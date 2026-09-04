@@ -155,7 +155,7 @@ export async function elevenLabsTTS(params: ElevenLabsTtsRequestParams): Promise
   try {
     await assertOkOrThrowProviderError(response, "ElevenLabs API error");
 
-    return Buffer.from(await readProviderBinaryResponse(response, "ElevenLabs API error", "audio"));
+    return await readProviderBinaryResponse(response, "ElevenLabs API error", "audio");
   } finally {
     await release();
   }
@@ -198,22 +198,12 @@ export async function elevenLabsTTSStream(params: ElevenLabsTtsRequestParams): P
       createOverflowError: ({ maxBytes }) =>
         new Error(`ElevenLabs API error: audio response exceeds ${maxBytes} bytes`),
       createReleaseError: () => new Error("ElevenLabs TTS stream released"),
+      cleanup: release,
     });
-    let releasePromise: Promise<void> | undefined;
-    const releaseAll = () => {
-      releasePromise ??= (async () => {
-        try {
-          await boundedStream.release();
-        } finally {
-          await release();
-        }
-      })();
-      return releasePromise;
-    };
     handedOff = true;
     return {
       audioStream: boundedStream.stream,
-      release: releaseAll,
+      release: boundedStream.release,
     };
   } finally {
     if (!handedOff) {

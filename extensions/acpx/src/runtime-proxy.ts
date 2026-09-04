@@ -4,6 +4,9 @@
  */
 import type { AcpRuntime, AcpRuntimeTurn, AcpRuntimeTurnInput } from "../runtime-api.js";
 
+export type CompleteAcpRuntimeTurn = AcpRuntimeTurn &
+  Required<Pick<AcpRuntimeTurn, "promptStarted">>;
+
 /**
  * Contract for runtimes this extension resolves behind the lazy proxy. The
  * SDK keeps these hooks optional for third-party backends, but every ACPX
@@ -11,11 +14,10 @@ import type { AcpRuntime, AcpRuntimeTurn, AcpRuntimeTurnInput } from "../runtime
  * implements the full surface. Requiring them here turns an absent hook into
  * a compile error instead of a silently fabricated success at runtime.
  */
-export type CompleteAcpRuntime = AcpRuntime &
+export type CompleteAcpRuntime = Omit<AcpRuntime, "startTurn"> &
   Required<
     Pick<
       AcpRuntime,
-      | "startTurn"
       | "getCapabilities"
       | "getStatus"
       | "setMode"
@@ -23,16 +25,21 @@ export type CompleteAcpRuntime = AcpRuntime &
       | "doctor"
       | "prepareFreshSession"
     >
-  >;
+  > & {
+    startTurn(input: AcpRuntimeTurnInput): CompleteAcpRuntimeTurn;
+  };
 
 /** Start an ACP turn through a lazy runtime resolver without awaiting resolution up front. */
 function lazyStartRuntimeTurn(
   resolveRuntime: () => Promise<CompleteAcpRuntime>,
   input: AcpRuntimeTurnInput,
-): AcpRuntimeTurn {
+): CompleteAcpRuntimeTurn {
   const turnPromise = resolveRuntime().then((runtime) => runtime.startTurn(input));
   return {
     requestId: input.requestId,
+    get promptStarted() {
+      return turnPromise.then((turn) => turn.promptStarted);
+    },
     events: {
       async *[Symbol.asyncIterator]() {
         yield* (await turnPromise).events;
@@ -53,6 +60,7 @@ export function createLazyAcpRuntimeProxy(
   resolveRuntime: () => Promise<CompleteAcpRuntime>,
 ): CompleteAcpRuntime {
   return {
+    ownerAwareSessions: 1,
     async ensureSession(input) {
       return await (await resolveRuntime()).ensureSession(input);
     },
@@ -72,7 +80,7 @@ export function createLazyAcpRuntimeProxy(
       await (await resolveRuntime()).setMode(input);
     },
     async setConfigOption(input) {
-      await (await resolveRuntime()).setConfigOption(input);
+      return await (await resolveRuntime()).setConfigOption(input);
     },
     async doctor() {
       return await (await resolveRuntime()).doctor();

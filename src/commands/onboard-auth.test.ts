@@ -8,6 +8,9 @@ import {
   readAuthProfilesForAgent,
   setupAuthTestEnv,
 } from "../../test/helpers/auth-wizard.js";
+import { ensureAuthProfileStore } from "../agents/auth-profiles/store.js";
+import { resolveProviderIdForAuth } from "../agents/provider-auth-aliases.js";
+import type { OpenClawConfig } from "../config/types.openclaw.js";
 import type { OAuthCredentials } from "../llm/utils/oauth/types.js";
 import {
   applyAuthProfileConfig,
@@ -16,17 +19,15 @@ import {
 } from "../plugins/provider-auth-helpers.js";
 import { setTestEnvValue } from "../test-utils/env.js";
 
-const providerEnvVarsById = vi.hoisted(
-  (): Record<string, readonly string[]> => ({
-    "cloudflare-ai-gateway": ["CLOUDFLARE_AI_GATEWAY_API_KEY"],
-    byteplus: ["BYTEPLUS_API_KEY"],
-    moonshot: ["MOONSHOT_API_KEY"],
-    openai: ["OPENAI_API_KEY"],
-    opencode: ["OPENCODE_API_KEY"],
-    "opencode-go": ["OPENCODE_API_KEY"],
-    volcengine: ["VOLCANO_ENGINE_API_KEY"],
-  }),
-);
+const providerEnvVarsById = vi.hoisted((): Record<string, readonly string[]> => ({
+  "cloudflare-ai-gateway": ["CLOUDFLARE_AI_GATEWAY_API_KEY"],
+  byteplus: ["BYTEPLUS_API_KEY"],
+  moonshot: ["MOONSHOT_API_KEY"],
+  openai: ["OPENAI_API_KEY"],
+  opencode: ["OPENCODE_API_KEY"],
+  "opencode-go": ["OPENCODE_API_KEY"],
+  volcengine: ["VOLCANO_ENGINE_API_KEY"],
+}));
 
 vi.mock("../config/paths.js", async (importOriginal) => ({
   ...(await importOriginal<typeof import("../config/paths.js")>()),
@@ -34,13 +35,13 @@ vi.mock("../config/paths.js", async (importOriginal) => ({
 }));
 
 vi.mock("../agents/provider-auth-aliases.js", () => ({
-  resolveProviderIdForAuth: (provider: string) => {
+  resolveProviderIdForAuth: vi.fn((provider: string) => {
     const normalized = provider.trim().toLowerCase();
     if (normalized === "z.ai" || normalized === "z-ai") {
       return "zai";
     }
     return normalized;
-  },
+  }),
 }));
 
 vi.mock("../secrets/provider-env-vars.js", () => ({
@@ -60,6 +61,13 @@ function expectFields(value: unknown, expected: Record<string, unknown>, label =
     expect(record[key], key).toEqual(expectedValue);
   }
   return record;
+}
+
+function readEffectiveAuthProfiles(agentDir: string) {
+  return ensureAuthProfileStore(agentDir, {
+    readOnly: true,
+    syncExternalCli: false,
+  });
 }
 
 describe("writeOAuthCredentials", () => {
@@ -125,19 +133,23 @@ describe("writeOAuthCredentials", () => {
     });
 
     for (const dir of [mainAgentDir, kidAgentDir]) {
-      const persistedStore = await readAuthProfilesForAgent<{
-        profiles?: Record<string, OAuthCredentials & { type?: string }>;
-      }>(dir);
-      expectFields(persistedStore.profiles?.["openai:default"], {
+      const effectiveStore = readEffectiveAuthProfiles(dir);
+      expectFields(effectiveStore.profiles?.["openai:default"], {
         refresh: "refresh-sync",
         access: "access-sync",
         type: "oauth",
       });
     }
-    const inheritedSiblingStore = await readAuthProfilesForAgent<{
+    const inheritedSiblingStore = readEffectiveAuthProfiles(workerAgentDir);
+    expectFields(inheritedSiblingStore.profiles?.["openai:default"], {
+      refresh: "refresh-sync",
+      access: "access-sync",
+      type: "oauth",
+    });
+    const persistedSiblingStore = await readAuthProfilesForAgent<{
       profiles?: Record<string, OAuthCredentials & { type?: string }>;
     }>(workerAgentDir);
-    expect(inheritedSiblingStore.profiles).toEqual({});
+    expect(persistedSiblingStore.profiles).toEqual({});
   });
 
   it("writes OAuth credentials only to target dir by default", async () => {
@@ -160,9 +172,7 @@ describe("writeOAuthCredentials", () => {
 
     await writeOAuthCredentials("openai", creds, kidAgentDir);
 
-    const kidParsed = await readAuthProfilesForAgent<{
-      profiles?: Record<string, OAuthCredentials & { type?: string }>;
-    }>(kidAgentDir);
+    const kidParsed = readEffectiveAuthProfiles(kidAgentDir);
     expectFields(kidParsed.profiles?.["openai:default"], {
       access: "access-kid",
       type: "oauth",
@@ -239,16 +249,20 @@ describe("upsertApiKeyProfile secret refs", () => {
     agentDir: string,
     profileId: string,
   ): Promise<AuthProfileEntry | undefined> {
-    const parsed = await readAuthProfilesForAgent<{
-      profiles?: Record<string, AuthProfileEntry>;
-    }>(agentDir);
-    return parsed.profiles?.[profileId];
+    const parsed = readEffectiveAuthProfiles(agentDir);
+    const profile = parsed.profiles[profileId];
+    if (!profile || profile.type !== "api_key") {
+      return undefined;
+    }
+    return {
+      ...(profile.key !== undefined ? { key: profile.key } : {}),
+      ...(profile.keyRef !== undefined ? { keyRef: profile.keyRef } : {}),
+      ...(profile.metadata !== undefined ? { metadata: profile.metadata } : {}),
+    };
   }
 
   async function readProfileIds(agentDir: string): Promise<string[]> {
-    const parsed = await readAuthProfilesForAgent<{
-      profiles?: Record<string, AuthProfileEntry>;
-    }>(agentDir);
+    const parsed = readEffectiveAuthProfiles(agentDir);
     return Object.keys(parsed.profiles ?? {}).toSorted();
   }
 
@@ -406,24 +420,92 @@ describe("upsertApiKeyProfile", () => {
 });
 
 describe("applyAuthProfileConfig", () => {
-  it("promotes the newly selected profile to the front of auth.order", () => {
+  const configOnlyCases: {
+    name: string;
+    cfg: OpenClawConfig;
+    preferProfileFirst?: boolean;
+  }[] = [
+    { name: "first profile", cfg: {} },
+    {
+      name: "same-mode profiles",
+      cfg: { auth: { profiles: { old: { provider: "z.ai", mode: "api_key" } } } },
+    },
+    {
+      name: "replacing the only other mode",
+      cfg: { auth: { profiles: { selected: { provider: "z.ai", mode: "oauth" } } } },
+    },
+    {
+      name: "disabled promotion with an empty order",
+      cfg: { auth: { profiles: { old: { provider: "z.ai", mode: "oauth" } }, order: {} } },
+      preferProfileFirst: false,
+    },
+  ];
+  it.each(configOnlyCases)(
+    "adds $name without requiring plugin discovery when order cannot change",
+    ({ cfg, ...options }) => {
+      const lookup = vi.mocked(resolveProviderIdForAuth).mockImplementation(() => {
+        throw new Error("plugin discovery unavailable");
+      });
+      try {
+        const next = applyAuthProfileConfig(cfg, {
+          profileId: "selected",
+          provider: "z-ai",
+          mode: "api_key",
+          preferProfileFirst: options.preferProfileFirst,
+        });
+        expect(next).toEqual({
+          ...cfg,
+          auth: {
+            ...cfg.auth,
+            profiles: {
+              ...cfg.auth?.profiles,
+              selected: { provider: "z-ai", mode: "api_key" },
+            },
+          },
+        });
+      } finally {
+        lookup.mockReset();
+      }
+    },
+  );
+
+  it.each([
+    {
+      order: ["anthropic:default"],
+      prefer: true,
+      expected: ["anthropic:work", "anthropic:default"],
+    },
+    {
+      order: ["anthropic:default"],
+      prefer: false,
+      expected: ["anthropic:default", "anthropic:work"],
+    },
+    {
+      order: ["anthropic:default", "anthropic:work", "anthropic:default"],
+      prefer: false,
+      expected: ["anthropic:default", "anthropic:work"],
+    },
+    { order: [], prefer: true, expected: ["anthropic:work"] },
+    { order: [], prefer: false, expected: ["anthropic:work"] },
+  ])("updates explicit order $order with promotion=$prefer", ({ order, prefer, expected }) => {
     const next = applyAuthProfileConfig(
       {
         auth: {
           profiles: {
             "anthropic:default": { provider: "anthropic", mode: "api_key" },
           },
-          order: { anthropic: ["anthropic:default"] },
+          order: { anthropic: order, unrelated: ["unrelated:default"] },
         },
       },
       {
         profileId: "anthropic:work",
         provider: "anthropic",
         mode: "oauth",
+        preferProfileFirst: prefer,
       },
     );
 
-    expect(next.auth?.order?.anthropic).toEqual(["anthropic:work", "anthropic:default"]);
+    expect(next.auth?.order).toEqual({ anthropic: expected, unrelated: ["unrelated:default"] });
   });
 
   it("creates provider order when switching from legacy oauth to api_key without explicit order", () => {
@@ -443,6 +525,24 @@ describe("applyAuthProfileConfig", () => {
     );
 
     expect(next.auth?.order?.kilocode).toEqual(["kilocode:default", "kilocode:legacy"]);
+  });
+
+  it.each([
+    { provider: "z.ai", expected: ["zai:new", "legacy", "same-mode"] },
+    { provider: "unrelated", expected: undefined },
+  ])("groups mixed modes only for canonical peers of $provider", ({ provider, expected }) => {
+    const next = applyAuthProfileConfig(
+      {
+        auth: {
+          profiles: {
+            legacy: { provider, mode: "oauth" },
+            "same-mode": { provider: "z-ai", mode: "api_key" },
+          },
+        },
+      },
+      { profileId: "zai:new", provider: "zai", mode: "api_key" },
+    );
+    expect(next.auth?.order).toEqual(expected ? { zai: expected } : undefined);
   });
 
   it("repairs aliased auth.order keys instead of duplicating them", () => {

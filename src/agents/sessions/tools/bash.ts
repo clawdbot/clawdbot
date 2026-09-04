@@ -10,6 +10,8 @@ import { Type } from "typebox";
 import { toErrorObject } from "../../../infra/errors.js";
 import { formatDurationSeconds } from "../../../infra/format-time/format-duration.js";
 import { releaseChildProcessOutputAfterExit } from "../../../process/child-process.js";
+import { COMMAND_PROCESS_TREE_KILL_GRACE_MS } from "../../../process/exec-spawn.js";
+import { createCommandTerminationController } from "../../../process/exec-termination.js";
 import { spawnCommand } from "../../../process/exec.js";
 import { keyHint } from "../../modes/interactive/components/keybinding-hints.js";
 import { truncateToVisualLines } from "../../modes/interactive/components/visual-truncate.js";
@@ -19,12 +21,11 @@ import {
   buildShellCommandInvocation,
   getBashShellConfig,
   getBashShellEnv,
-  killProcessTree,
 } from "../../shell-utils.js";
 import type { ToolDefinition, ToolRenderResultOptions } from "../extensions/types.js";
 import type { BashOperations } from "./bash-operations.js";
 import { OutputAccumulator } from "./output-accumulator.js";
-import { getTextOutput, invalidArgText, str } from "./render-utils.js";
+import { getTextOutput, invalidArgText, reuseTextComponent, str } from "./render-utils.js";
 import { formatFullOutputFooter, type BashToolDetails } from "./tool-contracts.js";
 import { wrapToolDefinition } from "./tool-definition-wrapper.js";
 import { DEFAULT_MAX_BYTES, DEFAULT_MAX_LINES, formatSize } from "./truncate.js";
@@ -71,26 +72,53 @@ export function createLocalBashOperations(options?: { shellPath?: string }): Bas
           );
           return;
         }
+        const cancelController = new AbortController();
+        const shellEnv = env ?? getBashShellEnv(shellConfig.shell);
         const child = spawnCommand(invocation.argv, {
           baseEnv: {},
           buffer: false,
+          cancelSignal: cancelController.signal,
           cwd,
           detached: process.platform !== "win32",
-          env: env ?? getBashShellEnv(shellConfig.shell),
+          env: shellEnv,
+          forceKillAfterDelay: COMMAND_PROCESS_TREE_KILL_GRACE_MS,
           ...(invocation.input === undefined ? {} : { input: invocation.input }),
           reject: false,
           stdio: [invocation.stdin, "pipe", "pipe"],
         });
         const releaseOutput = releaseChildProcessOutputAfterExit(child.nodeChildProcess);
+        let childExited = false;
+        child.nodeChildProcess.once("exit", () => {
+          childExited = true;
+        });
+        let commandSettled = false;
+        const terminationController = createCommandTerminationController({
+          child: child.nodeChildProcess,
+          cancelController,
+          baseEnv: {},
+          env: shellEnv,
+          processTree: { mode: "force" },
+          killGraceMs: COMMAND_PROCESS_TREE_KILL_GRACE_MS,
+          isChildExited: () => childExited,
+          isCommandSettled: () => commandSettled,
+        });
+        let terminationStarted = false;
+        const terminate = () => {
+          if (terminationStarted) {
+            return;
+          }
+          terminationStarted = true;
+          if (!terminationController.terminate()) {
+            cancelController.abort();
+          }
+        };
         let timedOut = false;
         let timeoutHandle: NodeJS.Timeout | undefined;
         const timeoutMs = resolveBashTimeoutMs(timeout);
         if (timeoutMs !== undefined) {
           timeoutHandle = setTimeout(() => {
             timedOut = true;
-            if (child.pid) {
-              killProcessTree(child.pid, { detached: true });
-            }
+            terminate();
           }, timeoutMs);
         }
         // Stream stdout and stderr. Tag each pipe so downstream decode state
@@ -98,11 +126,7 @@ export function createLocalBashOperations(options?: { shellPath?: string }): Bas
         child.stdout?.on("data", (data: Buffer) => onData(data, "stdout"));
         child.stderr?.on("data", (data: Buffer) => onData(data, "stderr"));
         // Handle abort signal by killing the entire process tree.
-        const onAbort = () => {
-          if (child.pid) {
-            killProcessTree(child.pid, { detached: true });
-          }
-        };
+        const onAbort = terminate;
         if (signal) {
           if (signal.aborted) {
             onAbort();
@@ -111,7 +135,9 @@ export function createLocalBashOperations(options?: { shellPath?: string }): Bas
           }
         }
         void child
-          .then((result) => {
+          .then(async (result) => {
+            commandSettled = true;
+            await terminationController.settle();
             if (result.failed && result.exitCode === undefined && result.signal === undefined) {
               if (result instanceof Error) {
                 throw result;
@@ -134,7 +160,9 @@ export function createLocalBashOperations(options?: { shellPath?: string }): Bas
             }
             resolve({ exitCode: result.exitCode ?? (result.failed ? 1 : 0) });
           })
-          .catch((err: unknown) => {
+          .catch(async (err: unknown) => {
+            commandSettled = true;
+            await terminationController.settle();
             if (timeoutHandle) {
               clearTimeout(timeoutHandle);
             }
@@ -465,9 +493,7 @@ export function createBashToolDefinition(
         state.startedAt = Date.now();
         state.endedAt = undefined;
       }
-      const text = (context.lastComponent as Text | undefined) ?? new Text("", 0, 0);
-      text.setText(formatBashCall(args));
-      return text;
+      return reuseTextComponent(context.lastComponent, formatBashCall(args));
     },
     renderResult(result, optionsLocal, themeLocal, context) {
       void themeLocal;

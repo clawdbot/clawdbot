@@ -1,3 +1,4 @@
+import type { ExecFileException } from "node:child_process";
 import { createHash } from "node:crypto";
 import fs from "node:fs/promises";
 import os from "node:os";
@@ -5,15 +6,28 @@ import path from "node:path";
 import { afterEach, describe, expect, it, vi } from "vitest";
 
 const mocks = vi.hoisted(() => ({
+  execFile: vi.fn(),
   fetchWithSsrFGuard: vi.fn(),
+  resolveLlamaCppDataDir: vi.fn(),
 }));
 
+vi.mock("node:child_process", () => ({ execFile: mocks.execFile }));
 vi.mock("openclaw/plugin-sdk/ssrf-runtime", async (importOriginal) => ({
   ...(await importOriginal<typeof import("openclaw/plugin-sdk/ssrf-runtime")>()),
   fetchWithSsrFGuard: mocks.fetchWithSsrFGuard,
 }));
+vi.mock("./defaults.js", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("./defaults.js")>()),
+  resolveLlamaCppDataDir: mocks.resolveLlamaCppDataDir,
+}));
 
-import { downloadVerifiedFile } from "./llama-server-install.js";
+import { LLAMA_SERVER_BUILD, LLAMA_SERVER_COMMIT } from "./llama-server-assets.js";
+import {
+  downloadVerifiedFile,
+  ensureLlamaServerInstalled,
+  resolveManagedLlamaServerPaths,
+  selectLlamaServerAsset,
+} from "./llama-server-install.js";
 
 type FileHandle = Awaited<ReturnType<typeof fs.open>>;
 
@@ -21,7 +35,9 @@ const tempRoots: string[] = [];
 
 afterEach(async () => {
   vi.restoreAllMocks();
+  mocks.execFile.mockReset();
   mocks.fetchWithSsrFGuard.mockReset();
+  mocks.resolveLlamaCppDataDir.mockReset();
   await Promise.all(
     tempRoots.splice(0).map((root) => fs.rm(root, { recursive: true, force: true })),
   );
@@ -31,6 +47,30 @@ async function createDestination(): Promise<{ destination: string; root: string 
   const root = await fs.mkdtemp(path.join(os.tmpdir(), "llama-server-download-"));
   tempRoots.push(root);
   return { destination: path.join(root, "model.gguf"), root };
+}
+
+async function createInstalledServer(): Promise<string> {
+  const root = await fs.mkdtemp(path.join(os.tmpdir(), "llama-server-installed-"));
+  tempRoots.push(root);
+  mocks.resolveLlamaCppDataDir.mockReturnValue(root);
+  const asset = selectLlamaServerAsset();
+  const { command } = resolveManagedLlamaServerPaths(asset);
+  await fs.mkdir(path.dirname(command), { recursive: true });
+  await fs.writeFile(command, "");
+  return command;
+}
+
+function mockVersionOutput(output: string): void {
+  mocks.execFile.mockImplementation(
+    (
+      _command: string,
+      _args: string[],
+      _options: unknown,
+      callback: (error: ExecFileException | null, stdout: string, stderr: string) => void,
+    ) => {
+      callback(null, output, "");
+    },
+  );
 }
 
 function mockDownload(payload: Buffer): ReturnType<typeof vi.fn> {
@@ -146,5 +186,27 @@ describe("downloadVerifiedFile", () => {
     await expect(fs.stat(destination)).rejects.toMatchObject({ code: "ENOENT" });
     expect(await fs.readdir(root)).toEqual([]);
     expect(release).toHaveBeenCalledOnce();
+  });
+});
+
+describe("ensureLlamaServerInstalled", () => {
+  it("accepts only the pinned build and commit from the version line", async () => {
+    const command = await createInstalledServer();
+    mockVersionOutput(
+      `version: 0.1.0-dev (build ${LLAMA_SERVER_BUILD}, commit ${LLAMA_SERVER_COMMIT.slice(0, 9)})\nbuilt with test compiler`,
+    );
+
+    await expect(ensureLlamaServerInstalled()).resolves.toMatchObject({ command });
+  });
+
+  it("rejects a different active build even when output mentions the pinned build later", async () => {
+    await createInstalledServer();
+    mockVersionOutput(
+      `version: 0.1.0-dev (build ${LLAMA_SERVER_BUILD + 1}, commit deadbeef0)\ncompatibility note: (build ${LLAMA_SERVER_BUILD}, commit ${LLAMA_SERVER_COMMIT.slice(0, 9)})`,
+    );
+
+    await expect(ensureLlamaServerInstalled()).rejects.toThrow(
+      `expected b${LLAMA_SERVER_BUILD} (${LLAMA_SERVER_COMMIT.slice(0, 9)})`,
+    );
   });
 });

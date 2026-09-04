@@ -140,6 +140,10 @@ function configSnapshotsMatch(left: OpenClawConfig, right: OpenClawConfig): bool
   if (left === right) {
     return true;
   }
+  // Authored SecretRefs live outside the JSON bytes. Projection must not replace their provenance.
+  if (getConfigResolutionFacts(left) !== getConfigResolutionFacts(right)) {
+    return false;
+  }
   try {
     return stableConfigStringify(left) === stableConfigStringify(right);
   } catch {

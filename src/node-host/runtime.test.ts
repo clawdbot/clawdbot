@@ -14,7 +14,7 @@ const mocks = vi.hoisted(() => {
     initializeWorkerSupervisor: vi.fn(async () => undefined),
     handleInvoke: vi.fn(async () => undefined),
     progressStartHeartbeats: vi.fn(),
-    progressWrite: vi.fn(async () => undefined),
+    progressWrite: vi.fn(async (_chunk: string) => undefined),
     startMcp: vi.fn(async (_servers: unknown, _deps?: { signal?: AbortSignal }) => ({
       descriptors: [],
       callMcpTool: vi.fn(),
@@ -99,7 +99,7 @@ async function startRuntime() {
   });
 }
 
-function holdInvoke() {
+function holdInvoke(onCommand?: (io: OpenClawPluginNodeHostCommandIo) => void) {
   let io: OpenClawPluginNodeHostCommandIo | undefined;
   let signal: AbortSignal | undefined;
   let release: (() => void) | undefined;
@@ -113,6 +113,9 @@ function holdInvoke() {
     };
     io = runtime.pluginCommandIo;
     signal = runtime.signal;
+    if (io) {
+      onCommand?.(io);
+    }
     await held;
   });
   return {
@@ -126,31 +129,16 @@ function holdInvoke() {
   };
 }
 
-describe("node-host worker manifest", () => {
-  it("allows environment-managed processes to force worker hosting without durable config", async () => {
-    const prepared = await prepareNodeHostRuntime({
-      config: { nodeHost: { skills: { enabled: false }, workerRuns: { enabled: false } } },
-      env: { PATH: "/usr/bin" },
-      enableWorkerRuns: true,
-      forceWorkerRuns: true,
-    });
-
-    expect(prepared.workerHostingEnabled).toBe(true);
-  });
-
-  it("keeps local consent separate from connection metadata", async () => {
-    const prepared = await prepareNodeHostRuntime({
-      config: { nodeHost: { skills: { enabled: false }, workerRuns: { enabled: true } } },
-      env: { PATH: "/usr/bin" },
-      enableWorkerRuns: true,
-    });
-
-    expect(prepared.workerHostingEnabled).toBe(true);
-    expect(prepared.manifest).not.toHaveProperty("workerRuns");
-  });
-});
-
 describe("node-host invocation cancellation", () => {
+  it("does not admit a queued invocation after its connection is retired", async () => {
+    const runtime = await startRuntime();
+    const pending = runtime.invoke({ ...frame, command: "system.run" });
+    runtime.cancelAll();
+    await pending;
+    expect(mocks.handleInvoke).not.toHaveBeenCalled();
+    await runtime.close();
+  });
+
   it("cancels ordinary node invocations", async () => {
     const held = holdInvoke();
     const runtime = await startRuntime();
@@ -323,6 +311,276 @@ describe("node-host desktop manifest", () => {
 describe("node-host invoke input dispatch", () => {
   beforeEach(() => {
     vi.clearAllMocks();
+  });
+
+  it("provides framed binary message IO to duplex plugin commands", async () => {
+    const held = holdInvoke();
+    const runtime = await startRuntime();
+    const invoking = runtime.invoke(frame);
+
+    try {
+      await vi.waitFor(() => expect(held.io).toBeDefined());
+      expect(held.io).toMatchObject({
+        frames: {
+          send: expect.any(Function),
+          onMessage: expect.any(Function),
+        },
+      });
+    } finally {
+      held.release();
+      await invoking;
+      await runtime.close();
+    }
+  });
+
+  it("announces framed readiness only after the plugin registers its message listener", async () => {
+    const held = holdInvoke();
+    const runtime = await startRuntime();
+    const invoking = runtime.invoke(frame);
+
+    try {
+      await vi.waitFor(() => expect(held.io).toBeDefined());
+      expect(mocks.progressWrite).not.toHaveBeenCalled();
+
+      const unsubscribe = held.io?.frames?.onMessage(vi.fn());
+
+      await vi.waitFor(() =>
+        expect(mocks.progressWrite).toHaveBeenCalledWith(JSON.stringify({ v: 1, kind: "ready" })),
+      );
+      expect(unsubscribe).toEqual(expect.any(Function));
+      unsubscribe?.();
+    } finally {
+      held.release();
+      await invoking;
+      await runtime.close();
+    }
+  });
+
+  it("round-trips binary messages through an external-style duplex plugin command", async () => {
+    const received = vi.fn();
+    const pluginCommand = {
+      command: "test.duplex",
+      duplex: true,
+      handle: (_paramsJSON: string | null, io: OpenClawPluginNodeHostCommandIo) => {
+        io.frames?.onMessage((message) => {
+          received(message);
+          void io.frames?.send(message);
+        });
+      },
+    };
+    const held = holdInvoke((io) => pluginCommand.handle(frame.paramsJSON, io));
+    const runtime = await startRuntime();
+    const invoking = runtime.invoke(frame);
+
+    try {
+      await vi.waitFor(() => expect(mocks.progressWrite).toHaveBeenCalledOnce());
+      runtime.handleInput(
+        frame.id,
+        0,
+        JSON.stringify({
+          v: 1,
+          kind: "data",
+          message: 0,
+          index: 0,
+          last: true,
+          data: "AP8B",
+        }),
+      );
+
+      await vi.waitFor(() => expect(mocks.progressWrite).toHaveBeenCalledTimes(2));
+      expect(received).toHaveBeenCalledWith(Uint8Array.from([0, 255, 1]));
+      expect(JSON.parse(mocks.progressWrite.mock.calls[1]?.[0] ?? "null")).toMatchObject({
+        v: 1,
+        kind: "data",
+        message: 0,
+        index: 0,
+        last: true,
+        data: "AP8B",
+      });
+    } finally {
+      held.release();
+      await invoking;
+      await runtime.close();
+    }
+  });
+
+  it("preserves binary message boundaries and fragments output below the transport limit", async () => {
+    const held = holdInvoke();
+    const runtime = await startRuntime();
+    const invoking = runtime.invoke(frame);
+
+    try {
+      await vi.waitFor(() => expect(held.io?.frames).toBeDefined());
+      const received = vi.fn();
+      held.io?.frames?.onMessage(received);
+      await vi.waitFor(() => expect(mocks.progressWrite).toHaveBeenCalledOnce());
+      mocks.progressWrite.mockClear();
+
+      const incoming = Uint8Array.from({ length: 20_000 }, (_, index) => index % 256);
+      const incomingFragments = [
+        incoming.slice(0, 8_192),
+        incoming.slice(8_192, 16_384),
+        incoming.slice(16_384),
+      ];
+      for (const [index, fragment] of incomingFragments.entries()) {
+        runtime.handleInput(
+          frame.id,
+          index,
+          JSON.stringify({
+            v: 1,
+            kind: "data",
+            message: 0,
+            index,
+            last: index === incomingFragments.length - 1,
+            data: Buffer.from(fragment).toString("base64"),
+          }),
+        );
+      }
+      runtime.handleInput(
+        frame.id,
+        incomingFragments.length,
+        JSON.stringify({
+          v: 1,
+          kind: "data",
+          message: 1,
+          index: 0,
+          last: true,
+          data: Buffer.from([0, 255]).toString("base64"),
+        }),
+      );
+      expect(received.mock.calls).toEqual([[incoming], [Uint8Array.from([0, 255])]]);
+
+      const outgoing = Uint8Array.from({ length: 20_000 }, (_, index) => (index * 7) % 256);
+      await Promise.all([
+        held.io?.frames?.send(outgoing),
+        held.io?.frames?.send(Uint8Array.from([4, 5, 6])),
+      ]);
+
+      const fragments = mocks.progressWrite.mock.calls.map(([value]) => {
+        expect(Buffer.byteLength(value, "utf8")).toBeLessThan(16 * 1024);
+        return JSON.parse(value) as {
+          v: number;
+          kind: string;
+          message: number;
+          index: number;
+          last: boolean;
+          data: string;
+        };
+      });
+      expect(fragments.map(({ message }) => message)).toEqual([0, 0, 0, 1]);
+      expect(fragments.map(({ index }) => index)).toEqual([0, 1, 2, 0]);
+      expect(
+        Buffer.concat(
+          fragments
+            .filter(({ message }) => message === 0)
+            .map(({ data }) => Buffer.from(data, "base64")),
+        ),
+      ).toEqual(Buffer.from(outgoing));
+      expect(Buffer.from(fragments[3]?.data ?? "", "base64")).toEqual(Buffer.from([4, 5, 6]));
+    } finally {
+      held.release();
+      await invoking;
+      await runtime.close();
+    }
+  });
+
+  it.each(["cancel", "result"] as const)(
+    "closes framed plugin IO after invocation %s",
+    async (terminalState) => {
+      const held = holdInvoke();
+      const runtime = await startRuntime();
+      const invoking = runtime.invoke(frame);
+
+      try {
+        await vi.waitFor(() => expect(held.io?.frames).toBeDefined());
+        const received = vi.fn();
+        held.io?.frames?.onMessage(received);
+        await vi.waitFor(() => expect(mocks.progressWrite).toHaveBeenCalledOnce());
+
+        if (terminalState === "cancel") {
+          runtime.cancel(frame.id);
+        } else {
+          held.release();
+          await invoking;
+        }
+        runtime.handleInput(
+          frame.id,
+          0,
+          JSON.stringify({
+            v: 1,
+            kind: "data",
+            message: 0,
+            index: 0,
+            last: true,
+            data: "eA==",
+          }),
+        );
+
+        expect(received).not.toHaveBeenCalled();
+        await expect(held.io?.frames?.send(Uint8Array.from([1]))).rejects.toThrow(/closed/i);
+      } finally {
+        held.release();
+        await invoking;
+        await runtime.close();
+      }
+    },
+  );
+
+  it("aborts a framed plugin command on malformed input without throwing through the transport", async () => {
+    const held = holdInvoke();
+    const runtime = await startRuntime();
+    const invoking = runtime.invoke(frame);
+
+    try {
+      await vi.waitFor(() => expect(held.io?.frames).toBeDefined());
+      held.io?.frames?.onMessage(vi.fn());
+      await vi.waitFor(() => expect(mocks.progressWrite).toHaveBeenCalledOnce());
+
+      expect(() => runtime.handleInput(frame.id, 0, "not-json")).not.toThrow();
+      expect(held.io?.signal.aborted).toBe(true);
+      await expect(held.io?.frames?.send(Uint8Array.from([1]))).rejects.toThrow(/closed/i);
+    } finally {
+      held.release();
+      await invoking;
+      await runtime.close();
+    }
+  });
+
+  it("aborts the invocation when its framed plugin message listener fails", async () => {
+    const held = holdInvoke();
+    const runtime = await startRuntime();
+    const invoking = runtime.invoke(frame);
+
+    try {
+      await vi.waitFor(() => expect(held.io?.frames).toBeDefined());
+      held.io?.frames?.onMessage(() => {
+        throw new Error("plugin message rejected");
+      });
+      await vi.waitFor(() => expect(mocks.progressWrite).toHaveBeenCalledOnce());
+
+      expect(() =>
+        runtime.handleInput(
+          frame.id,
+          0,
+          JSON.stringify({
+            v: 1,
+            kind: "data",
+            message: 0,
+            index: 0,
+            last: true,
+            data: "eA==",
+          }),
+        ),
+      ).not.toThrow();
+      expect(held.io?.signal.aborted).toBe(true);
+      expect(held.io?.signal.reason).toEqual(
+        expect.objectContaining({ message: "plugin message rejected" }),
+      );
+    } finally {
+      held.release();
+      await invoking;
+      await runtime.close();
+    }
   });
 
   it("buffers frames before the command registers input and flushes them in order", async () => {

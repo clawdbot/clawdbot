@@ -22,6 +22,9 @@ class ResizableDivider extends OpenClawLitElement {
   private startPosition = 0;
   private startRatio = 0;
   private dragRatio = 0;
+  private dragSize = 0;
+  private dragFrame = 0;
+  private pendingPosition: number | null = null;
   private activePointerId: number | null = null;
 
   static override styles = css`
@@ -114,7 +117,7 @@ class ResizableDivider extends OpenClawLitElement {
     super.disconnectedCallback();
     this.removeEventListener("pointerdown", this.handlePointerDown);
     this.removeEventListener("keydown", this.handleKeyDown);
-    this.stopDragging();
+    this.finishDragging(new Event("disconnect"));
   }
 
   protected override updated() {
@@ -126,12 +129,16 @@ class ResizableDivider extends OpenClawLitElement {
   }
 
   private handlePointerDown = (e: PointerEvent) => {
-    if (e.button !== 0) {
+    if (e.button !== 0 || this.activePointerId !== null) {
       return;
     }
     this.startPosition = this.orientation === "horizontal" ? e.clientY : e.clientX;
     this.startRatio = this.currentRatio();
     this.dragRatio = this.startRatio;
+    this.dragSize = this.measureDragSize();
+    if (this.dragSize <= 0) {
+      return;
+    }
     this.classList.add("dragging");
     this.capturePointer(e.pointerId);
 
@@ -139,44 +146,31 @@ class ResizableDivider extends OpenClawLitElement {
     for (const type of DRAG_END_EVENTS) {
       window.addEventListener(type, this.finishDragging);
     }
+    this.addEventListener("lostpointercapture", this.finishDragging);
 
     e.preventDefault();
   };
 
   private handlePointerMove = (e: PointerEvent) => {
-    if (this.activePointerId === null) {
+    if (e.pointerId !== this.activePointerId) {
       return;
     }
 
-    const container = this.parentElement;
-    if (!container) {
-      return;
+    this.pendingPosition = this.orientation === "horizontal" ? e.clientY : e.clientX;
+    if (!this.dragFrame) {
+      this.dragFrame = requestAnimationFrame(this.flushPointerMove);
     }
+  };
 
-    // Ratio is local to the two adjacent siblings, not the whole container:
-    // split-view rows/columns hold N panes, and a drag must only redistribute
-    // the pair this divider sits between. Container size is the 2-child
-    // fallback (legacy chat sidebar split).
-    const previousBounds = this.previousElementSibling?.getBoundingClientRect();
-    const nextBounds = this.nextElementSibling?.getBoundingClientRect();
-    const containerBounds = container.getBoundingClientRect();
-    const measuredSize = this.measureSize?.() ?? 0;
-    const siblingSize =
-      this.orientation === "horizontal"
-        ? (previousBounds?.height ?? 0) + (nextBounds?.height ?? 0)
-        : (previousBounds?.width ?? 0) + (nextBounds?.width ?? 0);
-    const containerSize =
-      measuredSize > 0
-        ? measuredSize
-        : siblingSize ||
-          (this.orientation === "horizontal" ? containerBounds.height : containerBounds.width);
-    if (containerSize <= 0) {
-      return;
+  private readonly flushPointerMove = () => {
+    this.dragFrame = 0;
+    const position = this.pendingPosition;
+    this.pendingPosition = null;
+    if (position !== null) {
+      this.dragRatio = this.emitResize(
+        this.startRatio + (position - this.startPosition) / this.dragSize,
+      );
     }
-    const position = this.orientation === "horizontal" ? e.clientY : e.clientX;
-    const deltaRatio = (position - this.startPosition) / containerSize;
-
-    this.dragRatio = this.emitResize(this.startRatio + deltaRatio);
   };
 
   private handleKeyDown = (e: KeyboardEvent) => {
@@ -205,19 +199,36 @@ class ResizableDivider extends OpenClawLitElement {
     this.emitResizeEnd(nextRatio);
   };
 
-  private readonly finishDragging = () => {
+  private readonly finishDragging = (event: Event) => {
+    if ("pointerId" in event && event.pointerId !== this.activePointerId) {
+      return;
+    }
     if (this.activePointerId !== null) {
+      if (this.dragFrame) {
+        cancelAnimationFrame(this.dragFrame);
+        this.dragFrame = 0;
+      }
+      this.flushPointerMove();
       this.emitResizeEnd(this.dragRatio);
     }
     this.stopDragging();
   };
 
   private stopDragging() {
-    if (this.activePointerId === null) {
+    const pointerId = this.activePointerId;
+    if (pointerId === null) {
       return;
     }
     this.classList.remove("dragging");
-    this.releaseActivePointer();
+    // Releasing capture can synchronously report capture loss. Remove the
+    // listener first so one owner end cannot emit resize-end twice.
+    this.removeEventListener("lostpointercapture", this.finishDragging);
+    this.releaseActivePointer(pointerId);
+    if (this.dragFrame) {
+      cancelAnimationFrame(this.dragFrame);
+      this.dragFrame = 0;
+    }
+    this.pendingPosition = null;
 
     window.removeEventListener("pointermove", this.handlePointerMove);
     for (const type of DRAG_END_EVENTS) {
@@ -252,6 +263,26 @@ class ResizableDivider extends OpenClawLitElement {
     return Math.max(this.minRatio, Math.min(this.maxRatio, value));
   }
 
+  private measureDragSize() {
+    const measuredSize = this.measureSize?.() ?? 0;
+    if (measuredSize > 0) {
+      return measuredSize;
+    }
+    const previousBounds = this.previousElementSibling?.getBoundingClientRect();
+    const nextBounds = this.nextElementSibling?.getBoundingClientRect();
+    const siblingSize =
+      this.orientation === "horizontal"
+        ? (previousBounds?.height ?? 0) + (nextBounds?.height ?? 0)
+        : (previousBounds?.width ?? 0) + (nextBounds?.width ?? 0);
+    if (siblingSize > 0) {
+      return siblingSize;
+    }
+    const containerBounds = this.parentElement?.getBoundingClientRect();
+    return this.orientation === "horizontal"
+      ? (containerBounds?.height ?? 0)
+      : (containerBounds?.width ?? 0);
+  }
+
   private currentRatio() {
     const measuredRatio = this.measureRatio?.();
     return measuredRatio !== undefined && Number.isFinite(measuredRatio)
@@ -281,10 +312,9 @@ class ResizableDivider extends OpenClawLitElement {
     this.setPointerCapture(pointerId);
   }
 
-  private releaseActivePointer() {
-    const pointerId = this.activePointerId;
+  private releaseActivePointer(pointerId: number) {
     this.activePointerId = null;
-    if (pointerId == null || typeof this.releasePointerCapture !== "function") {
+    if (typeof this.releasePointerCapture !== "function") {
       return;
     }
     if (typeof this.hasPointerCapture === "function" && !this.hasPointerCapture(pointerId)) {

@@ -1,4 +1,3 @@
-import { isRecord } from "@openclaw/normalization-core/record-coerce";
 import {
   collectAmbiguousAutomaticMediaUrls,
   collectAutomaticDeliveredMediaUrls,
@@ -7,7 +6,7 @@ import {
   getGatewayAgentResult,
   hasCommittedOutboundDeliveryEvidence,
   hasCompleteAutomaticMediaDeliveryOutcomeEvidence,
-  hasVisibleAgentPayload,
+  hasExplicitlyVisibleAgentPayload,
   type AgentDeliveryEvidence,
 } from "../agents/embedded-agent-runner/delivery-evidence.js";
 import { formatGeneratedMediaDeliveryRetryForPrompt } from "../agents/internal-events.js";
@@ -41,7 +40,6 @@ import {
   attachManagedOutgoingMediaToMessage,
   createManagedOutgoingMediaBlocks,
 } from "./managed-image-attachments.js";
-import { prepareGatewayInjectedAssistantContent } from "./server-methods/chat-transcript-inject.js";
 import type { GatewayContextResolver } from "./server-methods/types.js";
 import { dispatchGatewayLifecycleMethod as dispatchGatewayMethodInProcess } from "./server-recovery-runtime-context.js";
 import { loadSessionEntry } from "./session-utils.js";
@@ -71,24 +69,8 @@ async function deadLetterSessionDelivery(
   throw new SessionDeliveryDeadLetteredError(reason);
 }
 
-function hasQueuedVisiblePayload(payload: unknown): boolean {
-  if (isRecord(payload)) {
-    const visible = payload.visible;
-    if (typeof visible === "boolean") {
-      return visible;
-    }
-  }
-  return hasVisibleAgentPayload(
-    { payloads: [payload] },
-    {
-      includeErrorPayloads: false,
-      includeReasoningPayloads: false,
-    },
-  );
-}
-
 function hasQueuedVisibleAgentPayload(result: Pick<AgentDeliveryEvidence, "payloads">): boolean {
-  return Array.isArray(result.payloads) && result.payloads.some(hasQueuedVisiblePayload);
+  return Array.isArray(result.payloads) && result.payloads.some(hasExplicitlyVisibleAgentPayload);
 }
 
 function hasUnexpectedRecoverySideEffects(result: AgentDeliveryEvidence): boolean {
@@ -110,7 +92,7 @@ function collectVisiblePayloadMediaUrls(result: AgentDeliveryEvidence): string[]
   const urls = new Set<string>();
   const payloads = Array.isArray(result.payloads) ? result.payloads : [];
   for (const payload of payloads) {
-    if (!hasQueuedVisiblePayload(payload)) {
+    if (!hasExplicitlyVisibleAgentPayload(payload)) {
       continue;
     }
     for (const url of collectDeliveredMediaUrls({ payloads: [payload] })) {
@@ -152,7 +134,7 @@ function hasAutomaticVisibleSendEvidence(result: AgentDeliveryEvidence): boolean
     }
     const index =
       typeof record.index === "number" && Number.isInteger(record.index) ? record.index : undefined;
-    return index !== undefined && hasQueuedVisiblePayload(payloads[index]);
+    return index !== undefined && hasExplicitlyVisibleAgentPayload(payloads[index]);
   });
 }
 
@@ -360,19 +342,33 @@ export async function deliverQueuedGeneratedMediaAgentTurn(params: {
           for (const mediaUrl of mediaUrls) {
             let blocks = preparedMediaBlocks[mediaUrl];
             if (!blocks) {
+              const attachment = entry.expectedMediaAttachments?.[mediaUrl];
               blocks = await createManagedOutgoingMediaBlocks({
                 sessionKey: params.canonicalKey,
                 agentId: params.agentId,
-                mediaUrls: [mediaUrl],
-                attachments: [entry.expectedMediaAttachments?.[mediaUrl] ?? {}],
+                items: [
+                  {
+                    url: mediaUrl,
+                    ...(attachment?.name ? { filename: attachment.name } : {}),
+                    ...(attachment?.mimeType ? { mimeType: attachment.mimeType } : {}),
+                    trustedLocal: true,
+                    ...(attachment?.durationMs !== undefined
+                      ? { durationMs: attachment.durationMs }
+                      : {}),
+                    ...(attachment?.width !== undefined ? { width: attachment.width } : {}),
+                    ...(attachment?.height !== undefined ? { height: attachment.height } : {}),
+                  },
+                ],
                 stateDir,
                 localRoots: [getMediaDir()],
-                allowLocalNonImage: true,
               });
               if (
                 !blocks.some(
                   (block) =>
-                    block.type === "image" || block.type === "audio" || block.type === "video",
+                    block.type === "image" ||
+                    block.type === "audio" ||
+                    block.type === "video" ||
+                    block.type === "attachment",
                 )
               ) {
                 throw new Error("queued internal generated media could not be prepared");
@@ -398,7 +394,8 @@ export async function deliverQueuedGeneratedMediaAgentTurn(params: {
                     params.sessionEntry.cronRunContinuation.lifecycleRevision,
                 }
               : {}),
-            content: prepareGatewayInjectedAssistantContent(content),
+            content: [],
+            displayContent: content,
             idempotencyKey: `${queuedRunId}:generated-media-transcript`,
             updateMode: "inline",
           });

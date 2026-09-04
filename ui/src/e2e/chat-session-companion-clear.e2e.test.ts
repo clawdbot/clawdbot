@@ -1,8 +1,9 @@
-import { mkdir } from "node:fs/promises";
 import path from "node:path";
 import type { Locator, Page } from "playwright";
-import { expect, it } from "vitest";
+import { beforeEach, expect, it } from "vitest";
+import { createControlUiE2eArtifactDir } from "../test-helpers/control-ui-e2e-artifacts.ts";
 import {
+  controlUiSessionUrl,
   installMockGateway,
   navigateToControlUiSession,
   type MockGatewayControls,
@@ -15,23 +16,26 @@ const suite = createControlUiE2eSuite({
   startServerBeforeBrowser: true,
 });
 
-const artifactDir = process.env.OPENCLAW_UI_E2E_ARTIFACT_DIR?.trim();
+const artifactRoot = process.env.OPENCLAW_UI_E2E_ARTIFACT_DIR?.trim();
+let artifactDir: string | undefined;
+beforeEach(() => {
+  artifactDir = artifactRoot
+    ? createControlUiE2eArtifactDir("chat-session-companion-clear", artifactRoot)
+    : undefined;
+});
 const answer = "Keep this companion answer visible until the reset succeeds.";
 const initiatingSessionKey = "agent:main:companion-clear";
 const nextSessionKey = "agent:main:companion-next";
 const resetError = "Companion reset unavailable during reconnect";
 
 type CompanionSurface = {
+  clearButton: Locator;
   companion: Locator;
   gateway: MockGatewayControls;
-  menu: Locator;
   page: Page;
 };
 
 async function withCompanion(run: (surface: CompanionSurface) => Promise<void>): Promise<void> {
-  if (artifactDir) {
-    await mkdir(artifactDir, { recursive: true });
-  }
   await suite.withPage(
     {
       locale: "en-US",
@@ -72,7 +76,7 @@ async function withCompanion(run: (surface: CompanionSurface) => Promise<void>):
         sessionKey: initiatingSessionKey,
       });
 
-      await page.goto(`${suite.server.baseUrl}chat`);
+      await page.goto(controlUiSessionUrl(suite.server.baseUrl, initiatingSessionKey));
       const stateRequest = await gateway.waitForRequest("sessions.companion.state");
       expect(stateRequest.params).toEqual({
         agentId: "main",
@@ -83,23 +87,20 @@ async function withCompanion(run: (surface: CompanionSurface) => Promise<void>):
       await companion.getByText(answer, { exact: true }).waitFor();
       // The embedded rail has no header of its own: its destructive clear is
       // contributed to the shared side-panel header by the active panel.
-      const menu = page.locator(
-        ".side-panel__action-group--content wa-dropdown.chat-session-rail__menu",
-      );
-      await run({ companion, gateway, menu, page });
+      const clearButton = page.getByRole("button", { name: "Clear side chat", exact: true });
+      await run({ clearButton, companion, gateway, page });
     },
   );
 }
 
-async function clearCompanion(menu: Locator): Promise<void> {
-  await menu.getByRole("button", { name: "More companion actions" }).click();
-  await menu.locator('wa-dropdown-item[value="clear"]').click();
+async function clearCompanion(clearButton: Locator): Promise<void> {
+  await clearButton.click();
 }
 
 suite.define(() => {
   it("shows a reset failure without clearing the thread, then clears after a successful retry", async () => {
-    await withCompanion(async ({ companion, gateway, menu, page }) => {
-      await clearCompanion(menu);
+    await withCompanion(async ({ clearButton, companion, gateway, page }) => {
+      await clearCompanion(clearButton);
       await gateway.waitForRequest("sessions.companion.reset");
 
       const alert = page.getByRole("alert").filter({ hasText: resetError });
@@ -114,7 +115,7 @@ suite.define(() => {
 
       await alert.getByRole("button", { name: "Dismiss error" }).click();
       await gateway.setMethodResponse("sessions.companion.reset", { ok: true });
-      await clearCompanion(menu);
+      await clearCompanion(clearButton);
 
       await expect
         .poll(async () => (await gateway.getRequests("sessions.companion.reset")).length)
@@ -131,9 +132,9 @@ suite.define(() => {
   });
 
   it("does not publish a delayed reset rejection into a newly selected session", async () => {
-    await withCompanion(async ({ gateway, menu, page }) => {
+    await withCompanion(async ({ clearButton, gateway, page }) => {
       await gateway.deferNext("sessions.companion.reset");
-      await clearCompanion(menu);
+      await clearCompanion(clearButton);
       await gateway.waitForRequest("sessions.companion.reset");
 
       await navigateToControlUiSession(page, nextSessionKey);

@@ -12,8 +12,10 @@ import {
   buildScheduledCodexAppAuthorityInputFingerprint,
   captureScheduledCodexAppAuthority,
   intersectCodexPluginThreadConfigWithScheduledAuthority,
+  readCurrentCodexScheduledAppPolicy,
   resolveScheduledCodexAppCreatorCaptureDecision,
 } from "./scheduled-app-authority.js";
+import { readCodexManagedRequirementsFingerprint } from "./thread-requests.js";
 
 function policyContext() {
   return buildPluginAppPolicyContext(
@@ -109,8 +111,11 @@ describe("scheduled Codex app authority", () => {
     { name: "user home", overrides: { homeScope: "user" }, message: "user-home runtime" },
     {
       name: "missing account identity",
-      overrides: { hasPreparedAccountIdentity: false },
-      message: "genuine ChatGPT account identity",
+      overrides: {
+        hasPreparedAccountIdentity: false,
+        hasConfiguredAppServerIdentity: false,
+      },
+      message: "configured app-server identity",
     },
   ])("refuses creator capture for $name before mutation", ({ overrides, message }) => {
     const decision = resolveScheduledCodexAppCreatorCaptureDecision({
@@ -119,6 +124,7 @@ describe("scheduled Codex app authority", () => {
       usesSupervisionConnection: false,
       homeScope: "agent",
       hasPreparedAccountIdentity: true,
+      hasConfiguredAppServerIdentity: false,
       ...overrides,
     });
 
@@ -127,14 +133,18 @@ describe("scheduled Codex app authority", () => {
     expect(decision.unavailableReason).toContain("no automation changes were saved");
   });
 
-  it("supports creator capture only with a prepared exact account identity", () => {
+  it.each([
+    ["prepared profile", true, false],
+    ["configured app-server", false, true],
+  ])("supports creator capture with a %s identity", (_name, prepared, configured) => {
     expect(
       resolveScheduledCodexAppCreatorCaptureDecision({
         appsMayBeVisible: true,
         authenticatedScheduledMode: false,
         usesSupervisionConnection: false,
         homeScope: "agent",
-        hasPreparedAccountIdentity: true,
+        hasPreparedAccountIdentity: prepared,
+        hasConfiguredAppServerIdentity: configured,
       }),
     ).toEqual({ required: true, supported: true });
   });
@@ -157,7 +167,7 @@ describe("scheduled Codex app authority", () => {
             {
               name: "codex_apps",
               tools: {
-                list: { _meta: { connector_id: "calendar" } },
+                list: { title: "List events", _meta: { connector_id: "calendar" } },
                 create: { _meta: { connector_id: "calendar" } },
                 unrelated: { _meta: { connector_id: "other" } },
               },
@@ -168,7 +178,7 @@ describe("scheduled Codex app authority", () => {
       }
       if (method === "config/read") {
         return {
-          config: { apps: { calendar: { tools: { list: { approval_mode: "writes" } } } } },
+          config: { apps: { calendar: { tools: { "List events": { approval_mode: "writes" } } } } },
         };
       }
       throw new Error(`unexpected method ${method}`);
@@ -178,8 +188,11 @@ describe("scheduled Codex app authority", () => {
       client: { request } as never,
       threadId: "thread-final",
       policyContext: policyContext(),
-      profileId: "openai:work",
-      accountId: "acct-1",
+      auth: {
+        kind: "prepared-profile",
+        profileId: "openai:work",
+        accountId: "acct-1",
+      },
       configCwd: "/workspace",
     });
 
@@ -219,8 +232,11 @@ describe("scheduled Codex app authority", () => {
         client: { request } as never,
         threadId: "thread-final",
         policyContext: policyContext(),
-        profileId: "openai:work",
-        accountId: "acct-1",
+        auth: {
+          kind: "prepared-profile",
+          profileId: "openai:work",
+          accountId: "acct-1",
+        },
       }),
     ).resolves.toBeUndefined();
   });
@@ -250,8 +266,11 @@ describe("scheduled Codex app authority", () => {
         client: { request } as never,
         threadId: "thread-final",
         policyContext: policyContext(),
-        profileId: "openai:work",
-        accountId: "acct-1",
+        auth: {
+          kind: "prepared-profile",
+          profileId: "openai:work",
+          accountId: "acct-1",
+        },
         timeoutMs: 100,
       }),
     ).rejects.toThrow(
@@ -282,10 +301,74 @@ describe("scheduled Codex app authority", () => {
         client: { request } as never,
         threadId: "thread-final",
         policyContext: policyContext(),
-        profileId: "openai:work",
-        accountId: "acct-1",
+        auth: {
+          kind: "prepared-profile",
+          profileId: "openai:work",
+          accountId: "acct-1",
+        },
       }),
     ).rejects.toThrow("No automation changes were saved");
+  });
+
+  it("captures configured app-server authority without a prepared ChatGPT account", async () => {
+    const managedRequirements = {
+      hooks: { PreToolUse: [{ matcher: "*", hooks: [{ type: "command" }] }] },
+    };
+    const request = vi.fn(async (method: string) => {
+      if (method === "app/installed") {
+        return { apps: [{ id: "calendar", enabled: true, callable: true }] };
+      }
+      if (method === "mcpServerStatus/list") {
+        return {
+          data: [
+            {
+              name: "codex_apps",
+              tools: { list: { _meta: { connector_id: "calendar" } } },
+            },
+          ],
+          nextCursor: null,
+        };
+      }
+      if (method === "config/read") {
+        return { config: {} };
+      }
+      if (method === "configRequirements/read") {
+        return { requirements: managedRequirements };
+      }
+      throw new Error(`unexpected method ${method}`);
+    });
+    const managedRequirementsFingerprint = await readCodexManagedRequirementsFingerprint({
+      request,
+    } as never);
+
+    await expect(
+      captureScheduledCodexAppAuthority({
+        client: { request } as never,
+        threadId: "thread-final",
+        policyContext: policyContext(),
+        auth: {
+          kind: "configured-app-server",
+          connectionFingerprint: "configured-connection",
+        },
+      }),
+    ).resolves.toEqual(
+      authority({
+        auth: {
+          kind: "configured-app-server",
+          connectionFingerprint: "configured-connection",
+          managedRequirementsFingerprint,
+        },
+        apps: [
+          {
+            id: "calendar",
+            allowDestructiveActions: true,
+            allowOpenWorld: true,
+            destructiveApprovalMode: "allow",
+            tools: { list: "approve" },
+          },
+        ],
+      }),
+    );
   });
 
   it("intersects stored and current app/tool authority without admitting new apps", () => {
@@ -295,6 +378,7 @@ describe("scheduled Codex app authority", () => {
       {
         config: {
           apps: {
+            newly_connected: { enabled: true, default_tools_approval_mode: "approve" },
             calendar: {
               tools: {
                 list: { approval_mode: "writes" },
@@ -304,7 +388,16 @@ describe("scheduled Codex app authority", () => {
             },
           },
         },
-        toolNamesByApp: new Map([["calendar", new Set(["list", "edit", "newly_added"])]]),
+        toolsByApp: new Map([
+          [
+            "calendar",
+            new Map([
+              ["list", {}],
+              ["edit", {}],
+              ["newly_added", {}],
+            ]),
+          ],
+        ]),
       },
     );
 
@@ -318,6 +411,7 @@ describe("scheduled Codex app authority", () => {
     });
     expect(intersected.configPatch).toMatchObject({
       apps: {
+        newly_connected: { enabled: false },
         _default: {
           enabled: false,
           destructive_enabled: false,
@@ -329,12 +423,326 @@ describe("scheduled Codex app authority", () => {
           open_world_enabled: false,
           approvals_reviewer: "user",
           tools: {
-            list: { approval_mode: "prompt" },
-            edit: { approval_mode: "prompt" },
-            newly_added: { approval_mode: "prompt" },
+            list: { enabled: false, approval_mode: "prompt" },
+            edit: { enabled: false, approval_mode: "prompt" },
+            newly_added: { enabled: false, approval_mode: "prompt" },
           },
         },
       },
+    });
+  });
+
+  it.each([
+    { current: "ask", captured: "allow" },
+    { current: "allow", captured: "ask" },
+  ] as const)(
+    "keeps link approvals with the user for current $current and captured $captured policy",
+    ({ current, captured }) => {
+      const config = threadConfig();
+      config.policyContext.apps.calendar = {
+        source: "account",
+        appName: "Calendar",
+        mcpServerNames: [],
+        allowDestructiveActions: true,
+        allowOpenWorld: true,
+        destructiveApprovalMode: current,
+      };
+      config.configPatch = {
+        apps: {
+          calendar: {
+            enabled: true,
+            ...(current === "ask"
+              ? {
+                  links: {
+                    account: { approvals_reviewer: "user", default_tools_approval_mode: "auto" },
+                  },
+                }
+              : {}),
+          },
+          newly_connected: { enabled: true },
+        },
+      };
+      const intersected = intersectCodexPluginThreadConfigWithScheduledAuthority(
+        config,
+        authority({
+          apps: [
+            {
+              id: "calendar",
+              allowDestructiveActions: true,
+              allowOpenWorld: true,
+              destructiveApprovalMode: captured,
+              tools: { edit: "approve", blocked: "approve" },
+            },
+          ],
+        }),
+        {
+          config: {
+            apps: {
+              calendar: {
+                enabled: true,
+                links: {
+                  account: {
+                    approvals_reviewer: "auto_review",
+                    default_tools_approval_mode: "approve",
+                  },
+                },
+                tools: {
+                  edit: { approval_mode: "approve" },
+                  blocked: { enabled: false, approval_mode: "approve" },
+                },
+              },
+              newly_connected: { enabled: true },
+            },
+          },
+          toolsByApp: new Map([
+            [
+              "calendar",
+              new Map([
+                ["edit", {}],
+                ["blocked", {}],
+              ]),
+            ],
+          ]),
+        },
+      );
+
+      expect(intersected.provisionalAppIds).toEqual(["calendar"]);
+      expect(intersected.configPatch).toMatchObject({
+        apps: {
+          calendar: {
+            approvals_reviewer: "user",
+            links: {
+              account: { approvals_reviewer: "user", default_tools_approval_mode: "auto" },
+            },
+            tools: {
+              edit: { enabled: true, approval_mode: "prompt" },
+              blocked: { enabled: false, approval_mode: "prompt" },
+            },
+          },
+          newly_connected: { enabled: false },
+        },
+      });
+    },
+  );
+
+  it.each([
+    {
+      name: "explicit tool disablement",
+      appConfig: {
+        default_tools_enabled: true,
+        tools: { edit: { enabled: false } },
+      },
+      expectedEnabled: false,
+    },
+    {
+      name: "app default disablement",
+      appConfig: { default_tools_enabled: false },
+      expectedEnabled: false,
+    },
+    {
+      name: "app destructive restriction with unknown annotations",
+      appConfig: { destructive_enabled: false },
+      expectedEnabled: false,
+    },
+    {
+      name: "app open-world restriction with unknown annotations",
+      appConfig: { open_world_enabled: false },
+      expectedEnabled: false,
+    },
+    {
+      name: "explicit tool enablement over app default disablement",
+      appConfig: {
+        default_tools_enabled: false,
+        tools: { edit: { enabled: true } },
+      },
+      expectedEnabled: true,
+    },
+    {
+      name: "explicit tool enablement over current app hint defaults",
+      appConfig: {
+        destructive_enabled: false,
+        open_world_enabled: false,
+        tools: { edit: { enabled: true } },
+      },
+      expectedEnabled: true,
+    },
+    {
+      name: "title-keyed enablement over app default disablement",
+      appConfig: {
+        default_tools_enabled: false,
+        tools: { "Edit event": { enabled: true } },
+      },
+      expectedEnabled: true,
+    },
+    {
+      name: "title-keyed disablement over app default enablement",
+      appConfig: {
+        default_tools_enabled: true,
+        tools: { "Edit event": { enabled: false } },
+      },
+      expectedEnabled: false,
+    },
+    {
+      name: "full-name disablement over title-keyed enablement",
+      appConfig: {
+        default_tools_enabled: true,
+        tools: { edit: { enabled: false }, "Edit event": { enabled: true } },
+      },
+      expectedEnabled: false,
+    },
+    {
+      name: "full-name entry without enablement over title-keyed enablement",
+      appConfig: {
+        default_tools_enabled: false,
+        tools: { edit: { approval_mode: "prompt" }, "Edit event": { enabled: true } },
+      },
+      expectedEnabled: false,
+    },
+  ])("preserves $name from the current Codex config", ({ appConfig, expectedEnabled }) => {
+    const config = threadConfig();
+    config.policyContext = policyContext();
+    const intersected = intersectCodexPluginThreadConfigWithScheduledAuthority(
+      config,
+      authority(),
+      {
+        config: { apps: { calendar: appConfig } },
+        toolsByApp: new Map([["calendar", new Map([["edit", { title: "Edit event" }]])]]),
+      },
+    );
+
+    expect(intersected.configPatch).toMatchObject({
+      apps: {
+        calendar: {
+          tools: {
+            edit: { enabled: expectedEnabled },
+          },
+        },
+      },
+    });
+  });
+
+  it.each(["stored", "current"] as const)(
+    "keeps %s app caps authoritative over explicit tool enablement",
+    async (owner) => {
+      const config = threadConfig();
+      if (owner === "stored") {
+        config.policyContext = policyContext();
+      }
+      const stored = authority();
+      if (owner === "stored") {
+        for (const app of stored.payload.apps) {
+          app.allowDestructiveActions = false;
+          app.allowOpenWorld = false;
+        }
+      }
+      const currentPolicy = await readCurrentCodexScheduledAppPolicy({
+        request: async (method) =>
+          method === "config/read"
+            ? {
+                config: {
+                  apps: {
+                    calendar: {
+                      default_tools_enabled: true,
+                      tools: { destructive: { enabled: true } },
+                    },
+                  },
+                },
+              }
+            : {
+                data: [
+                  {
+                    name: "codex_apps",
+                    tools: {
+                      newly_benign: {
+                        _meta: { connector_id: "calendar" },
+                        annotations: { destructiveHint: false, openWorldHint: false },
+                      },
+                      destructive: {
+                        _meta: { connector_id: "calendar" },
+                        annotations: { destructiveHint: true, openWorldHint: false },
+                      },
+                      open_world: {
+                        _meta: { connector_id: "calendar" },
+                        annotations: { destructiveHint: false, openWorldHint: true },
+                      },
+                      unannotated: { _meta: { connector_id: "calendar" } },
+                    },
+                  },
+                ],
+                nextCursor: null,
+              },
+      });
+
+      const intersected = intersectCodexPluginThreadConfigWithScheduledAuthority(
+        config,
+        stored,
+        currentPolicy,
+      );
+
+      expect(intersected.configPatch).toMatchObject({
+        apps: {
+          calendar: {
+            tools: {
+              newly_benign: { enabled: true },
+              destructive: { enabled: false },
+              open_world: { enabled: false },
+              unannotated: { enabled: false },
+            },
+          },
+        },
+      });
+    },
+  );
+
+  it.each([
+    { name: "global default", app: {}, expected: "prompt" },
+    {
+      name: "app default over global default",
+      app: { default_tools_approval_mode: "writes" },
+      expected: "writes",
+    },
+    {
+      name: "tool override over app default",
+      app: {
+        default_tools_approval_mode: "prompt",
+        tools: { edit: { approval_mode: "approve" } },
+      },
+      expected: "approve",
+    },
+  ])("preserves approval $name during capture and continuation", async ({ app, expected }) => {
+    const request = vi.fn(async (method: string) => {
+      if (method === "app/installed") {
+        return { apps: [{ id: "calendar", enabled: true, callable: true }] };
+      }
+      if (method === "config/read") {
+        return {
+          config: {
+            apps: { _default: { default_tools_approval_mode: "prompt" }, calendar: app },
+          },
+        };
+      }
+      return {
+        data: [{ name: "codex_apps", tools: { edit: { _meta: { connector_id: "calendar" } } } }],
+        nextCursor: null,
+      };
+    });
+    const captured = await captureScheduledCodexAppAuthority({
+      client: { request } as never,
+      threadId: "thread-final",
+      policyContext: policyContext(),
+      auth: { kind: "prepared-profile", profileId: "openai:work", accountId: "acct-1" },
+    });
+    expect(captured).toMatchObject({ payload: { apps: [{ tools: { edit: expected } }] } });
+
+    const config = threadConfig();
+    config.policyContext = policyContext();
+    const intersected = intersectCodexPluginThreadConfigWithScheduledAuthority(
+      config,
+      authority(),
+      await readCurrentCodexScheduledAppPolicy({ request }),
+    );
+    expect(intersected.configPatch).toMatchObject({
+      apps: { calendar: { tools: { edit: { approval_mode: expected } } } },
     });
   });
 
@@ -344,7 +752,15 @@ describe("scheduled Codex app authority", () => {
       authority(),
       {
         config: {},
-        toolNamesByApp: new Map([["calendar", new Set(["list", "edit"])]]),
+        toolsByApp: new Map([
+          [
+            "calendar",
+            new Map([
+              ["list", {}],
+              ["edit", {}],
+            ]),
+          ],
+        ]),
       },
     );
     const narrowed = intersectCodexPluginThreadConfigWithScheduledAuthority(
@@ -352,7 +768,7 @@ describe("scheduled Codex app authority", () => {
       authority(),
       {
         config: {},
-        toolNamesByApp: new Map([["calendar", new Set(["list"])]]),
+        toolsByApp: new Map([["calendar", new Map([["list", {}]])]]),
       },
     );
 
@@ -370,7 +786,7 @@ describe("scheduled Codex app authority", () => {
     expect(() =>
       intersectCodexPluginThreadConfigWithScheduledAuthority(threadConfig(), authority(), {
         config: {},
-        toolNamesByApp: new Map(),
+        toolsByApp: new Map(),
       }),
     ).toThrow("Scheduled Codex apps are unavailable under the current policy or account: calendar");
   });
@@ -406,12 +822,12 @@ describe("scheduled Codex app authority", () => {
       authority(),
       {
         config: {},
-        toolNamesByApp: new Map([["calendar", new Set(["edit"])]]),
+        toolsByApp: new Map([["calendar", new Map([["edit", {}]])]]),
       },
     );
 
     expect(intersected.configPatch).toMatchObject({
-      apps: { calendar: { tools: { edit: { approval_mode: expected } } } },
+      apps: { calendar: { tools: { edit: { enabled: true, approval_mode: expected } } } },
     });
   });
 
@@ -516,7 +932,7 @@ describe("scheduled Codex app authority", () => {
 
     await expect(provider.build()).rejects.toMatchObject({
       name: "AgentHarnessPreflightError",
-      message: expect.stringContaining("Scheduled Codex app policy verification exceeded"),
+      message: expect.stringContaining("Codex app policy verification exceeded"),
     });
     expect(Date.now() - startedAt).toBeLessThan(1_000);
     expect(request.mock.calls.map(([method]) => method)).toEqual([

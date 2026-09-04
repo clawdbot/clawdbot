@@ -10,6 +10,7 @@ import { disposeAllSessionMcpRuntimes } from "../agents/agent-bundle-mcp-tools.j
 import { disposeRegisteredAgentHarnesses } from "../agents/harness/registry.js";
 import { createAgentRunRestartAbortError } from "../agents/run-termination.js";
 import { fenceSessionSuspensionWritesForGatewayShutdown } from "../agents/session-suspension.js";
+import { captureGatewayReplyRunRestartAbort } from "../auto-reply/reply/reply-run-registry.js";
 import { type ChannelId, listChannelPlugins } from "../channels/plugins/index.js";
 import { createInternalHookEvent, triggerInternalHook } from "../hooks/internal-hooks.js";
 import type { HeartbeatRunner } from "../infra/heartbeat-runner.js";
@@ -38,6 +39,8 @@ import {
 } from "./server-chat-state.js";
 import type { MediaCleanupStopResult } from "./server-media-cleanup-lifecycle.js";
 import { clearSessionTypingState } from "./server-methods/session-typing-state.js";
+import type { GatewayContextResolver } from "./server-methods/types.js";
+import type { GatewayMaintenanceHandles } from "./server-runtime-services.js";
 
 const shutdownLog = createSubsystemLogger("gateway/shutdown");
 const GATEWAY_SHUTDOWN_HOOK_TIMEOUT_MS = 5_000;
@@ -194,6 +197,7 @@ async function sleepForRestartReplyDrain(delayMs: number): Promise<void> {
 }
 
 type RestartRunAbortParams = {
+  resolveGatewayContext: GatewayContextResolver;
   chatAbortControllers: Map<string, ChatAbortControllerEntry>;
   chatQueuedTurns: QueuedChatTurnMap;
   restartRecoveryCandidates?: Map<string, RestartRecoveryCandidate>;
@@ -207,23 +211,10 @@ type RestartRunAbortParams = {
   broadcast: (event: string, payload: unknown, opts?: { dropIfSlow?: boolean }) => void;
   nodeSendToSession: (sessionKey: string, event: string, payload: unknown) => void;
   markMainSessionsAbortedForRestart?: (params: {
-    sessionKeys: Set<string>;
-    sessionIds: Set<string>;
-    activeRuns: Array<{
-      runId: string;
-      lifecycleGeneration: string;
-      sessionKey: string;
-      sessionId: string;
-      observedAt?: number;
-    }>;
+    resolveGatewayContext: GatewayContextResolver;
+    activeRuns: RestartRecoveryCandidate[];
     reason: string;
-    isActiveRun: (run: {
-      runId: string;
-      lifecycleGeneration: string;
-      sessionKey: string;
-      sessionId: string;
-      observedAt?: number;
-    }) => boolean;
+    isActiveRun: (run: RestartRecoveryCandidate) => boolean;
   }) => Promise<void> | void;
   resolveActiveSessionIdForKey?: (sessionKey: string) => string | undefined;
 };
@@ -269,24 +260,10 @@ function collectActiveRestartSessionRefs(
     RestartRunAbortParams,
     "chatAbortControllers" | "resolveActiveSessionIdForKey" | "restartRecoveryCandidates"
   >,
-): {
-  sessionKeys: Set<string>;
-  sessionIds: Set<string>;
-  activeRuns: Array<{
-    runId: string;
-    lifecycleGeneration: string;
-    sessionKey: string;
-    sessionId: string;
-    observedAt?: number;
-  }>;
-} {
-  const sessionKeys = new Set<string>();
-  const sessionIds = new Set<string>();
+): RestartRecoveryCandidate[] {
   const activeRuns = new Map<string, RestartRecoveryCandidate>();
   const observedAt = Date.now();
   const addRun = (run: RestartRecoveryCandidate) => {
-    sessionKeys.add(run.sessionKey);
-    sessionIds.add(run.sessionId);
     activeRuns.set(`${run.runId}\u0000${run.lifecycleGeneration}`, {
       ...run,
       observedAt: run.observedAt ?? observedAt,
@@ -294,18 +271,12 @@ function collectActiveRestartSessionRefs(
   };
   for (const [runId, entry] of listRestartRecoveryRuns(params.chatAbortControllers)) {
     const sessionKey = entry.sessionKey.trim();
-    if (sessionKey) {
-      sessionKeys.add(sessionKey);
-    }
     // Registration metadata can predate a reset or compaction session-id rotation.
     const resolvedSessionId =
       entry.kind === "agent" || !sessionKey
         ? undefined
         : params.resolveActiveSessionIdForKey?.(sessionKey);
     const sessionId = resolvedSessionId || entry.sessionId.trim();
-    if (sessionId) {
-      sessionIds.add(sessionId);
-    }
     if (runId && entry.lifecycleGeneration && sessionKey && sessionId) {
       addRun({
         runId,
@@ -323,7 +294,7 @@ function collectActiveRestartSessionRefs(
       sessionId: resolvedSessionId || candidate.sessionId,
     });
   }
-  return { sessionKeys, sessionIds, activeRuns: [...activeRuns.values()] };
+  return [...activeRuns.values()];
 }
 
 async function settleTerminalSessionPersistenceForRestart(
@@ -356,6 +327,7 @@ async function settleTerminalSessionPersistenceForRestart(
     if (!tracked || tracked.entry.projectSessionTerminalPersistence !== tracked.persistence) {
       continue;
     }
+    tracked.entry.projectSessionTerminalPending = false;
     tracked.entry.projectSessionTerminalPersistence = undefined;
     if (result.status === "fulfilled") {
       tracked.entry.projectSessionTerminalPersisted = true;
@@ -368,15 +340,15 @@ async function markActiveRunsForRestartRecovery(
     reason: string;
     warnings: string[];
   },
-): Promise<void> {
+): Promise<number> {
   if (!params.markMainSessionsAbortedForRestart) {
-    return;
+    return 0;
   }
   await settleTerminalSessionPersistenceForRestart(params.chatAbortControllers);
-  const refs = collectActiveRestartSessionRefs(params);
-  if (refs.sessionKeys.size === 0 && refs.sessionIds.size === 0) {
-    return;
-  }
+  const activeRuns = collectActiveRestartSessionRefs(params);
+  const activeEntries = new Map(params.chatAbortControllers);
+  const recoveryCandidates = new Map(params.restartRecoveryCandidates);
+  const abortReplyRuns = captureGatewayReplyRunRestartAbort(params.resolveGatewayContext);
   try {
     const markerTimeout = createTimeoutRace(
       RESTART_MARKER_SLOW_WARNING_MS,
@@ -384,18 +356,22 @@ async function markActiveRunsForRestartRecovery(
     );
     const markerOutcome = Promise.resolve(
       params.markMainSessionsAbortedForRestart({
-        ...refs,
+        resolveGatewayContext: params.resolveGatewayContext,
+        activeRuns,
         reason: params.reason,
         isActiveRun: (run) => {
           const entry = params.chatAbortControllers.get(run.runId);
           const candidate = params.restartRecoveryCandidates?.get(run.runId);
           return (
             (entry &&
+              entry === activeEntries.get(run.runId) &&
               !entry.controller.signal.aborted &&
               (entry.registrationCleanupRequested !== true ||
                 entry.projectSessionTerminalPersisted !== true) &&
               entry.lifecycleGeneration === run.lifecycleGeneration) ||
-            candidate?.lifecycleGeneration === run.lifecycleGeneration
+            (candidate !== undefined &&
+              candidate === recoveryCandidates.get(run.runId) &&
+              candidate.lifecycleGeneration === run.lifecycleGeneration)
           );
         },
       }),
@@ -417,13 +393,23 @@ async function markActiveRunsForRestartRecovery(
     } else if (firstOutcome.status === "failed") {
       throw firstOutcome.error;
     }
-    for (const run of refs.activeRuns) {
-      params.restartRecoveryCandidates?.delete(run.runId);
+    for (const run of activeRuns) {
+      if (params.restartRecoveryCandidates?.get(run.runId) === recoveryCandidates.get(run.runId)) {
+        params.restartRecoveryCandidates?.delete(run.runId);
+      }
     }
   } catch (err) {
     shutdownLog.warn(`failed to mark active main session(s) for restart recovery: ${String(err)}`);
     recordShutdownWarning(params.warnings, "restart-main-session-marker");
   }
+  // Disposing a tool cell can settle its result and start a finalizer. Cancel its
+  // parent after the marker settles, including failures, before resource teardown.
+  return abortReplyRuns((sessionId, error) => {
+    shutdownLog.warn(
+      `failed to cancel reply for restart: sessionId=${sessionId} error=${String(error)}`,
+    );
+    recordShutdownWarning(params.warnings, "restart-reply-abort");
+  });
 }
 
 /** Abort active chat runs that did not drain before restart shutdown. */
@@ -522,19 +508,11 @@ async function drainRestartPendingRepliesForShutdown(
     shutdownLog.warn(`aborted ${abortedQueuedTurns} queued turn(s) during restart shutdown`);
   }
 
-  if (
-    drainResult.counts.activeRuns <= 0 &&
-    (params.restartRecoveryCandidates?.size ?? 0) === 0 &&
-    listRestartRecoveryRuns(params.chatAbortControllers).length === 0
-  ) {
-    return;
-  }
-
-  await markActiveRunsForRestartRecovery({
+  const abortedReplies = await markActiveRunsForRestartRecovery({
     ...params,
     reason: "gateway restart shutdown",
   });
-  const abortedRuns = abortActiveRunsForRestart(params);
+  const abortedRuns = abortActiveRunsForRestart(params) + abortedReplies;
   if (abortedRuns <= 0) {
     return;
   }
@@ -725,15 +703,11 @@ export function createGatewayCloseHandler(
     closeProviderTransportDispatcherPool: () => Promise<void>;
     cron: { stop: () => void; stopAndDrain?: () => Promise<void> };
     heartbeatRunner: HeartbeatRunner;
-    updateCheckStop?: (() => void) | null;
+    updateCheckStop?: (() => Promise<void> | void) | null;
     stopTaskRegistryMaintenance?: (() => Promise<void> | void) | null;
     nodePresenceTimers: Map<string, ReturnType<typeof setInterval>>;
-    tickInterval: ReturnType<typeof setInterval>;
-    healthInterval: ReturnType<typeof setInterval>;
-    dedupeCleanup: ReturnType<typeof setInterval>;
+    maintenance: GatewayMaintenanceHandles | null;
     stopMediaCleanup: () => Promise<MediaCleanupStopResult>;
-    worktreeCleanup: ReturnType<typeof setInterval> | null;
-    skillCuratorCleanup: () => void;
     agentUnsub: (() => Promise<void> | void) | null;
     heartbeatUnsub: (() => void) | null;
     transcriptUnsub: (() => void) | null;
@@ -745,6 +719,7 @@ export function createGatewayCloseHandler(
       socket: { close: (code: number, reason: string) => void };
     }>;
     configReloader: { stop: () => Promise<void> };
+    finishRequestEntries?: () => Promise<void>;
     wss?: WebSocketServer;
     httpServer?: HttpServer;
     httpServers?: HttpServer[];
@@ -776,6 +751,7 @@ export function createGatewayCloseHandler(
       // info, and the completion line below reports duration and outcome.
       shutdownLog.debug(`shutdown started: ${reason}`);
 
+      await shutdownStep("update-check", () => params.updateCheckStop?.(), warnings);
       await measureCloseStep("config-reloader", () =>
         shutdownStep("config-reloader", () => params.configReloader.stop(), warnings),
       );
@@ -841,6 +817,7 @@ export function createGatewayCloseHandler(
             "restart-reply-drain",
             () =>
               drainRestartPendingRepliesForShutdown({
+                resolveGatewayContext: params.resolveGatewayContext,
                 getPendingReplyCount: params.getPendingReplyCount!,
                 chatAbortControllers: params.chatAbortControllers,
                 chatQueuedTurns: params.chatQueuedTurns,
@@ -967,22 +944,23 @@ export function createGatewayCloseHandler(
         () => params.stopTaskRegistryMaintenance?.(),
         warnings,
       );
-      await shutdownStep("update-check", () => params.updateCheckStop?.(), warnings);
       for (const timer of params.nodePresenceTimers.values()) {
         clearInterval(timer);
       }
       params.nodePresenceTimers.clear();
+      // Omit rather than null: ShutdownEventSchema declares an optional integer,
+      // and clients key the restart presentation on the field's presence.
       params.broadcast("shutdown", {
         reason,
-        restartExpectedMs,
+        ...(restartExpectedMs === null ? {} : { restartExpectedMs }),
       });
-      clearInterval(params.tickInterval);
-      clearInterval(params.healthInterval);
-      clearInterval(params.dedupeCleanup);
-      if (params.worktreeCleanup) {
-        clearInterval(params.worktreeCleanup);
+      if (params.maintenance) {
+        clearInterval(params.maintenance.tickInterval);
+        clearInterval(params.maintenance.healthInterval);
+        clearInterval(params.maintenance.dedupeCleanup);
+        clearInterval(params.maintenance.worktreeCleanup);
+        params.maintenance.skillUsageCleanup();
       }
-      params.skillCuratorCleanup();
       if (params.agentUnsub) {
         await shutdownStep("agent-unsub", () => params.agentUnsub!(), warnings);
       }
@@ -1055,6 +1033,9 @@ export function createGatewayCloseHandler(
           }
         });
       }
+      // Node cleanup replies remain admissible until sockets close. Join their
+      // uncancellable preparation before releasing the remaining process state.
+      await params.finishRequestEntries?.();
       clearSessionTypingState();
       const transportServers =
         params.httpServers && params.httpServers.length > 0
@@ -1096,20 +1077,20 @@ export function createGatewayCloseHandler(
         warnings,
       });
     } finally {
+      await params.finishRequestEntries?.();
       await shutdownStep("plugin-host-registry", clearActivePluginRegistry, warnings);
-      // Rent: plugin cleanup may still read ambient slots, so drain their shared
-      // lifecycle only after the registry owner has finished retiring plugins.
-      await shutdownStep(
-        "ambient-runtime-state",
-        () => drainGlobalSingletonLifecycleState(restartExpectedMs === null ? "close" : "restart"),
-        warnings,
-      );
       // Channel and plugin teardown still resolve account credentials. Keep the
       // active snapshot until every teardown owner is done, then always scrub it.
       try {
-        params.clearSecretsRuntimeSnapshot?.();
-      } catch {
-        /* ignore */
+        // Plugin cleanup may still read ambient slots. A failed owner drain must
+        // stop restart so the next lifecycle cannot reuse incomplete shutdown.
+        await drainGlobalSingletonLifecycleState(restartExpectedMs === null ? "close" : "restart");
+      } finally {
+        try {
+          params.clearSecretsRuntimeSnapshot?.();
+        } catch {
+          /* ignore */
+        }
       }
     }
 

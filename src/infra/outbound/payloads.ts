@@ -9,6 +9,7 @@ import {
 } from "../../auto-reply/reply/reply-payloads.js";
 import { stripLeadingInboundMetadata } from "../../auto-reply/reply/strip-inbound-meta.js";
 import type { ReplyPayload } from "../../auto-reply/types.js";
+import { formatLocationText } from "../../channels/location.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import {
   hasLegacyInteractiveReplyBlocks,
@@ -138,16 +139,12 @@ function collectPresentationMirrorText(presentation: MessagePresentation | undef
   return lines;
 }
 
-function collectInteractiveMirrorText(interactive: LegacyInteractiveReply | undefined): string[] {
-  if (!interactive) {
-    return [];
-  }
-  return collectBlockMirrorText(interactive.blocks);
-}
-
-function resolveOutboundMirrorText(entry: OutboundPayloadPlan): string {
-  const text = entry.parts.text.trim() ? entry.parts.text : entry.payload.text;
-  const presentation = normalizeMessagePresentation(entry.payload.presentation);
+/** Renders user-visible payload content safely for every outbound transcript mirror. */
+export function resolveOutboundPayloadMirrorText(payload: ReplyPayload): string {
+  const text = payload.text?.trim()
+    ? payload.text
+    : payload.location && formatLocationText(payload.location);
+  const presentation = normalizeMessagePresentation(payload.presentation);
   if (text?.trim()) {
     const structuredDataText = presentation
       ? collectBlockMirrorText(
@@ -156,10 +153,10 @@ function resolveOutboundMirrorText(entry: OutboundPayloadPlan): string {
       : [];
     return [text, ...structuredDataText].join("\n");
   }
-  const interactive = normalizeLegacyInteractiveReply(entry.payload.interactive);
+  const interactive = normalizeLegacyInteractiveReply(payload.interactive);
   return [
     ...collectPresentationMirrorText(presentation),
-    ...collectInteractiveMirrorText(interactive),
+    ...collectBlockMirrorText(interactive?.blocks ?? []),
   ].join("\n");
 }
 
@@ -225,25 +222,20 @@ function createOutboundPayloadPlanEntry(
   const mergedMedia = mergeMediaUrls(
     explicitMediaUrls,
     explicitMediaUrl ? [explicitMediaUrl] : undefined,
+    parsed.mediaUrls,
   );
   const strippedText = stripUnsupportedCitationControlMarkers(parsed.text ?? "");
   const strippedParsed =
     strippedText === (parsed.text ?? "") ? parsed : parseReplyDirectives(strippedText);
   const parsedText = strippedParsed.text ?? "";
-  if (
-    (strippedParsed.isSilent || isSuppressedRelayStatusText(parsedText)) &&
-    mergedMedia.length === 0
-  ) {
-    return null;
-  }
-  const hasMultipleMedia = (explicitMediaUrls?.length ?? 0) > 1;
-  const resolvedMediaUrl = hasMultipleMedia ? undefined : explicitMediaUrl;
+  const suppressedText = strippedParsed.isSilent || isSuppressedRelayStatusText(parsedText);
+  const resolvedMediaUrl = mergedMedia.length > 1 ? undefined : explicitMediaUrl;
   const normalizedPayload: ReplyPayload = {
     ...payload,
     text:
       formatBtwTextForExternalDelivery({
         ...payload,
-        text: parsedText,
+        text: suppressedText ? "" : parsedText,
       }) ?? "",
     mediaUrls: mergedMedia.length ? mergedMedia : undefined,
     mediaUrl: resolvedMediaUrl,
@@ -252,7 +244,10 @@ function createOutboundPayloadPlanEntry(
     replyToCurrent: payload.replyToCurrent || parsed.replyToCurrent,
     audioAsVoice: Boolean(payload.audioAsVoice || parsed.audioAsVoice),
   };
-  if (!isRenderablePayload(normalizedPayload)) {
+  const hasRenderableContent = suppressedText
+    ? hasReplyPayloadContent(normalizedPayload)
+    : isRenderablePayload(normalizedPayload);
+  if (!hasRenderableContent) {
     return null;
   }
   const hasChannelData = hasReplyChannelData(normalizedPayload.channelData);
@@ -360,7 +355,7 @@ export function projectOutboundPayloadPlanForMirror(
 ): OutboundPayloadMirror {
   return {
     text: plan
-      .map(resolveOutboundMirrorText)
+      .map(({ payload }) => resolveOutboundPayloadMirrorText(payload))
       .filter((text): text is string => Boolean(text))
       .join("\n"),
     mediaUrls: plan.flatMap((entry) => entry.parts.mediaUrls),

@@ -3,6 +3,23 @@ import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { applySystemAgentModelSelection } from "./setup-model-selection.js";
 
 describe("applySystemAgentModelSelection", () => {
+  it("updates the configured system owner without changing the legacy owner", async () => {
+    const config = {
+      agents: {
+        defaults: { systemAgent: { agentId: "beta" } },
+        entries: {
+          alpha: { default: true, model: "openai/gpt-5.5" },
+          beta: { model: "openai/gpt-5.6-sol" },
+        },
+      },
+    } satisfies OpenClawConfig;
+
+    const result = await applySystemAgentModelSelection({ config, model: "openai/gpt-5.6-luna" });
+
+    expect(result.agents?.entries?.alpha?.model).toBe("openai/gpt-5.5");
+    expect(result.agents?.entries?.beta?.model).toBe("openai/gpt-5.6-luna");
+  });
+
   it("rejects an unrepresentable explicit agent instead of updating main", async () => {
     const config = {
       agents: {

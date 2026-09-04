@@ -21,11 +21,7 @@ import {
 import { readRequiredProposal } from "./service-query.js";
 import { readSkillProposalEvents, recordSkillProposalEvaluation } from "./store-evaluation.js";
 import { assertSkillProposalEvaluationWithinLimit } from "./store-record.js";
-import {
-  hashSkillProposalContent,
-  readProposalSupportFiles,
-  withSkillProposalTargetLock,
-} from "./store.js";
+import { hashSkillProposalContent, withSkillProposalTargetLock } from "./store.js";
 import type {
   SkillProposalEvaluateInput,
   SkillProposalEvaluateResult,
@@ -81,7 +77,6 @@ export async function evaluateSkillProposal(
       if (hashSkillProposalContent(read.content) !== read.record.draftHash) {
         throw new Error("Proposal draft changed without updating proposal metadata.");
       }
-      const supportFiles = await readProposalSupportFiles(read.record, storeOptions(input.env));
       if (
         shouldRunEvaluators &&
         read.record.kind === "create" &&
@@ -96,7 +91,7 @@ export async function evaluateSkillProposal(
         bundles: shouldRunEvaluators
           ? await buildSkillProposalEvaluationBundles({
               proposal: read,
-              supportFiles,
+              supportFiles: read.supportFiles ?? [],
             })
           : undefined,
       };
@@ -177,11 +172,6 @@ export async function evaluateSkillProposal(
         current.revisionHash !== read.revisionHash ||
         hashSkillProposalContent(current.content) !== current.record.draftHash
       ) {
-        throw new Error(`Skill proposal ${read.record.id} changed while evaluation was running.`);
-      }
-      try {
-        await readProposalSupportFiles(current.record, storeOptions(input.env));
-      } catch {
         throw new Error(`Skill proposal ${read.record.id} changed while evaluation was running.`);
       }
       if (bundles) {

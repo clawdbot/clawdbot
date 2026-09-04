@@ -2,6 +2,7 @@ import { safeParseJsonRecord } from "@openclaw/normalization-core";
 import { asPositiveSafeInteger } from "@openclaw/normalization-core/number-coercion";
 import { asOptionalRecord as readRecord } from "@openclaw/normalization-core/record-coerce";
 import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
+import { readAssistantDisplayContent } from "../shared/assistant-display-content.js";
 import { isOpenClawDeliveryMirrorAssistantMessage } from "../shared/transcript-only-openclaw-assistant.js";
 import {
   extractAssistantTextForSilentCheck,
@@ -86,7 +87,7 @@ function hasNonEmptyValue(value: unknown): boolean {
   if (!value || typeof value !== "object") {
     return value != null;
   }
-  return Object.values(value as Record<string, unknown>).some(hasNonEmptyValue);
+  return Object.values(value).some(hasNonEmptyValue);
 }
 
 function hasExplicitMessageToolRoute(args: Record<string, unknown>): boolean {
@@ -365,9 +366,15 @@ function buildMessageToolVisibleReplyMirror(
   pending: PendingMessageToolVisibleReply,
 ): Record<string, unknown> {
   const sourceMessageSeq = asPositiveSafeInteger(readRecord(pending.anchor["__openclaw"])?.seq);
+  const deliveryMirror = [pending.deliveryMirrorAnchor, pending.completionAnchor].find((message) =>
+    isOpenClawDeliveryMirrorAssistantMessage(message),
+  );
+  const displayContent = readAssistantDisplayContent(deliveryMirror);
+  const content =
+    displayContent.length > 0 ? displayContent : [{ type: "text", text: pending.text }];
   const mirror: Record<string, unknown> = {
     role: "assistant",
-    content: [{ type: "text", text: pending.text }],
+    content,
     openclawMessageToolMirror: {
       toolName: "message",
       ...(pending.toolCallId ? { toolCallId: pending.toolCallId } : {}),
@@ -395,6 +402,13 @@ function readMessageToolDeliveryMirrorText(message: Record<string, unknown>): st
     return undefined;
   }
   return displayTextForDuplicateCheck(message);
+}
+
+function readMessageToolDeliveryMirrorCallId(message: Record<string, unknown>): string | undefined {
+  if (!isOpenClawDeliveryMirrorAssistantMessage(message)) {
+    return undefined;
+  }
+  return normalizeOptionalString(readRecord(message.openclawDeliveryMirror)?.toolCallId);
 }
 
 export function mirrorMessageToolVisibleReplies(messages: unknown[]): unknown[] {
@@ -466,9 +480,20 @@ export function mirrorMessageToolVisibleReplies(messages: unknown[]): unknown[] 
 
     const flushAfterCurrentMessage: PendingMessageToolVisibleReply[] = [];
     const deliveryMirrorText = readMessageToolDeliveryMirrorText(record);
-    const matchingDeliveryMirrorPending = deliveryMirrorText
+    const deliveryMirrorCallId = readMessageToolDeliveryMirrorCallId(record);
+    const exactDeliveryMirrorPending = deliveryMirrorCallId
+      ? pending.filter((item) => item.toolCallId === deliveryMirrorCallId)
+      : [];
+    const textMatchingDeliveryMirrorPending = deliveryMirrorText
       ? pending.filter((item) => item.text.trim() === deliveryMirrorText)
       : [];
+    const matchingDeliveryMirrorPending = deliveryMirrorCallId
+      ? exactDeliveryMirrorPending.length === 1
+        ? exactDeliveryMirrorPending
+        : []
+      : textMatchingDeliveryMirrorPending.length === 1
+        ? textMatchingDeliveryMirrorPending
+        : [];
     const duplicateDeliveryMirror = matchingDeliveryMirrorPending.some((item) => item.succeeded);
     const visibleReplies = extractMessageToolVisibleReplies(record);
     if (visibleReplies.length > 0) {
@@ -480,7 +505,8 @@ export function mirrorMessageToolVisibleReplies(messages: unknown[]): unknown[] 
         });
       }
     } else if (
-      matchingDeliveryMirrorPending.length === 0 &&
+      pending.length > 0 &&
+      deliveryMirrorText === undefined &&
       isRenderableAssistantDisplayMessage(record)
     ) {
       clearPending();

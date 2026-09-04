@@ -21,10 +21,10 @@ import type {
   AgentToolResult,
   AgentToolUpdateCallback,
 } from "../runtime/index.js";
-import { sanitizeToolResultImages } from "../tool-images.js";
-import { registerTrustedToolInputError } from "../tool-result-error.js";
+import { ToolAuthorizationError, ToolInputError } from "../tool-input-error.js";
 import { textResult } from "./tool-results.js";
 
+export { ToolAuthorizationError, ToolInputError };
 export { jsonResult, textResult } from "./tool-results.js";
 
 export type AgentToolWithMeta<TParameters extends TSchema, TResult> = AgentTool<
@@ -85,25 +85,6 @@ export type ActionGate<T extends Record<string, boolean | undefined>> = (
   key: keyof T,
   defaultValue?: boolean,
 ) => boolean;
-
-export class ToolInputError extends Error {
-  readonly status: number = 400;
-
-  constructor(message: string) {
-    super(message);
-    this.name = "ToolInputError";
-    registerTrustedToolInputError(this);
-  }
-}
-
-export class ToolAuthorizationError extends ToolInputError {
-  override readonly status = 403;
-
-  constructor(message: string) {
-    super(message);
-    this.name = "ToolAuthorizationError";
-  }
-}
 
 export function createActionGate<T extends Record<string, boolean | undefined>>(
   actions: T | undefined,
@@ -517,6 +498,7 @@ async function imageResult(params: {
       },
     },
   };
+  const { sanitizeToolResultImages } = await import("../tool-images.runtime.js");
   return await sanitizeToolResultImages(result, params.label, params.imageSanitization);
 }
 

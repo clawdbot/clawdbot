@@ -6,7 +6,6 @@ import {
 } from "@openclaw/normalization-core/number-coercion";
 import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
 import { colorize, theme } from "../../../packages/terminal-core/src/theme.js";
-import { listAgentIds } from "../../agents/agent-scope-config.js";
 import {
   resolveAgentExplicitModelPrimary,
   resolveAgentModelFallbacksOverride,
@@ -81,9 +80,9 @@ import {
 import { loadManifestMetadataSnapshot } from "../../plugins/manifest-contract-eligibility.js";
 import type { PluginMetadataSnapshot } from "../../plugins/plugin-metadata-snapshot.types.js";
 import type { ProviderSyntheticAuthResult } from "../../plugins/provider-external-auth.types.js";
-import { resolveProviderSyntheticAuthWithPlugin } from "../../plugins/provider-runtime.js";
+import { prepareProviderSyntheticAuthWithPlugin } from "../../plugins/provider-runtime.js";
 import { resolveRuntimeSyntheticAuthProviderRefs } from "../../plugins/synthetic-auth.runtime.js";
-import { type RuntimeEnv, writeRuntimeJson } from "../../runtime.js";
+import { type RuntimeEnv, writeRuntimeJson, writeRuntimeStdout } from "../../runtime.js";
 import { createLazyImportLoader } from "../../shared/lazy-promise.js";
 import { resolveUserPath, shortenHomePath } from "../../utils.js";
 import {
@@ -134,36 +133,6 @@ type StatusSyntheticAuth = {
   expiresAt?: number;
 };
 
-type StatusProviderRouteAuth =
-  | {
-      /** Provider artifact unavailable; retain the shipped provider-wide behavior. */
-      kind: "legacy";
-      evaluation: ModelAuthAvailabilityEvaluation;
-      usesCodexRuntimeAuth: boolean;
-      runtimeAvailability?: AgentHarnessRuntimeAvailability;
-    }
-  | {
-      kind: "route";
-      route: ProviderModelRouteCandidate;
-      evaluation: ModelAuthAvailabilityEvaluation;
-      usesCodexRuntimeAuth: boolean;
-      runtimeAvailability?: AgentHarnessRuntimeAvailability;
-    }
-  | {
-      kind: "indeterminate";
-      evaluation: ModelAuthAvailabilityEvaluation;
-      usesCodexRuntimeAuth: boolean;
-      runtimeAvailability?: AgentHarnessRuntimeAvailability;
-    }
-  | {
-      kind: "incompatible";
-      code: string;
-      message: string;
-      evaluation: ModelAuthAvailabilityEvaluation;
-      usesCodexRuntimeAuth: false;
-      runtimeAvailability?: undefined;
-    };
-
 type StatusProviderUseRef = {
   provider: string;
   model: string;
@@ -176,8 +145,16 @@ type StatusProviderUse = {
   provider: string;
   model: string;
   allowCodexRuntimeFallback: boolean;
-  routeAuth: StatusProviderRouteAuth;
+  evaluation: ModelAuthAvailabilityEvaluation;
+  usesCodexRuntimeAuth: boolean;
+  runtimeAvailability?: AgentHarnessRuntimeAvailability;
+  runtimeIncompatibility?: { code: string; message: string };
 };
+
+function resolveStatusProviderUseIncompatibility(usage: StatusProviderUse) {
+  const routeResolution = usage.evaluation.routeResolution;
+  return routeResolution?.kind === "incompatible" ? routeResolution : usage.runtimeIncompatibility;
+}
 
 type StatusRuntimeAuthStatus = "usable" | "missing" | "indeterminate";
 
@@ -380,24 +357,6 @@ export async function modelsStatusCommand(
   const agentFallbacksOverride = agentId
     ? resolveAgentModelFallbacksOverride(cfg, agentId)
     : undefined;
-  const resolvedConfig =
-    agentModelPrimary && agentModelPrimary.length > 0
-      ? {
-          ...cfg,
-          agents: {
-            ...cfg.agents,
-            defaults: {
-              ...cfg.agents?.defaults,
-              model: {
-                ...(typeof cfg.agents?.defaults?.model === "object"
-                  ? cfg.agents.defaults.model
-                  : {}),
-                primary: agentModelPrimary,
-              },
-            },
-          },
-        }
-      : cfg;
   const metadataSnapshot = loadManifestMetadataSnapshot({
     config: cfg,
     workspaceDir,
@@ -419,7 +378,7 @@ export async function modelsStatusCommand(
     }
     const pending = (async () => {
       const { runPluginPayloadSmokeCheckForManifestRecords } =
-        await import("../../cli/update-cli/plugin-payload-validation.js");
+        await import("../../plugins/payload-verification.js");
       const ownerPluginIds = resolveAgentHarnessOwnerPluginIds({
         runtime: "codex",
         provider,
@@ -453,8 +412,13 @@ export async function modelsStatusCommand(
     env: process.env,
   });
   try {
+    // agentId, not a synthetic config carrying the agent's primary into global
+    // defaults: the canonical resolvers merge per-agent model rows themselves, so
+    // the synthetic route resolved a bare per-agent alias against global defaults
+    // and reported a different provider than runtime selects.
     const resolved = resolveConfiguredModelRef({
-      cfg: resolvedConfig,
+      cfg,
+      agentId,
       defaultProvider: DEFAULT_PROVIDER,
       defaultModel: DEFAULT_MODEL,
       ...DISPLAY_MODEL_PARSE_OPTIONS,
@@ -485,15 +449,6 @@ export async function modelsStatusCommand(
           : utilityModelRef
             ? "provider-default"
             : "none";
-    const aliases = Object.entries(cfg.agents?.defaults?.models ?? {}).reduce<
-      Record<string, string>
-    >((acc, [key, entry]) => {
-      const alias = normalizeOptionalString(entry?.alias);
-      if (alias) {
-        acc[alias] = key;
-      }
-      return acc;
-    }, {});
     const configuredAllowRefs = [
       ...resolveConfiguredModelPolicyAllow({ cfg, agentId: workspaceAgentId }).refs,
     ];
@@ -501,9 +456,19 @@ export async function modelsStatusCommand(
     const modelsPath = path.join(agentDir, "models.json");
     const aliasIndex = buildModelAliasIndex({
       cfg,
+      agentId,
       defaultProvider: DEFAULT_PROVIDER,
       ...DISPLAY_MODEL_PARSE_OPTIONS,
     });
+    // The index is the same effective alias set the resolvers use, so per-agent
+    // rows that replace or empty-disable a default alias are reflected here
+    // instead of being read straight off `agents.defaults.models`.
+    const aliases = Object.fromEntries(
+      [...aliasIndex.byAlias.values()].map((match) => [
+        match.alias,
+        modelKey(match.ref.provider, match.ref.model),
+      ]),
+    );
     const resolveStatusModelRef = (raw: string | undefined) => {
       const modelRef = raw?.trim();
       if (!modelRef) {
@@ -511,6 +476,7 @@ export async function modelsStatusCommand(
       }
       return resolveModelRefFromString({
         cfg,
+        agentId,
         raw: modelRef,
         defaultProvider: DEFAULT_PROVIDER,
         aliasIndex,
@@ -650,13 +616,9 @@ export async function modelsStatusCommand(
         ...(probedProvider ? [normalizeProviderId(probedProvider)] : []),
       ]),
     ].toSorted((left, right) => left.localeCompare(right));
-    // Omitting agentId lets the catalog resolve its own owner, which still dead-ends on an
-    // ambiguous roster (prepared-model-catalog.ts resolveInputs). Keep the historical omission
-    // for single-agent installs and name the resolved owner only when the roster needs one.
-    const catalogAgentId = agentId ?? (listAgentIds(cfg).length > 1 ? workspaceAgentId : undefined);
     const catalog = await loadPreparedModelCatalogSnapshot({
       config: cfg,
-      ...(catalogAgentId ? { agentId: catalogAgentId } : {}),
+      agentId: workspaceAgentId,
       providerDiscoveryProviderIds,
       readOnly: true,
     });
@@ -720,79 +682,44 @@ export async function modelsStatusCommand(
                   availability: resolver.resolveProviderAuthAvailability(usage.provider, ref),
                   routeResolution: null,
                 };
-          const routeAuth: StatusProviderRouteAuth = await (async () => {
-            if (rawEvaluation.routeResolution?.kind === "incompatible") {
-              return {
-                kind: "incompatible",
-                code: rawEvaluation.routeResolution.code,
-                message: rawEvaluation.routeResolution.message,
-                evaluation: rawEvaluation,
-                usesCodexRuntimeAuth: false,
-              };
-            }
-            const usesCodexRuntimeAuth =
-              usage.allowCodexRuntimeFallback &&
-              resolveAgentHarnessPolicy({
-                provider: usage.provider,
-                modelId: usage.model,
-                ...(rawEvaluation.selectedRoute
-                  ? {
-                      modelApi: rawEvaluation.selectedRoute.api,
-                      modelBaseUrl: rawEvaluation.selectedRoute.baseUrl,
-                    }
-                  : {}),
-                config: cfg,
-                agentId: workspaceAgentId,
-              }).runtime === "codex";
-            if (
-              usesCodexRuntimeAuth &&
-              usage.provider !== OPENAI_PROVIDER_ID &&
-              usage.provider !== "codex"
-            ) {
-              return {
-                kind: "incompatible",
-                code: "unsupported-codex-runtime-provider",
-                message: `The Codex runtime does not support provider ${usage.provider}.`,
-                evaluation: rawEvaluation,
-                usesCodexRuntimeAuth: false,
-              };
-            }
-            const runtimeAvailability = usesCodexRuntimeAuth
-              ? await resolveCodexRuntimeAvailability(usage.provider)
+          const providerRouteIncompatible = rawEvaluation.routeResolution?.kind === "incompatible";
+          const requestedCodexRuntimeAuth =
+            !providerRouteIncompatible &&
+            usage.allowCodexRuntimeFallback &&
+            resolveAgentHarnessPolicy({
+              provider: usage.provider,
+              modelId: usage.model,
+              ...(rawEvaluation.selectedRoute
+                ? {
+                    modelApi: rawEvaluation.selectedRoute.api,
+                    modelBaseUrl: rawEvaluation.selectedRoute.baseUrl,
+                  }
+                : {}),
+              config: cfg,
+              agentId: workspaceAgentId,
+            }).runtime === "codex";
+          const runtimeIncompatibility =
+            requestedCodexRuntimeAuth &&
+            usage.provider !== OPENAI_PROVIDER_ID &&
+            usage.provider !== "codex"
+              ? {
+                  code: "unsupported-codex-runtime-provider",
+                  message: `The Codex runtime does not support provider ${usage.provider}.`,
+                }
               : undefined;
-            const evaluation = rawEvaluation;
-            if (evaluation.selectedRoute) {
-              return {
-                kind: "route",
-                route: evaluation.selectedRoute,
-                evaluation,
-                usesCodexRuntimeAuth,
-                runtimeAvailability,
-              };
-            }
-            if (
-              evaluation.routeResolution?.kind === "routes" ||
-              evaluation.routeResolution?.kind === "indeterminate"
-            ) {
-              return {
-                kind: "indeterminate",
-                evaluation,
-                usesCodexRuntimeAuth,
-                runtimeAvailability,
-              };
-            }
-            return {
-              kind: "legacy",
-              evaluation,
-              usesCodexRuntimeAuth,
-              runtimeAvailability,
-            };
-          })();
+          const usesCodexRuntimeAuth =
+            requestedCodexRuntimeAuth && runtimeIncompatibility === undefined;
+          const runtimeAvailability = usesCodexRuntimeAuth
+            ? await resolveCodexRuntimeAvailability(usage.provider)
+            : undefined;
           return {
             provider: usage.provider,
             model: usage.model,
             allowCodexRuntimeFallback: usage.allowCodexRuntimeFallback,
-            routeAuth,
+            evaluation: rawEvaluation,
+            usesCodexRuntimeAuth,
+            runtimeAvailability,
+            runtimeIncompatibility,
           };
         }),
       );
@@ -802,7 +729,7 @@ export async function modelsStatusCommand(
     const cliRuntimeAuthUsages = providerUses
       // Codex harness auth is already modeled by the selected OpenAI route.
       // CLI-runtime aliases are only for distinct backends such as Gemini CLI.
-      .filter((usage) => usage.allowCodexRuntimeFallback && !usage.routeAuth.usesCodexRuntimeAuth)
+      .filter((usage) => usage.allowCodexRuntimeFallback && !usage.usesCodexRuntimeAuth)
       .map((usage) => {
         const runtimeProvider = resolveCliRuntimeExecutionProvider({
           provider: usage.provider,
@@ -841,9 +768,7 @@ export async function modelsStatusCommand(
     );
     const codexProvider = normalizeProviderId(OPENAI_PROVIDER_ID);
     const codexProviderAlias = aliasMap[codexProvider] ?? codexProvider;
-    let codexRuntimeAuthUsages = providerUses.filter(
-      (usage) => usage.routeAuth.usesCodexRuntimeAuth,
-    );
+    let codexRuntimeAuthUsages = providerUses.filter((usage) => usage.usesCodexRuntimeAuth);
     if (codexRuntimeAuthUsages.length > 0) {
       syntheticProvidersToProbe.add(codexProvider);
       syntheticProvidersToProbe.add(codexProviderAlias);
@@ -854,9 +779,10 @@ export async function modelsStatusCommand(
       if (!syntheticAuthProviderRefs.has(normalized)) {
         continue;
       }
-      const resolvedLocal = resolveProviderSyntheticAuthWithPlugin({
+      const resolvedLocal = await prepareProviderSyntheticAuthWithPlugin({
         provider: normalized,
         config: cfg,
+        workspaceDir,
         context: {
           config: cfg,
           provider: normalized,
@@ -901,13 +827,12 @@ export async function modelsStatusCommand(
         profiles: { ...store.profiles, ...syntheticProfiles },
       });
       providerUses = await resolveProviderUses(authResolver);
-      codexRuntimeAuthUsages = providerUses.filter((usage) => usage.routeAuth.usesCodexRuntimeAuth);
+      codexRuntimeAuthUsages = providerUses.filter((usage) => usage.usesCodexRuntimeAuth);
     }
 
     const applied = getShellEnvAppliedKeys();
     const shellFallbackEnabled =
       shouldEnableShellEnvFallback(process.env) || cfg.env?.shellEnv?.enabled === true;
-
     const providerAuth = Array.from(
       new Set([
         ...providers,
@@ -1019,12 +944,12 @@ export async function modelsStatusCommand(
       if (cliRuntimeAuthProvider) {
         return authResolver.resolveProviderAuthAvailability(cliRuntimeAuthProvider) !== false;
       }
-      if (usage.routeAuth.kind === "incompatible") {
+      if (resolveStatusProviderUseIncompatibility(usage)) {
         // Route contract failures are reported separately from missing auth.
         return true;
       }
       // Unknown evidence is reported as indeterminate, not missing auth.
-      return usage.routeAuth.evaluation.availability !== false;
+      return usage.evaluation.availability !== false;
     };
     const codexRuntimeUsagesByProvider = new Map<string, StatusProviderUse[]>();
     for (const usage of codexRuntimeAuthUsages) {
@@ -1035,18 +960,18 @@ export async function modelsStatusCommand(
     const runtimeAuthRouteEntries: Array<readonly [string, StatusRuntimeAuthRoute]> = [
       ...Array.from(codexRuntimeUsagesByProvider.entries()).map(([provider, usages]) => {
         const representative =
-          usages.find((usage) => usage.routeAuth.evaluation.availability === true) ?? usages[0];
+          usages.find((usage) => usage.evaluation.availability === true) ?? usages[0];
         const effective = resolveRuntimeAuthRouteEffective(
           codexProvider,
-          representative?.routeAuth.evaluation,
+          representative?.evaluation,
         );
-        const availabilities = usages.map((usage) => usage.routeAuth.evaluation.availability);
+        const availabilities = usages.map((usage) => usage.evaluation.availability);
         const authStatus = availabilities.every((availability) => availability === true)
           ? "usable"
           : availabilities.some((availability) => availability === false)
             ? "missing"
             : "indeterminate";
-        const runtimeAvailability = representative?.routeAuth.runtimeAvailability;
+        const runtimeAvailability = representative?.runtimeAvailability;
         const route: StatusRuntimeAuthRoute =
           runtimeAvailability?.status === "unavailable"
             ? {
@@ -1097,15 +1022,16 @@ export async function modelsStatusCommand(
       const cliRuntimeAuthProvider = resolveCliRuntimeAuthProvider(usage);
       const evaluation = cliRuntimeAuthProvider
         ? authResolver.evaluateModelAuth(cliRuntimeAuthProvider)
-        : usage.routeAuth.evaluation;
-      if (usage.routeAuth.kind === "incompatible") {
+        : usage.evaluation;
+      const incompatibility = resolveStatusProviderUseIncompatibility(usage);
+      if (incompatibility) {
         return [
           {
             kind: "incompatible" as const,
             provider: usage.provider,
             model: usage.model,
-            code: usage.routeAuth.code,
-            message: usage.routeAuth.message,
+            code: incompatibility.code,
+            message: incompatibility.message,
           },
         ];
       }
@@ -1120,10 +1046,10 @@ export async function modelsStatusCommand(
           },
         ];
       }
-      if (usage.routeAuth.kind !== "route" || evaluation.availability) {
+      if (!usage.evaluation.selectedRoute || evaluation.availability) {
         return [];
       }
-      const authRequirement = usage.routeAuth.route.authRequirement;
+      const authRequirement = usage.evaluation.selectedRoute.authRequirement;
       return [
         {
           kind: "missing-auth" as const,
@@ -1200,6 +1126,8 @@ export async function modelsStatusCommand(
       .map(
         (raw) =>
           resolveModelRefFromString({
+            cfg,
+            agentId,
             raw: raw ?? "",
             defaultProvider: DEFAULT_PROVIDER,
             aliasIndex,
@@ -1307,13 +1235,13 @@ export async function modelsStatusCommand(
     const checkStatus = (() => {
       type RequirementHealth = "ok" | "expiring" | "missing" | "indeterminate";
       const resolveRouteAuthHealth = (usage: StatusProviderUse): RequirementHealth => {
-        if (usage.routeAuth.kind === "incompatible") {
+        if (resolveStatusProviderUseIncompatibility(usage)) {
           return "missing";
         }
         const cliRuntimeAuthProvider = resolveCliRuntimeAuthProvider(usage);
         const evaluation = cliRuntimeAuthProvider
           ? authResolver.evaluateModelAuth(cliRuntimeAuthProvider)
-          : usage.routeAuth.evaluation;
+          : usage.evaluation;
         if (evaluation.availability === undefined) {
           return "indeterminate";
         }
@@ -1398,7 +1326,7 @@ export async function modelsStatusCommand(
     }
 
     if (opts.plain) {
-      runtime.log(resolvedLabel);
+      writeRuntimeStdout(runtime, resolvedLabel);
       finishModelsStatusOutput(runtime, opts.check, checkStatus);
       return;
     }

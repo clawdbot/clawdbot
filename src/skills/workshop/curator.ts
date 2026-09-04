@@ -1,11 +1,13 @@
-import { asNullableRecord } from "@openclaw/normalization-core/record-coerce";
+import fs from "node:fs";
+import path from "node:path";
 import { canonicalizePath } from "../../agents/utils/paths.js";
 import {
-  executeSqliteQuerySync,
-  executeSqliteQueryTakeFirstSync,
-  getNodeSqliteKysely,
-} from "../../infra/kysely-sync.js";
+  onTrustedInternalDiagnosticEvent,
+  type DiagnosticSkillUsedEvent,
+} from "../../infra/diagnostic-events.js";
+import { executeSqliteQuerySync, getNodeSqliteKysely } from "../../infra/kysely-sync.js";
 import { createSubsystemLogger } from "../../logging/subsystem.js";
+import { readConfigMachineState } from "../../state/config-machine-state.js";
 import type { DB as OpenClawStateDatabase } from "../../state/openclaw-state-db.generated.js";
 import {
   openOpenClawStateDatabase,
@@ -13,23 +15,28 @@ import {
   type OpenClawStateDatabaseOptions,
 } from "../../state/openclaw-state-db.js";
 import { normalizeSkillIndexName } from "../discovery/skill-index.js";
-import { bumpSkillsSnapshotVersion } from "../runtime/refresh-state.js";
+import {
+  readSkillReviewOutcomes,
+  type SkillCollectionReviewStatus,
+  type SkillExperienceReviewStatus,
+} from "./collection-review-state.js";
+import { parseSkillProposalRow } from "./store-sqlite-record.js";
 
 const log = createSubsystemLogger("skills/curator");
-const CURATOR_STATE_ID = 1;
-let loggedArchivedSkillReadFailure = false;
+
+export const SKILL_LIFECYCLE_CURATION_RETIRED_MESSAGE =
+  "Skill lifecycle curation is retired. The weekly collection review manages the skill collection; pin, unpin, and restore no longer exist.";
 
 type SkillLifecycleState = "active" | "archived" | "stale";
-type CuratorDatabase = Pick<
-  OpenClawStateDatabase,
-  "skill_curator_state" | "skill_lifecycle" | "skill_usage"
->;
+type CuratorDatabase = Pick<OpenClawStateDatabase, "skill_usage" | "skill_workshop_proposals">;
 type SkillOverlapCandidate = { left: string; right: string; score: number };
 
 export type SkillCuratorStatus = {
   lastAttemptAtMs: number | null;
   lastSuccessAtMs: number | null;
   lastError: string | null;
+  collectionReview: Record<string, SkillCollectionReviewStatus>;
+  experienceReview: Record<string, SkillExperienceReviewStatus>;
   counts: Record<SkillLifecycleState, number>;
   skills: Array<{
     skillFile: string;
@@ -46,8 +53,6 @@ export type SkillCuratorStatus = {
   overlaps: SkillOverlapCandidate[];
 };
 
-type CuratorOptions = OpenClawStateDatabaseOptions & { nowMs?: number };
-
 function curatorDb(options: OpenClawStateDatabaseOptions = {}) {
   const database = openOpenClawStateDatabase(options);
   return { database, kysely: getNodeSqliteKysely<CuratorDatabase>(database.db) };
@@ -61,185 +66,181 @@ function canonicalSkillKey(name: string): string {
   return key;
 }
 
-function parseLifecycleState(value: string): SkillLifecycleState {
-  if (value === "active" || value === "stale" || value === "archived") {
-    return value;
-  }
-  throw new Error(`Invalid legacy skill lifecycle state: ${value}`);
-}
+export type SkillUsageFacts = { lastUsedAtMs: number; useCount: number };
 
-function parseOverlapCandidates(value: string | null | undefined): SkillOverlapCandidate[] {
-  if (!value) {
-    return [];
+/** Single reader for recorded usage; callers pass canonical skill files. */
+export function readSkillUsageByFile(
+  skillFiles: readonly string[],
+  options: OpenClawStateDatabaseOptions = {},
+): Map<string, SkillUsageFacts> {
+  if (skillFiles.length === 0) {
+    return new Map();
   }
-  try {
-    const overlaps = asNullableRecord(JSON.parse(value))?.overlaps;
-    if (!Array.isArray(overlaps)) {
-      return [];
-    }
-    return overlaps.flatMap((entry) => {
-      const overlap = asNullableRecord(entry);
-      return overlap &&
-        typeof overlap.left === "string" &&
-        typeof overlap.right === "string" &&
-        typeof overlap.score === "number"
-        ? [{ left: overlap.left, right: overlap.right, score: overlap.score }]
-        : [];
-    });
-  } catch {
-    return [];
-  }
+  const { database, kysely } = curatorDb(options);
+  const rows = executeSqliteQuerySync(
+    database.db,
+    kysely
+      .selectFrom("skill_usage")
+      .select(["skill_file", "last_used_at_ms", "use_count"])
+      .where("skill_file", "in", [...skillFiles]),
+  ).rows;
+  return new Map(
+    rows.map((row) => [
+      row.skill_file,
+      { lastUsedAtMs: row.last_used_at_ms, useCount: row.use_count },
+    ]),
+  );
 }
 
 export function getSkillCuratorStatus(
   options: OpenClawStateDatabaseOptions = {},
 ): SkillCuratorStatus {
   const { database, kysely } = curatorDb(options);
-  const state = executeSqliteQueryTakeFirstSync(
-    database.db,
-    kysely.selectFrom("skill_curator_state").selectAll().where("id", "=", CURATOR_STATE_ID),
-  );
-  const rows = executeSqliteQuerySync(
+  const state = readConfigMachineState<{
+    lastAttemptAtMs: number;
+    lastSuccessAtMs: number | null;
+    lastError: string | null;
+    lastResult: Record<string, unknown>;
+  }>("skills.curatorState", options);
+  const reviewOutcomes = readSkillReviewOutcomes(options);
+  const proposalRows = executeSqliteQuerySync(
     database.db,
     kysely
-      .selectFrom("skill_lifecycle")
-      .leftJoin("skill_usage", "skill_usage.skill_file", "skill_lifecycle.skill_file")
-      .select([
-        "skill_lifecycle.skill_key as skillKey",
-        "skill_lifecycle.skill_name as skillName",
-        "skill_lifecycle.skill_file as skillFile",
-        "skill_lifecycle.state as state",
-        "skill_lifecycle.pinned as pinned",
-        "skill_lifecycle.created_at_ms as createdAtMs",
-        "skill_lifecycle.state_changed_at_ms as stateChangedAtMs",
-        "skill_lifecycle.archived_reason as archivedReason",
-        "skill_usage.last_used_at_ms as lastUsedAtMs",
-        "skill_usage.use_count as useCount",
-      ])
-      .orderBy("skill_lifecycle.skill_file", "asc"),
+      .selectFrom("skill_workshop_proposals")
+      .selectAll()
+      .where("kind", "=", "create")
+      .where("status", "=", "applied")
+      .orderBy("applied_at", "asc")
+      .orderBy("proposal_id", "asc"),
   ).rows;
-  const counts: Record<SkillLifecycleState, number> = { active: 0, stale: 0, archived: 0 };
-  const skills = [];
-  for (const row of rows) {
-    const lifecycleState = parseLifecycleState(row.state);
-    counts[lifecycleState] += 1;
-    skills.push({
-      ...row,
-      state: lifecycleState,
-      pinned: row.pinned === 1,
-      lastUsedAtMs: row.lastUsedAtMs ?? null,
-      useCount: row.useCount ?? 0,
+  const curatedByFile = new Map<
+    string,
+    { skillFile: string; skillKey: string; skillName: string; createdAtMs: number }
+  >();
+  for (const row of proposalRows) {
+    const record = parseSkillProposalRow(row);
+    if (!record || record.createdBy !== "skill-workshop" || !record.appliedAt) {
+      continue;
+    }
+    const appliedAtMs = Date.parse(record.appliedAt);
+    const skillFile = canonicalizePath(record.target.skillFile);
+    if (!Number.isFinite(appliedAtMs) || !fs.existsSync(skillFile)) {
+      continue;
+    }
+    const existing = curatedByFile.get(skillFile);
+    if (existing) {
+      existing.createdAtMs = Math.min(existing.createdAtMs, appliedAtMs);
+      continue;
+    }
+    curatedByFile.set(skillFile, {
+      skillFile,
+      skillKey: canonicalSkillKey(record.target.skillKey || record.target.skillName),
+      skillName: record.target.skillName,
+      createdAtMs: appliedAtMs,
     });
   }
+  const curatedSkills = [...curatedByFile.values()].toSorted((left, right) =>
+    left.skillFile.localeCompare(right.skillFile),
+  );
+  const usageByFile = readSkillUsageByFile(
+    curatedSkills.map((skill) => skill.skillFile),
+    options,
+  );
+  const skills: SkillCuratorStatus["skills"] = curatedSkills.map((skill) => {
+    const usage = usageByFile.get(skill.skillFile);
+    return {
+      skillFile: skill.skillFile,
+      skillKey: skill.skillKey,
+      skillName: skill.skillName,
+      createdAtMs: skill.createdAtMs,
+      state: "active",
+      pinned: false,
+      stateChangedAtMs: skill.createdAtMs,
+      lastUsedAtMs: usage?.lastUsedAtMs ?? null,
+      useCount: usage?.useCount ?? 0,
+      archivedReason: null,
+    };
+  });
   return {
-    lastAttemptAtMs: state?.last_attempt_at_ms ?? null,
-    lastSuccessAtMs: state?.last_success_at_ms ?? null,
-    lastError: state?.last_error ?? null,
-    counts,
+    lastAttemptAtMs: state?.lastAttemptAtMs ?? null,
+    lastSuccessAtMs: state?.lastSuccessAtMs ?? null,
+    lastError: state?.lastError ?? null,
+    collectionReview: reviewOutcomes.collectionReviews,
+    experienceReview: reviewOutcomes.experienceReviews,
+    counts: { active: skills.length, stale: 0, archived: 0 },
     skills,
-    overlaps: parseOverlapCandidates(state?.last_result_json),
+    overlaps: [],
   };
 }
 
-function updateLifecyclePin(skill: string, pinned: boolean, options: OpenClawStateDatabaseOptions) {
-  const skillKey = canonicalSkillKey(skill);
-  const firstSkillFile = runOpenClawStateWriteTransaction(({ db }) => {
-    const kysely = getNodeSqliteKysely<CuratorDatabase>(db);
-    const first = executeSqliteQueryTakeFirstSync(
-      db,
-      kysely
-        .selectFrom("skill_lifecycle")
-        .select("skill_file")
-        .where("skill_key", "=", skillKey)
-        .orderBy("skill_file", "asc"),
-    );
-    if (!first) {
-      return null;
-    }
-    const changed = executeSqliteQuerySync(
-      db,
-      kysely
-        .updateTable("skill_lifecycle")
-        .set({ pinned: pinned ? 1 : 0 })
-        .where("skill_key", "=", skillKey),
-    ).numAffectedRows;
-    return changed === 0n ? null : first.skill_file;
-  }, options);
-  if (!firstSkillFile) {
-    throw new Error(`Curated skill not found: ${skill}`);
-  }
-  return getSkillCuratorStatus(options).skills.find((entry) => entry.skillFile === firstSkillFile)!;
-}
-
-export function pinCuratedSkill(skill: string, options: OpenClawStateDatabaseOptions = {}) {
-  return updateLifecyclePin(skill, true, options);
-}
-
-export function unpinCuratedSkill(skill: string, options: OpenClawStateDatabaseOptions = {}) {
-  return updateLifecyclePin(skill, false, options);
-}
-
-export function restoreCuratedSkill(skill: string, options: CuratorOptions = {}) {
-  const skillKey = canonicalSkillKey(skill);
-  const nowMs = options.nowMs ?? Date.now();
-  const firstSkillFile = runOpenClawStateWriteTransaction(({ db }) => {
-    const kysely = getNodeSqliteKysely<CuratorDatabase>(db);
-    const first = executeSqliteQueryTakeFirstSync(
-      db,
-      kysely
-        .selectFrom("skill_lifecycle")
-        .select("skill_file")
-        .where("skill_key", "=", skillKey)
-        .where("state", "=", "archived")
-        .orderBy("skill_file", "asc"),
-    );
-    if (!first) {
-      return null;
-    }
-    const changed = executeSqliteQuerySync(
-      db,
-      kysely
-        .updateTable("skill_lifecycle")
-        .set({ state: "active", state_changed_at_ms: nowMs, archived_reason: null })
-        .where("skill_key", "=", skillKey)
-        .where("state", "=", "archived"),
-    ).numAffectedRows;
-    return changed === 0n ? null : first.skill_file;
-  }, options);
-  if (!firstSkillFile) {
-    throw new Error(`Archived curated skill not found: ${skill}`);
-  }
-  bumpSkillsSnapshotVersion({ reason: "workshop", changedPath: firstSkillFile });
-  return getSkillCuratorStatus(options).skills.find((entry) => entry.skillFile === firstSkillFile)!;
-}
-
-export function getArchivedSkillFiles(
+function recordSkillUsage(
+  event: Pick<DiagnosticSkillUsedEvent, "agentId" | "skillName" | "skillSource" | "ts"> & {
+    skillFile?: string;
+  },
   options: OpenClawStateDatabaseOptions = {},
-): ReadonlySet<string> {
-  try {
-    const { database, kysely } = curatorDb(options);
-    const rows = executeSqliteQuerySync(
-      database.db,
-      kysely
-        .selectFrom("skill_lifecycle")
-        .select("skill_file")
-        .where("state", "=", "archived")
-        .orderBy("skill_file", "asc"),
-    ).rows;
-    return new Set(rows.map((row) => row.skill_file));
-  } catch (error) {
-    if (!loggedArchivedSkillReadFailure) {
-      loggedArchivedSkillReadFailure = true;
-      log.warn("failed to read archived skill state; loading without lifecycle filtering", {
-        error: String(error),
-      });
-    }
-    return new Set();
+): void {
+  const rawSkillFile = event.skillFile?.trim();
+  // File identity prevents a same-named skill in another workspace from inheriting usage.
+  if (!rawSkillFile || !path.isAbsolute(rawSkillFile)) {
+    log.debug(`skipping skill usage without file identity: ${event.skillName}`);
+    return;
   }
+  const skillFile = canonicalizePath(path.resolve(rawSkillFile));
+  const skillKey = canonicalSkillKey(event.skillName);
+  runOpenClawStateWriteTransaction(({ db }) => {
+    const kysely = getNodeSqliteKysely<CuratorDatabase>(db);
+    executeSqliteQuerySync(
+      db,
+      kysely
+        .insertInto("skill_usage")
+        .values({
+          skill_file: skillFile,
+          skill_key: skillKey,
+          skill_name: event.skillName,
+          skill_source: event.skillSource,
+          first_used_at_ms: event.ts,
+          last_used_at_ms: event.ts,
+          use_count: 1,
+          last_agent_id: event.agentId ?? null,
+        })
+        .onConflict((conflict) =>
+          conflict.column("skill_file").doUpdateSet((eb) => ({
+            skill_key: skillKey,
+            skill_name: event.skillName,
+            skill_source: event.skillSource,
+            first_used_at_ms: eb.fn<number>("min", [eb.ref("first_used_at_ms"), eb.val(event.ts)]),
+            last_used_at_ms: eb.fn<number>("max", [eb.ref("last_used_at_ms"), eb.val(event.ts)]),
+            use_count: eb("use_count", "+", 1),
+            last_agent_id: eb
+              .case()
+              .when("last_used_at_ms", "<=", event.ts)
+              .then(event.agentId ?? null)
+              .else(eb.ref("last_agent_id"))
+              .end(),
+          })),
+        ),
+    );
+  }, options);
 }
 
-/** Clears age-based state after the collection model has made a content decision. */
-export function clearCuratedSkillLifecycle(
+/** Listener failures must never propagate into the tool execution that emitted usage. */
+export function registerSkillUsageTracking(options: OpenClawStateDatabaseOptions = {}): () => void {
+  return onTrustedInternalDiagnosticEvent(
+    (event, metadata, privateData) => {
+      if (!metadata.trusted || event.type !== "skill.used") {
+        return;
+      }
+      try {
+        recordSkillUsage({ ...event, skillFile: privateData.skillUsage?.skillFile }, options);
+      } catch (error) {
+        log.warn(`failed to record skill usage: ${String(error)}`);
+      }
+    },
+    { include: ["skill.used"] },
+  );
+}
+
+export function clearSkillUsageForRemovedSkills(
   skillFiles: readonly string[],
   options: OpenClawStateDatabaseOptions = {},
 ): void {
@@ -250,7 +251,7 @@ export function clearCuratedSkillLifecycle(
     const kysely = getNodeSqliteKysely<CuratorDatabase>(db);
     executeSqliteQuerySync(
       db,
-      kysely.deleteFrom("skill_lifecycle").where(
+      kysely.deleteFrom("skill_usage").where(
         "skill_file",
         "in",
         skillFiles.map((skillFile) => canonicalizePath(skillFile)),

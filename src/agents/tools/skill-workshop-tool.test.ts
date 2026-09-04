@@ -27,6 +27,25 @@ const tempDirs = createTrackedTempDirs();
 let testState: OpenClawTestState;
 let stateDir = "";
 
+async function proposalArtifactPath(
+  proposalId: string,
+  relativePath: string,
+  options: { stateDir?: string; env?: NodeJS.ProcessEnv } = {},
+): Promise<string> {
+  const record = await readSkillProposalRecord(proposalId, options.env ? { env: options.env } : {});
+  if (!record) {
+    throw new Error(`expected stored proposal ${proposalId}`);
+  }
+  return path.join(
+    options.stateDir ?? stateDir,
+    "skill-workshop",
+    "proposals",
+    proposalId,
+    path.dirname(record.draftFile),
+    relativePath,
+  );
+}
+
 beforeEach(async () => {
   testState = await createOpenClawTestState({
     layout: "state-only",
@@ -66,8 +85,9 @@ describe("skill_workshop tool", () => {
 
     expect(JSON.stringify(tool.parameters)).toContain('"enum":["read","reconcile"]');
     expect(JSON.stringify(tool.parameters)).toContain(
-      "Exactly one decision for every current skill, plus optional new write decisions. Skills not created by Skill Workshop are read-only and require keep. write requires description and complete SKILL.md content; drop requires a reason.",
+      "Only the skills to change; unlisted skills stay. write requires description and complete SKILL.md content; drop requires a reason. Skills not created by Skill Workshop are read-only.",
     );
+    expect(JSON.stringify(tool.parameters)).toContain('"enum":["write","drop"]');
     expect(tool.description).toContain(SKILL_AUTHORING_STANDARDS_PROMPT);
     await tool.execute("read", { action: "read", skill_name: "duplicate" });
     await tool.execute("reconcile", {
@@ -117,7 +137,7 @@ describe("skill_workshop tool", () => {
 
     const first = tool.execute("first", {
       action: "reconcile",
-      collection: [{ action: "keep", name: "procedure" }],
+      collection: [],
     });
     await expect(
       tool.execute("second", {
@@ -186,6 +206,10 @@ describe("skill_workshop tool", () => {
     expect(schema).toContain("max 160 bytes");
     expect(schema).toContain("shortens the proposal listing entry");
     expect(schema).toContain("artifact_path");
+    expect(schema).toContain("stored proposal record changed");
+    expect(schema).toContain("run interrupted-apply recovery first");
+    expect(schema).toContain("then use only the stored record");
+    expect(schema).not.toContain("action fails if content or support files changed");
     expect(tool.description).toContain(lazyDescription);
     expect(tool.description).toContain(SKILL_AUTHORING_STANDARDS_PROMPT);
   });
@@ -312,7 +336,10 @@ describe("skill_workshop tool", () => {
 
     await expect(
       fs.access(
-        path.join(isolatedStateDir, "skill-workshop", "proposals", proposalId, "PROPOSAL.md"),
+        await proposalArtifactPath(proposalId, "PROPOSAL.md", {
+          stateDir: isolatedStateDir,
+          env,
+        }),
       ),
     ).resolves.toBeUndefined();
     await expect(
@@ -325,7 +352,7 @@ describe("skill_workshop tool", () => {
     ).resolves.toMatchObject({ details: { proposals: [] } });
   });
 
-  it("durably completes a proposal review and blocks later work", async () => {
+  it("pins the default action enum and blocks work after proposal review completion", async () => {
     const workspaceDir = await tempDirs.make("openclaw-skill-workshop-review-completion-");
     let completions = 0;
     const progress: Array<{ proposalIds: string[]; remaining: number }> = [];
@@ -358,7 +385,23 @@ describe("skill_workshop tool", () => {
 
     expect(
       (tool.parameters as { properties: { action: { enum: string[] } } }).properties.action.enum,
-    ).toEqual(["create", "revise", "list", "inspect", "complete"]);
+    ).toEqual([
+      "create",
+      "prepare_patch",
+      "patch",
+      "update",
+      "read",
+      "revise",
+      "list",
+      "inspect",
+      "evaluate",
+      "apply",
+      "reject",
+      "quarantine",
+      "history",
+      "restore_collection",
+      "complete",
+    ]);
     const create = tool.execute("call-create-before-complete", {
       action: "create",
       name: "Checkpointed Learning",
@@ -521,6 +564,7 @@ describe("skill_workshop tool", () => {
       status: "pending",
       kind: "create",
       skillKey: "weather-planner",
+      proposalFile: "PROPOSAL.md",
       scanState: "clean",
       supportFileCount: 1,
     });
@@ -529,27 +573,13 @@ describe("skill_workshop tool", () => {
     );
     await expect(
       fs.readFile(
-        path.join(
-          stateDir,
-          "skill-workshop",
-          "proposals",
-          (result.details as { id: string }).id,
-          "PROPOSAL.md",
-        ),
+        await proposalArtifactPath((result.details as { id: string }).id, "PROPOSAL.md"),
         "utf8",
       ),
     ).resolves.toContain("status: proposal");
     await expect(
       fs
-        .readFile(
-          path.join(
-            stateDir,
-            "skill-workshop",
-            "proposals",
-            (result.details as { id: string }).id,
-            "PROPOSAL.md",
-          ),
-        )
+        .readFile(await proposalArtifactPath((result.details as { id: string }).id, "PROPOSAL.md"))
         .then((buffer) => buffer.at(-1)),
     ).resolves.toBe(0x0a);
     await expect(
@@ -563,14 +593,7 @@ describe("skill_workshop tool", () => {
     });
     await expect(
       fs.readFile(
-        path.join(
-          stateDir,
-          "skill-workshop",
-          "proposals",
-          (result.details as { id: string }).id,
-          "references",
-          "weather.md",
-        ),
+        await proposalArtifactPath((result.details as { id: string }).id, "references/weather.md"),
         "utf8",
       ),
     ).resolves.toContain("Use weather API details.");
@@ -615,13 +638,7 @@ describe("skill_workshop tool", () => {
     );
     await expect(
       fs.readFile(
-        path.join(
-          stateDir,
-          "skill-workshop",
-          "proposals",
-          (result.details as { id: string }).id,
-          "PROPOSAL.md",
-        ),
+        await proposalArtifactPath((result.details as { id: string }).id, "PROPOSAL.md"),
         "utf8",
       ),
     ).resolves.toContain('version: "v2"');
@@ -733,15 +750,7 @@ describe("skill_workshop tool", () => {
 
     await expect(
       fs
-        .readFile(
-          path.join(
-            stateDir,
-            "skill-workshop",
-            "proposals",
-            (result.details as { id: string }).id,
-            "PROPOSAL.md",
-          ),
-        )
+        .readFile(await proposalArtifactPath((result.details as { id: string }).id, "PROPOSAL.md"))
         .then((buffer) => buffer.at(-1)),
     ).resolves.toBe(0x0a);
   });

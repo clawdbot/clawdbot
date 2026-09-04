@@ -1,7 +1,8 @@
 import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
-import { afterEach, describe, expect, it, vi } from "vitest";
+import { createDeferred } from "openclaw/plugin-sdk/extension-shared";
+import { afterEach, describe, expect, it, onTestFinished } from "vitest";
 import { driver, execution } from "./commands.test-helpers.js";
 import {
   CUA_DRIVER_CONTRACT_FIXTURES,
@@ -159,28 +160,29 @@ describe("cua-computer recording actions", () => {
   it("finalizes an in-flight recording once on every execution close", async () => {
     const active = driver();
     let nativeRecordingRoot = "";
-    let releaseStart: (() => void) | undefined;
-    const startGate = new Promise<void>((resolve) => {
-      releaseStart = resolve;
-    });
+    const startEntered = createDeferred<void>();
+    const startGate = createDeferred<void>();
     active.callTool.mockImplementation(async (name, args) => {
       if (name === "start_recording") {
         nativeRecordingRoot = String(args.output_dir);
-        await startGate;
+        startEntered.resolve();
+        await startGate.promise;
         return cuaToolResult(CUA_DRIVER_CONTRACT_FIXTURES.recordingActive);
       }
       return cuaToolResult(CUA_DRIVER_CONTRACT_FIXTURES.recordingStopped);
     });
     const computer = await execution(active.session);
+    onTestFinished(async () => {
+      startGate.resolve();
+      await computer.close("cancel");
+    });
 
     const start = computer.act(JSON.stringify({ action: "start_recording" }));
-    await vi.waitFor(() =>
-      expect(active.callTool).toHaveBeenCalledWith("start_recording", expect.anything(), undefined),
-    );
+    // Close only after the driver is in flight, regardless of resource-creation latency.
+    await Promise.race([startEntered.promise, start]);
     const close = computer.close("cancel");
-    releaseStart?.();
-    await start;
-    await close;
+    startGate.resolve();
+    await Promise.all([start, close]);
     await computer.close("cancel");
 
     expect(active.callTool.mock.calls.map(([name]) => name)).toEqual([

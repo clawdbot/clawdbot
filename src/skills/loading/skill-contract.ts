@@ -9,12 +9,10 @@ export interface Skill {
   description: string;
   /** Additional loading guidance rendered with the location in full and compact catalogs. */
   locationNote?: string;
-  /** Runtime-only content for non-filesystem skill locators such as node://. */
+  /** Prepared instructions for transferred bundles or non-filesystem locators such as node://. */
   readContent?: string;
   filePath: string;
   baseDir: string;
-  /** Deterministic marker for the SKILL.md content rendered as <version>. */
-  promptVersion?: string;
   sourceInfo: SourceInfo;
   disableModelInvocation: boolean;
   // Preserve legacy source reads while keeping the canonical upstream shape.
@@ -74,8 +72,7 @@ export function formatSkillsForPromptCore(skills: Skill[]): string {
   }
   const lines = [
     "\n\nThe following skills provide specialized instructions for specific tasks.",
-    "Use the read tool to load a skill's file when the task matches its description.",
-    "If a skill's <version> differs from a previous turn, re-read its SKILL.md before using it.",
+    "Read a skill's file at its listed location when the task matches its description.",
     "When a skill file references a relative path, resolve it against the skill directory (parent of SKILL.md / dirname of the path) and use that absolute path in tool commands.",
     "",
     "<available_skills>",
@@ -87,9 +84,6 @@ export function formatSkillsForPromptCore(skills: Skill[]): string {
     lines.push(`    <location>${escapeSkillXml(skill.filePath)}</location>`);
     if (skill.locationNote) {
       lines.push(`    <location_note>${escapeSkillXml(skill.locationNote)}</location_note>`);
-    }
-    if (skill.promptVersion) {
-      lines.push(`    <version>${escapeSkillXml(skill.promptVersion)}</version>`);
     }
     lines.push("  </skill>");
   }
@@ -112,9 +106,8 @@ export function formatSkillsCompactForPrompt(
   const lines = [
     "\n\nThe following skills provide specialized instructions for specific tasks.",
     descriptionMaxChars > 0
-      ? "Use the read tool to load a skill's file when the task matches its name or description."
-      : "Use the read tool to load a skill's file when the task matches its name.",
-    "If a skill's <version> differs from a previous turn, re-read its SKILL.md before using it.",
+      ? "Read a skill's file at its listed location when the task matches its name or description."
+      : "Read a skill's file at its listed location when the task matches its name.",
     "When a skill file references a relative path, resolve it against the skill directory (parent of SKILL.md / dirname of the path) and use that absolute path in tool commands.",
     "",
     "<available_skills>",
@@ -131,9 +124,6 @@ export function formatSkillsCompactForPrompt(
     lines.push(`    <location>${escapeSkillXml(skill.filePath)}</location>`);
     if (skill.locationNote) {
       lines.push(`    <location_note>${escapeSkillXml(skill.locationNote)}</location_note>`);
-    }
-    if (skill.promptVersion) {
-      lines.push(`    <version>${escapeSkillXml(skill.promptVersion)}</version>`);
     }
     lines.push("  </skill>");
   }

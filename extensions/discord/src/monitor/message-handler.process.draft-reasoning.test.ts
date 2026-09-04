@@ -54,7 +54,7 @@ async function runReasoningProgressDraft(
 }
 
 describe("processDiscordMessage draft streaming reasoning", () => {
-  it("skips empty apply_patch starts and renders the patch summary", async () => {
+  it("starts a quiet summary for a completed patch without exposing patch details", async () => {
     const draftStream = createMockDraftStreamForTest();
 
     dispatchInboundMessage.mockImplementationOnce(async (params?: DispatchInboundParams) => {
@@ -81,9 +81,7 @@ describe("processDiscordMessage draft streaming reasoning", () => {
 
     await runProcessDiscordMessage(ctx);
 
-    expect(draftStream.update).toHaveBeenCalledWith(
-      "Clawing...\n\n🩹 1 modified; extensions/discord/src/monitor/message-handler.draft-preview.ts",
-    );
+    expect(draftStream.update).toHaveBeenCalledWith("Clawing...");
     const updates = draftStream.update.mock.calls.map((call) => call[0]);
     expect(updates.join("\n")).not.toContain("Apply Patch");
   });
@@ -117,9 +115,7 @@ describe("processDiscordMessage draft streaming reasoning", () => {
 
     await runProcessDiscordMessage(ctx);
 
-    expect(draftStream.update).toHaveBeenCalledWith(
-      "Clawing...\n\n🛠️ Exec\n🧠 _Reading the event projector_",
-    );
+    expect(draftStream.update).toHaveBeenCalledWith("Clawing...\n\nReading the event projector");
     const updates = draftStream.update.mock.calls.map((call) => call[0]);
     expect(updates.join("\n")).not.toContain("Reasoning");
     expect(updates.join("\n")).not.toContain("Thinking\n");
@@ -153,7 +149,7 @@ describe("processDiscordMessage draft streaming reasoning", () => {
 
     await runProcessDiscordMessage(ctx);
 
-    expect(draftStream.update).toHaveBeenCalledWith("Clawing...\n\n🛠️ Exec\n• done");
+    expect(draftStream.update).toHaveBeenCalledWith("Clawing...");
     expect(draftStream.update.mock.calls.map((call) => call[0]).join("\n")).not.toContain(
       "Private planning",
     );
@@ -168,7 +164,7 @@ describe("processDiscordMessage draft streaming reasoning", () => {
     ]);
 
     expect(draftStream.update).toHaveBeenCalledWith(
-      "Clawing...\n\n🛠️ Exec\n🧠 _Considering plugin installation!_",
+      "Clawing...\n\nConsidering plugin installation!",
     );
     const updates = draftStream.update.mock.calls.map((call) => call[0]);
     expect(updates.join("\n")).not.toContain("• _!_");
@@ -178,7 +174,7 @@ describe("processDiscordMessage draft streaming reasoning", () => {
     const draftStream = await runReasoningProgressDraft(["Thinking", " through the install plan"]);
 
     expect(draftStream.update).toHaveBeenCalledWith(
-      "Clawing...\n\n🛠️ Exec\n🧠 _Thinking through the install plan_",
+      "Clawing...\n\nThinking through the install plan",
     );
   });
 
@@ -186,7 +182,7 @@ describe("processDiscordMessage draft streaming reasoning", () => {
     const draftStream = await runReasoningProgressDraft(["Thinking: compare install paths"]);
 
     expect(draftStream.update).toHaveBeenCalledWith(
-      "Clawing...\n\n🛠️ Exec\n🧠 _Thinking: compare install paths_",
+      "Clawing...\n\nThinking: compare install paths",
     );
   });
 
@@ -194,47 +190,39 @@ describe("processDiscordMessage draft streaming reasoning", () => {
     const draftStream = await runReasoningProgressDraft(["Reasoning: compare install paths"]);
 
     expect(draftStream.update).toHaveBeenCalledWith(
-      "Clawing...\n\n🛠️ Exec\n🧠 _Reasoning: compare install paths_",
+      "Clawing...\n\nReasoning: compare install paths",
     );
   });
 
   it("strips legacy Reasoning newline wrappers from progress snapshots", async () => {
     const draftStream = await runReasoningProgressDraft(["Reasoning:\ncompare install paths"]);
 
-    expect(draftStream.update).toHaveBeenCalledWith(
-      "Clawing...\n\n🛠️ Exec\n🧠 _compare install paths_",
-    );
+    expect(draftStream.update).toHaveBeenCalledWith("Clawing...\n\ncompare install paths");
   });
 
   it("strips legacy Thinking ellipsis display wrappers from progress snapshots", async () => {
     const draftStream = await runReasoningProgressDraft(["Thinking...\n\n_compare install paths_"]);
 
-    expect(draftStream.update).toHaveBeenCalledWith(
-      "Clawing...\n\n🛠️ Exec\n🧠 _compare install paths_",
-    );
+    expect(draftStream.update).toHaveBeenCalledWith("Clawing...\n\ncompare install paths");
   });
 
   it("preserves raw reasoning content that starts with a Thinking line", async () => {
     const draftStream = await runReasoningProgressDraft(["Thinking\nthrough the plan"]);
 
-    expect(draftStream.update).toHaveBeenCalledWith(
-      "Clawing...\n\n🛠️ Exec\n🧠 _Thinking through the plan_",
-    );
+    expect(draftStream.update).toHaveBeenCalledWith("Clawing...\n\nThinking through the plan");
   });
 
   it("appends raw reasoning chunks that start with Thinking", async () => {
     const draftStream = await runReasoningProgressDraft(["I was ", "Thinking about the plan"]);
 
-    expect(draftStream.update).toHaveBeenCalledWith(
-      "Clawing...\n\n🛠️ Exec\n🧠 _I was Thinking about the plan_",
-    );
+    expect(draftStream.update).toHaveBeenCalledWith("Clawing...\n\nI was Thinking about the plan");
   });
 
   it("appends raw reasoning chunks that start with Thinking ellipsis", async () => {
     const draftStream = await runReasoningProgressDraft(["I was ", "Thinking... through the plan"]);
 
     expect(draftStream.update).toHaveBeenCalledWith(
-      "Clawing...\n\n🛠️ Exec\n🧠 _I was Thinking... through the plan_",
+      "Clawing...\n\nI was Thinking... through the plan",
     );
   });
 
@@ -245,11 +233,11 @@ describe("processDiscordMessage draft streaming reasoning", () => {
     ]);
 
     expect(draftStream.update).toHaveBeenCalledWith(
-      "Clawing...\n\n🛠️ Exec\n🧠 _I was Reasoning: through edge cases_",
+      "Clawing...\n\nI was Reasoning: through edge cases",
     );
   });
 
-  it("keeps reasoning italics balanced when progress lines truncate", async () => {
+  it("truncates plain reasoning at a word boundary without generated decoration", async () => {
     const draftStream = await runReasoningProgressDraft(
       ["Thinking through a very detailed installation plan with many steps"],
       { label: "Clawing...", maxLineChars: 36, thinking: true },
@@ -258,8 +246,7 @@ describe("processDiscordMessage draft streaming reasoning", () => {
     const lastUpdate = draftStream.update.mock.calls.at(-1)?.[0];
     const reasoningLine = lastUpdate?.split("\n").at(-1);
 
-    expect(reasoningLine).toMatch(/^🧠 _.*…_$/u);
-    expect(reasoningLine?.match(/_/gu)).toHaveLength(2);
+    expect(reasoningLine).toBe("Thinking through a very…");
   });
 
   it("replaces reasoning snapshots instead of appending duplicates", async () => {
@@ -274,12 +261,12 @@ describe("processDiscordMessage draft streaming reasoning", () => {
       },
     ]);
 
-    expect(draftStream.update.mock.calls.at(-1)?.[0]).toContain("_Reading Checking_");
+    expect(draftStream.update.mock.calls.at(-1)?.[0]).toContain("Reading Checking");
     const updates = draftStream.update.mock.calls.map((call) => call[0]);
-    expect(updates.join("\n")).not.toContain("_Checking Reading");
+    expect(updates.join("\n")).not.toContain("Checking Reading");
   });
 
-  it("keeps Discord progress lines across assistant boundaries", async () => {
+  it("keeps one quiet Discord summary across assistant boundaries", async () => {
     const elapseProgressDraftStartDelay = useProgressDraftStartDelay();
     const draftStream = createMockDraftStreamForTest();
 
@@ -304,7 +291,7 @@ describe("processDiscordMessage draft streaming reasoning", () => {
 
     await runProcessDiscordMessage(ctx);
 
-    expect(draftStream.update).toHaveBeenCalledWith("Shelling\n\n🧩 First\n🧩 Second");
+    expect(draftStream.update).toHaveBeenCalledWith("Shelling");
     expect(draftStream.forceNewMessage).not.toHaveBeenCalled();
   });
 

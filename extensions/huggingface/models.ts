@@ -33,7 +33,9 @@ type HFModelEntry = {
     input_modalities?: string[];
   };
   providers?: Array<{
+    status?: string;
     context_length?: number;
+    supports_tools?: boolean;
   }>;
 };
 
@@ -88,14 +90,7 @@ function isReasoningModelHeuristic(modelId: string): boolean {
   );
 }
 
-function inferredMetaFromModelId(id: string): { name: string; reasoning: boolean } {
-  const base = id.split("/").pop() ?? id;
-  const reasoning = isReasoningModelHeuristic(id);
-  const name = base.replace(/-/g, " ").replace(/\b(\w)/g, (c) => c.toUpperCase());
-  return { name, reasoning };
-}
-
-function displayNameFromApiEntry(entry: HFModelEntry, inferredName: string): string {
+function displayNameFromApiEntry(entry: HFModelEntry): string {
   const fromApi =
     (typeof entry.name === "string" && entry.name.trim()) ||
     (typeof entry.title === "string" && entry.title.trim()) ||
@@ -103,11 +98,11 @@ function displayNameFromApiEntry(entry: HFModelEntry, inferredName: string): str
   if (fromApi) {
     return fromApi;
   }
+  const base = entry.id.split("/").pop() ?? entry.id;
   if (typeof entry.owned_by === "string" && entry.owned_by.trim()) {
-    const base = entry.id.split("/").pop() ?? entry.id;
     return `${entry.owned_by.trim()}/${base}`;
   }
-  return inferredName;
+  return base.replace(/-/g, " ").replace(/\b(\w)/g, (c) => c.toUpperCase());
 }
 
 function readHuggingfaceModelRows(body: unknown): readonly unknown[] {
@@ -130,27 +125,30 @@ function projectHuggingfaceModels(rows: readonly unknown[]): ModelDefinitionConf
     }
     seen.add(id);
 
-    const catalogEntry = catalogById.get(id);
-    if (catalogEntry) {
-      models.push(Object.assign({}, catalogEntry));
-      continue;
-    }
-
-    const inferred = inferredMetaFromModelId(id);
     const modalities = entry?.architecture?.input_modalities;
-    const providers = Array.isArray(entry?.providers) ? entry.providers : [];
-    const providerWithContext = providers.find(
-      (provider) => typeof provider?.context_length === "number" && provider.context_length > 0,
-    );
-    models.push({
+    const providers = Array.isArray(entry?.providers)
+      ? entry.providers.filter((provider) => provider?.status !== "error")
+      : [];
+    const providerContexts = providers
+      .map((provider) => provider?.context_length)
+      .filter((context): context is number => typeof context === "number" && context > 0);
+    const model: ModelDefinitionConfig = catalogById.get(id) ?? {
       id,
-      name: displayNameFromApiEntry(entry, inferred.name),
-      reasoning: inferred.reasoning,
+      name: displayNameFromApiEntry(entry),
+      reasoning: isReasoningModelHeuristic(id),
       input:
         Array.isArray(modalities) && modalities.includes("image") ? ["text", "image"] : ["text"],
       cost: HUGGINGFACE_DEFAULT_COST,
-      contextWindow: providerWithContext?.context_length ?? HUGGINGFACE_DEFAULT_CONTEXT_WINDOW,
+      contextWindow: HUGGINGFACE_DEFAULT_CONTEXT_WINDOW,
       maxTokens: HUGGINGFACE_DEFAULT_MAX_TOKENS,
+    };
+    models.push({
+      ...model,
+      contextWindow:
+        providerContexts.length > 0 ? Math.min(...providerContexts) : model.contextWindow,
+      ...(providers.some((provider) => provider?.supports_tools === false)
+        ? { compat: { ...model.compat, supportsTools: false } }
+        : {}),
     });
   }
   return models;

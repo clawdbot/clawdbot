@@ -13,7 +13,7 @@ vi.mock("../../tool-search.js", () => ({
 vi.mock("../logger.js", () => ({
   log: { warn: hoisted.warn },
 }));
-vi.mock("./attempt-finalize.js", () => ({
+vi.mock("./attempt-trajectory-flush.js", () => ({
   flushEmbeddedAttemptTrajectoryRecorder: hoisted.flushEmbeddedAttemptTrajectoryRecorder,
 }));
 vi.mock("./attempt-subscription-cleanup.js", () => ({

@@ -30,6 +30,7 @@ export const createTestInboundDebounceFlush: InboundDebounceFlushFactory = (para
     abortSignal: source?.abortSignal ?? new AbortController().signal,
     onAdopted: async () => await source?.onAdopted?.(),
     onDeferred: () => source?.onDeferred?.(),
+    onDeferredHeartbeat: () => source?.onDeferredHeartbeat?.(),
     onAdoptionFinalizing: () => source?.onAdoptionFinalizing?.(),
     onFailed: source?.onFailed ? async (error) => await source.onFailed?.(error) : undefined,
     onAbandoned: async () => await source?.onAbandoned?.(),
@@ -385,19 +386,18 @@ export function createPluginRuntimeMock(overrides: DeepPartial<PluginRuntime> = 
         resolved.admission ?? preflight.admission ?? ({ kind: "dispatch" } as const);
       let dispatchResult;
       if ("runDispatch" in resolved) {
-        const lifecycle = resolved.runDispatchLifecycle;
-        if (!lifecycle) {
-          throw new Error(
-            "runChannelInboundEvent prepared turns must declare runDispatchLifecycle when creating runDispatch",
-          );
-        }
-        if (
-          params.turnAdoptionLifecycle &&
-          lifecycle.turnAdoptionLifecycle !== params.turnAdoptionLifecycle
-        ) {
-          throw new Error(
-            "runChannelInboundEvent prepared turn runDispatchLifecycle must own the top-level turnAdoptionLifecycle",
-          );
+        if (params.turnAdoptionLifecycle) {
+          const lifecycle = resolved.runDispatchLifecycle;
+          if (!lifecycle) {
+            throw new Error(
+              "runChannelInboundEvent prepared turns must declare runDispatchLifecycle when creating runDispatch",
+            );
+          }
+          if (lifecycle.turnAdoptionLifecycle !== params.turnAdoptionLifecycle) {
+            throw new Error(
+              "runChannelInboundEvent prepared turn runDispatchLifecycle must own the top-level turnAdoptionLifecycle",
+            );
+          }
         }
         const prepared =
           "route" in resolved
@@ -565,6 +565,7 @@ export function createPluginRuntimeMock(overrides: DeepPartial<PluginRuntime> = 
           { id: "high", label: "high" },
         ],
       })),
+      runCommandFromIngress: vi.fn<PluginRuntime["agent"]["runCommandFromIngress"]>(),
       runEmbeddedAgent: runEmbeddedAgentMock,
       resolveAgentTimeoutMs: vi.fn<PluginRuntime["agent"]["resolveAgentTimeoutMs"]>(() => 30_000),
       ensureAgentWorkspace: vi
@@ -685,6 +686,9 @@ export function createPluginRuntimeMock(overrides: DeepPartial<PluginRuntime> = 
       listVoices: vi.fn<PluginRuntime["tts"]["listVoices"]>(),
     },
     mediaUnderstanding: {
+      resolveAudioInputBudget: vi
+        .fn<PluginRuntime["mediaUnderstanding"]["resolveAudioInputBudget"]>()
+        .mockResolvedValue({ enabled: true, maxBytes: 20 * 1024 * 1024 }),
       runFile: vi.fn<PluginRuntime["mediaUnderstanding"]["runFile"]>(),
       describeImageFile: vi.fn<PluginRuntime["mediaUnderstanding"]["describeImageFile"]>(),
       describeImageFileWithModel:
@@ -1009,10 +1013,14 @@ export function createPluginRuntimeMock(overrides: DeepPartial<PluginRuntime> = 
       resolveApiKeyForProvider: vi.fn<PluginRuntime["modelAuth"]["resolveApiKeyForProvider"]>(),
     },
     subagent: {
+      complete: vi.fn(),
       run: vi.fn(),
       waitForRun: vi.fn(),
       getSessionMessages: vi.fn(),
       deleteSession: vi.fn(),
+    },
+    hooks: {
+      dispatchHookAgentTurn: vi.fn(),
     },
     sandbox: {
       resolveWorkspaceAuthority: vi.fn(),
@@ -1043,6 +1051,7 @@ export function createPluginRuntimeMock(overrides: DeepPartial<PluginRuntime> = 
     nodes: {
       list: vi.fn(async () => ({ nodes: [] })),
       invoke: vi.fn(),
+      openDuplex: vi.fn(),
     },
   };
 

@@ -70,10 +70,22 @@ if [[ "$#" -gt 0 ]]; then
   exit 1
 fi
 
+# Match scanner paths and expose symlink roots before any validation or signing.
+while [[ "$APP_BUNDLE" == */ && "$APP_BUNDLE" != "/" ]]; do
+  APP_BUNDLE="${APP_BUNDLE%/}"
+done
 if [ ! -d "$APP_BUNDLE" ]; then
   echo "App bundle not found: $APP_BUNDLE" >&2
   exit 1
 fi
+
+# A non-following inventory cannot audit a symlink used as the bundle root.
+if [[ -L "$APP_BUNDLE" ]]; then
+  echo "ERROR: App bundle must not be a symlink: $APP_BUNDLE" >&2
+  exit 1
+fi
+# Freeze the physical policy root now; resolving it after a swap could authorize the replacement.
+APP_MUTATION_ROOT="$(cd -P -- "$APP_BUNDLE" && pwd -P)"
 
 select_identity() {
   local preferred available first
@@ -162,7 +174,13 @@ case "$TIMESTAMP_MODE" in
     timestamp_arg="--timestamp=none"
     ;;
   auto)
-    if [[ "$IDENTITY" == *"Developer ID Application"* ]]; then
+    identity_name="$IDENTITY"
+    if [[ "$IDENTITY" =~ ^[[:xdigit:]]{40}$ ]]; then
+      # A hash selector conceals the certificate class required for notarization timestamps.
+      identity_name="$(security find-identity -p codesigning -v 2>/dev/null \
+        | awk -v hash="$IDENTITY" 'toupper($2) == toupper(hash) { print }')"
+    fi
+    if [[ "$identity_name" == *"Developer ID Application"* ]]; then
       timestamp_arg="--timestamp"
     fi
     ;;
@@ -186,8 +204,13 @@ fi
 
 ENT_TMP_DIR=$(mktemp -d -t openclaw-entitlements.XXXXXX)
 trap cleanup EXIT
+ENT_TMP_DIR="$(cd -P -- "$ENT_TMP_DIR" && pwd -P)"
 ENT_TMP_APP="$ENT_TMP_DIR/app.plist"
+ENT_TMP_NODE="$ENT_TMP_DIR/node.plist"
 CODESIGN_OUTPUT="$ENT_TMP_DIR/codesign-output"
+NATIVE_INVENTORY="$ENT_TMP_DIR/native-inventory"
+INVENTORY_SCRIPT="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)/lib/mac-native-inventory.py"
+MUTATION_SCRIPT="${INVENTORY_SCRIPT%/*}/mac-bundle-mutation.py"
 
 options_args=()
 if [[ "$IDENTITY" != "-" ]]; then
@@ -230,8 +253,20 @@ fi
 
 APP_ENTITLEMENTS="$ENT_TMP_APP"
 
-# clear extended attributes to avoid stale signatures
-xattr -cr "$APP_BUNDLE" 2>/dev/null || true
+# V8 and bundled standalone JS executables need JIT memory under hardened
+# runtime. All native libraries are re-signed below; library validation stays on.
+cat > "$ENT_TMP_NODE" <<'PLIST'
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0"><dict>
+  <key>com.apple.security.cs.allow-jit</key><true/>
+  <key>com.apple.security.cs.allow-unsigned-executable-memory</key><true/>
+</dict></plist>
+PLIST
+
+run_bundle_mutation() {
+  /usr/bin/python3 "$MUTATION_SCRIPT" "$APP_MUTATION_ROOT" "$ENT_TMP_DIR" "$@"
+}
 
 codesign_with_timestamp_retry() {
   local attempt=1
@@ -241,7 +276,7 @@ codesign_with_timestamp_retry() {
   while true; do
     : >"$CODESIGN_OUTPUT"
     command_rc=0
-    codesign "$@" >"$CODESIGN_OUTPUT" 2>&1 || command_rc=$?
+    run_bundle_mutation codesign "$@" >"$CODESIGN_OUTPUT" 2>&1 || command_rc=$?
     cat "$CODESIGN_OUTPUT" >&2
     if [[ "$command_rc" -eq 0 ]]; then
       return 0
@@ -279,45 +314,50 @@ codesign_metadata_value() {
   local target="$1" key="$2" metadata
   metadata="$(codesign -dv --verbose=4 "$target" 2>&1)" || {
     local rc=$?
+    echo "ERROR: Could not read codesign metadata: $target" >&2
     return "$rc"
   }
-  awk -F= -v key="$key" '$1 == key && !found { print $2; found = 1 }' <<<"$metadata"
+  # Executable/Identifier can contain filename newlines. The real CodeDirectory
+  # follows Format and resets any injected fields; Authority starts with the leaf.
+  awk -F= -v key="$key" '
+    /^CodeDirectory / { format = previous; value = ""; found = 0 }
+    $1 == key && (!found || key != "Authority") {
+      value = substr($0, length(key) + 2); found = 1
+    }
+    { previous = $0 }
+    END {
+      if (format !~ /^Format=.*Mach-O /) exit 1
+      print value
+    }
+  ' <<<"$metadata" || {
+    echo "ERROR: Native Mach-O signature missing: $target. Rebuild the payload as codesign-compatible native code (thin/fat32); generic signatures are not accepted." >&2
+    return 1
+  }
 }
 
 team_id_for() {
   codesign_metadata_value "$1" TeamIdentifier
 }
 
-verify_team_ids() {
-  if [[ "$SKIP_TEAM_ID_CHECK" == "1" ]]; then
-    echo "Note: skipping Team ID audit (SKIP_TEAM_ID_CHECK=1)."
-    return 0
-  fi
-
+verify_native_signatures() {
   local expected
-  expected="$(team_id_for "$APP_BUNDLE" || true)"
-  if [[ -z "$expected" ]]; then
-    echo "WARN: TeamIdentifier missing on app bundle; skipping Team ID audit."
-    return 0
+  expected="$(team_id_for "$APP_BUNDLE")"
+  # A Team ID opt-out never permits generic signatures on native candidates.
+  if [[ "$SKIP_TEAM_ID_CHECK" == "1" ]]; then
+    echo "Note: skipping Team ID comparison (SKIP_TEAM_ID_CHECK=1); native format checks remain enabled."
+  elif [[ -z "$expected" ]]; then
+    echo "ERROR: TeamIdentifier missing on app bundle." >&2
+    return 1
   fi
 
-  local mismatches=()
-  while IFS= read -r -d '' f; do
-    if /usr/bin/file "$f" | /usr/bin/grep -q "Mach-O"; then
-      local team
-      team="$(team_id_for "$f" || true)"
-      if [[ -z "$team" ]]; then
-        team="not set"
-      fi
-      if [[ "$expected" == "not set" ]]; then
-        if [[ "$team" != "not set" ]]; then
-          mismatches+=("$f (TeamIdentifier=$team)")
-        fi
-      elif [[ "$team" != "$expected" ]]; then
-        mismatches+=("$f (TeamIdentifier=$team)")
-      fi
+  local mismatches=() kind f team
+  while IFS= read -r -d '' kind && IFS= read -r -d '' f; do
+    [[ "$kind" == "executable" || "$kind" == "library" ]] || continue
+    team="$(team_id_for "$f")"
+    if [[ "$SKIP_TEAM_ID_CHECK" != "1" && ( -z "$team" || "$team" != "$expected" ) ]]; then
+      mismatches+=("$f (TeamIdentifier=${team:-missing})")
     fi
-  done < <(find "$APP_BUNDLE" -type f -print0)
+  done < "$NATIVE_INVENTORY"
 
   if [[ "${#mismatches[@]}" -gt 0 ]]; then
     echo "ERROR: Team ID mismatch detected (expected: $expected)"
@@ -346,7 +386,7 @@ verify_elevation_signature() {
   assert_no_elevation_cua_driver
 
   local actual_team
-  actual_team="$(team_id_for "$APP_BUNDLE" || true)"
+  actual_team="$(team_id_for "$APP_BUNDLE")"
   if [[ "$actual_team" != "$ELEVATION_TEAM_ID" ]]; then
     echo "ERROR: Elevation host requires TeamIdentifier=$ELEVATION_TEAM_ID, got '${actual_team:-not set}'." >&2
     exit 1
@@ -362,7 +402,7 @@ verify_elevation_signature() {
   assert_no_apple_events_entitlement() {
     local signed_path="$1"
     local entitlements
-    entitlements="$(codesign -d --entitlements :- "$signed_path" 2>/dev/null || true)"
+    entitlements="$(codesign -d --entitlements :- "$signed_path")"
     if /usr/bin/grep -q "com.apple.security.automation.apple-events" <<<"$entitlements"; then
       echo "ERROR: Elevation host code retains Apple Events entitlement: $signed_path" >&2
       exit 1
@@ -370,15 +410,27 @@ verify_elevation_signature() {
   }
 
   assert_no_apple_events_entitlement "$APP_BUNDLE"
-  while IFS= read -r -d '' signed_path; do
-    if /usr/bin/file "$signed_path" | /usr/bin/grep -q "Mach-O"; then
-      assert_no_apple_events_entitlement "$signed_path"
-    fi
-  done < <(find "$APP_BUNDLE" -type f -print0)
+  local kind signed_path
+  while IFS= read -r -d '' kind && IFS= read -r -d '' signed_path; do
+    [[ "$kind" == "executable" || "$kind" == "library" ]] || continue
+    assert_no_apple_events_entitlement "$signed_path"
+  done < "$NATIVE_INVENTORY"
 }
 
-# Sign bundled helper binaries before signing the app bundle.
+# Complete the scan before any signing; process substitution hides scanner failures.
 assert_no_elevation_cua_driver
+/usr/bin/python3 "$INVENTORY_SCRIPT" "$APP_BUNDLE" > "$NATIVE_INVENTORY"
+# Shared inodes escape path confinement; special files can block recursive xattr.
+find "$APP_BUNDLE" \( -type f -links +1 -o ! -type f ! -type d ! -type l \) -print0 > "$ENT_TMP_DIR/unsafe-inputs"
+if [[ -s "$ENT_TMP_DIR/unsafe-inputs" ]]; then
+  echo "ERROR: Signing requires a private app copy without hardlinked or special files; copy or rebuild the bundle first." >&2
+  exit 1
+fi
+
+# Clear attributes only after input validation, inside the same write boundary as signing.
+run_bundle_mutation xattr -cr "$APP_BUNDLE" 2>/dev/null || true
+
+# Sign bundled helper binaries before signing the app bundle.
 MLX_TTS_HELPER="$APP_BUNDLE/Contents/MacOS/openclaw-mlx-tts"
 if [ -f "$MLX_TTS_HELPER" ]; then
   echo "Signing MLX TTS helper"; sign_plain_item "$MLX_TTS_HELPER"
@@ -389,43 +441,66 @@ if [ -f "$CUA_DRIVER" ]; then
   echo "Signing embedded CUA driver"; sign_plain_item "$CUA_DRIVER"
 fi
 
-# Sign main binary
-if [ -f "$APP_BUNDLE/Contents/MacOS/OpenClaw" ]; then
-  echo "Signing main binary"; sign_item "$APP_BUNDLE/Contents/MacOS/OpenClaw" "$APP_ENTITLEMENTS"
-fi
+# Seal all native payloads before the enclosing app; npm packages can carry
+# standalone executables and addons below arbitrarily nested dependency roots.
+WORKER_ROOT="$APP_BUNDLE/Contents/Resources/node-worker"
+while IFS= read -r -d '' worker_kind && IFS= read -r -d '' worker_file; do
+  [[ "$worker_kind" == "executable" || "$worker_kind" == "library" ]] || continue
+  [[ "$worker_file" == "$WORKER_ROOT/"* ]] || continue
+  worker_relative="${worker_file#"$WORKER_ROOT"/}"
+  # Node and the SDK's standalone Bun CLI own JS execution. Other native
+  # helpers must not inherit JIT permissions merely because they execute.
+  if [[ "$worker_kind" == "executable" && (
+    "$worker_relative" == arm64/bin/node || "$worker_relative" == x86_64/bin/node ||
+    "$worker_relative" == */node_modules/@anthropic-ai/claude-agent-sdk-darwin-arm64/claude ||
+    "$worker_relative" == */node_modules/@anthropic-ai/claude-agent-sdk-darwin-x64/claude
+  ) ]]; then
+    sign_item "$worker_file" "$ENT_TMP_NODE"
+  else
+    sign_plain_item "$worker_file"
+  fi
+  codesign --verify --strict "$worker_file"
+done < "$NATIVE_INVENTORY"
 
 # Sign Sparkle deeply if present
 SPARKLE="$APP_BUNDLE/Contents/Frameworks/Sparkle.framework"
 if [ -d "$SPARKLE" ]; then
   echo "Signing Sparkle framework and helpers"
-  find "$SPARKLE" -type f -print0 | while IFS= read -r -d '' f; do
-    if /usr/bin/file "$f" | /usr/bin/grep -q "Mach-O"; then
-      sign_plain_item "$f"
-    fi
-  done
-  sign_plain_item "$SPARKLE/Versions/B/Sparkle"
+  while IFS= read -r -d '' kind && IFS= read -r -d '' f; do
+    [[ "$kind" == "executable" || "$kind" == "library" ]] || continue
+    [[ "$f" == "$SPARKLE/"* ]] || continue
+    # Known Sparkle entry points are signed explicitly below. codesign treats
+    # bundle main-executable paths as the whole bundle, so don't seal them early.
+    case "${f#"$SPARKLE/Versions/B/"}" in
+      Sparkle|Autoupdate|Updater.app/Contents/MacOS/Updater|\
+      XPCServices/Downloader.xpc/Contents/MacOS/Downloader|\
+      XPCServices/Installer.xpc/Contents/MacOS/Installer) continue ;;
+    esac
+    sign_plain_item "$f"
+  done < "$NATIVE_INVENTORY"
   sign_plain_item "$SPARKLE/Versions/B/Autoupdate"
-  sign_plain_item "$SPARKLE/Versions/B/Updater.app/Contents/MacOS/Updater"
   sign_plain_item "$SPARKLE/Versions/B/Updater.app"
-  sign_plain_item "$SPARKLE/Versions/B/XPCServices/Downloader.xpc/Contents/MacOS/Downloader"
   sign_plain_item "$SPARKLE/Versions/B/XPCServices/Downloader.xpc"
-  sign_plain_item "$SPARKLE/Versions/B/XPCServices/Installer.xpc/Contents/MacOS/Installer"
   sign_plain_item "$SPARKLE/Versions/B/XPCServices/Installer.xpc"
-  sign_plain_item "$SPARKLE/Versions/B"
   sign_plain_item "$SPARKLE"
 fi
 
 # Sign any other embedded frameworks/dylibs
 if [ -d "$APP_BUNDLE/Contents/Frameworks" ]; then
-  find "$APP_BUNDLE/Contents/Frameworks" \( -name "*.framework" -o -name "*.dylib" \) ! -path "*Sparkle.framework*" -print0 | while IFS= read -r -d '' f; do
+  find "$APP_BUNDLE/Contents/Frameworks" -depth \( -name "*.framework" -o -name "*.dylib" \) ! -path "*Sparkle.framework*" -print0 > "$ENT_TMP_DIR/frameworks"
+  while IFS= read -r -d '' f; do
     echo "Signing framework: $f"; sign_plain_item "$f"
-  done
+  done < "$ENT_TMP_DIR/frameworks"
 fi
 
-# Finally sign the bundle
+# The bundle seal also signs its main executable. Signing that path separately
+# would seal every resource twice, with the first seal preceding nested code.
 sign_item "$APP_BUNDLE" "$APP_ENTITLEMENTS"
 
-verify_team_ids
+# Signing can create files. Rebuild after the final seal; the two read-only
+# audits share only this completed post-sign inventory, never the pre-sign scan.
+/usr/bin/python3 "$INVENTORY_SCRIPT" "$APP_BUNDLE" > "$NATIVE_INVENTORY"
+verify_native_signatures
 verify_elevation_signature
 
 echo "Codesign complete for $APP_BUNDLE"

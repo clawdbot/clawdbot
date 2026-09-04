@@ -63,6 +63,12 @@ export type SkillProposalOrigin = {
   messageId?: string;
 };
 
+export type SkillWorkshopPreparedPatch = {
+  skillFile: string;
+  contentHash: string;
+  oldString: string;
+};
+
 /** Run-scoped budget shared by every workshop tool instance created across runner retries. */
 export type SkillWorkshopProposalMutationBudget = {
   remaining: number;
@@ -76,6 +82,8 @@ export type SkillWorkshopProposalMutationBudget = {
   mutatedProposalIds?: Set<string>;
   /** Content hash per live skill read this run; autonomous updates require a matching receipt. */
   readSkillHashes?: Map<string, string>;
+  /** Single-use exact-span patch authority prepared from authoritative live content. */
+  preparedSkillPatches?: Map<string, SkillWorkshopPreparedPatch>;
 };
 
 export type SkillWorkshopProposalReviewProgress = {
@@ -102,6 +110,7 @@ export type SkillWorkshopProposalRevisionConstraint = {
 };
 
 export type SkillWorkshopRunOptions = {
+  libraryAuthoring?: import("../library/authoring.js").SkillLibraryAuthoringCapability;
   env?: NodeJS.ProcessEnv;
   proposalOnly?: boolean;
   updateProposals?: boolean;
@@ -139,6 +148,10 @@ export type SkillProposalSupportFile = {
   targetContentHash?: string;
 };
 
+export type PreparedSkillProposalSupportFile = SkillProposalSupportFile & { content: string };
+
+export type SkillProposalDraftFile = "PROPOSAL.md" | `generations/${string}/PROPOSAL.md`;
+
 export type SkillProposalRecord = {
   schema: typeof SKILL_WORKSHOP_SCHEMA;
   id: string;
@@ -157,7 +170,7 @@ export type SkillProposalRecord = {
   /** Durable mutation counts keyed by run id for bounded interrupted-run recovery. */
   originRunMutationCounts?: Record<string, number>;
   proposedVersion: string;
-  draftFile: "PROPOSAL.md";
+  draftFile: SkillProposalDraftFile;
   draftHash: string;
   supportFiles?: SkillProposalSupportFile[];
   target: SkillProposalTarget;
@@ -316,7 +329,7 @@ export type SkillProposalReadResult = {
   record: SkillProposalRecord;
   revisionHash: string;
   content: string;
-  supportFiles?: SkillProposalSupportFileInput[];
+  supportFiles?: PreparedSkillProposalSupportFile[];
 };
 
 export type SkillProposalApplyResult = {

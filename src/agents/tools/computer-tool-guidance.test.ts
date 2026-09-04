@@ -47,6 +47,7 @@ describe("computer tool guidance", () => {
     );
     expect(desktopOnly).toContain("desktop coordinates from the latest screenshot");
     expect(desktopOnly).toContain("stale frameId");
+    expect(desktopOnly).toContain("unchanged screen returns metadata only and reuses its frameId");
     expect(desktopOnly).not.toMatch(
       /get_window_state|accessibility|elementRef|window pixels|deliveryMode:"background"|background_unavailable/,
     );
@@ -58,7 +59,7 @@ describe("computer tool guidance", () => {
       }),
     );
     expect(windowBackground).toContain(
-      "elementRef from the latest observation > window pixels from the latest window image",
+      "elementRef from the latest observation > window coordinates from the latest observation",
     );
     expect(windowBackground).toContain('deliveryMode:"background"');
     expect(windowBackground).toContain("background_occluded");

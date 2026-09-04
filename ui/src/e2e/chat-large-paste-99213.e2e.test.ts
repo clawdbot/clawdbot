@@ -1,10 +1,12 @@
 // Control UI regression proof for #99213: paste a large screenshot-like PNG through the
 // real chat composer and verify chat.send receives it without overflowing base64 handling.
-import { copyFile, mkdir, rm, writeFile } from "node:fs/promises";
+import { copyFile, rm, writeFile } from "node:fs/promises";
 import path from "node:path";
+import { crc32 } from "node:zlib";
 import { createRequireRecord } from "openclaw/plugin-sdk/test-fixtures";
 import { chromium, type Browser, type BrowserContext, type Page } from "playwright";
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
+import { createControlUiE2eArtifactDir } from "../test-helpers/control-ui-e2e-artifacts.ts";
 import {
   canRunPlaywrightChromium,
   controlUiE2eWaitTimeoutMs,
@@ -18,7 +20,6 @@ const chromiumExecutablePath = resolvePlaywrightChromiumExecutablePath(chromium.
 const chromiumAvailable = canRunPlaywrightChromium(chromiumExecutablePath);
 const allowMissingChromium = process.env.OPENCLAW_UI_E2E_ALLOW_MISSING_CHROMIUM === "1";
 const describeControlUiE2e = chromiumAvailable || !allowMissingChromium ? describe : describe.skip;
-const artifactDir = path.resolve(process.cwd(), ".artifacts/control-ui-e2e/chat-large-paste-99213");
 const viewport = { height: 900, width: 1280 };
 
 let server: ControlUiE2eServer;
@@ -44,17 +45,6 @@ function requireArray(value: unknown, label: string): unknown[] {
     throw new Error(`Expected ${label} to be an array`);
   }
   return value;
-}
-
-function crc32(bytes: Uint8Array): number {
-  let crc = 0xffffffff;
-  for (const byte of bytes) {
-    crc ^= byte;
-    for (let bit = 0; bit < 8; bit += 1) {
-      crc = (crc >>> 1) ^ (crc & 1 ? 0xedb88320 : 0);
-    }
-  }
-  return (crc ^ 0xffffffff) >>> 0;
 }
 
 function uint32(value: number): Uint8Array {
@@ -113,11 +103,8 @@ function toBase64(bytes: Uint8Array): string {
   return Buffer.from(bytes).toString("base64");
 }
 
-async function newRecordedPage(label: string): Promise<RecordedPage> {
-  await mkdir(artifactDir, { recursive: true });
-  const rawVideoDir = path.join(artifactDir, `${label}-raw`);
-  await rm(rawVideoDir, { force: true, recursive: true });
-  await mkdir(rawVideoDir, { recursive: true });
+async function newRecordedPage(artifactDir: string, label: string): Promise<RecordedPage> {
+  const rawVideoDir = createControlUiE2eArtifactDir(`${label}-raw`, artifactDir);
   const browser = await chromium.launch({ executablePath: chromiumExecutablePath });
   let context: BrowserContext | undefined;
   let page: Page | undefined;
@@ -139,12 +126,15 @@ async function newRecordedPage(label: string): Promise<RecordedPage> {
     await page?.close().catch(() => {});
     await context?.close().catch(() => {});
     await browser.close().catch(() => {});
-    await rm(rawVideoDir, { force: true, recursive: true });
     throw error;
   }
 }
 
-async function closeRecordedPage(recorded: RecordedPage, label: string): Promise<string[]> {
+async function closeRecordedPage(
+  recorded: RecordedPage,
+  artifactDir: string,
+  label: string,
+): Promise<string[]> {
   const video = recorded.page.video();
   const videos: string[] = [];
   try {
@@ -154,10 +144,11 @@ async function closeRecordedPage(recorded: RecordedPage, label: string): Promise
       const videoPath = path.join(artifactDir, `${label}.webm`);
       await copyFile(rawVideoPath, videoPath);
       videos.push(videoPath);
+      // Failed finalization leaves the raw recording available for inspection.
+      await rm(recorded.rawVideoDir, { force: true, recursive: true });
     }
   } finally {
     await recorded.browser.close().catch(() => {});
-    await rm(recorded.rawVideoDir, { force: true, recursive: true });
   }
   return videos;
 }
@@ -177,13 +168,12 @@ describeControlUiE2e("Control UI #99213 large screenshot paste proof", () => {
   });
 
   it("sends a roughly 2 MB PNG without overlapping transcript rows", async () => {
-    await rm(artifactDir, { force: true, recursive: true });
-    await mkdir(artifactDir, { recursive: true });
+    const artifactDir = createControlUiE2eArtifactDir("chat-large-paste-99213");
     const pngBytes = createLargePngBytes(1_901_669);
     const imageBase64 = toBase64(pngBytes);
     const dataUrl = `data:image/png;base64,${imageBase64}`;
     const prompt = "proof: large Control UI clipboard image";
-    const recorded = await newRecordedPage("large-paste");
+    const recorded = await newRecordedPage(artifactDir, "large-paste");
     const screenshots: string[] = [];
     let videos: string[];
 
@@ -270,7 +260,7 @@ describeControlUiE2e("Control UI #99213 large screenshot paste proof", () => {
       await recorded.page.screenshot({ fullPage: true, path: sentScreenshot });
       screenshots.push(sentScreenshot);
     } finally {
-      videos = await closeRecordedPage(recorded, "large-paste");
+      videos = await closeRecordedPage(recorded, artifactDir, "large-paste");
     }
 
     const summary = {

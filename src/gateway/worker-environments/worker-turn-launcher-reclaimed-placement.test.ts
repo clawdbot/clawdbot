@@ -2,6 +2,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { createDeferred } from "../../../test/helpers/promise.js";
 import { createEmbeddedRunLaneController } from "../../agents/embedded-agent-runner/run/lane-controller.js";
 import type { RunEmbeddedAgentParams } from "../../agents/embedded-agent-runner/run/params.js";
+import { AGENT_RUN_RESTART_ABORT_ERROR_CODE } from "../../agents/run-termination.js";
 import { installSessionPlacementAdmissionProvider } from "../../agents/session-placement-admission.js";
 import { makeAgentAssistantMessage } from "../../agents/test-helpers/agent-message-fixtures.js";
 import {
@@ -18,10 +19,10 @@ import {
   retainQueuedAgentRunContext,
   sweepStaleRunContexts,
 } from "../../infra/agent-run-registry.js";
+import { getDiagnosticSessionActivitySnapshot } from "../../logging/diagnostic-run-activity.js";
 import { getCommandLaneSnapshot, setCommandLaneConcurrency } from "../../process/command-queue.js";
-import type { SpawnResult } from "../../process/exec.js";
 import { createWorkerSessionPlacementGate } from "./placement-worker-gate.js";
-import type { WorkerTurnLaunchRequest } from "./tunnel-contract.js";
+import type { WorkerTurnTunnelHandle } from "./tunnel-contract.js";
 import {
   ENVIRONMENT_ID,
   MANIFEST_REF,
@@ -31,6 +32,7 @@ import {
   attachedEnvironment,
   cleanupWorkerTurnLauncherTest,
   createWorkerSessionTurnPlacementProvider,
+  measureLaunchTurn,
   credential,
   openSessionManager,
   placements,
@@ -47,6 +49,33 @@ import {
 describe("worker turn launcher reclaimed placement", () => {
   beforeEach(setupWorkerTurnLauncherTest);
   afterEach(cleanupWorkerTurnLauncherTest);
+
+  it.each([
+    ["agent id", { agentId: "other", sessionKey: SESSION_KEY }],
+    ["session key", { agentId: "main", sessionKey: "agent:main:other" }],
+    ["blank agent id", { agentId: " ", sessionKey: SESSION_KEY }],
+    ["blank session key", { agentId: "main", sessionKey: " " }],
+  ])("rejects a conflicting supplied %s before redispatch", async (_label, identity) => {
+    seedReclaimedPlacement();
+    const redispatchReclaimed = vi.fn(async () => {
+      throw new Error("redispatch should not run");
+    });
+    const provider = createWorkerSessionTurnPlacementProvider({
+      environments: unusedEnvironments(),
+      placements,
+      redispatchReclaimed,
+    });
+
+    await expect(
+      provider.executeTurn(
+        { sessionId: SESSION_ID, ...identity, runId: `run-reclaimed-conflict-${_label}` },
+        turn(`run-reclaimed-conflict-${_label}`),
+        vi.fn(),
+      ),
+    ).rejects.toThrow(/Worker turn (agent id|session key) (?:is required|does not match)/u);
+    expect(redispatchReclaimed).not.toHaveBeenCalled();
+    expect(placements.get(SESSION_ID)).toMatchObject({ state: "reclaimed", turnClaim: null });
+  });
 
   it("redispatches a reclaimed placement before launching the worker turn", async () => {
     const reclaimed = seedReclaimedPlacement();
@@ -82,7 +111,7 @@ describe("worker turn launcher reclaimed placement", () => {
       }
       return active;
     };
-    const launchTurn = vi.fn(async (request: WorkerTurnLaunchRequest): Promise<SpawnResult> => {
+    const launchTurn = vi.fn<WorkerTurnTunnelHandle["launchTurn"]>(async (request) => {
       request.onDispatchReady?.();
       workerStarted.resolve();
       await resumeWorker.promise;
@@ -127,6 +156,7 @@ describe("worker turn launcher reclaimed placement", () => {
           resume: vi.fn(async () => {}),
         })),
         runWorkspaceCommand: vi.fn(),
+        measureLaunchTurn,
         launchTurn,
         syncWorkspace: vi.fn(async () => {
           throw new Error("unexpected workspace sync");
@@ -387,7 +417,10 @@ describe("worker turn launcher reclaimed placement", () => {
       const versionBeforeRejectedAdmission = readAgentRunIndexVersion();
 
       resumeWorkspaceResolution.resolve();
-      await expect(pending).rejects.toThrow("stale gateway lifecycle");
+      await expect(pending).rejects.toMatchObject({ code: AGENT_RUN_RESTART_ABORT_ERROR_CODE });
+      expect(
+        getDiagnosticSessionActivitySnapshot({ sessionId: SESSION_ID }).activeWorkKind,
+      ).toBeUndefined();
       expect(getAgentRunContext(runId)).toMatchObject({
         lifecycleGeneration: replacementGeneration,
         sessionId: "replacement-session",
@@ -467,6 +500,10 @@ describe("worker turn launcher reclaimed placement", () => {
       sessionId: SESSION_ID,
       sessionKey: SESSION_KEY,
       agentId: "main",
+    });
+    placements.fail({
+      sessionId: SESSION_ID,
+      recoveryError: "stale terminal worker failure",
     });
     placements.fail({
       sessionId: SESSION_ID,

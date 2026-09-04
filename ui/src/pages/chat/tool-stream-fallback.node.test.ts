@@ -1,35 +1,32 @@
 // @vitest-environment node
 import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
+import { createDeferred } from "../../../../test/helpers/promise.js";
+import type { GatewayBrowserClient } from "../../api/gateway.ts";
+import type { SessionsListResult } from "../../api/types.ts";
+import { createTestSessionCapability } from "../../lib/sessions/session-capability.test-support.ts";
+import { waitForFast } from "../../test-helpers/wait-for.ts";
+import { prunePersistedAssistantStreamSegments } from "./stream-segment-pruning.ts";
+import type { FallbackStatus } from "./tool-stream-contract.ts";
+import { handleSessionOperationEvent } from "./tool-stream-status.ts";
 import {
   agentEvent,
   createHost,
   TOOL_STREAM_TEST_NOW,
   useToolStreamFakeTimers,
 } from "./tool-stream.test-helpers.ts";
-import {
-  handleAgentEvent,
-  handleSessionOperationEvent,
-  type FallbackStatus,
-} from "./tool-stream.ts";
+import { handleAgentEvent } from "./tool-stream.ts";
 
-function expectCompactionCompleteAndAutoClears(host: ReturnType<typeof createHost>) {
+function expectCompactionCompleteAndRetained(host: ReturnType<typeof createHost>, itemId?: string) {
   expect(host.compactionStatus).toEqual({
+    ...(itemId ? { itemId } : {}),
     phase: "complete",
     runId: "run-1",
     startedAt: TOOL_STREAM_TEST_NOW,
     completedAt: TOOL_STREAM_TEST_NOW,
   });
-  const clearTimer = host.compactionClearTimer as unknown as {
-    hasRef?: unknown;
-    ref?: unknown;
-    unref?: unknown;
-  };
-  expect(typeof clearTimer.hasRef).toBe("function");
-  expect(typeof clearTimer.ref).toBe("function");
-  expect(typeof clearTimer.unref).toBe("function");
-
+  const status = host.compactionStatus;
   vi.advanceTimersByTime(5_000);
-  expect(host.compactionStatus).toBeNull();
+  expect(host.compactionStatus).toBe(status);
   expect(host.compactionClearTimer).toBeNull();
 }
 
@@ -180,63 +177,130 @@ describe("app-tool-stream fallback lifecycle handling", () => {
     vi.useRealTimers();
   });
 
-  it("updates the chat model cache from session_status model changes", () => {
-    const host = createHost();
-
-    handleAgentEvent(host, {
-      runId: "run-1",
-      seq: 1,
-      stream: "tool",
-      ts: Date.now(),
-      sessionKey: "main",
-      data: {
-        phase: "result",
-        name: "session_status",
-        toolCallId: "status-1",
-        result: {
-          details: {
-            ok: true,
-            sessionKey: "main",
-            changedModel: true,
-            modelProvider: "anthropic",
-            model: "claude-sonnet-4-6",
-            modelOverride: "anthropic/claude-sonnet-4-6",
+  it.each([
+    ["main", "agent:main:main", "main", null],
+    ["agent:work:thread", "agent:work:thread", "work", "openai/gpt-5-mini"],
+    ["global", "global", "work", null],
+    ["agent:work:main", "global", "work", null],
+  ])(
+    "refreshes canonical selection after status changes for %s",
+    async (key, target, agentId, override) => {
+      const row = {
+        key,
+        kind: "direct" as const,
+        updatedAt: 1,
+        modelProvider: "openai",
+        model: "gpt-5.6-sol",
+        modelOverrideSource: null,
+      };
+      const result: SessionsListResult = {
+        ts: 1,
+        path: "(multiple)",
+        count: 1,
+        defaults: { modelProvider: null, model: null, contextTokens: null },
+        sessions: [row],
+      };
+      const pendingPatch = createDeferred<unknown>();
+      const request = vi.fn(async (method: string) =>
+        method === "sessions.patch" ? pendingPatch.promise : result,
+      );
+      const sessions = createTestSessionCapability(
+        {
+          snapshot: {
+            client: { request } as unknown as GatewayBrowserClient,
+            phase: "connected",
+            hello: null,
+            assistantAgentId: agentId,
+            sessionKey: key,
           },
+          subscribe: () => () => undefined,
+          subscribeEvents: () => () => undefined,
         },
-      },
-    });
-
-    expect(host.sessions.state.modelOverrides.main).toBe("anthropic/claude-sonnet-4-6");
-  });
-
-  it("clears the chat model cache from session_status default resets", () => {
-    const host = createHost();
-    host.sessions.setModelOverride("main", "anthropic/claude-sonnet-4-6");
-
-    handleAgentEvent(host, {
-      runId: "run-1",
-      seq: 1,
-      stream: "tool",
-      ts: Date.now(),
-      sessionKey: "main",
-      data: {
-        phase: "result",
-        name: "session_status",
-        toolCallId: "status-1",
-        result: {
-          details: {
-            ok: true,
-            sessionKey: "main",
-            changedModel: true,
-            modelProvider: "openai",
-            model: "gpt-5.4",
-            modelOverride: null,
+        agentId,
+      );
+      const host = createHost({
+        sessionKey: key,
+        assistantAgentId: agentId,
+        agentsList: { defaultId: "main", scope: target === "global" ? "global" : "per-sender" },
+        sessions,
+      });
+      const event = {
+        ...agentEvent(
+          "run-1",
+          1,
+          "tool",
+          {
+            phase: "result",
+            name: "session_status",
+            toolCallId: "status-1",
+            result: {
+              details: { changedModel: true, sessionKey: target, agentId, modelOverride: override },
+            },
           },
-        },
-      },
-    });
+          key,
+        ),
+        agentId,
+      };
+      handleAgentEvent(host, event);
+      await waitForFast(() =>
+        expect(sessions.state.result?.sessions[0]?.model).toBe("gpt-5.6-sol"),
+      );
+      expect(request).toHaveBeenCalledWith("sessions.list", expect.objectContaining({ agentId }));
+      expect(sessions.state.modelOverrides).toEqual({});
 
-    expect(host.sessions.state.modelOverrides.main).toBeNull();
+      // Replaying an old tool result reads today's row, without replacing a newer UI intent.
+      result.sessions = [{ ...row, model: "gpt-5-mini" }];
+      const patch = sessions.patch(key, { model: "openai/gpt-5.6-luna" });
+      handleAgentEvent(
+        createHost({
+          sessionKey: key,
+          assistantAgentId: agentId,
+          agentsList: { defaultId: "main", scope: target === "global" ? "global" : "per-sender" },
+          sessions,
+        }),
+        event,
+      );
+      await waitForFast(() =>
+        expect(request.mock.calls.filter(([method]) => method === "sessions.list")).toHaveLength(2),
+      );
+      await waitForFast(() => expect(sessions.state.loading).toBe(false));
+      expect(sessions.state.result?.sessions[0]?.model).toBe("gpt-5-mini");
+      expect(sessions.state.modelOverrides[key]).toBe("openai/gpt-5.6-luna");
+      pendingPatch.resolve({ ok: true, key, entry: {} });
+      await patch;
+      expect(sessions.state.modelOverrides).toEqual({});
+      sessions.dispose();
+    },
+  );
+
+  it.each([
+    { changedModel: true, sessionKey: "global" },
+    { changedModel: false, sessionKey: "global", agentId: "work" },
+    { changedModel: true, sessionKey: "agent:work:other", agentId: "work" },
+    { changedModel: true, sessionKey: "global", agentId: "main" },
+  ])("does not refresh an unrelated/read-only status result (%j)", (details) => {
+    const host = createHost({
+      sessionKey: "global",
+      assistantAgentId: "work",
+      agentsList: { defaultId: "main" },
+    });
+    handleAgentEvent(host, {
+      ...agentEvent(
+        "run-1",
+        1,
+        "tool",
+        {
+          phase: "result",
+          name: "session_status",
+          toolCallId: "status-1",
+          result: { details },
+        },
+        "global",
+      ),
+      agentId: "work",
+    });
+    expect(host.sessions.refreshReplacement).not.toHaveBeenCalled();
+    expect(host.sessions.state.modelOverrides).toEqual({});
   });
 
   it("tags stream segments with the tool they precede without resetting elapsed time", () => {
@@ -312,6 +376,43 @@ describe("app-tool-stream fallback lifecycle handling", () => {
     expect(host.chatStream).toBeNull();
     vi.useRealTimers();
   });
+
+  it.each(["run-1", "run-2", undefined])(
+    "replaces only the commentary owned by persisted run %s",
+    (runId) => {
+      const state = createHost({
+        chatStreamSegments: [
+          { itemId: "shared-item", runId: "run-1", text: "First run", ts: 1 },
+          { itemId: "shared-item", runId: "run-2", text: "Second run", ts: 2 },
+        ],
+      });
+      const originalSegments = [...state.chatStreamSegments];
+      const persisted = {
+        role: "assistant",
+        content: "Completed progress",
+        __openclaw: { id: "persisted-commentary", seq: 3, ...(runId ? { runId } : {}) },
+        openclawStreamFallback: { itemId: "shared-item", source: "segment" },
+      };
+      prunePersistedAssistantStreamSegments(state, persisted);
+      expect(state.chatStreamSegments).toEqual(
+        runId ? originalSegments.filter((segment) => segment.runId !== runId) : [],
+      );
+      if (runId) {
+        state.chatMessages = [persisted];
+        handleAgentEvent(
+          state,
+          agentEvent(runId, 4, "item", {
+            kind: "preamble",
+            itemId: "shared-item",
+            progressText: "Completed progress",
+          }),
+        );
+        expect(state.chatStreamSegments).toEqual(
+          originalSegments.filter((segment) => segment.runId !== runId),
+        );
+      }
+    },
+  );
 
   it.each([
     { progressText: "Another run's commentary", name: "replace" },
@@ -551,13 +652,66 @@ describe("app-tool-stream fallback lifecycle handling", () => {
     expect(host.fallbackStatus).toBeNull();
   });
 
+  it.each([
+    { phase: "start" },
+    { phase: "end", completed: true },
+    { phase: "end", completed: false },
+    { phase: "end", completed: true, willRetry: true },
+  ])("keeps newer compaction active after stale $phase event %j", (staleData) => {
+    useToolStreamFakeTimers();
+    const host = createHost();
+    handleAgentEvent(
+      host,
+      agentEvent("run-1", 1, "compaction", { phase: "start", itemId: "compact-1" }),
+    );
+    handleAgentEvent(
+      host,
+      agentEvent("run-1", 3, "compaction", { phase: "start", itemId: "compact-2" }),
+    );
+    handleAgentEvent(
+      host,
+      agentEvent("run-1", 2, "compaction", { ...staleData, itemId: "compact-1" }),
+    );
+    expect(host.compactionStatus).toMatchObject({ phase: "active", itemId: "compact-2" });
+
+    handleAgentEvent(
+      host,
+      agentEvent("run-1", 4, "compaction", {
+        phase: "end",
+        completed: true,
+        itemId: "compact-2",
+      }),
+    );
+    handleAgentEvent(
+      host,
+      agentEvent("run-1", 3, "compaction", { phase: "start", itemId: "compact-2" }),
+    );
+    expectCompactionCompleteAndRetained(host, "compact-2");
+
+    handleAgentEvent(
+      host,
+      agentEvent("run-2", 1, "compaction", { phase: "start", itemId: "compact-3" }),
+    );
+    expect(host.compactionStatus).toMatchObject({
+      phase: "active",
+      runId: "run-2",
+      itemId: "compact-3",
+    });
+    vi.advanceTimersByTime(5 * 60_000);
+    expect(host.compactionStatus).toBeNull();
+  });
+
   it("keeps compaction in retry-pending state until the matching lifecycle end", () => {
     useToolStreamFakeTimers();
     const host = createHost();
 
-    handleAgentEvent(host, agentEvent("run-1", 1, "compaction", { phase: "start" }));
+    handleAgentEvent(
+      host,
+      agentEvent("run-1", 1, "compaction", { phase: "start", itemId: "compact-1" }),
+    );
 
     expect(host.compactionStatus).toEqual({
+      itemId: "compact-1",
       phase: "active",
       runId: "run-1",
       startedAt: TOOL_STREAM_TEST_NOW,
@@ -574,6 +728,7 @@ describe("app-tool-stream fallback lifecycle handling", () => {
     );
 
     expect(host.compactionStatus).toEqual({
+      itemId: "compact-1",
       phase: "retrying",
       runId: "run-1",
       startedAt: TOOL_STREAM_TEST_NOW,
@@ -582,8 +737,10 @@ describe("app-tool-stream fallback lifecycle handling", () => {
     expect(host.compactionClearTimer).not.toBeNull();
 
     handleAgentEvent(host, agentEvent("run-2", 3, "lifecycle", { phase: "end" }));
+    handleAgentEvent(host, agentEvent("run-1", 1, "lifecycle", { phase: "end" }));
 
     expect(host.compactionStatus).toEqual({
+      itemId: "compact-1",
       phase: "retrying",
       runId: "run-1",
       startedAt: TOOL_STREAM_TEST_NOW,
@@ -592,7 +749,7 @@ describe("app-tool-stream fallback lifecycle handling", () => {
 
     handleAgentEvent(host, agentEvent("run-1", 4, "lifecycle", { phase: "end" }));
 
-    expectCompactionCompleteAndAutoClears(host);
+    expectCompactionCompleteAndRetained(host, "compact-1");
 
     vi.useRealTimers();
   });
@@ -719,7 +876,7 @@ describe("app-tool-stream fallback lifecycle handling", () => {
     useToolStreamFakeTimers();
     const host = createHost({
       sessionKey: "agent:work:main",
-      agentsList: { defaultId: "main" },
+      agentsList: { defaultId: "main", scope: "global" },
     });
 
     handleAgentEvent(host, {
@@ -822,7 +979,7 @@ describe("app-tool-stream fallback lifecycle handling", () => {
 
     handleAgentEvent(host, agentEvent("run-1", 3, "lifecycle", { phase: "error", error: "boom" }));
 
-    expectCompactionCompleteAndAutoClears(host);
+    expectCompactionCompleteAndRetained(host);
 
     vi.useRealTimers();
   });

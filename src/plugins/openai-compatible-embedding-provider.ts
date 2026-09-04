@@ -1,9 +1,10 @@
 // Builds OpenAI-compatible embedding provider entries for plugins.
 import { normalizeProviderId } from "@openclaw/model-catalog-core/provider-id";
-import { asOptionalRecord as asRecord } from "@openclaw/normalization-core/record-coerce";
 import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
 import { truncateUtf16Safe } from "@openclaw/normalization-core/utf16-slice";
-import { readProviderJsonResponse } from "../agents/provider-http-errors.js";
+import { readEmbeddingVectors } from "../../packages/memory-host-sdk/src/host/embedding-vectors.js";
+import { withRemoteHttpResponse } from "../../packages/memory-host-sdk/src/host/remote-http.js";
+import { readProviderJsonArrayFieldResponse } from "../agents/provider-http-errors.js";
 import type {
   AcquireConfiguredProviderLocalService,
   ConfiguredProviderLocalServiceTarget,
@@ -11,7 +12,6 @@ import type {
 import type { ModelProviderLocalServiceConfig } from "../config/types.models.js";
 import { normalizeResolvedSecretInputString } from "../config/types.secrets.js";
 import { readResponseTextPrefix } from "../infra/http-body.js";
-import { fetchWithSsrFGuard } from "../infra/net/fetch-guard.js";
 import { ssrfPolicyFromHttpBaseUrlAllowedHostname, type SsrFPolicy } from "../infra/net/ssrf.js";
 import type {
   EmbeddingInput,
@@ -32,6 +32,7 @@ const EMBEDDING_ERROR_TRUNCATED_SUFFIX = "... [truncated]";
 type OpenAICompatibleEmbeddingClient = {
   providerId: string;
   baseUrl: string;
+  endpointUrl: string;
   headers: Record<string, string>;
   ssrfPolicy?: SsrFPolicy;
   model: string;
@@ -41,10 +42,6 @@ type OpenAICompatibleEmbeddingClient = {
   documentInputType?: string;
   localServiceTarget?: ConfiguredProviderLocalServiceTarget;
   acquireLocalService?: AcquireConfiguredProviderLocalService;
-};
-
-type OpenAICompatibleEmbeddingResponse = {
-  data?: unknown;
 };
 
 type ConfiguredEmbeddingProvider = {
@@ -113,16 +110,6 @@ function normalizeOptionalInputType(value: string | undefined): string | undefin
   return inputType ? inputType : undefined;
 }
 
-function chooseSecretInputOverride<T>(
-  override: T | undefined,
-  fallback: T | undefined,
-): T | undefined {
-  if (typeof override === "string") {
-    return override.trim() ? override : fallback;
-  }
-  return override ?? fallback;
-}
-
 function resolveRequestInputType(
   client: OpenAICompatibleEmbeddingClient,
   kind: EmbeddingProviderCallOptions["inputType"] | undefined,
@@ -142,27 +129,29 @@ function normalizeHeaderName(name: string): string {
 
 function buildHeaders(params: {
   apiKey: string | undefined;
-  extra: Record<string, unknown> | undefined;
+  provider: Record<string, unknown> | undefined;
+  remote: Record<string, unknown> | undefined;
 }): Record<string, string> {
   const headers: Record<string, string> = {
     accept: "application/json",
     "content-type": "application/json",
   };
-  for (const [name, rawValue] of Object.entries(params.extra ?? {})) {
-    const normalizedName = normalizeHeaderName(name);
-    if (!normalizedName || normalizedName === "authorization") {
-      continue;
+  for (const [path, extra] of [
+    ["models.providers.*.headers", params.provider],
+    ["memory.search.remote.headers", params.remote],
+  ] as const) {
+    for (const [name, rawValue] of Object.entries(extra ?? {})) {
+      const normalizedName = normalizeHeaderName(name);
+      if (!normalizedName) {
+        continue;
+      }
+      const value = resolveSecretString({ value: rawValue, path: `${path}.${normalizedName}` });
+      if (value) {
+        headers[normalizedName] = value;
+      }
     }
-    const value = resolveSecretString({
-      value: rawValue,
-      path: `models.providers.*.headers.${normalizedName}`,
-    });
-    if (!value) {
-      continue;
-    }
-    headers[normalizedName] = value;
   }
-  if (params.apiKey) {
+  if (params.apiKey && !headers.authorization) {
     headers.authorization = `Bearer ${params.apiKey}`;
   }
   return headers;
@@ -197,6 +186,43 @@ function resolveRemoteApiKey(value: unknown): string | undefined {
     value,
     path: "memory.search.remote.apiKey",
   });
+}
+
+async function resolveConfiguredProviderApiKey(params: {
+  providerId: string;
+  options: EmbeddingProviderCreateOptions;
+  configuredProvider: ConfiguredEmbeddingProvider | undefined;
+}): Promise<string | undefined> {
+  const apiKey = resolveSecretString({
+    value: params.configuredProvider?.apiKey,
+    path: `models.providers.${params.providerId}.apiKey`,
+  });
+  if (!apiKey) {
+    return undefined;
+  }
+  const { resolveAgentDir, tryResolveAmbientOwnerAgentId } =
+    await import("../agents/agent-scope-config.js");
+  const agentId = tryResolveAmbientOwnerAgentId(params.options.config);
+  const agentDir =
+    params.options.agentDir?.trim() ||
+    (agentId ? resolveAgentDir(params.options.config, agentId) : undefined);
+  // Without an owned auth store, a configured string retains its literal meaning.
+  if (!agentDir) {
+    return apiKey;
+  }
+  const { resolveScopedAuthProfileStore, resolveProviderEntryApiKeyAuth } =
+    await import("../agents/model-auth-provider.js");
+  const authParams = {
+    provider: params.providerId,
+    modelApi: params.configuredProvider?.api,
+    cfg: params.options.config,
+    agentDir,
+  };
+  const store = resolveScopedAuthProfileStore(authParams);
+  // Only explicit profile bindings enter model auth. General discovery would
+  // replace literal/runtime-resolved keys with unrelated profile or env credentials.
+  const auth = await resolveProviderEntryApiKeyAuth({ ...authParams, store });
+  return auth ? auth.apiKey : apiKey;
 }
 
 function isOpenAICompatibleProviderConfig(
@@ -258,38 +284,6 @@ function malformedEmbeddingResponse(): Error {
   return new Error("openai-compatible embeddings failed: malformed JSON response");
 }
 
-function readEmbeddingVector(value: unknown): number[] {
-  if (!Array.isArray(value)) {
-    throw malformedEmbeddingResponse();
-  }
-  for (const entry of value) {
-    if (typeof entry !== "number" || !Number.isFinite(entry)) {
-      throw malformedEmbeddingResponse();
-    }
-  }
-  return value;
-}
-
-function readEmbeddingVectors(
-  payload: OpenAICompatibleEmbeddingResponse,
-  expectedCount: number,
-): number[][] {
-  if (!Array.isArray(payload.data) || payload.data.length !== expectedCount) {
-    throw malformedEmbeddingResponse();
-  }
-  return payload.data.map((entry) => {
-    const record = asRecord(entry);
-    if (!record) {
-      throw malformedEmbeddingResponse();
-    }
-    return readEmbeddingVector(record.embedding);
-  });
-}
-
-async function readJsonResponse(response: Response): Promise<unknown> {
-  return await readProviderJsonResponse(response, "openai-compatible embeddings failed");
-}
-
 async function readEmbeddingErrorBodySnippet(response: Response): Promise<string | undefined> {
   if (!response.body || response.bodyUsed) {
     return undefined;
@@ -333,28 +327,31 @@ async function postEmbeddingRequest(params: {
       ? await client.acquireLocalService(client.localServiceTarget, params.signal)
       : undefined;
   try {
-    const { response, release } = await fetchWithSsrFGuard({
-      url: `${client.baseUrl}/embeddings`,
+    return await withRemoteHttpResponse({
+      url: client.endpointUrl,
       init: {
         method: "POST",
         headers: client.headers,
         body: JSON.stringify(body),
       },
       signal: params.signal,
-      policy: client.ssrfPolicy,
+      ssrfPolicy: client.ssrfPolicy,
       auditContext: "embedding-provider:openai-compatible",
+      onResponse: async (response) => {
+        if (!response.ok) {
+          throw await createEmbeddingHttpError(response);
+        }
+        return readEmbeddingVectors(
+          await readProviderJsonArrayFieldResponse(
+            response,
+            "openai-compatible embeddings failed",
+            "data",
+          ),
+          input.length,
+          "openai-compatible embeddings failed",
+        );
+      },
     });
-    try {
-      if (!response.ok) {
-        throw await createEmbeddingHttpError(response);
-      }
-      return readEmbeddingVectors(
-        (await readJsonResponse(response)) as OpenAICompatibleEmbeddingResponse,
-        input.length,
-      );
-    } finally {
-      await release();
-    }
   } finally {
     localServiceLease?.release();
   }
@@ -371,25 +368,37 @@ async function createOpenAICompatibleEmbeddingClient(
     options.provider?.trim() ??
     OPENAI_COMPATIBLE_EMBEDDING_PROVIDER_ID;
   const remoteBaseUrl = normalizeOptionalString(options.remote?.baseUrl);
-  const baseUrl = normalizeBaseUrl(remoteBaseUrl ?? configuredProvider?.baseUrl);
+  const providerBaseUrl = normalizeOptionalString(configuredProvider?.baseUrl);
+  const baseUrl = normalizeBaseUrl(remoteBaseUrl ?? providerBaseUrl);
+  // The embedding SDK also loads the provider registry; keep this shared policy edge lazy.
+  const { embeddingProviderOwnsDestination, resolveEmbeddingEndpointUrl } =
+    await import("../plugin-sdk/memory-core-host-engine-embeddings.js");
+  const providerOwnsDestination =
+    providerBaseUrl !== undefined && embeddingProviderOwnsDestination({ baseUrl, providerBaseUrl });
   const model = normalizeModel(options.model, options.provider);
-  const value = resolveRemoteApiKey(
-    chooseSecretInputOverride(options.remote?.apiKey, configuredProvider?.apiKey),
-  );
   const inputType = normalizeOptionalInputType(options.inputType);
   const queryInputType = normalizeOptionalInputType(options.queryInputType);
   const documentInputType = normalizeOptionalInputType(options.documentInputType);
   const headers = buildHeaders({
-    apiKey: value,
-    extra: {
-      ...configuredProvider?.headers,
-      ...options.remote?.headers,
-    },
+    apiKey: resolveRemoteApiKey(options.remote?.apiKey),
+    provider: providerOwnsDestination ? configuredProvider?.headers : undefined,
+    remote: options.remote?.headers,
   });
+  if (providerOwnsDestination && !headers.authorization) {
+    const providerApiKey = await resolveConfiguredProviderApiKey({
+      providerId,
+      options,
+      configuredProvider,
+    });
+    if (providerApiKey) {
+      headers.authorization = `Bearer ${providerApiKey}`;
+    }
+  }
   const localServiceOptions = options as LocalServiceAwareEmbeddingOptions;
   return {
     providerId,
     baseUrl,
+    endpointUrl: resolveEmbeddingEndpointUrl(baseUrl, "embeddings"),
     headers,
     ssrfPolicy: ssrfPolicyFromHttpBaseUrlAllowedHostname(baseUrl),
     model,

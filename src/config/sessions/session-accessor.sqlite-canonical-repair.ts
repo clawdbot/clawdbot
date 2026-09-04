@@ -85,7 +85,6 @@ export function readExactSessionEntryRowForCanonicalRepair(
     entry:
       parsedEntry ??
       ({ sessionId: row.current_session_id, updatedAt: row.updated_at } satisfies SessionEntry),
-    legacyKeys: [],
     row,
   };
 }
@@ -469,7 +468,7 @@ function copySqliteSessionOwnedStateForRepair(params: {
     if (!replaced) {
       continue;
     }
-    // Search and active-event tables are derived from transcript_events; force their canonical rebuild.
+    // Doctor repair runs outside gateway requests and must atomically finish copied projections.
     deleteSessionTranscriptIndexInTransaction(params.destination.db, sessionId);
     reconcileSessionTranscriptIndexInTransaction(params.destination.db, sessionId);
     publishSessionEntryCacheInvalidation(params.destination);
@@ -489,6 +488,7 @@ function copySqliteSessionOwnedStateForRepair(params: {
     params.destination,
     params.preferredSessionKey ? [params.preferredSessionKey] : sourceKeys,
     params.canonicalKey,
+    { includeParticipants: false },
   );
 }
 

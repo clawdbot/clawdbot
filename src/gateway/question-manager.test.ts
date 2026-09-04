@@ -116,6 +116,56 @@ describe("QuestionManager", () => {
     expect(manager.get(record.id)).toMatchObject({ status: "answered", resolvedBy: "control-ui" });
   });
 
+  it("keeps resolution receipts opt-in for simultaneous and late waiters", async () => {
+    const onResolved = vi.fn();
+    const record = manager.request({ questions, timeoutMs: 10_000, onResolved });
+    const legacy = manager.waitAnswer(record.id);
+    const tracked = manager.waitAnswer(record.id, undefined, true);
+    const resolutionId = "candidate-resolution";
+
+    expect(manager.resolve(record.id, answers, "plain-text", { resolutionId })).toEqual({
+      status: "answered",
+      answers,
+    });
+    await expect(legacy).resolves.toEqual({ status: "answered", answers });
+    await expect(tracked).resolves.toEqual({ status: "answered", answers, resolutionId });
+    await expect(manager.waitAnswer(record.id)).resolves.toEqual({ status: "answered", answers });
+    await expect(manager.waitAnswer(record.id, undefined, true)).resolves.toEqual({
+      status: "answered",
+      answers,
+      resolutionId,
+    });
+    expect(manager.get(record.id)).not.toHaveProperty("resolutionId");
+    expect(onResolved).toHaveBeenCalledExactlyOnceWith({
+      id: record.id,
+      status: "answered",
+      answers,
+    });
+    expect(() =>
+      manager.resolve(record.id, answers, "other", { resolutionId: "other-resolution" }),
+    ).toThrowError(QuestionManagerError);
+    await vi.advanceTimersByTimeAsync(QUESTION_RESOLVED_ENTRY_GRACE_MS);
+    expect(manager.get(record.id)).toBeNull();
+    // Already-delivered proof survives terminal-record cleanup, without a later lookup.
+    await expect(tracked).resolves.toEqual({ status: "answered", answers, resolutionId });
+  });
+
+  it("does not stamp a receipt when the synchronous commit fails", async () => {
+    const record = manager.request({ questions, timeoutMs: 10_000 });
+    const waiting = manager.waitAnswer(record.id, undefined, true);
+    expect(() =>
+      manager.resolve(record.id, answers, "failed", {
+        resolutionId: "uncommitted",
+        commit: () => {
+          throw new Error("commit failed");
+        },
+      }),
+    ).toThrow("commit failed");
+    expect(manager.get(record.id)?.status).toBe("pending");
+    manager.resolve(record.id, answers, "legacy");
+    await expect(waiting).resolves.toEqual({ status: "answered", answers });
+  });
+
   it.each(invalidAnswerCases)(
     "rejects %s without terminalizing",
     (_name, requestQuestions, invalid, questionId) => {

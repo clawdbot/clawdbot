@@ -16,6 +16,7 @@ import {
   normalizeBoardLayout,
   type BoardSize,
 } from "./board-layout.js";
+import { GITHUB_ACTIONS_GRANT_PREFIX } from "./github-actions-capability.js";
 
 export type BoardWidgetHtmlDocument = {
   html: string;
@@ -54,22 +55,26 @@ export type BoardSnapshotWithHtmlViewMetadata = {
   htmlViewMetadata: ReadonlyMap<string, BoardWidgetHtmlViewMetadata>;
 };
 
+export type BoardSessionTarget = { sessionKey: string; agentId?: string };
+
 export interface BoardStore {
-  getSnapshot(sessionKey: string): BoardSnapshot;
-  getSnapshotWithHtmlViewMetadata(sessionKey: string): BoardSnapshotWithHtmlViewMetadata;
-  applyOps(sessionKey: string, ops: readonly BoardOp[]): BoardSnapshot;
+  getSnapshot(target: BoardSessionTarget): BoardSnapshot;
+  getSnapshotWithHtmlViewMetadata(target: BoardSessionTarget): BoardSnapshotWithHtmlViewMetadata;
+  applyOps(target: BoardSessionTarget, ops: readonly BoardOp[]): BoardSnapshot;
   putWidget(params: BoardWidgetMaterializedPutParams): BoardWidgetPutResult;
   grant(
-    sessionKey: string,
+    target: BoardSessionTarget,
     name: string,
     decision: "granted" | "rejected",
     revision: number,
     instanceId?: string,
   ): BoardSnapshot;
-  readWidgetHtml(sessionKey: string, name: string): BoardWidgetHtmlDocument | undefined;
-  readWidgetRegistered(sessionKey: string, name: string): BoardWidgetRegisteredDocument | undefined;
-  readWidgetMcpApp(sessionKey: string, name: string): BoardWidgetMcpAppDocument | undefined;
-  listSessionsWithBoards(): string[];
+  readWidgetHtml(target: BoardSessionTarget, name: string): BoardWidgetHtmlDocument | undefined;
+  readWidgetRegistered(
+    target: BoardSessionTarget,
+    name: string,
+  ): BoardWidgetRegisteredDocument | undefined;
+  readWidgetMcpApp(target: BoardSessionTarget, name: string): BoardWidgetMcpAppDocument | undefined;
 }
 
 const BOARD_MAX_WIDGETS = 48;
@@ -113,7 +118,11 @@ export function createBoardDeclaredSummary(
 ): string[] | undefined {
   const lines = [
     ...(declared?.netOrigins ?? []).map((origin) => `Network access: ${origin}`),
-    ...(declared?.tools ?? []).map((tool) => `Tool access: ${tool}`),
+    ...(declared?.tools ?? []).map((tool) =>
+      tool.startsWith(GITHUB_ACTIONS_GRANT_PREFIX)
+        ? `GitHub Actions metadata: ${tool.slice(GITHUB_ACTIONS_GRANT_PREFIX.length)} (including private repository data accessible to the agent; shared with this widget/session audience)`
+        : `Tool access: ${tool}`,
+    ),
   ];
   return lines.length > 0 ? lines : undefined;
 }
@@ -244,6 +253,23 @@ export function createBoardWidgetPutSnapshot(
     layout.tabs.push({ tabId: "main", title: "Main", position: 0, chatDock: "right" });
   }
   const existing = layout.widgets.find((widget) => widget.name === params.name);
+  if (
+    existing &&
+    (existing.contentOwner !== params.content.kind ||
+      ((params.content.kind === "plugin" || params.content.kind === "registered") &&
+        (existing.pluginKind !== params.content.pluginKind ||
+          (params.content.kind === "registered" &&
+            existing.registeredContentKind !== params.content.contentKind))))
+  ) {
+    const incomingOwner =
+      params.content.kind === "plugin" || params.content.kind === "registered"
+        ? params.content.pluginKind
+        : params.content.kind;
+    throw new BoardValidationError(
+      "invalid_operation",
+      `board widget ${params.name} contains ${existing.pluginKind ?? existing.contentOwner} content; update it with the same content kind or remove it before replacing it with ${incomingOwner} content`,
+    );
+  }
   if (!existing && layout.widgets.length >= BOARD_MAX_WIDGETS) {
     throw new BoardValidationError(
       "invalid_operation",
@@ -287,6 +313,10 @@ export function createBoardWidgetPutSnapshot(
           ? { title: existing.title }
           : {}),
       contentKind: params.content.kind === "registered" ? "plugin" : params.content.kind,
+      contentOwner: params.content.kind,
+      ...(params.content.kind === "registered"
+        ? { registeredContentKind: params.content.contentKind }
+        : {}),
       ...(params.presentation !== undefined
         ? { presentation: params.presentation }
         : existing?.presentation !== undefined
@@ -329,11 +359,6 @@ export function createBoardWidgetPutSnapshot(
       move: params.placement?.tabId !== undefined || params.placement?.after !== undefined,
     },
   );
-  if (!declaredSummary) {
-    const widget = layout.widgets.find((candidate) => candidate.name === params.name)!;
-    delete widget.declaredSummary;
-    delete widget.declared;
-  }
   return {
     sessionKey: params.sessionKey,
     revision: prior.revision + 1,

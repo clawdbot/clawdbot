@@ -7,11 +7,13 @@ import {
 import { normalizeLowercaseStringOrEmpty } from "@openclaw/normalization-core/string-coerce";
 import { parseTcpPort, parseTcpPortFromArgs } from "../infra/tcp-port.js";
 import { sleep } from "../utils.js";
+import { GATEWAY_SERVICE_KIND } from "./constants.js";
 import { resolveGatewayServiceProbeHosts } from "./gateway-service-probe-hosts.js";
 import {
   execLaunchctl,
   formatLaunchctlResultDetail,
   isLaunchctlNotLoaded,
+  type LaunchctlResult,
 } from "./launchd-exec.js";
 import { resolveLaunchAgentLabel } from "./launchd-label.js";
 import { LAUNCH_AGENT_EXIT_TIMEOUT_SECONDS } from "./launchd-plist.js";
@@ -36,6 +38,10 @@ export async function resolveLaunchAgentGatewayContext(env: GatewayServiceEnv): 
   port: number | null;
   probeHosts: readonly string[];
 }> {
+  const serviceKind = env.OPENCLAW_SERVICE_KIND?.trim();
+  if (serviceKind && serviceKind !== GATEWAY_SERVICE_KIND) {
+    return { port: null, probeHosts: [] };
+  }
   const command = await readLaunchAgentProgramArguments(env).catch(() => null);
   const fromArgs = parseTcpPortFromArgs(command?.programArguments);
   if (fromArgs !== null) {
@@ -122,7 +128,7 @@ export async function bootstrapLaunchAgentOrThrow(params: {
         actionHint: params.actionHint,
       });
     }
-    if (isLaunchctlOperationAlreadyInProgress(detail)) {
+    if (boot.termination === "exit" && isLaunchctlOperationAlreadyInProgress(detail)) {
       const state = await probeLaunchAgentState(params.serviceTarget);
       if (state.state === "running" || state.state === "stopped") {
         params.onMutation?.("bootstrap");
@@ -278,13 +284,11 @@ export async function readLaunchAgentRuntime(
   };
 }
 
-export function isLaunchctlAlreadyLoaded(res: {
-  stdout: string;
-  stderr: string;
-  code: number;
-}): boolean {
+export function isLaunchctlAlreadyLoaded(res: LaunchctlResult): boolean {
   const detail = normalizeLowercaseStringOrEmpty(res.stderr || res.stdout);
-  return res.code === 130 || detail.includes("already exists in domain");
+  return (
+    res.termination === "exit" && (res.code === 130 || detail.includes("already exists in domain"))
+  );
 }
 
 export function isUnsupportedGuiDomain(detail: string): boolean {
@@ -304,11 +308,7 @@ function isLaunchctlOperationAlreadyInProgress(detail: string): boolean {
   );
 }
 
-function isLaunchctlBootstrapPendingTeardown(res: {
-  stdout: string;
-  stderr: string;
-  code: number;
-}): boolean {
+function isLaunchctlBootstrapPendingTeardown(res: LaunchctlResult): boolean {
   // `bootout` returns once launchd accepts the request, not once the job is gone,
   // so bootstrapping the same label mid-teardown answers EIO. The plist is valid
   // here, so this is a timing conflict to retry rather than a real I/O fault.
@@ -316,7 +316,7 @@ function isLaunchctlBootstrapPendingTeardown(res: {
   // launchd answers the same EIO for a label that is simply still registered
   // ("already exists in domain"). That job is not tearing down, so waiting for a
   // teardown that never comes only delays the failure.
-  if (isLaunchctlAlreadyLoaded(res)) {
+  if (res.termination !== "exit" || isLaunchctlAlreadyLoaded(res)) {
     return false;
   }
   const normalized = normalizeLowercaseStringOrEmpty(res.stderr || res.stdout);

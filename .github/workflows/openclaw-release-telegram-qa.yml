@@ -3,12 +3,10 @@ name: OpenClaw Release Telegram QA
 run-name: ${{ github.event_name == 'workflow_dispatch' && format('OpenClaw Release Telegram QA {0}', inputs.dispatch_id) || 'OpenClaw Release Telegram QA' }}
 
 on:
-  # Transitional compatibility for supported release refs whose parent still calls @main.
-  # Current main dispatches this workflow so qa-live-shared secrets stay in this run.
   workflow_call:
     inputs:
       expected_trusted_workflow_sha:
-        description: Resolved main SHA authorized for this trusted workflow
+        description: Exact trusted tooling SHA authorized for this workflow
         required: true
         type: string
       target_ref:
@@ -38,7 +36,7 @@ on:
         required: true
         type: string
       expected_trusted_workflow_sha:
-        description: Resolved main SHA authorized for this trusted workflow
+        description: Exact trusted tooling SHA authorized for this workflow
         required: true
         type: string
       target_ref:
@@ -58,7 +56,7 @@ on:
 env:
   FORCE_JAVASCRIPT_ACTIONS_TO_NODE24: "true"
   GH_TRANSIENT_SERVER_OR_NETWORK_PATTERN: "HTTP 5[0-9][0-9]|Server Error|invalid character .* looking for beginning of value|error connecting to|context deadline exceeded|connection reset by peer|connection refused|TLS handshake timeout|i/o timeout|network is unreachable|ETIMEDOUT|ECONNRESET|EAI_AGAIN"
-  NODE_VERSION: "24.16.0"
+  NODE_VERSION: "24.19.0"
   OPENCLAW_BUILD_PRIVATE_QA: "1"
   OPENCLAW_ENABLE_PRIVATE_QA_CLI: "1"
 
@@ -76,7 +74,7 @@ jobs:
       workflow_repository: ${{ steps.identity.outputs.workflow_repository }}
       workflow_sha: ${{ steps.identity.outputs.workflow_sha }}
     steps:
-      - name: Verify dispatched-main identity
+      - name: Verify dispatched workflow identity
         id: identity
         env:
           CALLER_WORKFLOW_REF: ${{ github.workflow_ref }}
@@ -93,7 +91,8 @@ jobs:
           set -euo pipefail
 
           expected_repository="openclaw/openclaw"
-          expected_ref="${expected_repository}/.github/workflows/openclaw-release-telegram-qa.yml@refs/heads/main"
+          workflow_path=".github/workflows/openclaw-release-telegram-qa.yml"
+          caller_path=".github/workflows/openclaw-release-checks.yml"
           if [[ "$GITHUB_REPOSITORY" != "$expected_repository" ||
                 ! "$EXPECTED_TRUSTED_WORKFLOW_SHA" =~ ^[a-f0-9]{40}$ ||
                 ! "$TARGET_SHA" =~ ^[a-f0-9]{40}$ ||
@@ -113,13 +112,38 @@ jobs:
             echo "Telegram QA release context requires an exact-SHA target ref." >&2
             exit 1
           fi
+          if [[ "$GITHUB_REF" == "refs/heads/main" ]]; then
+            expected_ref="${expected_repository}/${workflow_path}@${GITHUB_REF}"
+          elif [[ "$GITHUB_REF" =~ ^refs/heads/release-ci/([a-f0-9]{12})-([1-9][0-9]*)$ ]]; then
+            release_ci_sha_prefix="${BASH_REMATCH[1]}"
+            if [[ "$release_ci_sha_prefix" != "${EXPECTED_TRUSTED_WORKFLOW_SHA:0:12}" ]]; then
+              echo "Telegram QA release-ci ref does not match the authorized tooling SHA." >&2
+              exit 1
+            fi
+            expected_ref="${expected_repository}/${workflow_path}@${GITHUB_REF}"
+          elif [[ "$GITHUB_REF" =~ ^refs/heads/release/[0-9]{4}\.([1-9]|1[0-2])\.[1-9][0-9]*$ ||
+                  "$GITHUB_REF" =~ ^refs/heads/extended-stable/[0-9]{4}\.([1-9]|1[0-2])\.33$ ]]; then
+            expected_ref="${expected_repository}/${workflow_path}@${GITHUB_REF}"
+          else
+            echo "Telegram QA tooling ref must be exact main, canonical release or extended-stable, or canonical SHA-bound release-ci." >&2
+            exit 1
+          fi
+          if [[ "$GITHUB_SHA" != "$EXPECTED_TRUSTED_WORKFLOW_SHA" ||
+                "$WORKFLOW_SHA" != "$EXPECTED_TRUSTED_WORKFLOW_SHA" ]]; then
+            echo "Telegram QA tooling SHA does not match the authorized workflow SHA." >&2
+            exit 1
+          fi
           INVOCATION_MODE=reusable
           if [[ "$WORKFLOW_REF" == "$expected_ref" ]]; then
             INVOCATION_MODE=dispatch
-            [[ "$GITHUB_EVENT_NAME" == "workflow_dispatch" &&
-               "$GITHUB_REF" == "refs/heads/main" &&
-               "$GITHUB_SHA" == "$EXPECTED_TRUSTED_WORKFLOW_SHA" &&
-               "$WORKFLOW_SHA" == "$EXPECTED_TRUSTED_WORKFLOW_SHA" ]]
+            [[ "$GITHUB_EVENT_NAME" == "workflow_dispatch" ]]
+          else
+            expected_caller_ref="${expected_repository}/${caller_path}@${GITHUB_REF}"
+            if [[ "$WORKFLOW_REF" != "$expected_caller_ref" ||
+                  "$CALLER_WORKFLOW_SHA" != "$EXPECTED_TRUSTED_WORKFLOW_SHA" ]]; then
+              echo "Telegram QA reusable caller does not match the authorized tooling tuple." >&2
+              exit 1
+            fi
           fi
           export INVOCATION_MODE
 
@@ -241,7 +265,7 @@ jobs:
           [[ "$IDENTITY_STATUS" == "success" ]]
 
       - name: Checkout trusted Telegram QA bootstrap
-        uses: actions/checkout@df4cb1c069e1874edd31b4311f1884172cec0e10 # v6.0.3
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           repository: ${{ needs.trusted_identity.outputs.workflow_repository }}
           ref: ${{ needs.trusted_identity.outputs.workflow_sha }}
@@ -259,13 +283,13 @@ jobs:
       - name: Setup candidate build toolchain
         uses: ./.github/actions/setup-node-env
         with:
+          cache-mode: off
           node-version: ${{ env.NODE_VERSION }}
           install-bun: "true"
           install-deps: "false"
-          use-actions-cache: "false"
 
       - name: Checkout candidate runtime
-        uses: actions/checkout@df4cb1c069e1874edd31b4311f1884172cec0e10 # v6.0.3
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           ref: ${{ inputs.target_sha }}
           fetch-depth: 1
@@ -302,6 +326,8 @@ jobs:
           set -euo pipefail
           candidate_home="${RUNNER_TEMP}/openclaw-telegram-candidate-home"
           mkdir -p "$candidate_home"
+          # Native pnpm reads this policy from env; the config flag also covers older targets.
+          # Copies keep the candidate independent of the external package store.
           env -i \
             CI=true \
             COREPACK_HOME="${candidate_home}/.cache/corepack" \
@@ -309,12 +335,13 @@ jobs:
             LANG=C.UTF-8 \
             NPM_CONFIG_USERCONFIG=/dev/null \
             PATH="$PATH" \
+            PNPM_CONFIG_PACKAGE_IMPORT_METHOD=copy \
             RUNNER_TEMP="$RUNNER_TEMP" \
             pnpm install \
               --store-dir "$RUNNER_TEMP/openclaw-telegram-candidate-pnpm-store" \
               --prefer-offline \
               --frozen-lockfile \
-              --ignore-scripts=false \
+              --config.ignore-scripts=false \
               --config.engine-strict=false \
               --config.enable-pre-post-scripts=true \
               --config.package-import-method=copy \
@@ -362,7 +389,7 @@ jobs:
           } >>"$GITHUB_OUTPUT"
 
       - name: Restore trusted Telegram QA bootstrap
-        uses: actions/checkout@df4cb1c069e1874edd31b4311f1884172cec0e10 # v6.0.3
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           repository: ${{ needs.trusted_identity.outputs.workflow_repository }}
           ref: ${{ needs.trusted_identity.outputs.workflow_sha }}
@@ -515,7 +542,7 @@ jobs:
           [[ "$IDENTITY_STATUS" == "success" && "$BUILD_STATUS" == "success" ]]
 
       - name: Checkout trusted Telegram QA verifier
-        uses: actions/checkout@df4cb1c069e1874edd31b4311f1884172cec0e10 # v6.0.3
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           repository: ${{ needs.trusted_identity.outputs.workflow_repository }}
           ref: ${{ needs.trusted_identity.outputs.workflow_sha }}
@@ -615,7 +642,7 @@ jobs:
           echo "archive_path=$archive_path" >>"$GITHUB_OUTPUT"
 
       - name: Checkout independent candidate source
-        uses: actions/checkout@df4cb1c069e1874edd31b4311f1884172cec0e10 # v6.0.3
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           ref: ${{ inputs.target_sha }}
           fetch-depth: 1
@@ -684,7 +711,7 @@ jobs:
 
       - name: Attest exact candidate archive bytes
         id: attest
-        uses: actions/attest@f7c74d28b9d84cb8768d0b8ca14a4bac6ef463e6 # v4.2.0
+        uses: actions/attest@1e69f48acb82d1966a394da916b4c1698aa569d6 # v4.2.2
         with:
           subject-path: ${{ steps.verify_candidate.outputs.archive_path }}
 
@@ -740,7 +767,7 @@ jobs:
              "$ATTESTATION_STATUS" == "success" ]]
 
       - name: Checkout trusted Telegram QA harness
-        uses: actions/checkout@df4cb1c069e1874edd31b4311f1884172cec0e10 # v6.0.3
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           repository: ${{ needs.trusted_identity.outputs.workflow_repository }}
           ref: ${{ needs.trusted_identity.outputs.workflow_sha }}
@@ -750,10 +777,10 @@ jobs:
       - name: Setup trusted harness Node environment
         uses: ./.github/actions/setup-node-env
         with:
+          cache-mode: off
           node-version: ${{ env.NODE_VERSION }}
           install-bun: "true"
           install-deps: "true"
-          use-actions-cache: "false"
 
       - name: Build trusted QA harness
         id: build_harness
@@ -815,6 +842,7 @@ jobs:
         env:
           ARCHIVE_NAME: ${{ needs.build_candidate.outputs.archive_name }}
           ARCHIVE_SHA256: ${{ needs.build_candidate.outputs.archive_sha256 }}
+          CALLED_WORKFLOW_REF: ${{ needs.trusted_identity.outputs.workflow_ref }}
           CALLED_WORKFLOW_SHA: ${{ needs.trusted_identity.outputs.workflow_sha }}
           CANDIDATE_TREE: ${{ needs.build_candidate.outputs.candidate_tree }}
           GH_TOKEN: ${{ github.token }}
@@ -830,7 +858,7 @@ jobs:
 
           gh attestation verify "$archive_path" \
             --repo "$GITHUB_REPOSITORY" \
-            --cert-identity "https://github.com/openclaw/openclaw/.github/workflows/openclaw-release-telegram-qa.yml@refs/heads/main" \
+            --cert-identity "https://github.com/${CALLED_WORKFLOW_REF}" \
             --signer-digest "$CALLED_WORKFLOW_SHA" \
             --source-ref "$GITHUB_REF" \
             --source-digest "$GITHUB_SHA" \
@@ -1397,6 +1425,36 @@ jobs:
             exec sudo -n -- "$0" --root-terminate-uid
           fi
 
+          if [[ "${1:-}" == "--cleanup-temp-root" ]]; then
+            shift
+            exec sudo -n -- "$0" --root-cleanup-temp-root "$@"
+          fi
+
+          if [[ "${1:-}" == "--root-cleanup-temp-root" ]]; then
+            [[ "$EUID" == "0" && "$#" == "2" ]]
+            source /etc/openclaw-telegram-sut.conf
+            temp_root="$2"
+            case "$(dirname "$temp_root")" in
+              "$RUNTIME_ROOT/tmp" | "$RUNTIME_ROOT/tmp/openclaw-$RUNNER_UID") ;;
+              *) echo "SUT cleanup escaped the workflow runtime root." >&2; exit 1 ;;
+            esac
+            [[ "$(basename "$temp_root")" == openclaw-qa-suite-* ]]
+            if sut_uid_processes_alive; then
+              echo "SUT runtime cleanup requires isolated UID quiescence." >&2
+              exit 1
+            fi
+            [[ ! -L "$temp_root" ]]
+            if [[ ! -e "$temp_root" ]]; then
+              exit 0
+            fi
+            [[ -d "$temp_root" && "$(realpath -e "$temp_root")" == "$temp_root" ]]
+            [[ "$(stat -c '%u' "$temp_root")" == "$RUNNER_UID" ]]
+            # Preserve SUT-private modes until final shutdown. Unlink its tree
+            # without changing ownership or following links into other roots.
+            rm -rf --one-file-system -- "$temp_root"
+            exit 0
+          fi
+
           if [[ "${1:-}" == "--verify" ]]; then
             shift
             exec sudo -n -- "$0" --root-verify "$@"
@@ -1505,9 +1563,19 @@ jobs:
             "$RUNTIME_ROOT"/tmp/openclaw-"$RUNNER_UID"/openclaw-qa-suite-*) ;;
             *) echo "SUT temp root escaped the workflow runtime root." >&2; exit 1 ;;
           esac
+          requested_config_path="${OPENCLAW_CONFIG_PATH:?}"
           config_path="${temp_root}/openclaw.json"
           [[ -f "$config_path" && ! -L "$config_path" ]]
           [[ "$(realpath -e "$config_path")" == "$config_path" ]]
+          case "$requested_config_path" in
+            "$config_path") ;;
+            "${temp_root}/state/qa-auth-bootstrap/openclaw.json")
+              [[ "${1:-}" == "models" && "${2:-}" == "auth" ]]
+              [[ -f "$requested_config_path" && ! -L "$requested_config_path" ]]
+              [[ "$(realpath -e "$requested_config_path")" == "$requested_config_path" ]]
+              ;;
+            *) echo "SUT config path escaped the canonical or auth-bootstrap roots." >&2; exit 1 ;;
+          esac
           capture_live_model_config "$config_path"
 
           export OPENCLAW_QA_TEMP_ROOT="$temp_root"
@@ -1515,7 +1583,7 @@ jobs:
           export OPENCLAW_HOME="$HOME"
           export OPENCLAW_STATE_DIR="${temp_root}/state"
           export OPENCLAW_OAUTH_DIR="${OPENCLAW_STATE_DIR}/credentials"
-          export OPENCLAW_CONFIG_PATH="$config_path"
+          export OPENCLAW_CONFIG_PATH="$requested_config_path"
           export XDG_CACHE_HOME="${temp_root}/xdg-cache"
           export XDG_CONFIG_HOME="${temp_root}/xdg-config"
           export XDG_DATA_HOME="${temp_root}/xdg-data"
@@ -1550,6 +1618,9 @@ jobs:
             chown -R "$SUT_UID:$SUT_GID" "$path"
             chmod -R u=rwX,go= "$path"
           done
+          if [[ "$requested_config_path" != "$config_path" ]]; then
+            [[ "$(stat -c '%F:%a:%u:%g' "$requested_config_path")" == "regular file:600:${SUT_UID}:${SUT_GID}" ]]
+          fi
           if [[ -n "${OPENCLAW_BUNDLED_PLUGINS_DIR:-}" ]]; then
             chown -R root:root "$OPENCLAW_BUNDLED_PLUGINS_DIR"
             chmod -R a+rX,go-w "$OPENCLAW_BUNDLED_PLUGINS_DIR"
@@ -1615,6 +1686,7 @@ jobs:
           export SUT_UID SUT_GID RUNNER_UID RUNNER_GID RUNNER_HOME RUNNER_TEMP_DIR
           export CANDIDATE_ROOT CANDIDATE_ARTIFACTS_DIR RUNTIME_ROOT NODE_BIN
           export PRELOAD_PATH RUNNER_SENTINEL TRUSTED_WORKSPACE EVIDENCE_ROOT
+          export CANONICAL_CONFIG_PATH="$config_path"
           export boundary_mode generation command_file identity_file sandbox_file
           export command_sha256 expected_env_keys_b64 sandbox_payload_b64
 
@@ -1776,8 +1848,12 @@ jobs:
                     runtime_stage=verify-runtime-files
                     [[ -r "$CANDIDATE_ROOT/dist/index.js" &&
                           ! -w "$CANDIDATE_ROOT/dist/index.js" &&
-                          -r "${OPENCLAW_CONFIG_PATH:?}" &&
-                          ! -w "$OPENCLAW_CONFIG_PATH" ]]
+                          -r "${CANONICAL_CONFIG_PATH:?}" &&
+                          ! -w "$CANONICAL_CONFIG_PATH" ]]
+                    if [[ "$OPENCLAW_CONFIG_PATH" != "$CANONICAL_CONFIG_PATH" ]]; then
+                      [[ "${1:-}" == "models" && "${2:-}" == "auth" &&
+                            -r "$OPENCLAW_CONFIG_PATH" && -w "$OPENCLAW_CONFIG_PATH" ]]
+                    fi
                     [[ -d "${CANDIDATE_ARTIFACTS_DIR:?}" && -r "$CANDIDATE_ARTIFACTS_DIR" && -x "$CANDIDATE_ARTIFACTS_DIR" && ! -w "$CANDIDATE_ARTIFACTS_DIR" ]]
                     for writable_path in \
                       "${OPENCLAW_QA_TEMP_ROOT:?}/workspace" \
@@ -1814,6 +1890,7 @@ jobs:
                     unset \
                       CANDIDATE_ROOT \
                       CANDIDATE_ARTIFACTS_DIR \
+                      CANONICAL_CONFIG_PATH \
                       EVIDENCE_ROOT \
                       NODE_BIN \
                       PRELOAD_PATH \
@@ -1855,9 +1932,6 @@ jobs:
                     else
                       runtime_node_args=("$runtime_candidate_root/dist/index.js" "$@")
                     fi
-                    # Login Bash reads /etc/bash.bashrc with inherited nounset.
-                    # Add PS1 only after the attested inbound env-key comparison.
-                    export PS1=
                     runtime_stage=exec-runtime
                     exec "$runtime_node_bin" "${runtime_node_args[@]}"
                   '\'' openclaw-sut "$@"
@@ -1893,8 +1967,6 @@ jobs:
       - name: Validate required QA credential env
         id: validate_credentials
         env:
-          # Release trains share a bounded Telegram pool; wait through overlapping lanes.
-          CREDENTIAL_ACQUIRE_TIMEOUT_MS: "600000"
           JOB_TIMEOUT_MINUTES: "60"
           LEASE_TTL_MS: "7200000"
           OPENCLAW_QA_CONVEX_SECRET_CI: ${{ secrets.OPENCLAW_QA_CONVEX_SECRET_CI }}
@@ -1916,8 +1988,6 @@ jobs:
           EVIDENCE_ROOT: ${{ steps.create_sut.outputs.evidence_root }}
           OPENCLAW_QA_CONVEX_SECRET_CI: ${{ secrets.OPENCLAW_QA_CONVEX_SECRET_CI }}
           OPENCLAW_QA_CONVEX_SITE_URL: ${{ secrets.OPENCLAW_QA_CONVEX_SITE_URL }}
-          # Keep the CLI lease wait aligned with the validated workflow contract above.
-          OPENCLAW_QA_CREDENTIAL_ACQUIRE_TIMEOUT_MS: "600000"
           OPENCLAW_QA_CREDENTIAL_LEASE_TTL_MS: "7200000"
           OPENCLAW_QA_REDACT_PUBLIC_METADATA: "1"
           OPENCLAW_QA_SUT_FORBIDDEN_SENTINEL: trusted-parent-${{ github.run_id }}-${{ github.run_attempt }}
@@ -2530,7 +2600,7 @@ jobs:
       # Identity binds this checkout to the workflow definition that received
       # the OIDC token. Do not execute status code from the release candidate.
       - name: Checkout trusted Telegram status helper
-        uses: actions/checkout@df4cb1c069e1874edd31b4311f1884172cec0e10 # v6.0.3
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           repository: ${{ needs.trusted_identity.outputs.workflow_repository }}
           ref: ${{ needs.trusted_identity.outputs.workflow_sha }}

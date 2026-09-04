@@ -96,24 +96,18 @@ function formatSkillName(skill: SkillStatusEntry): string {
   return emoji ? `${emoji} ${name}` : name;
 }
 
+const SKILL_REQUIREMENT_GROUPS = [
+  ["bins", "Binaries"],
+  ["anyBins", "Any binaries"],
+  ["env", "Environment"],
+  ["config", "Config"],
+  ["os", "OS"],
+] as const;
+
 function formatSkillMissingSummary(skill: SkillStatusEntry): string {
-  const missing: string[] = [];
-  if (skill.missing.bins.length > 0) {
-    missing.push(`bins: ${skill.missing.bins.join(", ")}`);
-  }
-  if (skill.missing.anyBins.length > 0) {
-    missing.push(`anyBins: ${skill.missing.anyBins.join(", ")}`);
-  }
-  if (skill.missing.env.length > 0) {
-    missing.push(`env: ${skill.missing.env.join(", ")}`);
-  }
-  if (skill.missing.config.length > 0) {
-    missing.push(`config: ${skill.missing.config.join(", ")}`);
-  }
-  if (skill.missing.os.length > 0) {
-    missing.push(`os: ${skill.missing.os.join(", ")}`);
-  }
-  return missing.join("; ");
+  return SKILL_REQUIREMENT_GROUPS.filter(([key]) => skill.missing[key].length > 0)
+    .map(([key]) => `${key}: ${skill.missing[key].join(", ")}`)
+    .join("; ");
 }
 
 /** Render skill discovery status as sanitized JSON or a terminal table. */
@@ -263,51 +257,23 @@ export function formatSkillInfo(
     lines.push(`${theme.muted("  Primary env:")} ${skill.primaryEnv}`);
   }
 
-  const hasRequirements =
-    skill.requirements.bins.length > 0 ||
-    skill.requirements.anyBins.length > 0 ||
-    skill.requirements.env.length > 0 ||
-    skill.requirements.config.length > 0 ||
-    skill.requirements.os.length > 0;
+  const requirementGroups = SKILL_REQUIREMENT_GROUPS.filter(
+    ([key]) => skill.requirements[key].length > 0,
+  );
 
-  if (hasRequirements) {
+  if (requirementGroups.length > 0) {
     lines.push("");
     lines.push(theme.heading("Requirements:"));
-    if (skill.requirements.bins.length > 0) {
-      const binsStatus = skill.requirements.bins.map((bin) => {
-        const missing = skill.missing.bins.includes(bin);
-        return missing ? theme.error(`✗ ${bin}`) : theme.success(`✓ ${bin}`);
+    for (const [key, label] of requirementGroups) {
+      const missingRequirements = skill.missing[key];
+      const requirementStatus = skill.requirements[key].map((requirement) => {
+        const missing =
+          key === "anyBins"
+            ? missingRequirements.length > 0
+            : missingRequirements.includes(requirement);
+        return missing ? theme.error(`✗ ${requirement}`) : theme.success(`✓ ${requirement}`);
       });
-      lines.push(`${theme.muted("  Binaries:")} ${binsStatus.join(", ")}`);
-    }
-    if (skill.requirements.anyBins.length > 0) {
-      const anyBinsMissing = skill.missing.anyBins.length > 0;
-      const anyBinsStatus = skill.requirements.anyBins.map((bin) => {
-        const missing = anyBinsMissing;
-        return missing ? theme.error(`✗ ${bin}`) : theme.success(`✓ ${bin}`);
-      });
-      lines.push(`${theme.muted("  Any binaries:")} ${anyBinsStatus.join(", ")}`);
-    }
-    if (skill.requirements.env.length > 0) {
-      const envStatus = skill.requirements.env.map((env) => {
-        const missing = skill.missing.env.includes(env);
-        return missing ? theme.error(`✗ ${env}`) : theme.success(`✓ ${env}`);
-      });
-      lines.push(`${theme.muted("  Environment:")} ${envStatus.join(", ")}`);
-    }
-    if (skill.requirements.config.length > 0) {
-      const configStatus = skill.requirements.config.map((cfg) => {
-        const missing = skill.missing.config.includes(cfg);
-        return missing ? theme.error(`✗ ${cfg}`) : theme.success(`✓ ${cfg}`);
-      });
-      lines.push(`${theme.muted("  Config:")} ${configStatus.join(", ")}`);
-    }
-    if (skill.requirements.os.length > 0) {
-      const osStatus = skill.requirements.os.map((osName) => {
-        const missing = skill.missing.os.includes(osName);
-        return missing ? theme.error(`✗ ${osName}`) : theme.success(`✓ ${osName}`);
-      });
-      lines.push(`${theme.muted("  OS:")} ${osStatus.join(", ")}`);
+      lines.push(`${theme.muted(`  ${label}:`)} ${requirementStatus.join(", ")}`);
     }
   }
 
@@ -346,12 +312,13 @@ export function formatSkillsCheck(report: SkillStatusReport, opts: SkillsCheckOp
   const commandVisible = report.skills.filter((s) => s.commandVisible);
   const disabled = report.skills.filter((s) => s.disabled);
   const blocked = report.skills.filter((s) => s.blockedByAllowlist && !s.disabled);
-  const agentFiltered = report.skills.filter((s) => s.eligible && s.blockedByAgentFilter);
+  // Agent exclusion is independent of readiness; report both when a skill needs setup.
+  const agentFiltered = report.skills.filter((s) => s.blockedByAgentFilter);
   const promptHidden = report.skills.filter(
     (s) => s.eligible && !s.blockedByAgentFilter && !s.modelVisible,
   );
   const missingReqs = report.skills.filter(
-    (s) => !s.eligible && !s.disabled && !s.blockedByAllowlist && !s.blockedByAgentFilter,
+    (s) => !s.eligible && !s.disabled && !s.blockedByAllowlist,
   );
   const agentId = report.agentId ?? opts.agent;
 

@@ -327,6 +327,7 @@ describe("Codex /codex plugins subcommand", () => {
     });
     expect(io.currentConfig()).not.toHaveProperty("allow_all_plugins");
     expect(result.text).toContain("installed and authorized");
+    expect(result.text).toContain("Takes effect on your next message.");
   });
 
   it("installs remote plugins with their opaque remote identity and preserves exact summary ids", async () => {
@@ -728,6 +729,7 @@ describe("Codex /codex plugins subcommand", () => {
     );
     expect(installed.text).toContain("points to a different plugin identity");
     expect(enabled.text).toContain("enabled in openclaw.json");
+    expect(enabled.text).toContain("Takes effect on your next message.");
     expect(runtime.install).not.toHaveBeenCalled();
     expect(io.current()["security-review@company-tools"]).toEqual({
       enabled: true,

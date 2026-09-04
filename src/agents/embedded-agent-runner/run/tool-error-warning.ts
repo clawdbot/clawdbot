@@ -1,38 +1,20 @@
-import {
-  normalizeOptionalLowercaseString,
-  normalizeOptionalString,
-} from "@openclaw/normalization-core/string-coerce";
+import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
 import type { VerboseLevel } from "../../../auto-reply/thinking.js";
-import { formatToolAggregate } from "../../../auto-reply/tool-meta.js";
+import { formatToolAggregateParts } from "../../../auto-reply/tool-meta.js";
 import { formatInlineCodeSpan } from "../../../shared/markdown-code.js";
+import { resolveToolDisplay } from "../../tool-display.js";
 import { isExecLikeToolName, type ToolErrorSummary } from "../../tool-error-summary.js";
-import { isLikelyMutatingToolName } from "../../tool-mutation.js";
 
-type ToolErrorWarningPolicy = {
-  showWarning: boolean;
-  includeDetails: boolean;
-};
-
-const RECOVERABLE_TOOL_ERROR_KEYWORDS = [
-  "required",
-  "missing",
-  "invalid",
-  "must be",
-  "must have",
-  "needs",
-  "requires",
-] as const;
-
-function isRecoverableToolError(error: string | undefined): boolean {
-  const errorLower = normalizeOptionalLowercaseString(error) ?? "";
-  return RECOVERABLE_TOOL_ERROR_KEYWORDS.some((keyword) => errorLower.includes(keyword));
-}
-function isVerboseToolDetailEnabled(level?: VerboseLevel): boolean {
-  return level === "full";
-}
-
-function shouldMarkNonTerminalToolErrorWarning(lastToolError: ToolErrorSummary): boolean {
-  return lastToolError.middlewareError === true;
+function formatWarningToolLabel(
+  toolName: string,
+  metas: string[] | undefined,
+  markdown: boolean,
+): string {
+  // Progress prefixes are reserved internal traces. User warnings use the label
+  // and the same escaped details so every text-only display can retain them.
+  const { label } = resolveToolDisplay({ name: toolName });
+  const { detail } = formatToolAggregateParts(toolName, metas, { markdown });
+  return detail ? `${label}: ${detail}` : label;
 }
 
 function formatToolErrorWarningText(params: {
@@ -40,12 +22,13 @@ function formatToolErrorWarningText(params: {
   includeDetails: boolean;
   useMarkdown: boolean;
 }): string {
+  const failureVerb = params.lastToolError.executionStarted === false ? "blocked" : "failed";
   const terminalDiagnostic = params.lastToolError.terminalDiagnostic;
   if (terminalDiagnostic?.kind === "process") {
-    const toolLabel = formatToolAggregate(
+    const toolLabel = formatWarningToolLabel(
       "process",
       params.includeDetails ? [terminalDiagnostic.sessionId] : undefined,
-      { markdown: params.useMarkdown },
+      params.useMarkdown,
     );
     const reason =
       terminalDiagnostic.reason.kind === "exit"
@@ -64,9 +47,7 @@ function formatToolErrorWarningText(params: {
   const includeError =
     params.includeDetails || params.lastToolError.errorCode === "approval_timeout";
   if (isExecLikeToolName(params.lastToolError.toolName)) {
-    const toolLabel = formatToolAggregate(params.lastToolError.toolName, undefined, {
-      markdown: params.useMarkdown,
-    });
+    const toolLabel = resolveToolDisplay({ name: params.lastToolError.toolName }).label;
     const subject = params.includeDetails
       ? formatExecLikeFailureSubject(params.lastToolError.meta, params.useMarkdown)
       : "";
@@ -76,18 +57,18 @@ function formatToolErrorWarningText(params: {
     const errorSuffix =
       includeError && params.lastToolError.error ? `: ${params.lastToolError.error}` : "";
     return subject
-      ? `⚠️ ${toolLabel} failed: ${subject}${conciseExitSuffix}${errorSuffix}`
-      : `⚠️ ${toolLabel} failed${conciseExitSuffix}${errorSuffix}`;
+      ? `⚠️ ${toolLabel} ${failureVerb}: ${subject}${conciseExitSuffix}${errorSuffix}`
+      : `⚠️ ${toolLabel} ${failureVerb}${conciseExitSuffix}${errorSuffix}`;
   }
 
-  const toolSummary = formatToolAggregate(
+  const toolSummary = formatWarningToolLabel(
     params.lastToolError.toolName,
     params.includeDetails && params.lastToolError.meta ? [params.lastToolError.meta] : undefined,
-    { markdown: params.useMarkdown },
+    params.useMarkdown,
   );
   const errorSuffix =
     includeError && params.lastToolError.error ? `: ${params.lastToolError.error}` : "";
-  return `⚠️ ${toolSummary} failed${errorSuffix}`;
+  return `⚠️ ${toolSummary} ${failureVerb}${errorSuffix}`;
 }
 
 function formatExecLikeFailureSubject(meta: string | undefined, markdown: boolean): string {
@@ -304,91 +285,19 @@ function formatConciseExecExitSuffix(error: string | undefined): string {
 function maybeWrapInlineCode(value: string, markdown: boolean): string {
   return markdown ? formatInlineCodeSpan(value) : value;
 }
-/**
- * Chooses whether a tool failure needs a separate user-visible warning and
- * whether to include raw details. Mutating failures are stricter because a
- * silent failed write/send/delete can make the assistant look successful.
- */
-function resolveToolErrorWarningPolicy(params: {
-  lastToolError: ToolErrorSummary;
-  hasUserFacingReply: boolean;
-  hasUserFacingErrorReply: boolean;
-  hasUserFacingFailureAcknowledgement: boolean;
-  suppressToolErrors: boolean;
-  suppressToolErrorWarnings?: boolean | (() => boolean | undefined);
-  verboseLevel?: VerboseLevel;
-}): ToolErrorWarningPolicy {
-  const normalizedToolName = normalizeOptionalLowercaseString(params.lastToolError.toolName) ?? "";
-  let toolErrorWarningOverride: boolean | undefined;
-  let dynamicToolErrorWarningsDisabled = false;
-  if (typeof params.suppressToolErrorWarnings === "function") {
-    toolErrorWarningOverride = params.suppressToolErrorWarnings();
-    dynamicToolErrorWarningsDisabled = toolErrorWarningOverride === false;
-  } else {
-    toolErrorWarningOverride = params.suppressToolErrorWarnings;
-  }
-  const includeDetails =
-    !dynamicToolErrorWarningsDisabled && isVerboseToolDetailEnabled(params.verboseLevel);
-  const suppressToolErrorWarnings = toolErrorWarningOverride === true;
-  if (suppressToolErrorWarnings) {
-    return { showWarning: false, includeDetails };
-  }
-  // sessions_send timeouts and errors are transient inter-session communication
-  // issues — the message may still have been delivered. Suppress warnings to
-  // prevent raw error text from leaking into the chat surface (#23989).
-  if (normalizedToolName === "sessions_send") {
-    return { showWarning: false, includeDetails };
-  }
-  if (params.suppressToolErrors) {
-    return { showWarning: false, includeDetails };
-  }
-  // Mutating branch protects "assistant claims success while a user-visible mutation
-  // silently failed". Shell/exec are the agent's own workspace actions: the model sees
-  // the exit code in-context, and a successful final reply is recovery proof (#103574).
-  // Deliberately ignores mutatingAction for exec: codex marks every commandExecution
-  // mutating fail-closed (replay metadata, not display signal).
-  if (isExecLikeToolName(params.lastToolError.toolName)) {
-    // No recoverable-keyword suppression here: with no reply at all, the exec
-    // warning may be the run's only failure signal.
-    return { showWarning: !params.hasUserFacingReply, includeDetails };
-  }
-  if (params.lastToolError.terminalDiagnostic?.kind === "process") {
-    return { showWarning: !params.hasUserFacingReply, includeDetails };
-  }
-  const isMutatingToolError =
-    params.lastToolError.mutatingAction ?? isLikelyMutatingToolName(params.lastToolError.toolName);
-  if (isMutatingToolError) {
-    return {
-      showWarning: !params.hasUserFacingErrorReply && !params.hasUserFacingFailureAcknowledgement,
-      includeDetails,
-    };
-  }
-  return {
-    showWarning: !params.hasUserFacingReply && !isRecoverableToolError(params.lastToolError.error),
-    includeDetails,
-  };
-}
-
+/** Always warn when a tool failure would otherwise leave the user with no reply. */
 export function buildFailureWarning(params: {
   lastToolError: ToolErrorSummary;
   hasUserFacingReply: boolean;
-  hasUserFacingErrorReply: boolean;
-  hasUserFacingFailureAcknowledgement: boolean;
-  suppressToolErrors: boolean;
-  suppressToolErrorWarnings?: boolean | (() => boolean | undefined);
   verboseLevel?: VerboseLevel;
   useMarkdown: boolean;
-}): { text: string; nonTerminalToolErrorWarning: boolean } | undefined {
-  const warningPolicy = resolveToolErrorWarningPolicy(params);
-  if (!warningPolicy.showWarning) {
+}): string | undefined {
+  if (params.hasUserFacingReply) {
     return undefined;
   }
-  return {
-    text: formatToolErrorWarningText({
-      lastToolError: params.lastToolError,
-      includeDetails: warningPolicy.includeDetails,
-      useMarkdown: params.useMarkdown,
-    }),
-    nonTerminalToolErrorWarning: shouldMarkNonTerminalToolErrorWarning(params.lastToolError),
-  };
+  return formatToolErrorWarningText({
+    lastToolError: params.lastToolError,
+    includeDetails: params.verboseLevel === "full",
+    useMarkdown: params.useMarkdown,
+  });
 }

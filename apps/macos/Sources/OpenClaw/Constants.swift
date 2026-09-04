@@ -31,6 +31,7 @@ let voiceWakeAdditionalLocalesKey = "openclaw.voiceWakeAdditionalLocaleIDs"
 let voicePushToTalkEnabledKey = "openclaw.voicePushToTalkEnabled"
 let voiceWakeTriggersTalkModeKey = "openclaw.voiceWakeTriggersTalkMode"
 let talkEnabledKey = "openclaw.talkEnabled"
+let talkRealtimeRelayEnabledKey = "openclaw.talkRealtimeRelayEnabled"
 let talkPhaseSoundsEnabledKey = "openclaw.talkPhaseSoundsEnabled"
 let talkShiftToStopEnabledKey = "openclaw.talkShiftToStopEnabled"
 let iconOverrideKey = "openclaw.iconOverride"
@@ -48,9 +49,17 @@ let cookieSyncEnabledKey = "openclaw.cookieSyncEnabled"
 let cookieSyncIntoProfileKey = "openclaw.cookieSyncIntoProfile"
 let cookieSyncDomainsKey = "openclaw.cookieSyncDomains"
 
-func isComputerControlEnabled(defaults: UserDefaults = AppDefaults.standard) -> Bool {
+func isTalkRealtimeRelayEnabled(defaults: UserDefaults = AppDefaults.standard) -> Bool {
+    defaults.object(forKey: talkRealtimeRelayEnabledKey) as? Bool ?? false
+}
+
+func isComputerControlEnabled(
+    defaults: UserDefaults = AppDefaults.standard,
+    launchPlan: AppLaunchRuntimePlan = .current) -> Bool
+{
     // object(forKey:) preserves an explicit false; bool(forKey:) would conflate it with an unset default.
-    defaults.object(forKey: computerControlEnabledKey) as? Bool ?? true
+    let storedValue = defaults.object(forKey: computerControlEnabledKey) as? Bool ?? true
+    return launchPlan.resolveComputerControlEnabled(storedValue)
 }
 
 let activeComputerPresenceEnabledKey = "openclaw.activeComputerPresenceEnabled"

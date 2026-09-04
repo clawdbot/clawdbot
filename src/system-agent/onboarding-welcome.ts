@@ -60,7 +60,7 @@ type OnboardingWelcome = {
  * auth), not just a model: a model-only config would otherwise get the
  * ready-guide welcome while the gate stays locked, stranding the page.
  */
-export async function loadAuthoredSetupConfig(params: {
+async function loadAuthoredSetupConfig(params: {
   configExists: boolean;
   configValid: boolean;
 }): Promise<{

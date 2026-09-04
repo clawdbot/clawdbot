@@ -1,6 +1,7 @@
 import { expectDefined } from "@openclaw/normalization-core";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { emitAgentEvent } from "../../infra/agent-events.js";
+import { drainGlobalSingletonLifecycleState } from "../../shared/global-singleton.js";
 import { agentHandlers } from "../server-methods/agent.js";
 import type { DedupeEntry } from "../server-shared.js";
 import { setGatewayDedupeEntry } from "./agent-job.js";
@@ -29,10 +30,14 @@ function waitThroughGateway(
   return { promise, respond };
 }
 
-function completeRun(dedupe: Map<string, DedupeEntry>, runId: string): void {
+function completeRun(
+  dedupe: Map<string, DedupeEntry>,
+  runId: string,
+  source: "agent" | "chat" = "agent",
+): void {
   setGatewayDedupeEntry({
     dedupe,
-    key: `agent:${runId}`,
+    key: `${source}:${runId}`,
     entry: {
       ts: Date.now(),
       ok: true,
@@ -59,6 +64,44 @@ afterEach(() => {
 });
 
 describe("agent.wait gateway dedupe observations", () => {
+  it("retains chat input identity when terminal writers replace admission metadata", async () => {
+    const runId = "run-chat-request-identity";
+    const key = `chat:${runId}`;
+    const dedupe = new Map<string, DedupeEntry>([
+      [
+        key,
+        {
+          ts: 100,
+          ok: true,
+          requestIdentity: "submitted-mention-selection",
+        },
+      ],
+    ]);
+    setGatewayDedupeEntry({
+      dedupe,
+      key,
+      entry: { ts: 200, ok: true, payload: { runId, status: "ok", endedAt: 200 } },
+    });
+    expect(dedupe.get(key)?.requestIdentity).toBe("submitted-mention-selection");
+    setGatewayDedupeEntry({
+      dedupe,
+      key,
+      entry: {
+        ts: 300,
+        ok: false,
+        requestIdentity: "stale-writer-selection",
+        payload: { runId, status: "error", endedAt: 300 },
+      },
+    });
+    expect(dedupe.get(key)?.requestIdentity).toBe("submitted-mention-selection");
+    const waiter = waitThroughGateway({ runId, timeoutMs: 0 }, "chat");
+    await waiter.promise;
+    expect(waiter.respond).toHaveBeenCalledWith(
+      true,
+      expect.objectContaining({ runId, status: "error", endedAt: 300 }),
+    );
+  });
+
   it.each([
     ["agent", "timeout"],
     ["chat", "ok"],
@@ -112,20 +155,52 @@ describe("agent.wait gateway dedupe observations", () => {
     expect(second.respond).toHaveBeenCalledWith(true, expected);
   });
 
-  it("lets a fresh wait observe completion after an earlier waiter times out", async () => {
-    vi.useFakeTimers();
-    const runId = "run-public-timeout-cleanup";
-    const dedupe = new Map<string, DedupeEntry>();
-    const timedOut = waitThroughGateway({ runId, timeoutMs: 10 });
+  it.each(
+    ([undefined, "agent", "chat"] as const).flatMap((activeKind) =>
+      [0, 10].map((timeoutMs) => ({ activeKind, timeoutMs })),
+    ),
+  )(
+    "keeps $activeKind observation timeout after $timeoutMs ms nonterminal",
+    async ({ activeKind, timeoutMs }) => {
+      vi.useFakeTimers();
+      const runId = `run-public-timeout-${activeKind ?? "untracked"}-${timeoutMs}`;
+      const dedupe = new Map<string, DedupeEntry>();
+      const timedOut = waitThroughGateway({ runId, timeoutMs }, activeKind);
 
-    await vi.advanceTimersByTimeAsync(11);
-    await timedOut.promise;
-    expect(timedOut.respond).toHaveBeenCalledWith(true, {
+      await vi.advanceTimersByTimeAsync(timeoutMs);
+      await timedOut.promise;
+      expect(timedOut.respond).toHaveBeenCalledWith(true, {
+        runId,
+        status: "timeout",
+      });
+
+      completeRun(dedupe, runId, activeKind);
+      const completed = waitThroughGateway({ runId, timeoutMs: 0 }, activeKind);
+      await completed.promise;
+      expect(completed.respond).toHaveBeenCalledWith(
+        true,
+        expect.objectContaining({ runId, status: "ok", endedAt: 200 }),
+      );
+    },
+  );
+
+  it("attributes lifecycle reset without caching a terminal run outcome", async () => {
+    vi.useFakeTimers();
+    const runId = "run-public-lifecycle-reset";
+    const dedupe = new Map<string, DedupeEntry>();
+    const interrupted = waitThroughGateway({ runId, timeoutMs: 1_000 });
+
+    await drainGlobalSingletonLifecycleState("restart");
+    await interrupted.promise;
+    expect(interrupted.respond).toHaveBeenCalledWith(true, {
       runId,
       status: "timeout",
-      timeoutPhase: "queue",
-      providerStarted: false,
+      timeoutPhase: "gateway_draining",
     });
+
+    const fresh = waitThroughGateway({ runId, timeoutMs: 0 });
+    await fresh.promise;
+    expect(fresh.respond).toHaveBeenCalledWith(true, { runId, status: "timeout" });
 
     completeRun(dedupe, runId);
     const completed = waitThroughGateway({ runId, timeoutMs: 0 });

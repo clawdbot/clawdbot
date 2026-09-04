@@ -44,10 +44,16 @@ export async function setupAuthTestEnv(
 ): Promise<AuthTestEnv> {
   clearRuntimeAuthProfileStoreSnapshots();
   const state = await createOpenClawTestState({ prefix, layout: "state-only" });
-  const agentDir = path.join(state.stateDir, options?.agentSubdir ?? "agent");
-  process.env.OPENCLAW_AGENT_DIR = agentDir;
-  await fs.mkdir(agentDir, { recursive: true });
-  return { stateDir: state.stateDir, agentDir, cleanup: state.cleanup };
+  try {
+    const agentDir = path.join(state.stateDir, options?.agentSubdir ?? "agent");
+    process.env.OPENCLAW_AGENT_DIR = agentDir;
+    await fs.mkdir(agentDir, { recursive: true });
+    return { stateDir: state.stateDir, agentDir, cleanup: state.cleanup };
+  } catch (error) {
+    // Ownership has not reached the caller, so release the acquired state here.
+    await state.cleanup();
+    throw error;
+  }
 }
 
 type AuthTestLifecycle = {

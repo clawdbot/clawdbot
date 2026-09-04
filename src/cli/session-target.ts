@@ -3,8 +3,13 @@ import {
   GATEWAY_CLIENT_NAMES,
 } from "../../packages/gateway-protocol/src/client-info.js";
 import { classifyGatewayConnectFailure } from "../../packages/gateway-protocol/src/connect-error-details.js";
-import type { AgentsListResult } from "../../packages/gateway-protocol/src/index.js";
+import type {
+  AgentsListResult,
+  SessionsResolveResult,
+} from "../../packages/gateway-protocol/src/index.js";
+import { visibleWidth } from "../../packages/terminal-core/src/ansi.js";
 import { sanitizeTerminalText } from "../../packages/terminal-core/src/safe-text.js";
+import { formatTextCell } from "../commands/text-format.js";
 import { resolveCanonicalMainSessionKey } from "../config/sessions/main-session-key.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import {
@@ -33,10 +38,6 @@ type ResolvedSessionTarget = {
   gateway: SessionTargetGateway;
   parsed: SessionTargetInput;
 };
-
-type SessionsResolveResult =
-  | { ok: true; key: string }
-  | { ok: false; candidates?: Array<{ key: string; displayName?: string }> };
 
 function gatewayUrlForTarget(target: SessionTargetInput): string | undefined {
   return target.kind === "url" ? `${target.origin}${target.basePath}` : undefined;
@@ -83,16 +84,15 @@ function formatAmbiguousCandidates(
   gatewayUrl: string | undefined,
 ): string {
   const rows = candidates.map((candidate) => ({
-    name: sanitizeTerminalText(candidate.displayName?.trim() || "(unnamed)")
-      .replace(/\s+/gu, " ")
-      .slice(0, 40),
+    name: sanitizeTerminalText(candidate.displayName?.trim() || "(unnamed)").replace(/\s+/gu, " "),
     id: candidateId(candidate.key),
   }));
-  const width = Math.max("SESSION".length, ...rows.map((row) => row.name.length));
+  const nameWidth = Math.max(...rows.map((row) => visibleWidth(row.name)));
+  const width = Math.max("SESSION".length, Math.min(40, nameWidth));
   return [
     "Session reference is ambiguous:",
     `${"SESSION".padEnd(width)}  ID PREFIX`,
-    ...rows.map((row) => `${row.name.padEnd(width)}  ${row.id}`),
+    ...rows.map((row) => `${formatTextCell(row.name, width)}  ${row.id}`),
     `Pass a longer reference. ${sessionsListHint(gatewayUrl)}`,
   ].join("\n");
 }

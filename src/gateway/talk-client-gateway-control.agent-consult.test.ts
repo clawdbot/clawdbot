@@ -1,6 +1,13 @@
-import { beforeEach, describe, expect, it, vi } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import type { PluginRuntime } from "../plugins/runtime/types.js";
+import {
+  authorizeClientVoiceConfirmation,
+  checkClientVoiceToolConfirmationPolicy,
+  deactivateClientVoiceConfirmationSession,
+  noteClientVoiceConfirmationUtterance,
+} from "../talk/client-voice-confirmation.js";
+import { resetClientVoiceConfirmationStateForTest } from "../talk/client-voice-confirmation.test-support.js";
 
 type ConsultParams = Parameters<
   typeof import("../talk/agent-consult-runtime.js").consultRealtimeVoiceAgent
@@ -36,10 +43,8 @@ vi.mock("../talk/agent-consult-runtime.js", () => ({
   consultRealtimeVoiceAgent: mocks.consultRealtimeVoiceAgent,
 }));
 
-import {
-  createTalkClientAgentConsultRunner,
-  type TalkAgentConsultAuthority,
-} from "./talk-client-gateway-control.js";
+import { createTalkClientAgentConsultRunner } from "./talk-client-agent-consult.js";
+import type { TalkAgentConsultAuthority } from "./talk-client-gateway-control.js";
 
 const config = {} as OpenClawConfig;
 const coreParams = {
@@ -64,8 +69,12 @@ function createRunner(
   return createTalkClientAgentConsultRunner({
     config,
     context: { chatAbortControllers: new Map(), logGateway: { warn: vi.fn() } } as never,
-    agentId: "researcher",
-    sessionKey: "agent:researcher:talk",
+    sessionTarget: {
+      agentId: "researcher",
+      sessionKey: "main",
+      canonicalKey: "agent:researcher:talk",
+      storePath: "/tmp/sessions",
+    },
     authority,
     getVoiceSessionId: () => "voice-session",
     initialItems: [],
@@ -92,6 +101,8 @@ describe("Talk client agent consult admission", () => {
     });
   });
 
+  afterEach(() => resetClientVoiceConfirmationStateForTest());
+
   it("runs through a Talk-owned gateway admission and closes it after success", async () => {
     await expect(createRunner().runPrompt({ prompt: "check" })).resolves.toEqual({ text: "done" });
 
@@ -115,7 +126,13 @@ describe("Talk client agent consult admission", () => {
       }),
     );
     expect(mocks.consultRealtimeVoiceAgent).toHaveBeenCalledWith(
-      expect.objectContaining({ senderIsOwner: false, toolsAllow: ["read"] }),
+      expect.objectContaining({
+        agentId: "researcher",
+        sessionKey: "agent:researcher:talk",
+        storePath: "/tmp/sessions",
+        senderIsOwner: false,
+        toolsAllow: ["read"],
+      }),
     );
     expect(mocks.close).toHaveBeenCalledOnce();
   });
@@ -191,5 +208,50 @@ describe("Talk client agent consult admission", () => {
     );
     expect(mocks.prepareAgentRunAdmission).not.toHaveBeenCalled();
     expect(mocks.runEmbeddedAgentCore).not.toHaveBeenCalled();
+  });
+
+  it("continues the admitted run when close invalidates confirmation before registration", async () => {
+    const now = Date.now();
+    const challenge = checkClientVoiceToolConfirmationPolicy({
+      agentId: "researcher",
+      voiceSessionId: "voice-session",
+      runId: "run-original",
+      toolName: "message",
+      toolParams: { action: "send", message: "cancelled action" },
+      now,
+    });
+    if (challenge.allowed) {
+      throw new Error("expected voice confirmation challenge");
+    }
+    const confirmationId = challenge.reason.match(/VOICE_CONFIRMATION_REQUIRED:([^\s]+)/)?.[1];
+    if (!confirmationId) {
+      throw new Error("missing voice confirmation id");
+    }
+    noteClientVoiceConfirmationUtterance({
+      agentId: "researcher",
+      voiceSessionId: "voice-session",
+      text: "yes",
+      timestamp: now + 1,
+    });
+    authorizeClientVoiceConfirmation({
+      agentId: "researcher",
+      voiceSessionId: "voice-session",
+      confirmationId,
+      now: now + 2,
+    });
+    mocks.consultRealtimeVoiceAgent.mockImplementationOnce(async (params: ConsultParams) => {
+      deactivateClientVoiceConfirmationSession("researcher", "voice-session");
+      params.onRunStarted?.({ runId: "run-talk", sessionId: "session-talk", timeoutMs: 1 });
+      await params.agentRuntime.runEmbeddedAgent(coreParams);
+      return { text: "done" };
+    });
+    const registerRun = vi.fn();
+
+    await expect(
+      createRunner(registerRun).runArgs({ question: "check", confirmationId }),
+    ).resolves.toEqual({ text: "done" });
+    expect(registerRun).toHaveBeenCalledWith({ runId: "run-talk" });
+    expect(mocks.runEmbeddedAgentCore).toHaveBeenCalledOnce();
+    expect(mocks.close).toHaveBeenCalledOnce();
   });
 });

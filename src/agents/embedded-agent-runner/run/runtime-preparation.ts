@@ -5,6 +5,7 @@ import { resolvePreparedRunAdmission } from "../../admitted-run-context.js";
 import type { AuthProfileStore } from "../../auth-profiles.js";
 import { isProfileInCooldown } from "../../auth-profiles.js";
 import type { ResolvedProviderAuth } from "../../model-auth.js";
+import { resolvePreparedModelThinkingCompat } from "../../model-catalog-lookup.js";
 import type { PreparedModelRuntimeSnapshot } from "../../prepared-model-runtime.js";
 import { resolveProviderEndpoint } from "../../provider-attribution.js";
 import { getModelProviderRequestRouteFacts } from "../../provider-request-config.js";
@@ -44,6 +45,7 @@ type ApiKeyInfo = ResolvedProviderAuth;
 
 export async function prepareEmbeddedRunRuntime(input: {
   runParams: RunEmbeddedAgentInternalParams;
+  sessionAdmission?: Parameters<typeof resolveEmbeddedRunModelSetup>[0]["sessionAdmission"];
   provider: string;
   modelId: string;
   agentDir: string;
@@ -64,6 +66,7 @@ export async function prepareEmbeddedRunRuntime(input: {
   let modelId = input.modelId;
   const modelSetup = await resolveEmbeddedRunModelSetup({
     runParams: params,
+    sessionAdmission: input.sessionAdmission,
     provider,
     modelId,
     agentDir: input.agentDir,
@@ -82,8 +85,9 @@ export async function prepareEmbeddedRunRuntime(input: {
     modelSelectionChangedByHook,
     requestStreamTransportOverrides,
     expectedHarnessArtifact,
-    nativeModelOwnedHarnessId,
+    pinnedHarnessId,
     nativeModelOwned,
+    nativeSessionRuntime,
     modelConfigProvider,
     model,
     authStorage,
@@ -92,6 +96,7 @@ export async function prepareEmbeddedRunRuntime(input: {
   let agentHarness = modelSetup.agentHarness;
   let pluginHarnessOwnsTransport = modelSetup.pluginHarnessOwnsTransport;
   let runtimeModel = model;
+  let preparedThinkingCapabilityReady = false;
   const resolveEffectiveModel = (candidate: typeof runtimeModel) =>
     resolveEmbeddedRunEffectiveModel({
       runParams: params,
@@ -102,7 +107,7 @@ export async function prepareEmbeddedRunRuntime(input: {
       runtimeModel: candidate,
       nativeModelOwned,
       requestStreamTransportOverrides,
-      nativeModelOwnedHarnessId,
+      pinnedHarnessId,
     });
   const initialResolvedRuntimeModel = resolveEffectiveModel(runtimeModel);
   let contextTokenBudget = initialResolvedRuntimeModel.contextTokenBudget;
@@ -113,9 +118,23 @@ export async function prepareEmbeddedRunRuntime(input: {
   let effectiveModel = initialResolvedRuntimeModel.effectiveModel;
   const applyResolvedRuntimeModel = (
     candidate: typeof runtimeModel,
-    resolved = resolveEffectiveModel(candidate),
+    resolvedCandidate?: ReturnType<typeof resolveEffectiveModel>,
   ) => {
-    runtimeModel = candidate;
+    const preparedThinkingCompat = preparedThinkingCapabilityReady
+      ? resolvePreparedModelThinkingCompat({
+          capability: params.modelThinkingCapability,
+          model: candidate,
+          agentRuntime: agentHarness.id,
+        })
+      : undefined;
+    const resolvedModel = preparedThinkingCompat
+      ? { ...candidate, compat: { ...candidate.compat, ...preparedThinkingCompat } }
+      : candidate;
+    const resolved =
+      resolvedModel === candidate && resolvedCandidate
+        ? resolvedCandidate
+        : resolveEffectiveModel(resolvedModel);
+    runtimeModel = resolvedModel;
     effectiveModel = resolved.effectiveModel;
     contextTokenBudget = resolved.contextTokenBudget;
     authoredContextTokenCap = resolved.authoredContextTokenCap;
@@ -128,29 +147,33 @@ export async function prepareEmbeddedRunRuntime(input: {
     plan?: AgentRuntimeAuthPlan,
     preparedAuthAttempt?: PreparedAgentRuntimeAuthAttempt,
   ) =>
-    selectEmbeddedRunHarness({
-      runParams: params,
-      provider,
-      modelId,
-      model: candidate,
-      plan,
-      preparedAuthAttempt,
-      requestStreamTransportOverrides,
-      nativeModelOwnedHarnessId,
-    });
+    nativeSessionRuntime?.auth === "native"
+      ? nativeSessionRuntime.harness
+      : selectEmbeddedRunHarness({
+          runParams: params,
+          provider,
+          modelId,
+          model: candidate,
+          plan,
+          preparedAuthAttempt,
+          requestStreamTransportOverrides,
+          pinnedHarnessId,
+        });
   const selectHarnessForPreparedAttempts = (
     candidate: typeof effectiveModel,
     attempts: readonly PreparedAgentRuntimeAuthAttempt[],
   ) =>
-    selectEmbeddedRunHarnessForPreparedAttempts({
-      runParams: params,
-      provider,
-      modelId,
-      model: candidate,
-      attempts,
-      requestStreamTransportOverrides,
-      nativeModelOwnedHarnessId,
-    });
+    nativeSessionRuntime?.auth === "native"
+      ? nativeSessionRuntime.harness
+      : selectEmbeddedRunHarnessForPreparedAttempts({
+          runParams: params,
+          provider,
+          modelId,
+          model: candidate,
+          attempts,
+          requestStreamTransportOverrides,
+          pinnedHarnessId,
+        });
   input.markStartupStage("model-resolution");
   input.notifyExecutionPhase("model_resolution", { provider, model: modelId });
 
@@ -166,6 +189,7 @@ export async function prepareEmbeddedRunRuntime(input: {
     workspaceDir: input.workspaceDir,
     requestStreamTransportOverrides,
     nativeModelOwned,
+    nativeSessionRuntime,
     authStorage,
     modelRegistry,
     preparedModelRuntime: input.preparedModelRuntime,
@@ -190,6 +214,8 @@ export async function prepareEmbeddedRunRuntime(input: {
     preparedAuthAttempts,
   } = preparedAuthPlan;
   let { activePreparedAuthPlan } = preparedAuthPlan;
+  preparedThinkingCapabilityReady = true;
+  applyResolvedRuntimeModel(runtimeModel);
   const genericCompactionRecoveryAllowed = !pluginHarnessOwnsTransport;
   const profileCandidates = preparedAuthAttempts.map((attempt) => attempt.profileId);
   const forwardedPluginHarnessProfileId = pluginHarnessOwnsTransport
@@ -240,7 +266,7 @@ export async function prepareEmbeddedRunRuntime(input: {
     pluginHarnessOwnsTransport &&
     (preparedApiKeyRoute ||
       (!pluginHarnessOwnsAuthBootstrap &&
-        profileCandidates.some((profileId) => Boolean(profileId))));
+        preparedAuthAttempts.some((attempt) => attempt.kind !== "implicit")));
   const findPreparedAuthAttempt = (profileId: string | undefined, attemptIndex?: number) => {
     const attempt =
       attemptIndex === undefined
@@ -532,6 +558,7 @@ export async function prepareEmbeddedRunRuntime(input: {
     requestedModelId,
     expectedHarnessArtifact,
     nativeModelOwned,
+    nativeSessionRuntime,
     model,
     authStorage,
     modelRegistry,

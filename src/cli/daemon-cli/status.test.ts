@@ -1,25 +1,28 @@
 // Daemon status tests cover service status gathering and CLI responses.
 import { beforeEach, describe, expect, it, vi } from "vitest";
+import { fetchNpmPackageTargetStatus } from "../../infra/update-check-package-target.js";
 import { createCliRuntimeCapture } from "../test-runtime-capture.js";
 import type { DaemonStatus } from "./status.gather.js";
 
-const gatherDaemonStatus = vi.fn(
-  async (_opts?: unknown): Promise<DaemonStatus> => ({
-    service: {
-      label: "LaunchAgent",
-      loaded: true,
-      loadState: { status: "loaded" },
-      loadedText: "loaded",
-      notLoadedText: "not loaded",
-    },
-    rpc: {
-      ok: true,
-      url: "ws://127.0.0.1:18789",
-    },
-    extraServices: [],
-  }),
-);
+const gatherDaemonStatus = vi.fn(async (_opts?: unknown): Promise<DaemonStatus> => ({
+  service: {
+    label: "LaunchAgent",
+    loaded: true,
+    loadState: { status: "loaded" },
+    loadedText: "loaded",
+    notLoadedText: "not loaded",
+  },
+  rpc: {
+    ok: true,
+    url: "ws://127.0.0.1:18789",
+  },
+  extraServices: [],
+}));
 const printDaemonStatus = vi.fn();
+
+vi.mock("../../infra/update-check-package-target.js", () => ({
+  fetchNpmPackageTargetStatus: vi.fn(),
+}));
 
 const { runtimeErrors, defaultRuntime, resetRuntimeCapture } = createCliRuntimeCapture();
 
@@ -46,11 +49,44 @@ const { runDaemonStatus } = await import("./status.js");
 describe("runDaemonStatus", () => {
   beforeEach(() => {
     gatherDaemonStatus.mockClear();
+    vi.mocked(fetchNpmPackageTargetStatus).mockReset();
     printDaemonStatus.mockClear();
     defaultRuntime.error.mockClear();
     defaultRuntime.exit.mockClear();
     defaultRuntime.writeJson.mockClear();
     resetRuntimeCapture();
+  });
+
+  it.each([false, true])("confirms repair targets only for deep status (deep=%s)", async (deep) => {
+    const gathered = await gatherDaemonStatus();
+    gathered.pluginVersionDrift = {
+      gatewayVersion: "2026.7.1-2",
+      drifts: [
+        {
+          pluginId: "brave",
+          installedVersion: "2026.7.0",
+          gatewayVersion: "2026.7.1-2",
+          source: "npm",
+          spec: "@openclaw/brave-plugin@2026.7.0",
+        },
+      ],
+    };
+    gatherDaemonStatus.mockResolvedValueOnce(gathered);
+    vi.mocked(fetchNpmPackageTargetStatus).mockResolvedValue({
+      target: "2026.7.1",
+      version: null,
+      nodeEngine: null,
+      error: "HTTP 404",
+    });
+
+    await runDaemonStatus({ rpc: {}, probe: true, requireRpc: false, json: false, deep });
+
+    expect(fetchNpmPackageTargetStatus).toHaveBeenCalledTimes(deep ? 1 : 0);
+    const printed = printDaemonStatus.mock.calls[0]?.[0] as DaemonStatus;
+    expect(printed.pluginVersionDrift?.drifts[0]?.targetResolution?.status).toBe(
+      deep ? "unresolved" : undefined,
+    );
+    expect(defaultRuntime.exit).not.toHaveBeenCalled();
   });
 
   it("exits when require-rpc is set and the probe fails", async () => {

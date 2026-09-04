@@ -7,7 +7,7 @@ import { afterEach, describe, expect, it, vi } from "vitest";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { buildGatewayReloadPlan } from "../gateway/config-reload-plan.js";
 import { createGatewayCronReconciliation } from "../gateway/server-cron-reconciled.js";
-import { createGatewayReloadHandlers } from "../gateway/server-reload-handlers.js";
+import { createGatewayReloadHandlers } from "../gateway/server-reload-hot.js";
 import {
   isGatewaySigusr1RestartExternallyAllowed,
   setGatewaySigusr1RestartPolicy,
@@ -248,8 +248,7 @@ describe("mcp connection resolver helpers", () => {
     const previousExternalRestartPolicy = isGatewaySigusr1RestartExternallyAllowed();
 
     try {
-      // Model catalog provisioning is independent of plugin-owned MCP revocation.
-      // Keep both Gateway refresh calls observable without starting provider discovery.
+      // Keep Gateway refresh scheduling observable without starting provider discovery.
       const refreshPreparedModelRuntimeSnapshots = vi
         .spyOn(await import("./prepared-model-runtime.js"), "refreshPreparedModelRuntimeSnapshots")
         .mockResolvedValue(undefined);
@@ -331,12 +330,10 @@ describe("mcp connection resolver helpers", () => {
           storePath: "/tmp/openclaw-mcp-gateway-reload-proof-cron",
           cronEnabled: false,
           reconcileExitWatchers: async () => {},
-          stopExitWatchers: () => {},
           reconcileStreamWatchers: async () => {},
           stopStreamWatchers: async () => {},
-          reconcileHeartbeatJobs: async () => {},
+          reconcileSystemJobs: async () => "converged" as const,
         },
-        channelHealthMonitor: null,
       };
       const reloadLog = { info: vi.fn(), warn: vi.fn(), error: vi.fn() };
       const requestRecoveryRestart = vi.fn(() => ({ status: "failed" as const }));
@@ -363,8 +360,11 @@ describe("mcp connection resolver helpers", () => {
         setState(nextState) {
           gatewayState = nextState;
         },
-        async startChannel() {},
+        async startChannel() {
+          return new Map();
+        },
         async stopChannel() {},
+        pruneInactiveChannelAccountState() {},
         async reloadPlugins({ beforeReplace, commitRuntime }) {
           await beforeReplace(new Set());
           await commitRuntime();
@@ -381,11 +381,10 @@ describe("mcp connection resolver helpers", () => {
           isClosing: () => false,
           async runHook() {},
         }),
-        createHealthMonitor: () => null,
         requestRecoveryRestart,
       });
 
-      await expect(gatewayReload.applyHotReload(reloadPlan, nextConfig)).resolves.toBeUndefined();
+      await expect(gatewayReload.applyHotReload(reloadPlan, nextConfig)).resolves.toBe("applied");
       expect(refreshPreparedModelRuntimeSnapshots).toHaveBeenCalledWith(nextConfig, {
         allowGatewaySubagentBinding: true,
         catalogMode: "static",

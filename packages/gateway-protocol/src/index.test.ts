@@ -26,9 +26,6 @@ import {
   validateSessionsSearchParams,
   validateSessionsSendParams,
   validateSessionsUsageParams,
-  validateTasksCancelParams,
-  validateTasksListParams,
-  validateTasksRecoveryParams,
   validateTalkConfigResult,
   validateTalkClientCreateParams,
   validateTalkClientCreateResult,
@@ -172,27 +169,16 @@ describe("lazy protocol validators", () => {
   });
 
   it("validates session board face list and patch values", () => {
-    expectAccepted(validateSessionsListParams, [{ boardFace: "dashboard" }]);
-    expectRejected(validateSessionsListParams, [{ boardFace: "grid" }]);
+    expectAccepted(validateSessionsListParams, [
+      { boardFace: "dashboard" },
+      { hasBoard: true },
+      { hasBoard: false },
+    ]);
+    expectRejected(validateSessionsListParams, [{ boardFace: "grid" }, { hasBoard: "yes" }]);
     expectAccepted(validateSessionsPatchParams, [{ key: "agent:main:main", boardFace: "chat" }]);
     expectRejected(validateSessionsPatchParams, [{ key: "agent:main:main", boardFace: "grid" }]);
     // The schemas are closed objects; the pre-rename name must not slip back in.
     expectRejected(validateSessionsListParams, [{ face: "dashboard" }]);
-  });
-
-  it("validates session patch compare-and-swap identity", () => {
-    expectAccepted(validateSessionsPatchParams, [
-      sessionPatch({
-        key: "agent:main:self-archive",
-        archived: true,
-        expectedSessionId: "session-self-archive",
-        expectedLifecycleRevision: "revision-self-archive",
-      }),
-    ]);
-    expectRejected(validateSessionsPatchParams, [
-      sessionPatch({ key: "agent:main:self-archive", expectedSessionId: "" }),
-      sessionPatch({ key: "agent:main:self-archive", expectedLifecycleRevision: "" }),
-    ]);
   });
 
   it("validates bounded closed bulk session patch requests", () => {
@@ -213,6 +199,7 @@ describe("lazy protocol validators", () => {
       archived: false,
       pinned: true,
       unread: true,
+      contextWindow: "1m",
       thinkingLevel: "high",
       fastMode: "auto",
       toolOverrides: null,
@@ -222,8 +209,6 @@ describe("lazy protocol validators", () => {
       responseUsage: "full",
       elevatedLevel: "on",
       execHost: "gateway",
-      execSecurity: "allowlist",
-      execAsk: "on-miss",
       execNode: "node-1",
       model: "openai/gpt-5.6-luna",
       completionOwnerSessionKey: "agent:main:main",
@@ -266,6 +251,15 @@ describe("lazy protocol validators", () => {
       { targets: [target], patch: { archived: true, extra: true } },
       { targets: [target], patch: { archived: true }, extra: true },
     ]);
+  });
+
+  it.each(["execSecurity", "execAsk"])("accepts retired v4 session policy field %s", (field) => {
+    for (const value of ["deny", "always", null]) {
+      expectAccepted(validateSessionsPatchParams, [sessionPatch({ [field]: value })]);
+      expectAccepted(validateSessionsPatchManyParams, [
+        { targets: [{ key: "agent:main:main" }], patch: { [field]: value } },
+      ]);
+    }
   });
 
   it("validates sparse session tool overrides", () => {
@@ -407,11 +401,19 @@ describe("lazy protocol validators", () => {
     expectAccepted(protocol.validateSessionsCompactParams, [{ key: "global", agentId: "work" }]);
   });
 
-  it("accepts selected-agent scope on chat metadata params", () => {
-    expectAccepted(validateChatMetadataParams, [{}, { agentId: "work" }]);
+  it("accepts distinct session and draft-account scopes on chat metadata params", () => {
+    expectAccepted(validateChatMetadataParams, [
+      {},
+      { agentId: "work" },
+      { sessionKey: "agent:work:main" },
+      { agentId: "work", sessionKey: "global" },
+      { agentId: "work", authProfileId: "test:locked" },
+    ]);
     expectRejected(validateChatMetadataParams, [
       { agentId: "" },
       { agentId: "work", view: "configured" },
+      { sessionKey: "" },
+      { sessionKey: "agent:work:main", authProfileId: "test:locked" },
     ]);
   });
 
@@ -851,7 +853,7 @@ describe("validateTalkSessionRelayParams", () => {
     expectAccepted(validateTalkSessionAppendAudioParams, [
       talkSession({ audioBase64: "aGVsbG8=", timestamp: 123 }),
     ]);
-    expectAccepted(validateTalkSessionCancelOutputParams, [talkSession({ reason: "barge-in" })]);
+    expectAccepted(validateTalkSessionCancelOutputParams, [talkSession({ turnId: "turn-7" })]);
     expectAccepted(validateTalkSessionSubmitToolResultParams, [
       talkSession({
         callId: "call-1",
@@ -1038,36 +1040,6 @@ describe("validateModelsProbeParams", () => {
       {},
       { provider: "openai", timeoutMs: 0 },
       { provider: "openai", extra: true },
-    ]);
-  });
-});
-
-describe("validateTasksListParams", () => {
-  it("accepts SDK task ledger filters", () => {
-    expectAccepted(validateTasksListParams, [
-      {
-        status: ["running", "completed"],
-        agentId: "main",
-        sessionKey: "agent:main:main",
-        limit: 50,
-        cursor: "100",
-      },
-    ]);
-  });
-
-  it("rejects internal task statuses and unknown fields", () => {
-    expectRejected(validateTasksListParams, [{ status: "succeeded" }]);
-    expectRejected(validateTasksCancelParams, [{ taskId: "task-1", force: true }]);
-  });
-});
-
-describe("validateTasksRecoveryParams", () => {
-  it("accepts one to ten task ids and rejects unbounded recovery batches", () => {
-    expectAccepted(validateTasksRecoveryParams, [{ taskIds: ["task-1", "task-2"] }]);
-    expectRejected(validateTasksRecoveryParams, [
-      { taskIds: [] },
-      { taskIds: Array.from({ length: 11 }, (_, index) => `task-${index}`) },
-      { taskIds: ["task-1"], force: true },
     ]);
   });
 });

@@ -3,9 +3,43 @@ import {
   describeToolResultMediaPlaceholder,
   describeUnsupportedToolResultMedia,
   extractToolResultText,
+  formatToolResultText,
   hasMediaPayload,
   isImageWithMediaPayload,
 } from "./tool-result-text.js";
+
+describe("formatToolResultText", () => {
+  it("preserves significant boundary whitespace in nonblank tool output", () => {
+    expect(formatToolResultText({ text: "  indented\n", isError: false })).toBe("  indented\n");
+    expect(formatToolResultText({ text: "row1   \nrow2\n", isError: false })).toBe(
+      "row1   \nrow2\n",
+    );
+  });
+
+  it("falls back to placeholders only for blank tool output", () => {
+    expect(formatToolResultText({ text: "   \n\t", isError: false })).toBe("(no tool output)");
+    expect(
+      formatToolResultText({ text: "", mediaPlaceholder: "(see attached image)", isError: false }),
+    ).toBe("(see attached image)");
+  });
+
+  it("keeps the error prefix on unmodified output", () => {
+    expect(formatToolResultText({ text: "  failed  ", isError: true })).toBe(
+      "[tool error]   failed  ",
+    );
+  });
+
+  it("appends the omitted-media suffix after unmodified output", () => {
+    const text = "line with trailing spaces   ";
+    expect(
+      formatToolResultText({
+        text,
+        omittedMediaPlaceholder: "[tool image omitted]",
+        isError: false,
+      }),
+    ).toBe(`${text}\n[tool image omitted]`);
+  });
+});
 
 describe("hasMediaPayload", () => {
   it("requires non-empty inline data instead of media metadata", () => {
@@ -31,6 +65,36 @@ describe("isImageWithMediaPayload", () => {
 });
 
 describe("extractToolResultText", () => {
+  it.each([
+    { blocks: ["A\ud800", "\udc00B"], expected: "A\nB" },
+    { blocks: ["😀\ud800x\udc00漢"], expected: "😀x漢" },
+    { blocks: ["\ud800", "\udc00"], expected: "" },
+    { blocks: ["  before\n", "after  "], expected: "  before\n\nafter  " },
+  ])("sanitizes separate text blocks before joining: $blocks", ({ blocks, expected }) => {
+    expect(extractToolResultText(blocks.map((text) => ({ type: "text", text })))).toBe(expected);
+  });
+
+  it("keeps structured fallback and inclusion after block sanitation", () => {
+    const structured = { type: "json", value: "😀漢" };
+    const expected = '{"type":"json","value":"😀漢"}';
+    expect(extractToolResultText([{ type: "text", text: "\ud800" }, structured])).toBe(expected);
+    expect(
+      extractToolResultText([{ type: "text", text: "head\ud800" }, structured], {
+        includeStructured: true,
+      }),
+    ).toBe(`head\n${expected}`);
+  });
+
+  it.each([
+    { text: "x".repeat(8_000), expected: "x".repeat(8_000) },
+    { text: `${"x".repeat(7_999)}😀`, expected: `${"x".repeat(7_999)}\n…(truncated)…` },
+    { text: `${"x".repeat(8_000)}😀`, expected: `${"x".repeat(8_000)}\n…(truncated)…` },
+  ])("preserves UTF-16 at the included-text cap: $#", ({ text, expected }) => {
+    const blocks = [{ type: "text", text }];
+    expect(extractToolResultText(blocks, { includeStructured: true })).toBe(expected);
+    expect(extractToolResultText(blocks)).toBe(text);
+  });
+
   it("keeps media-only blocks out of provider replay text", () => {
     const text = extractToolResultText([
       { type: "text", text: "summary" },

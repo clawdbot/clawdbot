@@ -2,6 +2,7 @@ import type { ErrorShape, ResponseFrame } from "@openclaw/gateway-protocol";
 import {
   GatewayProtocolRequestError,
   GatewayProtocolRequestTimeoutError,
+  retainGatewayResponsePayload,
   type GatewayProtocolRequestOptions,
 } from "./protocol-request.js";
 import { resolveSafeTimeoutDelayMs } from "./timeouts.js";
@@ -46,8 +47,7 @@ type GatewayPendingRequestsOptions = {
 /** Owns request deadlines, correlation, settlement, and generation-scoped IDs. */
 export class GatewayPendingRequests {
   private readonly pending = new Map<string, GatewayPendingRequest>();
-  private readonly retiredIds = new Set<string>();
-  private collisionSuffix = 0;
+  private requestSequence = 0;
 
   constructor(private readonly opts: GatewayPendingRequestsOptions) {}
 
@@ -101,7 +101,6 @@ export class GatewayPendingRequests {
           return false;
         }
         this.pending.delete(id);
-        this.retiredIds.add(id);
         cleanup();
         this.finishTiming(id, pending, false, errorCode);
         return true;
@@ -158,7 +157,7 @@ export class GatewayPendingRequests {
       return;
     }
     const status = (frame.payload as { status?: unknown } | undefined)?.status;
-    if (pending.expectFinal && status === "accepted") {
+    if (frame.ok && pending.expectFinal && status === "accepted") {
       if (!pending.acceptedNotified) {
         pending.acceptedNotified = true;
         this.invoke("accepted", () => pending.onAccepted?.(frame.payload));
@@ -173,36 +172,29 @@ export class GatewayPendingRequests {
       return;
     }
     this.finishTiming(frame.id, pending, false, frame.error?.code);
-    pending.reject(
+    const error =
       this.opts.createRequestError?.(frame.error ?? {}) ??
-        new GatewayProtocolRequestError(frame.error ?? {}),
-    );
+      new GatewayProtocolRequestError(frame.error ?? {});
+    retainGatewayResponsePayload(error, frame.payload);
+    pending.reject(error);
   }
 
   flush(error: Error): void {
-    for (const [id, pending] of this.pending) {
-      this.finishTiming(id, pending, false, "CLIENT_CLOSED");
+    const retired = [...this.pending];
+    this.pending.clear();
+    // Timing observers can reconnect synchronously, so detach the entire old
+    // generation and reset its sequence before running any caller-owned code.
+    this.requestSequence = 0;
+    for (const [id, pending] of retired) {
       pending.cleanup?.();
+      this.finishTiming(id, pending, false, "CLIENT_CLOSED");
       pending.reject(error);
     }
-    this.pending.clear();
-    // IDs are tombstoned only for one socket generation. Retired socket frames
-    // are fenced by GatewayProtocolClient before a replacement generation runs.
-    this.retiredIds.clear();
-    this.collisionSuffix = 0;
   }
 
   private allocateRequestId(): string {
-    const id = this.opts.createRequestId();
-    if (!this.pending.has(id) && !this.retiredIds.has(id)) {
-      return id;
-    }
-    let uniqueId: string;
-    do {
-      this.collisionSuffix += 1;
-      uniqueId = `${id}:${this.collisionSuffix}`;
-    } while (this.pending.has(uniqueId) || this.retiredIds.has(uniqueId));
-    return uniqueId;
+    this.requestSequence += 1;
+    return `${this.requestSequence}:${this.opts.createRequestId()}`;
   }
 
   private finishTiming(
@@ -212,17 +204,25 @@ export class GatewayPendingRequests {
     errorCode?: string,
   ): void {
     const endedAtMs = this.opts.nowMs();
-    this.invoke("request timing", () =>
-      this.opts.onTiming?.({
-        id,
-        method: pending.method,
-        ok,
-        durationMs: Math.max(0, endedAtMs - pending.startedAtMs),
-        startedAtMs: pending.startedAtMs,
-        endedAtMs,
-        errorCode,
-      }),
-    );
+    try {
+      const onTiming = this.opts.onTiming;
+      if (onTiming === undefined || onTiming === null) {
+        return;
+      }
+      Reflect.apply(onTiming, this.opts, [
+        {
+          id,
+          method: pending.method,
+          ok,
+          durationMs: Math.max(0, endedAtMs - pending.startedAtMs),
+          startedAtMs: pending.startedAtMs,
+          endedAtMs,
+          errorCode,
+        },
+      ]);
+    } catch (error) {
+      this.opts.onCallbackError?.("request timing", error);
+    }
   }
 
   private invoke(label: string, callback: () => void): void {

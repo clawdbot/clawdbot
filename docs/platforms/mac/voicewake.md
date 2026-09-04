@@ -26,7 +26,7 @@ Voice Wake requires Apple Speech to support on-device recognition for the select
 - Hard stop: 120s (`captureHardStop`) to prevent runaway sessions.
 - Debounce between sessions: 350ms (`debounceAfterSend`) after a send.
 - The overlay is driven via `VoiceWakeOverlayController`, with committed/volatile text coloring.
-- After send, the recognizer restarts cleanly to listen for the next trigger.
+- After send, a fresh recognition task listens for the next trigger. Talk, Voice Wake, push-to-talk, and Quick Chat dictation reuse their recognizer while the selected language is unchanged; stopping capture still releases the microphone and cancels the task.
 
 ## Lifecycle invariants
 
@@ -47,6 +47,7 @@ Voice Wake requires Apple Speech to support on-device recognition for the select
 - **Hold Right Option to talk**: enables the push-to-talk monitor.
 - If the selected language lacks on-device recognition on this Mac, Voice Wake stays disabled while push-to-talk and Talk Mode remain available.
 - Language and mic pickers, a live level meter, a trigger-word table, and a tester (local-only, never forwards).
+- Trigger words follow the Primary Gateway and refresh when it reconnects or you select a different Primary. Opening a saved Gateway chat does not change them.
 - The mic picker preserves the last selection if a device disconnects, shows a disconnected hint, and temporarily falls back to the system default until it returns.
 - **Sounds**: chimes on trigger detect and on send, defaulting to the macOS "Glass" system sound. Pick any `NSSound`-loadable file (e.g. MP3/WAV/AIFF) per event, or choose **No Sound**.
 

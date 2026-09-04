@@ -32,17 +32,19 @@ type PostUpdateGatewayHealthRecoveryDeps = {
 };
 
 export async function recoverLaunchAgentAndRecheckGatewayHealth(params: {
+  preserveDefinition?: boolean;
   health: GatewayRestartSnapshot;
   service: GatewayService;
   port: number;
   expectedVersion?: string;
+  expectedBuildId?: string;
   env?: NodeJS.ProcessEnv;
   deps?: PostUpdateGatewayHealthRecoveryDeps;
 }): Promise<{
   health: GatewayRestartSnapshot;
   launchAgentRecovery: PostUpdateLaunchAgentRecoveryResult | null;
 }> {
-  if (params.health.healthy) {
+  if (params.health.healthy || params.preserveDefinition) {
     return { health: params.health, launchAgentRecovery: null };
   }
 
@@ -61,8 +63,10 @@ export async function recoverLaunchAgentAndRecheckGatewayHealth(params: {
     service: params.service,
     port: params.port,
     expectedVersion: params.expectedVersion,
+    ...(params.expectedBuildId ? { expectedBuildId: params.expectedBuildId } : {}),
     env: params.env,
     supervisorKeepsAlive: true,
+    settle: { probes: 12 },
   });
   return { health, launchAgentRecovery };
 }

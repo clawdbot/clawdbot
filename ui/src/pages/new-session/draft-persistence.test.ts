@@ -1,6 +1,7 @@
 /* @vitest-environment jsdom */
 
 import { afterEach, describe, expect, it, vi } from "vitest";
+import type { HumanMention } from "../../lib/chat/chat-types.ts";
 import type { DraftGatewayState } from "./draft-gateway-state.ts";
 import type { DraftPlaceState } from "./draft-place-state.ts";
 import { DraftSubmissionFlow } from "./draft-submission-flow.ts";
@@ -8,7 +9,13 @@ import { DraftSubmissionFlow } from "./draft-submission-flow.ts";
 type StoreReadResult =
   | {
       status: "found";
-      draft: { revision: number; text: string; attachments: unknown[]; writeId: string };
+      draft: {
+        revision: number;
+        text: string;
+        mentions?: readonly HumanMention[];
+        attachments: unknown[];
+        writeId: string;
+      };
     }
   | { status: "not-found"; revision?: number; writeId?: string };
 
@@ -117,16 +124,42 @@ describe("NewSessionDraftPersistence restore race", () => {
     expect(write?.text).toBe("typed before restore");
   });
 
-  it("restores a stored draft into a pristine composer", async () => {
+  it("restores stored text and selected recipients into a pristine composer", async () => {
     const flow = createFlow();
+    const mentions = [{ profileId: "alex", start: 0, end: 5 }];
     flow.draftPersistence.setOwner("ws://gateway.test", "recovery-a");
     flow.draftPersistence.activateRoute("agent:main");
     await resolvePendingRead({
       status: "found",
-      draft: { revision: 7, text: "stored draft", attachments: [], writeId: "w-1" },
+      draft: { revision: 7, text: "@Alex", mentions, attachments: [], writeId: "w-1" },
     });
     await settle();
-    expect(flow.message).toBe("stored draft");
+    expect(flow.message).toBe("@Alex");
+    expect(flow.mentions).toEqual(mentions);
+  });
+
+  it("preserves a same-name recipient selected before stored draft restoration completes", async () => {
+    const flow = createFlow();
+    const mentions = [{ profileId: "new-alex", start: 0, end: 5 }];
+    flow.setMessage("@Alex", mentions);
+    flow.draftPersistence.setOwner("ws://gateway.test", "recovery-a");
+    flow.draftPersistence.activateRoute("agent:main");
+    await resolvePendingRead({
+      status: "found",
+      draft: {
+        revision: 7,
+        text: "@Alex",
+        mentions: [{ profileId: "old-alex", start: 0, end: 5 }],
+        attachments: [],
+        writeId: "w-1",
+      },
+    });
+    await settle();
+    expect(flow.mentions).toEqual(mentions);
+    expect(store.writeDurableComposerSnapshot.mock.calls.at(-1)?.[0]).toMatchObject({
+      text: "@Alex",
+      mentions,
+    });
   });
 
   it("re-arms restore for the next route once the page resets the draft", async () => {

@@ -8,7 +8,7 @@ import {
   runWithDiagnosticTraceContext,
 } from "../infra/diagnostic-trace-context.js";
 import { getChildLogger, getLogger, resetLogger, setLoggerOverride } from "../logging.js";
-import { withEnv } from "../test-utils/env.js";
+import { withEnv, withEnvAsync } from "../test-utils/env.js";
 import { createSuiteLogPathTracker } from "./log-test-helpers.js";
 import { testApi as loggerTest } from "./logger.test-support.js";
 import { createDiagnosticLogRecordCapture } from "./test-helpers/diagnostic-log-capture.js";
@@ -162,30 +162,71 @@ describe("file log redaction", () => {
     expect(content).toContain("configured log path works");
   });
 
-  it("expands leading tilde in logging.file", () => {
+  it("expands leading tilde in logging.file", async () => {
     const home = path.join(path.dirname(logPathTracker.nextPath()), "home");
+    const logPath = path.join(home, "custom-openclaw.log");
 
-    withEnv({ HOME: home }, () => {
-      expect(loggerTest.resolveActiveLogFile("~/custom-openclaw.log")).toBe(
-        path.join(home, "custom-openclaw.log"),
-      );
+    await withEnvAsync({ HOME: home, OPENCLAW_HOME: undefined }, async () => {
+      setLoggerOverride({ level: "info", file: "~/custom-openclaw.log" });
+      getLogger().info("tilde log path works");
+
+      expect(await readLogFile(logPath)).toContain("tilde log path works");
     });
   });
 
-  it("writes trace context as top-level JSONL fields", async () => {
+  it.each(["bindings", "argument"])(
+    "writes %s trace context ahead of active scope",
+    async (source) => {
+      const logPath = logPathTracker.nextPath();
+      setLoggerOverride({ level: "info", file: logPath });
+      const trace = {
+        traceId: TRACE_ID,
+        spanId: SPAN_ID,
+        parentSpanId: "00f067aa0ba902b8",
+        traceFlags: "00",
+      };
+      const logger = getChildLogger({
+        subsystem: "gateway",
+        ...(source === "bindings" ? { trace } : {}),
+      });
+
+      runWithDiagnosticTraceContext(
+        createDiagnosticTraceContext({ traceId: "3bf92f3577b34da6a3ce929d0e0e4736" }),
+        () =>
+          logger.info(
+            { route: "/api/health", ...(source === "argument" ? { trace } : {}) },
+            "request completed",
+          ),
+      );
+
+      const [line] = (await readLogFile(logPath)).trim().split("\n");
+      const record = JSON.parse(line ?? "{}") as Record<string, unknown>;
+      expect(record.traceId).toBe(TRACE_ID);
+      expect(record.spanId).toBe(SPAN_ID);
+      expect(record.parentSpanId).toBe(trace.parentSpanId);
+      expect(record.traceFlags).toBe("00");
+    },
+  );
+
+  it("captures trace fields before message serialization invokes caller code", async () => {
     const logPath = logPathTracker.nextPath();
     setLoggerOverride({ level: "info", file: logPath });
-    const logger = getChildLogger({
-      subsystem: "gateway",
-      trace: { traceId: TRACE_ID, spanId: SPAN_ID },
-    });
+    const trace = { traceId: TRACE_ID, spanId: SPAN_ID };
 
-    logger.info({ route: "/api/health" }, "request completed");
+    getLogger().info(
+      { trace },
+      {
+        toJSON() {
+          trace.traceId = "3bf92f3577b34da6a3ce929d0e0e4736";
+          return "serialized";
+        },
+      },
+    );
 
-    const [line] = (await readLogFile(logPath)).trim().split("\n");
-    const record = JSON.parse(line ?? "{}") as Record<string, unknown>;
+    const record = JSON.parse((await readLogFile(logPath)).trim()) as Record<string, unknown>;
     expect(record.traceId).toBe(TRACE_ID);
     expect(record.spanId).toBe(SPAN_ID);
+    expect(record.message).toBe('"serialized"');
   });
 
   it("writes active request trace context as top-level JSONL fields", async () => {
@@ -206,17 +247,28 @@ describe("file log redaction", () => {
     expect(record.spanId).toBe(SPAN_ID);
   });
 
-  it("writes hostname and flattened message as top-level JSONL fields", async () => {
+  it.each([
+    {
+      name: "structured arguments",
+      args: [{ route: "/api/health" }, "request completed"],
+      message: "request completed",
+    },
+    {
+      name: "sparse numeric keys",
+      args: [{ "11": "eleven", "2": "two", "01": "leading", "1": "one" }],
+      message: "one leading two eleven",
+    },
+  ])("writes hostname and flattened message for $name", async ({ args, message }) => {
     const logPath = logPathTracker.nextPath();
     setLoggerOverride({ level: "info", file: logPath });
 
-    getLogger().info({ route: "/api/health" }, "request completed");
+    getLogger().info(...args);
 
     const [line] = (await readLogFile(logPath)).trim().split("\n");
     const record = JSON.parse(line ?? "{}") as Record<string, unknown>;
     expect(record.hostname).toBeTypeOf("string");
     expect(record.hostname).not.toBe("");
-    expect(record.message).toBe("request completed");
+    expect(record.message).toBe(message);
   });
 
   it("keeps bounded file-log messages UTF-16 safe", async () => {

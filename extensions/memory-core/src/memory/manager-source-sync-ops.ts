@@ -6,15 +6,17 @@ import {
   type SessionTranscriptCorpusEntry,
 } from "openclaw/plugin-sdk/memory-core-host-engine-sessions";
 import {
-  buildFileEntry,
-  listMemoryFiles,
   MEMORY_INDEX_FTS_TABLE,
   runWithConcurrency,
 } from "openclaw/plugin-sdk/memory-core-host-engine-storage";
 import { MemoryManagerSessionSyncOps } from "./manager-session-sync-ops.js";
-import { resolveMemorySessionSyncPlan } from "./manager-session-sync-state.js";
+import {
+  isMemorySessionIndexable,
+  resolveMemorySessionSyncPlan,
+} from "./manager-session-sync-state.js";
 import {
   loadMemorySourceFileState,
+  resolveMemorySourceFileEntries,
   resolveMemorySourceExistingHash,
 } from "./manager-source-state.js";
 import type {
@@ -58,20 +60,11 @@ export abstract class MemoryManagerSourceSyncOps extends MemoryManagerSessionSyn
         ? this.db.prepare(`DELETE FROM ${FTS_TABLE} WHERE path = ? AND source = ?`)
         : null;
 
-    const files = await listMemoryFiles(
-      this.workspaceDir,
-      this.settings.extraPaths,
-      this.settings.multimodal,
-    );
-    const fileEntries = (
-      await runWithConcurrency(
-        files.map(
-          (file) => async () =>
-            await buildFileEntry(file, this.workspaceDir, this.settings.multimodal),
-        ),
-        this.getIndexConcurrency(),
-      )
-    ).filter((entry): entry is MemoryIndexEntry => entry !== null);
+    const fileEntries = await resolveMemorySourceFileEntries({
+      workspaceDir: this.workspaceDir,
+      settings: this.settings,
+      concurrency: this.getIndexConcurrency(),
+    });
     log.debug("memory sync: indexing memory files", {
       files: fileEntries.length,
       needsFullReindex: params.needsFullReindex,
@@ -119,9 +112,10 @@ export abstract class MemoryManagerSourceSyncOps extends MemoryManagerSessionSyn
         }
         dirtyEntries.push(entry);
       }
-      const indexItems = dirtyEntries.map(
-        (entry): MemoryIndexWorkItem => ({ entry, source: "memory" }),
-      );
+      const indexItems = dirtyEntries.map((entry): MemoryIndexWorkItem => ({
+        entry,
+        source: "memory",
+      }));
       if (params.deferIndex) {
         return { indexItems, finalize: deleteStaleRows };
       }
@@ -303,6 +297,13 @@ export abstract class MemoryManagerSourceSyncOps extends MemoryManagerSessionSyn
         this.advanceSyncProgress(params.progress);
         return null;
       }
+      if (!isMemorySessionIndexable(entry)) {
+        // Archived runs may reveal their internal origin only while parsing.
+        // Remove earlier index artifacts before excluding that transcript.
+        deleteIndexedSessionPath(entry.path);
+        this.advanceSyncProgress(params.progress);
+        return null;
+      }
       const existingHash = resolveMemorySourceExistingHash({
         db: this.db,
         source: "sessions",
@@ -313,7 +314,7 @@ export abstract class MemoryManagerSourceSyncOps extends MemoryManagerSessionSyn
         this.advanceSyncProgress(params.progress);
         return null;
       }
-      return entry;
+      return { ...entry, sessionId: corpusEntryForPath(absPath).sessionId };
     };
 
     if (params.deferIndex) {
@@ -348,12 +349,10 @@ export abstract class MemoryManagerSourceSyncOps extends MemoryManagerSessionSyn
           )
         ).filter((entry): entry is MemoryIndexEntry => entry !== null);
         pendingIndexItems.push(
-          ...dirtyEntries.map(
-            (entry): MemoryIndexWorkItem => ({
-              entry,
-              source: "sessions",
-            }),
-          ),
+          ...dirtyEntries.map((entry): MemoryIndexWorkItem => ({
+            entry,
+            source: "sessions",
+          })),
         );
         if (pendingIndexItems.length >= SOURCE_WIDE_SESSION_INDEX_FLUSH_FILES) {
           await flushPendingIndexItems();

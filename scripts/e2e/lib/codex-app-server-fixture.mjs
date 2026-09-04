@@ -24,6 +24,7 @@ export function createFakeThreadStartResponse({ params, sessionId, threadId, ver
       forkedFromId: null,
       preview: "",
       ephemeral: false,
+      projectId: params?.projectId ?? null,
       modelProvider: "openai",
       createdAt: now,
       updatedAt: now,

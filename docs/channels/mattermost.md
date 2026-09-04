@@ -253,6 +253,14 @@ Use these target formats with `openclaw message send` or cron/webhooks:
 
 Outbound sends support at most one attachment per message; split multiple files into separate sends.
 
+Set `channels.mattermost.mediaMaxMb` to limit each inbound download and outbound
+attachment in MiB. `accounts.<id>.mediaMaxMb` overrides the channel root, then
+`agents.defaults.mediaMaxMb` supplies the fallback. Without any configured cap,
+inbound downloads retain their 8 MiB default and outbound media retains the
+shared loader defaults. Outbound images may be optimized. With a configured cap,
+download or upload failures fail the send instead of posting the unchecked original
+URL. Without a configured cap, the existing URL fallback remains available.
+
 <Warning>
 Bare opaque IDs (like `64ifufp...`) are **ambiguous** in Mattermost (user ID vs channel ID).
 

@@ -7,6 +7,7 @@ import {
 
 describe("OpenAI Realtime sideband call wire", () => {
   it("posts bounded server-owned session config and returns the fixed sideband URL", async () => {
+    const onCallAllocated = vi.fn();
     const fetchImpl = vi.fn(async (_url: string | URL | Request, init?: RequestInit) => {
       expect(init?.method).toBe("POST");
       expect(init?.headers).toMatchObject({ Authorization: "Bearer sk-platform" }); // pragma: allowlist secret
@@ -38,6 +39,7 @@ describe("OpenAI Realtime sideband call wire", () => {
         sdp: "v=0\r\nm=audio 9 UDP/TLS/RTP/SAVPF 111\r\n",
         session: { type: "realtime", model: "gpt-realtime-2.1" },
         gaSideband: true,
+        onCallAllocated,
         fetchImpl: fetchImpl as typeof fetch,
       }),
     ).resolves.toEqual({
@@ -47,6 +49,7 @@ describe("OpenAI Realtime sideband call wire", () => {
       sidebandUrl: "wss://api.openai.com/v1/realtime?call_id=call_test-123",
       status: 201,
     });
+    expect(onCallAllocated).toHaveBeenCalledExactlyOnceWith("call_test-123");
   });
 
   it.each([
@@ -57,6 +60,7 @@ describe("OpenAI Realtime sideband call wire", () => {
     [`/v1/realtime/calls/${"x".repeat(129)}`, "no valid call id"],
     [`/v1/realtime/calls/rtc_test?${"x".repeat(600)}`, "too large"],
   ])("rejects an untrusted Location header", async (location, message) => {
+    const onCallAllocated = vi.fn();
     await expect(
       createOpenAIQuicksilverCall({
         auth: { type: "api-key", token: "sk-platform" }, // pragma: allowlist secret
@@ -68,6 +72,7 @@ describe("OpenAI Realtime sideband call wire", () => {
         sdp: "v=0\r\n",
         session: { type: "realtime", model: "gpt-realtime-2.1" },
         gaSideband: true,
+        onCallAllocated,
         fetchImpl: vi.fn(
           async () =>
             new Response("v=answer\r\n", {
@@ -77,6 +82,7 @@ describe("OpenAI Realtime sideband call wire", () => {
         ) as typeof fetch,
       }),
     ).rejects.toThrow(message);
+    expect(onCallAllocated).not.toHaveBeenCalled();
   });
 
   it("constructs and validates the sideband URL locally", () => {
@@ -86,13 +92,20 @@ describe("OpenAI Realtime sideband call wire", () => {
     expect(() => buildOpenAIRealtimeSidebandUrl("https://attacker.example")).toThrow("invalid");
   });
 
-  it("hangs up only the fixed validated WebRTC call endpoint", async () => {
-    const fetchImpl = vi.fn(async () => new Response(null, { status: 204 }));
-    await hangupOpenAIRealtimeCall({
+  it.each([200, 404, 503])("releases the hangup response body for HTTP %s", async (status) => {
+    const cancel = vi.fn();
+    const fetchImpl = vi.fn(async () => new Response(new ReadableStream({ cancel }), { status }));
+    const hangingUp = hangupOpenAIRealtimeCall({
       apiKey: "sk-platform", // pragma: allowlist secret
       callId: "call_test-123",
       fetchImpl: fetchImpl as typeof fetch,
     });
+    if (status === 503) {
+      await expect(hangingUp).rejects.toThrow("hangup failed (503)");
+    } else {
+      await hangingUp;
+    }
+    expect(cancel).toHaveBeenCalledOnce();
     expect(fetchImpl).toHaveBeenCalledWith(
       "https://api.openai.com/v1/realtime/calls/call_test-123/hangup",
       expect.objectContaining({ method: "POST" }),
@@ -100,6 +113,7 @@ describe("OpenAI Realtime sideband call wire", () => {
   });
 
   it("redacts bounded provider error details", async () => {
+    const onCallAllocated = vi.fn();
     const leaked = "sk-proj-abcdefghijklmnopqrstuvwxyz1234567890";
     const fetchImpl = vi.fn(
       async () => new Response(`request rejected Authorization: Bearer ${leaked}`, { status: 403 }),
@@ -116,6 +130,7 @@ describe("OpenAI Realtime sideband call wire", () => {
         sdp: "v=0\r\n",
         session: { type: "realtime", model: "gpt-realtime-2.1" },
         gaSideband: true,
+        onCallAllocated,
         fetchImpl: fetchImpl as typeof fetch,
       });
     } catch (caught) {
@@ -124,5 +139,6 @@ describe("OpenAI Realtime sideband call wire", () => {
     expect(error).toBeInstanceOf(Error);
     expect((error as Error).message).toContain("OpenAI Realtime call creation failed (403)");
     expect((error as Error).message).not.toContain(leaked);
+    expect(onCallAllocated).not.toHaveBeenCalled();
   });
 });

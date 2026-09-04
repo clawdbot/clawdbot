@@ -5,6 +5,7 @@ import {
   type MessagingToolSend,
   type MessagingToolSourceReplyPayload,
 } from "openclaw/plugin-sdk/agent-harness-runtime";
+import { resolveCodexTtsProvenanceTransfer } from "openclaw/plugin-sdk/codex-mcp-projection";
 import {
   attemptTerminal,
   type AttemptFailureSource,
@@ -18,17 +19,21 @@ import { buildCodexMessagesSnapshot } from "./event-projector-snapshot.js";
 import type { CodexToolProgressProjection } from "./event-projector-tool-progress.js";
 import type { CodexToolTranscriptProjection } from "./event-projector-tool-transcript.js";
 import type { CodexResponseCompletionProjection } from "./event-projector-usage.js";
+import type { CodexProviderRefusal } from "./event-projector-values.js";
 import type { CodexTurn } from "./protocol.js";
 
 export type CodexAppServerToolTelemetry = {
   didSendViaMessagingTool: boolean;
   didDeliverSourceReplyViaMessageTool?: boolean;
+  sourceReplyDelivered?: true;
   messagingToolSentTexts: string[];
   messagingToolSentMediaUrls: string[];
   messagingToolSentTargets: MessagingToolSend[];
   messagingToolSourceReplyPayloads?: MessagingToolSourceReplyPayload[];
   heartbeatToolResponse?: HeartbeatToolResponse;
   toolMediaUrls?: string[];
+  toolAutoDeliveryMediaUrls?: string[];
+  coreTtsToolResults?: object[];
   toolAudioAsVoice?: boolean;
   successfulCronAdds?: number;
 } & Pick<EmbeddedRunAttemptResult, "acceptedSessionSpawns">;
@@ -40,6 +45,7 @@ type CodexAttemptResultInput = {
   completedTurn: CodexTurn | undefined;
   promptError: unknown;
   promptErrorSource: AttemptFailureSource | null;
+  providerRefusal: CodexProviderRefusal | undefined;
   synthesizedMissingToolResultError: string | null;
   recordSynthesizedMissingToolResultError: (error: string) => void;
   aborted: boolean;
@@ -56,9 +62,9 @@ type CodexAttemptResultInput = {
   assistantProjection: Pick<
     CodexAssistantProjection,
     | "collectAssistantTexts"
+    | "collectAsyncMessages"
     | "collectCommentaryMessages"
     | "createAssistantMessage"
-    | "createAssistantMirrorMessage"
     | "createCurrentAttemptAssistantMessage"
     | "hasAssistantItemTextForSynthesis"
   >;
@@ -85,6 +91,7 @@ export function buildCodexAttemptResult(
   // tool lacking a terminal item so audit consumers never retain an open action.
   input.nativeToolLifecycleProjection.finalizeActive();
   const assistantTexts = input.assistantProjection.collectAssistantTexts();
+  const asyncMessages = input.assistantProjection.collectAsyncMessages();
   const commentaryMessages = input.assistantProjection.collectCommentaryMessages();
   const reasoningText = input.reasoningProjection.reasoningText();
   const planText = input.reasoningProjection.planText();
@@ -126,15 +133,19 @@ export function buildCodexAttemptResult(
     tokenUsage: projectedUsage,
     aborted: input.aborted,
     promptError: input.promptError,
+    providerRefusal: input.providerRefusal,
   };
-  const lastAssistant = assistantTexts.length
-    ? input.assistantProjection.createAssistantMessage(
-        assistantTexts.join("\n\n"),
-        assistantMessageOptions,
-      )
-    : undefined;
-  const currentAttemptAssistant =
-    input.assistantProjection.createCurrentAttemptAssistantMessage(assistantMessageOptions);
+  const lastAssistant = input.providerRefusal
+    ? input.assistantProjection.createAssistantMessage("", assistantMessageOptions)
+    : assistantTexts.length
+      ? input.assistantProjection.createAssistantMessage(
+          assistantTexts.join("\n\n"),
+          assistantMessageOptions,
+        )
+      : undefined;
+  const currentAttemptAssistant = input.providerRefusal
+    ? lastAssistant
+    : input.assistantProjection.createCurrentAttemptAssistantMessage(assistantMessageOptions);
   // Each snapshot entry is tagged with a stable mirror identity of the
   // shape `${turnId}:${kind}`. The mirror's idempotency key is derived
   // from this identity rather than from snapshot position or content
@@ -152,25 +163,28 @@ export function buildCodexAttemptResult(
     turnId: input.turnId,
     upstreamUserText: input.upstreamUserText,
     reasoningText,
-    planText,
+    asyncMessages,
     commentaryMessages,
     toolMessages: input.toolTranscriptProjection.transcriptMessages,
     lastAssistant,
-    createAssistantMirrorMessage: (title, text) =>
-      input.assistantProjection.createAssistantMirrorMessage(title, text),
   });
   const turnFailed = input.completedTurn?.status === "failed";
-  const promptError =
-    input.promptError ??
-    storedMissingToolResultError ??
-    (turnFailed ? (input.completedTurn?.error?.message ?? "codex app-server turn failed") : null);
-  const agentHarnessResultClassification = classifyAgentHarnessTerminalOutcome({
-    assistantTexts,
-    reasoningText,
-    planText,
-    promptError,
-    turnCompleted: Boolean(input.completedTurn),
-  });
+  const promptError = input.providerRefusal
+    ? null
+    : (input.promptError ??
+      storedMissingToolResultError ??
+      (turnFailed
+        ? (input.completedTurn?.error?.message ?? "codex app-server turn failed")
+        : null));
+  const agentHarnessResultClassification = input.providerRefusal
+    ? undefined
+    : classifyAgentHarnessTerminalOutcome({
+        assistantTexts,
+        reasoningText,
+        planText,
+        promptError,
+        turnCompleted: Boolean(input.completedTurn),
+      });
   const toolMetas = input.toolProgressProjection.toolMetas;
   const hadPotentialSideEffects =
     input.toolTelemetry.didSendViaMessagingTool ||
@@ -179,7 +193,13 @@ export function buildCodexAttemptResult(
     ) ||
     input.generatedMediaProjection.hasGeneratedMedia() ||
     input.toolProgressProjection.hasPotentialSideEffects;
-  return {
+  const sentMediaUrls = new Set(
+    input.toolTelemetry.messagingToolSentMediaUrls.map((url) => url.trim()),
+  );
+  const toolAutoDeliveryMediaUrls = input.toolTelemetry.toolAutoDeliveryMediaUrls?.filter(
+    (url) => !sentMediaUrls.has(url.trim()),
+  );
+  const result = {
     terminal: attemptTerminal.normalize({
       aborted: input.aborted,
       promptError,
@@ -204,6 +224,7 @@ export function buildCodexAttemptResult(
     didSendViaMessagingTool: input.toolTelemetry.didSendViaMessagingTool,
     didDeliverSourceReplyViaMessageTool:
       input.toolTelemetry.didDeliverSourceReplyViaMessageTool === true,
+    sourceReplyDelivered: input.toolTelemetry.sourceReplyDelivered,
     messagingToolSentTexts: input.toolTelemetry.messagingToolSentTexts,
     messagingToolSentMediaUrls: input.toolTelemetry.messagingToolSentMediaUrls,
     messagingToolSentTargets: input.toolTelemetry.messagingToolSentTargets,
@@ -235,4 +256,9 @@ export function buildCodexAttemptResult(
     yieldDetected: input.yieldDetected || false,
     didSendDeterministicApprovalPrompt: input.guardianReviewCount > 0 ? false : undefined,
   };
+  const transferTtsProvenance = resolveCodexTtsProvenanceTransfer(input.runParams.hostCapabilities);
+  for (const toolResult of input.toolTelemetry.coreTtsToolResults ?? []) {
+    transferTtsProvenance?.(toolResult, result, toolAutoDeliveryMediaUrls ?? []);
+  }
+  return result;
 }

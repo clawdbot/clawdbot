@@ -144,6 +144,7 @@ function createPlan(
 async function dispatchObservedPlatformReply(params: {
   payload: { text: string; mediaUrls?: string[] };
   platform: Pick<AdmittedWebInboundMessage["platform"], "reply" | "sendMedia">;
+  deferredMediaUrls?: string[];
 }) {
   const pluginHook = vi.fn();
   const internalHook = vi.fn();
@@ -157,11 +158,31 @@ async function dispatchObservedPlatformReply(params: {
   initializeGlobalHookRunner(registry);
   registerInternalHook("message:sent", internalHook);
   const { context, plan, replyLogger } = createPlan(deliverWebReply, params.platform);
+  const onDelivered = vi.fn(plan.delivery.onDelivered);
   let deliveryResult: unknown;
+  let settledResult: unknown;
   const dispatchReplyWithBufferedBlockDispatcher = vi.fn(async (dispatch) => {
     dispatch.replyOptions?.onAgentRunStart?.("run-wa-partial");
-    deliveryResult = await dispatch.dispatcherOptions.deliver(params.payload, { kind: "final" });
-    return { queuedFinal: true, counts: { tool: 0, block: 0, final: 1 } };
+    if (params.deferredMediaUrls) {
+      const deferred = await dispatch.dispatcherOptions.deliver(
+        { text: "tool images", mediaUrls: params.deferredMediaUrls },
+        { kind: "tool" },
+      );
+      expect(deferred).toMatchObject({
+        visibleReplySent: false,
+        finalization: expect.any(Promise),
+      });
+      expect(onDelivered).not.toHaveBeenCalled();
+    }
+    try {
+      deliveryResult = await dispatch.dispatcherOptions.deliver(params.payload, { kind: "final" });
+    } finally {
+      settledResult = await dispatch.dispatcherOptions.onSettled?.();
+    }
+    return {
+      queuedFinal: true,
+      counts: { tool: params.deferredMediaUrls ? 1 : 0, block: 0, final: 1 },
+    };
   });
   const failure = await dispatchChannelInboundReply({
     cfg: { channels: { whatsapp: {} } } as never,
@@ -174,11 +195,19 @@ async function dispatchObservedPlatformReply(params: {
     recordInboundSession: async () => undefined,
     dispatchReplyWithBufferedBlockDispatcher,
     dispatcherOptions: plan.dispatcherOptions,
-    delivery: plan.delivery,
+    delivery: { ...plan.delivery, onDelivered },
     replyOptions: plan.replyOptions,
     replyResolver: plan.replyResolver,
   }).catch((caught: unknown) => caught);
-  return { deliveryResult, failure, internalHook, pluginHook, replyLogger };
+  return {
+    deliveryResult,
+    failure,
+    internalHook,
+    pluginHook,
+    replyLogger,
+    onDelivered,
+    settledResult,
+  };
 }
 
 afterEach(() => {
@@ -187,6 +216,96 @@ afterEach(() => {
 });
 
 describe("WhatsApp canonical message_sent delivery", () => {
+  it.each([
+    {
+      replacement: ["/tmp/a.jpg"],
+      sent: ["/tmp/a.jpg", "/tmp/b.jpg"],
+      deferredIds: ["sent-2"],
+      replacementId: "sent-1",
+    },
+    {
+      replacement: ["/tmp/a.jpg", "/tmp/b.jpg"],
+      sent: ["/tmp/a.jpg", "/tmp/b.jpg"],
+      deferredIds: [],
+      replacementId: "sent-1",
+    },
+    {
+      replacement: ["/tmp/c.jpg"],
+      sent: ["/tmp/a.jpg", "/tmp/b.jpg", "/tmp/c.jpg"],
+      deferredIds: ["sent-1", "sent-2"],
+      replacementId: "sent-3",
+    },
+    {
+      deferredMedia: ["/tmp/a.jpg", "/tmp/b.jpg", "/tmp/c.jpg"],
+      replacement: ["/tmp/b.jpg"],
+      sent: ["/tmp/b.jpg", "/tmp/a.jpg", "/tmp/c.jpg"],
+      deferredIds: ["sent-2", "sent-3"],
+      replacementId: "sent-1",
+    },
+  ])(
+    "finalizes every deferred attachment through core after replacement $replacement",
+    async ({
+      replacement,
+      sent: expectedSent,
+      deferredIds,
+      replacementId,
+      deferredMedia = ["/tmp/a.jpg", "/tmp/b.jpg"],
+    }) => {
+      const sent: string[] = [];
+      vi.mocked(loadWebMedia).mockImplementation(async (url) => ({
+        buffer: Buffer.from(url),
+        contentType: "image/jpeg",
+        kind: "image",
+      }));
+      const sendMedia = vi.fn<AdmittedWebInboundMessage["platform"]["sendMedia"]>(
+        async (content) => {
+          if (!("image" in content) || !Buffer.isBuffer(content.image)) {
+            throw new Error("expected image transport payload");
+          }
+          sent.push(content.image.toString());
+          return normalizeWhatsAppSendResult(
+            { key: { id: `sent-${sent.length}` } } as WAMessage,
+            "media",
+          );
+        },
+      );
+      const reply = vi.fn<AdmittedWebInboundMessage["platform"]["reply"]>();
+      const { failure, pluginHook, internalHook, onDelivered, settledResult } =
+        await dispatchObservedPlatformReply({
+          payload: { text: "Here are the images", mediaUrls: replacement },
+          deferredMediaUrls: deferredMedia,
+          platform: { reply, sendMedia },
+        });
+
+      expect(failure).toMatchObject({ dispatched: true });
+      expect(sent).toEqual(expectedSent);
+      expect(reply).not.toHaveBeenCalled();
+      expect(settledResult).toEqual({ visibleReplySent: true });
+      expect(onDelivered).toHaveBeenCalledTimes(2);
+      const [, info, finalized] = onDelivered.mock.calls[1]!;
+      expect(info.kind).toBe("tool");
+      expect(finalized?.finalization).toBeUndefined();
+      if (deferredIds.length) {
+        expect(finalized).toMatchObject({
+          visibleReplySent: true,
+          content: "",
+          messageIds: deferredIds,
+          receipt: { platformMessageIds: deferredIds },
+        });
+      } else {
+        expect(finalized).toEqual({ visibleReplySent: false, finalization: undefined });
+      }
+      const observedIds = [replacementId, ...deferredIds.slice(0, 1)];
+      await vi.waitFor(() => {
+        expect(pluginHook).toHaveBeenCalledTimes(observedIds.length);
+        expect(internalHook).toHaveBeenCalledTimes(observedIds.length);
+      });
+      expect(pluginHook.mock.calls.map(([event]) => [event.messageId, event.success])).toEqual(
+        observedIds.map((id) => [id, true]),
+      );
+    },
+  );
+
   it("emits one receipt-backed event with session and run correlation for multipart media", async () => {
     const pluginHook = vi.fn();
     const internalHook = vi.fn();

@@ -105,7 +105,11 @@ export function getToolResultText(msg: AgentMessage): string {
 }
 
 function estimateMessageChars(msg: AgentMessage): number {
-  if (!msg || typeof msg !== "object") {
+  if (
+    !msg ||
+    typeof msg !== "object" ||
+    ("excludeFromContext" in msg && msg.excludeFromContext === true)
+  ) {
     return 0;
   }
 
@@ -161,9 +165,6 @@ function estimateMessageChars(msg: AgentMessage): number {
   const role: unknown = Reflect.get(msg, "role");
 
   if (role === "bashExecution") {
-    if (Reflect.get(msg, "excludeFromContext") === true) {
-      return 0;
-    }
     return bashExecutionToText(msg as Parameters<typeof bashExecutionToText>[0]).length;
   }
 

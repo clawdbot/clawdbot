@@ -1,6 +1,17 @@
 // Tests shared ACP command helpers for formatting and identifiers.
 import { describe, expect, it } from "vitest";
-import { parseSpawnInput, parseSteerInput } from "./shared.js";
+import { formatRuntimeOptionsText, parseSpawnInput, parseSteerInput } from "./shared.js";
+
+describe("formatRuntimeOptionsText", () => {
+  it("shows accepted thinking next to the selected model", () => {
+    expect(formatRuntimeOptionsText({ model: "openai/gpt-5.6-luna", thinking: "medium" })).toBe(
+      "model=openai/gpt-5.6-luna, thinking=medium",
+    );
+    expect(formatRuntimeOptionsText({ model: "openai/gpt-5.6-luna" })).toBe(
+      "model=openai/gpt-5.6-luna",
+    );
+  });
+});
 
 describe("parseSteerInput", () => {
   it("preserves non-option instruction tokens while normalizing unicode-dash flags", () => {

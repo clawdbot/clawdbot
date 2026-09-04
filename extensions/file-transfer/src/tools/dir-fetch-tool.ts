@@ -7,10 +7,8 @@ import {
   ARCHIVE_LIMIT_ERROR_CODE,
   ArchiveLimitError,
   extractArchive,
-  type ArchiveEntryKind,
 } from "openclaw/plugin-sdk/archive";
 import { saveMediaBuffer } from "openclaw/plugin-sdk/media-store";
-import { asBoolean } from "openclaw/plugin-sdk/string-coerce-runtime";
 import { appendFileTransferAudit } from "../shared/audit.js";
 import { IMAGE_MIME_INLINE_SET, mimeFromExtension } from "../shared/mime.js";
 import { humanSize, readClampedInt } from "../shared/params.js";
@@ -41,15 +39,6 @@ const TAR_UNPACK_MAX_ENTRIES = 5000;
 // enforced by fs-safe while extracting.
 const DIR_FETCH_MAX_UNCOMPRESSED_BYTES = 64 * 1024 * 1024;
 const DIR_FETCH_MAX_SINGLE_FILE_BYTES = 16 * 1024 * 1024;
-
-function filterDirFetchArchiveEntry(entry: {
-  path: string;
-  kind: ArchiveEntryKind;
-}): "extract" | "skip" {
-  return (entry.kind === "file" || entry.kind === "directory") && !entry.path.includes("\\")
-    ? "extract"
-    : "skip";
-}
 
 function classifyArchiveFailure(error: unknown): {
   auditCode: "TREE_TOO_LARGE" | "UNSAFE_ARCHIVE";
@@ -135,7 +124,6 @@ export function createDirFetchTool(): AnyAgentTool {
         hardMin: 1,
         hardMax: DIR_FETCH_HARD_MAX_BYTES,
       });
-      const includeDotfiles = asBoolean(params.includeDotfiles) ?? false;
 
       const { nodeId, nodeDisplayName, payload, startedAt } = await invokeNodeToolPayload({
         node,
@@ -144,7 +132,6 @@ export function createDirFetchTool(): AnyAgentTool {
         commandParams: {
           path: dirPath,
           maxBytes,
-          includeDotfiles,
         },
         requestedPath: dirPath,
       });
@@ -190,7 +177,8 @@ export function createDirFetchTool(): AnyAgentTool {
           tarGzip: true,
           timeoutMs: TAR_UNPACK_TIMEOUT_MS,
           entryModes: "clamp",
-          entryFilter: filterDirFetchArchiveEntry,
+          // fs-safe validates raw paths before supplying canonical pre-strip names.
+          entryFilter: ({ kind }) => (kind === "file" || kind === "directory" ? "extract" : "skip"),
           onFiltered: "reject-archive",
           limits: {
             maxArchiveBytes: DIR_FETCH_HARD_MAX_BYTES,

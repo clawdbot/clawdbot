@@ -72,17 +72,17 @@ describe("prepared OpenClaw AI dependency", () => {
 });
 
 describe("workspace template package paths", () => {
-  it("keeps the runtime heartbeat template in the npm pack guard", () => {
-    expect(WORKSPACE_TEMPLATE_PACK_PATHS).toContain("src/agents/templates/HEARTBEAT.md");
+  it("does not require the retired heartbeat file in the npm pack guard", () => {
+    expect(WORKSPACE_TEMPLATE_PACK_PATHS).not.toContain("src/agents/templates/HEARTBEAT.md");
     expect(WORKSPACE_TEMPLATE_PACK_PATHS).not.toContain("docs/reference/templates/HEARTBEAT.md");
   });
 
-  it("keeps runtime heartbeat templates allowlisted in package.json", () => {
+  it("does not package retired runtime heartbeat templates", () => {
     const packageJson = JSON.parse(readFileSync("package.json", "utf-8")) as {
       files?: unknown;
     };
 
-    expect(packageJson.files).toContain("src/agents/templates/");
+    expect(packageJson.files).not.toContain("src/agents/templates/");
   });
 });
 
@@ -538,6 +538,14 @@ describe("resolveNpmReleaseCheckCommandTimeoutMs", () => {
 });
 
 describe("parseNpmPackJsonOutput", () => {
+  it("preserves filename-only pnpm receipts and npm size metadata", () => {
+    const receipt = { filename: "openclaw.tgz", unpackedSize: 120_354_302 };
+    expect(parseNpmPackJsonOutput(JSON.stringify(receipt))).toEqual([receipt]);
+    expect(parseNpmPackJsonOutput(JSON.stringify({ filename: receipt.filename }))).toEqual([
+      { filename: receipt.filename },
+    ]);
+  });
+
   it("parses a plain npm pack JSON array", () => {
     expect(parseNpmPackJsonOutput('[{"filename":"openclaw.tgz","files":[]}]')).toEqual([
       { filename: "openclaw.tgz", files: [] },
@@ -587,6 +595,16 @@ describe("parseNpmPackJsonOutput", () => {
 
   it("returns null when no JSON payload is present", () => {
     expect(parseNpmPackJsonOutput("> openclaw@2026.3.23 prepack")).toBeNull();
+  });
+
+  it.each([{}, { path: 42 }])("rejects incomplete packed file inventories: %j", (file) => {
+    expect(
+      parseNpmPackJsonOutput(
+        JSON.stringify([
+          { filename: "openclaw.tgz", files: [{ path: "dist/control-ui/index.html" }, file] },
+        ]),
+      ),
+    ).toBeNull();
   });
 });
 

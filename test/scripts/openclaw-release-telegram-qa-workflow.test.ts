@@ -83,17 +83,18 @@ function runIdentityVerification(params: {
   oidcJobWorkflowSha?: string;
   oidcWorkflowSha?: string;
   targetContextRef?: string;
+  workflowBranch?: string;
   workflowSha?: string;
 }) {
   const repository = "openclaw/openclaw";
-  const trustedWorkflowRef = `${repository}/.github/workflows/openclaw-release-telegram-qa.yml@refs/heads/main`;
+  const workflowBranch = params.workflowBranch ?? "main";
+  const workflowRefName = `refs/heads/${workflowBranch}`;
+  const trustedWorkflowRef = `${repository}/.github/workflows/openclaw-release-telegram-qa.yml@${workflowRefName}`;
   const invocation = params.invocation ?? "dispatch";
   const workflowRef =
     invocation === "dispatch"
       ? trustedWorkflowRef
-      : `${repository}/.github/workflows/openclaw-release-checks.yml@refs/heads/release-ci/test`;
-  const workflowRefName =
-    invocation === "dispatch" ? "refs/heads/main" : "refs/heads/release-ci/test";
+      : `${repository}/.github/workflows/openclaw-release-checks.yml@${workflowRefName}`;
   const workdir = tempDirs.make("openclaw-telegram-identity-");
   const fakeBin = join(workdir, "bin");
   const githubOutput = join(workdir, "github-output");
@@ -128,7 +129,7 @@ function runIdentityVerification(params: {
   );
   return spawnSync(
     "bash",
-    ["-c", requireRun("trusted_identity", "Verify dispatched-main identity")],
+    ["-c", requireRun("trusted_identity", "Verify dispatched workflow identity")],
     {
       cwd: workdir,
       encoding: "utf8",
@@ -363,7 +364,10 @@ describe("release Telegram QA workflow", () => {
       "timeout-minutes": 210,
     });
     expect(caller?.environment).toBeUndefined();
-    expect(caller?.["continue-on-error"]).toBeUndefined();
+    expect(caller?.outputs?.conclusion).toBe(
+      "${{ steps.dispatch.outputs.conclusion || steps.dispatch.outcome }}",
+    );
+    expect(caller?.["continue-on-error"]).toBe(true);
 
     const trusted = job("trusted_identity");
     expect(trusted).toMatchObject({
@@ -371,7 +375,7 @@ describe("release Telegram QA workflow", () => {
       "runs-on": "ubuntu-24.04",
       "timeout-minutes": 5,
     });
-    expect(step("trusted_identity", "Verify dispatched-main identity").id).toBe("identity");
+    expect(step("trusted_identity", "Verify dispatched workflow identity").id).toBe("identity");
 
     const candidateBuild = requireRun(
       "build_candidate",
@@ -388,6 +392,14 @@ describe("release Telegram QA workflow", () => {
     expect(requireRun("run_telegram", "Build trusted QA harness").trim()).toBe(
       "pnpm build qaRuntime",
     );
+    const extractCandidate = step("run_telegram", "Verify attestation and bounded extract");
+    expect(extractCandidate.env?.CALLED_WORKFLOW_REF).toBe(
+      "${{ needs.trusted_identity.outputs.workflow_ref }}",
+    );
+    expect(extractCandidate.run).toContain(
+      '--cert-identity "https://github.com/${CALLED_WORKFLOW_REF}"',
+    );
+    expect(extractCandidate.run).not.toContain("openclaw-release-telegram-qa.yml@refs/heads/main");
 
     const runJob = job("run_telegram");
     expect(runJob.environment).toBe("qa-live-shared");
@@ -410,9 +422,28 @@ describe("release Telegram QA workflow", () => {
     }
   });
 
-  it("accepts only the resolved trusted workflow identity", () => {
+  it("routes every documented workflow ref through exact direct and reusable identity", () => {
     const trustedSha = "b".repeat(40);
-    expect(runIdentityVerification({ expectedTrustedWorkflowSha: trustedSha }).status).toBe(0);
+    const releaseCiBranch = `release-ci/${trustedSha.slice(0, 12)}-1787215404735`;
+    for (const workflowBranch of [
+      "main",
+      "release/2026.7.1",
+      "extended-stable/2026.7.33",
+      releaseCiBranch,
+    ]) {
+      for (const invocation of ["dispatch", "reusable"] as const) {
+        const result = runIdentityVerification({
+          expectedTrustedWorkflowSha: trustedSha,
+          invocation,
+          workflowBranch,
+        });
+        expect(result.status, `${workflowBranch}/${invocation}: ${result.stderr}`).toBe(0);
+      }
+    }
+  });
+
+  it("accepts only canonical exact-SHA workflow and target identities", () => {
+    const trustedSha = "b".repeat(40);
     for (const targetContextRef of [
       "release/2026.7.1",
       "extended-stable/2026.7.33",
@@ -438,6 +469,31 @@ describe("release Telegram QA workflow", () => {
         oidcJobWorkflowSha: "c".repeat(40),
       }).stderr,
     ).toContain("OIDC job_workflow_sha mismatch");
+    expect(
+      runIdentityVerification({
+        expectedTrustedWorkflowSha: trustedSha,
+        workflowBranch: "release-ci/not-canonical",
+      }).stderr,
+    ).toContain("must be exact main, canonical release or extended-stable");
+    expect(
+      runIdentityVerification({
+        expectedTrustedWorkflowSha: trustedSha,
+        workflowBranch: `release-ci/${"c".repeat(12)}-1787215404735`,
+      }).stderr,
+    ).toContain("release-ci ref does not match the authorized tooling SHA");
+    for (const workflowBranch of [
+      "release/2026.0.1",
+      "release/2026.07.1",
+      "extended-stable/2026.13.33",
+      "extended-stable/2026.7.32",
+    ]) {
+      expect(
+        runIdentityVerification({
+          expectedTrustedWorkflowSha: trustedSha,
+          workflowBranch,
+        }).stderr,
+      ).toContain("must be exact main, canonical release or extended-stable");
+    }
   });
 
   it("accepts trusted release provenance and rejects same-repository PR heads", () => {
@@ -471,6 +527,25 @@ describe("release Telegram QA workflow", () => {
       { block: "Validate candidate release provenance", status: 0, stderr: "" },
       { block: "Revalidate candidate release provenance", status: 0, stderr: "" },
     ]);
+  });
+
+  it("accepts only same-line extended-stable successors in both provenance blocks", () => {
+    for (const provenanceBlock of PROVENANCE_BLOCKS) {
+      const accepted = runCandidateProvenance(provenanceBlock, {
+        candidateVersion: "2026.7.35",
+        targetContextRef: "extended-stable/2026.7.33",
+      });
+      expect(accepted.status, `${provenanceBlock.stepName}: ${accepted.stderr}`).toBe(0);
+
+      for (const candidateVersion of ["2026.7.32", "2026.8.35", "2026.7.35-beta.1"]) {
+        const rejected = runCandidateProvenance(provenanceBlock, {
+          candidateVersion,
+          targetContextRef: "extended-stable/2026.7.33",
+        });
+        expect(rejected.status, `${provenanceBlock.stepName}: ${candidateVersion}`).toBe(1);
+        expect(rejected.stderr).toContain("PATCH >= 33");
+      }
+    }
   });
 
   it("accepts only strict signed frozen beta branch heads in both provenance blocks", () => {
@@ -872,24 +947,22 @@ describe("release Telegram QA workflow", () => {
     );
     expect(createSut).not.toContain('chmod 0711 "$temp_root"');
     expect(createSut).not.toContain('chmod 1777 "$temp_root"');
+    expect(createSut).toContain('"${temp_root}/state/qa-auth-bootstrap/openclaw.json")');
+    expect(createSut).toContain(
+      '"$(stat -c \'%F:%a:%u:%g\' "$requested_config_path")" == "regular file:600:${SUT_UID}:${SUT_GID}"',
+    );
   });
 
-  it("adds an empty PS1 only after attested runtime environment verification", () => {
+  it("does not defer Bash startup cleanup to the privileged launcher", () => {
     const createSut = requireRun(
       "run_telegram",
       "Create isolated Telegram SUT identity and launcher",
     );
     const launcher = extractHereDocument(createSut, "LAUNCHER");
-    const verification = '[[ "$actual_env_keys_b64" == "$runtime_expected_env_keys_b64" ]]';
-    const ps1Export = "export PS1=";
-    const candidateExec = 'exec "$runtime_node_bin" "${runtime_node_args[@]}"';
 
-    expect(launcher.match(/export PS1=/gu)).toHaveLength(1);
-    expect(launcher.indexOf(verification)).toBeGreaterThan(-1);
-    expect(launcher.indexOf(ps1Export)).toBeGreaterThan(launcher.indexOf(verification));
-    expect(launcher.indexOf(candidateExec)).toBeGreaterThan(launcher.indexOf(ps1Export));
-    expect(launcher.match(/exec "\$runtime_node_bin"/gu)).toHaveLength(1);
-    expect(launcher).toContain('grep -Ev "^(PWD|SHLVL|_)$"');
+    expect(launcher).not.toContain("export PS1=");
+    expect(launcher).not.toContain("export -n BASHOPTS SHELLOPTS");
+    expect(launcher).not.toContain("unset BASH_ENV ENV");
   });
 
   it("mounts an isolated SUT-owned tmp without exposing the host tmp tree", () => {

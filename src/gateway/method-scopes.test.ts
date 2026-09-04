@@ -9,7 +9,7 @@ import {
   isGatewayMethodClassified,
   resolveLeastPrivilegeOperatorScopesForMethod,
 } from "./method-scopes.js";
-import { createPluginGatewayMethodDescriptor } from "./methods/registry.js";
+import { createPluginGatewayMethodDescriptor } from "./methods/descriptor.js";
 import { listGatewayMethods } from "./server-methods-list.js";
 import { coreGatewayHandlers } from "./server-methods.js";
 import type { GatewayRequestHandler } from "./server-methods/types.js";
@@ -61,13 +61,14 @@ describe("method scope resolution", () => {
   });
 
   it.each([
+    ["canvas.document.view", ["operator.read"]],
     ["sessions.resolve", ["operator.read"]],
     ["tasks.list", ["operator.read"]],
     ["audit.activity.list", ["operator.read"]],
     ["audit.run.inspect", ["operator.read"]],
     ["audit.list", ["operator.read"]],
     ["users.list", ["operator.read"]],
-    ["users.self", ["operator.write"]],
+    ["users.self", ["operator.read"]],
     ["users.linkEmail", ["operator.admin"]],
     ["users.setDisplayName", ["operator.write"]],
     ["users.setAvatar", ["operator.write"]],
@@ -459,6 +460,17 @@ describe("method scope resolution", () => {
       "operator.write",
     ],
     [
+      "Gateway abandonment",
+      "sessions.move",
+      {
+        key: "agent:main:thread",
+        expected: { generation: 1, environmentId: "environment-1", ownerEpoch: 1 },
+        target: { kind: "gateway" },
+        abandonSource: true,
+      },
+      "operator.write",
+    ],
+    [
       "device move",
       "sessions.move",
       {
@@ -517,7 +529,7 @@ describe("method scope resolution", () => {
     );
   });
 
-  it("requires admin for incognito session creation and inheritance", () => {
+  it("requires admin for sensitive session creation parameters", () => {
     const incognitoKey = "agent:main:dashboard:incognito-parent";
     for (const params of [
       { agentId: "main", incognito: true },
@@ -526,10 +538,10 @@ describe("method scope resolution", () => {
       { parentSessionKey: incognitoKey, fork: true },
       { parentSessionKey: incognitoKey, spawnDepth: 1 },
       { parentSessionKey: incognitoKey, succeedsParent: false, emitCommandHooks: true },
+      { agentId: "main", toolOverrides: { skills: { release: false } } },
     ]) {
-      expect(resolveLeastPrivilegeOperatorScopesForMethod("sessions.create", params)).toEqual([
-        "operator.admin",
-      ]);
+      const required = resolveLeastPrivilegeOperatorScopesForMethod("sessions.create", params);
+      expect(required).toEqual(["operator.admin"]);
       expect(
         authorizeOperatorScopesForMethod("sessions.create", ["operator.write"], params),
       ).toEqual({ allowed: false, missingScope: "operator.admin" });
@@ -917,11 +929,12 @@ describe("operator scope authorization", () => {
   });
 
   it.each([
+    "users.setRole",
     "exec.approvals.get",
     "exec.approvals.set",
     "exec.approvals.node.get",
     "exec.approvals.node.set",
-  ])("requires admin scope for exec approval policy method %s", (method) => {
+  ])("requires admin scope for sensitive policy method %s", (method) => {
     expect(authorizeOperatorScopesForMethod(method, ["operator.approvals"])).toEqual({
       allowed: false,
       missingScope: "operator.admin",
@@ -966,19 +979,14 @@ describe("operator scope authorization", () => {
 });
 
 describe("plugin approval method registration", () => {
-  it("lists all plugin approval methods", () => {
-    const methods = listGatewayMethods();
-    expect(methods).toContain("plugin.approval.list");
-    expect(methods).toContain("plugin.approval.request");
-    expect(methods).toContain("plugin.approval.waitDecision");
-    expect(methods).toContain("plugin.approval.resolve");
-  });
-
-  it("classifies plugin approval methods", () => {
-    expect(isGatewayMethodClassified("plugin.approval.list")).toBe(true);
-    expect(isGatewayMethodClassified("plugin.approval.request")).toBe(true);
-    expect(isGatewayMethodClassified("plugin.approval.waitDecision")).toBe(true);
-    expect(isGatewayMethodClassified("plugin.approval.resolve")).toBe(true);
+  it.each([
+    "plugin.approval.list",
+    "plugin.approval.request",
+    "plugin.approval.waitDecision",
+    "plugin.approval.resolve",
+  ])("lists and classifies %s", (method) => {
+    expect(listGatewayMethods()).toContain(method);
+    expect(isGatewayMethodClassified(method)).toBe(true);
   });
 });
 

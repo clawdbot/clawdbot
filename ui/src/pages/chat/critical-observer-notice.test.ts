@@ -98,7 +98,7 @@ describe("critical session observer notice", () => {
     document.body.append(toastHost);
     const show = (sessionKey: string, health: string, revision: number) =>
       showCriticalSessionObserverNotice({
-        payload: { sessionKey, headline: "Repeated test failure", health, revision },
+        payload: { sessionKey, headline: "⚠️ Repeated test failure", health, revision },
         selectedSessionKey: "agent:main:selected",
         sessionHost: {},
         sessions: [
@@ -116,7 +116,7 @@ describe("critical session observer notice", () => {
     show("agent:main:other", "stuck", 2);
     await toastHost.updateComplete;
     expect(toastHost.querySelector(".app-toast__message")?.textContent).toContain(
-      "Other work — Repeated test failure",
+      "Other work — ⚠️ Repeated test failure",
     );
 
     toastHost.querySelector<HTMLButtonElement>(".app-toast__action")?.click();

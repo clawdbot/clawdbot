@@ -5,27 +5,31 @@ import {
   resolveInboundSessionEnvelopeContext,
 } from "openclaw/plugin-sdk/channel-inbound";
 import {
+  resolveChannelGroups,
+  resolveChannelGroupsConfigPath,
+} from "openclaw/plugin-sdk/channel-policy";
+import {
   resolveChannelContextVisibilityMode,
   shouldIncludeSupplementalContext,
 } from "openclaw/plugin-sdk/context-visibility-runtime";
 import { resolvePinnedMainDmOwnerFromAllowlist } from "openclaw/plugin-sdk/security-runtime";
 import {
-  normalizeLowercaseStringOrEmpty,
   normalizeOptionalString,
   normalizeTrimmedStringList,
   uniqueStrings,
 } from "openclaw/plugin-sdk/string-coerce-runtime";
 import { truncateUtf16Safe } from "openclaw/plugin-sdk/text-utility-runtime";
+import { normalizeMattermostAllowEntry } from "./ingress-identity.js";
 import { resolveMattermostInboundMentionDecision } from "./monitor-activation.js";
 import {
   formatMattermostDirectMessageDropLog,
-  normalizeMattermostAllowEntry,
   resolveMattermostMonitorInboundAccess,
 } from "./monitor-auth.js";
 import { resolveMattermostPendingHistoryKey } from "./monitor-context.js";
 import { buildMattermostEventPlan } from "./monitor-event-plan.js";
 import {
   formatInboundFromLabel,
+  matchesMattermostBotMention,
   normalizeMention,
   shouldDropEmptyMattermostBody,
 } from "./monitor-helpers.js";
@@ -50,11 +54,19 @@ import { hasMattermostThreadParticipationWithPersistence } from "./thread-partic
 
 export function createMattermostPostHandler(monitor: MattermostMonitorContext) {
   const { account, botUserId, botUsername, cfg, core, groupPolicy, pairing, resources } = monitor;
+  const groupsConfigPath = resolveChannelGroupsConfigPath({
+    cfg,
+    channel: "mattermost",
+    accountId: account.accountId,
+    groups: resolveChannelGroups(cfg, "mattermost", account.accountId),
+  });
   const { resolveMattermostMedia, resolveUserInfo } = resources;
   const channelHistories = new Map<string, HistoryEntry[]>();
   const historyLimit = Math.max(
     0,
-    cfg.messages?.groupChat?.historyLimit ?? DEFAULT_GROUP_HISTORY_LIMIT,
+    account.config.historyLimit ??
+      cfg.messages?.groupChat?.historyLimit ??
+      DEFAULT_GROUP_HISTORY_LIMIT,
   );
 
   return async (
@@ -171,7 +183,7 @@ export function createMattermostPostHandler(monitor: MattermostMonitorContext) {
           if (created) {
             try {
               await sendMessageMattermost(
-                `user:${senderId}`,
+                `channel:${channelId}`,
                 core.channel.pairing.buildPairingReply({
                   channel: "mattermost",
                   idLine: `Your Mattermost user id: ${senderId}`,
@@ -245,11 +257,7 @@ export function createMattermostPostHandler(monitor: MattermostMonitorContext) {
     const mentionRegexes = core.channel.mentions.buildMentionRegexes(cfg, route.agentId);
     const wasMentioned =
       kind !== "direct" &&
-      ((botUsername
-        ? normalizeLowercaseStringOrEmpty(rawText).includes(
-            `@${normalizeLowercaseStringOrEmpty(botUsername)}`,
-          )
-        : false) ||
+      (matchesMattermostBotMention(rawText, botUsername) ||
         core.channel.mentions.matchesMentionPatterns(rawText, mentionRegexes));
     const oncharEnabled = account.chatmode === "onchar" && kind !== "direct";
     const oncharPrefixes = oncharEnabled ? resolveOncharPrefixes(account.oncharPrefixes) : [];
@@ -305,9 +313,14 @@ export function createMattermostPostHandler(monitor: MattermostMonitorContext) {
       return;
     }
     if (mentionDecision.shouldSkip) {
-      monitor.logVerboseMessage(
-        `mattermost: drop group message (missing mention channel=${channelId} sender=${senderId} requireMention=${shouldRequireMention} bypass=${shouldBypassMention} canDetectMention=${canDetectMention})`,
-      );
+      logInboundDrop({
+        log: monitor.runtime.log,
+        channel: "mattermost",
+        reason: "no mention",
+        target: channelId,
+        onceKey: JSON.stringify([account.accountId, channelId]),
+        hint: `Mention patterns can be derived from the agent identity name. Set ${groupsConfigPath}[${JSON.stringify(channelId)}].requireMention=false to process messages without a mention. Preserve existing groups entries; when adding the first groups map, include "*": {} to keep other chats admitted.`,
+      });
       recordPendingHistory();
       return;
     }

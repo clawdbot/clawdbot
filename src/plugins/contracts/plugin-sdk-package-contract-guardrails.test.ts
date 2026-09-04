@@ -580,6 +580,12 @@ describe("plugin-sdk package contract guardrails", () => {
     expect(ssrfRuntime).not.toHaveProperty("fetchConfiguredLocalOriginWithSsrFGuard");
   });
 
+  it("keeps memory provenance mutation out of the packaged Memory Core facade", async () => {
+    const memoryCoreRuntime = await import("../../plugin-sdk/memory-core-host-runtime-core.js");
+
+    expect(memoryCoreRuntime).not.toHaveProperty("recordMemoryArtifactWriteProvenance");
+  });
+
   it("keeps bundled plugin SDK compatibility subpaths explicitly classified", () => {
     const entrypoints = new Set(pluginSdkEntrypoints);
     const supported = new Set<string>(supportedBundledFacadeSdkEntrypoints);

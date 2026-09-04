@@ -4,13 +4,13 @@ import os from "node:os";
 import path from "node:path";
 import { normalizeLowercaseStringOrEmpty } from "@openclaw/normalization-core/string-coerce";
 import { afterEach, beforeEach, vi } from "vitest";
+import type { LegacyStateDetection } from "../infra/state-migrations.types.js";
 import { createEmptyPluginRegistry } from "../plugins/registry-empty.js";
 import { defineMockFn, type MockFn } from "../test-utils/vitest-mock-fn.js";
 import {
   readEmbeddedGatewayTokenForTest,
   testServiceAuditCodes,
 } from "./doctor-service-audit.test-helpers.js";
-import type { LegacyStateDetection } from "./doctor-state-migrations.js";
 import {
   applyMockDoctorConfigSnapshot,
   arrangeLegacyStateMigrationFixture,
@@ -37,7 +37,6 @@ export const resolveOpenClawPackageRoot = defineMockFn(vi.fn().mockResolvedValue
 export const runGatewayUpdate = defineMockFn(
   vi.fn().mockResolvedValue(createGatewayUpdateResult()),
 );
-const collectRelevantDoctorPluginIds = defineMockFn(vi.fn(() => []));
 const listPluginDoctorLegacyConfigRules = defineMockFn(vi.fn(() => []));
 const runDoctorHealthContributions = defineMockFn(vi.fn(defaultRunDoctorHealthContributions));
 const maybeRepairMemoryRecallHealth = defineMockFn(vi.fn().mockResolvedValue(undefined));
@@ -69,6 +68,7 @@ const legacyReadConfigFileSnapshot = defineMockFn(
 );
 const createConfigIO = defineMockFn(
   vi.fn(() => ({
+    configPath: "/tmp/openclaw.json",
     readConfigFileSnapshot: legacyReadConfigFileSnapshot,
   })),
 );
@@ -494,7 +494,7 @@ vi.mock("../plugins/doctor-contract-registry.js", () => ({
     config,
     changes: [],
   }),
-  collectRelevantDoctorPluginIds,
+  collectDoctorConfigRepairPluginIds: () => [],
   listPluginDoctorLegacyConfigRules,
 }));
 
@@ -523,6 +523,7 @@ vi.mock("../agents/auth-profiles/store.js", async () => {
   return {
     ...actual,
     ensureAuthProfileStore,
+    ensureAuthProfileStoreWithoutExternalProfiles: ensureAuthProfileStore,
   };
 });
 
@@ -546,15 +547,19 @@ vi.mock("../pairing/pairing-store.js", () => ({
   upsertChannelPairingRequest: vi.fn().mockResolvedValue({ code: "000000", created: false }),
 }));
 
-vi.mock("../runtime.js", () => ({
-  defaultRuntime: {
-    log: () => {},
-    error: () => {},
-    exit: () => {
-      throw new Error("exit");
+vi.mock("../runtime.js", async () => {
+  const actual = await vi.importActual<typeof import("../runtime.js")>("../runtime.js");
+  return {
+    ExitError: actual.ExitError,
+    defaultRuntime: {
+      log: () => {},
+      error: () => {},
+      exit: () => {
+        throw new Error("exit");
+      },
     },
-  },
-}));
+  };
+});
 
 vi.mock("../utils.js", async () => {
   const actual = await vi.importActual<typeof import("../utils.js")>("../utils.js");
@@ -567,6 +572,7 @@ vi.mock("../utils.js", async () => {
 
 vi.mock("./health.js", () => ({
   healthCommand: vi.fn().mockResolvedValue(undefined),
+  healthCommandNonExiting: vi.fn().mockResolvedValue(undefined),
 }));
 
 vi.mock("./onboard-helpers.js", () => ({
@@ -577,14 +583,23 @@ vi.mock("./onboard-helpers.js", () => ({
   randomToken: vi.fn(() => "test-gateway-token"),
 }));
 
-vi.mock("./doctor-state-migrations.js", () => ({
-  autoMigrateLegacyPluginDoctorState,
+vi.mock("../infra/state-migrations.doctor.js", () => ({
   autoMigrateLegacyState,
+  detectLegacyStateMigrations,
+  runLegacyStateMigrations,
+}));
+
+vi.mock("../infra/state-migrations.plugin-doctor.js", () => ({
+  autoMigrateLegacyPluginDoctorState,
+}));
+
+vi.mock("../infra/state-migrations.state-dir.js", () => ({
   autoMigrateLegacyStateDir,
   autoMigrateLegacyTaskStateSidecars,
-  detectLegacyStateMigrations,
+}));
+
+vi.mock("../infra/state-migrations.config-machine-state.js", () => ({
   migrateLegacyConfigMachineState: vi.fn(() => ({ changes: [], warnings: [] })),
-  runLegacyStateMigrations,
 }));
 
 vi.mock("../channels/plugins/lifecycle-startup.js", () => ({
@@ -630,6 +645,7 @@ beforeEach(() => {
   noteMemoryRecallHealth.mockReset().mockResolvedValue(undefined);
   legacyReadConfigFileSnapshot.mockReset().mockResolvedValue(createLegacyConfigSnapshot());
   createConfigIO.mockReset().mockImplementation(() => ({
+    configPath: "/tmp/openclaw.json",
     readConfigFileSnapshot: legacyReadConfigFileSnapshot,
   }));
   runExec.mockReset().mockResolvedValue({ stdout: "", stderr: "" });

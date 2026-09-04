@@ -4,7 +4,10 @@ import {
   runOpenClawStateWriteTransaction,
   type OpenClawStateDatabaseOptions,
 } from "../state/openclaw-state-db.js";
-import type { PersistedClawPackageRef } from "./provenance.js";
+import {
+  toPackageRefExtensionSqlParams,
+  type PersistedClawPackageRef,
+} from "./package-extension-provenance.js";
 
 export function digestClawPackageRef(ref: PersistedClawPackageRef): string {
   const persisted = {
@@ -75,16 +78,7 @@ export function replaceClawPackageRefExpected(
           relationship: expected.relationship,
           origin: expected.origin,
           independent_owner: expected.independentOwner ? 1 : 0,
-          extension_id: expected.extension?.id ?? null,
-          extension_format: expected.extension?.format ?? null,
-          extension_detected_format: expected.extension?.detectedFormat ?? null,
-          extension_mapped_json: expected.extension
-            ? JSON.stringify(expected.extension.mapped)
-            : null,
-          extension_unavailable_json: expected.extension
-            ? JSON.stringify(expected.extension.unavailable)
-            : null,
-          extension_adapter_identity: expected.extension?.adapterIdentity ?? null,
+          ...toPackageRefExtensionSqlParams(expected.extension),
           installed_at_ms: expected.installedAtMs,
           updated_at_ms: expected.updatedAtMs,
         });
@@ -137,16 +131,7 @@ export function replaceClawPackageRefExpected(
           relationship: replacement.relationship,
           origin: replacement.origin,
           independent_owner: replacement.independentOwner ? 1 : 0,
-          extension_id: replacement.extension?.id ?? null,
-          extension_format: replacement.extension?.format ?? null,
-          extension_detected_format: replacement.extension?.detectedFormat ?? null,
-          extension_mapped_json: replacement.extension
-            ? JSON.stringify(replacement.extension.mapped)
-            : null,
-          extension_unavailable_json: replacement.extension
-            ? JSON.stringify(replacement.extension.unavailable)
-            : null,
-          extension_adapter_identity: replacement.extension?.adapterIdentity ?? null,
+          ...toPackageRefExtensionSqlParams(replacement.extension),
           installed_at_ms: replacement.installedAtMs,
           updated_at_ms: replacement.updatedAtMs,
         });

@@ -12,6 +12,7 @@ import {
   executeSqliteQueryTakeFirstSync,
   getNodeSqliteKysely,
 } from "./kysely-sync.js";
+import { coerceRequiredSqliteNumber as sqliteNumber } from "./sqlite-number.js";
 
 type DiagnosticEventsTable = OpenClawStateKyselyDatabase["diagnostic_events"];
 type AuditRecordDatabase = Pick<OpenClawStateKyselyDatabase, "diagnostic_events">;
@@ -54,7 +55,7 @@ function countAuditRecords(database: DatabaseSync, scope: string): number {
       .select((eb) => eb.fn.countAll<number | bigint>().as("count"))
       .where("scope", "=", scope),
   );
-  return typeof row?.count === "bigint" ? Number(row.count) : (row?.count ?? 0);
+  return typeof row?.count === "bigint" ? sqliteNumber(row.count) : (row?.count ?? 0);
 }
 
 function nextAuditSequence(params: {

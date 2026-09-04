@@ -80,10 +80,3 @@ export async function readChatHistoryCliSessionImportSnapshot(
       })
     : [];
 }
-
-/** Augments local chat history with bound Claude CLI session messages when applicable. */
-export function augmentChatHistoryWithCliSessionImports(
-  params: Parameters<typeof resolveChatHistoryWithCliSessionImports>[0],
-): unknown[] {
-  return resolveChatHistoryWithCliSessionImports(params).messages;
-}

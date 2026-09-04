@@ -1,8 +1,8 @@
-import { mkdir } from "node:fs/promises";
 import path from "node:path";
 import type { QuestionRecord } from "@openclaw/gateway-protocol";
-import { expect, it } from "vitest";
+import { beforeEach, expect, it } from "vitest";
 import type { GatewaySessionRow, SessionsListResult } from "../api/types.ts";
+import { createControlUiE2eArtifactDir } from "../test-helpers/control-ui-e2e-artifacts.ts";
 import {
   controlUiSessionUrl,
   installMockGateway,
@@ -19,15 +19,15 @@ const suite = createControlUiE2eSuite({
 });
 
 const mainSessionKey = "agent:main:main";
+const rosterMatch = { includeGlobal: true };
 const captureUiProof = process.env.OPENCLAW_CAPTURE_UI_PROOF === "1";
 const proofVariant = process.env.OPENCLAW_HOME_ATTENTION_PROOF_VARIANT || "candidate";
-const proofDir = path.join(
-  process.cwd(),
-  ".artifacts",
-  "control-ui-e2e",
-  "home-attention",
-  proofVariant,
-);
+let proofDir: string;
+beforeEach(() => {
+  if (captureUiProof) {
+    proofDir = path.join(createControlUiE2eArtifactDir("home-attention"), proofVariant);
+  }
+});
 
 function sessionsList(row: GatewaySessionRow): SessionsListResult {
   return {
@@ -55,15 +55,15 @@ async function publishSessionRow(
   gateway: MockGatewayControls,
   row: GatewaySessionRow,
 ): Promise<void> {
-  await gateway.setMethodResponse("sessions.list", sessionsList(row));
-  const requestCount = (await gateway.getRequests("sessions.list")).length;
+  await gateway.setSessionsListResponse(sessionsList(row));
+  const requestCount = (await gateway.getRequests("sessions.list", rosterMatch)).length;
   await gateway.emitGatewayEvent("sessions.changed", {
     key: row.key,
     reason: "home-attention-proof",
     updatedAt: row.updatedAt,
   });
   await expect
-    .poll(async () => (await gateway.getRequests("sessions.list")).length)
+    .poll(async () => (await gateway.getRequests("sessions.list", rosterMatch)).length)
     .toBeGreaterThan(requestCount);
 }
 
@@ -90,9 +90,6 @@ async function captureState(
 
 suite.define(() => {
   it("projects question, failure, and agent-declared attention onto Home", async () => {
-    if (captureUiProof) {
-      await mkdir(proofDir, { recursive: true });
-    }
     const context = await suite.newBrowserContext({
       locale: "en-US",
       serviceWorkers: "block",
@@ -112,7 +109,7 @@ suite.define(() => {
     });
 
     await page.goto(controlUiSessionUrl(suite.server.baseUrl, mainSessionKey));
-    await gateway.waitForRequest("sessions.list");
+    await gateway.waitForRequest("sessions.list", { match: rosterMatch });
     const home = page.locator(".nav-item--home");
     await home.waitFor();
     const observed = {

@@ -44,12 +44,12 @@ jobs:
     runs-on: [self-hosted, "${{ inputs.crabbox_runner_label }}"]
     timeout-minutes: 120
     steps:
-      - uses: actions/checkout@df4cb1c069e1874edd31b4311f1884172cec0e10 # v6.0.3
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           ref: ${{ inputs.ref || github.ref }}
 
       - name: Setup Node.js
-        uses: actions/setup-node@48b55a011bda9f5d6aeb4c2d9c7362e8dae4041e # v6.4.0
+        uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
         with:
           node-version: "24"
 
@@ -121,7 +121,7 @@ jobs:
           install_args=(
             install
             --prefer-offline
-            --ignore-scripts=false
+            --config.ignore-scripts=false
             --config.engine-strict=false
             --config.enable-pre-post-scripts=true
             --config.side-effects-cache=true
@@ -132,7 +132,7 @@ jobs:
             local option_name="$2"
             local value="${!env_name-}"
             if [ -n "$value" ]; then
-              install_args+=("--${option_name}=${value}")
+              install_args+=("--config.${option_name}=${value}")
             fi
           }
           append_pnpm_option_arg PNPM_CONFIG_CHILD_CONCURRENCY child-concurrency
@@ -322,15 +322,15 @@ jobs:
             case "$arch" in
               aarch64|arm64)
                 buildx_arch=arm64
-                buildx_sha256=c4248d6cbc4a619a7e0b4609c11e509ad4ac0b475e1c64817c0ac20c5d90c766
+                buildx_sha256=5d0cafd9d16afe1a0f0d9529885344ace2cc99efdd531b6c783c5455a6001569
                 ;;
               x86_64|amd64)
                 buildx_arch=amd64
-                buildx_sha256=d41ece72044243b4f58b343441ae37446d9c29a7d6b5e11c61847bbcf8f7dfda
+                buildx_sha256=48af8a397ebd60178778bf63611dbcebe5f5e7a9be90eb9147b24b9587455778
                 ;;
               *) echo "unsupported buildx arch: $arch" >&2; exit 2 ;;
             esac
-            buildx_version="v0.35.0"
+            buildx_version="v0.36.1"
             mkdir -p "$HOME/.docker/cli-plugins"
             curl --fail --show-error --location \
               --connect-timeout "${OPENCLAW_CRABBOX_HYDRATE_DOWNLOAD_CONNECT_TIMEOUT_SECONDS:-15}" \
@@ -444,12 +444,12 @@ jobs:
     runs-on: [self-hosted, "${{ inputs.crabbox_runner_label }}"]
     timeout-minutes: 120
     steps:
-      - uses: actions/checkout@df4cb1c069e1874edd31b4311f1884172cec0e10 # v6.0.3
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           ref: ${{ inputs.ref || github.ref }}
 
       - name: Setup Node.js
-        uses: actions/setup-node@48b55a011bda9f5d6aeb4c2d9c7362e8dae4041e # v6.4.0
+        uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
         with:
           node-version: "24"
 
@@ -555,16 +555,16 @@ jobs:
             "--filter",
             "openclaw",
             "--prefer-offline",
-            "--ignore-scripts=true",
+            "--ignore-scripts",
             "--config.engine-strict=false",
             "--config.enable-pre-post-scripts=false",
             "--config.side-effects-cache=false",
             "--frozen-lockfile",
-            "--child-concurrency=$env:PNPM_CONFIG_CHILD_CONCURRENCY",
-            "--modules-dir=$env:PNPM_CONFIG_MODULES_DIR",
-            "--network-concurrency=$env:PNPM_CONFIG_NETWORK_CONCURRENCY",
-            "--store-dir=$env:PNPM_CONFIG_STORE_DIR",
-            "--virtual-store-dir=$env:PNPM_CONFIG_VIRTUAL_STORE_DIR"
+            "--config.child-concurrency=$env:PNPM_CONFIG_CHILD_CONCURRENCY",
+            "--config.modules-dir=$env:PNPM_CONFIG_MODULES_DIR",
+            "--config.network-concurrency=$env:PNPM_CONFIG_NETWORK_CONCURRENCY",
+            "--config.store-dir=$env:PNPM_CONFIG_STORE_DIR",
+            "--config.virtual-store-dir=$env:PNPM_CONFIG_VIRTUAL_STORE_DIR"
           )
           pnpm @installArgs
           if ($LASTEXITCODE -ne 0) {
@@ -677,7 +677,7 @@ jobs:
     runs-on: [self-hosted, "${{ inputs.crabbox_runner_label }}"]
     timeout-minutes: 120
     steps:
-      - uses: actions/checkout@df4cb1c069e1874edd31b4311f1884172cec0e10 # v6.0.3
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           ref: ${{ inputs.ref || github.ref }}
 
@@ -686,8 +686,8 @@ jobs:
         env:
           PNPM_HOME: ${{ runner.temp }}/pnpm-home
         with:
+          cache-mode: off
           install-bun: "false"
-          use-actions-cache: "false"
 
       - name: Prepare Crabbox shell
         shell: bash
@@ -741,6 +741,7 @@ jobs:
           BYTEPLUS_API_KEY: ${{ secrets.BYTEPLUS_API_KEY }}
           CEREBRAS_API_KEY: ${{ secrets.CEREBRAS_API_KEY }}
           DEEPINFRA_API_KEY: ${{ secrets.DEEPINFRA_API_KEY }}
+          DEEPSEEK_API_KEY: ${{ secrets.DEEPSEEK_API_KEY }}
           DASHSCOPE_API_KEY: ${{ secrets.DASHSCOPE_API_KEY }}
           FACTORY_API_KEY: ${{ secrets.FACTORY_API_KEY }}
           FIREWORKS_API_KEY: ${{ secrets.FIREWORKS_API_KEY }}

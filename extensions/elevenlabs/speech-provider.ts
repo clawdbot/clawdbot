@@ -269,54 +269,25 @@ function parseDirectiveToken(ctx: SpeechDirectiveTokenParseContext) {
           handled: true,
           overrides: { ...ctx.currentOverrides, modelId: normalizeElevenLabsTtsModelId(ctx.value) },
         };
-      case "stability": {
-        if (!ctx.policy.allowVoiceSettings) {
-          return { handled: true };
-        }
-        const value = parseNumberValue(ctx.value);
-        if (value == null) {
-          return { handled: true, warnings: ["invalid stability value"] };
-        }
-        requireInRange(value, 0, 1, "stability");
-        return { handled: true, overrides: mergeVoiceSettingsOverride(ctx, { stability: value }) };
-      }
+      case "stability":
       case "similarity":
       case "similarityboost":
-      case "similarity_boost": {
-        if (!ctx.policy.allowVoiceSettings) {
-          return { handled: true };
-        }
-        const value = parseNumberValue(ctx.value);
-        if (value == null) {
-          return { handled: true, warnings: ["invalid similarityBoost value"] };
-        }
-        requireInRange(value, 0, 1, "similarityBoost");
-        return {
-          handled: true,
-          overrides: mergeVoiceSettingsOverride(ctx, { similarityBoost: value }),
-        };
-      }
-      case "style": {
-        if (!ctx.policy.allowVoiceSettings) {
-          return { handled: true };
-        }
-        const value = parseNumberValue(ctx.value);
-        if (value == null) {
-          return { handled: true, warnings: ["invalid style value"] };
-        }
-        requireInRange(value, 0, 1, "style");
-        return { handled: true, overrides: mergeVoiceSettingsOverride(ctx, { style: value }) };
-      }
+      case "similarity_boost":
+      case "style":
       case "speed": {
         if (!ctx.policy.allowVoiceSettings) {
           return { handled: true };
         }
+        const setting = ctx.key.startsWith("similarity") ? "similarityBoost" : ctx.key;
         const value = parseNumberValue(ctx.value);
         if (value == null) {
-          return { handled: true, warnings: ["invalid speed value"] };
+          return { handled: true, warnings: [`invalid ${setting} value`] };
         }
-        requireInRange(value, 0.5, 2, "speed");
-        return { handled: true, overrides: mergeVoiceSettingsOverride(ctx, { speed: value }) };
+        requireInRange(value, setting === "speed" ? 0.5 : 0, setting === "speed" ? 2 : 1, setting);
+        return {
+          handled: true,
+          overrides: mergeVoiceSettingsOverride(ctx, { [setting]: value }),
+        };
       }
       case "speakerboost":
       case "speaker_boost":

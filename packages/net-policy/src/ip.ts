@@ -360,40 +360,46 @@ export function extractEmbeddedIpv4FromIpv6(address: ipaddr.IPv6): ipaddr.IPv4 |
   return undefined;
 }
 
+/** Parses the exact-IP and CIDR forms accepted by runtime address matching. */
+export function parseIpAddressOrCidr(
+  raw: string | undefined,
+): [ParsedIpAddress, number?] | undefined {
+  const candidate = normalizeOptionalString(raw);
+  if (!candidate) {
+    return undefined;
+  }
+  if (!candidate.includes("/")) {
+    const exact = parseCanonicalIpAddress(candidate);
+    return exact ? [exact] : undefined;
+  }
+  try {
+    return ipaddr.parseCIDR(candidate);
+  } catch {
+    return undefined;
+  }
+}
+
 /** Checks an IP literal against an exact IP or CIDR range, normalizing mapped IPv4. */
 export function isIpInCidr(ip: string, cidr: string): boolean {
   const normalizedIp = parseCanonicalIpAddress(ip);
-  if (!normalizedIp) {
+  const range = parseIpAddressOrCidr(cidr);
+  if (!normalizedIp || !range) {
     return false;
   }
-  const candidate = cidr.trim();
-  if (!candidate) {
-    return false;
-  }
+  const [baseAddress, prefixLength] = range;
   const comparableIp = normalizeIpv4MappedAddress(normalizedIp);
-  if (!candidate.includes("/")) {
-    const exact = parseCanonicalIpAddress(candidate);
-    if (!exact) {
-      return false;
-    }
-    const comparableExact = normalizeIpv4MappedAddress(exact);
+  const comparableBase = normalizeIpv4MappedAddress(baseAddress);
+  if (prefixLength === undefined) {
     return (
-      comparableIp.kind() === comparableExact.kind() &&
-      comparableIp.toString() === comparableExact.toString()
+      comparableIp.kind() === comparableBase.kind() &&
+      comparableIp.toString() === comparableBase.toString()
     );
   }
-
-  try {
-    const [baseAddress, prefixLength] = ipaddr.parseCIDR(candidate);
-    const comparableBase = normalizeIpv4MappedAddress(baseAddress);
-    if (isIpv4Address(comparableIp) && isIpv4Address(comparableBase)) {
-      return comparableIp.match([comparableBase, prefixLength]);
-    }
-    if (isIpv6Address(comparableIp) && isIpv6Address(comparableBase)) {
-      return comparableIp.match([comparableBase, prefixLength]);
-    }
-    return false;
-  } catch {
-    return false;
+  if (isIpv4Address(comparableIp) && isIpv4Address(comparableBase)) {
+    return comparableIp.match([comparableBase, prefixLength]);
   }
+  if (isIpv6Address(comparableIp) && isIpv6Address(comparableBase)) {
+    return comparableIp.match([comparableBase, prefixLength]);
+  }
+  return false;
 }

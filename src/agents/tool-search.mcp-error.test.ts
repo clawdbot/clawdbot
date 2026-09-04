@@ -149,9 +149,14 @@ describe("Tool Search MCP failures", () => {
     expect(wrappedResult.content).toEqual([
       {
         type: "text",
-        text: JSON.stringify({ tool: wrappedDetails.tool, result: wrappedDetails.result }, null, 2),
+        text: expect.stringContaining(
+          JSON.stringify({ tool: wrappedDetails.tool, result: wrappedDetails.result }, null, 2),
+        ),
       },
     ]);
+    expect(wrappedResult.content[0]).toMatchObject({
+      text: expect.stringContaining("EXTERNAL_UNTRUSTED_CONTENT"),
+    });
     expect(isToolResultError(wrappedResult)).toBe(true);
   });
 

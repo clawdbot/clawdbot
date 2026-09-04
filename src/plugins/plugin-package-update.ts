@@ -1,24 +1,27 @@
+import { isDeepStrictEqual } from "node:util";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import type { InstalledPluginIndex } from "./installed-plugin-index.js";
 import {
+  resolveInstalledPluginLifecycleOwnership,
   resolveInstalledPluginPackageOwnership,
-  type InstalledPluginPackageOwnership,
+  type InstalledPluginLifecycleOwnership,
 } from "./installed-plugin-package-ownership.js";
 import {
   hasMatchingPluginLoadPath,
   removePluginRuntimePolicyFromConfig,
+  resolveComparableUninstallPathInternal,
 } from "./uninstall-package-config.js";
 
-type PluginPackageUpdateSnapshot = ReadonlyMap<string, InstalledPluginPackageOwnership>;
+type PluginPackageUpdateSnapshot = ReadonlyMap<string, InstalledPluginLifecycleOwnership>;
 
 export function capturePluginPackageUpdateSnapshot(params: {
   index: InstalledPluginIndex;
   installOwners: readonly string[];
   env?: NodeJS.ProcessEnv;
 }): { ok: true; value: PluginPackageUpdateSnapshot } | { ok: false; error: string } {
-  const snapshot = new Map<string, InstalledPluginPackageOwnership>();
+  const snapshot = new Map<string, InstalledPluginLifecycleOwnership>();
   for (const installOwner of new Set(params.installOwners)) {
-    const ownership = resolveInstalledPluginPackageOwnership(
+    const ownership = resolveInstalledPluginLifecycleOwnership(
       params.index,
       installOwner,
       params.env,
@@ -67,6 +70,25 @@ export function reconcilePluginPackageUpdateConfig(params: {
       nextInstallOwner,
       params.env,
     );
+    if (before.kind === "orphan") {
+      const lifecycleAfter = resolveInstalledPluginLifecycleOwnership(
+        params.afterIndex,
+        nextInstallOwner,
+        params.env,
+      );
+      const unchangedOrphan =
+        nextInstallOwner === installOwner &&
+        isDeepStrictEqual(
+          params.afterIndex.installRecords[nextInstallOwner],
+          before.installRecord,
+        ) &&
+        lifecycleAfter.ok &&
+        lifecycleAfter.value.kind === "orphan";
+      if (!after.ok && !unchangedOrphan) {
+        return after;
+      }
+      continue;
+    }
     if (!after.ok) {
       return after;
     }
@@ -75,6 +97,17 @@ export function reconcilePluginPackageUpdateConfig(params: {
     if (removedPluginIds.length === 0) {
       continue;
     }
+    const retainedOwnedPaths = new Set(
+      [
+        after.value.installRecord.installPath,
+        after.value.installRecord.sourcePath,
+        ...params.afterIndex.plugins
+          .filter((plugin) => afterPluginIds.has(plugin.pluginId))
+          .flatMap((plugin) => [plugin.source, plugin.rootDir]),
+      ]
+        .filter((value): value is string => Boolean(value))
+        .map(resolveComparableUninstallPathInternal),
+    );
     const retainedContributionKeys = contributionKeys(params.afterIndex, afterPluginIds);
     for (const pluginId of removedPluginIds) {
       const oldRecord = params.beforeIndex.plugins.find((plugin) => plugin.pluginId === pluginId);
@@ -84,7 +117,15 @@ export function reconcilePluginPackageUpdateConfig(params: {
       ].filter((channelId) => !retainedContributionKeys.has(channelId));
       config = removePluginRuntimePolicyFromConfig(config, pluginId, {
         channelIds,
-        loadPaths: oldRecord?.source ? [oldRecord.source] : [],
+        loadPaths: [
+          oldRecord?.source,
+          before.installRecord.installPath,
+          before.installRecord.sourcePath,
+        ]
+          .filter((value): value is string => Boolean(value))
+          .filter(
+            (value) => !retainedOwnedPaths.has(resolveComparableUninstallPathInternal(value)),
+          ),
       }).config;
     }
   }
@@ -100,10 +141,14 @@ export function pluginPackageUpdateMayMutateConfig(params: {
   const channels = params.config.channels as Record<string, unknown> | undefined;
   for (const ownership of params.snapshot.values()) {
     const pluginIds = new Set(ownership.pluginIds);
-    const ownedSources = params.index.plugins
-      .filter((plugin) => pluginIds.has(plugin.pluginId) && plugin.source)
-      .map((plugin) => plugin.source!);
-    if (hasMatchingPluginLoadPath(params.config, ownedSources)) {
+    const ownedPaths = [
+      ownership.installRecord.installPath,
+      ownership.installRecord.sourcePath,
+      ...params.index.plugins
+        .filter((plugin) => pluginIds.has(plugin.pluginId) && plugin.source)
+        .map((plugin) => plugin.source!),
+    ].filter((value): value is string => Boolean(value));
+    if (hasMatchingPluginLoadPath(params.config, ownedPaths)) {
       return true;
     }
     for (const pluginId of ownership.pluginIds) {

@@ -12,6 +12,7 @@ import { resetTaskRegistryForTests } from "../tasks/task-runtime.test-helpers.js
 import { withOpenClawTestState } from "../test-utils/openclaw-test-state.js";
 import {
   loadRunCronIsolatedAgentTurn,
+  dispatchCronDeliveryMock,
   mockRunCronFallbackPassthrough,
   resetRunCronIsolatedAgentTurnHarness,
   resolveAllowedModelRefMock,
@@ -147,7 +148,7 @@ async function runPersistedDiagnosticCase(params: {
   );
 }
 
-describe.sequential("cron execution diagnostics", () => {
+describe("cron execution diagnostics", { concurrent: false }, () => {
   const servers: Server[] = [];
 
   beforeEach(() => {
@@ -326,6 +327,57 @@ describe.sequential("cron execution diagnostics", () => {
               source: "tool",
               severity: "error",
               message: "SYSTEM_RUN_DENIED: approval required",
+            }),
+          ]),
+        },
+      });
+    }
+  });
+
+  it("persists and emits terminal tool detail while keeping the payload generic", async () => {
+    const modelRef = { provider: "openai", model: "gpt-5.4" };
+    resolveConfiguredModelRefMock.mockReturnValue(modelRef);
+    mockRunCronFallbackPassthrough();
+    runEmbeddedAgentMock.mockResolvedValueOnce({
+      payloads: [{ text: "⚠️ Exec failed", isError: true, toolName: "exec" }],
+      meta: {
+        agentMeta: {},
+        terminalToolFailure: {
+          source: "tool",
+          toolName: "exec",
+          code: "UNKNOWN_TOOL_ID",
+        },
+      },
+    });
+
+    const { finished, history } = await runPersistedDiagnosticCase({
+      cfg: configFor(modelRef),
+      modelRef,
+      name: "unknown tool id",
+    });
+
+    expect(dispatchCronDeliveryMock).toHaveBeenCalledWith(
+      expect.objectContaining({
+        deliveryPayloads: [{ text: "cron isolated run returned an error payload", isError: true }],
+        outputText: "cron isolated run returned an error payload",
+        summary: "Code Mode could not resolve a configured MCP tool.",
+      }),
+    );
+
+    for (const outcome of [finished, history]) {
+      expect(outcome).toMatchObject({
+        status: "error",
+        provider: "openai",
+        model: "gpt-5.4",
+        summary: "Code Mode could not resolve a configured MCP tool.",
+        diagnostics: {
+          summary: "Code Mode could not resolve a configured MCP tool.",
+          entries: expect.arrayContaining([
+            expect.objectContaining({
+              source: "tool",
+              severity: "error",
+              message: "Code Mode could not resolve a configured MCP tool.",
+              toolName: "exec",
             }),
           ]),
         },

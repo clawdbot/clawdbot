@@ -3,10 +3,15 @@ import type {
   MessagePresentationAction,
   MessagePresentationButton,
 } from "../interactive/payload.js";
+import type { ApprovalScope } from "./approval-scope.js";
 import type { ApprovalRequestInput, ChannelApprovalKind } from "./approval-types.js";
 import type { CommandExplanationSummary } from "./command-analysis/explain.js";
 import type { ExecApprovalDecision, ExecApprovalResolved } from "./exec-approvals.js";
 import type { PluginApprovalResolved } from "./plugin-approvals.js";
+import type {
+  SystemAgentApprovalApplicationStatus,
+  SystemAgentApprovalResolved,
+} from "./system-agent-approvals.js";
 
 type ApprovalPhase = "pending" | "resolved" | "expired";
 
@@ -49,6 +54,7 @@ export type ExecApprovalViewBase = ApprovalViewBase & {
   envKeys?: readonly string[];
   host?: string | null;
   nodeId?: string | null;
+  scope?: ApprovalScope | null;
   sessionKey?: string | null;
 };
 
@@ -76,6 +82,7 @@ export type PluginApprovalViewBase = ApprovalViewBase & {
   approvalKind: "plugin";
   agentId?: string | null;
   pluginId?: string | null;
+  scope?: ApprovalScope | null;
   toolName?: string | null;
   severity: "info" | "warning" | "critical";
 };
@@ -99,16 +106,65 @@ export type PluginApprovalExpiredView = PluginApprovalViewBase & {
   phase: "expired";
 };
 
+/** Shared presentation fields for OpenClaw system change approvals. */
+export type SystemAgentApprovalViewBase = ApprovalViewBase & {
+  approvalKind: "system-agent";
+  agentId?: string | null;
+  scope?: null;
+  commandText: string;
+  commandPreview?: string | null;
+  ask?: string | null;
+  cwd?: string | null;
+  envKeys?: readonly string[];
+  host?: string | null;
+  nodeId?: string | null;
+  sessionKey?: string | null;
+  operationSummary: string;
+};
+
+/** Pending system change approval view, including executable reply actions. */
+type SystemAgentApprovalPendingView = SystemAgentApprovalViewBase & {
+  phase: "pending";
+  actions: ApprovalActionView[];
+  expiresAtMs: number;
+};
+
+/** Resolved system change approval view with the recorded decision. */
+type SystemAgentApprovalResolvedView = SystemAgentApprovalViewBase & {
+  phase: "resolved";
+  decision: ExecApprovalDecision;
+  resolvedBy?: string | null;
+  applicationStatus?: SystemAgentApprovalApplicationStatus;
+  terminalStatus?: "expired" | "cancelled";
+};
+
+/** Expired system change approval view without reply actions. */
+type SystemAgentApprovalExpiredView = SystemAgentApprovalViewBase & {
+  phase: "expired";
+};
+
 /** Any pending approval view that still accepts a user decision. */
-export type PendingApprovalView = ExecApprovalPendingView | PluginApprovalPendingView;
+export type PendingApprovalView =
+  | ExecApprovalPendingView
+  | PluginApprovalPendingView
+  | SystemAgentApprovalPendingView;
 /** Any approval view after a decision was recorded. */
-export type ResolvedApprovalView = ExecApprovalResolvedView | PluginApprovalResolvedView;
+export type ResolvedApprovalView =
+  | ExecApprovalResolvedView
+  | PluginApprovalResolvedView
+  | SystemAgentApprovalResolvedView;
 /** Any approval view after it can no longer be acted on. */
-export type ExpiredApprovalView = ExecApprovalExpiredView | PluginApprovalExpiredView;
+export type ExpiredApprovalView =
+  | ExecApprovalExpiredView
+  | PluginApprovalExpiredView
+  | SystemAgentApprovalExpiredView;
 /** Discriminated approval presentation model consumed by channel/UI renderers. */
 export type ApprovalViewModel = PendingApprovalView | ResolvedApprovalView | ExpiredApprovalView;
 
 /** Stored approval request variants accepted by the view-model builders. */
 export type ApprovalRequest = ApprovalRequestInput;
 /** Stored approval resolution variants accepted by resolved view builders. */
-export type ApprovalResolved = ExecApprovalResolved | PluginApprovalResolved;
+export type ApprovalResolved =
+  | (ExecApprovalResolved & { applicationStatus?: never; terminalStatus?: never })
+  | (PluginApprovalResolved & { applicationStatus?: never; terminalStatus?: never })
+  | SystemAgentApprovalResolved;

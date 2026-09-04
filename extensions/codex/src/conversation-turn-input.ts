@@ -75,7 +75,7 @@ function isImageMedia(media: InboundMedia): boolean {
 }
 
 function normalizeFileUrl(value: string): string | undefined {
-  if (!value.startsWith("file://")) {
+  if (!/^file:\/\//iu.test(value)) {
     return value;
   }
   try {
@@ -89,7 +89,7 @@ function readLocalMediaPath(value: string | undefined): string | undefined {
   if (!value) {
     return undefined;
   }
-  if (value.startsWith("file://")) {
+  if (/^file:\/\//iu.test(value)) {
     return value;
   }
   if (value.startsWith("//")) {

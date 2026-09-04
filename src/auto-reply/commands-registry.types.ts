@@ -16,6 +16,7 @@ export type CommandScope = "text" | "native" | "both";
  */
 export type CommandTier = "essential" | "standard" | "power";
 
+// v2026.8.1 SDK definitions may still use "docks"; it remains presentation-only.
 export type CommandCategory =
   | "session"
   | "options"
@@ -81,6 +82,8 @@ export type ChatCommandDefinition = {
   category?: CommandCategory;
   /** Progressive disclosure tier. Defaults to "standard" when omitted. */
   tier?: CommandTier;
+  /** Handler is safe to resolve while another run owns the session execution slot. */
+  activeRunSafe?: true;
 };
 
 /** Provider-facing native command registration shape. */

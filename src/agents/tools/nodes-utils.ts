@@ -4,6 +4,7 @@
  * Loads paired nodes from Gateway and resolves requested/default nodes with legacy pair-list fallback.
  */
 import { normalizeOptionalLowercaseString } from "@openclaw/normalization-core/string-coerce";
+import { GatewayClientRequestError } from "../../../packages/gateway-client/src/request-error.js";
 import { parseNodeList, parsePairingList } from "../../shared/node-list-parse.js";
 import type { NodeListNode } from "../../shared/node-list-types.js";
 import { resolveNodeFromNodeList, resolveNodeIdFromNodeList } from "../../shared/node-resolve.js";
@@ -19,50 +20,19 @@ type DefaultNodeSelectionOptions = {
   preferLocalMac?: boolean;
 };
 
-function messageFromError(error: unknown): string {
-  if (error instanceof Error) {
-    return error.message;
-  }
-  if (typeof error === "string") {
-    return error;
-  }
-  if (
-    typeof error === "object" &&
-    error !== null &&
-    "message" in error &&
-    typeof (error as { message?: unknown }).message === "string"
-  ) {
-    return (error as { message: string }).message;
-  }
-  if (typeof error === "object" && error !== null) {
-    try {
-      return JSON.stringify(error);
-    } catch {
-      return "";
-    }
-  }
-  return "";
-}
-
-function shouldFallbackToPairList(error: unknown): boolean {
-  const message = normalizeOptionalLowercaseString(messageFromError(error)) ?? "";
-  if (!message.includes("node.list")) {
-    return false;
-  }
-  return (
-    message.includes("unknown method") ||
-    message.includes("method not found") ||
-    message.includes("not implemented") ||
-    message.includes("unsupported")
-  );
-}
-
 async function loadNodes(opts: GatewayCallOptions, signal?: AbortSignal): Promise<NodeListNode[]> {
   try {
     const res = await callGatewayTool("node.list", opts, {}, { signal });
     return parseNodeList(res);
   } catch (error) {
-    if (!shouldFallbackToPairList(error)) {
+    if (
+      !(error instanceof GatewayClientRequestError) ||
+      error.gatewayCode !== "INVALID_REQUEST" ||
+      error.retryable ||
+      error.message !== "unknown method: node.list" ||
+      (error.retryAfterMs !== undefined &&
+        (!Number.isInteger(error.retryAfterMs) || error.retryAfterMs < 0))
+    ) {
       throw error;
     }
     // Older gateways only expose paired-node state; preserve node tools until node.list exists.

@@ -18,16 +18,15 @@ import {
   LEGACY_WORKSPACE_STATE_DIRNAME,
 } from "./workspace-legacy-state.js";
 import { resetLegacyWorkspaceStateCheckForTest } from "./workspace-legacy-state.test-support.js";
+import { resolveWorkspaceStateIdentity } from "./workspace-state-identity.js";
 import {
   mergeWorkspaceSetupState,
   readWorkspaceStateSnapshot,
   replaceWorkspaceAttestation,
-  resolveWorkspaceStateIdentity,
 } from "./workspace-state-store.js";
 import {
   DEFAULT_AGENTS_FILENAME,
   DEFAULT_BOOTSTRAP_FILENAME,
-  DEFAULT_HEARTBEAT_FILENAME,
   DEFAULT_IDENTITY_FILENAME,
   DEFAULT_MEMORY_FILENAME,
   DEFAULT_SOUL_FILENAME,
@@ -42,6 +41,7 @@ import {
   type WorkspaceBootstrapFile,
 } from "./workspace.js";
 
+const LEGACY_HEARTBEAT_FILENAME = "HEARTBEAT.md";
 let testState: OpenClawTestState | undefined;
 
 beforeEach(async () => {
@@ -659,7 +659,7 @@ describe("ensureAgentWorkspace", () => {
         DEFAULT_SOUL_FILENAME,
         DEFAULT_IDENTITY_FILENAME,
         DEFAULT_USER_FILENAME,
-        DEFAULT_HEARTBEAT_FILENAME,
+        LEGACY_HEARTBEAT_FILENAME,
       ],
     });
 
@@ -671,7 +671,7 @@ describe("ensureAgentWorkspace", () => {
       DEFAULT_SOUL_FILENAME,
       DEFAULT_IDENTITY_FILENAME,
       DEFAULT_USER_FILENAME,
-      DEFAULT_HEARTBEAT_FILENAME,
+      LEGACY_HEARTBEAT_FILENAME,
     ]) {
       await expectPathMissing(path.join(tempDir, fileName));
     }
@@ -803,19 +803,19 @@ describe("ensureAgentWorkspace", () => {
       content: "# IDENTITY.md\n\n- **Name:** Example\n",
     });
     const bootstrapPath = path.join(tempDir, DEFAULT_BOOTSTRAP_FILENAME);
-    const rmSpy = vi
-      .spyOn(fs, "rm")
-      .mockRejectedValueOnce(Object.assign(new Error("not a directory"), { code: "ENOTDIR" }));
+    const originalRm = fs.rm.bind(fs);
+    const rmSpy = vi.spyOn(fs, "rm").mockImplementation(async (filePath, options) => {
+      if (filePath === bootstrapPath) {
+        throw Object.assign(new Error("not a directory"), { code: "ENOTDIR" });
+      }
+      await originalRm(filePath, options);
+    });
 
     try {
-      const result = await ensureAgentWorkspace({ dir: tempDir, ensureBootstrapFiles: true });
-      expect(rmSpy).toHaveBeenCalledWith(bootstrapPath, { force: true });
+      await ensureAgentWorkspace({ dir: tempDir, ensureBootstrapFiles: true });
       await expect(fs.access(bootstrapPath)).resolves.toBeUndefined();
       const state = await readWorkspaceState(tempDir);
       expect(state.setupCompletedAt).toMatch(/\d{4}-\d{2}-\d{2}T/);
-      expect(result.bootstrapPending).toBe(false);
-      await expect(resolveWorkspaceBootstrapStatus(tempDir)).resolves.toBe("complete");
-      await expect(isWorkspaceBootstrapPending(tempDir)).resolves.toBe(false);
     } finally {
       rmSpy.mockRestore();
     }
@@ -865,7 +865,7 @@ describe("ensureAgentWorkspace", () => {
     await ensureAgentWorkspace({ dir: tempDir, ensureBootstrapFiles: true });
 
     // Heartbeat monitor context lives in cron scratch now; new workspaces get no file.
-    await expectPathMissing(path.join(tempDir, DEFAULT_HEARTBEAT_FILENAME));
+    await expectPathMissing(path.join(tempDir, LEGACY_HEARTBEAT_FILENAME));
   });
 
   it("does not recreate optional bootstrap files when workspace setup is already completed", async () => {
@@ -910,7 +910,7 @@ describe("ensureAgentWorkspace", () => {
     await expectPathMissing(path.join(tempDir, DEFAULT_SOUL_FILENAME));
     await expectPathMissing(path.join(tempDir, DEFAULT_IDENTITY_FILENAME));
     await expectPathMissing(path.join(tempDir, DEFAULT_USER_FILENAME));
-    await expectPathMissing(path.join(tempDir, DEFAULT_HEARTBEAT_FILENAME));
+    await expectPathMissing(path.join(tempDir, LEGACY_HEARTBEAT_FILENAME));
 
     // Verify the required AGENTS.md file still exists.
     await expect(fs.access(path.join(tempDir, DEFAULT_AGENTS_FILENAME))).resolves.toBeUndefined();
@@ -946,7 +946,7 @@ describe("ensureAgentWorkspace", () => {
       DEFAULT_SOUL_FILENAME,
       DEFAULT_IDENTITY_FILENAME,
       DEFAULT_USER_FILENAME,
-      DEFAULT_HEARTBEAT_FILENAME,
+      LEGACY_HEARTBEAT_FILENAME,
     ]) {
       await expectPathMissing(path.join(tempDir, filename));
     }

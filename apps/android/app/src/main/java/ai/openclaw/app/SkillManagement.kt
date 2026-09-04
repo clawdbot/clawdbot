@@ -9,7 +9,6 @@ import kotlinx.serialization.json.booleanOrNull
 import kotlinx.serialization.json.buildJsonObject
 import kotlinx.serialization.json.contentOrNull
 
-private const val CLAWHUB_RISK_ACKNOWLEDGEMENT_REQUIRED = "clawhub_risk_acknowledgement_required"
 internal const val CLAWHUB_INSTALL_REQUEST_TIMEOUT_MS = 125_000L
 internal const val CLAWHUB_SKILL_GATEWAY_UNAVAILABLE = "Update the Gateway to search and install ClawHub skills from Android."
 internal val CLAWHUB_SKILL_GATEWAY_METHODS = setOf("skills.search", "skills.detail", "skills.install")
@@ -22,8 +21,6 @@ data class GatewayClawHubSkillSearchState(
   val reviewingSlug: String? = null,
   val installReview: GatewayClawHubInstallReview? = null,
   val installingSlugs: Set<String> = emptySet(),
-  val acknowledgeSlug: String? = null,
-  val acknowledgeVersion: String? = null,
   val errorText: String? = null,
   val messageText: String? = null,
 )
@@ -68,8 +65,6 @@ data class GatewayClawHubInstallReview(
 internal data class GatewayClawHubInstallRejection(
   val message: String,
   val warning: String?,
-  val acknowledgeVersion: String?,
-  val requiresAcknowledgement: Boolean,
 )
 
 internal fun parseClawHubSearchResults(
@@ -115,11 +110,21 @@ internal fun parseClawHubInstallReview(
     ) ?: return null
   val author =
     when {
-      ownerDisplayName != null && ownerHandle != null && !ownerDisplayName.equals(ownerHandle, ignoreCase = true) ->
+      ownerDisplayName != null && ownerHandle != null && !ownerDisplayName.equals(ownerHandle, ignoreCase = true) -> {
         "$ownerDisplayName (@$ownerHandle)"
-      ownerDisplayName != null -> ownerDisplayName
-      ownerHandle != null -> "@$ownerHandle"
-      else -> "Unknown publisher"
+      }
+
+      ownerDisplayName != null -> {
+        ownerDisplayName
+      }
+
+      ownerHandle != null -> {
+        "@$ownerHandle"
+      }
+
+      else -> {
+        "Unknown publisher"
+      }
     }
   return GatewayClawHubInstallReview(
     slug = reviewedSlug,
@@ -130,29 +135,15 @@ internal fun parseClawHubInstallReview(
   )
 }
 
-internal fun clawHubInstallRejection(
-  error: GatewaySession.ErrorShape,
-  attemptedVersion: String?,
-): GatewayClawHubInstallRejection {
-  val details = error.details
-  val reviewedVersion = attemptedVersion?.trim()?.takeIf(String::isNotEmpty)
-  val gatewayVersion = details?.clawhubVersion?.trim()?.takeIf(String::isNotEmpty)
-  val acknowledgementRequested =
-    details?.clawhubTrustCode == CLAWHUB_RISK_ACKNOWLEDGEMENT_REQUIRED
-  val requiresAcknowledgement =
-    acknowledgementRequested && reviewedVersion != null && gatewayVersion == reviewedVersion
-  return GatewayClawHubInstallRejection(
-    message =
-      if (acknowledgementRequested && !requiresAcknowledgement) {
-        "The Gateway evaluated a different ClawHub release. Review the skill again before installing."
-      } else {
-        error.message.ifBlank { "The Gateway rejected this ClawHub install." }
-      },
-    warning = details?.clawhubWarning?.trim()?.takeIf(String::isNotEmpty),
-    acknowledgeVersion = reviewedVersion.takeIf { requiresAcknowledgement },
-    requiresAcknowledgement = requiresAcknowledgement,
+internal fun clawHubInstallRejection(error: GatewaySession.ErrorShape): GatewayClawHubInstallRejection =
+  GatewayClawHubInstallRejection(
+    message = error.message.ifBlank { "The Gateway rejected this ClawHub install." },
+    warning =
+      error.details
+        ?.clawhubWarning
+        ?.trim()
+        ?.takeIf(String::isNotEmpty),
   )
-}
 
 internal fun supportsClawHubSkillManagement(methods: Set<String>): Boolean = methods.containsAll(CLAWHUB_SKILL_GATEWAY_METHODS)
 
@@ -167,13 +158,11 @@ internal fun clawHubDetailParams(slug: String): String = buildJsonObject { put("
 internal fun clawHubInstallParams(
   slug: String,
   version: String?,
-  acknowledgeRisk: Boolean,
 ): String =
   buildJsonObject {
     put("source", JsonPrimitive("clawhub"))
     put("slug", JsonPrimitive(slug))
     version?.trim()?.takeIf(String::isNotEmpty)?.let { put("version", JsonPrimitive(it)) }
-    if (acknowledgeRisk) put("acknowledgeClawHubRisk", JsonPrimitive(true))
     put("timeoutMs", JsonPrimitive(120_000))
   }.toString()
 

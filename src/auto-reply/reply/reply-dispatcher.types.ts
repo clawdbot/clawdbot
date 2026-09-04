@@ -35,6 +35,8 @@ export type ReplyDispatchRuntimeInfo = {
   assistantMessageIndex?: number;
   /** @internal Claim direct-send custody immediately before recipient-visible platform I/O. */
   onPlatformSendDispatch?: () => Promise<void>;
+  /** @internal Synchronously fence custody after claiming it and before provider I/O. */
+  assertPlatformSendAuthorized?: () => void;
   /** @internal Bind this delivery's host-owned completion to a transformed payload. */
   bindPendingFinalDelivery?: <T extends ReplyPayload>(payload: T) => T;
 };

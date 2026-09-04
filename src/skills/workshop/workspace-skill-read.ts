@@ -42,6 +42,7 @@ type WritableWorkspaceSkillSummary = {
   name: string;
   description?: string;
   filePath: string;
+  userAuthored: boolean;
 };
 
 /**
@@ -58,21 +59,14 @@ export function listWritableWorkspaceSkillSummaries(
     agentId: opts?.agentId,
   });
   const ownedDirs = listWorkshopOwnedSkillDirs(workspaceDir, opts?.env ? { env: opts.env } : {});
-  const summaries: WritableWorkspaceSkillSummary[] = [];
-  for (const skill of status.skills) {
-    if (!WRITABLE_WORKSPACE_SOURCES.has(skill.source)) {
-      continue;
-    }
-    if (!ownedDirs.has(path.resolve(skill.baseDir))) {
-      continue;
-    }
-    summaries.push(
-      skill.description
-        ? { name: skill.skillKey, description: skill.description, filePath: skill.filePath }
-        : { name: skill.skillKey, filePath: skill.filePath },
-    );
-  }
-  return summaries;
+  return status.skills
+    .filter((skill) => WRITABLE_WORKSPACE_SOURCES.has(skill.source))
+    .map((skill) => ({
+      name: skill.name,
+      description: skill.description,
+      filePath: skill.filePath,
+      userAuthored: !ownedDirs.has(path.resolve(skill.baseDir)),
+    }));
 }
 
 /** Reads the live SKILL.md of a writable workspace skill, resolved like an update target. */
@@ -80,7 +74,7 @@ export async function readWritableWorkspaceSkill(
   workspaceDir: string,
   skillName: string,
   opts?: { config?: OpenClawConfig; agentId?: string },
-): Promise<{ skillKey: string; skillFile: string; content: string }> {
+): Promise<{ skillName: string; skillKey: string; skillFile: string; content: string }> {
   const name = normalizeOptionalString(skillName);
   if (!name) {
     throw new Error("Skill name is required.");
@@ -98,5 +92,10 @@ export async function readWritableWorkspaceSkill(
   if (content === null) {
     throw new Error(`Skill file is missing: ${targetSkill.filePath}`);
   }
-  return { skillKey: targetSkill.skillKey, skillFile: targetSkill.filePath, content };
+  return {
+    skillName: targetSkill.name,
+    skillKey: targetSkill.skillKey,
+    skillFile: targetSkill.filePath,
+    content,
+  };
 }

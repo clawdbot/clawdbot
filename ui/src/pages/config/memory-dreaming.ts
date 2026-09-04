@@ -6,7 +6,7 @@ import { html, nothing, type TemplateResult } from "lit";
 import { renderModelPicker } from "../../components/model-picker.ts";
 import { providerIdFromModelRef } from "../../components/provider-icon.ts";
 import {
-  renderSettingsDefaultState,
+  renderSettingsDefaultDescription,
   renderSettingsRow,
   renderSettingsSection,
   renderSettingsSegmented,
@@ -330,19 +330,13 @@ function renderField(props: DreamingSettingsProps, spec: DreamingFieldSpec) {
               : spec.defaultLabelKey
                 ? t(spec.defaultLabelKey)
                 : "";
-  const defaultState = renderSettingsDefaultState({
-    value: defaultValue,
-    overridden,
-    disabled: props.disabled,
-    onReset: () => props.onPatch(spec.path, undefined),
-  });
+  const defaultDescription = renderSettingsDefaultDescription(defaultValue, overridden);
   if (spec.kind === "toggle") {
     return renderSettingsToggleRow({
       title: t(spec.labelKey),
-      description: html`${t(spec.helpKey)} ${defaultState.description}`,
+      description: html`${t(spec.helpKey)} ${defaultDescription}`,
       checked: typeof value === "boolean" ? value : spec.fallback,
       disabled: props.disabled,
-      actions: defaultState.action,
       onChange: (checked) => props.onPatch(spec.path, checked),
     });
   }
@@ -359,35 +353,31 @@ function renderField(props: DreamingSettingsProps, spec: DreamingFieldSpec) {
     const provider = providerIdFromModelRef(defaultValue);
     return renderSettingsRow({
       title: t(spec.labelKey),
-      description: html`${t(spec.helpKey)} ${defaultState.description}`,
-      control: html`
-        ${defaultState.action}
-        ${renderModelPicker({
-          label: t(spec.labelKey),
-          value: text,
-          options: [
-            {
-              value: "",
-              label: defaultValue,
-              ...(provider ? { provider } : {}),
-            },
-          ],
-          disabled: props.disabled,
-          custom: {
-            label: t("cron.form.customModel"),
-            placeholder: spec.placeholderKey ? t(spec.placeholderKey) : "",
-            commit: "change",
+      description: html`${t(spec.helpKey)} ${defaultDescription}`,
+      control: renderModelPicker({
+        label: t(spec.labelKey),
+        value: text,
+        options: [
+          {
+            value: "",
+            label: defaultValue,
+            ...(provider ? { provider } : {}),
           },
-          onChange: (model) => props.onPatch(spec.path, model.trim() || undefined),
-        })}
-      `,
+        ],
+        disabled: props.disabled,
+        custom: {
+          label: t("cron.form.customModel"),
+          placeholder: spec.placeholderKey ? t(spec.placeholderKey) : "",
+          commit: "change",
+        },
+        onChange: (model) => props.onPatch(spec.path, model.trim() || undefined),
+      }),
     });
   }
   return renderSettingsRow({
     title: t(spec.labelKey),
-    description: html`${t(spec.helpKey)} ${defaultState.description}`,
+    description: html`${t(spec.helpKey)} ${defaultDescription}`,
     control: html`
-      ${defaultState.action}
       <input
         class="settings-input"
         type=${spec.kind === "number" ? "number" : "text"}
@@ -428,12 +418,10 @@ function renderField(props: DreamingSettingsProps, spec: DreamingFieldSpec) {
 export function renderDreamingSettings(props: DreamingSettingsProps): TemplateResult {
   const storageModeValue = readAtPath(props.dreaming, ["storage", "mode"]);
   const storageMode = normalizeStorageMode(storageModeValue);
-  const storageDefaultState = renderSettingsDefaultState({
-    value: t("memoryPage.dreaming.storage.modes.separate"),
-    overridden: hasAtPath(props.dreaming, ["storage", "mode"]),
-    disabled: props.disabled,
-    onReset: () => props.onPatch(["storage", "mode"], undefined),
-  });
+  const storageDefaultDescription = renderSettingsDefaultDescription(
+    t("memoryPage.dreaming.storage.modes.separate"),
+    hasAtPath(props.dreaming, ["storage", "mode"]),
+  );
   return html`
     ${renderSettingsSection(
       {
@@ -451,22 +439,19 @@ export function renderDreamingSettings(props: DreamingSettingsProps): TemplateRe
         ${renderSettingsRow({
           title: t("memoryPage.dreaming.storage.modeLabel"),
           description: html`
-            ${t("memoryPage.dreaming.storage.modeHelp")} ${storageDefaultState.description}
+            ${t("memoryPage.dreaming.storage.modeHelp")} ${storageDefaultDescription}
           `,
           stacked: true,
-          control: html`
-            ${storageDefaultState.action}
-            ${renderSettingsSegmented<StorageMode>({
-              value: storageMode,
-              options: STORAGE_MODES.map((mode) => ({
-                value: mode,
-                label: t(`memoryPage.dreaming.storage.modes.${mode}`),
-              })),
-              ariaLabel: t("memoryPage.dreaming.storage.modeLabel"),
-              disabled: props.disabled,
-              onChange: (mode) => props.onPatch(["storage", "mode"], mode),
-            })}
-          `,
+          control: renderSettingsSegmented<StorageMode>({
+            value: storageMode,
+            options: STORAGE_MODES.map((mode) => ({
+              value: mode,
+              label: t(`memoryPage.dreaming.storage.modes.${mode}`),
+            })),
+            ariaLabel: t("memoryPage.dreaming.storage.modeLabel"),
+            disabled: props.disabled,
+            onChange: (mode) => props.onPatch(["storage", "mode"], mode),
+          }),
         })}
         ${renderField(props, {
           kind: "toggle",

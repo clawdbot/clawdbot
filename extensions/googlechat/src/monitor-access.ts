@@ -2,7 +2,6 @@
 import {
   channelIngressRoutes,
   createChannelIngressResolver,
-  defineStableChannelIngressIdentity,
   type ChannelIngressContextBinding,
 } from "openclaw/plugin-sdk/channel-ingress-runtime";
 import type { ChannelBotLoopProtectionConfig } from "openclaw/plugin-sdk/config-contracts";
@@ -23,65 +22,9 @@ import {
 import type { ResolvedGoogleChatAccount } from "./accounts.js";
 import { sendGoogleChatMessage } from "./api.js";
 import { buildGoogleChatGroupPolicyScope } from "./group-policy.js";
+import { googleChatIngressIdentity, normalizeGoogleChatUserId } from "./ingress-identity.js";
 import type { GoogleChatCoreRuntime } from "./monitor-types.js";
 import type { GoogleChatAnnotation, GoogleChatMessage, GoogleChatSpace } from "./types.js";
-
-function normalizeUserId(raw?: string | null): string {
-  const trimmed = normalizeOptionalString(raw) ?? "";
-  if (!trimmed) {
-    return "";
-  }
-  return normalizeLowercaseStringOrEmpty(trimmed.replace(/^users\//i, ""));
-}
-
-const GOOGLECHAT_EMAIL_KIND = "plugin:googlechat-email" as const;
-
-function normalizeEntryValue(raw?: string | null): string {
-  return normalizeLowercaseStringOrEmpty(raw ?? "");
-}
-
-function normalizeGoogleChatStableEntry(entry: string): string | null {
-  const withoutProvider = normalizeEntryValue(entry).replace(
-    /^(googlechat|google-chat|gchat):/i,
-    "",
-  );
-  if (!withoutProvider) {
-    return null;
-  }
-  return withoutProvider.startsWith("users/") ? normalizeUserId(withoutProvider) : withoutProvider;
-}
-
-function normalizeGoogleChatEmailEntry(entry: string): string | null {
-  const withoutProvider = normalizeEntryValue(entry).replace(
-    /^(googlechat|google-chat|gchat):/i,
-    "",
-  );
-  if (withoutProvider.startsWith("users/")) {
-    return null;
-  }
-  const stable = normalizeGoogleChatStableEntry(entry);
-  return stable?.includes("@") ? stable : null;
-}
-
-const googleChatIngressIdentity = defineStableChannelIngressIdentity({
-  key: "sender-id",
-  normalizeEntry: normalizeGoogleChatStableEntry,
-  normalizeSubject: normalizeUserId,
-  aliases: [
-    {
-      key: "email",
-      kind: GOOGLECHAT_EMAIL_KIND,
-      normalizeEntry: normalizeGoogleChatEmailEntry,
-      normalizeSubject: normalizeEntryValue,
-      dangerous: true,
-    },
-  ],
-  isWildcardEntry: (entry) => normalizeEntryValue(entry) === "*",
-  resolveEntryId: ({ entryIndex, fieldKey }) =>
-    fieldKey === "stableId"
-      ? `entry-${entryIndex + 1}:user`
-      : `entry-${entryIndex + 1}:${fieldKey}`,
-});
 
 type GoogleChatGroupEntry = {
   requireMention?: boolean;
@@ -145,7 +88,7 @@ function extractMentionInfo(annotations: GoogleChatAnnotation[], botUser?: strin
     if (botTargets.has(userName)) {
       return true;
     }
-    return normalizeUserId(userName) === "app";
+    return normalizeGoogleChatUserId(userName) === "app";
   });
   return { hasAnyMention, wasMentioned };
 }

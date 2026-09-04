@@ -3,7 +3,11 @@ import type { GatewayBrowserClient } from "../../api/gateway.ts";
 import { t } from "../../i18n/index.ts";
 import { formatUiError } from "../../lib/format-error.ts";
 import type { AnnotationStroke } from "./browser-annotation.ts";
-import type { BrowserInspectedNode, BrowserPanelTab } from "./browser-client.ts";
+import type {
+  BrowserRequestClient,
+  BrowserInspectedNode,
+  BrowserPanelTab,
+} from "./browser-client.ts";
 import {
   captureBrowserScreenshot,
   closeBrowserTab,
@@ -11,6 +15,7 @@ import {
   focusBrowserTab,
   goBrowserHistory,
   isBrowserEvaluateDisabledError,
+  isBrowserNavigationBlockedError,
   listBrowserTabs,
   navigateBrowser,
   openBrowserTab,
@@ -26,6 +31,7 @@ import {
 } from "./browser-panel-operation-ownership.ts";
 import { BrowserPanelPendingInput } from "./browser-panel-pending-input.ts";
 import { loadBrowserPanelImage, type BrowserPanelView } from "./browser-panel-surface.ts";
+import { browserRouteKey, type BrowserRoute } from "./browser-target.ts";
 import { normalizeBrowserUrlDraft } from "./browser-url.ts";
 
 const ACTION_REFRESH_DELAY_MS = 350;
@@ -70,6 +76,7 @@ export class BrowserPanelController implements ReactiveController {
   }
 
   hostDisconnected(): void {
+    this.input.cancelOverlayPointerGesture();
     this.invalidateViewOperations();
     this.setState("loading", false);
   }
@@ -82,19 +89,38 @@ export class BrowserPanelController implements ReactiveController {
     this.host.requestUpdate();
   }
 
-  synchronizeHostProperties(changed: Map<string, unknown>): boolean {
-    if (!changed.has("client") && !changed.has("available")) {
-      return false;
-    }
+  synchronizeClient(): boolean {
     if (this.host.client !== this.activeClient) {
       this.activeClient = this.host.client;
+      this.operations.resetRoute();
       this.resetBrowserState();
-      if (this.host.browserPanelIsOpen() && this.host.available && this.host.client) {
-        void this.refreshAll();
-        return true;
-      }
+      return true;
     }
     return false;
+  }
+
+  get unavailableTabText(): string | null {
+    const reason = this.tabs.find((tab) => tab.id === this.activeTargetId)?.urlUnavailableReason;
+    return reason
+      ? t(
+          reason === "navigation_blocked"
+            ? "browser.navigationBlocked"
+            : "browser.navigationCheckFailed",
+        )
+      : null;
+  }
+
+  private clearUnavailableView(): boolean {
+    if (!this.unavailableTabText) {
+      return false;
+    }
+    this.invalidateViewOperations();
+    this.setState("view", null);
+    this.setState("loading", false);
+    this.setState("urlDraft", "");
+    this.setState("errorText", null);
+    this.exitCaptureModes();
+    return true;
   }
 
   private invalidateViewOperations(): void {
@@ -128,7 +154,9 @@ export class BrowserPanelController implements ReactiveController {
   }
 
   reportError(error: unknown): void {
-    const detail = formatUiError(error);
+    const detail = isBrowserNavigationBlockedError(error)
+      ? t("browser.navigationBlocked")
+      : formatUiError(error);
     this.setState("errorText", t("browser.errors.requestFailed", { error: detail }));
   }
 
@@ -142,8 +170,12 @@ export class BrowserPanelController implements ReactiveController {
     this.setState("loading", true);
     try {
       const snapshot = await listBrowserTabs(client);
+      // Tool results carry raw targets; preserve that selection when the list supplies its alias.
+      const selected = snapshot.tabs.find(
+        (tab) => tab.id === this.activeTargetId || tab.targetId === this.activeTargetId,
+      );
       const active =
-        snapshot.tabs.find((tab) => tab.id === this.activeTargetId) ?? snapshot.tabs[0];
+        selected ?? snapshot.tabs.find((tab) => !tab.urlUnavailableReason) ?? snapshot.tabs[0];
       if (!this.operations.acceptSnapshot(invocation, this.activeTargetId, active?.id ?? null)) {
         return;
       }
@@ -157,7 +189,7 @@ export class BrowserPanelController implements ReactiveController {
       if (!snapshot.running) {
         this.setState("view", null);
       }
-      if (this.activeTargetId !== null && active?.id !== this.activeTargetId) {
+      if (this.activeTargetId !== null && !selected) {
         this.invalidateViewOperations();
         invocation.epoch = this.operations.epoch;
         this.setState("view", null);
@@ -185,7 +217,10 @@ export class BrowserPanelController implements ReactiveController {
 
   private async refreshView(targetId: string, epoch = this.operations.epoch): Promise<void> {
     const client = this.operations.captureClient();
-    if (!client) {
+    if (!client || !this.operations.isLive(epoch, client) || this.activeTargetId !== targetId) {
+      return;
+    }
+    if (this.clearUnavailableView()) {
       return;
     }
     const current = this.operations.beginCapture(
@@ -208,6 +243,9 @@ export class BrowserPanelController implements ReactiveController {
         authToken: this.host.authToken,
         path: shot.path,
       });
+      if (!current()) {
+        return;
+      }
       const image = await loadBrowserPanelImage(dataUrl);
       const observedMetrics = await readBrowserPanelOwnedMetrics(
         client,
@@ -227,7 +265,14 @@ export class BrowserPanelController implements ReactiveController {
       // Tab snapshots can lag history and in-page navigation. Keep the stable
       // identity aligned with the document this capture owns.
       this.setState("tabs", this.operations.capturedTabs(this.tabs, targetId, metrics, shot.url));
-      this.setState("view", { targetId, dataUrl, image, url: shot.url, metrics });
+      this.setState("view", {
+        targetId,
+        dataUrl,
+        image,
+        url: shot.url,
+        metrics,
+        ...(this.operations.route ? { browserTab: { ...this.operations.route, targetId } } : {}),
+      });
       if (
         metrics &&
         this.observedViewportSize &&
@@ -241,7 +286,23 @@ export class BrowserPanelController implements ReactiveController {
       }
     } catch (error) {
       if (current()) {
-        this.reportError(error);
+        // A capture denial describes the selected tab; a denied navigation
+        // describes the destination and must keep the valid source screenshot.
+        if (isBrowserNavigationBlockedError(error)) {
+          this.setState(
+            "tabs",
+            this.tabs.map((tab) =>
+              tab.id === targetId
+                ? { ...tab, url: "", urlUnavailableReason: "navigation_blocked" }
+                : tab,
+            ),
+          );
+          if (!this.clearUnavailableView()) {
+            this.reportError(error);
+          }
+        } else {
+          this.reportError(error);
+        }
       }
     } finally {
       if (current()) {
@@ -252,7 +313,7 @@ export class BrowserPanelController implements ReactiveController {
   }
 
   async runAction(
-    action: (client: GatewayBrowserClient) => Promise<void>,
+    action: (client: BrowserRequestClient) => Promise<void>,
     refreshView = true,
   ): Promise<boolean> {
     const client = this.operations.captureClient();
@@ -451,7 +512,7 @@ export class BrowserPanelController implements ReactiveController {
   }
 
   private async refreshTabsOnly(
-    client: GatewayBrowserClient,
+    client: BrowserRequestClient,
     current: () => boolean,
   ): Promise<BrowserPanelSnapshotOutcome> {
     const invocation = this.operations.beginSnapshot(client);
@@ -463,6 +524,7 @@ export class BrowserPanelController implements ReactiveController {
       ) {
         this.setState("running", snapshot.running);
         this.setState("tabs", this.operations.retainTabSnapshot(client, snapshot.tabs));
+        this.clearUnavailableView();
         return "accepted";
       }
       return "rejected";
@@ -473,8 +535,11 @@ export class BrowserPanelController implements ReactiveController {
     }
   }
 
-  async selectTab(targetId: string): Promise<void> {
-    if (targetId === this.activeTargetId) {
+  async selectTab(targetId: string, route?: BrowserRoute): Promise<void> {
+    if (route && browserRouteKey(this.operations.route) !== browserRouteKey(route)) {
+      this.operations.resetRoute(route);
+      this.resetBrowserState();
+    } else if (targetId === this.activeTargetId && !route) {
       return;
     }
     const client = this.operations.captureClient();
@@ -484,11 +549,38 @@ export class BrowserPanelController implements ReactiveController {
     this.setState("activeTargetId", targetId);
     this.setState("view", null);
     this.exitCaptureModes();
+    if (!route && this.clearUnavailableView()) {
+      return;
+    }
     const focused = await this.runAction(async (actionClient) => {
-      await focusBrowserTab(actionClient, targetId);
-      await this.refreshView(targetId);
-      if (this.activeTargetId === targetId && this.view?.targetId === targetId) {
-        this.operations.markNavigationReconciled(actionClient, targetId);
+      if (route) {
+        // Listing is safe for blocked tabs; focus is not. Resolve the alias and
+        // current access observation before attempting to activate the target.
+        await this.refreshTabsOnly(actionClient, () => this.operations.isLive(epoch, actionClient));
+        if (!this.operations.isLive(epoch, actionClient)) {
+          return;
+        }
+        const selected = this.tabs.find((tab) => tab.id === targetId || tab.targetId === targetId);
+        this.setState("activeTargetId", selected?.id ?? targetId);
+        if (this.clearUnavailableView()) {
+          return;
+        }
+      }
+      const selectedTargetId = this.activeTargetId;
+      if (!selectedTargetId) {
+        return;
+      }
+      await focusBrowserTab(actionClient, selectedTargetId);
+      if (!this.operations.isLive(epoch, actionClient)) {
+        return;
+      }
+      await this.refreshView(selectedTargetId, epoch);
+      if (
+        this.operations.isLive(epoch, actionClient) &&
+        this.activeTargetId === selectedTargetId &&
+        this.view?.targetId === selectedTargetId
+      ) {
+        this.operations.markNavigationReconciled(actionClient, selectedTargetId);
       }
     }, false);
     if (!focused && this.operations.isLive(epoch) && this.activeTargetId === targetId) {
@@ -535,7 +627,7 @@ export class BrowserPanelController implements ReactiveController {
         }
         return;
       }
-      const next = this.tabs[0] ?? null;
+      const next = this.tabs.find((tab) => !tab.urlUnavailableReason) ?? this.tabs[0] ?? null;
       this.invalidateViewOperations();
       this.setState("activeTargetId", next?.id ?? null);
       this.setState("view", null);
@@ -552,6 +644,10 @@ export class BrowserPanelController implements ReactiveController {
   /** Real page reload: re-navigate to the current URL, then re-capture. A bare
    * screenshot refresh would leave the remote document untouched. */
   reloadPage(): void {
+    if (this.unavailableTabText) {
+      void this.refreshAll();
+      return;
+    }
     const url = this.view?.metrics?.url || this.view?.url || this.urlDraft;
     const normalized = normalizeBrowserUrlDraft(url);
     if (!this.activeTargetId) {
@@ -566,7 +662,7 @@ export class BrowserPanelController implements ReactiveController {
 
   goHistory(delta: -1 | 1): void {
     const targetId = this.activeTargetId;
-    if (!targetId) {
+    if (!targetId || !this.view) {
       return;
     }
     void this.runAction((client) => goBrowserHistory(client, { targetId, delta }));
@@ -583,9 +679,12 @@ export class BrowserPanelController implements ReactiveController {
   beginNewTab(): void {
     this.setState("pendingNewTab", true);
     this.setState("urlDraft", "");
-    void this.host.updateComplete.then(() =>
-      this.host.renderRoot.querySelector<HTMLInputElement>(".bp-url")?.focus(),
-    );
+    const epoch = this.operations.epoch;
+    void this.host.updateComplete.then(() => {
+      if (this.operations.isLive(epoch)) {
+        this.host.renderRoot.querySelector<HTMLInputElement>(".bp-url")?.focus();
+      }
+    });
   }
 
   setUrlDraft(value: string): void {
@@ -647,8 +746,12 @@ export class BrowserPanelController implements ReactiveController {
     this.input.handleOverlayPointerMove(event);
   }
 
-  handleOverlayPointerUp(): void {
-    this.input.handleOverlayPointerUp();
+  handleOverlayPointerUp(event: PointerEvent): void {
+    this.input.handleOverlayPointerUp(event);
+  }
+
+  cancelOverlayPointerGesture(): void {
+    this.input.cancelOverlayPointerGesture();
   }
 
   undoStroke(): void {

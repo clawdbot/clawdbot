@@ -2,7 +2,11 @@
 import { isUtf8 } from "node:buffer";
 import { randomUUID } from "node:crypto";
 import { URL } from "node:url";
-import { normalizeRequestInitHeadersForFetch } from "../infra/fetch-headers.js";
+import {
+  isHeadersLike,
+  normalizeRequestInitHeadersForFetch,
+  type HeadersLike,
+} from "../infra/fetch-headers.js";
 import { readChunkWithIdleTimeout } from "../infra/http-body.js";
 import {
   hasRegisteredSecretValuesForRedaction,
@@ -475,7 +479,7 @@ export function captureHttpExchange(
   params: {
     url: string;
     method: string;
-    requestHeaders?: Headers | Record<string, string> | undefined;
+    requestHeaders?: HeadersLike | Record<string, string> | undefined;
     requestBody?: BodyInit | Buffer | string | null;
     response: Response;
     transport?: "http" | "sse";
@@ -498,10 +502,11 @@ export function captureHttpExchange(
     typeof params.requestBody === "string" || Buffer.isBuffer(params.requestBody)
       ? params.requestBody
       : null;
-  const rawRequestContentType =
-    params.requestHeaders instanceof Headers
+  const rawRequestContentType = params.requestHeaders
+    ? isHeadersLike(params.requestHeaders)
       ? (params.requestHeaders.get("content-type") ?? undefined)
-      : params.requestHeaders?.["content-type"];
+      : params.requestHeaders["content-type"]
+    : undefined;
   const requestContentType =
     rawRequestContentType === undefined ? undefined : redactCaptureText(rawRequestContentType);
   const rawResponseContentType =

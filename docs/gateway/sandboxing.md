@@ -6,7 +6,7 @@ read_when: "You want a dedicated explanation of sandboxing or need to tune agent
 status: active
 ---
 
-OpenClaw can run tool execution inside a sandbox backend to reduce blast radius. Sandboxing is off by default and controlled by `agents.defaults.sandbox` (global) or `agents.entries.*.sandbox` (per-agent). The Gateway process always stays on the host; only tool execution moves into the sandbox when enabled.
+OpenClaw can run tool execution inside a sandbox backend to reduce blast radius. Sandboxing is off by default and controlled by `agents.defaults.sandbox` (global), `agents.entries.*.sandbox` (per-agent), or a required creator-role sandbox policy. The Gateway process always stays on the host; only tool execution moves into the sandbox when enabled.
 
 <Note>
 This is not a perfect security boundary, but it materially limits filesystem and process access when the model does something dumb.
@@ -20,7 +20,7 @@ This is not a perfect security boundary, but it materially limits filesystem and
 Not sandboxed:
 
 - The Gateway process itself.
-- Any tool explicitly allowed to run outside the sandbox via `tools.elevated`. Elevated exec bypasses sandboxing and runs on the configured escape path (`gateway` by default, or `node` when the exec target is `node`). If sandboxing is off, `tools.elevated` changes nothing since exec already runs on the host. See [Elevated Mode](/tools/elevated).
+- Any tool explicitly allowed to run outside an ordinary sandbox via `tools.elevated`. Elevated exec uses the configured escape path (`gateway` by default, or `node` when the exec target is `node`), but cannot escape a session whose creator role requires sandboxing. If sandboxing is off, `tools.elevated` changes nothing since exec already runs on the host. See [Elevated Mode](/tools/elevated).
 
 ## Modes, scope, and backend
 
@@ -34,15 +34,40 @@ Three independent settings control sandbox behavior:
 
 **Mode** controls when sandboxing applies:
 
-- `off`: no sandboxing.
+- `off`: no agent-wide sandboxing; sessions whose creator role requires a sandbox still run sandboxed.
 - `non-main`: sandbox every session except the agent's main session. The main session key is always `agent:<agentId>:main` (or `global` when `session.scope` is `"global"`); it is not configurable. Group/channel sessions use their own keys, so they always count as non-main and get sandboxed.
 - `all`: every session runs in a sandbox.
+
+Set a named operator role's `sandbox` policy to `"required"` to sandbox that
+role's newly created sessions regardless of agent mode. The creator requirement
+is immutable for the session; unavailable backends fail closed, and elevated
+execution or Gateway/node host overrides cannot bypass it. The default
+`"inherit"` preserves existing agent-mode behavior. See
+[Named operator roles](/gateway/operator-scopes#named-operator-roles).
 
 **Scope** controls how many containers/environments are created:
 
 - `agent`: one container per agent.
 - `session`: one container per session.
 - `shared`: one container shared by all sandboxed sessions (per-agent `docker`/`ssh`/`browser` overrides are ignored under this scope).
+
+Required sandboxes with proven Gateway-profile creators use that profile as
+their isolation boundary. Different guests on the same agent receive separate
+environments and workspaces, regardless of configured scope. Sessions created
+by the same profile reuse its existing environment and workspace, including
+when the configured scope is `session`; this upgrade does not rekey those paths.
+Channel, unknown, and other non-profile creators instead receive a separate
+required sandbox per canonical session. A matching raw ID cannot reuse a
+profile's resources. Required sandboxing and the read-only workspace cap remain
+in force; backend failure never falls back to host execution.
+Sessions without a role-required sandbox keep the configured scope behavior.
+
+The [creator namespace migration](/reference/database-schemas#creator-namespace-migration)
+does not delete or adopt old ambiguous workspaces or containers. Such sessions
+start with separate resources after upgrade. Preserve any needed old data
+before normal sandbox retention or manual cleanup, then recover selected files
+explicitly as an operator; do not copy an entire ambiguous environment into a
+trusted profile workspace automatically.
 
 Non-shared runtime identity also includes the resolved agent workspace path. This prevents co-hosted workspaces that reuse the same agent or session keys from sharing Docker, browser, SSH, OpenShell, or plugin-provided sandbox state. `shared` scope intentionally remains workspace-independent.
 
@@ -127,7 +152,7 @@ To expose host GPUs, set `agents.defaults.sandbox.docker.gpus` (or the per-agent
 If you deploy the OpenClaw Gateway itself as a Docker container, it orchestrates sibling sandbox containers using the host's Docker socket (DooD). This introduces a path mapping constraint:
 
 - **Config requires host paths**: `openclaw.json` `workspace` must contain the **host's absolute path** (e.g. `/home/user/.openclaw/workspaces`), not the internal Gateway container path. The Docker daemon evaluates paths relative to the host OS namespace, not the Gateway's own namespace.
-- **Matching volume map required**: The Gateway process also writes heartbeat and bridge files to that `workspace` path. Give the Gateway container an identical volume map (`-v /home/user/.openclaw:/home/user/.openclaw`) so the same host path resolves correctly from inside the Gateway container too. Mismatched mappings surface as `EACCES` when the Gateway tries to write its heartbeat.
+- **Matching volume map required**: The Gateway process also writes bridge files to that `workspace` path. Give the Gateway container an identical volume map (`-v /home/user/.openclaw:/home/user/.openclaw`) so the same host path resolves correctly from inside the Gateway container too. Mismatched mappings surface as `EACCES` when the Gateway writes workspace files.
 - **Codex code mode**: when an OpenClaw sandbox is active, OpenClaw disables Codex app-server native Code Mode, user MCP servers, and app-backed plugin execution for that turn (those run from the Gateway-host app-server process, not the OpenClaw sandbox backend), unless the sandbox tool policy exposes the required tools and you opt into the experimental sandbox exec-server path. Shell access then routes through OpenClaw sandbox-backed tools such as `sandbox_exec` and `sandbox_process`. Do not mount the host Docker socket into agent sandbox containers or custom Codex sandboxes. See [Codex Harness](/plugins/codex-harness) for the full behavior.
 
 On Ubuntu/AppArmor hosts with Docker sandbox mode enabled, Codex app-server `workspace-write` shell execution needs unprivileged user namespaces inside the sandbox container, and this can fail before shell startup when the service user cannot create them. This needs an unprivileged network namespace too when Docker sandbox egress is disabled (`network: "none"`, the default). Common symptoms: `bwrap: setting up uid map: Permission denied` and `bwrap: loopback: Failed RTM_NEWADDR: Operation not permitted`. Run `openclaw doctor`; if it reports a Codex bwrap namespace probe failure, prefer an AppArmor profile that grants the required namespaces to the OpenClaw service process. `kernel.apparmor_restrict_unprivileged_userns=0` is a host-wide fallback with security tradeoffs; use it only when that host posture is acceptable.
@@ -189,7 +214,7 @@ Podman notes:
 
 A containerized Gateway creates sibling sandboxes through the host's local Podman engine or Podman Machine.
 
-- **Use host paths consistently**: configure `workspace` with its host absolute path, then mount the complete state root and workspace into the Gateway at those same paths. Otherwise the sandbox may mount the workspace while the Gateway cannot write heartbeat or skill-workspace files.
+- **Use host paths consistently**: configure `workspace` with its host absolute path, then mount the complete state root and workspace into the Gateway at those same paths. Otherwise the sandbox may mount the workspace while the Gateway cannot write skill-workspace files.
 - **Podman Machine setup**: bind sources must be under the host home directory. Set the Gateway `HOME` to that path and point `OPENCLAW_HOME`, `OPENCLAW_STATE_DIR`, and `OPENCLAW_CONFIG_DIR` at the canonical mounted state root. The image needs a compatible Podman client, its named connection and SSH identity, plus a dedicated writable SSH directory for known-host metadata.
 - **Keep Podman access Gateway-only**: never mount the engine socket, connection material, or SSH identity into agent sandboxes. Arbitrary remote connections are unsupported; use the SSH backend instead.
 
@@ -198,6 +223,13 @@ A containerized Gateway creates sibling sandboxes through the host's local Podma
 ## SSH backend
 
 Use `backend: "ssh"` to sandbox `exec`, file tools, and media reads on an arbitrary SSH-accessible machine.
+
+The remote environment must provide `/bin/sh`, `python3`, and GNU-compatible
+`stat` (`-c`) and `readlink` (`-f`) for the filesystem bridge. These utilities
+must be available to the non-interactive SSH command, not just an interactive
+login shell. The Gateway host does not need these remote utilities: a macOS or
+Windows Gateway can use an SSH target that supplies them. This is a remote
+utility contract, not a Linux-only Gateway requirement.
 
 ```json5
 {
@@ -273,18 +305,30 @@ For the full prerequisites, configuration reference, workspace-mode comparison, 
 
 `agents.defaults.sandbox.workspaceAccess` controls what the sandbox can see:
 
-| Value            | Behavior                                                                                  |
-| ---------------- | ----------------------------------------------------------------------------------------- |
-| `none` (default) | Tools see an isolated sandbox workspace under `~/.openclaw/sandboxes`.                    |
-| `ro`             | Mounts the agent workspace read-only at `/agent` (disables `write`/`edit`/`apply_patch`). |
-| `rw`             | Mounts the agent workspace read/write at `/workspace`.                                    |
+| Value            | Behavior                                                                                                                  |
+| ---------------- | ------------------------------------------------------------------------------------------------------------------------- |
+| `none` (default) | Tools can read and write an isolated sandbox workspace under `~/.openclaw/sandboxes`; the agent workspace is not exposed. |
+| `ro`             | Mounts the agent workspace read-only at `/agent` (disables `write`/`edit`/`apply_patch`).                                 |
+| `rw`             | Mounts the agent workspace read/write at `/workspace`.                                                                    |
 
-With the OpenShell backend, `mirror` mode still uses the local workspace as the canonical source between exec turns, `remote` mode uses the remote OpenShell workspace as canonical after the initial seed, and `workspaceAccess: "ro"`/`"none"` still restrict write behavior the same way.
+For a role-required sandbox, OpenClaw caps configured `rw` workspace access at
+`ro` and logs an `agent/sandbox` warning. The guest keeps a separate sandbox
+workspace, while the shared agent workspace is available only as a read-only
+mount. This prevents guests from sharing the writable agent workspace; `none`
+and `ro` remain unchanged. Sessions without a role-required sandbox retain their
+configured workspace access.
+
+With the OpenShell backend, `mirror` mode still uses the local workspace as the canonical source between exec turns, and `remote` mode uses the remote OpenShell workspace as canonical after the initial seed. The same access rules apply: `none` permits private workspace writes, while `ro` disables writes.
 
 Inbound media is copied into the active sandbox workspace (`media/inbound/*`).
 
 <Note>
-**Skills**: the `read` tool is sandbox-rooted. With `workspaceAccess: "none"`, OpenClaw mirrors eligible skills into the sandbox workspace (`.../skills`) so they can be read. With `"rw"`, workspace skills are readable from `/workspace/skills`, and eligible managed, bundled, or plugin skills are materialized into the generated read-only path `/workspace/.openclaw/sandbox-skills/skills`.
+**Skills**: the `read` tool is sandbox-rooted. With `workspaceAccess: "none"`, OpenClaw mirrors eligible skills into the sandbox workspace (`.../skills`) as read-only instruction roots; other private workspace files remain writable. With `"rw"`, workspace skills are readable from `/workspace/skills`, and eligible managed, bundled, or plugin skills are materialized into the generated read-only path `/workspace/.openclaw/sandbox-skills/skills`.
+
+Local container mounts and sandbox file tools enforce these read-only roots.
+SSH and OpenShell shell execution relies on the remote host or OpenShell policy
+for filesystem restrictions; `workspaceAccess` alone does not make remote shell
+paths read-only.
 </Note>
 
 ## Multiple folders for one agent
@@ -331,12 +375,12 @@ This example gives the `research` agent a writable primary workspace, read-only 
 
 `workspaceAccess` and bind modes are independent:
 
-| Setting                          | Controls                                                                    |
-| -------------------------------- | --------------------------------------------------------------------------- |
-| `workspaceAccess: "none"`        | Uses an isolated sandbox workspace; does not expose the agent workspace.    |
-| `workspaceAccess: "ro"`          | Mounts the agent workspace read-only at `/agent`.                           |
-| `workspaceAccess: "rw"`          | Mounts the agent workspace read/write at `/workspace`.                      |
-| `docker.binds` entry `:ro`/`:rw` | Controls only that additional host folder at its configured container path. |
+| Setting                          | Controls                                                                         |
+| -------------------------------- | -------------------------------------------------------------------------------- |
+| `workspaceAccess: "none"`        | Uses a writable isolated sandbox workspace; does not expose the agent workspace. |
+| `workspaceAccess: "ro"`          | Mounts the agent workspace read-only at `/agent`.                                |
+| `workspaceAccess: "rw"`          | Mounts the agent workspace read/write at `/workspace`.                           |
+| `docker.binds` entry `:ro`/`:rw` | Controls only that additional host folder at its configured container path.      |
 
 Changing `workspaceAccess` does not change an additional bind from `ro` to `rw`, or vice versa. Global and per-agent `docker.binds` are merged. Keep `scope: "agent"` or `"session"` for per-agent binds; `scope: "shared"` ignores all per-agent Docker overrides and uses only global binds.
 
@@ -443,7 +487,13 @@ commands shown below instead.
     scripts/sandbox-common-setup.sh
     ```
 
-    From an npm install, build the default image first (see above), then build the common image on top using [`scripts/docker/sandbox/Dockerfile.common`](https://github.com/openclaw/openclaw/blob/main/scripts/docker/sandbox/Dockerfile.common) from the repository.
+    From an npm install, build the default image first (see above). Download [`scripts/docker/sandbox/Dockerfile.common`](https://github.com/openclaw/openclaw/blob/main/scripts/docker/sandbox/Dockerfile.common) and the root [`package.json`](https://github.com/openclaw/openclaw/blob/main/package.json) from the same OpenClaw commit or tag into an empty directory. Keep their filenames, then run from that directory:
+
+    ```bash
+    docker build -t openclaw-sandbox-common:bookworm-slim -f Dockerfile.common .
+    ```
+
+    `package.json` supplies the pinned pnpm version and must be in the build context, even with `--build-arg INSTALL_PNPM=0`. It is a read-only build input; you do not need a source checkout or a host pnpm installation.
 
     Then set `agents.defaults.sandbox.docker.image` to `openclaw-sandbox-common:bookworm-slim`.
 
@@ -465,11 +515,12 @@ By default, local container sandboxes run with **no network**. Override with `ag
 The default-off [secret egress proxy](/gateway/secrets#secret-egress-proxy) is Gateway-loopback only. Sandbox exec receives neither its proxy/CA environment nor protected sentinels. Sandbox/container proxy reachability is not implemented; do not enable sandbox networking expecting secret substitution to work in this release.
 
 <Note>
-Package installation and certificate-store changes are image provisioning, not
-normal sandbox-turn behavior. The defaults deliberately combine no network,
-a read-only root filesystem, and a non-root image user, so an in-turn package
-install should fail. Prefer a custom image that already contains packages and
-private certificate roots. If a Node process needs a private CA, also configure
+System package installation and certificate-store changes are image provisioning,
+not normal sandbox-turn behavior. The defaults deliberately combine no network,
+a read-only root filesystem, and a non-root image user, so an in-turn system package
+install should fail. Project-local dependencies can be installed in a writable
+workspace when the operator enables network egress. Prefer a custom image that
+already contains system packages and private certificate roots. If a Node process needs a private CA, also configure
 the CA path for Node, for example with `NODE_EXTRA_CA_CERTS`, through the custom
 image or `sandbox.docker.env`.
 </Note>
@@ -531,7 +582,7 @@ Paths:
       preserves workspace ownership. Rootless Podman rejects zero-valued users;
       bake packages into the image or use rootful Podman.
     - Sandbox exec does **not** inherit host `process.env`. Use `agents.defaults.sandbox.docker.env` (or a custom image) for skill API keys.
-    - Values in `agents.defaults.sandbox.docker.env` are passed as explicit container environment variables. Anyone with access to the selected container engine can inspect them with metadata commands such as `docker inspect` or `podman inspect`. Use a custom image, mounted secret file, or another secret delivery path if that metadata exposure is not acceptable.
+    - Values in `agents.defaults.sandbox.docker.env` remain visible through container metadata commands such as `docker inspect` or `podman inspect`. Docker and Podman require portable environment names and single-line, non-NUL values because secure engine environment files are line-delimited; config validation and `openclaw doctor` reject invalid entries before sandbox use. Rename invalid keys, use single-line values, or deliver multiline material through a mounted file or custom image; this requires manual remediation because `doctor --fix` cannot safely preserve the original value. SSH and OpenShell backends still support multiline values. Use a custom image, mounted secret file, or another secret delivery path if metadata exposure is not acceptable.
 
   </Accordion>
 </AccordionGroup>

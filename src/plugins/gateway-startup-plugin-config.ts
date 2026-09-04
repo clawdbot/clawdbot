@@ -2,7 +2,6 @@
 import { collectConfiguredModelRefs } from "@openclaw/model-catalog-core/configured-model-refs";
 import { isRecord } from "@openclaw/normalization-core/record-coerce";
 import { normalizeOptionalLowercaseString } from "@openclaw/normalization-core/string-coerce";
-import { listAgentEntries } from "../agents/agent-scope-config.js";
 import { splitTrailingAuthProfile } from "../agents/model-ref-profile.js";
 import {
   listExplicitlyDisabledChannelIdsForConfig,
@@ -186,6 +185,7 @@ export function resolveAuthorizedGatewayStartupDreamingPluginIds(params: {
   const activationState = resolveEffectivePluginActivationState({
     id: selectedPlugin.pluginId,
     origin: selectedPlugin.origin,
+    channelIds: selectedPlugin.contributions?.channels,
     config: params.pluginsConfig,
     rootConfig: params.config,
     enabledByDefault: isPluginEnabledByDefaultForPlatform(selectedPlugin, params.platform),
@@ -389,54 +389,6 @@ export function collectConfiguredStartupChannelIds(params: {
       ambientEnvTriggers: params.ambientEnvTriggers,
       includePersistedAuthState: params.includePersistedAuthState,
     }),
-  ]);
-}
-
-function collectValidationHeartbeatTargetChannelIds(config: OpenClawConfig): string[] {
-  const channelIds: string[] = [];
-  const pushTarget = (target: unknown) => {
-    if (typeof target !== "string") {
-      return;
-    }
-    const normalized = normalizeOptionalLowercaseString(target);
-    if (!normalized || normalized === "owner" || normalized === "last" || normalized === "none") {
-      return;
-    }
-    channelIds.push(normalized);
-  };
-  pushTarget(config.agents?.defaults?.heartbeat?.target);
-  for (const agent of listAgentEntries(config)) {
-    pushTarget(agent?.heartbeat?.target);
-  }
-  return sortUniquePluginIds(channelIds);
-}
-
-function collectValidationChannelConfigIds(config: OpenClawConfig): string[] {
-  const channels = isRecord(config.channels) ? config.channels : null;
-  if (!channels) {
-    return [];
-  }
-  return Object.keys(channels)
-    .filter((channelId) => channelId !== "defaults" && channelId !== "modelByChannel")
-    .map((channelId) => normalizeOptionalLowercaseString(channelId) ?? "")
-    .filter(Boolean)
-    .toSorted((left, right) => left.localeCompare(right));
-}
-
-export function collectConfigValidationChannelIds(params: {
-  config: OpenClawConfig;
-  env: NodeJS.ProcessEnv;
-}): string[] {
-  return sortUniquePluginIds([
-    ...collectValidationChannelConfigIds(params.config),
-    ...collectConfiguredStartupChannelIds({
-      config: params.config,
-      activationSourceConfig: params.config,
-      env: params.env,
-      // Config reads and backup discovery must not create or migrate the state DB.
-      includePersistedAuthState: false,
-    }),
-    ...collectValidationHeartbeatTargetChannelIds(params.config),
   ]);
 }
 

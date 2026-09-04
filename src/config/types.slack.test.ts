@@ -36,7 +36,7 @@ const slackStreamingConfig = {
       streaming: {
         mode: "progress",
         nativeTransport: true,
-        progress: { nativeTaskCards: true },
+        progress: { style: "compact", nativeTaskCards: true },
       },
     },
   },
@@ -49,7 +49,8 @@ describe("Slack config types", () => {
     });
   });
 
-  it("extends generic streaming config with native task cards", () => {
+  it("extends generic streaming config with Slack progress presentation", () => {
+    expect(slackStreamingConfig.channels.slack.streaming.progress.style).toBe("compact");
     expect(slackStreamingConfig.channels.slack.streaming.progress.nativeTaskCards).toBe(true);
   });
 });

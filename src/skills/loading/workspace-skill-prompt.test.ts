@@ -254,21 +254,17 @@ describe("applySkillsPromptLimits (via buildWorkspaceSkillsPrompt)", () => {
     expect(prompt.length).toBeLessThanOrEqual(expected.length);
   });
 
-  it("budgets the final rendered prompt including versions and limit notices", () => {
-    const skills = Array.from({ length: 24 }, (_, i) => ({
-      ...makeSkill(`skill-${i}`, "A".repeat(160)),
-      promptVersion: `sha256:${String(i).padStart(16, "0")}`,
-    }));
+  it("budgets the final rendered prompt including limit notices", () => {
+    const skills = Array.from({ length: 24 }, (_, i) => makeSkill(`skill-${i}`, "A".repeat(160)));
     const budget = 2_200;
 
     const prompt = buildPrompt(skills, { maxChars: budget });
 
     expect(prompt.length).toBeLessThanOrEqual(budget);
-    expect(prompt).toContain("<version>sha256:");
     expect(prompt).toContain("included");
   });
 
-  it("keeps no-skill catalogs empty instead of emitting version guidance", () => {
+  it("keeps no-skill catalogs empty", () => {
     const prompt = buildWorkspaceSkillsPrompt("/fake", {
       entries: [],
     });
@@ -403,6 +399,23 @@ describe("compactSkillPaths", () => {
     expect(prompt).toContain("~/");
     expect(prompt).toContain("test-skill");
     expect(prompt).toContain("A test skill for path compaction");
+  });
+
+  it("refreshes home prefixes for each prompt catalog", () => {
+    const root = path.parse(os.homedir()).root;
+    for (const name of ["first-home", "second-home"]) {
+      const home = path.join(root, "openclaw-compact-test", name);
+      const prompt = withEnv({ HOME: home, OPENCLAW_HOME: undefined }, () =>
+        buildPromptForFixtureSkill({
+          workspaceRoot: home,
+          skillDir: path.join(home, "skills", "dynamic-home"),
+          name: "dynamic-home",
+          description: "Per-catalog home resolution",
+        }),
+      );
+      expect(prompt).toContain("<location>~/skills/dynamic-home/SKILL.md</location>");
+      expect(prompt).not.toContain(home);
+    }
   });
 
   it("does not compact explicit state-root managed skill paths to OS-home tilde paths", () => {

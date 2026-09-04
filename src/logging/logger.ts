@@ -20,10 +20,7 @@ import {
 } from "../infra/diagnostic-trace-context.js";
 import { expandHomePrefix } from "../infra/home-dir.js";
 import { isBlockedObjectKey } from "../infra/prototype-keys.js";
-import {
-  DEFAULT_POSIX_TMP_ROOT,
-  resolvePreferredOpenClawTmpDir,
-} from "../infra/tmp-openclaw-dir.js";
+import { DEFAULT_POSIX_TMP_ROOT } from "../infra/tmp-openclaw-dir.js";
 import { invalidateLoggingConfigCache, readLoggingConfig } from "./config.js";
 import { resolveEnvLogLevelOverride } from "./env-log-level.js";
 import { type LogLevel, levelToMinLevel, normalizeLogLevel } from "./levels.js";
@@ -42,18 +39,8 @@ import { formatTimestamp } from "./timestamps.js";
 import type { LoggerSettings } from "./types.js";
 export type { LoggerSettings } from "./types.js";
 
-function resolveDefaultLogDir(): string {
-  return canUseNodeFs() ? resolvePreferredOpenClawTmpDir() : DEFAULT_POSIX_TMP_ROOT;
-}
-
-function resolveDefaultLogFile(defaultLogDir: string): string {
-  return canUseNodeFs()
-    ? path.join(defaultLogDir, "openclaw.log")
-    : `${DEFAULT_POSIX_TMP_ROOT}/openclaw.log`;
-}
-
-export const DEFAULT_LOG_DIR = resolveDefaultLogDir();
-export const DEFAULT_LOG_FILE = resolveDefaultLogFile(DEFAULT_LOG_DIR); // legacy single-file path
+export const DEFAULT_LOG_DIR = DEFAULT_POSIX_TMP_ROOT;
+export const DEFAULT_LOG_FILE = `${DEFAULT_LOG_DIR}/openclaw.log`; // legacy single-file path
 
 const MAX_LOG_AGE_MS = 24 * 60 * 60 * 1000; // 24h
 const DEFAULT_MAX_LOG_FILE_BYTES = 100 * 1024 * 1024; // 100 MB
@@ -382,22 +369,10 @@ function resolveLogTraceContext(
     : { trustedTraceContext: false };
 }
 
-function buildTraceFileLogFields(logObj: TsLogRecord): Record<string, string> | undefined {
+function buildFileLogFields(logObj: TsLogRecord): Record<string, string> {
   const { bindings, args } = extractLogBindingPrefix(getSortedNumericLogArgs(logObj));
+  // Message serialization can invoke caller code; capture the normalized trace first.
   const { trace } = resolveLogTraceContext(bindings, args);
-  if (!trace) {
-    return undefined;
-  }
-  return {
-    traceId: trace.traceId,
-    ...(trace.spanId ? { spanId: trace.spanId } : {}),
-    ...(trace.parentSpanId ? { parentSpanId: trace.parentSpanId } : {}),
-    ...(trace.traceFlags ? { traceFlags: trace.traceFlags } : {}),
-  };
-}
-
-function buildStructuredFileLogFields(logObj: TsLogRecord): Record<string, string> {
-  const { bindings, args } = extractLogBindingPrefix(getSortedNumericLogArgs(logObj));
   const structuredArg = isPlainLogRecordObject(args[0]) ? args[0] : undefined;
   const sources = [structuredArg, bindings, logObj];
   const messageArgs =
@@ -412,6 +387,7 @@ function buildStructuredFileLogFields(logObj: TsLogRecord): Record<string, strin
     ...(agentId ? { agent_id: agentId } : {}),
     ...(sessionId ? { session_id: sessionId } : {}),
     ...(channel ? { channel } : {}),
+    ...trace,
   };
 }
 
@@ -532,7 +508,7 @@ function resolveDefaultActiveLogFile(): string {
       `${LOG_PREFIX}-vitest-${process.pid}-${formatLocalDate(new Date())}${LOG_SUFFIX}`,
     );
   }
-  return resolveDefaultRollingLogFile({ logDir: DEFAULT_LOG_DIR });
+  return resolveDefaultRollingLogFile();
 }
 
 function resolveSettings(): ResolvedRuntimeSettings {
@@ -551,7 +527,7 @@ function resolveSettings(): ResolvedRuntimeSettings {
   if (canUseSilentVitestFileLogFastPath(envLevel)) {
     return {
       level: "silent",
-      file: resolveDefaultRollingLogFile({ logDir: DEFAULT_LOG_DIR }),
+      file: resolveDefaultRollingLogFile(),
       maxFileBytes: DEFAULT_MAX_LOG_FILE_BYTES,
       rolling: true,
     };
@@ -563,9 +539,9 @@ function resolveSettings(): ResolvedRuntimeSettings {
     process.env.VITEST === "true" && process.env.OPENCLAW_TEST_FILE_LOG !== "1" ? "silent" : "info";
   const fromConfig = normalizeLogLevel(cfg?.level, defaultLevel);
   const level = envLevel ?? fromConfig;
-  const file = cfg?.file ?? resolveDefaultActiveLogFile();
-  const maxFileBytes = resolveMaxLogFileBytes(cfg?.maxFileBytes);
   const rolling = cfg?.file ? isLegacyRollingLogFilePath(cfg.file) : true;
+  const file = resolveActiveLogFileWithMode(cfg?.file ?? resolveDefaultActiveLogFile(), rolling);
+  const maxFileBytes = resolveMaxLogFileBytes(cfg?.maxFileBytes);
   return { level, file, maxFileBytes, rolling };
 }
 
@@ -625,22 +601,20 @@ function buildLogger(settings: ResolvedRuntimeSettings): TsLogger<LogObj> {
         }
       }
       const time = formatTimestamp(logObj.date ?? new Date(), { style: "long" });
-      const traceFields = buildTraceFileLogFields(logObj as TsLogRecord);
-      const structuredFields = buildStructuredFileLogFields(logObj as TsLogRecord);
+      const fields = buildFileLogFields(logObj as TsLogRecord);
       const record = {
         ...logObj,
         _meta: withResolvedLogMetaHostname(
           logObj["_meta"],
-          expectDefined(structuredFields.hostname, "structured log hostname"),
+          expectDefined(fields.hostname, "structured log hostname"),
         ),
         time,
-        ...structuredFields,
-        ...traceFields,
+        ...fields,
       };
       const line = redactSensitiveText(JSON.stringify(redactLogRecordForTransport(record)));
       fileLogTransport.enqueue({
         file: activeFile,
-        hostname: expectDefined(structuredFields.hostname, "structured log hostname"),
+        hostname: expectDefined(fields.hostname, "structured log hostname"),
         maxFileBytes: settings.maxFileBytes,
         payload: `${line}\n`,
       });
@@ -799,5 +773,3 @@ function pruneOldRollingLogs(dir: string): void {
     // ignore missing dir or read errors
   }
 }
-
-/* oxlint-disable max-lines -- TODO: split this grandfathered oversized file. */

@@ -9,7 +9,7 @@ export {
   dedupeDreamDiaryEntries,
   removeBackfillDiaryEntries,
   writeBackfillDiaryEntries,
-} from "./src/dreaming-narrative.js";
+} from "./src/dreaming-dreams-file.js";
 export { previewGroundedRemMarkdown } from "./src/rem-evidence.js";
 export { filterRecallEntriesWithinLookback } from "./src/dreaming-phases.js";
 export { previewRemHarness } from "./src/rem-harness.js";
@@ -21,3 +21,4 @@ export {
   pluginStateIsolatedDoctorCheckIds,
   registerMemoryCoreDoctorChecks,
 } from "./src/doctor-health.js";
+export { MISSING_LOCAL_MEMORY_EMBEDDING_PROVIDER_MESSAGE } from "./src/memory/local-embedding-provider.js";

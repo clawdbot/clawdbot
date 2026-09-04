@@ -1,27 +1,36 @@
 import { compareChatQueueOrder } from "../../lib/chat/chat-queue-order.ts";
 import type { ChatQueueItem } from "../../lib/chat/chat-types.ts";
-import { subscribeStoredChatOutboxChanges } from "../../lib/chat/outbox-store.ts";
+import {
+  outboxPayloadMatchesOwner,
+  observeOutboxRecoveryOwner,
+} from "../../lib/chat/outbox-payload-store.runtime.ts";
+import {
+  applyStoredChatOutboxScope,
+  subscribeStoredChatOutboxChanges,
+} from "../../lib/chat/outbox-store.ts";
+import { resolveUiConversationIdentity } from "../../lib/sessions/session-key.ts";
 import { getSafeSessionStorage } from "../../local-storage.ts";
+import { getChatAttachmentDataUrl } from "./attachment-payload-store.ts";
 import {
   listStoredChatOutboxes,
-  resolveStoredChatOutboxScope,
+  updateStoredChatComposerQueueItem,
   storedChatOutboxScopeKey,
   type ChatComposerScope as Composer,
   type StoredChatOutboxScope as Scope,
 } from "./composer-persistence.ts";
+import {
+  captureOutboxPayloadOwner,
+  failOutboxPayload,
+  prepareOutboxPayload,
+} from "./outbox-payloads.ts";
 type Host = Composer & { chatQueue: ChatQueueItem[]; sessionKey: string; requestUpdate?(): void };
 type HostProjection = {
-  byScope: Map<string, ChatQueueItem[]>;
+  byScope: Map<string, { scope: Scope; queue: ChatQueueItem[] }>;
   durableSeen: Set<string>;
   retryable: Set<string>;
 };
-type LiveProjection = {
-  confirmationGrace?: { deadlineMs: number; deliveryVersion: string };
-  item: ChatQueueItem;
-  owner: Host;
-};
+type LiveProjection = { item: ChatQueueItem; owner: Host };
 const LIVE_VERSION_KEYS = ["sendRunId", "sendAttempts", "sendState", "sendError"] as const;
-const routePresentation = new WeakSet<ChatQueueItem>();
 const storageIds = new WeakMap<Storage, number>();
 let nextStorageId = 0;
 function isActiveLocal(state: HostProjection, item: ChatQueueItem): boolean {
@@ -37,6 +46,7 @@ class ChatOutboxGatewayOwner {
   private readonly hosts = new Map<Host, HostProjection>();
   private readonly panes = new Set<Host>();
   private readonly live = new Map<string, Map<string, LiveProjection>>();
+  private readonly hydrating = new Set<string>();
   private unsubscribe: (() => void) | null = null;
   constructor(readonly ownerGatewayKey: string) {}
   private state(host: Host): HostProjection {
@@ -44,11 +54,14 @@ class ChatOutboxGatewayOwner {
     if (existing) {
       return existing;
     }
-    const scope = resolveStoredChatOutboxScope(host, host.sessionKey);
+    const scope = resolveUiConversationIdentity(host, host.sessionKey);
     const durableSeen = new Set(this.outbox(host, scope)?.queue.map((item) => item.id));
     const created: HostProjection = { byScope: new Map(), durableSeen, retryable: new Set() };
     if (host.chatQueue.length) {
-      created.byScope.set(storedChatOutboxScopeKey(scope), host.chatQueue);
+      created.byScope.set(storedChatOutboxScopeKey(scope), {
+        scope,
+        queue: host.chatQueue.filter((item) => outboxPayloadMatchesOwner(host, item)),
+      });
     }
     this.hosts.set(host, created);
     return created;
@@ -61,7 +74,18 @@ class ChatOutboxGatewayOwner {
   durable(host: Composer, id: string) {
     return listStoredChatOutboxes(host).find(({ queue }) => queue.some((item) => item.id === id));
   }
-  private project(item: ChatQueueItem, local: ChatQueueItem, sessionKey: string): ChatQueueItem {
+  locate(host: Host, id: string) {
+    const outbox = this.durable(host, id);
+    const captured = outbox ?? this.local(this.state(host), id)?.scope;
+    if (!captured) {
+      return undefined;
+    }
+    const { sessionKey, agentId } = captured;
+    const scope = { sessionKey, agentId };
+    const item = this.snapshot(host, scope, outbox?.queue ?? []).find((row) => row.id === id);
+    return item ? { item, scope, durable: outbox?.queue.find((row) => row.id === id) } : undefined;
+  }
+  private project(item: ChatQueueItem, local: ChatQueueItem): ChatQueueItem {
     const projected: ChatQueueItem = { ...item };
     if (local.attachments) {
       const presented = new Map(local.attachments.map((attachment) => [attachment.id, attachment]));
@@ -74,23 +98,16 @@ class ChatOutboxGatewayOwner {
         projected[key] = local[key];
       }
     }
-    if (routePresentation.has(local) && (!local.sessionKey || local.sessionKey === sessionKey)) {
-      routePresentation.add(projected);
-      for (const key of ["sessionKey", "agentId"] as const) {
-        if (Object.hasOwn(local, key)) {
-          projected[key] = local[key];
-        } else {
-          delete projected[key];
-        }
-      }
-    }
     return projected;
   }
-  snapshot(host: Host, scope: Scope): ChatQueueItem[] {
+  snapshot(
+    host: Host,
+    scope: Scope,
+    durable = this.outbox(host, scope)?.queue ?? [],
+  ): ChatQueueItem[] {
     const key = storedChatOutboxScopeKey(scope);
-    const durable = this.outbox(host, scope)?.queue ?? [];
     const state = this.state(host);
-    const local = state.byScope.get(key) ?? [];
+    const local = state.byScope.get(key)?.queue ?? [];
     const localById = new Map(local.map((item) => [item.id, item]));
     const visible = durable.map((item) => {
       state.durableSeen.add(item.id);
@@ -101,7 +118,7 @@ class ChatOutboxGatewayOwner {
         : live && live.sendRunId === item.sendRunId
           ? live
           : pending && pending.sendRunId === item.sendRunId
-            ? this.project(item, pending, host.sessionKey)
+            ? this.project(item, pending)
             : item;
     });
     const durableIds = new Set(durable.map((item) => item.id));
@@ -110,7 +127,73 @@ class ChatOutboxGatewayOwner {
     return visible.toSorted(compareChatQueueOrder);
   }
   syncHost(host: Host, options: { requestUpdate?: boolean } = {}): void {
-    host.chatQueue = this.snapshot(host, resolveStoredChatOutboxScope(host, host.sessionKey));
+    if (this.ownerGatewayKey !== outboxOwnerKey(host)) {
+      chatOutboxOwner(host).syncHost(host, options);
+      return;
+    }
+    observeOutboxRecoveryOwner(host);
+    host.chatQueue = this.snapshot(host, resolveUiConversationIdentity(host, host.sessionKey));
+    for (const item of host.chatQueue) {
+      const key = item.attachmentPayload?.key;
+      if (
+        !key ||
+        item.attachmentStorageError ||
+        this.hydrating.has(key) ||
+        item.attachments?.every((attachment) => getChatAttachmentDataUrl(attachment))
+      ) {
+        continue;
+      }
+      this.hydrating.add(key);
+      const isCurrent = captureOutboxPayloadOwner(host);
+      void prepareOutboxPayload(host, item)
+        .then((result) => {
+          if (!isCurrent()) {
+            return;
+          }
+          const outbox = this.durable(host, item.id);
+          const current = outbox?.queue.find((row) => row.id === item.id);
+          if (!outbox || current?.attachmentPayload?.key !== key) {
+            return;
+          }
+          if (result.status === "ready") {
+            if (result.update.attachmentPayload?.key !== key) {
+              // Copy adoption must not overwrite a retry that replaced the captured row.
+              if (
+                !updateStoredChatComposerQueueItem(
+                  host,
+                  outbox.sessionKey,
+                  item,
+                  { ...item, ...result.update },
+                  outbox.agentId,
+                )
+              ) {
+                return;
+              }
+            }
+            this.keep(host, outbox, {
+              ...current,
+              attachments: result.update.attachments,
+              ...(result.update.attachmentPayload?.key !== key
+                ? {
+                    attachmentPayload: result.update.attachmentPayload,
+                    sendState: result.update.sendState,
+                    sendError: result.update.sendError,
+                  }
+                : {}),
+            });
+          } else {
+            updateStoredChatComposerQueueItem(
+              host,
+              outbox.sessionKey,
+              current,
+              failOutboxPayload(current, result.reason),
+              outbox.agentId,
+            );
+          }
+          this.publish(host);
+        })
+        .finally(() => this.hydrating.delete(key));
+    }
     if (options.requestUpdate !== false) {
       host.requestUpdate?.();
     }
@@ -128,18 +211,59 @@ class ChatOutboxGatewayOwner {
       }
     }
   }
-  subscribe(host: Host): () => void {
+  adoptSubscriptions(host: Composer): void {
+    const previous = subscriptions.get(host)?.owner;
+    if (!previous || previous === this) {
+      return;
+    }
+    // A shared client's credentials change before pane callbacks run. Move peers
+    // together so the first reconnect drain still observes every pane's edit hold.
+    for (const pane of previous.panes) {
+      if (outboxOwnerKey(pane) !== this.ownerGatewayKey) {
+        continue;
+      }
+      subscriptions.get(pane)!.owner = this;
+      previous.hosts.delete(pane);
+      for (const [key, live] of previous.live) {
+        for (const [id, projection] of live) {
+          if (projection.owner === pane) {
+            live.delete(id);
+          }
+        }
+        if (!live.size) {
+          previous.live.delete(key);
+        }
+      }
+      // Stored rows remain authoritative; old credential-local overlays do not.
+      pane.chatQueue = [];
+      previous.detach(pane);
+      this.attach(pane);
+    }
+  }
+  private attach(host: Host): void {
     this.panes.add(host);
     this.unsubscribe ??= subscribeStoredChatOutboxChanges(() => this.publish(undefined, true));
+  }
+  private detach(host: Host): void {
+    this.panes.delete(host);
+    if (!this.panes.size) {
+      this.unsubscribe?.();
+      this.unsubscribe = null;
+    }
+    this.prune(host);
+  }
+  subscribe(host: Host): () => void {
+    const subscription = { owner: this };
+    subscriptions.set(host, subscription);
+    this.attach(host);
     this.reconcile(host, this.state(host));
     this.syncHost(host, { requestUpdate: false });
     return () => {
-      this.panes.delete(host);
-      if (!this.panes.size) {
-        this.unsubscribe?.();
-        this.unsubscribe = null;
+      if (subscriptions.get(host) !== subscription) {
+        return;
       }
-      this.prune(host);
+      subscriptions.delete(host);
+      subscription.owner.detach(host);
     };
   }
   private reconcile(host: Host, state: HostProjection): void {
@@ -147,22 +271,22 @@ class ChatOutboxGatewayOwner {
       listStoredChatOutboxes(host).flatMap((outbox) => outbox.queue.map((item) => item.id)),
     );
     durableIds.forEach((id) => state.durableSeen.add(id));
-    for (const [key, queue] of state.byScope) {
-      state.byScope.set(
-        key,
-        queue.filter((item) => durableIds.has(item.id) || isActiveLocal(state, item)),
+    for (const local of state.byScope.values()) {
+      local.queue = local.queue.filter(
+        (item) => durableIds.has(item.id) || isActiveLocal(state, item),
       );
     }
   }
   replace(
     host: Host,
-    scope: Scope,
+    { sessionKey, agentId }: Scope,
     queue: ChatQueueItem[],
     options: { requestUpdate?: boolean } = {},
   ): void {
+    const scope = { sessionKey, agentId };
     const state = this.state(host);
     const key = storedChatOutboxScopeKey(scope);
-    const previous = state.byScope.get(key) ?? [];
+    const previous = state.byScope.get(key)?.queue ?? [];
     const previousById = new Map(previous.map((item) => [item.id, item]));
     const retainedIds = new Set(queue.map((item) => item.id));
     for (const item of previous) {
@@ -171,30 +295,30 @@ class ChatOutboxGatewayOwner {
       }
     }
     this.outbox(host, scope)?.queue.forEach((item) => state.durableSeen.add(item.id));
-    state.byScope.set(
-      key,
-      queue.map((item) => this.project(item, previousById.get(item.id) ?? item, host.sessionKey)),
-    );
+    state.byScope.set(key, {
+      scope,
+      queue: queue.map((item) => this.project(item, previousById.get(item.id) ?? item)),
+    });
     this.syncHost(host, options);
   }
-  keep(host: Host, scope: Scope, item: ChatQueueItem, retryable = false): void {
+  keep(host: Host, { sessionKey, agentId }: Scope, item: ChatQueueItem, retryable = false): void {
+    const scope = { sessionKey, agentId };
     const state = this.state(host);
     const key = storedChatOutboxScopeKey(scope);
-    const queue = (state.byScope.get(key) ?? []).filter((entry) => entry.id !== item.id);
-    queue.push(item);
+    const queue = (state.byScope.get(key)?.queue ?? []).filter((entry) => entry.id !== item.id);
+    queue.push(applyStoredChatOutboxScope(item, scope));
     queue.sort(compareChatQueueOrder);
-    state.byScope.set(key, queue);
-    routePresentation.add(item);
+    state.byScope.set(key, { scope, queue });
     if (retryable) {
       state.retryable.add(item.id);
     }
     this.syncHost(host);
   }
   private local(state: HostProjection, id: string) {
-    for (const [key, queue] of state.byScope) {
+    for (const { scope, queue } of state.byScope.values()) {
       const index = queue.findIndex((item) => item.id === id);
       if (index >= 0) {
-        return { key, queue, index };
+        return { scope, queue, index };
       }
     }
     return undefined;
@@ -215,7 +339,6 @@ class ChatOutboxGatewayOwner {
     if (update) {
       const next = update(current);
       match.queue[match.index] = next;
-      routePresentation.add(next);
       if (retryable) {
         state.retryable.add(id);
       }
@@ -226,40 +349,15 @@ class ChatOutboxGatewayOwner {
     const stored = this.durable(host, id)?.queue.find((item) => item.id === id);
     if (stored) {
       state.durableSeen.add(id);
-      match.queue[match.index] = this.project(stored, current, host.sessionKey);
+      match.queue[match.index] = this.project(stored, current);
     } else {
       match.queue.splice(match.index, 1);
-      state.byScope.set(match.key, match.queue);
     }
     this.syncHost(host);
     return current;
   }
   hasVolatile(host: Host, id: string): boolean {
     return this.hosts.get(host)?.retryable.has(id) ?? false;
-  }
-  confirmationDeadline(
-    scope: Scope,
-    itemId: string,
-    deliveryVersion: string,
-    now: number,
-    graceMs: number,
-  ): number | null {
-    const live = this.live.get(storedChatOutboxScopeKey(scope))?.get(itemId);
-    if (!live) {
-      return null;
-    }
-    if (live.confirmationGrace?.deliveryVersion === deliveryVersion) {
-      return live.confirmationGrace.deadlineMs;
-    }
-    const deadlineMs = now + graceMs;
-    live.confirmationGrace = { deadlineMs, deliveryVersion };
-    return deadlineMs;
-  }
-  clearConfirmationGrace(scope: Scope, itemId: string): void {
-    const live = this.live.get(storedChatOutboxScopeKey(scope))?.get(itemId);
-    if (live) {
-      delete live.confirmationGrace;
-    }
   }
   // Panes share this outbox and its drain while composer state stays per pane, so
   // a pane-local fact that blocks delivery has to be answerable from any of them.
@@ -285,7 +383,7 @@ class ChatOutboxGatewayOwner {
     const key = storedChatOutboxScopeKey(scope);
     const live = this.live.get(key) ?? new Map<string, LiveProjection>();
     if (item) {
-      live.set(id, { confirmationGrace: live.get(id)?.confirmationGrace, item, owner: host });
+      live.set(id, { item, owner: host });
       this.live.set(key, live);
     } else {
       live.delete(id);
@@ -297,16 +395,20 @@ class ChatOutboxGatewayOwner {
     this.prune(host);
   }
   allItems(host: Host): ChatQueueItem[] {
-    const durable = listStoredChatOutboxes(host).flatMap((outbox) => this.snapshot(host, outbox));
-    const local = [...this.state(host).byScope.values()].flat();
-    const items = new Map([...durable, ...local].map((item) => [item.id, item]));
+    const durable = listStoredChatOutboxes(host).flatMap((outbox) =>
+      this.snapshot(host, outbox, outbox.queue),
+    );
+    const local = [...this.state(host).byScope.values()].flatMap(({ queue }) => queue);
+    // The snapshot already merges durable and live state. A stale pane-local
+    // copy must not hide its sending overlay during connection retirement.
+    const items = new Map([...local, ...durable].map((item) => [item.id, item]));
     this.prune(host);
     return [...items.values()];
   }
   private prune(host: Host): void {
     const state = this.hosts.get(host);
     if (state && !this.panes.has(host)) {
-      const active = [...state.byScope.values()].some((queue) =>
+      const active = [...state.byScope.values()].some(({ queue }) =>
         queue.some((item) => isActiveLocal(state, item)),
       );
       if (!active && !this.live.size) {
@@ -316,7 +418,12 @@ class ChatOutboxGatewayOwner {
     if (!this.unsubscribe && !this.live.size && !this.hosts.size) {
       // Defer eviction until a synchronous send transition can add its live overlay.
       queueMicrotask(() => {
-        if (!this.unsubscribe && !this.live.size && !this.hosts.size) {
+        if (
+          !this.unsubscribe &&
+          !this.live.size &&
+          !this.hosts.size &&
+          owners.get(this.ownerGatewayKey) === this
+        ) {
           owners.delete(this.ownerGatewayKey);
         }
       });
@@ -324,13 +431,19 @@ class ChatOutboxGatewayOwner {
   }
 }
 const owners = new Map<string, ChatOutboxGatewayOwner>();
-export function chatOutboxOwner(host: Composer): ChatOutboxGatewayOwner {
+const subscriptions = new WeakMap<Composer, { owner: ChatOutboxGatewayOwner }>();
+function outboxOwnerKey(host: Composer): string {
   const storage = getSafeSessionStorage();
   if (storage && !storageIds.has(storage)) {
     storageIds.set(storage, ++nextStorageId);
   }
-  const key = `${storage ? storageIds.get(storage) : 0}\u0000${host.settings?.gatewayUrl?.trim() || "default"}`;
+  const key = `${storage ? storageIds.get(storage) : 0}\u0000${host.settings?.gatewayUrl?.trim() || "default"}\u0000${host.client?.recoveryScope ?? ""}`;
+  return key;
+}
+export function chatOutboxOwner(host: Composer): ChatOutboxGatewayOwner {
+  const key = outboxOwnerKey(host);
   const owner = owners.get(key) ?? new ChatOutboxGatewayOwner(key);
   owners.set(key, owner);
+  owner.adoptSubscriptions(host);
   return owner;
 }

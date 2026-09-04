@@ -451,6 +451,19 @@ describe("agents helpers", () => {
         { agentId: "work", match: { channel: "whatsapp" } },
         { agentId: "home", match: { channel: "telegram" } },
       ],
+      broadcast: {
+        strategy: "parallel",
+        "peer-1": ["work", "home"],
+        "peer-2": ["WORK"],
+      },
+      hooks: {
+        allowedAgentIds: ["*", "work", "home"],
+        mappings: [
+          { id: "work-hook", agentId: "WORK", action: "agent" },
+          { id: "home-hook", agentId: "home", action: "agent" },
+          { id: "default-hook", action: "agent" },
+        ],
+      },
       tools: {
         agentToAgent: { enabled: true, allow: ["work", "home"] },
       },
@@ -462,6 +475,16 @@ describe("agents helpers", () => {
     expect(result.config.agents?.entries).toHaveProperty("home");
     expect(result.config.bindings).toStrictEqual([
       { agentId: "home", match: { channel: "telegram" } },
+    ]);
+    expect(result.config.broadcast).toEqual({
+      strategy: "parallel",
+      "peer-1": ["home"],
+      "peer-2": [],
+    });
+    expect(result.config.hooks?.allowedAgentIds).toEqual(["*", "home"]);
+    expect(result.config.hooks?.mappings).toEqual([
+      { id: "home-hook", agentId: "home", action: "agent" },
+      { id: "default-hook", action: "agent" },
     ]);
     expect(result.config.tools?.agentToAgent?.allow).toEqual(["home"]);
     expect(result.config.agents?.defaults?.subagents?.allowAgents).toEqual(["home"]);

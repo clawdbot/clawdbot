@@ -17,6 +17,7 @@ import {
 vi.mock("../../components/input-dialog.ts", () => ({ showInputDialog: vi.fn() }));
 
 const SESSION_KEY = "agent:main:move-me";
+const SESSION_ID = "original-session";
 
 afterEach(() => {
   document.body.replaceChildren();
@@ -38,7 +39,7 @@ async function mountGroupsPage(groupsPut: () => Promise<SessionGroupMutationResu
   });
   const page = await createRenderedPage(createContext(mutableGateway.gateway, sessions), {
     count: 1,
-    sessions: [{ key: SESSION_KEY, archived: false }],
+    sessions: [{ key: SESSION_KEY, sessionId: SESSION_ID, archived: false }],
   } as SessionsListResult);
   // The dialog itself is covered by input-dialog.test.ts; here it only stands in
   // for the operator submitting a name. A recorded message is what keeps the real
@@ -65,7 +66,7 @@ describe("sessions page new group", () => {
     expect(sessions.patch).toHaveBeenCalledWith(
       SESSION_KEY,
       { category: "Client work" },
-      expect.anything(),
+      { agentId: undefined, expectedSessionId: SESSION_ID },
     );
   });
 
@@ -167,7 +168,7 @@ describe("sessions page new group", () => {
     // The replacement connection reloads the list before the operator retries.
     page.result = {
       count: 1,
-      sessions: [{ key: SESSION_KEY, archived: false }],
+      sessions: [{ key: SESSION_KEY, sessionId: SESSION_ID, archived: false }],
     } as SessionsListResult;
     await page.requestNewCategory(SESSION_KEY);
 
@@ -180,30 +181,89 @@ describe("sessions page new group", () => {
     );
   });
 
-  it("reports the skipped move when the row left the list during the catalog write", async () => {
-    let landCatalogWrite!: () => void;
-    const pending = new Promise<SessionGroupMutationResult>((resolve) => {
-      landCatalogWrite = () => resolve("completed");
-    });
-    const { page, sessions, submitMessages } = await mountGroupsPage(() => pending);
+  it.each([
+    { change: "paged out", currentId: SESSION_ID, visible: false },
+    { change: "reset with the same identity", currentId: SESSION_ID, visible: true },
+    { change: "deleted", currentId: undefined, visible: false },
+    { change: "replaced", currentId: "replacement-session", visible: true },
+  ])(
+    "lets the Gateway decide a move when the row was $change mid-write",
+    async ({ currentId, visible }) => {
+      let landCatalogWrite!: () => void;
+      const pending = new Promise<SessionGroupMutationResult>((resolve) => {
+        landCatalogWrite = () => resolve("completed");
+      });
+      const { page, sessions, submitMessages } = await mountGroupsPage(() => pending);
+      const failure = `Session ${SESSION_KEY} changed before patch. Retry.`;
+      let moved = false;
+      vi.mocked(sessions.patch).mockImplementation(async (_key, _patch, options) => {
+        if (options?.expectedSessionId && options.expectedSessionId !== currentId) {
+          throw new Error(failure);
+        }
+        moved = true;
+        return { key: SESSION_KEY } as Awaited<ReturnType<SessionCapability["patch"]>>;
+      });
 
-    const created = page.requestNewCategory(SESSION_KEY);
-    await vi.waitFor(() => expect(sessions.groupsPut).toHaveBeenCalledOnce());
+      const created = page.requestNewCategory(SESSION_KEY);
+      await vi.waitFor(() => expect(sessions.groupsPut).toHaveBeenCalledOnce());
 
-    // The row left this bounded list while the catalog write was in flight;
-    // patching its key now could recreate an entry the operator removed.
-    page.result = { count: 0, sessions: [] } as unknown as SessionsListResult;
-    landCatalogWrite();
-    await created;
+      page.result = {
+        count: visible ? 1 : 0,
+        sessions: visible ? [{ key: SESSION_KEY, sessionId: currentId, label: "Updated row" }] : [],
+      } as SessionsListResult;
+      landCatalogWrite();
+      await created;
 
-    expect(sessions.patch).not.toHaveBeenCalled();
-    // The group landed and the move did not. Retrying would only re-create the
-    // group, so the dialog closes — but the partial outcome has to stay visible
-    // on the page rather than reading as a clean success.
-    expect(submitMessages).toEqual([null]);
-    expect(page.error).toBe(
-      "Group created, but the move was skipped because the list changed. Move from the row menu.",
+      expect(sessions.patch).toHaveBeenCalledWith(
+        SESSION_KEY,
+        { category: "Client work" },
+        { agentId: undefined, expectedSessionId: SESSION_ID },
+      );
+      expect(moved).toBe(currentId === SESSION_ID);
+      expect(submitMessages).toEqual([currentId === SESSION_ID ? null : failure]);
+    },
+  );
+
+  it("captures the selected identity before the dialog's lazy load", async () => {
+    const { page, sessions } = await mountGroupsPage(async () => "completed");
+    const pending = page.requestNewCategory(SESSION_KEY);
+    page.result = {
+      count: 1,
+      sessions: [{ key: SESSION_KEY, sessionId: "replacement-session" }],
+    } as SessionsListResult;
+    await pending;
+    expect(sessions.patch).toHaveBeenCalledWith(
+      SESSION_KEY,
+      { category: "Client work" },
+      { agentId: undefined, expectedSessionId: SESSION_ID },
     );
+  });
+
+  it("creates an empty group without a selected row", async () => {
+    const { page, sessions, submitMessages } = await mountGroupsPage(async () => "completed");
+    await page.requestNewCategory();
+    expect(sessions.groupsPut).toHaveBeenCalledWith(["Client work"]);
+    expect(sessions.patch).not.toHaveBeenCalled();
+    expect(submitMessages).toEqual([null]);
+  });
+
+  it("does not assign when creating the catalog entry fails", async () => {
+    const { page, sessions, submitMessages } = await mountGroupsPage(async () => {
+      throw new Error("Group name rejected");
+    });
+    await page.requestNewCategory(SESSION_KEY);
+    expect(sessions.patch).not.toHaveBeenCalled();
+    expect(submitMessages).toEqual(["Group name rejected"]);
+  });
+
+  it("asks for a refresh instead of starting an unbound move", async () => {
+    const { page, sessions } = await mountGroupsPage(async () => "completed");
+    page.result = { count: 1, sessions: [{ key: SESSION_KEY }] } as SessionsListResult;
+    await page.requestNewCategory(SESSION_KEY);
+    expect(showInputDialog).not.toHaveBeenCalled();
+    expect(sessions.groupsPut).not.toHaveBeenCalled();
+    expect(sessions.patch).not.toHaveBeenCalled();
+    expect(page.error).toBe("Refresh");
   });
 
   it("skips the assignment when the catalog itself reports the write stale", async () => {

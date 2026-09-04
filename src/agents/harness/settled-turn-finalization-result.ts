@@ -62,11 +62,8 @@ export function resolveSettledTurnFinalizationText(
   result: AgentHarnessSettledTurnFinalizationResult,
 ): string {
   const text = resolveFinalAssistantVisibleText(result.assistant);
-  if (!text) {
+  if (!text || isSilentReplyText(text)) {
     throw new EmptySettledTurnFinalizationError(result);
-  }
-  if (isSilentReplyText(text)) {
-    throw new Error("Settled-turn finalization completed without a visible answer");
   }
   return text;
 }

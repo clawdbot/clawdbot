@@ -1,39 +1,45 @@
 # Structured release report
 
-Apply this contract only while publishing final feedback. The visible Markdown
-remains the human report. Append one hidden, versioned payload so dashboards can
-consume the same evidence without interpreting prose.
+Apply this contract only after the tester approves the complete posting batch.
+The visible Markdown remains the human report. Append one hidden payload so
+dashboards can consume the same evidence without interpreting prose.
 
 ## Build the current run
 
-Derive both representations from the sanitized worksheet evidence. Turn each
-distinct tester observation into one finding. Split multiple behaviors into
-separate findings; keep expected and observed behavior only when the tester
-provided them. A positive check is a `pass`, candidate misbehavior is a
-`problem`, and useful neutral context is an `observation`.
+Derive both representations from the sanitized worksheet and the approved
+finding drafts. Turn each distinct tester observation into one finding. A
+positive check is `pass`, test-target misbehavior is `problem`, and useful
+neutral context is `observation`.
 
-Use the surface's live-taxonomy URL fragment as its stable `id`. Use `unmapped`
-only when no scorecard surface fits. Include only surfaces with non-empty
-**Testing notes**. Do not infer severity, cross-user cluster ids, or whether a
-finding is fixed on `main`; dashboard analysis owns those judgments.
+Optional local telemetry may appear only as a short visible evidence note below
+the finding it corroborates. It never creates a finding or enters the payload.
+The visible **Test environment** profile is also excluded from the payload.
+The exact terminal result label is visible report metadata and is also excluded
+from the payload; `upgrade.result` continues to describe candidate upgrade
+behavior only. A generic **Candidate passed, but cleanup failed** label is
+allowed in visible Markdown, but cleanup details remain private tooling data.
+
+Use the live taxonomy URL fragment as a surface `id`; use `unmapped` only when
+no scorecard surface fits. Include only surfaces with non-empty **Testing
+notes**. Deduplicate a surface that appeared in both campaign priority lists.
+Do not infer severity.
 
 Append this envelope after the visible Markdown:
 
 ```md
-<!-- openclaw-release-validation-report:v1
+<!-- openclaw-release-validation-report:v2
 <compact JSON object>
 -->
 ```
 
-The JSON object has this exact shape:
+The object has this shape:
 
 ```json
 {
-  "schemaVersion": 1,
+  "schemaVersion": 2,
   "kind": "openclaw-release-validation-report",
-  "release": {
-    "tag": "vYYYY.M.D-beta.N",
-    "candidateCommit": "full candidate commit"
+  "campaign": {
+    "train": "vYYYY.M.D"
   },
   "revision": 1,
   "updatedAt": "ISO-8601 timestamp",
@@ -42,6 +48,11 @@ The JSON object has this exact shape:
     {
       "runId": "random UUID",
       "submittedAt": "ISO-8601 timestamp",
+      "beta": {
+        "tag": "vYYYY.M.D-beta.N",
+        "commit": "full beta commit"
+      },
+      "testedMainCommit": "full tested origin/main commit",
       "source": {
         "version": "privacy-safe source version",
         "commit": null
@@ -77,45 +88,46 @@ Every `findings` item has:
   "summary": "Selected model reverted after restart",
   "expected": "The selected model remains active",
   "observed": "The default model was restored",
+  "disposition": "new_issue",
   "issueUrl": "https://github.com/openclaw/openclaw/issues/123"
 }
 ```
 
-`result` is `pass`, `problem`, or `observation`. `surfaceId`, `result`, and
-`summary` are required. Omit `expected`, `observed`, and `issueUrl` when the
-tester did not provide them. Public OpenClaw issue URLs are allowed; other URLs
-are plain text only when essential release evidence.
+`surfaceId`, `result`, and `summary` are required. Omit `expected` and
+`observed` when the tester did not provide them. For a problem,
+`disposition` is `new_issue`, `existing_issue`, or `fixed`. A published finding
+requires its public issue or comment URL in `issueUrl`; a fixed finding instead
+requires `fixUrl`. Positive and neutral observations omit disposition and URLs.
 
-## Keep one report per tester
+## Keep one v2 report per tester
 
-Resolve the authenticated login with `gh api user`. Enumerate the campaign's
-comments and find comments authored by that login containing the exact v1
-marker. The login is lookup metadata only; never include it in the payload.
+Resolve the authenticated login with `gh api user`. Enumerate campaign comments
+and find comments authored by that login containing the exact v2 marker. Ignore
+historical v1 comments; they belong to the earlier beta-specific schema.
 
-- No matching comment: create one with `revision: 1` and the current run.
-- One valid matching comment: retain its `runs`, append the current run, set
-  `currentRunId` to the new UUID, increment `revision`, update `updatedAt`, and
-  replace that comment. The visible Markdown summarizes the current run.
-- Multiple matches, invalid JSON, a different release, or an unsupported schema:
-  stop and show the conflicting comment URLs instead of creating another vote.
+- No v2 comment: create one with `revision: 1` and the current run.
+- One valid v2 comment for this train: retain its `runs`, append the current
+  run, set `currentRunId` to the new UUID, increment `revision`, update
+  `updatedAt`, and replace that comment. The visible Markdown summarizes the
+  current run.
+- Multiple matches, invalid JSON, another train, or an unsupported schema: stop
+  and show the conflicting comment URLs instead of creating another vote.
 
-Consumers count the current run's promotion vote once per GitHub author. Older
-runs remain evidence but do not add votes.
+Consumers count the current run's vote once per GitHub author. Older runs remain
+evidence but do not add votes.
 
 ## Validate before publishing
 
-The hidden payload is public GitHub content. Apply the visible comment's privacy
-filter to every string: no local paths, gateway or environment names,
-credentials, raw logs, user identifiers, OCM/setup details, or cleanup details.
+The payload is public. No string may contain local paths, gateway/environment
+names, credentials, raw logs, user identifiers, OCM/setup details, cleanup
+details, telemetry records, prompts, responses, or tool payloads.
 
-Serialize compact JSON. Escape `<`, `>`, and `&` inside JSON strings as Unicode
-escapes so content cannot terminate the HTML comment. Parse the serialized bytes
-again with `jq -e`, require the exact schema and enum values above, and require
-the complete comment to remain below 60,000 UTF-8 bytes. Stop and ask rather
-than discard older runs when retaining them would exceed that bound. If any
-other validation fails, repair the payload before a GitHub write; never publish
-prose without its matching valid payload.
+Serialize compact JSON. Escape `<`, `>`, and `&` inside strings as Unicode
+escapes. Parse the serialized bytes again with `jq -e`; require the exact schema,
+enums, campaign train, beta identity, tested main SHA, approved disposition
+URLs, and a complete comment below 60,000 UTF-8 bytes. Stop rather than discard
+older runs when retention would exceed the limit.
 
-After the create or update, read the comment back. Completion requires the
-visible Markdown, marker, JSON, current run id, and promotion vote to match the
-locally validated comment exactly.
+After create or update, read the comment back. Completion requires visible
+Markdown, marker, JSON, current run id, beta identity, tested main SHA, finding
+URLs, and promotion vote to match the locally validated comment exactly.

@@ -4,29 +4,38 @@ import type { WizardPrompter } from "../wizard/prompts.js";
 import { createVpsAwareOAuthHandlers } from "./provider-oauth-flow.js";
 
 describe("createVpsAwareOAuthHandlers", () => {
-  it("sends remote OAuth URLs through the wizard prompter", async () => {
-    const note = vi.fn(async () => undefined);
-    const text = vi.fn(async () => "callback-value");
-    const openUrl = vi.fn(async () => undefined);
-    const spin = { update: vi.fn(), stop: vi.fn() };
-    const handlers = createVpsAwareOAuthHandlers({
-      isRemote: true,
-      prompter: { note, text } as unknown as WizardPrompter,
-      runtime: { log: vi.fn() } as unknown as RuntimeEnv,
-      spin: spin as ReturnType<WizardPrompter["progress"]>,
-      openUrl,
-      localBrowserMessage: "Opening browser",
-    });
+  it.each([true, false])(
+    "masks manual OAuth entry while forwarding URLs (remote=%s)",
+    async (isRemote) => {
+      const note = vi.fn(async () => undefined);
+      const text = vi.fn(async () => "callback-value");
+      const openUrl = vi.fn(async () => undefined);
+      const spin = { update: vi.fn(), stop: vi.fn() };
+      const handlers = createVpsAwareOAuthHandlers({
+        isRemote,
+        prompter: { note, text } as unknown as WizardPrompter,
+        runtime: { log: vi.fn() } as unknown as RuntimeEnv,
+        spin: spin as ReturnType<WizardPrompter["progress"]>,
+        openUrl,
+        localBrowserMessage: "Opening browser",
+      });
 
-    await handlers.onAuth({ url: "https://provider.example/oauth?state=state-1" });
+      await handlers.onAuth({ url: "https://provider.example/oauth?state=state-1" });
 
-    expect(openUrl).toHaveBeenCalledWith("https://provider.example/oauth?state=state-1");
-    expect(note).toHaveBeenCalledWith(
-      expect.stringContaining("https://provider.example/oauth?state=state-1"),
-      "OAuth sign-in",
-    );
-    await expect(handlers.onPrompt({ message: "Paste callback" })).resolves.toBe("callback-value");
-  });
+      expect(openUrl).toHaveBeenCalledWith("https://provider.example/oauth?state=state-1");
+      if (isRemote) {
+        expect(note).toHaveBeenCalledWith(
+          expect.stringContaining("https://provider.example/oauth?state=state-1"),
+          "OAuth sign-in",
+        );
+      }
+      await expect(handlers.onPrompt({ message: "Paste callback" })).resolves.toBe(
+        "callback-value",
+      );
+      expect(text).toHaveBeenCalledOnce();
+      expect(text).toHaveBeenCalledWith(expect.objectContaining({ sensitive: true }));
+    },
+  );
 
   it("forwards prompt cancellation to remote manual entry", async () => {
     const controller = new AbortController();
@@ -52,8 +61,12 @@ describe("createVpsAwareOAuthHandlers", () => {
     });
 
     await handlers.onAuth({ url: "https://provider.example/oauth?state=state-1" });
-    const prompt = handlers.onPrompt({ message: "Paste callback" });
     controller.abort();
+    // The provider may not request manual input until after cancellation wins.
+    await new Promise<void>((resolve) => {
+      setImmediate(resolve);
+    });
+    const prompt = handlers.onPrompt({ message: "Paste callback" });
 
     await expect(prompt).rejects.toThrow("prompt aborted");
     expect(text).toHaveBeenCalledWith(expect.objectContaining({ signal: controller.signal }));

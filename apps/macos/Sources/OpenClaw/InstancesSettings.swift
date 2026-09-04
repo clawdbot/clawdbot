@@ -14,7 +14,7 @@ struct InstancesSettings: View {
         VStack(alignment: .leading, spacing: 16) {
             self.header
             if let err = store.lastError {
-                Text("Error: \(err)")
+                Text(String(format: String(localized: "Error: %@"), err))
                     .foregroundStyle(.red)
             } else if let info = store.statusMessage {
                 Text(info)
@@ -168,16 +168,16 @@ struct InstancesSettings: View {
                 .foregroundStyle(.secondary)
         }
         .font(.caption)
-        .help("Presence updated \(inst.ageDescription).")
-        .accessibilityLabel("\(status.label) presence")
+        .help(Text(verbatim: String(format: String(localized: "Presence updated %@."), inst.ageDescription)))
+        .accessibilityLabel(Text(verbatim: String(format: String(localized: "%@ presence"), status.label)))
     }
 
     private func presenceStatus(for inst: InstanceInfo) -> (label: String, color: Color) {
         let nowMs = Date().timeIntervalSince1970 * 1000
         let ageSeconds = max(0, Int((nowMs - inst.ts) / 1000))
-        if ageSeconds <= 120 { return ("Active", .green) }
-        if ageSeconds <= 300 { return ("Idle", .yellow) }
-        return ("Stale", .gray)
+        if ageSeconds <= 120 { return (String(localized: "Active"), .green) }
+        if ageSeconds <= 300 { return (String(localized: "Idle"), .yellow) }
+        return (String(localized: "Stale"), .gray)
     }
 
     @ViewBuilder

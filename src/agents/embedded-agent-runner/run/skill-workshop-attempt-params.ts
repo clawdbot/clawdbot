@@ -12,6 +12,7 @@ export function resolveSkillWorkshopAttemptParams(
     | "skillWorkshopProposalReviewCompletion"
     | "skillWorkshopCollectionReconcile"
     | "skillWorkshopProposalRevision"
+    | "skillLibraryAuthoring"
   >,
 ) {
   return {
@@ -24,5 +25,6 @@ export function resolveSkillWorkshopAttemptParams(
     skillWorkshopProposalReviewCompletion: params.skillWorkshopProposalReviewCompletion,
     skillWorkshopCollectionReconcile: params.skillWorkshopCollectionReconcile,
     skillWorkshopProposalRevision: params.skillWorkshopProposalRevision,
+    skillLibraryAuthoring: params.skillLibraryAuthoring,
   };
 }

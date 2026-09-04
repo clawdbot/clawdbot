@@ -33,14 +33,25 @@ same provider; it never creates another provider namespace.
 ## Managed local server
 
 Choose **Managed local server** when OpenClaw should install, start, and stop
-the server. After consent, setup verifies a pinned llama.cpp build, downloads
-verified chat and embedding models, writes the loopback endpoint and
-`localService` definition, and probes the result before saving it.
+the server. After consent, setup verifies a pinned llama.cpp build, writes the
+loopback endpoint and `localService` definition, and probes the result before
+saving it.
 
 The default chat model is Gemma 4 E4B IT Q4_K_M (about 5.0 GB) with a 65,536
 token context cap. OpenClaw offers it only on machines with at least 16 GiB of
-RAM. The managed EmbeddingGemma model is about 0.3 GB. Setup discovery remains
+RAM. This setup downloads the chat model and the managed EmbeddingGemma model
+(about 0.3 GB).
+
+When `memory.search.provider` is `local` and chat setup cannot proceed or is
+declined, OpenClaw offers a separate embedding-only setup. It installs only the
+managed server and EmbeddingGemma after explicit consent. It does not add a
+llama.cpp chat model or change the current chat model. Setup discovery remains
 read-only and never installs or downloads anything.
+
+If the llama.cpp provider has any configured chat models, embedding-only setup
+leaves it unchanged. Move any chat routes to another provider and remove those
+model entries before retrying. An existing external llama.cpp server config
+must also be removed before OpenClaw can manage embeddings.
 
 ### Use another managed GGUF
 
@@ -110,8 +121,10 @@ remain authoritative over discovered rows with the same ID.
 
 Existing endpoints support no auth, API keys, SecretRefs, auth profiles, and
 explicit authorization headers. An explicit `Authorization` header wins over
-ambient API-key discovery. Endpoint URLs containing a username or password are
-rejected.
+ambient API-key discovery unless setup receives a new key. Choosing no API key
+removes the default llama.cpp auth profile and stale inline key fields while
+preserving an explicit `Authorization` header and unrelated headers. Endpoint
+URLs containing a username or password are rejected.
 
 ```bash
 export LLAMA_SERVER_API_KEY="<API_KEY>"

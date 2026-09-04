@@ -1,7 +1,7 @@
 import { spawnSync } from "node:child_process";
 import { generateKeyPairSync, sign } from "node:crypto";
 // OpenClaw npm postpublish tests validate postpublish verification behavior.
-import { mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
+import { mkdirSync, mkdtempSync, readFileSync, rmSync, truncateSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { dirname, join } from "node:path";
 import { describe, expect, it, vi } from "vitest";
@@ -578,14 +578,17 @@ describe("collectInstalledPackageErrors", () => {
   ): void {
     const omitted = new Set(omittedIds);
     for (const relativePath of requiredBundledPluginPackPaths) {
-      const match = /^dist\/extensions\/([^/]+)\/package\.json$/u.exec(relativePath);
+      const match = /^dist\/extensions\/([^/]+)\//u.exec(relativePath);
       if (!match || omitted.has(match[1] ?? "")) {
         continue;
       }
-      const packageJsonPath = join(packageRoot, relativePath);
-      mkdirSync(dirname(packageJsonPath), { recursive: true });
-      writeFileSync(packageJsonPath, "{}\n", "utf8");
+      const artifactPath = join(packageRoot, relativePath);
+      mkdirSync(dirname(artifactPath), { recursive: true });
+      writeFileSync(artifactPath, relativePath.endsWith(".json") ? "{}\n" : "export {};\n", "utf8");
     }
+    const inventoryPath = join(packageRoot, "dist", "postinstall-inventory.json");
+    mkdirSync(dirname(inventoryPath), { recursive: true });
+    writeFileSync(inventoryPath, JSON.stringify(requiredBundledPluginPackPaths), "utf8");
   }
 
   it("flags version mismatches", () => {
@@ -598,6 +601,32 @@ describe("collectInstalledPackageErrors", () => {
     expect(errors[0]).toBe(
       "installed package version mismatch: expected 2026.3.23-2, found 2026.3.23.",
     );
+  });
+
+  it("rejects an oversized worker before the full verifier reads its contents", () => {
+    const packageRoot = makeInstalledPackageRoot();
+
+    try {
+      writeFileSync(join(packageRoot, "package.json"), '{"version":"2026.3.23"}\n', "utf8");
+      const workerPath = join(packageRoot, "dist", "worker", WORKER_BUNDLE_ENTRY_PATH);
+      mkdirSync(dirname(workerPath), { recursive: true });
+      writeFileSync(workerPath, "/* Failed to load legacy context engine runtime. */\n", "utf8");
+      truncateSync(workerPath, 80 * 1024 * 1024 + 1);
+
+      const errors = collectInstalledPackageErrors({
+        expectedVersion: "2026.3.23",
+        installedVersion: "2026.3.23",
+        packageRoot,
+      });
+      const sizeError = `installed package root dist file 'worker/${WORKER_BUNDLE_ENTRY_PATH}' is invalid or exceeds 83886080 bytes.`;
+
+      expect(errors.filter((error) => error === sizeError)).toEqual([sizeError]);
+      expect(errors).not.toContain(
+        "installed package includes unresolved legacy context engine runtime loader; rebuild with a bundler-traceable LegacyContextEngine import.",
+      );
+    } finally {
+      rmSync(packageRoot, { recursive: true, force: true });
+    }
   });
 
   it.each(["ollama", "lmstudio"])(
@@ -617,10 +646,17 @@ describe("collectInstalledPackageErrors", () => {
           "package.json",
         );
         const expectedError = `installed bundled extension manifest missing: ${missingManifestPath}.`;
+        const missingArtifactErrors = requiredBundledPluginPackPaths
+          .filter((relativePath) => relativePath.startsWith(`dist/extensions/${providerId}/`))
+          .map((relativePath) =>
+            relativePath.endsWith("/package.json")
+              ? expectedError
+              : `installed bundled plugin artifact missing: ${relativePath}.`,
+          );
 
-        expect(collectInstalledBundledExtensionManifestErrors(packageRoot)).toStrictEqual([
-          expectedError,
-        ]);
+        expect(collectInstalledBundledExtensionManifestErrors(packageRoot)).toStrictEqual(
+          missingArtifactErrors,
+        );
         expect(
           collectInstalledPackageErrors({
             expectedVersion: "2026.3.23",
@@ -633,6 +669,46 @@ describe("collectInstalledPackageErrors", () => {
       }
     },
   );
+
+  it.each([
+    ["plugin manifest", "dist/extensions/ollama/openclaw.plugin.json"],
+    ["generated plugin artifact", "dist/extensions/ollama/provider-discovery.js"],
+  ])("rejects an installed bundled %s missing after postinstall", (_, relativePath) => {
+    const packageRoot = makeInstalledPackageRoot();
+
+    try {
+      writeExpectedBundledExtensionManifests(packageRoot);
+      rmSync(join(packageRoot, relativePath));
+
+      expect(collectInstalledBundledExtensionManifestErrors(packageRoot)).toContain(
+        `installed bundled plugin artifact missing: ${relativePath}.`,
+      );
+    } finally {
+      rmSync(packageRoot, { recursive: true, force: true });
+    }
+  });
+
+  it.each([
+    ["plugin manifest", "dist/extensions/ollama/openclaw.plugin.json"],
+    ["generated plugin artifact", "dist/extensions/ollama/provider-discovery.js"],
+  ])("rejects an installed bundled %s omitted from its inventory", (_, relativePath) => {
+    const packageRoot = makeInstalledPackageRoot();
+
+    try {
+      writeExpectedBundledExtensionManifests(packageRoot);
+      writeFileSync(
+        join(packageRoot, "dist", "postinstall-inventory.json"),
+        JSON.stringify(requiredBundledPluginPackPaths.filter((entry) => entry !== relativePath)),
+        "utf8",
+      );
+
+      expect(collectInstalledBundledExtensionManifestErrors(packageRoot)).toContain(
+        `installed bundled plugin artifact omitted from dist inventory: ${relativePath}.`,
+      );
+    } finally {
+      rmSync(packageRoot, { recursive: true, force: true });
+    }
+  });
 
   it("rejects an installed package without its bundled extension root", () => {
     const packageRoot = makeInstalledPackageRoot();
@@ -674,16 +750,16 @@ describe("collectInstalledPackageErrors", () => {
       expect(filteredErrors).toStrictEqual(expectedErrors);
       expect(filteredErrors).toEqual(
         expect.arrayContaining(
-          ["ollama", "lmstudio"].map(
-            (providerId) =>
-              `installed bundled extension manifest missing: ${join(
-                packageRoot,
-                "dist",
-                "extensions",
-                providerId,
-                "package.json",
-              )}.`,
-          ),
+          ["ollama", "lmstudio"].flatMap((providerId) => [
+            `installed bundled extension manifest missing: ${join(
+              packageRoot,
+              "dist",
+              "extensions",
+              providerId,
+              "package.json",
+            )}.`,
+            `installed bundled plugin artifact missing: dist/extensions/${providerId}/openclaw.plugin.json.`,
+          ]),
         ),
       );
     } finally {
@@ -718,16 +794,16 @@ describe("collectInstalledPackageErrors", () => {
       expect(probe.status, probe.stderr).toBe(0);
       expect(JSON.parse(probe.stdout)).toEqual(
         expect.arrayContaining(
-          ["ollama", "lmstudio"].map(
-            (providerId) =>
-              `installed bundled extension manifest missing: ${join(
-                packageRoot,
-                "dist",
-                "extensions",
-                providerId,
-                "package.json",
-              )}.`,
-          ),
+          ["ollama", "lmstudio"].flatMap((providerId) => [
+            `installed bundled extension manifest missing: ${join(
+              packageRoot,
+              "dist",
+              "extensions",
+              providerId,
+              "package.json",
+            )}.`,
+            `installed bundled plugin artifact missing: dist/extensions/${providerId}/openclaw.plugin.json.`,
+          ]),
         ),
       );
     } finally {
@@ -893,6 +969,31 @@ describe("collectInstalledContextEngineRuntimeErrors", () => {
     }
   });
 
+  it("ignores extension-owned JavaScript assets", () => {
+    const packageRoot = makeInstalledPackageRoot();
+
+    try {
+      const viewerPath = join(
+        packageRoot,
+        "dist",
+        "extensions",
+        "diffs",
+        "assets",
+        "viewer-runtime.js",
+      );
+      mkdirSync(dirname(viewerPath), { recursive: true });
+      writeFileSync(
+        viewerPath,
+        'throw new Error("Failed to load legacy context engine runtime.");\n',
+        "utf8",
+      );
+
+      expect(collectInstalledContextEngineRuntimeErrors(packageRoot)).toStrictEqual([]);
+    } finally {
+      rmSync(packageRoot, { recursive: true, force: true });
+    }
+  });
+
   it("refuses unbounded packaged dist scans", () => {
     const packageRoot = makeInstalledPackageRoot();
 
@@ -900,7 +1001,7 @@ describe("collectInstalledContextEngineRuntimeErrors", () => {
       writeDistJavaScriptFiles(packageRoot, INSTALLED_ROOT_DIST_JS_FILE_SCAN_LIMIT + 1);
 
       expect(collectInstalledContextEngineRuntimeErrors(packageRoot)).toEqual([
-        `installed package dist contains more than ${INSTALLED_ROOT_DIST_JS_FILE_SCAN_LIMIT} JavaScript files; refusing to scan unbounded package contents.`,
+        `installed package root dist contains more than ${INSTALLED_ROOT_DIST_JS_FILE_SCAN_LIMIT} JavaScript files; refusing to scan unbounded package contents.`,
       ]);
     } finally {
       rmSync(packageRoot, { recursive: true, force: true });
@@ -1184,7 +1285,15 @@ describe("collectInstalledRootDependencyManifestErrors", () => {
       name: "accepts the oversized worker rsync receiver",
       relativePath: `worker/${WORKER_BUNDLE_RSYNC_RECEIVER_PATH}`,
     },
-  ])("$name", ({ expected, relativePath }) => {
+    {
+      expected: [
+        `installed package root dist file 'worker/${WORKER_BUNDLE_ENTRY_PATH}' is invalid or exceeds 83886080 bytes.`,
+      ],
+      name: "rejects the worker deploy entrypoint above its dedicated parser bound",
+      relativePath: `worker/${WORKER_BUNDLE_ENTRY_PATH}`,
+      sparseSize: 80 * 1024 * 1024 + 1,
+    },
+  ])("$name", ({ expected, relativePath, sparseSize }) => {
     const packageRoot = makeInstalledPackageRoot();
 
     try {
@@ -1194,7 +1303,12 @@ describe("collectInstalledRootDependencyManifestErrors", () => {
       });
       const filePath = join(packageRoot, "dist", relativePath);
       mkdirSync(dirname(filePath), { recursive: true });
-      writeFileSync(filePath, `/* ${"x".repeat(6 * 1024 * 1024)} */\n`, "utf8");
+      if (sparseSize) {
+        writeFileSync(filePath, "/*", "utf8");
+        truncateSync(filePath, sparseSize);
+      } else {
+        writeFileSync(filePath, `/* ${"x".repeat(6 * 1024 * 1024)} */\n`, "utf8");
+      }
 
       expect(collectInstalledRootDependencyManifestErrors(packageRoot)).toEqual(expected);
     } finally {

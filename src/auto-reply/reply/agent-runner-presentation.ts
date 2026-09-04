@@ -23,7 +23,7 @@ type AgentTurnPresentation = {
     errorContext: boolean,
   ) => { text?: string; skip: boolean };
   normalizeStreamingText: (payload: ReplyPayload) => { text?: string; skip: boolean };
-  startPresentationWhileTyping: (
+  presentWithTyping: (
     typingPromise: Promise<void>,
     startPresentation: () => boolean | void | Promise<boolean | void>,
   ) => Promise<boolean | void>;
@@ -40,7 +40,7 @@ export function createAgentTurnPresentation(params: {
 }): AgentTurnPresentation {
   const classifyStreamingPartial = (payload: ReplyPayload): { text?: string; skip: boolean } => {
     let text = payload.text;
-    const reply = resolveSendableOutboundReplyParts(payload);
+    const reply = resolveSendableOutboundReplyParts(payload, { text: "" });
     if (params.turn.followupRun.run.silentExpected) {
       return { skip: true };
     }
@@ -80,9 +80,11 @@ export function createAgentTurnPresentation(params: {
     if (!text) {
       return { skip: true };
     }
+    const conversationContext =
+      params.turn.sessionCtx.agentText ?? params.turn.sessionCtx.BodyForAgent;
     const sanitized = errorContext
-      ? renderUserFacingText(text, { errorContext: true })
-      : sanitizeUserFacingText(text);
+      ? renderUserFacingText(text, { errorContext: true, conversationContext, streaming: true })
+      : sanitizeUserFacingText(text, { conversationContext, streaming: true });
     return sanitized.trim() ? { text: sanitized, skip: false } : { skip: true };
   };
 
@@ -94,10 +96,16 @@ export function createAgentTurnPresentation(params: {
     return sanitizeStreamingText(classified.text, Boolean(payload.isError));
   };
 
-  const startPresentationWhileTyping = async (
+  const preserveProgressCallbackStartOrder =
+    params.turn.opts?.preserveProgressCallbackStartOrder === true;
+  const presentWithTyping = async (
     typingPromise: Promise<void>,
     startPresentation: () => boolean | void | Promise<boolean | void>,
   ) => {
+    if (!preserveProgressCallbackStartOrder) {
+      await typingPromise;
+      return await startPresentation();
+    }
     let presentationPromise: boolean | void | Promise<boolean | void>;
     try {
       presentationPromise = startPresentation();
@@ -135,7 +143,7 @@ export function createAgentTurnPresentation(params: {
     classifyStreamingPartial,
     sanitizeStreamingText,
     normalizeStreamingText,
-    startPresentationWhileTyping,
+    presentWithTyping,
     blockReplyHandler,
   };
 }

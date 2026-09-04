@@ -1,7 +1,6 @@
 // Shares plugin auto-enable detection across config and runtime code.
 import { collectConfiguredModelRefs } from "@openclaw/model-catalog-core/configured-model-refs";
 import { normalizeProviderId } from "@openclaw/model-catalog-core/provider-id";
-import { expectDefined } from "@openclaw/normalization-core";
 import {
   asOptionalObjectRecord,
   asOptionalRecord,
@@ -16,9 +15,9 @@ import {
   type ChannelPresenceSignalSource,
 } from "../channels/config-presence.js";
 import {
-  hasBundledChannelConfiguredState,
-  listBundledChannelIdsWithConfiguredState,
-} from "../channels/plugins/configured-state.js";
+  hasBundledChannelPackageState,
+  listBundledChannelIdsForPackageState,
+} from "../channels/plugins/package-state-probes.js";
 import { findChatChannelMeta, normalizeChatChannelId } from "../channels/registry.js";
 import { isBlockedObjectKey } from "../infra/prototype-keys.js";
 import { normalizePluginsConfig } from "../plugins/config-state.js";
@@ -40,6 +39,7 @@ import type {
   PluginAutoEnableResult,
 } from "./plugin-auto-enable.types.js";
 import { ensurePluginAllowlisted } from "./plugins-allowlist.js";
+import { resolveConfiguredTalkRealtimeProviderId } from "./talk.js";
 import type { OpenClawConfig } from "./types.openclaw.js";
 
 const EMPTY_PLUGIN_MANIFEST_REGISTRY: PluginManifestRegistry = {
@@ -298,7 +298,9 @@ function collectConfiguredChannelIds(
   discovery?: PluginDiscoveryResult,
   ambientEnvTriggers: AmbientEnvTriggerPolicy = "allow",
 ): string[] {
-  const configuredStateChannelIds = new Set(listBundledChannelIdsWithConfiguredState(discovery));
+  const configuredStateChannelIds = new Set(
+    listBundledChannelIdsForPackageState("configuredState", discovery),
+  );
   return listPotentialConfiguredChannelPresenceSignals(cfg, env, {
     includePersistedAuthState: false,
     discovery,
@@ -332,7 +334,8 @@ function isAutoEnableConfiguredChannelSignal(params: {
   if (
     params.source === "env" &&
     params.configuredStateChannelIds.has(params.channelId) &&
-    !hasBundledChannelConfiguredState({
+    !hasBundledChannelPackageState({
+      metadataKey: "configuredState",
       channelId: params.channelId,
       cfg: params.cfg,
       env: params.env,
@@ -353,8 +356,10 @@ function hasConfiguredWebSearchProviderSelection(cfg: OpenClawConfig): boolean {
   );
 }
 
-function hasConfiguredSpeechProviderSelection(cfg: OpenClawConfig): boolean {
-  return collectConfiguredSpeechProviderIds(cfg).size > 0;
+function hasConfiguredVoiceProviderSelection(cfg: OpenClawConfig): boolean {
+  return Boolean(
+    collectConfiguredSpeechProviderIds(cfg).size || resolveConfiguredTalkRealtimeProviderId(cfg),
+  );
 }
 
 function hasConfiguredPluginConfigEntry(
@@ -533,7 +538,7 @@ function configMayNeedPluginManifestRegistry(cfg: OpenClawConfig, env: NodeJS.Pr
   if (hasConfiguredProviderModelOrHarness(cfg, env)) {
     return true;
   }
-  if (hasConfiguredSpeechProviderSelection(cfg)) {
+  if (hasConfiguredVoiceProviderSelection(cfg)) {
     return true;
   }
   if (collectConfiguredWorkerProviderIds(cfg).length > 0) {
@@ -584,7 +589,7 @@ export function resolvePluginAutoEnableReadiness(
   if (hasConfiguredProviderModelOrHarness(cfg, env)) {
     return { mayNeedAutoEnable: true, configuredChannelIds };
   }
-  if (hasConfiguredSpeechProviderSelection(cfg)) {
+  if (hasConfiguredVoiceProviderSelection(cfg)) {
     return { mayNeedAutoEnable: true, configuredChannelIds };
   }
   if (collectConfiguredWorkerProviderIds(cfg).length > 0) {
@@ -667,22 +672,24 @@ export function resolveConfiguredPluginAutoEnableCandidates(params: {
     }
   }
 
-  for (const { value: modelRef } of collectConfiguredModelRefs(params.config, {
-    includeChannelModelOverrides: false,
-  })) {
+  const configuredModelPluginIds = new Set<string>();
+  for (const modelRef of new Set(
+    collectConfiguredModelRefs(params.config, { includeChannelModelOverrides: false }).map(
+      ({ value }) => value,
+    ),
+  )) {
     const owningPluginIds = resolveOwningPluginIdsForModelRef({
       model: modelRef,
       config: params.config,
       env: params.env,
       manifestRegistry: params.registry,
     });
-    if (owningPluginIds?.length === 1) {
-      changes.push({
-        pluginId: expectDefined(owningPluginIds[0], "owning plugin ids entry at 0"),
-        kind: "provider-model-configured",
-        modelRef,
-      });
+    const pluginId = owningPluginIds?.length === 1 ? owningPluginIds[0] : undefined;
+    if (!pluginId || configuredModelPluginIds.has(pluginId)) {
+      continue;
     }
+    configuredModelPluginIds.add(pluginId);
+    changes.push({ pluginId, kind: "provider-model-configured", modelRef });
   }
 
   for (const providerId of collectConfiguredSpeechProviderIds(params.config)) {
@@ -694,6 +701,20 @@ export function resolveConfiguredPluginAutoEnableCandidates(params: {
         pluginId,
         kind: "speech-provider-selected",
         providerId,
+      });
+    }
+  }
+
+  const realtimeProviderId = resolveConfiguredTalkRealtimeProviderId(params.config);
+  if (realtimeProviderId) {
+    for (const plugin of params.registry.plugins) {
+      if (!plugin.contracts?.realtimeVoiceProviders?.includes(realtimeProviderId.toLowerCase())) {
+        continue;
+      }
+      changes.push({
+        pluginId: plugin.id,
+        kind: "setup-auto-enable",
+        reason: `${realtimeProviderId} realtime voice provider selected`,
       });
     }
   }
@@ -779,6 +800,7 @@ export function resolveConfiguredPluginAutoEnableCandidates(params: {
       config: params.config,
       env: params.env,
       pluginIds: setupPluginIds,
+      manifestRegistry: params.registry,
     })) {
       changes.push({
         pluginId: entry.pluginId,

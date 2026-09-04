@@ -688,3 +688,67 @@ describe("resolveMessagingTarget (directory fallback)", () => {
     expect(formatTargetDisplay({ channel: "forum", target: "forum:12345" })).toBe("12345");
   });
 });
+
+describe("resolveMessagingTarget (registry-scoped channel plugins)", () => {
+  const cfg = {} as OpenClawConfig;
+  const scopedPlugin = {
+    id: "zephyrchat",
+    meta: { label: "ZephyrChat" },
+    outbound: { sendText: async () => ({}) },
+    messaging: {
+      targetResolver: {
+        looksLikeId: (id: string) => /^Z[0-9a-f]{8}$/i.test(id.trim()),
+        hint: "<zephyrId>",
+      },
+    },
+  } as unknown as ChannelPlugin;
+  const scopedRegistry = {
+    channels: [{ plugin: scopedPlugin }],
+  } as unknown as import("../../plugins/registry-types.js").PluginRegistry;
+
+  beforeEach(() => {
+    mocks.getChannelPlugin.mockReturnValue(undefined);
+    mocks.getLoadedChannelPlugin.mockReturnValue(undefined);
+  });
+
+  it("resolves an id-like target through a channel plugin that is only registry-scoped", async () => {
+    const { withPluginRuntimeRegistryScope } =
+      await import("../../plugins/runtime/gateway-request-scope.js");
+    const result = await withPluginRuntimeRegistryScope(scopedRegistry, () =>
+      resolveMessagingTarget({ cfg, channel: "zephyrchat", input: "Zdeadbeef" }),
+    );
+    expect(result.ok).toBe(true);
+    if (!result.ok) {
+      throw new Error("expected scoped plugin resolution to succeed");
+    }
+    expect(result.target.to).toBe("Zdeadbeef");
+  });
+
+  it("keeps the scoped plugin's label and hint on an unknown target", async () => {
+    const { withPluginRuntimeRegistryScope } =
+      await import("../../plugins/runtime/gateway-request-scope.js");
+    const result = await withPluginRuntimeRegistryScope(scopedRegistry, () =>
+      resolveMessagingTarget({ cfg, channel: "zephyrchat", input: "not an id" }),
+    );
+    expect(result.ok).toBe(false);
+    if (result.ok) {
+      throw new Error("expected unknown target");
+    }
+    expect(result.error.message).toBe(
+      'Unknown target "not an id" for ZephyrChat. Hint: <zephyrId>',
+    );
+  });
+
+  it("still reports an unknown target without the scope", async () => {
+    const result = await resolveMessagingTarget({
+      cfg,
+      channel: "zephyrchat",
+      input: "Zdeadbeef",
+    });
+    expect(result.ok).toBe(false);
+    if (result.ok) {
+      throw new Error("expected unknown target without a scoped registry");
+    }
+    expect(result.error.message).toBe('Unknown target "Zdeadbeef" for zephyrchat.');
+  });
+});

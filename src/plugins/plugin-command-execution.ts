@@ -2,7 +2,7 @@
 import { normalizeLowercaseStringOrEmpty } from "@openclaw/normalization-core/string-coerce";
 import { truncateUtf16Safe } from "@openclaw/normalization-core/utf16-slice";
 import { resolveBoundAgentIdForSession } from "../agents/session-agent-binding.js";
-import { resolveConversationBindingContext } from "../channels/conversation-binding-context.js";
+import { resolveCommandConversationResolution } from "../channels/conversation-resolution.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { ADMIN_SCOPE, isOperatorScope } from "../gateway/operator-scopes.js";
 import { logVerbose } from "../globals.js";
@@ -49,7 +49,7 @@ function sanitizeArgs(args: string | undefined): string | undefined {
 
 function resolveBindingConversation(params: {
   registry: PluginRegistry;
-  config?: OpenClawConfig;
+  config: OpenClawConfig;
   channel: string;
   senderId?: string;
   from?: string;
@@ -65,8 +65,9 @@ function resolveBindingConversation(params: {
   if (!channelPlugin?.bindings?.resolveCommandConversation) {
     return null;
   }
-  return resolveConversationBindingContext({
-    cfg: params.config ?? ({} as OpenClawConfig),
+  return resolveCommandConversationResolution({
+    cfg: params.config,
+    plugin: channelPlugin,
     channel: params.channel,
     accountId: params.accountId,
     threadId: params.messageThreadId,

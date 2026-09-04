@@ -441,6 +441,32 @@ describe("deliverAgentCommandResult payload normalization", () => {
     });
   });
 
+  it.each([
+    { source: "outbound agent", outboundSession: { agentId: "worker" }, name: "Worker" },
+    { source: "session key", sessionKey: "agent:worker:slack:channel:c123", name: "Worker" },
+    { source: "sole agent", name: "Default" },
+  ])("carries the $source identity through durable final delivery", async (testCase) => {
+    await deliverAgentCommandResultForTest({
+      cfg: {
+        agents: {
+          entries: {
+            main: { identity: { name: " Default ", emoji: " :robot_face: " } },
+            ...(testCase.name === "Worker"
+              ? { worker: { identity: { name: " Worker ", emoji: " :robot_face: " } } }
+              : {}),
+          },
+        },
+      },
+      outboundSession: testCase.outboundSession,
+      opts: { sessionKey: testCase.sessionKey },
+      payloads: [{ text: "final answer" }],
+    });
+
+    expect(latestOutboundDeliveryArgs()).toMatchObject({
+      identity: { name: testCase.name, emoji: ":robot_face:" },
+    });
+  });
+
   it("renders response prefix templates with the selected runtime model", async () => {
     const delivered = await deliverAgentCommandResult({
       cfg: {
@@ -469,13 +495,11 @@ describe("deliverAgentCommandResult payload normalization", () => {
   });
 
   it("normalizes reply-media paths before outbound delivery", async () => {
-    const normalizerFn = vi.fn(
-      async (payload: ReplyPayload): Promise<ReplyPayload> => ({
-        ...payload,
-        mediaUrl: "/tmp/agent-workspace/out/photo.png",
-        mediaUrls: ["/tmp/agent-workspace/out/photo.png"],
-      }),
-    );
+    const normalizerFn = vi.fn(async (payload: ReplyPayload): Promise<ReplyPayload> => ({
+      ...payload,
+      mediaUrl: "/tmp/agent-workspace/out/photo.png",
+      mediaUrls: ["/tmp/agent-workspace/out/photo.png"],
+    }));
     createReplyMediaPathNormalizerMock.mockReturnValue(normalizerFn);
     deliverOutboundPayloadsMock.mockResolvedValue([]);
 

@@ -1,6 +1,5 @@
 {
   "id": "xiaomi",
-  "icon": "https://cdn.simpleicons.org/xiaomi",
   "activation": {
     "onStartup": false
   },
@@ -99,7 +98,7 @@
     }
   ],
   "contracts": {
-    "speechProviders": ["xiaomi"],
+    "speechProviders": ["xiaomi", "mimo"],
     "usageProviders": ["xiaomi", "xiaomi-token-plan"]
   },
   "providerAuthChoices": [

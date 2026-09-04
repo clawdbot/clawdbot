@@ -1,11 +1,13 @@
 /* @vitest-environment jsdom */
 
-import { describe, expect, it } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { GatewayBrowserClient } from "../../api/gateway.ts";
 import { createChatAttachmentHandoff } from "../../app/chat-attachment-handoff.ts";
 import type { ApplicationContext } from "../../app/context.ts";
 import type { ChatAttachment } from "../../lib/chat/chat-types.ts";
 import type { SessionCapability } from "../../lib/sessions/index.ts";
+import { resolveUiConversationIdentity } from "../../lib/sessions/session-key.ts";
+import { createStorageMock } from "../../test-helpers/storage.ts";
 import {
   getChatAttachmentDataUrl,
   registerChatAttachmentPayload,
@@ -13,14 +15,27 @@ import {
 } from "./attachment-payload-store.ts";
 import {
   closeStagedPane,
+  ChatPaneComposerHandoff,
   discardStateStagedAttachments,
   preparePaneStagedAttachments,
   replacePaneStagedAttachmentGatewayOwner,
   restorePaneStagedAttachments,
 } from "./chat-pane-attachment-handoff.ts";
 import { createTestChatPane } from "./chat-pane.test-support.ts";
+import { enqueueChatMessage, subscribeChatOutboxProjection } from "./chat-queue.ts";
 import type { ChatPageHost } from "./chat-state-host.ts";
-import { resolveStoredChatOutboxScope, storedChatOutboxScopeKey } from "./composer-persistence.ts";
+import {
+  ChatComposerPersistence,
+  loadChatComposerSnapshot,
+  storedChatOutboxScopeKey,
+} from "./composer-persistence.ts";
+import {
+  activeQueuedMessageEdit,
+  beginQueuedMessageEdit,
+  cancelQueuedMessageEdit,
+  isQueuedMessageBeingEdited,
+  updateQueuedMessageEdit,
+} from "./queued-message-edit.ts";
 import type { ChatSplitLayout } from "./split-layout-types.ts";
 
 function storedAttachment(id: string, mimeType = "image/png"): ChatAttachment {
@@ -42,6 +57,169 @@ function state(attachments: ChatAttachment[], sessionKey = "agent:main:one") {
     settings: { gatewayUrl: "ws://example.test" },
   } as unknown as ChatPageHost;
 }
+
+describe("cross-region Home composer ownership", () => {
+  const disposals: Array<() => void> = [];
+  beforeEach(() => {
+    vi.stubGlobal("sessionStorage", createStorageMock());
+  });
+  afterEach(() => {
+    for (const dispose of disposals.splice(0).toReversed()) {
+      dispose();
+    }
+    vi.unstubAllGlobals();
+  });
+
+  function presentation(
+    context: ApplicationContext,
+    owner: GatewayBrowserClient,
+    region: "page" | "dock",
+    sessionKey = "global",
+    agentId = "main",
+  ) {
+    const current = state([], sessionKey);
+    current.assistantAgentId = agentId;
+    current.client = owner;
+    current.connected = false;
+    current.chatMessage = "";
+    current.chatQueue = [];
+    const persistence = new ChatComposerPersistence(() => current);
+    current.requestUpdate = () => persistence.persistChangedState();
+    persistence.start();
+    const unsubscribe = subscribeChatOutboxProjection(current);
+    const view = { presented: true, owner };
+    const handoff = new ChatPaneComposerHandoff(context, {
+      state: () => current,
+      owner: () => view.owner,
+      region: () => region,
+      presented: () => view.presented,
+      pause: () => persistence.stop(),
+      resume: (restore) => {
+        if (restore) {
+          persistence.restore();
+        }
+        persistence.start();
+      },
+    });
+    disposals.push(() => {
+      handoff.dispose();
+      unsubscribe();
+      persistence.stop();
+      discardStateStagedAttachments(current);
+    });
+    return {
+      current,
+      persistence,
+      view,
+      handoff,
+      edit: (text: string, attachments = current.chatAttachments) => {
+        current.chatMessage = text;
+        current.chatAttachments = attachments;
+        persistence.schedule();
+        persistence.persistNow();
+      },
+    };
+  }
+
+  it.each([
+    ["agent:main:main", false],
+    ["global", false],
+    ["agent:main:main", true],
+    ["global", true],
+  ] as const)(
+    "moves edited draft and file back to the already-retained Home (%s, client rotation=%s)",
+    (sessionKey, rotateClient) => {
+      const context = {} as ApplicationContext;
+      const owner = { recoveryScope: "profile-a" } as GatewayBrowserClient;
+      const page = presentation(context, owner, "page", sessionKey);
+      page.edit("Home page draft");
+      page.view.presented = false;
+      const dock = presentation(context, owner, "dock", sessionKey);
+      dock.handoff.claim();
+      expect(dock.current.chatMessage).toBe("Home page draft");
+      const file = storedAttachment(`roundtrip-${sessionKey}`, "text/plain");
+      dock.edit("Edited in the dock", [file]);
+      const queued = enqueueChatMessage(dock.current, "queued original")!;
+      expect(beginQueuedMessageEdit(dock.current, queued.id)).toBe("started");
+      updateQueuedMessageEdit(dock.current, "unfinished queue correction");
+      if (rotateClient) {
+        const replacement = {
+          recoveryScope: "profile-a",
+          recoveryScopeReady: true,
+        } as GatewayBrowserClient;
+        for (const pane of [page, dock]) {
+          pane.view.owner = replacement;
+          pane.current.client = replacement;
+        }
+      }
+
+      // A retained source may still receive invalidations, but relinquished
+      // persistence must never overwrite the current presentation's newer edit.
+      page.current.chatMessage = "stale retained draft";
+      page.current.requestUpdate();
+      expect(loadChatComposerSnapshot(dock.current, sessionKey)?.draft).toBe("Edited in the dock");
+      page.view.presented = true;
+      page.handoff.claim();
+      dock.handoff.dispose();
+
+      expect(page.current.chatMessage).toBe("Edited in the dock");
+      expect(page.current.chatAttachments).toEqual([file]);
+      expect(getChatAttachmentDataUrl(file)).not.toBeNull();
+      expect(dock.current.chatAttachments).toEqual([]);
+      expect(loadChatComposerSnapshot(page.current, sessionKey)?.draft).toBe("Edited in the dock");
+      expect(activeQueuedMessageEdit(page.current)?.draftText).toBe("unfinished queue correction");
+      expect(dock.current.chatQueuedEdit).toBeNull();
+      expect(isQueuedMessageBeingEdited(dock.current, queued.id)).toBe(true);
+      expect(cancelQueuedMessageEdit(page.current)).toBe(true);
+      expect(isQueuedMessageBeingEdited(dock.current, queued.id)).toBe(false);
+    },
+  );
+
+  it.each([
+    "region",
+    "agent",
+    "session",
+    "client",
+    "profile",
+    "gateway",
+    "unverified-rotation",
+  ] as const)("does not transfer across a different %s owner", (difference) => {
+    const context = {} as ApplicationContext;
+    const owner = { recoveryScope: "profile-a" } as GatewayBrowserClient;
+    const page = presentation(context, owner, "page");
+    page.edit("Private Home draft");
+    page.view.presented = false;
+    if (difference === "profile") {
+      Object.defineProperty(owner, "recoveryScope", { value: "profile-b" });
+    }
+    if (difference === "gateway") {
+      page.current.settings = { gatewayUrl: "ws://different.test" } as ChatPageHost["settings"];
+    }
+    const nextOwner =
+      difference === "client" || difference === "unverified-rotation"
+        ? ({ recoveryScope: "profile-a" } as GatewayBrowserClient)
+        : owner;
+    if (difference === "unverified-rotation") {
+      page.view.owner = nextOwner;
+      page.current.client = nextOwner;
+    }
+    const dock = presentation(
+      context,
+      nextOwner,
+      difference === "region" ? "page" : "dock",
+      difference === "session" ? "agent:main:other" : "global",
+      difference === "agent" ? "research" : "main",
+    );
+    if (difference === "gateway") {
+      dock.current.settings = page.current.settings;
+    }
+
+    dock.handoff.claim();
+
+    expect(dock.current.chatMessage).toBe("");
+    expect(page.current.chatMessage).toBe("Private Home draft");
+  });
+});
 
 describe("staged chat attachment pane handoff", () => {
   it("discards a mounted package before clearing a closed pane handoff", () => {
@@ -107,7 +285,7 @@ describe("staged chat attachment pane handoff", () => {
       activePaneId: "p2",
     } satisfies ChatSplitLayout;
     const scopeKey = storedChatOutboxScopeKey(
-      resolveStoredChatOutboxScope(current, current.sessionKey),
+      resolveUiConversationIdentity(current, current.sessionKey),
     );
 
     closeStagedPane(pane.context, root, layout, pane.paneId);
@@ -145,7 +323,7 @@ describe("staged chat attachment pane handoff", () => {
     const reopened = storedAttachment("reopened");
     current.chatAttachments = [reopened];
     const scopeKey = storedChatOutboxScopeKey(
-      resolveStoredChatOutboxScope(current, current.sessionKey),
+      resolveUiConversationIdentity(current, current.sessionKey),
     );
 
     pane.disconnectedCallback();
@@ -249,7 +427,9 @@ describe("staged chat attachment pane handoff", () => {
     handoff.prepare({
       owner,
       paneId: "p1",
-      scopeKey: storedChatOutboxScopeKey(resolveStoredChatOutboxScope(remount, remount.sessionKey)),
+      scopeKey: storedChatOutboxScopeKey(
+        resolveUiConversationIdentity(remount, remount.sessionKey),
+      ),
       attachments: [],
       fallbacks: {
         collision: {

@@ -27,22 +27,32 @@ openclaw sessions --store ./tmp/sessions.json
 openclaw sessions --json
 ```
 
+Human-readable lists and cleanup previews use terminal-width tables. Long model
+names and flags wrap without being truncated, and Unicode keys stay aligned.
+Long keys show their beginning and end; use `openclaw sessions --json` for complete
+session keys.
+
 Flags:
 
-| Flag                 | Description                                                                   |
-| -------------------- | ----------------------------------------------------------------------------- |
-| `--agent <id>`       | One configured agent store (required for multiple explicit agents).           |
-| `--all-agents`       | Aggregate all configured agent stores.                                        |
-| `--store <path>`     | Legacy store selector path (cannot combine with `--agent` or `--all-agents`). |
-| `--active <minutes>` | Only show sessions updated within the past N minutes.                         |
-| `--limit <n\|all>`   | Max rows to output (default `100`; `all` restores full output).               |
-| `--json`             | Machine-readable output.                                                      |
-| `--verbose`          | Verbose logging.                                                              |
+| Flag                 | Description                                                         |
+| -------------------- | ------------------------------------------------------------------- |
+| `--agent <id>`       | One configured agent store (required for multiple explicit agents). |
+| `--all-agents`       | Aggregate all configured agent stores.                              |
+| `--store <path>`     | Legacy store selector path (cannot combine with `--all-agents`).    |
+| `--active <minutes>` | Only show sessions updated within the past N minutes.               |
+| `--limit <n\|all>`   | Max rows to output (default `100`; `all` restores full output).     |
+| `--json`             | Machine-readable output.                                            |
+| `--verbose`          | Verbose logging.                                                    |
 
 `--store` accepts the documented legacy selector form, including `sessions.json`
 and suffixless custom selectors. OpenClaw resolves that selector to its physical
 SQLite target, verifies the target exists and is usable, and reports the physical
-path it actually read.
+path it actually read. Combine it with `--agent <id>` when you must select the
+configured agent that owns the store.
+
+`--agent` and `--store` require non-blank values. Selection errors exit non-zero
+and use the standard [CLI JSON failure envelope](/cli#json-failures) when `--json`
+is set.
 
 `openclaw sessions` and the Gateway `sessions.list` RPC are bounded by default
 so large long-lived stores cannot monopolize the CLI process or Gateway event
@@ -50,6 +60,10 @@ loop. The CLI returns the newest 100 sessions by default; pass `--limit <n>`
 for a smaller/larger window or `--limit all` when you intentionally need the
 full store. JSON responses include `totalCount`, `limitApplied`, and `hasMore`
 when callers need to show that more rows exist.
+
+JSON session rows include `color` when a session color is set (for example,
+`"color": "blue"`). Uncolored sessions and sessions whose color was cleared omit
+the field.
 
 RPC clients can pass `configuredAgentsOnly: true` to keep the broad combined
 discovery source but return only rows for agents currently present in config.
@@ -106,6 +120,12 @@ wait for the placement to settle, then retry. Agent main sessions remain
 protected. Already archived sessions are successful no-ops. Use `--dry-run` to
 validate every key and preview the result without changing session state.
 
+Archive reasons are assigned automatically and displayed as human-readable text
+in the Control UI. Explicit archive commands record `manual`; maintenance-owned
+archives record their owning trigger. Missing reasons remain protected as legacy
+state. Under disk pressure, only sessions explicitly archived by `maxEntries`
+are eligible for automatic deletion after cheaper cleanup tiers are exhausted.
+
 ## Delete sessions
 
 Delete one or more sessions through the running Gateway:
@@ -144,6 +164,13 @@ Both lifecycle commands:
 - emit one stable JSON envelope with `ok`, `operation`, `dryRun`, and `results`
   when `--json` is set.
 
+Dry-run uses the Gateway's session list to report protected agent-main sessions
+as failed, even when the CLI uses different local session settings. Already
+archived sessions remain successful archive no-ops. Dry-run does not execute all
+Gateway lifecycle checks: `global` previews can still show an archive or delete
+action that the Gateway refuses. Explicitly selected non-default global deletion
+remains supported. The real archive or delete request is authoritative.
+
 Example mixed-result JSON:
 
 ```json
@@ -177,13 +204,21 @@ openclaw sessions --all-agents tail --follow
 progress lines. Without `--session-key`, it tails running sessions first, then
 the latest stored session. `--tail <count>` controls how many existing events
 print before follow mode; default `80`, and `0` starts at the current end.
-`--follow` keeps watching the selected SQLite-backed session or an explicit
-legacy trajectory file.
+`--follow` keeps watching the selected SQLite-backed sessions. Session keys use
+fixed-width terminal columns, with long keys truncated at whole grapheme boundaries
+so CJK characters, combining accents, and joined emoji keep progress lines aligned.
+
+A fully qualified `--session-key` selects its agent only when `--agent`, `--store`,
+and `--all-agents` are absent. An explicitly empty or whitespace-only `--agent`
+is rejected instead of selecting an inferred agent.
 
 The progress view is intentionally conservative: prompt text, tool arguments,
 and tool result bodies are not printed. Tool calls show the tool name with
 `{...redacted...}`; tool results show status such as `ok`, `error`, or `done`;
-model completion lines show provider/model and terminal status.
+model completion lines show provider/model and terminal status. Provider failures
+and turns without delivery show `error`; cancellation shows `aborted`, timeouts
+show `timeout`, and successful completions (including delivered partial replies)
+show `done`.
 
 ## Export a trajectory bundle
 
@@ -215,24 +250,29 @@ openclaw sessions cleanup --json
 
 - Scope note: `openclaw sessions cleanup` maintains session stores,
   transcripts, trajectory rows, and legacy trajectory sidecars. It does not
-  prune cron run history, which automatically keeps the newest 2000 rows per job
-  ([Cron configuration](/automation/cron-jobs#configuration)).
+  prune cron run history. Task maintenance retains terminal cron history for 7
+  days (`lost` rows for 24 hours) and enforces the newest 2000 rows per job and
+  history class as an additional ceiling ([Task maintenance](/automation/tasks#automatic-maintenance),
+  [Cron configuration](/automation/cron-jobs#configuration)).
 - Cleanup also prunes unreferenced legacy/archive transcript artifacts,
   compaction checkpoints, and trajectory sidecars older than
   `session.maintenance.pruneAfter`; artifacts still referenced by SQLite
-  session rows are preserved.
+  session rows are preserved. Eligible empty files count as removed artifacts
+  in both dry-run and applied summaries, even though they free zero bytes.
 - Cleanup reports short-lived Gateway model-run probe cleanup separately as
   `modelRunPruned`. This only matches strict explicit keys shaped like
   `agent:*:explicit:model-run-<uuid>`. Retention is a fixed `24h` and is
   pressure-gated: it only removes stale probe rows when session-entry
   maintenance/cap pressure is reached. When it runs, model-run cleanup
   happens before global stale cleanup and capping.
-- `maxEntries` caps the total live session row count. Protected rows are
-  reported as `keep` and count toward the cap, but they are never automatic
-  eviction targets. If protected rows prevent cleanup from reaching the cap,
-  the store remains above it. `--enforce` does not remove that protection;
-  unarchive, unpin, wait for active work to finish, or explicitly delete
-  sessions you no longer want to retain.
+- `maxEntries` caps the unarchived session row count; archived rows do not
+  consume it. Eligible ordinary overflow is reported as `archive-cap` and
+  archived, while synthetic runtime overflow remains disposable. Protected
+  unarchived rows are reported as `keep` and still consume the cap. If those
+  protected rows prevent cleanup from reaching the cap, the unarchived store
+  remains above it. `--enforce` does not remove that protection; unpin, wait
+  for active work to finish, or explicitly delete sessions you no longer want
+  to retain.
 
 Flags:
 
@@ -252,6 +292,19 @@ When a Gateway is reachable, non-dry-run cleanup for configured agent stores is
 sent through the Gateway so it shares the same session-store writer as runtime
 traffic. Use `--store <path>` for explicit offline repair of a legacy store
 selector.
+
+Offline cleanup loads trusted, permitted harness plugins so their session-owned
+resources are reclaimed with the deleted rows, even if the agent now uses a
+different model. Explicitly disabled or untrusted plugins are not run. If their
+resources may remain, cleanup prints a warning on stderr without changing the
+JSON result. Dry runs do not load harness plugins.
+
+Applied artifact cleanup counts only successful file removals. If a file cannot
+be deleted, it contributes no freed bytes and remains part of disk usage.
+Unreferenced artifact cleanup and legacy disk-budget enforcement continue with
+other eligible files. Canonical SQLite archive pruning stops after a deletion
+error to retain its database recovery copy. If usage stays above the target,
+check filesystem permissions and retry after resolving the deletion failure.
 
 `openclaw sessions cleanup --all-agents --dry-run --json`:
 

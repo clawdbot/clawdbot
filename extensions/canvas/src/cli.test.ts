@@ -1,5 +1,19 @@
+import {
+  GatewayClientRequestError,
+  GatewayClientRequestTimeoutError,
+} from "@openclaw/gateway-client";
 import { Command } from "commander";
 import { beforeEach, describe, expect, it, vi } from "vitest";
+
+const gatewayMocks = vi.hoisted(() => ({
+  callGatewayFromCli: vi.fn(),
+}));
+
+vi.mock("openclaw/plugin-sdk/gateway-runtime", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("openclaw/plugin-sdk/gateway-runtime")>()),
+  callGatewayFromCli: gatewayMocks.callGatewayFromCli,
+}));
+
 import {
   createDefaultCanvasCliDependencies,
   registerNodesCanvasCommands,
@@ -35,6 +49,7 @@ function createProgram(deps: CanvasCliDependencies) {
 describe("nodes canvas CLI", () => {
   beforeEach(() => {
     vi.clearAllMocks();
+    gatewayMocks.callGatewayFromCli.mockReset();
   });
 
   it("registers only presenter commands", () => {
@@ -179,5 +194,124 @@ describe("nodes canvas CLI", () => {
       }),
     ).rejects.toThrow(message);
     expect(deps.callGatewayCli).not.toHaveBeenCalled();
+  });
+
+  it("resolves and invokes a paired node when an older Gateway lacks node.list", async () => {
+    const { deps } = createDeps();
+    deps.resolveNodeId = createDefaultCanvasCliDependencies().resolveNodeId;
+    gatewayMocks.callGatewayFromCli
+      .mockRejectedValueOnce(
+        new GatewayClientRequestError({
+          code: "INVALID_REQUEST",
+          message: "unknown method: node.list",
+        }),
+      )
+      .mockResolvedValueOnce({
+        pending: [],
+        paired: [{ nodeId: "legacy-node", displayName: "Legacy Node" }],
+      });
+
+    await createProgram(deps).parseAsync(["nodes", "canvas", "hide", "--node", "Legacy Node"], {
+      from: "user",
+    });
+
+    expect(gatewayMocks.callGatewayFromCli.mock.calls.map(([method]) => method)).toEqual([
+      "node.list",
+      "node.pair.list",
+    ]);
+    expect(deps.callGatewayCli).toHaveBeenCalledWith(
+      "node.invoke",
+      expect.any(Object),
+      expect.objectContaining({ nodeId: "legacy-node", command: "canvas.hide" }),
+      expect.any(Object),
+    );
+  });
+
+  it.each([
+    {
+      label: "a local request timeout",
+      error: new GatewayClientRequestTimeoutError({
+        method: "node.list",
+        timeoutMs: 80,
+        requestSent: true,
+      }),
+    },
+    {
+      label: "an authorization rejection",
+      error: new GatewayClientRequestError({
+        code: "FORBIDDEN",
+        message: "unknown method: node.list",
+      }),
+    },
+    {
+      label: "an INVALID_REQUEST authentication failure",
+      error: new GatewayClientRequestError({
+        code: "INVALID_REQUEST",
+        message: "unauthorized",
+      }),
+    },
+    {
+      label: "a retryable unknown-method rejection",
+      error: new GatewayClientRequestError({
+        code: "INVALID_REQUEST",
+        message: "unknown method: node.list",
+        retryable: true,
+      }),
+    },
+    {
+      label: "an unknown-method rejection for another method",
+      error: new GatewayClientRequestError({
+        code: "INVALID_REQUEST",
+        message: "unknown method: node.list.extra",
+      }),
+    },
+    {
+      label: "malformed request retry metadata",
+      error: new GatewayClientRequestError({
+        code: "INVALID_REQUEST",
+        message: "unknown method: node.list",
+        retryAfterMs: -1,
+      }),
+    },
+    {
+      label: "a network connection error",
+      error: Object.assign(new Error("connect ECONNREFUSED 127.0.0.1:18789"), {
+        code: "ECONNREFUSED",
+      }),
+    },
+    {
+      label: "a closed Gateway transport",
+      error: new Error("gateway closed (1006): connection lost"),
+    },
+    {
+      label: "a malformed request-error lookalike",
+      error: Object.assign(new Error("unknown method: node.list"), {
+        name: "GatewayClientRequestError",
+        gatewayCode: "INVALID_REQUEST",
+      }),
+    },
+    {
+      label: "a plain unknown-method error",
+      error: new Error("unknown method: node.list"),
+    },
+  ])("preserves $label without resolving or invoking a stale node", async ({ error }) => {
+    const { deps, runtime } = createDeps();
+    deps.resolveNodeId = createDefaultCanvasCliDependencies().resolveNodeId;
+    gatewayMocks.callGatewayFromCli.mockRejectedValueOnce(error).mockResolvedValueOnce({
+      pending: [],
+      paired: [{ nodeId: "stale-node", displayName: "Stale Node" }],
+    });
+
+    await expect(
+      createProgram(deps).parseAsync(["nodes", "canvas", "hide", "--node", "Stale Node"], {
+        from: "user",
+      }),
+    ).rejects.toBe(error);
+
+    expect(gatewayMocks.callGatewayFromCli.mock.calls.map(([method]) => method)).toEqual([
+      "node.list",
+    ]);
+    expect(deps.callGatewayCli).not.toHaveBeenCalled();
+    expect(runtime.log).not.toHaveBeenCalled();
   });
 });

@@ -1,6 +1,6 @@
-import { mkdir } from "node:fs/promises";
 import path from "node:path";
-import { expect, it } from "vitest";
+import { beforeEach, expect, it } from "vitest";
+import { createControlUiE2eArtifactDir } from "../test-helpers/control-ui-e2e-artifacts.ts";
 import { installMockGateway } from "../test-helpers/control-ui-e2e.ts";
 import { createControlUiE2eSuite } from "./control-ui-e2e-suite.test-support.ts";
 
@@ -12,12 +12,12 @@ const suite = createControlUiE2eSuite({
 
 const captureUiProofEnabled = process.env.OPENCLAW_CAPTURE_UI_PROOF === "1";
 const collapsedSessionSectionsStorageKey = "openclaw:sidebar:sessions:collapsed-sections";
-const uiProofArtifactDir = path.join(
-  process.cwd(),
-  ".artifacts",
-  "control-ui-e2e",
-  "native-session-discovery",
-);
+let uiProofArtifactDir: string;
+beforeEach(() => {
+  if (captureUiProofEnabled) {
+    uiProofArtifactDir = createControlUiE2eArtifactDir("native-session-discovery");
+  }
+});
 
 suite.define(() => {
   it("hides empty native hosts and the empty Coding section", async () => {
@@ -101,7 +101,6 @@ suite.define(() => {
       await section.getByText("Shared gateway session", { exact: true }).waitFor();
       await section.getByText("Remote-only session", { exact: true }).waitFor();
       if (captureUiProofEnabled) {
-        await mkdir(uiProofArtifactDir, { recursive: true });
         await sessionGroups.screenshot({
           animations: "disabled",
           path: path.join(uiProofArtifactDir, "08-after-deduplicated-session-hosts.png"),

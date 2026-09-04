@@ -25,19 +25,17 @@ import {
   isExecApprovalRunAbortedError,
   registerExecApprovalRequestForHostOrThrow,
 } from "./bash-tools.exec-approval-request.js";
+import { shouldAwaitExecApprovalInline } from "./bash-tools.exec-approval-wait.js";
 import {
   formatNodeInvokeFailureFollowup,
-  formatNodeInvokeFailureToolResult,
   invokeNodeSystemRun,
 } from "./bash-tools.exec-host-node-failure.js";
 import {
   analyzeNodeApprovalRequirement,
   buildNodeSystemRunInvoke,
-  formatNodeRunToolResult,
-  invokeNodeSystemRunDirect,
+  dispatchNodeSystemRun,
   prepareNodeSystemRun,
   resolveNodeExecutionTarget,
-  shouldSkipNodeApprovalPrepare,
 } from "./bash-tools.exec-host-node-phases.js";
 import type { ExecuteNodeHostCommandParams } from "./bash-tools.exec-host-node.types.js";
 import * as execHostShared from "./bash-tools.exec-host-shared.js";
@@ -67,6 +65,9 @@ async function assertCurrentNodeGatewayPolicyAllowsDispatch(params: {
   currentPolicyAllows?: (policy: { hostSecurity: ExecSecurity; hostAsk: ExecAsk }) => boolean;
   fallbackPolicy?: NodeGatewayPolicyCheckpoint;
 }): Promise<void> {
+  if (params.request.bypassHostApprovalFloors) {
+    return;
+  }
   const current = await execHostShared.resolveExecHostApprovalContext({
     agentId: params.request.agentId,
     security: params.request.security,
@@ -113,38 +114,19 @@ export async function executeNodeHostCommand(
 ): Promise<AgentToolResult<ExecToolDetails>> {
   const target = await resolveNodeExecutionTarget(params);
   params.signal?.throwIfAborted();
-  if (params.bypassHostApprovalFloors) {
-    return await invokeNodeSystemRunDirect({ request: params, target });
-  }
-  const { hostSecurity, hostAsk, askFallback } =
-    await execHostShared.resolveExecHostApprovalContext({
-      agentId: params.agentId,
-      security: params.security,
-      ask: params.ask,
-      host: "node",
-    });
-  if (
-    shouldSkipNodeApprovalPrepare({
-      hostSecurity,
-      hostAsk,
-      strictInlineEval: params.strictInlineEval,
-    })
-  ) {
-    await assertCurrentNodeGatewayPolicyAllowsDispatch({
-      request: params,
-      authority: "current-policy",
-      currentPolicyAllows: (current) =>
-        shouldSkipNodeApprovalPrepare({
-          hostSecurity: current.hostSecurity,
-          hostAsk: current.hostAsk,
-          strictInlineEval: params.strictInlineEval,
-        }),
-    });
-    params.signal?.throwIfAborted();
-    return await invokeNodeSystemRunDirect({ request: params, target });
-  }
+  const { hostSecurity, hostAsk, askFallback } = params.bypassHostApprovalFloors
+    ? { hostSecurity: params.security, hostAsk: params.ask, askFallback: "deny" as const }
+    : await execHostShared.resolveExecHostApprovalContext({
+        agentId: params.agentId,
+        security: params.security,
+        ask: params.ask,
+        host: "node",
+      });
 
-  const prepared = await prepareNodeSystemRun({ request: params, target });
+  const prepared = await prepareNodeSystemRun({
+    request: { ...params, security: hostSecurity, ask: hostAsk },
+    target,
+  });
   const approvalAnalysis = await analyzeNodeApprovalRequirement({
     request: params,
     target,
@@ -177,16 +159,29 @@ export async function executeNodeHostCommand(
   });
   const unavailableDecisionRequestParams =
     unavailableDecisions.length > 0 ? { unavailableDecisions } : {};
+  const effectiveSecurity =
+    nodeSecurity === undefined ? hostSecurity : minSecurity(hostSecurity, nodeSecurity);
+  const effectiveAsk = nodeAsk === undefined ? hostAsk : maxAsk(hostAsk, nodeAsk);
+  if (effectiveSecurity === "deny") {
+    throw new Error("exec denied: host=node security=deny");
+  }
   const requiresAsk =
     requiresExecApproval({
-      ask: hostAsk,
-      security: hostSecurity,
+      ask: effectiveAsk,
+      security: effectiveSecurity,
       analysisOk,
       allowlistSatisfied,
       durableApprovalSatisfied,
     }) ||
     inlineEvalHit !== null ||
     requiresSecurityAuditSuppressionApproval;
+  if (
+    !requiresAsk &&
+    effectiveSecurity === "allowlist" &&
+    !(durableApprovalSatisfied || (analysisOk && allowlistSatisfied))
+  ) {
+    throw new Error("exec denied: host=node allowlist miss (ask=off)");
+  }
   if (requiresAsk && params.nonInteractiveApproval) {
     const text = `Exec denied (approval_required): ${params.command}`;
     return {
@@ -218,6 +213,7 @@ export async function executeNodeHostCommand(
       workdir: prepared.cwd,
       host: "node",
       nodeId: target.nodeId,
+      trigger: params.trigger,
       toolCallId: params.toolCallId,
       security: hostSecurity,
       ask: hostAsk,
@@ -446,6 +442,40 @@ export async function executeNodeHostCommand(
         inlineFallbackPolicy = currentFallback;
         inlineApprovalDecision = null;
         inlineApprovalId = approvalId;
+      } else if (unavailableReason === null && shouldAwaitExecApprovalInline(params)) {
+        // Keep the admitted turn alive while its approval is pending. Returning
+        // approval-pending here closes the authority before the operator can act.
+        const outcome = await execHostShared.resolveExecApprovalWaitOutcome({
+          approvalId,
+          preResolvedDecision,
+          signal: params.signal,
+          askFallback,
+          resolveTimedOut: async () => {
+            const fallback = await resolveCurrentTimeoutFallback();
+            return { ...fallback, context: fallback };
+          },
+          requiresExplicitApproval: (fallback) =>
+            fallback?.requiresExplicitApproval ?? inlineEvalHit !== null,
+          requiresAutoReviewHumanApproval: autoReviewRequiresHumanApproval,
+        });
+        params.signal?.throwIfAborted();
+        if (outcome.kind !== "resolved") {
+          throw new Error(`exec denied: ${outcome.kind}`);
+        }
+        if (outcome.state.deniedReason || !outcome.state.approvedByAsk) {
+          throw new Error(`exec denied: ${outcome.state.deniedReason ?? "approval-required"}`);
+        }
+        inlineApprovedByAsk = true;
+        inlineApprovalId = approvalId;
+        inlineApprovalDecision =
+          outcome.decision === "allow-always" && inlineEvalHit === null
+            ? "allow-always"
+            : outcome.decision === "allow-once" || outcome.decision === "allow-always"
+              ? "allow-once"
+              : null;
+        inlineApprovalSource = outcome.decision === null ? "ask-fallback" : undefined;
+        inlineDispatchAuthority = inlineApprovalSource ?? "human-approval";
+        inlineFallbackPolicy = outcome.state.timeoutContext;
       } else {
         const followupTarget = execHostShared.buildExecApprovalFollowupTarget({
           approvalId,
@@ -632,7 +662,6 @@ export async function executeNodeHostCommand(
     }
   }
 
-  const startedAt = Date.now();
   params.signal?.throwIfAborted();
   const invoke = buildNodeSystemRunInvoke({
     target,
@@ -641,6 +670,10 @@ export async function executeNodeHostCommand(
     cwd: prepared.cwd,
     agentId: prepared.agentId,
     sessionKey: prepared.sessionKey,
+    turnSourceChannel: params.turnSourceChannel,
+    turnSourceTo: params.turnSourceTo,
+    turnSourceAccountId: params.turnSourceAccountId,
+    turnSourceThreadId: params.turnSourceThreadId,
     approved: inlineApprovalSource ? undefined : inlineApprovedByAsk,
     approvalDecision: inlineApprovalSource ? null : inlineApprovalDecision,
     approvalSource: inlineApprovalSource,
@@ -660,32 +693,19 @@ export async function executeNodeHostCommand(
         allowlistSatisfied,
         durableApprovalSatisfied,
       }) &&
+      (current.hostSecurity !== "allowlist" ||
+        durableApprovalSatisfied ||
+        (analysisOk && allowlistSatisfied)) &&
       inlineEvalHit === null &&
       !requiresSecurityAuditSuppressionApproval,
   });
   params.signal?.throwIfAborted();
-  const invocation = await invokeNodeSystemRun({
-    invokeWaitMs: target.invokeWaitMs,
+  return dispatchNodeSystemRun({
+    request: params,
+    target,
     invoke,
-    signal: params.signal,
     ...((inlineApprovedByAsk || inlineApprovalSource) && inlineApprovalId
       ? { scopes: APPROVED_NODE_INVOKE_SCOPES }
       : {}),
-  });
-  if (!invocation.ok) {
-    return formatNodeInvokeFailureToolResult({
-      failure: invocation.failure,
-      nodeId: target.nodeId,
-      command: params.command,
-      startedAt,
-      cwd: params.workdir,
-      warnings: [...params.warnings, ...(params.foregroundWarnings ?? [])],
-    });
-  }
-  return formatNodeRunToolResult({
-    raw: invocation.raw,
-    startedAt,
-    cwd: params.workdir,
-    warnings: [...params.warnings, ...(params.foregroundWarnings ?? [])],
   });
 }

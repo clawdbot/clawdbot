@@ -222,13 +222,11 @@ export async function azureSpeechTTS(params: {
 
   try {
     await assertOkOrThrowProviderError(response, "Azure Speech TTS API error");
-    return Buffer.from(
-      await readProviderBinaryResponse(response, "Azure Speech TTS API error", "audio", {
-        maxBytes: params.maxBytes ?? DEFAULT_AZURE_SPEECH_MAX_BYTES,
-        onOverflow: ({ maxBytes }) =>
-          new Error(`Azure Speech TTS audio response exceeds ${maxBytes} bytes`),
-      }),
-    );
+    return await readProviderBinaryResponse(response, "Azure Speech TTS API error", "audio", {
+      maxBytes: params.maxBytes ?? DEFAULT_AZURE_SPEECH_MAX_BYTES,
+      onOverflow: ({ maxBytes }) =>
+        new Error(`Azure Speech TTS audio response exceeds ${maxBytes} bytes`),
+    });
   } finally {
     await release();
   }

@@ -1,6 +1,7 @@
 import type { Model } from "../../../llm/types.js";
 import { OPENCLAW_AGENT_RUNTIME_ID } from "../../agent-runtime-id.js";
 import { resolveAuthoredModelContextTokens } from "../../context-resolution.js";
+import { AgentHarnessPreflightError } from "../../harness/errors.js";
 import {
   selectAgentHarness,
   selectAgentHarnessForPreparedModelProviders,
@@ -22,7 +23,7 @@ type HarnessSelectionContext = {
   provider: string;
   modelId: string;
   requestStreamTransportOverrides?: "present";
-  nativeModelOwnedHarnessId?: string;
+  pinnedHarnessId?: string;
 };
 
 export function resolveEmbeddedRunEffectiveModel(
@@ -45,9 +46,10 @@ export function resolveEmbeddedRunEffectiveModel(
     modelId: params.modelId,
     runtimeModel: params.runtimeModel,
     nativeModelOwned: params.nativeModelOwned,
+    ...(params.runParams.contextWindow ? { contextWindow: params.runParams.contextWindow } : {}),
   });
   const authoredContextTokenCap =
-    params.agentHarnessId === OPENCLAW_AGENT_RUNTIME_ID
+    params.nativeModelOwned || params.agentHarnessId === OPENCLAW_AGENT_RUNTIME_ID
       ? undefined
       : resolveAuthoredModelContextTokens({
           cfg: params.runParams.config,
@@ -91,13 +93,13 @@ function buildHarnessModelProvider(
 }
 
 function assertPinnedHarness(
-  nativeModelOwnedHarnessId: string | undefined,
+  pinnedHarnessId: string | undefined,
   selected: AgentHarness,
   subject: string,
 ): void {
-  if (nativeModelOwnedHarnessId && selected.id !== nativeModelOwnedHarnessId) {
-    throw new Error(
-      `${subject} changed the session-pinned agent harness from "${nativeModelOwnedHarnessId}" to "${selected.id}".`,
+  if (pinnedHarnessId && selected.id !== pinnedHarnessId) {
+    throw new AgentHarnessPreflightError(
+      `${subject} changed the session-pinned agent harness from "${pinnedHarnessId}" to "${selected.id}". Reattach the original native session or use a concrete model chat.`,
     );
   }
 }
@@ -119,7 +121,7 @@ export function selectEmbeddedRunHarness(
     agentHarnessId: params.runParams.agentHarnessId,
     agentHarnessRuntimeOverride: params.runParams.agentHarnessRuntimeOverride,
   });
-  assertPinnedHarness(params.nativeModelOwnedHarnessId, selected, "Prepared model route");
+  assertPinnedHarness(params.pinnedHarnessId, selected, "Prepared model route");
   return selected;
 }
 
@@ -150,6 +152,6 @@ export function selectEmbeddedRunHarnessForPreparedAttempts(
     agentHarnessId: params.runParams.agentHarnessId,
     agentHarnessRuntimeOverride: params.runParams.agentHarnessRuntimeOverride,
   });
-  assertPinnedHarness(params.nativeModelOwnedHarnessId, selected, "Prepared auth routes");
+  assertPinnedHarness(params.pinnedHarnessId, selected, "Prepared auth routes");
   return selected;
 }

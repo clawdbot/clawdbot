@@ -11,6 +11,7 @@ import {
   type RequestFn,
 } from "./overlays-access.test-support.ts";
 import { createApplicationOverlays } from "./overlays.ts";
+import type { UpdateRestartStatusResponse } from "./update-overlay-helpers.ts";
 
 vi.mock("../lib/toast.ts", () => ({ showToast: vi.fn() }));
 
@@ -21,8 +22,6 @@ const UPDATE_HANDOFF_STARTED_REASON = "managed-service-handoff-started";
 function installUpdateTranslations() {
   const translations: Record<string, string> = {
     "updates.outcomeUnknown": UNKNOWN_OUTCOME_TEXT,
-    "updates.verificationFailedWithVersions":
-      "Update installed but running version did not change — restart may have been blocked. Expected v{expectedVersion}, running v{actualVersion}.",
     "updates.verificationFailedWithIdentity":
       "Update finished, but the running install does not match the expected revision. Expected {expected}, running {actual}.",
     "common.unknown": "Unknown",
@@ -42,8 +41,86 @@ afterEach(() => {
 });
 
 describe("application update reconciliation races", () => {
+  it("preserves a verified campaign outcome when update.run rejects afterward", async () => {
+    const updateRun = deferred();
+    const request = vi.fn<RequestFn>((method) => {
+      if (method === "update.run") {
+        return updateRun.promise;
+      }
+      return Promise.resolve(
+        method === "update.status"
+          ? {
+              sentinel: {
+                kind: "update",
+                status: "ok",
+                ts: 1_000,
+                stats: { after: { version: "2.0.0" } },
+              },
+            }
+          : [],
+      );
+    });
+    const harness = createGatewayHarness(client(request));
+    const overlays = createApplicationOverlays(harness.gateway, {
+      getActiveSessionKey: () => "agent:main:campaign-chat",
+    });
+    const schedule = {
+      channel: "stable",
+      autoEnabled: true,
+      target: { kind: "package", version: "2.0.0" },
+    };
+    harness.emitEvent("update.available", {
+      updateAvailable: { channel: "stable", currentVersion: "1.0.0", latestVersion: "2.0.0" },
+    });
+    const running = overlays.runUpdate();
+    try {
+      await flushMicrotasks();
+      expect(request).toHaveBeenCalledWith("update.run", {
+        sessionKey: "agent:main:campaign-chat",
+      });
+      harness.emitEvent("update.available", {
+        schedule: {
+          ...schedule,
+          campaign: {
+            id: "manual-campaign",
+            state: "applying",
+            announcedAtMs: 1_000,
+            forceAtMs: 1_000,
+            updatedAtMs: 1_000,
+          },
+        },
+      });
+      harness.emitEvent("update.available", { schedule });
+      await flushMicrotasks();
+      expect(overlays.snapshot.updateReconciliationPending).toBe(false);
+      expect(overlays.snapshot.updateStatusBanner).toBeNull();
+
+      updateRun.reject(new Error("late-rpc-rejection"));
+      await running;
+
+      expect(overlays.snapshot.updateStatusBanner).toBeNull();
+    } finally {
+      updateRun.resolve({});
+      await running;
+      overlays.dispose();
+    }
+  });
+
   it("checks the authoritative sentinel when disconnect wins the update.run response race", async () => {
+    vi.useFakeTimers();
     installUpdateTranslations();
+    let status: UpdateRestartStatusResponse = {
+      sentinel: {
+        kind: "update",
+        status: "skipped",
+        ts: 1_000,
+        stats: {
+          handoffId: "handoff-current",
+          reason: UPDATE_HANDOFF_STARTED_REASON,
+          after: { version: "1.0.0" },
+        },
+      },
+    };
     const updateRun = deferred<{
       ok: boolean;
       handoff: { status: string };
@@ -57,19 +134,15 @@ describe("application update reconciliation races", () => {
         return updateRun.promise;
       }
       if (method === "update.status") {
-        return Promise.resolve({
-          sentinel: {
-            kind: "update",
-            status: "ok",
-            stats: { after: { version: "1.0.0" } },
-          },
-        });
+        return Promise.resolve(status);
       }
       return Promise.resolve({});
     });
     const gatewayClient = client(request);
     const harness = createGatewayHarness(gatewayClient);
-    const overlays = createApplicationOverlays(harness.gateway);
+    const overlays = createApplicationOverlays(harness.gateway, {
+      getActiveSessionKey: () => "agent:main:disconnect-chat",
+    });
 
     try {
       harness.update({
@@ -87,7 +160,9 @@ describe("application update reconciliation races", () => {
 
       const running = overlays.runUpdate();
       await flushMicrotasks();
-      expect(request).toHaveBeenCalledWith("update.run", {});
+      expect(request).toHaveBeenCalledWith("update.run", {
+        sessionKey: "agent:main:disconnect-chat",
+      });
       expect(overlays.snapshot.updateReconciliationPending).toBe(true);
 
       harness.update({ phase: "stopped" });
@@ -95,6 +170,17 @@ describe("application update reconciliation races", () => {
       await flushMicrotasks();
 
       expectUpdateStatusRequested(request);
+      expect(overlays.snapshot.updateReconciliationPending).toBe(true);
+      // The status owner learned this real pending handoff while the RPC was unavailable.
+      status = {
+        sentinel: {
+          ...status.sentinel,
+          status: "ok",
+          ts: 2_000,
+          stats: { handoffId: "handoff-current", reason: null, after: { version: "1.0.0" } },
+        },
+      };
+      await vi.advanceTimersByTimeAsync(1_000);
       expect(overlays.snapshot.updateReconciliationPending).toBe(false);
       expect(overlays.snapshot.updateStatusBanner).toEqual({
         tone: "danger",
@@ -115,6 +201,7 @@ describe("application update reconciliation races", () => {
         result: { reason: UPDATE_HANDOFF_STARTED_REASON, status: "skipped" },
       });
       overlays.dispose();
+      vi.useRealTimers();
     }
   });
 
@@ -220,7 +307,7 @@ describe("application update reconciliation races", () => {
       expect(overlays.snapshot.updateReconciliationPending).toBe(false);
       expect(overlays.snapshot.updateStatusBanner).toEqual({
         tone: "danger",
-        text: expect.stringContaining("Expected v2.0.0"),
+        text: UNKNOWN_OUTCOME_TEXT,
       });
     } finally {
       overlays.dispose();
@@ -256,10 +343,16 @@ describe("application update reconciliation races", () => {
       await overlays.runUpdate();
       expect(overlays.snapshot.updateReconciliationPending).toBe(true);
 
+      const statusRequestsBeforeReconnect = request.mock.calls.filter(
+        ([method]) => method === "update.status",
+      ).length;
       harness.update({ phase: "stopped" });
       harness.update({ phase: "connected" });
       await flushMicrotasks();
       expectUpdateStatusRequested(request);
+      expect(request.mock.calls.filter(([method]) => method === "update.status")).toHaveLength(
+        statusRequestsBeforeReconnect + 1,
+      );
 
       harness.update({
         hello: {
@@ -286,7 +379,9 @@ describe("application update reconciliation races", () => {
         tone: "danger",
         text: UNKNOWN_OUTCOME_TEXT,
       });
-      expect(request.mock.calls.filter(([method]) => method === "update.status")).toHaveLength(1);
+      expect(request.mock.calls.filter(([method]) => method === "update.status")).toHaveLength(
+        statusRequestsBeforeReconnect + 1,
+      );
     } finally {
       updateStatus.resolve({});
       overlays.dispose();

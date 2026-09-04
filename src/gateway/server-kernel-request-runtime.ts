@@ -4,6 +4,7 @@ import type { createSubsystemLogger } from "../logging/subsystem.js";
 import { createGatewayChatMetadataLifecycle } from "./server-chat-metadata-lifecycle.js";
 import type { startGatewayCoreRuntime } from "./server-core-runtime.js";
 import { attachInitialGatewayLifetimeSidecars } from "./server-lifetime-sidecars.js";
+import type { GatewayHostLifecycle } from "./server-public.js";
 import { enforceSharedGatewaySessionGenerationForConfigWrite } from "./server-shared-auth-generation.js";
 import {
   getHealthCache,
@@ -19,6 +20,7 @@ export async function prepareGatewayKernelRequestRuntime(params: {
   coreRuntime: GatewayCoreRuntime;
   log: GatewayLogger;
   logHealth: GatewayLogger;
+  hostLifecycle?: GatewayHostLifecycle;
 }) {
   const { coreRuntime: runtime, log, logHealth } = params;
   const {
@@ -28,15 +30,19 @@ export async function prepareGatewayKernelRequestRuntime(params: {
     unavailableGatewayMethods,
     sessionCompanion,
     sessionObserver,
+    mentionInbox,
     getMcpAppSandboxPort,
     ensureSandboxHostPort,
     getPortalService,
     terminalLaunchPolicy,
     execApprovalManager,
+    questionManager,
     cancelRunBoundApprovals,
     forwardPluginApprovalRequest,
+    approvalWebPushDelivery,
     pluginApprovalIosPushDelivery,
     pluginApprovalManager,
+    placementStandingGrants,
     systemAgentApprovalManager,
     bindApprovalPublicationContext,
     validateAgentRuntimeApprovalAuthority,
@@ -123,19 +129,25 @@ export async function prepareGatewayKernelRequestRuntime(params: {
       runtimeState,
       sessionCompanion,
       getRuntimeConfig,
+      isConfigReloadSettled: () =>
+        !lifecycle.closePreludeStarted && runtimeState.configReloader.isConfigReloadSettled(),
       getGatewayMethodRegistry: getAttachedGatewayMethodRegistry,
       gatewayTlsFingerprint: gatewayTls.enabled ? gatewayTls.fingerprintSha256 : undefined,
       sessionObserver,
+      mentionInbox,
       getMcpAppSandboxPort,
       ensureSandboxHostPort,
       getPortalService,
       resolveTerminalLaunchPolicy: terminalLaunchPolicy.resolve,
       isTerminalEnabled: terminalLaunchPolicy.isEnabled,
       execApprovalManager,
+      questionManager,
       cancelRunBoundApprovals,
       forwardPluginApprovalRequest,
+      approvalWebPushDelivery,
       pluginApprovalIosPushDelivery,
       pluginApprovalManager,
+      placementStandingGrants,
       systemAgentApprovalManager,
       listSessionPendingApprovals: approvalSessionEvents.replay,
       loadGatewayModelCatalog,
@@ -177,7 +189,10 @@ export async function prepareGatewayKernelRequestRuntime(params: {
         ? { workerSessionPlacementService: workerEnvironmentStartup.placementStore }
         : {}),
       ...(workerPlacementRuntime
-        ? { workerPlacementDiskSpaceReader: workerPlacementRuntime.diskSpace }
+        ? {
+            workerPlacementDiskSpaceReader: workerPlacementRuntime.diskSpace,
+            workerPlacementRunnerAvailabilityReader: workerPlacementRuntime.runnerAvailability,
+          }
         : {}),
       ...(workerPlacementControlAvailable
         ? { workerPlacementDispatchService: workerPlacementControlAvailable }
@@ -221,6 +236,7 @@ export async function prepareGatewayKernelRequestRuntime(params: {
       getConfigReloaderHotReloadStatus: kernel.getConfigReloaderHotReloadStatus,
     });
   });
+  gatewayRequestContext.requestEntryLifetime = runtime.requestEntryLifetime;
   bindApprovalPublicationContext(gatewayRequestContext);
   await attachInitialGatewayLifetimeSidecars({
     chatMetadataLifecycle,
@@ -234,6 +250,13 @@ export async function prepareGatewayKernelRequestRuntime(params: {
     sidecars: runtimeState.gatewayLifetimeSidecars,
   });
   pluginGatewayContext.current = gatewayRequestContext;
+  gatewayRequestContext.dispatchHookAgentTurn = async (pluginId, hookParams) => {
+    const transport = runtime.transportBridge.current();
+    if (!transport) {
+      throw new Error("Gateway listener must start before plugin hook dispatch");
+    }
+    return await transport.dispatchHookAgentTurn(pluginId, hookParams);
+  };
   const { createGatewayInstanceRuntime } = await import("./server-instance-runtime.js");
   const gatewayInstanceRuntime = createGatewayInstanceRuntime({
     getContext: () => gatewayRequestContext,
@@ -244,8 +267,23 @@ export async function prepareGatewayKernelRequestRuntime(params: {
   gatewayInstanceRuntimeRef.current = gatewayInstanceRuntime;
   gatewayRequestContext.resolveGatewayContext = () =>
     gatewayInstanceRuntime.isAvailable() ? gatewayRequestContext : undefined;
+  const hostLifecycle = params.hostLifecycle;
+  if (hostLifecycle) {
+    gatewayRequestContext.hostLifecycle = {
+      request: (action, assertCaller) =>
+        hostLifecycle.request(action, () => {
+          if (!gatewayInstanceRuntime.isAvailable()) {
+            throw new Error(
+              "Gateway lifecycle is unavailable for this closed instance. Reconnect and retry.",
+            );
+          }
+          assertCaller();
+        }),
+    };
+  }
   gatewayRequestContext.approvalEvents = gatewayInstanceRuntime.approvalEvents;
   gatewayRequestContext.recoveryRuntime = gatewayInstanceRuntime.recovery;
+  gatewayRequestContext.createAgentTurnFacade = gatewayInstanceRuntime.createAgentTurnFacade;
   return { ...runtime, chatMetadataLifecycle, gatewayRequestContext, gatewayInstanceRuntime };
 }
 

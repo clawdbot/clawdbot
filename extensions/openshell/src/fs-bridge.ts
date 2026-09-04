@@ -7,37 +7,42 @@ import type {
   SandboxFsStat,
   SandboxResolvedPath,
 } from "openclaw/plugin-sdk/sandbox";
-import { createWritableRenameTargetResolver } from "openclaw/plugin-sdk/sandbox";
+import {
+  createWritableRenameTargetResolver,
+  resolveReadOnlyWorkspaceSkillMounts,
+} from "openclaw/plugin-sdk/sandbox";
 import { FsSafeError } from "openclaw/plugin-sdk/security-runtime";
-import type { OpenShellFsBridgeContext, OpenShellSandboxBackend } from "./backend.types.js";
+import type { OpenShellFsBridgeContext, OpenShellMirrorBackend } from "./backend.types.js";
+import {
+  isOpenShellRemotePathInside,
+  resolveOpenShellWorkspaceRoot,
+  type OpenShellWorkspaceRoot,
+} from "./workspace-roots.js";
 
 type ResolvedMountPath = SandboxResolvedPath & {
   mountHostRoot: string;
   writable: boolean;
-  source: "workspace" | "agent" | "protectedSkill";
 };
 
 type FsSafeRoot = Awaited<ReturnType<typeof fsRoot>>;
 type FsSafeStat = Awaited<ReturnType<FsSafeRoot["stat"]>>;
 
-const MATERIALIZED_SKILLS_CONTAINER_PARTS = [".openclaw", "sandbox-skills", "skills"] as const;
-
 export function createOpenShellFsBridge(params: {
   sandbox: OpenShellFsBridgeContext;
-  backend: OpenShellSandboxBackend;
-}): SandboxFsBridge {
+  backend: OpenShellMirrorBackend;
+}) {
   return new OpenShellFsBridge(params.sandbox, params.backend);
 }
 
 class OpenShellFsBridge implements SandboxFsBridge {
   private readonly resolveRenameTargets = createWritableRenameTargetResolver(
     (target) => this.resolveTarget(target),
-    (target, action) => this.ensureWritable(target, action),
+    (target, action) => this.ensureWritable(target, action, true),
   );
 
   constructor(
     private readonly sandbox: OpenShellFsBridgeContext,
-    private readonly backend: OpenShellSandboxBackend,
+    private readonly backend: OpenShellMirrorBackend,
   ) {}
 
   resolvePath(params: { filePath: string; cwd?: string }): SandboxResolvedPath {
@@ -177,7 +182,7 @@ class OpenShellFsBridge implements SandboxFsBridge {
   }): Promise<void> {
     const target = this.resolveTarget(params);
     const hostPath = this.requireHostPath(target);
-    this.ensureWritable(target, "remove files");
+    this.ensureWritable(target, "remove files", params.recursive);
     await assertLocalPathSafety({
       target,
       root: target.mountHostRoot,
@@ -255,10 +260,33 @@ class OpenShellFsBridge implements SandboxFsBridge {
     };
   }
 
-  private ensureWritable(target: ResolvedMountPath, action: string) {
-    if (this.sandbox.workspaceAccess !== "rw" || !target.writable) {
+  private ensureWritable(target: ResolvedMountPath, action: string, includeDescendants = false) {
+    if (
+      this.sandbox.workspaceAccess === "ro" ||
+      !target.writable ||
+      (includeDescendants &&
+        this.readOnlyMounts().some((mount) =>
+          isOpenShellRemotePathInside(target.containerPath, mount.containerPath),
+        ))
+    ) {
       throw new Error(`Sandbox path is read-only; cannot ${action}: ${target.containerPath}`);
     }
+  }
+
+  private readOnlyMounts() {
+    const workdirs = [this.sandbox.containerWorkdir];
+    if (
+      this.sandbox.workspaceAccess !== "none" &&
+      path.resolve(this.sandbox.workspaceDir) !== path.resolve(this.sandbox.agentWorkspaceDir)
+    ) {
+      workdirs.push(this.backend.remoteAgentWorkspaceDir || "/agent");
+    }
+    return [
+      ...workdirs.flatMap((workdir) =>
+        resolveReadOnlyWorkspaceSkillMounts({ ...this.sandbox, workdir }),
+      ),
+      ...(this.sandbox.readOnlyResourceMounts ?? []),
+    ];
   }
 
   private requireHostPath(target: ResolvedMountPath): string {
@@ -279,126 +307,139 @@ class OpenShellFsBridge implements SandboxFsBridge {
       "/",
     );
     const workspaceContainerRoot = this.sandbox.containerWorkdir.replace(/\\/g, "/");
-    const skillsRoot = this.sandbox.skillsWorkspaceDir
-      ? path.resolve(this.sandbox.skillsWorkspaceDir, "skills")
-      : undefined;
-    const skillsContainerRoot = path.posix.join(
-      workspaceContainerRoot,
-      ...MATERIALIZED_SKILLS_CONTAINER_PARTS,
-    );
-    const workspaceSkillsShadowRoot = path.resolve(
-      workspaceRoot,
-      ...MATERIALIZED_SKILLS_CONTAINER_PARTS,
-    );
     const input = params.filePath.trim();
+    const readOnlyMounts = this.readOnlyMounts();
 
-    if (skillsRoot && this.sandbox.workspaceAccess === "rw") {
-      const protectedSkillTarget = resolveProtectedSkillTarget({
-        input,
-        skillsRoot,
-        skillsContainerRoot,
-      });
-      if (protectedSkillTarget) {
-        return protectedSkillTarget;
+    const containerMounts: OpenShellWorkspaceRoot<{
+      hostRoot: string;
+      writable: boolean;
+    }>[] = [
+      {
+        remote: workspaceContainerRoot,
+        owner: "workspace",
+        value: {
+          hostRoot: workspaceRoot,
+          writable: this.sandbox.workspaceAccess !== "ro",
+        },
+      },
+      ...(hasAgentMount
+        ? [
+            {
+              remote: agentContainerRoot,
+              owner: "agent" as const,
+              value: {
+                hostRoot: agentRoot,
+                writable: this.sandbox.workspaceAccess === "rw",
+              },
+            },
+          ]
+        : []),
+    ];
+    containerMounts.unshift(
+      ...readOnlyMounts.map((mount) => ({
+        remote: mount.containerPath,
+        owner:
+          resolveOpenShellWorkspaceRoot(containerMounts, mount.containerPath)?.owner ?? "workspace",
+        value: { hostRoot: path.resolve(mount.hostPath), writable: false },
+      })),
+    );
+    const resolveContainerTarget = (containerPath: string): ResolvedMountPath | undefined => {
+      const containerMount = resolveOpenShellWorkspaceRoot(containerMounts, containerPath);
+      if (!containerMount) {
+        return undefined;
       }
-    }
-
-    if (input.startsWith(`${workspaceContainerRoot}/`) || input === workspaceContainerRoot) {
-      const relative = path.posix.relative(workspaceContainerRoot, input) || "";
+      const relative = path.posix.relative(containerMount.remote, containerPath) || "";
       const hostPath = relative
-        ? path.resolve(workspaceRoot, ...relative.split("/"))
-        : workspaceRoot;
+        ? path.resolve(containerMount.value.hostRoot, ...relative.split("/"))
+        : containerMount.value.hostRoot;
+      if (!isPathInside(containerMount.value.hostRoot, hostPath)) {
+        throw new Error(`Sandbox path escapes allowed mounts; cannot access: ${input}`);
+      }
       return {
         hostPath,
-        relativePath: relative,
+        relativePath:
+          containerMount.owner === "agent"
+            ? relative
+              ? containerMount.remote + "/" + relative
+              : containerMount.remote
+            : path.posix.relative(workspaceContainerRoot, containerPath),
         containerPath: relative
-          ? path.posix.join(workspaceContainerRoot, relative)
-          : workspaceContainerRoot,
-        mountHostRoot: workspaceRoot,
-        writable: this.sandbox.workspaceAccess === "rw",
-        source: "workspace",
+          ? path.posix.join(containerMount.remote, relative)
+          : containerMount.remote,
+        mountHostRoot: containerMount.value.hostRoot,
+        writable: containerMount.value.writable,
       };
-    }
-
-    if (
-      hasAgentMount &&
-      (input.startsWith(`${agentContainerRoot}/`) || input === agentContainerRoot)
-    ) {
-      const relative = path.posix.relative(agentContainerRoot, input) || "";
-      const hostPath = relative ? path.resolve(agentRoot, ...relative.split("/")) : agentRoot;
-      return {
-        hostPath,
-        relativePath: relative ? agentContainerRoot + "/" + relative : agentContainerRoot,
-        containerPath: relative
-          ? path.posix.join(agentContainerRoot, relative)
-          : agentContainerRoot,
-        mountHostRoot: agentRoot,
-        writable: this.sandbox.workspaceAccess === "rw",
-        source: "agent",
-      };
+    };
+    const containerCwd = params.cwd?.replace(/\\/g, "/");
+    const cwdMount = containerCwd
+      ? resolveOpenShellWorkspaceRoot(containerMounts, containerCwd)
+      : undefined;
+    const containerInput = path.posix.isAbsolute(input)
+      ? input
+      : cwdMount || !params.cwd
+        ? path.posix.resolve(containerCwd ?? workspaceContainerRoot, input)
+        : undefined;
+    if (containerInput) {
+      const target = resolveContainerTarget(containerInput);
+      if (target) {
+        return target;
+      }
+      if (
+        cwdMount ||
+        containerMounts.some(
+          (mount) => input === mount.remote || input.startsWith(`${mount.remote}/`),
+        )
+      ) {
+        throw new Error(`Sandbox path escapes allowed mounts; cannot access: ${input}`);
+      }
     }
 
     const cwd = params.cwd ? path.resolve(params.cwd) : workspaceRoot;
     const hostPath = path.isAbsolute(input) ? path.resolve(input) : path.resolve(cwd, input);
 
-    if (skillsRoot && this.sandbox.workspaceAccess === "rw") {
-      const protectedSkillShadowTarget = resolveProtectedSkillShadowTarget({
-        hostPath,
-        workspaceSkillsShadowRoot,
-        skillsRoot,
-        skillsContainerRoot,
-      });
-      if (protectedSkillShadowTarget) {
-        return protectedSkillShadowTarget;
+    // Resolve protected host aliases before the writable workspace that contains
+    // them; virtual mount shadows still resolve through the container table below.
+    for (const mount of readOnlyMounts) {
+      if (isPathInside(mount.hostPath, hostPath)) {
+        const relative = path
+          .relative(mount.hostPath, hostPath)
+          .split(path.sep)
+          .join(path.posix.sep);
+        return expectResolvedContainerTarget(
+          resolveContainerTarget(path.posix.join(mount.containerPath, relative)),
+          input,
+        );
       }
     }
 
     if (isPathInside(workspaceRoot, hostPath)) {
       const relative = path.relative(workspaceRoot, hostPath).split(path.sep).join(path.posix.sep);
-      return {
-        hostPath,
-        relativePath: relative,
-        containerPath: relative
-          ? path.posix.join(workspaceContainerRoot, relative)
-          : workspaceContainerRoot,
-        mountHostRoot: workspaceRoot,
-        writable: this.sandbox.workspaceAccess === "rw",
-        source: "workspace",
-      };
-    }
-
-    if (skillsRoot && this.sandbox.workspaceAccess === "rw" && isPathInside(skillsRoot, hostPath)) {
-      const relative = path.relative(skillsRoot, hostPath).split(path.sep).join(path.posix.sep);
-      return {
-        hostPath,
-        relativePath: relative
-          ? path.posix.join(...MATERIALIZED_SKILLS_CONTAINER_PARTS, relative)
-          : path.posix.join(...MATERIALIZED_SKILLS_CONTAINER_PARTS),
-        containerPath: relative
-          ? path.posix.join(skillsContainerRoot, relative)
-          : skillsContainerRoot,
-        mountHostRoot: skillsRoot,
-        writable: false,
-        source: "protectedSkill",
-      };
+      return expectResolvedContainerTarget(
+        resolveContainerTarget(path.posix.join(workspaceContainerRoot, relative)),
+        input,
+      );
     }
 
     if (hasAgentMount && isPathInside(agentRoot, hostPath)) {
       const relative = path.relative(agentRoot, hostPath).split(path.sep).join(path.posix.sep);
-      return {
-        hostPath,
-        relativePath: relative ? `${agentContainerRoot}/${relative}` : agentContainerRoot,
-        containerPath: relative
-          ? path.posix.join(agentContainerRoot, relative)
-          : agentContainerRoot,
-        mountHostRoot: agentRoot,
-        writable: this.sandbox.workspaceAccess === "rw",
-        source: "agent",
-      };
+      return expectResolvedContainerTarget(
+        resolveContainerTarget(path.posix.join(agentContainerRoot, relative)),
+        input,
+      );
     }
 
     throw new Error(`Path escapes sandbox root (${workspaceRoot}): ${params.filePath}`);
   }
+}
+
+function expectResolvedContainerTarget(
+  target: ResolvedMountPath | undefined,
+  input: string,
+): ResolvedMountPath {
+  if (!target) {
+    throw new Error(`Sandbox path escapes allowed mounts; cannot access: ${input}`);
+  }
+  return target;
 }
 
 async function mkdirLocalRootPath(params: {
@@ -555,72 +596,6 @@ function isNotFoundError(err: unknown): boolean {
       "code" in err &&
       (err as { code?: unknown }).code === "ENOENT")
   );
-}
-
-function resolveProtectedSkillTarget(params: {
-  input: string;
-  skillsRoot: string;
-  skillsContainerRoot: string;
-}): ResolvedMountPath | null {
-  const relativeRoot = path.posix.join(...MATERIALIZED_SKILLS_CONTAINER_PARTS);
-  const normalizedInput = path.posix.normalize(params.input.replace(/\\/g, "/"));
-  const isAbsoluteContainer =
-    normalizedInput === params.skillsContainerRoot ||
-    normalizedInput.startsWith(`${params.skillsContainerRoot}/`);
-  const isRelativeContainer =
-    normalizedInput === relativeRoot || normalizedInput.startsWith(`${relativeRoot}/`);
-  if (!isAbsoluteContainer && !isRelativeContainer) {
-    return null;
-  }
-
-  const relative = isAbsoluteContainer
-    ? path.posix.relative(params.skillsContainerRoot, normalizedInput)
-    : path.posix.relative(relativeRoot, normalizedInput);
-  const safeRelative = relative === "." ? "" : relative;
-  const hostPath = safeRelative
-    ? path.resolve(params.skillsRoot, ...safeRelative.split("/"))
-    : params.skillsRoot;
-  return {
-    hostPath,
-    relativePath: safeRelative ? path.posix.join(relativeRoot, safeRelative) : relativeRoot,
-    containerPath: safeRelative
-      ? path.posix.join(params.skillsContainerRoot, safeRelative)
-      : params.skillsContainerRoot,
-    mountHostRoot: params.skillsRoot,
-    writable: false,
-    source: "protectedSkill",
-  };
-}
-
-function resolveProtectedSkillShadowTarget(params: {
-  hostPath: string;
-  workspaceSkillsShadowRoot: string;
-  skillsRoot: string;
-  skillsContainerRoot: string;
-}): ResolvedMountPath | null {
-  if (!isPathInside(params.workspaceSkillsShadowRoot, params.hostPath)) {
-    return null;
-  }
-
-  const relative = path
-    .relative(params.workspaceSkillsShadowRoot, params.hostPath)
-    .split(path.sep)
-    .join(path.posix.sep);
-  const safeRelative = relative === "." ? "" : relative;
-  const hostPath = safeRelative
-    ? path.resolve(params.skillsRoot, ...safeRelative.split("/"))
-    : params.skillsRoot;
-  const relativeRoot = path.posix.join(...MATERIALIZED_SKILLS_CONTAINER_PARTS);
-  return {
-    hostPath,
-    relativePath: safeRelative ? path.posix.join(relativeRoot, safeRelative) : relativeRoot,
-    containerPath: safeRelative
-      ? path.posix.join(params.skillsContainerRoot, safeRelative)
-      : params.skillsContainerRoot,
-    mountHostRoot: params.skillsRoot,
-    writable: false,
-    source: "protectedSkill",
-  };
 }
 
 async function assertLocalPathSafety(params: {

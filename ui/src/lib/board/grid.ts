@@ -3,6 +3,7 @@
 export const BOARD_GRID_COLUMNS = 12;
 export const BOARD_GRID_ROW_HEIGHT = 56;
 export const BOARD_GRID_GAP = 12;
+export const BOARD_DOCUMENT_AUTO_MAX_ROWS = 240;
 const BOARD_GRID_MAX_HEIGHT = 20;
 
 export type BoardGridItem = {
@@ -41,12 +42,15 @@ function withOrder(item: BoardGridItem, order: number): BoardGridItem {
   return { name: item.name, w: item.w, h: item.h, order };
 }
 
-function canonicalItems(items: readonly BoardGridItem[]): BoardGridItem[] {
+function canonicalItems(
+  items: readonly BoardGridItem[],
+  maxItemHeight = BOARD_GRID_MAX_HEIGHT,
+): BoardGridItem[] {
   return items
     .map((item) => ({
       name: item.name,
       w: clampInteger(item.w, 1, BOARD_GRID_COLUMNS),
-      h: clampInteger(item.h, 1, BOARD_GRID_MAX_HEIGHT),
+      h: clampInteger(item.h, 1, maxItemHeight),
       order: Number.isFinite(item.order) ? item.order : 0,
     }))
     .toSorted((left, right) => left.order - right.order || left.name.localeCompare(right.name))
@@ -88,10 +92,13 @@ function firstFit(occupied: readonly boolean[][], item: BoardGridItem): BoardGri
  * Places canonical-order items at the first available row-major cell. Earlier
  * items therefore keep priority while every later item is gravity-tight.
  */
-export function layout(items: readonly BoardGridItem[]): BoardGridRect[] {
+export function layout(
+  items: readonly BoardGridItem[],
+  maxItemHeight = BOARD_GRID_MAX_HEIGHT,
+): BoardGridRect[] {
   const occupied: boolean[][] = [];
   const rects: BoardGridRect[] = [];
-  for (const item of canonicalItems(items)) {
+  for (const item of canonicalItems(items, maxItemHeight)) {
     const placed = firstFit(occupied, item);
     occupy(occupied, placed);
     rects.push(placed);
@@ -200,6 +207,9 @@ export function toCssPlacement(rect: BoardGridRect): string {
 
 // Keep this numeric inset aligned with the app-level --widget-frame-inset token.
 const BOARD_WIDGET_FRAME_INSET = 12;
+// board.css keeps a 1px border even when frameless. Reserve both edges so
+// viewport-sized content does not lose 2px on every resize report.
+const BOARD_WIDGET_BORDER_PX = 1;
 const BOARD_WIDGET_AUTO_MIN_ROWS = 2;
 const BOARD_WIDGET_AUTO_MAX_ROWS = 20;
 // Mirrors the 38px header grid row in board.css: coarse-pointer layouts keep
@@ -235,6 +245,7 @@ function autoBoardWidgetHeightPx(
   }
   return (
     contentHeightPx +
+    BOARD_WIDGET_BORDER_PX * 2 +
     chromeRowPx +
     ((widget.presentation ?? "card") === "card" ? BOARD_WIDGET_FRAME_INSET * 2 : 0)
   );
@@ -248,6 +259,7 @@ export function effectiveBoardWidgetRows(
   widget: BoardWidgetSizingInput,
   contentHeightPx: number | undefined,
   chromeRowPx = 0,
+  maxAutoRows = BOARD_WIDGET_AUTO_MAX_ROWS,
 ): number {
   const requiredHeight = autoBoardWidgetHeightPx(widget, contentHeightPx, chromeRowPx);
   if (requiredHeight === undefined) {
@@ -256,7 +268,8 @@ export function effectiveBoardWidgetRows(
   const rows = Math.ceil(
     (requiredHeight + BOARD_GRID_GAP) / (BOARD_GRID_ROW_HEIGHT + BOARD_GRID_GAP),
   );
-  return Math.min(BOARD_WIDGET_AUTO_MAX_ROWS, Math.max(BOARD_WIDGET_AUTO_MIN_ROWS, rows));
+  const minimumRows = Math.max(BOARD_WIDGET_AUTO_MIN_ROWS, rows);
+  return Math.min(maxAutoRows, minimumRows);
 }
 
 /**
@@ -269,16 +282,17 @@ export function exactBoardWidgetHeightPx(
   widget: BoardWidgetSizingInput,
   contentHeightPx: number | undefined,
   chromeRowPx = 0,
+  maxAutoRows = BOARD_WIDGET_AUTO_MAX_ROWS,
 ): number | undefined {
   const requiredHeight = autoBoardWidgetHeightPx(widget, contentHeightPx, chromeRowPx);
   if (requiredHeight === undefined) {
     return undefined;
   }
-  // Never exceed the quantized cell: at the row cap the content is taller than
-  // the cell, so the card fills the cell and the body scrolls/clips as before.
+  // Never exceed the quantized cell. The normal editable board retains its row
+  // cap; shell-free documents can raise it so the document owns vertical scroll.
   return Math.min(
     requiredHeight,
-    boardRowSpanPx(effectiveBoardWidgetRows(widget, contentHeightPx, chromeRowPx)),
+    boardRowSpanPx(effectiveBoardWidgetRows(widget, contentHeightPx, chromeRowPx, maxAutoRows)),
   );
 }
 

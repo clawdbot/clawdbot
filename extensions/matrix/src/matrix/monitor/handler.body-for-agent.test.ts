@@ -211,6 +211,54 @@ describe("createMatrixRoomMessageHandler inbound body formatting", () => {
     expect(latestSessionKey(recordInboundSession)).toBe("agent:ops:main");
   });
 
+  it("settles inbound poll events when relation pagination repeats a cursor", async () => {
+    let pollPageCalls = 0;
+    const getRelations = vi.fn(async () => {
+      pollPageCalls += 1;
+      if (pollPageCalls > 2) {
+        throw new Error("test stopped unbounded Matrix poll pagination");
+      }
+      return { events: [], nextBatch: "stuck", prevBatch: null };
+    });
+    const logVerboseMessage = vi.fn();
+    const { handler, finalizeInboundContext } = createMatrixHandlerTestHarness({
+      client: {
+        getEvent: async () => ({
+          event_id: "$poll",
+          sender: "@bot:example.org",
+          type: "m.poll.start",
+          origin_server_ts: 1,
+          content: {
+            "m.poll.start": {
+              question: { "m.text": "Lunch?" },
+              answers: [{ id: "pizza", "m.text": "Pizza" }],
+            },
+          },
+        }),
+        getRelations,
+      } as unknown as Partial<MatrixClient>,
+      isDirectMessage: true,
+      logVerboseMessage,
+    });
+
+    await handler("!room:example.org", {
+      type: "m.poll.response",
+      sender: "@user:example.org",
+      event_id: "$vote",
+      origin_server_ts: 2,
+      content: {
+        "m.poll.response": { answers: ["pizza"] },
+        "m.relates_to": { rel_type: "m.reference", event_id: "$poll" },
+      },
+    } as MatrixRawEvent);
+
+    expect(getRelations).toHaveBeenCalledTimes(2);
+    expect(finalizeInboundContext).not.toHaveBeenCalled();
+    expect(logVerboseMessage).toHaveBeenCalledWith(
+      expect.stringContaining("Matrix poll pagination returned a repeated cursor"),
+    );
+  });
+
   it("records reply context for quoted poll start events inside always-threaded replies", async () => {
     const { handler, finalizeInboundContext } = createMatrixHandlerTestHarness({
       client: {

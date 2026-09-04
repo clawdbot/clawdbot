@@ -1,6 +1,5 @@
 {
   "id": "openrouter",
-  "icon": "https://cdn.simpleicons.org/openrouter",
   "activation": {
     "onStartup": false
   },

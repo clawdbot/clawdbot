@@ -72,6 +72,7 @@ describe("Telegram inbound provenance buffering", () => {
         receivedAtMs: index + 1,
         debounceKey: "telegram:default:42:42:default",
         debounceLane: "default",
+        threadSpec: { scope: "none" },
         dispatchDedupeClaims: [],
         channelIngressResolvers: [channelIngressResolver],
       });
