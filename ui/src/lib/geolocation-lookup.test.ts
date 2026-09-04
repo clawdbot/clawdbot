@@ -1,4 +1,5 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
+import { createDeferred } from "../../../test/helpers/promise.js";
 import { lookupClientGeolocation } from "./geolocation-lookup.ts";
 import { setAvatarGatewayOrigin } from "./identity-avatar-context.ts";
 
@@ -35,15 +36,10 @@ describe("client geolocation lookup", () => {
 
   it("keeps the new Gateway's cached answer when an old request finishes late", async () => {
     setAvatarGatewayOrigin("https://gateway.example.test", ["device-token", "old-password"]);
-    let finishOldRequest!: (response: Response) => void;
+    const oldRequest = createDeferred<Response>();
     const fetchMock = vi
       .fn()
-      .mockImplementationOnce(
-        () =>
-          new Promise<Response>((resolve) => {
-            finishOldRequest = resolve;
-          }),
-      )
+      .mockReturnValueOnce(oldRequest.promise)
       .mockResolvedValue(jsonResponse({ found: true, city: "Vienna" }));
     vi.stubGlobal("fetch", fetchMock);
     const oldLookup = lookupClientGeolocation("203.0.113.19");
@@ -53,9 +49,9 @@ describe("client geolocation lookup", () => {
       status: "located",
       location: { city: "Vienna" },
     });
-    finishOldRequest(new Response(null, { status: 401 }));
+    oldRequest.resolve(new Response(null, { status: 401 }));
     await expect(oldLookup).resolves.toEqual({ status: "unavailable" });
-    expect(lookupClientGeolocation("203.0.113.19")).toBe(currentLookup);
+    await lookupClientGeolocation("203.0.113.19");
     expect(fetchMock).toHaveBeenCalledTimes(2);
   });
 

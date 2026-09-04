@@ -13,32 +13,19 @@ export type ClientGeolocation = {
   attribution?: { text: string; url: string };
 };
 
-/**
- * Lookups have three outcomes and callers must tell them apart: a database that
- * cannot answer yet is retryable, while an address the database does not place
- * is final. Collapsing them caches a permanent blank for a Gateway that was
- * merely still downloading.
- */
+// An unavailable database is retryable; an address it cannot place is a final miss.
 type ClientGeolocationResult =
   | { status: "located"; location: ClientGeolocation }
   | { status: "absent" }
   | { status: "unavailable" };
 
 const LOOKUP_TIMEOUT_MS = 15_000;
-// Presence rosters are small; the cap only stops an unbounded map on a busy
-// gateway where entries churn.
 const LOOKUP_CACHE_MAX_ENTRIES = 256;
 
 const lookupCache = new Map<string, Promise<ClientGeolocationResult>>();
 
-function clearClientGeolocationCache(): void {
-  lookupCache.clear();
-}
-
-// Endpoint and credentials both come from the shared Gateway context, so a
-// switch must drop cached placements instead of showing the previous Gateway's
-// answer for the same address.
-registerAvatarGatewayReset(clearClientGeolocationCache);
+// Gateway switches must not reuse placements from the previous credential context.
+registerAvatarGatewayReset(() => lookupCache.clear());
 
 function readLocation(payload: unknown): ClientGeolocationResult {
   const record = asOptionalRecord(payload);

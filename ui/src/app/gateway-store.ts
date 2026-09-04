@@ -410,16 +410,19 @@ export function createApplicationGateway(
       everConnected = false;
     }
     connection = nextConnection;
-    // Trust the connected gateway's origin for avatar route resolution so
-    // split-origin Control UI deployments load uploaded/proxied avatars.
-    setAvatarGatewayOrigin(
-      nextConnection.gatewayUrl,
-      resolveControlUiAuthCandidates({
-        settings: { token: nextConnection.token },
-        password: nextConnection.password,
-      }),
-      options.resourceBasePath,
-    );
+    // Both connection setup and hello bind resources to this connection's credentials.
+    const updateAvatarContext = (hello?: GatewayHelloOk) => {
+      setAvatarGatewayOrigin(
+        nextConnection.gatewayUrl,
+        resolveControlUiAuthCandidates({
+          hello,
+          settings: nextConnection,
+          password: nextConnection.password,
+        }),
+        options.resourceBasePath,
+      );
+    };
+    updateAvatarContext();
     updateSettings(
       {
         gatewayUrl: nextConnection.gatewayUrl,
@@ -487,15 +490,7 @@ export function createApplicationGateway(
           }
           return;
         }
-        setAvatarGatewayOrigin(
-          nextConnection.gatewayUrl,
-          resolveControlUiAuthCandidates({
-            hello,
-            settings: { token: nextConnection.token },
-            password: nextConnection.password,
-          }),
-          options.resourceBasePath,
-        );
+        updateAvatarContext(hello);
         connection = { ...connection, bootstrapToken: "", bootstrapProfile: undefined };
         if (persistConnectionSettings) {
           settings = loadSettings();

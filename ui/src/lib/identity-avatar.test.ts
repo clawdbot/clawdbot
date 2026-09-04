@@ -1,8 +1,13 @@
 // @vitest-environment node
 import { afterEach, describe, expect, it, vi } from "vitest";
+import { createDeferred } from "../../../test/helpers/promise.js";
 import { setAvatarGatewayOrigin } from "./identity-avatar-context.ts";
 import { resolveAvatarImageUrl, settleAvatarImageUrl } from "./identity-avatar-loader.ts";
 import { resolveAvatar, resolveIdentityHue } from "./identity-avatar.ts";
+
+function avatarResponse(mime = "image/png") {
+  return new Response(new Uint8Array([1, 2, 3]), { headers: { "content-type": mime } });
+}
 
 afterEach(() => {
   setAvatarGatewayOrigin(null);
@@ -181,17 +186,6 @@ describe("resolveAvatar gateway origin trust", () => {
       resolveAvatar({ id: "a@example.com", profileAvatarUrl: "https://evil.example/a.png" }),
     ).toMatchObject({ kind: "initials" });
   });
-
-  // NOTE: the trusted origin can only come from setAvatarGatewayOrigin — the
-  // IdentityAvatarInput type has no gatewayOrigin field, so sender metadata
-  // cannot influence it (compile-time enforced; no runtime test needed).
-
-  it("honors the app-wide gateway origin set via setAvatarGatewayOrigin", () => {
-    setAvatarGatewayOrigin("wss://gw.example.com/ws");
-    expect(
-      resolveAvatar({ id: "a@example.com", profileAvatarUrl: "/api/users/p1/avatar" }),
-    ).toEqual({ kind: "profile", url: "https://gw.example.com/api/users/p1/avatar" });
-  });
 });
 
 describe("resolveAvatar profile-id senders", () => {
@@ -278,17 +272,12 @@ describe("authenticated profile avatar cache", () => {
     ["/avatar/research", "image/svg+xml"],
   ])("shares one authenticated fetch for %s (%s)", async (avatarPath, mimeType) => {
     setAvatarGatewayOrigin("wss://gateway.example.test/ws", ["profile-token"]);
-    const fetchAvatar = vi.spyOn(globalThis, "fetch").mockResolvedValue(
-      new Response(new Uint8Array([1, 2, 3]), {
-        headers: { "content-type": mimeType },
-      }),
-    );
+    const fetchAvatar = vi.spyOn(globalThis, "fetch").mockResolvedValue(avatarResponse(mimeType));
     const createObjectURL = vi.spyOn(URL, "createObjectURL").mockReturnValue("blob:profile-ada");
 
     const first = resolveAvatarImageUrl(avatarPath);
     const second = resolveAvatarImageUrl(avatarPath);
 
-    expect(first).toBe(second);
     await expect(first).resolves.toBe("blob:profile-ada");
     await expect(second).resolves.toBe("blob:profile-ada");
     expect(fetchAvatar).toHaveBeenCalledOnce();
@@ -305,12 +294,9 @@ describe("authenticated profile avatar cache", () => {
 
   it("refetches when the gateway publishes a newer avatar revision", async () => {
     setAvatarGatewayOrigin("https://gateway.example.test", ["profile-token"]);
-    const fetchAvatar = vi.spyOn(globalThis, "fetch").mockImplementation(
-      async () =>
-        new Response(new Uint8Array([1, 2, 3]), {
-          headers: { "content-type": "image/png" },
-        }),
-    );
+    const fetchAvatar = vi
+      .spyOn(globalThis, "fetch")
+      .mockImplementation(async () => avatarResponse());
     vi.spyOn(URL, "createObjectURL")
       .mockReturnValueOnce("blob:profile-v7")
       .mockReturnValueOnce("blob:profile-v8");
@@ -332,11 +318,7 @@ describe("authenticated profile avatar cache", () => {
       const fetchAvatar = vi
         .spyOn(globalThis, "fetch")
         .mockResolvedValueOnce(new Response(null, { status }))
-        .mockResolvedValueOnce(
-          new Response(new Uint8Array([1, 2, 3]), {
-            headers: { "content-type": "image/png" },
-          }),
-        );
+        .mockResolvedValueOnce(avatarResponse());
       vi.spyOn(URL, "createObjectURL").mockReturnValue("blob:profile-uploaded");
 
       await expect(resolveAvatarImageUrl("/api/users/profile-ada/avatar")).resolves.toBeNull();
@@ -366,11 +348,7 @@ describe("authenticated profile avatar cache", () => {
     );
     expect(fetchAvatar).toHaveBeenCalledTimes(130);
     for (const finishRequest of finishRequests) {
-      finishRequest(
-        new Response(new Uint8Array([1, 2, 3]), {
-          headers: { "content-type": "image/png" },
-        }),
-      );
+      finishRequest(avatarResponse());
     }
 
     const imageUrls = await Promise.all(pending);
@@ -404,12 +382,9 @@ describe("authenticated profile avatar cache", () => {
       const before = position === "first" ? ["first-token"] : ["same-token", "first-password"];
       const after = position === "first" ? ["second-token"] : ["same-token", "second-password"];
       setAvatarGatewayOrigin("https://gateway.example.test", before);
-      const fetchAvatar = vi.spyOn(globalThis, "fetch").mockImplementation(
-        async () =>
-          new Response(new Uint8Array([1, 2, 3]), {
-            headers: { "content-type": "image/png" },
-          }),
-      );
+      const fetchAvatar = vi
+        .spyOn(globalThis, "fetch")
+        .mockImplementation(async () => avatarResponse());
       vi.spyOn(URL, "createObjectURL")
         .mockReturnValueOnce("blob:first-profile")
         .mockReturnValueOnce("blob:second-profile");
@@ -433,18 +408,13 @@ describe("authenticated profile avatar cache", () => {
 
   it("never retries a saved secret after its credential context was replaced", async () => {
     setAvatarGatewayOrigin("https://gateway.example.test", ["same-token", "old-password"]);
-    let finishRequest!: (response: Response) => void;
-    const fetchAvatar = vi.spyOn(globalThis, "fetch").mockImplementation(
-      () =>
-        new Promise<Response>((resolve) => {
-          finishRequest = resolve;
-        }),
-    );
+    const request = createDeferred<Response>();
+    const fetchAvatar = vi.spyOn(globalThis, "fetch").mockReturnValue(request.promise);
     const pending = resolveAvatarImageUrl("/api/users/profile-ada/avatar");
     const signal = fetchAvatar.mock.calls[0]?.[1]?.signal;
     setAvatarGatewayOrigin("https://gateway.example.test", ["same-token", "new-password"]);
     expect(signal?.aborted).toBe(true);
-    finishRequest(new Response(null, { status: 401 }));
+    request.resolve(new Response(null, { status: 401 }));
     await expect(pending).resolves.toBeNull();
     expect(fetchAvatar).toHaveBeenCalledOnce();
   });

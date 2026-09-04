@@ -135,11 +135,11 @@ describe("personal avatar HTTP authentication", () => {
           : { mode, [mode]: "test-shared-secret", allowTailscale: false };
       cfg = { gateway: { trustedProxies: ["127.0.0.1"] } };
       const { token } = await pairDevice();
+      expect((await request("test-shared-secret")).status).toBe(200);
       if (mode === "trusted-proxy") {
         // A tunnel may use the configured local password; paired HTTP tokens
         // must not bypass the proxy identity boundary on their own.
         expect((await request(token)).status).toBe(401);
-        expect((await request("test-shared-secret")).status).toBe(200);
       }
       // The live hello credential wins even with saved shared credentials.
       const candidates = resolveControlUiAuthCandidates({
@@ -177,11 +177,6 @@ describe("personal avatar HTTP authentication", () => {
     expect(
       (await fetch(origin + "/generic", { headers: { Authorization: "Bearer " + token } })).status,
     ).toBe(401);
-  });
-
-  it.each(["token", "password"] as const)("preserves shared %s access", async (mode) => {
-    auth = { mode, [mode]: "test-shared-secret", allowTailscale: false };
-    expect((await request("test-shared-secret")).status).toBe(200);
   });
 
   it.each([
