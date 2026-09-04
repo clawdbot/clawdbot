@@ -143,12 +143,14 @@ async function readDesktopMetadata(
   archived: Set<string>;
   skippedFiles: number;
   racedFiles: number;
+  scannedBytes: number;
   readFailed: boolean;
 }> {
   const active = new Map<string, DesktopSessionMetadata>();
   const archived = new Set<string>();
   const skippedFilesBefore = budget?.skippedFiles ?? 0;
   const racedFilesBefore = budget?.racedFiles ?? 0;
+  const remainingBytesBefore = budget?.remainingBytes;
   let readFailed = false;
   const markIoFailure = () => {
     readFailed = true;
@@ -207,6 +209,10 @@ async function readDesktopMetadata(
     customGroups,
     skippedFiles: (budget?.skippedFiles ?? 0) - skippedFilesBefore,
     racedFiles: (budget?.racedFiles ?? 0) - racedFilesBefore,
+    scannedBytes:
+      budget && remainingBytesBefore !== undefined
+        ? remainingBytesBefore - budget.remainingBytes
+        : 0,
     readFailed,
   };
 }
@@ -226,6 +232,7 @@ export const emptyDesktopOverlay: DesktopOverlay = {
   customGroups: new Map(),
   skippedFiles: 0,
   racedFiles: 0,
+  scannedBytes: 0,
   readFailed: false,
 };
 
@@ -235,6 +242,12 @@ function replayDesktopReadStatus(
   onIoFailure?: () => void,
 ): void {
   if (budget) {
+    if (overlay.scannedBytes > budget.remainingBytes) {
+      // The cached overlay was admitted by an earlier request, but this request's CLI scan may
+      // have consumed the remaining aggregate budget before the overlay was replayed.
+      budget.skippedFiles += 1;
+    }
+    budget.remainingBytes = Math.max(0, budget.remainingBytes - overlay.scannedBytes);
     budget.skippedFiles += overlay.skippedFiles;
     budget.racedFiles += overlay.racedFiles;
   }

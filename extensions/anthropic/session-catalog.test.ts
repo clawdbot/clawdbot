@@ -2840,6 +2840,45 @@ describe("Claude session catalog", () => {
     ).toBe(true);
   });
 
+  it("charges a cached Desktop overlay against a later CLI scan budget", async () => {
+    const home = await createHome();
+    await writeDesktopMetadata(home, "large-cached-overlay", {
+      cliSessionId: "desktop-only-cached-overlay",
+      sessionId: "local-desktop-only-cached-overlay",
+      title: "Cached Desktop overlay",
+      padding: "x".repeat(15 * 1024 * 1024),
+    });
+
+    await expect(listLocalClaudeSessionPage({}, home)).resolves.toEqual({ sessions: [] });
+
+    const projectRoot = path.join(home, ".claude", "projects");
+    const largeFileBytes = Math.floor(MAX_CATALOG_JSON_SCAN_BYTES / 5) + 1;
+    const largeSessionIds: string[] = [];
+    for (let index = 0; index < 4; index += 1) {
+      const sessionId = `warm-budget-session-${index}`;
+      const projectDir = path.join(projectRoot, `project-${index}`);
+      const transcriptPath = path.join(projectDir, `${sessionId}.jsonl`);
+      const indexPath = path.join(projectDir, "sessions-index.json");
+      await fs.mkdir(projectDir, { recursive: true });
+      const entry = {
+        sessionId,
+        fullPath: transcriptPath,
+        summary: sessionId,
+        isSidechain: false,
+      };
+      const prefix = `{"version":1,"entries":${JSON.stringify([entry])},"padding":"`;
+      const suffix = `"}`;
+      const paddingBytes = largeFileBytes - Buffer.byteLength(prefix) - Buffer.byteLength(suffix);
+      await fs.writeFile(indexPath, `${prefix}${"x".repeat(paddingBytes)}${suffix}`);
+      await fs.writeFile(transcriptPath, `${JSON.stringify({ type: "progress", sessionId })}\n`);
+      largeSessionIds.push(sessionId);
+    }
+
+    const refreshed = await listLocalClaudeSessionPage({}, home);
+    expect(refreshed.error).toMatchObject({ code: "LOCAL_CATALOG_PARTIAL" });
+    expect(refreshed.sessions.map((session) => session.threadId)).toEqual(largeSessionIds);
+  });
+
   it("keeps the catalog JSON cap across a stat-to-open replacement race", async () => {
     const home = await createHome();
     const projectDir = path.join(home, ".claude", "projects", "-workspace");
