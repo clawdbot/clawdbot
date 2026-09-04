@@ -319,6 +319,92 @@ defineDiscordVoiceTests(
       expect(agentCommandMock).not.toHaveBeenCalled();
     });
 
+    it("keeps an interleaved provider speech segment on the speaker whose audio is streaming", async () => {
+      agentCommandMock.mockResolvedValue({ payloads: [{ text: "talkback answer" }] });
+      const { bridgeParams, entry } = await createJoinedAgentProxyFixture({
+        config: {
+          voice: { realtime: { debounceMs: 1, requireWakeName: false, toolPolicy: "none" } },
+        },
+      });
+
+      // The guest speaks continuously; the owner's capture decodes its first chunk
+      // in between, and the provider's VAD start for the ongoing guest segment is
+      // delivered after that interleaving.
+      const guestTurn = beginSpeakerTurn(entry, {
+        senderIsOwner: false,
+        speakerLabel: "Guest",
+        userId: "u-guest",
+      });
+      beginSpeakerTurn(entry, {
+        senderIsOwner: true,
+        speakerLabel: "Owner",
+        userId: "u-owner",
+      });
+      guestTurn.sendInputAudio(Buffer.alloc(8));
+      bridgeParams?.onEvent?.({
+        direction: "server",
+        type: "input_audio_buffer.speech_started",
+      });
+      bridgeParams?.onEvent?.({
+        direction: "server",
+        type: "conversation.item.added",
+        itemId: "item_guest_speech",
+        itemRole: "user",
+      });
+
+      await flushRealtimeForcedConsultTimers(() => {
+        bridgeParams?.onTranscript?.("user", "guest keeps talking", true, {
+          itemId: "item_guest_speech",
+        });
+      });
+
+      expect(lastAgentCommandArgs().senderIsOwner).toBe(false);
+    });
+
+    it("does not satisfy another speaker's wake-name follow-up with a bound transcript", async () => {
+      agentCommandMock.mockResolvedValue({ payloads: [{ text: "talkback answer" }] });
+      const { bridgeParams, entry } = await createJoinedAgentProxyFixture({
+        config: {
+          voice: { realtime: { debounceMs: 1, requireWakeName: true, toolPolicy: "none" } },
+        },
+      });
+
+      const ownerTurn = beginSpeakerTurn(entry, {
+        senderIsOwner: true,
+        speakerLabel: "Owner",
+        userId: "u-owner",
+      });
+      await flushRealtimeForcedConsultTimers(() => {
+        bridgeParams?.onTranscript?.("user", "OpenClaw,", true);
+      });
+      ownerTurn.close();
+
+      const guestTurn = beginSpeakerTurn(entry, {
+        senderIsOwner: false,
+        speakerLabel: "Guest",
+        userId: "u-guest",
+      });
+      guestTurn.sendInputAudio(Buffer.alloc(8));
+      bridgeParams?.onEvent?.({
+        direction: "server",
+        type: "input_audio_buffer.speech_started",
+      });
+      bridgeParams?.onEvent?.({
+        direction: "server",
+        type: "conversation.item.added",
+        itemId: "item_guest_speech",
+        itemRole: "user",
+      });
+
+      await flushRealtimeForcedConsultTimers(() => {
+        bridgeParams?.onTranscript?.("user", "hello there", true, {
+          itemId: "item_guest_speech",
+        });
+      });
+
+      expect(agentCommandMock).not.toHaveBeenCalled();
+    });
+
     it("drops stale active-run control after provider continuity reset", async () => {
       let resolveOldControl: ((result: RealtimeVoiceAgentControlResult) => void) | undefined;
       controlRealtimeVoiceAgentRunMock

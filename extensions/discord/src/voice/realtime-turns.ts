@@ -77,7 +77,7 @@ export class DiscordRealtimeTurns {
   // conversation item inherits that binding by item id, and the delayed final transcript
   // resolves its speaker from the item id instead of callback timing.
   private inputItemSpeakers = new Map<string, PendingSpeakerTurn>();
-  private lastAudioTurn: PendingSpeakerTurn | undefined;
+  private lastAudioSender: PendingSpeakerTurn | undefined;
   private pendingSegmentSpeaker: PendingSpeakerTurn | undefined;
   private pendingWakeNameFollowup:
     | {
@@ -180,13 +180,20 @@ export class DiscordRealtimeTurns {
     const wakeNameResult = this.resolveWakeNameTranscript(trimmed, requireWakeName);
     let forcedSpeakerContext: DiscordRealtimeSpeakerContext | undefined;
     if (!wakeNameResult.allowed) {
-      if (this.pendingWakeNameFollowup && boundTurn) {
-        // A pending follow-up is satisfied by this transcript, and the item binding
-        // supplies the actual speaker instead of the timing-armed follow-up context.
+      if (
+        boundTurn &&
+        this.pendingWakeNameFollowup &&
+        this.pendingWakeNameFollowup.context.userId === boundTurn.context.userId
+      ) {
+        // The pending follow-up is satisfied by its own speaker's bound transcript, and
+        // the item binding supplies the actual speaker instead of the timing-armed
+        // follow-up context. Another participant's follow-up never authorizes this.
         this.pendingWakeNameFollowup = undefined;
         forcedSpeakerContext = boundTurn.context;
       } else {
-        const pendingWakeNameFollowup = this.consumePendingWakeNameFollowup();
+        const pendingWakeNameFollowup = boundTurn
+          ? undefined
+          : this.consumePendingWakeNameFollowup();
         transcriptAttribution ??= pendingWakeNameFollowup;
         if (!pendingWakeNameFollowup) {
           this.recordTranscriptUtterance(trimmed, transcriptAttribution, providerEpoch);
@@ -236,22 +243,22 @@ export class DiscordRealtimeTurns {
   clear(): void {
     this.speakerTurns.clear();
     this.resetPartialWakeNameTracking();
-    this.lastAudioTurn = undefined;
+    this.lastAudioSender = undefined;
     this.resetProviderContinuity();
   }
 
   /**
    * Pins the in-flight provider speech segment to the speaker whose audio is streaming.
-   * The VAD start event arrives in band with the audio stream, before any newer capture
-   * can begin, so it is the only reliable point to observe who is speaking.
+   * The VAD start event arrives in band with the audio stream, so it binds to the turn
+   * that most recently sent audio bytes, not to whichever capture merely started first.
    */
   markProviderSpeechSegmentStarted(): void {
-    this.pendingSegmentSpeaker = this.lastAudioTurn;
+    this.pendingSegmentSpeaker = this.lastAudioSender;
   }
 
   /** Binds an admitted provider input item to the speaker pinned for its speech segment. */
   bindSpeakerInputItem(itemId: string): void {
-    const speaker = this.pendingSegmentSpeaker ?? this.lastAudioTurn;
+    const speaker = this.pendingSegmentSpeaker ?? this.lastAudioSender;
     this.pendingSegmentSpeaker = undefined;
     if (!speaker) {
       return;
@@ -303,6 +310,9 @@ export class DiscordRealtimeTurns {
     const realtimePcm = convertDiscordPcm48kStereoToRealtimePcm24kMono(discordPcm48kStereo);
     if (realtimePcm.length > 0) {
       this.registerSpeakerTurnAudioStarted(turn);
+      // Concurrent captures interleave in the shared provider stream; the most recent
+      // sender is the only in-band signal for who produced the bytes the provider sees.
+      this.lastAudioSender = turn;
       turn.inputDiscordBytes += discordPcm48kStereo.length;
       turn.inputRealtimeBytes += realtimePcm.length;
       turn.inputChunks += 1;
@@ -333,7 +343,6 @@ export class DiscordRealtimeTurns {
       return;
     }
     this.speakerTurns.markAudio(turn);
-    this.lastAudioTurn = turn;
     logger.info(
       `discord voice: realtime speaker turn opened guild=${this.params.entry.guildId} channel=${this.params.entry.channelId} user=${turn.context.userId} speaker=${turn.context.speakerLabel} owner=${turn.context.senderIsOwner} pendingTurns=${this.speakerTurns.size()}`,
     );
