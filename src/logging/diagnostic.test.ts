@@ -1500,7 +1500,13 @@ describe("stuck session diagnostics threshold", () => {
       provider: "anthropic",
       model: "claude-sonnet-5",
       observationUnit: "turn",
-      requestTimeoutMs: backendDeadlineMs,
+    });
+    markDiagnosticRunProgress({
+      sessionId: "s1",
+      sessionKey: "main",
+      runId: "run-1",
+      reason: "model_call:stream_progress",
+      backendLivenessTimeoutMs: backendDeadlineMs,
     });
 
     // The generic abort threshold (60s here) must not preempt a backend that

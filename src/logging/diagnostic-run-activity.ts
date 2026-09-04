@@ -68,6 +68,8 @@ type SessionActivity = DiagnosticArgumentChurnActivity &
       Map<string, DiagnosticRecoveryModelCall>
     >;
     recoveredOwnerStartEventCutoffs: Map<string, number>;
+    /** Liveness deadline declared by the backend executing the active work. */
+    backendLivenessTimeoutMs?: number;
     lastProgressAt: number;
     lastProgressReason?: string;
   };
@@ -79,20 +81,16 @@ type DiagnosticToolStartedActivityEvent = Pick<
 
 type ModelStartedActivityEvent = Pick<
   Extract<DiagnosticEventPayload, { type: "model.call.started" }>,
-  | "runId"
-  | "sessionId"
-  | "sessionKey"
-  | "provider"
-  | "model"
-  | "callId"
-  | "observationUnit"
-  | "requestTimeoutMs"
+  "runId" | "sessionId" | "sessionKey" | "provider" | "model" | "callId" | "observationUnit"
 > & { seq?: number };
 
 type RunProgressEvent = Pick<
   Extract<DiagnosticEventPayload, { type: "run.progress" }>,
   "runId" | "sessionId" | "sessionKey" | "reason"
->;
+> & {
+  /** Liveness deadline the reporting backend already enforces for this work. */
+  backendLivenessTimeoutMs?: number;
+};
 
 const activityByRef = new Map<string, SessionActivity>();
 const activityByRunId = new Map<string, SessionActivity>();
@@ -366,7 +364,6 @@ function recordModelStarted(
     sessionId: event.sessionId,
     sessionKey: event.sessionKey,
     sequence: event.seq,
-    requestTimeoutMs: event.requestTimeoutMs,
   });
   touchSessionActivity(activity, "model_call:started");
 }
@@ -419,6 +416,9 @@ function applyRunProgress(params: RunProgressEvent, semantic = false): void {
   if (!activity) {
     return;
   }
+  if ((params.backendLivenessTimeoutMs ?? 0) > 0) {
+    activity.backendLivenessTimeoutMs = params.backendLivenessTimeoutMs;
+  }
   // Only an explicit fact from the current owner may clear its recovery evidence.
   if (!semantic || !runId) {
     touchSessionActivity(activity, params.reason);
@@ -436,6 +436,7 @@ function recordRunCompleted(
   }
   activity.activeTools.clear();
   activity.activeModelCalls.clear();
+  activity.backendLivenessTimeoutMs = undefined;
   for (const registration of activeDiagnosticOwners.values()) {
     if (registration.activity === activity && registration.owner.runId === event.runId) {
       return;
@@ -555,6 +556,7 @@ export function markDiagnosticEmbeddedRunEnded(params: {
   if (params.clearRunActivity !== false) {
     activity.activeTools.clear();
     activity.activeModelCalls.clear();
+    activity.backendLivenessTimeoutMs = undefined;
     activity.activeCoreModelCalls.clear();
   }
   if (activity.activeEmbeddedRuns.size === 0) {
@@ -649,6 +651,7 @@ export function clearDiagnosticEmbeddedRunActivityForSession(params: {
   }
   activity.activeTools.clear();
   activity.activeModelCalls.clear();
+  activity.backendLivenessTimeoutMs = undefined;
   activity.activeCoreModelCalls.clear();
   clearArgumentChurnActivity(activity, { runId: params.activeSessionId });
   clearArgumentChurnPolicyWaits(activity, { runId: params.activeSessionId });

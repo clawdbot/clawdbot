@@ -14,6 +14,8 @@ export type ModelCallStreamProgressTarget = {
   runId: string;
   sessionKey?: string;
   sessionId?: string;
+  /** Liveness deadline this backend already enforces for the work. */
+  backendLivenessTimeoutMs?: number;
 };
 
 /**
@@ -39,7 +41,13 @@ export function createModelCallStreamProgressReporter(): (
       ...(target.sessionId ? { sessionId: target.sessionId } : {}),
       reason: MODEL_CALL_STREAM_PROGRESS_REASON,
     };
-    markDiagnosticRunProgress(fields);
+    // The deadline rides the freshness update but stays out of the emitted
+    // event, whose shape is the published run.progress contract.
+    markDiagnosticRunProgress(
+      target.backendLivenessTimeoutMs === undefined
+        ? fields
+        : { ...fields, backendLivenessTimeoutMs: target.backendLivenessTimeoutMs },
+    );
     const now = Date.now();
     if (
       lastEmittedAtMs !== undefined &&

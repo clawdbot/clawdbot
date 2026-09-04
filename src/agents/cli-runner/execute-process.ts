@@ -151,10 +151,14 @@ export async function executeCliProcess(params: {
   // Skipped while a parsed tool owns the turn: that window belongs to
   // blocked-tool recovery, which reads the same clock and must still expire.
   const reportStreamProgress = createModelCallStreamProgressReporter();
+  // Every CLI backend already enforces this quiet allowance on its own child.
+  // Publishing it keeps generic stuck-session recovery from reclaiming work
+  // inside an allowance the operator configured on that backend.
   const streamProgressTarget = {
     runId: runParams.runId,
     ...(runParams.sessionKey ? { sessionKey: runParams.sessionKey } : {}),
     ...(runParams.sessionId ? { sessionId: runParams.sessionId } : {}),
+    backendLivenessTimeoutMs: params.noOutputTimeoutMs,
   };
   const consumeStdout = (chunk: string) => {
     const chunkBytes = Buffer.byteLength(chunk);

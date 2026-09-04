@@ -331,8 +331,6 @@ export function createClaudeCliModelCallDiagnostics(params: {
   prompt: string;
   systemPrompt?: string;
   transport: "paired-node-cli" | "stdio" | "stdio-live";
-  /** Backend-owned no-output deadline published to stuck-session recovery. */
-  requestTimeoutMs?: number;
   now?: () => number;
 }) {
   // Listener registration is process-stable after plugin startup. This attempt-local
@@ -475,9 +473,6 @@ export function createClaudeCliModelCallDiagnostics(params: {
         {
           type: "model.call.started",
           ...baseFields,
-          ...(params.requestTimeoutMs !== undefined
-            ? { requestTimeoutMs: params.requestTimeoutMs }
-            : {}),
         },
         privateData({ modelContent: baseModelContent() }),
       );

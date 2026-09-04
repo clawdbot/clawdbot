@@ -660,12 +660,6 @@ type DiagnosticModelCallBaseEvent = DiagnosticBaseEvent & {
 
 export type DiagnosticModelCallStartedEvent = DiagnosticModelCallBaseEvent & {
   type: "model.call.started";
-  /**
-   * Backend-owned liveness deadline for this call. Recovery reads it so the
-   * generic stuck-session floor cannot preempt a backend whose own watchdog
-   * still allows the observed silence.
-   */
-  requestTimeoutMs?: number;
 };
 
 export type DiagnosticModelCallCompletedEvent = DiagnosticModelCallBaseEvent & {

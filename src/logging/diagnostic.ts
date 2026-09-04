@@ -487,12 +487,18 @@ function isStalledEmbeddedRunRecoveryEligible(params: {
   stuckSessionAbortMs: number;
 }): boolean {
   const lastProgressAgeMs = params.activity?.lastProgressAgeMs;
+  // A backend that declares its own liveness deadline owns recovery timing
+  // inside it; the generic floor may only extend that allowance, never shorten it.
+  const effectiveAbortMs = Math.max(
+    params.stuckSessionAbortMs,
+    params.activity?.activeBackendLivenessTimeoutMs ?? 0,
+  );
   return (
     params.classification?.eventType === "session.stalled" &&
     params.classification.classification === "stalled_agent_run" &&
     params.classification.activeWorkKind === "embedded_run" &&
     typeof lastProgressAgeMs === "number" &&
-    lastProgressAgeMs >= params.stuckSessionAbortMs
+    lastProgressAgeMs >= effectiveAbortMs
   );
 }
 
@@ -525,6 +531,7 @@ function isStalledModelCallRecoveryEligible(params: {
   const effectiveAbortMs = Math.max(
     params.stuckSessionAbortMs,
     params.activity?.activeModelCallRequestTimeoutMs ?? 0,
+    params.activity?.activeBackendLivenessTimeoutMs ?? 0,
   );
   // Local providers are not blanket-exempt from recovery. Streaming model
   // chunks refresh run activity while emitted progress events are throttled, so
@@ -546,6 +553,7 @@ function isActiveAbortRecoveryEligible(params: {
   const effectiveModelAbortMs = Math.max(
     params.stuckSessionAbortMs,
     params.activity?.activeModelCallRequestTimeoutMs ?? 0,
+    params.activity?.activeBackendLivenessTimeoutMs ?? 0,
   );
   const activeModelCallRequestTimeoutMs = params.activity?.activeModelCallRequestTimeoutMs;
   const activeModelCallAllowanceExpired =
