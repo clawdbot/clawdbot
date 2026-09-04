@@ -4,6 +4,8 @@ import {
   clearPluginStateDatabaseForTests,
   closePluginStateDatabase,
   MAX_PLUGIN_STATE_VALUE_BYTES,
+  PLUGIN_STATE_DOCTOR_IMPORT_BATCH_ROWS,
+  pluginStateImportBatch,
   pluginStateClear,
   pluginStateConsume,
   pluginStateDelete,
@@ -465,28 +467,33 @@ export function importPluginStateEntriesForDoctor(
     defaultTtlMs,
   });
 
+  let batch: Array<PreparedRegisterParams & { createdAtMs: number }> = [];
+  const flush = () => {
+    pluginStateImportBatch({ pluginId, namespace, maxEntries, overflowPolicy, env }, batch);
+    batch = [];
+  };
   for (const entry of entries) {
-    if (!Number.isSafeInteger(entry.createdAt)) {
-      throw invalidInput("plugin state import createdAt must be a safe integer", "register");
+    try {
+      if (!Number.isSafeInteger(entry.createdAt)) {
+        throw invalidInput("plugin state import createdAt must be a safe integer", "register");
+      }
+      const prepared = prepareRegisterParams(
+        entry.key,
+        entry.value,
+        defaultTtlMs,
+        entry.ttlMs != null ? { ttlMs: entry.ttlMs } : undefined,
+      );
+      batch.push({ ...prepared, createdAtMs: entry.createdAt });
+    } catch (error) {
+      // Validation failure must not discard earlier valid rows in this batch.
+      flush();
+      throw error;
     }
-    const prepared = prepareRegisterParams(
-      entry.key,
-      entry.value,
-      defaultTtlMs,
-      entry.ttlMs != null ? { ttlMs: entry.ttlMs } : undefined,
-    );
-    pluginStateRegister({
-      pluginId,
-      namespace,
-      key: prepared.key,
-      valueJson: prepared.valueJson,
-      maxEntries,
-      overflowPolicy,
-      createdAtMs: entry.createdAt,
-      ...(env ? { env } : {}),
-      ...(prepared.ttlMs != null ? { ttlMs: prepared.ttlMs } : {}),
-    });
+    if (batch.length === PLUGIN_STATE_DOCTOR_IMPORT_BATCH_ROWS) {
+      flush();
+    }
   }
+  flush();
 }
 
 /** Opens a sync plugin-state namespace for a trusted core owner id. */

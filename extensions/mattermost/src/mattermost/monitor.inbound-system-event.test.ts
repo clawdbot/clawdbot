@@ -524,6 +524,7 @@ async function emitMattermostChannelPost(
   params: {
     id: string;
     message: string;
+    channelId?: string;
     rootId?: string;
     senderId?: string;
     senderName?: string;
@@ -532,16 +533,17 @@ async function emitMattermostChannelPost(
   },
 ) {
   const senderId = params.senderId ?? "user-1";
+  const channelId = params.channelId ?? "chan-1";
   await socket.emitMessage({
     event: "posted",
     data: {
-      channel_id: "chan-1",
+      channel_id: channelId,
       channel_name: "town-square",
       channel_display_name: "Town Square",
       sender_name: params.senderName ?? "alice",
       post: JSON.stringify({
         id: params.id,
-        channel_id: "chan-1",
+        channel_id: channelId,
         user_id: senderId,
         message: params.message,
         root_id: params.rootId,
@@ -550,7 +552,7 @@ async function emitMattermostChannelPost(
       }),
     },
     broadcast: {
-      channel_id: "chan-1",
+      channel_id: channelId,
       user_id: senderId,
     },
   });
@@ -1338,22 +1340,28 @@ describe("mattermost inbound user posts", () => {
     expect(ctx?.Provider).toBe("mattermost");
   });
 
-  it.each([
-    { message: "@openclawdia hello", expectedBody: null },
-    { message: "@openclaw:remote.example hello", expectedBody: null },
-    { message: "hello.@openclaw", expectedBody: "hello." },
-    { message: "hello-@openclaw", expectedBody: "hello-" },
-    { message: "hello:@openclaw", expectedBody: "hello:" },
-    { message: "@openclaw.", expectedBody: "." },
-    { message: "@openclaw-", expectedBody: "-" },
-    { message: "@openclaw: hello", expectedBody: ": hello" },
-  ])(
+  it.each(
+    [
+      { message: "@openclawdia hello", expectedBody: null },
+      { message: "@openclaw:remote.example hello", expectedBody: null },
+      { message: "hello.@openclaw", expectedBody: "hello." },
+      { message: "hello-@openclaw", expectedBody: "hello-" },
+      { message: "hello:@openclaw", expectedBody: "hello:" },
+      { message: "@openclaw.", expectedBody: "." },
+      { message: "@openclaw-", expectedBody: "-" },
+      { message: "@openclaw: hello", expectedBody: ": hello" },
+    ].map(({ message, expectedBody }, index) => ({
+      message,
+      expectedBody,
+      channelId: `mention-boundary-${index}`,
+    })),
+  )(
     "dispatches only genuine mention-required posts: $message",
-    async ({ message, expectedBody }) => {
+    async ({ message, expectedBody, channelId }) => {
       const socket = new FakeWebSocket();
       const abortController = new AbortController();
       mockState.abortController = abortController;
-      const verboseDebug = vi.fn();
+      const runtime = testRuntime();
       const config: OpenClawConfig = {
         channels: {
           mattermost: {
@@ -1367,11 +1375,11 @@ describe("mattermost inbound user posts", () => {
           },
         },
       };
-      mockState.runtimeCore = createRuntimeCore(config, undefined, { verboseDebug });
+      mockState.runtimeCore = createRuntimeCore(config);
 
       const monitor = monitorMattermostProvider({
         config,
-        runtime: testRuntime(),
+        runtime,
         abortSignal: abortController.signal,
         webSocketFactory: () => socket,
       });
@@ -1384,12 +1392,13 @@ describe("mattermost inbound user posts", () => {
       await emitMattermostChannelPost(socket, {
         id: "post-mention-boundary",
         message,
+        channelId,
       });
 
       if (expectedBody === null) {
         await vi.waitFor(() => {
-          expect(verboseDebug).toHaveBeenCalledWith(
-            expect.stringContaining("drop group message (missing mention"),
+          expect(runtime.log).toHaveBeenCalledWith(
+            expect.stringContaining(`mattermost: drop no mention target=${channelId}`),
           );
         });
         expect(mockState.dispatchInboundMessage).not.toHaveBeenCalled();
@@ -1398,6 +1407,7 @@ describe("mattermost inbound user posts", () => {
         expect(mockState.dispatchInboundMessage.mock.calls.at(0)?.[0].ctx.BodyForAgent).toBe(
           expectedBody,
         );
+        expect(runtime.log).not.toHaveBeenCalledWith(expect.stringContaining("drop no mention"));
       }
       abortController.abort();
       socket.emitClose(1000);

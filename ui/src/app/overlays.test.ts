@@ -825,10 +825,13 @@ describe("application update overlays", () => {
     });
     const harness = createGatewayHarness(client(request));
     let updateRunningWhenDrained = false;
+    harness.update({ sessionKey: "agent:main:originating-chat" });
     const overlays = createApplicationOverlays(harness.gateway, {
+      getActiveSessionKey: () => harness.gateway.snapshot.sessionKey,
       drainConfigWrites: async () => {
         order.push("drain");
         updateRunningWhenDrained = overlays.snapshot.updateRunning;
+        harness.update({ sessionKey: "agent:main:another-chat" });
         await Promise.resolve();
       },
     });
@@ -841,29 +844,47 @@ describe("application update overlays", () => {
     ]);
     // Suspension publishes first so no NEW write can start while draining.
     expect(updateRunningWhenDrained).toBe(true);
-  });
-
-  it("surfaces a coalesced restart while reconnect verification remains active", async () => {
-    installUpdateTranslations();
-    const request = vi.fn<RequestFn>().mockResolvedValue({
-      ok: true,
-      restart: { coalesced: true },
-      result: { status: "ok", after: { version: "2.0.0" } },
+    expect(request).toHaveBeenCalledWith("update.run", {
+      sessionKey: "agent:main:originating-chat",
     });
-    const harness = createGatewayHarness(client(request));
-    const overlays = createApplicationOverlays(harness.gateway);
-
-    await overlays.runUpdate();
-
-    expect(request).toHaveBeenCalledWith("update.run", {});
-    expect(overlays.snapshot.updateStatusBanner).toEqual({
-      tone: "info",
-      text: "Update installed. A gateway restart is already in progress; status will refresh after it reconnects.",
-    });
-    expect(overlays.snapshot.updateRunning).toBe(false);
-    expect(overlays.snapshot.updateReconciliationPending).toBe(true);
     overlays.dispose();
   });
+
+  it.each([
+    { name: "no active chat", activeSessionKey: undefined, options: undefined },
+    { name: "active chat", activeSessionKey: "agent:main:active", options: undefined },
+    {
+      name: "explicit chat override",
+      activeSessionKey: "agent:main:active",
+      options: { sessionKey: "agent:main:requested" },
+    },
+  ])(
+    "routes $name and retains coalesced restart verification",
+    async ({ activeSessionKey, options }) => {
+      installUpdateTranslations();
+      const request = vi.fn<RequestFn>().mockResolvedValue({
+        ok: true,
+        restart: { coalesced: true },
+        result: { status: "ok", after: { version: "2.0.0" } },
+      });
+      const harness = createGatewayHarness(client(request));
+      const overlays = createApplicationOverlays(harness.gateway, {
+        getActiveSessionKey: () => activeSessionKey,
+      });
+
+      await overlays.runUpdate(options);
+
+      const sessionKey = options?.sessionKey ?? activeSessionKey;
+      expect(request).toHaveBeenCalledWith("update.run", sessionKey ? { sessionKey } : {});
+      expect(overlays.snapshot.updateStatusBanner).toEqual({
+        tone: "info",
+        text: "Update installed. A gateway restart is already in progress; status will refresh after it reconnects.",
+      });
+      expect(overlays.snapshot.updateRunning).toBe(false);
+      expect(overlays.snapshot.updateReconciliationPending).toBe(true);
+      overlays.dispose();
+    },
+  );
 
   it("keeps reconciliation pending after a managed-service handoff starts", async () => {
     const request = vi.fn<RequestFn>().mockResolvedValue({

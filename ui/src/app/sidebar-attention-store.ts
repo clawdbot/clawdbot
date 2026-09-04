@@ -1,13 +1,15 @@
-import { clearSidebarAttentionDismissal } from "../components/sidebar-attention-dismissals.ts";
 import {
-  buildScopeUpgradeInboxEntry,
+  clearSidebarAttentionDismissal,
+  resolveScopeUpgradeDismissal,
   type SidebarAttentionDismissal,
-  type SidebarInboxEntry,
-} from "../components/sidebar-attention-entries.ts";
+} from "../components/sidebar-attention-dismissals.ts";
+import type { SidebarInboxEntry } from "../components/sidebar-attention-entries.ts";
 import type { AgentCapability } from "../lib/agents/index.ts";
 import type { AgentSelectionCapability } from "./agent-selection.ts";
+import type { ConnectionBootstrapCoordinator } from "./connection-bootstrap.ts";
 import type { ScopeUpgradeCapability } from "./device-scope-upgrade.ts";
 import type { ApplicationGateway } from "./gateway.ts";
+import type { MentionsCapability } from "./mentions.ts";
 import type { ApplicationOverlays } from "./overlays-types.ts";
 
 export type SidebarAttentionStoreSources = {
@@ -16,10 +18,12 @@ export type SidebarAttentionStoreSources = {
   agents: AgentCapability;
   overlays: ApplicationOverlays;
   scopeUpgrade: ScopeUpgradeCapability;
+  connectionBootstrap?: ConnectionBootstrapCoordinator;
 };
 
 export type SidebarAttentionStoreController = {
   readonly entries: readonly SidebarInboxEntry[];
+  readonly mentions: MentionsCapability;
   dismiss(dismissal: SidebarAttentionDismissal): void;
   syncDismissals(): void;
   dispose(): void;
@@ -32,7 +36,7 @@ type SidebarAttentionStoreControllerConstructor = new (
 
 export type SidebarAttentionStore = {
   readonly entries: readonly SidebarInboxEntry[];
-  activate(Controller: SidebarAttentionStoreControllerConstructor): void;
+  activate(Controller: SidebarAttentionStoreControllerConstructor): MentionsCapability;
   dismiss(dismissal: SidebarAttentionDismissal): void;
   subscribe(listener: () => void): () => void;
   dispose(): void;
@@ -55,7 +59,7 @@ export function createSidebarAttentionStore(
     if (
       snapshot.phase === "connected" &&
       scopes &&
-      !buildScopeUpgradeInboxEntry({ scopes, state: sources.scopeUpgrade.state })?.dismissal
+      !resolveScopeUpgradeDismissal({ scopes, state: sources.scopeUpgrade.state })
     ) {
       clearSidebarAttentionDismissal(sources.gateway.connection.gatewayUrl, "scopeUpgrade");
     }
@@ -70,6 +74,7 @@ export function createSidebarAttentionStore(
     },
     activate(Controller) {
       controller ??= new Controller(sources, publish);
+      return controller.mentions;
     },
     dismiss(dismissal) {
       controller?.dismiss(dismissal);

@@ -65,6 +65,10 @@ such as `telegram:123456789`. This gives first-time setups an explicit owner for
 privileged commands and exec approval prompts. After an owner exists, later
 pairing approvals only grant DM access; they do not add more owners.
 
+Manually allowlisted senders are not automatically command owners. If an
+authorized sender has no owner access, owner-only commands reply with the exact
+`openclaw config set commands.ownerAllowFrom` command for the operator to run.
+
 <Note>
 WhatsApp's login QR links a WhatsApp account to OpenClaw. DM access requests
 approve people who message that account. These are separate flows.

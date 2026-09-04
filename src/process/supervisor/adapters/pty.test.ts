@@ -94,6 +94,21 @@ describe("createPtyAdapter", () => {
     vi.clearAllMocks();
   });
 
+  it("does not spawn when construction aborts during the module import", async () => {
+    const abort = new AbortController();
+    spawnMock.mockReturnValue(createStubPty());
+
+    const starting = createPtyAdapter({
+      shell: "bash",
+      args: ["-lc", "echo started"],
+      abortSignal: abort.signal,
+    });
+    abort.abort();
+
+    await expect(starting).rejects.toThrow("PTY construction aborted");
+    expect(spawnMock).not.toHaveBeenCalled();
+  });
+
   it("uses the default terminal name and child env when Windows TERM is blank", async () => {
     const originalPlatform = Object.getOwnPropertyDescriptor(process, "platform");
     Object.defineProperty(process, "platform", { value: "win32", configurable: true });
@@ -210,18 +225,23 @@ describe("createPtyAdapter", () => {
     expect(ptyKillMock).not.toHaveBeenCalled();
   });
 
-  it("wait does not settle immediately on SIGKILL", async () => {
+  it("keeps terminal fallback distinct from unconfirmed PTY cleanup", async () => {
     vi.useFakeTimers();
     spawnMock.mockReturnValue(createStubPty());
-
+    const onSpawnCleanup = vi.fn<(cleanup: Promise<void>) => void>();
     const adapter = await createPtyAdapter({
       shell: "bash",
       args: ["-lc", "sleep 10"],
+      onSpawnCleanup,
     });
 
     await expectWaitStaysPendingUntilSigkillFallback(adapter.wait(), () => {
       adapter.kill();
     });
+    expect(onSpawnCleanup).toHaveBeenCalledOnce();
+    await expect(onSpawnCleanup.mock.calls[0]![0]).rejects.toThrow(
+      "cleanup could not be confirmed",
+    );
   });
 
   it("prefers real PTY exit over SIGKILL fallback settle", async () => {

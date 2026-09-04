@@ -331,6 +331,40 @@ test("lease revocation between startup Bot API calls prevents update polling", a
   assert.deepEqual(methods, ["getWebhookInfo"]);
 });
 
+test("clears a leased bot webhook before polling updates", async () => {
+  const methods = [];
+  const bodies = [];
+  const results = [
+    { url: "https://example.test/webhook", pending_update_count: 2 },
+    true,
+    [],
+    { url: "", pending_update_count: 0 },
+  ];
+  const fetchImpl = async (url, init) => {
+    methods.push(new URL(url).pathname.split("/").at(-1));
+    bodies.push(JSON.parse(init.body));
+    return {
+      ok: true,
+      status: 200,
+      json: async () => ({ ok: true, result: results.shift() }),
+    };
+  };
+  const result = await drainSutUpdates(
+    "sut-token",
+    { assertHealthy: () => {}, whenUnhealthy: new Promise(() => {}) },
+    fetchImpl,
+  );
+
+  assert.deepEqual(methods, ["getWebhookInfo", "deleteWebhook", "getUpdates", "getWebhookInfo"]);
+  assert.deepEqual(bodies[1], { drop_pending_updates: true });
+  assert.deepEqual(result, {
+    webhookUrlSet: true,
+    pendingBefore: 2,
+    drained: 0,
+    pendingAfter: 0,
+  });
+});
+
 test("lease loss during a credential command stops every owned child before its side effect", async (context) => {
   const temp = fs.mkdtempSync(path.join(os.tmpdir(), "telegram-command-lease-fence-"));
   const sideEffect = path.join(temp, "sent");

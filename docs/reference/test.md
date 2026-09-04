@@ -163,6 +163,9 @@ verify lease cleanup; never stop the operator's Gateway.
 2. `pnpm test <path-or-filter>` for one file, directory, or explicit target.
 3. `pnpm test` only when you intentionally need the full local Vitest suite.
 
+The project runner prints wrapper usage for a sole `--help` or `-h` request.
+Compound requests, including `--help --no-help`, follow native Vitest option semantics.
+
 An existing UI directory target stays scoped to that directory, including when
 combined with explicit E2E test files. Tests retain their owning shared, isolated,
 or browser lane. UI source/support-file targets that need whole-lane coverage
@@ -209,6 +212,11 @@ existing temporary directories, Node or Vitest caches, or other global caches. S
 validators; it does not require `TSX_DISABLE_CACHE` in the invoking shell. Raw
 external `tsx` and `node --import tsx` invocations outside these launchers are unchanged.
 
+Control UI builds report size budgets without enforcing them. Run
+`pnpm ui:check-performance` after a build to enforce absolute budgets, or
+`pnpm ui:check-performance:base <base-commit-sha>` to build and compare both
+revisions with the same toolchain. See [Control UI size budgets](/ci#control-ui-size-budgets).
+
 ### Source tests and subprocess builds
 
 Non-watch runs through `pnpm test` or `scripts/run-vitest.mjs` keep Vitest tests
@@ -226,12 +234,16 @@ reply metadata reader, and outbound normalizer. Shared chunks preserve their
 module and WeakMap identity. Generated TUI fixtures remain `.mts` files: Node
 launches them with `--import tsx` for their own syntax, while Bun handles that
 syntax natively without the Node loader. Only their runtime imports change.
-Existing package build entry paths and Vitest source parents stay unchanged. Other
-Worker-thread entries and arbitrary source CLI fixtures remain outside this declared set.
+Existing package build entry paths and Vitest source parents stay unchanged. The
+CLI fork-recovery regression also compiles the real CLI entry and its concurrent
+rebind's session accessor and binding helper together. Both processes use the same
+runtime graph while retaining the durable-write race and process-exit assertions.
+Other Worker-thread entries and arbitrary source CLI fixtures remain outside this declared set.
 
-The session-title retention test declares its title-reader and session-utils roots
-in this same generation. Each fresh heap-measurement child runs their JavaScript
-without spending its execution deadline on TypeScript imports.
+The session-title and child-link retention tests declare their title-reader,
+session-utils, and listing roots in this same generation. Each fresh
+heap-measurement child runs their JavaScript without spending its execution
+deadline on TypeScript imports.
 
 Preparation is lazy across both projects and shards. Config imports, listing
 tests, and tiny tests that do not import these declarations do not load the
@@ -428,7 +440,15 @@ and intentionally real-home live execution remain outside its protection.
 
 ## Control UI, TUI, and extension lanes
 
-- **Control UI E2E:** `pnpm test:ui:e2e` runs the Vitest + Playwright lane, usually against a mocked Gateway WebSocket. Four resource groups retain two execution phases: `ui-e2e-bundled` and `ui-e2e-standalone` run first with at most two workers total; `ui-e2e-serial` and `ui-e2e-serial-standalone` then share one worker. The two bundle consumers lazily share one temporary UI bundle/preview until the invocation closes. Standalone projects own their fixture, source, or custom-build servers; selecting only standalone suites avoids the shared bundle build. Every selected project receives Chromium metadata, and new E2E files default to parallel bundled ownership. The root config retains the full discovery inventory: `ui/src/**/*.e2e.test.ts` plus the QA Lab media-transcript real-Gateway suite. Shared mocks/controls live in `ui/src/test-helpers/control-ui-e2e.ts`. Some suites start isolated real Gateways; `OPENCLAW_UI_E2E_SKIP_REAL_GATEWAY=1` excludes them. `pnpm test:e2e` includes this lane, with no additional CI jobs for resource groups. Use Testbox/Crabbox only when clean Linux/browser parity is part of the proof. In a linked worktree, `node scripts/run-vitest.mjs run --config test/vitest/vitest.ui-e2e.config.ts --configLoader runner ui/src/e2e/chat-flow.messaging.e2e.test.ts` avoids pnpm dependency reconciliation for a targeted local run.
+- **Control UI E2E:** `pnpm test:ui:e2e` runs the Vitest + Playwright lane, usually against a mocked Gateway WebSocket. Four resource groups retain two execution phases: `ui-e2e-bundled` and `ui-e2e-standalone` run first with at most two workers total; `ui-e2e-serial` and `ui-e2e-serial-standalone` then share one worker. The two bundle consumers lazily share one temporary UI bundle/preview until the invocation closes. Standalone projects own their fixture, source, or custom-build servers; selecting only standalone suites avoids the shared bundle build. Every selected project receives Chromium metadata, and new E2E files default to parallel bundled ownership. The root config retains the full discovery inventory: `ui/src/**/*.e2e.test.ts` plus the QA Lab media-transcript and OpenClaw-delegation real-Gateway suites. Shared mocks/controls live in `ui/src/test-helpers/control-ui-e2e.ts`. Some suites start isolated real Gateways; `OPENCLAW_UI_E2E_SKIP_REAL_GATEWAY=1` excludes them. `pnpm test:e2e` includes this lane, with no additional CI jobs for resource groups. Use Testbox/Crabbox only when clean Linux/browser parity is part of the proof. In a linked worktree, `node scripts/run-vitest.mjs run --config test/vitest/vitest.ui-e2e.config.ts --configLoader runner ui/src/e2e/chat-flow.messaging.e2e.test.ts` avoids pnpm dependency reconciliation for a targeted local run.
+- **Control UI real-Gateway approval proof:** Check default and explicit Full Access delegation against an isolated Gateway with a mock provider. Build the runtime before running the targeted proof:
+
+  ```bash
+  pnpm build qaRuntime
+  node scripts/run-vitest.mjs run --config test/vitest/vitest.ui-e2e.config.ts \
+    --configLoader runner extensions/qa-lab/src/control-ui-openclaw-delegation.real-gateway.e2e.test.ts
+  ```
+
 - **TUI PTY tests:** `node scripts/run-vitest.mjs run --config test/vitest/vitest.tui-pty.config.ts` runs the fast fake-backend PTY lane. `OPENCLAW_TUI_PTY_INCLUDE_LOCAL=1` or `pnpm tui:pty:test:watch --mode local` runs the slower `tui --local` smoke, which mocks only the external model endpoint. CI also sets `OPENCLAW_TUI_PTY_USE_BUILT_CLI=1` after building `dist/`; use that flag only when exact-head built artifacts already exist. Assert stable visible text or fixture calls, not raw ANSI snapshots.
 - `pnpm test:extensions` and `pnpm test extensions` run all extension/plugin shards. Heavy channel plugins, the browser plugin, and OpenAI run as dedicated shards; other plugin groups stay batched. `pnpm test extensions/<id>` runs one bundled plugin lane.
 - **Browser native host:** `node scripts/run-vitest.mjs extensions/browser/src/browser/extension-install.native-host.e2e.test.ts` runs the real native messaging launcher on macOS or Linux against built dist with synthetic installation state; it does not launch Chrome or a Gateway. Windows skips this POSIX process proof because [native bootstrap uses manual pairing there](/tools/chrome-extension#requirements). The E2E owner prepares artifacts before workers. With an already-built candidate, prefix the command with `OPENCLAW_E2E_USE_PREBUILT_DIST=1` to reuse it; missing artifacts fail the test. This case belongs to `pnpm test:e2e`, not the browser source shard or untargeted `pnpm test` unit suite. Linux CI runs it explicitly in `build-artifacts` and validates a JSON report proving the exact named test passed. The workflow skips only frozen historical checkouts missing this test file; that skip is unavailable proof, not a pass or coverage.
@@ -471,9 +491,55 @@ JSON report together. Mantis allocates an invocation directory for setup logs,
 capture attempts, and its report; the builder preserves each attempt's relative
 paths and refuses to overwrite an existing report.
 
-Separate output owners remain: real-Gateway suites, `chat-outbox-*`, and
+The real-Gateway auth transport suite also allocates one fresh directory per
+suite invocation. Its screenshots wait for meaningful content and the presentation
+owner's finite entrance or resize animations, while perpetual descendant activity
+continues.
+
+Separate output owners remain: other real-Gateway suites, `chat-outbox-*`, and
 `chat-attachment-read-lifecycle`. Do not assume those owners have the ordinary
 mocked proof retention guarantee.
+
+### Screenshots during Chromium recordings
+
+The session-host command-state real-Gateway proof uses `page.screenshot({ path })`
+without `clip` or `fullPage: true`, keeping its existing viewport, recording size,
+waits, and animation options. This path was verified on Linux with Playwright
+1.62.1 and full Chrome for Testing 151.0.7922.34.
+
+Other recording owners have not been migrated or certified by this proof; some
+still use locator or full-page screenshots. This is not a suite-wide capture
+policy. Verify each owner's screenshot content and finalized video before
+changing its capture mode. When using the verified viewport path, crop any
+element-only PNG outside the browser. Cropping cannot recover missing content
+from an already-corrupted recording.
+
+In a macOS arm64 reproduction with Playwright 1.62.1 and its bundled full Chrome
+for Testing 151.0.7922.34, `locator.screenshot()` and
+`page.screenshot({ clip })` caused small screencast frames. The element appears at
+the video origin with gray elsewhere, even though the PNG, DOM geometry, and
+functional assertions are correct. `fullPage: true` is not a general workaround:
+a document larger than the viewport can instead produce a shrunken page with
+gray padding. Unclipped viewport captures preserved the recording in the same
+synthetic reproduction; other browser versions and platforms require their own
+verification.
+
+This is an upstream capture limitation, not a Gateway or context-cleanup failure.
+[Chromium's screenshot handler](https://chromium.googlesource.com/chromium/src/+/151.0.7922.34/content/browser/devtools/protocol/page_handler.cc#1492)
+temporarily changes the shared view size and restores it after capture; its
+screencast producer can observe the intermediate surface.
+[Playwright's recorder](https://github.com/microsoft/playwright/blob/v1.62.1/packages/playwright-core/src/server/videoRecorder.ts#L166)
+pads undersized frames with gray. Closing the context finalizes the video but
+does not repair those frames. Do not filter out bad frames or change UI behavior
+to conceal this limitation.
+
+Verify finalized video content around every capture, not just its dimensions or
+the success of locator assertions. For a dependency upgrade, reproduce with a
+synthetic page containing an offset small element, compare element, clipped,
+viewport, and oversized full-page screenshots, and inspect every decoded frame.
+Keep real host/profile footage local; inspect public proof for synthetic-only
+content before sharing. Correct PNGs remain useful still-image proof, but a
+corrupted video is not continuous-flow proof.
 
 ## Gateway and E2E
 
@@ -665,6 +731,8 @@ Saved output: `pnpm test:startup:bench:smoke` writes `.artifacts/cli-startup-ben
 </Accordion>
 
 <Accordion title="Gateway startup (scripts/bench-gateway-startup.ts)">
+
+Gateway startup, restart, and agent concurrency benchmark fixtures use temporary home and state directories, loopback binding, and `discovery.mdns.mode: "off"` so synthetic Gateways do not advertise on the LAN, including on macOS.
 
 Defaults to the built CLI entry at `dist/entry.js`; run `pnpm build` first. Pass `--entry scripts/run-node.mjs` to measure the source runner instead, and keep those results separate from built-entry baselines.
 

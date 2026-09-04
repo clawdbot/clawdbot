@@ -188,7 +188,6 @@ function parseRestartSentinelStats(value: unknown): RestartSentinelStats | null 
   const recovery =
     value.recovery === undefined ? undefined : updateRecoverySchema.safeParse(value.recovery);
   if (
-    (recovery !== undefined && !recovery.success) ||
     mode === false ||
     mode === null ||
     root === false ||
@@ -206,6 +205,7 @@ function parseRestartSentinelStats(value: unknown): RestartSentinelStats | null 
     return null;
   }
   const result: RestartSentinelStats = {};
+  // Recovery is diagnostic here; unsupported metadata must not suppress the restart notice.
   if (recovery?.success) {
     result.recovery = recovery.data;
   }

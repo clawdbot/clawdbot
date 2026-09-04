@@ -227,6 +227,7 @@ describe("sessions.send completed subagent follow-up status", () => {
             expect(params).toMatchObject({
               sessionKey,
               idempotencyKey: "source-send",
+              mentions: [{ profileId: "bob", start: 0, end: 4 }],
               ...(method === "sessions.steer" ? { queueMode: "interrupt" } : {}),
             });
             respond(true, payload);
@@ -238,7 +239,12 @@ describe("sessions.send completed subagent follow-up status", () => {
           method,
         )({
           req: { id: "receipt" } as never,
-          params: { key: sessionKey, message: "same prompt", idempotencyKey: "source-send" },
+          params: {
+            key: sessionKey,
+            message: "@Bob same prompt",
+            mentions: [{ profileId: "bob", start: 0, end: 4 }],
+            idempotencyKey: "source-send",
+          },
           respond,
           context: createRequestContext(),
           client: null,

@@ -4,6 +4,8 @@
 # `bare` is a clean Node/Git runner for install/update lanes. `functional`
 # installs the prepared OpenClaw npm tarball into /app for built-app lanes.
 
+ARG OPENCLAW_NODE_ALPINE_IMAGE="docker.io/library/node:24-alpine@sha256:d32cdf619f63fe0471182d08996dd516c6275bb5fd31ae06e55a570bd9e1ad43"
+
 FROM node:24-bookworm-slim@sha256:3638d9a6fe4030bd716be989438248074489337ba3275657f93595428be4fc03 AS e2e-runner
 
 # openssl provisions short-lived fixture certificates for HTTPS-only provider
@@ -43,6 +45,12 @@ CMD ["bash"]
 FROM bare AS build
 
 CMD ["bash"]
+
+FROM ${OPENCLAW_NODE_ALPINE_IMAGE} AS musl
+
+COPY scripts/docker/verify-fs-safe-native.mjs /tmp/verify-fs-safe-native.mjs
+
+CMD ["sh"]
 
 FROM bare AS functional-manifest
 
@@ -106,6 +114,7 @@ FROM bare AS functional
 # checkout sources into the image.
 COPY --from=openclaw_package --chown=appuser:appuser openclaw-current.tgz /tmp/openclaw-current.tgz
 COPY --from=functional-deps --chown=appuser:appuser /tmp/openclaw-deps/node_modules /app/node_modules
+COPY --chown=appuser:appuser scripts/docker/verify-fs-safe-native.mjs /tmp/verify-fs-safe-native.mjs
 # Extract the package over the prebuilt dependency tree (bundled deps ship in
 # the tarball), then run its packaged postinstall. Functional E2E lanes exercise
 # private bundled plugins too, so skip the production migration's intentionally
@@ -119,6 +128,7 @@ RUN tar -xzf /tmp/openclaw-current.tgz -C /app --strip-components=1 \
  && ln -sfn /app /app/node_modules/openclaw \
  && mkdir -p "$HOME/.local/bin" \
  && ln -sf /app/openclaw.mjs "$HOME/.local/bin/openclaw" \
+ && node /tmp/verify-fs-safe-native.mjs --package-root /app --mode require \
  && rm -f /tmp/openclaw-current.tgz
 
 CMD ["bash"]

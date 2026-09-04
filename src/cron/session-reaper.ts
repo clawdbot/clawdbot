@@ -12,6 +12,7 @@ import type { CronConfig } from "../config/types.cron.js";
 import { formatErrorMessage } from "../infra/errors.js";
 import { normalizeAgentId, parseAgentSessionKey } from "../routing/session-key.js";
 import { isCronRunSessionKey } from "../sessions/session-key-utils.js";
+import { isCompetingSessionWorkAdmissionActive } from "../sessions/session-lifecycle-admission.js";
 import { buildPendingGeneratedMediaSessionKeySet } from "../tasks/task-status-access.js";
 import { resolveCronAgentSessionKey } from "./isolated-agent/session-key.js";
 import type { Logger } from "./service/state.js";
@@ -84,18 +85,16 @@ export async function removeCronJobBaseSession(params: {
 /**
  * Sweeps completed isolated cron run sessions while preserving base cron sessions.
  *
- * Must run outside the cron service `locked()` section because this acquires
- * the session-store file lock; reversing that order can deadlock timer ticks.
+ * Run outside the cron service `locked()` section: cleanup acquires session
+ * lifecycle and writer ownership, so nesting the queues can deadlock timer ticks.
  */
 export async function sweepCronRunSessions(params: {
   cronConfig?: CronConfig;
   agentId: string;
-  /** Resolved path to sessions.json — required. */
+  /** Resolved session-store target, interpreted by the SQLite accessor. */
   sessionStorePath: string;
   nowMs?: number;
   log: Logger;
-  /** Override for testing — skips the min-interval throttle. */
-  force?: boolean;
 }): Promise<ReaperResult> {
   const retentionMs = resolveRetentionMs(params.cronConfig);
   if (retentionMs === null) {
@@ -110,8 +109,8 @@ export async function sweepCronRunSessions(params: {
   const lastSweepAtMs = lastSweepAtMsByTarget.get(targetKey) ?? 0;
 
   // Timer ticks can be frequent; throttle per agent/store target to avoid
-  // repeated session-store I/O while preserving a force path for tests.
-  if (!params.force && now >= lastSweepAtMs && now - lastSweepAtMs < MIN_SWEEP_INTERVAL_MS) {
+  // repeated session-store I/O.
+  if (now >= lastSweepAtMs && now - lastSweepAtMs < MIN_SWEEP_INTERVAL_MS) {
     return { swept: false, pruned: 0 };
   }
 
@@ -150,6 +149,14 @@ export async function sweepCronRunSessions(params: {
         if (pendingMediaSessionKeys.has(sessionKey)) {
           continue;
         }
+      }
+      // Skip known-busy rows so one active generation cannot abort idle sibling cleanup.
+      // The shared deletion guard still closes the race between selection and commit.
+      if (
+        entry.sessionId &&
+        isCompetingSessionWorkAdmissionActive(storePath, [sessionKey, entry.sessionId])
+      ) {
+        continue;
       }
       removals.push({
         sessionKey,

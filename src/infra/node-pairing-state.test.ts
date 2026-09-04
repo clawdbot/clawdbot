@@ -125,7 +125,36 @@ describe("node pairing generation", () => {
         key: expect.stringMatching(/^[a-f0-9]{64}$/u),
       },
       generation: null,
+      approvedSurface: { caps: [], commands: [], permissions: undefined },
     });
+  });
+
+  it("captures the approved surface from the same authenticated row as its generation", async () => {
+    const original = pairedNode({
+      nodeSurface: {
+        createdAtMs: 300,
+        approvedAtMs: 400,
+        caps: ["screen"],
+        commands: ["screen.snapshot"],
+        permissions: { accessibility: false },
+      },
+    });
+    mocks.getPairedDevice.mockResolvedValueOnce(original);
+
+    await expect(
+      captureAuthenticatedNodePairingState({
+        nodeId: original.deviceId,
+        publicKey: original.publicKey,
+        token: original.tokens!.node!.token,
+      }),
+    ).resolves.toMatchObject({
+      approvedSurface: {
+        caps: ["screen"],
+        commands: ["screen.snapshot"],
+        permissions: { accessibility: false },
+      },
+    });
+    expect(mocks.getPairedDevice).toHaveBeenCalledTimes(1);
   });
 
   it("keeps pairing identity stable when the pending surface is approved", async () => {

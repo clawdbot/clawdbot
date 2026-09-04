@@ -128,4 +128,34 @@ describe("chat picker overlay", () => {
     expect(effortPicker.open).toBe(false);
     expect(document.activeElement).toBe(effortTrigger);
   });
+
+  it("keeps ancestor pickers open and dismisses nested menus from the inside out", () => {
+    const composer = document.createElement("div");
+    composer.className = "agent-chat__input";
+    const model = document.createElement("details");
+    const modelTrigger = document.createElement("summary");
+    const dropdown = document.createElement("wa-dropdown");
+    const accountTrigger = document.createElement("button");
+    accountTrigger.slot = "trigger";
+    dropdown.append(accountTrigger);
+    model.append(modelTrigger, dropdown);
+    const peer = document.createElement("details");
+    composer.append(model, peer);
+    document.body.append(composer);
+    model.open = peer.open = true;
+    dropdown.setAttribute("open", "");
+    dropdown.addEventListener("wa-show", handleChatComposerDropdownShow);
+    dropdown.dispatchEvent(new Event("wa-show"));
+
+    expect(model.open).toBe(true);
+    expect(peer.open).toBe(false);
+    accountTrigger.dispatchEvent(new KeyboardEvent("keydown", { key: "Escape", bubbles: true }));
+    expect(dropdown.hasAttribute("open")).toBe(false);
+    expect(model.open).toBe(true);
+    expect(document.activeElement).toBe(accountTrigger);
+
+    accountTrigger.dispatchEvent(new KeyboardEvent("keydown", { key: "Escape", bubbles: true }));
+    expect(model.open).toBe(false);
+    expect(document.activeElement).toBe(modelTrigger);
+  });
 });

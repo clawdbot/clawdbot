@@ -26,7 +26,6 @@ const gatewayRuntimeIdentity = vi.hoisted(() => vi.fn());
 const dispatchChild = vi.hoisted(() => vi.fn());
 const spawnCallerIdentity = vi.hoisted(() => vi.fn());
 const spawnArgs = vi.hoisted(() => vi.fn());
-const githubPublicationRequest = vi.hoisted(() => vi.fn());
 const scopedSessionAccess = vi.hoisted(() =>
   vi.fn(async (params: { run: () => Promise<unknown> }) => await params.run()),
 );
@@ -109,7 +108,6 @@ const fixtureMocks = {
   dispatchChild,
   spawnCallerIdentity,
   spawnArgs,
-  githubPublicationRequest,
   scopedSessionAccess,
 };
 

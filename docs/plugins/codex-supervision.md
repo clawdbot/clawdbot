@@ -153,8 +153,9 @@ Each host appears as soon as its own native listing settles. The visible page
 reconciles after node-connectivity changes, when it regains focus, and at most
 every 30 seconds; a changed result gets a faster follow-up pass. Sessions created
 in Codex Desktop, the CLI, or another native client therefore appear without a
-full page reload. The first page follows Codex's own most-recently-updated order,
-so a newly created native session is eligible immediately.
+full page reload. The first page follows Codex's own most-recently-updated order.
+A fresh native fork remains readable by ID but can be absent from these lists
+until its first own user turn.
 Each returned search page scans a bounded number of native pages per host rather
 than sending the query to App Server, because native search can also match
 transcript previews.
@@ -389,9 +390,15 @@ even if the user turn is rejected or never starts. **Fork from here** excludes
 the selected native user turn; it does not erase configuration updates recorded
 before that turn. The refresh creates no user message or extra model turn.
 
-Before publishing the child, OpenClaw verifies the native cut, selected durable
-model and provider, immutable tool catalog, local display prefix, and exact
-creation owner. Its automatic native subscription is released before readiness.
+Canonical message forks require Codex 0.153.0 or newer and native model metadata.
+They use the source thread's current model selection when loaded in the selected
+App Server, or its latest persisted selection when unloaded. If Codex cannot
+report that selection, update Codex or fork an original imported message instead.
+
+Before publishing the child, OpenClaw verifies the native cut, selected model
+and provider, immutable tool catalog, local display prefix, and exact creation
+owner. It rejects changes to the source rollout or selected model during
+initialization. Its automatic native subscription is released before readiness.
 Preparation does not run prompt hooks or provision execution environments or
 requester MCP resources. The source's actual native declarations must match the
 fresh child's declarations; creation does not reconstruct a hypothetical run's

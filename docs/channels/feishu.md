@@ -394,6 +394,12 @@ The plugin ships agent tools for Feishu documents, chats, knowledge base, cloud 
 
 Per-account gates live under `accounts.<id>.tools`.
 
+Bitable operations use the application token from a `/base/` URL or returned
+`app_token`, not the node token in a `/wiki/` URL. If application creation succeeds
+but table metadata is not retrieved, keep the returned `app_token` and URL. Inspect
+that existing application rather than creating another one; a missing `table_id`
+does not mean creation failed.
+
 `feishu_doc` creates title-only documents. To add Markdown, pass the returned
 `document_id` as `doc_token` in a separate `write` action. A `create` request
 that includes `content` fails without creating an empty document.

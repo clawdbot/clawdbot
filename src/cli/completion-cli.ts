@@ -3,6 +3,7 @@ import fs from "node:fs/promises";
 import { Command, Option } from "commander";
 import { formatDocsLink } from "../../packages/terminal-core/src/links.js";
 import { theme } from "../../packages/terminal-core/src/theme.js";
+import { isInvalidConfigError } from "../config/io.invalid-config.js";
 import { routeLogsToStderr } from "../logging/console.js";
 import { formatConsoleDiagnosticLine } from "../logging/json-console-line.js";
 import {
@@ -216,9 +217,16 @@ export function registerCompletionCli(program: Command) {
 
       if (process.env[COMPLETION_SKIP_PLUGIN_COMMANDS_ENV] !== "1") {
         const { registerPluginCliCommandsFromValidatedConfig } = await import("../plugins/cli.js");
-        await registerPluginCliCommandsFromValidatedConfig(program, undefined, undefined, {
-          mode: "eager",
-        });
+        try {
+          await registerPluginCliCommandsFromValidatedConfig(program, undefined, undefined, {
+            mode: "eager",
+          });
+        } catch (error) {
+          if (!isInvalidConfigError(error)) {
+            throw error;
+          }
+          writeCompletionRegistrationWarning(`skipping plugin commands: ${error.message}`);
+        }
       }
 
       if (options.writeState) {

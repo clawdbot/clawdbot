@@ -1,5 +1,6 @@
 package ai.openclaw.app.ui
 
+import ai.openclaw.app.buildNodeMainSessionKey
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertNull
 import org.junit.Test
@@ -19,7 +20,7 @@ class SessionDashboardScreenTest {
       )
 
     assertEquals(
-      "https://gateway.example.com:8443/dashboard/ops/telegram/12345",
+      "https://gateway.example.com:8443/dashboard/ops/~key/telegram/12345",
       url,
     )
   }
@@ -42,35 +43,42 @@ class SessionDashboardScreenTest {
       )
 
     assertEquals(
-      "https://gateway.example.com:8443/openclaw/dashboard/main/qa",
+      "https://gateway.example.com:8443/openclaw/dashboard/main/~key/qa",
       url,
     )
   }
 
   @Test
-  fun dashboardUrlCollapsesMainKeysToAgentDashboard() {
+  fun dashboardUrlKeepsDeviceOwnedMainSession() {
+    val key = buildNodeMainSessionKey(deviceId = "1234567890abcdef", agentId = "ops")
     assertEquals(
-      "https://gateway.example.com/dashboard/research",
+      "https://gateway.example.com/dashboard/ops/~key/node-1234567890ab",
       sessionDashboardUrl(
         baseUrl = "https://gateway.example.com",
-        sessionKey = "agent:research:workspace",
-        mainSessionKey = "agent:research:workspace",
-      ),
-    )
-    assertEquals(
-      "https://gateway.example.com/dashboard/research",
-      sessionDashboardUrl(
-        baseUrl = "https://gateway.example.com",
-        sessionKey = "main",
-        fallbackAgentId = "research",
+        sessionKey = key,
+        fallbackAgentId = "main",
       ),
     )
   }
 
   @Test
+  fun dashboardUrlResolvesOnlyBareMainAndGlobalAliases() {
+    for (sessionKey in listOf("main", "MAIN", "global", "GLOBAL")) {
+      assertEquals(
+        "https://gateway.example.com/dashboard/research",
+        sessionDashboardUrl(
+          baseUrl = "https://gateway.example.com",
+          sessionKey = sessionKey,
+          fallbackAgentId = "research",
+        ),
+      )
+    }
+  }
+
+  @Test
   fun dashboardUrlEscapesDotTildeAndShortLiteralSegments() {
     assertEquals(
-      "https://gateway.example.com/dashboard/main/cron/~dot/~dotdot/~~dot",
+      "https://gateway.example.com/dashboard/main/~key/cron/~dot/~dotdot/~~dot",
       sessionDashboardUrl(
         baseUrl = "https://gateway.example.com",
         sessionKey = "agent:main:cron:.:..:~dot",
@@ -84,7 +92,7 @@ class SessionDashboardScreenTest {
       ),
     )
     assertEquals(
-      "https://gateway.example.com/dashboard/main/channel/release%2Ejs",
+      "https://gateway.example.com/dashboard/main/~key/channel/release%2Ejs",
       sessionDashboardUrl(
         baseUrl = "https://gateway.example.com",
         sessionKey = "agent:main:channel:release.js",
@@ -96,10 +104,13 @@ class SessionDashboardScreenTest {
   fun dashboardUrlPreservesExactSessionIdentity() {
     val uuid = "12345678-90ab-cdef-1234-567890abcdef"
     listOf(
-      "agent:main:dashboard:$uuid" to "dashboard/$uuid",
+      "agent:main:dashboard:$uuid" to "~key/dashboard/$uuid",
       "agent:main:$uuid" to "~key/$uuid",
       "agent:main:sessions" to "~key/sessions",
       "agent:main:main" to "~key/main",
+      "agent:main:global" to "~key/global",
+      "agent:main:boot" to "~key/boot",
+      "agent:main:workspace" to "~key/workspace",
     ).forEach { (sessionKey, rest) ->
       assertEquals(
         sessionKey,
@@ -107,7 +118,6 @@ class SessionDashboardScreenTest {
         sessionDashboardUrl(
           baseUrl = "https://gateway.example.com",
           sessionKey = sessionKey,
-          mainSessionKey = "workspace",
         ),
       )
     }

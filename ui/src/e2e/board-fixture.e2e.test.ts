@@ -753,31 +753,39 @@ describeStandaloneMockServer("standalone Control UI mock server", () => {
     });
   }
 
-  it("renders the remove action with the menu font size and a leading trash icon", async () => {
+  it("renders consistent menu options with a leading trash icon", async () => {
     const page = await browser.newPage();
     try {
       await page.goto(fixtureServer.url, { waitUntil: "networkidle" });
       await openWidgetMenu(page);
       const presentation = await page
         .locator(".board-widget__menu[open] .board-widget__menu-danger")
-        .evaluate((remove) => {
-          const preset = remove.parentElement?.querySelector(".board-widget__preset");
-          const icon = remove.querySelector('[slot="icon"]');
-          if (!(preset instanceof HTMLElement)) {
-            throw new Error("board fixture menu did not expose a resize preset");
+        .evaluate((action) => {
+          const menu = action.parentElement;
+          const move = menu?.querySelector('wa-dropdown-item[value^="move:"]');
+          const preset = menu?.querySelector(".board-widget__preset");
+          const icon = action.querySelector('[slot="icon"]');
+          if (!(move instanceof HTMLElement) || !(preset instanceof HTMLElement)) {
+            throw new Error("board fixture menu did not expose move and resize options");
           }
           return {
-            fontSize: getComputedStyle(remove).fontSize,
+            actionFontSize: getComputedStyle(action).fontSize,
+            actionText: action.textContent?.trim(),
             iconHidden: icon?.getAttribute("aria-hidden"),
             iconSvg: Boolean(icon?.querySelector("svg")),
+            moveFontSize: getComputedStyle(move).fontSize,
             presetFontSize: getComputedStyle(preset).fontSize,
           };
         });
       expect({
-        fontSizesMatch: presentation.fontSize === presentation.presetFontSize,
+        actionText: presentation.actionText,
+        fontSizesMatch:
+          presentation.moveFontSize === presentation.presetFontSize &&
+          presentation.actionFontSize === presentation.presetFontSize,
         iconHidden: presentation.iconHidden,
         iconSvg: presentation.iconSvg,
       }).toEqual({
+        actionText: "Delete",
         fontSizesMatch: true,
         iconHidden: "true",
         iconSvg: true,

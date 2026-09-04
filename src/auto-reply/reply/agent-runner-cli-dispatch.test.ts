@@ -52,6 +52,57 @@ afterEach(() => {
 });
 
 describe("runCliAgentWithLifecycle", () => {
+  it("bridges completed CLI compaction lifecycles to reply callbacks", async () => {
+    cliDispatchState.runCliAgentMock.mockImplementationOnce(async (params: { runId: string }) => {
+      emitAgentEvent({
+        runId: params.runId,
+        stream: "compaction",
+        data: { phase: "start", backend: "claude-cli" },
+      });
+      emitAgentEvent({
+        runId: params.runId,
+        stream: "compaction",
+        data: { phase: "end", backend: "claude-cli", completed: false },
+      });
+      emitAgentEvent({
+        runId: params.runId,
+        stream: "compaction",
+        data: { phase: "start", backend: "claude-cli" },
+      });
+      emitAgentEvent({
+        runId: params.runId,
+        stream: "compaction",
+        data: { phase: "end", backend: "claude-cli", completed: true },
+      });
+      return { payloads: [], meta: { durationMs: 1 } };
+    });
+    const callbacks: string[] = [];
+
+    await runCliAgentWithLifecycle({
+      runId: "run-compaction-bridge",
+      provider: "claude-cli",
+      onCompactionStart: async () => {
+        callbacks.push("start");
+      },
+      onCompactionEnd: async (payload) => {
+        callbacks.push(payload?.completed === false ? "incomplete" : "end");
+      },
+      runParams: {
+        sessionId: "session-1",
+        sessionFile: "/tmp/session.jsonl",
+        workspaceDir: "/tmp/workspace",
+        prompt: "hello",
+        provider: "claude-cli",
+        model: "claude-opus-4-8",
+        thinkLevel: "high",
+        timeoutMs: 1_000,
+        runId: "run-compaction-bridge",
+      },
+    });
+
+    expect(callbacks).toEqual(["start", "incomplete", "start", "end"]);
+  });
+
   it("bridges typed CLI plan events", async () => {
     cliDispatchState.runCliAgentMock.mockImplementationOnce(async (params: { runId: string }) => {
       emitAgentEvent({

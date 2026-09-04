@@ -9,6 +9,7 @@ import {
   type SessionGoalOperation,
   type SessionGoalOperationResult,
 } from "../../config/sessions/goals-operations.js";
+import type { PrepareAssistantTranscriptMessage } from "../../config/sessions/transcript-assistant-delivery.js";
 import { getAgentEventLifecycleGeneration } from "../../infra/agent-events.js";
 import { clearAgentRunContext } from "../../infra/agent-run-registry.js";
 import { emitDiagnosticsTimelineEvent } from "../../infra/diagnostics-timeline.js";
@@ -59,6 +60,7 @@ type ChatSendInternalOptions = {
   goalResume?: SessionGoalOperation & { action: "resume" };
   trustedSystemInput?: boolean;
   transcript?: Parameters<typeof createGatewayChatUserTurnController>[0]["transcript"];
+  prepareAssistantTranscriptMessage?: PrepareAssistantTranscriptMessage;
   toolsAllow?: string[];
   skillWorkshopProposalRevision?: SkillWorkshopProposalRevisionConstraint;
 };
@@ -180,6 +182,7 @@ async function handleChatSendWithOptions(
       transcript: options?.transcript,
       startedAt: admissionStartedAt,
       warn: (message) => context.logGateway.warn(message),
+      mentionInbox: context.mentionInbox,
       assertGoalCurrent: () => {
         sessionMutationCommitGuard?.();
         sessionMutationAuthorization?.assertCurrent();
@@ -489,6 +492,7 @@ async function handleChatSendWithOptions(
       client,
       context,
       toolsAllow: options?.toolsAllow,
+      prepareAssistantTranscriptMessage: options?.prepareAssistantTranscriptMessage,
       skillWorkshopProposalRevision: options?.skillWorkshopProposalRevision,
       skillLibraryAuthoring,
       cronCreatorAuthority,
@@ -555,7 +559,10 @@ export async function handleChatSendWithSkillWorkshopProposalRevision(
 export async function handleTrustedInternalChatSend(
   options: GatewayRequestHandlerOptions,
   onAdmissionOwned?: () => Promise<boolean>,
-  inputOptions?: Pick<ChatSendInternalOptions, "transcript" | "toolsAllow">,
+  inputOptions?: Pick<
+    ChatSendInternalOptions,
+    "transcript" | "toolsAllow" | "prepareAssistantTranscriptMessage"
+  >,
 ): Promise<void> {
   await handleChatSendWithOptions(options, onAdmissionOwned, undefined, {
     ...inputOptions,

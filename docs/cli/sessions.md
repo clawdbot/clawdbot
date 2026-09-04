@@ -120,6 +120,12 @@ wait for the placement to settle, then retry. Agent main sessions remain
 protected. Already archived sessions are successful no-ops. Use `--dry-run` to
 validate every key and preview the result without changing session state.
 
+Archive reasons are assigned automatically and displayed as human-readable text
+in the Control UI. Explicit archive commands record `manual`; maintenance-owned
+archives record their owning trigger. Missing reasons remain protected as legacy
+state. Under disk pressure, only sessions explicitly archived by `maxEntries`
+are eligible for automatic deletion after cheaper cleanup tiers are exhausted.
+
 ## Delete sessions
 
 Delete one or more sessions through the running Gateway:
@@ -157,6 +163,13 @@ Both lifecycle commands:
   still processing the other valid keys;
 - emit one stable JSON envelope with `ok`, `operation`, `dryRun`, and `results`
   when `--json` is set.
+
+Dry-run uses the Gateway's session list to report protected agent-main sessions
+as failed, even when the CLI uses different local session settings. Already
+archived sessions remain successful archive no-ops. Dry-run does not execute all
+Gateway lifecycle checks: `global` previews can still show an archive or delete
+action that the Gateway refuses. Explicitly selected non-default global deletion
+remains supported. The real archive or delete request is authoritative.
 
 Example mixed-result JSON:
 
@@ -252,12 +265,14 @@ openclaw sessions cleanup --json
   pressure-gated: it only removes stale probe rows when session-entry
   maintenance/cap pressure is reached. When it runs, model-run cleanup
   happens before global stale cleanup and capping.
-- `maxEntries` caps the total live session row count. Protected rows are
-  reported as `keep` and count toward the cap, but they are never automatic
-  eviction targets. If protected rows prevent cleanup from reaching the cap,
-  the store remains above it. `--enforce` does not remove that protection;
-  unarchive, unpin, wait for active work to finish, or explicitly delete
-  sessions you no longer want to retain.
+- `maxEntries` caps the unarchived session row count; archived rows do not
+  consume it. Eligible ordinary overflow is reported as `archive-cap` and
+  archived, while synthetic runtime overflow remains disposable. Protected
+  unarchived rows are reported as `keep` and still consume the cap. If those
+  protected rows prevent cleanup from reaching the cap, the unarchived store
+  remains above it. `--enforce` does not remove that protection; unpin, wait
+  for active work to finish, or explicitly delete sessions you no longer want
+  to retain.
 
 Flags:
 

@@ -125,20 +125,22 @@ class DebugSparklineTile extends OpenClawLightDomElement {
             <polyline points=${points}></polyline>
           `}
         </svg>
-        ${hover
-          ? html`
-              <div class="debug-vital__hairline" style="left: ${hoverLeft}%"></div>
-              <div
-                class="debug-vital__dot debug-vital__dot--hover"
-                style="left: ${hoverLeft}%; top: ${(this.toY(hover.value) / CHART_HEIGHT) * 100}%"
-              ></div>
-            `
-          : html`
-              <div
-                class="debug-vital__dot debug-vital__dot--now"
-                style="left: calc(100% - 3px); top: ${(lastY / CHART_HEIGHT) * 100}%"
-              ></div>
-            `}
+        ${
+          hover
+            ? html`
+                <div class="debug-vital__hairline" style="left: ${hoverLeft}%"></div>
+                <div
+                  class="debug-vital__dot debug-vital__dot--hover"
+                  style="left: ${hoverLeft}%; top: ${(this.toY(hover.value) / CHART_HEIGHT) * 100}%"
+                ></div>
+              `
+            : html`
+                <div
+                  class="debug-vital__dot debug-vital__dot--now"
+                  style="left: calc(100% - 3px); top: ${(lastY / CHART_HEIGHT) * 100}%"
+                ></div>
+              `
+        }
       </div>
     `;
   }

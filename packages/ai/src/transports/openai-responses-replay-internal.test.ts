@@ -115,12 +115,10 @@ describe("Responses streamed recovery lifecycle", () => {
           { role: "user", content: "After checkpoint" },
         ],
       };
-      const buildFullHistoryRequest = vi.fn(
-        (): OpenAIResponsesRequestParams => ({
-          ...request,
-          input: [{ role: "user", content: "Before checkpoint" }, ...request.input],
-        }),
-      );
+      const buildFullHistoryRequest = vi.fn((): OpenAIResponsesRequestParams => ({
+        ...request,
+        input: [{ role: "user", content: "Before checkpoint" }, ...request.input],
+      }));
       const onCompactionRejected = vi.fn((_checkpoint: OpenAIResponsesCompactionRejection) => {
         order.push("commit");
       });

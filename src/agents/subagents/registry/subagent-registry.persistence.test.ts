@@ -192,7 +192,8 @@ describe("subagent registry persistence", () => {
         callGateway({ method: "agent.wait", params, timeoutMs }),
       sendRecoveryNotice: vi.fn(),
     };
-    activateSubagentRegistry(() => ({ recoveryRuntime }) as never);
+    const gateway = { recoveryRuntime, resolveGatewayContext: () => gateway as never };
+    activateSubagentRegistry(() => gateway as never);
   };
 
   const fastPersistSubagentRunsToDisk = (runs: Map<string, SubagentRunRecord>) =>

@@ -414,6 +414,7 @@ export function windowObservation(
     ];
   });
   const details: Record<string, unknown> = {
+    coordinateSpace: "image-pixels",
     ...(typeof structured.total_element_count === "number"
       ? { totalElementCount: structured.total_element_count }
       : {}),

@@ -57,6 +57,46 @@ const PUBLIC_EXTENSION_CONTRACT_RE =
   /^(?:src\/plugin-sdk\/|src\/plugins\/contracts\/|src\/channels\/plugins\/|scripts\/lib\/plugin-sdk-entrypoints\.json$|scripts\/(?:sync-plugin-sdk-exports|plugin-sdk-api-diff)\.mts$)/u;
 const BUNDLED_CHANNEL_CONFIG_METADATA_PATH_RE =
   /^(?:src\/config\/(?:bundled-channel-config-metadata\.generated|zod-schema\.[^/]+)\.ts|src\/channels\/plugins\/config-schema\.ts|src\/plugin-sdk\/(?:bundled-channel-config-schema|channel-config-schema)\.ts|src\/plugins\/(?:bundled-dir|public-surface-loader|public-surface-runtime|sdk-alias)\.ts|scripts\/(?:generate-bundled-channel-config-metadata\.ts|load-channel-config-surface\.ts|lib\/(?:bundled-plugin-source-utils|format-generated-module|generated-output-utils)\.mts)|extensions\/[^/]+\/(?:openclaw\.plugin\.json|package\.json|(?:config|security-contract)-api\.[cm]?[jt]sx?|src\/config-(?:schema(?:-[^/]+)?|surface|ui-hints)\.[cm]?[jt]sx?))$/u;
+const CONFIG_DOC_INPUT_PATH_RE =
+  /^(?:src\/config\/[^/]+\.ts|src\/channels\/ids\.ts|src\/plugin-sdk\/(?:channel-core|secret-input)\.ts|src\/plugins\/(?:manifest(?:-registry|-setup-normalizers)?|package-manifest|discovery|bundled-channel-config-metadata)\.ts|scripts\/(?:generate-config-doc-baseline\.ts|(?:check-changed|changed-lanes)\.m[jt]s|lib\/changed-path-facts\.mjs))$/u;
+const CONFIG_DOC_BASELINE_PATHS = new Set([
+  "docs/.generated/config-baseline.counts.json",
+  "docs/.generated/config-baseline.sha256",
+]);
+
+// Bridge shared schema/hint owners consumed through SDK/workspace aliases.
+// Facades in CONFIG_DOC_INPUT_PATH_RE are direct inputs, not runtime traversal roots.
+const CONFIG_DOC_SCHEMA_SOURCE_PATHS = new Set([
+  "src/config/schema.ts",
+  "src/plugin-sdk/channel-config-ui-hints.ts",
+  "src/plugin-sdk/secret-input-schema.ts",
+  "packages/net-policy/src/redact-sensitive-url.ts",
+]);
+
+/** Source entries and shared owners consumed by core schema and bundled metadata collectors. */
+export function isConfigDocSchemaSourcePath(file: string): boolean {
+  return (
+    CONFIG_DOC_SCHEMA_SOURCE_PATHS.has(file) ||
+    /^extensions\/[^/]+\/(?:src\/config-(?:schema|surface)|channel-config-api)\.[cm]?[jt]sx?$/u.test(
+      file,
+    )
+  );
+}
+
+/** Config docs consume core schema/help plus the bundled plugin metadata pipeline. */
+export function hasConfigDocInput(changedPaths: string[]): boolean {
+  return changedPaths
+    .map(normalizeChangedPath)
+    .some(
+      (changedPath) =>
+        !getChangedPathFacts(changedPath).isChangedLaneTest &&
+        (CONFIG_DOC_BASELINE_PATHS.has(changedPath) ||
+          isConfigDocSchemaSourcePath(changedPath) ||
+          CONFIG_DOC_INPUT_PATH_RE.test(changedPath) ||
+          BUNDLED_CHANNEL_CONFIG_METADATA_PATH_RE.test(changedPath)),
+    );
+}
+
 /**
  * Files whose changes are treated as release metadata only.
  * @internal Shared repository-script contract.
@@ -70,8 +110,7 @@ export const RELEASE_METADATA_PATHS = new Set([
   "apps/ios/CHANGELOG.md",
   "apps/macos/Sources/OpenClaw/Resources/Info.plist",
   "apps/mobile/version.json",
-  "docs/.generated/config-baseline.counts.json",
-  "docs/.generated/config-baseline.sha256",
+  ...CONFIG_DOC_BASELINE_PATHS,
   "docs/install/updating.md",
   "package.json",
 ]);
@@ -85,6 +124,19 @@ export type ChangedLaneResult = {
   docsOnly: boolean;
   reasons: string[];
 };
+
+/** Eligible leaf inputs; compiler inventories still decide all consuming graphs. */
+export function getChangedCoreTestPaths(result: ChangedLaneResult): string[] | undefined {
+  const { lanes } = result;
+  if (lanes.all || lanes.core || lanes.ui || lanes.tooling || lanes.liveDockerTooling) {
+    return undefined;
+  }
+  const paths = result.paths.filter((file) => getChangedPathFacts(file).surface !== "docs");
+  return paths.length > 0 &&
+    paths.every((file) => /^(?:src|ui|packages)\/.+\.test\.tsx?$/u.test(file))
+    ? paths
+    : undefined;
+}
 
 type DetectChangedLanesOptions = {
   packageJsonChangeKind?: "liveDockerTooling" | "tooling" | null;
@@ -212,7 +264,11 @@ export function detectChangedLanes(
       continue;
     }
 
-    if (PUBLIC_EXTENSION_CONTRACT_RE.test(changedPath)) {
+    // Test leaves exercise contracts; shared helpers and suites can affect their consumers.
+    if (
+      PUBLIC_EXTENSION_CONTRACT_RE.test(changedPath) &&
+      !/\.(?:test|spec)\.[cm]?[jt]sx?$/u.test(changedPath)
+    ) {
       lanes.core = true;
       lanes.coreTests = true;
       lanes.extensions = true;

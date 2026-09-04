@@ -562,11 +562,12 @@ async function runCases(runtime: Runtime, repoRoot: string, artifactBase: string
   return failures;
 }
 
-async function main() {
+export async function runGatewayCompactionAbort(argv: readonly string[]) {
   // Only Node built-ins and inert proof fixtures load before this guard.
   // The outer process owns these paths through shutdown, including import-time SQLite state.
   const tmpRoot = await requireOwnedEnvironment();
   const { values } = parseArgs({
+    args: [...argv],
     options: {
       "artifact-base": { type: "string" },
       "repo-root": { type: "string" },
@@ -622,9 +623,9 @@ async function main() {
   return failure ? 1 : 0;
 }
 
-async function launch() {
-  if (process.argv.includes("--isolated-child")) {
-    return await main();
+async function launch(argv: string[]) {
+  if (argv.includes("--isolated-child")) {
+    return await runGatewayCompactionAbort(argv);
   }
   // The catalog can invoke this producer directly. Its outer process imports
   // only process tooling and owns the child's namespace until verified shutdown.
@@ -667,13 +668,7 @@ async function launch() {
   try {
     const code = await runManagedCommand({
       bin: process.execPath,
-      args: [
-        "--import",
-        "tsx",
-        fileURLToPath(import.meta.url),
-        ...process.argv.slice(2),
-        "--isolated-child",
-      ],
+      args: ["--import", "tsx", fileURLToPath(import.meta.url), ...argv, "--isolated-child"],
       env,
       requireProcessTreeExit: true,
       timeoutMs: 10 * 60_000,
@@ -695,7 +690,7 @@ async function launch() {
 }
 
 if (import.meta.url === pathToFileURL(process.argv[1] ?? "").href) {
-  launch()
+  launch(process.argv.slice(2))
     .then((code) => process.exit(code))
     .catch((error: unknown) => {
       console.error(error instanceof Error ? error.message : String(error));

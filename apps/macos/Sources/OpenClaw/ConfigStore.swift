@@ -1,9 +1,46 @@
 import Foundation
+import OpenClawKit
 import OpenClawProtocol
 
 enum ConfigStore {
-    private struct ConfigWriteAck: Decodable {
-        let hash: String?
+    /// A revision token is useful only with the document and Gateway that issued it.
+    @MainActor
+    struct Document {
+        var root: [String: Any]
+        fileprivate let origin: Origin
+        fileprivate let hash: String?
+        fileprivate let readError: Error?
+
+        var isCurrent: Bool {
+            self.origin.isCurrent
+        }
+    }
+
+    @MainActor
+    fileprivate final class Origin {
+        let gateway: GatewayConnection
+        let revision: UInt64?
+        let mode: AppState.ConnectionMode
+        let localURL: URL
+        var allowsLocalFallback: Bool
+        var lease: GatewayConnection.ServerLease?
+
+        init(gateway: GatewayConnection) {
+            self.gateway = gateway
+            self.revision = gateway.selectedEndpointRevision
+            self.mode = AppStateStore.shared.connectionMode
+            self.localURL = OpenClawConfigFile.url()
+            self.allowsLocalFallback = self.mode != .remote
+        }
+
+        var selectionIsCurrent: Bool {
+            self.gateway.selectedEndpointRevision == self.revision &&
+                AppStateStore.shared.connectionMode == self.mode && OpenClawConfigFile.url() == self.localURL
+        }
+
+        var isCurrent: Bool {
+            self.selectionIsCurrent && self.lease.map(self.gateway.serverLeaseMatchesCurrentRoute) != false
+        }
     }
 
     struct Overrides {
@@ -28,76 +65,93 @@ enum ConfigStore {
     }
 
     private static let overrideStore = OverrideStore()
-    @MainActor private static var lastHash: String?
-
-    private static func isRemoteMode() async -> Bool {
-        let overrides = await self.overrideStore.overrides
-        if let override = overrides.isRemoteMode {
-            return await override()
-        }
-        return await MainActor.run { AppStateStore.shared.connectionMode == .remote }
-    }
-
     @MainActor
-    static func load() async -> [String: Any] {
+    static func load(gateway: GatewayConnection = .shared) async -> Document {
+        let origin = Origin(gateway: gateway)
         let overrides = await self.overrideStore.overrides
-        if await self.isRemoteMode() {
-            if let override = overrides.loadRemote {
-                return await override()
+        if let isRemoteMode = overrides.isRemoteMode {
+            origin.allowsLocalFallback = await !isRemoteMode()
+        }
+        let remote = !origin.allowsLocalFallback
+        guard origin.selectionIsCurrent else {
+            return Document(root: [:], origin: origin, hash: nil, readError: self.sourceChanged())
+        }
+        if let load = remote ? overrides.loadRemote : nil {
+            let root = await load()
+            return Document(root: root, origin: origin, hash: nil, readError: nil)
+        }
+        if !remote, let load = overrides.loadLocal {
+            return Document(root: load(), origin: origin, hash: nil, readError: nil)
+        }
+        do {
+            let lease = try await gateway.acquireServerLease()
+            guard origin.selectionIsCurrent else { throw self.sourceChanged() }
+            origin.lease = lease
+            let snapshot: ConfigSnapshot = try await gateway.requestDecoded(
+                method: .configGet, params: nil, timeoutMs: 8000, ifCurrentRoute: lease.route)
+            guard origin.isCurrent else { throw self.sourceChanged() }
+            return Document(
+                root: snapshot.config?.mapValues { $0.foundationValue } ?? [:],
+                origin: origin,
+                hash: snapshot.hash,
+                readError: nil)
+        } catch {
+            guard !remote, origin.isCurrent, self.permitsLocalFallback(after: error) else {
+                return Document(root: [:], origin: origin, hash: nil, readError: error)
             }
-            return await self.loadFromGateway() ?? [:]
+            // An offline local document remains a local-file edit; a later
+            // connection must not lend it a different document's revision token.
+            origin.lease = nil
+            return Document(root: OpenClawConfigFile.loadDict(), origin: origin, hash: nil, readError: nil)
         }
-        if let override = overrides.loadLocal {
-            return override()
-        }
-        if let gateway = await self.loadFromGateway() {
-            return gateway
-        }
-        return OpenClawConfigFile.loadDict()
     }
 
     @MainActor
-    static func save(
-        _ root: sending [String: Any],
-        allowGatewayAuthMutation: Bool = false) async throws
+    static func document(
+        snapshot: ConfigSnapshot,
+        gateway: GatewayConnection,
+        lease: GatewayConnection.ServerLease) -> Document
     {
+        let origin = Origin(gateway: gateway)
+        origin.lease = lease
+        return Document(
+            root: snapshot.config?.mapValues { $0.foundationValue } ?? [:],
+            origin: origin,
+            hash: snapshot.hash,
+            readError: nil)
+    }
+
+    @MainActor
+    static func save(_ document: Document, allowGatewayAuthMutation: Bool = false) async throws {
+        let origin = document.origin
+        guard origin.isCurrent else { throw self.sourceChanged() }
+        if let error = document.readError { throw error }
         let overrides = await self.overrideStore.overrides
-        if await self.isRemoteMode() {
+        guard origin.isCurrent else { throw self.sourceChanged() }
+        if !origin.allowsLocalFallback {
+            if let save = overrides.saveRemote {
+                try await save(document.root)
+            } else {
+                try await self.saveToGateway(document, overrides: overrides)
+            }
+            guard origin.isCurrent else { throw self.sourceChanged() }
+        } else if let save = overrides.saveLocal {
+            save(document.root)
+        } else {
             do {
-                if let override = overrides.saveRemote {
-                    try await override(root)
+                if origin.lease == nil, overrides.saveGateway == nil {
+                    try self.saveLocal(document, allowGatewayAuthMutation: allowGatewayAuthMutation)
                 } else {
-                    try await self.saveToGateway(root)
+                    try await self.saveToGateway(document, overrides: overrides)
                 }
             } catch {
-                if !self.shouldFallbackToLocalWrite(afterGatewaySaveError: error) {
-                    self.lastHash = nil
+                guard origin.isCurrent, self.permitsLocalFallback(after: error) else {
+                    throw error
                 }
-                throw error
-            }
-        } else {
-            if let override = overrides.saveLocal {
-                override(root)
-            } else {
-                do {
-                    try await self.saveToGateway(root)
-                } catch {
-                    guard self.shouldFallbackToLocalWrite(afterGatewaySaveError: error) else {
-                        self.lastHash = nil
-                        throw error
-                    }
-                    guard OpenClawConfigFile.saveDict(
-                        root,
-                        preserveExistingKeys: true,
-                        allowGatewayAuthMutation: allowGatewayAuthMutation)
-                    else {
-                        throw NSError(domain: "ConfigStore", code: 2, userInfo: [
-                            NSLocalizedDescriptionKey: "Local config write rejected to protect gateway auth/mode.",
-                        ])
-                    }
-                }
+                try self.saveLocal(document, allowGatewayAuthMutation: allowGatewayAuthMutation)
             }
         }
+        guard origin.selectionIsCurrent else { throw self.sourceChanged() }
         #if DEBUG
         let notificationCenter = overrides.notificationCenter ?? .default
         #else
@@ -107,20 +161,29 @@ enum ConfigStore {
     }
 
     @MainActor
-    private static func loadFromGateway() async -> [String: Any]? {
-        do {
-            let snap: ConfigSnapshot = try await GatewayConnection.shared.requestDecoded(
-                method: .configGet,
-                params: nil,
-                timeoutMs: 8000)
-            self.lastHash = snap.hash
-            return snap.config?.mapValues { $0.foundationValue } ?? [:]
-        } catch {
-            return nil
+    private static func saveLocal(_ document: Document, allowGatewayAuthMutation: Bool) throws {
+        guard document.origin.isCurrent else { throw self.sourceChanged() }
+        guard OpenClawConfigFile.saveDict(
+            document.root, preserveExistingKeys: true, allowGatewayAuthMutation: allowGatewayAuthMutation)
+        else {
+            throw NSError(domain: "ConfigStore", code: 2, userInfo: [
+                NSLocalizedDescriptionKey: "Local config write rejected to protect gateway auth/mode.",
+            ])
         }
     }
 
-    private static func shouldFallbackToLocalWrite(afterGatewaySaveError error: Error) -> Bool {
+    private static func sourceChanged() -> Error {
+        NSError(domain: "ConfigStore", code: 3, userInfo: [
+            NSLocalizedDescriptionKey: "Gateway changed since this config was loaded. Reload it before saving.",
+        ])
+    }
+
+    private static func permitsLocalFallback(after error: Error) -> Bool {
+        if error is CancellationError || error is GatewayConnectAuthError ||
+            (error as? GatewayResponseError)?.isAuthorizationFailure == true
+        {
+            return false
+        }
         let nsError = error as NSError
         let message = "\(nsError.domain) \(nsError.localizedDescription)".lowercased()
         let blockedFragments = [
@@ -138,33 +201,25 @@ enum ConfigStore {
     }
 
     @MainActor
-    private static func saveToGateway(_ root: [String: Any]) async throws {
-        let overrides = await self.overrideStore.overrides
-        if let saveGateway = overrides.saveGateway {
-            try await saveGateway(root)
+    private static func saveToGateway(_ document: Document, overrides: Overrides) async throws {
+        if let save = overrides.saveGateway {
+            try await save(document.root)
             return
         }
-        if self.lastHash == nil {
-            _ = await self.loadFromGateway()
-        }
-        let data = try JSONSerialization.data(withJSONObject: root, options: [.prettyPrinted, .sortedKeys])
+        guard let lease = document.origin.lease, document.isCurrent else { throw self.sourceChanged() }
+        let data = try JSONSerialization.data(withJSONObject: document.root, options: [.prettyPrinted, .sortedKeys])
         guard let raw = String(data: data, encoding: .utf8) else {
             throw NSError(domain: "ConfigStore", code: 1, userInfo: [
                 NSLocalizedDescriptionKey: "Failed to encode config.",
             ])
         }
         var params: [String: AnyCodable] = ["raw": AnyCodable(raw)]
-        if let baseHash = self.lastHash {
-            params["baseHash"] = AnyCodable(baseHash)
-        }
-        let ack: ConfigWriteAck = try await GatewayConnection.shared.requestDecoded(
-            method: .configSet,
+        if let hash = document.hash { params["baseHash"] = AnyCodable(hash) }
+        _ = try await document.origin.gateway.request(
+            method: GatewayConnection.Method.configSet.rawValue,
             params: params,
-            timeoutMs: 10000)
-        if let hash = ack.hash, !hash.isEmpty {
-            self.lastHash = hash
-        }
-        _ = await self.loadFromGateway()
+            timeoutMs: 10000,
+            ifCurrentRoute: lease.route)
     }
 
     #if DEBUG
@@ -176,15 +231,6 @@ enum ConfigStore {
         await self.overrideStore.setOverride(.init())
     }
 
-    @MainActor
-    static func _testSetLastHash(_ hash: String?) {
-        self.lastHash = hash
-    }
-
-    @MainActor
-    static func _testLastHash() -> String? {
-        self.lastHash
-    }
     #endif
 }
 

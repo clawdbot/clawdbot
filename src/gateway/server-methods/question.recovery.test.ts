@@ -429,7 +429,10 @@ it.each(["reply admission", "embedded steering"])(
       resetTriggered: false,
     });
     operation.attachBackend(Object.assign(handle, { kind: "embedded" as const, cancel: abort }));
-    operation.bindToolAuthorityFingerprint("human-wait-surface");
+    operation.bindToolAuthoritySnapshot({
+      fingerprint: () => "human-wait-surface",
+      project: () => "human-wait-surface",
+    });
     operation.setPhase("running");
     try {
       await request("ask_user");

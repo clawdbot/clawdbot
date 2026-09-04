@@ -696,6 +696,9 @@ final class GatewayProcessManager {
     }
 
     private func describeAttachFailure(_ error: Error, port: Int, instance: PortGuardian.Descriptor?) -> String {
+        if let issue = GatewayCompatibilityIssue(error: error) {
+            return issue.message
+        }
         let ns = error as NSError
         let message = ns.localizedDescription.isEmpty ? "unknown error" : ns.localizedDescription
         let lower = message.lowercased()
@@ -704,9 +707,6 @@ final class GatewayProcessManager {
             Gateway on port \(port) rejected auth. Set gateway.auth.token to match the running gateway \
             (or clear it on the gateway) and retry.
             """
-        }
-        if lower.contains("protocol mismatch") {
-            return "Gateway on port \(port) is incompatible (protocol mismatch). Update the app/gateway."
         }
         if lower.contains("unexpected response") || lower.contains("invalid response") {
             return "Port \(port) returned non-gateway data; another process is using it."

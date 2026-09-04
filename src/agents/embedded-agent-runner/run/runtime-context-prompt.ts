@@ -5,7 +5,6 @@ import {
   extractInternalRuntimeContext,
   INTERNAL_RUNTIME_CONTEXT_BEGIN,
   INTERNAL_RUNTIME_CONTEXT_END,
-  OPENCLAW_NEXT_TURN_RUNTIME_CONTEXT_HEADER,
   OPENCLAW_RUNTIME_CONTEXT_CUSTOM_TYPE,
   OPENCLAW_RUNTIME_CONTEXT_NOTICE,
   OPENCLAW_RUNTIME_EVENT_HEADER,
@@ -248,15 +247,14 @@ function buildRuntimeContextMessageContent(params: {
   runtimeContext: string;
   kind: "next-turn" | "runtime-event";
 }): string {
-  // Wrap the runtime context body in delimited internal-context markers so
-  // stripInternalRuntimeContext can fully remove the block when it leaks
-  // into user-visible surfaces (e.g. Feishu streaming cards, #92589).
+  // Next-turn carriers carry only the delimited body: the stable system prompt
+  // explains the markers once, and the delimiters are what hasInternalRuntimeContext
+  // and the leak strippers key on. Runtime events keep their preface because the
+  // model receives no user message alongside them.
   return [
-    params.kind === "runtime-event"
-      ? OPENCLAW_RUNTIME_EVENT_HEADER
-      : OPENCLAW_NEXT_TURN_RUNTIME_CONTEXT_HEADER,
-    OPENCLAW_RUNTIME_CONTEXT_NOTICE,
-    "",
+    ...(params.kind === "runtime-event"
+      ? [OPENCLAW_RUNTIME_EVENT_HEADER, OPENCLAW_RUNTIME_CONTEXT_NOTICE, ""]
+      : []),
     INTERNAL_RUNTIME_CONTEXT_BEGIN,
     params.runtimeContext,
     INTERNAL_RUNTIME_CONTEXT_END,

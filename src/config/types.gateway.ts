@@ -140,6 +140,8 @@ export type GatewayControlUiConfig = {
   root?: string;
   /** Optional visual label and named color distinguishing this Gateway environment. */
   environment?: ControlUiEnvironment;
+  /** Show the Discord community invitation in this Gateway's Control UI (default true). */
+  communityInvite?: boolean;
   /** Optional service credential used only for Control UI GitHub previews and discovery. */
   github?: { token?: SecretInput };
   /**

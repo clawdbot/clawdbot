@@ -631,8 +631,9 @@ class GatewaySession(
     expectedEndpointStableId: String?,
     event: String,
     payloadJson: String?,
+    logFailure: Boolean = true,
   ): Boolean =
-    sendNodeEventWithOutcomeForEndpoint(expectedEndpointStableId, event, payloadJson) ==
+    sendNodeEventWithOutcomeForEndpoint(expectedEndpointStableId, event, payloadJson, logFailure) ==
       NodeEventSendOutcome.COMPLETED
 
   internal suspend fun sendNodeEventWithOutcome(
@@ -644,6 +645,7 @@ class GatewaySession(
     expectedEndpointStableId: String?,
     event: String,
     payloadJson: String?,
+    logFailure: Boolean = true,
   ): NodeEventSendOutcome {
     val conn = readyConnection(expectedEndpointStableId) ?: return NodeEventSendOutcome.DISCONNECTED
     return try {
@@ -659,7 +661,7 @@ class GatewaySession(
       // Voice/audio ownership takeover must cancel before a stale node event dispatches.
       throw err
     } catch (err: Throwable) {
-      Log.w("OpenClawGateway", "node.event failed: ${err::class.java.simpleName}")
+      if (logFailure) Log.w("OpenClawGateway", "node.event failed: ${err::class.java.simpleName}")
       NodeEventSendOutcome.FAILED
     }
   }
@@ -862,19 +864,24 @@ class GatewaySession(
       } else {
         json.parseToJsonElement(paramsJson)
       }
-    val res =
-      conn.request(method, params, timeoutMs) { enqueue ->
-        // Check after the transport mutex wait, in the same physical -> caller-owner
-        // lock order as hello publication. Only OkHttp's synchronous enqueue is guarded.
-        synchronized(lifecycleLock) {
-          if (currentConnection !== conn || !conn.isReady()) {
-            throw GatewayRequestNotEnqueued("gateway request lease changed")
-          }
-          withEnqueue(enqueue)
-        }
-      }
+    val res = conn.request(method, params, timeoutMs, guardRequestEnqueue(conn, withEnqueue))
     return RpcResult(ok = res.ok, payloadJson = res.payloadJson, error = res.error)
   }
+
+  private fun guardRequestEnqueue(
+    conn: Connection,
+    withEnqueue: (() -> Unit) -> Unit,
+  ): (() -> Unit) -> Unit =
+    { enqueue ->
+      // Check after the transport mutex wait, in the same physical -> caller-owner
+      // lock order as hello publication. Only OkHttp's synchronous enqueue is guarded.
+      synchronized(lifecycleLock) {
+        if (currentConnection !== conn || !conn.isReady()) {
+          throw GatewayRequestNotEnqueued("gateway request lease changed")
+        }
+        withEnqueue(enqueue)
+      }
+    }
 
   private fun readyConnection(expectedEndpointStableId: String?): Connection? =
     readyConnection()?.takeIf { connection ->
@@ -886,14 +893,16 @@ class GatewaySession(
     method: String,
     paramsJson: String?,
     timeoutMs: Long = 15_000,
+    withEnqueue: (() -> Unit) -> Unit = { it() },
     onError: (ErrorShape) -> Unit = {},
-  ) = sendRequestFrameForEndpoint(null, method, paramsJson, timeoutMs, onError)
+  ) = sendRequestFrameForEndpoint(null, method, paramsJson, timeoutMs, withEnqueue, onError)
 
   internal suspend fun sendRequestFrameForEndpoint(
     expectedEndpointStableId: String?,
     method: String,
     paramsJson: String?,
     timeoutMs: Long = 15_000,
+    withEnqueue: (() -> Unit) -> Unit = { it() },
     onError: (ErrorShape) -> Unit = {},
   ) {
     val conn = readyConnection(expectedEndpointStableId) ?: throw IllegalStateException("not connected")
@@ -903,7 +912,7 @@ class GatewaySession(
       } else {
         json.parseToJsonElement(paramsJson)
       }
-    conn.sendRequestFrame(method = method, params = params, timeoutMs = timeoutMs, onError = onError)
+    conn.sendRequestFrame(method, params, timeoutMs, guardRequestEnqueue(conn, withEnqueue), onError)
   }
 
   private data class RpcResponse(
@@ -992,7 +1001,9 @@ class GatewaySession(
           tls = target.tls,
           customHeadersProvider = customHeadersProvider,
         )
-      socket = client.newWebSocket(request, listener)
+      // OkHttp can invoke onOpen before newWebSocket returns. Publish under the
+      // send lock so the handshake cannot observe a not-yet-installed socket.
+      writeLock.withLock { socket = client.newWebSocket(request, listener) }
       return connectDeferred.await()
     }
 
@@ -1125,12 +1136,13 @@ class GatewaySession(
       method: String,
       params: JsonElement?,
       timeoutMs: Long,
+      withEnqueue: (() -> Unit) -> Unit = { it() },
       onError: (ErrorShape) -> Unit,
     ) {
       val id = UUID.randomUUID().toString()
       val deferred = registerPending(id)
       try {
-        sendJson(buildRequestFrame(id = id, method = method, params = params))
+        sendJson(buildRequestFrame(id = id, method = method, params = params), withEnqueue)
       } catch (err: Throwable) {
         pending.remove(id)
         throw err
@@ -1180,8 +1192,8 @@ class GatewaySession(
       writeLock.withLock {
         currentCoroutineContext().ensureActive()
         withEnqueue {
-          if (socket?.send(jsonString) != true) {
-            // OkHttp returning false means this frame never entered its outgoing queue.
+          if (state.get() == ConnectionState.CLOSED || socket?.send(jsonString) != true) {
+            // Closing during the lock wait, like an OkHttp false return, means no frame was queued.
             throw GatewayRequestNotEnqueued("gateway send failed")
           }
         }

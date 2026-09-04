@@ -14,6 +14,7 @@ from urllib.parse import urlsplit
 
 owner = str(Path(sys.argv[1]).resolve())
 mode = sys.argv[2]
+kova = mode in ("kova", "kova-retry", "kova-exhausted")
 git = shutil.which("git")
 assert git, "Git is required for checkout authentication proof"
 
@@ -64,7 +65,7 @@ with tempfile.TemporaryDirectory(prefix="checkout-auth-") as directory:
         if mode == "qa-tag":
             checked(git, "-c", "user.name=Checkout Fixture", "-c", "user.email=fixture@example.invalid",
                     "tag", "-a", "v2026.9.1", "-m", "release", cwd=source)
-    if mode == "historical":
+    if mode in ("historical", "base"):
         (source / "payload.txt").write_text("current checkout\n")
         checked(git, "add", "payload.txt", cwd=source)
         checked(git, "-c", "user.name=Checkout Fixture", "-c", "user.email=fixture@example.invalid",
@@ -82,6 +83,11 @@ with tempfile.TemporaryDirectory(prefix="checkout-auth-") as directory:
     authorization = f"Basic {encoded}"
     requests = []
     kova_methods = []
+    transient_failures = 0
+    filtered_fetch = False
+    planned_failures = {"kova-retry": 2, "kova-exhausted": 3}.get(mode, 0)
+    post_checkout_requests = []
+    checkout_complete = root / "checkout-complete"
     redirect = False
 
     class Handler(BaseHTTPRequestHandler):
@@ -95,11 +101,14 @@ with tempfile.TemporaryDirectory(prefix="checkout-auth-") as directory:
             self.serve_git()
 
         def serve_git(self):
+            global transient_failures, filtered_fetch
             parsed = urlsplit(self.path)
             headers = self.headers.get_all("Authorization") or []
             authenticated = len(headers) == 1 and headers[0].lower().startswith("basic ") and headers[0][6:] == encoded
             requests.append({"path": parsed.path, "authenticated": authenticated,
                              "authorizationPresent": bool(headers)})
+            if checkout_complete.exists():
+                post_checkout_requests.append(parsed.path)
             if parsed.path.startswith("/other.git"):
                 self.send_error(404)
                 return
@@ -109,16 +118,23 @@ with tempfile.TemporaryDirectory(prefix="checkout-auth-") as directory:
                 self.send_header("Content-Length", "0")
                 self.end_headers()
                 return
-            if mode == "kova":
+            if kova:
                 kova_methods.append(self.command)
-            public_fetch = mode == "kova" and kova_methods.count("GET") == 1
-            if not authenticated and not public_fetch:
+            if not authenticated:
                 self.send_response(401)
                 self.send_header("WWW-Authenticate", 'Basic realm="checkout fixture"')
                 self.send_header("Content-Length", "0")
                 self.end_headers()
                 return
+            if kova and self.command == "GET" and transient_failures < planned_failures:
+                transient_failures += 1
+                self.send_response(503)
+                self.send_header("Content-Length", "0")
+                self.end_headers()
+                return
             body = self.rfile.read(int(self.headers.get("Content-Length", "0")))
+            if kova and b"filter blob:none" in body:
+                filtered_fetch = True
             backend = subprocess.run(
                 [git, "http-backend"], input=body, capture_output=True, timeout=15,
                 env={**env, "GIT_PROJECT_ROOT": str(root), "GIT_HTTP_EXPORT_ALL": "1",
@@ -149,7 +165,7 @@ with tempfile.TemporaryDirectory(prefix="checkout-auth-") as directory:
     try:
         remote = f"http://127.0.0.1:{server.server_port}/{bare.name}"
         workspace = root / "workspace"
-        if mode == "kova":
+        if kova:
             # Keep the whole workflow body intact. Only unrelated OCM/npm tools
             # are stubbed; Git talks to the real server for every object it needs.
             workspace = root / "kova-src"
@@ -160,22 +176,26 @@ sha256sum() { cat >/dev/null; }
 tar() { :; }
 npm() { test -s "$KOVA_SRC/payload.txt"; }
 node() { :; }
-''' + sys.argv[3]
-            config = home / ".gitconfig"
-            checked(git, "config", "--file", str(config), f"url.{remote}.insteadOf",
-                    "https://github.com/fixture/kova.git")
+''' + sys.argv[3].replace('"https://github.com/${KOVA_REPOSITORY}.git"', json.dumps(remote)).replace(
+                'f"https://github.com/{os.environ[\'KOVA_REPOSITORY\']}.git"', repr(remote))
             result = command("bash", "-e", "-o", "pipefail", "-c", script, extra={
-                "GIT_CONFIG_GLOBAL": str(config), "CI_GIT_OWNER": owner,
+                "CI_GIT_OWNER": owner, "GH_TOKEN": token,
                 "RUNNER_TEMP": str(root), "KOVA_HOME": str(home / "kova"),
                 "GITHUB_ENV": str(root / "environment"), "GITHUB_PATH": str(root / "path"),
                 "OCM_VERSION": "fixture", "OCM_LINUX_X64_SHA256": "fixture",
                 "KOVA_REPOSITORY": "fixture/kova", "KOVA_REF": revision})
             complete = result.returncode == 0 and (workspace / "payload.txt").read_text() == (source / "payload.txt").read_text()
             local_config = (workspace / ".git/config").read_text()
-            assert token not in result.stdout + result.stderr + local_config
-            assert encoded not in result.stdout + result.stderr + local_config
+            # Actions consumes mask registration without rendering the secret.
+            # Every other output line and persisted config must remain secretless.
+            visible_stdout = "\n".join(line for line in result.stdout.splitlines()
+                                       if line != f"::add-mask::{encoded}")
+            published = visible_stdout + result.stderr + local_config
+            assert token not in published and encoded not in published
             print(json.dumps({"mode": mode, "exitCode": result.returncode, "stderr": result.stderr,
                               "checkoutComplete": complete, "sessions": kova_methods.count("GET"),
+                              "transientFailures": transient_failures, "filteredFetch": filtered_fetch,
+                              "shallowCheckout": complete and checked(git, "rev-parse", "--is-shallow-repository", cwd=workspace) == "true",
                               "credentialPersisted": "extraheader" in local_config.lower(), "requests": requests}))
             raise SystemExit(0)
         checked(git, "init", str(workspace))
@@ -276,7 +296,7 @@ elif phase == "redirect":
                     raise
                 return subprocess.CompletedProcess(child.args, child.returncode, stdout, stderr)
 
-        if mode == "historical":
+        if mode in ("historical", "base"):
             env["GIT_CONFIG_GLOBAL"] = str(home / ".gitconfig")
             policy.write_text('''import ci_git_owner as owner
 import json, os, sys
@@ -289,22 +309,33 @@ try:
     owner.checkout()
 finally:
     owner.checkout_environment.clear()
-historical = json.loads(os.environ["CHECKOUT_GIT_COMMITS_JSON"])[0]
-owner.run_git(os.getcwd(), "cat-file", "-e", historical + "^{commit}")
-reader = str(Path.cwd().parent / "historical-reader")
-owner.run_git(os.getcwd(), "worktree", "add", "--detach", reader, historical)
-assert Path(reader, "payload.txt").read_text() == "checkout must hydrate this promised blob\\n"
-owner.run_git(os.getcwd(), "worktree", "remove", reader)
+Path.cwd().parent.joinpath("checkout-complete").touch()
+if phase == "base":
+    base = os.environ["CHECKOUT_BASE_SHA"]
+    assert owner.git_output(os.getcwd(), "rev-parse", "refs/remotes/origin/ci-ratchet-base").strip() == base
+    diff = owner.git_output(os.getcwd(), "diff", "--unified=0", base + "..HEAD", "--", "payload.txt")
+    assert "-checkout must hydrate this promised blob\\n+current checkout\\n" in diff
+else:
+    historical = json.loads(os.environ["CHECKOUT_GIT_COMMITS_JSON"])[0]
+    owner.run_git(os.getcwd(), "cat-file", "-e", historical + "^{commit}")
+    reader = str(Path.cwd().parent / "historical-reader")
+    owner.run_git(os.getcwd(), "worktree", "add", "--detach", reader, historical)
+    assert Path(reader, "payload.txt").read_text() == "checkout must hydrate this promised blob\\n"
+    owner.run_git(os.getcwd(), "worktree", "remove", reader)
 ''')
             env.update(CHECKOUT_SHA=revision, WORKFLOW_SHA=revision,
-                       CHECKOUT_GIT_COMMITS_JSON=json.dumps([historical_revision]))
-            result = owned("historical")
+                       CHECKOUT_GIT_COMMITS_JSON=json.dumps([historical_revision]) if mode == "historical" else "[]",
+                       CHECKOUT_BASE_SHA=historical_revision if mode == "base" else "")
+            result = owned(mode)
             assert result.returncode == 0, result.stderr
             assert requests and all(item["authenticated"] for item in requests)
+            assert not post_checkout_requests, "prepared objects triggered HTTP after checkout"
             config = (workspace / ".git/config").read_text()
             assert token not in config and encoded not in config and "extraheader" not in config.lower()
             assert checked(git, "rev-parse", "HEAD", cwd=workspace) == revision
-            print(json.dumps({"historicalReaderPrepared": True, "credentialPersisted": False}))
+            print(json.dumps({"mode": mode, "preparedObjectsReadable": True,
+                              "credentialPersisted": False,
+                              "postCheckoutRequests": len(post_checkout_requests)}))
             raise SystemExit(0)
 
         fetched = owned("fetch-only" if mode == "fetch-only" else "fetch")

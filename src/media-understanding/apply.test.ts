@@ -2263,26 +2263,6 @@ describe("applyMediaUnderstanding", () => {
     },
   );
 
-  it("handles path traversal attempts in filenames safely", async () => {
-    // Even if a file somehow got a path-like name, it should be handled safely
-    const filePath = await createTempMediaFile({
-      fileName: "normal.txt",
-      content: "legitimate content",
-    });
-
-    const { ctx, result } = await applyWithDisabledMedia({
-      body: "<media:document>",
-      mediaPath: filePath,
-      mediaType: "text/plain",
-    });
-
-    expect(result.appliedFile).toBe(true);
-    // Verify the file was processed and output contains expected structure
-    expect(ctx.Body).toContain('<file name="');
-    expect(ctx.Body).toContain('mime="text/plain"');
-    expect(ctx.Body).toContain("legitimate content");
-  });
-
   it.each([
     { content: "file content", expected: "file content" },
     { content: "", expected: "[No extractable text]" },

@@ -99,6 +99,7 @@ function notificationPreferences(approvalRequested: boolean): WebPushNotificatio
       approvalRequested,
       agentFinished: false,
       agentQuestion: false,
+      humanMentioned: false,
       scheduledTaskFailed: false,
       backgroundTaskFailed: false,
     },

@@ -47,6 +47,7 @@ import {
 } from "./agent-runner.test-fixtures.js";
 import type { ReplyOperation } from "./reply-run-registry.js";
 import { createSourceReplyDeliveryRuntime } from "./source-reply-delivery-runtime.js";
+import { createMockReplyOperation } from "./test-helpers.js";
 
 const {
   compactEmbeddedAgentSessionMock,
@@ -182,49 +183,12 @@ type TestReplyOperation = ReplyOperation & {
 };
 
 function createReplyOperation(): TestReplyOperation {
-  const now = Date.now();
-  return {
-    key: "test",
-    sessionId: "session",
-    turnKind: "visible",
-    abortSignal: new AbortController().signal,
-    staleExpiryReason: undefined,
-    resetTriggered: false,
-    terminalRecovery: false,
-    acceptedSteeredInboundAudio: false,
-    startedAtMs: now,
-    lastActivityAtMs: now,
-    phase: "queued",
-    result: null,
-    recordActivity: vi.fn(),
-    hasOwnedSessionId: vi.fn((sessionId: string) => sessionId === "session"),
+  const { replyOperation } = createMockReplyOperation({ key: "test" });
+  return Object.assign(replyOperation, {
+    phase: "queued" as const,
     setPhase: vi.fn<ReplyOperation["setPhase"]>(),
     updateSessionId: vi.fn<ReplyOperation["updateSessionId"]>(),
-    updateSessionKey: vi.fn<ReplyOperation["updateSessionKey"]>(),
-    bindToolAuthorityFingerprint: vi.fn(),
-    bindToolAuthorityProjector: vi.fn(),
-    projectToolAuthorityFingerprint: vi.fn(),
-    bindToolAuthorityRoute: vi.fn(),
-    attachBackend: vi.fn(),
-    detachBackend: vi.fn(),
-    freezeAbort: vi.fn(),
-    retainFailureUntilComplete: vi.fn(),
-    complete: vi.fn(),
-    completeThen: vi.fn((afterClear: () => void) => {
-      afterClear();
-    }),
-    completeWithAfterClearBarrier: vi.fn(),
-    fail: vi.fn(),
-    abortByUser: vi.fn(() => true),
-    abortForRestart: vi.fn(() => true),
-    supersede: vi.fn(() => true),
-    markTerminalRecovery: vi.fn(),
-    markAcceptedSteeredInboundAudio: vi.fn(),
-    markWaitingForDeferredMaintenance: vi.fn(),
-    markDeferredMaintenanceWaitEnded: vi.fn(),
-    markWaitingForGlobalLane: vi.fn(),
-    markGlobalLaneWaitEnded: vi.fn(),
-  };
+  });
 }
 
 function createCompactionLifecycle(replyOperation: ReplyOperation) {
@@ -1550,84 +1514,95 @@ describe("runMemoryFlushIfNeeded", () => {
     expect(agentCall.authProfileIdSource).toBeUndefined();
   });
 
-  it("loads the selected harness before memory-flush fallback preflight", async () => {
-    const cfg = {
-      agents: {
-        defaults: {
-          compaction: {
-            memoryFlush: {},
+  it.each([undefined, "model-owner"])(
+    "prepares the requested memory runtime without pinning observations (owner %s)",
+    async (pluginOwnerId) => {
+      const cfg = {
+        agents: {
+          defaults: {
+            compaction: {
+              memoryFlush: {},
+            },
           },
         },
-      },
-    };
-    const sessionEntry: SessionEntry = {
-      sessionId: "session",
-      updatedAt: Date.now(),
-      totalTokens: 80_000,
-      totalTokensFresh: true,
-      totalTokensVersion: 1,
-      compactionCount: 1,
-      agentRuntimeOverride: "codex",
-    };
-    const runtimePolicySessionKey = "agent:main:telegram:default:direct:12345";
-    runWithModelFallbackMock.mockImplementationOnce(
-      async (params: { provider: string; model: string; run: ModelFallbackParams["run"] }) => ({
-        result: await params.run(params.provider, params.model, {
-          isFinalFallbackAttempt: false,
-          modelRoutingProvenance: modelRoutingProvenance(params.provider, params.model),
+      };
+      const sessionEntry: SessionEntry = {
+        sessionId: "session",
+        updatedAt: Date.now(),
+        totalTokens: 80_000,
+        totalTokensFresh: true,
+        totalTokensVersion: 1,
+        compactionCount: 1,
+        agentRuntimeOverride: "codex",
+        modelSelectionLocked: pluginOwnerId !== undefined,
+        pluginOwnerId,
+        agentHarnessId: "openclaw",
+      };
+      const runtimePolicySessionKey = "agent:main:telegram:default:direct:12345";
+      runWithModelFallbackMock.mockImplementationOnce(
+        async (params: { provider: string; model: string; run: ModelFallbackParams["run"] }) => ({
+          result: await params.run(params.provider, params.model, {
+            isFinalFallbackAttempt: false,
+            modelRoutingProvenance: modelRoutingProvenance(params.provider, params.model),
+          }),
+          provider: params.provider,
+          model: params.model,
+          attempts: [],
         }),
-        provider: params.provider,
-        model: params.model,
-        attempts: [],
-      }),
-    );
+      );
 
-    await runMemoryFlushIfNeeded({
-      cfg,
-      followupRun: createTestFollowupRun({
-        agentId: "main",
+      await runMemoryFlushIfNeeded({
+        cfg,
+        followupRun: createTestFollowupRun({
+          agentId: "main",
+          sessionKey: "main",
+          runtimePolicySessionKey,
+          workspaceDir: rootDir,
+          provider: "openai",
+          model: "gpt-5.4",
+          modelSelectionLocked: sessionEntry.modelSelectionLocked,
+        }),
+        sessionCtx: createTestTemplateContext({ Provider: "telegram" }),
+        defaultModel: "openai/gpt-5.4",
+        modelContextTokens: 100_000,
+        resolvedVerboseLevel: "off",
+        sessionEntry,
+        sessionStore: { main: sessionEntry },
         sessionKey: "main",
         runtimePolicySessionKey,
-        workspaceDir: rootDir,
+        isHeartbeat: false,
+        replyOperation: createReplyOperation(),
+      });
+
+      const fallbackCall = requireModelFallbackCall();
+      expect(fallbackCall.agentId).toBe("main");
+      expect(fallbackCall.sessionKey).toBe(runtimePolicySessionKey);
+      expect(fallbackCall.resolveAgentHarnessRuntimeOverride?.("openai", "gpt-5.4")).toBe("codex");
+      expect(requireEmbeddedAgentCall()).toMatchObject({
+        isFinalFallbackAttempt: false,
+        agentHarnessId: undefined,
+        agentHarnessRuntimeOverride: "codex",
+      });
+
+      await fallbackCall.prepareAgentHarnessRuntime?.({
         provider: "openai",
         model: "gpt-5.4",
-      }),
-      sessionCtx: createTestTemplateContext({ Provider: "telegram" }),
-      defaultModel: "openai/gpt-5.4",
-      modelContextTokens: 100_000,
-      resolvedVerboseLevel: "off",
-      sessionEntry,
-      sessionStore: { main: sessionEntry },
-      sessionKey: "main",
-      runtimePolicySessionKey,
-      isHeartbeat: false,
-      replyOperation: createReplyOperation(),
-    });
-
-    const fallbackCall = requireModelFallbackCall();
-    expect(fallbackCall.agentId).toBe("main");
-    expect(fallbackCall.sessionKey).toBe(runtimePolicySessionKey);
-    expect(fallbackCall.resolveAgentHarnessRuntimeOverride?.("openai", "gpt-5.4")).toBe("codex");
-    expect(requireEmbeddedAgentCall().isFinalFallbackAttempt).toBe(false);
-
-    await fallbackCall.prepareAgentHarnessRuntime?.({
-      provider: "openai",
-      model: "gpt-5.4",
-      agentHarnessRuntimeOverride: "codex",
-    });
-
-    expect(ensureSelectedAgentHarnessPluginMock).toHaveBeenCalledWith(
-      expect.objectContaining({
-        provider: "openai",
-        modelId: "gpt-5.4",
-        agentId: "main",
-        sessionKey: runtimePolicySessionKey,
-        agentHarnessId: "codex",
         agentHarnessRuntimeOverride: "codex",
-        workspaceDir: rootDir,
-      }),
-    );
-  });
+      });
+
+      expect(ensureSelectedAgentHarnessPluginMock).toHaveBeenCalledWith(
+        expect.objectContaining({
+          provider: "openai",
+          modelId: "gpt-5.4",
+          agentId: "main",
+          sessionKey: runtimePolicySessionKey,
+          agentHarnessId: "codex",
+          agentHarnessRuntimeOverride: "codex",
+          workspaceDir: rootDir,
+        }),
+      );
+    },
+  );
 
   it("ignores stale runtime pins before memory-flush fallback preflight", async () => {
     const sessionEntry: SessionEntry = {

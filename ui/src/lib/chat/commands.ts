@@ -4,13 +4,14 @@ import { asNullableRecord as asRecord } from "@openclaw/normalization-core/recor
 import { normalizeLowercaseStringOrEmpty } from "@openclaw/normalization-core/string-coerce";
 import { truncateUtf16Safe } from "@openclaw/normalization-core/utf16-slice";
 import type { CommandEntry } from "../../../../packages/gateway-protocol/src/index.js";
+import type { CommandArgValues } from "../../../../src/auto-reply/commands-args.types.js";
 import { buildBuiltinChatCommands } from "../../../../src/auto-reply/commands-registry.shared.js";
+import type { IconName } from "../../components/icons.ts";
 import { t } from "../../i18n/index.ts";
 
 export type SlashCommandCategory = "session" | "model" | "agents" | "tools";
 
 type SlashCommandTier = "essential" | "standard" | "power";
-type ChatIconName = string;
 
 export type SlashCommandDef = {
   key: string;
@@ -19,12 +20,14 @@ export type SlashCommandDef = {
   description: string;
   descriptionKey?: string;
   args?: string;
-  icon?: ChatIconName;
+  icon?: IconName;
   category?: SlashCommandCategory;
   /** When true, the command is executed client-side via RPC instead of sent to the agent. */
   executeLocal?: boolean;
   /** Fixed argument choices for inline hints. */
   argOptions?: string[];
+  /** Whether a multi-word argument may execute from an inline prose position. */
+  allowsInlineMultiWordArgs?: boolean;
   /** Keyboard shortcut hint shown in the menu (display only). */
   shortcut?: string;
   /** Progressive disclosure tier. Defaults to "standard" when omitted. */
@@ -47,6 +50,7 @@ type CommandLike = {
     required?: boolean;
     choices?: LocalArgChoice[];
   }>;
+  formatArgs?: (values: CommandArgValues) => string | undefined;
   category?: string;
   tier?: string;
   source?: "native" | "plugin" | "skill";
@@ -68,13 +72,14 @@ const MAX_REMOTE_NAME_LENGTH = 200;
 const MAX_REMOTE_DESCRIPTION_LENGTH = 2_000;
 const MAX_REMOTE_ARG_NAME_LENGTH = 200;
 
-const COMMAND_ICON_OVERRIDES: Partial<Record<string, ChatIconName>> = {
+const COMMAND_ICON_OVERRIDES: Partial<Record<string, IconName>> = {
   help: "book",
   status: "barChart",
   usage: "barChart",
   export: "download",
   export_session: "download",
   tools: "terminal",
+  dashboard: "layoutDashboard",
   skill: "zap",
   commands: "book",
   new: "plus",
@@ -92,6 +97,8 @@ const COMMAND_ICON_OVERRIDES: Partial<Record<string, ChatIconName>> = {
   steer: "send",
   tts: "volume2",
 };
+
+const INLINE_MULTI_WORD_COMMANDS = new Set(["dashboard"]);
 
 const LOCAL_COMMANDS = new Set([
   "help",
@@ -201,8 +208,9 @@ function formatArgs(command: CommandLike): string | undefined {
     .join(" ");
 }
 
-function choiceToValue(choice: LocalArgChoice): string {
-  return typeof choice === "string" ? choice : choice.value;
+function choiceToValue(command: CommandLike, argName: string, choice: LocalArgChoice): string {
+  const value = typeof choice === "string" ? choice : choice.value;
+  return command.formatArgs?.({ [argName]: value }) ?? value;
 }
 
 function getArgOptions(command: CommandLike): string[] | undefined {
@@ -210,7 +218,9 @@ function getArgOptions(command: CommandLike): string[] | undefined {
   if (!firstArg) {
     return undefined;
   }
-  const options = firstArg.choices?.map(choiceToValue).filter(Boolean);
+  const options = firstArg.choices
+    ?.map((choice) => choiceToValue(command, firstArg.name, choice))
+    .filter(Boolean);
   return options?.length ? options : undefined;
 }
 
@@ -231,7 +241,7 @@ function mapCategory(command: CommandLike): SlashCommandCategory {
   }
 }
 
-function mapIcon(command: CommandLike): ChatIconName | undefined {
+function mapIcon(command: CommandLike): IconName | undefined {
   return COMMAND_ICON_OVERRIDES[normalizeUiKey(command)] ?? "terminal";
 }
 
@@ -265,6 +275,7 @@ function toSlashCommand(
     category: mapCategory(command),
     executeLocal: source === "local" && LOCAL_COMMANDS.has(command.key),
     argOptions: getArgOptions(command),
+    allowsInlineMultiWordArgs: INLINE_MULTI_WORD_COMMANDS.has(command.key),
     tier: source === "local" ? mapTier(command) : "standard",
     ...(resolvedSource ? { source: resolvedSource } : {}),
     ...(command.skillDisplayName ? { skillDisplayName: command.skillDisplayName } : {}),
@@ -368,6 +379,7 @@ function buildLocalSlashCommands(): SlashCommandDef[] {
         required: arg.required,
         choices: Array.isArray(arg.choices) ? arg.choices : undefined,
       })),
+      formatArgs: command.formatArgs,
       category: command.category,
       tier: command.tier,
     }))

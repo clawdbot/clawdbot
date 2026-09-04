@@ -61,6 +61,49 @@ describe("normalizeLegacyTerminalViewLocation", () => {
 });
 
 describe("bootstrapApplication", () => {
+  it.each([
+    { pathname: "/settings/model-providers", routeId: "model-providers", warmed: true },
+    { pathname: "/operator/settings/model-providers", routeId: "model-providers", warmed: true },
+    { pathname: "/chat/main/example-deadbeef", routeId: "chat", warmed: true },
+    { pathname: "/", routeId: "chat", warmed: false },
+    { pathname: "/chat", routeId: "chat", warmed: false },
+    { pathname: "/focus/terminal", routeId: "chat", warmed: false },
+    { pathname: "/approve/exec%3A1", routeId: "chat", warmed: false },
+  ] as const)(
+    "warms only explicit application routes at startup: $pathname",
+    async ({ pathname, routeId, warmed }) => {
+      const previousUrl = window.location.href;
+      const previousSettings = loadSettings();
+      window.history.replaceState({}, "", pathname);
+      const runtime = bootstrapApplication();
+      const route = runtime.router.getRoute(routeId);
+      if (!route) {
+        throw new Error(`Missing route ${routeId}`);
+      }
+      const component = vi.spyOn(route, "component").mockResolvedValue({ render: () => null });
+      const loader = vi.spyOn(route, "loader");
+      const startGateway = vi.spyOn(runtime.context.gateway, "start").mockImplementation(() => {});
+      try {
+        expect(component).not.toHaveBeenCalled();
+        const starting = runtime.start();
+        expect(component).toHaveBeenCalledTimes(warmed ? 1 : 0);
+        expect(loader).not.toHaveBeenCalled();
+        runtime.stop();
+        await starting;
+        component.mockClear();
+        await runtime.start();
+        expect(component).not.toHaveBeenCalled();
+      } finally {
+        runtime.stop();
+        component.mockRestore();
+        loader.mockRestore();
+        startGateway.mockRestore();
+        window.history.replaceState({}, "", previousUrl);
+        saveSettings(previousSettings);
+      }
+    },
+  );
+
   it("replaces a released dashboard query bookmark before router start", async () => {
     const initialLocation = {
       pathname: "/chat",

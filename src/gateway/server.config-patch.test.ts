@@ -1000,6 +1000,30 @@ describe("gateway config methods", () => {
     expect(res.payload?.schema?.properties).toBeUndefined();
   });
 
+  it("returns consistent help and reload metadata for plugin enablement", async () => {
+    const res = await rpcReq<{
+      path: string;
+      schema?: { description?: string };
+      reloadKind?: string;
+      hintPath?: string;
+      hint?: { help?: string };
+    }>(requireWs(), "config.schema.lookup", {
+      path: "plugins.entries.sample-plugin.enabled",
+    });
+
+    expect(res.ok).toBe(true);
+    expect(res.payload).toMatchObject({
+      path: "plugins.entries.sample-plugin.enabled",
+      reloadKind: "hot",
+      hintPath: "plugins.entries.*.enabled",
+    });
+    const description = res.payload?.schema?.description;
+    expect(description).toMatch(/default hybrid reload mode/i);
+    expect(description).toMatch(/hot-reload the plugin runtime/i);
+    expect(description).not.toMatch(/restart required/i);
+    expect(res.payload?.hint?.help).toBe(description);
+  });
+
   it("rejects config.schema.lookup when the path is missing", async () => {
     const res = await rpcReq<{ ok?: boolean }>(requireWs(), "config.schema.lookup", {
       path: "gateway.notReal.path",

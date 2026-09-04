@@ -324,6 +324,7 @@ type MockNpmPackage = {
   versions?: string[];
   installedVersion?: string;
   installedIntegrity?: string;
+  omitViewIntegrity?: boolean;
   omitInstalledVersion?: boolean;
   omitInstalledIntegrity?: boolean;
   materializesRootOpenClaw?: boolean;
@@ -484,7 +485,9 @@ function mockNpmViewAndInstallMany(packages: MockNpmPackage[]) {
             name: viewPackage.packageName,
             version: viewPackage.version,
             dist: {
-              integrity: viewPackage.integrity ?? "sha512-plugin-test",
+              ...(viewPackage.omitViewIntegrity
+                ? {}
+                : { integrity: viewPackage.integrity ?? "sha512-plugin-test" }),
               shasum: viewPackage.shasum ?? "pluginshasum",
             },
             ...(viewPackage.openclaw ? { openclaw: viewPackage.openclaw } : {}),
@@ -1340,6 +1343,38 @@ describe("installPluginFromNpmSpec", () => {
       false,
     );
     expect(fs.existsSync(resolveTestPluginPackageDir(npmRoot, "drift-plugin"))).toBe(false);
+  });
+
+  it("rejects a trusted pin when registry metadata omits integrity before install", async () => {
+    const npmRoot = path.join(suiteTempRootTracker.makeTempDir(), "npm");
+    const packageName = "missing-registry-integrity-plugin";
+    mockNpmViewAndInstall({
+      spec: `${packageName}@latest`,
+      packageName,
+      version: "1.0.0",
+      pluginId: packageName,
+      integrity: "sha512-substituted",
+      shasum: "substituted-shasum",
+      omitViewIntegrity: true,
+      npmRoot,
+      expectedDependencySpec: "1.0.0",
+    });
+
+    const result = await installPluginFromNpmSpec({
+      spec: `${packageName}@latest`,
+      expectedIntegrity: "sha512-trusted",
+      npmDir: npmRoot,
+      logger: { info: () => {}, warn: () => {} },
+    });
+
+    expect(result).toEqual({
+      ok: false,
+      error: `aborted: npm package integrity missing for ${packageName}@1.0.0`,
+    });
+    expect(
+      runCommandWithTimeoutMock.mock.calls.some(([argv]) => isManagedNpmInstallCommand(argv)),
+    ).toBe(false);
+    expect(fs.existsSync(resolveTestPluginPackageDir(npmRoot, packageName))).toBe(false);
   });
 
   it("rejects npm installs when the installed version drifts from verified metadata", async () => {

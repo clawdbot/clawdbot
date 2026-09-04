@@ -111,6 +111,21 @@ describe("resolveMessageActionDetails full-message eligibility", () => {
     expect(loaded?.markdown).toBe("Recovered full assistant content.");
     expect(loaded?.replyTarget?.text).toBe("Recovered full assistant content.");
   });
+
+  it("projects an omitted historical image into reply text", () => {
+    const details = resolveMessageActionDetails({
+      message: {
+        role: "assistant",
+        content: [{ type: "image", omitted: true, bytes: 12 * 1024 }],
+        __openclaw: { id: "msg-omitted-image" },
+      },
+      messageId: "msg-omitted-image",
+      onReply: () => {},
+      senderLabel: "assistant",
+    });
+
+    expect(details?.replyTarget?.text).toBe("Image · Omitted from history · 12 KB");
+  });
 });
 
 describe("user message disclosure", () => {
