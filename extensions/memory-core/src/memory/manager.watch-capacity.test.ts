@@ -85,8 +85,13 @@ const {
     nativeWatchMock,
     capacityCode,
   };
-  (globalThis as Record<PropertyKey, unknown>)[chokidarKey] = result.watchMock;
-  (globalThis as Record<PropertyKey, unknown>)[nativeKey] = result.nativeWatchMock;
+  // Real-exhaustion-host mode (OPENCLAW_REAL_CAPACITY_HOST=1): leave the
+  // factory seams untouched so the real fs.watch fails with a real EMFILE
+  // raised by the kernel. Only the injected-errno cases need the overrides.
+  if (process.env.OPENCLAW_REAL_CAPACITY_HOST !== "1") {
+    (globalThis as Record<PropertyKey, unknown>)[chokidarKey] = result.watchMock;
+    (globalThis as Record<PropertyKey, unknown>)[nativeKey] = result.nativeWatchMock;
+  }
   return result;
 });
 
