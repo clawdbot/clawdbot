@@ -177,11 +177,14 @@ export async function runProviderCatalog(params: {
     profileId?: string;
   };
   reportCatalogOutcome?: (outcome: ProviderCatalogOutcome) => void;
+  /** Fences lifecycle replacement immediately around the outbound provider hook. */
+  assertCurrent?: () => void;
 }) {
   const hook = resolveProviderCatalogHook(params.provider);
   if (!hook) {
     return undefined;
   }
+  params.assertCurrent?.();
   const result = await hook.run({
     config: params.config,
     agentDir: params.agentDir,
@@ -191,6 +194,7 @@ export async function runProviderCatalog(params: {
     resolveProviderApiKey: params.resolveProviderApiKey,
     resolveProviderAuth: params.resolveProviderAuth,
   });
+  params.assertCurrent?.();
   for (const outcome of copyProviderCatalogOutcomes(result)) {
     if (
       params.providerIds !== undefined &&

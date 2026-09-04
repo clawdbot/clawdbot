@@ -4886,21 +4886,26 @@ describe("resolveGatewayModelSupportsImages", () => {
     expect(loadGatewayModelCatalog).not.toHaveBeenCalled();
   });
 
-  test("falls back to live discovery for models absent from the prepared catalog", async () => {
-    const loadGatewayModelCatalogSnapshot = vi.fn(async (params?: { readOnly?: boolean }) =>
-      createModelCatalogSnapshot({
-        agentId: "qa",
-        entries: params?.readOnly
-          ? []
-          : [
-              {
-                id: "vendor/runtime-vision-model",
-                name: "Runtime Vision Model",
-                provider: "openrouter",
-                input: ["text", "image"],
-              },
-            ],
-      }),
+  test("falls back to provider-scoped live discovery for models absent from the prepared catalog", async () => {
+    const loadGatewayModelCatalogSnapshot = vi.fn(
+      async (params?: {
+        providerDiscoveryProviderIds?: readonly string[];
+        readOnly?: boolean;
+        scopedLiveProviderDiscovery?: boolean;
+      }) =>
+        createModelCatalogSnapshot({
+          agentId: "qa",
+          entries: params?.scopedLiveProviderDiscovery
+            ? [
+                {
+                  id: "vendor/runtime-vision-model",
+                  name: "Runtime Vision Model",
+                  provider: "openrouter",
+                  input: ["text", "image"],
+                },
+              ]
+            : [],
+        }),
     );
 
     await expect(
@@ -4918,23 +4923,30 @@ describe("resolveGatewayModelSupportsImages", () => {
     });
     expect(loadGatewayModelCatalogSnapshot).toHaveBeenNthCalledWith(2, {
       agentId: "qa",
-      readOnly: false,
+      providerDiscoveryProviderIds: ["openrouter"],
+      readOnly: true,
+      scopedLiveProviderDiscovery: true,
     });
   });
 
-  test("falls back to live discovery for provisional prepared text-only metadata", async () => {
-    const loadGatewayModelCatalogSnapshot = vi.fn(async (params?: { readOnly?: boolean }) =>
-      createModelCatalogSnapshot({
-        agentId: "qa",
-        entries: [
-          {
-            id: "vendor/runtime-vision-model",
-            name: "Runtime Vision Model",
-            provider: "openrouter",
-            input: params?.readOnly ? ["text"] : ["text", "image"],
-          },
-        ],
-      }),
+  test("uses provider-scoped discovery for provisional prepared text-only metadata", async () => {
+    const loadGatewayModelCatalogSnapshot = vi.fn(
+      async (params?: {
+        providerDiscoveryProviderIds?: readonly string[];
+        readOnly?: boolean;
+        scopedLiveProviderDiscovery?: boolean;
+      }) =>
+        createModelCatalogSnapshot({
+          agentId: "qa",
+          entries: [
+            {
+              id: "vendor/runtime-vision-model",
+              name: "Runtime Vision Model",
+              provider: "openrouter",
+              input: params?.scopedLiveProviderDiscovery ? ["text", "image"] : ["text"],
+            },
+          ],
+        }),
     );
 
     await expect(
@@ -4952,7 +4964,9 @@ describe("resolveGatewayModelSupportsImages", () => {
     });
     expect(loadGatewayModelCatalogSnapshot).toHaveBeenNthCalledWith(2, {
       agentId: "qa",
-      readOnly: false,
+      providerDiscoveryProviderIds: ["openrouter"],
+      readOnly: true,
+      scopedLiveProviderDiscovery: true,
     });
   });
 

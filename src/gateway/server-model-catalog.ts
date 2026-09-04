@@ -1,5 +1,4 @@
 import { resolvePublishedModelCatalogOwner } from "../agents/prepared-model-catalog-owner.js";
-import type { LoadPreparedModelCatalogParams } from "../agents/prepared-model-catalog.js";
 import type {
   PublishedModelCatalogOwnerCandidate,
   ResolvedPublishedModelCatalogOwner,
@@ -15,6 +14,7 @@ import { isPreparedModelCatalogFull } from "../agents/prepared-model-runtime.ful
 import { getRuntimeConfig } from "../config/io.js";
 import type { PreparedGatewayModelCatalogSnapshot } from "./server-model-catalog-auth.js";
 import type {
+  GatewayModelCatalogLoadParams,
   GatewayModelCatalogSnapshot,
   PreparedGatewayModelCatalog,
 } from "./server-model-catalog.types.js";
@@ -23,22 +23,14 @@ export type GatewayModelChoice = import("../agents/model-catalog.js").ModelCatal
 export type { GatewayModelCatalogSnapshot } from "./server-model-catalog.types.js";
 
 type GatewayModelCatalogConfig = ReturnType<typeof getRuntimeConfig>;
-type LoadPublishedPreparedModelCatalogOwnerSnapshot = (params: {
-  agentId?: string;
-  agentDir?: string;
-  config: GatewayModelCatalogConfig;
-  readOnly?: boolean;
-  refreshFullCatalog?: LoadPreparedModelCatalogParams["refreshFullCatalog"];
-  workspaceDir?: string;
-}) => Promise<PublishedModelCatalogOwnerCandidate>;
-type LoadGatewayModelCatalogParams = {
-  agentId?: string;
-  agentDir?: string;
+type LoadPublishedPreparedModelCatalogOwnerSnapshot = (
+  params: GatewayModelCatalogLoadParams & {
+    config: GatewayModelCatalogConfig;
+  },
+) => Promise<PublishedModelCatalogOwnerCandidate>;
+type LoadGatewayModelCatalogParams = GatewayModelCatalogLoadParams & {
   getConfig?: () => GatewayModelCatalogConfig;
   loadPublishedPreparedModelCatalogOwnerSnapshot?: LoadPublishedPreparedModelCatalogOwnerSnapshot;
-  readOnly?: boolean;
-  refreshFullCatalog?: LoadPreparedModelCatalogParams["refreshFullCatalog"];
-  workspaceDir?: string;
 };
 type LoadPreparedGatewayModelCatalogParams = LoadGatewayModelCatalogParams & {
   authScope?: PreparedModelRuntimeAuthScope;
@@ -80,10 +72,14 @@ async function loadGatewayModelCatalogOwnerSnapshot(
     ...(params?.agentId ? { agentId: params.agentId } : {}),
     ...(params?.agentDir ? { agentDir: params.agentDir } : {}),
     config: (params?.getConfig ?? getRuntimeConfig)(),
+    ...(params?.providerDiscoveryProviderIds
+      ? { providerDiscoveryProviderIds: params.providerDiscoveryProviderIds }
+      : {}),
     readOnly: params?.readOnly !== false,
     ...(params?.refreshFullCatalog !== undefined
       ? { refreshFullCatalog: params.refreshFullCatalog }
       : {}),
+    ...(params?.scopedLiveProviderDiscovery ? { scopedLiveProviderDiscovery: true } : {}),
     ...(params?.workspaceDir ? { workspaceDir: params.workspaceDir } : {}),
   });
   const owner = resolvePublishedModelCatalogOwner(candidate);

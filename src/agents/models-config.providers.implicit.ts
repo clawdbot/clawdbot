@@ -80,6 +80,7 @@ type ImplicitProviderParams = {
   providerDiscoveryEntriesOnly?: boolean;
   onProviderCatalogOutcome?: (outcome: ProviderCatalogOutcome) => void;
   sourceModelFields?: SourceModelFields;
+  assertDiscoveryCurrent?: () => void;
 };
 
 type ImplicitProviderContext = ImplicitProviderParams & {
@@ -301,6 +302,7 @@ async function resolvePluginImplicitProviders(
         resolveProviderAuth: (providerId, options) =>
           ctx.resolveProviderAuth(providerId?.trim() || provider.id, options),
         reportCatalogOutcome: ctx.onProviderCatalogOutcome,
+        ...(ctx.assertDiscoveryCurrent ? { assertCurrent: ctx.assertDiscoveryCurrent } : {}),
         timeoutMs: ctx.providerDiscoveryTimeoutMs ?? resolveLiveProviderCatalogTimeoutMs(ctx.env),
       });
     }

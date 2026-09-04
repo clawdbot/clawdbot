@@ -2009,6 +2009,44 @@ describe("agent request events", () => {
     expectFields(parseCall?.[2], { supportsInlineImages: false });
   });
 
+  it("scopes node-session image capability discovery to the selected provider", async () => {
+    const ctx = buildCtx();
+    runtimeMocks.resolveGatewayModelSupportsImages.mockResolvedValueOnce(true);
+    loadSessionEntryMock.mockReturnValueOnce({
+      ...buildSessionLookup("agent:main:main", {
+        model: "runtime-vision",
+        modelProvider: "test-provider",
+      }),
+      canonicalKey: "agent:main:main",
+    });
+
+    await handleNodeEvent(ctx, "node-runtime-vision", {
+      event: "agent.request",
+      payloadJSON: JSON.stringify({
+        message: "describe",
+        sessionKey: "agent:main:main",
+        attachments: [
+          {
+            type: "image",
+            mimeType: "image/png",
+            fileName: "dot.png",
+            content: "AAAA",
+          },
+        ],
+      }),
+    });
+
+    expect(runtimeMocks.resolveGatewayModelSupportsImages).toHaveBeenCalledWith({
+      agentId: "main",
+      loadGatewayModelCatalog: ctx.loadGatewayModelCatalog,
+      loadGatewayModelCatalogSnapshot: ctx.loadGatewayModelCatalogSnapshot,
+      model: "runtime-vision",
+      provider: "test-provider",
+    });
+    const parseCall = mockCall(parseMessageWithAttachmentsMock);
+    expectFields(parseCall?.[2], { supportsInlineImages: true });
+  });
+
   it("passes ordered durable media metadata to the agent transcript recorder", async () => {
     parseMessageWithAttachmentsMock.mockResolvedValueOnce({
       message: "describe\n[media attached: media://inbound/offloaded]",

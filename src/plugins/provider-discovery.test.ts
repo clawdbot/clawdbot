@@ -1,5 +1,5 @@
 /** Tests provider discovery normalization, grouping, and manifest contribution handling. */
-import { describe, expect, it } from "vitest";
+import { describe, expect, it, vi } from "vitest";
 import type { ModelDefinitionConfig, ModelProviderConfig } from "../config/types.js";
 import {
   groupPluginDiscoveryProvidersByOrder,
@@ -113,6 +113,31 @@ describe("groupPluginDiscoveryProvidersByOrder", () => {
 });
 
 describe("runProviderCatalog", () => {
+  it("fences a retired owner before invoking the provider hook", async () => {
+    const providerIo = vi.fn(async () => null);
+    const replaced = new Error("catalog owner replaced");
+    const provider: ProviderPlugin = {
+      id: "openai",
+      label: "OpenAI",
+      auth: [],
+      catalog: { run: providerIo },
+    };
+
+    await expect(
+      runProviderCatalog({
+        provider,
+        config: {},
+        env: {},
+        resolveProviderApiKey: () => ({ apiKey: undefined }),
+        resolveProviderAuth: () => ({ apiKey: undefined, mode: "none", source: "none" }),
+        assertCurrent: () => {
+          throw replaced;
+        },
+      }),
+    ).rejects.toBe(replaced);
+    expect(providerIo).not.toHaveBeenCalled();
+  });
+
   it("passes the selected provider identities into the catalog hook", async () => {
     let providerIds: readonly string[] | undefined;
     const provider: ProviderPlugin = {

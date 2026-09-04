@@ -15,6 +15,7 @@ import { resolveAgentDir, resolveAgentWorkspaceDir } from "./agent-scope-config.
 import { OPENAI_CODEX_DEFAULT_PROFILE_ID } from "./auth-profiles/constants.js";
 import { getRuntimeExternalCliProfileIds } from "./auth-profiles/runtime-external-profile-references.js";
 import { saveAuthProfileStore } from "./auth-profiles/store.js";
+import { replacePersistedPluginModelCatalogs } from "./plugin-model-catalog.js";
 import { preparePublishedModelCatalogOwnerIdentity } from "./prepared-model-catalog-owner.js";
 import {
   createPreparedModelCatalogWorker,
@@ -38,6 +39,7 @@ import {
   EXTERNAL_AUTH_PATH_ENV,
   createCatalogFixture,
   createJwtWithExp,
+  resolveProviderCatalogMarker,
   writeCodexAuth,
   writeFixturePlugin,
 } from "./prepared-model-catalog-worker.test-support.js";
@@ -53,6 +55,7 @@ import {
   getPreparedModelRuntimeSnapshot,
   refreshPreparedModelRuntimeSnapshots,
 } from "./prepared-model-runtime.js";
+import { prepareScopedReadOnlyLiveModelCatalog } from "./prepared-model-runtime.scoped-catalog.js";
 import { AuthStorage } from "./sessions/auth-storage.js";
 import {
   markPluginMetadataSnapshotProvided,
@@ -190,6 +193,48 @@ describe("prepared model catalog worker boundary", () => {
     const catalog = await fixture.snapshot.loadFullModelCatalog!();
     expect(catalog.entries).toContainEqual(
       expect.objectContaining({ provider: PROVIDER_ID, id: "plugin-generation-v1" }),
+    );
+  });
+
+  it("fences a retired scoped owner before real plugin catalog I/O", async () => {
+    const fixture = createCatalogFixture(
+      makeTempDir,
+      0,
+      {},
+      {
+        providerCatalogEntry: "./index.cjs",
+      },
+    );
+    replacePersistedPluginModelCatalogs({
+      agentDir: fixture.agentDir,
+      pluginCatalogWrites: {},
+    });
+    const providerCatalogMarker = resolveProviderCatalogMarker(fixture.root);
+    const input = {
+      agentId: "main",
+      agentDir: fixture.agentDir,
+      inheritedAuthDir: fixture.agentDir,
+      workspaceDir: fixture.workspaceDir,
+      config: fixture.config,
+      env: fixture.env,
+      readOnly: true,
+    };
+    const retired = new Error("catalog owner retired");
+
+    await expect(
+      prepareScopedReadOnlyLiveModelCatalog(input, [PROVIDER_ID], () => {
+        throw retired;
+      }),
+    ).rejects.toBe(retired);
+    expect(fs.existsSync(providerCatalogMarker)).toBe(false);
+
+    const current = await prepareScopedReadOnlyLiveModelCatalog(input, [PROVIDER_ID]);
+    expect(fs.readFileSync(providerCatalogMarker, "utf8")).toBe("provider\n");
+    expect(current.entries).toContainEqual(
+      expect.objectContaining({
+        provider: PROVIDER_ID,
+        id: "plugin-generation-v1",
+      }),
     );
   });
 

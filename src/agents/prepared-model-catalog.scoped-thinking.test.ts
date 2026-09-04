@@ -222,7 +222,7 @@ describe("loadProviderScopedThinkingCatalog", () => {
     expect(catalog).toEqual([expect.objectContaining(ollamaEntry)]);
     // Live discovery stays scoped to the requested provider: no broad plugin fanout.
     expect(scopedLiveMock).toHaveBeenCalledTimes(1);
-    expect(scopedLiveMock).toHaveBeenCalledWith(expect.anything(), ["ollama"]);
+    expect(scopedLiveMock).toHaveBeenCalledWith(expect.anything(), ["ollama"], undefined);
     expect(scopedStaticMock).toHaveBeenCalledTimes(1);
   });
 

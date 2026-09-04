@@ -8,6 +8,16 @@ export type PreparedGatewayModelCatalog = {
   pluginRegistry?: ProviderThinkingRegistry;
 };
 
+export type GatewayModelCatalogLoadParams = {
+  agentId?: string;
+  agentDir?: string;
+  providerDiscoveryProviderIds?: readonly string[];
+  readOnly?: boolean;
+  refreshFullCatalog?: boolean | "stale";
+  scopedLiveProviderDiscovery?: boolean;
+  workspaceDir?: string;
+};
+
 export type GatewayModelCatalogSnapshot = ModelCatalogSnapshot & {
   agentId: string;
   agentDir: string;

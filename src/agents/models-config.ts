@@ -67,6 +67,7 @@ type EnsureOpenClawModelsJsonOptions = {
   providerDiscoveryTimeoutMs?: number;
   providerDiscoveryEntriesOnly?: boolean;
   onProviderCatalogOutcome?: (outcome: ProviderCatalogOutcome) => void;
+  assertDiscoveryCurrent?: () => void;
 };
 
 type PlanOpenClawModelsJsonSourceOptions = EnsureOpenClawModelsJsonOptions & {
@@ -336,6 +337,9 @@ function prepareModelsConfigContext(
       : {}),
     ...(options.onProviderCatalogOutcome
       ? { onProviderCatalogOutcome: options.onProviderCatalogOutcome }
+      : {}),
+    ...(options.assertDiscoveryCurrent
+      ? { assertDiscoveryCurrent: options.assertDiscoveryCurrent }
       : {}),
   };
 }

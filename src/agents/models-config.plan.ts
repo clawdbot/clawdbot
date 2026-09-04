@@ -55,6 +55,7 @@ export type PreparedModelsConfigContext = Readonly<{
   providerDiscoveryTimeoutMs?: number;
   providerDiscoveryEntriesOnly?: boolean;
   onProviderCatalogOutcome?: (outcome: ProviderCatalogOutcome) => void;
+  assertDiscoveryCurrent?: () => void;
 }>;
 
 /** Dependency hook for resolving implicit model providers while planning models.json. */
@@ -74,6 +75,7 @@ type ResolveImplicitProvidersForModelsJson = (params: {
   providerDiscoveryTimeoutMs?: number;
   providerDiscoveryEntriesOnly?: boolean;
   sourceModelFields?: SourceModelFields;
+  assertDiscoveryCurrent?: () => void;
 }) => Promise<Record<string, ProviderConfig>>;
 
 /**
@@ -206,6 +208,9 @@ async function resolveProvidersForModelsJsonWithDeps(
       : {}),
     ...(context.onProviderCatalogOutcome
       ? { onProviderCatalogOutcome: context.onProviderCatalogOutcome }
+      : {}),
+    ...(context.assertDiscoveryCurrent
+      ? { assertDiscoveryCurrent: context.assertDiscoveryCurrent }
       : {}),
   });
   return mergeProviders({

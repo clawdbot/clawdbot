@@ -31,6 +31,7 @@ async function prepareScopedReadOnlyModelCatalogWithMode(
   input: PreparedModelRuntimeInput,
   providerDiscoveryProviderIds: readonly string[],
   catalogMode: PreparedModelRuntimeCatalogMode,
+  assertOwnerCurrent?: () => void,
 ): Promise<ModelCatalogSnapshot> {
   const scopedInput = input.readOnly ? input : { ...input, readOnly: true };
   const { agentFacts, pluginGeneration } = await prepareWorkspaceBuildGroup(
@@ -47,7 +48,9 @@ async function prepareScopedReadOnlyModelCatalogWithMode(
     pluginGeneration,
     catalogMode,
     false,
-    catalogMode === "live" ? { providerDiscoveryProviderIds } : {},
+    catalogMode === "live"
+      ? { providerDiscoveryProviderIds, assertDiscoveryCurrent: assertOwnerCurrent }
+      : {},
   );
   const { modelCatalog } = await prepareFullCatalogFacts(
     agentFactsForInput,
@@ -108,6 +111,12 @@ export function prepareScopedReadOnlyModelCatalog(
 export function prepareScopedReadOnlyLiveModelCatalog(
   input: PreparedModelRuntimeInput,
   providerDiscoveryProviderIds: readonly string[],
+  assertOwnerCurrent?: () => void,
 ): Promise<ModelCatalogSnapshot> {
-  return prepareScopedReadOnlyModelCatalogWithMode(input, providerDiscoveryProviderIds, "live");
+  return prepareScopedReadOnlyModelCatalogWithMode(
+    input,
+    providerDiscoveryProviderIds,
+    "live",
+    assertOwnerCurrent,
+  );
 }

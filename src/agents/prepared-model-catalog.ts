@@ -17,7 +17,9 @@ import type { ResolvedPublishedModelCatalogOwner } from "./prepared-model-catalo
 import {
   getPreparedModelFullCatalogAuth,
   getPreparedModelRuntimeAuthMaterializations,
+  getPreparedModelRuntimeAuthStore,
   loadPreparedModelRuntimeAuth,
+  type PreparedModelRuntimeAuth,
   setPreparedModelRuntimeAuthMaterializations,
   setPreparedModelRuntimeAuthLoader,
   setPreparedModelRuntimeAuthStore,
@@ -67,6 +69,29 @@ export type GetPublishedPreparedModelCatalogOwnerParams = Omit<
 
 type PreparedModelCatalogConfigPolicy = "exact" | "published";
 
+/** Rebinds private auth facts whenever an immutable catalog owner is projected. */
+function projectPreparedModelRuntimeSnapshot(params: {
+  snapshot: PreparedModelRuntimeSnapshot;
+  auth: PreparedModelRuntimeAuth;
+  modelCatalog: ModelCatalogSnapshot;
+}): PreparedModelRuntimeSnapshot {
+  const projected = Object.freeze({
+    ...params.snapshot,
+    authModes: params.auth.authModes,
+    modelCatalog: params.modelCatalog,
+  });
+  setPreparedModelRuntimeAuthStore(projected, params.auth.authStore);
+  setPreparedModelRuntimeAuthLoader(
+    projected,
+    async (scope) => (await loadPreparedModelRuntimeAuth(params.snapshot, scope)) ?? params.auth,
+  );
+  setPreparedModelRuntimeAuthMaterializations(
+    projected,
+    getPreparedModelRuntimeAuthMaterializations(params.snapshot),
+  );
+  return projected;
+}
+
 async function materializeRequestedModelCatalog(
   snapshot: PreparedModelRuntimeSnapshot,
   readOnly: boolean | undefined,
@@ -92,23 +117,9 @@ async function materializeRequestedModelCatalog(
   if (!fullAuth) {
     throw new Error("prepared full model catalog omitted its auth generation");
   }
-  const materialized = Object.freeze({
-    ...snapshot,
-    authModes: fullAuth.authModes,
-    modelCatalog,
-  });
-  setPreparedModelRuntimeAuthStore(materialized, fullAuth.authStore);
   // Later explicit auth refreshes stay bound to the original owner generation. Ordinary reads
   // consume the full worker's paired auth without invoking this loader.
-  setPreparedModelRuntimeAuthLoader(
-    materialized,
-    async (scope) => (await loadPreparedModelRuntimeAuth(snapshot, scope)) ?? fullAuth,
-  );
-  setPreparedModelRuntimeAuthMaterializations(
-    materialized,
-    getPreparedModelRuntimeAuthMaterializations(snapshot),
-  );
-  return materialized;
+  return projectPreparedModelRuntimeSnapshot({ snapshot, auth: fullAuth, modelCatalog });
 }
 
 function acceptsPreparedSnapshotConfig(
@@ -299,15 +310,64 @@ async function resolvePreparedModelCatalogOwnerSnapshotWithPolicy(
 async function loadPreparedModelCatalogOwnerSnapshotWithPolicy(
   params: LoadPreparedModelCatalogParams,
   configPolicy: PreparedModelCatalogConfigPolicy,
+  replacementAttempt = 0,
 ): Promise<PreparedModelRuntimeSnapshot> {
-  const publishedReadOnlyOwner = params.readOnly
-    ? getPreparedModelCatalogOwnerSnapshot(params)
-    : undefined;
   const snapshot = await resolvePreparedModelCatalogOwnerSnapshotWithPolicy(params, configPolicy);
+  const publishedReadOnlyOwner = params.readOnly
+    ? configPolicy === "published"
+      ? getPublishedPreparedModelCatalogOwnerSnapshot(params)
+      : getPreparedModelCatalogOwnerSnapshot(params)
+    : undefined;
   // A fallback read-only lease retires before this projection. Only a published owner can safely
   // expose its generation cache; the leased snapshot already contains its exact prepared facts.
-  if (params.readOnly && !publishedReadOnlyOwner) {
+  if (params.readOnly && publishedReadOnlyOwner !== snapshot) {
     return snapshot;
+  }
+  if (params.readOnly && params.providerDiscoveryProviderIds) {
+    const readCurrentOwner = () =>
+      configPolicy === "published"
+        ? getPublishedPreparedModelCatalogOwnerSnapshot(params)
+        : getPreparedModelCatalogOwnerSnapshot(params);
+    let modelCatalog: ModelCatalogSnapshot;
+    try {
+      modelCatalog = await loadScopedReadOnlyModelCatalog(
+        {
+          ...params,
+          agentDir: snapshot.agentDir,
+          config: snapshot.config,
+          ...(snapshot.workspaceDir ? { workspaceDir: snapshot.workspaceDir } : {}),
+        },
+        () => {
+          if (readCurrentOwner() !== snapshot) {
+            throw new PreparedModelCatalogConfigReplacedError(snapshot.agentDir);
+          }
+        },
+      );
+    } catch (error) {
+      if (
+        configPolicy === "published" &&
+        replacementAttempt === 0 &&
+        error instanceof PreparedModelCatalogConfigReplacedError
+      ) {
+        return loadPreparedModelCatalogOwnerSnapshotWithPolicy(params, configPolicy, 1);
+      }
+      throw error;
+    }
+    if (readCurrentOwner() !== snapshot) {
+      if (configPolicy === "published" && replacementAttempt === 0) {
+        return loadPreparedModelCatalogOwnerSnapshotWithPolicy(params, configPolicy, 1);
+      }
+      throw new PreparedModelCatalogConfigReplacedError(snapshot.agentDir);
+    }
+    const authStore = getPreparedModelRuntimeAuthStore(snapshot);
+    if (!authStore) {
+      throw new Error("prepared scoped model catalog omitted its auth generation");
+    }
+    return projectPreparedModelRuntimeSnapshot({
+      snapshot,
+      auth: { authModes: snapshot.authModes, authStore },
+      modelCatalog,
+    });
   }
   return await materializeRequestedModelCatalog(
     snapshot,
@@ -318,6 +378,7 @@ async function loadPreparedModelCatalogOwnerSnapshotWithPolicy(
 
 async function loadScopedReadOnlyModelCatalog(
   params: LoadPreparedModelCatalogParams,
+  assertOwnerCurrent?: () => void,
 ): Promise<ModelCatalogSnapshot> {
   const { activationExact, activationFull, full } = resolveInputs(params);
   const fullCandidates =
@@ -337,11 +398,11 @@ async function loadScopedReadOnlyModelCatalog(
       }
     }
   }
-  const prepareScoped =
-    params.scopedLiveProviderDiscovery === true
-      ? prepareScopedReadOnlyLiveModelCatalog
-      : prepareScopedReadOnlyModelCatalog;
-  return prepareScoped(activationExact, params.providerDiscoveryProviderIds ?? []);
+  assertOwnerCurrent?.();
+  const providerIds = params.providerDiscoveryProviderIds ?? [];
+  return params.scopedLiveProviderDiscovery === true
+    ? prepareScopedReadOnlyLiveModelCatalog(activationExact, providerIds, assertOwnerCurrent)
+    : prepareScopedReadOnlyModelCatalog(activationExact, providerIds);
 }
 
 /**

@@ -100,6 +100,10 @@ export function writeCodexAuth(codexHome: string, marker: string): void {
   fs.utimesSync(authPath, future, future);
 }
 
+export function resolveProviderCatalogMarker(root: string): string {
+  return path.join(root, "provider-catalog-marker.txt");
+}
+
 export function writeFixturePlugin(params: {
   root: string;
   spinMs: number;
@@ -107,6 +111,7 @@ export function writeFixturePlugin(params: {
   builtPluginVersion?: string;
   nativeCatalog?: boolean;
   asyncSyntheticAuth?: boolean;
+  providerCatalogEntry?: "./index.cjs" | "./provider-discovery.cjs";
 }): string {
   const pluginDir = path.join(params.root, "plugin");
   fs.mkdirSync(pluginDir, { recursive: true });
@@ -198,6 +203,9 @@ module.exports = {
       },
       catalog: {
         run(context) {
+          if (${JSON.stringify(params.providerCatalogEntry === "./index.cjs")}) {
+            fs.appendFileSync(${JSON.stringify(resolveProviderCatalogMarker(params.root))}, "provider\\n");
+          }
           const refOnlyApi = context.resolveProviderApiKey(${JSON.stringify(REF_ONLY_API_PROVIDER_ID)}).apiKey;
           const refOnlyToken = context.resolveProviderApiKey(${JSON.stringify(REF_ONLY_TOKEN_PROVIDER_ID)}).apiKey;
           const durableAuth = context.resolveProviderApiKey(${JSON.stringify(DURABLE_AUTH_PROVIDER_ID)}).apiKey;
@@ -298,9 +306,9 @@ module.exports = {
         MISSING_AUTH_HARNESS_ID,
         UNRELATED_SYNTHETIC_AUTH_ID,
       ],
-      providerCatalogEntry: params.builtPluginVersion
-        ? "./provider-discovery.cts"
-        : "./provider-discovery.cjs",
+      providerCatalogEntry:
+        params.providerCatalogEntry ??
+        (params.builtPluginVersion ? "./provider-discovery.cts" : "./provider-discovery.cjs"),
       configSchema: { type: "object", additionalProperties: false, properties: {} },
       contracts: { externalAuthProviders: [PROVIDER_ID] },
       modelCatalog: { discovery: { [PROVIDER_ID]: "runtime" }, runtimeAugment: true },
@@ -318,6 +326,7 @@ export function createCatalogFixture(
     hydrateExternalCliProviderIds?: readonly string[];
     builtPluginVersion?: string;
     asyncSyntheticAuth?: boolean;
+    providerCatalogEntry?: "./index.cjs" | "./provider-discovery.cjs";
   },
 ) {
   const root = makeTempDir("openclaw-model-catalog-worker-");
