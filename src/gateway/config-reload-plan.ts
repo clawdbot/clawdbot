@@ -268,14 +268,12 @@ function getReloadPolicyCatalog() {
       },
       { prefixes: plugin.reload?.noopPrefixes ?? [], kind: "none" },
     ]),
-    ...channelPlugins.map(
-      (plugin): ReloadPolicy => ({
-        prefixes: [`plugins.entries.${plugin.id}`],
-        kind: "hot",
-        actions: ["reloadPlugins", "disposeMcpRuntimes"],
-        channels: [plugin],
-      }),
-    ),
+    ...channelPlugins.map((plugin): ReloadPolicy => ({
+      prefixes: [`plugins.entries.${plugin.id}`],
+      kind: "hot",
+      actions: ["reloadPlugins", "disposeMcpRuntimes"],
+      channels: [plugin],
+    })),
     // Channel snapshots capture shared policy. Fan out by default while
     // preserving explicit plugin/channel policies above on equal-prefix ties.
     {
