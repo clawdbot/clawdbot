@@ -2,8 +2,9 @@
 import { mkdtemp, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import path from "node:path";
+import { setTimeout as delay } from "node:timers/promises";
 import { toErrorObject as toLintErrorObject } from "@openclaw/normalization-core/error-coercion";
-import { describe, expect, it } from "vitest";
+import { describe, expect, it, vi } from "vitest";
 import {
   collectAllResolvedPackagesFromLockfile,
   collectProdResolvedPackagesFromLockfile,
@@ -16,6 +17,8 @@ import {
   runPnpmAuditProd,
   stripVersionDecorators,
 } from "../../scripts/pre-commit/pnpm-audit-prod.mjs";
+
+vi.mock("node:timers/promises", () => ({ setTimeout: vi.fn(async () => {}) }));
 
 describe("pnpm-audit-prod", () => {
   it("keeps toolchain snapshots separate from production while auditing both documents", () => {
@@ -313,30 +316,158 @@ snapshots:
     },
   );
 
-  it("aborts stalled bulk advisory requests", async () => {
-    let signal: AbortSignal | undefined;
+  it("retries a timed-out bulk advisory request with a fresh request lifecycle", async () => {
+    const signals: AbortSignal[] = [];
+    const fetchImpl = vi.fn(((_url, init) => {
+      const signal = init?.signal;
+      if (signal) {
+        signals.push(signal);
+      }
+      if (signals.length === 2) {
+        return Promise.resolve(new Response("{}", { status: 200 }));
+      }
+      return new Promise((_resolve, reject) => {
+        signal?.addEventListener(
+          "abort",
+          () => reject(toLintErrorObject(signal.reason, "Non-Error rejection")),
+          { once: true },
+        );
+      });
+    }) as typeof fetch);
+
+    await expect(
+      fetchBulkAdvisories({
+        payload: { axios: ["1.0.0"] },
+        timeoutMs: 5,
+        fetchImpl,
+      }),
+    ).resolves.toEqual({});
+    expect(fetchImpl).toHaveBeenCalledTimes(2);
+    expect(signals).toHaveLength(2);
+    expect(signals[0]).not.toBe(signals[1]);
+    expect(signals[0]?.aborted).toBe(true);
+    expect(signals[1]?.aborted).toBe(false);
+  });
+
+  it("fails closed after three timed-out bulk advisory requests", async () => {
+    vi.mocked(delay).mockClear();
+    const signals: AbortSignal[] = [];
+    const fetchImpl = vi.fn(((_url, init) => {
+      const signal = init?.signal;
+      if (signal) {
+        signals.push(signal);
+      }
+      return new Promise((_resolve, reject) => {
+        signal?.addEventListener(
+          "abort",
+          () => reject(toLintErrorObject(signal.reason, "Non-Error rejection")),
+          { once: true },
+        );
+      });
+    }) as typeof fetch);
     const request = fetchBulkAdvisories({
       payload: { axios: ["1.0.0"] },
       timeoutMs: 5,
-      fetchImpl: ((_url, init) => {
-        signal = init?.signal ?? undefined;
-        return new Promise((_resolve, reject) => {
-          signal?.addEventListener(
-            "abort",
-            () =>
-              reject(
-                toLintErrorObject(signal?.reason ?? new Error("aborted"), "Non-Error rejection"),
-              ),
-            {
-              once: true,
-            },
-          );
-        });
-      }) as typeof fetch,
+      fetchImpl,
     });
 
-    await expect(request).rejects.toThrow(/Bulk advisory request exceeded timeout/u);
-    expect(signal?.aborted).toBe(true);
+    await expect(request).rejects.toThrow(
+      /failed after 3 attempts.*Check npm registry availability/u,
+    );
+    expect(fetchImpl).toHaveBeenCalledTimes(3);
+    expect(signals).toHaveLength(3);
+    expect(signals[0]).not.toBe(signals[1]);
+    expect(signals.every((signal) => signal.aborted)).toBe(true);
+    expect(delay).toHaveBeenCalledTimes(2);
+    const secondWaitMs = vi.mocked(delay).mock.calls[1]?.[0];
+    expect(secondWaitMs).toBeGreaterThanOrEqual(2000);
+    expect(secondWaitMs).toBeLessThan(4000);
+  });
+
+  it.each(["network error", "HTTP 503"])("recovers %s with bounded backoff", async (failure) => {
+    vi.mocked(delay).mockClear();
+    const fetchImpl = vi.fn(async () => new Response("{}"));
+    fetchImpl.mockImplementationOnce(async () => {
+      if (failure === "network error") {
+        throw new TypeError("fetch failed", { cause: new Error("ECONNRESET") });
+      }
+      return new Response("temporarily unavailable", { status: 503 });
+    });
+
+    await expect(
+      fetchBulkAdvisories({ payload: { axios: ["1.0.0"] }, fetchImpl }),
+    ).resolves.toEqual({});
+    expect(fetchImpl).toHaveBeenCalledTimes(2);
+    expect(delay).toHaveBeenCalledOnce();
+    const waitMs = vi.mocked(delay).mock.calls[0]?.[0];
+    expect(waitMs).toBeGreaterThanOrEqual(1000);
+    expect(waitMs).toBeLessThan(2000);
+  });
+
+  it.each(["network error", "HTTP 503"])("fails closed after repeated %s", async (failure) => {
+    const fetchImpl = vi.fn(async () => {
+      if (failure === "network error") {
+        throw new TypeError("fetch failed");
+      }
+      return new Response("temporarily unavailable", { status: 503 });
+    });
+    await expect(fetchBulkAdvisories({ payload: { axios: ["1.0.0"] }, fetchImpl })).rejects.toThrow(
+      /failed after 3 attempts.*Check npm registry availability/u,
+    );
+    expect(fetchImpl).toHaveBeenCalledTimes(3);
+  });
+
+  it("does not retry an untagged error with the timeout message", async () => {
+    const fetchImpl = vi.fn(async () => {
+      throw new Error("Bulk advisory request exceeded timeout of 5ms");
+    });
+
+    await expect(
+      fetchBulkAdvisories({
+        payload: { axios: ["1.0.0"] },
+        timeoutMs: 5,
+        fetchImpl,
+      }),
+    ).rejects.toThrow("Bulk advisory request exceeded timeout of 5ms");
+    expect(fetchImpl).toHaveBeenCalledOnce();
+  });
+
+  it.each([
+    {
+      caseName: "HTTP client failures",
+      responseBodyMaxBytes: undefined,
+      response: () => new Response("registry failure", { status: 403, statusText: "Forbidden" }),
+      expectedError: /Bulk advisory request failed \(403 Forbidden\)/u,
+    },
+    {
+      caseName: "invalid JSON",
+      responseBodyMaxBytes: undefined,
+      response: () => new Response("{", { status: 200 }),
+      expectedError: /JSON/u,
+    },
+    {
+      caseName: "empty bodies",
+      responseBodyMaxBytes: undefined,
+      response: () => new Response("", { status: 200 }),
+      expectedError: /Bulk advisory response body was empty/u,
+    },
+    {
+      caseName: "oversized bodies",
+      responseBodyMaxBytes: 4,
+      response: () => new Response("12345", { status: 200 }),
+      expectedError: /Bulk advisory response body exceeded 4 bytes/u,
+    },
+  ])("does not retry $caseName", async ({ responseBodyMaxBytes, response, expectedError }) => {
+    const fetchImpl = vi.fn(async () => response());
+
+    await expect(
+      fetchBulkAdvisories({
+        payload: { axios: ["1.0.0"] },
+        ...(responseBodyMaxBytes ? { responseBodyMaxBytes } : {}),
+        fetchImpl,
+      }),
+    ).rejects.toThrow(expectedError);
+    expect(fetchImpl).toHaveBeenCalledOnce();
   });
 
   it("clamps oversized bulk advisory request timers before scheduling", async () => {
@@ -365,45 +496,35 @@ snapshots:
     expect(signal?.aborted).toBe(false);
   });
 
-  it("cancels stalled successful bulk advisory response bodies on request timeout", async () => {
-    let cancelled = false;
-    const body = new ReadableStream({
-      pull() {
-        return new Promise(() => {});
-      },
-      cancel() {
-        cancelled = true;
-      },
-    });
-    const request = fetchBulkAdvisories({
-      payload: { axios: ["1.0.0"] },
-      timeoutMs: 5,
-      fetchImpl: async () => new Response(body, { status: 200 }),
-    });
-
-    await expect(request).rejects.toThrow(/Bulk advisory request exceeded timeout/u);
-    expect(cancelled).toBe(true);
-  });
-
-  it("cancels stalled failed bulk advisory response bodies on request timeout", async () => {
-    let cancelled = false;
-    const body = new ReadableStream({
-      pull() {
-        return new Promise(() => {});
-      },
-      cancel() {
-        cancelled = true;
-      },
-    });
-    const request = fetchBulkAdvisories({
-      payload: { axios: ["1.0.0"] },
-      timeoutMs: 5,
-      fetchImpl: async () => new Response(body, { status: 500, statusText: "Internal Error" }),
-    });
-
-    await expect(request).rejects.toThrow(/Bulk advisory request exceeded timeout/u);
-    expect(cancelled).toBe(true);
-  });
+  it.each([
+    { status: 200, attempts: 3 },
+    { status: 503, attempts: 3 },
+    { status: 403, attempts: 1 },
+  ])(
+    "cancels stalled HTTP $status bodies without retrying client failures",
+    async ({ status, attempts }) => {
+      let cancellations = 0;
+      const fetchImpl = vi.fn(
+        async () =>
+          new Response(
+            new ReadableStream({
+              pull() {
+                return new Promise(() => {});
+              },
+              cancel() {
+                cancellations += 1;
+              },
+            }),
+            { status },
+          ),
+      );
+      await expect(
+        fetchBulkAdvisories({ payload: { axios: ["1.0.0"] }, timeoutMs: 5, fetchImpl }),
+      ).rejects.toThrow(/Bulk advisory request exceeded timeout/u);
+      expect(fetchImpl).toHaveBeenCalledTimes(attempts);
+      expect(cancellations).toBe(attempts);
+    },
+  );
 
   it("bounds successful bulk advisory response bodies", async () => {
     let cancelled = false;
@@ -491,7 +612,9 @@ snapshots:
         const exitCode = await runPnpmAuditProd({
           rootDir: tempDir,
           fetchImpl: async (input) => {
-            expect(String(input)).toMatch(/\/-\/npm\/v1\/security\/advisories\/bulk$/u);
+            const url =
+              input instanceof URL ? input.href : input instanceof Request ? input.url : input;
+            expect(url).toMatch(/\/-\/npm\/v1\/security\/advisories\/bulk$/u);
             return new Response(
               JSON.stringify(
                 blocked

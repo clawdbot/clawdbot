@@ -144,6 +144,7 @@ describe("DesktopClient", () => {
     handle.disableInput();
     expect(instances[0]?.viewOnly).toBe(true);
     handle.disconnect();
+    handle.disconnect();
     expect(instances[0]?.disconnect).toHaveBeenCalledOnce();
   });
 
@@ -159,19 +160,22 @@ describe("DesktopClient", () => {
     const onDisconnect = vi.fn();
     const client = new DesktopClient(Rfb, () => socket as unknown as WebSocket);
 
-    await client.connect({
+    const handle = await client.connect({
       wsUrl: "ws://control.example.test/desktop/observe",
       isCurrent: () => true,
       viewOnly: true,
       target: document.createElement("div"),
       onDisconnect,
     });
+    onDisconnect.mockImplementation(() => handle.disconnect());
     if (close) {
       socket.dispatchEvent(new CloseEvent("close", close));
     }
     instances[0]?.dispatchEvent(new CustomEvent("disconnect", { detail: { clean } }));
 
     expect(onDisconnect).toHaveBeenCalledExactlyOnceWith({ ...close, clean });
+    handle.disconnect();
+    expect(instances[0]?.disconnect).not.toHaveBeenCalled();
     if (!close) {
       socket.dispatchEvent(new CloseEvent("close", { code: 1000 }));
       expect(onDisconnect).toHaveBeenCalledExactlyOnceWith({ clean });

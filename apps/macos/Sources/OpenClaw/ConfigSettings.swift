@@ -5,42 +5,73 @@ struct ConfigSettings: View {
     private let isPreview = ProcessInfo.processInfo.isPreview
     private let isNixMode = ProcessInfo.processInfo.isNixMode
     @Bindable var store: ChannelsStore
+    let isActive: Bool
+    @State private var activeWork = false
     @State private var hasLoaded = false
     @State private var activePath: String?
-    @State private var failedLookupPaths: Set<String> = []
 
-    init(store: ChannelsStore = .shared) {
+    private struct LoadIdentity: Equatable {
+        let active: Bool
+        let source: ChannelsStore.Source?
+        let revision: UInt64?
+    }
+
+    private struct LookupIdentity: Equatable {
+        let load: LoadIdentity
+        let path: String?
+    }
+
+    init(store: ChannelsStore = .shared, isActive: Bool = true) {
         self.store = store
+        self.isActive = isActive
     }
 
     var body: some View {
+        let load = LoadIdentity(
+            active: self.isActive,
+            source: self.store.source,
+            revision: self.store.gateway.selectedEndpointRevision)
+        let lookup = LookupIdentity(load: load, path: self.activePath)
         HStack(spacing: 16) {
             self.sidebar
             self.detail
         }
         .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .topLeading)
         .settingsDetailContent()
-        .task {
-            guard !self.hasLoaded else { return }
-            guard !self.isPreview else { return }
+        .task(id: load) {
+            guard load.active, !self.isPreview, !Task.isCancelled else { return }
             self.hasLoaded = true
-            Task { await self.store.loadConfig(force: false) }
-            _ = await self.store.loadConfigSchemaLookup(path: ".")
+            async let configLoad: Void = self.store.loadConfig(force: false, source: load.source)
+            _ = await self.store.loadConfigSchemaLookup(path: ".", source: load.source)
+            await configLoad
+            guard !Task.isCancelled else { return }
             self.ensureSelection()
         }
-        .task(id: self.activePath) {
-            guard let activePath = self.activePath else { return }
-            await self.loadPath(activePath)
+        .task(id: lookup) {
+            // Root completion must not retry this path after its own read has failed.
+            guard lookup.load.active, !self.isPreview, !Task.isCancelled,
+                  let activePath = lookup.path, let source = lookup.load.source else { return }
+            _ = await self.store.loadConfigSchemaLookup(path: activePath, source: source)
         }
-        .onAppear { self.ensureSelection() }
+        .onAppear {
+            self.updateActiveWork(self.isActive)
+            self.ensureSelection()
+        }
+        .onChange(of: self.isActive) { _, active in self.updateActiveWork(active) }
+        .onDisappear { self.updateActiveWork(false) }
         .onChange(of: self.store.configLookupRoot?.path) { _, _ in
-            self.failedLookupPaths.removeAll()
             self.ensureSelection()
         }
     }
 }
 
 extension ConfigSettings {
+    private func updateActiveWork(_ active: Bool) {
+        guard self.activeWork != active else { return }
+        self.activeWork = active
+        if active { self.store.start() } else { self.store.stop() }
+    }
+
     private struct ConfigSection: Identifiable {
         let key: String
         let label: String
@@ -96,7 +127,8 @@ extension ConfigSettings {
     private var detail: some View {
         VStack(alignment: .leading, spacing: 16) {
             if self.store.configLookupRoot == nil,
-               !self.hasLoaded || self.store.configLookupLoadingPaths.contains(".")
+               !self.hasLoaded || self.store.configLookupLoadingPaths.contains(".") ||
+               (self.store.isAcquiringSource && self.store.lastError == nil)
             {
                 ProgressView().controlSize(.small)
             } else if let section = self.activeSection {
@@ -125,7 +157,9 @@ extension ConfigSettings {
     private var schemaUnavailableDetail: some View {
         VStack(alignment: .leading, spacing: 8) {
             self.header
-            Text(self.store.configStatus ?? "Schema unavailable.")
+            if self.store.isAcquiringSource { ProgressView().controlSize(.small) }
+            Text(self.store.lastError ?? self.store.configLookupErrors["."] ?? self.store.configStatus ??
+                "Schema unavailable.")
                 .font(.callout)
                 .foregroundStyle(.secondary)
             self.actionRow
@@ -186,9 +220,9 @@ extension ConfigSettings {
     private var actionRow: some View {
         HStack(spacing: 10) {
             Button("Reload") {
-                Task { await self.store.reloadConfigDraft() }
+                Task { await self.store.reloadConfigDraft(lookupPath: ".") }
             }
-            .disabled(!self.store.configLoaded)
+            .disabled(self.store.isSavingConfig)
 
             Button(self.store.isSavingConfig ? "Saving…" : "Save") {
                 Task { await self.store.saveConfigDraft() }
@@ -265,7 +299,7 @@ extension ConfigSettings {
             return AnyView(ProgressView().controlSize(.small))
         }
         guard let node = self.store.configLookupNode(path: path) else {
-            if self.failedLookupPaths.contains(path) {
+            if self.store.configLookupErrors[path] != nil {
                 return AnyView(self.lookupUnavailable(path: path))
             }
             return AnyView(ProgressView().controlSize(.small))
@@ -316,12 +350,11 @@ extension ConfigSettings {
 
     private func lookupUnavailable(path: String) -> some View {
         VStack(alignment: .leading, spacing: 8) {
-            Text(self.store.configStatus ?? "Schema unavailable.")
+            Text(self.store.configLookupErrors[path] ?? "Schema unavailable.")
                 .font(.callout)
                 .foregroundStyle(.secondary)
             Button("Retry") {
-                self.failedLookupPaths.remove(path)
-                Task { await self.loadPath(path) }
+                Task { _ = await self.store.loadConfigSchemaLookup(path: path) }
             }
             .buttonStyle(.bordered)
         }
@@ -396,19 +429,6 @@ extension ConfigSettings {
                     path: child.path,
                     hasChildren: child.hasChildren)
             }
-    }
-
-    private func loadPath(_ path: String) async {
-        guard self.store.configLookupNode(path: path) == nil else {
-            self.failedLookupPaths.remove(path)
-            return
-        }
-        guard !self.store.configLookupLoadingPaths.contains(path) else { return }
-        if await self.store.loadConfigSchemaLookup(path: path) == nil {
-            self.failedLookupPaths.insert(path)
-        } else {
-            self.failedLookupPaths.remove(path)
-        }
     }
 
     private func label(for child: ConfigSchemaLookupChild) -> String {

@@ -5630,8 +5630,15 @@ setImmediate(() => {
         }),
       );
       writeFileSync(path.join(source, "index.js"), 'module.exports = "cache-proof-v1";\n');
-      // Resolve the pinned CLI before changing registry/store: pnpm bootstraps itself
-      // through the selected registry and looks for managed versions in that store.
+      // Both projects own the pinned environment before any command runs; otherwise
+      // pnpm resolves its own metadata from the public registry during bootstrap.
+      const { environment } = pnpmLockfileDocuments(readFileSync("pnpm-lock.yaml", "utf8"));
+      if (environment !== null) {
+        for (const directory of [source, workspace]) {
+          writeFileSync(path.join(directory, "pnpm-lock.yaml"), `---\n${environment}\n---\n`);
+        }
+      }
+      // Capture the pinned CLI before switching to the fixture-only registry/store.
       const bootstrap = resolvePnpmRunner();
       const npmExecPath = execFileSync(
         bootstrap.command,
@@ -5783,11 +5790,6 @@ server.listen(0, "127.0.0.1", () => {
             }),
           );
         writeConsumerManifest("1.0.0");
-        // The fixture owns the same pinned toolchain as CI; its registry serves dependencies only.
-        const { environment } = pnpmLockfileDocuments(readFileSync("pnpm-lock.yaml", "utf8"));
-        if (environment !== null) {
-          writeFileSync(path.join(workspace, "pnpm-lock.yaml"), `---\n${environment}\n---\n`);
-        }
         const installArgs = ["install", "--ignore-scripts", "--config.engine-strict=false"];
         const onlineArgs = [...installArgs, `--registry=${registryUrl}`];
         const seeded = runPnpm([...onlineArgs, "--lockfile-only"], workspace);
