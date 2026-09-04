@@ -120,6 +120,9 @@ those installations; the durable run report remains available after reconnect.
 Runs with an internal origin session, including Control UI and webchat, receive
 these notices directly in that session's transcript. Passing only `sessionKey`
 is enough; the caller does not need to supply `deliveryContext`.
+Before stopping the managed service, the updater waits for the serving Gateway
+to finish its restart notice attempt. That wait is capped at 10 seconds so a
+stalled notice cannot block activation.
 
 The report includes the outcome, recorded phase durations, failed steps,
 verification facts, and the next action when needed. A run sends each notice

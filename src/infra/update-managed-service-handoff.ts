@@ -54,6 +54,7 @@ const HANDOFF_READY_TIMEOUT_MS = 30_000;
 const HANDOFF_READY_MARKER = "OPENCLAW_UPDATE_HANDOFF_READY\n";
 const HANDOFF_BUSY_MARKER = "HANDOFF_BUSY ";
 const HANDOFF_ACTIVATION_MARKER = "park\n";
+const HANDOFF_NOTICE_MARKER = "before-park\n";
 const HANDOFF_STATE_DATABASE_BUSY_TIMEOUT_MS = 5_000;
 const SERVICE_IDENTITY_ENV_VARS = new Set<string>([
   "OPENCLAW_LAUNCHD_LABEL",
@@ -799,6 +800,7 @@ let parkedServiceInvocation = null;
 let restorationArmed = false;
 let updaterStarted = false;
 let pendingServiceStop;
+let finishBeforeParkNotice;
 
 function recordServiceStop() {
   serviceStoppedAtMs ??= Date.now();
@@ -1114,6 +1116,19 @@ async function activateTransferredGateway() {
     if (updateCancelled || !ownsManagedUpdateLease()) throw new Error("managed update activation cancelled");
     await sleep(Math.min(250, Math.max(0, delayedUntil - Date.now())));
   }
+  // The serving Gateway owns its final notice; the retained control pipe joins
+  // that durable write before native stop, without extending the 10s notice bound.
+  if (params.beforePark && !process.stdin.destroyed) {
+    await new Promise((resolve) => {
+      const finish = () => { clearTimeout(timer); finishBeforeParkNotice = undefined; resolve(); };
+      const timer = setTimeout(() => {
+        appendLog("pre-park notice timed out after 10 seconds");
+        finish();
+      }, 10_000);
+      finishBeforeParkNotice = finish;
+      fs.writeSync(1, ${JSON.stringify(HANDOFF_NOTICE_MARKER)});
+    });
+  }
   if (params.requester) {
     const { isManagedUpdateRequesterOwner } = await import(pathToFileURL(params.recoveryModulePath).href);
     if (!(await isManagedUpdateRequesterOwner(params.requester))) {
@@ -1344,7 +1359,10 @@ async function collectUpdateFailureTriage() {
         if (commands.length >= 4) return process.stdin.destroy();
         const command = input.slice(0, newline);
         input = input.slice(newline + 1);
-        if (command === "cancel" && transferred) {
+        if (transferred && (command === "noticed" || command === "notice-failed")) {
+          if (command === "notice-failed") appendLog("pre-park notice failed");
+          finishBeforeParkNotice?.();
+        } else if (command === "cancel" && transferred) {
           // Before activation the candidate is disposable; after parking only
           // the orchestrator may decide whether the installed tree can restart.
           if (!restorationArmed) {
@@ -1734,9 +1752,14 @@ function waitForHandoffResponse(child: HandoffChild, command?: string): Promise<
     const onInputClose = () => finish(new Error("managed update handoff control input closed"));
     const onData = (chunk: Buffer | string) => {
       buffered = `${buffered}${chunk.toString()}`.slice(-1024);
-      const newline = buffered.indexOf("\n");
-      if (newline >= 0) {
-        finish(buffered.slice(0, newline));
+      let newline;
+      while ((newline = buffered.indexOf("\n")) >= 0) {
+        const line = buffered.slice(0, newline + 1);
+        buffered = buffered.slice(newline + 1);
+        if (line !== HANDOFF_NOTICE_MARKER) {
+          finish(line.slice(0, -1));
+          return;
+        }
       }
     };
     const timeout = setTimeout(() => {
@@ -1834,6 +1857,7 @@ async function spawnManagedServiceUpdateHandoff(
   );
   const helperParams = {
     runId: metaFile.meta.runId,
+    beforePark: Boolean(params.beforePark),
     requester:
       params.requester?.channel && !isInternalMessageChannel(params.requester.channel)
         ? params.requester
@@ -1949,6 +1973,41 @@ async function spawnManagedServiceUpdateHandoff(
     await fs.rm(dir, { recursive: true, force: true }).catch(() => {});
     throw err;
   }
+  if (params.beforePark) {
+    let buffered = "";
+    const isCurrent = () =>
+      activeManagedServiceUpdateHandoffs.get(rootIdentity) === owner &&
+      owner.transferred &&
+      !owner.cancelling &&
+      !owner.exited;
+    const onNotice = (chunk: Buffer | string) => {
+      buffered = `${buffered}${chunk.toString()}`.slice(-1024);
+      if (!buffered.includes(HANDOFF_NOTICE_MARKER)) {
+        return;
+      }
+      child.stdout.off("data", onNotice);
+      if (!isCurrent()) {
+        return;
+      }
+      // The helper's lease now names the validating runner. Its park owner
+      // revalidates that lease; this captured pipe only coordinates the notice.
+      void owner.beforePark?.().then(
+        () => {
+          if (isCurrent()) {
+            child.stdin.write("noticed\n");
+          }
+        },
+        () => {
+          if (isCurrent()) {
+            child.stdin.write("notice-failed\n");
+          }
+        },
+      );
+    };
+    child.stdout.on("data", onNotice);
+    child.once("exit", () => child.stdout.off("data", onNotice));
+  }
+
   const result = { command: commandLabel, logPath };
   const handoffId = readiness.slice(HANDOFF_BUSY_MARKER.length).trim();
   return `${readiness}\n` === HANDOFF_READY_MARKER

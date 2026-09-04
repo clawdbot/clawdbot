@@ -121,6 +121,26 @@ describe("managed service update handoff", () => {
 
   registerManagedHandoffOwnerTests(runManagedServiceManagerBoundary, itUnix, expect);
 
+  itUnix.each(["acknowledged", "stalled", "rejected"] as const)(
+    "parks after the transferred pre-park notice is %s, within its bounded attempt",
+    async (beforeParkNotice) => {
+      const { commands, log, state } = await runManagedServiceManagerBoundary("systemd", {
+        controlDisconnect: "transferred",
+        beforeParkNotice,
+        updaterExitCode: 0,
+        updaterResult: { status: "ok", mode: "npm" },
+      });
+      expect(commands.some((command) => command.includes("stop openclaw-gateway.service"))).toBe(
+        true,
+      );
+      expect(state).toMatchObject({ parked: true, stopCompleted: true });
+      expect(log.includes("pre-park notice timed out after 10 seconds")).toBe(
+        beforeParkNotice === "stalled",
+      );
+      expect(log.includes("pre-park notice failed")).toBe(beforeParkNotice === "rejected");
+    },
+  );
+
   itUnix.each(
     (["systemd", "launchd"] as const).flatMap((kind) =>
       [false, true].map((recover) => ({ kind, recover })),

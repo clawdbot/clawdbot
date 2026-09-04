@@ -1,4 +1,7 @@
-import { afterEach, beforeAll, beforeEach, vi } from "vitest";
+import { spawn } from "node:child_process";
+import fs from "node:fs/promises";
+import path from "node:path";
+import { afterEach, beforeAll, beforeEach, expect, vi } from "vitest";
 import type { ConfigFileSnapshot, OpenClawConfig } from "../../config/types.openclaw.js";
 import type { RestartSentinelPayload } from "../../infra/restart-sentinel.js";
 import type { RespawnSupervisor } from "../../infra/supervisor-markers.js";
@@ -72,6 +75,84 @@ export const transferManagedServiceUpdateHandoffMock = vi.fn<
 export const cancelManagedServiceUpdateHandoffMock = vi.fn<
   typeof import("../../infra/update-managed-service-handoff.js").cancelManagedServiceUpdateHandoff
 >(async () => "restored-in-process");
+
+/** Drive real helper pipes while a disposable process stands in for the serving Gateway. */
+export async function withTransferredUpdateHandoff(
+  root: string,
+  onNotice: (runId: string) => Promise<void>,
+  run: (activate: () => Promise<void>) => Promise<void>,
+) {
+  await fs.mkdir(root, { recursive: true });
+  const activatePath = path.join(root, "activate");
+  const updatedPath = path.join(root, "updated");
+  const updaterPath = path.join(root, "updater.cjs");
+  await fs.writeFile(
+    updaterPath,
+    `
+    const fs = require("node:fs");
+    process.stdin.once("end", () => process.exit(1));
+    process.stdin.once("data", (reply) => {
+      if (reply.toString() !== "parked\\n") process.exit(2);
+      fs.writeFileSync(${JSON.stringify(updatedPath)}, "updated");
+      process.stdout.write(JSON.stringify({ root: ${JSON.stringify(root)}, status: "ok", mode: "npm" }));
+      process.stdin.destroy();
+    });
+    const gate = setInterval(() => {
+      if (!fs.existsSync(${JSON.stringify(activatePath)})) return;
+      clearInterval(gate);
+      process.stdout.write("park\\n");
+    }, 5);
+  `,
+  );
+  const tempRoot = await import("../../infra/tmp-openclaw-dir.js");
+  const tmp = vi.spyOn(tempRoot, "resolvePreferredOpenClawTmpDir").mockReturnValue(root);
+  const handoff = await vi.importActual<
+    typeof import("../../infra/update-managed-service-handoff.js")
+  >("../../infra/update-managed-service-handoff.js");
+  const parent = spawn(process.execPath, ["-e", "process.stdin.resume()"], {
+    stdio: ["pipe", "ignore", "ignore"],
+  });
+  let helper: Awaited<ReturnType<typeof handoff.startManagedServiceUpdateHandoff>> | undefined;
+  startManagedServiceUpdateHandoffMock.mockImplementationOnce(async (params) => {
+    helper = await handoff.startManagedServiceUpdateHandoff({
+      ...params,
+      root,
+      supervisor: null,
+      parentPid: parent.pid,
+      execPath: process.execPath,
+      argv1: updaterPath,
+      runId: undefined,
+      meta: {},
+      beforePark: async () => {
+        await params.beforePark?.();
+        await onNotice(params.runId!);
+        expect(parent.exitCode).toBeNull();
+        parent.stdin?.end();
+      },
+    });
+    return helper;
+  });
+  transferManagedServiceUpdateHandoffMock.mockImplementationOnce(
+    handoff.transferManagedServiceUpdateHandoff,
+  );
+  try {
+    await run(() => fs.writeFile(activatePath, "activate"));
+    await vi.waitFor(() => fs.access(updatedPath), { timeout: 5_000 });
+  } finally {
+    parent.stdin?.end();
+    if (helper?.pid) {
+      try {
+        process.kill(helper.pid, "SIGKILL");
+      } catch {
+        /* Already exited. */
+      }
+    }
+    if (helper) {
+      await fs.rm(path.dirname(helper.logPath), { recursive: true, force: true });
+    }
+    tmp.mockRestore();
+  }
+}
 
 export const sendGatewayLifecycleNoticeMock = vi.fn(async () => true);
 export const resolveGatewayLifecycleNoticeRouteMock = vi.fn(
@@ -165,7 +246,8 @@ vi.mock("../../version.js", () => ({
   },
 }));
 
-vi.mock("../../infra/supervisor-markers.js", () => ({
+vi.mock("../../infra/supervisor-markers.js", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("../../infra/supervisor-markers.js")>()),
   detectRespawnSupervisor: detectRespawnSupervisorMock,
 }));
 

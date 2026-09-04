@@ -76,6 +76,7 @@ export function createManagedServiceManagerBoundary({
       runnerFallback?: boolean;
       revokeWhileValidating?: boolean;
       replaceLedgerWriter?: boolean;
+      beforeParkNotice?: "acknowledged" | "stalled" | "rejected";
     },
   ): Promise<ManagedServiceManagerBoundaryResult> {
     const { spawn } =
@@ -231,6 +232,7 @@ export function createManagedServiceManagerBoundary({
     try {
       await startManagedServiceUpdateHandoff({
         runId: run?.runId,
+        ...(options?.beforeParkNotice ? { beforePark: async () => {} } : {}),
         root,
         restartDrainTimeoutMs: 300_000,
         parentPid,
@@ -472,7 +474,11 @@ export function createManagedServiceManagerBoundary({
           parent.stdin?.end();
           await vi.waitFor(() => expect(parent.exitCode).toBe(0));
         }
-        if (!options.cancelDuringValidation && !options.cancelAtActivation) {
+        if (
+          !options.cancelDuringValidation &&
+          !options.cancelAtActivation &&
+          !options.beforeParkNotice
+        ) {
           runningHelper.stdin?.end();
         }
         if (options.controlDisconnect === "transferred") {
@@ -504,7 +510,20 @@ export function createManagedServiceManagerBoundary({
                 JSON.stringify({ commands: { ownerAllowFrom: [] } }),
               );
             }
+            const notice = options.beforeParkNotice
+              ? waitForHandoffResponse(runningHelper.stdout, "before-park")
+              : undefined;
             await fs.writeFile(validationReleasePath, "activate");
+            if (notice) {
+              await notice;
+              await expect(pathExists(commandsPath)).resolves.toBe(false);
+              expect(parent.exitCode).toBeNull();
+              if (options.beforeParkNotice !== "stalled") {
+                runningHelper.stdin?.write(
+                  options.beforeParkNotice === "rejected" ? "notice-failed\n" : "noticed\n",
+                );
+              }
+            }
             if (options.cancelAtActivation) {
               await vi.waitFor(
                 async () => {
