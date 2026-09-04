@@ -12,6 +12,7 @@ import type {
   CliBackendLiveSessionHandle,
 } from "openclaw/plugin-sdk/cli-backend";
 import { isRecord } from "openclaw/plugin-sdk/string-coerce-runtime";
+import { resolveClaudeAgentSdkExecutable } from "./agent-sdk-executable.js";
 import {
   createClaudeAgentSdkProcessOwner,
   type ClaudeAgentSdkSecretInput,
@@ -148,7 +149,10 @@ function resolveClaudeAgentSdkOptions(
     env: context.env,
     includePartialMessages: true,
     model: context.modelId,
-    pathToClaudeCodeExecutable: context.command,
+    pathToClaudeCodeExecutable: resolveClaudeAgentSdkExecutable({
+      command: context.command,
+      env: context.env,
+    }),
     permissionMode: "default",
     settingSources: ["user"],
     spawnClaudeCodeProcess: processOwner.spawn,
