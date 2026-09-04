@@ -169,6 +169,14 @@ describe("handleMessageUpdate text signatures", () => {
       ],
     },
     {
+      name: "releases a terminal literal GLM marker after later prose",
+      chunks: ["Use <tool_call>exec", " now."],
+      updates: [
+        { text: "Use", delta: "Use" },
+        { text: "Use <tool_call>exec now.", delta: " <tool_call>exec now." },
+      ],
+    },
+    {
       name: "split voice directive",
       chunks: ["[[audio_as_", "voice]]Hello", " world"],
       updates: [

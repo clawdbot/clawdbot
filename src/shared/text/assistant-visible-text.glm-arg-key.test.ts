@@ -3,6 +3,7 @@
 import { describe, expect, it } from "vitest";
 import {
   sanitizeAssistantVisibleText,
+  sanitizeAssistantVisibleTextWithProfile,
   stripAssistantInternalScaffolding,
 } from "./assistant-visible-text.js";
 
@@ -29,14 +30,17 @@ describe("stripAssistantInternalScaffolding GLM arg_key", () => {
     );
   });
 
-  it("holds an incomplete <tool_call>exec prefix until GLM args arrive", () => {
-    expectVisibleText("Visible\n<tool_call>exec", "Visible\n");
-    expectVisibleText("Visible\n<tool_call>x", "Visible\n");
-    expectVisibleText("Visible\n<tool_call>exec ", "Visible\n");
-    expectVisibleText("Visible\n<tool_call>exec\n", "Visible\n");
+  it("holds an incomplete <arg_key> prefix to end on final delivery", () => {
     expectVisibleText("Visible\n<tool_call>exec<arg_key>", "Visible\n");
     expectVisibleText("Visible\n<tool_call>exec<arg_", "Visible\n");
     expectVisibleText("Visible\n<tool_call>exec<arg_ke", "Visible\n");
+  });
+
+  it("preserves terminal literal <tool_call>exec prose", () => {
+    expectVisibleText("Use <tool_call>exec", "Use <tool_call>exec");
+    expectVisibleText("Use <tool_call>exec ", "Use <tool_call>exec ");
+    expectVisibleText("Use <tool_call>exec\n", "Use <tool_call>exec\n");
+    expectVisibleText("Use <tool_call>x", "Use <tool_call>x");
   });
 
   it("preserves literal exec<arg_key> syntax outside a GLM tool-call block", () => {
@@ -75,6 +79,20 @@ describe("sanitizeAssistantVisibleText GLM arg_key", () => {
         "Models emit exec<arg_key>command</arg_key> next to a structured tool call.",
       ),
     ).toBe("Models emit exec<arg_key>command</arg_key> next to a structured tool call.");
-    expect(sanitizeAssistantVisibleText("Visible\n<tool_call>exec")).toBe("Visible");
+    expect(sanitizeAssistantVisibleText("Use <tool_call>exec")).toBe("Use <tool_call>exec");
+    expect(sanitizeAssistantVisibleText("Use <tool_call>exec ")).toBe("Use <tool_call>exec");
+    expect(sanitizeAssistantVisibleText("Use <tool_call>exec\n")).toBe("Use <tool_call>exec");
+  });
+
+  it("holds a name-only GLM prefix only while streaming", () => {
+    expect(
+      sanitizeAssistantVisibleTextWithProfile("Visible\n<tool_call>exec", "delivery", true),
+    ).toBe("Visible");
+    expect(
+      sanitizeAssistantVisibleTextWithProfile("Visible\n<tool_call>exec ", "delivery", true),
+    ).toBe("Visible");
+    expect(sanitizeAssistantVisibleTextWithProfile("Visible\n<tool_call>x", "delivery", true)).toBe(
+      "Visible",
+    );
   });
 });
