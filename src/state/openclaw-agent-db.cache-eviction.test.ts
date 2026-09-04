@@ -4,6 +4,7 @@ import os from "node:os";
 import path from "node:path";
 import { afterAll, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 import { requireNodeSqlite } from "../infra/node-sqlite.js";
+import { releaseOpenClawAgentDatabaseLease } from "./openclaw-agent-db-lease.js";
 import {
   borrowOpenClawAgentDatabase,
   closeOpenClawAgentDatabaseByPath,
@@ -111,6 +112,36 @@ describe("openclaw agent database handle cache", () => {
     expect(isOpenClawAgentDatabaseOpen(recentlyUsed.path)).toBe(true);
     expect(leastRecentlyUsed.db.isOpen).toBe(false);
     expect(isOpenClawAgentDatabaseOpen(leastRecentlyUsed.path)).toBe(false);
+  });
+
+  it("releases an evicted lease in its acquisition store after its environment changes", () => {
+    const env = requireFixtureEnv();
+    const stateDir = env.OPENCLAW_STATE_DIR;
+    const nextStateDir = fs.mkdtempSync(path.join(os.tmpdir(), "agent-lease-eviction-"));
+    const evicted = baseDatabases[0]!;
+    const { db: state } = openOpenClawStateDatabase({ env });
+    const leases = () =>
+      state.prepare("SELECT lease_id FROM agent_database_leases WHERE path = ?").all(evicted.path);
+    const acquiredLeases = leases();
+    expect(acquiredLeases).toHaveLength(1);
+    try {
+      env.OPENCLAW_STATE_DIR = nextStateDir;
+      openOpenClawAgentDatabase({
+        agentId: "lease-owner-evictor",
+        env: { OPENCLAW_STATE_DIR: stateDir },
+      });
+      expect(evicted.db.isOpen).toBe(false);
+      expect(leases()).toEqual([]);
+      expect(fs.readdirSync(nextStateDir)).toEqual([]);
+    } finally {
+      env.OPENCLAW_STATE_DIR = stateDir;
+      // A failing regression must not leave its original UUID in the shared fixture.
+      for (const lease of acquiredLeases) {
+        releaseOpenClawAgentDatabaseLease(String(lease.lease_id), { env });
+      }
+      closeOpenClawStateDatabaseForTest();
+      fs.rmSync(nextStateDir, { recursive: true, force: true });
+    }
   });
 
   it("never evicts an LRU handle with an open transaction", () => {
