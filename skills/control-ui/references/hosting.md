@@ -47,8 +47,9 @@ For dashboards with HTML or MCP App frames:
 6. verify the frame in the Tailscale-hosted Control UI.
 
 Write down both sides of every proxy hop before changing it. The public side is
-normally HTTPS, while the Gateway sandbox listener is HTTP. Configure the proxy
-upstream with the listener's real protocol. Do not infer it from the public URL
+normally HTTPS. The Gateway sandbox listener uses HTTPS when Gateway TLS is
+enabled, otherwise HTTP. Configure the proxy upstream with the listener's real
+protocol. Do not infer it from the public URL
 or from the proxy's automatic TLS behavior. A response such as `Client sent an
 HTTP request to an HTTPS server` is a protocol mismatch, not proof that the
 sandbox is healthy.
