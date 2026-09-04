@@ -2,7 +2,8 @@
 import path from "node:path";
 import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
 import { normalizeStringEntries } from "@openclaw/normalization-core/string-normalization";
-import { findChatChannelMeta, normalizeChatChannelId } from "../channels/registry.js";
+import { findChatChannelMeta } from "../channels/chat-meta.js";
+import { normalizeChatChannelId } from "../channels/ids.js";
 import { createSubsystemLogger } from "../logging/subsystem.js";
 import type { PluginManifestRegistry } from "../plugins/manifest-registry.js";
 import {

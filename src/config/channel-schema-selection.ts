@@ -1,10 +1,8 @@
 import { resolvePluginActivationSourceConfig } from "../plugins/activation-source-config.js";
 import { resolveDiscoverableScopedChannelPluginIds } from "../plugins/channel-presence-policy.js";
 import type { PluginManifestRegistry } from "../plugins/manifest-registry.js";
-import {
-  materializePluginAutoEnableCandidatesInternal,
-  resolveConfiguredChannelAutoEnableCandidates,
-} from "./plugin-auto-enable.shared.js";
+import { resolveConfiguredChannelAutoEnableCandidates } from "./plugin-auto-enable.channels.js";
+import { materializePluginAutoEnableCandidatesInternal } from "./plugin-auto-enable.materialize.js";
 import { getRuntimeConfigSnapshot } from "./runtime-snapshot.js";
 import type { OpenClawConfig } from "./types.openclaw.js";
 
