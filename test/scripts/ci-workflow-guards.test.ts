@@ -4227,16 +4227,20 @@ NODE
     expect(workflow.jobs["security-fast"].needs).toBeUndefined();
   });
 
-  it.each([false, true])(
-    "composes dedicated contract coverage before precise planning (build=%s)",
-    (buildImpact) => {
+  it.each([
+    { buildImpact: false, uiE2e: false },
+    { buildImpact: true, uiE2e: true },
+  ])(
+    "composes dedicated suite coverage before precise planning (build=$buildImpact, UI=$uiE2e)",
+    ({ buildImpact, uiE2e }) => {
       const manifest = runCiManifestFixture({
         bundledPlanner: true,
         eventName: "pull_request",
         changedPaths: [buildImpact ? "src/fixture.ts" : "src/plugins/contracts/fixture-a.test.ts"],
+        scopeEnv: { OPENCLAW_CI_RUN_UI_TESTS: String(uiE2e) },
         changedPlannerSource: `
         export const createChangedNodeTestShards = (_paths, options = {}) => {
-          console.log("dedicated-coverage:" + JSON.stringify(options.dedicatedContractShards ?? null));
+          console.log("dedicated-coverage:" + JSON.stringify(options));
           return ${
             buildImpact
               ? "[]"
@@ -4264,7 +4268,21 @@ NODE
         manifest.output.split("\n").find((line) => line.startsWith("dedicated-coverage:")),
         "precise planner coverage input",
       );
-      expect(JSON.parse(coverage.slice("dedicated-coverage:".length))).toEqual(dedicated);
+      expect(JSON.parse(coverage.slice("dedicated-coverage:".length))).toEqual({
+        dedicatedContractShards: dedicated,
+        dedicatedUiE2e: uiE2e,
+      });
+      for (const job of ["checks-ui-e2e", "checks-ui-e2e-real-gateway"]) {
+        expect(
+          evaluateWorkflowExpression(`\${{ ${readCiWorkflow().jobs[job].if} }}`, {
+            eventName: "pull_request",
+            repository: "openclaw/openclaw",
+            runAttempt: 1,
+            preflightOutputs: manifest.outputs,
+          }),
+          job,
+        ).toBe(uiE2e);
+      }
       const nodeRows = JSON.parse(
         expectDefined(manifest.outputs.checks_node_core_nondist_matrix, "precise matrix"),
       ).include;

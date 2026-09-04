@@ -1480,6 +1480,7 @@ jobs:
             }
             changedNodeTestShards = changedNodeTestPlan.createChangedNodeTestShards(changedPaths, {
               dedicatedContractShards: [...pluginContractShards, ...channelContractShards],
+              dedicatedUiE2e: runUiTests && !compatibilityTarget,
             });
             if (changedNodeTestShards === null) {
               changedExtensionFallbackShards =
