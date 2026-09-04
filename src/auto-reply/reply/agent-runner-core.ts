@@ -82,11 +82,13 @@ export function buildSilentFallbackFailurePayload(params: {
   hasSuccessfulTerminalDelivery: boolean;
   allowEmptyAssistantReplyAsSilent?: boolean;
   silentExpected?: boolean;
+  hasExplicitSilentReply?: boolean;
 }): ReplyPayload | undefined {
   if (
     params.isHeartbeat ||
     params.allowEmptyAssistantReplyAsSilent === true ||
     params.silentExpected === true ||
+    params.hasExplicitSilentReply === true ||
     params.hasSuccessfulTerminalDelivery ||
     !params.fallbackTransition.fallbackActive ||
     !params.fallbackFailureKnown

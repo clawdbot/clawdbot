@@ -21,7 +21,6 @@ import * as cronStoreModule from "../store.js";
 import { loadCronJobsStoreWithConfigJobs, loadCronStore } from "../store.js";
 import { cronStoreKey } from "../store/key.js";
 import * as runReceiptStore from "../store/run-receipt-store.js";
-import { saveCronJobsStoreWithTransactionHooks } from "../store/transaction-hooks.js";
 import type { CronJob } from "../types.js";
 import { start, stop } from "./ops-lifecycle.js";
 import {
@@ -1020,18 +1019,19 @@ describe("cron service ops seam coverage", () => {
       runIsolatedAgentJob: vi.fn(async () => ({ status: "ok" as const })),
     });
     const proposal = proposeCronRunRecovery(state, job.id, undefined, startedAt);
-    await saveCronJobsStoreWithTransactionHooks(
+    await cronStoreModule.saveCronJobsStore(
       storePath,
       { version: 1, jobs: [completedJob] },
-      undefined,
       {
-        afterWrite: (db) => {
-          runReceiptStore.finishCronRunReceiptInDatabase({
-            database: db,
-            handle: receipt,
-            status: "ok",
-            finishedAtMs: now,
-          });
+        transactionHooks: {
+          afterWrite: (db) => {
+            runReceiptStore.finishCronRunReceiptInDatabase({
+              database: db,
+              handle: receipt,
+              status: "ok",
+              finishedAtMs: now,
+            });
+          },
         },
       },
     );

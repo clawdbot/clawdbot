@@ -5,6 +5,8 @@ import {
 import { GENERIC_EXTERNAL_RUN_FAILURE_TEXT } from "../../agents/failover/user-copy.js";
 import { isAskUserPromptPending } from "../../agents/tools/ask-user-tool.js";
 import { normalizeAgentPlanSteps } from "../../channels/streaming.js";
+import { logVerbose } from "../../globals.js";
+import { formatErrorMessage } from "../../infra/errors.js";
 import {
   copyReplyPayloadMetadata,
   getReplyPayloadMetadata,
@@ -137,6 +139,25 @@ export async function executeDispatch(state: PrepareDispatchExecutionReadyState)
                 onAssistantMessageStart: wrapProgressCallback(
                   params.replyOptions?.onAssistantMessageStart,
                 ),
+                onQueuedFollowupSettled: params.replyOptions?.onQueuedFollowupSettled
+                  ? async () => {
+                      // Retained block callbacks only enqueue; cleanup must join their
+                      // delivery even when this dispatch has already returned.
+                      try {
+                        await waitForPendingDirectBlockReplyDelivery();
+                      } catch (error) {
+                        try {
+                          await params.replyOptions?.onQueuedFollowupSettled?.();
+                        } catch (cleanupError) {
+                          logVerbose(
+                            `dispatch-from-config: queued cleanup failed; preserving delivery error: ${formatErrorMessage(cleanupError)}`,
+                          );
+                        }
+                        throw error;
+                      }
+                      await params.replyOptions?.onQueuedFollowupSettled?.();
+                    }
+                  : undefined,
                 onBlockReplyQueued: wrapProgressCallback(params.replyOptions?.onBlockReplyQueued),
                 onToolStart: wrapProgressCallback(params.replyOptions?.onToolStart, {
                   allowWhenToolSummariesHidden:
@@ -540,7 +561,11 @@ export async function executeDispatch(state: PrepareDispatchExecutionReadyState)
                       markInboundDedupeReplayUnsafe();
                       const admitted = state.sendTrackedBlockReply(normalizedPayload);
                       if (admitted) {
-                        state.progressState.hasPendingDirectBlockReplyDelivery = true;
+                        // Capture admission's drain; concurrent or aborted waiters must
+                        // not consume another callback's delivery obligation.
+                        const pending = dispatcher.waitForIdle().then(() => undefined);
+                        void pending.catch(() => undefined);
+                        state.progressState.pendingDirectBlockReplyDelivery = pending;
                       }
                       if (
                         admitted &&

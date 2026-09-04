@@ -30,6 +30,7 @@ import {
   clearCronJobActive,
   isCronJobActive,
   markCronJobActive,
+  requestActiveCronJobCancellation,
 } from "../active-jobs.js";
 import * as schedule from "../schedule.js";
 import { loadCronStore, saveCronStore } from "../store.js";
@@ -1474,110 +1475,117 @@ describe("cron service timer regressions", () => {
     },
   );
 
-  it("keeps user cancellation disabled for main-session cron wrappers", async () => {
-    vi.useFakeTimers();
-    resetTaskRegistryForTests();
+  it.each([false, true])(
+    "keeps user cancellation disabled after main payload handoff (condition=%s)",
+    async (withCondition) => {
+      vi.useFakeTimers();
+      resetTaskRegistryForTests();
 
-    const store = timerRegressionFixtures.makeStorePath();
-    const scheduledAt = Date.parse("2026-02-15T13:00:00.000Z");
-    const cronJob: CronJob = {
-      id: "main-session-cancel-boundary",
-      name: "main session cancel boundary",
-      enabled: true,
-      createdAtMs: scheduledAt - 60_000,
-      updatedAtMs: scheduledAt - 60_000,
-      schedule: { kind: "at", at: new Date(scheduledAt).toISOString() },
-      sessionTarget: "main",
-      wakeMode: "now",
-      payload: { kind: "systemEvent", text: "queued downstream work" },
-      state: { nextRunAtMs: scheduledAt },
-    };
-    await saveCronStore(store.storePath, { version: 1, jobs: [cronJob] });
+      const store = timerRegressionFixtures.makeStorePath();
+      const scheduledAt = Date.parse("2026-02-15T13:00:00.000Z");
+      const cronJob: CronJob = {
+        id: "main-session-cancel-boundary",
+        name: "main session cancel boundary",
+        enabled: true,
+        createdAtMs: scheduledAt - 60_000,
+        updatedAtMs: scheduledAt - 60_000,
+        schedule: withCondition
+          ? { kind: "every", everyMs: 60_000, anchorMs: scheduledAt - 60_000 }
+          : { kind: "at", at: new Date(scheduledAt).toISOString() },
+        sessionTarget: "main",
+        wakeMode: "now",
+        payload: { kind: "systemEvent", text: "queued downstream work" },
+        ...(withCondition ? { trigger: { script: "json({ fire: true })" } } : {}),
+        state: { nextRunAtMs: scheduledAt },
+      };
+      await saveCronStore(store.storePath, { version: 1, jobs: [cronJob] });
 
-    let now = scheduledAt;
-    const heartbeatResult = createDeferred<HeartbeatRunResult>();
-    const runHeartbeatOnce = vi.fn(async (): Promise<HeartbeatRunResult> => {
-      return await heartbeatResult.promise;
-    });
-    const enqueueSystemEvent = vi.fn();
-    const requestHeartbeat = vi.fn();
-    const state = createCronServiceState({
-      cronEnabled: true,
-      storePath: store.storePath,
-      log: noopLogger,
-      nowMs: () => now,
-      enqueueSystemEvent,
-      requestHeartbeat,
-      runHeartbeatOnce,
-      wakeNowHeartbeatBusyMaxWaitMs: 1_000,
-      wakeNowHeartbeatBusyRetryDelayMs: 50,
-      runIsolatedAgentJob: createDefaultIsolatedRunner(),
-    });
-
-    const timerPromise = onTimer(state);
-    try {
-      const runId = `cron:main-session-cancel-boundary:${scheduledAt}`;
-      for (
-        let attempt = 0;
-        attempt < 10 && runHeartbeatOnce.mock.calls.length === 0;
-        attempt += 1
-      ) {
-        await vi.advanceTimersByTimeAsync(0);
-        await Promise.resolve();
-      }
-      expect(runHeartbeatOnce).toHaveBeenCalledTimes(1);
-
-      const task = findCronTaskByBaseRunId(runId);
-      if (!task) {
-        throw new Error("Expected main-session cron task row");
-      }
-      expect(task.status).toBe("running");
-
-      installCronCancellationControlRuntime();
-      const cancelResult = await cancelTaskById({
-        cfg: {} as never,
-        taskId: task.taskId,
+      let now = scheduledAt;
+      const heartbeatResult = createDeferred<HeartbeatRunResult>();
+      const runHeartbeatOnce = vi.fn(async (): Promise<HeartbeatRunResult> => {
+        return await heartbeatResult.promise;
+      });
+      const enqueueSystemEvent = vi.fn();
+      const requestHeartbeat = vi.fn();
+      const state = createCronServiceState({
+        cronEnabled: true,
+        storePath: store.storePath,
+        log: noopLogger,
+        nowMs: () => now,
+        enqueueSystemEvent,
+        requestHeartbeat,
+        runHeartbeatOnce,
+        evaluateCronTrigger: async () => ({ kind: "evaluated", fire: true }),
+        wakeNowHeartbeatBusyMaxWaitMs: 1_000,
+        wakeNowHeartbeatBusyRetryDelayMs: 50,
+        runIsolatedAgentJob: createDefaultIsolatedRunner(),
       });
 
-      expect(cancelResult.found).toBe(true);
-      expect(cancelResult.cancelled).toBe(false);
-      expect(cancelResult.reason).toBe("Cron task has no active cancellation handle.");
-      expect(listTaskRecords().find((entry) => entry.taskId === task.taskId)?.status).toBe(
-        "running",
-      );
+      const timerPromise = onTimer(state);
+      try {
+        const runId = `cron:main-session-cancel-boundary:${scheduledAt}`;
+        for (
+          let attempt = 0;
+          attempt < 10 && runHeartbeatOnce.mock.calls.length === 0;
+          attempt += 1
+        ) {
+          await vi.advanceTimersByTimeAsync(0);
+          await Promise.resolve();
+        }
+        expect(runHeartbeatOnce).toHaveBeenCalledTimes(1);
 
-      now = scheduledAt + 2_000;
-      heartbeatResult.resolve({ status: "skipped", reason: HEARTBEAT_SKIP_REQUESTS_IN_FLIGHT });
-      await vi.advanceTimersByTimeAsync(0);
-      await timerPromise;
+        const task = findCronTaskByBaseRunId(runId);
+        if (!task) {
+          throw new Error("Expected main-session cron task row");
+        }
+        expect(task.status).toBe("running");
 
-      expect(enqueueSystemEvent).toHaveBeenCalledWith(
-        "queued downstream work",
-        expect.objectContaining({
-          agentId: "main",
-          contextKey: "cron:main-session-cancel-boundary",
-        }),
-      );
-      expect(enqueueSystemEvent.mock.calls[0]?.[1]).not.toHaveProperty("sessionKey");
-      expect(requestHeartbeat).toHaveBeenCalledWith(
-        expect.objectContaining({
-          agentId: "main",
-          reason: "cron:main-session-cancel-boundary",
-        }),
-        { status: "skipped", reason: HEARTBEAT_SKIP_REQUESTS_IN_FLIGHT },
-      );
-      expect(requestHeartbeat.mock.calls[0]?.[0]).not.toHaveProperty("sessionKey");
-    } finally {
-      stop(state);
-      heartbeatResult.resolve({ status: "ran", durationMs: 0 });
-      await Promise.allSettled([timerPromise, heartbeatResult.promise]);
-      await vi.waitFor(() => expect(getSuspensionVisibleCronTaskRunCount()).toBe(0));
-      resetActiveCronTaskRunsForTests();
-      resetTaskRegistryControlRuntimeForTests();
-      resetTaskRegistryForTests();
-      vi.useRealTimers();
-    }
-  });
+        installCronCancellationControlRuntime();
+        const cancelResult = await cancelTaskById({
+          cfg: {} as never,
+          taskId: task.taskId,
+        });
+
+        expect(cancelResult.found).toBe(true);
+        expect(cancelResult.cancelled).toBe(false);
+        expect(cancelResult.reason).toBe("Cron task has no active cancellation handle.");
+        expect(listTaskRecords().find((entry) => entry.taskId === task.taskId)?.status).toBe(
+          "running",
+        );
+
+        now = scheduledAt + 2_000;
+        heartbeatResult.resolve({ status: "skipped", reason: HEARTBEAT_SKIP_REQUESTS_IN_FLIGHT });
+        await vi.advanceTimersByTimeAsync(0);
+        await timerPromise;
+
+        expect(enqueueSystemEvent).toHaveBeenCalledWith(
+          "queued downstream work",
+          expect.objectContaining({
+            agentId: "main",
+            contextKey: "cron:main-session-cancel-boundary",
+          }),
+        );
+        expect(enqueueSystemEvent.mock.calls[0]?.[1]).not.toHaveProperty("sessionKey");
+        expect(requestHeartbeat).toHaveBeenCalledWith(
+          expect.objectContaining({
+            agentId: "main",
+            reason: "cron:main-session-cancel-boundary",
+          }),
+          { status: "skipped", reason: HEARTBEAT_SKIP_REQUESTS_IN_FLIGHT },
+        );
+        expect(requestHeartbeat.mock.calls[0]?.[0]).not.toHaveProperty("sessionKey");
+      } finally {
+        stop(state);
+        heartbeatResult.resolve({ status: "ran", durationMs: 0 });
+        await Promise.allSettled([timerPromise, heartbeatResult.promise]);
+        await vi.waitFor(() => expect(getSuspensionVisibleCronTaskRunCount()).toBe(0));
+        resetActiveCronTaskRunsForTests();
+        resetTaskRegistryControlRuntimeForTests();
+        resetTaskRegistryForTests();
+        vi.useRealTimers();
+      }
+    },
+  );
 
   it("allows cancellation of detached script work targeting the main session", async () => {
     vi.useFakeTimers();
@@ -1851,6 +1859,46 @@ describe("cron service timer regressions", () => {
       expect(runIsolatedAgentJob).not.toHaveBeenCalled();
     } finally {
       clearCronJobActive(cronJob.id, activeJobMarker);
+    }
+  });
+
+  it("consumes a pending cancellation before a main condition binds its controller", async () => {
+    const store = timerRegressionFixtures.makeStorePath();
+    const now = Date.now();
+    const cronJob = createDueIsolatedJob({
+      id: "condition-cancel-before-bind",
+      nowMs: now,
+      nextRunAtMs: now,
+    });
+    cronJob.sessionTarget = "main";
+    cronJob.payload = { kind: "systemEvent", text: "must not enqueue" };
+    cronJob.schedule = { kind: "every", everyMs: 60_000, anchorMs: now - 60_000 };
+    cronJob.trigger = { script: "json({ fire: true })" };
+    const activeJobMarker = markCronJobActive(cronJob.id);
+    requestActiveCronJobCancellation(cronJob.id, "Cron job disabled by operator.");
+    const evaluateCronTrigger = vi.fn(async () => ({ kind: "evaluated" as const, fire: true }));
+    const enqueueSystemEvent = vi.fn();
+    const state = createCronServiceState({
+      cronEnabled: true,
+      storePath: store.storePath,
+      log: noopLogger,
+      enqueueSystemEvent,
+      requestHeartbeat: vi.fn(),
+      evaluateCronTrigger,
+      runIsolatedAgentJob: createDefaultIsolatedRunner(),
+    });
+    try {
+      await expect(
+        executeJobCoreWithTimeout(state, cronJob, { activeJobMarker }),
+      ).resolves.toMatchObject({
+        status: "error",
+        error: "Cron job disabled by operator.",
+      });
+      expect(evaluateCronTrigger).not.toHaveBeenCalled();
+      expect(enqueueSystemEvent).not.toHaveBeenCalled();
+    } finally {
+      clearCronJobActive(cronJob.id, activeJobMarker);
+      await vi.waitFor(() => expect(getSuspensionVisibleCronTaskRunCount()).toBe(0));
     }
   });
 
