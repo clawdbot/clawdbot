@@ -124,16 +124,15 @@ export type {
   TranscriptSourceProvider,
   WorkerDesktopApp,
   WorkerDesktopEndpoint,
-  WorkerDelegatedProvisionOptions,
   WorkerLease,
   WorkerLeaseStatus,
   WorkerMachineOption,
   WorkerProfile,
-  WorkerProvisionOptions,
   WorkerProvider,
   WorkerProviderV2,
   WorkerSshEndpoint,
   WorkerSshIdentity,
+  WorkerSshIdentityRequestV2,
 } from "./capability-provider.types.js";
 export type {
   MigrationApplyResult,

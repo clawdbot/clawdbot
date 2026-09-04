@@ -389,8 +389,11 @@ describe("worker environment service", () => {
     const provider = support.createProvider();
     const workerService = support.createService(provider);
     const environment = await workerService.create("development", "request-queued-identity");
-    const record = expectDefined(support.testState.store.get(environment.environmentId));
-    const leaseId = expectDefined(record.leaseId);
+    const record = expectDefined(
+      support.testState.store.get(environment.environmentId),
+      "created worker environment",
+    );
+    const leaseId = expectDefined(record.leaseId, "created worker lease");
     let releaseProvider!: () => void;
     const providerBlocked = new Promise<void>((resolve) => {
       releaseProvider = resolve;
@@ -401,6 +404,7 @@ describe("worker environment service", () => {
       path: "/keys/worker",
     }));
     const identityResolverFor = createWorkerSshIdentityResolver({
+      assertCurrent: () => {},
       callProvider: async (_environmentId, run) => {
         providerEntered();
         await providerBlocked;
@@ -422,6 +426,48 @@ describe("worker environment service", () => {
 
     await expect(identity).rejects.toThrow("session dispatch authority closed");
     expect(resolveSshIdentity).not.toHaveBeenCalled();
+  });
+
+  it("passes live authority through provider-owned SSH identity resolution", async () => {
+    const provider = support.createProvider();
+    const workerService = support.createService(provider);
+    const environment = await workerService.create("development", "request-live-identity");
+    const record = expectDefined(
+      support.testState.store.get(environment.environmentId),
+      "created worker environment",
+    );
+    const leaseId = expectDefined(record.leaseId, "created worker lease");
+    let releaseIdentity!: () => void;
+    const identityPending = new Promise<void>((resolve) => {
+      releaseIdentity = resolve;
+    });
+    const identityEntered = vi.fn();
+    let authorized = true;
+    const resolveSshIdentity = vi.fn(async ({ assertAuthorized }) => {
+      assertAuthorized();
+      identityEntered();
+      await identityPending;
+      assertAuthorized();
+      return { kind: "path" as const, path: "/keys/worker" };
+    });
+    const identityResolverFor = createWorkerSshIdentityResolver({
+      assertCurrent: () => {},
+      callProvider: async (_environmentId, run) => await run(),
+      requireWorkerProfile: () => ({ region: "test" }),
+      resolveSshIdentity,
+    });
+    const identity = identityResolverFor(record, provider, leaseId, () => {
+      if (!authorized) {
+        throw new Error("session dispatch authority closed");
+      }
+    })(support.SSH_ENDPOINT.keyRef);
+
+    await vi.waitFor(() => expect(identityEntered).toHaveBeenCalledOnce());
+    authorized = false;
+    releaseIdentity();
+
+    await expect(identity).rejects.toThrow("session dispatch authority closed");
+    expect(resolveSshIdentity).toHaveBeenCalledOnce();
   });
 
   it("aborts a timed-out SSH bootstrap before tearing down its lease", async () => {

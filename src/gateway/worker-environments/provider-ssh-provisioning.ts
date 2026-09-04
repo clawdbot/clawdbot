@@ -22,6 +22,7 @@ type WorkerSshProvisioningOptions = Pick<
 };
 
 export function createWorkerSshIdentityResolver(options: {
+  assertCurrent: (record: WorkerEnvironmentRecord) => void;
   callProvider: WorkerProviderLifecycleOptions["callProvider"];
   requireWorkerProfile: (value: unknown) => WorkerProfile;
   resolveSshIdentity: WorkerProviderLifecycleOptions["resolveSshIdentity"];
@@ -38,9 +39,21 @@ export function createWorkerSshIdentityResolver(options: {
       if (!resolveSshIdentity) {
         throw new Error("Worker SSH identity resolution is unavailable");
       }
-      return await options.callProvider(record.environmentId, () => {
+      const assertAuthorized = () => {
+        options.assertCurrent(record);
         authorize?.();
-        return resolveSshIdentity({ provider, leaseId, profile, keyRef });
+      };
+      return await options.callProvider(record.environmentId, async () => {
+        assertAuthorized();
+        const identity = await resolveSshIdentity({
+          provider,
+          leaseId,
+          profile,
+          keyRef,
+          assertAuthorized,
+        });
+        assertAuthorized();
+        return identity;
       });
     };
   };

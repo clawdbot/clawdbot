@@ -438,20 +438,25 @@ export async function createGatewayWorkerEnvironmentRuntime(params: {
     placementStore: placementGate,
     executeSessionTool: (request) => executeSessionTool(request),
     liveEvents: workerLiveEvents,
-    resolveSshIdentity: async ({ provider, leaseId, profile, keyRef }) => {
+    resolveSshIdentity: async ({ provider, leaseId, profile, keyRef, assertAuthorized }) => {
+      assertAuthorized();
       const workerRuntime = await loadWorkerEnvironmentRuntimeModule();
+      assertAuthorized();
       return await workerRuntime.resolveWorkerSshIdentity({
         provider,
         leaseId,
         profile,
         keyRef,
-        resolveGeneric: async (genericKeyRef) => ({
-          kind: "material",
-          contents: await workerRuntime.resolveSecretRefString(genericKeyRef, {
+        assertAuthorized,
+        resolveGeneric: async (genericKeyRef, assertCurrent) => {
+          assertCurrent();
+          const contents = await workerRuntime.resolveSecretRefString(genericKeyRef, {
             config: getActiveSecretsRuntimeConfigSnapshot()?.sourceConfig ?? getRuntimeConfig(),
             env: getActiveSecretsRuntimeEnvState(),
-          }),
-        }),
+          });
+          assertCurrent();
+          return { kind: "material", contents };
+        },
       });
     },
     bootstrapWorker: async ({

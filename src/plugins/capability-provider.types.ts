@@ -87,6 +87,12 @@ export type WorkerSshIdentityRequest = {
   keyRef: SecretRef;
 };
 
+/** Authority-bound identity context supplied to delegated worker providers. */
+export type WorkerSshIdentityRequestV2 = WorkerSshIdentityRequest & {
+  /** Revalidate the exact live environment and initiating turn before every external effect. */
+  assertAuthorized: () => void;
+};
+
 /** Closed set of applications installed and launchable on a provisioned worker desktop. */
 export type WorkerDesktopApp =
   | {
@@ -228,7 +234,7 @@ export class WorkerProviderError extends Error {
   }
 }
 
-export type WorkerProvisionOptions = {
+type WorkerProvisionOptions = {
   /** Cancel this attempt; settle its active commands before rejecting. Cleanup proves release separately. */
   signal?: AbortSignal;
   executionMode?: WorkerExecutionMode;
@@ -248,13 +254,15 @@ export type WorkerProvisionOptions = {
   };
 };
 
-export type WorkerDelegatedProvisionOptions = WorkerProvisionOptions & {
+type WorkerDelegatedProvisionOptions = WorkerProvisionOptions & {
   /** Revalidate the exact initiating turn immediately before every provider-owned effect. */
   assertAuthorized: () => void;
 };
 
 /** Cloud-worker lifecycle capability shared by plugin and internal providers. */
-export type WorkerProvider = {
+type WorkerProviderContract<
+  SshIdentityRequest extends WorkerSshIdentityRequest = WorkerSshIdentityRequest,
+> = {
   id: string;
   /** Process-stable choices available for this profile; omit the hook to hide machine selection. */
   listMachineOptions?: (profile: WorkerProfile) => Promise<readonly WorkerMachineOption[]>;
@@ -310,7 +318,7 @@ export type WorkerProvider = {
    * Resolves provider-owned dynamic identities. When absent, the gateway uses its generic
    * SecretRef resolver; when present, failures are authoritative and never fall back.
    */
-  resolveSshIdentity?: (request: WorkerSshIdentityRequest) => Promise<WorkerSshIdentity>;
+  resolveSshIdentity?(request: SshIdentityRequest): Promise<WorkerSshIdentity>;
   renew?: (leaseId: string) => Promise<void>;
   /**
    * Bounded cleanup for configured profiles, including when no leases remain. Core schedules
@@ -328,8 +336,10 @@ export type WorkerProvider = {
   resolveDestroyTimeoutMs?: (profile: WorkerProfile) => number;
 };
 
+export type WorkerProvider = WorkerProviderContract;
+
 /** Worker provider with authority-bound delegated placement support. */
-export type WorkerProviderV2 = WorkerProvider & {
+export type WorkerProviderV2 = WorkerProviderContract<WorkerSshIdentityRequestV2> & {
   supportedExecutionModes: NonNullable<WorkerProvider["supportedExecutionModes"]>;
   provisionDelegated: (
     profile: WorkerProfile,

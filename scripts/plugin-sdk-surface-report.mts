@@ -358,8 +358,8 @@ export function readPluginSdkSurfaceBudgets(env: NodeJS.ProcessEnv = process.env
       // +7: card projection plus three rendering helpers on channel-outbound and its shipped barrel.
       // +2: shared diff-stat rendering on channel-outbound and its shipped barrel.
       // +1: shared static UI guidance, separate from per-turn harness delivery policy.
-      // +3: closure-bound worker provider provisioning authority and option contracts.
-      4449,
+      // +1: closure-bound worker provider provisioning contract.
+      4447,
       env,
     ),
     publicFunctionExports: readPluginSdkSurfaceBudgetEnv(

@@ -46,6 +46,7 @@ export type WorkerProviderLifecycleInputOptions = {
     leaseId: string;
     profile: WorkerProfile;
     keyRef: SecretRef;
+    assertAuthorized: () => void;
   }) => Promise<WorkerSshIdentity>;
   ensureNodeWorkerBundle?: (params: {
     deviceId: string;

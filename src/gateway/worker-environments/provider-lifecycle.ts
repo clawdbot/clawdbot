@@ -47,12 +47,6 @@ export function createWorkerProviderLifecycle(options: WorkerProviderLifecycleOp
 
   const checkedProfile = (value: unknown) => requireWorkerProfile(value, serviceError);
 
-  const identityResolverFor = createWorkerSshIdentityResolver({
-    callProvider,
-    requireWorkerProfile: checkedProfile,
-    resolveSshIdentity: options.resolveSshIdentity,
-  });
-
   const providerFor = (providerId: string): WorkerProvider => {
     const provider = options.resolveProvider(providerId);
     if (provider) {
@@ -74,6 +68,18 @@ export function createWorkerProviderLifecycle(options: WorkerProviderLifecycleOp
     ...options,
     providerFor,
     requireWorkerProfile: checkedProfile,
+  });
+
+  const identityResolverFor = createWorkerSshIdentityResolver({
+    assertCurrent: (record) => {
+      const current = requireCurrentOwner(record);
+      if (options.isStopping() || current.destroyRequestedAtMs !== null) {
+        throw new Error("Worker SSH identity owner is no longer current");
+      }
+    },
+    callProvider,
+    requireWorkerProfile: checkedProfile,
+    resolveSshIdentity: options.resolveSshIdentity,
   });
 
   const listMachineOptions = async (profileId: string) => {
