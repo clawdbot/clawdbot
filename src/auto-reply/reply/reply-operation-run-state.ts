@@ -1,5 +1,3 @@
-import type { AgentTurnExecutionResult } from "./agent-runner-execution.types.js";
-import type { FollowupRun } from "./queue/types.js";
 import { isReplyOperationSuperseded } from "./reply-operation-abort.js";
 import type { ReplyOperation } from "./reply-run-registry.js";
 
@@ -41,7 +39,7 @@ export function resolveReplyOperationRunState(
 export function recordReplyOperationAgentTurn(
   states: readonly ReplyOperationRunState[] | undefined,
   owner: ReplyOperation | undefined,
-  outcome?: AgentTurnExecutionResult["outcome"],
+  outcome?: { kind: "aborted" | "rejected" } | { kind: "settled"; status: "ok" | "failed" },
 ): void {
   for (const state of states ?? []) {
     state.agentTurn =
@@ -56,17 +54,4 @@ export function recordReplyOperationAgentTurn(
 
 export function resolveReplyOperationAgentTurn(state: ReplyOperationRunState | undefined) {
   return isReplyOperationSuperseded(state?.agentTurnOwner) ? "superseded" : state?.agentTurn;
-}
-
-export function bindQueueDispositionToRunState(
-  run: FollowupRun,
-  state: ReplyOperationRunState | undefined,
-): void {
-  const observe = run.onQueueDisposition;
-  run.onQueueDisposition = (disposition) => {
-    observe?.(disposition);
-    if (state && disposition !== "queue-cap-old") {
-      state.admission = { status: "skipped", reason: "queue-cap" };
-    }
-  };
 }

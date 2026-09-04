@@ -272,13 +272,23 @@ export async function runReplyAgent(
     return undefined;
   }
 
+  const bindQueueDisposition = () => {
+    const observe = followupRun.onQueueDisposition;
+    followupRun.onQueueDisposition = (disposition) => {
+      observe?.(disposition);
+      if (replyOperationRunState && disposition !== "queue-cap-old") {
+        replyOperationRunState.admission = { status: "skipped", reason: "queue-cap" };
+      }
+    };
+  };
+
   if (
     effectiveShouldSteer &&
     isActive &&
     !shouldQueueAuthorityMismatch &&
     messageInjectionDisposition === "none"
   ) {
-    replyRunState.bindQueueDispositionToRunState(followupRun, replyOperationRunState);
+    bindQueueDisposition();
     const result = await runActiveReplySteer({
       followupRun,
       opts,
@@ -320,7 +330,7 @@ export async function runReplyAgent(
   }
 
   if (activeRunQueueAction === "enqueue-followup") {
-    replyRunState.bindQueueDispositionToRunState(followupRun, replyOperationRunState);
+    bindQueueDisposition();
     const enqueued = enqueueFollowupRun(
       queueKey,
       followupRun,
