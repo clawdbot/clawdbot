@@ -3453,7 +3453,7 @@ Update and merge these partial structured summaries.`,
           ),
         ],
       });
-      expect(outputText(parent)).toBe("NO_REPLY");
+      expect(outputText(parent)).toBe("Worker started.");
     };
 
     const firstChildResponse = startChild("qa-terminal-child-1", firstChildSessionKey);
@@ -3681,7 +3681,7 @@ Update and merge these partial structured summaries.`,
   });
 
   it.each(["visible", "silent", "fallback", "restart", "empty"])(
-    "ends the %s parent turn before direct terminal delivery",
+    "acknowledges the %s worker before direct terminal delivery",
     async (terminalCase) => {
       const server = await startMockServer();
       const prompt = `Subagent terminal reply QA check: ${terminalCase}.`;
@@ -3697,7 +3697,7 @@ Update and merge these partial structured summaries.`,
       });
 
       expect(outputItems(payload).some((item) => item.type === "function_call")).toBe(false);
-      expect(outputText(payload)).toBe("NO_REPLY");
+      expect(outputText(payload)).toBe("Worker started.");
     },
   );
 

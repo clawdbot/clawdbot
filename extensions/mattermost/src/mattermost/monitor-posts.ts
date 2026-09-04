@@ -118,6 +118,9 @@ export function createMattermostPostHandler(monitor: MattermostMonitorContext) {
       senderId;
     const rawPostText = typeof post.message === "string" ? post.message : "";
     const rawText = normalizeOptionalString(rawPostText) ?? "";
+    // "@bot /new" addresses the bot, then issues a command: strip the mention before
+    // detection and CommandBody, or the leading-slash check fails and the model gets prose.
+    const commandBody = normalizeMention(rawText, botUsername).trim();
     const { effectiveReplyToId, sessionKey } = thread;
     const { envelopeOptions, previousTimestamp } = resolveInboundSessionEnvelopeContext({
       cfg,
@@ -149,7 +152,7 @@ export function createMattermostPostHandler(monitor: MattermostMonitorContext) {
       surface: "mattermost",
     });
     const isControlCommand =
-      allowTextCommands && core.channel.commands.isControlCommandMessage(rawText, cfg);
+      allowTextCommands && core.channel.commands.isControlCommandMessage(commandBody, cfg);
     const accessDecision = await resolveMattermostMonitorInboundAccess({
       account,
       cfg,
@@ -392,7 +395,6 @@ export function createMattermostPostHandler(monitor: MattermostMonitorContext) {
       });
     }
 
-    const commandBody = rawText.trim();
     const inboundHistory =
       historyKey && historyLimit > 0
         ? createChannelHistoryWindow({ historyMap: channelHistories }).buildInboundHistory({

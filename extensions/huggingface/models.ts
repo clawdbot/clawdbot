@@ -1,15 +1,17 @@
-// Huggingface plugin module implements models behavior.
 import { withTrustedEnvProxyGuardedFetchMode } from "openclaw/plugin-sdk/fetch-runtime";
 import { resolveTimerTimeoutMs } from "openclaw/plugin-sdk/number-runtime";
 import { buildLiveModelProviderConfig } from "openclaw/plugin-sdk/provider-catalog-live-runtime";
+import { buildManifestModelProviderConfig } from "openclaw/plugin-sdk/provider-catalog-shared";
 import type { ModelDefinitionConfig } from "openclaw/plugin-sdk/provider-model-types";
 import {
   fetchWithSsrFGuard,
   ssrfPolicyFromHttpBaseUrlAllowedHostname,
 } from "openclaw/plugin-sdk/ssrf-runtime";
 import { normalizeLowercaseStringOrEmpty } from "openclaw/plugin-sdk/string-coerce-runtime";
+import manifest from "./openclaw.plugin.json" with { type: "json" };
 
-export const HUGGINGFACE_BASE_URL = "https://router.huggingface.co/v1";
+const HUGGINGFACE_MANIFEST_CATALOG = manifest.modelCatalog.providers.huggingface;
+export const HUGGINGFACE_BASE_URL = HUGGINGFACE_MANIFEST_CATALOG.baseUrl;
 export const HUGGINGFACE_POLICY_SUFFIXES = ["cheapest", "fastest"] as const;
 const HUGGINGFACE_DISCOVERY_TIMEOUT_MS = 30_000;
 
@@ -43,35 +45,10 @@ type OpenAIListModelsResponse = {
   data?: HFModelEntry[];
 };
 
-export const HUGGINGFACE_MODEL_CATALOG: ModelDefinitionConfig[] = [
-  {
-    id: "deepseek-ai/DeepSeek-R1",
-    name: "DeepSeek R1",
-    reasoning: true,
-    input: ["text"],
-    contextWindow: 131072,
-    maxTokens: 8192,
-    cost: { input: 3, output: 7, cacheRead: 3, cacheWrite: 3 },
-  },
-  {
-    id: "deepseek-ai/DeepSeek-V3.1",
-    name: "DeepSeek V3.1",
-    reasoning: false,
-    input: ["text"],
-    contextWindow: 131072,
-    maxTokens: 8192,
-    cost: { input: 0.6, output: 1.25, cacheRead: 0.6, cacheWrite: 0.6 },
-  },
-  {
-    id: "openai/gpt-oss-120b",
-    name: "GPT-OSS 120B",
-    reasoning: false,
-    input: ["text"],
-    contextWindow: 131072,
-    maxTokens: 8192,
-    cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
-  },
-];
+export const HUGGINGFACE_MODEL_CATALOG: ModelDefinitionConfig[] = buildManifestModelProviderConfig({
+  providerId: "huggingface",
+  catalog: HUGGINGFACE_MANIFEST_CATALOG,
+}).models;
 
 export function isHuggingfacePolicyLocked(modelRef: string): boolean {
   const ref = modelRef.trim();
