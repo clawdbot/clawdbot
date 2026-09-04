@@ -68,28 +68,32 @@ class SidebarAgentCard extends OpenClawLightDomContentsElement {
           }}
         >
           <span
-            class="sidebar-agent-card__avatar ${this.environment
-              ? "sidebar-agent-card__avatar--environment"
-              : ""}"
+            class="sidebar-agent-card__avatar ${
+              this.environment ? "sidebar-agent-card__avatar--environment" : ""
+            }"
           >
-            ${avatarUrl
-              ? html`<img
-                  src=${avatarUrl}
-                  alt=""
-                  aria-hidden="true"
-                  loading="lazy"
-                  decoding="async"
-                />`
-              : html`<span class="sidebar-agent-card__avatar-text" aria-hidden="true"
-                  >${this.avatarText}</span
-                >`}
-            ${this.menuUnread && !this.menuOpen
-              ? html`<span
-                  class="session-unread-dot sidebar-agent-card__menu-unread"
-                  role="img"
-                  aria-label=${t("sessionsView.unread")}
-                ></span>`
-              : nothing}
+            ${
+              avatarUrl
+                ? html`<img
+                    src=${avatarUrl}
+                    alt=""
+                    aria-hidden="true"
+                    loading="lazy"
+                    decoding="async"
+                  />`
+                : html`<span class="sidebar-agent-card__avatar-text" aria-hidden="true"
+                    >${this.avatarText}</span
+                  >`
+            }
+            ${
+              this.menuUnread && !this.menuOpen
+                ? html`<span
+                    class="session-unread-dot sidebar-agent-card__menu-unread"
+                    role="img"
+                    aria-label=${t("sessionsView.unread")}
+                  ></span>`
+                : nothing
+            }
           </span>
           <span class="sidebar-agent-card__text">
             <span class="sidebar-agent-card__name">
@@ -98,11 +102,13 @@ class SidebarAgentCard extends OpenClawLightDomContentsElement {
                 >${icons.chevronsUpDown}</span
               >
             </span>
-            ${this.environment
-              ? html`<span class="sidebar-agent-card__subtitle-row">
-                  <span class="control-ui-environment-pill">${this.environment.label}</span>
-                </span>`
-              : nothing}
+            ${
+              this.environment
+                ? html`<span class="sidebar-agent-card__subtitle-row">
+                    <span class="control-ui-environment-pill">${this.environment.label}</span>
+                  </span>`
+                : nothing
+            }
           </span>
         </button>
       </div>

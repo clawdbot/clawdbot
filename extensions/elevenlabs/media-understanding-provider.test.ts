@@ -1,15 +1,8 @@
 // Elevenlabs tests cover media understanding provider plugin behavior.
+import { expectDefined } from "openclaw/plugin-sdk/expect-runtime";
 import { mockPinnedHostnameResolution } from "openclaw/plugin-sdk/test-env";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { elevenLabsMediaUnderstandingProvider } from "./media-understanding-provider.js";
-
-function requireFirstFetchCall(fetchMock: ReturnType<typeof vi.fn>): [string, RequestInit] {
-  const [call] = fetchMock.mock.calls;
-  if (!call) {
-    throw new Error("expected ElevenLabs media fetch call");
-  }
-  return call as [string, RequestInit];
-}
 
 describe("elevenLabsMediaUnderstandingProvider", () => {
   let ssrfMock: { mockRestore: () => void } | undefined;
@@ -48,7 +41,8 @@ describe("elevenLabsMediaUnderstandingProvider", () => {
 
     expect(result).toEqual({ text: "hello", model: "scribe_v2" });
     expect(fetchMock).toHaveBeenCalledTimes(1);
-    const [url, init] = requireFirstFetchCall(fetchMock);
+    const [url, requestInit] = expectDefined(fetchMock.mock.calls[0], "ElevenLabs fetch call");
+    const init = expectDefined(requestInit, "ElevenLabs request init");
     expect(url).toBe("https://api.elevenlabs.io/v1/speech-to-text");
     expect(init.method).toBe("POST");
     const headers = new Headers(init.headers);

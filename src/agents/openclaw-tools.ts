@@ -8,6 +8,7 @@ import { getActiveSecretsRuntimeConfigSnapshot } from "../secrets/runtime-state.
 import { getActiveRuntimeWebToolsMetadataFromState } from "../secrets/runtime-web-tools-state.js";
 import { isCronRunSessionKey } from "../sessions/session-key-utils.js";
 import { resolveAgentWorkspaceDir, resolveSessionAgentIds } from "./agent-scope.js";
+import { finalizeAgentToolAvailability } from "./agent-tool-availability.js";
 import { bindAssembledAgentToolActionDescriptor } from "./agent-tool-metadata.js";
 import {
   type HookContext,
@@ -121,6 +122,10 @@ export function createOpenClawTools(options?: OpenClawToolsOptions): AnyAgentToo
   const spawnWorkspaceDir = resolveWorkspaceRoot(options?.spawnWorkspaceDir ?? workspaceDir);
   options?.recordToolPrepStage?.("openclaw-tools:session-workspace");
   const widgetPresentation = resolveWidgetPresentationForRun(options);
+  const inlineWidgetClientAvailable = options?.clientCaps?.includes("inline-widgets") === true;
+  const widgetSessionKey = normalizeOptionalString(
+    options?.runSessionKey ?? options?.agentSessionKey,
+  );
   const gatewayCallerAccountId = options?.gatewayCallerAccountId ?? options?.agentAccountId;
   const runtimeWebTools = getActiveRuntimeWebToolsMetadataFromState();
   const sandbox =
@@ -302,6 +307,21 @@ export function createOpenClawTools(options?: OpenClawToolsOptions): AnyAgentToo
     resolvedConfig?.tools?.deny,
     options?.pluginToolDenylist,
   );
+  const scheduledWidgetExplicitlyAllowed = isToolExplicitlyAllowedByFactoryPolicy({
+    toolName: "show_widget",
+    allowlist: options?.runtimeToolAllowlist,
+    denylist: explicitFactoryDenylist,
+  });
+  // Scheduled turns with an explicit server-stamped tool cap have no originating
+  // renderer. Persistent session targets may still write their durable board;
+  // detached cron-run sessions stay gated because their board is not user-owned.
+  const scheduledPinnedWidgetOnly =
+    options?.gatewayCallerScheduled === true &&
+    scheduledWidgetExplicitlyAllowed &&
+    !inlineWidgetClientAvailable &&
+    !widgetPresentation.currentChannelPresenter &&
+    Boolean(widgetSessionKey) &&
+    !isCronRunSessionKey(widgetSessionKey);
   const includeMessageTool =
     !embedded ||
     options?.sourceReplyDeliveryMode === "message_tool_only" ||
@@ -411,9 +431,10 @@ export function createOpenClawTools(options?: OpenClawToolsOptions): AnyAgentToo
           createShowWidgetTool({
             sessionId: options?.sessionId,
             agentId: sessionAgentId,
-            agentSessionKey: options?.runSessionKey ?? options?.agentSessionKey,
+            agentSessionKey: widgetSessionKey,
             inlineHostEnabled: isCoreCanvasHostEnabled(resolvedConfig),
-            inlineClientAvailable: options?.clientCaps?.includes("inline-widgets") === true,
+            inlineClientAvailable: inlineWidgetClientAvailable,
+            pinnedOnly: scheduledPinnedWidgetOnly,
             presenters: widgetPresentation.presenters,
             presenterContext: widgetPresentation.context,
           }),
@@ -434,7 +455,10 @@ export function createOpenClawTools(options?: OpenClawToolsOptions): AnyAgentToo
     ...(embedded
       ? []
       : [
-          createGatewayTool(),
+          createGatewayTool({
+            senderIsOwner: options?.senderIsOwner,
+            requesterSenderId: options?.requesterSenderId,
+          }),
           ...createOpenClawDelegateToolsForRun({ ...options, sessionAgentId }),
         ]),
     createAgentsListTool({
@@ -485,6 +509,7 @@ export function createOpenClawTools(options?: OpenClawToolsOptions): AnyAgentToo
             agentId: sessionAgentId,
             sessionKey: options?.runSessionKey ?? options?.agentSessionKey,
             runId: options?.runId,
+            ...(options?.questionPrompt ? { questionPrompt: options.questionPrompt } : {}),
           }),
         ]
       : []),
@@ -499,6 +524,7 @@ export function createOpenClawTools(options?: OpenClawToolsOptions): AnyAgentToo
             agentId: sessionAgentId,
             sessionKey: options?.runSessionKey ?? options?.agentSessionKey,
             runId: options?.runId,
+            ...(options?.questionPrompt ? { questionPrompt: options.questionPrompt } : {}),
           }),
         ]
       : []),
@@ -623,7 +649,7 @@ export function createOpenClawTools(options?: OpenClawToolsOptions): AnyAgentToo
     options?.recordToolPrepStage?.("openclaw-tools:plugin-tools");
   }
 
-  allTools = filterToolsByClientCaps(allTools, options?.clientCaps);
+  allTools = finalizeAgentToolAvailability(filterToolsByClientCaps(allTools, options?.clientCaps));
   options?.recordToolPrepStage?.("openclaw-tools:client-capabilities");
   for (const tool of allTools) {
     bindAssembledAgentToolActionDescriptor(tool);

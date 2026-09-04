@@ -301,7 +301,6 @@ create_verified_peekaboo_snapshot() {
   PEEKABOO_SNAPSHOT_ROOT="$SWIFT_WORK_ROOT/snapshot"
   mkdir -p "$PEEKABOO_SNAPSHOT_ROOT"
   PEEKABOO_SNAPSHOT_IMAGE="$PEEKABOO_SNAPSHOT_ROOT/Peekaboo.dmg"
-  PEEKABOO_SNAPSHOT_MOUNT="$PEEKABOO_SNAPSHOT_ROOT/mount"
   mkdir "$PEEKABOO_SNAPSHOT_MOUNT"
   # -quiet suppresses failure stderr too; discard only routine stdout.
   hdiutil create -fs APFS -format UDRO \
@@ -450,7 +449,7 @@ cleanup_swift_architecture() {
     }
   fi
   if [[ "$cleanup_status" == "0" ]]; then
-    rm -rf "$PEEKABOO_SNAPSHOT_ROOT" "$SWIFT_PACKAGE_CONTAINER" "$SWIFT_WORK_ROOT/resource-backups"
+    rm -rf "$PEEKABOO_SNAPSHOT_ROOT" "$PEEKABOO_SNAPSHOT_MOUNT" "$SWIFT_PACKAGE_CONTAINER" "$SWIFT_WORK_ROOT/resource-backups"
   fi
   return "$cleanup_status"
 }
@@ -511,7 +510,7 @@ if [[ "${BASH_SOURCE[0]}" == "$0" ]]; then
   SWIFT_PACKAGE_CONTAINER="$SWIFT_WORK_ROOT/package"
   SWIFT_PACKAGE_ROOT="$SWIFT_PACKAGE_CONTAINER/apps/macos"
   PEEKABOO_SNAPSHOT_ROOT="$SWIFT_WORK_ROOT/snapshot"
-  PEEKABOO_SNAPSHOT_MOUNT="$PEEKABOO_SNAPSHOT_ROOT/mount"
+  PEEKABOO_SNAPSHOT_MOUNT="$9"
   case "$operation" in
     build) build_swift_architecture "$arch" ;;
     cleanup) cleanup_swift_architecture ;;

@@ -1,6 +1,8 @@
 import { html, nothing } from "lit";
 import { normalizeBasePath } from "../../../app-route-paths.ts";
 import { t } from "../../../i18n/index.ts";
+import { formatBytes } from "../../../lib/agents/display.ts";
+import type { MessageContentItem } from "../../../lib/chat/chat-types.ts";
 import { isImageMediaPath, isSvgImageMediaPath } from "../../../lib/media-file-extension.ts";
 import "./chat-audio-player.ts";
 import "./chat-svg-attachment.ts";
@@ -38,6 +40,27 @@ import {
   type ImageRenderOptions,
 } from "./chat-message-media.ts";
 import type { SidebarContent } from "./chat-sidebar.ts";
+
+type OmittedMediaItem = Extract<MessageContentItem, { type: "omitted_media" }>;
+
+export function renderOmittedMedia(items: OmittedMediaItem[]) {
+  if (items.length === 0) {
+    return nothing;
+  }
+  return html`${items.map((item) => {
+    const reason =
+      item.media.sizeBytes === undefined
+        ? t("chat.attachments.omittedFromHistory")
+        : t("chat.attachments.omittedFromHistoryWithSize", {
+            size: formatBytes(item.media.sizeBytes),
+          });
+    return renderAssistantAttachmentStatusCard({
+      label: t("chat.attachments.image"),
+      badge: t("chat.attachments.history"),
+      reason,
+    });
+  })}`;
+}
 
 type ManagedAttachmentAvailability =
   | { status: "checking"; refreshAfter?: number; refreshAttempts?: number }

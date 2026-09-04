@@ -1127,4 +1127,16 @@ describe("runtime postbuild static assets", () => {
       );
     }
   });
+
+  it.each(["shared-Y6bNiw2w.js", "shared-DTaQo6Hi.js"])(
+    "preserves the old updater node-runner ABI through %s",
+    async (chunk) => {
+      const rootDir = createTempDir("openclaw-runtime-postbuild-");
+
+      writeLegacyCliExitCompatChunks({ rootDir });
+
+      const bridge = await import(pathToFileURL(path.join(rootDir, "dist", chunk)).href);
+      expect(bridge.resolveNodeRunner()).toBe(process.execPath);
+    },
+  );
 });

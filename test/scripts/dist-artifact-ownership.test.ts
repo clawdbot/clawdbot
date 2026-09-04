@@ -9,6 +9,7 @@ import {
   resolveDistArtifactLockPath,
   withDistArtifactOwnership,
 } from "../../scripts/lib/dist-artifact-ownership.mts";
+import { BOUNDARY_PLUGIN_UNITS } from "../../scripts/lib/extension-boundary-inputs.mts";
 import {
   TSDOWN_NON_SDK_DTS_CONFIG_GROUPS,
   TSDOWN_PLUGIN_SDK_DTS_CONFIG_GROUPS,
@@ -761,16 +762,8 @@ describe.skipIf(process.platform === "win32")("dist artifact ownership", () => {
           compilerOptions: { outDir: "dist", tsBuildInfoFile: "dist/.tsbuildinfo" },
         }),
       );
-      for (const name of [
-        "qa-channel",
-        "memory-core",
-        "matrix",
-        "discord",
-        "slack",
-        "telegram",
-        "whatsapp",
-      ]) {
-        const entry = name === "matrix" ? "test-api.ts" : "api.ts";
+      for (const [name, entryName] of BOUNDARY_PLUGIN_UNITS) {
+        const entry = `${entryName}.ts`;
         write(root, `extensions/${name}/${entry}`, "export interface Plugin { id: string }\n");
         write(
           root,

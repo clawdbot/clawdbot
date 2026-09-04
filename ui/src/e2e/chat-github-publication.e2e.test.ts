@@ -1,6 +1,8 @@
+import { writeFile } from "node:fs/promises";
 import path from "node:path";
 import { expect, it } from "vitest";
 import { SESSION_PULL_REQUESTS_SUBSCRIBE_METHOD } from "../lib/session-pull-requests.ts";
+import { takeControlUiViewportScreenshot } from "../test-helpers/control-ui-e2e-screenshot.ts";
 import { installMockGateway } from "../test-helpers/control-ui-e2e.ts";
 import { createControlUiSessionRow } from "../test-helpers/control-ui-session-fixtures.ts";
 import {
@@ -162,11 +164,10 @@ suite.define(() => {
       const publish = page.getByRole("button", { name: "Publish PR" });
       await publish.waitFor();
       if (captureUiProof) {
-        await page.screenshot({
-          animations: "disabled",
-          fullPage: true,
-          path: path.join(suite.artifactDir, `${name}-workspace.png`),
-        });
+        await writeFile(
+          path.join(suite.artifactDir, `${name}-workspace.png`),
+          await takeControlUiViewportScreenshot(page, page.locator(".shell"), [publish]),
+        );
       }
       await expect.poll(() => publish.isEnabled()).toBe(ready);
       if (conflict) {
@@ -261,11 +262,12 @@ suite.define(() => {
       .toContain("My GitHub");
     expect(await gateway.getRequests("secrets.set")).toHaveLength(0);
     if (captureUiProof) {
-      await page.screenshot({
-        animations: "disabled",
-        fullPage: true,
-        path: path.join(suite.artifactDir, "05-personal-identity-changed.png"),
-      });
+      await writeFile(
+        path.join(suite.artifactDir, "05-personal-identity-changed.png"),
+        await takeControlUiViewportScreenshot(page, page.locator(".shell"), [
+          page.getByRole("button", { name: "Choose a new publication" }),
+        ]),
+      );
     }
   });
 
@@ -351,11 +353,10 @@ suite.define(() => {
       expect(await gateway.getRequests("sessions.github.publish")).toHaveLength(0);
       expect(await gateway.getRequests("sessions.github.confirm")).toHaveLength(0);
       if (captureUiProof) {
-        await page.screenshot({
-          animations: "disabled",
-          fullPage: true,
-          path: path.join(suite.artifactDir, "06-original-confirmation.png"),
-        });
+        await writeFile(
+          path.join(suite.artifactDir, "06-original-confirmation.png"),
+          await takeControlUiViewportScreenshot(page, page.locator(".shell"), [details]),
+        );
       }
       await page.getByRole("button", { name: "Confirm original publication" }).click();
       const confirmed = await gateway.waitForRequest("sessions.github.confirm");

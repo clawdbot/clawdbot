@@ -5,6 +5,17 @@ import type { GatewayPostReadySidecarHandle } from "./server-startup-post-attach
 
 type GatewayLogger = ReturnType<typeof createSubsystemLogger>;
 
+/** A committed auth change remains successful even if its best-effort UI notification fails. */
+export function broadcastChatMetadataChanged(
+  context: Pick<GatewayRequestContext, "broadcast" | "logGateway">,
+): void {
+  try {
+    context.broadcast("chat.metadata.changed", {}, { dropIfSlow: true });
+  } catch {
+    context.logGateway.warn("chat metadata change notification failed");
+  }
+}
+
 export async function createGatewayChatMetadataLifecycle(params: {
   getConfig: () => OpenClawConfig;
   minimalTestGateway: boolean;
@@ -37,7 +48,11 @@ export async function createGatewayChatMetadataLifecycle(params: {
           refreshOnRead: true,
         }
       : {}),
-    onChanged: () => context?.broadcast("chat.metadata.changed", {}, { dropIfSlow: true }),
+    onChanged: () => {
+      if (context) {
+        broadcastChatMetadataChanged(context);
+      }
+    },
     log: params.log,
   });
   const refreshLogged = () => {
@@ -53,7 +68,7 @@ export async function createGatewayChatMetadataLifecycle(params: {
       refreshLogged();
     }
   };
-  const registerRefreshListeners = async (): Promise<GatewayPostReadySidecarHandle | undefined> => {
+  const registerRefreshListeners = async (): Promise<(() => void) | undefined> => {
     if (params.minimalTestGateway) {
       return undefined;
     }
@@ -93,12 +108,10 @@ export async function createGatewayChatMetadataLifecycle(params: {
       registerRuntimeAuthProfileStoreMutationListener(() => {
         invalidateForSubordinateChange();
       });
-    return {
-      stop: async () => {
-        unregisterRuntimeAuthProfileStoreMutation();
-        unregisterPreparedModelRuntimePublication();
-        unregisterSkillsChange();
-      },
+    return () => {
+      unregisterRuntimeAuthProfileStoreMutation();
+      unregisterPreparedModelRuntimePublication();
+      unregisterSkillsChange();
     };
   };
 
@@ -108,9 +121,16 @@ export async function createGatewayChatMetadataLifecycle(params: {
       sidecars: GatewayPostReadySidecarHandle[],
     ) => {
       context = next;
-      const sidecar = await registerRefreshListeners();
-      if (sidecar) {
-        sidecars.push(sidecar);
+      const unregister = await registerRefreshListeners();
+      // Minimal Gateways still own read-triggered preparation. Every lifetime
+      // must join it before shutdown retires the config and model owners.
+      sidecars.push({
+        stop: async () => {
+          unregister?.();
+          await runtime.stop();
+        },
+      });
+      if (unregister) {
         // Publications that complete before listener registration would otherwise be missed.
         // During ordinary startup the owner is published after attachment, so an unavailable
         // snapshot here is expected and the publication listener performs the first refresh.

@@ -209,8 +209,15 @@ describe("executeAgentTurn: result and tool delivery", () => {
   });
 
   it("does not classify silent NO_REPLY terminal results for fallback", async () => {
+    state.runEmbeddedAgentMock.mockResolvedValueOnce({
+      payloads: [{ text: "NO_REPLY" }],
+      meta: {},
+    });
     state.runWithModelFallbackMock.mockImplementationOnce(async (params: FallbackRunnerParams) => {
-      const result = { payloads: [{ text: "NO_REPLY" }], meta: {} };
+      const result = requireRecord(
+        await params.run("openai", "gpt-5.4", initialFallbackAttemptOptions(params)),
+        "executed fallback result",
+      );
       expect(
         await params.classifyResult?.({
           result,
@@ -297,8 +304,12 @@ describe("executeAgentTurn: result and tool delivery", () => {
       hasSentPayload: vi.fn(() => false),
       getSentMediaUrls: vi.fn(() => []),
     };
+    state.runEmbeddedAgentMock.mockResolvedValueOnce({ payloads: [], meta: {} });
     state.runWithModelFallbackMock.mockImplementationOnce(async (params: FallbackRunnerParams) => {
-      const result = { payloads: [], meta: {} };
+      const result = requireRecord(
+        await params.run("openai", "gpt-5.4", initialFallbackAttemptOptions(params)),
+        "executed fallback result",
+      );
       expect(
         await params.classifyResult?.({
           result,
@@ -328,8 +339,12 @@ describe("executeAgentTurn: result and tool delivery", () => {
   });
 
   it("classifies final GPT-5 terminal-empty results instead of silently succeeding", async () => {
+    state.runEmbeddedAgentMock.mockResolvedValueOnce({ payloads: [], meta: {} });
     state.runWithModelFallbackMock.mockImplementationOnce(async (params: FallbackRunnerParams) => {
-      const result = { payloads: [], meta: {} };
+      const result = requireRecord(
+        await params.run("openai", "gpt-5.4", initialFallbackAttemptOptions(params)),
+        "executed fallback result",
+      );
       const classification = await params.classifyResult?.({
         result,
         provider: "openai",

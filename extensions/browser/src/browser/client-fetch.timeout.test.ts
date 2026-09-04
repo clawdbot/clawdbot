@@ -20,9 +20,13 @@ vi.mock("./control-auth.js", () => ({
 vi.mock("./bridge-auth-registry.js", () => ({
   getBridgeAuthForPort: authMocks.getBridgeAuthForPort,
 }));
-vi.mock("openclaw/plugin-sdk/ssrf-runtime", () => ({
-  fetchWithSsrFGuard: (...args: unknown[]) => fetchWithSsrFGuardMock(...args),
-}));
+vi.mock("openclaw/plugin-sdk/ssrf-runtime", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("openclaw/plugin-sdk/ssrf-runtime")>();
+  return {
+    ...actual,
+    fetchWithSsrFGuard: (...args: unknown[]) => fetchWithSsrFGuardMock(...args),
+  };
+});
 
 const { fetchBrowserJson } = await import("./client-fetch.js");
 

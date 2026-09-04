@@ -61,7 +61,9 @@ describe("application update reconciliation races", () => {
       );
     });
     const harness = createGatewayHarness(client(request));
-    const overlays = createApplicationOverlays(harness.gateway);
+    const overlays = createApplicationOverlays(harness.gateway, {
+      getActiveSessionKey: () => "agent:main:campaign-chat",
+    });
     const schedule = {
       channel: "stable",
       autoEnabled: true,
@@ -73,7 +75,9 @@ describe("application update reconciliation races", () => {
     const running = overlays.runUpdate();
     try {
       await flushMicrotasks();
-      expect(request).toHaveBeenCalledWith("update.run", {});
+      expect(request).toHaveBeenCalledWith("update.run", {
+        sessionKey: "agent:main:campaign-chat",
+      });
       harness.emitEvent("update.available", {
         schedule: {
           ...schedule,
@@ -136,7 +140,9 @@ describe("application update reconciliation races", () => {
     });
     const gatewayClient = client(request);
     const harness = createGatewayHarness(gatewayClient);
-    const overlays = createApplicationOverlays(harness.gateway);
+    const overlays = createApplicationOverlays(harness.gateway, {
+      getActiveSessionKey: () => "agent:main:disconnect-chat",
+    });
 
     try {
       harness.update({
@@ -154,7 +160,9 @@ describe("application update reconciliation races", () => {
 
       const running = overlays.runUpdate();
       await flushMicrotasks();
-      expect(request).toHaveBeenCalledWith("update.run", {});
+      expect(request).toHaveBeenCalledWith("update.run", {
+        sessionKey: "agent:main:disconnect-chat",
+      });
       expect(overlays.snapshot.updateReconciliationPending).toBe(true);
 
       harness.update({ phase: "stopped" });

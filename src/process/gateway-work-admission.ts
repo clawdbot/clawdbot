@@ -361,7 +361,7 @@ export function tryBeginGatewayPreparedRestartRootWorkAdmission(): GatewayRootWo
 }
 
 /** Independent detached work counts separately even when launched by an admitted parent. */
-function tryBeginGatewayIndependentRootWorkAdmission(
+export function tryBeginGatewayIndependentRootWorkAdmission(
   origin = "independent",
 ): GatewayRootWorkAdmissionLease | null {
   if (
@@ -578,6 +578,9 @@ export function tryBeginGatewaySuspendAdmission(
 export function resetGatewayWorkAdmission(): void {
   // SIGUSR1 can abandon old async chains before their finally blocks run.
   // Retire their ALS records so surviving chains must re-enter admission.
+  GATEWAY_WORK_ADMISSION_STATE.restartDrainController.abort(
+    new GatewayDrainingError("gateway runtime reset"),
+  );
   for (const admission of GATEWAY_WORK_ADMISSION_STATE.activeRootWork) {
     admission.references = 0;
     admission.retiredByReset = true;

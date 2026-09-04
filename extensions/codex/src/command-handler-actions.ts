@@ -194,7 +194,7 @@ export async function handleNativeGoal(
   if (!target) {
     return "Cannot manage the Codex goal because this command has no stable binding identity.";
   }
-  const binding = await deps.bindingStore.read(target.identity);
+  const binding = deps.bindingStore.read(target.identity);
   if (!binding?.threadId) {
     return "No Codex thread is attached to this OpenClaw session yet.";
   }
@@ -365,7 +365,7 @@ export async function setConversationModel(
       currentSession && currentSession.sessionId === ctx.sessionId
         ? (currentSession.modelOverride ?? currentSession.model)
         : undefined;
-    const binding = await deps.bindingStore.read(target.identity);
+    const binding = deps.bindingStore.read(target.identity);
     // Direct sessions report their desired selection; bound conversations
     // must never mistake an ambient outer-session model for native ownership.
     const activeModel =
@@ -455,7 +455,7 @@ export async function startThreadAction(
   if (!target) {
     return `Cannot start Codex ${kind === "compact" ? "compaction" : "review"} because this command did not include a stable binding identity.`;
   }
-  const binding = await deps.bindingStore.read(target.identity);
+  const binding = deps.bindingStore.read(target.identity);
   if (!binding?.threadId) {
     return `No Codex thread is attached to this OpenClaw session yet.`;
   }
@@ -484,7 +484,7 @@ export async function startThreadAction(
     }
     if (target.identity.kind === "conversation") {
       const sessionBinding = ctx.sessionId
-        ? await deps.bindingStore.read(
+        ? deps.bindingStore.read(
             sessionBindingIdentity({
               sessionId: ctx.sessionId,
               sessionKey: ctx.sessionKey,
@@ -543,7 +543,7 @@ function supervisedCommandGuard(
       includeTurns: false,
     });
     scope.assertCurrent();
-    if (!isDeepStrictEqual(await deps.bindingStore.read(identity), binding)) {
+    if (!isDeepStrictEqual(deps.bindingStore.read(identity), binding)) {
       throw new Error("Codex command binding changed before model execution");
     }
     scope.assertCurrent();

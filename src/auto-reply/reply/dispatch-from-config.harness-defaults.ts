@@ -13,6 +13,7 @@ import type { SessionEntry } from "../../config/sessions/types.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import { logVerbose } from "../../globals.js";
 import { formatErrorMessage } from "../../infra/errors.js";
+import { resolveSessionPinnedHarnessId } from "../../sessions/agent-harness-session-key.js";
 import { resolveStoredModelOverride } from "../../sessions/stored-model-overrides.js";
 import {
   sessionDeliveryChannel,
@@ -301,8 +302,7 @@ function resolveHarnessSourceVisibleRepliesDefault(params: {
         config: params.cfg,
         agentId: params.sessionAgentId,
         sessionKey: params.sessionKey,
-        agentHarnessId:
-          params.entry?.modelSelectionLocked === true ? params.entry.agentHarnessId : undefined,
+        agentHarnessId: resolveSessionPinnedHarnessId(params.entry),
         agentHarnessRuntimeOverride,
       });
       return (

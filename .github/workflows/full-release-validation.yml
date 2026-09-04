@@ -34,7 +34,7 @@ on:
         default: false
         type: boolean
       telegram_waiver:
-        description: Explicit owner-approved Telegram integration waiver for stable 2026.8.1 only
+        description: Reviewed Telegram waiver (2026.8.1 or 2026.9.1) for stable/full validation
         required: false
         default: ""
         type: string
@@ -108,7 +108,7 @@ on:
         default: ""
         type: string
       cross_os_suite_filter:
-        description: Optional focused cross-OS suite filter, e.g. windows/packaged-upgrade or packaged-fresh
+        description: Optional cross-OS selection for all or cross-os runs, e.g. ubuntu,macos or windows/packaged-upgrade
         required: false
         default: ""
         type: string
@@ -271,6 +271,7 @@ jobs:
           UPGRADE_SURVIVOR_SCENARIOS: ${{ (inputs.run_release_soak || inputs.release_profile == 'stable' || inputs.release_profile == 'full') && 'reported-issues' || '' }}
           ALLOW_FROZEN_TARGET_SCENARIO_OMISSIONS: ${{ inputs.target_context_ref != '' }}
           ALLOW_UNRELEASED_CHANGELOG: ${{ inputs.allow_unreleased_changelog || (inputs.target_context_ref == '' && (inputs.ref == 'main' || inputs.ref == 'refs/heads/main')) }}
+          PACKAGE_PUBLISHED: ${{ inputs.release_package_spec != '' }}
           RELEASE_PACKAGE_SPEC: ${{ inputs.release_package_spec }}
           PACKAGE_ACCEPTANCE_PACKAGE_SPEC: ${{ inputs.package_acceptance_package_spec }}
           RERUN_GROUP: ${{ inputs.rerun_group }}
@@ -290,6 +291,7 @@ jobs:
             --arg upgradeSurvivorScenarios "$UPGRADE_SURVIVOR_SCENARIOS" \
             --argjson allowFrozenTargetScenarioOmissions "$ALLOW_FROZEN_TARGET_SCENARIO_OMISSIONS" \
             --argjson allowUnreleasedChangelog "$ALLOW_UNRELEASED_CHANGELOG" \
+            --argjson packagePublished "$PACKAGE_PUBLISHED" \
             --arg sharedImagePolicy "no-push-artifact" \
             '$ARGS.named' > "$input"
           result="$(
@@ -348,6 +350,7 @@ jobs:
           NPM_TELEGRAM_PACKAGE_SPEC: ${{ inputs.npm_telegram_package_spec }}
           RERUN_GROUP: ${{ inputs.rerun_group }}
           LIVE_SUITE_FILTER: ${{ inputs.live_suite_filter }}
+          CROSS_OS_SUITE_FILTER: ${{ steps.filters.outputs.cross_os_suite_filter }}
           TARGET_CONTEXT_REF: ${{ inputs.target_context_ref }}
           TARGET_REF: ${{ inputs.ref }}
           TARGET_SHA: ${{ steps.resolve.outputs.sha }}
@@ -448,7 +451,8 @@ jobs:
           const policy = releaseContext && beta && train === 'beta' ? 'npm-beta-v1'
             : releaseContext && stable && train === 'stable' ? 'npm-stable-v1' : undefined;
           normalizeReleaseCoveragePolicy({ coveragePolicy: policy, releaseProfile: env.RELEASE_PROFILE,
-            rerunGroup: env.RERUN_GROUP, runReleaseSoak: env.RUN_RELEASE_SOAK, targetVersion: version.version });
+            rerunGroup: env.RERUN_GROUP, runReleaseSoak: env.RUN_RELEASE_SOAK, targetVersion: version.version,
+            crossOsSuiteFilter: env.CROSS_OS_SUITE_FILTER });
           const scope = policy === 'npm-beta-v1' ? 'npm-beta' : policy === 'npm-stable-v1' ? 'npm-stable' : 'full';
           appendFileSync(env.GITHUB_OUTPUT, `npm_dist_tag=${distTag}\nrelease_candidate_branch=${branch}\ncoverage_policy=${policy ?? ''}\nci_release_scope=${scope}\nskip_package_telegram_e2e=${beta ? 'true' : env.SKIP_PACKAGE_TELEGRAM_E2E}\n`);
           NODE
@@ -800,7 +804,7 @@ jobs:
             # fresh run id (read-after-write lag) and can briefly report the default
             # display_title before run-name evaluates. Both are retryable; a REAL run
             # object with mismatched identity fields still refuses immediately.
-            for attempt in $(seq 1 12); do
+            for attempt in $(seq 1 60); do
               if ! candidate_run_json="$(
                 gh_with_retry api "repos/${GITHUB_REPOSITORY}/actions/runs/${candidate_run_id}"
               )" || ! jq -e --argjson id "$candidate_run_id" '.id == $id' \
@@ -1555,13 +1559,7 @@ jobs:
           CANDIDATE_REQUIRED: ${{ needs.resolve_target.outputs.candidate_required }}
           CANDIDATE_ACQUISITION_RESULT: ${{ needs.candidate_acquisition.result }}
           CANDIDATE_EVIDENCE_JSON: ${{ needs.candidate_acquisition.outputs.binding_json }}
-          CANDIDATE_RELEASE_SOAK: ${{ inputs.run_release_soak || inputs.release_profile == 'stable' || inputs.release_profile == 'full' }}
-          CANDIDATE_UPGRADE_SURVIVOR_BASELINE: openclaw@latest
-          CANDIDATE_UPGRADE_SURVIVOR_BASELINES: ""
-          CANDIDATE_UPGRADE_SURVIVOR_SCENARIOS: ${{ (inputs.run_release_soak || inputs.release_profile == 'stable' || inputs.release_profile == 'full') && 'reported-issues' || '' }}
-          CANDIDATE_ALLOW_FROZEN_TARGET_SCENARIO_OMISSIONS: ${{ inputs.target_context_ref != '' }}
-          CANDIDATE_ALLOW_UNRELEASED_CHANGELOG: ${{ inputs.allow_unreleased_changelog || (inputs.target_context_ref == '' && (inputs.ref == 'main' || inputs.ref == 'refs/heads/main')) }}
-          CANDIDATE_SHARED_IMAGE_POLICY: no-push-artifact
+          CANDIDATE_REQUEST_JSON: ${{ needs.resolve_target.outputs.candidate_request_json }}
           FULL_RELEASE_RESTORE_PLAN: ${{ github.run_attempt != 1 }}
           FULL_RELEASE_EXECUTION_PLAN_PATH: ${{ runner.temp }}/full-release-execution-plan/full-release-execution-plan.json
         run: |
@@ -1595,17 +1593,7 @@ jobs:
               --arg candidateRequired "$CANDIDATE_REQUIRED" \
               --arg candidateAcquisitionResult "$CANDIDATE_ACQUISITION_RESULT" \
               --argjson candidateEvidence "${CANDIDATE_EVIDENCE_JSON:-null}" \
-              --arg candidateRepository "$GITHUB_REPOSITORY" \
-              --arg candidateTargetSha "$TARGET_SHA" \
-              --arg candidateToolingSha "$GITHUB_SHA" \
-              --arg candidateReleaseProfile "$RELEASE_PROFILE" \
-              --argjson candidateReleaseSoak "$CANDIDATE_RELEASE_SOAK" \
-              --arg candidateUpgradeSurvivorBaseline "$CANDIDATE_UPGRADE_SURVIVOR_BASELINE" \
-              --arg candidateUpgradeSurvivorBaselines "$CANDIDATE_UPGRADE_SURVIVOR_BASELINES" \
-              --arg candidateUpgradeSurvivorScenarios "$CANDIDATE_UPGRADE_SURVIVOR_SCENARIOS" \
-              --argjson candidateAllowFrozenTargetScenarioOmissions "$CANDIDATE_ALLOW_FROZEN_TARGET_SCENARIO_OMISSIONS" \
-              --argjson candidateAllowUnreleasedChangelog "$CANDIDATE_ALLOW_UNRELEASED_CHANGELOG" \
-              --arg candidateSharedImagePolicy "$CANDIDATE_SHARED_IMAGE_POLICY" \
+              --argjson candidateRequestInput "$CANDIDATE_REQUEST_JSON" \
               --arg normalCiResult "$NORMAL_CI_RESULT" \
               --arg normalCiRunId "$NORMAL_CI_RUN_ID" \
               --arg normalCiRunAttempt "$NORMAL_CI_RUN_ATTEMPT" \
@@ -1660,19 +1648,7 @@ jobs:
                 candidateRequired: $candidateRequired,
                 candidateAcquisitionResult: $candidateAcquisitionResult,
                 candidateEvidence: $candidateEvidence,
-                candidateRequestInput: {
-                  repository: $candidateRepository,
-                  targetSha: $candidateTargetSha,
-                  toolingSha: $candidateToolingSha,
-                  releaseProfile: $candidateReleaseProfile,
-                  releaseSoak: $candidateReleaseSoak,
-                  upgradeSurvivorBaseline: $candidateUpgradeSurvivorBaseline,
-                  upgradeSurvivorBaselines: $candidateUpgradeSurvivorBaselines,
-                  upgradeSurvivorScenarios: $candidateUpgradeSurvivorScenarios,
-                  allowFrozenTargetScenarioOmissions: $candidateAllowFrozenTargetScenarioOmissions,
-                  allowUnreleasedChangelog: $candidateAllowUnreleasedChangelog,
-                  sharedImagePolicy: $candidateSharedImagePolicy
-                },
+                candidateRequestInput: $candidateRequestInput,
                 children: {
                   normalCi: {result: $normalCiResult, runId: $normalCiRunId, runAttempt: $normalCiRunAttempt, url: $normalCiUrl},
                   pluginPrereleaseIndependent: {result: $pluginPrereleaseIndependentResult, runId: $pluginPrereleaseIndependentRunId, runAttempt: $pluginPrereleaseIndependentRunAttempt, url: $pluginPrereleaseIndependentUrl},

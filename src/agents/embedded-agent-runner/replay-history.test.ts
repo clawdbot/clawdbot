@@ -6,10 +6,13 @@ import { OPENCLAW_TRANSCRIPT_ARTIFACT_API } from "../../shared/transcript-only-o
 import {
   INTERNAL_RUNTIME_CONTEXT_BEGIN,
   INTERNAL_RUNTIME_CONTEXT_END,
-  OPENCLAW_NEXT_TURN_RUNTIME_CONTEXT_HEADER,
   OPENCLAW_RUNTIME_CONTEXT_NOTICE,
 } from "../internal-runtime-context.js";
 import { normalizeAssistantReplayContent } from "./replay-history.js";
+
+// Preface of carriers persisted before the stable system prompt explained the markers.
+const LEGACY_NEXT_TURN_RUNTIME_CONTEXT_HEADER =
+  "OpenClaw runtime context for the active user request in this turn. Do not reply to or describe this context. Use it to continue answering the active user request now. Do not wait for another message.";
 
 const FALLBACK_TEXT = "[assistant turn failed before producing content]";
 const COPIED_INBOUND_METADATA_ONLY_TEXT = [
@@ -426,7 +429,7 @@ describe("normalizeAssistantReplayContent", () => {
             INTERNAL_RUNTIME_CONTEXT_BEGIN,
             "keep this internal",
             INTERNAL_RUNTIME_CONTEXT_END,
-            OPENCLAW_NEXT_TURN_RUNTIME_CONTEXT_HEADER,
+            LEGACY_NEXT_TURN_RUNTIME_CONTEXT_HEADER,
             OPENCLAW_RUNTIME_CONTEXT_NOTICE,
             "",
             "Visible after",

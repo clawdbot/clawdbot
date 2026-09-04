@@ -17,7 +17,7 @@ import type { SessionEntrySummary } from "../../config/sessions/session-accessor
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import { isDiagnosticFlagEnabled } from "../../infra/diagnostic-flags.js";
 import { formatErrorMessage } from "../../infra/errors.js";
-import { resolveHeartbeatSummaryForAgent } from "../../infra/heartbeat-summary.js";
+import { resolveHeartbeatSummariesForAgents } from "../../infra/heartbeat-summary-projection.js";
 import { redactToolPayloadTextWithConfig } from "../../logging/redact.js";
 import { createSubsystemLogger } from "../../logging/subsystem.js";
 import {
@@ -67,9 +67,6 @@ const debugHealth = (
     healthLog.info(message, meta);
   }
 };
-
-const resolveHeartbeatSummary = (cfg: OpenClawConfig, agentId: string) =>
-  resolveHeartbeatSummaryForAgent(cfg, agentId);
 
 export function resolveHealthAgentOrder(cfg: OpenClawConfig) {
   const defaultAgentId = tryResolveLegacyCompatibilityAgentId(cfg);
@@ -144,8 +141,12 @@ export async function buildHealthAgentSummaries(
   cfg: OpenClawConfig,
   { defaultAgentId, ordered }: ReturnType<typeof resolveHealthAgentOrder>,
 ): Promise<AgentHealthSummary[]> {
-  const reader = await createHealthSessionStoreReader(ordered.map((entry) => entry.id));
-  return ordered.map((entry) => {
+  const agentIds = ordered.map((entry) => entry.id);
+  const reader = await createHealthSessionStoreReader(agentIds);
+  // One roster pass for every agent: per-agent resolution re-walks the roster
+  // and froze large fleets for tens of seconds each refresh (#137570).
+  const heartbeats = resolveHeartbeatSummariesForAgents(cfg, agentIds);
+  return ordered.map((entry, index) => {
     const store = reader.read(
       resolveSessionStorePathCore(cfg.session?.store, { agentId: entry.id }),
       entry.id,
@@ -154,7 +155,7 @@ export async function buildHealthAgentSummaries(
       agentId: entry.id,
       name: entry.name,
       isDefault: entry.id === defaultAgentId,
-      heartbeat: resolveHeartbeatSummary(cfg, entry.id),
+      heartbeat: expectDefined(heartbeats[index], "heartbeat summary"),
       sessions: projectHealthSessions(store.path, store),
     };
   });

@@ -11,6 +11,7 @@ import {
   type ConnectPairingRequiredReason,
 } from "../../../../packages/gateway-protocol/src/connect-error-details.js";
 import { ErrorCodes, errorShape } from "../../../../packages/gateway-protocol/src/index.js";
+import { getRuntimeConfigSnapshot } from "../../../config/runtime-snapshot.js";
 import {
   approveBootstrapDevicePairing,
   approveDevicePairing,
@@ -28,6 +29,7 @@ import { roleScopesAllow } from "../../../shared/operator-scope-compat.js";
 import { isBrowserCopilotClient } from "../../../utils/message-channel.js";
 import { pruneSupersededSilentPairingsAfterApproval } from "../../device-pairing-prune.js";
 import { normalizeNodeHostCompatibilityMetadata } from "../../node-legacy-protocol-filter.js";
+import { isScopelessNodePairingRequest } from "../../node-pairing-auto-approve.js";
 import { normalizeChromeExtensionOrigin } from "../../origin-check.js";
 import { formatForLog } from "../../ws-log.js";
 import { truncateCloseReason } from "../close-reason.js";
@@ -35,6 +37,7 @@ import {
   applyConnectionScopeCap,
   isStartupNodeBootstrapConnect,
   rejectGatewayStartupConnect,
+  resolveGatewayConnectPolicyFailure,
 } from "./connect-admission.js";
 import {
   pairedDeviceAllowsBootstrapProfile,
@@ -43,7 +46,10 @@ import {
 import { issueGatewayConnectDeviceTokens } from "./connect-device-tokens.js";
 import { authorizeExistingGatewayDevice } from "./connect-existing-device.js";
 import { startGatewayNodePairingSshApproval } from "./connect-node-pairing-ssh.js";
-import { resolvePairingApprovalPlan } from "./connect-pairing-approval-plan.js";
+import {
+  resolveLocalPairingApproval,
+  resolvePairingApprovalPlan,
+} from "./connect-pairing-approval-plan.js";
 import type {
   AuthenticatedGatewayConnect,
   DeviceAuthorizedGatewayConnect,
@@ -84,6 +90,8 @@ export async function authorizeGatewayConnectDevice(
     skipLocalBackendSelfPairing,
     controlUiPairingKind,
   } = state;
+  const isConnectAuthorizationCurrent = () =>
+    resolveGatewayConnectPolicyFailure(context, state) === undefined;
   const failPairingHandshake = (params: {
     message: string;
     details?:
@@ -166,7 +174,7 @@ export async function authorizeGatewayConnectDevice(
           requestedScopes,
           allowedScopes: resolvePairedAccessScopes(pairedCandidate),
         });
-      const plan = await resolvePairingApprovalPlan({
+      const pairingPlanParams = {
         reason,
         existingPairedDevice,
         state,
@@ -179,9 +187,10 @@ export async function authorizeGatewayConnectDevice(
         devicePublicKey,
         scopes,
         hasRequestedScopes,
-        connectionScopeCap: (capped) =>
+        connectionScopeCap: (capped: string[]) =>
           applyConnectionScopeCap({ scopes: capped, upgradeReq: context.handler.upgradeReq }),
-      });
+      };
+      const plan = await resolvePairingApprovalPlan(pairingPlanParams);
       // Same-key reconnects reuse paired grants without pairing or false upgrade audits.
       if (
         reason === "scope-upgrade" &&
@@ -266,37 +275,60 @@ export async function authorizeGatewayConnectDevice(
       const inlineApprovalAttempted =
         trustedProxyApprovalScopes !== null || pairing.request.silent === true;
       if (inlineApprovalAttempted) {
-        approved =
-          trustedProxyApprovalScopes !== null
-            ? await approveDevicePairing(pairing.request.requestId, {
-                callerScopes: trustedProxyApprovalScopes,
-                accessMetadata: clientAccessMetadata,
-                approvedVia: "trusted-proxy",
-                autoApproveNewDeviceScopes: trustedProxyApprovalScopes,
-              })
-            : plan.bootstrapApprovalProfile
-              ? await approveBootstrapDevicePairing(
-                  pairing.request.requestId,
-                  plan.bootstrapApprovalProfile,
-                  { accessMetadata: clientAccessMetadata },
-                )
-              : await approveDevicePairing(pairing.request.requestId, {
-                  // A silent self-grant's authority is locality plus proven
-                  // local-grade auth, not the requested scope list. Approval
-                  // merges the existing row's scopes back in, so the caller
-                  // set must cover requested plus already-held — nothing new.
-                  callerScopes: uniqueStrings([
-                    ...scopes,
-                    ...(existingPairedDevice
-                      ? resolvePairedAccessScopes(existingPairedDevice)
-                      : []),
-                  ]),
-                  accessMetadata: clientAccessMetadata,
-                  // Same-host local approvals are prune-eligible "silent";
-                  // trusted-CIDR approvals cross hosts and must never be
-                  // auto-pruned, so they carry their own provenance.
-                  approvedVia: plan.allowSilentLocalPairing ? "silent" : "trusted-cidr",
-                });
+        if (trustedProxyApprovalScopes !== null) {
+          approved = await approveDevicePairing(pairing.request.requestId, {
+            callerScopes: trustedProxyApprovalScopes,
+            accessMetadata: clientAccessMetadata,
+            approvedVia: "trusted-proxy",
+            autoApproveNewDeviceScopes: trustedProxyApprovalScopes,
+            isApprovalCurrent: isConnectAuthorizationCurrent,
+          });
+        } else if (plan.bootstrapApprovalProfile) {
+          approved = await approveBootstrapDevicePairing(
+            pairing.request.requestId,
+            plan.bootstrapApprovalProfile,
+            {
+              accessMetadata: clientAccessMetadata,
+              isApprovalCurrent: isConnectAuthorizationCurrent,
+            },
+          );
+        } else if (plan.localApproval) {
+          approved = await approveDevicePairing(pairing.request.requestId, {
+            // A silent self-grant's authority is locality plus proven
+            // local-grade auth, not the requested scope list. Approval
+            // merges the existing row's scopes back in, so the caller
+            // set must cover requested plus already-held — nothing new.
+            callerScopes: uniqueStrings([
+              ...scopes,
+              ...(existingPairedDevice ? resolvePairedAccessScopes(existingPairedDevice) : []),
+            ]),
+            accessMetadata: clientAccessMetadata,
+            // Same-host local approvals are prune-eligible "silent";
+            // trusted-CIDR approvals cross hosts and must never be
+            // auto-pruned, so they carry their own provenance.
+            approvedVia: plan.localApproval,
+            isApprovalCurrent: ({ pending, existing }) => {
+              const currentConfig = getRuntimeConfigSnapshot();
+              if (
+                !currentConfig ||
+                !isConnectAuthorizationCurrent() ||
+                pending.deviceId !== device.id ||
+                pending.publicKey !== devicePublicKey ||
+                (plan.localApproval === "trusted-cidr" && !isScopelessNodePairingRequest(pending))
+              ) {
+                return false;
+              }
+              return (
+                resolveLocalPairingApproval({
+                  ...pairingPlanParams,
+                  configSnapshot: currentConfig,
+                  existingPairedDevice: existing ?? null,
+                  scopes: pending.scopes ?? [],
+                }) === plan.localApproval
+              );
+            },
+          });
+        }
         if (approved?.status === "approved") {
           if (trustedProxyApprovalScopes !== null) {
             scopes = trustedProxyApprovalScopes;
@@ -518,6 +550,7 @@ export async function authorizeGatewayConnectDevice(
           state: { ...state, scopes, handoffBootstrapProfile },
           scopes,
           hasApprovedDeviceBaseline: hasServerApprovedDeviceTokenBaseline,
+          isIssuanceCurrent: isConnectAuthorizationCurrent,
         });
 
   return {

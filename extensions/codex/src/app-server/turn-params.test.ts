@@ -52,6 +52,8 @@ describe("buildTurnStartParams temporal context", () => {
   it("emits the host fallback after a timezone override is removed", () => {
     vi.spyOn(Date, "now").mockReturnValue(Date.parse("2026-09-02T00:30:00.000Z"));
     const hostTimezone = Intl.DateTimeFormat().resolvedOptions().timeZone?.trim() || "UTC";
+    const configuredTimezone =
+      hostTimezone === "America/Los_Angeles" ? "Asia/Tokyo" : "America/Los_Angeles";
     const options = {
       threadId: "thread-1",
       cwd: "/repo",
@@ -60,20 +62,20 @@ describe("buildTurnStartParams temporal context", () => {
     };
     const configured = buildTurnStartParams(
       createParams("/tmp/session.jsonl", "/repo", {
-        agents: { defaults: { userTimezone: "America/Los_Angeles" } },
+        agents: { defaults: { userTimezone: configuredTimezone } },
       }),
       options,
     );
     const fallback = buildTurnStartParams(createParams("/tmp/session.jsonl", "/repo"), options);
 
     expect(configured.additionalContext?.openclaw_temporal_context?.value).toContain(
-      "Current date: 2026-09-01",
+      `Time zone: ${configuredTimezone}`,
     );
     expect(fallback.additionalContext?.openclaw_temporal_context?.value).toContain(
       `Time zone: ${hostTimezone}`,
     );
     expect(fallback.additionalContext?.openclaw_temporal_context?.value).not.toContain(
-      "America/Los_Angeles",
+      configuredTimezone,
     );
   });
 });

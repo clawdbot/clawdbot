@@ -153,6 +153,12 @@ restrictions still override broader global policy. OpenClaw-owned MCP tools
 remain authorized by the Gateway rather than receiving duplicate native
 approval; other MCP tools stay host-permission controlled.
 
+Claude's native `AskUserQuestion` uses OpenClaw's structured question flow. When
+OpenClaw rejects malformed questions, it reports the failed field and
+constraint without repeating the submitted text, and asks Claude to correct
+the field and retry. Invalid questions do not prompt the user. If the user
+skips a valid question, Claude instead continues with its best judgment.
+
 When the effective exec ask setting is `on-miss` or `always`, OpenClaw relays
 native or extension tool requests as interactive approvals to the session's
 channel: **Allow once** permits the single call, **Allow always** permits that
@@ -302,7 +308,7 @@ api.registerTextTransforms({
 
 `input` rewrites the system prompt and user prompt passed to the CLI. `output` rewrites streamed assistant text and parsed final text before OpenClaw handles its own control markers and channel delivery; for provider-backed model calls it also restores string values inside structured tool-call arguments after stream repair and before tool execution. Raw provider JSON fragments are left unchanged; consumers should use the structured partial, end, or result payload.
 
-For CLIs that emit provider-specific JSONL events, set `jsonlDialect` on that backend's config: `claude-stream-json` for Claude Code-compatible streams, `gemini-stream-json` for Gemini CLI `stream-json` events.
+For CLIs that emit provider-specific JSONL events, set `jsonlDialect` on that backend's config: `claude-stream-json` for Claude Code-compatible streams, `gemini-stream-json` for Gemini CLI `stream-json` events. Declaring `claude-stream-json` is a contract: the backend's `result` records carry Claude Code's terminal semantics, including `terminal_reason`. A reply-less `result` whose `terminal_reason` says the CLI ended the turn on purpose after work may have run (`hook_stopped`, `stop_hook_prevented`, `aborted_tools`, `aborted_streaming`, `budget_exhausted`, or `max_turns`) is a recorded turn stop: OpenClaw reports that reason to the user and does not replay the turn on a fallback model, because the backend's tool actions may already have run.
 
 ## Native compaction ownership
 

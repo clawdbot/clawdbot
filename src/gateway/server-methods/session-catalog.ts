@@ -21,15 +21,12 @@ import type {
   SessionCatalogCreateTarget,
   SessionCatalogProvider,
 } from "../../plugins/session-catalog.js";
-import { bindPluginSessionConversation } from "../../plugins/session-conversation-binding.js";
-import { resolveAgentIdFromSessionKey } from "../../routing/session-key.js";
-import { recordSessionStateEvent } from "../../sessions/session-state-events.js";
-import { upsertSessionUpstreamLink } from "../../sessions/session-upstream-links.js";
 import { authorizeGatewaySessionCreation } from "../operator-role-policy.js";
 import { projectSessionParticipant } from "../session-identity-projection.js";
 import type { SessionActorProfileIdentity } from "../session-utils-contracts.js";
 import { resolveAgentIdOrRespondError } from "./agent-id-shared.js";
 import { authorizeSessionCatalogThread } from "./session-catalog-authorization.js";
+import { continueAuthorizedSessionCatalog } from "./session-catalog-continue.js";
 import {
   createSessionCatalogRequestEntrySnapshot,
   type SessionCatalogInstances,
@@ -304,7 +301,7 @@ function catalogResult(
     id: provider.id,
     label: provider.label,
     capabilities: {
-      continueSession: Boolean(provider.continueSession),
+      continueSession: Boolean(provider.continueSession || provider.copyToGatewaySession),
       archive: Boolean(provider.archive),
       ...(provider.openTerminal ? { openTerminal: true } : {}),
       ...(createSession ? { createSession } : {}),
@@ -387,6 +384,9 @@ export const sessionCatalogHandlers: GatewayRequestHandlers = {
               requestEntries.projectHostSessions(host, result.instances),
               visibility,
               {
+                audience: catalogRegistrations.providers.find(
+                  (provider) => provider.id === catalog.id,
+                )?.audience,
                 requestEntries,
               },
             ),
@@ -564,7 +564,13 @@ export const sessionCatalogHandlers: GatewayRequestHandlers = {
     }
   },
 
-  "sessions.catalog.continue": async ({ params, respond, client, context }) => {
+  "sessions.catalog.continue": async ({
+    params,
+    respond,
+    client,
+    context,
+    sessionMutationCommitGuard,
+  }) => {
     if (
       !assertValidParams(
         params,
@@ -581,7 +587,7 @@ export const sessionCatalogHandlers: GatewayRequestHandlers = {
       return;
     }
     const provider = registration.provider;
-    if (!provider.continueSession) {
+    if (!provider.continueSession && !provider.copyToGatewaySession) {
       respond(false, undefined, errorShape(ErrorCodes.INVALID_REQUEST, "catalog is view-only"));
       return;
     }
@@ -606,56 +612,20 @@ export const sessionCatalogHandlers: GatewayRequestHandlers = {
         respond(false, undefined, creationError);
         return;
       }
-      const { catalogId: _catalogId, ...providerRequest } = request;
-      // Fail closed for unscoped callers: providers gate high-authority
-      // continues (e.g. node-executing bindings) on these scopes.
-      const clientScopes = Array.isArray(client?.connect?.scopes) ? client.connect.scopes : [];
-      const result = await provider.continueSession({
-        ...providerRequest,
+      const continued = await continueAuthorizedSessionCatalog({
+        request,
+        registration,
         agentId: authorization.agentId,
         allowProcessHomeFallback: authorization.allowProcessHomeFallback,
-        clientScopes,
+        client,
+        context,
+        commitGuard: sessionMutationCommitGuard,
       });
-      if (result.conversationBinding) {
-        // operator.write on Continue is the approval boundary. Per-turn plugin and
-        // node command authorization still applies after this binding is installed.
-        await bindPluginSessionConversation({
-          pluginId: registration.pluginId,
-          pluginName: registration.pluginName,
-          pluginRoot: registration.rootDir?.trim() || registration.source,
-          sessionKey: result.sessionKey,
-          binding: result.conversationBinding,
-          afterBind: result.afterConversationBound,
-        });
+      if (!continued.ok) {
+        respond(false, undefined, continued.error);
+        return;
       }
-      // Session creation canonicalizes the adopted key with its resolved agent,
-      // including non-default agents. Use the returned key's owner for links and events.
-      const agentId = resolveAgentIdFromSessionKey(result.sessionKey);
-      if (result.upstream) {
-        // Links exist only for adoptions made on this version: pre-upgrade adopted
-        // sessions are transient linkage with no shipped contract, and re-continuing
-        // from the catalog establishes the link. No doctor backfill by design.
-        upsertSessionUpstreamLink({
-          sessionKey: result.sessionKey,
-          agentId,
-          catalogId: request.catalogId,
-          hostId: request.hostId,
-          threadId: request.threadId,
-          upstreamKind: result.upstream.kind,
-          upstreamRef: result.upstream.ref,
-          marker: result.upstream.marker,
-        });
-      }
-      recordSessionStateEvent({
-        sessionKey: result.sessionKey,
-        agentId,
-        kind: "adopted",
-        actorType: "human",
-        dedupeKey: `adopted:${result.sessionKey}`,
-        summary: `adopted from ${request.catalogId}`,
-        payload: { catalogId: request.catalogId, hostId: request.hostId },
-      });
-      respond(true, { sessionKey: result.sessionKey });
+      respond(true, { sessionKey: continued.sessionKey });
     } catch (error) {
       const details = catalogError(error);
       respond(

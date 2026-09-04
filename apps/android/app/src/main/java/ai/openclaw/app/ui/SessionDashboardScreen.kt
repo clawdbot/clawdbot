@@ -46,14 +46,12 @@ internal fun SessionDashboardScreen(
   val desktopObserveAvailable by viewModel.desktopObserveAvailable.collectAsState()
   val sessionOwnerAgentId by viewModel.chatSessionOwnerAgentId.collectAsState()
   val gatewayDefaultAgentId by viewModel.gatewayDefaultAgentId.collectAsState()
-  val mainSessionKey by viewModel.mainSessionKey.collectAsState()
   val dashboardUrl =
     controlPage?.let { page ->
       sessionDashboardUrl(
         baseUrl = page.baseUrl,
         sessionKey = sessionKey,
         fallbackAgentId = sessionOwnerAgentId ?: gatewayDefaultAgentId,
-        mainSessionKey = mainSessionKey,
       )
     }
   var showingDesktop by rememberSaveable(sessionKey) { mutableStateOf(false) }
@@ -143,14 +141,13 @@ internal fun SessionDashboardScreen(
 }
 
 /**
- * Mirrors buildControlUiSessionPath(exactKey = true), preserving the Control UI base path.
- * A known session key must not become an ambiguous short session reference.
+ * Only bare main/global keys are Gateway aliases. Canonical keys stay literal so
+ * the device-owned main session cannot become the Gateway's main session or a slug.
  */
 internal fun sessionDashboardUrl(
   baseUrl: String,
   sessionKey: String,
   fallbackAgentId: String? = null,
-  mainSessionKey: String? = null,
 ): String? {
   val rawKey = sessionKey.trim().takeIf(String::isNotEmpty) ?: return null
   val parsed = parseAgentSessionKey(rawKey)
@@ -160,30 +157,11 @@ internal fun sessionDashboardUrl(
   val rest = parsed?.second ?: rawKey
   val segments = rest.split(':')
   if (segments.any(String::isEmpty)) return null
-  val configuredMainKey =
-    mainSessionKey
-      ?.trim()
-      ?.takeIf(String::isNotEmpty)
-      ?.let { key -> parseAgentSessionKey(key)?.second ?: key }
-      ?.lowercase(Locale.ROOT)
-      ?: "main"
-  val normalizedRest = rest.lowercase(Locale.ROOT)
   val routeSegments =
-    when {
-      (parsed == null && normalizedRest == "main") ||
-        normalizedRest == configuredMainKey ||
-        normalizedRest == "global" -> {
-        emptyList()
-      }
-
-      segments.size == 1 &&
-        (normalizedRest in dashboardReservedSessionRests || dashboardShortSessionRef.matches(rest)) -> {
-        listOf("~key", encodeDashboardPathSegment(rest))
-      }
-
-      else -> {
-        segments.map(::encodeDashboardPathSegment)
-      }
+    if (parsed == null && (rest.equals("main", ignoreCase = true) || rest.equals("global", ignoreCase = true))) {
+      emptyList()
+    } else {
+      listOf("~key") + segments.map(::encodeDashboardPathSegment)
     }
   val uri = baseUrl.trimEnd('/').toUri()
   val basePath = uri.encodedPath.orEmpty().trimEnd('/')
@@ -201,9 +179,6 @@ internal fun sessionDashboardUrl(
     .build()
     .toString()
 }
-
-private val dashboardReservedSessionRests = setOf("main", "global", "boot", "sessions")
-private val dashboardShortSessionRef = Regex("^(?:.*-)?[0-9a-f]{8,32}$", RegexOption.IGNORE_CASE)
 
 private fun parseAgentSessionKey(sessionKey: String): Pair<String, String>? {
   val parts = sessionKey.split(':')

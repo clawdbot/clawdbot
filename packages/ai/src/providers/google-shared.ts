@@ -38,6 +38,7 @@ import type {
   StreamOptions,
 } from "../types.js";
 import type { AssistantMessageEventStream } from "../utils/event-stream.js";
+import { notifyLlmRequestActivity } from "../utils/llm-request-activity.js";
 import { sortPromptCacheToolsByName } from "../utils/prompt-cache-stability.js";
 import { sanitizeSurrogates } from "../utils/sanitize-unicode.js";
 import { stripSystemPromptCacheBoundary } from "../utils/system-prompt-cache-boundary.js";
@@ -804,6 +805,7 @@ export async function consumeGoogleGenerateContentStream<T extends GoogleApiType
   };
 
   for await (const chunk of params.chunks) {
+    notifyLlmRequestActivity(params.signal);
     params.output.responseId ||= chunk.responseId;
     const responseModel = chunk.modelVersion?.trim();
     if (

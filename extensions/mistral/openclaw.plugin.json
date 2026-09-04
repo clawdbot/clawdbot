@@ -1,6 +1,6 @@
 {
   "id": "mistral",
-  "icon": "https://cdn.simpleicons.org/mistralai",
+  "capabilityCatalogEntry": "./capability-catalog.ts",
   "activation": {
     "onStartup": false
   },

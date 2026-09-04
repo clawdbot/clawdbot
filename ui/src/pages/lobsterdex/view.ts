@@ -52,9 +52,11 @@ export function renderLobsterdex(entries: LobsterdexViewEntries, props: Lobsterd
         </div>
         <span class="lobsterdex-page__count">${countLabel}</span>
       </header>
-      ${props.copyFeedback?.status === "error"
-        ? html`<div class="callout danger" role="alert">${t("common.copyFailed")}</div>`
-        : nothing}
+      ${
+        props.copyFeedback?.status === "error"
+          ? html`<div class="callout danger" role="alert">${t("common.copyFailed")}</div>`
+          : nothing
+      }
       <div class="lobsterdex-page__grid" aria-label=${countLabel}>
         ${LOBSTER_PET_PALETTES.map((palette) => {
           const look = canonicalLobsterLook(palette);
@@ -86,36 +88,44 @@ export function renderLobsterdex(entries: LobsterdexViewEntries, props: Lobsterd
                 @click=${() => props.onCopyLink?.(palette.id)}
               >
                 <span aria-hidden="true"
-                  >${props.copyFeedback?.status === "copied" &&
-                  props.copyFeedback.paletteId === palette.id
-                    ? icons.check
-                    : icons.link}</span
+                  >${
+                    props.copyFeedback?.status === "copied" &&
+                    props.copyFeedback.paletteId === palette.id
+                      ? icons.check
+                      : icons.link
+                  }</span
                 >
               </button>
               <div
-                class="lobsterdex-page__sprite lobster-pet lobster-pet--palette-${palette.id} ${seen
-                  ? ""
-                  : "lobsterdex__mini--unseen"}"
+                class="lobsterdex-page__sprite lobster-pet lobster-pet--palette-${palette.id} ${
+                  seen ? "" : "lobsterdex__mini--unseen"
+                }"
                 style=${lobsterLookStyle(look)}
               >
                 ${renderLobsterSvg(look, { standalone: true })}
-                ${entry?.shinySeenAt != null
-                  ? html`<span
-                      class="lobsterdex__mini-star lobsterdex-page__star"
-                      aria-hidden="true"
-                      >✦</span
-                    >`
-                  : nothing}
+                ${
+                  entry?.shinySeenAt != null
+                    ? html`<span
+                        class="lobsterdex__mini-star lobsterdex-page__star"
+                        aria-hidden="true"
+                        >✦</span
+                      >`
+                    : nothing
+                }
               </div>
               <h3>${name}</h3>
               <p class="lobsterdex-page__lore">${seen ? lore.flavor : lore.hint}</p>
               <div class="lobsterdex-page__dates">
-                ${firstSeen
-                  ? html`<p class="lobsterdex-page__date"><time>${firstSeen}</time></p>`
-                  : nothing}
-                ${shinySeen
-                  ? html`<p class="lobsterdex-page__date"><time>${shinySeen}</time></p>`
-                  : nothing}
+                ${
+                  firstSeen
+                    ? html`<p class="lobsterdex-page__date"><time>${firstSeen}</time></p>`
+                    : nothing
+                }
+                ${
+                  shinySeen
+                    ? html`<p class="lobsterdex-page__date"><time>${shinySeen}</time></p>`
+                    : nothing
+                }
               </div>
             </article>
           `;

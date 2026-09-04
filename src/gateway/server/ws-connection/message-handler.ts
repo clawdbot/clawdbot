@@ -42,6 +42,7 @@ import { resolveNodePairingClientIpSource } from "../../node-pairing-auto-approv
 import { MAX_PREAUTH_PAYLOAD_BYTES } from "../../server-constants.js";
 import { formatForLog, logWs } from "../../ws-log.js";
 import { truncateCloseReason } from "../close-reason.js";
+import { resolveGatewayWsBrowserOrigin } from "../ws-origin-policy.js";
 import { createGatewayAuthenticatedRequestDispatcher } from "./authenticated-request-dispatch.js";
 import { isStartupNodeConnect } from "./connect-admission.js";
 import { authenticateGatewayConnect } from "./connect-auth.js";
@@ -355,7 +356,13 @@ export function attachGatewayWsMessageHandler(params: GatewayWsMessageHandlerPar
           reportedClientIp,
           reportedClientIpSource,
           hasBrowserOriginHeader,
-          enforceOriginCheckForAnyClient,
+          browserOrigin: resolveGatewayWsBrowserOrigin({
+            client: connectParams.client,
+            requestHost,
+            origin: requestOrigin,
+            isLocalClient,
+            enforceOriginCheckForAnyClient,
+          }),
           browserRateLimitClientIp,
           authRateLimiter,
           clientLabel,

@@ -103,7 +103,7 @@ it.each([false, true])(
 it("releases the store writer before maintenance archive sizing completes", async () => {
   const tempDir = tempDirs.make("openclaw-session-maintenance-writer-");
   const storePath = path.join(tempDir, "agents", "main", "sessions", "sessions.json");
-  const removedKey = "agent:main:maintenance-sizing-removed";
+  const removedKey = "agent:main:subagent:maintenance-sizing-removed";
   const writerKey = "agent:main:maintenance-sizing-writer";
   replaceSessionEntrySync(
     { sessionKey: removedKey, storePath },
@@ -248,7 +248,8 @@ it("does not hold channel recording behind automatic session maintenance", async
 
 it.each([
   {
-    expected: { afterCount: 1, capped: 65 },
+    expected: { afterCount: 66, capArchived: 65, capped: 65 },
+    expectedStat: /^66\b/u,
     name: "maintenance pruning",
     mutate: async (storePath: string) =>
       await applySessionEntryLifecycleMutation({
@@ -262,6 +263,7 @@ it.each([
   },
   {
     expected: { afterCount: 1, removedEntries: 65 },
+    expectedStat: /^1\b/u,
     name: "explicit lifecycle cleanup",
     mutate: async (storePath: string) =>
       await applySessionEntryLifecycleMutation({
@@ -274,6 +276,7 @@ it.each([
   },
   {
     expected: { archivedTranscriptArtifacts: 0, removedEntries: 65 },
+    expectedStat: /^1\b/u,
     name: "lifecycle artifact cleanup",
     mutate: async (storePath: string) =>
       await cleanupSessionLifecycleArtifactsCore({
@@ -284,7 +287,7 @@ it.each([
         nowMs: 66,
       }),
   },
-])("refreshes planner statistics after bulk $name", async ({ expected, mutate }) => {
+])("refreshes planner statistics after bulk $name", async ({ expected, expectedStat, mutate }) => {
   const { database, storePath } = createPlannerStore(66);
   expect(
     database.db
@@ -298,7 +301,7 @@ it.each([
     database.db
       .prepare("SELECT stat FROM sqlite_stat1 WHERE idx = ?")
       .get("idx_agent_session_nodes_updated_at"),
-  ).toEqual({ stat: expect.stringMatching(/^1\b/u) });
+  ).toEqual({ stat: expect.stringMatching(expectedStat) });
   expect(database.db.prepare("PRAGMA analysis_limit").get()).toEqual({ analysis_limit: 37 });
 });
 

@@ -99,9 +99,6 @@ const publications: Record<string, string | symbol> = {
   "src/commands/doctor/shared/codex-route-session-repair.ts": Symbol.for(
     "openclaw.codexRouteSessionRepairTestApi",
   ),
-  "src/commands/doctor/shared/plugin-dependency-cleanup.ts": Symbol.for(
-    "openclaw.pluginDependencyCleanupTestApi",
-  ),
   "src/commands/doctor/shared/stale-auth-order.ts": Symbol.for("openclaw.staleAuthOrderTestApi"),
   "src/commands/doctor/shared/stale-oauth-profile-shadows.ts": Symbol.for(
     "openclaw.staleOAuthProfileShadowsTestApi",
@@ -110,7 +107,6 @@ const publications: Record<string, string | symbol> = {
     "openclaw.onboardNonInteractiveLocalTestApi",
   ),
   "src/commands/status.command.ts": Symbol.for("openclaw.statusCommandTestApi"),
-  "src/cron/schedule.ts": Symbol.for("openclaw.cronScheduleTestApi"),
   "src/cron/service/active-run-cancellation.ts": Symbol.for("openclaw.activeCronTaskRunTestApi"),
   "src/cron/service/timer.ts": Symbol.for("openclaw.cronTimerTestApi"),
   "src/cron/session-reaper.ts": Symbol.for("openclaw.cronSessionReaperTestApi"),
@@ -118,9 +114,6 @@ const publications: Record<string, string | symbol> = {
     "openclaw.doctorHealthContributionsTestApi",
   ),
   "src/infra/exec-approvals-store.ts": Symbol.for("openclaw.execApprovalsStoreTestApi"),
-  "src/infra/session-delivery-queue-runtime.ts": Symbol.for(
-    "openclaw.sessionDeliveryQueueRuntimeTestApi",
-  ),
   "src/logging/diagnostic-run-activity.ts": Symbol.for("openclaw.diagnosticRunActivityTestApi"),
   "src/logging/diagnostic.ts": Symbol.for("openclaw.diagnosticTestApi"),
   "src/logging/secret-redaction-registry.ts": Symbol.for("openclaw.secretRedactionRegistryTestApi"),

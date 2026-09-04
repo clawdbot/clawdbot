@@ -8,6 +8,45 @@ import { managedWorktrees, WorktreeRepositoryError } from "../agents/worktrees/s
 import type { CreateManagedWorktreeParams } from "../agents/worktrees/types.js";
 import { formatErrorMessage } from "../infra/errors.js";
 import type { PrepareGatewaySessionLifecycle } from "./session-lifecycle-preparation.js";
+import { loadGatewaySessionEntryReadOnly } from "./session-utils-store.js";
+
+export function resolveSpawnParentWorktreeSource(
+  parentSessionKey: string,
+  agentId: string,
+  assertCallerCurrent: (() => void) | undefined,
+) {
+  const parent = loadGatewaySessionEntryReadOnly(parentSessionKey, { agentId });
+  if (!parent.entry?.worktree) {
+    return undefined;
+  }
+  const worktree = managedWorktrees.findLiveByOwner("session", parent.canonicalKey);
+  if (
+    !worktree ||
+    worktree.id !== parent.entry.worktree.id ||
+    parent.entry.archivedAt !== undefined
+  ) {
+    throw new Error("Spawn parent managed worktree changed; retry from its current session");
+  }
+  const parentSessionId = parent.entry.sessionId;
+  // Validate the inherited source through the child creation commit. After that,
+  // persisted workspace intent belongs to the child and uses its admitted run.
+  const assertCurrent = () => {
+    assertCallerCurrent?.();
+    const current = loadGatewaySessionEntryReadOnly(parent.canonicalKey, { agentId });
+    const currentWorktree = managedWorktrees.findLiveByOwner("session", parent.canonicalKey);
+    if (
+      current.entry?.sessionId !== parentSessionId ||
+      current.entry.archivedAt !== undefined ||
+      current.entry.worktree?.id !== worktree.id ||
+      currentWorktree?.id !== worktree.id ||
+      currentWorktree.repoRoot !== worktree.repoRoot ||
+      currentWorktree.path !== worktree.path
+    ) {
+      throw new Error("Spawn parent managed worktree changed; retry from its current session");
+    }
+  };
+  return { workspace: worktree.repoRoot, assertCurrent };
+}
 
 /** One worktree preparation owner for synchronous creation and admitted first turns. */
 export async function prepareSessionWorktree(params: {
@@ -50,7 +89,11 @@ export async function prepareSessionWorktree(params: {
           ),
         );
       }
-      if ((params.name && existing.name !== params.name) || (params.baseRef && boundId)) {
+      // Replaying the recorded selection reuses the checkout; changing it must not rebase it.
+      if (
+        (params.name && existing.name !== params.name) ||
+        (params.baseRef && existing.baseRef !== params.baseRef)
+      ) {
         return err(
           errorShape(
             ErrorCodes.INVALID_REQUEST,

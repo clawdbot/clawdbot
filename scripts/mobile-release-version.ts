@@ -202,6 +202,12 @@ function expectedPreparedChanges(params: {
   androidVersionCode: number;
   changes: MobileReleaseChange[];
 } {
+  // Google Play counts uploaded Unicode characters, including the generated newline.
+  if (Array.from(params.releaseNotes).length > 500) {
+    throw new Error(
+      "Android release notes exceed Google Play's 500 Unicode character limit. Shorten the shared notes in apps/ios/CHANGELOG.md before preparing or finalizing the mobile release.",
+    );
+  }
   const currentMobileVersion = readMobileVersionManifest(params.rootDir).version;
   if (compareVersions(params.gatewayVersion, currentMobileVersion) < 0) {
     throw new Error(

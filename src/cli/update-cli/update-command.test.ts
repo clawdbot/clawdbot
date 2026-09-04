@@ -816,6 +816,7 @@ describe("recoverLaunchAgentAndRecheckGatewayHealth", () => {
       expectedBuildId: "new-build",
       env: { OPENCLAW_PROFILE: "stomme", OPENCLAW_PORT: "18790" },
       supervisorKeepsAlive: true,
+      settle: { probes: 12 },
     });
   });
 

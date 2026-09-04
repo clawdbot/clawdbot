@@ -1,5 +1,6 @@
 // @vitest-environment node
-import { describe, expect, it } from "vitest";
+import { beforeEach, describe, expect, it } from "vitest";
+import { i18n } from "../../i18n/index.ts";
 import { projectDevicePlacements } from "./device-placement.ts";
 import type { DraftEnvironment } from "./discovery.ts";
 
@@ -25,6 +26,10 @@ function node(overrides: Partial<DraftEnvironment>): DraftEnvironment {
 }
 
 describe("device placement projection", () => {
+  beforeEach(async () => {
+    await i18n.setLocale("en");
+  });
+
   it.each([
     {
       name: "available host",
@@ -136,6 +141,10 @@ describe("device placement projection", () => {
       environment: {
         workerSlots: { total: 2, available: 0 },
         invocableCommands: ["codex.exec-server.stdio.v1"],
+        requiredNodeCommand: {
+          command: "codex.exec-server.stdio.v1",
+          state: "invocable" as const,
+        },
       },
       selectable: true,
     },
@@ -144,7 +153,7 @@ describe("device placement projection", () => {
       requirement: { requiredNodeCommands: [], consumesWorkerSlot: true },
       environment: { workerSlots: { total: 2, available: 0 } },
       selectable: false,
-      reason: /worker slots/i,
+      reason: "No worker slots are available. Wait for a slot or pick another device.",
     },
     {
       name: "declaring a command does not grant Gateway invocation authority",
@@ -155,26 +164,64 @@ describe("device placement projection", () => {
       environment: {
         capabilities: ["codex.exec-server.stdio.v1"],
         invocableCommands: [],
+        requiredNodeCommand: {
+          command: "codex.exec-server.stdio.v1",
+          state: "unauthorized" as const,
+        },
       },
       selectable: false,
-      reason: /enable|approv/i,
+      reason:
+        "Authorize codex.exec-server.stdio.v1 in the Gateway node command policy, or pick another device.",
     },
     {
-      name: "missing command authority fails closed even when worker slots are free",
+      name: "an undeclared command fails closed even when worker slots are free",
       requirement: {
         requiredNodeCommands: ["codex.exec-server.stdio.v1"],
         consumesWorkerSlot: false,
       },
-      environment: { invocableCommands: ["camera.snap"] },
+      environment: {
+        invocableCommands: ["camera.snap"],
+        requiredNodeCommand: {
+          command: "codex.exec-server.stdio.v1",
+          state: "undeclared" as const,
+        },
+      },
       selectable: false,
-      reason: /enable|approv/i,
+      reason:
+        "Make codex.exec-server.stdio.v1 available on this device, then reconnect, or pick another device.",
+    },
+    {
+      name: "a pending-approval command reports awaiting pairing approval",
+      requirement: {
+        requiredNodeCommands: ["codex.exec-server.stdio.v1"],
+        consumesWorkerSlot: false,
+      },
+      environment: {
+        requiredNodeCommand: {
+          command: "codex.exec-server.stdio.v1",
+          state: "pending-approval" as const,
+        },
+      },
+      selectable: false,
+      reason:
+        "Ask an administrator to approve the pending codex.exec-server.stdio.v1 request, or pick another device.",
+    },
+    {
+      name: "missing command state fails closed",
+      requirement: {
+        requiredNodeCommands: ["codex.exec-server.stdio.v1"],
+        consumesWorkerSlot: false,
+      },
+      environment: {},
+      selectable: false,
+      reason: "The selected runner isn't ready yet. Try again in a moment.",
     },
   ])("$name", ({ requirement, environment, selectable, reason }) => {
     const [device] = projectDevicePlacements([node(environment)], requirement);
 
     expect(device?.selectable).toBe(selectable);
     if (reason) {
-      expect(device?.disabledReason).toMatch(reason);
+      expect(device?.disabledReason).toBe(reason);
     }
   });
 });

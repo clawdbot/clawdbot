@@ -8,8 +8,8 @@
   },
   "type": "module",
   "dependencies": {
-    "@aws-sdk/client-s3": "3.1116.0",
-    "@aws-sdk/s3-request-presigner": "3.1116.0",
+    "@aws-sdk/client-s3": "3.1117.0",
+    "@aws-sdk/s3-request-presigner": "3.1117.0",
     "@tloncorp/tlon-skill": "0.5.0",
     "@urbit/aura": "3.0.0",
     "zod": "4.4.3"

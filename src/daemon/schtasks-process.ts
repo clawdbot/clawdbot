@@ -16,6 +16,7 @@ import { resolveGatewayServiceProbeHosts } from "./gateway-service-probe-hosts.j
 import { readScheduledTaskCommand } from "./schtasks-layout.js";
 import type { GatewayServiceRuntime } from "./service-runtime.js";
 import type { GatewayServiceCommandConfig, GatewayServiceEnv } from "./service-types.js";
+import { WINDOWS_TASK_SUPERVISOR_FLAG } from "./windows-task-supervisor-contract.js";
 
 type WindowsProcessSnapshotEntry = {
   ProcessId?: number;
@@ -173,10 +174,16 @@ export async function resolveScheduledTaskOwnedGatewayPids(
     if (!snapshot) {
       return [];
     }
-    const pid = findInstalledProcessPid(snapshot, port, installedArguments, () => true);
-    if (pid) {
-      // The task is single-instance; persisted argv identifies its process before it starts listening.
-      return [pid];
+    // Prefer the Gateway PID; before admission its exact supervisor still owns startup.
+    // /End can leave that supervisor alive, so stop must find it before a Gateway exists.
+    for (const argv of [
+      installedArguments,
+      [...installedArguments, WINDOWS_TASK_SUPERVISOR_FLAG],
+    ]) {
+      const pid = findInstalledProcessPid(snapshot, port, argv, () => true);
+      if (pid) {
+        return [pid];
+      }
     }
     // A listener can be dual-stack or belong to another task; Windows control requires CIM argv proof.
     return [];

@@ -60,6 +60,31 @@ The Control UI is an **admin surface** (chat, config, exec approvals). Do not ex
 - **Identity-bearing modes**: Tailscale Serve satisfies Control UI/WebSocket auth via identity headers when `gateway.auth.allowTailscale: true`; a non-loopback identity-aware reverse proxy satisfies `gateway.auth.mode: "trusted-proxy"`. Neither needs a pasted shared secret for the WebSocket.
 - **Not localhost**: use Tailscale Serve, a non-loopback shared-secret bind, a non-loopback identity-aware reverse proxy with `gateway.auth.mode: "trusted-proxy"`, or an SSH tunnel. HTTP APIs still use shared-secret auth unless you intentionally run private-ingress `gateway.auth.mode: "none"` or trusted-proxy HTTP auth. See [Web surfaces](/web).
 
+## Automatic browser handoff
+
+An identity-aware HTTPS host can provide automatic login for direct dashboard links while
+keeping the Gateway's existing token and device authentication. After an initial connection
+fails because authentication is missing, the Control UI makes one same-origin request to
+`GET /.well-known/openclaw/browser-bootstrap` (under the Control UI base path, if configured).
+Existing credentials are tried first. Explicit credentials, remote Gateway selections,
+pairing failures, and rejected credentials do not trigger this recovery.
+
+This endpoint belongs to the deployment's authenticated proxy or handoff service. OpenClaw
+does not expose an unauthenticated credential issuer. The service must independently verify
+the browser's identity and authorization before using the host's `openclaw dashboard --json`
+handoff. Return only its single-use browser credential:
+
+```json
+{ "bootstrapToken": "<single-use-browser-bootstrap>", "bootstrapProfile": "owner" }
+```
+
+Use `Content-Type: application/json` and `Cache-Control: no-store`, reject cross-origin
+requests, and never return the shared Gateway token. The UI rejects redirects, responses
+larger than 8 KiB, and tokens longer than 4096 printable ASCII characters. The request has
+a 45-second deadline and is cancelled if the connection changes or the page stops.
+Successful recovery preserves the current dashboard route. If no endpoint is configured or
+the host declines the request, the existing login instructions remain available.
+
 ## Open in Telegram
 
 Telegram bots can open the dashboard as a Telegram Mini App with `/dashboard`.

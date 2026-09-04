@@ -43,16 +43,8 @@ function ensureListener() {
       if (isTerminalTaskStatus(current.status) || !hasAuthoritativeTaskBacking(current)) {
         continue;
       }
-      if (recordTaskActivityEvent(current, evt)) {
-        const lastEventAt = current.lastEventAt ?? current.startedAt ?? current.createdAt;
-        if (now - lastEventAt >= ACTIVITY_LIVENESS_WRITE_MS) {
-          updateTask(current.taskId, { lastEventAt: now });
-        }
-        continue;
-      }
-      const patch: Partial<TaskRecord> = {
-        lastEventAt: now,
-      };
+      recordTaskActivityEvent(current, evt);
+      const patch: Partial<TaskRecord> = {};
       if (evt.stream === "lifecycle") {
         const phase = typeof evt.data?.phase === "string" ? evt.data.phase : undefined;
         const eventStartedAt = evt.data?.startedAt;
@@ -112,6 +104,11 @@ function ensureListener() {
           patch.lastToolName = toolName;
         }
       }
+      const lastEventAt = current.lastEventAt ?? current.startedAt ?? current.createdAt;
+      if (Object.keys(patch).length === 0 && now - lastEventAt < ACTIVITY_LIVENESS_WRITE_MS) {
+        continue;
+      }
+      patch.lastEventAt = now;
       const stateChangeEvent =
         patch.status && patch.status !== current.status
           ? appendTaskEvent({

@@ -455,9 +455,7 @@ export function createGrepToolDefinition(
                   details.truncation = truncation;
                 }
                 if (linesTruncated) {
-                  notices.push(
-                    `Some lines truncated to ${GREP_MAX_LINE_LENGTH} chars. Use read tool to see full lines`,
-                  );
+                  notices.push(`Some lines truncated to ${GREP_MAX_LINE_LENGTH} chars`);
                   details.linesTruncated = true;
                 }
                 if (notices.length > 0) {

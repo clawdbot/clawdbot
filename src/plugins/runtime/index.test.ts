@@ -51,6 +51,7 @@ function createCommandResult() {
 
 function createGatewaySubagentRuntime() {
   return {
+    complete: vi.fn(),
     run: vi.fn(),
     waitForRun: vi.fn(),
     getSessionMessages: vi.fn(),

@@ -11,6 +11,7 @@ import {
   getAiTransportHost,
   type AiInlineContentBlock,
 } from "../host.js";
+import { onLlmRequestActivity } from "../utils/llm-request-activity.js";
 import { createCompactionCapture } from "./anthropic-compaction-replay.js";
 import { resolveCompactionReplayPressure } from "./provider-compaction-replay.js";
 import { withProviderAcceptanceObserver } from "./transport-stream-shared.js";
@@ -889,7 +890,7 @@ describe("anthropic transport stream", () => {
 
       expect(latestAnthropicRequest().payload.fallbacks).toBe("default");
       expect(latestAnthropicRequestHeaders().get("anthropic-beta")).toBe(
-        "fine-grained-tool-streaming-2025-05-14,server-side-fallback-2026-07-01",
+        "fine-grained-tool-streaming-2025-05-14,server-side-fallback-2026-07-01,thinking-binding-controls-2026-08-01",
       );
     },
   );
@@ -1650,6 +1651,30 @@ describe("anthropic transport stream", () => {
 
     expect(result.stopReason).toBe("error");
     expect(result.errorMessage).toBe("OpenClaw transport error: malformed_streaming_fragment");
+  });
+
+  it("reports every parsed Anthropic event as request activity", async () => {
+    const events = [
+      anthropicMessageStart({ id: "msg_activity", usage: {} }),
+      { type: "ping" },
+      { type: "message_stop" },
+    ];
+    guardedFetchMock.mockResolvedValueOnce(createSseResponse(events));
+    const controller = new AbortController();
+    const onActivity = vi.fn();
+    const unsubscribe = onLlmRequestActivity(controller.signal, onActivity);
+
+    try {
+      await runTransportStream(
+        makeAnthropicTransportModel(),
+        { messages: [{ role: "user", content: "hello" }] } as AnthropicStreamContext,
+        { apiKey: "sk-ant-api", signal: controller.signal } as AnthropicStreamOptions,
+      );
+    } finally {
+      unsubscribe();
+    }
+
+    expect(onActivity).toHaveBeenCalledTimes(events.length);
   });
 
   it.each([
@@ -4158,7 +4183,11 @@ describe("anthropic transport stream", () => {
       );
 
       const payload = latestAnthropicRequest().payload;
-      expect(payload.thinking).toEqual({ type: "adaptive", display: "summarized" });
+      expect(payload.thinking).toEqual({
+        type: "adaptive",
+        display: "summarized",
+        block_binding: { prefix_mismatch_behavior: "drop_block" },
+      });
       expect(payload.output_config).toEqual({ effort: testCase.effort });
     }
   });
@@ -4234,7 +4263,11 @@ describe("anthropic transport stream", () => {
     );
 
     const payload = latestAnthropicRequest().payload;
-    expect(payload.thinking).toEqual({ type: "adaptive", display: "summarized" });
+    expect(payload.thinking).toEqual({
+      type: "adaptive",
+      display: "summarized",
+      block_binding: { prefix_mismatch_behavior: "drop_block" },
+    });
     expect(payload.output_config).toEqual({ effort: "xhigh" });
   });
 
@@ -4258,7 +4291,11 @@ describe("anthropic transport stream", () => {
     );
 
     const payload = latestAnthropicRequest().payload;
-    expect(payload.thinking).toEqual({ type: "adaptive", display: "summarized" });
+    expect(payload.thinking).toEqual({
+      type: "adaptive",
+      display: "summarized",
+      block_binding: { prefix_mismatch_behavior: "drop_block" },
+    });
     expect(payload.output_config).toEqual({ effort: "max" });
   });
 

@@ -43,9 +43,9 @@ function isCiLikeEnv(env: Env = process.env) {
 
 // Small CI runners share one constraint check for shard concurrency and Go memory policy.
 export function isConstrainedCiCheckHost(hostResources: Resources) {
-  return (
-    hostResources.totalMemoryBytes < CI_PARALLEL_MIN_MEMORY_BYTES ||
-    hostResources.logicalCpuCount < CI_PARALLEL_MIN_CPUS
+  return !(
+    hostResources.totalMemoryBytes >= CI_PARALLEL_MIN_MEMORY_BYTES &&
+    hostResources.logicalCpuCount >= CI_PARALLEL_MIN_CPUS
   );
 }
 

@@ -366,7 +366,6 @@
     <string name="native_34d29e78d246ae8d" formatted="false" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"الخدمة متصلة"</string>
     <string name="native_34e108c0896d0158" formatted="false" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"العرض"</string>
     <string name="native_34ef570432852cd6" formatted="false" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"جاهز عندما تكون جاهزًا"</string>
-    <string name="native_35054a374a0f2b14" formatted="false" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"تعذّر تحميل كتالوج موفّري الخدمة."</string>
     <string name="native_3514b4452a987ac0" formatted="false" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"يتحدث · بانتظار الرد"</string>
     <string name="native_352a5b4c1246d1bf" formatted="false" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"غير ممنوح"</string>
     <string name="native_35322b5bb5a218a1" formatted="false" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"حفظ التغييرات"</string>
@@ -566,7 +565,6 @@
     <string name="native_53b7230f9bf052b7" formatted="false" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"لقد وافقت"</string>
     <string name="native_53c8ee5160e74bf2" formatted="false" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"مراجعة بالذكاء الاصطناعي، مع تدخل بشري احتياطي، للوصول الإضافي."</string>
     <string name="native_53dd551fe4010842" formatted="false" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"وصّل Gateway لتحميل جاهزية المزوّد."</string>
-    <string name="native_53f15ea2f2343351" formatted="false" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"غير مقترن"</string>
     <string name="native_53fb429d67bd4aab" formatted="false" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"انتهت صلاحية هذه الموافقة قبل أن يتم حلها."</string>
     <string name="native_541ff80fcb2f8e87" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"جارٍ الرصد خلال %1$s ثانية — انتقل إلى التطبيق المستهدف"</string>
     <string name="native_542e9aa519c89605" formatted="false" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"مطالبة الوكيل"</string>
@@ -880,6 +878,7 @@
     <string name="native_838337fd9ab30454" formatted="false" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"لخّص سلاسل المحادثات الأخيرة والخطوات التالية."</string>
     <string name="native_83e2faed20a3cda4" formatted="false" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"يعمل على الجهاز أثناء ظهور OpenClaw."</string>
     <string name="native_844e5b02f3ef05ca" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"%1$s يعمل"</string>
+    <string name="native_8477f18620f1ef69" formatted="false" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"Background Shell"</string>
     <string name="native_848123d14f84faa2" formatted="false" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"خام"</string>
     <string name="native_848f54e89660cea4" formatted="false" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"عمليات التشغيل"</string>
     <string name="native_849ccb784cf30af6" formatted="false" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"شغّل الآن"</string>
@@ -1270,7 +1269,6 @@
     <string name="native_c2a2701582c4413a" formatted="false" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"تحقق من الوصول"</string>
     <string name="native_c2d60919f955cd83" formatted="false" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"دور الوكيل"</string>
     <string name="native_c2d66755e6d0b42f" formatted="false" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"عزل"</string>
-    <string name="native_c31723ab330289fe" formatted="false" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"جارٍ البحث…"</string>
     <string name="native_c34dd5eb8b0af56e" formatted="false" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"من أين أحصل على رمز الإعداد؟"</string>
     <string name="native_c3546b39ecbbed8a" formatted="false" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"تعذّر تمكين المهارة."</string>
     <string name="native_c35b21d6ca39aa7c" formatted="false" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"pdf"</string>

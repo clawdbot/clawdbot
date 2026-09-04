@@ -572,6 +572,15 @@ or headless node host). This uses `skills.bins` over the Gateway RPC to
 fetch the skill bin list. Disable this if you want strict manual
 allowlists.
 
+Skill trust belongs to the Gateway that supplied it. Switching Gateways retires
+the previous cache, including the Mac app's trusted-binary list and an approval
+check that is still in progress. A failed refresh can keep the last known trust
+from the same Gateway; it cannot import another Gateway's trust.
+
+The Mac's Exec Approvals pane refreshes its trusted binaries and agent choices
+when the selected Gateway connects. Local policy, the selected scope, and
+unfinished allowlist edits stay on the Mac.
+
 <Warning>
 - This is an **implicit convenience allowlist**, separate from manual path allowlist entries.
 - It is intended for trusted operator environments where Gateway and node are in the same trust boundary.
@@ -612,6 +621,20 @@ When a prompt is required, the gateway broadcasts
 `exec.approval.requested` to operator clients. The Control UI and macOS
 app resolve it via `exec.approval.resolve`, then the gateway forwards the
 approved request to the node host.
+
+The macOS approval panel keeps ordinary commands compact, with the supplied agent
+and host in one summary. It shows the working directory beneath the full,
+wrapping command; longer commands scroll. Expand **Details** to inspect the
+executable path. Directory and executable paths remain fully selectable.
+**Copy** copies the displayed command, including visible escapes for control and
+invisible characters. The host comes from the request; a gateway or node can be
+remote from the Mac displaying the panel.
+
+Choose **Allow Once** or press **Command-Return** to approve one execution.
+Return alone does not approve. **Escape** dismisses the panel, denying the request
+when **Don't Allow** is available; otherwise it closes without a decision.
+**Always Allow Here** appears only when the request's policy permits durable
+approval.
 
 For `host=node`, approval requests include a canonical `systemRunPlan`
 payload. The gateway uses that plan as the authoritative command/cwd/session

@@ -1,7 +1,8 @@
 import prettyMilliseconds from "pretty-ms";
 
-const durationUnitMs = {
+export const durationUnitMs = {
   year: 31_536_000_000,
+  week: 604_800_000,
   day: 86_400_000,
   hour: 3_600_000,
   minute: 60_000,
@@ -9,8 +10,7 @@ const durationUnitMs = {
   millisecond: 1,
 } as const;
 
-export type DurationUnit = keyof typeof durationUnitMs;
-type DurationPart = { value: number | bigint; unit: DurationUnit };
+export type DurationPart = { value: number | bigint; unit: keyof typeof durationUnitMs };
 
 function resolveDurationParts(ms: number, unitCount: number, showYears = false): DurationPart[] {
   const days = BigInt(Math.trunc(ms / durationUnitMs.day));

@@ -81,6 +81,7 @@ import {
 import {
   isUnavailableNpmTarget,
   PLUGIN_INSTALL_ERROR_CODE,
+  type PluginInstallArtifactConsentRequest,
   type PluginInstallLogger,
 } from "./install-types.js";
 import {
@@ -95,7 +96,10 @@ import {
   withoutPluginInstallRecords,
 } from "./installed-plugin-index-records.js";
 import { createInstalledPluginIndexScopeLookup } from "./installed-plugin-index-scope-lookup.js";
-import { isInstalledPluginEnabled } from "./installed-plugin-index.js";
+import {
+  createInstalledPluginEnabledPredicate,
+  isInstalledPluginEnabled,
+} from "./installed-plugin-index.js";
 import {
   resolveInstalledPluginLifecycleOwnership,
   resolveInstalledPluginPackageOwnership,
@@ -205,6 +209,8 @@ export type ManagedPluginSourceInstallRequest =
   | {
       source: "local";
       path: string;
+      /** Stable source provenance when installing an owner-verified temporary copy. */
+      recordPath?: string;
       recordSource: "archive" | "path";
       mode: "install" | "update";
       link?: boolean;
@@ -338,17 +344,12 @@ function resolveManagedPluginDiagnostics(
   config: OpenClawConfig,
 ): PluginDiagnostic[] {
   const dependencies = getManagedPluginCache().dependencyStatus;
+  const isEnabled = createInstalledPluginEnabledPredicate(snapshot.index.plugins, config);
   const { diagnostics } = projectPluginDependencyHealth({
     plugins: snapshot.index.plugins.map((record) => {
       const manifest = snapshot.byPluginId.get(record.pluginId);
-      const enabled = isInstalledPluginEnabled(snapshot.index, record.pluginId, config);
-      const tracksDependencies = tracksPluginDependencyStatus({
-        origin: record.origin,
-        pluginId: record.pluginId,
-        packageName: record.packageName,
-        packageBuild: record.packageBuild,
-      });
-      if (manifest && tracksDependencies && !dependencies.has(manifest)) {
+      const enabled = isEnabled(record.pluginId);
+      if (manifest && !dependencies.has(manifest) && tracksPluginDependencyStatus(record)) {
         dependencies.set(
           manifest,
           buildPluginDependencyStatus({
@@ -376,20 +377,6 @@ export function clearManagedPluginOfficialCatalogCache(): void {
   getManagedPluginCache().officialCatalog = undefined;
 }
 
-function resolveCatalogManifestIcon(manifest: unknown): string | undefined {
-  if (!manifest || typeof manifest !== "object") {
-    return undefined;
-  }
-  return normalizeOptionalString((manifest as { icon?: unknown }).icon);
-}
-
-function resolveCatalogEntryIcon(entry: OfficialExternalPluginCatalogEntry | undefined) {
-  return (
-    normalizeOptionalString(entry?.icon) ??
-    resolveCatalogManifestIcon(getOfficialExternalPluginCatalogManifest(entry ?? {}))
-  );
-}
-
 function mergeCatalogMetadata(
   hosted: OfficialExternalPluginCatalogEntry,
   bundled: OfficialExternalPluginCatalogEntry,
@@ -399,7 +386,6 @@ function mergeCatalogMetadata(
   const bundledManifest = getOfficialExternalPluginCatalogManifest(bundled);
   const bundledCatalog = bundledManifest?.catalog;
   const bundledPlugin = bundledManifest?.plugin;
-  const bundledIcon = resolveCatalogManifestIcon(bundledManifest);
   const bundledName = normalizeOptionalString(bundled.name);
   const bundledDescription = normalizeOptionalString(bundled.description);
   const bundledKind = normalizeOptionalString(bundled.kind);
@@ -430,7 +416,6 @@ function mergeCatalogMetadata(
       ...hostedManifest,
       ...(bundledPlugin ? { plugin: { ...hostedManifest?.plugin, ...bundledPlugin } } : {}),
       ...(mergedCatalog ? { catalog: mergedCatalog } : {}),
-      ...(!resolveCatalogManifestIcon(hostedManifest) && bundledIcon ? { icon: bundledIcon } : {}),
     },
   };
 }
@@ -754,6 +739,20 @@ function resolveInstalledHostedOfficialEntry(params: {
   };
 }
 
+export type ManagedPluginIconSource = { kind: "file"; path: string; rootPath: string };
+
+function resolvePluginIconSource(params: {
+  metadata: PluginMetadataSnapshot;
+  pluginId: string;
+}): ManagedPluginIconSource | undefined {
+  const normalizedPluginId = params.metadata.normalizePluginId(params.pluginId);
+  const manifest = params.metadata.byPluginId.get(normalizedPluginId);
+  const localIconPath = normalizeOptionalString(manifest?.iconPath);
+  if (localIconPath && manifest) {
+    return { kind: "file", path: localIconPath, rootPath: manifest.rootDir };
+  }
+  return undefined;
+}
 function resolveManagedPluginMetadataParams(config: OpenClawConfig, env: NodeJS.ProcessEnv) {
   const workspace = resolvePluginControlPlaneWorkspace({ config, env });
   return {
@@ -798,41 +797,16 @@ export function refreshManagedPluginMetadata(params: {
   return snapshot;
 }
 
-/** Resolve the current manifest/catalog icon URL without accepting a caller-provided URL. */
-export const resolveManagedPluginIconUrl = withManagedPluginCache(
+/** Resolve the current package-local icon without accepting caller-provided input. */
+export const resolveManagedPluginIconSource = withManagedPluginCache(
   async (params: {
     config: OpenClawConfig;
     pluginId: string;
     env?: NodeJS.ProcessEnv;
-    officialCatalog?: OfficialCatalogResult;
-  }): Promise<string | undefined> => {
+  }): Promise<ManagedPluginIconSource | undefined> => {
     const env = params.env ?? process.env;
     const metadata = resolveManagedPluginMetadata(params.config, env);
-    const officialCatalog = params.officialCatalog ?? (await loadOfficialCatalog());
-    const normalizedPluginId = metadata.normalizePluginId(params.pluginId);
-    const record = metadata.index.plugins.find(
-      (candidate) => metadata.normalizePluginId(candidate.pluginId) === normalizedPluginId,
-    );
-    if (!record) {
-      return resolveCatalogEntryIcon(
-        officialCatalog.entries.find(
-          (candidate) => resolveOfficialExternalPluginId(candidate) === normalizedPluginId,
-        ),
-      );
-    }
-    const ownership = resolveInstalledPluginPackageOwnership(metadata.index, record.pluginId);
-    const installOwner = ownership.ok ? ownership.value.installOwner : undefined;
-    const { entry: officialEntry } = resolveInstalledHostedOfficialEntry({
-      record,
-      ...(installOwner ? { installOwner } : {}),
-      installRecord: installOwner ? metadata.index.installRecords[installOwner] : undefined,
-      officialEntries: prepareCatalogEntries(officialCatalog.entries),
-      bundledOfficialEntries: prepareCatalogEntries(listOfficialExternalPluginCatalogEntries()),
-    });
-    return (
-      resolveCatalogEntryIcon(officialEntry) ??
-      normalizeOptionalString(metadata.byPluginId.get(normalizedPluginId)?.icon)
-    );
+    return resolvePluginIconSource({ metadata, pluginId: params.pluginId });
   },
 );
 
@@ -894,11 +868,17 @@ export const listManagedPlugins = withManagedPluginCache(
     const bundledOfficialEntries = prepareCatalogEntries(
       listOfficialExternalPluginCatalogEntries(),
     );
-    const installedIconsById = new Map<string, string | undefined>();
+    const installedIconsById = new Map<string, ManagedPluginIconSource | undefined>();
     const installedClawHubPackages = new Set<string>();
     const capabilityConsentDiagnostics: PluginDiagnostic[] = [];
+    // Hosted loading can yield; prepare this phase from the current config.
+    const isEnabled = createInstalledPluginEnabledPredicate(
+      metadata.index.plugins,
+      params.config,
+      env,
+    );
     const plugins = metadata.index.plugins.map((record): ManagedPluginCatalogEntry => {
-      const enabled = isInstalledPluginEnabled(metadata.index, record.pluginId, params.config, env);
+      const enabled = isEnabled(record.pluginId);
       const manifest = metadata.byPluginId.get(record.pluginId);
       const localCatalog = normalizeCatalogMetadata(manifest?.catalog);
       const ownership = resolveInstalledPluginPackageOwnership(metadata.index, record.pluginId);
@@ -1000,8 +980,7 @@ export const listManagedPlugins = withManagedPluginCache(
       if (!installedIconsById.has(normalizedPluginId)) {
         installedIconsById.set(
           normalizedPluginId,
-          resolveCatalogEntryIcon(officialEntry) ??
-            normalizeOptionalString(metadata.byPluginId.get(normalizedPluginId)?.icon),
+          resolvePluginIconSource({ metadata, pluginId: record.pluginId }),
         );
       }
       if (installedIconsById.get(normalizedPluginId)) {
@@ -1072,7 +1051,6 @@ export const listManagedPlugins = withManagedPluginCache(
         ...(catalog.featured !== undefined ? { featured: catalog.featured } : {}),
         ...(featuredAt !== undefined ? { featuredAt } : {}),
         ...(catalog.order !== undefined ? { order: catalog.order } : {}),
-        ...(resolveCatalogEntryIcon(entry) ? { hasIcon: true } : {}),
         ...(install ? { install } : {}),
       });
     }
@@ -1372,6 +1350,7 @@ async function persistManagedSourceInstall(params: {
   runtime?: RuntimeEnv;
   successMessage?: string;
   beforePersistentApply?: () => void;
+  beforePersistentEffect?: () => void | Promise<void>;
 }): Promise<{ config: OpenClawConfig; warnings: string[] }> {
   const warnings: string[] = [];
   let committed = false;
@@ -1384,6 +1363,7 @@ async function persistManagedSourceInstall(params: {
       runtime: params.runtime,
       persistenceLogger: { warn: (message) => warnings.push(message) },
       beforePersistentApply: params.beforePersistentApply,
+      beforePersistentEffect: params.beforePersistentEffect,
       // Only the persistence owner can distinguish rejection from a late refresh failure.
       onCommitted: () => {
         committed = true;
@@ -1490,6 +1470,8 @@ type ManagedPluginSourceInstallParams = {
   acknowledgeCapabilities?: PluginCapabilityConsentAcknowledgment;
   onCapabilityConsent?: PluginCapabilityConsentHandler;
   beforePersistentApply?: () => void;
+  /** Revalidate the initiating owner after artifact review and before durable activation. */
+  beforePersistentEffect?: () => void | Promise<void>;
 };
 
 /**
@@ -1502,6 +1484,23 @@ type ManagedPluginSourceInstallParams = {
  */
 export async function installManagedPluginSource(
   params: ManagedPluginSourceInstallParams,
+): Promise<ManagedPluginSourceInstallResult> {
+  return await withPluginLifecycleLease({ env: params.env }, async (lease) => {
+    const assertOwned = lease.assertOwned.bind(lease);
+    const ownedParams = {
+      ...params,
+      beforePersistentApply: () => {
+        params.beforePersistentApply?.();
+        assertOwned();
+      },
+    };
+    return await installManagedPluginSourceUnderLease(ownedParams, assertOwned);
+  });
+}
+
+async function installManagedPluginSourceUnderLease(
+  params: ManagedPluginSourceInstallParams,
+  assertOwned: () => void,
 ): Promise<ManagedPluginSourceInstallResult> {
   const { request } = params;
   if (request.source === "official" && request.installSources) {
@@ -1530,19 +1529,22 @@ export async function installManagedPluginSource(
       : { ...installAttempt, installSource: installedSource };
   }
   if (request.source !== "official" && request.source !== "npm" && request.source !== "clawhub") {
-    return await installResolvedManagedPluginSource(params);
+    return await installResolvedManagedPluginSource(params, assertOwned);
   }
   const installSpec = resolveOfficialManagedInstallSpec({
     request,
     config: params.snapshot.config,
   });
   if (!installSpec) {
-    return await installResolvedManagedPluginSource(params);
+    return await installResolvedManagedPluginSource(params, assertOwned);
   }
-  const result = await installResolvedManagedPluginSource({
-    ...params,
-    request: { ...request, spec: installSpec, recordSpec: request.recordSpec ?? request.spec },
-  });
+  const result = await installResolvedManagedPluginSource(
+    {
+      ...params,
+      request: { ...request, spec: installSpec, recordSpec: request.recordSpec ?? request.spec },
+    },
+    assertOwned,
+  );
   if (result.ok) {
     return result;
   }
@@ -1563,6 +1565,7 @@ export async function installManagedPluginSource(
 /** Execute one resolved plugin source through the shared install-and-persist pipeline. */
 async function installResolvedManagedPluginSource(
   params: ManagedPluginSourceInstallParams,
+  assertOwned: () => void,
 ): Promise<ManagedPluginSourceInstallResult> {
   const { request } = params;
   const env = params.env ?? process.env;
@@ -1606,16 +1609,25 @@ async function installResolvedManagedPluginSource(
         onCapabilityConsent: params.onCapabilityConsent,
       });
 
-  const common = requestDeferredPluginInstall({
-    ...params.safetyOverrides,
-    config: params.snapshot.config,
-    extensionsDir,
-    logger: params.logger,
-    beforePersistentApply: params.beforePersistentApply,
-    ...(capabilityConsent
-      ? { onBeforePluginArtifactCommit: capabilityConsent.onBeforePluginArtifactCommit }
-      : {}),
-  });
+  const common = requestDeferredPluginInstall(
+    {
+      ...params.safetyOverrides,
+      config: params.snapshot.config,
+      extensionsDir,
+      logger: params.logger,
+      beforePersistentApply: params.beforePersistentApply,
+      ...(capabilityConsent || params.beforePersistentEffect
+        ? {
+            onBeforePluginArtifactCommit: async (artifact: PluginInstallArtifactConsentRequest) => {
+              await capabilityConsent?.onBeforePluginArtifactCommit(artifact);
+              await params.beforePersistentEffect?.();
+            },
+          }
+        : {}),
+    },
+    undefined,
+    assertOwned,
+  );
   const complete = async <T extends SourceInstallerResult>(
     installResult: Promise<T>,
     completed: {
@@ -1699,7 +1711,7 @@ async function installResolvedManagedPluginSource(
         successMessage: request.successMessage,
         install: (result) => ({
           source: request.recordSource,
-          sourcePath: request.path,
+          sourcePath: request.recordPath ?? request.path,
           installPath: installPath ?? result.targetDir,
           version: result.version,
         }),

@@ -454,6 +454,8 @@ Enterprise Grid organization installation, use the dedicated
         "app_home_opened",
         "app_mention",
         "app_context_changed",
+        "agent_session_stopped",
+        "agent_session_title_changed",
         "channel_rename",
         "member_joined_channel",
         "member_left_channel",
@@ -528,6 +530,8 @@ Enterprise Grid organization installation, use the dedicated
         "app_home_opened",
         "app_mention",
         "app_context_changed",
+        "agent_session_stopped",
+        "agent_session_title_changed",
         "message.channels",
         "message.groups",
         "message.im"
@@ -669,6 +673,8 @@ openclaw gateway
         "app_home_opened",
         "app_mention",
         "app_context_changed",
+        "agent_session_stopped",
+        "agent_session_title_changed",
         "channel_rename",
         "member_joined_channel",
         "member_left_channel",
@@ -749,6 +755,8 @@ openclaw gateway
         "app_home_opened",
         "app_mention",
         "app_context_changed",
+        "agent_session_stopped",
+        "agent_session_title_changed",
         "message.channels",
         "message.groups",
         "message.im"
@@ -972,6 +980,8 @@ Base manifest (Socket Mode default):
         "app_home_opened",
         "app_mention",
         "app_context_changed",
+        "agent_session_stopped",
+        "agent_session_title_changed",
         "channel_rename",
         "member_joined_channel",
         "member_left_channel",
@@ -1010,6 +1020,8 @@ For **HTTP Request URLs mode**, replace `settings` with the HTTP variant and add
         "app_home_opened",
         "app_mention",
         "app_context_changed",
+        "agent_session_stopped",
+        "agent_session_title_changed",
         "channel_rename",
         "member_joined_channel",
         "member_left_channel",
@@ -1038,7 +1050,9 @@ Surface different features that extend the above defaults.
 
 The default manifest enables the Slack App Home **Home** tab and subscribes to `app_home_opened`. When a workspace member opens the Home tab, OpenClaw publishes a safe default Home view with `views.publish`; no conversation payload or private configuration is included. When single slash command mode is enabled, the command hint uses `channels.slack.slashCommand.name`; installations using native commands or no slash commands omit that hint. The **Messages** tab remains enabled for Slack DMs. New apps use Slack Agent View through `features.agent_view`, `assistant:write`, and `app_context_changed`. See [Agent View DMs](/channels/slack#agent-view-dms) for how OpenClaw detects the experience and routes each visible root to its own session.
 
-Existing apps that already use `features.assistant_view` can keep their current manifest. OpenClaw continues to handle `assistant_thread_started` and `assistant_thread_context_changed` for those installs. Slack makes migration from Assistant View to Agent View irreversible and requires users to hard refresh afterward, so do not replace `assistant_view` on an existing app until you intend to migrate the whole workspace.
+OpenClaw drives Slack session status: `processing` while a turn runs, `suspended` while a native approval waits, and `active` when done. The native **Stop** button requires the `agent_session_stopped` event subscription and aborts the run like `/stop`, with the same authorization checks. Session titles follow the OpenClaw session display name; the `agent_session_title_changed` subscription lets user renames flow back to OpenClaw.
+
+Existing apps that already use `features.assistant_view` can keep that feature setting. OpenClaw continues to handle `assistant_thread_started` and `assistant_thread_context_changed` for those installs; add the same session event subscriptions for Stop and title synchronization. Slack makes migration from Assistant View to Agent View irreversible and requires users to hard refresh afterward, so do not replace `assistant_view` on an existing app until you intend to migrate the whole workspace.
 
 <AccordionGroup>
   <Accordion title="Optional native slash commands">
@@ -1545,10 +1559,10 @@ The default scope (`"group-mentions"`) does not fire ack reactions in direct mes
 - `partial`: replace preview text with the latest partial output. Set this to restore the previous default behavior.
 - `block`: append chunked preview updates.
 - `progress` (default): show structured progress in one native task card when Slack supports it, with a Block Kit session-card fallback.
-- `streaming.preview.toolProgress`: controls tool previews in `partial` and `block` modes (default: `true`). In `progress` mode, ordinary tool activity drives one work summary rather than visible tool rows.
-- `streaming.preview.commandText`: `status` hides command/exec text in tool previews (default); `raw` includes it. Progress summaries do not show ordinary command lines.
+- `streaming.progress.toolProgress`: `progress` mode is quiet by default (`false`). Set `true` to add one task row (native card) or activity line (Block Kit card) per tool call, plus tool/file/time counters on the Block Kit card. `streaming.preview.toolProgress` controls tool previews in `partial` and `block` modes (default: `true`).
+- `streaming.preview.commandText` / `streaming.progress.commandText`: `status` keeps compact tool-progress lines while hiding raw command/exec text (default); set `raw` to opt into command text.
 
-Use the default quiet progress presentation:
+Show the tool log while hiding raw command/exec text:
 
 ```json
 {
@@ -1557,7 +1571,8 @@ Use the default quiet progress presentation:
       "streaming": {
         "mode": "progress",
         "progress": {
-          "nativeTaskCards": true
+          "toolProgress": true,
+          "commandText": "status"
         }
       }
     }
@@ -1567,11 +1582,11 @@ Use the default quiet progress presentation:
 
 `channels.slack.streaming.nativeTransport` controls Slack native text streaming when `channels.slack.streaming.mode` is `partial` (default: `true`).
 
-In `progress` mode, Slack's native agent card is the default: the whole turn is one streamed message that interleaves narration with a live plan/task card and finishes with the assistant's answer in that same message. The card shows authored plan milestones, or one stable work-summary row when no plan exists. It does not turn each tool call into a task. Routine updates coalesce at one-second intervals; approvals, actual failures, and completion bypass that delay. The card appears only once a turn does real work, so a plain question is answered without one.
+In `progress` mode, Slack's native agent card is the default: the whole turn is one streamed message that interleaves narration with a live plan/task card and finishes with the assistant's answer in that same message. The card shows authored plan steps when the agent publishes a plan, otherwise one stable work-summary row; approval requests and failed commands get their own row. With `progress.toolProgress: true`, it also shows per-tool task rows alongside any authored plan. Routine updates coalesce at one-second intervals; approvals, failures, and completion bypass that delay. A tool failure shows as a red attention row while the turn runs; if the turn still completes successfully, that row settles as `Recovered: …` instead of staying red. The card appears only once a turn does real work — tool or plan activity still running after a short delay — so a plain question is answered without one.
 
-Set `channels.slack.streaming.progress.nativeTaskCards` to `false` to fall back to the Block Kit session card, which posts a separate message showing a plain status summary, narration, and authored milestones, and finalizes to success or error. It does not add tool rows, generated emoji, or tool/file/time counters.
+Set `channels.slack.streaming.progress.nativeTaskCards` to `false` to fall back to the Block Kit session card, which posts a separate message showing title, narration, plan checklist, and authored commentary, and finalizes to success or error. With `progress.toolProgress: true` it also lists recent tool activity, tool/file totals, and elapsed time.
 
-Set `channels.slack.streaming.progress.style` to `"compact"` for one plain-text progress draft instead of either card surface. This is also the default when `progress.toolProgress` is `false` and no style is selected. With the other progress controls below, only authored commentary appears as italic text: plan checklists and tool-status lines never replace it. An eligible final text answer replaces that same Slack message. Set `style: "card"` explicitly to retain a card while hiding tool progress.
+Set `channels.slack.streaming.progress.style` to `"compact"` for one plain-text progress draft instead of either card surface. Explicitly setting `progress.toolProgress: false` also selects compact style when `style` is unset; leaving both options unset keeps the default quiet card. Set `style: "card"` to keep a card with `toolProgress: false`. Commentary appears as italic text, and authored reasoning, approval requests, and failures remain visible. The final response is posted as a new message, then the temporary preview is deleted after Slack confirms delivery. Older previews displaced by human replies are cleaned up with it; durable messages and videos stay in the conversation.
 
 For streamed preambles, Slack waits for the first complete preamble before creating the message, so its notification contains the full thought rather than a single token. Once that message exists, later preambles can stream as edits without another notification.
 
@@ -1593,18 +1608,19 @@ For streamed preambles, Slack waits for the first complete preamble before creat
 }
 ```
 
-Slack still uses normal final delivery when the reply cannot safely replace the draft, including media, errors, oversized text, split block payloads, custom outbound identity, or an edit failure.
+Compact progress always uses normal final delivery, including for media and errors. Other draft modes use normal delivery when the reply cannot safely replace the draft, including oversized text, split block payloads, custom outbound identity, or an edit failure.
 
 Both surfaces link the session with **Open in OpenClaw**, but only when that link can work: `gateway.publicOrigin` must be set (the externally reachable Gateway origin) and the Control UI must not be disabled via `gateway.controlUi.enabled: false`. Installations that leave `publicOrigin` unset — where there is no way to reach OpenClaw from Slack — get no link rather than a dead one. If the Control UI is served below a path prefix, also set `gateway.controlUi.basePath`.
 
-- A reply thread must be available for native text streaming and Slack assistant thread status to appear. Thread selection still follows `replyToMode`.
+- A reply thread must be available for native text streaming and Slack session status to appear. Thread selection still follows `replyToMode`.
 - Channel, group-chat, and top-level DM roots can still use the normal draft preview when native streaming is unavailable or no reply thread exists.
 - Top-level Slack DMs stay off-thread by default, so they do not show Slack's thread-style native stream/status preview; OpenClaw posts and edits a draft preview in the DM instead.
 - Custom outbound username/icon settings keep portable previews enabled. OpenClaw keeps the preview or session card app-authored and delivers the customized final separately. Slack does not allow impersonated messages to be deleted.
 - Media and non-text payloads fall back to normal delivery.
-- Media/error finals cancel pending preview edits; eligible text/block finals flush only when they can edit the preview in place.
-- Native streamed final answers wait for Slack's acknowledgement before delivery is marked successful. A later progress-card finalization failure does not discard an already acknowledged answer.
-- If streaming fails mid-reply, OpenClaw falls back to normal delivery for remaining payloads.
+- Outside compact progress, media/error finals cancel pending preview edits; eligible text/block finals flush only when they can edit the preview in place.
+- Native streamed replies wait for Slack's acknowledgement before delivery is marked successful. Each complete reply block flushes separately, including short blocks; routine progress updates still coalesce. A later progress-card finalization failure does not discard an already acknowledged reply.
+- Explicit HTTP 429 rate-limit rejections are retried up to twice by default, after Slack's `Retry-After` delay. This also applies to ordinary messages and upload completion; lost responses and server errors are not replayed.
+- Definite recipient or scope rejections fall back to normal delivery for buffered text. Ambiguous streaming failures (such as a lost response) report failure without replaying the unacknowledged text, because Slack may already have accepted it. Later payloads use normal delivery.
 
 Use draft preview instead of Slack native text streaming:
 
@@ -1647,7 +1663,7 @@ Legacy keys:
 
 ## Typing reaction fallback
 
-`typingReaction` adds a temporary reaction to the inbound Slack message while OpenClaw is processing a reply, then removes it when the run finishes. This is most useful outside of thread replies, which use a default "is typing..." status indicator.
+`typingReaction` adds a temporary reaction to the inbound Slack message while OpenClaw is processing a reply, then removes it when the run finishes. This is most useful outside of thread replies, which use Slack's `processing` session status.
 
 Resolution order:
 
@@ -2091,7 +2107,7 @@ openclaw pairing list slack
     - The manifest uses `features.agent_view` with `assistant:write` and subscribes to `app_context_changed`. Apps still on `features.assistant_view` get Assistant View threads instead, and Slack cannot move an app back once it switches to Agent View.
     - OpenClaw has seen an Agent View signal since the app was installed: open the app's **Messages** tab once, or send a DM from the Agent View composer. In verbose logs, `slack suggested prompts update failed for channel D...: internal_error` on a Messages-tab open is expected for an Agent View app and counts as evidence.
     - In HTTP mode, the Gateway has received at least one signed event since it started; `slack app id <id> learned from signed event` in the logs confirms the durable marker can be read. Socket Mode reads the app ID from the app token at startup, so no event is needed.
-    - A `Slack Agent View state failed to persist` warning means the signal was recorded for the running process but the marker was not stored, so it is forgotten on restart. `failed to open` or `failed to load` means a stored marker could not be read, so Agent View stays off until the next signal.
+    - `Slack Agent View state failed to open`, `persist`, or `load` warnings mean the durable marker could not be stored or read. A signal already detected in the running process still applies. After a restart, Agent View resumes when OpenClaw successfully reads a stored marker or detects a new signal.
 
     See [Agent View DMs](/channels/slack#agent-view-dms).
 

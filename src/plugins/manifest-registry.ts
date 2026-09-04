@@ -54,6 +54,7 @@ import { satisfiesPluginApiRange, resolvePackagePluginApiRange } from "./package
 import { isPathInside } from "./path-safety.js";
 import {
   pluginCacheExistsSync,
+  pluginCacheLstatSync,
   pluginCacheRealpathSync,
   pluginCacheStatSync,
   readPluginCacheFile,
@@ -113,7 +114,7 @@ function resolveManifestPluginSourcePath(params: {
   rootDir: string;
   manifestPath: string;
   pluginId: string;
-  entryName: "providerCatalogEntry";
+  entryName: "providerCatalogEntry" | "capabilityCatalogEntry";
   entry: string;
   rejectHardlinks: boolean;
   diagnostics: PluginDiagnostic[];
@@ -127,7 +128,7 @@ function resolveManifestPluginSourcePath(params: {
     });
   };
 
-  if (path.isAbsolute(params.entry)) {
+  if (!params.entry || path.isAbsolute(params.entry)) {
     pushDiagnostic();
     return undefined;
   }
@@ -168,6 +169,30 @@ type SeenIdEntry = {
   candidate: PluginCandidate;
   record: PluginManifestRecord;
 };
+
+const PORTABLE_PLUGIN_ICON_PATH = path.join("assets", "icon.png");
+
+function resolvePortablePluginIconPath(params: {
+  rootDir: string;
+  rejectHardlinks: boolean;
+}): string | undefined {
+  const iconPath = path.resolve(params.rootDir, PORTABLE_PLUGIN_ICON_PATH);
+  const iconStat = pluginCacheLstatSync(iconPath);
+  if (!iconStat?.isFile() || (params.rejectHardlinks && iconStat.nlink > 1)) {
+    return undefined;
+  }
+  const rootPath = path.resolve(params.rootDir);
+  const rootRealPath = pluginCacheRealpathSync(rootPath) ?? rootPath;
+  return isPluginRootPath({
+    rootPath,
+    targetPath: iconPath,
+    rootRealPath,
+    rejectHardlinks: params.rejectHardlinks,
+    targetMustExist: true,
+  })
+    ? iconPath
+    : undefined;
+}
 
 // Canonicalize identical physical plugin roots with the most explicit source.
 // This only applies when multiple candidates resolve to the same on-disk plugin.
@@ -432,7 +457,10 @@ function buildRecord(params: {
     description:
       normalizeOptionalString(params.manifest.description) ?? params.candidate.packageDescription,
     catalog: mergeManifestCatalog(params.manifest.catalog, officialCatalogManifest?.catalog),
-    icon: normalizeOptionalString(params.manifest.icon),
+    iconPath: resolvePortablePluginIconPath({
+      rootDir: params.candidate.rootDir,
+      rejectHardlinks: params.rejectHardlinks,
+    }),
     version: normalizeOptionalString(params.manifest.version) ?? params.candidate.packageVersion,
     packageName: params.candidate.packageName,
     packageVersion: params.candidate.packageVersion,
@@ -457,6 +485,18 @@ function buildRecord(params: {
           diagnostics: params.diagnostics,
         })
       : undefined,
+    capabilityCatalogSource:
+      params.manifest.capabilityCatalogEntry === undefined
+        ? undefined
+        : (resolveManifestPluginSourcePath({
+            rootDir: params.candidate.rootDir,
+            manifestPath: params.manifestPath,
+            pluginId,
+            entryName: "capabilityCatalogEntry",
+            entry: params.manifest.capabilityCatalogEntry,
+            rejectHardlinks: params.rejectHardlinks,
+            diagnostics: params.diagnostics,
+          }) ?? null),
     modelSupport: params.manifest.modelSupport,
     modelCatalog: params.manifest.modelCatalog,
     modelPricing: params.manifest.modelPricing,
@@ -482,6 +522,7 @@ function buildRecord(params: {
     trustedOfficialInstall: params.trustedOfficialInstall === true ? true : undefined,
     qaRunners: params.manifest.qaRunners,
     dashboard: params.manifest.dashboard,
+    controlUi: params.manifest.controlUi,
     mcpServers: params.manifest.mcpServers,
     skills: params.manifest.skills ?? [],
     settingsFiles: [],
@@ -540,11 +581,16 @@ function buildBundleRecord(params: {
   };
   candidate: PluginCandidate;
   manifestPath: string;
+  rejectHardlinks: boolean;
 }): PluginManifestRecord {
   return {
     id: params.manifest.id,
     name: normalizeOptionalString(params.manifest.name) ?? params.candidate.idHint,
     description: normalizeOptionalString(params.manifest.description),
+    iconPath: resolvePortablePluginIconPath({
+      rootDir: params.candidate.rootDir,
+      rejectHardlinks: params.rejectHardlinks,
+    }),
     version: normalizeOptionalString(params.manifest.version),
     packageName: params.candidate.packageName,
     packageVersion: params.candidate.packageVersion,
@@ -1034,6 +1080,7 @@ export function loadPluginManifestRegistryCore(
           manifest: manifest as Parameters<typeof buildBundleRecord>[0]["manifest"],
           candidate,
           manifestPath: manifestRes.manifestPath,
+          rejectHardlinks,
         })
       : buildRecord({
           manifest: manifest as PluginManifest,

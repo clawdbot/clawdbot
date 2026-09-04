@@ -22,11 +22,12 @@ import {
   isSlackAnyNativeApprovalClientEnabled,
   shouldHandleSlackNativeApprovalRequest,
 } from "./approval-native-gates.js";
+import { getSlackListenerWriteClient } from "./client.js";
 import { normalizeSlackApproverId } from "./exec-approvals.js";
 import { SLACK_EDIT_TEXT_MAX_BYTES } from "./limits.js";
-import type { SlackEventScope } from "./monitor/event-scope.js";
 import { resolveSlackReplyBlocks } from "./reply-blocks.js";
 import { sendMessageSlack } from "./send.js";
+import { setSlackSessionStatus } from "./session-status.js";
 import { parseSlackTarget } from "./target-parsing.js";
 import { truncateSlackTextByUtf8Bytes } from "./truncate.js";
 
@@ -34,6 +35,7 @@ type SlackBlock = Block | KnownBlock;
 type SlackPendingApproval = {
   channelId: string;
   messageTs: string;
+  threadTs?: string;
   teamId?: string;
 };
 type SlackPendingDelivery = {
@@ -357,7 +359,17 @@ export const slackApprovalNativeRuntime = createChannelApprovalNativeRuntimeAdap
       }
       const client = resolveApprovalClient(resolved.context, preparedTarget.teamId);
       const to = await resolveApprovalChannel(client, preparedTarget.to, preparedTarget.teamId);
-      const eventScope = resolveApprovalEventScope(client, preparedTarget.teamId);
+      const eventScope = preparedTarget.teamId
+        ? {
+            teamId: preparedTarget.teamId,
+            client,
+            writeClient: getSlackListenerWriteClient({
+              listenerClient: client,
+              teamId: preparedTarget.teamId,
+              clientOptions: resolved.context.app.webClientOptions,
+            }),
+          }
+        : undefined;
       const message = await sendMessageSlack(to, pendingPayload.text, {
         cfg,
         accountId: resolved.accountId,
@@ -366,25 +378,37 @@ export const slackApprovalNativeRuntime = createChannelApprovalNativeRuntimeAdap
         client,
         eventScope,
       });
+      await setSlackSessionStatus({
+        client,
+        channelId: message.channelId,
+        threadTs: preparedTarget.threadTs,
+        status: "suspended",
+      });
       return {
         channelId: message.channelId,
         messageTs: message.messageId,
+        threadTs: preparedTarget.threadTs,
         teamId: preparedTarget.teamId,
       };
     },
-    updateEntry: async ({ cfg, accountId, context, entry, payload }) => {
+    updateEntry: async ({ cfg, accountId, context, entry, payload, phase }) => {
       const resolved = resolveHandlerContext({ cfg, accountId, context });
       if (!resolved) {
         return;
       }
-      const nextPayload = payload;
       const client = resolveApprovalClient(resolved.context, entry.teamId);
       await updateMessage({
         client,
         channelId: entry.channelId,
         messageTs: entry.messageTs,
-        text: nextPayload.text,
-        blocks: nextPayload.blocks,
+        text: payload.text,
+        blocks: payload.blocks,
+      });
+      await setSlackSessionStatus({
+        client,
+        channelId: entry.channelId,
+        threadTs: entry.threadTs,
+        status: phase === "resolved" ? "processing" : "active",
       });
     },
   },
@@ -407,19 +431,6 @@ function resolveApprovalClient(context: SlackApprovalHandlerContext, teamId?: st
     throw new Error("Slack Enterprise Grid approval client is unavailable");
   }
   return client;
-}
-
-function resolveApprovalEventScope(
-  client: WebClient,
-  teamId?: string,
-): SlackEventScope | undefined {
-  if (!teamId) {
-    return undefined;
-  }
-  return {
-    teamId,
-    client,
-  };
 }
 
 async function resolveApprovalChannel(client: WebClient, target: string, teamId?: string) {

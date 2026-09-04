@@ -167,6 +167,11 @@ export type SessionCatalogContinueProviderResult = {
   };
 };
 
+type SessionCatalogGatewayCopy = {
+  displayName?: string;
+  preferredModel?: string;
+};
+
 type SessionCatalogCreateParams = {
   /** Agent whose model/runtime policy must authorize the catalog target. */
   agentId?: string;
@@ -175,6 +180,8 @@ type SessionCatalogCreateParams = {
 export type SessionCatalogProvider = {
   id: string;
   label: string;
+  /** Provider rows are Gateway-hosted artifacts visible to authenticated operators. */
+  audience?: "gateway-operators";
   /** Closed plugin-owned route contract; invalid or colliding declarations are not projected. */
   shareRoute?: SessionCatalogShareRoute;
   /** Declares that every HOME-sensitive action honors the host isolation policy. */
@@ -189,6 +196,10 @@ export type SessionCatalogProvider = {
   continueSession?: (
     params: SessionCatalogContinueProviderParams,
   ) => Promise<SessionCatalogContinueProviderResult>;
+  /** Copy catalog history into a new ordinary Gateway-owned session. */
+  copyToGatewaySession?: (
+    params: SessionCatalogContinueProviderParams,
+  ) => Promise<SessionCatalogGatewayCopy>;
   checkUpstreamActivity?: (
     probes: SessionUpstreamProbe[],
     policy?: { allowProcessHomeFallback?: boolean },

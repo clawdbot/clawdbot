@@ -193,19 +193,23 @@ class ChatOutboxRecovery extends LitElement {
       ${rows.map(
         (entry) => html`<div class="chat-outbox-recovery-row">
           <p>
-            ${"id" in entry
-              ? [entry.session.draft, ...(entry.session.queue ?? []).map((item) => item.text)]
-                  .filter(Boolean)
-                  .join(" · ")
-                  .slice(0, 240)
-              : entry.text.slice(0, 240)}
+            ${
+              "id" in entry
+                ? [entry.session.draft, ...(entry.session.queue ?? []).map((item) => item.text)]
+                    .filter(Boolean)
+                    .join(" · ")
+                    .slice(0, 240)
+                : entry.text.slice(0, 240)
+            }
           </p>
           <p>
-            ${"id" in entry
-              ? t("chat.outboxRecoveryMessages", {
-                  count: String(entry.session.queue?.length ?? 0),
-                })
-              : entry.attachmentNames.join(", ").slice(0, 240)}
+            ${
+              "id" in entry
+                ? t("chat.outboxRecoveryMessages", {
+                    count: String(entry.session.queue?.length ?? 0),
+                  })
+                : entry.attachmentNames.join(", ").slice(0, 240)
+            }
           </p>
           <button
             class="btn"

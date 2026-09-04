@@ -225,6 +225,12 @@ providers may also include thinking configuration in their cache identity, so
 changing only the thinking level can increase latency and input-token cost even
 when the model itself stays the same.
 
+Retained reasoning is model-bound on current Claude models. Moving a session
+off Claude Fable 5.1 continues without Fable's earlier thinking, moving onto it
+keeps the thinking of Opus 5, Sonnet 5, Opus 4.8, and Fable 5, and switching
+away and back or changing `/think` invalidates the pre-switch Fable reasoning.
+See [Anthropic](/providers/anthropic#tool-calls-and-retained-thinking).
+
 <a id="model-in-chat" />
 
 ## `/model` in chat

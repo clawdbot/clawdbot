@@ -111,6 +111,8 @@ export function resolveGatewayScopedTools(params: {
   excludeToolNames?: Iterable<string>;
   /** Server-minted coding tools that must be mediated through the loopback surface. */
   mediatedToolNames?: Iterable<string>;
+  /** Host-projected canonical authority for native CLI tools absent from this bridge. */
+  nativeCronCreatorToolAllowlist?: readonly string[];
   disablePluginTools?: boolean;
   gatewayRequestedTools?: string[];
   /** Add the CLI-only, node-forced exec tool before applying the shared policy pipeline. */
@@ -488,8 +490,6 @@ export function resolveGatewayScopedTools(params: {
             sessionKey: params.sessionKey,
             sessionId: params.sessionId,
             sessionStore: params.cfg.session?.store,
-            mainKey: params.cfg.session?.mainKey,
-            sessionScope: params.cfg.session?.scope,
             eventRouting: resolveEventSessionRoutingPolicy({
               cfg: params.cfg,
               sessionKey: params.sessionKey,
@@ -572,8 +572,16 @@ export function resolveGatewayScopedTools(params: {
   if (shouldInheritEffectiveToolAllowlist) {
     replaceWithEffectiveToolAllowlist(inheritedToolAllowlist, inheritableTools);
   }
-  replaceWithEffectiveCronCreatorToolAllowlist(cronCreatorToolAllowlist, inheritableTools, (tool) =>
-    getPluginToolMeta(tool),
+  replaceWithEffectiveCronCreatorToolAllowlist(
+    cronCreatorToolAllowlist,
+    inheritableTools,
+    (tool) => getPluginToolMeta(tool),
+    {
+      canonicalToolNames: params.nativeCronCreatorToolAllowlist,
+      // The loopback grant only carries native authority for Gateway-placed
+      // CLI runs, so its native shell is pinned restrict-only to this host.
+      nativeExecTarget: { host: "gateway" },
+    },
   );
 
   return {

@@ -41,10 +41,7 @@ const loadReadabilityDeps = createLazyRuntimeModule(() =>
 function exceedsEstimatedHtmlNestingDepth(html: string, maxDepth: number): boolean {
   let depth = 0;
   const len = html.length;
-  for (let i = 0; i < len; i++) {
-    if (html.charCodeAt(i) !== 60) {
-      continue;
-    }
+  for (let i = html.indexOf("<"); i >= 0; i = html.indexOf("<", i + 1)) {
     const next = html.charCodeAt(i + 1);
     if (next === 33 || next === 63) {
       continue;

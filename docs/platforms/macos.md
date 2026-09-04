@@ -60,6 +60,15 @@ independently of the sidebar, keeping permission and capability controls reachab
 
 ## Updates
 
+If the primary Gateway connection rejects the app's protocol version, the app
+shows an update alert and keeps the explanation in its connection status.
+Remote setup and connection probes show the same guidance inline. The message names the app
+release and both protocol versions, and tells you which side needs updating:
+run `openclaw update` on an older Gateway host, or install a newer Mac app from
+the [download options](#download). A rejected handshake may not report the
+Gateway's release version; the app marks that information as unavailable.
+Different release numbers alone do not trigger this alert.
+
 The dashboard update card names what the app will update:
 
 - **Update Mac app + Gateway** means the signed app owns the local launchd
@@ -92,6 +101,24 @@ so it stays quiet when no matching app release exists. `stable`, missing, and
 unknown values stay on stable app builds.
 
 ## Open dashboard links
+
+For a remote Gateway with identity-aware authentication, the app opens the
+dashboard at its sign-in address: HTTPS `gateway.publicOrigin` for trusted-proxy
+authentication, or the active managed Tailscale Serve address when Tailscale
+identity is enabled. Serve does not require `gateway.publicOrigin`. Complete
+the sign-in inside the dashboard window; your existing Gateway profile then
+owns the displayed identity and chat attribution. The native device connection
+keeps its configured transport, including SSH, and its credentials are not sent
+to the public dashboard or sign-in provider. Shared-secret Gateways without a
+personal sign-in route continue to use the shared owner profile.
+
+Open windows for saved Gateway profiles follow sign-in route changes after a
+reconnect. An unchanged route keeps the current dashboard and its navigation.
+
+Opening the embedded dashboard at its default Chat landing restores the last
+page you visited, such as **Usage**, for that Gateway origin. Explicit session
+links and navigation requests take precedence over the remembered page, and
+first-run model setup still runs when needed.
 
 In the macOS app's embedded dashboard, clicking an external web link opens it in a resizable browser sidebar at half the window width. Drag the divider in either direction to choose another width; the app remembers it. Widening the browser lets the dashboard switch to compact navigation, with a 400-point minimum for the dashboard and a 320-point minimum for the browser. Each link opens in its own tab, the tab strip appears when multiple pages are open, and clicking the same link again reuses its existing tab. Drag tabs to reorder them, close them with the tab close button or a middle-click, and right-click a tab for **Open in Default Browser**, **Copy Link**, **Reload**, **Close Tab**, and **Close Other Tabs**. The window's titlebar back/forward controls and trackpad swipes navigate dashboard history; the sidebar's own back/forward controls navigate the active tab's history. The sidebar also has reload, open-in-default-browser, and close controls.
 

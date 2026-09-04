@@ -153,19 +153,13 @@ export function convertMessages(
         content: compat.requiresAssistantAfterToolResult ? "" : null,
       };
 
-      const assistantTextParts = msg.content
+      const assistantTexts = msg.content
         .filter(isTextContentBlock)
         .filter((block) => block.text.trim().length > 0)
-        .map(
-          (block) =>
-            ({
-              type: "text",
-              text: sanitizeSurrogates(block.text),
-            }) satisfies ChatCompletionContentPartText,
-        );
+        .map((block) => sanitizeSurrogates(block.text));
       // Separate content blocks are distinct utterances, so replay them the way
       // the string-content flattener does rather than running them together.
-      const assistantText = assistantTextParts.map((part) => part.text).join("\n");
+      const assistantText = assistantTexts.join("\n");
 
       const nonEmptyThinkingBlocks = msg.content
         .filter(isThinkingContentBlock)
@@ -175,7 +169,13 @@ export function convertMessages(
           const thinkingText = nonEmptyThinkingBlocks
             .map((block) => sanitizeSurrogates(block.thinking))
             .join("\n\n");
-          assistantMsg.content = [{ type: "text", text: thinkingText }, ...assistantTextParts];
+          assistantMsg.content = [
+            { type: "text", text: thinkingText },
+            ...assistantTexts.map((text): ChatCompletionContentPartText => ({
+              type: "text",
+              text,
+            })),
+          ];
         } else {
           // String content is the interoperable Chat Completions replay shape;
           // content-part arrays make some compatible servers mirror JSON.

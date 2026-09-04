@@ -4,7 +4,7 @@
 import { describe, expect, it } from "vitest";
 import { ADMIN_SCOPE, READ_SCOPE, WRITE_SCOPE } from "../operator-scopes.js";
 import type { GatewayRequestHandler } from "../server-methods/types.js";
-import { isSessionProfileDependentMethod } from "../session-sharing-target-input.js";
+import { isSessionProfileDependentMethod } from "../session-method-policy.js";
 import { listCoreGatewayMethodNames } from "./core-descriptors.js";
 import { createPluginGatewayMethodDescriptor } from "./descriptor.js";
 import {
@@ -156,6 +156,9 @@ describe("gateway method registry", () => {
     expect(registry.requiresAuthenticatedProfile("approval.history")).toBe(false);
     expect(registry.requiresAuthenticatedProfile("board.data.read")).toBe(false);
     expect(registry.requiresAuthenticatedProfile("board.prompt.authorize")).toBe(false);
+    expect(registry.requiresAuthenticatedProfile("talk.client.create")).toBe(false);
+    expect(registry.requiresAuthenticatedProfile("talk.session.steer")).toBe(false);
+    expect(registry.requiresAuthenticatedProfile("wake")).toBe(false);
     expect(registry.requiresAuthenticatedProfile("aux.identity.read")).toBe(true);
   });
 });

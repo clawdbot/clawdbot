@@ -18,7 +18,7 @@ on:
         required: false
         type: string
       allow_failed_publish_recovery:
-        description: Accept a failed Release Publish parent only after every stable platform asset was repaired and published
+        description: Accept a failed Release Publish parent only after npm and Docker publication succeeded
         required: false
         default: false
         type: boolean
@@ -342,6 +342,16 @@ jobs:
           fetch-depth: 1
           persist-credentials: false
 
+      # The recorded main SHA owns release data, not the current replay policy.
+      - name: Checkout trusted closeout tooling
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          ref: ${{ github.workflow_sha }}
+          path: .closeout-tooling
+          fetch-depth: 1
+          sparse-checkout: scripts
+          persist-credentials: false
+
       - name: Checkout shipped release tag
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
@@ -425,7 +435,7 @@ jobs:
           }
           NODE
           gh_with_retry run view "$RELEASE_PUBLISH_RUN_ID" --repo "$GITHUB_REPOSITORY" \
-            --json workflowName,event,status,conclusion,headSha \
+            --json workflowName,event,status,conclusion,headSha,jobs \
             > "$RUNNER_TEMP/release-publish-run.json"
           node --input-type=module - "$RUNNER_TEMP/release-publish-run.json" <<'NODE'
           import { readFileSync } from "node:fs";
@@ -452,106 +462,25 @@ jobs:
             );
           }
           if (failedRecovery) {
-            console.log("Accepting failed Release Publish parent under explicit complete-platform recovery.");
+            // App failures cannot hold npm closeout; the Gateway distribution
+            // still needs successful npm and Docker publication in this parent.
+            const requiredJobs = [
+              ["Publish plugins, then OpenClaw"],
+              [
+                "Publish Docker images / Publish prepared Docker images",
+                // Published releases before prepared-image promotion used this terminal job.
+                "Publish Docker images / Verify attestations and promote channel",
+              ],
+            ];
+            for (const names of requiredJobs) {
+              const jobs = (run.jobs ?? []).filter((job) => names.includes(job.name));
+              if (jobs.length !== 1 || jobs[0].conclusion !== "success") {
+                throw new Error(`Failed-publish recovery requires one successful publication job: ${names.join(" or ")}.`);
+              }
+            }
+            console.log("Accepting failed Release Publish parent with verified npm and Docker publication; apps may be pending.");
           }
           NODE
-
-          if [[ "$ALLOW_FAILED_PUBLISH_RECOVERY" == "true" ]]; then
-            parent_log="$RUNNER_TEMP/release-publish-run.log"
-            gh_with_retry run view "$RELEASE_PUBLISH_RUN_ID" --repo "$GITHUB_REPOSITORY" --log \
-              > "$parent_log"
-            mapfile -t windows_node_run_ids < <(
-              sed -nE '/Dispatched windows-node-release\.yml/ { s#.*https://github\.com/openclaw/openclaw/actions/runs/([1-9][0-9]*).*#\1#p; }' "$parent_log" |
-                LC_ALL=C sort -u
-            )
-            if [[ "${#windows_node_run_ids[@]}" != "1" ]]; then
-              echo "Failed-publish recovery requires exactly one Windows Node Release run dispatched by the parent; found ${#windows_node_run_ids[@]}." >&2
-              exit 1
-            fi
-            windows_node_run_id="${windows_node_run_ids[0]}"
-            windows_node_run_json="$RUNNER_TEMP/windows-node-release-run.json"
-            gh_with_retry run view "$windows_node_run_id" --repo "$GITHUB_REPOSITORY" \
-              --json workflowName,event,status,conclusion,headSha,url,jobs \
-              > "$windows_node_run_json"
-            parent_head_sha="$(jq -r '.headSha // empty' "$RUNNER_TEMP/release-publish-run.json")"
-            PARENT_HEAD_SHA="$parent_head_sha" \
-              node --input-type=module -e '
-              import { readFileSync } from "node:fs";
-              const run = JSON.parse(readFileSync(process.argv[1], "utf8"));
-              for (const [key, expected] of [
-                ["workflowName", "Windows Node Release"],
-                ["event", "workflow_dispatch"],
-                ["status", "completed"],
-                ["conclusion", "success"],
-                ["headSha", process.env.PARENT_HEAD_SHA],
-              ]) {
-                if (run[key] !== expected) {
-                  throw new Error(`Windows Node Release must have ${key}=${expected}, got ${run[key] ?? "<missing>"}.`);
-                }
-              }
-              const jobs = (run.jobs ?? []).filter(
-                (job) => job.name === "Promote signed Windows installers" && job.conclusion === "success",
-              );
-              if (jobs.length !== 1) {
-                throw new Error("Windows Node Release must contain one successful signed-installer promotion job.");
-              }
-              for (const name of [
-                "Validate inputs",
-                "Verify Authenticode signatures",
-                "Upload to OpenClaw release",
-                "Verify promoted release asset contract",
-              ]) {
-                const steps = (jobs[0].steps ?? []).filter(
-                  (step) => step.name === name && step.conclusion === "success",
-                );
-                if (steps.length !== 1) {
-                  throw new Error(`Windows Node Release is missing successful step: ${name}.`);
-                }
-              }
-              ' "$windows_node_run_json"
-            windows_node_log="$RUNNER_TEMP/windows-node-release-run.log"
-            gh_with_retry run view "$windows_node_run_id" --repo "$GITHUB_REPOSITORY" --log \
-              > "$windows_node_log"
-            windows_node_installer_digests="$(
-              node --input-type=module -e '
-              import { readFileSync } from "node:fs";
-              const log = readFileSync(process.argv[1], "utf8");
-              const marker = "EXPECTED_INSTALLER_DIGESTS:";
-              const names = [
-                "OpenClawCompanion-Setup-arm64.exe",
-                "OpenClawCompanion-Setup-x64.exe",
-              ];
-              const contracts = new Set();
-              for (const line of log.split(/\r?\n/u)) {
-                const markerIndex = line.indexOf(marker);
-                if (markerIndex === -1) continue;
-                const candidate = line.slice(markerIndex + marker.length).trim();
-                let parsed;
-                try {
-                  parsed = JSON.parse(candidate);
-                } catch {
-                  continue;
-                }
-                const keys = Object.keys(parsed).toSorted((left, right) => left.localeCompare(right));
-                if (
-                  JSON.stringify(keys) !== JSON.stringify(names) ||
-                  !names.every((name) => /^sha256:[0-9a-f]{64}$/u.test(parsed[name] ?? ""))
-                ) {
-                  continue;
-                }
-                contracts.add(JSON.stringify(Object.fromEntries(names.map((name) => [name, parsed[name]]))));
-              }
-              if (contracts.size !== 1) {
-                throw new Error(`Windows Node Release logs must contain exactly one candidate-approved digest contract, got ${contracts.size}.`);
-              }
-              process.stdout.write([...contracts][0]);
-              ' "$windows_node_log"
-            )"
-            {
-              echo "WINDOWS_NODE_RELEASE_RUN_ID=$windows_node_run_id"
-              echo "WINDOWS_NODE_INSTALLER_DIGESTS=$windows_node_installer_digests"
-            } >> "$GITHUB_ENV"
-          fi
 
           manifest_dir="$RUNNER_TEMP/full-release-validation-manifest"
           rm -rf "$manifest_dir"
@@ -607,45 +536,19 @@ jobs:
           gh_with_retry release view "$RELEASE_TAG" --repo "$GITHUB_REPOSITORY" \
             --json tagName,isDraft,isPrerelease,assets \
             > "$CLOSEOUT_DIR/github-release.json"
-          if [[ "$ALLOW_FAILED_PUBLISH_RECOVERY" == "true" ]]; then
-            recovery_dir="$CLOSEOUT_DIR/platform-recovery"
-            mkdir -p "$recovery_dir"
+          existing_manifest_args=()
+          if [[ "$REPAIR_PARTIAL_CLOSEOUT" == "true" ]]; then
+            closeout_asset="openclaw-${RELEASE_TAG#v}-stable-main-closeout.json"
             gh_with_retry release download "$RELEASE_TAG" --repo "$GITHUB_REPOSITORY" \
-              --pattern OpenClaw-Android.apk \
-              --pattern OpenClaw-Android-SHA256SUMS.txt \
-              --pattern OpenClawCompanion-Setup-arm64.exe \
-              --pattern OpenClawCompanion-Setup-x64.exe \
-              --pattern OpenClawCompanion-SHA256SUMS.txt \
-              --dir "$recovery_dir"
-            (
-              cd "$recovery_dir"
-              verify_checksum_manifest() {
-                local manifest="$1" actual expected normalized
-                shift
-                normalized="${manifest}.normalized"
-                sed 's/\r$//' "$manifest" > "$normalized"
-                expected="$(printf '%s\n' "$@" | LC_ALL=C sort)"
-                actual="$(awk 'NF { name=$2; sub(/^\*/, "", name); print name }' "$normalized" | LC_ALL=C sort)"
-                if [[ "$actual" != "$expected" ]]; then
-                  echo "$manifest must list exactly: $*" >&2
-                  exit 1
-                fi
-                sha256sum --strict --check "$normalized"
-                rm -f "$normalized"
-              }
-              verify_checksum_manifest OpenClaw-Android-SHA256SUMS.txt \
-                OpenClaw-Android.apk
-              verify_checksum_manifest OpenClawCompanion-SHA256SUMS.txt \
-                OpenClawCompanion-Setup-arm64.exe \
-                OpenClawCompanion-Setup-x64.exe
-            )
-            gh_with_retry attestation verify "$recovery_dir/OpenClaw-Android.apk" \
-              --repo "$GITHUB_REPOSITORY" \
-              --signer-workflow "$GITHUB_REPOSITORY/.github/workflows/android-release.yml" \
-              --source-ref "refs/tags/$RELEASE_TAG" \
-              --deny-self-hosted-runners
+              --pattern "$closeout_asset" --dir "$CLOSEOUT_DIR"
+            # Replay keeps the original main snapshot but checks late macOS
+            # publication against the appcast currently served from main.
+            gh_with_retry api "repos/$GITHUB_REPOSITORY/contents/appcast.xml?ref=main" \
+              --jq '.content' | tr -d '\n' | base64 --decode > "$CLOSEOUT_DIR/published-appcast.xml"
+            existing_manifest_args=(--existing-manifest "$CLOSEOUT_DIR/$closeout_asset"
+              --published-appcast "$CLOSEOUT_DIR/published-appcast.xml")
           fi
-          node scripts/verify-stable-main-closeout.mjs \
+          node .closeout-tooling/scripts/verify-stable-main-closeout.mjs \
             --tag "$RELEASE_TAG" \
             --main-dir "$GITHUB_WORKSPACE" \
             --tag-dir "$GITHUB_WORKSPACE/release-tag" \
@@ -656,10 +559,11 @@ jobs:
             --rollback-drill-id "$ROLLBACK_DRILL_ID" \
             --rollback-drill-date "$ROLLBACK_DRILL_DATE" \
             --allow-stale-rollback-drill "$REPAIR_PARTIAL_CLOSEOUT" \
-            --require-complete-platform-assets "$ALLOW_FAILED_PUBLISH_RECOVERY" \
-            --windows-node-release-run-id "${WINDOWS_NODE_RELEASE_RUN_ID:-}" \
-            --windows-node-installer-digests "${WINDOWS_NODE_INSTALLER_DIGESTS:-}" \
+            --allow-failed-publish-recovery "$ALLOW_FAILED_PUBLISH_RECOVERY" \
+            "${existing_manifest_args[@]}" \
             --output "$CLOSEOUT_DIR/stable-main-closeout.json"
+          jq -r '"Apps: \(.apps // "not recorded in legacy snapshot")\nAppcast: \(.appcast // "verified")"' \
+            "$CLOSEOUT_DIR/stable-main-closeout.json" >> "$GITHUB_STEP_SUMMARY"
           release_version="${RELEASE_TAG#v}"
           sha256sum "$CLOSEOUT_DIR/stable-main-closeout.json" | awk -v asset="openclaw-${release_version}-stable-main-closeout.json" \
             '{print $1 "  " asset}' \

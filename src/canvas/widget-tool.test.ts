@@ -70,6 +70,7 @@ function createLiveBoardTestContext(
 ): GatewayRequestContext {
   const context = {
     broadcast,
+    getSessionEventSubscriberConnIds: () => new Set<string>(),
     getRuntimeConfig: () => ({ agents: { list: [{ id: "main" }] } }),
   } as unknown as GatewayRequestContext;
   context.resolveGatewayContext = () => context;

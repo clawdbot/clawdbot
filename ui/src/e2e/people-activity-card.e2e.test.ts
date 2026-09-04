@@ -1,7 +1,9 @@
+import { writeFile } from "node:fs/promises";
 import path from "node:path";
 import type { Locator, Page } from "playwright";
 import { beforeEach, expect, it } from "vitest";
 import { createControlUiE2eArtifactDir } from "../test-helpers/control-ui-e2e-artifacts.ts";
+import { takeControlUiViewportScreenshot } from "../test-helpers/control-ui-e2e-screenshot.ts";
 import { defaultControlUiFeatureMethods } from "../test-helpers/control-ui-e2e.ts";
 import {
   captureUiProofEnabled,
@@ -155,7 +157,14 @@ suite.define(() => {
           );
         expect(await card.innerHTML()).not.toContain("agent:private:hidden");
         await expectInlineLastActivity(card);
-        await capturePeopleCard(page, "desktop-light-open.png");
+        if (captureUiProofEnabled) {
+          await writeFile(
+            path.join(proofDirectory, "desktop-light-open.png"),
+            await takeControlUiViewportScreenshot(page, card, [
+              card.getByRole("link", { name: "View activity", exact: true }),
+            ]),
+          );
+        }
         const bounds = await row.boundingBox();
         const cardBounds = await card.boundingBox();
         if (!bounds || !cardBounds) {
@@ -284,7 +293,7 @@ suite.define(() => {
         await person.click();
         await card.waitFor({ state: "visible" });
         await card.getByRole("link", { name: "View activity", exact: true }).click();
-        await expect.poll(() => page.url()).toContain("/activity?person=alice");
+        await expect.poll(() => new URL(page.url()).pathname).toBe("/activity/alice");
         await expect.poll(() => card.count()).toBe(0);
       },
     );
@@ -451,7 +460,7 @@ suite.define(() => {
         await profileCard.waitFor({ state: "visible" });
         expect(await profileCard.getByRole("link", { name: /^Raw watch(?:\s|$)/ }).count()).toBe(0);
         const activity = profileCard.getByRole("link", { name: "View activity", exact: true });
-        expect(await activity.getAttribute("href")).toBe(`/activity?person=${id}`);
+        expect(await activity.getAttribute("href")).toBe(`/activity/${id}`);
         if (captureUiProofEnabled) {
           await page.screenshot({
             path: path.join(proofDirectory, "profile-card.png"),

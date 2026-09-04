@@ -102,6 +102,14 @@ export function runFakeCodexAppServer({ handlers, logMode = "requests", requestL
       handler({ id, notify, params, sendResult });
       return;
     }
+    if (method === "config/read") {
+      sendResult({ config: {}, origins: {}, layers: [] });
+      return;
+    }
+    if (method === "configRequirements/read") {
+      sendResult({ requirements: null });
+      return;
+    }
     sendResult({});
   });
 }

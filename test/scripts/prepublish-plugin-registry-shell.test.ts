@@ -1,9 +1,16 @@
 import { execFileSync, spawn, spawnSync } from "node:child_process";
 import { createHash } from "node:crypto";
 import { once } from "node:events";
-import { copyFileSync, existsSync, mkdirSync, readFileSync, writeFileSync } from "node:fs";
+import {
+  copyFileSync,
+  existsSync,
+  mkdirSync,
+  readFileSync,
+  symlinkSync,
+  writeFileSync,
+} from "node:fs";
 import { createServer } from "node:http";
-import { dirname, join, resolve } from "node:path";
+import { delimiter, dirname, join, resolve } from "node:path";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { parse } from "yaml";
 import { useAutoCleanupTempDirTracker } from "../helpers/temp-dir.js";
@@ -13,6 +20,27 @@ const VERSION = "2026.8.1-beta.1";
 const BASELINE_VERSION = "2026.7.1";
 const SCRIPT = "scripts/e2e/lib/prepublish-plugin-registry.sh";
 const tempDirs = useAutoCleanupTempDirTracker(afterEach);
+
+function resolveWorkflowBash(): string {
+  // Ubuntu uses Bash 5; Apple's Bash 3 does not honor errexit for failed [[ ]] guards.
+  for (const dir of (process.env.PATH ?? "").split(delimiter).filter(Boolean)) {
+    const candidate = resolve(dir, "bash");
+    if (!existsSync(candidate)) {
+      continue;
+    }
+    const result = spawnSync(
+      candidate,
+      ["--noprofile", "--norc", "-c", 'test "${BASH_VERSINFO[0]}" -ge 5'],
+      { stdio: "ignore", timeout: 1_000 },
+    );
+    if (result.status === 0) {
+      return candidate;
+    }
+  }
+  throw new Error(
+    "Native npm 12 workflow tests require Bash 5+. Install Bash 5+ and put it on PATH.",
+  );
+}
 
 function sha256(path: string): string {
   return createHash("sha256").update(readFileSync(path)).digest("hex");
@@ -37,7 +65,7 @@ function createTarball(
   return tarball;
 }
 
-function registryFixture(root: string, names: string[]) {
+function registryFixture(root: string, names: string[], version = VERSION) {
   const artifactDir = join(root, "artifact");
   mkdirSync(artifactDir);
   const packages = names
@@ -49,10 +77,10 @@ function registryFixture(root: string, names: string[]) {
         artifactDir,
         name,
         tarball,
-        VERSION,
-        name === "openclaw" ? { dependencies: { "@openclaw/ai": VERSION } } : {},
+        version,
+        name === "openclaw" ? { dependencies: { "@openclaw/ai": version } } : {},
       );
-      return { name, version: VERSION, tarball, sha256: sha256(file) };
+      return { name, version, tarball, sha256: sha256(file) };
     });
   const manifestPath = join(artifactDir, "prepublish-plugin-registry.json");
   writeFileSync(
@@ -61,7 +89,7 @@ function registryFixture(root: string, names: string[]) {
       schema: "openclaw.prepublish-plugin-registry/v1",
       schemaVersion: 1,
       sourceSha: SOURCE_SHA,
-      candidateVersion: VERSION,
+      candidateVersion: version,
       packages,
     }),
   );
@@ -71,7 +99,7 @@ function registryFixture(root: string, names: string[]) {
     env: {
       OPENCLAW_PREPUBLISH_PLUGIN_REGISTRY_DIR: artifactDir,
       OPENCLAW_DOCKER_E2E_SELECTED_SHA: SOURCE_SHA,
-      OPENCLAW_PREPUBLISH_PLUGIN_REGISTRY_CANDIDATE_VERSION: VERSION,
+      OPENCLAW_PREPUBLISH_PLUGIN_REGISTRY_CANDIDATE_VERSION: version,
       OPENCLAW_PREPUBLISH_PLUGIN_REGISTRY_MANIFEST_SHA256: sha256(manifestPath),
     },
   };
@@ -79,7 +107,7 @@ function registryFixture(root: string, names: string[]) {
 
 async function withPublishedRegistry(root: string, run: (url: string) => void | Promise<void>) {
   const portFile = join(root, "upstream-port");
-  const args = ["openclaw", "@openclaw/ai"].flatMap((name, index) => [
+  const args = ["openclaw", "@openclaw/ai", "@openclaw/discord"].flatMap((name, index) => [
     name,
     BASELINE_VERSION,
     createTarball(
@@ -193,18 +221,20 @@ console.log(JSON.stringify({ url, first: first.status, second: second.status, bo
     }
   });
 
-  it("installs a published baseline before the exact candidate and reaps its registry on failure", async () => {
-    const root = tempDirs.make("openclaw-prepublish-command-");
-    const fixture = registryFixture(root, ["openclaw", "@openclaw/ai"]);
-    const registryUrl = join(root, "registry-url");
-    await withPublishedRegistry(root, async (upstream) => {
-      const result = spawnSync(
-        "bash",
-        [
-          resolve(SCRIPT),
+  it.each([VERSION, "2026.8.1", "2026.8.1-2"])(
+    "installs a published baseline before candidate %s and reaps its registry on failure",
+    async (version) => {
+      const root = tempDirs.make("openclaw-prepublish-command-");
+      const fixture = registryFixture(root, ["openclaw", "@openclaw/ai"], version);
+      const registryUrl = join(root, "registry-url");
+      await withPublishedRegistry(root, async (upstream) => {
+        const result = spawnSync(
           "bash",
-          "-c",
-          `
+          [
+            resolve(SCRIPT),
+            "bash",
+            "-c",
+            `
 set -euo pipefail
 test "$BUN_CONFIG_REGISTRY" = "$NPM_CONFIG_REGISTRY"
 npm install --prefix "$INSTALL_DIR" openclaw@latest --ignore-scripts --no-fund --no-audit --package-lock=false --userconfig=/dev/null --cache "$INSTALL_DIR/cache"
@@ -213,29 +243,30 @@ npm install --prefix "$INSTALL_DIR" "$ROOT_TARBALL" --ignore-scripts --no-fund -
 node -e 'const fs=require("node:fs"); const root=require(process.env.INSTALL_DIR+"/node_modules/openclaw/package.json"); const ai=require(process.env.INSTALL_DIR+"/node_modules/@openclaw/ai/package.json"); if(root.dependencies["@openclaw/ai"] !== ai.version) process.exit(1); fs.writeFileSync(process.env.REGISTRY_URL_FILE, process.env.NPM_CONFIG_REGISTRY);'
 exit 17
 `,
-        ],
-        {
-          cwd: root,
-          encoding: "utf8",
-          timeout: 30_000,
-          env: {
-            ...process.env,
-            ...fixture.env,
-            OPENCLAW_NPM_REGISTRY_UPSTREAM: upstream,
-            BASELINE_VERSION,
-            INSTALL_DIR: join(root, "install"),
-            ROOT_TARBALL: join(fixture.artifactDir, "openclaw.tgz"),
-            REGISTRY_URL_FILE: registryUrl,
+          ],
+          {
+            cwd: root,
+            encoding: "utf8",
+            timeout: 30_000,
+            env: {
+              ...process.env,
+              ...fixture.env,
+              OPENCLAW_NPM_REGISTRY_UPSTREAM: upstream,
+              BASELINE_VERSION,
+              INSTALL_DIR: join(root, "install"),
+              ROOT_TARBALL: join(fixture.artifactDir, "openclaw.tgz"),
+              REGISTRY_URL_FILE: registryUrl,
+            },
           },
-        },
-      );
+        );
 
-      expect(result.status, result.stdout + result.stderr).toBe(17);
-      await expect(
-        fetch(readFileSync(registryUrl, "utf8"), { signal: AbortSignal.timeout(1_000) }),
-      ).rejects.toThrow();
-    });
-  });
+        expect(result.status, result.stdout + result.stderr).toBe(17);
+        await expect(
+          fetch(readFileSync(registryUrl, "utf8"), { signal: AbortSignal.timeout(1_000) }),
+        ).rejects.toThrow();
+      });
+    },
+  );
 
   it("carries verified registry bytes and their expected identity into the Docker context", () => {
     const root = tempDirs.make("openclaw-prepublish-build-context-");
@@ -283,12 +314,14 @@ docker_e2e_prepare_package_context "$ROOT_TARBALL"
     { name: "mismatched registry digest", registry: true, fault: "manifest" },
     { name: "mismatched root package digest", registry: true, fault: "package" },
   ])("runs the native npm 12 workflow with $name", async ({ registry, fault }) => {
+    const bash = resolveWorkflowBash();
     const root = tempDirs.make("openclaw-npm12-workflow-registry-");
     const fixture = registryFixture(root, ["@openclaw/ai"]);
     const packageDir = join(root, ".artifacts/docker-e2e-package");
     const bin = join(root, "bin");
     mkdirSync(packageDir, { recursive: true });
     mkdirSync(bin);
+    symlinkSync(bash, join(bin, "bash"));
     const packageTgz = createTarball(root, packageDir, "openclaw", "openclaw-current.tgz");
     const installed = join(root, "installed");
     for (const file of [
@@ -328,37 +361,44 @@ NODE
 `,
     );
     const workflow = parse(readFileSync(".github/workflows/package-acceptance.yml", "utf8")) as {
-      jobs: { npm_12_install_sh: { steps: Array<{ name: string; run?: string }> } };
+      jobs: { npm_12_install_sh: { steps: Array<{ name: string; shell?: string; run?: string }> } };
     };
-    const script = workflow.jobs.npm_12_install_sh.steps.find(
-      (step) => step.name === "Run install.sh with npm 12",
-    )?.run;
-    if (!script) {
+    const step = workflow.jobs.npm_12_install_sh.steps.find(
+      (candidate) => candidate.name === "Run install.sh with npm 12",
+    );
+    if (!step?.run) {
       throw new Error("Missing native npm 12 installer step");
     }
+    expect(step.shell).toBe("bash");
+    const scriptPath = join(root, "npm12-workflow.sh");
+    writeFileSync(scriptPath, step.run);
     await withPublishedRegistry(root, async (upstream) => {
-      const result = spawnSync("bash", ["-c", script], {
-        cwd: root,
-        encoding: "utf8",
-        timeout: 30_000,
-        env: {
-          ...process.env,
-          ...fixture.env,
-          PATH: `${bin}:${process.env.PATH}`,
-          RUNNER_TEMP: join(root, "runner-temp"),
-          NPM_CONFIG_REGISTRY: upstream,
-          npm_config_registry: upstream,
-          OPENCLAW_NPM_REGISTRY_UPSTREAM: upstream,
-          OPENCLAW_PREPUBLISH_PLUGIN_REGISTRY_DIR: registry ? fixture.artifactDir : "",
-          OPENCLAW_DOCKER_E2E_SELECTED_SHA: fault === "source" ? "b".repeat(40) : SOURCE_SHA,
-          OPENCLAW_PREPUBLISH_PLUGIN_REGISTRY_MANIFEST_SHA256:
-            fault === "manifest" ? "b".repeat(64) : sha256(fixture.manifestPath),
-          EXPECTED_PACKAGE_SHA256: fault === "package" ? "b".repeat(64) : sha256(packageTgz),
-          EXPECTED_PACKAGE_VERSION: VERSION,
-          EXPECTED_DEPENDENCY_VERSION: registry ? VERSION : BASELINE_VERSION,
-          INSTALL_MARKER: installed,
+      const result = spawnSync(
+        bash,
+        ["--noprofile", "--norc", "-e", "-o", "pipefail", scriptPath],
+        {
+          cwd: root,
+          encoding: "utf8",
+          timeout: 30_000,
+          env: {
+            ...process.env,
+            ...fixture.env,
+            PATH: `${bin}:${process.env.PATH}`,
+            RUNNER_TEMP: join(root, "runner-temp"),
+            NPM_CONFIG_REGISTRY: upstream,
+            npm_config_registry: upstream,
+            OPENCLAW_NPM_REGISTRY_UPSTREAM: upstream,
+            OPENCLAW_PREPUBLISH_PLUGIN_REGISTRY_DIR: registry ? fixture.artifactDir : "",
+            OPENCLAW_DOCKER_E2E_SELECTED_SHA: fault === "source" ? "b".repeat(40) : SOURCE_SHA,
+            OPENCLAW_PREPUBLISH_PLUGIN_REGISTRY_MANIFEST_SHA256:
+              fault === "manifest" ? "b".repeat(64) : sha256(fixture.manifestPath),
+            EXPECTED_PACKAGE_SHA256: fault === "package" ? "b".repeat(64) : sha256(packageTgz),
+            EXPECTED_PACKAGE_VERSION: VERSION,
+            EXPECTED_DEPENDENCY_VERSION: registry ? VERSION : BASELINE_VERSION,
+            INSTALL_MARKER: installed,
+          },
         },
-      });
+      );
       if (fault) {
         expect(result.status, result.stdout + result.stderr).not.toBe(0);
         expect(existsSync(installed)).toBe(false);
@@ -483,16 +523,10 @@ NODE
 
   it.each(["2026.8.1", "2026.8.1-2"])(
     "resolves stable candidate %s from an unversioned npm spec",
-    (version) => {
+    async (version) => {
       const root = tempDirs.make("openclaw-stable-prepublish-registry-shell-");
       const registryRoot = join(root, "registry");
-      const discordTarball = createTarball(
-        root,
-        root,
-        "@openclaw/discord",
-        `openclaw-discord-${version}.tgz`,
-        version,
-      );
+      const fixture = registryFixture(root, ["@openclaw/discord"], version);
       const fixtureVersion = "2026.5.2";
       const braveTarball = createTarball(
         root,
@@ -501,11 +535,12 @@ NODE
         `openclaw-brave-${fixtureVersion}.tgz`,
         fixtureVersion,
       );
-      const result = spawnSync(
-        "bash",
-        [
-          "-c",
-          `
+      await withPublishedRegistry(root, (upstream) => {
+        const result = spawnSync(
+          "bash",
+          [
+            "-c",
+            `
 set -euo pipefail
 source "$HELPER"
 registry_pid=""
@@ -516,29 +551,32 @@ cleanup() {
   fi
 }
 trap cleanup EXIT
-openclaw_prepublish_plugin_registry_start \
-  "" "" "$VERSION" "" "$REGISTRY_ROOT" registry_pid \
-  "@openclaw/discord" "$VERSION" "$DISCORD_TARBALL" \
+openclaw_prepublish_plugin_registry_start_mounted \
+  "$REGISTRY_ROOT" registry_pid '[]' \
   "@openclaw/brave-plugin" "$FIXTURE_VERSION" "$BRAVE_TARBALL"
 test "$(npm view @openclaw/discord version)" = "$VERSION"
+test "$(npm view @openclaw/discord@$BASELINE_VERSION version)" = "$BASELINE_VERSION"
 test "$(npm view @openclaw/brave-plugin version)" = "$FIXTURE_VERSION"
 `,
-        ],
-        {
-          encoding: "utf8",
-          env: {
-            ...process.env,
-            BRAVE_TARBALL: braveTarball,
-            DISCORD_TARBALL: discordTarball,
-            FIXTURE_VERSION: fixtureVersion,
-            HELPER: SCRIPT,
-            REGISTRY_ROOT: registryRoot,
-            VERSION: version,
+          ],
+          {
+            encoding: "utf8",
+            env: {
+              ...process.env,
+              ...fixture.env,
+              OPENCLAW_NPM_REGISTRY_UPSTREAM: upstream,
+              BASELINE_VERSION,
+              BRAVE_TARBALL: braveTarball,
+              FIXTURE_VERSION: fixtureVersion,
+              HELPER: SCRIPT,
+              REGISTRY_ROOT: registryRoot,
+              VERSION: version,
+            },
           },
-        },
-      );
+        );
 
-      expect(result.status, result.stderr).toBe(0);
+        expect(result.status, result.stderr).toBe(0);
+      });
     },
   );
 

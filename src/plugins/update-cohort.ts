@@ -9,6 +9,7 @@ import {
   collectMissingPluginInstallPayloads,
   type MissingPluginInstallPayload,
 } from "./payload-verification.js";
+import { createPluginCache, withPluginCache } from "./plugin-cache.js";
 import {
   capturePluginPackageUpdateSnapshot,
   reconcilePluginPackageUpdateConfig,
@@ -60,12 +61,14 @@ export async function convergePluginReleaseCohort(params: {
   let config = sync.config;
   let changed = sync.changed;
   let npmChanged = false;
-  const beforeIndex = loadInstalledPluginIndex({
-    config,
-    installRecords: config.plugins?.installs ?? {},
-    workspaceDir: params.workspaceDir,
-    env: params.env,
-  });
+  const beforeIndex = withPluginCache(createPluginCache(), () =>
+    loadInstalledPluginIndex({
+      config,
+      installRecords: config.plugins?.installs ?? {},
+      workspaceDir: params.workspaceDir,
+      env: params.env,
+    }),
+  );
   const packageUpdateSnapshot = capturePluginPackageUpdateSnapshot({
     index: beforeIndex,
     installOwners: Object.keys(config.plugins?.installs ?? {}),
@@ -127,12 +130,16 @@ export async function convergePluginReleaseCohort(params: {
   npmChanged ||= update.changed;
   Object.assign(installOwnerMigrations, resolvePluginInstallOwnerMigrations(update));
 
-  const afterIndex = loadInstalledPluginIndex({
-    config,
-    installRecords: config.plugins?.installs ?? {},
-    workspaceDir: params.workspaceDir,
-    env: params.env,
-  });
+  // Reinstall can restore the same path. Reconciliation needs new filesystem facts,
+  // including formerly missing files, without retiring a retained runtime generation.
+  const afterIndex = withPluginCache(createPluginCache(), () =>
+    loadInstalledPluginIndex({
+      config,
+      installRecords: config.plugins?.installs ?? {},
+      workspaceDir: params.workspaceDir,
+      env: params.env,
+    }),
+  );
   const reconciled = reconcilePluginPackageUpdateConfig({
     config,
     beforeIndex,

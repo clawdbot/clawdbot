@@ -63,9 +63,9 @@ export function sessionAttentionSubtitle(attention: SidebarSessionAttention): st
 export function renderSessionRunSpinner(showTitle = true, queued = false) {
   const label = t(queued ? "sessionsView.statusQueued" : "sessionsView.activeRun");
   return html`<span
-    class="session-run-spinner sidebar-recent-session__state${queued
-      ? " session-run-spinner--queued"
-      : ""}"
+    class="session-run-spinner sidebar-recent-session__state${
+      queued ? " session-run-spinner--queued" : ""
+    }"
     role="img"
     aria-label=${label}
     title=${showTitle ? label : nothing}

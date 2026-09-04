@@ -88,7 +88,8 @@ export function appendCapturedOutput(
     const remaining = Math.max(0, maxBytes - capture.bytes);
     if (remaining > 0) {
       const kept = buffer.subarray(0, remaining);
-      capture.chunks.push(kept);
+      // A clipped prefix must not retain the discarded backing bytes.
+      capture.chunks.push(kept.byteLength < buffer.byteLength ? Buffer.from(kept) : kept);
       capture.bytes += kept.byteLength;
     }
     capture.truncatedBytes += Math.max(0, buffer.byteLength - remaining);

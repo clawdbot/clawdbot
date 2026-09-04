@@ -1,6 +1,6 @@
 // Control Ui Mock Dev script supports OpenClaw repository automation.
 import { createHash } from "node:crypto";
-import { rmSync } from "node:fs";
+import fs, { rmSync } from "node:fs";
 import { mkdir, mkdtemp } from "node:fs/promises";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
@@ -16,6 +16,7 @@ import { applySharedChannelFieldHelp } from "../src/config/schema.channel-field-
 import { buildBaseHints } from "../src/config/schema.hints.js";
 import { applyConfigTierHints, applyResolvedConfigTierHints } from "../src/config/schema.tiers.js";
 import { CONTROL_UI_BOOTSTRAP_CONFIG_PATH } from "../src/gateway/control-ui-contract.js";
+import { controlUiPluginAssetRoot } from "../src/gateway/control-ui-plugin-assets-contract.js";
 import { buildUpdateRestartSentinelPayload } from "../src/infra/update-restart-sentinel-payload.js";
 import type { UpdateRunResult } from "../src/infra/update-runner.js";
 import type { UpdateAvailable, UpdateScheduleState } from "../ui/src/api/types.ts";
@@ -23,9 +24,13 @@ import {
   controlUiSessionPath,
   createControlUiMockBootstrapConfig,
   createControlUiMockGatewayInitScript,
+  createControlUiMockSameOriginGatewayScript,
+  prepareControlUiMockGatewayScenario,
   type ControlUiMockGatewayScenario,
 } from "../ui/src/test-helpers/control-ui-e2e.ts";
 import { createControlUiSessionRow } from "../ui/src/test-helpers/control-ui-session-fixtures.ts";
+import { workboardUi } from "../ui/src/test-helpers/control-ui-workboard-fixture.ts";
+import { createOfflineDeviceNode } from "../ui/src/test-helpers/devices-fixtures.ts";
 import {
   resolveExternalPackageAliasesForVite,
   resolveSourcePackageAliasesForVite,
@@ -59,6 +64,7 @@ type CliOptions = {
     | "attachments"
     | "board"
     | "code-fences"
+    | "dashboards"
     | "goal"
     | "swarm"
     | "update-available"
@@ -360,6 +366,7 @@ function parseFixture(value: string | undefined): CliOptions["fixture"] {
     value !== "attachments" &&
     value !== "board" &&
     value !== "code-fences" &&
+    value !== "dashboards" &&
     value !== "goal" &&
     value !== "swarm" &&
     value !== "update-available" &&
@@ -1699,6 +1706,37 @@ async function createChatPickerScenario(
   const workboardMocks = buildWorkboardMocks(baseTime);
   const activityTime = Date.now();
   const activitySessions = buildActivitySessionRows(activityTime);
+  const dashboardGallerySessions =
+    fixture === "dashboards"
+      ? [
+          sessionRow("agent:main:dashboard:release-health", "Release health", baseTime - 3_000, {
+            boardFace: "dashboard",
+            createdActor: MOCK_ACTOR_MIRA,
+            hasActiveRun: true,
+            status: "running",
+          }),
+          sessionRow("agent:main:dashboard:model-spend", "Model spend", baseTime - 8_000, {
+            boardFace: "dashboard",
+            createdActor: MOCK_ACTOR_PETER,
+          }),
+          sessionRow("agent:main:dashboard:support-radar", "Support radar", baseTime - 18_000, {
+            boardFace: "dashboard",
+            createdActor: MOCK_ACTOR_MIRA,
+          }),
+          sessionRow("agent:main:dashboard:ci-signal", "CI signal", baseTime - 42_000, {
+            boardFace: "dashboard",
+            createdActor: MOCK_ACTOR_PETER,
+          }),
+          sessionRow("agent:main:dashboard:community-pulse", "Community pulse", baseTime - 75_000, {
+            boardFace: "dashboard",
+            createdActor: MOCK_ACTOR_MIRA,
+          }),
+          sessionRow("agent:main:dashboard:gateway-fleet", "Gateway fleet", baseTime - 130_000, {
+            boardFace: "dashboard",
+            createdActor: MOCK_ACTOR_PETER,
+          }),
+        ]
+      : [];
   const activeGoal = {
     schemaVersion: 1 as const,
     id: "goal-mobile-parity",
@@ -1715,6 +1753,7 @@ async function createChatPickerScenario(
   };
   const sessions = [
     ...activitySessions,
+    ...dashboardGallerySessions,
     ...(fixture === "workboard"
       ? [
           sessionRow(workboardMocks.sessionKey, "Product operations dashboard", baseTime, {
@@ -1809,6 +1848,13 @@ async function createChatPickerScenario(
       execCwd: "/Users/demo/Work/openclaw",
       lastReadAt: baseTime - 120_000,
       owner: { actor: MOCK_ACTOR_PETER },
+      participantCount: 4,
+      participants: [
+        { identity: { type: "profile", id: "profile-mira" }, label: "Mira" },
+        { identity: { type: "profile", id: "profile-riley" }, label: "Riley" },
+        { identity: { type: "profile", id: "profile-sam" }, label: "Sam" },
+        { identity: { type: "profile", id: "profile-lee" }, label: "Lee" },
+      ],
       observerDigest: {
         headline: "Done: fixed the flaky retry-window test",
         health: "done",
@@ -2054,6 +2100,8 @@ async function createChatPickerScenario(
       "sessions.catalog.read",
       "sessions.create",
       "system.info",
+      "desktop.observe",
+      "environments.list",
       "terminal.open",
       ...(updateFixture ? ["update.hold", "update.run", "update.status"] : []),
       ...(fixture === "workboard"
@@ -2066,19 +2114,7 @@ async function createChatPickerScenario(
           ]
         : []),
     ],
-    controlUiTabs:
-      fixture === "workboard"
-        ? [
-            {
-              group: "control",
-              icon: "kanban",
-              id: "workboard",
-              label: "Workboard",
-              placement: "route:workboard",
-              pluginId: "workboard",
-            },
-          ]
-        : [],
+    ...(fixture === "workboard" ? workboardUi : {}),
     controlUiWidgetKinds: [
       { pluginId: "session", kind: "session:progress", label: "Session progress" },
       ...(fixture === "workboard"
@@ -2335,7 +2371,8 @@ async function createChatPickerScenario(
         osLabel: "macOS 26.5",
         nodeVersion: "24.15.0",
         pid: 4242,
-        uptimeMs: 86_400_000,
+        uptimeMs: (11 * 24 + 4) * 3_600_000,
+        loadAverage: [3.2, 2.8, 2.4],
         cpuCount: 16,
         memoryTotalBytes: 68_719_476_736,
         memoryFreeBytes: 34_359_738_368,
@@ -2402,6 +2439,7 @@ async function createChatPickerScenario(
                 { kind: "local", name: "main" },
                 { kind: "local", name: "steipete/place-picker" },
               ],
+              repositoryStatus: "git",
               defaultBranch: "main",
               headBranch: "main",
             },
@@ -2414,6 +2452,7 @@ async function createChatPickerScenario(
                 { kind: "local", name: "main" },
                 { kind: "local", name: "steipete/storage-selector-design" },
               ],
+              repositoryStatus: "git",
               defaultBranch: "main",
               headBranch: "main",
             },
@@ -2421,6 +2460,22 @@ async function createChatPickerScenario(
         ],
       },
       "environments.list": {
+        environments: [
+          {
+            id: "gateway",
+            type: "gateway",
+            label: "Gateway host",
+            status: "available",
+            desktop: true,
+          },
+          {
+            id: "node:a1b2c3d4e5f60718293a4b5c6d7e8f90a1b2c3d4e5f60718293a4b5c6d7e8f90",
+            type: "node",
+            label: "Mac Studio",
+            status: "available",
+            desktop: true,
+          },
+        ],
         profiles: [{ id: "aws", providerId: "aws" }],
       },
       // config.set/config.apply are served statefully by the mock gateway
@@ -2610,7 +2665,7 @@ async function createChatPickerScenario(
           },
           {
             deviceId: "0f1e2d3c4b5a69788796a5b4c3d2e1f00f1e2d3c4b5a69788796a5b4c3d2e1f0",
-            displayName: "Mac Studio",
+            displayName: "Mac mini",
             platform: "darwin",
             clientId: "node-host",
             clientMode: "node",
@@ -2681,20 +2736,43 @@ async function createChatPickerScenario(
       },
       "node.list": {
         nodes: [
+          createOfflineDeviceNode(),
           {
             nodeId: "a1b2c3d4e5f60718293a4b5c6d7e8f90a1b2c3d4e5f60718293a4b5c6d7e8f90",
             displayName: "Mac Studio",
             platform: "darwin",
             deviceFamily: "Mac",
-            modelIdentifier: "Mac14,12",
+            modelIdentifier: "Mac15,14",
             remoteIp: "192.168.1.11",
             version: "2026.6.11",
             connected: true,
             paired: true,
             approvalState: "approved",
             connectedAtMs: baseTime - 60_000,
-            caps: ["canvas", "screen"],
+            hostStats: {
+              cpuCount: 24,
+              loadAverage: [3.2, 2.8, 2.4],
+              memoryTotalBytes: 192 * 1024 ** 3,
+              memoryFreeBytes: 41 * 1024 ** 3,
+              diskTotalBytes: 2 * 1024 ** 4,
+              diskAvailableBytes: 1.2 * 1024 ** 4,
+              updatedAtMs: baseTime,
+            },
+            caps: [
+              "browser",
+              "canvas",
+              "screen",
+              "computer",
+              "file",
+              "system",
+              "mcp",
+              "local-inference",
+              "claude-sessions",
+              "codex-cli-sessions",
+              "pi-sessions",
+            ],
             commands: [
+              "desktop.stream",
               "screen.snapshot",
               "system.execApprovals.get",
               "system.execApprovals.set",
@@ -2705,18 +2783,27 @@ async function createChatPickerScenario(
           },
           {
             nodeId: "0f1e2d3c4b5a69788796a5b4c3d2e1f00f1e2d3c4b5a69788796a5b4c3d2e1f0",
-            displayName: "Mac Studio",
+            displayName: "Mac mini",
             platform: "darwin",
             deviceFamily: "Mac",
-            modelIdentifier: "Mac15,14",
+            modelIdentifier: "Mac16,11",
             remoteIp: "192.168.1.12",
             version: "2026.6.10",
             connected: true,
             paired: true,
             approvalState: "approved",
             lastSeenAtMs: baseTime - 82_800_000,
-            caps: ["canvas", "screen"],
-            commands: ["screen.snapshot", "system.run"],
+            hostStats: {
+              cpuCount: 12,
+              loadAverage: [15.4, 13.8, 11.2],
+              memoryTotalBytes: 32 * 1024 ** 3,
+              memoryFreeBytes: 2 * 1024 ** 3,
+              diskTotalBytes: 1024 ** 4,
+              diskAvailableBytes: 64 * 1024 ** 3,
+              updatedAtMs: baseTime,
+            },
+            caps: ["browser", "computer", "file", "system", "codex-cli-sessions"],
+            commands: ["desktop.stream", "screen.snapshot", "system.run"],
           },
           {
             nodeId: "11223344556677889900aabbccddeeff11223344556677889900aabbccddeeff",
@@ -3076,15 +3163,22 @@ function escapeScriptContent(script: string): string {
   return script.replaceAll("</script", "<\\/script");
 }
 
-function createMockGatewayPlugin(
+async function createMockGatewayPlugin(
   scenario: ControlUiMockGatewayScenario,
   fixture?: CliOptions["fixture"],
-): Plugin {
-  const initScript = escapeScriptContent(createControlUiMockGatewayInitScript(scenario));
+): Promise<Plugin> {
+  const prepared = await prepareControlUiMockGatewayScenario(scenario);
+  const initScript = escapeScriptContent(createControlUiMockGatewayInitScript(prepared.scenario));
+  const sameOriginGatewayScript = escapeScriptContent(createControlUiMockSameOriginGatewayScript());
   const statefulInitScript = escapeScriptContent(
-    createControlUiPreviewInitScript() + skillLibraryMockInitScript(scenario.models),
+    createControlUiPreviewInitScript() + skillLibraryMockInitScript(prepared.scenario.models),
   );
-  const bootstrapBody = JSON.stringify(createControlUiMockBootstrapConfig(scenario));
+  const bootstrapBody = JSON.stringify(createControlUiMockBootstrapConfig(prepared.scenario));
+  const pluginIconIds = new Set(
+    buildPluginCatalogMock()
+      .plugins.filter((plugin) => plugin.hasIcon)
+      .map((plugin) => plugin.id),
+  );
   const attachmentThemeToggle =
     fixture === "attachments"
       ? `    <style data-openclaw-control-ui-mock-theme-toggle>
@@ -3124,6 +3218,40 @@ function createMockGatewayPlugin(
       : "";
   return {
     configureServer(server) {
+      server.middlewares.use((req, res, next) => {
+        const prefix = "/__openclaw__/plugin-icon/";
+        const pathname = new URL(req.url ?? "/", "http://openclaw.invalid").pathname;
+        if (!pathname.startsWith(prefix)) {
+          next();
+          return;
+        }
+        const pluginId = decodeURIComponent(pathname.slice(prefix.length));
+        if (!pluginIconIds.has(pluginId)) {
+          next();
+          return;
+        }
+        const icon = path.join(repoRoot, "extensions", pluginId, "assets", "icon.png");
+        if (!fs.existsSync(icon)) {
+          next();
+          return;
+        }
+        res.statusCode = 200;
+        res.setHeader("content-type", "image/png");
+        res.end(fs.readFileSync(icon));
+      });
+      server.middlewares.use((req, res, next) => {
+        const pathname = req.url?.split("?", 1)[0];
+        if (!pathname?.startsWith(controlUiPluginAssetRoot())) {
+          next();
+          return;
+        }
+        const asset = prepared.assets.get(pathname);
+        res.statusCode = asset ? 200 : 404;
+        if (asset) {
+          res.setHeader("content-type", asset.contentType);
+        }
+        res.end(asset?.body);
+      });
       server.middlewares.use(CONTROL_UI_BOOTSTRAP_CONFIG_PATH, (_req, res) => {
         res.statusCode = 200;
         res.setHeader("content-type", "application/json");
@@ -3138,7 +3266,7 @@ function createMockGatewayPlugin(
     transformIndexHtml(html) {
       return html.replace(
         "</head>",
-        `${attachmentThemeToggle}    <script data-openclaw-control-ui-mock-locale>\n      try { localStorage.setItem("openclaw.i18n.locale", "en"); } catch {}\n    </script>\n    <script data-openclaw-control-ui-mock-gateway>\n${initScript}\n${statefulInitScript}\n    </script>\n  </head>`,
+        `${attachmentThemeToggle}    <script data-openclaw-control-ui-mock-locale>\n      try { localStorage.setItem("openclaw.i18n.locale", "en"); } catch {}\n    </script>\n    <script data-openclaw-control-ui-mock-gateway>\n${sameOriginGatewayScript}\n${initScript}\n${statefulInitScript}\n    </script>\n  </head>`,
       );
     },
   };
@@ -3230,7 +3358,7 @@ try {
     },
     plugins: [
       ...createStandaloneMockIsolationPlugins(),
-      createMockGatewayPlugin(scenario, options.fixture),
+      await createMockGatewayPlugin(scenario, options.fixture),
       createBoardFixturePlugin(),
       ...(options.fixture === "attachments" ? [createChatAttachmentFixturePlugin()] : []),
     ],

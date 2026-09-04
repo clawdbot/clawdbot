@@ -66,6 +66,15 @@ vi.mock("../../../runtime.js", async (importOriginal) => ({
   defaultRuntime: runtimeMock,
 }));
 
+// Forward to the same synchronous-throwing exit mock: runMessageAction only defers the
+// real exit via the one-shot output drain, which these tests don't exercise directly.
+vi.mock("../../one-shot-exit.js", () => ({
+  requestExitAfterOneShotOutput: (runtime: { exit: (code: number) => never }, exitCode = 0) => {
+    runtime.exit(exitCode);
+    return true;
+  },
+}));
+
 vi.mock("../../deps.js", () => ({
   createDefaultDeps: () => ({}),
 }));

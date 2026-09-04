@@ -57,6 +57,7 @@ export const GATEWAY_EVENTS = [
   "session.tool",
   "sessions.changed",
   "controlUi.sessionPullRequests.changed",
+  "plugins.controlUi.changed",
   "presence",
   "tick",
   "talk.mode",
@@ -71,6 +72,7 @@ export const GATEWAY_EVENTS = [
   "node.pair.requested",
   "node.pair.resolved",
   "node.presence",
+  "node.hostStats",
   GATEWAY_EVENT_NODE_RUNNER_INVENTORY_CHANGED,
   "node.invoke.cancel",
   "node.invoke.input",
@@ -97,4 +99,5 @@ export const GATEWAY_EVENTS = [
   GATEWAY_EVENT_UPDATE_AVAILABLE,
   "portal.changed",
   "progressCard.changed",
+  "mentions.changed",
 ];

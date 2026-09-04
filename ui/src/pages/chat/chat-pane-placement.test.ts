@@ -83,7 +83,7 @@ describe("chat pane placement", () => {
     const session = { ...activePlacementSession(), hasActiveRun: true };
 
     const moving = dialogs.track(pane.moveHeaderPlacement(session));
-    await vi.waitFor(() => {
+    await dialogs.waitFor(() => {
       expect(document.body.querySelector('[data-value="device:runner"]')).not.toBeNull();
     });
     expect(document.body.querySelector('[data-value="cloud:aws"]')).toBeNull();
@@ -155,7 +155,7 @@ describe("chat pane placement", () => {
     const session = activePlacementSession();
 
     const moving = dialogs.track(pane.moveHeaderPlacement(session));
-    await vi.waitFor(() => {
+    await dialogs.waitFor(() => {
       expect(document.body.querySelector('[data-value="cloud:aws"]')).not.toBeNull();
     });
     document.body.querySelector<HTMLButtonElement>('[data-value="cloud:aws"]')?.click();
@@ -252,7 +252,7 @@ describe("chat pane placement", () => {
       } satisfies GatewaySessionRow;
 
       const moving = dialogs.track(pane.moveHeaderPlacement(session));
-      await vi.waitFor(() => {
+      await dialogs.waitFor(() => {
         expect(document.body.querySelector('[data-value="cloud:aws"]')).not.toBeNull();
       });
       const incompatible = document.body.querySelector<HTMLButtonElement>(
@@ -411,7 +411,7 @@ describe("chat pane placement", () => {
     } satisfies GatewaySessionRow;
 
     const moving = dialogs.track(pane.moveHeaderPlacement(session));
-    await vi.waitFor(() => {
+    await dialogs.waitFor(() => {
       expect(document.body.querySelector('[data-value="device:build-mac"]')).not.toBeNull();
     });
     const device = document.body.querySelector<HTMLButtonElement>(
@@ -448,6 +448,14 @@ describe("chat pane placement", () => {
                 sessionHost: true,
                 workerSlots: { total: 1, available: 1 },
                 invocableCommands: ["codex.exec-server.stdio.v1"],
+                ...(executionMode === "remote-exec"
+                  ? {
+                      requiredNodeCommand: {
+                        command: "codex.exec-server.stdio.v1",
+                        state: "invocable",
+                      },
+                    }
+                  : {}),
               },
             ],
           };
@@ -482,7 +490,7 @@ describe("chat pane placement", () => {
       } satisfies GatewaySessionRow;
 
       const moving = dialogs.track(pane.moveHeaderPlacement(session));
-      await vi.waitFor(() => {
+      await dialogs.waitFor(() => {
         expect(document.body.querySelector('[data-value="device:build-mac"]')).not.toBeNull();
       });
       document.body.querySelector<HTMLButtonElement>('[data-value="device:build-mac"]')?.click();
@@ -517,6 +525,7 @@ describe("chat pane placement", () => {
       },
       availableSlots: 0,
       invocableCommands: ["codex.exec-server.stdio.v1"],
+      commandState: "invocable",
       disabled: false,
     },
     {
@@ -526,6 +535,7 @@ describe("chat pane placement", () => {
       devicePlacement: { requiredNodeCommands: [], consumesWorkerSlot: true },
       availableSlots: 0,
       invocableCommands: [],
+      commandState: undefined,
       disabled: true,
       reason: /worker slots/i,
     },
@@ -539,8 +549,10 @@ describe("chat pane placement", () => {
       },
       availableSlots: 1,
       invocableCommands: [],
+      commandState: "unauthorized",
       disabled: true,
-      reason: /enable|approv/i,
+      reason:
+        "Authorize codex.exec-server.stdio.v1 in the Gateway node command policy, or pick another device.",
     },
   ] as const)("$name in the Move Session picker", async (scenario) => {
     const request = dialogs.mockRequest(async (method: string) => {
@@ -557,6 +569,14 @@ describe("chat pane placement", () => {
               workerSlots: { total: 1, available: scenario.availableSlots },
               capabilities: ["codex.exec-server.stdio.v1"],
               invocableCommands: scenario.invocableCommands,
+              ...(scenario.commandState
+                ? {
+                    requiredNodeCommand: {
+                      command: "codex.exec-server.stdio.v1",
+                      state: scenario.commandState,
+                    },
+                  }
+                : {}),
             },
           ],
         };
@@ -589,7 +609,12 @@ describe("chat pane placement", () => {
     } satisfies GatewaySessionRow;
 
     const moving = dialogs.track(pane.moveHeaderPlacement(session));
-    await vi.waitFor(() => {
+    await dialogs.waitFor(() =>
+      expect(request).toHaveBeenCalledWith("environments.list", {
+        runtimeId: scenario.runtimeId,
+      }),
+    );
+    await dialogs.waitFor(() => {
       expect(document.body.querySelector('[data-value="device:build-mac"]')).not.toBeNull();
     });
     const device = document.body.querySelector<HTMLButtonElement>(
@@ -597,7 +622,11 @@ describe("chat pane placement", () => {
     );
     expect(device?.disabled).toBe(scenario.disabled);
     if (scenario.reason !== undefined) {
-      expect(device?.title).toMatch(scenario.reason);
+      if (typeof scenario.reason === "string") {
+        expect(device?.title).toBe(scenario.reason);
+      } else {
+        expect(device?.title).toMatch(scenario.reason);
+      }
     }
     [...document.body.querySelectorAll<HTMLButtonElement>("button")]
       .find((button) => button.textContent?.trim() === "Cancel")

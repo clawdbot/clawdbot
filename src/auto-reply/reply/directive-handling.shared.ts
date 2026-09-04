@@ -322,7 +322,11 @@ export async function persistSessionDirectiveSnapshot(params: {
   touchedFields: Array<keyof SessionEntry>;
   hasModelSelection: boolean;
   reassertLiveModelSwitchPending: boolean;
-}): Promise<{ status: "applied" | "conflict" | "model-selection-locked" }> {
+  validateCommit?: () => string | undefined;
+}): Promise<
+  | { status: "applied" | "conflict" | "model-selection-locked" }
+  | { status: "commit-rejected"; error: string }
+> {
   const { sessionEntry, sessionKey, sessionStore } = params;
   const persistence = await persistReplySessionEntry({
     storePath: params.storePath,
@@ -332,11 +336,15 @@ export async function persistSessionDirectiveSnapshot(params: {
     reassertLiveModelSwitchPending: params.reassertLiveModelSwitchPending,
     requireModelSelectionUnlocked: params.hasModelSelection,
     touchedFields: params.touchedFields,
+    validateCommit: params.validateCommit,
   });
   if (persistence.status !== "current") {
     if (persistence.entry) {
       sessionStore[sessionKey] = persistence.entry;
       adoptPersistedSessionSnapshot(sessionEntry, persistence.entry);
+    }
+    if (persistence.status === "commit-rejected") {
+      return persistence;
     }
     return {
       status: persistence.status === "model-selection-locked" ? persistence.status : "conflict",

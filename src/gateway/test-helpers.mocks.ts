@@ -188,7 +188,14 @@ vi.mock("../infra/tailscale.js", async () => {
     await vi.importActual<typeof import("../infra/tailscale.js")>("../infra/tailscale.js");
   return {
     ...actual,
-    readTailscaleWhoisIdentity: async () => testTailscaleWhois.value,
+    readTailscaleWhoisIdentity: async (
+      ip: string,
+      _exec: unknown,
+      opts?: { timeoutMs?: number; cacheTtlMs?: number; errorTtlMs?: number },
+    ) => {
+      testTailscaleWhois.calls.push({ ip, opts });
+      return testTailscaleWhois.value;
+    },
   };
 });
 

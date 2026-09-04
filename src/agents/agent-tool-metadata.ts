@@ -1,4 +1,5 @@
 import { copyPluginToolMeta, getPluginToolMeta } from "../plugins/tool-metadata.js";
+import { copyAgentToolAvailability } from "./agent-tool-availability.js";
 import type { AnyAgentTool } from "./agent-tools.types.js";
 import { copyBeforeToolCallHookMarker } from "./before-tool-call-metadata.js";
 import { copyChannelAgentToolMeta } from "./channel-tool-metadata.js";
@@ -44,6 +45,7 @@ export function copyBeforeToolCallWrapperMetadata(
   copyChannelAgentToolMeta(source as never, target as never);
   copyToolTerminalPresentation(source, target);
   copyAgentToolActionDescriptor(source, target);
+  copyAgentToolAvailability(source, target);
 }
 
 /** Bind the broad family at final assembly from private, process-stable owner metadata. */
@@ -75,5 +77,6 @@ export function copyAgentToolMetadata<T extends AnyAgentTool>(source: AnyAgentTo
   copyCronScheduledToolProjection(source, target);
   copyInternalToolExecutionPreparer(source, target);
   copyAgentToolActionDescriptor(source, target);
+  copyAgentToolAvailability(source, target);
   return target;
 }

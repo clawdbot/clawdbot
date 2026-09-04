@@ -1,4 +1,4 @@
-import { execFileSync, spawnSync } from "node:child_process";
+import { execFileSync, spawn, spawnSync } from "node:child_process";
 import { createHash } from "node:crypto";
 import {
   chmodSync,
@@ -28,6 +28,12 @@ import {
   type PublishablePluginPackage,
   type ScanPackageResult,
 } from "../../scripts/lib/plugin-npm-security-scan.mts";
+import {
+  isProcessAlive,
+  waitForChildClose,
+  waitForDead,
+  waitForPidFile,
+} from "../helpers/process-wait.js";
 import { useAutoCleanupTempDirTracker } from "../helpers/temp-dir.js";
 
 const CANDIDATE_SHA = "1".repeat(40);
@@ -820,6 +826,91 @@ describe("scripts/lib/plugin-npm-security-scan.mts", () => {
       expect(`${result.stdout}${result.stderr}${JSON.stringify(report)}`).not.toContain(root);
     }
   }, 30_000);
+
+  it.skipIf(process.platform === "win32").each([
+    ["SIGINT", 130],
+    ["SIGTERM", 143],
+  ] as const)(
+    "joins scanner descendants and records cancellation on %s",
+    async (signal, exitCode) => {
+      const root = tempDirs.make("openclaw-plugin-npm-security-cancel-");
+      const childPath = join(root, "child.mjs");
+      const childPidPath = join(root, "child.pid");
+      const descendantPidPath = join(root, "descendant.pid");
+      const reportPath = join(root, "report.json");
+      writeFileSync(
+        childPath,
+        `import fs from "node:fs";
+import { spawn } from "node:child_process";
+setInterval(() => {}, 1000);
+fs.writeFileSync(${JSON.stringify(childPidPath)}, String(process.pid));
+const descendant = spawn(process.execPath, ["-e", "setInterval(() => {}, 1000)"], { stdio: "ignore" });
+descendant.once("spawn", () => fs.writeFileSync(${JSON.stringify(descendantPidPath)}, String(descendant.pid)));
+descendant.unref();
+`,
+        "utf8",
+      );
+      const wrapper = spawn(
+        process.execPath,
+        [
+          "scripts/plugin-npm-security-scan-runner.mjs",
+          "--artifact-root",
+          root,
+          "--candidate-sha",
+          CANDIDATE_SHA,
+          "--tooling-sha",
+          TOOLING_SHA,
+          "--report",
+          reportPath,
+        ],
+        {
+          cwd: process.cwd(),
+          env: {
+            ...process.env,
+            NODE_ENV: "test",
+            OPENCLAW_PLUGIN_SECURITY_RUNNER_CHILD: childPath,
+          },
+          stdio: "ignore",
+        },
+      );
+      const closed = waitForChildClose(wrapper, 10_000);
+      let childPid: number | undefined;
+      let descendantPid: number | undefined;
+      try {
+        childPid = await waitForPidFile(childPidPath, 5_000);
+        descendantPid = await waitForPidFile(descendantPidPath, 5_000);
+        expect(isProcessAlive(childPid)).toBe(true);
+        expect(isProcessAlive(descendantPid)).toBe(true);
+        wrapper.kill(signal);
+        const result = await closed;
+        expect(isProcessAlive(childPid)).toBe(false);
+        expect(isProcessAlive(descendantPid)).toBe(false);
+        expect(result).toEqual({ code: exitCode, signal: null });
+        expect(JSON.parse(readFileSync(reportPath, "utf8"))).toMatchObject({
+          candidateSha: CANDIDATE_SHA,
+          toolingSha: TOOLING_SHA,
+          status: "fail",
+          errors: [`Plugin npm security scanner cancelled by ${signal}.`],
+        });
+      } finally {
+        if (wrapper.exitCode === null && wrapper.signalCode === null) {
+          wrapper.kill("SIGKILL");
+        }
+        await closed;
+        if (childPid) {
+          try {
+            process.kill(-childPid, "SIGKILL");
+          } catch (error) {
+            expect(error).toMatchObject({ code: "ESRCH" });
+          }
+          await waitForDead(childPid, 2_000);
+        }
+        if (descendantPid) {
+          await waitForDead(descendantPid, 2_000);
+        }
+      }
+    },
+  );
 
   it("fails closed when RSS measurement is unavailable", () => {
     const root = tempDirs.make("openclaw-plugin-npm-security-rss-measurement-");

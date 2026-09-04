@@ -26,7 +26,7 @@ import { setReplyPayloadMetadata, type ReplyPayload } from "../../auto-reply/rep
 import { getTotalPendingReplies } from "../../auto-reply/reply/dispatcher-registry.js";
 import { markInboundContextLabel } from "../../auto-reply/reply/inbound-context-marker.js";
 import {
-  replyRunRegistry as baseReplyRunRegistry,
+  replyRunRegistry,
   type ReplyBackendQueueMessageOptions,
   type ReplyOperation,
 } from "../../auto-reply/reply/reply-run-registry.js";
@@ -50,7 +50,10 @@ import { resolveMirroredTranscriptText } from "../../config/sessions/transcript-
 import { withOwnedSessionTranscriptWrites } from "../../config/sessions/transcript-write-context.js";
 import { getAgentRunContext } from "../../infra/agent-run-registry.js";
 import { RUN_STALE_TAKEOVER_MS } from "../../logging/diagnostic-run-activity.js";
-import { runExclusiveSessionLifecycleMutation } from "../../sessions/session-lifecycle-admission.js";
+import {
+  getActiveSessionWorkAdmissionCount,
+  runExclusiveSessionLifecycleMutation,
+} from "../../sessions/session-lifecycle-admission.js";
 import { projectAssistantDisplayContent } from "../../shared/assistant-display-content.js";
 import {
   disposeOpenClawAgentDatabaseByPath,
@@ -65,6 +68,7 @@ import { createChatRunState } from "../server-chat-state.js";
 import { STALE_WORKER_BUILD_REASON } from "../worker-environments/admission.js";
 import { agentWaitHandler } from "./agent-wait.js";
 import { handleChatSend, handleTrustedInternalChatSend } from "./chat-send-handler.js";
+import { readChatSendDedupeResponse } from "./chat-send-pre-admission.js";
 import type { GatewayRequestContext, RespondFn } from "./types.js";
 
 type ProjectedDispatchParams = Parameters<
@@ -83,15 +87,6 @@ type TranscriptUpdate = Parameters<
 
 const TEST_TOOL_AUTHORITY_FINGERPRINT = "test-tool-authority";
 const TEST_TOOL_AUTHORITY_ROUTE = { provider: "openai", model: "gpt-5.6-sol" } as const;
-const replyRunRegistry = {
-  ...baseReplyRunRegistry,
-  begin(...args: Parameters<typeof baseReplyRunRegistry.begin>) {
-    const operation = baseReplyRunRegistry.begin(...args);
-    operation.bindToolAuthorityRoute(TEST_TOOL_AUTHORITY_ROUTE);
-    operation.bindToolAuthorityFingerprint(TEST_TOOL_AUTHORITY_FINGERPRINT);
-    return operation;
-  },
-};
 
 const mockState = vi.hoisted(() => {
   const createTestState = () => ({
@@ -1086,8 +1081,11 @@ function managedAudioBlocks(content: Array<Record<string, unknown>>) {
 }
 
 function bindTestToolAuthority(operation: ReplyOperation) {
-  operation.bindToolAuthorityProjector(() => TEST_TOOL_AUTHORITY_FINGERPRINT);
-  operation.bindToolAuthorityRoute({ provider: "anthropic", model: "test-model" });
+  operation.bindToolAuthoritySnapshot({
+    fingerprint: () => TEST_TOOL_AUTHORITY_FINGERPRINT,
+    project: () => TEST_TOOL_AUTHORITY_FINGERPRINT,
+  });
+  operation.bindToolAuthorityRoute(TEST_TOOL_AUTHORITY_ROUTE);
 }
 
 function beginActiveReplyOperation(params: {
@@ -1348,7 +1346,10 @@ async function runNonStreamingChatSend(params: {
   }
   if (waitFor === "dedupe") {
     await waitForAssertion(() => {
-      expect(params.context.dedupe.has(`chat:${params.idempotencyKey}`)).toBe(true);
+      // Admission retains request identity before a terminal response exists.
+      expect(
+        readChatSendDedupeResponse(params.context.dedupe, params.idempotencyKey),
+      ).toBeDefined();
     });
     return undefined;
   }
@@ -1454,6 +1455,15 @@ beforeAll(() => {
   });
 });
 
+afterEach(async () => {
+  // ACKs and terminal errors can precede detached transcript cleanup.
+  await waitForAssertion(() => expect(getActiveSessionWorkAdmissionCount()).toBe(0));
+  replyRunRegistryTesting.resetReplyRunRegistry();
+  mockState.reset();
+  bindingMocks.resolveByConversation.mockReset();
+  bindingMocks.resolveByConversation.mockReturnValue(null);
+});
+
 afterAll(async () => {
   try {
     expect(getTotalPendingReplies()).toBe(0);
@@ -1470,13 +1480,6 @@ afterAll(async () => {
 });
 
 describe("chat directive tag stripping for non-streaming final payloads", () => {
-  afterEach(() => {
-    replyRunRegistryTesting.resetReplyRunRegistry();
-    mockState.reset();
-    bindingMocks.resolveByConversation.mockReset();
-    bindingMocks.resolveByConversation.mockReturnValue(null);
-  });
-
   it("carries an internal runtime tool cap into agent dispatch", async () => {
     const { send } = await createSqliteChatRequest("openclaw-chat-send-runtime-tools-");
 
@@ -2459,29 +2462,41 @@ describe("chat directive tag stripping for non-streaming final payloads", () => 
       queueMessage,
     });
 
-    await send({
+    const pendingSend = send({
       idempotencyKey: "idem-steer-reject",
       requestParams: { queueMode: "steer" },
       waitFor: "none",
     });
-    expect(respond).toHaveBeenCalledWith(
-      true,
-      expect.objectContaining({ status: "started" }),
-      undefined,
-      expect.any(Object),
-    );
-    delivery.reject(new Error("native turn ended"));
-    operation.complete();
+    const rejection = new Error("native turn ended");
+    try {
+      await waitForAssertion(() => expect(queueMessage).toHaveBeenCalledOnce());
+      // A negative callback is provisional; only the terminal rejection permits fallback.
+      expect(respond).not.toHaveBeenCalled();
+      expect(dispatchInboundMessageMock).toHaveBeenCalledTimes(dispatchCallsBefore);
+      delivery.reject(rejection);
+      await pendingSend;
+      expect(respond).toHaveBeenCalledWith(
+        true,
+        expect.objectContaining({ status: "started" }),
+        undefined,
+        expect.any(Object),
+      );
+      operation.complete();
 
-    await waitForAssertion(() => {
-      expect(context.dedupe.get("chat:idem-steer-reject")?.payload).toEqual({
-        runId: "idem-steer-reject",
-        status: "ok",
+      await waitForAssertion(() => {
+        expect(context.dedupe.get("chat:idem-steer-reject")?.payload).toEqual({
+          runId: "idem-steer-reject",
+          status: "ok",
+        });
       });
-    });
-    expect(queueMessage).toHaveBeenCalledOnce();
-    expect(dispatchInboundMessageMock).toHaveBeenCalledTimes(dispatchCallsBefore + 1);
-    expect(mockState.lastDispatchCtx?.BodyForAgent).toBe("hello");
+      expect(queueMessage).toHaveBeenCalledOnce();
+      expect(dispatchInboundMessageMock).toHaveBeenCalledTimes(dispatchCallsBefore + 1);
+      expect(mockState.lastDispatchCtx?.BodyForAgent).toBe("hello");
+    } finally {
+      delivery.reject(rejection);
+      operation.complete();
+      await Promise.allSettled([pendingSend, delivery.promise]);
+    }
   });
 
   it("never aborts or replays onto a successor after unconfirmed acceptance", async () => {
@@ -2688,7 +2703,9 @@ describe("chat directive tag stripping for non-streaming final payloads", () => 
       { agentId: "main", dropIfSlow: true },
     ]);
     await waitForAssertion(() => {
-      expect(context.dedupe.has("chat:idem-command-session-metadata")).toBe(true);
+      expect(
+        readChatSendDedupeResponse(context.dedupe, "idem-command-session-metadata"),
+      ).toBeDefined();
     });
   });
 
@@ -3310,68 +3327,84 @@ describe("chat directive tag stripping for non-streaming final payloads", () => 
     });
   });
 
-  it("replaces reply-to-current with an explicit id on a runtime-owned media rewrite", async () => {
-    await withTranscriptFixtureState("openclaw-chat-send-owned-media-", async (fixtureDir) => {
-      const mediaUrl = `data:image/png;base64,${TINY_PNG_BASE64}`;
-      writeSavedPng(fixtureDir, "reply.png");
-      await appendSourceReplyMirrorEntry({
-        idempotencyKey: "older-distinct-assistant",
-        text: "A distinct earlier reply.",
-        provider: "openai",
-        model: "codex",
-      });
-      await appendSourceReplyMirrorEntry({
-        idempotencyKey: "runtime-owned-assistant",
-        openclawDelivery: { audioAsVoice: true, replyToCurrent: true },
-        text: `Dinner options\nMEDIA:${mediaUrl}`,
-        provider: "openai",
-        model: "codex",
-      });
-      setAgentRunReplies([
-        {
-          kind: "final",
-          payload: setReplyPayloadMetadata(
-            {
-              text: "Dinner options",
-              mediaUrl,
-              mediaUrls: [mediaUrl],
-              replyToId: "3114cf3c-e628-4c33-9214-894a1d8b6c60",
-            },
-            {
-              assistantTranscriptOwned: true,
-              assistantTranscriptIdempotencyKey: "runtime-owned-assistant",
-            },
-          ),
-        },
-      ]);
-      const { send } = createChatRequestFixture();
+  it.each([false, true])(
+    "replaces reply-to-current on a runtime-owned media rewrite (signed=%s)",
+    async (signed) => {
+      await withTranscriptFixtureState("openclaw-chat-send-owned-media-", async (fixtureDir) => {
+        const mediaUrl = `data:image/png;base64,${TINY_PNG_BASE64}`;
+        writeSavedPng(fixtureDir, "reply.png");
+        await appendSourceReplyMirrorEntry({
+          idempotencyKey: "older-distinct-assistant",
+          text: "A distinct earlier reply.",
+          provider: "openai",
+          model: "codex",
+        });
+        await appendSourceReplyMirrorEntry({
+          idempotencyKey: "runtime-owned-assistant",
+          openclawDelivery: { audioAsVoice: true, replyToCurrent: true },
+          text: `Dinner options\nMEDIA:${mediaUrl}`,
+          ...(signed
+            ? {
+                content: [
+                  { type: "text", text: "Dinner options", textSignature: "msg_final" },
+                  { type: "text", text: `MEDIA:${mediaUrl}` },
+                ],
+              }
+            : {}),
+          provider: "openai",
+          model: "codex",
+        });
+        setAgentRunReplies([
+          {
+            kind: "final",
+            payload: setReplyPayloadMetadata(
+              {
+                text: "Dinner options",
+                mediaUrl,
+                mediaUrls: [mediaUrl],
+                replyToId: "3114cf3c-e628-4c33-9214-894a1d8b6c60",
+              },
+              {
+                assistantTranscriptOwned: true,
+                assistantTranscriptIdempotencyKey: "runtime-owned-assistant",
+              },
+            ),
+          },
+        ]);
+        const { send } = createChatRequestFixture();
 
-      await send({
-        idempotencyKey: "idem-owned-media",
-        expectBroadcast: false,
-        waitFor: "dedupe",
-      });
+        await send({
+          idempotencyKey: "idem-owned-media",
+          expectBroadcast: false,
+          waitFor: "dedupe",
+        });
 
-      const messages = await readActiveAssistantTranscriptMessages();
-      expect(messages.map((message) => message.idempotencyKey)).toEqual([
-        "older-distinct-assistant",
-        "runtime-owned-assistant",
-      ]);
-      const rewritten = messages[1];
-      const content = Array.isArray(rewritten?.content)
-        ? (rewritten.content as Array<Record<string, unknown>>)
-        : [];
-      expect(content[0]).toEqual({ type: "text", text: "Dinner options" });
-      expect(content.filter((block) => block.type === "image")).toHaveLength(1);
-      expect(rewritten?.openclawDelivery).toEqual({
-        audioAsVoice: true,
-        mediaUrls: [mediaUrl],
-        replyToId: "3114cf3c-e628-4c33-9214-894a1d8b6c60",
+        const messages = await readActiveAssistantTranscriptMessages();
+        expect(messages.map((message) => message.idempotencyKey)).toEqual([
+          "older-distinct-assistant",
+          "runtime-owned-assistant",
+        ]);
+        const rewritten = messages[1];
+        const content = Array.isArray(rewritten?.content)
+          ? (rewritten.content as Array<Record<string, unknown>>)
+          : [];
+        expect(content[0]).toEqual({ type: "text", text: "Dinner options" });
+        expect(content.filter((block) => block.type === "image")).toHaveLength(1);
+        if (signed) {
+          expect((await readRawActiveAssistantTranscriptMessages())[1]?.content).toEqual([
+            { type: "text", text: "Dinner options", textSignature: "msg_final" },
+          ]);
+        }
+        expect(rewritten?.openclawDelivery).toEqual({
+          audioAsVoice: true,
+          mediaUrls: [mediaUrl],
+          replyToId: "3114cf3c-e628-4c33-9214-894a1d8b6c60",
+        });
+        expect(JSON.stringify(rewritten)).not.toContain("[[reply_to:");
+        expect(JSON.stringify(messages)).not.toContain(":assistant-media");
       });
-      expect(JSON.stringify(rewritten)).not.toContain("[[reply_to:");
-      expect(JSON.stringify(messages)).not.toContain(":assistant-media");
-    });
-  });
+    },
+  );
 
   it("persists agent media only after a disposed attempt transcript owner has unwound", async () => {
     await withTranscriptFixtureState(
@@ -3932,7 +3965,14 @@ describe("chat directive tag stripping for non-streaming final payloads", () => 
         const assistantEntries = await readActiveAssistantTranscriptMessages();
         expect(assistantEntries).toHaveLength(1);
         expect(assistantEntries[0]?.idempotencyKey).toBe(mirrorIdempotencyKey);
-        expect(JSON.stringify(assistantEntries[0])).toContain(replyText);
+        for (const message of [
+          assistantEntries[0],
+          ...(await readRawActiveAssistantTranscriptMessages()),
+        ]) {
+          expect(getMessageContent({ message }).filter((block) => block.type === "text")).toEqual([
+            { type: "text", text: replyText },
+          ]);
+        }
         expect(JSON.stringify(assistantEntries[0])).toContain("/api/chat/media/outgoing/");
         expect(JSON.stringify(assistantEntries[0]?.content)).not.toContain(mediaUrl);
       },
@@ -7139,7 +7179,7 @@ describe("chat directive tag stripping for non-streaming final payloads", () => 
     await waitForAssertion(() => {
       expect(mockState.maxActiveSaveMediaCalls).toBe(1);
       expect(mockState.savedMediaCalls).toHaveLength(2);
-      expect(context.dedupe.has("chat:idem-image-serial-save")).toBe(true);
+      expect(readChatSendDedupeResponse(context.dedupe, "idem-image-serial-save")).toBeDefined();
     });
   });
 

@@ -60,12 +60,11 @@ const defaults: Record<string, string> = {
   FROZEN_TARGET: "false",
   HISTORICAL_TARGET: "false",
   FORMAT_CHECK: "false",
+  CHANGED_CORE_TEST_PATHS_JSON: "",
   RUN_CONTROL_UI_I18N: "false",
   RUN_UI_TESTS: "false",
   HOSTED_RUNNER_STRIPES: "false",
   RUNNER_PROFILE: "github",
-  PR_BASE_SHA: base,
-  DIFF_BASE_SHA: base,
   PROTOCOL_SINCE_BASE_SHA: base,
   RATCHET_PR_HEAD_SHA: candidate,
 };

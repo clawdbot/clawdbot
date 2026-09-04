@@ -954,6 +954,14 @@ describe("generateSummary thinking options", () => {
 
 describe("split-turn compaction", () => {
   const operatorFocus = "Preserve API decisions.";
+  const runtimeContext: AgentMessage = {
+    role: "custom",
+    customType: "openclaw.runtime-context",
+    content: "PRIVATE_RUNTIME_CONTEXT",
+    display: false,
+    details: { runtimeContextCarrier: true },
+    timestamp: 1,
+  };
   it.each([
     { name: "ordinary history", history: true, prefix: false, budgets: [800] },
     { name: "history and prefix", history: true, prefix: true, budgets: [800, 500] },
@@ -1008,16 +1016,9 @@ describe("split-turn compaction", () => {
         const stream = createAssistantMessageEventStream();
         setTimeout(() => {
           active--;
-          const response: AssistantMessage = {
-            role: "assistant",
-            content: [{ type: "text", text: "summary" }],
-            api: model.api,
-            provider: model.provider,
-            model: model.id,
-            usage: createUsage(outputBudgets.length * 10 + 1),
-            stopReason: "stop",
-            timestamp: 1,
-          };
+          const usage = createUsage(outputBudgets.length * 10 + 1);
+          const response = createAssistant("summary", usage, 1);
+          response.model = model.id;
           stream.push({ type: "done", reason: "stop", message: response });
           stream.end();
         }, 5);
@@ -1026,8 +1027,12 @@ describe("split-turn compaction", () => {
       const result = await compact(
         {
           firstKeptEntryId: "kept-entry",
-          messagesToSummarize: history ? [{ role: "user", content: "history", timestamp: 1 }] : [],
-          turnPrefixMessages: prefix ? [{ role: "user", content: "prefix", timestamp: 2 }] : [],
+          messagesToSummarize: history
+            ? [{ role: "user", content: "history", timestamp: 1 }, runtimeContext]
+            : [],
+          turnPrefixMessages: prefix
+            ? [{ role: "user", content: "prefix", timestamp: 2 }, runtimeContext]
+            : [],
           isSplitTurn: prefix,
           ...(activeRequest ? { latestUnresolvedUserRequest: activeRequest } : {}),
           tokensBefore: 100,
@@ -1053,6 +1058,7 @@ describe("split-turn compaction", () => {
       );
       for (const prompt of prompts) {
         expect(prompt).toContain(focus);
+        expect(prompt).not.toContain("PRIVATE_RUNTIME_CONTEXT");
         expect(prompt.indexOf(focus)).toBeGreaterThan(prompt.lastIndexOf("</conversation>"));
       }
       if (result.ok && activeRequest) {

@@ -3417,7 +3417,7 @@ describe("matrix monitor handler draft streaming", () => {
         streaming: "progress",
         previewToolProgressEnabled: true,
         accountConfig: {
-          streaming: { mode: "progress", progress: { label: false } },
+          streaming: { mode: "progress", progress: { toolProgress: true, label: false } },
         } as never,
       });
       const streaming = await dispatch();
@@ -3464,6 +3464,7 @@ describe("matrix monitor handler draft streaming", () => {
         streaming: {
           mode: "progress",
           progress: {
+            toolProgress: true,
             label: "Pearling",
             maxLines: 1,
           },
@@ -3492,7 +3493,7 @@ describe("matrix monitor handler draft streaming", () => {
       accountConfig: {
         streaming: {
           mode: "progress",
-          progress: { label: false, maxLineChars: 500 },
+          progress: { toolProgress: true, label: false, maxLineChars: 500 },
         },
       } as never,
     });
@@ -3535,7 +3536,7 @@ describe("matrix monitor handler draft streaming", () => {
       streaming: "progress",
       previewToolProgressEnabled: true,
       accountConfig: {
-        streaming: { mode: "progress", progress: { label: "Working" } },
+        streaming: { mode: "progress", progress: { toolProgress: true, label: "Working" } },
       } as never,
     });
     const { opts, finish } = await dispatch();
@@ -3556,9 +3557,6 @@ describe("matrix monitor handler draft streaming", () => {
       status: "failed",
       progressText: "run openclaw cron -> run jq (agent) failed",
     });
-    expect(sendSingleTextMessageMatrixMock).not.toHaveBeenCalled();
-    await vi.advanceTimersByTimeAsync(5_000);
-
     expect(sendSingleTextMessageMatrixMock).toHaveBeenCalledTimes(1);
     expect(singleTextMessageBody()).toContain("failed");
 
@@ -3593,7 +3591,7 @@ describe("matrix monitor handler draft streaming", () => {
       streaming: "progress",
       previewToolProgressEnabled: true,
       accountConfig: {
-        streaming: { mode: "progress", progress: { label: "Working" } },
+        streaming: { mode: "progress", progress: { toolProgress: true, label: "Working" } },
       } as never,
     });
     const { opts, finish } = await dispatch();
@@ -3652,7 +3650,7 @@ describe("matrix monitor handler draft streaming", () => {
       streaming: "progress",
       previewToolProgressEnabled: true,
       accountConfig: {
-        streaming: { mode: "progress", progress: { label: "Working" } },
+        streaming: { mode: "progress", progress: { toolProgress: true, label: "Working" } },
       } as never,
     });
     const { opts, finish } = await dispatch();
@@ -3729,18 +3727,59 @@ describe("matrix monitor handler draft streaming", () => {
     await finish();
   });
 
-  it("suppresses standalone Matrix tool progress in progress mode when draft lines are disabled", async () => {
-    const { dispatch } = createStreamingHarness({
-      streaming: "progress",
-      previewToolProgressEnabled: false,
-    });
-    const { opts, finish } = await dispatch();
+  it.each([undefined, false])(
+    "keeps quiet Matrix status, plans, and attention with toolProgress=%s",
+    async (toolProgress) => {
+      vi.useFakeTimers();
+      let finish: (() => Promise<void>) | undefined;
+      try {
+        const { dispatch } = createStreamingHarness({
+          streaming: "progress",
+          previewToolProgressEnabled: false,
+          accountConfig: {
+            streaming: { mode: "progress", progress: { label: "Working", toolProgress } },
+          },
+        });
+        const streaming = await dispatch();
+        const { opts } = streaming;
+        finish = streaming.finish;
 
-    expect(opts.suppressDefaultToolProgressMessages).toBe(true);
-    expect(opts.onToolStart).toBeUndefined();
-    expect(sendSingleTextMessageMatrixMock).not.toHaveBeenCalled();
-    await finish();
-  });
+        expect(opts.suppressDefaultToolProgressMessages).toBe(true);
+        await opts.onToolStart?.({ name: "read_file" });
+        expect(sendSingleTextMessageMatrixMock).not.toHaveBeenCalled();
+        await vi.advanceTimersByTimeAsync(1_500);
+        expect(singleTextMessageBody()).toBe("Working");
+
+        await opts.onPlanUpdate?.({
+          phase: "update",
+          steps: [{ step: "Inspect", status: "in_progress" }],
+        });
+        await vi.advanceTimersByTimeAsync(1_000);
+        expect(lastCallArg(editMessageMatrixMock, 2, "Matrix plan edit body")).toContain(
+          "▸ Inspect",
+        );
+
+        await opts.onApprovalEvent?.({ phase: "requested", command: "confirm-operation" });
+        await vi.advanceTimersByTimeAsync(1_000);
+        expect(lastCallArg(editMessageMatrixMock, 2, "Matrix approval edit body")).toContain(
+          "confirm-operation",
+        );
+
+        await opts.onCommandOutput?.({ phase: "end", name: "exec", exitCode: 1 });
+        await vi.advanceTimersByTimeAsync(1_000);
+        const attention = lastCallArg(editMessageMatrixMock, 2, "Matrix failure edit body");
+        expect(attention).toContain("exit 1");
+        expect(attention).toContain("confirm-operation");
+        expect(attention).not.toContain("Read File");
+      } finally {
+        try {
+          await finish?.();
+        } finally {
+          vi.useRealTimers();
+        }
+      }
+    },
+  );
 
   it("does not create a blank Matrix progress draft when label and lines are disabled", async () => {
     const { dispatch } = createStreamingHarness({
@@ -4549,6 +4588,7 @@ describe("matrix monitor handler draft streaming", () => {
     try {
       const { dispatch } = createStreamingHarness({
         streaming: "progress",
+        accountConfig: { streaming: { mode: "progress", progress: { toolProgress: true } } },
         previewToolProgressEnabled: true,
       });
       const { deliver, opts, finish } = await dispatch();

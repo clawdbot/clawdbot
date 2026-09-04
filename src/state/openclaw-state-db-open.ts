@@ -21,8 +21,8 @@ import {
   OPENCLAW_STATE_SCHEMA_VERSION,
   type OpenClawStateDatabase,
 } from "./openclaw-state-db-contract.js";
-import { assertSupportedSchemaVersion } from "./openclaw-state-db-maintenance.js";
 import { ensureOpenClawStatePermissions } from "./openclaw-state-db-permissions.js";
+import { assertSupportedStateSchemaVersion } from "./openclaw-state-db-schema-version.js";
 
 const stateDbLog = createSubsystemLogger("state/db");
 
@@ -69,7 +69,7 @@ export function openUnpublishedStateDatabase(params: {
     () => {
       let maintenance: SqliteWalMaintenance | undefined;
       try {
-        assertSupportedSchemaVersion(db, params.pathname);
+        assertSupportedStateSchemaVersion(db, params.pathname);
         assertStateDatabaseIntegrityBeforeMutation(db, params.pathname);
         configureSqlitePreSchemaPragmas(db, { busyTimeoutMs });
         maintenance = configureSqliteConnectionPragmas(db, {

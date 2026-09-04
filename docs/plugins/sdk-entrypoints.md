@@ -12,6 +12,10 @@ Every plugin exports a default entry object. The SDK provides a helper for
 each entry shape: `defineToolPlugin`, `definePluginEntry`,
 `defineChannelPluginEntry`, `defineSetupPluginEntry`.
 
+All plugin APIs are [experimental](/plugins/sdk-overview#api-stability),
+including these entry helpers. Pin and test the OpenClaw host versions your
+plugin supports.
+
 <Tip>
   **Looking for a walkthrough?** See [Tool Plugins](/plugins/tool-plugins),
   [Channel Plugins](/plugins/sdk-channel-plugins), or
@@ -161,8 +165,9 @@ export default definePluginEntry({
   `openclaw/plugin-sdk/session-catalog` and register a
   `SessionCatalogProvider` with `api.registerSessionCatalog(...)`. Required
   provider fields are `id`, `label`, `list`, and `read`; optional hooks are
-  `resolveCreateSession`, `continueSession`, `checkUpstreamActivity`, `archive`,
-  `openTerminal`, and `startTerminalSession`. Core owns the
+  `resolveCreateSession`, `continueSession`, `copyToGatewaySession`,
+  `checkUpstreamActivity`, `archive`, `openTerminal`, and `startTerminalSession`.
+  Core owns the
   `sessions.catalog.*` Gateway methods; providers return host, session,
   transcript, and terminal-plan projections without registering RPCs. A list
   provider should call the optional
@@ -174,6 +179,14 @@ export default definePluginEntry({
   attribution; the viewer and the session adopter are not transcript authors.
   Core resolves profile identities against current profile data, including merges.
   User items without attribution display as **User**.
+
+  A Gateway-hosted catalog may set `audience: "gateway-operators"` when every
+  authenticated operator with `operator.read` may view its rows. Such a provider
+  may implement `copyToGatewaySession(...)` to return a bounded display name and
+  optional preferred model for an independent Gateway-owned continuation. Core
+  owns operator and agent authorization, session creation, model readiness and
+  policy checks, rollback, and untrusted-content wrapping. The provider supplies
+  transcript text through `read(...)`; it must not write the destination session.
 
   Native source titles are presentation, not unique session labels. When adopting
   a new source, pass its title as `displayName` to the owner-authorized

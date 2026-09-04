@@ -919,6 +919,18 @@ describe("Bedrock Fable contract", () => {
             delta: { text: "buffered output" },
           },
         },
+        {
+          metadata: {
+            usage: { inputTokens: 1, outputTokens: 1, totalTokens: 2 },
+            metrics: { latencyMs: 1 },
+          },
+        },
+        {
+          metadata: {
+            usage: { inputTokens: 1, outputTokens: 1, totalTokens: 2 },
+            metrics: { latencyMs: 1 },
+          },
+        },
         { messageStop: { stopReason: "end_turn" } },
       ]),
     } as never);
@@ -937,7 +949,7 @@ describe("Bedrock Fable contract", () => {
       unsubscribe();
     }
 
-    expect(activityCount).toBeGreaterThan(0);
+    expect(activityCount).toBe(5);
   });
 });
 

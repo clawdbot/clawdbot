@@ -30,6 +30,11 @@ agent model: openai/gpt-5.6-sol (thinking=medium, fast=on)
 - Configure the log file path and level via `~/.openclaw/openclaw.json`: `logging.file`, `logging.level`.
 - The file format is one JSON object per line.
 
+With config hot reload enabled, changes to `logging.level`, `logging.file`, and
+`logging.maxFileBytes` apply to the next log record, including records from
+long-lived channel loggers. Queued records finish writing to their original file.
+Explicit logger-level overrides, such as Baileys verbosity, remain in effect.
+
 Talk, realtime voice, and managed-room code paths use the shared file logger for bounded lifecycle records intended for operational debugging and OTLP log export. Transcript text, audio payloads, turn ids, call ids, and provider item ids are never copied into the log record.
 
 The Control UI Logs tab tails this file via the gateway (`logs.tail`). The CLI does the same:
@@ -43,6 +48,7 @@ openclaw logs --follow
 - **File logs** are controlled exclusively by `logging.level`.
 - `--verbose` only affects **console verbosity** (and WS log style) - it does **not** raise the file log level.
 - To capture verbose-only details in file logs, set `logging.level` to `debug` or `trace`.
+- Embedded-run `continue_normal` decisions log at `debug`; retry, profile-rotation, model-fallback, and error decisions remain warnings.
 - Trace logging also includes diagnostic timing summaries for selected hot paths, such as plugin tool factory preparation. See [/tools/plugin#slow-plugin-tool-setup](/tools/plugin#slow-plugin-tool-setup).
 
 ## Console capture

@@ -55,7 +55,7 @@ describe("chat pane placement restart", () => {
     };
 
     const restarting = dialogs.track(pane.restartHeaderPlacement(session));
-    await vi.waitFor(() => {
+    await dialogs.waitFor(() => {
       expect(document.body.querySelector('[data-value="cloud:aws"]')).not.toBeNull();
     });
     expect(document.body.textContent).toContain(

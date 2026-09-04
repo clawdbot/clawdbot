@@ -9,7 +9,6 @@ import {
   createEmbeddedRunHandle,
   testing as embeddedRunTesting,
 } from "../agents/embedded-agent-runner/runs.test-support.js";
-import { recordReplyOperationAgentTurn } from "../auto-reply/reply/reply-operation-agent-turn-state.js";
 import { resolveReplyOperationRunState } from "../auto-reply/reply/reply-operation-run-state.js";
 import { createReplyOperation } from "../auto-reply/reply/reply-run-registry.js";
 import { testing as replyRunRegistryTesting } from "../auto-reply/reply/reply-run-registry.test-support.js";
@@ -528,7 +527,8 @@ describe("heartbeat runner skips when target session lane is busy", () => {
         if (!runState) {
           throw new Error("Expected heartbeat reply operation run state");
         }
-        recordReplyOperationAgentTurn(runState, "ok", operation);
+        runState.agentTurn = "ok";
+        runState.agentTurnOwner = operation;
         operation.freezeAbort();
         setActiveEmbeddedRun(sessionId, handle, sessionKey);
         const drained = preemptAndDrainEmbeddedHeartbeatRun(sessionId, 1_000);

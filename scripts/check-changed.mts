@@ -16,6 +16,9 @@ import { performance } from "node:perf_hooks";
 import {
   LIVE_DOCKER_AUTH_SHELL_TARGETS,
   detectChangedLanesForPaths,
+  getChangedCoreTestPaths,
+  hasConfigDocInput,
+  isConfigDocSchemaSourcePath,
   hasDeadcodeScannedSource,
   hasProtocolEventCoverageInput,
   listChangedPathsFromGit,
@@ -38,6 +41,7 @@ import { runManagedCommand } from "./lib/managed-child-process.mts";
 import { listGeneratedExtensionAssetSources } from "./lib/static-extension-assets.mts";
 import { createSparseTsgoSkipEnv } from "./lib/tsgo-sparse-guard.mts";
 import type { createChangedCoreTestCheck } from "./run-tsgo-core-test-shards.mts";
+import { hasImportGraphImpactOnTargets } from "./test-projects.test-support.mts";
 
 type ChangedCheckCommand = {
   coreTestCheck?: "checkBoundary" | "checkTypes";
@@ -136,7 +140,7 @@ const ANDROID_VERSION_SYNC_PATHS = new Set([
 ]);
 const SWIFT_BUILD_CACHE_METADATA_TEST_PATH = "test/scripts/swift-build-cache-metadata.test.ts";
 const MACOS_APP_CI_PATH_RE =
-  /^(?:apps\/(?:macos\/(?!Tests\/.+\.swift$)|(?:macos-mlx-tts|shared|swabble)\/)|Swabble\/|src\/(?:shared\/worker-bundle-hash\.ts|worker\/workspace-rsync-receiver\.ts|gateway\/worker-environments\/workspace-(?:accepted-(?:remote-script|sync)|mutation-remote-script|rsync-path\.test|sync(?:-helpers)?)\.ts)$)/u;
+  /^(?:apps\/(?:macos\/(?!Tests\/.+\.swift$)|(?:macos-mlx-tts|shared|swabble)\/)|Swabble\/|src\/(?:agents\/github-exec-(?:launcher|credential)\.ts|shared\/worker-bundle-hash\.ts|worker\/workspace-rsync-receiver\.ts|gateway\/worker-environments\/workspace-(?:accepted-(?:remote-script|sync)|mutation-remote-script|rsync-path\.test|sync(?:-helpers)?)\.ts)$)/u;
 let corepackPnpmShimDir: string | undefined;
 let corepackPnpmShimCleanupRegistered = false;
 let cachedGeneratedExtensionAssetPaths: Set<string> | undefined;
@@ -710,6 +714,22 @@ export function createChangedCheckPlan(
   if (result.lanes.all || result.lanes.bundledChannelConfigMetadata) {
     add("bundled channel config metadata", ["check:bundled-channel-config-metadata"]);
   }
+  // Select before docs-only returns; trace schema entries without expanding config IO/loaders.
+  if (
+    result.lanes.all ||
+    result.lanes.releaseMetadata ||
+    hasConfigDocInput(result.paths) ||
+    hasImportGraphImpactOnTargets(
+      result.paths.filter(
+        (file) => /\.[cm]?[jt]sx?$/u.test(file) && !getChangedPathFacts(file).isChangedLaneTest,
+      ),
+      isConfigDocSchemaSourcePath,
+      process.cwd(),
+      { tooling: true },
+    )
+  ) {
+    add("config docs baseline", ["config:docs:check"]);
+  }
   if (shouldRunSqliteSessionSchemaBaselineCheck(result.paths)) {
     add("SQLite sessions/transcripts schema baseline", ["sqlite:sessions-schema:check"]);
   }
@@ -773,17 +793,7 @@ export function createChangedCheckPlan(
 
   // Typechecking alone accepts extension imports; the graph guard also covers
   // shared test/tooling dependencies that core tests can pull into their graph.
-  const changedTestPaths = result.paths.filter(
-    (file) => getChangedPathFacts(file).surface !== "docs",
-  );
-  const narrowCoreTests =
-    !runAll &&
-    !lanes.core &&
-    !lanes.ui &&
-    !lanes.tooling &&
-    !lanes.liveDockerTooling &&
-    changedTestPaths.length > 0 &&
-    changedTestPaths.every((file) => /^(?:src|ui|packages)\/.+\.test\.tsx?$/u.test(file));
+  const narrowCoreTests = getChangedCoreTestPaths(result) !== undefined;
   if (runAll || lanes.core || lanes.coreTests || lanes.ui || lanes.tooling) {
     add("core tsgo graph boundary", ["lint:tmp:tsgo-core-boundary"]);
     if (narrowCoreTests) {
@@ -804,7 +814,6 @@ export function createChangedCheckPlan(
     ]);
     add("Android version sync", ["android:version:check"]);
     add("config schema baseline", ["config:schema:check"]);
-    add("config docs baseline", ["config:docs:check"]);
     add("root dependency ownership", ["deps:root-ownership:check"]);
     return finishPlan("release metadata");
   }
@@ -1104,7 +1113,7 @@ async function runChangedCheck(result: ChangedLaneResult, options: ChangedCheckR
 
   const coreTestCheck = plan.commands.some((command) => command.coreTestCheck)
     ? (await import("./run-tsgo-core-test-shards.mts")).createChangedCoreTestCheck(
-        result.paths.filter((file) => getChangedPathFacts(file).surface !== "docs"),
+        getChangedCoreTestPaths(result)!,
         createSparseTsgoSkipEnv(childEnv),
       )
     : undefined;

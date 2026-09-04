@@ -10,7 +10,7 @@ import {
   releaseLocalCronRunReceiptOwnership,
   type CronRunReceiptHandle,
 } from "../store/run-receipt-store.js";
-import type { CronStoreTransactionHooks } from "../store/transaction-hooks.js";
+import type { CronStoreTransactionHooks } from "../store/transaction-hooks.types.js";
 import type { CronJob } from "../types.js";
 import { normalizeCronRunErrorText } from "./execution-errors.js";
 import { enrollForeignReceipt } from "./foreign-receipt-monitor.js";

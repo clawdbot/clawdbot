@@ -338,6 +338,30 @@ describe("question gateway methods", () => {
     });
   });
 
+  it("returns committed resolution receipts only to opted-in question waiters", async () => {
+    const requested = await call("question.request", requestParams);
+    const id = (requested[1] as { id: string }).id;
+    const legacy = call("question.waitAnswer", { id });
+    const tracked = call("question.waitAnswer", { id, includeResolutionId: true });
+    const answers = { answers: { destination: ["Home"] } };
+    const resolutionId = "plain-text-submission";
+
+    expect(await call("question.resolve", { id, answers, resolutionId })).toEqual([
+      true,
+      { status: "answered", answers },
+      undefined,
+    ]);
+    expect(await legacy).toEqual([true, { status: "answered", answers }, undefined]);
+    expect(await tracked).toEqual([true, { status: "answered", answers, resolutionId }, undefined]);
+    expect(broadcast).toHaveBeenCalledWith("question.resolved", {
+      id,
+      status: "answered",
+      answers,
+    });
+    expect((await call("question.get", { id }))[1]).toEqual({ question: manager.get(id) });
+    expect(manager.get(id)).not.toHaveProperty("resolutionId");
+  });
+
   it("rejects duplicate ids and one-option questions at the request boundary", async () => {
     const duplicate = await call("question.request", {
       questions: [requestParams.questions[0], requestParams.questions[0]],
@@ -830,9 +854,11 @@ describe("question gateway methods", () => {
       reloadSecrets.mockRejectedValue(new Error("synthetic refresh failure"));
       const id = await requestSecretQuestion();
       const value = "test-secret-refresh-failed";
+      const resolutionId = "committed-before-refresh";
       const result = await call("question.resolve", {
         id,
         answers: { answers: { secret_value: [value] } },
+        resolutionId,
       });
       expect(result).toMatchObject([
         false,
@@ -840,10 +866,15 @@ describe("question gateway methods", () => {
         { code: "UNAVAILABLE", message: expect.stringContaining("was saved") },
       ]);
       expect(manager.get(id)?.status).toBe("answered");
-      expect(await manager.waitAnswer(id)).toMatchObject({
+      expect(await manager.waitAnswer(id)).toEqual({
         status: "answered",
         answers: { answers: { secret_value: ["stored"] } },
       });
+      expect(await call("question.waitAnswer", { id, includeResolutionId: true })).toEqual([
+        true,
+        { status: "answered", answers: { answers: { secret_value: ["stored"] } }, resolutionId },
+        undefined,
+      ]);
       expect(
         (
           await call("question.resolve", {

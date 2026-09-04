@@ -1,6 +1,7 @@
 /* @vitest-environment jsdom */
 
 import { describe, expect, it, vi } from "vitest";
+import { createDeferred } from "../../../../test/helpers/promise.js";
 import {
   steerRealtimeTalkActiveConsult,
   submitRealtimeTalkConsult,
@@ -85,11 +86,8 @@ describe("RealtimeTalkSession consult handoff", () => {
   });
 
   it("does not start a consult after aborting during the transcript flush", async () => {
-    let releaseFlush!: () => void;
-    const flushPending = new Promise<void>((resolve) => {
-      releaseFlush = resolve;
-    });
-    const flushTranscriptWrites = vi.fn(async () => await flushPending);
+    const flushPending = createDeferred();
+    const flushTranscriptWrites = vi.fn(async () => await flushPending.promise);
     const request = vi.fn();
     const submit = vi.fn();
     const controller = new AbortController();
@@ -110,7 +108,7 @@ describe("RealtimeTalkSession consult handoff", () => {
     await vi.waitFor(() => expect(flushTranscriptWrites).toHaveBeenCalledOnce());
 
     controller.abort();
-    releaseFlush();
+    flushPending.resolve();
     await consult;
 
     expect(request).not.toHaveBeenCalled();
@@ -121,15 +119,12 @@ describe("RealtimeTalkSession consult handoff", () => {
     "keeps the acknowledgement alive and cancels its exact %s target",
     async (agentSessionKey) => {
       type Acknowledgement = { runId: string; agentId: string; agentSessionKey: string };
-      let acknowledge!: (value: Acknowledgement) => void;
-      const pendingAcknowledgement = new Promise<Acknowledgement>((resolve) => {
-        acknowledge = resolve;
-      });
+      const pendingAcknowledgement = createDeferred<Acknowledgement>();
       const request = vi.fn(
         async (method: string, _params: unknown, options?: { signal?: AbortSignal }) => {
           if (method === "talk.client.toolCall") {
             expect(options).toBeUndefined();
-            return await pendingAcknowledgement;
+            return await pendingAcknowledgement.promise;
           }
           if (method === "chat.abort") {
             return { ok: true, aborted: true };
@@ -154,7 +149,7 @@ describe("RealtimeTalkSession consult handoff", () => {
       await vi.waitFor(() => expect(request).toHaveBeenCalledOnce());
 
       controller.abort();
-      acknowledge({ runId: "run-1", agentId: "voice", agentSessionKey });
+      pendingAcknowledgement.resolve({ runId: "run-1", agentId: "voice", agentSessionKey });
       await consult;
 
       expect(request).toHaveBeenCalledWith("chat.abort", {
@@ -306,10 +301,7 @@ describe("RealtimeTalkSession consult handoff", () => {
 
   it("keeps source-reply final text when the empty-final wait completes later", async () => {
     let listener: ((event: { event: string; payload?: unknown }) => void) | undefined;
-    let resolveWait: ((value: { runId: string; status: "ok" }) => void) | undefined;
-    const waitResult = new Promise<{ runId: string; status: "ok" }>((resolve) => {
-      resolveWait = resolve;
-    });
+    const waitResult = createDeferred<{ runId: string; status: "ok" }>();
     const request = vi.fn(async (method: string) => {
       if (method === "talk.client.toolCall") {
         setImmediate(() => {
@@ -345,7 +337,7 @@ describe("RealtimeTalkSession consult handoff", () => {
         };
       }
       if (method === "agent.wait") {
-        return await waitResult;
+        return await waitResult.promise;
       }
       throw new Error(`unexpected request: ${method}`);
     });
@@ -367,7 +359,7 @@ describe("RealtimeTalkSession consult handoff", () => {
       args: { question: "Check status" },
       submit,
     });
-    resolveWait?.({ runId: "run-1", status: "ok" });
+    waitResult.resolve({ runId: "run-1", status: "ok" });
     await Promise.resolve();
 
     expect(request).toHaveBeenCalledWith("agent.wait", {

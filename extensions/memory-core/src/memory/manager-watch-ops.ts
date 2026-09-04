@@ -14,6 +14,7 @@ import {
   normalizeExtraMemoryPathEntries,
 } from "openclaw/plugin-sdk/memory-core-host-engine-storage";
 import { resolveTimerTimeoutMs } from "openclaw/plugin-sdk/number-runtime";
+import { formatCliCommand } from "openclaw/plugin-sdk/setup-tools";
 import { normalizeLowercaseStringOrEmpty } from "openclaw/plugin-sdk/string-coerce-runtime";
 import { MemoryManagerSyncBase } from "./manager-sync-base.js";
 import {
@@ -235,12 +236,15 @@ export abstract class MemoryManagerWatchOps extends MemoryManagerSyncBase {
   }
 
   private warnIfMemoryWatchPressure(count: number, unit: MemoryWatchPressureUnit): void {
+    const reindexCommand = formatCliCommand(
+      `openclaw memory index --force --agent ${this.agentId}`,
+    );
     warnIfMemoryWatchPressureHigh(
       this.memoryWatchPressureWarning,
       count,
       unit,
       "Large memory folders or extraPaths can make OpenClaw run out of file watchers or open files.",
-      "Remove large extraPaths, or set memory.search.sync.watch to false and refresh memory manually.",
+      `Remove unnecessary memory.search.extraPaths entries or narrow their directory roots, including per-agent entries; otherwise review the host's file-watch/open-file limits. After changes, restart the Gateway. To refresh the affected index, run in the Gateway's environment: ${reindexCommand}.`,
       (message) => log.warn(message),
     );
   }

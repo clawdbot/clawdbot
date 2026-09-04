@@ -180,8 +180,23 @@ function prepareChannelConfigSchema(
 /** Collects per-channel config metadata with the plugin that supplied the selected schema. */
 export function collectChannelSchemaMetadataWithOwnership(
   registry: PluginManifestRegistry,
+  selectedPluginIds?: ReadonlySet<string>,
 ): ChannelSchemaMetadataWithOwnership[] {
   const byChannelId = new Map<string, ChannelMetadataRecord>();
+  const selectedOwners = new Map<string, string>();
+  for (const record of registry.plugins.toSorted(
+    (left, right) => PLUGIN_ORIGIN_RANK[left.origin] - PLUGIN_ORIGIN_RANK[right.origin],
+  )) {
+    if (!selectedPluginIds?.has(record.id)) {
+      continue;
+    }
+    for (const channelId of record.channels) {
+      // Runtime keeps the first eligible registration and diagnoses explicit duplicates.
+      if (!selectedOwners.has(channelId)) {
+        selectedOwners.set(channelId, record.id);
+      }
+    }
+  }
 
   for (const record of registry.plugins) {
     const originRank = PLUGIN_ORIGIN_RANK[record.origin] ?? Number.MAX_SAFE_INTEGER;
@@ -189,6 +204,9 @@ export function collectChannelSchemaMetadataWithOwnership(
     const rootDescription = record.channelCatalogMeta?.blurb;
 
     for (const channelId of record.channels) {
+      if (selectedOwners.has(channelId) && selectedOwners.get(channelId) !== record.id) {
+        continue;
+      }
       const current = byChannelId.get(channelId);
       // Root channel catalog metadata can fill labels/descriptions before a channel-specific
       // config block appears, but it must not overwrite a closer-origin channel entry.
@@ -207,6 +225,9 @@ export function collectChannelSchemaMetadataWithOwnership(
     }
 
     for (const [channelId, channelConfig] of Object.entries(record.channelConfigs ?? {})) {
+      if (selectedOwners.has(channelId) && selectedOwners.get(channelId) !== record.id) {
+        continue;
+      }
       const current = byChannelId.get(channelId);
       if (
         current &&
@@ -243,8 +264,9 @@ export function collectChannelSchemaMetadataWithOwnership(
 /** Collects public per-channel config UI metadata without internal schema ownership. */
 export function collectChannelSchemaMetadataCore(
   registry: PluginManifestRegistry,
+  selectedPluginIds?: ReadonlySet<string>,
 ): ChannelUiMetadata[] {
-  return collectChannelSchemaMetadataWithOwnership(registry).map(
+  return collectChannelSchemaMetadataWithOwnership(registry, selectedPluginIds).map(
     ({ schemaPluginId: _schemaPluginId, schemaPluginOrigin: _schemaPluginOrigin, ...entry }) =>
       entry,
   );

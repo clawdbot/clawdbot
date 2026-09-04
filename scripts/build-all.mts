@@ -426,44 +426,41 @@ function resolveStepEnv(step: BuildAllStep, env: NodeJS.ProcessEnv, platform: No
 export function resolveBuildAllStep(step: BuildAllStep, params: BuildAllStepParams = {}) {
   const platform = params.platform ?? process.platform;
   const env = resolveStepEnv(step, params.env ?? process.env, platform);
-  if (step.kind === "pnpm") {
-    const nodeFallbackArgs =
-      env.OPENCLAW_BUILD_ALL_NO_PNPM === "1" ? PNPM_STEP_NODE_FALLBACKS.get(step.label) : undefined;
-    if (nodeFallbackArgs) {
-      return {
-        command: params.nodeExecPath ?? nodeBin,
-        args: nodeFallbackArgs,
-        options: {
-          stdio: "inherit",
-          env,
-        } satisfies SpawnSyncOptions,
-      };
-    }
-    const runner = resolvePnpmRunner({
-      env,
-      pnpmArgs: step.pnpmArgs,
-      nodeExecPath: params.nodeExecPath ?? nodeBin,
-      npmExecPath: params.npmExecPath ?? env.npm_execpath,
-      comSpec: params.comSpec,
-      platform,
-    });
+  const nodeArgs =
+    step.kind !== "pnpm"
+      ? step.args
+      : env.OPENCLAW_BUILD_ALL_NO_PNPM === "1"
+        ? PNPM_STEP_NODE_FALLBACKS.get(step.label)
+        : undefined;
+  if (nodeArgs) {
     return {
-      command: runner.command,
-      args: runner.args,
+      command: params.nodeExecPath ?? nodeBin,
+      args: nodeArgs,
       options: {
         stdio: "inherit",
         env,
-        shell: runner.shell,
-        windowsVerbatimArguments: runner.windowsVerbatimArguments,
+        // Managed commands default to a Windows shell; Node needs literal argv,
+        // including percent-encoded file URLs passed to --import.
+        shell: false,
       } satisfies SpawnSyncOptions,
     };
   }
+  const runner = resolvePnpmRunner({
+    env,
+    pnpmArgs: step.pnpmArgs,
+    nodeExecPath: params.nodeExecPath ?? nodeBin,
+    npmExecPath: params.npmExecPath ?? env.npm_execpath,
+    comSpec: params.comSpec,
+    platform,
+  });
   return {
-    command: params.nodeExecPath ?? nodeBin,
-    args: step.args,
+    command: runner.command,
+    args: runner.args,
     options: {
       stdio: "inherit",
       env,
+      shell: runner.shell,
+      windowsVerbatimArguments: runner.windowsVerbatimArguments,
     } satisfies SpawnSyncOptions,
   };
 }

@@ -55,6 +55,7 @@ import {
 } from "./task-flow-registry.js";
 import type { TaskFlowRecord } from "./task-flow-registry.types.js";
 import { getTaskActivitySnapshot } from "./task-registry-activity.js";
+import { updateTaskStateByRunId } from "./task-registry-record-api.js";
 import {
   cancelTaskById,
   deleteTaskRecordById,
@@ -735,72 +736,111 @@ describe("task-registry", () => {
     });
   });
 
-  it("bounds durable liveness writes for live activity deltas", async () => {
-    await withTaskRegistryTempDir(async () => {
-      const store = createInMemoryTaskRegistryStore();
-      const upsert = vi.spyOn(store, "upsertTaskWithDeliveryState");
-      configureTaskRegistryRuntime({ store });
-      createTaskFixture("subagent", {
-        childSessionKey: "agent:main:subagent:ephemeral",
-        runId: "run-ephemeral-activity",
-        task: "Keep streaming state in memory",
-      });
-      const initialLastEventAt = requireTaskByRunId("run-ephemeral-activity").lastEventAt!;
-      upsert.mockClear();
-
-      emitAgentEvent({
-        runId: "run-ephemeral-activity",
-        stream: "thinking",
-        data: { text: "Planning" },
-      });
-      emitAgentEvent({
-        runId: "run-ephemeral-activity",
-        stream: "assistant",
-        data: { text: "Editing" },
-      });
-      expect(upsert).not.toHaveBeenCalled();
-      const dateNow = vi.spyOn(Date, "now").mockReturnValue(initialLastEventAt + 60_000);
-      try {
-        emitAgentEvent({
-          runId: "run-ephemeral-activity",
-          stream: "assistant",
-          data: { text: "Still editing" },
+  it.each(["cli", "subagent"] as const)(
+    "bounds durable liveness writes for %s live activity",
+    async (runtime) => {
+      await withTaskRegistryTempDir(async () => {
+        const store = createInMemoryTaskRegistryStore();
+        const upsert = vi.spyOn(store, "upsertTaskWithDeliveryState");
+        configureTaskRegistryRuntime({ store });
+        const runId = "run-ephemeral-activity";
+        const task = createTaskFixture(runtime, {
+          childSessionKey: "agent:main:subagent:ephemeral",
+          runId,
+          task: "Keep streaming state in memory",
         });
-      } finally {
-        dateNow.mockRestore();
-      }
-      expect(upsert).toHaveBeenCalledOnce();
-      expect(requireTaskByRunId("run-ephemeral-activity").lastEventAt).toBe(
-        initialLastEventAt + 60_000,
-      );
-      upsert.mockClear();
-      emitAgentEvent({
-        runId: "run-ephemeral-activity",
-        stream: "tool",
-        data: {
-          phase: "start",
-          name: "write",
-          toolCallId: "write-1",
-          args: { path: "src/example.ts", content: "one\ntwo" },
-        },
-      });
-      expect(upsert).toHaveBeenCalledOnce();
-      upsert.mockClear();
-      emitAgentEvent({
-        runId: "run-ephemeral-activity",
-        stream: "tool",
-        data: { phase: "result", name: "write", toolCallId: "write-1", isError: false },
-      });
+        const initialLastEventAt = requireTaskByRunId(runId).lastEventAt!;
+        const emit = (stream: string, data: Record<string, unknown>) =>
+          emitAgentEvent({ runId, stream, data });
+        const emitCandidate = (progressText: string) =>
+          emit("item", {
+            itemId: "answer-1",
+            kind: "answer_candidate",
+            title: "Answer candidate",
+            phase: "update",
+            status: "candidate",
+            progressText,
+            source: "codex-app-server",
+            hideFromChannelProgress: true,
+          });
+        const dateNow = vi.spyOn(Date, "now").mockReturnValue(initialLastEventAt);
+        upsert.mockClear();
+        try {
+          emit("thinking", { text: "Planning" });
+          let text = "";
+          for (let index = 0; index < 128; index += 1) {
+            const delta = `Line ${index + 1}\n`;
+            text += delta;
+            emitCandidate(text.trimEnd());
+            emit("assistant", { text, delta });
+          }
+          emit("item", {
+            itemId: "preamble-1",
+            kind: "preamble",
+            title: "Preamble",
+            phase: "update",
+            progressText: "Preparing the next step",
+          });
+          emit("plan", {
+            phase: "update",
+            steps: [{ step: "Write the result", status: "in_progress" }],
+          });
+          emit("usage", { outputTokens: 128 });
+          emit("codex_app_server.lifecycle", {
+            phase: "thread_ready",
+            threadId: "thread-1",
+            action: "resumed",
+          });
+          expect(upsert).not.toHaveBeenCalled();
+          expect(getTaskActivitySnapshot(task.taskId)?.lastActivity).toBe("Line 128");
 
-      expect(upsert).not.toHaveBeenCalled();
-      emitAgentEvent({
-        runId: "run-ephemeral-activity",
-        stream: "lifecycle",
-        data: { phase: "end", endedAt: 200 },
+          dateNow.mockReturnValue(initialLastEventAt + 60_000);
+          emitCandidate(text.trimEnd());
+          expect(upsert).toHaveBeenCalledOnce();
+          expect(requireTaskByRunId(runId).lastEventAt).toBe(initialLastEventAt + 60_000);
+          upsert.mockClear();
+          emit("assistant", { text: "Still editing" });
+          expect(upsert).not.toHaveBeenCalled();
+          expect(getTaskActivitySnapshot(task.taskId)?.lastActivity).toBe("Still editing");
+
+          emit("error", { error: "Observed diagnostic failure" });
+          expect(upsert).toHaveBeenCalledOnce();
+          expect(requireTaskByRunId(runId).error).toBe("Observed diagnostic failure");
+          upsert.mockClear();
+          emit("tool", {
+            phase: "start",
+            name: "write",
+            toolCallId: "write-1",
+            args: { path: "src/example.ts", content: "one\ntwo" },
+          });
+          expect(upsert).toHaveBeenCalledOnce();
+          expectRecordFields(requireTaskByRunId(runId), {
+            toolUseCount: 1,
+            lastToolName: "write",
+          });
+          upsert.mockClear();
+          emit("tool", {
+            phase: "update",
+            name: "write",
+            toolCallId: "write-1",
+            partialResult: { content: [{ type: "text", text: "Writing" }] },
+          });
+          emit("tool", {
+            phase: "result",
+            name: "write",
+            toolCallId: "write-1",
+            isError: false,
+          });
+          expect(upsert).not.toHaveBeenCalled();
+          emit("lifecycle", { phase: "end", endedAt: initialLastEventAt + 60_000 });
+          expect(upsert).toHaveBeenCalledOnce();
+          expect(requireTaskByRunId(runId).status).toBe("succeeded");
+        } finally {
+          dateNow.mockRestore();
+        }
       });
-      expect(upsert).toHaveBeenCalledOnce();
-    });
-  });
+    },
+  );
 
   it.each([
     {
@@ -4064,6 +4104,29 @@ describe("task-registry", () => {
     });
   });
 
+  it("records the transition time when a generic update becomes terminal", async () => {
+    await withTaskRegistryTempDir(async () => {
+      const task = createTaskFixture("cli", {
+        runId: "run-generic-terminal",
+        task: "Generic terminal transition",
+        status: "running",
+        deliveryStatus: "pending",
+        lastEventAt: 100,
+      });
+      updateTaskStateByRunId({ runId: "run-generic-terminal", endedAt: 150 });
+      const nowSpy = vi.spyOn(Date, "now").mockReturnValue(300);
+
+      updateTaskStateByRunId({ runId: "run-generic-terminal", status: "failed" });
+      nowSpy.mockRestore();
+
+      expectRecordFields(requireTaskById(task.taskId), {
+        status: "failed",
+        endedAt: 300,
+        lastEventAt: 300,
+      });
+    });
+  });
+
   it("normalizes restored task timestamps before exposing them", async () => {
     await withTaskRegistryTempDir(async () => {
       configureTaskRegistryRuntime({
@@ -4099,6 +4162,43 @@ describe("task-registry", () => {
         createdAt: 100,
         startedAt: 100,
         lastEventAt: 150,
+      });
+    });
+  });
+
+  it("materializes a restored legacy terminal timestamp", async () => {
+    await withTaskRegistryTempDir(async () => {
+      configureTaskRegistryRuntime({
+        store: {
+          loadSnapshot: () => ({
+            tasks: new Map([
+              [
+                "task-restored-terminal",
+                {
+                  taskId: "task-restored-terminal",
+                  runtime: "cli",
+                  requesterSessionKey: "agent:main:main",
+                  ownerKey: "agent:main:main",
+                  scopeKind: "session",
+                  runId: "run-restored-terminal",
+                  task: "Restored terminal task",
+                  status: "failed",
+                  deliveryStatus: "not_applicable",
+                  notifyPolicy: "done_only",
+                  createdAt: 100,
+                  lastEventAt: 250,
+                },
+              ],
+            ]),
+            deliveryStates: new Map(),
+          }),
+          saveSnapshot: () => {},
+        },
+      });
+
+      expectRecordFields(requireTaskByRunId("run-restored-terminal"), {
+        endedAt: 250,
+        lastEventAt: 250,
       });
     });
   });

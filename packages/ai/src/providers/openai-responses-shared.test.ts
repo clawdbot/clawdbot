@@ -899,6 +899,10 @@ describe("convertResponsesMessages", () => {
       ) as unknown as Array<Record<string, unknown>>;
 
       const reasoningItem = input.find((item) => item.type === "reasoning");
+      if (!preservesCiphertext) {
+        expect(reasoningItem).toBeUndefined();
+        return;
+      }
       expect(reasoningItem).toMatchObject({
         type: "reasoning",
         id: "rs_route_fenced",
@@ -906,11 +910,7 @@ describe("convertResponsesMessages", () => {
         content: [{ type: "reasoning_text", text: "safe content" }],
       });
       expect(reasoningItem).not.toHaveProperty("__openclaw_replay");
-      if (preservesCiphertext) {
-        expect(reasoningItem).toHaveProperty("encrypted_content", "route-bound-ciphertext");
-      } else {
-        expect(reasoningItem).not.toHaveProperty("encrypted_content");
-      }
+      expect(reasoningItem).toHaveProperty("encrypted_content", "route-bound-ciphertext");
     },
   );
 

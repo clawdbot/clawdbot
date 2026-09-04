@@ -177,15 +177,19 @@ flags, and plugin allow/deny references into this block. Explicit canonical
 ## App-server transport
 
 For ordinary harness turns, OpenClaw starts the managed Codex binary shipped
-with the official plugin (currently `@openai/codex` `0.152.1`):
+with the official plugin (currently `@openai/codex` `0.153.0`):
 
 ```bash
 codex app-server --listen stdio://
 ```
 
 This keeps the app-server version tied to the official `codex` plugin instead of
-whichever separate Codex CLI happens to be installed locally. Set
-`appServer.command` only when you intentionally want a different executable.
+whichever separate Codex CLI happens to be installed locally. OpenClaw resolves
+`@openai/codex/bin/codex.js` from the loader-selected plugin root using Node
+package resolution, including npm-hoisted and pnpm-linked dependencies. It does
+not search `.bin` shims or global `PATH` for managed startup. On Windows, Node
+runs the same package entrypoint without requiring a `codex.cmd` shim.
+Set `appServer.command` only when you intentionally want a different executable.
 Ordinary managed turns with the default isolated agent home prefer this pinned
 package even when a macOS desktop bundle is installed. When
 [Computer Use](/plugins/codex-computer-use) is enabled, or when `homeScope` is
@@ -319,7 +323,7 @@ If the normal app-server runtime would be `danger-full-access`, enabling
 permission profile instead. Codex-managed network enforcement is sandboxed
 networking, so a full-access profile would not protect outbound traffic.
 
-The plugin manages stable Codex app-server `0.152.1`. Explicit custom
+The plugin manages stable Codex app-server `0.153.0`. Explicit custom
 executables, remote app-servers, and macOS desktop binaries must report a
 parseable semantic version of `0.149.0` or newer. Older, malformed, and
 unversioned handshakes are rejected. Newer versions log a compatibility warning
@@ -448,7 +452,7 @@ The stable default is fail-closed: active OpenClaw sandboxing disables native
 Codex execution surfaces that would otherwise run from the Codex app-server
 host. Use `appServer.experimental.sandboxExecServer: true` only when you want
 to try Codex's remote environment support with OpenClaw's sandbox backend.
-This preview path uses the pinned Codex `0.152.1` app-server.
+This preview path uses the pinned Codex `0.153.0` app-server.
 
 ```json5
 {
@@ -595,7 +599,10 @@ and settled-turn finalization use private temporary homes and OpenClaw auth
 even when ordinary sessions share the user home. A Chat created
 through Codex Sessions uses its private supervision connection instead, which
 preserves the native connection's auth and provider configuration for the
-canonical branch and future resumes.
+canonical branch and future resumes. If that supervised turn finishes tool work
+without a final answer, OpenClaw does not borrow host credentials to generate
+one. It delivers the [settled-tool fallback](/plugins/codex-harness-runtime#final-answers-after-settled-tool-work)
+without repeating completed actions.
 
 In a model-locked supervised Chat, `codex_threads` cannot attach a different
 fork or archive the Chat's bound native thread. List and metadata-only read
@@ -703,13 +710,15 @@ Codex runtime, so `Promise.all` does not submit them concurrently; use a
 bounded sequential launch loop when starting collector children.
 
 Tools marked `catalogMode: "direct-only"`, including the OpenClaw `computer`
-tool, are grouped under `openclaw_direct`. OpenClaw adds that namespace to
-Codex's `code_mode.direct_only_tool_namespaces` list without replacing
+tool and regular-agent `openclaw` delegation, are grouped under `openclaw_direct`.
+OpenClaw adds that namespace to Codex's
+`features.code_mode.direct_only_tool_namespaces` list without replacing
 operator-supplied entries. Codex therefore exposes those tools as
 `DirectModelOnly` in normal and code-mode-only threads instead of routing them
-through nested Code Mode `tools.*` calls. This boundary is required for
-image-bearing results: nested Code Mode serialization flattens image output to
-text, which would discard the screenshot needed for the next computer action.
+through nested Code Mode `tools.*` calls. This preserves image-bearing results,
+which nested Code Mode otherwise flattens to text. It also keeps delegated human
+approval on the direct model call: a yielded script cell must not let the model
+finish its turn while that approval is still waiting.
 
 Set `codexDynamicToolsLoading: "direct"` only when connecting to a custom
 Codex app-server that cannot search deferred dynamic tools or when debugging
@@ -718,7 +727,7 @@ the full tool payload.
 ## Timeouts
 
 OpenClaw-owned dynamic tool calls are bounded independently from
-`appServer.requestTimeoutMs`. Each Codex `item/tool/call` request uses the
+`appServer.requestTimeoutMs`. Ordinary Codex `item/tool/call` requests use the
 first available timeout in this order:
 
 - A positive per-call `timeoutMs` argument.
@@ -734,11 +743,19 @@ first available timeout in this order:
 
 This watchdog is the outer dynamic `item/tool/call` budget. Provider-specific
 request timeouts run inside that call and keep their own timeout semantics.
-Dynamic tool budgets are capped at 600000 ms. `agents_wait` adds 30000 ms of
-outer completion grace, and the app-server client allows 660000 ms so that
-structured wait result can reach Codex. On timeout, OpenClaw aborts the tool
-signal where supported and returns a failed dynamic-tool response to Codex so
-the turn can continue instead of leaving the session in `processing`.
+Ordinary dynamic tool budgets are capped at 600000 ms. `agents_wait` adds 30000 ms
+of outer completion grace. Human-interaction tools use the validated question
+wait plus 30000 ms: `ask_user` and `secrets` credential requests honor their question
+timeout, while delegated `openclaw` calls use the fixed 930000 ms default. That
+budget covers the ten-minute approval window plus staging and application;
+model-authored arguments cannot override it. The app-server request watchdog
+leaves another 30000 ms beyond the applicable tool budget for the result to reach
+Codex.
+
+On timeout, OpenClaw aborts the tool signal where supported and returns a failed
+dynamic-tool response to Codex so the turn can continue instead of leaving the
+session in `processing`. These wait budgets never preserve approval authority
+after the requesting run or tool closes.
 
 ### Turn execution and settlement
 
@@ -851,8 +868,8 @@ response remains authoritative even if it contains no visible models; HTTP
 `401` and `403` return an empty catalog rather than exposing fallback models.
 
 <Note>
-The current bundled harness is `@openai/codex` `0.152.1`. A live `model/list`
-probe against the official `0.152.1` app-server, using an isolated,
+The current bundled harness is `@openai/codex` `0.153.0`. A live `model/list`
+probe against the official `0.153.0` app-server, using an isolated,
 unauthenticated Codex home and `includeHidden: true`, returned this public
 subset of catalog metadata:
 

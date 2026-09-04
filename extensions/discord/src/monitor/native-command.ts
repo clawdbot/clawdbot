@@ -28,6 +28,7 @@ import {
   resolveDiscordAccountDmPolicy,
   resolveDiscordMaxLinesPerMessage,
 } from "../accounts.js";
+import { resolveDiscordCommandOwnerAllowFrom } from "../command-owners.js";
 import {
   Button,
   Command,
@@ -38,7 +39,6 @@ import {
   type StringSelectMenuInteraction,
 } from "../internal/discord.js";
 import {
-  resolveDiscordCommandOwnerAllowFrom,
   resolveDiscordChannelPolicyCommandAuthorizer,
   resolveDiscordOwnerAccess,
 } from "./allow-list.js";

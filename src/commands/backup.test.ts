@@ -50,15 +50,6 @@ type CapturedBackupManifest = {
 describe("backup commands", () => {
   let tempHome: TempHomeEnv;
 
-  function requireFirstMockArg<T>(mock: { mock: { calls: T[][] } }, label: string): T {
-    const call = mock.mock.calls[0];
-    if (!call) {
-      throw new Error(`expected ${label} call`);
-    }
-    const [arg] = call;
-    return expectDefined(arg, "arg test invariant");
-  }
-
   async function mockWorkspaceBackupPlan(stateDir: string, workspaceDir: string, nowMs: number) {
     vi.spyOn(backupShared, "resolveBackupPlanFromDisk").mockResolvedValue(
       await resolveBackupPlanFromPaths({
@@ -67,8 +58,6 @@ describe("backup commands", () => {
         oauthDir: path.join(stateDir, "credentials"),
         workspaceDirs: [workspaceDir],
         includeWorkspace: true,
-        configInsideState: true,
-        oauthInsideState: true,
         nowMs,
       }),
     );
@@ -195,8 +184,6 @@ describe("backup commands", () => {
       oauthDir,
       workspaceDirs: [workspaceDir],
       includeWorkspace: true,
-      configInsideState: true,
-      oauthInsideState: true,
       nowMs: 123,
     });
     expectWorkspaceCoveredByState(plan);
@@ -221,8 +208,6 @@ describe("backup commands", () => {
         oauthDir: path.join(stateDir, "credentials"),
         workspaceDirs: [workspaceLink],
         includeWorkspace: true,
-        configInsideState: true,
-        oauthInsideState: true,
         nowMs: 123,
       });
       expectWorkspaceCoveredByState(plan);
@@ -266,8 +251,6 @@ describe("backup commands", () => {
           oauthDir: path.join(stateDir, "credentials"),
           workspaceDirs: [externalWorkspace],
           includeWorkspace: true,
-          configInsideState: false,
-          oauthInsideState: true,
           nowMs,
         }),
       );
@@ -398,13 +381,12 @@ describe("backup commands", () => {
 
       expect(result.skippedVolatileCount).toBe(1);
       expect(runtime.log).toHaveBeenCalledTimes(1);
-      const payload = requireFirstMockArg(vi.mocked(runtime.log), "runtime log");
+      const [payload] = expectDefined(vi.mocked(runtime.log).mock.calls[0], "runtime log call");
       if (typeof payload !== "string") {
         throw new Error("backup test expected JSON string output");
       }
       expect(payload).not.toContain("Backup skipped");
-      const parsedPayload = JSON.parse(payload) as { skippedVolatileCount?: unknown };
-      expect(parsedPayload.skippedVolatileCount).toBe(1);
+      expect(JSON.parse(payload)).toHaveProperty("skippedVolatileCount", 1);
     } finally {
       await fs.rm(backupDir, { recursive: true, force: true });
     }
@@ -579,8 +561,6 @@ describe("backup commands", () => {
         configPath: path.join(stateDir, "openclaw.json"),
         oauthDir: path.join(stateDir, "credentials"),
         includeWorkspace: false,
-        configInsideState: true,
-        oauthInsideState: true,
         nowMs: 123,
       }),
     );
@@ -671,8 +651,6 @@ describe("backup commands", () => {
         oauthDir: path.join(stateDir, "credentials"),
         includeWorkspace: false,
         onlyConfig: true,
-        configInsideState: true,
-        oauthInsideState: true,
         nowMs: 123,
       }),
     );

@@ -402,11 +402,11 @@ export class CustodianSessionStore {
     );
   }
 
-  exitSetup(): void {
+  exitSetup(destination: "chat" | "model-setup" | "profile" = "chat"): void {
     // Leaving setup revokes navigation authority from every in-flight reply.
     // The destination surface separately decides whether to retain or rotate context.
     this.revokeNavigationAuthority();
-    this.context?.navigate("chat");
+    this.context?.navigate(destination);
   }
 
   private revokeNavigationAuthority(): void {
@@ -422,11 +422,6 @@ export class CustodianSessionStore {
   private advanceRequestEpoch(): number {
     this.transcript.invalidate();
     return ++this.requestEpoch;
-  }
-
-  openModelSetup(): void {
-    this.revokeNavigationAuthority();
-    this.context?.navigate("model-setup");
   }
 
   private emit(): void {
@@ -721,7 +716,9 @@ export class CustodianSessionStore {
         this.nextMessageId += 1;
         this.messages = [...this.messages, message];
       }
-      if (result.action === "open-agent") {
+      if (result.handoff?.kind === "model-accounts") {
+        this.exitSetup("profile");
+      } else if (result.action === "open-agent") {
         const handoff = await performCustodianAgentHandoff({
           context,
           ...(result.agentId ? { agentId: result.agentId } : {}),

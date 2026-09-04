@@ -192,7 +192,8 @@ function collapseDuplicateParagraphs(text: string): string {
   }
   let projected = collapsePlainDuplicateParagraphs(masked + text.slice(cursor));
   for (const { region, token } of protectedRegions) {
-    projected = projected.replace(token, text.slice(region.start, region.end));
+    // Replacement-string dollar sequences must remain literal inside code.
+    projected = projected.replace(token, () => text.slice(region.start, region.end));
   }
   return projected;
 }
@@ -281,8 +282,13 @@ function createDuplicateParagraphProjector(protectCode = true): TextProjector {
     const collapsed = hasDuplicate || duplicate;
     let delta = input.delta;
     if (collapsed) {
+      // Code can expose pending whitespace; the plain suffix cannot safely append across it.
       delta =
-        input.delta === null || !wasCollapsed || duplicate !== wasDuplicate || completedParagraph
+        input.delta === null ||
+        !wasCollapsed ||
+        duplicate !== wasDuplicate ||
+        completedParagraph ||
+        (protectCode && /\s$/.test(text))
           ? null
           : added;
       text =

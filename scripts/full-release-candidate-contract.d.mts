@@ -10,10 +10,11 @@ export interface FullReleaseCandidateRequest {
     prepublishPluginRegistry: 1;
     sharedImage: 1;
   };
+  packagePublished: boolean;
   releaseProfile: string;
   releaseSoak: boolean;
   repository: string;
-  schema: "openclaw.full-release-candidate-request/v1";
+  schema: "openclaw.full-release-candidate-request/v2";
   sharedImagePolicy: string;
   targetSha: string;
   toolingSha: string;

@@ -11,6 +11,10 @@ import {
 
 export { getCoreTtsToolResultMediaUrls } from "../agents/tools/tts-tool-result-provenance.js";
 export { consumeTrustedToolNoStartError } from "../agents/tool-result-error.js";
+export {
+  acknowledgeInternalToolResult,
+  copyInternalToolResultState,
+} from "../agents/runtime/internal-hooks.js";
 
 type OpenClawCodingToolsOptions = NonNullable<
   Parameters<typeof import("./agent-harness.js").createOpenClawCodingTools>[0]

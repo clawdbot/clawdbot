@@ -97,6 +97,33 @@ describe("cli tool result events", () => {
     }
   });
 
+  it("emits canonical CLI compaction lifecycle events", () => {
+    const runId = "run-compaction-events";
+    const handlers = createCliEventHandlers({
+      context: buildContext(runId),
+      toolTracking: buildToolTracking(),
+      getRunState: () => ({ failed: false, error: undefined }),
+    });
+    const events: AgentEventRuntimePayload[] = [];
+    const dispose = onAgentEvent((event) => {
+      if (event.runId === runId && event.stream === "compaction") {
+        events.push(event);
+      }
+    });
+
+    try {
+      handlers.emitCliCompaction({ phase: "start" });
+      handlers.emitCliCompaction({ phase: "end", completed: true });
+
+      expect(events.map((event) => event.data)).toEqual([
+        { phase: "start", backend: "claude-cli" },
+        { phase: "end", backend: "claude-cli", completed: true },
+      ]);
+    } finally {
+      dispose();
+    }
+  });
+
   it("keeps correlated result args without adding them to display results", () => {
     const runId = "run-tool-result-args";
     const handlers = createCliEventHandlers({

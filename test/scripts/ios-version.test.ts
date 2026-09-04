@@ -7,7 +7,6 @@ import {
   encodeIosAppStoreVersion,
   extractChangelogSection,
   normalizeIosAppStoreRevision,
-  normalizePinnedIosVersion,
   renderIosReleaseNotes,
   resolveGatewayVersionForIosRelease,
   resolveIosVersion,
@@ -243,15 +242,6 @@ describe("resolveIosVersion", () => {
     });
 
     expect(() => resolveIosVersion(rootDir, { releaseVersion: "2026.4.6-beta.1" })).toThrow(
-      "Expected release version like 2026.6.5",
-    );
-  });
-
-  it("rejects impossible pinned release versions", () => {
-    expect(() => normalizePinnedIosVersion("2026.13.6")).toThrow(
-      "Expected release version like 2026.6.5",
-    );
-    expect(() => normalizePinnedIosVersion("2026.4.9007199254740993")).toThrow(
       "Expected release version like 2026.6.5",
     );
   });

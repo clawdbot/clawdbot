@@ -371,22 +371,24 @@ export class OpenClawAssistantPanel extends OpenClawLightDomElement {
             )}
           </div>
           <div class="rail-header__actions assistant-panel-actions">
-            ${this.destination === "home"
-              ? html`<button
-                  class="rail-header__action assistant-panel-icon"
-                  type="button"
-                  aria-label=${t("assistantPanel.openHome")}
-                  @click=${() => this.openHomePage()}
-                >
-                  ${icons.maximize}
-                </button>`
-              : nothing}
+            ${
+              this.destination === "home"
+                ? html`<button
+                    class="rail-header__action assistant-panel-icon"
+                    type="button"
+                    aria-label=${t("assistantPanel.openHome")}
+                    @click=${() => this.openHomePage()}
+                  >
+                    ${icons.maximize}
+                  </button>`
+                : nothing
+            }
             <button
               class="rail-header__action assistant-panel-icon"
               type="button"
-              aria-label=${dock === "bottom"
-                ? t("assistantPanel.dockRight")
-                : t("assistantPanel.dockBottom")}
+              aria-label=${
+                dock === "bottom" ? t("assistantPanel.dockRight") : t("assistantPanel.dockBottom")
+              }
               @click=${() => this.setDock(dock === "bottom" ? "right" : "bottom")}
             >
               ${dock === "bottom" ? icons.panelRightOpen : icons.panelBottomOpen}
@@ -401,26 +403,30 @@ export class OpenClawAssistantPanel extends OpenClawLightDomElement {
             </button>
           </div>
         </header>
-        ${this.destination === "home"
-          ? html`${isOptionalElementDefined(HOME_SESSION_ELEMENT)
-              ? html`<openclaw-home-session
-                  .sessionKey=${home.sessionKey}
-                  .agentId=${home.agentId}
-                  .workContext=${workContext}
-                ></openclaw-home-session>`
-              : homeState
-                ? renderLazyElementState(
-                    homeState,
-                    () => this.homeLoader.retry(),
-                    () => this.setOpen(false),
-                  )
-                : nothing}`
-          : html`<openclaw-custodian-surface
-              .store=${this.store}
-              .onboarding=${this.store.activeVariant === "onboarding"}
-              .newAgentIntent=${this.store.activeVariant === "new-agent"}
-              compact
-            ></openclaw-custodian-surface>`}
+        ${
+          this.destination === "home"
+            ? html`${
+                isOptionalElementDefined(HOME_SESSION_ELEMENT)
+                  ? html`<openclaw-home-session
+                      .sessionKey=${home.sessionKey}
+                      .agentId=${home.agentId}
+                      .workContext=${workContext}
+                    ></openclaw-home-session>`
+                  : homeState
+                    ? renderLazyElementState(
+                        homeState,
+                        () => this.homeLoader.retry(),
+                        () => this.setOpen(false),
+                      )
+                    : nothing
+              }`
+            : html`<openclaw-custodian-surface
+                .store=${this.store}
+                .onboarding=${this.store.activeVariant === "onboarding"}
+                .newAgentIntent=${this.store.activeVariant === "new-agent"}
+                compact
+              ></openclaw-custodian-surface>`
+        }
       </section>
     `;
   }

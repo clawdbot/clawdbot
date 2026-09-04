@@ -82,6 +82,32 @@ describe("session manager codec compatibility", () => {
     expect(context).toContain("after");
   });
 
+  it.each([1, 2])("excludes malformed metadata after migrating version %i", (version) => {
+    const manager = SessionManager.fromEntries([
+      { type: "session", version, id: "legacy-metadata", cwd: "/tmp" },
+      {
+        type: "message",
+        id: "before",
+        parentId: null,
+        message: { role: "user", content: "before malformed metadata" },
+      },
+      { type: "model_change", id: "invalid-model", parentId: "before", provider: "openai" },
+      {
+        type: "message",
+        id: "after",
+        parentId: "invalid-model",
+        message: { role: "user", content: "valid descendant" },
+      },
+    ]);
+
+    expect(manager.getEntries().map((entry) => entry.type)).toEqual(["message", "message"]);
+    expect(manager.buildSessionContext()).toEqual({
+      messages: [{ role: "user", content: "valid descendant" }],
+      thinkingLevel: "off",
+      model: null,
+    });
+  });
+
   it("parses opaque tree links without widening their variants", () => {
     expect(parseParentLinkedOpaqueEntry({ type: "future", id: "f1", parentId: null })).toEqual({
       id: "f1",

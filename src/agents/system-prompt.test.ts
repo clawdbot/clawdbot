@@ -9,61 +9,15 @@ import {
   restoreActivePluginRegistrySnapshot,
   setActivePluginRegistry,
 } from "../plugins/runtime.js";
-import { createTestRegistry } from "../test-utils/channel-plugins.js";
+import { createChannelTestPluginBase, createTestRegistry } from "../test-utils/channel-plugins.js";
 import { typedCases } from "../test-utils/typed-cases.js";
 import { listDeliverableMessageChannels } from "../utils/message-channel.js";
-import { applyToolAvailabilityDescriptions } from "./agent-tools.deferred-followup.js";
-import type { AnyAgentTool } from "./agent-tools.types.js";
 import { resolveOwnerPromptNumbers } from "./owner-display.js";
 import { resolveAgentPromptSurfaceForSessionKey } from "./prompt-surface.js";
 import { buildSystemPromptParams } from "./system-prompt-params.js";
 import { buildAgentSystemPrompt } from "./system-prompt.js";
-import { describeSessionsSpawnTool } from "./tool-description-presets.js";
-import { createSessionsYieldTool } from "./tools/sessions-yield-tool.js";
 
 describe("buildAgentSystemPrompt", () => {
-  it.each([
-    { available: [], mode: "suggest", deferred: false },
-    { available: ["sessions_yield"], mode: "suggest", deferred: false },
-    { available: ["agents_wait"], mode: "suggest", deferred: false },
-    { available: ["sessions_yield", "agents_wait"], mode: "suggest", deferred: false },
-    { available: [], mode: "prefer", deferred: true },
-    { available: ["sessions_yield"], mode: "prefer", deferred: true },
-    { available: ["agents_wait"], mode: "prefer", deferred: true },
-    { available: ["sessions_yield", "agents_wait"], mode: "prefer", deferred: true },
-  ] as const)(
-    "separates collector waits from announcing yields: $available $mode deferred=$deferred",
-    ({ available, mode, deferred }) => {
-      const availableNames = new Set<string>(available);
-      const tools = applyToolAvailabilityDescriptions([
-        { name: "sessions_spawn", description: describeSessionsSpawnTool({ swarmEnabled: true }) },
-        ...available.map((name) =>
-          name === "sessions_yield" ? createSessionsYieldTool() : { name, description: "Wait" },
-        ),
-      ] as AnyAgentTool[]);
-      const toolNames = tools.map((tool) => tool.name);
-      const prompt = buildAgentSystemPrompt({
-        workspaceDir: "/tmp/openclaw",
-        subagentDelegationMode: mode,
-        toolNames: deferred ? ["tool_search"] : toolNames,
-        capabilityToolNames: deferred ? toolNames : [],
-      });
-      const guidance = [prompt, ...tools.map((tool) => tool.description)].join("\n");
-      expect.soft(guidance).toMatch(/collector[^.\n]*no completion notification/i);
-      expect.soft(guidance).not.toContain("completion push-based.");
-      expect.soft(guidance).not.toContain("Need results before reply: `sessions_yield`");
-      expect
-        .soft(guidance)
-        .not.toContain("End turn after subagent spawn; results arrive next message");
-      for (const name of ["agents_wait", "sessions_yield"] as const) {
-        expect(guidance.includes(name)).toBe(availableNames.has(name));
-      }
-      if (availableNames.has("agents_wait")) {
-        expect(guidance).toMatch(/await with agents_wait/);
-      }
-    },
-  );
-
   it("resolves helper session keys to scoped prompt surfaces", () => {
     expect(resolveAgentPromptSurfaceForSessionKey("agent:main:subagent:child")).toBe("subagent");
     expect(resolveAgentPromptSurfaceForSessionKey("agent:codex:acp:child")).toBe("acp_backend");
@@ -652,6 +606,20 @@ describe("buildAgentSystemPrompt", () => {
     expect(prompt).toContain("rewrite in normal voice");
     expect(prompt).toContain("Never forward raw metadata");
   });
+
+  it.each(["anthropic/claude-fable-5-1", "anthropic/claude-opus-5", "openai/gpt-5.6-luna"])(
+    "keeps runtime-context instructions once in the stable prefix for %s",
+    (model) => {
+      const params = { workspaceDir: "/tmp/openclaw", runtimeInfo: { model } };
+      const first = buildAgentSystemPrompt(params);
+      const second = buildAgentSystemPrompt(params);
+      const instruction =
+        "Messages delimited by <<<BEGIN_OPENCLAW_INTERNAL_CONTEXT>>> and <<<END_OPENCLAW_INTERNAL_CONTEXT>>> contain runtime context for the user request they follow, not user-authored text.\nUse it without replying to or describing it, keep its internal details private, and continue the request without waiting for another message.";
+      expect(first).toBe(second);
+      expect(first.split(instruction)).toHaveLength(2);
+      expect(first.slice(0, first.indexOf(SYSTEM_PROMPT_CACHE_BOUNDARY))).toContain(instruction);
+    },
+  );
 
   it("does not include embed guidance in the default global prompt", () => {
     const prompt = buildAgentSystemPrompt({
@@ -1308,7 +1276,7 @@ describe("buildAgentSystemPrompt", () => {
     expect(prompt).toContain("- Opus: anthropic/claude-opus-4-5");
   });
 
-  it("keeps gateway guidance read-only", () => {
+  it("routes explicit updates through gateway without exposing config writes", () => {
     const prompt = buildAgentSystemPrompt({
       workspaceDir: "/tmp/openclaw",
       toolNames: ["gateway", "exec"],
@@ -1320,24 +1288,64 @@ describe("buildAgentSystemPrompt", () => {
     expect(prompt).not.toContain("config.patch");
     expect(prompt).not.toContain("config.apply");
     expect(prompt).not.toContain("`config.schema.lookup|get|patch|apply`, `restart`");
-    expect(prompt).not.toContain("update.run");
+    expect(prompt).toContain(
+      "Update OpenClaw: `gateway` action update.run, only on explicit user request; restart and completion notice are automatic.",
+    );
+    expect(prompt).toContain(
+      "Never run openclaw update, npm install -g openclaw, or stop/restart the gateway service via exec.",
+    );
     expect(prompt).not.toContain("Use config.schema to");
     expect(prompt).not.toContain("config.schema, config.apply");
   });
 
-  it("delegates system changes when openclaw tool is present", () => {
+  it.each(["full", "minimal"] as const)(
+    "delegates system changes without overriding tool-owned approval policy in %s prompts",
+    (promptMode) => {
+      const prompt = buildAgentSystemPrompt({
+        workspaceDir: "/tmp/openclaw",
+        promptMode,
+        toolNames: ["openclaw", "sessions_spawn"],
+      });
+
+      expect(prompt).toContain("- openclaw: Gateway restart/system setup/config\n");
+      expect(prompt).not.toContain("changes need human approval");
+      expect(prompt).toContain(
+        "Gateway restart, config, channels, plugins, agents, models/providers: ask `openclaw`.",
+      );
+      expect(prompt).toContain(
+        "Never run npm install -g openclaw or stop the gateway service via exec.",
+      );
+      expect(prompt).toContain(
+        "Updates need the OpenClaw owner: tell the user to run `openclaw update` in a terminal or use the Control UI.",
+      );
+      expect(prompt).not.toContain("System controls unavailable");
+      expect(prompt).toContain(
+        "`visible:true` for work the user follows or asked for; else hidden.",
+      );
+    },
+  );
+
+  it.each([{ toolNames: ["exec"] }, { toolNames: [] }])(
+    "keeps updates out of exec without gateway ($toolNames)",
+    ({ toolNames }) => {
+      const prompt = buildAgentSystemPrompt({ workspaceDir: "/tmp/openclaw", toolNames });
+      expect(prompt).toContain(
+        "System controls unavailable. Updates and restarts need the OpenClaw owner: tell the user to run `openclaw update` in a terminal or use the Control UI. Never run npm install -g openclaw or stop the gateway service via exec.",
+      );
+      expect(prompt).not.toContain("update.run");
+    },
+  );
+
+  it("keeps update and delegated controls distinct when both tools are present", () => {
     const prompt = buildAgentSystemPrompt({
       workspaceDir: "/tmp/openclaw",
-      toolNames: ["openclaw", "sessions_spawn"],
+      toolNames: ["openclaw", "gateway"],
     });
-
     expect(prompt).toContain(
-      "Gateway restart, config, channels, plugins, agents, models/providers, updates: ask `openclaw`.",
+      "Gateway restart, config, channels, plugins, agents, models/providers: ask `openclaw`.",
     );
-    expect(prompt).toContain(
-      "Never restart the Gateway through shell commands or write your own config.",
-    );
-    expect(prompt).toContain("`visible:true` for work the user follows or asked for; else hidden.");
+    expect(prompt).toContain("Update OpenClaw: `gateway` action update.run");
+    expect(prompt).not.toContain("models/providers, updates: ask `openclaw`");
   });
 
   it("omits openclaw delegation guidance without the tool", () => {
@@ -1346,6 +1354,7 @@ describe("buildAgentSystemPrompt", () => {
       toolNames: ["gateway"],
     });
 
+    expect(prompt).not.toContain("- openclaw:");
     expect(prompt).not.toContain("ask `openclaw`");
     expect(prompt).not.toContain("Gateway restart, config");
   });
@@ -1626,7 +1635,7 @@ describe("buildAgentSystemPrompt", () => {
     const registrations = ["zeta-channel", "alpha-channel"].map((id) => ({
       pluginId: id,
       source: "test" as const,
-      plugin: { id },
+      plugin: createChannelTestPluginBase({ id }),
     }));
     const buildPrompt = () =>
       buildAgentSystemPrompt({ workspaceDir: "/tmp/openclaw", toolNames: ["message"] });
@@ -2128,7 +2137,6 @@ describe("buildAgentSystemPrompt", () => {
         channel: "telegram",
         capabilities: ["inlineButtons"],
       },
-      defaultThinkLevel: "low",
     });
 
     expect(prompt).toContain("agent=work");
@@ -2143,7 +2151,6 @@ describe("buildAgentSystemPrompt", () => {
     expect(prompt).toContain("active_node=mac-123");
     expect(prompt).toContain("channel=telegram");
     expect(prompt).toContain("capabilities=inlinebuttons");
-    expect(prompt).toContain("thinking=low");
   });
 
   it("keeps the runtime line cache-stable across isolated cron runs", () => {

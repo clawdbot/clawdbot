@@ -14,6 +14,7 @@ import {
 } from "lit";
 import { McpAppUnmountGate } from "../../../components/mcp-app-unmount.ts";
 import { resolveScrollBehavior } from "../../../lib/scroll-behavior.ts";
+import { isTranscriptScrollKey } from "../chat-scroll-input.ts";
 import type { AssistantMessageExpansionState } from "../chat-thread.ts";
 import {
   CHAT_TRANSCRIPT_END_THRESHOLD_PX,
@@ -198,7 +199,7 @@ export class ChatSessionVirtualizerHost implements ReactiveControllerHost, ChatT
   }
   private rowKeys: readonly string[] = [];
   private rowIndexesByKey = new Map<string, number>();
-  private messageRowKeysById = new Map<string, string>();
+  private messageRowKeysById: ReadonlyMap<string, string> = new Map();
   private focusedRowKey: string | null = null;
   private readonly announcement = new TranscriptAnnouncementState();
   private readonly mcpAppUnmountGate = new McpAppUnmountGate(this);
@@ -263,10 +264,7 @@ export class ChatSessionVirtualizerHost implements ReactiveControllerHost, ChatT
           if (!element || element !== this.scrollElement || instance.scrollElement !== element) {
             return;
           }
-          if (
-            event instanceof KeyboardEvent &&
-            !["ArrowUp", "ArrowDown", "PageUp", "PageDown", "Home", "End", " "].includes(event.key)
-          ) {
+          if (event instanceof KeyboardEvent && !isTranscriptScrollKey(event)) {
             return;
           }
           if (event instanceof PointerEvent && event.target !== element) {
@@ -405,7 +403,7 @@ export class ChatSessionVirtualizerHost implements ReactiveControllerHost, ChatT
     this.measureRowRefs.clear();
     this.rowKeys = [];
     this.rowIndexesByKey.clear();
-    this.messageRowKeysById.clear();
+    this.messageRowKeysById = new Map();
     this.focusedRowKey = null;
     this.pendingScrollOffset = null;
   }
@@ -514,7 +512,7 @@ export class ChatSessionVirtualizerHost implements ReactiveControllerHost, ChatT
   }
 
   syncMessageRows(messageRowKeysById: ReadonlyMap<string, string>): void {
-    this.messageRowKeysById = new Map(messageRowKeysById);
+    this.messageRowKeysById = messageRowKeysById;
   }
 
   revealMessage(messageId: string): boolean {

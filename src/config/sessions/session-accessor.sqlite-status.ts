@@ -1,5 +1,9 @@
 import { sql } from "kysely";
-import { executeSqliteQuerySync, getNodeSqliteKysely } from "../../infra/kysely-sync.js";
+import {
+  executeSqliteQuerySync,
+  getNodeSqliteKysely,
+  sqliteStringSet,
+} from "../../infra/kysely-sync.js";
 import type { DB as OpenClawAgentKyselyDatabase } from "../../state/openclaw-agent-db.generated.js";
 import type { OpenClawAgentDatabase } from "../../state/openclaw-agent-db.js";
 import type {
@@ -96,14 +100,13 @@ export function readSessionEntriesByStatus(
   sessionKeys?: readonly string[],
 ): SessionEntrySummary[] {
   const selectedStatuses = [...new Set(statuses)];
-  const selectedSessionKeys = sessionKeys ? [...new Set(sessionKeys)] : undefined;
-  if (selectedStatuses.length === 0 || selectedSessionKeys?.length === 0) {
+  if (selectedStatuses.length === 0) {
     return [];
   }
   const db = getNodeSqliteKysely<SessionStatusDatabase>(database.db);
   let query = db.selectFrom("session_nodes").selectAll().where("status", "in", selectedStatuses);
-  if (selectedSessionKeys) {
-    query = query.where("session_key", "in", selectedSessionKeys);
+  if (sessionKeys) {
+    query = query.where("session_key", "in", sqliteStringSet(sessionKeys));
   }
   return executeSqliteQuerySync(database.db, query)
     .rows.flatMap((row) => {

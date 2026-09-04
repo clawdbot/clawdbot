@@ -357,8 +357,19 @@ export function renderSanitizedUserFacingText(
 
 export const GENERIC_EXTERNAL_RUN_FAILURE_TEXT =
   "⚠️ Something went wrong while processing your request. Please try again, or use /new to start a fresh session.";
-export const HEARTBEAT_EXTERNAL_RUN_FAILURE_TEXT =
-  "⚠️ Heartbeat check failed before it could produce an update. The main chat session remains available.";
+const HEARTBEAT_FAILURE_LEAD = "⚠️ Heartbeat check failed before it could produce an update";
+const HEARTBEAT_FAILURE_TAIL = "The main chat session remains available.";
+export const HEARTBEAT_EXTERNAL_RUN_FAILURE_TEXT = `${HEARTBEAT_FAILURE_LEAD}. ${HEARTBEAT_FAILURE_TAIL}`;
+
+/** `reason` is the failure-reply owner's already sanitized and capped detail. */
+export function renderHeartbeatRunFailureCopy(reason?: string): string {
+  if (!reason) {
+    return HEARTBEAT_EXTERNAL_RUN_FAILURE_TEXT;
+  }
+  const terminator = /[.!?]$/u.test(reason) ? "" : ".";
+  return `${HEARTBEAT_FAILURE_LEAD}: ${reason}${terminator} ${HEARTBEAT_FAILURE_TAIL}`;
+}
+
 export const PROVIDER_CONVERSATION_STATE_ERROR_USER_MESSAGE =
   "⚠️ The model provider rejected the conversation state. Please try again, or use /new to start a fresh session.";
 const PROVIDER_RATE_LIMIT_OR_QUOTA_ERROR_USER_MESSAGE =

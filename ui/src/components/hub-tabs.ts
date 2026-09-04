@@ -127,13 +127,11 @@ export function renderHubTabs<T extends string>(props: HubTabsProps<T>): Templat
             }}
             ${selected ? ref((element) => reclaimFocus(props.id, tab.value, element)) : nothing}
           >
-            ${tab.label}${tab.count == null
-              ? nothing
-              : html`<span class="hub-tab__badge hub-tab__badge--count"
-                  >${tab.count}</span
-                >`}${tab.badge == null
-              ? nothing
-              : html`<span class="hub-tab__badge">${tab.badge}</span>`}
+            ${tab.label}${
+              tab.count == null
+                ? nothing
+                : html`<span class="hub-tab__badge hub-tab__badge--count">${tab.count}</span>`
+            }${tab.badge == null ? nothing : html`<span class="hub-tab__badge">${tab.badge}</span>`}
           </wa-tab>
         `;
       })}

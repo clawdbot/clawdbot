@@ -299,7 +299,7 @@ separate x86_64 appliance archive containing an OpenClaw npm tarball and pins
 the Node, archive, and manifest digests. Build that appliance independently
 from the same landed OpenClaw source.
 
-To test bundled plugin source against a packaged image, mount one plugin source directory over its packaged source path, e.g. `OPENCLAW_EXTRA_MOUNTS=/path/to/fork/extensions/synology-chat:/app/extensions/synology-chat:ro`. That overrides the matching compiled `/app/dist/extensions/synology-chat` bundle for the same plugin id.
+To test bundled plugin source against a packaged image, mount one plugin source directory over its packaged source path, e.g. `OPENCLAW_EXTRA_MOUNTS=/path/to/fork/extensions/synology-chat:/app/extensions/synology-chat:ro`. That overrides the matching compiled `/app/dist/extensions/synology-chat` bundle for the same plugin id. Restart the Gateway after adding or changing a mount; runtime loading and setup use the mounted source.
 
 ### Observability
 

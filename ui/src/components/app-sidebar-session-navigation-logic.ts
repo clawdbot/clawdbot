@@ -1,7 +1,6 @@
 import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
-import type { GatewayControlUiPluginTab } from "../api/gateway.ts";
 import type { GatewaySessionRow, SessionsListResult } from "../api/types.ts";
-import { SIDEBAR_NAV_ROUTES, type NavigationRouteId } from "../app-navigation.ts";
+import { SIDEBAR_NAV_ROUTES } from "../app-navigation.ts";
 import type { RouteId } from "../app-route-paths.ts";
 import type { ApplicationContext } from "../app/context.ts";
 import { listSelectableAgents } from "../lib/agents/display.ts";
@@ -39,10 +38,9 @@ import {
   type SidebarSessionSortMode,
   type SidebarSessionStatusFilter,
 } from "./app-sidebar-session-types.ts";
-import type { SidebarWorkboardBoard } from "./app-sidebar-workboard.ts";
 import { resolveCloudWorkerStopAction } from "./cloud-worker-stop.ts";
 import type { SessionAttentionController } from "./session-attention-controller.ts";
-import { listAssignableSessionOwners, type SessionOwnerOption } from "./session-owner-chip.ts";
+import { sessionSelfOwner, type SessionOwnerOption } from "./session-owner-chip.ts";
 
 type SessionRow = SessionsListResult["sessions"][number];
 
@@ -190,6 +188,7 @@ export function buildSidebarSessionNavigationState(input: {
       createdActor: row.createdActor,
       owner: row.owner,
       participants: row.participants,
+      expandedParticipants: row.expandedParticipants,
       participantCount: row.participantCount,
       archivedBy: row.archivedBy,
       // The sidebar's zone structure already says what forked from what;
@@ -278,10 +277,7 @@ export function buildSidebarSessionNavigationState(input: {
 export function buildReconciledSidebarZone(input: {
   sidebarEntries: readonly string[];
   rows: SidebarRecentSession[];
-  workboardBoards: readonly SidebarWorkboardBoard[];
-  enabledRouteIds: readonly NavigationRouteId[] | undefined;
-  workboardBoardsReady: boolean;
-  controlUiTabs: readonly GatewayControlUiPluginTab[] | undefined;
+  pluginNavigationKeys: ReadonlySet<string>;
 }) {
   const pinnedRows = input.rows.filter((row) => row.pinned);
   // Only loaded rows count as authoritative unpinned state; entries for
@@ -292,15 +288,11 @@ export function buildReconciledSidebarZone(input: {
     pinnedRows,
     SIDEBAR_NAV_ROUTES,
     knownUnpinnedKeys,
-    input.workboardBoards,
-    input.enabledRouteIds?.includes("workboard") ?? true,
-    input.workboardBoardsReady,
-    input.controlUiTabs?.some((tab) => tab.placement === "route:workboard") === true,
+    input.pluginNavigationKeys,
   );
   return {
     ...reconciled,
     sessionRows: new Map(pinnedRows.map((row) => [row.key, row])),
-    workboardRows: new Map(input.workboardBoards.map((board) => [board.id, board])),
   };
 }
 
@@ -568,11 +560,10 @@ export function applySidebarSessionOwnerFilter(input: {
 } {
   const facetOwners = input.ownerFacet ?? [];
   const selfId = input.self?.id;
-  const selfOwner = selfId
-    ? listAssignableSessionOwners({ facet: facetOwners, self: input.self }).find(
-        (owner) => owner.type === "human" && owner.id === selfId,
-      )
-    : undefined;
+  const selfOwner =
+    facetOwners.find((owner) => owner.id === selfId)?.type === "agent"
+      ? null
+      : sessionSelfOwner(input.self);
   const ownerOptions = selfOwner
     ? [selfOwner, ...facetOwners.filter((owner) => owner.id !== selfOwner.id)]
     : facetOwners;

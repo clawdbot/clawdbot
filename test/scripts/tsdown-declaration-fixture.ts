@@ -9,6 +9,7 @@ import {
   TSDOWN_NON_SDK_DTS_CONFIG_GROUPS,
   TSDOWN_PLUGIN_SDK_DTS_CONFIG_GROUPS,
 } from "../../scripts/lib/tsdown-config-groups.mts";
+import { materializeDeclarationPackages } from "./declaration-fixture-packages.js";
 import { createScriptTestHarness } from "./test-helpers.js";
 
 const { createTempDir } = createScriptTestHarness();
@@ -107,7 +108,26 @@ export function createFixture(
 ) {
   fs.mkdirSync(root, { recursive: true });
   fs.mkdirSync(path.join(root, ".artifacts"));
-  fs.symlinkSync(path.resolve("node_modules"), path.join(root, "node_modules"), "junction");
+  // Link the selected graph's real toolchain and runtime packages: each writer
+  // validates the fixture's entire dependency topology before and after emit.
+  for (const name of [
+    ".bin",
+    "@anthropic-ai/claude-agent-sdk",
+    "@openclaw/fs-safe",
+    "@typescript/native-preview",
+    "playwright-core",
+    "tsx",
+    ...(groups === TSDOWN_NON_SDK_DTS_CONFIG_GROUPS ? ["pretty-ms"] : []),
+  ]) {
+    const target = path.join(root, "node_modules", name);
+    fs.mkdirSync(path.dirname(target), { recursive: true });
+    fs.symlinkSync(
+      fs.realpathSync(path.join(sourceRoot, "node_modules", name)),
+      target,
+      "junction",
+    );
+  }
+  materializeDeclarationPackages(root, groups === TSDOWN_NON_SDK_DTS_CONFIG_GROUPS);
   const write = (source: string, contents: string) => {
     const relative = path.relative(root, path.resolve(root, source));
     if (relative === ".." || relative.startsWith(`..${path.sep}`) || path.isAbsolute(relative)) {

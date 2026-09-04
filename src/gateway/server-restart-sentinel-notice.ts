@@ -1,5 +1,6 @@
-// Durable outbound notice ownership for restart-sentinel recovery.
 import { sendDurableMessageBatchCore } from "../channels/message/runtime.js";
+// Durable outbound notice ownership for restart-sentinel recovery.
+import { getChannelPlugin, normalizeChannelId } from "../channels/plugins/index.js";
 import type { CliDeps } from "../cli/deps.types.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import {
@@ -37,8 +38,12 @@ import {
 } from "../infra/outbound/message-sent-hook.js";
 import { acceptedPreparedOutboundEntries } from "../infra/outbound/prepared-batch.js";
 import { buildOutboundSessionContext } from "../infra/outbound/session-context.js";
+import { resolveOutboundTarget } from "../infra/outbound/targets.js";
 import { createSubsystemLogger } from "../logging/subsystem.js";
+import { stringifyRouteThreadId } from "../plugin-sdk/channel-route.js";
 import { getGlobalHookRunner } from "../plugins/hook-runner-global.js";
+import type { DeliveryContext } from "../utils/delivery-context.shared.js";
+import { withTimeout } from "../utils/with-timeout.js";
 
 const log = createSubsystemLogger("gateway/restart-sentinel");
 const RESTART_NOTICE_RECOVERY_DELAY_MS = process.env.VITEST ? 1 : 1_000;
@@ -53,6 +58,86 @@ type RestartSentinelNoticeRoute = {
   threadId?: string;
 };
 
+type GatewayLifecycleNotice = RestartSentinelNoticeRoute & {
+  cfg: OpenClawConfig;
+  message: string;
+  sessionKey?: string;
+};
+
+/** Resolve once before an update can replace lazily loaded channel modules. */
+export function resolveGatewayLifecycleNoticeRoute(params: {
+  cfg: OpenClawConfig;
+  deliveryContext?: DeliveryContext;
+  threadId?: string;
+}): RestartSentinelNoticeRoute | undefined {
+  const origin = params.deliveryContext;
+  const channel = origin?.channel ? normalizeChannelId(origin.channel) : null;
+  if (!channel || !origin?.to) {
+    return undefined;
+  }
+  const resolved = resolveOutboundTarget({
+    cfg: params.cfg,
+    channel,
+    to: origin.to,
+    accountId: origin.accountId,
+    mode: "implicit",
+  });
+  if (!resolved.ok) {
+    return undefined;
+  }
+  const threadId = params.threadId ?? stringifyRouteThreadId(origin.threadId);
+  const transport = getChannelPlugin(channel)?.threading?.resolveReplyTransport?.({
+    cfg: params.cfg,
+    accountId: origin.accountId,
+    threadId,
+  });
+  return {
+    channel,
+    to: resolved.to,
+    accountId: origin.accountId,
+    replyToId: transport?.replyToId ?? undefined,
+    threadId:
+      transport && Object.hasOwn(transport, "threadId")
+        ? stringifyRouteThreadId(transport.threadId)
+        : threadId,
+  };
+}
+
+/** Await one durable attempt; recovery retains failed custody without delaying shutdown. */
+export async function sendGatewayLifecycleNotice(
+  params: GatewayLifecycleNotice & {
+    deps: CliDeps;
+    deliveryIntentId: string;
+  },
+): Promise<boolean> {
+  let delivered = false;
+  try {
+    await withTimeout(
+      (async () => {
+        const queued = await enqueueGatewayLifecycleNotice(params, params.deliveryIntentId);
+        if (!queued.created) {
+          return;
+        }
+        await deliverGatewayLifecycleNoticeAttempt(
+          {
+            ...params,
+            summary: "update.run notice",
+            queueId: queued.id,
+          },
+          () => {
+            delivered = true;
+          },
+        );
+      })(),
+      10_000,
+      "update.run notice",
+    );
+  } catch (error) {
+    log.warn(`update.run notice failed: ${formatErrorMessage(error)}`);
+  }
+  return delivered;
+}
+
 type RestartSentinelNoticeEnqueueResult = { id: string; created: boolean };
 
 // Duplicate gateway startup paths share the same producer outcome. A caller
@@ -60,14 +145,21 @@ type RestartSentinelNoticeEnqueueResult = { id: string; created: boolean };
 const activeRestartNoticeEnqueues = new Map<string, Promise<RestartSentinelNoticeEnqueueResult>>();
 
 export async function enqueueRestartSentinelNotice(
-  params: RestartSentinelNoticeRoute & {
-    cfg: OpenClawConfig;
-    message: string;
+  params: GatewayLifecycleNotice & {
     sessionKey: string;
     revision: number;
   },
 ): Promise<RestartSentinelNoticeEnqueueResult> {
-  const deliveryIntentId = `restart-sentinel-notice:${params.sessionKey}:${params.revision}`;
+  return await enqueueGatewayLifecycleNotice(
+    params,
+    `restart-sentinel-notice:${params.sessionKey}:${params.revision}`,
+  );
+}
+
+async function enqueueGatewayLifecycleNotice(
+  params: GatewayLifecycleNotice,
+  deliveryIntentId: string,
+): Promise<RestartSentinelNoticeEnqueueResult> {
   const active = activeRestartNoticeEnqueues.get(deliveryIntentId);
   if (active) {
     await active;
@@ -85,12 +177,7 @@ export async function enqueueRestartSentinelNotice(
 }
 
 async function enqueueRestartSentinelNoticeOwned(
-  params: RestartSentinelNoticeRoute & {
-    cfg: OpenClawConfig;
-    message: string;
-    sessionKey: string;
-    revision: number;
-  },
+  params: GatewayLifecycleNotice,
   deliveryIntentId: string,
 ): Promise<RestartSentinelNoticeEnqueueResult> {
   const claim = await withActiveDeliveryClaim(deliveryIntentId, async () => {
@@ -117,12 +204,7 @@ async function enqueueRestartSentinelNoticeOwned(
 }
 
 async function enqueueRestartSentinelNoticeClaimed(
-  params: RestartSentinelNoticeRoute & {
-    cfg: OpenClawConfig;
-    message: string;
-    sessionKey: string;
-    revision: number;
-  },
+  params: GatewayLifecycleNotice,
   deliveryIntentId: string,
   preparationOwner: StableDeliveryPreparationOwner,
 ): Promise<RestartSentinelNoticeEnqueueResult> {
@@ -228,15 +310,28 @@ async function drainFailedRestartSentinelNotice(params: {
 }
 
 export async function deliverRestartSentinelNotice(
-  params: RestartSentinelNoticeRoute & {
+  params: GatewayLifecycleNotice & {
     deps: CliDeps;
-    cfg: OpenClawConfig;
     sessionKey: string;
     summary: string;
-    message: string;
     queueId: string;
   },
 ): Promise<void> {
+  const claim = await deliverGatewayLifecycleNoticeAttempt(params);
+  if (claim.status === "claimed-by-other-owner") {
+    log.info(`${params.summary}: durable restart notice claimed by recovery`, {
+      sessionKey: params.sessionKey,
+    });
+  }
+  if (claim.status === "claimed-by-other-owner" || !claim.value) {
+    await drainFailedRestartSentinelNotice(params);
+  }
+}
+
+async function deliverGatewayLifecycleNoticeAttempt(
+  params: GatewayLifecycleNotice & { deps: CliDeps; summary: string; queueId: string },
+  onDelivered?: () => void,
+) {
   const messageSentEvents: MessageSentEvent[] = [];
   const flushTerminalObservers = async (
     results: readonly OutboundDeliveryResult[],
@@ -259,7 +354,7 @@ export async function deliverRestartSentinelNotice(
       await runOutboundDeliveryCommitHooks(results);
     }
   };
-  const claim = await withActiveDeliveryClaim(params.queueId, async () => {
+  return await withActiveDeliveryClaim(params.queueId, async () => {
     try {
       const reservation = await reserveDeliveryAttempt(params.queueId, RESTART_NOTICE_MAX_ATTEMPTS);
       if (reservation.status === "exhausted") {
@@ -310,6 +405,11 @@ export async function deliverRestartSentinelNotice(
       const results = send.status === "sent" ? send.results : [];
       if (send.status === "sent" && results.length === 0) {
         throw new Error("outbound delivery returned no results");
+      }
+      // Capture the platform fact before queue settlement or hooks can stall.
+      // A bounded caller must still report a sent acknowledgement on timeout.
+      if (results.length > 0) {
+        onDelivered?.();
       }
       try {
         await ackDelivery(params.queueId);
@@ -376,19 +476,4 @@ export async function deliverRestartSentinelNotice(
       return false;
     }
   });
-  if (claim.status === "claimed-by-other-owner") {
-    log.info(`${params.summary}: durable restart notice claimed by recovery`, {
-      sessionKey: params.sessionKey,
-    });
-  }
-  const needsRecovery =
-    claim.status === "claimed-by-other-owner" || (claim.status === "claimed" && !claim.value);
-  if (needsRecovery) {
-    await drainFailedRestartSentinelNotice({
-      cfg: params.cfg,
-      queueId: params.queueId,
-      sessionKey: params.sessionKey,
-      summary: params.summary,
-    });
-  }
 }
