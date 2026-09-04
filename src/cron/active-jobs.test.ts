@@ -4,6 +4,7 @@ import {
   createOperationalRunInstanceRef,
   prepareAgentRunAdmission,
 } from "../agents/admitted-run-context.js";
+import { importFreshModule } from "../plugin-sdk/test-helpers/import-fresh.js";
 import {
   advanceCronActiveJobGeneration,
   bindCronJobAdmittedRun,
@@ -64,89 +65,108 @@ describe("hasActiveCronJobsExceptMarkers", () => {
   });
 });
 
-describe("active cron schedule ownership", () => {
-  it.each([
-    "active owner",
-    "closed admission",
-    "aborted run",
-    "expired caller",
-    "replaced marker",
-    "replaced admission",
-    "retired generation",
-    "copied guard",
-    "different instance",
-  ] as const)("keeps self-removal bound to the %s", async (scenario) => {
-    const jobId = "self-removing-job";
-    const marker = markCronJobActive(jobId)!;
-    const controller = new AbortController();
-    const admission = prepareAgentRunAdmission({
-      cfg: {},
-      operationalRunInstance: createOperationalRunInstanceRef("self-removal-run"),
-      facts: {
-        runId: "self-removal-run",
-        agentId: "main",
-        ingress: { kind: "schedule", boundary: "cron.isolated-agent", state: "present" },
-      },
-    });
-    const replacement = prepareAgentRunAdmission({
-      cfg: {},
-      operationalRunInstance: createOperationalRunInstanceRef("replacement-run"),
-      facts: {
-        runId: "replacement-run",
-        agentId: "main",
-        ingress: { kind: "schedule", boundary: "cron.isolated-agent", state: "present" },
-      },
-    });
-    try {
-      const context = await admission.admit("embedded");
-      bindCronJobAdmittedRun(marker, context, controller.signal);
-      let callerActive = true;
-      const commitGuard = vi.fn();
-      bindCronSelfRemovalCommitGuard(
-        jobId,
-        scenario === "different instance"
-          ? createOperationalRunInstanceRef(context.operationalRunInstance.runId)
-          : context.operationalRunInstance,
-        commitGuard,
-        () => {
-          if (!callerActive) {
-            throw new Error("caller expired");
-          }
+describe.each(["same module", "reload before guard", "reload after guard"])(
+  "active cron self-removal ownership: %s",
+  (moduleBoundary) => {
+    it.each([
+      "active owner",
+      "closed admission",
+      "aborted run",
+      "expired caller",
+      "replaced marker",
+      "replaced admission",
+      "retired generation",
+      "copied guard",
+      "different instance",
+    ] as const)("keeps self-removal bound to the %s", async (scenario) => {
+      const jobId = "self-removing-job";
+      const marker = markCronJobActive(jobId)!;
+      const controller = new AbortController();
+      const admission = prepareAgentRunAdmission({
+        cfg: {},
+        operationalRunInstance: createOperationalRunInstanceRef("self-removal-run"),
+        facts: {
+          runId: "self-removal-run",
+          agentId: "main",
+          ingress: { kind: "schedule", boundary: "cron.isolated-agent", state: "present" },
         },
-      );
-      let currentMarker = marker;
-      if (scenario === "closed admission") {
-        admission.close();
-      } else if (scenario === "aborted run") {
-        controller.abort();
-      } else if (scenario === "expired caller") {
-        callerActive = false;
-      } else if (scenario === "replaced admission") {
-        bindCronJobAdmittedRun(marker, await replacement.admit("embedded"), controller.signal);
-      } else if (scenario === "replaced marker" || scenario === "retired generation") {
-        if (scenario === "retired generation") {
-          advanceCronActiveJobGeneration();
+      });
+      const replacement = prepareAgentRunAdmission({
+        cfg: {},
+        operationalRunInstance: createOperationalRunInstanceRef("replacement-run"),
+        facts: {
+          runId: "replacement-run",
+          agentId: "main",
+          ingress: { kind: "schedule", boundary: "cron.isolated-agent", state: "present" },
+        },
+      });
+      try {
+        const context = await admission.admit("embedded");
+        bindCronJobAdmittedRun(marker, context, controller.signal);
+        let callerActive = true;
+        const commitGuard = vi.fn();
+        const bindingModule =
+          moduleBoundary === "reload before guard"
+            ? await importFreshModule<typeof import("./active-jobs.js")>(
+                import.meta.url,
+                "./active-jobs.js?cron-self-removal-before-guard",
+              )
+            : { bindCronSelfRemovalCommitGuard };
+        bindingModule.bindCronSelfRemovalCommitGuard(
+          jobId,
+          scenario === "different instance"
+            ? createOperationalRunInstanceRef(context.operationalRunInstance.runId)
+            : context.operationalRunInstance,
+          commitGuard,
+          () => {
+            if (!callerActive) {
+              throw new Error("caller expired");
+            }
+          },
+        );
+        let currentMarker = marker;
+        if (scenario === "closed admission") {
+          admission.close();
+        } else if (scenario === "aborted run") {
+          controller.abort();
+        } else if (scenario === "expired caller") {
+          callerActive = false;
+        } else if (scenario === "replaced admission") {
+          bindCronJobAdmittedRun(marker, await replacement.admit("embedded"), controller.signal);
+        } else if (scenario === "replaced marker" || scenario === "retired generation") {
+          if (scenario === "retired generation") {
+            advanceCronActiveJobGeneration();
+          }
+          currentMarker = markCronJobActive(jobId)!;
         }
-        currentMarker = markCronJobActive(jobId)!;
-      }
-      const cancel = vi.fn();
-      currentMarker.cancellation = { kind: "bound", cancel };
+        const cancel = vi.fn();
+        currentMarker.cancellation = { kind: "bound", cancel };
 
-      const removalGuard = scenario === "copied guard" ? () => commitGuard() : commitGuard;
-      expect(noteActiveCronJobRemoval(jobId, removalGuard)).toBe(currentMarker);
-      expect(currentMarker.jobRemoved).toBe(true);
-      expect(hasActiveCronJobs()).toBe(true);
-      if (scenario === "active owner") {
-        expect(cancel).not.toHaveBeenCalled();
-      } else {
-        expect(cancel).toHaveBeenCalledExactlyOnceWith("Cron job removed by operator.");
+        const removalGuard = scenario === "copied guard" ? () => commitGuard() : commitGuard;
+        const removalModule =
+          moduleBoundary === "same module"
+            ? { noteActiveCronJobRemoval }
+            : await importFreshModule<typeof import("./active-jobs.js")>(
+                import.meta.url,
+                "./active-jobs.js?cron-self-removal-after-guard",
+              );
+        expect(removalModule.noteActiveCronJobRemoval(jobId, removalGuard)).toBe(currentMarker);
+        expect(currentMarker.jobRemoved).toBe(true);
+        expect(hasActiveCronJobs()).toBe(true);
+        if (scenario === "active owner") {
+          expect(cancel).not.toHaveBeenCalled();
+        } else {
+          expect(cancel).toHaveBeenCalledExactlyOnceWith("Cron job removed by operator.");
+        }
+      } finally {
+        admission.close();
+        replacement.close();
       }
-    } finally {
-      admission.close();
-      replacement.close();
-    }
-  });
+    });
+  },
+);
 
+describe("active cron schedule ownership", () => {
   it("notifies only the removed marker when a same-id run replaces it", () => {
     const removedMarker = markCronJobActive("reused-job");
     const onRemovedInactive = vi.fn();

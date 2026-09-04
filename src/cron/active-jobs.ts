@@ -10,17 +10,17 @@ import type { CronPayload } from "./types.js";
 
 type CronActiveJobState = {
   activeJobs: Map<string, CronActiveJobMarker>;
+  selfRemovalOwners: WeakMap<() => void, () => CronActiveJobMarker | undefined>;
+  admittedJobRuns: WeakMap<
+    CronActiveJobMarker,
+    { context: AdmittedRunContext; assertActive: () => void }
+  >;
   generation: number;
   nextToken: number;
   emptyWaiters: Set<() => void>;
 };
 
 const CRON_ACTIVE_JOB_STATE_KEY = Symbol.for("openclaw.cron.activeJobs");
-const selfRemovalOwners = new WeakMap<() => void, () => CronActiveJobMarker | undefined>();
-const admittedJobRuns = new WeakMap<
-  CronActiveJobMarker,
-  { context: AdmittedRunContext; assertActive: () => void }
->();
 
 export function bindCronJobAdmittedRun(
   marker: CronActiveJobMarker | undefined,
@@ -29,7 +29,7 @@ export function bindCronJobAdmittedRun(
 ): void {
   const assertActive = resolveAdmittedRunActiveAssertion(context, signal);
   if (marker && assertActive && isCronActiveJobMarkerCurrent(marker)) {
-    admittedJobRuns.set(marker, { context, assertActive });
+    getCronActiveJobState().admittedJobRuns.set(marker, { context, assertActive });
   }
 }
 
@@ -40,6 +40,7 @@ export function bindCronSelfRemovalCommitGuard(
   commitGuard: () => void,
   assertCallerActive: () => void,
 ): void {
+  const { admittedJobRuns, selfRemovalOwners } = getCronActiveJobState();
   const marker = getCurrentCronActiveJobMarker(jobId);
   const owner = marker && admittedJobRuns.get(marker);
   if (
@@ -85,9 +86,12 @@ export type CronActiveJobMarker = {
 
 function getCronActiveJobState(): CronActiveJobState {
   // Cron runs can cross module reload boundaries in tests and dev watch; keep
-  // the in-flight job set process-global so duplicate-run guards share state.
+  // markers and their admission bindings together so removal still recognizes
+  // the exact live owner when execution and Gateway use different module copies.
   const state = resolveGlobalSingleton<CronActiveJobState>(CRON_ACTIVE_JOB_STATE_KEY, () => ({
     activeJobs: new Map<string, CronActiveJobMarker>(),
+    selfRemovalOwners: new WeakMap(),
+    admittedJobRuns: new WeakMap(),
     generation: 0,
     nextToken: 1,
     emptyWaiters: new Set<() => void>(),
@@ -95,6 +99,8 @@ function getCronActiveJobState(): CronActiveJobState {
   state.generation ??= 0;
   state.nextToken ??= 1;
   state.activeJobs ??= new Map<string, CronActiveJobMarker>();
+  state.selfRemovalOwners ??= new WeakMap();
+  state.admittedJobRuns ??= new WeakMap();
   state.emptyWaiters ??= new Set<() => void>();
   return state;
 }
@@ -221,7 +227,7 @@ export function noteActiveCronJobRemoval(
   marker.jobRemoved = true;
   // Check the exact live admission again after persistence, while retaining its
   // marker for duplicate exclusion and deferred session cleanup until completion.
-  if (!commitGuard || selfRemovalOwners.get(commitGuard)?.() !== marker) {
+  if (!commitGuard || getCronActiveJobState().selfRemovalOwners.get(commitGuard)?.() !== marker) {
     requestCronActiveJobMarkerCancellation(marker, "Cron job removed by operator.");
   }
   return marker;
