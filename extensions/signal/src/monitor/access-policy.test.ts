@@ -254,7 +254,7 @@ describe("resolveSignalAccessState", () => {
       sender: SIGNAL_SENDER,
       groupId: SIGNAL_GROUP_ID,
       isGroup: true,
-      hasControlCommand: true,
+      shouldComputeCommandAuthorized: true,
     });
 
     expect(access.senderAccess.decision).toBe("allow");
@@ -272,7 +272,7 @@ describe("resolveSignalAccessState", () => {
       sender: SIGNAL_SENDER,
       groupId: SIGNAL_GROUP_ID,
       isGroup: true,
-      hasControlCommand: true,
+      shouldComputeCommandAuthorized: true,
     });
 
     expect(access.commandAccess.authorized).toBe(true);
@@ -289,7 +289,7 @@ describe("resolveSignalAccessState", () => {
       sender: resolveAliasedSignalSender(),
       groupId: SIGNAL_GROUP_ID,
       isGroup: true,
-      hasControlCommand: true,
+      shouldComputeCommandAuthorized: true,
     });
 
     expect(access.senderAccess.decision).toBe("allow");

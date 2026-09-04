@@ -120,13 +120,13 @@ export async function resolveSignalAccessState(params: {
   groupId?: string;
   isGroup?: boolean;
   cfg?: Pick<OpenClawConfig, "accessGroups" | "commands">;
-  hasControlCommand?: boolean;
+  shouldComputeCommandAuthorized?: boolean;
   readStoreAllowFrom?: () => Promise<string[]>;
   contextBinding?: ChannelIngressContextBinding;
 }) {
   const isGroup = params.isGroup ?? params.groupId != null;
   const command =
-    params.hasControlCommand === true
+    params.shouldComputeCommandAuthorized === true
       ? {
           allowTextCommands: true,
           directGroupAllowFrom: "effective" as const,

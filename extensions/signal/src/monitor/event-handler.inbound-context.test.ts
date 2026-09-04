@@ -1,8 +1,9 @@
 // Signal tests cover event handler.inbound context plugin behavior.
 import { expectChannelInboundContextContract as expectInboundContextContract } from "openclaw/plugin-sdk/channel-contract-testing";
 import type { OpenClawConfig } from "openclaw/plugin-sdk/config-contracts";
+import { clearPluginCommands, registerPluginCommand } from "openclaw/plugin-sdk/plugin-runtime";
 import type { MsgContext } from "openclaw/plugin-sdk/reply-runtime";
-import { beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
+import { afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 import { resolveSignalReplyContextWithPersistence } from "../reply-authors.js";
 import { resetSignalReplyAuthorsForTests } from "../reply-authors.test-helpers.js";
 import type {
@@ -452,6 +453,10 @@ describe("signal createSignalEventHandler inbound context", () => {
     logVerboseMock.mockClear();
     shouldLogVerboseMock.mockReset().mockReturnValue(false);
     approvalReactionMocks.maybeResolveSignalApprovalReaction.mockReset().mockResolvedValue(false);
+  });
+
+  afterEach(() => {
+    clearPluginCommands();
   });
 
   it("passes a finalized MsgContext to dispatchInboundMessage", async () => {
@@ -1298,6 +1303,29 @@ describe("signal createSignalEventHandler inbound context", () => {
     });
 
     await receiveGroupMessage(handler, "/status");
+
+    expect(requireCapturedContext().CommandAuthorized).toBe(true);
+  });
+
+  it("authorizes registered plugin commands from admitted direct senders", async () => {
+    registerPluginCommand("signal-test-plugin", {
+      name: "signal-plugin-auth",
+      description: "Test Signal plugin command authorization.",
+      acceptsArgs: true,
+      handler: async () => ({ text: "ok" }),
+    });
+    const handler = createTestHandler({
+      cfg: createDirectConfig({
+        signal: {
+          dmPolicy: "allowlist",
+          allowFrom: ["+15550001111"],
+        },
+      }),
+      dmPolicy: "allowlist",
+      allowFrom: ["+15550001111"],
+    });
+
+    await receiveMessage(handler, { message: "hey / signal-plugin-auth check", attachments: [] });
 
     expect(requireCapturedContext().CommandAuthorized).toBe(true);
   });

@@ -694,6 +694,84 @@ describe("handlePluginCommand", () => {
     expect(handler).toHaveBeenCalledTimes(1);
   });
 
+  it("executes an allowed Microsoft Teams plugin command and stops the nearest unauthorized ingress", async () => {
+    const handler = vi.fn(async () => ({ text: "plugin handler reached" }));
+    expect(
+      registerPluginCommandInRegistry(registry, "msteams-test-plugin", {
+        name: "msteams-plugin-auth",
+        description: "Test Microsoft Teams plugin command authorization.",
+        acceptsArgs: true,
+        handler,
+      }),
+    ).toEqual({ ok: true });
+
+    const cfg = {
+      commands: { text: true, useAccessGroups: true },
+      channels: {
+        msteams: {
+          groupPolicy: "open",
+          groupAllowFrom: ["member-aad"],
+          requireMention: false,
+        },
+      },
+    } as OpenClawConfig;
+    const commandBody = "/msteams-plugin-auth check";
+    const executeFromFinalIngress = async (params: {
+      senderId: string;
+      commandAuthorized: boolean;
+    }) => {
+      const ctx = finalizeInboundContext({
+        Provider: "msteams",
+        Surface: "msteams",
+        OriginatingChannel: "msteams",
+        Body: commandBody,
+        CommandBody: commandBody,
+        CommandSource: "text",
+        CommandAuthorized: params.commandAuthorized,
+        SenderId: params.senderId,
+        From: `msteams:group:${params.senderId}`,
+        To: "conversation:19:group@thread.tacv2",
+      });
+      const replyOptions: NonNullable<HandleCommandsParams["opts"]> &
+        PluginCommandExecutionReplyOptions = {};
+      expect(shouldBypassPluginOwnedBindingForCommand(ctx, cfg, replyOptions)).toBe(
+        params.commandAuthorized,
+      );
+
+      const commandParams = buildPluginParams(commandBody, cfg);
+      commandParams.ctx = ctx;
+      commandParams.opts = replyOptions;
+      commandParams.command = buildCommandContext({
+        ctx,
+        cfg,
+        sessionKey: commandParams.sessionKey,
+        isGroup: true,
+        triggerBodyNormalized: commandBody,
+        commandAuthorized: params.commandAuthorized,
+      });
+      return await handlePluginCommand(commandParams, true);
+    };
+
+    await expect(
+      executeFromFinalIngress({ senderId: "member-aad", commandAuthorized: true }),
+    ).resolves.toEqual({
+      shouldContinue: false,
+      reply: { text: "plugin handler reached" },
+    });
+    await expect(
+      executeFromFinalIngress({ senderId: "unlisted-aad", commandAuthorized: false }),
+    ).resolves.toEqual({
+      shouldContinue: false,
+      reply: { text: "⚠️ This command requires authorization." },
+    });
+    expect(handler).toHaveBeenCalledTimes(1);
+    expect(firstCommandContext(handler)).toMatchObject({
+      channel: "msteams",
+      commandBody,
+      senderId: "member-aad",
+    });
+  });
+
   it.each([
     {
       name: "Gateway command routed to its originating channel",
