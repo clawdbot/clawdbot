@@ -40,3 +40,13 @@ export function workerEnvironmentStateRequiresLease(
 ): state is WorkerEnvironmentLeasedState {
   return state !== "requested" && state !== "provisioning" && state !== "failed";
 }
+
+export function isWorkerEnvironmentGone(environment: {
+  state: WorkerEnvironmentState;
+  leaseId: string | null;
+}): boolean {
+  return (
+    environment.state === "destroyed" ||
+    (environment.state === "failed" && environment.leaseId === null)
+  );
+}

@@ -368,7 +368,7 @@ describe("remote-exec skill resource lifecycle", () => {
     ]);
     await fs.unlink(permit!);
     await allocationOwner.coordinator.recover({
-      getEnvironment: () => ({ state: "attached", ownerEpoch: 1 }),
+      getEnvironment: () => ({ state: "attached", ownerEpoch: 1, leaseId: "lease-active" }),
       startTunnel: async () => carrier as never,
     });
     await expect(allocationOwner.ledger.list()).resolves.toEqual([]);
@@ -507,7 +507,7 @@ describe("remote-exec skill resource lifecycle", () => {
       { allocationId, phase: "cleanup-pending" },
     ]);
     await allocationOwner.coordinator.recover({
-      getEnvironment: () => ({ state: "attached", ownerEpoch: 1 }),
+      getEnvironment: () => ({ state: "attached", ownerEpoch: 1, leaseId: "lease-active" }),
       startTunnel: async () => carrier as never,
     });
     await expect(allocationOwner.ledger.list()).resolves.toEqual([]);
@@ -559,7 +559,7 @@ describe("remote-exec skill resource lifecycle", () => {
 
     await fs.rm(replacementRoot!, { recursive: true });
     await allocationOwner.coordinator.recover({
-      getEnvironment: () => ({ state: "attached", ownerEpoch: 1 }),
+      getEnvironment: () => ({ state: "attached", ownerEpoch: 1, leaseId: "lease-active" }),
       startTunnel: async () => carrier as never,
     });
     await expect(allocationOwner.ledger.list()).resolves.toEqual([]);
@@ -600,7 +600,7 @@ describe("remote-exec skill resource lifecycle", () => {
     await allocationOwner.coordinator.stop();
     const restarted = createTestCoordinator(allocationOwner.stateDir, "6".repeat(32)).coordinator;
     await restarted.recover({
-      getEnvironment: () => ({ state: "attached", ownerEpoch: 1 }),
+      getEnvironment: () => ({ state: "attached", ownerEpoch: 1, leaseId: "lease-active" }),
       startTunnel: async () => carrier as never,
     });
     await new Promise<void>((resolve) => {
@@ -672,7 +672,7 @@ describe("remote-exec skill resource lifecycle", () => {
     await allocationOwner.coordinator.stop();
     const restarted = createTestCoordinator(allocationOwner.stateDir, "2".repeat(32)).coordinator;
     await restarted.recover({
-      getEnvironment: () => ({ state: "attached", ownerEpoch: 1 }),
+      getEnvironment: () => ({ state: "attached", ownerEpoch: 1, leaseId: "lease-active" }),
       startTunnel: async () => carrier as never,
     });
     await expect(allocationOwner.ledger.list()).resolves.toEqual([]);
@@ -763,7 +763,7 @@ describe("remote-exec skill resource lifecycle", () => {
     const root = path.dirname(resources!.mounts[0]!.containerPath);
     const currentStart = vi.fn(async () => carrier as never);
     await allocationOwner.coordinator.recover({
-      getEnvironment: () => ({ state: "attached", ownerEpoch: 1 }),
+      getEnvironment: () => ({ state: "attached", ownerEpoch: 1, leaseId: "lease-active" }),
       startTunnel: currentStart,
     });
     expect(currentStart).not.toHaveBeenCalled();
@@ -781,7 +781,7 @@ describe("remote-exec skill resource lifecycle", () => {
     const callsBeforeUnavailable = commandCalls;
     const cleanupDeferred = vi.fn();
     await restarted.recover({
-      getEnvironment: () => ({ state: "attached", ownerEpoch: 1 }),
+      getEnvironment: () => ({ state: "attached", ownerEpoch: 1, leaseId: "lease-active" }),
       startTunnel: async () => {
         throw new Error("placement unavailable");
       },
@@ -795,7 +795,7 @@ describe("remote-exec skill resource lifecycle", () => {
 
     const replacementOwnerStart = vi.fn(async () => carrier as never);
     await restarted.recover({
-      getEnvironment: () => ({ state: "attached", ownerEpoch: 2 }),
+      getEnvironment: () => ({ state: "attached", ownerEpoch: 2, leaseId: "lease-active" }),
       startTunnel: replacementOwnerStart,
     });
     expect(replacementOwnerStart).toHaveBeenCalledWith({
@@ -826,7 +826,7 @@ describe("remote-exec skill resource lifecycle", () => {
 
     await expect(
       replacement.recover({
-        getEnvironment: () => ({ state: "attached", ownerEpoch: 1 }),
+        getEnvironment: () => ({ state: "attached", ownerEpoch: 1, leaseId: "lease-active" }),
         startTunnel: replacementStart,
       }),
     ).rejects.toThrow(/skill resource allocation owner/iu);
@@ -836,7 +836,7 @@ describe("remote-exec skill resource lifecycle", () => {
 
     await current.coordinator.stop();
     await replacement.recover({
-      getEnvironment: () => ({ state: "attached", ownerEpoch: 1 }),
+      getEnvironment: () => ({ state: "attached", ownerEpoch: 1, leaseId: "lease-active" }),
       startTunnel: async () => carrier as never,
     });
     await expect(replacement.ledger.list()).resolves.toEqual([]);

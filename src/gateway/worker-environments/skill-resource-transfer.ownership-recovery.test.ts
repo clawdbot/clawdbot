@@ -2,6 +2,7 @@ import { spawn } from "node:child_process";
 import fs from "node:fs/promises";
 import path from "node:path";
 import { afterEach, describe, expect, it, vi } from "vitest";
+import { createDeferred } from "../../../test/helpers/promise.js";
 import { useAutoCleanupTempDirTracker } from "../../../test/helpers/temp-dir.js";
 import { loadWorkspaceSkills } from "../../skills/loading/workspace-skill-loader.js";
 import { buildSkillSnapshot } from "../../skills/loading/workspace-skill-prompt.js";
@@ -115,7 +116,7 @@ describe("remote-exec skill resource ownership recovery", () => {
     const deferred = vi.fn();
 
     await allocation.coordinator.recover({
-      getEnvironment: () => ({ state: "destroyed", ownerEpoch: 1 }),
+      getEnvironment: () => ({ state: "destroyed", ownerEpoch: 1, leaseId: "lease-active" }),
       startTunnel: vi.fn(),
       onEnvironmentCleanupDeferred: deferred,
     });
@@ -142,7 +143,7 @@ describe("remote-exec skill resource ownership recovery", () => {
     const deferred = vi.fn();
 
     await allocation.coordinator.recover({
-      getEnvironment: () => ({ state: "destroyed", ownerEpoch: 1 }),
+      getEnvironment: () => ({ state: "destroyed", ownerEpoch: 1, leaseId: "lease-active" }),
       startTunnel: vi.fn(),
       onEnvironmentCleanupDeferred: deferred,
     });
@@ -167,7 +168,11 @@ describe("remote-exec skill resource ownership recovery", () => {
       leaseToken: "6".repeat(64),
     });
     const deferred = vi.fn();
-    const getEnvironment = () => ({ state: "failed", ownerEpoch: 1 });
+    const getEnvironment = () => ({
+      state: "failed" as const,
+      ownerEpoch: 1,
+      leaseId: "lease-cleanup-unproven",
+    });
 
     const reconnectRecovery = allocation.coordinator.recover({
       getEnvironment,
@@ -186,7 +191,16 @@ describe("remote-exec skill resource ownership recovery", () => {
     await allocation.coordinator.stop();
   });
 
-  it("retires host intent only after provider-confirmed environment destruction", async () => {
+  it.each([
+    {
+      teardown: "destroyed environment",
+      environment: { state: "destroyed", ownerEpoch: 2, leaseId: "lease-destroyed" },
+    },
+    {
+      teardown: "failed environment with its provider lease cleared",
+      environment: { state: "failed", ownerEpoch: 2, leaseId: null },
+    },
+  ] as const)("retires host intent after a provider-proven $teardown", async ({ environment }) => {
     const remoteWorkspaceDir = await fs.realpath(temps.make("resource-destroyed-workspace-"));
     const stateDir = temps.make("resource-destroyed-state-");
     const original = createCoordinator(stateDir, "5".repeat(32));
@@ -201,7 +215,7 @@ describe("remote-exec skill resource ownership recovery", () => {
     const startTunnel = vi.fn();
 
     await replacement.coordinator.recover({
-      getEnvironment: () => ({ state: "destroyed", ownerEpoch: 2 }),
+      getEnvironment: () => environment,
       startTunnel,
     });
 
@@ -210,6 +224,110 @@ describe("remote-exec skill resource ownership recovery", () => {
     expect(record.phase).toBe("intent");
     await replacement.coordinator.stop();
   });
+
+  it.each([{ outcome: "success" }, { outcome: "failure" }] as const)(
+    "holds global ownership until reconnect recovery settles after $outcome",
+    async ({ outcome }) => {
+      const remoteWorkspaceDir = await fs.realpath(temps.make("resource-stop-recovery-"));
+      const carrier = createSpawnTunnel(remoteWorkspaceDir);
+      const stateDir = temps.make("resource-stop-recovery-state-");
+      const current = createCoordinator(stateDir, "a".repeat(32));
+      const allocationId = "b".repeat(32);
+      await current.coordinator.createIntent({
+        allocationId,
+        environmentId: "reconnect-recovery-environment",
+        ownerEpoch: 1,
+        workspace: remoteWorkspaceDir,
+        leaseToken: "c".repeat(64),
+      });
+      current.coordinator.abandon(allocationId);
+      const recoveryStarted = createDeferred<void>();
+      const finishRecovery = createDeferred<void>();
+      const deferred = vi.fn();
+      const warn = vi.fn();
+      const reconnectStart = vi.fn(async () => {
+        recoveryStarted.resolve();
+        await finishRecovery.promise;
+        if (outcome === "failure") {
+          throw new Error("fixture reconnect tunnel failure");
+        }
+        return carrier as never;
+      });
+      const recovery = current.coordinator.recover({
+        getEnvironment: () => ({
+          state: "attached",
+          ownerEpoch: 1,
+          leaseId: "lease-reconnect-recovery",
+        }),
+        startTunnel: reconnectStart,
+        onEnvironmentCleanupDeferred: deferred,
+        warn,
+      });
+      let stopped = false;
+      const stopping = current.coordinator.stop().then(() => {
+        stopped = true;
+      });
+      await recoveryStarted.promise;
+      const lateStart = vi.fn();
+      await expect(
+        current.coordinator.recover({
+          getEnvironment: () => ({
+            state: "attached",
+            ownerEpoch: 1,
+            leaseId: "lease-reconnect-recovery",
+          }),
+          startTunnel: lateStart,
+        }),
+      ).rejects.toThrow("coordinator is stopping");
+      expect(lateStart).not.toHaveBeenCalled();
+
+      const contender = createCoordinator(stateDir, "d".repeat(32));
+      const contenderStart = vi.fn();
+      await expect(
+        contender.coordinator.recover({
+          getEnvironment: () => ({
+            state: "attached",
+            ownerEpoch: 2,
+            leaseId: "lease-replacement",
+          }),
+          startTunnel: contenderStart,
+        }),
+      ).rejects.toThrow(/skill resource allocation owner/iu);
+      expect(contenderStart).not.toHaveBeenCalled();
+      expect(stopped).toBe(false);
+      await contender.coordinator.stop();
+
+      finishRecovery.resolve();
+      await recovery;
+      await stopping;
+      expect(stopped).toBe(true);
+      if (outcome === "success") {
+        await expect(current.ledger.list()).resolves.toEqual([]);
+        expect(deferred).not.toHaveBeenCalled();
+        expect(warn).not.toHaveBeenCalled();
+      } else {
+        await expect(current.ledger.list()).resolves.toMatchObject([
+          { allocationId, phase: "intent" },
+        ]);
+        expect(deferred).toHaveBeenCalledWith("reconnect-recovery-environment");
+        expect(warn).toHaveBeenCalledWith(
+          `Skill resource allocation cleanup remains queued (reconnect-recovery-environment, ${allocationId})`,
+        );
+      }
+
+      const replacement = createCoordinator(stateDir, "e".repeat(32));
+      await replacement.coordinator.recover({
+        getEnvironment: () => ({
+          state: "attached",
+          ownerEpoch: 2,
+          leaseId: "lease-replacement",
+        }),
+        startTunnel: async () => carrier as never,
+      });
+      await expect(replacement.ledger.list()).resolves.toEqual([]);
+      await replacement.coordinator.stop();
+    },
+  );
 
   it.each([
     { cut: "after remote prepare", operation: "cleanup", phase: "cleanup-pending" },
@@ -294,7 +412,11 @@ describe("remote-exec skill resource ownership recovery", () => {
       const replacement = createCoordinator(stateDir, "8".repeat(32));
       let recoveryOwnerEpoch: number | undefined;
       await replacement.coordinator.recover({
-        getEnvironment: () => ({ state: "attached", ownerEpoch: 2 }),
+        getEnvironment: () => ({
+          state: "attached",
+          ownerEpoch: 2,
+          leaseId: "lease-replacement",
+        }),
         startTunnel: async (request) => {
           recoveryOwnerEpoch = request.ownerEpoch;
           return carrier as never;

@@ -163,6 +163,38 @@ describe("worker environment service", () => {
     expect(prune).toHaveBeenCalledOnce();
   });
 
+  it("prunes a failed environment after its cleared lease retires allocation intent", async () => {
+    const environmentId = "worker-failed-cleanup-complete";
+    const requested = support.testState.store.createIntent({
+      environmentId,
+      providerId: "fake",
+      profileId: "development",
+      profileSnapshot: { settings: { region: "test" } },
+      provisionOperationId: `provision:${environmentId}`,
+    });
+    support.testState.store.transition({
+      environmentId,
+      from: requested.state,
+      to: "failed",
+    });
+    const workerService = support.createService(support.createProvider());
+    const allocationId = "a".repeat(32);
+    await workerService.skillResourceAllocations.createIntent({
+      allocationId,
+      environmentId,
+      ownerEpoch: 0,
+      workspace: support.testState.root,
+      leaseToken: "b".repeat(64),
+    });
+    workerService.skillResourceAllocations.abandon(allocationId);
+    const prune = vi.spyOn(support.testState.store, "pruneTerminalEnvironments");
+
+    await workerService.reconcileOnce();
+
+    await expect(workerService.skillResourceAllocations.ledger.list()).resolves.toEqual([]);
+    expect(prune).toHaveBeenCalledOnce();
+  });
+
   it("schedules durable skill resource cleanup on full startup reconciliation", async () => {
     const workerService = support.createService(support.createProvider());
     const recover = vi

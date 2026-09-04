@@ -134,7 +134,11 @@ describe("concurrent worker workspace results", () => {
 
       denyCleanup = false;
       await coordinator.recover({
-        getEnvironment: () => ({ state: "attached", ownerEpoch: OWNER_EPOCH }),
+        getEnvironment: () => ({
+          state: "attached",
+          ownerEpoch: OWNER_EPOCH,
+          leaseId: "lease-active",
+        }),
         startTunnel: async () => tunnel,
       });
       await expect(ledger.list()).resolves.toEqual([]);

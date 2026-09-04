@@ -17,6 +17,7 @@ import {
   type SkillResourceAllocationRecord,
 } from "./skill-resource-allocation-ledger.js";
 import { SKILL_RESOURCE_RUNTIME_SCRIPT } from "./skill-resource-transfer.js";
+import { isWorkerEnvironmentGone, type WorkerEnvironmentState } from "./state.js";
 import type { WorkerTunnelHandle } from "./tunnel-contract.js";
 
 type AllocationTunnel = Pick<WorkerTunnelHandle, "runWorkspaceCommand">;
@@ -37,9 +38,14 @@ function asOwnershipError(error: unknown): Error {
 }
 
 export type SkillResourceAllocationRecoveryOptions = {
-  getEnvironment: (
-    environmentId: string,
-  ) => { state: string; ownerEpoch: number; destroyRequestedAtMs?: number | null } | undefined;
+  getEnvironment: (environmentId: string) =>
+    | {
+        state: WorkerEnvironmentState;
+        ownerEpoch: number;
+        leaseId: string | null;
+        destroyRequestedAtMs?: number | null;
+      }
+    | undefined;
   startTunnel: (request: {
     environmentId: string;
     ownerEpoch: number;
@@ -72,8 +78,8 @@ export class SkillResourceAllocationCoordinator {
     this.ownershipLeaseMs = options.ownershipLeaseMs ?? DEFAULT_OWNERSHIP_LEASE_MS;
   }
 
-  private async ensureOwnership(): Promise<void> {
-    if (this.stopping) {
+  private async ensureOwnership(admittedBeforeStop = false): Promise<void> {
+    if (this.stopping && !admittedBeforeStop) {
       throw new Error("Skill resource allocation coordinator is stopping");
     }
     if (this.ownershipContext) {
@@ -85,7 +91,7 @@ export class SkillResourceAllocationCoordinator {
       const ready = createDeferredCore();
       const release = createDeferredCore();
       const abort = new AbortController();
-      let entered = false;
+      let readyResolved = false;
       this.ownershipAbort = abort;
       ownershipReady = ready.promise;
       this.ownershipReady = ownershipReady;
@@ -102,12 +108,12 @@ export class SkillResourceAllocationCoordinator {
           operationLabel: "worker.skill-resource-allocation.owner",
         },
         async (context) => {
-          entered = true;
-          if (this.stopping) {
+          if (this.stopping && !admittedBeforeStop) {
             throw new Error("Skill resource allocation coordinator is stopping");
           }
           this.ownershipContext = context;
           this.releaseOwnership = release.resolve;
+          readyResolved = true;
           ready.resolve();
           await Promise.race([
             release.promise,
@@ -118,7 +124,7 @@ export class SkillResourceAllocationCoordinator {
         },
       )
         .catch((error: unknown) => {
-          if (!entered) {
+          if (!readyResolved) {
             ready.reject(error);
           } else if (!this.stopping) {
             this.ownershipFailure = asOwnershipError(error);
@@ -274,9 +280,12 @@ export class SkillResourceAllocationCoordinator {
   }
 
   recover(options: SkillResourceAllocationRecoveryOptions): Promise<void> {
+    if (this.stopping) {
+      return Promise.reject(new Error("Skill resource allocation coordinator is stopping"));
+    }
     const prior = this.recoveryInFlight;
     const recovery = (prior ? prior.catch(() => undefined) : Promise.resolve())
-      .then(() => this.ensureOwnership())
+      .then(() => this.ensureOwnership(true))
       .then(() => this.recoverPass(options));
     this.recoveryInFlight = recovery;
     return recovery.finally(() => {
@@ -304,10 +313,10 @@ export class SkillResourceAllocationCoordinator {
         }
         continue;
       }
-      if (environment?.state === "destroyed") {
+      if (environment && isWorkerEnvironmentGone(environment)) {
         try {
-          // A destroyed environment is the provider lifecycle's durable proof that its
-          // workspace no longer exists. Retire host intent without reopening that placement.
+          // The terminal state and cleared-lease policy are the provider lifecycle's durable
+          // proof that the workspace no longer exists. Do not reopen that placement.
           await this.ledger.removeAfterEnvironmentDestroyed(
             record.allocationId,
             record.revision,
@@ -368,6 +377,10 @@ export class SkillResourceAllocationCoordinator {
 
   async stop(): Promise<void> {
     this.stopping = true;
+    const recovery = this.recoveryInFlight;
+    if (recovery) {
+      await Promise.allSettled([recovery]);
+    }
     if (this.ownershipContext) {
       this.releaseOwnership?.();
     } else {
