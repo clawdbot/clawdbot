@@ -596,6 +596,22 @@ describe("Anthropic Agent SDK runtime ownership", () => {
     );
   });
 
+  it("replaces the Claude Code preset and disables its memory surfaces by default", async () => {
+    useSdkMessages();
+
+    await collect(createContext({}));
+
+    expect(sdkOptions()).toEqual(
+      expect.objectContaining({
+        systemPrompt: "Follow the OpenClaw execution policy.",
+        settings: {
+          autoMemoryEnabled: false,
+          claudeMdExcludes: ["**/CLAUDE.md", "**/CLAUDE.local.md", "**/.claude/rules/**"],
+        },
+      }),
+    );
+  });
+
   it("reuses one official SDK query and Claude process across compatible agent turns", async () => {
     const live = useLiveSdkStreams();
     const capability = createLiveCapability();
