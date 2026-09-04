@@ -164,6 +164,17 @@ function slashCommand(
 }
 
 describe("getSlashCommandCompletions", () => {
+  it("presents the first-class dashboard command with the dashboard icon", () => {
+    const dashboard = SLASH_COMMANDS.find((entry) => entry.name === "dashboard");
+
+    expect(dashboard).toMatchObject({
+      category: "tools",
+      allowsInlineMultiWordArgs: true,
+      icon: "layoutDashboard",
+      source: "native",
+    });
+  });
+
   it("ranks an exact name above prefixes and description-only matches", () => {
     replaceSlashCommands([
       slashCommand("openclaw", {
@@ -325,6 +336,14 @@ describe("parseSlashCommand", () => {
       executeLocal: false,
     });
     expectParsedSlash("/tools verbose", { name: "tools" }, "verbose");
+  });
+
+  it("formats structured argument choices with the shared command serializer", () => {
+    expect(requireCommandByName("exec").argOptions).toEqual([
+      "host=sandbox",
+      "host=gateway",
+      "host=node",
+    ]);
   });
 
   it("parses slash aliases through the shared registry", () => {

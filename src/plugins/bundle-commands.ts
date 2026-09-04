@@ -93,12 +93,10 @@ function toDefaultCommandName(rootDir: string, filePath: string): string {
   return withoutExt.split(path.sep).join(":");
 }
 
-function toDefaultDescription(rawName: string, promptTemplate: string): string {
-  const firstLine = promptTemplate
-    .split(/\r?\n/u)
-    .map((line) => line.trim())
-    .find(Boolean);
-  return firstLine || rawName;
+function toDefaultDescription(promptTemplate: string): string {
+  // stripFrontmatterBlock already normalized line endings and trimmed the nonempty body.
+  const lineEnd = promptTemplate.indexOf("\n");
+  return (lineEnd < 0 ? promptTemplate : promptTemplate.slice(0, lineEnd)).trimEnd();
 }
 
 function loadBundleCommandsFromRoot(params: {
@@ -131,8 +129,7 @@ function loadBundleCommandsFromRoot(params: {
       continue;
     }
     const description =
-      normalizeOptionalString(frontmatter.description) ||
-      toDefaultDescription(rawName, promptTemplate);
+      normalizeOptionalString(frontmatter.description) || toDefaultDescription(promptTemplate);
     entries.push({
       pluginId: params.pluginId,
       rawName,

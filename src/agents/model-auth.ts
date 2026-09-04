@@ -34,6 +34,7 @@ export type { ProviderCredentialPrecedence } from "./model-auth-provider.js";
 export {
   createRuntimeProviderAuthLookup,
   hasRuntimeAvailableProviderAuth,
+  prepareRuntimeAvailableProviderAuth,
 } from "./model-auth-runtime.js";
 export type { RuntimeProviderAuthLookup } from "./model-auth-runtime.js";
 export {

@@ -60,27 +60,29 @@ class OpenClawWorkboardCardWidget extends WorkboardWidgetElement {
             <dd>${card.agentId ?? t("workboard.widget.unassigned")}</dd>
           </div>
         </dl>
-        ${statuses.length > 1
-          ? html`
-              <label class="workboard-widget-card__move">
-                <span>${t("workboard.fieldStatus")}</span>
-                <select
-                  aria-label=${`${t("workboard.fieldStatus")}: ${card.title}`}
-                  .value=${card.status}
-                  ?disabled=${!this.canMutate}
-                  @change=${(event: Event) => void this.handleStatusChange(event)}
-                >
-                  ${statuses.map(
-                    (status) => html`
-                      <option value=${status} ?selected=${status === card.status}>
-                        ${t(`workboard.status.${status}`)}
-                      </option>
-                    `,
-                  )}
-                </select>
-              </label>
-            `
-          : nothing}
+        ${
+          statuses.length > 1
+            ? html`
+                <label class="workboard-widget-card__move">
+                  <span>${t("workboard.fieldStatus")}</span>
+                  <select
+                    aria-label=${`${t("workboard.fieldStatus")}: ${card.title}`}
+                    .value=${card.status}
+                    ?disabled=${!this.canMutate}
+                    @change=${(event: Event) => void this.handleStatusChange(event)}
+                  >
+                    ${statuses.map(
+                      (status) => html`
+                        <option value=${status} ?selected=${status === card.status}>
+                          ${t(`workboard.status.${status}`)}
+                        </option>
+                      `,
+                    )}
+                  </select>
+                </label>
+              `
+            : nothing
+        }
       </article>
     `;
   }

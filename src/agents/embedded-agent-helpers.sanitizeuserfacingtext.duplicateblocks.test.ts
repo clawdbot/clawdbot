@@ -10,6 +10,7 @@ describe("sanitizeUserFacingText duplicate-block collapse", () => {
       "class Worker:",
       "    def run(self):",
       '        self.log("retrying")',
+      '        replacement = "$&"',
       "",
       "    def log(self, msg):",
       "        print(msg)",

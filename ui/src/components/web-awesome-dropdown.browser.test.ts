@@ -56,7 +56,7 @@ async function open(f: Fixture) {
 // can arrive after native completion has already removed the animation class.
 async function duringElementAnimation(
   element: HTMLElement,
-  state: "show" | "hide",
+  state: "show" | "hide" | "show-with-scale",
   request: () => unknown,
   action: () => void | Promise<void>,
 ) {
@@ -501,22 +501,17 @@ describe.runIf(browserMode)("Web Awesome dropdown lifecycle", () => {
       f.host.append(surface);
       await surface.updateComplete;
       const popup = surface.shadowRoot!.querySelector("wa-popup")!;
-      let starts = 0;
       let shown = false;
       let hidden = false;
-      popup.popup.addEventListener(
-        "animationstart",
-        () => {
-          expect(shown).toBe(false);
-          starts++;
-        },
-        { once: true },
-      );
       surface.addEventListener("wa-after-show", () => (shown = true));
       surface.addEventListener("wa-after-hide", () => (hidden = true));
-      surface.open = true;
+      await duringElementAnimation(
+        popup.popup,
+        "show-with-scale",
+        () => (surface.open = true),
+        () => expect(shown).toBe(false),
+      );
       await expect.poll(() => shown).toBe(true);
-      expect(starts).toBe(1);
       surface.open = false;
       await expect.poll(() => hidden).toBe(true);
       expect(popup.active).toBe(false);

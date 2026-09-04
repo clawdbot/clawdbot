@@ -390,8 +390,6 @@ export function createTestChatPane(params: {
     sidebarLayout: { columns: [] },
     ...createInitialChatRealtimeState(),
     // Minimal scroll host so scheduleChatScroll is a no-op instead of throwing.
-    chatScrollGeneration: 0,
-    chatScrollCommitCleanup: null,
     handleChatScroll: vi.fn(),
     resetToolStream: vi.fn(),
     renderLifecycle: { afterCommit: () => () => {}, invalidate: () => {} },

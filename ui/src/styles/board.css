@@ -271,8 +271,7 @@ openclaw-board-widget-cell {
   padding: 5px 9px;
 }
 
-.board-widget__preset,
-.board-widget__menu-danger {
+.board-widget__menu wa-dropdown-item {
   font-size: 11px;
 }
 

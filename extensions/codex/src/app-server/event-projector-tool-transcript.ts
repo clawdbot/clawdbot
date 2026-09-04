@@ -406,7 +406,8 @@ export class CodexToolTranscriptProjection {
     result.content = replacement.content;
   }
 
-  async recordNativeToolResultWithDetails(item: CodexThreadItem | undefined): Promise<void> {
+  // Preparation can outlive finalization; the projector owns recording after its close guard.
+  async prepareNativeToolResultDetails(item: CodexThreadItem | undefined): Promise<unknown> {
     const preparedDetails = await this.prepareNativeMcpAppResultDetails(item);
     const approvalReviewState = item ? this.approvalReviewsByCallId.get(item.id) : undefined;
     // The terminal tool result is the durable owner for its reviews. Live
@@ -417,7 +418,7 @@ export class CodexToolTranscriptProjection {
           approvalReviewOutcome: toolApprovalReviewOutcome(approvalReviewState),
         }
       : undefined;
-    const details = reviewDetails
+    return reviewDetails
       ? isJsonObject(preparedDetails)
         ? { ...preparedDetails, ...reviewDetails }
         : {
@@ -425,7 +426,6 @@ export class CodexToolTranscriptProjection {
             ...reviewDetails,
           }
       : preparedDetails;
-    this.recordNativeToolResult(item, details);
   }
 
   private async prepareNativeMcpAppResultDetails(
@@ -588,14 +588,20 @@ export class CodexToolTranscriptProjection {
       : `${MISSING_TOOL_RESULT_ERROR} missingToolResultCount=${missingCount}`;
   }
 
-  async readMirroredSessionMessages(): Promise<AgentMessage[]> {
+  async readMirroredSessionMessages(signal?: AbortSignal): Promise<AgentMessage[]> {
     return (
-      (await readCodexMirroredSessionHistoryMessages({
-        agentId: this.params.agentId,
-        sessionFile: this.params.sessionFile,
-        sessionId: this.params.sessionId,
-        sessionKey: this.params.sessionKey,
-      })) ?? []
+      (await readCodexMirroredSessionHistoryMessages(
+        {
+          agentId: this.params.agentId,
+          sessionFile: this.params.sessionFile,
+          sessionId: this.params.sessionId,
+          sessionKey: this.params.sessionKey,
+          sessionTarget: this.params.sessionTarget,
+        },
+        undefined,
+        "native-evidence",
+        signal,
+      )) ?? []
     );
   }
 

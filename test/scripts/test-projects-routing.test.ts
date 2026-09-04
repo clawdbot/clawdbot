@@ -5,7 +5,8 @@ import os from "node:os";
 import path from "node:path";
 import { expectDefined } from "@openclaw/normalization-core";
 import { beforeAll, describe, expect, it } from "vitest";
-import { resolveVitestCliEntry, resolveVitestNodeArgs } from "../../scripts/run-vitest.mts";
+import { resolveVitestCliEntry } from "../../scripts/lib/vitest-build-prerequisites.mts";
+import { resolveVitestNodeArgs } from "../../scripts/lib/vitest-process-env.mts";
 import { withEnv } from "../../src/test-utils/env.js";
 
 const {
@@ -42,6 +43,7 @@ describe("test-projects args", () => {
   it("drops a pnpm passthrough separator while preserving targeted filters", () => {
     expect(parseTestProjectsArgs(["--", "src/foo.test.ts", "-t", "target"])).toEqual({
       forwardedArgs: ["src/foo.test.ts", "-t", "target"],
+      nonTargetArgs: ["-t", "target"],
       targetArgs: ["src/foo.test.ts"],
       watchMode: false,
     });
@@ -59,6 +61,60 @@ describe("test-projects args", () => {
       "src/foo.test.ts",
     ]);
   });
+
+  it.each([["--watch", "false"], ["-w", "false"], ["--watch=false"], ["--no-watch"]])(
+    "preserves native watch controls after the wrapper separator: %j",
+    (...flags) => {
+      const file = "test/scripts/run-vitest.test.ts";
+      expect(parseTestProjectsArgs([file, "--", ...flags])).toEqual({
+        targetArgs: [file],
+        forwardedArgs: [file, ...flags],
+        nonTargetArgs: flags,
+        watchMode: false,
+      });
+    },
+  );
+
+  it("keeps option values out of project targets", () => {
+    const file = "test/scripts/run-vitest.test.ts";
+    const reporter = "test/scripts/reporter.test.ts";
+    expect(parseTestProjectsArgs([file, "--reporter", reporter])).toEqual({
+      targetArgs: [file],
+      forwardedArgs: [file, "--reporter", reporter],
+      nonTargetArgs: ["--reporter", reporter],
+      watchMode: false,
+    });
+  });
+
+  it.each(
+    [
+      { label: "distinct operand", flag: "--exclude", operand: "test/scripts/other.test.ts" },
+      {
+        label: "identical exclusion",
+        flag: "--exclude",
+        operand: "test/scripts/run-vitest.test.ts",
+      },
+      { label: "identical name pattern", flag: "-t", operand: "test/scripts/run-vitest.test.ts" },
+    ].flatMap(({ label, flag, operand }) =>
+      [true, false].map((targetFirst) => ({ label, flag, operand, targetFirst })),
+    ),
+  )(
+    "partitions targets by occurrence, not option-operand value: $label (targetFirst=$targetFirst)",
+    ({ flag, operand, targetFirst }) => {
+      const target = "test/scripts/run-vitest.test.ts";
+      const args = targetFirst
+        ? [target, flag, operand, "--reporter=dot"]
+        : [flag, operand, target, "--reporter=dot"];
+      expect(buildVitestRunPlans(args)).toEqual([
+        {
+          config: "test/vitest/vitest.tooling.config.ts",
+          includePatterns: [target],
+          forwardedArgs: [flag, operand, "--reporter=dot"],
+          watchMode: false,
+        },
+      ]);
+    },
+  );
 
   it("uses run mode by default", () => {
     const spec = expectDefined(createVitestRunSpecs(["src/foo.test.ts"])[0], "run spec");

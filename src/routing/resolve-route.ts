@@ -345,39 +345,16 @@ function pushToIndexMap(
   map.set(key, [binding]);
 }
 
-function peerLookupKeys(kind: ChatType, id: string): string[] {
-  if (kind === "group") {
-    return [`group:${id}`, `channel:${id}`];
-  }
-  if (kind === "channel") {
-    return [`channel:${id}`, `group:${id}`];
-  }
-  return [`${kind}:${id}`];
+function peerLookupKey(kind: ChatType, id: string): string {
+  // Group/channel matching is interchangeable; share one source-ordered bucket.
+  return `${kind === "channel" ? "group" : kind}:${id}`;
 }
 
-function collectPeerIndexedBindings(
+function getPeerIndexedBindings(
   index: EvaluatedBindingsIndex,
   peer: RoutePeer | null,
 ): EvaluatedBinding[] {
-  if (!peer) {
-    return [];
-  }
-  const out: EvaluatedBinding[] = [];
-  const seen = new Set<EvaluatedBinding>();
-  for (const key of peerLookupKeys(peer.kind, peer.id)) {
-    const matches = index.byPeer.get(key);
-    if (!matches) {
-      continue;
-    }
-    for (const match of matches) {
-      if (seen.has(match)) {
-        continue;
-      }
-      seen.add(match);
-      out.push(match);
-    }
-  }
-  return out;
+  return peer ? (index.byPeer.get(peerLookupKey(peer.kind, peer.id)) ?? []) : [];
 }
 
 function buildEvaluatedBindingsIndex(bindings: EvaluatedBinding[]): EvaluatedBindingsIndex {
@@ -391,9 +368,11 @@ function buildEvaluatedBindingsIndex(bindings: EvaluatedBinding[]): EvaluatedBin
 
   for (const binding of bindings) {
     if (binding.match.peer.state === "valid") {
-      for (const key of peerLookupKeys(binding.match.peer.kind, binding.match.peer.id)) {
-        pushToIndexMap(byPeer, key, binding);
-      }
+      pushToIndexMap(
+        byPeer,
+        peerLookupKey(binding.match.peer.kind, binding.match.peer.id),
+        binding,
+      );
       continue;
     }
     if (binding.match.peer.state === "wildcard-kind") {
@@ -717,6 +696,8 @@ export function resolveAgentRoute(input: ResolveAgentRouteInput): ResolvedAgentR
         routeCache.clear();
         routeCache.set(routeCacheKey, route);
       }
+      // Cold and warm returns are caller-owned; edits must not poison the cache.
+      return { ...route };
     }
     return route;
   };
@@ -763,13 +744,13 @@ export function resolveAgentRoute(input: ResolveAgentRouteInput): ResolvedAgentR
       matchedBy: "binding.peer",
       enabled: Boolean(peer),
       scopePeer: peer,
-      candidates: collectPeerIndexedBindings(bindingsIndex, peer),
+      candidates: getPeerIndexedBindings(bindingsIndex, peer),
     },
     {
       matchedBy: "binding.peer.parent",
       enabled: Boolean(parentPeer && parentPeer.id),
       scopePeer: parentPeer && parentPeer.id ? parentPeer : null,
-      candidates: collectPeerIndexedBindings(bindingsIndex, parentPeer),
+      candidates: getPeerIndexedBindings(bindingsIndex, parentPeer),
     },
     {
       matchedBy: "binding.peer.wildcard",

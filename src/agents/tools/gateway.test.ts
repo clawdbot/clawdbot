@@ -749,6 +749,43 @@ describe("gateway tool defaults", () => {
     );
   });
 
+  it.each(["preparation", "retry"] as const)(
+    "carries dispatch authority across %s without sending it as RPC data",
+    async (stage) => {
+      let current = true;
+      const refused = new Error("source closed");
+      const sent: unknown[] = [];
+      const assertCurrent = vi.fn(() => {
+        if (!current) {
+          throw refused;
+        }
+      });
+      mocks.callGateway.mockImplementation(async (options: CallGatewayOptions) => {
+        options.assertDispatchCurrent?.();
+        sent.push(options.params);
+        current = false;
+        throw Object.assign(
+          new Error("invalid node.invoke params: unexpected property 'turnSourceChannel'"),
+          {
+            name: "GatewayClientRequestError",
+            gatewayCode: "INVALID_REQUEST",
+            details: { nodeCommandDispatched: false },
+          },
+        );
+      });
+      const params = { nodeId: "node-1", command: "device.info", idempotencyKey: "guarded" };
+      const result = callGatewayTool("node.invoke", {}, params, {
+        dispatchAuthority: { version: 2, kind: "source-bound", assertCurrent },
+      });
+      if (stage === "preparation") {
+        current = false;
+      }
+      await expect(result).rejects.toBe(refused);
+      expect(assertCurrent).toHaveBeenCalledTimes(stage === "preparation" ? 1 : 2);
+      expect(sent).toEqual(stage === "preparation" ? [] : [params]);
+    },
+  );
+
   it("does not retry a dispatched node invoke whose error resembles schema rejection", async () => {
     const dispatchedError = Object.assign(
       new Error("invalid node.invoke params: at root: unexpected property 'turnSourceChannel'"),

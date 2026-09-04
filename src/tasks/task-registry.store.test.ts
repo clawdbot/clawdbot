@@ -50,6 +50,7 @@ import {
   type TaskRegistryObserverEvent,
 } from "./task-registry.store.js";
 import {
+  bindTaskRecord,
   bindTaskRunExecution,
   loadTaskRegistryStateFromSqlite,
   loadTaskRegistryStateFromSqliteReadOnly,
@@ -78,6 +79,24 @@ function createTaskRecord(params: Parameters<typeof createTaskRecordOrNull>[0]):
   }
   return task;
 }
+
+it("normalizes missing terminal timestamps at the SQLite write boundary", () => {
+  const bound = bindTaskRecord({
+    taskId: "task-legacy-terminal",
+    runtime: "cli",
+    requesterSessionKey: "agent:main:main",
+    ownerKey: "agent:main:main",
+    scopeKind: "session",
+    task: "Legacy terminal",
+    status: "failed",
+    deliveryStatus: "not_applicable",
+    notifyPolicy: "done_only",
+    createdAt: 100,
+    lastEventAt: 250,
+  });
+
+  expect(bound.ended_at).toBe(250);
+});
 
 function createManagedTaskFlow(
   params: Parameters<typeof createManagedTaskFlowOrNull>[0],
@@ -1135,6 +1154,40 @@ describe("task-registry store runtime", () => {
           toolUseCount: 1,
           lastToolName: "read",
         });
+      },
+    );
+  });
+
+  it("normalizes a legacy terminal row with no persisted end time", async () => {
+    await withOpenClawTestState(
+      { layout: "state-only", prefix: "openclaw-task-legacy-terminal-" },
+      async () => {
+        const created = createTaskRecord({
+          runtime: "cli",
+          ownerKey: "agent:main:main",
+          scopeKind: "session",
+          runId: "run-legacy-terminal-sqlite",
+          task: "Legacy terminal row",
+          status: "running",
+          deliveryStatus: "pending",
+        });
+        const terminalAt = created.createdAt + 1_000;
+        const database = openOpenClawStateDatabase();
+        const db = getNodeSqliteKysely<TaskRegistryTestDatabase>(database.db);
+        executeSqliteQuerySync(
+          database.db,
+          db
+            .updateTable("task_runs")
+            .set({ status: "failed", ended_at: null, last_event_at: terminalAt })
+            .where("task_id", "=", created.taskId),
+        );
+
+        expect(loadTaskRegistryStateFromSqlite().tasks.get(created.taskId)?.endedAt).toBe(
+          terminalAt,
+        );
+        expect(loadTaskRegistryStateFromSqliteReadOnly().tasks.get(created.taskId)?.endedAt).toBe(
+          terminalAt,
+        );
       },
     );
   });

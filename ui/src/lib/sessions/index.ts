@@ -165,13 +165,13 @@ export function createSessionCapability(gateway: SessionGateway): SessionCapabil
 
   // Canonical Gateway rows are the source of truth for everything except the
   // UI-owned facts the capability keeps beside them, so every published result
-  // passes through the same overlay: swarm notes, then in-flight pin intents.
+  // passes through the same overlay: swarm notes, then in-flight row intents.
   const decorateRows = (
     result: SessionsListResult | null,
     owner = roster.primaryList(),
   ): SessionsListResult | null =>
     deletions.apply(
-      mutations.applyConfirmedArchives(mutations.applyPendingPins(swarmActivity.decorate(result))),
+      mutations.applyConfirmedArchives(mutations.applyPendingRows(swarmActivity.decorate(result))),
       owner,
     );
 

@@ -9,7 +9,7 @@ import {
   interruptSessionWorkAdmissions,
   isCompetingSessionWorkAdmissionActive,
   isSessionWorkAdmissionActive,
-  isSessionWorkAdmissionTargetActive,
+  captureGatewaySessionWorkAdmissions,
   runExclusiveSessionLifecycleMutation,
 } from "./session-lifecycle-admission.js";
 
@@ -65,6 +65,7 @@ it("rejects arrivals during awaited cleanup and its final microtask, then reopen
 
 it("interrupts a preexisting non-chat pending attempt without classifying it as active work", async () => {
   const scope = "non-chat-pending.sqlite";
+  const resolveGatewayContext = () => undefined;
   const identities = ["agent:main:pending", "pending-session"] as const;
   const entered = createDeferred();
   const release = createDeferred();
@@ -84,6 +85,7 @@ it("interrupts a preexisting non-chat pending attempt without classifying it as 
     scope,
     identities,
     onInterrupt: interrupted,
+    resolveGatewayContext,
     assertAllowed: () => {
       validated = true;
     },
@@ -97,7 +99,7 @@ it("interrupts a preexisting non-chat pending attempt without classifying it as 
   try {
     expect(isSessionWorkAdmissionActive(scope, identities)).toBe(false);
     expect(
-      isSessionWorkAdmissionTargetActive({
+      captureGatewaySessionWorkAdmissions(resolveGatewayContext).isActive({
         scope,
         sessionKey: identities[0],
         sessionId: identities[1],

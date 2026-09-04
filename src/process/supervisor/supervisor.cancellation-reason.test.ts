@@ -99,6 +99,59 @@ describe("process supervisor first cancellation reason", () => {
     vi.useFakeTimers();
   });
 
+  it("keeps the first manual-cancel when a later construction deadline fires", async () => {
+    const startup = createDeferred<CancellationTestAdapter>();
+    createChildAdapterMock.mockReturnValueOnce(startup.promise);
+    const supervisor = createProcessSupervisor();
+    const runId = "manual-cancel-then-timeout";
+    const pendingRun = supervisor.spawn({
+      runId,
+      sessionId: runId,
+      backendId: "test",
+      mode: "child",
+      argv: [process.execPath, "-e", "setInterval(() => {}, 1_000)"],
+      timeoutMs: 25,
+      stdinMode: "pipe-closed",
+    });
+
+    expect(supervisor.getRecord(runId)).toMatchObject({ state: "starting" });
+    supervisor.cancel(runId, "manual-cancel");
+    expect(supervisor.getRecord(runId)).toMatchObject({
+      state: "exiting",
+      terminationReason: "manual-cancel",
+    });
+
+    await vi.advanceTimersByTimeAsync(25);
+    const constructionState = await Promise.race([
+      pendingRun.then(
+        () => "settled" as const,
+        () => "rejected" as const,
+      ),
+      Promise.resolve().then(() => "pending" as const),
+    ]);
+    expect(constructionState).toBe("settled");
+
+    const run = await pendingRun;
+    await expect(run.wait()).resolves.toMatchObject({
+      reason: "manual-cancel",
+      timedOut: false,
+      noOutputTimedOut: false,
+    });
+    expect(supervisor.getRecord(runId)).toMatchObject({
+      state: "exited",
+      terminationReason: "manual-cancel",
+    });
+
+    const lateAdapter = createCancellationTestAdapter();
+    startup.resolve(lateAdapter);
+    await Promise.resolve();
+    expect(lateAdapter.killMock).toHaveBeenCalledWith("SIGKILL");
+    expect(lateAdapter.disposeMock).not.toHaveBeenCalled();
+    lateAdapter.settle("SIGKILL");
+    await run.waitForExtinction?.();
+    expect(lateAdapter.disposeMock).toHaveBeenCalled();
+  });
+
   afterEach(() => {
     vi.clearAllTimers();
     vi.useRealTimers();

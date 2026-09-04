@@ -41,12 +41,13 @@ struct OpenClawWatchApp: App {
                 store: self.inboxStore,
                 directNode: self.directNode,
                 onAction: { action in
-                    guard let receiver = self.receiver else { return }
-                    let draft = self.inboxStore.makeReplyDraft(action: action)
-                    guard let attemptID = self.inboxStore.markReplySending(actionLabel: action.label) else { return }
+                    guard let receiver = self.receiver,
+                          let command = self.inboxStore.makeQuickReplyCommand(action: action)
+                    else { return }
                     Task { @MainActor in
-                        let result = await receiver.sendReply(draft)
-                        self.inboxStore.markReplyResult(result, actionLabel: action.label, attemptID: attemptID)
+                        if await self.inboxStore.enqueueQuickReply(command) {
+                            receiver.replayChatDelivery()
+                        }
                     }
                 },
                 onExecApprovalDecision: { approvalId, gatewayStableID, decision in
@@ -84,8 +85,8 @@ struct OpenClawWatchApp: App {
                 onAppCommand: { command in
                     self.sendAppCommand(command)
                 },
-                onSendChatMessage: { text in
-                    self.sendChatMessage(text)
+                onSendChatMessage: { text, spokenReply in
+                    await self.sendChatMessage(text, spokenReply: spokenReply)
                 })
                 .task {
                     UNUserNotificationCenter.current().delegate = self.notificationDelegate
@@ -108,6 +109,7 @@ struct OpenClawWatchApp: App {
                     }
                     self.refreshAppSnapshot()
                     self.refreshExecApprovalReview()
+                    self.receiver?.replayChatDelivery()
                 }
                 .onChange(of: self.scenePhase) { _, newPhase in
                     switch newPhase {
@@ -115,6 +117,7 @@ struct OpenClawWatchApp: App {
                         self.directNode.connectForForeground()
                         self.refreshAppSnapshot()
                         self.refreshExecApprovalReview()
+                        self.receiver?.replayChatDelivery()
                     case .inactive, .background:
                         self.directNode.disconnectForBackground()
                     @unknown default:
@@ -143,30 +146,14 @@ struct OpenClawWatchApp: App {
         }
     }
 
-    private func sendChatMessage(_ text: String) -> String? {
+    private func sendChatMessage(_ text: String, spokenReply: Bool) async -> String? {
         guard let receiver else { return nil }
-        let trimmed = text.trimmingCharacters(in: .whitespacesAndNewlines)
-        guard !trimmed.isEmpty else { return nil }
-        guard self.inboxStore.hasGatewayTaggedAppSnapshot else {
-            self.inboxStore.markAppCommandBlocked(
-                .sendChat,
-                reason: String(localized: "Refreshing iPhone state"))
+        guard let commandId = await self.inboxStore.enqueueChat(text: text, spokenReply: spokenReply) else {
             self.refreshAppSnapshot()
             return nil
         }
-        let message = self.inboxStore.makeAppCommand(.sendChat, text: trimmed)
-        let attemptID = self.inboxStore.markAppCommandSending(.sendChat)
-        Task { @MainActor in
-            let result = await receiver.sendAppCommand(message)
-            guard self.inboxStore.markAppCommandResult(result, command: .sendChat, attemptID: attemptID) else {
-                return
-            }
-            try? await Task.sleep(nanoseconds: 900_000_000)
-            guard self.inboxStore.isCurrentAppCommandAttempt(attemptID, gatewayStableID: message.gatewayStableID)
-            else { return }
-            self.refreshAppSnapshot()
-        }
-        return message.commandId
+        receiver.replayChatDelivery()
+        return commandId
     }
 
     private func refreshExecApprovalReview(force: Bool = false) {

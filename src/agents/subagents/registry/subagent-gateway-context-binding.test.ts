@@ -1,10 +1,15 @@
 import { describe, expect, it } from "vitest";
+import type { GatewayRequestContext } from "../../../gateway/server-methods/types.js";
 import {
   bindGatewayContextResolver,
   getGatewayContextResolver,
   getSharedGatewayContextResolver,
 } from "../../../plugins/runtime/gateway-request-scope.js";
 import { createSubagentRunRecord } from "../../subagent-test-fixtures.test-helpers.js";
+import {
+  getGatewayToolCallerIdentity,
+  withGatewayToolCallerIdentity,
+} from "../../tools/gateway-caller-context.js";
 
 describe("subagent Gateway context binding", () => {
   it("keeps successor routing private and excludes restored rows", () => {
@@ -37,18 +42,68 @@ describe("subagent Gateway context binding", () => {
 
       const shared = getSharedGatewayContextResolver([first, second]);
       expect(shared).toBeTypeOf("function");
-      expect(shared?.()).toBeUndefined();
+      expect(() => shared?.()).toThrow("incompatible Gateway");
     },
   );
+
+  it.each([
+    { retired: 0, closure: "closed" },
+    { retired: 1, closure: "closed" },
+    { retired: 0, closure: "replaced" },
+    { retired: 1, closure: "replaced" },
+    { retired: 0, closure: "throwing" },
+    { retired: 1, closure: "throwing" },
+  ])("rechecks caller $retired after its source is $closure", async ({ retired, closure }) => {
+    const context = {} as GatewayRequestContext;
+    const replacement = {} as GatewayRequestContext;
+    const sources: Array<GatewayRequestContext | undefined> = [context, context];
+    const owners = [{}, {}];
+    let throwing = false;
+    for (const [index, owner] of owners.entries()) {
+      const resolver = await withGatewayToolCallerIdentity(
+        {
+          agentId: "main",
+          sessionKey: "agent:main:main",
+          gatewayContextResolver: () => {
+            if (throwing && index === retired) {
+              throw new Error("source closed");
+            }
+            return sources[index];
+          },
+        },
+        () => getGatewayToolCallerIdentity()?.gatewayContextResolver,
+      );
+      bindGatewayContextResolver(owner, resolver);
+    }
+    expect(getGatewayContextResolver(owners[0]!)).not.toBe(getGatewayContextResolver(owners[1]!));
+    const shared = getSharedGatewayContextResolver(owners);
+    expect(shared?.()).toBe(context);
+    // Rebinding a row cannot retarget a composition already captured by delivery.
+    bindGatewayContextResolver(owners[retired]!, () => replacement);
+    expect(shared?.()).toBe(context);
+    throwing = closure === "throwing";
+    sources[retired] = closure === "replaced" ? replacement : undefined;
+    expect(shared?.()).toBeUndefined();
+  });
 
   it("preserves a shared owner and leaves wholly unbound batches unbound", () => {
     const first = {};
     const second = {};
-    const resolver = () => ({ owner: "gateway-a" }) as never;
+    const context = {} as GatewayRequestContext;
+    let closed = false;
+    const resolver = () => {
+      if (closed) {
+        throw new Error("source closed");
+      }
+      return context;
+    };
     expect(getSharedGatewayContextResolver([])).toBeUndefined();
     expect(getSharedGatewayContextResolver([first, second])).toBeUndefined();
     bindGatewayContextResolver(first, resolver);
     bindGatewayContextResolver(second, resolver);
-    expect(getSharedGatewayContextResolver([first, second])).toBe(resolver);
+    const shared = getSharedGatewayContextResolver([first, second]);
+    expect(shared?.()).toBe(context);
+    closed = true;
+    expect(shared?.()).toBeUndefined();
   });
 });

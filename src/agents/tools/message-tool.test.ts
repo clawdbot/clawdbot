@@ -36,9 +36,11 @@ import {
   consumePreExecutionBlockedToolCall,
   wrapToolWithBeforeToolCallHook,
 } from "../agent-tools.before-tool-call.js";
+import { readEmbeddedMessageDeliveryFact } from "../embedded-agent-message-delivery.js";
 import { createOpenClawTools } from "../openclaw-tools.js";
 import { withGatewayToolCallerIdentity } from "./gateway-caller-context.js";
 import { createMessageTool } from "./message-tool-execution.js";
+import { runSessionsSendA2AFlow } from "./sessions-send-tool.a2a.js";
 
 type CreateMessageTool = typeof createMessageTool;
 
@@ -591,6 +593,140 @@ describe("message tool gateway timeout", () => {
         expect.objectContaining({ text: expect.stringContaining("messageDelivery") }),
       ]),
     );
+  });
+
+  it.each([
+    { name: "implicit final source send", route: "current-source", expected: true },
+    { name: "explicit final source send", route: "current-source", final: true, expected: true },
+    { name: "progress send", route: "current-source", final: false },
+    { name: "other conversation", target: "telegram:999" },
+    { name: "partial source send", route: "current-source", partial: true },
+    { name: "dry run", route: "current-source", dryRun: true },
+    { name: "internal UI", route: "current-source", internal: true },
+    { name: "plugin source send", route: "current-source", plugin: true, expected: true },
+    {
+      name: "implicit A2A plugin send without a mirror marker",
+      plugin: true,
+      webchat: true,
+      expected: true,
+    },
+    { name: "partial plugin source send", route: "current-source", plugin: true, partial: true },
+  ])(
+    "records final external delivery for $name",
+    async ({ route, target, final, expected, partial, dryRun, internal, plugin, webchat }) => {
+      mocks.runMessageAction.mockResolvedValue({
+        kind: "send",
+        action: "send",
+        channel: "telegram",
+        to: target ?? (webchat ? "123" : "telegram:123"),
+        handledBy: internal ? "internal-source" : plugin ? "plugin" : "core",
+        payload: {
+          sourceReplyRoute: route,
+          messageId: "message-1",
+          ...(partial ? { status: "partial_failed" } : {}),
+        },
+        sendResult: {
+          channel: "telegram",
+          to: "telegram:123",
+          via: "direct",
+          mediaUrl: null,
+          deliveryStatus: partial ? "partial_failed" : "sent",
+          dryRun: dryRun === true,
+          result: { channel: "telegram", messageId: "message-1" },
+        },
+        dryRun: dryRun === true,
+      } satisfies MessageActionResult);
+
+      const { result } = await executeSendWithResult({
+        action: { message: "hello", final },
+        toolOptions: {
+          agentSessionKey: "agent:main:telegram:group:123",
+          currentChannelProvider: webchat ? "webchat" : "telegram",
+          currentChannelId: "123",
+          currentMessagingTarget: "telegram:123",
+          sourceReplyDeliveryMode: "message_tool_only",
+        },
+      });
+      expect(result.details).toMatchObject({
+        messageDelivery: { status: dryRun ? "dryRun" : "settled" },
+      });
+      expect(
+        (result.details as { messageDelivery: { sourceReplyDelivered?: true } }).messageDelivery
+          .sourceReplyDelivered,
+      ).toBe(expected);
+    },
+  );
+
+  it.each(
+    (["reply", "thread-reply", "poll"] as const).flatMap((action) =>
+      (["final", "other target", "partial", "progress", "dry run"] as const).map((mode) => ({
+        action,
+        mode,
+      })),
+    ),
+  )("records only final source delivery for $action ($mode)", async ({ action, mode }) => {
+    const sessionKey = "agent:main:telegram:group:123";
+    const marker = "source action delivered once";
+    const target = mode === "other target" ? "telegram:999" : "telegram:123";
+    const payload = {
+      messageId: "delivered-message",
+      receipt: { replyToId: "inbound-message" },
+      ...(mode === "partial" ? { status: "partial_failed" } : {}),
+    };
+    const common = {
+      channel: "telegram" as const,
+      handledBy: "plugin" as const,
+      payload,
+      dryRun: mode === "dry run",
+    };
+    mocks.runMessageAction.mockResolvedValue(
+      action === "poll"
+        ? { ...common, kind: "poll", action, to: target }
+        : { ...common, kind: "action", action },
+    );
+    const { result } = await executeSendWithResult({
+      action: {
+        action,
+        target,
+        messageId: "inbound-message",
+        message: marker,
+        final: mode !== "progress",
+      },
+      toolOptions: {
+        agentSessionKey: sessionKey,
+        currentChannelProvider: "telegram",
+        currentChannelId: "123",
+        currentMessagingTarget: "telegram:123",
+        currentMessageId: "inbound-message",
+      },
+    });
+    const delivery = readEmbeddedMessageDeliveryFact(
+      (result.details as { messageDelivery?: unknown }).messageDelivery,
+    );
+    if (mode === "final") {
+      const visible = [marker];
+      const gateway = vi.fn();
+      gateway.mockImplementation(async (request) => {
+        if (request.method === "send") {
+          visible.push(request.params.message);
+        }
+        return {};
+      });
+      await runSessionsSendA2AFlow({
+        callGateway: gateway,
+        targetSessionKey: sessionKey,
+        requesterSessionKey: sessionKey,
+        requesterChannel: "telegram",
+        displayKey: sessionKey,
+        message: "Reply to the source",
+        announceTimeoutMs: 10_000,
+        maxPingPongTurns: 0,
+        roundOneReply: marker,
+        sourceReplyDelivered: delivery?.sourceReplyDelivered,
+      });
+      expect(visible).toEqual([marker]);
+    }
+    expect(delivery?.sourceReplyDelivered).toBe(mode === "final" ? true : undefined);
   });
 
   it("does not advertise source-reply finality on ordinary message tools", () => {

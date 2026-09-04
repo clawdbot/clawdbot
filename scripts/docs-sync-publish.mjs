@@ -22,6 +22,16 @@ const DEFAULT_CLAWHUB_REPO_CANDIDATES = [
   path.resolve(ROOT, "..", "clawhub"),
 ];
 const SYNC_SUPPORT_FILES = [
+  // File URLs declare the copied runtime closure without executing modules:
+  // source sync runs before parser dependencies are installed.
+  {
+    source: new URL("./lib/docs-markdown.mjs", import.meta.url),
+    target: path.join(".openclaw-sync", "lib", "docs-markdown.mjs"),
+  },
+  {
+    source: new URL("./lib/docs-redirects.mjs", import.meta.url),
+    target: path.join(".openclaw-sync", "lib", "docs-redirects.mjs"),
+  },
   {
     source: path.join(ROOT, "scripts", "check-docs-mdx.mjs"),
     target: path.join(".openclaw-sync", "check-docs-mdx.mjs"),

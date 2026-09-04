@@ -75,6 +75,12 @@ describe("runCronIsolatedAgentTurn runtime model thinking", () => {
         isNewSession: true,
       }),
     );
+    runWithModelFallbackMock.mockImplementation(async (params: TestModelFallbackRunnerParams) => ({
+      result: await runInitialModelFallbackAttempt(params),
+      provider: params.provider,
+      model: params.model,
+      attempts: [],
+    }));
   });
 
   afterEach(() => {
@@ -98,12 +104,6 @@ describe("runCronIsolatedAgentTurn runtime model thinking", () => {
         level === "off" || catalog?.some((entry) => entry.reasoning === true) === true,
     );
     resolveSupportedThinkingLevelMock.mockReturnValue("off");
-    runWithModelFallbackMock.mockImplementation(async (params: TestModelFallbackRunnerParams) => ({
-      result: await runInitialModelFallbackAttempt(params),
-      provider: params.provider,
-      model: params.model,
-      attempts: [],
-    }));
 
     await runCronIsolatedAgentTurn({
       cfg: {
@@ -152,12 +152,6 @@ describe("runCronIsolatedAgentTurn runtime model thinking", () => {
       ref: { provider: "ollama", model: "minimax-m3:cloud" },
     });
     loadModelCatalogMock.mockResolvedValue([]);
-    runWithModelFallbackMock.mockImplementation(async (params: TestModelFallbackRunnerParams) => ({
-      result: await runInitialModelFallbackAttempt(params),
-      provider: params.provider,
-      model: params.model,
-      attempts: [],
-    }));
 
     await runCronIsolatedAgentTurn({
       cfg: {
@@ -200,14 +194,6 @@ describe("runCronIsolatedAgentTurn runtime model thinking", () => {
         ref: { provider: "ollama", model: "minimax-m3:cloud" },
       });
       loadModelCatalogMock.mockResolvedValue([]);
-      runWithModelFallbackMock.mockImplementation(
-        async (params: TestModelFallbackRunnerParams) => ({
-          result: await runInitialModelFallbackAttempt(params),
-          provider: params.provider,
-          model: params.model,
-          attempts: [],
-        }),
-      );
 
       await runCronIsolatedAgentTurn({
         cfg: {

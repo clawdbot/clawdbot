@@ -72,6 +72,26 @@ final class OpenClawSnapshotUITests: XCTestCase {
         self.captureReleaseScreenshot(Self.settingsScreenshotTarget)
     }
 
+    func testWatchMessageDeliveryIsReachableFromSettings() throws {
+        self.launchApp(for: Self.settingsScreenshotTarget)
+        let app = try XCTUnwrap(self.app)
+        let watch = app.buttons.containing(.staticText, identifier: "Apple Watch").firstMatch
+        for _ in 0..<5 where !watch.isHittable {
+            app.swipeUp()
+        }
+        XCTAssertTrue(watch.isHittable)
+        watch.tap()
+        let delivery = app.buttons.containing(.staticText, identifier: "Message Delivery").firstMatch
+        XCTAssertTrue(delivery.waitForExistence(timeout: 8))
+        self.attachScreenshot(named: "watch-delivery-settings")
+        delivery.tap()
+        XCTAssertTrue(app.navigationBars["Message Delivery"].waitForExistence(timeout: 8))
+        let loaded = app.descendants(matching: .any).matching(NSPredicate(
+            format: "label == %@ OR label == %@", "No saved Watch messages", "Discard…")).firstMatch
+        XCTAssertTrue(loaded.waitForExistence(timeout: 8))
+        self.attachScreenshot(named: "watch-message-delivery")
+    }
+
     func testAgentsNavigateToSettingsThroughSidebar() throws {
         try XCTSkipIf(UIDevice.current.userInterfaceIdiom != .phone, "Phone sidebar navigation only")
         self.launchApp(for: Self.agentScreenshotTarget)
@@ -756,35 +776,76 @@ final class OpenClawSnapshotUITests: XCTestCase {
         self.attachScreenshot(named: "voice-note-sent-after-stopping-response")
     }
 
-    func testKeyboardOpenSendFollowsLiveEdge() throws {
+    func testKeyboardOpenPreservesTranscriptAndFollowsLiveEdgeAfterSend() throws {
         try XCTSkipIf(UIDevice.current.userInterfaceIdiom != .phone, "Phone keyboard proof only")
-        self.launchApp(for: ScreenshotTarget(
-            initialTab: "chat",
-            initialDestination: "chat",
-            name: "keyboard-follow"))
+        self.launchApp(
+            for: ScreenshotTarget(
+                initialTab: "chat",
+                initialDestination: "chat",
+                name: "keyboard-follow"),
+            additionalArguments: ["--openclaw-long-chat-fixture"])
         let app = try XCTUnwrap(self.app)
+
+        let latestSeededReply = app.staticTexts["OPENCLAW_LONG_CHAT_LATEST"]
+        XCTAssertTrue(latestSeededReply.waitForExistence(timeout: 8))
 
         let input = self.chatMessageInput(in: app)
         XCTAssertTrue(input.waitForExistence(timeout: 8))
         input.tap()
-        input.typeText(
+        let keyboard = app.keyboards.firstMatch
+        XCTAssertTrue(keyboard.waitForExistence(timeout: 3))
+        func visibleAreaAboveKeyboard() -> CGRect {
+            CGRect(
+                x: app.frame.minX,
+                y: app.frame.minY,
+                width: app.frame.width,
+                height: keyboard.frame.minY - app.frame.minY)
+        }
+        XCTAssertTrue(latestSeededReply.exists)
+        XCTAssertTrue(latestSeededReply.frame.intersects(visibleAreaAboveKeyboard()))
+        XCTAssertLessThanOrEqual(latestSeededReply.frame.maxY, keyboard.frame.minY + 1)
+        self.assertElementHasRenderedContent(latestSeededReply, named: "seeded reply after keyboard opens")
+
+        let promptPrefix =
             "Give me a long, detailed status update covering the release plan, review feedback, " +
-                "open follow-ups, and the next steps for the team.")
+            "open follow-ups, "
+        let promptSuffix = "and the next steps for the team."
+        let prompt = promptPrefix + promptSuffix
+        input.typeText(promptPrefix)
+        XCTAssertTrue(latestSeededReply.exists)
+        XCTAssertTrue(latestSeededReply.frame.intersects(visibleAreaAboveKeyboard()))
+        self.assertElementHasRenderedContent(latestSeededReply, named: "seeded reply while typing")
+        input.typeText(promptSuffix)
+        XCTAssertEqual(input.value as? String, prompt)
+        XCTAssertTrue(latestSeededReply.exists)
+        XCTAssertTrue(latestSeededReply.frame.intersects(visibleAreaAboveKeyboard()))
+        XCTAssertLessThanOrEqual(latestSeededReply.frame.maxY, keyboard.frame.minY + 1)
+        self.attachScreenshot(named: "keyboard-transcript-visible-while-typing")
+
         let send = app.buttons["chat-send-message"]
         XCTAssertTrue(send.waitForExistence(timeout: 5))
         send.tap()
 
-        // Regression proof for #108692: with the keyboard still up, the reply must scroll into
-        // view above the keyboard on its own — no jump affordance, no manual scrolling.
-        let keyboard = app.keyboards.firstMatch
+        // Regression proof for #108692 and #135214: the transcript remains rendered while typing,
+        // then the sent turn follows the live edge without a manual redraw or scroll.
         XCTAssertTrue(keyboard.exists)
+        let sentPrompt = app.staticTexts.matching(
+            NSPredicate(format: "label == %@", prompt))
+            .firstMatch
+        XCTAssertTrue(sentPrompt.waitForExistence(timeout: 8))
         let reply = app.staticTexts.matching(
             NSPredicate(format: "label CONTAINS %@", "keep the mobile workflow connected to the gateway"))
             .firstMatch
         XCTAssertTrue(reply.waitForExistence(timeout: 8))
         Thread.sleep(forTimeInterval: 1.0)
+        let visibleArea = visibleAreaAboveKeyboard()
+        XCTAssertTrue(sentPrompt.frame.intersects(visibleArea))
+        XCTAssertTrue(reply.frame.intersects(visibleArea))
         XCTAssertLessThanOrEqual(reply.frame.maxY, keyboard.frame.minY + 1)
+        self.assertElementHasRenderedContent(sentPrompt, named: "sent prompt after send")
+        self.assertElementHasRenderedContent(reply, named: "reply after send")
         XCTAssertFalse(app.buttons["Jump to latest reply"].exists)
+        self.attachScreenshot(named: "keyboard-transcript-visible-after-send")
     }
 
     func testExistingSessionRestoresLatestOutput() throws {
@@ -844,7 +905,7 @@ final class OpenClawSnapshotUITests: XCTestCase {
         let app = try XCTUnwrap(self.app)
 
         let assistant = app.staticTexts[
-            "Ready when you are. I can check a project, coordinate an agent, or prepare the next step."
+            "Ready when you are. I can check a project, coordinate an agent, or prepare the next step.",
         ]
         XCTAssertTrue(assistant.waitForExistence(timeout: 8))
         assistant.press(forDuration: 0.8)
@@ -857,6 +918,43 @@ final class OpenClawSnapshotUITests: XCTestCase {
         actions.tap()
         XCTAssertTrue(app.buttons["Copy Message"].waitForExistence(timeout: 3))
         self.attachScreenshot(named: "assistant-message-actions")
+
+        app.buttons["Select Text"].tap()
+        let selectableText = app.textViews["chat-selectable-text"]
+        XCTAssertTrue(selectableText.waitForExistence(timeout: 3))
+        XCTAssertTrue((selectableText.value as? String)?.contains("Ready when you are") == true)
+        self.attachScreenshot(named: "assistant-select-text")
+        app.buttons["Close"].tap()
+        XCTAssertTrue(selectableText.waitForNonExistence(timeout: 3))
+    }
+
+    func testCodeBlockCopyButtonCopiesRawCode() throws {
+        try XCTSkipIf(UIDevice.current.userInterfaceIdiom != .phone, "Phone code block copy proof only")
+        self.launchApp(for: ScreenshotTarget(
+            initialTab: "chat",
+            initialDestination: "chat",
+            name: "code-block-copy"))
+        let app = try XCTUnwrap(self.app)
+        let input = self.chatMessageInput(in: app)
+        XCTAssertTrue(input.waitForExistence(timeout: 8))
+        input.tap()
+        input.typeText("```swift\nlet copied = true\n```")
+        let send = app.buttons["chat-send-message"]
+        XCTAssertTrue(send.waitForExistence(timeout: 3))
+        send.tap()
+
+        // The user's block precedes any code parsed from the fixture's echoed reply.
+        let copyCode = app.buttons["Copy code"].firstMatch
+        XCTAssertTrue(copyCode.waitForExistence(timeout: 8))
+        app.scrollViews.firstMatch.swipeDown()
+        self.attachScreenshot(named: "code-block-copy")
+        // iOS prompts before another process reads pasteboard contents, so the runner can only
+        // observe that the tap wrote a string; ChatPasteboardTests covers the exact bytes in-process.
+        UIPasteboard.general.items = []
+        XCTAssertFalse(UIPasteboard.general.hasStrings)
+        copyCode.tap()
+        XCTAssertTrue(UIPasteboard.general.hasStrings)
+        self.attachScreenshot(named: "code-block-copied")
     }
 
     func testEmptyChatStarterPromptSendsMessage() throws {
@@ -1307,7 +1405,7 @@ extension OpenClawSnapshotUITests {
         XCTAssertTrue(send.waitForExistence(timeout: 3))
         XCTAssertFalse(send.isEnabled)
         XCTAssertTrue(app.staticTexts[
-            "Authentication failed. Review the provider credential or sign-in, then retry."
+            "Authentication failed. Review the provider credential or sign-in, then retry.",
         ].waitForExistence(timeout: 3))
         self.attachScreenshot(named: "chat-composer-model-auth-failed")
     }
@@ -2042,6 +2140,85 @@ extension OpenClawSnapshotUITests {
             Double(brightPixels) / Double(sampledPixels),
             0.002,
             "Dark appearance must keep the settings labels visibly light",
+            file: file,
+            line: line)
+    }
+
+    private func assertElementHasRenderedContent(
+        _ element: XCUIElement,
+        named name: String,
+        file: StaticString = #filePath,
+        line: UInt = #line)
+    {
+        guard let app, let image = app.screenshot().image.cgImage else {
+            XCTFail("App screenshot has no CGImage", file: file, line: line)
+            return
+        }
+
+        let appFrame = app.frame
+        let elementFrame = element.frame.intersection(appFrame)
+        guard !elementFrame.isNull, elementFrame.width > 1, elementFrame.height > 1 else {
+            XCTFail("\(name) has no visible screenshot region", file: file, line: line)
+            return
+        }
+
+        let scaleX = CGFloat(image.width) / appFrame.width
+        let scaleY = CGFloat(image.height) / appFrame.height
+        let crop = CGRect(
+            x: (elementFrame.minX - appFrame.minX) * scaleX,
+            y: (elementFrame.minY - appFrame.minY) * scaleY,
+            width: elementFrame.width * scaleX,
+            height: elementFrame.height * scaleY).integral
+            .intersection(CGRect(x: 0, y: 0, width: image.width, height: image.height))
+        guard let cropped = image.cropping(to: crop), crop.width > 1, crop.height > 1 else {
+            XCTFail("Could not crop screenshot for \(name)", file: file, line: line)
+            return
+        }
+
+        let width = cropped.width
+        let height = cropped.height
+        var pixels = [UInt8](repeating: 0, count: width * height * 4)
+        let rendered = pixels.withUnsafeMutableBytes { buffer in
+            guard let context = CGContext(
+                data: buffer.baseAddress,
+                width: width,
+                height: height,
+                bitsPerComponent: 8,
+                bytesPerRow: width * 4,
+                space: CGColorSpaceCreateDeviceRGB(),
+                bitmapInfo: CGImageAlphaInfo.premultipliedLast.rawValue)
+            else {
+                return false
+            }
+            context.draw(cropped, in: CGRect(x: 0, y: 0, width: width, height: height))
+            return true
+        }
+        guard rendered else {
+            XCTFail("Could not render screenshot crop for \(name)", file: file, line: line)
+            return
+        }
+
+        func luminance(at offset: Int) -> Int {
+            (Int(pixels[offset]) * 299 + Int(pixels[offset + 1]) * 587 + Int(pixels[offset + 2]) * 114) / 1000
+        }
+
+        var contrastingEdges = 0
+        var comparedEdges = 0
+        for y in 0..<height {
+            for x in 1..<width {
+                let offset = (y * width + x) * 4
+                let previousOffset = offset - 4
+                if abs(luminance(at: offset) - luminance(at: previousOffset)) >= 12 {
+                    contrastingEdges += 1
+                }
+                comparedEdges += 1
+            }
+        }
+
+        XCTAssertGreaterThan(
+            Double(contrastingEdges) / Double(max(1, comparedEdges)),
+            0.002,
+            "\(name) must contain rendered glyph edges, not only an accessibility frame",
             file: file,
             line: line)
     }

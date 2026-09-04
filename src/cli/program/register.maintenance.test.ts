@@ -169,15 +169,32 @@ describe("registerMaintenanceCommands doctor action", () => {
     expect(runtime.exit).toHaveBeenCalledWith(2);
   });
 
-  it("maps --fix to repair=true", async () => {
+  it.each([
+    { args: [], repair: false, force: false, yes: false },
+    { args: ["--fix"], repair: true, force: false, yes: false },
+    { args: ["--force"], repair: false, force: true, yes: false },
+    { args: ["--fix", "--force"], repair: true, force: true, yes: false },
+    { args: ["--repair", "--force"], repair: true, force: true, yes: false },
+    { args: ["--yes", "--force"], repair: false, force: true, yes: true },
+  ])("forwards repair and force independently for $args", async ({ args, repair, force, yes }) => {
     doctorCommand.mockResolvedValue(undefined);
 
-    await runMaintenanceCli(["doctor", "--fix"]);
+    await runMaintenanceCli(["doctor", ...args]);
 
     expect(doctorCommand).toHaveBeenCalledTimes(1);
     const [runtimeArg, options] = commandCall(doctorCommand);
     expect(runtimeArg).toBe(runtime);
-    expect(options.repair).toBe(true);
+    expect(options).toMatchObject({ repair, force, yes });
+  });
+
+  it("explains the force option without promising service rewrites during repair", () => {
+    const program = new Command();
+    registerMaintenanceCommands(program);
+    const doctor = program.commands.find((command) => command.name() === "doctor");
+    const help = doctor?.helpInformation().replace(/\s+/gu, " ");
+
+    expect(help).toContain("Allow aggressive repair choices");
+    expect(help).toContain("(with --fix, preserves service definitions)");
   });
 
   it("passes session sqlite options to doctor command", async () => {

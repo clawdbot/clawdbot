@@ -1074,7 +1074,8 @@ suite.define(() => {
       const toggle = firstEmptyGroup.locator(".sidebar-session-group-toggle");
       await toggle.click();
       await expect.poll(() => toggle.getAttribute("aria-expanded")).toBe("false");
-      await expect.poll(groupHeight).toBe(expandedHeight);
+      // DOMRect measurements can differ by subpixel rounding without a layout change.
+      await expect.poll(groupHeight).toBeCloseTo(expandedHeight, 2);
       await expect
         .poll(() => firstEmptyGroup.locator(".sidebar-session-empty-hint").count())
         .toBe(0);

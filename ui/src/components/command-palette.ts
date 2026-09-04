@@ -219,58 +219,64 @@ function renderCommandPalette(props: CommandPaletteProps) {
           @input=${(e: Event) => props.onQueryChange((e.target as HTMLInputElement).value)}
         />
         <div id=${paletteListboxId} class="cmd-palette__results" role="listbox">
-          ${props.sessionSearchPartial || props.sessionSearchIncomplete
-            ? html`<div class="cmd-palette__empty" role="status">
-                ${t(
-                  props.sessionSearchIncomplete
-                    ? "palette.searchIncomplete"
-                    : "palette.searchPartial",
-                )}
-              </div>`
-            : nothing}
-          ${grouped.length === 0
-            ? html`<div class="cmd-palette__empty">
-                <span class="nav-item__icon" style="opacity:0.3;width:20px;height:20px"
-                  >${icons.search}</span
-                >
-                <span
-                  >${props.sessionSearchFailed
-                    ? t("palette.searchFailed")
-                    : t("palette.noResults")}</span
-                >
-              </div>`
-            : grouped.map(
-                ([category, groupedItems]) => html`
-                  <div class="cmd-palette__group-label">
-                    ${commandPaletteCategoryLabel(category)}
-                  </div>
-                  ${groupedItems.map((item) => {
-                    const globalIndex = items.indexOf(item);
-                    const isActive = globalIndex === activeIndex;
-                    return html`
-                      <div
-                        id=${getOptionId(globalIndex)}
-                        class="cmd-palette__item ${isActive ? "cmd-palette__item--active" : ""}"
-                        role="option"
-                        aria-selected=${isActive ? "true" : "false"}
-                        @click=${(e: Event) => {
-                          e.stopPropagation();
-                          selectItem(item, props);
-                        }}
-                        @mouseenter=${() => props.onActiveIdChange(item.id)}
-                      >
-                        <span class="nav-item__icon">${icons[item.icon]}</span>
-                        <span>${item.label}</span>
-                        ${item.description
-                          ? html`<span class="cmd-palette__item-desc muted"
-                              >${item.description}</span
-                            >`
-                          : nothing}
-                      </div>
-                    `;
-                  })}
-                `,
-              )}
+          ${
+            props.sessionSearchPartial || props.sessionSearchIncomplete
+              ? html`<div class="cmd-palette__empty" role="status">
+                  ${t(
+                    props.sessionSearchIncomplete
+                      ? "palette.searchIncomplete"
+                      : "palette.searchPartial",
+                  )}
+                </div>`
+              : nothing
+          }
+          ${
+            grouped.length === 0
+              ? html`<div class="cmd-palette__empty">
+                  <span class="nav-item__icon" style="opacity:0.3;width:20px;height:20px"
+                    >${icons.search}</span
+                  >
+                  <span
+                    >${
+                      props.sessionSearchFailed ? t("palette.searchFailed") : t("palette.noResults")
+                    }</span
+                  >
+                </div>`
+              : grouped.map(
+                  ([category, groupedItems]) => html`
+                    <div class="cmd-palette__group-label">
+                      ${commandPaletteCategoryLabel(category)}
+                    </div>
+                    ${groupedItems.map((item) => {
+                      const globalIndex = items.indexOf(item);
+                      const isActive = globalIndex === activeIndex;
+                      return html`
+                        <div
+                          id=${getOptionId(globalIndex)}
+                          class="cmd-palette__item ${isActive ? "cmd-palette__item--active" : ""}"
+                          role="option"
+                          aria-selected=${isActive ? "true" : "false"}
+                          @click=${(e: Event) => {
+                            e.stopPropagation();
+                            selectItem(item, props);
+                          }}
+                          @mouseenter=${() => props.onActiveIdChange(item.id)}
+                        >
+                          <span class="nav-item__icon">${icons[item.icon]}</span>
+                          <span>${item.label}</span>
+                          ${
+                            item.description
+                              ? html`<span class="cmd-palette__item-desc muted"
+                                  >${item.description}</span
+                                >`
+                              : nothing
+                          }
+                        </div>
+                      `;
+                    })}
+                  `,
+                )
+          }
         </div>
         <div class="cmd-palette__footer">
           <span><kbd>↑↓</kbd> ${t("palette.footer.navigate")}</span>

@@ -230,15 +230,16 @@ export function createComputerTool(options?: {
           signal,
         });
         if (actResult.observation || isComputerObservationAction(action, params.dialogAction)) {
-          session.recordObservation(resolved, actResult);
           session.setTarget(resolved.target);
-          return await projectComputerActResult({
+          const projected = await projectComputerActResult({
             result: actResult,
             target: resolved.target,
             action,
             referenceWidth,
             modelHasVision: options?.modelHasVision,
           });
+          session.recordObservation(resolved, actResult, projected.imageCoordinates);
+          return projected.result;
         }
         try {
           await sleep(AFTER_ACTION_SCREENSHOT_DELAY_MS, signal);

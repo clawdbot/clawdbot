@@ -263,21 +263,18 @@ const historyProfiles: {
   step: string;
   env: Record<string, string>;
   target: string;
-  depth: number;
 }[] = [
   {
     job: "preflight",
     step: "Resolve exact diff base",
     env: { GITHUB_EVENT_NAME: "workflow_dispatch", RELEASE_GATE: "true" },
     target: "+refs/pull/17/merge:refs/remotes/origin/release-gate-merge",
-    depth: 2,
   },
   {
     job: "checks-fast-core",
     step: "Prepare release-gate ratchet merge tree",
     env: {},
     target: "+refs/pull/17/merge:refs/remotes/origin/ci-ratchet-merge",
-    depth: 2,
   },
 ];
 
@@ -293,7 +290,7 @@ linuxIt.each(
   ]),
 )(
   "$job/$step joins supplemental history before consumption ($label, $target)",
-  async ({ job, step, env, target, depth, fetchResults, code }) => {
+  async ({ job, step, env, target, fetchResults, code }) => {
     const report = await runCiGitStep({
       job,
       step,
@@ -304,7 +301,7 @@ linuxIt.each(
     });
     expect(report.code).toBe(code);
     expect(report.fetches).toHaveLength(1);
-    expect(report.fetches[0]?.args).toEqual(expect.arrayContaining([target, `--depth=${depth}`]));
+    expect(report.fetches[0]?.args).toEqual(expect.arrayContaining([target, "--depth=2"]));
     if (step === "Resolve exact diff base") {
       expect(report.githubOutput).toBe(code === 0 ? `sha=${base}\nhead_sha=${merge}\n` : "");
     }

@@ -9,6 +9,7 @@ import {
   CHAT_INPUT_RUN_ID_MAX_CHARS,
 } from "./chat-history-constants.js";
 import { closedObject } from "./closed-object.js";
+import { HumanMentionsSchema } from "./human-mentions.js";
 import { ChatSendSessionKeyString, InputProvenanceSchema, NonEmptyString } from "./primitives.js";
 import { SessionPermissionModeSchema, SessionToolOverridesSchema } from "./sessions-row.js";
 
@@ -124,16 +125,27 @@ export const ChatHistoryCursorResultSchema = Type.Union([
 ]);
 
 /** Lightweight metadata; session scope preserves the persisted auth-profile selection. */
-export const ChatMetadataParamsSchema = closedObject({
-  agentId: Type.Optional(NonEmptyString),
-  sessionKey: Type.Optional(
-    Type.String({
-      minLength: 1,
-      description:
-        "Read the authorized session's persisted auth-profile selection instead of neutral agent metadata.",
-    }),
-  ),
-});
+export const ChatMetadataParamsSchema = Object.assign(
+  closedObject({
+    agentId: Type.Optional(NonEmptyString),
+    authProfileId: Type.Optional(
+      Type.String({
+        minLength: 1,
+        maxLength: 256,
+        description:
+          "Preview your own saved model account for a new chat without changing defaults. Cannot be combined with sessionKey.",
+      }),
+    ),
+    sessionKey: Type.Optional(
+      Type.String({
+        minLength: 1,
+        description:
+          "Read the authorized session's persisted auth-profile selection instead of neutral agent metadata.",
+      }),
+    ),
+  }),
+  { not: { required: ["sessionKey", "authProfileId"] } },
+);
 
 /** Batched purpose-title request for tool calls rendered in the Control UI. */
 export const ChatToolTitlesParamsSchema = closedObject({
@@ -222,6 +234,7 @@ export const ChatSendParamsSchema = closedObject({
   agentId: Type.Optional(NonEmptyString),
   sessionId: Type.Optional(NonEmptyString),
   message: Type.String(),
+  mentions: Type.Optional(HumanMentionsSchema),
   intent: Type.Optional(ChatSendIntentSchema),
   thinking: Type.Optional(Type.String()),
   fastMode: Type.Optional(Type.Union([Type.Boolean(), Type.Literal("auto")])),

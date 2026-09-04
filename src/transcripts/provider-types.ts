@@ -72,6 +72,20 @@ export type TranscriptStartRequest = {
   onStatus?: (status: TranscriptSourceStatus) => void | Promise<void>;
 };
 
+/** Request to watch whether a live source currently has human participants. */
+export type TranscriptOccupancyWatchRequest = {
+  cfg?: OpenClawConfig;
+  source: TranscriptSourceLocator;
+  abortSignal?: AbortSignal;
+  startupWaitMs?: number;
+  /** Emitted on 0 -> >0 humans, and once on subscription if already occupied. */
+  onOccupied: () => void;
+  /** Emitted on >0 -> 0 humans. Bots never count; callbacks preserve observed order. */
+  onEmpty: () => void;
+};
+
+export type TranscriptOccupancyWatchHandle = { stop: () => void };
+
 /**
  * Result from starting a transcript source provider.
  *
@@ -140,7 +154,14 @@ export type TranscriptToolCaller =
       roleIds: readonly string[];
     };
 
-export type TranscriptToolAction = "import" | "start" | "status" | "stop" | "summarize";
+export type TranscriptToolAction =
+  | "import"
+  | "start"
+  | "status"
+  | "stop"
+  | "summarize"
+  | "list"
+  | "show";
 
 export type TranscriptSourceAccessControl = {
   /** Ingress channel whose trusted account owns this provider's account namespace. */
@@ -168,6 +189,9 @@ export type TranscriptSourceProvider = {
   name: string;
   sourceKinds: readonly TranscriptSourceKind[];
   start?: (request: TranscriptStartRequest) => Promise<TranscriptsStartResult>;
+  watchOccupancy?: (
+    request: TranscriptOccupancyWatchRequest,
+  ) => Promise<Result<TranscriptOccupancyWatchHandle, string>>;
   stop?: (request: TranscriptStopRequest) => Promise<TranscriptsStopResult>;
   status?: (
     source: TranscriptSourceLocator,

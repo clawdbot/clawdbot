@@ -230,31 +230,23 @@ describe("memory watcher config", () => {
   }
 
   function createWatcherConfig(overrides?: Partial<MemorySearchConfig>): OpenClawConfig {
-    const defaults: NonNullable<NonNullable<OpenClawConfig["agents"]>["defaults"]> = {
-      workspace: workspaceDir,
-    };
     return isolateMemoryManagerTestConfig({
       memory: {
-        backend: "builtin",
         search: {
           provider: "openai",
           model: "mock-embed",
           store: { vector: { enabled: false } },
-          sync: { watch: true, onSessionStart: false, onSearch: false },
-          query: { minScore: 0, hybrid: { enabled: false } },
+          query: { minScore: 0 },
           extraPaths: [extraDir],
           ...overrides,
         },
       },
-      agents: {
-        defaults,
-        list: [{ id: "main", default: true }],
-      },
-    } as OpenClawConfig);
+      agents: { entries: { main: { workspace: workspaceDir } } },
+    });
   }
 
-  async function expectWatcherManager(cfg: OpenClawConfig) {
-    const result = await getMemorySearchManager({ cfg, agentId: "main" });
+  async function expectWatcherManager(cfg: OpenClawConfig, agentId = "main") {
+    const result = await getMemorySearchManager({ cfg, agentId });
     if (!result.manager) {
       throw new Error("manager missing");
     }
@@ -344,32 +336,35 @@ describe("memory watcher config", () => {
     },
   );
 
-  it("filters patterned extra path file events while watching the directory root", async () => {
-    await setupWatcherWorkspace({ name: "seed.md", contents: "seed" });
-    await fs.mkdir(path.join(extraDir, "notes"), { recursive: true });
-    await fs.mkdir(path.join(extraDir, "drafts"), { recursive: true });
-    await fs.writeFile(path.join(extraDir, "notes", "keep.md"), "keep");
-    await fs.writeFile(path.join(extraDir, "drafts", "skip.md"), "skip");
-    const cfg = createWatcherConfig({
-      extraPaths: [{ path: extraDir, pattern: "notes/**/*.md" }],
-    });
+  it.each(["notes", "..notes"])(
+    "filters %s file events while watching the directory root",
+    async (directory) => {
+      await setupWatcherWorkspace({ name: "seed.md", contents: "seed" });
+      await fs.mkdir(path.join(extraDir, directory), { recursive: true });
+      await fs.mkdir(path.join(extraDir, "drafts"), { recursive: true });
+      await fs.writeFile(path.join(extraDir, directory, "keep.md"), "keep");
+      await fs.writeFile(path.join(extraDir, "drafts", "skip.md"), "skip");
+      const cfg = createWatcherConfig({
+        extraPaths: [{ path: extraDir, pattern: `${directory}/**/*.md` }],
+      });
 
-    const activeManager = await expectWatcherManager(cfg);
-    const extraWatcher = createdNativeWatchers.find(
-      (watcher) => watcher.dir === extraDir && watcher.recursive,
-    );
-    expect(extraWatcher).toBeDefined();
-    vi.useFakeTimers();
-    const syncSpy = vi.spyOn(activeManager, "sync").mockResolvedValue(undefined);
+      const activeManager = await expectWatcherManager(cfg);
+      const extraWatcher = createdNativeWatchers.find(
+        (watcher) => watcher.dir === extraDir && watcher.recursive,
+      );
+      expect(extraWatcher).toBeDefined();
+      vi.useFakeTimers();
+      const syncSpy = vi.spyOn(activeManager, "sync").mockResolvedValue(undefined);
 
-    extraWatcher?.emit("change", path.join("drafts", "skip.md"));
-    await vi.advanceTimersByTimeAsync(BUILT_IN_WATCH_DEBOUNCE_MS);
-    expect(syncSpy).not.toHaveBeenCalled();
+      extraWatcher?.emit("change", path.join("drafts", "skip.md"));
+      await vi.advanceTimersByTimeAsync(BUILT_IN_WATCH_DEBOUNCE_MS);
+      expect(syncSpy).not.toHaveBeenCalled();
 
-    extraWatcher?.emit("change", path.join("notes", "keep.md"));
-    await vi.advanceTimersByTimeAsync(BUILT_IN_WATCH_DEBOUNCE_MS);
-    expect(syncSpy).toHaveBeenCalledWith({ reason: "watch" });
-  });
+      extraWatcher?.emit("change", path.join(directory, "keep.md"));
+      await vi.advanceTimersByTimeAsync(BUILT_IN_WATCH_DEBOUNCE_MS);
+      expect(syncSpy).toHaveBeenCalledWith({ reason: "watch" });
+    },
+  );
 
   it("does not start watchers for one-shot CLI managers", async () => {
     await setupWatcherWorkspace({ name: "notes.md", contents: "hello" });
@@ -608,16 +603,20 @@ describe("memory watcher config", () => {
         await fs.mkdir(path.join(root, `topic-${i}`));
       }
       const cfg = createWatcherConfig({ extraPaths: [] });
+      cfg.agents = {
+        ownership: "explicit",
+        entries: { main: {}, "watch-linux": { workspace: workspaceDir } },
+      };
       vi.useFakeTimers();
 
-      await expectWatcherManager(cfg);
-      expect(memoryLoggerWarn).not.toHaveBeenCalledWith(
-        expect.stringContaining("Memory file watching is tracking 2002 directories."),
-      );
+      await expectWatcherManager(cfg, "watch-linux");
+      expect(memoryLoggerWarn).not.toHaveBeenCalled();
+      await vi.advanceTimersByTimeAsync(10_000);
+      expect(memoryLoggerWarn).toHaveBeenCalledTimes(1);
       await vi.advanceTimersByTimeAsync(10_000);
 
-      expect(memoryLoggerWarn).toHaveBeenCalledWith(
-        expect.stringContaining("Memory file watching is tracking 2002 directories."),
+      expect(memoryLoggerWarn).toHaveBeenCalledExactlyOnceWith(
+        "Memory file watching is tracking 2002 directories. Large memory folders or extraPaths can make OpenClaw run out of file watchers or open files. Remove unnecessary memory.search.extraPaths entries or narrow their directory roots, including per-agent entries; otherwise review the host's file-watch/open-file limits. After changes, restart the Gateway. To refresh the affected index, run in the Gateway's environment: openclaw memory index --force --agent watch-linux.",
       );
     } finally {
       Object.defineProperty(process, "platform", {
@@ -1125,26 +1124,38 @@ describe("memory watcher config", () => {
   });
 
   it("warns when chokidar memory watching tracks many paths", async () => {
-    await setupWatcherWorkspace({ name: "notes.md", contents: "hello" });
-    const cfg = createWatcherConfig();
-    vi.useFakeTimers();
+    vi.stubEnv("OPENCLAW_PROFILE", "memory-watch");
+    try {
+      await setupWatcherWorkspace({ name: "notes.md", contents: "hello" });
+      const cfg = createWatcherConfig();
+      cfg.agents = {
+        ownership: "explicit",
+        entries: { main: {}, "watch-paths": { workspace: workspaceDir } },
+      };
+      vi.useFakeTimers();
 
-    await expectWatcherManager(cfg);
+      const activeManager = await expectWatcherManager(cfg, "watch-paths");
 
-    const chokidarWatcher = createdChokidarWatchers[0];
-    if (!chokidarWatcher) {
-      throw new Error("expected chokidar watcher");
+      const chokidarWatcher = createdChokidarWatchers[0];
+      if (!chokidarWatcher) {
+        throw new Error("expected chokidar watcher");
+      }
+      chokidarWatcher.watchedEntries = {
+        [workspaceDir]: Array.from({ length: 2_001 }, (_value, index) => `${index}.md`),
+      };
+      expect(memoryLoggerWarn).not.toHaveBeenCalled();
+      chokidarWatcher.emit("ready");
+      expect(memoryLoggerWarn).toHaveBeenCalledTimes(1);
+      await vi.advanceTimersByTimeAsync(10_000);
+      await activeManager.close();
+      expect(chokidarWatcher.close).toHaveBeenCalledTimes(1);
+      await vi.advanceTimersByTimeAsync(10_000);
+
+      expect(memoryLoggerWarn).toHaveBeenCalledExactlyOnceWith(
+        "Memory file watching is tracking 2002 paths. Large memory folders or extraPaths can make OpenClaw run out of file watchers or open files. Remove unnecessary memory.search.extraPaths entries or narrow their directory roots, including per-agent entries; otherwise review the host's file-watch/open-file limits. After changes, restart the Gateway. To refresh the affected index, run in the Gateway's environment: openclaw --profile memory-watch memory index --force --agent watch-paths.",
+      );
+    } finally {
+      vi.unstubAllEnvs();
     }
-    chokidarWatcher.watchedEntries = {
-      [workspaceDir]: Array.from({ length: 2_001 }, (_value, index) => `${index}.md`),
-    };
-    expect(memoryLoggerWarn).not.toHaveBeenCalledWith(
-      expect.stringContaining("Memory file watching is tracking 2002 paths."),
-    );
-    await vi.advanceTimersByTimeAsync(10_000);
-
-    expect(memoryLoggerWarn).toHaveBeenCalledWith(
-      expect.stringContaining("Memory file watching is tracking 2002 paths."),
-    );
   });
 });

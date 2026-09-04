@@ -91,6 +91,8 @@ function visibleAgentResponse(runId = "run-main") {
       payloads: [{ text: "announced" }],
       didSendViaMessagingTool: true,
       messagingToolSentTexts: ["announced"],
+      didDeliverSourceReplyViaMessageTool: true,
+      messagingToolSourceReplyPayloads: [{ text: "announced", sourceReplyFinal: true }],
     },
   };
 }

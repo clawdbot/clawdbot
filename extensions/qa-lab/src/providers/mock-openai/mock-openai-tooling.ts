@@ -248,7 +248,9 @@ export function buildQaToolSearchArgs(
   }
   if (targetTool === "openclaw") {
     return {
-      message: "Reply exactly QA-SYSTEM-AGENT-DELEGATE-INFERENCE-OK. Do not call tools.",
+      message: /\bopenclaw_fixture=logging-level-info\b/u.test(prompt)
+        ? 'config set logging.level "info"'
+        : "Reply exactly QA-SYSTEM-AGENT-DELEGATE-INFERENCE-OK. Do not call tools.",
     };
   }
   if (targetTool === "ask_user") {

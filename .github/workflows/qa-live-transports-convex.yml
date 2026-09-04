@@ -251,21 +251,11 @@ jobs:
             if [[ "$selected_revision" == "$release_branch_sha" ]]; then
               trusted_reason="release-branch-head"
             fi
-          else
-            pr_head_count="$(
-              gh api \
-                -H "Accept: application/vnd.github+json" \
-                "repos/${GITHUB_REPOSITORY}/commits/${selected_revision}/pulls" \
-                --jq '[.[] | select(.state == "open" and .head.repo.full_name == "'"${GITHUB_REPOSITORY}"'" and .head.sha == "'"${selected_revision}"'")] | length'
-            )"
-            if [[ "$pr_head_count" != "0" ]]; then
-              trusted_reason="open-pr-head"
-            fi
           fi
 
           if [[ -z "$trusted_reason" ]]; then
             echo "Ref '${INPUT_REF}' resolved to $selected_revision, which is not trusted for this secret-bearing QA run." >&2
-            echo "Allowed refs must be on main, point to a release tag, match a release branch head, or match an open PR head in ${GITHUB_REPOSITORY}." >&2
+            echo "Allowed refs must be on main, point to a release tag, match a release branch head, or be an exact revision selected by a trusted caller." >&2
             exit 1
           fi
 
@@ -280,7 +270,7 @@ jobs:
   run_mock_parity:
     name: Run QA Lab mock parity lane
     needs: [validate_selected_ref]
-    if: inputs.expected_sha == '' || inputs.run_mock_parity
+    if: (inputs.expected_sha == '' || inputs.run_mock_parity) && (github.event_name != 'workflow_dispatch' || inputs.scenario == '')
     runs-on: ${{ vars.OPENCLAW_CI_RUNNER_BACKEND == 'github' && 'ubuntu-24.04' || 'blacksmith-16vcpu-ubuntu-2404' }}
     timeout-minutes: 30
     env:
@@ -464,7 +454,7 @@ jobs:
   run_live_matrix:
     name: Run Matrix live QA lane
     needs: [authorize_actor, validate_selected_ref]
-    if: inputs.expected_sha == '' || inputs.run_matrix
+    if: (inputs.expected_sha == '' || inputs.run_matrix) && (github.event_name != 'workflow_dispatch' || inputs.scenario == '')
     runs-on: ${{ vars.OPENCLAW_CI_RUNNER_BACKEND == 'github' && 'ubuntu-24.04' || 'blacksmith-16vcpu-ubuntu-2404' }}
     timeout-minutes: 90
     concurrency:
@@ -768,7 +758,7 @@ jobs:
   run_live_discord:
     name: Run Discord live QA lane with Convex leases
     needs: [authorize_actor, validate_selected_ref]
-    if: inputs.expected_sha == '' || inputs.run_discord
+    if: (inputs.expected_sha == '' || inputs.run_discord) && (github.event_name != 'workflow_dispatch' || inputs.scenario == '')
     runs-on: ${{ vars.OPENCLAW_CI_RUNNER_BACKEND == 'github' && 'ubuntu-24.04' || 'blacksmith-16vcpu-ubuntu-2404' }}
     timeout-minutes: 60
     environment: qa-live-shared
@@ -854,7 +844,7 @@ jobs:
   run_live_whatsapp:
     name: Run WhatsApp live QA lane with Convex leases
     needs: [authorize_actor, validate_selected_ref]
-    if: inputs.expected_sha == '' || inputs.run_whatsapp
+    if: (inputs.expected_sha == '' || inputs.run_whatsapp) && (github.event_name != 'workflow_dispatch' || inputs.scenario == '')
     runs-on: ${{ vars.OPENCLAW_CI_RUNNER_BACKEND == 'github' && 'ubuntu-24.04' || 'blacksmith-16vcpu-ubuntu-2404' }}
     timeout-minutes: 60
     concurrency:
@@ -933,7 +923,7 @@ jobs:
   run_live_slack:
     name: Run Slack live QA lane with Convex leases
     needs: [authorize_actor, validate_selected_ref]
-    if: inputs.expected_sha == '' || inputs.run_slack
+    if: (inputs.expected_sha == '' || inputs.run_slack) && (github.event_name != 'workflow_dispatch' || inputs.scenario == '')
     runs-on: ${{ vars.OPENCLAW_CI_RUNNER_BACKEND == 'github' && 'ubuntu-24.04' || 'blacksmith-16vcpu-ubuntu-2404' }}
     timeout-minutes: 60
     environment: qa-live-shared

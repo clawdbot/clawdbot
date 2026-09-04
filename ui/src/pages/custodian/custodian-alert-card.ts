@@ -57,16 +57,18 @@ export function renderCustodianAlertCard(params: {
     <ul class="custodian__alert-facts">
       ${params.alert.facts.map((fact) => html`<li>${fact}</li>`)}
     </ul>
-    ${action
-      ? html`<button
-          class="btn btn--sm primary custodian__alert-action"
-          type="button"
-          title=${updateDisabled ? t("updates.adminRequired") : nothing}
-          ?disabled=${updateDisabled}
-          @click=${() => runAlertAction(action.target, params.context, canUpdate)}
-        >
-          ${action.label}
-        </button>`
-      : nothing}
+    ${
+      action
+        ? html`<button
+            class="btn btn--sm primary custodian__alert-action"
+            type="button"
+            title=${updateDisabled ? t("updates.adminRequired") : nothing}
+            ?disabled=${updateDisabled}
+            @click=${() => runAlertAction(action.target, params.context, canUpdate)}
+          >
+            ${action.label}
+          </button>`
+        : nothing
+    }
   </article>`;
 }

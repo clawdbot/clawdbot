@@ -12,6 +12,7 @@ type BenchmarkRun = Parameters<typeof testing.summarizeRuns>[0][number];
 
 function createBenchmarkRun(overrides: Partial<BenchmarkRun> = {}): BenchmarkRun {
   return {
+    controlPlane: [],
     controlUi: [],
     durationMs: 10,
     freshConnection: { error: null, latencyMs: 25, ok: true },
@@ -57,6 +58,11 @@ describe("gateway concurrency benchmark script", () => {
         "50",
         "--session-count",
         "120",
+        "--control-plane",
+        "--history-messages",
+        "20",
+        "--history-message-chars",
+        "8192",
         "--history-clients",
         "6",
         "--history-burst",
@@ -89,6 +95,9 @@ describe("gateway concurrency benchmark script", () => {
       json: true,
       historyBurst: 5,
       historyClients: 6,
+      historyMessages: 20,
+      historyMessageChars: 8192,
+      controlPlane: true,
       maxControlMs: 2_000,
       maxHandshakeMs: 2_000,
       output: "concurrency.json",
@@ -126,6 +135,19 @@ describe("gateway concurrency benchmark script", () => {
       "--session-updates must be at most 100000",
     );
     expect(testing.parseOptions([]).diagnosticsTimeline).toBe(true);
+    expect(() =>
+      testing.parseOptions(["--session-count", "10000", "--history-messages", "500"]),
+    ).toThrow("synthetic history");
+    expect(() =>
+      testing.parseOptions([
+        "--session-count",
+        "1000",
+        "--history-messages",
+        "10",
+        "--history-message-chars",
+        "65536",
+      ]),
+    ).toThrow("synthetic history");
   });
 
   it("summarizes plugin metadata scans captured after startup warmup", () => {
@@ -221,6 +243,7 @@ describe("gateway concurrency benchmark script", () => {
       degraded: null,
       degradedSinceMs: null,
       delayP99Ms: null,
+      delayMaxMs: null,
       error: null,
       latencyMs: 2_000,
       ok: true,
@@ -244,6 +267,31 @@ describe("gateway concurrency benchmark script", () => {
     expect(testing.summarizeRuns([run]).budgetViolations).toEqual([]);
   });
 
+  it.each(["tasks.list", "cron.list", "cron.status"])(
+    "enforces the control budget for %s",
+    (method) => {
+      const run = createBenchmarkRun({
+        controlPlane: [
+          {
+            method,
+            atMs: 0,
+            error: null,
+            latencyMs: 2001,
+            ok: true,
+          },
+        ],
+      });
+      const summary = testing.summarizeRuns([run], { maxControlMs: 2000 });
+      expect(summary.budgetViolations).toEqual([
+        `Gateway ${method} probe exceeded 2000ms: ok=true latencyMs=2001.0 error=none`,
+      ]);
+      expect(summary.controlPlane[method]).toMatchObject({
+        failedSamples: 0,
+        latencyMs: { count: 1, max: 2001 },
+      });
+    },
+  );
+
   it("keeps setup probes outside the control budget and handshakes under their own budget", () => {
     const slowProbe = { atMs: 0, error: null, latencyMs: 5_000, ok: true };
     const slowReady = {
@@ -252,6 +300,7 @@ describe("gateway concurrency benchmark script", () => {
       degraded: null,
       degradedSinceMs: null,
       delayP99Ms: null,
+      delayMaxMs: null,
       status: 200,
       utilization: null,
     };

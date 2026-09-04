@@ -16,6 +16,7 @@ import {
   validateActionsArtifactBinding,
   validateActionsArtifactProducerJob,
 } from "./lib/actions-artifact-archive.mjs";
+import { parseStrictBooleanArg } from "./lib/arg-utils.runtime.mjs";
 import { resolveNpmPublishPlan } from "./lib/npm-publish-plan.mjs";
 
 export {
@@ -108,16 +109,6 @@ function assertPositiveInteger(value, label) {
     throw new Error(`${label} must be a safe positive integer.`);
   }
   return value;
-}
-
-function assertBooleanString(value, label) {
-  if (value === "true") {
-    return true;
-  }
-  if (value === "false") {
-    return false;
-  }
-  throw new Error(`${label} must be true or false.`);
 }
 
 function hasControlCharacters(value) {
@@ -1198,7 +1189,7 @@ function commonCliParams(values) {
     requiresManualOverride:
       values.requiresManualOverride === undefined
         ? false
-        : assertBooleanString(values.requiresManualOverride, "requires-manual-override"),
+        : parseStrictBooleanArg(values.requiresManualOverride, "requires-manual-override"),
     route: values.route,
     publicationReason: values.publicationReason,
     publisherPolicy:

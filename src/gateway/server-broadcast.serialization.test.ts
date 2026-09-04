@@ -5,7 +5,7 @@ import { once } from "node:events";
 import { existsSync } from "node:fs";
 import type { AddressInfo } from "node:net";
 import { rawDataToString } from "@openclaw/gateway-client/websocket-data";
-import { afterEach, describe, expect, it, vi } from "vitest";
+import { afterEach, describe, expect, it, onTestFinished, vi } from "vitest";
 import { WebSocket, WebSocketServer, type RawData } from "ws";
 import { resolveSessionStorePathCore } from "../config/sessions.js";
 import {
@@ -254,20 +254,55 @@ describe("broadcast serialization failures", () => {
 });
 
 describe("presence recipient projection", () => {
-  it("delivers credential-free metadata invalidations only to readable operators", () => {
-    const readers = [makeClient("reader"), makeClient("admin")];
-    readers[1]!.client.connect.scopes = ["operator.admin"];
-    const denied = [makeClient("no-scope"), makeClient("node")];
+  it.each(["chat.metadata.changed", "node.presence", "node.hostStats"])(
+    "delivers %s only to readable operators",
+    (event) => {
+      const readers = [makeClient("reader"), makeClient("writer"), makeClient("admin")];
+      readers[1]!.client.connect.scopes = ["operator.write"];
+      readers[2]!.client.connect.scopes = ["operator.admin"];
+      const denied = [makeClient("no-scope"), makeClient("node"), makeClient("pairing")];
+      denied[0]!.client.connect.scopes = [];
+      denied[1]!.client.connect.role = "node";
+      denied[2]!.client.connect.scopes = ["operator.pairing"];
+      const { broadcast } = createGatewayBroadcaster({
+        clients: new Set([...readers, ...denied].map(({ client }) => client)),
+      });
+      broadcast(event, {});
+      for (const peer of readers) {
+        expect(JSON.parse(peer.socket.send.mock.lastCall![0])).toMatchObject({
+          event,
+          payload: {},
+        });
+      }
+      for (const peer of denied) {
+        expect(peer.socket.send).not.toHaveBeenCalled();
+      }
+    },
+  );
+
+  it("delivers mention invalidations only to targeted readable operators", () => {
+    const readers = [makeClient("reader"), makeClient("writer"), makeClient("admin")];
+    readers[1]!.client.connect.scopes = ["operator.write"];
+    readers[2]!.client.connect.scopes = ["operator.admin"];
+    const denied = [makeClient("no-scope"), makeClient("node"), makeClient("unrelated")];
     denied[0]!.client.connect.scopes = [];
     denied[1]!.client.connect.role = "node";
-    const { broadcast } = createGatewayBroadcaster({
+    const { broadcastToConnIds } = createGatewayBroadcaster({
       clients: new Set([...readers, ...denied].map(({ client }) => client)),
     });
-    broadcast("chat.metadata.changed", {});
+    const payload = { gatewayInstanceId: "mention-gateway", revision: 1 };
+
+    broadcastToConnIds(
+      "mentions.changed",
+      payload,
+      new Set(["reader", "writer", "admin", "no-scope", "node"]),
+    );
+
     for (const peer of readers) {
       expect(JSON.parse(peer.socket.send.mock.lastCall![0])).toMatchObject({
-        event: "chat.metadata.changed",
-        payload: {},
+        event: "mentions.changed",
+        payload,
+        seq: 1,
       });
     }
     for (const peer of denied) {
@@ -315,7 +350,12 @@ describe("presence recipient projection", () => {
       };
       const admin = makeClient("admin");
       admin.client.connect.scopes = ["operator.admin"];
-      const connection = createGatewayConnectionState({ cfg, getRuntimeConfig: () => cfg });
+      const connection = createGatewayConnectionState({
+        bootId: "presence-projection",
+        cfg,
+        getRuntimeConfig: () => cfg,
+      });
+      onTestFinished(() => connection.mentionInbox.dispose());
       const person = {
         text: "watcher",
         ts: 42,

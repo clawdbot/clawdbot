@@ -1,5 +1,6 @@
 // QA Lab Slack capture preserves transient message writes from the shared debug capture store.
 import { setTimeout as sleep } from "node:timers/promises";
+import type { DebugProxyCaptureReader } from "openclaw/plugin-sdk/proxy-capture";
 import type { SlackObservedMessage } from "./slack-live.contracts.js";
 import { collectSlackBlockText } from "./slack-live.observations.js";
 
@@ -9,13 +10,8 @@ const SLACK_QA_MESSAGE_TEXT_MAX_CHARS = 2_048;
 const SLACK_QA_BLOCK_TEXT_MAX_ITEMS = 64;
 const SLACK_QA_MESSAGE_WRITE_METHODS = new Set(["chat.postMessage", "chat.update"]);
 
-type SlackQaCaptureStore = {
-  getSessionEvents(sessionId: string, limit?: number): Array<Record<string, unknown>>;
-  readBlob(blobId: string): string | null;
-};
-
 function readSlackQaCapturePayload(
-  store: SlackQaCaptureStore,
+  store: DebugProxyCaptureReader,
   event: Record<string, unknown>,
 ): string | undefined {
   const blobId = typeof event.dataBlobId === "string" ? event.dataBlobId : undefined;
@@ -41,7 +37,7 @@ function parseSlackQaCaptureObject(payload: string): Record<string, unknown> | u
 }
 
 function parseSuccessfulSlackCaptureResponse(
-  store: SlackQaCaptureStore,
+  store: DebugProxyCaptureReader,
   event: Record<string, unknown>,
 ) {
   if (event.kind !== "response" || event.status !== 200) {
@@ -73,13 +69,13 @@ function isSlackQaMessageWriteRequest(event: Record<string, unknown>) {
   return method !== undefined && SLACK_QA_MESSAGE_WRITE_METHODS.has(method);
 }
 
-function readSlackQaCaptureEvents(params: { sessionId: string; store: SlackQaCaptureStore }) {
+function readSlackQaCaptureEvents(params: { sessionId: string; store: DebugProxyCaptureReader }) {
   return params.store.getSessionEvents(params.sessionId, SLACK_QA_CAPTURE_EVENT_LIMIT);
 }
 
 export function getSlackQaMessageWriteCursor(params: {
   sessionId: string;
-  store: SlackQaCaptureStore;
+  store: DebugProxyCaptureReader;
 }): number {
   return readSlackQaCaptureEvents(params).reduce(
     (cursor, event) =>
@@ -112,7 +108,7 @@ function truncateSlackQaText(value: unknown): string | undefined {
 function parseSlackQaMessageWrite(params: {
   request: Record<string, unknown>;
   response: Record<string, unknown>;
-  store: SlackQaCaptureStore;
+  store: DebugProxyCaptureReader;
 }): SlackObservedMessage | undefined {
   const payload = readSlackQaCapturePayload(params.store, params.request);
   const request = payload ? parseSlackQaCaptureObject(payload) : undefined;
@@ -139,7 +135,7 @@ function parseSlackQaMessageWrite(params: {
 function collectSlackQaMessageWrites(params: {
   afterRequestEventId: number;
   events: Array<Record<string, unknown>>;
-  store: SlackQaCaptureStore;
+  store: DebugProxyCaptureReader;
 }) {
   const requests = params.events.filter(
     (event) =>
@@ -182,7 +178,7 @@ export async function readSlackQaMessageWrites(params: {
   afterRequestEventId: number;
   sessionId: string;
   settleTimeoutMs?: number;
-  store: SlackQaCaptureStore;
+  store: DebugProxyCaptureReader;
 }): Promise<SlackObservedMessage[]> {
   const timeoutMs = params.settleTimeoutMs ?? SLACK_QA_CAPTURE_SETTLE_TIMEOUT_MS;
   const deadline = Date.now() + timeoutMs;

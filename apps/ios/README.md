@@ -302,6 +302,7 @@ gateway can only send pushes for iOS devices that paired with that gateway.
 - One Chat surface for text, realtime voice, dictation, and voice notes through the operator gateway session.
 - iOS node commands in foreground: camera snap/clip, screen record, location, contacts, calendar, reminders, photos, motion, local notifications.
 - Authenticated background `node.presence.alive` beacons that update gateway last-seen metadata when the app moves between foreground and background, without treating suspended sockets as connected.
+- Connected nodes publish CPU count and memory immediately and every 60 seconds through `node.host.stats`, supplying the Control UI Devices meters. iOS reports neither load averages nor disk capacity (Apple's required-reason API policy does not allow sending disk-space values off-device). Reporting stops when the node route disconnects or changes, and iOS suspension can pause updates.
 - Share extension deep-link forwarding into the connected gateway session.
 
 ## Computer Use Relationship

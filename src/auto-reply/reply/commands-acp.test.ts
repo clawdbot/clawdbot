@@ -1162,7 +1162,10 @@ describe("/acp command", () => {
 
     const result = await handleAcpCommand(params, true);
 
-    expect(result).toEqual({ shouldContinue: false });
+    expect(result).toEqual({
+      shouldContinue: false,
+      reply: { text: expect.stringContaining("commands.ownerAllowFrom") },
+    });
   });
 
   it("keeps read-only /acp actions available to authorized non-owners", async () => {
