@@ -1472,6 +1472,45 @@ When no candidate `--model` is passed, the character eval defaults to
 `openai/gpt-5.6-sol,thinking=xhigh,fast` and
 `anthropic/claude-opus-4-8,thinking=high`.
 
+### Comparing completed runs across harnesses
+
+Use the cross-harness report mode to check recorded run conditions before
+comparing outcomes:
+
+```bash
+pnpm openclaw qa parity-report --cross-harness \
+  --candidate-summary .artifacts/candidate/qa-suite-summary.json \
+  --baseline-summary .artifacts/baseline/qa-suite-summary.json \
+  --output-dir .artifacts/comparison
+```
+
+The command writes `qa-cross-harness-comparison.json`. Matching task content,
+source revision, check profile, and runner settings produce `comparable`, with
+per-check outcomes, regressions, selected harness IDs, primary and alternate model/provider identities,
+and available elapsed times. Comparability is not a passing quality gate: failed
+checks remain failed, and the command does not select a winner or rank token costs.
+
+Inputs must be regular JSON files of at most 16 MiB each. Use a new output
+directory for each comparison; existing comparison files are never overwritten.
+
+Missing or invalid identities, incomplete runs, duplicate or missing checks, and
+mismatched conditions produce `not-comparable` with reasons and exit code 1.
+Missing elapsed time is `null`, not zero. Existing model-axis and runtime-axis
+reports are unchanged; `--cross-harness` cannot be combined with `--runtime-axis`
+or `--token-efficiency`.
+
+Source-checkout flow suites capture version 1 identities in
+`run.comparisonIdentity` before execution and recheck the source revision before
+publishing. Dirty, changed, or unavailable checkouts have an unknown revision.
+Runner settings include the resolved transport-readiness timeout and worker-start
+stagger. Custom lab handles/launchers, SUT commands, injected configuration/adapters,
+runtime-pair summaries, and unified suite summaries do not currently supply these identities. Older summaries
+remain readable but are not eligible for this comparison mode. Rerun supported
+flow suites from clean checkouts; do not fill missing identities in by hand.
+
+These are producer-reported conditions, not signed evidence, harness-version
+attestation, or proof that the checks themselves are trustworthy.
+
 ## Related docs
 
 - [Maturity scorecard](/maturity/scorecard)

@@ -5,6 +5,7 @@ import {
   prepareQaTransportAdapterFactories,
   qaTransportSupportsModuleFlows,
 } from "./qa-transport-registry.js";
+import { captureQaRunComparisonIdentity } from "./run-comparability.js";
 import { readQaBootstrapScenarioCatalog } from "./scenario-catalog.js";
 import { expandQaScenarioExecutionCells } from "./scenario-lane.js";
 import { invalidateQaSuiteArtifactGeneration } from "./suite-artifacts.js";
@@ -15,6 +16,7 @@ import {
   collectQaSuitePluginIds,
   normalizeQaSuiteConcurrency,
   resolveQaSuiteOutputDir,
+  resolveQaSuiteWorkerStartStaggerMs,
   selectQaFlowSuiteScenarios,
 } from "./suite-planning.js";
 import { runQaFlowSuiteIsolated } from "./suite-run-isolated.js";
@@ -26,6 +28,7 @@ import {
   formatQaSuiteRunStartProgress,
   isQaSuiteNestedRun,
   markQaSuiteNestedRun,
+  resolveQaSuiteTransportReadyTimeoutMs,
   runQaSuiteScenarioDefinitionForRuntime,
   shouldLogQaSuiteProgress,
   shouldRunQaSuiteWithIsolatedScenarioWorkers,
@@ -75,8 +78,18 @@ export async function runQaFlowSuiteFromRuntime(params?: QaSuiteRunParams): Prom
     throw new Error("QA round-trip probes are not supported with runtime-pair runs.");
   }
   await invalidateQaSuiteArtifactGeneration(outputDir);
+  const concurrency = params?.failFast
+    ? 1
+    : normalizeQaSuiteConcurrency(
+        params?.concurrency,
+        selectedScenarios.length,
+        params?.channelDriverSelection ? 1 : defaultQaSuiteConcurrencyForTransport(transportId),
+      );
   const preparedParams = {
     ...params,
+    transportReadyTimeoutMs: resolveQaSuiteTransportReadyTimeoutMs(params?.transportReadyTimeoutMs),
+    workerStartStaggerMs:
+      params?.workerStartStaggerMs ?? resolveQaSuiteWorkerStartStaggerMs(concurrency),
     adapterFactories: await prepareQaTransportAdapterFactories({
       factories: params?.adapterFactories,
       driver: channelDriver,
@@ -92,10 +105,15 @@ export async function runQaFlowSuiteFromRuntime(params?: QaSuiteRunParams): Prom
   if (isQaSuiteNestedRun(params)) {
     markQaSuiteNestedRun(preparedParams);
   }
-  const enabledPluginIds = [
+  const requestedPluginIds = [
     ...new Set([
       ...collectQaSuitePluginIds(selectedScenarios),
       ...(params?.enabledPluginIds ?? []).map((pluginId) => pluginId.trim()).filter(Boolean),
+    ]),
+  ];
+  const enabledPluginIds = [
+    ...new Set([
+      ...requestedPluginIds,
       ...(params?.forcedRuntime && params.forcedRuntime !== "openclaw"
         ? [params.forcedRuntime]
         : []),
@@ -107,15 +125,47 @@ export async function runQaFlowSuiteFromRuntime(params?: QaSuiteRunParams): Prom
       (channelDriver === "crabline" ? "default" : "sut"),
   );
   const gatewayRuntimeOptions = collectQaSuiteGatewayRuntimeOptions(selectedScenarios);
-  const concurrency = params?.failFast
-    ? 1
-    : normalizeQaSuiteConcurrency(
-        params?.concurrency,
-        selectedScenarios.length,
-        params?.channelDriverSelection ? 1 : defaultQaSuiteConcurrencyForTransport(transportId),
-      );
+  const usesCanonicalLab =
+    !params?.lab &&
+    (!params?.startLab || params.startLab === (await import("./lab-server.js")).startQaLabServer);
   const progressEnabled = shouldLogQaSuiteProgress();
   const context: QaSuiteResolvedRunContext = {
+    // Injected lab, SUT, adapter, and config implementations are not bound to this revision.
+    comparisonIdentity:
+      !usesCanonicalLab ||
+      params?.runtimePair ||
+      params?.sutOpenClawCommand ||
+      params?.mutateConfig ||
+      params?.adapterFactories?.length ||
+      params?.adapterOptions
+        ? undefined
+        : captureQaRunComparisonIdentity({
+            repoRoot,
+            scenarios: selectedScenarios,
+            harness: params?.forcedRuntime ?? "openclaw",
+            runProfile: {
+              os: process.platform,
+              architecture: process.arch,
+              nodeVersion: process.version,
+              transportId,
+              channelDriver,
+              channel: params?.channelId ?? params?.channelDriverSelection?.channel,
+              providerMode,
+              fastMode,
+              concurrency,
+              transportReadyTimeoutMs: preparedParams.transportReadyTimeoutMs,
+              workerStartStaggerMs: preparedParams.workerStartStaggerMs,
+              // The selected runtime's implicit plugin is a comparison dimension, not a task setting.
+              enabledPluginIds: requestedPluginIds,
+              thinking: params?.thinkingDefault,
+              cliAuthMode: params?.claudeCliAuthMode,
+              controlUiEnabled: params?.controlUiEnabled,
+              failFast: params?.failFast,
+              roundTripProbe: params?.roundTripProbe,
+              agentIdentity: catalog.agentIdentityMarkdown,
+              kickoffTask: catalog.kickoffTask,
+            },
+          }),
     startedAt,
     repoRoot,
     outputDir,

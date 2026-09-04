@@ -15,6 +15,7 @@ import type {
   QaTransportId,
 } from "./qa-transport-registry.js";
 import type { QaReportCheck } from "./report.js";
+import type { QaRunComparisonIdentity } from "./run-comparability.js";
 import type { RuntimeId, RuntimeParityCell, RuntimeParityResult } from "./runtime-parity.js";
 import type { QaScorecardChannelDriver, QaScorecardEvidenceMode } from "./scorecard-taxonomy.js";
 import type { QaSuiteRoundTripProbe } from "./suite-round-trip.js";
@@ -108,6 +109,7 @@ export type QaSuiteScenarioRunner = (
 ) => Promise<QaSuiteScenarioResult>;
 
 export type QaSuiteResolvedRunContext = {
+  comparisonIdentity?: QaRunComparisonIdentity;
   startedAt: Date;
   repoRoot: string;
   outputDir: string;

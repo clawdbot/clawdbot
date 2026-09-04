@@ -2,6 +2,7 @@
 import { booleanFlag, parseFlagArgs, stringFlag } from "./lib/arg-utils.mts";
 
 type Options = {
+  crossHarness?: boolean;
   baselineLabel?: string;
   baselineSummary?: string;
   candidateLabel?: string;
@@ -25,6 +26,7 @@ function parseArgs(args: string[]): Options {
       stringFlag("--output-dir", "outputDir", { rejectShortOptions: true }),
       stringFlag("--repo-root", "repoRoot", { rejectShortOptions: true }),
       booleanFlag("--runtime-axis", "runtimeAxis"),
+      booleanFlag("--cross-harness", "crossHarness"),
       stringFlag("--summary", "summary", { rejectShortOptions: true }),
       booleanFlag("--token-efficiency", "tokenEfficiency"),
     ],
@@ -41,6 +43,7 @@ Options:
   --candidate-label <label>   Candidate display label
   --baseline-label <label>    Baseline display label
   --runtime-axis              Interpret --summary as a runtime-pair summary
+  --cross-harness             Compare completed runs with matching captured conditions
   --summary <path>            Runtime-axis qa-suite-summary.json path
   --token-efficiency          Also write the runtime token-efficiency report
   --repo-root <path>          Repository root to target
@@ -70,6 +73,7 @@ try {
 
   const { runQaParityReportCommand } = await import("../extensions/qa-lab/src/cli.runtime.ts");
   await runQaParityReportCommand({
+    ...(opts.crossHarness ? { crossHarness: true } : {}),
     ...(opts.baselineSummary ? { baselineSummary: opts.baselineSummary } : {}),
     ...(opts.candidateSummary ? { candidateSummary: opts.candidateSummary } : {}),
     ...(opts.baselineLabel ? { baselineLabel: opts.baselineLabel } : {}),
