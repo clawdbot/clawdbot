@@ -272,7 +272,7 @@ async function startOwnedGatewayChild(
       await signalActiveProcess(signal);
       if (signal === "SIGUSR1") {
         await waitForQaGatewayRestartBoundary({
-          readLogsSince: (mark) => output.readRedactedSince(mark),
+          readLogsSince: (mark) => output.readSince(mark),
           mark: restartLogMark,
         });
         await waitForGatewayReady({

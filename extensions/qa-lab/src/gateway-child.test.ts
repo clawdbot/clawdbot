@@ -1268,10 +1268,9 @@ describe("buildQaRuntimeEnv", () => {
     await expect(wait).resolves.toBeUndefined();
   });
 
-  it("keeps restart offsets stable after stderr output", async () => {
+  it("keeps a private restart marker visible after an unterminated log prefix", async () => {
     const output = createQaGatewayChildLogCollector();
-    output.push("stdout", Buffer.from("gateway ready\n"));
-    output.push("stderr", Buffer.from("stderr warning\n"));
+    output.push("stderr", Buffer.from("unterminated warning"));
     const mark = output.mark();
     const wait = waitForQaGatewayRestartBoundary({
       readLogsSince: (since) => output.readSince(since),
@@ -1280,12 +1279,10 @@ describe("buildQaRuntimeEnv", () => {
       timeoutMs: 100,
     });
 
-    output.push(
-      "stdout",
-      Buffer.from("signal SIGUSR1 received\nrestart mode: in-process restart\n"),
-    );
+    output.push("stdout", Buffer.from("restart mode: in-process restart\n"));
 
     await expect(wait).resolves.toBeUndefined();
+    expect(output.readRedactedSince(mark)).toBe("");
   });
 
   it("bounds diagnostics while monotonic marks retain fresh output semantics", () => {
