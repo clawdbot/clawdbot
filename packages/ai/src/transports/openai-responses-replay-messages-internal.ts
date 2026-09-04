@@ -32,11 +32,24 @@ import {
   type ReplayableResponseReasoningItem,
 } from "./openai-responses-contracts.js";
 import { resolveReplayableResponsesMessageId } from "./openai-responses-replay.js";
+import { usesNativeOpenAICodexResponsesBackend } from "./openai-transport-params.js";
 import { providerReplayContextMatches } from "./provider-replay-context.js";
 import {
   sanitizeNonEmptyTransportPayloadText,
   sanitizeTransportPayloadText,
 } from "./transport-stream-shared.js";
+
+export function isTransientOpenAICodexReasoningItem(
+  model: Model,
+  item: { type?: unknown; id?: unknown },
+): boolean {
+  return (
+    usesNativeOpenAICodexResponsesBackend(model) &&
+    item.type === "reasoning" &&
+    typeof item.id === "string" &&
+    item.id.startsWith("rs_tmp_")
+  );
+}
 
 export function stripEncryptedReasoningContentFields(value: unknown): {
   value: unknown;
@@ -397,6 +410,10 @@ function convertResponsesMessagesWithStyle(
               continue;
             }
             if (!isRecord(reasoningItem) || reasoningItem.type !== "reasoning") {
+              continue;
+            }
+            if (isTransientOpenAICodexReasoningItem(model, reasoningItem)) {
+              previousReplayItemWasReasoning = false;
               continue;
             }
             const replayableReasoningItem = prepareOpenAIResponsesReasoningItemForReplay(
