@@ -113,6 +113,7 @@ export async function prepareTerminalWithSettledTurnFinalization(input: {
   }
   const settledFailureSignal = prepared.failureSignal;
   const settledTerminalToolFailure = prepared.terminalToolFailure;
+  const persistSession = input.finalization.preparedAttempt.sessionPersistence !== "detached";
   const committedSessionTarget = resolveCommittedSessionTarget({
     preparedAttempt: input.finalization.preparedAttempt,
     sessionTarget: input.finalization.sessionTarget,
@@ -202,13 +203,15 @@ export async function prepareTerminalWithSettledTurnFinalization(input: {
         finalizationOutcome: "failed" as const,
       };
     }
-    const transcriptIdempotencyKey = await persistSettledToolFallbackTranscript({
-      attempt: input.finalization.preparedAttempt,
-      abortSignal: input.finalization.abortSignal,
-      sessionId: committedSessionTarget?.sessionId ?? initial.sessionIdUsed,
-      sessionTarget: committedSessionTarget,
-    });
-    if (input.finalization.abortSignal.aborted) {
+    const transcriptIdempotencyKey = persistSession
+      ? await persistSettledToolFallbackTranscript({
+          attempt: input.finalization.preparedAttempt,
+          abortSignal: input.finalization.abortSignal,
+          sessionId: committedSessionTarget?.sessionId ?? initial.sessionIdUsed,
+          sessionTarget: committedSessionTarget,
+        })
+      : undefined;
+    if (!transcriptIdempotencyKey && input.finalization.abortSignal.aborted) {
       log.warn(
         `settled-turn fallback was cancelled during transcript persistence: runId=${runParams.runId} sessionId=${runParams.sessionId} ` +
           `provider=${errorContext.provider}/${errorContext.model} — preserving cancellation`,
@@ -250,7 +253,7 @@ export async function prepareTerminalWithSettledTurnFinalization(input: {
   // host-owned recovery output and must cross that source-reply suppression.
   finalizedPrepared.payloadsWithToolMedia?.forEach((payload) => {
     markReplyPayloadForSourceSuppressionDelivery(payload);
-    if (sessionWriterDeliveryAuthority) {
+    if (persistSession && sessionWriterDeliveryAuthority) {
       setReplyPayloadMetadata(payload, { sessionWriterDeliveryAuthority });
     }
   });
@@ -507,6 +510,9 @@ async function persistSettledToolFallbackTranscript(input: {
       idempotencyKey,
       signal: input.abortSignal,
       text: SETTLED_TOOL_FINALIZATION_FALLBACK_TEXT,
+      // The append commit owns the cancellation cutoff. Publishing afterward
+      // must not turn an already-durable fallback into a cancelled terminal.
+      updateMode: "none",
     });
     if (!result.ok) {
       if (hasWriterFence || result.code === "session-rebound") {

@@ -577,6 +577,7 @@ describe("prepareTerminalWithSettledTurnFinalization", () => {
       sessionKey: "agent:main:settled",
       storePath: "/tmp/sessions.json",
       text: SETTLED_TOOL_FINALIZATION_FALLBACK_TEXT,
+      updateMode: "none",
     });
     expect(result.attempt).toMatchObject({
       assistantTexts: [SETTLED_TOOL_FINALIZATION_FALLBACK_TEXT],

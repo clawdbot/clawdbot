@@ -2,7 +2,10 @@ import fs from "node:fs";
 import path from "node:path";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { getReplyPayloadMetadata } from "../../../auto-reply/reply-payload.js";
-import { replaceSessionEntry } from "../../../config/sessions/session-accessor.js";
+import {
+  loadSessionEntry,
+  replaceSessionEntry,
+} from "../../../config/sessions/session-accessor.js";
 import { useTempSessionsFixture } from "../../../config/sessions/test-helpers.js";
 import {
   appendSessionTranscriptMessageByIdentity,
@@ -32,17 +35,57 @@ describe("unavailable finalization through the real core backend", () => {
   afterEach(() => admission.close());
 
   it.each([
-    { terminal: "ok", context: "unavailable", toolFailed: false, silentExpected: false },
+    {
+      terminal: "ok",
+      context: "unavailable",
+      toolFailed: false,
+      silentExpected: false,
+      sessionPersistence: "durable",
+      cancellation: "none",
+    },
     {
       terminal: "failed",
       context: "openclaw-transcript",
       toolFailed: true,
       silentExpected: false,
+      sessionPersistence: "durable",
+      cancellation: "none",
     },
-    { terminal: "ok", context: "unavailable", toolFailed: false, silentExpected: true },
+    {
+      terminal: "ok",
+      context: "unavailable",
+      toolFailed: false,
+      silentExpected: true,
+      sessionPersistence: "durable",
+      cancellation: "none",
+    },
+    {
+      terminal: "ok",
+      context: "unavailable",
+      toolFailed: false,
+      silentExpected: false,
+      sessionPersistence: "detached",
+      cancellation: "none",
+    },
+    {
+      terminal: "ok",
+      context: "unavailable",
+      toolFailed: false,
+      silentExpected: false,
+      sessionPersistence: "durable",
+      cancellation: "pre-append",
+    },
+    {
+      terminal: "ok",
+      context: "unavailable",
+      toolFailed: false,
+      silentExpected: false,
+      sessionPersistence: "durable",
+      cancellation: "post-append",
+    },
   ] as const)(
-    "keeps settled work terminal when finalizer capability is absent ($terminal/$context, silent: $silentExpected)",
-    async ({ terminal, context, toolFailed, silentExpected }) => {
+    "keeps settled work terminal when finalizer capability is absent ($terminal/$context, $sessionPersistence, cancellation: $cancellation)",
+    async ({ terminal, context, toolFailed, silentExpected, sessionPersistence, cancellation }) => {
       const admittedRunContext = await admission.admit("embedded");
       const assistant = buildEmbeddedRunnerAssistant({
         provider: "openai",
@@ -105,16 +148,25 @@ describe("unavailable finalization through the real core backend", () => {
         sessionId: "session-settled",
         sessionKey: "agent:main:settled",
         storePath,
+        ...(sessionPersistence === "detached"
+          ? { expectedLifecycleRevision: "revision-detached" }
+          : {}),
       };
-      await replaceSessionEntry(target, { sessionId: target.sessionId, updatedAt: 1 });
+      await replaceSessionEntry(target, {
+        sessionId: target.sessionId,
+        updatedAt: 1,
+        ...(sessionPersistence === "detached" ? { lifecycleRevision: "revision-detached" } : {}),
+      });
       for (const message of attempt.messagesSnapshot) {
         await appendSessionTranscriptMessageByIdentity({ ...target, message });
       }
       const prefix = await readVisibleSessionTranscriptMessageEntries(target);
       const prefixBytes = JSON.stringify(prefix);
+      const sessionEntryBytes = JSON.stringify(loadSessionEntry(target));
       const input = createSettledFinalizationTestInput(attempt, admittedRunContext);
       input.terminalBase.runParams.trigger = toolFailed ? "cron" : "user";
       input.terminalBase.runParams.sessionKey = target.sessionKey;
+      input.terminalBase.runParams.sessionPersistence = sessionPersistence;
       Object.assign(
         input.finalization.preparedAttempt,
         createResolvedEmbeddedRunnerModel("openai", "gpt-5.6-sol"),
@@ -134,6 +186,26 @@ describe("unavailable finalization through the real core backend", () => {
       delete input.finalization.harness.finalizeSettledTurn;
       input.finalization.harness.runAttempt = runAttempt;
       input.finalization.preparedAttempt.silentExpected = silentExpected;
+      input.finalization.preparedAttempt.sessionPersistence = sessionPersistence;
+      let cancellationController: AbortController | undefined;
+      if (cancellation !== "none") {
+        cancellationController = new AbortController();
+        const signal = cancellationController.signal;
+        const throwIfAborted = signal.throwIfAborted.bind(signal);
+        let transcriptAbortChecks = 0;
+        vi.spyOn(signal, "throwIfAborted").mockImplementation(() => {
+          transcriptAbortChecks += 1;
+          if (cancellation === "pre-append" && transcriptAbortChecks === 1) {
+            cancellationController?.abort(new Error("cancelled before fallback append"));
+          } else if (cancellation === "post-append" && transcriptAbortChecks === 3) {
+            queueMicrotask(() =>
+              cancellationController?.abort(new Error("cancelled after fallback append")),
+            );
+          }
+          throwIfAborted();
+        });
+        input.finalization.abortSignal = signal;
+      }
 
       const result = await prepareTerminalWithSettledTurnFinalization(input);
 
@@ -145,7 +217,11 @@ describe("unavailable finalization through the real core backend", () => {
       expect(attempt.terminal.kind).toBe(terminal);
       const transcript = await readVisibleSessionTranscriptMessageEntries(target);
       expect(JSON.stringify(transcript.slice(0, prefix.length))).toBe(prefixBytes);
-      if (silentExpected) {
+      expect(JSON.stringify(loadSessionEntry(target))).toBe(sessionEntryBytes);
+      expect(cancellationController?.signal.aborted).toBe(
+        cancellation === "none" ? undefined : true,
+      );
+      if (silentExpected || cancellation === "pre-append") {
         expect(result.attempt).toBe(attempt);
         expect(result.prepared.payloadsWithToolMedia).not.toContainEqual(
           expect.objectContaining({ text: FALLBACK }),
@@ -158,16 +234,25 @@ describe("unavailable finalization through the real core backend", () => {
       expect(result.prepared.payloadsWithToolMedia).toEqual([
         expect.objectContaining({ text: FALLBACK }),
       ]);
-      expect(
-        getReplyPayloadMetadata(result.prepared.payloadsWithToolMedia?.[0] ?? {}),
-      ).toMatchObject({
-        assistantTranscriptOwned: true,
-        assistantTranscriptIdempotencyKey: "run-settled:settled-finalization-fallback",
+      const metadata = getReplyPayloadMetadata(result.prepared.payloadsWithToolMedia?.[0] ?? {});
+      expect(metadata).toMatchObject({
         deliverDespiteSourceReplySuppression: true,
       });
       expect(result.attempt.currentAttemptAssistant).toMatchObject({
         provider: assistant.provider,
         model: assistant.model,
+      });
+      if (sessionPersistence === "detached") {
+        expect(metadata?.assistantTranscriptOwned).toBeUndefined();
+        expect(metadata?.assistantTranscriptIdempotencyKey).toBeUndefined();
+        expect(metadata?.sessionWriterDeliveryAuthority).toBeUndefined();
+        expect(transcript).toHaveLength(prefix.length);
+        return;
+      }
+
+      expect(metadata).toMatchObject({
+        assistantTranscriptOwned: true,
+        assistantTranscriptIdempotencyKey: "run-settled:settled-finalization-fallback",
       });
       expect(transcript.slice(prefix.length)).toMatchObject([
         {

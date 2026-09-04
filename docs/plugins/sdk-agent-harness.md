@@ -902,11 +902,15 @@ does not call `runAttempt`, repeat the original model turn, or replay completed
 tools. Canonical failed-tool metadata remains attached to the terminal result.
 Runs with `silentExpected` never synthesize or persist this fallback.
 
-Cancellation remains terminal and does not produce the fallback. Finalization
-cannot enter ordinary auth/profile rotation, model fallback, context recovery,
-compaction continuation, or hook-requested revision paths. It also skips plugin
-prompt mutation, `before_agent_run`, LLM input/output, terminal revision, and
-`agent_end` hooks. Core diagnostics still record the operation and its failure.
+Cancellation observed before fallback persistence remains terminal and produces
+no fallback. Once the durable append commits, the fallback remains authoritative
+and is delivered even if cancellation arrives afterward. Detached runs deliver
+the fallback without persisting it or attaching session-writer authority.
+Finalization cannot enter ordinary auth/profile rotation, model fallback,
+context recovery, compaction continuation, or hook-requested revision paths. It
+also skips plugin prompt mutation, `before_agent_run`, LLM input/output,
+terminal revision, and `agent_end` hooks. Core diagnostics still record the
+operation and its failure.
 
 The callback returns `AgentHarnessSettledTurnFinalizationResult`, not an
 ordinary attempt result. Its public fields are limited to the completed

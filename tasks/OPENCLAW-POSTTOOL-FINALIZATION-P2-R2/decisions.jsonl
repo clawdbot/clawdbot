@@ -1,1 +1,3 @@
 {"ts":"2026-09-04T08:20:56.589Z","kind":"reset_agent","actor":"dispatcher","payload":{"agent":"planner","force":true,"eagerRestart":true}}
+{"ts":"2026-09-04T08:35:37.390Z","kind":"compact","actor":"dispatcher","payload":{"agent":"planner","percent":100,"threshold":80}}
+{"ts":"2026-09-04T08:35:37.390Z","kind":"terminate","actor":"planner","payload":{"reason":"Planner session stalled twice after external 90s adapter timeout; no implementation mutations or pushes. Continue as R3 from same HEAD and scope."}}

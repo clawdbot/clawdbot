@@ -1,0 +1,16 @@
+{"ts":"2026-09-04T08:37:51.334Z","kind":"spawn_subagents","actor":"planner","payload":{"coder_engine":"codex","coder_model":"gpt-5.6-sol","reviewer_engine":"cursor","reviewer_model":"auto"}}
+{"ts":"2026-09-04T09:07:13.555Z","kind":"terminate","actor":"planner","payload":{"reason":"cancelled"}}
+{"ts":"2026-09-04T09:10:02.777Z","kind":"spawn_subagents","actor":"planner","payload":{"coder_engine":"codex","coder_model":"gpt-5.6-sol","reviewer_engine":"cursor","reviewer_model":"auto"}}
+{"ts":"2026-09-04T09:26:19.899Z","kind":"compact","actor":"dispatcher","payload":{"agent":"coder","percent":100,"threshold":70}}
+{"ts":"2026-09-04T09:27:32.653Z","kind":"compact","actor":"dispatcher","payload":{"agent":"coder","percent":100,"threshold":70}}
+{"ts":"2026-09-04T09:27:46.011Z","kind":"spawn_subagents","actor":"planner","payload":{"coder_engine":"codex","coder_model":"gpt-5.6-sol","reviewer_engine":"cursor","reviewer_model":"auto"}}
+{"ts":"2026-09-04T09:28:35.252Z","kind":"reset_agent","actor":"dispatcher","payload":{"agent":"coder","force":false,"eagerRestart":true}}
+{"ts":"2026-09-04T09:31:39.291Z","kind":"compact","actor":"dispatcher","payload":{"agent":"coder","percent":100,"threshold":70}}
+{"ts":"2026-09-04T09:31:47.555Z","kind":"spawn_subagents","actor":"planner","payload":{"coder_engine":"codex","coder_model":"gpt-5.6-sol","reviewer_engine":"cursor","reviewer_model":"auto"}}
+{"ts":"2026-09-04T09:38:36.754Z","kind":"terminate","actor":"planner","payload":{"reason":"cancelled"}}
+{"ts":"2026-09-04T09:38:36.764Z","kind":"reset_agent","actor":"dispatcher","payload":{"agent":"coder","force":false,"eagerRestart":true}}
+{"ts":"2026-09-04T10:44:48.723Z","kind":"spawn_subagents","actor":"planner","payload":{"coder_engine":"codex","coder_model":"gpt-5.6-sol","reviewer_engine":"cursor","reviewer_model":"auto"}}
+{"ts":"2026-09-04T10:46:00.191Z","kind":"compact","actor":"dispatcher","payload":{"agent":"coder","percent":100,"threshold":70}}
+{"ts":"2026-09-04T10:47:07.537Z","kind":"spawn_subagents","actor":"planner","payload":{"coder_engine":"codex","coder_model":"gpt-5.6-sol","reviewer_engine":"cursor","reviewer_model":"auto"}}
+{"ts":"2026-09-04T10:47:14.865Z","kind":"reset_agent","actor":"dispatcher","payload":{"agent":"coder","force":false,"eagerRestart":true}}
+{"ts":"2026-09-04T11:13:53.744Z","kind":"terminate","actor":"planner","payload":{"reason":"cancelled"}}

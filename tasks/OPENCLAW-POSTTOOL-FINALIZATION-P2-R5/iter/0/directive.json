@@ -1,0 +1,23 @@
+{
+  "schema_version": 1,
+  "iter": 0,
+  "ts": "2026-09-04T10:47:07.538Z",
+  "goal": "Resume from the intact workspace and preserve the current five-file candidate. Run every pending goal.json gate using only the verified pnpm 12.1.0 executable `/home/openclaw/.cache/node/corepack/v1/pnpm/12.1.0/pnpm-native`. Emit iter_complete with exact command/output evidence, then hand off to the Reviewer for a read-only audit.",
+  "constraints": [
+    "Use only `/home/openclaw/.cache/node/corepack/v1/pnpm/12.1.0/pnpm-native` for pnpm commands.",
+    "Do not use npx, pnpm 12.0.0, the package placeholder wrapper, package-manager overrides, or workarounds.",
+    "Fix only demonstrated candidate failures within the existing five files.",
+    "Do not repeat RED capture or implementation.",
+    "Do not touch a sixth file.",
+    "Do not run or restart runtime services.",
+    "Do not push.",
+    "Reviewer must remain read-only."
+  ],
+  "success_criteria": [
+    "All pending goal.json gates have exact command/output evidence from pnpm-native 12.1.0.",
+    "The five-file candidate remains unchanged unless an authoritative gate demonstrates a real failure.",
+    "Coder emits iter_complete.",
+    "Reviewer performs the subsequent read-only audit."
+  ],
+  "max_attempts": 1
+}
