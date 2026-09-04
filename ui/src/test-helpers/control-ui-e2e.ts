@@ -11,7 +11,7 @@ import type { ConsoleMessage, Frame, Locator, Page, Request } from "playwright";
 import type { InlineConfig, Plugin, PreviewServer, ViteDevServer } from "vite";
 import { PROTOCOL_VERSION } from "../../../packages/gateway-protocol/src/version.js";
 import { CONTROL_UI_BOOTSTRAP_CONFIG_PATH } from "../../../src/gateway/control-ui-contract.js";
-import { CONTROL_UI_PLUGIN_ASSET_PREFIX } from "../../../src/gateway/control-ui-plugin-assets-contract.js";
+import { controlUiPluginAssetRoot } from "../../../src/gateway/control-ui-plugin-assets-contract.js";
 import type { ModelCatalogEntry, UpdateAvailable, UpdateScheduleState } from "../api/types.ts";
 import type { AuthenticatedUser } from "../app/user-profile.ts";
 import { normalizeControlUiBuildInfo } from "../build-info-normalizers.ts";
@@ -2788,7 +2788,7 @@ export async function installMockGateway(
 ): Promise<MockGatewayControls> {
   const prepared = await prepareControlUiMockGatewayScenario(scenario);
   if (prepared.assets.size) {
-    await page.route(`**${CONTROL_UI_PLUGIN_ASSET_PREFIX}**`, async (route) => {
+    await page.route(`**${controlUiPluginAssetRoot()}**`, async (route) => {
       const asset = prepared.assets.get(new URL(route.request().url()).pathname);
       await route.fulfill(asset ? { status: 200, ...asset } : { status: 404 });
     });

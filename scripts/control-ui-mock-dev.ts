@@ -16,7 +16,7 @@ import { applySharedChannelFieldHelp } from "../src/config/schema.channel-field-
 import { buildBaseHints } from "../src/config/schema.hints.js";
 import { applyConfigTierHints, applyResolvedConfigTierHints } from "../src/config/schema.tiers.js";
 import { CONTROL_UI_BOOTSTRAP_CONFIG_PATH } from "../src/gateway/control-ui-contract.js";
-import { CONTROL_UI_PLUGIN_ASSET_PREFIX } from "../src/gateway/control-ui-plugin-assets-contract.js";
+import { controlUiPluginAssetRoot } from "../src/gateway/control-ui-plugin-assets-contract.js";
 import { buildUpdateRestartSentinelPayload } from "../src/infra/update-restart-sentinel-payload.js";
 import type { UpdateRunResult } from "../src/infra/update-runner.js";
 import type { UpdateAvailable, UpdateScheduleState } from "../ui/src/api/types.ts";
@@ -3241,7 +3241,7 @@ async function createMockGatewayPlugin(
       });
       server.middlewares.use((req, res, next) => {
         const pathname = req.url?.split("?", 1)[0];
-        if (!pathname?.startsWith(CONTROL_UI_PLUGIN_ASSET_PREFIX)) {
+        if (!pathname?.startsWith(controlUiPluginAssetRoot())) {
           next();
           return;
         }
