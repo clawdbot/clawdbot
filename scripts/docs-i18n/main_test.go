@@ -354,6 +354,7 @@ func TestClassifyDocOutputRequiresCurrentPromptVersion(t *testing.T) {
 			"x-i18n:",
 			"  source_hash: "+sourceHash,
 			fmt.Sprintf("  prompt_version: %d", version),
+			fmt.Sprintf("  workflow: %d", workflowVersion),
 			"  postprocess_version: "+localizedLinkPostprocessVersion,
 			"---",
 			"",
@@ -380,7 +381,7 @@ func TestClassifyDocOutputRequiresCurrentPromptVersion(t *testing.T) {
 	}
 }
 
-func TestFilterDocQueueSchedulesLegacyOutputsForPostprocessOnly(t *testing.T) {
+func TestFilterDocQueueSchedulesPendingOutputsForPostprocessOnly(t *testing.T) {
 	t.Parallel()
 
 	docsRoot := t.TempDir()
@@ -393,6 +394,7 @@ func TestFilterDocQueueSchedulesLegacyOutputsForPostprocessOnly(t *testing.T) {
 		"x-i18n:",
 		"  source_hash: "+hashBytes([]byte(mustReadFile(t, sourcePath))),
 		fmt.Sprintf("  prompt_version: %d", promptVersion),
+		fmt.Sprintf("  workflow: %d", workflowVersion),
 		"---",
 		"",
 		"See [Troubleshooting](/gateway/troubleshooting).",
@@ -403,7 +405,7 @@ func TestFilterDocQueueSchedulesLegacyOutputsForPostprocessOnly(t *testing.T) {
 		t.Fatalf("filterDocQueue failed: %v", err)
 	}
 	if len(pending) != 0 {
-		t.Fatalf("expected legacy matching output to skip translation, got pending=%v", pending)
+		t.Fatalf("expected current matching output to skip translation, got pending=%v", pending)
 	}
 	if skipped != 1 {
 		t.Fatalf("expected one skipped translation, got %d", skipped)
@@ -429,6 +431,7 @@ func TestFilterDocQueueHonorsMaxAcrossPostprocessOutputs(t *testing.T) {
 		"x-i18n:",
 		"  source_hash: "+hashBytes([]byte(mustReadFile(t, firstSource))),
 		fmt.Sprintf("  prompt_version: %d", promptVersion),
+		fmt.Sprintf("  workflow: %d", workflowVersion),
 		"---",
 		"",
 		"# 网关",
@@ -439,6 +442,7 @@ func TestFilterDocQueueHonorsMaxAcrossPostprocessOutputs(t *testing.T) {
 		"x-i18n:",
 		"  source_hash: "+hashBytes([]byte(mustReadFile(t, secondSource))),
 		fmt.Sprintf("  prompt_version: %d", promptVersion),
+		fmt.Sprintf("  workflow: %d", workflowVersion),
 		"---",
 		"",
 		"# 示例 provider",
@@ -841,6 +845,20 @@ func TestRunDocsI18NKeepsModelSelectionPrivate(t *testing.T) {
 			writeFile(t, filepath.Join(docsRoot, ".i18n", "zh-CN.tm.jsonl"), `{"cache_key":"old-cache","translated":"old translation","model":"private-primary","provider":"old-provider"}`)
 			source := filepath.Join(docsRoot, "test.md")
 			writeFile(t, source, "---\ntitle: Gateway\n---\n\n# Gateway\n\nHello world.\n")
+			writeFile(t, filepath.Join(docsRoot, "zh-CN", "test.md"), stringsJoin(
+				"---",
+				"title: Gateway",
+				"x-i18n:",
+				"  source_hash: "+hashBytes([]byte(mustReadFile(t, source))),
+				fmt.Sprintf("  prompt_version: %d", promptVersion),
+				fmt.Sprintf("  workflow: %d", workflowVersion-1),
+				"  postprocess_version: "+localizedLinkPostprocessVersion,
+				"  model: private-primary",
+				"  provider: old-provider",
+				"---",
+				"",
+				"# Previous translation",
+			))
 			if err := runDocsI18N(context.Background(), runConfig{docsRoot: docsRoot, sourceLang: "en", targetLang: "zh-CN", mode: mode, parallel: 1}, []string{source}, func(string, string, []GlossaryEntry, string) (docsTranslator, error) {
 				return fakeDocsTranslator{}, nil
 			}); err != nil {
