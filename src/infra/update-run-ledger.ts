@@ -2,27 +2,28 @@ import { randomUUID } from "node:crypto";
 import type { DatabaseSync } from "node:sqlite";
 import { isRecord } from "@openclaw/normalization-core/record-coerce";
 import { truncateUtf16Safe } from "@openclaw/normalization-core/utf16-slice";
+import { UPDATE_RUN_PHASES } from "../../packages/gateway-protocol/src/update-run-vocabulary.js";
+import { resolveStateDir } from "../config/paths.js";
 import { redactSensitiveText } from "../logging/redact.js";
+import { escapeRegExp } from "../shared/regexp.js";
 import type { OpenClawStateDatabaseOptions } from "../state/openclaw-state-db-contract.js";
 import { withExistingOpenClawStateDatabaseReadOnly } from "../state/openclaw-state-db-readonly.js";
 import { tableExists } from "../state/openclaw-state-db-schema-helpers.js";
 import type { DB, UpdateRuns } from "../state/openclaw-state-db.generated.js";
 import { runOpenClawStateWriteTransaction } from "../state/openclaw-state-db.js";
 import { OPENCLAW_STATE_SCHEMA_SQL } from "../state/openclaw-state-schema.js";
+import { resolveRequiredHomeDir } from "./home-dir.js";
 import {
   executeSqliteQuerySync,
   executeSqliteQueryTakeFirstSync,
   getNodeSqliteKysely,
 } from "./kysely-sync.js";
 import {
-  UPDATE_RUN_PHASES,
   UpdateRunRecordSchema,
   type UpdateRunRecord,
   type UpdateRunPhase,
   type UpdateRunStep,
 } from "./update-run-record.js";
-
-export type { UpdateRunRecord, UpdateRunPhase, UpdateRunStep } from "./update-run-record.js";
 
 const JSON_BYTES = 16 * 1024;
 const JSON_FIELDS = [
@@ -35,47 +36,23 @@ const JSON_FIELDS = [
   "repair",
 ] as const;
 type LedgerDatabase = Pick<DB, "update_runs">;
+type LedgerOptions = OpenClawStateDatabaseOptions & { redactPaths?: readonly string[] };
 type RunPatch = Partial<
   Pick<UpdateRunRecord, "origin" | "target" | "before" | "after" | "trigger">
 >;
 
-function sanitizeText(value: string): string {
-  return truncateUtf16Safe(
-    redactSensitiveText(value, { mode: "tools" }).replace(
-      /(?<![\w:/])(?:\/(?:[^\s"'<>]+)|[A-Za-z]:\\[^\s"'<>]+)/gu,
-      "[path]",
-    ),
-    1024,
-  );
-}
-
-function sanitizeJson(value: unknown): unknown {
+function mapJsonText(value: unknown, transform: (text: string) => string): unknown {
   if (typeof value === "string") {
-    return sanitizeText(value);
+    return transform(value);
   }
   if (Array.isArray(value)) {
-    return value.map(sanitizeJson);
+    return value.map((entry) => mapJsonText(entry, transform));
   }
   if (isRecord(value)) {
     return Object.fromEntries(
       Object.keys(value)
         .toSorted()
-        .map((key) => [key, sanitizeJson(value[key])]),
-    );
-  }
-  return value;
-}
-
-function shortenJsonText(value: unknown): unknown {
-  if (typeof value === "string") {
-    return truncateUtf16Safe(value, Math.floor(value.length / 2));
-  }
-  if (Array.isArray(value)) {
-    return value.map(shortenJsonText);
-  }
-  if (isRecord(value)) {
-    return Object.fromEntries(
-      Object.entries(value).map(([key, entry]) => [key, shortenJsonText(entry)]),
+        .map((key) => [key, mapJsonText(value[key], transform)]),
     );
   }
   return value;
@@ -90,17 +67,23 @@ function boundedJson(input: unknown): string {
       const disposable = value.findIndex(
         (item) => !isRecord(item) || !UPDATE_RUN_PHASES.some((phase) => phase === item.step),
       );
-      value.splice(Math.max(0, disposable), 1);
+      if (disposable >= 0) {
+        value = value.toSpliced(disposable, 1);
+      } else {
+        // Phase identities and timestamps fit the budget. Discard optional
+        // diagnostics before losing the history needed by every report.
+        value = value.map((item) => (isRecord(item) ? { ...item, detail: undefined } : item));
+      }
     } else if (isRecord(value)) {
       const object = value;
       const key = Object.keys(object)
         .toSorted()
         .find((field) => Array.isArray(object[field]) && object[field].length > 0);
       const array = key ? object[key] : undefined;
-      if (Array.isArray(array)) {
-        array.shift();
+      if (key && Array.isArray(array)) {
+        value = { ...object, [key]: array.slice(1) };
       } else {
-        value = shortenJsonText(value);
+        value = mapJsonText(value, (text) => truncateUtf16Safe(text, Math.floor(text.length / 2)));
       }
     } else {
       throw new Error("Update run metadata exceeds its bounded schema");
@@ -110,8 +93,50 @@ function boundedJson(input: unknown): string {
   return json;
 }
 
-function encodeRun(input: UpdateRunRecord): UpdateRuns {
-  const record = UpdateRunRecordSchema.parse(sanitizeJson(input));
+function encodeRun(input: UpdateRunRecord, options: LedgerOptions): UpdateRuns {
+  const env = options.env ?? process.env;
+  // Home-relative selectors remain actionable in reports. Other captured roots
+  // are diagnostic only; model refs, slash commands, and URLs are not paths.
+  const roots: [string | undefined, string][] = [
+    [resolveRequiredHomeDir(env), "~"],
+    [env.HOME, "~"],
+    [env.USERPROFILE, "~"],
+    [resolveStateDir(env), "$OPENCLAW_STATE_DIR"],
+    [env.OPENCLAW_CONFIG_PATH, "[path]"],
+    ...(options.redactPaths ?? []).map((root): [string, string] => [root, "[path]"]),
+  ];
+  const redactPaths: [RegExp, string][] = roots.flatMap(([root, replacement]) => {
+    if (!root) {
+      return [];
+    }
+    const prefix = root
+      .replaceAll("\\", "/")
+      .replace(/\/+$/u, "")
+      .split("/")
+      .map(escapeRegExp)
+      .join("[\\\\/]");
+    const flags = /^(?:[A-Za-z]:|\\\\)/u.test(root) ? "giu" : "gu";
+    return prefix
+      ? [
+          [
+            new RegExp(
+              `(?<!https?:)(?:(?<![\\w/])|(?<=file:///?))${prefix}(?=$|[\\\\/\\s"'<>.,;:)])`,
+              flags,
+            ),
+            replacement,
+          ],
+        ]
+      : [];
+  });
+  const record = UpdateRunRecordSchema.parse(
+    mapJsonText(input, (value) => {
+      let text = redactSensitiveText(value, { mode: "tools" });
+      for (const [pattern, replacement] of redactPaths) {
+        text = text.replace(pattern, () => replacement);
+      }
+      return truncateUtf16Safe(text, 1024);
+    }),
+  );
   return {
     run_id: record.runId,
     created_at_ms: record.createdAtMs,
@@ -193,7 +218,7 @@ function writeRun<T>(operation: (db: DatabaseSync) => T, options: OpenClawStateD
 function mutateRun(
   runId: string,
   update: (record: UpdateRunRecord) => void,
-  options: OpenClawStateDatabaseOptions,
+  options: LedgerOptions,
 ): UpdateRunRecord {
   return writeRun((db) => {
     const record = readRun(db, runId);
@@ -206,7 +231,7 @@ function mutateRun(
       return record;
     }
     record.updatedAtMs = Math.max(Date.now(), record.updatedAtMs + 1);
-    const row = encodeRun(record);
+    const row = encodeRun(record, options);
     executeSqliteQuerySync(
       db,
       getNodeSqliteKysely<LedgerDatabase>(db)
@@ -220,28 +245,31 @@ function mutateRun(
 
 export function createUpdateRun(
   input: RunPatch & { runId?: string; trigger: UpdateRunRecord["trigger"] },
-  options: OpenClawStateDatabaseOptions = {},
+  options: LedgerOptions = {},
 ): UpdateRunRecord {
   const now = Date.now();
-  const row = encodeRun({
-    runId: input.runId ?? randomUUID(),
-    createdAtMs: now,
-    updatedAtMs: now,
-    trigger: input.trigger,
-    phase: "requested",
-    status: "running",
-    reason: null,
-    origin: input.origin ?? {},
-    target: input.target ?? {},
-    before: input.before ?? {},
-    after: {},
-    steps: [{ step: "requested", status: "in_progress", startedAtMs: now }],
-    verification: {},
-    repair: [],
-    confirmedAtMs: null,
-    finishedAtMs: null,
-    downtimeMs: null,
-  });
+  const row = encodeRun(
+    {
+      runId: input.runId ?? randomUUID(),
+      createdAtMs: now,
+      updatedAtMs: now,
+      trigger: input.trigger,
+      phase: "requested",
+      status: "running",
+      reason: null,
+      origin: input.origin ?? {},
+      target: input.target ?? {},
+      before: input.before ?? {},
+      after: {},
+      steps: [{ step: "requested", status: "in_progress", startedAtMs: now }],
+      verification: {},
+      repair: [],
+      confirmedAtMs: null,
+      finishedAtMs: null,
+      downtimeMs: null,
+    },
+    options,
+  );
   return writeRun((db) => {
     const existing = readRun(db, row.run_id);
     if (existing) {
@@ -274,7 +302,7 @@ export function recordUpdateRunPhase(
   runId: string,
   phase: UpdateRunPhase,
   patch: RunPatch & { step?: UpdateRunStep } = {},
-  options: OpenClawStateDatabaseOptions = {},
+  options: LedgerOptions = {},
 ): UpdateRunRecord {
   return mutateRun(
     runId,
@@ -317,7 +345,7 @@ export function recordUpdateRunPhase(
 export function recordUpdateRunStep(
   runId: string,
   step: UpdateRunStep,
-  options: OpenClawStateDatabaseOptions = {},
+  options: LedgerOptions = {},
 ): UpdateRunRecord {
   return mutateRun(
     runId,
@@ -338,7 +366,7 @@ export function finishUpdateRun(
     after?: UpdateRunRecord["after"];
     downtimeMs?: number;
   },
-  options: OpenClawStateDatabaseOptions = {},
+  options: LedgerOptions = {},
 ): UpdateRunRecord {
   return mutateRun(
     runId,
@@ -372,7 +400,7 @@ export function finishUpdateRun(
 export function recordUpdateRunVerification(
   runId: string,
   verification: UpdateRunRecord["verification"],
-  options: OpenClawStateDatabaseOptions = {},
+  options: LedgerOptions = {},
 ): UpdateRunRecord {
   return mutateRun(
     runId,
@@ -399,7 +427,7 @@ export function recordUpdateRunVerification(
 export function recordUpdateRunRepairAttempt(
   runId: string,
   attempt: UpdateRunRecord["repair"][number],
-  options: OpenClawStateDatabaseOptions = {},
+  options: LedgerOptions = {},
 ): UpdateRunRecord {
   return mutateRun(
     runId,

@@ -1,11 +1,8 @@
 import { sliceUtf16Safe } from "@openclaw/normalization-core/utf16-slice";
+import { UPDATE_RUN_PHASES } from "../../packages/gateway-protocol/src/update-run-vocabulary.js";
 import { formatDurationPrecise } from "./format-time/format-duration.ts";
 import type { RestartSentinelPayload } from "./restart-sentinel-store.js";
-import {
-  UPDATE_RUN_PHASES,
-  summarizeUpdateStepFailure,
-  type UpdateRunRecord,
-} from "./update-run-record.js";
+import { summarizeUpdateStepFailure, type UpdateRunRecord } from "./update-run-record.js";
 import type { UpdateRunResult } from "./update-runner-types.js";
 
 export type UpdateRunReport = { headline: string; lines: string[]; markdown: string };

@@ -1,5 +1,11 @@
 import { sliceUtf16Safe, truncateUtf16Safe } from "@openclaw/normalization-core/utf16-slice";
 import { z } from "zod";
+import {
+  UPDATE_RUN_PHASES,
+  UPDATE_RUN_STATUSES,
+  UPDATE_RUN_STEP_STATUSES,
+  UPDATE_RUN_TRIGGERS,
+} from "../../packages/gateway-protocol/src/update-run-vocabulary.js";
 import type { UpdateStepResult } from "./update-runner-types.js";
 
 /** A bounded diagnostic excerpt for a failed update step, never its command log or cwd. */
@@ -19,19 +25,6 @@ export function summarizeUpdateStepFailure(
   );
 }
 
-export const UPDATE_RUN_PHASES = [
-  "requested",
-  "staging",
-  "validating",
-  "repairing",
-  "activating",
-  "restarting",
-  "verifying",
-  "finished",
-] as const;
-const UPDATE_RUN_STATUSES = ["running", "succeeded", "failed", "rolled-back", "skipped"] as const;
-const UPDATE_RUN_TRIGGERS = ["chat", "control-ui", "cli", "campaign", "mac-app", "api"] as const;
-
 const text = z.string().max(1024);
 const timestamp = z.number().int().nonnegative();
 const version = z.object({
@@ -42,7 +35,7 @@ const version = z.object({
 
 const UpdateRunStepSchema = z.object({
   step: text,
-  status: z.enum(["pending", "in_progress", "completed", "failed", "skipped"]),
+  status: z.enum(UPDATE_RUN_STEP_STATUSES),
   startedAtMs: timestamp.optional(),
   endedAtMs: timestamp.optional(),
   detail: text.optional(),

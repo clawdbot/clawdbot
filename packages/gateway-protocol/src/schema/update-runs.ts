@@ -1,4 +1,10 @@
 import { Type, type Static } from "typebox";
+import {
+  UPDATE_RUN_PHASES,
+  UPDATE_RUN_STATUSES,
+  UPDATE_RUN_STEP_STATUSES,
+  UPDATE_RUN_TRIGGERS,
+} from "../update-run-vocabulary.js";
 import { closedObject } from "./closed-object.js";
 
 const text = Type.String({ maxLength: 1024 });
@@ -8,17 +14,8 @@ const runId = Type.String({
   pattern:
     "^([0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[1-8][0-9a-fA-F]{3}-[89abAB][0-9a-fA-F]{3}-[0-9a-fA-F]{12}|00000000-0000-0000-0000-000000000000|ffffffff-ffff-ffff-ffff-ffffffffffff)$",
 });
-const phase = Type.Enum([
-  "requested",
-  "staging",
-  "validating",
-  "repairing",
-  "activating",
-  "restarting",
-  "verifying",
-  "finished",
-]);
-const status = Type.Enum(["running", "succeeded", "failed", "rolled-back", "skipped"]);
+const phase = Type.Enum(UPDATE_RUN_PHASES);
+const status = Type.Enum(UPDATE_RUN_STATUSES);
 const version = closedObject({
   version: Type.Optional(Type.Union([text, Type.Null()])),
   sha: Type.Optional(Type.Union([text, Type.Null()])),
@@ -30,7 +27,7 @@ export const UpdateRunRecordSchema = closedObject({
   runId,
   createdAtMs: timestamp,
   updatedAtMs: timestamp,
-  trigger: Type.Enum(["chat", "control-ui", "cli", "campaign", "mac-app", "api"]),
+  trigger: Type.Enum(UPDATE_RUN_TRIGGERS),
   phase,
   status,
   reason: Type.Union([text, Type.Null()]),
@@ -67,7 +64,7 @@ export const UpdateRunRecordSchema = closedObject({
   steps: Type.Array(
     closedObject({
       step: text,
-      status: Type.Enum(["pending", "in_progress", "completed", "failed", "skipped"]),
+      status: Type.Enum(UPDATE_RUN_STEP_STATUSES),
       startedAtMs: Type.Optional(timestamp),
       endedAtMs: Type.Optional(timestamp),
       detail: Type.Optional(text),

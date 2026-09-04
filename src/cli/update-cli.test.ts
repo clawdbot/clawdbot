@@ -6531,6 +6531,9 @@ describe("update-cli", () => {
             recovery: { serviceRestartSafe: false },
           },
         });
+        expect(listUpdateRuns({ limit: 1 })).toMatchObject([
+          { phase: "finished", status: "failed", reason: "windows-task-autostart-restore-failed" },
+        ]);
       } finally {
         platformSpy.mockRestore();
       }
@@ -7181,6 +7184,9 @@ describe("update-cli", () => {
       await vi.waitFor(() => expect(processExitSpy).toHaveBeenCalledWith(130));
       expect(resumeScheduledTaskAutoStartAfterUpdate).not.toHaveBeenCalled();
       expect(defaultRuntime.exit).not.toHaveBeenCalled();
+      expect(listUpdateRuns({ limit: 1 })).toMatchObject([
+        { phase: "finished", status: "failed", reason: "package update" },
+      ]);
     } finally {
       platformSpy.mockRestore();
       processOnSpy.mockRestore();
@@ -7260,6 +7266,9 @@ describe("update-cli", () => {
       expect(resumeScheduledTaskAutoStartAfterUpdate).toHaveBeenCalledTimes(1);
       expect(serviceStop).not.toHaveBeenCalled();
       expect(packageInstallCommandCall()).toBeUndefined();
+      expect(listUpdateRuns({ limit: 1 })).toMatchObject([
+        { phase: "finished", status: "skipped", reason: "cancelled" },
+      ]);
       expect(defaultRuntime.exit).not.toHaveBeenCalledWith(1);
       await vi.waitFor(() => {
         expect(processExitSpy).toHaveBeenCalledTimes(2);

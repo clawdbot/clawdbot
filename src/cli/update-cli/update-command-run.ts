@@ -151,7 +151,7 @@ export function completeUpdateCommandRun(
     return result;
   }
   const normalized = normalizeControlPlaneUpdateResult({ ...result, runId: run.runId });
-  const recordOptions = { env: run.env };
+  const recordOptions = { env: run.env, redactPaths: result.root ? [result.root] : [] };
   const active = getUpdateRun(run.runId, recordOptions);
   if (active) {
     recordUpdateRunPhase(

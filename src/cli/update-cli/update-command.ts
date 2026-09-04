@@ -643,9 +643,6 @@ async function updateCommandInternal(
     recoveryState,
   });
   if (!execution) {
-    if (recoveryState.windowsTaskAutoStartRecovery?.interrupted()) {
-      finishUpdateRun(run.runId, { status: "skipped", reason: "cancelled" }, { env: run.env });
-    }
     return;
   }
   const { result, preManagedServiceStop, ownedManagedUpdateContext, recoveryEnv } = execution;

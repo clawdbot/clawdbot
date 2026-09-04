@@ -916,6 +916,8 @@ enum class GatewayMethod(
   PluginsControlUiReload("plugins.controlUi.reload"),
   PluginsControlUiReport("plugins.controlUi.report"),
   PluginsControlUiStatus("plugins.controlUi.status"),
+  UpdateRunsGet("update.runs.get"),
+  UpdateRunsList("update.runs.list"),
 }
 
 enum class GatewayEvent(
@@ -977,6 +979,7 @@ enum class GatewayEvent(
   TerminalData("terminal.data"),
   TerminalExit("terminal.exit"),
   UpdateAvailable("update.available"),
+  UpdateRunChanged("update.run.changed"),
   PortalChanged("portal.changed"),
   ProgressCardChanged("progressCard.changed"),
   MentionsChanged("mentions.changed"),

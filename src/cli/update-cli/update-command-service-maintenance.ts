@@ -23,7 +23,7 @@ import { resolveSystemdServiceName } from "../../daemon/systemd-service-files.js
 import { sha256Hex } from "../../infra/crypto-digest.js";
 import { readActiveGatewayLockIdentity } from "../../infra/gateway-lock.js";
 import { probePortUsage } from "../../infra/ports-probe.js";
-import { recordUpdateRunPhase } from "../../infra/update-run-ledger.js";
+import { finishUpdateRun, recordUpdateRunPhase } from "../../infra/update-run-ledger.js";
 import type { UpdateRunResult } from "../../infra/update-runner.js";
 import { defaultRuntime } from "../../runtime.js";
 import {
@@ -253,8 +253,10 @@ function serviceControlStdoutForMode(jsonMode: boolean): NodeJS.WritableStream {
 function armWindowsTaskAutoStartRecovery(
   serviceEnv: NodeJS.ProcessEnv,
   assertCurrentService?: () => Promise<void>,
+  updateRun?: UpdateCommandOptions["run"],
 ): WindowsTaskAutoStartRecovery {
   let restorePromise: Promise<void> | undefined;
+  let restorationFailed = false;
   let restoreAllowed = true;
   let unregisterSignalExitBarrier = () => {};
   let finishUpdate: (() => void) | undefined;
@@ -285,15 +287,35 @@ function armWindowsTaskAutoStartRecovery(
     unregisterSignalExitBarrier();
   };
   const complete = (restartSafe = true) => {
-    if (!restartSafe) {
-      // Re-enabling a rejected installation would let a login trigger bypass
-      // the updater's unsafe-stop decision after this process has exited.
-      restoreAllowed = false;
-      removeSignalHandlers();
+    try {
+      // Native preparation may abort before returning its recovery handle.
+      // Persist that outcome before releasing the signal's process-exit gate.
+      if (finishUpdate && interrupted && updateRun && (restoreAllowed || restorationFailed)) {
+        const failed = restorationFailed || !restartSafe;
+        finishUpdateRun(
+          updateRun.runId,
+          {
+            status: failed ? "failed" : "skipped",
+            reason: restorationFailed
+              ? "windows-task-autostart-restore-failed"
+              : failed
+                ? "update-failed"
+                : "cancelled",
+          },
+          { env: updateRun.env },
+        );
+      }
+    } finally {
+      if (!restartSafe) {
+        // Re-enabling a rejected installation would let a login trigger bypass
+        // the updater's unsafe-stop decision after this process has exited.
+        restoreAllowed = false;
+        removeSignalHandlers();
+      }
+      finishUpdate?.();
+      finishUpdate = undefined;
+      unregisterSignalExitGate();
     }
-    finishUpdate?.();
-    finishUpdate = undefined;
-    unregisterSignalExitGate();
   };
   const restore = (restartSafe?: boolean) => {
     // Finalization has already reported this lifecycle's outcome. A retained
@@ -312,6 +334,10 @@ function armWindowsTaskAutoStartRecovery(
           await assertCurrentService?.();
           await resumeScheduledTaskAutoStartAfterUpdate(serviceEnv);
         }
+      })
+      .catch((error: unknown) => {
+        restorationFailed = true;
+        throw error;
       })
       .finally(removeSignalHandlers);
     return restorePromise;
@@ -351,11 +377,16 @@ async function abortWindowsTaskUpdateIfInterrupted(
 async function maybeSuspendWindowsTaskAutoStartForUpdate(params: {
   serviceEnv: NodeJS.ProcessEnv | undefined;
   assertCurrentService?: () => Promise<void>;
+  updateRun?: UpdateCommandOptions["run"];
 }): Promise<WindowsTaskAutoStartRecovery | undefined> {
   if (process.platform !== "win32" || !params.serviceEnv) {
     return undefined;
   }
-  const recovery = armWindowsTaskAutoStartRecovery(params.serviceEnv, params.assertCurrentService);
+  const recovery = armWindowsTaskAutoStartRecovery(
+    params.serviceEnv,
+    params.assertCurrentService,
+    params.updateRun,
+  );
   let suspended: boolean;
   try {
     suspended = await recovery.suspended;
@@ -497,6 +528,7 @@ export async function maybeStopManagedServiceBeforeMutableUpdate(params: {
   const suspendTask = () =>
     maybeSuspendWindowsTaskAutoStartForUpdate({
       serviceEnv: serviceState.env,
+      updateRun: params.updateRun,
       // Doctor pins a definition for the whole repair. Ordinary updates may
       // hand off to a replacement package root before restoring task autostart.
       assertCurrentService: params.expectedService

@@ -3,6 +3,7 @@ import { randomUUID } from "node:crypto";
 import fs from "node:fs";
 import { DatabaseSync } from "node:sqlite";
 import { afterEach, describe, expect, it, vi } from "vitest";
+import { UPDATE_RUN_PHASES } from "../../packages/gateway-protocol/src/update-run-vocabulary.js";
 import { createTempDirTracker } from "../../test/helpers/temp-dir.js";
 import {
   closeOpenClawStateDatabaseForTest,
@@ -263,8 +264,42 @@ describe("update run ledger", () => {
     expect(getUpdateRun(run.runId, options)?.steps.at(-1)?.detail).toBe("x".repeat(1_023));
   });
 
-  it("persists safe diagnostic summaries while dropping raw logs, secrets, and private absolute paths", () => {
+  it("preserves every phase and its timestamps when multibyte details exceed the JSON budget", () => {
     const options = isolatedOptions();
+    const clock = vi.spyOn(Date, "now").mockReturnValue(1_000);
+    const run = createUpdateRun({ trigger: "cli" }, options);
+    const phases = UPDATE_RUN_PHASES.filter((phase) => phase !== "finished");
+    for (const [index, phase] of phases.entries()) {
+      clock.mockReturnValue(1_000 + index * 100);
+      recordUpdateRunPhase(
+        run.runId,
+        phase,
+        { step: { step: phase, status: "in_progress", detail: "界".repeat(1_024) } },
+        options,
+      );
+    }
+    clock.mockReturnValue(2_000);
+    finishUpdateRun(run.runId, { status: "failed", reason: "restart-unhealthy" }, options);
+    const persisted = getUpdateRun(run.runId, options)!;
+    expect(persisted.steps.map(({ step }) => step)).toEqual(phases);
+    expect(persisted.steps.map(({ startedAtMs }) => startedAtMs)).toEqual(
+      phases.map((_, index) => 1_000 + index * 100),
+    );
+    expect(persisted.steps.map(({ endedAtMs }) => endedAtMs)).toEqual(
+      phases.map((_, index) => (index === phases.length - 1 ? 2_000 : 1_100 + index * 100)),
+    );
+    expect(persisted.steps.at(-1)?.status).toBe("failed");
+    expect(Buffer.byteLength(JSON.stringify(persisted.steps))).toBeLessThanOrEqual(16 * 1024);
+  });
+
+  it("persists safe diagnostic summaries while dropping raw logs, secrets, and private absolute paths", () => {
+    const options = {
+      env: {
+        ...isolatedOptions().env,
+        HOME: "/Users/example",
+        USERPROFILE: "C:\\Users\\example",
+      },
+    };
     const run = createUpdateRun({ trigger: "cli" }, options);
     const detail =
       "doctor failed in /Users/example/private/config.json and C:\\Users\\example\\private.json with token=synthetic-test-token";
@@ -286,7 +321,44 @@ describe("update run ledger", () => {
     ]) {
       expect(serialized).not.toContain(privateValue);
     }
-    expect(persisted?.steps.at(-1)?.detail).toContain("[path]");
+    expect(persisted?.steps.at(-1)?.detail).toContain("~/private/config.json");
+  });
+
+  it("preserves model refs, slash commands, URLs, and usable home-relative recovery selectors", () => {
+    const options = {
+      env: { ...isolatedOptions().env, HOME: "/home/operator" },
+      redactPaths: ["/opt/openclaw-candidate", "\\\\host\\share"],
+    };
+    const run = createUpdateRun(
+      {
+        trigger: "cli",
+        origin: {
+          nextAction: "Run openclaw update cleanup --dry-run for state /home/operator/.openclaw.",
+        },
+      },
+      options,
+    );
+    const summary = `openai/gpt-5.6-luna: use /update; see https://docs.openclaw.ai/cli/update, http://host/share/x and https://host/share/x. Read config:${options.env.OPENCLAW_STATE_DIR}/state/openclaw.sqlite and file:///home/operator/module.js and /opt/openclaw-candidate/config.json and \\\\host\\share\\x; token=synthetic-test-token`;
+    recordUpdateRunRepairAttempt(
+      run.runId,
+      { attempt: 1, status: "failed", startedAtMs: 1, summary },
+      options,
+    );
+    const persisted = getUpdateRun(run.runId, options)!;
+    expect(persisted.origin.nextAction).toContain("~/.openclaw");
+    expect(persisted.repair[0]?.summary).toContain("openai/gpt-5.6-luna: use /update");
+    expect(persisted.repair[0]?.summary).toContain("https://docs.openclaw.ai/cli/update");
+    expect(persisted.repair[0]?.summary).toContain("http://host/share/x");
+    expect(persisted.repair[0]?.summary).toContain("https://host/share/x");
+    expect(persisted.repair[0]?.summary).not.toContain("\\\\host\\share");
+    for (const privateValue of [
+      "/home/operator",
+      options.env.OPENCLAW_STATE_DIR,
+      "/opt/openclaw-candidate",
+      "synthetic-test-token",
+    ]) {
+      expect(JSON.stringify(persisted)).not.toContain(privateValue);
+    }
   });
 
   it("rejects invalid public record identities and vocabulary before writing", () => {
