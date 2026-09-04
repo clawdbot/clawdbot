@@ -61,8 +61,8 @@ import { cleanupSystemAgentSession, createSystemAgentSession } from "./agent-tur
 import { runSystemAgentTurnWithDeps } from "./agent-turn.test-support.js";
 import { resolveSystemAgentConfiguredRouteFromConfig } from "./inference-route.js";
 import { setupInferenceLog } from "./setup-inference-core.js";
-import { runSetupInferenceTest } from "./setup-inference-persist.js";
 import { resolveSetupInferenceProbeStreamParams } from "./setup-inference-probe.js";
+import { runSetupInferenceTest } from "./setup-inference-test.js";
 import {
   SetupInferenceActivationIndeterminateError,
   activateSetupInference as activateSetupInferenceImpl,
