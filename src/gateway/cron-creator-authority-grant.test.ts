@@ -267,8 +267,8 @@ describe("cron management authority grants", () => {
     ["expiry", () => vi.spyOn(Date, "now").mockReturnValue(Date.now() + 60_000)],
   ] as const)("denies a suspended operation after %s", async (_label, invalidate) => {
     const fixture = createManagementFixture();
-    const started = createDeferred<void>();
-    const resume = createDeferred<void>();
+    const started = createDeferred();
+    const resume = createDeferred();
     const effect = vi.fn();
     const operation = withCronManagementGrant(
       fixture.mint(),

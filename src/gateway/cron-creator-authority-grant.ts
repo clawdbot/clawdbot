@@ -10,6 +10,7 @@ import {
   type AgentRunDelegatedAuthority,
 } from "../infra/agent-run-registry.js";
 import type { AgentRuntimeIdentity } from "./agent-runtime-identity-token.js";
+import type { CronCreatorAuthorityGrant } from "./cron-creator-authority-grant.types.js";
 
 export const CRON_MANAGEMENT_METHODS = [
   "cron.list",
@@ -23,11 +24,6 @@ const activeManagement = new AsyncLocalStorage<{
   identity: AgentRuntimeIdentity;
   assertActive: () => void;
 }>();
-
-export type CronCreatorAuthorityGrant = Readonly<{
-  runId: string;
-  token: string;
-}>;
 
 export type CronCreatorAuthorityRunScope = {
   readonly runId: string;

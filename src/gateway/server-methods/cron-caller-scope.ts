@@ -14,10 +14,8 @@ import type {
 import { normalizeAccountId } from "../../routing/account-id.js";
 import { normalizeAgentId } from "../../routing/session-key.js";
 import { parseAgentSessionKey } from "../../sessions/session-key-utils.js";
-import {
-  getCronManagementAuthority,
-  type CronCreatorAuthorityGrant,
-} from "../cron-creator-authority-grant.js";
+import { getCronManagementAuthority } from "../cron-creator-authority-grant.js";
+import type { CronCreatorAuthorityGrant } from "../cron-creator-authority-grant.types.js";
 import type { GatewayClient } from "./types.js";
 
 export type CronCallerScope = {

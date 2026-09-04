@@ -1075,11 +1075,11 @@ export const cronHandlers: GatewayRequestHandlers = {
       }
     }
     const touchesToolRuntime = cronPatchTouchesToolRuntime(patch);
-    const validateUpdate = async (currentJob: CronJob) => {
+    const validateUpdate = async (jobToUpdate: CronJob) => {
       const nextJob = await assertValidCronUpdatePatch({
         cfg,
         defaultAgentId: context.cron.getDefaultAgentId(),
-        currentJob,
+        currentJob: jobToUpdate,
         patch,
       });
       if (

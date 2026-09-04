@@ -18,8 +18,8 @@ import {
   createCronCreatorAuthorityRunScope,
   mintCronCreatorAuthorityGrant,
   revokeCronCreatorAuthorityRunScope,
-  type CronCreatorAuthorityGrant,
 } from "../../gateway/cron-creator-authority-grant.js";
+import type { CronCreatorAuthorityGrant } from "../../gateway/cron-creator-authority-grant.types.js";
 import { buildAgentPeerSessionKey } from "../../routing/session-key.js";
 import {
   bindActiveCronCreatorAuthorityResolver,

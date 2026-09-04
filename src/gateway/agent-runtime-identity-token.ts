@@ -24,7 +24,7 @@ import {
   withAgentRuntimeExecutionLineageRedemption,
 } from "./agent-runtime-execution-lineage.js";
 import type { AgentRuntimeSessionSpawnContext } from "./agent-runtime-session-spawn-context.js";
-import type { CronCreatorAuthorityGrant } from "./cron-creator-authority-grant.js";
+import type { CronCreatorAuthorityGrant } from "./cron-creator-authority-grant.types.js";
 import {
   resolveMessageActionTurnCapability,
   type AgentRuntimeMessageActionContext,

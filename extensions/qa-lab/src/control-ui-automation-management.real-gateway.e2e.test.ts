@@ -89,7 +89,9 @@ async function startAutomationProvider() {
     results,
     async stop() {
       server.closeAllConnections();
-      await new Promise<void>((resolve) => server.close(() => resolve()));
+      await new Promise<void>((resolve) => {
+        server.close(() => resolve());
+      });
     },
   };
 }
@@ -257,7 +259,7 @@ suite.define(() => {
                   window as Window & {
                     __OPENCLAW_NATIVE_CONTROL_AUTH__?: { gatewayUrl: string; token: string };
                   }
-                ).__OPENCLAW_NATIVE_CONTROL_AUTH__ = { gatewayUrl, token };
+                )["__OPENCLAW_NATIVE_CONTROL_AUTH__"] = { gatewayUrl, token };
               },
               { gatewayUrl: gateway.wsUrl, token: gateway.token },
             );
