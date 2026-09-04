@@ -581,27 +581,33 @@ suite.define(() => {
         });
       }
 
-      const cardElement = await page
-        .locator("openclaw-plugin-view")
-        .filter({ has: cardWidget })
-        .elementHandle();
+      const nativeCardView = page.locator("openclaw-plugin-view").filter({ has: cardWidget });
+      const cardElement = await nativeCardView.elementHandle();
       expect(cardElement).not.toBeNull();
       await cardElement?.evaluate((element) => {
         Reflect.set(globalThis, "workboardPluginElementIdentity", element);
       });
+      const expectRetainedCardView = async (presented: boolean) => {
+        await expect
+          .poll(() =>
+            nativeCardView.evaluate(
+              (element, visible) =>
+                element === Reflect.get(globalThis, "workboardPluginElementIdentity") &&
+                element.isConnected &&
+                Reflect.get(element, "presented") === visible,
+              presented,
+            ),
+          )
+          .toBe(true);
+      };
+      await focusChatSidePanel(page);
+      await expectRetainedCardView(true);
+      await page.getByRole("button", { name: "Restore split", exact: true }).click();
+      await restoreChatAsMain(page);
       const listCountBeforeHide = (await gateway.getRequests("workboard.cards.list")).length;
       await page.locator('[data-region-header="side"] .side-panel__minimize').click();
       await expect.poll(() => page.locator(".board-session-surface").isVisible()).toBe(false);
-      await expect
-        .poll(() =>
-          cardElement?.evaluate(
-            (element) =>
-              element === Reflect.get(globalThis, "workboardPluginElementIdentity") &&
-              element.isConnected &&
-              Reflect.get(element, "presented") === false,
-          ),
-        )
-        .toBe(true);
+      await expectRetainedCardView(false);
       await gateway.setMethodResponse(
         "workboard.cards.list",
         workboardCardsListResponse([refreshedCard, alreadyRunningCard]),
@@ -633,17 +639,7 @@ suite.define(() => {
         .toBe(listCountBeforeHide + 2);
       await expect.poll(() => cardWidget.textContent()).toContain(refreshedCard.title);
       await expect.poll(() => accessory.textContent()).toContain(refreshedCard.title);
-      const reopenedCardElement = page.locator("openclaw-plugin-view").filter({ has: cardWidget });
-      await expect
-        .poll(() =>
-          reopenedCardElement.evaluate(
-            (element) =>
-              element === Reflect.get(globalThis, "workboardPluginElementIdentity") &&
-              Reflect.get(element, "presented") === true &&
-              element.isConnected,
-          ),
-        )
-        .toBe(true);
+      await expectRetainedCardView(true);
 
       await cardWidget.getByRole("combobox").selectOption("running");
       const moveRequest = await gateway.waitForRequest("workboard.cards.move");

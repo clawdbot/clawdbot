@@ -155,7 +155,6 @@ describe("chat sidebar region", () => {
         dashboard: nothing,
         workspace: html`<div data-panel="workspace">Workspace panel</div>`,
         tasks: nothing,
-        detailOpen: false,
         renderDetail: () => html``,
         digest: null,
         activeRunId: null,

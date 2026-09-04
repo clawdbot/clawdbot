@@ -8,6 +8,11 @@ import {
   defaultControlUiFeatureMethods,
   installMockGateway,
 } from "../test-helpers/control-ui-e2e.ts";
+import {
+  dockChatSidePanel,
+  focusChatSidePanel,
+  restoreChatAsMain,
+} from "./chat-side-panel.test-support.ts";
 import { createControlUiE2eSuite } from "./control-ui-e2e-suite.test-support.ts";
 
 const suite = createControlUiE2eSuite({ name: "Native plugin UI ownership" });
@@ -555,10 +560,10 @@ suite.define(() => {
         await page.getByRole("link", { name: "UI fixture", exact: true }).waitFor();
         const accessories = page.locator("[data-fixture-session-accessory]");
         const accessory = accessories.filter({ hasText: sessionKey });
-        const expectOneAccessory = async (key = sessionKey, visible = true) => {
+        const expectOneAccessory = async (key = sessionKey) => {
           await expect
             .poll(() => page.locator("[data-fixture-session-accessory]:visible").allTextContents())
-            .toEqual(visible ? [key] : []);
+            .toEqual([key]);
           expect(await accessories.filter({ hasText: key }).count()).toBe(1);
         };
         await expectOneAccessory();
@@ -570,20 +575,19 @@ suite.define(() => {
         await page.locator(".board-session-surface:not([hidden])").waitFor();
         await expectOneAccessory();
         for (const dock of ["bottom", "right"] as const) {
-          await page.locator(`.side-panel__dock-${dock}`).click();
+          await dockChatSidePanel(page, dock);
           await expect
             .poll(() => page.locator(".sidebar-region--bottom").count())
             .toBe(dock === "bottom" ? 1 : 0);
           await expectOneAccessory();
         }
-        for (const expanded of [true, false]) {
-          await page.locator(".side-panel__expand").click();
-          await expect
-            .poll(() => page.locator(".sidebar-region--expanded").count())
-            .toBe(expanded ? 1 : 0);
-          await expectOneAccessory(sessionKey, !expanded);
-        }
-        await page.locator(".side-panel__minimize").click();
+        await focusChatSidePanel(page);
+        await expectOneAccessory();
+        await page.getByRole("button", { name: "Restore split", exact: true }).click();
+        await expect.poll(() => page.locator(".sidebar-region--expanded").count()).toBe(0);
+        await restoreChatAsMain(page);
+        await expectOneAccessory();
+        await page.locator('[data-region-header="side"] .side-panel__minimize').click();
         await expect.poll(() => page.locator(".board-session-surface").isVisible()).toBe(false);
         await expectOneAccessory();
         await page.screenshot({ path: path.join(suite.artifactDir, "before.png"), fullPage: true });

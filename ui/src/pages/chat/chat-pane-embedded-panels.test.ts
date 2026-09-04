@@ -59,9 +59,11 @@ describe("chat pane embedded panels", () => {
       hello: { features: { methods: ["sessions.diff"] } },
       sessionKey: "agent:main:review",
       sidebarContent: null,
+      sidebarLayout: { columns: [] },
     } as unknown as ChatPageHost;
     const mount = document.body.appendChild(document.createElement("div"));
     const renderPanels = async (layout: SidebarLayout) => {
+      state.sidebarLayout = layout;
       const definitions = sidebarPanelDefinitions({
         state,
         renderDetail: (content) =>
