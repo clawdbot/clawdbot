@@ -2016,7 +2016,7 @@ src/agents/tools-effective-inventory.ts	4
 src/agents/tools/agent-step.ts	2
 src/agents/tools/agents-wait-tool.ts	1
 src/agents/tools/ask-user-tool-normalization.ts	3
-src/agents/tools/ask-user-tool.ts	8
+src/agents/tools/ask-user-tool.ts	5
 src/agents/tools/automations-tool-name.ts	1
 src/agents/tools/chat-history-text.ts	3
 src/agents/tools/common.ts	2
