@@ -39,7 +39,7 @@ import { resolveUpdateTargetEnv } from "./update-command-service-env.js";
 
 const CLI_NAME = resolveCliName();
 
-export async function runPackageInstallUpdate(params: {
+export type PackageInstallUpdateParams = {
   root: string;
   installKind: "git" | "package" | "unknown";
   tag: string;
@@ -56,7 +56,11 @@ export async function runPackageInstallUpdate(params: {
   nodeRunner?: string;
   installEnv?: NodeJS.ProcessEnv;
   installTarget?: ResolvedGlobalInstallTarget;
-}): Promise<UpdateRunResult> {
+};
+
+export async function runPackageInstallUpdate(
+  params: PackageInstallUpdateParams,
+): Promise<UpdateRunResult> {
   const installEnv = params.installEnv ?? (await createGlobalInstallEnv());
   const runCommand = createGlobalCommandRunner();
   let installTarget = params.installTarget;
