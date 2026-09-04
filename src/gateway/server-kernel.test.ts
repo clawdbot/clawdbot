@@ -442,11 +442,14 @@ describe("createGatewayKernel", () => {
       const releaseConnectionStop = createDeferred();
       const releaseLateConnectionStop = createDeferred();
       const connectionSidecar = {
-        stop: vi.fn<() => Promise<void>>(async () => {
-          connectionStopEntered.resolve();
-          await releaseConnectionStop.promise;
-          throw connectionStopError;
-        }),
+        stop: vi
+          .fn<() => Promise<void>>()
+          .mockImplementationOnce(async () => {
+            connectionStopEntered.resolve();
+            await releaseConnectionStop.promise;
+            throw connectionStopError;
+          })
+          .mockResolvedValue(undefined),
       };
       kernel.registerConnectionDependentSidecars([connectionSidecar]);
       const closeTransport = vi.fn(() => releaseConnection());
@@ -510,16 +513,7 @@ describe("createGatewayKernel", () => {
       const duringSealSidecar = { stop: vi.fn(async () => {}) };
       kernel.registerGatewayLifetimeSidecars([duringSealSidecar]);
       releaseLateLifetimeStop();
-      await expect(closing).rejects.toMatchObject({
-        errors: [
-          {
-            message:
-              "shutdown step failed (connection-dependent sidecars): remote worker stop failed",
-            cause: connectionStopError,
-          },
-        ],
-      });
-      connectionSidecar.stop.mockResolvedValue(undefined);
+      await expect(closing).resolves.toBeUndefined();
       closePreludeReached.mockRestore();
       expect(lifetimeSidecar.stop).toHaveBeenCalledTimes(2);
       expect(trailingSidecar).toHaveBeenCalledOnce();

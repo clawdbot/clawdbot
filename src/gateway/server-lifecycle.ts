@@ -479,6 +479,7 @@ export async function prepareGatewayLifecycle(params: {
     },
   });
   const stopConnectionDependentSidecars = async () => {
+    // Failed worker stops still need their supervisor transport and runtime dependencies.
     try {
       await connectionDependentSidecarStopOwner.stop();
     } finally {
@@ -580,7 +581,11 @@ export async function prepareGatewayLifecycle(params: {
     await beginClosePrelude({ reason: "gateway startup failed" });
     await runGatewayShutdownSteps({
       steps: [
-        { name: "connection-dependent sidecars", run: stopConnectionDependentSidecars },
+        {
+          name: "connection-dependent sidecars",
+          run: stopConnectionDependentSidecars,
+          required: true,
+        },
         {
           name: "received connection work",
           run: () => runtime.connectionWork.drain(),

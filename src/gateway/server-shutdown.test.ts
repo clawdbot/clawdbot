@@ -19,7 +19,7 @@ describe("gateway shutdown steps", () => {
   it.each([false, true])(
     "retains prior failures and respects a required join (failure: %s)",
     async (joinFails) => {
-      const stopError = new Error("worker stop failed");
+      const stopError = new Error("optional sidecar stop failed");
       const drainError = new Error("connection cleanup failed");
       const closeDependencies = vi.fn();
       const drain = vi.fn(async () => {
@@ -32,7 +32,7 @@ describe("gateway shutdown steps", () => {
         runGatewayShutdownSteps({
           steps: [
             {
-              name: "connection-dependent sidecars",
+              name: "optional sidecars",
               run: () => {
                 throw stopError;
               },
@@ -45,7 +45,7 @@ describe("gateway shutdown steps", () => {
       ).rejects.toMatchObject({
         errors: [
           {
-            message: "shutdown step failed (connection-dependent sidecars): worker stop failed",
+            message: "shutdown step failed (optional sidecars): optional sidecar stop failed",
             cause: stopError,
           },
           ...(joinFails

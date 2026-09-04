@@ -111,7 +111,11 @@ export async function startGatewayServerCore(
           await prelude;
           await runGatewayShutdownSteps({
             steps: [
-              { name: "connection-dependent sidecars", run: stopConnectionDependentSidecars },
+              {
+                name: "connection-dependent sidecars",
+                run: stopConnectionDependentSidecars,
+                required: true,
+              },
               {
                 name: "received connection work",
                 run: () => gatewayKernel.connectionWork.drain(),

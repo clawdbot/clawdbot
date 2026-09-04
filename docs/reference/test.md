@@ -489,8 +489,10 @@ lifetime owner preserves existing hook, test, and action budgets.
 
 Gateway close joins received WebSocket work and asynchronous connection cleanup,
 including cooperating background refreshes registered at their producer with
-`trackAsyncWork`. Register the actual operation, not just its response or timeout
-wrapper; cache eviction does not end its lifetime. `withOpenClawTestState` likewise
+`trackAsyncWork`. Connection-dependent worker sidecars must stop successfully
+before supervisor transports or other dependencies close; failure retains those
+dependencies and rejects shutdown. Register the actual operation, not just its
+response or timeout wrapper; cache eviction does not end its lifetime. `withOpenClawTestState` likewise
 joins registered callback descendants before releasing state. MCP requests observe
 both caller cancellation and their closing work owner, so shutdown cancels pending
 requests before joining handlers and disposing transports. These scopes do not
