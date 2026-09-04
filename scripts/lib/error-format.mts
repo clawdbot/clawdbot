@@ -27,7 +27,24 @@ export function toErrorObject(value: unknown, fallbackMessage: string): Error {
   }
   const error = new Error(fallbackMessage, { cause: value });
   if ((typeof value === "object" && value !== null) || typeof value === "function") {
-    Object.assign(error, value);
+    // Twin of the canonical safe-copy loop in packages/normalization-core
+    // (error-coercion.ts) and packages/retry (index.ts): skipping own `__proto__`
+    // blocks the prototype-setter hijack; Reflect.set keeps Object.assign semantics.
+    // Object.assign reads each source value before its target write, so the
+    // skipped key still observes its descriptor trap and a throwing getter.
+    for (const key of Reflect.ownKeys(value)) {
+      const descriptor = Reflect.getOwnPropertyDescriptor(value, key);
+      if (descriptor === undefined || !descriptor.enumerable) {
+        continue;
+      }
+      const fieldValue = Reflect.get(value, key);
+      if (key === "__proto__") {
+        continue;
+      }
+      if (!Reflect.set(error, key, fieldValue)) {
+        throw new TypeError(`Cannot assign property ${String(key)} to error target`);
+      }
+    }
   }
   return error;
 }

@@ -8,6 +8,11 @@ export type FormatErrorMessageOptions = {
 const STRUCTURED_ERROR_OWNED_FIELDS = new Set(["cause", "message", "name", "stack"]);
 const STRUCTURED_ERROR_PROTOTYPE_FIELDS = new Set(["__proto__", "constructor", "prototype"]);
 
+// toErrorObject copies with Object.assign semantics (only __proto__ skipped, so
+// [[Set]] preserves existing Error descriptors and propagates throwing accessors);
+// toStructuredErrorObject below uses stricter isolation (skips owned + prototype
+// fields, swallows failures) so a hostile proxy cannot crash it.
+
 function readProperty(value: object, key: "cause" | "code" | "status"): unknown {
   try {
     return (value as Record<string, unknown>)[key];
@@ -144,7 +149,23 @@ export function toErrorObject(value: unknown, fallbackMessage: string): Error {
   }
   const error = new Error(fallbackMessage, { cause: value });
   if ((typeof value === "object" && value !== null) || typeof value === "function") {
-    Object.assign(error, value);
+    // Object.assign minus __proto__: a parsed own enumerable __proto__ would
+    // replace this Error's prototype, so it is skipped to block prototype hijack.
+    // Object.assign reads each source value before its target write, so the
+    // skipped key still observes its descriptor trap and a throwing getter.
+    for (const key of Reflect.ownKeys(value)) {
+      const descriptor = Reflect.getOwnPropertyDescriptor(value, key);
+      if (descriptor === undefined || !descriptor.enumerable) {
+        continue;
+      }
+      const fieldValue = Reflect.get(value, key);
+      if (key === "__proto__") {
+        continue;
+      }
+      if (!Reflect.set(error, key, fieldValue)) {
+        throw new TypeError(`Cannot assign property ${String(key)} to error target`);
+      }
+    }
   }
   return error;
 }
@@ -159,13 +180,19 @@ export function toStructuredErrorObject(value: unknown): Error {
     return toErrorObject(value, message);
   }
   const error = new Error(message, { cause: value });
+  // Stricter isolation than toErrorObject: skip owned Error fields (keep the
+  // construction-time message/stack/cause) and prototype-accessor keys, and
+  // swallow descriptor/getter failures so a hostile proxy cannot crash it.
   try {
     const detailKeys = Reflect.ownKeys(value).filter(
       (key) =>
         (typeof key !== "string" ||
           (!STRUCTURED_ERROR_OWNED_FIELDS.has(key) &&
             !STRUCTURED_ERROR_PROTOTYPE_FIELDS.has(key))) &&
-        Reflect.getOwnPropertyDescriptor(value, key)?.enumerable,
+        // Ignored keys must be excluded before descriptor access: a proxy may
+        // throw from its trap for exactly the keys this coercer drops, and one
+        // throwing probe must not discard the remaining safe details.
+        Reflect.getOwnPropertyDescriptor(value, key)?.enumerable === true,
     );
     for (const key of detailKeys) {
       try {
