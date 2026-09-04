@@ -595,9 +595,7 @@ describe("containerRestRequest", () => {
   });
 
   it("caps oversized REST request timeouts before arming abort timers", async () => {
-    const timeoutSpy = vi
-      .spyOn(globalThis, "setTimeout")
-      .mockReturnValue(0 as unknown as ReturnType<typeof setTimeout>);
+    const timeoutSpy = vi.spyOn(globalThis, "setTimeout");
     try {
       mockFetch.mockResolvedValue({
         ok: true,
