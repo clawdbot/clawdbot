@@ -346,11 +346,16 @@ export function resolveAssistantErrorPresentation(
   msg: AssistantMessage,
   opts?: AssistantErrorTextOptions,
 ): { text: string; attribution: "provider" | "runtime" } {
-  // Recorded runtime origin outranks provider-looking text, status and auth hints.
-  if (msg.diagnostics?.some((diagnostic) => diagnostic.type === "synthesized_run_failure")) {
-    return { text: GENERIC_ASSISTANT_ERROR_TEXT, attribution: "runtime" };
-  }
   const rawError = msg.errorMessage?.trim();
+  // Keep local remediation while rejecting provider attribution inferred from runtime text.
+  if (msg.diagnostics?.some((diagnostic) => diagnostic.type === "synthesized_run_failure")) {
+    const text =
+      formatDiskSpaceErrorCopy(rawError ?? "") ??
+      (isTimeoutErrorMessage(rawError ?? "")
+        ? SYNTHESIZED_TIMEOUT_ERROR_TEXT
+        : GENERIC_ASSISTANT_ERROR_TEXT);
+    return { text, attribution: "runtime" };
+  }
   const facts = classifyAssistantErrorFacts(msg, opts);
   const friendlyError = formatAssistantErrorText(msg, opts, facts);
   const rawPassthrough = isRawAssistantErrorPassthrough({ friendlyError, rawError });

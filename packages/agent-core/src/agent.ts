@@ -8,7 +8,6 @@ import type {
   ThinkingBudgets,
   Transport,
 } from "@openclaw/llm-core";
-import { withRunFailureOrigin } from "@openclaw/llm-core/diagnostics";
 import { runAgentLoop, runAgentLoopContinue } from "./agent-loop.js";
 import { TranscriptNotContinuableError } from "./errors.js";
 import { attachInternalSyncSteeringGetter, getInternalBeforeToolBatch } from "./internal-hooks.js";
@@ -664,12 +663,10 @@ export class Agent {
 
   private async handleRunFailure(error: unknown, signal: AbortSignal): Promise<void> {
     const aborted = signal.aborted;
-    const failureMessage = createFailureMessage(
-      this.mutableState.model,
-      withRunFailureOrigin(error, "runtime", signal),
-      aborted,
+    const failureMessage = createFailureMessage(this.mutableState.model, error, aborted, {
       signal,
-    );
+      origin: "runtime",
+    });
     await this.processEvents({ type: "message_start", message: failureMessage });
     await this.processEvents({ type: "message_end", message: failureMessage });
     await this.processEvents({ type: "turn_end", message: failureMessage, toolResults: [] });

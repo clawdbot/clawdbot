@@ -156,12 +156,13 @@ describe("agentLoop EventStream failures", () => {
 
   it("preserves a runtime abort through a replacement exception in the public stream", async () => {
     const controller = new AbortController();
+    const failure = withRunFailureOrigin(new Error("harness failed"), "runtime");
     const stream = agentLoopContinue(
       { systemPrompt: "", messages: [{ role: "user", content: "hello", timestamp: 1 }] },
       config,
       controller.signal,
       () => {
-        controller.abort(withRunFailureOrigin(new Error("harness failed"), "runtime"));
+        controller.abort(failure);
         throw transportAbortError(controller.signal);
       },
     );
@@ -170,6 +171,17 @@ describe("agentLoop EventStream failures", () => {
       stopReason: "aborted",
       diagnostics: [{ type: "synthesized_run_failure", timestamp: expect.any(Number) }],
     });
+    await expect(
+      runAgentLoopContinue(
+        { systemPrompt: "", messages: [{ role: "user", content: "hello", timestamp: 1 }] },
+        config,
+        () => {},
+        undefined,
+        () => {
+          throw failure;
+        },
+      ),
+    ).rejects.toBe(failure);
   });
 
   it.each(["agent", "stream"] as const)(

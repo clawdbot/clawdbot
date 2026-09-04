@@ -426,10 +426,12 @@ export function assignTransportErrorDetails(
   output: AssistantMessage,
   error: unknown,
   signal?: AbortSignal,
+  sourceError: unknown = error,
 ): ProviderErrorProjection {
   const projection = projectProviderError(unwrapRunFailure(error), signal);
   Object.assign(output, projection);
-  appendRuntimeFailureDiagnostic(output, error, signal);
+  // Cancellation can replace displayed details without changing the caught failure's origin.
+  appendRuntimeFailureDiagnostic(output, sourceError, signal);
   if (
     projection.stopReason === "error" &&
     output.content.length === 0 &&

@@ -95,6 +95,16 @@ export function withRunFailureOrigin(
   origin: RunFailureOrigin,
   signal?: AbortSignal,
 ): Error {
+  const capturedOrigin = getRunFailureOrigin(error);
+  if (capturedOrigin) {
+    try {
+      if (error instanceof Error && readErrorData(error, RUN_FAILURE_ORIGIN) === capturedOrigin) {
+        return error;
+      }
+    } catch {
+      // A foreign proxy cannot prevent construction of a safe failure wrapper.
+    }
+  }
   const message =
     error && typeof error === "object"
       ? readErrorData(error, "message")
@@ -107,7 +117,7 @@ export function withRunFailureOrigin(
     {
       // Known failures retain their source; the first abort supplies provenance for replacements.
       value:
-        getRunFailureOrigin(error) ??
+        capturedOrigin ??
         (signal?.aborted ? getRunFailureOrigin(signal.reason) : undefined) ??
         origin,
     },
@@ -132,6 +142,7 @@ export function appendRuntimeFailureDiagnostic(
   message: { stopReason: string; timestamp: number; diagnostics?: AssistantMessageDiagnostic[] },
   error: unknown,
   signal?: AbortSignal,
+  fallbackOrigin?: "runtime",
 ): void {
   // Keep the source already captured before a later caller abort. Transports
   // replacing an uncoded reason recover its origin from the first abort instead.
@@ -139,7 +150,8 @@ export function appendRuntimeFailureDiagnostic(
     getRunFailureOrigin(error) ??
     ((message.stopReason === "error" || message.stopReason === "aborted") && signal?.aborted
       ? getRunFailureOrigin(signal.reason)
-      : undefined);
+      : undefined) ??
+    fallbackOrigin;
   if (
     origin === "runtime" &&
     !message.diagnostics?.some((d) => d.type === "synthesized_run_failure")

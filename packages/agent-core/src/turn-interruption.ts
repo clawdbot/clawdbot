@@ -10,7 +10,7 @@ export function createFailureMessage(
   model: Model,
   error: unknown,
   aborted: boolean,
-  signal?: AbortSignal,
+  options?: { signal?: AbortSignal; origin?: "runtime" },
 ): AssistantMessage {
   const message: AssistantMessage = {
     role: "assistant",
@@ -30,7 +30,7 @@ export function createFailureMessage(
       cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, total: 0 },
     },
   };
-  appendRuntimeFailureDiagnostic(message, error, signal);
+  appendRuntimeFailureDiagnostic(message, error, options?.signal, options?.origin);
   return message;
 }
 

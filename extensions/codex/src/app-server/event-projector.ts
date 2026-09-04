@@ -1,6 +1,5 @@
 // Codex plugin module implements event projector behavior.
 import {
-  withRunFailureOrigin,
   runAgentHarnessAfterCompactionHook,
   runAgentHarnessBeforeCompactionHook,
   type AgentMessage,
@@ -435,8 +434,7 @@ export class CodexAppServerEventProjector {
 
   markTimedOut(): void {
     this.aborted = true;
-    const error = "codex app-server attempt timed out";
-    this.terminalFailure.promptError = withRunFailureOrigin(error, "runtime");
+    this.terminalFailure.promptError = "codex app-server attempt timed out";
     this.terminalFailure.promptErrorSource = "prompt";
   }
 

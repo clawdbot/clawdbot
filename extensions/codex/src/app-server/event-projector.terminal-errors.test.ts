@@ -1,8 +1,4 @@
 import {
-  getRunFailureOrigin,
-  resolveAssistantErrorPresentation,
-} from "openclaw/plugin-sdk/agent-harness-runtime";
-import {
   describe,
   registerCodexEventProjectorTestLifecycle,
   expect,
@@ -55,19 +51,11 @@ describe("CodexAppServerEventProjector terminal errors", () => {
           ),
         );
         const terminal = readAttemptTerminal(projector.buildResult(buildEmptyToolTelemetry()));
-        expect(getRunFailureOrigin(terminal.promptError)).toBeUndefined();
         expect(terminal.promptError).toBeInstanceOf(Error);
         expect(terminal.promptError).toMatchObject({ message: error.message, ...facts });
       }
     },
   );
-
-  it("marks the projector's own timeout as a runtime failure", async () => {
-    const projector = await createProjector();
-    projector.markTimedOut();
-    const result = projector.buildResult(buildEmptyToolTelemetry());
-    expect(getRunFailureOrigin(readAttemptTerminal(result).promptError)).toBe("runtime");
-  });
 
   it("does not treat app-server interrupted status as a user cancellation by itself", async () => {
     const projector = await createProjector();
@@ -205,10 +193,7 @@ describe("CodexAppServerEventProjector terminal errors", () => {
       aborted: false,
       promptErrorSource: "prompt",
     });
-    expect(readAttemptTerminal(result).promptError).toMatchObject({
-      message: expect.stringContaining("without a matching tool.result"),
-    });
-    expect(getRunFailureOrigin(readAttemptTerminal(result).promptError)).toBe("runtime");
+    expect(readAttemptTerminal(result).promptError).toContain("without a matching tool.result");
     expect(result.lastToolError).toBeUndefined();
   });
 
@@ -301,13 +286,6 @@ describe("CodexAppServerEventProjector terminal errors", () => {
             candidate.diagnostics?.some((diagnostic) => diagnostic.type === "provider_refusal"),
         ),
       ).toHaveLength(1);
-
-      projector.markTimedOut();
-      const timedOut = projector.buildResult(buildEmptyToolTelemetry());
-      expect(getRunFailureOrigin(readAttemptTerminal(timedOut).promptError)).toBe("runtime");
-      expect(resolveAssistantErrorPresentation(timedOut.currentAttemptAssistant!).attribution).toBe(
-        "runtime",
-      );
     },
   );
 

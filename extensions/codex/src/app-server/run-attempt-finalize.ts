@@ -1,10 +1,6 @@
 import { addAbortListener } from "node:events";
 import {
-  appendRuntimeFailureDiagnostic,
   buildEmbeddedForegroundPromptContext,
-  getRunFailureOrigin,
-  resolveAssistantErrorPresentation,
-  withRunFailureOrigin,
   embeddedAgentLog,
   formatErrorMessage,
   runAgentHarnessLlmOutputHook,
@@ -20,7 +16,6 @@ import {
 import { attemptTerminal, type EmbeddedRunAttemptResult } from "./attempt-terminal.js";
 import { TURN_FINALIZE_DRAIN_ABORT_GRACE_MS } from "./attempt-timeouts.js";
 import { buildCodexContinuityCalibration } from "./context-engine-projection.js";
-import { createAssistantMessage } from "./event-projector-assistant-message.js";
 import { flattenCodexDynamicToolFunctions } from "./protocol.js";
 import { readCodexRateLimitsRevision, readRecentCodexRateLimits } from "./rate-limit-cache.js";
 import type { CodexAttemptActiveTurn } from "./run-attempt-active-turn.js";
@@ -164,14 +159,11 @@ export async function finalizeCodexAttempt(
   let finalPromptError =
     resourceState.executionDisconnectError ??
     clientClosedPromptErrorForFinal ??
-    (state.timeout
-      ? withRunFailureOrigin(
-          state.timeout.kind === "settlement"
-            ? "codex app-server terminal settlement timed out"
-            : "codex app-server execution budget timed out",
-          "runtime",
-        )
-      : projectedTerminal.promptError);
+    (state.timeout?.kind === "settlement"
+      ? "codex app-server terminal settlement timed out"
+      : state.timeout?.kind === "execution"
+        ? "codex app-server execution budget timed out"
+        : projectedTerminal.promptError);
   const finalPromptErrorMessage =
     typeof finalPromptError === "string"
       ? finalPromptError
@@ -217,8 +209,7 @@ export async function finalizeCodexAttempt(
   }
   const refreshedUsageLimitPromptError = await refreshCodexUsageLimitPromptError({
     client: resourceState.client,
-    message:
-      getRunFailureOrigin(finalPromptError) === "runtime" ? undefined : finalPromptErrorMessage,
+    message: finalPromptErrorMessage,
     timeoutMs: appServer.requestTimeoutMs,
     signal: runAbortController.signal,
   });
@@ -332,7 +323,6 @@ export async function finalizeCodexAttempt(
         message.stopReason = finalAborted ? "aborted" : finalPromptError ? "error" : "stop";
         message.errorMessage = finalPromptError ? formatErrorMessage(finalPromptError) : undefined;
       }
-      appendRuntimeFailureDiagnostic(message, finalPromptError);
     }
   }
   const modelCallFailureKind =
@@ -528,23 +518,11 @@ export async function finalizeCodexAttempt(
       data: { text: terminalAssistantText },
     });
   }
-  const errorPresentation = finalPromptError
-    ? resolveAssistantErrorPresentation(
-        createAssistantMessage(params, "", {
-          tokenUsage: undefined,
-          aborted: finalAborted,
-          promptError: finalPromptError,
-        }),
-      )
-    : undefined;
   emitLifecycleTerminal(
     finalPromptError
       ? {
           phase: "error",
-          error:
-            errorPresentation?.attribution === "runtime"
-              ? errorPresentation.text
-              : formatErrorMessage(finalPromptError),
+          error: formatErrorMessage(finalPromptError),
           ...buildLifecycleTerminalMeta({ aborted: finalAborted, timedOut: effectiveTimedOut }),
         }
       : {

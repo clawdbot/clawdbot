@@ -944,16 +944,22 @@ describe("runtime failure presentation", () => {
     }
     return message;
   };
-  it.each([errorText, "HTTP 503 unavailable", "context length exceeded"])(
-    "prioritizes synthesized runtime origin over %s",
-    (text) => {
-      const message = makeAssistantMessageFixture({
-        errorMessage: text,
-        diagnostics: [{ type: "synthesized_run_failure", timestamp: 1 }],
-      });
-      expect(formatUserFacingAssistantErrorText(message)).toBe(GENERIC_ASSISTANT_ERROR_TEXT);
-    },
-  );
+  it.each([
+    [errorText, GENERIC_ASSISTANT_ERROR_TEXT],
+    ["HTTP 503 unavailable", GENERIC_ASSISTANT_ERROR_TEXT],
+    ["context length exceeded", GENERIC_ASSISTANT_ERROR_TEXT],
+    ["runtime callback timed out", "LLM request timed out."],
+    [
+      "ENOSPC: no space left on device, write",
+      "OpenClaw could not write local session data because the disk is full. Free some disk space and try again.",
+    ],
+  ])("renders runtime failure %s without provider attribution", (text, expected) => {
+    const message = makeAssistantMessageFixture({
+      errorMessage: text,
+      diagnostics: [{ type: "synthesized_run_failure", timestamp: 1 }],
+    });
+    expect(formatUserFacingAssistantErrorText(message)).toBe(expected);
+  });
   it.each(["onPayload", "onResponse"] as const)(
     "keeps the runtime %s callback neutral",
     async (hook) => {
