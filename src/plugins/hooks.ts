@@ -24,6 +24,10 @@ import { formatHookErrorForLog } from "../hooks/fire-and-forget.js";
 import { formatErrorMessage } from "../infra/errors.js";
 import { projectModelContextMessages } from "../shared/model-context-message.js";
 import { concatOptionalTextSegments } from "../shared/text/join-segments.js";
+import type {
+  PluginHookBeforeToolCallResult,
+  PluginHostBeforeToolCallResult,
+} from "./hook-before-tool-call-result.js";
 import {
   type GateHookResult,
   type InputGateDecision,
@@ -60,7 +64,6 @@ import type {
   PluginHookInboundClaimEvent,
   PluginHookInboundClaimResult,
   PluginHookBeforeToolCallEvent,
-  PluginHookBeforeToolCallResult,
   PluginAgentTurnPrepareEvent,
   PluginAgentTurnPrepareResult,
   PluginHeartbeatPromptContributionEvent,
@@ -1448,8 +1451,8 @@ export function createHookRunner(
       assertAuthority: () => boolean | void;
       markOwnerDecision?: () => void;
     }>,
-  ): Promise<PluginHookBeforeToolCallResult | undefined> {
-    return runModifyingHook<"before_tool_call", PluginHookBeforeToolCallResult>(
+  ): Promise<PluginHostBeforeToolCallResult | undefined> {
+    return runModifyingHook<"before_tool_call", PluginHostBeforeToolCallResult>(
       "before_tool_call",
       event,
       ctx,

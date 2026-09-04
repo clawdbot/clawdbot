@@ -351,7 +351,8 @@ export function readPluginSdkSurfaceBudgets(env: NodeJS.ProcessEnv = process.env
       // +2: browser-safe Date timestamp validation and UTF-16 truncation primitives.
       // +3: capability catalog descriptors, entry factories, and native host context.
       // +2: canonical paragraph grouping and UTF-16 boundaries for channel-owned chunking.
-      4433,
+      // +6: external verification approvals surface (types, runtime state, verifier contracts) for plugin-owned HITL.
+      4439,
       env,
     ),
     publicFunctionExports: readPluginSdkSurfaceBudgetEnv(

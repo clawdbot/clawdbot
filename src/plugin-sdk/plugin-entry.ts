@@ -12,6 +12,14 @@ export type {
 } from "../plugins/capability-catalog-context.types.js";
 export type { PluginCapabilityCatalog } from "../plugins/capability-catalog.types.js";
 export type { OpenClawConfig } from "../config/types.openclaw.js";
+export type {
+  PluginExternalResolution,
+  PluginExternalVerificationAttempt,
+  PluginExternalVerificationCompletionResult,
+  PluginExternalVerificationContext,
+  PluginExternalVerificationGrantAuthorization,
+  PluginExternalVerificationGrantStore,
+} from "../plugins/external-verification-approval-types.js";
 
 export type {
   AgentHarness,

@@ -23,6 +23,20 @@ const { retiredRegistries, activatedRegistries, registryEpochs, recordEpochs, re
 export type PluginRegistryLifecycleEpoch = object;
 type PluginRecordLifecycleEpoch = object;
 
+const lifecycleListeners = new Set<() => void>();
+
+function notifyPluginRegistryLifecycleListeners(): void {
+  for (const listener of lifecycleListeners) {
+    listener();
+  }
+}
+
+/** Observe activation edges that can replace runtime-owned plugin capabilities. */
+export function onPluginRegistryLifecycleChange(listener: () => void): () => void {
+  lifecycleListeners.add(listener);
+  return () => lifecycleListeners.delete(listener);
+}
+
 /** Marks a registry retired so late runtime calls can reject stale plugin state. */
 export function markPluginRegistryRetired(registry: PluginRegistry | null | undefined): void {
   if (registry) {
@@ -31,6 +45,7 @@ export function markPluginRegistryRetired(registry: PluginRegistry | null | unde
     // Retired registrations cannot be reused and retain their Gateway/cache generation.
     // Release every cache key now, including keys that will never be looked up again.
     pluginLoaderCacheState.deleteValue(registry);
+    notifyPluginRegistryLifecycleListeners();
   }
 }
 
@@ -42,6 +57,7 @@ export function markPluginRegistryActive(registry: PluginRegistry | null | undef
     // Every activation owns a fresh opaque generation. A retired closure cannot
     // regain authority merely because the same registry object becomes active.
     registryEpochs.set(registry, Object.freeze({}));
+    notifyPluginRegistryLifecycleListeners();
   }
 }
 
