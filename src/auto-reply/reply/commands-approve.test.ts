@@ -223,6 +223,36 @@ describe("handleApproveCommand", () => {
     expect(result?.reply?.text).toContain("Usage: /approve");
   });
 
+  it.each(["constructor", "__proto__", "toString", "valueOf"])(
+    "rejects Object.prototype decision %s instead of treating it as an approval decision",
+    async (decision) => {
+      const result = await handleApproveCommand(
+        buildApproveParams(`/approve abc ${decision}`, {
+          commands: { text: true },
+          channels: { whatsapp: { allowFrom: ["*"] } },
+        } as OpenClawConfig),
+        true,
+      );
+      expect(result?.shouldContinue).toBe(false);
+      expect(result?.reply?.text).toContain("Usage: /approve");
+      expect(resolveApprovalOverGatewayMock).not.toHaveBeenCalled();
+    },
+  );
+
+  it("still accepts a real own-key decision after prototype names are rejected", async () => {
+    resolveApprovalOverGatewayMock.mockResolvedValue(undefined);
+    const result = await handleApproveCommand(
+      buildApproveParams("/approve abc deny", {
+        commands: { text: true },
+        channels: { whatsapp: { allowFrom: ["*"] } },
+      } as OpenClawConfig),
+      true,
+    );
+    expect(result?.shouldContinue).toBe(false);
+    expect(result?.reply?.text).toContain("Approval deny submitted");
+    expectApprovalResolverCall({ method: "exec.approval.resolve", id: "abc", decision: "deny" });
+  });
+
   it.each([
     {
       name: "submits approval",
