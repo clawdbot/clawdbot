@@ -1,4 +1,5 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
+import { createDeferred } from "../../../test/helpers/promise.js";
 import type { AuthProfileStore } from "../../agents/auth-profiles/types.js";
 import * as providerAuth from "../../agents/model-provider-auth.js";
 import { PreparedModelCatalogConfigReplacedError } from "../../agents/prepared-model-catalog.errors.js";
@@ -65,8 +66,8 @@ describe("/models browse catalog recovery", () => {
       vi.useFakeTimers();
       let current = true;
       catalogMocks.isCurrent = () => current;
-      const evaluating = Promise.withResolvers<void>();
-      const resumeAuth = Promise.withResolvers<void>();
+      const evaluating = createDeferred();
+      const resumeAuth = createDeferred();
       const evaluateModelAuth = vi.fn(async () => ({
         availability: true as const,
         routeResolution: null,

@@ -1,4 +1,5 @@
 import { beforeEach, describe, expect, it, vi } from "vitest";
+import { createDeferred } from "../../test/helpers/promise.js";
 
 const mocks = vi.hoisted(() => ({
   config: {} as object,
@@ -125,8 +126,8 @@ describe("prepared model catalog access", () => {
     async ({ readOnly, rejectProjection }) => {
       let current = true;
       const snapshot = { ...readOnlySnapshot, isCurrent: () => current };
-      const started = Promise.withResolvers<void>();
-      const resume = Promise.withResolvers<void>();
+      const started = createDeferred();
+      const resume = createDeferred();
       const failure = new Error("projection failed");
       mocks.prepareSnapshot.mockRejectedValue(new PreparedModelRuntimeOwnerNotPublishedError());
       mocks.loadSnapshot.mockResolvedValue(snapshot);
