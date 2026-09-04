@@ -3866,7 +3866,8 @@ if (canonicalProvider === "blacksmith-testbox") {
   if (normalizedArgs[0] === "run") {
     // Native full sync relies on receiver-side dir-merge rules. Apple openrsync
     // drops them and deletes ignored runtime data before our source receiver runs.
-    const rsync = checkedOutput("rsync", ["--version"]);
+    const rsyncBinary = resolvePathBinary("rsync", process.env, process.platform) ?? "rsync";
+    const rsync = checkedOutput(rsyncBinary, ["--version"]);
     const gnuRsync = /^rsync\s+version\s+\d+\.\d+\.\d+\s+protocol version\s+\d+\b/u.test(
       rsync.stdout,
     );
