@@ -138,7 +138,7 @@ describe("unavailable finalization through the real core backend", () => {
       const result = await prepareTerminalWithSettledTurnFinalization(input);
 
       expect("finalizeSettledTurn" in input.finalization.harness).toBe(false);
-      expect(input.finalization.harness.finalizeSettledTurn).toBeUndefined();
+      expect(Reflect.get(input.finalization.harness, "finalizeSettledTurn")).toBeUndefined();
       expect(runAttempt).not.toHaveBeenCalled();
       expect(result.finalizationOutcome).toBe("failed");
       expect(JSON.stringify(attempt)).toBe(original);

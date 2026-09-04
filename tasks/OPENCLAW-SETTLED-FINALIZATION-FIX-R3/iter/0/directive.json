@@ -1,24 +1,25 @@
 {
   "schema_version": 1,
   "iter": 0,
-  "ts": "2026-09-03T23:12:08.336Z",
-  "goal": "Continue the existing settled post-tool finalization repair from the recorded checkpoint. Do not repeat dependency installation, docs indexing, planning, or baseline discovery. Your next action is the strict true-undefined RED regression before any production edit.",
+  "ts": "2026-09-04T03:24:02.341Z",
+  "goal": "Finish the remaining bounded baseline-equivalence evidence and pre-review documentation/scope/LOC checks for the preserved R3 candidate, then return evidence to Planner.",
   "constraints": [
-    "Treat G0 as confirmed green at 0ff55f67ac9e3c9ae14bf3cab4d56e56e75a6e1c.",
-    "Read and preserve the existing plan.md, goal.json, branch, evidence, and tasks/ ledger; never stage, edit, or delete tasks/ content.",
-    "Add the regression only in an allowed test file with harness.finalizeSettledTurn genuinely undefined.",
-    "Run the focused unavailable test and record RED caused specifically by absent fallback behavior, not setup or fixture failure.",
-    "Only after valid RED, make the canonical owner repair using the existing fallback path; add no parallel recovery, replay, retry, config, protocol, schema, or dependency surface.",
-    "Coder owns edits; Reviewer remains read-only until all pre-review gates are green at a recorded exact HEAD.",
-    "Do not push or create a pull request."
+    "Resume the latest durable checkpoint; preserve all files, hashes, prior evidence, instruction snapshot, branch, and roles.",
+    "Accept and do not rerun the recorded controlled pairs: zstd candidate/base each failed 26 of 37; Android/Ruby candidate/base each had the same two failures; systemd candidate/base each timed out the exact environment case at 120000ms after the same unsafe-permissions prerequisite.",
+    "Do not rerun the full suite, the full systemd file, or any previously completed candidate gate.",
+    "Finish only any remaining representative timing/auth candidate-versus-base comparison that can complete quickly, using identical environments and exact targeted commands. Stop and report if it cannot be bounded safely.",
+    "Run `pnpm docs:list` and cache-corrected `pnpm check:docs`, then the exact scope gates: `git diff --check`, `git diff --name-status`, and `git diff --numstat` against base `194b7f2a16196481a70c139fb31f1777bdfbdc12`.",
+    "Classify production, test, docs, planner, and ledger deltas separately; verify production LOC is net-neutral or negative and no out-of-scope tracked file is present.",
+    "Preserve the intended `Reflect.get` regression assertion.",
+    "Do not edit, format, repair, stage, commit, push, delete, or manually commit anything; the orchestrator owns commits.",
+    "Return exact commands, exit statuses, baseline-pair evidence, docs results, scope results, LOC classification, current tracked status, and hashes to Planner.",
+    "Do not emit iter_complete; Reviewer must not start."
   ],
   "success_criteria": [
-    "Valid pre-production-edit RED with finalizeSettledTurn truly undefined.",
-    "Same focused test becomes green after the canonical repair.",
-    "No model or tool replay; exactly one persisted and returned fallback for eligible visible turns.",
-    "Failed-tool truth and silentExpected behavior remain intact.",
-    "Production LOC is net-neutral or negative.",
-    "All plan.md and goal.json gates pass before exact-HEAD review."
+    "Every remaining quickly bounded timing/auth representative has controlled candidate/base evidence, or a precise boundedness reason is recorded.",
+    "Documentation checks reach terminal status.",
+    "Scope, diff-check, and LOC gates reach terminal status with production LOC at most zero and no unexplained tracked path.",
+    "No files are changed or committed, and complete evidence returns to Planner without Reviewer."
   ],
-  "max_attempts": 6
+  "max_attempts": 1
 }
