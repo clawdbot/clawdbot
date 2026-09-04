@@ -3,6 +3,7 @@ import type { OpenClawConfig } from "openclaw/plugin-sdk/config-contracts";
 import { beforeAll, describe, expect, it } from "vitest";
 import { loadFreshIMessageReplyCacheForTest } from "../test-support/runtime.js";
 import { createSentMessageCache } from "./echo-cache.js";
+import { createSelfChatCache } from "./self-chat-cache.js";
 
 type InboundProcessingModule = typeof import("./inbound-processing.js");
 let resolveIMessageInboundDecision: InboundProcessingModule["resolveIMessageInboundDecision"];
@@ -138,5 +139,31 @@ describe("resolveIMessageInboundDecision reply_to_guid echo detection", () => {
     });
 
     expect(decision.kind).toBe("dispatch");
+  });
+
+  it("does not drop authored self-chat row with reply_to_guid matching outbound", async () => {
+    const echoCache = createSentMessageCache();
+    const selfChatCache = createSelfChatCache();
+    const scope = "default:imessage:+15555550123";
+    echoCache.remember(scope, { text: "Hello", messageId: "GUID-A" });
+
+    const decision = await resolveDecision({
+      message: {
+        id: 104,
+        guid: "GUID-E",
+        reply_to_guid: "GUID-A",
+        text: "Hello",
+        is_from_me: true,
+        sender: "+15555550123",
+        chat_identifier: "+15555550123",
+        destination_caller_id: "+15555550123",
+      },
+      messageText: "Hello",
+      bodyText: "Hello",
+      echoCache,
+      selfChatCache,
+    });
+
+    expect(decision.kind).not.toBe("drop");
   });
 });

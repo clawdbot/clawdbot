@@ -577,7 +577,9 @@ export async function resolveIMessageInboundDecision(params: {
   // but reference the outbound GUID via reply_to_guid. Check this before
   // access/pairing so a mirror from an unpaired or blocked sender is still
   // suppressed as an echo rather than triggering pairing or access handling.
-  if (params.echoCache && replyToGuid && bodyText) {
+  // Skip authored (is_from_me=true) rows — those are self-chat echoes handled
+  // by the self-chat cache above, not paired mirrors from the database.
+  if (params.echoCache && !params.message.is_from_me && replyToGuid && bodyText) {
     const earlyEchoScope = buildIMessageEchoScope({
       accountId: params.accountId,
       isGroup,
@@ -796,7 +798,7 @@ export async function resolveIMessageInboundDecision(params: {
         media: mediaFacts[0],
         messageIds: inboundMessageIds,
         includePendingText: isSelfChat,
-        replyToGuid,
+        replyToGuid: isSelfChat ? undefined : replyToGuid,
       })
     ) {
       params.logVerbose?.(

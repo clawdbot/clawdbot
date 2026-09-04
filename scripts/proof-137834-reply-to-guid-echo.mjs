@@ -195,6 +195,35 @@ const results = [];
   });
 }
 
+// Scenario 7: authored self-chat row with reply_to_guid — must not be dropped
+{
+  const echoCache = createSentMessageCache();
+  echoCache.remember(scope, { text: "Hello", messageId: "GUID-A" });
+  const decision = await resolveIMessageInboundDecision(
+    makeParams({
+      message: {
+        id: 104,
+        guid: "GUID-E",
+        reply_to_guid: "GUID-A",
+        text: "Hello",
+        is_from_me: true,
+        sender: "+15555550123",
+        chat_identifier: "+15555550123",
+        destination_caller_id: "+15555550123",
+      },
+      messageText: "Hello",
+      bodyText: "Hello",
+      echoCache,
+    }),
+  );
+  results.push({
+    scenario: "authored self-chat: is_from_me=true, reply_to_guid=GUID-A, text=Hello",
+    expected: "not drop",
+    actual: decision.kind,
+    pass: decision.kind !== "drop",
+  });
+}
+
 const allPass = results.every((r) => r.pass);
 
 const verdict = {
