@@ -26,18 +26,23 @@ import {
   stripProposalFrontmatterForSkill,
 } from "../skills/workshop/frontmatter.js";
 import { resolveWorkshopSkillsDir } from "../skills/workshop/skills-root.js";
-import { hashSkillProposalContent } from "../skills/workshop/store.js";
+import { hashSkillProposalContent, importLegacySkillProposal } from "../skills/workshop/store.js";
 import { SKILL_WORKSHOP_SCHEMA, type SkillProposalRecord } from "../skills/workshop/types.js";
 import {
   closeOpenClawStateDatabaseForTest,
   openOpenClawStateDatabase,
+  repairOpenClawStateDatabaseSchemaIfNeeded,
 } from "../state/openclaw-state-db.js";
 import {
   createOpenClawTestState,
   type OpenClawTestState,
 } from "../test-utils/openclaw-test-state.js";
 import { migrateLegacySkillWorkshopProposals } from "./doctor-skill-workshop-sqlite.js";
-import { seedLegacyV15ProposalRows } from "./doctor-skill-workshop-sqlite.test-support.js";
+import {
+  createAppliedLegacyProposal,
+  readSkillProposalRecord,
+  seedLegacyV15ProposalRows,
+} from "./doctor-skill-workshop-sqlite.test-support.js";
 
 let state: OpenClawTestState;
 
@@ -238,6 +243,109 @@ describe("Workshop relocation and workspace survival", () => {
       expect(readWorkspaceStateSnapshot(fixture.workspaceDir).attestation).toBeUndefined();
     },
   );
+
+  it("captures a new attestation only for remaining filesystem moves", async () => {
+    const fixture = await createLegacyWorkspace();
+    repairOpenClawStateDatabaseSchemaIfNeeded({ env: state.env });
+    deleteWorkspaceState(prepareWorkspaceStateDeletion(fixture.workspaceDir));
+    const before = readWorkspaceStateSnapshot(fixture.workspaceDir);
+    expect(before.attestation).toBeUndefined();
+    const name = "remaining-relocation";
+    const skillDir = path.join(fixture.workspaceDir, "skills", name);
+    const skillFile = path.join(skillDir, "SKILL.md");
+    const draft = renderProposalMarkdown({
+      name,
+      description: "Procedure remaining after interruption",
+      content: "# Remaining procedure\n",
+      date: fixture.created.createdAt,
+    });
+    const content = stripProposalFrontmatterForSkill(draft);
+    const remaining = createAppliedLegacyProposal({
+      id: "workspace-remaining-20260901-1234567890",
+      title: "Create remaining procedure",
+      description: "Procedure remaining after interruption",
+      content: draft,
+      target: {
+        skillName: name,
+        skillKey: name,
+        skillDir,
+        skillFile,
+        source: "openclaw-workspace",
+      },
+    });
+    await fs.mkdir(skillDir, { recursive: true });
+    await fs.writeFile(skillFile, content);
+    await state.writeText(
+      path.join("skill-workshop", "proposals", remaining.id, "PROPOSAL.md"),
+      draft,
+    );
+    importLegacySkillProposal({
+      record: remaining,
+      ownerAgentId: "main",
+      store: { env: state.env },
+    });
+
+    await interruptPendingWrite({ ...fixture, before });
+
+    await expect(fs.readFile(skillFile, "utf8")).resolves.toBe(content);
+    const receipts = openOpenClawStateDatabase({ env: state.env }).db.prepare(`
+      SELECT status,
+        json_extract(report_json, '$.attestedAtMs') AS attested_at_ms,
+        json_array_length(report_json, '$.moves') AS move_count,
+        json_extract(report_json, '$.moves[0].source') AS moved_source
+      FROM migration_sources
+      WHERE migration_kind = ? AND source_path = ?
+    `);
+    expect(receipts.all(WORKSPACE_CONTENT_RELOCATION_MIGRATION_KIND, fixture.workspaceDir)).toEqual(
+      [],
+    );
+    await ensureAgentWorkspace({ dir: fixture.workspaceDir, ensureBootstrapFiles: false });
+    const attested = readWorkspaceStateSnapshot(fixture.workspaceDir);
+    expect(attested.attestation).toBeDefined();
+    expect(attested.attestation?.generatedHashes.size).toBe(0);
+
+    const resumed = await migrateLegacySkillWorkshopProposals({
+      config: fixture.config,
+      env: state.env,
+    });
+
+    expect(resumed.warnings).toEqual([]);
+    expect(readWorkspaceStateSnapshot(fixture.workspaceDir).attestation).toBeUndefined();
+    expect(receipts.all(WORKSPACE_CONTENT_RELOCATION_MIGRATION_KIND, fixture.workspaceDir)).toEqual(
+      [
+        {
+          status: "completed",
+          attested_at_ms: attested.attestation!.attestedAtMs,
+          move_count: 1,
+          moved_source: skillDir,
+        },
+      ],
+    );
+    for (const record of [fixture.created, fixture.pending, remaining]) {
+      const destination = path.join(
+        resolveWorkshopSkillsDir(fixture.config, "main", state.env),
+        record.target.skillKey,
+      );
+      await expect(readSkillProposalRecord(record.id, { env: state.env })).resolves.toMatchObject({
+        status: record.status,
+        target: {
+          skillDir: destination,
+          skillFile: path.join(destination, "SKILL.md"),
+          source: "openclaw-workshop",
+        },
+      });
+    }
+    await expect(fs.readFile(path.join(fixture.destination, "SKILL.md"), "utf8")).resolves.toBe(
+      fixture.content,
+    );
+    await expect(
+      fs.readFile(
+        path.join(resolveWorkshopSkillsDir(fixture.config, "main", state.env), name, "SKILL.md"),
+        "utf8",
+      ),
+    ).resolves.toBe(content);
+    await expectWorkspaceUsable(fixture.workspaceDir);
+  });
 
   it("resumes saved workspace cleanup after a pending proposal write interrupts relocation", async () => {
     const fixture = await createLegacyWorkspace();

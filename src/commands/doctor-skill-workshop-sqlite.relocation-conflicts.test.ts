@@ -15,11 +15,13 @@ import {
   type OpenClawTestState,
 } from "../test-utils/openclaw-test-state.js";
 import { createTrackedTempDirs } from "../test-utils/tracked-temp-dirs.js";
+import { planWorkshopRelocation } from "./doctor-skill-workshop-relocation.js";
 import {
   inspectLegacySkillWorkshopMigration,
   migrateLegacySkillWorkshopProposals,
 } from "./doctor-skill-workshop-sqlite.js";
 import {
+  createAppliedLegacyProposal,
   readSkillProposalRecord,
   seedLegacyV15ProposalRows,
 } from "./doctor-skill-workshop-sqlite.test-support.js";
@@ -44,20 +46,11 @@ describe("doctor Skill Workshop SQLite relocation conflicts and recovery", () =>
       await tempDirs.make("openclaw-workshop-invalid-relocation-workspace-"),
     );
     const skillDir = path.join(workspaceDir, "skills", "invalid-relocation");
-    const now = "2026-09-01T00:00:00.000Z";
-    const record: SkillProposalRecord = {
-      schema: SKILL_WORKSHOP_SCHEMA,
+    const record = createAppliedLegacyProposal({
       id: "invalid-relocation-20260901-1234567890",
-      kind: "create",
-      status: "applied",
       title: "Create Invalid Relocation",
       description: "Invalid relocation",
-      createdAt: now,
-      updatedAt: now,
-      createdBy: "skill-workshop",
-      proposedVersion: "v1",
-      draftFile: "PROPOSAL.md",
-      draftHash: hashSkillProposalContent("invalid relocation"),
+      content: "invalid relocation",
       target: {
         skillName: "invalid-relocation",
         skillKey: "invalid-relocation",
@@ -65,9 +58,7 @@ describe("doctor Skill Workshop SQLite relocation conflicts and recovery", () =>
         skillFile: path.join(skillDir, "SKILL.md"),
         source: "openclaw-workspace",
       },
-      scan: { state: "clean", scannedAt: now, critical: 0, warn: 0, info: 0, findings: [] },
-      appliedAt: now,
-    };
+    });
     await fs.mkdir(skillDir, { recursive: true });
     seedLegacyV15ProposalRows(testState.env, [{ record, workspaceDir, claimReleasedTime: null }]);
 
@@ -146,7 +137,6 @@ describe("doctor Skill Workshop SQLite relocation conflicts and recovery", () =>
     const sentinelContent = "Unrelated shared content.\n";
     const normalContent =
       "---\nname: normal-workshop\ndescription: Normal procedure\n---\n\n# Normal\n";
-    const now = "2026-09-01T00:00:00.000Z";
     const records = [
       {
         id: "linked-workshop-20260901-1234567890",
@@ -163,19 +153,11 @@ describe("doctor Skill Workshop SQLite relocation conflicts and recovery", () =>
         content: normalContent,
       },
     ].map(({ id, skillName, skillDir, skillFile, content }) => ({
-      record: {
-        schema: SKILL_WORKSHOP_SCHEMA,
+      record: createAppliedLegacyProposal({
         id,
-        kind: "create",
-        status: "applied",
         title: `Create ${skillName}`,
         description: `${skillName} procedure`,
-        createdAt: now,
-        updatedAt: now,
-        createdBy: "skill-workshop",
-        proposedVersion: "v1",
-        draftFile: "PROPOSAL.md",
-        draftHash: hashSkillProposalContent(content),
+        content,
         target: {
           skillName,
           skillKey: skillName,
@@ -183,9 +165,7 @@ describe("doctor Skill Workshop SQLite relocation conflicts and recovery", () =>
           skillFile,
           source: skillName === normalSkillName ? "agents-skills-project" : "openclaw-workspace",
         },
-        scan: { state: "clean", scannedAt: now, critical: 0, warn: 0, info: 0, findings: [] },
-        appliedAt: now,
-      } satisfies SkillProposalRecord,
+      }),
       workspaceDir,
     }));
 
@@ -272,7 +252,6 @@ describe("doctor Skill Workshop SQLite relocation conflicts and recovery", () =>
     const secondWorkspaceDir = await fs.realpath(
       await tempDirs.make("openclaw-workshop-collision-second-workspace-"),
     );
-    const now = "2026-09-01T00:00:00.000Z";
     const skillKey = "shared-name";
     const records = [
       {
@@ -290,19 +269,11 @@ describe("doctor Skill Workshop SQLite relocation conflicts and recovery", () =>
       return {
         workspaceDir,
         content,
-        record: {
-          schema: SKILL_WORKSHOP_SCHEMA,
+        record: createAppliedLegacyProposal({
           id,
-          kind: "create",
-          status: "applied",
           title: "Create Shared Name",
           description: "Shared skill",
-          createdAt: now,
-          updatedAt: now,
-          createdBy: "skill-workshop",
-          proposedVersion: "v1",
-          draftFile: "PROPOSAL.md",
-          draftHash: hashSkillProposalContent(content),
+          content,
           target: {
             skillName: "Shared Name",
             skillKey,
@@ -310,9 +281,7 @@ describe("doctor Skill Workshop SQLite relocation conflicts and recovery", () =>
             skillFile: path.join(skillDir, "SKILL.md"),
             source: "openclaw-workspace",
           },
-          scan: { state: "clean", scannedAt: now, critical: 0, warn: 0, info: 0, findings: [] },
-          appliedAt: now,
-        } satisfies SkillProposalRecord,
+        }),
       };
     });
     for (const { record, content } of records) {
@@ -381,20 +350,11 @@ describe("doctor Skill Workshop SQLite relocation conflicts and recovery", () =>
       "---\nname: verified-adoption\ndescription: Verified procedure\n---\n\n# Verified\n";
     const destinationContent =
       "---\nname: unrelated-skill\ndescription: Unrelated procedure\n---\n\n# Unrelated\n";
-    const now = "2026-09-01T00:00:00.000Z";
-    const record: SkillProposalRecord = {
-      schema: SKILL_WORKSHOP_SCHEMA,
+    const record = createAppliedLegacyProposal({
       id: "verified-adoption-20260901-1234567890",
-      kind: "create",
-      status: "applied",
       title: "Create Verified Adoption",
       description: "Verified procedure",
-      createdAt: now,
-      updatedAt: now,
-      createdBy: "skill-workshop",
-      proposedVersion: "v1",
-      draftFile: "PROPOSAL.md",
-      draftHash: hashSkillProposalContent(expectedContent),
+      content: expectedContent,
       target: {
         skillName: "verified-adoption",
         skillKey: "verified-adoption",
@@ -402,9 +362,7 @@ describe("doctor Skill Workshop SQLite relocation conflicts and recovery", () =>
         skillFile: path.join(legacySkillDir, "SKILL.md"),
         source: "openclaw-workspace",
       },
-      scan: { state: "clean", scannedAt: now, critical: 0, warn: 0, info: 0, findings: [] },
-      appliedAt: now,
-    };
+    });
     await fs.mkdir(destination, { recursive: true });
     await fs.writeFile(path.join(destination, "SKILL.md"), destinationContent, "utf8");
     seedLegacyV15ProposalRows(testState.env, [{ record, workspaceDir, claimReleasedTime: null }]);
@@ -425,6 +383,85 @@ describe("doctor Skill Workshop SQLite relocation conflicts and recovery", () =>
       },
     );
   });
+
+  it.each([false, true])(
+    "shares adoption proof across historical creates (matching first: %s)",
+    async (matchingFirst) => {
+      const workspaceDir = await fs.realpath(
+        await tempDirs.make("openclaw-workshop-repeated-adoption-workspace-"),
+      );
+      const workshopRoot = resolveWorkshopSkillsDir({}, "main", testState.env);
+      const now = "2026-09-01T00:00:00.000Z";
+      const records = ["first-adoption", "second-adoption", "first-adoption", "first-adoption"].map(
+        (name, index) => {
+          const skillDir = path.join(workspaceDir, "skills", name);
+          const content = `---\nname: ${name}\ndescription: ${name} procedure\n---\n\n# ${name}\n`;
+          return {
+            content,
+            record: {
+              schema: SKILL_WORKSHOP_SCHEMA,
+              id: `${name}-20260901-123456789${index}`,
+              kind: index === 3 ? "update" : "create",
+              status: index === 3 ? "pending" : "applied",
+              title: `Create ${name}`,
+              description: `${name} procedure`,
+              createdAt: now,
+              updatedAt: now,
+              createdBy: "skill-workshop",
+              proposedVersion: "v1",
+              draftFile: "PROPOSAL.md",
+              draftHash: hashSkillProposalContent(index === 0 ? "unmatched content" : content),
+              target: {
+                skillName: name,
+                skillKey: name,
+                skillDir,
+                skillFile: path.join(skillDir, "SKILL.md"),
+                source: "openclaw-workspace",
+              },
+              scan: { state: "clean", scannedAt: now, critical: 0, warn: 0, info: 0, findings: [] },
+              ...(index === 3 ? {} : { appliedAt: now }),
+            } satisfies SkillProposalRecord,
+          };
+        },
+      );
+      for (const { record, content } of records.slice(0, 2)) {
+        const destination = path.join(workshopRoot, record.target.skillKey);
+        await fs.mkdir(destination, { recursive: true });
+        await fs.writeFile(path.join(destination, "SKILL.md"), content);
+      }
+
+      const ordered = matchingFirst
+        ? [records[2]!, records[1]!, records[0]!, records[3]!]
+        : records;
+      const plan = await planWorkshopRelocation(
+        ordered.map(({ record }) => ({ record, ownerAgentId: "main" })),
+        {},
+        testState.env,
+      );
+
+      expect(
+        plan.moves
+          .map(({ operation, destination, updates }) => ({
+            operation,
+            destination,
+            proposalIds: updates.map(({ record }) => record.id).toSorted(),
+          }))
+          .toSorted((left, right) => left.destination.localeCompare(right.destination)),
+      ).toEqual([
+        {
+          operation: "adopt",
+          destination: path.join(workshopRoot, "first-adoption"),
+          proposalIds: [records[0]!.record.id, records[2]!.record.id, records[3]!.record.id],
+        },
+        {
+          operation: "adopt",
+          destination: path.join(workshopRoot, "second-adoption"),
+          proposalIds: [records[1]!.record.id],
+        },
+      ]);
+      expect(plan.updates).toEqual([]);
+    },
+  );
 
   it.each(["removed source", "retained source", "changed source metadata"])(
     "recovers a real applied proposal with %s after an interrupted relocation",
@@ -514,25 +551,16 @@ describe("doctor Skill Workshop SQLite relocation conflicts and recovery", () =>
     const workspaceDir = await fs.realpath(
       await tempDirs.make("openclaw-workshop-relocation-failure-workspace-"),
     );
-    const now = "2026-09-01T00:00:00.000Z";
     const records = ["first-relocation", "second-relocation"].map((name) => {
       const skillDir = path.join(workspaceDir, "skills", name);
       const content = `---\nname: ${name}\ndescription: ${name} procedure\n---\n\n# ${name}\n`;
       return {
         content,
-        record: {
-          schema: SKILL_WORKSHOP_SCHEMA,
+        record: createAppliedLegacyProposal({
           id: `${name}-20260901-1234567890`,
-          kind: "create",
-          status: "applied",
           title: `Create ${name}`,
           description: `${name} procedure`,
-          createdAt: now,
-          updatedAt: now,
-          createdBy: "skill-workshop",
-          proposedVersion: "v1",
-          draftFile: "PROPOSAL.md",
-          draftHash: hashSkillProposalContent(content),
+          content,
           target: {
             skillName: name,
             skillKey: name,
@@ -540,9 +568,7 @@ describe("doctor Skill Workshop SQLite relocation conflicts and recovery", () =>
             skillFile: path.join(skillDir, "SKILL.md"),
             source: "openclaw-workspace",
           },
-          scan: { state: "clean", scannedAt: now, critical: 0, warn: 0, info: 0, findings: [] },
-          appliedAt: now,
-        } satisfies SkillProposalRecord,
+        }),
       };
     });
     for (const { record, content } of records) {

@@ -93,8 +93,8 @@ export function inferOwnerAgentId(params: {
 }
 
 async function verifyRelocationDestination(params: {
-  record: SkillProposalRecord;
-  observedContentHashes: ReadonlySet<string>;
+  records: readonly SkillProposalRecord[];
+  skillKey: string;
   destinationSkillDir: string;
   destinationSkillFile: string;
   config: OpenClawConfig;
@@ -110,29 +110,39 @@ async function verifyRelocationDestination(params: {
   const skillKey = frontmatter
     ? (resolveSkillManifestMetadata(frontmatter)?.skillKey ?? name)?.trim()
     : undefined;
-  let appliedContentHash = params.record.draftHash;
-  try {
-    const proposal = await readSkillProposal(
-      params.record.id,
-      { config: params.config, env: params.env },
-      {},
-      { config: params.config, reconcile: false },
-    );
-    if (proposal) {
-      appliedContentHash = hashSkillProposalContent(
-        stripProposalFrontmatterForSkill(proposal.content),
-      );
-    }
-  } catch {
-    // Legacy SQLite rows can have no proposal bundle. Their only available
-    // content fact is the stored hash, which older migration fixtures used for
-    // the applied file bytes.
-  }
-  if (content === null || skillKey !== params.record.target.skillKey) {
+  if (content === null || skillKey !== params.skillKey) {
     return false;
   }
   const contentHash = hashSkillProposalContent(content);
-  return contentHash === appliedContentHash || params.observedContentHashes.has(contentHash);
+  for (const record of params.records) {
+    if (record.status === "pending") {
+      if (record.kind === "update" && record.target.currentContentHash === contentHash) {
+        return true;
+      }
+      continue;
+    }
+    let appliedContentHash = record.kind === "create" ? record.draftHash : undefined;
+    try {
+      const proposal = await readSkillProposal(
+        record.id,
+        { config: params.config, env: params.env },
+        {},
+        { config: params.config, reconcile: false },
+      );
+      if (proposal) {
+        appliedContentHash = hashSkillProposalContent(
+          stripProposalFrontmatterForSkill(proposal.content),
+        );
+      }
+    } catch {
+      // Legacy creates can lack a bundle; retain their stored-hash recovery proof.
+      // An applied update needs its bundle, not the pre-update currentContentHash.
+    }
+    if (contentHash === appliedContentHash) {
+      return true;
+    }
+  }
+  return false;
 }
 
 function retargetWorkshopProposal(
@@ -178,8 +188,14 @@ type WorkshopRelocationPlan = {
   workspaceDir: string | undefined;
   ownerAgentId?: string;
   unconfiguredOwnerAgentId?: string;
-  moveKey?: string;
-  staleReason?: string;
+  relocation?: WorkshopRelocation;
+};
+
+type WorkshopRelocation = {
+  target: ReturnType<typeof resolveSkillProposalTarget>;
+  plans: WorkshopRelocationPlan[];
+  move?: WorkshopMove;
+  rejection?: string;
 };
 
 type WorkshopMove = {
@@ -201,12 +217,8 @@ export async function planWorkshopRelocation(
   externalProposalCountsByAgent: Record<string, number>;
   warnings: string[];
 }> {
-  const external = records.flatMap<WorkshopRelocationPlan>((entry) => {
-    // Completed updates are history; only applied creates still claim a live skill.
-    if (
-      entry.record.status !== "pending" &&
-      !(entry.record.status === "applied" && entry.record.kind === "create")
-    ) {
+  const candidates = records.flatMap<WorkshopRelocationPlan>((entry) => {
+    if (entry.record.status !== "pending" && entry.record.status !== "applied") {
       return [];
     }
     const source = path.resolve(entry.record.target.skillDir);
@@ -225,23 +237,12 @@ export async function planWorkshopRelocation(
     ) {
       return [];
     }
-    return [
-      {
-        entry,
-        source,
-        workspaceDir,
-        ...(owner.ownerAgentId ? { ownerAgentId: owner.ownerAgentId } : {}),
-        ...(owner.unconfiguredOwnerAgentId
-          ? { unconfiguredOwnerAgentId: owner.unconfiguredOwnerAgentId }
-          : {}),
-        ...(owner.unconfiguredOwnerAgentId
-          ? {
-              staleReason: `Skill Workshop could not use unconfigured owning agent "${owner.unconfiguredOwnerAgentId}"; the legacy path stays in place and the proposal is stale.`,
-            }
-          : {}),
-      },
-    ];
+    return [{ entry, source, workspaceDir, ...owner }];
   });
+  // Completed updates provide recovery evidence, not ownership or relocation actions.
+  const external = candidates.filter(
+    ({ entry }) => entry.record.status === "pending" || entry.record.kind === "create",
+  );
   const warnings: string[] = [];
   const deferredWorkspaces = new Set<string>();
   for (const workspaceDir of new Set(external.map((plan) => plan.workspaceDir))) {
@@ -257,37 +258,42 @@ export async function planWorkshopRelocation(
       warnings.push(String(error));
     }
   }
+  const relocations = new Map<string, WorkshopRelocation>();
   const ready = external.filter(
     (plan) => !plan.workspaceDir || !deferredWorkspaces.has(plan.workspaceDir),
   );
-  const movesByKey = new Map<string, WorkshopMove>();
   for (const plan of ready) {
-    const { entry } = plan;
-    const record = entry.record;
-    if (!plan.ownerAgentId) {
-      plan.staleReason ??=
-        "Skill Workshop could not identify one owning agent; the legacy path stays in place and the proposal is stale.";
-      continue;
-    }
-    if (record.kind !== "create" || record.status !== "applied") {
-      continue;
-    }
-    if (!plan.workspaceDir) {
-      plan.staleReason =
-        "Skill Workshop could not identify the legacy workspace; the path stays in place and the proposal is stale.";
+    if (!plan.ownerAgentId || (plan.entry.record.status === "applied" && !plan.workspaceDir)) {
       continue;
     }
     const target = resolveSkillProposalTarget({
-      skillName: record.target.skillKey,
+      skillName: plan.entry.record.target.skillKey,
       config,
       agentId: plan.ownerAgentId,
       env,
     });
-    const moveKey = `${plan.source}\0${target.skillDir}`;
-    plan.moveKey = moveKey;
-    if (movesByKey.has(moveKey)) {
+    const key = [
+      plan.ownerAgentId,
+      plan.source,
+      path.resolve(plan.entry.record.target.skillFile),
+      plan.entry.record.target.skillKey,
+      target.skillDir,
+    ].join("\0");
+    plan.relocation = relocations.get(key) ?? { target, plans: [] };
+    plan.relocation.plans.push(plan);
+    relocations.set(key, plan.relocation);
+  }
+  const moves: WorkshopMove[] = [];
+  for (const relocation of relocations.values()) {
+    const plan = relocation.plans.find(
+      ({ entry }) => entry.record.kind === "create" && entry.record.status === "applied",
+    );
+    if (!plan?.workspaceDir) {
       continue;
     }
+    const record = plan.entry.record;
+    const { target } = relocation;
+    let operation: WorkshopMove["operation"] = "move";
     let sourceStat: Awaited<ReturnType<typeof fs.lstat>> | undefined;
     try {
       // The workspace itself may be an alias. Below that root, inspect every
@@ -307,191 +313,149 @@ export async function planWorkshopRelocation(
       sourceStat = undefined;
     }
     if (sourceStat?.isSymbolicLink()) {
-      plan.staleReason = `Skill Workshop no longer writes through symlinked skills; ${plan.source} stays a workspace skill.`;
+      relocation.rejection = `Skill Workshop no longer writes through symlinked skills; ${plan.source} stays a workspace skill.`;
       continue;
     }
     if (!sourceStat) {
       // The move is durable before metadata persistence; on rerun, adopt only its verified destination.
-      if (await pathExists(target.skillFile)) {
-        // Pending updates bind the live bytes they read, including earlier
-        // applied improvements that no longer match the original create.
-        const observedContentHashes = new Set(
-          ready.flatMap((update) => {
-            const updateTarget = update.entry.record.target;
-            return update.ownerAgentId === plan.ownerAgentId &&
-              update.source === plan.source &&
-              update.entry.record.kind === "update" &&
-              update.entry.record.status === "pending" &&
-              updateTarget.skillKey === record.target.skillKey &&
-              path.resolve(updateTarget.skillFile) === path.resolve(record.target.skillFile) &&
-              updateTarget.currentContentHash
-              ? [updateTarget.currentContentHash]
-              : [];
-          }),
-        );
-        if (
-          !(await verifyRelocationDestination({
-            record,
-            observedContentHashes,
-            destinationSkillDir: target.skillDir,
-            destinationSkillFile: target.skillFile,
-            config,
-            env,
-          }))
-        ) {
-          plan.staleReason =
-            "Skill Workshop could not adopt the relocated skill: destination identity mismatch (content hash or frontmatter name/key); the proposal is stale.";
-          continue;
-        }
-        movesByKey.set(moveKey, {
-          source: plan.source,
-          workspaceDir: plan.workspaceDir,
-          destination: target.skillDir,
-          operation: "adopt",
-          updates: [],
-        });
-      } else {
-        plan.staleReason =
+      if (!(await pathExists(target.skillFile))) {
+        relocation.rejection =
           "Skill Workshop could not find the applied legacy skill; the proposal is stale.";
+        continue;
       }
-      continue;
-    }
-    const frontmatter = readSkillFrontmatterSafe({
-      rootDir: plan.source,
-      filePath: path.join(plan.source, "SKILL.md"),
-      maxBytes: resolveSkillDiscoveryLimits(config).maxSkillFileBytes,
-    });
-    if (!frontmatter?.description?.trim()) {
-      plan.staleReason = INVALID_LEGACY_SKILL_REASON;
-      continue;
-    }
-    if (await pathExists(target.skillDir)) {
-      const destinationStat = await fs.lstat(target.skillDir);
-      if (destinationStat.isDirectory()) {
-        // A cross-device copy can publish before source removal fails. Retire
-        // that source only when every file, including metadata, matches its copy.
-        const [sourceHash, destinationHash] = await Promise.all(
-          [plan.source, target.skillDir].map((skillDir) =>
-            readSkillProposalTargetTreeSha256(skillDir, { includeRootMetadata: true }),
-          ),
-        );
-        if (sourceHash === destinationHash) {
-          movesByKey.set(moveKey, {
-            source: plan.source,
-            workspaceDir: plan.workspaceDir,
-            destination: target.skillDir,
-            operation: "remove-source",
-            updates: [],
-          });
+      const evidence = candidates
+        .filter(
+          ({ entry, source, ownerAgentId }) =>
+            ownerAgentId === plan.ownerAgentId &&
+            source === plan.source &&
+            entry.record.target.skillKey === record.target.skillKey &&
+            path.resolve(entry.record.target.skillFile) === path.resolve(record.target.skillFile),
+        )
+        .map(({ entry }) => entry.record);
+      if (
+        !(await verifyRelocationDestination({
+          records: evidence,
+          skillKey: target.skillKey,
+          destinationSkillDir: target.skillDir,
+          destinationSkillFile: target.skillFile,
+          config,
+          env,
+        }))
+      ) {
+        relocation.rejection =
+          "Skill Workshop could not adopt the relocated skill: destination identity mismatch (content hash or frontmatter name/key); the proposal is stale.";
+        continue;
+      }
+      operation = "adopt";
+    } else {
+      const frontmatter = readSkillFrontmatterSafe({
+        rootDir: plan.source,
+        filePath: path.join(plan.source, "SKILL.md"),
+        maxBytes: resolveSkillDiscoveryLimits(config).maxSkillFileBytes,
+      });
+      if (!frontmatter?.description?.trim()) {
+        relocation.rejection = INVALID_LEGACY_SKILL_REASON;
+        continue;
+      }
+      if (await pathExists(target.skillDir)) {
+        const destinationStat = await fs.lstat(target.skillDir);
+        let copied = false;
+        if (destinationStat.isDirectory()) {
+          // A cross-device copy can publish before source removal fails. Retire
+          // that source only when every file, including metadata, matches its copy.
+          const [sourceHash, destinationHash] = await Promise.all(
+            [plan.source, target.skillDir].map((skillDir) =>
+              readSkillProposalTargetTreeSha256(skillDir, { includeRootMetadata: true }),
+            ),
+          );
+          copied = sourceHash === destinationHash;
+        }
+        if (!copied) {
+          relocation.rejection = `Skill Workshop relocation conflict: destination already exists at ${target.skillDir}.`;
           continue;
         }
+        operation = "remove-source";
       }
-      plan.staleReason = `Skill Workshop relocation conflict: destination already exists at ${target.skillDir}.`;
-      continue;
     }
-    movesByKey.set(moveKey, {
+    relocation.move = {
       source: plan.source,
       workspaceDir: plan.workspaceDir,
       destination: target.skillDir,
-      operation: "move",
+      operation,
       updates: [],
-    });
+    };
+    moves.push(relocation.move);
   }
 
-  const moves = [...movesByKey.values()];
   const conflictsBySource = new Map<string, string>();
-  // Check both directions before moving anything; neither owner nor source
-  // selection may depend on which proposal happened to be read first.
-  for (const field of ["source", "destination"] as const) {
-    const groups = new Map<string, WorkshopMove[]>();
-    for (const move of moves) {
-      const group = groups.get(move[field]) ?? [];
-      group.push(move);
-      groups.set(move[field], group);
-    }
-    for (const [location, group] of groups) {
-      if (group.length < 2) {
-        continue;
-      }
-      const sources = group.map((move) => move.source);
-      const reason =
-        field === "destination"
-          ? `Skill Workshop relocation conflict: sources ${sources.toSorted().join(", ")} map to the same destination ${location}.`
-          : `Skill Workshop relocation conflict: source ${location} maps to multiple destinations ${group
-              .map((move) => move.destination)
-              .toSorted()
-              .join(", ")}.`;
-      for (const source of sources) {
-        conflictsBySource.set(source, reason);
-      }
-    }
-  }
-  for (const plan of ready) {
-    const reason = conflictsBySource.get(plan.source);
+  const sources = moves.map((move) => ({
+    move,
+    source: resolveCanonicalWorkspacePath(move.source),
+  }));
+  const workspaces = listAgentIds(config).map((agentId) =>
+    resolveCanonicalWorkspacePath(resolveAgentWorkspaceDir(config, agentId, env)),
+  );
+  // Reject the entire overlap before moving anything, including configured
+  // workspaces without a Workshop claim; moving their ancestor changes ownership.
+  for (const { move, source } of sources) {
+    const sharedDestination = moves.filter((other) => other.destination === move.destination);
+    const overlap = sources.find(
+      ({ move: other, source: otherSource }) =>
+        other !== move && (isPathInside(source, otherSource) || isPathInside(otherSource, source)),
+    );
+    const workspace = workspaces.find((directory) => isPathInside(source, directory));
+    const reason =
+      sharedDestination.length > 1
+        ? `Skill Workshop relocation conflict: sources ${sharedDestination
+            .map((other) => other.source)
+            .toSorted()
+            .join(", ")} map to the same destination ${move.destination}.`
+        : overlap
+          ? `Skill Workshop relocation conflict: source ${move.source} overlaps source ${overlap.move.source} targeting ${overlap.move.destination}.`
+          : workspace
+            ? `Skill Workshop relocation conflict: source ${move.source} contains configured workspace ${workspace}.`
+            : undefined;
     if (reason) {
-      plan.staleReason = reason;
-      plan.moveKey = undefined;
+      conflictsBySource.set(move.source, reason);
     }
   }
-  for (const [moveKey, move] of movesByKey) {
-    if (conflictsBySource.has(move.source)) {
-      movesByKey.delete(moveKey);
-    }
-  }
-
   const updates: WorkshopProposalUpdate[] = [];
   for (const plan of ready) {
-    const { entry } = plan;
+    const { entry, relocation, ownerAgentId } = plan;
     const record = entry.record;
-    const ownerAgentId = plan.ownerAgentId;
-    const target =
-      ownerAgentId && record.status === "pending"
-        ? resolveSkillProposalTarget({
-            skillName: record.target.skillKey,
-            config,
-            agentId: ownerAgentId,
-            env,
-          })
-        : undefined;
-    const moveKey = plan.moveKey ?? (target ? `${plan.source}\0${target.skillDir}` : undefined);
-    const move = moveKey ? movesByKey.get(moveKey) : undefined;
-    if (move && !plan.staleReason) {
-      move.updates.push({
-        record: retargetWorkshopProposal(record, {
-          skillKey: record.target.skillKey,
-          skillDir: move.destination,
-          skillFile: path.join(move.destination, "SKILL.md"),
-        }),
-        ...(ownerAgentId ? { ownerAgentId } : {}),
-      });
-      continue;
-    }
-    if (plan.staleReason) {
-      updates.push({
-        record: staleWorkshopProposal(record, plan.staleReason),
-        ...(ownerAgentId ? { ownerAgentId } : {}),
-      });
-      continue;
-    }
-    if (record.status === "pending" && record.kind === "create" && ownerAgentId && target) {
-      updates.push({
-        record: retargetWorkshopProposal(record, target),
-        ownerAgentId,
-      });
-      continue;
-    }
-    if (record.status === "pending" && record.kind === "update") {
+    const conflictReason = conflictsBySource.get(plan.source);
+    if (!relocation) {
       updates.push({
         record: staleWorkshopProposal(
           record,
-          "Skill Workshop no longer edits skills outside its own directory.",
+          conflictReason ??
+            (ownerAgentId
+              ? "Skill Workshop could not identify the legacy workspace; the path stays in place and the proposal is stale."
+              : plan.unconfiguredOwnerAgentId
+                ? `Skill Workshop could not use unconfigured owning agent "${plan.unconfiguredOwnerAgentId}"; the legacy path stays in place and the proposal is stale.`
+                : "Skill Workshop could not identify one owning agent; the legacy path stays in place and the proposal is stale."),
         ),
         ...(ownerAgentId ? { ownerAgentId } : {}),
       });
+      continue;
     }
+    const { target, move } = relocation;
+    const staleReason =
+      conflictReason ??
+      relocation.rejection ??
+      (!move && record.kind === "update"
+        ? "Skill Workshop no longer edits skills outside its own directory."
+        : undefined);
+    const update = {
+      record: staleReason
+        ? staleWorkshopProposal(record, staleReason)
+        : retargetWorkshopProposal(record, target),
+      ...(ownerAgentId ? { ownerAgentId } : {}),
+    };
+    (move && !staleReason ? move.updates : updates).push(update);
   }
   return {
-    moves: [...movesByKey.values()],
+    moves: moves.filter((move) => !conflictsBySource.has(move.source)),
     updates,
     externalProposalCount: external.length,
     externalProposalCountsByAgent: external.reduce<Record<string, number>>((counts, plan) => {

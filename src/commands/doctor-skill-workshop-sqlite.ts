@@ -8,6 +8,7 @@ import { removePathWithinRoot } from "../infra/fs-safe-remove.js";
 import { pathExists, root, type Root } from "../infra/fs-safe.js";
 import { executeSqliteQuerySync, getNodeSqliteKysely } from "../infra/kysely-sync.js";
 import { movePathWithCopyFallback } from "../infra/replace-file.js";
+import { acquireStateDatabaseCoordinator } from "../infra/state-database-coordinator.js";
 import {
   parseSkillProposalRow,
   readStoredProposal,
@@ -30,6 +31,7 @@ import {
   openExistingOpenClawStateDatabaseReadOnly,
   runOpenClawStateWriteTransaction,
 } from "../state/openclaw-state-db.js";
+import { resolveOpenClawStateSqlitePath } from "../state/openclaw-state-db.paths.js";
 import {
   listPendingLegacyCollectionBackupRoots,
   migrateLegacyCollectionBackups,
@@ -179,6 +181,11 @@ async function relocateLegacyWorkshopTargets(
   const plan = await planWorkshopRelocation(records, config, env);
   const workspaceMoves = new Map<string, typeof plan.moves>();
   for (const move of plan.moves) {
+    // Adopted sources are already absent. Only pending filesystem moves can
+    // prove that this attempt will empty a newly attested workspace.
+    if (move.operation === "adopt") {
+      continue;
+    }
     const moves = workspaceMoves.get(move.workspaceDir) ?? [];
     moves.push(move);
     workspaceMoves.set(move.workspaceDir, moves);
@@ -445,20 +452,29 @@ export async function migrateLegacySkillWorkshopProposals(params: {
   env?: NodeJS.ProcessEnv;
 }): Promise<MigrationResult> {
   const env = params.env ?? process.env;
-  const sidecars = await importLegacySkillProposalSidecars({ config: params.config, env });
-  const relocation = await relocateLegacyWorkshopTargets(params.config, env);
-  const relocationChanges =
-    relocation.movedSkills > 0 ||
-    relocation.retargetedProposals > 0 ||
-    relocation.staleProposals > 0 ||
-    relocation.migratedBackupRoots > 0
-      ? [
-          `Relocated ${relocation.movedSkills} Skill Workshop skill${relocation.movedSkills === 1 ? "" : "s"}, retargeted ${relocation.retargetedProposals} proposal${relocation.retargetedProposals === 1 ? "" : "s"}, marked ${relocation.staleProposals} stale, and migrated ${relocation.migratedBackupRoots} legacy collection backup root${relocation.migratedBackupRoots === 1 ? "" : "s"}.`,
-        ]
-      : [];
-  return {
-    ...sidecars,
-    changes: [...sidecars.changes, ...relocationChanges],
-    warnings: [...sidecars.warnings, ...relocation.warnings],
-  };
+  // Plain Doctor can reach automatic migration without its repair scope.
+  // Keep one owner through filesystem moves, receipt completion, and backup retirement.
+  const coordinator = acquireStateDatabaseCoordinator({
+    databasePath: resolveOpenClawStateSqlitePath(env),
+  });
+  try {
+    const sidecars = await importLegacySkillProposalSidecars({ config: params.config, env });
+    const relocation = await relocateLegacyWorkshopTargets(params.config, env);
+    const relocationChanges =
+      relocation.movedSkills > 0 ||
+      relocation.retargetedProposals > 0 ||
+      relocation.staleProposals > 0 ||
+      relocation.migratedBackupRoots > 0
+        ? [
+            `Relocated ${relocation.movedSkills} Skill Workshop skill${relocation.movedSkills === 1 ? "" : "s"}, retargeted ${relocation.retargetedProposals} proposal${relocation.retargetedProposals === 1 ? "" : "s"}, marked ${relocation.staleProposals} stale, and migrated ${relocation.migratedBackupRoots} legacy collection backup root${relocation.migratedBackupRoots === 1 ? "" : "s"}.`,
+          ]
+        : [];
+    return {
+      ...sidecars,
+      changes: [...sidecars.changes, ...relocationChanges],
+      warnings: [...sidecars.warnings, ...relocation.warnings],
+    };
+  } finally {
+    coordinator.release();
+  }
 }

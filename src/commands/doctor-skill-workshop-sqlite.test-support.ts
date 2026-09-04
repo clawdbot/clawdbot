@@ -1,6 +1,9 @@
 import { openNodeSqliteDatabase } from "../infra/node-sqlite.js";
-import { readSkillProposalRecord as readSkillProposalRecordImpl } from "../skills/workshop/store.js";
-import type { SkillProposalRecord } from "../skills/workshop/types.js";
+import {
+  hashSkillProposalContent,
+  readSkillProposalRecord as readSkillProposalRecordImpl,
+} from "../skills/workshop/store.js";
+import { SKILL_WORKSHOP_SCHEMA, type SkillProposalRecord } from "../skills/workshop/types.js";
 import {
   closeOpenClawStateDatabaseForTest,
   openOpenClawStateDatabase,
@@ -10,6 +13,32 @@ export const readSkillProposalRecord = (
   proposalId: string,
   options: { env?: NodeJS.ProcessEnv } = {},
 ) => readSkillProposalRecordImpl(proposalId, { config: {}, ...options }, {}, { config: {} });
+
+export function createAppliedLegacyProposal(
+  params: Pick<SkillProposalRecord, "id" | "title" | "description" | "target"> & {
+    content: string;
+    createdAt?: string;
+  },
+): SkillProposalRecord & { appliedAt: string } {
+  const now = params.createdAt ?? "2026-09-01T00:00:00.000Z";
+  return {
+    schema: SKILL_WORKSHOP_SCHEMA,
+    id: params.id,
+    kind: "create",
+    status: "applied",
+    title: params.title,
+    description: params.description,
+    createdAt: now,
+    updatedAt: now,
+    createdBy: "skill-workshop",
+    proposedVersion: "v1",
+    draftFile: "PROPOSAL.md",
+    draftHash: hashSkillProposalContent(params.content),
+    target: params.target,
+    scan: { state: "clean", scannedAt: now, critical: 0, warn: 0, info: 0, findings: [] },
+    appliedAt: now,
+  };
+}
 
 export function seedLegacyV15ProposalRows(
   env: NodeJS.ProcessEnv,

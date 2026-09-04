@@ -50,7 +50,10 @@ export async function listPendingLegacyCollectionBackupRoots(
     const legacyRoot = path.join(backupRoot, name);
     try {
       const backups = await readLegacyCollectionBackups(legacyRoot);
-      const workspaceDirs = new Set(backups.map((backup) => backup.manifest.workspaceDir));
+      if (backups.length === 0) {
+        continue;
+      }
+      const workspaceDirs = new Set(backups.map((backup) => backup.workspaceDir));
       const workspaceDir = [...workspaceDirs][0];
       const ownerAgentId =
         workspaceDirs.size === 1 && workspaceDir
@@ -84,16 +87,9 @@ export async function listPendingLegacyCollectionBackupRoots(
 
 type LegacyCollectionBackup = {
   backupDir: string;
-  manifest: {
-    id: string;
-    createdAt: string;
-    workspaceDir: string;
-    skillDirs: string[];
-    resultSkillDirs: string[];
-    resultSkillHashes: Record<string, string>;
-  };
-  convertedSkillDirs: string[];
-  convertedResultSkillDirs: string[];
+  workspaceDir: string;
+  manifest: CollectionBackupManifest;
+  sourceDirs: ReadonlyMap<string, string>;
 };
 
 export function inferWorkspaceOwnerAgentId(
@@ -126,8 +122,9 @@ function legacyCollectionSkillPath(workspaceDir: string, relativeDir: string): s
 
 function readLegacyCollectionBackupManifest(
   value: unknown,
-  backupId: string,
-): LegacyCollectionBackup["manifest"] {
+  backupDir: string,
+): LegacyCollectionBackup {
+  const backupId = path.basename(backupDir);
   const record = asNullableRecord(value);
   const skillDirs = record?.skillDirs;
   const resultSkillDirs = record?.resultSkillDirs;
@@ -143,6 +140,19 @@ function readLegacyCollectionBackupManifest(
   ) {
     throw new Error(`invalid legacy collection backup manifest: ${backupId}`);
   }
+  const workspaceDir = path.resolve(record.workspaceDir);
+  const convertedDirs = new Map(
+    [...new Set([...skillDirs, ...resultSkillDirs])].map((relativeDir) => [
+      relativeDir,
+      legacyCollectionSkillPath(workspaceDir, relativeDir),
+    ]),
+  );
+  const sourceDirs = new Map(
+    [...convertedDirs].map(([source, destination]) => [destination, source]),
+  );
+  if (sourceDirs.size !== convertedDirs.size) {
+    throw new Error(`legacy collection backup paths collide: ${backupId}`);
+  }
   const resultSkillHashes = asNullableRecord(record.resultSkillHashes);
   if (!resultSkillHashes) {
     throw new Error(`invalid legacy collection backup hashes: ${backupId}`);
@@ -153,18 +163,25 @@ function readLegacyCollectionBackupManifest(
     if (typeof hash !== "string") {
       throw new Error(`invalid legacy collection backup hashes: ${backupId}`);
     }
-    parsedResultSkillHashes[relativeDir] = hash;
+    parsedResultSkillHashes[convertedDirs.get(relativeDir)!] = hash;
   }
   if (Object.keys(resultSkillHashes).some((key) => !resultSkillDirs.includes(key))) {
     throw new Error(`invalid legacy collection backup hashes: ${backupId}`);
   }
   return {
-    id: backupId,
-    createdAt: record.createdAt,
-    workspaceDir: path.resolve(record.workspaceDir),
-    skillDirs: [...new Set(skillDirs)],
-    resultSkillDirs: [...new Set(resultSkillDirs)],
-    resultSkillHashes: parsedResultSkillHashes,
+    backupDir,
+    workspaceDir,
+    sourceDirs,
+    manifest: {
+      schema: "openclaw.skill-collection-backup.v2",
+      id: backupId,
+      createdAt: record.createdAt,
+      skillDirs: [...new Set(skillDirs)].map((relativeDir) => convertedDirs.get(relativeDir)!),
+      resultSkillDirs: [...new Set(resultSkillDirs)].map((relativeDir) =>
+        convertedDirs.get(relativeDir)!,
+      ),
+      resultSkillHashes: parsedResultSkillHashes,
+    },
   };
 }
 
@@ -182,38 +199,36 @@ async function readLegacyCollectionBackups(backupRoot: string): Promise<LegacyCo
     if (Buffer.byteLength(manifestText, "utf8") > MAX_BACKUP_MANIFEST_BYTES) {
       throw new Error(`legacy collection backup manifest is too large: ${entry.name}`);
     }
-    const manifest = readLegacyCollectionBackupManifest(JSON.parse(manifestText), entry.name);
-    const convertedSkillDirs = manifest.skillDirs.map((relativeDir) =>
-      legacyCollectionSkillPath(manifest.workspaceDir, relativeDir),
+    backups.push(
+      readLegacyCollectionBackupManifest(
+        JSON.parse(manifestText),
+        path.join(backupRoot, entry.name),
+      ),
     );
-    const convertedResultSkillDirs = manifest.resultSkillDirs.map((relativeDir) =>
-      legacyCollectionSkillPath(manifest.workspaceDir, relativeDir),
-    );
-    const sourcePaths = [...new Set([...manifest.skillDirs, ...manifest.resultSkillDirs])];
-    const convertedPaths = sourcePaths.map((relativeDir) =>
-      legacyCollectionSkillPath(manifest.workspaceDir, relativeDir),
-    );
-    if (new Set(convertedPaths).size !== sourcePaths.length) {
-      throw new Error(`legacy collection backup paths collide: ${entry.name}`);
-    }
-    backups.push({
-      backupDir: path.join(backupRoot, entry.name),
-      manifest,
-      convertedSkillDirs,
-      convertedResultSkillDirs,
-    });
   }
   return backups;
 }
 
-async function readRestorableCollectionBackupCreatedAt(
+async function hasNewerUnrelatedCollectionBackup(
   backupRoot: string,
-): Promise<string | undefined> {
+  backups: readonly LegacyCollectionBackup[],
+): Promise<boolean> {
+  const pending = new Map(backups.map((backup) => [backup.manifest.id, backup]));
+  const newestLegacy = backups
+    .map((backup) => backup.manifest.createdAt)
+    .toSorted()
+    .at(-1)!;
   const entries = await fs.readdir(backupRoot, { withFileTypes: true }).catch(() => []);
   const createdAtValues = await Promise.all(
     entries
       .filter((entry) => entry.isDirectory() && !entry.name.startsWith(".pending-"))
       .map(async (entry) => {
+        const backup = pending.get(entry.name);
+        if (backup) {
+          // Only an exact published copy belongs to this interrupted batch.
+          await verifyLegacyCollectionBackupCopy(backup, path.join(backupRoot, entry.name));
+          return undefined;
+        }
         const record = asNullableRecord(
           JSON.parse(await fs.readFile(path.join(backupRoot, entry.name, "manifest.json"), "utf8")),
         );
@@ -224,10 +239,9 @@ async function readRestorableCollectionBackupCreatedAt(
           : undefined;
       }),
   );
-  return createdAtValues
-    .filter((createdAt): createdAt is string => createdAt !== undefined)
-    .toSorted()
-    .at(-1);
+  return createdAtValues.some(
+    (createdAt) => createdAt !== undefined && createdAt.localeCompare(newestLegacy) >= 0,
+  );
 }
 
 async function isHistoryOnlyBackup(backupDir: string): Promise<boolean> {
@@ -251,7 +265,7 @@ async function readLegacyBackupSkillKey(
   fallbackKey: string | undefined,
   maxSkillFileBytes: number,
 ): Promise<string | undefined> {
-  const skillDir = path.join(backup.backupDir, "workspace", relativeDir);
+  const skillDir = path.join(backup.backupDir, "workspace", backup.sourceDirs.get(relativeDir)!);
   const frontmatter = readSkillFrontmatterSafe({
     rootDir: skillDir,
     filePath: path.join(skillDir, "SKILL.md"),
@@ -287,7 +301,7 @@ async function proveLegacyCollectionBackupOwnership(
   });
   const maxSkillFileBytes = resolveSkillDiscoveryLimits(config).maxSkillFileBytes;
   for (const relativeDir of new Set([...backedUpDirs, ...resultDirs])) {
-    const legacyPath = path.resolve(backup.manifest.workspaceDir, relativeDir);
+    const legacyPath = path.resolve(backup.workspaceDir, backup.sourceDirs.get(relativeDir)!);
     if (await pathExists(legacyPath)) {
       continue;
     }
@@ -338,17 +352,16 @@ async function proveLegacyCollectionBackupOwnership(
 async function verifyLegacyCollectionBackupCopy(
   backup: LegacyCollectionBackup,
   destination: string,
-  manifest: CollectionBackupManifest,
 ): Promise<void> {
   const published: unknown = JSON.parse(
     await fs.readFile(path.join(destination, "manifest.json"), "utf8"),
   );
-  if (!isDeepStrictEqual(published, manifest)) {
+  if (!isDeepStrictEqual(published, backup.manifest)) {
     throw new Error(`destination backup manifest differs: ${destination}`);
   }
-  for (const [index, relativeDir] of backup.manifest.skillDirs.entries()) {
-    const source = path.join(backup.backupDir, "workspace", relativeDir);
-    const copied = path.join(destination, "skills", backup.convertedSkillDirs[index]!);
+  for (const relativeDir of backup.manifest.skillDirs) {
+    const source = path.join(backup.backupDir, "workspace", backup.sourceDirs.get(relativeDir)!);
+    const copied = path.join(destination, "skills", relativeDir);
     // Tree hashing treats missing roots as empty; retirement requires both copies.
     await Promise.all([fs.access(source), fs.access(copied)]);
     const [sourceHash, copiedHash] = await Promise.all(
@@ -362,101 +375,74 @@ async function verifyLegacyCollectionBackupCopy(
   }
 }
 
-async function migrateLegacyCollectionBackup(
+async function publishLegacyCollectionBackup(
   backup: LegacyCollectionBackup,
   destinationRoot: string,
   config: OpenClawConfig,
   env: NodeJS.ProcessEnv,
   ownerAgentId: string,
   newerBackupExists: boolean,
-): Promise<void> {
+): Promise<CollectionBackupManifest> {
   const destination = path.join(destinationRoot, backup.manifest.id);
-  const manifest: CollectionBackupManifest = {
-    schema: "openclaw.skill-collection-backup.v2",
-    id: backup.manifest.id,
-    createdAt: backup.manifest.createdAt,
-    skillDirs: backup.convertedSkillDirs,
-    resultSkillDirs: backup.convertedResultSkillDirs,
-    resultSkillHashes: Object.fromEntries(
-      backup.manifest.resultSkillDirs.map((relativeDir, index) => [
-        backup.convertedResultSkillDirs[index],
-        backup.manifest.resultSkillHashes[relativeDir],
-      ]),
-    ),
-  };
-  if (!(await pathExists(destination))) {
-    if (newerBackupExists) {
-      throw new Error(`newer agent backup already exists at ${destinationRoot}`);
-    }
-    const staging = path.join(
-      destinationRoot,
-      `.pending-legacy-${backup.manifest.id}-${randomUUID()}`,
-    );
-    try {
-      const affectedDirs = [
-        ...new Set([...backup.manifest.skillDirs, ...backup.manifest.resultSkillDirs]),
-      ];
-      const provenLegacyPaths = await proveLegacyCollectionBackupOwnership(
-        backup,
-        config,
-        env,
-        ownerAgentId,
-      );
-      const unownedDirs = affectedDirs.filter(
-        (relativeDir) =>
-          !provenLegacyPaths.has(path.resolve(backup.manifest.workspaceDir, relativeDir)),
-      );
-      if (unownedDirs.length > 0) {
-        await fs.cp(
-          path.join(backup.backupDir, "workspace"),
-          path.join(staging, "history", "workspace"),
-          { recursive: true, errorOnExist: true, force: false, preserveTimestamps: true },
-        );
-        const historyManifest: CollectionBackupManifest = {
-          schema: "openclaw.skill-collection-backup.v2",
-          id: backup.manifest.id,
-          createdAt: backup.manifest.createdAt,
-          skillDirs: [],
-          resultSkillDirs: [],
-          resultSkillHashes: {},
-          restoreUnavailableReason: `Legacy collection paths are not proven Workshop-owned: ${unownedDirs.join(", ")}`,
-        };
-        await fs.writeFile(
-          path.join(staging, "manifest.json"),
-          JSON.stringify(historyManifest, null, 2),
-        );
-        await fs.mkdir(destinationRoot, { recursive: true });
-        await fs.rename(staging, destination);
-        return;
-      }
-      await fs.mkdir(path.join(staging, "skills"), { recursive: true });
-      for (const [index, relativeDir] of backup.manifest.skillDirs.entries()) {
-        const source = path.join(backup.backupDir, "workspace", relativeDir);
-        if (!(await pathExists(source))) {
-          throw new Error(`legacy collection backup is incomplete: ${relativeDir}`);
-        }
-        const destinationRelativeDir = backup.convertedSkillDirs[index]!;
-        await fs.mkdir(path.dirname(path.join(staging, "skills", destinationRelativeDir)), {
-          recursive: true,
-        });
-        await fs.cp(source, path.join(staging, "skills", destinationRelativeDir), {
-          recursive: true,
-          errorOnExist: true,
-          force: false,
-          preserveTimestamps: true,
-        });
-      }
-      await fs.writeFile(path.join(staging, "manifest.json"), JSON.stringify(manifest, null, 2));
-      await fs.mkdir(destinationRoot, { recursive: true });
-      await fs.rename(staging, destination);
-    } catch (error) {
-      await fs.rm(staging, { recursive: true, force: true });
-      throw error;
-    }
+  if (await pathExists(destination)) {
+    return backup.manifest;
   }
-  // New publication and interrupted cleanup share the same full-copy proof.
-  await verifyLegacyCollectionBackupCopy(backup, destination, manifest);
-  await fs.rm(backup.backupDir, { recursive: true, force: false });
+  if (newerBackupExists) {
+    throw new Error(`newer agent backup already exists at ${destinationRoot}`);
+  }
+  const provenLegacyPaths = await proveLegacyCollectionBackupOwnership(
+    backup,
+    config,
+    env,
+    ownerAgentId,
+  );
+  const unownedDirs = [...backup.sourceDirs.values()].filter(
+    (relativeDir) => !provenLegacyPaths.has(path.resolve(backup.workspaceDir, relativeDir)),
+  );
+  const restorable = unownedDirs.length === 0;
+  const manifest: CollectionBackupManifest = restorable
+    ? backup.manifest
+    : {
+        ...backup.manifest,
+        skillDirs: [],
+        resultSkillDirs: [],
+        resultSkillHashes: {},
+        restoreUnavailableReason: `Legacy collection paths are not proven Workshop-owned: ${unownedDirs.join(", ")}`,
+      };
+  const copies = restorable
+    ? backup.manifest.skillDirs.map((relativeDir) => ({
+        source: path.join(backup.backupDir, "workspace", backup.sourceDirs.get(relativeDir)!),
+        relativeDir: path.join("skills", relativeDir),
+      }))
+    : [
+        {
+          source: path.join(backup.backupDir, "workspace"),
+          relativeDir: path.join("history", "workspace"),
+        },
+      ];
+  const staging = path.join(
+    destinationRoot,
+    `.pending-legacy-${backup.manifest.id}-${randomUUID()}`,
+  );
+  try {
+    await fs.mkdir(path.join(staging, restorable ? "skills" : "history"), { recursive: true });
+    for (const copy of copies) {
+      const copied = path.join(staging, copy.relativeDir);
+      await fs.mkdir(path.dirname(copied), { recursive: true });
+      await fs.cp(copy.source, copied, {
+        recursive: true,
+        errorOnExist: true,
+        force: false,
+        preserveTimestamps: true,
+      });
+    }
+    await fs.writeFile(path.join(staging, "manifest.json"), JSON.stringify(manifest, null, 2));
+    await fs.rename(staging, destination);
+  } catch (error) {
+    await fs.rm(staging, { recursive: true, force: true });
+    throw error;
+  }
+  return manifest;
 }
 
 export async function migrateLegacyCollectionBackups(
@@ -473,17 +459,10 @@ export async function migrateLegacyCollectionBackups(
     }
     const { legacyRoot, backups, ownerAgentId, destinationRoot } = root;
     try {
-      const currentCreatedAt = await readRestorableCollectionBackupCreatedAt(destinationRoot);
-      const newestLegacy = backups.toSorted((left, right) =>
-        right.manifest.createdAt.localeCompare(left.manifest.createdAt),
-      )[0];
-      const newerBackupExists = Boolean(
-        currentCreatedAt &&
-        newestLegacy &&
-        currentCreatedAt.localeCompare(newestLegacy.manifest.createdAt) >= 0,
-      );
+      const newerBackupExists = await hasNewerUnrelatedCollectionBackup(destinationRoot, backups);
+      const restorable: LegacyCollectionBackup[] = [];
       for (const backup of backups) {
-        await migrateLegacyCollectionBackup(
+        const manifest = await publishLegacyCollectionBackup(
           backup,
           destinationRoot,
           config,
@@ -491,6 +470,20 @@ export async function migrateLegacyCollectionBackups(
           ownerAgentId,
           newerBackupExists,
         );
+        if (manifest.restoreUnavailableReason === undefined) {
+          restorable.push(backup);
+        }
+      }
+      // Retain every source until the whole batch is published and verified.
+      // Otherwise an interrupted newest-first batch loses its recovery evidence.
+      for (const backup of restorable) {
+        await verifyLegacyCollectionBackupCopy(
+          backup,
+          path.join(destinationRoot, backup.manifest.id),
+        );
+      }
+      for (const backup of restorable) {
+        await fs.rm(backup.backupDir, { recursive: true, force: false });
       }
       if ((await fs.readdir(legacyRoot)).length === 0) {
         await fs.rmdir(legacyRoot);
