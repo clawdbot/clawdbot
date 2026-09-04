@@ -1,22 +1,12 @@
-import { randomUUID } from "node:crypto";
 import fs from "node:fs/promises";
 import path from "node:path";
 import { isDeepStrictEqual } from "node:util";
 import { isRecord } from "@openclaw/normalization-core/record-coerce";
-import { prepareSystemAgentRunAdmission } from "../agents/admitted-run-context.js";
-import {
-  type AgentRunResultView,
-  extractAgentRunTerminalError,
-  extractAgentRunText,
-} from "../agents/agent-run-result.js";
 import { listAgentEntries } from "../agents/agent-scope.js";
 import { normalizeAuthProfileCredential } from "../agents/auth-profiles/credential-normalize.js";
 import { loadPersistedAuthProfileStore } from "../agents/auth-profiles/persisted.js";
 import { updateAuthProfileStoreWithLock } from "../agents/auth-profiles/store.js";
-import type { AgentExecutionAuthBinding } from "../agents/execution-auth-binding.js";
-import { describeFailoverError } from "../agents/failover-error.js";
 import { splitTrailingAuthProfile } from "../agents/model-ref-profile.js";
-import { SessionManager } from "../agents/sessions/index.js";
 import { applyMergePatch } from "../config/merge-patch.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import type { PluginInstallRecord } from "../config/types.plugins.js";
@@ -25,22 +15,8 @@ import { enablePluginInConfig } from "../plugins/enable.js";
 import { prepareProviderAuthProfilesForPersistence } from "../plugins/provider-auth-persistence.js";
 import type { ProviderAuthResult } from "../plugins/types.js";
 import type { RuntimeEnv } from "../runtime.js";
-import {
-  type ActivateSetupInferenceDeps,
-  SETUP_INFERENCE_TEST_PROMPT,
-  SETUP_INFERENCE_TEST_TIMEOUT_MS,
-  SetupInferenceCancelledError,
-  type SetupInferenceFailureStatus,
-  setupInferenceLog,
-} from "./setup-inference-core.js";
-import {
-  type SetupInferenceTestPlan,
-  extractRunWinnerError,
-  mapFailoverReasonToSetupStatus,
-  resolveStrictSetupAuthProfileError,
-  resolveToolFreeCliSetupError,
-} from "./setup-inference-plan-helpers.js";
-import { resolveSetupInferenceProbeStreamParams } from "./setup-inference-probe.js";
+import { type ActivateSetupInferenceDeps, setupInferenceLog } from "./setup-inference-core.js";
+import type { SetupInferenceTestPlan } from "./setup-inference-plan-helpers.js";
 
 export async function cleanupSetupInferenceTempDir(params: {
   tempDir: string;
@@ -457,188 +433,4 @@ export async function rollbackManualAuthProfiles(
     }
   }
   return false;
-}
-
-export async function runSetupInferenceTest(params: {
-  plan: SetupInferenceTestPlan;
-  prompt?: string;
-  tempDir: string;
-  deps: ActivateSetupInferenceDeps;
-  authProfileStateMode: "read-write" | "read-only";
-  requireExecutionOwner: boolean;
-  signal?: AbortSignal;
-}): Promise<
-  | { ok: true; latencyMs: number; auth: AgentExecutionAuthBinding; text: string }
-  | {
-      ok: false;
-      status: SetupInferenceFailureStatus;
-      error: string;
-    }
-> {
-  const { plan, tempDir, deps, authProfileStateMode, requireExecutionOwner } = params;
-  // Keep probe prefixes aligned with the logging filters; provider transports can also use the
-  // session id as cache affinity, so this ephemeral id must stay under OpenAI's 64-character cap.
-  const runId = `probe-setup-inference-${randomUUID()}`;
-  const sessionId = runId;
-  const sessionFile = `in-memory:${sessionId}`;
-  const sessionManager = SessionManager.inMemory(tempDir);
-  const effectiveAgentId = plan.routeAgentId ?? plan.agentId ?? "openclaw";
-  const sessionKey = `agent:${effectiveAgentId}:setup-inference:incognito-${runId}`;
-  const timeoutMs = deps.timeoutMs ?? SETUP_INFERENCE_TEST_TIMEOUT_MS;
-  const started = Date.now();
-  const failed = (status: SetupInferenceFailureStatus, error: string) => {
-    setupInferenceLog.warn("Inference setup probe failed.", {
-      event: "setup_inference_probe_failed",
-      provider: plan.provider,
-      model: plan.model,
-      runner: plan.runner,
-      status,
-      timeoutMs,
-      durationMs: Date.now() - started,
-    });
-    return { ok: false as const, status, error };
-  };
-  const preparedRunAdmission = prepareSystemAgentRunAdmission(
-    plan.config,
-    runId,
-    effectiveAgentId,
-    "system-agent.setup-inference",
-  );
-  let successfulAuth: AgentExecutionAuthBinding | undefined;
-  try {
-    if (plan.runner === "cli") {
-      const unsupportedError = resolveToolFreeCliSetupError(plan);
-      if (unsupportedError) {
-        return failed("unavailable", unsupportedError);
-      }
-    }
-    const strictProfileError = resolveStrictSetupAuthProfileError({
-      plan,
-      workspaceDir: tempDir,
-      deps,
-    });
-    if (strictProfileError) {
-      return failed("auth", strictProfileError);
-    }
-
-    let result: AgentRunResultView;
-    if (plan.runner === "cli") {
-      const runCli = deps.runCliAgent ?? (await import("../agents/cli-runner.js")).runCliAgent;
-      result = (await runCli({
-        preparedRunAdmission,
-        sessionId,
-        sessionKey,
-        sessionManager,
-        agentId: effectiveAgentId,
-        trigger: "manual",
-        sessionFile,
-        workspaceDir: tempDir,
-        ...(plan.agentDir ? { agentDir: plan.agentDir } : {}),
-        config: plan.executionConfig ?? plan.config,
-        prompt: params.prompt ?? SETUP_INFERENCE_TEST_PROMPT,
-        provider: plan.provider,
-        model: plan.model,
-        ...(plan.authProfileId ? { authProfileId: plan.authProfileId } : {}),
-        timeoutMs,
-        runId,
-        messageChannel: "openclaw",
-        messageProvider: "openclaw",
-        executionMode: "side-question",
-        disableTools: true,
-        cleanupCliLiveSessionOnRunEnd: true,
-        onSuccessfulAuthBinding: (binding) => {
-          successfulAuth = binding;
-        },
-        ...(params.signal ? { abortSignal: params.signal } : {}),
-      })) as AgentRunResultView;
-    } else {
-      const runEmbedded =
-        deps.runEmbeddedAgent ?? (await import("../agents/embedded-agent.js")).runEmbeddedAgent;
-      result = (await runEmbedded({
-        preparedRunAdmission,
-        sessionId,
-        sessionKey,
-        sessionManager,
-        // The probe owns its transcript; session admission must not create durable agent state.
-        sessionPersistence: "detached",
-        agentId: effectiveAgentId,
-        trigger: "manual",
-        sessionFile,
-        workspaceDir: tempDir,
-        ...(plan.agentDir ? { agentDir: plan.agentDir } : {}),
-        config: plan.executionConfig ?? plan.config,
-        prompt: params.prompt ?? SETUP_INFERENCE_TEST_PROMPT,
-        provider: plan.provider,
-        model: plan.model,
-        ...(plan.authProfileId
-          ? { authProfileId: plan.authProfileId, authProfileIdSource: "user" as const }
-          : {}),
-        authProfileStateMode,
-        preparedModelRuntimeMode: "isolated-read-only",
-        ...(plan.cleanupBundleMcpOnRunEnd ? { cleanupBundleMcpOnRunEnd: true } : {}),
-        ...(plan.agentHarnessRuntimeOverride
-          ? { agentHarnessRuntimeOverride: plan.agentHarnessRuntimeOverride }
-          : {}),
-        timeoutMs,
-        runId,
-        lane: `session:probe-setup-inference:${plan.provider}`,
-        thinkLevel: "off",
-        reasoningLevel: "off",
-        verboseLevel: "off",
-        disableTrajectory: true,
-        // Keep the "reply OK" probe bounded while leaving room for reasoning.
-        // Custom completions pass no explicit cap: the stream layer applies the
-        // resolved model's own maxTokens budget without exceeding its limits.
-        ...(params.prompt === undefined
-          ? resolveSetupInferenceProbeStreamParams(plan.agentHarnessRuntimeOverride)
-          : {}),
-        disableTools: true,
-        modelRun: true,
-        messageChannel: "openclaw",
-        messageProvider: "openclaw",
-        onSuccessfulAuthBinding: (binding) => {
-          successfulAuth = binding;
-        },
-        ...(params.signal ? { abortSignal: params.signal } : {}),
-      })) as AgentRunResultView;
-    }
-    if (params.signal?.aborted) {
-      throw new SetupInferenceCancelledError();
-    }
-    const terminalError = extractAgentRunTerminalError(result);
-    if (terminalError) {
-      const described = describeFailoverError(new Error(terminalError));
-      return failed(mapFailoverReasonToSetupStatus(described.reason), described.message);
-    }
-    const text = extractAgentRunText(result)?.trim();
-    if (!text) {
-      return failed(
-        "format",
-        "The model started but did not send a reply. Try again or pick another option.",
-      );
-    }
-    const winnerError = await extractRunWinnerError(plan, result);
-    if (winnerError) {
-      return failed("unknown", winnerError);
-    }
-    if (requireExecutionOwner && !successfulAuth) {
-      return failed(
-        "unknown",
-        "Inference succeeded, but its runtime did not report an owner that OpenClaw can safely reuse.",
-      );
-    }
-    return {
-      ok: true,
-      latencyMs: Date.now() - started,
-      text,
-      auth:
-        successfulAuth ??
-        (!requireExecutionOwner && plan.authProfileId ? { authProfileId: plan.authProfileId } : {}),
-    };
-  } catch (error) {
-    const described = describeFailoverError(error);
-    return failed(mapFailoverReasonToSetupStatus(described.reason), described.message);
-  } finally {
-    preparedRunAdmission.close();
-  }
 }

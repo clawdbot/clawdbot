@@ -260,7 +260,7 @@ describe("agents_wait", () => {
     },
   );
 
-  it("orders completions by their durable capture time instead of input order", async () => {
+  it("orders completions by durable capture time with input-order ties", async () => {
     const later = collectorRun("later", "agent:main:main", { status: "done" });
     later.completion = { required: false, resultText: "later", capturedAt: 10 };
     const earlier = collectorRun("earlier", "agent:main:main", { status: "done" });
@@ -282,6 +282,28 @@ describe("agents_wait", () => {
       completed: [{ runId: "earlier" }, { runId: "later" }],
       pending: [],
     });
+
+    const tied = collectorRun("tied", "agent:main:main", { status: "done" });
+    tied.completion = { required: false, resultText: "tied", capturedAt: 5 };
+    records.set(tied.runId, tied);
+    records.set("foreign", collectorRun("foreign", "agent:other:main", { status: "done" }));
+    records.set("pending-one", collectorRun("pending-one", "agent:main:main"));
+    records.set("pending-two", collectorRun("pending-two", "agent:main:main"));
+
+    const mixed = await tool.execute("mixed", {
+      ids: ["later", "missing", "tied", "pending-two", "foreign", "earlier", "pending-one"],
+      timeoutSeconds: 0,
+    });
+
+    expect(mixed.details).toMatchObject({
+      completed: [{ runId: "tied" }, { runId: "earlier" }, { runId: "later" }],
+      pending: ["pending-two", "pending-one"],
+      errors: [
+        { runId: "missing", error: "not_found" },
+        { runId: "foreign", error: "not_owner" },
+      ],
+    });
+    expect(isToolResultError(mixed)).toBe(false);
   });
 
   it("is idempotent and returns per-id ownership and unknown errors", async () => {

@@ -37,13 +37,13 @@ import {
   rollbackManualAuthProfiles,
   applyManualAuthConfig,
   type ManualAuthPersistenceReceipt,
-  runSetupInferenceTest,
 } from "./setup-inference-persist.js";
 import {
   projectSetupTargetModelMetadata,
   resolveSetupAgentRuntimeId,
   type SetupInferenceTestPlan,
 } from "./setup-inference-plan-helpers.js";
+import { runSetupInferenceTest } from "./setup-inference-test.js";
 import { createSystemAgentModelSelectionUpdater } from "./setup-model-selection.js";
 import type { SystemAgentOwnerPluginArtifactSnapshot } from "./verified-inference.js";
 

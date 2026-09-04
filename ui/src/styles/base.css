@@ -800,6 +800,11 @@ openclaw-app {
   height: 100%;
 }
 
+/* Empty contribution hosts must not add layout boxes before the plugin runtime loads. */
+openclaw-plugin-contributions {
+  display: contents;
+}
+
 @media (display-mode: standalone) {
   @supports (height: 100dvh) {
     html,
@@ -929,6 +934,15 @@ select {
 input[type="checkbox"],
 input[type="radio"] {
   accent-color: var(--accent);
+}
+
+/* Typing into a native control whose face carries `calt` corrupts already-typed
+   glyphs, and the damage survives caret moves and blur; important because
+   feature-local `font:` shorthands reset font-variant. Editors that own their
+   text layer keep theirs, so a file reads the same viewed or edited. */
+input,
+textarea {
+  font-variant-ligatures: no-contextual !important;
 }
 
 input,
