@@ -268,6 +268,9 @@ export class DiscordRealtimeSpeakerSession implements VoiceRealtimeSession {
       cfg: this.params.cfg,
       agentId: this.params.entry.route.agentId,
       defaultModel: this.realtimeConfig?.model,
+      // Discord is a Gateway-owned relay, not a browser client: the OpenAI provider only
+      // selects the OAuth GPT-Live Gateway-relay bridge when this surface is declared.
+      surface: "gateway-relay",
       isProviderAvailable: (provider) =>
         isSecretOwnerAvailable(
           "capability",
@@ -357,6 +360,9 @@ export class DiscordRealtimeSpeakerSession implements VoiceRealtimeSession {
             toolPolicy !== "none" ? [REALTIME_VOICE_AGENT_CONTROL_TOOL] : [],
           )
         : [],
+      // Only the Gateway-relay bridge calls this; browser/bridge surfaces resolve consults
+      // through their own native tool-calling path instead.
+      runAgentConsult: this.consults.runAgentConsult,
       audioSink: {
         isOpen: () => !this.isStopped(),
         sendAudio: (audio, metadata) => this.playback.sendOutputAudio(audio, metadata),

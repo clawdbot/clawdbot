@@ -531,6 +531,20 @@ export async function runDiscordGatewayLifecycle(params: {
       readyTimeoutMs: gatewayReadyTimeoutMs,
     });
 
+    if (!gatewayReadyAtLifecycleStart && params.voiceManager) {
+      // READY can precede this wait's own listener dispatch during startup. Reconcile once
+      // more after the authoritative readiness wait so an occupied configured channel that
+      // became ready mid-wait is not missed; the `gatewayReadyAtLifecycleStart` branch above
+      // already covers the case where READY preceded lifecycle setup entirely.
+      void params.voiceManager
+        .autoJoin()
+        .catch((err: unknown) =>
+          params.runtime.error?.(
+            danger(`discord voice: post-READY autoJoin failed: ${formatErrorMessage(err)}`),
+          ),
+        );
+    }
+
     if (drainPendingGatewayErrors() === "stop") {
       return;
     }

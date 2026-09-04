@@ -116,6 +116,75 @@ defineDiscordVoiceTests(
       expect(lastRealtimeBridgeParams().agentId).toBe("agent-1");
     });
 
+    it("selects the gateway-relay surface and exposes the Discord consult runner", async () => {
+      const { bridgeParams } = await createJoinedAgentProxyFixture();
+
+      const providerOptions = requireRecord(
+        lastMockCall(
+          resolveConfiguredRealtimeVoiceProviderMock as unknown as MockCallSource,
+          "provider resolve",
+        )[0],
+        "provider resolve options",
+      );
+      expect(providerOptions.surface).toBe("gateway-relay");
+      expect(bridgeParams.runAgentConsult).toEqual(expect.any(Function));
+    });
+
+    it("reuses speaker context and delegates duplicate gateway consults exactly once", async () => {
+      agentCommandMock.mockResolvedValueOnce({ payloads: [{ text: "Gateway answer" }] });
+      const { bridgeParams, entry } = await createJoinedAgentProxyFixture();
+      beginSpeakerTurn(entry, { speakerLabel: "Alice", userId: "u-alice" });
+
+      const runAgentConsult = bridgeParams.runAgentConsult;
+      if (!runAgentConsult) {
+        throw new Error("expected Discord gateway agent consult runner");
+      }
+      const results = await Promise.all([
+        runAgentConsult({ prompt: "What changed?" }),
+        runAgentConsult({ prompt: "What changed?" }),
+      ]);
+
+      expect(results).toEqual([{ text: "Gateway answer" }, { text: "Gateway answer" }]);
+      expect(agentCommandMock).toHaveBeenCalledOnce();
+      expect(lastAgentCommandArgs()).toMatchObject({
+        message: "What changed?",
+      });
+    });
+
+    it.each(["abort", "continuity reset"] as const)(
+      "fails closed when a gateway consult is interrupted by %s",
+      async (transition) => {
+        const answer = createDeferred<{ payloads: Array<{ text: string }> }>();
+        agentCommandMock.mockReturnValueOnce(answer.promise);
+        const { bridgeParams, entry } = await createJoinedAgentProxyFixture();
+        beginSpeakerTurn(entry, { speakerLabel: "Alice", userId: "u-alice" });
+
+        const runAgentConsult = bridgeParams.runAgentConsult;
+        if (!runAgentConsult) {
+          throw new Error("expected Discord gateway agent consult runner");
+        }
+        const controller = new AbortController();
+        const pending = runAgentConsult({
+          prompt: "What changed?",
+          signal: controller.signal,
+        });
+        await Promise.resolve();
+
+        if (transition === "abort") {
+          controller.abort(new Error("consult cancelled"));
+        } else {
+          bridgeParams.onEvent?.({ direction: "client", type: "session.continuity.reset" });
+          answer.resolve({ payloads: [{ text: "stale answer" }] });
+        }
+
+        await expect(pending).rejects.toThrow(
+          transition === "abort" ? "consult cancelled" : "context is stale",
+        );
+        expect(agentCommandMock).toHaveBeenCalledOnce();
+        answer.resolve({ payloads: [{ text: "late answer" }] });
+      },
+    );
+
     it("keeps agent-proxy realtime transcripts on the audio turn speaker context", async () => {
       agentCommandMock.mockResolvedValueOnce({ payloads: [{ text: "non-owner answer" }] });
       const { bridgeParams, entry } = await createJoinedAgentProxyFixture({

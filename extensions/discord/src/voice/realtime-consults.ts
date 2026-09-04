@@ -8,6 +8,7 @@ import {
   parseRealtimeVoiceAgentControlToolArgs,
   REALTIME_VOICE_AGENT_CONSULT_TOOL_NAME,
   REALTIME_VOICE_AGENT_CONTROL_TOOL_NAME,
+  type RealtimeVoiceAgentConsultRunner,
   type RealtimeVoiceAgentConsultToolPolicy,
   type RealtimeVoiceAgentControlResult,
   type RealtimeVoiceAgentTalkbackQueue,
@@ -89,6 +90,79 @@ export class DiscordRealtimeConsults {
   close(): void {
     this.talkback.close();
     this.clearProviderConsultState();
+  }
+
+  /**
+   * Gateway-relay entry point: the OpenAI provider calls this directly for the OAuth
+   * GPT-Live bridge instead of routing through the native realtime tool-call protocol
+   * (`handleToolCall`), so it must resolve Discord speaker identity and consult dedup
+   * itself using the same forced-consult coordinator.
+   */
+  runAgentConsult: RealtimeVoiceAgentConsultRunner = async ({ prompt, signal }) => {
+    const providerEpoch = this.params.providerEpoch();
+    if (signal?.aborted || this.params.stopped()) {
+      throw signal?.reason ?? new Error("Discord realtime consult stopped");
+    }
+    let recent = this.findRecentAgentProxyConsultContext(prompt);
+    let context = recent?.context?.speaker;
+    if (!context) {
+      context = this.params.turns.consumePendingSpeakerContext();
+      if (context) {
+        recent = this.rememberRecentAgentProxyConsultContext(prompt, context, { started: true });
+      }
+    }
+    if (!context || !recent) {
+      throw new Error("No Discord speaker context available");
+    }
+    if (recent.context?.providerEpoch !== providerEpoch) {
+      throw new Error("Discord realtime consult context is stale");
+    }
+    const pending =
+      recent.context.result !== undefined
+        ? Promise.resolve(recent.context.result)
+        : (recent.context.promise ??
+          this.trackAgentProxyConsult(recent, this.runAgentTurn({ context, message: prompt })));
+    const result = await this.awaitActiveConsult(pending, signal, providerEpoch);
+    if ("text" in result) {
+      return { text: result.text };
+    }
+    throw new Error("error" in result ? result.error : "Discord realtime consult was cancelled");
+  };
+
+  private async awaitActiveConsult(
+    promise: Promise<AgentProxyConsultResult>,
+    signal: AbortSignal | undefined,
+    providerEpoch: number,
+  ): Promise<AgentProxyConsultResult> {
+    if (!signal) {
+      return await this.requireActiveConsult(promise, providerEpoch);
+    }
+    if (signal.aborted) {
+      throw signal.reason ?? new Error("Discord realtime consult aborted");
+    }
+    let rejectAbort!: (error: unknown) => void;
+    const abort = new Promise<never>((_resolve, reject) => {
+      rejectAbort = reject;
+    });
+    const onAbort = () =>
+      rejectAbort(signal.reason ?? new Error("Discord realtime consult aborted"));
+    signal.addEventListener("abort", onAbort, { once: true });
+    try {
+      return await this.requireActiveConsult(Promise.race([promise, abort]), providerEpoch);
+    } finally {
+      signal.removeEventListener("abort", onAbort);
+    }
+  }
+
+  private async requireActiveConsult(
+    promise: Promise<AgentProxyConsultResult>,
+    providerEpoch: number,
+  ): Promise<AgentProxyConsultResult> {
+    const result = await promise;
+    if (this.params.stopped() || providerEpoch !== this.params.providerEpoch()) {
+      throw new Error("Discord realtime consult context is stale");
+    }
+    return result;
   }
 
   isIdle(): boolean {
