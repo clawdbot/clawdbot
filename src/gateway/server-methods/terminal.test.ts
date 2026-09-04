@@ -3,15 +3,11 @@ import { afterEach, describe, expect, it, vi } from "vitest";
 import { GATEWAY_CLIENT_CAPS } from "../../../packages/gateway-protocol/src/client-info.js";
 import { ErrorCodes } from "../../../packages/gateway-protocol/src/index.js";
 import type { InternalSessionEntry } from "../../config/sessions/types.js";
-import type { OpenClawConfig } from "../../config/types.openclaw.js";
-import { createEmptyPluginRegistry } from "../../plugins/registry-empty.js";
-import { resetPluginRuntimeStateForTest, setActivePluginRegistry } from "../../plugins/runtime.js";
-import type { SessionCatalogProvider } from "../../plugins/session-catalog.js";
-import { createTerminalLaunchPolicy } from "../terminal/launch.js";
+import { resetPluginRuntimeStateForTest } from "../../plugins/runtime.js";
 import { TerminalSessionManager } from "../terminal/session-manager.js";
 import { makeFakePty } from "../terminal/session-manager.test-helpers.js";
-import type { TerminalSessionSummary } from "../terminal/session-types.js";
 import { openTerminalSession, terminalHandlers, TERMINAL_OPEN_DEADLINE_MS } from "./terminal.js";
+import { installCatalog, makeOpts } from "./terminal.test-helpers.js";
 
 function waitForFast<T>(
   callback: () => T | Promise<T>,
@@ -63,80 +59,6 @@ vi.mock("../session-utils.js", async () => ({
   ...(await vi.importActual<typeof import("../session-utils.js")>("../session-utils.js")),
   loadGatewaySessionEntryReadOnly: sessionMocks.loadGatewaySessionEntryReadOnly,
 }));
-
-function makeOpts(
-  params: unknown,
-  terminalConfig: { enabled?: boolean } | undefined,
-  terminalPolicyConfig?: OpenClawConfig,
-  nodeRegistry: {
-    get: (nodeId: string) => unknown;
-    invoke?: (params: unknown) => Promise<unknown>;
-  } = { get: () => undefined },
-) {
-  const sessions = {
-    open: vi.fn(async (_request: unknown) => ({
-      ok: true as const,
-      sessionId: "terminal-1",
-      agentId: "main",
-      shell: "/bin/zsh",
-      cwd: "/work",
-    })),
-    write: vi.fn(() => true),
-    resize: vi.fn(() => true),
-    close: vi.fn(() => true),
-    attach: vi.fn(() => ({
-      sessionId: "terminal-1",
-      agentId: "main",
-      shell: "/bin/zsh",
-      cwd: "/work",
-      buffer: "replay",
-      seq: 6,
-      title: "codex",
-      owner: "conn" as const,
-    })),
-    snapshot: vi.fn(() => "10%\r100%"),
-    list: vi.fn((): TerminalSessionSummary[] => []),
-    upload: vi.fn(async () => ({ path: "/tmp/upload/report.pdf", size: 4 })),
-  };
-  const runtimeConfig = { gateway: { terminal: terminalConfig } } as OpenClawConfig;
-  const policy = createTerminalLaunchPolicy(runtimeConfig);
-  if (terminalPolicyConfig) {
-    policy.prepareConfig(terminalPolicyConfig, { restartPending: true });
-  }
-  const respond = vi.fn();
-  const isConnectionActive = vi.fn(() => true);
-  const isTerminalEnabled = vi.fn(() => policy.isEnabled());
-  const resolveTerminalLaunchPolicy = vi.fn((agentId?: string) => policy.resolve(agentId));
-  const context = {
-    getRuntimeConfig: () => runtimeConfig,
-    resolveTerminalLaunchPolicy,
-    isTerminalEnabled,
-    terminalSessions: sessions,
-    nodeRegistry: { invoke: vi.fn(), ...nodeRegistry },
-    isConnectionActive,
-    logGateway: { info: vi.fn() },
-  } as unknown as Parameters<(typeof terminalHandlers)["terminal.input"]>[0]["context"];
-  const opts = {
-    params: params as Record<string, unknown>,
-    respond,
-    context,
-    client: { connId: "conn-1", connect: {} },
-  } as unknown as Parameters<(typeof terminalHandlers)["terminal.input"]>[0];
-  return {
-    opts,
-    sessions,
-    respond,
-    isConnectionActive,
-    isTerminalEnabled,
-    resolveTerminalLaunchPolicy,
-  };
-}
-
-function installCatalog(provider: SessionCatalogProvider) {
-  const registry = createEmptyPluginRegistry();
-  registry.sessionCatalogs.push({ pluginId: "test", provider, source: "test" });
-  setActivePluginRegistry(registry);
-}
 
 afterEach(() => {
   resetPluginRuntimeStateForTest();
@@ -949,92 +871,5 @@ describe("terminal gateway policy", () => {
     expect(sessions.write).not.toHaveBeenCalled();
     expect(sessions.close).toHaveBeenCalledWith("conn-1", "s1");
     expect(respond).toHaveBeenCalledWith(true, { ok: false });
-  });
-
-  it("uploads a file through the owned terminal session", async () => {
-    const { opts, sessions, respond } = makeOpts(
-      { sessionId: "s1", name: "report.pdf", contentBase64: "dGVzdA==" },
-      { enabled: true },
-    );
-
-    await expectDefined(terminalHandlers["terminal.upload"], "terminal.upload")(opts);
-
-    expect(sessions.upload).toHaveBeenCalledWith("conn-1", "s1", {
-      name: "report.pdf",
-      contentBase64: "dGVzdA==",
-    });
-    expect(respond).toHaveBeenCalledWith(true, { path: "/tmp/upload/report.pdf", size: 4 });
-  });
-
-  it("rejects non-canonical base64 before staging", async () => {
-    const { opts, sessions, respond } = makeOpts(
-      { sessionId: "s1", name: "report.pdf", contentBase64: "AB==" },
-      { enabled: true },
-    );
-
-    await expectDefined(terminalHandlers["terminal.upload"], "terminal.upload")(opts);
-
-    expect(sessions.upload).not.toHaveBeenCalled();
-    expect(respond).toHaveBeenCalledWith(
-      false,
-      undefined,
-      expect.objectContaining({ code: ErrorCodes.INVALID_REQUEST }),
-    );
-  });
-
-  it("binds paired-node uploads to the catalog terminal host", async () => {
-    const command = "codex.terminal.resume.v1";
-    const uploadCommand = "terminal.upload";
-    installCatalog({
-      id: "codex",
-      label: "Codex",
-      list: async () => [],
-      read: async (request) => ({ ...request, items: [] }),
-      openTerminal: async () => ({
-        kind: "node",
-        nodeId: "node-1",
-        command,
-        paramsJSON: JSON.stringify({ threadId: "thread" }),
-      }),
-    });
-    const node = {
-      nodeId: "node-1",
-      connId: "conn-node",
-      pairingGeneration: "generation-node",
-      commands: [command, uploadCommand],
-    };
-    const invoke = vi.fn(async () => ({
-      ok: true,
-      payloadJSON: JSON.stringify({ path: "/tmp/node/report.pdf", size: 4 }),
-    }));
-    const { opts, sessions } = makeOpts(
-      {
-        cols: 80,
-        rows: 24,
-        catalog: { catalogId: "codex", hostId: "node:node-1", threadId: "thread" },
-      },
-      { enabled: true },
-      undefined,
-      { get: () => node, invoke },
-    );
-
-    await expectDefined(terminalHandlers["terminal.open"], "terminal.open")(opts);
-    const openRequest = sessions.open.mock.calls[0]?.[0] as
-      | { stageUpload?: (file: { name: string; contentBase64: string }) => Promise<unknown> }
-      | undefined;
-    const result = await openRequest?.stageUpload?.({
-      name: "report.pdf",
-      contentBase64: "dGVzdA==",
-    });
-
-    expect(invoke).toHaveBeenCalledWith({
-      nodeId: "node-1",
-      expectedConnId: "conn-node",
-      expectedPairingGeneration: "generation-node",
-      command: uploadCommand,
-      params: { name: "report.pdf", contentBase64: "dGVzdA==" },
-      timeoutMs: 120_000,
-    });
-    expect(result).toEqual({ path: "/tmp/node/report.pdf", size: 4 });
   });
 });
