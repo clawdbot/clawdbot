@@ -40,6 +40,12 @@ The packaging script stages only that media capability set before Tauri invokes
 linuxdeploy. This prevents optional host plugins from adding unrelated system
 libraries to the AppImage dependency closure.
 
+The packaging flow provisions Tauri's five AppImage tools into a clean,
+digest-pinned cache. After Tauri builds the AppImage, the finalizer re-verifies
+that cache, removes bundled Wayland client libraries from the retained AppDir,
+and rebuilds the artifact. WebKitGTK and Mesa then use one compatible host
+stack.
+
 ## Develop and build
 
 The companion frontend is static HTML, CSS, and JavaScript. Install repository dependencies once
@@ -143,10 +149,21 @@ Build a `.deb` and AppImage locally (the same command CI runs):
 
 ```bash
 plugins=$(mktemp -d)
+cache=$(mktemp -d)
+trap 'rm -rf "$plugins" "$cache"' EXIT
+export XDG_CACHE_HOME="$cache"
 apps/linux/scripts/stage-appimage-gstreamer.sh "$plugins"
-cd apps/linux/src-tauri
-GSTREAMER_PLUGINS_DIR="$plugins" \
-  pnpm dlx @tauri-apps/cli@2.11.4 build --bundles deb,appimage
+apps/linux/scripts/tauri-appimage-tools.sh prepare
+apps/linux/scripts/tauri-appimage-tools.sh verify pre-build
+export LDAI_RUNTIME_FILE="$cache/tauri/.appimage-runtime-x86_64"
+(
+  cd apps/linux/src-tauri
+  GSTREAMER_PLUGINS_DIR="$plugins" \
+    pnpm dlx @tauri-apps/cli@2.11.4 build --bundles deb,appimage \
+      --config '{"bundle":{"createUpdaterArtifacts":false,"useLocalToolsDir":false}}'
+)
+apps/linux/scripts/finalize-appimage.sh \
+  apps/linux/src-tauri/target/release/bundle/appimage
 ```
 
 Bundles land in `target/release/bundle/{deb,appimage}/`. The `Linux App` CI
@@ -155,11 +172,14 @@ requests touching `apps/linux/**` and on manual dispatch.
 
 ## Releases
 
-The `Linux App Release` workflow (manual dispatch, release operators) builds
-the bundles from an existing stable release tag (prerelease tags are
-rejected: their semver suffix breaks Debian upgrade ordering) and attaches them to that tag's
-GitHub release with a `SHA256SUMS.linux-app.txt` checksum file. The tag commit
-must be reachable from `main` or its matching `release/YYYY.M.PATCH` branch;
-numeric correction tags use the base version's release branch. Dispatch from
-`main` or an exact protected `release-publish/<sha-prefix>-<serial>` tooling tag
-whose commit is contained in `main`. Builds use the validated release tag SHA.
+Manually dispatch `Linux App Release Request` from `main`. Provide the existing
+stable release tag in `tag`; prerelease tags are rejected because their semver
+suffix breaks Debian upgrade ordering. Enable the optional
+`desktop-test-bundles` input only when unsigned macOS and Windows test bundles
+are needed.
+
+A successful request automatically triggers `Linux App Release`. It builds from
+the validated release tag SHA and attaches the bundles to that tag's GitHub
+release with a `SHA256SUMS.linux-app.txt` checksum file. The tag commit must be
+reachable from `main` or its matching `release/YYYY.M.PATCH` branch; numeric
+correction tags use the base version's release branch.

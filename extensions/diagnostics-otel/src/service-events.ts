@@ -30,6 +30,8 @@ export function createDiagnosticsEventHandler(params: {
 }) {
   const { logger, recorders, recordLogRecord, recordSecurityEvent } = params;
   const {
+    recordGatewayEventLoopSample,
+    recordGatewayRpc,
     recordModelUsage,
     recordWebhookReceived,
     recordWebhookProcessed,
@@ -84,6 +86,12 @@ export function createDiagnosticsEventHandler(params: {
   ) => {
     try {
       switch (evt.type) {
+        case "gateway.event_loop.sample":
+          recordGatewayEventLoopSample(evt, metadata);
+          return;
+        case "gateway.rpc":
+          recordGatewayRpc(evt, metadata);
+          return;
         case "model.usage":
           recordModelUsage(evt, metadata, privateData.hostPluginId);
           return;

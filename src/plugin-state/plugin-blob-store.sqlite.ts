@@ -7,7 +7,10 @@ import {
   executeSqliteQueryTakeFirstSync,
   getNodeSqliteKysely,
 } from "../infra/kysely-sync.js";
-import { coerceRequiredSqliteNumber as sqliteNumber } from "../infra/sqlite-number.js";
+import {
+  coerceRequiredSqliteNumber as sqliteNumber,
+  normalizeSqliteNumber,
+} from "../infra/sqlite-number.js";
 import type { DB as OpenClawStateKyselyDatabase } from "../state/openclaw-state-db.generated.js";
 import {
   openOpenClawStateDatabase,
@@ -15,6 +18,8 @@ import {
 } from "../state/openclaw-state-db.js";
 import { resolveOpenClawStateSqlitePath } from "../state/openclaw-state-db.paths.js";
 import type {
+  PluginBlobEntry,
+  PluginBlobEntryInfo,
   PluginBlobOverflowPolicy,
   PluginBlobStoreErrorCode,
   PluginBlobStoreOperation,
@@ -29,12 +34,10 @@ type PluginBlobTable = OpenClawStateKyselyDatabase["plugin_blob_entries"];
 type PluginBlobDatabase = Pick<OpenClawStateKyselyDatabase, "plugin_blob_entries">;
 type PluginBlobRow = Selectable<PluginBlobTable>;
 
-export type PluginBlobStoredInfo = Pick<
+type PluginBlobStoredInfo = Pick<
   PluginBlobRow,
   "entry_key" | "metadata_json" | "created_at" | "expires_at"
 > & { size_bytes: number | bigint };
-
-export type PluginBlobStoredEntry = PluginBlobStoredInfo & { blob: Uint8Array };
 
 type BlobDescriptor = {
   entry_key: string;
@@ -55,8 +58,6 @@ type BlobWriteParams = {
   ttlMs?: number;
   env?: NodeJS.ProcessEnv;
 };
-
-type ValidateMetadataJson = (metadataJson: string) => void;
 
 function createError(params: {
   code: PluginBlobStoreErrorCode;
@@ -104,10 +105,38 @@ function kysely(db: DatabaseSync) {
   return getNodeSqliteKysely<PluginBlobDatabase>(db);
 }
 
+function decodeBlobInfo<TMetadata>(
+  row: PluginBlobStoredInfo,
+  operation: PluginBlobStoreOperation,
+  env?: NodeJS.ProcessEnv,
+): PluginBlobEntryInfo<TMetadata> {
+  let metadata: TMetadata;
+  try {
+    // SAFETY: The typed plugin namespace owns the metadata shape; storage validates JSON syntax.
+    metadata = JSON.parse(row.metadata_json) as TMetadata;
+  } catch (error) {
+    throw createError({
+      code: "PLUGIN_BLOB_CORRUPT",
+      operation,
+      message: "Plugin blob entry contains corrupt metadata JSON.",
+      env,
+      cause: error,
+    });
+  }
+  const expiresAt = normalizeSqliteNumber(row.expires_at);
+  return {
+    key: row.entry_key,
+    metadata,
+    sizeBytes: sqliteNumber(row.size_bytes),
+    createdAt: normalizeSqliteNumber(row.created_at) ?? 0,
+    ...(expiresAt != null ? { expiresAt } : {}),
+  };
+}
+
 function selectLiveBlob(
   db: DatabaseSync,
   params: { pluginId: string; namespace: string; key: string; now: number },
-): PluginBlobStoredEntry | undefined {
+) {
   return executeSqliteQueryTakeFirstSync(
     db,
     kysely(db)
@@ -493,15 +522,21 @@ export function pluginBlobRegisterIfAbsent(params: BlobWriteParams): boolean {
   return writeBlob(params, true);
 }
 
-export function pluginBlobLookup(params: {
+export function pluginBlobLookup<TMetadata>(params: {
   pluginId: string;
   namespace: string;
   key: string;
   env?: NodeJS.ProcessEnv;
-}): PluginBlobStoredEntry | undefined {
+}): PluginBlobEntry<TMetadata> | undefined {
   try {
     const { db } = openDatabase("lookup", params.env);
-    return selectLiveBlob(db, { ...params, now: Date.now() });
+    const row = selectLiveBlob(db, { ...params, now: Date.now() });
+    return row
+      ? {
+          ...decodeBlobInfo<TMetadata>(row, "lookup", params.env),
+          bytes: Uint8Array.from(row.blob),
+        }
+      : undefined;
   } catch (error) {
     throw wrapError(
       error,
@@ -513,14 +548,16 @@ export function pluginBlobLookup(params: {
   }
 }
 
-export function pluginBlobEntries(params: {
+export function pluginBlobEntries<TMetadata>(params: {
   pluginId: string;
   namespace: string;
   env?: NodeJS.ProcessEnv;
-}): PluginBlobStoredInfo[] {
+}): PluginBlobEntryInfo<TMetadata>[] {
   try {
     const { db } = openDatabase("entries", params.env);
-    return selectLiveInfo(db, { ...params, now: Date.now() });
+    return selectLiveInfo(db, { ...params, now: Date.now() }).map((row) =>
+      decodeBlobInfo<TMetadata>(row, "entries", params.env),
+    );
   } catch (error) {
     throw wrapError(
       error,
@@ -555,13 +592,12 @@ export function pluginBlobDelete(params: {
   }
 }
 
-export function pluginBlobDeleteExpiredKey(params: {
+export function pluginBlobDeleteExpiredKey<TMetadata>(params: {
   pluginId: string;
   namespace: string;
   key: string;
   env?: NodeJS.ProcessEnv;
-  validateMetadataJson: ValidateMetadataJson;
-}): PluginBlobStoredInfo | undefined {
+}): PluginBlobEntryInfo<TMetadata> | undefined {
   try {
     openDatabase("sweep", params.env);
     return runOpenClawStateWriteTransaction(
@@ -570,9 +606,10 @@ export function pluginBlobDeleteExpiredKey(params: {
         if (!row) {
           return undefined;
         }
-        params.validateMetadataJson(row.metadata_json);
+        // Decode before deletion so corrupt metadata cannot orphan external artifacts.
+        const entry = decodeBlobInfo<TMetadata>(row, "sweep", params.env);
         deleteKey(db, params);
-        return row;
+        return entry;
       },
       params.env ? { env: params.env } : {},
     );
@@ -587,12 +624,11 @@ export function pluginBlobDeleteExpiredKey(params: {
   }
 }
 
-export function pluginBlobDeleteExpired(params: {
+export function pluginBlobDeleteExpired<TMetadata>(params: {
   pluginId: string;
   namespace: string;
   env?: NodeJS.ProcessEnv;
-  validateMetadataJson: ValidateMetadataJson;
-}): PluginBlobStoredInfo[] {
+}): PluginBlobEntryInfo<TMetadata>[] {
   try {
     openDatabase("sweep", params.env);
     return runOpenClawStateWriteTransaction(
@@ -611,11 +647,10 @@ export function pluginBlobDeleteExpired(params: {
             .orderBy("created_at", "asc")
             .orderBy("entry_key", "asc"),
         ).rows;
-        for (const row of rows) {
-          params.validateMetadataJson(row.metadata_json);
-        }
+        // Return all cleanup metadata only after every row decodes and the claim commits.
+        const entries = rows.map((row) => decodeBlobInfo<TMetadata>(row, "sweep", params.env));
         deleteExpiredNamespace(db, { ...params, now });
-        return rows;
+        return entries;
       },
       params.env ? { env: params.env } : {},
     );

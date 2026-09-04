@@ -137,6 +137,11 @@ it.each(["cjs", "ts"])(
           const hooks = {
             dispatchHookAgentTurn: vi.fn<PluginRuntime["hooks"]["dispatchHookAgentTurn"]>(),
           };
+          const nodes = {
+            list: vi.fn<PluginRuntime["nodes"]["list"]>(),
+            invoke: vi.fn<PluginRuntime["nodes"]["invoke"]>(),
+            openDuplex: vi.fn<PluginRuntime["nodes"]["openDuplex"]>(),
+          };
           const dispatchReplyFromConfig =
             vi.fn<PluginRuntime["channel"]["reply"]["dispatchReplyFromConfig"]>();
           const config = { plugins: { entries: { [plugin.id]: { enabled: true } } } };
@@ -159,7 +164,7 @@ it.each(["cjs", "ts"])(
             config,
             cache: false,
             pluginSdkResolution: "src",
-            runtimeOptions: { hooks, dispatchReplyFromConfig },
+            runtimeOptions: { hooks, nodes, dispatchReplyFromConfig },
           });
           expect(registry.plugins).toContainEqual(
             expect.objectContaining({ id: plugin.id, status: "loaded" }),
@@ -204,7 +209,9 @@ it.each(["cjs", "ts"])(
             config: Object.getOwnPropertyDescriptor(runtime, "config")!,
             state: Object.getOwnPropertyDescriptor(runtime, "state")!,
             system: Object.getOwnPropertyDescriptor(runtime, "system")!,
+            nodes: Object.getOwnPropertyDescriptor(runtime, "nodes")!,
           };
+          expect(descriptors.nodes.get?.()).toBe(nodes);
           for (const [key, prepared] of [
             ["config", configApi],
             ["state", state],
@@ -246,7 +253,32 @@ it.each(["cjs", "ts"])(
             ),
           );
           expect(runtime.hooks).toBe(hooks);
+          expect(runtime.nodes).toBe(nodes);
           expect(runtime.channel.reply.dispatchReplyFromConfig).toBe(dispatchReplyFromConfig);
+          for (const key of [
+            "gateway",
+            "subagent",
+            "hooks",
+            "nodes",
+            "sandbox",
+            "worktrees",
+            "webSearch",
+            "tasks",
+          ] as const) {
+            const replacement = { ...runtime[key] };
+            expect.soft(Reflect.set(runtime, key, replacement), key).toBe(true);
+            expect.soft(runtime[key], key).toBe(replacement);
+            expect(Object.getOwnPropertyDescriptor(runtime, key)).toEqual({
+              value: replacement,
+              writable: true,
+              configurable: true,
+              enumerable: true,
+            });
+          }
+          expect(descriptors.nodes.get?.()).toBe(runtime.nodes);
+          const ttsDescriptor = Object.getOwnPropertyDescriptor(runtime, "tts")!;
+          expect(ttsDescriptor).toMatchObject({ get: expect.any(Function), set: undefined });
+          expect(Reflect.set(runtime, "tts", {})).toBe(false);
           for (const [key, prepared] of [
             ["config", configApi],
             ["state", state],
@@ -254,11 +286,16 @@ it.each(["cjs", "ts"])(
           ] as const) {
             const descriptor = descriptors[key];
             const replacement = { ...prepared };
-            // The existing lazy descriptor is an accessor: Reflect.set with the proxy receiver
-            // fails, while its explicit setter replaces the materialized data property.
-            expect(Reflect.set(runtime, key, replacement)).toBe(false);
-            descriptor.set?.(replacement);
+            expect(Reflect.set(runtime, key, replacement)).toBe(true);
             expect(descriptor.get?.()).toBe(replacement);
+            descriptor.set?.(prepared);
+            expect(runtime[key]).toBe(prepared);
+            const setterError = new Error("runtime setter rejected");
+            const setter = vi.fn(function (this: unknown, value: unknown) {
+              if (value === setterError) {
+                throw setterError;
+              }
+            });
             Object.defineProperty(runtime, key, {
               configurable: true,
               get(this: unknown) {
@@ -267,6 +304,7 @@ it.each(["cjs", "ts"])(
                 }
                 return this === runtime ? prepared : replacement;
               },
+              set: setter,
             });
             expect(runtime[key]).toBe(prepared);
             expect(descriptor.get?.()).toBe(replacement);
@@ -274,6 +312,17 @@ it.each(["cjs", "ts"])(
             expect
               .soft(Reflect.get(runtime, key, undefined), "explicit undefined receiver")
               .toBeUndefined();
+            for (const receiver of [runtime, null, undefined]) {
+              expect(Reflect.set(runtime, key, replacement, receiver)).toBe(true);
+              expect(setter.mock.contexts.at(-1)).toBe(receiver);
+            }
+            expect(() => Reflect.set(runtime, key, setterError)).toThrow(setterError);
+            Object.defineProperty(runtime, key, {
+              configurable: true,
+              value: prepared,
+              writable: false,
+            });
+            expect(Reflect.set(runtime, key, replacement)).toBe(false);
             Reflect.deleteProperty(runtime, key);
             expect(runtime[key]).toBeUndefined();
             expect(descriptor.get?.()).toBeUndefined();
@@ -310,10 +359,52 @@ it("keeps version and injected instance surfaces independent of the broad runtim
 
   expect(runtime.version).toBe(VERSION);
   expect(Object.getOwnPropertyDescriptor(runtime, "version")?.get?.()).toBe(VERSION);
-  expect(runtime.gateway).toBe(gateway);
-  expect(runtime.nodes).toBe(nodes);
-  expect(runtime.subagent).toBe(subagent);
+  const descriptors = Object.getOwnPropertyDescriptors(runtime);
+  expect(Object.keys(runtime)).toEqual([
+    "version",
+    "gateway",
+    "config",
+    "agent",
+    "subagent",
+    "system",
+    "media",
+    "mediaUnderstanding",
+    "tts",
+    "channel",
+    "events",
+    "logging",
+    "state",
+    "modelAuth",
+    "imageGeneration",
+    "videoGeneration",
+    "musicGeneration",
+    "llm",
+    "hooks",
+    "nodes",
+    "sandbox",
+    "worktrees",
+    "webSearch",
+    "tasks",
+  ]);
+  expect(Reflect.ownKeys(runtime)).toEqual(Object.keys(descriptors));
+  for (const key of Object.keys(descriptors)) {
+    expect(key in runtime).toBe(true);
+    expect(descriptors[key]).toMatchObject({ configurable: true, enumerable: true });
+  }
+  for (const [key, instance] of [
+    ["gateway", gateway],
+    ["nodes", nodes],
+    ["subagent", subagent],
+  ] as const) {
+    expect(runtime[key]).toBe(instance);
+    expect(descriptors[key]?.get?.()).toBe(instance);
+    expect(Reflect.get(runtime, key, null)).toBe(instance);
+    expect(Reflect.get(runtime, key, undefined)).toBe(instance);
+  }
   expect(loadPluginModule).not.toHaveBeenCalled();
+  // Object.prototype names are not declared runtime metadata.
+  expect(() => Reflect.has(runtime, "toString")).toThrow("broad runtime should stay lazy");
+  expect(loadPluginModule).toHaveBeenCalledTimes(1);
 });
 
 describe("cached plugin load failures", () => {

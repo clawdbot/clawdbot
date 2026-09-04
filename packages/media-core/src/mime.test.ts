@@ -229,6 +229,19 @@ describe("mime detection", () => {
     ).toBe("audio/webm");
   });
 
+  it.each(["audio/webm", "audio/mp4"])(
+    "preserves the declared %s hint when bytes and extension are inconclusive",
+    async (headerMime) => {
+      expect(
+        await detectMime({
+          buffer: Buffer.alloc(16),
+          headerMime,
+          additionalMimeHints: ["application/octet-stream"],
+        }),
+      ).toBe(headerMime);
+    },
+  );
+
   it.each([
     {
       name: "audio/mp4 header",

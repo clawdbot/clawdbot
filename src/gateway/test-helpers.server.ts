@@ -57,6 +57,7 @@ import {
   toAgentStoreSessionKey,
 } from "../routing/session-key.js";
 import { createLazyRuntimeModule } from "../shared/lazy-runtime.js";
+import { closeOpenClawAgentDatabases } from "../state/openclaw-agent-db.js";
 import {
   resetTaskFlowRegistryForTests,
   resetTaskRegistryForTests,
@@ -510,6 +511,10 @@ async function cleanupGatewayTestHome(options: { restoreEnv: boolean }) {
   resetLogger();
   resetTaskRegistryForTests({ persist: false });
   resetTaskFlowRegistryForTests({ persist: false });
+  if (tempHome && activeSuiteGatewayServerCount === 0) {
+    // Release fixture-owned handles while their lease environment still exists.
+    closeOpenClawAgentDatabases(tempHome);
+  }
   if (options.restoreEnv) {
     gatewayEnvSnapshot?.restore();
     gatewayEnvSnapshot = undefined;

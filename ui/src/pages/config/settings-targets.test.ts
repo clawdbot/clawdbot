@@ -28,6 +28,8 @@ describe("settings search target manifest", () => {
         target.hash,
       ]),
     ).toEqual([
+      ["device", "/settings/device", "", ""],
+      ["devicePermissions", "/settings/device/permissions", "", ""],
       ["updates", "/settings/updates", "", "#config-section-update"],
       ["channels", "/settings/channels", "", ""],
       ["security", "/settings/security", "", ""],

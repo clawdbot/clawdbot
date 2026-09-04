@@ -19,10 +19,10 @@ import {
 import { listMemoryArtifactProvenance } from "openclaw/plugin-sdk/memory-core-host-runtime-core";
 import { resolveStorePath } from "openclaw/plugin-sdk/session-store-paths";
 import {
+  borrowOpenClawAgentDatabase,
   executeSqliteQuerySync,
   getNodeSqliteKysely,
   openNodeSqliteDatabase,
-  openOpenClawAgentDatabase,
   runSqliteImmediateTransactionSync,
   tableExists,
   withOpenClawAgentDatabaseReadOnly,
@@ -43,7 +43,6 @@ import {
 import { collectTranscriptWrites } from "./memory-forget-curated-writes.js";
 import { summarizeParticipantMatches, type MemoryForgetReport } from "./memory-forget-report.js";
 import { withMemoryWorkspaceLock } from "./memory-workspace-lock.js";
-import { closeMemoryDatabase, openMemoryDatabaseAtPath } from "./memory/manager-db.js";
 import { isMemorySessionIndexable } from "./memory/manager-session-sync-state.js";
 import {
   readSessionIngestionState,
@@ -287,8 +286,8 @@ async function planMemoryIndex(params: {
     } finally {
       probe.close();
     }
-    // Ordinary owner handles cannot enable extensions after construction.
-    // This fresh owner-validated handle stays read-only while exposing vec0.
+    // Preview must not create or migrate state; its owner-validated handle
+    // stays read-only while exposing vec0.
     const vectorResult = withOpenClawAgentDatabaseReadOnly(
       ({ db }) => {
         db.enableLoadExtension(true);
@@ -595,17 +594,12 @@ async function forgetWorkspaceMemory(
     return report;
   }
 
-  const database = openOpenClawAgentDatabase({ agentId: params.agentId });
-  const vectorDb =
-    indexPlan.chunks.length > 0 && indexPlan.hasVectorTable
-      ? openMemoryDatabaseAtPath(database.path, true, params.agentId)
-      : undefined;
-  const db = vectorDb ?? database.db;
-  const kysely = getNodeSqliteKysely<ForgetDatabase>(db);
-  const chunkIds = indexPlan.chunks.map((chunk) => chunk.id);
-  const chunkHashes = [...new Set(indexPlan.chunks.map((chunk) => chunk.hash))];
+  const { db, release } = borrowOpenClawAgentDatabase({ agentId: params.agentId });
   try {
-    if (vectorDb) {
+    const kysely = getNodeSqliteKysely<ForgetDatabase>(db);
+    const chunkIds = indexPlan.chunks.map((chunk) => chunk.id);
+    const chunkHashes = [...new Set(indexPlan.chunks.map((chunk) => chunk.hash))];
+    if (chunkIds.length > 0 && indexPlan.hasVectorTable) {
       const loaded = await loadSqliteVecExtension({ db });
       if (!loaded.ok) {
         throw new Error(
@@ -708,8 +702,6 @@ async function forgetWorkspaceMemory(
     deleteMemoryEntryOrigins({ agentId: params.agentId, entryKeys: [...entryKeys] });
     return report;
   } finally {
-    if (vectorDb) {
-      closeMemoryDatabase(vectorDb);
-    }
+    release();
   }
 }
