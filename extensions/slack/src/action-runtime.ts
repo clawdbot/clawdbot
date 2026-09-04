@@ -1210,7 +1210,25 @@ export async function handleSlackAction(
         `Slack canvas "${canvasId}" is not bound to an authorized channel. Only canvases created through the canvas action can be edited, deleted, or inspected.`,
       );
     }
-    await assertReadTargetAllowed({ channelId: binding.channelId, teamId: binding.teamId });
+    // The canvas_id identifies the document, not the request's channel: an agent
+    // could otherwise name an allowed channel A while the canvas is actually
+    // bound to channel B (or a different workspace). Reject any binding that is
+    // not the exact conversation this request targets; the request's own
+    // context-gate already proved the agent may act in `target`, so this only
+    // forbids reaching a *different* conversation's canvas through a mismatched
+    // canvas_id. teamId is compared when both sides name one (slack canvases are
+    // workspace-scoped, so a cross-team match would never be legitimate).
+    if (
+      binding.channelId !== channelId ||
+      (binding.teamId !== undefined &&
+        target.teamId !== undefined &&
+        binding.teamId !== target.teamId)
+    ) {
+      throw new Error(
+        `Slack canvas "${canvasId}" is bound to a different conversation than the one this request targets and cannot be acted on.`,
+      );
+    }
+    await assertReadTargetAllowed(target);
     if (action === "editCanvas") {
       const changes = readCanvasChangesParam(params);
       await slackActionRuntime.editSlackCanvas(canvasId, changes, writeOpts);

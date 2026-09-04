@@ -443,6 +443,43 @@ describe("Slack canvas action real-transport trace", () => {
     });
   });
 
+  it("rejects acting on a canvas bound to a different conversation than the request targets", async () => {
+    await withRealCanvasBindingStore(async () => {
+      // Create records the canvas->C123 binding. A later request that names C456
+      // (an otherwise-allowlisted channel openclaw permits) with the same canvas
+      // id must be rejected before any HTTP call: the canvas is bound to C123,
+      // and canvases.* sends only canvas_id so Slack cannot verify the target.
+      // This closes the mismatch where an agent proxies another conversation's
+      // canvas through the canvas_id it was handed.
+      const created = await runCanvasScenario({
+        op: "create",
+        channelId: "C123",
+        title: "Owned",
+        documentContent: { type: "markdown", markdown: "# Owned" },
+      });
+      expect(created.error).toBeUndefined();
+      expect(created.result?.details).toMatchObject({
+        ok: true,
+        canvas: { canvasId: "F0TRACE001" },
+      });
+
+      // Both C123 and C456 are allowlisted by default, so only the canvas->channel
+      // binding mismatch can explain the rejection.
+      const { calls, error } = await runCanvasScenario({
+        op: "edit",
+        channelId: "C456",
+        canvasId: "F0TRACE001",
+        changes: [
+          { operation: "insert_at_end", documentContent: { type: "markdown", markdown: "x" } },
+        ],
+      });
+      expect(error?.message).toBe(
+        'Slack canvas "F0TRACE001" is bound to a different conversation than the one this request targets and cannot be acted on.',
+      );
+      expect(calls).toEqual([]);
+    });
+  });
+
   it("rejects a canvas edit with an invalid canvas id before any HTTP call", async () => {
     await withRealCanvasBindingStore(async () => {
       const { calls, error } = await runCanvasScenario({
