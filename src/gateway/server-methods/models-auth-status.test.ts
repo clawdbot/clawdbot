@@ -829,18 +829,59 @@ describe("models.authStatus", () => {
     );
   });
 
-  it("does not offer logout for runtime external CLI profiles", async () => {
-    const health = createOpenAiCodexOauthHealthSummary();
+  it("loads exact-account usage for runtime OpenAI bootstrap without offering logout", async () => {
+    const profileId = "openai:default";
     setPreparedAuthStore({
       version: 1,
-      profiles: {},
-      runtimeExternalProfileIds: ["openai:default"],
+      profiles: {
+        [profileId]: {
+          type: "oauth",
+          provider: "openai",
+          access: "bootstrap-access",
+          refresh: "bootstrap-refresh",
+          expires: Date.now() + 60_000,
+        },
+      },
+      runtimeExternalProfileIds: [profileId],
+      runtimeExternalCliProfileIds: [profileId],
     });
-    mocks.buildAuthHealthSummary.mockReturnValue(health);
-
-    const provider = await firstAuthStatusProvider();
-
-    expect(provider?.profiles[0]?.logoutSupported).toBeUndefined();
+    mocks.buildAuthHealthSummary.mockReturnValue(createOpenAiCodexOauthHealthSummary());
+    const usage = Promise.withResolvers<UsageSummary>();
+    mocks.loadProviderUsageSummary.mockReturnValueOnce(usage.promise);
+    try {
+      const pending = await firstAuthStatusProvider();
+      expect(pending?.profiles[0]).toMatchObject({
+        profileId,
+        source: "external",
+        externallyManaged: true,
+        usageRefreshPending: true,
+      });
+      expect(pending?.profiles[0]?.logoutSupported).toBeUndefined();
+      expect(mocks.loadProviderUsageSummary).toHaveBeenCalledWith(
+        expect.objectContaining({ authProfile: { provider: "openai", profileId } }),
+      );
+      usage.resolve({
+        updatedAt: Date.now(),
+        providers: [
+          {
+            provider: "openai",
+            displayName: "OpenAI",
+            usageScope: "account",
+            windows: [{ label: "week", usedPercent: 25 }],
+          },
+        ],
+      });
+      await waitForFast(async () => {
+        const ready = await firstAuthStatusProvider();
+        expect(ready?.profiles[0]?.usage).toMatchObject({ windows: [{ usedPercent: 25 }] });
+        expect(ready?.usageProfileId).toBe(profileId);
+        expect(ready?.profiles[0]?.usageRefreshPending).toBeUndefined();
+        expect(ready?.profiles[0]?.logoutSupported).toBeUndefined();
+      });
+    } finally {
+      usage.resolve(emptyUsageSummary());
+      await usage.promise;
+    }
   });
 
   it("reports external CLI-managed OAuth as signed in across access-token expiry", async () => {
@@ -895,7 +936,6 @@ describe("models.authStatus", () => {
       profiles: [{ profileId, status: "expired" }],
     });
     expect(provider?.expiry).toBeUndefined();
-    expect(mocks.loadProviderUsageSummary).not.toHaveBeenCalled();
   });
 
   it("keeps an unrelated effective token expiry visible beside owned CLI OAuth", async () => {
