@@ -7,6 +7,7 @@ import type {
   ToolResultMessage,
   EventStream as SourceEventStream,
 } from "@openclaw/llm-core";
+import { withRunFailureOrigin } from "@openclaw/llm-core/diagnostics";
 import { coerceErrorMessage } from "@openclaw/normalization-core/error-coercion";
 import { asOptionalRecord } from "@openclaw/normalization-core/record-coerce";
 import {
@@ -214,7 +215,12 @@ function pushLoopFailure(
   signal: AbortSignal | undefined,
 ): void {
   const aborted = signal?.aborted === true;
-  const failureMessage = createFailureMessage(config.model, error, aborted, signal);
+  const failureMessage = createFailureMessage(
+    config.model,
+    withRunFailureOrigin(error, "runtime", signal),
+    aborted,
+    signal,
+  );
   stream.push({ type: "message_start", message: failureMessage });
   stream.push({ type: "message_end", message: failureMessage });
   stream.push({ type: "turn_end", message: failureMessage, toolResults: [] });
@@ -439,7 +445,7 @@ async function runLoop(
         const terminalMessage = {
           ...createFailureMessage(
             config.model,
-            new Error(TOOL_LOOP_RECOVERY_TERMINATED_MESSAGE),
+            withRunFailureOrigin(TOOL_LOOP_RECOVERY_TERMINATED_MESSAGE, "runtime"),
             false,
           ),
           content: [{ type: "text" as const, text: TOOL_LOOP_RECOVERY_TERMINATED_MESSAGE }],

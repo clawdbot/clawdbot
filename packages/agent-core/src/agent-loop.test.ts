@@ -172,6 +172,42 @@ describe("agentLoop EventStream failures", () => {
     });
   });
 
+  it.each(["agent", "stream"] as const)(
+    "keeps a callback failure runtime-owned after it aborts the %s",
+    async (entry) => {
+      const controller = new AbortController();
+      const streamFn = vi.fn(failingStreamFn);
+      const transformContext = async () => {
+        if (entry === "agent") {
+          agent.abort();
+        } else {
+          controller.abort();
+        }
+        throw new Error("401 OAuth token refresh failed for openai: invalid_grant");
+      };
+      const agent = new Agent({ initialState: { model }, streamFn, transformContext });
+      let messages: AgentMessage[];
+      if (entry === "agent") {
+        await agent.prompt("hello");
+        messages = agent.state.messages;
+      } else {
+        const stream = agentLoopContinue(
+          { systemPrompt: "", messages: [{ role: "user", content: "hello", timestamp: 1 }] },
+          { ...config, transformContext },
+          controller.signal,
+          streamFn,
+        );
+        await collectEvents(stream);
+        messages = await stream.result();
+      }
+      expect(messages.find((message) => message.role === "assistant")).toMatchObject({
+        stopReason: "aborted",
+        diagnostics: [{ type: "synthesized_run_failure", timestamp: expect.any(Number) }],
+      });
+      expect(streamFn).not.toHaveBeenCalled();
+    },
+  );
+
   it("persists and replays interruption guidance after Agent aborts a rejected run", async () => {
     let markStarted = () => {};
     const started = new Promise<void>((resolve) => {
