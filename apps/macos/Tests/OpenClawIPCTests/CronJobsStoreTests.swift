@@ -553,12 +553,21 @@ struct CronJobsStoreTests {
         }
     }
 
-    @Test func `starting and stopping retains normal scheduler and job refresh behavior`() async throws {
+    @Test(arguments: [false, true])
+    func `starting and stopping retains normal scheduler and job refresh behavior`(lateHello: Bool) async throws {
         let fixture = CronGatewayFixture()
         let store = CronJobsStore(gateway: fixture.gateway)
+        defer { store.stop(.settings) }
 
         store.start(.settings)
-        try #require(await self.waitUntil { store.jobs.count == 2 })
+        try #require(await self.waitUntil { store.jobs.count == 2 && !store.isLoadingJobs })
+        if lateHello {
+            let snapshot = try #require(await fixture.gateway.lastSnapshot)
+            let lease = try #require(await fixture.gateway.captureServerLease())
+            // Hello admission precedes subscriber delivery, which can arrive after the first poll.
+            await fixture.gateway._test_handlePush(.snapshot(snapshot), socketGeneration: lease.socketGeneration)
+            #expect(await fixture.waitForRequest(method: "cron.list", occurrence: 1) == nil)
+        }
 
         #expect(store.schedulerEnabled == true)
         #expect(store.schedulerStorePath == "/tmp/cron-tests")
@@ -665,8 +674,7 @@ struct CronJobsStoreTests {
                     return false
                 })
             try #require(reachedGate)
-            // Bootstrap polling and hello delivery may each finish a list before
-            // the event refresh reaches this gate. Count only later requests.
+            // Observe replacement work only after the event refresh reaches its held lookup.
             let nextListOccurrence = await fixture.requests.requestCount(method: "cron.list")
 
             if replacement == "event" {

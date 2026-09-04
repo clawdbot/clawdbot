@@ -405,8 +405,6 @@ final class CronJobsStore {
             self.scheduleRefresh(delayMs: 0)
         }
         switch push {
-        case .snapshot:
-            self.scheduleRefresh(delayMs: 0)
         case let .event(evt) where evt.event == "cron":
             guard let payload = evt.payload else { return }
             if let cronEvt = try? GatewayPayloadDecoding.decode(payload, as: CronEvent.self) {
