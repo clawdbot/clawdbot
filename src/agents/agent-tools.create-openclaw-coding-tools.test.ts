@@ -183,6 +183,25 @@ function cronCreatorToolNames(
 }
 
 describe("createOpenClawCodingTools", () => {
+  it("prefers the canonical messaging target over the raw channel id for exec approvals", async () => {
+    vi.mocked(createExecTool).mockClear();
+
+    const tools = createOpenClawCodingTools({
+      messageProvider: "discord",
+      currentMessagingTarget: "channel:123",
+      currentChannelId: "123",
+      messageTo: "channel:123",
+    });
+    await requireToolExecute(requireTool(tools, "exec"))("canonical-target", {
+      command: "echo ok",
+    });
+
+    expect(vi.mocked(createExecTool).mock.calls.at(-1)?.[0]).toMatchObject({
+      currentMessagingTarget: "channel:123",
+      currentChannelId: "123",
+    });
+  });
+
   it("resolves messageTo into the exec approval target when current targets are absent", async () => {
     vi.mocked(createExecTool).mockClear();
 
