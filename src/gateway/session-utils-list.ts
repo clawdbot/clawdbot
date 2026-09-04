@@ -178,17 +178,6 @@ function filterSessionEntries(params: {
   const visibleEntries = Object.entries(store).filter(
     ([key, entry]) => params.entryFilter?.(key, entry) ?? true,
   );
-  const matchesSearch = search
-    ? createSessionListSearchMatcher({
-        cfg,
-        search,
-        now,
-        visibleEntries,
-        agentId: agentId || undefined,
-        getRowContext: params.getRowContext,
-        projectActiveRun: params.projectActiveRun,
-      })
-    : undefined;
   const allowedProfileIds =
     opts.involvingProfileId && params.restrictProfileReferences
       ? new Set(
@@ -213,34 +202,26 @@ function filterSessionEntries(params: {
   }
   const selectedProfileId = profileReference?.value;
 
-  for (const [key, entry] of visibleEntries) {
+  const candidateEntries = visibleEntries.filter(([key, entry]) => {
     if (
       isCronRunSessionKey(key) ||
       (!includeGlobal && key === "global") ||
       (!includeUnknown && key === "unknown")
     ) {
-      continue;
+      return false;
     }
-    if (agentId) {
-      if (key === "global") {
-        if (!includeGlobal) {
-          continue;
-        }
-      } else if (key === "unknown") {
-        continue;
-      } else {
-        const parsed = parseAgentSessionKey(key);
-        if (!parsed || normalizeAgentId(parsed.agentId) !== agentId) {
-          continue;
-        }
+    if (agentId && key !== "global") {
+      const parsed = parseAgentSessionKey(key);
+      if (!parsed || normalizeAgentId(parsed.agentId) !== agentId) {
+        return false;
       }
     }
     if (isPhantomAgentStoreListEntry(key, entry)) {
-      continue;
+      return false;
     }
     if (spawnedBy) {
       if (key === "unknown" || key === "global") {
-        continue;
+        return false;
       }
       const filterRowContext = resolveSessionListRowContext(params);
       const latest = filterRowContext
@@ -263,13 +244,13 @@ function filterSessionEntries(params: {
         : shouldKeepStoreOnlyChildLink(entry, now) &&
           (entry.spawnedBy === spawnedBy || entry.parentSessionKey === spawnedBy);
       if (!keepSpawned) {
-        continue;
+        return false;
       }
     }
     if (opts.archived !== "all") {
       const archived = entry.archivedAt !== undefined;
       if (opts.archived === true ? !archived : archived) {
-        continue;
+        return false;
       }
     }
     if (
@@ -277,11 +258,27 @@ function filterSessionEntries(params: {
       (!isFinitePositiveTimestamp(entry.lastInteractionAt) ||
         normalizeOptionalString(entry.heartbeatIsolatedBaseSessionKey))
     ) {
-      continue;
+      return false;
     }
     if ((label && entry.label !== label) || (boardFace && entry.boardFace !== boardFace)) {
-      continue;
+      return false;
     }
+    return true;
+  });
+  // Search batches runtime metadata; excluded rows must not participate in ownership resolution.
+  const matchesSearch = search
+    ? createSessionListSearchMatcher({
+        cfg,
+        search,
+        now,
+        visibleEntries: candidateEntries,
+        agentId: agentId || undefined,
+        getRowContext: params.getRowContext,
+        projectActiveRun: params.projectActiveRun,
+      })
+    : undefined;
+
+  for (const [key, entry] of candidateEntries) {
     if (matchesSearch && !matchesSearch(key, entry)) {
       continue;
     }
