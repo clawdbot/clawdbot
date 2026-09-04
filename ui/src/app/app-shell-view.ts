@@ -366,7 +366,7 @@ export function renderApplicationShell(host: ShellViewHost) {
         canHoldUpdate,
         onUpdate: () => void context.overlays.runUpdate(),
         refreshRequired: navigationSurfaceHidden ? false : controlUiRefreshRequired,
-        onRefresh: host.refreshControlUi,
+        onRefresh: () => void host.refreshControlUi(),
         onHoldUpdate: () => context.overlays.holdUpdate(),
         onReviewUpdate: () => host.navigate("updates"),
         searchQuery: host.settingsSearchQuery,
