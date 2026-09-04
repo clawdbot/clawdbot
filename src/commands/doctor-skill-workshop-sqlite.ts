@@ -3,15 +3,16 @@ import fs from "node:fs/promises";
 import path from "node:path";
 import { resolveStateDir } from "../config/paths.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
-import { isMissingPathError } from "../infra/errors.js";
+import { hasErrnoCode, isMissingPathError } from "../infra/errors.js";
 import { removePathWithinRoot } from "../infra/fs-safe-remove.js";
 import { pathExists, root, type Root } from "../infra/fs-safe.js";
 import { executeSqliteQuerySync, getNodeSqliteKysely } from "../infra/kysely-sync.js";
-import { isPathInside } from "../infra/path-guards.js";
-import { readSkillFrontmatterSafe } from "../skills/loading/local-loader.js";
-import { resolveSkillDiscoveryLimits } from "../skills/loading/skill-root-discovery.js";
-import { resolveWorkshopSkillsDir } from "../skills/workshop/skills-root.js";
-import { parseSkillProposalRow } from "../skills/workshop/store-sqlite-record.js";
+import { movePathWithCopyFallback } from "../infra/replace-file.js";
+import {
+  parseSkillProposalRow,
+  readStoredProposal,
+  updateProposal,
+} from "../skills/workshop/store-sqlite-record.js";
 import { openSkillWorkshopStore } from "../skills/workshop/store-sqlite-schema.js";
 import {
   hashSkillProposalContent,
@@ -19,23 +20,31 @@ import {
   readSkillProposal,
   readSkillProposalRecord,
   readSkillProposalRollback,
-  resolveSkillProposalTarget,
-  updateSkillProposalRecord,
   validateSkillProposalRecord,
   validateSkillProposalRollback,
 } from "../skills/workshop/store.js";
 import type { SkillProposalRecord, SkillProposalRollback } from "../skills/workshop/types.js";
 import { tableExists } from "../state/openclaw-state-db-schema-helpers.js";
 import type { DB as OpenClawStateDatabase } from "../state/openclaw-state-db.generated.js";
-import { openExistingOpenClawStateDatabaseReadOnly } from "../state/openclaw-state-db.js";
 import {
-  listLegacyCollectionBackupRoots,
+  openExistingOpenClawStateDatabaseReadOnly,
+  runOpenClawStateWriteTransaction,
+} from "../state/openclaw-state-db.js";
+import {
+  listPendingLegacyCollectionBackupRoots,
   migrateLegacyCollectionBackups,
 } from "./doctor-skill-workshop-collection-backups.js";
 import {
   inferOwnerAgentId,
-  verifyRelocationDestination,
+  planWorkshopRelocation,
+  resolveLegacyWorkshopWorkspaceDir,
+  type LegacyWorkshopProposal,
+  type WorkshopProposalUpdate,
 } from "./doctor-skill-workshop-relocation.js";
+import {
+  finishWorkshopWorkspaceRelocations,
+  prepareWorkshopWorkspaceRelocation,
+} from "./doctor-skill-workshop-workspaces.js";
 
 const WORKSHOP_DIR = "skill-workshop";
 const PROPOSALS_DIR = `${WORKSHOP_DIR}/proposals`;
@@ -51,8 +60,6 @@ const MAX_RECORD_BYTES = 1024 * 1024;
 // SKILL.md plus 64 existing 256 KiB support targets.
 const MAX_ROLLBACK_BYTES = 128 * 1024 * 1024;
 const PROPOSAL_ID_PATTERN = /^[a-z0-9][a-z0-9-]{5,120}$/;
-const INVALID_LEGACY_SKILL_REASON =
-  "Skill Workshop could not load the applied legacy skill; the path stays in place and the proposal is stale.";
 
 type MigrationResult = {
   changes: string[];
@@ -81,52 +88,7 @@ async function readJson(rootDir: Root, relativePath: string, maxBytes: number): 
     maxBytes,
     symlinks: "reject",
   });
-  return JSON.parse(read.buffer.toString("utf8")) as unknown;
-}
-
-function retargetWorkshopProposal(
-  record: SkillProposalRecord,
-  target: ReturnType<typeof resolveSkillProposalTarget>,
-): SkillProposalRecord {
-  return {
-    ...record,
-    target: {
-      ...record.target,
-      skillDir: target.skillDir,
-      skillFile: target.skillFile,
-      source: "openclaw-workshop",
-    },
-    updatedAt: new Date().toISOString(),
-  };
-}
-
-function staleWorkshopProposal(record: SkillProposalRecord, reason: string): SkillProposalRecord {
-  const now = new Date().toISOString();
-  return {
-    ...record,
-    status: "stale",
-    updatedAt: now,
-    staleAt: now,
-    statusReason: reason,
-  };
-}
-
-async function moveWorkshopSkillDirectory(source: string, destination: string): Promise<void> {
-  await fs.mkdir(path.dirname(destination), { recursive: true });
-  try {
-    await fs.rename(source, destination);
-  } catch (error) {
-    if ((error as NodeJS.ErrnoException).code !== "EXDEV") {
-      throw error;
-    }
-    await fs.cp(source, destination, {
-      recursive: true,
-      errorOnExist: true,
-      force: false,
-      preserveTimestamps: true,
-    });
-    await fs.rm(source, { recursive: true, force: false });
-  }
+  return JSON.parse(read.buffer.toString("utf8"));
 }
 
 export async function inspectLegacySkillWorkshopMigration(params: {
@@ -147,7 +109,7 @@ export async function inspectLegacySkillWorkshopMigration(params: {
       ).rows;
       records = rows.flatMap((row) => {
         try {
-          const parsed = validateSkillProposalRecord(JSON.parse(row.record_json) as unknown);
+          const parsed = validateSkillProposalRecord(JSON.parse(row.record_json));
           return parsed.ok ? [{ record: parsed.value, ownerAgentId: row.owner_agent_id }] : [];
         } catch {
           return [];
@@ -158,266 +120,11 @@ export async function inspectLegacySkillWorkshopMigration(params: {
     database?.walMaintenance.close();
   }
   const plan = await planWorkshopRelocation(records, params.config, env);
-  const backups = await listLegacyCollectionBackupRoots(env);
+  const backups = await listPendingLegacyCollectionBackupRoots(params.config, env);
   return {
     externalProposalCount: plan.externalProposalCount,
     externalProposalCountsByAgent: plan.externalProposalCountsByAgent,
-    legacyBackupRootCount: backups.names.length,
-  };
-}
-
-type LegacyWorkshopProposal = {
-  record: SkillProposalRecord;
-  ownerAgentId: string | null;
-};
-
-type WorkshopProposalUpdate = {
-  record: SkillProposalRecord;
-  ownerAgentId?: string;
-};
-
-type WorkshopRelocationPlan = {
-  entry: LegacyWorkshopProposal;
-  source: string;
-  ownerAgentId?: string;
-  unconfiguredOwnerAgentId?: string;
-  moveKey?: string;
-  staleReason?: string;
-};
-
-type WorkshopMove = {
-  source: string;
-  destination: string;
-  adopted: boolean;
-  updates: WorkshopProposalUpdate[];
-};
-
-async function planWorkshopRelocation(
-  records: LegacyWorkshopProposal[],
-  config: OpenClawConfig,
-  env: NodeJS.ProcessEnv,
-): Promise<{
-  moves: WorkshopMove[];
-  updates: WorkshopProposalUpdate[];
-  externalProposalCount: number;
-  externalProposalCountsByAgent: Record<string, number>;
-}> {
-  const external = records.flatMap<WorkshopRelocationPlan>((entry) => {
-    if (entry.record.status !== "pending" && entry.record.status !== "applied") {
-      return [];
-    }
-    const source = path.resolve(entry.record.target.skillDir);
-    const owner = inferOwnerAgentId({
-      config,
-      env,
-      record: entry.record,
-      workspaceDir: path.dirname(path.dirname(source)),
-      rowOwnerAgentId: entry.ownerAgentId,
-    });
-    if (
-      owner.ownerAgentId &&
-      entry.ownerAgentId &&
-      isPathInside(path.resolve(resolveWorkshopSkillsDir(config, owner.ownerAgentId, env)), source)
-    ) {
-      return [];
-    }
-    return [
-      {
-        entry,
-        source,
-        ...(owner.ownerAgentId ? { ownerAgentId: owner.ownerAgentId } : {}),
-        ...(owner.unconfiguredOwnerAgentId
-          ? { unconfiguredOwnerAgentId: owner.unconfiguredOwnerAgentId }
-          : {}),
-        ...(owner.unconfiguredOwnerAgentId
-          ? {
-              staleReason: `Skill Workshop could not use unconfigured owning agent "${owner.unconfiguredOwnerAgentId}"; the legacy path stays in place and the proposal is stale.`,
-            }
-          : {}),
-      },
-    ];
-  });
-  const movesByKey = new Map<string, WorkshopMove>();
-  for (const plan of external) {
-    const { entry } = plan;
-    const record = entry.record;
-    if (!plan.ownerAgentId) {
-      plan.staleReason ??=
-        "Skill Workshop could not identify one owning agent; the legacy path stays in place and the proposal is stale.";
-      continue;
-    }
-    if (record.kind !== "create" || record.status !== "applied") {
-      continue;
-    }
-    const target = resolveSkillProposalTarget({
-      skillName: record.target.skillKey,
-      config,
-      agentId: plan.ownerAgentId,
-      env,
-    });
-    const moveKey = `${plan.source}\0${target.skillDir}`;
-    plan.moveKey = moveKey;
-    if (movesByKey.has(moveKey)) {
-      continue;
-    }
-    let sourceStat: Awaited<ReturnType<typeof fs.lstat>> | undefined;
-    try {
-      sourceStat = await fs.lstat(plan.source);
-    } catch (error) {
-      if (!isMissingPathError(error)) {
-        throw error;
-      }
-    }
-    if (sourceStat?.isSymbolicLink()) {
-      plan.staleReason = `Skill Workshop no longer writes through symlinked skills; ${plan.source} stays a workspace skill.`;
-      continue;
-    }
-    if (!sourceStat) {
-      // The move is durable before metadata persistence; on rerun, adopt only its verified destination.
-      if (await pathExists(target.skillFile)) {
-        if (
-          !(await verifyRelocationDestination({
-            record,
-            destinationSkillDir: target.skillDir,
-            destinationSkillFile: target.skillFile,
-            config,
-            env,
-          }))
-        ) {
-          plan.staleReason =
-            "Skill Workshop could not adopt the relocated skill: destination identity mismatch (content hash or frontmatter name/key); the proposal is stale.";
-          continue;
-        }
-        movesByKey.set(moveKey, {
-          source: plan.source,
-          destination: target.skillDir,
-          adopted: true,
-          updates: [],
-        });
-      } else {
-        plan.staleReason =
-          "Skill Workshop could not find the applied legacy skill; the proposal is stale.";
-      }
-      continue;
-    }
-    const frontmatter = readSkillFrontmatterSafe({
-      rootDir: plan.source,
-      filePath: path.join(plan.source, "SKILL.md"),
-      maxBytes: resolveSkillDiscoveryLimits(config).maxSkillFileBytes,
-    });
-    if (!frontmatter?.description?.trim()) {
-      plan.staleReason = INVALID_LEGACY_SKILL_REASON;
-      continue;
-    }
-    if (await pathExists(target.skillDir)) {
-      plan.staleReason = `Skill Workshop relocation conflict: destination already exists at ${target.skillDir}.`;
-      continue;
-    }
-    movesByKey.set(moveKey, {
-      source: plan.source,
-      destination: target.skillDir,
-      adopted: false,
-      updates: [],
-    });
-  }
-
-  const movesByDestination = new Map<string, string[]>();
-  for (const move of movesByKey.values()) {
-    const sources = movesByDestination.get(move.destination) ?? [];
-    sources.push(move.source);
-    movesByDestination.set(move.destination, sources);
-  }
-  for (const [destination, sources] of movesByDestination) {
-    if (sources.length < 2) {
-      continue;
-    }
-    const conflictReason = `Skill Workshop relocation conflict: sources ${sources.toSorted().join(", ")} map to the same destination ${destination}.`;
-    for (const plan of external) {
-      if (sources.includes(plan.source)) {
-        plan.staleReason = conflictReason;
-        plan.moveKey = undefined;
-      }
-    }
-    for (const [moveKey, move] of movesByKey) {
-      if (sources.includes(move.source)) {
-        movesByKey.delete(moveKey);
-      }
-    }
-  }
-
-  const updates: WorkshopProposalUpdate[] = [];
-  for (const plan of external) {
-    const { entry } = plan;
-    const record = entry.record;
-    const ownerAgentId = plan.ownerAgentId;
-    const target =
-      ownerAgentId &&
-      record.status === "pending" &&
-      (record.kind === "create" || record.kind === "update")
-        ? resolveSkillProposalTarget({
-            skillName: record.target.skillKey,
-            config,
-            agentId: ownerAgentId,
-            env,
-          })
-        : undefined;
-    const moveKey = plan.moveKey ?? (target ? `${plan.source}\0${target.skillDir}` : undefined);
-    const move = moveKey ? movesByKey.get(moveKey) : undefined;
-    if (move && !plan.staleReason) {
-      move.updates.push({
-        record: retargetWorkshopProposal(record, {
-          skillKey: record.target.skillKey,
-          skillDir: move.destination,
-          skillFile: path.join(move.destination, "SKILL.md"),
-        }),
-        ...(ownerAgentId ? { ownerAgentId } : {}),
-      });
-      continue;
-    }
-    if (plan.staleReason) {
-      updates.push({
-        record: staleWorkshopProposal(record, plan.staleReason),
-        ...(ownerAgentId ? { ownerAgentId } : {}),
-      });
-      continue;
-    }
-    if (record.status === "pending" && record.kind === "create" && ownerAgentId && target) {
-      updates.push({
-        record: retargetWorkshopProposal(record, target),
-        ownerAgentId,
-      });
-      continue;
-    }
-    if (record.status === "applied" && record.kind === "create" && ownerAgentId) {
-      updates.push({
-        record: staleWorkshopProposal(
-          record,
-          "Skill Workshop could not find the applied legacy skill; the proposal is stale.",
-        ),
-        ownerAgentId,
-      });
-    }
-    if (record.status === "pending" && record.kind === "update") {
-      updates.push({
-        record: staleWorkshopProposal(
-          record,
-          "Skill Workshop no longer edits skills outside its own directory.",
-        ),
-        ...(ownerAgentId ? { ownerAgentId } : {}),
-      });
-    }
-  }
-  return {
-    moves: [...movesByKey.values()],
-    updates,
-    externalProposalCount:
-      updates.length +
-      [...movesByKey.values()].reduce((count, move) => count + move.updates.length, 0),
-    externalProposalCountsByAgent: external.reduce<Record<string, number>>((counts, plan) => {
-      const ownerAgentId = plan.ownerAgentId ?? plan.unconfiguredOwnerAgentId ?? "unknown";
-      counts[ownerAgentId] = (counts[ownerAgentId] ?? 0) + 1;
-      return counts;
-    }, {}),
+    legacyBackupRootCount: backups.length,
   };
 }
 
@@ -426,44 +133,77 @@ async function relocateLegacyWorkshopTargets(
   env: NodeJS.ProcessEnv,
 ): Promise<WorkshopRelocationResult> {
   const { database, kysely } = openSkillWorkshopStore({ env });
-  const records = executeSqliteQuerySync(
+  const rows = executeSqliteQuerySync(
     database.db,
     kysely.selectFrom("skill_workshop_proposals").selectAll(),
-  ).rows.flatMap((row) => {
+  ).rows;
+  const initialRows = new Map(rows.map((row) => [row.proposal_id, row]));
+  const records = rows.flatMap((row) => {
     const record = parseSkillProposalRow(row);
     return record ? [{ record, ownerAgentId: row.owner_agent_id }] : [];
   });
   let retargetedProposals = 0;
   let staleProposals = 0;
-  const persistUpdates = async (updates: WorkshopProposalUpdate[]): Promise<void> => {
+  const persistUpdates = (updates: WorkshopProposalUpdate[]): void => {
+    if (updates.length === 0) {
+      return;
+    }
+    // Every proposal for one moved skill must commit together. Otherwise a
+    // retry loses the create row that proves where its pending updates belong.
+    runOpenClawStateWriteTransaction(
+      ({ db }) => {
+        for (const update of updates) {
+          const expected = initialRows.get(update.record.id);
+          const current = readStoredProposal(update.record.id, { env });
+          if (
+            !current ||
+            current.row.record_json !== expected?.record_json ||
+            current.row.owner_agent_id !== expected?.owner_agent_id
+          ) {
+            throw new Error(`Skill proposal changed during relocation: ${update.record.id}`);
+          }
+          updateProposal(db, current.row, update.record, update.ownerAgentId);
+        }
+      },
+      { env },
+      { operationLabel: "skill-workshop.relocation.commit" },
+    );
     for (const update of updates) {
       if (update.record.status === "stale") {
         staleProposals += 1;
       } else {
         retargetedProposals += 1;
       }
-      await updateSkillProposalRecord({
-        record: update.record,
-        ...(update.ownerAgentId ? { ownerAgentId: update.ownerAgentId } : {}),
-        store: { env },
-      });
     }
   };
   const plan = await planWorkshopRelocation(records, config, env);
+  const workspaceMoves = new Map<string, typeof plan.moves>();
   for (const move of plan.moves) {
-    if (!move.adopted) {
-      await moveWorkshopSkillDirectory(move.source, move.destination);
-    }
-    await persistUpdates(move.updates);
+    const moves = workspaceMoves.get(move.workspaceDir) ?? [];
+    moves.push(move);
+    workspaceMoves.set(move.workspaceDir, moves);
   }
-  await persistUpdates(plan.updates);
+  for (const [workspaceDir, moves] of workspaceMoves) {
+    await prepareWorkshopWorkspaceRelocation(workspaceDir, moves, env);
+  }
+  for (const move of plan.moves) {
+    if (move.operation === "move") {
+      await fs.mkdir(path.dirname(move.destination), { recursive: true });
+      await movePathWithCopyFallback({ from: move.source, to: move.destination });
+    } else if (move.operation === "remove-source") {
+      await fs.rm(move.source, { recursive: true, force: false });
+    }
+    persistUpdates(move.updates);
+  }
+  persistUpdates(plan.updates);
+  await finishWorkshopWorkspaceRelocations(env);
   const backupMigration = await migrateLegacyCollectionBackups(config, env);
   return {
-    movedSkills: plan.moves.filter((move) => !move.adopted).length,
+    movedSkills: plan.moves.filter((move) => move.operation === "move").length,
     retargetedProposals,
     staleProposals,
     migratedBackupRoots: backupMigration.migrated,
-    warnings: backupMigration.warnings,
+    warnings: [...plan.warnings, ...backupMigration.warnings],
   };
 }
 
@@ -540,7 +280,11 @@ async function migrateProposal(params: {
     config: params.config,
     env: params.env,
     record: record.value,
-    workspaceDir: path.dirname(path.dirname(path.resolve(record.value.target.skillDir))),
+    workspaceDir: resolveLegacyWorkshopWorkspaceDir(
+      record.value.target.skillDir,
+      params.config,
+      params.env,
+    ),
   });
   if (!owner.ownerAgentId) {
     throw new Error(
@@ -618,7 +362,7 @@ async function importLegacySkillProposalSidecars(params: {
   try {
     entries = await stateRoot.list(PROPOSALS_DIR, { withFileTypes: true });
   } catch (error) {
-    if ((error as NodeJS.ErrnoException).code === "not-found") {
+    if (hasErrnoCode(error, "not-found")) {
       return { changes: [], warnings: [], detected: 0, migrated: 0 };
     }
     return {

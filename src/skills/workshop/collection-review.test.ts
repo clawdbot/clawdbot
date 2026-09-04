@@ -24,6 +24,7 @@ import {
   recordSkillCollectionReviewStatus,
 } from "./collection-review-state.js";
 import { runSkillCollectionReviewForAgent } from "./collection-review.js";
+import { getSkillCuratorStatus } from "./curator.js";
 import { resolveWorkshopSkillsDir } from "./skills-root.js";
 
 const runEmbeddedAgent = vi.hoisted(() => vi.fn());
@@ -290,17 +291,36 @@ describe("skill collection review", () => {
     expect(onError).not.toHaveBeenCalled();
   });
 
-  it("records a bounded failure", async () => {
+  it("reports bounded failures and clears them after the next successful collection review", () => {
+    const options = { env: testState.env };
     const attemptedAtMs = Date.UTC(2026, 7, 10);
     recordSkillCollectionReviewStatus(
       "main",
-      { attemptedAtMs, error: new Error("x".repeat(500)) },
-      { env: testState.env },
+      { attemptedAtMs: attemptedAtMs - 2, succeededAtMs: attemptedAtMs - 1 },
+      options,
     );
-    const review = Object.values(
-      readSkillReviewOutcomes({ env: testState.env }).collectionReviews,
-    )[0];
-    expect(review?.error).toHaveLength(300);
+    recordSkillCollectionReviewStatus(
+      "main",
+      { attemptedAtMs, error: new Error("x".repeat(500)) },
+      options,
+    );
+    const failed = getSkillCuratorStatus(options);
+    expect(failed).toMatchObject({
+      lastAttemptAtMs: attemptedAtMs,
+      lastSuccessAtMs: attemptedAtMs - 1,
+      lastError: "x".repeat(300),
+    });
+    expect(failed.collectionReview.main?.error).toHaveLength(300);
+    recordSkillCollectionReviewStatus(
+      "main",
+      { attemptedAtMs: attemptedAtMs + 1, succeededAtMs: attemptedAtMs + 2 },
+      options,
+    );
+    expect(getSkillCuratorStatus(options)).toMatchObject({
+      lastAttemptAtMs: attemptedAtMs + 1,
+      lastSuccessAtMs: attemptedAtMs + 2,
+      lastError: null,
+    });
   });
 
   it("keeps delegated authority out of failed incognito review runs", async () => {

@@ -145,7 +145,7 @@ const evaluateSkillProposal = (
 ) => evaluateSkillProposalImpl({ config: workshopConfig, ...input });
 const inspectSkillProposal = (
   proposalId: string,
-  options?: OptionalWorkshopConfig<Parameters<typeof inspectSkillProposalImpl>[1]>,
+  options?: Partial<Parameters<typeof inspectSkillProposalImpl>[1]>,
 ) => inspectSkillProposalImpl(proposalId, { config: workshopConfig, agentId: "main", ...options });
 const listSkillProposalEvents = (
   input: OptionalWorkshopConfig<Parameters<typeof listSkillProposalEventsImpl>[0]>,

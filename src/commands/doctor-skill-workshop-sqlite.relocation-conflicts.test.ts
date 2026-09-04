@@ -1,11 +1,15 @@
 import fs from "node:fs/promises";
 import path from "node:path";
-import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import { applySkillProposal, proposeCreateSkill } from "../skills/workshop/service.js";
 import { resolveWorkshopSkillsDir } from "../skills/workshop/skills-root.js";
 import { hashSkillProposalContent, importLegacySkillProposal } from "../skills/workshop/store.js";
 import * as workshopStore from "../skills/workshop/store.js";
 import { SKILL_WORKSHOP_SCHEMA, type SkillProposalRecord } from "../skills/workshop/types.js";
+import {
+  openOpenClawStateDatabase,
+  repairOpenClawStateDatabaseSchemaIfNeeded,
+} from "../state/openclaw-state-db.js";
 import {
   createOpenClawTestState,
   type OpenClawTestState,
@@ -90,123 +94,176 @@ describe("doctor Skill Workshop SQLite relocation conflicts and recovery", () =>
     );
   });
 
-  it.runIf(process.platform !== "win32")(
-    "stales symlinked applied skills without relocating them",
-    async () => {
-      const workspaceDir = await fs.realpath(
-        await tempDirs.make("openclaw-workshop-symlink-workspace-"),
-      );
-      const realSkillDir = await fs.realpath(
-        await tempDirs.make("openclaw-workshop-symlink-target-"),
-      );
-      const skillsDir = path.join(workspaceDir, "skills");
-      const symlinkedSkillName = "linked-workshop";
-      const normalSkillName = "normal-workshop";
-      const symlinkedSkillDir = path.join(skillsDir, symlinkedSkillName);
-      const symlinkedSkillFile = path.join(symlinkedSkillDir, "SKILL.md");
-      const normalSkillDir = path.join(skillsDir, normalSkillName);
-      const normalSkillFile = path.join(normalSkillDir, "SKILL.md");
-      const symlinkedContent =
-        "---\nname: linked-workshop\ndescription: Linked procedure\n---\n\n# Linked\n";
-      const normalContent =
-        "---\nname: normal-workshop\ndescription: Normal procedure\n---\n\n# Normal\n";
-      const now = "2026-09-01T00:00:00.000Z";
-      const records = [
-        {
-          id: "linked-workshop-20260901-1234567890",
-          skillName: "linked-workshop",
-          skillDir: symlinkedSkillDir,
-          skillFile: symlinkedSkillFile,
-          content: symlinkedContent,
-        },
-        {
-          id: "normal-workshop-20260901-1234567890",
-          skillName: "normal-workshop",
-          skillDir: normalSkillDir,
-          skillFile: normalSkillFile,
-          content: normalContent,
-        },
-      ].map(({ id, skillName, skillDir, skillFile, content }) => ({
-        record: {
-          schema: SKILL_WORKSHOP_SCHEMA,
-          id,
-          kind: "create",
-          status: "applied",
-          title: `Create ${skillName}`,
-          description: `${skillName} procedure`,
-          createdAt: now,
-          updatedAt: now,
-          createdBy: "skill-workshop",
-          proposedVersion: "v1",
-          draftFile: "PROPOSAL.md",
-          draftHash: hashSkillProposalContent(content),
-          target: {
-            skillName,
-            skillKey: skillName,
-            skillDir,
-            skillFile,
-            source: "openclaw-workspace",
-          },
-          scan: { state: "clean", scannedAt: now, critical: 0, warn: 0, info: 0, findings: [] },
-          appliedAt: now,
-        } satisfies SkillProposalRecord,
-        workspaceDir,
-      }));
-
-      await fs.mkdir(realSkillDir, { recursive: true });
-      await fs.writeFile(path.join(realSkillDir, "SKILL.md"), symlinkedContent, "utf8");
-      await fs.mkdir(normalSkillDir, { recursive: true });
-      await fs.writeFile(normalSkillFile, normalContent, "utf8");
-      await fs.mkdir(skillsDir, { recursive: true });
-      await fs.symlink(realSkillDir, symlinkedSkillDir, "dir");
-      seedLegacyV15ProposalRows(
-        testState.env,
-        records.map(({ record, workspaceDir: recordWorkspaceDir }) => ({
-          record,
-          workspaceDir: recordWorkspaceDir,
-          claimReleasedTime: null,
-        })),
-      );
-
-      const workshopRoot = resolveWorkshopSkillsDir({}, "main", testState.env);
-      const symlinkedReason = `Skill Workshop no longer writes through symlinked skills; ${symlinkedSkillDir} stays a workspace skill.`;
-      const first = await migrateLegacySkillWorkshopProposals({
-        config: {},
-        env: testState.env,
-      });
-      expect(first.changes.join("\n")).toContain(
-        "Relocated 1 Skill Workshop skill, retargeted 1 proposal, marked 1 stale",
-      );
-      await expect(fs.lstat(symlinkedSkillDir)).resolves.toSatisfy((stat) => stat.isSymbolicLink());
-      await expect(fs.readlink(symlinkedSkillDir)).resolves.toBe(realSkillDir);
-      await expect(fs.readFile(symlinkedSkillFile, "utf8")).resolves.toBe(symlinkedContent);
-      await expect(fs.access(path.join(workshopRoot, symlinkedSkillName))).rejects.toThrow();
-      await expect(
-        fs.readFile(path.join(workshopRoot, normalSkillName, "SKILL.md"), "utf8"),
-      ).resolves.toBe(normalContent);
-      await expect(
-        readSkillProposalRecord("linked-workshop-20260901-1234567890", { env: testState.env }),
-      ).resolves.toMatchObject({
-        status: "stale",
-        statusReason: symlinkedReason,
+  it
+    .runIf(process.platform !== "win32")
+    .each([
+      "skill leaf",
+      "external parent",
+      "destination parent",
+      "contained parent",
+      "workspace root",
+    ] as const)("preserves relocation ownership through a linked %s", async (linkedComponent) => {
+    const workspaceDir = await fs.realpath(
+      await tempDirs.make("openclaw-workshop-symlink-workspace-"),
+    );
+    const externalRoot = await fs.realpath(
+      await tempDirs.make("openclaw-workshop-symlink-target-"),
+    );
+    const rootAlias = linkedComponent === "workspace root";
+    const configuredWorkspace = rootAlias
+      ? path.join(externalRoot, "workspace-alias")
+      : workspaceDir;
+    const config = {
+      agents: { entries: { main: { workspace: configuredWorkspace } } },
+    };
+    const workshopRoot = resolveWorkshopSkillsDir(config, "main", testState.env);
+    const skillsDir = path.join(workspaceDir, "skills");
+    const symlinkedSkillName = "linked-workshop";
+    const normalSkillName = "normal-workshop";
+    const symlinkedSkillDir = path.join(skillsDir, symlinkedSkillName);
+    const symlinkedSkillFile = path.join(symlinkedSkillDir, "SKILL.md");
+    const normalSkillDir = path.join(workspaceDir, ".agents", "skills", normalSkillName);
+    const normalSkillFile = path.join(normalSkillDir, "SKILL.md");
+    const linkedRoot =
+      linkedComponent === "destination parent"
+        ? workshopRoot
+        : linkedComponent === "contained parent"
+          ? path.join(workspaceDir, "shared-skills")
+          : rootAlias
+            ? skillsDir
+            : externalRoot;
+    const realSkillDir =
+      linkedComponent === "skill leaf" ? linkedRoot : path.join(linkedRoot, symlinkedSkillName);
+    const symlinkPath = rootAlias
+      ? configuredWorkspace
+      : linkedComponent === "skill leaf"
+        ? symlinkedSkillDir
+        : skillsDir;
+    const symlinkTarget = rootAlias ? workspaceDir : linkedRoot;
+    const symlinkedContent =
+      "---\nname: linked-workshop\ndescription: Linked procedure\n---\n\n# Linked\n";
+    const supportContent = "Shared support data must survive relocation.\n";
+    const sentinelContent = "Unrelated shared content.\n";
+    const normalContent =
+      "---\nname: normal-workshop\ndescription: Normal procedure\n---\n\n# Normal\n";
+    const now = "2026-09-01T00:00:00.000Z";
+    const records = [
+      {
+        id: "linked-workshop-20260901-1234567890",
+        skillName: "linked-workshop",
+        skillDir: symlinkedSkillDir,
+        skillFile: symlinkedSkillFile,
+        content: symlinkedContent,
+      },
+      {
+        id: "normal-workshop-20260901-1234567890",
+        skillName: "normal-workshop",
+        skillDir: normalSkillDir,
+        skillFile: normalSkillFile,
+        content: normalContent,
+      },
+    ].map(({ id, skillName, skillDir, skillFile, content }) => ({
+      record: {
+        schema: SKILL_WORKSHOP_SCHEMA,
+        id,
+        kind: "create",
+        status: "applied",
+        title: `Create ${skillName}`,
+        description: `${skillName} procedure`,
+        createdAt: now,
+        updatedAt: now,
+        createdBy: "skill-workshop",
+        proposedVersion: "v1",
+        draftFile: "PROPOSAL.md",
+        draftHash: hashSkillProposalContent(content),
         target: {
-          skillDir: symlinkedSkillDir,
-          skillFile: symlinkedSkillFile,
-          source: "openclaw-workspace",
+          skillName,
+          skillKey: skillName,
+          skillDir,
+          skillFile,
+          source: skillName === normalSkillName ? "agents-skills-project" : "openclaw-workspace",
         },
+        scan: { state: "clean", scannedAt: now, critical: 0, warn: 0, info: 0, findings: [] },
+        appliedAt: now,
+      } satisfies SkillProposalRecord,
+      workspaceDir,
+    }));
+
+    await fs.mkdir(path.join(realSkillDir, "references"), { recursive: true });
+    await fs.writeFile(path.join(realSkillDir, "SKILL.md"), symlinkedContent, "utf8");
+    await fs.writeFile(path.join(realSkillDir, "references", "data.txt"), supportContent);
+    await fs.writeFile(path.join(linkedRoot, "unrelated.txt"), sentinelContent);
+    await fs.mkdir(normalSkillDir, { recursive: true });
+    await fs.writeFile(normalSkillFile, normalContent, "utf8");
+    await fs.mkdir(path.dirname(symlinkPath), { recursive: true });
+    await fs.symlink(symlinkTarget, symlinkPath, "dir");
+    seedLegacyV15ProposalRows(
+      testState.env,
+      records.map(({ record, workspaceDir: recordWorkspaceDir }) => ({
+        record,
+        workspaceDir: recordWorkspaceDir,
+        claimReleasedTime: null,
+      })),
+    );
+
+    const symlinkedReason = `Skill Workshop no longer writes through symlinked skills; ${symlinkedSkillDir} stays a workspace skill.`;
+    const first = await migrateLegacySkillWorkshopProposals({
+      config,
+      env: testState.env,
+    });
+    expect(first.changes.join("\n")).toContain(
+      rootAlias
+        ? "Relocated 2 Skill Workshop skills, retargeted 2 proposals, marked 0 stale"
+        : "Relocated 1 Skill Workshop skill, retargeted 1 proposal, marked 1 stale",
+    );
+    await expect(fs.lstat(symlinkPath)).resolves.toSatisfy((stat) => stat.isSymbolicLink());
+    await expect(fs.readlink(symlinkPath)).resolves.toBe(symlinkTarget);
+    const preservedSkillDir = rootAlias
+      ? path.join(workshopRoot, symlinkedSkillName)
+      : realSkillDir;
+    await expect(fs.readFile(path.join(preservedSkillDir, "SKILL.md"), "utf8")).resolves.toBe(
+      symlinkedContent,
+    );
+    await expect(
+      fs.readFile(path.join(preservedSkillDir, "references", "data.txt"), "utf8"),
+    ).resolves.toBe(supportContent);
+    await expect(fs.readFile(path.join(linkedRoot, "unrelated.txt"), "utf8")).resolves.toBe(
+      sentinelContent,
+    );
+    if (!rootAlias && linkedComponent !== "destination parent") {
+      await expect(fs.access(path.join(workshopRoot, symlinkedSkillName))).rejects.toMatchObject({
+        code: "ENOENT",
       });
-      await expect(
-        inspectLegacySkillWorkshopMigration({ config: {}, env: testState.env }),
-      ).resolves.toEqual({
-        externalProposalCount: 0,
-        externalProposalCountsByAgent: {},
-        legacyBackupRootCount: 0,
-      });
-      await expect(
-        migrateLegacySkillWorkshopProposals({ config: {}, env: testState.env }),
-      ).resolves.toEqual({ changes: [], warnings: [], detected: 0, migrated: 0 });
-    },
-  );
+    }
+    await expect(
+      fs.readFile(path.join(workshopRoot, normalSkillName, "SKILL.md"), "utf8"),
+    ).resolves.toBe(normalContent);
+    const firstRecord = await readSkillProposalRecord("linked-workshop-20260901-1234567890", {
+      env: testState.env,
+    });
+    expect(firstRecord).toMatchObject({
+      status: rootAlias ? "applied" : "stale",
+      ...(rootAlias ? {} : { statusReason: symlinkedReason }),
+      target: {
+        skillDir: rootAlias ? preservedSkillDir : symlinkedSkillDir,
+        skillFile: rootAlias ? path.join(preservedSkillDir, "SKILL.md") : symlinkedSkillFile,
+        source: rootAlias ? "openclaw-workshop" : "openclaw-workspace",
+      },
+    });
+    await expect(
+      inspectLegacySkillWorkshopMigration({ config, env: testState.env }),
+    ).resolves.toEqual({
+      externalProposalCount: 0,
+      externalProposalCountsByAgent: {},
+      legacyBackupRootCount: 0,
+    });
+    await expect(
+      migrateLegacySkillWorkshopProposals({ config, env: testState.env }),
+    ).resolves.toEqual({ changes: [], warnings: [], detected: 0, migrated: 0 });
+    await expect(
+      readSkillProposalRecord("linked-workshop-20260901-1234567890", { env: testState.env }),
+    ).resolves.toEqual(firstRecord);
+  });
 
   it("stales applied skills whose planned destinations collide", async () => {
     const firstWorkspaceDir = await fs.realpath(
@@ -369,64 +426,89 @@ describe("doctor Skill Workshop SQLite relocation conflicts and recovery", () =>
     );
   });
 
-  it("adopts a real applied proposal after an interrupted relocation", async () => {
-    const workspaceDir = await fs.realpath(
-      await tempDirs.make("openclaw-workshop-real-adoption-workspace-"),
-    );
-    const proposal = await proposeCreateSkill({
-      workspaceDir,
-      config: {},
-      agentId: "main",
-      env: testState.env,
-      name: "real-adoption",
-      description: "Real applied proposal",
-      content: "# Real adoption\n",
-    });
-    const applied = await applySkillProposal({
-      workspaceDir,
-      config: {},
-      agentId: "main",
-      env: testState.env,
-      proposalId: proposal.record.id,
-      expectedRevisionHash: proposal.revisionHash,
-    });
-    await expect(fs.access(applied.record.target.skillFile)).resolves.toBeUndefined();
-    const legacySkillDir = path.join(workspaceDir, "skills", "real-adoption");
-    const legacyRecord = {
-      ...applied.record,
-      target: {
-        ...applied.record.target,
-        skillDir: legacySkillDir,
-        skillFile: path.join(legacySkillDir, "SKILL.md"),
-        source: "openclaw-workspace",
-      },
-    } satisfies SkillProposalRecord;
-    await workshopStore.updateSkillProposalRecord({
-      record: legacyRecord,
-      store: { env: testState.env },
-    });
-    // The applied service result is already at the destination. Repointing the
-    // persisted legacy target leaves the interrupted-move state: source absent,
-    // destination present.
+  it.each(["removed source", "retained source", "changed source metadata"])(
+    "recovers a real applied proposal with %s after an interrupted relocation",
+    async (sourceState) => {
+      const workspaceDir = await fs.realpath(
+        await tempDirs.make("openclaw-workshop-real-adoption-workspace-"),
+      );
+      const proposal = await proposeCreateSkill({
+        workspaceDir,
+        config: {},
+        agentId: "main",
+        env: testState.env,
+        name: "real-adoption",
+        description: "Real applied proposal",
+        content: "# Real adoption\n",
+      });
+      const applied = await applySkillProposal({
+        workspaceDir,
+        config: {},
+        agentId: "main",
+        env: testState.env,
+        proposalId: proposal.record.id,
+        expectedRevisionHash: proposal.revisionHash,
+      });
+      await expect(fs.access(applied.record.target.skillFile)).resolves.toBeUndefined();
+      const legacySkillDir = path.join(workspaceDir, "skills", "real-adoption");
+      const legacyRecord = {
+        ...applied.record,
+        target: {
+          ...applied.record.target,
+          skillDir: legacySkillDir,
+          skillFile: path.join(legacySkillDir, "SKILL.md"),
+          source: "openclaw-workspace",
+        },
+      } satisfies SkillProposalRecord;
+      await workshopStore.updateSkillProposalRecord({
+        record: legacyRecord,
+        store: { env: testState.env },
+      });
+      if (sourceState !== "removed source") {
+        await fs.mkdir(path.dirname(legacySkillDir), { recursive: true });
+        await fs.cp(applied.record.target.skillDir, legacySkillDir, { recursive: true });
+      }
+      if (sourceState === "changed source metadata") {
+        await fs.mkdir(path.join(legacySkillDir, ".clawhub"));
+        await fs.writeFile(
+          path.join(legacySkillDir, ".clawhub", "origin.json"),
+          "operator metadata",
+        );
+      }
 
-    const result = await migrateLegacySkillWorkshopProposals({
-      config: {},
-      env: testState.env,
-    });
+      const result = await migrateLegacySkillWorkshopProposals({
+        config: {},
+        env: testState.env,
+      });
 
-    expect(result.changes.join("\n")).toContain(
-      "Relocated 0 Skill Workshop skills, retargeted 1 proposal, marked 0 stale",
-    );
-    await expect(
-      readSkillProposalRecord(applied.record.id, { env: testState.env }),
-    ).resolves.toMatchObject({
-      status: "applied",
-      target: {
-        skillFile: applied.record.target.skillFile,
-        source: "openclaw-workshop",
-      },
-    });
-  });
+      if (sourceState === "changed source metadata") {
+        await expect(
+          readSkillProposalRecord(applied.record.id, { env: testState.env }),
+        ).resolves.toMatchObject({
+          status: "stale",
+          target: { skillDir: legacySkillDir },
+        });
+        expect(
+          await fs.readFile(path.join(legacySkillDir, ".clawhub", "origin.json"), "utf8"),
+        ).toBe("operator metadata");
+        return;
+      }
+      expect(result.warnings).toEqual([]);
+      await expect(
+        readSkillProposalRecord(applied.record.id, { env: testState.env }),
+      ).resolves.toMatchObject({
+        status: "applied",
+        target: {
+          skillFile: applied.record.target.skillFile,
+          source: "openclaw-workshop",
+        },
+      });
+      await expect(fs.access(legacySkillDir)).rejects.toMatchObject({ code: "ENOENT" });
+      await expect(
+        migrateLegacySkillWorkshopProposals({ config: {}, env: testState.env }),
+      ).resolves.toMatchObject({ changes: [], warnings: [] });
+    },
+  );
 
   it("adopts a skill moved before its proposal persistence and converges on rerun", async () => {
     const workspaceDir = await fs.realpath(
@@ -474,15 +556,24 @@ describe("doctor Skill Workshop SQLite relocation conflicts and recovery", () =>
     );
 
     const workshopRoot = resolveWorkshopSkillsDir({}, "main", testState.env);
-    const persistSpy = vi
-      .spyOn(workshopStore, "updateSkillProposalRecord")
-      .mockRejectedValueOnce(new Error("injected relocation persistence failure"));
+    repairOpenClawStateDatabaseSchemaIfNeeded({ env: testState.env });
+    const database = openOpenClawStateDatabase({ env: testState.env });
+    database.db.exec(`
+      CREATE TEMP TRIGGER reject_first_relocation
+      BEFORE UPDATE OF record_json ON main.skill_workshop_proposals
+      WHEN OLD.proposal_id = '${records[0]!.record.id}'
+        AND NEW.status = 'applied'
+        AND json_extract(NEW.record_json, '$.target.source') = 'openclaw-workshop'
+      BEGIN
+        SELECT RAISE(ABORT, 'injected relocation persistence failure');
+      END;
+    `);
     try {
       await expect(
         migrateLegacySkillWorkshopProposals({ config: {}, env: testState.env }),
       ).rejects.toThrow("injected relocation persistence failure");
     } finally {
-      persistSpy.mockRestore();
+      database.db.exec("DROP TRIGGER reject_first_relocation");
     }
 
     await expect(

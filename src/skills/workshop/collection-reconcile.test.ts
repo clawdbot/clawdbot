@@ -70,12 +70,11 @@ const listWritableSkillCollection = (
 const reconcileSkillCollection = (
   params: OptionalWorkshopConfig<Parameters<typeof reconcileSkillCollectionImpl>[0]>,
 ) => reconcileSkillCollectionImpl({ config: workshopConfig, agentId: "main", ...params });
-const listSkillProposals = (
-  options?: OptionalWorkshopConfig<Parameters<typeof listSkillProposalsImpl>[0]>,
-) => listSkillProposalsImpl({ config: workshopConfig, agentId: "main", ...options });
+const listSkillProposals = (options?: Partial<Parameters<typeof listSkillProposalsImpl>[0]>) =>
+  listSkillProposalsImpl({ config: workshopConfig, agentId: "main", ...options });
 const inspectSkillProposal = (
   proposalId: string,
-  options?: OptionalWorkshopConfig<Parameters<typeof inspectSkillProposalImpl>[1]>,
+  options?: Partial<Parameters<typeof inspectSkillProposalImpl>[1]>,
 ) => inspectSkillProposalImpl(proposalId, { config: workshopConfig, agentId: "main", ...options });
 const applySkillProposal = (
   input: OptionalWorkshopConfig<Parameters<typeof applySkillProposalImpl>[0]>,

@@ -119,7 +119,7 @@ async function resolveLifecycleApprovalDescription(params: {
   description: string;
   proposalId?: string;
 }> {
-  if (!params.workspaceDir) {
+  if (!params.workspaceDir || !params.agentId) {
     return { description: params.fallback };
   }
   const toolParams = asNullableRecord(params.toolParams);

@@ -19,6 +19,7 @@ import type { SkillCollectionReconcileResult } from "./collection-contracts.js";
 import {
   databaseOptions,
   ensureSkillWorkshopSchema,
+  openSkillWorkshopStore,
   type SkillWorkshopStoreOptions,
 } from "./store-sqlite-schema.js";
 
@@ -80,7 +81,7 @@ export async function withSkillCollectionReviewClaim<T>(
 }
 
 function reviewMap<T>(state: Record<string, unknown>, field: string): Record<string, T> {
-  // SAFETY: cache-class state is written only by recordWorkspaceReview below.
+  // SAFETY: cache-class state is written only by recordReviewEntry below.
   return (asNullableRecord(state[field]) ?? {}) as Record<string, T>;
 }
 
@@ -115,7 +116,11 @@ export function recordSkillCollectionReviewStatus(
           attemptedAtMs: review.attemptedAtMs,
           ...(review.succeededAtMs !== undefined ? { succeededAtMs: review.succeededAtMs } : {}),
         };
-  recordReviewEntry("collectionReviews", agentId, status, options);
+  recordReviewEntry("collectionReviews", agentId, status, options, {
+    lastAttemptAtMs: status.attemptedAtMs,
+    ...(status.succeededAtMs !== undefined ? { lastSuccessAtMs: status.succeededAtMs } : {}),
+    lastError: status.error ?? null,
+  });
 }
 
 export function recordSkillExperienceReviewOutcome(
@@ -137,6 +142,7 @@ function recordReviewEntry(
   entryKey: string,
   review: SkillCollectionReviewStatus | SkillExperienceReviewStatus,
   options: OpenClawStateDatabaseOptions,
+  summary: Partial<Omit<SkillCuratorState, "lastResult">> = {},
 ): void {
   updateConfigMachineState<SkillCuratorState>(
     "skills.curatorState",
@@ -147,6 +153,7 @@ function recordReviewEntry(
         lastSuccessAtMs: null,
         lastError: null,
         ...current,
+        ...summary,
         lastResult: {
           ...state,
           [field]: {
@@ -183,6 +190,25 @@ function parseStoredDrops(value: string): SkillCollectionReconcileResult["droppe
     }
     return { name: record.name, reason: record.reason };
   });
+}
+
+export function readSkillCollectionBackupDrops(
+  agentId: string,
+  backupId: string,
+  options: SkillWorkshopStoreOptions = {},
+): Set<string> {
+  const { database, kysely } = openSkillWorkshopStore(options);
+  const rows = executeSqliteQuerySync(
+    database.db,
+    kysely
+      .selectFrom("skill_workshop_collection_reviews")
+      .select("dropped_json")
+      .where("owner_agent_id", "=", agentId)
+      .where("backup_id", "=", backupId),
+  ).rows;
+  return new Set(
+    rows.flatMap((row) => parseStoredDrops(row.dropped_json).map((drop) => drop.name)),
+  );
 }
 
 export function listSkillCollectionReviewOutcomes(

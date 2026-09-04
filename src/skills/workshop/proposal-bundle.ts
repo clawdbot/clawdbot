@@ -67,11 +67,17 @@ export async function buildSkillProposalEvaluationBundles(params: {
   };
 }
 
-export async function readSkillProposalTargetTreeSha256(skillDir: string): Promise<string> {
-  return hashSkillTree(await readSkillTreeFiles(skillDir));
+export async function readSkillProposalTargetTreeSha256(
+  skillDir: string,
+  options: { includeRootMetadata?: boolean } = {},
+): Promise<string> {
+  return hashSkillTree(await readSkillTreeFiles(skillDir, options.includeRootMetadata));
 }
 
-async function readSkillTreeFiles(skillDir: string): Promise<PluginHookSkillBundleFile[]> {
+async function readSkillTreeFiles(
+  skillDir: string,
+  includeRootMetadata = false,
+): Promise<PluginHookSkillBundleFile[]> {
   if (!(await pathExists(skillDir))) {
     return [];
   }
@@ -92,7 +98,7 @@ async function readSkillTreeFiles(skillDir: string): Promise<PluginHookSkillBund
     const portablePath = entry.relativePath.split(path.sep).join("/");
     if (
       !portablePath ||
-      EXCLUDED_ROOT_DIRS.has(portablePath.split("/")[0] ?? "") ||
+      (!includeRootMetadata && EXCLUDED_ROOT_DIRS.has(portablePath.split("/")[0] ?? "")) ||
       entry.kind === "directory"
     ) {
       continue;

@@ -4,9 +4,11 @@ import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import { renderProposalMarkdown } from "../skills/workshop/frontmatter.js";
 import {
   applySkillProposal,
+  inspectSkillProposal,
   listSkillProposals,
   reviseSkillProposal,
 } from "../skills/workshop/service.js";
+import { resolveWorkshopSkillsDir } from "../skills/workshop/skills-root.js";
 import {
   hashSkillProposalContent,
   importLegacySkillProposal,
@@ -123,6 +125,109 @@ describe("doctor Skill Workshop SQLite migration", () => {
       migrateLegacySkillWorkshopProposals({ config: {}, env: testState.env }),
     ).resolves.toEqual({ changes: [], warnings: [], detected: 0, migrated: 0 });
   });
+
+  it.each([
+    { relativeRoot: "skills", source: "openclaw-workspace" },
+    { relativeRoot: ".agents/skills", source: "agents-skills-project" },
+    { relativeRoot: ".agents/skills/team", source: "agents-skills-project" },
+  ])(
+    "imports an originless update sidecar from $relativeRoot",
+    async ({ relativeRoot, source }) => {
+      const workspaceDir = await fs.realpath(await tempDirs.make("originless-workshop-update-"));
+      const config = {
+        agents: {
+          entries: {
+            main: { workspace: workspaceDir, agentDir: path.join(workspaceDir, ".agent") },
+          },
+        },
+      };
+      const proposalId = "originless-update-20260701-1234567890";
+      const skillDir = path.join(workspaceDir, relativeRoot, "originless-update");
+      const skillFile = path.join(skillDir, "SKILL.md");
+      const liveContent =
+        "---\nname: originless-update\ndescription: User procedure\n---\n\n# Original user procedure\n";
+      const supportContent = "Keep the proposed evidence for inspection.\n";
+      const now = "2026-07-01T00:00:00.000Z";
+      const content = renderProposalMarkdown({
+        name: "originless-update",
+        description: "Proposed procedure",
+        content: "# Proposed procedure\n",
+        fallbackFrontmatterContent: liveContent,
+        date: now,
+      });
+      const record: SkillProposalRecord = {
+        schema: SKILL_WORKSHOP_SCHEMA,
+        id: proposalId,
+        kind: "update",
+        status: "pending",
+        title: "Update originless-update",
+        description: "Proposed procedure",
+        createdAt: now,
+        updatedAt: now,
+        createdBy: "cli",
+        proposedVersion: "v1",
+        draftFile: "PROPOSAL.md",
+        draftHash: hashSkillProposalContent(content),
+        supportFiles: [
+          {
+            path: "references/evidence.md",
+            sizeBytes: Buffer.byteLength(supportContent),
+            hash: hashSkillProposalContent(supportContent),
+            targetExisted: false,
+          },
+        ],
+        target: {
+          skillName: "originless-update",
+          skillKey: "originless-update",
+          skillDir,
+          skillFile,
+          source,
+          currentContentHash: hashSkillProposalContent(liveContent),
+        },
+        scan: { state: "clean", scannedAt: now, critical: 0, warn: 0, info: 0, findings: [] },
+      };
+      const proposalDir = path.join(testState.stateDir, "skill-workshop", "proposals", proposalId);
+      await fs.mkdir(skillDir, { recursive: true });
+      await fs.writeFile(skillFile, liveContent);
+      await fs.mkdir(path.join(proposalDir, "references"), { recursive: true });
+      await fs.writeFile(path.join(proposalDir, "proposal.json"), JSON.stringify(record));
+      await fs.writeFile(path.join(proposalDir, "PROPOSAL.md"), content);
+      await fs.writeFile(path.join(proposalDir, "references", "evidence.md"), supportContent);
+
+      const first = await migrateLegacySkillWorkshopProposals({ config, env: testState.env });
+      const owner = { config, agentId: "main", env: testState.env };
+      const inspected = await inspectSkillProposal(proposalId, owner);
+
+      expect(first).toMatchObject({ migrated: 1, warnings: [] });
+      expect(inspected).toMatchObject({
+        content,
+        record: {
+          status: "stale",
+          statusReason: "Skill Workshop no longer edits skills outside its own directory.",
+          target: record.target,
+        },
+      });
+      await expect(fs.readFile(skillFile, "utf8")).resolves.toBe(liveContent);
+      await expect(fs.readFile(path.join(proposalDir, "PROPOSAL.md"), "utf8")).resolves.toBe(
+        content,
+      );
+      await expect(
+        fs.readFile(path.join(proposalDir, "references", "evidence.md"), "utf8"),
+      ).resolves.toBe(supportContent);
+      await expect(fs.access(path.join(proposalDir, "proposal.json"))).rejects.toMatchObject({
+        code: "ENOENT",
+      });
+      await expect(
+        fs.access(
+          path.join(resolveWorkshopSkillsDir(config, "main", testState.env), "originless-update"),
+        ),
+      ).rejects.toMatchObject({ code: "ENOENT" });
+      await expect(
+        migrateLegacySkillWorkshopProposals({ config, env: testState.env }),
+      ).resolves.toMatchObject({ changes: [], warnings: [], migrated: 0 });
+      await expect(inspectSkillProposal(proposalId, owner)).resolves.toEqual(inspected);
+    },
+  );
 
   it("preserves shipped v1 proposals through migration, revision, and apply", async () => {
     const workspaceDir = await tempDirs.make("openclaw-workshop-shipped-upgrade-");

@@ -168,8 +168,8 @@ export async function readProposalForInspect(
   params: Record<string, unknown>,
   workspaceDir: string,
   config: OpenClawConfig,
-  env?: NodeJS.ProcessEnv,
-  agentId?: string,
+  env: NodeJS.ProcessEnv | undefined,
+  agentId: string,
 ): Promise<SkillProposalReadResult> {
   const proposalId = readToolStringParam(params, "proposal_id", { label: "proposal_id" });
   if (proposalId) {

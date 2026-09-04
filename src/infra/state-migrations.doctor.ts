@@ -11,6 +11,7 @@ import {
 import { resolveChannelDefaultAccountId } from "../channels/plugins/helpers.js";
 import { getChannelPlugin } from "../channels/plugins/registry.js";
 import type { ChannelId } from "../channels/plugins/types.public.js";
+import { migrateLegacySkillWorkshopProposals } from "../commands/doctor-skill-workshop-sqlite.js";
 import { resolveSessionStoreCompatibilityAgentId } from "../config/legacy.default-agent-owner.js";
 import { resolveOAuthDir, resolveStateDir } from "../config/paths.js";
 import { migrateLegacyMainSessionKeys } from "../config/sessions/legacy-main-session-migration.js";
@@ -871,7 +872,7 @@ function migrateLegacyStateSchema(
 
 type LegacyStateMigrationStep = {
   phase: "shared" | "final";
-  kind?: "acp-session-metadata" | "legacy-main-session-keys";
+  runWithoutFileDetection?: boolean;
   collectNotices?: boolean;
   run: () => MigrationMessages | Promise<MigrationMessages>;
 };
@@ -1021,6 +1022,17 @@ function buildLegacyStateMigrationSteps(
   const finalSteps: LegacyStateMigrationStep[] = [
     ownerStep(detected.restartSentinel, migrateLegacyRestartSentinel),
     ...doctorFinalSteps,
+    {
+      // Workspace evidence must be canonical before a Workshop move can retire
+      // the attestation for a directory it intentionally empties.
+      ...finalStep(() =>
+        migrateLegacySkillWorkshopProposals({
+          config: params.sessionConfig ?? params.config,
+          env: { ...env, OPENCLAW_STATE_DIR: stateDir },
+        }),
+      ),
+      runWithoutFileDetection: true,
+    },
     finalStep(() =>
       migrateLegacyChannelPairingState({
         detected: detected.channelPairing,
@@ -1057,7 +1069,7 @@ function buildLegacyStateMigrationSteps(
         });
         return { changes: result.changes, warnings: [], notices: result.warnings };
       }, true),
-      kind: "legacy-main-session-keys",
+      runWithoutFileDetection: true,
     });
   }
   if (repairSessionFiles) {
@@ -1073,7 +1085,7 @@ function buildLegacyStateMigrationSteps(
           legacySessionSurfaces: params.legacySessionSurfaces,
         }),
       ),
-      kind: "acp-session-metadata",
+      runWithoutFileDetection: true,
     });
   }
   if (!params.skipAgentScopedMigrations) {
@@ -1379,11 +1391,11 @@ export async function autoMigrateLegacyState(params: {
     !detected.workspace.hasLegacy &&
     !detected.channelPairing.hasLegacy
   ) {
-    // SQLite key migration and Doctor's standalone ACP repair can have no file preview.
-    // Preserve their convergence even when the other detectors have no work.
+    // SQLite rows can still need owner repair after schema migration has finished.
+    // Preserve those repairs even when legacy file detectors have no work.
     const alwaysRunSources: MigrationMessages[] = [];
     for (const step of migrationSteps) {
-      if (step.kind === "legacy-main-session-keys" || step.kind === "acp-session-metadata") {
+      if (step.runWithoutFileDetection) {
         alwaysRunSources.push(await step.run());
       }
     }

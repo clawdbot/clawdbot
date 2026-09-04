@@ -137,7 +137,7 @@ type SkillWorkshopToolOptions = {
   workspaceDir: string;
   config: OpenClawConfig;
   env?: NodeJS.ProcessEnv;
-  agentId?: string;
+  agentId: string;
   origin?: SkillProposalOrigin;
   /** Internal reviewers may inspect and draft bounded pending proposals, never change lifecycle state. */
   proposalOnly?: boolean;

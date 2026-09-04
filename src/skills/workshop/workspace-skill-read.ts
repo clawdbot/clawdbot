@@ -57,9 +57,7 @@ export function listWritableWorkshopSkillSummaries(
   return records
     .map(({ skill, frontmatter }) => ({
       name: skill.name,
-      skillKey: frontmatter
-        ? (resolveSkillManifestMetadata(frontmatter)?.skillKey ?? skill.name)
-        : skill.name,
+      skillKey: resolveSkillManifestMetadata(frontmatter)?.skillKey ?? skill.name,
       description: skill.description,
       baseDir: skill.baseDir,
       filePath: skill.filePath,

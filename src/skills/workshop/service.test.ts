@@ -60,20 +60,23 @@ function withWorkshopOwner<T extends { config?: OpenClawConfig; agentId?: string
 }
 
 type OptionalWorkshopConfig<T> = Omit<T, "config"> & { config?: OpenClawConfig };
+type OptionalWorkshopOwner<T> = Omit<T, "config" | "agentId"> & {
+  config?: OpenClawConfig;
+  agentId?: string;
+};
 
 const applySkillProposal = (
   input: OptionalWorkshopConfig<Parameters<typeof applySkillProposalImpl>[0]>,
 ) => applySkillProposalImpl(withWorkshopOwner(input));
 const getSkillProposalRunProgress = (
-  input: OptionalWorkshopConfig<Parameters<typeof getSkillProposalRunProgressImpl>[0]>,
+  input: OptionalWorkshopOwner<Parameters<typeof getSkillProposalRunProgressImpl>[0]>,
 ) => getSkillProposalRunProgressImpl(withWorkshopOwner(input));
 const inspectSkillProposal = (
   proposalId: string,
-  input?: OptionalWorkshopConfig<Parameters<typeof inspectSkillProposalImpl>[1]>,
+  input?: Partial<Parameters<typeof inspectSkillProposalImpl>[1]>,
 ) => inspectSkillProposalImpl(proposalId, withWorkshopOwner(input ?? {}));
-const listSkillProposals = (
-  input?: OptionalWorkshopConfig<Parameters<typeof listSkillProposalsImpl>[0]>,
-) => listSkillProposalsImpl(withWorkshopOwner(input ?? {}));
+const listSkillProposals = (input?: Partial<Parameters<typeof listSkillProposalsImpl>[0]>) =>
+  listSkillProposalsImpl(withWorkshopOwner(input ?? {}));
 const proposeCreateSkill = (
   input: OptionalWorkshopConfig<Parameters<typeof proposeCreateSkillImpl>[0]>,
 ) => proposeCreateSkillImpl(withWorkshopOwner(input));
@@ -87,7 +90,7 @@ const rejectSkillProposal = (
   input: OptionalWorkshopConfig<Parameters<typeof rejectSkillProposalImpl>[0]>,
 ) => rejectSkillProposalImpl(withWorkshopOwner(input));
 const resolvePendingSkillProposal = (
-  input: OptionalWorkshopConfig<Parameters<typeof resolvePendingSkillProposalImpl>[0]>,
+  input: OptionalWorkshopOwner<Parameters<typeof resolvePendingSkillProposalImpl>[0]>,
 ) => resolvePendingSkillProposalImpl(withWorkshopOwner(input));
 const reviseSkillProposal = (
   input: OptionalWorkshopConfig<Parameters<typeof reviseSkillProposalImpl>[0]>,

@@ -419,6 +419,7 @@ function migrateSkillWorkshopDirectoryOwnership(
       .prepare(
         "SELECT proposal_id, record_json FROM skill_workshop_proposals WHERE claim_released_time IS NOT NULL",
       )
+      // SAFETY: v15 declares both selected proposal columns as TEXT NOT NULL.
       .all() as Array<{ proposal_id: string; record_json: string }>;
     if (released.length > 0) {
       const staleAt = new Date().toISOString();
@@ -428,6 +429,7 @@ function migrateSkillWorkshopDirectoryOwnership(
          WHERE proposal_id = ?`,
       );
       for (const row of released) {
+        // SAFETY: the v15 Workshop writer stores a proposal object in record_json.
         const record = JSON.parse(row.record_json) as Record<string, unknown>;
         const staleRecord = {
           ...record,
