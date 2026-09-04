@@ -1,21 +1,15 @@
 name: Linux App Release
 
 on:
-  workflow_dispatch:
-    inputs:
-      tag:
-        description: Existing OpenClaw release tag to receive Linux companion bundles, for example v2026.7.1
-        required: true
-        type: string
-      desktop-test-bundles:
-        description: Also build unsigned macOS/Windows test bundles
-        default: false
-        type: boolean
+  workflow_run: # zizmor: ignore[dangerous-triggers] main-only release builder; exact successful request/main identity is validated before selected-tag execution, while signing and publication stay in fresh jobs
+    workflows: ["Linux App Release Request"]
+    branches: [main]
+    types: [completed]
 
 permissions: {}
 
 concurrency:
-  group: linux-app-release-${{ inputs.tag }}
+  group: linux-app-release-${{ github.event.workflow_run.id }}
   cancel-in-progress: false
 
 env:
@@ -24,6 +18,14 @@ env:
 jobs:
   validate_release:
     name: Validate release tag
+    if: >-
+      github.repository == 'openclaw/openclaw' &&
+      github.event.workflow_run.repository.full_name == 'openclaw/openclaw' &&
+      github.event.workflow_run.event == 'workflow_dispatch' &&
+      github.event.workflow_run.name == 'Linux App Release Request' &&
+      github.event.workflow_run.head_branch == 'main' &&
+      github.event.workflow_run.head_sha == github.workflow_sha &&
+      github.event.workflow_run.conclusion == 'success'
     runs-on: ubuntu-22.04
     timeout-minutes: 10
     permissions:
@@ -31,21 +33,24 @@ jobs:
     # Build jobs check out this exact SHA so a tag force-moved mid-run cannot
     # swap in code the ancestry guard never validated.
     outputs:
+      desktop_test_bundles: ${{ steps.request.outputs.desktop_test_bundles }}
+      release_tag: ${{ steps.request.outputs.release_tag }}
       tag_sha: ${{ steps.ancestry.outputs.tag_sha }}
       updater_pubkey: ${{ steps.updater_trust.outputs.updater_pubkey }}
     steps:
-      - name: Validate tag input format
+      - name: Validate trusted release request
+        id: request
         env:
-          RELEASE_TAG: ${{ inputs.tag }}
+          REQUEST_TITLE: ${{ github.event.workflow_run.display_title }}
         run: |
           set -euo pipefail
-          if [[ ! "${RELEASE_TAG}" =~ ^v[0-9]{4}\.[1-9][0-9]*\.[1-9][0-9]*(-[1-9][0-9]*)?$ ]]; then
-            # Alpha/beta semver suffixes map to a Debian revision that sorts
-            # AFTER the plain stable version, breaking beta-to-stable upgrades;
-            # numeric stable revisions (-N) order correctly and stay allowed.
-            echo "Linux bundles ship for stable release tags only (vYYYY.M.PATCH or vYYYY.M.PATCH-N); got: ${RELEASE_TAG}"
+          pattern='^Linux App Release Request \[(v[0-9]{4}\.[1-9][0-9]*\.[1-9][0-9]*(-[1-9][0-9]*)?)\] desktop=(true|false)$'
+          if [[ ! "${REQUEST_TITLE}" =~ ${pattern} ]]; then
+            echo "Release request title does not match the trusted request contract"
             exit 1
           fi
+          echo "release_tag=${BASH_REMATCH[1]}" >> "$GITHUB_OUTPUT"
+          echo "desktop_test_bundles=${BASH_REMATCH[3]}" >> "$GITHUB_OUTPUT"
 
       - name: Prepare Git owner
         uses: openclaw/openclaw/.github/actions/git-owner@dd4528b6393e7d00063067a080ca7241b48ce475
@@ -53,7 +58,7 @@ jobs:
       - name: Checkout selected tag
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
-          ref: refs/tags/${{ inputs.tag }}
+          ref: refs/tags/${{ steps.request.outputs.release_tag }}
           fetch-depth: 0
           persist-credentials: false
 
@@ -107,7 +112,7 @@ jobs:
       - name: Ensure tag commit is reachable from its release branch
         id: ancestry
         env:
-          RELEASE_TAG: ${{ inputs.tag }}
+          RELEASE_TAG: ${{ steps.request.outputs.release_tag }}
           WORKFLOW_SHA: ${{ github.workflow_sha }}
         run: |
           set -euo pipefail
@@ -174,7 +179,7 @@ jobs:
       - name: Ensure matching GitHub release exists
         env:
           GH_TOKEN: ${{ github.token }}
-          RELEASE_TAG: ${{ inputs.tag }}
+          RELEASE_TAG: ${{ steps.request.outputs.release_tag }}
         run: gh release view "${RELEASE_TAG}" --repo "${GITHUB_REPOSITORY}" --json tagName --jq .tagName
 
   build_linux:
@@ -190,26 +195,6 @@ jobs:
       deb_artifact_id: ${{ steps.upload_deb.outputs.artifact-id }}
       unsigned_appimage_artifact_id: ${{ steps.upload_appimage.outputs.artifact-id }}
     steps:
-      - name: Checkout selected tag
-        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
-        with:
-          ref: ${{ needs.validate_release.outputs.tag_sha }}
-          persist-credentials: false
-
-      - name: Checkout trusted Linux packaging tooling
-        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
-        with:
-          ref: ${{ github.workflow_sha }}
-          path: .release-tooling
-          fetch-depth: 1
-          persist-credentials: false
-          sparse-checkout: |
-            apps/linux/scripts/stage-appimage-gstreamer.sh
-            apps/linux/scripts/finalize-appimage.sh
-            apps/linux/tests/packaged_runtime_smoke.py
-            apps/linux/tests/first_run.py
-          sparse-checkout-cone-mode: false
-
       - name: Install Tauri system dependencies
         run: |
           sudo apt-get update
@@ -248,14 +233,45 @@ jobs:
       - name: Install Rust
         run: rustup toolchain install stable --profile minimal
 
-      - name: Setup Node environment
-        uses: ./.github/actions/setup-node-env
+      - name: Setup trusted Node runtime
+        uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
         with:
-          cache-mode: restore
-          install-bun: "false"
+          node-version: 24
+
+      - name: Setup trusted pnpm
+        uses: pnpm/action-setup@0e279bb959325dab635dd2c09392533439d90093 # v6.0.8
+        with:
+          version: 12.1.0
+          run_install: false
+
+      - name: Checkout selected tag
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          ref: ${{ needs.validate_release.outputs.tag_sha }}
+          persist-credentials: false
+
+      - name: Checkout trusted Linux packaging tooling
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          ref: ${{ github.workflow_sha }}
+          path: .release-tooling
+          fetch-depth: 1
+          persist-credentials: false
+          sparse-checkout: |
+            apps/linux/scripts/stage-appimage-gstreamer.sh
+            apps/linux/scripts/finalize-appimage.sh
+            apps/linux/tests/packaged_runtime_smoke.py
+            apps/linux/tests/first_run.py
+          sparse-checkout-cone-mode: false
+
+      - name: Install selected-tag dependencies
+        run: >-
+          pnpm install --frozen-lockfile --prefer-offline
+          --config.ignore-scripts=false --config.engine-strict=false
+          --config.enable-pre-post-scripts=true --config.side-effects-cache=true
 
       - name: Stage AppImage GStreamer plugins
-        run: |
+        run: | # zizmor: ignore[github-env] static runner-temporary path consumed by the Tauri build in this secretless job
           plugins="${RUNNER_TEMP}/openclaw-gstreamer-plugins"
           .release-tooling/apps/linux/scripts/stage-appimage-gstreamer.sh "$plugins" \
             | tee "${RUNNER_TEMP}/openclaw-gstreamer-elements.tsv"
@@ -266,7 +282,7 @@ jobs:
         env:
           # appimagetool strips fail on CI runners; Tauri documents NO_STRIP for Actions.
           NO_STRIP: "true"
-          RELEASE_TAG: ${{ inputs.tag }}
+          RELEASE_TAG: ${{ needs.validate_release.outputs.release_tag }}
         run: |
           set -euo pipefail
           version="${RELEASE_TAG#v}"
@@ -283,7 +299,7 @@ jobs:
 
       - name: Verify and stage unsigned Linux bundles
         env:
-          RELEASE_TAG: ${{ inputs.tag }}
+          RELEASE_TAG: ${{ needs.validate_release.outputs.release_tag }}
         run: |
           set -euo pipefail
           shopt -s nullglob
@@ -308,7 +324,7 @@ jobs:
         id: packaged-runtime
         shell: bash
         env:
-          RELEASE_TAG: ${{ inputs.tag }}
+          RELEASE_TAG: ${{ needs.validate_release.outputs.release_tag }}
         run: |
           version="${RELEASE_TAG#v}"
           xvfb-run -a -s '-screen 0 1280x1024x24' dbus-run-session -- \
@@ -381,7 +397,7 @@ jobs:
 
       - name: Sign finalized AppImage
         env:
-          RELEASE_TAG: ${{ inputs.tag }}
+          RELEASE_TAG: ${{ needs.validate_release.outputs.release_tag }}
           TAG_SHA: ${{ needs.validate_release.outputs.tag_sha }}
           TAURI_SIGNING_PRIVATE_KEY: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY }}
           TAURI_SIGNING_PRIVATE_KEY_PASSWORD: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY_PASSWORD }}
@@ -425,7 +441,7 @@ jobs:
   # Users must bypass Gatekeeper or SmartScreen before running them.
   build_macos:
     name: Build unsigned macOS test bundles
-    if: ${{ inputs['desktop-test-bundles'] }}
+    if: ${{ needs.validate_release.outputs.desktop_test_bundles == 'true' }}
     needs: validate_release
     # macos-15, not macos-14: tauri-plugin-notifications' Swift sources use
     # typed throws (`throws(FFIResult)`), which needs Swift 6. The macos-14
@@ -438,25 +454,36 @@ jobs:
       dmg_artifact_id: ${{ steps.upload_dmg.outputs.artifact-id }}
       unsigned_updater_artifact_id: ${{ steps.upload_updater.outputs.artifact-id }}
     steps:
+      - name: Install Rust
+        run: rustup toolchain install stable --profile minimal
+
+      - name: Setup trusted Node runtime
+        uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
+        with:
+          node-version: 24
+
+      - name: Setup trusted pnpm
+        uses: pnpm/action-setup@0e279bb959325dab635dd2c09392533439d90093 # v6.0.8
+        with:
+          version: 12.1.0
+          run_install: false
+
       - name: Checkout selected tag
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           ref: ${{ needs.validate_release.outputs.tag_sha }}
           persist-credentials: false
 
-      - name: Install Rust
-        run: rustup toolchain install stable --profile minimal
-
-      - name: Setup Node environment
-        uses: ./.github/actions/setup-node-env
-        with:
-          cache-mode: restore
-          install-bun: "false"
+      - name: Install selected-tag dependencies
+        run: >-
+          pnpm install --frozen-lockfile --prefer-offline
+          --config.ignore-scripts=false --config.engine-strict=false
+          --config.enable-pre-post-scripts=true --config.side-effects-cache=true
 
       - name: Build macOS test bundles
         working-directory: apps/linux/src-tauri
         env:
-          RELEASE_TAG: ${{ inputs.tag }}
+          RELEASE_TAG: ${{ needs.validate_release.outputs.release_tag }}
         run: |
           set -euo pipefail
           version="${RELEASE_TAG#v}"
@@ -465,7 +492,7 @@ jobs:
 
       - name: Verify and stage unsigned macOS bundles
         env:
-          RELEASE_TAG: ${{ inputs.tag }}
+          RELEASE_TAG: ${{ needs.validate_release.outputs.release_tag }}
         run: |
           set -euo pipefail
           shopt -s nullglob
@@ -510,7 +537,7 @@ jobs:
 
   build_windows:
     name: Build unsigned Windows test bundle
-    if: ${{ inputs['desktop-test-bundles'] }}
+    if: ${{ needs.validate_release.outputs.desktop_test_bundles == 'true' }}
     needs: validate_release
     runs-on: windows-2022
     timeout-minutes: 45
@@ -519,26 +546,38 @@ jobs:
     outputs:
       unsigned_updater_artifact_id: ${{ steps.upload_updater.outputs.artifact-id }}
     steps:
+      - name: Install Rust
+        run: rustup toolchain install stable --profile minimal
+
+      - name: Setup trusted Node runtime
+        uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
+        with:
+          node-version: 24
+
+      - name: Setup trusted pnpm
+        uses: pnpm/action-setup@0e279bb959325dab635dd2c09392533439d90093 # v6.0.8
+        with:
+          version: 12.1.0
+          run_install: false
+
       - name: Checkout selected tag
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           ref: ${{ needs.validate_release.outputs.tag_sha }}
           persist-credentials: false
 
-      - name: Install Rust
-        run: rustup toolchain install stable --profile minimal
-
-      - name: Setup Node environment
-        uses: ./.github/actions/setup-node-env
-        with:
-          cache-mode: restore
-          install-bun: "false"
+      - name: Install selected-tag dependencies
+        shell: bash
+        run: >-
+          pnpm install --frozen-lockfile --prefer-offline
+          --config.ignore-scripts=false --config.engine-strict=false
+          --config.enable-pre-post-scripts=true --config.side-effects-cache=true
 
       - name: Build Windows test bundle
         working-directory: apps/linux/src-tauri
         shell: bash
         env:
-          RELEASE_TAG: ${{ inputs.tag }}
+          RELEASE_TAG: ${{ needs.validate_release.outputs.release_tag }}
         run: |
           set -euo pipefail
           version="${RELEASE_TAG#v}"
@@ -548,7 +587,7 @@ jobs:
       - name: Verify and stage unsigned Windows bundle
         shell: pwsh
         env:
-          RELEASE_TAG: ${{ inputs.tag }}
+          RELEASE_TAG: ${{ needs.validate_release.outputs.release_tag }}
         run: |
           $ErrorActionPreference = "Stop"
           $version = $env:RELEASE_TAG.Substring(1)
@@ -579,7 +618,7 @@ jobs:
   # selected-tag build jobs must cross the same artifact-only signing boundary.
   sign_desktop:
     name: Sign finalized desktop updater bundles
-    if: ${{ inputs['desktop-test-bundles'] }}
+    if: ${{ needs.validate_release.outputs.desktop_test_bundles == 'true' }}
     needs:
       - validate_release
       - build_macos
@@ -620,7 +659,7 @@ jobs:
 
       - name: Sign finalized desktop updater bundles
         env:
-          RELEASE_TAG: ${{ inputs.tag }}
+          RELEASE_TAG: ${{ needs.validate_release.outputs.release_tag }}
           TAG_SHA: ${{ needs.validate_release.outputs.tag_sha }}
           TAURI_SIGNING_PRIVATE_KEY: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY }}
           TAURI_SIGNING_PRIVATE_KEY_PASSWORD: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY_PASSWORD }}
@@ -685,7 +724,7 @@ jobs:
         always() &&
         needs.build_linux.result == 'success' &&
         needs.sign_linux.result == 'success' &&
-        (!inputs['desktop-test-bundles'] ||
+        (needs.validate_release.outputs.desktop_test_bundles != 'true' ||
           (needs.build_macos.result == 'success' &&
             needs.build_windows.result == 'success' &&
             needs.sign_desktop.result == 'success'))
@@ -719,14 +758,14 @@ jobs:
           path: dist/input/linux
 
       - name: Download macOS test DMG
-        if: ${{ inputs['desktop-test-bundles'] }}
+        if: ${{ needs.validate_release.outputs.desktop_test_bundles == 'true' }}
         uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8
         with:
           artifact-ids: ${{ needs.build_macos.outputs.dmg_artifact_id }}
           path: dist/input/macos/release
 
       - name: Download signed desktop updater bundles
-        if: ${{ inputs['desktop-test-bundles'] }}
+        if: ${{ needs.validate_release.outputs.desktop_test_bundles == 'true' }}
         uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8
         with:
           artifact-ids: ${{ needs.sign_desktop.outputs.signed_desktop_artifact_id }}
@@ -734,9 +773,9 @@ jobs:
 
       - name: Assemble release assets and updater manifest
         env:
-          DESKTOP_TEST_BUNDLES: ${{ inputs['desktop-test-bundles'] }}
+          DESKTOP_TEST_BUNDLES: ${{ needs.validate_release.outputs.desktop_test_bundles }}
           GH_TOKEN: ${{ github.token }}
-          RELEASE_TAG: ${{ inputs.tag }}
+          RELEASE_TAG: ${{ needs.validate_release.outputs.release_tag }}
         run: |
           set -euo pipefail
           version="${RELEASE_TAG#v}"
@@ -789,7 +828,7 @@ jobs:
       - name: Attach bundles to the release
         env:
           GH_TOKEN: ${{ github.token }}
-          RELEASE_TAG: ${{ inputs.tag }}
+          RELEASE_TAG: ${{ needs.validate_release.outputs.release_tag }}
         run: |
           set -euo pipefail
           gh release upload "${RELEASE_TAG}" \
@@ -798,11 +837,11 @@ jobs:
             dist/release/*
 
       - name: Publish desktop test update channel
-        if: ${{ inputs['desktop-test-bundles'] }}
+        if: ${{ needs.validate_release.outputs.desktop_test_bundles == 'true' }}
         env:
           DESKTOP_TEST_CHANNEL_TAG: desktop-test
           GH_TOKEN: ${{ github.token }}
-          RELEASE_TAG: ${{ inputs.tag }}
+          RELEASE_TAG: ${{ needs.validate_release.outputs.release_tag }}
           TAG_SHA: ${{ needs.validate_release.outputs.tag_sha }}
         run: |
           set -euo pipefail

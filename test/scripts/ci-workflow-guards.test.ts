@@ -15833,8 +15833,38 @@ it("pins simple release admission owners before selected checkout and preserves 
     expect(body).not.toMatch(/backoff\(|for attempt in range/u);
   }
 
+  const request = parse(readFileSync(".github/workflows/linux-app-release-request.yml", "utf8"));
   const linux = parse(readFileSync(workflows[0].file, "utf8"));
+  expect(request["run-name"]).toBe(
+    "Linux App Release Request [${{ inputs.tag }}] desktop=${{ inputs['desktop-test-bundles'] }}",
+  );
+  expect(request.permissions).toEqual({});
+  expect(Object.keys(request.on.workflow_dispatch.inputs)).toEqual(["tag", "desktop-test-bundles"]);
+  expect(request.jobs.validate_request.permissions).toBeUndefined();
+  expect(JSON.stringify(request)).not.toContain("${{ secrets.");
+  expect(linux.on).toEqual({
+    workflow_run: {
+      workflows: ["Linux App Release Request"],
+      branches: ["main"],
+      types: ["completed"],
+    },
+  });
   expect(linux.permissions).toEqual({});
+  expect(linux.jobs.validate_release.if).toContain(
+    "github.event.workflow_run.repository.full_name == 'openclaw/openclaw'",
+  );
+  expect(linux.jobs.validate_release.if).toContain(
+    "github.event.workflow_run.event == 'workflow_dispatch'",
+  );
+  expect(linux.jobs.validate_release.if).toContain(
+    "github.event.workflow_run.head_branch == 'main'",
+  );
+  expect(linux.jobs.validate_release.if).toContain(
+    "github.event.workflow_run.head_sha == github.workflow_sha",
+  );
+  expect(linux.jobs.validate_release.if).toContain(
+    "github.event.workflow_run.conclusion == 'success'",
+  );
   const tauriSigningEnvNames = [
     "TAURI_SIGNING_PRIVATE_KEY",
     "TAURI_SIGNING_PRIVATE_KEY_PATH",
@@ -15897,9 +15927,44 @@ it("pins simple release admission owners before selected checkout and preserves 
     linuxSteps.findIndex(({ id }) => id === "ancestry"),
   );
   expect(linux.jobs.validate_release.outputs).toEqual({
+    desktop_test_bundles: "${{ steps.request.outputs.desktop_test_bundles }}",
+    release_tag: "${{ steps.request.outputs.release_tag }}",
     tag_sha: "${{ steps.ancestry.outputs.tag_sha }}",
     updater_pubkey: "${{ steps.updater_trust.outputs.updater_pubkey }}",
   });
+  const releaseRequest = expectDefined(
+    linuxSteps.find(({ id }) => id === "request"),
+    "trusted release request validation",
+  );
+  expect(releaseRequest.env).toEqual({
+    REQUEST_TITLE: "${{ github.event.workflow_run.display_title }}",
+  });
+  expect(releaseRequest.run).toContain("Release request title does not match");
+  expect(releaseRequest.run).toContain('echo "release_tag=${BASH_REMATCH[1]}"');
+  expect(releaseRequest.run).toContain('echo "desktop_test_bundles=${BASH_REMATCH[3]}"');
+  const requestRoot = tempDirs.make("openclaw-linux-release-request-");
+  const requestOutput = path.join(requestRoot, "output");
+  const acceptedRequest = spawnSync("bash", ["-c", releaseRequest.run ?? ""], {
+    encoding: "utf8",
+    env: {
+      ...process.env,
+      GITHUB_OUTPUT: requestOutput,
+      REQUEST_TITLE: "Linux App Release Request [v2026.8.2] desktop=true",
+    },
+  });
+  expect(acceptedRequest.status, `${acceptedRequest.stdout}${acceptedRequest.stderr}`).toBe(0);
+  expect(readFileSync(requestOutput, "utf8")).toBe(
+    "release_tag=v2026.8.2\ndesktop_test_bundles=true\n",
+  );
+  const rejectedRequest = spawnSync("bash", ["-c", releaseRequest.run ?? ""], {
+    encoding: "utf8",
+    env: {
+      ...process.env,
+      GITHUB_OUTPUT: requestOutput,
+      REQUEST_TITLE: "Linux App Release Request [v2026.8.2] desktop=true extra",
+    },
+  });
+  expect(rejectedRequest.status).toBe(1);
   const updaterTrust = expectDefined(
     linuxSteps.find(({ id }) => id === "updater_trust"),
     "updater trust-root validation",
@@ -15912,10 +15977,26 @@ it("pins simple release admission owners before selected checkout and preserves 
   expect(updaterTrust.run).toContain('-L "$trusted_config"');
   expect(updaterTrust.run).toContain('"$selected_pubkey" != "$trusted_pubkey"');
   expect(updaterTrust.run).toContain('echo "updater_pubkey=$trusted_pubkey" >> "$GITHUB_OUTPUT"');
-  for (const name of ["build_linux", "build_macos", "build_windows"]) {
-    expect(linux.jobs[name].steps[0].with.ref).toBe(
-      "${{ needs.validate_release.outputs.tag_sha }}",
+  for (const jobName of ["build_linux", "build_macos", "build_windows"]) {
+    const steps = linux.jobs[jobName].steps as WorkflowStep[];
+    const checkoutIndex = steps.findIndex(({ name }) => name === "Checkout selected tag");
+    expect(steps[checkoutIndex]?.with?.ref).toBe("${{ needs.validate_release.outputs.tag_sha }}");
+    expect(checkoutIndex, `${jobName} selected checkout order`).toBeGreaterThan(0);
+    expect(
+      steps.slice(0, checkoutIndex).some(({ uses }) => uses?.startsWith("./")),
+      `${jobName} pre-checkout local action`,
+    ).toBe(false);
+    expect(
+      steps.slice(checkoutIndex + 1).some(({ uses }) => uses?.startsWith("./")),
+      `${jobName} selected-tag local action`,
+    ).toBe(false);
+    expect(JSON.stringify(steps), `${jobName} Actions cache usage`).not.toContain("actions/cache");
+    const install = expectDefined(
+      steps.find(({ name }) => name === "Install selected-tag dependencies"),
+      `${jobName} dependency install`,
     );
+    expect(steps.indexOf(install), `${jobName} install order`).toBeGreaterThan(checkoutIndex);
+    expect(install.run).toContain("pnpm install --frozen-lockfile");
   }
   const linuxBuildSteps = linux.jobs.build_linux.steps as WorkflowStep[];
   const selectedTagCheckout = linuxBuildSteps.findIndex(
@@ -15924,7 +16005,7 @@ it("pins simple release admission owners before selected checkout and preserves 
   const trustedToolingCheckout = linuxBuildSteps.findIndex(
     ({ name }) => name === "Checkout trusted Linux packaging tooling",
   );
-  expect(selectedTagCheckout).toBe(0);
+  expect(selectedTagCheckout).toBeGreaterThan(0);
   expect(trustedToolingCheckout).toBe(selectedTagCheckout + 1);
   const trustedToolingOptions = linuxBuildSteps[trustedToolingCheckout]?.with;
   expect(trustedToolingOptions).toMatchObject({
@@ -16014,7 +16095,7 @@ it("pins simple release admission owners before selected checkout and preserves 
     "Linux AppImage signing step",
   );
   expect(signAppImage.env).toMatchObject({
-    RELEASE_TAG: "${{ inputs.tag }}",
+    RELEASE_TAG: "${{ needs.validate_release.outputs.release_tag }}",
     TAG_SHA: "${{ needs.validate_release.outputs.tag_sha }}",
     TAURI_SIGNING_PRIVATE_KEY: "${{ secrets.TAURI_SIGNING_PRIVATE_KEY }}",
     TAURI_SIGNING_PRIVATE_KEY_PASSWORD: "${{ secrets.TAURI_SIGNING_PRIVATE_KEY_PASSWORD }}",
@@ -16128,7 +16209,7 @@ it("pins simple release admission owners before selected checkout and preserves 
     "desktop updater signing step",
   );
   expect(signDesktop.env).toMatchObject({
-    RELEASE_TAG: "${{ inputs.tag }}",
+    RELEASE_TAG: "${{ needs.validate_release.outputs.release_tag }}",
     TAG_SHA: "${{ needs.validate_release.outputs.tag_sha }}",
     TAURI_SIGNING_PRIVATE_KEY: "${{ secrets.TAURI_SIGNING_PRIVATE_KEY }}",
     TAURI_SIGNING_PRIVATE_KEY_PASSWORD: "${{ secrets.TAURI_SIGNING_PRIVATE_KEY_PASSWORD }}",
@@ -16152,6 +16233,7 @@ it("pins simple release admission owners before selected checkout and preserves 
   expect(linux.jobs.publish.needs).toContain("sign_desktop");
   expect(linux.jobs.publish.if).toContain("needs.sign_linux.result == 'success'");
   expect(linux.jobs.publish.if).toContain("needs.sign_desktop.result == 'success'");
+  expect(linux.jobs.publish.if).not.toContain("inputs.");
   expect(
     (linux.jobs.publish.steps as WorkflowStep[]).find(
       ({ name }) => name === "Download Debian bundle",
