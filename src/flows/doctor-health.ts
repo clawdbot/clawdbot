@@ -18,7 +18,7 @@ const loadConfigModule = createLazyRuntimeModule(() => import("../config/config.
 async function assertDoctorDatabaseSchemasCompatible(): Promise<void> {
   const [databasePreflight, agentDatabase, stateDatabase] = await Promise.all([
     import("../state/openclaw-database-preflight.js"),
-    import("../state/openclaw-agent-db.js"),
+    import("../state/openclaw-agent-db-contract.js"),
     import("../state/openclaw-state-db-contract.js"),
   ]);
   const databaseSchemas = databasePreflight.preflightOpenClawDatabaseSchemas({
@@ -141,8 +141,11 @@ export async function runDoctorHealthFlow(runtime?: RuntimeEnv, options: DoctorO
       return;
     }
     if (options.repair === true || options.yes === true) {
-      // Migration warnings also cover optional archives; certify required runtime
-      // schemas independently before reporting success or a recoverable advisory.
+      // Contributions can report optional migration warnings, but repair must not
+      // complete while required state still blocks runtime access.
+      const { assertSessionStoreMigrationComplete } =
+        await import("../config/sessions/startup-migration.js");
+      assertSessionStoreMigrationComplete({ cfg: ctx.cfg, env: process.env });
       const { assertOpenClawDatabasesReady } =
         await import("../state/openclaw-database-preflight.js");
       const { resolveConfiguredAgentDatabaseTargets } =
@@ -157,6 +160,9 @@ export async function runDoctorHealthFlow(runtime?: RuntimeEnv, options: DoctorO
       const { assertConfiguredWorkspaceStateReady } =
         await import("../agents/workspace-state-dirs.js");
       assertConfiguredWorkspaceStateReady({ cfg: ctx.cfg });
+      const { assertNoPendingLegacyExecApprovals } =
+        await import("../infra/exec-approvals-migration-gate.js");
+      assertNoPendingLegacyExecApprovals();
     }
     await maintenance?.finish(ctx.cfg);
     if (ctx.postInstallDoctorResult) {

@@ -1,4 +1,5 @@
 // Mattermost tests cover client.retry plugin behavior.
+import { createDeferred } from "openclaw/plugin-sdk/extension-shared";
 import { MAX_TIMER_TIMEOUT_MS } from "openclaw/plugin-sdk/number-runtime";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { createMattermostClient, createMattermostDirectChannelWithRetry } from "./client.js";
@@ -111,24 +112,52 @@ describe("createMattermostDirectChannelWithRetry", () => {
     expect(result.id).toBe("dm-channel-port");
   });
 
-  it("does not retry on 400 even if error message contains '429' text", async () => {
-    // This tests that "429" in error detail doesn't trigger false rate-limit retry
-    // e.g., "Invalid user ID: 4294967295" should NOT be retried
-    mockFetch.mockResolvedValueOnce(jsonResponse({ message: "Invalid user ID: 4294967295" }, 400));
+  for (const { name, status, message, expectedError } of [
+    {
+      name: "does not retry on 400 even if error message contains '429' text",
+      status: 400,
+      message: "Invalid user ID: 4294967295",
+      expectedError: "Mattermost API 400",
+    },
+    {
+      name: "does not retry on 4xx client errors (except 429)",
+      status: 400,
+      message: "Bad request",
+      expectedError: "400",
+    },
+    {
+      name: "does not retry on 404 not found",
+      status: 404,
+      message: "User not found",
+      expectedError: "404",
+    },
+    {
+      name: "does not retry on 4xx errors even if message contains retryable keywords",
+      status: 400,
+      message: "Request timeout: connection timed out",
+      expectedError: "400",
+    },
+    {
+      name: "does not retry on 403 Forbidden even with 'abort' in message",
+      status: 403,
+      message: "Request aborted: forbidden",
+      expectedError: "403",
+    },
+  ]) {
+    it(name, async () => {
+      mockFetch.mockResolvedValueOnce(jsonResponse({ message }, status));
 
-    const client = createMockClient();
-
-    const run = suppressUnhandled(
-      createMattermostDirectChannelWithRetry(client, ["user-1", "user-2"], {
-        maxRetries: 3,
-        initialDelayMs: 10,
-      }),
-    );
-    await expect(resolveRetryRun(run)).rejects.toThrow("Mattermost API 400");
-
-    // Should not retry - only called once (400 is a client error, even though message contains "429")
-    expect(mockFetch).toHaveBeenCalledTimes(1);
-  });
+      const client = createMockClient();
+      const run = suppressUnhandled(
+        createMattermostDirectChannelWithRetry(client, ["user-1", "user-2"], {
+          maxRetries: 3,
+          initialDelayMs: 10,
+        }),
+      );
+      await expect(resolveRetryRun(run)).rejects.toThrow(expectedError);
+      expect(mockFetch).toHaveBeenCalledTimes(1);
+    });
+  }
 
   it("retries on 5xx server errors", async () => {
     mockFetch
@@ -191,38 +220,6 @@ describe("createMattermostDirectChannelWithRetry", () => {
     expect(mockFetch).toHaveBeenCalledTimes(2);
   });
 
-  it("does not retry on 4xx client errors (except 429)", async () => {
-    mockFetch.mockResolvedValueOnce(jsonResponse({ message: "Bad request" }, 400));
-
-    const client = createMockClient();
-
-    const run = suppressUnhandled(
-      createMattermostDirectChannelWithRetry(client, ["user-1", "user-2"], {
-        maxRetries: 3,
-        initialDelayMs: 10,
-      }),
-    );
-    await expect(resolveRetryRun(run)).rejects.toThrow("400");
-
-    expect(mockFetch).toHaveBeenCalledTimes(1);
-  });
-
-  it("does not retry on 404 not found", async () => {
-    mockFetch.mockResolvedValueOnce(jsonResponse({ message: "User not found" }, 404));
-
-    const client = createMockClient();
-
-    const run = suppressUnhandled(
-      createMattermostDirectChannelWithRetry(client, ["user-1", "user-2"], {
-        maxRetries: 3,
-        initialDelayMs: 10,
-      }),
-    );
-    await expect(resolveRetryRun(run)).rejects.toThrow("404");
-
-    expect(mockFetch).toHaveBeenCalledTimes(1);
-  });
-
   it("throws after exhausting all retries", async () => {
     mockFetch.mockImplementation(async () => jsonResponse({ message: "Service unavailable" }, 503));
 
@@ -242,31 +239,19 @@ describe("createMattermostDirectChannelWithRetry", () => {
   it("respects custom timeout option and aborts fetch", async () => {
     let abortSignal: AbortSignal | undefined;
     let abortListenerCalled = false;
+    const abortedFetch = createDeferred<Response>();
+    const onAbort = () => {
+      abortListenerCalled = true;
+      abortedFetch.reject(new Error("AbortError"));
+    };
 
-    mockFetch.mockImplementationOnce((url, init) => {
+    mockFetch.mockImplementationOnce((_url, init) => {
       abortSignal = init?.signal ?? undefined;
-      if (abortSignal) {
-        abortSignal.addEventListener("abort", () => {
-          abortListenerCalled = true;
-        });
-      }
-      // Return a promise that rejects when aborted, otherwise never resolves
-      return new Promise((_, reject) => {
-        if (abortSignal) {
-          const checkAbort = () => {
-            if (abortSignal?.aborted) {
-              reject(new Error("AbortError"));
-            } else {
-              setTimeout(checkAbort, 10);
-            }
-          };
-          setTimeout(checkAbort, 10);
-        }
-      });
+      abortSignal?.addEventListener("abort", onAbort, { once: true });
+      return abortedFetch.promise;
     });
 
     const client = createMockClient();
-
     const run = suppressUnhandled(
       createMattermostDirectChannelWithRetry(client, ["user-1", "user-2"], {
         timeoutMs: 50,
@@ -274,19 +259,24 @@ describe("createMattermostDirectChannelWithRetry", () => {
         initialDelayMs: 10,
       }),
     );
-    await expect(resolveRetryRun(run)).rejects.toThrow("AbortError");
-
-    expect(mockFetch).toHaveBeenCalledTimes(1);
-    expect(abortSignal).toBeInstanceOf(AbortSignal);
-    expect(abortSignal?.aborted).toBe(true);
-    expect(abortListenerCalled).toBe(true);
+    try {
+      await vi.runAllTimersAsync();
+      // Check timeout delivery before awaiting the fetch it must reject.
+      expect(mockFetch).toHaveBeenCalledTimes(1);
+      expect(abortSignal).toBeInstanceOf(AbortSignal);
+      expect(abortSignal?.aborted).toBe(true);
+      expect(abortListenerCalled).toBe(true);
+      await expect(run).rejects.toThrow("AbortError");
+    } finally {
+      abortSignal?.removeEventListener("abort", onAbort);
+      const settled = Promise.allSettled([run, abortedFetch.promise]);
+      abortedFetch.reject(new Error("test cleanup"));
+      await settled;
+    }
   });
 
   it("caps oversized request timeouts before scheduling aborts", async () => {
-    const timeoutSpy = vi
-      .spyOn(globalThis, "setTimeout")
-      .mockReturnValue(1 as unknown as ReturnType<typeof setTimeout>);
-    vi.spyOn(globalThis, "clearTimeout").mockImplementation(() => undefined);
+    const timeoutSpy = vi.spyOn(globalThis, "setTimeout");
     mockFetch.mockResolvedValueOnce(jsonResponse({ id: "dm-channel-capped" }, 201));
 
     const client = createMockClient();
@@ -355,43 +345,6 @@ describe("createMattermostDirectChannelWithRetry", () => {
     delays.forEach((delay) => {
       expect(delay).toBeLessThanOrEqual(2500);
     });
-  });
-
-  it("does not retry on 4xx errors even if message contains retryable keywords", async () => {
-    // This tests the fix for false positives where a 400 error with "timeout" in the message
-    // would incorrectly be retried
-    mockFetch.mockResolvedValueOnce(
-      jsonResponse({ message: "Request timeout: connection timed out" }, 400),
-    );
-
-    const client = createMockClient();
-
-    const run = suppressUnhandled(
-      createMattermostDirectChannelWithRetry(client, ["user-1", "user-2"], {
-        maxRetries: 3,
-        initialDelayMs: 10,
-      }),
-    );
-    await expect(resolveRetryRun(run)).rejects.toThrow("400");
-
-    // Should not retry - only called once
-    expect(mockFetch).toHaveBeenCalledTimes(1);
-  });
-
-  it("does not retry on 403 Forbidden even with 'abort' in message", async () => {
-    mockFetch.mockResolvedValueOnce(jsonResponse({ message: "Request aborted: forbidden" }, 403));
-
-    const client = createMockClient();
-
-    const run = suppressUnhandled(
-      createMattermostDirectChannelWithRetry(client, ["user-1", "user-2"], {
-        maxRetries: 3,
-        initialDelayMs: 10,
-      }),
-    );
-    await expect(resolveRetryRun(run)).rejects.toThrow("403");
-
-    expect(mockFetch).toHaveBeenCalledTimes(1);
   });
 
   it("passes AbortSignal to fetch for timeout support", async () => {

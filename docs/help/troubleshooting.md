@@ -179,7 +179,7 @@ sudo chown -R root:root /path/to/openclaw-config/npm
 openclaw doctor --fix
 ```
 
-Deeper docs: [Blocked plugin path ownership](/tools/plugin#blocked-plugin-path-ownership), [Docker: Permissions and EACCES](/install/docker#shell-helpers-optional)
+Deeper docs: [Blocked plugin path ownership](/tools/plugin#blocked-plugin-path-ownership), [Docker: Permissions and EACCES](/install/docker#permissions-and-eacces)
 
 ## Decision tree
 

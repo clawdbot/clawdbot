@@ -26,8 +26,6 @@ import * as nodeHost from "./bash-tools.exec-host-node.js";
 import { createExecTool } from "./bash-tools.exec-run.js";
 import type { ExecToolDefaults } from "./bash-tools.exec-types.js";
 import * as codeModeBridge from "./code-mode-bridge.js";
-import { consumeRepairableCodeModeFailure } from "./code-mode-repair-provenance.js";
-import { isCodeModeBridgeRepairEligible } from "./code-mode-state.js";
 import { createSubscribedCodeModeHarness } from "./code-mode.bridge.lifecycle.test-support.js";
 import { applyCodeModeCatalog } from "./code-mode.js";
 import {
@@ -37,7 +35,6 @@ import {
   testing,
   waitUntilCompleted,
 } from "./code-mode.test-support.js";
-import { consumeToolEffectReceipt } from "./tool-effect-receipt.js";
 import { consumeTrustedToolNoStartError } from "./tool-result-error.js";
 import { createToolTerminalObserver } from "./tool-terminal-outcome.js";
 import { jsonResult, ToolInputError } from "./tools/common.js";
@@ -171,12 +168,6 @@ describe("Code Mode subscribed host denial", () => {
           completedCount: 2,
           activeCount: 0,
         });
-        const serialized = JSON.stringify(details);
-        for (const copy of [{ ...details }, structuredClone(details), JSON.parse(serialized)]) {
-          expect(consumeRepairableCodeModeFailure(copy)).toBe(false);
-        }
-        expect(consumeRepairableCodeModeFailure(details)).toBe(true);
-        expect(consumeRepairableCodeModeFailure(details)).toBe(false);
       } finally {
         harness.dispose();
       }
@@ -236,9 +227,6 @@ describe("Code Mode subscribed host denial", () => {
           expect(wait).toHaveBeenCalledOnce();
           expect(details.value).toMatchObject({ exitCode: 0, aggregated: "host-corrected" });
         }
-        expect(consumeRepairableCodeModeFailure(details)).toBe(
-          change === "deny" || change === "invalid",
-        );
       } finally {
         harness.dispose();
         vi.useRealTimers();
@@ -285,7 +273,6 @@ describe("Code Mode subscribed host denial", () => {
       const allowed = decision === "allow-once" || decision === "allow-always";
       const details = await harness.runToCompletion();
       expect(details.status).toBe("failed");
-      expect(consumeRepairableCodeModeFailure(details)).toBe(allowed);
       expect(before).toHaveBeenCalledOnce();
       expect(resolutions).toEqual([
         decision === "cancel" || decision === "unavailable" || decision === "report"
@@ -339,7 +326,6 @@ describe("Code Mode subscribed host denial", () => {
     try {
       const details = await harness.runToCompletion();
       expect(details.error).toContain("requested node");
-      expect(consumeRepairableCodeModeFailure(details)).toBe(true);
       expect(approve).toHaveBeenCalledOnce();
       expect(rewrite).toHaveBeenCalledOnce();
       expect(harness.spawn).not.toHaveBeenCalled();
@@ -402,7 +388,6 @@ describe("Code Mode subscribed host denial", () => {
         const details = await running;
         expect(details).toMatchObject({ status: "failed" });
         expect(details.error).toMatch(/abort|cancel/i);
-        expect(consumeRepairableCodeModeFailure(details)).toBe(false);
         release.resolve();
         await finished.promise;
         await vi.waitFor(() => expect(harness.subscription.getItemLifecycle().activeCount).toBe(0));
@@ -449,7 +434,6 @@ describe("Code Mode subscribed host denial", () => {
       expect(producerError).toBeInstanceOf(Error);
       expect(consumeTrustedToolNoStartError(producerError)).toBe(false);
       expect(consumeTrustedToolNoStartError(replacement)).toBe(false);
-      expect(consumeRepairableCodeModeFailure(details)).toBe(false);
       expect(harness.spawn).not.toHaveBeenCalled();
     } finally {
       harness.dispose();
@@ -466,7 +450,6 @@ describe("Code Mode subscribed host denial", () => {
       const details = await harness.runToCompletion();
       await vi.waitFor(() => expect(after).toHaveBeenCalledOnce());
       expect(details.error).toContain("exec host not allowed");
-      expect(consumeRepairableCodeModeFailure(details)).toBe(true);
     } finally {
       harness.dispose();
     }
@@ -480,7 +463,7 @@ describe("Code Mode subscribed host denial", () => {
     "denial-first/settles-first",
     "denial-first/settles-last",
     "late-settlement",
-  ] as const)("retains real whole-cell mutation history: %s", async (order) => {
+  ] as const)("does not replay completed work around a host denial: %s", async (order) => {
     const dir = await fs.mkdtemp(path.join(os.tmpdir(), "code-mode-host-marker-"));
     const marker = path.join(dir, "mutation.txt");
     const mutated = createDeferred();
@@ -543,26 +526,14 @@ describe("Code Mode subscribed host denial", () => {
       let details = await harness.run(code);
       if (order === "parked") {
         expect(details.status).toBe("waiting");
-        const parked = expectDefined(
-          testing.activeRuns.get(String(details.runId)),
-          "real parked history",
-        );
-        expect(isCodeModeBridgeRepairEligible(parked.bridgeDispatch)).toBe(false);
         details = resultDetails(
           await expectDefined(harness.tools[1], "wait").execute("resume-denial", {
             runId: details.runId,
           }),
         );
-        expect(isCodeModeBridgeRepairEligible(parked.bridgeDispatch)).toBe(false);
       }
       if (order === "late-settlement") {
         expect(details.status).toBe("waiting");
-        const pending = expectDefined(
-          testing.activeRuns.get(String(details.runId)),
-          "pending mutation",
-        );
-        expect(isCodeModeBridgeRepairEligible(pending.bridgeDispatch)).toBe(false);
-        expect(consumeRepairableCodeModeFailure(details)).toBe(false);
         await expect(fs.readFile(marker, "utf8")).rejects.toMatchObject({ code: "ENOENT" });
         releaseLateMutation.resolve();
         await lateMutationFinished.promise;
@@ -572,7 +543,6 @@ describe("Code Mode subscribed host denial", () => {
           }),
         );
         await vi.waitFor(() => expect(harness.subscription.getItemLifecycle().activeCount).toBe(0));
-        expect(isCodeModeBridgeRepairEligible(pending.bridgeDispatch)).toBe(false);
       }
       details = await harness.complete(details);
       expect(details).toMatchObject({ status: "failed", bridgeDispatchStarted: true });
@@ -589,7 +559,6 @@ describe("Code Mode subscribed host denial", () => {
           mutationFirstSettlement ? ["record_mutation", "exec"] : ["exec", "record_mutation"],
         );
       }
-      expect(consumeRepairableCodeModeFailure(details)).toBe(false);
       expect(harness.spawn).not.toHaveBeenCalled();
       expect(harness.remote).not.toHaveBeenCalled();
     } finally {
@@ -602,7 +571,7 @@ describe("Code Mode subscribed host denial", () => {
   });
 
   it.each(["unbranded", "input-error", "security-deny"] as const)(
-    "does not grant operation proof to %s failures",
+    "reports %s failures without starting a shell process",
     async (kind) => {
       const harness = createHostHarness({
         name: `untrusted-${kind}`,
@@ -625,7 +594,6 @@ describe("Code Mode subscribed host denial", () => {
             : `return await exec({ command: "printf no", host: "gateway" });`,
         );
         expect(details.status).toBe("failed");
-        expect(consumeRepairableCodeModeFailure(details)).toBe(false);
         expect(harness.spawn).not.toHaveBeenCalled();
         expect(harness.remote).not.toHaveBeenCalled();
       } finally {
@@ -678,7 +646,6 @@ describe("Code Mode subscribed host denial", () => {
       expect(checkClientVoiceToolConfirmationPolicy(policy).allowed).toBe(true);
       const denied = await harness.runToCompletion(`return await exec(${JSON.stringify(args)});`);
       expect(denied.error).toContain("exec host not allowed");
-      expect(consumeRepairableCodeModeFailure(denied)).toBe(true);
       expect(checkClientVoiceToolConfirmationPolicy(policy).allowed).toBe(false);
       for (const input of [args, { ...args, host: "gateway" }]) {
         const blocked = await harness.runToCompletion(
@@ -689,7 +656,6 @@ describe("Code Mode subscribed host denial", () => {
           value: { status: "blocked", deniedReason: "client-voice-confirmation" },
         });
         expect(JSON.stringify(blocked.value)).toContain("VOICE_CONFIRMATION_REQUIRED");
-        expect(consumeRepairableCodeModeFailure(blocked)).toBe(false);
       }
       expect(harness.spawn).not.toHaveBeenCalled();
       expect(harness.remote).not.toHaveBeenCalled();
@@ -698,40 +664,4 @@ describe("Code Mode subscribed host denial", () => {
       resetClientVoiceConfirmationStateForTest();
     }
   });
-  it.each(["copy", "json", "reuse"] as const)(
-    "does not transfer a settled object's proof through %s",
-    async (mode) => {
-      const harness = createHostHarness({ name: `settled-${mode}` });
-      const runBridge = codeModeBridge.runBridgeRequest;
-      let first: Awaited<ReturnType<typeof runBridge>> | undefined;
-      vi.spyOn(codeModeBridge, "runBridgeRequest").mockImplementation(async (params) => {
-        const settled = await runBridge(params);
-        if (mode === "reuse") {
-          if (first) {
-            return first;
-          }
-          first = settled;
-          return settled;
-        }
-        first = settled;
-        const serialized = JSON.stringify(settled);
-        return mode === "json" ? JSON.parse(serialized) : { ...settled };
-      });
-      try {
-        const details = await harness.runToCompletion();
-        expect(details.error).toContain("exec host not allowed");
-        expect(consumeRepairableCodeModeFailure(details)).toBe(mode === "reuse");
-        if (mode === "reuse") {
-          const reused = await harness.runToCompletion();
-          expect(consumeRepairableCodeModeFailure(reused)).toBe(false);
-        } else {
-          expect(consumeToolEffectReceipt(first)).toEqual({ state: "not_started" });
-        }
-        expect(consumeToolEffectReceipt(first)).toBeUndefined();
-        expect(harness.spawn).not.toHaveBeenCalled();
-      } finally {
-        harness.dispose();
-      }
-    },
-  );
 });

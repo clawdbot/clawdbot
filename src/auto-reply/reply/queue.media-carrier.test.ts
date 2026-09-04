@@ -113,7 +113,10 @@ describe("followup prompt metadata carrier", () => {
       sessionId: run.run.sessionId,
       resetTriggered: false,
     });
-    operation.bindToolAuthorityFingerprint("media-authority");
+    operation.bindToolAuthoritySnapshot({
+      fingerprint: () => "media-authority",
+      project: () => "media-authority",
+    });
     const reject = vi.fn(async () => {
       throw new Error("no active turn to steer");
     });

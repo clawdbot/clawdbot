@@ -1,4 +1,38 @@
 import Foundation
+import OpenClawKit
+import OpenClawProtocol
+
+struct GatewayCompatibilityIssue: Equatable {
+    let problem: GatewayConnectionProblem
+    let versions: String
+
+    init?(error: Error, appVersion: String? = GatewayEnvironment.appVersionString()) {
+        guard let rejection = error as? GatewayConnectAuthError else { return nil }
+        let minimum = GATEWAY_MIN_PROTOCOL_VERSION
+        let maximum = GATEWAY_PROTOCOL_VERSION
+        guard rejection.isProtocolMismatch(supportedProtocols: minimum...maximum) else { return nil }
+        let normalized = GatewayConnectAuthError(
+            message: rejection.message,
+            detailCode: GatewayConnectAuthDetailCode.protocolMismatch.rawValue,
+            canRetryWithDeviceToken: false,
+            clientMinProtocol: minimum,
+            clientMaxProtocol: maximum,
+            expectedProtocol: rejection.expectedProtocol)
+        guard let problem = GatewayConnectionProblemMapper.map(error: normalized) else { return nil }
+        self.problem = problem
+        let appProtocol = minimum == maximum ? "\(maximum)" : "\(minimum)–\(maximum)"
+        let gatewayProtocol = rejection.expectedProtocol.map(String.init) ?? "unknown"
+        self.versions = "OpenClaw app: \(appVersion ?? "unknown"). " +
+            "App protocol: \(appProtocol). Gateway protocol: \(gatewayProtocol). " +
+            "The Gateway did not report its release version."
+    }
+
+    var message: String {
+        let action = self.problem.actionCommand.map { "Run \($0) on the Gateway host, then reconnect." }
+            ?? "Update app from https://docs.openclaw.ai/platforms/macos, then reconnect."
+        return "\(self.problem.title). \(self.versions) \(self.problem.message) \(action)"
+    }
+}
 
 enum GatewayConnectionTone: Equatable {
     case healthy

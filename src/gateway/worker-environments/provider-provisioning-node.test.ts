@@ -173,9 +173,15 @@ describe("node worker provider provisioning", () => {
       const finishProvider = createDeferredCore();
       const finishEnrollment = createDeferredCore<WorkerNodeEnrollment>();
       const finishRuntime = createDeferredCore<WorkerNodeRuntimePreparation>();
-      const runtime: WorkerNodeRuntimePreparation = { nodeBootstrap: support.NODE_BOOTSTRAP };
+      const runtime: WorkerNodeRuntimePreparation = {
+        nodeBootstrap: support.NODE_BOOTSTRAP,
+        workerBundle: {
+          ...support.NODE_BOOTSTRAP,
+          packageRelativePath: `worker-artifacts/${support.NODE_BOOTSTRAP.sha256}.tgz`,
+        },
+      };
       let runtimeSignal: AbortSignal | undefined;
-      const prepareNodeRuntime = vi.fn(async (_record, signal?: AbortSignal) => {
+      const prepareNodeRuntime = vi.fn(async (_record, _bundle, signal?: AbortSignal) => {
         runtimeSignal = signal;
         return outcome === "runtime-timeout" ? await finishRuntime.promise : runtime;
       });
@@ -473,7 +479,7 @@ describe("node worker provider provisioning", () => {
       sharedHost: true,
       ownerEpoch: 1,
     });
-    expect(support.testState.prepareInstallation).not.toHaveBeenCalled();
+    expect(support.testState.prepareInstallation).toHaveBeenCalledExactlyOnceWith("bundle");
     expect(support.testState.bootstrapWorker).not.toHaveBeenCalled();
     const credential = workerService.takeMintedCredential({
       environmentId: result.environmentId,

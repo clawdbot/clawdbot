@@ -38,13 +38,12 @@ export type TabAccessEventPolicy = {
   invalidateTab(tabId: number): void;
   retireTab(tabId: number): void;
   forwardDocumentEvent: TabAccessPolicy["forwardDocumentEvent"];
-  invalidateDocumentGroup: TabAccessPolicy["invalidateDocumentGroup"];
   renewTabAccess(
     tabId: number,
     attachedEpoch: TabAccessEpoch | undefined,
     tab: BrowserTabSnapshot | undefined,
   ): TabAccessEpoch | undefined;
-  invalidateAll(group?: { id: number; title?: string }): void;
+  invalidateGroup(group?: { id: number; title?: string }, removed?: boolean): void;
   observeTabUpdate(
     tabId: number,
     change: { groupId?: number; url?: string; status?: string },

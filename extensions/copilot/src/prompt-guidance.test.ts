@@ -36,14 +36,15 @@ describe("buildCopilotPromptGuidance", () => {
     expect(guidance).toContain("## Delegation");
     expect(guidance).toContain("delegate via `sessions_spawn`");
     expect(guidance).toContain("spawn `sessions_spawn` with `visible=true`");
-    expect(guidance).toContain("Need results before reply: `sessions_yield`; never poll.");
+    expect(guidance).toContain("Need announced results before reply: `sessions_yield`");
+    expect(guidance).toContain("Collectors require explicit result collection instead.");
     expect(guidance).toContain("`subagents(action=list)` only for requested status/debug.");
-    expect(guidance).toContain("For the current source conversation, reply normally");
+    expect(guidance).toContain("You can participate in the conversation throughout your work.");
     expect(guidance?.indexOf("## Skill Workshop")).toBeLessThan(
       guidance?.indexOf("## Delegation") ?? 0,
     );
     expect(guidance?.indexOf("## Delegation")).toBeLessThan(
-      guidance?.indexOf("For the current source conversation") ?? 0,
+      guidance?.indexOf("You can participate in the conversation throughout your work.") ?? 0,
     );
   });
 
@@ -64,7 +65,7 @@ describe("buildCopilotPromptGuidance", () => {
     const guidance = buildGuidance(attempt);
 
     expect(guidance).not.toContain("## Delegation");
-    expect(guidance).toContain("For the current source conversation, reply normally");
+    expect(guidance).toContain("You can participate in the conversation throughout your work.");
   });
 
   it.each([
@@ -90,7 +91,9 @@ describe("buildCopilotPromptGuidance", () => {
     const guidance = buildGuidance({}, [" sessions_spawn ", "sessions_spawn"]);
 
     expect(guidance).toContain("## Delegation");
-    expect(guidance).toContain("Completion is push-based; never poll.");
+    expect(guidance).toContain(
+      "Announced completion is push-based; collectors require explicit result collection.",
+    );
     expect(guidance).not.toContain("sessions_yield");
     expect(guidance).not.toContain("subagents(action=list)");
     expect(buildGuidance({}, ["sessions_yield", "subagents"])).not.toContain("## Delegation");

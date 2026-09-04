@@ -4,7 +4,6 @@ import fs from "node:fs";
 import type { HeapProfiler } from "node:inspector";
 import os from "node:os";
 import path from "node:path";
-import { promisify } from "node:util";
 import { describe, expect, it } from "vitest";
 import {
   buildVitestProfileCommandWithArgs,
@@ -13,17 +12,30 @@ import {
 } from "../../scripts/run-vitest-profile.mts";
 import { createScriptTestHarness } from "./test-helpers.js";
 
-function runProfileProcess(command: string, args: string[], root: string) {
-  return promisify(execFile)(command, args, {
-    cwd: root,
-    env: { PATH: process.env.PATH, HOME: root, USERPROFILE: root, CI: "1" },
-  }).then(
-    ({ stdout, stderr }) => ({ code: 0, output: stdout + stderr }),
-    (error: { code: number; stdout: string; stderr: string }) => ({
-      code: error.code,
-      output: error.stdout + error.stderr,
-    }),
-  );
+function runProfileProcess(
+  command: string,
+  args: string[],
+  root: string,
+): Promise<{ code: number; output: string }> {
+  return new Promise((resolve, reject) => {
+    execFile(
+      command,
+      args,
+      { cwd: root, env: { PATH: process.env.PATH, HOME: root, USERPROFILE: root, CI: "1" } },
+      (error, stdout, stderr) => {
+        const output = stdout + stderr;
+        if (!error) {
+          resolve({ code: 0, output });
+          return;
+        }
+        if (typeof error.code === "number" && error.code !== 0 && !error.signal) {
+          resolve({ code: error.code, output });
+          return;
+        }
+        reject(new Error(`${error.message}\n${output}`, { cause: error }));
+      },
+    );
+  });
 }
 
 describe("scripts/run-vitest-profile", () => {
@@ -63,39 +75,49 @@ describe("scripts/run-vitest-profile", () => {
     },
   );
 
-  it.each(
-    [
-      { pool: "forks", isolate: true, custom: false, failRun: false },
-      { pool: "threads", isolate: true, custom: false, failRun: true },
-      { pool: "forks", isolate: false, custom: false, failRun: true },
-      { pool: "threads", isolate: false, custom: false, failRun: false },
-      { pool: "forks", isolate: true, custom: true, failRun: true },
-      { pool: "threads", isolate: true, custom: true, failRun: false },
-      { pool: "forks", isolate: true, custom: true, failRun: false, projects: true },
-      { pool: "forks", isolate: false, custom: false, failRun: false, failProfile: true },
-      { pool: "threads", isolate: false, custom: false, failRun: true, failProfile: true },
-      ...["ignore", "filter"].flatMap((errorPolicy) =>
-        [false, true].map((failProfile) => ({
-          pool: errorPolicy === "ignore" ? "forks" : "threads",
-          isolate: false,
-          custom: false,
-          failRun: false,
-          failProfile,
-          unhandled: true,
-          errorPolicy,
-        })),
-      ),
-      { pool: "forks", isolate: false, custom: false, failRun: false, unhandled: true },
-    ].map((testCase) => ({
-      projects: false,
-      failProfile: false,
-      unhandled: false,
-      errorPolicy: "default",
-      ...testCase,
-    })),
-  )(
-    "profiles selected $pool runner (isolated: $isolate, custom: $custom, failed: $failRun, projects: $projects, write failure: $failProfile, unhandled: $unhandled, policy: $errorPolicy)",
-    async ({ pool, isolate, custom, failRun, projects, failProfile, unhandled, errorPolicy }) => {
+  it.each([
+    { pool: "forks", isolate: true, custom: false, failRun: false },
+    { pool: "threads", isolate: true, custom: false, failRun: true },
+    { pool: "forks", isolate: false, custom: false, failRun: true },
+    { pool: "threads", isolate: false, custom: false, failRun: false },
+    { pool: "forks", isolate: true, custom: true, failRun: true },
+    { pool: "threads", isolate: true, custom: true, failRun: false },
+    { pool: "forks", isolate: true, custom: true, failRun: false, projects: true },
+    { pool: "forks", isolate: false, custom: false, failRun: false, failProfile: true },
+    { pool: "threads", isolate: false, custom: false, failRun: true, failProfile: true },
+    ...["ignore", "filter"].flatMap((errorPolicy) =>
+      [false, true].map((failProfile) => ({
+        pool: errorPolicy === "ignore" ? "forks" : "threads",
+        isolate: false,
+        custom: false,
+        failRun: false,
+        failProfile,
+        unhandled: true,
+        errorPolicy,
+      })),
+    ),
+    { pool: "forks", isolate: false, custom: false, failRun: false, unhandled: true },
+  ])(
+    "profiles selected runner %j",
+    async ({
+      pool,
+      isolate,
+      custom,
+      failRun,
+      projects = false,
+      failProfile = false,
+      unhandled = false,
+      errorPolicy = "default",
+    }: {
+      pool: string;
+      isolate: boolean;
+      custom: boolean;
+      failRun: boolean;
+      projects?: boolean;
+      failProfile?: boolean;
+      unhandled?: boolean;
+      errorPolicy?: string;
+    }) => {
       const root = createTempDir("oc-profile-sibling-");
       fs.writeFileSync(path.join(root, "package.json"), '{"private":true,"type":"module"}');
       fs.symlinkSync(
@@ -193,7 +215,9 @@ it("retains the selected execution context", async () => {
         "--exclude",
         "cli-excluded.test.ts",
       ];
-      if (projects) args.push("--reporter", "dot", "--reporter", "json");
+      if (projects) {
+        args.push("--reporter", "dot", "--reporter", "json");
+      }
       const result = await runProfileProcess(process.execPath, args, root);
       const reportPath = path.join(root, "report.json");
       const reportText = fs.existsSync(reportPath) ? fs.readFileSync(reportPath, "utf8") : "";
@@ -203,8 +227,12 @@ it("retains the selected execution context", async () => {
       if (shouldFail) {
         expect(result.output.trimEnd()).toMatch(/\[run-vitest-profile\] FAILED \(exit 1\)$/u);
       }
-      if (failRun) expect(result.output).toContain("intentional profiling sibling failure");
-      if (unhandled) expect(result.output).toContain("intentional unhandled profiling workload");
+      if (failRun) {
+        expect(result.output).toContain("intentional profiling sibling failure");
+      }
+      if (unhandled) {
+        expect(result.output).toContain("intentional unhandled profiling workload");
+      }
       const report = JSON.parse(reportText);
       expect(report.numTotalTests).toBe(2);
       expect(report.numFailedTests).toBe(failRun ? 1 : 0);
@@ -233,7 +261,9 @@ it("retains the selected execution context", async () => {
         expect(cpu.endTime).toBeGreaterThan(cpu.startTime);
         expect(heap.head.children.length).toBeGreaterThan(0);
         const nodes = [heap.head];
-        for (const node of nodes) nodes.push(...node.children);
+        for (const node of nodes) {
+          nodes.push(...node.children);
+        }
         const workload = nodes.find(
           (node) => node.callFrame.functionName === `retain_${name}_heap_workload`,
         );
@@ -245,7 +275,9 @@ it("retains the selected execution context", async () => {
   it.each([
     { mode: "main", flags: ["--help", "--unknown-profile-test-option"] },
     { mode: "runner", flags: ["-h", "--pool"] },
-  ])("prints $mode help without starting a test server", async ({ mode, flags }) => {
+    { mode: "main", flags: ["--help", "--help"] },
+    { mode: "runner", flags: ["--help", "--help"] },
+  ])("prints $mode help for $flags without starting a test server", async ({ mode, flags }) => {
     const root = createTempDir("oc-profile-help-");
     const args = [
       path.join(repoRoot, "scripts/run-vitest-profile.mts"),

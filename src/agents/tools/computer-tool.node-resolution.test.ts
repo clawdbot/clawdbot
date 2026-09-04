@@ -106,12 +106,13 @@ describe("createComputerTool node resolution", () => {
     expect(tool.description).toContain("get_window_state");
     const selectors = ["node", "gatewayUrl", "gatewayToken", "timeoutMs"];
     const schema = tool.parameters as { properties: Record<string, unknown> };
-    expect(schema.properties.action).toMatchObject({ enum: computerUse.actions });
+    expect(schema.properties.action).toMatchObject({ enum: [...computerUse.actions, "wait"] });
     for (const selector of selectors) {
       expect(schema.properties).not.toHaveProperty(selector);
     }
 
-    const screenshot = await tool.execute("observe", { action: "screenshot" });
+    const screenshot = await tool.execute("observe", { action: "wait", duration: 0 });
+    expect(sleepMock).toHaveBeenCalledWith(0, undefined);
     expect(screenshot.details).toMatchObject({ node: "session-desktop" });
     const frameId = (screenshot.details as { frameId: string }).frameId;
     await tool.execute("click", { action: "left_click", coordinate: [0, 0], frameId });
@@ -151,7 +152,7 @@ describe("createComputerTool node resolution", () => {
     for (const selector of selectors) {
       expect(schema.properties).not.toHaveProperty(selector);
     }
-    await expect(tool.execute("after-close", { action: "screenshot" })).rejects.toThrow(
+    await expect(tool.execute("after-close", { action: "wait", duration: 0 })).rejects.toThrow(
       "computer: execution is closed",
     );
     expect(invoke).toHaveBeenCalledTimes(4);
@@ -328,10 +329,14 @@ describe("createComputerTool node resolution", () => {
     expect(callGatewayToolMock).not.toHaveBeenCalled();
   });
 
-  it("rejects an ambiguous eligible display-name match", async () => {
+  it("rejects an ambiguous eligible display-name match across current clients", async () => {
     listNodesMock.mockResolvedValue([
-      macComputerNode({ nodeId: "mac-a", displayName: "Shared Desktop" }),
-      macComputerNode({ nodeId: "mac-b", displayName: "Shared Desktop" }),
+      macComputerNode({
+        nodeId: "mac-a",
+        displayName: "Shared Desktop",
+        clientId: "openclaw-macos",
+      }),
+      macComputerNode({ nodeId: "mac-b", displayName: "Shared Desktop", clientId: "node-host" }),
     ]);
     const tool = createComputerTool({ modelHasVision: true });
     await expect(

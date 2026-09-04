@@ -1,4 +1,3 @@
-// Codex tests cover run attempt.native hook relay plugin behavior.
 import fs from "node:fs/promises";
 import path from "node:path";
 import {
@@ -85,10 +84,14 @@ describe("runCodexAppServerAttempt native hook relay", () => {
     expect(harness.requests.some((request) => request.method === "thread/start")).toBe(false);
   });
 
-  it("does not read managed hook policy when no enforcing native relay is installed", async () => {
+  it("allows observational hooks under managed-only hook policy", async () => {
     const sessionFile = path.join(tempDir, "observational-hooks-only.jsonl");
     const workspaceDir = path.join(tempDir, "observational-hooks-only-workspace");
-    const harness = createStartedThreadHarness();
+    const harness = createStartedThreadHarness(async (method) =>
+      method === "configRequirements/read"
+        ? { requirements: { allowManagedHooksOnly: true } }
+        : undefined,
+    );
 
     const run = runCodexAppServerAttempt(createParams(sessionFile, workspaceDir), {
       nativeHookRelay: { enabled: true, events: ["post_tool_use"] },
@@ -97,9 +100,8 @@ describe("runCodexAppServerAttempt native hook relay", () => {
     await harness.completeTurn({ threadId: "thread-1", turnId: "turn-1" });
     await run;
 
-    expect(harness.requests.some((request) => request.method === "configRequirements/read")).toBe(
-      false,
-    );
+    const startRequest = harness.requests.find((request) => request.method === "thread/start");
+    expect(startRequest?.params).not.toHaveProperty(["config", "hooks.PreToolUse"]);
   });
 
   it("rejects Guardian review when the running server resolves an untrusted managed endpoint", async () => {
@@ -707,7 +709,7 @@ describe("runCodexAppServerAttempt native hook relay", () => {
       const sameExecutionSession = kind === "replacement";
       const sessionFile = path.join(tempDir, "session.jsonl");
       const workspaceDir = path.join(tempDir, "workspace");
-      const firstHarness = createStartedThreadHarness();
+      const firstHarness = createStartedThreadHarness(undefined, { persistedThreads: [] });
       const firstParams = createLoopRelayParams(sessionFile, workspaceDir);
       firstParams.sandboxSessionKey = "agent:main:policy";
       const firstRun = runCodexAppServerAttempt(firstParams, {
@@ -745,8 +747,9 @@ describe("runCodexAppServerAttempt native hook relay", () => {
         }),
       ).resolves.toMatchObject({ exitCode: 0 });
 
+      firstHarness.close();
       const secondHarness = sameExecutionSession
-        ? createResumeHarness()
+        ? createResumeHarness("thread-1")
         : createStartedThreadHarness();
       const secondParams = createLoopRelayParams(
         sameExecutionSession ? sessionFile : path.join(tempDir, "independent-session.jsonl"),
@@ -922,14 +925,17 @@ describe("runCodexAppServerAttempt native hook relay", () => {
       dynamicToolsFingerprint: "[]",
       nativeHookRelayGeneration: "generation-from-failed-resume",
     });
-    const harness = createStartedThreadHarness(async (method) => {
-      if (method === "thread/resume") {
-        // Exact unsubscribe after the structured RPC failure proves the resume
-        // subscription is released before falling back to a fresh thread.
-        throw new CodexAppServerRpcError({ code: -32_000, message: "resume failed" }, method);
-      }
-      return undefined;
-    });
+    const harness = createStartedThreadHarness(
+      async (method) => {
+        if (method === "thread/resume") {
+          // Exact unsubscribe after the structured RPC failure proves the resume
+          // subscription is released before falling back to a fresh thread.
+          throw new CodexAppServerRpcError({ code: -32_000, message: "resume failed" }, method);
+        }
+        return undefined;
+      },
+      { persistedThreads: ["thread-existing"] },
+    );
 
     const run = runCodexAppServerAttempt(createLoopRelayParams(sessionFile, workspaceDir), {
       nativeHookRelay: {

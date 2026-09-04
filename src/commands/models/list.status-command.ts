@@ -80,7 +80,7 @@ import {
 import { loadManifestMetadataSnapshot } from "../../plugins/manifest-contract-eligibility.js";
 import type { PluginMetadataSnapshot } from "../../plugins/plugin-metadata-snapshot.types.js";
 import type { ProviderSyntheticAuthResult } from "../../plugins/provider-external-auth.types.js";
-import { resolveProviderSyntheticAuthWithPlugin } from "../../plugins/provider-runtime.js";
+import { prepareProviderSyntheticAuthWithPlugin } from "../../plugins/provider-runtime.js";
 import { resolveRuntimeSyntheticAuthProviderRefs } from "../../plugins/synthetic-auth.runtime.js";
 import { type RuntimeEnv, writeRuntimeJson, writeRuntimeStdout } from "../../runtime.js";
 import { createLazyImportLoader } from "../../shared/lazy-promise.js";
@@ -378,7 +378,7 @@ export async function modelsStatusCommand(
     }
     const pending = (async () => {
       const { runPluginPayloadSmokeCheckForManifestRecords } =
-        await import("../../cli/update-cli/plugin-payload-validation.js");
+        await import("../../plugins/payload-verification.js");
       const ownerPluginIds = resolveAgentHarnessOwnerPluginIds({
         runtime: "codex",
         provider,
@@ -779,9 +779,10 @@ export async function modelsStatusCommand(
       if (!syntheticAuthProviderRefs.has(normalized)) {
         continue;
       }
-      const resolvedLocal = resolveProviderSyntheticAuthWithPlugin({
+      const resolvedLocal = await prepareProviderSyntheticAuthWithPlugin({
         provider: normalized,
         config: cfg,
+        workspaceDir,
         context: {
           config: cfg,
           provider: normalized,
@@ -832,7 +833,6 @@ export async function modelsStatusCommand(
     const applied = getShellEnvAppliedKeys();
     const shellFallbackEnabled =
       shouldEnableShellEnvFallback(process.env) || cfg.env?.shellEnv?.enabled === true;
-
     const providerAuth = Array.from(
       new Set([
         ...providers,

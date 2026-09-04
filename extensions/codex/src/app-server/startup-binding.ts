@@ -16,10 +16,11 @@ import {
 import { parseSqliteSessionFileMarker } from "openclaw/plugin-sdk/session-store-runtime";
 import { resolveCodexAppServerHomeDir } from "./auth-bridge.js";
 import { isJsonObject, type JsonValue } from "./protocol.js";
-import type {
-  CodexAppServerBindingIdentity,
-  CodexAppServerBindingStore,
-  CodexAppServerThreadBinding,
+import {
+  assertCodexBindingMayBeReplaced,
+  type CodexAppServerBindingIdentity,
+  type CodexAppServerBindingStore,
+  type CodexAppServerThreadBinding,
 } from "./session-binding.js";
 
 // Codex owns proactive auto-compaction, but OpenClaw must not resume a native
@@ -416,6 +417,7 @@ export async function rotateOversizedCodexAppServerStartupBinding(params: {
   config: EmbeddedRunAttemptParams["config"] | undefined;
   contextEngineActive?: boolean;
   projectedTurnTokens?: number;
+  expectedSessionRuntimeOwnership?: EmbeddedRunAttemptParams["expectedSessionRuntimeOwnership"];
 }): Promise<{
   binding: CodexAppServerThreadBinding | undefined;
   startupContextTokens?: number;
@@ -459,6 +461,11 @@ export async function rotateOversizedCodexAppServerStartupBinding(params: {
         rolloutFiles.map(async (file) => {
           await file.handle?.close();
         }),
+      );
+      assertCodexBindingMayBeReplaced(
+        binding,
+        "rotating an oversized native transcript",
+        params.expectedSessionRuntimeOwnership,
       );
       embeddedAgentLog.warn(
         "codex app-server native transcript exceeded active byte limit; starting a fresh thread",
@@ -511,6 +518,11 @@ export async function rotateOversizedCodexAppServerStartupBinding(params: {
       : undefined;
   const tokenCount = maxFiniteNumber([sessionTokens, nativeTokens]);
   if (tokenCount !== undefined && tokenCount >= maxTokens) {
+    assertCodexBindingMayBeReplaced(
+      binding,
+      "rotating a full native context",
+      params.expectedSessionRuntimeOwnership,
+    );
     embeddedAgentLog.warn(
       "codex app-server native transcript exceeded active token limit; starting a fresh thread",
       {

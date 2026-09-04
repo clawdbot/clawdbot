@@ -2,17 +2,20 @@ import { normalizeProviderId } from "@openclaw/model-catalog-core/provider-id";
 import type { PluginMetadataSnapshot } from "../plugins/plugin-metadata-snapshot.types.js";
 import type { PreparedAgentCredentialModes } from "./agent-auth-credential-modes.js";
 import { resolveUsableAgentCredentialModes } from "./agent-auth-credentials.js";
-import { resolveAmbientAgentCredentialsForDiscovery } from "./agent-auth-discovery.js";
+import { prepareAmbientAgentCredentialsForDiscovery } from "./agent-auth-discovery.js";
 import type { ModelCatalogSnapshot } from "./model-catalog.types.js";
 import { prepareImplicitProviderStaticCatalog } from "./models-config.providers.implicit.js";
 import {
   prepareAgentCatalogSource,
   prepareWorkspaceBuildGroup,
 } from "./prepared-model-runtime.facts.js";
-import { prepareFullCatalogFacts } from "./prepared-model-runtime.full-catalog.js";
+import {
+  materializePreparedModelCatalog,
+  prepareFullCatalogFacts,
+} from "./prepared-model-runtime.full-catalog.js";
 import {
   listPreparedSyntheticAuthProviderRefs,
-  resolvePreparedSyntheticAuth,
+  prepareSyntheticAuth,
 } from "./prepared-model-runtime.synthetic-auth.js";
 import type {
   PreparedModelRuntimeCatalogMode,
@@ -46,9 +49,13 @@ async function prepareScopedReadOnlyModelCatalogWithMode(
     false,
     catalogMode === "live" ? { providerDiscoveryProviderIds } : {},
   );
-  return (
-    await prepareFullCatalogFacts(agentFactsForInput, pluginGeneration, catalogMode, catalogSource)
-  ).modelCatalog;
+  const { modelCatalog } = await prepareFullCatalogFacts(
+    agentFactsForInput,
+    pluginGeneration,
+    catalogMode,
+    catalogSource,
+  );
+  return materializePreparedModelCatalog(modelCatalog, agentFactsForInput.runtimeCapabilityModels);
 }
 
 /** Resolves provider-scoped, secret-free auth modes without live model discovery. */
@@ -71,13 +78,12 @@ export async function prepareScopedReadOnlyModelAuthModes(
         ...(input.workspaceDir ? { workspaceDir: input.workspaceDir } : {}),
       })
     ).providers ?? [];
-  const credentials = resolveAmbientAgentCredentialsForDiscovery({
+  const credentials = await prepareAmbientAgentCredentialsForDiscovery({
     config: input.config,
     env: input.env,
     authoritativeSyntheticAuthProviderRefs: pluginMetadataSnapshot.owners.cliBackends.keys(),
     syntheticAuthProviderRefs: listPreparedSyntheticAuthProviderRefs(providers),
-    resolveSyntheticAuth: (provider) =>
-      resolvePreparedSyntheticAuth({ config: input.config, provider, providers }),
+    resolveSyntheticAuth: (provider) => prepareSyntheticAuth({ ...input, provider, providers }),
     ...(input.workspaceDir ? { workspaceDir: input.workspaceDir } : {}),
   });
   const modes = resolveUsableAgentCredentialModes(credentials);

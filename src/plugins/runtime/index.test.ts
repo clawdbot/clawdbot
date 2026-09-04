@@ -51,6 +51,7 @@ function createCommandResult() {
 
 function createGatewaySubagentRuntime() {
   return {
+    complete: vi.fn(),
     run: vi.fn(),
     waitForRun: vi.fn(),
     getSessionMessages: vi.fn(),
@@ -331,6 +332,7 @@ describe("plugin runtime command execution", () => {
       name: "exposes runtime.mediaUnderstanding helpers",
       assert: (runtime: ReturnType<typeof createPluginRuntime>) => {
         expectFunctionKeys(runtime.mediaUnderstanding as Record<string, unknown>, [
+          "resolveAudioInputBudget",
           "runFile",
           "describeImageFile",
           "describeImageFileWithModel",

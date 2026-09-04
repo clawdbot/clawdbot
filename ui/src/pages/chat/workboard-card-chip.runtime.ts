@@ -1,3 +1,4 @@
+import "../../styles/chat/workboard-card-chip.css";
 import { html, nothing } from "lit";
 import { property, state } from "lit/decorators.js";
 import type { GatewayBrowserClient } from "../../api/gateway.ts";

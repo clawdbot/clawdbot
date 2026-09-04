@@ -449,9 +449,6 @@ describe("atomic subagent completion admission store", () => {
 
   it("recovers a committed blocked alert once and leaves a completed tombstone", async () => {
     useDefaultDatabase();
-    (globalThis as unknown as Record<PropertyKey, { reset(): void }>)[
-      Symbol.for("openclaw.sessionDeliveryQueueRuntimeTestApi")
-    ]?.reset();
     const input = persistOwner();
     expect(
       blockSubagentCompletionDelivery({

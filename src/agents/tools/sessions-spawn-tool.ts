@@ -36,6 +36,10 @@ import {
   SWARM_CODE_MODE_IDEMPOTENCY_KEY,
   SWARM_CODE_MODE_REQUEST_FINGERPRINT,
 } from "../subagents/swarm/swarm-code-mode.js";
+import {
+  bindCollectorSpawnTool,
+  captureCollectorSpawnGuard,
+} from "../subagents/swarm/swarm-collector-capability.js";
 import { resolveSwarmConfig } from "../subagents/swarm/swarm-config.js";
 import {
   describeSessionsSpawnTool,
@@ -212,6 +216,12 @@ function createSessionsSpawnToolSchema(params: {
     cleanup: optionalStringEnum(["delete", "keep"] as const, {
       description: "Hidden session cleanup; visible=true always keeps the session.",
     }),
+    expectsCompletionMessage: Type.Optional(
+      Type.Boolean({
+        description:
+          "false: fire-and-forget; requester gets no completion handoff when the child finishes.",
+      }),
+    ),
     sandbox: optionalStringEnum(SESSIONS_SPAWN_SANDBOX_MODES, {
       description: '"inherit" parent sandbox policy; "require" fails unless child is sandboxed.',
     }),
@@ -227,7 +237,8 @@ function createSessionsSpawnToolSchema(params: {
       ? {
           collect: Type.Optional(
             Type.Boolean({
-              description: "Swarm collector child for parallel fan-out.",
+              description:
+                "Swarm collector child for parallel fan-out; no completion notification.",
             }),
           ),
           outputSchema: Type.Optional(
@@ -345,7 +356,13 @@ export function createSessionsSpawnTool(
     requesterAgentId,
     sandboxed: opts?.sandboxed,
   });
-  return {
+  const parameters = createSessionsSpawnToolSchema({
+    acpAvailable,
+    threadAvailable,
+    subagentThreadAvailable: threadAvailability.subagent,
+    swarmEnabled: swarmConfig.enabled,
+  });
+  const tool: AnyAgentTool = {
     label: "Sessions",
     name: "sessions_spawn",
     displaySummary: acpAvailable
@@ -359,14 +376,9 @@ export function createSessionsSpawnTool(
       sessionToolsVisibility,
       spawnRestricted: restrictToSpawned,
     }),
-    parameters: createSessionsSpawnToolSchema({
-      acpAvailable,
-      threadAvailable,
-      subagentThreadAvailable: threadAvailability.subagent,
-      swarmEnabled: swarmConfig.enabled,
-    }),
+    parameters,
     execute: async (_toolCallId, args, signal) => {
-      const assertActive = captureAgentToolSourceExecutionGuard(
+      const assertSourceActive = captureAgentToolSourceExecutionGuard(
         signal && opts?.signal ? AbortSignal.any([signal, opts.signal]) : (signal ?? opts?.signal),
       );
       const params = args as Record<PropertyKey, unknown>;
@@ -385,6 +397,10 @@ export function createSessionsSpawnTool(
       }
       const hasCollectParam = Object.hasOwn(params, "collect");
       const collect = params.collect === true;
+      const assertActive = collect
+        ? captureCollectorSpawnGuard(tool, _toolCallId, assertSourceActive)
+        : assertSourceActive;
+      assertActive();
       if (params.outputSchema !== undefined && !collect) {
         throw new ToolInputError('sessions_spawn "outputSchema" requires collect=true.');
       }
@@ -465,6 +481,7 @@ export function createSessionsSpawnTool(
           requestedAgentId,
           runTimeoutSeconds,
           sandbox,
+          expectsCompletionMessage,
           options: opts,
         });
       const visibleResult = opts?.expectedParentSessionId
@@ -632,6 +649,7 @@ export function createSessionsSpawnTool(
           {
             agentSessionKey: opts?.agentSessionKey,
             requesterTurnRunId: opts?.requesterTurnRunId,
+            requesterThinkingLevel: opts?.requesterThinkingLevel,
             completionOwnerKey: opts?.completionOwnerKey,
             agentChannel: opts?.agentChannel,
             agentAccountId: opts?.agentAccountId,
@@ -660,4 +678,5 @@ export function createSessionsSpawnTool(
       return jsonResult(addRoleToFailureResult(result, requestedAgentId));
     },
   };
+  return bindCollectorSpawnTool(tool, parameters.properties, opts?.signal);
 }

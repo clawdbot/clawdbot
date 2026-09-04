@@ -6,6 +6,7 @@ import type { WebPushNotificationPreferences } from "../../../packages/gateway-p
 import { createDeferred } from "../../../test/helpers/promise.js";
 import type { GatewayBrowserClient } from "../api/gateway.ts";
 import { renderNotificationsSection } from "../pages/config/notifications-section.ts";
+import type { ConnectionBootstrapCoordinator } from "./connection-bootstrap.ts";
 import type { ApplicationGateway, ApplicationGatewaySnapshot } from "./gateway.ts";
 import { createWebPushCapability } from "./web-push.ts";
 
@@ -98,6 +99,7 @@ function notificationPreferences(approvalRequested: boolean): WebPushNotificatio
       approvalRequested,
       agentFinished: false,
       agentQuestion: false,
+      humanMentioned: false,
       scheduledTaskFailed: false,
       backgroundTaskFailed: false,
     },
@@ -208,6 +210,34 @@ describe("web push Gateway reconciliation", () => {
 
     expect(first).not.toHaveBeenCalled();
     expect(second).toHaveBeenCalled();
+    capability.dispose();
+  });
+
+  it("schedules initial reconciliation through the connection bootstrap coordinator", async () => {
+    const coordinatorRuns: string[] = [];
+    const coordinator = {
+      reset: () => {},
+      run: async (key, task) => {
+        coordinatorRuns.push(key);
+        await task();
+      },
+      synchronize: () => {},
+    } satisfies ConnectionBootstrapCoordinator;
+    const harness = gatewayHarness();
+    const connection = gatewayClient(Promise.resolve(encodedVapidKey([4, 1, 2, 3])));
+    const capability = createWebPushCapability(harness.gateway, {
+      connectionBootstrap: coordinator,
+    });
+
+    harness.connect(connection.client);
+    await vi.waitFor(() => expect(coordinatorRuns).toEqual(["web-push-reconcile"]));
+    await vi.waitFor(() =>
+      expect(connection.request).toHaveBeenCalledWith(
+        "push.web.subscribe",
+        expect.objectContaining({ endpoint: "https://push.example.test/subscription" }),
+      ),
+    );
+
     capability.dispose();
   });
 

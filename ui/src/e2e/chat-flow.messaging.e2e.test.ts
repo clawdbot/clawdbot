@@ -841,8 +841,7 @@ suite.define(() => {
         key: channelSessionKey,
         clearQueued: true,
       });
-      await gateway.setMethodResponse(
-        "sessions.list",
+      await gateway.setSessionsListResponse(
         chatSessionListResponse([
           {
             activeRunIds: [],

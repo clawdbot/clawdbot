@@ -71,6 +71,7 @@ describe("type suppression inventory", () => {
         .filter((finding) => finding.kind === "expect-error")
         .map((finding) => `${finding.file}:${finding.line}:${finding.excerpt}`),
     ).toEqual([
+      "extensions/openai/realtime-quicksilver-session-lifecycle.test.ts:30:@ts-expect-error JavaScript callers must still fail before reserving a native session.",
       "src/infra/kysely-sync.types.test.ts:49:@ts-expect-error Kysely checks selected column string literals.",
       "src/infra/kysely-sync.types.test.ts:52:@ts-expect-error Kysely checks table string literals.",
       "src/infra/kysely-sync.types.test.ts:55:@ts-expect-error Kysely checks where-reference string literals.",
@@ -79,11 +80,11 @@ describe("type suppression inventory", () => {
       "src/plugin-sdk/plugin-entry.reply-trigger.test.ts:8:@ts-expect-error Trigger eligibility is only supported for before_agent_reply.",
       "src/plugin-sdk/plugin-entry.reply-trigger.test.ts:10:@ts-expect-error An empty trigger list cannot prove that a hook is inactive.",
       "src/plugin-sdk/plugin-entry.reply-trigger.test.ts:28:@ts-expect-error Tool authority is only supported for before_prompt_build.",
-      "src/plugins/registry.diagnostics.test.ts:41:@ts-expect-error JavaScript plugins may omit the required supplement builder.",
-      "src/plugins/registry.diagnostics.test.ts:43:@ts-expect-error JavaScript plugins may omit the required hosted-media resolver.",
-      "src/plugins/registry.diagnostics.test.ts:45:@ts-expect-error Unknown JavaScript hook names must produce a diagnostic.",
-      "src/plugins/registry.diagnostics.test.ts:176:@ts-expect-error Untyped hook input reaches the existing rejection/coercion path.",
-      "src/plugins/registry.diagnostics.test.ts:210:@ts-expect-error Closed registration must stop before coercing untyped hook input.",
+      "src/plugins/registry.diagnostics.test.ts:47:@ts-expect-error JavaScript plugins may omit the required supplement builder.",
+      "src/plugins/registry.diagnostics.test.ts:49:@ts-expect-error JavaScript plugins may omit the required hosted-media resolver.",
+      "src/plugins/registry.diagnostics.test.ts:51:@ts-expect-error Unknown JavaScript hook names must produce a diagnostic.",
+      "src/plugins/registry.diagnostics.test.ts:247:@ts-expect-error Untyped hook input reaches the existing rejection/coercion path.",
+      "src/plugins/registry.diagnostics.test.ts:281:@ts-expect-error Closed registration must stop before coercing untyped hook input.",
     ]);
   });
 });

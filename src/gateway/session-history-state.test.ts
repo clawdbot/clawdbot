@@ -754,7 +754,7 @@ describe("SessionHistorySseState", () => {
             {
               type: "text",
               text: [
-                "[Inter-session message] sourceSession=agent:main:subagent:child sourceChannel=webchat sourceTool=subagent_announce isUser=false",
+                "[Inter-session message] sourceSession=agent:main:subagent:child sourceChannel=internal sourceTool=subagent_announce isUser=false",
                 "This content was routed by OpenClaw from another session or internal tool.",
                 "<<<BEGIN_OPENCLAW_INTERNAL_CONTEXT>>>",
                 "subagent completion payload",
@@ -804,7 +804,7 @@ describe("SessionHistorySseState", () => {
           ],
           provenance: {
             kind: "inter_session",
-            sourceChannel: "webchat",
+            sourceChannel: "internal",
             sourceSessionKey: "image_generate:task-123",
             sourceTool: "image_generate",
           },

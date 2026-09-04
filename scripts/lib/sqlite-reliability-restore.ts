@@ -6,6 +6,7 @@ import { fileURLToPath } from "node:url";
 import { createLocalSqliteSnapshotProvider } from "../../src/snapshot/local-repository.js";
 import {
   assertSameCompactionPayload,
+  formatReliabilityStderr,
   type CompactionPayloadProof,
   type ReliabilityReport,
   type ReliabilityStateProof,
@@ -79,11 +80,6 @@ function hasPublicationStaging(scratchPath: string): boolean {
   );
 }
 
-function formatWorkerStderr(stderr: string): string {
-  const text = stderr.trim();
-  return text ? ` stderr=${JSON.stringify(text)}` : "";
-}
-
 async function waitForWorkerReady(params: {
   child: ChildProcess;
   readStderr: () => string;
@@ -93,7 +89,7 @@ async function waitForWorkerReady(params: {
       cleanup();
       reject(
         new Error(
-          `SQLite restore worker did not become ready.${formatWorkerStderr(params.readStderr())}`,
+          `SQLite restore worker did not become ready.${formatReliabilityStderr(params.readStderr())}`,
         ),
       );
     }, 30_000);
@@ -115,7 +111,7 @@ async function waitForWorkerReady(params: {
       cleanup();
       reject(
         new Error(
-          `SQLite restore worker exited before ready: code=${String(code)} signal=${String(signal)}.${formatWorkerStderr(params.readStderr())}`,
+          `SQLite restore worker exited before ready: code=${String(code)} signal=${String(signal)}.${formatReliabilityStderr(params.readStderr())}`,
         ),
       );
     };
@@ -187,7 +183,7 @@ async function waitForCrashPoint(params: {
       cleanup();
       reject(
         new Error(
-          `SQLite restore worker did not reach ${params.crashPoint}.${formatWorkerStderr(params.readStderr())}`,
+          `SQLite restore worker did not reach ${params.crashPoint}.${formatReliabilityStderr(params.readStderr())}`,
         ),
       );
     }, RESTORE_TIMEOUT_MS);
@@ -206,7 +202,7 @@ async function waitForCrashPoint(params: {
       cleanup();
       reject(
         new Error(
-          `SQLite restore worker exited before ${params.crashPoint}: code=${String(code)} signal=${String(signal)}.${formatWorkerStderr(params.readStderr())}`,
+          `SQLite restore worker exited before ${params.crashPoint}: code=${String(code)} signal=${String(signal)}.${formatReliabilityStderr(params.readStderr())}`,
         ),
       );
     };

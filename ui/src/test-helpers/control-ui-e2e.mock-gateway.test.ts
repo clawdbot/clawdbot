@@ -2,7 +2,11 @@
 // Exercises the serialized mock gateway exactly as a page would: the init
 // script installs MockWebSocket on window, and requests flow over it.
 import { describe, expect } from "vitest";
-import { createControlUiMockGatewayInitScript } from "./control-ui-e2e.ts";
+import {
+  createControlUiMockGatewayInitScript,
+  type ControlUiMockGateway,
+  type ControlUiMockRequestHandler,
+} from "./control-ui-e2e.ts";
 import { mockGatewayTest as it } from "./mock-gateway-page.test-support.ts";
 
 type ResponseFrame = {
@@ -23,6 +27,49 @@ function waitForMockCycle(): Promise<void> {
     setTimeout(resolve, 300);
   });
 }
+
+it("keeps handler responses and events on the requesting socket", async ({ gatewayPage }) => {
+  const { window, execute } = gatewayPage;
+  execute(createControlUiMockGatewayInitScript());
+  const gateway = (window as Window & { openclawControlUiE2eGateway?: ControlUiMockGateway })
+    .openclawControlUiE2eGateway;
+  if (!gateway) {
+    throw new Error("Mock Gateway was not installed");
+  }
+  const pending: Parameters<ControlUiMockRequestHandler>[0][] = [];
+  gateway.setRequestHandler("health", (request) => pending.push(request));
+  const sockets = [
+    new window.WebSocket("ws://mock/first"),
+    new window.WebSocket("ws://mock/second"),
+  ];
+  const frames: ResponseFrame[][] = [[], []];
+  for (const [index, socket] of sockets.entries()) {
+    socket.addEventListener("message", (event: MessageEvent) => {
+      const frame = JSON.parse(String(event.data)) as ResponseFrame;
+      if (frame.event !== "connect.challenge") {
+        frames[index]!.push(frame);
+      }
+    });
+  }
+  await flushMockTimers();
+  for (const [index, socket] of sockets.entries()) {
+    socket.send(
+      JSON.stringify({ type: "req", id: String(index), method: "health", params: { index } }),
+    );
+  }
+  await flushMockTimers();
+  expect(pending.map((request) => request.params)).toEqual([{ index: 0 }, { index: 1 }]);
+  for (const request of pending.toReversed()) {
+    request.respond(request.params);
+    request.emit("checked", request.params);
+  }
+  for (const index of [0, 1]) {
+    expect(frames[index]).toMatchObject([
+      { type: "res", id: String(index), ok: true, payload: { index } },
+      { type: "event", event: "checked", payload: { index } },
+    ]);
+  }
+});
 
 describe("mock gateway stateful config", () => {
   it("takes existing mock sockets offline without closing their replacement", async ({
