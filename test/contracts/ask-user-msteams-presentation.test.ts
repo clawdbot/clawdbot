@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { msteamsPlugin } from "../../extensions/msteams/channel-plugin-api.js";
+import { msteamsPlugin } from "../../extensions/msteams/api.js";
 import { buildAgentHarnessQuestionPromptPayload } from "../../src/agents/harness/user-input-bridge.js";
 
 describe("question reply guidance", () => {
