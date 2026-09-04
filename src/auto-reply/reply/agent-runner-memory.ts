@@ -849,13 +849,13 @@ export async function runSessionCompactionIfNeeded(params: {
   }
   const shouldCompactByTranscriptBytes =
     exceedsTranscriptByteThreshold && !transcriptByteCompactionLatched;
-  if (isCodexRuntime) {
-    // Codex owns the byte fuse: the startup binding caps native rollout transcripts at
-    // the same threshold and restarts oversized threads fresh each turn. Required native
-    // preflight here would be refused for restricted bindings and block the turn.
+  if (isCodexRuntime && !shouldCompactByTranscriptBytes) {
+    // Codex owns native-thread token pressure; OpenClaw owns the host transcript byte fuse
+    // that bounds fresh-thread bootstrap seeds. The byte-triggered path still runs, and
+    // the plugin's intentional declines for restricted bindings are benign skips.
     logVerbose(
       `preflightCompaction skipped: sessionKey=${params.sessionKey} runtime=codex ` +
-        `reason=codex_owns_native_thread_and_byte_fuse ` +
+        `reason=codex_native_auto_compaction ` +
         `activeTranscriptBytes=${activeTranscriptBytes ?? "undefined"} ` +
         `maxActiveTranscriptBytes=${maxActiveTranscriptBytes ?? "undefined"}`,
     );

@@ -3714,7 +3714,7 @@ describe("runMemoryFlushIfNeeded", () => {
     ["fresh session selected from the outset", "fresh", "codex"],
     ["upgraded session with historical embedded ownership", "upgraded", "openclaw"],
   ])(
-    "leaves byte-guarded Codex runtime preflight to the startup-binding owner %s",
+    "byte-guards a Codex runtime %s through native preflight",
     async (_label, fixtureId, agentHarnessId) => {
       const storePath = path.join(rootDir, `sqlite-codex-byte-guard-${fixtureId}.json`);
       const sessionKey = "agent:main:main";
@@ -3765,17 +3765,26 @@ describe("runMemoryFlushIfNeeded", () => {
         });
       }
 
-      // The Codex startup binding owns the byte fuse: it caps native rollout
-      // transcripts and restarts oversized threads fresh, so the host preflight
-      // neither attempts required native compaction nor blocks the turn.
-      expect(entry?.compactionCount).toBe(0);
-      expect(replyOperation.setPhase).not.toHaveBeenCalledWith("preflight_compacting");
-      expect(compactEmbeddedAgentSessionMock).not.toHaveBeenCalled();
+      // The byte-triggered attempt still runs for Codex runtimes so supervised,
+      // context-engine, and unrestricted bindings keep their configured recovery.
+      expect(entry?.compactionCount).toBe(2);
+      expect(replyOperation.setPhase).toHaveBeenCalledWith("preflight_compacting");
+      expect(compactEmbeddedAgentSessionMock).toHaveBeenCalledTimes(2);
+      expect(requireCompactEmbeddedAgentSessionCall(1)).toMatchObject({
+        agentHarnessId: "codex",
+        contextTokenBudget: 1_000_000,
+        deferOwningContextEngineCompaction: false,
+        preflightCompactionTrigger: "transcript_bytes",
+        preflightRequired: true,
+        sessionId: "session",
+        sessionKey,
+        trigger: "budget",
+      });
       expect(loadMainSessionEntry(storePath).transcriptByteCompactionLatch).toBeUndefined();
     },
   );
 
-  it("admits a Codex turn past the byte fuse without required native preflight compaction", async () => {
+  it("keeps a Codex turn admitted when the plugin declines native compaction", async () => {
     const storePath = path.join(rootDir, "sqlite-codex-host-isolated-byte-guard.json");
     const sessionKey = "agent:main:main";
     const scope = { agentId: "main", sessionId: "session", sessionKey, storePath };
@@ -3829,10 +3838,17 @@ describe("runMemoryFlushIfNeeded", () => {
       ...createCompactionLifecycle(replyOperation),
     });
 
+    // The plugin's intentional decline is a benign skip: the byte-triggered attempt
+    // still ran, but the turn is admitted instead of blocked, and the rotation
+    // owns the restricted binding's byte fuse on the next startup binding.
     expect(entry?.sessionId).toBe("session");
-    expect(compactEmbeddedAgentSessionMock).not.toHaveBeenCalled();
+    expect(compactEmbeddedAgentSessionMock).toHaveBeenCalledTimes(1);
+    expect(requireCompactEmbeddedAgentSessionCall(0)).toMatchObject({
+      preflightCompactionTrigger: "transcript_bytes",
+      preflightRequired: true,
+      trigger: "budget",
+    });
     expect(entry?.compactionCount).toBe(0);
-    expect(replyOperation.setPhase).not.toHaveBeenCalledWith("preflight_compacting");
     expect(loadMainSessionEntry(storePath).transcriptByteCompactionLatch).toBeUndefined();
   });
 

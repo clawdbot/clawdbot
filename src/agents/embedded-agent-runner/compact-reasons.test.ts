@@ -99,6 +99,13 @@ describe("classifyCompactionReason", () => {
     );
   });
 
+  it.each([
+    "native compaction is unavailable for a host-isolated Codex session",
+    "codex app-server owns automatic compaction",
+  ])("classifies the intentional Codex decline %s as native_compaction_declined", (reason) => {
+    expect(classifyCompactionReason(reason)).toBe("native_compaction_declined");
+  });
+
   it("classifies safeguard messages as guard-blocked", () => {
     expect(
       classifyCompactionReason(
@@ -151,12 +158,14 @@ describe("classifyCompactionReason", () => {
 });
 
 describe("isBenignCompactionSkipReason", () => {
-  it.each(["already under target", "already compacted"])(
-    "keeps the established %s skip contract",
-    (reason) => {
-      expect(isBenignCompactionSkipReason(reason)).toBe(true);
-    },
-  );
+  it.each([
+    "already under target",
+    "already compacted",
+    "native compaction is unavailable for a host-isolated Codex session",
+    "codex app-server owns automatic compaction",
+  ])("keeps the established %s skip contract", (reason) => {
+    expect(isBenignCompactionSkipReason(reason)).toBe(true);
+  });
 
   it("requires an explicit successful-result opt-in for empty transcripts", () => {
     const reason = "no real conversation messages";

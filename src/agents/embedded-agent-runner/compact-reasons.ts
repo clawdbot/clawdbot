@@ -61,6 +61,14 @@ export function classifyCompactionReason(reason?: string): string {
   if (text.includes("already compacted") || text.includes("already_compacted")) {
     return "already_compacted";
   }
+  // The Codex plugin intentionally declines native compaction for host-isolated or
+  // policy-restricted bindings; the startup-binding rotation owns their byte fuse.
+  if (
+    text.includes("native compaction is unavailable") ||
+    text.includes("codex app-server owns automatic compaction")
+  ) {
+    return "native_compaction_declined";
+  }
   if (text.includes("deferred to background")) {
     return "deferred_background";
   }
@@ -92,7 +100,11 @@ export function classifyCompactionReason(reason?: string): string {
 /** Return whether a classified reason represents an intentional compaction no-op. */
 export function isBenignCompactionSkipReason(reason?: string): boolean {
   const classification = classifyCompactionReason(reason);
-  return classification === "below_threshold" || classification === "already_compacted";
+  return (
+    classification === "below_threshold" ||
+    classification === "already_compacted" ||
+    classification === "native_compaction_declined"
+  );
 }
 
 /** Return whether a compaction result is an intentional no-op rather than a failure. */
