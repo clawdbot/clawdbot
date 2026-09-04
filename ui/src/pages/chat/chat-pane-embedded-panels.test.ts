@@ -59,9 +59,11 @@ describe("chat pane embedded panels", () => {
       hello: { features: { methods: ["sessions.diff"] } },
       sessionKey: "agent:main:review",
       sidebarContent: null,
+      sidebarLayout: { columns: [] },
     } as unknown as ChatPageHost;
     const mount = document.body.appendChild(document.createElement("div"));
     const renderPanels = async (layout: SidebarLayout) => {
+      state.sidebarLayout = layout;
       const definitions = sidebarPanelDefinitions({
         state,
         renderDetail: (content) =>
@@ -169,7 +171,9 @@ describe("chat pane embedded panels", () => {
       render(definition.loading, mount);
       const skeleton = mount.querySelector("openclaw-panel-loading-skeleton");
       await skeleton?.updateComplete;
-      expect(skeleton?.getAttribute("data-panel-skeleton")).toBe(expected[definition.slot]);
+      expect(skeleton?.getAttribute("data-panel-skeleton")).toBe(
+        expected[definition.slot as keyof typeof expected],
+      );
     }
   });
 

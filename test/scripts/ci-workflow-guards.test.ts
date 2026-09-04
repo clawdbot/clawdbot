@@ -6259,16 +6259,18 @@ server.listen(0, "127.0.0.1", () => {
       rmSync(path.join(root, ".pnpmfile.mjs"));
       expect(fingerprint()).toBe(baseline);
 
-      mkdirSync(path.join(root, "scripts"), { recursive: true });
-      writeFileSync(path.join(root, "scripts", "prepare-git-hooks.mjs"), "export {};\n");
-      expect(fingerprint()).not.toBe(baseline);
-      rmSync(path.join(root, "scripts"), { recursive: true });
-      expect(fingerprint()).toBe(baseline);
-
-      writeFileSync(path.join(root, "node-version.mjs"), "export {};\n");
-      expect(fingerprint()).not.toBe(baseline);
-      rmSync(path.join(root, "node-version.mjs"));
-      expect(fingerprint()).toBe(baseline);
+      for (const relativePath of [
+        "node-version.mjs",
+        "scripts/prepare-git-hooks.mjs",
+        "scripts/lib/package-lifecycle-marker.mjs",
+      ]) {
+        const inputPath = path.join(root, relativePath);
+        mkdirSync(path.dirname(inputPath), { recursive: true });
+        writeFileSync(inputPath, "fixture\n");
+        expect(fingerprint(), relativePath).not.toBe(baseline);
+        rmSync(inputPath);
+        expect(fingerprint(), relativePath).toBe(baseline);
+      }
 
       // Formatting, key order, and scripts that pnpm install never executes
       // should keep the existing dependency snapshot warm.
@@ -11916,6 +11918,7 @@ printf '%s\n' "\${CURL_SUCCESS_IP:-203.0.113.7}"
         "ls-files",
         "--",
         ":(glob)ui/src/**/*.e2e.test.ts",
+        ":(glob)extensions/*/browser/**/*.e2e.test.ts",
         "extensions/qa-lab/src/control-ui-media-transcript.real-gateway.e2e.test.ts",
         "extensions/qa-lab/src/session-host-command-state.real-gateway.e2e.test.ts",
         "extensions/qa-lab/src/control-ui-openclaw-delegation.real-gateway.e2e.test.ts",
@@ -12026,6 +12029,7 @@ printf '%s\n' "\${CURL_SUCCESS_IP:-203.0.113.7}"
     expect(config.test?.globalSetup).toEqual([]);
     expect(config.test?.include).toEqual([
       "ui/src/**/*.e2e.test.ts",
+      "extensions/*/browser/**/*.e2e.test.ts",
       "extensions/qa-lab/src/control-ui-media-transcript.real-gateway.e2e.test.ts",
       "extensions/qa-lab/src/session-host-command-state.real-gateway.e2e.test.ts",
       "extensions/qa-lab/src/control-ui-openclaw-delegation.real-gateway.e2e.test.ts",

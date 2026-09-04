@@ -263,6 +263,14 @@ export type PluginManifestDashboard = {
   actionVerbs?: PluginManifestDashboardActionVerb[];
 };
 
+/** Built browser assets activated by the trusted native Control UI host. */
+export type PluginManifestControlUi = {
+  /** JavaScript entry in a dedicated dist subdirectory, relative to the plugin root. */
+  entry: string;
+  /** Stylesheets in the same asset directory, loaded before activation. */
+  styles?: string[];
+};
+
 export type PluginManifestMcpServer = Record<string, unknown>;
 
 export type PluginManifestConfigLiteral = string | number | boolean | null;
@@ -413,6 +421,7 @@ export type PluginManifest = {
   qaRunners?: PluginManifestQaRunner[];
   /** Widget data and action capabilities validated against runtime registrations. */
   dashboard?: PluginManifestDashboard;
+  controlUi?: PluginManifestControlUi;
   /** Static MCP servers contributed while this plugin is enabled. */
   mcpServers?: Record<string, PluginManifestMcpServer>;
   skills?: string[];

@@ -4,7 +4,6 @@ import type { GatewaySessionRow, SessionsListResult } from "../../api/types.ts";
 import { formatUiError } from "../format-error.ts";
 import { createGatewayConnectionLifecycle } from "../gateway-connection-lifecycle.ts";
 import type { SessionCreateOutcome } from "./create.ts";
-import { scopedAgentListParamsForSession } from "./navigation.ts";
 import {
   readSessionChangedEvent,
   reconcileSessionChanged,
@@ -41,7 +40,6 @@ export type {
 export type { SessionPatch, SessionPatchResult } from "./patch.ts";
 export { DEFAULT_SESSION_LIST_QUERY, SESSIONS_PAGE_DEFAULT_LIMIT } from "./session-requests.ts";
 export { reconcileSessionRunTerminal, type SessionRunTerminal } from "./reconcile.ts";
-export { requestSessionCreate } from "./create.ts";
 export { resolveSessionKey } from "./navigation.ts";
 export {
   compareSessionRowsByUpdatedAt,
@@ -83,7 +81,15 @@ function isSessionStateEvent(event: GatewayEventFrame): boolean {
   return event.event === "sessions.changed" || event.event === "session.message";
 }
 
-export function createSessionCapability(gateway: SessionGateway): SessionCapability {
+type SessionAgentSelection = {
+  readonly state: { readonly selectedId: string | null };
+  subscribe: (listener: () => void) => () => void;
+};
+
+export function createSessionCapability(
+  gateway: SessionGateway,
+  agentSelection: SessionAgentSelection,
+): SessionCapability {
   let state: SessionState = {
     result: null,
     agentId: null,
@@ -112,6 +118,7 @@ export function createSessionCapability(gateway: SessionGateway): SessionCapabil
   let hydratedClient: SessionGateway["snapshot"]["client"] = null;
   let hydratedSelfUserId: string | null = null;
   let connectionClient = gateway.snapshot.client;
+  let selectedAgentId = agentSelection.state.selectedId;
   let sessionEventSubscriptionError: string | null = null;
   let publishedErrorSource: "session-observer" | "operation" | null = null;
 
@@ -191,8 +198,9 @@ export function createSessionCapability(gateway: SessionGateway): SessionCapabil
         publish({ ...state, error: null });
       }
       if (previousError !== null && error === null) {
-        // Observer outages do not replay events; one canonical list closes the gap.
+        // Observer outages do not replay events; every held query must close the gap.
         void roster.refresh({ ...roster.lastOptions(), backgroundHydrate: true, force: true });
+        roster.invalidateManagedLists();
       }
     },
   });
@@ -456,6 +464,11 @@ export function createSessionCapability(gateway: SessionGateway): SessionCapabil
   };
 
   const reconcileRunTerminal = (terminal: SessionRunTerminal): boolean => {
+    for (const key of terminal.sessionKeys) {
+      if (key.trim()) {
+        roster.invalidateManagedLists(parseAgentSessionKey(key)?.agentId);
+      }
+    }
     const result = reconcileSessionRunTerminal(state.result, terminal);
     if (result === state.result) {
       return false;
@@ -522,13 +535,9 @@ export function createSessionCapability(gateway: SessionGateway): SessionCapabil
       }
       const hydrate = async () => {
         if (connection.isCurrent(scope)) {
-          const sessionKey = gateway.snapshot.sessionKey?.trim();
-          const agentScope = sessionKey
-            ? scopedAgentListParamsForSession(gateway.snapshot, sessionKey)
-            : { agentId: resolveUiSelectedGlobalAgentId(gateway.snapshot) };
           await roster.bootstrap({
             ...roster.lastOptions(), // Keep visible roster filters through reconnect hydration.
-            ...agentScope,
+            agentId: agentSelection.state.selectedId ?? undefined,
             includeDerivedTitles: true,
             includeLastMessage: true,
             backgroundHydrate: true,
@@ -540,6 +549,19 @@ export function createSessionCapability(gateway: SessionGateway): SessionCapabil
         }
       };
       void hydrate().catch(() => undefined);
+    }
+  });
+
+  const stopSelection = agentSelection.subscribe(() => {
+    const nextAgentId = agentSelection.state.selectedId;
+    if (selectedAgentId === nextAgentId) {
+      return;
+    }
+    selectedAgentId = nextAgentId;
+    // Selection publishes before Gateway hydration. A new connection bootstraps
+    // the current selection; route changes on a hydrated connection replace its roster.
+    if (nextAgentId && hydratedClient === gateway.snapshot.client) {
+      void roster.refreshReplacement(nextAgentId);
     }
   });
 
@@ -621,6 +643,7 @@ export function createSessionCapability(gateway: SessionGateway): SessionCapabil
     captureConnectionScope: () => connection.capture(),
     isConnectionScopeCurrent: (scope) => connection.isCurrent(scope),
     list: roster.list,
+    observeList: roster.observeList,
     listSnapshot: (scope) => roster.listSnapshot(scope),
     subscribeList(scope, listener) {
       if (!roster.isPrimaryList(scope)) {
@@ -697,6 +720,7 @@ export function createSessionCapability(gateway: SessionGateway): SessionCapabil
       pullRequestEpochs.clear();
       sessionEventSubscription.dispose();
       stopGateway();
+      stopSelection();
       stopEvents();
       createdListeners.clear();
       listeners.clear();

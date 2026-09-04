@@ -10,7 +10,7 @@ import {
 import type { PluginCapabilityConsentHandler } from "./capability-consent.js";
 import {
   attachPluginInstallTransaction,
-  isPluginInstallCommitDeferred,
+  resolvePluginInstallTransactionRequest,
 } from "./install-transaction.js";
 import type { PluginInstallArtifactConsentHandler } from "./install-types.js";
 import type { ManagedPluginSourceInstallRequest } from "./management-service.js";
@@ -59,6 +59,40 @@ const requests = [
 
 describe("managed plugin install transactions", () => {
   beforeEach(() => vi.resetAllMocks());
+
+  it("rechecks the initiating owner after awaited capability consent", async () => {
+    const expired = new Error("approval owner expired during review");
+    let current = true;
+    mocks.install.mockImplementation(
+      (params: Parameters<typeof invokePluginArtifactInstallMock>[1]) =>
+        invokePluginArtifactInstallMock(
+          async () => ({ ok: true, pluginId: "demo", targetDir: "/managed/demo" }),
+          params,
+        ),
+    );
+    await expect(
+      installManagedPluginSource({
+        request: {
+          source: "local",
+          path: "/incoming.tgz",
+          recordSource: "archive",
+          mode: "update",
+        },
+        snapshot,
+        onCapabilityConsent: async (review) => {
+          await Promise.resolve();
+          current = false;
+          return { reviewToken: review.reviewToken };
+        },
+        beforePersistentEffect: () => {
+          if (!current) {
+            throw expired;
+          }
+        },
+      }),
+    ).rejects.toBe(expired);
+    expect(mocks.persist).not.toHaveBeenCalled();
+  });
 
   it.each(requests)("settles $source payloads at the config commit boundary", async (request) => {
     for (const failure of ["authority-closed", "before-commit", "after-commit", "none"] as const) {
@@ -126,8 +160,11 @@ describe("managed plugin install transactions", () => {
               return { ok: true as const };
             },
           };
+          const transactionRequest = resolvePluginInstallTransactionRequest(params);
           const copied = await installPackageDir(
-            isPluginInstallCommitDeferred(params) ? requestDeferredPackageDirInstall(copy) : copy,
+            transactionRequest
+              ? requestDeferredPackageDirInstall(copy, transactionRequest.assertOwned)
+              : copy,
           );
           if (!copied.ok) {
             throw new Error(copied.error);
