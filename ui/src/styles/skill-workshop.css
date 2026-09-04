@@ -1257,12 +1257,41 @@
 }
 
 @media (max-width: 768px) {
+  /* Keep enough queue context to select a proposal and give populated details
+     a full viewport. Empty states stay intrinsic instead of creating blank scroll. */
   .sw-triage {
     grid-template-columns: minmax(0, 1fr);
+    grid-template-rows: minmax(96px, 22vh) auto;
+  }
+
+  .sw-triage > .sw-detail:not(.sw-detail--empty) {
+    min-height: 80vh;
+  }
+
+  .sw-triage > .sw-detail--empty,
+  .sw-empty-state {
+    min-height: 0;
+  }
+
+  .sw-empty-state {
+    padding: 0 20px;
   }
 
   .sw-queue-resizer {
     display: none;
+  }
+
+  .content--skill-workshop {
+    overflow-y: auto;
+  }
+
+  .sw-hub-panel,
+  #skill-workshop-mode-panel,
+  .sw-hub-panel::part(base),
+  #skill-workshop-mode-panel::part(base),
+  .sw-view,
+  .sw-view__pane {
+    min-height: auto;
   }
 }
 
