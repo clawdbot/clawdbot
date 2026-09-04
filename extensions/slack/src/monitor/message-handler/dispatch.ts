@@ -112,12 +112,6 @@ async function dispatchSlackMessageWithSetup(
     useStreaming,
   } = setup;
   let dispatchError: unknown;
-  const onDeliveryError = (err: unknown, info: { kind: ReplyDispatchKind }) => {
-    // Core settles delivery errors without throwing; Slack closeout still owns the failure.
-    dispatchError ??= err;
-    runtime.error?.(danger(`slack ${info.kind} reply failed: ${formatSlackError(err)}`));
-    replyPipeline.typingCallbacks?.onIdle?.();
-  };
   const delivery = createSlackStreamingDeliveryRuntime(setup);
   const draftPreviewCommitted = { value: false };
   const progress = createSlackProgressRuntime({
@@ -479,7 +473,12 @@ async function dispatchSlackMessageWithSetup(
       },
       delivery: {
         deliver: deliverSlackPayload,
-        onError: onDeliveryError,
+        onError: (err, info) => {
+          // Core settles delivery errors without throwing; Slack closeout still owns the failure.
+          dispatchError ??= err;
+          runtime.error?.(danger(`slack ${info.kind} reply failed: ${formatSlackError(err)}`));
+          replyPipeline.typingCallbacks?.onIdle?.();
+        },
       },
       record: prepared.turn.record as InboundReplyRecordOptions,
       history: prepared.turn.history,

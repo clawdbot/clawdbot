@@ -278,7 +278,10 @@ describe("registerSlackAgentEvents", () => {
       harness.ctx.allowFrom = ["U_OWNER"];
       harness.ctx.useAccessGroups = true;
       const client = harness.ctx.app.client;
-      const writeClient = expectDefined(getSlackListenerWriteClient({ listenerClient: client }));
+      const writeClient = expectDefined(
+        getSlackListenerWriteClient({ listenerClient: client }),
+        "derived Slack listener write client",
+      );
       vi.spyOn(writeClient.chat, "startStream").mockResolvedValue({
         ok: true,
         ts: "1712345678.000002",
