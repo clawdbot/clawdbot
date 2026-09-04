@@ -6,6 +6,7 @@ import { createDeferred } from "../../../../test/helpers/promise.js";
 import { GatewayRequestError } from "../../api/gateway.ts";
 import type { GatewaySessionRow } from "../../api/types.ts";
 import { waitForFast } from "../../test-helpers/wait-for.ts";
+import { replaceCard } from "./card-state.ts";
 import {
   addWorkboardCardComment,
   archiveWorkboardCard,
@@ -4061,6 +4062,315 @@ describe("workboard controller", () => {
       status: "blocked",
       position: 2000,
     });
+  });
+
+  it("projects card deletion before Gateway acknowledgement", async () => {
+    const deletion = createDeferred<unknown>();
+    const parent = makeCard({ id: "parent-1", title: "Parent", status: "done" });
+    const child = makeCard({
+      id: "child-1",
+      title: "Child",
+      metadata: {
+        links: [{ id: "link-1", type: "parent", targetCardId: parent.id, createdAt: 1 }],
+      },
+    });
+    const client = createClient((method) => {
+      if (method === "workboard.cards.delete") {
+        return deletion.promise;
+      }
+      return {};
+    });
+    state.cards = [parent, child];
+
+    const pending = deleteCard(client, parent.id);
+
+    expect(state.cards).toHaveLength(1);
+    expect(state.cards[0]).toMatchObject({ id: child.id });
+    expect(state.cards[0]?.metadata?.links).toBeUndefined();
+    expect(state.busyCardIds).toEqual(new Set([parent.id]));
+
+    deletion.resolve({ deleted: true });
+    await pending;
+    expect(state.pendingCardRemovals).toEqual(new Map());
+  });
+
+  it("does not resurrect an acknowledged delete from an overlapping list read", async () => {
+    const list = createDeferred<unknown>();
+    const deletion = createDeferred<unknown>();
+    const deletedCard = makeCard({ id: "deleted-1" });
+    const client = createClient((method) => {
+      if (method === "workboard.cards.list") {
+        return list.promise;
+      }
+      if (method === "workboard.cards.delete") {
+        return deletion.promise;
+      }
+      return {};
+    });
+    state.cards = [deletedCard];
+    state.loaded = true;
+    state.loadAttempted = true;
+
+    const refresh = refreshBoard(client, "manual");
+    await Promise.resolve();
+    expect(requestCalls(client, "workboard.cards.list")).toHaveLength(1);
+
+    const pending = deleteCard(client, deletedCard.id);
+    deletion.resolve({ deleted: true });
+    await pending;
+    expect(state.cards).toEqual([]);
+
+    list.resolve(listResult([deletedCard]));
+    await refresh;
+
+    expect(state.cards).toEqual([]);
+  });
+
+  it("keeps pending dependency cleanup across a concurrent child write", async () => {
+    const deletion = createDeferred<unknown>();
+    const parent = makeCard({ id: "parent-1", title: "Parent", status: "done" });
+    const child = makeCard({
+      id: "child-1",
+      title: "Child",
+      metadata: {
+        links: [{ id: "link-1", type: "parent", targetCardId: parent.id, createdAt: 1 }],
+      },
+    });
+    const movedChild = { ...child, status: "blocked" as const, position: 3000 };
+    const client = createClient((method) => {
+      if (method === "workboard.cards.delete") {
+        return deletion.promise;
+      }
+      if (method === "workboard.cards.move") {
+        return { card: movedChild };
+      }
+      return {};
+    });
+    state.cards = [parent, child];
+
+    const pending = deleteCard(client, parent.id);
+    await moveCard(client, {
+      cardId: child.id,
+      status: movedChild.status,
+      position: movedChild.position,
+    });
+
+    expect(state.cards).toHaveLength(1);
+    expect(state.cards[0]).toMatchObject({ id: child.id, status: movedChild.status });
+    expect(state.cards[0]?.metadata?.links).toBeUndefined();
+    expect(state.pendingCardRemovals).toEqual(new Map([[parent.id, expect.anything()]]));
+
+    deletion.resolve({ deleted: true });
+    await pending;
+    expect(state.cards[0]?.metadata?.links).toBeUndefined();
+  });
+
+  it.each(["parent-first", "child-first"] as const)(
+    "restores an overlapping dependency when the %s delete rejects first",
+    async (firstRejection) => {
+      const parentDeletion = createDeferred<unknown>();
+      const childDeletion = createDeferred<unknown>();
+      const parent = makeCard({ id: "parent-1", title: "Parent", status: "done" });
+      const child = makeCard({
+        id: "child-1",
+        title: "Child",
+        position: 2000,
+        metadata: {
+          links: [{ id: "link-1", type: "parent", targetCardId: parent.id, createdAt: 1 }],
+        },
+      });
+      const client = createClient((method, params) => {
+        if (method !== "workboard.cards.delete") {
+          return {};
+        }
+        const cardId = (params as { id: string }).id;
+        return cardId === parent.id ? parentDeletion.promise : childDeletion.promise;
+      });
+      state.cards = [parent, child];
+
+      const parentPending = deleteCard(client, parent.id);
+      const childPending = deleteCard(client, child.id);
+
+      expect(state.cards).toEqual([]);
+      if (firstRejection === "parent-first") {
+        parentDeletion.reject(new Error("parent delete rejected"));
+        await parentPending;
+        childDeletion.reject(new Error("child delete rejected"));
+        await childPending;
+      } else {
+        childDeletion.reject(new Error("child delete rejected"));
+        await childPending;
+        parentDeletion.reject(new Error("parent delete rejected"));
+        await parentPending;
+      }
+
+      expect(state.cards.map((card) => card.id)).toEqual([parent.id, child.id]);
+      expect(state.cards.find((card) => card.id === child.id)?.metadata?.links).toEqual(
+        child.metadata?.links,
+      );
+      expect(state.pendingCardRemovals).toEqual(new Map());
+    },
+  );
+
+  it("does not restore a link to a parent whose overlapping delete succeeded", async () => {
+    const parentDeletion = createDeferred<unknown>();
+    const childDeletion = createDeferred<unknown>();
+    const parent = makeCard({ id: "parent-1", title: "Parent", status: "done" });
+    const child = makeCard({
+      id: "child-1",
+      title: "Child",
+      position: 2000,
+      metadata: {
+        links: [{ id: "link-1", type: "parent", targetCardId: parent.id, createdAt: 1 }],
+      },
+    });
+    const client = createClient((method, params) => {
+      if (method !== "workboard.cards.delete") {
+        return {};
+      }
+      const cardId = (params as { id: string }).id;
+      return cardId === parent.id ? parentDeletion.promise : childDeletion.promise;
+    });
+    state.cards = [parent, child];
+
+    const parentPending = deleteCard(client, parent.id);
+    const childPending = deleteCard(client, child.id);
+    parentDeletion.resolve({ deleted: true });
+    await parentPending;
+    childDeletion.reject(new Error("child delete rejected"));
+    await childPending;
+
+    expect(state.cards).toEqual([{ ...child, metadata: undefined }]);
+    expect(state.pendingCardRemovals).toEqual(new Map());
+  });
+
+  it("restores a rejected delete without overwriting a concurrent card write", async () => {
+    const deletion = createDeferred<unknown>();
+    const parent = makeCard({ id: "parent-1", title: "Parent", status: "done" });
+    const child = makeCard({
+      id: "child-1",
+      title: "Child",
+      metadata: {
+        links: [{ id: "link-1", type: "parent", targetCardId: parent.id, createdAt: 1 }],
+      },
+    });
+    const sibling = makeCard({ id: "sibling-1", title: "Sibling" });
+    const movedChild = { ...child, status: "blocked" as const, position: 3000 };
+    const movedSibling = { ...sibling, status: "blocked" as const, position: 2000 };
+    const client = createClient((method, params) => {
+      if (method === "workboard.cards.delete") {
+        return deletion.promise;
+      }
+      if (method === "workboard.cards.move") {
+        return {
+          card: (params as { id?: string }).id === child.id ? movedChild : movedSibling,
+        };
+      }
+      return {};
+    });
+    state.cards = [parent, child, sibling];
+
+    const pending = deleteCard(client, parent.id);
+    await moveCard(client, {
+      cardId: child.id,
+      status: movedChild.status,
+      position: movedChild.position,
+    });
+    await moveCard(client, {
+      cardId: sibling.id,
+      status: "blocked",
+      position: 2000,
+    });
+
+    deletion.reject(new Error("gateway refused delete"));
+    await pending;
+
+    expect(state.error).toBe("gateway refused delete");
+    expect(state.cards).toHaveLength(3);
+    expect(state.cards.find((card) => card.id === parent.id)).toEqual(parent);
+    expect(state.cards.find((card) => card.id === child.id)).toEqual({
+      ...movedChild,
+      metadata: child.metadata,
+    });
+    expect(state.cards.find((card) => card.id === sibling.id)).toEqual(movedSibling);
+    expect(state.cards.map((card) => card.id)).toEqual([parent.id, sibling.id, child.id]);
+  });
+
+  it("restores the latest card and link snapshots after a delete rejection", async () => {
+    const deletion = createDeferred<unknown>();
+    const parent = makeCard({ id: "parent-1", title: "Parent", status: "done" });
+    const child = makeCard({
+      id: "child-1",
+      title: "Child",
+      position: 2000,
+      metadata: {
+        links: [{ id: "link-1", type: "parent", targetCardId: parent.id, createdAt: 1 }],
+      },
+    });
+    const sibling = makeCard({ id: "sibling-1", title: "Sibling", position: 3000 });
+    const client = createClient((method) =>
+      method === "workboard.cards.delete" ? deletion.promise : {},
+    );
+    state.cards = [parent, child, sibling];
+
+    const pending = deleteCard(client, parent.id);
+    const latestParent = {
+      ...parent,
+      title: "Parent edited while delete was pending",
+      status: "blocked" as const,
+      updatedAt: 3,
+    };
+    replaceCard(state, latestParent);
+    replaceCard(state, { ...child, position: 4000, metadata: undefined });
+    replaceCard(state, {
+      ...sibling,
+      metadata: {
+        links: [{ id: "link-2", type: "parent", targetCardId: parent.id, createdAt: 2 }],
+      },
+    });
+
+    deletion.reject(new Error("gateway refused delete"));
+    await pending;
+
+    expect(state.cards).toEqual([
+      { ...latestParent },
+      {
+        ...sibling,
+        metadata: {
+          links: [{ id: "link-2", type: "parent", targetCardId: parent.id, createdAt: 2 }],
+        },
+      },
+      { ...child, position: 4000, metadata: undefined },
+    ]);
+  });
+
+  it("restores distinct links with the same type and target after a delete rejection", async () => {
+    const deletion = createDeferred<unknown>();
+    const parent = makeCard({ id: "parent-1", title: "Parent", status: "done" });
+    const child = makeCard({
+      id: "child-1",
+      title: "Child",
+      metadata: {
+        links: [
+          { id: "link-1", type: "relates_to", targetCardId: parent.id, createdAt: 1 },
+          { id: "link-2", type: "relates_to", targetCardId: parent.id, createdAt: 2 },
+        ],
+      },
+    });
+    const client = createClient((method) =>
+      method === "workboard.cards.delete" ? deletion.promise : {},
+    );
+    state.cards = [parent, child];
+
+    const pending = deleteCard(client, parent.id);
+    expect(state.cards[0]?.metadata?.links).toBeUndefined();
+
+    deletion.reject(new Error("gateway refused delete"));
+    await pending;
+
+    expect(state.cards.find((card) => card.id === child.id)?.metadata?.links).toEqual(
+      child.metadata?.links,
+    );
   });
 
   it("removes stale dependency links from local cards after delete", async () => {
