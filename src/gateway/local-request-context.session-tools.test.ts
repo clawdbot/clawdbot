@@ -76,18 +76,20 @@ function withSessionToolsFixture(run: (cfg: OpenClawConfig) => Promise<void>) {
 }
 
 describe("built-in session tool role authority", () => {
-  let runtimeSetup: Promise<unknown> | undefined;
+  let runtimeSetup: Promise<unknown>[] = [];
   beforeAll(() => {
     // Load the real mutation runtime as suite preparation, outside scenario deadlines.
-    return (runtimeSetup = Promise.all([
+    runtimeSetup = [
       import("./server-methods/sessions-create.js"),
       import("./server-methods/sessions-delete.js"),
       import("./server-methods/sessions-mutations.js"),
       import("./server-methods/sessions.runtime.js"),
-    ]));
+    ];
+    return Promise.all(runtimeSetup);
   });
   afterAll(async () => {
-    await runtimeSetup?.catch(() => {});
+    // A failed import does not cancel its siblings; drain their module setup too.
+    await Promise.allSettled(runtimeSetup);
   });
 
   afterEach(async () => {
