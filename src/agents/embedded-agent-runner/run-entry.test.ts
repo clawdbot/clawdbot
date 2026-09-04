@@ -91,6 +91,14 @@ function makeResult(params: {
   };
 }
 
+function createDirectHarness() {
+  return {
+    workspaceDir: "/tmp/workspace",
+    preparation: { kind: "direct" as const },
+    resolveRuntimeOverride: () => undefined,
+  };
+}
+
 function recordTurnAttempt(
   record: ((facts: ContextEngineTurnAttemptFacts) => void) | undefined,
   label: string,
@@ -229,11 +237,7 @@ describe("runEmbeddedAgentEntry", () => {
           agentId: "main",
           sessionId: "session-1",
         },
-        harness: {
-          workspaceDir: "/tmp/workspace",
-          preparation: { kind: "direct" },
-          resolveRuntimeOverride: () => undefined,
-        },
+        harness: createDirectHarness(),
         behavior:
           behavior === "channel-delivery"
             ? {
@@ -460,11 +464,7 @@ describe("runEmbeddedAgentEntry", () => {
     const result = await runEmbeddedAgentEntry({
       selection: { cfg: {}, provider: "primary-provider", model: "primary-model" },
       identity: { runId: "maintenance", agentId: "main", sessionId: "session-1" },
-      harness: {
-        workspaceDir: "/tmp/workspace",
-        preparation: { kind: "direct" },
-        resolveRuntimeOverride: () => undefined,
-      },
+      harness: createDirectHarness(),
       behavior: { kind: "maintenance" },
       sessionOverride: { kind: "preserve" },
       runCandidate: async (provider, model) => makeResult({ provider, model }),
@@ -485,11 +485,7 @@ describe("runEmbeddedAgentEntry", () => {
     await runEmbeddedAgentEntry({
       selection: { cfg: {}, provider: "primary-provider", model: "primary-model" },
       identity: { runId: "settle-winner", agentId: "main", sessionId: "session-1" },
-      harness: {
-        workspaceDir: "/tmp/workspace",
-        preparation: { kind: "direct" },
-        resolveRuntimeOverride: () => undefined,
-      },
+      harness: createDirectHarness(),
       behavior: { kind: "command-rpc", hasCommittedSideEffect: () => false },
       sessionOverride: { kind: "preserve" },
       onAcceptedTerminal,
@@ -534,11 +530,7 @@ describe("runEmbeddedAgentEntry", () => {
     await runEmbeddedAgentEntry({
       selection: { cfg: {}, provider: "provider", model: "model" },
       identity: { runId: "settle-after-abort", agentId: "main", sessionId: "session-1" },
-      harness: {
-        workspaceDir: "/tmp/workspace",
-        preparation: { kind: "direct" },
-        resolveRuntimeOverride: () => undefined,
-      },
+      harness: createDirectHarness(),
       behavior: {
         kind: "channel-delivery",
         readDeliveryEvidence: () => ({
@@ -590,11 +582,7 @@ describe("runEmbeddedAgentEntry", () => {
       const run = await runEmbeddedAgentEntry({
         selection: { cfg: {}, provider: "provider", model: "model" },
         identity: { runId: "settle-result", agentId: "main", sessionId: "session-1" },
-        harness: {
-          workspaceDir: "/tmp/workspace",
-          preparation: { kind: "direct" },
-          resolveRuntimeOverride: () => undefined,
-        },
+        harness: createDirectHarness(),
         behavior: { kind: "command-rpc", hasCommittedSideEffect },
         sessionOverride: { kind: "preserve" },
         runCandidate: async (provider, model, options) => {
@@ -654,11 +642,7 @@ describe("runEmbeddedAgentEntry", () => {
     await runEmbeddedAgentEntry({
       selection: { cfg: {}, provider: "provider", model: "model" },
       identity: { runId: "settle-exhausted", agentId: "main", sessionId: "session-1" },
-      harness: {
-        workspaceDir: "/tmp/workspace",
-        preparation: { kind: "direct" },
-        resolveRuntimeOverride: () => undefined,
-      },
+      harness: createDirectHarness(),
       behavior: { kind: "command-rpc", hasCommittedSideEffect: () => false },
       sessionOverride: { kind: "preserve" },
       runCandidate: async (provider, model, options) => {
@@ -710,11 +694,7 @@ describe("runEmbeddedAgentEntry", () => {
     const result = await runEmbeddedAgentEntry({
       selection: { cfg: {}, provider: "provider", model: "model" },
       identity: { runId: "settle-non-terminal", agentId: "main", sessionId: "session-1" },
-      harness: {
-        workspaceDir: "/tmp/workspace",
-        preparation: { kind: "direct" },
-        resolveRuntimeOverride: () => undefined,
-      },
+      harness: createDirectHarness(),
       behavior: { kind: "command-rpc", hasCommittedSideEffect: () => true },
       sessionOverride: { kind: "preserve" },
       runCandidate: async (provider, model, options) => {
@@ -766,11 +746,7 @@ describe("runEmbeddedAgentEntry", () => {
       runEmbeddedAgentEntry({
         selection: { cfg: {}, provider: "provider", model: "model" },
         identity: { runId: "settle-classifier-throw", agentId: "main", sessionId: "session-1" },
-        harness: {
-          workspaceDir: "/tmp/workspace",
-          preparation: { kind: "direct" },
-          resolveRuntimeOverride: () => undefined,
-        },
+        harness: createDirectHarness(),
         behavior: {
           kind: "channel-delivery",
           readDeliveryEvidence: () => {
@@ -817,11 +793,7 @@ describe("runEmbeddedAgentEntry", () => {
       runEmbeddedAgentEntry({
         selection: { cfg: {}, provider: "primary-provider", model: "primary-model" },
         identity: { runId: "channel-throw", agentId: "main", sessionId: "session-1" },
-        harness: {
-          workspaceDir: "/tmp/workspace",
-          preparation: { kind: "direct" },
-          resolveRuntimeOverride: () => undefined,
-        },
+        harness: createDirectHarness(),
         behavior: {
           kind: "channel-delivery",
           readDeliveryEvidence: () => ({
@@ -883,11 +855,7 @@ describe("runEmbeddedAgentEntry", () => {
     const result = await runEmbeddedAgentEntry({
       selection: { cfg: {}, provider: "primary-provider", model: "primary-model" },
       identity: { runId: "channel-throw-empty", agentId: "main", sessionId: "session-1" },
-      harness: {
-        workspaceDir: "/tmp/workspace",
-        preparation: { kind: "direct" },
-        resolveRuntimeOverride: () => undefined,
-      },
+      harness: createDirectHarness(),
       behavior: {
         kind: "channel-delivery",
         readDeliveryEvidence: () => ({
@@ -932,11 +900,7 @@ describe("runEmbeddedAgentEntry", () => {
     const result = await runEmbeddedAgentEntry({
       selection: { cfg: {}, provider: "primary-provider", model: "primary-model" },
       identity: { runId: "followup", agentId: "main", sessionId: "session-1" },
-      harness: {
-        workspaceDir: "/tmp/workspace",
-        preparation: { kind: "direct" },
-        resolveRuntimeOverride: () => undefined,
-      },
+      harness: createDirectHarness(),
       behavior: { kind: "followup-delivery" },
       sessionOverride: { kind: "preserve" },
       runCandidate: async (provider, model) =>
@@ -1006,11 +970,7 @@ describe("runEmbeddedAgentEntry", () => {
       const result = await runEmbeddedAgentEntry({
         selection: { cfg: {}, provider: "provider", model: "model" },
         identity: { runId, agentId: "main", sessionId: "session-1" },
-        harness: {
-          workspaceDir: "/tmp/workspace",
-          preparation: { kind: "direct" },
-          resolveRuntimeOverride: () => undefined,
-        },
+        harness: createDirectHarness(),
         behavior: { kind: "command-rpc", hasCommittedSideEffect: () => false },
         sessionOverride: { kind: "preserve" },
         runCandidate: async (provider, model) => ({
