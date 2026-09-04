@@ -891,6 +891,12 @@ suite.define(() => {
     { kind: "server close", expected: "synthetic desktop service stopped" },
   ])("explains real RFB $kind failures", async ({ kind, expected }) => {
     await suite.withPage({ serviceWorkers: "block" }, async ({ page }) => {
+      const consoleErrors: string[] = [];
+      page.on("console", (message) => {
+        if (message.type() === "error") {
+          consoleErrors.push(message.text());
+        }
+      });
       const { rfb, panel } = await openScriptedDesktop(page);
       if (kind === "server close") {
         await rfb.disconnect(expected);
@@ -903,6 +909,7 @@ suite.define(() => {
       expect(message).toContain(expected);
       expect(message).not.toContain("unknown reason");
       await expect.poll(rfb.events).toEqual(["authenticated:1", "closed:1"]);
+      expect(consoleErrors).not.toContain("Tried changing state of a disconnected RFB object");
     });
   });
 
