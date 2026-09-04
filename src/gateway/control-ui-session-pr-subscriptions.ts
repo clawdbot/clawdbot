@@ -20,6 +20,11 @@ type LoadSessionPullRequests = (
   params: ControlUiSessionPullRequestsParams,
 ) => Promise<ControlUiSessionPullRequests>;
 
+type WatchedKeyState = {
+  hash?: string;
+  snapshot?: ControlUiSessionPullRequestSnapshot;
+};
+
 type SubscriptionDeps = {
   broadcastToConnIds: GatewayBroadcastToConnIdsFn;
   isConnectionActive?: (connId: string) => boolean;
@@ -72,8 +77,7 @@ function parseSessionKeys(value: unknown): string[] | null {
   if (!Array.isArray(value) || value.length > CONTROL_UI_SESSION_PULL_REQUESTS_MAX_KEYS) {
     return null;
   }
-  const keys: string[] = [];
-  const seen = new Set<string>();
+  const keys = new Set<string>();
   for (const entry of value) {
     if (typeof entry !== "string") {
       return null;
@@ -82,12 +86,9 @@ function parseSessionKeys(value: unknown): string[] | null {
     if (!key || key.length > CHAT_SEND_SESSION_KEY_MAX_LENGTH) {
       return null;
     }
-    if (!seen.has(key)) {
-      seen.add(key);
-      keys.push(key);
-    }
+    keys.add(key);
   }
-  return keys;
+  return [...keys];
 }
 
 export function parseControlUiSessionPullRequestsSubscribeParams(
@@ -119,15 +120,20 @@ export function parseControlUiSessionPullRequestsSubscribeParams(
 export function createControlUiSessionPullRequestSubscriptions(
   deps: SubscriptionDeps,
 ): ControlUiSessionPullRequestSubscriptions {
-  // Each nonempty replace-set maps watched keys to delivery state and owns its hydration generation.
-  const subscriptions = new Map<string, Map<string, boolean>>();
-  const snapshots = new Map<
+  // A retained key keeps its work and delivery lifetime; removing it retires that cell.
+  const subscriptions = new Map<
     string,
-    { hash: string; snapshot: ControlUiSessionPullRequestSnapshot }
+    Map<string, { delivered?: ControlUiSessionPullRequestSnapshot }>
   >();
+  const keyStates = new Map<string, WatchedKeyState>();
   const inflight = new Map<
     string,
-    { promise: Promise<ControlUiSessionPullRequestSnapshot>; refresh: boolean }
+    {
+      promise: Promise<ControlUiSessionPullRequestSnapshot>;
+      refresh: boolean;
+      state: WatchedKeyState;
+      demands: Set<() => boolean>;
+    }
   >();
   const setTimer = deps.setTimer ?? globalThis.setTimeout;
   const clearTimer = deps.clearTimer ?? globalThis.clearTimeout;
@@ -158,31 +164,50 @@ export function createControlUiSessionPullRequestSubscriptions(
 
   const loadSnapshot = (
     sessionKey: string,
+    isCurrent: () => boolean,
     refresh = false,
   ): Promise<ControlUiSessionPullRequestSnapshot> => {
+    const state = keyStates.get(sessionKey);
+    if (!state || !isCurrent()) {
+      return Promise.resolve(UNAVAILABLE_SNAPSHOT);
+    }
     const pending = inflight.get(sessionKey);
     if (pending) {
-      if (!refresh || pending.refresh) {
+      if (pending.state === state && (!refresh || pending.refresh)) {
+        pending.demands.add(isCurrent);
         return pending.promise;
       }
       // Serialize a forced refresh behind an older normal load so that older
       // poll results can never land after the refresh and revert its snapshot.
-      return pending.promise.then(() => loadSnapshot(sessionKey, true));
+      return pending.promise.then(() => loadSnapshot(sessionKey, isCurrent, refresh));
     }
+    const demands = new Set([isCurrent]);
     const promise = limit(async () => {
-      // Queued hydration and forced refreshes share one limit. Recheck demand
-      // at execution, since disconnect or shutdown can retire them while waiting.
-      return stopped || subscribersForKey(sessionKey).size === 0
-        ? UNAVAILABLE_SNAPSHOT
-        : pushedSnapshot(await load(loaderParams(sessionKey, refresh)));
-    })
-      .catch(() => UNAVAILABLE_SNAPSHOT)
-      .finally(() => {
-        if (inflight.get(sessionKey)?.promise === promise) {
-          inflight.delete(sessionKey);
+      // Joiners retain their own watched-key lifetimes. A later force-only
+      // watcher must not revive normal work retired while waiting for a slot.
+      if (!Array.from(demands).some((current) => current())) {
+        return UNAVAILABLE_SNAPSHOT;
+      }
+      // Fresh result identity acknowledges forced loads even when the failure is unchanged.
+      const snapshot = await load(loaderParams(sessionKey, refresh))
+        .then(pushedSnapshot)
+        .catch(() => ({ ...UNAVAILABLE_SNAPSHOT }));
+      if (keyStates.get(sessionKey) === state) {
+        const hash = JSON.stringify(snapshot);
+        const changed = state.hash !== hash;
+        Object.assign(state, { hash, snapshot });
+        // Publish once at the shared owner, using the latest snapshot and watcher union.
+        if (changed) {
+          push(subscribersForKey(sessionKey), sessionKey, snapshot);
         }
-      });
-    inflight.set(sessionKey, { promise, refresh });
+      }
+      return snapshot;
+    }).finally(() => {
+      if (inflight.get(sessionKey)?.promise === promise) {
+        inflight.delete(sessionKey);
+      }
+    });
+    inflight.set(sessionKey, { promise, refresh, state, demands });
     return promise;
   };
 
@@ -198,18 +223,18 @@ export function createControlUiSessionPullRequestSubscriptions(
     sessions[sessionKey] = snapshot;
     deps.broadcastToConnIds(CONTROL_UI_SESSION_PULL_REQUESTS_CHANGED_EVENT, { sessions }, connIds);
     for (const connId of connIds) {
-      const subscription = subscriptions.get(connId);
-      if (subscription?.has(sessionKey)) {
-        subscription.set(sessionKey, true);
+      const watched = subscriptions.get(connId)?.get(sessionKey);
+      if (watched) {
+        watched.delivered = snapshot;
       }
     }
   };
 
   const pruneOrphans = () => {
     const watched = watchedKeys();
-    for (const key of snapshots.keys()) {
+    for (const key of keyStates.keys()) {
       if (!watched.has(key)) {
-        snapshots.delete(key);
+        keyStates.delete(key);
       }
     }
   };
@@ -232,21 +257,9 @@ export function createControlUiSessionPullRequestSubscriptions(
     // One union pass owns each key once; the loader retains its failure and
     // rate-limit cache, so the poller never creates a second quota policy.
     await Promise.all(
-      Array.from(watchedKeys(), async (sessionKey) => {
-        const snapshot = await loadSnapshot(sessionKey);
-        const connIds = subscribersForKey(sessionKey);
-        if (connIds.size === 0) {
-          return;
-        }
-        const hash = JSON.stringify(snapshot);
-        if (snapshots.get(sessionKey)?.hash === hash) {
-          return;
-        }
-        snapshots.set(sessionKey, { hash, snapshot });
-        // Publish immediately after each key resolves: cross-key batching can
-        // otherwise deliver an older poll result after a forced refresh.
-        push(connIds, sessionKey, snapshot);
-      }),
+      Array.from(keyStates, ([sessionKey, state]) =>
+        loadSnapshot(sessionKey, () => keyStates.get(sessionKey) === state),
+      ),
     );
   };
 
@@ -264,7 +277,7 @@ export function createControlUiSessionPullRequestSubscriptions(
     }
     const previousSubscription = subscriptions.get(normalizedConnId);
     const subscription = new Map(
-      sessionKeys.map((key) => [key, previousSubscription?.get(key) ?? false]),
+      sessionKeys.map((key) => [key, previousSubscription?.get(key) ?? {}]),
     );
     if (subscription.size === 0) {
       unsubscribe(normalizedConnId);
@@ -275,30 +288,24 @@ export function createControlUiSessionPullRequestSubscriptions(
     schedulePoll();
 
     await Promise.all(
-      Array.from(subscription, async ([sessionKey, delivered]) => {
-        const previous = snapshots.get(sessionKey);
+      Array.from(subscription, async ([sessionKey, watched]) => {
+        let state = keyStates.get(sessionKey);
+        if (!state) {
+          keyStates.set(sessionKey, (state = {}));
+        }
+        const isCurrent = () => subscriptions.get(normalizedConnId)?.get(sessionKey) === watched;
         const refresh = refreshSessionKeys.has(sessionKey);
-        const cached = refresh ? undefined : previous?.snapshot;
+        const cached = refresh ? undefined : state.snapshot;
         // A shared cached snapshot does not prove this connection received it.
         if (cached) {
-          if (!delivered) {
+          if (!watched.delivered) {
             push(new Set([normalizedConnId]), sessionKey, cached);
           }
           return;
         }
-        const snapshot = await loadSnapshot(sessionKey, refresh);
-        // A later replace-set owns the connection immediately; an older async
-        // initial load must never publish keys after that ownership changed.
-        if (subscriptions.get(normalizedConnId) !== subscription) {
-          return;
-        }
-        const hash = JSON.stringify(snapshot);
-        snapshots.set(sessionKey, { hash, snapshot });
-        if (refresh && previous?.hash !== hash) {
-          push(subscribersForKey(sessionKey), sessionKey, snapshot);
-        } else {
-          // Initial snapshots are also per-key so a later async load cannot
-          // delay an old cached value past a concurrent refresh.
+        const snapshot = await loadSnapshot(sessionKey, isCurrent, refresh);
+        // A removed/re-added key has a new cell; retained keys still need their result.
+        if (isCurrent() && (refresh ? watched.delivered !== snapshot : !watched.delivered)) {
           push(new Set([normalizedConnId]), sessionKey, snapshot);
         }
       }),
@@ -325,7 +332,7 @@ export function createControlUiSessionPullRequestSubscriptions(
       timer = null;
     }
     subscriptions.clear();
-    snapshots.clear();
+    keyStates.clear();
     inflight.clear();
   };
 

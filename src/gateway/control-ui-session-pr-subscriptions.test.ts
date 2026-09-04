@@ -182,6 +182,104 @@ describe("control UI session PR subscriptions", () => {
     );
   });
 
+  it.each([
+    { polling: false, refresh: false },
+    { polling: false, refresh: true },
+    { polling: true, refresh: false },
+    { polling: true, refresh: true },
+  ])(
+    "does not revive retired queued work with polling=$polling, refresh=$refresh",
+    async ({ polling, refresh }) => {
+      vi.useFakeTimers();
+      const blocked = createDeferred<ControlUiSessionPullRequests>();
+      const load = vi.fn(async ({ sessionKey }: ControlUiSessionPullRequestsParams) =>
+        sessionKey.startsWith("blocked-") ? await blocked.promise : READY,
+      );
+      const broadcastToConnIds = vi.fn();
+      active = createControlUiSessionPullRequestSubscriptions({ broadcastToConnIds, load });
+      if (polling) {
+        await active.replace("old", ["session"]);
+        load.mockClear();
+        broadcastToConnIds.mockClear();
+      }
+      const blockers = active.replace(
+        "blockers",
+        Array.from({ length: 4 }, (_, index) => `blocked-${index}`),
+      );
+      await vi.waitFor(() => expect(load).toHaveBeenCalledTimes(4));
+      const retired = polling ? active.pollNow() : active.replace("old", ["session"]);
+      active.unsubscribe("old");
+      const current = active.replace("new", ["session"], new Set(refresh ? ["session"] : []));
+      blocked.resolve(READY);
+      await Promise.all([blockers, retired, current]);
+
+      expect(load.mock.calls.filter(([params]) => params.sessionKey === "session")).toEqual([
+        [refresh ? { sessionKey: "session", refresh: true } : { sessionKey: "session" }],
+      ]);
+      expect(broadcastToConnIds.mock.calls.filter((call) => "session" in call[1].sessions)).toEqual(
+        [
+          [
+            CHANGED_EVENT,
+            { sessions: { session: { ...READY, status: "ready" } } },
+            new Set(["new"]),
+          ],
+        ],
+      );
+    },
+  );
+
+  it("does not revive a retired forced refresh when another watcher joins its normal load", async () => {
+    vi.useFakeTimers();
+    const normal = createDeferred<ControlUiSessionPullRequests>();
+    const load = vi.fn(() => normal.promise);
+    const broadcastToConnIds = vi.fn();
+    active = createControlUiSessionPullRequestSubscriptions({ broadcastToConnIds, load });
+    const initial = active.replace("old", ["session"]);
+    await vi.waitFor(() => expect(load).toHaveBeenCalledTimes(1));
+    const forced = active.replace("old", ["session"], new Set(["session"]));
+    const current = active.replace("new", ["session"]);
+    active.unsubscribe("old");
+    normal.resolve(READY);
+    await Promise.all([initial, forced, current]);
+
+    expect(load).toHaveBeenCalledExactlyOnceWith({ sessionKey: "session" });
+    expect(broadcastToConnIds).toHaveBeenCalledExactlyOnceWith(
+      CHANGED_EVENT,
+      { sessions: { session: { ...READY, status: "ready" } } },
+      new Set(["new"]),
+    );
+  });
+
+  it("discards an orphaned load before hydrating a new watcher", async () => {
+    vi.useFakeTimers();
+    const retired = createDeferred<ControlUiSessionPullRequests>();
+    const fresh = createDeferred<ControlUiSessionPullRequests>();
+    const load = vi
+      .fn()
+      .mockImplementationOnce(() => retired.promise)
+      .mockImplementationOnce(() => fresh.promise);
+    const broadcastToConnIds = vi.fn();
+    active = createControlUiSessionPullRequestSubscriptions({ broadcastToConnIds, load });
+    const initial = active.replace("old", ["session"]);
+    await vi.waitFor(() => expect(load).toHaveBeenCalledTimes(1));
+    const forced = active.replace("old", ["session"], new Set(["session"]));
+    active.unsubscribe("old");
+    const current = active.replace("new", ["session"]);
+    retired.resolve({ ...READY, rateLimited: true });
+    await vi.waitFor(() => expect(load).toHaveBeenCalledTimes(2));
+
+    expect(broadcastToConnIds).not.toHaveBeenCalled();
+    expect(load.mock.calls).toEqual([[{ sessionKey: "session" }], [{ sessionKey: "session" }]]);
+    fresh.resolve(READY);
+    await Promise.all([initial, forced, current]);
+
+    expect(broadcastToConnIds).toHaveBeenCalledExactlyOnceWith(
+      CHANGED_EVENT,
+      { sessions: { session: { ...READY, status: "ready" } } },
+      new Set(["new"]),
+    );
+  });
+
   it("loads agent-scoped global watch keys from the owning agent store", async () => {
     vi.useFakeTimers();
     const load = vi.fn(async () => READY);
@@ -219,6 +317,32 @@ describe("control UI session PR subscriptions", () => {
     );
   });
 
+  it.each([false, true])(
+    "acknowledges unchanged forced results with failing=%s",
+    async (failing) => {
+      vi.useFakeTimers();
+      const load = vi.fn(async () => {
+        if (failing) {
+          throw new Error("GitHub unavailable");
+        }
+        return READY;
+      });
+      const broadcastToConnIds = vi.fn();
+      active = createControlUiSessionPullRequestSubscriptions({ broadcastToConnIds, load });
+      await active.replace("requester", ["session"]);
+      await active.replace("sibling", ["session"]);
+      broadcastToConnIds.mockClear();
+
+      await active.replace("requester", ["session"], new Set(["session"]));
+
+      expect(broadcastToConnIds).toHaveBeenCalledExactlyOnceWith(
+        CHANGED_EVENT,
+        { sessions: { session: { ...READY, status: failing ? "unavailable" : "ready" } } },
+        new Set(["requester"]),
+      );
+    },
+  );
+
   it("serializes forced refreshes behind older normal polls", async () => {
     vi.useFakeTimers();
     let resolveNormal!: (value: ControlUiSessionPullRequests) => void;
@@ -237,19 +361,23 @@ describe("control UI session PR subscriptions", () => {
     const broadcastToConnIds = vi.fn();
     active = createControlUiSessionPullRequestSubscriptions({ broadcastToConnIds, load });
     await active.replace("conn-a", ["session"]);
+    await active.replace("conn-b", ["session"]);
     broadcastToConnIds.mockClear();
 
     const poll = active.pollNow();
-    const refresh = active.replace("conn-a", ["session"], new Set(["session"]));
     await vi.waitFor(() => expect(load).toHaveBeenCalledTimes(2));
+    const refresh = active.replace("conn-a", ["session"], new Set(["session"]));
+    await vi.advanceTimersByTimeAsync(0);
     resolveNormal({ pullRequests: [], rateLimited: true });
     await vi.waitFor(() => expect(load).toHaveBeenCalledTimes(3));
     resolveForced(READY);
     await Promise.all([poll, refresh]);
 
-    expect(broadcastToConnIds.mock.calls.at(-1)?.[1]).toEqual({
-      sessions: { session: { ...READY, status: "ready" } },
-    });
+    expect(broadcastToConnIds).toHaveBeenLastCalledWith(
+      CHANGED_EVENT,
+      { sessions: { session: { ...READY, status: "ready" } } },
+      new Set(["conn-a", "conn-b"]),
+    );
   });
 
   it("stops polling keys orphaned by replace-set or disconnect cleanup", async () => {
@@ -271,6 +399,37 @@ describe("control UI session PR subscriptions", () => {
     expect(load).not.toHaveBeenCalled();
   });
 
+  it.each(["poll", "refresh"])(
+    "keeps a pending %s current when a replacement retains its watched key",
+    async (kind) => {
+      vi.useFakeTimers();
+      const pending = createDeferred<ControlUiSessionPullRequests>();
+      const load = vi
+        .fn()
+        .mockResolvedValueOnce(READY)
+        .mockImplementationOnce(() => pending.promise)
+        .mockResolvedValue(READY);
+      const broadcastToConnIds = vi.fn();
+      active = createControlUiSessionPullRequestSubscriptions({ broadcastToConnIds, load });
+      await active.replace("conn-a", ["session"]);
+      const pendingLoad =
+        kind === "poll"
+          ? active.pollNow()
+          : active.replace("conn-a", ["session"], new Set(["session"]));
+      await vi.waitFor(() => expect(load).toHaveBeenCalledTimes(2));
+      await active.replace("conn-a", ["session", "other"]);
+      broadcastToConnIds.mockClear();
+      pending.resolve({ ...READY, rateLimited: true });
+      await pendingLoad;
+
+      expect(broadcastToConnIds).toHaveBeenCalledExactlyOnceWith(
+        CHANGED_EVENT,
+        { sessions: { session: { ...READY, rateLimited: true, status: "rate-limited" } } },
+        new Set(["conn-a"]),
+      );
+    },
+  );
+
   it.each(["stop", "disconnect", "empty replace"])(
     "retires queued forced refreshes on %s while settling their callers",
     async (cleanup) => {
@@ -285,8 +444,9 @@ describe("control UI session PR subscriptions", () => {
       active = createControlUiSessionPullRequestSubscriptions({ broadcastToConnIds, load });
       await active.replace("conn-a", ["session"]);
       const poll = active.pollNow();
-      const refresh = active.replace("conn-a", ["session"], new Set(["session"]));
       await vi.waitFor(() => expect(load).toHaveBeenCalledTimes(2));
+      const refresh = active.replace("conn-a", ["session"], new Set(["session"]));
+      await vi.advanceTimersByTimeAsync(0);
 
       if (cleanup === "stop") {
         active.stop();
@@ -317,6 +477,31 @@ describe("control UI session PR subscriptions", () => {
 
     expect(load).not.toHaveBeenCalled();
     expect(broadcastToConnIds).not.toHaveBeenCalled();
+  });
+
+  it("keeps a pending poll current through a cached watcher handoff", async () => {
+    vi.useFakeTimers();
+    const pending = createDeferred<ControlUiSessionPullRequests>();
+    const load = vi
+      .fn()
+      .mockResolvedValueOnce(READY)
+      .mockImplementationOnce(() => pending.promise);
+    const broadcastToConnIds = vi.fn();
+    active = createControlUiSessionPullRequestSubscriptions({ broadcastToConnIds, load });
+    await active.replace("conn-a", ["session"]);
+    const poll = active.pollNow();
+    await vi.waitFor(() => expect(load).toHaveBeenCalledTimes(2));
+    await active.replace("conn-b", ["session"]);
+    active.unsubscribe("conn-a");
+    broadcastToConnIds.mockClear();
+    pending.resolve({ ...READY, rateLimited: true });
+    await poll;
+
+    expect(broadcastToConnIds).toHaveBeenCalledExactlyOnceWith(
+      CHANGED_EVENT,
+      { sessions: { session: { ...READY, rateLimited: true, status: "rate-limited" } } },
+      new Set(["conn-b"]),
+    );
   });
 
   it("does not publish a superseded replace-set after its load completes", async () => {
