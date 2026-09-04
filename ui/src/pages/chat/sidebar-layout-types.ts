@@ -1,6 +1,7 @@
 export type SidebarSlotId =
   | "browser"
   | "companion"
+  | "conversation"
   | "dashboard"
   | "desktop"
   | "detail"
@@ -9,7 +10,7 @@ export type SidebarSlotId =
   | "terminal"
   | "workspace";
 export type SidebarPanel = { id: string; slot: SidebarSlotId };
-export type SidebarDock = "bottom" | "right";
+export type SidebarDock = "bottom" | "left" | "right";
 export type SidebarColumn = {
   id: string;
   side: "right";
@@ -20,6 +21,7 @@ export type SidebarColumn = {
 };
 export type SidebarLayout = {
   columns: SidebarColumn[];
+  mainPanelId?: string;
   dock?: SidebarDock;
   open?: boolean;
   expanded?: boolean;

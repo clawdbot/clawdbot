@@ -1,5 +1,5 @@
 ---
-summary: "Session dashboards: agent-built widgets, boards, tabs, and the dashboard side panel"
+summary: "Session dashboards: agent-built widgets, boards, tabs, and flexible task layouts"
 read_when:
   - Using or explaining session dashboards in the Control UI
   - Deciding what agents can do on a board and what needs an operator grant
@@ -9,9 +9,11 @@ title: "Session Dashboards"
 Every thread in the Control UI can own a **dashboard** — a grid of live widgets
 your agent builds for you. A thread with no widgets is just chat. When its first
 widget is pinned, the dashboard opens beside the conversation in a resizable
-side panel. Use **Expand side panel** to give the dashboard the full task area,
-**Collapse** to return to the split layout, or close the panel to return to chat
-alone. Later widget updates leave your current panel layout unchanged.
+side panel. Use the task toolbar's **Swap** button to exchange the dashboard and
+chat, or its **Layout** menu to move the side panel left, right, or below the
+main area. Later widget updates leave your current panel layout unchanged.
+Closing and reopening the panel does not restart loaded widgets or discard their
+unsaved input. Reloading the page starts fresh widget views.
 
 There is nothing to set up and no separate app to configure: dashboards are a
 core feature, owned by the thread, stored with the agent, and they survive
@@ -21,16 +23,39 @@ core feature, owned by the thread, stored with the agent, and they survive
 
 Open `/dashboards` to browse dashboard-enabled threads as a card gallery. Search
 by thread or author, filter by author, and sort by recent activity or title.
-Select a card to open its owning chat with the dashboard panel expanded. An open
+Select a card to open its owning task with the dashboard as the focused main
+view. Choose **Restore split** to bring the side panel alongside it. An open
 Dashboards page updates as threads are renamed, archived, or deleted, including
 after a Gateway reconnect.
 If a refresh fails, the page keeps the last loaded dashboards visible with a
 stale-data warning. Choose **Retry** to load the list again.
 
 The dashboard and its server-side thread preference follow you when you connect
-to the same Gateway from another device. The active dashboard tab and side-panel
-layout remain per-device UI state, so each browser can keep its own working
-layout.
+to the same Gateway from another device. The active dashboard tab and task
+layout remain per-device UI state. Ordinary task revisits restore the browser's
+saved arrangement for that task; opening a gallery card explicitly focuses the
+dashboard.
+
+## Arrange your task
+
+The main area and side panel can show either the dashboard or chat. Browser,
+Terminal, Files, and Review use the same layout controls:
+
+- **Swap** in the task toolbar exchanges the main view and active side-panel
+  tab. Its tooltip names both views, for example **Swap Chat and Dashboard**.
+  The previous main view becomes the active side-panel tab; other tabs stay
+  available.
+- **Layout** in the task toolbar moves the side panel left, right, or below the
+  main area. Drag the divider to resize it. Narrow panes use a bottom panel
+  until there is room for a side-by-side layout again.
+- **Focus** in the main pane header gives that view the full task area.
+  **Restore split** brings back the side panel with its previous placement and
+  size.
+
+Swapping, moving, and focusing preserve the live views, including chat drafts
+and widget interactions. Closing the whole side panel hides its tabs and leaves
+the main view in place. Closing the Dashboard tab removes that view from the
+layout; it does not delete the board. Reopen it from the panel's **+** menu.
 
 ## Build a dashboard by asking
 
@@ -78,12 +103,14 @@ never needs the agent.
   **Auto height** from the widget menu to fit the content again.
 - **Tabs.** A board can have several pages — say, an overview tab and a
   focused tab with one big widget. Each tab remembers its widget layout.
-- **Dashboard panel.** The board shares the task area with its owning chat and
-  resizes like other side panels. Expand it for a dashboard-only view, choose
-  **Collapse** to bring the chat back beside it, or close it for chat alone.
+- **Dashboard view.** The board can occupy the main area or a resizable side
+  panel. With Dashboard active in the side panel, choose **Swap** in the task
+  toolbar, then **Focus** for a dashboard-only view. **Restore split** brings
+  the side panel back.
 - **Agent parity.** The agent's `dashboard` tool creates or updates trusted
   plugin widgets, moves, resizes, and removes widgets, manages tabs, switches
-  the visible tab, and requests a split or expanded dashboard. The `show_widget` tool
+  the visible tab, and requests a split or expanded dashboard with
+  `set_presentation` and `presentation: "split"` or `"expanded"`. The `show_widget` tool
   creates or refreshes custom HTML and registered-source widgets; updating an
   existing widget uses `pin: true`, the same `name`, and new `widget_code`.
   Board snapshots identify each widget's `contentOwner` and, when applicable,
@@ -94,6 +121,10 @@ never needs the agent.
   Switching the visible tab or dashboard presentation requires a connected
   Control UI. If none is connected, the command returns `UNAVAILABLE`; open the
   Control UI and retry.
+  `focus_tab` shows the dashboard in its current position. Call
+  `set_presentation` after focusing the tab: `presentation: "expanded"` makes
+  the dashboard main and focuses it; `"split"` reveals it using the current
+  arrangement, bringing chat alongside when Dashboard is main.
 
 ## What widgets are allowed to do
 
@@ -170,8 +201,8 @@ under `<stateDir>/workspaces`, without importing that content into a dashboard.
 - Deleting a thread deletes its board.
 - Boards live on your gateway (in the owning agent's database) and appear on
   every device you connect from.
-- Dashboard-enabled threads appear in `/dashboards`. Closing the side panel does
-  not delete the dashboard or remove it from the gallery.
+- Dashboard-enabled threads appear in `/dashboards`. Closing the Dashboard tab
+  or side panel does not delete the dashboard or remove it from the gallery.
 - The security model, storage details, and design rationale live in
   [Dashboard Architecture](/web/dashboard-architecture), including the
   documented sandbox tradeoffs.

@@ -2226,6 +2226,7 @@ describe("short-term promotion", () => {
     });
 
     const auditBefore = await auditShortTermPromotionArtifacts({ workspaceDir });
+    expect(auditBefore.updatedAt).toBe("2026-04-04T00:00:00.000Z");
     expect(auditBefore.invalidEntryCount).toBe(1);
     expect(auditBefore.issues.map((issue) => issue.code)).toStrictEqual([
       "recall-store-invalid",

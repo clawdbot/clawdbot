@@ -681,7 +681,7 @@ export async function publishModelRuntimeSnapshot(
   const publication = (async () => {
     try {
       const result = (await build.pending)[0]!;
-      if (owner.generation !== generation || owners.get(key) !== owner) {
+      if (!isGenerationCurrent()) {
         throw new PreparedModelRuntimePublicationSupersededError(
           `prepared model runtime publication was superseded for ${input.agentDir}`,
         );
@@ -697,10 +697,19 @@ export async function publishModelRuntimeSnapshot(
       if (owner.generation === generation) {
         owner.pendingPluginGeneration = undefined;
       }
-      if (owner.generation === generation && owners.get(key) === owner) {
+      if (isGenerationCurrent()) {
         owner.pending = undefined;
         owner.needsRefresh = true;
         owner.refreshError = refreshError;
+        if (
+          (owner.provenance === "run" || owner.provenance === "ephemeral") &&
+          !owner.snapshot &&
+          !owner.leaseCount
+        ) {
+          // No lease was returned to retire this owner. Actual build completion still
+          // fences retries through agentBuildCompletions, even after a timeout.
+          owners.delete(key);
+        }
       }
       throw refreshError;
     }

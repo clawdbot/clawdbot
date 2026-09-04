@@ -193,6 +193,10 @@ export async function prepareCodexAttemptRuntime(connection: CodexAttemptConnect
   // capability; do not promote that fact to general sender ownership.
   const hasFreshCreatorAuthority =
     cronCreatorAuthorityCapability?.active === true &&
+    !(
+      cronCreatorAuthorityCapability.controlUiAdmin &&
+      cronCreatorAuthorityCapability.callerOrigin.kind === "unknown"
+    ) &&
     cronCreatorAuthorityCapability.runId === params.runId &&
     !cronCreatorAuthorityCapability.signal.aborted;
   const mayResolveScheduledConfiguredMcpCreatorAuthority =

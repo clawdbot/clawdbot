@@ -26,6 +26,8 @@ export type SlashCommandDef = {
   executeLocal?: boolean;
   /** Fixed argument choices for inline hints. */
   argOptions?: string[];
+  /** Whether a multi-word argument may execute from an inline prose position. */
+  allowsInlineMultiWordArgs?: boolean;
   /** Keyboard shortcut hint shown in the menu (display only). */
   shortcut?: string;
   /** Progressive disclosure tier. Defaults to "standard" when omitted. */
@@ -77,6 +79,7 @@ const COMMAND_ICON_OVERRIDES: Partial<Record<string, IconName>> = {
   export: "download",
   export_session: "download",
   tools: "terminal",
+  dashboard: "layoutDashboard",
   skill: "zap",
   commands: "book",
   new: "plus",
@@ -94,6 +97,8 @@ const COMMAND_ICON_OVERRIDES: Partial<Record<string, IconName>> = {
   steer: "send",
   tts: "volume2",
 };
+
+const INLINE_MULTI_WORD_COMMANDS = new Set(["dashboard"]);
 
 const LOCAL_COMMANDS = new Set([
   "help",
@@ -270,6 +275,7 @@ function toSlashCommand(
     category: mapCategory(command),
     executeLocal: source === "local" && LOCAL_COMMANDS.has(command.key),
     argOptions: getArgOptions(command),
+    allowsInlineMultiWordArgs: INLINE_MULTI_WORD_COMMANDS.has(command.key),
     tier: source === "local" ? mapTier(command) : "standard",
     ...(resolvedSource ? { source: resolvedSource } : {}),
     ...(command.skillDisplayName ? { skillDisplayName: command.skillDisplayName } : {}),

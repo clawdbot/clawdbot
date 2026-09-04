@@ -16,10 +16,7 @@ import { OPENAI_CODEX_DEFAULT_PROFILE_ID } from "./auth-profiles/constants.js";
 import { getRuntimeExternalCliProfileIds } from "./auth-profiles/runtime-external-profile-references.js";
 import { saveAuthProfileStore } from "./auth-profiles/store.js";
 import { preparePublishedModelCatalogOwnerIdentity } from "./prepared-model-catalog-owner.js";
-import {
-  createPreparedModelCatalogWorker,
-  createPreparedModelCatalogWorkerInput,
-} from "./prepared-model-catalog-worker.js";
+import { createPreparedModelCatalogWorker } from "./prepared-model-catalog-worker.js";
 import {
   DISCOVERED_HARNESS_ID,
   PROVIDER_ID,
@@ -962,7 +959,7 @@ describe("prepared model catalog worker boundary", () => {
         },
       },
     };
-    const input = createPreparedModelCatalogWorkerInput({
+    const worker = createPreparedModelCatalogWorker({
       agentFacts: {
         input: {
           agentId: "main",
@@ -982,12 +979,9 @@ describe("prepared model catalog worker boundary", () => {
         templateAuthStorage: AuthStorage.inMemory({}),
       } satisfies PreparedModelRuntimeAgentFacts,
       pluginMetadataSnapshot: fixture.pluginMetadataSnapshot,
-    });
-
-    const catalog = await createPreparedModelCatalogWorker({
-      input,
       isCurrent: fixture.isCurrent,
-    }).loadCatalog();
+    });
+    const catalog = await worker.loadCatalog();
 
     expect(catalog.entries).toContainEqual(
       expect.objectContaining({

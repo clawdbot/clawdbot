@@ -72,10 +72,14 @@ export async function prepareCodexAttemptContext(
   };
   const readFencedHistory = async () => {
     const transcriptReadFence = params.userTurnTranscriptRecorder?.getAdmissionReceipt();
-    return await readMirroredSessionHistoryMessages({
+    const messages = await readMirroredSessionHistoryMessages({
       ...activeTranscriptTarget,
+      signal: connection.runAbortController.signal,
       ...(transcriptReadFence ? { admission: transcriptReadFence } : {}),
     });
+    connection.runAbortController.signal.throwIfAborted();
+    params.hostCapabilities.assertActive();
+    return messages;
   };
   const historyState = {
     messages:

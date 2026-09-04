@@ -1,5 +1,6 @@
 // Matrix tests cover cli plugin behavior.
 import { Command } from "commander";
+import { createDeferred } from "openclaw/plugin-sdk/extension-shared";
 import { formatZonedTimestamp } from "openclaw/plugin-sdk/time-runtime";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { registerMatrixCli } from "./cli.js";
@@ -23,6 +24,7 @@ const resolveMatrixAuthContextMock = vi.fn();
 const matrixSetupApplyAccountConfigMock = vi.fn();
 const matrixSetupValidateInputMock = vi.fn();
 const matrixRuntimeLoadConfigMock = vi.fn();
+const matrixRuntimeMutateConfigFileMock = vi.fn();
 const matrixRuntimeReplaceConfigFileMock = vi.fn();
 const resetMatrixRoomKeyBackupMock = vi.fn();
 const restoreMatrixRoomKeyBackupMock = vi.fn();
@@ -124,6 +126,7 @@ vi.mock("./runtime.js", () => ({
   getMatrixRuntime: () => ({
     config: {
       current: (...args: unknown[]) => matrixRuntimeLoadConfigMock(...args),
+      mutateConfigFile: (...args: unknown[]) => matrixRuntimeMutateConfigFileMock(...args),
       replaceConfigFile: (...args: unknown[]) => matrixRuntimeReplaceConfigFileMock(...args),
     },
   }),
@@ -280,6 +283,11 @@ describe("matrix CLI verification commands", () => {
     matrixSetupApplyAccountConfigMock.mockImplementation(({ cfg }: { cfg: unknown }) => cfg);
     matrixRuntimeLoadConfigMock.mockReturnValue({});
     matrixRuntimeReplaceConfigFileMock.mockResolvedValue(undefined);
+    matrixRuntimeMutateConfigFileMock.mockImplementation(async ({ mutate, afterWrite }) => {
+      const draft = structuredClone(matrixRuntimeLoadConfigMock());
+      await mutate(draft, { snapshot: { runtimeConfig: structuredClone(draft) } });
+      await matrixRuntimeReplaceConfigFileMock({ nextConfig: draft, afterWrite });
+    });
     resolveMatrixAuthContextMock.mockImplementation(
       ({ cfg, accountId }: { cfg: unknown; accountId?: string | null }) => ({
         cfg,
@@ -1233,6 +1241,278 @@ describe("matrix CLI verification commands", () => {
     expectRecordFields(payload, { accountId: "ops", encryptionChanged: false });
     expectRecordFields(payload.bootstrap, { success: true, cryptoBootstrap: null });
     expectRecordFields(payload.status, { verified: true });
+  });
+
+  it.each(["encryption setup", "account add"])(
+    "keeps %s private until its crypto clients have retired",
+    async (command) => {
+      const cfg: CoreConfig = {
+        channels: {
+          matrix: {
+            accounts: {
+              ops: { homeserver: "https://matrix.example.org", accessToken: "token" },
+            },
+          },
+        },
+      };
+      matrixRuntimeLoadConfigMock.mockReturnValue(cfg);
+      resolveMatrixAccountMock.mockReturnValue({ configured: true });
+      resolveMatrixAccountConfigMock.mockImplementation(
+        ({ cfg: inputCfg, accountId }: { cfg: CoreConfig; accountId: string }) =>
+          inputCfg.channels?.matrix?.accounts?.[accountId] ?? {},
+      );
+      const bootstrapEntered = createDeferred<void>();
+      const bootstrapRetired = createDeferred<void>();
+      const profileEntered = createDeferred<void>();
+      const profileRetired = createDeferred<void>();
+      const readEntered = createDeferred<void>();
+      const readRetired = createDeferred<void>();
+      bootstrapMatrixVerificationMock.mockImplementationOnce(async () => {
+        bootstrapEntered.resolve();
+        await bootstrapRetired.promise;
+        return successfulMatrixBootstrap();
+      });
+      if (command === "account add") {
+        updateMatrixOwnProfileMock.mockImplementationOnce(async () => {
+          profileEntered.resolve();
+          await profileRetired.promise;
+          return {
+            displayNameUpdated: false,
+            avatarUpdated: true,
+            resolvedAvatarUrl: "mxc://example.org/avatar",
+            convertedAvatarFromHttp: true,
+          };
+        });
+      }
+      const finalRead =
+        command === "encryption setup" ? getMatrixVerificationStatusMock : listMatrixOwnDevicesMock;
+      finalRead.mockImplementationOnce(async () => {
+        readEntered.resolve();
+        await readRetired.promise;
+        return command === "encryption setup" ? matrixVerificationStatus() : [];
+      });
+      const gatewayActivations: CoreConfig[] = [];
+      const latestCfg = structuredClone(cfg);
+      latestCfg.messages = { ackReaction: "updated-during-bootstrap" };
+      matrixRuntimeMutateConfigFileMock.mockImplementationOnce(async ({ mutate, afterWrite }) => {
+        const draft = structuredClone(latestCfg);
+        await mutate(draft, { snapshot: { runtimeConfig: latestCfg } });
+        await matrixRuntimeReplaceConfigFileMock({ nextConfig: draft, afterWrite });
+      });
+      matrixRuntimeReplaceConfigFileMock.mockImplementationOnce(
+        async ({ nextConfig }: { nextConfig: CoreConfig }) => {
+          gatewayActivations.push(nextConfig);
+        },
+      );
+      const running = runMatrixCli(
+        command === "encryption setup"
+          ? ["matrix", "encryption", "setup", "--account", "ops", "--json"]
+          : matrixAccountPasswordArgs(
+              "ops",
+              "--enable-e2ee",
+              "--avatar-url",
+              "https://example.org/avatar.png",
+              "--json",
+            ),
+      );
+      try {
+        await bootstrapEntered.promise;
+        expect(gatewayActivations).toEqual([]);
+        bootstrapRetired.resolve();
+        if (command === "account add") {
+          await profileEntered.promise;
+          expect(gatewayActivations).toEqual([]);
+          profileRetired.resolve();
+        }
+        await readEntered.promise;
+        expect(gatewayActivations).toEqual([]);
+      } finally {
+        bootstrapRetired.resolve();
+        profileRetired.resolve();
+        readRetired.resolve();
+        await running;
+      }
+      expect(gatewayActivations).toHaveLength(1);
+      expect(gatewayActivations[0]?.channels?.matrix?.accounts?.ops?.encryption).toBe(true);
+      expect(gatewayActivations[0]?.messages?.ackReaction).toBe("updated-during-bootstrap");
+      if (command === "account add") {
+        expect(gatewayActivations[0]?.channels?.matrix?.accounts?.ops?.avatarUrl).toBe(
+          "mxc://example.org/avatar",
+        );
+      } else {
+        expectRecordFields(JSON.parse(String(stdoutWriteArg())), {
+          success: true,
+          status: matrixVerificationStatus(),
+        });
+      }
+      expect(process.exitCode).toBeUndefined();
+    },
+  );
+
+  it.each(["bootstrap result", "bootstrap throw", "status throw"])(
+    "still saves encryption setup after a %s failure",
+    async (failure) => {
+      matrixRuntimeLoadConfigMock.mockReturnValue({ channels: { matrix: {} } });
+      resolveMatrixAccountMock.mockReturnValue({ configured: true });
+      getMatrixVerificationStatusMock.mockResolvedValue(matrixVerificationStatus());
+      if (failure === "bootstrap result") {
+        bootstrapMatrixVerificationMock.mockResolvedValue({
+          ...successfulMatrixBootstrap(),
+          success: false,
+          error: "bootstrap unavailable",
+        });
+      } else if (failure === "bootstrap throw") {
+        bootstrapMatrixVerificationMock.mockRejectedValue(new Error("bootstrap unavailable"));
+      } else {
+        getMatrixVerificationStatusMock.mockRejectedValue(new Error("status unavailable"));
+      }
+      await runMatrixCli(["matrix", "encryption", "setup", "--json"]);
+
+      expect(matrixRuntimeReplaceConfigFileMock).toHaveBeenCalledOnce();
+      const write = mockCallArg(matrixRuntimeReplaceConfigFileMock) as { nextConfig: CoreConfig };
+      expect(write.nextConfig.channels?.matrix?.encryption).toBe(true);
+      expect(process.exitCode).toBe(1);
+      expectRecordFields(JSON.parse(String(stdoutWriteArg())), { success: false });
+    },
+  );
+
+  it.each([
+    ["encryption setup", "account replacement"],
+    ["account add", "account replacement"],
+    ["encryption setup", "channel disable"],
+    ["account add", "channel disable"],
+  ])("does not publish %s after concurrent %s", async (command, change) => {
+    const cfg: CoreConfig = {
+      channels: {
+        matrix: {
+          enabled: true,
+          accounts: {
+            ops: {
+              enabled: true,
+              homeserver: "https://matrix.example.org",
+              accessToken: "original-token",
+            },
+          },
+        },
+      },
+    };
+    matrixRuntimeLoadConfigMock.mockReturnValue(cfg);
+    resolveMatrixAccountMock.mockReturnValue({ configured: true });
+    resolveMatrixAccountConfigMock.mockImplementation(
+      ({ cfg: inputCfg, accountId }: { cfg: CoreConfig; accountId: string }) =>
+        inputCfg.channels?.matrix?.accounts?.[accountId] ?? {},
+    );
+    getMatrixVerificationStatusMock.mockResolvedValue(matrixVerificationStatus());
+    const replaced: CoreConfig =
+      change === "channel disable"
+        ? {
+            ...cfg,
+            channels: { matrix: { ...cfg.channels?.matrix, enabled: false } },
+          }
+        : {
+            channels: {
+              matrix: {
+                accounts: {
+                  ops: {
+                    homeserver: "https://replacement.example.org",
+                    accessToken: "replacement-token",
+                  },
+                },
+              },
+            },
+          };
+    matrixRuntimeMutateConfigFileMock.mockImplementationOnce(async ({ mutate, afterWrite }) => {
+      const draft = structuredClone(replaced);
+      await mutate(draft, { snapshot: { runtimeConfig: replaced } });
+      await matrixRuntimeReplaceConfigFileMock({ nextConfig: draft, afterWrite });
+    });
+    await runMatrixCli(
+      command === "encryption setup"
+        ? ["matrix", "encryption", "setup", "--account", "ops", "--json"]
+        : matrixAccountPasswordArgs("ops", "--enable-e2ee", "--json"),
+    );
+
+    expect(matrixRuntimeReplaceConfigFileMock).not.toHaveBeenCalled();
+    expect(process.exitCode).toBe(1);
+    expect(JSON.parse(String(stdoutWriteArg())).error).toContain("changed during setup");
+    expect(JSON.parse(String(stdoutWriteArg())).error).toContain("run the setup command again");
+  });
+
+  it("compares runtime account config while preserving source SecretRefs", async () => {
+    const cfg: CoreConfig = {
+      channels: {
+        matrix: { accessToken: "resolved-token", homeserver: "https://matrix.example.org" },
+      },
+    };
+    const source: CoreConfig = {
+      channels: {
+        matrix: {
+          accessToken: { source: "env", provider: "default", id: "MATRIX_ACCESS_TOKEN" },
+          homeserver: "https://matrix.example.org",
+        },
+      },
+    };
+    matrixRuntimeLoadConfigMock.mockReturnValue(cfg);
+    resolveMatrixAccountMock.mockReturnValue({ configured: true });
+    getMatrixVerificationStatusMock.mockResolvedValue(matrixVerificationStatus());
+    matrixRuntimeMutateConfigFileMock.mockImplementationOnce(async ({ mutate, afterWrite }) => {
+      const draft = structuredClone(source);
+      await mutate(draft, { snapshot: { runtimeConfig: cfg } });
+      await matrixRuntimeReplaceConfigFileMock({ nextConfig: draft, afterWrite });
+    });
+    await runMatrixCli(["matrix", "encryption", "setup", "--json"]);
+
+    expect(process.exitCode).toBeUndefined();
+    const write = mockCallArg(matrixRuntimeReplaceConfigFileMock) as { nextConfig: CoreConfig };
+    expect(write.nextConfig.channels?.matrix?.accessToken).toEqual(
+      source.channels?.matrix?.accessToken,
+    );
+    expect(write.nextConfig.channels?.matrix?.encryption).toBe(true);
+  });
+
+  it.each(["bootstrap", "status"])(
+    "reports publication failure ahead of an earlier %s failure",
+    async (stage) => {
+      resolveMatrixAccountMock.mockReturnValue({ configured: true });
+      const action =
+        stage === "bootstrap" ? bootstrapMatrixVerificationMock : getMatrixVerificationStatusMock;
+      action.mockRejectedValueOnce(new Error(`${stage} failed`));
+      matrixRuntimeReplaceConfigFileMock.mockRejectedValueOnce(
+        new Error("config publication failed"),
+      );
+      await runMatrixCli(["matrix", "encryption", "setup", "--json"]);
+
+      expect(process.exitCode).toBe(1);
+      expect(JSON.parse(String(stdoutWriteArg()))).toEqual({
+        success: false,
+        error: "config publication failed",
+      });
+    },
+  );
+
+  it("saves an encrypted account and reports bootstrap, profile, and device-health failures", async () => {
+    resolveMatrixAccountConfigMock.mockImplementation(
+      ({ cfg, accountId }: { cfg: CoreConfig; accountId: string }) =>
+        cfg.channels?.matrix?.accounts?.[accountId] ?? {},
+    );
+    bootstrapMatrixVerificationMock.mockRejectedValueOnce(new Error("bootstrap failed"));
+    updateMatrixOwnProfileMock.mockRejectedValueOnce(new Error("profile failed"));
+    listMatrixOwnDevicesMock.mockRejectedValueOnce(new Error("device health failed"));
+    await runMatrixCli(
+      matrixAccountPasswordArgs("ops", "--enable-e2ee", "--name", "Ops", "--json"),
+    );
+
+    expect(matrixRuntimeReplaceConfigFileMock).toHaveBeenCalledOnce();
+    expect(process.exitCode).toBeUndefined();
+    const result = JSON.parse(String(stdoutWriteArg()));
+    expect(result.encryptionEnabled).toBe(true);
+    expectRecordFields(result.verificationBootstrap, {
+      attempted: true,
+      success: false,
+      error: "bootstrap failed",
+    });
+    expectRecordFields(result.profile, { attempted: true, error: "profile failed" });
+    expectRecordFields(result.deviceHealth, { error: "device health failed" });
   });
 
   it("bootstraps verification for newly added encrypted accounts", async () => {

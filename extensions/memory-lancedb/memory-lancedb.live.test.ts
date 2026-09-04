@@ -104,51 +104,57 @@ describeLive("memory plugin live tests", () => {
     const forgetTool = materialize("memory_forget");
     const storedText = "The user prefers dark mode for all applications";
 
-    // Test store
-    const storeResult = await storeTool.execute("test-call-1", {
-      text: storedText,
-      importance: 0.8,
-      category: "preference",
-    });
+    try {
+      // Test store
+      const storeResult = await storeTool.execute("test-call-1", {
+        text: storedText,
+        importance: 0.8,
+        category: "preference",
+      });
 
-    expect(storeResult.details?.action).toBe("created");
-    const storedId = storeResult.details?.id;
-    expect(storedId).toMatch(/.+/);
+      expect(storeResult.details?.action).toBe("created");
+      const storedId = storeResult.details?.id;
+      expect(storedId).toMatch(/.+/);
 
-    // Test recall
-    const recallResult = await recallTool.execute("test-call-2", {
-      query: "dark mode preference",
-      limit: 5,
-    });
+      // Test recall
+      const recallResult = await recallTool.execute("test-call-2", {
+        query: "dark mode preference",
+        limit: 5,
+      });
 
-    expect(recallResult.details?.count).toBeGreaterThan(0);
-    expect(recallResult.details?.memories?.[0]?.text).toContain("dark mode");
+      expect(recallResult.details?.count).toBeGreaterThan(0);
+      expect(recallResult.details?.memories?.[0]?.text).toContain("dark mode");
 
-    // Test duplicate detection
-    const duplicateResult = await storeTool.execute("test-call-3", {
-      text: storedText,
-    });
+      // Test duplicate detection
+      const duplicateResult = await storeTool.execute("test-call-3", {
+        text: storedText,
+      });
 
-    expect(duplicateResult.details).toEqual({
-      action: "already_present",
-      existingId: storedId,
-      existingText: storedText,
-    });
+      expect(duplicateResult.details).toEqual({
+        action: "already_present",
+        existingId: storedId,
+        existingText: storedText,
+      });
 
-    // Test forget
-    const forgetResult = await forgetTool.execute("test-call-4", {
-      memoryId: storedId,
-    });
+      // Test forget
+      const forgetResult = await forgetTool.execute("test-call-4", {
+        memoryId: storedId,
+      });
 
-    expect(forgetResult.details?.action).toBe("deleted");
+      expect(forgetResult.details?.action).toBe("deleted");
 
-    // Verify it's gone
-    const recallAfterForget = await recallTool.execute("test-call-5", {
-      query: "dark mode preference",
-      limit: 5,
-    });
+      // Verify it's gone
+      const recallAfterForget = await recallTool.execute("test-call-5", {
+        query: "dark mode preference",
+        limit: 5,
+      });
 
-    expect(recallAfterForget.details?.count).toBe(0);
+      expect(recallAfterForget.details?.count).toBe(0);
+    } finally {
+      for (const service of registeredServices) {
+        await service.stop?.();
+      }
+    }
   }, 60000); // 60s timeout for live API calls
 
   test("skips retained user messages with real embeddings and LanceDB", async () => {

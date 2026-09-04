@@ -82,7 +82,7 @@ export function createModelListAuthIndex(
         provider,
         modelId: ref?.modelId,
         preferredProfileId: ref?.preferredProfileId,
-        lockedProfileId: ref?.lockedProfileId,
+        pinnedProfileId: ref?.pinnedProfileId,
       });
     },
   };

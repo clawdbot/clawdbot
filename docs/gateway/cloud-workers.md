@@ -382,7 +382,11 @@ Mapped Machine0 classes appear even when Crabbox omits the legacy `classes` summ
 
 The workspace is not a continuous mirror: OpenClaw syncs a fresh eligible inventory at dispatch, not before every turn on an existing worker. In Git workspaces, files created only on the Gateway after dispatch remain local and outside the accepted manifest. To send those new inputs, finish the current turn, stop the cloud worker, and dispatch again.
 
-Remote-exec skill bundles are private, read-only turn inputs inside the execution workspace. They are ignored by ordinary Git staging and excluded from workspace synchronization and reconciliation. Normal turn cleanup removes them; cleanup failures are reported. If initialization loses its response, the unidentified copy remains owned by that workspace: nodes reclaim it when the authoritative retention snapshot releases the generation, including after restart, while SSH-backed copies follow workspace/provider teardown. Restarting a node alone does not delete a retained generation.
+Remote-exec skill bundles are private, read-only turn inputs inside the execution workspace. They are ignored by ordinary Git staging and excluded from workspace synchronization and reconciliation. Normal turn cleanup removes them; cleanup failures are reported. Before preparing the next turn, OpenClaw removes leftover private skill copies from that workspace, including copies whose initialization response was lost. This also runs when the new turn selects no skills. Recovery preserves attachments and unrelated directories, and a cleanup failure stops preparation with retry guidance.
+
+The skill catalog and explicit skill references point to the current turn's worker copy. Instructions and relative scripts use that same location; edits to the Gateway source apply to later turns.
+
+Disconnected workers have no cleanup deadline. Nodes also reclaim copies when the authoritative retention snapshot releases their workspace generation, including after restart; SSH-backed copies follow workspace/provider teardown. Restarting a node alone does not delete a retained generation. Skill-copy paths last only for their turn, so background commands must not depend on them remaining available afterward.
 
 Completed cloud turns reconcile eligible, size-bounded workspace files back into the session's managed worktree before the turn claim is released. Worker-turn uses its terminal worker event to create the durable pending-result fence. Remote-exec waits for workspace quiescence and enters the same reconciliation flow after the local Codex attempt. Before applying the result, the Gateway stages complete authenticated base/current manifests plus each changed resulting blob as a Git ref under `refs/openclaw/worker-results/`; deletions are represented by the manifests and need no blob. This keeps the cloud delta recoverable even if the Gateway stops during the apply without duplicating unchanged baseline content. Workspace results use Git file semantics: regular files, executable bits, symlinks, additions, changes, and deletions are retained, while empty directories and other directory modes are not. The resulting file changes remain in the managed worktree for normal review and commit.
 
@@ -407,7 +411,12 @@ data-loss confirmation, it abandons the exact offline device owner and resumes
 from the last Gateway-synced workspace without replay. Unsynced device files
 and in-flight work may be lost. This explicit abandonment also fences an active
 local Codex turn claim without waiting for an acknowledgment from the offline
-node. If the device is already available, use the
+node. The Gateway revokes the abandoned worker's credentials, tools, and result
+authority before returning the session to local ownership. It retains the exact
+old device cleanup scope until reconnection confirms physical worker shutdown;
+this cleanup cannot stop or revoke a later session owner, including after a
+Gateway restart. Continue on Gateway does not claim that the offline process has
+already stopped. If the device is already available, use the
 ordinary reconcile-first move instead.
 
 To stop a running turn in the Control UI, use chat **Stop** or `/stop` first. Once no turn is running, choose **Stop cloud worker…** from the placement chip. The Gateway performs one final workspace reconciliation before it destroys the environment. A placement already in `draining` or `reconciling` is finishing teardown; wait for its badge to become `reclaimed` before resetting or deleting the session. An environment in `draining` or `destroying` has not yet confirmed release: teardown errors remain visible, and Stop can be retried. Starting another turn after reclaim provisions a replacement worker only while its original cloud profile remains configured for the same provider; deleting that profile prevents new cloud allocation.

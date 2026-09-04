@@ -1,5 +1,8 @@
 import { html, nothing } from "lit";
 import { t } from "../../i18n/index.ts";
+import { registerDesktopEnglish } from "../../i18n/locales/en-desktop.ts";
+
+registerDesktopEnglish();
 
 export type DesktopPanelState =
   | "picker"

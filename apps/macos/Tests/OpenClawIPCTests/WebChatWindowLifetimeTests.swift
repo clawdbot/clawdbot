@@ -1,3 +1,4 @@
+import AppKit
 import Foundation
 import Testing
 @testable import OpenClaw
@@ -5,26 +6,55 @@ import Testing
 
 @MainActor
 struct WebChatWindowLifetimeTests {
-    @Test func `a pending primary open cannot outlive its manager`() async throws {
-        try await withIsolatedWebChatManager { manager in
-            let release = DispatchSemaphore(value: 0)
-            let gateEntered = AsyncStream.makeStream(of: Void.self)
-            let blockedConnection = Task.detached {
-                await GatewayConnection.shared.holdForPendingPrimaryOpenRegression(
-                    entered: gateEntered.continuation,
-                    release: release)
-            }
-            defer {
+    @Test(arguments: ["ordinary", "transcript"], ["manager", "native window"])
+    func `a pending primary open cannot outlive its owner`(admission: String, closeOwner: String) async throws {
+        let configPath = TestIsolation.tempConfigPath()
+        defer { try? FileManager.default.removeItem(atPath: configPath) }
+        let fixture = CronSourceFixture()
+        do {
+            try await withIsolatedWebChatManager(
+                primaryConnection: fixture.gateway,
+                env: ["OPENCLAW_CONFIG_PATH": configPath])
+            { manager in
+                try JSONSerialization.data(withJSONObject: CronSourceFixture.configuration(revision: 1))
+                    .write(to: URL(fileURLWithPath: configPath))
+                let lease = try await fixture.gateway.acquireServerLease()
+                let previousWindows = Set(NSApp.windows.map(ObjectIdentifier.init))
+                manager.show(sessionKey: "existing-primary")
+                let window = try #require(NSApp.windows.first { !previousWindows.contains(ObjectIdentifier($0)) })
+                let release = DispatchSemaphore(value: 0)
+                let gateEntered = AsyncStream.makeStream(of: Void.self)
+                let blockedConnection = Task.detached {
+                    await fixture.gateway.holdForPendingPrimaryOpenRegression(
+                        entered: gateEntered.continuation,
+                        release: release)
+                }
+                defer { release.signal() }
+                var gateIterator = gateEntered.stream.makeAsyncIterator()
+                await gateIterator.next()
+                var rejected = false
+                if admission == "ordinary" {
+                    // Explicit-session presentation does not populate the preferred main-session cache.
+                    manager.show()
+                } else {
+                    manager.show(sessionKey: "cron:shared-job", ifCurrentRouteFrom: lease) { rejected = true }
+                }
+                if closeOwner == "manager" {
+                    manager.close()
+                } else {
+                    window.close()
+                }
+                #expect(manager.activeSessionKey == nil)
                 release.signal()
+                #expect(await blockedConnection.value)
+                #expect(await !self.eventually { manager.activeSessionKey != nil })
+                #expect(!rejected)
             }
-            var gateIterator = gateEntered.stream.makeAsyncIterator()
-            await gateIterator.next()
-            manager.show()
-            manager.close()
-            release.signal()
-            #expect(await blockedConnection.value)
-            #expect(await !self.eventually { manager.activeSessionKey != nil })
+        } catch {
+            await fixture.gateway.shutdown()
+            throw error
         }
+        await fixture.gateway.shutdown()
     }
 
     @Test func `selecting a profile session preserves the primary active session`() async {
@@ -125,27 +155,39 @@ struct WebChatWindowLifetimeTests {
 }
 
 @MainActor
-func withIsolatedWebChatManager(_ body: (WebChatManager) async throws -> Void) async throws {
-    try await TestIsolation.withIsolatedState {
-        weak var retiredManager: WebChatManager?
-        var failure: (any Error)?
-        do {
-            let manager = WebChatManager()
-            retiredManager = manager
-            defer { manager.close() }
-            try await body(manager)
-        } catch {
-            failure = error
-        }
-        // close() owns asynchronous fleet retirement. Keep the global lease
-        // until that task releases its manager so it cannot shut down the next fixture.
-        let deadline = ContinuousClock.now + .seconds(3)
-        while retiredManager != nil, ContinuousClock.now < deadline {
-            try? await Task.sleep(for: .milliseconds(10))
-        }
-        #expect(retiredManager == nil)
-        if let failure { throw failure }
+func withIsolatedWebChatManager(
+    primaryConnection: GatewayConnection = .shared,
+    env: [String: String?] = [:],
+    _ body: (WebChatManager) async throws -> Void) async throws
+{
+    try await TestIsolation.withIsolatedState(env: env) {
+        try await withWebChatManagerLifetime(primaryConnection: primaryConnection, body)
     }
+}
+
+@MainActor
+func withWebChatManagerLifetime(
+    primaryConnection: GatewayConnection = .shared,
+    _ body: (WebChatManager) async throws -> Void) async throws
+{
+    weak var retiredManager: WebChatManager?
+    var failure: (any Error)?
+    do {
+        let manager = WebChatManager(primaryConnection: primaryConnection)
+        retiredManager = manager
+        defer { manager.close() }
+        try await body(manager)
+    } catch {
+        failure = error
+    }
+    // close() owns asynchronous fleet retirement. Keep the global lease
+    // until that task releases its manager so it cannot shut down the next fixture.
+    let deadline = ContinuousClock.now + .seconds(3)
+    while retiredManager != nil, ContinuousClock.now < deadline {
+        try? await Task.sleep(for: .milliseconds(10))
+    }
+    #expect(retiredManager == nil)
+    if let failure { throw failure }
 }
 
 extension GatewayConnection {

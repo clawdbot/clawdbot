@@ -568,8 +568,16 @@ that skip lifecycle scripts also stop before activation. On npm 12 and newer,
 the updater approves only the candidate OpenClaw lifecycle; transitive
 dependency scripts remain blocked. OpenClaw then swaps the clean package tree
 into the real global prefix. If verification fails, post-update doctor, plugin
-sync, and restart work do not run from the suspect tree. Even when the
-installed version already matches the target, the command refreshes the
+sync, and restart work do not run from the suspect tree.
+
+Staging uses a unique `.openclaw.update-stage-*` directory inside the target
+global `node_modules`, separate from disposable npm rename leftovers. Each
+attempt tries to remove only its own staging prefix; leftover cleanup does not
+reclaim these stages. If an interrupted update leaves one behind, confirm that
+no updater is still using it before removing that exact directory. This separation
+does not make simultaneous package swaps safe.
+
+Even when the installed version already matches the target, the command refreshes the
 global package install, then runs plugin sync, a core-command completion
 refresh, and restart work. This keeps packaged sidecars and channel-owned
 plugin records aligned with the installed OpenClaw build, while leaving full

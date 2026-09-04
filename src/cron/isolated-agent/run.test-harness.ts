@@ -407,6 +407,7 @@ vi.mock("./helpers.js", () => ({
 
 vi.mock("../../channels/plugins/index.js", () => ({
   getChannelPlugin: getChannelPluginMock,
+  getLoadedChannelPlugin: getChannelPluginMock,
 }));
 
 vi.mock("./session.js", () => ({

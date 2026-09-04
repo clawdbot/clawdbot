@@ -1482,7 +1482,7 @@ describe("deliverReplies message_sent hook", () => {
         await deliverReplies(
           baseParams({
             replies: [payload],
-            eventScope: { teamId: "T123", client: { chat: { postMessage } } },
+            eventScope: { teamId: "T123", client: {}, writeClient: { chat: { postMessage } } },
           }),
         ),
       onError,

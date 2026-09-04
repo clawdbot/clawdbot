@@ -361,7 +361,7 @@ export function tryBeginGatewayPreparedRestartRootWorkAdmission(): GatewayRootWo
 }
 
 /** Independent detached work counts separately even when launched by an admitted parent. */
-function tryBeginGatewayIndependentRootWorkAdmission(
+export function tryBeginGatewayIndependentRootWorkAdmission(
   origin = "independent",
 ): GatewayRootWorkAdmissionLease | null {
   if (
