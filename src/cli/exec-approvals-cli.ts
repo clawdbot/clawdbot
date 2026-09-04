@@ -38,10 +38,12 @@ import {
   readExecApprovalsSnapshot,
   redactExecApprovals,
   updateExecApprovals,
+  type ExecAllowlistEntry,
   type ExecApprovalsAgent,
   type ExecApprovalsDefaults,
   type ExecApprovalsFile,
 } from "../infra/exec-approvals.js";
+import { isCwdBoundHashedArgPattern } from "../infra/exec-command-resolution.js";
 import { formatTimeAgo } from "../infra/format-time/format-relative.ts";
 import { defaultRuntime } from "../runtime.js";
 import { rethrowExpectedCliError } from "./failure-output.js";
@@ -930,6 +932,23 @@ function renderEffectivePolicy(params: { report: EffectivePolicyReport }) {
   defaultRuntime.log(muted(`Precedence: ${params.report.note}`));
 }
 
+function formatAllowlistScope(entry: ExecAllowlistEntry): string {
+  const pattern = entry.pattern?.trim() ?? "";
+  if (pattern.startsWith("=command:") || pattern.startsWith("=node-command:")) {
+    return "command (allow-always)";
+  }
+  if (entry.source === "allow-always") {
+    if (isCwdBoundHashedArgPattern(entry.argPattern)) {
+      return "cwd+argv (allow-always)";
+    }
+    return "inactive legacy (allow-always)";
+  }
+  if (entry.argPattern) {
+    return "argv-restricted";
+  }
+  return "path-only";
+}
+
 function renderApprovalsSnapshot(snapshot: ExecApprovalsSnapshot, targetLabel: string) {
   if (isNativeApprovalsSnapshot(snapshot)) {
     renderNativeApprovalsSnapshot(snapshot, targetLabel);
@@ -951,8 +970,14 @@ function renderApprovalsSnapshot(snapshot: ExecApprovalsSnapshot, targetLabel: s
       : null,
   ].filter((part): part is string => part != null);
   const agents = file.agents ?? {};
-  const allowlistRows: Array<{ Target: string; Agent: string; Pattern: string; LastUsed: string }> =
-    [];
+
+  const allowlistRows: Array<{
+    Target: string;
+    Agent: string;
+    Pattern: string;
+    Scope: string;
+    LastUsed: string;
+  }> = [];
   const now = Date.now();
   for (const [agentId, agent] of Object.entries(agents)) {
     const allowlist = Array.isArray(agent.allowlist) ? agent.allowlist : [];
@@ -966,6 +991,7 @@ function renderApprovalsSnapshot(snapshot: ExecApprovalsSnapshot, targetLabel: s
         Target: targetLabel,
         Agent: agentId,
         Pattern: pattern,
+        Scope: formatAllowlistScope(entry),
         LastUsed: lastUsedAt ? formatTimeAgo(Math.max(0, now - lastUsedAt)) : muted("unknown"),
       });
     }
@@ -1013,6 +1039,7 @@ function renderApprovalsSnapshot(snapshot: ExecApprovalsSnapshot, targetLabel: s
         { key: "Target", header: "Target", minWidth: 10 },
         { key: "Agent", header: "Agent", minWidth: 8 },
         { key: "Pattern", header: "Pattern", minWidth: 20, flex: true },
+        { key: "Scope", header: "Scope", minWidth: 16 },
         { key: "LastUsed", header: "Last Used", minWidth: 10 },
       ],
       rows: allowlistRows,
@@ -1456,6 +1483,7 @@ export function registerExecApprovalsCli(program: Command) {
 }
 
 export const testing = {
+  formatAllowlistScope,
   formatCliError,
   readStdin,
 };

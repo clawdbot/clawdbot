@@ -355,6 +355,68 @@ describe("exec approvals CLI", () => {
     expect(requireRecord(allowlist[0], "JSON allowlist entry").pattern).toBe(pattern);
   });
 
+  it("labels allowlist entry scope and renders Scope column in approvals get", async () => {
+    expect(testing.formatAllowlistScope({ pattern: "/usr/bin/python3" })).toBe("path-only");
+    expect(
+      testing.formatAllowlistScope({ pattern: "/usr/bin/python3", argPattern: "^a\\.py$" }),
+    ).toBe("argv-restricted");
+    expect(
+      testing.formatAllowlistScope({
+        pattern: "/usr/bin/python3",
+        source: "allow-always",
+        argPattern: "sha256:cwd-argv:v1:deadbeef",
+      }),
+    ).toBe("cwd+argv (allow-always)");
+    expect(
+      testing.formatAllowlistScope({
+        pattern: "/usr/bin/python3",
+        source: "allow-always",
+      }),
+    ).toBe("inactive legacy (allow-always)");
+    expect(
+      testing.formatAllowlistScope({
+        pattern: "=command:abcdef0123456789",
+        source: "allow-always",
+      }),
+    ).toBe("command (allow-always)");
+
+    localSnapshot.file = {
+      version: 1,
+      agents: {
+        main: {
+          allowlist: [
+            { pattern: "/usr/bin/python3" },
+            {
+              pattern: "/usr/bin/python3",
+              source: "allow-always",
+              argPattern: "sha256:cwd-argv:v1:deadbeef",
+            },
+          ],
+        },
+      },
+    };
+
+    await runApprovalsCommand(["approvals", "get"]);
+
+    const output = loggedOutput();
+    expect(output).toContain("Allowlist");
+    expect(output).toContain("Scope");
+    expect(output).toContain("path-only");
+    expect(output).toContain("cwd+argv (allow-always)");
+
+    defaultRuntime.writeJson.mockClear();
+    await runApprovalsCommand(["approvals", "get", "--json"]);
+
+    const file = requireRecord(writtenJson().file, "JSON approvals file");
+    const agents = requireRecord(file.agents, "JSON approvals agents");
+    const main = requireRecord(agents.main, "JSON main agent");
+    const allowlist = requireArray(main.allowlist, "JSON main allowlist");
+    expect(allowlist).toHaveLength(2);
+    expect(requireRecord(allowlist[0], "entry 0").pattern).toBe("/usr/bin/python3");
+    expect(requireRecord(allowlist[1], "entry 1").source).toBe("allow-always");
+    expect(requireRecord(allowlist[1], "entry 1").argPattern).toBe("sha256:cwd-argv:v1:deadbeef");
+  });
+
   it("redacts the socket token from local get JSON while preserving its path", async () => {
     localSnapshot.file = {
       version: 1,
@@ -1119,3 +1181,4 @@ describe("exec approvals CLI", () => {
     expect(callGatewayFromCli).toHaveBeenCalledTimes(1);
   });
 });
+/* oxlint-disable max-lines -- TODO: split this grandfathered oversized file. */
