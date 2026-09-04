@@ -440,8 +440,9 @@ test("a hidden-foreign role cannot discover sessions through search, batch previ
   });
 });
 
-test("sessions.describe hides foreign drafts at operator role boundaries", async () => {
+test("sessions.describe and sessions.get hide foreign drafts at operator role boundaries", async () => {
   const sessionKey = "agent:main:foreign-draft-describe";
+  const sessionId = "session-foreign-draft-describe";
   const profileId = (name: string) => ensureProfileForEmail(`${name}@example.com`).id;
   const ownerId = profileId("draft-owner");
   const memberId = profileId("draft-member");
@@ -449,12 +450,19 @@ test("sessions.describe hides foreign drafts at operator role boundaries", async
   await replaceSessionEntry(
     { agentId: "main", sessionKey, storePath },
     {
-      sessionId: "session-foreign-draft-describe",
+      sessionId,
       updatedAt: 42,
       createdActor: { type: "human", source: "profile", id: ownerId },
       visibility: "draft",
     },
   );
+  await seedLinearSessionTranscript({
+    agentId: "main",
+    contents: ["foreign draft transcript"],
+    sessionId,
+    sessionKey,
+    storePath,
+  });
   expect(
     addSessionMember(
       { agentId: "main", sessionKey, storePath },
@@ -530,6 +538,16 @@ test("sessions.describe hides foreign drafts at operator role boundaries", async
       expect(described.payload?.session?.participants, name).toHaveLength(4);
       expect(described.payload?.session?.expandedParticipants, name).toHaveLength(5);
     }
+    const transcript = await directSessionReq<{ messages: Array<{ content?: unknown }> }>(
+      "sessions.get",
+      { key: sessionKey },
+      { client, context: { getRuntimeConfig: () => cfg } },
+    );
+    expect(transcript.ok, name).toBe(true);
+    expect(
+      transcript.payload?.messages.map((message) => message.content),
+      name,
+    ).toEqual(hidden ? [] : ["foreign draft transcript"]);
   }
 });
 
