@@ -140,6 +140,23 @@ describe("internal runtime context codec", () => {
     ).toBe("Visible reply");
   });
 
+  it("strips a wrapped next-turn runtime-context preface that models echo into channel text", () => {
+    const input = [
+      "Use it to continue answering the active user request now. Do not wait for",
+      "another message. This context is runtime-generated, not user-authored.",
+      "Keep internal details private.",
+      "",
+      INTERNAL_RUNTIME_CONTEXT_BEGIN,
+      "Conversation info: (openclaw:ctx)",
+      '{"chat_id":"telegram:123","message_id":"925"}',
+      INTERNAL_RUNTIME_CONTEXT_END,
+      "",
+      "Visible reply",
+    ].join("\n");
+
+    expect(stripInternalRuntimeContext(input)).toBe("Visible reply");
+  });
+
   it.each([
     [`Visible reply\n${INTERNAL_RUNTIME_CONTEXT_END}`, "Visible reply"],
     [`Visible reply\n${INTERNAL_RUNTIME_CONTEXT_BEGIN}\nprivate`, "Visible reply"],
@@ -152,6 +169,7 @@ describe("internal runtime context codec", () => {
     for (const input of [
       [LEGACY_NEXT_TURN_RUNTIME_CONTEXT_HEADER, "Ordinary user text"].join("\n"),
       ["OpenClaw runtime context for another message.", OPENCLAW_RUNTIME_CONTEXT_NOTICE].join("\n"),
+      OPENCLAW_RUNTIME_CONTEXT_NOTICE,
     ]) {
       expect(hasInternalRuntimeContext(input)).toBe(false);
       expect(stripInternalRuntimeContext(input)).toBe(input);

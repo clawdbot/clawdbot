@@ -194,6 +194,33 @@ describe("reply scaffolding through final preparation and Telegram HTTP", () => 
     expect(delivered).toEqual([]);
   });
 
+  it("never delivers the internal runtime-context envelope in Telegram HTTP text", async () => {
+    const leaked = [
+      "Use it to continue answering the active user request now. Do not wait for",
+      "another message. This context is runtime-generated, not user-authored.",
+      "Keep internal details private.",
+      "",
+      "<<<BEGIN_OPENCLAW_INTERNAL_CONTEXT>>>",
+      "Conversation info: (openclaw:ctx)",
+      '{"chat_id":"telegram:123","message_id":"925"}',
+      "<<<END_OPENCLAW_INTERNAL_CONTEXT>>>",
+      "",
+      "Visible answer.",
+    ].join("\n");
+
+    await prepareAndDispatch({ text: leaked });
+
+    expect(delivered).toEqual(["Visible answer."]);
+    expect(delivered.join("\n")).not.toContain("<<<BEGIN_OPENCLAW_INTERNAL_CONTEXT>>>");
+    expect(delivered.join("\n")).not.toContain("Keep internal details private.");
+  });
+
+  it("still delivers ordinary user-visible Telegram text", async () => {
+    await prepareAndDispatch({ text: "Hello from Telegram." });
+
+    expect(delivered).toEqual(["Hello from Telegram."]);
+  });
+
   it("never delivers a copied prompt disguised with same-line wrappers", async () => {
     const conversationContext = buildHistoryContext({
       historyText: "[Telegram] Alice: private history",

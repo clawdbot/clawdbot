@@ -214,26 +214,68 @@ const RUNTIME_CONTEXT_PROMPT_HEADERS: readonly string[] = [
   OPENCLAW_RUNTIME_EVENT_HEADER,
 ];
 
+function collapseRuntimeContextWhitespace(value: string): string {
+  return value.replace(/\s+/g, " ").trim();
+}
+
+const COLLAPSED_RUNTIME_CONTEXT_NOTICE = collapseRuntimeContextWhitespace(
+  OPENCLAW_RUNTIME_CONTEXT_NOTICE,
+);
+const COLLAPSED_RUNTIME_CONTEXT_PREFACE_MATCHES = new Set(
+  RUNTIME_CONTEXT_PROMPT_HEADERS.flatMap((header) => {
+    const preface = collapseRuntimeContextWhitespace(
+      `${header} ${OPENCLAW_RUNTIME_CONTEXT_NOTICE}`,
+    );
+    const matches = [preface];
+    let searchFrom = 0;
+    for (;;) {
+      const cut = preface.indexOf(". ", searchFrom);
+      if (cut === -1) {
+        break;
+      }
+      const suffix = preface.slice(cut + 2);
+      // Keep the notice-only sentence: that is ordinary text unless a known header
+      // precedes it. Models wrap and echo a sentence-aligned suffix of the preface.
+      if (suffix.length > COLLAPSED_RUNTIME_CONTEXT_NOTICE.length) {
+        matches.push(suffix);
+      }
+      searchFrom = cut + 2;
+    }
+    return matches;
+  }),
+);
+
+function isCollapsedRuntimeContextPreface(collapsed: string): boolean {
+  return Boolean(collapsed) && COLLAPSED_RUNTIME_CONTEXT_PREFACE_MATCHES.has(collapsed);
+}
+
 function stripRuntimeContextPromptPreface(text: string): string {
   const lines = text.split(/\r?\n/);
   let changed = false;
   const output: string[] = [];
 
   for (let index = 0; index < lines.length; index += 1) {
-    const line = lines[index] ?? "";
-    const nextLine = lines[index + 1] ?? "";
-    if (
-      RUNTIME_CONTEXT_PROMPT_HEADERS.includes(line.trim()) &&
-      nextLine.trim() === OPENCLAW_RUNTIME_CONTEXT_NOTICE
-    ) {
+    let matchEnd = -1;
+    const run: string[] = [];
+    for (let cursor = index; cursor < lines.length; cursor += 1) {
+      const line = lines[cursor] ?? "";
+      if (line.trim() === "") {
+        break;
+      }
+      run.push(line.trim());
+      if (isCollapsedRuntimeContextPreface(collapseRuntimeContextWhitespace(run.join(" ")))) {
+        matchEnd = cursor;
+      }
+    }
+    if (matchEnd !== -1) {
       changed = true;
-      index += 1;
+      index = matchEnd;
       while (index + 1 < lines.length && (lines[index + 1] ?? "").trim() === "") {
         index += 1;
       }
       continue;
     }
-    output.push(line);
+    output.push(lines[index] ?? "");
   }
 
   return changed
