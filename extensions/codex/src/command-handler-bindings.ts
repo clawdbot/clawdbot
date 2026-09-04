@@ -64,7 +64,8 @@ export function isCurrentSessionModelSelectionLocked(ctx: PluginCommandContext):
   // SessionEntry is the durable authority even when a native binding is absent or stale.
   // Never infer this lock from binding model metadata such as preserveNativeModel.
   const { agentId } = resolveCodexConversationControlScope(ctx);
-  const storePath = resolveStorePath(ctx.config.session?.store, { agentId });
+  const storePath =
+    ctx.sessionTarget?.storePath ?? resolveStorePath(ctx.config.session?.store, { agentId });
   return isModelSelectionLocked(
     getSessionEntry({
       storePath,
@@ -247,7 +248,8 @@ export async function describeConversationBinding(
   const sessionEntry = sessionKey
     ? getSessionEntry({
         agentId,
-        storePath: resolveStorePath(ctx.config.session?.store, { agentId }),
+        storePath:
+          ctx.sessionTarget?.storePath ?? resolveStorePath(ctx.config.session?.store, { agentId }),
         sessionKey,
         hydrateSkillPromptRefs: false,
         readConsistency: "latest",
@@ -337,18 +339,24 @@ export async function resumeThread(
     agentId: scope.agentId,
     config: ctx.config,
   });
+  const reclaimed = await reclaimCurrentCodexSessionGeneration({
+    bindingStore: deps.bindingStore,
+    identity,
+    config: ctx.config,
+    storePath: ctx.sessionTarget?.storePath,
+  });
+  if (!reclaimed) {
+    throw createCodexSessionGenerationSupersededError(identity.sessionId);
+  }
   return await withExclusiveCodexAppServerThread({
     bindingStore: deps.bindingStore,
     identity,
     threadId: normalizedThreadId,
     run: async () =>
       await deps.bindingStore.withLease(identity, async () => {
-        const reclaimed = await reclaimCurrentCodexSessionGeneration({
-          bindingStore: deps.bindingStore,
-          identity,
-          config: ctx.config,
-        });
-        if (!reclaimed) {
+        // Adoption precedes native ownership checks; queue waits must not admit a later generation.
+        const generation = await deps.bindingStore.prepareSessionGenerationReclaim(identity);
+        if (generation.kind !== "resolved" || !generation.result) {
           throw createCodexSessionGenerationSupersededError(identity.sessionId);
         }
         const currentBinding = deps.bindingStore.read(identity);

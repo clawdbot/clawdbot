@@ -215,6 +215,7 @@ export async function runCodexAppServerSideQuestion(
     bindingStore: options.bindingStore,
     identity: bindingIdentity,
     config: params.cfg,
+    storePath: params.storePath,
     assertCurrent: () => {
       params.hostCapabilities.assertActive();
       params.opts?.abortSignal?.throwIfAborted();
