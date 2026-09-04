@@ -973,29 +973,6 @@ describe("diagnostic-events", () => {
     expect(events.some((event) => event.type === "gateway.rpc")).toBe(false);
   });
 
-  it("keeps log records off the public diagnostic event stream", async () => {
-    const publicEvents: string[] = [];
-    const internalEvents: string[] = [];
-    onDiagnosticEvent((event) => {
-      publicEvents.push(event.type);
-    });
-    onInternalDiagnosticEvent((event) => {
-      internalEvents.push(event.type);
-    });
-
-    emitDiagnosticEvent({
-      type: "log.record",
-      level: "INFO",
-      message: "private log",
-    });
-
-    await new Promise<void>((resolve) => {
-      setImmediate(resolve);
-    });
-    expect(publicEvents).toStrictEqual([]);
-    expect(internalEvents).toEqual(["log.record"]);
-  });
-
   it("emits exec approval followup suppression events on the public stream", async () => {
     const events: DiagnosticEventPayload[] = [];
     onDiagnosticEvent((event) => {

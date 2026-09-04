@@ -767,6 +767,7 @@ policy changes apply within the existing pairing approval.
     controlUi: {
       enabled: true,
       basePath: "/openclaw",
+      // experimental: { customPlugins: false }, // Labs: native UI from user-installed plugins
       // environment: { label: "edge", color: "amber" },
       // communityInvite: true, // show the sidebar Discord invitation unless dismissed
       // root: "dist/control-ui",
@@ -879,6 +880,7 @@ policy changes apply within the existing pairing approval.
   `OPENCLAW_GATEWAY_PASSWORD`, and set `gateway.auth.mode` to `password`. Then
   run `openclaw config set gateway.tailscale.mode funnel`, followed by
   `openclaw config unset gateway.tailscale.preserveFunnel`. Default `false`.
+- `controlUi.experimental.customPlugins`: allow native browser UI from user-installed plugins, including local development plugins. Default: `false`. Enable through **Settings → Labs → Custom plugin UI** or set this boolean to `true`. Native UI runs with the signed-in operator's Gateway authority, so enable it only for trusted plugins. Native UI from enabled bundled plugins remains available with the setting off; backend plugin APIs, ordinary plugin loading, sandboxed dashboard widgets, and MCP Apps are unaffected. Restart the Gateway and reload connected browser tabs after changing it. See [Feature plugins](/plugins/feature-plugins#enable-custom-plugin-ui).
 - `controlUi.allowedOrigins`: explicit browser-origin allowlist for Gateway WebSocket connects. Required for public non-loopback browser origins. Private same-origin LAN/Tailnet UI loads from loopback, RFC1918/link-local, `.local`, `.ts.net`, or Tailscale CGNAT hosts are accepted without enabling Host-header fallback.
 - `controlUi.environment`: optional visual identity for distinguishing Gateway environments. Set `{ label: "edge", color: "amber" }` to show a matching top stripe, agent-avatar ring, environment pills, browser-title suffix, and tinted favicon. `label` is trimmed and must contain 1–24 characters. `color` must be `teal`, `amber`, `purple`, `coral`, `pink`, `blue`, `green`, `red`, or `gray`. The label and color are visible before sign-in; omit the setting to keep the default appearance unchanged.
 - `controlUi.communityInvite`: show the Discord community invitation in the sidebar. Default: `true`. Set `false` on the Gateway serving the UI to hide it for every browser using that deployment, including browsers connected to a different remote Gateway. The setting hot-reloads; existing pages pick it up after browser refresh or reconnect. Re-enabling preserves browser-local dismissals.

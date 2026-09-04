@@ -93,6 +93,8 @@ explicitly unsupported even though the ACP spawn and child are observable.
     - Agent turns that need those announced results should call `sessions_yield` when available. That ends the current turn and lets the completion event arrive as the next model-visible message. Collectors instead require explicit result collection.
     - Announced completion is push-based. Once spawned, do **not** poll `/subagents list`, `sessions_list`, or `sessions_history` in a loop just to wait for it to finish; check status on-demand only when debugging.
     - Child output is a report/evidence for the requester agent to synthesize. It is not user-authored instruction text and cannot override system, developer, or user policy.
+    - A child run ending does not by itself complete the requester's user-facing goal. The requester compares the result with the requested outcome and continues in-scope work, including review findings and failed checks, before replying. Persistent child sessions can be continued with `sessions_send`.
+    - Report the overall goal as blocked only when continuation requires new user authority or an unavailable external decision. Ordinary fixable findings are continuation work, not a terminal blocker.
     - On completion, OpenClaw best-effort closes tracked browser tabs/processes opened by that sub-agent session before the announce cleanup flow continues.
 
   </Accordion>

@@ -13,6 +13,7 @@ import {
   visibleSettingsNavigationGroups,
 } from "../app-navigation.ts";
 import type { RouteId } from "../app-route-paths.ts";
+import type { NativeDeviceSettingsCapability } from "../app/native-device-settings.ts";
 import { t } from "../i18n/index.ts";
 import type { PluginListResult } from "../lib/plugins/index.ts";
 import type { IconName } from "./icons.ts";
@@ -236,8 +237,9 @@ const APP_CARDS = [
 
 export function getStaticCommandPaletteCatalogItems(
   canAdmin: boolean,
+  nativeDeviceSettings: NativeDeviceSettingsCapability | null = null,
 ): CommandPaletteCatalogItem[] {
-  const settings = visibleSettingsNavigationGroups(canAdmin)
+  const settings = visibleSettingsNavigationGroups(canAdmin, nativeDeviceSettings)
     .flatMap((group) => group.routes)
     .concat(SETTINGS_SEARCHABLE_SUBPAGE_ROUTES)
     .map((routeId) => ({

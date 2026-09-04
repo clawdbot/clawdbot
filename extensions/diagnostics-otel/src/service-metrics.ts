@@ -20,6 +20,15 @@ export function createDiagnosticsMetrics(
     meter.createHistogram(resolveMetricName(name), options);
 
   return {
+    gatewayEventLoopDelayMaxHistogram: createHistogram("openclaw.gateway.event_loop.delay_max_ms", {
+      unit: "ms",
+      description: "Maximum event-loop delay per completed Gateway observation window",
+      advice: { explicitBucketBoundaries: AGENT_DURATION_MS_BUCKETS },
+    }),
+    gatewayEventLoopObservedCounter: createCounter("openclaw.gateway.event_loop.observed_ms", {
+      unit: "ms",
+      description: "Elapsed time covered by completed Gateway event-loop observation windows",
+    }),
     gatewayRpcRequestsCounter: createCounter("openclaw.gateway.rpc.requests", {
       unit: "1",
       description: "Authenticated Gateway WebSocket requests received",
