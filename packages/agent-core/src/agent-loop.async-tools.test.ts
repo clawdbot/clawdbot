@@ -578,6 +578,7 @@ it.each(["error", "aborted"] as const)(
 
 it.each([
   "runtime-first",
+  "runtime-error",
   "thrown-runtime",
   "thrown-caller",
   "coded-runtime",
@@ -643,7 +644,13 @@ it.each([
             if (boundary === "thrown-runtime" || boundary === "thrown-caller") {
               throw error;
             }
-            failTransportStream({ stream: response, output: assistant([source]), signal, error });
+            if (boundary === "runtime-error") {
+              const terminal = { ...assistant([source], "error"), errorMessage: error.message };
+              response.push({ type: "error", reason: "error", error: terminal });
+              response.end();
+            } else {
+              failTransportStream({ stream: response, output: assistant([source]), signal, error });
+            }
           }
           yield* response;
         } finally {
@@ -707,7 +714,10 @@ it.each([
     terminal?.diagnostics?.some((entry) => entry.type === "synthesized_run_failure") ?? false,
   ).toBe(runtime);
   expect(terminal?.stopReason).toBe(
-    boundary === "provider-first" || boundary === "listener" || boundary === "thrown-runtime"
+    boundary === "provider-first" ||
+      boundary === "listener" ||
+      boundary === "thrown-runtime" ||
+      boundary === "runtime-error"
       ? "error"
       : "aborted",
   );

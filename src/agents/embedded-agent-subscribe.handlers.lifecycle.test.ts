@@ -1350,6 +1350,7 @@ it("keeps one actual runtime failure neutral through channel, lifecycle and seri
     { type: "synthesized_run_failure", timestamp: message.timestamp },
   ]);
   const payloads = buildEmbeddedRunPayloads({
+    sessionKey: "agent:main:main",
     assistantTexts: [],
     currentAssistant: serialized,
     lastAssistant: serialized,
