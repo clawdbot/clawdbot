@@ -1281,11 +1281,10 @@ export async function runMemoryFlushIfNeeded(params: {
   let flushRunRegistered = false;
   let activeSessionEntry = entry ?? params.sessionEntry;
   const activeSessionStore = params.sessionStore ?? {};
-  // Resolved further below, once the transcript size is known; declared here so
-  // recordFailure can capture it without a temporal dead zone if an earlier
-  // step throws.
-  let cliRearmBucket: number | undefined;
-  const recordFailure = (error: unknown) =>
+  // The CLI re-arm bucket is resolved further below, once the transcript size
+  // is known, so callers pass it explicitly: a failure raised before then has
+  // no bucket to record, which is exactly what should be persisted.
+  const recordFailure = (error: unknown, cliRearmBucket?: number) =>
     recordMemoryFlushFailure(error, params, activeSessionEntry, cliRearmBucket);
   const contextWindowTokens = resolveMemoryFlushContextWindowTokens({
     cfg: params.cfg,
@@ -1372,7 +1371,7 @@ export async function runMemoryFlushIfNeeded(params: {
   // transcript-byte anchor is available to replace that watermark; a CLI
   // session without one keeps the original skip rather than flushing once
   // and then silently never again.
-  cliRearmBucket = resolveCliMemoryFlushRearmBucket({ isCli, transcriptByteSize });
+  const cliRearmBucket = resolveCliMemoryFlushRearmBucket({ isCli, transcriptByteSize });
   if (isCli && cliRearmBucket === undefined) {
     return { sessionEntry: entry ?? params.sessionEntry, outcome: "skipped" };
   }
@@ -1536,7 +1535,7 @@ export async function runMemoryFlushIfNeeded(params: {
   try {
     preparedAttempt = await prepareMemoryFlushAttempt();
   } catch (error) {
-    return await recordFailure(error);
+    return await recordFailure(error, cliRearmBucket);
   }
   if (!preparedAttempt) {
     return { sessionEntry: activeSessionEntry, outcome: "skipped" };
@@ -1762,7 +1761,7 @@ export async function runMemoryFlushIfNeeded(params: {
     }
     return { sessionEntry: activeSessionEntry, outcome: "completed" };
   } catch (error) {
-    return await recordFailure(error);
+    return await recordFailure(error, cliRearmBucket);
   } finally {
     await deferredLifecycle.complete();
     if (flushRunRegistered) {
