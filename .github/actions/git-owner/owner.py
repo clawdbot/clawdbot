@@ -1,4 +1,5 @@
 import base64
+import builtins
 import json
 import os
 import re
@@ -9,6 +10,7 @@ import subprocess
 import sys
 import tempfile
 import time
+from types import TracebackType
 
 linux = os.environ.get("RUNNER_OS", sys.platform) in ("Linux", "linux")
 fetch_timeout_seconds = 120 if linux else 90
@@ -507,6 +509,47 @@ def main():
         checkout_environment.clear()
 
 
+def terminal_diagnostic(error, owner_code):
+    # Code identity, not a filename supplied by policy, proves source provenance.
+    codes = {id(owner_code): owner_code}
+    pending = [owner_code]
+    while pending:
+        for value in pending.pop().co_consts:
+            if type(value) is type(owner_code):
+                codes[id(value)] = value
+                pending.append(value)
+    names = {value: value.__name__ for value in vars(builtins).values()
+             if isinstance(value, type) and issubclass(value, BaseException)}
+    names.update({FetchTimeout: "FetchTimeout", GitFailure: "GitFailure"})
+    records, seen, via = [], set(), "terminal"
+    while error is not None and id(error) not in seen and len(records) < 4:
+        seen.add(id(error))
+        record = {"type": names.get(type(error), "unknown"), "via": via}
+        for field in ("errno", "winerror"):
+            value = getattr(error, field, None)
+            if type(value) is int and -(2 ** 31) <= value < 2 ** 32:
+                record[field] = value
+        frames, trace = [], error.__traceback__
+        # Bound traversal as well as output; malformed metadata cannot stall exit.
+        for _ in range(256):
+            if trace is None:
+                break
+            if type(trace) is not TracebackType:
+                raise TypeError
+            frame, code = trace.tb_frame, trace.tb_frame.f_code
+            if frame.f_globals is globals() and id(code) in codes and 0 < trace.tb_lineno < 2 ** 31:
+                frames.append({"function": code.co_name[:64], "line": trace.tb_lineno})
+                frames = frames[-6:]
+            trace = trace.tb_next
+        record["owner_frames"] = frames
+        if trace is not None:
+            record["traceback_truncated"] = 1
+        records.append(record)
+        cause = error.__cause__
+        error, via = (cause, "cause") if cause is not None else (error.__context__, "context")
+    return records
+
+
 if __name__ == "__main__":
     try:
         main()
@@ -515,6 +558,16 @@ if __name__ == "__main__":
     except GitFailure as error:
         raise SystemExit(error.code)
     except Exception as error:
-        # Do not print command arguments or environment: Git may carry credentials.
-        print(f"::error::Git ownership/setup failed ({type(error).__name__}); refusing reuse or retry", file=sys.stderr)
+        name, diagnostic = "unknown", "unavailable"
+        try:
+            records = terminal_diagnostic(error, sys._getframe().f_code)
+            diagnostic = json.dumps(records, separators=(",", ":"))
+            name = records[0]["type"]
+        except BaseException:
+            pass  # Diagnostics must never replace the authoritative terminal exit.
+        try:
+            print(f"::error::Git ownership/setup failed ({name}); refusing reuse or retry", file=sys.stderr)
+            print(f"[ci-git-owner] diagnostic={diagnostic}", file=sys.stderr)
+        except BaseException:
+            pass
         raise SystemExit(125)
