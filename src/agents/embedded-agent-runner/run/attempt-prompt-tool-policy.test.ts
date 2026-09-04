@@ -8,12 +8,15 @@ import {
   createPromptBuildToolPolicy,
 } from "./attempt-prompt-support.js";
 
-function catalogEntry(name: string, tool: { name: string } = { name }): ToolSearchCatalogEntry {
+function catalogEntry(
+  name: string,
+  tool: { name: string; description?: string } = { name, description: name },
+): ToolSearchCatalogEntry {
   return {
     id: name,
     source: "openclaw",
     name,
-    description: name,
+    description: tool.description ?? "",
     tool,
   } as ToolSearchCatalogEntry;
 }
