@@ -15968,6 +15968,65 @@ it("pins generated publisher and maturity owners before credentials and selected
   }
 });
 
+it("reports stale Linux release requests before selected code runs", () => {
+  const workflow = parse(readFileSync(".github/workflows/linux-app-release.yml", "utf8"));
+  const job = workflow.jobs.validate_release;
+  const requestStep = expectDefined((job.steps as WorkflowStep[])[0], "first request validation");
+  const requestSha = "a".repeat(40);
+  const requestRun = {
+    repository: { full_name: "openclaw/openclaw" },
+    event: "workflow_dispatch",
+    name: "Linux App Release Request",
+    head_branch: "main",
+    head_sha: requestSha,
+    conclusion: "success",
+  };
+  const github = {
+    repository: "openclaw/openclaw",
+    workflow_sha: requestSha,
+    event: { workflow_run: requestRun },
+  };
+  const admitted = (context: typeof github) => runInNewContext(job.if, { github: context });
+  expect(admitted({ ...github, repository: "untrusted/openclaw" })).toBe(false);
+  for (const changedRun of [
+    { repository: { full_name: "untrusted/openclaw" } },
+    { event: "push" },
+    { name: "Another workflow" },
+    { head_branch: "topic" },
+    { conclusion: "failure" },
+  ]) {
+    expect(admitted({ ...github, event: { workflow_run: { ...requestRun, ...changedRun } } })).toBe(
+      false,
+    );
+  }
+  for (const workflowSha of ["b".repeat(40), requestSha]) {
+    expect(admitted({ ...github, workflow_sha: workflowSha })).toBe(true);
+    expect(requestStep.name).toBe("Validate trusted release request");
+    const output = path.join(tempDirs.make("openclaw-linux-request-"), "output");
+    writeFileSync(output, "");
+    const result = spawnSync("bash", ["-c", expectDefined(requestStep.run, "request validation")], {
+      encoding: "utf8",
+      env: {
+        PATH: process.env.PATH,
+        GITHUB_OUTPUT: output,
+        REQUEST_TITLE: "Linux App Release Request [v2026.8.2] desktop=false",
+        REQUEST_HEAD_SHA: requestSha,
+        WORKFLOW_SHA: workflowSha,
+      },
+    });
+    const matching = workflowSha === requestSha;
+    expect(result.status, `${result.stdout}${result.stderr}`).toBe(matching ? 0 : 1);
+    expect(readFileSync(output, "utf8")).toBe(
+      matching ? "release_tag=v2026.8.2\ndesktop_test_bundles=false\n" : "",
+    );
+    if (!matching) {
+      expect(`${result.stdout}${result.stderr}`).toContain(
+        "::error::Main advanced after this Linux release request. Dispatch a new Linux App Release Request",
+      );
+    }
+  }
+});
+
 it("pins simple release admission owners before selected checkout and preserves Git contracts", () => {
   const pinned = {
     name: "Prepare Git owner",
@@ -16038,9 +16097,6 @@ it("pins simple release admission owners before selected checkout and preserves 
   );
   expect(linux.jobs.validate_release.if).toContain(
     "github.event.workflow_run.head_branch == 'main'",
-  );
-  expect(linux.jobs.validate_release.if).toContain(
-    "github.event.workflow_run.head_sha == github.workflow_sha",
   );
   expect(linux.jobs.validate_release.if).toContain(
     "github.event.workflow_run.conclusion == 'success'",
@@ -16118,6 +16174,8 @@ it("pins simple release admission owners before selected checkout and preserves 
   );
   expect(releaseRequest.env).toEqual({
     REQUEST_TITLE: "${{ github.event.workflow_run.display_title }}",
+    REQUEST_HEAD_SHA: "${{ github.event.workflow_run.head_sha }}",
+    WORKFLOW_SHA: "${{ github.workflow_sha }}",
   });
   expect(releaseRequest.run).toContain("Release request title does not match");
   expect(releaseRequest.run).toContain('echo "release_tag=${BASH_REMATCH[1]}"');
@@ -16130,6 +16188,8 @@ it("pins simple release admission owners before selected checkout and preserves 
       ...process.env,
       GITHUB_OUTPUT: requestOutput,
       REQUEST_TITLE: "Linux App Release Request [v2026.8.2] desktop=true",
+      REQUEST_HEAD_SHA: "a".repeat(40),
+      WORKFLOW_SHA: "a".repeat(40),
     },
   });
   expect(acceptedRequest.status, `${acceptedRequest.stdout}${acceptedRequest.stderr}`).toBe(0);
@@ -16142,6 +16202,8 @@ it("pins simple release admission owners before selected checkout and preserves 
       ...process.env,
       GITHUB_OUTPUT: requestOutput,
       REQUEST_TITLE: "Linux App Release Request [v2026.8.2] desktop=true extra",
+      REQUEST_HEAD_SHA: "a".repeat(40),
+      WORKFLOW_SHA: "a".repeat(40),
     },
   });
   expect(rejectedRequest.status).toBe(1);
