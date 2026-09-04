@@ -1,5 +1,6 @@
 // Agent Core module implements agent behavior.
 import type {
+  AssistantMessage,
   ImageContent,
   Message,
   Model,
@@ -8,14 +9,14 @@ import type {
   ThinkingBudgets,
   Transport,
 } from "@openclaw/llm-core";
-import { runAgentLoop, runAgentLoopContinue } from "./agent-loop.js";
+import { type AgentEventSink, runAgentLoop, runAgentLoopContinue } from "./agent-loop.js";
 import { TranscriptNotContinuableError } from "./errors.js";
 import { attachInternalSyncSteeringGetter, getInternalBeforeToolBatch } from "./internal-hooks.js";
 import { resolveAgentReasoningOption } from "./reasoning.js";
 import { type AgentCoreStreamRuntimeDeps, resolveAgentCoreStreamFn } from "./runtime-deps.js";
 import {
   appendInterruptedTurnMessage,
-  createFailureMessage,
+  createRunFailureContext,
   isTurnHandoffAbort,
 } from "./turn-interruption.js";
 import type {
@@ -546,12 +547,12 @@ export class Agent {
     messages: AgentMessage[],
     options: { skipInitialSteeringPoll?: boolean } = {},
   ): Promise<void> {
-    await this.runWithLifecycle(async (signal) => {
+    await this.runWithLifecycle(async (signal, emit) => {
       await runAgentLoop(
         messages,
         this.createContextSnapshot(),
         this.createLoopConfig(options),
-        (event) => this.processEvents(event),
+        emit,
         signal,
         this.streamFn,
       );
@@ -559,11 +560,11 @@ export class Agent {
   }
 
   private async runContinuation(): Promise<void> {
-    await this.runWithLifecycle(async (signal) => {
+    await this.runWithLifecycle(async (signal, emit) => {
       await runAgentLoopContinue(
         this.createContextSnapshot(),
         this.createLoopConfig(),
-        (event) => this.processEvents(event),
+        emit,
         signal,
         this.streamFn,
       );
@@ -636,7 +637,9 @@ export class Agent {
     };
   }
 
-  private async runWithLifecycle(executor: (signal: AbortSignal) => Promise<void>): Promise<void> {
+  private async runWithLifecycle(
+    executor: (signal: AbortSignal, emit: AgentEventSink) => Promise<void>,
+  ): Promise<void> {
     if (this.activeRun) {
       throw new Error("Agent is already processing.");
     }
@@ -652,22 +655,29 @@ export class Agent {
     this.mutableState.streamingMessage = undefined;
     this.mutableState.errorMessage = undefined;
 
+    const failureContext = createRunFailureContext((event) => this.processEvents(event));
     try {
-      await executor(abortController.signal);
+      await executor(abortController.signal, failureContext.emit);
     } catch (error) {
-      await this.handleRunFailure(error, abortController.signal.aborted);
+      await this.handleRunFailure(
+        failureContext.createMessage(
+          this.mutableState.model,
+          error,
+          abortController.signal.aborted,
+        ),
+      );
     } finally {
+      failureContext.dispose();
       this.finishRun();
     }
   }
 
-  private async handleRunFailure(error: unknown, aborted: boolean): Promise<void> {
-    const failureMessage = createFailureMessage(this.mutableState.model, error, aborted);
+  private async handleRunFailure(failureMessage: AssistantMessage): Promise<void> {
     await this.processEvents({ type: "message_start", message: failureMessage });
     await this.processEvents({ type: "message_end", message: failureMessage });
     await this.processEvents({ type: "turn_end", message: failureMessage, toolResults: [] });
     const messages: AgentMessage[] = [failureMessage];
-    if (aborted && !isTurnHandoffAbort(this.signal)) {
+    if (failureMessage.stopReason === "aborted" && !isTurnHandoffAbort(this.signal)) {
       await appendInterruptedTurnMessage(messages, (event) => this.processEvents(event));
     }
     await this.processEvents({ type: "agent_end", messages });

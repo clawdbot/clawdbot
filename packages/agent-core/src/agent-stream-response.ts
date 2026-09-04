@@ -8,7 +8,7 @@ import type {
 import { uuidv7 } from "./harness/session/uuid.js";
 import { type AgentCoreStreamRuntimeDeps, resolveAgentCoreStreamFn } from "./runtime-deps.js";
 import { createStreamSteering } from "./stream-steering.js";
-import { normalizeCoreContextMessages } from "./turn-interruption.js";
+import { normalizeCoreContextMessages, startRunProviderStream } from "./turn-interruption.js";
 import type {
   AgentContext,
   AgentEvent,
@@ -217,13 +217,15 @@ export async function streamAgentResponse(
     executions = Promise.all([previousExecutions, execution]).then(() => {});
   };
   try {
-    const response = await streamFunction(config.model, llmContext, {
-      ...config,
-      apiKey: resolvedApiKey,
-      signal: executionSignal,
-      onActiveResponse: steering.onActiveResponse,
-      asyncToolExecution: true,
-    });
+    const response = await startRunProviderStream(emit, () =>
+      streamFunction(config.model, llmContext, {
+        ...config,
+        apiKey: resolvedApiKey,
+        signal: executionSignal,
+        onActiveResponse: steering.onActiveResponse,
+        asyncToolExecution: true,
+      }),
+    );
 
     let partialMessage: AssistantMessage | null = null;
     let partialIndex: number | undefined;

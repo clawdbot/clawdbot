@@ -57,13 +57,20 @@ function deferUntilTransportRuntimeHost(
 ): AssistantMessageEventStreamContract {
   const output = createAssistantMessageEventStream();
   void (async () => {
+    let hostReady = false;
     try {
       await ensureTransportRuntimeHost();
+      hostReady = true;
       for await (const event of start()) {
         output.push(event);
       }
     } catch (error) {
       const message = createRuntimeHostErrorMessage(model, error);
+      // Host setup has not admitted a provider request. Keep its failures
+      // distinct from exceptions raised by the provider stream below.
+      if (!hostReady) {
+        message.diagnostics = [{ type: "synthesized_run_failure", timestamp: message.timestamp }];
+      }
       output.push({ type: "error", reason: "error", error: message });
     } finally {
       output.end();

@@ -46,7 +46,7 @@ export function renderAssistantRequestFailureCopy(
     httpStatus <= 599
       ? `HTTP ${httpStatus}`
       : undefined;
-  if (!reason && !status) {
+  if (!target && !reason && !status) {
     return undefined;
   }
   const details = [reason, status].filter(Boolean);

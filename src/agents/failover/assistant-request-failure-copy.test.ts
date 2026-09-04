@@ -16,35 +16,25 @@ describe("renderAssistantRequestFailureCopy", () => {
   it("renders HTTP status when status is provided without reason", () => {
     const copy = renderAssistantRequestFailureCopy({
       provider: "anthropic",
-      model: "claude-3-5-sonnet",
+      model: "sonnet-4.6",
       status: 502,
     });
-    expect(copy).toBe("⚠️ anthropic/claude-3-5-sonnet request failed (HTTP 502).");
+    expect(copy).toBe("⚠️ anthropic/sonnet-4.6 request failed (HTTP 502).");
   });
 
-  it("returns undefined when only target is provided without reason or status", () => {
-    const copy = renderAssistantRequestFailureCopy({
-      provider: "anthropic",
-      model: "claude-3-5-sonnet",
-    });
-    expect(copy).toBeUndefined();
-  });
+  it.each([undefined, "unclassified", "no_error_details"] as const)(
+    "retains provider attribution for an opaque %s failure",
+    (reason) => {
+      const copy = renderAssistantRequestFailureCopy({
+        provider: "anthropic",
+        model: "sonnet-4.6",
+        reason,
+      });
+      expect(copy).toBe("⚠️ anthropic/sonnet-4.6 request failed.");
+    },
+  );
 
-  it("returns undefined when reason is unclassified and status is absent", () => {
-    const copy = renderAssistantRequestFailureCopy({
-      provider: "openai",
-      model: "gpt-4o",
-      reason: "unclassified",
-    });
-    expect(copy).toBeUndefined();
-  });
-
-  it("returns undefined when reason is no_error_details and status is absent", () => {
-    const copy = renderAssistantRequestFailureCopy({
-      provider: "openai",
-      model: "gpt-4o",
-      reason: "no_error_details",
-    });
-    expect(copy).toBeUndefined();
+  it("returns undefined without a target, reason, or status", () => {
+    expect(renderAssistantRequestFailureCopy({})).toBeUndefined();
   });
 });
