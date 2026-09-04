@@ -1,3 +1,4 @@
+import { getReplyPayloadMetadata } from "../../auto-reply/reply-payload.js";
 import { emitAgentEvent } from "../../infra/agent-events.js";
 import { formatErrorMessageForDisplay } from "../../infra/error-diagnostics.js";
 import { formatErrorMessage } from "../../infra/errors.js";
@@ -58,11 +59,18 @@ export function createAgentCommandLifecycle(params: {
   state: AgentAttemptLifecycleState;
 }) {
   let lifecycleFinishingEmitted = false;
+  // Plugin harnesses may omit lifecycle callbacks. Preserve their prepared error
+  // copy only for failed results; successful tool warnings must not fail the run.
+  // An earlier tool warning is not evidence of the terminal failure's cause.
   const resolveResultError = (runResult: AgentAttemptResult, includeErrorPayload: boolean) =>
     params.state.lifecycleError ??
-    (includeErrorPayload
+    (includeErrorPayload || runResult.meta.error
       ? runResult.payloads?.find(
-          (payload) => payload.isError === true && typeof payload.text === "string",
+          (payload) =>
+            payload.isError === true &&
+            typeof payload.text === "string" &&
+            payload.text.trim().length > 0 &&
+            !getReplyPayloadMetadata(payload)?.toolErrorWarning,
         )?.text
       : undefined) ??
     (runResult.meta.error ? "Agent run failed" : undefined);

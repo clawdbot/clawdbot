@@ -252,6 +252,83 @@ describe("synthesized failure presentation across runtime and channel owners", (
     observed.configureHost.mockReset();
   });
 
+  it.each(["runtime", "provider"] as const)(
+    "preserves the prepared %s error without a lifecycle callback",
+    async (origin) => {
+      const agent = new Agent({
+        initialState: { model },
+        streamFn: () => terminalStream(assistant("error")),
+        ...(origin === "runtime"
+          ? { transformContext: async () => throwFailure(new Error(canary)) }
+          : {}),
+      });
+      await agent.prompt("Exercise a harness without lifecycle callbacks.");
+      const message = lastAssistant(agent.state.messages);
+      const payloads = buildEmbeddedRunPayloads({
+        assistantTexts: [],
+        currentAssistant: message,
+        lastAssistant: message,
+        sessionKey: "agent:qa:result-only",
+        provider: model.provider,
+        model: model.id,
+      });
+      const result = {
+        payloads,
+        meta: { durationMs: 0, error: { kind: "incomplete_turn" as const, message: canary } },
+      };
+      const command = createAgentCommandLifecycle({
+        runId: "result-only",
+        lifecycleGeneration: () => "failure-copy-generation",
+        startedAt: 1,
+        state: {
+          currentTurnUserMessagePersisted: false,
+          lifecycleEnded: false,
+          lifecycleFinishing: false,
+        },
+      });
+      const expected = origin === "runtime" ? GENERIC_ASSISTANT_ERROR_TEXT : providerCopy;
+      expect(command.resolveResultError(result, false)).toBe(expected);
+      command.emitResultError(result, false, {
+        metadata: {},
+        outcome: buildAgentRunTerminalOutcome({ status: "error", stopReason: "error" }),
+      });
+      const terminal = observed.emit.mock.calls[0]?.[0];
+      if (!terminal) {
+        throw new Error("expected the command-owned terminal event");
+      }
+      expect(terminal.data.error).toBe(expected);
+      expect(
+        deriveGatewaySessionLifecycleSnapshot({ event: { ...terminal, ts: Date.now() } })
+          .lastRunError,
+      ).toBe(expected);
+      expect(JSON.stringify(terminal)).not.toContain(canary);
+    },
+  );
+
+  it.each([
+    { name: "successful tool warning", failed: false, text: "An earlier tool failed." },
+    { name: "failed result without a payload", failed: true, text: undefined },
+    { name: "empty plugin hook failure", failed: true, text: "" },
+    { name: "blank plugin hook failure", failed: true, text: " \t " },
+  ])("keeps the safe fallback boundary for $name", ({ failed, text }) => {
+    const command = createAgentCommandLifecycle({
+      runId: "result-fallback",
+      lifecycleGeneration: () => "failure-copy-generation",
+      startedAt: 1,
+      state: {
+        currentTurnUserMessagePersisted: false,
+        lifecycleEnded: false,
+        lifecycleFinishing: false,
+      },
+    });
+    // Native hook errors can reach blocked-run-result without text normalization.
+    const error = failed ? { kind: "hook_block" as const, message: canary } : undefined;
+    const payloads = text === undefined ? [] : [{ text, isError: true }];
+    expect(command.resolveResultError({ payloads, meta: { durationMs: 0, error } }, false)).toBe(
+      failed ? "Agent run failed" : undefined,
+    );
+  });
+
   it.each([
     { boundary: "context", shape: "opaque", raw: canary },
     { boundary: "context", shape: "empty", raw: "" },
