@@ -266,13 +266,32 @@ function importedAssistantCoversCliAggregate(
   aggregateText: string | undefined,
   importedAssistantTexts: readonly string[],
 ): boolean {
-  if (!aggregateText) {
+  if (!aggregateText || importedAssistantTexts.length === 0) {
     return false;
   }
-  return importedAssistantTexts.some(
-    (segment) =>
-      segment.length >= CLI_ASSISTANT_COVERED_SEGMENT_MIN_LENGTH && aggregateText.endsWith(segment),
-  );
+  for (let start = 0; start < importedAssistantTexts.length; start += 1) {
+    let acc = importedAssistantTexts[start];
+    if (!acc) {
+      continue;
+    }
+    for (let end = start; end < importedAssistantTexts.length; end += 1) {
+      if (end > start) {
+        const next = importedAssistantTexts[end];
+        if (!next) {
+          break;
+        }
+        acc = `${acc}\n${next}`;
+      }
+      const normalized = acc.replace(/\s+/g, " ").trim();
+      if (normalized === aggregateText) {
+        return normalized.length >= CLI_ASSISTANT_COVERED_SEGMENT_MIN_LENGTH;
+      }
+      if (normalized.length > aggregateText.length) {
+        break;
+      }
+    }
+  }
+  return false;
 }
 
 /** Merges imported CLI transcript messages into local history without duplicating overlaps. */
@@ -311,6 +330,7 @@ export function mergeImportedChatHistoryMessages(params: {
     }
   }
   let nextOrder = merged.length;
+  const acceptedImportedAssistantTexts: string[] = [];
   for (const message of params.importedMessages) {
     const externalIdentityKey = resolveImportedExternalIdentityKey(message);
     if (externalIdentityKey && exactExternalIdentityIndex.has(externalIdentityKey)) {
@@ -334,10 +354,19 @@ export function mergeImportedChatHistoryMessages(params: {
     merged.push(imported);
     indexEntry(imported);
     nextOrder += 1;
+    const importedFrom = normalizeOptionalString(
+      asOptionalRecord(asOptionalRecord(imported.message)?.["__openclaw"])?.importedFrom,
+    );
+    if (
+      imported.role === "assistant" &&
+      imported.text &&
+      imported.externalIdentityKey &&
+      importedFrom === "claude-cli"
+    ) {
+      acceptedImportedAssistantTexts.push(imported.text);
+    }
   }
-  const importedAssistantTexts = merged.flatMap((entry) =>
-    entry.role === "assistant" && entry.text && entry.externalIdentityKey ? [entry.text] : [],
-  );
+  const importedAssistantTexts = acceptedImportedAssistantTexts;
   const uncovered = merged.filter((entry) => {
     if (entry.role !== "assistant" || !readCliAssistantIdempotencyKey(entry.message)) {
       return true;

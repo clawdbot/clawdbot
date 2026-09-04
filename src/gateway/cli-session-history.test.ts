@@ -1785,6 +1785,35 @@ describe("cli session history", () => {
     },
   );
 
+  it("keeps a local cli-assistant aggregate when only the final imported segment matches", () => {
+    const timestamp = Date.parse("2026-03-26T16:29:55.700Z");
+    const interim = "Thinking about the request";
+    const finalSegment = "Here is the finished answer.";
+    const localAggregate = {
+      role: "assistant",
+      content: [{ type: "text", text: `${interim}\n${finalSegment}` }],
+      timestamp,
+      idempotencyKey: "cli-assistant:run-1",
+    };
+    const importedFinal = {
+      role: "assistant",
+      content: [{ type: "text", text: finalSegment }],
+      timestamp: timestamp + 1,
+      __openclaw: {
+        importedFrom: "claude-cli",
+        externalId: "assistant-final",
+        cliSessionId: "session-1",
+      },
+    };
+
+    const merged = mergeImportedChatHistoryMessages({
+      localMessages: [localAggregate],
+      importedMessages: [importedFinal],
+    });
+
+    expect(merged).toEqual([localAggregate, importedFinal]);
+  });
+
   it("keeps a local cli-assistant aggregate that imported segments do not cover", () => {
     const timestamp = Date.parse("2026-03-26T16:29:55.700Z");
     const localAggregate = {
