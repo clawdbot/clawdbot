@@ -217,6 +217,12 @@ struct ExecApprovalPromptLayoutTests {
         #expect(panel.frame.width <= visibleFrame.width)
         #expect(panel.frame.height <= visibleFrame.height)
 
+        let shortPanel = ExecApprovalsPromptPresenter.buildPanel(
+            ExecApprovalPromptRequest(command: "/usr/bin/printf ok", ask: "on-miss"),
+            onDecision: { _ in })
+        defer { shortPanel.close() }
+        #expect(shortPanel.frame.height < panel.frame.height)
+
         let commandView = try #require(self.descendants(of: content).compactMap { $0 as? NSTextView }.first)
         let scrollView = try #require(commandView.enclosingScrollView)
         #expect(commandView.string == ExecApprovalCommandDisplaySanitizer.sanitize(command))

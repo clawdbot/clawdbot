@@ -6,6 +6,8 @@ struct ExecApprovalPanelView: View {
     let decisions: [ExecApprovalDecision]
     let onDecision: (ExecApprovalDecision) -> Void
 
+    @State private var showingDetails = false
+
     private var command: String {
         ExecApprovalCommandDisplaySanitizer.sanitize(self.request.command)
     }
@@ -39,9 +41,20 @@ struct ExecApprovalPanelView: View {
                     .font(.system(size: 13, weight: .semibold))
                 Text("Allow this command?")
                     .font(.system(size: 23, weight: .semibold))
-                Text("Review what will run before granting permission.")
-                    .font(.callout)
-                    .foregroundStyle(.secondary)
+                let agent = ExecApprovalsPromptPresenter.sanitizedContextValue(self.request.agentId)
+                let host = ExecApprovalsPromptPresenter.sanitizedContextValue(self.request.host)
+                let summary = [
+                    agent.map { String(format: String(localized: "Agent %@"), $0) },
+                    host.map { String(format: String(localized: "Host %@"), $0) },
+                ].compactMap(\.self).joined(separator: " · ")
+                if !summary.isEmpty {
+                    Text(verbatim: summary)
+                        .font(.system(size: 12))
+                        .foregroundStyle(.secondary)
+                        .lineLimit(1)
+                        .truncationMode(.middle)
+                        .help(summary)
+                }
             }
             Spacer(minLength: 0)
         }
@@ -72,7 +85,7 @@ struct ExecApprovalPanelView: View {
             .padding(.vertical, 12)
             Divider()
             ExecApprovalCommandView(command: self.command)
-                .frame(minHeight: 100, maxHeight: .infinity)
+                .frame(minHeight: 56, maxHeight: .infinity)
         }
         .background(Color(nsColor: .textBackgroundColor))
         .clipShape(RoundedRectangle(cornerRadius: 12))
@@ -80,44 +93,48 @@ struct ExecApprovalPanelView: View {
     }
 
     private var context: some View {
-        ScrollView {
-            Grid(alignment: .leading, horizontalSpacing: 16, verticalSpacing: 10) {
-                self.detail("Run on", value: self.request.host, symbol: "desktopcomputer")
-                self.detail("Agent", value: self.request.agentId, symbol: "person.crop.circle")
-                self.detail("Directory", value: self.request.cwd, symbol: "folder")
-                self.detail(
-                    "Executable",
-                    value: self.request.resolvedPath,
-                    symbol: "chevron.left.forwardslash.chevron.right")
-                self.detail("Security", value: self.request.security, symbol: "shield")
-                self.detail("Ask mode", value: self.request.ask, symbol: "hand.raised")
-            }
-            .font(.system(size: 12))
-            .frame(maxWidth: .infinity, alignment: .leading)
-        }
-        .scrollBounceBehavior(.basedOnSize)
-        .frame(maxHeight: 170)
-    }
-
-    @ViewBuilder
-    private func detail(_ title: String, value: String?, symbol: String) -> some View {
-        if let value = ExecApprovalsPromptPresenter.sanitizedContextValue(value) {
-            GridRow(alignment: .top) {
-                Label(title, systemImage: symbol)
+        HStack(alignment: .top, spacing: 10) {
+            if let cwd = ExecApprovalsPromptPresenter.sanitizedContextValue(self.request.cwd) {
+                Image(systemName: "folder")
                     .foregroundStyle(.secondary)
-                    .fixedSize()
-                Text(value)
-                    .fontDesign(title == "Directory" || title == "Executable" ? .monospaced : .default)
-                    .textSelection(.enabled)
-                    .fixedSize(horizontal: false, vertical: true)
-                    .frame(maxWidth: .infinity, alignment: .leading)
-                    .accessibilityLabel("\(title): \(value)")
+                    .accessibilityHidden(true)
+                ScrollView {
+                    Text(verbatim: cwd)
+                        .font(.system(size: 12, design: .monospaced))
+                        .textSelection(.enabled)
+                        .frame(maxWidth: .infinity, alignment: .leading)
+                        .accessibilityLabel(Text(verbatim: String(
+                            format: String(localized: "Working directory: %@"), cwd)))
+                }
+                .scrollBounceBehavior(.basedOnSize)
+                .frame(maxHeight: 44)
+            } else {
+                Spacer(minLength: 0)
+            }
+            if let executable = ExecApprovalsPromptPresenter.sanitizedContextValue(self.request.resolvedPath) {
+                Button("Details") { self.showingDetails.toggle() }
+                    .buttonStyle(.plain)
+                    .foregroundStyle(.secondary)
+                    .popover(isPresented: self.$showingDetails) {
+                        VStack(alignment: .leading, spacing: 8) {
+                            Text("Resolved executable").font(.headline)
+                            ScrollView {
+                                Text(verbatim: executable)
+                                    .font(.system(size: 12, design: .monospaced))
+                                    .textSelection(.enabled)
+                                    .frame(maxWidth: .infinity, alignment: .leading)
+                            }
+                            .frame(width: 360, height: 60)
+                        }
+                        .padding(16)
+                    }
             }
         }
+        .font(.system(size: 12))
     }
 
     private var actions: some View {
-        VStack(alignment: .leading, spacing: 12) {
+        VStack(alignment: .leading, spacing: 0) {
             Divider()
             HStack(spacing: 10) {
                 if self.decisions.contains(.allowAlways) {
@@ -138,11 +155,14 @@ struct ExecApprovalPanelView: View {
             }
             .controlSize(.large)
             .padding(.horizontal, 24)
-            Text("Approval is required before this command can run.")
-                .font(.system(size: 11))
-                .foregroundStyle(.secondary)
-                .padding(.horizontal, 24)
-                .padding(.bottom, 18)
+            .padding(.vertical, 16)
+            if self.decisions.contains(.allowAlways) {
+                Text("Always Allow Here saves approval for future matching requests.")
+                    .font(.system(size: 11))
+                    .foregroundStyle(.secondary)
+                    .padding(.horizontal, 24)
+                    .padding(.bottom, 16)
+            }
         }
     }
 }
@@ -167,7 +187,7 @@ private struct ExecApprovalCommandView: NSViewRepresentable {
         textView.autoresizingMask = [.width]
         textView.minSize = .zero
         textView.maxSize = NSSize(width: CGFloat.greatestFiniteMagnitude, height: CGFloat.greatestFiniteMagnitude)
-        textView.setAccessibilityLabel("Command")
+        textView.setAccessibilityLabel(String(localized: "Command"))
         textView.string = self.command
 
         let scrollView = NSScrollView()

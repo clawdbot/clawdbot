@@ -141,24 +141,33 @@ enum ExecApprovalsPromptPresenter {
         onDecision: @escaping (ExecApprovalDecision?) -> Void) -> NSPanel
     {
         let screenSize = NSScreen.main?.visibleFrame.size ?? NSSize(width: 800, height: 700)
-        let size = NSSize(width: min(680, screenSize.width - 40), height: min(620, screenSize.height - 80))
+        let width = min(680, screenSize.width - 40)
+        let command = ExecApprovalCommandDisplaySanitizer.sanitize(request.command)
+        // Match the command viewer's font and horizontal insets when choosing its initial height.
+        let commandBounds = (command as NSString).boundingRect(
+            with: NSSize(width: width - 80, height: .greatestFiniteMagnitude),
+            options: [.usesLineFragmentOrigin, .usesFontLeading],
+            attributes: [.font: NSFont.monospacedSystemFont(ofSize: 13, weight: .regular)])
+        let decisions = self.allowedPromptDecisions(request)
+        let chromeHeight: CGFloat = 320 + (decisions.contains(.allowAlways) ? 30 : 0)
+        let commandHeight = min(240, max(56, ceil(commandBounds.height) + 28))
+        let size = NSSize(width: width, height: min(chromeHeight + commandHeight, screenSize.height - 80))
         let panel = ExecApprovalPanel(
             contentRect: NSRect(origin: .zero, size: size),
             styleMask: [.titled, .fullSizeContentView, .resizable],
             backing: .buffered,
             defer: false)
-        let decisions = self.allowedPromptDecisions(request)
         panel.onDismiss = { onDecision(decisions.contains(.deny) ? .deny : nil) }
         panel.level = .modalPanel
         panel.collectionBehavior = [.canJoinAllSpaces, .fullScreenAuxiliary]
-        panel.title = "OpenClaw Command Approval"
+        panel.title = String(localized: "OpenClaw Command Approval")
         panel.titleVisibility = .hidden
         panel.titlebarAppearsTransparent = true
         panel.isReleasedWhenClosed = false
         panel.isRestorable = false
         panel.hidesOnDeactivate = false
         panel.isMovableByWindowBackground = true
-        panel.contentMinSize = NSSize(width: min(560, size.width), height: min(440, size.height))
+        panel.contentMinSize = NSSize(width: min(560, size.width), height: min(chromeHeight + 56, size.height))
         for type in [NSWindow.ButtonType.closeButton, .miniaturizeButton, .zoomButton] {
             panel.standardWindowButton(type)?.isHidden = true
         }
