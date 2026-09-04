@@ -90,11 +90,19 @@ See [Release channels](/install/development-channels) for channel semantics.
 ### From chat
 
 The OpenClaw owner can say "update" (the agent uses the `gateway` action
-`update.run`) or send `/update`. The bot acknowledges, the Gateway restarts,
-and an update report arrives in the same chat. It includes the outcome, recorded
-phase durations, failed steps, verification facts, and the next action when
-needed. If the update cannot start, the bot records and explains why and provides
-the manual command when available.
+`update.run`) or send `/update`. A normal update sends four messages in that
+chat:
+
+1. An acknowledgement when the update is accepted.
+2. `⏳ Restarting the gateway now (v<from> → v<to>)…` before restart.
+3. `🔁 Back on v<to>, verifying…` when the new Gateway starts verification.
+4. The final report, including successful updates.
+
+The report includes the outcome, recorded phase durations, failed steps,
+verification facts, and the next action when needed. A run sends each notice
+at most once; an update that stops before restart sends only the notices for
+phases it reached. If the update cannot start, the bot records and explains why
+and provides the manual command when available.
 
 Chat, CLI, Control UI, and automatic updates share a durable run ID. Use
 `openclaw update status` to read the active or latest report, including after a
@@ -510,8 +518,9 @@ When `update.run` has a routable chat session, the Gateway sends an update
 acknowledgement before starting the handoff or in-process update. It waits up to
 10 seconds for delivery; a failed chat send does not block the update. The RPC
 response includes `ackDelivered` so clients can distinguish a delivered
-acknowledgement from an unavailable or failed route. A synchronous failure after
-a delivered acknowledgement sends a second notice when no restart is scheduled.
+acknowledgement from an unavailable or failed route. Restart, verification,
+and completion notices follow the durable run state, as described in
+[From chat](/install/updating#from-chat).
 
 The Control UI includes its active session in the update request. Internal/webchat
 sessions receive the outcome as a transcript message after restart; sessions with
@@ -531,6 +540,11 @@ confirmation naming the target, the installed and available versions when known,
 and the restart impact; it sends nothing until you choose **Update and restart**.
 Cancel, Escape, and dismissing the dialog leave the Gateway untouched. Automatic
 campaigns, the CLI, and `update.run` API clients are unaffected.
+
+After confirmation, the dialog shows the live phase list, step details, and
+verification results. It stays open during restart and resumes from the Gateway's
+run record after reconnecting. Success and failure both leave a final report in
+the dialog and **Settings → Updates**. See [Control UI updates](/web/control-ui#updates).
 
 In the signed macOS app, a local app-owned Gateway changes that card to
 **Update Mac app + Gateway**. Sparkle updates the app first; after relaunch, the

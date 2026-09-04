@@ -320,6 +320,30 @@ The page intentionally focuses on inventory, discovery, install, enablement,
 and removal. Use [`openclaw plugins`](/cli/plugins) for arbitrary npm, git, or
 local-path sources, updates, and advanced plugin configuration.
 
+## Updates
+
+Open **Settings → Updates** (`/settings/updates`) to check the installed version,
+update policy, and active or most recent update. **Update now** opens a
+confirmation showing the target and restart impact. Choose **Update and restart**
+to start; canceling leaves the Gateway untouched.
+
+After confirmation, one update view shows the ordered phases, current or last
+step details, and verification results for the service, version, plugins,
+channels, and inference. The details area follows new lines until you scroll up.
+The dialog stays open with **Gateway restarting…** while the connection is down.
+After reconnecting, it reads the same run from the Gateway; reloading the page
+also restores the active or latest run in Settings.
+
+Every completed run keeps a report, including success. Failed runs retain
+**Check status**, **Retry update**, and Triage recovery actions. The sidebar update
+card shows the active phase and opens the same view. A completed run can appear
+there for up to 24 hours until you acknowledge it in that browser.
+
+The report is shared with chat and the CLI. See [Updating](/install/updating)
+for installation-specific behavior and [Run history and reports](/cli/update#run-history-and-reports)
+for inspecting a run from the Gateway host. In the signed macOS app, an app-owned
+local Gateway still uses **Update Mac app + Gateway** and the native update flow.
+
 ## Apps and extensions
 
 Open **Apps** from the sidebar **More** menu, the command palette, or the
