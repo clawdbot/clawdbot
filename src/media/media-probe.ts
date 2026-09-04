@@ -150,7 +150,8 @@ function isMissingFdProtocolError(error: unknown): boolean {
   }
   const stderr = (error as { stderr?: unknown }).stderr;
   const message = typeof stderr === "string" ? stderr : error instanceof Error ? error.message : "";
-  // ffprobe < 6.1 rejects `-fd` with "Failed to set value '0' for option 'fd': Option not found".
+  // ffprobe < 6.0 (no fd: protocol, e.g. 4.4 and 5.1) rejects `-fd` with
+  // "Failed to set value '0' for option 'fd': Option not found".
   return /(?:fd:.*protocol not found|protocol not found.*fd|unrecognized option ['"]?fd|option ['"]?fd['"]?\b.*not found)/is.test(
     message,
   );
