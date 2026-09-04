@@ -41,6 +41,7 @@ import {
   recordMemorySessionTombstones,
 } from "./memory-entry-origins.js";
 import { collectTranscriptWrites } from "./memory-forget-curated-writes.js";
+import { summarizeParticipantMatches, type MemoryForgetReport } from "./memory-forget-report.js";
 import { withMemoryWorkspaceLock } from "./memory-workspace-lock.js";
 import { closeMemoryDatabase, openMemoryDatabaseAtPath } from "./memory/manager-db.js";
 import { isMemorySessionIndexable } from "./memory/manager-session-sync-state.js";
@@ -49,6 +50,7 @@ import {
   SESSION_CORPUS_RELATIVE_DIR,
   writeSessionIngestionState,
 } from "./session-ingestion.js";
+import { commitMemoryContent, hashMemoryContent } from "./short-term-promotion-memory-write.js";
 import type { ShortTermRecallEntry } from "./short-term-promotion-types.js";
 
 type ForgetDatabase = {
@@ -76,6 +78,7 @@ type MemoryRewrite = {
   relativePath: string;
   content: string;
   remove: boolean;
+  expectedContent: string;
 };
 type ForgetIndexPlan = {
   chunks: Array<ForgetDatabase["memory_index_chunks"]>;
@@ -84,38 +87,6 @@ type ForgetIndexPlan = {
   vectorRows: number;
   embeddingCacheRows: number;
   hasVectorTable: boolean;
-};
-
-export type MemoryForgetReport = {
-  agentId: string;
-  dryRun: boolean;
-  sessionIds: string[];
-  sessionResolutions: Array<{
-    sessionId: string;
-    sessionKey?: string;
-    source: "live" | "archived" | "unresolved";
-  }>;
-  entryKeys: string[];
-  mixedLineageEntryKeys: string[];
-  untargetableEntryKeys: string[];
-  curatedWrites: Array<{ relativePath: string; observedAt: number }>;
-  artifacts: {
-    memoryFiles: number;
-    memoryEntries: number;
-    memoryLines: number;
-    sessionCorpusFiles: number;
-    sessionCorpusLines: number;
-    indexChunks: number;
-    indexSources: number;
-    ftsRows: number;
-    vectorRows: number;
-    embeddingCacheRows: number;
-    shortTermEntries: number;
-    seenHashScopes: number;
-    backups: number;
-    originRows: number;
-  };
-  refusals: string[];
 };
 
 const PROMOTION_MARKER = /^\s*<!--\s*openclaw-memory-promotion:([^\n]*?)\s*-->\s*$/u;
@@ -431,6 +402,7 @@ async function forgetWorkspaceMemory(
         relativePath: path.relative(workspaceDir, absolutePath).replaceAll("\\", "/"),
         content: rewritten,
         remove: rewritten.trim().length === 0,
+        expectedContent: content,
       });
     }
   }
@@ -468,6 +440,7 @@ async function forgetWorkspaceMemory(
         relativePath: path.relative(workspaceDir, absolutePath).replaceAll("\\", "/"),
         content: scrubbed.content,
         remove: false,
+        expectedContent: content,
       });
       removedMemoryEntries += scrubbed.removedEntries;
       removedMemoryLines += scrubbed.removedLines;
@@ -586,6 +559,7 @@ async function forgetWorkspaceMemory(
     agentId: params.agentId,
     dryRun: params.dryRun === true,
     sessionIds: [...sessionIds].toSorted(),
+    participantMatches: summarizeParticipantMatches(targets, params.participants),
     sessionResolutions: targets
       .map(({ sessionId, sessionKey, resolution }) =>
         sessionKey
@@ -721,11 +695,15 @@ async function forgetWorkspaceMemory(
       });
     }
     for (const rewrite of [...memoryRewrites, ...corpusRewrites]) {
-      if (rewrite.remove) {
-        await fs.unlink(rewrite.absolutePath);
-      } else {
-        await fs.writeFile(rewrite.absolutePath, rewrite.content, "utf8");
-      }
+      await commitMemoryContent({
+        filePath: rewrite.absolutePath,
+        tempPrefix: `${path.basename(rewrite.absolutePath)}.forget`,
+        expectedHash: hashMemoryContent(rewrite.expectedContent),
+        expectedContent: rewrite.expectedContent,
+        allowInPlaceFallback: true,
+        conflictMessage: `${path.basename(rewrite.absolutePath)} changed before the memory forget rewrite could commit`,
+        content: rewrite.remove ? null : rewrite.content,
+      });
     }
     deleteMemoryEntryOrigins({ agentId: params.agentId, entryKeys: [...entryKeys] });
     return report;

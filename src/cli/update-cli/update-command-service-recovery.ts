@@ -32,6 +32,7 @@ type PostUpdateGatewayHealthRecoveryDeps = {
 };
 
 export async function recoverLaunchAgentAndRecheckGatewayHealth(params: {
+  preserveDefinition?: boolean;
   health: GatewayRestartSnapshot;
   service: GatewayService;
   port: number;
@@ -43,7 +44,7 @@ export async function recoverLaunchAgentAndRecheckGatewayHealth(params: {
   health: GatewayRestartSnapshot;
   launchAgentRecovery: PostUpdateLaunchAgentRecoveryResult | null;
 }> {
-  if (params.health.healthy) {
+  if (params.health.healthy || params.preserveDefinition) {
     return { health: params.health, launchAgentRecovery: null };
   }
 
@@ -65,6 +66,7 @@ export async function recoverLaunchAgentAndRecheckGatewayHealth(params: {
     ...(params.expectedBuildId ? { expectedBuildId: params.expectedBuildId } : {}),
     env: params.env,
     supervisorKeepsAlive: true,
+    settle: { probes: 12 },
   });
   return { health, launchAgentRecovery };
 }

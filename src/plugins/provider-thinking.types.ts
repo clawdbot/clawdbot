@@ -72,3 +72,22 @@ export type ProviderThinkingProfile = {
    */
   preserveWhenCatalogReasoningFalse?: boolean;
 };
+
+/** Prepared provider policy ownership, without the broader Gateway registry contract. */
+export type ProviderThinkingRegistry = {
+  providers: ReadonlyArray<{
+    provider: {
+      id: string;
+      aliases?: string[];
+      hookAliases?: string[];
+      resolveThinkingProfile?: (
+        context: ProviderDefaultThinkingPolicyContext,
+      ) => ProviderThinkingProfile | null | undefined;
+    };
+  }>;
+};
+
+export type ProviderThinkingPolicySource =
+  | "active"
+  | "active-or-bundled"
+  | ProviderThinkingRegistry;

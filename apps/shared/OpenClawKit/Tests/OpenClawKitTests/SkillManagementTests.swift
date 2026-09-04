@@ -70,7 +70,7 @@ struct SkillManagementTests {
         let data = Data(
             #"{"name":"pdf","description":"","source":"clawhub","filePath":"/s/pdf/SKILL.md","baseDir":"/s/pdf","skillKey":"pdf","primaryEnv":null,"emoji":null,"homepage":null,"always":false,"disabled":false,"eligible":true,"requirements":{"bins":[],"env":[],"config":[]},"missing":{"bins":[],"env":[],"config":[]},"configChecks":[],"install":[],"clawhub":{"status":"linked","valid":true,"slug":"pdf","requestedReference":"skills-sh:openai/skills/pdf","installedVersion":"0.0.0"}}"#
                 .utf8)
-        let installed = [try JSONDecoder().decode(SkillStatus.self, from: data)]
+        let installed = try [JSONDecoder().decode(SkillStatus.self, from: data)]
 
         // The canonical slug is "pdf", so matching by the sent reference is the only readback that
         // identifies this install without colliding with a registry skill of the same slug.
@@ -80,31 +80,28 @@ struct SkillManagementTests {
         let external = try JSONDecoder().decode(
             ClawHubSkillSummary.self,
             from: Data(
-                #"{"slug":"pdf","installRef":"skills-sh:openai/skills/pdf","installOnly":true,"displayName":"Pdf"}"#.utf8))
+                #"{"slug":"pdf","installRef":"skills-sh:openai/skills/pdf","installOnly":true,"displayName":"Pdf"}"#
+                    .utf8))
         #expect(SkillManagementContract.installed(installed, searchResult: external))
         #expect(!SkillManagementContract.installed(
             installed,
             requestedReference: "skills-sh:someone-else/skills/pdf"))
     }
 
-    @Test func `risk acknowledgement stays bound to reviewed version`() {
-        let matching = GatewayResponseError(
+    @Test(arguments: [
+        (Optional("  Outcome: Blocked\nAudit details.\n"), Optional("Outcome: Blocked\nAudit details.")),
+        (Optional(" \n"), nil),
+        (nil, nil),
+    ])
+    func `install rejection preserves message and optional warning`(warning: String?, expected: String?) {
+        let error = GatewayResponseError(
             method: "skills.install",
             code: "UNAVAILABLE",
-            message: "Review warning",
-            details: [
-                "clawhubTrustCode": AnyCodable("clawhub_risk_acknowledgement_required"),
-                "version": AnyCodable("2.0.0"),
-                "warning": AnyCodable("Automated analysis found risky behavior."),
-            ])
-        let accepted = SkillManagementContract.rejection(from: matching, attemptedVersion: "2.0.0")
-        #expect(accepted.requiresAcknowledgement)
-        #expect(accepted.acknowledgeVersion == "2.0.0")
-
-        let stale = SkillManagementContract.rejection(from: matching, attemptedVersion: "1.0.0")
-        #expect(!stale.requiresAcknowledgement)
-        #expect(stale.acknowledgeVersion == nil)
-        #expect(stale.message.contains("different ClawHub release"))
+            message: "Install was not started.",
+            details: warning.map { ["warning": AnyCodable($0)] } ?? [:])
+        let rejection = SkillManagementContract.rejection(from: error)
+        #expect(rejection.message == "Install was not started.")
+        #expect(rejection.warning == expected)
     }
 
     @Test func `missing requirements preserve alternatives and platforms`() throws {

@@ -2,6 +2,7 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { REALTIME_VOICE_DESCRIBE_VIEW_TOOL_NAME } from "../../../../src/talk/describe-view-tool.js";
 import { GoogleLiveRealtimeTalkTransport } from "./realtime-talk-google-live.ts";
+import { prepareRealtimeTalkTestInput } from "./realtime-talk-input.test-support.ts";
 import type { RealtimeTalkCallbacks } from "./realtime-talk-shared.ts";
 
 class FakeGoogleLiveWebSocket extends EventTarget {
@@ -58,7 +59,7 @@ class FakeAudioContext {
   async close(): Promise<void> {}
 }
 
-function createTransport(callbacks: RealtimeTalkCallbacks, videoDeviceId?: string) {
+async function createTransport(callbacks: RealtimeTalkCallbacks, videoDeviceId?: string) {
   return new GoogleLiveRealtimeTalkTransport(
     {
       provider: "google",
@@ -76,6 +77,7 @@ function createTransport(callbacks: RealtimeTalkCallbacks, videoDeviceId?: strin
       },
     },
     {
+      input: await prepareRealtimeTalkTestInput(),
       callbacks,
       client: { request: vi.fn(), addEventListener: vi.fn() } as never,
       sessionKey: "main",
@@ -125,7 +127,9 @@ describe("Google Live Video Talk", () => {
   it("streams bounded camera frames directly and answers describe_view calls", async () => {
     const audioStop = vi.fn();
     const videoStop = vi.fn();
-    const audioTrack = { stop: audioStop } as unknown as MediaStreamTrack;
+    const audioTrack = Object.assign(new EventTarget(), {
+      stop: audioStop,
+    }) as unknown as MediaStreamTrack;
     const videoTrack = Object.assign(new EventTarget(), {
       stop: videoStop,
       readyState: "live",
@@ -164,7 +168,7 @@ describe("Google Live Video Talk", () => {
       .mockReturnValue("data:image/jpeg;base64,gemini-camera-frame");
     const onStatus = vi.fn();
     const onVideoStream = vi.fn();
-    const transport = createTransport({ onStatus, onVideoStream });
+    const transport = await createTransport({ onStatus, onVideoStream });
 
     const { start, ws } = await beginTransport(transport);
     expect(getUserMedia).toHaveBeenCalledOnce();
@@ -261,7 +265,9 @@ describe("Google Live Video Talk", () => {
   });
 
   it("clears ended camera state and reacquires on the next enable", async () => {
-    const audioTrack = { stop: vi.fn() } as unknown as MediaStreamTrack;
+    const audioTrack = Object.assign(new EventTarget(), {
+      stop: vi.fn(),
+    }) as unknown as MediaStreamTrack;
     const firstVideoTrack = Object.assign(new EventTarget(), {
       stop: vi.fn(),
       readyState: "live",
@@ -294,7 +300,7 @@ describe("Google Live Video Talk", () => {
     vi.stubGlobal("navigator", { mediaDevices: { getUserMedia } });
     vi.spyOn(HTMLMediaElement.prototype, "play").mockResolvedValue(undefined);
     const onVideoStream = vi.fn();
-    const transport = createTransport({ onVideoStream });
+    const transport = await createTransport({ onVideoStream });
 
     await startTransport(transport);
     await transport.setVideoEnabled(true);
@@ -311,9 +317,10 @@ describe("Google Live Video Talk", () => {
   it("releases acquired media when stopped during the camera prompt", async () => {
     const audioStop = vi.fn();
     const videoStop = vi.fn();
+    const audioTrack = Object.assign(new EventTarget(), { stop: audioStop });
     const audio = {
-      getAudioTracks: () => [{} as MediaStreamTrack],
-      getTracks: () => [{ stop: audioStop }],
+      getAudioTracks: () => [audioTrack],
+      getTracks: () => [audioTrack],
     } as unknown as MediaStream;
     const camera = {
       getVideoTracks: () => [{} as MediaStreamTrack],
@@ -325,7 +332,7 @@ describe("Google Live Video Talk", () => {
     });
     const getUserMedia = vi.fn().mockResolvedValueOnce(audio).mockReturnValueOnce(cameraPending);
     vi.stubGlobal("navigator", { mediaDevices: { getUserMedia } });
-    const transport = createTransport({});
+    const transport = await createTransport({});
 
     await startTransport(transport);
     const enabling = transport.setVideoEnabled(true);
@@ -342,7 +349,9 @@ describe("Google Live Video Talk", () => {
   it("finishes active camera cleanup when the stream callback throws", async () => {
     const audioStop = vi.fn();
     const videoStop = vi.fn();
-    const audioTrack = { stop: audioStop } as unknown as MediaStreamTrack;
+    const audioTrack = Object.assign(new EventTarget(), {
+      stop: audioStop,
+    }) as unknown as MediaStreamTrack;
     const videoTrack = Object.assign(new EventTarget(), {
       stop: videoStop,
       readyState: "live",
@@ -368,7 +377,7 @@ describe("Google Live Video Talk", () => {
         throw new Error("stream callback failed");
       }
     });
-    const transport = createTransport({ onVideoStream });
+    const transport = await createTransport({ onVideoStream });
     const ws = await startTransport(transport);
     await transport.setVideoEnabled(true);
 
@@ -379,7 +388,9 @@ describe("Google Live Video Talk", () => {
   });
 
   it("switches an active camera and keeps video frame capture running", async () => {
-    const audioTrack = { stop: vi.fn() } as unknown as MediaStreamTrack;
+    const audioTrack = Object.assign(new EventTarget(), {
+      stop: vi.fn(),
+    }) as unknown as MediaStreamTrack;
     const frontStop = vi.fn();
     const frontTrack = Object.assign(new EventTarget(), {
       stop: frontStop,
@@ -415,7 +426,7 @@ describe("Google Live Video Talk", () => {
     vi.stubGlobal("navigator", { mediaDevices: { getUserMedia } });
     vi.spyOn(HTMLMediaElement.prototype, "play").mockResolvedValue(undefined);
     const onVideoStream = vi.fn();
-    const transport = createTransport({ onVideoStream }, "front");
+    const transport = await createTransport({ onVideoStream }, "front");
 
     await startTransport(transport);
     await transport.setVideoEnabled(true);
@@ -436,7 +447,9 @@ describe("Google Live Video Talk", () => {
   it("releases camera media when Google setup times out", async () => {
     const audioStop = vi.fn();
     const videoStop = vi.fn();
-    const audioTrack = { stop: audioStop } as unknown as MediaStreamTrack;
+    const audioTrack = Object.assign(new EventTarget(), {
+      stop: audioStop,
+    }) as unknown as MediaStreamTrack;
     const videoTrack = Object.assign(new EventTarget(), {
       stop: videoStop,
       readyState: "live",
@@ -463,9 +476,10 @@ describe("Google Live Video Talk", () => {
     });
     const onStatus = vi.fn();
     const onVideoStream = vi.fn();
-    const transport = createTransport({ onStatus, onVideoStream });
+    const transport = await createTransport({ onStatus, onVideoStream });
 
     const { start, ws } = await beginTransport(transport);
+    onStatus.mockClear();
     await transport.setVideoEnabled(true);
     ws.emitOpen();
     const rejected = expect(start).rejects.toThrow("Realtime connection timed out after 30000ms");

@@ -593,7 +593,15 @@ void refreshGateways();
 window.setInterval(() => void refreshGateways(), 2000);
 
 const mode = new URLSearchParams(window.location.search).get("mode");
-if (mode === "reconnecting") {
+if (mode === "missingCli") {
+  render({
+    description: "Install the OpenClaw CLI to connect to a local Gateway.",
+    dot: "idle",
+    eyebrow: "CLI REQUIRED",
+    showInstall: true,
+    title: "OpenClaw needs the CLI",
+  });
+} else if (mode === "reconnecting") {
   render({
     activity: "Retrying every few seconds…",
     description: "The gateway connection dropped. OpenClaw will restore the dashboard automatically.",

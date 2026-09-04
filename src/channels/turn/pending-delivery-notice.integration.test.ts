@@ -6,6 +6,8 @@ import { setReplyPayloadMetadata } from "../../auto-reply/reply-payload.js";
 import type { FinalizedMsgContext } from "../../auto-reply/templating.js";
 import { loadSessionEntry, replaceSessionEntry } from "../../config/sessions/session-accessor.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
+import { failDurableDelivery } from "../../infra/outbound/delivery-completion.js";
+import { closeOpenClawAgentDatabasesForTest } from "../../state/openclaw-agent-db.js";
 import { dispatchRoutedChannelTurn } from "./lifecycle.js";
 
 const dispatchReplyWithRoutedChannelDispatcherCore = vi.hoisted(() => vi.fn());
@@ -130,34 +132,50 @@ describe("pending delivery notice end to end", () => {
     });
   };
 
-  it("turns an injected ambiguous loss into one same-route notice", async () => {
-    const ambiguous = new Error("socket closed before response");
-    await expect(
-      runTurn(async () => {
-        throw ambiguous;
-      }),
-    ).rejects.toBe(ambiguous);
+  it.each([false, true])(
+    "keeps a settled notice final when suppression is %s",
+    async (suppressed) => {
+      sendRecoveryNotice.mockResolvedValue({ suppressed });
+      const ambiguous = new Error("socket closed before response");
+      await expect(
+        runTurn(async () => {
+          throw ambiguous;
+        }),
+      ).rejects.toBe(ambiguous);
 
-    const afterLoss = loadSessionEntry({ sessionKey, storePath });
-    expect(afterLoss?.pendingFinalDelivery?.deliveries).toEqual([
-      { id: completion.deliveryId, state: "unknown" },
-    ]);
-    expect(afterLoss?.pendingDeliveryNotice).toMatchObject({
-      intentId: completion.intentId,
-      state: "owed",
-    });
-    expect(sendRecoveryNotice).not.toHaveBeenCalled();
+      const afterLoss = loadSessionEntry({ sessionKey, storePath });
+      expect(afterLoss?.pendingFinalDelivery?.deliveries).toEqual([
+        { id: completion.deliveryId, state: "unknown" },
+      ]);
+      expect(afterLoss?.pendingDeliveryNotice).toMatchObject({
+        intentId: completion.intentId,
+        state: "owed",
+      });
+      expect(sendRecoveryNotice).not.toHaveBeenCalled();
 
-    // The next turn carries its own fresh custody; the stale intent stays put.
-    await runTurn(async () => ({ visibleReplySent: true }), { bindCustody: false });
+      // The next turn carries its own fresh custody; the stale intent stays put.
+      await runTurn(async () => ({ visibleReplySent: true }), { bindCustody: false });
 
-    expect(sendRecoveryNotice).toHaveBeenCalledExactlyOnceWith(
-      expect.objectContaining({
-        channel: "telegram",
-        to: "chat-1",
-        text: expect.stringContaining("couldn’t confirm"),
-      }),
-    );
-    expect(loadSessionEntry({ sessionKey, storePath })?.pendingDeliveryNotice).toBeUndefined();
-  });
+      expect(sendRecoveryNotice).toHaveBeenCalledExactlyOnceWith(
+        expect.objectContaining({
+          channel: "telegram",
+          to: "chat-1",
+          text: expect.stringContaining("couldn’t confirm"),
+        }),
+      );
+      expect(loadSessionEntry({ sessionKey, storePath })?.pendingDeliveryNotice?.state).toBe(
+        suppressed ? "unresolved" : "acknowledged",
+      );
+
+      // Reopen the canonical store so normalization must preserve the terminal fact.
+      closeOpenClawAgentDatabasesForTest();
+      // A queue restart can repeat owner settlement after its first write committed.
+      await failDurableDelivery({ kind: "pending-final", ...completion });
+      await runTurn(async () => ({ visibleReplySent: true }), { bindCustody: false });
+      expect(sendRecoveryNotice).toHaveBeenCalledTimes(1);
+      expect(loadSessionEntry({ sessionKey, storePath })?.pendingDeliveryNotice?.state).toBe(
+        suppressed ? "unresolved" : "acknowledged",
+      );
+    },
+  );
 });

@@ -6,11 +6,11 @@ let dashboardWindowLogger = Logger(subsystem: "ai.openclaw", category: "Dashboar
 
 enum DashboardWindowLayout {
     static let windowSize = NSSize(width: 1240, height: 860)
-    static let mainBrowserMinWidth: CGFloat = 601
+    // The dashboard can use its compact navigation below 600pt; keeping the
+    // expanded rail's width here would stop the browser near half the window.
+    static let mainBrowserMinWidth: CGFloat = 400
     static let linkBrowserMinWidth: CGFloat = 320
-    static let windowMinSize = NSSize(
-        width: DashboardWindowLayout.mainBrowserMinWidth + DashboardWindowLayout.linkBrowserMinWidth + 1,
-        height: 620)
+    static let windowMinSize = NSSize(width: 922, height: 620)
     static let linkBrowserPreferredFraction: CGFloat = 0.5
     static let linkBrowserTabBarHeight: CGFloat = 30
     static let linkBrowserToolbarHeight: CGFloat = 52
@@ -98,14 +98,4 @@ struct DashboardWindowAuth: Equatable {
         self.token?.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty == false ||
             self.password?.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty == false
     }
-}
-
-/// Dashboard URLs carry the auth token in the `#token=...` fragment; strip the
-/// fragment before logging so credentials never land in unified logs.
-func dashboardLogString(for url: URL) -> String {
-    guard var components = URLComponents(url: url, resolvingAgainstBaseURL: false) else {
-        return "<unparseable-url>"
-    }
-    components.fragment = nil
-    return components.url?.absoluteString ?? "<unparseable-url>"
 }

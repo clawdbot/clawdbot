@@ -14,15 +14,15 @@ import type { FailoverError } from "../failover-error.js";
 import { applyPluginTextReplacements } from "../plugin-text-transforms.js";
 import type { CliExecuteDeps } from "./execute-deps.js";
 import type { CliEventHandlers } from "./execute-events.js";
-import {
-  createCliAbortError,
-  executeNodeClaudeRun,
-  type resolveNodeClaudeTarget,
-} from "./execute-node-claude.js";
+import { createCliAbortError, executeNodeClaudeRun } from "./execute-node-claude.js";
 import { appendCliOutputTail } from "./execute-output-buffer.js";
 import { executePluginOwnedProcess } from "./execute-plugin.js";
 import type { CliToolTracking } from "./execute-tool-tracking.js";
-import { createCliExitFailoverError, createCliFailoverError } from "./exit-error.js";
+import {
+  createCliExitFailoverError,
+  createCliFailoverError,
+  resolveCliResumeAtError,
+} from "./exit-error.js";
 import { buildCliSupervisorScopeKey } from "./helpers.js";
 import { cliBackendLog, formatCliBackendOutputDigest } from "./log.js";
 import type { createClaudeCliModelCallDiagnostics } from "./model-call-diagnostics.js";
@@ -31,7 +31,7 @@ import {
   resolveCliNoOutputTimeoutDecision,
 } from "./no-output-timeout-policy.js";
 import { createCliOutputFailoverError } from "./output-error.js";
-import type { PreparedCliRunContext } from "./types.js";
+import type { NodeClaudePlacement, PreparedCliRunContext } from "./types.js";
 
 const CLI_RUNNER_OUTPUT_PARSE_BYTES = 1024 * 1024;
 
@@ -65,26 +65,28 @@ type ExecuteCliProcessOptions = {
 
 export async function executeCliProcess(params: {
   context: PreparedCliRunContext;
+  assertCurrent: () => void;
   backend: CliBackendConfig;
   deps: CliExecuteDeps;
   events: CliEventHandlers;
   toolTracking: CliToolTracking;
   diagnostics: ReturnType<typeof createClaudeCliModelCallDiagnostics>;
-  nodePlacement: ReturnType<typeof resolveNodeClaudeTarget>;
+  nodePlacement: NodeClaudePlacement | null;
   nodeSystemPrompt?: string;
   nodeEnv?: Record<string, string>;
   nodeClearEnv?: string[];
   useManagedClaudeLiveSession: boolean;
-  usePluginOwnedExecution: boolean;
   initialGatewayCaptureKey?: string;
   useResume: boolean;
   cliSessionIdToUse?: string;
   resolvedSessionId?: string;
   executionCommand: string;
+  executionArgv0?: string;
   executionLeadingArgv: readonly string[];
   executionArgs: string[];
   env: Record<string, string>;
   prompt: string;
+  promptContext?: PreparedCliRunContext["promptContext"];
   argsPrompt?: string;
   stdin?: string;
   noOutputTimeoutMs: number;
@@ -103,6 +105,9 @@ export async function executeCliProcess(params: {
     lane: runParams.lane,
   };
   const outputErrorContext = { ...failoverContext, runId: runParams.runId };
+  // buildCliArgs emits this option only for an actual checkpointed resume.
+  const resumeAtArg =
+    params.useResume && runParams.cliSessionResumeAt ? params.backend.resumeAtArg : undefined;
   const hasJsonlOutput = params.outputMode === "jsonl";
 
   const streamingParser = hasJsonlOutput
@@ -110,9 +115,11 @@ export async function executeCliProcess(params: {
         backend: params.backend,
         providerId: context.backendResolved.id,
         parseJsonlEvent: context.backendResolved.parseJsonlEvent,
+        parseJsonlLifecycleEvent: context.backendResolved.parseJsonlLifecycleEvent,
         onAssistantDelta: params.events.emitCliAssistantDelta,
         onThinkingDelta: params.events.emitCliThinkingDelta,
         onThinkingProgress: params.events.emitCliThinkingProgress,
+        onCompaction: params.events.emitCliCompaction,
         onToolUseStart: params.events.emitParsedToolUseStart,
         onToolResult: params.events.emitParsedToolResult,
         onDisplayToolUseStart: params.events.emitCliDisplayToolUseStart,
@@ -173,7 +180,9 @@ export async function executeCliProcess(params: {
   const pluginTimeout: { error?: FailoverError } = {};
   let terminalInterruption: CliTerminalInterruption | undefined;
   let result: RunExit;
+  runParams.assertCurrent?.();
   params.diagnostics?.observeRequestPayload(params.stdin ?? params.argsPrompt ?? "");
+  params.assertCurrent();
   if (params.nodePlacement) {
     const nodeRun = await executeNodeClaudeRun({
       context,
@@ -193,14 +202,15 @@ export async function executeCliProcess(params: {
     result = nodeRun.result;
     nodeRunAbortSignal = nodeRun.nodeRunAbortSignal;
     nodeRunTruncated = nodeRun.nodeRunTruncated;
-  } else if (params.usePluginOwnedExecution && context.preparedBackend.execute) {
+  } else if (context.executionTarget.kind === "plugin") {
     result = await executePluginOwnedProcess({
       context,
-      execute: context.preparedBackend.execute,
+      execute: context.executionTarget.execute,
       executionCommand: params.executionCommand,
       executionArgs: params.executionArgs,
       env: params.env,
       prompt: params.prompt,
+      ...(params.promptContext ? { promptContext: params.promptContext } : {}),
       useResume: params.useResume,
       forceNewSession:
         params.cliSessionIdToUse === undefined && context.openClawHistoryPrompt !== undefined,
@@ -235,6 +245,12 @@ export async function executeCliProcess(params: {
             },
           }
         : {}),
+    }).catch((error: unknown) => {
+      runParams.assertCurrent?.();
+      if (runParams.abortSignal?.aborted || params.events.hasObservedCliActivity()) {
+        throw error;
+      }
+      throw resolveCliResumeAtError(error, resumeAtArg, failoverContext) ?? error;
     });
   } else {
     const supervisor = params.deps.getProcessSupervisor();
@@ -252,6 +268,7 @@ export async function executeCliProcess(params: {
     runParams.abortSignal?.addEventListener("abort", abortManagedRun, { once: true });
     try {
       const managedRun = await supervisor.spawn({
+        assertCurrent: params.assertCurrent,
         runId: runParams.runId,
         sessionId: runParams.sessionId,
         backendId: context.backendResolved.id,
@@ -259,6 +276,7 @@ export async function executeCliProcess(params: {
         replaceExistingScope: Boolean(params.useResume && scopeKey),
         mode: "child",
         argv: [params.executionCommand, ...params.executionLeadingArgv, ...params.executionArgs],
+        argv0: params.executionArgv0,
         timeoutMs: runParams.timeoutMs,
         noOutputTimeoutMs: params.noOutputTimeoutMs,
         cwd: context.cwd ?? context.workspaceDir,
@@ -321,9 +339,9 @@ export async function executeCliProcess(params: {
     );
   }
 
-  const stdout = stdoutParseBuffer.toString("utf8").trim();
+  let stdout: string | undefined;
+  const readStdout = () => (stdout ??= stdoutParseBuffer.toString("utf8").trim());
   const stdoutDiagnostic = stdoutTail.trim();
-  const stderr = stderrParseBuffer.toString("utf8").trim();
   const stderrDiagnostic = stderrTail.trim();
   const processDiagnostics = {
     backendId: context.backendResolved.id,
@@ -360,7 +378,7 @@ export async function executeCliProcess(params: {
     streamedJsonlOutput ??
     (params.outputMode === "json" && !stdoutParseExceeded
       ? parseCliOutput({
-          raw: stdout,
+          raw: readStdout(),
           backend: params.backend,
           providerId: context.backendResolved.id,
           outputMode: params.outputMode,
@@ -451,11 +469,14 @@ export async function executeCliProcess(params: {
         "cli_overall_timeout",
       );
     }
+    const retryEmptyFailure = result.reason === "exit" && !params.events.hasObservedCliActivity();
+    const stderr = stderrParseBuffer.toString("utf8").trim();
     throw createCliExitFailoverError({
       context: failoverContext,
-      candidates: [stderr, stdout, stderrDiagnostic, stdoutDiagnostic],
+      candidates: [stderr, readStdout(), stderrDiagnostic, stdoutDiagnostic],
       fallbackMessage: "CLI failed.",
-      retryEmptyFailure: result.reason === "exit" && !params.events.hasObservedCliActivity(),
+      retryEmptyFailure,
+      resumeAtArg: retryEmptyFailure ? resumeAtArg : undefined,
     });
   }
 
@@ -473,7 +494,7 @@ export async function executeCliProcess(params: {
         `CLI backend ${context.backendResolved.id} does not support manual compaction`,
       );
     }
-    const validation = manualCompaction.validateOutput(stdout);
+    const validation = manualCompaction.validateOutput(readStdout());
     if (!validation.ok) {
       throw createCliFailoverError(validation.reason, "unknown", failoverContext);
     }
@@ -487,7 +508,7 @@ export async function executeCliProcess(params: {
   const parsed =
     parsedStructuredOutput ??
     parseCliOutput({
-      raw: stdout,
+      raw: readStdout(),
       backend: params.backend,
       providerId: context.backendResolved.id,
       outputMode: params.outputMode,

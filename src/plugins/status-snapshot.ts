@@ -16,12 +16,12 @@ import { resolveInstalledPluginIndexInstallOwner } from "./installed-plugin-inde
 import type { InstalledPluginIndex } from "./installed-plugin-index-types.js";
 import type { PluginManifestRecord } from "./manifest-registry.js";
 import type { PluginDiagnostic } from "./manifest-types.js";
+import { tracksPluginDependencyStatus } from "./official-external-plugin-repair-hints.js";
 import { tracePluginLifecyclePhase } from "./plugin-lifecycle-trace.js";
-import { resolvePluginMetadataSnapshot } from "./plugin-metadata-snapshot.js";
-import {
-  loadPluginRegistrySnapshotWithMetadata,
-  type PluginRegistrySnapshotDiagnostic,
-  type PluginRegistrySnapshotSource,
+import { loadPluginMetadataSnapshot } from "./plugin-metadata-snapshot.js";
+import type {
+  PluginRegistrySnapshotDiagnostic,
+  PluginRegistrySnapshotSource,
 } from "./plugin-registry.js";
 import { createEmptyPluginRegistry } from "./registry-empty.js";
 import type { PluginRecord, PluginRegistry } from "./registry-types.js";
@@ -78,7 +78,11 @@ export function collectPluginCapabilityConsentDiagnostics(params: {
   }
   const currentAcceptanceByOwner = new Map<string, boolean>();
   for (const plugin of params.index.plugins) {
-    if (!plugin.enabled || plugin.origin === "bundled") {
+    if (
+      !plugin.enabled ||
+      plugin.origin === "bundled" ||
+      params.manifests.get(plugin.pluginId)?.trustedOfficialInstall
+    ) {
       continue;
     }
     const installOwner = resolveInstalledPluginIndexInstallOwner(plugin);
@@ -121,6 +125,7 @@ function buildPluginRecordFromInstalledIndex(
     ...(manifest?.description ? { description: manifest.description } : {}),
     format,
     ...(bundleFormat ? { bundleFormat } : {}),
+    bundleCapabilities: manifest?.bundleCapabilities,
     ...(manifest?.kind ? { kind: manifest.kind } : {}),
     source: plugin.source ?? plugin.manifestPath,
     rootDir: plugin.rootDir,
@@ -157,14 +162,18 @@ function buildPluginRecordFromInstalledIndex(
     hookCount: 0,
     configSchema: Boolean(manifest?.configSchema),
     contracts: manifest?.contracts,
-    dependencyStatus:
-      plugin.origin === "bundled"
-        ? undefined
-        : buildPluginDependencyStatus({
-            rootDir: plugin.rootDir,
-            dependencies: manifest?.packageDependencies,
-            optionalDependencies: manifest?.packageOptionalDependencies,
-          }),
+    dependencyStatus: tracksPluginDependencyStatus({
+      origin: plugin.origin,
+      pluginId: plugin.pluginId,
+      packageName: plugin.packageName,
+      packageBuild: plugin.packageBuild,
+    })
+      ? buildPluginDependencyStatus({
+          rootDir: plugin.rootDir,
+          dependencies: manifest?.packageDependencies,
+          optionalDependencies: manifest?.packageOptionalDependencies,
+        })
+      : undefined,
   };
 }
 
@@ -179,27 +188,22 @@ export function buildPluginRegistrySnapshotReport(
     env,
     workspaceDir: params?.workspaceDir,
   });
-  const result = tracePluginLifecyclePhase(
+  // Status may reuse lifecycle metadata, but must not publish its own discovery as current.
+  const metadataSnapshot = tracePluginLifecyclePhase(
     "plugin registry snapshot",
     () =>
-      loadPluginRegistrySnapshotWithMetadata({
+      loadPluginMetadataSnapshot({
         config,
-        env: params?.env,
+        env,
         workspaceDir: workspace.workspaceDir,
       }),
     { surface: "status" },
   );
-  const metadataSnapshot = resolvePluginMetadataSnapshot({
-    index: result.snapshot,
-    config,
-    env,
-    workspaceDir: workspace.workspaceDir,
-  });
-  const manifestByPluginId = metadataSnapshot.byPluginId;
+  const { index, byPluginId: manifestByPluginId, registryDiagnostics } = metadataSnapshot;
   const diagnostics = [
-    ...result.snapshot.diagnostics,
+    ...index.diagnostics,
     ...collectPluginCapabilityConsentDiagnostics({
-      index: result.snapshot,
+      index,
       manifests: manifestByPluginId,
     }),
   ];
@@ -207,11 +211,12 @@ export function buildPluginRegistrySnapshotReport(
     workspaceDir: workspace.workspaceDir,
     workspaceScope: workspace.workspaceScope,
     ...createEmptyPluginRegistry(),
-    plugins: result.snapshot.plugins.map((plugin) =>
+    plugins: index.plugins.map((plugin) =>
       buildPluginRecordFromInstalledIndex(plugin, manifestByPluginId.get(plugin.pluginId)),
     ),
     diagnostics: appendPluginControlPlaneWorkspaceDiagnostic(diagnostics, workspace),
-    registrySource: result.source,
-    registryDiagnostics: result.diagnostics,
+    registrySource:
+      metadataSnapshot.registrySource ?? (registryDiagnostics.length > 0 ? "derived" : "provided"),
+    registryDiagnostics,
   });
 }

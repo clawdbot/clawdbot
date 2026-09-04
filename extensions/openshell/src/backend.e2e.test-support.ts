@@ -1,15 +1,60 @@
 import { spawn } from "node:child_process";
 import fs from "node:fs/promises";
 import path from "node:path";
+import { setTimeout as delay } from "node:timers/promises";
 import { expectDefined } from "@openclaw/normalization-core";
 import type { SandboxBackendHandle, SandboxFsBridge } from "openclaw/plugin-sdk/sandbox";
 import { expect } from "vitest";
+import { z } from "zod";
 
 type ExecResult = {
   code: number;
   stdout: string;
   stderr: string;
 };
+
+export function buildOpenShellPolicyYaml(params: {
+  port: number;
+  binaryPath: string;
+  hostIp?: string;
+}): string {
+  const hostIp = params.hostIp?.trim();
+  // An explicit override keeps its shipped single-/32 policy; only the default
+  // uses NVIDIA's host_gateway_alias.rs ranges across managed Docker bridges.
+  // Upstream's 172.0.0.0/8 intentionally extends beyond RFC1918.
+  const allowedIps = hostIp
+    ? [`${hostIp}/32`]
+    : ["10.0.0.0/8", "172.0.0.0/8", "192.168.0.0/16", "fc00::/7"];
+  const networkPolicies = `  host_echo:
+    name: host-echo
+    endpoints:
+      - host: host.openshell.internal
+        port: ${params.port}
+        protocol: rest
+        enforcement: enforce
+        access: full
+        allowed_ips:
+${allowedIps.map((ip) => `          - "${ip}"`).join("\n")}
+    binaries:
+      - path: ${params.binaryPath}`;
+  return `version: 1
+
+filesystem_policy:
+  include_workdir: true
+  read_only: [/usr, /lib, /proc, /dev/urandom, /app, /etc, /var/log, /opt]
+  read_write: [/sandbox, /tmp, /dev/null]
+
+landlock:
+  compatibility: best_effort
+
+process:
+  run_as_user: sandbox
+  run_as_group: sandbox
+
+network_policies:
+${networkPolicies}
+`;
+}
 
 export async function runCommand(params: {
   command: string;
@@ -74,6 +119,85 @@ export async function runCommand(params: {
   });
 }
 
+export async function cleanupOpenShellWorkspace(params: {
+  command: string;
+  env: NodeJS.ProcessEnv;
+  workspace: string;
+  sandboxNames: string[];
+}): Promise<void> {
+  const deadline = Date.now() + 2 * 60_000;
+  const remainingMs = () => {
+    const remaining = deadline - Date.now();
+    if (remaining <= 0) {
+      throw new Error("OpenShell sandbox cleanup did not complete within 120 seconds");
+    }
+    return remaining;
+  };
+  const ownedNames = new Set(params.sandboxNames);
+  const listNames = async () => {
+    const result = await runCommand({
+      command: params.command,
+      args: [
+        "--workspace",
+        params.workspace,
+        "sandbox",
+        "list",
+        "--limit",
+        String(ownedNames.size + 1),
+        "--output",
+        "json",
+      ],
+      env: params.env,
+      timeoutMs: remainingMs(),
+    });
+    remainingMs();
+    const sandboxes = z
+      .array(z.object({ name: z.string().min(1) }))
+      .parse(JSON.parse(result.stdout));
+    const names = sandboxes.map((sandbox) => sandbox.name);
+    // This isolated workspace contains only the fixture's owned sandboxes. An extra
+    // row or unexpected name must fail, never masquerade as a complete inventory.
+    if (
+      names.length > ownedNames.size ||
+      new Set(names).size !== names.length ||
+      names.some((name) => !ownedNames.has(name))
+    ) {
+      throw new Error("Unexpected sandbox inventory in OpenShell fixture workspace");
+    }
+    return names;
+  };
+  const presentNames = await listNames();
+  const failures: unknown[] = [];
+  for (const sandboxName of [...ownedNames].filter((name) => presentNames.includes(name))) {
+    try {
+      await runCommand({
+        command: params.command,
+        args: ["--workspace", params.workspace, "sandbox", "delete", sandboxName],
+        env: params.env,
+        timeoutMs: remainingMs(),
+      });
+      // OpenShell v0.0.109 acknowledges deletion before its controller removes the
+      // durable row. Observe absence before deleting the workspace; never retry errors.
+      if (failures.length === 0) {
+        while ((await listNames()).includes(sandboxName)) {
+          await delay(Math.min(250, remainingMs()));
+        }
+      }
+    } catch (error) {
+      failures.push(error);
+    }
+  }
+  if (failures.length > 0) {
+    throw new AggregateError(failures, "OpenShell sandbox cleanup failed");
+  }
+  await runCommand({
+    command: params.command,
+    args: ["workspace", "delete", params.workspace],
+    env: params.env,
+    timeoutMs: 30_000,
+  });
+}
+
 export async function runBackendExec(params: {
   backend: SandboxBackendHandle;
   command: string;
@@ -81,8 +205,13 @@ export async function runBackendExec(params: {
   allowFailure?: boolean;
   timeoutMs?: number;
 }): Promise<ExecResult> {
+  const workdir = expectDefined(
+    await params.backend.validateWorkdir?.(params.backend.workdir),
+    "OpenShell validated working directory",
+  );
   const execSpec = await params.backend.buildExecSpec({
     command: params.command,
+    workdir,
     env: params.env ?? {},
     usePty: false,
   });
@@ -116,6 +245,61 @@ export async function runPreparedBackendExec(params: {
   }
 }
 
+export async function verifyRemoteExecOverlap(params: {
+  backend: SandboxBackendHandle;
+  twin: SandboxBackendHandle;
+  bridge: SandboxFsBridge;
+}): Promise<void> {
+  const probeDir = "exec-overlap";
+  await params.bridge.mkdirp({ filePath: probeDir });
+  await runBackendExec({ backend: params.twin, command: "true", timeoutMs: 60_000 });
+  const waitingScript = `import pathlib,time
+root=pathlib.Path("exec-overlap")
+root.joinpath("ready").write_text("ready")
+deadline=time.monotonic()+30
+for name in ("command-release", "file-release"):
+    target=root.joinpath(name)
+    while not target.is_file() or target.read_text() != name:
+        if time.monotonic() >= deadline:
+            raise RuntimeError("remote execution prevented concurrent " + name)
+        time.sleep(0.05)
+print("remote-exec-overlapped-command-and-file")`;
+  const releaseScript = `import pathlib,time
+root=pathlib.Path("exec-overlap")
+deadline=time.monotonic()+30
+while not root.joinpath("ready").exists():
+    if time.monotonic() >= deadline:
+        raise RuntimeError("waiting command did not start")
+    time.sleep(0.05)
+root.joinpath("command-release").write_text("command-release")`;
+  // A process that waits for the next turn's write must not retain the runtime lease.
+  // Observe rejection immediately, but join it in finally even if the writer fails.
+  const waiting = runBackendExec({
+    backend: params.backend,
+    command: `python3 -c '${waitingScript}'`,
+    timeoutMs: 60_000,
+  });
+  const settled = Promise.allSettled([waiting]);
+  try {
+    await runBackendExec({
+      backend: params.twin,
+      command: `python3 -c '${releaseScript}'`,
+      timeoutMs: 60_000,
+    });
+    await params.bridge.writeFile({
+      filePath: `${probeDir}/file-release`,
+      data: "file-release",
+    });
+    await expect(waiting).resolves.toMatchObject({
+      code: 0,
+      stdout: "remote-exec-overlapped-command-and-file\n",
+    });
+  } finally {
+    await settled;
+    await params.bridge.remove({ filePath: probeDir, recursive: true });
+  }
+}
+
 export async function stressBackend(params: {
   backends: Array<Parameters<typeof runBackendExec>[0]["backend"]>;
   bridge: SandboxFsBridge;
@@ -137,9 +321,13 @@ export async function stressBackend(params: {
         if (slot % 2 === 0) {
           expectedIds.push(id);
           const exitCode = slot === 0 ? 23 : 0;
+          const serialMutation =
+            params.mode === "mirror"
+              ? `n=$(cat stress/count 2>/dev/null || echo 0); sleep 0.02; printf '%s\\n' "$((n + 1))" > stress/count; printf '%s\\n' '${id}' >> stress/ledger; `
+              : "";
           const result = await runBackendExec({
             backend,
-            command: `mkdir -p stress; n=$(cat stress/count 2>/dev/null || echo 0); sleep 0.02; printf '%s\\n' "$((n + 1))" > stress/count; printf '%s\\n' '${id}' >> stress/ledger; printf '%s' "$STRESS_VALUE" > 'stress/@exec-${id}'; exit ${exitCode}`,
+            command: `mkdir -p stress; ${serialMutation}printf '%s' "$STRESS_VALUE" > 'stress/@exec-${id}'; exit ${exitCode}`,
             env: { STRESS_VALUE: `value-${id}` },
             allowFailure: true,
             timeoutMs: 60_000,
@@ -201,12 +389,13 @@ export async function stressBackend(params: {
     args: [`${params.backends[0]!.workdir}/stress`],
   });
   const remoteFiles = JSON.parse(inventory.stdout.toString("utf8")) as Record<string, string>;
-  const ledger = expectDefined(remoteFiles.ledger, "OpenShell remote command ledger");
-  expect(ledger.trim().split("\n").toSorted()).toEqual(expectedIds.toSorted());
-  const expectedFiles: Record<string, string> = {
-    ledger,
-    count: `${expectedIds.length}\n`,
-  };
+  const expectedFiles: Record<string, string> = {};
+  if (params.mode === "mirror") {
+    const ledger = expectDefined(remoteFiles.ledger, "OpenShell mirror command ledger");
+    expect(ledger.trim().split("\n").toSorted()).toEqual(expectedIds.toSorted());
+    expectedFiles.ledger = ledger;
+    expectedFiles.count = `${expectedIds.length}\n`;
+  }
   for (let wave = 0; wave < waves; wave++) {
     for (let slot = 0; slot < concurrency; slot++) {
       const id = `${wave}-${slot}`;
@@ -246,7 +435,7 @@ export async function stressBackend(params: {
       elapsedMs: Date.now() - startedAt,
       p50Ms: orderedLatencies[Math.floor(latencies.length / 2)],
       p95Ms: orderedLatencies[Math.floor(latencies.length * 0.95)],
-      verifiedFiles: Object.keys(expectedFiles).length - 2,
+      verifiedFiles: Object.keys(expectedFiles).length,
     }),
   );
 }

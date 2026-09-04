@@ -51,9 +51,6 @@ const cronExternalContentRuntimeLoader = createLazyImportLoader(
 const cronAuthProfileRuntimeLoader = createLazyImportLoader(
   () => import("./run-auth-profile.runtime.js"),
 );
-const cronModelPreflightRuntimeLoader = createLazyImportLoader(
-  () => import("./model-preflight.runtime.js"),
-);
 export async function loadSessionAccessorRuntime() {
   return await sessionAccessorRuntimeLoader.load();
 }
@@ -64,10 +61,6 @@ export async function loadCronExternalContentRuntime() {
 
 async function loadCronAuthProfileRuntime() {
   return await cronAuthProfileRuntimeLoader.load();
-}
-
-export async function loadCronModelPreflightRuntime() {
-  return await cronModelPreflightRuntimeLoader.load();
 }
 
 function hasConfiguredAuthProfiles(cfg: OpenClawConfig): boolean {
@@ -87,6 +80,7 @@ export async function resolveCronAuthSelection(params: {
   cfg: OpenClawConfig;
   provider: string;
   modelId: string;
+  configuredProfileId?: string;
   harnessRuntime: Parameters<
     CronAuthProfileRuntime["resolveSessionAuthSelection"]
   >[0]["harnessRuntime"];
@@ -108,6 +102,7 @@ export async function resolveCronAuthSelection(params: {
     cfg: params.cfg,
     provider: params.provider,
     modelId: params.modelId,
+    ...(params.configuredProfileId ? { configuredProfileId: params.configuredProfileId } : {}),
     harnessRuntime: params.harnessRuntime,
     agentDir: params.agentDir,
     sessionEntry: params.cronSession.sessionEntry,

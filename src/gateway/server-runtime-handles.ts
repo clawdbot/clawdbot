@@ -21,6 +21,7 @@ export type GatewayConfigReloaderHandle = {
   stop: () => Promise<void>;
   hotReloadStatus?: () => GatewayHotReloadStatus;
   notifyPluginMetadataChanged: () => void;
+  isConfigReloadSettled: () => boolean;
 };
 
 /** Mutable handles owned by a running gateway server process. */
@@ -30,7 +31,7 @@ export type GatewayServerMutableState = {
   stopMediaCleanup: () => Promise<MediaCleanupStopResult>;
   heartbeatRunner: HeartbeatRunner;
   stopOutboundDeliveryRecovery: () => Promise<void>;
-  stopGatewayUpdateCheck: () => void;
+  stopGatewayUpdateCheck: () => Promise<void>;
   tailscaleCleanup: (() => Promise<void>) | null;
   postReadySidecars: GatewayPostReadySidecarHandle[];
   gatewayLifetimeSidecars: GatewayPostReadySidecarHandle[];
@@ -54,7 +55,7 @@ export function createGatewayServerMutableState(): GatewayServerMutableState {
     stopMediaCleanup: () => waitForMediaCleanupDrains({ timeoutMs: MEDIA_CLEANUP_STOP_TIMEOUT_MS }),
     heartbeatRunner: createNoopHeartbeatRunner(),
     stopOutboundDeliveryRecovery: async () => {},
-    stopGatewayUpdateCheck: () => {},
+    stopGatewayUpdateCheck: async () => {},
     tailscaleCleanup: null as (() => Promise<void>) | null,
     postReadySidecars: [],
     gatewayLifetimeSidecars: [],
@@ -65,6 +66,7 @@ export function createGatewayServerMutableState(): GatewayServerMutableState {
     configReloader: {
       stop: async () => {},
       notifyPluginMetadataChanged: () => {},
+      isConfigReloadSettled: () => false,
     } satisfies GatewayConfigReloaderHandle,
     agentUnsub: null as (() => Promise<void> | void) | null,
     heartbeatUnsub: null as (() => void) | null,

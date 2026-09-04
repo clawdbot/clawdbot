@@ -51,8 +51,10 @@ vi.mock("./attempt-prompt-build.js", () => ({
 }));
 vi.mock("./attempt-prompt-submit.js", () => ({
   handleEmbeddedAttemptPromptError: mocks.handlePromptError,
-  prepareEmbeddedAttemptPromptExecution: mocks.preparePromptExecution,
   submitEmbeddedAttemptPrompt: mocks.submitPrompt,
+}));
+vi.mock("./prompt-image-preparation.js", () => ({
+  prepareEmbeddedAttemptPromptExecution: mocks.preparePromptExecution,
 }));
 vi.mock("./attempt-prompt-preflight.js", () => ({
   handleEmbeddedAttemptMidTurnPrecheck: mocks.handleMidTurnPrecheck,
@@ -252,14 +254,21 @@ function createFixture() {
       uncompactedEffectiveTools: [],
     },
     toolPolicy: {
-      baseline: { activeToolNames: ["read"], catalogEntries: [] },
-      effectiveTools: [{ name: "read" }],
-      uncompactedEffectiveTools: [{ name: "read" }],
-      tools: [{ name: "read" }],
-      codeModeControlsEnabled: false,
-      coreReadAuthorized: true,
+      current: {
+        activeToolNames: ["read"],
+        effectiveTools: [{ name: "read" }],
+        uncompactedEffectiveTools: [{ name: "read" }],
+        tools: [{ name: "read" }],
+        coreReadAuthorized: true,
+      },
+      apply(toolsAllow: string[] | undefined) {
+        Object.assign(this.current, mocks.applyPromptToolsAllow({ toolsAllow }));
+        return this.current;
+      },
+      refresh: vi.fn(),
     },
     preflight: {
+      compactionReplayEnabled: false,
       contextEngineAssemblySucceeded: false,
       contextEnginePromptAuthority: "assembled",
       includeBoundaryTimestamp: false,

@@ -38,12 +38,12 @@ mkdir -p "$install_dir"
 
 install_archive \
   swiftformat \
-  "https://github.com/nicklockwood/SwiftFormat/releases/download/0.62.1/swiftformat.zip" \
-  "7cb1cb1fae04932047c7015441c543848e8e60e1572d808d080e0a1f1661114a"
+  "https://github.com/nicklockwood/SwiftFormat/releases/download/0.63.0/swiftformat.zip" \
+  "28c7802e11fa5ae113d903066439c6bb1be20a8ac1ad9709c42616a7e273fb0f"
 install_archive \
   swiftlint \
-  "https://github.com/realm/SwiftLint/releases/download/0.65.0/portable_swiftlint.zip" \
-  "d6cb0aa7a2f5f1ef306fc9e37bcb54dc9a26facc8f7784ac0c3dd3eccf5c6ba6"
+  "https://github.com/realm/SwiftLint/releases/download/0.65.1/portable_swiftlint.zip" \
+  "c1e429b0599cf1b516f369a2d9ec04eaf0e436f3c12b637df8851fa52ff694d0"
 
-[[ "$($install_dir/swiftformat --version)" == "0.62.1" ]]
-[[ "$($install_dir/swiftlint version)" == "0.65.0" ]]
+[[ "$($install_dir/swiftformat --version)" == "0.63.0" ]]
+[[ "$($install_dir/swiftlint version)" == "0.65.1" ]]

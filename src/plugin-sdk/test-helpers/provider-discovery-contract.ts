@@ -138,15 +138,9 @@ function providerModelIds(provider: Record<string, unknown>): Array<unknown> {
 function installDiscoveryHooks(state: DiscoveryState, options: DiscoveryContractOptions) {
   beforeAll(async () => {
     vi.resetModules();
-    vi.doMock("openclaw/plugin-sdk/agent-runtime", async (importOriginal) => {
-      const actual = await importOriginal<typeof import("../agent-runtime.js")>();
-      return {
-        ...actual,
-        ensureAuthProfileStore: ensureAuthProfileStoreMock,
-        listProfilesForProvider: listProfilesForProviderMock,
-      };
-    });
-    vi.doMock("openclaw/plugin-sdk/provider-auth", () => {
+    vi.doMock("openclaw/plugin-sdk/provider-auth", async (importOriginal) => {
+      const { findNormalizedProviderValue, resolveAuthProfileOrder } =
+        await importOriginal<typeof import("../provider-auth.js")>();
       return {
         DEFAULT_COPILOT_API_BASE_URL: "https://api.individual.githubcopilot.com",
         MINIMAX_OAUTH_MARKER: "minimax-oauth",
@@ -169,6 +163,7 @@ function installDiscoveryHooks(state: DiscoveryState, options: DiscoveryContract
         coerceSecretRef: asNullableRecord,
         ensureApiKeyFromOptionEnvOrPrompt: vi.fn(),
         ensureAuthProfileStore: ensureAuthProfileStoreMock,
+        findNormalizedProviderValue,
         listProfilesForProvider: listProfilesForProviderMock,
         normalizeApiKeyInput: (value: unknown) => (typeof value === "string" ? value.trim() : ""),
         normalizeGithubCopilotDomain: (raw: unknown) => {
@@ -178,6 +173,7 @@ function installDiscoveryHooks(state: DiscoveryState, options: DiscoveryContract
             : "github.com";
         },
         normalizeOptionalSecretInput: normalizeOptionalString,
+        resolveAuthProfileOrder,
         resolveNonEnvSecretRefApiKeyMarker: (source: unknown) =>
           typeof source === "string" ? source : "",
         upsertAuthProfile: vi.fn(),

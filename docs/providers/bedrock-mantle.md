@@ -139,10 +139,11 @@ If you prefer explicit config instead of auto-discovery:
 }
 ```
 
-An explicit non-empty `models` list is authoritative and replaces every
-discovered row, including the Claude rows below. Omit `models` to retain the
-automatic Mantle catalog, or include the complete Claude model entries you
-want to use.
+An explicit non-empty `models` list controls membership and replaces discovered
+rows, including the Claude rows below. For matching rows, an explicit `input`
+wins; when the source row omits `input`, discovery can fill that capability
+metadata. Omit `models` to retain the automatic Mantle catalog, or include the
+complete Claude model entries you want to use.
 
 ## Advanced configuration
 
@@ -198,8 +199,9 @@ want to use.
     Preview accepts a `temperature` override normally.
 
     A non-empty explicit `models.providers["amazon-bedrock-mantle"].models`
-    list replaces the complete discovered catalog. Omit that list when you
-    want these built-in Claude rows.
+    list controls membership and replaces the complete discovered catalog.
+    Matching rows can inherit discovered `input` capability only when the source
+    row omitted it. Omit the list when you want these built-in Claude rows.
 
   </Accordion>
 

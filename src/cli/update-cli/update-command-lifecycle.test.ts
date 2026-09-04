@@ -37,12 +37,6 @@ function record(name: string): void {
   mocks.events.push(`${name}:${mocks.leaseActive}`);
 }
 
-vi.mock("../../commands/doctor.js", () => ({
-  doctorCommand: vi.fn(async () => {
-    record("doctor");
-  }),
-}));
-
 vi.mock("../../config/config.js", async (importOriginal) => ({
   ...(await importOriginal<typeof import("../../config/config.js")>()),
   assertConfigWriteAllowedInCurrentMode: vi.fn(),
@@ -92,11 +86,14 @@ vi.mock("./shared.js", async (importOriginal) => ({
   tryWriteCompletionCache: vi.fn(async () => "completed"),
 }));
 
-vi.mock("./update-command-config.js", async (importOriginal) => ({
-  ...(await importOriginal<typeof import("./update-command-config.js")>()),
+vi.mock("./update-command-config-snapshot.js", () => ({
   createUpdateConfigSnapshot: vi.fn(async () => {
     record("config-snapshot");
   }),
+}));
+
+vi.mock("./update-command-config.js", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("./update-command-config.js")>()),
   persistRequestedUpdateChannel: vi.fn(async (params: { configSnapshot: unknown }) => {
     record("persist-channel");
     return params.configSnapshot;
@@ -207,8 +204,8 @@ describe("update plugin lifecycle lease boundaries", () => {
       yes: true,
     });
 
-    expectLifecycleBoundary("doctor");
-    const doctorIndex = mocks.events.indexOf("doctor:false");
+    expectLifecycleBoundary("fresh-doctor");
+    const doctorIndex = mocks.events.indexOf("fresh-doctor:false");
     expect(mocks.events.slice(0, doctorIndex)).toContain("read-config:true");
     expect(mocks.events).not.toContain("persisted-index:true");
   });

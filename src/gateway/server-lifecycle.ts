@@ -1,4 +1,4 @@
-import { resolveActiveEmbeddedRunSessionId } from "../agents/embedded-agent-runner/run-state.js";
+import { resolveActiveEmbeddedRunSessionId } from "../agents/embedded-agent-runner/active-run-projections.js";
 import { fenceSessionSuspensionWritesForGatewayShutdown } from "../agents/session-suspension.js";
 import { getTotalPendingReplies } from "../auto-reply/reply/dispatcher-registry.js";
 import { listLoadedChannelPlugins } from "../channels/plugins/registry-loaded.js";
@@ -7,7 +7,6 @@ import { getRuntimeConfig } from "../config/io.js";
 import { upsertPresence } from "../infra/system-presence.js";
 import { startDiagnosticHeartbeat, stopDiagnosticHeartbeat } from "../logging/diagnostic.js";
 import type { createSubsystemLogger } from "../logging/subsystem.js";
-import { clearPluginMetadataLifecycleCaches } from "../plugins/plugin-metadata-lifecycle.js";
 import { clearSecretsRuntimeSnapshotState } from "../secrets/runtime-state.js";
 import {
   recordRemoteNodeInfo,
@@ -46,6 +45,7 @@ type GatewayLogger = ReturnType<typeof createSubsystemLogger>;
 
 export async function prepareGatewayLifecycle(params: {
   runtime: GatewayRuntimePreparation;
+  releasePluginMetadata: () => void;
   port: number;
   log: GatewayLogger;
   logCron: GatewayLogger;
@@ -59,6 +59,7 @@ export async function prepareGatewayLifecycle(params: {
     sessionMessageSubscribers,
     isConnectionActive,
     clients,
+    mentionInbox,
     broadcast,
     cfgAtStart,
     pluginRuntime,
@@ -87,7 +88,6 @@ export async function prepareGatewayLifecycle(params: {
     activeTaskCount,
     desktopSessionRegistry,
     nodeDesktopStreamBroker,
-    nodeDesktopObserveAvailable,
     bindDeviceNodeControl,
     bindWorkerNodeDesktopControl,
     workerPlacementRuntime,
@@ -122,8 +122,7 @@ export async function prepareGatewayLifecycle(params: {
     sessionEventSubscribers,
     sessionMessageSubscribers,
     listRegisteredNodePluginToolCommands: () => pluginRuntime.registry.nodeHostCommands,
-    nodePluginToolsEnabled: cfgAtStart.gateway?.nodes?.pluginTools?.enabled !== false,
-    nodeSkillsEnabled: cfgAtStart.gateway?.nodes?.allowSkills !== false,
+    getConfig: getRuntimeConfig,
     onRunnerStateChanged: (nodeId, change) => {
       if (change.availabilityChanged) {
         workerPlacementRuntime?.runnerAvailability.markChanged();
@@ -142,15 +141,12 @@ export async function prepareGatewayLifecycle(params: {
       void nodeDesktopServiceRef.current?.stopNode(nodeId);
     },
   });
-  const nodeDesktopService =
-    nodeDesktopObserveAvailable && desktopSessionRegistry && nodeDesktopStreamBroker
-      ? (await import("./desktop/node-source.js")).createNodeDesktopService({
-          getConfig: getRuntimeConfig,
-          nodeRegistry,
-          desktopRegistry: desktopSessionRegistry,
-          streamBroker: nodeDesktopStreamBroker,
-        })
-      : undefined;
+  const nodeDesktopService = (await import("./desktop/node-source.js")).createNodeDesktopService({
+    getConfig: getRuntimeConfig,
+    nodeRegistry,
+    desktopRegistry: desktopSessionRegistry,
+    streamBroker: nodeDesktopStreamBroker,
+  });
   nodeDesktopServiceRef.current = nodeDesktopService;
   bindDeviceNodeControl?.(nodeWorkerSupervisorTransport);
   bindWorkerNodeDesktopControl?.(nodeWorkerSupervisorTransport);
@@ -288,7 +284,6 @@ export async function prepareGatewayLifecycle(params: {
       hookClientIpConfig: runtimeState.hookClientIpConfig,
       heartbeatRunner: runtimeState.heartbeatRunner,
       cronState: runtimeState.cronState,
-      channelHealthMonitor: runtimeState.channelHealthMonitor,
     }),
     setReloadHookState: (next: {
       hooksConfig: typeof runtimeState.hooksConfig;
@@ -390,13 +385,14 @@ export async function prepareGatewayLifecycle(params: {
       return;
     }
     lifecycle.closePreludeStarted = true;
+    mentionInbox.dispose();
     postReadySidecarStopOwner.beginClose();
     gatewayLifetimeSidecarStopOwner.beginClose();
     // Fence background owners before any awaited close step can tear down the
     // plugin/channel or shared-state runtime they still need.
     void stopOutboundDeliveryRecoveryForClose();
     void stopMediaCleanupForClose();
-    runtimeState.stopGatewayUpdateCheck();
+    void runtimeState.stopGatewayUpdateCheck().catch(() => {});
     runtimeState.controlUiSessionPullRequests?.stop();
     runtimeState.sessionViewerPresence?.stop();
     kernel.setDispatchReady(false);
@@ -419,6 +415,7 @@ export async function prepareGatewayLifecycle(params: {
     await Promise.all([
       stopOutboundDeliveryRecoveryForClose(),
       stopMediaCleanupForClose(),
+      runtimeState.stopGatewayUpdateCheck(),
       stopConfigReloaderForClose().catch(() => {}),
     ]);
   };
@@ -426,7 +423,6 @@ export async function prepareGatewayLifecycle(params: {
     await beginClosePrelude();
     disposeNodeConnectionNotifications(nodeRegistry);
     watchNodeHttpRuntime.close();
-    clearPluginMetadataLifecycleCaches();
     await shutdownRuntime.runGatewayClosePrelude({
       ...(diagnosticsEnabled ? { stopDiagnostics: stopDiagnosticHeartbeat } : {}),
       clearSkillsRefreshTimer: () => {
@@ -489,61 +485,66 @@ export async function prepareGatewayLifecycle(params: {
     }
   };
   const createCloseHandler = () => async (optsValue?: GatewayCloseOptions) => {
-    markClosePreludeStarted();
-    const channelIds = listLoadedChannelPlugins().map((plugin) => plugin.id as ChannelId);
-    const transport = transportBridge.current();
-    await transport?.portalService.closeAll();
-    await shutdownRuntime.createGatewayCloseHandler({
-      bonjourStop: kernel.swapBonjourStop(null),
-      tailscaleCleanup: runtimeState.tailscaleCleanup,
-      clearSecretsRuntimeSnapshot: clearSecretsRuntimeSnapshotState,
-      channelIds,
-      stopChannel,
-      pluginServices: runtimeState.pluginServices,
-      cron: runtimeState.cronState.cron,
-      heartbeatRunner: runtimeState.heartbeatRunner,
-      updateCheckStop: runtimeState.stopGatewayUpdateCheck,
-      stopTaskRegistryMaintenance: shutdownRuntime.stopTaskRegistryMaintenance,
-      nodePresenceTimers,
-      broadcast,
-      maintenance: runtimeState.maintenance,
-      stopMediaCleanup: stopMediaCleanupForClose,
-      agentUnsub: runtimeState.agentUnsub,
-      heartbeatUnsub: runtimeState.heartbeatUnsub,
-      transcriptUnsub: runtimeState.transcriptUnsub,
-      lifecycleUnsub: runtimeState.lifecycleUnsub,
-      taskUnsub: runtimeState.taskUnsub,
-      chatRunState,
-      chatAbortControllers,
-      chatQueuedTurns,
-      restartRecoveryCandidates,
-      removeChatRun,
-      agentRunSeq,
-      nodeSendToSession,
-      resolveActiveSessionIdForKey: resolveActiveEmbeddedRunSessionId,
-      markMainSessionsAbortedForRestart: async (restart) => {
-        await shutdownRuntime.markRestartAbortedMainSessions({
-          cfg: getRuntimeConfig(),
-          ...restart,
-        });
-      },
-      getPendingReplyCount: getTotalPendingReplies,
-      clients,
-      configReloader: { stop: stopConfigReloaderForClose },
-      ...(transport
-        ? {
-            wss: transport.wss,
-            httpServer: transport.httpServer,
-            httpServers: transport.httpServers,
-          }
-        : {}),
-      drainActiveSessionsForShutdown: shutdownRuntime.drainActiveSessionsForShutdown,
-      disposeAllBundleLspRuntimes: shutdownRuntime.disposeAllBundleLspRuntimes,
-      drainRetainedOpenAiEmbeddingProviders: shutdownRuntime.drainRetainedOpenAiEmbeddingProviders,
-      stopGmailWatcher: shutdownRuntime.stopGmailWatcher,
-      disposeAllCodeModeRuns: shutdownRuntime.disposeAllCodeModeRuns,
-      closeProviderTransportDispatcherPool: shutdownRuntime.closeProviderTransportDispatcherPool,
-    })(optsValue);
+    try {
+      markClosePreludeStarted();
+      const channelIds = listLoadedChannelPlugins().map((plugin) => plugin.id as ChannelId);
+      const transport = transportBridge.current();
+      await transport?.portalService.closeAll();
+      await shutdownRuntime.createGatewayCloseHandler({
+        bonjourStop: kernel.swapBonjourStop(null),
+        tailscaleCleanup: runtimeState.tailscaleCleanup,
+        clearSecretsRuntimeSnapshot: clearSecretsRuntimeSnapshotState,
+        channelIds,
+        stopChannel,
+        pluginServices: runtimeState.pluginServices,
+        cron: runtimeState.cronState.cron,
+        heartbeatRunner: runtimeState.heartbeatRunner,
+        updateCheckStop: runtimeState.stopGatewayUpdateCheck,
+        stopTaskRegistryMaintenance: shutdownRuntime.stopTaskRegistryMaintenance,
+        nodePresenceTimers,
+        broadcast,
+        maintenance: runtimeState.maintenance,
+        stopMediaCleanup: stopMediaCleanupForClose,
+        agentUnsub: runtimeState.agentUnsub,
+        heartbeatUnsub: runtimeState.heartbeatUnsub,
+        transcriptUnsub: runtimeState.transcriptUnsub,
+        lifecycleUnsub: runtimeState.lifecycleUnsub,
+        taskUnsub: runtimeState.taskUnsub,
+        chatRunState,
+        chatAbortControllers,
+        chatQueuedTurns,
+        restartRecoveryCandidates,
+        removeChatRun,
+        agentRunSeq,
+        nodeSendToSession,
+        resolveActiveSessionIdForKey: resolveActiveEmbeddedRunSessionId,
+        markMainSessionsAbortedForRestart: async (restart) => {
+          await shutdownRuntime.markRestartAbortedMainSessions({
+            cfg: getRuntimeConfig(),
+            ...restart,
+          });
+        },
+        getPendingReplyCount: getTotalPendingReplies,
+        clients,
+        configReloader: { stop: stopConfigReloaderForClose },
+        ...(transport
+          ? {
+              wss: transport.wss,
+              httpServer: transport.httpServer,
+              httpServers: transport.httpServers,
+            }
+          : {}),
+        drainActiveSessionsForShutdown: shutdownRuntime.drainActiveSessionsForShutdown,
+        disposeAllBundleLspRuntimes: shutdownRuntime.disposeAllBundleLspRuntimes,
+        drainRetainedOpenAiEmbeddingProviders:
+          shutdownRuntime.drainRetainedOpenAiEmbeddingProviders,
+        stopGmailWatcher: shutdownRuntime.stopGmailWatcher,
+        disposeAllCodeModeRuns: shutdownRuntime.disposeAllCodeModeRuns,
+        closeProviderTransportDispatcherPool: shutdownRuntime.closeProviderTransportDispatcherPool,
+      })(optsValue);
+    } finally {
+      params.releasePluginMetadata();
+    }
   };
   const closeOnStartupFailure = async () => {
     await runGatewayShutdownSteps({

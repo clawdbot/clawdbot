@@ -76,6 +76,9 @@ function createWizardAccountScope(params: {
       ...cfg.channels,
       [params.channelKey]: {
         ...channel,
+        // Legacy callbacks use this map to choose account-scoped writes even
+        // when there were no root values to promote into a default account.
+        accounts: channel.accounts ?? {},
         defaultAccount: accountId,
       },
     },

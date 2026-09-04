@@ -431,10 +431,10 @@ class MainViewModelTest {
 
   private fun assertNodeServiceStopRequested() {
     val app = RuntimeEnvironment.getApplication()
-    val intent: Intent? = shadowOf(app).nextStartedService
+    val intent: Intent? = shadowOf(app).nextStoppedService
     assertNotNull(intent)
     assertEquals(NodeForegroundService::class.java.name, intent?.component?.className)
-    assertEquals("ai.openclaw.app.action.STOP", intent?.action)
+    assertNull(shadowOf(app).nextStartedService)
   }
 
   private fun assertNodeServiceResumeRequested() {

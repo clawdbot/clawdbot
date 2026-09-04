@@ -732,15 +732,12 @@ describe("parseMessageWithAttachments validation errors", () => {
 
   it("caps text-only image offloads", async () => {
     const logs: string[] = [];
-    const attachments = Array.from(
-      { length: 11 },
-      (_, index): ChatAttachment => ({
-        type: "image",
-        mimeType: "image/png",
-        fileName: `dot-${index}.png`,
-        content: PNG_1x1,
-      }),
-    );
+    const attachments = Array.from({ length: 11 }, (_, index): ChatAttachment => ({
+      type: "image",
+      mimeType: "image/png",
+      fileName: `dot-${index}.png`,
+      content: PNG_1x1,
+    }));
     const parsed = await parseTextOnlyAttachments("see these", attachments, logs);
 
     try {

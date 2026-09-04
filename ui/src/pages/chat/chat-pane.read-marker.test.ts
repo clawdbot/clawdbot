@@ -3,15 +3,14 @@
 import { describe, expect, it, vi } from "vitest";
 import type { GatewayBrowserClient } from "../../api/gateway.ts";
 import type { ApplicationGatewaySnapshot } from "../../app/gateway.ts";
-import type { SessionCapability } from "../../lib/sessions/index.ts";
-import { createTestChatPane } from "./chat-pane.test-support.ts";
+import { createSessionCapabilityFixture, createTestChatPane } from "./chat-pane.test-support.ts";
 
 describe("chat pane read markers", () => {
   it("marks an unread failure read even when its regular unread flag is false", () => {
     const patch = vi.fn().mockResolvedValue(null);
     const { pane } = createTestChatPane({
       client: {} as GatewayBrowserClient,
-      sessions: { patch } as unknown as SessionCapability,
+      sessions: createSessionCapabilityFixture({ patch }),
     });
 
     pane.markSessionRead({
@@ -35,7 +34,7 @@ describe("chat pane read markers", () => {
     const patch = vi.fn().mockResolvedValue(null);
     const { pane } = createTestChatPane({
       client: {} as GatewayBrowserClient,
-      sessions: { patch } as unknown as SessionCapability,
+      sessions: createSessionCapabilityFixture({ patch }),
     });
 
     pane.markSessionRead({
@@ -69,7 +68,7 @@ describe("chat pane read markers", () => {
     const patch = vi.fn().mockResolvedValue(null);
     const { pane, state } = createTestChatPane({
       client: {} as GatewayBrowserClient,
-      sessions: { patch } as unknown as SessionCapability,
+      sessions: createSessionCapabilityFixture({ patch }),
     });
     pane.context.gateway.snapshot.hello = {
       auth: { role: "operator", scopes },
@@ -97,7 +96,7 @@ describe("chat pane read markers", () => {
     const patch = vi.fn().mockResolvedValue(null);
     const { pane } = createTestChatPane({
       client: {} as GatewayBrowserClient,
-      sessions: { patch } as unknown as SessionCapability,
+      sessions: createSessionCapabilityFixture({ patch }),
     });
     const row = {
       key: "agent:main:current",
@@ -118,7 +117,7 @@ describe("chat pane read markers", () => {
     const patch = vi.fn().mockResolvedValue(null);
     const { pane } = createTestChatPane({
       client: {} as GatewayBrowserClient,
-      sessions: { patch } as unknown as SessionCapability,
+      sessions: createSessionCapabilityFixture({ patch }),
     });
     const sessionsState = (presented: boolean) => {
       pane.presented = presented;
@@ -158,7 +157,7 @@ describe("chat pane read markers", () => {
     const patch = vi.fn().mockResolvedValue(null);
     const { pane } = createTestChatPane({
       client: {} as GatewayBrowserClient,
-      sessions: { patch } as unknown as SessionCapability,
+      sessions: createSessionCapabilityFixture({ patch }),
     });
 
     pane.markSessionRead({
@@ -182,7 +181,7 @@ describe("chat pane read markers", () => {
     const patch = vi.fn().mockResolvedValue({});
     const { pane } = createTestChatPane({
       client: {} as GatewayBrowserClient,
-      sessions: { patch } as unknown as SessionCapability,
+      sessions: createSessionCapabilityFixture({ patch }),
     });
     const row = {
       key: "agent:main:current",

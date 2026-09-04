@@ -2154,7 +2154,7 @@ describe("launchd install", () => {
     const apiKey = "secret-api-key";
     await installLaunchAgent(
       defaultLaunchAgentFixture(env, {
-        environment: { TMPDIR: tmpDir, OPENAI_API_KEY: apiKey },
+        environment: { TMPDIR: tmpDir, OPENAI_API_KEY: apiKey, NODE_OPTIONS: "", UNUSED: "" },
       }),
     );
 
@@ -2173,6 +2173,8 @@ describe("launchd install", () => {
     const envFile = state.files.get(envFilePath) ?? "";
     expect(envFile).toContain(`export TMPDIR='${tmpDir}'`);
     expect(envFile).toContain(`export OPENAI_API_KEY='${apiKey}'`);
+    expect(envFile).toContain("export NODE_OPTIONS=''");
+    expect(envFile).not.toContain("UNUSED");
     expect(state.fileModes.get(envFilePath)).toBe(0o600);
     expect(state.fileModes.get(wrapperPath)).toBe(0o700);
     expect(state.dirModes.get("/Users/test/.openclaw/service-env")).toBe(0o700);
@@ -2181,6 +2183,7 @@ describe("launchd install", () => {
     expect(command?.programArguments).toEqual(defaultProgramArguments);
     expect(command?.environment?.TMPDIR).toBe(tmpDir);
     expect(command?.environment?.OPENAI_API_KEY).toBe(apiKey);
+    expect(command?.environment?.NODE_OPTIONS).toBe("");
     expect(command?.environmentValueSources?.TMPDIR).toBe("file");
     expect(command?.environmentValueSources?.OPENAI_API_KEY).toBe("file");
   });
@@ -3102,8 +3105,13 @@ describe("launchd install", () => {
       ["enable", serviceId],
       ["kickstart", serviceId],
       ["bootstrap", domain, resolveLaunchAgentPlistPath(env)],
+      ["kickstart", serviceId],
     ]);
-    expect(onMutation.mock.calls).toEqual([[{ mode: "enable" }], [{ mode: "bootstrap" }]]);
+    expect(onMutation.mock.calls).toEqual([
+      [{ mode: "enable" }],
+      [{ mode: "bootstrap" }],
+      [{ mode: "kickstart" }],
+    ]);
   });
 
   it("fails an already-loaded bootstrap immediately instead of waiting out the teardown deadline", async () => {

@@ -1,10 +1,11 @@
-import { mkdir, readFile } from "node:fs/promises";
+import { readFile } from "node:fs/promises";
 import path from "node:path";
 import { expect, it } from "vitest";
 import {
   chatSessionListResponse,
   captureUiProofEnabled,
   createChatFlowE2eSuite,
+  controlUiSessionUrl,
   installMockGateway,
 } from "./chat-flow.test-support.ts";
 
@@ -52,7 +53,7 @@ suite.define(() => {
         });
 
         try {
-          await page.goto(`${suite.server.baseUrl}chat`);
+          await page.goto(controlUiSessionUrl(suite.server.baseUrl, "agent:main:session-a"));
           const header = page.locator(".chat-pane__header").first();
           await header.waitFor();
           await header.locator(".workspace-icon").waitFor();
@@ -242,20 +243,15 @@ suite.define(() => {
     });
 
     try {
-      await page.goto(`${suite.server.baseUrl}chat`);
+      await page.goto(controlUiSessionUrl(suite.server.baseUrl, "agent:main:session-a"));
       const icon = page.locator(".chat-pane__header openclaw-workspace-icon").first();
       await icon.waitFor();
       await icon.locator("svg").waitFor();
       await icon.evaluate((element) => element.setAttribute("data-recovery-host", "mounted"));
-      const proofDir = path.join(
-        process.cwd(),
-        ".artifacts",
-        "control-ui-e2e",
-        "workspace-icon-recovery",
-      );
       if (captureUiProofEnabled) {
-        await mkdir(proofDir, { recursive: true });
-        await page.screenshot({ path: path.join(proofDir, "fallback.png") });
+        await page.screenshot({
+          path: path.join(suite.artifactDir, "workspace-icon-recovery", "fallback.png"),
+        });
       }
 
       await icon.locator(".workspace-icon").waitFor({ timeout: 10_000 });
@@ -263,7 +259,9 @@ suite.define(() => {
       expect(requests).toBe(2);
       expect(await icon.getAttribute("data-recovery-host")).toBe("mounted");
       if (captureUiProofEnabled) {
-        await page.screenshot({ path: path.join(proofDir, "recovered.png") });
+        await page.screenshot({
+          path: path.join(suite.artifactDir, "workspace-icon-recovery", "recovered.png"),
+        });
       }
     } finally {
       await suite.closeBrowserContext(context);

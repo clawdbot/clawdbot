@@ -6,6 +6,7 @@ import os from "node:os";
 import path from "node:path";
 import { expectDefined } from "@openclaw/normalization-core";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { TASKS_LIST_CURSOR_MAX_LENGTH } from "../../../packages/gateway-protocol/src/index.js";
 import {
   INTERNAL_RUNTIME_CONTEXT_BEGIN,
   INTERNAL_RUNTIME_CONTEXT_END,
@@ -21,7 +22,6 @@ import { ensureProfileForEmail } from "../../state/user-profiles.js";
 import {
   createTaskRecord as createTaskRecordOrNull,
   getTaskById,
-  listTaskRecordPage,
   markTaskTerminalById,
   recordTaskProgressByRunId,
 } from "../../tasks/runtime-internal.js";
@@ -39,7 +39,11 @@ import type { GatewayClient, RespondFn } from "./types.js";
 
 const stateDirEnvSnapshot = captureEnv(["OPENCLAW_STATE_DIR"]);
 const cancelSessionMock = vi.fn();
-const killSubagentRunAdminMock = vi.fn();
+const mainSessionTaskScope = {
+  requesterSessionKey: "agent:main:main",
+  ownerKey: "agent:main:main",
+  scopeKind: "session",
+} as const;
 type TaskResponsePayload = {
   tasks?: Array<Record<string, unknown>>;
   task?: Record<string, unknown>;
@@ -64,13 +68,14 @@ beforeEach(async () => {
   setTestEnvValue("OPENCLAW_STATE_DIR", stateDir);
   resetTaskRegistryForTests();
   cancelSessionMock.mockReset();
-  killSubagentRunAdminMock.mockReset();
   setTaskRegistryControlRuntimeForTests({
     cancelActiveCronTaskRun: () => false,
     getAcpSessionManager: () => ({
       cancelSession: cancelSessionMock,
     }),
-    killSubagentRunAdmin: async (params) => killSubagentRunAdminMock(params),
+    killSubagentRunAdmin: async () => {
+      throw new Error("Unexpected subagent cancellation in task handler fixture");
+    },
   });
 });
 
@@ -85,6 +90,7 @@ afterEach(async () => {
 
 function identifiedClient(scopes: string[], profileId = "viewer@example.com"): GatewayClient {
   return {
+    connId: `conn-${profileId}-${scopes.join("-")}`,
     connect: {
       minProtocol: 1,
       maxProtocol: 1,
@@ -140,6 +146,7 @@ async function runTaskHandler(
   params: Record<string, unknown>,
   config: Record<string, unknown> = {},
   client: GatewayClient | null = null,
+  context = createContext(config),
 ) {
   const { calls, respond } = captureRespond();
   await expectDefined(
@@ -149,7 +156,7 @@ async function runTaskHandler(
     req: { type: "req", id: `req-${method}`, method },
     params,
     respond,
-    context: createContext(config),
+    context,
     client,
     isWebchatConnect: () => false,
   });
@@ -246,49 +253,6 @@ describe("tasks gateway handlers", () => {
 
     expect(calls[0]?.[0]).toBe(true);
     expect(payload?.tasks?.map((entry) => entry.taskId)).toEqual([task.taskId]);
-  });
-
-  it("does not use the executor as the requester owner for a legacy bare task", () => {
-    const task = createTaskRecord({
-      runtime: "subagent",
-      requesterSessionKey: "global",
-      ownerKey: "global",
-      scopeKind: "session",
-      childSessionKey: "agent:research:subagent:child",
-      agentId: "research",
-      runId: "run-legacy-owner",
-      task: "Owned by ops, executed by research",
-      status: "running",
-      deliveryStatus: "pending",
-    });
-    expect(task.requesterAgentId).toBeUndefined();
-    const cfg = {
-      session: { scope: "global", store: "/tmp/shared-sessions.sqlite" },
-      agents: {
-        ownership: "explicit",
-        defaults: { sessionStore: { agentId: "ops" } },
-        entries: { ops: {}, research: {} },
-      },
-    } satisfies OpenClawConfig;
-
-    expect(
-      listTaskRecordPage({
-        offset: 0,
-        limit: 10,
-        sessionKey: "global",
-        sessionAgentId: "ops",
-        cfg,
-      }).tasks.map((entry) => entry.taskId),
-    ).toEqual([task.taskId]);
-    expect(
-      listTaskRecordPage({
-        offset: 0,
-        limit: 10,
-        sessionKey: "global",
-        sessionAgentId: "research",
-        cfg,
-      }).tasks,
-    ).toEqual([]);
   });
 
   it("orders the ledger by last activity, not creation time", async () => {
@@ -405,7 +369,7 @@ describe("tasks gateway handlers", () => {
     expect(byId.get("task-later-completion")?.updatedAt).toBe(base - 500);
   });
 
-  it("preserves activity ordering across cursor pages", async () => {
+  it("preserves activity ordering across unchanged cursor pages", async () => {
     const created = [500, 100, 700, 300, 500].map((lastEventAt, index) =>
       createTaskRecord({
         runtime: "cli",
@@ -428,19 +392,85 @@ describe("tasks gateway handlers", () => {
         return left.taskId < right.taskId ? -1 : left.taskId > right.taskId ? 1 : 0;
       })
       .map((task) => task.taskId);
+    const context = createContext();
+    const client = identifiedClient(["operator.read"]);
 
-    const page1 = await runTaskHandler("tasks.list", { limit: 2 });
-    expect(page1.calls[0]?.[0]).toBe(true);
+    const page1 = await runTaskHandler("tasks.list", { limit: 2 }, {}, client, context);
     expect(page1.payload?.tasks?.map((task) => task.id)).toEqual(expectedIds.slice(0, 2));
-    expect(page1.payload?.nextCursor).toBe("2");
+    expect(page1.payload?.nextCursor).toEqual(expect.any(String));
+    expect(page1.payload?.nextCursor?.length).toBeLessThanOrEqual(TASKS_LIST_CURSOR_MAX_LENGTH);
 
-    const page2 = await runTaskHandler("tasks.list", { limit: 2, cursor: "2" });
+    const page2 = await runTaskHandler(
+      "tasks.list",
+      { limit: 2, cursor: page1.payload?.nextCursor },
+      {},
+      client,
+      context,
+    );
     expect(page2.payload?.tasks?.map((task) => task.id)).toEqual(expectedIds.slice(2, 4));
-    expect(page2.payload?.nextCursor).toBe("4");
 
-    const page3 = await runTaskHandler("tasks.list", { limit: 2, cursor: "4" });
+    const page3 = await runTaskHandler(
+      "tasks.list",
+      { limit: 2, cursor: page2.payload?.nextCursor },
+      {},
+      client,
+      context,
+    );
     expect(page3.payload?.tasks?.map((task) => task.id)).toEqual(expectedIds.slice(4));
     expect(page3.payload?.nextCursor).toBeUndefined();
+
+    const priorContext = await runTaskHandler(
+      "tasks.list",
+      { limit: 2, cursor: page1.payload?.nextCursor },
+      {},
+      client,
+      createContext(),
+    );
+    expect(priorContext.calls[0]?.[2]?.code).toBe("INVALID_REQUEST");
+  });
+
+  it("rejects a continuation after task activity changes", async () => {
+    const created = [400, 300, 200, 100].map((lastEventAt, index) =>
+      createTaskRecord({
+        runtime: "cli",
+        requesterSessionKey: "agent:main:main",
+        ownerKey: "agent:main:main",
+        scopeKind: "session",
+        runId: `run-stale-page-${index}`,
+        task: `Stale page task ${index}`,
+        status: "running",
+        deliveryStatus: "pending",
+        lastEventAt,
+      }),
+    );
+    const context = createContext();
+    const client = identifiedClient(["operator.read"]);
+    const page1 = await runTaskHandler("tasks.list", { limit: 2 }, {}, client, context);
+    expect(page1.payload?.tasks?.map((task) => task.id)).toEqual([
+      created[0]?.taskId,
+      created[1]?.taskId,
+    ]);
+
+    recordTaskProgressByRunId({
+      runId: created[3]?.runId ?? "",
+      lastEventAt: 500,
+    });
+
+    const page2 = await runTaskHandler(
+      "tasks.list",
+      { limit: 2, cursor: page1.payload?.nextCursor },
+      {},
+      client,
+      context,
+    );
+    expect(page2.calls[0]).toMatchObject([
+      false,
+      undefined,
+      {
+        code: "INVALID_REQUEST",
+        message: "invalid or expired tasks.list cursor; restart pagination without a cursor",
+      },
+    ]);
   });
 
   it("uses task id as the stable activity-order tie break", async () => {
@@ -487,7 +517,7 @@ describe("tasks gateway handlers", () => {
       const { payload } = await runTaskHandler("tasks.list", { limit: 2 });
 
       expect(payload?.tasks).toHaveLength(2);
-      expect(payload?.nextCursor).toBe("2");
+      expect(payload?.nextCursor).toEqual(expect.any(String));
       expect(cloneSpy).toHaveBeenCalledTimes(2);
     } finally {
       cloneSpy.mockRestore();
@@ -512,7 +542,7 @@ describe("tasks gateway handlers", () => {
           {
             sessionId: `session-${sessionKey}`,
             updatedAt: 1,
-            createdActor: { type: "human", id: actorId },
+            createdActor: { type: "human", source: "profile", id: actorId },
             visibility: "shared",
             ...(access === "incognito" && sessionKey === foreignKey ? { incognito: true } : {}),
           },
@@ -549,7 +579,7 @@ describe("tasks gateway handlers", () => {
       expect(list.payload?.tasks?.map((task) => task.taskId)).toEqual([
         visibleForeign ? taskId : own.taskId,
       ]);
-      expect(list.payload?.nextCursor).toBe(visibleForeign ? "1" : undefined);
+      expect(list.payload?.nextCursor).toEqual(visibleForeign ? expect.any(String) : undefined);
       const get = await runTaskHandler("tasks.get", { taskId }, config, viewer);
       if (visibleForeign) {
         expect(get.payload?.task?.taskId).toBe(taskId);
@@ -589,32 +619,6 @@ describe("tasks gateway handlers", () => {
     },
   );
 
-  it("returns page records isolated from the registry", () => {
-    const created = createTaskRecord({
-      runtime: "cli",
-      requesterSessionKey: "agent:main:main",
-      ownerKey: "agent:main:main",
-      scopeKind: "session",
-      task: "Isolated task",
-      status: "running",
-      deliveryStatus: "pending",
-      detail: { nested: { value: "original" } },
-    });
-
-    const page = listTaskRecordPage({ offset: 0, limit: 1 });
-    const detail = page.tasks[0]?.detail as { nested: { value: string } } | undefined;
-    expect(detail).toBeDefined();
-    if (detail) {
-      detail.nested.value = "mutated";
-    }
-
-    const current = expectDefined(
-      getTaskById(created.taskId),
-      "page mutation must not change the registry record",
-    );
-    expect((current.detail as { nested: { value: string } }).nested.value).toBe("original");
-  });
-
   it("treats explicit task agentId as authoritative over the session-key fallback", async () => {
     // Cross-agent subagent task: the registry derives agentId=worker from the
     // child session key, while owner/requester keys belong to main. tasks.list
@@ -643,9 +647,7 @@ describe("tasks gateway handlers", () => {
   it("gets completed tasks with stable completed status", async () => {
     const task = createTaskRecord({
       runtime: "cli",
-      requesterSessionKey: "agent:main:main",
-      ownerKey: "agent:main:main",
-      scopeKind: "session",
+      ...mainSessionTaskScope,
       runId: "run-completed",
       task: "Done task",
       status: "succeeded",
@@ -658,6 +660,8 @@ describe("tasks gateway handlers", () => {
     expect(payload?.task?.title).toBe("Done task");
     expect(payload?.task?.prompt).toBe("Done task");
   });
+
+  const cliStaleResult = { runtime: "cli", progressSummary: "CLI stale progress" } as const;
 
   it.each([
     {
@@ -683,17 +687,21 @@ describe("tasks gateway handlers", () => {
     },
     {
       label: "CLI completion",
-      runtime: "cli",
-      progressSummary: "CLI stale progress",
+      ...cliStaleResult,
       terminalSummary: "CLI canonical result",
       expected: "CLI canonical result",
     },
     {
       label: "CLI sanitized terminal result",
-      runtime: "cli",
-      progressSummary: "CLI stale progress",
+      ...cliStaleResult,
       terminalSummary: "Exec denied (gateway id=req-1, approval-timeout): bash -lc ls",
       expected: "Command did not run: approval timed out.",
+    },
+    {
+      label: "CLI blocked media references",
+      ...cliStaleResult,
+      terminalSummary: 'Delivery failed.\nRetained media: path="/tmp/proof.png"',
+      expected: 'Delivery failed. Retained media: path="/tmp/proof.png"',
     },
     {
       label: "cron progress fallback",
@@ -750,9 +758,7 @@ describe("tasks gateway handlers", () => {
   it("keeps bounded prompts lookup-only", async () => {
     const task = createTaskRecord({
       runtime: "cli",
-      requesterSessionKey: "agent:main:main",
-      ownerKey: "agent:main:main",
-      scopeKind: "session",
+      ...mainSessionTaskScope,
       task: `Inspect the task prompt ${"x".repeat(5_000)}`,
       status: "running",
       deliveryStatus: "pending",
@@ -778,9 +784,7 @@ describe("tasks gateway handlers", () => {
     ].join("\n");
     const task = createTaskRecord({
       runtime: "cli",
-      requesterSessionKey: "agent:main:main",
-      ownerKey: "agent:main:main",
-      scopeKind: "session",
+      ...mainSessionTaskScope,
       task: `${visiblePrompt}\n${INTERNAL_RUNTIME_CONTEXT_BEGIN}\nhidden\n${INTERNAL_RUNTIME_CONTEXT_END}`,
       status: "running",
       deliveryStatus: "pending",
@@ -794,9 +798,7 @@ describe("tasks gateway handlers", () => {
   it("sanitizes task text before exposing SDK summaries", async () => {
     const task = createTaskRecord({
       runtime: "cli",
-      requesterSessionKey: "agent:main:main",
-      ownerKey: "agent:main:main",
-      scopeKind: "session",
+      ...mainSessionTaskScope,
       runId: "run-sanitized",
       label:
         "Compile artifact\nOpenClaw runtime context (internal): Keep internal details private.",
@@ -1043,6 +1045,7 @@ describe("tasks gateway handlers", () => {
     expect(cancelSessionMock).toHaveBeenCalledWith({
       cfg: {},
       sessionKey: "agent:codex:acp:child",
+      agentId: "codex",
       reason: "operator requested stop",
       expectedRunId: "run-cancel-acp-gateway",
     });

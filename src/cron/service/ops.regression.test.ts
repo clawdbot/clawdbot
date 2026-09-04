@@ -24,6 +24,7 @@ import {
 } from "../../process/gateway-work-admission.js";
 import { CommandLane } from "../../process/lanes.js";
 import { openOpenClawStateDatabase } from "../../state/openclaw-state-db.js";
+import { mockCall } from "../../test-utils/mock-call-assertions.js";
 import { isCronJobActive } from "../active-jobs.js";
 import { loadCronStore, saveCronStore } from "../store.js";
 import { cronStoreKey } from "../store/key.js";
@@ -49,26 +50,12 @@ function expectQueuedRunAck(result: unknown) {
   return ack.runId as string;
 }
 
-function requireMockCall(
-  mock: { mock: { calls: unknown[][] } },
-  callIndex: number,
-  label: string,
-): unknown[] {
-  const call = mock.mock.calls[callIndex];
-  if (!call) {
-    throw new Error(`expected ${label} call ${callIndex}`);
-  }
-  return call;
-}
-
 function expectIsolatedRunJobId(
   runIsolatedAgentJob: ReturnType<typeof vi.fn>,
   callIndex: number,
   jobId: string,
 ) {
-  const [params] = requireMockCall(runIsolatedAgentJob, callIndex, "runIsolatedAgentJob") as [
-    { job?: { id?: string } }?,
-  ];
+  const [params] = mockCall(runIsolatedAgentJob, callIndex) as [{ job?: { id?: string } }?];
   expect(params?.job?.id).toBe(jobId);
 }
 
@@ -506,9 +493,7 @@ describe("cron service ops regressions", () => {
 
     expect(runResult).toEqual({ ok: true, ran: true });
     expect(runIsolatedAgentJob).toHaveBeenCalledOnce();
-    const [params] = requireMockCall(runIsolatedAgentJob, 0, "runIsolatedAgentJob") as [
-      { message?: unknown }?,
-    ];
+    const [params] = mockCall(runIsolatedAgentJob, 0) as [{ message?: unknown }?];
     expect(params?.message).toBe(marker);
   });
 
@@ -595,10 +580,7 @@ describe("cron service ops regressions", () => {
     const result = await run(state, "stale-running", "force");
     expect(result).toEqual({ ok: true, ran: true });
     expect(enqueueSystemEvent).toHaveBeenCalledTimes(1);
-    const [text, options] = requireMockCall(enqueueSystemEvent, 0, "enqueueSystemEvent") as [
-      string,
-      { agentId?: unknown }?,
-    ];
+    const [text, options] = mockCall(enqueueSystemEvent, 0) as [string, { agentId?: unknown }?];
     expect(text).toBe("stale-running");
     expect(options?.agentId).toBe("main");
   });
@@ -1068,7 +1050,7 @@ describe("cron service ops regressions", () => {
       requestHeartbeat: vi.fn(),
       runIsolatedAgentJob:
         params.runStatus === "ok"
-          ? vi.fn().mockResolvedValue({ status: "ok", summary: "ok" })
+          ? vi.fn().mockResolvedValue({ status: "ok", summary: "ok", delivered: true })
           : vi.fn().mockResolvedValue({ status: "error", error: "boom" }),
       onEvent: (event) => events.push(event),
     });

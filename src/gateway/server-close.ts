@@ -682,7 +682,7 @@ export function createGatewayCloseHandler(
     closeProviderTransportDispatcherPool: () => Promise<void>;
     cron: { stop: () => void; stopAndDrain?: () => Promise<void> };
     heartbeatRunner: HeartbeatRunner;
-    updateCheckStop?: (() => void) | null;
+    updateCheckStop?: (() => Promise<void> | void) | null;
     stopTaskRegistryMaintenance?: (() => Promise<void> | void) | null;
     nodePresenceTimers: Map<string, ReturnType<typeof setInterval>>;
     maintenance: GatewayMaintenanceHandles | null;
@@ -729,6 +729,7 @@ export function createGatewayCloseHandler(
       // info, and the completion line below reports duration and outcome.
       shutdownLog.debug(`shutdown started: ${reason}`);
 
+      await shutdownStep("update-check", () => params.updateCheckStop?.(), warnings);
       await measureCloseStep("config-reloader", () =>
         shutdownStep("config-reloader", () => params.configReloader.stop(), warnings),
       );
@@ -920,7 +921,6 @@ export function createGatewayCloseHandler(
         () => params.stopTaskRegistryMaintenance?.(),
         warnings,
       );
-      await shutdownStep("update-check", () => params.updateCheckStop?.(), warnings);
       for (const timer of params.nodePresenceTimers.values()) {
         clearInterval(timer);
       }
@@ -1052,19 +1052,18 @@ export function createGatewayCloseHandler(
       });
     } finally {
       await shutdownStep("plugin-host-registry", clearActivePluginRegistry, warnings);
-      // Rent: plugin cleanup may still read ambient slots, so drain their shared
-      // lifecycle only after the registry owner has finished retiring plugins.
-      await shutdownStep(
-        "ambient-runtime-state",
-        () => drainGlobalSingletonLifecycleState(restartExpectedMs === null ? "close" : "restart"),
-        warnings,
-      );
       // Channel and plugin teardown still resolve account credentials. Keep the
       // active snapshot until every teardown owner is done, then always scrub it.
       try {
-        params.clearSecretsRuntimeSnapshot?.();
-      } catch {
-        /* ignore */
+        // Plugin cleanup may still read ambient slots. A failed owner drain must
+        // stop restart so the next lifecycle cannot reuse incomplete shutdown.
+        await drainGlobalSingletonLifecycleState(restartExpectedMs === null ? "close" : "restart");
+      } finally {
+        try {
+          params.clearSecretsRuntimeSnapshot?.();
+        } catch {
+          /* ignore */
+        }
       }
     }
 

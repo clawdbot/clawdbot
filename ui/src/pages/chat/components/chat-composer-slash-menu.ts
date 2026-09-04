@@ -1,7 +1,7 @@
 import { html, nothing, type TemplateResult } from "lit";
 import { ref } from "lit/directives/ref.js";
 import type { ChatSendShortcut } from "../../../app/settings.ts";
-import { icons, type IconName } from "../../../components/icons.ts";
+import { icons } from "../../../components/icons.ts";
 import { t } from "../../../i18n/index.ts";
 import {
   SLASH_COMMANDS,
@@ -26,7 +26,13 @@ import {
   hasActiveInlineSlashArgumentPrefix,
   removeInlineSlashSelection,
 } from "./chat-composer-inline-slash.ts";
-import { getSlashArgOptionId, getSlashCommandOptionId } from "./chat-composer-slash-menu-dom.ts";
+import {
+  getSlashArgOptionId,
+  getSlashCommandOptionId,
+  getSlashCommandOptionLabel,
+  renderSlashMatchedName,
+  renderSlashIcon,
+} from "./chat-composer-slash-menu-dom.ts";
 
 export type SlashMenuState = {
   slashCommandDispatchConnected: boolean;
@@ -47,10 +53,11 @@ export type SlashMenuHost = {
   getTextarea: () => HTMLTextAreaElement | null;
   resolveArgOptions: (command: SlashCommandDef) => string[];
   runCommand: () => void;
-  canRunInlineCommand: () => boolean;
+  canRun: (inline: boolean) => boolean;
   runInlineCommand?: (command: string) => void;
   refreshCommands?: () => void | Promise<void>;
   commandFilter?: (command: SlashCommandDef) => boolean;
+  activateComposerMode?: (command: SlashCommandDef) => boolean;
 };
 
 export function createSlashMenuState(): SlashMenuState {
@@ -197,7 +204,7 @@ export function updateSlashMenu(
   const items = getSlashCommandCompletions(completion.query, {
     showAll: true,
     inlineOnly: completion.inline,
-    allowImmediateInlineCommands: host.canRunInlineCommand() && !completion.skillOnly,
+    allowImmediateInlineCommands: host.canRun(true) && !completion.skillOnly,
   }).filter((command) => host.commandFilter?.(command) ?? true);
   state.slashMenuCompletion = completion;
   state.slashMenuItems = [
@@ -222,7 +229,7 @@ function beginInlineSlashArguments(
     !state.slashMenuCompletion?.inline ||
     cmd.source === "skill" ||
     !cmd.args ||
-    !host.canRunInlineCommand() ||
+    !host.canRun(true) ||
     !host.runInlineCommand
   ) {
     return false;
@@ -254,7 +261,10 @@ function selectSlashCommand(
   host: SlashMenuHost,
   requestUpdate: () => void,
 ): void {
-  if (cmd.source !== "skill" && !host.canRunInlineCommand() && state.slashMenuCompletion?.inline) {
+  if (host.activateComposerMode?.(cmd)) {
+    return;
+  }
+  if (cmd.source !== "skill" && !host.canRun(true) && state.slashMenuCompletion?.inline) {
     return;
   }
   const inlineReplacement = cmd.source === "skill" ? `$${cmd.name}` : `/${cmd.name}`;
@@ -264,7 +274,7 @@ function selectSlashCommand(
   if (
     state.slashMenuCompletion?.inline &&
     executesInlineImmediately(cmd) &&
-    host.canRunInlineCommand() &&
+    host.canRun(true) &&
     host.runInlineCommand &&
     removeInlineSlashSelection(state, host)
   ) {
@@ -340,8 +350,8 @@ function selectSlashArg(
   requestUpdate: () => void,
   run: boolean,
 ): void {
-  const command = state.slashMenuCommand;
-  if (command?.source !== "skill" && !host.canRunInlineCommand()) {
+  const { slashMenuCommand: command, slashMenuCompletion: completion } = state;
+  if (command?.source !== "skill" && !host.canRun(completion?.inline === true)) {
     return;
   }
   const cmdName = command?.name ?? "";
@@ -350,7 +360,7 @@ function selectSlashArg(
     state.slashMenuCompletion?.inline &&
     command &&
     executesInlineImmediately(command) &&
-    host.canRunInlineCommand() &&
+    host.canRun(true) &&
     host.runInlineCommand &&
     removeInlineSlashSelection(state, host)
   ) {
@@ -388,7 +398,7 @@ function submitInlineSlashArgument(
     !completion?.inline ||
     !command ||
     !executesInlineImmediately(command) ||
-    !host.canRunInlineCommand() ||
+    !host.canRun(true) ||
     !host.runInlineCommand
   ) {
     return false;
@@ -406,7 +416,7 @@ function submitInlineSlashArgument(
 }
 
 function beginDirectInlineSlashArgument(state: SlashMenuState, host: SlashMenuHost): boolean {
-  if (!host.canRunInlineCommand() || !host.runInlineCommand) {
+  if (!host.canRun(true) || !host.runInlineCommand) {
     return false;
   }
   const current = host.getTextarea()?.value ?? host.getDraft();
@@ -539,23 +549,7 @@ export function getActiveSlashMenuOptionLabel(state: SlashMenuState): string {
     const arg = state.slashMenuArgItems[state.slashMenuIndex];
     return commandName && arg ? `/${commandName} ${arg}` : "";
   }
-  const cmd = state.slashMenuItems[state.slashMenuIndex];
-  if (!cmd) {
-    return "";
-  }
-  const command = `/${cmd.name}${cmd.args ? ` ${cmd.args}` : ""}`;
-  return `${command} ${getSlashCommandDescription(cmd)}`;
-}
-
-function renderSlashIcon(name: string) {
-  return icons[name as IconName] ?? icons.terminal;
-}
-
-function renderMatchedName(name: string, query: string): TemplateResult {
-  const matchLength = name.toLowerCase().startsWith(query.toLowerCase()) ? query.length : 0;
-  return matchLength === 0
-    ? html`${name}`
-    : html`<mark>${name.slice(0, matchLength)}</mark>${name.slice(matchLength)}`;
+  return getSlashCommandOptionLabel(state.slashMenuItems[state.slashMenuIndex]);
 }
 
 function renderSlashCommandOption(params: {
@@ -581,17 +575,19 @@ function renderSlashCommandOption(params: {
       }}
     >
       <span class="slash-menu-icon"
-        >${cmd.source === "skill"
-          ? icons.pencilSparkles
-          : cmd.icon
-            ? renderSlashIcon(cmd.icon)
-            : icons.terminal}</span
+        >${
+          cmd.source === "skill"
+            ? icons.pencilSparkles
+            : cmd.icon
+              ? renderSlashIcon(cmd.icon)
+              : icons.terminal
+        }</span
       >
       <span class="slash-menu-copy">
         <span class="slash-menu-name"
-          >/${renderMatchedName(cmd.name, query)}${cmd.args
-            ? html`<span class="slash-menu-args"> ${cmd.args}</span>`
-            : nothing}</span
+          >/${renderSlashMatchedName(cmd.name, query)}${
+            cmd.args ? html`<span class="slash-menu-args"> ${cmd.args}</span>` : nothing
+          }</span
         >
         <span class="slash-menu-desc">${getSlashCommandDescription(cmd)}</span>
       </span>
@@ -635,9 +631,9 @@ export function renderSlashMenu(
               (arg, i) => html`
                 <div
                   id=${getSlashArgOptionId(host.paneId, state.slashMenuCommand?.name ?? "", arg)}
-                  class="slash-menu-item ${i === state.slashMenuIndex
-                    ? "slash-menu-item--active"
-                    : ""}"
+                  class="slash-menu-item ${
+                    i === state.slashMenuIndex ? "slash-menu-item--active" : ""
+                  }"
                   role="option"
                   aria-selected=${i === state.slashMenuIndex}
                   @click=${() => selectSlashArg(arg, state, host, requestUpdate, true)}
@@ -647,9 +643,11 @@ export function renderSlashMenu(
                   }}
                 >
                   <span class="slash-menu-icon"
-                    >${state.slashMenuCommand?.icon
-                      ? renderSlashIcon(state.slashMenuCommand.icon)
-                      : icons.terminal}</span
+                    >${
+                      state.slashMenuCommand?.icon
+                        ? renderSlashIcon(state.slashMenuCommand.icon)
+                        : icons.terminal
+                    }</span
                   >
                   <span class="slash-menu-copy">
                     <span class="slash-menu-name">${arg}</span>
@@ -706,21 +704,23 @@ export function renderSlashMenu(
             )}
           </div>`,
         )}
-        ${skills.length > 0
-          ? html`<div class="slash-menu-group slash-menu-group--skills">
-              <div class="slash-menu-group__label">${t("chat.skills.label")}</div>
-              ${skills.map((cmd, index) =>
-                renderSlashCommandOption({
-                  cmd,
-                  index: commands.length + index,
-                  query,
-                  requestUpdate,
-                  host,
-                  state,
-                }),
-              )}
-            </div>`
-          : nothing}
+        ${
+          skills.length > 0
+            ? html`<div class="slash-menu-group slash-menu-group--skills">
+                <div class="slash-menu-group__label">${t("chat.skills.label")}</div>
+                ${skills.map((cmd, index) =>
+                  renderSlashCommandOption({
+                    cmd,
+                    index: commands.length + index,
+                    query,
+                    requestUpdate,
+                    host,
+                    state,
+                  }),
+                )}
+              </div>`
+            : nothing
+        }
       </div>
     </div>
   `;

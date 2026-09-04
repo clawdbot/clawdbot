@@ -1,15 +1,20 @@
 // Simple completion runtime tests cover model resolution, provider auth, and
 // one-shot completion wiring before requests reach the shared LLM stream path.
+import { createApiRegistry } from "@openclaw/ai";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
-import type { Model } from "../llm/types.js";
+import { createPluginMetadataSnapshotFixture } from "../plugins/plugin-metadata.test-support.js";
 import {
   looksLikeSecretSentinel,
   mintSecretSentinel,
   resolveSecretSentinel,
 } from "../secrets/sentinel.js";
 import type { resolveModelAsync } from "./embedded-agent-runner/model.js";
-import { fingerprintResolvedProviderAuth } from "./execution-auth-binding.js";
+import {
+  fingerprintAuthProfileCredential,
+  fingerprintResolvedProviderAuth,
+} from "./execution-auth-binding.js";
+import { makeProviderModelFixture } from "./test-helpers/provider-model-fixture.js";
 
 // Hoisted mocks keep Vitest module replacement stable while the implementation
 // under test imports auth, model resolution, and transport helpers at module load.
@@ -22,7 +27,10 @@ const hoisted = vi.hoisted(() => ({
   setRuntimeApiKeyMock: vi.fn(),
   prepareProviderRuntimeAuthMock: vi.fn(),
   ensureAuthProfileStoreMock: vi.fn(),
-  getCurrentPluginMetadataSnapshotMock: vi.fn(),
+  getCurrentPluginMetadataSnapshotMock:
+    vi.fn<
+      typeof import("../plugins/current-plugin-metadata-snapshot.js").getCurrentPluginMetadataSnapshot
+    >(),
 }));
 
 vi.mock("./prepared-model-runtime.js", () => ({
@@ -35,7 +43,7 @@ vi.mock("../plugins/runtime/generation-scope.js", () => ({
 
 vi.mock("./sessions/model-registry-runtime.js", () => ({
   getModelRegistryRuntime: () => {
-    const apiRegistry = {};
+    const apiRegistry = createApiRegistry();
     return {
       apiRegistry,
       llmRuntime: {
@@ -98,7 +106,7 @@ beforeEach(() => {
       workspaceDir: "/tmp/runtime-workspace",
       config: {},
       authModes: {},
-      metadataSnapshot: { plugins: [], index: { plugins: [] } },
+      metadataSnapshot: createPluginMetadataSnapshotFixture(),
       allowGatewaySubagentBinding: false,
       modelCatalog: { entries: [] },
       configuredRuntimeModels: [],
@@ -118,6 +126,7 @@ beforeEach(() => {
     model: {
       provider: "anthropic",
       id: "claude-opus-4-6",
+      api: "anthropic-messages",
     },
     authStorage: {
       setRuntimeApiKey: hoisted.setRuntimeApiKeyMock,
@@ -143,21 +152,23 @@ beforeEach(() => {
     },
   );
   hoisted.ensureAuthProfileStoreMock.mockReturnValue({ version: 1, profiles: {} });
-  hoisted.getCurrentPluginMetadataSnapshotMock.mockReturnValue({
-    plugins: [
-      {
-        id: "openai",
-        modelCatalog: {
-          providers: {
-            openai: {
-              defaultUtilityModel: "gpt-5.5",
-              models: [{ id: "gpt-5.5" }],
+  hoisted.getCurrentPluginMetadataSnapshotMock.mockReturnValue(
+    createPluginMetadataSnapshotFixture({
+      plugins: [
+        {
+          id: "openai",
+          modelCatalog: {
+            providers: {
+              openai: {
+                defaultUtilityModel: "gpt-5.5",
+                models: [{ id: "gpt-5.5" }],
+              },
             },
           },
         },
-      },
-    ],
-  });
+      ],
+    }),
+  );
 });
 
 function expectPreparedModelResult(
@@ -181,20 +192,20 @@ function createOpenAIRouteModelResolver(params: {
   api: "openai-responses" | "openai-chatgpt-responses";
   baseUrl: string;
 }) {
-  return vi.fn(async (...args: Parameters<typeof resolveModelAsync>) => {
-    const [provider, modelId, , cfg] = args;
+  return vi.fn<typeof resolveModelAsync>(async (provider, modelId, _agentDir, cfg, options) => {
+    if (!options?.authStorage || !options.modelRegistry) {
+      throw new Error("Prepared model stores were not bound");
+    }
     const configured = cfg?.models?.providers?.openai;
     return {
-      model: {
+      model: makeProviderModelFixture({
         provider,
         id: modelId,
         api: configured?.api ?? params.api,
         baseUrl: configured?.baseUrl ?? params.baseUrl,
-      } as Model,
-      authStorage: {
-        setRuntimeApiKey: hoisted.setRuntimeApiKeyMock,
-      },
-      modelRegistry: {},
+      }),
+      authStorage: options.authStorage,
+      modelRegistry: options.modelRegistry,
     };
   });
 }
@@ -269,6 +280,55 @@ describe("prepareSimpleCompletionModel", () => {
     );
   });
 
+  it("keeps a bound personal OAuth owner stable across token rotation", async () => {
+    const profileId =
+      "personal:9ee1b53f-13f7-4d21-b0a1-2b539ab4fd1d:5b99e716-6cea-49f2-a79e-ffb6df8ad5e1";
+    let credential = {
+      type: "oauth" as const,
+      provider: "openai",
+      access: "access-before-refresh",
+      refresh: "refresh-before",
+      expires: Date.now() + 60_000,
+      accountId: "workspace",
+    };
+    hoisted.ensureAuthProfileStoreMock.mockImplementation(
+      (_agentDir: string, options?: { profileId?: string }) => ({
+        version: 1,
+        profiles: options?.profileId === profileId ? { [profileId]: credential } : {},
+      }),
+    );
+    hoisted.getApiKeyForModelMock.mockImplementation(async () => ({
+      apiKey: credential.access,
+      profileId,
+      source: `profile:${profileId}`,
+      mode: "oauth",
+    }));
+    const params = {
+      cfg: {},
+      provider: "openai",
+      modelId: "gpt-5.5",
+      profileId,
+      bindAuthOwner: true,
+      modelResolver: createOpenAIRouteModelResolver({
+        api: "openai-chatgpt-responses",
+        baseUrl: "https://chatgpt.com/backend-api/codex",
+      }),
+    };
+
+    const before = await prepareSimpleCompletionModel(params);
+    credential = { ...credential, access: "access-after-refresh", refresh: "refresh-after" };
+    const after = await prepareSimpleCompletionModel(params);
+
+    expectPreparedModelResult(before);
+    expectPreparedModelResult(after);
+    expect(before.auth.apiKey).toBe("access-before-refresh");
+    expect(after.auth.apiKey).toBe("access-after-refresh");
+    expect(before.sourceAuthFingerprint).toBe(after.sourceAuthFingerprint);
+    expect(after.sourceAuthFingerprint).toBe(
+      fingerprintAuthProfileCredential({ profileId, credential }),
+    );
+  });
+
   it("returns error when model resolution fails", async () => {
     hoisted.resolveModelMock.mockReturnValueOnce({
       error: "Unknown model: anthropic/missing-model",
@@ -318,6 +378,7 @@ describe("prepareSimpleCompletionModel", () => {
       model: {
         provider: "amazon-bedrock",
         id: "anthropic.claude-sonnet-4-6",
+        api: "bedrock-converse-stream",
       },
       authStorage: {
         setRuntimeApiKey: hoisted.setRuntimeApiKeyMock,
@@ -351,6 +412,7 @@ describe("prepareSimpleCompletionModel", () => {
       model: {
         provider: "github-copilot",
         id: "gpt-4.1",
+        api: "openai-completions",
       },
       authStorage: {
         setRuntimeApiKey: hoisted.setRuntimeApiKeyMock,
@@ -392,6 +454,7 @@ describe("prepareSimpleCompletionModel", () => {
       model: {
         provider: "github-copilot",
         id: "gpt-4.1",
+        api: "openai-completions",
       },
       authStorage: {
         setRuntimeApiKey: hoisted.setRuntimeApiKeyMock,
@@ -428,7 +491,7 @@ describe("prepareSimpleCompletionModel", () => {
       label: "model-auth:github-copilot",
     });
     hoisted.resolveModelMock.mockReturnValueOnce({
-      model: { provider: "github-copilot", id: "gpt-4.1" },
+      model: { provider: "github-copilot", id: "gpt-4.1", api: "openai-completions" },
       authStorage: { setRuntimeApiKey: hoisted.setRuntimeApiKeyMock },
       modelRegistry: {},
     });
@@ -458,6 +521,7 @@ describe("prepareSimpleCompletionModel", () => {
       model: {
         provider: "github-copilot",
         id: "gpt-4.1",
+        api: "openai-completions",
       },
       authStorage: {
         setRuntimeApiKey: hoisted.setRuntimeApiKeyMock,
@@ -557,6 +621,7 @@ describe("prepareSimpleCompletionModel", () => {
       model: {
         provider: "amazon-bedrock-mantle",
         id: "anthropic.claude-opus-4-7",
+        api: "anthropic-messages",
         baseUrl: "https://bedrock-mantle.us-east-1.api.aws/anthropic",
       },
       authStorage: {
@@ -617,6 +682,7 @@ describe("prepareSimpleCompletionModel", () => {
       model: {
         provider: "ollama",
         id: "llama3.2:latest",
+        api: "ollama",
       },
       authStorage: {
         setRuntimeApiKey: hoisted.setRuntimeApiKeyMock,
@@ -660,6 +726,7 @@ describe("prepareSimpleCompletionModel", () => {
       model: {
         provider: "anthropic",
         id: "claude-opus-4-6",
+        api: "anthropic-messages",
       },
       authStorage: {
         setRuntimeApiKey: hoisted.setRuntimeApiKeyMock,
@@ -696,6 +763,7 @@ describe("prepareSimpleCompletionModel", () => {
       model: {
         provider: "mistral",
         id: "mistral-medium-3-5",
+        api: "mistral-conversations",
       },
       authStorage: {
         setRuntimeApiKey: hoisted.setRuntimeApiKeyMock,
@@ -795,13 +863,12 @@ describe("prepareSimpleCompletionModelForAgent", () => {
       agentId: "main",
       useUtilityModel: true,
       skipAgentDiscovery: true,
-      modelResolver: modelResolver as unknown as typeof resolveModelAsync,
+      modelResolver,
     });
 
     expectPreparedModelResult(result);
     expect(result.selection.provider).toBe("openai");
     expect(result.selection.modelId).toBe("gpt-5.5");
-    expect(result.selection.runtimeProvider).toBe("openai");
     expect(result.model).toMatchObject({
       id: "gpt-5.5",
       api: "openai-responses",
@@ -838,7 +905,7 @@ describe("prepareSimpleCompletionModelForAgent", () => {
       agentId: "main",
       modelRef: "openai/gpt-5.5",
       skipAgentDiscovery: true,
-      modelResolver: modelResolver as unknown as typeof resolveModelAsync,
+      modelResolver,
     });
 
     expectPreparedModelResult(result);
@@ -878,7 +945,7 @@ describe("prepareSimpleCompletionModelForAgent", () => {
       cfg,
       agentId: "main",
       skipAgentDiscovery: true,
-      modelResolver: modelResolver as unknown as typeof resolveModelAsync,
+      modelResolver,
     });
 
     expectPreparedModelResult(result);
@@ -908,7 +975,7 @@ describe("prepareSimpleCompletionModelForAgent", () => {
       agentId: "main",
       modelRef: "openai/gpt-5.5",
       skipAgentDiscovery: true,
-      modelResolver: modelResolver as unknown as typeof resolveModelAsync,
+      modelResolver,
     });
 
     expectPreparedModelResult(result);

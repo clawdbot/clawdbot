@@ -19,7 +19,7 @@ plugin.
 | Direct CLI flag            | `--meta-api-key <key>`             |
 | API                        | Responses API (`openai-responses`) |
 | Base URL                   | `https://api.meta.ai/v1`           |
-| Default model              | `meta/muse-spark-1.1`              |
+| Default model              | `meta/muse-spark-1.3`              |
 | OpenClaw reasoning default | `high` (`reasoning.effort`)        |
 
 ## Getting started
@@ -77,12 +77,16 @@ openclaw onboard --non-interactive --accept-risk --skip-health \
 Prices and data-use terms come from Meta's
 [pricing and rate limits](https://dev.meta.ai/docs/pricing-rate-limits/)
 documentation.
+Meta's [model catalog](https://dev.meta.ai/docs/models) identifies Muse Spark 1.3
+as the latest version and recommends it for new work.
 
 | Model ref                         | Name                       | OpenClaw input | Reasoning | Context window | Input / cached input / output per 1M tokens |
 | --------------------------------- | -------------------------- | -------------- | --------- | -------------- | ------------------------------------------- |
-| `meta/muse-spark-1.1`             | Muse Spark 1.1             | text, image    | yes       | 1,048,576      | $1.25 / $0.15 / $4.25                       |
+| `meta/muse-spark-1.3`             | Muse Spark 1.3             | text, image    | yes       | 1,048,576      | $1.25 / $0.15 / $4.25                       |
+| `meta/muse-spark-1.3-contributor` | Muse Spark 1.3 Contributor | text, image    | yes       | 1,048,576      | $0.10 / $0.002 / $0.20                      |
 | `meta/muse-spark-1.2`             | Muse Spark 1.2             | text, image    | yes       | 1,048,576      | $1.25 / $0.15 / $4.25                       |
 | `meta/muse-spark-1.2-contributor` | Muse Spark 1.2 Contributor | text, image    | yes       | 1,048,576      | $0.10 / $0.002 / $0.20                      |
+| `meta/muse-spark-1.1`             | Muse Spark 1.1             | text, image    | yes       | 1,048,576      | $1.25 / $0.15 / $4.25                       |
 
 <Warning>
 Meta's [pricing documentation](https://dev.meta.ai/docs/pricing-rate-limits/) and
@@ -132,9 +136,9 @@ Muse Spark does not accept `reasoning.effort: "none"`. OpenClaw maps
   env: { vars: { MODEL_API_KEY: "<key>" } },
   agents: {
     defaults: {
-      model: { primary: "meta/muse-spark-1.1" },
+      model: { primary: "meta/muse-spark-1.3" },
       models: {
-        "meta/muse-spark-1.1": { alias: "Muse Spark 1.1" },
+        "meta/muse-spark-1.3": { alias: "Muse Spark 1.3" },
       },
     },
   },

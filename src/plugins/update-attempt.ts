@@ -8,12 +8,12 @@ import { installPluginFromGitSpec } from "./git-install.js";
 import type { InstallSafetyOverrides } from "./install-security-scan.types.js";
 import { copyPluginInstallTransactionRequest } from "./install-transaction.js";
 import {
+  isUnavailableNpmTarget,
   PLUGIN_INSTALL_ERROR_CODE,
   type PluginInstallArtifactConsentHandler,
 } from "./install-types.js";
 import { installPluginFromNpmSpec } from "./install.js";
 import { installPluginFromMarketplace } from "./marketplace.js";
-import { shouldFallbackClawHubBridgeToNpm } from "./update-config.js";
 import {
   describeBetaNpmFallback,
   describeNpmChannelFallback,
@@ -31,14 +31,14 @@ import {
 
 export function formatNewerExactPinnedNpmDefaultLineMessage(params: {
   pluginId: string;
-  effectiveSpec: string;
+  recordedSpec: string;
   currentVersion: string;
   newer: { packageName: string; registryLine: "beta" | "latest"; version: string };
 }): string {
   return (
-    `${params.pluginId} is pinned to ${params.effectiveSpec} (installed ${params.currentVersion}); ` +
+    `${params.pluginId} is pinned to ${params.recordedSpec} (installed ${params.currentVersion}); ` +
     `registry ${params.newer.registryLine} resolves to ${params.newer.version}. ` +
-    `Pass \`openclaw plugins update ${params.newer.packageName}@${params.newer.registryLine}\` to follow that registry line.`
+    `Pass \`openclaw plugins update ${params.newer.packageName}@${params.newer.registryLine}\` to replace this version pin.`
   );
 }
 
@@ -219,11 +219,8 @@ type PluginUpdateAttemptState = {
   activeClawHubInstallSpec?: string;
   channelFallbackSuffix: string;
   npmChannelFallback?: PluginUpdateChannelFallback;
-  officialNpmFallbackInstallSpec?: string;
-  officialNpmFallbackRecordSpec?: string;
   resultSource: UpdatablePluginInstallRecord["source"];
   usedNpmFallback: boolean;
-  usedOfficialNpmFallback: boolean;
 };
 
 type PluginUpdateAttemptResult =
@@ -273,40 +270,28 @@ export async function buildDryRunPluginUpdateOutcome(params: {
   currentVersion?: string;
   effectiveSpec?: string;
   fallbackSpec?: string;
-  officialNpmFallbackInstallSpec?: string;
   usedNpmFallback: boolean;
-  usedOfficialNpmFallback: boolean;
   hasSpecOverride: boolean;
-  hasOfficialNpmSpec: boolean;
   updateChannel?: UpdateChannel;
   timeoutMs?: number;
   channelFallbackSuffix: string;
   npmChannelFallback?: PluginUpdateChannelFallback;
 }): Promise<PluginUpdateOutcome> {
-  const probeSpec = params.usedNpmFallback
-    ? (params.fallbackSpec ?? params.officialNpmFallbackInstallSpec)
-    : params.effectiveSpec;
+  const probeSpec = params.usedNpmFallback ? params.fallbackSpec : params.effectiveSpec;
   const npmProbeVersion =
-    params.record.source === "npm" || params.usedOfficialNpmFallback
-      ? resolveNpmResultVersion(params.result)
-      : undefined;
+    params.record.source === "npm" ? resolveNpmResultVersion(params.result) : undefined;
   const resolvedProbeVersion =
     params.result.version ??
     npmProbeVersion ??
-    (params.record.source === "npm" || params.usedOfficialNpmFallback
-      ? resolveExactNpmSpecVersion(probeSpec)
-      : undefined);
+    (params.record.source === "npm" ? resolveExactNpmSpecVersion(probeSpec) : undefined);
   const nextVersion = resolvedProbeVersion ?? "unknown";
   const currentLabel = params.currentVersion ?? "unknown";
   const unchanged = isPluginUpdateUnchanged({ ...params, nextVersion: resolvedProbeVersion });
   const newerExactPinnedDefaultLine =
-    unchanged &&
-    params.record.source === "npm" &&
-    !params.hasSpecOverride &&
-    !params.hasOfficialNpmSpec
+    unchanged && params.record.source === "npm" && !params.hasSpecOverride
       ? await resolveNewerExactPinnedNpmDefaultLine({
           currentVersion: params.currentVersion,
-          effectiveSpec: params.effectiveSpec,
+          recordedSpec: params.record.spec,
           probeNpmVersion: npmProbeVersion,
           updateChannel: params.updateChannel,
           timeoutMs: params.timeoutMs,
@@ -315,10 +300,10 @@ export async function buildDryRunPluginUpdateOutcome(params: {
 
   if (unchanged) {
     const message =
-      newerExactPinnedDefaultLine && params.effectiveSpec
+      newerExactPinnedDefaultLine && params.record.spec
         ? formatNewerExactPinnedNpmDefaultLineMessage({
             pluginId: params.pluginId,
-            effectiveSpec: params.effectiveSpec,
+            recordedSpec: params.record.spec,
             currentVersion: currentLabel,
             newer: newerExactPinnedDefaultLine,
           }) + params.channelFallbackSuffix
@@ -360,7 +345,6 @@ export async function runPluginUpdateAttempt(params: {
   expectedIntegrity?: string;
   npmSpecs?: PluginUpdateSpecPlan;
   clawhubSpecs?: PluginUpdateSpecPlan;
-  officialNpmFallbackSpecs?: PluginUpdateSpecPlan | null;
   trustedSourceLinkedOfficialInstall: boolean;
   expectedReplacementPluginId?: string;
   getFallbackExpectedIntegrity: () => Promise<string | undefined>;
@@ -459,20 +443,16 @@ export async function runPluginUpdateAttempt(params: {
   }
 
   let activeClawHubInstallSpec = params.effectiveSpec;
-  let officialNpmFallbackInstallSpec = params.officialNpmFallbackSpecs?.installSpec;
-  let officialNpmFallbackRecordSpec = params.officialNpmFallbackSpecs?.recordSpec;
   let usedNpmFallback = false;
-  let usedOfficialNpmFallback = false;
   let channelFallbackSuffix = "";
   let npmChannelFallback: PluginUpdateChannelFallback | undefined;
-  let resultSource = params.record.source;
+  const resultSource = params.record.source;
 
   if (
     !result.ok &&
     params.record.source === "npm" &&
     params.npmSpecs?.fallbackSpec &&
-    result.code !== PLUGIN_INSTALL_ERROR_CODE.SECURITY_SCAN_BLOCKED &&
-    result.code !== PLUGIN_INSTALL_ERROR_CODE.SECURITY_SCAN_FAILED
+    isUnavailableNpmTarget(result)
   ) {
     params.logger.warn?.(
       describeBetaNpmFallback({
@@ -552,47 +532,6 @@ export async function runPluginUpdateAttempt(params: {
       }),
     );
     activeClawHubInstallSpec = params.clawhubSpecs.fallbackSpec;
-    if (params.officialNpmFallbackSpecs?.fallbackSpec) {
-      officialNpmFallbackInstallSpec = params.officialNpmFallbackSpecs.fallbackSpec;
-      officialNpmFallbackRecordSpec = params.officialNpmFallbackSpecs.fallbackSpec;
-    }
-  }
-
-  if (
-    !result.ok &&
-    params.record.source === "clawhub" &&
-    officialNpmFallbackInstallSpec &&
-    shouldFallbackClawHubBridgeToNpm({
-      result,
-      npmSpec: officialNpmFallbackInstallSpec,
-    })
-  ) {
-    params.logger.warn?.(
-      `Plugin "${params.pluginId}" could not download official ClawHub artifact for ${activeClawHubInstallSpec ?? `clawhub:${params.record.clawhubPackage!}`}; using npm ${officialNpmFallbackInstallSpec} instead. Core update can still complete.`,
-    );
-    usedNpmFallback = true;
-    usedOfficialNpmFallback = true;
-    resultSource = "npm";
-    channelFallbackSuffix = params.dryRun
-      ? ` (warning: official ClawHub artifact fallback would use ${officialNpmFallbackInstallSpec}).`
-      : ` (warning: official ClawHub artifact fallback used ${officialNpmFallbackInstallSpec}).`;
-    result = await installNpmSpec(
-      installParams({
-        spec: officialNpmFallbackInstallSpec,
-        config: params.config,
-        mode: "update",
-        extensionsDir: params.extensionsDir,
-        timeoutMs: params.timeoutMs,
-        ...dryRunOption,
-        dangerouslyForceUnsafeInstall: params.dangerouslyForceUnsafeInstall,
-        onInstallPolicyWarning: params.onInstallPolicyWarning,
-        onBeforePluginArtifactCommit: params.onBeforePluginArtifactCommit,
-        trustedSourceLinkedOfficialInstall: true,
-        expectedPluginId: params.pluginId,
-        expectedReplacementPluginId: params.expectedReplacementPluginId,
-        logger: params.logger,
-      }),
-    );
   }
 
   return {
@@ -601,10 +540,7 @@ export async function runPluginUpdateAttempt(params: {
     activeClawHubInstallSpec,
     channelFallbackSuffix,
     npmChannelFallback,
-    officialNpmFallbackInstallSpec,
-    officialNpmFallbackRecordSpec,
     resultSource,
     usedNpmFallback,
-    usedOfficialNpmFallback,
   };
 }

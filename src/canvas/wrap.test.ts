@@ -10,9 +10,9 @@ describe("buildWidgetDocument", () => {
       '<SvG viewBox="0 0 10 10"><circle r="4" /></SvG>',
     );
 
-    expect(Buffer.byteLength(html)).toBe(15592);
+    expect(Buffer.byteLength(html)).toBe(18121);
     expect(createHash("sha256").update(html).digest("hex")).toBe(
-      "30ea7be77ec728493e29996b32e1dd7c31322814087352459c0849d45fb4663e",
+      "c8f0ea0dea6648693a8972f602762716618563022f8248e8e7d99a8b1a723692",
     );
     expect(html).toContain("openclaw:widget-host-init-ack");
     expect(html).toContain('request("host.open",{url})');
@@ -30,6 +30,9 @@ describe("buildWidgetDocument", () => {
     expect(html).toContain("widget host capabilities unavailable");
     expect(html).toContain("widget prompt host unavailable");
     expect(html).toContain("openclaw:widget-chat-host");
+    expect(html).toContain("openclaw:widget-board-host");
+    expect(html).toContain("openclaw:widget-scroll");
+    expect(html).toContain("event.isTrusted");
     expect(html).not.toContain("widget is not hosted on a board");
     const bridgeKeys = JSON.parse(html.match(/const keys=(\[[^\]]+\])/)?.[1] ?? "[]") as string[];
     expect(bridgeKeys).toEqual([

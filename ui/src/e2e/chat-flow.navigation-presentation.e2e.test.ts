@@ -3,9 +3,11 @@ import { controlUiBundledSettingsStorageKey } from "../test-helpers/control-ui-e
 import {
   SESSION_DRAG_MIME,
   captureSessionAccessibilityProof,
+  captureUiProof,
   chatSessionListResponse,
   controlUiSessionPath,
   createChatFlowE2eSuite,
+  controlUiSessionUrl,
   installMockGateway,
   requireRecord,
   sidebarSessionOrder,
@@ -70,7 +72,7 @@ suite.define(() => {
     });
 
     try {
-      await page.goto(`${suite.server.baseUrl}chat`);
+      await page.goto(controlUiSessionUrl(suite.server.baseUrl, "agent:main:session-a"));
       const panes = page.locator("openclaw-chat-pane.chat-split-view__pane");
       await expect.poll(() => panes.count(), { timeout: 10_000 }).toBe(2);
       await expect
@@ -126,13 +128,28 @@ suite.define(() => {
       methodResponses: {
         "chat.history": initialResponses,
         "chat.startup": initialResponses,
-        "sessions.list": chatSessionListResponse(),
+        "sessions.list": chatSessionListResponse([
+          {
+            key: sessionA,
+            sessionId: `${sessionA}:backing`,
+            kind: "direct",
+            label: "Session A",
+            updatedAt: 2,
+          },
+          {
+            key: sessionB,
+            sessionId: `${sessionB}:backing`,
+            kind: "direct",
+            label: "Session B",
+            updatedAt: 1,
+          },
+        ]),
       },
       sessionKey: sessionA,
     });
 
     try {
-      await page.goto(`${suite.server.baseUrl}chat`);
+      await page.goto(controlUiSessionUrl(suite.server.baseUrl, sessionA));
       await waitForChatScrollIdle(page);
       await gateway.waitForRequest("agent.identity.get");
       const initialIdentityRequestCount = (await gateway.getRequests("agent.identity.get")).length;
@@ -227,7 +244,7 @@ suite.define(() => {
     });
 
     try {
-      await page.goto(`${suite.server.baseUrl}chat`);
+      await page.goto(controlUiSessionUrl(suite.server.baseUrl, "agent:main:session-a"));
       await page.getByText("Split toolbar proof.").waitFor({ timeout: 10_000 });
 
       // Desktop renders no topbar row: the sidebar owns navigation.
@@ -278,7 +295,14 @@ suite.define(() => {
       const headers = page.locator(".chat-pane__header");
       await expect.poll(() => panes.count()).toBe(2);
       await panes.last().getByText("Split toolbar proof.").waitFor();
-      await expect.poll(() => panes.last().locator(".chat-loading-skeleton").count()).toBe(0);
+      await expect
+        .poll(() =>
+          panes
+            .last()
+            .locator('openclaw-panel-loading-skeleton[data-panel-skeleton="chat"]')
+            .count(),
+        )
+        .toBe(0);
       await gateway.resolveDeferred("chat.startup");
       await expect
         .poll(() =>
@@ -639,7 +663,7 @@ suite.define(() => {
 
       // The background hydrate must not take the shared sessions loading
       // flag, which would disable New session for the whole request.
-      const newThread = page.getByRole("button", { name: "New session" }).first();
+      const newThread = page.getByRole("link", { name: "New session" }).first();
       expect(await newThread.isEnabled()).toBe(true);
 
       await gateway.resolveDeferred("sessions.list");
@@ -695,7 +719,7 @@ suite.define(() => {
     });
 
     try {
-      await page.goto(`${suite.server.baseUrl}chat`);
+      await page.goto(controlUiSessionUrl(suite.server.baseUrl, "agent:main:session-a"));
       await page
         .locator('.sidebar-recent-session[data-session-key="agent:main:session-a"]')
         .waitFor({
@@ -742,7 +766,7 @@ suite.define(() => {
     }
   });
 
-  it("flips a sidebar short route before any list refresh and refreshes only for an outbox", async () => {
+  it("releases a retained queued send after the canonical session list records idle", async () => {
     const context = await suite.newBrowserContext({
       locale: "en-US",
       serviceWorkers: "block",
@@ -751,17 +775,45 @@ suite.define(() => {
     const page = await context.newPage();
     const firstKey = "agent:main:thread:aaaaaaaa-1111-4111-8111-111111111111";
     const secondKey = "agent:main:thread:bbbbbbbb-2222-4222-8222-222222222222";
-    const sessions = chatSessionListResponse([
-      { key: firstKey, kind: "direct", label: "Instant A", updatedAt: 2 },
+    const activeSessions = chatSessionListResponse([
+      {
+        key: firstKey,
+        kind: "direct",
+        label: "Instant A",
+        updatedAt: 2,
+        activeRunIds: ["server-run"],
+        hasActiveRun: true,
+        status: "running",
+      },
+      { key: secondKey, kind: "direct", label: "Instant B", updatedAt: 1 },
+    ]);
+    const idleSessions = chatSessionListResponse([
+      {
+        key: firstKey,
+        kind: "direct",
+        label: "Instant A",
+        updatedAt: 3,
+        activeRunIds: [],
+        hasActiveRun: false,
+        lastRunId: "server-run",
+        status: "done",
+      },
       { key: secondKey, kind: "direct", label: "Instant B", updatedAt: 1 },
     ]);
     const gateway = await installMockGateway(page, {
-      methodResponses: { "sessions.list": sessions },
+      methodResponses: {
+        "chat.history": {
+          messages: [],
+          sessionInfo: { hasActiveRun: false, status: "done" },
+          thinkingLevel: null,
+        },
+        "sessions.list": activeSessions,
+      },
       sessionKey: firstKey,
     });
 
     try {
-      await page.goto(`${suite.server.baseUrl}chat`);
+      await page.goto(controlUiSessionUrl(suite.server.baseUrl, firstKey));
       await page.locator(`.sidebar-recent-session[data-session-key="${secondKey}"]`).waitFor();
       await page
         .locator(".chat-pane-cache__pane--visible .chat-pane__session-title")
@@ -834,9 +886,18 @@ suite.define(() => {
       await expect
         .poll(async () => (await gateway.getRequests("sessions.list")).length)
         .toBe(emptyOutboxListCount + 1);
-      if (emptyOutboxListRequests.length === 0) {
-        await gateway.resolveDeferred("sessions.list", sessions);
-      }
+      const queued = page.locator(".chat-queue").getByText("flush after idle reconciliation");
+      await queued.waitFor();
+      expect(await gateway.getRequests("chat.send")).toHaveLength(0);
+      await captureUiProof(suite, page, "queued-idle-release", "01-queued-before-idle.png");
+      await gateway.resolveDeferred("sessions.list", idleSessions);
+      const send = await gateway.waitForRequest("chat.send");
+      expect(requireRecord(send.params)).toMatchObject({
+        message: "flush after idle reconciliation",
+        sessionKey: firstKey,
+      });
+      await queued.waitFor({ state: "detached" });
+      await captureUiProof(suite, page, "queued-idle-release", "02-sent-after-idle.png");
     } finally {
       await suite.closeBrowserContext(context);
     }
@@ -901,7 +962,7 @@ suite.define(() => {
     });
 
     try {
-      await page.goto(`${suite.server.baseUrl}chat`);
+      await page.goto(controlUiSessionUrl(suite.server.baseUrl, initialKey));
       const row = page.locator(`.sidebar-recent-session[data-session-key="${key}"]`);
       await row.locator("a.sidebar-recent-session__link").click();
       await expect
@@ -923,7 +984,7 @@ suite.define(() => {
       expect(await link.getAttribute("aria-current")).toBe("page");
       expect(await link.getAttribute("aria-describedby")).toBeNull();
       expect(await link.ariaSnapshot()).toContain(`link "${readableTitle}"`);
-      await captureSessionAccessibilityProof(page, "after-derived-title");
+      await captureSessionAccessibilityProof(suite, page, "after-derived-title");
 
       const listCountBeforePatch = (await gateway.getRequests("sessions.list")).length;
       await row.hover();
@@ -943,7 +1004,7 @@ suite.define(() => {
       await expect.poll(() => label.textContent()).toBe(readableTitle);
       expect(await link.getAttribute("aria-current")).toBe("page");
       expect(await link.ariaSnapshot()).toContain(`link "${readableTitle}"`);
-      await captureSessionAccessibilityProof(page, "after-patch-refresh");
+      await captureSessionAccessibilityProof(suite, page, "after-patch-refresh");
     } finally {
       await suite.closeBrowserContext(context);
     }

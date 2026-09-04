@@ -67,18 +67,12 @@ export class SidebarPeopleController implements ReactiveController {
     }
     const target =
       event.target instanceof Element
-        ? event.target.closest<HTMLElement>(".sidebar-online__row")
+        ? event.target.closest<HTMLElement>("[data-person-card]")
         : null;
     if (!target || !["pointerover", "focusin", "click"].includes(event.type)) {
       return;
     }
     // Input modality belongs to the runtime; row intent only warms its lazy code.
-    if (
-      event.type === "click" &&
-      !(event.target instanceof Element && event.target.closest(".sidebar-online__details"))
-    ) {
-      return;
-    }
     const generation = ++this.generation;
     this.pendingTarget = target;
     document.addEventListener("pointerdown", this.cancelPending, true);

@@ -154,7 +154,9 @@ function writeFakePrlctl(tempDir: string, posixScript: string, windowsBootstrap:
   const prlctlPath = join(tempDir, "prlctl");
   writeFileSync(prlctlPath, posixScript);
   chmodSync(prlctlPath, 0o755);
-  copyFileSync(process.execPath, join(tempDir, "prlctl.exe"));
+  if (process.platform === "win32") {
+    copyFileSync(process.execPath, join(tempDir, "prlctl.exe"));
+  }
   writeFileSync(join(tempDir, "prlctl-bootstrap.mjs"), windowsBootstrap);
 }
 
@@ -598,7 +600,7 @@ ensure_vm_running`,
       const restoreIndex = linux.indexOf(`this.phase("${lane}.restore-snapshot"`);
       const resetIndex = linux.indexOf(`this.phase("${lane}.reset-state"`);
       const installIndex = linux.indexOf(
-        `this.phase("${lane}.${lane === "fresh" ? "install-latest-bootstrap" : "install-latest"}"`,
+        `this.phase("${lane}.${lane === "fresh" ? "install-main" : "install-latest"}"`,
       );
       expect(restoreIndex).toBeGreaterThanOrEqual(0);
       expect(resetIndex).toBeGreaterThan(restoreIndex);
@@ -1701,8 +1703,8 @@ if (commandArgs[0] === "list") {
     expect(combined).toContain("MinGit-");
     expect(combined).toContain("portable-git");
     expect(combined).toContain("where.exe git.exe");
-    expect(windowsGit.indexOf('"MinGit-2.55.0.4-64-bit.zip"')).toBeLessThan(
-      windowsGit.indexOf('"MinGit-2.55.0.4-arm64.zip"'),
+    expect(windowsGit.indexOf('"MinGit-2.55.0.5-64-bit.zip"')).toBeLessThan(
+      windowsGit.indexOf('"MinGit-2.55.0.5-arm64.zip"'),
     );
     expect(
       combined.match(/curl\.exe -fsSL --connect-timeout 10 --max-time 120 --retry 2/g),

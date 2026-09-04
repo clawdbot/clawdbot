@@ -1,0 +1,19 @@
+diff --git a/core/rfb.js b/core/rfb.js
+index 80011e4a10203806f14df1ffc3b8425861a965a7..b8b75557417cfb0f0522c0abbb56ec23b63d625b 100644
+--- a/core/rfb.js
++++ b/core/rfb.js
+@@ -2429,11 +2429,9 @@ export default class RFB extends EventTargetMixin {
+                 }
+ 
+             } else if (actions === extendedClipboardActionProvide) {
+-                if (this._viewOnly) {
+-                    return true;
+-                }
+-
+-                if (!(formats & extendedClipboardFormatText)) {
++                if (this._viewOnly || !(formats & extendedClipboardFormatText)) {
++                    // Ignored clipboard bytes must not become the next RFB message.
++                    this._sock.rQskipBytes(length - 4);
+                     return true;
+                 }
+                 // Ignore what we had in our clipboard client side.

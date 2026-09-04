@@ -2,6 +2,7 @@ import type { ErrorShape, ResponseFrame } from "@openclaw/gateway-protocol";
 import {
   GatewayProtocolRequestError,
   GatewayProtocolRequestTimeoutError,
+  retainGatewayResponsePayload,
   type GatewayProtocolRequestOptions,
 } from "./protocol-request.js";
 import { resolveSafeTimeoutDelayMs } from "./timeouts.js";
@@ -156,7 +157,7 @@ export class GatewayPendingRequests {
       return;
     }
     const status = (frame.payload as { status?: unknown } | undefined)?.status;
-    if (pending.expectFinal && status === "accepted") {
+    if (frame.ok && pending.expectFinal && status === "accepted") {
       if (!pending.acceptedNotified) {
         pending.acceptedNotified = true;
         this.invoke("accepted", () => pending.onAccepted?.(frame.payload));
@@ -171,10 +172,11 @@ export class GatewayPendingRequests {
       return;
     }
     this.finishTiming(frame.id, pending, false, frame.error?.code);
-    pending.reject(
+    const error =
       this.opts.createRequestError?.(frame.error ?? {}) ??
-        new GatewayProtocolRequestError(frame.error ?? {}),
-    );
+      new GatewayProtocolRequestError(frame.error ?? {});
+    retainGatewayResponsePayload(error, frame.payload);
+    pending.reject(error);
   }
 
   flush(error: Error): void {

@@ -47,6 +47,7 @@ import {
 } from "openclaw/plugin-sdk/text-chunking";
 import {
   inspectZaloAccount,
+  isZaloAccountConfigured,
   listZaloAccountIds,
   resolveDefaultZaloAccountId,
   resolveZaloAccount,
@@ -134,10 +135,6 @@ const zaloMessageAdapter = defineChannelMessageAdapter({
     media: sendZaloDelivery,
   },
 });
-
-function isZaloAccountConfigured(account: ResolvedZaloAccount): boolean {
-  return account.tokenStatus ? account.tokenStatus !== "missing" : Boolean(account.token?.trim());
-}
 
 const zaloConfigAdapter = createScopedChannelConfigAdapter<ResolvedZaloAccount>({
   sectionKey: "zalo",

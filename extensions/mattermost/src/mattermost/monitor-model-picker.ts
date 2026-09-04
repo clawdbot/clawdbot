@@ -18,7 +18,7 @@ import { buildMattermostEventPlan, type MattermostEventPlan } from "./monitor-ev
 import type { MattermostMonitorContext } from "./monitor-types.js";
 import { deliverMattermostReplyPayload } from "./reply-delivery.js";
 import type { ReplyPayload } from "./runtime-api.js";
-import { buildModelsProviderData } from "./runtime-api.js";
+import { buildPreparedModelsProviderData } from "./runtime-api.js";
 import { sendMessageMattermost } from "./send.js";
 
 type RunModelPickerCommandParams = {
@@ -203,7 +203,7 @@ export function createMattermostModelPickerInteractionHandler(
       agentId: eventPlan.route.agentId,
       sessionKey: eventPlan.thread.sessionKey,
     };
-    const data = await buildModelsProviderData(cfg, eventPlan.route.agentId);
+    const data = await buildPreparedModelsProviderData(cfg, eventPlan.route.agentId);
     if (data.providers.length === 0) {
       return await updatePickerPost("No models available.");
     }

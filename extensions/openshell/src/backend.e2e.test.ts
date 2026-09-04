@@ -1,7 +1,6 @@
 // Openshell tests cover backend plugin behavior.
 import fs from "node:fs/promises";
 import net from "node:net";
-import os from "node:os";
 import path from "node:path";
 import {
   createSandboxTestContext,
@@ -11,10 +10,13 @@ import {
 } from "openclaw/plugin-sdk/test-fixtures";
 import { describe, expect, it } from "vitest";
 import {
+  buildOpenShellPolicyYaml,
+  cleanupOpenShellWorkspace,
   runCommand,
   runBackendExec,
   runPreparedBackendExec,
   stressBackend,
+  verifyRemoteExecOverlap,
 } from "./backend.e2e.test-support.js";
 import {
   createOpenShellSandboxBackendFactory,
@@ -28,7 +30,7 @@ const OPENCLAW_OPENSHELL_COMMAND =
   process.env.OPENCLAW_E2E_OPENSHELL_COMMAND?.trim() || "openshell";
 const OPENCLAW_OPENSHELL_CONFIG_HOME =
   process.env.OPENCLAW_E2E_OPENSHELL_CONFIG_HOME?.trim() || null;
-const OPENCLAW_OPENSHELL_HOST_IP = process.env.OPENCLAW_E2E_OPENSHELL_HOST_IP?.trim() || null;
+const OPENCLAW_OPENSHELL_HOST_IP = process.env.OPENCLAW_E2E_OPENSHELL_HOST_IP;
 
 const CUSTOM_IMAGE_DOCKERFILE = `FROM python:3.13-slim
 
@@ -139,46 +141,6 @@ async function dockerReady(): Promise<boolean> {
   } catch {
     return false;
   }
-}
-
-async function resolveOpenShellHostIp(): Promise<string> {
-  if (OPENCLAW_OPENSHELL_HOST_IP) {
-    return OPENCLAW_OPENSHELL_HOST_IP;
-  }
-  const networks = await runCommand({
-    command: "docker",
-    args: ["network", "ls", "--format", "{{.Name}}"],
-    timeoutMs: 20_000,
-  });
-  for (const network of networks.stdout.split(/\r?\n/u).map((value) => value.trim())) {
-    if (!network.startsWith("openshell")) {
-      continue;
-    }
-    const gateway = await runCommand({
-      command: "docker",
-      args: [
-        "run",
-        "--rm",
-        "--network",
-        network,
-        "--add-host",
-        "host.openshell.internal:host-gateway",
-        "python:3.13-alpine",
-        "python3",
-        "-c",
-        "import socket; print(socket.gethostbyname('host.openshell.internal'))",
-      ],
-      allowFailure: true,
-      timeoutMs: 60_000,
-    });
-    const hostIp = gateway.stdout.trim();
-    if (gateway.code === 0 && net.isIP(hostIp)) {
-      return hostIp;
-    }
-  }
-  throw new Error(
-    "OpenShell E2E could not resolve host.openshell.internal on the OpenShell Docker network; set OPENCLAW_E2E_OPENSHELL_HOST_IP",
-  );
 }
 
 async function allocatePort(): Promise<number> {
@@ -293,7 +255,6 @@ HTTPServer(("0.0.0.0", 8000), Handler).serve_forever()
           await runCommand({
             command: "docker",
             args: ["rm", "-f", containerId],
-            allowFailure: true,
             timeoutMs: 30_000,
           });
         },
@@ -311,42 +272,6 @@ HTTPServer(("0.0.0.0", 8000), Handler).serve_forever()
     timeoutMs: 30_000,
   });
   throw new Error("docker-backed host policy server did not become ready");
-}
-
-function buildOpenShellPolicyYaml(params: {
-  port: number;
-  binaryPath: string;
-  hostIp: string;
-}): string {
-  const networkPolicies = `  host_echo:
-    name: host-echo
-    endpoints:
-      - host: host.openshell.internal
-        port: ${params.port}
-        protocol: rest
-        enforcement: enforce
-        access: full
-        allowed_ips:
-          - "${params.hostIp}/32"
-    binaries:
-      - path: ${params.binaryPath}`;
-  return `version: 1
-
-filesystem_policy:
-  include_workdir: true
-  read_only: [/usr, /lib, /proc, /dev/urandom, /app, /etc, /var/log, /opt]
-  read_write: [/sandbox, /tmp, /dev/null]
-
-landlock:
-  compatibility: best_effort
-
-process:
-  run_as_user: sandbox
-  run_as_group: sandbox
-
-network_policies:
-${networkPolicies}
-`;
 }
 
 describe("OpenShell gateway discovery", () => {
@@ -405,7 +330,6 @@ describe("openshell sandbox backend e2e", () => {
         );
       }
       const openshellConfigHome = OPENCLAW_OPENSHELL_CONFIG_HOME;
-      const hostIp = await resolveOpenShellHostIp();
       const gatewayName = await activeOpenShellGateway(OPENCLAW_OPENSHELL_COMMAND, {
         ...process.env,
         XDG_CONFIG_HOME: openshellConfigHome,
@@ -414,13 +338,17 @@ describe("openshell sandbox backend e2e", () => {
         throw new Error("OpenShell E2E requires an active local registered gateway");
       }
 
-      const rootDir = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-openshell-e2e-"));
+      // macOS sockaddr_un cannot hold the test runner's nested temporary path, and the
+      // mirror socket under this root would exceed it.
+      const rootDir = await fs.mkdtemp(path.join(await fs.realpath("/tmp"), "oc-osh-e2e-"));
       const env = openshellEnv(rootDir);
       const previousHome = process.env.HOME;
       const previousXdgConfigHome = process.env.XDG_CONFIG_HOME;
       const previousXdgCacheHome = process.env.XDG_CACHE_HOME;
       const workspaceDir = path.join(rootDir, "workspace");
-      const mirrorWorkspaceDir = path.join(rootDir, "mirror-workspace");
+      const mirrorWorkspaceDir = path.join(rootDir, "mirror");
+      const overlapWorkspaceDir = path.join(rootDir, "overlap-primary");
+      const overlapAgentWorkspaceDir = path.join(rootDir, "overlap-agent");
       const dockerfileDir = path.join(rootDir, "custom-image");
       const dockerfilePath = path.join(dockerfileDir, "Dockerfile");
       const denyPolicyPath = path.join(rootDir, "deny-policy.yaml");
@@ -430,6 +358,7 @@ describe("openshell sandbox backend e2e", () => {
       const testRunId = `${process.pid.toString(36)}${Date.now().toString(36)}`;
       const openShellWorkspace = `oc-w-${testRunId.slice(-14)}`;
       let hostPolicyServer: HostPolicyServer | null | undefined;
+      let mirrorSocketServer: net.Server | undefined;
       let workspaceCreated = false;
       const sandboxCfg = {
         mode: "all" as const,
@@ -490,6 +419,24 @@ describe("openshell sandbox backend e2e", () => {
         agentWorkspaceDir: mirrorWorkspaceDir,
         cfg: sandboxCfg,
       });
+      const overlapBackend = await createOpenShellSandboxBackendFactory({
+        pluginConfig: resolveOpenShellPluginConfig({
+          command: OPENCLAW_OPENSHELL_COMMAND,
+          gateway: gatewayName,
+          workspace: openShellWorkspace,
+          from: dockerfilePath,
+          autoProviders: false,
+          policy: denyPolicyPath,
+          remoteWorkspaceDir: "/sandbox/agent/project",
+          remoteAgentWorkspaceDir: "/sandbox/agent",
+        }),
+      })({
+        sessionKey: `session:openshell-e2e-overlap:${scopeSuffix}`,
+        scopeKey: `session:openshell-e2e-overlap:${scopeSuffix}`,
+        workspaceDir: overlapWorkspaceDir,
+        agentWorkspaceDir: overlapAgentWorkspaceDir,
+        cfg: { ...sandboxCfg, workspaceAccess: "ro" },
+      });
       const allowBackend = await createOpenShellSandboxBackendFactory({
         pluginConfig: { ...pluginConfig, policy: allowPolicyPath },
       })({
@@ -500,6 +447,7 @@ describe("openshell sandbox backend e2e", () => {
         cfg: sandboxCfg,
       });
 
+      const failures: unknown[] = [];
       try {
         process.env.HOME = env.HOME;
         process.env.XDG_CONFIG_HOME = env.XDG_CONFIG_HOME;
@@ -510,6 +458,8 @@ describe("openshell sandbox backend e2e", () => {
         }
         await fs.mkdir(workspaceDir, { recursive: true });
         await fs.mkdir(mirrorWorkspaceDir, { recursive: true });
+        await fs.mkdir(overlapWorkspaceDir, { recursive: true });
+        await fs.mkdir(overlapAgentWorkspaceDir, { recursive: true });
         await fs.mkdir(dockerfileDir, { recursive: true });
         const isolatedConfigHome = env.XDG_CONFIG_HOME;
         if (!isolatedConfigHome) {
@@ -534,6 +484,14 @@ describe("openshell sandbox backend e2e", () => {
           "mirror-from-local\n",
           "utf8",
         );
+        await fs.writeFile(
+          path.join(overlapWorkspaceDir, "primary-only.txt"),
+          "primary-preserved\n",
+        );
+        await fs.writeFile(
+          path.join(overlapAgentWorkspaceDir, "agent-only.txt"),
+          "agent-preserved\n",
+        );
         for (const protectedDirectory of [".git", "hooks", "git-hooks"]) {
           const protectedPath = path.join(mirrorWorkspaceDir, protectedDirectory);
           await fs.mkdir(protectedPath, { recursive: true });
@@ -553,13 +511,28 @@ describe("openshell sandbox backend e2e", () => {
           await fs.symlink(hostLinkTarget, linkPath);
         }
         await fs.link(hostLinkTarget, path.join(mirrorWorkspaceDir, "links", "hardlinked.txt"));
+        const mirrorFifoPath = path.join(mirrorWorkspaceDir, "host.fifo");
+        const mirrorSocketPath = path.join(mirrorWorkspaceDir, "host.sock");
+        const mkfifoResult = await runCommand({
+          command: "mkfifo",
+          args: [mirrorFifoPath],
+          timeoutMs: 10_000,
+        });
+        expect(mkfifoResult.code).toBe(0);
+        const socketServer = net.createServer();
+        mirrorSocketServer = socketServer;
+        socketServer.listen(mirrorSocketPath);
+        await new Promise<void>((resolve, reject) => {
+          socketServer.once("listening", resolve);
+          socketServer.once("error", reject);
+        });
         await fs.writeFile(dockerfilePath, CUSTOM_IMAGE_DOCKERFILE, "utf8");
         await fs.writeFile(
           denyPolicyPath,
           buildOpenShellPolicyYaml({
             port: hostPolicyServer.port,
             binaryPath: "/usr/bin/false",
-            hostIp,
+            hostIp: OPENCLAW_OPENSHELL_HOST_IP,
           }),
           "utf8",
         );
@@ -568,11 +541,10 @@ describe("openshell sandbox backend e2e", () => {
           buildOpenShellPolicyYaml({
             port: hostPolicyServer.port,
             binaryPath: "/usr/bin/curl",
-            hostIp,
+            hostIp: OPENCLAW_OPENSHELL_HOST_IP,
           }),
           "utf8",
         );
-
         const execResult = await runBackendExec({
           backend,
           command: "pwd && cat /opt/openshell-e2e-marker.txt && cat seed.txt",
@@ -602,13 +574,6 @@ describe("openshell sandbox backend e2e", () => {
           running: true,
           configLabelMatch: true,
         });
-
-        const curlPathResult = await runBackendExec({
-          backend,
-          command: "command -v curl",
-          timeoutMs: 60_000,
-        });
-        expect(trimTrailingNewline(curlPathResult.stdout.trim())).toMatch(/^\/.+\/curl$/);
 
         const sandbox = createSandboxTestContext({
           overrides: {
@@ -666,6 +631,24 @@ describe("openshell sandbox backend e2e", () => {
         });
         expect(mirrorExecResult.stdout).toContain("/sandbox/project");
         expect(mirrorExecResult.stdout).toContain("mirror-from-local");
+        expect((await fs.lstat(mirrorFifoPath)).isFIFO()).toBe(true);
+        expect((await fs.lstat(mirrorSocketPath)).isSocket()).toBe(true);
+        if (stressMode === "mirror") {
+          await expect(
+            runBackendExec({
+              backend: overlapBackend,
+              command:
+                "cat primary-only.txt ../agent-only.txt && printf 'agent-remote\\n' > ../agent-only.txt",
+              timeoutMs: 2 * 60_000,
+            }),
+          ).resolves.toMatchObject({
+            code: 0,
+            stdout: "primary-preserved\nagent-preserved\n",
+          });
+          await expect(
+            fs.readFile(path.join(overlapAgentWorkspaceDir, "agent-only.txt"), "utf8"),
+          ).resolves.toBe("agent-preserved\n");
+        }
         for (const relativePath of hostLinks) {
           await expect(fs.readlink(path.join(mirrorWorkspaceDir, relativePath))).resolves.toBe(
             hostLinkTarget,
@@ -774,6 +757,9 @@ describe("openshell sandbox backend e2e", () => {
           agentWorkspaceDir: workspaceDir,
           cfg: sandboxCfg,
         });
+        if (stressMode === "remote") {
+          await verifyRemoteExecOverlap({ backend, twin: remoteTwin, bridge });
+        }
         await stressBackend(
           stressMode === "mirror"
             ? {
@@ -790,7 +776,17 @@ describe("openshell sandbox backend e2e", () => {
               },
         );
 
-        for (const candidate of [mirrorBackend, backend]) {
+        for (const [candidate, candidateBridge] of [
+          [mirrorBackend, mirrorBridge],
+          [backend, bridge],
+        ] as const) {
+          await expect(
+            runBackendExec({ backend: candidate, command: "exit 23", timeoutMs: 60_000 }),
+          ).rejects.toThrow("exit: 23");
+          await candidateBridge.writeFile({ filePath: "after-failed-exec.txt", data: "recovered" });
+          await expect(
+            runBackendExec({ backend: candidate, command: "cat after-failed-exec.txt" }),
+          ).resolves.toMatchObject({ code: 0, stdout: "recovered" });
           await expect(
             candidate.buildExecSpec({
               command: "true",
@@ -804,7 +800,6 @@ describe("openshell sandbox backend e2e", () => {
           await expect(candidate.validateWorkdir?.(candidate.workdir)).resolves.toBe(
             candidate.workdir,
           );
-          candidate.discardPreparedWorkdir?.(candidate.workdir);
           const unspawned = await candidate.buildExecSpec({
             command: "exit 99",
             env: {},
@@ -841,46 +836,66 @@ describe("openshell sandbox backend e2e", () => {
             token: held.finalizeToken,
           });
         }
+      } catch (error) {
+        failures.push(error);
       } finally {
-        for (const sandboxName of [
-          backend.runtimeId,
-          mirrorBackend.runtimeId,
-          allowBackend.runtimeId,
-        ]) {
-          await runCommand({
-            command: OPENCLAW_OPENSHELL_COMMAND,
-            args: ["--workspace", openShellWorkspace, "sandbox", "delete", sandboxName],
-            env,
-            allowFailure: true,
-            timeoutMs: 2 * 60_000,
-          });
+        try {
+          if (workspaceCreated) {
+            await cleanupOpenShellWorkspace({
+              command: OPENCLAW_OPENSHELL_COMMAND,
+              env,
+              workspace: openShellWorkspace,
+              sandboxNames: [
+                backend.runtimeId,
+                mirrorBackend.runtimeId,
+                overlapBackend.runtimeId,
+                allowBackend.runtimeId,
+              ],
+            });
+          }
+        } catch (error) {
+          failures.push(error);
+        } finally {
+          try {
+            const socketServer = mirrorSocketServer;
+            if (socketServer) {
+              await new Promise<void>((resolve, reject) => {
+                socketServer.close((error) => (error ? reject(error) : resolve()));
+              });
+            }
+          } catch (error) {
+            failures.push(error);
+          }
+          try {
+            await hostPolicyServer?.close();
+          } catch (error) {
+            failures.push(error);
+          }
+          try {
+            await fs.rm(rootDir, { recursive: true, force: true });
+          } catch (error) {
+            failures.push(error);
+          } finally {
+            if (previousHome === undefined) {
+              delete process.env.HOME;
+            } else {
+              process.env.HOME = previousHome;
+            }
+            if (previousXdgConfigHome === undefined) {
+              delete process.env.XDG_CONFIG_HOME;
+            } else {
+              process.env.XDG_CONFIG_HOME = previousXdgConfigHome;
+            }
+            if (previousXdgCacheHome === undefined) {
+              delete process.env.XDG_CACHE_HOME;
+            } else {
+              process.env.XDG_CACHE_HOME = previousXdgCacheHome;
+            }
+          }
         }
-        if (workspaceCreated) {
-          await runCommand({
-            command: OPENCLAW_OPENSHELL_COMMAND,
-            args: ["workspace", "delete", openShellWorkspace],
-            env,
-            allowFailure: true,
-            timeoutMs: 30_000,
-          });
-        }
-        await hostPolicyServer?.close().catch(() => {});
-        await fs.rm(rootDir, { recursive: true, force: true });
-        if (previousHome === undefined) {
-          delete process.env.HOME;
-        } else {
-          process.env.HOME = previousHome;
-        }
-        if (previousXdgConfigHome === undefined) {
-          delete process.env.XDG_CONFIG_HOME;
-        } else {
-          process.env.XDG_CONFIG_HOME = previousXdgConfigHome;
-        }
-        if (previousXdgCacheHome === undefined) {
-          delete process.env.XDG_CACHE_HOME;
-        } else {
-          process.env.XDG_CACHE_HOME = previousXdgCacheHome;
-        }
+      }
+      if (failures.length > 0) {
+        throw new AggregateError(failures, "OpenShell E2E or cleanup failed");
       }
     },
   );

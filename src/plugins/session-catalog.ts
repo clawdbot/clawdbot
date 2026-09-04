@@ -1,6 +1,7 @@
 import { createHash } from "node:crypto";
 import type {
   SessionCatalogHost,
+  SessionCatalogShareRoute,
   SessionsCatalogArchiveParams,
   SessionsCatalogContinueParams,
   SessionsCatalogReadParams,
@@ -63,6 +64,8 @@ export type SessionCatalogStartTerminalProviderParams = {
   initialMessage?: string;
   /** Present only when the caller selected a catalog host backed by this node. */
   nodeId?: string;
+  /** Selected local catalog source; node ownership is carried by nodeId. */
+  hostId?: string;
 };
 
 export type SessionCatalogTerminalPlan =
@@ -164,6 +167,11 @@ export type SessionCatalogContinueProviderResult = {
   };
 };
 
+type SessionCatalogGatewayCopy = {
+  displayName?: string;
+  preferredModel?: string;
+};
+
 type SessionCatalogCreateParams = {
   /** Agent whose model/runtime policy must authorize the catalog target. */
   agentId?: string;
@@ -172,6 +180,10 @@ type SessionCatalogCreateParams = {
 export type SessionCatalogProvider = {
   id: string;
   label: string;
+  /** Provider rows are Gateway-hosted artifacts visible to authenticated operators. */
+  audience?: "gateway-operators";
+  /** Closed plugin-owned route contract; invalid or colliding declarations are not projected. */
+  shareRoute?: SessionCatalogShareRoute;
   /** Declares that every HOME-sensitive action honors the host isolation policy. */
   supportsProcessHomeIsolation?: true;
   /** Config-derived target; the Gateway memoizes it for one runtime-config object identity. */
@@ -179,10 +191,15 @@ export type SessionCatalogProvider = {
     params: SessionCatalogCreateParams,
   ) => SessionCatalogCreateTarget | undefined;
   list: (params: SessionCatalogListProviderParams) => Promise<SessionCatalogHost[]>;
+  /** Items are newest-first by source order; nextCursor continues to older items. */
   read: (params: SessionCatalogReadProviderParams) => Promise<SessionsCatalogReadResult>;
   continueSession?: (
     params: SessionCatalogContinueProviderParams,
   ) => Promise<SessionCatalogContinueProviderResult>;
+  /** Copy catalog history into a new ordinary Gateway-owned session. */
+  copyToGatewaySession?: (
+    params: SessionCatalogContinueProviderParams,
+  ) => Promise<SessionCatalogGatewayCopy>;
   checkUpstreamActivity?: (
     probes: SessionUpstreamProbe[],
     policy?: { allowProcessHomeFallback?: boolean },

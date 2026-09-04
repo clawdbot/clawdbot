@@ -144,9 +144,9 @@ Any local process that can connect to the Gateway can impersonate a loopback rev
 
 ### Configure with the wizard
 
-Run `openclaw configure --section gateway` and select **Trusted Proxy**. Entering a loopback proxy address (including a CIDR with a loopback base address) shows the security warning above and asks whether to allow loopback authentication. The default is **No** for a new configuration. **Yes** saves `gateway.auth.trustedProxy.allowLoopback: true`; **No** leaves it unset and warns that loopback proxy requests will fail with `trusted_proxy_loopback_source`, with a link back to this page.
+Run `openclaw configure --section gateway` and select **Trusted Proxy**. Entering an address or CIDR that matches a loopback source under the Gateway's runtime rules shows the security warning above and asks whether to allow loopback authentication. This includes ranges containing loopback, even when their base address is not loopback. The default is **No** for a new configuration. **Yes** saves `gateway.auth.trustedProxy.allowLoopback: true`; **No** leaves it unset and warns that loopback proxy requests will fail with `trusted_proxy_loopback_source`, with a link back to this page.
 
-When reconfiguring an existing trusted-proxy setup, the prompt defaults to the existing `allowLoopback` opt-in. Choosing **No** revokes it. If no entered proxy address is loopback, the wizard leaves the existing value unchanged. Same-mode reconfiguration also preserves `deviceAutoApprove` verbatim; device enrollment policy is not changed by this prompt. Switching from another auth mode does not restore dormant trusted-proxy opt-ins.
+When reconfiguring an existing trusted-proxy setup, the prompt defaults to the existing `allowLoopback` opt-in. Choosing **No** revokes it. If no entered address or range matches a loopback source, the wizard leaves the existing value unchanged. Same-mode reconfiguration also preserves `deviceAutoApprove` verbatim; device enrollment policy is not changed by this prompt. Switching from another auth mode does not restore dormant trusted-proxy opt-ins.
 
 ## Per-identity scope grants
 
@@ -441,6 +441,37 @@ If startup fails with an error like `gateway auth mode is trusted-proxy, but a s
 
 Loopback trusted-proxy identity headers still fail closed: same-host callers are not silently authenticated as proxy users. Internal OpenClaw callers that bypass the proxy may authenticate with `gateway.auth.password` / `OPENCLAW_GATEWAY_PASSWORD` instead. Token fallback remains intentionally unsupported in trusted-proxy mode.
 
+## Restrict a separate Gateway to one owner
+
+Use a [separate Gateway cell](/gateway/multi-tenant-hosting) when one owner needs a
+different trust boundary. A separate workspace, model picker filter, or Gateway
+process under the same OS user does not isolate its credentials and state from
+other agents running as that user.
+
+Fleet-managed cells currently use token authentication. This trusted-proxy
+procedure requires an independently provisioned cell; do not overwrite Fleet's
+managed auth configuration.
+
+The identity-aware proxy must reject every other user **before forwarding any HTTP
+request or WebSocket upgrade**. Bind that policy to a verified immutable identity,
+such as an issuer-qualified OIDC subject, and overwrite `userHeader` with that
+identity. Set `allowUsers` to the same single value as a second check. Gateway
+`allowUsers` compares the trimmed header value exactly; it does not verify a JWT,
+resolve an account ID, or make an email address immutable. `requiredHeaders` only
+checks that headers are present and non-blank.
+
+Keep the Gateway reachable only from that proxy. Do not rely on `allowUsers` alone
+to revoke access: valid paired-device or bootstrap credentials have their own
+WebSocket authentication paths. Existing connections also require explicit
+revocation or disconnection. Enforce the owner restriction at the proxy for all
+routes, including plugin routes, and do not create an unprotected node route.
+
+For a proxy-only cell, omit both Gateway token and password configuration and
+their environment variables. Keep `allowLoopback: false` when the proxy has a
+separate network identity. The provider credential inside the cell authenticates
+the workload to its provider; it does not authenticate the human using the
+Gateway. The host administrator remains trusted.
+
 ## Security checklist
 
 Before enabling trusted-proxy auth, verify:
@@ -474,6 +505,14 @@ Separate, non-trusted-proxy-specific findings also apply whenever Control UI is 
 
 ## Troubleshooting
 
+### Control UI says Proxy authentication required
+
+The Gateway is reachable, but it rejected proxy authentication or forwarded identity. For `AUTH_IDENTITY_HEADER_REQUIRED`, a required proxy header was missing or blank; this is not a network outage.
+
+Open the configured authenticated proxy or SSO dashboard URL and sign in there instead of visiting the Gateway's loopback URL directly. If the error persists, ask the Gateway administrator to verify identity and required-header forwarding on **WebSocket upgrade requests**, and confirm that the signed-in account is permitted.
+
+A Gateway token cannot replace proxy authentication. Do not send identity headers from the browser, broaden `trustedProxies`, or remove `allowUsers` to work around the rejection.
+
 <AccordionGroup>
   <Accordion title="trusted_proxy_untrusted_source">
     The request didn't come from an IP in `gateway.trustedProxies`. Check:
@@ -493,7 +532,7 @@ Separate, non-trusted-proxy-specific findings also apply whenever Control UI is 
 
     Fix:
 
-    - Prefer token/password auth for internal same-host clients that do not go through the proxy, or
+    - Use an explicitly configured local password for internal same-host clients that do not go through the proxy; token fallback is not supported in trusted-proxy mode, or
     - Route through a non-loopback trusted proxy address and keep that IP in `gateway.trustedProxies`, or
     - For a deliberate same-host reverse proxy, set `gateway.auth.trustedProxy.allowLoopback = true`, keep the loopback address in `gateway.trustedProxies`, and make sure the proxy strips or overwrites identity headers.
 
@@ -525,7 +564,7 @@ Separate, non-trusted-proxy-specific findings also apply whenever Control UI is 
 
   </Accordion>
   <Accordion title="trusted_proxy_user_not_allowed">
-    The user is authenticated but not in `allowUsers`. Either add them or remove the allowlist.
+    The user is authenticated but not in `allowUsers`. Sign in with a permitted account or ask the Gateway administrator to review the intended access policy. Do not remove the allowlist as a connectivity workaround.
   </Accordion>
   <Accordion title="trusted_proxy_no_proxies_configured / trusted_proxy_config_missing">
     `gateway.auth.mode` is `"trusted-proxy"` but `gateway.trustedProxies` is empty, or `gateway.auth.trustedProxy` itself is missing. Every request is rejected until both are set.

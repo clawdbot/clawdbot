@@ -195,12 +195,14 @@ internal fun workingClawPose(
   phase: Float,
 ): WorkingClawPose =
   when (stance) {
-    WorkingClawStance.Spin ->
+    WorkingClawStance.Spin -> {
       WorkingClawPose(
         rotationY = phase * 360f,
         jawRotation = sampleFrames(snipFrames, phase),
       )
-    WorkingClawStance.Shadowbox ->
+    }
+
+    WorkingClawStance.Shadowbox -> {
       WorkingClawPose(
         rotationZ = sampleFrames(comboRotationFrames, phase),
         translationXDp = sampleFrames(comboXFrames, phase),
@@ -208,57 +210,76 @@ internal fun workingClawPose(
         powAlpha = sampleFrames(powAlphaFrames, phase),
         powScale = sampleFrames(powScaleFrames, phase),
       )
-    WorkingClawStance.Backflip ->
+    }
+
+    WorkingClawStance.Backflip -> {
       WorkingClawPose(
         rotationZ = sampleFrames(backflipRotationFrames, phase),
         translationYDp = sampleFrames(backflipYFrames, phase),
         jawRotation = sampleFrames(snipFrames, phase),
       )
-    WorkingClawStance.Zen ->
+    }
+
+    WorkingClawStance.Zen -> {
       WorkingClawPose(
         scale = sampleFrames(zenScaleFrames, phase, easeInOut),
         jawRotation = sampleFrames(zenJawFrames, phase),
       )
-    WorkingClawStance.Drummer ->
+    }
+
+    WorkingClawStance.Drummer -> {
       WorkingClawPose(
         rotationZ = sampleFrames(drummerRotationFrames, phase),
         jawRotation = sampleFrames(drummerJawFrames, phase),
       )
-    WorkingClawStance.Peekaboo ->
+    }
+
+    WorkingClawStance.Peekaboo -> {
       WorkingClawPose(
         translationYDp = sampleFrames(peekabooYFrames, phase),
         scale = sampleFrames(peekabooScaleFrames, phase),
         jawRotation = sampleFrames(peekabooJawFrames, phase),
       )
-    WorkingClawStance.NodOff ->
+    }
+
+    WorkingClawStance.NodOff -> {
       WorkingClawPose(
         rotationZ = sampleFrames(nodOffRotationFrames, phase),
         translationYDp = sampleFrames(nodOffYFrames, phase),
         jawRotation = sampleFrames(nodOffJawFrames, phase),
       )
-    WorkingClawStance.Curious ->
+    }
+
+    WorkingClawStance.Curious -> {
       WorkingClawPose(
         rotationZ = sampleFrames(curiousRotationFrames, phase),
         jawRotation = sampleFrames(curiousJawFrames, phase),
       )
-    WorkingClawStance.OmNom ->
+    }
+
+    WorkingClawStance.OmNom -> {
       WorkingClawPose(
         translationXDp = sampleFrames(omNomXFrames, phase),
         jawRotation = sampleFrames(omNomJawFrames, phase),
       )
-    WorkingClawStance.FakeOut ->
+    }
+
+    WorkingClawStance.FakeOut -> {
       WorkingClawPose(
         rotationZ = sampleFrames(fakeOutRotationFrames, phase),
         jawRotation = sampleFrames(fakeOutJawFrames, phase),
       )
+    }
+
     WorkingClawStance.Default,
     WorkingClawStance.Southpaw,
     WorkingClawStance.Flurry,
-    ->
+    -> {
       WorkingClawPose(
         rotationZ = sampleFrames(flexFrames, phase),
         jawRotation = sampleFrames(snipFrames, phase),
       )
+    }
   }
 
 internal fun workingClawCycleMs(stance: WorkingClawStance): Long =
@@ -431,14 +452,17 @@ internal fun formatLocalizedChatDurationCompact(durationMs: Long): String =
         val days = count
         nativeString("\${days}d", days)
       }
+
       ChatDurationUnit.Hour -> {
         val hours = count
         nativeString("\${hours}h", hours)
       }
+
       ChatDurationUnit.Minute -> {
         val minutes = count
         nativeString("\${minutes}m", minutes)
       }
+
       ChatDurationUnit.Second -> {
         val seconds = count
         nativeString("\${seconds}s", seconds)

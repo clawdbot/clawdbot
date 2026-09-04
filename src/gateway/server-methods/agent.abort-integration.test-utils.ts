@@ -2,21 +2,28 @@
 import { expectDefined } from "@openclaw/normalization-core";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { registerExecApprovalFollowupRuntimeHandoff } from "../../agents/bash-tools.exec-approval-followup-state.js";
+import { createSubagentRunRecord } from "../../agents/subagent-test-fixtures.test-helpers.js";
 import {
-  addSubagentRunForTests,
   getSubagentRunByChildSessionKey,
-  testing as subagentRegistryTesting,
+  registerSubagentRun,
 } from "../../agents/subagents/registry/subagent-registry.test-helpers.js";
+import { enqueueSwarmRun, releaseSwarmRun } from "../../agents/subagents/swarm/swarm-scheduler.js";
+import { testing as swarmSchedulerTesting } from "../../agents/subagents/swarm/swarm-scheduler.test-support.js";
+import { createReplyOperation } from "../../auto-reply/reply/reply-run-registry.js";
 import type { InternalSessionEntry as SessionEntry } from "../../config/sessions.js";
+import { resolveSessionStorePathCore } from "../../config/sessions/paths.js";
+import { replaceSessionEntry } from "../../config/sessions/session-accessor.js";
 import { runExclusiveSessionLifecycleMutation } from "../../sessions/session-lifecycle-admission.js";
 import { setGatewayDedupeEntry } from "../agent-turn/agent-job.js";
 import { prepareAgentRunDispatch } from "../agent-turn/agent-run-admission-phase.js";
 import { createAgentTurnIo } from "../agent-turn/io.js";
 import { resolveAgentRunExpiresAtMs } from "../chat-abort.js";
+import type { GatewaySessionRow } from "../session-utils.js";
 import {
+  applyGatewaySubagentRegistryTestDeps,
   getAgentTestMocks,
+  operatorWriteCliClient,
   makeContext,
-  type AgentHandlerArgs,
   waitForAssertion,
   requireValue,
   expectRecordFields,
@@ -32,10 +39,24 @@ import {
   describe1AfterEach1,
   prime,
 } from "./agent.test-harness.js";
+import {
+  handleChatAbortRequest,
+  handleChatAbortRequestWithLifecycle,
+} from "./chat-abort-handler.js";
 import { chatHandlers } from "./chat.js";
 import type { GatewayRequestContext } from "./types.js";
 
 const mocks = getAgentTestMocks();
+
+function expectReactivationFailure(respond: ReturnType<typeof vi.fn>, runId: string): void {
+  expect(mocks.replaceSubagentRunAfterSteer).toHaveBeenCalledOnce();
+  expect(respond).toHaveBeenCalledWith(
+    false,
+    { runId, status: "error", summary: "reactivate boom" },
+    { code: "UNAVAILABLE", message: "reactivate boom" },
+    { runId, error: "reactivate boom" },
+  );
+}
 
 describe("gateway agent handler chat.abort integration", () => {
   beforeEach(describe1BeforeEach0);
@@ -59,7 +80,7 @@ describe("gateway agent handler chat.abort integration", () => {
       {
         context,
         reqId: runId,
-        client: { connId: "conn-1" } as AgentHandlerArgs["client"],
+        client: { ...operatorWriteCliClient(), connId: "conn-1" },
       },
     );
 
@@ -83,7 +104,7 @@ describe("gateway agent handler chat.abort integration", () => {
       tokenStart: 0,
       tokensUsed: 5,
       continuationTurns: 0,
-    };
+    } satisfies NonNullable<GatewaySessionRow["goal"]>;
     mocks.listAgentIds.mockReturnValue(["main", "work"]);
     mocks.resolveExplicitAgentSessionKey.mockReturnValue("global");
     mocks.loadSessionEntry.mockReturnValue({
@@ -216,10 +237,7 @@ describe("gateway agent handler chat.abort integration", () => {
     expect(context.chatAbortControllers.has(runId)).toBe(true);
 
     const abortRespond = vi.fn();
-    await expectDefined(
-      chatHandlers["chat.abort"],
-      'chatHandlers["chat.abort"] test invariant',
-    )({
+    await handleChatAbortRequest({
       params: { sessionKey: "agent:main:main", runId },
       respond: abortRespond as never,
       context,
@@ -364,10 +382,7 @@ describe("gateway agent handler chat.abort integration", () => {
     });
 
     const abortRespond = vi.fn();
-    await expectDefined(
-      chatHandlers["chat.abort"],
-      'chatHandlers["chat.abort"] test invariant',
-    )({
+    await handleChatAbortRequest({
       params: { sessionKey: requestedSessionKey, runId },
       respond: abortRespond as never,
       context,
@@ -461,10 +476,7 @@ describe("gateway agent handler chat.abort integration", () => {
     });
 
     const abortRespond = vi.fn();
-    await expectDefined(
-      chatHandlers["chat.abort"],
-      'chatHandlers["chat.abort"] test invariant',
-    )({
+    await handleChatAbortRequest({
       params: { sessionKey: "global", agentId: "work", runId },
       respond: abortRespond as never,
       context,
@@ -620,10 +632,7 @@ describe("gateway agent handler chat.abort integration", () => {
     expect(context.chatAbortControllers.has(runId)).toBe(false);
 
     const abortRespond = vi.fn();
-    await expectDefined(
-      chatHandlers["chat.abort"],
-      'chatHandlers["chat.abort"] test invariant',
-    )({
+    await handleChatAbortRequest({
       params: { sessionKey: "agent:main:main" },
       respond: abortRespond as never,
       context,
@@ -719,10 +728,7 @@ describe("gateway agent handler chat.abort integration", () => {
     expect(context.chatAbortControllers.has(runId)).toBe(false);
 
     const abortRespond = vi.fn();
-    await expectDefined(
-      chatHandlers["chat.abort"],
-      'chatHandlers["chat.abort"] test invariant',
-    )({
+    await handleChatAbortRequest({
       params: { sessionKey: "agent:main:main", runId },
       respond: abortRespond as never,
       context,
@@ -903,6 +909,7 @@ describe("gateway agent handler chat.abort integration", () => {
     mocks.listAgentIds.mockReturnValue(["main", "work"]);
     mocks.loadSessionEntry.mockReturnValue({
       cfg: {},
+      agentId: "work",
       storePath: "/tmp/sessions.json",
       entry: {
         sessionId: "work-global-session-id",
@@ -964,17 +971,19 @@ describe("gateway agent handler chat.abort integration", () => {
       }),
     );
     await waitForAssertion(() => expect(context.loadGatewayModelCatalog).toHaveBeenCalled());
+    expect(context.loadGatewayModelCatalog).toHaveBeenCalledWith({
+      agentId: "work",
+      readOnly: true,
+    });
     expect(mocks.loadSessionEntry).toHaveBeenCalledWith("global", {
       agentId: "work",
       clone: false,
+      projection: "list",
     });
     expect(context.chatAbortControllers.has(runId)).toBe(false);
 
     const abortRespond = vi.fn();
-    await expectDefined(
-      chatHandlers["chat.abort"],
-      'chatHandlers["chat.abort"] test invariant',
-    )({
+    await handleChatAbortRequest({
       params: { sessionKey: "global", agentId: "work", runId },
       respond: abortRespond as never,
       context,
@@ -1062,10 +1071,7 @@ describe("gateway agent handler chat.abort integration", () => {
     expect(context.chatAbortControllers.has(runId)).toBe(false);
 
     const abortRespond = vi.fn();
-    await expectDefined(
-      chatHandlers["chat.abort"],
-      'chatHandlers["chat.abort"] test invariant',
-    )({
+    await handleChatAbortRequest({
       params: { sessionKey: "agent:main:main", runId },
       respond: abortRespond as never,
       context,
@@ -1234,7 +1240,7 @@ describe("gateway agent handler chat.abort integration", () => {
         context,
         respond,
         reqId: runId,
-        client: { connect: { scopes: ["operator.admin"] } } as AgentHandlerArgs["client"],
+        client: operatorWriteCliClient(["operator.admin"]),
       },
     );
     await waitForAssertion(() => expect(releaseReset).toBeTypeOf("function"));
@@ -1284,7 +1290,7 @@ describe("gateway agent handler chat.abort integration", () => {
       {
         context,
         reqId: "restart-after-reset-commit",
-        client: { connect: { scopes: ["operator.admin"] } } as AgentHandlerArgs["client"],
+        client: operatorWriteCliClient(["operator.admin"]),
       },
     );
 
@@ -1329,7 +1335,7 @@ describe("gateway agent handler chat.abort integration", () => {
       {
         context,
         reqId: "restart-after-bare-reset",
-        client: { connect: { scopes: ["operator.admin"] } } as AgentHandlerArgs["client"],
+        client: operatorWriteCliClient(["operator.admin"]),
       },
     );
 
@@ -1369,7 +1375,7 @@ describe("gateway agent handler chat.abort integration", () => {
       {
         context,
         reqId: "post-commit-reset-failure",
-        client: { connect: { scopes: ["operator.admin"] } } as AgentHandlerArgs["client"],
+        client: operatorWriteCliClient(["operator.admin"]),
       },
     );
 
@@ -1407,7 +1413,7 @@ describe("gateway agent handler chat.abort integration", () => {
       {
         context,
         reqId: "restart-after-reset-later",
-        client: { connect: { scopes: ["operator.admin"] } } as AgentHandlerArgs["client"],
+        client: operatorWriteCliClient(["operator.admin"]),
       },
     );
 
@@ -1457,22 +1463,19 @@ describe("gateway agent handler chat.abort integration", () => {
         respond,
         reqId: runId,
         flushDispatch: false,
-        client: { connId: "owner-conn" } as AgentHandlerArgs["client"],
+        client: { ...operatorWriteCliClient(), connId: "owner-conn" },
       },
     );
     await waitForAssertion(() => expect(sessionWriteCalls).toBe(1));
     expect(context.chatAbortControllers.has(runId)).toBe(false);
 
     const abortRespond = vi.fn();
-    await expectDefined(
-      chatHandlers["chat.abort"],
-      'chatHandlers["chat.abort"] test invariant',
-    )({
+    await handleChatAbortRequest({
       params: { sessionKey: "agent:main:main", runId },
       respond: abortRespond as never,
       context,
       req: { type: "req", id: "abort-req", method: "chat.abort" },
-      client: { connId: "other-conn" } as AgentHandlerArgs["client"],
+      client: { ...operatorWriteCliClient(), connId: "other-conn" },
       isWebchatConnect: () => false,
     });
 
@@ -1564,10 +1567,7 @@ describe("gateway agent handler chat.abort integration", () => {
     });
 
     const abortRespond = vi.fn();
-    await expectDefined(
-      chatHandlers["chat.abort"],
-      'chatHandlers["chat.abort"] test invariant',
-    )({
+    await handleChatAbortRequest({
       params: { sessionKey: "agent:main:telegram:direct:123", runId },
       respond: abortRespond as never,
       context,
@@ -1640,6 +1640,7 @@ describe("gateway agent handler chat.abort integration", () => {
 
     try {
       const pending = prepareAgentRunDispatch({
+        promptedAt: nowMs,
         request: {
           message: "wait for dispatch admission",
           timeout: 120,
@@ -1923,10 +1924,7 @@ describe("gateway agent handler chat.abort integration", () => {
     expect(capturedSignal?.aborted).toBe(false);
 
     const abortRespond = vi.fn();
-    await expectDefined(
-      chatHandlers["chat.abort"],
-      'chatHandlers["chat.abort"] test invariant',
-    )({
+    await handleChatAbortRequest({
       params: { sessionKey: "agent:main:main", runId },
       respond: abortRespond as never,
       context,
@@ -1944,74 +1942,211 @@ describe("gateway agent handler chat.abort integration", () => {
     expect(context.chatAbortControllers.has(runId)).toBe(false);
   });
 
-  it("chat.abort by runId kills only subagents owned by that requester turn", async () => {
-    prime();
-    subagentRegistryTesting.setDepsForTest({
-      persistSubagentRunsToDisk: () => {},
-      persistSubagentRunsToDiskOrThrow: () => {},
-    });
-    const pending = new Promise(() => {});
-    let capturedSignal: AbortSignal | undefined;
-    mocks.agentCommand.mockImplementationOnce((opts: { abortSignal?: AbortSignal }) => {
-      capturedSignal = opts.abortSignal;
-      return pending;
-    });
-
-    const context = makeContext();
-    const runId = "idem-abort-owned-subagents";
-    const ownedChildSessionKey = "agent:main:subagent:owned-by-aborted-turn";
-    const unrelatedChildSessionKey = "agent:main:subagent:owned-by-other-turn";
-    await invokeAgent(
-      {
-        message: "hi",
-        agentId: "main",
-        sessionKey: "agent:main:main",
-        idempotencyKey: runId,
-      },
-      { context, reqId: runId },
-    );
-    for (const [childSessionKey, requesterTurnRunId] of [
-      [ownedChildSessionKey, runId],
-      [unrelatedChildSessionKey, "other-parent-turn"],
-    ] as const) {
-      addSubagentRunForTests({
-        runId: `child-${requesterTurnRunId}`,
-        childSessionKey,
-        controllerSessionKey: "agent:main:main",
-        requesterSessionKey: "agent:main:main",
-        requesterDisplayKey: "main",
-        requesterAgentId: "main",
-        requesterTurnRunId,
-        task: requesterTurnRunId,
-        cleanup: "keep",
-        createdAt: Date.now() - 2_000,
-        startedAt: Date.now() - 1_000,
+  it.each([
+    { name: "announcing", expectsCompletionMessage: true, collect: false },
+    { name: "nonannouncing", expectsCompletionMessage: false, collect: false },
+    { name: "unspecified completion", expectsCompletionMessage: undefined, collect: false },
+    { name: "collector", expectsCompletionMessage: false, collect: true },
+    {
+      name: "collector partial persistence error",
+      expectsCompletionMessage: false,
+      collect: true,
+      releaseOnParent: true,
+      partialFailure: true,
+    },
+    {
+      name: "collector session cascade partial persistence error",
+      expectsCompletionMessage: false,
+      collect: true,
+      releaseOnParent: true,
+      partialFailure: true,
+      cascade: true,
+    },
+    {
+      name: "collector parent signal",
+      expectsCompletionMessage: false,
+      collect: true,
+      releaseOnParent: true,
+    },
+  ])(
+    "chat.abort by runId kills only registered children of its non-admin owner: $name",
+    async ({ expectsCompletionMessage, collect, releaseOnParent, partialFailure, cascade }) => {
+      prime();
+      applyGatewaySubagentRegistryTestDeps({
+        persistSubagentRunsToDisk: () => {},
+        persistSubagentRunsToDiskOrThrow: () => {},
+        callGateway: async () => await new Promise(() => {}),
       });
-    }
+      const pending = new Promise(() => {});
+      let capturedSignal: AbortSignal | undefined;
+      mocks.agentCommand.mockImplementationOnce((opts: { abortSignal?: AbortSignal }) => {
+        capturedSignal = opts.abortSignal;
+        return pending;
+      });
 
-    const abortRespond = vi.fn();
-    await expectDefined(
-      chatHandlers["chat.abort"],
-      'chatHandlers["chat.abort"] test invariant',
-    )({
-      params: { sessionKey: "agent:main:main", runId },
-      respond: abortRespond as never,
-      context,
-      req: { type: "req", id: "abort-req", method: "chat.abort" },
-      client: null,
-      isWebchatConnect: () => false,
-    });
+      const context = makeContext();
+      const client = {
+        ...operatorWriteCliClient(["operator.read", "operator.write"]),
+        connId: "owner-conn",
+      };
+      const runId = "idem-abort-owned-subagents";
+      const ownedChildSessionKey = "agent:main:subagent:owned-by-aborted-turn";
+      const queuedChildSessionKey = "agent:main:subagent:queued-by-aborted-turn";
+      const unrelatedChildSessionKey = "agent:main:subagent:owned-by-other-turn";
+      await invokeAgent(
+        {
+          message: "hi",
+          agentId: "main",
+          sessionKey: "agent:main:main",
+          idempotencyKey: runId,
+        },
+        { context, reqId: runId, client },
+      );
+      for (const [childSessionKey, requesterTurnRunId, queued] of [
+        [ownedChildSessionKey, runId, false],
+        ...(collect ? [[queuedChildSessionKey, runId, true] as const] : []),
+        [unrelatedChildSessionKey, "other-parent-turn", false],
+      ] as const) {
+        registerSubagentRun({
+          runId: childSessionKey,
+          childSessionKey,
+          controllerSessionKey:
+            cascade && requesterTurnRunId !== runId ? "agent:main:other" : "agent:main:main",
+          requesterSessionKey: "agent:main:main",
+          requesterDisplayKey: "main",
+          requesterAgentId: "main",
+          requesterTurnRunId,
+          task: requesterTurnRunId,
+          cleanup: "keep",
+          expectsCompletionMessage,
+          collect,
+          queued,
+        });
+      }
 
-    expect(mockCallArg(abortRespond)).toBe(true);
-    expect(capturedSignal?.aborted).toBe(true);
-    expect(getSubagentRunByChildSessionKey(ownedChildSessionKey)).toMatchObject({
-      endedReason: "subagent-killed",
-      killReconciliation: { suppressTaskDelivery: true },
-    });
-    expect(
-      getSubagentRunByChildSessionKey(unrelatedChildSessionKey)?.execution.endedAt,
-    ).toBeUndefined();
-  });
+      const queuedDispatch = vi.fn(async () => {});
+      const unselectedDispatch = vi.fn(async () => {});
+      let childOperation: ReturnType<typeof createReplyOperation> | undefined;
+      if (collect) {
+        const sessionId = "active-collector-session";
+        await replaceSessionEntry(
+          {
+            storePath: resolveSessionStorePathCore(undefined, { agentId: "main" }),
+            sessionKey: ownedChildSessionKey,
+          },
+          { sessionId, updatedAt: Date.now() },
+        );
+        childOperation = createReplyOperation({
+          sessionKey: ownedChildSessionKey,
+          sessionId,
+          resetTriggered: false,
+        });
+        childOperation.attachBackend({
+          kind: "embedded",
+          isStreaming: () => true,
+          cancel: () => {
+            if (!releaseOnParent) {
+              expect(releaseSwarmRun(ownedChildSessionKey)).toBe(true);
+            }
+          },
+        });
+        if (releaseOnParent) {
+          capturedSignal?.addEventListener(
+            "abort",
+            () => {
+              expect(releaseSwarmRun(ownedChildSessionKey)).toBe(true);
+            },
+            { once: true },
+          );
+        }
+        enqueueSwarmRun({
+          groupId: "abort-owned-collectors",
+          runId: queuedChildSessionKey,
+          maxConcurrent: 1,
+          activeRunIds: [ownedChildSessionKey],
+          start: queuedDispatch,
+          onStartFailure: () => true,
+        });
+        enqueueSwarmRun({
+          groupId: "abort-owned-collectors",
+          runId: unrelatedChildSessionKey,
+          maxConcurrent: 1,
+          activeRunIds: [],
+          start: unselectedDispatch,
+          onStartFailure: () => true,
+        });
+      }
+      try {
+        const foreignRespond = vi.fn();
+        await handleChatAbortRequest({
+          params: { sessionKey: "agent:main:main", runId },
+          respond: foreignRespond as never,
+          context,
+          req: { type: "req", id: "foreign-abort-req", method: "chat.abort" },
+          client: { ...client, connId: "foreign-conn" },
+          isWebchatConnect: () => false,
+        });
+        expect(mockCallArg(foreignRespond)).toBe(false);
+        expect(capturedSignal?.aborted).toBe(false);
+        expect(getSubagentRunByChildSessionKey(ownedChildSessionKey)?.execution.status).toBe(
+          "running",
+        );
+        if (collect) {
+          expect(getSubagentRunByChildSessionKey(queuedChildSessionKey)?.execution.status).toBe(
+            "queued",
+          );
+          expect(queuedDispatch).not.toHaveBeenCalled();
+        }
+        const abortRespond = vi.fn();
+        if (partialFailure) {
+          context.chatRunState.getOrCreate(runId).buffer = "partial";
+          mocks.loadSessionEntry.mockImplementationOnce(() => {
+            throw new Error("partial persistence failed");
+          });
+        }
+        const abort = handleChatAbortRequestWithLifecycle(
+          {
+            params: { sessionKey: "agent:main:main", ...(cascade ? {} : { runId }) },
+            respond: abortRespond as never,
+            context,
+            req: { type: "req", id: "abort-req", method: "chat.abort" },
+            client,
+            isWebchatConnect: () => false,
+          },
+          cascade ? { cascadeDescendants: true } : {},
+        );
+
+        if (partialFailure) {
+          await expect(abort).rejects.toThrow("partial persistence failed");
+        } else {
+          await abort;
+          expect(mockCallArg(abortRespond)).toBe(true);
+          expectRecordFields(mockCallArg(abortRespond, 0, 1), { aborted: true, runIds: [runId] });
+        }
+        expect(capturedSignal?.aborted).toBe(true);
+        expect(getSubagentRunByChildSessionKey(ownedChildSessionKey)).toMatchObject({
+          endedReason: "subagent-killed",
+          killReconciliation: { suppressTaskDelivery: true },
+        });
+        expect(
+          getSubagentRunByChildSessionKey(unrelatedChildSessionKey)?.execution.endedAt,
+        ).toBeUndefined();
+        if (collect) {
+          expect(getSubagentRunByChildSessionKey(queuedChildSessionKey)).toMatchObject({
+            execution: { status: "terminal" },
+            endedReason: "subagent-killed",
+          });
+          expect(childOperation?.abortSignal.aborted).toBe(true);
+          await Promise.resolve();
+          expect(queuedDispatch).not.toHaveBeenCalled();
+          await waitForAssertion(() => expect(unselectedDispatch).toHaveBeenCalledOnce());
+        }
+      } finally {
+        childOperation?.complete();
+        swarmSchedulerTesting.reset();
+      }
+    },
+  );
 
   it("chat.abort by runId allows the owner connection to use a stale session key", async () => {
     prime();
@@ -2034,7 +2169,7 @@ describe("gateway agent handler chat.abort integration", () => {
       {
         context,
         reqId: runId,
-        client: { connId: "owner-conn" } as AgentHandlerArgs["client"],
+        client: { ...operatorWriteCliClient(), connId: "owner-conn" },
       },
     );
 
@@ -2045,15 +2180,12 @@ describe("gateway agent handler chat.abort integration", () => {
     });
 
     const abortRespond = vi.fn();
-    await expectDefined(
-      chatHandlers["chat.abort"],
-      'chatHandlers["chat.abort"] test invariant',
-    )({
+    await handleChatAbortRequest({
       params: { sessionKey: "agent:main:main", runId },
       respond: abortRespond as never,
       context,
       req: { type: "req", id: "abort-req", method: "chat.abort" },
-      client: { connId: "owner-conn" } as AgentHandlerArgs["client"],
+      client: { ...operatorWriteCliClient(), connId: "owner-conn" },
       isWebchatConnect: () => false,
     });
 
@@ -2092,10 +2224,7 @@ describe("gateway agent handler chat.abort integration", () => {
     );
 
     const abortRespond = vi.fn();
-    await expectDefined(
-      chatHandlers["chat.abort"],
-      'chatHandlers["chat.abort"] test invariant',
-    )({
+    await handleChatAbortRequest({
       params: { sessionKey: "agent:main:main", runId },
       respond: abortRespond as never,
       context,
@@ -2153,10 +2282,7 @@ describe("gateway agent handler chat.abort integration", () => {
     );
 
     const abortRespond = vi.fn();
-    await expectDefined(
-      chatHandlers["chat.abort"],
-      'chatHandlers["chat.abort"] test invariant',
-    )({
+    await handleChatAbortRequest({
       params: { sessionKey: "agent:main:main" },
       respond: abortRespond as never,
       context,
@@ -2264,20 +2390,13 @@ describe("gateway agent handler chat.abort integration", () => {
 
   it("removes the chatAbortControllers entry if pre-dispatch reactivation fails", async () => {
     prime("reactivation-session");
-    mocks.getLatestSubagentRunByChildSessionKey.mockReturnValueOnce({
-      runId: "previous-run",
-      childSessionKey: "agent:main:main",
-      controllerSessionKey: "agent:main:main",
-      ownerKey: "agent:main:main",
-      scopeKind: "session",
-      requesterDisplayKey: "main",
-      task: "old task",
-      cleanup: "keep",
-      createdAt: 1,
-      startedAt: 2,
-      endedAt: 3,
-      outcome: { status: "ok" },
-    });
+    mocks.getLatestSubagentRunByChildSessionKey.mockReturnValueOnce(
+      createSubagentRunRecord({
+        runId: "previous-run",
+        childSessionKey: "agent:main:main",
+        execution: { status: "terminal", endedAt: 3 },
+      }),
+    );
     mocks.replaceSubagentRunAfterSteer.mockRejectedValueOnce(new Error("reactivate boom"));
 
     const context = makeContext();
@@ -2295,11 +2414,7 @@ describe("gateway agent handler chat.abort integration", () => {
 
     expect(context.chatAbortControllers.has(runId)).toBe(false);
     expect(mocks.agentCommand).not.toHaveBeenCalled();
-    const errorCall = respond.mock.calls.find((call: unknown[]) => call[0] === false);
-    const errorArgs = requireValue(errorCall, "error response missing");
-    expectRecordFields(errorArgs[1], { runId, status: "error" });
-    expectRecordFields(errorArgs[2], { code: "UNAVAILABLE" });
-    expectRecordFields(errorArgs[3], { runId });
+    expectReactivationFailure(respond, runId);
   });
 
   it("restores admitted restart recovery if pre-dispatch reactivation fails", async () => {
@@ -2332,20 +2447,13 @@ describe("gateway agent handler chat.abort integration", () => {
       canonicalKey: sessionKey,
     }));
     mocks.updateSessionStore.mockImplementation(async (_path, updater) => await updater(store));
-    mocks.getLatestSubagentRunByChildSessionKey.mockReturnValueOnce({
-      runId: "previous-run",
-      childSessionKey: sessionKey,
-      controllerSessionKey: sessionKey,
-      ownerKey: sessionKey,
-      scopeKind: "session",
-      requesterDisplayKey: "main",
-      task: "old task",
-      cleanup: "keep",
-      createdAt: 1,
-      startedAt: 2,
-      endedAt: 3,
-      outcome: { status: "ok" },
-    });
+    mocks.getLatestSubagentRunByChildSessionKey.mockReturnValueOnce(
+      createSubagentRunRecord({
+        runId: "previous-run",
+        childSessionKey: sessionKey,
+        execution: { status: "terminal", endedAt: 3 },
+      }),
+    );
     mocks.replaceSubagentRunAfterSteer.mockRejectedValueOnce(new Error("reactivate boom"));
 
     const respond = vi.fn();
@@ -2376,12 +2484,7 @@ describe("gateway agent handler chat.abort integration", () => {
       },
     });
     expect(store[sessionKey]?.mainRestartRecovery?.reservation).toBeUndefined();
-    expect(
-      respond.mock.calls.some(
-        ([ok, payload]) =>
-          ok === false && (payload as { runId?: string; status?: string })?.runId === runId,
-      ),
-    ).toBe(true);
+    expectReactivationFailure(respond, runId);
   });
 
   it("releases a foreground recovery owner if pre-dispatch reactivation fails", async () => {
@@ -2409,23 +2512,16 @@ describe("gateway agent handler chat.abort integration", () => {
       canonicalKey: sessionKey,
     }));
     mocks.updateSessionStore.mockImplementation(async (_path, updater) => await updater(store));
-    mocks.getLatestSubagentRunByChildSessionKey.mockReturnValueOnce({
-      runId: "previous-run",
-      childSessionKey: sessionKey,
-      controllerSessionKey: sessionKey,
-      ownerKey: sessionKey,
-      scopeKind: "session",
-      requesterDisplayKey: "main",
-      task: "old task",
-      cleanup: "keep",
-      createdAt: 1,
-      startedAt: 2,
-      endedAt: 3,
-      outcome: { status: "ok" },
-    });
+    mocks.getLatestSubagentRunByChildSessionKey.mockReturnValueOnce(
+      createSubagentRunRecord({
+        runId: "previous-run",
+        childSessionKey: sessionKey,
+        execution: { status: "terminal", endedAt: 3 },
+      }),
+    );
     mocks.replaceSubagentRunAfterSteer.mockRejectedValueOnce(new Error("reactivate boom"));
 
-    await invokeAgent(
+    const respond = await invokeAgent(
       {
         message: "new foreground turn",
         agentId: "main",
@@ -2433,11 +2529,12 @@ describe("gateway agent handler chat.abort integration", () => {
         sessionId,
         idempotencyKey: runId,
       },
-      { client: backendGatewayClient(), reqId: runId, respond: vi.fn() },
+      { client: backendGatewayClient(), reqId: runId },
     );
 
     expect(mocks.agentCommand).not.toHaveBeenCalled();
     expect(store[sessionKey]?.mainRestartRecovery?.foregroundClaims).toBeUndefined();
+    expectReactivationFailure(respond, runId);
   });
 
   it("releases gateway admission when foreground owner cleanup exhausts retries", async () => {

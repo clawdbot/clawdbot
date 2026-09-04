@@ -52,7 +52,7 @@ const LEGACY_CONFIG_CUTOFF = "2026.7.2-beta.4";
 
 function projectExtendedStable2026_6_35QaConfig(cfg: OpenClawConfig): OpenClawConfig {
   const { entries, ...agents } = cfg.agents ?? {};
-  const { mediaModels, ...defaults } = agents.defaults ?? {};
+  const { mediaModels, modelPolicy: _modelPolicy, ...defaults } = agents.defaults ?? {};
 
   return {
     ...cfg,
@@ -76,6 +76,7 @@ function projectExtendedStable2026_6_35QaConfig(cfg: OpenClawConfig): OpenClawCo
 
 function projectLegacyPackageQaConfig(cfg: OpenClawConfig): OpenClawConfig {
   const { entries, ...agents } = cfg.agents ?? {};
+  const { modelPolicy: _modelPolicy, ...legacyDefaults } = agents.defaults ?? {};
   const memory = cfg.memory as
     | (Record<string, unknown> & {
         backend?: unknown;
@@ -88,6 +89,7 @@ function projectLegacyPackageQaConfig(cfg: OpenClawConfig): OpenClawConfig {
     ...cfg,
     agents: {
       ...agents,
+      defaults: legacyDefaults,
       ...(entries
         ? {
             list: Object.entries(entries).map(([id, agent]) => Object.assign({}, agent, { id })),

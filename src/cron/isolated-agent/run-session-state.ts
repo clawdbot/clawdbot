@@ -18,10 +18,15 @@ import type { SkillSnapshot } from "../../skills/types.js";
 import {
   normalizeCronScheduledToolCallerOrigin,
   normalizeCronScheduledToolPolicy,
+  normalizeCronToolsAllowExecTarget,
+  normalizeCronToolsAllowExecTargetRequirement,
+  stripCronPinnedExecGrant,
 } from "../scheduled-tool-policy.js";
 import type {
   CronScheduledToolCallerOrigin,
   CronScheduledToolPolicy,
+  CronToolsAllowExecTarget,
+  CronToolsAllowExecTargetRequirement,
 } from "../scheduled-tool-policy.js";
 import { setSessionRuntimeModel } from "./run.runtime.js";
 import type { resolveCronSession } from "./session.js";
@@ -56,15 +61,19 @@ type PersistSessionEntry = (params: {
   sessionKey: string;
   storePath: string;
   update: (currentEntry: SessionEntry | undefined) => SessionEntry;
+  assertCommitAllowed?: () => void;
 }) => Promise<void>;
 
 /** Persists the currently selected mutable cron session entry to the session store. */
-export type PersistCronSessionEntry = () => Promise<void>;
+export type PersistCronSessionEntry = (
+  assertCommitAllowed?: () => void,
+  entry?: MutableCronSessionEntry,
+) => Promise<void>;
 
 /** Hidden exact-run row retained while detached cron work can still resume. */
 export type CronRunContinuationSession = {
   initialize: () => Promise<void>;
-  sync: () => Promise<void>;
+  sync: (assertCommitAllowed?: () => void) => Promise<void>;
   setCliExecutionProvider: (provider?: string) => Promise<void>;
   seal: (options?: { basePersisted?: boolean }) => Promise<void>;
 };
@@ -140,9 +149,12 @@ export function createPersistCronSessionEntry(params: {
   sandbox?: "required";
   persistSessionEntry: PersistSessionEntry;
 }): PersistCronSessionEntry {
-  return async () => {
+  return async (assertCommitAllowed, liveEntry = params.cronSession.sessionEntry) => {
     const resetBoundaryPending = params.cronSession.resetBoundaryPending !== undefined;
-    const liveEntry = params.cronSession.sessionEntry;
+    // Reset admission completes before a CLI turn can own settlement.
+    if (assertCommitAllowed && resetBoundaryPending) {
+      throw new CronSessionLifecycleClaimError(params.agentSessionKey);
+    }
     const persistedEntry =
       isCronSessionKey(params.agentSessionKey) &&
       liveEntry.sessionId &&
@@ -159,6 +171,7 @@ export function createPersistCronSessionEntry(params: {
       storePath: params.cronSession.storePath,
       sessionKey: params.agentSessionKey,
       fallbackEntry: persistedEntry,
+      assertCommitAllowed,
       ...(resetBoundaryPending ? { resetBoundaryReason: "cron-stale" as const } : {}),
       update: (currentEntry) => {
         if (!currentEntry) {
@@ -252,6 +265,8 @@ export function createCronRunContinuationSession(params: {
   toolsAllowIsDefault?: boolean;
   scheduledToolPolicy?: CronScheduledToolPolicy;
   scheduledToolCallerOrigin?: CronScheduledToolCallerOrigin;
+  toolsAllowExecTarget?: CronToolsAllowExecTarget;
+  toolsAllowExecTargetRequirement?: CronToolsAllowExecTargetRequirement;
   cliSessionBindingFacts?: {
     extraSystemPromptStatic?: string;
     sourceReplyDeliveryMode?: "automatic" | "message_tool_only";
@@ -266,20 +281,39 @@ export function createCronRunContinuationSession(params: {
   const scheduledToolCallerOrigin = normalizeCronScheduledToolCallerOrigin(
     params.scheduledToolCallerOrigin,
   );
+  const toolsAllowExecTarget =
+    params.toolsAllow === undefined
+      ? undefined
+      : normalizeCronToolsAllowExecTarget(params.toolsAllowExecTarget);
+  const toolsAllowExecTargetRequirement =
+    params.toolsAllow === undefined
+      ? undefined
+      : normalizeCronToolsAllowExecTargetRequirement(params.toolsAllowExecTargetRequirement);
+  const storedToolsAllow = stripCronPinnedExecGrant({
+    toolsAllow: params.toolsAllow,
+    requirement: toolsAllowExecTargetRequirement,
+  });
   const continuation: NonNullable<SessionEntry["cronRunContinuation"]> = {
     lifecycleRevision: params.cronSession.lifecycleRevision,
     phase: "running" as const,
-    ...(params.toolsAllow !== undefined ? { toolsAllow: [...params.toolsAllow] } : {}),
+    ...(storedToolsAllow !== undefined ? { toolsAllow: storedToolsAllow } : {}),
     ...(params.toolsAllowIsDefault === true ? { toolsAllowIsDefault: true } : {}),
     ...(scheduledToolPolicy ? { scheduledToolPolicy } : {}),
     ...(scheduledToolPolicy?.mode === "account" ? { scheduledToolCallerOrigin } : {}),
+    ...(toolsAllowExecTarget ? { toolsAllowExecTarget } : {}),
+    ...(toolsAllowExecTargetRequirement ? { toolsAllowExecTargetRequirement } : {}),
     ...(params.cliSessionBindingFacts
       ? { cliSessionBindingFacts: { ...params.cliSessionBindingFacts } }
       : {}),
   };
   const owns = (entry: SessionEntry | undefined) =>
     entry?.cronRunContinuation?.lifecycleRevision === continuation.lifecycleRevision;
-  const persist = async (create: boolean, phase: "running" | "ready", basePersisted = false) => {
+  const persist = async (
+    create: boolean,
+    phase: "running" | "ready",
+    basePersisted = false,
+    assertCommitAllowed?: () => void,
+  ) => {
     const source = structuredClone(params.cronSession.sessionEntry);
     delete source.createdVia;
     delete source.createdActor;
@@ -294,6 +328,7 @@ export function createCronRunContinuationSession(params: {
       storePath: params.cronSession.storePath,
       sessionKey: params.runSessionKey,
       fallbackEntry: source,
+      assertCommitAllowed,
       update: (current) => {
         if ((current && !owns(current)) || (!current && !create)) {
           throw new CronSessionLifecycleClaimError(params.runSessionKey);
@@ -311,6 +346,11 @@ export function createCronRunContinuationSession(params: {
         return {
           ...current,
           ...source,
+          // Snapshot merges remove cleared keys; continuity copies must carry
+          // their absence too, or this row resurrects an invalid native handle.
+          cliSessionBindings: source.cliSessionBindings,
+          cliSessionIds: source.cliSessionIds,
+          claudeCliSessionId: source.claudeCliSessionId,
           ...(!current
             ? buildSessionCreationStamp({
                 via: "cron",
@@ -336,7 +376,8 @@ export function createCronRunContinuationSession(params: {
   };
   return {
     initialize: async () => await persist(true, "running"),
-    sync: async () => await persist(false, "running"),
+    sync: async (assertCommitAllowed) =>
+      await persist(false, "running", false, assertCommitAllowed),
     setCliExecutionProvider: async (provider) => {
       const normalizedProvider = provider?.trim();
       if (normalizedProvider) {

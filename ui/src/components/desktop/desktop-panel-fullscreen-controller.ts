@@ -1,7 +1,10 @@
 import { t } from "../../i18n/index.ts";
+import { registerDesktopEnglish } from "../../i18n/locales/en-desktop.ts";
 import { formatUiError } from "../../lib/format-error.ts";
 import type { OpenClawLitElement } from "../../lit/openclaw-element.ts";
 import { FullscreenController } from "../fullscreen-controller.ts";
+
+registerDesktopEnglish();
 
 type DesktopPanelFullscreenOptions = {
   section: () => HTMLElement | null;

@@ -3,25 +3,25 @@ import { beforeEach, describe, expect, it, vi } from "vitest";
 import type { OpenClawConfig } from "../config/config.js";
 import { withBundledPluginEnablementCompat } from "./bundled-compat.js";
 
-const readBundledDiscoveryMode = vi.hoisted(() => vi.fn<() => "compat" | "allowlist">());
+const readBundledDiscoveryModeMemoized = vi.hoisted(() => vi.fn<() => "compat" | "allowlist">());
 
-vi.mock("./bundled-discovery-state.js", () => ({ readBundledDiscoveryMode }));
+vi.mock("./bundled-discovery-state.js", () => ({ readBundledDiscoveryModeMemoized }));
 
 describe("withBundledPluginEnablementCompat", () => {
   beforeEach(() => {
-    readBundledDiscoveryMode.mockClear();
-    readBundledDiscoveryMode.mockReturnValue("allowlist");
+    readBundledDiscoveryModeMemoized.mockClear();
+    readBundledDiscoveryModeMemoized.mockReturnValue("allowlist");
   });
 
   it("returns unchanged config for an empty plugin list without reading upgrade state", () => {
     const config = { plugins: { allow: ["openai"] } } satisfies OpenClawConfig;
 
     expect(withBundledPluginEnablementCompat({ config, pluginIds: [] })).toBe(config);
-    expect(readBundledDiscoveryMode).not.toHaveBeenCalled();
+    expect(readBundledDiscoveryModeMemoized).not.toHaveBeenCalled();
   });
 
   it("honors bundledDiscovery compat before plugin allowlists", () => {
-    readBundledDiscoveryMode.mockReturnValue("compat");
+    readBundledDiscoveryModeMemoized.mockReturnValue("compat");
     const config = {
       plugins: {
         allow: ["discord"],
@@ -58,7 +58,7 @@ describe("withBundledPluginEnablementCompat", () => {
   });
 
   it("adds compat allow entries for plugins that already have entries", () => {
-    readBundledDiscoveryMode.mockReturnValue("compat");
+    readBundledDiscoveryModeMemoized.mockReturnValue("compat");
     const config = {
       plugins: {
         allow: ["openai"],

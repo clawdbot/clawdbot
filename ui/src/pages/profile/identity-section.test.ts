@@ -3,7 +3,7 @@
 import { render } from "lit";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import type { UserProfile } from "../../../../packages/gateway-protocol/src/index.ts";
-import { setAvatarGatewayOrigin } from "../../lib/identity-avatar.ts";
+import { setAvatarGatewayOrigin } from "../../lib/identity-avatar-context.ts";
 import { renderIdentitySection } from "./identity-section.ts";
 
 type IdentitySectionProps = Parameters<typeof renderIdentitySection>[0];
@@ -196,6 +196,31 @@ describe("renderIdentitySection", () => {
     expect(container.textContent).toContain("GitHub-backed sign-in");
     expect(container.textContent).toContain("Refresh to retry");
     expect(container.querySelector(".identity-github-form")).toBeNull();
+    const toggle = container.querySelector<HTMLElement & { checked: boolean }>("wa-switch");
+    expect(toggle?.checked).toBe(false);
+    expect(toggle?.hasAttribute("disabled")).toBe(true);
+  });
+
+  it("explains personal GitHub sign-in for the shared owner without email or retry rows", () => {
+    const container = document.createElement("div");
+    render(
+      renderIdentitySection(
+        createProps({ profile: { ...PROFILE, id: "gateway-owner", emails: [] } }),
+      ),
+      container,
+    );
+
+    const descriptions = [...container.querySelectorAll(".settings-row__desc")].map((node) =>
+      node.textContent?.trim(),
+    );
+    expect(descriptions).toContain(
+      "GitHub-backed sign-in through Cloudflare Access or Tailscale Serve provides this identity.",
+    );
+    expect(descriptions).toContain(
+      "Requires GitHub-backed sign-in through Cloudflare Access or Tailscale Serve.",
+    );
+    expect(container.textContent).not.toContain("Linked emails");
+    expect(container.textContent).not.toContain("Refresh to retry");
     const toggle = container.querySelector<HTMLElement & { checked: boolean }>("wa-switch");
     expect(toggle?.checked).toBe(false);
     expect(toggle?.hasAttribute("disabled")).toBe(true);

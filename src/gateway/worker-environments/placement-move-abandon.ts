@@ -1,3 +1,4 @@
+import { DEVICE_WORKER_PROVIDER_ID } from "./device-provider-identity.js";
 import {
   isUnavailableEnvironment,
   type WorkerDispatchEnvironmentService,
@@ -5,17 +6,20 @@ import {
   type WorkerDispatchPlacementStore,
 } from "./placement-dispatch-failure.js";
 import {
-  FORCED_WORKER_ABANDONMENT_ERROR,
   forceAbandonWorkerEnvironment,
+  reportWorkerAbandonmentCleanupError,
 } from "./placement-force-abandon.js";
 import type { WorkerPlacementMoveIntent } from "./placement-move-intent.js";
 import type { WorkerPlacementRunnerAvailabilityReader } from "./placement-projector.js";
+import {
+  FORCED_WORKER_ABANDONMENT_ERROR,
+  isForceAbandonedWorkerPlacement,
+} from "./placement-record.js";
 import type {
   WorkerPlacementAuthorization,
   WorkerPlacementMoveRequest,
   WorkerPlacementReclaimRequest,
 } from "./service-contract.js";
-import { isFailedWorkerPlacementEnvironmentGone } from "./session-placement-lifecycle.js";
 import type { WorkerWorkspaceOperationCoordinator } from "./workspace-operation-coordinator.js";
 
 export function createWorkerPlacementMoveAbandonment(options: {
@@ -35,6 +39,17 @@ export function createWorkerPlacementMoveAbandonment(options: {
     onCleanupError?: (error: unknown) => void,
   ) =>
     await options.workspaceOperations.run(environmentId, async () => {
+      // Capture the selected owner before journal cleanup can yield to a replacement.
+      const environment = environments.get(environmentId);
+      const sessionId = environment?.attachedSessionIds[0];
+      const abandonment =
+        environment?.providerId === DEVICE_WORKER_PROVIDER_ID &&
+        environment.nodeDeviceId &&
+        environment.sharedHost !== false &&
+        environment.attachedSessionIds.length === 1 &&
+        sessionId
+          ? { sessionId, ownerEpoch: environment.ownerEpoch }
+          : undefined;
       await forceAbandonWorkerEnvironment({
         placements,
         environmentId,
@@ -42,17 +57,15 @@ export function createWorkerPlacementMoveAbandonment(options: {
         onCleanupError,
       });
       try {
-        return await environments.destroy(environmentId);
+        return await (abandonment
+          ? environments.destroy(environmentId, abandonment)
+          : environments.destroy(environmentId));
       } catch (error) {
         const current = environments.get(environmentId);
         if (!current || !isUnavailableEnvironment(current)) {
           throw error;
         }
-        try {
-          onCleanupError?.(error);
-        } catch {
-          // Reporting cannot overturn the durable placement/environment fences.
-        }
+        reportWorkerAbandonmentCleanupError(onCleanupError, error);
         return current;
       }
     });
@@ -60,12 +73,15 @@ export function createWorkerPlacementMoveAbandonment(options: {
   const validateAbandonSource = (request: WorkerPlacementMoveRequest): void => {
     const current = placements.get(request.sessionId);
     if (
-      current?.state !== "active" ||
+      (current?.state !== "active" && !isForceAbandonedWorkerPlacement(current)) ||
       current.generation !== request.source.generation ||
       current.environmentId !== request.source.environmentId ||
       current.activeOwnerEpoch !== request.source.ownerEpoch
     ) {
       throw new Error(`Cannot abandon stale worker placement for session ${request.sessionKey}`);
+    }
+    if (isForceAbandonedWorkerPlacement(current)) {
+      return;
     }
     const runner = options.runnerAvailability.read(current);
     if (!runner) {
@@ -97,21 +113,24 @@ export function createWorkerPlacementMoveAbandonment(options: {
     ) {
       throw new Error(`Session ${request.sessionKey} abandonment source changed before teardown`);
     }
-    await forceDestroyEnvironment(intent.source.environmentId);
+    await options.workspaceOperations.run(intent.source.environmentId, async () => {
+      await forceAbandonWorkerEnvironment({
+        placements,
+        environmentId: intent.source.environmentId,
+        resolveWorkspacePath: options.resolveWorkspacePath,
+      });
+      if (environments.get(intent.source.environmentId)) {
+        await environments.destroy(intent.source.environmentId, {
+          sessionId: intent.sessionId,
+          ownerEpoch: intent.source.ownerEpoch,
+          authorize,
+        });
+      }
+    });
     authorize?.();
     const failed = placements.get(request.sessionId);
     if (failed?.state !== "failed") {
       throw new Error(`Session ${request.sessionKey} abandonment did not fence its remote owner`);
-    }
-    if (
-      !isFailedWorkerPlacementEnvironmentGone({
-        environmentService: environments,
-        placement: failed,
-      })
-    ) {
-      throw new Error(
-        `Session ${request.sessionKey} device teardown is still pending; retry Continue on Gateway`,
-      );
     }
     const local = placements.completeAbandonedPlacementMoveSourceToLocal({
       operationId: intent.operationId,

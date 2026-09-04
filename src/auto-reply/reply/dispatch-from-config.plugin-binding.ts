@@ -15,6 +15,7 @@ import {
 } from "../commands-registry.js";
 import { shouldHandleTextCommands } from "../commands-text-routing.js";
 import type { FinalizedRuntimeMsgContext } from "../templating.js";
+import { resolveCommandChannel } from "./commands-context.js";
 import { resolveCommandContextText } from "./context-text.js";
 import { isExplicitSourceReplyCommand } from "./source-reply-delivery-mode.js";
 
@@ -63,7 +64,7 @@ export function shouldBypassPluginOwnedBindingForCommand(
   if (planned) {
     return true;
   }
-  const channel = normalizeOptionalString(ctx.Surface ?? ctx.Provider) ?? "";
+  const channel = resolveCommandChannel(ctx);
   const match = matchPluginCommandInvocation(createPluginCommandRuntime(), commandBody, {
     channel,
   });

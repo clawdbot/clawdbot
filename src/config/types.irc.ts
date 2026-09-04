@@ -1,8 +1,5 @@
 // Defines IRC channel configuration types.
-import type {
-  ChannelMentionPatternsConfig,
-  CommonChannelMessagingConfig,
-} from "./types.channel-messaging-common.js";
+import type { CommonChannelMessagingConfig } from "./types.channel-messaging-common.js";
 import type { GroupToolPolicyBySenderConfig, GroupToolPolicyConfig } from "./types.tools.js";
 
 export type IrcAccountConfig = Omit<CommonChannelMessagingConfig, "mentionPatterns"> & {
@@ -53,8 +50,6 @@ export type IrcAccountConfig = Omit<CommonChannelMessagingConfig, "mentionPatter
       systemPrompt?: string;
     }
   >;
-  /** Optional mention patterns specific to IRC channel messages. */
-  mentionPatterns?: ChannelMentionPatternsConfig<true>;
 };
 
 export type IrcConfig = {

@@ -9,18 +9,9 @@ const TEST_UNDICI_RUNTIME_DEPS_KEY = "__OPENCLAW_TEST_UNDICI_RUNTIME_DEPS__";
 const requireUndici = createRequire(import.meta.url);
 
 type UndiciAgentOptions = ConstructorParameters<typeof import("undici").Agent>[0];
-type UndiciEnvHttpProxyAgentOptions = ConstructorParameters<
-  typeof import("undici").EnvHttpProxyAgent
->[0];
 type UndiciProxyAgentOptions = ConstructorParameters<typeof import("undici").ProxyAgent>[0];
 type UndiciProxyAgentOptionsRecord = Exclude<UndiciProxyAgentOptions, string | URL>;
 type UndiciProxyClientFactory = NonNullable<UndiciProxyAgentOptionsRecord["clientFactory"]>;
-type UndiciProxyClientOptions = Pick<
-  UndiciProxyAgentOptionsRecord,
-  "clientFactory" | "connectTimeout" | "proxyTls"
->;
-type UnknownFunction = (...args: unknown[]) => unknown;
-
 // Guarded fetch dispatchers intentionally stay on HTTP/1.1. Undici 8 enables
 // HTTP/2 ALPN by default, but dispatcher overrides are unreliable on that path.
 const HTTP1_ONLY_DISPATCHER_OPTIONS = Object.freeze({
@@ -40,45 +31,45 @@ export function loadUndiciModule(
   return requireUndici("undici") as typeof import("undici");
 }
 
-function stripIpServernameFromConnectOptions(options: unknown): unknown {
-  if (!isObjectRecord(options) || typeof options.servername !== "string") {
-    return options;
-  }
-  const servername = options.servername.replace(/^\[|\]$/g, "");
-  if (net.isIP(servername) === 0) {
-    return options;
-  }
-  const next = { ...options };
-  delete next.servername;
-  return next;
-}
-
-function stripIpServernameFromConnect(connect: unknown): unknown {
-  if (typeof connect !== "function") {
-    return connect;
-  }
-  return (options: unknown, callback: unknown): unknown =>
-    (connect as UnknownFunction)(stripIpServernameFromConnectOptions(options), callback);
-}
-
-function createHttp1ProxyClientFactory(
-  proxyOptions: UndiciProxyClientOptions,
-): UndiciProxyClientFactory {
-  const { buildConnector } = loadUndiciModule(["buildConnector"]);
-  // ProxyAgent's connector already captured ALPN defaults before this factory.
-  // This HTTP(S)-only seam enforces HTTP/1 without enabling TLS on SOCKS hops.
-  const connect = buildConnector({
-    timeout: proxyOptions.connectTimeout,
-    ...resolveUndiciAutoSelectFamilyConnectOptions(),
-    ...proxyOptions.proxyTls,
-    allowH2: false,
-  });
-  return (origin, options) => {
-    // HTTPS proxies addressed by IP must not pass the IP literal as TLS SNI.
+function createHttp1ProxyClientFactory(): UndiciProxyClientFactory {
+  type Connect = ReturnType<typeof import("undici").buildConnector>;
+  return (origin, poolOptions) => {
+    const connect = isObjectRecord(poolOptions) ? poolOptions.connect : undefined;
     return createUndiciPool(origin, {
-      ...options,
-      connect: stripIpServernameFromConnect(connect),
+      ...poolOptions,
+      ...(typeof connect === "function"
+        ? {
+            connect: (params: Parameters<Connect>[0], callback: Parameters<Connect>[1]) => {
+              // IP-addressed HTTPS proxies must not send an IP literal as TLS SNI.
+              const { servername, ...withoutServername } = params;
+              return connect(
+                servername && net.isIP(servername.replace(/^\[|\]$/g, ""))
+                  ? withoutServername
+                  : params,
+                callback,
+              );
+            },
+          }
+        : {}),
     });
+  };
+}
+
+/** Prepare proxy transport without transferring direct-origin TLS or DNS policy. */
+export function buildProxyConnectOptions(options: Omit<UndiciProxyAgentOptionsRecord, "uri">) {
+  const connect = {
+    ...resolveUndiciAutoSelectFamilyConnectOptions(),
+    ...(typeof options.connect === "object" ? options.connect : {}),
+  };
+  return {
+    autoSelectFamily: connect.autoSelectFamily,
+    autoSelectFamilyAttemptTimeout: connect.autoSelectFamilyAttemptTimeout,
+    ...options.proxyTls,
+    timeout:
+      options.connectTimeout ??
+      options.proxyTls?.timeout ??
+      (typeof options.connect === "object" ? options.connect.timeout : undefined),
+    ...HTTP1_ONLY_DISPATCHER_OPTIONS,
   };
 }
 
@@ -109,133 +100,63 @@ function createUndiciOriginDispatcher(
     : createUndiciPool(origin, options);
 }
 
-function addUndiciAgentFactory<TOptions extends object>(options: TOptions): TOptions {
-  if ("factory" in options) {
-    return options;
-  }
-  return {
-    ...options,
-    factory: createUndiciOriginDispatcher,
-  };
-}
-
-function addHttp1ProxyClientFactory<TOptions extends UndiciProxyClientOptions>(
-  options: TOptions,
-): TOptions {
-  if ("clientFactory" in options) {
-    return options;
-  }
-  // Caller factories own their connection policy and must not be replaced.
-  return {
-    ...options,
-    clientFactory: createHttp1ProxyClientFactory(options),
-  };
-}
-
-function applyMissingConnectOptions(
-  connect: Record<string, unknown>,
-  defaults: Record<string, unknown>,
-): void {
-  for (const [key, value] of Object.entries(defaults)) {
-    if (!(key in connect)) {
-      connect[key] = value;
-    }
-  }
-}
-
-function includesSocksProxy(urls: Array<string | URL | undefined>): boolean {
-  return urls.some((url) => url && ["socks:", "socks5:"].includes(URL.parse(url)?.protocol ?? ""));
-}
-
-function withHttp1OnlyDispatcherOptions<T extends object | undefined>(
-  options?: T,
-  timeoutMs?: number,
-  applyTo?: { connect?: boolean; proxyTls?: boolean },
-): (T extends object ? T : Record<never, never>) & { allowH2: false } {
-  const base = {} as (T extends object ? T : Record<never, never>) & { allowH2: false };
-  if (options) {
-    Object.assign(base, options);
-  }
-  Object.assign(base, HTTP1_ONLY_DISPATCHER_OPTIONS);
-  const baseRecord = base as Record<string, unknown>;
-  const targets = applyTo ?? { connect: true };
-  const autoSelectConnect = resolveUndiciAutoSelectFamilyConnectOptions();
-  if (autoSelectConnect && targets.connect && typeof baseRecord.connect !== "function") {
-    const connect = isObjectRecord(baseRecord.connect) ? baseRecord.connect : {};
-    applyMissingConnectOptions(connect, autoSelectConnect);
-    baseRecord.connect = connect;
-  }
-  if (autoSelectConnect && targets.proxyTls) {
-    const proxyTls = isObjectRecord(baseRecord.proxyTls) ? baseRecord.proxyTls : {};
-    applyMissingConnectOptions(proxyTls, autoSelectConnect);
-    baseRecord.proxyTls = proxyTls;
-  }
-  if (timeoutMs !== undefined && Number.isFinite(timeoutMs) && timeoutMs > 0) {
-    const normalizedTimeoutMs = Math.floor(timeoutMs);
-    baseRecord.bodyTimeout = normalizedTimeoutMs;
-    baseRecord.headersTimeout = normalizedTimeoutMs;
-    if (targets.proxyTls === false) {
-      baseRecord.connectTimeout ??= normalizedTimeoutMs;
-    }
-    if (targets.connect && typeof baseRecord.connect !== "function") {
-      baseRecord.connect = {
-        ...(isObjectRecord(baseRecord.connect) ? baseRecord.connect : {}),
-        timeout: normalizedTimeoutMs,
-      };
-    }
-    if (targets.proxyTls) {
-      baseRecord.proxyTls = {
-        ...(isObjectRecord(baseRecord.proxyTls) ? baseRecord.proxyTls : {}),
-        timeout: normalizedTimeoutMs,
-      };
-    }
-  }
-  return base;
+function normalizedTimeout(timeoutMs?: number): number | undefined {
+  return timeoutMs !== undefined && Number.isFinite(timeoutMs) && timeoutMs > 0
+    ? Math.floor(timeoutMs)
+    : undefined;
 }
 
 export function buildHttp1AgentOptions(
-  options?: UndiciAgentOptions,
+  options: UndiciAgentOptions = {},
   timeoutMs?: number,
 ): NonNullable<UndiciAgentOptions> {
-  return addUndiciAgentFactory(withHttp1OnlyDispatcherOptions(options, timeoutMs));
+  const timeout = normalizedTimeout(timeoutMs);
+  return {
+    factory: createUndiciOriginDispatcher,
+    ...options,
+    ...HTTP1_ONLY_DISPATCHER_OPTIONS,
+    connect:
+      typeof options.connect === "function"
+        ? options.connect
+        : {
+            ...resolveUndiciAutoSelectFamilyConnectOptions(),
+            ...options.connect,
+            ...(timeout !== undefined ? { timeout } : {}),
+          },
+    ...(timeout !== undefined ? { bodyTimeout: timeout, headersTimeout: timeout } : {}),
+  };
 }
 
-export function buildHttp1EnvHttpProxyAgentOptions(
-  options?: UndiciEnvHttpProxyAgentOptions,
+function buildHttp1ProxyOptions<T extends Omit<UndiciProxyAgentOptionsRecord, "uri">>(
+  options: T,
   timeoutMs?: number,
-): NonNullable<UndiciEnvHttpProxyAgentOptions> {
-  // Undici 8.7 began forwarding plain HTTP by default. OpenClaw keeps CONNECT
-  // tunneling so managed and explicit proxies retain one target-isolation contract.
-  const proxyOptions = { proxyTunnel: true, ...options };
-  const includesSocks = includesSocksProxy([
-    options?.httpProxy ?? process.env.http_proxy ?? process.env.HTTP_PROXY,
-    options?.httpsProxy ?? process.env.https_proxy ?? process.env.HTTPS_PROXY,
-  ]);
-  return addHttp1ProxyClientFactory(
-    withHttp1OnlyDispatcherOptions(
-      addUndiciAgentFactory(addActiveManagedProxyTlsOptions(proxyOptions) ?? proxyOptions),
-      timeoutMs,
-      // Undici shares this option bag across both proxy endpoints. Generated TLS
-      // hints would turn a plain SOCKS hop into SOCKS-over-TLS; explicit TLS stays.
-      { connect: true, proxyTls: !includesSocks },
-    ),
-  );
+  managedTlsEnv?: NodeJS.ProcessEnv,
+): T & NonNullable<UndiciAgentOptions> {
+  const timeout = normalizedTimeout(timeoutMs);
+  const managed = addActiveManagedProxyTlsOptions(options, { env: managedTlsEnv });
+  const prepared = {
+    proxyTunnel: true,
+    ...managed,
+    ...buildHttp1AgentOptions(managed, timeout),
+    connectTimeout: timeout ?? options.proxyTls?.timeout ?? options.connectTimeout,
+  };
+  // Generic connector hints are not TLS opt-in: Undici interprets proxyTls
+  // presence as SOCKS-over-TLS. Only explicitly supplied/managed TLS belongs there.
+  return {
+    ...prepared,
+    clientFactory:
+      options.clientFactory === undefined ? createHttp1ProxyClientFactory() : options.clientFactory,
+  };
 }
 
 export function buildHttp1ProxyAgentOptions(
   options: UndiciProxyAgentOptions,
   timeoutMs?: number,
+  managedTlsEnv?: NodeJS.ProcessEnv,
 ): Exclude<UndiciProxyAgentOptions, string> {
-  const normalized =
-    typeof options === "string" || options instanceof URL
-      ? { uri: options.toString() }
-      : { ...options };
-  const proxyOptions = { proxyTunnel: true, ...normalized };
-  return addHttp1ProxyClientFactory(
-    withHttp1OnlyDispatcherOptions(
-      addUndiciAgentFactory(addActiveManagedProxyTlsOptions(proxyOptions)),
-      timeoutMs,
-      { proxyTls: !includesSocksProxy([normalized.uri]) },
-    ),
-  ) as Exclude<UndiciProxyAgentOptions, string>;
+  return buildHttp1ProxyOptions(
+    typeof options === "string" || options instanceof URL ? { uri: options.toString() } : options,
+    timeoutMs,
+    managedTlsEnv,
+  );
 }

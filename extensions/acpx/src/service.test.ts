@@ -700,6 +700,11 @@ describe("createAcpxRuntimeService", () => {
     const workspaceDir = testWorkspace.dir;
     const ctx = createServiceContext(workspaceDir);
     const service = createAcpxRuntimeService(ctx);
+    const sessionsDir = path.join(workspaceDir, "state", "sessions");
+    await fs.mkdir(sessionsDir, { recursive: true });
+    for (const id of ["global", "openclaw-owner-v1-existing", "agent:free:acp:test"]) {
+      await fs.writeFile(path.join(sessionsDir, `${encodeURIComponent(id)}.json`), "{}");
+    }
 
     await service.start(ctx);
 
@@ -732,7 +737,10 @@ describe("createAcpxRuntimeService", () => {
 
     expect(acpxRuntimeConstructorMock).toHaveBeenCalledOnce();
     expect(acpxRuntimeConstructorMock).toHaveBeenCalledWith(
-      expect.objectContaining({ elicitationModes: ["form", "url"] }),
+      expect.objectContaining({
+        elicitationModes: ["form", "url"],
+        openclawLegacyBareSessionKeys: new Set(["global", "openclaw-owner-v1-existing"]),
+      }),
     );
     expect(backend.healthy).toBeUndefined();
     const turn = backendRuntime.startTurn({

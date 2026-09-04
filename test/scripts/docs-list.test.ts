@@ -37,23 +37,44 @@ describe("docs-list", () => {
     expect(result.stderr).toBe("docs:list: missing docs directory. Run from repo root.\n");
   });
 
-  it("prints single-line read_when strings as read hints", () => {
+  it("reads metadata across supported front matter forms", () => {
     const tempRepoRoot = makeTempRepoRoot("openclaw-docs-list-");
     mkdirSync(path.join(tempRepoRoot, "docs"), { recursive: true });
-    writeFileSync(
-      path.join(tempRepoRoot, "docs", "page.md"),
-      `---
-summary: "Single-line read_when page"
-read_when: "Read this page when the hint is inline."
----
-`,
-      "utf8",
-    );
+    const cases = [
+      [
+        "inline.md",
+        '---\nsummary: "Single-line read_when page"\nread_when: "Read this page when the hint is inline."\n---\n',
+        "Single-line read_when page",
+      ],
+      ["yaml-end.md", '---\nsummary: "YAML document end page"\n...\n', "YAML document end page"],
+      [
+        "annotated.md",
+        '---\r\nsummary: "Annotated closing delimiter"\r\n--- # end\r\n',
+        "Annotated closing delimiter",
+      ],
+      [
+        "whitespace.md",
+        '---\nsummary: "Whitespace closing delimiter"\n---   \n',
+        "Whitespace closing delimiter",
+      ],
+      [
+        "document-end-comment.md",
+        '---\r\nsummary: "Document end comment"\r\n... # end\r\n',
+        "Document end comment",
+      ],
+    ] as const;
+
+    for (const [fileName, content] of cases) {
+      writeFileSync(path.join(tempRepoRoot, "docs", fileName), content, "utf8");
+    }
 
     const output = runDocsList(tempRepoRoot);
 
-    expect(output).toContain("page.md - Single-line read_when page");
+    for (const [fileName, , summary] of cases) {
+      expect(output).toContain(`${fileName} - ${summary}`);
+    }
     expect(output).toContain("Read when: Read this page when the hint is inline.");
+    expect(output).not.toContain("unterminated front matter");
   });
 
   it("renders the publish docs map on demand without creating a mirror", () => {
@@ -63,7 +84,8 @@ read_when: "Read this page when the hint is inline."
       path.join(tempRepoRoot, "docs", "page.md"),
       `---
 summary: "Page"
----
+# This metadata comment must not become a heading
+... # end
 # Visible title
 
 ## \`API[*]\` <script>alert(1)</script>
@@ -75,6 +97,12 @@ summary: "Page"
 \`\`\`md
 ### Hidden fenced heading
 \`\`\`
+
+\`\`\`\`md
+\`\`\`json
+### Hidden nested fenced heading
+\`\`\`
+\`\`\`\`
 `,
       "utf8",
     );
@@ -89,7 +117,9 @@ summary: "Page"
     expect(output).toContain("  - H3: &lt;scr&lt;script&gt;ipt&gt;alert(1)&lt;/script&gt;");
     expect(output).toContain("  - H4: `![label](https://example.test/image)`");
     expect(output).toContain("## nested/index.mdx\n\n- Route: /nested");
+    expect(output).not.toContain("metadata comment must not become a heading");
     expect(output).not.toContain("Hidden fenced heading");
+    expect(output).not.toContain("Hidden nested fenced heading");
     expect(output).not.toContain("AGENTS.md");
     expect(existsSync(path.join(tempRepoRoot, "docs", "docs_map.md"))).toBe(false);
   });

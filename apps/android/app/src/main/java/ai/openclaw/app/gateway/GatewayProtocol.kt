@@ -293,6 +293,8 @@ data class ToolsGitHubAuthorizeCancelResult(
 @Serializable
 data class SessionGitHubPublicationRequested(
   val requestId: String,
+  val publisher: SessionGitHubPublicationRequestedPublisher? = null,
+  val effect: SessionGitHubPublicationRequestedEffect? = null,
   val message: String,
 ) : SessionGitHubPublicationResult
 
@@ -300,6 +302,8 @@ data class SessionGitHubPublicationRequested(
 @Serializable
 data class SessionGitHubPublicationPublishing(
   val requestId: String,
+  val publisher: SessionGitHubPublicationPublishingPublisher? = null,
+  val effect: SessionGitHubPublicationPublishingEffect? = null,
   val message: String,
 ) : SessionGitHubPublicationResult
 
@@ -307,6 +311,8 @@ data class SessionGitHubPublicationPublishing(
 @Serializable
 data class SessionGitHubPublicationPublished(
   val requestId: String,
+  val publisher: SessionGitHubPublicationPublishedPublisher? = null,
+  val effect: SessionGitHubPublicationPublishedEffect? = null,
   val url: String,
   val repository: String,
   val branch: String,
@@ -317,9 +323,20 @@ data class SessionGitHubPublicationPublished(
 @Serializable
 data class SessionGitHubPublicationFailed(
   val requestId: String,
+  val publisher: SessionGitHubPublicationFailedPublisher? = null,
+  val effect: SessionGitHubPublicationFailedEffect? = null,
   val code: String,
   val message: String,
   val nextAction: String,
+) : SessionGitHubPublicationResult
+
+@SerialName("needs_confirmation")
+@Serializable
+data class SessionGitHubPublicationNeedsConfirmation(
+  val requestId: String,
+  val publisher: SessionGitHubPublicationNeedsConfirmationPublisher? = null,
+  val effect: SessionGitHubPublicationNeedsConfirmationEffect? = null,
+  val message: String,
 ) : SessionGitHubPublicationResult
 
 @OptIn(ExperimentalSerializationApi::class)
@@ -385,6 +402,81 @@ data class GitHubIdentityFactsGitAuthor(
 )
 
 @Serializable
+data class SessionGitHubPublicationRequestedPublisher(
+  val source: String,
+  val accountId: Long,
+  val login: String,
+)
+
+@Serializable
+data class SessionGitHubPublicationRequestedEffect(
+  val kind: String,
+  val status: String,
+  val headCommit: String? = null,
+  val url: String? = null,
+)
+
+@Serializable
+data class SessionGitHubPublicationPublishingPublisher(
+  val source: String,
+  val accountId: Long,
+  val login: String,
+)
+
+@Serializable
+data class SessionGitHubPublicationPublishingEffect(
+  val kind: String,
+  val status: String,
+  val headCommit: String? = null,
+  val url: String? = null,
+)
+
+@Serializable
+data class SessionGitHubPublicationPublishedPublisher(
+  val source: String,
+  val accountId: Long,
+  val login: String,
+)
+
+@Serializable
+data class SessionGitHubPublicationPublishedEffect(
+  val kind: String,
+  val status: String,
+  val headCommit: String? = null,
+  val url: String? = null,
+)
+
+@Serializable
+data class SessionGitHubPublicationFailedPublisher(
+  val source: String,
+  val accountId: Long,
+  val login: String,
+)
+
+@Serializable
+data class SessionGitHubPublicationFailedEffect(
+  val kind: String,
+  val status: String,
+  val headCommit: String? = null,
+  val url: String? = null,
+)
+
+@Serializable
+data class SessionGitHubPublicationNeedsConfirmationPublisher(
+  val source: String,
+  val accountId: Long,
+  val login: String,
+)
+
+@Serializable
+data class SessionGitHubPublicationNeedsConfirmationEffect(
+  val kind: String,
+  val status: String,
+  val headCommit: String? = null,
+  val url: String? = null,
+)
+
+@Serializable
 data class ProjectsListResultObservedProjectsItemCheckoutsItem(
   val runnerId: String,
   val path: String,
@@ -433,6 +525,8 @@ enum class GatewayMethod(
   ExecApprovalRequest("exec.approval.request"),
   ExecApprovalWaitDecision("exec.approval.waitDecision"),
   ExecApprovalResolve("exec.approval.resolve"),
+  ExecApprovalGrantsList("exec.approval.grants.list"),
+  ExecApprovalGrantsRevoke("exec.approval.grants.revoke"),
   QuestionRequest("question.request"),
   QuestionWaitAnswer("question.waitAnswer"),
   QuestionResolve("question.resolve"),
@@ -450,6 +544,7 @@ enum class GatewayMethod(
   OpenclawApprovalList("openclaw.approval.list"),
   OpenclawSetupDetect("openclaw.setup.detect"),
   OpenclawSetupActivate("openclaw.setup.activate"),
+  OpenclawSetupActivateStart("openclaw.setup.activate.start"),
   OpenclawSetupAuthStart("openclaw.setup.auth.start"),
   OpenclawSetupPrepareStart("openclaw.setup.prepare.start"),
   WizardStart("wizard.start"),
@@ -500,6 +595,16 @@ enum class GatewayMethod(
   UsersSetDisplayName("users.setDisplayName"),
   UsersSetAvatar("users.setAvatar"),
   UsersSetRole("users.setRole"),
+  UsersListAuthLinks("users.listAuthLinks"),
+  UsersListModelAccounts("users.listModelAccounts"),
+  UsersSelectModelAccount("users.selectModelAccount"),
+  UsersLinkAuthProfile("users.linkAuthProfile"),
+  UsersUnlinkAuthProfile("users.unlinkAuthProfile"),
+  UsersAuthConnectStart("users.authConnect.start"),
+  UsersAuthConnectAnswer("users.authConnect.answer"),
+  UsersAuthConnectStatus("users.authConnect.status"),
+  UsersAuthConnectCancel("users.authConnect.cancel"),
+  UsersAuthConnectCatalog("users.authConnect.catalog"),
   TasksList("tasks.list"),
   TasksGet("tasks.get"),
   TasksCancel("tasks.cancel"),
@@ -531,6 +636,13 @@ enum class GatewayMethod(
   ArtifactsGet("artifacts.get"),
   ArtifactsDownload("artifacts.download"),
   SkillsStatus("skills.status"),
+  SkillsLibraryList("skills.library.list"),
+  SkillsLibraryRead("skills.library.read"),
+  SkillsLibrarySave("skills.library.save"),
+  SkillsLibraryMutate("skills.library.mutate"),
+  SkillsLibraryActivate("skills.library.activate"),
+  SkillsLibraryImport("skills.library.import"),
+  SkillsLibraryUpload("skills.library.upload"),
   SkillsSearch("skills.search"),
   SkillsDetail("skills.detail"),
   SkillsSecurityVerdicts("skills.securityVerdicts"),
@@ -582,6 +694,8 @@ enum class GatewayMethod(
   SessionsSend("sessions.send"),
   SessionsAbort("sessions.abort"),
   SessionsPatch("sessions.patch"),
+  SessionsGoalUpdate("sessions.goal.update"),
+  SessionsGoalClear("sessions.goal.clear"),
   SessionsPluginPatch("sessions.pluginPatch"),
   SessionsCleanup("sessions.cleanup"),
   SessionsReset("sessions.reset"),
@@ -675,6 +789,8 @@ enum class GatewayMethod(
   PushWebSubscribe("push.web.subscribe"),
   PushWebUnsubscribe("push.web.unsubscribe"),
   PushWebTest("push.web.test"),
+  PushWebPreferencesGet("push.web.preferences.get"),
+  PushWebPreferencesSet("push.web.preferences.set"),
   ConfigOpenFile("config.openFile"),
   Connect("connect"),
   ChatInject("chat.inject"),
@@ -780,6 +896,21 @@ enum class GatewayMethod(
   DiagnosticsLanes("diagnostics.lanes"),
   SessionMembersListEvidence("session.members.listEvidence"),
   PluginsInspect("plugins.inspect"),
+  UsersGithubStatus("users.github.status"),
+  UsersGithubAuthorizeStart("users.github.authorize.start"),
+  UsersGithubAuthorizePoll("users.github.authorize.poll"),
+  UsersGithubAuthorizeCancel("users.github.authorize.cancel"),
+  UsersGithubDisconnect("users.github.disconnect"),
+  SessionsGithubOptions("sessions.github.options"),
+  SessionsGithubStatus("sessions.github.status"),
+  SessionsGithubConfirm("sessions.github.confirm"),
+  SessionsTitlePrepare("sessions.title.prepare"),
+  UsersMentionable("users.mentionable"),
+  MentionsList("mentions.list"),
+  MentionsDismiss("mentions.dismiss"),
+  TranscriptsList("transcripts.list"),
+  TranscriptsGet("transcripts.get"),
+  ModelsAuthOrderSet("models.authOrderSet"),
 }
 
 enum class GatewayEvent(
@@ -788,6 +919,7 @@ enum class GatewayEvent(
   ConnectChallenge("connect.challenge"),
   Agent("agent"),
   Chat("chat"),
+  ChatMetadataChanged("chat.metadata.changed"),
   UiCommand("ui.command"),
   SessionApproval("session.approval"),
   SessionMessage("session.message"),
@@ -805,6 +937,7 @@ enum class GatewayEvent(
   TalkMode("talk.mode"),
   TalkEvent("talk.event"),
   Shutdown("shutdown"),
+  GatewaySuspension("gateway.suspension"),
   Health("health"),
   Heartbeat("heartbeat"),
   Cron("cron"),
@@ -813,6 +946,7 @@ enum class GatewayEvent(
   NodePairRequested("node.pair.requested"),
   NodePairResolved("node.pair.resolved"),
   NodePresence("node.presence"),
+  NodeHostStats("node.hostStats"),
   NodeRunnerInventoryChanged("node.runnerInventory.changed"),
   NodeInvokeCancel("node.invoke.cancel"),
   NodeInvokeInput("node.invoke.input"),
@@ -839,4 +973,5 @@ enum class GatewayEvent(
   UpdateAvailable("update.available"),
   PortalChanged("portal.changed"),
   ProgressCardChanged("progressCard.changed"),
+  MentionsChanged("mentions.changed"),
 }

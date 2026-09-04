@@ -1,5 +1,4 @@
 import { AsyncLocalStorage } from "node:async_hooks";
-import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import { resolveGlobalSingleton } from "../../shared/global-singleton.js";
 import { withPluginMetadataSnapshotScope } from "../current-plugin-metadata-snapshot.js";
 import type { PluginMetadataSnapshot } from "../plugin-metadata-snapshot.types.js";
@@ -18,7 +17,6 @@ const pluginRuntimeGenerationRegistryScope = resolveGlobalSingleton<
 /** Carries one prepared plugin generation through all nested runtime lookups. */
 export function withPluginRuntimeGenerationScope<T>(
   generation: {
-    config: OpenClawConfig;
     metadataSnapshot: PluginMetadataSnapshot;
     pluginRegistry?: PluginRegistry;
   },
@@ -31,13 +29,8 @@ export function withPluginRuntimeGenerationScope<T>(
       pluginRuntimeGenerationRegistryScope.run(pluginRegistry, () =>
         withPluginRuntimeRegistryScope(pluginRegistry, run),
       ),
-    {
-      config: generation.config,
-      trustConfigIdentity: true,
-      ...(generation.metadataSnapshot.workspaceDir
-        ? { workspaceDir: generation.metadataSnapshot.workspaceDir }
-        : {}),
-    },
+    // The prepared generation already owns discovery and policy compatibility.
+    { trustConfigIdentity: true },
   );
 }
 

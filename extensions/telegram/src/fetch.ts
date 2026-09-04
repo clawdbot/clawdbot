@@ -246,16 +246,10 @@ function resolveTelegramDispatcherPolicy(params: {
     };
   }
   if (params.useEnvProxy) {
-    const includesSocks = Object.values(resolveEnvHttpProxyAgentOptions() ?? {}).some((url) =>
-      ["socks:", "socks5:"].includes(URL.parse(url)?.protocol ?? ""),
-    );
     return {
       policy: {
         mode: "env-proxy",
         connect: { ...connect },
-        // These are generated connector hints, not an operator TLS opt-in.
-        // Undici interprets proxyTls presence as SOCKS-over-TLS for a SOCKS hop.
-        ...(includesSocks ? {} : { proxyTls: { ...connect } }),
       },
       mode: "env-proxy",
     };

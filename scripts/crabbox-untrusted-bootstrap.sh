@@ -2,7 +2,7 @@
 set -euo pipefail
 
 node_version="24.19.0"
-pnpm_spec="pnpm@11.22.0+sha512.1ff870c4c6133dfd88fb2afc46dd13d47f09c9794b438c6fdb47ca98caf3bc16381ee0be93a091b8e3824cf01f889f46d7d9e20910fb0be1ab0fb5baa80dd621"
+pnpm_spec="pnpm@12.1.0+sha512.d9b8276d97f6ec86e49815877f91ee9f63cee61f2063b304e43b6dab8fa07ce8a9afd46d2facd39f921e6a9d06b3c75a81349c7b888c2d22886bae0229901037"
 
 if [[ $# -lt 2 ]]; then
   echo "usage: $0 <expected-head-sha> <command> [args...]" >&2
@@ -88,6 +88,13 @@ pnpm_spec="$4"
   COREPACK_HOME="$corepack_home" \
   PATH="$install_root/bin:/usr/bin:/bin" \
   "$install_root/bin/corepack" prepare "$pnpm_spec" --activate
+# Warm from the trusted tool directory, never the untrusted checkout.
+cd "$install_root"
+/usr/bin/env \
+  COREPACK_ENABLE_DOWNLOAD_PROMPT=0 \
+  COREPACK_HOME="$corepack_home" \
+  PATH="$install_root/bin:/usr/bin:/bin" \
+  "$install_root/bin/corepack" "$pnpm_spec" --version
 INSTALL
 
 for tool in node npm npx corepack pnpm pnpx; do

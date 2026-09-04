@@ -109,39 +109,61 @@ describe("discordVoiceTranscriptsSourceProvider", () => {
     ).resolves.toMatchObject({ ok: false });
   });
 
-  it("starts Discord voice in transcripts mode", async () => {
-    const join = vi.fn(async () => ({ ok: true, message: "joined" }));
-    setDiscordTranscriptsVoiceManager({
-      accountId: "primary",
-      manager: { join } as unknown as DiscordVoiceManager,
-    });
+  it.each([undefined, "Operator meeting"])(
+    "starts capture, retains title %s, and reports retirement",
+    async (title) => {
+      const join = vi.fn<DiscordVoiceManager["join"]>(async () => ({
+        ok: true,
+        message: "joined",
+        channelName: "Planning room",
+      }));
+      setDiscordTranscriptsVoiceManager({
+        accountId: "primary",
+        manager: { join } as unknown as DiscordVoiceManager,
+      });
 
-    const onUtterance = vi.fn();
-    const result = await discordVoiceTranscriptsSourceProvider.start?.({
-      session: {
+      const onUtterance = vi.fn();
+      const onStatus = vi.fn();
+      const result = await discordVoiceTranscriptsSourceProvider.start?.({
+        session: {
+          sessionId: "notes-1",
+          title,
+          startedAt: new Date().toISOString(),
+          source: {
+            providerId: "discord-voice",
+            accountId: "primary",
+            guildId: "g1",
+            channelId: "c1",
+          },
+        },
+        onUtterance,
+        onStatus,
+      });
+
+      expect(result).toMatchObject({ ok: true, session: { title: title ?? "Planning room" } });
+      expect(join).toHaveBeenCalledWith(
+        { guildId: "g1", channelId: "c1" },
+        {
+          transcripts: {
+            sessionId: "notes-1",
+            onUtterance,
+            onStop: expect.any(Function),
+          },
+        },
+      );
+      await join.mock.calls[0]?.[1]?.transcripts?.onStop?.();
+      expect(onStatus).toHaveBeenCalledExactlyOnceWith({
+        active: false,
         sessionId: "notes-1",
-        startedAt: new Date().toISOString(),
         source: {
           providerId: "discord-voice",
           accountId: "primary",
           guildId: "g1",
           channelId: "c1",
         },
-      },
-      onUtterance,
-    });
-
-    expect(result).toMatchObject({ ok: true });
-    expect(join).toHaveBeenCalledWith(
-      { guildId: "g1", channelId: "c1" },
-      {
-        transcripts: {
-          sessionId: "notes-1",
-          onUtterance,
-        },
-      },
-    );
-  });
+      });
+    },
+  );
 
   it("uses the sole voice-capable account instead of a text-only default", async () => {
     const workJoin = vi.fn(async () => ({ ok: true, message: "joined work" }));
@@ -424,6 +446,104 @@ describe("discordVoiceTranscriptsSourceProvider", () => {
       error: "Discord voice manager is not available.",
     });
   });
+
+  it.each(["registered", "delayed"])(
+    "watches occupancy through the %s voice-capable account and stops callbacks",
+    async (readiness) => {
+      vi.useFakeTimers();
+      let listener: ((state: { occupied: boolean }) => void) | undefined;
+      const unsubscribe = vi.fn(() => {
+        listener = undefined;
+      });
+      const watchChannelOccupancy = vi.fn<DiscordVoiceManager["watchChannelOccupancy"]>(
+        (_room, callback) => {
+          listener = callback;
+          callback({ occupied: true });
+          return unsubscribe;
+        },
+      );
+      const manager = { watchChannelOccupancy } as unknown as DiscordVoiceManager;
+      if (readiness === "registered") {
+        setDiscordTranscriptsVoiceManager({ accountId: "work", manager });
+      }
+      const transitions: string[] = [];
+      const request = discordVoiceTranscriptsSourceProvider.watchOccupancy?.({
+        cfg: {
+          channels: {
+            discord: {
+              defaultAccount: "primary",
+              accounts: {
+                primary: { token: "primary-token", voice: { enabled: false } },
+                work: { token: "work-token", voice: { enabled: true } },
+              },
+            },
+          },
+        },
+        source: { providerId: "discord-voice", guildId: "g1", channelId: "c1" },
+        startupWaitMs: 30_000,
+        onOccupied: () => {
+          transitions.push("occupied");
+        },
+        onEmpty: () => {
+          transitions.push("empty");
+        },
+      });
+      if (readiness === "delayed") {
+        await vi.advanceTimersByTimeAsync(1_000);
+        expect(transitions).toEqual([]);
+        setDiscordTranscriptsVoiceManager({ accountId: "work", manager });
+      }
+      const result = await request;
+      expect(result?.ok).toBe(true);
+      expect(watchChannelOccupancy).toHaveBeenCalledWith(
+        { guildId: "g1", channelId: "c1" },
+        expect.any(Function),
+      );
+      listener?.({ occupied: false });
+      expect(transitions).toEqual(["occupied", "empty"]);
+      if (!result?.ok) {
+        throw new Error("expected occupancy watch handle");
+      }
+      result.value.stop();
+      listener?.({ occupied: true });
+      expect(transitions).toEqual(["occupied", "empty"]);
+      expect(unsubscribe).toHaveBeenCalledOnce();
+      expect(vi.getTimerCount()).toBe(0);
+    },
+  );
+
+  it.each(["abort", "timeout"])(
+    "releases a manager wait on %s without subscribing later",
+    async (ending) => {
+      vi.useFakeTimers();
+      const abortController = new AbortController();
+      const watchChannelOccupancy = vi.fn();
+      const result = discordVoiceTranscriptsSourceProvider.watchOccupancy?.({
+        source: {
+          providerId: "discord-voice",
+          accountId: "delayed",
+          guildId: "g1",
+          channelId: "c1",
+        },
+        startupWaitMs: 1_000,
+        abortSignal: abortController.signal,
+        onOccupied: vi.fn(),
+        onEmpty: vi.fn(),
+      });
+      if (ending === "abort") {
+        abortController.abort();
+      } else {
+        await vi.advanceTimersByTimeAsync(1_000);
+      }
+      await expect(result).resolves.toMatchObject({ ok: false });
+      setDiscordTranscriptsVoiceManager({
+        accountId: "delayed",
+        manager: { watchChannelOccupancy } as unknown as DiscordVoiceManager,
+      });
+      expect(watchChannelOccupancy).not.toHaveBeenCalled();
+      expect(vi.getTimerCount()).toBe(0);
+    },
+  );
 
   it("stops Discord transcripts without owning promoted voice sessions", async () => {
     const leave = vi.fn(async () => ({ ok: true, message: "stopped notes" }));

@@ -15,10 +15,14 @@ import type {
   Tool,
   Usage,
 } from "openclaw/plugin-sdk/llm";
-import { createAssistantMessageEventStream } from "openclaw/plugin-sdk/llm";
+import { createAssistantMessageEventStream, transformMessages } from "openclaw/plugin-sdk/llm";
 import type { ProviderRuntimeModel } from "openclaw/plugin-sdk/plugin-entry";
 import { isNonSecretApiKeyMarker } from "openclaw/plugin-sdk/provider-auth";
-import { createPlainTextToolCallCompatWrapper } from "openclaw/plugin-sdk/provider-stream-shared";
+import { readProviderResponseErrorText } from "openclaw/plugin-sdk/provider-http";
+import {
+  createPlainTextToolCallCompatWrapper,
+  notifyLlmRequestActivity,
+} from "openclaw/plugin-sdk/provider-stream-shared";
 import {
   describeUnsupportedToolResultMedia,
   extractToolResultText,
@@ -39,7 +43,6 @@ import { estimateStringChars } from "openclaw/plugin-sdk/text-utility-runtime";
 import { OLLAMA_CLOUD_BASE_URL, OLLAMA_DEFAULT_BASE_URL } from "./defaults.js";
 import { normalizeOllamaWireModelId } from "./model-id.js";
 import { buildOllamaBaseUrlSsrFPolicy, isOllamaCloudModel } from "./provider-models.js";
-import { readOllamaResponseErrorText } from "./request-header-redaction.js";
 import {
   createOllamaVisibleContentSanitizer,
   sanitizeOllamaFinalVisibleContent,
@@ -982,7 +985,7 @@ function createRawOllamaStreamFn(
           ? { availableToolNames }
           : {};
         const ollamaMessages = convertToOllamaMessages(
-          context.messages ?? [],
+          transformMessages(context.messages ?? [], model),
           context.systemPrompt,
           toolCallNameOptions,
         );
@@ -1076,7 +1079,7 @@ function createRawOllamaStreamFn(
         try {
           await notifyProviderHttpResponse({ options, response, model });
           if (!response.ok) {
-            const errorText = await readOllamaResponseErrorText(
+            const errorText = await readProviderResponseErrorText(
               response,
               OLLAMA_STREAM_ERROR_BODY_LIMIT_BYTES,
               headers,
@@ -1228,6 +1231,7 @@ function createRawOllamaStreamFn(
 
           for await (const chunk of parseNdjsonStream(reader)) {
             throwIfOllamaStreamAborted(options?.signal);
+            notifyLlmRequestActivity(options?.signal);
             if (finalResponse) {
               throw new Error(MALFORMED_STREAMING_FRAGMENT_ERROR_MESSAGE);
             }

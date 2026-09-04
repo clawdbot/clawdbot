@@ -232,6 +232,12 @@ export type CliBackendLiveSessionCapability = {
   remove(handle: CliBackendLiveSessionHandle): void;
 };
 
+/** Turn-only context that must not become an operator-authored native transcript row. */
+export type CliBackendPromptContext = {
+  prependContext?: string;
+  appendContext?: string;
+};
+
 /** Exact prepared local process facts consumed by a plugin-owned execution transport. */
 export type CliBackendExecuteContext = {
   command: string;
@@ -239,11 +245,14 @@ export type CliBackendExecuteContext = {
   cwd: string;
   env: Record<string, string>;
   prompt: string;
+  promptContext?: CliBackendPromptContext;
   modelId: string;
   systemPrompt: string;
   sessionId?: string;
   useResume: boolean;
   abortSignal?: AbortSignal;
+  /** Revalidate the host-owned run and caller before deferred credential use or dispatch. */
+  assertCurrent?: () => void;
   timeoutMs: number;
   executionMode?: CliBackendExecutionMode;
   toolAvailability?: CliBackendToolAvailability;
@@ -326,6 +335,19 @@ export type CliBackendParseJsonlEvent = (
   line: string,
   ctx: CliBackendParseJsonlEventContext,
 ) => CliBackendParsedJsonlEvent | readonly CliBackendParsedJsonlEvent[] | null | undefined;
+
+export type CliBackendParsedJsonlLifecycleEvent =
+  | { kind: "compaction"; phase: "start" }
+  | { kind: "compaction"; phase: "end"; completed: boolean };
+
+export type CliBackendParseJsonlLifecycleEvent = (
+  line: string,
+  ctx: CliBackendParseJsonlEventContext,
+) =>
+  | CliBackendParsedJsonlLifecycleEvent
+  | readonly CliBackendParsedJsonlLifecycleEvent[]
+  | null
+  | undefined;
 
 export type CliBackendAuthEpochMode = "combined" | "profile-only";
 
@@ -512,6 +534,11 @@ type CliBackendPluginBase = {
    * renders them but does not treat them as host tool execution or delivery evidence.
    */
   parseJsonlEvent?: CliBackendParseJsonlEvent;
+  /**
+   * Optional lifecycle parser kept separate from the legacy JSONL event union.
+   * Existing plugins can continue exhaustively matching `parseJsonlEvent` results.
+   */
+  parseJsonlLifecycleEvent?: CliBackendParseJsonlLifecycleEvent;
   /**
    * Whether this CLI backend can expose native tools outside OpenClaw's tool
    * catalog. Exact restricted runs require `selectable` plus a declared

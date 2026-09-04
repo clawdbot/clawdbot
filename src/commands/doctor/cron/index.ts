@@ -25,6 +25,7 @@ import {
 import {
   formatLegacyIssuePreview,
   formatIncompleteInheritedAuthorityAdvisory,
+  formatLegacyGatewayExecAdvisory,
   formatScheduledToolPolicyAdvisory,
   formatUnresolvedCommandPromptAdvisory,
   formatUnresolvedShellPromptAdvisory,
@@ -304,6 +305,18 @@ export async function collectLegacyCronStoreHealthFindings(params: {
     }
   }
 
+  if (normalized.legacyGatewayExecJobs.length > 0) {
+    findings.push(
+      legacyCronStoreFinding({
+        message: `${pluralize(normalized.legacyGatewayExecJobs.length, "automation")} require recreation because they grant the retired \`gateway_exec\` alias.`,
+        path: sqliteStorePath,
+        requirement: "legacy-gateway-exec-recreation",
+        fixHint:
+          "Review the affected jobs with `openclaw automations list --all`, then recreate each one from a fresh authenticated creator turn or explicitly reauthorize its complete tool cap from a trusted operator shell.",
+      }),
+    );
+  }
+
   const notifyCount = rawJobs.filter((job) => job.notify === true).length;
   if (notifyCount > 0) {
     findings.push(
@@ -371,8 +384,12 @@ export async function maybeRepairLegacyCronStore(params: {
     legacyQuarantine,
     legacyImportCount,
     invalidConfigRows,
+    persistedQuarantine,
     rawJobs,
   } = state;
+  const revalidatableQuarantineCount = persistedQuarantine.filter(
+    (entry) => entry.reason === "invalid-schedule" && entry.job,
+  ).length;
   const sqliteStorePath = resolveOpenClawStateSqlitePath();
   try {
     const quarantine = loadCronQuarantinedJobs(storePath);
@@ -402,7 +419,8 @@ export async function maybeRepairLegacyCronStore(params: {
       !legacyStoreDetected &&
       !legacyRunLogDetected &&
       !legacyQuarantine &&
-      invalidConfigRows.length === 0
+      invalidConfigRows.length === 0 &&
+      revalidatableQuarantineCount === 0
     ) {
       return;
     }
@@ -421,9 +439,18 @@ export async function maybeRepairLegacyCronStore(params: {
         `- ${pluralize(invalidConfigRows.length, "malformed cron row")} will be quarantined in SQLite`,
       );
     }
+    if (revalidatableQuarantineCount > 0) {
+      previewLines.push(
+        `- ${pluralize(revalidatableQuarantineCount, "quarantined automation")} will be revalidated and restored only if current validation passes`,
+      );
+    }
+    const noteHeading =
+      legacyStoreDetected || legacyRunLogDetected || legacyQuarantine
+        ? `Legacy cron storage detected at ${shortenHomePath(storePath)}.`
+        : `Cron store issues detected at ${shortenHomePath(sqliteStorePath)}.`;
     note(
       [
-        `Legacy cron storage detected at ${shortenHomePath(storePath)}.`,
+        noteHeading,
         ...previewLines,
         `Repair with ${formatCliCommand("openclaw doctor --fix")} to finish the migration.`,
       ].join("\n"),
@@ -436,7 +463,13 @@ export async function maybeRepairLegacyCronStore(params: {
     if (!shouldRepair) {
       return;
     }
-    noteLegacyCronRepairResult(await applyLegacyCronStoreRepair({ cfg: params.cfg, state }));
+    noteLegacyCronRepairResult(
+      await applyLegacyCronStoreRepair({
+        cfg: params.cfg,
+        state,
+        recoverQuarantinedScheduleJobs: true,
+      }),
+    );
     return;
   }
   noteCronModelOverrides({ cfg: params.cfg, jobs: rawJobs });
@@ -515,6 +548,12 @@ export async function maybeRepairLegacyCronStore(params: {
   if (scheduledToolPolicyAdvisory) {
     note(scheduledToolPolicyAdvisory, "Cron");
   }
+  const legacyGatewayExecAdvisory = formatLegacyGatewayExecAdvisory(
+    normalized.legacyGatewayExecJobs,
+  );
+  if (legacyGatewayExecAdvisory) {
+    note(legacyGatewayExecAdvisory, "Cron");
+  }
   const staticMcpByAgentWorkspace = new Map<string, boolean>();
   const incompleteInheritedAuthorityAdvisory = formatIncompleteInheritedAuthorityAdvisory(
     rawJobs
@@ -588,6 +627,11 @@ export async function maybeRepairLegacyCronStore(params: {
       `- ${pluralize(invalidConfigRows.length, "malformed cron row")} will be quarantined in SQLite`,
     );
   }
+  if (revalidatableQuarantineCount > 0) {
+    previewLines.push(
+      `- ${pluralize(revalidatableQuarantineCount, "quarantined automation")} will be revalidated and restored only if current validation passes`,
+    );
+  }
   if (notifyCount > 0) {
     previewLines.push(
       `- ${pluralize(notifyCount, "job")} still uses legacy \`notify: true\` webhook fallback`,
@@ -624,6 +668,11 @@ export async function maybeRepairLegacyCronStore(params: {
   }
 
   noteLegacyCronRepairResult(
-    await applyLegacyCronStoreRepair({ cfg: params.cfg, state, normalized }),
+    await applyLegacyCronStoreRepair({
+      cfg: params.cfg,
+      state,
+      normalized,
+      recoverQuarantinedScheduleJobs: true,
+    }),
   );
 }

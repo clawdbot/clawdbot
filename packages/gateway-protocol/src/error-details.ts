@@ -23,6 +23,7 @@ export type {
   ProjectCloneErrorDetails,
   ProjectCloneFailureCause,
   WizardNotFoundErrorDetails,
+  SetupAdmissionBusyErrorDetails,
 } from "./gateway-error-details.js";
 export {
   CronJobNotFoundErrorDetailsSchema,
@@ -33,6 +34,7 @@ export {
   ProjectCloneErrorDetailsSchema,
   SkillProposalRevisionChangedErrorDetailsSchema,
   WizardNotFoundErrorDetailsSchema,
+  SetupAdmissionBusyErrorDetailsSchema,
   buildMissingScopeErrorDetails,
   errorShape,
   missingScopeErrorShape,

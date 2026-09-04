@@ -1,8 +1,10 @@
 // Daemon lifecycle core tests cover service lifecycle transitions and platform adapters.
-import { beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
+import { afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 import type { OpenClawConfig } from "../../config/config.js";
 import type { GatewayServiceControlArgs } from "../../daemon/service-types.js";
 import type { GatewayService } from "../../daemon/service.js";
+import { mockSystemAccountHome } from "../../daemon/service.test-helpers.js";
+import { withEnvAsync } from "../../test-utils/env.js";
 import {
   createGatewayServiceRunArgs as createServiceRunArgs,
   createGatewayUninstallArgs,
@@ -144,7 +146,12 @@ describe("runServiceRestart token drift", () => {
       await import("./lifecycle-core.js"));
   });
 
+  afterEach(() => {
+    vi.restoreAllMocks();
+  });
+
   beforeEach(() => {
+    mockSystemAccountHome();
     appendGatewayLifecycleAudit.mockClear();
     createGatewayLifecycleMutationAudit.mockClear();
     resetLifecycleRuntimeLogs();
@@ -482,6 +489,25 @@ describe("runServiceRestart token drift", () => {
       message: "Gateway service definition repaired and restarted.",
     });
   });
+
+  it.each([true, false])(
+    "keeps Nix restart available without suggesting a forbidden token reinstall (json=%s)",
+    async (json) => {
+      await withEnvAsync({ OPENCLAW_NIX_MODE: "1" }, async () => {
+        await expect(
+          runServiceRestart({ ...createServiceRunArgs(true), opts: { json } }),
+        ).resolves.toBe(true);
+
+        expect(service.restart).toHaveBeenCalledOnce();
+        const output = json
+          ? readJsonLog<{ warnings: string[] }>().warnings.join("\n")
+          : lifecycleRuntimeLogs.join("\n");
+        expect(output).toContain("Config token differs from service token");
+        expect(output).toContain("Nix mode detected; service install is disabled.");
+        expect(output).not.toContain("gateway install --force");
+      });
+    },
+  );
 
   it("emits drift warning when enabled", async () => {
     await runServiceRestart(createServiceRunArgs(true));
@@ -1004,6 +1030,17 @@ describe("runServiceRestart token drift", () => {
     const payload = readJsonLog<{ ok?: boolean; error?: string }>();
     expect(payload.ok).toBe(false);
     expect(payload.error).toContain("launchctl kickstart failed: permission denied");
+  });
+
+  it("runs the start health check before reporting success", async () => {
+    service.isLoaded.mockResolvedValue(false);
+    const postStartCheck = vi.fn(async () => {});
+
+    await runServiceStart({ ...createServiceRunArgs(), postStartCheck });
+
+    expect(postStartCheck).toHaveBeenCalledOnce();
+    const payload = readJsonLog<{ ok?: boolean; result?: string }>();
+    expect(payload).toMatchObject({ ok: true, result: "started" });
   });
 
   it("fails start with install hints when no service is installed", async () => {

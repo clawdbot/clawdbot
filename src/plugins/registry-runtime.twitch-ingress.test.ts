@@ -73,15 +73,15 @@ const transport = await vi.hoisted(async () => {
   return { ChatClient, createDeferred };
 });
 
-vi.mock("@twurple/chat", () => ({
-  ChatClient: transport.ChatClient,
-  LogLevel: { WARNING: "warning" },
-}));
-
 const { twitchPlugin, setTwitchRuntime } = await importBundledChannelContractSourceArtifact<{
   twitchPlugin: ChannelPlugin<unknown>;
   setTwitchRuntime: (runtime: PluginRuntime) => void;
-}>("twitch", "api.js");
+}>("twitch", "api.js", {
+  "@twurple/chat": () => ({
+    ChatClient: transport.ChatClient,
+    LogLevel: { WARNING: "warning" },
+  }),
+});
 
 type Policy = { allowFrom?: string[]; allowedRoles?: string[] };
 type EvidenceResult = ReturnType<typeof consumeChannelAdmissionEvidence>;

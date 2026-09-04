@@ -13,7 +13,7 @@ export const CODE_MODE_SWARM_CONTROLLER_SOURCE = String.raw`
     if (typeof value !== "string" || !value.trim()) {
       throw new TypeError(kind + " note must be a non-empty string");
     }
-    void request("swarmNote", [{ kind, text: value }]).catch(() => {});
+    void request("swarmNote", [{ kind, text: value }], { queue: true }).catch(() => {});
   }
 
   async function runAgent(prompt, options = {}) {
@@ -27,8 +27,8 @@ export const CODE_MODE_SWARM_CONTROLLER_SOURCE = String.raw`
       throw new TypeError("agents.run phase must be a non-empty string");
     }
     if (options.phase !== undefined) swarmNote("phase", options.phase);
-    const spawned = await request("agentSpawn", [prompt, options]);
-    const completion = await request("agentWait", [spawned.runId]);
+    const spawned = await request("agentSpawn", [prompt, options], { queue: true });
+    const completion = await request("agentWait", [spawned.runId], { queue: true });
     if (!completion || completion.status !== "done") {
       const runId = completion?.runId ?? spawned.runId ?? "unknown";
       const status = completion?.status ?? "failed";

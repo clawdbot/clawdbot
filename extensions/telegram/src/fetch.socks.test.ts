@@ -2,13 +2,13 @@ import assert from "node:assert/strict";
 import { readFile } from "node:fs/promises";
 import { Api } from "grammy";
 import { createDeferred } from "openclaw/plugin-sdk/extension-shared";
-import { withOpenClawTestState } from "openclaw/plugin-sdk/test-state";
-import { afterEach, beforeEach, expect, it, vi } from "vitest";
 import {
   PROXY_FIXTURE_HOST,
   PROXY_FIXTURE_PAYLOAD,
   withProxyFixture,
-} from "../../../src/test-helpers/proxy-fixture.js";
+} from "openclaw/plugin-sdk/test-env";
+import { withOpenClawTestState } from "openclaw/plugin-sdk/test-state";
+import { afterEach, beforeEach, expect, it, vi } from "vitest";
 import { resolveMedia } from "./bot/delivery.resolve-media.js";
 import type { TelegramContext } from "./bot/types.js";
 import { asTelegramClientFetch, createTelegramClientFetch } from "./client-fetch.js";
@@ -34,13 +34,19 @@ beforeEach(() => {
 });
 afterEach(() => vi.unstubAllEnvs());
 
-it.each(["explicit", "environment"])(
+it.each(["explicit", "environment", "ALL_PROXY", "standard-over-managed"])(
   "sends Bot API transport requests through a plain %s SOCKS proxy",
   async (mode) => {
-    await withProxyFixture(async ({ socksProxy, connections }) => {
-      if (mode === "environment") {
+    await withProxyFixture(async ({ socksProxy, httpProxy, connections }) => {
+      if (mode === "environment" || mode === "standard-over-managed") {
         vi.stubEnv("HTTP_PROXY", socksProxy);
         vi.stubEnv("HTTPS_PROXY", socksProxy);
+      }
+      if (mode === "standard-over-managed") {
+        vi.stubEnv("OPENCLAW_PROXY_URL", httpProxy);
+      }
+      if (mode === "ALL_PROXY") {
+        vi.stubEnv("ALL_PROXY", socksProxy);
       }
       const transport = resolveTelegramTransport(
         mode === "explicit" ? makeProxyFetch(socksProxy) : undefined,
@@ -52,6 +58,9 @@ it.each(["explicit", "environment"])(
 
         expect(await response.text()).toBe(PROXY_FIXTURE_PAYLOAD);
         expect(connections).toEqual([`socks:${PROXY_FIXTURE_HOST}`]);
+        expect(transport.dispatcherAttempts?.[0]?.dispatcherPolicy?.mode).toBe(
+          mode === "explicit" ? "explicit-proxy" : "env-proxy",
+        );
       } finally {
         await transport.close();
       }

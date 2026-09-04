@@ -88,7 +88,7 @@ describe("loadChatRoute", () => {
       new AbortController().signal,
     );
 
-    expect(loaded).not.toHaveProperty("kind", "session");
+    expect(loaded).toEqual({ type: "notFound", data: { routeId: "chat" } });
     expect(list).not.toHaveBeenCalled();
   });
 
@@ -261,6 +261,36 @@ describe("loadChatRoute", () => {
       face: "dashboard",
     });
     expect(list).not.toHaveBeenCalled();
+  });
+
+  it("carries expanded dashboard presentation into route data", async () => {
+    const { context } = contextFor(result([]));
+    await expect(
+      loadChatRoute(
+        context,
+        { pathname: "/dashboard/work", search: "?dashboard=expanded", hash: "" },
+        "dashboard",
+        new AbortController().signal,
+      ),
+    ).resolves.toMatchObject({
+      kind: "session",
+      sessionKey: "agent:work:main",
+      face: "dashboard",
+      dashboardExpanded: true,
+    });
+    await expect(
+      loadChatRoute(
+        context,
+        { pathname: "/chat/work", search: "?dashboard=expanded", hash: "" },
+        "chat",
+        new AbortController().signal,
+      ),
+    ).resolves.toMatchObject({
+      kind: "session",
+      sessionKey: "agent:work:main",
+      face: "chat",
+      dashboardExpanded: true,
+    });
   });
 
   it("waits for configured session defaults before resolving an agent main route", async () => {
@@ -498,7 +528,7 @@ describe("loadChatRoute", () => {
       ),
     ).resolves.toEqual({
       kind: "session",
-      sessionKey: "catalog:claude:gateway%3Alocal:thread-2",
+      sessionKey: "agent:main:catalog:claude:gateway%3Alocal:thread-2",
       agentId: "main",
       draft: undefined,
       face: "chat",
@@ -521,7 +551,7 @@ describe("loadChatRoute", () => {
       ),
     ).resolves.toMatchObject({
       kind: "session",
-      sessionKey: "catalog:claude:gateway%3Alocal:thread-2",
+      sessionKey: "agent:research:catalog:claude:gateway%3Alocal:thread-2",
       agentId: "research",
     });
   });
@@ -541,7 +571,7 @@ describe("loadChatRoute", () => {
       ),
     ).resolves.toEqual({
       kind: "session",
-      sessionKey: "catalog:claude:gateway%3Alocal:thread-2",
+      sessionKey: "agent:research:catalog:claude:gateway%3Alocal:thread-2",
       agentId: "research",
       draft: undefined,
       face: "dashboard",

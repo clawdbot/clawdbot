@@ -4,6 +4,7 @@ import type {
   SessionsCatalogListResult,
 } from "../../../../packages/gateway-protocol/src/index.ts";
 import type { GatewayBrowserClient } from "../../api/gateway.ts";
+import { normalizeAgentId } from "./session-key.ts";
 
 export type CatalogSessionKey = {
   catalogId: string;
@@ -75,8 +76,10 @@ export async function lookupCatalogSession(params: {
   return { host, session: null };
 }
 
-export function buildCatalogSessionKey(key: CatalogSessionKey): string {
-  return `catalog:${encodeURIComponent(key.catalogId)}:${encodeURIComponent(key.hostId)}:${encodeURIComponent(key.threadId)}`;
+export function buildCatalogSessionKey(key: CatalogSessionKey, agentId?: string): string {
+  const source = `catalog:${encodeURIComponent(key.catalogId)}:${encodeURIComponent(key.hostId)}:${encodeURIComponent(key.threadId)}`;
+  // Source rows are ownerless; routed panes carry the agent through retention and split focus.
+  return agentId ? `agent:${normalizeAgentId(agentId)}:${source}` : source;
 }
 
 export function catalogSessionSearch(key: CatalogSessionKey): string {
@@ -96,10 +99,12 @@ export function catalogSessionKeyFromSearch(search: string): CatalogSessionKey |
 }
 
 export function parseCatalogSessionKey(value: string | null | undefined): CatalogSessionKey | null {
-  if (!value?.startsWith("catalog:")) {
+  // Strip only the owner prefix: native source identifiers are case-sensitive.
+  const source = value?.replace(/^agent:[^:]+:/u, "");
+  if (!source?.startsWith("catalog:")) {
     return null;
   }
-  const parts = value.slice("catalog:".length).split(":");
+  const parts = source.slice("catalog:".length).split(":");
   if (parts.length !== 3 || parts.some((part) => !part)) {
     return null;
   }

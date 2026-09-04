@@ -16,10 +16,13 @@ export async function withProxyFixture(
   run: (fixture: {
     httpProxy: string;
     httpOrigin: string;
+    httpsOrigin: string;
     httpsProxy: string;
+    otherHttpsProxy: string;
     socksProxy: string;
     tlsSocksProxy: string;
     connections: string[];
+    originRoutes: Array<"proxy" | "direct">;
     certificate: string;
     waitForProxyProtocol: () => Promise<string>;
     waitForSocketsClosed: () => Promise<void>;
@@ -28,6 +31,8 @@ export async function withProxyFixture(
   const sockets = new Set<net.Socket>();
   const servers: net.Server[] = [];
   const connections: string[] = [];
+  const originRoutes: Array<"proxy" | "direct"> = [];
+  const proxiedPorts = new Set<number>();
   const events = new EventEmitter();
   const trackSocket = (socket: net.Socket) => {
     sockets.add(socket);
@@ -48,6 +53,7 @@ export async function withProxyFixture(
   };
   const tlsOptions = { key: privateKey, cert: certificate };
   const handleOrigin: http.RequestListener = (request, response) => {
+    originRoutes.push(proxiedPorts.has(request.socket.remotePort ?? -1) ? "proxy" : "direct");
     const requestPath = request.url ?? "/";
     if (request.url?.endsWith("/getFile")) {
       const chunks: Buffer[] = [];
@@ -103,6 +109,11 @@ export async function withProxyFixture(
     });
     trackSocket(upstream);
     upstream.once("connect", () => {
+      const localPort = upstream.localPort;
+      if (localPort !== undefined) {
+        proxiedPorts.add(localPort);
+        upstream.once("close", () => proxiedPorts.delete(localPort));
+      }
       ready();
       if (head.length) {
         upstream.write(head);
@@ -187,15 +198,19 @@ export async function withProxyFixture(
     plainOriginPort = await listen(http.createServer(handleOrigin));
     const httpPort = await listen(connectProxy(false));
     const httpsPort = await listen(connectProxy(true));
+    const otherHttpsPort = await listen(connectProxy(true));
     const socksPort = await listen(net.createServer(acceptSocks));
     const tlsSocksPort = await listen(tls.createServer(tlsOptions, acceptSocks));
     await run({
       httpProxy: `http://127.0.0.1:${httpPort}`,
       httpOrigin: `http://127.0.0.1:${plainOriginPort}`,
+      httpsOrigin: `https://127.0.0.1:${originPort}`,
       httpsProxy: `https://127.0.0.1:${httpsPort}`,
+      otherHttpsProxy: `https://127.0.0.1:${otherHttpsPort}`,
       socksProxy: `socks5://127.0.0.1:${socksPort}`,
       tlsSocksProxy: `socks5://127.0.0.1:${tlsSocksPort}`,
       connections,
+      originRoutes,
       certificate,
       waitForProxyProtocol: () =>
         new Promise<string>((resolve) => {

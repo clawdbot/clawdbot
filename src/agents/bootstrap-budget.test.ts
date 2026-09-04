@@ -33,11 +33,13 @@ describe("buildBootstrapBudgetState", () => {
       config: {
         agents: { defaults: { bootstrapMaxChars: 10, bootstrapTotalMaxChars: 12 } },
       },
-      bootstrapFiles,
-      injectedFiles: [
-        { path: "/tmp/AGENTS.md", content: "a".repeat(8) },
-        { path: "/tmp/SOUL.md", content: "b".repeat(4) },
-      ],
+      files: buildBootstrapInjectionStats({
+        bootstrapFiles,
+        injectedFiles: [
+          { path: "/tmp/AGENTS.md", content: "a".repeat(8) },
+          { path: "/tmp/SOUL.md", content: "b".repeat(4) },
+        ],
+      }),
     });
 
     expect(state.bootstrapMaxChars).toBe(10);

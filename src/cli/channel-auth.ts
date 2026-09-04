@@ -9,10 +9,12 @@ import {
   normalizeChannelId,
 } from "../channels/plugins/index.js";
 import { resolveInstallableChannelPlugin } from "../commands/channel-setup/channel-plugin-resolution.js";
+import { assertAccountSelectorForMutation } from "../commands/channels/account-selector.js";
 import { requireValidConfigFileSnapshot } from "../commands/config-validation.js";
 import { getRuntimeConfig, type OpenClawConfig } from "../config/config.js";
 import { applyPluginAutoEnable } from "../config/plugin-auto-enable.js";
 import { callGateway } from "../gateway/call.js";
+import type { ChannelAccountStartOutcome } from "../gateway/server-channel-runtime.types.js";
 import { setVerbose } from "../globals.js";
 import { formatErrorMessage } from "../infra/errors.js";
 import { isBlockedObjectKey } from "../infra/prototype-keys.js";
@@ -23,6 +25,7 @@ import { formatCliCommand } from "./command-format.js";
 import { formatUnsupportedChannelActionMessage } from "./error-format.js";
 
 type ChannelAuthOptions = {
+  agent?: string;
   channel?: string;
   account?: string;
   verbose?: boolean;
@@ -101,6 +104,7 @@ async function resolveChannelPluginForMode(
   channelId: string;
   plugin: ChannelPlugin;
 } | null> {
+  assertAccountSelectorForMutation(opts.account);
   const snapshot = await requireValidConfigFileSnapshot(runtime);
   if (!snapshot) {
     return null;
@@ -115,6 +119,7 @@ async function resolveChannelPluginForMode(
   const resolved = await resolveInstallableChannelPlugin({
     cfg,
     runtime,
+    agentId: opts.agent,
     rawChannel: channelInput,
     ...(normalizedChannelId ? { channelId: normalizedChannelId } : {}),
     allowInstall: true,
@@ -189,7 +194,7 @@ async function reconcileGatewayRuntimeAfterLocalLogin(params: {
     return;
   }
   try {
-    await callGateway({
+    const result = await callGateway<{ outcome?: ChannelAccountStartOutcome }>({
       config: params.cfg,
       method: "channels.start",
       params: {
@@ -200,6 +205,12 @@ async function reconcileGatewayRuntimeAfterLocalLogin(params: {
       clientName: GATEWAY_CLIENT_NAMES.GATEWAY_CLIENT,
       deviceIdentity: null,
     });
+    // Older Gateways return only the runtime snapshot, without a start decision.
+    if (result.outcome && result.outcome.status !== "handed-off") {
+      params.runtime.log(
+        `Local login saved auth for ${params.channelId}/${params.accountId}. Gateway start: ${result.outcome.reason}. Check ${formatCliCommand(`openclaw channels status --channel ${params.channelId} --probe`)}.`,
+      );
+    }
   } catch (error) {
     // A plugin installed or enabled after Gateway startup is absent from its
     // process-stable registry. Restart only for that exact RPC rejection.

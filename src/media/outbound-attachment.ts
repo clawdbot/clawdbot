@@ -2,7 +2,6 @@
 import { rm } from "node:fs/promises";
 import { buildOutboundMediaLoadOptions, type OutboundMediaAccess } from "./load-options.js";
 import { saveMediaBuffer } from "./store.js";
-import { loadWebMedia, markTrustedGeneratedHtmlPath } from "./web-media.js";
 
 /** Loads a remote/local media URL and stages it into the outbound media store. */
 export async function resolveOutboundAttachmentFromUrl(
@@ -14,6 +13,7 @@ export async function resolveOutboundAttachmentFromUrl(
     readFile?: (filePath: string) => Promise<Buffer>;
   },
 ): Promise<{ path: string; contentType?: string }> {
+  const { loadWebMedia, markTrustedGeneratedHtmlPath } = await import("./web-media.js");
   const media = await loadWebMedia(
     mediaUrl,
     buildOutboundMediaLoadOptions({

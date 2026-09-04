@@ -45,11 +45,22 @@ afterEach(() => {
 });
 
 function mockFeaturedCatalogResponse(payload: unknown, status = 200) {
-  ssrfRuntimeMocks.fetchWithSsrFGuard.mockResolvedValueOnce({
-    response: Response.json(payload, { status }),
-    finalUrl: NVIDIA_FEATURED_MODELS_URL,
+  const featured =
+    (payload as { "featured-models"?: Array<{ model: string }> })["featured-models"] ?? [];
+  ssrfRuntimeMocks.fetchWithSsrFGuard.mockImplementation(async ({ url }: { url: string }) => ({
+    response: Response.json(
+      url === NVIDIA_FEATURED_MODELS_URL
+        ? payload
+        : {
+            data: featured.map(({ model }) => ({
+              id: model.includes("/") ? model : `nvidia/${model}`,
+            })),
+          },
+      { status },
+    ),
+    finalUrl: url,
     release: vi.fn(),
-  });
+  }));
 }
 
 function registerNvidiaPluginApi() {
@@ -208,6 +219,7 @@ describe("nvidia provider hooks", () => {
 
     expect(entries?.map((entry) => entry.id)).toEqual([
       "nvidia/nemotron-3-ultra-550b-a55b",
+      "nvidia/nemotron-3.5-lightning-30b-a3b",
       "nvidia/nemotron-3-super-120b-a12b",
       "z-ai/glm-5.2",
       "moonshotai/kimi-k2.6",
@@ -218,7 +230,7 @@ describe("nvidia provider hooks", () => {
     expect(ssrfRuntimeMocks.fetchWithSsrFGuard).not.toHaveBeenCalled();
   });
 
-  it("surfaces the bundled NVIDIA models when authenticated featured catalog fetch fails", async () => {
+  it("surfaces the bundled NVIDIA models when authenticated live discovery fails", async () => {
     mockFeaturedCatalogResponse({ error: "unavailable" }, 503);
     const provider = await registerNvidiaProvider();
 
@@ -226,6 +238,7 @@ describe("nvidia provider hooks", () => {
 
     expect(entries?.map((entry) => entry.id)).toEqual([
       "nvidia/nemotron-3-ultra-550b-a55b",
+      "nvidia/nemotron-3.5-lightning-30b-a3b",
       "nvidia/nemotron-3-super-120b-a12b",
       "z-ai/glm-5.2",
       "moonshotai/kimi-k2.6",
@@ -233,7 +246,7 @@ describe("nvidia provider hooks", () => {
       "deepseek-ai/deepseek-v4-pro",
     ]);
     expect(entries?.every((entry) => entry.provider === "nvidia")).toBe(true);
-    expect(ssrfRuntimeMocks.fetchWithSsrFGuard).toHaveBeenCalledTimes(1);
+    expect(ssrfRuntimeMocks.fetchWithSsrFGuard).toHaveBeenCalledTimes(2);
   });
 
   it("surfaces republished NVIDIA featured models via augmentModelCatalog", async () => {
@@ -309,6 +322,7 @@ describe("nvidia provider hooks", () => {
     const staticRows = await catalogProvider?.staticCatalog?.(buildCatalogContext());
     expect(staticRows?.map((entry) => `${entry.source}:${entry.provider}/${entry.model}`)).toEqual([
       "static:nvidia/nvidia/nemotron-3-ultra-550b-a55b",
+      "static:nvidia/nvidia/nemotron-3.5-lightning-30b-a3b",
       "static:nvidia/nvidia/nemotron-3-super-120b-a12b",
       "static:nvidia/z-ai/glm-5.2",
       "static:nvidia/moonshotai/kimi-k2.6",
@@ -325,7 +339,7 @@ describe("nvidia provider hooks", () => {
     ]);
   });
 
-  it("keeps static rows out of the live catalog when the featured catalog is unavailable", async () => {
+  it("keeps static rows out of the live catalog when discovery is unavailable", async () => {
     mockFeaturedCatalogResponse({ error: "unavailable" }, 503);
     const { registeredModelCatalogProviders } = registerNvidiaPluginApi();
     const catalogProvider = registeredModelCatalogProviders[0];

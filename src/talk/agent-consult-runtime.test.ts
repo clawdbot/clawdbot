@@ -42,14 +42,11 @@ type ForkSessionEntryFromParentParams = Parameters<ForkSessionEntryFromParent>[0
 type ForkSessionEntryFromParentResult = Awaited<ReturnType<ForkSessionEntryFromParent>>;
 
 const sessionForkMocks = vi.hoisted(() => ({
-  defaultForkSessionEntryFromParent: undefined as ForkSessionEntryFromParent | undefined,
-  forkSessionEntryFromParent: vi.fn(),
+  forkSessionEntryFromParent: vi.fn<ForkSessionEntryFromParent>(),
 }));
 
 vi.mock("../auto-reply/reply/session-fork.js", async (importOriginal) => {
   const actual = await importOriginal<typeof import("../auto-reply/reply/session-fork.js")>();
-  sessionForkMocks.defaultForkSessionEntryFromParent = actual.forkSessionEntryFromParent;
-  sessionForkMocks.forkSessionEntryFromParent.mockImplementation(actual.forkSessionEntryFromParent);
   return {
     ...actual,
     forkSessionEntryFromParent: sessionForkMocks.forkSessionEntryFromParent,
@@ -179,6 +176,12 @@ function expectNonEmptyString(value: unknown) {
 
 describe("realtime voice agent consult runtime", () => {
   beforeEach(async () => {
+    sessionForkMocks.forkSessionEntryFromParent.mockImplementation(async (params) => {
+      const actual = await vi.importActual<typeof import("../auto-reply/reply/session-fork.js")>(
+        "../auto-reply/reply/session-fork.js",
+      );
+      return await actual.forkSessionEntryFromParent(params);
+    });
     // macOS aliases its temp directory through /var; canonical paths keep the
     // SQLite cache key and cleanup target aligned.
     testTempDir = await fs.realpath(
@@ -189,13 +192,6 @@ describe("realtime voice agent consult runtime", () => {
 
   afterEach(async () => {
     sessionForkMocks.forkSessionEntryFromParent.mockReset();
-    const defaultForkSessionEntryFromParent = sessionForkMocks.defaultForkSessionEntryFromParent;
-    if (!defaultForkSessionEntryFromParent) {
-      throw new Error("Expected the realtime voice session fork implementation");
-    }
-    sessionForkMocks.forkSessionEntryFromParent.mockImplementation(
-      defaultForkSessionEntryFromParent,
-    );
     const tempDir = testTempDir;
     testTempDir = undefined;
     if (tempDir) {
@@ -402,7 +398,11 @@ describe("realtime voice agent consult runtime", () => {
     async (parentAgentId) => {
       const { runtime, runEmbeddedAgent, sessionStore } = createAgentRuntime();
       const spawnedBy = `agent:${parentAgentId}:main`;
-      const createdActor = { type: "human" as const, id: "profile-required" };
+      const createdActor = {
+        type: "human" as const,
+        source: "profile" as const,
+        id: "profile-required",
+      };
       sessionStore[spawnedBy] = {
         sessionId: "parent-session",
         createdActor,
@@ -634,7 +634,7 @@ describe("realtime voice agent consult runtime", () => {
       sessionId: "parent-session",
       sessionFile: testTempPath("parent.jsonl"),
       totalTokens: 100,
-      createdActor: { type: "human", id: "profile-required" },
+      createdActor: { type: "human", source: "profile", id: "profile-required" },
       sandbox: "required",
       updatedAt: 1,
     };
@@ -721,7 +721,7 @@ describe("realtime voice agent consult runtime", () => {
       spawnedBy: "agent:main:main",
       forkedFromParent: true,
       createdVia: "talk",
-      createdActor: { type: "human", id: "profile-required" },
+      createdActor: { type: "human", source: "profile", id: "profile-required" },
       sandbox: "required",
       createdAt: forkedEntry.createdAt,
       updatedAt: forkedEntry.updatedAt,

@@ -1,10 +1,8 @@
 import { randomUUID } from "node:crypto";
-import path from "node:path";
 import { resolveStateDir } from "../../config/paths.js";
-import {
-  type InternalSessionEntry as SessionEntry,
-  type RestartRecoveryRun,
-  resolveAllAgentSessionStoreTargetsSync,
+import type {
+  InternalSessionEntry as SessionEntry,
+  RestartRecoveryRun,
 } from "../../config/sessions.js";
 import { applySessionEntryReplacements } from "../../config/sessions/session-accessor.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
@@ -18,8 +16,7 @@ import {
 import {
   listActiveEmbeddedRunSessionIds,
   listActiveEmbeddedRunSessionKeys,
-} from "../embedded-agent-runner/run-state.js";
-import { resolveAgentSessionDirs } from "../session-dirs.js";
+} from "../embedded-agent-runner/active-run-projections.js";
 import {
   isMainRestartRecoveryAggregateTerminalOnly,
   isMainRestartRecoveryCandidate,
@@ -27,6 +24,7 @@ import {
   transitionMainSessionRecovery,
 } from "./main-session-recovery-state.js";
 import {
+  discoverRestartRecoveryStorePaths,
   hasCurrentProcessOwner,
   mainSessionRecoveryLog,
   normalizeFiniteTimestamp,
@@ -117,28 +115,21 @@ export async function markRestartAbortedMainSessions(params: {
   }
 
   const storePaths = new Set<string>();
-  const env =
-    params.stateDir === undefined
-      ? process.env
-      : { ...process.env, OPENCLAW_STATE_DIR: params.stateDir };
-  const stateDir = resolveStateDir(env);
-  const configs = [params.cfg, ...(params.additionalCfgs ?? [])].filter(
-    (cfg): cfg is OpenClawConfig => Boolean(cfg),
-  );
-  for (const cfg of configs) {
+  const stateDir = params.stateDir ?? resolveStateDir(process.env);
+  const configs = [params.cfg, ...(params.additionalCfgs ?? [])].filter(Boolean);
+  for (const cfg of configs.length > 0 ? configs : [undefined]) {
     try {
-      for (const target of resolveAllAgentSessionStoreTargetsSync(cfg, { env })) {
-        storePaths.add(path.resolve(target.storePath));
+      for (const storePath of await discoverRestartRecoveryStorePaths({ cfg, stateDir })) {
+        storePaths.add(storePath);
       }
     } catch (err) {
+      if (!cfg) {
+        throw err;
+      }
       mainSessionRecoveryLog.warn(
         `failed to resolve configured session stores for restart marker: ${String(err)}`,
       );
     }
-  }
-
-  for (const sessionsDir of await resolveAgentSessionDirs(stateDir)) {
-    storePaths.add(path.join(sessionsDir, "sessions.json"));
   }
 
   for (const storePath of activeAdmissions.keys()) {

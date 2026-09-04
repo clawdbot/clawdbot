@@ -1,12 +1,15 @@
 // Source-blind browser proof for bundled plugin lazy-view recovery.
-import { mkdir } from "node:fs/promises";
 import path from "node:path";
 import type { Route } from "playwright";
-import { expect, it } from "vitest";
+import { beforeEach, expect, it } from "vitest";
+import { createControlUiE2eArtifactDir } from "../test-helpers/control-ui-e2e-artifacts.ts";
 import { installMockGateway } from "../test-helpers/control-ui-e2e.ts";
 import { createControlUiE2eSuite } from "./control-ui-e2e-suite.test-support.ts";
 
-const artifactDir = path.resolve(".artifacts/control-ui-e2e/plugin-bundled-view-recovery");
+let artifactDir: string;
+beforeEach(() => {
+  artifactDir = createControlUiE2eArtifactDir("plugin-bundled-view-recovery");
+});
 const bundledChunk = /\/assets\/logbook-view-[^/]+\.js(?:\?.*)?$/;
 
 const suite = createControlUiE2eSuite({
@@ -17,7 +20,6 @@ const suite = createControlUiE2eSuite({
 
 suite.define(() => {
   it("stops automatic reloads after one failed recovery and keeps manual Reload", async () => {
-    await mkdir(artifactDir, { recursive: true });
     await suite.withPage(
       {
         locale: "en-US",

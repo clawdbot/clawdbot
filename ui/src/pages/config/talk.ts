@@ -12,6 +12,7 @@ import {
   renderSettingsValue,
 } from "../../components/settings-ui.ts";
 import { t } from "../../i18n/index.ts";
+import { renderSettingsSelectRow } from "./settings-select-row.ts";
 import { isTalkGptLiveModel, type TalkRealtimeSelection } from "./talk-schema.ts";
 
 /** One realtime provider row from talk.catalog, reduced to what the pickers use. */
@@ -22,6 +23,7 @@ export type TalkRealtimeProviderOption = {
   aliases: readonly string[];
   models: readonly string[];
   voices: readonly string[];
+  voicesByModel?: Record<string, readonly string[]>;
   /** Empty when the catalog does not declare transports for the provider. */
   transports: readonly string[];
   defaultModel: string | null;
@@ -119,38 +121,6 @@ export function effectiveTalkValues(
     speakerVoice ??= entry?.speakerVoice ?? null;
   }
   return { model, speakerVoice };
-}
-
-function renderTalkSelectRow(params: {
-  title: string;
-  description?: string;
-  value: string;
-  options: ReadonlyArray<{ value: string; label: string }>;
-  disabled: boolean;
-  onChange: (value: string) => void;
-}) {
-  return renderSettingsRow({
-    title: params.title,
-    description: params.description,
-    control: html`
-      <select
-        class="settings-select"
-        aria-label=${params.title}
-        ?disabled=${params.disabled}
-        .value=${params.value}
-        @change=${(event: Event) =>
-          params.onChange((event.currentTarget as HTMLSelectElement).value)}
-      >
-        ${params.options.map(
-          (option) => html`
-            <option value=${option.value} ?selected=${params.value === option.value}>
-              ${option.label}
-            </option>
-          `,
-        )}
-      </select>
-    `,
-  });
 }
 
 function renderStatusRow(props: TalkViewProps) {
@@ -255,8 +225,10 @@ function renderModelRow(props: TalkViewProps) {
 
 function renderVoiceRow(props: TalkViewProps) {
   const provider = selectedTalkProviderOption(props.catalog, props.selection);
-  const { speakerVoice: voice } = effectiveTalkValues(props.selection, provider);
-  if (!provider || provider.voices.length === 0) {
+  const { model, speakerVoice: voice } = effectiveTalkValues(props.selection, provider);
+  const voices =
+    provider?.voicesByModel?.[model ?? provider.defaultModel ?? ""] ?? provider?.voices ?? [];
+  if (voices.length === 0) {
     return renderSettingsRow({
       title: t("talkPage.voice.title"),
       description: t("talkPage.voice.description"),
@@ -265,10 +237,10 @@ function renderVoiceRow(props: TalkViewProps) {
   }
   const options = [
     { value: TALK_PICKER_UNSET, label: t("talkPage.voice.default") },
-    ...provider.voices.map((value) => ({ value, label: value })),
-    ...(voice && !provider.voices.includes(voice) ? [{ value: voice, label: voice }] : []),
+    ...voices.map((value) => ({ value, label: value })),
+    ...(voice && !voices.includes(voice) ? [{ value: voice, label: voice }] : []),
   ];
-  return renderTalkSelectRow({
+  return renderSettingsSelectRow({
     title: t("talkPage.voice.title"),
     description: t("talkPage.voice.description"),
     value: voice ?? TALK_PICKER_UNSET,

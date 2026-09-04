@@ -1,5 +1,6 @@
 // Line plugin module implements rich menu behavior.
 import { messagingApi } from "@line/bot-sdk";
+import { bufferToBlobPart } from "openclaw/plugin-sdk/blob-runtime";
 import type { OpenClawConfig } from "openclaw/plugin-sdk/config-contracts";
 import { getAgentScopedMediaLocalRoots } from "openclaw/plugin-sdk/media-local-roots";
 import { mimeTypeFromFilePath } from "openclaw/plugin-sdk/media-mime";
@@ -124,9 +125,8 @@ export async function uploadRichMenuImage(
         ? "image/png"
         : "image/jpeg";
 
-  const imageBytes = new ArrayBuffer(media.buffer.byteLength);
-  new Uint8Array(imageBytes).set(media.buffer);
-  await blobClient.setRichMenuImage(richMenuId, new Blob([imageBytes], { type: contentType }));
+  const blob = new Blob([bufferToBlobPart(media.buffer)], { type: contentType });
+  await blobClient.setRichMenuImage(richMenuId, blob);
 
   if (opts.verbose) {
     logVerbose(`line: uploaded image to rich menu ${richMenuId}`);

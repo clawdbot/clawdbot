@@ -1,3 +1,4 @@
+import { SIDEBAR_SESSION_ROSTER_LIMIT } from "../../../src/shared/session-list-limits.ts";
 import type { RouteId } from "../app-route-paths.ts";
 import type { ApplicationContext } from "../app/context.ts";
 import { readPresenceEntries, type PresencePayload } from "../app/user-profile.ts";
@@ -8,10 +9,9 @@ import type {
   SessionListSnapshot,
 } from "../lib/sessions/index.ts";
 import { normalizeAgentId } from "../lib/sessions/session-key.ts";
-import {
-  SIDEBAR_AGENT_SESSION_LIST_LIMIT,
-  type SidebarSessionStatusFilter,
-  type SidebarSessionOwnerFilter,
+import type {
+  SidebarSessionOwnerFilter,
+  SidebarSessionStatusFilter,
 } from "./app-sidebar-session-types.ts";
 
 type SidebarSessionListOwner = {
@@ -99,7 +99,7 @@ export function sidebarSessionListQuery(owner: SidebarSessionQueryOwner, agentId
     involvingMe: involvingMe || undefined,
     agentId,
     archivedFilter: owner.sidebarSessionStatusFilter(),
-    limit: SIDEBAR_AGENT_SESSION_LIST_LIMIT,
+    limit: SIDEBAR_SESSION_ROSTER_LIMIT,
     includeDerivedTitles: true,
     includeLastMessage: true,
   } as const;
