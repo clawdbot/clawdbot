@@ -8,7 +8,7 @@ import { runEmbeddedAgentEntry } from "../../agents/embedded-agent-runner/run-en
 import { abortable } from "../../agents/embedded-agent-runner/run/abortable.js";
 import type { EmbeddedAgentRunResult } from "../../agents/embedded-agent-runner/types.js";
 import { FailoverError, resolveModelFallbackError } from "../../agents/failover-error.js";
-import { runFallbackAttempt } from "../../agents/model-fallback-attempt.js";
+import { runWithModelFallback } from "../../agents/model-fallback-runner.js";
 import { createAgentRunDirectAbortError } from "../../agents/run-termination.js";
 import { installSessionPlacementAdmissionProvider } from "../../agents/session-placement-admission.js";
 import { loadSessionEntry } from "../../config/sessions/session-accessor.js";
@@ -187,6 +187,8 @@ describe("worker launch capabilities", () => {
     closeFails: boolean;
     primary?:
       | "provider"
+      | "overload"
+      | "http-507"
       | "abort"
       | "timeout"
       | "returned"
@@ -214,6 +216,8 @@ describe("worker launch capabilities", () => {
     ...(
       [
         "provider",
+        "overload",
+        "http-507",
         "abort",
         "timeout",
         "returned",
@@ -269,22 +273,31 @@ describe("worker launch capabilities", () => {
             : {}),
         },
       };
-      const primaryError =
+      const providerFailure =
         primary === "provider"
-          ? new FailoverError("provider failed", { reason: "auth", status: 401 })
-          : primary === "abort"
-            ? createAgentRunDirectAbortError()
-            : primary === "timeout"
-              ? await abortable(
-                  AbortSignal.abort(new DOMException("turn timed out", "TimeoutError")),
-                  Promise.resolve(),
-                ).catch((error: unknown) => {
-                  if (!(error instanceof Error)) {
-                    throw error;
-                  }
-                  return error;
-                })
+          ? ({ reason: "auth", status: 401 } as const)
+          : primary === "overload"
+            ? ({ reason: "overloaded", status: 503 } as const)
+            : primary === "http-507"
+              ? ({ reason: "timeout", status: 507 } as const)
               : undefined;
+      const primaryError = providerFailure
+        ? primary === "http-507"
+          ? Object.assign(new Error("provider request failed"), { status: 507 })
+          : new FailoverError("provider failed", providerFailure)
+        : primary === "abort"
+          ? createAgentRunDirectAbortError()
+          : primary === "timeout"
+            ? await abortable(
+                AbortSignal.abort(new DOMException("turn timed out", "TimeoutError")),
+                Promise.resolve(),
+              ).catch((error: unknown) => {
+                if (!(error instanceof Error)) {
+                  throw error;
+                }
+                return error;
+              })
+            : undefined;
       if (primaryError) {
         attachErrorDiagnostic(primaryError, "original provider diagnostic");
         Object.freeze(primaryError);
@@ -488,30 +501,49 @@ describe("worker launch capabilities", () => {
             expect.soft(display).toContain("computer close failed | native close failed");
           }
           expect(display).not.toContain(secret);
-          if (primary === "provider") {
-            expect(primaryError).toMatchObject({ reason: "auth", status: 401 });
+          if (providerFailure) {
+            expect(primaryError).toMatchObject(
+              primary === "http-507" ? { status: providerFailure.status } : providerFailure,
+            );
             expect.soft(resolveModelFallbackError(failure)).toEqual({
               kind: closeFails ? "terminal" : "failover",
-              error: primaryError,
+              error:
+                closeFails || primary !== "http-507"
+                  ? primaryError
+                  : expect.objectContaining(providerFailure),
             });
           }
-          const run = vi.fn(async () => {
-            throw failure;
-          });
-          const fallback = runFallbackAttempt({
-            run,
-            provider: "fixture-provider",
-            model: "fixture-model",
-            attempts: [],
-            attempt: 1,
-            total: 2,
-          });
-          if (primary === "provider" && !closeFails) {
-            await expect(fallback).resolves.toMatchObject({ error: primaryError });
-          } else {
-            await expect(fallback).rejects.toBe(primaryError);
+          const failures = [
+            failure,
+            ...(providerFailure && closeFails
+              ? [
+                  new Error("outer failure", { cause: failure }),
+                  new AggregateError([failure], "outer aggregate"),
+                ]
+              : []),
+          ];
+          for (const error of failures) {
+            const run = vi.fn().mockRejectedValueOnce(error).mockResolvedValueOnce(localResult);
+            const fallback = runWithModelFallback({
+              cfg: undefined,
+              manifestPlugins: [],
+              run,
+              provider: "fixture-provider",
+              model: "fixture-model",
+              fallbacksOverride: ["fixture-next/fixture-model"],
+            });
+            if (providerFailure && !closeFails) {
+              await expect(fallback).resolves.toMatchObject({
+                outcome: "completed",
+                result: localResult,
+                attempts: [providerFailure],
+              });
+              expect(run).toHaveBeenCalledTimes(2);
+            } else {
+              await expect(fallback).rejects.toBe(error);
+              expect(run).toHaveBeenCalledOnce();
+            }
           }
-          expect(run).toHaveBeenCalledOnce();
         } else {
           const result = await operation;
           if (!closeFails) {
