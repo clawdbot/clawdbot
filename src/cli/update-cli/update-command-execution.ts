@@ -92,9 +92,10 @@ let isPreparedArtifactOwnedBy: (
   owner: UpdateGenerationPackageUpdateExecutor,
 ) => boolean;
 
-class IssuedUpdateGenerationPreparedArtifact {
+class IssuedUpdateGenerationPreparedArtifact implements UpdateGenerationPreparedArtifact {
   readonly formatVersion = 1 as const;
   readonly token: string;
+  declare readonly [updateGenerationPreparedArtifactBrand]: true;
   readonly #owner: UpdateGenerationPackageUpdateExecutor;
 
   constructor(
@@ -121,11 +122,7 @@ class IssuedUpdateGenerationPreparedArtifact {
 const issuePreparedArtifact = (
   owner: UpdateGenerationPackageUpdateExecutor,
 ): UpdateGenerationPreparedArtifact => {
-  return new IssuedUpdateGenerationPreparedArtifact(
-    PREPARED_ARTIFACT_ISSUER,
-    owner,
-    // SAFETY: The runtime-private owner and issuer-checked constructor enforce this nominal type.
-  ) as unknown as UpdateGenerationPreparedArtifact;
+  return new IssuedUpdateGenerationPreparedArtifact(PREPARED_ARTIFACT_ISSUER, owner);
 };
 
 export type UpdateGenerationPackagePreparationParams = Omit<
