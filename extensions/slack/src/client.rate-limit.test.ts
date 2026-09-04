@@ -1,5 +1,6 @@
 // Real OpenClaw stream helpers and Slack SDK with synthetic HTTP responses.
 import { WebClient, type WebClientOptions } from "@slack/web-api";
+import { createDeferred } from "openclaw/plugin-sdk/extension-shared";
 import { describe, expect, it } from "vitest";
 import { createSlackWriteClient, resolveSlackWriteClientOptions } from "./client.js";
 import { appendSlackStream, startSlackStream, stopSlackStream } from "./streaming.js";
@@ -92,6 +93,62 @@ describe("Slack explicit rate-limit recovery", () => {
       transport.requests.filter((request) => request.method === "chat.startStream"),
     ).toHaveLength(2);
   });
+
+  it.each(["retry", "abort"] as const)(
+    "allows %s while a discarded 429 body and its cancellation remain pending",
+    async (action) => {
+      const cleanup = createDeferred<void>();
+      let bodyController!: ReadableStreamDefaultController;
+      let cancelled = false;
+      let attempts = 0;
+      const body = new ReadableStream({
+        start(controller) {
+          bodyController = controller;
+        },
+        cancel() {
+          cancelled = true;
+          return cleanup.promise;
+        },
+      });
+      const fetch: NonNullable<WebClientOptions["fetch"]> = async () => {
+        attempts += 1;
+        return attempts === 1
+          ? new Response(body, {
+              status: 429,
+              headers: { "retry-after": action === "abort" ? "60" : "0" },
+            })
+          : new Response(JSON.stringify({ ok: true, ts: STREAM_TS }));
+      };
+      const operation =
+        action === "retry"
+          ? runStreamOperation("chat.startStream", fetch)
+          : createSlackWriteClient("synthetic-stalled-cancel-fixture", {
+              fetch,
+              timeout: 20,
+            }).apiCall("chat.postMessage", { channel: "CFIXTURE", text: "answer" });
+      const settled = operation.then(
+        () => "delivered",
+        () => "aborted",
+      );
+      let deadline: ReturnType<typeof setTimeout> | undefined;
+      try {
+        const outcome = await Promise.race([
+          settled,
+          new Promise<string>((resolve) => {
+            deadline = setTimeout(() => resolve("stalled"), 1_000);
+          }),
+        ]);
+        expect(outcome).toBe(action === "retry" ? "delivered" : "aborted");
+        expect(cancelled).toBe(true);
+        expect(attempts).toBe(action === "retry" ? 3 : 1);
+      } finally {
+        clearTimeout(deadline);
+        bodyController.error(new Error("test cleanup"));
+        cleanup.resolve();
+        await settled;
+      }
+    },
+  );
   it.each(STREAM_METHODS)(
     "retries a rejected %s without duplicating buffered text",
     async (method) => {
@@ -164,6 +221,7 @@ describe("Slack explicit rate-limit recovery", () => {
     { header: "2147001", calls: 1 },
     { header: "0", calls: 1, rejectRateLimitedCalls: true },
     { header: "0", calls: 2, retryConfig: { retries: 1, minTimeout: 1, maxTimeout: 1 } },
+    { header: "0", calls: 3, retryConfig: { retries: 2, minTimeout: 1, maxTimeout: 1 } },
   ])("bounds rate-limit recovery for $header ($calls requests)", async (testCase) => {
     const responses: Response[] = [];
     const client = createSlackWriteClient("synthetic-budget-fixture", {

@@ -158,9 +158,11 @@ export function resolveSlackWriteClientOptions(
               return response;
             }
             const retryAfter = parseRetryAfterHeaderSeconds(response.headers.get("retry-after"));
-            // Rejection is established by the status; discarded-body failures
-            // cannot turn it into an ambiguous send, but cancellation still wins.
-            await response.arrayBuffer().catch(() => undefined);
+            // Do not wait for peer EOF or a capture tee before retry/abort can proceed.
+            // SAFETY: Runtime fetch responses expose an optional standard body stream.
+            void (response as { body?: ReadableStream | null }).body
+              ?.cancel()
+              .catch(() => undefined);
             init?.signal?.throwIfAborted();
             // The shared abortable timer caps one sleep at this platform limit;
             // refuse an unrepresentable delay instead of retrying before Slack allows.
