@@ -441,19 +441,14 @@ export function runUiCli(argv: string[] = process.argv.slice(2)): void {
     if (rest.some((arg) => arg === "--help" || arg === "-h")) {
       return;
     }
-    for (const [validator, ...validatorArgs] of [
-      ["check-control-ui-precompressed-assets.mts"],
-      ["check-control-ui-performance.mts", "--report-only"],
-    ] as const) {
+    for (const validator of [
+      "check-control-ui-precompressed-assets.mts",
+      "check-control-ui-performance.mts",
+    ]) {
       runSpawnCallSync(
         resolveSpawnCall(
           process.execPath,
-          [
-            "--import",
-            new URL("./tsx.mjs", import.meta.url).href,
-            path.join(here, validator),
-            ...validatorArgs,
-          ],
+          ["--import", new URL("./tsx.mjs", import.meta.url).href, path.join(here, validator)],
           env,
           { cwd: repoRoot },
         ),

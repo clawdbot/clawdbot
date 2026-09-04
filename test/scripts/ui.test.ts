@@ -401,7 +401,7 @@ process.exitCode = ${expectedExit};\n`,
     { noPnpm: false, failValidator: "check-control-ui-precompressed-assets.mts" },
     { noPnpm: true, failValidator: "check-control-ui-performance.mts" },
   ])(
-    "reports budgets and enforces asset validity off disk caches (noPnpm=$noPnpm, failure=$failValidator)",
+    "enforces asset and performance budgets off disk caches (noPnpm=$noPnpm, failure=$failValidator)",
     ({ noPnpm, failValidator }) => {
       const tempDir = fs.realpathSync(fs.mkdtempSync(path.join(os.tmpdir(), "openclaw-ui-cache-")));
       const tempRoot = path.join(tempDir, "temp");
@@ -463,8 +463,7 @@ enum Transformed { Value = "transformed" }
 const validator = process.argv[2];
 const reportOnly = process.argv.includes("--report-only");
 console.log(JSON.stringify({ validator, transformed: Transformed.Value, reportOnly }));
-process.exitCode = validator === ${JSON.stringify(failValidator)} ? 17
-  : validator === "check-control-ui-performance.mts" && !reportOnly ? 1 : 0;
+process.exitCode = validator === ${JSON.stringify(failValidator)} ? 17 : 0;
 `,
         );
         // Run the native launcher, intercept only the build, then replay each real
@@ -486,7 +485,7 @@ childProcess.spawnSync = function(command, args, options) {
   }
   const validator = path.basename(args[2]);
   if (!validators.includes(validator)) throw new Error("Unexpected UI subprocess");
-  assert.deepEqual(args.slice(3), validator === "check-control-ui-performance.mts" ? ["--report-only"] : []);
+  assert.deepEqual(args.slice(3), []);
   assert.equal(options.env.TSX_DISABLE_CACHE, undefined);
   return spawnSync(command, [...args.slice(0, 2), ${JSON.stringify(fixture)}, validator, ...args.slice(3)], options);
 };
@@ -550,7 +549,7 @@ require("node:module").syncBuiltinESMExports();
           expectedValidators.map((validator) => ({
             validator,
             transformed: "transformed",
-            reportOnly: validator === "check-control-ui-performance.mts",
+            reportOnly: false,
           })),
         );
         for (const cacheRoot of cacheRoots) {

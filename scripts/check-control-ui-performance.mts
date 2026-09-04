@@ -21,7 +21,6 @@ const DEFAULT_STARTUP_BUDGET_BASELINE_PATH = path.resolve(
 // may accumulate. The fixed startup JS ceiling bounds that cumulative creep.
 const CONTROL_UI_STARTUP_JS_GZIP_TOLERANCE_BYTES = 512;
 const CONTROL_UI_STARTUP_JS_GZIP_BUILD_VARIANCE_BYTES = 64;
-const CONTROL_UI_STARTUP_CSS_GZIP_TARGET_BYTES = 45 * KIB;
 const CONTROL_UI_CSS_GZIP_GROWTH_BYTES = KIB;
 // The opaque Mermaid sandbox loads one self-contained classic script only when
 // a diagram is viewed. Keep its size visible without relaxing ordinary chunks.
@@ -36,9 +35,13 @@ const controlUiPerformanceBudgets = {
   // 350 KiB maintainer-approved by Vyctor 2026-08-11 for #121686;
   // #121734 left main 6 B below the prior 319 KiB hard ceiling.
   startupJsGzipBytes: 350 * KIB,
-  // Keep 45 KiB advisory: tiny integrated changes must not exhaust the budget.
-  // The fixed 50 KiB ceiling bounds accumulation of sub-KiB changes.
-  startupCssGzipBytes: 50 * KIB,
+  // 45 KiB CSS ceilings maintainer-approved 2026-07 alongside the interleaved
+  // sidebar zone styling; headroom over the ~36.5 KiB post-diet baseline.
+  // Briefly 47 KiB for the Tide/Beacon/Phosphor palettes, restored to 45 KiB
+  // once those palettes moved out of the startup sheet into public/themes and
+  // measured 42.2 KiB — below where they started. Adding a built-in theme no
+  // longer costs the default path anything, so this ceiling should stay put.
+  startupCssGzipBytes: 45 * KIB,
   largestJsGzipBytes: 215 * KIB,
   // Composer multiline surface (stack #124301) legitimately grew boot CSS;
   // operator decision 2026-08-25 rejected boot splitting due to precedence risk.
@@ -260,11 +263,6 @@ function controlUiPerformanceWarnings(
   budgets: Readonly<typeof CONTROL_UI_PERFORMANCE_BUDGETS>,
 ): string[] {
   const warnings: string[] = [];
-  if (metrics.startup.css.gzipBytes > CONTROL_UI_STARTUP_CSS_GZIP_TARGET_BYTES) {
-    warnings.push(
-      `startup CSS gzip is above the ${CONTROL_UI_STARTUP_CSS_GZIP_TARGET_BYTES} B advisory target; remaining hard-ceiling headroom: ${budgets.startupCssGzipBytes - metrics.startup.css.gzipBytes} B`,
-    );
-  }
   const largestCssHeadroom = budgets.largestCssGzipBytes - metrics.largest.css.gzipBytes;
   if (largestCssHeadroom < CONTROL_UI_CSS_GZIP_GROWTH_BYTES) {
     warnings.push(`largest CSS gzip has ${largestCssHeadroom} B of hard-ceiling headroom`);
@@ -318,7 +316,7 @@ export function formatControlUiPerformanceReport(
     );
   }
   lines.push(
-    `  startup CSS: ${formatAssetSummary(metrics.startup.css)} (limits: ${formatRequestCount(budgets.startupCssRequests)}, advisory target ${CONTROL_UI_STARTUP_CSS_GZIP_TARGET_BYTES} B, hard ceiling ${budgets.startupCssGzipBytes} B; headroom ${budgets.startupCssGzipBytes - metrics.startup.css.gzipBytes} B)`,
+    `  startup CSS: ${formatAssetSummary(metrics.startup.css)} (limits: ${formatRequestCount(budgets.startupCssRequests)}, hard ceiling ${budgets.startupCssGzipBytes} B; headroom ${budgets.startupCssGzipBytes - metrics.startup.css.gzipBytes} B)`,
     `  largest ordinary JS: ${metrics.largest.js.file}, ${formatControlUiPerformanceBytes(metrics.largest.js.gzipBytes)} gzip (limit: ${formatControlUiPerformanceBytes(budgets.largestJsGzipBytes)})`,
     `  largest CSS: ${metrics.largest.css.file}, ${metrics.largest.css.gzipBytes} B gzip (hard ceiling ${budgets.largestCssGzipBytes} B; headroom ${budgets.largestCssGzipBytes - metrics.largest.css.gzipBytes} B)`,
     `  all JS: ${formatAssetSummary(metrics.total.js)}`,
@@ -328,7 +326,7 @@ export function formatControlUiPerformanceReport(
     for (const area of ["startup", "largest"] as const) {
       const growth = metrics[area].css.gzipBytes - baseMetrics[area].css.gzipBytes;
       lines.push(
-        `  ${area} CSS gzip vs base: ${baseMetrics[area].css.gzipBytes} B -> ${metrics[area].css.gzipBytes} B (${growth >= 0 ? "+" : ""}${growth} B; growth below ${CONTROL_UI_CSS_GZIP_GROWTH_BYTES} B allowed)`,
+        `  ${area} CSS gzip vs base: ${baseMetrics[area].css.gzipBytes} B -> ${metrics[area].css.gzipBytes} B (${growth >= 0 ? "+" : ""}${growth} B; secondary guard allows growth below ${CONTROL_UI_CSS_GZIP_GROWTH_BYTES} B)`,
       );
     }
   }

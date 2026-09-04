@@ -126,17 +126,18 @@ remains the explicit operator override for attempting a different budget.
 
 ## Control UI size budgets
 
-`pnpm ui:build` produces and verifies the bundle, then reports its compressed
-sizes. Budget violations do not prevent artifact generation. The separate
-`control-ui-performance` job enforces the budgets without blocking other jobs
-from building or testing the same source.
+`pnpm ui:build` produces and verifies the bundle, then enforces its compressed
+size budgets. A violation fails the build after artifact generation. The separate
+`control-ui-performance` job compares the exact candidate and base revisions
+without blocking other jobs from building or testing the same source.
 
-Startup CSS has a 45 KiB advisory target and a 50 KiB hard ceiling. Growth below
-1 KiB passes; an increase of 1 KiB or more in either startup CSS or the largest
-CSS file fails the comparison. The existing largest-file, JavaScript, request-count,
-and isolated-renderer ceilings still apply independently. Reports include exact
-bytes, base deltas, and remaining headroom, with an early warning when the largest
-CSS file has less than 1 KiB of headroom.
+Startup CSS has a 45 KiB hard ceiling. As a secondary exact-base guard, growth
+below 1 KiB passes; an increase of 1 KiB or more in either startup CSS or the
+largest CSS file fails the comparison even below the absolute ceilings. The
+existing largest-file, JavaScript, request-count, and isolated-renderer ceilings
+still apply independently. Reports include exact bytes, base deltas, and remaining
+headroom, with an early warning when the largest CSS file has less than 1 KiB of
+headroom.
 
 CI builds the selected checkout and the exact preflight base with the same
 installed Node, Vite, and dependencies. The temporary base's CSS sidecars are
@@ -151,9 +152,9 @@ pnpm ui:check-performance:base <base-commit-sha>
 ```
 
 To enforce absolute budgets on an existing build, run `pnpm ui:check-performance`.
-Use `--base-dist <directory>` to compare with an already-built base, or
-`--report-only` to report violations without failing. Missing or malformed build
-artifacts remain errors in report-only mode.
+Use `--base-dist <directory>` to compare with an already-built base. Run
+`pnpm ui:check-performance --report-only` for an explicit non-blocking
+diagnostic. Missing or malformed build artifacts remain errors in report-only mode.
 
 ## Watching pull request CI
 

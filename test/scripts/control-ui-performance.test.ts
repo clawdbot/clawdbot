@@ -285,16 +285,27 @@ describe("Control UI performance budgets", () => {
     );
   });
 
-  it("reports a 17-byte startup CSS target excess without failing the check", () => {
-    const { rootDir, scriptPath } = createCliFixture(46_097);
+  it.each([
+    ["accepts startup CSS exactly at 45 KiB", 45 * 1024, 0],
+    ["rejects startup CSS one byte above 45 KiB", 45 * 1024 + 1, 1],
+  ])("%s", (_name, startupCssGzipBytes, expectedStatus) => {
+    const { rootDir, scriptPath } = createCliFixture(startupCssGzipBytes);
     const result = runControlUiPerformanceCli(scriptPath, ["--json"], rootDir);
 
-    expect(result.status, result.stderr).toBe(0);
+    expect(result.status, result.stderr).toBe(expectedStatus);
     const report = JSON.parse(result.stdout);
-    expect(report.violations).toEqual([]);
-    expect(report.warnings).toEqual([expect.stringContaining("CSS")]);
-    expect(report.report).toContain("46097 B");
-    expect(report.report).toContain("5103 B");
+    expect(report.violations).toEqual(
+      expectedStatus
+        ? [
+            expect.objectContaining({
+              metric: "startup CSS gzip",
+              actual: 45 * 1024 + 1,
+              limit: 45 * 1024,
+            }),
+          ]
+        : [],
+    );
+    expect(report.report).toContain(`hard ceiling ${45 * 1024} B`);
   });
 
   it.each<
@@ -307,14 +318,12 @@ describe("Control UI performance budgets", () => {
       metric: string | null,
     ]
   >([
-    ["startup growth below 1 KiB", 47_103, 46_080, 50_000, 50_000, null],
-    ["startup growth at 1 KiB", 47_104, 46_080, 50_000, 50_000, "startup CSS"],
-    ["deferred growth below 1 KiB", 46_080, 46_080, 52_000, 50_977, null],
-    ["deferred growth at 1 KiB", 46_080, 46_080, 52_000, 50_976, "largest CSS"],
-    ["startup at the hard cap", 51_200, 51_200, 50_000, 50_000, null],
-    ["startup above the hard cap", 51_201, 51_201, 50_000, 50_000, "startup CSS"],
-    ["deferred at the hard cap", 46_080, 46_080, 53_400, 53_400, null],
-    ["deferred above the hard cap", 46_080, 46_080, 53_401, 53_401, "largest CSS"],
+    ["startup growth below 1 KiB", 45_000, 43_977, 45_000, 45_000, null],
+    ["startup growth at 1 KiB", 45_000, 43_976, 45_000, 45_000, "startup CSS"],
+    ["deferred growth below 1 KiB", 45_000, 45_000, 52_000, 50_977, null],
+    ["deferred growth at 1 KiB", 45_000, 45_000, 52_000, 50_976, "largest CSS"],
+    ["deferred at the hard cap", 45_000, 45_000, 53_400, 53_400, null],
+    ["deferred above the hard cap", 45_000, 45_000, 53_401, 53_401, "largest CSS"],
   ])("checks %s against built base assets", (_name, css, baseCss, lazy, baseLazy, metric) => {
     const current = createCliFixture(css, lazy);
     const base = createCliFixture(baseCss, baseLazy);
@@ -335,7 +344,7 @@ describe("Control UI performance budgets", () => {
   });
 
   it("keeps budget violations visible in report-only mode without rejecting artifacts", () => {
-    const { rootDir, scriptPath } = createCliFixture(51_201);
+    const { rootDir, scriptPath } = createCliFixture(46_081);
     const enforced = runControlUiPerformanceCli(scriptPath, ["--json"], rootDir);
     const reported = runControlUiPerformanceCli(scriptPath, ["--json", "--report-only"], rootDir);
 
@@ -344,7 +353,7 @@ describe("Control UI performance budgets", () => {
     const report = JSON.parse(reported.stdout);
     expect(report.violations).toEqual(JSON.parse(enforced.stdout).violations);
     expect(report.violations).toEqual([
-      expect.objectContaining({ metric: "startup CSS gzip", actual: 51_201, limit: 51_200 }),
+      expect.objectContaining({ metric: "startup CSS gzip", actual: 46_081, limit: 46_080 }),
     ]);
   });
 
@@ -378,7 +387,9 @@ describe("Control UI performance budgets", () => {
       const baselinePath = path.join(configDir, "control-ui-startup-budget-baseline.json");
       const before = fs.readFileSync(baselinePath, "utf8");
       const args = ["--update-baseline", option];
-      if (option === "--base-dist") args.push(distDir);
+      if (option === "--base-dist") {
+        args.push(distDir);
+      }
 
       const result = runControlUiPerformanceCli(scriptPath, args, rootDir);
       expect(result.status).toBe(1);
