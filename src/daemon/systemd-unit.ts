@@ -49,7 +49,7 @@ function renderEnvironmentFileLines(environmentFiles: string[] | undefined): str
   }
   return normalizeStringEntries(environmentFiles).map((entry) => {
     assertNoSystemdLineBreaks(entry, "Systemd EnvironmentFile values");
-    return `EnvironmentFile=-${systemdEscapeArg(entry)}`;
+    return `EnvironmentFile=-${entry.trim()}`;
   });
 }
 
@@ -64,9 +64,12 @@ export function buildSystemdUnit({
   const descriptionValue = description?.trim() || "OpenClaw Gateway";
   assertNoSystemdLineBreaks(descriptionValue, "Systemd Description");
   const descriptionLine = `Description=${descriptionValue}`;
-  const workingDirLine = workingDirectory
-    ? `WorkingDirectory=${systemdEscapeArg(workingDirectory)}`
-    : null;
+  let workingDirLine: string | null = null;
+  if (workingDirectory) {
+    const trimmedCwd = workingDirectory.trim();
+    assertNoSystemdLineBreaks(trimmedCwd, "Systemd WorkingDirectory");
+    workingDirLine = `WorkingDirectory=${trimmedCwd}`;
+  }
   const envLines = renderEnvLines(environment);
   const environmentFileLines = renderEnvironmentFileLines(environmentFiles);
   return [
