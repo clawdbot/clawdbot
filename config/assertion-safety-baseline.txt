@@ -761,7 +761,6 @@ extensions/memory-core/src/session-backfill-lifecycle.ts	2
 extensions/memory-core/src/session-backfill.ts	1
 extensions/memory-core/src/session-ingestion.ts	2
 extensions/memory-core/src/session-reset-recall-metadata.ts	3
-extensions/memory-core/src/session-search-visibility.ts	2
 extensions/memory-core/src/short-term-promotion-apply.ts	4
 extensions/memory-core/src/short-term-promotion-memory-write.ts	4
 extensions/memory-core/src/short-term-promotion-record.ts	1
