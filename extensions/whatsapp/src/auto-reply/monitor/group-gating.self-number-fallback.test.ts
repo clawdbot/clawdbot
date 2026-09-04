@@ -68,9 +68,19 @@ describe("applyGroupGating self-number mention fallback", () => {
     expect(msg.groupMention).toEqual({ wasMentioned: true, requireMention: true });
   });
 
+  it("dispatches when the number sits on its own line", async () => {
+    const msg = makeGroupMsg("call me\n+1 555 123 4567\nthanks");
+    const result = await applyGroupGating(makeParams(msg));
+
+    expect(result.shouldProcess).toBe(true);
+    expect(msg.groupMention).toEqual({ wasMentioned: true, requireMention: true });
+  });
+
   it.each([
     ["Meeting at 15:55, room 123, ext 4567", "digits spread across unrelated numbers"],
     ["invoice 9915551234567001 is overdue", "the number embedded in a longer number"],
+    ["1555\n1234567", "two numbers split by a line break"],
+    ["1555\r\n1234567", "two numbers split by a CRLF break"],
   ])("keeps the message as context without dispatching: %s (%s)", async (body, _label) => {
     const msg = makeGroupMsg(body);
     const result = await applyGroupGating(makeParams(msg));

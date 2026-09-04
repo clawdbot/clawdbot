@@ -97,7 +97,9 @@ function isBotMentionedFromTargets(
   if (targets.self.e164) {
     const selfDigits = targets.self.e164.replace(/\D/g, "");
     if (selfDigits) {
-      const bodyCompact = bodyClean.replace(/[\s\-().]/g, "");
+      // Only horizontal formatting is removed. Line breaks stay in the body so
+      // numbers on separate lines keep their boundary and cannot be joined.
+      const bodyCompact = bodyClean.replace(/[^\S\r\n\u2028\u2029]|[-().]/g, "");
       const pattern = new RegExp(`(?<!\\d)\\+?${selfDigits}(?!\\d)`);
       if (pattern.test(bodyCompact)) {
         return true;
