@@ -848,6 +848,11 @@ describe("shared Codex app-server client", () => {
     expect(secondClient).toBe(firstClient);
     expect(desktop.process.stdin.destroyed).toBe(true);
     expect(pluginLocal.process.stdin.destroyed).toBe(false);
+    expect(clearSharedCodexAppServerClientIfCurrent(desktop.client)).toBe(false);
+    expect(
+      retireSharedCodexAppServerClientIfCurrent(desktop.client, { failActiveLeases: true }),
+    ).toBeUndefined();
+    expect(pluginLocal.process.stdin.destroyed).toBe(false);
     expect(startSpy).toHaveBeenCalledTimes(2);
     const retained = retainSharedCodexAppServerClientByInstanceId(firstClient.getInstanceId());
     expect(retained?.client).toBe(firstClient);
@@ -863,6 +868,13 @@ describe("shared Codex app-server client", () => {
     });
     expect(startSpy.mock.calls[1]?.[0]).not.toHaveProperty("managedFallbackCommandPaths");
 
+    expect(
+      retireSharedCodexAppServerClientIfCurrent(pluginLocal.client, { failActiveLeases: true }),
+    ).toEqual({ activeLeases: 0, closed: true });
+    expect(clearSharedCodexAppServerClientIfCurrent(desktop.client)).toBe(false);
+    expect(
+      retireSharedCodexAppServerClientIfCurrent(desktop.client, { failActiveLeases: true }),
+    ).toBeUndefined();
     await clearSharedCodexAppServerClientAndWait({ exitTimeoutMs: 25, forceKillDelayMs: 5 });
     expect(pluginLocal.process.stdin.destroyed).toBe(true);
   });

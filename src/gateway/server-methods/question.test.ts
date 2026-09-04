@@ -22,6 +22,7 @@ import {
 } from "../chat-abort.js";
 import { createGatewayBroadcaster } from "../server-broadcast.js";
 import { createChatRunState } from "../server-chat-state.js";
+import { GatewayClientRegistry } from "../server/client-registry.js";
 import type { GatewayWsClient } from "../server/ws-types.js";
 import { canReceiveSessionEvent } from "../session-sharing.js";
 import {
@@ -247,7 +248,11 @@ describe("question gateway methods", () => {
       const viewerClient = makeQuestionClient(viewer, "question-viewer");
       const guestClient = makeQuestionClient(guest, "question-guest");
       const gatewayBroadcaster = createGatewayBroadcaster({
-        clients: new Set([ownerClient.client, viewerClient.client, guestClient.client]),
+        clients: new GatewayClientRegistry([
+          ownerClient.client,
+          viewerClient.client,
+          guestClient.client,
+        ]),
         canReceiveSessionEvent: (client, sessionKeys, agentId, event, payload) =>
           canReceiveSessionEvent({ cfg, client, sessionKeys, agentId, event, payload }),
       });

@@ -40,6 +40,7 @@ import {
 } from "../infra/agent-run-registry.js";
 import { subscribePluginSessionsChanged } from "../plugins/gateway-events.js";
 import { withOpenClawTestState } from "../test-utils/openclaw-test-state.js";
+import { GatewayClientRegistry } from "./server/client-registry.js";
 
 const persistGatewaySessionLifecycleEventMock = vi.fn();
 const loadGatewaySessionLifecycleSnapshotMock = vi.hoisted(() => vi.fn());
@@ -1021,7 +1022,9 @@ describe("agent event handler", () => {
         usesSharedGatewayAuth: false,
         connect: { role: "operator", scopes: ["operator.read"] },
       } as unknown as GatewayWsClient;
-      const broadcaster = createGatewayBroadcaster({ clients: new Set([client]) });
+      const broadcaster = createGatewayBroadcaster({
+        clients: new GatewayClientRegistry([client]),
+      });
       harness.broadcast.mockImplementation(broadcaster.broadcast);
       harness.broadcastToConnIds.mockImplementation(broadcaster.broadcastToConnIds);
       const runId = "backpressured-run";
@@ -3354,7 +3357,7 @@ describe("agent event handler", () => {
     const sessionKey = "agent:main:headless-run";
     const received = vi.fn();
     const unsubscribe = subscribePluginSessionsChanged(received);
-    const publisher = createGatewayBroadcaster({ clients: new Set() });
+    const publisher = createGatewayBroadcaster({ clients: new GatewayClientRegistry() });
     const { broadcastToConnIds, handler } = createHarness({
       resolveSessionKeyForRun: () => sessionKey,
     });

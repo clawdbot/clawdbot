@@ -33,7 +33,7 @@ import type {
 } from "./server-broadcast-types.js";
 import type { SessionMessageSubscriberRegistry } from "./server-chat-state.js";
 import { MAX_BUFFERED_BYTES, WEBSOCKET_OPEN_READY_STATE } from "./server-constants.js";
-import { GatewayClientRegistry } from "./server/client-registry.js";
+import type { GatewayClientRegistry } from "./server/client-registry.js";
 import type { GatewayWsClient } from "./server/ws-types.js";
 import { logWs, summarizeAgentEventForWsLog } from "./ws-log.js";
 
@@ -240,7 +240,7 @@ type ClientDelivery = {
 };
 
 export function createGatewayBroadcaster(params: {
-  clients: Set<GatewayWsClient>;
+  clients: GatewayClientRegistry;
   preparePresenceProjection?: (
     presence: SystemPresence[],
   ) => (client: GatewayWsClient) => SystemPresence[];
@@ -256,8 +256,6 @@ export function createGatewayBroadcaster(params: {
 }) {
   const clientSeq = new WeakMap<GatewayWsClient, number>();
   const reportedSlowPayloadClients = new WeakSet<GatewayWsClient>();
-  const indexedClients =
-    params.clients instanceof GatewayClientRegistry ? params.clients : undefined;
   const deliveries = new WeakMap<GatewayWsClient, ClientDelivery>();
   const deliveryFor = (client: GatewayWsClient) => {
     let state = deliveries.get(client);
@@ -381,8 +379,8 @@ export function createGatewayBroadcaster(params: {
     let sessionSubscriberConnIdsByKey: Array<ReadonlySet<string> | undefined> | undefined;
     const recipients = retained
       ? [retained.client]
-      : targetConnIds && indexedClients
-        ? indexedClients.getByConnectionIds(targetConnIds)
+      : targetConnIds
+        ? params.clients.getByConnectionIds(targetConnIds)
         : params.clients;
     for (const c of recipients) {
       // Closing nodes remain discoverable until their owner drains admitted lifecycle work.
@@ -392,9 +390,6 @@ export function createGatewayBroadcaster(params: {
         c.invalidated === true ||
         c.socket.readyState !== WEBSOCKET_OPEN_READY_STATE
       ) {
-        continue;
-      }
-      if (targetConnIds && !indexedClients && !targetConnIds.has(c.connId)) {
         continue;
       }
       if (!hasEventScope(c, event, explicitPluginScope)) {
@@ -625,16 +620,8 @@ export function createGatewayBroadcaster(params: {
   };
 
   const getBufferedAmount: GatewayBufferedAmountFn = (connId) => {
-    if (indexedClients) {
-      const client = indexedClients.getByConnectionId(connId);
-      return client ? bufferedBytes(deliveryFor(client)) : undefined;
-    }
-    for (const client of params.clients) {
-      if (client.connId === connId) {
-        return bufferedBytes(deliveryFor(client));
-      }
-    }
-    return undefined;
+    const client = params.clients.getByConnectionId(connId);
+    return client ? bufferedBytes(deliveryFor(client)) : undefined;
   };
 
   const broadcastPluginEvent: GatewayPluginEventBroadcastFn = (event, payload, scope) => {

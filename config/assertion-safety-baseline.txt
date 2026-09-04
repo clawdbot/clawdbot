@@ -161,7 +161,6 @@ extensions/codex/doctor-contract-api.ts	1
 extensions/codex/harness.ts	1
 extensions/codex/index.ts	27
 extensions/codex/src/app-server/approval-bridge.ts	1
-extensions/codex/src/app-server/attempt-client-cleanup.ts	1
 extensions/codex/src/app-server/attempt-context.ts	1
 extensions/codex/src/app-server/attempt-diagnostics.ts	3
 extensions/codex/src/app-server/attempt-notifications.ts	1
