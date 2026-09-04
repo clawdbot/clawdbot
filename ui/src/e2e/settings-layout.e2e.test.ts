@@ -194,7 +194,7 @@ suite.define(() => {
     const page = await context.newPage();
     const errors: string[] = [];
     const failedScripts: string[] = [];
-    const scripts: Promise<string>[] = [];
+    const scripts: string[] = [];
     page.on("pageerror", (error) => errors.push(error.message));
     page.on("console", (message) => {
       if (message.type() === "error") {
@@ -206,22 +206,28 @@ suite.define(() => {
         failedScripts.push(request.url());
       }
     });
-    page.on("response", (response) => {
-      if (response.request().resourceType() === "script") {
-        if (!response.ok()) {
-          failedScripts.push(response.url());
-        }
-        scripts.push(response.text());
-      }
-    });
     await installMockGateway(page);
+    // Capture before delivery: Chromium drops response bodies after navigation,
+    // including late script loads that were absent from a Promise.all snapshot.
+    await page.route("**/*", async (route) => {
+      if (route.request().resourceType() !== "script") {
+        await route.fallback();
+        return;
+      }
+      const response = await route.fetch();
+      if (!response.ok()) {
+        failedScripts.push(response.url());
+      }
+      scripts.push(await response.text());
+      await route.fulfill({ response });
+    });
 
     try {
       const providerCopy = "Model providers with auth, plan, quota, and cost data.";
       for (const route of ["new", "chat"]) {
         await page.goto(`${suite.server.baseUrl}${route}`);
         await page.locator(".agent-chat__composer-combobox textarea").waitFor();
-        expect((await Promise.all(scripts)).join("\n")).not.toContain(providerCopy);
+        expect(scripts.join("\n")).not.toContain(providerCopy);
         if (recordVisuals) {
           await page.screenshot({
             path: path.join(suite.artifactDir, `${route}.png`),
@@ -231,7 +237,7 @@ suite.define(() => {
       }
       await page.goto(`${suite.server.baseUrl}settings/model-providers`);
       await page.getByRole("heading", { name: /^Configured providers\b/ }).waitFor();
-      expect((await Promise.all(scripts)).join("\n")).toContain(providerCopy);
+      expect(scripts.join("\n")).toContain(providerCopy);
       expect(await page.locator(".model-providers__defaults").textContent()).toContain(
         "Utility Model",
       );
@@ -244,7 +250,11 @@ suite.define(() => {
         });
       }
     } finally {
-      await context.close();
+      try {
+        await page.unrouteAll({ behavior: "wait" });
+      } finally {
+        await context.close();
+      }
     }
   });
 
