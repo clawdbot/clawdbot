@@ -767,57 +767,85 @@ describe("presentation capability limits", () => {
     );
   });
 
-  it.each([
-    { encoding: "characters" as const, length: (text: string) => Array.from(text).length },
-    { encoding: "utf8-bytes" as const, length: (text: string) => Buffer.byteLength(text, "utf8") },
-    { encoding: "utf16-units" as const, length: (text: string) => text.length },
-  ])("preserves authored Unicode content under $encoding limits", ({ encoding, length }) => {
-    const text = "abc😀 def\nlast";
-    const original = {
-      title: text,
-      blocks: [
-        { type: "text" as const, text },
-        { type: "context" as const, text },
-      ],
-    };
-    const capabilities = { context: false, limits: { text: { maxLength: 6, encoding } } };
-    const presentation = adaptMessagePresentationForChannel({
-      presentation: original,
-      capabilities,
-    });
-    expect(length(presentation.title ?? "")).toBeLessThanOrEqual(6);
-    for (const block of presentation.blocks) {
-      expect(block.type).toBe("text");
-      if (block.type === "text") {
-        expect(length(block.text)).toBeLessThanOrEqual(6);
-        expect(Buffer.from(block.text, "utf8").toString("utf8")).toBe(block.text);
+  it.each(
+    [
+      { encoding: "characters" as const, length: (text: string) => Array.from(text).length },
+      {
+        encoding: "utf8-bytes" as const,
+        length: (text: string) => Buffer.byteLength(text, "utf8"),
+      },
+      { encoding: "utf16-units" as const, length: (text: string) => text.length },
+    ].flatMap((mode) =>
+      [
+        { sample: "mixed text", text: "abc😀 def\nlast" },
+        { sample: "long text", text: `${"😀".repeat(64)} split \n${"e\u0301 ".repeat(24)}last` },
+      ].map((sample) => ({
+        encoding: mode.encoding,
+        length: mode.length,
+        sample: sample.sample,
+        text: sample.text,
+      })),
+    ),
+  )(
+    "preserves authored Unicode content under $encoding limits for $sample",
+    ({ encoding, length, text }) => {
+      const original = {
+        title: text,
+        blocks: [
+          { type: "text" as const, text },
+          { type: "context" as const, text },
+        ],
+      };
+      const capabilities = { context: false, limits: { text: { maxLength: 6, encoding } } };
+      const presentation = adaptMessagePresentationForChannel({
+        presentation: original,
+        capabilities,
+      });
+      expect(length(presentation.title ?? "")).toBeLessThanOrEqual(6);
+      for (const block of presentation.blocks) {
+        expect(block.type).toBe("text");
+        if (block.type === "text") {
+          expect(length(block.text)).toBeLessThanOrEqual(6);
+          expect(Buffer.from(block.text, "utf8").toString("utf8")).toBe(block.text);
+        }
       }
-    }
-    expect(renderMessagePresentationFallbackText({ presentation })).toBe(
-      renderMessagePresentationFallbackText({ presentation: original }),
-    );
-    expect(
-      renderMessagePresentationFallbackText({
-        presentation: normalizeMessagePresentation(
-          adaptMessagePresentationForChannel({ presentation, capabilities }),
-        ),
-      }),
-    ).toBe(renderMessagePresentationFallbackText({ presentation: original }));
-    expect(adaptMessagePresentationForChannel({ presentation: original })).toEqual(original);
-  });
+      expect(renderMessagePresentationFallbackText({ presentation })).toBe(
+        renderMessagePresentationFallbackText({ presentation: original }),
+      );
+      expect(
+        renderMessagePresentationFallbackText({
+          presentation: normalizeMessagePresentation(
+            adaptMessagePresentationForChannel({ presentation, capabilities }),
+          ),
+        }),
+      ).toBe(renderMessagePresentationFallbackText({ presentation: original }));
+      expect(adaptMessagePresentationForChannel({ presentation: original })).toEqual(original);
+    },
+  );
 
-  it("does not split code points when applying label limits", () => {
+  it.each([
+    {
+      sample: "astral labels",
+      labels: ["😀😀😀", "🚀🚀🚀", "👍👍👍"] as const,
+      prefixes: ["😀😀", "🚀🚀", "👍👍"],
+    },
+    {
+      sample: "long labels with isolated surrogates",
+      labels: ["A\uD800B".repeat(24), "\uDC00AB".repeat(24), "😀\uD800Z".repeat(24)] as const,
+      prefixes: ["A\uD800", "\uDC00A", "😀\uD800"],
+    },
+  ])("preserves code-point prefixes for $sample", ({ labels, prefixes }) => {
     const presentation = adaptMessagePresentationForChannel({
       presentation: {
         blocks: [
           {
             type: "buttons",
-            buttons: [{ label: "😀😀😀", value: "ok" }],
+            buttons: [{ label: labels[0], value: "ok" }],
           },
           {
             type: "select",
-            placeholder: "🚀🚀🚀",
-            options: [{ label: "👍👍👍", value: "yes" }],
+            placeholder: labels[1],
+            options: [{ label: labels[2], value: "yes" }],
           },
         ],
       },
@@ -836,12 +864,12 @@ describe("presentation capability limits", () => {
     expect(presentation.blocks).toEqual([
       {
         type: "buttons",
-        buttons: [{ label: "😀😀", value: "ok" }],
+        buttons: [{ label: prefixes[0], value: "ok" }],
       },
       {
         type: "select",
-        placeholder: "🚀🚀",
-        options: [{ label: "👍👍", value: "yes" }],
+        placeholder: prefixes[1],
+        options: [{ label: prefixes[2], value: "yes" }],
       },
     ]);
   });
