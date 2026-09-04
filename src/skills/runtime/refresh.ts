@@ -7,6 +7,7 @@ import { normalizeOptionalString } from "@openclaw/normalization-core/string-coe
 import chokidar, { type FSWatcher } from "chokidar";
 import { isDefaultStateDir } from "../../config/paths.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
+import { resolveRealpathOrAbsolute } from "../../infra/boundary-path.js";
 import { isPathInside } from "../../infra/path-guards.js";
 import { createSubsystemLogger } from "../../logging/subsystem.js";
 import type { PluginMetadataSnapshot } from "../../plugins/plugin-metadata-snapshot.types.js";
@@ -156,67 +157,19 @@ function resolveWatchTargets(
 
   const targets = new Map<string, WatchTarget>();
   for (const root of baseRoots) {
-    addSkillRootWatchTargets(targets, root.path, GROUPED_SKILLS_WATCH_DEPTH);
-    addTrustedSymlinkSkillWatchTargets(
+    addSkillSourceWatchTargets(
       targets,
       root.path,
       root.source,
       allowedSymlinkTargetRealPaths,
       GROUPED_SKILLS_WATCH_DEPTH,
-      root.path,
-    );
-    addTrustedSymlinkSkillWatchTargets(
-      targets,
-      path.join(root.path, "skills"),
-      root.source,
-      allowedSymlinkTargetRealPaths,
-      GROUPED_SKILLS_WATCH_DEPTH,
-      root.path,
     );
   }
   for (const resolved of extraDirs) {
-    const rootDepth =
-      path.basename(resolved) === "skills"
-        ? GROUPED_SKILLS_WATCH_DEPTH
-        : CONFIGURED_ROOT_WATCH_DEPTH;
-    addSkillRootWatchTargets(targets, resolved, rootDepth);
-    addTrustedSymlinkSkillWatchTargets(
-      targets,
-      resolved,
-      "openclaw-extra",
-      allowedSymlinkTargetRealPaths,
-      rootDepth,
-      resolved,
-    );
-    addTrustedSymlinkSkillWatchTargets(
-      targets,
-      path.join(resolved, "skills"),
-      "openclaw-extra",
-      allowedSymlinkTargetRealPaths,
-      GROUPED_SKILLS_WATCH_DEPTH,
-      resolved,
-    );
+    addSkillSourceWatchTargets(targets, resolved, "openclaw-extra", allowedSymlinkTargetRealPaths);
   }
   for (const dir of pluginSkillDirs) {
-    const rootDepth =
-      path.basename(dir) === "skills" ? GROUPED_SKILLS_WATCH_DEPTH : CONFIGURED_ROOT_WATCH_DEPTH;
-    addSkillRootWatchTargets(targets, dir, rootDepth);
-    addTrustedSymlinkSkillWatchTargets(
-      targets,
-      dir,
-      "openclaw-plugin",
-      allowedSymlinkTargetRealPaths,
-      rootDepth,
-      dir,
-    );
-    addTrustedSymlinkSkillWatchTargets(
-      targets,
-      path.join(dir, "skills"),
-      "openclaw-plugin",
-      allowedSymlinkTargetRealPaths,
-      GROUPED_SKILLS_WATCH_DEPTH,
-      dir,
-    );
+    addSkillSourceWatchTargets(targets, dir, "openclaw-plugin", allowedSymlinkTargetRealPaths);
   }
   const sortedTargets = Array.from(targets.values()).toSorted((a, b) =>
     a.path.localeCompare(b.path),
@@ -248,10 +201,44 @@ function addSkillRootWatchTargets(
   targets: Map<string, WatchTarget>,
   root: string,
   rootDepth: number,
-): void {
+): string {
   addWatchTarget(targets, root, rootDepth);
   const companionSkillsRoot = path.join(root, "skills");
   addWatchTarget(targets, companionSkillsRoot, GROUPED_SKILLS_WATCH_DEPTH);
+  return companionSkillsRoot;
+}
+
+function addSkillSourceWatchTargets(
+  targets: Map<string, WatchTarget>,
+  root: string,
+  source: string,
+  allowedSymlinkTargetRealPaths: readonly string[],
+  rootDepth = path.basename(root) === "skills"
+    ? GROUPED_SKILLS_WATCH_DEPTH
+    : CONFIGURED_ROOT_WATCH_DEPTH,
+): void {
+  const companionSkillsRoot = addSkillRootWatchTargets(targets, root, rootDepth);
+  // Both bounded scans share the source's containment identity for this preparation.
+  // Trusted symlink leaves below remain registration-only, never recursive scans.
+  const rootRealPath = resolveRealpathOrAbsolute(root);
+  addTrustedSymlinkSkillWatchTargets(
+    targets,
+    root,
+    source,
+    allowedSymlinkTargetRealPaths,
+    rootDepth,
+    rootRealPath,
+    rootRealPath,
+  );
+  addTrustedSymlinkSkillWatchTargets(
+    targets,
+    companionSkillsRoot,
+    source,
+    allowedSymlinkTargetRealPaths,
+    GROUPED_SKILLS_WATCH_DEPTH,
+    rootRealPath,
+    resolveRealpathOrAbsolute(companionSkillsRoot),
+  );
 }
 
 function addTrustedSymlinkSkillWatchTargets(
@@ -260,10 +247,9 @@ function addTrustedSymlinkSkillWatchTargets(
   source: string,
   allowedSymlinkTargetRealPaths: readonly string[],
   maxDepth: number,
-  containmentRoot: string,
+  containmentRootRealPath: string,
+  rootRealPath: string,
 ): void {
-  const containmentRootRealPath = tryRealpath(containmentRoot) ?? path.resolve(containmentRoot);
-  const rootRealPath = tryRealpath(root) ?? path.resolve(root);
   try {
     if (
       fs.lstatSync(root).isSymbolicLink() &&
