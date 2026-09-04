@@ -20,7 +20,10 @@ import { normalizeDeliveryContext } from "../../utils/delivery-context.shared.js
 import { listAgentIds, resolveAgentConfig, resolveSessionAgentId } from "../agent-scope.js";
 import { reserveChildAdmissionSlot } from "../child-admission.js";
 import { resolveAgentIdentity } from "../identity.js";
-import { resolveSubagentSpawnModelSelection } from "../model-selection.js";
+import {
+  resolveDefaultModelForAgent,
+  resolveSubagentSpawnModelSelection,
+} from "../model-selection.js";
 import { resolveSandboxRuntimeStatus } from "../sandbox/runtime-status.js";
 import { resolveSpawnedWorkspaceInheritance, type SpawnedToolContext } from "../spawned-context.js";
 import {
@@ -30,9 +33,13 @@ import {
 import { deleteSubagentSessionForCleanup } from "../subagents/registry/subagent-session-cleanup.js";
 import { getSubagentDepthFromSessionStore } from "../subagents/spawn/subagent-depth.js";
 import { resolveSubagentSpawnOwnership } from "../subagents/spawn/subagent-spawn-ownership.js";
-import { resolveConfiguredSubagentRunTimeoutSeconds } from "../subagents/spawn/subagent-spawn-plan.js";
+import {
+  resolveConfiguredSubagentRunTimeoutSeconds,
+  splitModelRef,
+} from "../subagents/spawn/subagent-spawn-plan.js";
 import { resolveSubagentThinkingOverride } from "../subagents/spawn/subagent-spawn-thinking.js";
 import { resolveSubagentTargetPolicy } from "../subagents/spawn/subagent-target-policy.js";
+import { resolveCandidateThinkingLevel } from "../thinking-runtime.js";
 import { normalizeToolModelOverride, readToolStringParam, ToolInputError } from "./common.js";
 import {
   callInProcessGatewayTool,
@@ -246,7 +253,22 @@ export async function maybeSpawnVisibleSession(params: {
       error: `Invalid configured subagent thinking level "${thinkingPlan.thinkingCandidateRaw}".`,
     };
   }
-  const resolvedThinkingLevel = thinkingPlan.initialSessionPatch.thinkingLevel;
+  const inheritedThinkingLevel =
+    thinkingPlan.thinkingOverride === undefined
+      ? thinkingPlan.initialSessionPatch.thinkingLevel
+      : undefined;
+  const selectedModel = splitModelRef(resolvedModel);
+  const selectedDefaults = resolveDefaultModelForAgent({ cfg, agentId: targetAgentId });
+  const resolvedThinkingLevel = inheritedThinkingLevel
+    ? resolveCandidateThinkingLevel({
+        cfg,
+        provider: selectedModel.provider ?? selectedDefaults.provider,
+        modelId: selectedModel.model ?? selectedDefaults.model,
+        level: inheritedThinkingLevel,
+        agentId: targetAgentId,
+        sessionKey: `agent:${targetAgentId}:dashboard:pending`,
+      })
+    : thinkingPlan.initialSessionPatch.thinkingLevel;
   const runTimeoutSeconds = resolveConfiguredSubagentRunTimeoutSeconds({
     cfg,
     runTimeoutSeconds: params.runTimeoutSeconds,

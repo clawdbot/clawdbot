@@ -1102,6 +1102,43 @@ describe("sessions_spawn tool", () => {
     );
   });
 
+  it("clamps inherited thinking to the visible child's selected runtime", async () => {
+    const callGateway = vi.fn(async () => ({
+      key: "agent:main:dashboard:child",
+      runStarted: true,
+      runId: "run-visible",
+    }));
+    const tool = createSessionsSpawnTool({
+      agentSessionKey: "agent:main:main",
+      requesterThinkingLevel: "xhigh",
+      config: {
+        agents: {
+          defaults: {
+            model: { primary: "demo/demo-model" },
+          },
+          list: [{ id: "main" }],
+        },
+      },
+      callGateway: callGateway as never,
+      registerRun: vi.fn(),
+      countActiveRuns: () => 0,
+    });
+
+    await tool.execute("visible-inherited-thinking", {
+      task: "inspect issue",
+      visible: true,
+    });
+
+    expect(callGateway).toHaveBeenCalledWith(
+      "sessions.create",
+      expect.objectContaining({
+        agentId: "main",
+        model: "demo/demo-model",
+        thinkingLevel: "high",
+      }),
+    );
+  });
+
   it("surfaces unsupported configured thinking instead of silently creating a visible child", async () => {
     const registerRun = vi.fn();
     const callGateway = vi.fn(async (_method: string, request: Record<string, unknown>) => {
