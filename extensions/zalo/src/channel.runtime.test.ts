@@ -1,7 +1,15 @@
-import { describe, expect, it } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { notifyZaloPairingApproval } from "./channel.runtime.js";
 
 describe("notifyZaloPairingApproval", () => {
+  beforeEach(() => {
+    vi.stubEnv("ZALO_BOT_TOKEN", "");
+  });
+
+  afterEach(() => {
+    vi.unstubAllEnvs();
+  });
+
   it.each([
     {
       name: "simplified default account",
