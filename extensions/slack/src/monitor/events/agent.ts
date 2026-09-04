@@ -86,6 +86,7 @@ export function registerSlackAgentEvents(params: {
           prompt: "/stop",
           builtInCommand: "stop",
           sessionTarget: target?.route,
+          isSessionTargetCurrent: target?.isActive,
           onAdmitted: () => {
             if (target && !target.isActive()) {
               return false;
@@ -143,6 +144,7 @@ export function registerSlackAgentEvents(params: {
       const isGroupDm = auth.channelType === "mpim";
       const isRoom = auth.channelType === "channel" || auth.channelType === "group";
       const routing = await resolveSlackSessionEventRoutingContext({
+        intent: "title",
         ctx,
         account,
         message: {
@@ -158,13 +160,21 @@ export function registerSlackAgentEvents(params: {
         isRoomish: isRoom || isGroupDm,
         eventScope,
       });
-      await getSlackRuntime().agent.session.patchSessionEntry({
+      const updated = await getSlackRuntime().agent.session.patchSessionEntry({
         agentId: routing.route.agentId,
         storePath: resolveStorePath(ctx.cfg.session?.store, { agentId: routing.route.agentId }),
         sessionKey: routing.sessionKey,
         preserveActivity: true,
-        update: () => ({ displayName: event.title }),
+        update: () => {
+          if (!routing.isCurrentSession()) {
+            throw new Error("Slack conversation owner changed before the title update");
+          }
+          return { displayName: event.title };
+        },
       });
+      if (!updated) {
+        throw new Error("Slack conversation session disappeared before the title update");
+      }
       ctx.recordSlackSessionTitle({
         channelId: event.channel,
         threadTs: event.thread_ts,

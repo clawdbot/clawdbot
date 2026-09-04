@@ -290,6 +290,7 @@ export function resolveSessionAbortTarget(
  * storage-sized operation. Runtime abort side effects remain with callers.
  */
 export async function markSessionAbortTarget(params: {
+  isCurrent?: () => boolean;
   resolveAbortCutoff?: (context: SessionAbortTargetContext) => SessionAbortTargetCutoff | undefined;
   scope: SessionAccessScope;
   now?: () => number;
@@ -300,6 +301,9 @@ export async function markSessionAbortTarget(params: {
     const updated = await patchSessionEntryCore(
       params.scope,
       (currentEntry) => {
+        if (params.isCurrent?.() === false) {
+          return null;
+        }
         resolution.target = {
           entry: { ...currentEntry },
           persisted: false,
@@ -325,7 +329,7 @@ export async function markSessionAbortTarget(params: {
         skipMaintenance: true,
       },
     );
-    return updated
+    return updated && resolution.target
       ? {
           entry: { ...updated },
           persisted: true,
