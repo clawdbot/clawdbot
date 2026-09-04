@@ -658,6 +658,9 @@ export async function processCompletionsStream(
       await cooperativeScheduler.afterEvent();
     }
   }
+  // The SDK can end an aborted SSE iterator normally; cancellation must win
+  // before buffered terminal markers can promote provisional tool calls.
+  throwIfModelStreamAborted(options?.signal);
   if (!finishReason && (directMode || options?.sawStreamDONE?.() === false)) {
     throw new Error("Stream ended without finish_reason");
   }
