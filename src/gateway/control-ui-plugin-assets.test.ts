@@ -163,7 +163,11 @@ describe("native Control UI browser assets", () => {
         );
         expect(reportControlUiPluginActivation(browser, report)).toBe(false);
         expect(listControlUiPluginActivations(browser)).toEqual([]);
-        for (const headers of [{ cookie }, { authorization: "Bearer test-token" }]) {
+        const credentials: Record<string, string>[] = [
+          { cookie },
+          { authorization: "Bearer test-token" },
+        ];
+        for (const headers of credentials) {
           for (const asset of [entry.entryUrl, ...entry.styles]) {
             expect((await sendRequest(server, { path: asset, headers })).res.statusCode).toBe(404);
           }

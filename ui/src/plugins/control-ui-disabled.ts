@@ -4,8 +4,12 @@ import type { ApplicationContext } from "../app/context.ts";
 import { t } from "../i18n/index.ts";
 import { shouldHandleNavigationClick } from "../lib/navigation-click.ts";
 
+type CustomPluginUiDisabledContext = Pick<ApplicationContext<"labs">, "basePath" | "navigate"> & {
+  readonly plugins: Pick<ApplicationContext["plugins"], "errors">;
+};
+
 export function renderCustomPluginUiDisabled(
-  context: ApplicationContext | undefined,
+  context: CustomPluginUiDisabledContext | undefined,
   pluginId: string,
   onNavigate?: () => void,
 ) {
