@@ -284,12 +284,17 @@ export function classifyExecAllowlistScope(
   entry: Pick<ExecAllowlistEntry, "pattern" | "source" | "argPattern">,
 ): ExecAllowlistScope {
   const pattern = entry.pattern?.trim() ?? "";
-  if (pattern.startsWith("=command:") || pattern.startsWith("=node-command:")) {
+  const generated = entry.source === "allow-always";
+  // Only a generated grant is honored as exact command text; every consumer of
+  // the reserved prefixes requires the source. A manual pattern that merely
+  // starts with one is an ordinary glob to matchAllowlist, so it falls through
+  // to its real scope instead of borrowing the narrower label.
+  if (generated && (pattern.startsWith("=command:") || pattern.startsWith("=node-command:"))) {
     return "command text";
   }
   // matchAllowlist skips path-only and legacy-hashed generated grants outright,
   // so an allow-always entry authorizes nothing unless it is cwd-bound.
-  if (entry.source === "allow-always" && !isCwdBoundHashedArgPattern(entry.argPattern)) {
+  if (generated && !isCwdBoundHashedArgPattern(entry.argPattern)) {
     return "inactive";
   }
   if (isCwdBoundHashedArgPattern(entry.argPattern)) {

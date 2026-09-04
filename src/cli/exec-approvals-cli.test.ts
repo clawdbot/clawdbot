@@ -199,6 +199,8 @@ describe("exec approvals CLI", () => {
             { pattern, lastUsedAt },
             { pattern, source: "allow-always", argPattern: "sha256:cwd-argv:v1:abc", lastUsedAt },
             { pattern, source: "allow-always", lastUsedAt },
+            { pattern: "=command:manual0000000000", lastUsedAt },
+            { pattern: "=command:generated00000", source: "allow-always", lastUsedAt },
           ],
         },
       },
@@ -206,14 +208,20 @@ describe("exec approvals CLI", () => {
 
     await runApprovalsCommand(["approvals", "get"]);
 
-    const rows = loggedOutput()
-      .split("\n")
-      .filter((line) => line.includes(pattern));
+    const output = loggedOutput().split("\n");
+    const rows = output.filter((line) => line.includes(pattern));
     expect(rows).toHaveLength(3);
     expect(new Set(rows).size).toBe(3);
     expect(rows[0]).toContain("any args");
     expect(rows[1]).toContain("argv+cwd");
     expect(rows[2]).toContain("inactive");
+
+    // A reserved prefix is only an exact-command grant when the source says so;
+    // `approvals allowlist add` stores any pattern without one.
+    const commandRows = output.filter((line) => line.includes("=command:"));
+    expect(commandRows).toHaveLength(2);
+    expect(commandRows[0]).toContain("any args");
+    expect(commandRows[1]).toContain("command text");
   });
 
   it("redacts the socket token from local get JSON while preserving its path", async () => {
