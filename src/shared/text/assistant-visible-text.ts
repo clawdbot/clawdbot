@@ -50,12 +50,8 @@ const TOOL_CALL_JSON_PAYLOAD_START_RE =
   /^(?:\s+[A-Za-z_:][-A-Za-z0-9_:.]*\s*=\s*(?:"[^"]*"|'[^']*'|[^\s"'=<>`]+))*\s*(?:\r?\n\s*)?[[{]/;
 const TOOL_CALL_XML_PAYLOAD_START_RE =
   /^\s*(?:\r?\n\s*)?<(?:antml:)?(?:function_call|tool_call|function|invoke|parameters?|arguments?)\b/i;
-const TOOL_CALL_GLM_ARG_CLOSED_RE =
-  /^(?:[A-Za-z_][\w./:-]*)?\s*<\s*arg_key\b[\s\S]*<\/\s*arg_key\b/i;
-// Hold a <tool_call> tool-name / whitespace / partial <arg_key> prefix until
-// classified. A later replacement cannot unsay an emitted prefix.
-const TOOL_CALL_GLM_ARG_INCOMPLETE_RE =
-  /^(?:[A-Za-z_][\w./:-]*)?(?:\s+|\s*<\s*(?:arg_key\b[^>]*)?|\s*<\s*arg_key\b[^>]*>[^\s<]*)?$/i;
+const GLM_TOOL_NAME_RE = /^[A-Za-z_][\w./:-]*/;
+const GLM_ARG_KEY = "arg_key";
 const NESTED_JSON_TOOL_CALL_PAYLOAD_START_RE = /^\s*(?:\r?\n\s*)?<(?:function_call|tool_call)\b/i;
 
 type ToolCallPayloadKind = "json" | "xml" | null;
@@ -167,14 +163,75 @@ function detectToolCallPayloadKind(text: string, start: number): ToolCallPayload
   if (TOOL_CALL_XML_PAYLOAD_START_RE.test(rest)) {
     return "xml";
   }
-  if (TOOL_CALL_GLM_ARG_CLOSED_RE.test(rest) || isIncompleteGlmArgPayload(rest)) {
+  if (isClosedGlmArgPayload(rest) || isIncompleteGlmArgPayload(rest)) {
     return "xml";
   }
   return null;
 }
 
+function readGlmToolName(rest: string): string | null {
+  const match = GLM_TOOL_NAME_RE.exec(rest);
+  return match?.[0] ?? null;
+}
+
+function isClosedGlmArgPayload(rest: string): boolean {
+  const name = readGlmToolName(rest);
+  if (!name) {
+    return false;
+  }
+  return /^\s*<\s*arg_key\b[\s\S]*<\/\s*arg_key\b/i.test(rest.slice(name.length));
+}
+
+// Hold a <tool_call> tool-name / whitespace / partial <arg_key> prefix until
+// classified. A later replacement cannot unsay an emitted prefix.
 function isIncompleteGlmArgPayload(rest: string): boolean {
-  return TOOL_CALL_GLM_ARG_INCOMPLETE_RE.test(rest) && /[A-Za-z_<]/.test(rest);
+  const name = readGlmToolName(rest);
+  if (!name) {
+    return false;
+  }
+  const afterName = rest.slice(name.length);
+  if (afterName === "" || /^\s+$/.test(afterName)) {
+    return true;
+  }
+  const open = afterName.match(/^\s*</);
+  if (!open) {
+    return false;
+  }
+  return isIncompleteGlmArgKeyAfterOpen(afterName.slice(open[0].length));
+}
+
+function isIncompleteGlmArgKeyAfterOpen(afterOpen: string): boolean {
+  let cursor = 0;
+  while (cursor < afterOpen.length && /\s/.test(afterOpen.charAt(cursor))) {
+    cursor += 1;
+  }
+  const body = afterOpen.slice(cursor);
+  if (body === "") {
+    return true;
+  }
+  let matched = 0;
+  while (
+    matched < body.length &&
+    matched < GLM_ARG_KEY.length &&
+    body[matched]?.toLowerCase() === GLM_ARG_KEY[matched]
+  ) {
+    matched += 1;
+  }
+  if (matched === 0) {
+    return false;
+  }
+  if (matched < GLM_ARG_KEY.length) {
+    return body.length === matched;
+  }
+  const afterTag = body.slice(GLM_ARG_KEY.length);
+  if (/^[A-Za-z0-9_]/.test(afterTag)) {
+    return false;
+  }
+  const close = afterTag.indexOf(">");
+  if (close === -1) {
+    return true;
+  }
+  return /^[^\s<]*$/.test(afterTag.slice(close + 1));
 }
 
 function startsWithNestedJsonToolCallPayload(text: string, start: number): boolean {

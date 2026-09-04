@@ -24,7 +24,7 @@ describe("stripAssistantInternalScaffolding GLM arg_key", () => {
 
   it("strips dangling <tool_call> followed by <arg_key> to end", () => {
     expectVisibleText(
-      "Checking.\n<tool_call>\n<arg_key>name</arg_key>\n<arg_value>read",
+      "Checking.\n<tool_call>read\n<arg_key>name</arg_key>\n<arg_value>read",
       "Checking.\n",
     );
   });
@@ -35,6 +35,8 @@ describe("stripAssistantInternalScaffolding GLM arg_key", () => {
     expectVisibleText("Visible\n<tool_call>exec ", "Visible\n");
     expectVisibleText("Visible\n<tool_call>exec\n", "Visible\n");
     expectVisibleText("Visible\n<tool_call>exec<arg_key>", "Visible\n");
+    expectVisibleText("Visible\n<tool_call>exec<arg_", "Visible\n");
+    expectVisibleText("Visible\n<tool_call>exec<arg_ke", "Visible\n");
   });
 
   it("preserves literal exec<arg_key> syntax outside a GLM tool-call block", () => {
@@ -45,6 +47,10 @@ describe("stripAssistantInternalScaffolding GLM arg_key", () => {
     expectVisibleText(
       "Use <tool_call>exec<arg_key> literally.",
       "Use <tool_call>exec<arg_key> literally.",
+    );
+    expectVisibleText(
+      "prefix <tool_call><arg_key>secret</arg_key></tool_call> suffix",
+      "prefix <tool_call><arg_key>secret</arg_key></tool_call> suffix",
     );
   });
 });
@@ -59,6 +65,11 @@ describe("sanitizeAssistantVisibleText GLM arg_key", () => {
     expect(sanitizeAssistantVisibleText("Use <tool_call><arg> literally.")).toBe(
       "Use <tool_call><arg> literally.",
     );
+    expect(
+      sanitizeAssistantVisibleText(
+        "prefix <tool_call><arg_key>secret</arg_key></tool_call> suffix",
+      ),
+    ).toBe("prefix <tool_call><arg_key>secret</arg_key></tool_call> suffix");
     expect(
       sanitizeAssistantVisibleText(
         "Models emit exec<arg_key>command</arg_key> next to a structured tool call.",
