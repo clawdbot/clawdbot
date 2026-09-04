@@ -755,8 +755,8 @@ Use `openclaw triage --agent codex` to select a particular agent.
 Failed interactive updates open triage automatically after updater cleanup and
 pass the captured failure to the agent before fresh diagnostics can delay the
 handoff. JSON, `--yes`, and non-interactive update invocations collect diagnostics
-and print handoff commands without starting an agent. For diagnostic collection
-alone, use `openclaw triage --non-interactive`; add `--update-result <path>` to
+and print handoff commands without starting an external coding agent. For
+diagnostic collection alone, use `openclaw triage --non-interactive`; add `--update-result <path>` to
 include a saved update-failure artifact. See [Triage](/cli/triage) for command
 formatting and installation targeting.
 
@@ -766,6 +766,32 @@ The failed update retains its nonzero exit code even if the agent repairs it.
 - For `openclaw update --channel dev` on source checkouts, the updater auto-bootstraps `pnpm` when needed. If you see a pnpm/corepack bootstrap error, install `pnpm` manually (or re-enable `corepack`) and rerun the update.
 - Check: [Troubleshooting](/gateway/troubleshooting)
 - Ask in Discord: [https://discord.gg/clawd](https://discord.gg/clawd)
+
+### Unattended repair on your own inference
+
+Update orchestration can invoke the same embedded repair loop as
+`openclaw triage --run` without a terminal or an external coding-agent CLI. It
+uses the system-agent owner's default model, its `model.fallbacks`, then other
+configured agents' authenticated routes, skipping models without tool support
+and routes without usable authentication. It reports unavailable inference
+instead of waiting for a login or approval prompt.
+
+The default limits are three turns, ten minutes total, five minutes per turn,
+and 40 tool calls per turn. The updater supplies a validation check before the
+first turn and after each attempt. Repair stops when validation succeeds, a
+budget is reached, or a turn fails to improve the result; a regression is
+reported as unrepaired. The model's `REPAIR_RESULT` summary does not replace
+these checks.
+
+The agent may diagnose and repair the target install or staged candidate and
+its OpenClaw state, including running Doctor lint, `doctor --fix`, and health
+checks. Its repair contract forbids changing credentials or auth stores,
+deleting state or databases, package-manager writes outside the target root,
+and service or Gateway lifecycle commands. The orchestrator retains control of
+activation, restart, and rollback. The repair loop reports its attempts; it
+does not take snapshots or undo changes. See [Triage](/cli/triage#installation-target-and-embedded-handoff)
+for the embedded repair contract. Interactive `triage --run` remains limited
+to one turn and still requires a terminal.
 
 ## Related
 
