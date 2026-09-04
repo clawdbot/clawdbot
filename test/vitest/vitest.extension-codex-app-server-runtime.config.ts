@@ -17,6 +17,7 @@ function createExtensionCodexAppServerRuntimeVitestConfig(
       "extensions/codex/src/app-server/session-binding.test.ts",
       "extensions/codex/src/app-server/shared-client.test.ts",
       "extensions/codex/src/app-server/startup-binding.test.ts",
+      "extensions/codex/src/app-server/startup-binding.rotation.test.ts",
       "extensions/codex/src/app-server/thread-lifecycle*.test.ts",
       "extensions/codex/src/app-server/transport-*.test.ts",
     ],

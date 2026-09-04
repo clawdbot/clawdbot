@@ -849,12 +849,15 @@ export async function runSessionCompactionIfNeeded(params: {
   }
   const shouldCompactByTranscriptBytes =
     exceedsTranscriptByteThreshold && !transcriptByteCompactionLatched;
-  if (isCodexRuntime && !shouldCompactByTranscriptBytes) {
-    // Codex owns native-thread token pressure; OpenClaw owns the host transcript byte fuse
-    // that bounds fresh-thread bootstrap seeds.
+  if (isCodexRuntime) {
+    // Codex owns native-thread token pressure and the transcript byte fuse: the
+    // startup binding caps native rollout transcripts at the same threshold and
+    // restarts oversized threads fresh each turn. Attempting required native
+    // preflight compaction here can only be refused for host-isolated or
+    // policy-restricted bindings, which would block the turn outright.
     logVerbose(
       `preflightCompaction skipped: sessionKey=${params.sessionKey} runtime=codex ` +
-        `reason=codex_native_auto_compaction ` +
+        `reason=codex_owns_native_thread_and_byte_fuse ` +
         `activeTranscriptBytes=${activeTranscriptBytes ?? "undefined"} ` +
         `maxActiveTranscriptBytes=${maxActiveTranscriptBytes ?? "undefined"}`,
     );

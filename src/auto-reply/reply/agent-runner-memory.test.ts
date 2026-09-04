@@ -3714,7 +3714,7 @@ describe("runMemoryFlushIfNeeded", () => {
     ["fresh session selected from the outset", "fresh", "codex"],
     ["upgraded session with historical embedded ownership", "upgraded", "openclaw"],
   ])(
-    "byte-guards a Codex runtime %s through native preflight",
+    "leaves byte-guarded Codex runtime preflight to the startup-binding owner %s",
     async (_label, fixtureId, agentHarnessId) => {
       const storePath = path.join(rootDir, `sqlite-codex-byte-guard-${fixtureId}.json`);
       const sessionKey = "agent:main:main";
@@ -3765,22 +3765,76 @@ describe("runMemoryFlushIfNeeded", () => {
         });
       }
 
-      expect(entry?.compactionCount).toBe(2);
-      expect(replyOperation.setPhase).toHaveBeenCalledWith("preflight_compacting");
-      expect(compactEmbeddedAgentSessionMock).toHaveBeenCalledTimes(2);
-      expect(requireCompactEmbeddedAgentSessionCall(1)).toMatchObject({
-        agentHarnessId: "codex",
-        contextTokenBudget: 1_000_000,
-        deferOwningContextEngineCompaction: false,
-        preflightCompactionTrigger: "transcript_bytes",
-        preflightRequired: true,
-        sessionId: "session",
-        sessionKey,
-        trigger: "budget",
-      });
+      // The Codex startup binding owns the byte fuse: it caps native rollout
+      // transcripts and restarts oversized threads fresh, so the host preflight
+      // neither attempts required native compaction nor blocks the turn.
+      expect(entry?.compactionCount).toBe(0);
+      expect(replyOperation.setPhase).not.toHaveBeenCalledWith("preflight_compacting");
+      expect(compactEmbeddedAgentSessionMock).not.toHaveBeenCalled();
       expect(loadMainSessionEntry(storePath).transcriptByteCompactionLatch).toBeUndefined();
     },
   );
+
+  it("admits a Codex turn past the byte fuse without required native preflight compaction", async () => {
+    const storePath = path.join(rootDir, "sqlite-codex-host-isolated-byte-guard.json");
+    const sessionKey = "agent:main:main";
+    const scope = { agentId: "main", sessionId: "session", sessionKey, storePath };
+    await upsertSessionEntryCore(scope, { sessionId: "session", updatedAt: 10 });
+    await replaceTranscriptEvents(scope, [
+      { message: { role: "user", content: "x".repeat(256) }, type: "message" },
+    ]);
+    expect(readTranscriptStatsSync(scope).sizeBytes).toBeGreaterThan(10);
+
+    const sessionEntry: SessionEntry = {
+      sessionId: "session",
+      updatedAt: Date.now(),
+      totalTokens: 10,
+      totalTokensFresh: true,
+      totalTokensVersion: 1,
+      compactionCount: 0,
+      agentRuntimeOverride: "codex",
+      agentHarnessId: "openclaw",
+    };
+    // The Codex plugin intentionally refuses native compaction for host-isolated or
+    // policy-restricted bindings; the preflight owner must not turn that refusal into
+    // a blocked turn. The startup-binding rotation owns the Codex byte fuse instead.
+    compactEmbeddedAgentSessionMock.mockReset().mockResolvedValue({
+      ok: true,
+      compacted: false,
+      reason: "native compaction is unavailable for a host-isolated Codex session",
+    });
+    const replyOperation = createReplyOperation();
+
+    const entry = await runSessionCompactionIfNeeded({
+      cfg: {
+        agents: {
+          defaults: {
+            compaction: { maxActiveTranscriptBytes: "10b" },
+          },
+        },
+      },
+      followupRun: createTestFollowupRun({
+        provider: "openai",
+        model: "gpt-5.5",
+        sessionId: "session",
+        sessionKey,
+      }),
+      defaultModel: "gpt-5.5",
+      modelContextTokens: 1_000_000,
+      sessionEntry,
+      sessionStore: { [sessionKey]: sessionEntry },
+      sessionKey,
+      storePath,
+      isHeartbeat: false,
+      ...createCompactionLifecycle(replyOperation),
+    });
+
+    expect(entry?.sessionId).toBe("session");
+    expect(compactEmbeddedAgentSessionMock).not.toHaveBeenCalled();
+    expect(entry?.compactionCount).toBe(0);
+    expect(replyOperation.setPhase).not.toHaveBeenCalledWith("preflight_compacting");
+    expect(loadMainSessionEntry(storePath).transcriptByteCompactionLatch).toBeUndefined();
+  });
 
   it("leaves a reset SQLite Codex session below the byte fuse for native compaction", async () => {
     const storePath = path.join(rootDir, "sqlite-codex-under-byte-guard.json");
