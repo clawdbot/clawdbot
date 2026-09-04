@@ -100,6 +100,25 @@ suite.define(() => {
           await page.screenshot({ path: path.join(suite.artifactDir, "startup-load-failure.png") });
         }
       }
+      const readStartup = () =>
+        page.evaluate((key) => {
+          const app = document.querySelector("openclaw-app") as HTMLElement & {
+            runtime: { context: ApplicationContext };
+          };
+          return app.runtime.context.placementStartup.get(key);
+        }, sessionKey);
+      const failed = await readStartup();
+      await expect.poll(() => page.evaluate(() => Date.now())).toBeGreaterThan(failed!.startedAt);
+      for (const selectedKey of ["agent:main:another-task", sessionKey]) {
+        await page.evaluate((key) => {
+          const app = document.querySelector("openclaw-app") as HTMLElement & {
+            runtime: { context: ApplicationContext };
+          };
+          app.runtime.context.gateway.setSessionKey(key);
+        }, selectedKey);
+        expect(await readStartup()).toEqual(failed);
+      }
+      await alert.getByRole("button", { name: "Retry", exact: true }).waitFor();
       const held = await pane.evaluate(async (element) => {
         const { state } = element as HTMLElement & { state: ChatPageHost };
         state.handleChatDraftChange("later ordinary turn");

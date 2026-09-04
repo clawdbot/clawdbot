@@ -95,12 +95,15 @@ export function createApplicationPlacementStartup(
   const { gateway } = dependencies;
   let disposed = false;
   let runtime: ApplicationPlacementStartupRuntime | undefined;
-  let runtimeLoad: Promise<void> | undefined;
-  let runtimeError: Error | undefined;
+  let runtimeLoad: { error?: Error } | undefined;
   const listeners = new Set<() => void>();
   let stopGateway: (() => void) | undefined;
   let pendingStoredRecovery:
-    | ((sessionKey: string) => { startedAt: number } | undefined)
+    | {
+        current: () => boolean;
+        refresh: () => void;
+        read: (sessionKey: string) => { startedAt: number } | undefined;
+      }
     | undefined;
 
   const publish = () => listeners.forEach((listener) => listener());
@@ -109,18 +112,23 @@ export function createApplicationPlacementStartup(
     return phase === "connected" && client?.recoveryScopeReady ? client : null;
   };
 
-  const resumeRecovery = (input?: PlacementStartupInput) => {
+  const resumeRecovery = (input?: PlacementStartupInput, retry = false) => {
     if (disposed) {
       return;
     }
     stopGateway ??= gateway.subscribe(() => resumeRecovery());
+    if ((input || retry) && runtimeLoad?.error) {
+      runtimeLoad = undefined;
+      if (!input) {
+        publish();
+      }
+    }
     if (input) {
       if (runtime) {
         runtime.start(input);
         return;
       }
       const sessionKey = input.recovery.sessionKey;
-      runtimeError = undefined;
       preRuntimeEntries.delete(sessionKey);
       const current = capturePlacementStartupConnection(gateway, input.recovery);
       preRuntimeEntries.set(sessionKey, () => (current() ? input : undefined));
@@ -152,26 +160,39 @@ export function createApplicationPlacementStartup(
     if (client && !input) {
       // Keys hold admission until runtime validation, even if import finishes offline.
       // They carry neither payload content nor execution permission.
-      const owner = {
-        gatewayUrl: gateway.connection.gatewayUrl,
-        recoveryScope: client.recoveryScope,
-      };
-      const current = capturePlacementStartupConnection(gateway, owner);
-      const keys = listSessionPlacementRecoveryStorageKeys(owner.gatewayUrl, owner.recoveryScope);
-      const restored = { startedAt: Date.now() };
-      pendingStoredRecovery = (key) =>
-        current() &&
-        keys.includes(
-          sessionPlacementRecoveryExactStorageKey(owner.gatewayUrl, owner.recoveryScope, key),
-        )
-          ? restored
-          : undefined;
+      if (!pendingStoredRecovery?.current()) {
+        const owner = {
+          gatewayUrl: gateway.connection.gatewayUrl,
+          recoveryScope: client.recoveryScope,
+        };
+        const current = capturePlacementStartupConnection(gateway, owner);
+        let keys: string[] = [];
+        const restored = { startedAt: Date.now() };
+        pendingStoredRecovery = {
+          current,
+          refresh: () => {
+            keys = listSessionPlacementRecoveryStorageKeys(owner.gatewayUrl, owner.recoveryScope);
+          },
+          read: (key) =>
+            current() &&
+            keys.includes(
+              sessionPlacementRecoveryExactStorageKey(owner.gatewayUrl, owner.recoveryScope, key),
+            )
+              ? restored
+              : undefined,
+        };
+      }
+      // Reset can remove a creating draft while the lazy runtime is unavailable.
+      pendingStoredRecovery.refresh();
     }
-    if (runtimeError !== undefined) {
-      runtimeError = undefined;
-      publish();
+    // Snapshot changes retain the attempt and its observed start time. Only an
+    // explicit Start or Retry can replace a failed lazy-module load.
+    if (runtimeLoad) {
+      return;
     }
-    runtimeLoad ??= loadRuntime().then(
+    const loading: { error?: Error } = {};
+    runtimeLoad = loading;
+    void loadRuntime().then(
       ({ default: createApplicationPlacementStartupRuntime }) => {
         if (disposed) {
           return;
@@ -181,8 +202,7 @@ export function createApplicationPlacementStartup(
         resumeRecovery();
       },
       (error: unknown) => {
-        runtimeLoad = undefined;
-        runtimeError = new Error(formatUiError(error));
+        loading.error = new Error(formatUiError(error));
         publish();
       },
     );
@@ -193,7 +213,7 @@ export function createApplicationPlacementStartup(
       const input = preRuntimeEntries.get(sessionKey)?.();
       const pending = input
         ? { targetKind: input.recovery.target.kind, startedAt: input.createdAt }
-        : pendingStoredRecovery?.(sessionKey);
+        : pendingStoredRecovery?.read(sessionKey);
       if (!pending) {
         return runtime?.get(sessionKey) ?? null;
       }
@@ -201,9 +221,9 @@ export function createApplicationPlacementStartup(
         ? {
             sessionKey,
             ...pending,
-            phase: runtimeError ? "failed" : "pending",
-            error: runtimeError?.message,
-            retryable: Boolean(runtimeError),
+            phase: runtimeLoad?.error ? "failed" : "pending",
+            error: runtimeLoad?.error?.message,
+            retryable: Boolean(runtimeLoad?.error),
           }
         : null;
     },
@@ -211,7 +231,7 @@ export function createApplicationPlacementStartup(
       return Boolean(
         preRuntimeEntries.get(sessionKey)?.() ||
         runtime?.hasPendingTurn(sessionKey) ||
-        pendingStoredRecovery?.(sessionKey),
+        pendingStoredRecovery?.read(sessionKey),
       );
     },
     start: resumeRecovery,
@@ -253,23 +273,30 @@ export function createApplicationPlacementStartup(
         return resumeRecovery(input);
       }
       const stored = pendingStoredRecovery;
-      if (stored?.(sessionKey)) {
-        const error = runtimeError;
+      if (stored?.read(sessionKey)) {
+        const loading = runtimeLoad;
+        const error = loading?.error;
         if (isStaleChunkImportError(error)) {
           // A failed hashed import stays cached. Reload only while the saved
           // owner remains current, and never discard another memory-only start.
           void retryStaleChunkReloadWhenReachable({
-            canReload: () =>
-              !disposed &&
-              runtimeError === error &&
-              Boolean(stored(sessionKey)) &&
-              [...preRuntimeEntries.values()].every(
-                (readInput) => readInput()?.persistRecovery !== false,
-              ),
+            canReload: () => {
+              // Reset can retire the row while the document probe is pending.
+              stored.refresh();
+              return (
+                !disposed &&
+                runtimeLoad === loading &&
+                pendingStoredRecovery === stored &&
+                Boolean(stored.read(sessionKey)) &&
+                [...preRuntimeEntries.values()].every(
+                  (readInput) => readInput()?.persistRecovery !== false,
+                )
+              );
+            },
           });
           return;
         }
-        return resumeRecovery();
+        return resumeRecovery(undefined, true);
       }
       runtime?.retry(sessionKey);
     },
