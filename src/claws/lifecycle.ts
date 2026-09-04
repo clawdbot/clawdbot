@@ -1,6 +1,6 @@
 // Builds complete read-only Claw add plans without mutating local state.
 import { createHash } from "node:crypto";
-import { lstat, realpath } from "node:fs/promises";
+import { realpath } from "node:fs/promises";
 import { homedir } from "node:os";
 import { relative, resolve } from "node:path";
 import { stableStringify } from "@openclaw/normalization-core";
@@ -9,10 +9,15 @@ import { assertNoSymlinkParents } from "../infra/fs-safe-advanced.js";
 import { FsSafeError, root as fsSafeRoot, type Root } from "../infra/fs-safe.js";
 import { resolveUserPath } from "../utils.js";
 import { findClawExtensionPackageCollisions, planClawExtensions } from "./application-plan.js";
+import {
+  planWorkspaceAdoption,
+  planWorkspaceAdoptionTargets,
+  workspaceAdoptionCapabilityChange,
+} from "./lifecycle-adopt-plan.js";
+import { planClawAgent } from "./lifecycle-agent-plan.js";
 import { digestClawMcpServer } from "./mcp.js";
 import { clawManifestWorkspaceConflictsWithPath } from "./schema.js";
 import { MAX_MANAGED_FILE_BYTES, MAX_MANAGED_WORKSPACE_BYTES } from "./source-limits.js";
-import { materializeClawToolProfile } from "./tool-profile-consent.js";
 import {
   CLAW_ADD_PLAN_SCHEMA_VERSION,
   CLAW_BOOTSTRAP_FILE_NAMES,
@@ -30,8 +35,6 @@ import {
   type ClawWorkspaceSourceSnapshot,
 } from "./types.js";
 
-const AGENT_ID_PATTERN = /^[a-z][a-z0-9_-]{0,63}$/;
-
 function capabilityChange(
   change: Omit<ClawAddCapabilityChange, "classification" | "requiresDistinctConsent" | "digest">,
 ): ClawAddCapabilityChange {
@@ -47,6 +50,7 @@ export type ClawAddPlanContext = {
   agentId?: string;
   workspace?: string;
   resumableWorkspace?: string;
+  adoptExistingWorkspace?: boolean;
   existingAgentIds?: Iterable<string>;
   existingWorkspacePaths?: Iterable<string>;
   existingMcpServerNames?: Iterable<string>;
@@ -226,96 +230,42 @@ export async function buildClawAddPlan(params: {
   const capabilityChanges: ClawAddCapabilityChange[] = [];
   const readinessRequirements: ClawLocalPrerequisite[] = [];
 
-  if (!AGENT_ID_PATTERN.test(finalId)) {
-    blockers.push(
-      blocker(
-        "invalid_agent_id",
-        "$.agent.id",
-        `Final agent id ${JSON.stringify(finalId)} is not a valid portable agent id.`,
-      ),
-    );
-  }
-  const existingAgentIds = new Set(context.existingAgentIds ?? []);
-  const agentBlocked = existingAgentIds.has(finalId);
-  const openClawAgentSettings = params.openClawProfile?.agent ?? {};
-  const persistedOpenClawAgentSettings = params.reconstructLegacyDynamicToolProfilePlan
-    ? openClawAgentSettings
-    : materializeClawToolProfile(openClawAgentSettings);
-  const agentConfig: ClawAddPlan["agent"]["config"] = {
-    ...params.manifest.agent,
-    ...persistedOpenClawAgentSettings,
-    id: finalId,
+  const agentPlan = planClawAgent({
+    finalId,
     workspace,
-  };
-  if (agentBlocked) {
-    blockers.push(
-      blocker(
-        "agent_id_collision",
-        "$.agent.id",
-        `Agent id ${JSON.stringify(finalId)} already exists; Claws never merge into existing agents.`,
-      ),
-    );
-  }
-  actions.push({
-    kind: "agent",
-    id: finalId,
-    action: "create",
-    target: `agents.entries[${JSON.stringify(finalId)}]`,
-    details: { ...agentConfig, expectedState: "absent" },
-    blocked: agentBlocked || !AGENT_ID_PATTERN.test(finalId),
+    manifestAgent: params.manifest.agent,
+    openClawProfile: params.openClawProfile,
+    reconstructLegacyDynamicToolProfilePlan: params.reconstructLegacyDynamicToolProfilePlan,
+    existingAgentIds: context.existingAgentIds,
   });
-  const agentCapabilityEffect = {
-    ...(openClawAgentSettings.sandbox ? { sandbox: openClawAgentSettings.sandbox } : {}),
-    ...(openClawAgentSettings.tools ? { tools: openClawAgentSettings.tools } : {}),
-    ...(openClawAgentSettings.memory ? { memory: openClawAgentSettings.memory } : {}),
-    ...(openClawAgentSettings.heartbeat ? { heartbeat: openClawAgentSettings.heartbeat } : {}),
-  };
-  if (Object.keys(agentCapabilityEffect).length > 0) {
-    capabilityChanges.push(
-      capabilityChange({
-        kind: "agent",
-        id: finalId,
-        path: "agent",
-        action: "create",
-        reason:
-          "The new agent declares sandbox, tool, memory-search, or recurring heartbeat capabilities.",
-        effect: agentCapabilityEffect,
-      }),
-    );
+  const agentConfig = agentPlan.config;
+  blockers.push(...agentPlan.blockers);
+  actions.push(agentPlan.action);
+  if (agentPlan.capabilityChange) {
+    capabilityChanges.push(capabilityChange(agentPlan.capabilityChange));
   }
 
   const configuredWorkspacePaths = new Set(
     [...(context.existingWorkspacePaths ?? [])].map((path) => canonicalWorkspacePath(path)),
   );
   const configuredWorkspaceConflict = configuredWorkspacePaths.has(workspace);
-  const workspaceExistsOnDisk = await lstat(workspace)
-    .then(() => true)
-    .catch(() => false);
   const resumableWorkspace = context.resumableWorkspace
     ? canonicalWorkspacePath(context.resumableWorkspace)
     : undefined;
-  const workspaceBlocked =
-    configuredWorkspaceConflict || (workspaceExistsOnDisk && resumableWorkspace !== workspace);
-  if (workspaceBlocked) {
-    blockers.push(
-      blocker(
-        "workspace_collision",
-        "$.workspace",
-        `Workspace ${JSON.stringify(workspace)} already exists; a Claw requires a new workspace.`,
-      ),
-    );
-  }
-  actions.push({
-    kind: "workspace",
-    id: finalId,
-    action: "create",
-    target: workspace,
-    details: { expectedState: "absent" },
-    blocked: workspaceBlocked,
-    ...(workspaceBlocked
-      ? { reason: `Workspace ${JSON.stringify(workspace)} already exists.` }
-      : {}),
+  const workspacePlan = await planWorkspaceAdoption({
+    agentId: finalId,
+    workspace,
+    requested: context.adoptExistingWorkspace === true,
+    configuredWorkspaceConflict,
+    resumableWorkspace,
   });
+  const workspaceAdoption = workspacePlan.adopted;
+  const workspaceBlocked = workspacePlan.action.blocked;
+  blockers.push(...workspacePlan.blockers);
+  actions.push(workspacePlan.action);
+  if (workspaceAdoption) {
+    capabilityChanges.push(capabilityChange(workspaceAdoptionCapabilityChange(finalId, workspace)));
+  }
 
   if (params.packageBootstrap && params.includePackageBootstrap !== false) {
     actions.push({
@@ -479,6 +429,16 @@ export async function buildClawAddPlan(params: {
         blockers.push(diagnostic);
       }
     }
+  }
+
+  if (workspaceAdoption) {
+    blockers.push(
+      ...(await planWorkspaceAdoptionTargets({
+        workspace,
+        pendingFiles: pendingWorkspaceFiles,
+        packageBootstrap: actions.find((action) => action.kind === "bootstrap"),
+      })),
+    );
   }
 
   for (const [index, pkg] of params.manifest.packages.entries()) {

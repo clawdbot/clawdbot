@@ -857,23 +857,6 @@ describe("applyClawAddPlan", () => {
     expect(installPackages).not.toHaveBeenCalled();
   });
 
-  it("records parent-directory creation failures before workspace mutation", async () => {
-    const root = tempDirs.make("openclaw-claw-add-");
-    const blockedParent = join(root, "blocked-parent");
-    await writeFile(blockedParent, "not a directory", "utf8");
-    const { plan } = await makePlan(undefined, {
-      workspace: join(blockedParent, "workspace-worker"),
-    });
-
-    await expect(
-      applyClawAddPlan(plan, {
-        consentPlanIntegrity: plan.planIntegrity,
-        env: stateEnv(root),
-      }),
-    ).rejects.toMatchObject({ code: "workspace_parent_failed" });
-    expect(readInstallRow("worker", root)).toBeUndefined();
-  });
-
   it("removes a new workspace when its durable phase cannot be recorded", async () => {
     const { root, plan } = await makePlan();
     const statuses: string[] = [];

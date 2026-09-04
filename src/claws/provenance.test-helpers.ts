@@ -9,6 +9,7 @@ export async function makeProvenancePlan(
   manifestValue: unknown,
   options: {
     workspace?: string;
+    adoptExistingWorkspace?: boolean;
     openClawProfile?: ClawOpenClawProfile;
     packagePreflight?: NonNullable<
       Parameters<typeof buildClawAddPlan>[0]["context"]
@@ -35,6 +36,7 @@ export async function makeProvenancePlan(
     source,
     context: {
       workspace: options.workspace ?? join(root, "workspace-worker"),
+      ...(options.adoptExistingWorkspace ? { adoptExistingWorkspace: true } : {}),
       ...(options.packagePreflight ? { packagePreflight: options.packagePreflight } : {}),
     },
   });

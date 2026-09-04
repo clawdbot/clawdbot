@@ -23,6 +23,7 @@ export type ClawsAddOptions = {
   json?: boolean;
   agentId?: string;
   workspace?: string;
+  adoptExistingWorkspace?: boolean;
 };
 
 export type ClawsStatusOptions = { json?: boolean };
@@ -111,13 +112,18 @@ export function registerClawsCli(program: Command) {
 
   claws
     .command("add")
-    .description("Preview adding one new agent and workspace from a Claw")
+    .description("Preview adding one agent and its workspace from a Claw")
     .argument("<source>", "Path to a Claw package directory or grouped manifest")
     .option("--dry-run", "Preview all actions without mutating state", false)
-    .option("--yes", "Confirm creation of the new agent and workspace", false)
+    .option("--yes", "Confirm creating the agent and its workspace", false)
     .option("--plan-integrity <digest>", "Bind consent to an exact dry-run plan")
     .option("--agent-id <id>", "Override the requested id with an unused local agent id")
-    .option("--workspace <path>", "Override the derived new workspace path")
+    .option("--workspace <path>", "Override the derived workspace path")
+    .option(
+      "--adopt-existing-workspace",
+      "Adopt an existing workspace directory; declared files must already match or be absent",
+      false,
+    )
     .option("--json", "Print JSON", false)
     .action(async (source: string, opts: ClawsAddOptions) => {
       const { runClawsAddCommand } = await import("./claws-cli.runtime.js");
