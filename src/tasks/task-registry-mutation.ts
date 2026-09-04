@@ -230,7 +230,10 @@ export function updateTask(taskId: string, patch: Partial<TaskRecord>): TaskReco
 }
 
 /** Publishes a record already committed by a cross-owner shared-state transaction. */
-export function publishTaskRecordAfterAtomicStore(record: TaskRecord): TaskRecord {
+export function publishTaskRecordAfterAtomicStore(
+  record: TaskRecord,
+  options?: { syncTaskFlow?: boolean; deferredObserverEvents?: Array<() => void> },
+): TaskRecord {
   const next = normalizeTaskTimestamps(cloneTaskRecord(record));
   const current = tasks.get(next.taskId);
   const becomesTerminal =
@@ -254,12 +257,20 @@ export function publishTaskRecordAfterAtomicStore(record: TaskRecord): TaskRecor
   addParentFlowIdIndex(next.taskId, next);
   addRelatedSessionKeyIndex(next.taskId, next);
   rebuildRunIdIndex();
-  syncFlowFromTaskAfterTaskMutation(next, "atomic completion admission");
-  emitTaskRegistryObserverEvent(() => ({
-    kind: "upserted",
-    task: cloneTaskRecord(next),
-    ...(current ? { previous: cloneTaskRecord(current) } : {}),
-  }));
+  if (options?.syncTaskFlow !== false) {
+    syncFlowFromTaskAfterTaskMutation(next, "atomic completion admission");
+  }
+  const emit = () =>
+    emitTaskRegistryObserverEvent(() => ({
+      kind: "upserted",
+      task: cloneTaskRecord(next),
+      ...(current ? { previous: cloneTaskRecord(current) } : {}),
+    }));
+  if (options?.deferredObserverEvents) {
+    options.deferredObserverEvents.push(emit);
+  } else {
+    emit();
+  }
   return cloneTaskRecord(next);
 }
 
