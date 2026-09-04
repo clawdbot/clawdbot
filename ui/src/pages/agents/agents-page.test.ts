@@ -1,6 +1,7 @@
 /* @vitest-environment jsdom */
 
 import { describe, expect, it, vi } from "vitest";
+import { createDeferred } from "../../../../test/helpers/promise.js";
 import type { GatewayBrowserClient } from "../../api/gateway.ts";
 import type {
   AgentsFilesListResult,
@@ -79,14 +80,6 @@ function setPageGateway(
   sourceChanged = false,
 ) {
   page.gateway.applySnapshot(snapshot(client, connected), { initial: false, sourceChanged });
-}
-
-function deferred<T>() {
-  let resolve!: (value: T) => void;
-  const promise = new Promise<T>((next) => {
-    resolve = next;
-  });
-  return { promise, resolve };
 }
 
 function snapshot(
@@ -225,7 +218,7 @@ function pageContext(
 
 describe("AgentsPage gateway lifecycle", () => {
   it("retires visible-session effective tools across a same-client reconnect", async () => {
-    const staleResult = deferred<ToolsEffectiveResult>();
+    const staleResult = createDeferred<ToolsEffectiveResult>();
     const client = { request: vi.fn(() => staleResult.promise) } as unknown as GatewayBrowserClient;
     const page = document.createElement("openclaw-agents-page") as TestAgentsPage;
     page.context = pageContext(
@@ -249,7 +242,7 @@ describe("AgentsPage gateway lifecycle", () => {
   });
 
   it("does not stage a default-agent change after a same-client reconnect", async () => {
-    const loading = deferred<void>();
+    const loading = createDeferred();
     const client = {} as GatewayBrowserClient;
     const currentGateway = gateway(snapshot(client));
     const agents = agentsCapability(async () => files("main", "unused"));
@@ -416,7 +409,7 @@ describe("AgentsPage gateway lifecycle", () => {
     const workerModels = [
       { id: "worker-model", name: "Worker private model", provider: "anthropic" },
     ];
-    const defaultResult = deferred<{ models: ModelCatalogEntry[] }>();
+    const defaultResult = createDeferred<{ models: ModelCatalogEntry[] }>();
     const request = vi.fn((_method: string, params?: { agentId?: string }) =>
       params?.agentId === "worker"
         ? Promise.resolve({ models: workerModels })
@@ -469,7 +462,7 @@ describe("AgentsPage gateway lifecycle", () => {
   it("rejects an old-client model catalog after the Gateway client changes", async () => {
     const oldModels = [{ id: "old", name: "Old Model", alias: "opus", provider: "anthropic" }];
     const nextModels = [{ id: "new", name: "Opus 4.8", alias: "opus", provider: "anthropic" }];
-    const oldResult = deferred<{ models: ModelCatalogEntry[] }>();
+    const oldResult = createDeferred<{ models: ModelCatalogEntry[] }>();
     const oldRequest = vi.fn(() => oldResult.promise);
     const nextRequest = vi.fn(async () => ({ models: nextModels }));
     const page = document.createElement("openclaw-agents-page") as TestAgentsPage;
@@ -496,7 +489,7 @@ describe("AgentsPage gateway lifecycle", () => {
   it("refreshes a stale in-flight model catalog after a same-client reconnect", async () => {
     const oldModels = [{ id: "old", name: "Old Model", alias: "opus", provider: "anthropic" }];
     const nextModels = [{ id: "new", name: "Opus 4.8", alias: "opus", provider: "anthropic" }];
-    const oldResult = deferred<{ models: ModelCatalogEntry[] }>();
+    const oldResult = createDeferred<{ models: ModelCatalogEntry[] }>();
     const request = vi
       .fn()
       .mockReturnValueOnce(oldResult.promise)
@@ -704,7 +697,7 @@ describe("AgentsPage gateway lifecycle", () => {
 
   it("keeps an in-flight scoped cron request attached to a same-client gateway snapshot", async () => {
     const job = cronJob("same-client-job", "main");
-    const pendingJobs = deferred<CronJobsListResult>();
+    const pendingJobs = createDeferred<CronJobsListResult>();
     const request = vi.fn((method: string, params?: { limit?: number }) => {
       if (method === "cron.status") {
         return Promise.resolve({ enabled: true, jobs: 1, nextWakeAtMs: null });
@@ -737,7 +730,7 @@ describe("AgentsPage gateway lifecycle", () => {
 
   it("immediately publishes cron loading and ignores a second refresh while the first is pending", async () => {
     const job = cronJob("double-refresh-job", "main");
-    const pendingJobs = deferred<CronJobsListResult>();
+    const pendingJobs = createDeferred<CronJobsListResult>();
     const request = vi.fn((method: string, params?: { limit?: number }) => {
       if (method === "cron.status") {
         return Promise.resolve({ enabled: true, jobs: 1, nextWakeAtMs: null });
@@ -824,15 +817,12 @@ describe("AgentsPage gateway lifecycle", () => {
   });
 
   it("does not let an old-client file load overwrite a replacement load", async () => {
-    let resolveFirst!: (value: AgentsFilesListResult) => void;
-    let resolveSecond!: (value: AgentsFilesListResult) => void;
-    const first = new Promise<AgentsFilesListResult>((resolve) => {
-      resolveFirst = resolve;
-    });
-    const second = new Promise<AgentsFilesListResult>((resolve) => {
-      resolveSecond = resolve;
-    });
-    const ensureFiles = vi.fn().mockReturnValueOnce(first).mockReturnValueOnce(second);
+    const first = createDeferred<AgentsFilesListResult>();
+    const second = createDeferred<AgentsFilesListResult>();
+    const ensureFiles = vi
+      .fn()
+      .mockReturnValueOnce(first.promise)
+      .mockReturnValueOnce(second.promise);
     const page = document.createElement("openclaw-agents-page") as TestAgentsPage;
     const oldClient = {} as GatewayBrowserClient;
     const nextClient = {} as GatewayBrowserClient;
@@ -854,12 +844,12 @@ describe("AgentsPage gateway lifecycle", () => {
     const replacementLoad = page.loadAgentFiles("main");
     expect(page.agentFilesLoading).toBe(true);
 
-    resolveFirst(files("main", "old"));
+    first.resolve(files("main", "old"));
     await oldLoad;
     expect(page.agentFilesList).toBeNull();
     expect(page.agentFilesLoading).toBe(true);
 
-    resolveSecond(files("main", "new"));
+    second.resolve(files("main", "new"));
     await replacementLoad;
     expect(page.agentFilesList?.workspace).toBe("new");
     expect(page.agentFilesLoading).toBe(false);
@@ -912,15 +902,12 @@ describe("AgentsPage gateway lifecycle", () => {
   });
 
   it("retries an in-flight panel load after a same-client disconnect", async () => {
-    let resolveFirst!: (value: AgentsFilesListResult) => void;
-    let resolveSecond!: (value: AgentsFilesListResult) => void;
-    const first = new Promise<AgentsFilesListResult>((resolve) => {
-      resolveFirst = resolve;
-    });
-    const second = new Promise<AgentsFilesListResult>((resolve) => {
-      resolveSecond = resolve;
-    });
-    const ensureFiles = vi.fn().mockReturnValueOnce(first).mockReturnValueOnce(second);
+    const first = createDeferred<AgentsFilesListResult>();
+    const second = createDeferred<AgentsFilesListResult>();
+    const ensureFiles = vi
+      .fn()
+      .mockReturnValueOnce(first.promise)
+      .mockReturnValueOnce(second.promise);
     const client = {} as GatewayBrowserClient;
     const page = document.createElement("openclaw-agents-page") as TestAgentsPage;
     setPageGateway(page, client);
@@ -954,19 +941,19 @@ describe("AgentsPage gateway lifecycle", () => {
     expect(ensureFiles).toHaveBeenCalledTimes(2);
     expect(page.agentFilesLoading).toBe(true);
 
-    resolveFirst(files("main", "old"));
+    first.resolve(files("main", "old"));
     await oldLoad;
     expect(page.agentFilesList).toBeNull();
     expect(page.agentFilesLoading).toBe(true);
 
-    resolveSecond(files("main", "new"));
+    second.resolve(files("main", "new"));
     await waitForFast(() => expect(page.agentFilesList?.workspace).toBe("new"));
     expect(page.agentFilesLoading).toBe(false);
   });
 
   it("rejects a file result from a replaced agents capability", async () => {
-    const oldFiles = deferred<AgentsFilesListResult>();
-    const nextFiles = deferred<AgentsFilesListResult>();
+    const oldFiles = createDeferred<AgentsFilesListResult>();
+    const nextFiles = createDeferred<AgentsFilesListResult>();
     const client = {} as GatewayBrowserClient;
     const currentGateway = gateway(snapshot(client));
     const oldAgents = agentsCapability(() => oldFiles.promise);
@@ -998,8 +985,8 @@ describe("AgentsPage gateway lifecycle", () => {
   });
 
   it("keeps replacement identity loading active when the old capability settles", async () => {
-    const oldEnsure = deferred<void>();
-    const nextEnsure = deferred<void>();
+    const oldEnsure = createDeferred();
+    const nextEnsure = createDeferred();
     const client = {} as GatewayBrowserClient;
     const currentGateway = gateway(snapshot(client));
     const agents = agentsCapability(async () => files("main", "unused"));
@@ -1039,8 +1026,8 @@ describe("AgentsPage gateway lifecycle", () => {
   });
 
   it("rejects effective-tools results from a replaced sessions capability", async () => {
-    const oldResult = deferred<ToolsEffectiveResult>();
-    const nextResult = deferred<ToolsEffectiveResult>();
+    const oldResult = createDeferred<ToolsEffectiveResult>();
+    const nextResult = createDeferred<ToolsEffectiveResult>();
     const request = vi
       .fn()
       .mockReturnValueOnce(oldResult.promise)

@@ -1,5 +1,6 @@
 // Control UI tests cover agents behavior.
 import { describe, expect, it, vi } from "vitest";
+import { createDeferred } from "../../../../test/helpers/promise.js";
 import type { GatewayBrowserClient } from "../../api/gateway.ts";
 import type { ApplicationGatewayPhase } from "../../app/gateway.ts";
 import {
@@ -15,16 +16,6 @@ import type { AgentsState } from "./index.ts";
 type AgentsConfigCapability = Parameters<typeof setDefaultAgent>[0];
 
 type TestRequest = (method: string, payload?: unknown) => Promise<unknown>;
-
-function deferred<T>() {
-  let resolve!: (value: T) => void;
-  let reject!: (reason: unknown) => void;
-  const promise = new Promise<T>((resolvePromise, rejectPromise) => {
-    resolve = resolvePromise;
-    reject = rejectPromise;
-  });
-  return { promise, resolve, reject };
-}
 
 function createGatewayHarness(client: GatewayBrowserClient) {
   let snapshot: { client: GatewayBrowserClient | null; phase: ApplicationGatewayPhase } = {
@@ -140,7 +131,7 @@ describe("createAgentCapability lifecycle", () => {
     const first = { defaultId: "main", agents: [{ id: "main" }] };
     const replacement = { defaultId: "research", agents: [{ id: "research" }] };
     const reconnected = { defaultId: "writer", agents: [{ id: "writer" }] };
-    const pendingRefresh = deferred<unknown>();
+    const pendingRefresh = createDeferred<unknown>();
     const request = vi
       .fn<TestRequest>()
       .mockResolvedValueOnce(first)
@@ -179,8 +170,8 @@ describe("createAgentCapability lifecycle", () => {
   });
 
   it("starts a fresh list request after a same-client reconnect", async () => {
-    const first = deferred<unknown>();
-    const second = deferred<unknown>();
+    const first = createDeferred<unknown>();
+    const second = createDeferred<unknown>();
     const request = vi
       .fn<TestRequest>()
       .mockReturnValueOnce(first.promise)
@@ -208,8 +199,8 @@ describe("createAgentCapability lifecycle", () => {
   });
 
   it("isolates file requests across a same-client reconnect", async () => {
-    const first = deferred<unknown>();
-    const second = deferred<unknown>();
+    const first = createDeferred<unknown>();
+    const second = createDeferred<unknown>();
     const request = vi
       .fn<TestRequest>()
       .mockReturnValueOnce(first.promise)
@@ -237,7 +228,7 @@ describe("createAgentCapability lifecycle", () => {
   });
 
   it("retires existing file loading state before dropping disconnected owners", async () => {
-    const pending = deferred<unknown>();
+    const pending = createDeferred<unknown>();
     const request = vi.fn<TestRequest>().mockReturnValue(pending.promise);
     const client = { request } as unknown as GatewayBrowserClient;
     const harness = createGatewayHarness(client);
@@ -258,8 +249,8 @@ describe("createAgentCapability lifecycle", () => {
   });
 
   it("keeps a replacement list request owned while its predecessor completes", async () => {
-    const first = deferred<unknown>();
-    const second = deferred<unknown>();
+    const first = createDeferred<unknown>();
+    const second = createDeferred<unknown>();
     const request = vi
       .fn<TestRequest>()
       .mockReturnValueOnce(first.promise)
@@ -285,7 +276,7 @@ describe("createAgentCapability lifecycle", () => {
   });
 
   it("invalidates cached and in-flight file lists for changed agents", async () => {
-    const pending = deferred<unknown>();
+    const pending = createDeferred<unknown>();
     const request = vi
       .fn<TestRequest>()
       .mockResolvedValueOnce({ agentId: "main", workspace: "old", files: [] })
@@ -308,7 +299,7 @@ describe("createAgentCapability lifecycle", () => {
   });
 
   it("does not commit a list request after disposal", async () => {
-    const pending = deferred<unknown>();
+    const pending = createDeferred<unknown>();
     const request = vi.fn<TestRequest>().mockReturnValue(pending.promise);
     const client = { request } as unknown as GatewayBrowserClient;
     const harness = createGatewayHarness(client);
@@ -390,18 +381,10 @@ describe("loadToolsCatalog", () => {
 
   it("keeps a replacement-client catalog load isolated from the old request", async () => {
     const { state, request: oldRequest } = createState();
-    let resolveOld!: (value: unknown) => void;
-    let resolveNext!: (value: unknown) => void;
-    oldRequest.mockReturnValue(
-      new Promise((resolve) => {
-        resolveOld = resolve;
-      }),
-    );
-    const nextRequest = vi.fn<TestRequest>().mockReturnValue(
-      new Promise((resolve) => {
-        resolveNext = resolve;
-      }),
-    );
+    const oldResult = createDeferred<unknown>();
+    const nextResult = createDeferred<unknown>();
+    oldRequest.mockReturnValue(oldResult.promise);
+    const nextRequest = vi.fn<TestRequest>().mockReturnValue(nextResult.promise);
 
     const oldLoad = loadToolsCatalog(state, "main");
     state.client = { request: nextRequest } as unknown as AgentsState["client"];
@@ -410,12 +393,12 @@ describe("loadToolsCatalog", () => {
     state.toolsCatalogLoadingAgentId = null;
     const nextLoad = loadToolsCatalog(state, "main");
 
-    resolveOld({ agentId: "main", profiles: [], groups: [{ id: "old" }] });
+    oldResult.resolve({ agentId: "main", profiles: [], groups: [{ id: "old" }] });
     await oldLoad;
     expect(state.toolsCatalogResult).toBeNull();
     expect(state.toolsCatalogLoading).toBe(true);
 
-    resolveNext({ agentId: "main", profiles: [], groups: [{ id: "new" }] });
+    nextResult.resolve({ agentId: "main", profiles: [], groups: [{ id: "new" }] });
     await nextLoad;
     expect(state.toolsCatalogResult?.groups).toEqual([{ id: "new" }]);
     expect(state.toolsCatalogLoading).toBe(false);
@@ -498,18 +481,10 @@ describe("loadToolsEffective", () => {
 
   it("keeps a replacement-client effective-tools load isolated from the old request", async () => {
     const { state, request: oldRequest } = createState();
-    let resolveOld!: (value: unknown) => void;
-    let resolveNext!: (value: unknown) => void;
-    oldRequest.mockReturnValue(
-      new Promise((resolve) => {
-        resolveOld = resolve;
-      }),
-    );
-    const nextRequest = vi.fn<TestRequest>().mockReturnValue(
-      new Promise((resolve) => {
-        resolveNext = resolve;
-      }),
-    );
+    const oldResult = createDeferred<unknown>();
+    const nextResult = createDeferred<unknown>();
+    oldRequest.mockReturnValue(oldResult.promise);
+    const nextRequest = vi.fn<TestRequest>().mockReturnValue(nextResult.promise);
 
     const oldLoad = loadToolsEffective(state, { agentId: "main", sessionKey: "main" });
     state.client = { request: nextRequest } as unknown as AgentsState["client"];
@@ -518,12 +493,12 @@ describe("loadToolsEffective", () => {
     state.toolsEffectiveLoadingKey = null;
     const nextLoad = loadToolsEffective(state, { agentId: "main", sessionKey: "main" });
 
-    resolveOld({ agentId: "main", profile: "old", groups: [] });
+    oldResult.resolve({ agentId: "main", profile: "old", groups: [] });
     await oldLoad;
     expect(state.toolsEffectiveResult).toBeNull();
     expect(state.toolsEffectiveLoading).toBe(true);
 
-    resolveNext({ agentId: "main", profile: "new", groups: [] });
+    nextResult.resolve({ agentId: "main", profile: "new", groups: [] });
     await nextLoad;
     expect(state.toolsEffectiveResult?.profile).toBe("new");
     expect(state.toolsEffectiveLoading).toBe(false);
@@ -531,8 +506,8 @@ describe("loadToolsEffective", () => {
 
   it("keeps the newest visible-session tools when an older response finishes last", async () => {
     const { state, request } = createState();
-    const oldRequest = deferred<unknown>();
-    const currentRequest = deferred<unknown>();
+    const oldRequest = createDeferred<unknown>();
+    const currentRequest = createDeferred<unknown>();
     request.mockReturnValueOnce(oldRequest.promise).mockReturnValueOnce(currentRequest.promise);
     state.agentsPanel = "tools";
     state.sessionKey = "agent:main:older";
@@ -552,7 +527,7 @@ describe("loadToolsEffective", () => {
 
   it("ignores a retired visible-session failure after a newer tools response", async () => {
     const { state, request } = createState();
-    const oldRequest = deferred<unknown>();
+    const oldRequest = createDeferred<unknown>();
     request.mockReturnValueOnce(oldRequest.promise).mockResolvedValueOnce({
       agentId: "main",
       profile: "current",
@@ -573,8 +548,8 @@ describe("loadToolsEffective", () => {
 
   it("retires an old tools request when the same session is reset and reloaded", async () => {
     const { state, request } = createState();
-    const oldRequest = deferred<unknown>();
-    const currentRequest = deferred<unknown>();
+    const oldRequest = createDeferred<unknown>();
+    const currentRequest = createDeferred<unknown>();
     request.mockReturnValueOnce(oldRequest.promise).mockReturnValueOnce(currentRequest.promise);
     state.agentsPanel = "tools";
     state.sessionKey = "agent:main:current";

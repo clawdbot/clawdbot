@@ -1,20 +1,13 @@
 import { expect, it, vi } from "vitest";
+import { createDeferred } from "../../../../test/helpers/promise.js";
 import type { GatewayBrowserClient } from "../../api/gateway.ts";
 import type { AgentIdentityResult } from "../../api/types.ts";
 import type { ApplicationGatewayPhase } from "../../app/gateway.ts";
 import { createAgentIdentityCapability } from "./identity.ts";
 
-function deferred<T>() {
-  let resolve!: (value: T) => void;
-  const promise = new Promise<T>((resolvePromise) => {
-    resolve = resolvePromise;
-  });
-  return { promise, resolve };
-}
-
 it("rejects stale identities after reconnecting the same client", async () => {
-  const oldRequest = deferred<AgentIdentityResult>();
-  const currentRequest = deferred<AgentIdentityResult>();
+  const oldRequest = createDeferred<AgentIdentityResult>();
+  const currentRequest = createDeferred<AgentIdentityResult>();
   const request = vi
     .fn()
     .mockImplementationOnce(() => oldRequest.promise)
@@ -56,8 +49,8 @@ it("rejects stale identities after reconnecting the same client", async () => {
 });
 
 it("rejects an in-flight identity after that agent is invalidated", async () => {
-  const staleRequest = deferred<AgentIdentityResult>();
-  const currentRequest = deferred<AgentIdentityResult>();
+  const staleRequest = createDeferred<AgentIdentityResult>();
+  const currentRequest = createDeferred<AgentIdentityResult>();
   const request = vi
     .fn()
     .mockImplementationOnce(() => staleRequest.promise)
@@ -82,7 +75,7 @@ it("rejects an in-flight identity after that agent is invalidated", async () => 
 });
 
 it("publishes each fetched snapshot once under overlapping roster and stream updates", async () => {
-  const pending = deferred<AgentIdentityResult>();
+  const pending = createDeferred<AgentIdentityResult>();
   const ids = Array.from({ length: 24 }, (_, index) => `agent-${index}`);
   const request = vi.fn((_method: string, { agentId }: { agentId: string }) =>
     pending.promise.then(() => ({ agentId, name: agentId })),
