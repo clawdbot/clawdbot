@@ -30,8 +30,13 @@ export async function queryBuzzEventById(params: {
     closeReason: REPLY_TARGET_COMPLETE_REASON,
     closeMessage: (reason) => `Buzz reply target query closed: ${reason}`,
     onEvent: (event) => {
-      // The relay is untrusted: keep only an event that is actually the one
-      // the reply tag named.
+      // Integrity is already settled before this callback. nostr-tools hands an
+      // event to a subscription only when `matchFilters(...) && verifyEvent(...)`
+      // holds, and that verifier recomputes the event hash, compares it against
+      // `id`, then checks `sig` against `pubkey`. Buzz builds every relay with
+      // `new Relay(...)`, which installs that verifier. What is left here is
+      // relevance: a relay may also answer with events it holds that the reply
+      // tag never named, and only the named one may reach the model.
       if (!found && event.id === params.eventId) {
         found = event;
       }
