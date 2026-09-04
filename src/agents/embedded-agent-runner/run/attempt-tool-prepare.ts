@@ -379,6 +379,7 @@ export function prepareEmbeddedAttemptToolBase(params: {
             conversationCapabilityProfile: runtimeCapabilityProfile,
             scheduledToolPolicy: attempt.scheduledToolPolicy,
             onYield: params.onYield,
+            onRequestSessionCompaction: attempt.onRequestSessionCompaction,
           });
           // The built-in harness retains its existing authoritative wrappers.
           // Only plugin harnesses receive and require the projected host capability.

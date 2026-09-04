@@ -101,6 +101,8 @@ export type RunEmbeddedAgentParams = {
   sessionKey?: string;
   /** Storage-neutral transcript/session target. Defaults to sessionId/sessionKey/agentId. */
   sessionTarget?: AgentRunSessionTarget;
+  /** Host-owned receiver for session_compact tool requests; absent means the tool is not offered. */
+  onRequestSessionCompaction?: (request: { focus?: string }) => void;
   /** Immutable gateway lifecycle ownership captured when this execution was admitted. */
   lifecycleGeneration?: string;
   /** Provider prompt-cache affinity key; distinct from transcript/session identity. */

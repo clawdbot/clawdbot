@@ -35,6 +35,7 @@
     "tool_call": {"emoji":"🧰","title":"Tool Call","detailKeys":[]},
     "tool_call_update": {"emoji":"🧰","title":"Tool Call","detailKeys":[]},
     "session_status": {"emoji":"📊","title":"Session Status","detailKeys":["sessionKey","model"]},
+    "session_compact": {"emoji":"🧹","title":"Compact Session","detailKeys":["focus"]},
     "github_publish": {"emoji":"🔀","title":"GitHub Publish","detailKeys":["title"]},
     "github_identity_status": {"emoji":"🔐","title":"GitHub Identity Status","detailKeys":[]},
     "sessions": {"emoji":"🗂️","title":"Session Settings","actions":{"patch":{"label":"update","detailKeys":["sessionKey","label","pinned","archived","model","thinkingLevel"]},"group_list":{"label":"groups"},"group_set":{"label":"set groups","detailKeys":["names"]},"group_rename":{"label":"rename group","detailKeys":["name","to"]},"group_delete":{"label":"delete group","detailKeys":["name"]}}},

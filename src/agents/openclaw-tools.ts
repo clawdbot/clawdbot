@@ -71,6 +71,7 @@ import { createPortalTool } from "./tools/portal-tool.js";
 import { createProgressCardTool } from "./tools/progress-card-tool.js";
 import { createScreenTool } from "./tools/screen-tool.js";
 import { createSecretsTool } from "./tools/secrets-tool.js";
+import { createSessionCompactTool } from "./tools/session-compact-tool.js";
 import { createSessionStatusTool } from "./tools/session-status-tool.js";
 import { createSessionsHistoryTool } from "./tools/sessions-history-tool.js";
 import { createSessionsListTool } from "./tools/sessions-list-tool.js";
@@ -611,6 +612,14 @@ export function createOpenClawTools(options?: OpenClawToolsOptions): AnyAgentToo
       }),
       onYield: options?.onYield,
     }),
+    ...(options?.onRequestSessionCompaction
+      ? [
+          createSessionCompactTool({
+            sessionId: options?.sessionId,
+            onRequestCompaction: options.onRequestSessionCompaction,
+          }),
+        ]
+      : []),
     createSubagentsTool({
       agentSessionKey: options?.agentSessionKey,
       agentId: sessionAgentId,
