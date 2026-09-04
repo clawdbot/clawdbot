@@ -576,7 +576,7 @@ extensions/inworld/tts.ts	2
 extensions/irc/src/channel.ts	5
 extensions/irc/src/inbound.ts	6
 extensions/irc/src/irc-ingress.ts	9
-extensions/irc/src/message-adapter.ts	2
+extensions/irc/src/message-adapter.ts	1
 extensions/irc/src/monitor.ts	1
 extensions/irc/src/send.ts	1
 extensions/irc/src/setup-core.ts	6
