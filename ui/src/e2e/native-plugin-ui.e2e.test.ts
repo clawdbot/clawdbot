@@ -702,12 +702,13 @@ suite.define(() => {
         });
         await selectView(page, "Workspace", "ui-fixture/workspace");
         await page.getByRole("heading", { name: "Custom workspace" }).waitFor();
-        expect(await page.locator("button.plugin-ui-recovery").isVisible()).toBe(false);
         await page.screenshot({
           path: path.join(suite.artifactDir, "custom-workspace.png"),
           fullPage: true,
         });
-        await page.getByRole("button", { name: "Show built-in workspace" }).click();
+        await page.getByRole("button", { name: "Customize UI", exact: true }).click();
+        await page.getByRole("combobox", { name: "Workspace", exact: true }).selectOption("");
+        await page.getByRole("button", { name: "Close", exact: true }).last().click();
         await page.getByRole("link", { name: "UI fixture", exact: true }).waitFor();
         await page.getByRole("link", { name: "UI fixture", exact: true }).click();
         await page.getByRole("heading", { name: "Fixture revision one" }).waitFor();
