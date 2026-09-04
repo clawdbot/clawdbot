@@ -306,7 +306,36 @@ describe("prepareEmbeddedAttemptBundleTools", () => {
 
     const result = await prepareEmbeddedAttemptBundleTools(input);
 
-    expect(result.mcpDiagnostics).toBe(diagnostics);
+    expect(result.mcpDiagnostics).toEqual(diagnostics);
+    // The failed server is admitted through the same final policy as real
+    // bundle tools: one probe per server, carrying its bundle-mcp metadata.
+    expect(mocks.applyFinalEffectiveToolPolicy).toHaveBeenCalledWith(
+      expect.objectContaining({
+        bundledTools: [expect.objectContaining({ name: "memos__server" })],
+      }),
+    );
+  });
+
+  it("drops recorded MCP catalog failures for servers the final policy hides", async () => {
+    const input = createInput([], []);
+    input.attempt.config = { plugins: { enabled: false } };
+    mocks.getOrCreateSessionMcpRuntime.mockResolvedValue({});
+    mocks.materializeBundleMcpToolsForRun.mockResolvedValue({
+      tools: [],
+      diagnostics: [
+        {
+          serverName: "memos",
+          safeServerName: "memos",
+          launchSummary: "memos",
+          message: "connect ECONNREFUSED",
+        },
+      ],
+    });
+    mocks.applyFinalEffectiveToolPolicy.mockImplementation(() => []);
+
+    const result = await prepareEmbeddedAttemptBundleTools(input);
+
+    expect(result.mcpDiagnostics).toBeUndefined();
   });
 
   it("never exposes client functions when the attempt disables every tool", async () => {
