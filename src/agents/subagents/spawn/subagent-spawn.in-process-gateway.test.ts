@@ -313,6 +313,80 @@ describe("spawnSubagentDirect in-process Gateway collector launch", () => {
     expect(subordinateAdmissionStates).toEqual([false, false]);
   });
 
+  it("gives each selected global agent its own collector capacity", async () => {
+    await writeFile(
+      path.join(stateDir, "openclaw.json"),
+      JSON.stringify({
+        session: { scope: "global" },
+        tools: { swarm: { enabled: true, maxConcurrent: 1 } },
+        agents: {
+          defaults: { workspace: stateDir },
+          entries: {
+            main: { default: true, workspace: stateDir },
+            worker: { workspace: stateDir },
+          },
+        },
+      }),
+    );
+    clearConfigCache();
+    const launched: string[] = [];
+    let releaseLaunch!: () => void;
+    const launchGate = new Promise<void>((resolve) => {
+      releaseLaunch = resolve;
+    });
+    subagentSpawnTesting.setDepsForTest({
+      dispatchGatewayMethodInProcess: async <T>(
+        method: string,
+        params: Record<string, unknown>,
+      ) => {
+        if (method === "agent") {
+          launched.push(params.sessionKey as string);
+          await launchGate;
+        }
+        return { runId: params.idempotencyKey, status: "accepted" } as T;
+      },
+    });
+    const results = await withPluginRuntimeGatewayRequestScope(
+      {
+        context: makeGatewayContext(),
+        client: externalCliClient(),
+        isWebchatConnect: () => false,
+      },
+      () =>
+        Promise.all(
+          ["main", "worker"].map((requesterAgentIdOverride) =>
+            spawnSubagentDirect(
+              {
+                task: "collect independently",
+                collect: true,
+                context: "isolated",
+                lightContext: true,
+                groupId: "shared",
+              },
+              {
+                agentSessionKey: "global",
+                requesterAgentIdOverride,
+                requesterRunId: `parent-${requesterAgentIdOverride}`,
+              },
+            ),
+          ),
+        ),
+    );
+    try {
+      expect(results).toMatchObject([{ status: "accepted" }, { status: "accepted" }]);
+      await waitForAssertion(() =>
+        expect(launched.toSorted()).toEqual(
+          results.map((result) => result.childSessionKey).toSorted(),
+        ),
+      );
+    } finally {
+      releaseLaunch();
+      await waitForAssertion(() =>
+        expect(subagentRuns.get(results[0]!.runId!)?.swarmLaunchPending).toBe(false),
+      );
+    }
+  });
+
   it("consumes the exact private parent token in the child Gateway identity", async () => {
     const parentToken = createExecutionIdentityAdmissionToken("parent-run", {
       contextId: "parent-context",

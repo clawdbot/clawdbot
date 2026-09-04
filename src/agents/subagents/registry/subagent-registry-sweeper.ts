@@ -106,6 +106,7 @@ export function createSubagentRegistrySweeper(params: {
   getRunsForCollectorGroup: (
     requesterSessionKey: string,
     groupId: string,
+    requesterAgentId?: string,
   ) => Iterable<[string, SubagentRunRecord]>;
   warn: (message: string, meta?: Record<string, unknown>) => void;
 }) {
@@ -247,7 +248,7 @@ export function createSubagentRegistrySweeper(params: {
       const mutatedRunIds = new Set<string>();
       const collectorArchiveCandidates = new Map<
         string,
-        { requesterSessionKey: string; groupId: string }
+        { requesterSessionKey: string; groupId: string; requesterAgentId?: string }
       >();
       const phase = ([runId, entry]: [string, SubagentRunRecord]) =>
         entry.requesterSettleWake
@@ -486,12 +487,13 @@ export function createSubagentRegistrySweeper(params: {
           const swarmRequesterSessionKey =
             entry.swarmRequesterSessionKey ?? entry.requesterSessionKey;
           const groupKey = groupId
-            ? JSON.stringify([swarmRequesterSessionKey, groupId])
+            ? JSON.stringify([entry.requesterAgentId, swarmRequesterSessionKey, groupId])
             : undefined;
           if (groupKey && groupId) {
             collectorArchiveCandidates.set(groupKey, {
               requesterSessionKey: swarmRequesterSessionKey,
               groupId,
+              requesterAgentId: entry.requesterAgentId,
             });
           }
           continue;
@@ -567,8 +569,15 @@ export function createSubagentRegistrySweeper(params: {
           });
         }
       }
-      for (const { requesterSessionKey, groupId } of collectorArchiveCandidates.values()) {
-        const groupEntries = [...params.getRunsForCollectorGroup(requesterSessionKey, groupId)];
+      for (const {
+        requesterSessionKey,
+        groupId,
+        requesterAgentId,
+      } of collectorArchiveCandidates.values()) {
+        const readGroup = () => [
+          ...params.getRunsForCollectorGroup(requesterSessionKey, groupId, requesterAgentId),
+        ];
+        const groupEntries = readGroup();
         if (
           groupEntries.some(
             ([, candidate]) =>
@@ -667,7 +676,7 @@ export function createSubagentRegistrySweeper(params: {
           continue;
         }
         const expectedGroupEntries = new Map(groupEntries);
-        const liveGroupEntries = [...params.getRunsForCollectorGroup(requesterSessionKey, groupId)];
+        const liveGroupEntries = readGroup();
         if (
           liveGroupEntries.length !== groupEntries.length ||
           liveGroupEntries.some(

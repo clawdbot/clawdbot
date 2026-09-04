@@ -212,7 +212,7 @@ export function resolveSubagentSpawnRequest(
       (requesterRunId ? `swarm:${requesterInternalKey}:${requesterRunId}` : undefined))
     : undefined;
   const swarmSchedulerGroupKey = swarmGroupId
-    ? JSON.stringify([requesterInternalKey, swarmGroupId])
+    ? JSON.stringify([requesterAgentId, requesterInternalKey, swarmGroupId])
     : undefined;
   const resolveAdmission = (pendingChildren = 0) => {
     const collectorRuns = params.collect
