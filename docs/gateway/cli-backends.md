@@ -266,8 +266,8 @@ The bundled Anthropic plugin registers for `claude-cli`:
 | agent runtime         | Anthropic Agent SDK with a warm, session-scoped Claude Code query                                                                                                                                             |
 | `imageArg`            | `@`                                                                                                                                                                                                           |
 | `imagePathScope`      | `workspace`                                                                                                                                                                                                   |
-| `systemPromptFileArg` | `--append-system-prompt-file`  (paired-node direct CLI only)                                                                                                                                                  |
-| `systemPromptMode`    | `append`  (paired-node direct CLI only; Agent SDK runs replace the preset)                                                                                                                                    |
+| `systemPromptFileArg` | `--append-system-prompt-file` (paired-node direct CLI only)                                                                                                                                                   |
+| `systemPromptMode`    | `append` (paired-node direct CLI only; Agent SDK runs replace the preset)                                                                                                                                     |
 
 On Claude Code 2.1.98 or newer, the bundled backend adds
 `--exclude-dynamic-system-prompt-sections` after a bounded version probe on the
