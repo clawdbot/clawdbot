@@ -9,6 +9,10 @@ import {
 } from "../config/sessions/transcript.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import {
+  ASSISTANT_DISPLAY_CONTENT_FIELD,
+  retainAssistantModelContent,
+} from "../shared/assistant-display-content.js";
+import {
   OPENCLAW_TRANSCRIPT_ARTIFACT_API,
   OPENCLAW_TRANSCRIPT_ARTIFACT_PROVIDER,
 } from "../shared/transcript-only-openclaw-assistant.js";
@@ -22,7 +26,7 @@ import {
 const AUTOMATION_RESULT_MODEL = "automation-result" as const;
 
 type BackgroundSessionResultCommit =
-  | { ok: true; messageId: string }
+  | { ok: true; messageId: string; appended: boolean }
   | { ok: false; reason: string };
 
 type BackgroundSessionResultProvenance = {
@@ -38,6 +42,10 @@ export async function commitBackgroundResultToSession(params: {
   /** Pins output to the conversation generation that admitted the background run. */
   expectedGeneration: { sessionId: string; lifecycleRevision: string | undefined };
   text: string;
+  displayContent?: readonly Record<string, unknown>[];
+  onMessageCommitted?: Parameters<
+    typeof appendExactAssistantMessageToSessionTranscript
+  >[0]["onMessageCommitted"];
   idempotencyKey: string;
   provenance: BackgroundSessionResultProvenance;
   config: OpenClawConfig;
@@ -49,6 +57,8 @@ export async function commitBackgroundResultToSession(params: {
   if (!sessionKey || !text || !idempotencyKey) {
     return { ok: false, reason: "background session result is missing required data" };
   }
+  const displayContent = params.displayContent?.map((block) => Object.assign({}, block));
+  const modelContent = displayContent ? retainAssistantModelContent(displayContent) : [];
 
   const storePath = resolveSessionStorePathCore(params.config.session?.store, {
     agentId: params.agentId,
@@ -90,7 +100,8 @@ export async function commitBackgroundResultToSession(params: {
       }
       const message = {
         role: "assistant",
-        content: [{ type: "text", text }],
+        content: modelContent.length > 0 ? modelContent : [{ type: "text", text }],
+        ...(displayContent?.length ? { [ASSISTANT_DISPLAY_CONTENT_FIELD]: displayContent } : {}),
         api: OPENCLAW_TRANSCRIPT_ARTIFACT_API,
         provider: OPENCLAW_TRANSCRIPT_ARTIFACT_PROVIDER,
         model: AUTOMATION_RESULT_MODEL,
@@ -114,6 +125,7 @@ export async function commitBackgroundResultToSession(params: {
       } satisfies SessionTranscriptAssistantMessage & {
         openclawAutomation: BackgroundSessionResultProvenance;
       };
+      let appendedMessage = false;
       const appended = await appendExactAssistantMessageToSessionTranscript({
         agentId: params.agentId,
         sessionKey,
@@ -124,9 +136,16 @@ export async function commitBackgroundResultToSession(params: {
         storePath,
         updateMode: "inline",
         config: params.config,
+        // Managed display blocks get fresh attachment ids on retry. Preserve the
+        // first committed bytes once this idempotency key owns a transcript row.
+        ...(displayContent ? { beforeMessageWrite: ({ message: candidate }) => candidate } : {}),
+        onMessageCommitted: (result) => {
+          appendedMessage = result.appended;
+          params.onMessageCommitted?.(result);
+        },
       });
       return appended.ok
-        ? { ok: true, messageId: appended.messageId }
+        ? { ok: true, messageId: appended.messageId, appended: appendedMessage }
         : { ok: false, reason: appended.reason };
     },
   });

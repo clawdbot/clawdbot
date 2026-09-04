@@ -15,6 +15,7 @@ import { afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vite
 import { SILENT_REPLY_TOKEN } from "../../auto-reply/tokens.js";
 import type { ChannelMessagingAdapter } from "../../channels/plugins/types.public.js";
 import * as deliveryQueueSqlite from "../../infra/delivery-queue-sqlite.js";
+import { ASSISTANT_DISPLAY_CONTENT_FIELD } from "../../shared/assistant-display-content.js";
 
 const directCronCompletionRetention = {
   idPrefix: "cron-direct-delivery:v1:",
@@ -26,12 +27,15 @@ const directCronCompletionRetention = {
 
 const {
   appendAssistantMessageToSessionTranscriptMock,
+  attachManagedOutgoingMediaToMessageMock,
+  buildAssistantDisplayContentFromReplyPayloadsMock,
   commitBackgroundResultToSessionMock,
   countActiveDescendantRunsMock,
   deliverOutboundPayloadsMock,
   ensureOutboundSessionEntryMock,
   loadCronSessionEntryLatestMock,
   maybeApplyTtsToPayloadMock,
+  removeManagedOutgoingMediaBlocksMock,
   retireSessionMcpRuntimeMock,
   resolveOutboundSessionRouteMock,
 } = vi.hoisted(() => ({
@@ -40,15 +44,19 @@ const {
     sessionFile: "session.jsonl",
     messageId: "mirror-message",
   }),
+  attachManagedOutgoingMediaToMessageMock: vi.fn().mockReturnValue(true),
+  buildAssistantDisplayContentFromReplyPayloadsMock: vi.fn(),
   commitBackgroundResultToSessionMock: vi.fn().mockResolvedValue({
     ok: true,
     messageId: "current-completion-message",
+    appended: true,
   }),
   countActiveDescendantRunsMock: vi.fn().mockReturnValue(0),
   deliverOutboundPayloadsMock: vi.fn().mockResolvedValue([{ ok: true }]),
   ensureOutboundSessionEntryMock: vi.fn().mockResolvedValue(undefined),
   loadCronSessionEntryLatestMock: vi.fn(),
   maybeApplyTtsToPayloadMock: vi.fn(async (params: { payload: unknown }) => params.payload),
+  removeManagedOutgoingMediaBlocksMock: vi.fn().mockResolvedValue(undefined),
   retireSessionMcpRuntimeMock: vi.fn().mockResolvedValue(true),
   resolveOutboundSessionRouteMock: vi.fn().mockResolvedValue(null),
 }));
@@ -138,6 +146,27 @@ vi.mock("../../config/sessions/transcript.runtime.js", () => ({
 
 vi.mock("../../sessions/background-session-result.js", () => ({
   commitBackgroundResultToSession: commitBackgroundResultToSessionMock,
+}));
+
+vi.mock("../../gateway/server-methods/chat-assistant-content.js", () => ({
+  buildAssistantDisplayContentFromReplyPayloads: buildAssistantDisplayContentFromReplyPayloadsMock,
+  hasAssistantDisplayMediaContent: (content: Array<Record<string, unknown>> | undefined) =>
+    Boolean(content?.some((block) => block.type !== "text")),
+  hasManagedOutgoingAssistantContent: (content: Array<Record<string, unknown>> | undefined) =>
+    Boolean(
+      content?.some(
+        (block) =>
+          block.type === "image" ||
+          block.type === "audio" ||
+          block.type === "video" ||
+          block.type === "attachment",
+      ),
+    ),
+}));
+
+vi.mock("../../gateway/managed-image-attachments.js", () => ({
+  attachManagedOutgoingMediaToMessage: attachManagedOutgoingMediaToMessageMock,
+  removeManagedOutgoingMediaBlocks: removeManagedOutgoingMediaBlocksMock,
 }));
 
 vi.mock("./session.js", () => ({
@@ -306,6 +335,31 @@ function makeBaseParams(overrides: {
   };
 }
 
+function makeCurrentSessionMediaParams(options: {
+  text?: string;
+  mediaUrl?: string;
+  runStartedAt?: number;
+}) {
+  const params = makeBaseParams({
+    ...(options.text !== undefined ? { synthesizedText: options.text } : {}),
+    ...(options.runStartedAt !== undefined ? { runStartedAt: options.runStartedAt } : {}),
+    sessionTarget: "current",
+  });
+  if (options.text === undefined) {
+    params.synthesizedText = undefined;
+    params.summary = undefined;
+    params.outputText = undefined;
+  }
+  params.deliveryPayloadHasStructuredContent = true;
+  params.deliveryPayloads = [
+    {
+      ...(options.text !== undefined ? { text: options.text } : {}),
+      mediaUrl: options.mediaUrl ?? "https://example.com/report.png?token=redacted",
+    },
+  ];
+  return params;
+}
+
 const requireRecord = createRequireRecord("object", "expected-label");
 
 function outboundDeliveryCall(callIndex = 0) {
@@ -373,10 +427,29 @@ describe("dispatchCronDelivery — double-announce guard", () => {
       },
       messageId: "mirror-message",
     });
-    commitBackgroundResultToSessionMock.mockResolvedValue({
-      ok: true,
-      messageId: "current-completion-message",
-    });
+    commitBackgroundResultToSessionMock.mockImplementation(
+      async (params: {
+        displayContent?: readonly Record<string, unknown>[];
+        onMessageCommitted?: (result: {
+          appended: boolean;
+          message: Record<string, unknown>;
+          messageId: string;
+        }) => void;
+      }) => {
+        const messageId = "current-completion-message";
+        params.onMessageCommitted?.({
+          appended: true,
+          message: params.displayContent
+            ? { [ASSISTANT_DISPLAY_CONTENT_FIELD]: params.displayContent }
+            : {},
+          messageId,
+        });
+        return { ok: true, messageId, appended: true };
+      },
+    );
+    buildAssistantDisplayContentFromReplyPayloadsMock.mockResolvedValue(undefined);
+    attachManagedOutgoingMediaToMessageMock.mockReturnValue(true);
+    removeManagedOutgoingMediaBlocksMock.mockResolvedValue(undefined);
     loadCronSessionEntryLatestMock.mockReturnValue({
       sessionId: "test-session-id",
       lifecycleRevision: "test-lifecycle-revision",
@@ -3601,35 +3674,301 @@ describe("dispatchCronDelivery — double-announce guard", () => {
     expect(appendAssistantMessageToSessionTranscript).not.toHaveBeenCalled();
   });
 
-  it("commits a safe media projection and still sends the current-target payload once", async () => {
-    const params = makeBaseParams({ sessionTarget: "current", runStartedAt: 2_500 });
-    params.synthesizedText = undefined;
-    params.summary = undefined;
-    params.outputText = undefined;
-    params.deliveryPayloadHasStructuredContent = true;
-    params.deliveryPayloads = [{ mediaUrl: "https://example.com/report.png?token=redacted" }];
+  it("commits a media-only current-target completion with managed display content", async () => {
+    const displayContent = [
+      {
+        type: "image",
+        url: "/api/chat/media/outgoing/source-session-id/attachment/report.png",
+      },
+    ];
+    buildAssistantDisplayContentFromReplyPayloadsMock.mockResolvedValueOnce(displayContent);
+    const params = makeCurrentSessionMediaParams({ runStartedAt: 2_500 });
 
     const state = await dispatchCronDelivery(params);
 
     expect(state).toMatchObject({ delivered: true, deliveryAttempted: true });
-    expect(commitBackgroundResultToSessionMock).toHaveBeenCalledWith(
-      expect.objectContaining({ text: "report.png" }),
+    expect(buildAssistantDisplayContentFromReplyPayloadsMock).toHaveBeenCalledWith(
+      expect.objectContaining({
+        sessionKey: "agent:main:webchat:direct:owner",
+        agentId: "main",
+        payloads: [{ mediaUrl: "https://example.com/report.png?token=redacted" }],
+        includeSensitiveMedia: false,
+      }),
     );
+    expect(commitBackgroundResultToSessionMock).toHaveBeenCalledWith(
+      expect.objectContaining({ text: "report.png", displayContent }),
+    );
+    expect(attachManagedOutgoingMediaToMessageMock).toHaveBeenCalledWith({
+      messageId: "current-completion-message",
+      blocks: displayContent,
+    });
+    expect(removeManagedOutgoingMediaBlocksMock).not.toHaveBeenCalled();
     expect(deliverOutboundPayloads).toHaveBeenCalledTimes(1);
     expectDeliveryCall(0, {
       payloads: [{ mediaUrl: "https://example.com/report.png?token=redacted" }],
     });
   });
 
-  it("does not mark or send a current-target delivery when its session commit fails", async () => {
+  it("fails before external delivery when committed media ownership cannot be attached", async () => {
+    const displayContent = [
+      {
+        type: "image",
+        url: "/api/chat/media/outgoing/source-session-id/attachment/report.png",
+      },
+    ];
+    buildAssistantDisplayContentFromReplyPayloadsMock.mockResolvedValueOnce(displayContent);
+    attachManagedOutgoingMediaToMessageMock.mockReturnValueOnce(false);
+    const params = makeCurrentSessionMediaParams({ runStartedAt: 2_525 });
+
+    await expect(dispatchCronDelivery(params)).rejects.toThrow(
+      "current-session media ownership could not be persisted",
+    );
+
+    expect(attachManagedOutgoingMediaToMessageMock).toHaveBeenCalledWith({
+      messageId: "current-completion-message",
+      blocks: displayContent,
+    });
+    expect(removeManagedOutgoingMediaBlocksMock).not.toHaveBeenCalled();
+    expect(deliverOutboundPayloads).not.toHaveBeenCalled();
+  });
+
+  it("repairs committed media ownership and cleans new media when the commit deduplicates", async () => {
+    const displayContent = [
+      {
+        type: "image",
+        url: "/api/chat/media/outgoing/source-session-id/attachment/retry.png",
+      },
+    ];
+    const committedDisplayContent = [
+      {
+        type: "image",
+        url: "/api/chat/media/outgoing/source-session-id/attachment/original.png",
+      },
+    ];
+    buildAssistantDisplayContentFromReplyPayloadsMock.mockResolvedValueOnce(displayContent);
+    commitBackgroundResultToSessionMock.mockImplementationOnce(
+      async (params: {
+        onMessageCommitted?: (result: {
+          appended: boolean;
+          message: Record<string, unknown>;
+          messageId: string;
+        }) => void;
+      }) => {
+        const messageId = "existing-current-completion-message";
+        params.onMessageCommitted?.({
+          appended: false,
+          message: { [ASSISTANT_DISPLAY_CONTENT_FIELD]: committedDisplayContent },
+          messageId,
+        });
+        return { ok: true, messageId, appended: false };
+      },
+    );
+    const params = makeCurrentSessionMediaParams({
+      mediaUrl: "https://example.com/retry.png?token=redacted",
+      runStartedAt: 2_550,
+    });
+
+    const state = await dispatchCronDelivery(params);
+
+    expect(state).toMatchObject({ delivered: true, deliveryAttempted: true });
+    expect(attachManagedOutgoingMediaToMessageMock).toHaveBeenCalledWith({
+      messageId: "existing-current-completion-message",
+      blocks: committedDisplayContent,
+    });
+    expect(removeManagedOutgoingMediaBlocksMock).toHaveBeenCalledWith({
+      blocks: displayContent,
+      messageId: null,
+    });
+  });
+
+  it("skips ownership attachment when the canonical retry row has no managed media", async () => {
+    const displayContent = [
+      {
+        type: "image",
+        url: "/api/chat/media/outgoing/source-session-id/attachment/retry.png",
+      },
+    ];
+    const committedDisplayContent = [
+      { type: "text", text: "Report attached." },
+      {
+        type: "attachment_error",
+        attachment: { code: "delivery-failed", kind: "image", label: "report.png" },
+      },
+    ];
+    buildAssistantDisplayContentFromReplyPayloadsMock.mockResolvedValueOnce(displayContent);
+    commitBackgroundResultToSessionMock.mockImplementationOnce(
+      async (params: {
+        onMessageCommitted?: (result: {
+          appended: boolean;
+          message: Record<string, unknown>;
+          messageId: string;
+        }) => void;
+      }) => {
+        const messageId = "existing-current-completion-message";
+        params.onMessageCommitted?.({
+          appended: false,
+          message: { [ASSISTANT_DISPLAY_CONTENT_FIELD]: committedDisplayContent },
+          messageId,
+        });
+        return { ok: true, messageId, appended: false };
+      },
+    );
+    const params = makeCurrentSessionMediaParams({
+      text: "Report attached.",
+      mediaUrl: "https://example.com/retry.png?token=redacted",
+      runStartedAt: 2_575,
+    });
+
+    const state = await dispatchCronDelivery(params);
+
+    expect(state).toMatchObject({ delivered: true, deliveryAttempted: true });
+    expect(attachManagedOutgoingMediaToMessageMock).not.toHaveBeenCalled();
+    expect(removeManagedOutgoingMediaBlocksMock).toHaveBeenCalledWith({
+      blocks: displayContent,
+      messageId: null,
+    });
+  });
+
+  it("repairs canonical managed ownership when retry media preparation fails", async () => {
+    const displayContent = [
+      { type: "text", text: "Report attached." },
+      {
+        type: "attachment_error",
+        attachment: { code: "delivery-failed", kind: "image", label: "report.png" },
+      },
+    ];
+    const committedDisplayContent = [
+      {
+        type: "image",
+        url: "/api/chat/media/outgoing/source-session-id/attachment/original.png",
+      },
+    ];
+    buildAssistantDisplayContentFromReplyPayloadsMock.mockResolvedValueOnce(displayContent);
+    commitBackgroundResultToSessionMock.mockImplementationOnce(
+      async (params: {
+        onMessageCommitted?: (result: {
+          appended: boolean;
+          message: Record<string, unknown>;
+          messageId: string;
+        }) => void;
+      }) => {
+        const messageId = "existing-current-completion-message";
+        params.onMessageCommitted?.({
+          appended: false,
+          message: { [ASSISTANT_DISPLAY_CONTENT_FIELD]: committedDisplayContent },
+          messageId,
+        });
+        return { ok: true, messageId, appended: false };
+      },
+    );
+    const params = makeCurrentSessionMediaParams({
+      text: "Report attached.",
+      runStartedAt: 2_590,
+    });
+
+    const state = await dispatchCronDelivery(params);
+
+    expect(state).toMatchObject({ delivered: true, deliveryAttempted: true });
+    expect(attachManagedOutgoingMediaToMessageMock).toHaveBeenCalledWith({
+      messageId: "existing-current-completion-message",
+      blocks: committedDisplayContent,
+    });
+    expect(removeManagedOutgoingMediaBlocksMock).toHaveBeenCalledWith({
+      blocks: displayContent,
+      messageId: null,
+    });
+  });
+
+  it("commits text and media from the finalized current-target payload", async () => {
+    const displayContent = [
+      { type: "text", text: "Report attached." },
+      {
+        type: "image",
+        url: "/api/chat/media/outgoing/source-session-id/attachment/report.png",
+      },
+    ];
+    buildAssistantDisplayContentFromReplyPayloadsMock.mockResolvedValueOnce(displayContent);
+    const params = makeCurrentSessionMediaParams({
+      text: "Report attached.",
+      runStartedAt: 2_600,
+    });
+
+    const state = await dispatchCronDelivery(params);
+
+    expect(state).toMatchObject({ delivered: true, deliveryAttempted: true });
+    expect(commitBackgroundResultToSessionMock).toHaveBeenCalledWith(
+      expect.objectContaining({ text: "Report attached.\nreport.png", displayContent }),
+    );
+    expect(attachManagedOutgoingMediaToMessageMock).toHaveBeenCalledWith({
+      messageId: "current-completion-message",
+      blocks: displayContent,
+    });
+    expectDeliveryCall(0, { payloads: params.deliveryPayloads });
+  });
+
+  it("persists a visible failure block when current-target media cannot be prepared", async () => {
+    const displayContent = [
+      { type: "text", text: "Report attached." },
+      {
+        type: "attachment_error",
+        attachment: { code: "delivery-failed", kind: "image", label: "report.png" },
+      },
+    ];
+    buildAssistantDisplayContentFromReplyPayloadsMock.mockResolvedValueOnce(displayContent);
+    const params = makeCurrentSessionMediaParams({
+      text: "Report attached.",
+      runStartedAt: 2_650,
+    });
+
+    const state = await dispatchCronDelivery(params);
+
+    expect(state).toMatchObject({ delivered: true, deliveryAttempted: true });
+    expect(commitBackgroundResultToSessionMock).toHaveBeenCalledWith(
+      expect.objectContaining({ displayContent }),
+    );
+    expect(attachManagedOutgoingMediaToMessageMock).not.toHaveBeenCalled();
+  });
+
+  it("drops preliminary media when a descendant final reply replaces the payload", async () => {
+    const finalReply = "The descendant finished without an attachment.";
+    vi.mocked(isLikelyInterimCronMessage).mockReturnValue(true);
+    vi.mocked(readDescendantSubagentFallbackReply).mockResolvedValue(finalReply);
+    const params = makeCurrentSessionMediaParams({
+      text: "on it",
+      mediaUrl: "https://example.com/preliminary.png?token=redacted",
+      runStartedAt: 2_700,
+    });
+
+    const state = await dispatchCronDelivery(params);
+
+    expect(state).toMatchObject({ delivered: true, deliveryAttempted: true });
+    expect(buildAssistantDisplayContentFromReplyPayloadsMock).not.toHaveBeenCalled();
+    expect(commitBackgroundResultToSessionMock).toHaveBeenCalledWith(
+      expect.objectContaining({ text: finalReply }),
+    );
+    expect(commitBackgroundResultToSessionMock).not.toHaveBeenCalledWith(
+      expect.objectContaining({ displayContent: expect.anything() }),
+    );
+    expect(attachManagedOutgoingMediaToMessageMock).not.toHaveBeenCalled();
+    expectDeliveryCall(0, { payloads: [{ text: finalReply }] });
+  });
+
+  it("cleans managed media when a current-target session commit fails", async () => {
     const queueSourceAwareness = vi.fn().mockResolvedValue(undefined);
+    const displayContent = [
+      { type: "text", text: "must not escape before commit" },
+      {
+        type: "image",
+        url: "/api/chat/media/outgoing/source-session-id/attachment/report.png",
+      },
+    ];
+    buildAssistantDisplayContentFromReplyPayloadsMock.mockResolvedValueOnce(displayContent);
     commitBackgroundResultToSessionMock.mockResolvedValueOnce({
       ok: false,
       reason: "source session was archived",
     });
-    const params = makeBaseParams({
-      synthesizedText: "must not escape before commit",
-      sessionTarget: "current",
+    const params = makeCurrentSessionMediaParams({
+      text: "must not escape before commit",
     });
     params.queueSourceSessionMessageToolAwareness = queueSourceAwareness;
 
@@ -3640,7 +3979,33 @@ describe("dispatchCronDelivery — double-announce guard", () => {
       deliveryAttempted: true,
       deliveryError: "source session was archived",
     });
+    expect(removeManagedOutgoingMediaBlocksMock).toHaveBeenCalledWith({
+      blocks: displayContent,
+      messageId: null,
+    });
+    expect(attachManagedOutgoingMediaToMessageMock).not.toHaveBeenCalled();
     expect(queueSourceAwareness).toHaveBeenCalledOnce();
+    expect(deliverOutboundPayloads).not.toHaveBeenCalled();
+  });
+
+  it("cleans managed media when a current-target session commit throws", async () => {
+    const displayContent = [
+      {
+        type: "image",
+        url: "/api/chat/media/outgoing/source-session-id/attachment/report.png",
+      },
+    ];
+    buildAssistantDisplayContentFromReplyPayloadsMock.mockResolvedValueOnce(displayContent);
+    commitBackgroundResultToSessionMock.mockRejectedValueOnce(new Error("transcript write failed"));
+    const params = makeCurrentSessionMediaParams({});
+
+    await expect(dispatchCronDelivery(params)).rejects.toThrow("transcript write failed");
+
+    expect(removeManagedOutgoingMediaBlocksMock).toHaveBeenCalledWith({
+      blocks: displayContent,
+      messageId: null,
+    });
+    expect(attachManagedOutgoingMediaToMessageMock).not.toHaveBeenCalled();
     expect(deliverOutboundPayloads).not.toHaveBeenCalled();
   });
 
@@ -3648,7 +4013,7 @@ describe("dispatchCronDelivery — double-announce guard", () => {
     const queueSourceAwareness = vi.fn().mockResolvedValue(undefined);
     commitBackgroundResultToSessionMock.mockImplementationOnce(async () => {
       expect(queueSourceAwareness).not.toHaveBeenCalled();
-      return { ok: true, messageId: "current-completion-message" };
+      return { ok: true, messageId: "current-completion-message", appended: true };
     });
     const params = makeBaseParams({
       synthesizedText: "message-tool completion",
