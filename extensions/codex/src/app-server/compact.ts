@@ -27,7 +27,11 @@ import {
   retainCodexAppServerLiveThread,
   type CodexAppServerLiveThreadOwnership,
 } from "./client-runtime.js";
-import { CodexAppServerRpcError, type CodexAppServerClient } from "./client.js";
+import {
+  CodexAppServerRpcError,
+  isCodexAppServerPrewriteRequestCancellationError,
+  type CodexAppServerClient,
+} from "./client.js";
 import { persistCodexContextCompactionActivity } from "./context-compaction-activity.js";
 import { readCodexThreadContextSnapshot } from "./event-projector-usage.js";
 import {
@@ -606,12 +610,13 @@ async function compactCodexNativeThread(
               throw new Error("cannot detach an unconfirmed supervised codex thread");
             }
             // Closing a WebSocket proves only that the connection ended, not
-            // that its remote turn stopped. Detach this exact thread before
-            // allowing future work to acquire the session lifecycle fence.
-            const bindingCleared = await options.bindingStore.mutate(bindingIdentity, {
-              kind: "clear",
-              threadId: binding.threadId,
-            });
+            // that its remote turn stopped. Detach only while this generation
+            // owns the row; a successor may need it as its recorded predecessor.
+            const bindingCleared = await options.bindingStore.mutate(
+              bindingIdentity,
+              { kind: "clear", threadId: binding.threadId },
+              assertCurrent,
+            );
             if (bindingCleared) {
               return;
             }
@@ -739,24 +744,34 @@ async function compactCodexNativeThread(
                   ...(guardedRequestTimeoutMs === undefined
                     ? {}
                     : { timeoutMs: guardedRequestTimeoutMs }),
-                  assertCurrent,
+                  assertCurrent: () => {
+                    try {
+                      assertCurrent();
+                    } catch (error) {
+                      // This physical pre-write rejection proves no compaction
+                      // started, including retries after ingress overload.
+                      compactionRequestDefinitelyRejected = true;
+                      throw error;
+                    }
+                  },
                 },
               );
               return { started: true as const, accepted: true as const };
             } catch (error) {
-              if (error instanceof CodexAppServerRpcError) {
-                // A server rejection proves native history was untouched; an
-                // ambiguous transport failure must never restore stale context.
+              compactionRequestDefinitelyRejected ||=
+                isCodexAppServerPrewriteRequestCancellationError(error);
+              if (compactionRequestDefinitelyRejected || error instanceof CodexAppServerRpcError) {
+                // Settle a definite rejection before restoration so a refused
+                // write cannot strand the watcher waiting for a nonexistent turn.
                 completionWatch.confirmRequestRejected();
-                await options.bindingStore.mutate(
-                  bindingIdentity,
-                  {
-                    kind: "set",
-                    binding,
-                  },
-                  assertCurrent,
-                );
-                compactionRequestDefinitelyRejected = !isCodexThreadNotFoundError(error);
+                if (!compactionRequestDefinitelyRejected) {
+                  await options.bindingStore.mutate(
+                    bindingIdentity,
+                    { kind: "set", binding },
+                    assertCurrent,
+                  );
+                  compactionRequestDefinitelyRejected = !isCodexThreadNotFoundError(error);
+                }
               }
               // Retirement can acquire this same generation lease.
               return { started: true as const, accepted: false as const, error };
@@ -766,7 +781,10 @@ async function compactCodexNativeThread(
             return guardedResult.result;
           }
           if (!guardedResult.accepted) {
-            if (!(guardedResult.error instanceof CodexAppServerRpcError)) {
+            if (
+              !compactionRequestDefinitelyRejected &&
+              !(guardedResult.error instanceof CodexAppServerRpcError)
+            ) {
               // Transport errors after the write leave the server-side start
               // ambiguous. Retire or detach the thread before releasing its fence.
               await completionWatch.retireUnconfirmedRequest(
