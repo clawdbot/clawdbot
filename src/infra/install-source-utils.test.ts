@@ -433,7 +433,16 @@ describe("packNpmSpecToArchive", () => {
       },
     });
     expect(runCommandWithTimeoutMock).toHaveBeenCalledWith(
-      ["npm", "pack", "openclaw-plugin@1.2.3", "--ignore-scripts", "--json"],
+      [
+        "npm",
+        "pack",
+        "openclaw-plugin@1.2.3",
+        "--ignore-scripts",
+        "--json",
+        "--pack-destination",
+        cwd,
+        "--dry-run=false",
+      ],
       {
         cwd,
         timeoutMs: 300_000,
