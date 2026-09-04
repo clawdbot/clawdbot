@@ -126,12 +126,12 @@ function runChangedLanesCli(cwd: string, args: string[]) {
   );
 }
 
-function runRepoScript(script: string, args: string[], env = createNestedGitEnv()) {
+function runRepoScript(script: string, args: string[], env = createNestedGitEnv(), cwd = repoRoot) {
   const nodeArgs = script.endsWith(".mts")
-    ? ["--import", "tsx", script, ...args]
-    : [script, ...args];
+    ? ["--import", "tsx", path.join(repoRoot, script), ...args]
+    : [path.join(repoRoot, script), ...args];
   return spawnSync(process.execPath, nodeArgs, {
-    cwd: repoRoot,
+    cwd,
     encoding: "utf8",
     env,
   });
@@ -241,6 +241,7 @@ function runChangedFormatLaneWithRepoOxfmt(cwd: string, changedPaths: string[]) 
 function runChangedCheckWithRecordedCommands(
   failingCommand: string | null,
   paths = ["src/gateway/server-runtime-state.ts"],
+  cwd = repoRoot,
 ) {
   const dir = makeTempRepoRoot(tempDirs, "openclaw-changed-check-order-");
   const binDir = path.join(dir, "bin");
@@ -279,14 +280,19 @@ if (bin === "pnpm" && args[0] === ${JSON.stringify(failingCommand)}) {
       `@echo off\r\n"${process.execPath}" "${childPath}" ${bin} %*\r\n`,
     );
   }
-  const result = runRepoScript("scripts/check-changed.mjs", ["--", ...paths], {
-    ...createNestedGitEnv(),
-    CI: "",
-    GITHUB_ACTIONS: "",
-    OPENCLAW_CHECK_CHANGED_REMOTE_CHILD: "1",
-    OPENCLAW_CHECK_CHANGED_SKIP_DEADCODE: "",
-    PATH: `${binDir}${path.delimiter}${process.env.PATH ?? ""}`,
-  });
+  const result = runRepoScript(
+    "scripts/check-changed.mjs",
+    ["--", ...paths],
+    {
+      ...createNestedGitEnv(),
+      CI: "",
+      GITHUB_ACTIONS: "",
+      OPENCLAW_CHECK_CHANGED_REMOTE_CHILD: "1",
+      OPENCLAW_CHECK_CHANGED_SKIP_DEADCODE: "",
+      PATH: `${binDir}${path.delimiter}${process.env.PATH ?? ""}`,
+    },
+    cwd,
+  );
   const events: { event: string; bin: string; args: string[] }[] = readFileSync(eventsPath, "utf8")
     .trim()
     .split("\n")
@@ -501,6 +507,15 @@ describe("scripts/changed-lanes", () => {
     { failingCommand: "tsgo:core:test" },
     { failingCommand: "lint:tmp:tsgo-core-boundary" },
     { failingCommand: "config:docs:check", paths: ["src/config/schema.help.automation.ts"] },
+    { failingCommand: "config:docs:check", paths: ["extensions/feishu/src/webhook-path.ts"] },
+    {
+      failingCommand: "config:docs:check",
+      paths: [
+        "src/plugin-sdk/channel-config-ui-hints.ts",
+        "src/plugin-sdk/secret-input-schema.ts",
+        "packages/net-policy/src/redact-sensitive-url.ts",
+      ],
+    },
     { failingCommand: null },
   ])(
     "retains serial gate execution and stops on $failingCommand before broad audits",
@@ -513,7 +528,9 @@ describe("scripts/changed-lanes", () => {
       expect(result.signal, result.stderr).toBeNull();
       expect(result.status, result.stderr).toBe(failingCommand === null ? 0 : 23);
       const commands = events.filter((event) => event.event === "start");
-      const planned = createChangedCheckPlan(detectChangedLanes(paths)).commands.map((command) => ({
+      const planned = createChangedCheckPlan(
+        detectChangedLanesForPaths({ paths, base: "HEAD", staged: true }),
+      ).commands.map((command) => ({
         bin: command.bin ?? "pnpm",
         args: command.args,
       }));
@@ -549,6 +566,69 @@ describe("scripts/changed-lanes", () => {
       }
     },
   );
+
+  it.each([
+    {
+      name: "transitive helper and re-export",
+      paths: [
+        "./packages/schema-values/src/message-default.ts",
+        "packages\\schema-values\\src\\message-default.ts",
+      ],
+      selected: true,
+    },
+    {
+      name: "staged deleted schema dependency",
+      paths: ["extensions/courier/src/delivery-limit.ts"],
+      selected: true,
+      deleted: true,
+    },
+    {
+      name: "shared schema owner dependency and re-export",
+      paths: ["src/shared/schema-hint-default.ts"],
+      selected: true,
+    },
+    {
+      name: "unrelated facade runtime dependency",
+      paths: ["src/plugin-sdk/channel-runtime.ts"],
+      selected: false,
+    },
+    {
+      name: "unrelated plugin runtime",
+      paths: ["extensions/courier/src/transport.ts"],
+      selected: false,
+    },
+  ])("executes config-doc dependency selection for $name", ({ paths, selected, deleted }) => {
+    const cwd = makeTempRepoRoot(tempDirs, "openclaw-config-doc-dependencies-");
+    git(cwd, ["init", "-q", "--initial-branch=main"]);
+    for (const [file, source] of Object.entries({
+      "extensions/courier/src/config-schema.ts":
+        'import { value } from "./metadata.js"; import { limit } from "./delivery-limit.js"; export const schema = { value, limit };',
+      "extensions/courier/src/metadata.ts":
+        'export { value } from "../../../packages/schema-values/src/message-default.js";',
+      "packages/schema-values/src/message-default.ts": 'export const value = "message";',
+      "extensions/courier/src/delivery-limit.ts": "export const limit = 12;",
+      "extensions/courier/src/transport.ts": "export const runtime = true;",
+      "src/plugin-sdk/channel-config-ui-hints.ts": 'export { label } from "./schema-hints.js";',
+      "src/plugin-sdk/schema-hints.ts": 'export { label } from "../shared/schema-hint-default.js";',
+      "src/shared/schema-hint-default.ts": 'export const label = "Message limit";',
+      "src/plugin-sdk/channel-core.ts":
+        'export { label } from "./channel-config-ui-hints.js"; export { runtime } from "./channel-runtime.js";',
+      "src/plugin-sdk/channel-runtime.ts": "export const runtime = true;",
+    })) {
+      writeRepoFile(cwd, file, source);
+    }
+    commitAll(cwd, "schema dependency fixture");
+    if (deleted) {
+      unlinkSync(path.join(cwd, paths[0]!));
+      git(cwd, ["add", "-u"]);
+    }
+    const { events, result } = runChangedCheckWithRecordedCommands("config:docs:check", paths, cwd);
+    expect(result.error, result.stderr).toBeUndefined();
+    expect(result.status, result.stderr).toBe(selected ? 23 : 0);
+    expect(
+      events.filter(({ event, args }) => event === "start" && args[0] === "config:docs:check"),
+    ).toHaveLength(selected ? 1 : 0);
+  });
 
   it("prints changed check dry-run commands", () => {
     const result = runRepoScript("scripts/check-changed.mjs", [
@@ -1081,6 +1161,13 @@ describe("scripts/changed-lanes", () => {
       "src/plugins/manifest-registry.ts",
       "src/plugins/bundled-channel-config-metadata.ts",
       "extensions/discord/channel-config-api.ts",
+      "extensions/feishu/src/webhook-path.ts",
+      "extensions/mattermost/src/secret-input.ts",
+      "src/plugin-sdk/channel-config-ui-hints.ts",
+      "src/plugin-sdk/channel-core.ts",
+      "src/plugin-sdk/secret-input-schema.ts",
+      "src/plugin-sdk/secret-input.ts",
+      "packages/net-policy/src/redact-sensitive-url.ts",
       "scripts/generate-config-doc-baseline.ts",
       "vitest.config.ts",
       "CHANGELOG.md",

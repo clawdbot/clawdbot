@@ -167,13 +167,12 @@ type VitestSpecShape = Pick<VitestRunSpec, "config" | "env">;
 type WatchableVitestSpecShape = VitestSpecShape & Pick<VitestRunSpec, "watchMode">;
 type ImportGraph = {
   reverseImports: Map<string, string[]>;
-  reverseReexports: Map<string, string[]>;
   testFiles: Set<string>;
 };
 type ImportGraphEdges = {
   file: string;
+  specifiers: string[];
   imports: Set<string>;
-  reexports: Set<string>;
   references: Set<string>;
 };
 type UnmatchedExplicitTestTarget = {
@@ -1640,7 +1639,7 @@ function readImportGraphEdges(
     .filter(({ parseImports }) => parseImports || terms.length > 0);
   const extensions = tooling ? TOOLING_IMPORTABLE_FILE_EXTENSIONS : IMPORTABLE_FILE_EXTENSIONS;
   return readTestSelectorSourceFacts(cwd, requests, terms, GIT_LS_FILES_MAX_BUFFER_BYTES).map(
-    ({ file, imports, reexports, matches, references }) => {
+    ({ file, imports, matches, references }) => {
       const resolve = (specifiers: string[]) =>
         new Set(
           specifiers
@@ -1649,8 +1648,8 @@ function readImportGraphEdges(
         );
       const edges = cachedImportGraphEdges.get(cacheKey(file)) ?? {
         file,
+        specifiers: imports,
         imports: resolve(imports),
-        reexports: resolve(reexports),
         references: new Set<string>(),
       };
       for (const reference of references) {
@@ -1845,7 +1844,6 @@ function getImportGraph(cwd: string) {
   const files = listImportGraphFilesForCwd(cwd);
   const fileSet = new Set(files);
   const reverseImports = new Map<string, string[]>();
-  const reverseReexports = new Map<string, string[]>();
   const testFiles = new Set(
     files.filter((file) => isTestFileTarget(file) && !file.endsWith(".live.test.ts")),
   );
@@ -1856,53 +1854,64 @@ function getImportGraph(cwd: string) {
     if (!edges) {
       continue;
     }
-    for (const [imports, reverse] of [
-      [edges.imports, reverseImports],
-      [edges.reexports, reverseReexports],
-    ] as const) {
-      for (const imported of imports) {
-        const importers = reverse.get(imported) ?? [];
-        importers.push(file);
-        reverse.set(imported, importers);
-      }
+    for (const imported of edges.imports) {
+      const importers = reverseImports.get(imported) ?? [];
+      importers.push(file);
+      reverseImports.set(imported, importers);
     }
   }
 
-  cachedImportGraph = { reverseImports, reverseReexports, testFiles };
+  cachedImportGraph = { reverseImports, testFiles };
   cachedImportGraphCwd = cwd;
   return cachedImportGraph;
 }
 
-/** Returns whether any changed path reaches one of the requested import-graph targets. */
+/** Query relative imports/re-exports from targets without scanning unrelated source bodies. */
 export function hasImportGraphImpactOnTargets(
   changedPaths: string[],
-  targetPaths: string[],
+  targetPaths: string[] | ((file: string) => boolean),
   cwd = process.cwd(),
+  options: ImportGraphOptions = {},
 ) {
-  const targets = new Set(targetPaths.map(normalizePathPattern));
-  if (targets.size === 0) {
+  const changed = new Set(changedPaths.map(normalizePathPattern));
+  if (changed.size === 0) {
     return false;
   }
-
-  const { reverseImports, reverseReexports } = getImportGraph(cwd);
-  for (const changedPath of changedPaths) {
-    const queue = [normalizePathPattern(changedPath)];
-    const seen = new Set(queue);
-    for (const current of queue) {
-      if (targets.has(current)) {
-        return true;
-      }
-      const importers = [
-        ...(reverseImports.get(current) ?? []),
-        ...(reverseReexports.get(current) ?? []),
-      ];
-      for (const importer of importers) {
-        if (!seen.has(importer)) {
-          seen.add(importer);
-          queue.push(importer);
+  const files = listImportGraphFilesForCwd(cwd, options);
+  const targets = Array.isArray(targetPaths)
+    ? targetPaths.map(normalizePathPattern)
+    : files.filter(targetPaths);
+  if (targets.some((file) => changed.has(file))) {
+    return true;
+  }
+  // Staged deletions have left the index, but surviving importers still own their edges.
+  const fileSet = new Set([...files, ...changed]);
+  const extensions = options.tooling
+    ? TOOLING_IMPORTABLE_FILE_EXTENSIONS
+    : IMPORTABLE_FILE_EXTENSIONS;
+  const seen = new Set(targets);
+  let frontier = targets;
+  while (frontier.length > 0) {
+    readImportGraphEdges(cwd, frontier, fileSet, options.tooling);
+    const next: string[] = [];
+    for (const file of frontier) {
+      const edges = cachedImportGraphEdges.get(`${cwd}\0${options.tooling === true}\0${file}`);
+      // Resolve raw cached facts against this query's deleted-path identities too.
+      for (const specifier of edges?.specifiers ?? []) {
+        const dependency = resolveImportSpecifier(file, specifier, fileSet, extensions);
+        if (!dependency) {
+          continue;
+        }
+        if (changed.has(dependency)) {
+          return true;
+        }
+        if (!seen.has(dependency)) {
+          seen.add(dependency);
+          next.push(dependency);
         }
       }
     }
+    frontier = next;
   }
   return false;
 }

@@ -1361,10 +1361,12 @@ Local changed-lane logic lives in `scripts/changed-lanes.mjs` and is executed by
 - extension production changes run extension prod and extension test typecheck plus extension lint;
 - extension test-only changes run extension test typecheck plus extension lint;
 - bundled channel manifests, package metadata, config schemas, UI hints, and generator owners also run the bundled channel config metadata drift check;
-- config schema/help, bundled plugin metadata, generator/selector owners, and tracked config baseline changes run `pnpm config:docs:check`, including baseline files mixed with ordinary docs; all-lane and release metadata plans include it once;
+- config schema/help, bundled plugin metadata, relative-import dependencies of source schema entries, generator/selector owners, and tracked config baseline changes run `pnpm config:docs:check`, including baseline files mixed with ordinary docs; all-lane and release metadata plans include it once;
 - public Plugin SDK or plugin-contract changes expand to extension typecheck because extensions depend on those core contracts (Vitest extension sweeps stay explicit test work);
 - release metadata-only version bumps run targeted version/config/root-dependency checks;
 - unknown root/config changes fail safe to all check lanes.
+
+Schema dependency selection reuses the local relative-import graph, including re-exports and deleted leaf paths still referenced by surviving source. Shared SDK channel UI-hint and secret-input schema owners, plus the workspace sensitive-URL hint owner, are explicit roots across alias boundaries. Edits to their SDK facades are also selected without traversing unrelated facade runtime dependencies. This is not universal alias or computed-import resolution.
 
 Local changed-test routing lives in `scripts/test-projects.test-support.mts` and is intentionally cheaper than `check:changed`: direct test edits run themselves, source edits prefer explicit mappings, then sibling tests and import-graph dependents. Shared group-room delivery config is one of the explicit mappings: changes to the group visible-reply config, source reply delivery mode, or the message-tool system prompt route through the core reply tests plus Discord and Slack delivery regressions so a shared default change fails before the first PR push. Use `OPENCLAW_TEST_CHANGED_BROAD=1 pnpm test:changed` only when the change is harness-wide enough that the cheap mapped set is not a trustworthy proxy.
 

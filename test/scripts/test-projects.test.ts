@@ -3967,7 +3967,6 @@ describe("test selector native source facts", () => {
         ];
         const expectedFacts = {
           imports: ["./barrel.js", "./dynamic.mjs"],
-          reexports: ["./barrel.js"],
           matches: ["scripts/tool.mts", "scripts/tool"],
           references: ["scripts/tool.mts"],
         };
@@ -4005,7 +4004,6 @@ describe("test selector native source facts", () => {
             {
               file: "large.mts",
               imports: [],
-              reexports: [],
               matches: ["scripts/tool.mts"],
               references: ["scripts/tool.mts"],
             },
