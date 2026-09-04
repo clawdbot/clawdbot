@@ -5,6 +5,7 @@ import type { Command } from "commander";
 import type { MessageReceipt } from "../channels/message/types.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import type { ApprovalScope } from "../infra/approval-scope.js";
+import type { InternalDiagnosticEventInterest } from "../infra/diagnostic-event-listener-presence.js";
 import type {
   DiagnosticEventPrivateData,
   DiagnosticEventInput,
@@ -384,6 +385,7 @@ export type OpenClawPluginServiceContext = {
         metadata: DiagnosticEventMetadata,
         privateData: DiagnosticEventPrivateData,
       ) => void,
+      filter?: InternalDiagnosticEventInterest<DiagnosticEventPayload["type"]>,
     ) => () => void;
     registerTracePropagationBridge?: (bridge: DiagnosticTracePropagationBridge) => () => void;
   };

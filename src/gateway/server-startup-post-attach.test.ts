@@ -31,8 +31,8 @@ const hoisted = vi.hoisted(() => {
     (params: { onHandle?: (handle: PluginServicesHandle) => void }) => Promise<PluginServicesHandle>
   >(async () => ({ stop: async () => {} }));
   const startGmailWatcherWithLogs = vi.fn(async () => {});
-  const loadInternalHooks = vi.fn(async () => 0);
-  const setInternalHooksEnabled = vi.fn();
+  const commitInternalHooks = vi.fn(() => true);
+  const prepareInternalHooks = vi.fn(async () => ({ loadedCount: 0, commit: commitInternalHooks }));
   const hasInternalHookListeners = vi.fn(() => false);
   const startupHookEvent = { type: "gateway", action: "startup", sessionKey: "gateway:startup" };
   const createInternalHookEvent = vi.fn(() => startupHookEvent);
@@ -102,8 +102,8 @@ const hoisted = vi.hoisted(() => {
   return {
     startPluginServices,
     startGmailWatcherWithLogs,
-    loadInternalHooks,
-    setInternalHooksEnabled,
+    prepareInternalHooks,
+    commitInternalHooks,
     hasInternalHookListeners,
     startupHookEvent,
     createInternalHookEvent,
@@ -173,12 +173,11 @@ vi.mock("../hooks/gmail-watcher-lifecycle.js", () => ({
 vi.mock("../hooks/internal-hooks.js", () => ({
   createInternalHookEvent: hoisted.createInternalHookEvent,
   hasInternalHookListeners: hoisted.hasInternalHookListeners,
-  setInternalHooksEnabled: hoisted.setInternalHooksEnabled,
   triggerInternalHook: hoisted.triggerInternalHook,
 }));
 
 vi.mock("../hooks/loader.js", () => ({
-  loadInternalHooks: hoisted.loadInternalHooks,
+  prepareInternalHooks: hoisted.prepareInternalHooks,
 }));
 
 vi.mock("../plugins/hook-runner-global.js", () => ({
@@ -479,8 +478,8 @@ describe("startGatewayPostAttachRuntime", () => {
     vi.stubEnv("OPENCLAW_SKIP_PROVIDERS", "0");
     hoisted.startPluginServices.mockClear();
     hoisted.startGmailWatcherWithLogs.mockClear();
-    hoisted.loadInternalHooks.mockClear();
-    hoisted.setInternalHooksEnabled.mockClear();
+    hoisted.prepareInternalHooks.mockClear();
+    hoisted.commitInternalHooks.mockClear();
     hoisted.hasInternalHookListeners.mockReset();
     hoisted.hasInternalHookListeners.mockReturnValue(false);
     hoisted.createInternalHookEvent.mockClear();
@@ -611,8 +610,12 @@ describe("startGatewayPostAttachRuntime", () => {
     });
     expect([...unavailableGatewayMethods]).toStrictEqual([]);
     expect(hoisted.startPluginServices).toHaveBeenCalledTimes(1);
-    expect(hoisted.loadInternalHooks).not.toHaveBeenCalled();
-    expect(hoisted.setInternalHooksEnabled).not.toHaveBeenCalled();
+    expect(hoisted.prepareInternalHooks).toHaveBeenCalledWith(
+      { hooks: { internal: { enabled: false } } },
+      "/tmp/openclaw-workspace",
+      { failureMode: "best-effort" },
+    );
+    expect(hoisted.commitInternalHooks).toHaveBeenCalledWith({ initial: true });
     expect(hoisted.logGatewayStartup).toHaveBeenCalledTimes(1);
     expect(firstStartupLog().loadedPluginIds).toEqual(["beta", "alpha"]);
     expect(hoisted.logGatewayStartup).toHaveBeenCalledWith(
@@ -764,7 +767,7 @@ describe("startGatewayPostAttachRuntime", () => {
   it("reports internal hook load failures without copying the error into the summary", async () => {
     const log = { info: vi.fn<(message: string) => void>(), warn: vi.fn() };
     const logHooks = { info: vi.fn(), warn: vi.fn(), error: vi.fn() };
-    hoisted.loadInternalHooks.mockRejectedValueOnce(new Error("private hook path"));
+    hoisted.prepareInternalHooks.mockRejectedValueOnce(new Error("private hook path"));
 
     await startGatewayPostAttachRuntime({
       ...createPostAttachParams(),
@@ -779,6 +782,37 @@ describe("startGatewayPostAttachRuntime", () => {
       .find((message) => message.startsWith("gateway startup outcomes:"));
     expect(outcomeMessage).toContain("internal-hooks=failed (see earlier log)");
     expect(outcomeMessage).not.toContain("private hook path");
+  });
+
+  it("does not publish an imported hook candidate after Gateway close starts", async () => {
+    const loading = createDeferred<{
+      loadedCount: number;
+      commit: typeof hoisted.commitInternalHooks;
+    }>();
+    let closing = false;
+    hoisted.prepareInternalHooks.mockReturnValueOnce(loading.promise);
+    const params = createPostAttachParams();
+    const starting = startGatewaySidecars({
+      cfg: { hooks: { internal: { enabled: true } } },
+      pluginRegistry: params.pluginRegistry,
+      defaultWorkspaceDir: params.defaultWorkspaceDir,
+      deps: params.deps,
+      startChannels: params.startChannels,
+      shouldStartChannels: () => !closing,
+      shouldCreatePostReadySidecars: () => !closing,
+      shouldStartPluginServices: () => !closing,
+      log: params.log,
+      logHooks: params.logHooks,
+      logChannels: params.logChannels,
+    });
+    await waitForGatewayTestState(() => {
+      expect(hoisted.prepareInternalHooks).toHaveBeenCalledOnce();
+    });
+    closing = true;
+    loading.resolve({ loadedCount: 1, commit: hoisted.commitInternalHooks });
+    await starting;
+    expect(hoisted.commitInternalHooks).not.toHaveBeenCalled();
+    expect(params.startChannels).not.toHaveBeenCalled();
   });
 
   it("refreshes the restart sentinel after sidecars without blocking post-attach", async () => {
@@ -3879,7 +3913,7 @@ describe("startGatewayPostAttachRuntime", () => {
         },
       });
 
-      expect(hoisted.loadInternalHooks).not.toHaveBeenCalled();
+      expect(hoisted.commitInternalHooks).toHaveBeenCalledWith({ initial: true });
       expect(hoisted.hasInternalHookListeners).toHaveBeenCalledWith("gateway", "startup");
 
       await vi.advanceTimersByTimeAsync(250);

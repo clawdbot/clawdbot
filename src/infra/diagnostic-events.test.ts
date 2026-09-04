@@ -951,6 +951,7 @@ describe("diagnostic-events", () => {
         model: "gpt-5.4",
       });
     }
+    emitTrustedDiagnosticEvent({ type: "gateway.rpc", method: "health", phase: "received" });
 
     await waitForDiagnosticEventsDrained();
 
@@ -962,12 +963,14 @@ describe("diagnostic-events", () => {
     );
     expect(dropSummary).toMatchObject({
       type: "diagnostic.async_queue.dropped",
-      droppedEvents: 1,
+      droppedEvents: 2,
+      droppedTrustedEvents: 1,
       droppedUntrustedEvents: 1,
       maxQueueLength: 10_000,
       drainBatchSize: 100,
     });
     expect(events.filter((event) => event.type === "model.call.started")).toHaveLength(10_000);
+    expect(events.some((event) => event.type === "gateway.rpc")).toBe(false);
   });
 
   it("keeps log records off the public diagnostic event stream", async () => {

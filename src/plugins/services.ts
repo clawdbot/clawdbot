@@ -71,12 +71,12 @@ function createServiceContext(params: {
             params.lease.assertActive("internal diagnostic emitter");
             emitTrustedDiagnosticEventWithPrivateData(event, privateData);
           },
-          onEvent: (listener) => {
+          onEvent: (listener, filter) => {
             params.lease.assertActive("internal diagnostic listener");
             const trustedListener = isOtelExporter
               ? markTrustedOtelDiagnosticListener(listener)
               : listener;
-            return params.lease.retain(onTrustedInternalDiagnosticEvent(trustedListener));
+            return params.lease.retain(onTrustedInternalDiagnosticEvent(trustedListener, filter));
           },
           registerTracePropagationBridge: (bridge) => {
             params.lease.assertActive("diagnostic trace propagation bridge");

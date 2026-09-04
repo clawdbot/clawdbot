@@ -146,14 +146,31 @@ The packaging script stages only that media capability set before Tauri invokes
 linuxdeploy. This prevents optional host plugins from adding unrelated system
 libraries to the AppImage dependency closure.
 
+The packaging flow provisions Tauri's five AppImage tools into a clean,
+digest-pinned cache. After Tauri builds the AppImage, the finalizer re-verifies
+that cache, removes bundled Wayland client libraries from the retained AppDir,
+and rebuilds the artifact. WebKitGTK and Mesa then use one compatible host
+stack.
+
 You can also build the same bundles from a source checkout:
 
 ```bash
 plugins=$(mktemp -d)
+cache=$(mktemp -d)
+trap 'rm -rf "$plugins" "$cache"' EXIT
+export XDG_CACHE_HOME="$cache"
 apps/linux/scripts/stage-appimage-gstreamer.sh "$plugins"
-cd apps/linux/src-tauri
-GSTREAMER_PLUGINS_DIR="$plugins" \
-  pnpm dlx @tauri-apps/cli@2.11.4 build --bundles deb,appimage
+apps/linux/scripts/tauri-appimage-tools.sh prepare
+apps/linux/scripts/tauri-appimage-tools.sh verify pre-build
+export LDAI_RUNTIME_FILE="$cache/tauri/.appimage-runtime-x86_64"
+(
+  cd apps/linux/src-tauri
+  GSTREAMER_PLUGINS_DIR="$plugins" \
+    pnpm dlx @tauri-apps/cli@2.11.4 build --bundles deb,appimage \
+      --config '{"bundle":{"createUpdaterArtifacts":false,"useLocalToolsDir":false}}'
+)
+apps/linux/scripts/finalize-appimage.sh \
+  apps/linux/src-tauri/target/release/bundle/appimage
 ```
 
 The `Linux App` CI workflow uploads the same bundles as the

@@ -539,10 +539,11 @@ See [Plugins](/tools/plugin).
 - Control service: loopback only (port derived from `gateway.port`, default `18791`).
 - `extraArgs` appends extra launch flags to local Chromium startup (for example
   `--disable-gpu`, window sizing, or debug flags).
-- Browser profiles, the default profile, and global launch settings hot-reload.
+- Browser profiles, the default profile, global launch settings,
+  `snapshotDefaults`, and `tabCleanup` hot-reload.
   Changed launch settings replace affected managed browsers on their next use;
   externally attached browsers stay running. Enablement, evaluation, SSRF policy,
-  extension relay, and tab cleanup require a Gateway restart.
+  and extension relay require a Gateway restart.
 
 ---
 

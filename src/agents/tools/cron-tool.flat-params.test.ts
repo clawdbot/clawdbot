@@ -275,6 +275,50 @@ describe("cron tool flat-params", () => {
     expect(tool.prepareArguments?.(prepared)).toEqual(prepared);
   });
 
+  it("caps an allowed scalar flat toolsAllow to creator authority before dispatch", async () => {
+    const tool = createCronTool(
+      { creatorToolAllowlist: ["read", "cron"] },
+      { callGatewayTool: callGatewayToolMock },
+    );
+
+    await tool.execute("call-flat-toolsallow-allowed", {
+      action: "add",
+      everyMs: 3_600_000,
+      message: "status summary",
+      name: "FLATTEST-CAP-ALLOWED",
+      toolsAllow: "read",
+    });
+
+    const [method, , params] = firstGatewayToolCall<{
+      payload?: { toolsAllow?: unknown };
+    }>();
+    expect(method).toBe("cron.add");
+    expect(params.payload?.toolsAllow).toEqual(["read"]);
+  });
+
+  it("strips a scalar flat toolsAllow outside creator authority before dispatch", async () => {
+    const tool = createCronTool(
+      {
+        creatorToolAllowlist: ["read", "cron"],
+      },
+      { callGatewayTool: callGatewayToolMock },
+    );
+
+    await tool.execute("call-flat-toolsallow-unavailable", {
+      action: "add",
+      everyMs: 3_600_000,
+      message: "status summary",
+      name: "FLATTEST-CAP-UNAVAILABLE",
+      toolsAllow: "write",
+    });
+
+    const [method, , params] = firstGatewayToolCall<{
+      payload?: { toolsAllow?: unknown };
+    }>();
+    expect(method).toBe("cron.add");
+    expect(params.payload?.toolsAllow).toEqual([]);
+  });
+
   it("leaves blank scalar capability fields invalid", () => {
     const tool = createCronTool();
     const prepared = tool.prepareArguments?.({

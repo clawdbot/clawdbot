@@ -1016,6 +1016,16 @@ openclaw-settings-save-indicator:empty {
 
 .sidebar-shell {
   --sidebar-pad-x: 10px;
+  --sidebar-session-link-padding-block: 4px;
+  --sidebar-session-row-floor: 30px;
+  --sidebar-title-line-height: calc(18px * var(--control-ui-text-scale));
+  --sidebar-session-row-min-height: max(
+    var(--sidebar-session-row-floor),
+    calc(
+      var(--sidebar-title-line-height) + var(--sidebar-session-link-padding-block) +
+        var(--sidebar-session-link-padding-block)
+    )
+  );
   /* Both gutters are content insets; the footer strip negates them to bleed. */
   --sidebar-pad-bottom: 8px;
   display: flex;
@@ -1708,10 +1718,9 @@ openclaw-settings-save-indicator:empty {
 }
 
 .sidebar-session-tree__loading {
-  min-height: 28px;
-  padding: 6px var(--sidebar-text-offset);
-  color: var(--muted);
-  font-size: var(--control-ui-text-xs);
+  min-height: var(--sidebar-session-row-min-height);
+  margin-inline: var(--sidebar-text-offset) 2px;
+  clip-path: inset(calc((100% - 10px) / 2) 0 round var(--radius-sm));
 }
 
 .sidebar-session-tree__show-more {
@@ -1910,12 +1919,11 @@ openclaw-settings-save-indicator:empty {
    here so gateway threads and native coding catalogs cannot drift apart. */
 .sidebar-recent-session {
   --sidebar-child-session-toggle-width: max(34px, calc(36px * var(--control-ui-text-scale)));
-  --sidebar-title-line-height: calc(18px * var(--control-ui-text-scale));
 
   display: flex;
   align-items: center;
   min-width: 0;
-  min-height: 30px;
+  min-height: var(--sidebar-session-row-min-height);
   padding-right: 2px;
   border-radius: var(--radius-md);
   color: var(--muted);
@@ -1964,7 +1972,9 @@ openclaw-settings-save-indicator:empty {
   gap: var(--sidebar-row-gap);
   flex: 1 1 auto;
   min-width: 0;
-  padding: 4px 2px 4px var(--sidebar-inset);
+  min-height: var(--sidebar-session-row-min-height);
+  padding: var(--sidebar-session-link-padding-block) 2px var(--sidebar-session-link-padding-block)
+    var(--sidebar-inset);
   color: inherit;
   text-decoration: none;
 }
@@ -1975,7 +1985,7 @@ openclaw-settings-save-indicator:empty {
   justify-content: center;
   gap: 1px;
   width: var(--sidebar-child-session-toggle-width, 31px);
-  height: 30px;
+  height: var(--sidebar-session-row-min-height);
   flex: 0 0 var(--sidebar-child-session-toggle-width, 31px);
   padding: 0 3px;
   border: 0;
@@ -2148,15 +2158,6 @@ openclaw-settings-save-indicator:empty {
   font-size: calc(13px * var(--control-ui-text-scale));
   font-weight: 500;
   color: var(--text);
-}
-
-.sidebar-recent-session--child {
-  min-height: 30px;
-}
-
-.sidebar-recent-session--child .sidebar-recent-session__link {
-  padding-top: 4px;
-  padding-bottom: 4px;
 }
 
 .sidebar-recent-sessions
@@ -3186,7 +3187,7 @@ a:is(
    a row must not make it read as dimmer than the same row further down. */
 .sidebar-zone-entry .sidebar-recent-session {
   position: relative;
-  min-height: 32px;
+  min-height: max(32px, var(--sidebar-session-row-min-height));
   padding: 0 8px;
   border: 1px solid transparent;
   background: transparent;
@@ -3200,23 +3201,16 @@ a:is(
 
 .sidebar-zone-entry .sidebar-recent-session__link {
   gap: 8px;
-  min-height: 30px;
   padding: 3px 0;
 }
 
 @media (hover: none), (pointer: coarse) {
-  .sidebar-recent-session,
-  .sidebar-recent-session__link,
-  .sidebar-zone-entry :is(.sidebar-recent-session, .sidebar-recent-session__link) {
-    min-height: 44px;
+  .sidebar-shell {
+    --sidebar-session-row-floor: 44px;
   }
 
   .sidebar-recent-session {
     --sidebar-child-session-toggle-width: max(44px, calc(36px * var(--control-ui-text-scale)));
-  }
-
-  .sidebar-child-session-toggle {
-    height: 44px;
   }
 
   .sidebar-recent-session:not(.sidebar-recent-session--child, .sidebar-recent-session--single-line)

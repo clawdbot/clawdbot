@@ -69,8 +69,6 @@ type PluginStateSeedEntryForTests = {
   expiresAt?: number | null;
 };
 
-let cachedDatabase: PluginStateDatabase | null = null;
-
 function createPluginStateError(params: {
   code: PluginStateStoreErrorCode;
   operation: PluginStateStoreOperation;
@@ -408,20 +406,8 @@ function openPluginStateDatabase(
 ): PluginStateDatabase {
   const env = options.env ?? process.env;
   const pathname = resolveOpenClawStateSqlitePath(env);
-  if (cachedDatabase && cachedDatabase.path === pathname && cachedDatabase.db.isOpen) {
-    return cachedDatabase;
-  }
-  if (cachedDatabase && !cachedDatabase.db.isOpen) {
-    cachedDatabase = null;
-  }
-
   try {
-    const database = openOpenClawStateDatabase(options);
-    cachedDatabase = {
-      db: database.db,
-      path: database.path,
-    };
-    return cachedDatabase;
+    return openOpenClawStateDatabase(options);
   } catch (error) {
     throw wrapPluginStateError(
       error,
@@ -498,11 +484,12 @@ function runWriteTransaction<T>(
   write: (store: PluginStateDatabase) => T,
   options: OpenClawStateDatabaseOptions = {},
 ): T {
-  const store = openPluginStateDatabase(operation, options);
-  return runOpenClawStateWriteTransaction(() => {
-    const result = write(store);
-    return result;
-  }, options);
+  // Only cold acquisition failures are open errors. A held owner's ownership or
+  // transaction failure must remain a write error, with its callback supplying the handle.
+  if (!isOpenClawStateDatabaseOpen(resolveOpenClawStateSqlitePath(options.env ?? process.env))) {
+    openPluginStateDatabase(operation, options);
+  }
+  return runOpenClawStateWriteTransaction(write, options);
 }
 
 type PluginStateRetention = {
@@ -1551,7 +1538,6 @@ function seedPluginStateDatabaseEntriesForTests(
 function probePluginStateStore(): PluginStateStoreProbeResult {
   const databasePath = resolveOpenClawStateSqlitePath(process.env);
   const steps: PluginStateStoreProbeStep[] = [];
-  const wasOpen = cachedDatabase !== null;
   const stateWasOpen = isOpenClawStateDatabaseOpen();
 
   const pushOk = (name: string) => steps.push({ name, ok: true });
@@ -1627,7 +1613,7 @@ function probePluginStateStore(): PluginStateStoreProbeResult {
   } catch (error) {
     pushFailure("probe", error);
   } finally {
-    if (!wasOpen && !stateWasOpen) {
+    if (!stateWasOpen) {
       closePluginStateDatabase();
     }
   }
@@ -1636,7 +1622,6 @@ function probePluginStateStore(): PluginStateStoreProbeResult {
 }
 
 export function closePluginStateDatabase(): void {
-  cachedDatabase = null;
   closeOpenClawStateDatabase();
 }
 

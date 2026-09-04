@@ -5,7 +5,7 @@ import type { AmbientEnvTriggerPolicy } from "../channels/config-presence.js";
 import type { CliDeps } from "../cli/deps.types.js";
 import { resolveStateDir } from "../config/paths.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
-import { hasConfiguredInternalHooks } from "../hooks/configured.js";
+import { resolveInternalHookSelection } from "../hooks/configured.js";
 import { isTruthyEnvValue } from "../infra/env.js";
 import type { GatewayActiveWorkInspectors } from "../infra/gateway-active-work.js";
 import { hasRestartSentinel } from "../infra/restart-sentinel.js";
@@ -618,28 +618,39 @@ export async function startGatewaySidecars(params: {
 }) {
   const postReadySidecars: GatewayPostReadySidecarHandle[] = [];
 
-  const internalHooksConfigured = hasConfiguredInternalHooks(params.cfg);
+  const internalHooksConfigured = resolveInternalHookSelection(params.cfg).configured;
   await measureStartup(params.startupTrace, "sidecars.internal-hooks", async () => {
     try {
-      if (internalHooksConfigured) {
-        const [{ setInternalHooksEnabled }, { loadInternalHooks }] = await Promise.all([
-          loadInternalHooksModule(),
-          import("../hooks/loader.js"),
-        ]);
-        setInternalHooksEnabled(params.cfg.hooks?.internal?.enabled !== false);
-        const loadedCount = await loadInternalHooks(params.cfg, params.defaultWorkspaceDir);
-        if (loadedCount > 0) {
-          params.startupOutcomes?.record({ subsystem: "internal-hooks", status: "loaded" });
-          params.logHooks.info(
-            `loaded ${loadedCount} internal hook handler${loadedCount > 1 ? "s" : ""}`,
-          );
-        } else {
-          params.startupOutcomes?.record({
-            subsystem: "internal-hooks",
-            status: "skipped",
-            reason: "no-handlers-loaded",
-          });
-        }
+      const { prepareInternalHooks } = await import("../hooks/loader.js");
+      const prepared = await prepareInternalHooks(params.cfg, params.defaultWorkspaceDir, {
+        failureMode: "best-effort",
+      });
+      if (
+        params.shouldCreatePostReadySidecars?.() === false ||
+        !prepared.commit({ initial: true })
+      ) {
+        params.startupOutcomes?.record({
+          subsystem: "internal-hooks",
+          status: "skipped",
+          reason: "superseded",
+        });
+        return;
+      }
+      if (!internalHooksConfigured) {
+        return;
+      }
+      const { loadedCount } = prepared;
+      if (loadedCount > 0) {
+        params.startupOutcomes?.record({ subsystem: "internal-hooks", status: "loaded" });
+        params.logHooks.info(
+          `loaded ${loadedCount} internal hook handler${loadedCount > 1 ? "s" : ""}`,
+        );
+      } else {
+        params.startupOutcomes?.record({
+          subsystem: "internal-hooks",
+          status: "skipped",
+          reason: "no-handlers-loaded",
+        });
       }
     } catch (err) {
       params.startupOutcomes?.record({
@@ -1031,7 +1042,7 @@ const defaultGatewayPostAttachRuntimeDeps: GatewayPostAttachRuntimeDeps = {
 function createDeferredGatewayUpdateCheck(params: {
   startupTrace?: GatewayStartupTrace;
   runtimeDeps: GatewayPostAttachRuntimeDeps;
-  cfg: OpenClawConfig;
+  getConfig: () => OpenClawConfig;
   log: {
     info: (msg: string) => void;
     warn: (msg: string) => void;
@@ -1091,7 +1102,7 @@ function createDeferredGatewayUpdateCheck(params: {
     ownerReady = (async () => {
       try {
         owner = await params.runtimeDeps.createGatewayUpdateCheck({
-          cfg: params.cfg,
+          getConfig: params.getConfig,
           log: params.log,
           isNixMode: params.isNixMode,
           ...(params.activeWorkInspectors
@@ -1353,7 +1364,7 @@ export async function startGatewayPostAttachRuntime(
     : createDeferredGatewayUpdateCheck({
         startupTrace: params.startupTrace,
         runtimeDeps,
-        cfg: params.cfgAtStart,
+        getConfig: params.getConfig,
         log: params.log,
         isNixMode: params.isNixMode,
         broadcastToConnIds: params.broadcastToConnIds,

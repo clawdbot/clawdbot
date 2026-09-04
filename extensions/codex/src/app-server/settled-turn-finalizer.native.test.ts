@@ -16,6 +16,7 @@ import { buildCodexAppServerConnectionFingerprint } from "./plugin-app-cache-key
 import { assertCodexThreadStartResponse } from "./protocol-validators.js";
 import { isJsonObject, type JsonObject } from "./protocol.js";
 import {
+  bindProductionHarnessHostCapabilitiesForTest,
   createCodexRuntimePlanFixture,
   createNativeRunParams,
   runCodexAppServerAttempt,
@@ -646,11 +647,16 @@ describe.skipIf(process.platform === "win32")(
           }
           fixture.setPhase("action");
           params.runId = "run-settled-action";
+          const closeHost = await bindProductionHarnessHostCapabilitiesForTest(params);
+          cleanups.push(async () => closeHost());
           const settledAttempt = await runCodexAppServerAttempt(params, runOptions);
           expect(settledAttempt.terminal).toEqual({ kind: "ok" });
           const context = settledAttempt.settledTurnFinalizationContext;
           expect(context).toBeInstanceOf(settledContext.CodexSettledTurnContext);
           expect(Object.isFrozen(context)).toBe(true);
+          expect(() => params.hostCapabilities.assertActive()).not.toThrow();
+          closeHost();
+          expect(() => params.hostCapabilities.assertActive()).toThrow();
           const sourceKey = scenario.homeScope === "user" ? NATIVE_KEY : HOST_KEY;
           expect(
             fixture.requests.map(({ body, account }) => ({ model: body.model, account })),

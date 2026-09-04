@@ -81,6 +81,7 @@ const TRAIN_2026_7_METHODS = [
 ] as const;
 
 const CURRENT_TRAIN_METHODS = [
+  "canvas.document.view",
   "diagnostics.lanes",
   "plugins.inspect",
   "device.pair.setupStatus",
