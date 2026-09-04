@@ -578,7 +578,7 @@ export function normalizeEmbeddingVector(value: unknown): number[] {
     for (let offset = 0; offset < bytes.byteLength; offset += Float32Array.BYTES_PER_ELEMENT) {
       floats.push(view.getFloat32(offset, true));
     }
-    value = floats;
+    return normalizeEmbeddingVector(floats);
   }
 
   if (!Array.isArray(value)) {
