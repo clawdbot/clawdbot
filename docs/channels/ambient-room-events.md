@@ -54,7 +54,7 @@ Two settings silently disable ambient room events even when `unmentionedInbound:
 
 Check the effective surface with `openclaw agents list` and a probe turn rather than assuming the profile includes it.
 
-After saving the config, the Gateway hot-applies `messages` settings. Restart only when file watching or config reload is disabled (`gateway.reload.mode: "off"`).
+After saving the config, the Gateway hot-applies `messages` settings. With `gateway.reload.mode: "off"`, restart manually to apply the change.
 
 ## What changes
 

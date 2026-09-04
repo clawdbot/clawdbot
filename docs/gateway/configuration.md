@@ -548,10 +548,10 @@ Reload never migrates workspace state.
 
 ### Reload modes
 
-| Mode                   | Behavior                                                                      |
-| ---------------------- | ----------------------------------------------------------------------------- |
-| **`hybrid`** (default) | Hot-applies safe changes instantly. Automatically restarts for critical ones. |
-| **`off`**              | Disables file watching. Changes take effect on the next manual restart.       |
+| Mode                   | Behavior                                                                                                                             |
+| ---------------------- | ------------------------------------------------------------------------------------------------------------------------------------ |
+| **`hybrid`** (default) | Hot-applies safe changes instantly. Automatically restarts for critical ones.                                                        |
+| **`off`**              | Keeps watching and validating source changes and notifying clients, but does not apply them. Runtime changes require manual restart. |
 
 ```json5
 {
