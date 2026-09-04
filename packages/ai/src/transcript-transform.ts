@@ -104,7 +104,11 @@ function transformAssistant<TApi extends Api>(
     }
     const { thoughtSignature: _, ...unsigned } = block;
     // Pairing uses these IDs as shared keys, before model-specific normalization runs.
-    const trimmedId = block.id.trim();
+    // Runtime content blocks (e.g. attachment blocks) may carry no id even though
+    // the static union requires one; guard the trim so a missing id does not crash
+    // every subsequent turn in the session (see #137729).
+    // SAFETY: ToolCall.id is statically a required string, but runtime attachment blocks bypass the union and carry no id.
+    const trimmedId = (block as { id?: string }).id?.trim() ?? "";
     if (sameModel) {
       return trimmedId === block.id ? block : Object.assign({}, block, { id: trimmedId });
     }
@@ -133,7 +137,11 @@ export function transformMessages<TApi extends Api>(
     if (message.role !== "toolResult") {
       return message;
     }
-    const trimmedId = message.toolCallId.trim();
+    // A toolResult message may arrive without a toolCallId at runtime; guard the
+    // trim so the upstream error is surfaced instead of being masked by a
+    // TypeError (see #137729).
+    // SAFETY: ToolResultMessage.toolCallId is statically string, but a toolResult may arrive without one at runtime.
+    const trimmedId = (message as { toolCallId?: string }).toolCallId?.trim() ?? "";
     const toolCallId = toolCallIdMap.get(trimmedId) ?? trimmedId;
     return toolCallId === message.toolCallId ? message : Object.assign({}, message, { toolCallId });
   });
