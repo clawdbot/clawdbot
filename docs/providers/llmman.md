@@ -21,9 +21,9 @@ title: "llmman"
   `llmman` is a custom self-hosted OpenAI-compatible backend, not a dedicated OpenClaw provider plugin: you configure it under `models.providers.llmman` instead of picking an onboarding auth choice. For a bundled plugin with auto-discovery, see [SGLang](/providers/sglang) or [vLLM](/providers/vllm).
 </Note>
 
-<Warning>
-  `llmman serve` does not authenticate API requests. Keep the default loopback bind unless access is restricted by a trusted network boundary.
-</Warning>
+<Info>
+  Version scope: this page is verified against [llmman b315](https://github.com/llmmanorg/llmman/releases/tag/b315), commit [`0e7a3ed`](https://github.com/llmmanorg/llmman/commit/0e7a3ed815d49a74d7aad1b1c70b5eb6c3013b18).
+</Info>
 
 ## Getting started
 
