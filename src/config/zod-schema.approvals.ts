@@ -20,6 +20,7 @@ const ExecApprovalForwardingSchema = z
     agentFilter: z.array(z.string()).optional(),
     sessionFilter: z.array(z.string()).optional(),
     targets: z.array(ExecApprovalForwardTargetSchema).optional(),
+    outcome: z.union([z.literal("message"), z.literal("none")]).optional(),
   })
   .strict()
   .optional();

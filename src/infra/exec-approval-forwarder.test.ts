@@ -896,4 +896,40 @@ describe("exec approval forwarder", () => {
       expect(deliver).toHaveBeenCalledTimes(1);
     });
   });
+
+  describe("outcome", () => {
+    it("delivers resolved message by default when outcome is undefined", async () => {
+      vi.useFakeTimers();
+      const { deliver, forwarder } = createForwarder({ cfg: TARGETS_CFG });
+      await expect(forwarder.handleRequested(baseRequest)).resolves.toBe(true);
+      await forwarder.handleResolved({
+        id: baseRequest.id,
+        decision: "allow-once",
+        ts: 2000,
+      });
+      expect(deliver).toHaveBeenCalledTimes(2);
+    });
+
+    it("suppresses resolved message when outcome is none", async () => {
+      vi.useFakeTimers();
+      const cfg = {
+        approvals: {
+          exec: {
+            enabled: true,
+            mode: "targets",
+            targets: [{ channel: "slack", to: "U1" }],
+            outcome: "none",
+          },
+        },
+      } as OpenClawConfig;
+      const { deliver, forwarder } = createForwarder({ cfg });
+      await expect(forwarder.handleRequested(baseRequest)).resolves.toBe(true);
+      await forwarder.handleResolved({
+        id: baseRequest.id,
+        decision: "allow-once",
+        ts: 2000,
+      });
+      expect(deliver).toHaveBeenCalledTimes(1);
+    });
+  });
 });

@@ -479,4 +479,26 @@ describe("plugin approval forwarding", () => {
       expect(deliver).not.toHaveBeenCalled();
     });
   });
+
+  describe("outcome", () => {
+    it("suppresses resolved message when outcome is none", async () => {
+      const cfg = {
+        ...PLUGIN_TARGETS_CFG,
+        approvals: {
+          ...PLUGIN_TARGETS_CFG.approvals,
+          plugin: {
+            ...PLUGIN_TARGETS_CFG.approvals?.plugin,
+            outcome: "none",
+          },
+        },
+      } as OpenClawConfig;
+      const deliver = vi.fn().mockResolvedValue([]);
+      const { forwarder } = createForwarder({ cfg, deliver });
+
+      await registerPendingApproval(forwarder, deliver);
+
+      await forwarder.handlePluginApprovalResolved!(makePluginResolved());
+      expect(deliver).toHaveBeenCalledTimes(0);
+    });
+  });
 });

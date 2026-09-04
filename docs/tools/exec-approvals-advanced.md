@@ -202,6 +202,7 @@ Config:
       mode: "session", // "session" | "targets" | "both"
       agentFilter: ["main"],
       sessionFilter: ["discord"], // substring or regex
+      outcome: "message", // "message" | "none"
       targets: [
         { channel: "slack", to: "U12345678" },
         { channel: "telegram", to: "123456789" },
@@ -210,6 +211,13 @@ Config:
   },
 }
 ```
+
+When a forwarded approval is resolved, OpenClaw posts a follow-up outcome message
+(`Exec approval: Allowed` / `Exec approval: Denied`, or the plugin equivalent) to the forward
+targets. Set `outcome: "none"` to suppress that resolved-outcome follow-up entirely; the default
+`"message"` keeps the current behavior. `outcome` applies only to target forwarding: native
+approval clients deliver their own resolved outcomes through channel adapters and are not affected
+by this setting.
 
 Reply in chat:
 
@@ -235,6 +243,7 @@ For plugin-authoring behavior, request fields, and decision semantics, see
       enabled: true,
       mode: "targets",
       agentFilter: ["main"],
+      outcome: "message", // "message" | "none"
       targets: [
         { channel: "slack", to: "U12345678" },
         { channel: "telegram", to: "123456789" },
@@ -245,7 +254,7 @@ For plugin-authoring behavior, request fields, and decision semantics, see
 ```
 
 The config shape is identical to `approvals.exec`: `enabled`, `mode`, `agentFilter`,
-`sessionFilter`, and `targets` work the same way.
+`sessionFilter`, `outcome`, and `targets` work the same way.
 
 Channels that support shared interactive replies render the same approval buttons for both exec and
 plugin approvals. Channels without shared interactive UI fall back to plain text with `/approve`

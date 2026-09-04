@@ -688,6 +688,16 @@ function createApprovalHandlers<
   };
 
   const handleResolved = async (resolved: TResolved) => {
+    // Gate the outcome echo via config
+    const cfg = params.getConfig();
+    const forwardingConfig = params.strategy.config(cfg);
+    const outcome = forwardingConfig?.outcome ?? "message";
+    if (outcome === "none") {
+      // Still settle to avoid leaks, but suppress delivery
+      pending.settle(params.strategy.getResolvedId(resolved), () => {});
+      return;
+    }
+
     const settled = pending.settle(params.strategy.getResolvedId(resolved), (entry) =>
       deliverResolved(resolved, entry.value),
     );
