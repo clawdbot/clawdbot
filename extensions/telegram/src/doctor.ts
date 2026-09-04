@@ -246,7 +246,7 @@ function scanTelegramSelectedQuoteToolProgressWarnings(
     });
     if (
       blockStreamingEnabled ||
-      !resolveChannelStreamingPreviewToolProgress(account, undefined, streamMode)
+      !resolveChannelStreamingPreviewToolProgress(account, streamMode !== "progress", streamMode)
     ) {
       return [];
     }

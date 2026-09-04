@@ -106,7 +106,11 @@ export function createChannelProgressDraftCompositor(params: {
       .join("\n");
   const previewToolProgressEnabled =
     params.active &&
-    resolveChannelStreamingPreviewToolProgress(params.entry, undefined, params.mode);
+    resolveChannelStreamingPreviewToolProgress(
+      params.entry,
+      params.mode !== "progress",
+      params.mode,
+    );
   const quietProgress = params.presentation === "summary" || !previewToolProgressEnabled;
   const commentaryProgressEnabled =
     params.active && resolveChannelStreamingProgressCommentary(params.entry, false, params.mode);

@@ -824,14 +824,12 @@ export function resolveChannelStreamingPreviewChunk(
 }
 
 /**
- * Whether tool calls become visible progress rows. `progress` drafts are quiet
- * unless the operator opts into the rolling tool log; `partial` and `block`
- * previews show tool updates by default.
+ * The shipped SDK default keeps tool rows visible. Bundled callers pass their
+ * mode-specific default so progress drafts can stay quiet.
  */
 export function resolveChannelStreamingPreviewToolProgress(
   entry: StreamingCompatEntry | null | undefined,
-  /** Shipped SDK argument; bundled channels use the mode-aware default. */
-  defaultValue?: boolean,
+  defaultValue = true,
   /**
    * The channel's resolved stream mode. Only the caller knows it: channels pick
    * their own default when `streaming.mode` is unset (Telegram uses "progress",
@@ -847,11 +845,10 @@ export function resolveChannelStreamingPreviewToolProgress(
     return (
       asBoolean(config?.progress?.toolProgress) ??
       asBoolean(config?.preview?.toolProgress) ??
-      defaultValue ??
-      false
+      defaultValue
     );
   }
-  return asBoolean(config?.preview?.toolProgress) ?? defaultValue ?? true;
+  return asBoolean(config?.preview?.toolProgress) ?? defaultValue;
 }
 
 export function resolveChannelStreamingProgressCommentary(

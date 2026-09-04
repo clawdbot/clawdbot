@@ -95,7 +95,11 @@ export function createSlackProgressRuntime(runtimeParams: {
   const progressDraftActive = Boolean(draftStream) || useNativeProgressStreaming;
   const previewToolProgressEnabled =
     progressDraftActive &&
-    resolveChannelStreamingPreviewToolProgress(account.config, undefined, slackStreaming.mode);
+    resolveChannelStreamingPreviewToolProgress(
+      account.config,
+      slackStreaming.mode !== "progress",
+      slackStreaming.mode,
+    );
   let shouldYieldDraftProgress: () => boolean = () => false;
   const suppressDefaultToolProgressMessages =
     resolveChannelStreamingSuppressDefaultToolProgressMessages(account.config, {

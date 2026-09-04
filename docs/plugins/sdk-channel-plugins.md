@@ -99,10 +99,11 @@ its snapshots; native renderers must preserve them alongside plan rows and
 ordinary activity.
 
 `resolveChannelStreamingPreviewToolProgress(entry, defaultValue?, mode?)` keeps
-its optional boolean default as the second argument. Bundled channels pass
-`undefined` there and their resolved streaming mode as the third argument, so
-unconfigured `progress` drafts hide ordinary tool rows while `partial` and
-`block` previews show them.
+its shipped default of `true` when the second argument is omitted or
+`undefined`. Bundled channels pass `mode !== "progress"` as the second argument
+and their resolved streaming mode as the third argument, so unconfigured
+`progress` drafts hide ordinary tool rows while `partial` and `block` previews
+show them.
 
 The compositor and formatter's `presentation: "summary"` option and the
 checklist formatter's `plain: true` option are deprecated but retain their
