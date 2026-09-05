@@ -22,7 +22,7 @@ scenario:
     - src/gateway/server.ts
     - src/gateway/server-runtime-config.ts
     - test/e2e/qa-lab/runtime/gateway-loopback-lan-access.ts
-    - test/e2e/qa-lab/runtime/gateway-loopback-lan-access.test.ts
+    - test/e2e/qa-lab/runtime/gateway-loopback-lan-access.e2e.test.ts
   execution:
     kind: script
     parallelSafe: true
