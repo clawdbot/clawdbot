@@ -49,7 +49,7 @@ const input = {
       multiSelect: true,
     },
   ],
-};
+} as const;
 
 describe("Claude CLI user input adapter", () => {
   it("maps Claude questions and answers while deduplicating the CLI callbacks", async () => {
@@ -128,44 +128,60 @@ describe("Claude CLI user input adapter", () => {
     });
   });
 
-  it("guides a malformed question retry without replaying the rejected call", async () => {
-    const requestUserInput = vi.fn(async () => ({
-      status: "answered" as const,
-      answers: { question_1: ["Vitest"], question_2: ["Unit tests"] },
-    }));
-    const authorizer = createClaudeCliUserInputAuthorizer(createContext(requestUserInput));
-    const signal = new AbortController().signal;
-    const rejected = {
-      behavior: "deny",
-      message:
-        "OpenClaw rejected malformed Claude user questions: questions[0].header must be at most 12 characters. Correct the invalid field and retry AskUserQuestion.",
-    };
+  it.each([
+    {
+      name: "oversized header",
+      questions: [{ ...input.questions[0], header: "Too long for Claude" }],
+      failure: "questions[0].header must be at most 12 characters",
+    },
+    {
+      name: "duplicate question text with distinct headers and options",
+      questions: [
+        input.questions[0],
+        { ...input.questions[1], question: input.questions[0].question },
+      ],
+      failure: "questions[1].question must be unique within the request",
+    },
+  ])(
+    "guides a retry for $name without replaying the rejected call",
+    async ({ questions, failure }) => {
+      const requestUserInput = vi.fn(async () => ({
+        status: "answered" as const,
+        answers: { question_1: ["Vitest"], question_2: ["Unit tests"] },
+      }));
+      const authorizer = createClaudeCliUserInputAuthorizer(createContext(requestUserInput));
+      const signal = new AbortController().signal;
+      const rejected = {
+        behavior: "deny",
+        message: `OpenClaw rejected malformed Claude user questions: ${failure}. Correct the invalid field and retry AskUserQuestion.`,
+      };
 
-    await expect(
-      authorizer.authorize({
-        input: { questions: [{ ...input.questions[0], header: "Too long for Claude" }] },
-        signal,
-        toolUseId: "rejected-question",
-      }),
-    ).resolves.toEqual(rejected);
-    await expect(
-      authorizer.authorize({ input, signal, toolUseId: "rejected-question" }),
-    ).resolves.toEqual(rejected);
-    expect(requestUserInput).not.toHaveBeenCalled();
+      await expect(
+        authorizer.authorize({
+          input: { questions },
+          signal,
+          toolUseId: "rejected-question",
+        }),
+      ).resolves.toEqual(rejected);
+      await expect(
+        authorizer.authorize({ input, signal, toolUseId: "rejected-question" }),
+      ).resolves.toEqual(rejected);
+      expect(requestUserInput).not.toHaveBeenCalled();
 
-    await expect(
-      authorizer.authorize({ input, signal, toolUseId: "corrected-question" }),
-    ).resolves.toMatchObject({
-      behavior: "allow",
-      updatedInput: {
-        answers: {
-          "Which test runner should we use?": "Vitest",
-          "Which proof should we collect?": "Unit tests",
+      await expect(
+        authorizer.authorize({ input, signal, toolUseId: "corrected-question" }),
+      ).resolves.toMatchObject({
+        behavior: "allow",
+        updatedInput: {
+          answers: {
+            "Which test runner should we use?": "Vitest",
+            "Which proof should we collect?": "Unit tests",
+          },
         },
-      },
-    });
-    expect(requestUserInput).toHaveBeenCalledOnce();
-  });
+      });
+      expect(requestUserInput).toHaveBeenCalledOnce();
+    },
+  );
 
   it.each([
     ["missing questions array", {}, "questions must be an array of 1 to 4 questions"],

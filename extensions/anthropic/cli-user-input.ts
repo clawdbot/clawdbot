@@ -81,6 +81,10 @@ function readClaudeUserInputQuestions(input: Record<string, unknown>): ParsedQue
     if (!question.ok) {
       return { ok: false, failure: `${questionPath}.question ${question.failure}` };
     }
+    // Claude keys answers by the exact question text, not the header or question ID.
+    if (questions.some((existing) => existing.question === question.text)) {
+      return { ok: false, failure: `${questionPath}.question must be unique within the request` };
+    }
     const header = readBoundedText(rawQuestion.header, 12);
     if (!header.ok) {
       return { ok: false, failure: `${questionPath}.header ${header.failure}` };
