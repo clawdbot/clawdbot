@@ -446,7 +446,7 @@ export async function replacePreparedModelRuntimeSnapshotAfterCatalogGenerationM
       authPublication.rejectAdopted(replacement.gateId, error),
     removeReplyDispatch: (agentIds) => replyDispatchPublication.remove(agentIds),
     enqueuePublication: enqueuePreparedModelRuntimePublication,
-    drainPendingAuthMutations,
+    drainPendingAuthMutations: (commit, required) => drainAuth(commit, required),
   });
 }
 
@@ -610,10 +610,8 @@ export function refreshPreparedModelRuntimeSnapshots(
     if (!isPublicationCurrent()) {
       return;
     }
-    await drainPendingAuthMutations(
-      // The final queue check, dispatch rebuild, and replacement resolution are one commit.
-      commitReplacement,
-    );
+    // The final queue check, dispatch rebuild, and replacement resolution commit together.
+    await drainAuth(commitReplacement);
   }).then(commitReplacement, (error: unknown) => {
     const refreshError = toStringifiedError(error);
     rejectReplacement(refreshError);
@@ -630,7 +628,7 @@ function enqueuePreparedModelRuntimePublication(task: () => Promise<void>): Prom
   return publication;
 }
 
-async function drainPendingAuthMutations(commit?: () => void): Promise<void> {
+async function drainAuth(commit?: () => void, required?: PreparedModelRuntimeOwner): Promise<void> {
   await authPublication.drain({
     owners,
     publish: async (entries, includeCredentialProviders) =>
@@ -644,12 +642,15 @@ async function drainPendingAuthMutations(commit?: () => void): Promise<void> {
       }),
     publishOwners: (publishedOwners) => replyDispatchPublication.replace(publishedOwners),
     commit,
-    onOwnerFailure: (error) => {
-      const refreshError = toStringifiedError(error);
-      notifyPreparedModelRuntimePublication({ phase: "failed", error: refreshError });
-      log.warn(`auth-triggered model runtime refresh failed: ${String(refreshError)}`);
-    },
+    onOwnerFailure: reportAuthRefreshFailure,
+    requiredOwner: required,
   });
+}
+
+function reportAuthRefreshFailure(error: unknown): void {
+  const refreshError = toStringifiedError(error);
+  notifyPreparedModelRuntimePublication({ phase: "failed", error: refreshError });
+  log.warn(`auth-triggered model runtime refresh failed: ${String(refreshError)}`);
 }
 
 function invalidateForAuthMutation(event: PreparedModelRuntimeAuthMutation): void {
@@ -698,17 +699,14 @@ function invalidateForAuthMutation(event: PreparedModelRuntimeAuthMutation): voi
     return;
   }
   const publication = enqueuePreparedModelRuntimePublication(async () => {
-    // A pending replacement gate means a queued config publication owns the next generation:
-    // it drains queued auth mutations against the new config and rebuilds/announces the
-    // dispatch publication. Rebuilding here would revive stale owners with the old config or
-    // throw on them, emitting a spurious failed/published event that wedges chat metadata.
+    // A pending replacement drains auth against the new config and owns the next dispatch.
+    // Rebuilding here could revive stale owners or emit lifecycle events that wedge metadata.
     if (pendingModelRuntimeReplacement) {
       authPublication.adoptTransaction(transaction, pendingModelRuntimeReplacement.gateId);
       return;
     }
-    await drainPendingAuthMutations(() => {
-      // Admission waits on this publication, so it must rebuild static content only. A profile-set
-      // change leaves a stale flag for the explicit catalog-read path to consume later.
+    await drainAuth(() => {
+      // Admission waits here, so rebuild static content and leave catalog refresh for explicit reads.
       if (pendingModelRuntimeReplacement) {
         authPublication.adoptTransaction(transaction, pendingModelRuntimeReplacement.gateId);
         return;
@@ -735,8 +733,7 @@ function invalidateForAuthMutation(event: PreparedModelRuntimeAuthMutation): voi
     }
     const refreshError = toStringifiedError(error);
     authPublication.reject(transaction, refreshError);
-    notifyPreparedModelRuntimePublication({ phase: "failed", error: refreshError });
-    log.warn(`auth-triggered model runtime refresh failed: ${String(refreshError)}`);
+    reportAuthRefreshFailure(refreshError);
   });
 }
 

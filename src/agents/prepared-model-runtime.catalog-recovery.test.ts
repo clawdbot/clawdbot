@@ -28,6 +28,7 @@ describe("prepared model runtime catalog recovery", () => {
     resetPreparedModelRuntimeHarness(state);
     mocks.configuredAgentDirs.set("default", "/tmp/unused-agent");
     mocks.configuredAgentDirs.set("secondary", "/tmp/configured-secondary");
+    mocks.configuredAgentDirs.set("tertiary", "/tmp/configured-tertiary");
   });
 
   afterEach(async () => {
@@ -211,7 +212,7 @@ describe("prepared model runtime catalog recovery", () => {
   });
 
   it("restores recovered dispatch when an adopted sibling refresh fails", async () => {
-    mocks.configuredAgentIds = ["default", "secondary"];
+    mocks.configuredAgentIds = ["default", "secondary", "tertiary"];
     const config = {};
     await refreshPreparedModelRuntimeSnapshots(config, { gatewayLifecycle: true });
     const defaultInput = {
@@ -242,7 +243,13 @@ describe("prepared model runtime catalog recovery", () => {
         await recoveryBuildBlocked;
         return { agentDir: String(args[1]), wrote: false };
       })
-      .mockRejectedValueOnce(siblingError);
+      .mockImplementationOnce(async () => {
+        mocks.mutationListener?.({
+          agentDir: "/tmp/configured-tertiary",
+          affectsInheritedStores: false,
+        });
+        throw siblingError;
+      });
 
     const recovery =
       replacePreparedModelRuntimeSnapshotAfterCatalogGenerationMismatch(initialDefault);
@@ -260,6 +267,9 @@ describe("prepared model runtime catalog recovery", () => {
     await expect(
       loadPublishedGatewayReplyDispatchRuntime({ agentId: "secondary" }),
     ).rejects.toThrow("prepared reply dispatch runtime owner was not published for secondary");
+    await expect(
+      loadPublishedGatewayReplyDispatchRuntime({ agentId: "tertiary" }),
+    ).resolves.toMatchObject({ agentId: "tertiary" });
   });
 
   it("rejects recovery when its adopted auth refresh fails", async () => {

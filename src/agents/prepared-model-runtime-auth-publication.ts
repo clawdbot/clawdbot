@@ -236,6 +236,7 @@ export class PreparedModelRuntimeAuthPublicationOwner {
     publishOwners: (owners: readonly PreparedModelRuntimeOwner[]) => void;
     commit?: () => void;
     onOwnerFailure?: (error: unknown) => void;
+    requiredOwner?: PreparedModelRuntimeOwner;
   }): Promise<void> {
     while (this.#events.length > 0) {
       const components = partitionAuthMutationOwners(this.#events.splice(0));
@@ -252,8 +253,11 @@ export class PreparedModelRuntimeAuthPublicationOwner {
             this.settleComponent(transaction, componentOwners, params.owners, params.publishOwners);
           }
         } catch (error) {
-          if (this.#transaction?.adoptedBy) {
-            // The replacement transaction exclusively settles adopted gates from its own result.
+          if (
+            this.#transaction?.adoptedBy &&
+            (!params.requiredOwner || componentOwners.includes(params.requiredOwner))
+          ) {
+            // A replacement cannot commit when the owner it requires fails to publish.
             throw error;
           }
           const transaction = this.#transaction;
