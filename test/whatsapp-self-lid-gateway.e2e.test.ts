@@ -17,7 +17,7 @@ import {
 const WHATSAPP_TEST_API_MODULE_ID = resolveRelativeBundledPluginPublicModuleId({
   fromModuleUrl: import.meta.url,
   pluginId: "whatsapp",
-  artifactBasename: "test-api.js",
+  artifactBasename: "src/test-support/self-lid-gateway-api.js",
 });
 const {
   extractMentionedJids,
@@ -30,7 +30,7 @@ const {
   setLoadConfigMock,
 } = (await import(
   WHATSAPP_TEST_API_MODULE_ID
-)) as typeof import("../extensions/whatsapp/test-api.js");
+)) as typeof import("../extensions/whatsapp/src/test-support/self-lid-gateway-api.js");
 
 const SELF_LID_ID = "900000000000001";
 const SELF_LID = SELF_LID_ID + "@lid";
