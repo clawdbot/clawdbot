@@ -73,40 +73,7 @@ function resolveActionArg(args: unknown): string | undefined {
   if (!args || typeof args !== "object") {
     return undefined;
   }
-  const actionRaw = (args as Record<string, unknown>).action;
-  if (typeof actionRaw !== "string") {
-    return undefined;
-  }
-  const action = normalizeOptionalString(actionRaw);
-  return action || undefined;
-}
-
-/** Resolve display verb/detail from tool args and optional display metadata. */
-export function resolveToolVerbAndDetailForArgs(params: {
-  toolKey: string;
-  args?: unknown;
-  meta?: string;
-  spec?: ToolDisplaySpec;
-  fallbackDetailKeys?: string[];
-  detailMode: "first" | "summary";
-  toolDetailMode?: ToolDetailMode;
-  detailCoerce?: CoerceDisplayValueOptions;
-  detailMaxEntries?: number;
-  detailFormatKey?: (raw: string) => string;
-}): { verb?: string; detail?: string } {
-  return resolveToolVerbAndDetail({
-    toolKey: params.toolKey,
-    args: params.args,
-    meta: params.meta,
-    action: resolveActionArg(params.args),
-    spec: params.spec,
-    fallbackDetailKeys: params.fallbackDetailKeys,
-    detailMode: params.detailMode,
-    toolDetailMode: params.toolDetailMode,
-    detailCoerce: params.detailCoerce,
-    detailMaxEntries: params.detailMaxEntries,
-    detailFormatKey: params.detailFormatKey,
-  });
+  return normalizeOptionalString((args as Record<string, unknown>).action);
 }
 
 function coerceDisplayValue(
@@ -707,9 +674,6 @@ function resolveDetailFromKeys(
     seen.add(token);
     unique.push(entry);
   }
-  if (unique.length === 0) {
-    return undefined;
-  }
 
   const maxEntries = opts.maxEntries ?? 8;
   const parts: string[] = [];
@@ -722,11 +686,11 @@ function resolveDetailFromKeys(
   return parts.join(" · ");
 }
 
-function resolveToolVerbAndDetail(params: {
+/** Resolve display verb/detail from tool args and optional display metadata. */
+export function resolveToolVerbAndDetailForArgs(params: {
   toolKey: string;
   args?: unknown;
   meta?: string;
-  action?: string;
   spec?: ToolDisplaySpec;
   fallbackDetailKeys?: string[];
   detailMode: "first" | "summary";
@@ -735,14 +699,15 @@ function resolveToolVerbAndDetail(params: {
   detailMaxEntries?: number;
   detailFormatKey?: (raw: string) => string;
 }): { verb?: string; detail?: string } {
-  const actionSpec = resolveActionSpec(params.spec, params.action);
+  const action = resolveActionArg(params.args);
+  const actionSpec = resolveActionSpec(params.spec, action);
   const fallbackVerb =
     params.toolKey === "web_search"
       ? "search"
       : params.toolKey === "web_fetch"
         ? "fetch"
         : params.toolKey.replace(/_/g, " ").replace(/\./g, " ");
-  const verb = normalizeVerb(actionSpec?.label ?? params.action ?? fallbackVerb);
+  const verb = normalizeVerb(actionSpec?.label ?? action ?? fallbackVerb);
 
   let detail: string | undefined;
   if (params.toolKey === "exec" || params.toolKey === "bash" || params.toolKey === "shell") {
@@ -808,4 +773,3 @@ export function formatToolDetailText(
   }
   return opts.prefixWithWith ? `with ${normalized}` : normalized;
 }
-/* oxlint-disable max-lines -- TODO: split this grandfathered oversized file. */
