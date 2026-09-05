@@ -14,10 +14,12 @@ import {
 import { listConfigAuditRecordsForTests } from "./io.audit.test-support.js";
 import { createConfigIO } from "./io.js";
 import {
-  maybeRecoverSuspiciousConfigRead,
-  maybeRecoverSuspiciousConfigReadSync,
   promoteConfigSnapshotToLastKnownGoodCore,
   recoverConfigFromLastKnownGoodCore,
+} from "./io.last-known-good.js";
+import {
+  maybeRecoverSuspiciousConfigRead,
+  maybeRecoverSuspiciousConfigReadSync,
 } from "./io.observe-recovery.js";
 import type { ConfigFileSnapshot } from "./types.js";
 
@@ -574,6 +576,100 @@ describe("config observe recovery", () => {
       expect(await fsp.readFile(configPath, "utf-8")).toBe(clobberedUpdateChannelRaw);
       expectWarnContaining(warn, "accepted baseline is hand-authored");
       expectWarnNotContaining(warn, "Config auto-restored from backup:");
+    });
+  });
+
+  it("loadConfig restores a promoted accepted baseline over a recognized clobber", async () => {
+    await withSuiteHome(async (home) => {
+      const { deps } = makeDeps(home);
+      const { io, configPath, warn } = createTestConfigIO(home);
+      const auditPath = path.join(home, ".openclaw", "logs", "config-audit.jsonl");
+      // Read 1: the operator's hand-authored config is accepted, and a later
+      // Gateway startup promotes those exact bytes to the retained `.last-good`.
+      const handAuthoredRaw = `${JSON.stringify(
+        { update: { channel: "beta" }, gateway: { mode: "local" } },
+        null,
+        2,
+      )}\n`;
+      await seedConfig(configPath, {
+        update: { channel: "beta" },
+        gateway: { mode: "local" },
+      });
+      io.loadConfig();
+      await promoteConfigSnapshotToLastKnownGoodCore({
+        deps,
+        snapshot: await makeSnapshot(configPath, {
+          update: { channel: "beta" },
+          gateway: { mode: "local" },
+        }),
+        logger: deps.logger,
+      });
+      expect(await fsp.readFile(resolveLastKnownGoodConfigPath(configPath), "utf-8")).toBe(
+        handAuthoredRaw,
+      );
+
+      // Read 2: a recognized clobber plus a `.bak` predating the accepted file.
+      // The retained `.last-good` is the only copy of the operator's config.
+      await fsp.writeFile(
+        `${configPath}.bak`,
+        `${JSON.stringify(recoverableCoreConfig, null, 2)}\n`,
+        "utf-8",
+      );
+      await writeClobberedUpdateChannel(configPath);
+
+      const config = io.loadConfig();
+
+      expect(config.gateway?.mode).toBe("local");
+      expect(await fsp.readFile(configPath, "utf-8")).toBe(handAuthoredRaw);
+      expectWarnContaining(warn, `Config auto-restored from last-good: ${configPath}`);
+      const observe = (await readObserveEvents(auditPath)).at(-1);
+      expect(observe?.restoredFromBackup).toBe(true);
+      expect(observe?.restoredBackupPath).toBe(resolveLastKnownGoodConfigPath(configPath));
+    });
+  });
+
+  it("read snapshots keep a recognized clobber when the retained baseline diverged", async () => {
+    await withSuiteHome(async (home) => {
+      const { deps } = makeDeps(home);
+      const { io, configPath, warn } = createTestConfigIO(home);
+      const auditPath = path.join(home, ".openclaw", "logs", "config-audit.jsonl");
+      await seedConfig(configPath, {
+        update: { channel: "beta" },
+        gateway: { mode: "local" },
+      });
+      io.loadConfig();
+      await promoteConfigSnapshotToLastKnownGoodCore({
+        deps,
+        snapshot: await makeSnapshot(configPath, {
+          update: { channel: "beta" },
+          gateway: { mode: "local" },
+        }),
+        logger: deps.logger,
+      });
+      // The retained copy no longer matches the recorded baseline hash, so
+      // restoring it would write unverified bytes over the active config.
+      await fsp.writeFile(
+        resolveLastKnownGoodConfigPath(configPath),
+        "{ broken: true }\n",
+        "utf-8",
+      );
+      await fsp.writeFile(
+        `${configPath}.bak`,
+        `${JSON.stringify(recoverableCoreConfig, null, 2)}\n`,
+        "utf-8",
+      );
+      await writeClobberedUpdateChannel(configPath);
+
+      const snapshot = await io.readConfigFileSnapshot({ recoverSuspicious: true });
+
+      expect(snapshot.config.gateway?.mode).toBeUndefined();
+      await expect(fsp.readFile(configPath, "utf-8")).resolves.toBe(clobberedUpdateChannelRaw);
+      expectWarnContaining(warn, "accepted baseline is hand-authored");
+      expectWarnContaining(warn, "no verified last-good copy exists");
+      expectWarnNotContaining(warn, "Config auto-restored from");
+      // Only the accepted-baseline anomaly is observed; no restore is recorded.
+      const observeEvents = await readObserveEvents(auditPath);
+      expect(observeEvents.filter((event) => event.restoredFromBackup === true)).toEqual([]);
     });
   });
 

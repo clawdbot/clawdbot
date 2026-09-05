@@ -1,9 +1,9 @@
 import { createConfigIoContext } from "./io.context.js";
-import { loadConfigFromContext } from "./io.load.js";
 import {
   promoteConfigSnapshotToLastKnownGoodCore,
   recoverConfigFromLastKnownGoodCore,
-} from "./io.observe-recovery.js";
+} from "./io.last-known-good.js";
+import { loadConfigFromContext } from "./io.load.js";
 import { recoverConfigFromJsonRootSuffixWithContext } from "./io.recovery.js";
 import {
   readBestEffortConfigSnapshotFromContext,
