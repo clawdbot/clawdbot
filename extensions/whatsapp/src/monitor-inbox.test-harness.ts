@@ -359,6 +359,9 @@ export function buildNotifyMessageUpsert(params: {
   timestamp: number;
   pushName?: string;
   participant?: string;
+  addressingMode?: string;
+  remoteJidAlt?: string;
+  participantAlt?: string;
 }) {
   return {
     type: "notify",
@@ -369,6 +372,9 @@ export function buildNotifyMessageUpsert(params: {
           fromMe: false,
           remoteJid: params.remoteJid,
           participant: params.participant,
+          addressingMode: params.addressingMode,
+          remoteJidAlt: params.remoteJidAlt,
+          participantAlt: params.participantAlt,
         },
         message: { conversation: params.text },
         messageTimestamp: params.timestamp,
