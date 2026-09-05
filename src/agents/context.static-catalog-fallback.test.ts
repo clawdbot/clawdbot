@@ -4,7 +4,11 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { resolveMemoryFlushContextWindowTokens } from "../auto-reply/reply/memory-flush.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
-import { resolveBundledStaticCatalogContext, resetContextWindowCacheForTest } from "./context.js";
+import {
+  isCatalogOwnedContextResolution,
+  resolveBundledStaticCatalogContext,
+  resetContextWindowCacheForTest,
+} from "./context.js";
 
 vi.mock("./embedded-agent-runner/model.static-catalog.js", async (importOriginal) => ({
   ...(await importOriginal<Record<string, unknown>>()),
@@ -56,7 +60,7 @@ describe("bundled static catalog enrichment failure isolation", () => {
           },
         },
       },
-    } as OpenClawConfig;
+    } as unknown as OpenClawConfig;
     expect(
       await resolveMemoryFlushContextWindowTokens({
         cfg,
@@ -64,5 +68,60 @@ describe("bundled static catalog enrichment failure isolation", () => {
         modelId: "deepseek-v4-flash",
       }),
     ).toBe(272_000);
+  });
+});
+
+describe("isCatalogOwnedContextResolution", () => {
+  it.each([
+    {
+      name: "warm cache resolves the same catalog value through the discovered cache",
+      staticCatalogContext: { modelContextWindow: 1_000_000 },
+      resolvedTokens: 1_000_000,
+      configOnlyTokens: 1_000_000,
+      expected: true,
+    },
+    {
+      name: "cold catalog resolution without config rows",
+      staticCatalogContext: { modelContextWindow: 1_000_000 },
+      resolvedTokens: 1_000_000,
+      configOnlyTokens: undefined,
+      expected: true,
+    },
+    {
+      name: "authored cap below the catalog row is not catalog-owned",
+      staticCatalogContext: { modelContextTokens: 200_000 },
+      resolvedTokens: 100_000,
+      configOnlyTokens: 100_000,
+      expected: false,
+    },
+    {
+      name: "authored cap equal to the catalog tokens stays catalog-owned",
+      staticCatalogContext: { modelContextWindow: 1_050_000, modelContextTokens: 272_000 },
+      resolvedTokens: 272_000,
+      configOnlyTokens: 272_000,
+      expected: true,
+    },
+    {
+      name: "missing catalog context is never catalog-owned",
+      staticCatalogContext: undefined,
+      resolvedTokens: 200_000,
+      configOnlyTokens: 200_000,
+      expected: false,
+    },
+    {
+      name: "unresolved model is never catalog-owned",
+      staticCatalogContext: { modelContextWindow: 1_000_000 },
+      resolvedTokens: undefined,
+      configOnlyTokens: undefined,
+      expected: false,
+    },
+  ])("$name", ({ staticCatalogContext, resolvedTokens, configOnlyTokens, expected }) => {
+    expect(
+      isCatalogOwnedContextResolution({
+        staticCatalogContext,
+        resolvedTokens,
+        configOnlyTokens,
+      }),
+    ).toBe(expected);
   });
 });

@@ -6,14 +6,38 @@ import type { FollowupExecutionResult } from "./followup-turn-execution.js";
 const mocks = vi.hoisted(() => ({
   persistSessionUsageUpdate: vi.fn(async (_params: unknown) => undefined),
   refreshQueuedFollowupSession: vi.fn(),
-  resolveContextTokensForModel: vi.fn<() => number | undefined>(() => 200_000),
-  resolveBundledStaticCatalogContext: vi.fn<() => Promise<undefined>>(async () => undefined),
+  resolveContextTokensForModel: vi.fn<
+    (params?: { modelContextWindow?: number }) => number | undefined
+  >(() => 200_000),
+  resolveBundledStaticCatalogContext: vi.fn<
+    (params?: {
+      cfg?: unknown;
+      provider?: string;
+      model?: string;
+    }) => Promise<{ modelContextWindow?: number; modelContextTokens?: number } | undefined>
+  >(async () => undefined),
+  isCatalogOwnedContextResolution: vi.fn<
+    (params?: {
+      staticCatalogContext?: { modelContextWindow?: number; modelContextTokens?: number };
+      resolvedTokens?: number;
+      configOnlyTokens?: number;
+    }) => boolean
+  >((params) => params?.staticCatalogContext !== undefined && params?.resolvedTokens !== undefined),
 }));
 
 vi.mock("../../agents/context.js", () => ({
-  resolveContextTokensForModel: (params: unknown) => mocks.resolveContextTokensForModel(params),
-  resolveBundledStaticCatalogContext: (params: unknown) =>
-    mocks.resolveBundledStaticCatalogContext(params),
+  resolveContextTokensForModel: (params?: { modelContextWindow?: number }) =>
+    mocks.resolveContextTokensForModel(params),
+  resolveBundledStaticCatalogContext: (params?: {
+    cfg?: unknown;
+    provider?: string;
+    model?: string;
+  }) => mocks.resolveBundledStaticCatalogContext(params),
+  isCatalogOwnedContextResolution: (params?: {
+    staticCatalogContext?: { modelContextWindow?: number; modelContextTokens?: number };
+    resolvedTokens?: number;
+    configOnlyTokens?: number;
+  }) => mocks.isCatalogOwnedContextResolution(params),
 }));
 
 vi.mock("../../agents/fast-mode.js", () => ({
@@ -174,6 +198,11 @@ describe("accountFollowupTurn", () => {
   beforeEach(() => {
     vi.clearAllMocks();
     mocks.resolveContextTokensForModel.mockReturnValue(200_000);
+    mocks.resolveBundledStaticCatalogContext.mockResolvedValue(undefined);
+    mocks.isCatalogOwnedContextResolution.mockImplementation(
+      (params) =>
+        params?.staticCatalogContext !== undefined && params?.resolvedTokens !== undefined,
+    );
   });
 
   it("forwards typed runtime context provenance to session persistence", async () => {
@@ -234,7 +263,7 @@ describe("accountFollowupTurn", () => {
       modelContextWindow: 120_000,
     });
     mocks.resolveContextTokensForModel.mockImplementation(
-      (params: { modelContextWindow?: number }) => params.modelContextWindow ?? 200_000,
+      (params?: { modelContextWindow?: number }) => params?.modelContextWindow ?? 200_000,
     );
     const runParams = createParams();
 

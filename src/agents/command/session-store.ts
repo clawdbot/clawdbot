@@ -113,13 +113,16 @@ export async function updateSessionStoreAfterAgentRun(params: {
     });
     if (resolvedTokens !== undefined) {
       contextTokens = resolvedTokens;
-      // Only a bundled catalog row that produced or tightened the effective
-      // window is a trusted persisted resolution; config-only clamps and the
-      // generic default stay legacy so removed caps cannot stick.
-      contextTokensSource ??=
-        configOnlyTokens === undefined || resolvedTokens < configOnlyTokens
-          ? "resolved-v1"
-          : "resolved";
+      // Only a bundled catalog row that owns the effective window is a trusted
+      // persisted resolution; config-only clamps and the generic default stay
+      // legacy so removed caps cannot stick.
+      contextTokensSource ??= contextModule.isCatalogOwnedContextResolution({
+        staticCatalogContext,
+        resolvedTokens,
+        configOnlyTokens,
+      })
+        ? "resolved-v1"
+        : "resolved";
     } else {
       contextTokens = DEFAULT_CONTEXT_TOKENS;
     }

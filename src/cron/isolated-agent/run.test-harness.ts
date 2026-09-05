@@ -76,6 +76,7 @@ export const runEmbeddedAgentMock = createMock();
 export const runCliAgentMock = createMock();
 export const resolveContextTokensForModelMock = createMock();
 export const resolveBundledStaticCatalogContextMock = createMock();
+export const isCatalogOwnedContextResolutionMock = createMock();
 export const getCliSessionBindingMock = createMock();
 export const loadSessionEntryMock = createMock();
 const replaceSessionEntryMock = createMock();
@@ -181,6 +182,7 @@ vi.mock("./run-external-content.runtime.js", () => ({
 vi.mock("./run-context.runtime.js", () => ({
   resolveContextTokensForModel: resolveContextTokensForModelMock,
   resolveBundledStaticCatalogContext: resolveBundledStaticCatalogContextMock,
+  isCatalogOwnedContextResolution: isCatalogOwnedContextResolutionMock,
 }));
 
 vi.mock("../../web-search/runtime.js", () => ({
@@ -647,6 +649,11 @@ function resetRunOutcomeMocks(): void {
   resolveContextTokensForModelMock.mockReturnValue(undefined);
   resolveBundledStaticCatalogContextMock.mockReset();
   resolveBundledStaticCatalogContextMock.mockResolvedValue(undefined);
+  isCatalogOwnedContextResolutionMock.mockReset();
+  isCatalogOwnedContextResolutionMock.mockImplementation(
+    (params?: { staticCatalogContext?: unknown; resolvedTokens?: number }) =>
+      params?.staticCatalogContext !== undefined && params?.resolvedTokens !== undefined,
+  );
   pickLastNonEmptyTextFromPayloadsMock.mockReset();
   pickLastNonEmptyTextFromPayloadsMock.mockReturnValue("test output");
   resolveCronPayloadOutcomeMock.mockReset();

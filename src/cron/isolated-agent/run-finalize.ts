@@ -137,12 +137,14 @@ export async function finalizeCronRun(params: {
     ...contextResolutionParams,
     ...staticCatalogContext,
   });
-  // Only a bundled catalog row that produced or tightened the effective window
-  // is a trusted persisted resolution; config-only clamps and the generic
-  // default stay legacy so removed caps cannot stick.
-  const catalogOwnedResolution =
-    modelContextTokens !== undefined &&
-    (configOnlyTokens === undefined || modelContextTokens < configOnlyTokens);
+  // Only a bundled catalog row that owns the effective window is a trusted
+  // persisted resolution; config-only clamps and the generic default stay
+  // legacy so removed caps cannot stick.
+  const catalogOwnedResolution = cronContextRuntime.isCatalogOwnedContextResolution({
+    staticCatalogContext,
+    resolvedTokens: modelContextTokens,
+    configOnlyTokens,
+  });
   const agentHarnessId = normalizeOptionalString(finalRunResult.meta?.agentMeta?.agentHarnessId);
   const authoredContextTokens = resolveAuthoredModelContextTokens({
     cfg: prepared.cfgWithAgentDefaults,

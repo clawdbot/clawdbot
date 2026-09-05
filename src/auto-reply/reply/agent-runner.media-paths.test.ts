@@ -111,6 +111,8 @@ vi.mock("../../agents/model-runtime-aliases.js", async () => {
 
 vi.mock("../../agents/context.js", () => ({
   resolveContextTokensForModel: () => 200_000,
+  resolveBundledStaticCatalogContext: async () => undefined,
+  isCatalogOwnedContextResolution: () => false,
 }));
 
 vi.mock("../../infra/agent-events.js", async () => {

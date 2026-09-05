@@ -1,4 +1,5 @@
 import {
+  isCatalogOwnedContextResolution,
   resolveBundledStaticCatalogContext,
   resolveContextTokensForModel,
 } from "../../agents/context.js";
@@ -289,12 +290,14 @@ export async function accountAgentTurn(context: AgentTurnAccountingContext) {
           ...staticCatalogContext,
         })
       : undefined;
-  // Only a bundled catalog row that produced or tightened the effective window
-  // earns the trusted persisted-resolution tag; config-only resolutions keep
-  // the legacy tag so removed caps cannot stick.
-  const catalogOwnedResolution =
-    resolvedContextTokens !== undefined &&
-    (configOnlyTokens === undefined || resolvedContextTokens < configOnlyTokens);
+  // Only a bundled catalog row that owns the effective window earns the
+  // trusted persisted-resolution tag; config-only resolutions keep the legacy
+  // tag so removed caps cannot stick.
+  const catalogOwnedResolution = isCatalogOwnedContextResolution({
+    staticCatalogContext,
+    resolvedTokens: resolvedContextTokens,
+    configOnlyTokens,
+  });
   const contextTokensUsed =
     runtimeContextTokens ??
     resolvedContextTokens ??

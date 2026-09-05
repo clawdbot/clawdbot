@@ -17,6 +17,8 @@ const scheduleFollowupDrainMock = vi.fn();
 
 vi.mock("../../agents/context.js", () => ({
   resolveContextTokensForModel: () => 200_000,
+  resolveBundledStaticCatalogContext: async () => undefined,
+  isCatalogOwnedContextResolution: () => false,
 }));
 
 vi.mock("../../agents/model-selection.js", async () => {

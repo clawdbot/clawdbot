@@ -759,13 +759,13 @@ describe("updateSessionStoreAfterAgentRun", () => {
       });
 
       expect(sessionStore[sessionKey]?.contextTokens).toBe(272_000);
-      // The config-authored clamp equals the config-only resolution, so the
-      // persisted value keeps the untrusted legacy tag (removed caps cannot
-      // stick as trusted resolutions).
-      expect(sessionStore[sessionKey]?.contextTokensSource).toBe("resolved");
+      // The authored clamp equals the bundled catalog's own contextTokens cap,
+      // so the value is still catalog-owned and persists as a trusted
+      // resolution.
+      expect(sessionStore[sessionKey]?.contextTokensSource).toBe("resolved-v1");
       expect(loadPersistedSessionEntry(storePath, sessionKey)?.contextTokens).toBe(272_000);
       expect(loadPersistedSessionEntry(storePath, sessionKey)?.contextTokensSource).toBe(
-        "resolved",
+        "resolved-v1",
       );
     });
   });
