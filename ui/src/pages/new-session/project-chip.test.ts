@@ -40,24 +40,37 @@ describe("What chip state", () => {
     expect(state.showWorkspace).toBe(showWorkspace);
   });
 
-  it("omits project recents already shown in the project list", () => {
-    const folderRecent = {
-      kind: "folder" as const,
-      folder: "/workspace/scratch",
-      displayName: "scratch",
-    };
-    const state = resolveProjectChip({
-      folder: "",
-      workspace: "/workspace",
-      projectId: "",
-      selectedRemoteProject: null,
-      projects,
-      recents: [{ kind: "project", projectId: "openclaw", displayName: "OpenClaw" }, folderRecent],
-      projectQuery: "",
-    });
+  it.each(["", "open"])(
+    "shows each project once, retaining recent order (query: %s)",
+    (projectQuery) => {
+      const folderRecent = {
+        kind: "folder" as const,
+        folder: "/workspace/scratch",
+        displayName: "scratch",
+      };
+      const state = resolveProjectChip({
+        folder: "",
+        workspace: "/workspace",
+        projectId: "",
+        selectedRemoteProject: null,
+        projects,
+        recents: [
+          { kind: "project", projectId: "openclaw", displayName: "OpenClaw" },
+          folderRecent,
+        ],
+        projectQuery,
+      });
 
-    expect(state.recents).toEqual([folderRecent]);
-  });
+      expect(state.recents).toEqual(
+        projectQuery
+          ? []
+          : [{ kind: "project", projectId: "openclaw", displayName: "OpenClaw" }, folderRecent],
+      );
+      expect(state.localProjects.map((project) => project.id)).toEqual(
+        projectQuery ? ["openclaw"] : ["website"],
+      );
+    },
+  );
 
   it.each([
     ["https://github.com/openclaw/openclaw.git", true],

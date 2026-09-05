@@ -202,13 +202,9 @@ function listProjectRecents(
     const folder = worktreeRoot ?? spawnedCwd ?? execCwd;
     // Reserved rows such as `global` carry no owner in their logical key. Keep the prepared
     // combined-store owner so equal workspace paths still resolve to the session's agent.
-    const sessionAgentId = expectDefined(
-      targetsBySessionKey.get(sessionKey),
-      "recent session owner",
-    ).agentId;
+    const owner = expectDefined(targetsBySessionKey.get(sessionKey), "recent session owner");
     const project =
-      explicitProject ??
-      (folder ? resolvePathProject(projects, folder, sessionAgentId) : undefined);
+      explicitProject ?? (folder ? resolvePathProject(projects, folder, owner.agentId) : undefined);
     const key = project
       ? `project:${project.id}`
       : folder
