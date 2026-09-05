@@ -422,7 +422,6 @@ export class ProfilePage extends OpenClawLightDomElement {
     return renderProfileHero({
       row,
       user: this.selfUser,
-      displayName: this.ownProfile?.displayName,
       identity: this.context.agentIdentity.get(agentId),
       resolveImageUrl: (avatarUrl) => this.heroAvatarLoader.resolve(avatarUrl),
       failedAvatarUrl: this.failedHeroAvatarUrl,

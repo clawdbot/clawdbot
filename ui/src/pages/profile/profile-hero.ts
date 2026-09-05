@@ -1,22 +1,15 @@
-// The connected person owns Profile; unidentified connections retain the agent preview.
 import { html, nothing } from "lit";
-import type { AgentIdentityResult } from "../../api/types.ts";
+import type { AgentIdentityResult, AgentsListResult } from "../../api/types.ts";
 import type { AuthenticatedUser } from "../../app/user-profile.ts";
 import { icons } from "../../components/icons.ts";
 import { renderSettingsGroup } from "../../components/settings-ui.ts";
+import { t } from "../../i18n/index.ts";
 import { resolveAgentAvatarUrl, resolveAssistantTextAvatar } from "../../lib/avatar.ts";
 import "../../components/viewer-facepile.ts";
 
-type HeroAgentRow = {
-  id: string;
-  name?: string;
-  identity?: { name?: string; emoji?: string; avatar?: string; avatarUrl?: string };
-};
-
 export type ProfileHeroProps = {
   user?: AuthenticatedUser | null;
-  displayName?: string | null;
-  row: HeroAgentRow;
+  row: AgentsListResult["agents"][number];
   identity: AgentIdentityResult | null | undefined;
   resolveImageUrl: (avatarUrl: string) => string | null;
   failedAvatarUrl: string | null;
@@ -51,8 +44,9 @@ function renderHeroAvatar(props: ProfileHeroProps, name: string) {
 }
 
 export function renderProfileHero(props: ProfileHeroProps) {
+  // An absent live name is authoritative; the editor's fetched profile may be stale.
   const name = props.user
-    ? props.user.name?.trim() || props.displayName?.trim() || props.user.email || props.user.id
+    ? props.user.name?.trim() || props.user.email || t("nav.owner")
     : props.identity?.name?.trim() ||
       props.row.identity?.name?.trim() ||
       props.row.name?.trim() ||

@@ -16,7 +16,10 @@ import {
   takeControlUiElementScreenshot,
   takeControlUiViewportScreenshot,
 } from "../test-helpers/control-ui-e2e-screenshot.ts";
-import { installMockGateway } from "../test-helpers/control-ui-e2e.ts";
+import {
+  installMockGateway,
+  type ControlUiMockGatewayScenario,
+} from "../test-helpers/control-ui-e2e.ts";
 import { createControlUiE2eSuite } from "./control-ui-e2e-suite.test-support.ts";
 
 const suite = createControlUiE2eSuite({
@@ -76,7 +79,7 @@ const linkedGitHubProfile = {
     avatarUrl: githubAvatarUrl,
   },
 };
-const testPresenceUsers = [
+const testPresenceUsers: NonNullable<ControlUiMockGatewayScenario["presenceUsers"]> = [
   {
     self: true,
     id: testProfile.id,
@@ -133,15 +136,27 @@ suite.define(() => {
     });
   });
 
-  it("wraps a long authenticated email beside the Profile badge on narrow screens", async () => {
-    const longEmail = "very-long-primary-user-address-for-profile-proof@example.com";
+  it("wraps an unnamed user's long email in both hero fields on narrow screens", async () => {
+    const longEmail = "primaryuserprimaryuserprimaryuserprimaryuserprimaryuser@example.test";
     await suite.withPage({ viewport: { width: 360, height: 800 } }, async ({ page }) => {
       await openProfilePage(
         page,
-        { "users.self": { profile: { ...testProfile, emails: [longEmail] } } },
-        testPresenceUsers.map((user) => ({ ...user, email: longEmail })),
+        { "users.self": { profile: { ...testProfile, displayName: null, emails: [longEmail] } } },
+        testPresenceUsers.map((user) => ({ ...user, name: undefined, email: longEmail })),
       );
 
+      const title = page.locator(".profile-hero__name");
+      await expect(title).toHaveText(longEmail);
+      expect(
+        await title.evaluate((element) => {
+          const parent = element.parentElement;
+          return (
+            parent !== null &&
+            element.getBoundingClientRect().width <= parent.clientWidth &&
+            element.scrollWidth <= element.clientWidth
+          );
+        }),
+      ).toBe(true);
       const handle = page.locator(".profile-hero__handle");
       await expect(handle).toContainText(longEmail);
       expect(await handle.evaluate((element) => element.scrollWidth <= element.clientWidth)).toBe(

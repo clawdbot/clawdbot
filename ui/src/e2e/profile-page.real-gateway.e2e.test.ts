@@ -141,8 +141,31 @@ suite.define(() => {
           if (proofDir) {
             await page.screenshot({
               animations: "disabled",
-              fullPage: true,
               path: path.join(proofDir, "01-real-gateway-authenticated-profile.png"),
+            });
+          }
+          await page.locator(".identity-name-control input").fill("Local draft");
+          const editor = await page.context().newPage();
+          await editor.goto(new URL("settings/profile", suite.server.baseUrl).href);
+          const nameInput = editor.locator(".identity-name-control input");
+          await expect.poll(() => nameInput.inputValue()).toBe("Test Person");
+          await nameInput.fill("Remote Person");
+          await nameInput.press("Enter");
+          await expect
+            .poll(() => page.locator(".profile-hero__name").textContent())
+            .toBe("Remote Person");
+          await nameInput.fill("");
+          await nameInput.press("Enter");
+          await expect
+            .poll(() => page.locator(".profile-hero__name").textContent())
+            .toBe(authenticatedUser);
+          await expect
+            .poll(() => page.locator(".identity-name-control input").inputValue())
+            .toBe("Local draft");
+          if (proofDir) {
+            await page.screenshot({
+              animations: "disabled",
+              path: path.join(proofDir, "02-real-gateway-cleared-profile.png"),
             });
           }
         },

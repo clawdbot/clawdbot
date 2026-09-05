@@ -50,6 +50,8 @@
 }
 
 .profile-hero__name {
+  max-width: 100%;
+  overflow-wrap: anywhere;
   font-size: 24px;
   font-weight: 700;
   letter-spacing: -0.02em;
