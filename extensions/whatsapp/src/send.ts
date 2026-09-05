@@ -36,6 +36,7 @@ import {
   prepareWhatsAppOutboundMedia,
   resolveAdditiveWhatsAppMediaUrls,
 } from "./outbound-media-contract.js";
+import { assertWhatsAppOutboundPolicyAllowed } from "./outbound-policy.js";
 import type { WhatsAppQuotedMessageKey } from "./quoted-message.js";
 import { markdownToWhatsAppChunks, toWhatsappJid } from "./text-runtime.js";
 
@@ -154,6 +155,7 @@ export async function sendMessageWhatsApp(
     audioAsVoice?: boolean;
     forceDocument?: boolean;
     accountId?: string;
+    sessionKey?: string;
     quotedMessageKey?: WhatsAppQuotedMessageKey;
     preserveLeadingWhitespace?: boolean;
     /** Report each accepted internal platform send before the next fallible send. */
@@ -197,6 +199,12 @@ async function sendMessageWhatsAppInActivityScope(
   const correlationId = generateSecureUuid();
   const startedAt = Date.now();
   const cfg = requireRuntimeConfig(options.cfg, "WhatsApp send");
+  assertWhatsAppOutboundPolicyAllowed({
+    cfg,
+    target: jid,
+    sessionKey: options.sessionKey,
+    action: "message",
+  });
   const { listener: active, accountId: resolvedAccountId } = requireOutboundActiveWebListener({
     cfg,
     accountId: options.accountId,
@@ -378,9 +386,16 @@ export async function sendTypingWhatsApp(
   options: {
     cfg: OpenClawConfig;
     accountId?: string;
+    sessionKey?: string;
   },
 ): Promise<void> {
   const cfg = requireRuntimeConfig(options.cfg, "WhatsApp typing send");
+  assertWhatsAppOutboundPolicyAllowed({
+    cfg,
+    target: to,
+    sessionKey: options.sessionKey,
+    action: "typing",
+  });
   const { listener: active } = requireOutboundActiveWebListener({
     cfg,
     accountId: options.accountId,
@@ -400,11 +415,18 @@ export async function sendReactionWhatsApp(
     fromMe?: boolean;
     participant?: string;
     accountId?: string;
+    sessionKey?: string;
     cfg: OpenClawConfig;
   },
 ): Promise<void> {
   const correlationId = generateSecureUuid();
   const cfg = requireRuntimeConfig(options.cfg, "WhatsApp reaction");
+  assertWhatsAppOutboundPolicyAllowed({
+    cfg,
+    target: chatJid,
+    sessionKey: options.sessionKey,
+    action: "reaction",
+  });
   const { listener: active } = requireOutboundActiveWebListener({
     cfg,
     accountId: options.accountId,
@@ -442,11 +464,17 @@ export async function sendReactionWhatsApp(
 export async function sendPollWhatsApp(
   to: string,
   poll: PollInput,
-  options: { verbose: boolean; accountId?: string; cfg: OpenClawConfig },
+  options: { verbose: boolean; accountId?: string; sessionKey?: string; cfg: OpenClawConfig },
 ): Promise<{ messageId: string; toJid: string }> {
   const correlationId = generateSecureUuid();
   const startedAt = Date.now();
   const cfg = requireRuntimeConfig(options.cfg, "WhatsApp poll");
+  assertWhatsAppOutboundPolicyAllowed({
+    cfg,
+    target: to,
+    sessionKey: options.sessionKey,
+    action: "poll",
+  });
   const { listener: active } = requireOutboundActiveWebListener({
     cfg,
     accountId: options.accountId,

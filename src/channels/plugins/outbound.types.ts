@@ -37,6 +37,8 @@ export type ChannelOutboundContext = {
   formatting?: OutboundDeliveryFormattingOptions;
   threadId?: string | number | null;
   accountId?: string | null;
+  /** Trusted originating turn context for channel-owned side-effect policy. */
+  sessionKey?: string;
   identity?: OutboundIdentity;
   deps?: OutboundSendDeps;
   silent?: boolean;

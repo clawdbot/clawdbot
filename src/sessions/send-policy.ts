@@ -16,6 +16,23 @@ import { deriveSessionChatType } from "./session-chat-type.js";
 /** Session send-policy decision after config and per-session overrides are evaluated. */
 export type SessionSendPolicyDecision = "allow" | "deny";
 
+export type SessionOutboundPolicyAction =
+  | "message"
+  | "poll"
+  | "reaction"
+  | "typing"
+  | "read_receipt"
+  | "system";
+
+export type SessionOutboundPolicyDecision =
+  | { status: "allow"; sendPolicy: "allow"; action: SessionOutboundPolicyAction }
+  | {
+      status: "deny";
+      sendPolicy: "deny";
+      action: SessionOutboundPolicyAction;
+      reason: "send_policy_denied";
+    };
+
 /** Normalizes raw send-policy text into a decision. */
 export function normalizeSendPolicy(raw?: string | null): SessionSendPolicyDecision | undefined {
   const value = normalizeOptionalLowercaseString(raw);
@@ -156,4 +173,24 @@ export function resolveSendPolicy(params: {
 
   const fallback = normalizeSendPolicy(policy.default);
   return fallback ?? "allow";
+}
+
+export function resolveSessionOutboundPolicy(params: {
+  cfg: OpenClawConfig;
+  entry?: SessionEntry;
+  sessionKey?: string;
+  channel?: string;
+  chatType?: SessionChatType;
+  action: SessionOutboundPolicyAction;
+}): SessionOutboundPolicyDecision {
+  const sendPolicy = resolveSendPolicy(params);
+  if (sendPolicy === "deny") {
+    return {
+      status: "deny",
+      sendPolicy,
+      action: params.action,
+      reason: "send_policy_denied",
+    };
+  }
+  return { status: "allow", sendPolicy, action: params.action };
 }

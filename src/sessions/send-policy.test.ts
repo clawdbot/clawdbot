@@ -3,7 +3,7 @@ import { describe, expect, it } from "vitest";
 import type { OpenClawConfig } from "../config/config.js";
 import type { SessionEntry } from "../config/sessions.js";
 import { buildAgentPeerSessionKey } from "../routing/session-key.js";
-import { resolveSendPolicy } from "./send-policy.js";
+import { resolveSendPolicy, resolveSessionOutboundPolicy } from "./send-policy.js";
 
 describe("resolveSendPolicy", () => {
   const cfgWithRules = (
@@ -204,5 +204,31 @@ describe("resolveSendPolicy", () => {
     } as OpenClawConfig;
 
     expect(resolveSendPolicy({ cfg, sessionKey })).toBe("deny");
+  });
+});
+
+describe("resolveSessionOutboundPolicy", () => {
+  it("uses sendPolicy as the shared outbound side-effect decision", () => {
+    const cfg = {
+      session: {
+        sendPolicy: {
+          default: "allow",
+          rules: [{ action: "deny", match: { channel: "whatsapp", chatType: "group" } }],
+        },
+      },
+    } as OpenClawConfig;
+
+    expect(
+      resolveSessionOutboundPolicy({
+        cfg,
+        action: "reaction",
+        sessionKey: "agent:main:whatsapp:group:1203630@g.us",
+      }),
+    ).toEqual({
+      status: "deny",
+      sendPolicy: "deny",
+      action: "reaction",
+      reason: "send_policy_denied",
+    });
   });
 });

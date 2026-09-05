@@ -80,6 +80,7 @@ export async function deliverOutboundPayloadsCore(
       to,
       deps,
       accountId,
+      session: params.session,
       replyToId: reply?.replyToId,
       replyToMode: reply?.source === "implicit" ? reply.mode : undefined,
       formatting: params.formatting,

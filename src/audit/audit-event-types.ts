@@ -51,6 +51,7 @@ export const AUDIT_OUTBOUND_MESSAGE_SUPPRESSED_REASONS = [
   "empty_after_message_sending_hook",
   "empty_after_reply_payload_sending_hook",
   "no_visible_payload",
+  "send_policy_denied",
 ] as const;
 
 export type AuditOutboundMessageSuppressedReasonCode =

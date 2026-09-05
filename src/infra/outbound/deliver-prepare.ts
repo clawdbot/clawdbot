@@ -2,6 +2,7 @@ import { copyReplyPayloadMetadata } from "../../auto-reply/reply-payload.js";
 // Finalizes outbound modifying policy before durable queue custody is created.
 import type { ReplyPayload } from "../../auto-reply/types.js";
 import { getGlobalHookRunner } from "../../plugins/hook-runner-global.js";
+import { resolveSessionOutboundPolicy } from "../../sessions/send-policy.js";
 import { throwIfAborted } from "./abort.js";
 import { createChannelHandler, resolveChannelOutboundDirectiveOptions } from "./deliver-channel.js";
 import type { DeliverOutboundPayloadsParams } from "./deliver-contracts.js";
@@ -54,6 +55,7 @@ async function createPreparationHandler(params: DeliverOutboundPayloadsParams) {
     to: params.to,
     deps: params.deps,
     accountId: params.accountId,
+    session: params.session,
     replyToId: reply?.replyToId,
     replyToMode: reply?.source === "implicit" ? reply.mode : undefined,
     formatting: params.formatting,
@@ -121,6 +123,35 @@ export async function prepareOutboundPayloadBatch(
   params: DeliverOutboundPayloadsParams,
   options?: { onBeforeFirstModifier?: () => void },
 ): Promise<PreparedOutboundBatch> {
+  const policy = resolveSessionOutboundPolicy({
+    cfg: params.cfg,
+    action: "message",
+    sessionKey: params.session?.policyKey ?? params.session?.key,
+    channel: params.channel,
+    chatType:
+      params.session?.conversationKind ??
+      (params.session?.conversationType === "direct" || params.session?.conversationType === "group"
+        ? params.session.conversationType
+        : undefined),
+  });
+  if (policy.status === "deny") {
+    return {
+      schemaVersion: PREPARED_OUTBOUND_BATCH_SCHEMA_VERSION,
+      sourcePayloadCount: params.payloads.length,
+      channelNormalized: true,
+      ...((params.runId ?? params.replyPayloadSendingHook?.runId)
+        ? { runId: params.runId ?? params.replyPayloadSendingHook?.runId }
+        : {}),
+      ...(params.executionIdentityToken
+        ? { executionIdentityToken: params.executionIdentityToken }
+        : {}),
+      entries: params.payloads.map((_, sourceIndex) => ({
+        sourceIndex,
+        status: "suppressed",
+        reason: policy.reason,
+      })),
+    };
+  }
   const directiveOptions = await resolveChannelOutboundDirectiveOptions({
     cfg: params.cfg,
     agentId: params.session?.agentId,

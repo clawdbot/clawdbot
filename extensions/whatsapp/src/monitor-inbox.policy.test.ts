@@ -236,6 +236,37 @@ describe("web monitor inbox", () => {
     await listener.close();
   });
 
+  it("delivery coordinator skips group read receipts denied by session.sendPolicy", async () => {
+    const { onMessage, listener, sock } = await startWebInboxMonitor({
+      config: {
+        channels: { whatsapp: { groupPolicy: "open" } },
+        messages: DEFAULT_MESSAGES_CFG,
+        session: {
+          sendPolicy: {
+            rules: [{ action: "deny", match: { channel: "whatsapp", chatType: "group" } }],
+          },
+        },
+      },
+    });
+    sock.ev.emit(
+      "messages.upsert",
+      createNotifyUpsert(
+        createGroupMessage({
+          id: "rr-policy-1",
+          participant: "15551234567@s.whatsapp.net",
+          conversation: "read receipt should stay silent",
+        }),
+      ),
+    );
+    await waitForMessageCalls(onMessage, 1);
+    await waitForInboundWorkDrained(listener);
+
+    expect(onMessage).toHaveBeenCalledTimes(1);
+    expect(sock.readMessages).not.toHaveBeenCalled();
+
+    await listener.close();
+  });
+
   it.each([
     {
       name: "lets group messages through even when sender not in allowFrom",

@@ -26,9 +26,13 @@ import { createSubsystemLogger } from "../../logging/subsystem.js";
 import type { OutboundMediaAccess, OutboundMediaReadFile } from "../../media/load-options.js";
 import { resolveAgentScopedOutboundMediaAccess } from "../../media/read-capability.js";
 import { extractToolPayload } from "../../plugin-sdk/tool-payload.js";
+import {
+  resolveSessionOutboundPolicy,
+  type SessionOutboundPolicyAction,
+} from "../../sessions/send-policy.js";
 import { formatErrorMessage } from "../errors.js";
 import { throwIfAborted } from "./abort.js";
-import type { OutboundDeliveryResult } from "./deliver-types.js";
+import { PlatformMessageNotDispatchedError, type OutboundDeliveryResult } from "./deliver-types.js";
 import type { NormalizedOutboundPayload, OutboundSendDeps } from "./deliver.js";
 import type { DurableDeliveryCompletion } from "./delivery-completion.js";
 import type { MessageActionGateway } from "./message-action-contracts.js";
@@ -107,6 +111,29 @@ type PluginHandledResult = {
 };
 
 type SendMessageParams = Parameters<typeof sendMessage>[0];
+
+function assertOutboundSendPolicyAllowed(params: {
+  ctx: OutboundSendContext;
+  action: SessionOutboundPolicyAction;
+}): void {
+  if (params.ctx.dryRun) {
+    return;
+  }
+  const decision = resolveSessionOutboundPolicy({
+    cfg: params.ctx.cfg,
+    action: params.action,
+    sessionKey: params.ctx.sessionKey ?? params.ctx.mirror?.sessionKey,
+    channel: params.ctx.channel,
+    chatType: params.ctx.conversationType,
+  });
+  if (decision.status === "allow") {
+    return;
+  }
+  throw new PlatformMessageNotDispatchedError(
+    `Session sendPolicy denied outbound ${params.action} on ${params.ctx.channel}`,
+    { cause: new Error(decision.reason), retryable: false },
+  );
+}
 
 export function materializeMessagePresentationFallback(params: {
   payload: Pick<ReplyPayload, "presentation" | "text">;
@@ -354,6 +381,7 @@ export async function executeSendAction(params: {
   sendResult?: MessageSendResult;
 }> {
   throwIfAborted(params.ctx.abortSignal);
+  assertOutboundSendPolicyAllowed({ ctx: params.ctx, action: "message" });
   const defaultPayload: ReplyPayload = params.payload ?? {
     text: params.message,
     mediaUrl: params.mediaUrl,
@@ -513,6 +541,7 @@ export async function executePollAction(params: {
   toolResult?: AgentToolResult<unknown>;
   pollResult?: MessagePollResult;
 }> {
+  assertOutboundSendPolicyAllowed({ ctx: params.ctx, action: "poll" });
   const pluginHandled = await tryHandleWithPluginAction({
     ctx: params.ctx,
     action: "poll",

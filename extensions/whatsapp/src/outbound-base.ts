@@ -109,6 +109,7 @@ export function createWhatsAppOutboundBase({
       cfg: params.cfg,
       ...mediaOptions,
       accountId: params.accountId ?? undefined,
+      ...(params.sessionKey ? { sessionKey: params.sessionKey } : {}),
       gifPlayback: params.gifPlayback,
       ...mediaDeliveryOptions,
       replyToIdSource: params.replyToIdSource,
@@ -161,10 +162,11 @@ export function createWhatsAppOutboundBase({
           },
           { forceDocument: params.forceDocument },
         ),
-      sendPoll: async ({ cfg, to, poll, accountId }) =>
+      sendPoll: async ({ cfg, to, poll, accountId, sessionKey }) =>
         await sendPollWhatsApp(to, poll, {
           verbose: shouldLogVerbose(),
           accountId: accountId ?? undefined,
+          ...(sessionKey ? { sessionKey } : {}),
           cfg,
         }),
     }),

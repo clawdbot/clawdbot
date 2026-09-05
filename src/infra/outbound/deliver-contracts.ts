@@ -140,6 +140,8 @@ export type ChannelHandlerParams = {
   channel: string;
   to: string;
   accountId?: string;
+  /** Trusted originating turn context for channel-owned side-effect policy. */
+  session?: OutboundSessionContext;
   replyToId?: string | null;
   replyToMode?: ReplyToMode;
   formatting?: OutboundDeliveryFormattingOptions;

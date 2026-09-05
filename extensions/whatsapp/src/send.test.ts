@@ -27,6 +27,14 @@ let setLoggerOverride: typeof import("openclaw/plugin-sdk/runtime-env").setLogge
 const WHATSAPP_TEST_CFG: OpenClawConfig = {
   channels: { whatsapp: {} },
 };
+const WHATSAPP_GROUP_SEND_DENIED_CFG: OpenClawConfig = {
+  session: {
+    sendPolicy: {
+      rules: [{ action: "deny", match: { channel: "whatsapp", chatType: "group" } }],
+    },
+  },
+  channels: { whatsapp: {} },
+};
 
 vi.mock("./connection-controller-runtime-context.js", async () => {
   const actual = await vi.importActual<typeof import("./connection-controller-runtime-context.js")>(
@@ -145,6 +153,64 @@ describe("web outbound", () => {
     });
     expect(sendComposingTo).toHaveBeenCalledWith("+1555");
     expect(sendMessage).toHaveBeenCalledWith("+1555", "hi", undefined, undefined);
+  });
+
+  it.each([
+    {
+      name: "messages",
+      run: async () =>
+        await sendMessageWhatsApp("120363401234567890@g.us", "hi", {
+          verbose: false,
+          cfg: WHATSAPP_GROUP_SEND_DENIED_CFG,
+          sessionKey: "agent:main:whatsapp:group:120363401234567890@g.us",
+        }),
+      expectNoSend: () => {
+        expect(sendComposingTo).not.toHaveBeenCalled();
+        expect(sendMessage).not.toHaveBeenCalled();
+      },
+    },
+    {
+      name: "typing",
+      run: async () =>
+        await sendTypingWhatsApp("120363401234567890@g.us", {
+          cfg: WHATSAPP_GROUP_SEND_DENIED_CFG,
+          sessionKey: "agent:main:whatsapp:group:120363401234567890@g.us",
+        }),
+      expectNoSend: () => {
+        expect(sendComposingTo).not.toHaveBeenCalled();
+      },
+    },
+    {
+      name: "polls",
+      run: async () =>
+        await sendPollWhatsApp(
+          "120363401234567890@g.us",
+          { question: "Lunch?", options: ["Pizza", "Sushi"] },
+          {
+            verbose: false,
+            cfg: WHATSAPP_GROUP_SEND_DENIED_CFG,
+            sessionKey: "agent:main:whatsapp:group:120363401234567890@g.us",
+          },
+        ),
+      expectNoSend: () => {
+        expect(sendPoll).not.toHaveBeenCalled();
+      },
+    },
+    {
+      name: "reactions",
+      run: async () =>
+        await sendReactionWhatsApp("120363401234567890@g.us", "msg123", "👀", {
+          verbose: false,
+          cfg: WHATSAPP_GROUP_SEND_DENIED_CFG,
+          sessionKey: "agent:main:whatsapp:group:120363401234567890@g.us",
+        }),
+      expectNoSend: () => {
+        expect(sendReaction).not.toHaveBeenCalled();
+      },
+    },
+  ])("blocks WhatsApp group $name denied by session.sendPolicy", async ({ run, expectNoSend }) => {
+    await expect(run()).rejects.toBeInstanceOf(PlatformMessageNotDispatchedError);
+    expectNoSend();
   });
 
   it.each([

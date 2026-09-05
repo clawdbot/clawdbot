@@ -45,6 +45,7 @@ export type OutboundPayloadDeliverySuppressionReason =
   | "empty_after_message_sending_hook"
   | "empty_after_reply_payload_sending_hook"
   | "no_visible_payload"
+  | "send_policy_denied"
   | "adapter_returned_no_send"
   | "adapter_returned_no_identity";
 
