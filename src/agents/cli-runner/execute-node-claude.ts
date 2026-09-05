@@ -275,6 +275,12 @@ export async function executeNodeClaudeRun(params: {
         signal: skillRuntime?.signal ?? nodeAbortController.signal,
       });
       if (decision === "allow-once" || decision === "allow-always") {
+        // Replay the approved canonical cwd so the invoke's systemRunPlan
+        // validation matches: nodePlacement.cwd may be the original symlink
+        // path, but the plan carries the realpath.
+        if (approval.systemRunPlan.cwd) {
+          params.nodePlacement.cwd = approval.systemRunPlan.cwd;
+        }
         nodeResult = await invokeNode({ decision, plan: approval.systemRunPlan });
       } else {
         nodeResult = {

@@ -3822,6 +3822,7 @@ describe("exec approval handlers", () => {
     expect(request["systemRunPlan"]).toEqual({
       argv: ["/usr/bin/echo", "ok"],
       cwd: "/real/cwd",
+      requestedCwd: null,
       commandText: "/usr/bin/echo ok",
       commandPreview: "echo ok",
       agentId: "main",
@@ -3834,6 +3835,33 @@ describe("exec approval handlers", () => {
         allowlistRules: [{ pattern: "/usr/bin/echo" }],
       },
     });
+  });
+
+  it("carries requestedCwd through the normalized approval plan", async () => {
+    const { request } = await requestExecApprovalForTest({
+      timeoutMs: 10,
+      command: "echo ok",
+      commandArgv: ["echo", "ok"],
+      cwd: "/tmp/link/sub",
+      systemRunPlan: {
+        argv: ["/usr/bin/echo", "ok"],
+        cwd: "/real/cwd",
+        requestedCwd: "/tmp/link/sub",
+        commandText: "/usr/bin/echo ok",
+        commandPreview: "echo ok",
+        agentId: "main",
+        sessionKey: "agent:main:main",
+        policySnapshot: {
+          security: "allowlist",
+          ask: "on-miss",
+          askFallback: "deny",
+          autoAllowSkills: false,
+          allowlistRules: [{ pattern: "/usr/bin/echo" }],
+        },
+      },
+    });
+    const plan = request["systemRunPlan"] as { requestedCwd?: string | null };
+    expect(plan.requestedCwd).toBe("/tmp/link/sub");
   });
 
   it("derives a command preview from the fallback command for older node plans", async () => {

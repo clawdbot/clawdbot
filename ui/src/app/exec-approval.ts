@@ -7,6 +7,7 @@ export type ExecApprovalRequestPayload = {
   command: string;
   scope?: ApprovalScope | null;
   cwd?: string | null;
+  requestedCwd?: string | null;
   host?: string | null;
   security?: string | null;
   ask?: string | null;
@@ -179,6 +180,7 @@ function parseExecApprovalRequested(payload: unknown): ExecApprovalRequest | nul
     request: {
       command,
       cwd: typeof request.cwd === "string" ? request.cwd : null,
+      requestedCwd: typeof request.requestedCwd === "string" ? request.requestedCwd : null,
       host: typeof request.host === "string" ? request.host : null,
       security: typeof request.security === "string" ? request.security : null,
       ask: typeof request.ask === "string" ? request.ask : null,

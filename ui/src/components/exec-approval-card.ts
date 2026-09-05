@@ -186,6 +186,9 @@ function renderExecBody(
     <div class="exec-approval-meta">
       ${renderMetaRow(t("execApproval.labels.host"), request.host)}
       ${renderMetaRow(t("execApproval.labels.cwd"), request.cwd, { path: true })}
+      ${request.requestedCwd && request.requestedCwd !== request.cwd
+        ? renderMetaRow(t("execApproval.labels.requestedCwd"), request.requestedCwd, { path: true })
+        : nothing}
     </div>
     ${renderDetails(html`
       ${renderMetaRow(t("execApproval.labels.resolved"), request.resolvedPath, { path: true })}
