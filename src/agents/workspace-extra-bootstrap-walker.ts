@@ -82,9 +82,11 @@ export function hasGlobPattern(pattern: string): boolean {
 // literal `pkg[ab]` directory instead would falsely reject the whole pattern if
 // a stray `pkg[ab]` symlink escaped the workspace. A fully-literal pattern
 // (routedToGlob false) keeps `[ ]` literal and its whole path — the `main`
-// bracket-path compatibility contract.
+// bracket-path compatibility contract. The routed grammar also treats an extglob
+// open (`@(`, `+(`, `!(`, plus `?(` and `*(`) as magic, matching where fs.glob
+// roots its walk over the alternatives rather than at a literally-named segment.
 function literalPatternPrefix(pattern: string, routedToGlob: boolean): string {
-  const magicSegment = routedToGlob ? /[?*{}[\]]/u : /[?*{}]/u;
+  const magicSegment = routedToGlob ? /[?*{}[\]]|[!*+?@]\(/u : /[?*{}]/u;
   const segments = normalizeWorkspacePatternPath(pattern).split("/");
   const literal: string[] = [];
   for (const segment of segments) {
