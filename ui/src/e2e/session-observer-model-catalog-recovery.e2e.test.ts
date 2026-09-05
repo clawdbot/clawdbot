@@ -1,5 +1,7 @@
+import { writeFile } from "node:fs/promises";
 import path from "node:path";
 import { expect, it } from "vitest";
+import { takeControlUiViewportScreenshot } from "../test-helpers/control-ui-e2e-screenshot.ts";
 import {
   installMockGateway,
   pauseVirtualClock,
@@ -86,10 +88,12 @@ suite.define(() => {
           text.trim(),
         );
         if (captureUiProof) {
-          await section.screenshot({
-            animations: "disabled",
-            path: path.join(suite.artifactDir, "01-initial-failure.png"),
-          });
+          // The settings section exceeds the viewport; keep its current field scroll.
+          await picker.scrollIntoViewIfNeeded();
+          await writeFile(
+            path.join(suite.artifactDir, "01-initial-failure.png"),
+            await takeControlUiViewportScreenshot(page, section, [picker]),
+          );
           await page.evaluate(() => {
             const cue = document.createElement("div");
             cue.id = "session-observer-proof-cue";

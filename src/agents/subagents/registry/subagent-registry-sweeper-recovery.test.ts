@@ -97,6 +97,7 @@ function createHarness(runtime: { current?: GatewayRecoveryRuntime }) {
     getGatewayRecoveryRuntime: () => runtime.current,
     abandonSubagentRestartRecoveryLaunch: vi.fn(() => true),
     clearAcceptedSubagentRestartRecovery: vi.fn(() => true),
+    clearPendingSubagentRecoveryNotice: vi.fn(() => true),
     resumeSettledSubagentRestartRecovery: vi.fn(() => true),
     replaceSubagentRunAfterSteer: vi.fn(() => true),
     markSubagentRestartRecoveryLaunchAttempted: vi.fn((params) => ({

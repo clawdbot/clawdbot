@@ -31,7 +31,6 @@ export type CandidateSkillDir = {
   skillDir: string;
   skillDirRealPath: string;
   name: string;
-  skillMdRealPath: string;
 };
 
 type PluginSkillCandidate = {
@@ -476,7 +475,6 @@ export function discoverSkillCandidates(params: {
               skillDir: baseDir,
               skillDirRealPath: baseDirRealPath,
               name: path.basename(baseDir),
-              skillMdRealPath: rootSkillRealPath,
             },
           ]
         : [],
@@ -538,7 +536,6 @@ export function discoverSkillCandidates(params: {
         skillDir: rootDir,
         skillDirRealPath: rootRealPath,
         name: path.basename(rootDir),
-        skillMdRealPath: configuredRootSkillRealPath,
       };
     }
   }
@@ -579,7 +576,6 @@ export function discoverSkillCandidates(params: {
           skillDir: candidate.skillDir,
           skillDirRealPath,
           name: candidate.name,
-          skillMdRealPath,
         });
       }
       continue;

@@ -86,6 +86,7 @@ class OpenClawBoardView extends OpenClawLightDomElement {
   @property({ attribute: false }) widgetFrameUrl?: BoardWidgetFrameUrl;
   @property({ attribute: false }) callbacks?: BoardViewCallbacks;
   @property({ type: Boolean }) active = true;
+  @property({ type: Boolean }) bridgeEnabled = true;
   @property({ type: Boolean }) canMutate = true;
   @property({ type: Boolean }) canGrant = true;
   @property({ type: Boolean }) fitAutoContent = false;
@@ -605,6 +606,7 @@ class OpenClawBoardView extends OpenClawLightDomElement {
                 .widgetFrameUrl=${this.widgetFrameUrl}
                 .callbacks=${this.cellCallbacks}
                 .active=${this.active}
+                .bridgeEnabled=${this.bridgeEnabled}
                 .dragging=${widget.name === this.gestureName}
                 .focusTabIndex=${widget.name === focusName ? 0 : -1}
                 .positionInSet=${(logicalPosition.get(widget.name) ?? 0) + 1}

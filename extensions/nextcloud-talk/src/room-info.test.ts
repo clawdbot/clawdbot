@@ -2,7 +2,9 @@
 import { mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import path from "node:path";
+import { SsrFBlockedError } from "openclaw/plugin-sdk/ssrf-runtime";
 import { afterEach, describe, expect, it, vi } from "vitest";
+import type { ResolvedNextcloudTalkAccount } from "./accounts.js";
 import { resolveNextcloudTalkRoomKind } from "./room-info.js";
 
 const fetchWithSsrFGuard = vi.hoisted(() => vi.fn());
@@ -14,10 +16,22 @@ vi.mock("../runtime-api.js", () => {
 
 afterEach(() => {
   fetchWithSsrFGuard.mockReset();
+  vi.restoreAllMocks();
   for (const dir of tempDirs.splice(0)) {
     rmSync(dir, { force: true, recursive: true });
   }
 });
+
+function lookupAccount(accountId: string): ResolvedNextcloudTalkAccount {
+  return {
+    accountId,
+    enabled: true,
+    baseUrl: "https://nc.example.com",
+    secret: "test-bot-secret",
+    secretSource: "config",
+    config: { apiUser: "test-user", apiPassword: "test-password" },
+  };
+}
 
 type RoomInfoFetchParams = {
   auditContext?: string;
@@ -255,18 +269,12 @@ describe("nextcloud talk room info", () => {
       ),
       release,
     });
-    const config = { apiUser: "test-user" };
-    Reflect.set(config, "apiPassword", "test-password");
-    const params: Record<string, unknown> = {
-      account: {
-        accountId: "test-account",
-        baseUrl: "https://nc.example.com",
-        config,
-      },
-    };
-    Reflect.set(params, "roomToken", "test-room");
-
-    await expect(resolveNextcloudTalkRoomKind(params as never)).resolves.toBeUndefined();
+    await expect(
+      resolveNextcloudTalkRoomKind({
+        account: lookupAccount("response-cleanup"),
+        roomToken: "test-room",
+      }),
+    ).rejects.toThrow("Nextcloud Talk room lookup failed (503)");
     expect(cancelBody).toHaveBeenCalledTimes(1);
     expect(release).toHaveBeenCalledTimes(1);
   });
@@ -318,4 +326,82 @@ describe("nextcloud talk room info", () => {
 
     expect(fetchWithSsrFGuard).not.toHaveBeenCalled();
   });
+
+  it.each([408, 429, 500, 503, 599])(
+    "leaves HTTP %s retryable and fetches the room again after recovery",
+    async (status) => {
+      const release = vi.fn(async () => {});
+      fetchWithSsrFGuard
+        .mockResolvedValueOnce({ response: new Response("", { status }), release })
+        .mockResolvedValueOnce({
+          response: jsonResponse({ ocs: { data: { type: 6 } } }),
+          release,
+        });
+      const params = { account: lookupAccount(`http-${status}`), roomToken: "direct" };
+
+      await expect(resolveNextcloudTalkRoomKind(params)).rejects.toThrow(`(${status})`);
+      await expect(resolveNextcloudTalkRoomKind(params)).resolves.toBe("direct");
+      await expect(resolveNextcloudTalkRoomKind(params)).resolves.toBe("direct");
+
+      expect(fetchWithSsrFGuard).toHaveBeenCalledTimes(2);
+      expect(release).toHaveBeenCalledTimes(2);
+    },
+  );
+
+  it("propagates transport errors without caching them", async () => {
+    const transportError = new TypeError("fetch failed");
+    fetchWithSsrFGuard.mockRejectedValueOnce(transportError).mockResolvedValueOnce({
+      response: jsonResponse({ ocs: { data: { type: 1 } } }),
+      release: vi.fn(async () => {}),
+    });
+    const params = { account: lookupAccount("transport"), roomToken: "direct" };
+
+    await expect(resolveNextcloudTalkRoomKind(params)).rejects.toBe(transportError);
+    await expect(resolveNextcloudTalkRoomKind(params)).resolves.toBe("direct");
+    expect(fetchWithSsrFGuard).toHaveBeenCalledTimes(2);
+  });
+
+  it.each([401, 403])("caches HTTP %s fallback for thirty seconds", async (status) => {
+    const clock = vi.spyOn(Date, "now").mockReturnValue(1_700_000_000_000);
+    fetchWithSsrFGuard
+      .mockResolvedValueOnce({
+        response: new Response("", { status }),
+        release: vi.fn(async () => {}),
+      })
+      .mockResolvedValueOnce({
+        response: jsonResponse({ ocs: { data: { type: 1 } } }),
+        release: vi.fn(async () => {}),
+      });
+    const params = { account: lookupAccount(`permanent-${status}`), roomToken: "direct" };
+
+    await expect(resolveNextcloudTalkRoomKind(params)).resolves.toBeUndefined();
+    clock.mockReturnValue(1_700_000_029_999);
+    await expect(resolveNextcloudTalkRoomKind(params)).resolves.toBeUndefined();
+    expect(fetchWithSsrFGuard).toHaveBeenCalledTimes(1);
+    clock.mockReturnValue(1_700_000_030_000);
+    await expect(resolveNextcloudTalkRoomKind(params)).resolves.toBe("direct");
+    expect(fetchWithSsrFGuard).toHaveBeenCalledTimes(2);
+  });
+
+  it("keeps security-policy rejection on the cached fallback path", async () => {
+    fetchWithSsrFGuard.mockRejectedValue(new SsrFBlockedError("blocked private network"));
+    const params = { account: lookupAccount("policy"), roomToken: "direct" };
+
+    await expect(resolveNextcloudTalkRoomKind(params)).resolves.toBeUndefined();
+    await expect(resolveNextcloudTalkRoomKind(params)).resolves.toBeUndefined();
+    expect(fetchWithSsrFGuard).toHaveBeenCalledTimes(1);
+  });
+
+  it.each(["not-a-url", "file:///tmp/nextcloud-talk"])(
+    "does not retry or fetch an invalid base URL: %s",
+    async (baseUrl) => {
+      const params = {
+        account: { ...lookupAccount(`invalid-${baseUrl}`), baseUrl },
+        roomToken: "direct",
+      };
+      await expect(resolveNextcloudTalkRoomKind(params)).resolves.toBeUndefined();
+      await expect(resolveNextcloudTalkRoomKind(params)).resolves.toBeUndefined();
+      expect(fetchWithSsrFGuard).not.toHaveBeenCalled();
+    },
+  );
 });

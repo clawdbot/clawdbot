@@ -87,6 +87,8 @@ export {
 
 type SqliteSessionEntryPatchOptions = SessionEntryPatchOptions & {
   skipMaintenance?: boolean;
+  /** Recheck owner cancellation after async preparation, immediately before committing. */
+  shouldCommit?: () => boolean;
   /** Synchronous owner bookkeeping after COMMIT, before observers can cancel the caller. */
   onCommitted?: (entry: SessionEntry) => void;
 };
@@ -333,7 +335,7 @@ export function listSessionEntriesByStatus(
 
 /** Lists transcript-bearing SQLite sessions, including retained rows from session-id rotation. */
 export function listSessionTranscriptInstances(
-  scope: Partial<Omit<SessionAccessScope, "sessionKey">> = {},
+  scope: SessionEntryListScope = {},
   options: SessionTranscriptInstanceListOptions = {},
 ): SessionTranscriptInstance[] {
   const resolved = resolveSqliteScope({ ...scope, sessionKey: "" });
@@ -342,7 +344,7 @@ export function listSessionTranscriptInstances(
       options.sessionId !== undefined
         ? {
             get: (sessionKey: string) =>
-              readExactSessionEntryRowValidated(database, sessionKey)?.entry,
+              readExactSessionEntryRowValidated(database, sessionKey, scope.projection)?.entry,
           }
         : new Map(
             listSqliteSessionEntriesFromDatabase(database, resolved, {
@@ -506,6 +508,9 @@ async function patchSqliteSessionEntrySnapshot(
     let previousIdentity = new Map<string, SessionEntry>();
     let currentIdentity = new Map<string, SessionEntry>();
     runOpenClawAgentWriteTransaction((writeDatabase) => {
+      if (options.shouldCommit?.() === false) {
+        return;
+      }
       const fresh = params.readSnapshot(writeDatabase);
       assertLifecycleTargetSnapshotUnchanged(prepared, fresh, params.operationLabel);
       options.assertCommitAllowed?.();

@@ -3,8 +3,10 @@ import { expectDefined } from "@openclaw/normalization-core";
 import { afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 import { normalizeToolParameters } from "../agents/agent-tools.schema.js";
 import { DEFAULT_PLUGIN_TOOLS_ALLOWLIST_ENTRY } from "../agents/tool-policy.js";
+import { createInvalidConfigError, throwInvalidConfig } from "../config/io.invalid-config.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import type { SecretRef } from "../config/types.secrets.js";
+import { createDedupeCache } from "../infra/dedupe.js";
 import { resetLogger, setLoggerOverride } from "../logging/logger.js";
 import { loggingState } from "../logging/state.js";
 import { resolveInstalledPluginIndexPolicyHash } from "./installed-plugin-index-policy.js";
@@ -3605,6 +3607,63 @@ describe("resolvePluginTools optional tools", () => {
     const tools = resolvePluginTools(createResolveToolsParams({ toolAllowlist: ["*"] }));
 
     expectResolvedToolNames(tools, ["optional_tool"]);
+  });
+  it("reports changed config diagnostics once without blaming the dependent plugin (#137694)", () => {
+    const logger = { error: vi.fn() };
+    const loggedConfigPaths = createDedupeCache({ ttlMs: 0, maxSize: 4096 });
+    let message = "first error";
+    setRegistry([
+      createNamedToolEntry("memory-wiki", "memory_wiki_tool", {
+        factory: () =>
+          throwInvalidConfig({
+            configPath: "/tmp/openclaw.json",
+            issues: [{ path: "plugins.entries.owner.config", message }],
+            logger,
+            loggedConfigPaths,
+          }),
+      }),
+    ]);
+    const errorSpy = vi.fn();
+    loggingState.rawConsole = { log: vi.fn(), info: vi.fn(), warn: vi.fn(), error: errorSpy };
+    setLoggerOverride({ level: "silent", consoleLevel: "error" });
+
+    for (const nextMessage of ["first error", "first error", "second error", "second error"]) {
+      message = nextMessage;
+      expectResolvedToolNames(
+        resolvePluginTools(createResolveToolsParams({ toolAllowlist: ["*"] })),
+        [],
+      );
+    }
+    expect(logger.error.mock.calls).toEqual([
+      ["Invalid config at /tmp/openclaw.json:\n- plugins.entries.owner.config: first error"],
+      ["Invalid config at /tmp/openclaw.json:\n- plugins.entries.owner.config: second error"],
+    ]);
+    expect(errorSpy).not.toHaveBeenCalled();
+  });
+
+  it.each([
+    ["unlogged invalid-config", createInvalidConfigError("/tmp/openclaw.json", "invalid property")],
+    ["ordinary factory", new Error("factory unavailable")],
+  ])("still logs %s errors from plugin factories (#137694)", (_kind, error) => {
+    setRegistry([
+      createNamedToolEntry("memory-wiki", "memory_wiki_tool", {
+        factory: () => {
+          throw error;
+        },
+      }),
+    ]);
+    const errorSpy = vi.fn();
+    loggingState.rawConsole = { log: vi.fn(), info: vi.fn(), warn: vi.fn(), error: errorSpy };
+    setLoggerOverride({ level: "silent", consoleLevel: "error" });
+
+    expectResolvedToolNames(
+      resolvePluginTools(createResolveToolsParams({ toolAllowlist: ["*"] })),
+      [],
+    );
+    expect(errorSpy).toHaveBeenCalledOnce();
+    expect(errorSpy).toHaveBeenCalledWith(
+      expect.stringContaining("plugin tool failed (memory-wiki)"),
+    );
   });
 });
 

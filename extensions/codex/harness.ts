@@ -11,7 +11,10 @@ import { resolvePluginConfigObject } from "openclaw/plugin-sdk/plugin-config-run
 import type { PluginRuntime } from "openclaw/plugin-sdk/plugin-runtime";
 import { runHostPreparedIsolatedCompletion } from "openclaw/plugin-sdk/simple-completion-runtime";
 import { readCodexRuntimeModelId } from "./src/app-server/model-runtime.js";
-import { sessionBindingIdentity } from "./src/app-server/session-binding-record.js";
+import {
+  sessionBindingIdentity,
+  readCodexSessionOwnershipBinding,
+} from "./src/app-server/session-binding-record.js";
 import type { CodexAppServerBindingStore } from "./src/app-server/session-binding.js";
 import type { CodexSessionCatalogControlFactory } from "./src/session-catalog-types.js";
 
@@ -124,7 +127,12 @@ export function createCodexAppServerAgentHarness(
         }
       };
       assertCurrent();
-      const binding = options.bindingStore.read(sessionBindingIdentity(params));
+      const binding = readCodexSessionOwnershipBinding({
+        bindingStore: options.bindingStore,
+        identity: sessionBindingIdentity(params),
+        config: params.config,
+        storePath: params.storePath,
+      });
       assertCurrent();
       return binding?.preserveNativeModel === true
         ? {

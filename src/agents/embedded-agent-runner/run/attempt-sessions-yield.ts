@@ -152,8 +152,6 @@ export function stripSessionsYieldArtifacts(activeSession: {
     return;
   }
 
-  activeSession.agent.state.messages = strippedMessages;
-
   // The interrupt marker can settle independently in live and persisted state.
   // Only assistant removals need the live-suffix cap to prevent data loss.
   let remainingAssistantCount = removedMessages.filter(
@@ -185,4 +183,5 @@ export function stripSessionsYieldArtifacts(activeSession: {
         (entry.type === "message" && isTranscriptOnlyOpenClawAssistantMessage(entry.message)),
     },
   );
+  activeSession.agent.state.messages = strippedMessages;
 }

@@ -37,10 +37,6 @@ export function removeTrailingMidTurnPrecheckAssistantError(params: {
 }): void {
   const messages = params.activeSession.agent.state.messages;
   const removedActiveError = isMidTurnPrecheckAssistantError(messages.at(-1));
-  if (removedActiveError) {
-    params.activeSession.agent.state.messages = messages.slice(0, -1);
-  }
-
   const removedPersistedError =
     params.sessionManager.removeTrailingEntries(
       (entry) => entry.type === "message" && isMidTurnPrecheckAssistantError(entry.message),
@@ -52,6 +48,9 @@ export function removeTrailingMidTurnPrecheckAssistantError(params: {
           (entry.type === "message" && isTranscriptOnlyOpenClawAssistantMessage(entry.message)),
       },
     ) > 0;
+  if (removedActiveError) {
+    params.activeSession.agent.state.messages = messages.slice(0, -1);
+  }
   if (removedActiveError && !removedPersistedError) {
     log.warn(
       "[context-overflow-midturn-precheck] removed synthetic assistant error from active session but could not locate matching persisted SessionManager entry",

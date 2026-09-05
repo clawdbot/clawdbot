@@ -1464,7 +1464,7 @@ describe("gateway session utils", () => {
     expect(nativeUltra.thinkingLevels).toContainEqual({ id: "ultra", label: "ultra" });
   });
 
-  test("strips retired thinking provenance from Gateway patch results", async () => {
+  test("strips retired thinking provenance from Gateway patch results", () => {
     const entry = {
       sessionId: "private-fallback",
       updatedAt: 1,
@@ -1477,25 +1477,20 @@ describe("gateway session utils", () => {
         ts: 1,
       },
     } as unknown as InternalSessionEntry;
-    const result = await projectSessionPatchResult({
+    const result = projectSessionPatchResult({
       canonicalKey: "agent:main:main",
       cfg: {
         agents: { defaults: { model: { primary: "openai/gpt-5.6-sol" } } },
       } as OpenClawConfig,
       entry,
-      modelCatalogByAgent: new Map([
-        [
-          "main",
-          Promise.resolve([
-            {
-              provider: "openai",
-              id: "gpt-5.6-sol",
-              name: "GPT 5.6 Sol",
-              reasoning: true,
-            },
-          ]),
-        ],
-      ]),
+      modelCatalog: [
+        {
+          provider: "openai",
+          id: "gpt-5.6-sol",
+          name: "GPT 5.6 Sol",
+          reasoning: true,
+        },
+      ],
       storePath: "/tmp/openclaw-sessions.json",
       targetAgentId: "main",
     });
@@ -3679,75 +3674,78 @@ describe("gateway session utils", () => {
     }
   });
 
-  test("loadSessionEntry preserves a listed deleted main session over the live default main", async () => {
-    resetConfigRuntimeState();
-    try {
-      await withStateDirEnv("session-utils-load-deleted-main-entry-", async ({ stateDir }) => {
-        const storeTemplate = path.join(
-          stateDir,
-          "agents",
-          "{agentId}",
-          "sessions",
-          "sessions.json",
-        );
-        const liveSessionsDir = path.join(stateDir, "agents", "ops", "sessions");
-        const deletedSessionsDir = path.join(stateDir, "agents", "main", "sessions");
-        fs.mkdirSync(liveSessionsDir, { recursive: true });
-        fs.mkdirSync(deletedSessionsDir, { recursive: true });
-        const liveStorePath = path.join(liveSessionsDir, "sessions.json");
-        const deletedStorePath = path.join(deletedSessionsDir, "sessions.json");
-        await seedSessionEntries(liveStorePath, {
-          "agent:ops:main": { sessionId: "sess-live-default", updatedAt: 10 },
-        });
-        await seedSessionEntries(deletedStorePath, {
-          "agent:main:main": { sessionId: "sess-deleted-main", updatedAt: 20 },
-        });
-        const cfg = {
-          session: { mainKey: "main", store: storeTemplate },
-          agents: { list: [{ id: "ops", default: true }] },
-        } as OpenClawConfig;
-        setRuntimeConfigSnapshot(cfg, cfg);
-
-        const target = resolveGatewaySessionStoreTarget({ cfg, key: "agent:main:main" });
-        const loaded = loadSessionEntry("agent:main:main");
-
-        expect(target.canonicalKey).toBe("agent:main:main");
-        expect(target.agentId).toBe("main");
-        expect(target.storePath).toBe(path.resolve(deletedStorePath));
-        expect(loaded.canonicalKey).toBe("agent:main:main");
-        expect(loaded.storePath).toBe(path.resolve(deletedStorePath));
-        expect(loaded.entry?.sessionId).toBe("sess-deleted-main");
-        closeOpenClawAgentDatabasesForTest();
-        const parse = JSON.parse;
-        let liveDefaultParses = 0;
-        const parseSpy = vi.spyOn(JSON, "parse").mockImplementation((text, reviver) => {
-          if (text.includes('"sessionId":"sess-live-default"')) {
-            liveDefaultParses += 1;
-          }
-          return parse(text, reviver);
-        });
-        try {
-          expect(
-            resolveGatewaySessionStoreTargetsReadOnly({
-              cfg,
-              targets: [{ key: "agent:main:main" }],
-            }),
-          ).toMatchObject([
-            {
-              agentId: "main",
-              storePath: path.resolve(deletedStorePath),
-              store: { "agent:main:main": { sessionId: "sess-deleted-main" } },
-            },
-          ]);
-          expect(liveDefaultParses).toBe(0);
-        } finally {
-          parseSpy.mockRestore();
-        }
-      });
-    } finally {
+  test.each([undefined, "main", "research"])(
+    "keeps private deleted-main discovery ahead of replacement selection (%s)",
+    async (agentId) => {
       resetConfigRuntimeState();
-    }
-  });
+      try {
+        await withStateDirEnv("session-utils-load-deleted-main-entry-", async ({ stateDir }) => {
+          const storeTemplate = path.join(
+            stateDir,
+            "agents",
+            "{agentId}",
+            "sessions",
+            "sessions.json",
+          );
+          const liveSessionsDir = path.join(stateDir, "agents", "ops", "sessions");
+          const deletedSessionsDir = path.join(stateDir, "agents", "main", "sessions");
+          fs.mkdirSync(liveSessionsDir, { recursive: true });
+          fs.mkdirSync(deletedSessionsDir, { recursive: true });
+          const liveStorePath = path.join(liveSessionsDir, "sessions.json");
+          const deletedStorePath = path.join(deletedSessionsDir, "sessions.json");
+          await seedSessionEntries(liveStorePath, {
+            "agent:ops:main": { sessionId: "sess-live-default", updatedAt: 10 },
+          });
+          await seedSessionEntries(deletedStorePath, {
+            "agent:main:main": { sessionId: "sess-deleted-main", updatedAt: 20 },
+          });
+          const cfg = {
+            session: { store: storeTemplate },
+            agents: { ownership: "explicit", entries: { ops: {}, research: {} } },
+          } as OpenClawConfig;
+          setRuntimeConfigSnapshot(cfg, cfg);
+
+          const target = resolveGatewaySessionStoreTarget({ cfg, key: "agent:main:main", agentId });
+          const loaded = loadSessionEntry("agent:main:main", { agentId });
+
+          expect(target.canonicalKey).toBe("agent:main:main");
+          expect(target.agentId).toBe("main");
+          expect(target.storePath).toBe(path.resolve(deletedStorePath));
+          expect(loaded.canonicalKey).toBe("agent:main:main");
+          expect(loaded.storePath).toBe(path.resolve(deletedStorePath));
+          expect(loaded.entry?.sessionId).toBe("sess-deleted-main");
+          closeOpenClawAgentDatabasesForTest();
+          const parse = JSON.parse;
+          let liveDefaultParses = 0;
+          const parseSpy = vi.spyOn(JSON, "parse").mockImplementation((text, reviver) => {
+            if (text.includes('"sessionId":"sess-live-default"')) {
+              liveDefaultParses += 1;
+            }
+            return parse(text, reviver);
+          });
+          try {
+            expect(
+              resolveGatewaySessionStoreTargetsReadOnly({
+                cfg,
+                targets: [{ key: "agent:main:main", agentId }],
+              }),
+            ).toMatchObject([
+              {
+                agentId: "main",
+                storePath: path.resolve(deletedStorePath),
+                store: { "agent:main:main": { sessionId: "sess-deleted-main" } },
+              },
+            ]);
+            expect(liveDefaultParses).toBe(0);
+          } finally {
+            parseSpy.mockRestore();
+          }
+        });
+      } finally {
+        resetConfigRuntimeState();
+      }
+    },
+  );
 
   test.each([false, true])(
     "keeps deleted-main incognito lookups in their process store (exactRead=%s)",
@@ -3929,6 +3927,24 @@ describe("gateway session utils", () => {
     expect(result.agents[0]?.identity?.avatarUrl).toBe(
       `data:image/png;base64,${Buffer.from("avatar").toString("base64")}`,
     );
+  });
+
+  test.each(["local", "data"])("keeps %s avatar bytes out of browser agent rows", (kind) => {
+    const workspace = fs.mkdtempSync(path.join(os.tmpdir(), "session-utils-browser-avatar-"));
+    onTestFinished(() => fs.rmSync(workspace, { recursive: true, force: true }));
+    const dataUrl = `data:image/png;base64,${Buffer.from("avatar").toString("base64")}`;
+    fs.writeFileSync(path.join(workspace, "avatar-link.png"), "avatar");
+    const cfg = createSingleAgentAvatarConfig(workspace);
+    if (kind === "data") {
+      cfg.agents!.list![0]!.identity!.avatar = dataUrl;
+    }
+    const browser = listAgentsForGateway(cfg, undefined, { httpAvatarBasePath: "/control" });
+    expect(browser.agents[0]?.identity?.avatarUrl).toMatch(
+      /^\/control\/avatar\/main\?v=[a-f0-9]+$/,
+    );
+    expect(browser.agents[0]?.identity?.avatar).toBe(browser.agents[0]?.identity?.avatarUrl);
+    expect(JSON.stringify(browser)).not.toContain(dataUrl);
+    expect(listAgentsForGateway(cfg).agents[0]?.identity?.avatarUrl).toBe(dataUrl);
   });
 
   test("listAgentsForGateway falls back to identity.name when name is unset", () => {

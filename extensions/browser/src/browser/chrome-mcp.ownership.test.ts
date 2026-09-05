@@ -132,6 +132,9 @@ function createMarkerSession(options: { existingPage?: boolean; navigateError?: 
       connect: vi.fn(),
     },
     transport: { pid: 123 },
+    closeTransport() {
+      return this.client.close();
+    },
     ready: Promise.resolve(),
     routing: {
       sessionNonce: "000000000001",

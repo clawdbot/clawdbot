@@ -16,10 +16,10 @@ import type { MsgContext } from "../templating.js";
 import type { ElevatedLevel } from "../thinking.js";
 import type { ReplyPayload } from "../types.js";
 import type { CommandContext } from "./commands-types.js";
+import { maybeHandleUnexpectedDirectiveArguments } from "./directive-handling.arguments.js";
 import { isDirectiveOnly } from "./directive-handling.directive-only.js";
 import { resolveModelRuntimeDirective } from "./directive-handling.model-runtime.js";
 import { resolveModelSelectionFromDirective } from "./directive-handling.model-selection.js";
-import { maybeHandleUnexpectedNativeDirectiveArguments } from "./directive-handling.native.js";
 import type { HandleDirectiveOnlyParams } from "./directive-handling.params.js";
 import type { InlineDirectives } from "./directive-handling.parse.js";
 import { formatModelSelectionScopeAck } from "./directive-handling.shared.js";
@@ -337,11 +337,11 @@ export async function applyInlineDirectiveOverrides(params: {
   }
 
   // Model-only directives have a focused persistence service; reject leftovers before that mutation.
-  if (directives.nativeCommand?.name === "model") {
-    const unexpectedNativeArguments = maybeHandleUnexpectedNativeDirectiveArguments(directives);
-    if (unexpectedNativeArguments) {
+  if (directives.command?.name === "model") {
+    const unexpectedArguments = maybeHandleUnexpectedDirectiveArguments(directives);
+    if (unexpectedArguments) {
       typing.cleanup();
-      return { kind: "reply", reply: unexpectedNativeArguments };
+      return { kind: "reply", reply: unexpectedArguments };
     }
   }
 

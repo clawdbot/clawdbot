@@ -3,6 +3,7 @@ import type { ConfigFileSnapshot, OpenClawConfig } from "../config/types.opencla
 import type { HeartbeatRunner } from "../infra/heartbeat-runner.js";
 import type { GatewayRestartEmitter } from "../infra/restart.js";
 import type { PluginMetadataSnapshot } from "../plugins/plugin-metadata-snapshot.types.js";
+import type { PluginRegistry } from "../plugins/registry.js";
 import type { ChannelKind, GatewayReloadPlan } from "./config-reload-plan.js";
 import type { GatewayCronReconciliation } from "./server-cron-reconciled.js";
 import type { GatewayCronState } from "./server-cron.js";
@@ -140,11 +141,14 @@ export type GatewayReloadHandlerParams = {
   getState: () => GatewayHotReloadState;
   setState: (state: GatewayHotReloadState) => void;
   getPluginMetadataSnapshot?: () => PluginMetadataSnapshot | undefined;
+  getPluginRegistry: () => PluginRegistry;
   startChannel: GatewayChannelManager["startChannel"];
   stopChannel: GatewayChannelManager["stopChannel"];
+  releaseChannelRouteHandoffs: GatewayChannelManager["releaseChannelRouteHandoffs"];
   pruneInactiveChannelAccountState: (activeChannelIds: ReadonlySet<ChannelKind>) => void;
   getChannelAutostartSuppression?: GatewayChannelManager["getAutostartSuppression"];
   stopPostReadySidecars?: () => Promise<void> | void;
+  reloadPluginServices?: (config: OpenClawConfig, serviceIds: ReadonlySet<string>) => Promise<void>;
   reloadPlugins: (params: {
     nextConfig: OpenClawConfig;
     sourceConfig: OpenClawConfig;
@@ -174,7 +178,10 @@ export type GatewayReloadHandlerParams = {
 
 export type ManagedGatewayConfigReloaderParams = Omit<
   GatewayReloadHandlerParams,
-  "assertRestartReady" | "logReload" | "pruneInactiveChannelAccountState"
+  | "assertRestartReady"
+  | "logReload"
+  | "pruneInactiveChannelAccountState"
+  | "releaseChannelRouteHandoffs"
 > & {
   configRevisionProjector: import("./config-revision-token.js").GatewayConfigRevisionProjector;
   minimalTestGateway: boolean;

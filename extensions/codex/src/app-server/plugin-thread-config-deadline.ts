@@ -108,15 +108,20 @@ async function buildCodexPluginThreadConfigWithinDeadline(
   // One deadline owns the whole config build; every RPC gets only the remaining
   // budget so discovery cannot consume one full request timeout per call.
   const deadlineMs = Date.now() + timeoutMs;
-  const boundedRequest: CodexPluginRuntimeRequest = (method, requestParams) => {
+  let requestTimedOut = false;
+  const boundedRequest: CodexPluginRuntimeRequest = async (method, requestParams) => {
     const remainingTimeoutMs = deadlineMs - Date.now();
-    if (remainingTimeoutMs <= 0) {
+    if (requestTimedOut || remainingTimeoutMs <= 0) {
       throw new CodexPluginThreadConfigDeadlineError();
     }
-    return request(method, requestParams, {
-      timeoutMs: remainingTimeoutMs,
-      signal,
-    });
+    try {
+      return await request(method, requestParams, { timeoutMs: remainingTimeoutMs, signal });
+    } catch (error) {
+      // Inventory readers absorb failures. Preserve timeout evidence before they
+      // turn it into missing apps, even if the wall clock trails the request timer.
+      requestTimedOut ||= isCodexPluginThreadConfigTimeoutError(error);
+      throw error;
+    }
   };
   try {
     return await withAbortableTimeout({
@@ -129,7 +134,7 @@ async function buildCodexPluginThreadConfigWithinDeadline(
         });
         const result = transform ? await transform(config, boundedRequest) : config;
         // Inventory readers can absorb an RPC timeout into an unavailable result.
-        if (Date.now() >= deadlineMs) {
+        if (requestTimedOut || Date.now() >= deadlineMs) {
           throw new CodexPluginThreadConfigDeadlineError();
         }
         return result;
@@ -140,7 +145,7 @@ async function buildCodexPluginThreadConfigWithinDeadline(
   } catch (error) {
     if (
       signal.aborted ||
-      (!isCodexPluginThreadConfigTimeoutError(error) && Date.now() < deadlineMs)
+      (!requestTimedOut && !isCodexPluginThreadConfigTimeoutError(error) && Date.now() < deadlineMs)
     ) {
       throw error;
     }

@@ -56,9 +56,6 @@ export function chatHistoryRequests(owner: object): ChatHistoryPaneRequests {
   return requests;
 }
 
-/** Dispatched by a pane whenever its authoritative transcript starts or stops loading. */
-export const CHAT_TRANSCRIPT_LOADING_CHANGED_EVENT = "openclaw-chat-transcript-loading-changed";
-
 function isChatHistoryLoading(load: ChatHistoryLoadState): boolean {
   return load.phase === "pending-connection" || load.phase === "in-flight";
 }
@@ -109,10 +106,6 @@ export function getChatHistoryLoadState(state: ChatState): ChatHistoryLoadState 
     state.requestUpdate?.();
   }
   return requests.historyLoad;
-}
-
-export function getChatHistoryVersion(state: ChatState): number {
-  return chatHistoryRequests(state).historyVersion;
 }
 
 type ChatHistoryRequestOwnership = {

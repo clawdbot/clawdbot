@@ -46,7 +46,6 @@ import {
   registerChatAttachmentPayload as registerStoredChatAttachmentPayload,
   releaseChatAttachmentPayloads,
 } from "./attachment-payload-store.ts";
-import { refreshChatAvatar } from "./chat-avatar.ts";
 import * as chatCommandExecutor from "./chat-command-executor.ts";
 import type { executeSlashCommand } from "./chat-command-executor.ts";
 import { handleChatGatewayEvent } from "./chat-gateway.ts";
@@ -318,16 +317,6 @@ function navigateChatInputHistory(host: TestChatHost, direction: "up" | "down"):
   }).handled;
 }
 
-function requestUrl(input: string | URL | Request): string {
-  if (typeof input === "string") {
-    return input;
-  }
-  if (input instanceof URL) {
-    return input.toString();
-  }
-  return input.url;
-}
-
 function createJsonResponse(body: unknown, options: { ok?: boolean } = {}): Response {
   const response = new Response(null, { status: options.ok === false ? 500 : 200 });
   response.json = async () => await body;
@@ -341,14 +330,6 @@ type MockCallSource = {
 };
 
 const requireRecord = createRequireRecord("object", "expected-label");
-
-function mockArg(source: MockCallSource, callIndex: number, argIndex: number, label: string) {
-  const call = source.mock.calls[callIndex];
-  if (!call) {
-    throw new Error(`expected mock call: ${label}`);
-  }
-  return call[argIndex];
-}
 
 function findRequestPayload(source: MockCallSource, method: string, label: string) {
   const call = Array.from(source.mock.calls).find((candidate) => candidate[0] === method);
@@ -382,18 +363,6 @@ function admitHostQueueItems(host: TestChatHost): void {
     );
     expect(admitStoredChatComposerQueueItem(host, admission, item)).toBe(true);
   }
-}
-
-function fetchInit(source: MockCallSource, callIndex: number) {
-  return requireRecord(mockArg(source, callIndex, 1, `fetch init ${callIndex}`), "fetch init");
-}
-
-function fetchUrl(source: MockCallSource, callIndex: number) {
-  const input = mockArg(source, callIndex, 0, `fetch input ${callIndex}`);
-  if (typeof input === "string" || input instanceof URL || input instanceof Request) {
-    return requestUrl(input);
-  }
-  throw new Error(`expected fetch input ${callIndex}`);
 }
 
 function createSessionsResult(sessions: GatewaySessionRow[]): SessionsListResult {
@@ -482,7 +451,11 @@ describe("refreshChat", () => {
 
     expect(await raceWithMacrotask(refresh)).toBe("resolved");
     expect(host.chatLoading).toBe(true);
-    expect(host.request).toHaveBeenCalledWith("chat.history", { sessionKey: "main", limit: 800 });
+    expect(host.request).toHaveBeenCalledWith("chat.history", {
+      sessionKey: "main",
+      limit: 80,
+      maxBytes: 256 * 1024,
+    });
     expect(host.request).not.toHaveBeenCalledWith("sessions.list", expect.anything());
     expect(requestUpdate).not.toHaveBeenCalled();
   });
@@ -745,7 +718,7 @@ describe("refreshChat", () => {
     [
       "selected global agent",
       { sessionKey: "global", assistantAgentId: "work", agentsList: { defaultId: "main" } },
-      { sessionKey: "global", agentId: "work", limit: 800 },
+      { sessionKey: "global", agentId: "work", limit: 80, maxBytes: 256 * 1024 },
     ],
     [
       "agent main alias",
@@ -753,7 +726,7 @@ describe("refreshChat", () => {
         sessionKey: "agent:work:main",
         agentsList: { defaultId: "main", mainKey: "main", scope: "global" as const },
       },
-      { sessionKey: "agent:work:main", agentId: "work", limit: 800 },
+      { sessionKey: "agent:work:main", agentId: "work", limit: 80, maxBytes: 256 * 1024 },
     ],
     [
       "agent session",
@@ -761,7 +734,7 @@ describe("refreshChat", () => {
         sessionKey: "agent:work:dashboard",
         agentsList: { defaultId: "main", mainKey: "main" },
       },
-      { sessionKey: "agent:work:dashboard", limit: 800 },
+      { sessionKey: "agent:work:dashboard", limit: 80, maxBytes: 256 * 1024 },
     ],
     [
       "hello default before the agents list loads",
@@ -772,12 +745,12 @@ describe("refreshChat", () => {
           snapshot: { sessionDefaults: { defaultAgentId: "ops" } },
         },
       },
-      { sessionKey: "global", agentId: "ops", limit: 800 },
+      { sessionKey: "global", agentId: "ops", limit: 80, maxBytes: 256 * 1024 },
     ],
     [
       "unknown session",
       { sessionKey: "unknown", assistantAgentId: "work", agentsList: { defaultId: "main" } },
-      { sessionKey: "unknown", limit: 800 },
+      { sessionKey: "unknown", limit: 80, maxBytes: 256 * 1024 },
     ],
   ])("scopes history for %s", async (_name, overrides, expected) => {
     const host = makeChatHost({
@@ -1446,208 +1419,6 @@ describe("refreshChat", () => {
     expect(host.chatQueue).toEqual([expect.objectContaining(restoredQueue[0])]);
     if (expectedSession) {
       expect(host.sessionsResult?.sessions[0]).toMatchObject(expectedSession);
-    }
-  });
-});
-
-describe("refreshChatAvatar", () => {
-  beforeAll(async () => {
-    await loadChatHelpers();
-  });
-
-  const pairedDeviceHello = gatewayHelloForMethods([], []);
-
-  it.each([
-    {
-      name: "uses a route-relative avatar endpoint before basePath bootstrap finishes",
-      resourceBasePath: "",
-      objectUrl: "blob:local-avatar",
-      expectedToken: undefined,
-      overrides: {},
-    },
-    {
-      name: "prefers the paired device token for avatar metadata and local avatar URLs",
-      resourceBasePath: "/openclaw/",
-      objectUrl: "blob:device-avatar",
-      expectedToken: "device-token",
-      overrides: {
-        settings: { token: "session-token" },
-        password: "shared-password",
-        hello: {
-          ...pairedDeviceHello,
-          auth: { ...pairedDeviceHello.auth, deviceToken: "device-token" },
-        },
-      },
-    },
-    {
-      name: "fetches local avatars through Authorization headers instead of tokenized URLs",
-      resourceBasePath: "/openclaw/",
-      objectUrl: "blob:session-avatar",
-      expectedToken: "session-token",
-      overrides: { settings: { token: "session-token" } },
-    },
-  ])("$name", async ({ resourceBasePath, objectUrl, expectedToken, overrides }) => {
-    const createObjectURL = vi.fn(() => objectUrl);
-    const revokeObjectURL = vi.fn();
-    vi.stubGlobal(
-      "URL",
-      class extends URL {
-        static override createObjectURL = createObjectURL;
-        static override revokeObjectURL = revokeObjectURL;
-      },
-    );
-    const metadataUrl = `${resourceBasePath.replace(/\/$/, "")}/avatar/main?meta=1`;
-    const fetchMock = vi.fn<typeof fetch>((input: string | URL | Request) => {
-      const url = requestUrl(input);
-      if (url === metadataUrl) {
-        return Promise.resolve(createJsonResponse({ avatarUrl: "/avatar/main" }));
-      }
-      if (url === "/avatar/main") {
-        return Promise.resolve(new Response(new Blob(["avatar"])));
-      }
-      throw new Error(`Unexpected avatar URL: ${url}`);
-    });
-    vi.stubGlobal("fetch", fetchMock);
-    const host = makeChatHost({ resourceBasePath, sessionKey: "agent:main", ...overrides });
-
-    await refreshChatAvatar(host);
-
-    for (const [index, url] of [metadataUrl, "/avatar/main"].entries()) {
-      expect(fetchUrl(fetchMock, index)).toBe(url);
-      const init = fetchInit(fetchMock, index);
-      expect(init.method).toBe("GET");
-      if (expectedToken) {
-        expect(init.headers).toEqual({ Authorization: `Bearer ${expectedToken}` });
-      } else {
-        expect(init).not.toHaveProperty("headers");
-      }
-    }
-    expect(createObjectURL).toHaveBeenCalledTimes(1);
-    expect(revokeObjectURL).not.toHaveBeenCalled();
-    expect(host.chatAvatarUrl).toBe(objectUrl);
-  });
-  it("keeps mounted dashboard avatar endpoints under the normalized base path", async () => {
-    const fetchMock = vi
-      .fn<typeof fetch>()
-      .mockResolvedValue(createJsonResponse({}, { ok: false }));
-    vi.stubGlobal("fetch", fetchMock);
-
-    const host = makeChatHost({
-      resourceBasePath: "/openclaw/",
-      sessionKey: "agent:ops:main",
-    });
-    await refreshChatAvatar(host);
-
-    expect(fetchUrl(fetchMock, 0)).toBe("/openclaw/avatar/ops?meta=1");
-    expect(fetchInit(fetchMock, 0).method).toBe("GET");
-    expect(host.chatAvatarUrl).toBeNull();
-  });
-
-  it("drops remote avatar metadata so the control UI can rely on same-origin images only", async () => {
-    const fetchMock = vi.fn<typeof fetch>().mockResolvedValue(
-      createJsonResponse({
-        avatarUrl: "https://example.com/avatar.png",
-        avatarSource: "https://example.com/avatar.png",
-        avatarStatus: "remote",
-        avatarReason: null,
-      }),
-    );
-    vi.stubGlobal("fetch", fetchMock);
-
-    const host = makeChatHost({ resourceBasePath: "", sessionKey: "agent:main" });
-    await refreshChatAvatar(host);
-
-    expect(host.chatAvatarUrl).toBeNull();
-    expect(host.chatAvatarSource).toBe("https://example.com/avatar.png");
-    expect(host.chatAvatarStatus).toBe("remote");
-  });
-
-  it("keeps unresolved IDENTITY.md avatar metadata when falling back to the logo", async () => {
-    const fetchMock = vi.fn<typeof fetch>().mockResolvedValue(
-      createJsonResponse({
-        avatarUrl: null,
-        avatarSource: "assets/avatars/nova-portrait.png",
-        avatarStatus: "none",
-        avatarReason: "missing",
-      }),
-    );
-    vi.stubGlobal("fetch", fetchMock);
-
-    const host = makeChatHost({ resourceBasePath: "", sessionKey: "agent:main" });
-    await refreshChatAvatar(host);
-
-    expect(host.chatAvatarUrl).toBeNull();
-    expect(host.chatAvatarSource).toBe("assets/avatars/nova-portrait.png");
-    expect(host.chatAvatarStatus).toBe("none");
-    expect(host.chatAvatarReason).toBe("missing");
-  });
-
-  it.each([
-    {
-      name: "ignores stale avatar responses after switching sessions",
-      firstAgent: "main",
-      overrides: { sessionKey: "agent:main:main" },
-      switchAgent(host: TestChatHost) {
-        host.sessionKey = "agent:ops:main";
-      },
-    },
-    {
-      name: "ignores stale global avatar responses after switching selected agents",
-      firstAgent: "work",
-      overrides: {
-        sessionKey: "global",
-        assistantAgentId: "work",
-        agentsList: { defaultId: "main" },
-      },
-      switchAgent(host: TestChatHost) {
-        host.assistantAgentId = "ops";
-      },
-    },
-  ])("$name", async (fixture) => {
-    const { firstAgent, overrides } = fixture;
-    const createObjectURL = vi.fn(() => "blob:ops-avatar");
-    const revokeObjectURL = vi.fn();
-    vi.stubGlobal(
-      "URL",
-      class extends URL {
-        static override createObjectURL = createObjectURL;
-        static override revokeObjectURL = revokeObjectURL;
-      },
-    );
-    const firstRequest = createDeferred<{ avatarUrl?: string }>();
-    const opsRequest = createDeferred<{ avatarUrl?: string }>();
-    const firstMetadataUrl = `/avatar/${firstAgent}?meta=1`;
-    const fetchMock = vi.fn<typeof fetch>((input: string | URL | Request) => {
-      const url = requestUrl(input);
-      if (url === firstMetadataUrl) {
-        return Promise.resolve(createJsonResponse(firstRequest.promise));
-      }
-      if (url === "/avatar/ops?meta=1") {
-        return Promise.resolve(createJsonResponse(opsRequest.promise));
-      }
-      if (url === "/avatar/ops") {
-        return Promise.resolve(new Response(new Blob(["avatar"])));
-      }
-      throw new Error(`Unexpected avatar URL: ${url}`);
-    });
-    vi.stubGlobal("fetch", fetchMock);
-    const host = makeChatHost({ resourceBasePath: "", ...overrides });
-
-    const firstRefresh = refreshChatAvatar(host);
-    fixture.switchAgent(host);
-    const secondRefresh = refreshChatAvatar(host);
-    firstRequest.resolve({ avatarUrl: `/avatar/${firstAgent}` });
-    await firstRefresh;
-    expect(host.chatAvatarUrl).toBeNull();
-    opsRequest.resolve({ avatarUrl: "/avatar/ops" });
-    await secondRefresh;
-
-    expect(createObjectURL).toHaveBeenCalledTimes(1);
-    expect(revokeObjectURL).not.toHaveBeenCalled();
-    expect(host.chatAvatarUrl).toBe("blob:ops-avatar");
-    for (const [index, url] of [firstMetadataUrl, "/avatar/ops?meta=1", "/avatar/ops"].entries()) {
-      expect(fetchUrl(fetchMock, index)).toBe(url);
-      expect(fetchInit(fetchMock, index).method).toBe("GET");
     }
   });
 });
@@ -9939,7 +9710,8 @@ describe("handleSendChat", () => {
     await waitForFast(() => {
       expect(host.request).toHaveBeenCalledWith("chat.history", {
         sessionKey: "agent:main",
-        limit: 800,
+        limit: 80,
+        maxBytes: 256 * 1024,
         inputRunIds: [
           findRequestPayload(host.request, "chat.send", "rejected send").idempotencyKey,
         ],
@@ -10039,7 +9811,8 @@ describe("handleSendChat", () => {
     await waitForFast(() =>
       expect(host.request).toHaveBeenCalledWith("chat.history", {
         sessionKey: sourceSessionKey,
-        limit: 800,
+        limit: 80,
+        maxBytes: 256 * 1024,
       }),
     );
     host.sessionKey = replacementSessionKey;
@@ -10071,7 +9844,8 @@ describe("handleSendChat", () => {
     await waitForFast(() =>
       expect(host.request).toHaveBeenCalledWith("chat.history", {
         sessionKey: "agent:main",
-        limit: 800,
+        limit: 80,
+        maxBytes: 256 * 1024,
       }),
     );
     host.client = clientWithRequest(makeRequestMock());
@@ -10136,7 +9910,8 @@ describe("handleSendChat", () => {
     expect(host.request).toHaveBeenCalledWith("chat.history", {
       sessionKey: "global",
       agentId: "work",
-      limit: 800,
+      limit: 80,
+      maxBytes: 256 * 1024,
     });
     expect(host.chatMessages).toStrictEqual([]);
     expect(host.chatMessagesBySession?.has("agent:work:main")).toBe(false);
@@ -10273,7 +10048,8 @@ describe("handleSendChat", () => {
     expect(host.lastError).toContain("clear request may have completed");
     expect(replacementRequest).toHaveBeenCalledWith("chat.history", {
       sessionKey: "agent:main",
-      limit: 800,
+      limit: 80,
+      maxBytes: 256 * 1024,
     });
 
     await retryQueuedChatMessage(host, queuedId);
@@ -10315,7 +10091,8 @@ describe("handleSendChat", () => {
       await waitForFast(() =>
         expect(replacementRequest).toHaveBeenCalledWith("chat.history", {
           sessionKey: sourceSessionKey,
-          limit: 800,
+          limit: 80,
+          maxBytes: 256 * 1024,
         }),
       );
       const afterCommit = vi.spyOn(host.renderLifecycle, "afterCommit");
@@ -10374,7 +10151,8 @@ describe("handleSendChat", () => {
     expect(host.request).toHaveBeenCalledWith("chat.history", {
       sessionKey: "global",
       agentId: "work",
-      limit: 800,
+      limit: 80,
+      maxBytes: 256 * 1024,
     });
     expect(listStoredChatOutboxes(host)).toStrictEqual([]);
   });

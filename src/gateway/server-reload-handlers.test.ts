@@ -44,13 +44,21 @@ import {
   setGatewaySigusr1RestartPolicy,
   setPreRestartDeferralCheck,
 } from "../infra/restart.js";
+import { createPluginRuntimeCapabilityLease } from "../plugins/capability-lease.js";
 import { registerPluginCommandInRegistry } from "../plugins/command-registration.js";
+import {
+  createPluginHttpRouteHandoff,
+  registerPluginHttpRoute,
+  withPluginHttpRouteRegistry,
+} from "../plugins/http-registry.js";
 import {
   createPluginCommandRuntime,
   type PluginCommandCatalogDecision,
 } from "../plugins/plugin-command-runtime.js";
+import { createEmptyPluginRegistry } from "../plugins/registry-empty.js";
 import {
   captureActivePluginRegistrySnapshot,
+  requireActivePluginChannelRegistry,
   resetPluginRuntimeStateForTest,
   restoreActivePluginRegistrySnapshot,
   setActivePluginRegistry,
@@ -160,12 +168,14 @@ function createGatewayReloadHandlers(
 ) {
   const { requestRecoveryRestart, ...handlerParams } = params;
   return createGatewayReloadHandlersImpl({
+    getPluginRegistry: requireActivePluginChannelRegistry,
     deps: {} as never,
     broadcast: vi.fn(),
     getState: createDefaultGatewayReloadState,
     setState: vi.fn(),
     startChannel: vi.fn(async () => new Map()),
     stopChannel: vi.fn(async () => {}),
+    releaseChannelRouteHandoffs: vi.fn(),
     pruneInactiveChannelAccountState: vi.fn(),
     stopPostReadySidecars: vi.fn(),
     reloadPlugins: vi.fn(async () => makePluginReloadResult()),
@@ -211,6 +221,7 @@ function createTestCronState(overrides: Partial<GatewayCronState> = {}): Gateway
 
 function startManagedGatewayConfigReloader(params: ManagedReloaderTestParams) {
   return startManagedGatewayConfigReloaderImpl({
+    getPluginRegistry: requireActivePluginChannelRegistry,
     minimalTestGateway: false,
     initialCompareConfig: params.initialConfig,
     initialInternalWriteHash: null,
@@ -227,7 +238,10 @@ function startManagedGatewayConfigReloader(params: ManagedReloaderTestParams) {
     logChannels: { info: vi.fn(), error: vi.fn() },
     logCron: { error: vi.fn() },
     logReload: { info: vi.fn(), warn: vi.fn(), error: vi.fn() },
-    channelManager: { pruneInactiveChannelAccountState: vi.fn() } as never,
+    channelManager: {
+      pruneInactiveChannelAccountState: vi.fn(),
+      releaseChannelRouteHandoffs: vi.fn(),
+    } as never,
     activateRuntimeSecrets: vi.fn(async (config: OpenClawConfig) =>
       makePreparedSecretsSnapshot(config),
     ) as never,
@@ -309,7 +323,7 @@ const hoisted = vi.hoisted(() => ({
   ),
   refreshContextWindowCache: vi.fn(async (_cfg: OpenClawConfig) => {}),
   clearCurrentProviderAuthState: vi.fn(() => {}),
-  disposeAllSessionMcpRuntimes: vi.fn(async () => {}),
+  reloadSessionMcpRuntimes: vi.fn(async () => {}),
   buildGatewayCronService: vi.fn((_params?: { env?: NodeJS.ProcessEnv }) => ({
     cron: { start: vi.fn(async () => {}), stop: vi.fn() },
     storePath: "/tmp/rebuilt-cron.json",
@@ -439,7 +453,7 @@ vi.mock("../agents/model-provider-auth.js", () => ({
 }));
 
 vi.mock("../agents/agent-bundle-mcp-tools.js", () => ({
-  disposeAllSessionMcpRuntimes: hoisted.disposeAllSessionMcpRuntimes,
+  reloadSessionMcpRuntimes: hoisted.reloadSessionMcpRuntimes,
 }));
 
 vi.mock("../plugins/installed-plugin-index-records.js", () => ({
@@ -466,6 +480,82 @@ function createRecordedChannelHandlers(events: string[]) {
       return new Map();
     }),
   };
+}
+
+async function withReloadChannelManager(
+  plugins: ChannelPlugin[],
+  run: (fixture: {
+    manager: ReturnType<typeof createChannelManager>;
+    registry: { current: ReturnType<typeof createTestRegistry> };
+    start: ReturnType<typeof vi.fn<ReloadHandlerParams["startChannel"]>>;
+    stop: ReturnType<typeof vi.fn<ReloadHandlerParams["stopChannel"]>>;
+  }) => Promise<void>,
+  getRuntimeConfig: () => OpenClawConfig = () => ({}),
+) {
+  let closing = false;
+  const monitors: Array<{ signal: AbortSignal; finished: Promise<void> }> = [];
+  const registry = {
+    current: createTestRegistry(
+      plugins.map((plugin) => ({
+        pluginId: plugin.id,
+        source: "test",
+        plugin: {
+          ...plugin,
+          gateway: {
+            ...plugin.gateway,
+            startAccount: async (context) => {
+              const stopped = createDeferred();
+              const finished = createDeferred();
+              const onAbort = () => stopped.resolve();
+              monitors.push({ signal: context.abortSignal, finished: finished.promise });
+              context.abortSignal.addEventListener("abort", onAbort, { once: true });
+              if (context.abortSignal.aborted) {
+                onAbort();
+              }
+              try {
+                await plugin.gateway?.startAccount?.(context);
+                await stopped.promise;
+              } finally {
+                context.abortSignal.removeEventListener("abort", onAbort);
+                finished.resolve();
+              }
+            },
+            stopAccount: async (context) => {
+              // Retire injected stop faults during fixture cleanup; the manager still aborts
+              // and joins every real monitor before the registry is restored by afterEach.
+              if (!closing) {
+                await plugin.gateway?.stopAccount?.(context);
+              }
+            },
+          },
+        } satisfies ChannelPlugin,
+      })),
+    ),
+  };
+  setActivePluginRegistry(registry.current);
+  const manager = createChannelManager({
+    getRuntimeConfig,
+    getPluginRegistry: () => registry.current,
+    channelLogs: {},
+    channelRuntimeEnvs: {},
+    isClosing: () => closing,
+  });
+  try {
+    await run({
+      manager,
+      registry,
+      start: vi.fn(manager.startChannel),
+      stop: vi.fn(manager.stopChannel),
+    });
+  } finally {
+    closing = true;
+    const stops = await Promise.allSettled(plugins.map(({ id }) => manager.stopChannel(id)));
+    await Promise.all(monitors.map(({ finished }) => finished));
+    expect(monitors.every(({ signal }) => signal.aborted)).toBe(true);
+    for (const outcome of stops) {
+      expect(outcome.status).toBe("fulfilled");
+    }
+  }
 }
 
 function makePreparedSecretsSnapshot(
@@ -963,8 +1053,8 @@ afterEach(() => {
   hoisted.refreshPreparedModelRuntimeSnapshots.mockClear();
   hoisted.refreshContextWindowCache.mockClear();
   hoisted.clearCurrentProviderAuthState.mockClear();
-  hoisted.disposeAllSessionMcpRuntimes.mockClear();
-  hoisted.disposeAllSessionMcpRuntimes.mockResolvedValue(undefined);
+  hoisted.reloadSessionMcpRuntimes.mockClear();
+  hoisted.reloadSessionMcpRuntimes.mockResolvedValue(undefined);
   hoisted.buildGatewayCronService.mockClear();
   clearSecretsRuntimeSnapshot();
   clearRuntimeConfigSnapshot();
@@ -1278,6 +1368,7 @@ async function withManagedChannelSecretFixture(
   activateSecretsRuntimeSnapshot(initialSnapshot);
   const manager = createChannelManager({
     getRuntimeConfig: () => getActiveSecretsRuntimeSnapshot()?.config ?? initialSnapshot.config,
+    getPluginRegistry: requireActivePluginChannelRegistry,
     channelLogs: {},
     channelRuntimeEnvs: {},
   });
@@ -2131,7 +2222,7 @@ describe("gateway hot reload model state", () => {
     expect(cron.stop).not.toHaveBeenCalled();
     expect(channels.start).not.toHaveBeenCalled();
     expect(channels.stop).not.toHaveBeenCalled();
-    expect(hoisted.disposeAllSessionMcpRuntimes).not.toHaveBeenCalled();
+    expect(hoisted.reloadSessionMcpRuntimes).not.toHaveBeenCalled();
     expect(logReload.info).toHaveBeenCalledWith(`config hot reload applied (${changedPath})`);
   });
 
@@ -2521,9 +2612,9 @@ describe("gateway hot reload model state", () => {
     });
   });
 
-  it("disposes cached MCP runtimes on MCP config hot reloads", async () => {
+  it("reconciles cached MCP owners on MCP config hot reloads", async () => {
     const logReload = { info: vi.fn(), warn: vi.fn(), error: vi.fn() };
-    hoisted.disposeAllSessionMcpRuntimes.mockRejectedValueOnce(new Error("dispose failed"));
+    hoisted.reloadSessionMcpRuntimes.mockRejectedValueOnce(new Error("dispose failed"));
     const { applyHotReload, setState } = createReloadHandlersForTest(
       logReload,
       undefined,
@@ -2541,7 +2632,7 @@ describe("gateway hot reload model state", () => {
       nextConfig,
     );
 
-    expect(hoisted.disposeAllSessionMcpRuntimes).toHaveBeenCalledTimes(1);
+    expect(hoisted.reloadSessionMcpRuntimes).toHaveBeenCalledTimes(1);
     expect(setState).toHaveBeenCalledOnce();
     expect(logReload.warn).toHaveBeenCalledWith(
       "bundle-mcp runtime disposal during config reload failed: Error: dispose failed",
@@ -2712,6 +2803,112 @@ describe("gateway hot reload model state", () => {
   });
 });
 
+describe("gateway targeted service reload", () => {
+  it("forwards the service owner through managed config publication", async () => {
+    vi.useFakeTimers();
+    const registry = createTestRegistry([]);
+    registry.services.push({
+      pluginId: "exporter",
+      source: "test",
+      origin: "workspace",
+      service: { id: "exporter", reload: { configPrefixes: ["diagnostics.otel"] }, start() {} },
+    });
+    setActivePluginRegistry(registry);
+    const initialConfig: OpenClawConfig = { diagnostics: { otel: { enabled: true } } };
+    const nextConfig: OpenClawConfig = { diagnostics: { otel: { enabled: false } } };
+    const listener = createConfigWriteListenerRef();
+    const reloadPluginServices = vi.fn(async () => {});
+    const reloader = startManagedGatewayConfigReloader({
+      initialConfig,
+      readSnapshot: async () => createValidConfigSnapshot(nextConfig, "otel-disabled"),
+      subscribeToWrites: captureConfigWriteListener(listener),
+      reloadPluginServices,
+    });
+    try {
+      const application = createRuntimeConfigWriteApplication();
+      if (!listener.current) {
+        throw new Error("Expected managed config write listener");
+      }
+      listener.current(
+        attachRuntimeConfigWriteApplication(
+          createConfigWriteNotification(nextConfig, "otel-disabled", 1, "runtime", "source"),
+          application,
+        ),
+      );
+      await vi.advanceTimersByTimeAsync(0);
+      await expect(application.result).resolves.toBe("applied");
+      expect(reloadPluginServices).toHaveBeenCalledExactlyOnceWith(
+        nextConfig,
+        new Set(["exporter"]),
+      );
+    } finally {
+      await reloader.stop();
+    }
+  });
+
+  it.each(["targeted", "full plugin", "service failure", "publication failure"] as const)(
+    "keeps committed service replacement and recovery ordered: %s",
+    async (mode) => {
+      vi.useFakeTimers();
+      const events: string[] = [];
+      const nextConfig: OpenClawConfig = { diagnostics: { otel: { enabled: false } } };
+      const selected = new Set(["exporter"]);
+      const failure = new Error(mode);
+      const requestRecoveryRestart = vi.fn(() => ({ status: "emitted" as const }));
+      const reloadPluginServices = vi.fn(async () => {
+        events.push("service");
+        if (mode === "service failure") {
+          throw failure;
+        }
+      });
+      const handlers = createGatewayReloadHandlers({
+        reloadPluginServices,
+        requestRecoveryRestart,
+        reloadPlugins: async ({ commitRuntime }) => {
+          await commitRuntime();
+          events.push("plugins");
+          return makePluginReloadResult();
+        },
+      });
+      try {
+        const applying = handlers.applyHotReload(
+          createHotTailPlan({ restartServices: selected, reloadPlugins: mode === "full plugin" }),
+          nextConfig,
+          {
+            sourceConfig: nextConfig,
+            isCurrent: () => true,
+            publish: async (commit) => {
+              if (mode === "publication failure") {
+                throw failure;
+              }
+              await commit();
+              events.push("published");
+            },
+          },
+        );
+        if (mode === "publication failure") {
+          await expect(applying).rejects.toBe(failure);
+          expect(events).toEqual([]);
+        } else {
+          await expect(applying).resolves.toBe(
+            mode === "service failure" ? "applied-restart-required" : "applied",
+          );
+          expect(events).toEqual(["published", mode === "full plugin" ? "plugins" : "service"]);
+        }
+        if (mode === "targeted" || mode === "service failure") {
+          expect(reloadPluginServices).toHaveBeenCalledExactlyOnceWith(nextConfig, selected);
+        } else {
+          expect(reloadPluginServices).not.toHaveBeenCalled();
+        }
+        await vi.advanceTimersByTimeAsync(500);
+        expect(requestRecoveryRestart).toHaveBeenCalledTimes(mode === "service failure" ? 1 : 0);
+      } finally {
+        handlers.stopRestartRetries();
+      }
+    },
+  );
+});
+
 describe("gateway hot reload superseded tail recovery", () => {
   it("rearms detached stale-tail recovery against an already accepted config", async () => {
     vi.useFakeTimers();
@@ -2880,7 +3077,7 @@ describe("gateway hot reload superseded tail recovery", () => {
         throw new Error("gmail tail failed");
       });
       if (surface === "mcp") {
-        hoisted.disposeAllSessionMcpRuntimes.mockImplementationOnce(async () => {
+        hoisted.reloadSessionMcpRuntimes.mockImplementationOnce(async () => {
           entered.resolve();
           await release.promise;
         });
@@ -2976,7 +3173,10 @@ describe("gateway hot reload superseded tail recovery", () => {
     releaseStop.resolve();
     await reloadA;
 
-    expect(stopChannel).toHaveBeenCalledWith("discord", undefined, { manual: false });
+    expect(stopChannel).toHaveBeenCalledWith("discord", undefined, {
+      manual: false,
+      routeHandoff: true,
+    });
     expect(startChannel).toHaveBeenCalledWith("discord", undefined, {
       preserveManualStop: true,
       skipUnavailableAccounts: true,
@@ -2988,28 +3188,35 @@ describe("gateway hot reload superseded tail recovery", () => {
     "starts the %s channel outside the config-reload request admission",
     async (channel) => {
       const startRootCounts: number[] = [];
-      const handlers = createReloadHandlersForTest(undefined, {
-        start: vi.fn(async () => {
-          startRootCounts.push(getActiveGatewayRootWorkCount({ excludeCurrent: true }));
-          return new Map();
-        }),
-        stop: vi.fn(async () => {}),
-      });
-      const root = tryBeginGatewayRootWorkAdmission();
-      expect(root).not.toBeNull();
-
-      try {
-        await root?.run(async () => {
-          await handlers.applyHotReload(
-            createHotTailPlan({ restartChannels: new Set([channel]) }),
-            {},
-          );
-        });
-      } finally {
-        root?.release();
-      }
-
-      expect(startRootCounts).toEqual([1]);
+      await withReloadChannelManager(
+        [
+          {
+            ...createChannelTestPluginBase({ id: channel }),
+            gateway: {
+              startAccount: async () => {
+                startRootCounts.push(getActiveGatewayRootWorkCount({ excludeCurrent: true }));
+              },
+            },
+          },
+        ],
+        async (channels) => {
+          const handlers = createReloadHandlersForTest(undefined, channels);
+          const root = tryBeginGatewayRootWorkAdmission();
+          expect(root).not.toBeNull();
+          try {
+            await root?.run(async () => {
+              await handlers.applyHotReload(
+                createHotTailPlan({ restartChannels: new Set([channel]) }),
+                {},
+              );
+              await waitForFast(() => expect(startRootCounts).toEqual([1]));
+            });
+          } finally {
+            root?.release();
+          }
+          expect(startRootCounts).toEqual([1]);
+        },
+      );
     },
   );
 });
@@ -3825,7 +4032,10 @@ describe("gateway restart deferral preflight", () => {
       restoreChannelReloadEnv();
     }
 
-    expect(stopChannel).toHaveBeenCalledWith("discord", undefined, { manual: false });
+    expect(stopChannel).toHaveBeenCalledWith("discord", undefined, {
+      manual: false,
+      routeHandoff: true,
+    });
     expect(startChannel).toHaveBeenCalledWith("discord", undefined, {
       preserveManualStop: true,
       skipUnavailableAccounts: true,
@@ -3872,7 +4082,10 @@ describe("gateway restart deferral preflight", () => {
       restoreChannelReloadEnv();
     }
 
-    expect(stopChannel).toHaveBeenCalledWith("telegram", undefined, { manual: false });
+    expect(stopChannel).toHaveBeenCalledWith("telegram", undefined, {
+      manual: false,
+      routeHandoff: true,
+    });
     expect(startChannel).toHaveBeenCalledWith("telegram", undefined, {
       preserveManualStop: true,
       skipUnavailableAccounts: true,
@@ -4038,45 +4251,67 @@ describe("gateway channel hot reload handlers", () => {
     const events: string[] = [];
     const startRootCounts: number[] = [];
     const accountStopSettled = createDeferred();
-    const channels = {
-      stop: vi.fn(async (channel: ChannelKind, accountId?: string) => {
-        events.push(`stop:${channel}:${accountId}`);
-        await accountStopSettled.promise;
-      }),
-      start: vi.fn(async (channel: ChannelKind, accountId?: string) => {
-        events.push(`start:${channel}:${accountId}`);
-        startRootCounts.push(getActiveGatewayRootWorkCount({ excludeCurrent: true }));
-        return new Map();
-      }),
-    };
-    const { applyHotReload } = createReloadHandlersForTest(undefined, channels);
-    const root = tryBeginGatewayRootWorkAdmission();
-    expect(root).not.toBeNull();
-    let reload: Promise<GatewayHotReloadApplicationStatus> | undefined;
-
-    try {
-      await root?.run(async () => {
-        await withChannelReloadsEnabled(async () => {
-          await withDiscordAccounts(["default", "alpha", "beta"], async () => {
-            reload = applyHotReload(createAccountReloadPlan(["alpha"]), {});
-            await waitForFast(() => expect(events).toEqual(["stop:discord:alpha"]));
-            expect(channels.start).not.toHaveBeenCalled();
-
-            accountStopSettled.resolve();
-            await reload;
+    let holdStop = false;
+    await withReloadChannelManager(
+      [
+        {
+          ...createChannelTestPluginBase({
+            id: "discord",
+            config: { listAccountIds: () => ["default", "alpha", "beta"] },
+          }),
+          gateway: {
+            stopAccount: async ({ accountId }) => {
+              events.push(`stop:discord:${accountId}`);
+              if (holdStop) {
+                await accountStopSettled.promise;
+              }
+            },
+            startAccount: async ({ accountId }) => {
+              events.push(`start:discord:${accountId}`);
+              startRootCounts.push(getActiveGatewayRootWorkCount({ excludeCurrent: true }));
+            },
+          },
+        },
+      ],
+      async (channels) => {
+        await channels.manager.startChannel("discord");
+        await waitForFast(() => expect(startRootCounts).toHaveLength(3));
+        await channels.manager.stopChannel("discord", "beta");
+        events.length = 0;
+        startRootCounts.length = 0;
+        holdStop = true;
+        const { applyHotReload } = createReloadHandlersForTest(undefined, channels);
+        const root = tryBeginGatewayRootWorkAdmission();
+        expect(root).not.toBeNull();
+        let reload: Promise<GatewayHotReloadApplicationStatus> | undefined;
+        try {
+          await root?.run(async () => {
+            await withChannelReloadsEnabled(async () => {
+              reload = applyHotReload(createAccountReloadPlan(["alpha"]), {});
+              await waitForFast(() => expect(events).toEqual(["stop:discord:alpha"]));
+              expect(channels.start).not.toHaveBeenCalled();
+              accountStopSettled.resolve();
+              await reload;
+              await waitForFast(() => expect(startRootCounts).toEqual([1]));
+            });
           });
+        } finally {
+          accountStopSettled.resolve();
+          await reload?.catch(() => {});
+          root?.release();
+        }
+        expect(events).toEqual(["stop:discord:alpha", "start:discord:alpha"]);
+        expect(startRootCounts).toEqual([1]);
+        expect(channels.stop).toHaveBeenCalledOnce();
+        expect(channels.start).toHaveBeenCalledOnce();
+        expect(channels.manager.isManuallyStopped("discord", "beta")).toBe(true);
+        expect(channels.manager.getRuntimeSnapshot().channelAccounts.discord).toMatchObject({
+          default: { running: true },
+          alpha: { running: true },
+          beta: { running: false },
         });
-      });
-    } finally {
-      accountStopSettled.resolve();
-      await reload?.catch(() => {});
-      root?.release();
-    }
-
-    expect(events).toEqual(["stop:discord:alpha", "start:discord:alpha"]);
-    expect(startRootCounts).toEqual([1]);
-    expect(channels.stop).toHaveBeenCalledOnce();
-    expect(channels.start).toHaveBeenCalledOnce();
+      },
+    );
   });
 
   it("continues targeted restarts after an account failure", async () => {
@@ -6089,7 +6324,10 @@ describe("gateway plugin hot reload handlers", () => {
 
     expect(runtimeEnv.env[envKey]).toBeUndefined();
     expect(targetEnv[envKey]).toBeUndefined();
-    expect(stopChannel).toHaveBeenCalledWith("discord", undefined, { manual: false });
+    expect(stopChannel).toHaveBeenCalledWith("discord", undefined, {
+      manual: false,
+      routeHandoff: true,
+    });
     expect(startChannel).toHaveBeenCalledWith("discord", undefined, {
       preserveManualStop: true,
       skipUnavailableAccounts: true,
@@ -6583,104 +6821,121 @@ describe("gateway plugin hot reload handlers", () => {
   });
 
   it("restarts channel command handlers against the replacement registry", async () => {
-    const discordPlugin = createChannelTestPluginBase({
-      id: "discord",
-      config: {
-        listAccountIds: () => ["catalog-account", "disabled-account"],
-        resolveAccount: (_cfg, accountId) => ({ accountId }),
-      },
-    });
-    const createDiscordRegistry = () =>
-      createTestRegistry([{ pluginId: "discord", plugin: discordPlugin, source: "test" }]);
-    const oldRegistry = createDiscordRegistry();
-    const nextRegistry = createDiscordRegistry();
-    const oldHandler = vi.fn(async () => ({ text: "old" }));
-    const nextHandler = vi.fn(async () => ({ text: "next" }));
-    for (const [registry, handler] of [
-      [oldRegistry, oldHandler],
-      [nextRegistry, nextHandler],
-    ] as const) {
-      expect(
-        registerPluginCommandInRegistry(registry, "command-owner", {
-          name: "refresh",
-          description: "Refresh",
-          channels: ["discord"],
-          handler,
-        }),
-      ).toEqual({ ok: true });
-    }
-    setActivePluginRegistry(oldRegistry);
-    const staleDispatch = createPluginCommandRuntime()
-      .listNativeCandidates("discord")[0]!
-      .prepareDispatch();
-    expect(staleDispatch.kind).toBe("plugin");
-
     const events: string[] = [];
-    let restartedDispatch: PluginCommandCatalogDecision | undefined;
-    const handlers = createReloadHandlersForTest(
-      undefined,
-      {
-        stop: vi.fn(async (channel, accountId) => {
-          events.push(`stop:${channel}:${accountId ?? "all"}`);
-        }),
-        start: vi.fn(async (channel, accountId) => {
-          events.push(`start:${channel}:${accountId ?? "all"}`);
-          restartedDispatch = createPluginCommandRuntime()
-            .listNativeCandidates("discord")[0]!
-            .prepareDispatch();
-          return new Map();
-        }),
-      },
-      vi.fn(async (params): Promise<GatewayPluginReloadResult> => {
-        await params.beforeReplace(new Set(["discord"]));
-        await params.commitRuntime();
-        setActivePluginRegistry(nextRegistry);
-        events.push("registry:next");
-        return makePluginReloadResult({ activeChannels: new Set(["discord"]) });
+    const dispatches: PluginCommandCatalogDecision[] = [];
+    const discordPlugin: ChannelPlugin = {
+      ...createChannelTestPluginBase({
+        id: "discord",
+        config: {
+          listAccountIds: () => ["catalog-account", "disabled-account"],
+          resolveAccount: (_cfg, accountId) => ({
+            accountId,
+            enabled: accountId !== "disabled-account",
+          }),
+        },
       }),
-    );
-
-    await withPluginRuntimeGatewayRequestScope(
-      {
-        isWebchatConnect: () => false,
-        pluginRegistry: oldRegistry,
+      gateway: {
+        startAccount: async ({ accountId }) => {
+          events.push(`start:discord:${accountId}`);
+          const commands = createPluginCommandRuntime();
+          dispatches.push(commands.listNativeCandidates("discord")[0]!.prepareDispatch());
+        },
+        stopAccount: async ({ accountId }) => {
+          events.push(`stop:discord:${accountId}`);
+        },
       },
-      () =>
-        handlers.applyHotReload(
-          createPluginReloadPlan(),
-          { plugins: { enabled: true } },
-          {
-            sourceConfig: { plugins: { enabled: true } },
-            publish: async (commit) => await commit(),
-            isCurrent: () => true,
-          },
-        ),
-    );
-
-    expect(events).toEqual(["stop:discord:all", "registry:next", "start:discord:all"]);
-    if (staleDispatch.kind === "plugin") {
-      await expect(
-        staleDispatch.execute({
-          channel: "discord",
-          isAuthorizedSender: true,
-          commandBody: "/refresh",
-          config: {},
+    };
+    await withReloadChannelManager([discordPlugin], async (channels) => {
+      const oldRegistry = channels.registry.current;
+      const nextRegistry = createTestRegistry(
+        oldRegistry.channels.map(({ pluginId, plugin }) => ({ pluginId, plugin, source: "test" })),
+      );
+      const oldHandler = vi.fn(async () => ({ text: "old" }));
+      const nextHandler = vi.fn(async () => ({ text: "next" }));
+      for (const [registry, handler] of [
+        [oldRegistry, oldHandler],
+        [nextRegistry, nextHandler],
+      ] as const) {
+        expect(
+          registerPluginCommandInRegistry(registry, "command-owner", {
+            name: "refresh",
+            description: "Refresh",
+            channels: ["discord"],
+            handler,
+          }),
+        ).toEqual({ ok: true });
+      }
+      await channels.manager.startChannel("discord");
+      await waitForFast(() => expect(dispatches).toHaveLength(1));
+      const staleDispatch = dispatches[0];
+      expect(staleDispatch?.kind).toBe("plugin");
+      expect(events).toEqual(["start:discord:catalog-account"]);
+      events.length = 0;
+      const handlers = createReloadHandlersForTest(
+        undefined,
+        channels,
+        vi.fn(async (params): Promise<GatewayPluginReloadResult> => {
+          await params.beforeReplace(new Set(["discord"]));
+          await params.commitRuntime();
+          channels.registry.current = nextRegistry;
+          setActivePluginRegistry(nextRegistry);
+          events.push("registry:next");
+          return makePluginReloadResult({ activeChannels: new Set(["discord"]) });
         }),
-      ).resolves.toMatchObject({ text: expect.stringContaining("registry changed") });
-    }
-    expect(restartedDispatch?.kind).toBe("plugin");
-    if (restartedDispatch?.kind === "plugin") {
-      await expect(
-        restartedDispatch.execute({
-          channel: "discord",
-          isAuthorizedSender: true,
-          commandBody: "/refresh",
-          config: {},
-        }),
-      ).resolves.toEqual({ text: "next" });
-    }
-    expect(oldHandler).not.toHaveBeenCalled();
-    expect(nextHandler).toHaveBeenCalledOnce();
+      );
+      await withPluginRuntimeGatewayRequestScope(
+        { isWebchatConnect: () => false, pluginRegistry: oldRegistry },
+        () =>
+          handlers.applyHotReload(
+            createPluginReloadPlan(),
+            { plugins: { enabled: true } },
+            {
+              sourceConfig: { plugins: { enabled: true } },
+              publish: async (commit) => await commit(),
+              isCurrent: () => true,
+            },
+          ),
+      );
+      await waitForFast(() => expect(dispatches).toHaveLength(2));
+      const restartedDispatch = dispatches[1];
+      expect(events).toEqual([
+        "stop:discord:catalog-account",
+        "stop:discord:disabled-account",
+        "registry:next",
+        "start:discord:catalog-account",
+      ]);
+      if (staleDispatch?.kind === "plugin") {
+        await expect(
+          staleDispatch.execute({
+            channel: "discord",
+            isAuthorizedSender: true,
+            commandBody: "/refresh",
+            config: {},
+          }),
+        ).resolves.toMatchObject({ text: expect.stringContaining("registry changed") });
+      }
+      expect(restartedDispatch?.kind).toBe("plugin");
+      if (restartedDispatch?.kind === "plugin") {
+        await expect(
+          restartedDispatch.execute({
+            channel: "discord",
+            isAuthorizedSender: true,
+            commandBody: "/refresh",
+            config: {},
+          }),
+        ).resolves.toEqual({ text: "next" });
+      }
+      expect(channels.stop).toHaveBeenCalledExactlyOnceWith("discord", undefined, {
+        manual: false,
+        routeHandoff: true,
+      });
+      expect(channels.start).toHaveBeenCalledExactlyOnceWith("discord", undefined, {
+        preserveManualStop: true,
+        skipUnavailableAccounts: true,
+      });
+      expect(oldHandler).not.toHaveBeenCalled();
+      expect(nextHandler).toHaveBeenCalledOnce();
+    });
   });
 
   it("keeps a committed plugin generation when a later channel restart fails", async () => {
@@ -6928,71 +7183,105 @@ describe("gateway plugin hot reload handlers", () => {
     const setState = vi.fn();
     const logChannels = { info: vi.fn(), error: vi.fn() };
     const events: string[] = [];
-    const startRootCounts: number[] = [];
+    const configRootCounts: number[] = [];
+    const monitorStarts: string[] = [];
     const pruneInactiveChannelAccountState = vi.fn();
-    const startChannel = vi.fn(async (channel: ChannelKind) => {
-      events.push(`start:${channel}`);
-      startRootCounts.push(getActiveGatewayRootWorkCount({ excludeCurrent: true }));
-      return new Map();
+    const plugins = ["telegram", "discord"].map((channel) => {
+      const plugin: ChannelPlugin = createChannelTestPluginBase({ id: channel });
+      plugin.gateway = {
+        startAccount: async () => {
+          monitorStarts.push(channel);
+        },
+        stopAccount: async () => {
+          events.push(`stop:${channel}`);
+          if (channel === "discord") {
+            throw new Error("stop failed");
+          }
+        },
+      };
+      return plugin;
     });
-    const stopChannel = vi.fn(async (channel: ChannelKind) => {
-      events.push(`stop:${channel}`);
-      if (channel === "discord") {
-        throw new Error("stop failed");
-      }
-    });
-    const reloadPlugins = vi.fn(
-      async (params: {
-        beforeReplace: (channels: ReadonlySet<ChannelKind>) => Promise<void>;
-      }): Promise<GatewayPluginReloadResult> => {
-        events.push("reload:start");
-        await params.beforeReplace(new Set(["telegram", "discord"]));
-        events.push("registry:replace");
-        return makePluginReloadResult();
-      },
-    );
-    const { applyHotReload } = createGatewayReloadHandlers({
-      getState: () => gatewayState,
-      setState,
-      startChannel,
-      stopChannel,
-      pruneInactiveChannelAccountState,
-      reloadPlugins,
-      logChannels,
-    });
-
-    const root = tryBeginGatewayRootWorkAdmission();
-    expect(root).not.toBeNull();
     try {
-      await expect(
-        root?.run(async () => {
-          await applyHotReload(createPluginReloadPlan(), {
-            plugins: {
-              enabled: false,
-            },
+      await withReloadChannelManager(
+        plugins,
+        async (channels) => {
+          await channels.manager.startChannels();
+          await waitForFast(() => expect(monitorStarts).toHaveLength(2));
+          monitorStarts.length = 0;
+          configRootCounts.length = 0;
+          const startChannel = vi.fn<ReloadHandlerParams["startChannel"]>((...args) => {
+            events.push(`start:${args[0]}`);
+            return channels.manager.startChannel(...args);
           });
-        }),
-      ).rejects.toThrow("failed to stop channels before plugin reload: discord");
+          const reloadPlugins = vi.fn(
+            async (params: {
+              beforeReplace: (channels: ReadonlySet<ChannelKind>) => Promise<void>;
+            }): Promise<GatewayPluginReloadResult> => {
+              events.push("reload:start");
+              await params.beforeReplace(new Set(["telegram", "discord"]));
+              events.push("registry:replace");
+              return makePluginReloadResult();
+            },
+          );
+          const { applyHotReload } = createGatewayReloadHandlers({
+            getState: () => gatewayState,
+            setState,
+            startChannel,
+            stopChannel: channels.stop,
+            pruneInactiveChannelAccountState,
+            reloadPlugins,
+            logChannels,
+          });
+
+          const root = tryBeginGatewayRootWorkAdmission();
+          expect(root).not.toBeNull();
+          try {
+            await root?.run(async () => {
+              await expect(
+                applyHotReload(createPluginReloadPlan(), { plugins: { enabled: false } }),
+              ).rejects.toThrow("plugin reload cancellation rollback failed for: discord");
+              await waitForFast(() => expect(monitorStarts).toEqual(["telegram"]));
+            });
+          } finally {
+            root?.release();
+          }
+
+          expect(events).toEqual([
+            "reload:start",
+            "stop:telegram",
+            "stop:discord",
+            "start:telegram",
+            "start:discord",
+          ]);
+          expect(logChannels.error).toHaveBeenCalledWith(
+            "failed to stop discord channel before plugin reload: stop failed",
+          );
+          expect(logChannels.error).toHaveBeenCalledWith(
+            expect.stringContaining("replacement not admitted: stop-in-flight"),
+          );
+          expect(startChannel).toHaveBeenCalledWith("telegram", undefined, {
+            preserveManualStop: true,
+          });
+          expect(startChannel).toHaveBeenCalledWith("discord", undefined, {
+            preserveManualStop: true,
+          });
+          // Both rollback requests enter the detached manager, but a failed stop
+          // must keep Discord gated instead of starting a second account lifetime.
+          expect(configRootCounts).toEqual([0, 0, 1, 1]);
+          await expect(startChannel.mock.results[1]?.value).resolves.toEqual(
+            new Map([["default", { status: "retry", reason: "stop-in-flight" }]]),
+          );
+          expect(pruneInactiveChannelAccountState).not.toHaveBeenCalled();
+          expect(setState).not.toHaveBeenCalled();
+        },
+        () => {
+          configRootCounts.push(getActiveGatewayRootWorkCount({ excludeCurrent: true }));
+          return {};
+        },
+      );
     } finally {
-      root?.release();
       restoreChannelReloadEnv();
     }
-
-    expect(events).toEqual([
-      "reload:start",
-      "stop:telegram",
-      "stop:discord",
-      "start:telegram",
-      "start:discord",
-    ]);
-    expect(logChannels.error).toHaveBeenCalledWith(
-      "failed to stop discord channel before plugin reload: stop failed",
-    );
-    expect(startChannel).toHaveBeenCalledWith("telegram", undefined, { preserveManualStop: true });
-    expect(startChannel).toHaveBeenCalledWith("discord", undefined, { preserveManualStop: true });
-    expect(startRootCounts).toEqual([1, 1]);
-    expect(pruneInactiveChannelAccountState).not.toHaveBeenCalled();
-    expect(setState).not.toHaveBeenCalled();
   });
 
   it("stops removed channels before plugin replacement and starts newly active channels", async () => {
@@ -7062,8 +7351,8 @@ describe("gateway plugin hot reload handlers", () => {
     });
     expect(reloadParamsRecord?.sourceConfig).toBe(sourceConfig);
     expect(stopChannel.mock.calls).toEqual([
-      ["discord", undefined, { manual: false }],
-      ["slack", undefined, { manual: false }],
+      ["discord", undefined, { manual: false, routeHandoff: true }],
+      ["slack", undefined, { manual: false, routeHandoff: true }],
     ]);
     expect(startChannel).toHaveBeenCalledExactlyOnceWith("slack", undefined, {
       preserveManualStop: true,
@@ -7085,6 +7374,7 @@ describe("gateway plugin hot reload handlers", () => {
     const restoreChannelReloadEnv = enableChannelReloadsForTest();
     const gatewayState = createDefaultGatewayReloadState();
     const setState = vi.fn();
+    const releaseChannelRouteHandoffs = vi.fn();
     const logChannels = { info: vi.fn(), error: vi.fn() };
     const events: string[] = [];
     const startChannel = vi.fn(async (channel: ChannelKind) => {
@@ -7111,6 +7401,7 @@ describe("gateway plugin hot reload handlers", () => {
       setState,
       startChannel,
       stopChannel,
+      releaseChannelRouteHandoffs,
       reloadPlugins,
       getChannelAutostartSuppression: () => ({
         reason: "crash-loop-breaker",
@@ -7129,8 +7420,13 @@ describe("gateway plugin hot reload handlers", () => {
       restoreChannelReloadEnv();
     }
 
-    expect(stopChannel).toHaveBeenCalledWith("discord", undefined, { manual: false });
+    expect(stopChannel).toHaveBeenCalledWith("discord", undefined, {
+      manual: false,
+      routeHandoff: true,
+    });
     expect(startChannel).not.toHaveBeenCalled();
+    expect(stopChannel).toHaveBeenCalledTimes(1);
+    expect(releaseChannelRouteHandoffs).toHaveBeenCalledExactlyOnceWith("discord", undefined);
     expect(events).toEqual(["reload:start", "stop:discord", "registry:replace"]);
     expect(logChannels.info).toHaveBeenCalledWith(
       "channel restart during hot reload suppressed by crash-loop breaker for channels: discord",
@@ -7156,16 +7452,15 @@ describe("deferred channel reload abort generation", () => {
   const createTestHandlers = (
     logChannels: any,
     channels: any,
-    options?: {
-      reloadPlugins?: ReloadHandlerParams["reloadPlugins"];
-      requestRecoveryRestart?: ReloadHandlerParams["requestRecoveryRestart"];
-    },
+    options?: Pick<
+      Partial<ReloadHandlerParams>,
+      "reloadPlugins" | "requestRecoveryRestart" | "releaseChannelRouteHandoffs"
+    >,
   ) =>
     createGatewayReloadHandlers({
       startChannel: channels.start,
       stopChannel: channels.stop,
-      ...(options?.reloadPlugins ? { reloadPlugins: options.reloadPlugins } : {}),
-      requestRecoveryRestart: options?.requestRecoveryRestart,
+      ...options,
       logChannels,
     });
 
@@ -7201,6 +7496,7 @@ describe("deferred channel reload abort generation", () => {
       expect(oldChannels.start).not.toHaveBeenCalled();
       expect(nextChannels.stop).toHaveBeenCalledExactlyOnceWith("whatsapp", undefined, {
         manual: false,
+        routeHandoff: true,
       });
       expect(nextChannels.start).toHaveBeenCalledExactlyOnceWith("whatsapp", undefined, {
         preserveManualStop: true,
@@ -7261,7 +7557,10 @@ describe("deferred channel reload abort generation", () => {
       "config hot reload cancelled by config supersession or in-process restart",
     );
 
-    expect(channels.stop).toHaveBeenCalledWith("whatsapp", undefined, { manual: false });
+    expect(channels.stop).toHaveBeenCalledWith("whatsapp", undefined, {
+      manual: false,
+      routeHandoff: true,
+    });
     expect(channels.start).not.toHaveBeenCalled();
   });
 
@@ -7290,18 +7589,39 @@ describe("deferred channel reload abort generation", () => {
       "config hot reload cancelled by config supersession or in-process restart",
     );
 
-    expect(channels.stop).toHaveBeenCalledWith("whatsapp", undefined, { manual: false });
+    expect(channels.stop).toHaveBeenCalledWith("whatsapp", undefined, {
+      manual: false,
+      routeHandoff: true,
+    });
     expect(channels.start).not.toHaveBeenCalled();
     expect(requestRecoveryRestart).not.toHaveBeenCalled();
   });
 
   it("schedules recovery when plugin cancellation rollback cannot restart a channel", async () => {
     const logChannels = { info: vi.fn(), error: vi.fn() };
+    const registry = createEmptyPluginRegistry();
+    const lease = createPluginRuntimeCapabilityLease("rollback channel test");
+    const handoff = createPluginHttpRouteHandoff();
+    withPluginHttpRouteRegistry(
+      registry,
+      () =>
+        registerPluginHttpRoute({
+          path: "/rollback-webhook",
+          auth: "plugin",
+          pluginId: "whatsapp",
+          handler: vi.fn(),
+        }),
+      lease,
+    );
     const channels = {
       start: vi.fn(async () => {
         throw new Error("channel restart failed");
       }),
-      stop: vi.fn(async () => {}),
+      stop: vi.fn(async () => {
+        handoff.park(lease);
+        lease.revoke();
+        expect(registry.httpRoutes[0]?.handoff).toBe(true);
+      }),
     };
     const reloadPlugins: NonNullable<ReloadHandlerParams["reloadPlugins"]> = async (params) => {
       await params.beforeReplace(new Set(["whatsapp"]));
@@ -7313,11 +7633,13 @@ describe("deferred channel reload abort generation", () => {
     const { applyHotReload } = createTestHandlers(logChannels, channels, {
       reloadPlugins,
       requestRecoveryRestart,
+      releaseChannelRouteHandoffs: () => handoff.release(),
     });
 
     await expect(applyHotReload(createPluginReloadPlan(), {})).rejects.toThrow(
       "plugin reload cancellation rollback failed for: whatsapp",
     );
+    expect(registry.httpRoutes).toEqual([]);
 
     expect(requestRecoveryRestart).toHaveBeenCalledWith(
       expect.stringContaining("hot reload recovery: plugin channel rollback"),
@@ -7750,7 +8072,10 @@ describe("deferred channel reload abort generation", () => {
       await vi.advanceTimersByTimeAsync(500); // wake up, see active=0, drain complete
       await expect(reloadPromise).resolves.toBe("applied");
 
-      expect(channels.stop).toHaveBeenCalledWith("whatsapp", undefined, { manual: false });
+      expect(channels.stop).toHaveBeenCalledWith("whatsapp", undefined, {
+        manual: false,
+        routeHandoff: true,
+      });
       expect(channels.start).toHaveBeenCalledWith("whatsapp", undefined, {
         preserveManualStop: true,
         skipUnavailableAccounts: true,

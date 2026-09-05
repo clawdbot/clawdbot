@@ -12,6 +12,7 @@ import {
   abortReplyRunBySessionId,
   expireStaleReplyRunBySessionId,
   forceClearReplyOperation,
+  hasCommittedReplyOperationOutcome,
   hasReplyOperationExecutionStarted,
   isReplyRunEvidenceStaleBySessionId,
   isReplyRunActiveForSessionId,
@@ -1000,12 +1001,19 @@ export function isEmbeddedAgentRunInProgress(sessionId: string): boolean {
   return resolveEmbeddedAgentRunProgressState(sessionId) !== undefined;
 }
 
-export function resolveEmbeddedReplyActivity(
-  sessionId: string,
-): Pick<ReplyOperation, "phase" | "lastActivityAtMs"> | undefined {
+export type EmbeddedReplyActivity = Pick<ReplyOperation, "phase" | "lastActivityAtMs"> & {
+  /** Terminal outcome committed; only delivery/finalization remains. */
+  terminalOutcomeCommitted: boolean;
+};
+
+export function resolveEmbeddedReplyActivity(sessionId: string): EmbeddedReplyActivity | undefined {
   const operation = resolveActiveReplyOperationForSessionId(sessionId);
   return operation
-    ? { phase: operation.phase, lastActivityAtMs: operation.lastActivityAtMs }
+    ? {
+        phase: operation.phase,
+        lastActivityAtMs: operation.lastActivityAtMs,
+        terminalOutcomeCommitted: hasCommittedReplyOperationOutcome(operation),
+      }
     : undefined;
 }
 
@@ -1248,6 +1256,13 @@ export async function abortAndDrainEmbeddedAgentRun(params: {
     ? ACTIVE_EMBEDDED_RUN_REGISTRATIONS.get(embeddedRunHandle)?.agentId
     : undefined;
   const replyOperation = resolveActiveReplyOperationForSessionId(params.sessionId);
+  if (
+    params.reason === "stuck_recovery" &&
+    replyOperation &&
+    hasCommittedReplyOperationOutcome(replyOperation)
+  ) {
+    return { aborted: false, drained: false, forceCleared: false };
+  }
   let releaseStaleExpiryBarrier: (() => void) | undefined;
   const staleExpiryBarrier =
     params.reason === "stuck_recovery"

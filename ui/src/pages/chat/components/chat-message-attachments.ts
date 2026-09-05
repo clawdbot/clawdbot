@@ -323,16 +323,28 @@ function resolveAttachmentSource(
     options;
   const assistantAvailability = resolveAssistantAttachmentAvailability(
     attachment.url,
-    options.localMediaPreviewRoots ?? [],
     resourceBasePath,
     authToken,
     onRequestUpdate,
+    options,
   );
   if (assistantAvailability.status !== "available") {
     return {
       status: assistantAvailability.status,
       reason:
         assistantAvailability.status === "unavailable" ? assistantAvailability.reason : undefined,
+      onAllow:
+        assistantAvailability.status === "unavailable" && assistantAvailability.canAllow
+          ? () =>
+              retryAssistantAttachmentAvailability(
+                attachment.url,
+                resourceBasePath,
+                authToken,
+                onRequestUpdate,
+                options,
+                true,
+              )
+          : undefined,
       onRetry:
         assistantAvailability.status === "unavailable" && assistantAvailability.recoverable
           ? () =>
@@ -341,6 +353,7 @@ function resolveAttachmentSource(
                 resourceBasePath,
                 authToken,
                 onRequestUpdate,
+                options,
               )
           : undefined,
     };
@@ -369,6 +382,7 @@ function resolveAttachmentSource(
         attachment.url,
         resourceBasePath,
         assistantAvailability.mediaTicket,
+        options,
       )
     : isManagedOutgoingMediaSource(attachment.url)
       ? applyResourceBasePath(managedAvailability.url, resourceBasePath)
@@ -440,6 +454,8 @@ export function renderAssistantAttachments(
         badge: resolved.status === "unavailable" ? t("chat.attachments.unavailable") : "",
         reason: resolved.status === "unavailable" ? resolved.reason : undefined,
         onRetry: resolved.onRetry,
+        onAllow: imageAttachment ? resolved.onAllow : undefined,
+        path: isLocalAssistantAttachmentSource(attachment.url) ? attachment.url : undefined,
       });
     }
     const { src: attachmentUrl, ...media } = resolved.source;

@@ -578,35 +578,47 @@ Hot reload and secrets reload preserve that distinction: catalog compatibility
 metadata does not become a custom request override that switches a native runtime
 back to OpenClaw.
 
-| Category                  | Fields                                                                                                                                                                                                                         | Gateway restart needed?                |
-| ------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ | -------------------------------------- |
-| Channels                  | `channels.*`, `web` (WhatsApp) - all built-in and plugin channels                                                                                                                                                              | No (restarts that channel)             |
-| Agent & models            | `agents`, `models`, `auth.order`, `auth.profiles`, `broadcast`, `worktreeRoot`, `cloudWorkers.projectProfiles`                                                                                                                 | No                                     |
-| Automation                | `hooks`, `cron`, `agents.defaults.heartbeat`                                                                                                                                                                                   | No (reloads the owning subsystem)      |
-| Sessions & messages       | `session`, `messages`                                                                                                                                                                                                          | No                                     |
-| Tools & media             | `tools`, `skills`, `mcp` except Apps listener settings, `audio`, `talk`, `tts`, `memory.citations`, `attachments.ttlHours`                                                                                                     | No                                     |
-| Plugin config             | `plugins.entries.*`, `plugins.allow`, `plugins.deny`, `plugins.enabled`                                                                                                                                                        | No (reloads plugin runtime)            |
-| UI & misc                 | `ui`, `logging`, `identity`, `bindings`, `surfaces`                                                                                                                                                                            | No                                     |
-| Approval & install policy | `approvals.exec`, `approvals.plugin`, `security.installPolicy`, `security.audit.suppressions`                                                                                                                                  | No (subsequent operations)             |
-| Diagnostics & ACP         | `diagnostics.flags`, `diagnostics.cacheTrace.enabled`, `acp.stream`, `acp.runtime.installCommand`                                                                                                                              | No (subsequent operations)             |
-| Updates & telemetry       | `update.checkOnStart`, `update.channel`, `update.auto.enabled`, `telemetry.enabled`, `telemetry.consentedAt`                                                                                                                   | No (next check)                        |
-| Hosted URLs               | `gateway.publicOrigin`, `mcp.apps.sandboxOrigin`                                                                                                                                                                               | No (new URLs and hosted apps)          |
-| Gateway HTTP APIs         | `gateway.http.endpoints`, `gateway.http.securityHeaders.strictTransportSecurity`                                                                                                                                               | No (next request)                      |
-| Gateway tools & nodes     | `gateway.tools`, `gateway.nodes.browser`, `gateway.nodes.pairing`, `gateway.nodes.commands`, `gateway.nodes.pluginTools.enabled`, `gateway.nodes.allowSkills`                                                                  | No                                     |
-| Gateway client features   | `gateway.cliAgents`, selected `gateway.controlUi` settings below                                                                                                                                                               | No                                     |
-| Gateway push              | `gateway.push.apns.relay`                                                                                                                                                                                                      | No (next push)                         |
-| Gateway terminal          | `gateway.terminal`                                                                                                                                                                                                             | No                                     |
-| Gateway credentials       | `gateway.auth.token`, `gateway.auth.password`, with the same effective auth mode                                                                                                                                               | No (old shared-auth clients reconnect) |
-| Gateway auth limits       | `gateway.auth.rateLimit`                                                                                                                                                                                                       | No (retains limiter state)             |
-| Discovery visibility      | `discovery.mdns.mode`                                                                                                                                                                                                          | No (replaces discovery advertisements) |
-| Browser defaults          | `browser.profiles`, `browser.defaultProfile`, `browser.headless`, `browser.executablePath`, `browser.attachOnly`, `browser.cdpUrl`, `browser.noSandbox`, `browser.extraArgs`, `browser.snapshotDefaults`, `browser.tabCleanup` | No                                     |
-| Gateway server            | Other `gateway.*` settings (port, bind, auth mode, roles, tailscale, TLS)                                                                                                                                                      | **Yes**                                |
-| Infrastructure            | Other `discovery` and `browser` settings, MCP Apps listener settings, `secrets.egressProxy`, `plugins.load`, `plugins.installs`                                                                                                | **Yes**                                |
+| Category                  | Fields                                                                                                                                                                                                                                                             | Gateway restart needed?                |
+| ------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ | -------------------------------------- |
+| Channels                  | `channels.*`, `web` (WhatsApp) - all built-in and plugin channels                                                                                                                                                                                                  | No (restarts that channel)             |
+| Agent & models            | `agents`, `models`, `auth.order`, `auth.profiles`, `broadcast`, `worktreeRoot`, `cloudWorkers.projectProfiles`                                                                                                                                                     | No                                     |
+| Automation                | `hooks`, `cron`, `agents.defaults.heartbeat`                                                                                                                                                                                                                       | No (reloads the owning subsystem)      |
+| Sessions & messages       | `session`, `messages`                                                                                                                                                                                                                                              | No                                     |
+| Tools & media             | `tools`, `skills`, `mcp` except Apps listener settings, `audio`, `talk`, `tts`, `memory.citations`, `attachments.ttlHours`                                                                                                                                         | No                                     |
+| Plugin config             | `plugins.entries.*`, `plugins.allow`, `plugins.deny`, `plugins.enabled`                                                                                                                                                                                            | No (reloads plugin runtime)            |
+| UI & misc                 | `ui`, `logging`, `identity`, `bindings`, `surfaces`                                                                                                                                                                                                                | No                                     |
+| Approval & install policy | `approvals.exec`, `approvals.plugin`, `security.installPolicy`, `security.audit.suppressions`                                                                                                                                                                      | No (subsequent operations)             |
+| Diagnostics & ACP         | `diagnostics.flags`, `diagnostics.cacheTrace.enabled`, `acp.stream`, `acp.runtime.installCommand`                                                                                                                                                                  | No (subsequent operations)             |
+| Updates & telemetry       | `update.checkOnStart`, `update.channel`, `update.auto.enabled`, `telemetry.enabled`, `telemetry.consentedAt`                                                                                                                                                       | No (next check)                        |
+| Hosted URLs               | `gateway.publicOrigin`, `mcp.apps.sandboxOrigin`                                                                                                                                                                                                                   | No (new URLs and hosted apps)          |
+| Gateway HTTP APIs         | `gateway.http.endpoints`, `gateway.http.securityHeaders.strictTransportSecurity`                                                                                                                                                                                   | No (next request)                      |
+| Gateway tools & nodes     | `gateway.tools`, `gateway.nodes.browser`, `gateway.nodes.pairing`, `gateway.nodes.commands`, `gateway.nodes.pluginTools.enabled`, `gateway.nodes.allowSkills`                                                                                                      | No                                     |
+| Gateway client features   | `gateway.cliAgents`, selected `gateway.controlUi` settings below                                                                                                                                                                                                   | No                                     |
+| Gateway push              | `gateway.push.apns.relay`                                                                                                                                                                                                                                          | No (next push)                         |
+| Gateway terminal          | `gateway.terminal`                                                                                                                                                                                                                                                 | No                                     |
+| Gateway credentials       | `gateway.auth.token`, `gateway.auth.password`, with the same effective auth mode                                                                                                                                                                                   | No (old shared-auth clients reconnect) |
+| Gateway auth limits       | `gateway.auth.rateLimit`                                                                                                                                                                                                                                           | No (retains limiter state)             |
+| Discovery visibility      | `discovery.mdns.mode`                                                                                                                                                                                                                                              | No (replaces discovery advertisements) |
+| Browser defaults          | `browser.profiles`, `browser.defaultProfile`, `browser.headless`, `browser.executablePath`, `browser.attachOnly`, `browser.cdpUrl`, `browser.noSandbox`, `browser.extraArgs`, `browser.snapshotDefaults`, `browser.tabCleanup`, `browser.allowSystemProfileImport` | No                                     |
+| Gateway server            | Other `gateway.*` settings (port, bind, auth mode, roles, tailscale, TLS)                                                                                                                                                                                          | **Yes**                                |
+| Infrastructure            | Other `discovery` and `browser` settings, MCP Apps listener settings, `secrets.egressProxy`, `plugins.load`, `plugins.installs`                                                                                                                                    | **Yes**                                |
 
-Changes to `channels.defaults`, `channels.modelByChannel`, `messages.inbound`,
-`messages.ackReactionScope`, `commands`, `accessGroups`, `tts`, `surfaces`,
-`acp.stream`, and `diagnostics.flags` restart loaded channel runtimes to refresh shared policy. Manually stopped accounts stay
-stopped, and the Gateway keeps running.
+Changes to `channels.defaults`, `channels.modelByChannel`, `commands`,
+`accessGroups`, `tts`, `surfaces`, `acp.stream`, and `diagnostics.flags` refresh
+loaded channel runtimes that capture those policies. Manually stopped accounts
+stay stopped, and the Gateway keeps running.
+
+[Inbound debounce settings](/concepts/messages#inbound-debouncing) apply at the
+next inbound admission without reconnecting supported channels.
+`messages.ackReactionScope` applies to subsequent turns without reconnecting
+Discord, Matrix, Signal, Slack, Telegram, or WhatsApp. Other channel plugins
+refresh unless they declare that they read the policy live. Per-channel and
+per-account overrides still take precedence; admitted turns retain their policy.
+
+`diagnostics.enabled` updates diagnostic dispatch and heartbeat ownership live.
+With `diagnostics-otel` loaded, `diagnostics.otel` restarts only its exporter service,
+flushing the old generation before starting the new one. Externally preloaded
+OpenTelemetry providers retain their transport and shutdown ownership.
 
 Operation settings apply at their next use; they do not restart in-flight runs
 or recreate provisioned workers. Approval expiry changes affect newly issued
@@ -624,14 +636,17 @@ load failure keeps the previous handlers; events already running finish with
 their original handlers. Workspace changes reload directory hooks from the
 newly selected workspace. Reload does not replay `gateway:startup`.
 
-Under `gateway.controlUi`, the `environment`, `github`, `toolTitles`,
+Under `gateway.controlUi`, the `enabled`, `environment`, `github`,
 `sessionObserver`, `embedSandbox`, `allowExternalEmbedUrls`, and
 `automaticallyFetchFavicons` settings hot-apply. Reload open Control UI pages to
 pick up the environment label, CLI agent picker, embed preferences, and favicon
 display preference; the Gateway process keeps running. `allowedOrigins` and
 `dangerouslyAllowHostHeaderOriginFallback` also hot-apply: pending handshakes
 recheck the new policy, and browser connections it no longer allows close.
-Control UI serving paths still require a Gateway restart.
+Disabling the Control UI stops serving dashboard pages and assets and cancels
+pending asset preparation. Existing Gateway connections and agent runs continue.
+Re-enabling prepares missing dashboard assets in the background; requests return
+`503` until they are ready. Control UI serving paths still require a Gateway restart.
 
 Node command policy updates connected nodes immediately. Disabling node-published
 tools or skills withdraws them; re-enabling restores the last publication within
@@ -695,6 +710,12 @@ Install, update, uninstall, and explicit plugin metadata refresh require a
 Gateway restart; `hybrid` schedules that restart, while `off` leaves it to you.
 Changing an agent's workspace also does not discover plugins in the new
 directory until restart. See [Plugin metadata snapshots](/plugins/architecture#plugin-metadata-snapshot-and-lookup-table).
+
+During channel or plugin hot reload, Gateway-hosted channel webhook routes return
+`503` with `Retry-After: 1` until replacement ingress registers. Senders must honor
+retry responses; this does not acknowledge delivery. Disabled or removed accounts,
+manual stops, and cancelled replacement lifetimes release those temporary routes.
+When replacement ingress reports ready, old paths it did not reclaim are removed.
 
 ### Reload planning
 

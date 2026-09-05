@@ -1,3 +1,4 @@
+import { lookup } from "node:dns/promises";
 // Openai tests cover openai chatgpt oauth flow plugin behavior.
 import { EventEmitter, once } from "node:events";
 import { Agent, createServer, get, type IncomingHttpHeaders, type Server } from "node:http";
@@ -51,12 +52,15 @@ function fakeJwt(payload: unknown): string {
   ].join(".");
 }
 
-function requestCallback(
+async function requestCallback(
   url: string,
   agent: Agent,
 ): Promise<{ headers: IncomingHttpHeaders; body: string }> {
+  // A container's client DNS hints can omit IPv6 even when listen("localhost")
+  // selects ::1. Keep the fixture client on the listener's resolved family.
+  const { family } = await lookup(resolveOpenAICallbackHost());
   return new Promise((resolve, reject) => {
-    const request = get(url, { agent }, (response) => {
+    const request = get(url, { agent, family }, (response) => {
       const chunks: Buffer[] = [];
       response.on("data", (chunk: Buffer) => chunks.push(chunk));
       response.on("end", () => {
@@ -67,11 +71,13 @@ function requestCallback(
   });
 }
 
-function connectIdleSocket(url: string): Promise<Socket> {
+async function connectIdleSocket(url: string): Promise<Socket> {
   const callbackUrl = new URL(url);
+  const { family } = await lookup(resolveOpenAICallbackHost());
   const socket = connect({
     host: resolveOpenAICallbackHost(),
     port: Number(callbackUrl.port),
+    family,
   });
   return once(socket, "connect").then(() => socket);
 }

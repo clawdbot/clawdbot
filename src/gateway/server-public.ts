@@ -1,5 +1,6 @@
 import type { Result } from "@openclaw/normalization-core/result";
 import type { AmbientEnvTriggerPolicy } from "../channels/config-presence.js";
+import type { GatewaySuspendHandoffOwner } from "../infra/gateway-suspend-coordinator.js";
 import type { GatewayRestartEmitter } from "../infra/restart.js";
 import type { GatewayTailscaleIngressEndpoint } from "./ingress-attribution.js";
 import type { ChannelAutostartSuppression } from "./server-channels.js";
@@ -13,6 +14,8 @@ export type GatewayCloseOptions = {
 
 /** A capability for one host iteration; native completion belongs to the host. */
 export type GatewayHostLifecycle = {
+  /** Present only when this host owns process exit; the identity never crosses RPC. */
+  externalRestart?: GatewaySuspendHandoffOwner;
   request(
     action: "start" | "stop" | "restart",
     assertCaller: () => void,
@@ -22,6 +25,7 @@ export type GatewayHostLifecycle = {
 export type GatewayServer = {
   /** Process-local endpoint used by OpenClaw-managed Tailscale proxying. */
   getTailscaleIngressEndpoint: () => GatewayTailscaleIngressEndpoint | undefined;
+  /** Fences WebSocket ingress and joins received work and connection cleanup before disposal. */
   close: (opts?: GatewayCloseOptions) => Promise<void>;
   /**
    * Resolves when this generation finishes mandatory sidecar startup and rejects on failure.

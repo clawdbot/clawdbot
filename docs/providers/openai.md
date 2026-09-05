@@ -77,6 +77,13 @@ The supported reasoning efforts are `low`, `medium`, `high`, `xhigh`, and `max`.
 An existing `minimal` setting maps to `low`. Astra cannot disable reasoning;
 `off` never sends the unsupported `none` effort.
 Temperature and `top_p` are not sent.
+These defaults also apply to configured Astra model entries without explicit
+reasoning or temperature compatibility metadata.
+Azure Responses deployments continue to use their configured capabilities.
+
+`/think ultra` is also available on the OpenClaw and Codex runtimes. Ultra enables
+proactive sub-agent orchestration; it is not a raw Responses API effort. OpenClaw
+uses `max`, while native Codex selects Astra's model-defined effort (`xhigh`).
 
 Standard pricing per million tokens is $10 input, $1 cache reads, $12.50 cache
 writes, and $50 output. Requests above 272K input tokens have higher rates.
@@ -122,7 +129,14 @@ Responses endpoint. Configure the existing model settings:
   the next user turn. OpenClaw preserves the original request-level effort
   and places a `configuration_update` at the new turn. This optimization
   works across matching session history over SSE or cached WebSockets.
-  A continuation for an already accepted steering message keeps its inherited effort.
+  Automatic steering continuations keep their inherited settings. If steering
+  waits for a tool result or approval, the explicit continuation uses current
+  request settings, including output limits and reasoning settings, without
+  repeating accepted steering. Earlier `configuration_update` items retain
+  their effect; a changed request-level effort does not replace those controls.
+  When accepted steering waits for a tool result or approval and its history
+  contains effort controls, finish that input with a compatible Astra model
+  and mode before switching.
 
 The example disables automatic server compaction because OpenAI cannot combine
 it with configuration updates. Cache-preserving effort changes also exclude

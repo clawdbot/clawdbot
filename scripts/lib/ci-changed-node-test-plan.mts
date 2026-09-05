@@ -12,6 +12,7 @@ import {
   isTestFileTarget,
   isTestSupportFileTarget,
   resolveChangedTestTargetPlan,
+  UI_E2E_VITEST_CONFIG,
 } from "../test-projects.test-support.mts";
 import { listAvailableExtensionIds } from "./changed-extensions.mts";
 import {
@@ -555,6 +556,7 @@ export function createChangedNodeTestShards(
   changedPaths: string[],
   options: CwdOptions & {
     dedicatedContractShards?: readonly { task: string; includePatterns: readonly string[] }[];
+    dedicatedUiE2e?: boolean;
   } = {},
 ): ChangedNodeTestShard[] | null {
   const cwd = options.cwd ?? process.cwd();
@@ -612,9 +614,13 @@ export function createChangedNodeTestShards(
   if (targetPlans === null) {
     return null;
   }
-  // CI supplies the same enabled envelopes it emits. Validate all changed paths
-  // first, then subtract only exact targets owned by those configs and includes.
+  // CI supplies the suite owners it emits. Validate every changed path first,
+  // then subtract covered plans; local runs and unselected owners keep their targets.
   const targets = targetPlans
+    .filter(
+      ({ plans }) =>
+        !options.dedicatedUiE2e || !plans.every(({ config }) => config === UI_E2E_VITEST_CONFIG),
+    )
     .filter(
       ({ target, plans }) =>
         !plans.every((plan) => {

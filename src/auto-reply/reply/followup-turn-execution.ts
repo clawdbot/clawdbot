@@ -79,6 +79,9 @@ export async function executeFollowupTurn(params: {
   const roomEvent = turn.queued.currentInboundEventKind === "room_event";
   const progressAllowed = () => turn.sendPolicy === "allow" && !roomEvent;
   const currentVerboseLevel = (): VerboseLevel => {
+    if (turn.queued.run.verboseLevelOverride !== undefined) {
+      return turn.queued.run.verboseLevelOverride;
+    }
     const session = turn.session;
     if (session.kind === "session" && session.storePath) {
       try {

@@ -378,6 +378,16 @@ export function resolveFollowupDeliveryContextKey(run: FollowupRun): string {
     JSON.stringify([...new Set(execution.memberRoleIds ?? [])].toSorted()),
     execution.spawnedBy ?? "",
     execution.traceAuthorized === true,
+    execution.traceLevelOverride ?? "",
+    execution.thinkLevel ?? "",
+    execution.thinkLevelOverride ?? "",
+    execution.fastMode ?? "",
+    execution.fastModeOverride === true,
+    execution.fastModeAutoOnSecondsOverride === true,
+    execution.fastModeAutoOnSeconds ?? "",
+    execution.verboseLevel ?? "",
+    execution.verboseLevelOverride ?? "",
+    execution.reasoningLevel ?? "",
     execution.elevatedLevel ?? "",
     provenance?.kind ?? "",
     provenance?.originSessionId ?? "",
@@ -1520,12 +1530,8 @@ export function scheduleFollowupDrain(
           continue;
         }
         if (queue.mode === "collect") {
-          // Once the batch is mixed, never collect again within this drain.
-          // Prevents “collect after shift” collapsing different targets.
-          //
-          // Debug: `pnpm test src/auto-reply/reply/reply-flow.test.ts`
-          // Check if messages span multiple channels.
-          // If so, process individually to preserve per-message routing.
+          // Recheck remaining routes after each individual drain so a later
+          // compatible suffix can collect without mixing destinations.
           const isCrossChannel =
             hasCrossChannelItems(queue.items, resolveCrossChannelKey) ||
             queue.items.some(requiresIndividualCollectDrain);

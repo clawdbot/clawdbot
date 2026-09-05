@@ -31,7 +31,7 @@ type BrowserBridgeFacadeModule = {
 function loadFacadeModule(): Promise<BrowserBridgeFacadeModule> {
   return loadActivatedBundledPluginPublicSurfaceModule<BrowserBridgeFacadeModule>({
     dirName: "browser",
-    artifactBasename: "runtime-api.js",
+    artifactBasename: "bridge-api.js",
   });
 }
 

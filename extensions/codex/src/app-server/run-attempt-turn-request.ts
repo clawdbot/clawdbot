@@ -155,9 +155,11 @@ export async function prepareCodexAttemptTurnRequest(
         await resourceState.client.request("turn/start", turnStartParams, {
           timeoutMs: params.timeoutMs,
           signal: runAbortController.signal,
+          assertCurrent: connection.assertCurrent,
         }),
       );
       acceptedTurnId = startedTurn.turn.id;
+      connection.assertCurrent();
       throwIfTurnStartAcceptedAfterAbort();
       return startedTurn;
     } catch (error) {

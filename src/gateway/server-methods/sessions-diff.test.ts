@@ -573,6 +573,23 @@ describe("loadSessionDiff", () => {
     expect(changed.files[0]?.binary).toBe(true);
   });
 
+  it("keeps pre-session changes hidden when new files exceed the fingerprint budget", async () => {
+    initRepo(repoRoot);
+    fs.writeFileSync(path.join(repoRoot, "z-existing.txt"), "preexisting work\n");
+    const baseline = await captureSessionDiffBaseline({ cwd: repoRoot, sessionId: "s1" });
+    expect(baseline?.files.map((file) => file.path)).toEqual(["z-existing.txt"]);
+    const addedPaths = Array.from({ length: 4 }, (_, index) => `a-new-${index}.bin`);
+    for (const filePath of addedPaths) {
+      fs.writeFileSync(path.join(repoRoot, filePath), Buffer.alloc(4 * 1024 * 1024));
+    }
+    mockSession(repoRoot, { sessionDiffBaseline: baseline });
+
+    const result = await loadSessionDiff({ sessionKey: "agent:main:s1" });
+
+    expect(result.files.map((file) => file.path)).toEqual(addedPaths);
+    expect(result.additions).toBe(0);
+  });
+
   it("skips oversized files instead of materializing them during baseline capture", async () => {
     initRepo(repoRoot);
     fs.writeFileSync(path.join(repoRoot, "large.txt"), Buffer.alloc(4 * 1024 * 1024 + 1, 97));

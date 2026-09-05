@@ -29,7 +29,7 @@ export const DEFAULT_LLAMA_CPP_MODEL_SHA256 =
   "85a896a047553e842f25297ee5b031d64ff30147d9c4af17b1e4b394cd1fab87";
 // The full OpenClaw agent system prompt alone is ~31K tokens, so 8K overflows on
 // the first turn. 64K leaves real headroom for history and tool output; Gemma 4
-// supports far more, and the 16 GiB offer floor already bounds weaker machines.
+// supports far more; the setup catalog budgets memory for this initial context.
 export const DEFAULT_LLAMA_CPP_CONTEXT_SIZE = 65536;
 
 export const DEFAULT_LLAMA_CPP_EMBEDDING_MODEL =
@@ -42,14 +42,6 @@ export const DEFAULT_LLAMA_CPP_EMBEDDING_CACHE_FILE =
 export const DEFAULT_LLAMA_CPP_EMBEDDING_MODEL_SIZE_BYTES = 328_577_056;
 export const DEFAULT_LLAMA_CPP_EMBEDDING_MODEL_SHA256 =
   "6fa0c02a9c302be6f977521d399b4de3a46310a4f2621ee0063747881b673f67";
-
-// 5 GB weights + KV cache + OS headroom. Below 16 GiB the default model
-// thrashes, so onboarding omits the download offer entirely.
-const LLAMA_CPP_DEFAULT_MODEL_RAM_FLOOR_BYTES = 16 * 1024 ** 3;
-
-export function meetsLlamaCppDefaultModelRamFloor(totalmemBytes = os.totalmem()): boolean {
-  return totalmemBytes >= LLAMA_CPP_DEFAULT_MODEL_RAM_FLOOR_BYTES;
-}
 
 export function resolveLlamaCppDataDir(): string {
   return path.join(resolveStateDir(), "tools", "llama.cpp");

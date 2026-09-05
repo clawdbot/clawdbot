@@ -18,7 +18,6 @@ import {
   runOpenClawStateWriteTransaction,
   type OpenClawStateDatabaseOptions,
 } from "../../state/openclaw-state-db.js";
-import { selectResolvedUserProfileById } from "../../state/user-profiles-internal.js";
 import { installSkillFromClawHub } from "../lifecycle/clawhub.js";
 import {
   prepareSkillLibraryBundle,
@@ -33,6 +32,7 @@ import {
   requireSkillLibraryEntry,
   requireSkillLibraryProfile,
   requireSkillLibraryUpload,
+  selectSkillLibraryOwner,
   skillLibraryDb,
   type SkillLibraryAuthority,
 } from "./store.js";
@@ -122,7 +122,7 @@ export async function uploadSkillLibrary(
       if (
         activeUploads.length >= MAX_ACTIVE_UPLOADS ||
         activeUploads.filter(
-          (upload) => selectResolvedUserProfileById(db, upload.owner_profile_id)?.id === actor,
+          (upload) => selectSkillLibraryOwner(db, upload.owner_profile_id)?.id === actor,
         ).length >=
           MAX_ACTIVE_UPLOADS / 2
       ) {

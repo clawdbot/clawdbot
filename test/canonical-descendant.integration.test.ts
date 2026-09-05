@@ -18,6 +18,7 @@ import {
   setRuntimeAuthProfileStoreSnapshot,
   clearRuntimeAuthProfileStoreSnapshots,
 } from "../src/agents/auth-profiles/runtime-snapshots.js";
+import { log as embeddedAgentLog } from "../src/agents/embedded-agent-runner/logger.js";
 import { runAgentHarnessBeforeMessageWriteHook } from "../src/agents/harness/hook-helpers.js";
 import { createAgentHarnessHostCapabilities } from "../src/agents/harness/host-capability.js";
 import { listRegisteredAgentHarnesses } from "../src/agents/harness/registry.js";
@@ -115,6 +116,7 @@ async function withFixture(
     codexPlugins?: Parameters<typeof createCanonicalForkFixtureForTest>[0]["codexPlugins"];
     desktopGenerationFingerprint?: string;
     senderIsOwner?: boolean;
+    transcript?: { display?: false; excludeFromContext?: true };
     mcpResolver?: OpenClawPluginMcpServerConnectionResolver;
   } = {},
 ) {
@@ -165,6 +167,7 @@ async function withFixture(
         const target = { agentId: "main", sessionId, sessionKey, storePath };
         const recorder = createUserTurnTranscriptRecorder({
           input: {
+            ...options.transcript,
             text: prompt,
             timestamp: 123,
             idempotencyKey: buildRunUserTurnIdempotencyKey(runId),
@@ -786,6 +789,33 @@ describe("canonical descendant lifecycle through real owners", () => {
       );
       expect(await loadTranscriptEvents(target)).toEqual(before);
     });
+  }, 180_000);
+
+  it("preserves hidden admitted consult prompts without requesting visible-row annotation", async () => {
+    const warn = vi.spyOn(embeddedAgentLog, "warn").mockImplementation(() => undefined);
+    await withFixture(
+      async (fixture, _fork, _revoke, admissions) => {
+        const source = await fixture.adopt();
+        await fixture.turn(source.sessionKey, "Hidden voice consultation");
+        const { recorder, before } = admissions.at(-1)!;
+        expect(recorder.getAdmissionReceipt()).toBeDefined();
+        expect(recorder.getPersistedMessage?.()).toMatchObject({
+          display: false,
+          excludeFromContext: true,
+        });
+        const target = {
+          ...fixture.identity(source.sessionKey),
+          sessionKey: source.sessionKey,
+          storePath: fixture.storePath,
+        };
+        expect(await loadTranscriptEvents(target)).toEqual(before);
+        expect(warn).not.toHaveBeenCalledWith(
+          "failed to mirror codex app-server prompt at turn start",
+          expect.anything(),
+        );
+      },
+      { transcript: { display: false, excludeFromContext: true } },
+    );
   }, 180_000);
 
   it("annotates the pre-admitted Gateway user without replacing its event or read fence", async () => {

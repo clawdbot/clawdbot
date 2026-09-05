@@ -465,7 +465,7 @@ const TUI_VITEST_CONFIG = "test/vitest/vitest.tui.config.ts";
 const TUI_PTY_VITEST_CONFIG = "test/vitest/vitest.tui-pty.config.ts";
 const UI_VITEST_CONFIG = "test/vitest/vitest.ui.config.ts";
 const UI_BROWSER_VITEST_CONFIG = "test/vitest/vitest.ui-browser.config.ts";
-const UI_E2E_VITEST_CONFIG = "test/vitest/vitest.ui-e2e.config.ts";
+export const UI_E2E_VITEST_CONFIG = "test/vitest/vitest.ui-e2e.config.ts";
 const UI_ISOLATED_VITEST_CONFIG = "test/vitest/vitest.ui-isolated.config.ts";
 const UTILS_VITEST_CONFIG = "test/vitest/vitest.utils.config.ts";
 const WIZARD_VITEST_CONFIG = "test/vitest/vitest.wizard.config.ts";
@@ -2736,6 +2736,10 @@ const SEMANTIC_TOOLING_TARGET_PATTERNS: Array<[RegExp, string[]]> = [
   [/^scripts\/lib\/plistbuddy\.sh$/u, ["create-dmg", "package-mac-app", "package-mac-dist"]],
   [/^scripts\/lib\/swift-toolchain\.sh$/u, ["package-mac-app", "package-mac-dist"]],
   [/^scripts\/stage-cua-driver-macos\.sh$/u, ["package-mac-app"]],
+  [
+    /^scripts\/(stage-cloudflared-macos\.sh|lib\/cloudflared-macos\.json)$/u,
+    ["stage-cloudflared-macos", "package-mac-app"],
+  ],
   [
     /^scripts\/lib\/npm-publish-plan\.mjs$/u,
     [

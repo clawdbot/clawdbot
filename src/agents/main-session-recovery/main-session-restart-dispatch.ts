@@ -490,9 +490,7 @@ export async function resumeMainSession(params: {
           return { result: false };
         }
         entry.restartRecoveryDeliveryRunId = recoveryRunId;
-        if (params.forceRestartSafeTools) {
-          entry.restartRecoveryForceSafeTools = true;
-        }
+        entry.restartRecoveryForceSafeTools = params.forceRestartSafeTools ? true : undefined;
         entry.updatedAt = Date.now();
         return {
           result: true,

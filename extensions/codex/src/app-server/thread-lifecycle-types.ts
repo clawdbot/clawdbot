@@ -61,6 +61,8 @@ export type CodexStartOrResumeThreadParams = {
   reserveResumeThread?: (threadId: string) => { release: () => void };
   bindingStore: CodexAppServerBindingStore;
   params: EmbeddedRunAttemptParams;
+  /** Retained host-generation proof; the opaque host capability remains unchanged. */
+  assertCurrent?: () => void;
   /** Private execution identity resolved by this harness's catalog generation. */
   runtimeModelId?: string;
   agentId?: string;

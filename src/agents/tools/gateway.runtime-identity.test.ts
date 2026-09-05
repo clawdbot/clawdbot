@@ -8,7 +8,7 @@ import {
 } from "../../gateway/agent-runtime-identity-token.js";
 import { resolveExecutionIdentitySpawnFacts } from "../../gateway/agent-turn/agent-run-execution-lineage.js";
 import type { CallGatewayOptions } from "../../gateway/call.js";
-import { ExecApprovalManager } from "../../gateway/exec-approval-manager.js";
+import { createTestApprovalManager } from "../../gateway/exec-approval-manager.test-support.js";
 import {
   mintMessageActionTurnCapability,
   revokeMessageActionTurnCapability,
@@ -599,15 +599,20 @@ describe("gateway tool runtime identity", () => {
     },
   );
 
-  it.each(
+  it.for(
     ["exec.approval.request", "plugin.approval.request"].flatMap((method) =>
       [false, true].map((ambient) => ({ method, ambient })),
     ),
   )(
     "rejects late $method registration after permission change (ambient lifetime: $ambient)",
-    async ({ method, ambient }) => {
+    async ({ method, ambient }, testContext) => {
       mocks.callGateway.mockResolvedValue({ id: "approval" });
-      const manager = new ExecApprovalManager({
+      const manager = createTestApprovalManager<{
+        command: string;
+        title: string;
+        description: string;
+      }>(testContext, {
+        approvalKind: method === "plugin.approval.request" ? "plugin" : "exec",
         validateAgentRuntimeDelegatedAuthority: validateAgentRunDelegatedAuthority,
       });
       const operationalRunInstance = createOperationalRunInstanceRef("run-permission-change");
@@ -630,7 +635,11 @@ describe("gateway tool runtime identity", () => {
             if (!oldIdentity) {
               throw new Error("Expected signed approval identity");
             }
-            const oldRecord = manager.create({ command: "echo old" }, 2_000, "old-generation");
+            const oldRecord = manager.create(
+              { command: "echo old", title: "Old action", description: "Review the old action" },
+              2_000,
+              "old-generation",
+            );
             oldRecord.agentRuntimeDelegatedAuthority = oldIdentity.delegatedAuthority;
             // The request is already dispatched, but has not registered its pending card.
             oldGeneration.abort(new Error("Permission change"));
@@ -645,7 +654,11 @@ describe("gateway tool runtime identity", () => {
             if (!nextIdentity) {
               throw new Error("Expected replacement approval identity");
             }
-            const nextRecord = manager.create({ command: "echo new" }, 2_000, "next-generation");
+            const nextRecord = manager.create(
+              { command: "echo new", title: "New action", description: "Review the new action" },
+              2_000,
+              "next-generation",
+            );
             nextRecord.agentRuntimeDelegatedAuthority = nextIdentity.delegatedAuthority;
             const decision = manager.register(nextRecord, 2_000);
             const waiter = manager.awaitDecision(nextRecord.id);

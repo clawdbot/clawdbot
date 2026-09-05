@@ -1,7 +1,7 @@
-/** Recovery accepted during an earlier sibling's drain stays in the captured kill tree. */
+/** Recovery beneath a draining control ancestor stays in the captured kill tree. */
 import { writeFile } from "node:fs/promises";
 import path from "node:path";
-import { expect, it, vi } from "vitest";
+import { beforeEach, expect, it, vi } from "vitest";
 import { createDeferred } from "../../../../test/helpers/promise.js";
 import {
   clearConfigCache,
@@ -18,10 +18,12 @@ import {
   invokeChatAbortHandler,
 } from "../../../gateway/server-methods/chat.abort.test-helpers.js";
 import { sessionMutationHandlers } from "../../../gateway/server-methods/sessions-mutations.js";
+import { loadSessionsRuntimeModule } from "../../../gateway/server-methods/sessions-shared.js";
 import {
   registerAgentRunContext,
   clearAgentRunContext,
 } from "../../../infra/agent-run-registry.js";
+import * as gatewayWorkAdmission from "../../../process/gateway-work-admission.js";
 import * as sessionLifecycle from "../../../sessions/session-lifecycle-admission.js";
 import { SUBAGENT_KILL_TASK_ERROR } from "../../../tasks/detached-task-runtime-contract.js";
 import { getDetachedTaskLifecycleRuntime } from "../../../tasks/detached-task-runtime.js";
@@ -50,6 +52,7 @@ import {
   initSubagentRegistry,
   markSubagentRunTerminated,
   registerSubagentRun,
+  scheduleSubagentRegistrySweep,
   replaceSubagentRunAfterSteerCore,
 } from "./subagent-registry.js";
 import { writeSubagentSessionEntry } from "./subagent-registry.persistence.test-support.js";
@@ -57,6 +60,16 @@ import { loadSubagentRegistryFromSqlite } from "./subagent-registry.store.sqlite
 import { releaseSubagentRun, testing } from "./subagent-registry.test-helpers.js";
 
 const fixture = useSubagentControlFixture();
+
+beforeEach(async () => {
+  // Prepare reset runtime definitions before the timed recovery races.
+  await Promise.all([
+    loadSessionsRuntimeModule(),
+    import("../../embedded-agent.js"),
+    import("../../agent-bundle-mcp-tools.js"),
+    import("../../bash-process-registry.js"),
+  ]);
+});
 
 it("does not promote a provisional task when replacement wins before admin admission", async () => {
   testing.setDepsForTest({
@@ -132,7 +145,8 @@ it("does not promote a provisional task when replacement wins before admin admis
     const result = await pending;
     expect(await admin.mock.results[0]!.value).toEqual({ found: false, killed: false });
     expect.soft(result.cancelled).toBe(false);
-    expect.soft(getTaskById(task.taskId)?.error).toBe(SUBAGENT_KILL_TASK_ERROR);
+    expect.soft(getTaskById(task.taskId)?.status).toBe("running");
+    expect.soft(getTaskById(task.taskId)?.error).toBeUndefined();
     nextWait.resolve({
       status: "ok",
       endedAt: Date.now(),
@@ -166,7 +180,7 @@ it.each(
       .map((scenario) => ({ boundary, scenario })),
   ),
 )(
-  "$boundary resolves accepted recovery after an earlier sibling drains (scenario=$scenario)",
+  "$boundary resolves accepted recovery after its control ancestor drains (scenario=$scenario)",
   async ({ boundary, scenario }) => {
     await writeFile(
       path.join(fixture.stateDir, "openclaw.json"),
@@ -224,17 +238,27 @@ it.each(
       recoveryRuntime,
       resolveGatewayContext: () => gatewayContext as never,
     };
-    // Real startup hydrates and activates before live rows exist. Consume its
-    // empty scheduled pass so it cannot race the later controlled recovery.
-    vi.useFakeTimers({ toFake: ["setTimeout", "clearTimeout"] });
+    // Await the scheduled empty sweep before adding live rows. Process-wide
+    // timer counts also include independently owned worker idle timers.
+    const startupSweep = createDeferred();
+    const runWithAdmission = gatewayWorkAdmission.runWithGatewayIndependentRootWorkAdmission;
+    const admissionObserver = vi
+      .spyOn(gatewayWorkAdmission, "runWithGatewayIndependentRootWorkAdmission")
+      .mockImplementation((run, origin) => {
+        const pending = runWithAdmission(run, origin);
+        if (origin === "subagents:sweeper") {
+          void pending.then(() => startupSweep.resolve(), startupSweep.reject);
+        }
+        return pending;
+      });
     try {
       initSubagentRegistry();
       activateSubagentRegistry(gatewayContext.resolveGatewayContext);
-      await vi.runOnlyPendingTimersAsync();
-      expect(vi.getTimerCount()).toBe(0);
+      scheduleSubagentRegistrySweep({ delayMs: 0 });
+      await startupSweep.promise;
       expect(dispatchRecovery).not.toHaveBeenCalled();
     } finally {
-      vi.useRealTimers();
+      admissionObserver.mockRestore();
     }
     for (const [runId, childSessionKey, requesterSessionKey, collect, queued] of [
       ["parent", parentKey, controllerSessionKey, false, false],
@@ -257,7 +281,7 @@ it.each(
         runId,
         childSessionKey,
         requesterSessionKey,
-        controllerSessionKey: requesterSessionKey,
+        controllerSessionKey: runId === "b" ? aKey : requesterSessionKey,
         requesterAgentId: "main",
         requesterDisplayKey: requesterSessionKey,
         task: runId,
@@ -319,7 +343,7 @@ it.each(
     const cfg = getRuntimeConfig();
     const pending =
       boundary === "bulk"
-        ? killAllControlledSubagentRuns({ cfg, controller, runs: [a, b] })
+        ? killAllControlledSubagentRuns({ cfg, controller, runs: [a] })
         : killSubagentRunAdmin({
             cfg,
             sessionKey: parentKey,
@@ -339,7 +363,7 @@ it.each(
         entered.promise,
         pending.then((result) => {
           throw new Error(
-            `Stop completed before the sibling admission drain: ${JSON.stringify(result)}`,
+            `Stop completed before the ancestor admission drain: ${JSON.stringify(result)}`,
           );
         }),
       ]);
@@ -455,7 +479,7 @@ it.each(
             runId: "unrelated",
             childSessionKey: bKey,
             requesterSessionKey: owner,
-            controllerSessionKey: owner,
+            controllerSessionKey: aKey,
             requesterAgentId: "main",
             requesterDisplayKey: owner,
             task: "new independent owner",

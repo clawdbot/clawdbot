@@ -71,6 +71,8 @@ const CORE_GATEWAY_HANDLER_MODULES = {
   "plugin-host-hooks": () =>
     import("./plugin-host-hooks.js").then((module) => module.pluginHostHookHandlers),
   plugins: () => import("./plugins.js").then((module) => module.pluginsHandlers),
+  "plugins-mutations": () =>
+    import("./plugins-mutations.js").then((module) => module.pluginMutationHandlers),
   projects: () => import("./projects.js").then((module) => module.projectsHandlers),
   portals: () => import("./portals.js").then((module) => module.portalHandlers),
   "progress-card": () => import("./progress-card.js").then((module) => module.progressCardHandlers),

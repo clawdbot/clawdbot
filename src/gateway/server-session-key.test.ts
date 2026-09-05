@@ -137,6 +137,20 @@ describe("resolveSessionKeyForRun", () => {
     });
   });
 
+  it("keeps qualified global main run ownership before collapsing its key", () => {
+    mockCombinedSessionStore(
+      {
+        session: { scope: "global" },
+        agents: { ownership: "explicit", entries: { ops: {}, research: {} } },
+      },
+      {},
+    );
+    registerAgentRunContext("qualified-global-run", { sessionKey: "agent:research:main" });
+
+    expect(resolveSessionKeyForRun("qualified-global-run", { agentId: "research" })).toBe("main");
+    expect(resolveSessionKeyForRun("qualified-global-run", { agentId: "ops" })).toBeUndefined();
+  });
+
   it("does not overwrite active run context when a scoped lookup finds another agent store entry", () => {
     hoisted.loadConfigMock.mockReturnValue({});
     registerAgentRunContext("run-1", { sessionKey: "agent:retired:acp:run-1" });

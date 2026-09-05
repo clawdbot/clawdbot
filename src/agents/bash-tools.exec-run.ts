@@ -462,6 +462,7 @@ export function createExecTool(
             bashElevated: elevatedDefaults,
             approvalReviewerDeviceId: defaults?.approvalReviewerDeviceId,
             nonInteractiveApproval: defaults?.nonInteractiveApproval,
+            approvalFollowupMode: defaults?.approvalFollowupMode,
             turnSourceChannel: defaults?.messageProvider,
             turnSourceTo: defaults?.currentChannelId,
             turnSourceAccountId: defaults?.accountId,

@@ -515,6 +515,7 @@ export function selectInstalledPluginManifestRecords(
 }
 
 export function loadPluginManifestRegistryForInstalledIndex(params: {
+  registryPath?: string;
   index: InstalledPluginIndex;
   manifestRegistry?: PluginManifestRegistry;
   config?: OpenClawConfig;
@@ -582,6 +583,7 @@ export function loadPluginManifestRegistryForInstalledIndex(params: {
           return candidate;
         });
       return loadPluginManifestRegistryCore({
+        registryPath: params.registryPath,
         config: params.config,
         workspaceDir: params.workspaceDir,
         env,

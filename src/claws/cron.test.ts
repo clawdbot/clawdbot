@@ -3,8 +3,18 @@ import { afterEach, describe, expect, it, vi } from "vitest";
 import { validateCronAddParams } from "../../packages/gateway-protocol/src/index.js";
 import { useAutoCleanupTempDirTracker } from "../../test/helpers/temp-dir.js";
 import { normalizeCronJobCreate } from "../cron/normalize.js";
-import { closeOpenClawStateDatabaseForTest } from "../state/openclaw-state-db.js";
-import { clawCronGatewayInput, installClawCronJobs, readClawCronRefs } from "./cron.js";
+import {
+  closeOpenClawStateDatabaseForTest,
+  openOpenClawStateDatabase,
+} from "../state/openclaw-state-db.js";
+import {
+  clawCronGatewayInput,
+  deleteClawCronRef,
+  installClawCronJobs,
+  markClawCronRefRemoved,
+  readClawCronRefs,
+  upsertClawCronRef,
+} from "./cron.js";
 import { buildClawAddPlan } from "./lifecycle.js";
 import { parseClawManifest } from "./schema.js";
 import type { ClawSourceIdentity } from "./types.js";
@@ -259,6 +269,8 @@ describe("installClawCronJobs", () => {
     expect(refs).toMatchObject([
       { schedulerJobId: "scheduler-after-lost-response", status: "complete" },
     ]);
+    expect(refs[0]).not.toHaveProperty("error");
+    expect(refs).toEqual(readClawCronRefs("worker-two", { env: current.env }));
   });
 
   it("converges concurrent installs through the declaration key", async () => {
@@ -284,5 +296,77 @@ describe("installClawCronJobs", () => {
     expect(jobs.size).toBe(1);
     expect(first[0]).toMatchObject({ schedulerJobId: "scheduler-converged", status: "complete" });
     expect(second[0]).toMatchObject({ schedulerJobId: "scheduler-converged", status: "complete" });
+  });
+
+  it("retains creation time across replacement and scopes removal to the owning agent", async () => {
+    const current = await fixture();
+    const options = { env: current.env };
+    const [original] = await installClawCronJobs(current.plan, {
+      ...options,
+      gateway: { add: async () => ({ id: "scheduler-original" }) },
+      nowMs: 42,
+    });
+    const replacement = {
+      ...original!,
+      schedulerJobId: "scheduler-replacement",
+      job: { ...original!.job, message: 'Report "quoted" \\ 日本語\n\u0000' },
+      error: "previous failure",
+      createdAtMs: 999,
+      updatedAtMs: 100,
+    };
+    upsertClawCronRef(replacement, options);
+    const otherAgent = {
+      ...original!,
+      agentId: "other-agent",
+      declarationKey: "claw:other-agent:daily-report",
+      schedulerJobId: "scheduler-other",
+    };
+    upsertClawCronRef(otherAgent, options);
+    expect(readClawCronRefs("worker-two", options)).toEqual([{ ...replacement, createdAtMs: 42 }]);
+
+    const removed = markClawCronRefRemoved("worker-two", "daily-report", {
+      ...options,
+      nowMs: 200,
+    });
+    expect(removed).toMatchObject({ status: "removed", createdAtMs: 42, updatedAtMs: 200 });
+    expect(removed).not.toHaveProperty("schedulerJobId");
+    expect(removed).not.toHaveProperty("error");
+    expect(readClawCronRefs("worker-two", options)).toEqual([removed]);
+    expect(markClawCronRefRemoved("worker-two", "missing", options)).toBeUndefined();
+    deleteClawCronRef("worker-two", "daily-report", options);
+    deleteClawCronRef("worker-two", "daily-report", options);
+    expect(readClawCronRefs("worker-two", options)).toEqual([]);
+    expect(readClawCronRefs("other-agent", options)).toEqual([otherAgent]);
+  });
+
+  it("parses the full agent list before removal while installation reads only its declaration", async () => {
+    const current = await fixture();
+    const options = { env: current.env };
+    const gateway = { add: vi.fn().mockResolvedValue({ id: "scheduler-valid" }) };
+    const [original] = await installClawCronJobs(current.plan, { ...options, gateway });
+    upsertClawCronRef(
+      {
+        ...original!,
+        manifestId: "zz-malformed",
+        declarationKey: "claw:worker-two:zz-malformed",
+        schedulerJobId: "scheduler-malformed",
+      },
+      options,
+    );
+    const db = openOpenClawStateDatabase(options).db;
+    db.prepare("UPDATE claw_cron_refs SET job_json = ? WHERE manifest_id = ?").run(
+      "{",
+      "zz-malformed",
+    );
+
+    expect(() => readClawCronRefs("worker-two", options)).toThrow(SyntaxError);
+    expect(() => markClawCronRefRemoved("worker-two", "daily-report", options)).toThrow(
+      SyntaxError,
+    );
+    expect(() => markClawCronRefRemoved("worker-two", "missing", options)).toThrow(SyntaxError);
+    await expect(installClawCronJobs(current.plan, { ...options, gateway })).resolves.toEqual([
+      original,
+    ]);
+    expect(gateway.add).toHaveBeenCalledOnce();
   });
 });

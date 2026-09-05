@@ -547,7 +547,6 @@ export abstract class MemoryManagerEmbeddingOps extends MemoryManagerSyncOps {
         enabled: this.cache.enabled,
         providerIdentities: generation.identities,
         hashes: chunks.map((chunk) => chunk.hash),
-        tableName: EMBEDDING_CACHE_TABLE,
       }),
     });
   }
@@ -948,7 +947,6 @@ export abstract class MemoryManagerEmbeddingOps extends MemoryManagerSyncOps {
             embedding: embeddings[index] ?? [],
           })),
           now,
-          tableName: EMBEDDING_CACHE_TABLE,
         });
         this.upsertFileRecord(entry, source);
         if (needsVectorRebuild) {

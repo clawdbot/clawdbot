@@ -20,8 +20,11 @@ import {
 import { sessionDeleteHandlers } from "../../../gateway/server-methods/sessions-delete.js";
 import type { GatewayRequestContext } from "../../../gateway/server-methods/types.js";
 import { createSyntheticPluginRuntimeClient } from "../../../gateway/server-plugin-runtime-client.js";
+import { emitAgentEvent } from "../../../infra/agent-events.js";
 import {
   claimAgentRunDelegatedAuthority,
+  clearAgentRunContext,
+  registerAgentRunContext,
   releaseAgentRunDelegatedAuthority,
   rotateAgentRunRegistryLifecycleGeneration,
 } from "../../../infra/agent-run-registry.js";
@@ -62,6 +65,7 @@ import {
 } from "../../tools/gateway-caller-context.js";
 import { createSessionsSpawnTool } from "../../tools/sessions-spawn-tool.js";
 import { subagentRuns } from "../registry/subagent-registry-memory.js";
+import { registerSubagentRun } from "../registry/subagent-registry.js";
 import {
   settleSubagentRegistryPersistenceWork,
   writeSubagentSessionEntry,
@@ -174,6 +178,232 @@ async function createBoundParent(runtime: "embedded" | "plugin-harness" = "embed
 }
 
 describe("pending spawn invocation authority", () => {
+  it.each(["sibling", "nested sibling"] as const)(
+    "stops a fresh spawn below a completed persistent sibling while a %s drain remains pending",
+    async (slowBranch) => {
+      const originalConfig = getRuntimeConfig();
+      await writeFile(
+        path.join(stateDir, "openclaw.json"),
+        JSON.stringify({
+          ...originalConfig,
+          agents: {
+            ...originalConfig.agents,
+            defaults: {
+              ...originalConfig.agents?.defaults,
+              subagents: { maxSpawnDepth: 2 },
+            },
+          },
+        }),
+      );
+      clearConfigCache();
+      clearRuntimeConfigSnapshot();
+      const { cfg, storePath, context, admission, parent } = await createBoundParent();
+      const sessionLifecycle = await import("../../../sessions/session-lifecycle-admission.js");
+      const key = (id: string) => `agent:main:subagent:${id}`;
+      const ids = slowBranch === "sibling" ? ["a", "b"] : ["a", "b", "d"];
+      const slowId = slowBranch === "sibling" ? "a" : "d";
+      for (const id of ids) {
+        await writeSubagentSessionEntry({
+          stateDir,
+          agentId: "main",
+          sessionKey: key(id),
+          defaultSessionId: `${id}-session`,
+          lifecycleRevision: "original",
+        });
+        registerSubagentRun({
+          runId: id,
+          childSessionKey: key(id),
+          controllerSessionKey: id === "d" ? key("a") : parentSessionKey,
+          requesterSessionKey: id === "d" ? key("a") : parentSessionKey,
+          requesterAgentId: "main",
+          requesterDisplayKey: parentSessionKey,
+          requesterTurnRunId: id === "d" ? "a" : parentRunId,
+          task: id,
+          cleanup: "keep",
+          collect: id !== "b",
+          spawnMode: id === "b" ? "session" : "run",
+          expectsCompletionMessage: false,
+        });
+        registerAgentRunContext(id, { sessionKey: key(id), sessionId: `${id}-session` });
+      }
+      const completedB = subagentRuns.get("b")!;
+      const completedGeneration = completedB.generation;
+      emitAgentEvent({
+        runId: "b",
+        sessionKey: key("b"),
+        stream: "lifecycle",
+        data: { phase: "end", endedAt: Date.now() },
+      });
+      await vi.waitFor(() => expect(findTaskByRunId("b")?.status).toBe("succeeded"));
+      clearAgentRunContext("b");
+      await settleSubagentRegistryPersistenceWork();
+      expect(completedB).toMatchObject({
+        generation: completedGeneration,
+        spawnMode: "session",
+        execution: { status: "terminal" },
+        endedReason: "subagent-complete",
+      });
+      expect(
+        Array.from(subagentRuns.values()).some((entry) => entry.controllerSessionKey === key("b")),
+      ).toBe(false);
+      const entered = createDeferred();
+      const resume = createDeferred();
+      const slow = await beginSessionWorkAdmission({
+        scope: storePath,
+        identities: [key(slowId), `${slowId}-session`],
+        assertAllowed: () => {},
+        onInterrupt: () => slow.release(),
+      });
+      const interrupt = sessionLifecycle.interruptSessionWorkAdmissions;
+      const drain = vi
+        .spyOn(sessionLifecycle, "interruptSessionWorkAdmissions")
+        .mockImplementation(async (params) => {
+          const released = await interrupt(params);
+          if (params.scope === storePath && Array.from(params.identities).includes(key(slowId))) {
+            expect(released).toBe(true);
+            entered.resolve();
+            await resume.promise;
+          }
+          return released;
+        });
+      const cancellation = invokeChatAbortHandler({
+        handler: handleChatAbortRequest,
+        context,
+        request: { sessionKey: parentSessionKey, runId: parentRunId },
+        client: { connId: "owner-connection", connect: { scopes: ["operator.write"] } },
+      });
+      const freshAdmission = prepareAgentRunAdmission({
+        cfg,
+        operationalRunInstance: createOperationalRunInstanceRef("fresh-b"),
+        facts: {
+          runId: "fresh-b",
+          agentId: "main",
+          ingress: { kind: "system", boundary: "spawn-authority-test", state: "present" },
+        },
+      });
+      let fresh: Awaited<ReturnType<typeof beginSessionWorkAdmission>> | undefined;
+      const freshInterrupted = vi.fn();
+      const dispatch = vi.fn();
+      try {
+        // Completed B visits its empty child list synchronously while the other
+        // branch enters its asynchronous mutation/drain, before this barrier opens.
+        await entered.promise;
+        expect(subagentRuns.get("b")).toBe(completedB);
+        expect(completedB.generation).toBe(completedGeneration);
+        expect(findTaskByRunId("b")?.status).toBe("succeeded");
+        const original = loadSessionEntry({ storePath, sessionKey: key("b") });
+        expect(original).toMatchObject({ sessionId: "b-session", lifecycleRevision: "original" });
+        const admitted = await freshAdmission.admit("embedded");
+        bindGatewayContextResolver(admitted, () => context as unknown as GatewayRequestContext);
+        fresh = await beginSessionWorkAdmission({
+          scope: storePath,
+          identities: [key("b"), "b-session"],
+          assertAllowed: () => {},
+          onInterrupt: () => {
+            freshInterrupted();
+            fresh?.release();
+          },
+        });
+        const blockerStarted = createDeferred();
+        enqueueSwarmRun({
+          groupId: JSON.stringify(["main", key("b"), groupId]),
+          runId: "late-spawn-blocker",
+          maxConcurrent: 1,
+          activeRunIds: [],
+          start: async () => blockerStarted.resolve(),
+          onStartFailure: () => true,
+        });
+        await blockerStarted.promise;
+        spawnTesting.setDepsForTest({
+          resolveContextEngine: async () => new LegacyContextEngine(),
+          dispatchGatewayMethodInProcess: async <T>(
+            method: string,
+            params: Record<string, unknown>,
+          ) => {
+            expect(method).toBe("agent");
+            dispatch(params.idempotencyKey);
+            return { runId: params.idempotencyKey, status: "accepted" } as T;
+          },
+        });
+        const source = createSessionsSpawnTool({
+          config: cfg,
+          agentSessionKey: key("b"),
+          requesterRunId: "fresh-b",
+          requesterTurnRunId: "fresh-b",
+        });
+        const [tool] = finalizeAgentTools({
+          tools: [
+            source,
+            createAgentsWaitTool({ config: cfg, agentSessionKey: key("b"), agentId: "main" }),
+          ],
+          hookContext: { config: cfg, agentId: "main", sessionKey: key("b"), runId: "fresh-b" },
+          abortSignal: new AbortController().signal,
+        });
+        const spawned = await fresh.run(() =>
+          withPluginRuntimeGatewayRequestScope(
+            { context: context as unknown as GatewayRequestContext, isWebchatConnect: () => false },
+            () =>
+              withGatewayToolCallerIdentity(
+                createAdmittedGatewayToolCallerIdentity({
+                  admittedRunContext: admitted,
+                  agentId: "main",
+                  sessionKey: key("b"),
+                }),
+                () =>
+                  tool!.execute!("late-spawn", {
+                    task: "late child",
+                    collect: true,
+                    context: "isolated",
+                    groupId,
+                  }),
+              ),
+          ),
+        );
+        expect(spawned).toMatchObject({ details: { status: "accepted" } });
+        const { runId } = spawned.details as { runId: string };
+        expect(subagentRuns.get(runId)).toMatchObject({
+          controllerSessionKey: key("b"),
+          requesterTurnRunId: "fresh-b",
+          execution: { status: "queued" },
+        });
+        expect(getAdmittedRunDelegatedAuthority(admitted)).toBeDefined();
+        resume.resolve();
+        expect(await cancellation).toHaveBeenCalledWith(
+          true,
+          expect.objectContaining({ aborted: true }),
+        );
+        expect(findTaskByRunId(runId)?.status).toBe("cancelled");
+        expect(subagentRuns.get("b")).toBe(completedB);
+        expect(completedB.generation).toBe(completedGeneration);
+        expect(findTaskByRunId("b")?.status).toBe("succeeded");
+        expect(loadSessionEntry({ storePath, sessionKey: key("b") })).toMatchObject({
+          sessionId: "b-session",
+          lifecycleRevision: "original",
+        });
+        expect(freshInterrupted).not.toHaveBeenCalled();
+        expect(fresh.isActive()).toBe(true);
+        expect(getAdmittedRunDelegatedAuthority(admitted)).toBeDefined();
+        releaseSwarmRun("late-spawn-blocker");
+        await Promise.resolve();
+        expect(dispatch).not.toHaveBeenCalled();
+      } finally {
+        resume.resolve();
+        slow.release();
+        fresh?.release();
+        try {
+          await cancellation;
+        } finally {
+          drain.mockRestore();
+          releaseSwarmRun("late-spawn-blocker");
+          freshAdmission.close();
+          admission.close();
+          parent.cleanup();
+          ids.forEach((id) => clearAgentRunContext(id));
+        }
+      }
+    },
+  );
+
   it.each([
     "native abort",
     "native acceptance",

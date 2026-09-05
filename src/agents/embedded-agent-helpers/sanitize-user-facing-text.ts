@@ -222,8 +222,11 @@ export function createVerifiedConversationContextStreamFilter(
   };
 }
 
-export function userFacingTextFilters(errorContext = false): TextFilter[] {
-  return [
+// Share descriptors only; createTextProjection owns each stream's mutable state.
+const userFacingFilters: Partial<Record<"normal" | "error", readonly TextFilter[]>> = {};
+
+export function userFacingTextFilters(errorContext = false): readonly TextFilter[] {
+  return (userFacingFilters[errorContext ? "error" : "normal"] ??= [
     { transform: stripFinalTags, activationTokens: ["<"] },
     {
       transform: stripInternalRuntimeContext,
@@ -248,7 +251,7 @@ export function userFacingTextFilters(errorContext = false): TextFilter[] {
     plainToolCallTextFilter,
     leadingEmptyLinesTextFilter,
     duplicateParagraphTextFilter,
-  ];
+  ]);
 }
 
 export function sanitizeUserFacingText(

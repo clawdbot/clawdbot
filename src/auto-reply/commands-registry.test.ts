@@ -812,14 +812,16 @@ describe("commands registry args", () => {
     ]);
   });
 
-  it("keeps verbose full available while preserving no-arg status dispatch", () => {
+  it("offers all verbose choices when no argument is provided", () => {
     const verbose = requireChatCommand("verbose");
 
     const modeArg = requireCommandArgAt(verbose, 0);
     expect(modeArg.choices).toEqual(["on", "off", "full"]);
-    expect(
-      resolveCommandArgMenu({ command: verbose, args: undefined, cfg: {} as never }),
-    ).toBeNull();
+    expect(requireCommandArgMenu({ command: verbose }).choices).toEqual([
+      { label: "on", value: "on" },
+      { label: "off", value: "off" },
+      { label: "full", value: "full" },
+    ]);
   });
 
   it("does not show menus when arg already provided", () => {

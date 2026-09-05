@@ -51,6 +51,7 @@ import {
 } from "../../scripts/check-changed.mts";
 import { resolveOxfmtInvocation } from "../../scripts/format-docs.mts";
 import { cleanupTempDirs, makeTempDir as makeTempRepoRoot } from "../helpers/temp-dir.js";
+import { materializeNativeCompiler } from "./native-boundary-fixture.js";
 
 const tempDirs: string[] = [];
 const repoRoot = process.cwd();
@@ -172,7 +173,27 @@ function createRootTestLintFixture() {
   })) {
     writeRepoFile(dir, file, source);
   }
-  symlinkSync(path.join(repoRoot, "node_modules"), path.join(dir, "node_modules"), "junction");
+  materializeNativeCompiler(dir);
+  for (const name of ["@types/node", "vitest"]) {
+    const destination = path.join(dir, "node_modules", name);
+    mkdirSync(path.dirname(destination), { recursive: true });
+    symlinkSync(path.join(repoRoot, "node_modules", name), destination, "junction");
+  }
+  // Lint still uses the real tools, but its install cannot own the native compiler.
+  // Direct package entries preserve relative imports and the tsgolint peer context.
+  for (const [bin, entry] of [
+    ["oxlint", "oxlint/bin/oxlint"],
+    ["tsgolint", "oxlint-tsgolint/bin/tsgolint.js"],
+  ] as const) {
+    symlinkSync(
+      path.join(repoRoot, "node_modules", entry),
+      path.join(dir, "node_modules/.bin", bin),
+      "file",
+    );
+    if (process.platform === "win32") {
+      writeRepoFile(dir, `node_modules/.bin/${bin}.cmd`, `@node "%~dp0${bin}" %*\r\n`);
+    }
+  }
   // All-lane plans run the real coverage guard against unchanged mobile inputs.
   symlinkSync(path.join(repoRoot, "apps"), path.join(dir, "apps"), "junction");
   for (const script of [
@@ -183,7 +204,7 @@ function createRootTestLintFixture() {
     symlinkSync(path.join(repoRoot, "scripts", script), path.join(dir, "scripts", script));
   }
   // Stub unrelated package gates at the executable boundary: real pnpm could
-  // reconcile the linked toolchain. The CLI and source-only lint wrapper stay real.
+  // reconcile this partial install. The CLI and source-only lint wrapper stay real.
   const binDir = path.join(dir, "bin");
   for (const bin of ["pnpm", "corepack"]) {
     writeRepoFile(dir, `bin/${bin}`, "#!/bin/sh\nexit 0\n");

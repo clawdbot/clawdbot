@@ -1,8 +1,10 @@
 // Spawn utility tests cover child process setup and stream handling helpers.
 import type { ChildProcess } from "node:child_process";
 import { EventEmitter } from "node:events";
+import path from "node:path";
 import { PassThrough } from "node:stream";
 import { describe, expect, it, vi } from "vitest";
+import { withTempDir } from "../test-utils/temp-dir.js";
 import { spawnWithFallback } from "./spawn-utils.js";
 
 function createStubChild() {
@@ -132,5 +134,16 @@ describe("spawnWithFallback", () => {
     expect(await outcome).toEqual([{ status: "rejected", reason: retired }]);
     expect(spawnMock).toHaveBeenCalledOnce();
     expect(onFallback).toHaveBeenCalledOnce();
+  });
+
+  it("rejects ENOENT from a real missing executable", async () => {
+    await withTempDir("openclaw-spawn-missing-", async (dir) => {
+      await expect(
+        spawnWithFallback({
+          argv: [path.join(dir, "missing-executable")],
+          options: { stdio: "ignore" },
+        }),
+      ).rejects.toMatchObject({ code: "ENOENT" });
+    });
   });
 });

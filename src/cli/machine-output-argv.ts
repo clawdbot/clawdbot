@@ -1,7 +1,4 @@
-import {
-  consumeRootOptionToken,
-  getRootOptionAwareCommandPath,
-} from "../infra/cli-root-options.js";
+import { getRootOptionAwareCommandPath } from "../infra/cli-root-options.js";
 
 export type MachineOutputResolverParams = {
   argv: readonly string[];
@@ -18,27 +15,6 @@ export function isMachineOutputStdoutTTY(
   stdout: { readonly isTTY?: boolean } = process.stdout,
 ): boolean {
   return stdout.isTTY === true;
-}
-
-/** Locate the root command after supported root options without loading descriptor catalogs. */
-export function findMachineOutputRootCommandIndex(argv: readonly string[]): number | null {
-  const args = argv.slice(2);
-  for (let index = 0; index < args.length; index += 1) {
-    const arg = args[index];
-    if (!arg || arg === "--") {
-      return null;
-    }
-    const consumed = consumeRootOptionToken(args, index);
-    if (consumed > 0) {
-      index += consumed - 1;
-      continue;
-    }
-    if (arg.startsWith("-")) {
-      continue;
-    }
-    return index + 2;
-  }
-  return null;
 }
 
 /** Read positional command tokens after supported root options, without importing CLI catalogs. */

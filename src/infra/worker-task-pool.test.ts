@@ -67,6 +67,53 @@ describe("worker task pool", () => {
     }
   });
 
+  it.each(["complete", "abort", "close"] as const)(
+    "keeps tasks without a deadline pending until %s",
+    async (ending) => {
+      const pool = createPool();
+      const counters = new SharedArrayBuffer(8);
+      const view = new Int32Array(counters);
+      const controller = new AbortController();
+      const reason = new Error(`explicit ${ending}`);
+      vi.useFakeTimers({ toFake: ["setTimeout", "clearTimeout"] });
+      const active = pool.run(
+        { label: "active", counters, wait: true },
+        ending === "abort" ? { signal: controller.signal } : {},
+      );
+      const queued = pool.run({ label: "queued" }, {});
+      const settled = Promise.allSettled([active, queued]);
+      try {
+        // Omission must not install the pool's historical 60-second default timer.
+        await vi.advanceTimersByTimeAsync(60_001);
+        if (ending === "abort") {
+          controller.abort(reason);
+        } else if (ending === "close") {
+          await pool.close(reason);
+        } else {
+          Atomics.store(view, 1, 1);
+          Atomics.notify(view, 1);
+        }
+        const outcomes = await settled;
+        expect(outcomes[0]).toEqual(
+          ending === "complete"
+            ? { status: "fulfilled", value: expect.objectContaining({ label: "active" }) }
+            : { status: "rejected", reason },
+        );
+        expect(outcomes[1]).toEqual(
+          ending === "close"
+            ? { status: "rejected", reason }
+            : { status: "fulfilled", value: expect.objectContaining({ label: "queued" }) },
+        );
+      } finally {
+        Atomics.store(view, 1, 1);
+        Atomics.notify(view, 1);
+        await pool.close();
+        await settled;
+        vi.useRealTimers();
+      }
+    },
+  );
+
   it("expires queued work and never launches cancelled asynchronous preparation", async () => {
     const pool = createPool();
     const counters = new SharedArrayBuffer(8);

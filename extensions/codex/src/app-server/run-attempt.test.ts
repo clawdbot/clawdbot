@@ -809,29 +809,13 @@ async function writeTokenPressureState(
 function installFailingThreadStartClient(onThreadStart: () => unknown) {
   const retireSpy = vi.spyOn(sharedClientModule, "retireSharedCodexAppServerClientIfCurrent");
   retireSpy.mockClear();
-  const state: { failedClient?: unknown } = {};
-  setCodexAppServerClientFactoryForTest(async () => {
-    const client = {
-      ...mockClientRuntimeMethods(),
-      request: vi.fn(async (method: string) => {
-        if (method === "configRequirements/read") {
-          return { requirements: null };
-        }
-        if (method === "config/read") {
-          return { config: {}, origins: {}, layers: [] };
-        }
-        if (method === "thread/start") {
-          return await onThreadStart();
-        }
-        return {};
-      }),
-      addNotificationHandler: vi.fn(() => () => undefined),
-      addRequestHandler: vi.fn(() => () => undefined),
-    };
-    state.failedClient = client;
-    return client as never;
+  const { client } = createStartedThreadHarness(async (method) => {
+    if (method === "thread/start") {
+      return await onThreadStart();
+    }
+    return undefined;
   });
-  return { retireSpy, state };
+  return { retireSpy, state: { failedClient: client } };
 }
 
 async function runSharedClientRestartTest(
@@ -4170,7 +4154,7 @@ describe("runCodexAppServerAttempt", () => {
     expect(inputText).toContain("calibrated recent anchor: continue the audit");
     expect(inputText).not.toContain("calibrated delta block 0:");
   });
-  it("records the observed turn density on the binding for the next continuity projection", async () => {
+  it("calibrates continuity from the latest response while retaining whole-turn usage", async () => {
     const { sessionFile, workspaceDir } = createRunPaths();
     const sessionManager = openRunSession(sessionFile);
     for (let index = 0; index < 12; index += 1) {
@@ -4187,32 +4171,32 @@ describe("runCodexAppServerAttempt", () => {
     params.prompt = "record this turn's density";
     const run = runCodexAppServerAttempt(params);
     await harness.waitForMethod("turn/start");
-    await harness.notify({
-      method: "thread/tokenUsage/updated",
-      params: {
-        threadId: "thread-1",
-        turnId: "turn-1",
-        tokenUsage: {
-          last: {
-            totalTokens: 152_000,
-            inputTokens: 150_000,
+    for (const inputTokens of [140_000, 150_000]) {
+      await harness.notify({
+        method: "rawResponse/completed",
+        params: {
+          threadId: "thread-1",
+          turnId: "turn-1",
+          responseId: `response-${inputTokens}`,
+          usage: {
+            totalTokens: inputTokens + 2_000,
+            inputTokens,
             cachedInputTokens: 40_000,
             cacheWriteInputTokens: 10_000,
             outputTokens: 2_000,
             reasoningOutputTokens: 0,
           },
         },
-      },
-    });
+      });
+    }
     await harness.completeTurn({ threadId: "thread-1", turnId: "turn-1" });
-    await run;
+    expect((await run).attemptUsage?.total).toBe(294_000);
     const turnStart = harness.requests.find((request) => request.method === "turn/start");
     const inputText =
       (turnStart?.params as { input?: Array<{ text?: string }> } | undefined)?.input?.[0]?.text ??
       "";
     const binding = await readCodexAppServerBinding(sessionFile);
-    // The full input cost is the calibration denominator: uncached (100k) +
-    // cacheRead (40k) + cacheWrite (10k) = the provider's 150k inputTokens.
+    // Density uses the latest full prompt, including cached input, not cumulative billing.
     expect(binding?.continuityCalibration).toEqual({
       promptChars: inputText.length,
       inputTokens: 150_000,

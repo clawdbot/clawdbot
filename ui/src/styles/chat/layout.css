@@ -56,6 +56,19 @@ openclaw-chat-page {
   user-select: text;
 }
 
+@media (max-width: 560px) {
+  .chat-error:has(> .chat-error__discard) {
+    grid-template-columns: 18px minmax(0, 1fr);
+  }
+
+  .chat-error__discard {
+    grid-column: 2;
+    justify-self: start;
+    white-space: normal;
+    text-align: start;
+  }
+}
+
 .chat-error:has(details[open]) {
   align-items: start;
 }

@@ -1,11 +1,11 @@
 {
   "name": "@openclaw/onepassword",
-  "version": "2026.8.1",
+  "version": "2026.9.1",
   "private": true,
   "description": "1Password SecretRef resolver and audited agent secrets broker for OpenClaw",
   "type": "module",
   "dependencies": {
-    "@openclaw/fs-safe": "0.7.2"
+    "@openclaw/fs-safe": "0.8.1"
   },
   "devDependencies": {
     "@openclaw/plugin-sdk": "workspace:*"

@@ -240,9 +240,7 @@ export async function appendStatusAllDiagnosis(params: {
     lines.push(
       `  ${muted(`${summarizeRestartSentinel(params.sentinel.payload)} · ${formatTimeAgo(Date.now() - params.sentinel.payload.ts)}`)}`,
     );
-    const updateRestartValue = formatUpdateRestartStatusValue(params.sentinel.payload, {
-      formatTimeAgo,
-    });
+    const updateRestartValue = formatUpdateRestartStatusValue(params.sentinel.payload);
     if (updateRestartValue) {
       lines.push(`  ${muted(`Update restart: ${updateRestartValue}`)}`);
     }

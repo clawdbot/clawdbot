@@ -19,15 +19,15 @@ minimumReleaseAgeExclude:
   - "zod@4.5.2"
   - "@openai/codex"
   - "@openai/codex-*"
-  # fs-safe 0.7.2 adds final publication checks; remove after 2026-09-08.
-  - "@openclaw/fs-safe@0.7.2"
-  - "@openclaw/fs-safe-darwin-arm64@0.7.2"
-  - "@openclaw/fs-safe-darwin-x64@0.7.2"
-  - "@openclaw/fs-safe-linux-arm64-gnu@0.7.2"
-  - "@openclaw/fs-safe-linux-arm64-musl@0.7.2"
-  - "@openclaw/fs-safe-linux-x64-gnu@0.7.2"
-  - "@openclaw/fs-safe-linux-x64-musl@0.7.2"
-  - "@openclaw/fs-safe-win32-x64-msvc@0.7.2"
+  # fs-safe 0.8.1 adds retainOnExit for fail-closed build locks; remove after 2026-09-11.
+  - "@openclaw/fs-safe@0.8.1"
+  - "@openclaw/fs-safe-darwin-arm64@0.8.1"
+  - "@openclaw/fs-safe-darwin-x64@0.8.1"
+  - "@openclaw/fs-safe-linux-arm64-gnu@0.8.1"
+  - "@openclaw/fs-safe-linux-arm64-musl@0.8.1"
+  - "@openclaw/fs-safe-linux-x64-gnu@0.8.1"
+  - "@openclaw/fs-safe-linux-x64-musl@0.8.1"
+  - "@openclaw/fs-safe-win32-x64-msvc@0.8.1"
   # Bot API 10.3 types replace OpenClaw's temporary rich-message bridge.
   - "@grammyjs/types@5.0.0"
   - "grammy@1.46.0"
@@ -42,7 +42,7 @@ overrides:
   # Memory LanceDB supplies vectors; WhatsApp prepares thumbnails with Rastermill.
   "@lancedb/lancedb>@huggingface/transformers": "-"
   "baileys>sharp": "-"
-  "@agentclientprotocol/codex-acp@1.6.2>@openai/codex": 0.153.0
+  "@agentclientprotocol/codex-acp@1.6.2>@openai/codex": 0.153.4
   "@codemirror/commands@6.11.0>@codemirror/view": 6.43.9
   "@anthropic-ai/sdk": 0.120.0
   "@opentelemetry/core": 2.10.0
