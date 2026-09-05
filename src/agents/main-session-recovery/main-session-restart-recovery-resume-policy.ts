@@ -1,3 +1,4 @@
+import { asOptionalRecord } from "@openclaw/normalization-core/record-coerce";
 import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
 import type { InternalSessionEntry as SessionEntry } from "../../config/sessions.js";
 import { isMainSessionRestartRecoveryInputProvenance } from "../../sessions/input-provenance.js";
@@ -227,7 +228,7 @@ export function hasReplaySafeCodeModeCheckpointInCurrentTurn(
     const message = messages[index];
     if (
       getMessageRole(message) === "user" &&
-      !isMainSessionRestartRecoveryInputProvenance((message as { provenance?: unknown }).provenance)
+      !isMainSessionRestartRecoveryInputProvenance(asOptionalRecord(message)?.provenance)
     ) {
       return false;
     }

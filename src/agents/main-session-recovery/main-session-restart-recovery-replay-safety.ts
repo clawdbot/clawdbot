@@ -1,3 +1,4 @@
+import { asOptionalRecord } from "@openclaw/normalization-core/record-coerce";
 import {
   visitSessionMessagesAsync,
   type SessionTranscriptReadScope,
@@ -14,11 +15,7 @@ export async function readMainSessionReplaySafeCheckpoint(
   // with constant memory; recovery inputs continue the original user turn.
   await visitSessionMessagesAsync(scope, (message) => {
     if (getTranscriptMessageRole(message) === "user") {
-      if (
-        !isMainSessionRestartRecoveryInputProvenance(
-          (message as { provenance?: unknown }).provenance,
-        )
-      ) {
+      if (!isMainSessionRestartRecoveryInputProvenance(asOptionalRecord(message)?.provenance)) {
         replaySafe = false;
       }
     } else if (hasReplaySafeCodeModeCheckpointInCurrentTurn([message])) {
