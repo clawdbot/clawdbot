@@ -99,11 +99,12 @@ function createApprovalPrompt(id = "approval-123") {
 describe("sendMessageIMessage receipts", () => {
   let openClawState: OpenClawTestState;
 
-  it("rejects a bare short numeric handle over auto/iMessage but delivers it as an SMS short code (#125461)", async () => {
+  it("rejects bare short handles only without an sms/auto path and delivers them otherwise (#125461)", async () => {
     await loadFreshSendModule();
     const client = createClient({ guid: "p:0/imsg-sms-short-code", status: "sent" });
-    // Auto service rides the iMessage transport, where a bare digit string is
-    // a chat row id typo rather than a deliverable handle.
+    // No typed prefix and no configured service: the bare digit string is a
+    // chat row id typo on the default iMessage path, so it fails before any
+    // RPC.
     await expect(
       sendMessageIMessage("5", "hello", { config: IMESSAGE_TEST_CFG, client }),
     ).rejects.toThrow(/chat_id/);
@@ -115,6 +116,19 @@ describe("sendMessageIMessage receipts", () => {
     };
     await sendMessageIMessage("12345", "hello", { config: smsCfg, client });
     expect(getClientMocks(client).request).toHaveBeenCalled();
+    getClientMocks(client).request.mockClear();
+
+    // A configured automatic account keeps its pre-guard short-code routing:
+    // Messages receives the handle plus region and resolves it natively.
+    const autoCfg = {
+      channels: { imessage: { service: "auto" as const, accounts: { default: {} } } },
+    };
+    await sendMessageIMessage("12345", "hello", { config: autoCfg, client });
+    expect(getClientMocks(client).request).toHaveBeenCalledWith(
+      "send",
+      expect.objectContaining({ to: "12345", service: "auto" }),
+      expect.anything(),
+    );
     getClientMocks(client).request.mockClear();
 
     // An option-selected service wins the same way.

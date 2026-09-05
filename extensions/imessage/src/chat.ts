@@ -50,8 +50,8 @@ function buildChatTargetParams(
   }
   // Chat actions share the send/resolver precedence: an explicit service wins,
   // while a parser-default "auto" defers to the account's configured service
-  // before the deliverability verdict, so configured SMS short codes still
-  // reach typing/read RPCs.
+  // before the deliverability verdict, so configured sms/auto accounts keep
+  // short codes on typing/read RPCs.
   const service =
     opts.service ??
     resolveIMessageTargetService(target) ??

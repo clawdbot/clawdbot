@@ -834,8 +834,9 @@ export async function sendMessageIMessage(
     opts.service ??
     resolveIMessageTargetService(target) ??
     (account.config.service as IMessageService | undefined);
-  // The bare-numeric verdict needs the effective service: a short code is a
-  // legitimate SMS target, so only reject it once "sms" failed to win.
+  // The bare-numeric verdict needs the effective service: sms and auto pass
+  // short codes through to Messages; only iMessage-only or unset service
+  // delivery rejects them.
   assertDeliverableIMessageHandle({ target, service });
   const sendTransport = (account.config.sendTransport ?? "auto") as IMessageSendTransport;
   const resolvedReplyToId = resolveAuthorizedIMessageReplyReference({

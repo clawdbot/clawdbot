@@ -429,10 +429,10 @@ export const imessagePlugin: ChannelPlugin<ResolvedIMessageAccount, IMessageProb
     outbound: {
       base: {
         deliveryMode: "direct",
-        // Bare-numeric handles need the resolved service before a verdict: a
-        // short code is a legitimate SMS target, so only the account config
-        // decides. Core resolve and dry-run both land here; the send path
-        // re-applies the same helper.
+        // Bare-numeric handles need the resolved service before a verdict:
+        // sms/auto delivery forwards short codes to Messages, so only
+        // iMessage-only or unset service rejects them. Core resolve and
+        // dry-run both land here; the send path re-applies the same helper.
         resolveTarget: ({ cfg, to, accountId }) => {
           try {
             const target = parseIMessageTarget(to ?? "");
