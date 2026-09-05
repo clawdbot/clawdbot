@@ -564,6 +564,31 @@ describe("signalSetupAdapter", () => {
     ).toBeNull();
   });
 
+  it("allows a container transport to reuse an account stored under a friendly key", () => {
+    expect(
+      signalSetupAdapter.validateInput?.({
+        cfg: {
+          channels: {
+            signal: {
+              accounts: {
+                "Work Phone": {
+                  account: "+15555550123",
+                  name: "Work",
+                  transport: { kind: "container", url: "http://127.0.0.1:9199" },
+                },
+              },
+            },
+          },
+        },
+        accountId: "work-phone",
+        input: {
+          signalTransport: "container",
+          httpUrl: "http://127.0.0.1:9299",
+        },
+      }),
+    ).toBeNull();
+  });
+
   it("allows a named container transport to inherit the root Signal account", () => {
     expect(
       signalSetupAdapter.validateInput?.({

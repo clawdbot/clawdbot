@@ -1,5 +1,5 @@
 // Signal plugin module implements setup core behavior.
-import { normalizeAccountId, resolveAccountEntry } from "openclaw/plugin-sdk/account-resolution";
+import { normalizeAccountId } from "openclaw/plugin-sdk/account-resolution";
 import { parseAllowFromEntries } from "openclaw/plugin-sdk/allow-from";
 import { createChannelDmPolicy } from "openclaw/plugin-sdk/channel-dm-policy";
 import { defineChannelSetupContract } from "openclaw/plugin-sdk/channel-setup";
@@ -27,7 +27,11 @@ import {
 } from "openclaw/plugin-sdk/string-coerce-runtime";
 import { normalizeE164 } from "openclaw/plugin-sdk/text-utility-runtime";
 import type { SignalTransportConfig } from "./account-types.js";
-import { resolveDefaultSignalAccountId, resolveSignalAccount } from "./accounts.js";
+import {
+  resolveDefaultSignalAccountId,
+  resolveSignalAccount,
+  resolveSignalAccountEntry,
+} from "./accounts.js";
 import {
   detectSignalTransport,
   prepareSignalManagedNativeTransport,
@@ -210,7 +214,7 @@ function resolveSignalSetupAccount(params: {
     params.accountId ?? resolveDefaultSignalAccountId(params.cfg),
   );
   const signal = params.cfg.channels?.signal;
-  const account = resolveAccountEntry(signal?.accounts, accountId);
+  const account = resolveSignalAccountEntry(signal?.accounts, accountId);
   return account?.account ?? signal?.account;
 }
 
