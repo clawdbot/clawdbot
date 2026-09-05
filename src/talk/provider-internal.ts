@@ -6,6 +6,10 @@
  * RealtimeVoiceProviderPlugin contract.
  */
 import type { OpenClawConfig } from "../config/types.openclaw.js";
+import type {
+  RealtimeVoicePublicClientHints,
+  RealtimeVoicePublicProjection,
+} from "../plugins/provider-policy-surface.js";
 import { resolveBundledProviderPolicySurface } from "../plugins/provider-public-artifacts.js";
 import type { RealtimeVoiceProviderPlugin } from "../plugins/types.js";
 import type {
@@ -61,10 +65,10 @@ type InternalRealtimeVoiceProviderApi = {
     providerConfig: RealtimeVoiceProviderConfig;
     model?: string;
   }) => InternalRealtimeVoiceProviderCapabilities;
-  projectPublicConfig?: (ctx: {
+  projectPublicProjection?: (ctx: {
     providerConfig: RealtimeVoiceProviderConfig;
     config: RealtimeVoiceProviderConfig;
-  }) => RealtimeVoiceProviderConfig;
+  }) => RealtimeVoicePublicProjection;
   validateGatewayRelayLaunch?: (ctx: {
     cfg?: OpenClawConfig;
     providerConfig: RealtimeVoiceProviderConfig;
@@ -156,18 +160,32 @@ export function projectInternalRealtimeVoicePublicConfig<
   providerConfig: RealtimeVoiceProviderConfig;
   config: T;
 }): T {
+  return projectInternalRealtimeVoicePublicProjection(params).config;
+}
+
+export function projectInternalRealtimeVoicePublicProjection<
+  T extends RealtimeVoiceProviderConfig,
+>(params: {
+  provider?: RealtimeVoiceProviderPlugin;
+  providerId?: string;
+  providerConfig: RealtimeVoiceProviderConfig;
+  config: T;
+}): { config: T; clientHints?: RealtimeVoicePublicClientHints } {
   const project =
     (params.provider
-      ? readInternalRealtimeVoiceProviderApi(params.provider)?.projectPublicConfig
+      ? readInternalRealtimeVoiceProviderApi(params.provider)?.projectPublicProjection
       : undefined) ??
     (params.providerId
-      ? resolveBundledProviderPolicySurface(params.providerId)?.projectRealtimeVoicePublicConfig
+      ? resolveBundledProviderPolicySurface(params.providerId)?.projectRealtimeVoicePublicProjection
       : undefined);
   const projected = project?.({ providerConfig: params.providerConfig, config: params.config });
   if (projected) {
-    return projected as T; // SAFETY: projections only remove or replace `model`; other fields stay intact.
+    return {
+      ...projected,
+      config: projected.config as T,
+    }; // SAFETY: projections only remove or replace `model`; other fields stay intact.
   }
-  return params.config;
+  return { config: params.config };
 }
 
 export function resolveInternalRealtimeVoiceGatewayRelayLaunchError(params: {

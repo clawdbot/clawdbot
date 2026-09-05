@@ -119,16 +119,25 @@ export function projectConfiguredModelRow(ctx: ProviderNormalizeResolvedModelCon
   return null;
 }
 
-export function projectRealtimeVoicePublicConfig(ctx: {
+export function projectRealtimeVoicePublicProjection(ctx: {
   providerConfig: Record<string, unknown>;
   config: Record<string, unknown>;
-}): Record<string, unknown> {
+}): {
+  config: Record<string, unknown>;
+  clientHints?: { modelSource: "gateway"; gatewayRelaySupported: false };
+} {
   const model = normalizeOptionalString(ctx.config.model) ?? ctx.providerConfig.model;
   if (!isOpenAIGptLiveModel(typeof model === "string" ? model : undefined)) {
-    return ctx.config;
+    return { config: ctx.config };
   }
   const { model: _model, ...publicConfig } = ctx.config;
-  return publicConfig;
+  return {
+    config: publicConfig,
+    clientHints: {
+      modelSource: "gateway",
+      gatewayRelaySupported: false,
+    },
+  };
 }
 
 function firstRouteBaseUrl(...values: unknown[]): unknown {

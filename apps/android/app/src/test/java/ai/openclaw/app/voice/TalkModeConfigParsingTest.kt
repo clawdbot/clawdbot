@@ -131,6 +131,22 @@ class TalkModeConfigParsingTest {
   }
 
   @Test
+  fun preservesGatewayRelayEligibilityWhenModelIsRedacted() {
+    val projected =
+      json
+        .parseToJsonElement(
+          """
+          {
+            "talk": {"realtime": {"provider": "openai"}},
+            "clientHints": {"realtime": {"modelSource": "gateway", "gatewayRelaySupported": false}}
+          }
+          """.trimIndent(),
+        ).jsonObject
+
+    assertFalse(TalkModeGatewayConfigParser.parse(projected).realtimeRelayModelSupported)
+  }
+
+  @Test
   fun resolvesRealtimeLanguageFromConfigThenWatchThenPhone() {
     assertEquals(
       "de",

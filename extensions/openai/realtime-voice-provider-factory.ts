@@ -8,7 +8,7 @@ import type {
 } from "openclaw/plugin-sdk/realtime-voice";
 import { REALTIME_VOICE_AUDIO_FORMAT_PCM16_24KHZ } from "openclaw/plugin-sdk/realtime-voice-provider";
 import { normalizeOptionalString } from "openclaw/plugin-sdk/string-coerce-runtime";
-import { projectRealtimeVoicePublicConfig } from "./provider-policy-api.js";
+import { projectRealtimeVoicePublicProjection } from "./provider-policy-api.js";
 import { resolveOpenAIChatGptSubscriptionAuth } from "./realtime-auth.js";
 import type { OpenAIRealtimeHost } from "./realtime-host.js";
 import { createOpenAIRealtimeClientSecret } from "./realtime-provider-shared.js";
@@ -88,10 +88,16 @@ type OpenAIInternalRealtimeVoiceProviderApi = {
     providerConfig: RealtimeVoiceProviderConfig;
     model?: string;
   }) => OpenAIInternalRealtimeVoiceCapabilities;
-  projectPublicConfig?: (ctx: {
+  projectPublicProjection?: (ctx: {
     providerConfig: RealtimeVoiceProviderConfig;
     config: RealtimeVoiceProviderConfig;
-  }) => RealtimeVoiceProviderConfig;
+  }) => {
+    config: RealtimeVoiceProviderConfig;
+    clientHints?: {
+      modelSource: "gateway";
+      gatewayRelaySupported: false;
+    };
+  };
   validateGatewayRelayLaunch?: (ctx: {
     cfg?: RealtimeVoiceBrowserSessionCreateRequest["cfg"];
     providerConfig: RealtimeVoiceProviderConfig;
@@ -582,7 +588,7 @@ export function buildOpenAIRealtimeVoiceProvider(
       }
       return OPENAI_REALTIME_CAPABILITIES;
     },
-    projectPublicConfig: projectRealtimeVoicePublicConfig,
+    projectPublicProjection: projectRealtimeVoicePublicProjection,
     validateGatewayRelayLaunch: ({ providerConfig, model, autoRespondToAudio }) => {
       const config = normalizeProviderConfig(providerConfig);
       if (autoRespondToAudio === false && isOpenAIGptLiveModel(model ?? config.model)) {

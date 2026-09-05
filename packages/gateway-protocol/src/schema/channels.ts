@@ -571,6 +571,16 @@ export const TalkConfigResultSchema = closedObject({
         seamColor: Type.Optional(Type.String()),
       }),
     ),
+    clientHints: Type.Optional(
+      closedObject({
+        realtime: Type.Optional(
+          closedObject({
+            modelSource: Type.Optional(Type.Literal("gateway")),
+            gatewayRelaySupported: Type.Optional(Type.Boolean()),
+          }),
+        ),
+      }),
+    ),
   }),
 });
 

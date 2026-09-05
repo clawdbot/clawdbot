@@ -1227,16 +1227,17 @@ value into `plugins.entries.openai.config.personality` when that key is unset.
     selecting GPT-Live for those consumers.
 
     <Warning>
-    Platform API-key access to `/v1/live` is waitlist-gated and commonly returns
-    `400 model_not_found` without enrollment. Use a ChatGPT OAuth profile, or request Platform access with the
-    [GPT-Live API access form](https://openai.com/form/gpt-live-1-in-the-api/).
+    This route requires a Platform API key with access to the configured
+    account-issued model. ChatGPT OAuth is not a fallback for it. If session
+    creation is rejected, verify that the key and configured model belong to
+    the same Platform project.
     </Warning>
 
     A `403 Voice session access denied` response is overloaded and does not by
     itself prove an account entitlement problem: an invalid voice produces the
     same response. First verify the model and voice against the accepted lists
-    above, then verify that the selected ChatGPT OAuth profile and
-    `chatgpt-account-id` belong to the same account.
+    above, then verify the Platform key and configured model against the same
+    project.
 
     The Gateway-owned WebRTC route routes sideband delegations through the
     configured OpenClaw agent and keeps OAuth or Platform credentials away from
@@ -1252,9 +1253,10 @@ value into `plugins.entries.openai.config.personality` when that key is unset.
     delegations, and delegation results over that one socket. The legacy
     `chatgpt.com` backend route returns `403` and is not used.
 
-    Maintainers can exercise OpenClaw's complete OAuth path with the opt-in
-    live test. It skips when no ChatGPT OAuth credential is available and
-    never prints token material:
+    Maintainers can exercise the Platform direct path and the separate GA
+    browser OAuth path with the opt-in live tests. The private realtime model
+    is read from `talk.realtime.model`; missing credentials or model config
+    produce sanitized skips, and the tests never print either value:
 
     ```bash
     OPENCLAW_LIVE_TEST=1 OPENCLAW_LIVE_GPT_LIVE=1 node --import tsx scripts/test-live.mts -- extensions/openai/realtime-quicksilver.live.test.ts

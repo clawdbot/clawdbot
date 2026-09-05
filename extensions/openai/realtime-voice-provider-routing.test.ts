@@ -115,17 +115,17 @@ describe("OpenAI realtime voice provider routing", () => {
       supportsToolCalls: false,
     });
     expect(
-      internalApi.projectPublicConfig({
+      internalApi.projectPublicProjection({
         providerConfig,
         config: { model: OPAQUE_REALTIME_MODEL },
       }),
-    ).toEqual({});
+    ).toMatchObject({ config: {} });
     expect(
-      internalApi.projectPublicConfig({
+      internalApi.projectPublicProjection({
         providerConfig: { model: "gpt-realtime-2.1" },
         config: { model: "gpt-realtime-2.1" },
       }),
-    ).toEqual({ model: "gpt-realtime-2.1" });
+    ).toEqual({ config: { model: "gpt-realtime-2.1" } });
   });
 
   it("advertises continuing realtime tool results", () => {

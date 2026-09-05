@@ -143,6 +143,34 @@ struct TalkModeGatewayConfigTests {
         #expect(parsed.realtimeBrain == nil)
     }
 
+    @Test func `redacted gateway model remains omitted`() {
+        let snapshot = ConfigSnapshot(
+            path: nil,
+            exists: true,
+            raw: nil,
+            hash: nil,
+            parsed: nil,
+            valid: true,
+            config: [
+                "talk": AnyCodable([
+                    "realtime": [
+                        "provider": "openai",
+                        "mode": "realtime",
+                        "transport": "gateway-relay",
+                    ],
+                ]),
+                "clientHints": AnyCodable([
+                    "realtime": [
+                        "modelSource": "gateway",
+                        "gatewayRelaySupported": false,
+                    ],
+                ]),
+            ],
+            issues: nil)
+
+        #expect(Self.parse(snapshot).realtimeModelId == nil)
+    }
+
     private static func snapshot(talk: [String: Any]) -> ConfigSnapshot {
         ConfigSnapshot(
             path: nil,

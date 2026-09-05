@@ -254,7 +254,7 @@ describe("Realtime call creation", () => {
         "GPT-Live rejected the session (403). Verify the selected OpenAI account, model, and GPT-Live voice; this response alone does not identify which was denied.",
     },
     {
-      name: "Platform waitlist denial",
+      name: "Platform model access denial",
       status: 400,
       body: '{"error":{"code":"model_not_found","message":"The model does not exist or you do not have access"}}',
       message:

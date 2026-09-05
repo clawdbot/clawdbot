@@ -39,6 +39,16 @@ type ProviderProjectRealtimeVoicePublicConfigContext = {
   config: Record<string, unknown>;
 };
 
+export type RealtimeVoicePublicClientHints = {
+  modelSource?: "gateway";
+  gatewayRelaySupported?: boolean;
+};
+
+export type RealtimeVoicePublicProjection = {
+  config: Record<string, unknown>;
+  clientHints?: RealtimeVoicePublicClientHints;
+};
+
 type EmbeddingProviderSetupInspection = {
   provider: string;
   reason: string;
@@ -83,9 +93,9 @@ export type BundledProviderPolicySurface = ProviderPolicySurface & {
   projectConfiguredModelRow?: (
     ctx: ProviderProjectConfiguredModelRowContext,
   ) => ProviderRuntimeModel | null | undefined;
-  projectRealtimeVoicePublicConfig?: (
+  projectRealtimeVoicePublicProjection?: (
     ctx: ProviderProjectRealtimeVoicePublicConfigContext,
-  ) => Record<string, unknown> | null | undefined;
+  ) => RealtimeVoicePublicProjection | null | undefined;
 };
 
 const PROVIDER_POLICY_HOOK_KEYS = [
@@ -125,9 +135,9 @@ function extractBundledProviderPolicySurface(
     surface.projectConfiguredModelRow =
       mod.projectConfiguredModelRow as BundledProviderPolicySurface["projectConfiguredModelRow"];
   }
-  if (typeof mod.projectRealtimeVoicePublicConfig === "function") {
+  if (typeof mod.projectRealtimeVoicePublicProjection === "function") {
     Object.assign(surface, {
-      projectRealtimeVoicePublicConfig: mod.projectRealtimeVoicePublicConfig,
+      projectRealtimeVoicePublicProjection: mod.projectRealtimeVoicePublicProjection,
     });
   }
   return Object.keys(surface).length > 0 ? surface : null;
