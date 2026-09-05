@@ -39,8 +39,14 @@ type MatrixDraftStream = {
   deleteCurrentMessage: () => Promise<void>;
   /** Clear the MSC4357 live marker in place when the draft is kept as final text. */
   finalizeLive: () => Promise<boolean>;
-  /** Reset state for the next text block (after tool calls). */
-  reset: () => void;
+  /**
+   * Reset state for the next text block. By default the reply target reverts
+   * to the stream's original target (or clears, matching a fresh logical
+   * block); pass keepReplyTarget when the next block must keep replying to
+   * whatever the stream is currently targeting (e.g. a tool dispatch, which
+   * must not reset threading the way a new block would).
+   */
+  reset: (options?: { keepReplyTarget?: boolean }) => void;
   /** The event ID of the current draft message, if any. */
   eventId: () => string | undefined;
   /** The last content accepted for the current draft event, if any. */
@@ -210,9 +216,16 @@ export function createMatrixDraftStream(params: {
     loop.resetPending();
     loop.resetThrottleWindow();
   };
-  const reset = (): void => {
-    // A new block consumes the first-only reply reference; retraction does not.
-    replyToId = params.preserveReplyId ? params.replyToId : undefined;
+  const reset = (options?: { keepReplyTarget?: boolean }): void => {
+    // Clear reply context unless preserveReplyId is set (replyToMode "all"),
+    // in which case subsequent blocks should keep replying to the original.
+    // keepReplyTarget overrides both: the caller is starting a fresh draft
+    // message for the same in-flight target, not a new logical block.
+    replyToId = options?.keepReplyTarget
+      ? replyToId
+      : params.preserveReplyId
+        ? params.replyToId
+        : undefined;
     streamState.stopped = false;
     streamState.final = false;
     resetCurrentMessage();

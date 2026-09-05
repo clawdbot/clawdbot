@@ -3267,6 +3267,49 @@ describe("matrix monitor handler draft streaming", () => {
     await finish();
   });
 
+  it("flushes and finalizes a live draft before a tool dispatch instead of leaving it stuck", async () => {
+    vi.useFakeTimers();
+    let finish: (() => Promise<void>) | undefined;
+    try {
+      const { dispatch } = createStreamingHarness({ streaming: "partial" });
+      const streaming = await dispatch();
+      const { opts, deliver } = streaming;
+      finish = streaming.finish;
+
+      // The throttle window starts at zero, so the model's very first
+      // fragment sends immediately (this is how a fast turn's lead-in text
+      // shows up truncated at just its first characters).
+      opts.onPartialReply?.({ text: "He" });
+      await waitForMatrixState(() => {
+        expect(sendSingleTextMessageMatrixMock).toHaveBeenCalledTimes(1);
+      });
+
+      // The rest of the sentence arrives inside the throttle window, so this
+      // update is only scheduled — not sent yet — when the tool call fires.
+      opts.onPartialReply?.({ text: "Hej Markus! Full text" });
+      expect(editMessageMatrixMock).not.toHaveBeenCalled();
+
+      await deliver({ text: "tool result" }, { kind: "tool" });
+
+      // The tool dispatch must flush the pending edit and strip the live
+      // marker in place of leaving the draft orphaned at "He" forever.
+      expect(lastCallArg(editMessageMatrixMock, 2, "Matrix draft finalize body")).toBe(
+        "Hej Markus! Full text",
+      );
+      const finalizeOptions = requireRecord(
+        lastCallArg(editMessageMatrixMock, 3, "Matrix draft finalize options"),
+        "Matrix draft finalize options",
+      );
+      expect(finalizeOptions.live).toBe(false);
+    } finally {
+      try {
+        await finish?.();
+      } finally {
+        vi.useRealTimers();
+      }
+    }
+  });
+
   it("finalizes a single quiet-preview block in place when block streaming is enabled", async () => {
     const { dispatch, redactEventMock } = createStreamingHarness({ blockStreamingEnabled: true });
     const { deliver, opts, finish } = await dispatch();
@@ -4452,6 +4495,30 @@ describe("matrix monitor handler draft streaming", () => {
     await finish();
   });
 
+  it("does not republish stale preview text after a block's final edit already replaced it", async () => {
+    const { dispatch } = createStreamingHarness({
+      blockStreamingEnabled: true,
+      streaming: "partial",
+    });
+    const { deliver, opts, finish } = await dispatch();
+
+    opts.onPartialReply?.({ text: "Single" });
+    await waitForMatrixState(() => {
+      expect(sendSingleTextMessageMatrixMock).toHaveBeenCalledTimes(1);
+    });
+
+    // "block" kind still runs beginNextBlockDraft() right after this
+    // delivery settles. Its final text ("Single block") differs from the
+    // draft's own cached preview ("Single"), so editFinal edits the real
+    // text directly and bypasses draftStream's send cache — that cache
+    // must not get replayed as a second, stale overwrite.
+    await deliver({ text: "Single block" }, { kind: "block" });
+
+    expect(editMessageMatrixMock).toHaveBeenCalledTimes(1);
+    expectEditLiveFlag("$draft1", "Single block", undefined);
+    await finish();
+  });
+
   it("preserves completed blocks by rotating to a new quiet preview", async () => {
     const { dispatch, redactEventMock } = createStreamingHarness({ blockStreamingEnabled: true });
     const { deliver, opts, finish } = await dispatch();
@@ -4575,6 +4642,31 @@ describe("matrix monitor handler draft streaming", () => {
 
     await deliver({ text: "Hello world" }, { kind: "block" });
 
+    expect(deliverMatrixRepliesMock).toHaveBeenCalledTimes(1);
+    await finish();
+  });
+
+  it("preserves a stuck draft's cleanup ownership when tool-dispatch finalization fails", async () => {
+    const { dispatch, redactEventMock } = createStreamingHarness({ streaming: "partial" });
+    const { deliver, opts, finish } = await dispatch();
+
+    opts.onPartialReply?.({ text: "Hello" });
+    await waitForMatrixState(() => {
+      expect(sendSingleTextMessageMatrixMock).toHaveBeenCalledTimes(1);
+    });
+
+    // The tool dispatch's own finalizeLive() edit rejects.
+    editMessageMatrixMock.mockRejectedValueOnce(new Error("rate limited"));
+    await deliver({ text: "tool result" }, { kind: "tool" });
+
+    // A bare reset() here would wipe the event id and the
+    // mustDeliverFinalNormally() failure state, so the final delivery below
+    // would never learn "$draft1" needs redacting — orphaning it, still
+    // live, forever. The event id and failure state must survive instead.
+    deliverMatrixRepliesMock.mockClear();
+    await deliver({ text: "Final text" }, { kind: "final" });
+
+    expect(redactEventMock).toHaveBeenCalledWith("!room:example.org", "$draft1");
     expect(deliverMatrixRepliesMock).toHaveBeenCalledTimes(1);
     await finish();
   });

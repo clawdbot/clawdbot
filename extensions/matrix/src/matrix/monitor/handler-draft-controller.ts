@@ -184,9 +184,55 @@ export async function createMatrixDraftController(params: {
     latestDraftFullText = "";
   };
 
+  /**
+   * Flush and finalize a still-active draft generation before it's
+   * abandoned. Returns whether the stream is safe to reset for a fresh
+   * generation.
+   *
+   * No-ops (returns true) unless disposition is "active": the block/final
+   * settlement branch already marks the draft consumed or retained once it
+   * finalizes-in-place or redacts/replaces it, including the editFinal path
+   * that edits the real final text directly and bypasses draftStream's own
+   * send cache. Re-running finalizeLive() there would use that stale cached
+   * text and silently republish it over the already-delivered final content.
+   *
+   * Returns false when mustDeliverFinalNormally() is true afterward (the
+   * flush or the live-marker edit itself failed): the event id and that
+   * failure state must stay intact so a later final/block delivery's
+   * existing redact-or-replace handling can find and clean up this preview.
+   * Resetting here would strand it, live and orphaned, with nothing left
+   * pointing at it.
+   */
+  const settleDraftGeneration = async (): Promise<boolean> => {
+    if (!draftStream || draftDisposition !== "active") {
+      return true;
+    }
+    // Flush before abandoning this draft generation: a bare reset() drops any
+    // still-pending throttled edit and permanently orphans the draft event at
+    // whatever partial text was last actually sent — live marker and all —
+    // since no later delivery kind reopens or redacts it once the model has
+    // moved on (e.g. into a tool call, or a newly admitted followup).
+    await draftStream.stop();
+    await draftStream.finalizeLive();
+    return !draftStream.mustDeliverFinalNormally();
+  };
+
+  const settleDraftForToolDispatch = async () => {
+    if (!draftStream || !(await settleDraftGeneration())) {
+      return;
+    }
+    // stop() marks the stream final, which makes every later update() a
+    // no-op — reset it so the next text segment gets a fresh draft message,
+    // but keep the current reply target: a tool dispatch must not reset
+    // threading the way a new logical block would (the draft still owes its
+    // reply to whatever the in-flight turn originally targeted).
+    draftStream.reset({ keepReplyTarget: true });
+  };
+
   const resetDraftDeliveryState = async () => {
-    await draftStream?.discardPending();
-    draftStream?.reset();
+    if (await settleDraftGeneration()) {
+      draftStream?.reset();
+    }
     draftDisposition = "active";
     currentDraftMessageGeneration = 0;
     currentDraftBlockOffset = 0;
@@ -206,6 +252,8 @@ export async function createMatrixDraftController(params: {
     resetDraftBlockOffsets,
     beginAssistantMessage: () => progressDraft.beginAssistantMessage(),
     resetDraftDeliveryState,
+    settleDraftGeneration,
+    settleDraftForToolDispatch,
     updateDraftFromLatestFullText,
     draftDisposition: () => draftDisposition,
     beginDraftGeneration: () => {

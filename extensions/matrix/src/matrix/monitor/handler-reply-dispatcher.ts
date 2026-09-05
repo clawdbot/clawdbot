@@ -79,12 +79,20 @@ export function createMatrixReplyDispatcher(config: {
   const hasRepliedRef = { value: false };
   let finalReplyDeliveryFailed = false;
   let nonFinalReplyDeliveryFailed = false;
-  const beginNextBlockDraft = () => {
+  const beginNextBlockDraft = async () => {
     // Each block owns a new draft generation; prior retained/consumed state must not
     // suppress settlement or cleanup for the next provider-visible event.
+    const settled = await draftController.settleDraftGeneration();
     draftController.beginDraftGeneration();
     draftController.advanceDraftBlockBoundary({ fallbackToLatestEnd: true });
-    draftStream?.reset();
+    // Only reset the underlying draft stream when settlement actually
+    // succeeded — a failed live-marker edit needs its event id and
+    // mustDeliverFinalNormally() failure state to survive so a later
+    // final/block delivery's own redact-or-replace handling can still find
+    // and clean up this preview instead of losing all reference to it.
+    if (settled) {
+      draftStream?.reset();
+    }
     draftController.resetReplyToIdForNextBlock();
     draftController.updateDraftFromLatestFullText();
   };
@@ -97,11 +105,24 @@ export function createMatrixReplyDispatcher(config: {
         result: MatrixReplyDeliveryResult,
       ): Promise<MatrixReplyDeliveryResult> => {
         if (info.kind === "block") {
-          beginNextBlockDraft();
+          await beginNextBlockDraft();
 
           // Re-assert typing so the user still sees the indicator while
           // the next block generates.
           await typingCallbacks.onReplyStart();
+        } else if (info.kind === "tool") {
+          // "tool" kind bypasses the draft-settlement branch below entirely
+          // (its finalize/redact logic assumes payload.text is the draft's
+          // own final content, which does not hold for a tool payload).
+          // Settle without the rest of beginNextBlockDraft()'s generation
+          // reset: that also clears the draft's reply target, but a tool
+          // dispatch must keep the *same* in-flight draft/reply target for
+          // whatever text follows the tool call, not start a fresh block.
+          // Without settling at all here, a tool dispatch mid-stream leaves
+          // whatever the draft was last showing (often just the first
+          // throttled fragment) orphaned with the MSC4357 live marker stuck
+          // on forever.
+          await draftController.settleDraftForToolDispatch();
         }
         return result;
       };
@@ -476,14 +497,16 @@ export function createMatrixReplyDispatcher(config: {
         }),
       );
     },
-    onError: (err: unknown, info: { kind: "tool" | "block" | "final" }) => {
+    onError: async (err: unknown, info: { kind: "tool" | "block" | "final" }) => {
       if (info.kind === "final") {
         finalReplyDeliveryFailed = true;
       } else {
         nonFinalReplyDeliveryFailed = true;
       }
       if (info.kind === "block") {
-        beginNextBlockDraft();
+        await beginNextBlockDraft();
+      } else if (info.kind === "tool") {
+        await draftController.settleDraftForToolDispatch();
       }
       runtime.error?.(`matrix ${info.kind} reply failed: ${String(err)}`);
     },
