@@ -1,6 +1,6 @@
 {
   "name": "@openclaw/memory-core",
-  "version": "2026.9.2",
+  "version": "2026.9.3",
   "private": true,
   "description": "OpenClaw core memory search plugin",
   "type": "module",
@@ -18,7 +18,7 @@
     "openclaw": "workspace:*"
   },
   "peerDependencies": {
-    "openclaw": ">=2026.9.2"
+    "openclaw": ">=2026.9.3"
   },
   "peerDependenciesMeta": {
     "openclaw": {
