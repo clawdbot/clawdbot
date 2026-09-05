@@ -1,10 +1,10 @@
 import { describe, expect, it } from "vitest";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
-import type { PluginMetadataSnapshot } from "../../plugins/plugin-metadata-snapshot.types.js";
 import type {
   PluginManifestRecord,
   PluginManifestRegistry,
 } from "../../plugins/manifest-registry.types.js";
+import type { PluginMetadataSnapshot } from "../../plugins/plugin-metadata-snapshot.types.js";
 import { inspectConfiguredModelReferences } from "./model-reference-validation.js";
 
 /**
@@ -24,6 +24,7 @@ function createSnapshotFromRegistry(
     registryDiagnostics: [],
     manifestRegistry: registry,
     plugins: registry.plugins,
+    diagnostics: [],
     byPluginId: new Map(registry.plugins.map((p) => [p.id, p])),
     normalizePluginId: (id: string) => id,
     owners: {
