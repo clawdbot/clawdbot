@@ -46,6 +46,7 @@ import {
   OLLAMA_DEFAULT_BASE_URL,
 } from "./defaults.js";
 import { normalizeOllamaWireModelId } from "./model-id.js";
+import { resolveOllamaBaseUrlForRun } from "./provider-base-url.js";
 import { buildOllamaBaseUrlSsrFPolicy, isOllamaCloudModel } from "./provider-models.js";
 import {
   createOllamaVisibleContentSanitizer,
@@ -159,20 +160,7 @@ function isLikelyGarbledVisibleText(params: { text: string; modelId: string }): 
   );
 }
 
-export function resolveOllamaBaseUrlForRun(params: {
-  modelBaseUrl?: string;
-  providerBaseUrl?: string;
-}): string {
-  const providerBaseUrl = params.providerBaseUrl?.trim();
-  if (providerBaseUrl) {
-    return providerBaseUrl;
-  }
-  const modelBaseUrl = params.modelBaseUrl?.trim();
-  if (modelBaseUrl) {
-    return modelBaseUrl;
-  }
-  return OLLAMA_NATIVE_BASE_URL;
-}
+export { resolveOllamaBaseUrlForRun } from "./provider-base-url.js";
 
 const OLLAMA_OPTION_PARAM_KEYS = new Set([
   "num_keep",

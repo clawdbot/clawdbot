@@ -1047,6 +1047,13 @@ For full setup and behavior, see [Ollama Web Search](/tools/ollama-search).
   </Accordion>
 
   <Accordion title="Thinking control">
+    Native local Ollama compaction summaries default to thinking off. This keeps
+    summarization from using its default three-minute request window for reasoning;
+    Qwen3.5 treats `low` as thinking enabled rather than a reduced thinking budget.
+    An explicit `agents.defaults.compaction.thinkingLevel` overrides this
+    preference. Existing per-model `params.think`/`params.thinking` settings
+    keep their normal precedence. Hosted routes keep their compaction defaults.
+
     OpenClaw forwards thinking as Ollama expects it: top-level `think`, not
     `options.think`. Auto-discovered models whose `/api/show` reports a
     `thinking` capability expose `/think low`, `/think medium`, `/think high`,

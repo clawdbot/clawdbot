@@ -1,5 +1,5 @@
 import { expectDefined } from "@openclaw/normalization-core";
-import type { ProviderAuthMethod } from "openclaw/plugin-sdk/plugin-entry";
+import type { ProviderAuthMethod, ProviderRuntimeModel } from "openclaw/plugin-sdk/plugin-entry";
 import { createTestPluginApi } from "openclaw/plugin-sdk/plugin-test-api";
 import {
   capturePluginRegistration,
@@ -171,11 +171,113 @@ describe("ollama tool-schema compatibility", () => {
     }
   });
 
-  it("keeps configured-row projection aligned with absent runtime model normalizers", () => {
-    for (const provider of registerProvidersWithPluginConfig({})) {
-      expect(provider.normalizeResolvedModel).toBeUndefined();
-    }
-  });
+  it.each([
+    {
+      provider: "ollama",
+      id: "qwen3.5:4b",
+      api: "ollama",
+      baseUrl: "http://127.0.0.1:11434",
+      expected: "off",
+    },
+    {
+      provider: "ollama",
+      id: "server-alias",
+      api: "ollama",
+      baseUrl: "http://model-host.internal:11434",
+      expected: "off",
+    },
+    {
+      provider: "ollama-cloud",
+      id: "qwen3.5:4b",
+      api: "ollama",
+      baseUrl: "http://127.0.0.1:11434",
+      expected: undefined,
+    },
+    {
+      provider: "ollama",
+      id: "qwen3.5:cloud",
+      api: "ollama",
+      baseUrl: "http://127.0.0.1:11434",
+      expected: undefined,
+    },
+    {
+      provider: "ollama",
+      id: "qwen3.5:4b-cloud",
+      api: "ollama",
+      baseUrl: "http://127.0.0.1:11434",
+      expected: undefined,
+    },
+    {
+      provider: "ollama",
+      id: "server-alias",
+      api: "ollama",
+      baseUrl: "https://ollama.com/api",
+      expected: undefined,
+    },
+    {
+      provider: "ollama",
+      id: "qwen3.5:4b",
+      api: "openai-completions",
+      baseUrl: "http://127.0.0.1:11434/v1",
+      expected: undefined,
+    },
+    {
+      provider: "ollama",
+      id: "qwen3.5:4b",
+      api: "ollama",
+      baseUrl: "http://127.0.0.1:11434",
+      providerBaseUrl: "https://ollama.com",
+      expected: undefined,
+    },
+    {
+      provider: "ollama",
+      id: "qwen3.5:4b",
+      api: "ollama",
+      baseUrl: "https://ollama.com",
+      providerBaseUrl: "http://127.0.0.1:11434",
+      expected: "off",
+    },
+  ] as const)(
+    "prepares compaction thinking for $provider/$id at $baseUrl ($api)",
+    ({ expected, ...route }) => {
+      const provider = registerProvidersWithPluginConfig({}).find(
+        (entry) => entry.id === route.provider,
+      );
+      const model: ProviderRuntimeModel = {
+        provider: route.provider,
+        id: route.id,
+        api: route.api,
+        baseUrl: route.baseUrl,
+        name: route.id,
+        reasoning: true,
+        input: ["text"],
+        cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
+        contextWindow: 32_768,
+        maxTokens: 8_192,
+        params: { think: true },
+      };
+      const config =
+        "providerBaseUrl" in route
+          ? {
+              models: {
+                providers: {
+                  [route.provider]: { baseUrl: route.providerBaseUrl, api: route.api, models: [] },
+                },
+              },
+            }
+          : {};
+      const resolved =
+        provider.normalizeResolvedModel?.({
+          provider: route.provider,
+          modelId: route.id,
+          model,
+          config,
+        }) ?? model;
+      expect(resolved.compactionThinkingDefault).toBe(expected);
+      expect(resolved).toMatchObject(model);
+      expect(model).not.toHaveProperty("compactionThinkingDefault");
+    },
+  );
 });
 
 function createOllamaResetValidationContext(
