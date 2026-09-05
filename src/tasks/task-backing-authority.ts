@@ -1,4 +1,5 @@
 import { asOptionalRecord } from "@openclaw/normalization-core/record-coerce";
+import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
 import { getTaskFlowById } from "./task-flow-runtime-internal.js";
 import {
   ensureTaskRegistryReady,
@@ -116,7 +117,14 @@ export function createNextAcpTaskBackingDetail(params: {
   for (const taskId of taskIdsByRelatedSessionKey.get(params.childSessionKey) ?? []) {
     const task = tasks.get(taskId);
     const instance = task ? readTaskBackingInstance(task.detail) : undefined;
-    if (task && instance?.runtime === "acp" && isCanonicalBackingTask(task)) {
+    // Requester candidates serve list queries; generation history keeps its owner/child scope.
+    if (
+      task &&
+      (normalizeOptionalString(task.ownerKey) === params.childSessionKey ||
+        normalizeOptionalString(task.childSessionKey) === params.childSessionKey) &&
+      instance?.runtime === "acp" &&
+      isCanonicalBackingTask(task)
+    ) {
       generation = Math.max(generation, instance.generation);
     }
   }
