@@ -185,6 +185,7 @@ export type WorkshopProposalUpdate = {
 type WorkshopRelocationPlan = {
   record: SkillProposalRecord;
   source: string;
+  deferred: boolean;
   workspaceDir: string | undefined;
   ownerAgentId?: string;
   unconfiguredOwnerAgentId?: string;
@@ -206,10 +207,32 @@ type WorkshopMove = {
   updates: WorkshopProposalUpdate[];
 };
 
+export async function readLegacyWorkshopSourceStat(workspaceDir: string, source: string) {
+  let sourceStat: Awaited<ReturnType<typeof fs.lstat>> | undefined;
+  try {
+    // A workspace root may be an alias; generated paths below it may not be.
+    let directory = workspaceDir;
+    for (const segment of path.relative(workspaceDir, source).split(path.sep)) {
+      directory = path.join(directory, segment);
+      sourceStat = await fs.lstat(directory);
+      if (sourceStat.isSymbolicLink()) {
+        break;
+      }
+    }
+  } catch (error) {
+    if (!isMissingPathError(error)) {
+      throw error;
+    }
+    return undefined;
+  }
+  return sourceStat;
+}
+
 export async function planWorkshopRelocation(
   records: LegacyWorkshopProposal[],
   config: OpenClawConfig,
   env: NodeJS.ProcessEnv,
+  deferredSources: ReadonlySet<string> = new Set(),
 ): Promise<{
   moves: WorkshopMove[];
   updates: WorkshopProposalUpdate[];
@@ -237,7 +260,16 @@ export async function planWorkshopRelocation(
     ) {
       return [];
     }
-    return [{ record: entry.record, source, workspaceDir, ...owner }];
+    return [
+      {
+        record: entry.record,
+        source,
+        workspaceDir,
+        deferred:
+          deferredSources.size > 0 && deferredSources.has(resolveCanonicalWorkspacePath(source)),
+        ...owner,
+      },
+    ];
   });
   // Completed updates provide recovery evidence, not ownership or relocation actions.
   const external = candidates.filter(
@@ -259,10 +291,8 @@ export async function planWorkshopRelocation(
     }
   }
   const relocations = new Map<string, WorkshopRelocation>();
-  const ready = external.filter(
-    (plan) => !plan.workspaceDir || !deferredWorkspaces.has(plan.workspaceDir),
-  );
-  for (const plan of ready) {
+  for (const plan of external) {
+    plan.deferred ||= Boolean(plan.workspaceDir && deferredWorkspaces.has(plan.workspaceDir));
     if (!plan.ownerAgentId || (plan.record.status === "applied" && !plan.workspaceDir)) {
       continue;
     }
@@ -285,6 +315,9 @@ export async function planWorkshopRelocation(
   }
   const moves: WorkshopMove[] = [];
   for (const relocation of relocations.values()) {
+    if (relocation.plans.some((plan) => plan.deferred)) {
+      continue;
+    }
     const plan = relocation.plans.find(
       ({ record }) => record.kind === "create" && record.status === "applied",
     );
@@ -294,24 +327,7 @@ export async function planWorkshopRelocation(
     const { record } = plan;
     const { target } = relocation;
     let operation: WorkshopMove["operation"] = "move";
-    let sourceStat: Awaited<ReturnType<typeof fs.lstat>> | undefined;
-    try {
-      // The workspace itself may be an alias. Below that root, inspect every
-      // component before choosing either a move or copied-source removal.
-      let directory = plan.workspaceDir;
-      for (const segment of path.relative(plan.workspaceDir, plan.source).split(path.sep)) {
-        directory = path.join(directory, segment);
-        sourceStat = await fs.lstat(directory);
-        if (sourceStat.isSymbolicLink()) {
-          break;
-        }
-      }
-    } catch (error) {
-      if (!isMissingPathError(error)) {
-        throw error;
-      }
-      sourceStat = undefined;
-    }
+    const sourceStat = await readLegacyWorkshopSourceStat(plan.workspaceDir, plan.source);
     if (sourceStat?.isSymbolicLink()) {
       relocation.rejection = `Skill Workshop no longer writes through symlinked skills; ${plan.source} stays a workspace skill.`;
       continue;
@@ -392,6 +408,32 @@ export async function planWorkshopRelocation(
     move,
     source: resolveCanonicalWorkspacePath(move.source),
   }));
+  const deferredReservations = external
+    .filter((plan) => plan.deferred)
+    .map((plan) => ({
+      source: resolveCanonicalWorkspacePath(plan.source),
+      destination: plan.relocation?.target.skillDir,
+    }));
+  const deferredMoves = new Set<WorkshopMove>();
+  // Deferred sources still reserve their paths and destinations. Carry those
+  // reservations through connected moves so an ancestor cannot move them indirectly.
+  for (const reservation of deferredReservations) {
+    for (const { move, source } of sources) {
+      if (
+        !deferredMoves.has(move) &&
+        (reservation.destination === move.destination ||
+          isPathInside(reservation.source, source) ||
+          isPathInside(source, reservation.source))
+      ) {
+        deferredMoves.add(move);
+        deferredReservations.push({ source, destination: move.destination });
+        warnings.push(
+          `Skill Workshop left ${move.source} in place because a connected skill still needs migration or recovery.`,
+        );
+      }
+    }
+  }
+  const deferredMoveSources = new Set([...deferredMoves].map((move) => move.source));
   const workspaces = listAgentIds(config).map((agentId) =>
     resolveCanonicalWorkspacePath(resolveAgentWorkspaceDir(config, agentId, env)),
   );
@@ -420,7 +462,10 @@ export async function planWorkshopRelocation(
     }
   }
   const updates: WorkshopProposalUpdate[] = [];
-  for (const plan of ready) {
+  for (const plan of external) {
+    if (plan.deferred || deferredMoveSources.has(plan.source)) {
+      continue;
+    }
     const { record, relocation, ownerAgentId } = plan;
     const conflictReason = conflictsBySource.get(plan.source);
     if (!relocation) {
@@ -454,7 +499,9 @@ export async function planWorkshopRelocation(
     (move && !staleReason ? move.updates : updates).push(update);
   }
   return {
-    moves: moves.filter((move) => !conflictsBySource.has(move.source)),
+    moves: moves.filter(
+      (move) => !conflictsBySource.has(move.source) && !deferredMoveSources.has(move.source),
+    ),
     updates,
     externalProposalCount: external.length,
     externalProposalCountsByAgent: external.reduce<Record<string, number>>((counts, plan) => {

@@ -1,6 +1,7 @@
 import { expectDefined } from "@openclaw/normalization-core";
 import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
+import { isPathInside } from "../../infra/path-guards.js";
 import { normalizeSkillIndexName } from "../discovery/skill-index.js";
 import {
   assertInsideSkillsRoot,
@@ -196,10 +197,15 @@ async function reconcilePendingCreateProposal(
       if (!current || current.record.kind !== "create" || current.record.status !== "pending") {
         return { read: current ?? read };
       }
-      assertInsideSkillsRoot(workshopDir, current.record.target.skillFile, "skill file");
-      if (await readSkillProposalRollback(current.record.id, options)) {
+      // Deferred proposals remain readable without access to their old targets.
+      // Collision reconciliation only operates inside the owned Workshop root.
+      if (
+        !isPathInside(workshopDir, current.record.target.skillFile) ||
+        (await readSkillProposalRollback(current.record.id, options))
+      ) {
         return { read: current };
       }
+      assertInsideSkillsRoot(workshopDir, current.record.target.skillFile, "skill file");
       const targetContent = await readWorkspaceSkillFile(current.record.target.skillFile);
       if (targetContent === null) {
         return { read: current };

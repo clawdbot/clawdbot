@@ -457,7 +457,7 @@ async function reconcileInterruptedApply(
   options: SkillWorkshopDirectoryStoreOptions,
 ): Promise<boolean> {
   const stored = readStoredProposal(proposalId, options);
-  if (!stored || stored.record.status !== "pending") {
+  if (!stored || stored.record.status !== "pending" || !options.agentId) {
     return false;
   }
   // Avoid acquiring the target lock on ordinary reads. Apply and revise reread
@@ -480,6 +480,7 @@ async function reconcileInterruptedApply(
     record: stored.record,
     expectedRecordJson: stored.row.record_json,
     draftContent,
+    skillsRoot: resolveWorkshopSkillsDir(options.config, options.agentId, options.env),
     store: options,
   });
 }
@@ -508,7 +509,7 @@ async function readProposalSupportFiles(
   return out;
 }
 
-async function readSkillProposalBundle(
+export async function readSkillProposalBundle(
   record: SkillProposalRecord,
   options: SkillWorkshopStoreOptions,
 ): Promise<SkillProposalReadResult> {

@@ -1,6 +1,8 @@
 import { randomUUID } from "node:crypto";
 import fs from "node:fs/promises";
 import path from "node:path";
+import { assertWorkspaceStateMigrationReady } from "../agents/workspace-legacy-state.js";
+import { resolveCanonicalWorkspacePath } from "../agents/workspace-state-identity.js";
 import { resolveStateDir } from "../config/paths.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { hasErrnoCode, isMissingPathError } from "../infra/errors.js";
@@ -11,8 +13,11 @@ import {
   executeSqliteQueryTakeFirstSync,
   getNodeSqliteKysely,
 } from "../infra/kysely-sync.js";
+import { isPathInside } from "../infra/path-guards.js";
 import { movePathWithCopyFallback } from "../infra/replace-file.js";
 import { acquireStateDatabaseCoordinator } from "../infra/state-database-coordinator.js";
+import { reconcileInterruptedSkillProposalApply } from "../skills/workshop/reconcile-transition.js";
+import { resolveWorkshopSkillsDir } from "../skills/workshop/skills-root.js";
 import {
   parseSkillProposalRow,
   readStoredProposal,
@@ -22,7 +27,9 @@ import {
   hashSkillProposalContent,
   importLegacySkillProposal,
   readSkillProposal,
+  readSkillProposalBundle,
   readSkillProposalRollback,
+  resolveSkillProposalTarget,
   validateSkillProposalRecord,
   validateSkillProposalRollback,
 } from "../skills/workshop/store.js";
@@ -42,6 +49,7 @@ import {
 import {
   inferOwnerAgentId,
   planWorkshopRelocation,
+  readLegacyWorkshopSourceStat,
   resolveLegacyWorkshopWorkspaceDir,
   type LegacyWorkshopProposal,
   type WorkshopProposalUpdate,
@@ -141,10 +149,85 @@ async function relocateLegacyWorkshopTargets(
   );
   // Planning must not initialize optional Workshop tables or indexes on a no-op
   // startup. Actual proposal writes retain their feature-owned schema ensure.
-  const rows = tableExists(database.db, "skill_workshop_proposals")
-    ? executeSqliteQuerySync(database.db, kysely.selectFrom("skill_workshop_proposals").selectAll())
-        .rows
-    : [];
+  const readRows = () =>
+    tableExists(database.db, "skill_workshop_proposals")
+      ? executeSqliteQuerySync(
+          database.db,
+          kysely.selectFrom("skill_workshop_proposals").selectAll(),
+        ).rows
+      : [];
+  const deferredSources = new Set<string>();
+  const recoveryWarnings: string[] = [];
+  // Settle writes while their proposal and rollback still name the same files.
+  // Recovery can establish a create's ownership or restore a partial update.
+  for (const row of readRows()) {
+    const record = parseSkillProposalRow(row);
+    if (
+      !record ||
+      record.status !== "pending" ||
+      !(await readSkillProposalRollback(record.id, { env }))
+    ) {
+      continue;
+    }
+    const workspaceDir = resolveLegacyWorkshopWorkspaceDir(record.target.skillDir, config, env);
+    const { ownerAgentId } = inferOwnerAgentId({
+      record,
+      config,
+      env,
+      workspaceDir,
+      rowOwnerAgentId: row.owner_agent_id,
+    });
+    if (
+      !workspaceDir ||
+      !ownerAgentId ||
+      isPathInside(resolveWorkshopSkillsDir(config, ownerAgentId, env), record.target.skillDir)
+    ) {
+      continue;
+    }
+    try {
+      assertWorkspaceStateMigrationReady({ workspaceDirs: [workspaceDir], env });
+      const sourceStat = await readLegacyWorkshopSourceStat(workspaceDir, record.target.skillDir);
+      if (sourceStat?.isSymbolicLink()) {
+        continue;
+      }
+      const skillsRoot = [
+        path.join(workspaceDir, "skills"),
+        path.join(workspaceDir, ".agents", "skills"),
+      ].find((rootDir) => isPathInside(rootDir, record.target.skillDir));
+      if (!skillsRoot) {
+        throw new Error("the original skill root could not be verified");
+      }
+      const target = resolveSkillProposalTarget({
+        skillName: record.target.skillKey,
+        config,
+        agentId: ownerAgentId,
+        env,
+      });
+      if (!sourceStat && (await pathExists(target.skillDir))) {
+        throw new Error("the original skill is missing and its destination already exists");
+      }
+      const store = { config, env, agentId: ownerAgentId };
+      const proposal = await readSkillProposalBundle(record, store);
+      const recovered = await reconcileInterruptedSkillProposalApply({
+        record,
+        expectedRecordJson: row.record_json,
+        draftContent: proposal.content,
+        skillsRoot,
+        store,
+      });
+      if (!recovered) {
+        throw new Error("the interrupted apply could not be verified or restored");
+      }
+    } catch (error) {
+      // Moving the create claim alone would strand its pending update's recovery.
+      deferredSources.add(resolveCanonicalWorkspacePath(record.target.skillDir));
+      recoveryWarnings.push(
+        `Skill Workshop did not relocate ${record.target.skillDir}: ${String(error)}. ` +
+          `Recovery for proposal ${record.id} remains pending; check its files and saved proposal before retrying Doctor.`,
+      );
+    }
+  }
+  const rows = readRows();
   const initialRows = new Map(rows.map((row) => [row.proposal_id, row]));
   const records = rows.flatMap((row) => {
     const record = parseSkillProposalRow(row);
@@ -175,7 +258,7 @@ async function relocateLegacyWorkshopTargets(
       { operationLabel: "skill-workshop.relocation.commit" },
     );
   };
-  const plan = await planWorkshopRelocation(records, config, env);
+  const plan = await planWorkshopRelocation(records, config, env, deferredSources);
   const workspaceMoves = new Map<string, typeof plan.moves>();
   for (const move of plan.moves) {
     // Adopted sources are already absent. Only pending filesystem moves can
@@ -209,7 +292,7 @@ async function relocateLegacyWorkshopTargets(
     retargetedProposals: updates.length - staleProposals,
     staleProposals,
     migratedBackupRoots: backupMigration.migrated,
-    warnings: [...plan.warnings, ...backupMigration.warnings],
+    warnings: [...recoveryWarnings, ...plan.warnings, ...backupMigration.warnings],
   };
 }
 

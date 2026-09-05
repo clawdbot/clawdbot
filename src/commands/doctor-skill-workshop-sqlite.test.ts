@@ -397,6 +397,7 @@ describe("doctor Skill Workshop SQLite migration", () => {
     await fs.writeFile(path.join(proposalDir, "references", "proof.md"), supportContent, "utf8");
     await fs.writeFile(path.join(proposalDir, "rollback.json"), JSON.stringify(rollback), "utf8");
     await fs.writeFile(targetSupportFile, supportContent, "utf8");
+    await expect(fs.readFile(targetSupportFile, "utf8")).resolves.toBe(supportContent);
 
     await expect(
       migrateLegacySkillWorkshopProposals({
@@ -409,12 +410,12 @@ describe("doctor Skill Workshop SQLite migration", () => {
         },
       }),
     ).resolves.toMatchObject({ detected: 1, migrated: 1, warnings: [] });
-    await expect(readSkillProposalRollback(proposalId)).resolves.toMatchObject(rollback);
+    await expect(readSkillProposalRollback(proposalId)).resolves.toBeNull();
 
     await expect(listSkillProposals({ config: {}, agentId: "main" })).resolves.toMatchObject({
       proposals: [expect.objectContaining({ id: proposalId, status: "pending" })],
     });
-    await expect(fs.readFile(targetSupportFile, "utf8")).resolves.toBe(supportContent);
+    await expect(fs.access(targetSupportFile)).rejects.toMatchObject({ code: "ENOENT" });
 
     const revised = await reviseSkillProposal({
       workspaceDir,
@@ -429,6 +430,9 @@ describe("doctor Skill Workshop SQLite migration", () => {
     await expect(fs.readFile(revised.record.target.skillFile, "utf8")).resolves.toContain(
       "Revised after recovery.",
     );
-    await expect(fs.readFile(targetSupportFile, "utf8")).resolves.toBe(supportContent);
+    await expect(fs.access(targetSupportFile)).rejects.toMatchObject({ code: "ENOENT" });
+    await expect(
+      fs.readFile(path.join(revised.record.target.skillDir, "references", "proof.md"), "utf8"),
+    ).resolves.toBe(supportContent);
   });
 });

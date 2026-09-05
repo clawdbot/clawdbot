@@ -511,7 +511,13 @@ describe("doctor Skill Workshop SQLite relocation and legacy migration", () => {
         },
       },
     });
-    expect(result).toMatchObject({ detected: 1, migrated: 1, warnings: [] });
+    // Import preserves the large receipt, but its support set does not match
+    // this proposal. Recovery must remain bound to the original target.
+    expect(result).toMatchObject({
+      detected: 1,
+      migrated: 1,
+      warnings: [expect.stringContaining(proposalId)],
+    });
 
     const listed = await listSkillProposals({ config: {}, agentId: "main" });
     expect(listed.proposals).toEqual([expect.objectContaining({ id: proposalId })]);
@@ -522,10 +528,7 @@ describe("doctor Skill Workshop SQLite relocation and legacy migration", () => {
         originRunIds: ["legacy-run", "revision-run"],
         originRunMutationCounts: { "legacy-run": 1, "revision-run": 2 },
         target: {
-          skillDir: path.join(
-            resolveWorkshopSkillsDir({}, "main", testState.env),
-            "legacy-workshop",
-          ),
+          skillDir: targetDir,
         },
       },
     });
@@ -578,6 +581,7 @@ describe("doctor Skill Workshop SQLite relocation and legacy migration", () => {
     expect(ambiguous).toMatchObject({ migrated: 0 });
     expect(ambiguous.warnings).toEqual([
       expect.stringContaining("owning agent could not be inferred"),
+      expect.stringContaining(proposalId),
     ]);
     await expect(fs.access(path.join(ambiguousDir, "proposal.json"))).resolves.toBeUndefined();
   });

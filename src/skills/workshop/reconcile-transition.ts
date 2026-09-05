@@ -1,5 +1,6 @@
 import path from "node:path";
 import {
+  assertInsideSkillsRoot,
   normalizeWorkspaceSkillSupportPath,
   prepareWorkspaceSkillRestoration,
   readWorkspaceSkillFile,
@@ -10,7 +11,6 @@ import { bumpSkillsSnapshotVersion } from "../runtime/refresh-state.js";
 import { stripProposalFrontmatterForSkill } from "./frontmatter.js";
 import { createSkillProposalEvent } from "./plugin-hooks.js";
 import { hashSkillProposalContent } from "./proposal-hash.js";
-import { resolveWorkshopSkillsDir } from "./skills-root.js";
 import { readStoredProposal } from "./store-sqlite-record.js";
 import { clearSkillProposalRollback, readSkillProposalRollback } from "./store-sqlite-rollback.js";
 import type { SkillWorkshopDirectoryStoreOptions } from "./store-sqlite-schema.js";
@@ -22,6 +22,7 @@ export async function reconcileInterruptedSkillProposalApply(params: {
   record: SkillProposalRecord;
   expectedRecordJson: string;
   draftContent: string;
+  skillsRoot: string;
   store: SkillWorkshopDirectoryStoreOptions;
 }): Promise<boolean> {
   return await withSkillProposalCommitLock(
@@ -35,6 +36,8 @@ export async function reconcileInterruptedSkillProposalApply(params: {
       ) {
         return false;
       }
+      assertInsideSkillsRoot(params.skillsRoot, stored.record.target.skillDir, "skill directory");
+      assertInsideSkillsRoot(params.skillsRoot, stored.record.target.skillFile, "skill file");
       const rollback = await readSkillProposalRollback(params.record.id, params.store);
       if (!rollback || !resolveRecoveryRollback(stored.record, rollback)) {
         return false;
@@ -87,7 +90,7 @@ export async function reconcileInterruptedSkillProposalApply(params: {
       }
       if (recovery.state === "partial") {
         const restoration = await prepareWorkspaceSkillRestoration({
-          skillsRoot: resolveStoreWorkshopSkillsDir(params.store),
+          skillsRoot: params.skillsRoot,
           skillDir: stored.record.target.skillDir,
           skillFile: stored.record.target.skillFile,
           previousContent: rollback.previousContent ?? null,
@@ -114,13 +117,6 @@ export async function reconcileInterruptedSkillProposalApply(params: {
     },
     params.store,
   ).catch(() => false);
-}
-
-function resolveStoreWorkshopSkillsDir(store: SkillWorkshopDirectoryStoreOptions): string {
-  if (!store.agentId) {
-    throw new Error("Skill Workshop recovery requires the active agent id.");
-  }
-  return resolveWorkshopSkillsDir(store.config, store.agentId, store.env);
 }
 
 type SkillProposalRecoverySupportFile = {
