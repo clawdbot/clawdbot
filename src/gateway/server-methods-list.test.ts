@@ -78,7 +78,7 @@ describe("listGatewayMethods", () => {
     expect(listGatewayMethods()).toContain("approval.resolve");
   });
 
-  it("appends plugin UI methods without changing the complete legacy method prefix", () => {
+  it("appends plugin UI, update history and report methods without changing the legacy prefix", () => {
     const methods = listGatewayMethods();
     const legacyCount = LEGACY_ADVERTISED_GATEWAY_METHODS.length;
 
@@ -88,6 +88,11 @@ describe("listGatewayMethods", () => {
       "plugins.controlUi.reload",
       "plugins.controlUi.report",
       "plugins.controlUi.status",
+    ]);
+    expect(methods.slice(legacyCount + 4)).toEqual([
+      "update.runs.get",
+      "update.runs.list",
+      "update.report",
     ]);
   });
 

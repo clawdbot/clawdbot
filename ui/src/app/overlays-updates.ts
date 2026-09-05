@@ -9,6 +9,11 @@ import type { ConnectionBootstrapCoordinator } from "./connection-bootstrap.ts";
 import type { ApplicationGateway } from "./gateway.ts";
 import { readGatewayOperatorAccess } from "./operator-access.ts";
 import type { ApplicationUpdateOverlaySnapshot } from "./overlays-types.ts";
+import { createUpdateCampaignStatusPoller } from "./update-campaign-status-poller.ts";
+import {
+  canReportUpdateFailure,
+  createUpdateFailureReportController,
+} from "./update-failure-report-controller.ts";
 import {
   classifyUpdateRunResponse,
   createUpdateStatusRefresher,
@@ -43,41 +48,6 @@ export type ApplicationUpdateOverlayHooks = {
   onUpdateFailure?: (failure: UpdateFailureTriage, admission: UpdateTriageAdmission) => void;
 };
 
-function createUpdateCampaignStatusPoller(params: {
-  canPoll: () => boolean;
-  refresh: () => Promise<void>;
-}) {
-  let timer: ReturnType<typeof globalThis.setTimeout> | null = null;
-  let generation = 0;
-  const stop = () => {
-    generation += 1;
-    if (timer !== null) {
-      globalThis.clearTimeout(timer);
-      timer = null;
-    }
-  };
-  const poll = async () => {
-    timer = null;
-    const currentGeneration = generation;
-    if (params.canPoll()) {
-      await params.refresh();
-    }
-    if (currentGeneration === generation) {
-      sync();
-    }
-  };
-  const sync = () => {
-    if (!params.canPoll()) {
-      stop();
-      return;
-    }
-    if (timer === null) {
-      timer = globalThis.setTimeout(() => void poll(), 5_000);
-    }
-  };
-  return { stop, sync };
-}
-
 export function createApplicationUpdateOverlays(
   gateway: ApplicationGateway,
   onChange: () => void,
@@ -93,6 +63,9 @@ export function createApplicationUpdateOverlays(
     updateReconciliationPending: false,
     updateStatusBanner: null,
     recordedUpdateAttempt: null,
+    reportableUpdateFailureId: null,
+    updateFailureReportBusy: false,
+    updateFailureReportNotice: null,
     controlUiRefreshRequired: false,
   };
   let disposed = false;
@@ -113,6 +86,24 @@ export function createApplicationUpdateOverlays(
   let updateHoldInFlight = false;
   let observedApplyingCampaignId: string | null = null;
   let currentFailure: { failure: UpdateFailureTriage; profileId: string | null } | null = null;
+  const updateFailureReporter = createUpdateFailureReportController({
+    getClient: () => gateway.snapshot.client,
+    isCurrent: (attemptId, client) =>
+      !disposed &&
+      activeClient === client &&
+      gateway.snapshot.client === client &&
+      gateway.snapshot.phase === "connected" &&
+      snapshot.reportableUpdateFailureId === attemptId &&
+      currentFailure?.failure.id === attemptId &&
+      canReportUpdateFailure(gateway.snapshot),
+    setBusy: (updateFailureReportBusy) => {
+      snapshot = { ...snapshot, updateFailureReportBusy };
+      publish();
+    },
+    setResult: (attemptId, result) => {
+      snapshot = { ...snapshot, updateFailureReportNotice: { attemptId, result } };
+    },
+  });
 
   function publish(failurePrepared = false) {
     const wasBusy = snapshot.updateRunning || snapshot.updateReconciliationPending;
@@ -123,8 +114,16 @@ export function createApplicationUpdateOverlays(
     if (applying && campaign.id !== observedApplyingCampaignId) {
       observedApplyingCampaignId = campaign.id;
       if (currentFailure || snapshot.recordedUpdateAttempt) {
+        updateFailureReporter.invalidate();
         currentFailure = null;
-        snapshot = { ...snapshot, updateStatusBanner: null, recordedUpdateAttempt: null };
+        snapshot = {
+          ...snapshot,
+          updateStatusBanner: null,
+          recordedUpdateAttempt: null,
+          reportableUpdateFailureId: null,
+          updateFailureReportBusy: false,
+          updateFailureReportNotice: null,
+        };
       }
     }
     snapshot = {
@@ -221,10 +220,22 @@ export function createApplicationUpdateOverlays(
     profileId = noticeScope().profileId,
   ) => {
     const prepared = prepareFailureTriage(failure, profileId);
+    const reportableUpdateFailureId =
+      failure.outcome === "failed" && failure.attempt ? failure.id : null;
+    const reportIdentityChanged = snapshot.reportableUpdateFailureId !== reportableUpdateFailureId;
+    if (reportIdentityChanged) {
+      updateFailureReporter.invalidate();
+    }
     snapshot = {
       ...snapshot,
       recordedUpdateAttempt: failure.attempt,
       updateStatusBanner: failure.banner,
+      reportableUpdateFailureId,
+      updateFailureReportBusy: reportIdentityChanged ? false : snapshot.updateFailureReportBusy,
+      updateFailureReportNotice:
+        snapshot.updateFailureReportNotice?.attemptId === reportableUpdateFailureId
+          ? snapshot.updateFailureReportNotice
+          : null,
     };
     publish(prepared);
   };
@@ -287,12 +298,24 @@ export function createApplicationUpdateOverlays(
       status.recordedUpdateAttempt = snapshot.recordedUpdateAttempt;
     }
     const prepared = failure ? prepareFailureTriage(failure) : false;
+    const reportableUpdateFailureId =
+      failure?.outcome === "failed" && failure.attempt ? failure.id : null;
+    const reportIdentityChanged = snapshot.reportableUpdateFailureId !== reportableUpdateFailureId;
+    if (reportIdentityChanged) {
+      updateFailureReporter.invalidate();
+    }
     if (!failure && response.sentinel?.kind === "update") {
       currentFailure = null;
     }
     snapshot = {
       ...snapshot,
       ...status,
+      reportableUpdateFailureId,
+      updateFailureReportBusy: reportIdentityChanged ? false : snapshot.updateFailureReportBusy,
+      updateFailureReportNotice:
+        snapshot.updateFailureReportNotice?.attemptId === reportableUpdateFailureId
+          ? snapshot.updateFailureReportNotice
+          : null,
       updateCampaignStatusHydrated: true,
     };
     publish(prepared);
@@ -328,6 +351,7 @@ export function createApplicationUpdateOverlays(
     const nextGatewayScope = gatewayCredentialScope(gateway.connection.gatewayUrl);
     if (nextGatewayScope !== updateGatewayScope) {
       updateRunGeneration += 1;
+      updateFailureReporter.invalidate();
       updateStatusRevision += 1;
       updateVerification.cancel();
       setPendingUpdate(null);
@@ -339,6 +363,9 @@ export function createApplicationUpdateOverlays(
         ...snapshot,
         updateStatusBanner: null,
         recordedUpdateAttempt: null,
+        reportableUpdateFailureId: null,
+        updateFailureReportBusy: false,
+        updateFailureReportNotice: null,
         heldUpdateCampaignId: null,
       };
     }
@@ -349,6 +376,7 @@ export function createApplicationUpdateOverlays(
     const nextOperatorAccess = readGatewayOperatorAccess(next);
     if (operatorAccess.canAdmin && !nextOperatorAccess.canAdmin) {
       updateRunGeneration += 1;
+      updateFailureReporter.invalidate();
       updateStatusRevision += 1;
       updateVerification.cancel();
       const updateStatusBanner = pendingUpdate ? resolveUnknownUpdateOutcomeBanner() : null;
@@ -362,6 +390,9 @@ export function createApplicationUpdateOverlays(
         updateStatusRefreshing: false,
         updateStatusBanner,
         recordedUpdateAttempt: null,
+        reportableUpdateFailureId: null,
+        updateFailureReportBusy: false,
+        updateFailureReportNotice: null,
       };
     }
     operatorAccess = nextOperatorAccess;
@@ -369,12 +400,21 @@ export function createApplicationUpdateOverlays(
     activeHello = next.hello;
     connectedSource = nextConnectedSource;
     if (connected && currentFailure && currentFailure.profileId !== (next.selfUser?.id ?? null)) {
+      updateFailureReporter.invalidate();
       currentFailure = null;
+      snapshot = {
+        ...snapshot,
+        reportableUpdateFailureId: null,
+        updateFailureReportBusy: false,
+        updateFailureReportNotice: null,
+      };
     }
     if (connectedSourceChanged) {
       updateRunGeneration += 1;
+      updateFailureReporter.invalidate();
       updateStatusRevision += 1;
       updateVerification.cancel();
+      snapshot = { ...snapshot, updateFailureReportBusy: false };
     }
     if (!connected || !next.client) {
       updateRequestRunning = false;
@@ -499,6 +539,7 @@ export function createApplicationUpdateOverlays(
       }
       const sessionKey = options?.sessionKey ?? hooks.getActiveSessionKey?.();
       const generation = ++updateRunGeneration;
+      updateFailureReporter.invalidate();
       updateStatusRevision += 1;
       updateRequestRunning = true;
       currentFailure = null;
@@ -506,6 +547,9 @@ export function createApplicationUpdateOverlays(
         ...snapshot,
         updateStatusBanner: null,
         recordedUpdateAttempt: null,
+        reportableUpdateFailureId: null,
+        updateFailureReportBusy: false,
+        updateFailureReportNotice: null,
       };
       publish();
       const requestId = generateUUID();
@@ -665,9 +709,13 @@ export function createApplicationUpdateOverlays(
         updateHoldInFlight = false;
       }
     },
+    async reportUpdateFailure(this: void, attemptId: string) {
+      await updateFailureReporter.report(attemptId);
+    },
     dispose() {
       disposed = true;
       updateRunGeneration += 1;
+      updateFailureReporter.invalidate();
       clearPendingUpdateTimer();
       updateVerification.cancel();
       updateCampaignPoller.stop();

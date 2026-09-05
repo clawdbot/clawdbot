@@ -5,6 +5,7 @@ import { asNullableRecord as asConfigRecord } from "@openclaw/normalization-core
 import { html, nothing, type TemplateResult } from "lit";
 import type { UpdateAvailable, UpdateScheduleState } from "../../api/types.ts";
 import type { NativeDeviceSettingsCapability } from "../../app/native-device-settings.ts";
+import type { UpdateFailureReportNotice } from "../../app/overlays-types.ts";
 import type {
   ApplicationStatusBanner,
   RecordedUpdateAttempt,
@@ -48,7 +49,11 @@ type UpdatesViewProps = {
   canUpdate: boolean;
   canCheckStatus: boolean;
   canHoldUpdate: boolean;
+  canReport: boolean;
   updateBusy: boolean;
+  reportableUpdateFailureId: string | null;
+  updateFailureReportBusy: boolean;
+  updateFailureReportNotice: UpdateFailureReportNotice | null;
   nowMs?: number;
   onChannelChange: (channel: UpdatesChannel) => void;
   onUpdateChecksChange: (enabled: boolean) => void;
@@ -56,6 +61,7 @@ type UpdatesViewProps = {
   onUpdateNow: () => void;
   onHoldUpdate: () => Promise<boolean>;
   onCheckStatus: () => Promise<void>;
+  onReportFailure: (attemptId: string) => Promise<void>;
 };
 
 function renderDeviceUpdates(capability: NativeDeviceSettingsCapability | null | undefined) {
@@ -179,8 +185,28 @@ function renderRecordedAttempt(props: UpdatesViewProps) {
         >
           ${t("updates.page.retryUpdate")}
         </button>
+        ${
+          props.reportableUpdateFailureId
+            ? html`<button
+                class="btn btn--sm"
+                type="button"
+                title=${props.canReport ? "" : t("updates.page.reportOwnerRequired")}
+                ?disabled=${!props.canReport || props.updateBusy || props.updateFailureReportBusy}
+                @click=${() => void props.onReportFailure(props.reportableUpdateFailureId!)}
+              >
+                ${
+                  props.updateFailureReportBusy
+                    ? t("updates.page.reportSubmitting")
+                    : t("updates.page.reportFailure")
+                }
+              </button>`
+            : nothing
+        }
       </div>`,
     }),
+    props.updateFailureReportNotice
+      ? renderUpdateFailureReportNotice(props.updateFailureReportNotice)
+      : nothing,
     renderSettingsRow({
       title: t("updates.page.cliFallback"),
       description: t("updates.triage.hostHint"),
@@ -191,6 +217,48 @@ function renderRecordedAttempt(props: UpdatesViewProps) {
       </details>`,
     }),
   ]);
+}
+
+function renderUpdateFailureReportNotice(notice: UpdateFailureReportNotice) {
+  const result = notice.result;
+  const label =
+    result.status === "created"
+      ? t("updates.page.reportCreated")
+      : result.status === "fallback"
+        ? t("updates.page.reportFallback")
+        : result.status === "pending"
+          ? t("updates.page.reportPending")
+          : result.status === "retryable"
+            ? t("updates.page.reportRetryable")
+            : result.status === "duplicate"
+              ? t("updates.page.reportDuplicate")
+              : t("updates.page.reportError");
+  const url = "url" in result && result.url ? result.url : null;
+  const fallbackUrl = "fallbackUrl" in result && result.fallbackUrl ? result.fallbackUrl : null;
+  return renderSettingsRow({
+    title: t("updates.page.reportResult"),
+    stacked: true,
+    control: html`<div class="updates-attempt-details" role="status">
+      <div>${label}</div>
+      ${
+        url
+          ? html`<div>
+              <a href=${url} target="_blank" rel="noreferrer">${t("updates.page.openIssue")}</a>
+            </div>`
+          : nothing
+      }
+      ${
+        fallbackUrl
+          ? html`<div>
+              <a href=${fallbackUrl} target="_blank" rel="noreferrer"
+                >${t("updates.page.openPrefilledIssue")}</a
+              >
+            </div>`
+          : nothing
+      }
+      ${"message" in result && result.message ? html`<div>${result.message}</div>` : nothing}
+    </div>`,
+  });
 }
 
 function readUpdatesSettings(

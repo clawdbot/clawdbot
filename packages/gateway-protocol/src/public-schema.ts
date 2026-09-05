@@ -366,6 +366,8 @@ export {
   UpdateScheduleStateSchema,
   UpdateHoldParamsSchema,
   UpdateHoldResultSchema,
+  UpdateReportParamsSchema,
+  UpdateReportResultSchema,
   SystemAgentChatParamsSchema,
   SystemAgentChatQuestionSchema,
   SystemAgentChatResultSchema,
