@@ -433,6 +433,11 @@ export class OpenClawApp extends OpenClawLightDomElement {
       <openclaw-board-document
         .gatewaySnapshot=${gatewaySnapshot}
         .sessionKey=${route.data.sessionKey}
+        .preparedSession=${
+          route.data.agentId
+            ? { sessionKey: route.data.sessionKey, agentId: route.data.agentId }
+            : null
+        }
         .onDocumentClose=${
           isNativeWebChromeHost() ? null : () => this.closeDocument(this.context?.basePath ?? "")
         }

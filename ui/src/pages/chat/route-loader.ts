@@ -234,6 +234,7 @@ function resolvedSessionRouteData(params: {
   return {
     kind: "session",
     sessionKey: params.row.key,
+    ...(params.row.agentId ? { agentId: params.row.agentId } : {}),
     ...sessionRouteHints(params.location),
     face,
     ...(params.shortId && params.shortId.length > 8 ? { shortId: params.shortId } : {}),
@@ -471,6 +472,8 @@ export async function loadChatRoute(
     return {
       kind: "session",
       sessionKey: cached.sessionKey,
+      // The connection-bound handoff has already validated this agent scope.
+      agentId: target.agentId,
       ...sessionRouteHints(routeLocation),
       face,
       ...(target.shortId.length > 8 ? { shortId: target.shortId } : {}),

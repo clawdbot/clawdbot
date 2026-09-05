@@ -68,6 +68,7 @@ describe("loadChatRoute", () => {
     expect(redirected).toEqual({
       kind: "session",
       sessionKey,
+      agentId: "main",
       draft: "ship",
       face: "chat",
       canonicalLocation: {
@@ -89,7 +90,13 @@ describe("loadChatRoute", () => {
         "chat",
         signal,
       ),
-    ).resolves.toEqual({ kind: "session", sessionKey, draft: "ship", face: "chat" });
+    ).resolves.toEqual({
+      kind: "session",
+      sessionKey,
+      agentId: "main",
+      draft: "ship",
+      face: "chat",
+    });
     expect(list).not.toHaveBeenCalled();
     expect(request).toHaveBeenCalledOnce();
   });
@@ -131,6 +138,7 @@ describe("loadChatRoute", () => {
     ).resolves.toEqual({
       kind: "session",
       sessionKey: target.key,
+      agentId: "main",
       draft: undefined,
       face: "chat",
       shortId: "123456780a",
@@ -199,6 +207,7 @@ describe("loadChatRoute", () => {
       ).resolves.toEqual({
         kind: "session",
         sessionKey: expectedRow?.key,
+        agentId: candidate.agentId,
         draft: "ship",
         focusComposer: true,
         face: "dashboard",

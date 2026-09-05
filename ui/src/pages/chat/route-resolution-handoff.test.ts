@@ -37,6 +37,7 @@ describe("session route navigation handoffs", () => {
       expect(loaded).toMatchObject({
         kind: "session",
         sessionKey: storedRow.key,
+        agentId: "roboclaw",
         canonicalLocation: {
           // Canonicalizes to the same short reference every other surface links to.
           pathname: `/${face}/roboclaw/default-mode-with-rare-surprises-12345678`,
@@ -47,7 +48,12 @@ describe("session route navigation handoffs", () => {
       }
       await expect(
         loadChatRoute(context, loaded.canonicalLocation, face, new AbortController().signal),
-      ).resolves.toMatchObject({ kind: "session", sessionKey: storedRow.key, face });
+      ).resolves.toMatchObject({
+        kind: "session",
+        sessionKey: storedRow.key,
+        agentId: "roboclaw",
+        face,
+      });
       expect(request).toHaveBeenCalledExactlyOnceWith("sessions.resolve", {
         reference: {
           key: "agent:roboclaw:default-mode-with-rare-surprises",
