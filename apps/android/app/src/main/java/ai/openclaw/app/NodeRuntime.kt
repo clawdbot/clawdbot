@@ -3081,6 +3081,8 @@ class NodeRuntime private constructor(
     position: ChatReaderPosition,
   ) = chatReaderPositionStore.save(binding, position)
 
+  internal suspend fun clearChatReaderPosition(binding: ChatReaderPositionBinding) = chatReaderPositionStore.clear(binding)
+
   suspend fun listBackgroundTasks(agentId: String): List<BackgroundTask> = chat.listBackgroundTasks(agentId)
 
   suspend fun getBackgroundTask(taskId: String): BackgroundTask = chat.getBackgroundTask(taskId)

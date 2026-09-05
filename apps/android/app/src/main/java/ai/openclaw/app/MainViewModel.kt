@@ -679,6 +679,8 @@ class MainViewModel private constructor(
     position: ChatReaderPosition,
   ) = ensureRuntime().saveChatReaderPosition(binding, position)
 
+  internal suspend fun clearChatReaderPosition(binding: ChatReaderPositionBinding) = ensureRuntime().clearChatReaderPosition(binding)
+
   val execApprovals: StateFlow<List<GatewayExecApprovalSummary>> = runtimeState(initial = emptyList()) { it.execApprovals }
   val execApprovalsRefreshing: StateFlow<Boolean> = runtimeState(initial = false) { it.execApprovalsRefreshing }
   val execApprovalsErrorText: StateFlow<String?> = runtimeState(initial = null) { it.execApprovalsErrorText }

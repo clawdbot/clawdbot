@@ -153,6 +153,13 @@ internal class ChatReaderPositionStore(
     }
   }
 
+  suspend fun clear(binding: ChatReaderPositionBinding) {
+    val state = database()
+    fence.save(binding) {
+      state.readerPositionDao().deleteSession(binding.gatewayId, binding.sessionKey)
+    }
+  }
+
   suspend fun deleteSession(
     gatewayId: String,
     sessionKey: String,

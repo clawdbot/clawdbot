@@ -26,21 +26,22 @@ class ChatReaderScrollControllerTest {
   fun cancellingViewportDebounceFlushesLatestPosition() =
     runTest {
       val expected = ChatReaderPosition(messageId = "message-1", itemOffset = 37)
+      val expectedWrite = ChatReaderPositionWrite.Save(expected)
       val positions =
         flow {
-          emit(true to expected)
+          emit(true to expectedWrite)
           awaitCancellation()
         }
-      val saved = mutableListOf<ChatReaderPosition>()
+      val saved = mutableListOf<ChatReaderPositionWrite>()
       val collector =
         launch(start = CoroutineStart.UNDISPATCHED) {
-          collectChatReaderPositionSaves(positions) { position -> saved += position }
+          collectChatReaderPositionSaves(positions) { write -> saved += write }
         }
 
       yield()
       collector.cancelAndJoin()
 
-      assertEquals(listOf(expected), saved)
+      assertEquals(listOf(expectedWrite), saved)
     }
 
   @Test
@@ -140,6 +141,7 @@ class ChatReaderScrollControllerTest {
     val timeline = activeTimeline(user("user-1"), stream = "partial reply")
 
     assertNull(timeline.readerPosition(index = 0, offset = 21))
+    assertEquals(ChatReaderPositionWrite.Clear, timeline.readerPositionWrite(index = 0, offset = 21))
   }
 
   @Test

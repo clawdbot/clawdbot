@@ -89,6 +89,16 @@ internal data class ChatReaderTransition(
   val animated: Boolean = false,
 )
 
+internal sealed interface ChatReaderPositionWrite {
+  data class Save(
+    val position: ChatReaderPosition,
+  ) : ChatReaderPositionWrite
+
+  data object Clear : ChatReaderPositionWrite
+
+  data object None : ChatReaderPositionWrite
+}
+
 internal data class ChatReaderScrollController(
   val listState: LazyListState,
   val showJumpToLatest: Boolean,
@@ -107,6 +117,7 @@ internal fun rememberChatReaderScrollController(
   gatewayId: String? = null,
   loadPosition: suspend (String, String) -> ChatReaderPositionBinding? = { _, _ -> null },
   savePosition: suspend (ChatReaderPositionBinding, ChatReaderPosition) -> Unit = { _, _ -> },
+  clearPosition: suspend (ChatReaderPositionBinding) -> Unit = {},
 ): ChatReaderScrollController {
   val listState = rememberLazyListState()
   val scope = rememberCoroutineScope()
@@ -114,6 +125,7 @@ internal fun rememberChatReaderScrollController(
   val currentTimeline by rememberUpdatedState(timeline)
   val currentLoadPosition by rememberUpdatedState(loadPosition)
   val currentSavePosition by rememberUpdatedState(savePosition)
+  val currentClearPosition by rememberUpdatedState(clearPosition)
   val readerStateSaver = remember(gatewayId, sessionKey) { createChatReaderStateSaver(sessionKey) }
   var readerState by
     rememberSaveable(gatewayId, sessionKey, stateSaver = readerStateSaver) {
@@ -204,18 +216,22 @@ internal fun rememberChatReaderScrollController(
     collectChatReaderPositionSaves(
       positions =
         snapshotFlow {
-          val position =
+          val write =
             if (positionLoaded && readerState.initialized && applyingScrollCount == 0) {
-              currentTimeline.readerPosition(
-                index = listState.firstVisibleItemIndex,
-                offset = listState.firstVisibleItemScrollOffset,
-              )
+              val index = listState.firstVisibleItemIndex
+              currentTimeline.readerPositionWrite(index, listState.firstVisibleItemScrollOffset)
             } else {
-              null
+              ChatReaderPositionWrite.None
             }
-          listState.isScrollInProgress to position
+          listState.isScrollInProgress to write
         },
-      save = { position -> currentSavePosition(binding, position) },
+      persist = { write ->
+        when (write) {
+          is ChatReaderPositionWrite.Save -> currentSavePosition(binding, write.position)
+          ChatReaderPositionWrite.Clear -> currentClearPosition(binding)
+          ChatReaderPositionWrite.None -> Unit
+        }
+      },
     )
   }
 
@@ -262,25 +278,28 @@ internal fun rememberChatReaderScrollController(
 }
 
 internal suspend fun collectChatReaderPositionSaves(
-  positions: Flow<Pair<Boolean, ChatReaderPosition?>>,
-  save: suspend (ChatReaderPosition) -> Unit,
+  positions: Flow<Pair<Boolean, ChatReaderPositionWrite>>,
+  persist: suspend (ChatReaderPositionWrite) -> Unit,
 ) {
-  var pendingPosition: ChatReaderPosition? = null
+  var pendingWrite: ChatReaderPositionWrite? = null
   try {
-    positions.collectLatest { (scrolling, position) ->
-      pendingPosition = position
-      position ?: return@collectLatest
+    positions.collectLatest { (scrolling, write) ->
+      if (write == ChatReaderPositionWrite.None) {
+        pendingWrite = null
+        return@collectLatest
+      }
+      pendingWrite = write
       if (scrolling) delay(250)
       withContext(NonCancellable) {
-        val saved = runCatching { save(position) }.isSuccess
-        if (saved && pendingPosition == position) pendingPosition = null
+        val saved = runCatching { persist(write) }.isSuccess
+        if (saved && pendingWrite == write) pendingWrite = null
       }
     }
   } finally {
-    pendingPosition?.let { position ->
+    pendingWrite?.let { write ->
       // Composition disposal must flush the last observed viewport even when it
       // cancels the debounce before the settled save begins.
-      withContext(NonCancellable) { runCatching { save(position) } }
+      withContext(NonCancellable) { runCatching { persist(write) } }
     }
   }
 }
@@ -456,6 +475,14 @@ internal fun ChatTimeline.readerPosition(
     messageVersion = stableMessageVersion(message),
   )
 }
+
+internal fun ChatTimeline.readerPositionWrite(
+  index: Int,
+  offset: Int,
+): ChatReaderPositionWrite =
+  readerPosition(index, offset)?.let { ChatReaderPositionWrite.Save(it) }
+    ?: ChatReaderPositionWrite.Clear.takeIf { index == latestContentIndex }
+    ?: ChatReaderPositionWrite.None
 
 private fun ChatTimeline.indexOfMessage(id: String): Int? =
   items

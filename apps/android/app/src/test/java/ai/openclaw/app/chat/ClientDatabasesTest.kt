@@ -89,6 +89,23 @@ class ClientDatabasesTest {
     }
 
   @Test
+  fun clearingCurrentReaderBindingKeepsItActiveForLaterSaves() =
+    runTest {
+      val names = databaseNames()
+      withDatabases(names) { databases ->
+        val store = databases.readerPositionStore()
+        val binding = store.bind("gateway-a", "main")
+        store.save(binding, ChatReaderPosition("message-a", 37))
+
+        store.clear(binding)
+        assertNull(databases.clientStateDatabase().readerPositionDao().load("gateway-a", "main"))
+        val latest = ChatReaderPosition("message-b", 11)
+        store.save(binding, latest)
+        assertEquals(latest, store.bind("gateway-a", "main").position)
+      }
+    }
+
+  @Test
   fun pendingInitializationDoesNotHoldReaderFenceAgainstRecovery() =
     runTest {
       val names = databaseNames()

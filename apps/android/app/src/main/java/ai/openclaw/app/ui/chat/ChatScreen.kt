@@ -738,6 +738,7 @@ fun ChatScreen(
       historyLoading = historyLoading,
       loadReaderPosition = viewModel::loadChatReaderPosition,
       saveReaderPosition = viewModel::saveChatReaderPosition,
+      clearReaderPosition = viewModel::clearChatReaderPosition,
       activeRunCount = selectedActiveRun.count,
       activeRunId = selectedActiveRun.runId,
       activeRunClockKey = selectedActiveRun.clockKey,
@@ -1333,6 +1334,7 @@ private fun ChatMessageList(
   historyLoading: Boolean,
   loadReaderPosition: suspend (String, String) -> ChatReaderPositionBinding,
   saveReaderPosition: suspend (ChatReaderPositionBinding, ChatReaderPosition) -> Unit,
+  clearReaderPosition: suspend (ChatReaderPositionBinding) -> Unit,
   activeRunCount: Int,
   activeRunId: String?,
   activeRunClockKey: String?,
@@ -1410,6 +1412,7 @@ private fun ChatMessageList(
       historyLoading = historyLoading,
       loadPosition = loadReaderPosition,
       savePosition = saveReaderPosition,
+      clearPosition = clearReaderPosition,
     )
   DisposableEffect(sessionKey, turnRecapResolver) {
     onDispose { turnRecapResolver.abandonActiveWatch(sessionKey) }
