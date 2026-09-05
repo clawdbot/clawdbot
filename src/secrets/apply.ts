@@ -738,12 +738,15 @@ function scrubEnvFiles(params: {
     return envRawByPath;
   }
   const knownSecretEnvVars = new Set(listKnownSecretEnvVarNames());
-  const envRefValuesAwaitingSource = new Map(
-    params.plannedTargets.flatMap((target) => {
-      const value = target.ref.source === "env" ? params.env[target.ref.id] : undefined;
-      return isNonEmptyString(value) ? [[target.ref.id, value] as [string, string]] : [];
-    }),
-  );
+  const envRefValuesAwaitingSource = new Map<string, string>();
+  for (const target of params.plannedTargets) {
+    if (target.ref.source === "env") {
+      const value = params.env[target.ref.id];
+      if (isNonEmptyString(value)) {
+        envRefValuesAwaitingSource.set(target.ref.id, value);
+      }
+    }
+  }
   for (const envPath of listSecretsDotEnvPaths({
     configPath: params.configPath,
     stateDir: params.stateDir,
