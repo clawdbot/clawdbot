@@ -46,15 +46,10 @@ function collectInto(
  * per-index paths an include boundary could not own positionally.
  */
 export function collectChangedConfigPaths(base: unknown, next: unknown): ChangedConfigPaths {
-  if (isDeepStrictEqual(base, next)) {
-    return { paths: [], rootChanged: false };
-  }
-  if (!isRecord(base) || !isRecord(next)) {
-    return { paths: [], rootChanged: true };
-  }
   const paths: string[][] = [];
   collectInto(base, next, [], paths);
-  return { paths, rootChanged: paths.some((entry) => entry.length === 0) };
+  const rootChanged = paths.some((entry) => entry.length === 0);
+  return { paths: rootChanged ? [] : paths, rootChanged };
 }
 
 function isPathPrefix(prefix: readonly string[], candidate: readonly string[]): boolean {

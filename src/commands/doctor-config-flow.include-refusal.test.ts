@@ -16,10 +16,42 @@ vi.mock("../../packages/terminal-core/src/note.js", () => ({
   note: noteMock,
 }));
 
-describe("doctor --fix with an include-owned repair beside a root repair", () => {
+describe("doctor --fix include write ownership", () => {
   afterEach(() => {
     noteMock.mockClear();
     closeOpenClawStateDatabaseForTest();
+  });
+
+  it("writes a nested agent repair to its fragment and preserves both ancestor files", async () => {
+    await withTempHome(async (home) => {
+      await withEnvOverride({ OPENCLAW_DISABLE_BUNDLED_PLUGINS: "1" }, async () => {
+        const configPath = await writeOpenClawConfig(home, {
+          agents: { entries: { main: { $include: "./config/main-parent.json5" } } },
+          gateway: { mode: "local" },
+        });
+        const fragmentDir = path.join(path.dirname(configPath), "config");
+        await fs.mkdir(fragmentDir);
+        const parentPath = path.join(fragmentDir, "main-parent.json5");
+        const parentRaw = '{ /* keep this delegation */ $include: "./main.json5" }\n';
+        await fs.writeFile(parentPath, parentRaw);
+        const fragmentPath = path.join(fragmentDir, "main.json5");
+        await fs.writeFile(fragmentPath, JSON.stringify({ sandbox: { perSession: true } }));
+        const rootRaw = await fs.readFile(configPath, "utf-8");
+
+        const ctx = await prepareDoctorContext(configPath);
+        expect(ctx.configResult.shouldWriteConfig).toBe(true);
+        expect(ctx.configResult.skipWizardMetadataForIncludeWrite).toBe(true);
+        await runWriteConfigHealth(ctx, { runPostWriteRepairs: false });
+
+        expect(ctx.configWriteRefusal).toBeUndefined();
+        expect(ctx.configResultWriteCommitted).toBe(true);
+        expect(JSON.parse(await fs.readFile(fragmentPath, "utf-8"))).toEqual({
+          sandbox: { scope: "session" },
+        });
+        await expect(fs.readFile(configPath, "utf-8")).resolves.toBe(rootRaw);
+        await expect(fs.readFile(parentPath, "utf-8")).resolves.toBe(parentRaw);
+      });
+    });
   });
 
   it("records the refusal and leaves the root and the included file untouched", async () => {

@@ -222,13 +222,7 @@ function pathOverlapsAny(path: string[], candidates: readonly string[][] | undef
 }
 
 function isIncludeOwnedPath(rootAuthoredConfig: unknown, path: string[]): boolean {
-  return collectIncludeOwnedPaths(rootAuthoredConfig).some((includePath) => {
-    const overlapsInclude = pathStartsWith(path, includePath) || pathStartsWith(includePath, path);
-    if (!overlapsInclude) {
-      return false;
-    }
-    return !isMutableSiblingPathAtInclude(rootAuthoredConfig, includePath, path);
-  });
+  return findOverlappingIncludeOwnedPath(rootAuthoredConfig, path) !== undefined;
 }
 
 function findOverlappingIncludeOwnedPath(

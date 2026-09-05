@@ -106,8 +106,8 @@ export type ConfigIncludeOwnership = {
   path: readonly string[];
   kind: "single" | "multiple";
   hasSiblingOverrides: boolean;
-  /** Whether the authored include sits at or below an actual array entry. */
-  hasArrayAncestor: boolean;
+  /** Whether the authored include sits at or below an actual array entry; absent means false. */
+  hasArrayAncestor?: boolean;
   targetPath?: string;
   targetPaths?: readonly string[];
 };

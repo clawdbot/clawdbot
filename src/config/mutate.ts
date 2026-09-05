@@ -49,7 +49,7 @@ import {
   type ConfigWriteOptions,
   type ConfigWriteResult,
 } from "./io.js";
-import { rejectConfigNonFiniteNumbers } from "./io.read-helpers.js";
+import { containsConfigIncludeDirective, rejectConfigNonFiniteNumbers } from "./io.read-helpers.js";
 import { warnIfJSON5CommentsWillBeStripped } from "./json5-comments.js";
 import { ConfigMutationConflictError } from "./mutation-conflict.js";
 import type { ConfigMutationBase } from "./mutation-types.js";
@@ -482,19 +482,6 @@ export function configWriteTargetsIncludeBoundary(params: {
       configPath: params.snapshot.path,
       includePath: includeWrite.includePath,
     })
-  );
-}
-
-function containsConfigIncludeDirective(value: unknown): boolean {
-  if (Array.isArray(value)) {
-    return value.some((item) => containsConfigIncludeDirective(item));
-  }
-  if (!isRecord(value)) {
-    return false;
-  }
-  return (
-    Object.hasOwn(value, INCLUDE_KEY) ||
-    Object.values(value).some((item) => containsConfigIncludeDirective(item))
   );
 }
 

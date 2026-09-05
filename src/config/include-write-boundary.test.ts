@@ -8,7 +8,6 @@ const alphaInclude = {
   path: ["agents", "entries", "alpha"],
   kind: "single" as const,
   hasSiblingOverrides: false,
-  hasArrayAncestor: false,
   targetPath: "/cfg/alpha.json5",
 };
 
