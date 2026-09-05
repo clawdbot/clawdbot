@@ -11,7 +11,7 @@ vi.mock("../../process/exec.js", () => ({
   spawnCommand: spawnCommandMock,
 }));
 
-import { execOpenPath, resolveOpenPathCommand } from "./open-path.js";
+import { execOpenPath, isHeadlessOpenPathError, resolveOpenPathCommand } from "./open-path.js";
 
 function fakeChild(result: Promise<unknown>) {
   const unref = vi.fn();
@@ -160,5 +160,44 @@ describe("execOpenPath", () => {
     const expectedMessage = `Command failed with exit code 3: xdg-open: ${"x".repeat(4_095)}`;
     expect(message).toBe(expectedMessage);
     expect(message).toHaveLength(expectedMessage.length);
+  });
+});
+
+describe("isHeadlessOpenPathError", () => {
+  it("detects xdg-open no method available diagnostic", () => {
+    expect(
+      isHeadlessOpenPathError("xdg-open: no method available for opening '/tmp/workspace'"),
+    ).toBe(true);
+  });
+
+  it("detects missing xdg-open command (ENOENT)", () => {
+    expect(
+      isHeadlessOpenPathError(
+        "Command failed with ENOENT: xdg-open /tmp/workspace\nspawn xdg-open ENOENT",
+      ),
+    ).toBe(true);
+  });
+
+  it("returns false for xdg-open permission errors", () => {
+    expect(
+      isHeadlessOpenPathError(
+        "Command failed with EACCES: xdg-open /tmp/workspace\nspawn xdg-open EACCES",
+      ),
+    ).toBe(false);
+  });
+
+  it("returns false for missing launcher errors on other platforms", () => {
+    expect(
+      isHeadlessOpenPathError("Command failed with ENOENT: open /tmp/workspace\nspawn open ENOENT"),
+    ).toBe(false);
+    expect(
+      isHeadlessOpenPathError(
+        "Command failed with ENOENT: powershell.exe /tmp/workspace\nspawn powershell.exe ENOENT",
+      ),
+    ).toBe(false);
+  });
+
+  it("returns false for unrelated errors", () => {
+    expect(isHeadlessOpenPathError("Permission denied: /tmp/workspace")).toBe(false);
   });
 });

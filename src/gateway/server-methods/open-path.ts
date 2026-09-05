@@ -129,7 +129,10 @@ export function formatOpenPathError(error: unknown): string {
 }
 
 export function isHeadlessOpenPathError(message: string): boolean {
-  return message.includes("xdg-open") && message.includes("no method available");
+  return (
+    message.includes("xdg-open") &&
+    (message.includes("no method available") || message.includes("ENOENT"))
+  );
 }
 
 export function sanitizePathForLog(targetPath: string): string {
