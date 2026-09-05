@@ -283,6 +283,13 @@ function prepareGoogleChatIR(text: string): {
   };
 }
 
+function isGoogleChatLinkHref(href: string): boolean {
+  // Google Chat serializes any href as a native `<href|label>` link; collapse
+  // non-web schemes (e.g. file:) to label text so they cannot become
+  // clickable/inert native links. Mirrors Telegram's isTelegramRichLinkHref.
+  return /^(?:https?:\/\/|mailto:|tel:|#)/i.test(href);
+}
+
 function renderGoogleChatIR(ir: MarkdownIR, markers: GoogleChatMarkers): string {
   const rendered = renderMarkdownWithMarkers(
     ir,
@@ -303,6 +310,11 @@ function renderGoogleChatIR(ir: MarkdownIR, markers: GoogleChatMarkers): string 
         const href = link.href.trim();
         const label = value.slice(link.start, link.end);
         if (!href || !label) {
+          return null;
+        }
+        // Collapse non-allowlist schemes (e.g. file:, javascript:, data:) to
+        // label text before native-link construction. Mirrors Telegram's gate.
+        if (!isGoogleChatLinkHref(href)) {
           return null;
         }
         const labelHasStyles = ir.styles.some(

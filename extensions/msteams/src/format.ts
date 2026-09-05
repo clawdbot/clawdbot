@@ -34,8 +34,18 @@ const MSTEAMS_MARKERS = {
   strikethrough: { open: "~~", close: "~~" },
 } as const;
 
+function isMSTeamsLinkHref(href: string): boolean {
+  // MSTeams serializes any href into markdown `[label](href)`; collapse
+  // non-web schemes (e.g. file:) to label text so they cannot become
+  // clickable/inert links. Mirrors Telegram's isTelegramRichLinkHref.
+  return /^(?:https?:\/\/|mailto:|tel:|#)/i.test(href);
+}
+
 function createTokenPrefix(text: string, label: string): string {
-  const normalized = markdownToIR(text, { autolink: false, linkify: false }).text;
+  // With these parser options, the leading marker must be literal or entity-decoded.
+  const normalized = /[\u{E000}&]/u.test(text)
+    ? markdownToIR(text, { autolink: false, linkify: false }).text
+    : "";
   let prefix: string;
   do {
     prefix = `\u{E000}${label}-${randomUUID()}\u{E001}`;
@@ -503,10 +513,6 @@ function protectMSTeamsCode(
   };
 }
 
-function isMSTeamsLinkHref(href: string): boolean {
-  return /^(?:https?:\/\/|mailto:|tel:|#)/i.test(href);
-}
-
 export function formatMSTeamsMarkdown(markdown: string, tableMode: MarkdownTableMode): string {
   const rawTables: string[] = [];
   const escapedMarkdown: string[] = [];
@@ -554,9 +560,9 @@ export function formatMSTeamsMarkdown(markdown: string, tableMode: MarkdownTable
       escapeText: (text) => text,
       buildLink: (link) => {
         const href = link.href.trim();
-        // MSTeams serializes any href into markdown `[label](href)`; collapse
-        // non-web schemes (e.g. file:) to label text so they cannot become
-        // clickable/inert links. Mirrors Telegram's isTelegramRichLinkHref.
+        // Collapse non-allowlist schemes (e.g. file:, javascript:, data:) to
+        // label text before native markdown-link construction. Mirrors
+        // Telegram's rich-link gate.
         if (!isMSTeamsLinkHref(href)) {
           return null;
         }
