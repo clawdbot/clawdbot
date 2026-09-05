@@ -805,6 +805,13 @@ type ToolResultReplacement = {
   message: AgentMessage;
 };
 
+type MeasuredToolResultBranchEntry = {
+  readonly entry: ToolResultBranchEntry;
+  readonly textLength: number;
+};
+
+type MeasuredToolResultReplacement = Readonly<ToolResultReplacement & { textLength: number }>;
+
 function getToolResultProjectionBaseKey(message: AgentMessage): string | undefined {
   if (message.role !== "toolResult") {
     return undefined;
@@ -1107,15 +1114,15 @@ function toolResultTextMatches(left: string[], right: string[]): boolean {
 }
 
 function buildAggregateToolResultReplacements(params: {
-  branch: ToolResultBranchEntry[];
+  branch: MeasuredToolResultBranchEntry[];
   spillSourceBranch?: ToolResultBranchEntry[];
   aggregateBudgetChars: number;
   minKeepChars?: number;
   protectedEntryIds?: Set<string>;
-}): { replacements: ToolResultReplacement[]; pressureExceeded: boolean } {
+}): { replacements: MeasuredToolResultReplacement[]; pressureExceeded: boolean } {
   const minKeepChars = params.minKeepChars ?? MIN_KEEP_CHARS;
   const candidates = params.branch
-    .flatMap((entry, index) => {
+    .flatMap(({ entry, textLength }, index) => {
       const message = entry.message;
       return entry.type === "message" && message?.role === "toolResult"
         ? [
@@ -1123,7 +1130,7 @@ function buildAggregateToolResultReplacements(params: {
               entryId: entry.id,
               message,
               spillSourceMessage: params.spillSourceBranch?.[index]?.message ?? message,
-              textLength: getToolResultTextBudget(message),
+              textLength,
               aggregateEligible: entry.aggregateEligible !== false,
               protectedByTrailingBatch: params.protectedEntryIds?.has(entry.id) ?? false,
             },
@@ -1149,7 +1156,7 @@ function buildAggregateToolResultReplacements(params: {
   }
 
   let remainingReduction = totalChars - params.aggregateBudgetChars;
-  const replacements = new Map<string, ToolResultReplacement>();
+  const replacements = new Map<string, MeasuredToolResultReplacement>();
   // Frozen prompt bytes are immutable. Recover only from unsent tail results;
   // allow budget overflow when frozen history alone exceeds the aggregate cap.
   const recoveryCandidates = candidates.filter(
@@ -1162,8 +1169,8 @@ function buildAggregateToolResultReplacements(params: {
       if (remainingReduction <= 0) {
         break;
       }
-      const baseMessage = replacements.get(candidate.entryId)?.message ?? candidate.message;
-      const baseTextLength = getToolResultTextBudget(baseMessage);
+      const baseTextLength =
+        replacements.get(candidate.entryId)?.textLength ?? candidate.textLength;
       if (!clear && baseTextLength <= minTruncatedTextChars) {
         continue;
       }
@@ -1192,11 +1199,17 @@ function buildAggregateToolResultReplacements(params: {
           suffix,
         });
       }
-      const actualReduction = Math.max(0, baseTextLength - getToolResultTextBudget(message));
+      const textLength =
+        message === candidate.message ? candidate.textLength : getToolResultTextBudget(message);
+      const actualReduction = Math.max(0, baseTextLength - textLength);
       if (actualReduction <= 0 && (!clear || !spillMarkers)) {
         continue;
       }
-      replacements.set(candidate.entryId, { entryId: candidate.entryId, message });
+      replacements.set(candidate.entryId, {
+        entryId: candidate.entryId,
+        message,
+        textLength,
+      });
       remainingReduction -= actualReduction;
     }
   }
@@ -1265,24 +1278,25 @@ function clearToolResultText(
 }
 
 function applyToolResultReplacementsToBranch(
-  branch: ToolResultBranchEntry[],
-  replacements: ToolResultReplacement[],
-): { branch: ToolResultBranchEntry[]; reducedChars: number } {
+  branch: MeasuredToolResultBranchEntry[],
+  replacements: MeasuredToolResultReplacement[],
+): { branch: MeasuredToolResultBranchEntry[]; reducedChars: number } {
   if (replacements.length === 0) {
     return { branch, reducedChars: 0 };
   }
-  const replacementsById = new Map(replacements.map(({ entryId, message }) => [entryId, message]));
+  const replacementsById = new Map(replacements.map((item) => [item.entryId, item]));
   let reducedChars = 0;
-  const nextBranch = branch.map((entry) => {
-    const message = replacementsById.get(entry.id);
-    if (!message || entry.type !== "message" || !entry.message) {
-      return entry;
+  const nextBranch = branch.map((measured) => {
+    const { entry, textLength } = measured;
+    const replacement = replacementsById.get(entry.id);
+    if (!replacement || entry.type !== "message" || !entry.message) {
+      return measured;
     }
-    reducedChars += Math.max(
-      0,
-      getToolResultTextBudget(entry.message) - getToolResultTextBudget(message),
-    );
-    return { ...entry, message };
+    reducedChars += Math.max(0, textLength - replacement.textLength);
+    return {
+      entry: { ...entry, message: replacement.message },
+      textLength: replacement.textLength,
+    };
   });
   return { branch: nextBranch, reducedChars };
 }
@@ -1301,35 +1315,60 @@ function buildToolResultReplacementPlan(params: {
   aggregatePressureExceeded: boolean;
   oversizedReducibleChars: number;
   aggregateReducibleChars: number;
+  toolResultCount: number;
+  totalToolResultChars: number;
 } {
   const minKeepChars = params.minKeepChars ?? MIN_KEEP_CHARS;
   const protectedEntryIds = params.protectTrailingToolResults
     ? getTrailingToolResultEntryIds(params.branch)
     : undefined;
-  const oversizedReplacements = params.branch.flatMap((entry): ToolResultReplacement[] => {
-    const message = entry.message;
-    if (
-      entry.type !== "message" ||
-      message?.role !== "toolResult" ||
-      getToolResultTextBudget(message) <= params.maxChars
-    ) {
-      return [];
+  let toolResultCount = 0;
+  let totalToolResultChars = 0;
+  // Measurements belong to this synchronous plan, never to mutable messages or
+  // session projection state. Replacement producers supply the next measurement.
+  const measuredBranch = params.branch.map((entry): MeasuredToolResultBranchEntry => {
+    const textLength =
+      entry.type === "message" && entry.message ? getToolResultTextBudget(entry.message) : 0;
+    if (textLength > 0) {
+      toolResultCount += 1;
+      totalToolResultChars += textLength;
     }
-    const suffix = resolveAggregateElisionMarkers(message)?.truncationSuffix;
-    const maxChars = Math.max(params.maxChars, suffix ? estimateToolResultTextChars(suffix(1)) : 0);
-    return [
-      {
-        entryId: entry.id,
-        message: truncateToolResultMessage(message, maxChars, {
-          minKeepChars: protectedEntryIds?.has(entry.id)
-            ? Math.max(minKeepChars, MIN_KEEP_CHARS)
-            : minKeepChars,
-          ...(suffix ? { suffix } : {}),
-        }),
-      },
-    ];
+    return { entry, textLength };
   });
-  const oversizedPhase = applyToolResultReplacementsToBranch(params.branch, oversizedReplacements);
+  const oversizedReplacements = measuredBranch.flatMap(
+    ({ entry, textLength }): MeasuredToolResultReplacement[] => {
+      const message = entry.message;
+      if (
+        entry.type !== "message" ||
+        message?.role !== "toolResult" ||
+        textLength <= params.maxChars
+      ) {
+        return [];
+      }
+      const suffix = resolveAggregateElisionMarkers(message)?.truncationSuffix;
+      const maxChars = Math.max(
+        params.maxChars,
+        suffix ? estimateToolResultTextChars(suffix(1)) : 0,
+      );
+      const replacementMessage = truncateToolResultMessage(message, maxChars, {
+        minKeepChars: protectedEntryIds?.has(entry.id)
+          ? Math.max(minKeepChars, MIN_KEEP_CHARS)
+          : minKeepChars,
+        ...(suffix ? { suffix } : {}),
+      });
+      return [
+        {
+          entryId: entry.id,
+          message: replacementMessage,
+          textLength:
+            replacementMessage === message
+              ? textLength
+              : getToolResultTextBudget(replacementMessage),
+        },
+      ];
+    },
+  );
+  const oversizedPhase = applyToolResultReplacementsToBranch(measuredBranch, oversizedReplacements);
   const aggregatePlan = buildAggregateToolResultReplacements({
     branch: oversizedPhase.branch,
     spillSourceBranch: params.branch,
@@ -1343,13 +1382,20 @@ function buildToolResultReplacementPlan(params: {
   );
 
   return {
-    branch: aggregatePhase.branch,
-    replacements: [...oversizedReplacements, ...aggregatePlan.replacements],
+    branch:
+      aggregatePhase.branch === measuredBranch
+        ? params.branch
+        : aggregatePhase.branch.map(({ entry }) => entry),
+    replacements: [...oversizedReplacements, ...aggregatePlan.replacements].map(
+      ({ entryId, message }) => ({ entryId, message }),
+    ),
     oversizedReplacementCount: oversizedReplacements.length,
     aggregateReplacementCount: aggregatePlan.replacements.length,
     aggregatePressureExceeded: aggregatePlan.pressureExceeded,
     oversizedReducibleChars: oversizedPhase.reducedChars,
     aggregateReducibleChars: aggregatePhase.reducedChars,
+    toolResultCount,
+    totalToolResultChars,
   };
 }
 
@@ -1412,19 +1458,6 @@ export function estimateToolResultReductionPotential(params: {
   const { maxChars, aggregateBudgetChars } = resolveToolResultBudgets(params);
   const branch = buildToolResultPlanningBranch(params.messages);
 
-  let toolResultCount = 0;
-  let totalToolResultChars = 0;
-  for (const { message: msg } of branch) {
-    if (msg.role !== "toolResult") {
-      continue;
-    }
-    const textLength = getToolResultTextBudget(msg);
-    if (textLength <= 0) {
-      continue;
-    }
-    toolResultCount += 1;
-    totalToolResultChars += textLength;
-  }
   const plan = buildToolResultReplacementPlan({
     branch,
     maxChars,
@@ -1436,8 +1469,8 @@ export function estimateToolResultReductionPotential(params: {
   return {
     maxChars,
     aggregateBudgetChars,
-    toolResultCount,
-    totalToolResultChars,
+    toolResultCount: plan.toolResultCount,
+    totalToolResultChars: plan.totalToolResultChars,
     oversizedCount: plan.oversizedReplacementCount,
     oversizedReducibleChars: plan.oversizedReducibleChars,
     aggregateReducibleChars: plan.aggregateReducibleChars,
