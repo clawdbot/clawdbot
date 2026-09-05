@@ -16,5 +16,7 @@ export type ProviderRuntimeModel = Omit<Model, "compat"> & {
   maxTokensSource?: "configured" | "discovered";
   params?: Record<string, unknown>;
   requestTimeoutMs?: number;
+  /** Provider/host-prepared tool discovery preference for this attempt; never persisted. */
+  toolSearchMode?: "tools" | false;
   mediaInput?: ModelMediaInputConfig;
 };

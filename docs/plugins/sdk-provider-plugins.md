@@ -827,6 +827,17 @@ catalog, API-key auth, and dynamic model resolution.
       - `resolveThinkingProfile(ctx)` receives the selected `provider`, `modelId`, optional merged `reasoning` catalog hint, and optional merged model `compat` facts. Use `compat` only to select the provider's thinking UI/profile.
       - `resolveSystemPromptContribution` lets a provider inject cache-aware system-prompt guidance for a model family. Prefer it over the legacy plugin-wide `before_prompt_build` hook when the behavior belongs to one provider/model family and should preserve the stable/dynamic cache split.
 
+      Bundled and trusted official plugins can also export
+      `resolveToolSearchMode(ctx)` from their lightweight `provider-policy-api`
+      artifact. The context contains the final `provider`, `modelId`, `api`, and
+      optional `baseUrl`; its type is exported from
+      `openclaw/plugin-sdk/provider-model-types`. Return `"tools"` to prefer
+      structured Tool Search, `false` to veto the managed-local-service default,
+      or `undefined` to leave that decision to the host. The host records the
+      result on the resolved runtime model rather than writing configuration.
+      Explicit `tools.toolSearch` settings take precedence. This hook changes
+      schema exposure, not tool permissions or availability.
+
     </Accordion>
 
   </Step>

@@ -19,9 +19,15 @@ not depend on `tools.toolSearch`.
 For the generic OpenClaw runtime that exposes a QuickJS-WASI `exec`/`wait`
 surface instead of Tool Search controls, see [Code Mode](/tools/code-mode).
 
+Local inference routes use structured Tool Search automatically when
+`tools.toolSearch` is unset. This defers tool schemas while keeping the
+policy-approved capabilities available. It does not enable lean mode or remove
+optional tools. The default follows the active model for each run, including
+model switches and fallbacks, without changing another agent's settings.
+
 When enabled for OpenClaw runs, the model automatically receives a bounded
-directory of the available trusted tool names and descriptions. By default, it
-also receives one `tool_search_code` tool, plus any direct-only tools whose
+directory of the available trusted tool names and descriptions. Explicitly
+setting `tools.toolSearch: true` selects one `tool_search_code` tool, plus any direct-only tools whose
 structured results cannot cross the compact bridge. The code tool runs a short
 JavaScript body in an isolated Node subprocess with an `openclaw.tools` bridge:
 
@@ -93,8 +99,9 @@ for the current run while OpenClaw tools, plugin tools, and MCP tools can be
 compacted behind the directory catalog. A direct call to an exact hidden
 directory name is hydrated from that same authorized catalog before execution.
 
-All modes are experimental. Prefer direct tool exposure for small OpenClaw tool
-catalogs, and prefer the Codex-native stable surfaces for Codex harness runs.
+All modes are experimental. Local inference defaults to structured `tools` mode;
+other routes keep direct tool exposure unless configured otherwise. Codex harness
+runs use their native surfaces.
 
 There is no separate source-selection config. When Tool Search is enabled, the
 catalog includes catalog-eligible OpenClaw, MCP, and client tools after normal
@@ -118,9 +125,9 @@ Tool Search changes the shape:
   direct-only tools
 - during the turn: the model can load remaining schemas as needed
 
-Direct tool exposure is still the right default for small catalogs. Tool Search
-is best when one run can see many tools, especially from MCP servers or
-client-provided app tools.
+Tool Search is useful when one run can see many tools, especially from MCP
+servers or client-provided app tools. Local inference uses it by default to
+reduce the prompt that the model must process before responding.
 
 The capability directory is sorted by tool name, limited to 18,000 characters,
 and built from the already policy-filtered catalog. OpenClaw reuses the
@@ -296,7 +303,19 @@ Normal OpenClaw behavior still applies to final calls:
 
 ## Config
 
-Enable Tool Search for OpenClaw runs with the default code bridge:
+With `tools.toolSearch` unset, local Ollama models, LM Studio, and managed local
+services use structured `tools` mode with a default search limit of 5 and a
+maximum of 10. Known hosted Ollama routes (cloud model tags, the cloud provider,
+or the hosted endpoint) are excluded. An untagged alias served by an Ollama
+daemon inherits the daemon's Tool Search default even if that alias forwards to
+a hosted model. Other providers are not classified from model names or a
+loopback URL alone.
+
+An explicit `tools.toolSearch` value takes precedence, including `false`.
+Setting `agents.defaults.experimental.localModelLean: false` restores optional
+tools but does not turn off automatic Tool Search.
+
+Enable Tool Search explicitly for OpenClaw runs with the default code bridge:
 
 ```bash
 openclaw config set tools.toolSearch true

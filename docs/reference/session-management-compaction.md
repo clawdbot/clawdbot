@@ -284,7 +284,7 @@ Two additional guards run outside these paths:
 }
 ```
 
-OpenClaw enforces a built-in reserve for embedded runs and caps it against the active model context window so it cannot consume the whole prompt budget. This keeps small-context local models from entering compaction from the first token while leaving enough headroom for multi-turn housekeeping such as the memory flush.
+OpenClaw enforces a built-in reserve for embedded runs and caps it at one quarter of the active model context window. The default reserve remains 20,000 tokens for windows of 80,000 tokens or larger. Smaller windows retain at least three quarters of their capacity for prompts and conversation, while the reserve leaves room for compaction summaries and housekeeping such as the memory flush.
 
 Set `enabled: false` to disable threshold-driven auto-compaction inside the embedded agent runtime and direct-command post-turn maintenance. OpenClaw's reply preflight and overflow-recovery compaction paths remain available, and manual `/compact` continues to work.
 
@@ -327,17 +327,17 @@ Before auto-compaction happens, OpenClaw can run a silent agentic turn that writ
 
 Config (`agents.defaults.compaction.memoryFlush`), full reference at [/gateway/config-agents](/gateway/config-agents#agents-defaults-compaction):
 
-| Key                         | Default          | Notes                                                                                                                                                  |
-| --------------------------- | ---------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------ |
-| `enabled`                   | `true`           |                                                                                                                                                        |
-| `model`                     | unset            | exact provider/model override for the flush turn only, for example `ollama/qwen3:8b`                                                                   |
-| `softThresholdTokens`       | `4000`           | gap below the compaction threshold that triggers a flush                                                                                               |
-| `forceFlushTranscriptBytes` | unset (disabled) | force a flush once active transcript history reaches this estimated byte size (or string like `"2mb"`), even if token counters are stale; `0` disables |
+| Key                         | Default | Notes                                                                                                                                                  |
+| --------------------------- | ------- | ------------------------------------------------------------------------------------------------------------------------------------------------------ |
+| `enabled`                   | `true`  |                                                                                                                                                        |
+| `model`                     | unset   | exact provider/model override for the flush turn only, for example `ollama/qwen3:8b`                                                                   |
+| `softThresholdTokens`       | `4000`  | gap below the compaction threshold that triggers a flush                                                                                               |
+| `forceFlushTranscriptBytes` | `"2mb"` | force a flush once active transcript history reaches this estimated byte size (or string like `"2mb"`), even if token counters are stale; `0` disables |
 
-For a 32,768-token window, a 20,000-token reserve and a 4,000-token soft margin,
-early flushing starts at 8,768 projected tokens. Blocking token compaction starts
-at 12,768, or later if an applicable server threshold is higher. Between those
-thresholds, flushing can run without blocking the next user turn on compaction.
+For a 32,768-token window, the built-in plan uses an 8,192-token reserve and a
+4,000-token soft margin. Early flushing starts at 20,576 projected tokens. Blocking
+token compaction starts at 24,576, or later if an applicable server threshold is higher. Between those
+thresholds, memory flushing can run without requiring compaction.
 The selected memory provider owns the reserve and flush margin; without a flush
 plan, maintenance still uses the effective compaction reserve. Nonpositive
 thresholds suppress token triggers. Transcript byte guards remain independent.

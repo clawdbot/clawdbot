@@ -737,10 +737,14 @@ Replace model IDs with exact names from `ollama list` or
 
   </Accordion>
 
-  <Accordion title="Lean local model profile">
-    Some local models handle simple prompts but struggle with the full agent
-    tool surface. Limit tools and context before touching global runtime
-    settings:
+  <Accordion title="Small local model profile">
+    Local Ollama models automatically use structured [Tool Search](/tools/tool-search)
+    when `tools.toolSearch` is unset. This keeps optional capabilities available
+    while loading their schemas only when needed. Setup does not enable lean mode.
+    App, interactive CLI, and non-interactive setup use a 32,768-token runtime
+    context, or the model's native window if smaller. The advertised native window
+    is retained separately; known cloud routes keep their hosted context.
+    Bound any explicit context override to what the host can support:
 
     ```json5
     {
@@ -748,9 +752,6 @@ Replace model IDs with exact names from `ollama list` or
         entries: {
           local: {
             default: true,
-            experimental: {
-              localModelLean: true,
-            },
             model: { primary: "ollama/gemma4" },
           },
         },
@@ -768,7 +769,6 @@ Replace model IDs with exact names from `ollama list` or
                 input: ["text"],
                 contextTokens: 32768,
                 params: { num_ctx: 32768 },
-                compat: { supportsTools: false },
               },
             ],
           },
@@ -777,14 +777,15 @@ Replace model IDs with exact names from `ollama list` or
     }
     ```
 
+    Explicit `tools.toolSearch` settings take precedence, including `false`.
+    Tool Search does not change Ollama's context or thinking mode. Ollama thinking
+    defaults to off; an explicit thinking setting can change that independently.
+    If you previously enabled `localModelLean`, set it to `false` to restore
+    optional tools while retaining automatic Tool Search.
+
     Use `compat.supportsTools: false` only when the model or server reliably
-    fails on tool schemas — it trades agent capability for stability.
-    `localModelLean` removes heavyweight browser, cron, message, media-generation,
-    voice, and PDF tools from the direct agent surface unless explicitly required,
-    and puts larger catalogs behind Tool Search. It does not change Ollama's
-    runtime context or thinking mode. Pair it with `params.num_ctx` and
-    `params.thinking: false` for small Qwen-style thinking models that loop or
-    spend their budget on hidden reasoning.
+    fails on tool schemas; it disables tool use entirely. For a deliberately
+    narrower agent, prefer `tools.profile` or a per-agent tool policy.
 
   </Accordion>
 </AccordionGroup>

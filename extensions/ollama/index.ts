@@ -290,12 +290,14 @@ async function discoverAppGuidedOllamaModel(
     ) {
       continue;
     }
-    model = capLocalOllamaModelContext({
-      ...candidate,
-      contextWindow,
-      contextTokens: contextWindow,
-      compat: { ...candidate.compat, supportsTools: true },
-    });
+    model = capLocalOllamaModelContext(
+      {
+        ...candidate,
+        contextWindow,
+        compat: { ...candidate.compat, supportsTools: true },
+      },
+      provider.baseUrl,
+    );
     break;
   }
   if (!model) {
@@ -617,7 +619,9 @@ async function resolveRequestedDynamicOllamaModel(params: {
     showInfo.contextWindow,
     showInfo.capabilities,
   );
-  const model = params.capContextTokens ? capLocalOllamaModelContext(definition) : definition;
+  const model = params.capContextTokens
+    ? capLocalOllamaModelContext(definition, showBaseUrl)
+    : definition;
   return toDynamicOllamaModel({
     provider: params.provider,
     providerConfig: params.providerConfig,

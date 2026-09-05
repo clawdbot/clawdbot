@@ -6,11 +6,32 @@ import type {
   ProviderNormalizeResolvedModelContext,
   ProviderThinkingProfile,
 } from "openclaw/plugin-sdk/plugin-entry";
-import type { ModelProviderConfig } from "openclaw/plugin-sdk/provider-model-types";
-import { OLLAMA_CLOUD_PROVIDER_ID, OLLAMA_DEFAULT_BASE_URL } from "./src/defaults.js";
+import type {
+  ModelProviderConfig,
+  ProviderToolSearchPolicyContext,
+} from "openclaw/plugin-sdk/provider-model-types";
+import {
+  OLLAMA_CLOUD_PROVIDER_ID,
+  isOllamaCloudOrigin,
+  OLLAMA_DEFAULT_BASE_URL,
+} from "./src/defaults.js";
 import { supportsOllamaCloudFullThinkingEffort } from "./src/model-reasoning.js";
 
 type OllamaProviderConfigDraft = Partial<ModelProviderConfig>;
+
+/** Server routes prefer discovery; known cloud routes keep the ordinary surface.
+ * Untagged aliases retain the server default because configured rows have no remote-source metadata. */
+export function resolveToolSearchMode({
+  provider,
+  modelId,
+  baseUrl,
+}: ProviderToolSearchPolicyContext): "tools" | false {
+  return normalizeProviderId(provider) === OLLAMA_CLOUD_PROVIDER_ID ||
+    isCloudModelRef(modelId) ||
+    isOllamaCloudOrigin(baseUrl)
+    ? false
+    : "tools";
+}
 
 const OLLAMA_REASONING_THINKING_PROFILE = {
   levels: [{ id: "off" }, { id: "low" }, { id: "medium" }, { id: "high" }, { id: "max" }],

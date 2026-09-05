@@ -2964,7 +2964,7 @@ describe("runSetupWizard", () => {
 
   it.each([
     { provider: "openai", explicitLean: undefined, expectedLean: undefined },
-    { provider: "managed-local", explicitLean: undefined, expectedLean: true },
+    { provider: "managed-local", explicitLean: undefined, expectedLean: undefined },
     { provider: "managed-local", explicitLean: false, expectedLean: false },
     { provider: "managed-local", explicitLean: true, expectedLean: true },
   ])(
@@ -3029,8 +3029,8 @@ describe("runSetupWizard", () => {
       expect(persistedWizardConfigs().at(-1)?.agents?.defaults?.experimental?.localModelLean).toBe(
         expectedLean,
       );
-      expect(persistedWizardConfigs().at(-1)?.wizard?.localModelLeanAutoModel).toBe(
-        managed && explicitLean === undefined ? modelRef : undefined,
+      expect(persistedWizardConfigs().at(-1)?.wizard ?? {}).not.toHaveProperty(
+        "localModelLeanAutoModel",
       );
     },
   );
