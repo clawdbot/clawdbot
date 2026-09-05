@@ -1286,6 +1286,7 @@ export const en: TranslationMap & {
     forkedSession: "Forked session",
     copySessionId: "Session ID",
     copySessionLink: "Session link",
+    copySessionPreviewLink: "Preview link",
     copyMarkdown: "Conversation as Markdown",
     openNewTab: "New tab",
     openNewWindow: "New window",
