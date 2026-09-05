@@ -738,7 +738,11 @@ enum DeviceIdentitySQLiteStore {
     private static func requireConsistentClaims(_ claims: [LegacyClaim]) throws {
         guard let first = claims.first else { return }
         guard claims.dropFirst().allSatisfy({ self.hasSameKeyMaterial($0.material, first.material) }) else {
-            throw DeviceIdentityStore.storageError("Legacy device identity sources conflict; all sources preserved")
+            let descriptions = claims.map { claim in
+                "\(claim.source.identityURL.path) (deviceId: \(claim.material.identity.deviceId))"
+            }.joined(separator: ", ")
+            throw DeviceIdentityStore.storageError(
+                "Legacy device identity sources conflict across [\(descriptions)]; all sources preserved.")
         }
     }
 

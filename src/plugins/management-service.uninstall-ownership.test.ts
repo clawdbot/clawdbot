@@ -49,7 +49,8 @@ vi.mock("./uninstall.js", async (importOriginal) => {
   return { ...original, planPluginUninstall: vi.fn(original.planPluginUninstall) };
 });
 
-const { listManagedPlugins, uninstallManagedPlugin } = await import("./management-service.js");
+const { listManagedPlugins } = await import("./management-service.js");
+const { uninstallManagedPlugin } = await import("./management-mutations.js");
 const { planPluginUninstall } = await import("./uninstall.js");
 
 describe("plugin management uninstall channel ownership", () => {
