@@ -1,6 +1,6 @@
 {
   "name": "@openclaw/xai-plugin",
-  "version": "2026.9.2",
+  "version": "2026.9.3",
   "private": true,
   "description": "OpenClaw xAI plugin",
   "type": "module",
