@@ -161,7 +161,7 @@ it("releases the store writer before maintenance archive sizing completes", asyn
 it("does not hold channel recording behind automatic session maintenance", async () => {
   const tempDir = tempDirs.make("openclaw-session-maintenance-ingress-");
   const storePath = path.join(tempDir, "agents", "main", "sessions", "sessions.json");
-  const staleSessionKey = "agent:main:maintenance-ingress-stale";
+  const staleSessionKey = "agent:main:subagent:maintenance-ingress-stale";
   replaceSessionEntrySync(
     { sessionKey: staleSessionKey, storePath },
     { sessionId: "maintenance-ingress-stale", updatedAt: 1 },
@@ -205,7 +205,7 @@ it("does not hold channel recording behind automatic session maintenance", async
     entryWrite.then(() => "entry-write" as const),
     materializationStarted.then(() => "maintenance" as const),
   ]);
-  const laterStaleSessionKey = "agent:main:maintenance-ingress-later-stale";
+  const laterStaleSessionKey = "agent:main:subagent:maintenance-ingress-later-stale";
   if (firstCompleted === "entry-write") {
     await materializationStarted;
     replaceSessionEntrySync(

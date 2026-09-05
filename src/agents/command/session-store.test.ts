@@ -465,7 +465,16 @@ describe("updateSessionStoreAfterAgentRun", () => {
             Object.values(persisted).filter((entry) => entry.archivedAt === undefined),
           ).toHaveLength(42);
           expect(persisted[sessionKey]?.sessionId).toBe(sessionId);
-          expect(persisted["agent:main:stale:44"]?.archivedAt).toEqual(expect.any(Number));
+          expect(persisted[sessionKey]?.archivedAt).toBeUndefined();
+          for (let index = 0; index < 45; index += 1) {
+            const entry = persisted[`agent:main:stale:${index}`];
+            expect(entry?.sessionId).toBe(`stale-${index}`);
+            if (index >= 41) {
+              expect(entry?.archivedAt).toEqual(expect.any(Number));
+            } else {
+              expect(entry?.archivedAt).toBeUndefined();
+            }
+          }
         },
         { timeout: 5_000 },
       );

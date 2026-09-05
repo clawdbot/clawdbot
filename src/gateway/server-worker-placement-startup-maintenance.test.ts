@@ -202,7 +202,10 @@ describe("worker placement session maintenance ownership", () => {
         try {
           await triggerMaintenance();
           await vi.waitFor(() => {
-            expect(loadSessionEntry(sessionScope(sentinelKey))).toBeUndefined();
+            expect(loadSessionEntry(sessionScope(sentinelKey))).toMatchObject({
+              sessionId: sentinelEntry.sessionId,
+              archivedAt: expect.any(Number),
+            });
           });
           expect(loadSessionEntry(sessionScope(sessionKey))).toMatchObject({
             sessionId: placement.sessionId,
@@ -214,17 +217,12 @@ describe("worker placement session maintenance ownership", () => {
           await sidecar.stop();
           expect(collectSessionMaintenancePreserveKeys()?.has(sessionKey)).not.toBe(true);
           await triggerMaintenance();
-          if (maintenance === "dashboard archive" || maintenance === "entry capping") {
-            await vi.waitFor(() => {
-              expect(loadSessionEntry(sessionScope(sessionKey))?.archivedAt).toEqual(
-                expect.any(Number),
-              );
+          await vi.waitFor(() => {
+            expect(loadSessionEntry(sessionScope(sessionKey))).toMatchObject({
+              sessionId: placement.sessionId,
+              archivedAt: expect.any(Number),
             });
-          } else {
-            await vi.waitFor(() => {
-              expect(loadSessionEntry(sessionScope(sessionKey))).toBeUndefined();
-            });
-          }
+          });
         } finally {
           await sidecar.stop();
         }

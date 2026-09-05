@@ -48,6 +48,9 @@ describe("recent session maintenance preservation", () => {
         "agent:main:telegram:direct:user:topic:77",
         "agent:main:telegram:dm:user:topic:77",
         "agent:main:opaque:thread:reply",
+        "agent:main:broken:direct:peer",
+        "agent:main:broken:account:direct:peer",
+        "agent:main:direct:peer",
       ];
       const removableKeys = [
         "agent:main:old",
@@ -67,15 +70,13 @@ describe("recent session maintenance preservation", () => {
             expect(shouldPreserveMaintenanceEntry({ key, entry: store[key] })).toBe(false);
           }
         } else if (boundary === "pruning") {
-          expect(pruneStaleEntries(store, 30 * DAY_MS, { log: false })).toBe(removableKeys.length);
+          expect(pruneStaleEntries(store, 30 * DAY_MS, { log: false })).toBe(1);
         } else {
-          expect(capEntryCount(store, protectedKeys.length, { log: false })).toBe(
-            removableKeys.length,
-          );
+          expect(capEntryCount(store, protectedKeys.length, { log: false })).toBe(3);
         }
 
         for (const key of protectedKeys) {
-          expect(store).toHaveProperty(key);
+          expect(store[key]).toEqual({ sessionId: key, updatedAt });
         }
         expect(resolveSessionConversation).not.toHaveBeenCalled();
       } finally {
@@ -108,9 +109,9 @@ describe("recent session maintenance preservation", () => {
       pruneStaleEntries(store, 12 * 60 * 60 * 1000, {
         preserveRecentMs,
       }),
-    ).toBe(2);
+    ).toBe(1);
     expect(store).toHaveProperty(recentKey);
-    expect(store).not.toHaveProperty(staleKey);
+    expect(store[staleKey]?.archivedAt).toEqual(expect.any(Number));
     expect(store).not.toHaveProperty(syntheticKey);
 
     store[staleKey] = { sessionId: "stale-2", updatedAt: now - 8 * DAY_MS };

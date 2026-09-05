@@ -815,23 +815,18 @@ describe("session-store-runtime compatibility surface", () => {
   });
 
   it.each([
-    { pruneAfterMs: 7 * DAY_MS, staleSessionPresent: false },
-    { pruneAfterMs: 0, staleSessionPresent: true },
-    { pruneAfterMs: -DAY_MS, staleSessionPresent: true },
+    { pruneAfterMs: 7 * DAY_MS, archivedAt: expect.any(Number) },
+    { pruneAfterMs: 0, archivedAt: undefined },
+    { pruneAfterMs: -DAY_MS, archivedAt: undefined },
   ])(
     "applies age retention $pruneAfterMs through entry patches",
-    async ({ pruneAfterMs, staleSessionPresent }) => {
+    async ({ pruneAfterMs, archivedAt }) => {
       const staleSessionKey = "agent:main:stale";
       const activeSessionKey = "agent:main:active";
       const now = Date.now();
-      await seedSessionEntry(staleSessionKey, {
-        sessionId: "session-stale",
-        updatedAt: now - 8 * DAY_MS,
-      });
-      await seedSessionEntry(activeSessionKey, {
-        sessionId: "session-active",
-        updatedAt: now,
-      });
+      const staleEntry = { sessionId: "session-stale", updatedAt: now - 8 * DAY_MS };
+      await seedSessionEntry(staleSessionKey, staleEntry);
+      await seedSessionEntry(activeSessionKey, { sessionId: "session-active", updatedAt: now });
       assignOwner(staleSessionKey);
 
       await patchSessionEntry({
@@ -849,9 +844,14 @@ describe("session-store-runtime compatibility surface", () => {
         update: () => ({ model: "gpt-5.5" }),
       });
 
-      const hasStaleEntry = () =>
-        getSessionEntry({ sessionKey: staleSessionKey, storePath }) != null;
-      await vi.waitFor(() => expect(hasStaleEntry()).toBe(staleSessionPresent), { timeout: 5_000 });
+      const readStaleEntry = () => getSessionEntry({ sessionKey: staleSessionKey, storePath });
+      await vi.waitFor(() => expect(readStaleEntry()?.archivedAt).toEqual(archivedAt), {
+        timeout: 5_000,
+      });
+      expect(readStaleEntry()).toMatchObject(staleEntry);
+      const activeEntry = getSessionEntry({ sessionKey: activeSessionKey, storePath });
+      expect(activeEntry).toMatchObject({ sessionId: "session-active", model: "gpt-5.5" });
+      expect(activeEntry?.archivedAt).toBeUndefined();
     },
   );
 

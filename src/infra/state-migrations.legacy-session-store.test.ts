@@ -47,9 +47,20 @@ it.each([
       });
 
       expect(store[modelRunSessionKey] != null).toBe(modelRunSessionPresent);
+      expect(Object.keys(store)).toHaveLength(modelRunSessionPresent ? 3 : 2);
       expect(Object.values(store).filter((entry) => entry.archivedAt === undefined)).toHaveLength(
         2,
       );
+      expect(store["agent:main:active"]).toMatchObject({ sessionId: "session-active" });
+      expect(store["agent:main:active"]?.archivedAt).toBeUndefined();
+      expect(store["agent:main:old"]).toMatchObject({ sessionId: "session-old" });
+      if (modelRunSessionPresent) {
+        expect(store[modelRunSessionKey]).toMatchObject({ sessionId: "session-model-run" });
+        expect(store[modelRunSessionKey]?.archivedAt).toBeUndefined();
+        expect(store["agent:main:old"]?.archivedAt).toEqual(expect.any(Number));
+      } else {
+        expect(store["agent:main:old"]?.archivedAt).toBeUndefined();
+      }
     });
   },
 );

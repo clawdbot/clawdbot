@@ -41,6 +41,7 @@ import {
 import type { SessionEntryRemovalPlan } from "./session-accessor.sqlite-lifecycle-types.js";
 import { deleteSessionDeliveryArtifacts } from "./session-accessor.sqlite-node-artifacts.js";
 import { authorizeSqliteReclamationCommit } from "./session-accessor.sqlite-reclamation-commit.js";
+import { isRecentHistoricalSessionId } from "./session-accessor.sqlite-references.js";
 import { cloneSessionEntry, getSessionKysely } from "./session-accessor.sqlite-scope.js";
 import type { InternalSessionEntry as SessionEntry } from "./types.js";
 
@@ -74,6 +75,7 @@ export type SqliteSessionReclamationPlan =
       kind: "lifecycle-artifacts";
     })
   | (SessionReclamationPlanBase & {
+      diskBudget: { preserveRecentMs?: number | null };
       kind: "history-eviction";
       protectedSessionIds: string[];
       sessionId: string;
@@ -291,10 +293,24 @@ export function reclaimSqliteSessionInTransaction(
   if (plan.kind === "history-eviction") {
     const value = runOpenClawAgentWriteTransaction((transactionDb) => {
       callbacks.beforeMutation?.();
+      const protectedSessionIds = new Set(plan.protectedSessionIds);
+      // Node activity can change after the parent dispatches the Worker.
+      if (
+        isRecentHistoricalSessionId({
+          database: transactionDb,
+          ...plan.diskBudget,
+          sessionId: plan.sessionId,
+        })
+      ) {
+        protectedSessionIds.add(plan.sessionId);
+      }
       const archivedTranscripts = deleteMaterializedSessionStatePlans(
         transactionDb,
         plan.materializedPlans,
-        new Set(plan.protectedSessionIds),
+        protectedSessionIds,
+        undefined,
+        undefined,
+        plan.diskBudget,
       );
       const db = getSessionKysely(transactionDb.db);
       const deleted =
@@ -329,6 +345,11 @@ export function reclaimSqliteSessionInTransaction(
       transactionDb,
       plan.materializedPlans,
       new Set(plan.protectedSessionIds),
+      new Set([
+        plan.deleteParams.target.canonicalKey,
+        ...plan.deleteParams.target.storeKeys,
+        ...snapshot.map((row) => row.sessionKey),
+      ]),
     );
     const db = getSessionKysely(transactionDb.db);
     const deleted =
@@ -500,12 +521,14 @@ export function createLifecycleArtifactReclamationPlan(params: {
 
 export function createHistoryEvictionReclamationPlan(params: {
   databaseOptions: OpenClawAgentDatabaseOptions;
+  diskBudget: { preserveRecentMs?: number | null };
   materializedPlans: MaterializedSessionStateDeletePlan[];
   protectedSessionIds: ReadonlySet<string>;
   sessionId: string;
 }): Extract<SqliteSessionReclamationPlan, { kind: "history-eviction" }> {
   return {
     databaseOptions: toWorkerDatabaseOptions(params.databaseOptions),
+    diskBudget: params.diskBudget,
     kind: "history-eviction",
     materializedPlans: params.materializedPlans,
     protectedSessionIds: [...params.protectedSessionIds],

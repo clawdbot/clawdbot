@@ -9,7 +9,6 @@ import type { RuntimeEnv } from "../runtime.js";
 const mocks = vi.hoisted(() => ({
   loadConfig: vi.fn(),
   resolveCommandSessionStoreTargets: vi.fn(),
-  resolveSessionCleanupAction: vi.fn(),
   runSessionsCleanup: vi.fn(),
   runLocalSessionsCleanup: vi.fn(),
   callGateway: vi.fn(),
@@ -29,7 +28,6 @@ vi.mock("./session-store-targets.js", () => ({
 
 vi.mock("../config/sessions.js", async (importOriginal) => ({
   ...(await importOriginal<typeof import("../config/sessions.js")>()),
-  resolveSessionCleanupAction: mocks.resolveSessionCleanupAction,
   runSessionsCleanup: mocks.runSessionsCleanup,
 }));
 
@@ -100,34 +98,6 @@ describe("sessionsCleanupCommand", () => {
       { agentId: "main", storePath: "/resolved/sessions.json" },
     ]);
     mocks.callGateway.mockResolvedValue(null);
-    mocks.resolveSessionCleanupAction.mockImplementation(
-      (params: {
-        key: string;
-        missingKeys: Set<string>;
-        staleKeys: Set<string>;
-        cappedKeys: Set<string>;
-        capArchivedKeys?: Set<string>;
-        dmScopeRetiredKeys: Set<string>;
-        modelRunPrunedKeys?: Set<string>;
-      }) => {
-        if (params.dmScopeRetiredKeys.has(params.key)) {
-          return "retire-dm-scope";
-        }
-        if (params.missingKeys.has(params.key)) {
-          return "prune-missing";
-        }
-        if (params.staleKeys.has(params.key)) {
-          return "prune-stale";
-        }
-        if (params.capArchivedKeys?.has(params.key)) {
-          return "archive-cap";
-        }
-        if (params.cappedKeys.has(params.key)) {
-          return "cap-overflow";
-        }
-        return "keep";
-      },
-    );
     mocks.runSessionsCleanup.mockResolvedValue({
       mode: "warn",
       previewResults: [],
@@ -508,7 +478,7 @@ describe("sessionsCleanupCommand", () => {
     });
   });
 
-  it("renders a dry-run action table with keep/prune actions", async () => {
+  it("renders a dry-run action table with keep/archive/prune actions", async () => {
     mocks.runSessionsCleanup.mockResolvedValue({
       mode: "warn",
       previewResults: [
@@ -518,15 +488,15 @@ describe("sessionsCleanupCommand", () => {
             storePath: "/resolved/sessions.json",
             mode: "warn",
             dryRun: true,
-            beforeCount: 3,
+            beforeCount: 4,
             afterCount: 3,
             missing: 0,
             dmScopeRetired: 0,
             modelRunPruned: 0,
-            archived: 0,
+            archived: 1,
             capArchived: 1,
             pruned: 1,
-            capped: 0,
+            capped: 1,
             unreferencedArtifacts: {
               scannedFiles: 5,
               removedFiles: 2,
@@ -537,12 +507,14 @@ describe("sessionsCleanupCommand", () => {
             wouldMutate: true,
           },
           beforeStore: {
+            ageArchived: { sessionId: "age-archived", updatedAt: 0, model: "test:opus" },
             stale: { sessionId: "stale", updatedAt: 1, model: "test:opus" },
             fresh: { sessionId: "fresh", updatedAt: 2, model: "test:opus" },
             capArchived: { sessionId: "cap-archived", updatedAt: 0, model: "test:opus" },
           },
           missingKeys: new Set<string>(),
           staleKeys: new Set(["stale"]),
+          ageArchivedKeys: new Set(["ageArchived"]),
           capArchivedKeys: new Set(["capArchived"]),
           cappedKeys: new Set<string>(),
           dmScopeRetiredKeys: new Set<string>(),
@@ -564,6 +536,7 @@ describe("sessionsCleanupCommand", () => {
     expectLogsToInclude(logs, "Planned session actions:");
     expectLogsToInclude(logs, "Would prune unreferenced artifacts: 2");
     expectLogsToInclude(logs, "Would archive cap overflow: 1");
+    expectLogsToInclude(logs, "Would archive inactive sessions: 1");
     const actionKeys = logs
       .flatMap((entry) => stripAnsi(entry).split("\n"))
       .map((line) =>
@@ -576,6 +549,8 @@ describe("sessionsCleanupCommand", () => {
     expect(actionKeys).toContainEqual(["keep", "fresh"]);
     expect(actionKeys).toContainEqual(["prune-stale", "stale"]);
     expect(actionKeys).toContainEqual(["archive-cap", "capArchived"]);
+    expect(actionKeys).toContainEqual(["archive-age", "ageArchived"]);
+    expectLogsToInclude(logs, "Total: 3 kept, 1 pruned");
   });
 
   it("finishes a large distinct-label preview with the normal CLI process stack", () => {
@@ -677,6 +652,7 @@ describe("sessionsCleanupCommand", () => {
           staleKeys: new Set(["cronPruned", "unsafePruned", "malformedLabelPruned"]),
           cappedKeys: new Set(["directCapped"]),
           dmScopeRetiredKeys: new Set<string>(),
+          modelRunPrunedKeys: new Set<string>(),
         },
       ],
       appliedSummaries: [],
@@ -745,6 +721,7 @@ describe("sessionsCleanupCommand", () => {
           staleKeys: new Set<string>(),
           cappedKeys: new Set<string>(),
           dmScopeRetiredKeys: new Set<string>(),
+          modelRunPrunedKeys: new Set<string>(),
         },
       ],
       appliedSummaries: [],
