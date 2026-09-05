@@ -19,14 +19,11 @@ import { type AnyAgentTool, readToolStringParam, ToolInputError } from "./common
 import {
   awaitGatewayQuestionAnswer,
   createGatewayQuestionCanceller,
+  createQuestionPromptLifetime,
   type GatewayQuestionCall,
 } from "./gateway-question-lifecycle.js";
 import { callGatewayTool } from "./gateway.js";
-import {
-  createQuestionPromptAbort,
-  type QuestionPromptDelivery,
-  sendQuestionToolPrompt,
-} from "./question-prompt-send.js";
+import { type QuestionPromptDelivery, sendQuestionToolPrompt } from "./question-prompt-send.js";
 import { jsonResult, textResult } from "./tool-results.js";
 
 type SecretStoreKind = "secret";
@@ -275,7 +272,7 @@ export function createSecretsTool(params: {
         throw new ToolInputError(`Unknown secrets action: ${action}`);
       }
       const request = normalizeSecretsRequestParams(input);
-      const promptAbort = publishOwnPrompt ? createQuestionPromptAbort(signal) : undefined;
+      using prompt = createQuestionPromptLifetime(signal);
       const delivery = beginAskUserPromptDelivery({
         toolCallId,
         sessionKey: params.sessionKey,
@@ -292,7 +289,7 @@ export function createSecretsTool(params: {
                   questions: request.questions,
                   config: params.config,
                   send: publishOwnPrompt,
-                  signal: promptAbort?.signal,
+                  signal: prompt.signal,
                 }),
             }
           : {}),
@@ -302,8 +299,10 @@ export function createSecretsTool(params: {
       const cancelPendingQuestion = createGatewayQuestionCanceller({
         gatewayCall,
         questionId: delivery.questionId,
+        beforeCancel: prompt.close,
       });
       const cancelOnAbort = () => {
+        prompt.close();
         delivery.release();
         void cancelPendingQuestion("run-abort");
       };
@@ -344,7 +343,7 @@ export function createSecretsTool(params: {
           questionId: delivery.questionId,
           timeoutMs,
           ...(signal ? { signal } : {}),
-        });
+        }).finally(prompt.close);
         delivery.markReady();
         let questionResult: QuestionWaitAnswerResult | undefined;
         if (delivery.hasSubscriber) {
@@ -391,7 +390,6 @@ export function createSecretsTool(params: {
         }
         throw error;
       } finally {
-        promptAbort?.abort();
         signal?.removeEventListener("abort", cancelOnAbort);
         delivery.release();
       }

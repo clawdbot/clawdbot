@@ -38,22 +38,9 @@ export type QuestionPromptDelivery = {
   messageChannel?: string;
 };
 
-/** Ties a question prompt to both the run signal and the question's terminal state. */
-export function createQuestionPromptAbort(toolSignal?: AbortSignal): {
-  signal: AbortSignal;
-  abort: () => void;
-} {
-  const controller = new AbortController();
-  const signal = toolSignal ? AbortSignal.any([toolSignal, controller.signal]) : controller.signal;
-  return {
-    signal,
-    abort: () => controller.abort(new Error("question ended before prompt delivery")),
-  };
-}
-
 /** Builds a portable prompt sender for Gateway-scoped / loopback tool construction. */
 export function createChannelQuestionPromptDelivery(params: {
-  cfg?: OpenClawConfig;
+  cfg: OpenClawConfig;
   channel?: string | null;
   to?: string | number | null;
   accountId?: string;
@@ -62,7 +49,7 @@ export function createChannelQuestionPromptDelivery(params: {
   const cfg = params.cfg;
   const channel = normalizeMessageChannel(params.channel);
   const to = params.to?.toString().trim();
-  if (!cfg || !channel || !to || !isDeliverableMessageChannel(channel)) {
+  if (!channel || !to || !isDeliverableMessageChannel(channel)) {
     return undefined;
   }
   return {
@@ -88,10 +75,10 @@ export function createChannelQuestionPromptDelivery(params: {
 function settleChannelQuestionPromptSend(send: DurableMessageBatchSendResult): void {
   // Fail closed when the durable batch did not reach the chat. ask_user then
   // cancels instead of waiting on Control UI after a suppressed or failed send.
-  if (send.status === "sent" || durableMessageBatchMayHaveReachedRecipient(send)) {
+  if (durableMessageBatchMayHaveReachedRecipient(send)) {
     return;
   }
-  if (send.status === "failed" || send.status === "partial_failed") {
+  if (send.status === "failed") {
     throw send.error;
   }
   throw new Error(

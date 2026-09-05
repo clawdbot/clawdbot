@@ -633,12 +633,14 @@ describe("secrets tool", () => {
     expect(sent[0]?.text).toContain("SERVICE_API_KEY");
   });
 
-  it("aborts a self-published credential prompt when the answer wins before delivery", async () => {
+  it("ends credential publication before post-answer metadata finishes", async () => {
     const sessionKey = "agent:main:secret-direct-dispatch-abort";
     const args = { action: "request", name: "SERVICE_API_KEY", kind: "secret" };
     let capturedSignal: AbortSignal | undefined;
     let aborted = false;
     let finishWait: ((value: unknown) => void) | undefined;
+    const metadataStarted = createDeferred();
+    const metadata = createDeferred<{ entries: (typeof secretEntry)[] }>();
     const gateway = gatewayStub(async (method, _options, params) => {
       if (method === "question.request") {
         return { id: params.id };
@@ -649,7 +651,8 @@ describe("secrets tool", () => {
         });
       }
       if (method === "secrets.store.list") {
-        return { entries: [unrelatedEnv, secretEntry] };
+        metadataStarted.resolve();
+        return metadata.promise;
       }
       throw new Error(`unexpected method ${method}`);
     });
@@ -676,9 +679,13 @@ describe("secrets tool", () => {
       { once: true },
     );
     finishWait?.(storedAnswer);
-
-    await expect(pending).resolves.toMatchObject({ details: { status: "stored" } });
-    expect(aborted).toBe(true);
+    try {
+      await metadataStarted.promise;
+      expect(aborted).toBe(true);
+    } finally {
+      metadata.resolve({ entries: [secretEntry] });
+      await expect(pending).resolves.toMatchObject({ details: { status: "stored" } });
+    }
   });
 
   it("keeps the credential prompt off a channel that cannot carry a Control UI link", async () => {
