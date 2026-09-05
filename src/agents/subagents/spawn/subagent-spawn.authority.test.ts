@@ -113,7 +113,11 @@ describe("pending spawn invocation authority", () => {
         stream: "lifecycle",
         data: { phase: "end", endedAt: Date.now() },
       });
-      await vi.waitFor(() => expect(findTaskByRunId("b")?.status).toBe("succeeded"));
+      // The lifecycle end settles through root-work admission plus SQLite persistence;
+      // on a two-CPU hosted runner that chain exceeds vi.waitFor's 1s default.
+      await vi.waitFor(() => expect(findTaskByRunId("b")?.status).toBe("succeeded"), {
+        timeout: 15_000,
+      });
       clearAgentRunContext("b");
       await settleSubagentRegistryPersistenceWork();
       expect(completedB).toMatchObject({
