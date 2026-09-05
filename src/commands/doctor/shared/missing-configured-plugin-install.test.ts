@@ -1368,6 +1368,154 @@ describe("repairMissingConfiguredPluginInstalls", () => {
     },
   );
 
+  it.each([
+    "mixed",
+    "updater-throw",
+    "persist-throw",
+    "partial-marker-write",
+    "second-effect-refused",
+    "cleanup-throw",
+  ] as const)("settles multiple dependency repair owners after %s", async (scenario) => {
+    const parent = tempDirs.make("openclaw-doctor-multiple-dependencies-");
+    const pluginIds = ["dependency-a", "dependency-b", "dependency-c"];
+    const fixtures = pluginIds.map((pluginId) => {
+      const rootDir = path.join(parent, pluginId, "node_modules", pluginId);
+      fs.mkdirSync(rootDir, { recursive: true });
+      createColdPluginFixture({
+        rootDir,
+        pluginId,
+        packageName: pluginId,
+        packageJson: { dependencies: { "required-runtime": "1.0.0" } },
+      });
+      return {
+        pluginId,
+        rootDir,
+        markerPath: resolveRetainedManagedNpmInstallMarkerPath(rootDir),
+        manifest: fs.readFileSync(path.join(rootDir, "package.json"), "utf8"),
+        record: {
+          source: "npm" as const,
+          spec: `${pluginId}@1.0.0`,
+          resolvedName: pluginId,
+          resolvedSpec: `${pluginId}@1.0.0`,
+          resolvedVersion: "1.0.0",
+          installPath: rootDir,
+        },
+      };
+    });
+    const first = expectDefined(fixtures[0], "first dependency fixture");
+    const second = expectDefined(fixtures[1], "second dependency fixture");
+    const existing = expectDefined(fixtures[2], "preexisting dependency fixture");
+    await markRetainedManagedNpmInstall({
+      packageDir: existing.rootDir,
+      pluginId: existing.pluginId,
+      reason: "existing-owner",
+    });
+    const existingMarker = fs.readFileSync(existing.markerPath, "utf8");
+    const records = Object.fromEntries(fixtures.map((item) => [item.pluginId, item.record]));
+    const cfg: OpenClawConfig = {
+      plugins: { entries: Object.fromEntries(pluginIds.map((id) => [id, { enabled: true }])) },
+    };
+    mocks.loadInstalledPluginIndexInstallRecords.mockResolvedValue(records);
+    mocks.loadPluginMetadataSnapshot.mockReturnValue({
+      plugins: fixtures.map(({ pluginId, rootDir }) => ({
+        id: pluginId,
+        origin: "global",
+        rootDir,
+        source: path.join(rootDir, "index.cjs"),
+        packageName: pluginId,
+        packageDependencies: { "required-runtime": "1.0.0" },
+        channels: [],
+      })),
+      diagnostics: [],
+    });
+    const failure = new Error(`multiple dependency repair ${scenario}`);
+    const cleanupFailure = new Error("first dependency marker cleanup failed");
+    if (scenario === "partial-marker-write") {
+      const writeFile = fs.promises.writeFile.bind(fs.promises);
+      vi.spyOn(fs.promises, "writeFile").mockImplementation(async (file, data, options) => {
+        if (file === second.markerPath) {
+          await writeFile(file, '{"partial":', options);
+          throw failure;
+        }
+        return writeFile(file, data, options);
+      });
+    }
+    if (scenario === "cleanup-throw") {
+      const rm = fs.promises.rm.bind(fs.promises);
+      vi.spyOn(fs.promises, "rm").mockImplementation((file, options) =>
+        file === first.markerPath ? Promise.reject(cleanupFailure) : rm(file, options),
+      );
+    }
+    const beforePersistentEffect = vi.fn(async () => {
+      if (scenario === "second-effect-refused" && beforePersistentEffect.mock.calls.length === 2) {
+        throw failure;
+      }
+    });
+    const replacementRecord = { ...first.record, installPath: path.join(parent, "replacement") };
+    mocks.updateNpmInstalledPlugins.mockImplementation(async () => {
+      for (const fixture of fixtures) {
+        expect(hasRetainedManagedNpmInstallMarker(fixture.rootDir)).toBe(true);
+      }
+      if (scenario === "updater-throw" || scenario === "cleanup-throw") {
+        throw failure;
+      }
+      fs.mkdirSync(replacementRecord.installPath);
+      createColdPluginFixture({
+        rootDir: replacementRecord.installPath,
+        pluginId: first.pluginId,
+        packageName: first.pluginId,
+      });
+      return {
+        config: { plugins: { installs: { ...records, [first.pluginId]: replacementRecord } } },
+        changed: true,
+        outcomes: fixtures.map(({ pluginId }) => ({
+          pluginId,
+          status: pluginId === first.pluginId ? "updated" : "error",
+          message: `repair outcome for ${pluginId}`,
+        })),
+      };
+    });
+    if (scenario === "persist-throw") {
+      mocks.writePersistedInstalledPluginIndexInstallRecords.mockRejectedValueOnce(failure);
+    }
+    const { repairMissingPluginInstallsForIds } =
+      await import("./missing-configured-plugin-install.js");
+    const repair = () =>
+      repairMissingPluginInstallsForIds({ cfg, pluginIds, env: testEnv, beforePersistentEffect });
+
+    if (scenario === "mixed") {
+      const result = await repair();
+      expect(result.repairedPluginIds).toEqual([first.pluginId]);
+      expect(result.failedPluginIds).toEqual([second.pluginId, existing.pluginId]);
+      expect(result.records).toEqual({ ...records, [first.pluginId]: replacementRecord });
+      expect(mocks.writePersistedInstalledPluginIndexInstallRecords).toHaveBeenCalledWith(
+        result.records,
+        { config: cfg, env: testEnv },
+      );
+    } else if (scenario === "cleanup-throw") {
+      await expect(repair()).rejects.toMatchObject({ errors: [failure, cleanupFailure] });
+    } else {
+      await expect(repair()).rejects.toBe(failure);
+    }
+    expect(hasRetainedManagedNpmInstallMarker(first.rootDir)).toBe(
+      scenario === "mixed" || scenario === "cleanup-throw",
+    );
+    expect(hasRetainedManagedNpmInstallMarker(second.rootDir)).toBe(false);
+    expect(fs.readFileSync(existing.markerPath, "utf8")).toBe(existingMarker);
+    for (const fixture of fixtures) {
+      expect(fs.readFileSync(path.join(fixture.rootDir, "package.json"), "utf8")).toBe(
+        fixture.manifest,
+      );
+    }
+    if (scenario === "partial-marker-write" || scenario === "second-effect-refused") {
+      expect(mocks.updateNpmInstalledPlugins).not.toHaveBeenCalled();
+    }
+    if (scenario !== "mixed" && scenario !== "persist-throw") {
+      expect(mocks.writePersistedInstalledPluginIndexInstallRecords).not.toHaveBeenCalled();
+    }
+    expect(mocks.installPluginFromNpmSpec).not.toHaveBeenCalled();
+  });
+
   it("maps a missing configured plugin install to a structured finding and dry-run effect", async () => {
     mocks.listChannelPluginCatalogEntries.mockReturnValue([
       {
