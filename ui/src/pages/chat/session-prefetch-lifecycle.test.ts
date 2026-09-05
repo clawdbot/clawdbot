@@ -1,6 +1,6 @@
 /* @vitest-environment jsdom */
 import { afterEach, beforeEach, describe, expect, it, onTestFinished, vi } from "vitest";
-import type { GatewayBrowserClient } from "../../api/gateway.ts";
+import { createTestGatewayClient } from "../../test-helpers/gateway-client.ts";
 import { readChatSessionSnapshot, type ChatMessageCache } from "./session-message-cache.ts";
 import {
   createSessionPrefetchFixture,
@@ -30,7 +30,7 @@ describe("session prefetch pane and navigation ownership", () => {
         historyResult((params as { sessionKey: string }).sessionKey),
       );
       updatePrefetch({
-        client: { request } as unknown as GatewayBrowserClient,
+        client: createTestGatewayClient(request),
         listRevision: 1,
         openSessionKeys: [],
         rows: [row("agent:main:newest", NOW), row("agent:main:recent", NOW - 1), row(intended, 1)],
@@ -68,7 +68,7 @@ describe("session prefetch pane and navigation ownership", () => {
       historyResult((params as { sessionKey: string }).sessionKey),
     );
     updatePrefetch({
-      client: { request } as unknown as GatewayBrowserClient,
+      client: createTestGatewayClient(request),
       listRevision: 1,
       openSessionKeys: ["agent:main:selected"],
       rows: [row(home.sessionKey, NOW), row("agent:main:recent", NOW - 1)],
@@ -92,7 +92,7 @@ describe("session prefetch pane and navigation ownership", () => {
         historyResult((params as { sessionKey: string }).sessionKey),
       );
       updatePrefetch({
-        client: { request } as unknown as GatewayBrowserClient,
+        client: createTestGatewayClient(request),
         listRevision: 1,
         openSessionKeys: ["agent:main:selected"],
         rows: [row(home.sessionKey, NOW), row("agent:main:recent", NOW - 1)],
