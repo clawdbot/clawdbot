@@ -374,7 +374,10 @@ suite.define(() => {
         await expect
           .poll(() => visiblePane.locator('[data-progress-card-placement="rail"]').count())
           .toBe(0);
-        await sidePanel.getByRole("button", { name: "Restore split", exact: true }).click();
+        await page
+          .locator(".chat-pane__header")
+          .getByRole("button", { name: "Restore split", exact: true })
+          .click();
         await restoreChatAsMain(page);
 
         await page.setViewportSize({ height: 900, width: 560 });

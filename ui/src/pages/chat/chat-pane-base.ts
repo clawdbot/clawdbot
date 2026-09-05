@@ -403,7 +403,6 @@ export abstract class ChatPaneBase extends OpenClawLightDomElement {
         resolve: (confirmed: boolean) => void;
       }
     | undefined;
-  protected retainedBoardSessionKey = "";
   protected readonly observedBoardPresence = new Map<string, boolean>();
   protected dashboardExpandedRouteKey = "";
   protected swarmHydrator: SwarmRosterHydrator | null = null;
@@ -528,7 +527,14 @@ export abstract class ChatPaneBase extends OpenClawLightDomElement {
       )
       .watch(
         () => this.resolveBoardProvider(),
-        (provider, notify) => provider.snapshot$.subscribe(notify),
+        (provider, notify) => {
+          const unsubscribeSnapshot = provider.snapshot$.subscribe(notify);
+          const unsubscribeError = provider.loadError$.subscribe(notify);
+          return () => {
+            unsubscribeSnapshot();
+            unsubscribeError();
+          };
+        },
       )
       .effect(
         () => this.resolveBoardProvider(),

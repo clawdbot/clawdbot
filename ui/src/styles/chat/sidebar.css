@@ -136,8 +136,8 @@ openclaw-chat-sidebar-region,
   position: relative;
   display: grid;
   grid-template-columns: minmax(0, 1fr);
-  grid-template-rows: auto minmax(0, 1fr);
-  grid-template-areas: "main-header" "main";
+  grid-template-rows: minmax(0, 1fr);
+  grid-template-areas: "main";
   flex: 1 1 0;
   width: 100%;
   min-width: 0;
@@ -155,26 +155,27 @@ openclaw-chat-sidebar-region,
 
 .sidebar-region--open:not(.sidebar-region--expanded) {
   grid-template-columns: minmax(0, 1fr) auto minmax(0, var(--side-panel-width));
-  grid-template-areas: "main-header divider side-header" "main divider side";
+  grid-template-rows: auto minmax(0, 1fr);
+  grid-template-areas: "main divider side-header" "main divider side";
 }
 
 .sidebar-region--left.sidebar-region--open:not(.sidebar-region--expanded) {
   grid-template-columns: minmax(0, var(--side-panel-width)) auto minmax(0, 1fr);
-  grid-template-areas: "side-header divider main-header" "side divider main";
+  grid-template-areas: "side-header divider main" "side divider main";
 }
 
 .sidebar-region--bottom.sidebar-region--open:not(.sidebar-region--expanded),
 .sidebar-region--narrow.sidebar-region--open:not(.sidebar-region--expanded) {
   /* Fit saved heights to short task panes without consuming the main content row. */
   --side-panel-max-height: calc(
-    (100% - 2 * var(--rail-header-height) - var(--resize-handle-size, 6px)) * 0.6
+    (100% - var(--rail-header-height) - var(--resize-handle-size, 6px)) * 0.6
   );
   grid-template-columns: minmax(0, 1fr);
-  grid-template-rows: auto minmax(0, 1fr) auto auto minmax(
+  grid-template-rows: minmax(0, 1fr) auto auto minmax(
       0,
       min(var(--side-panel-height), var(--side-panel-max-height))
     );
-  grid-template-areas: "main-header" "main" "divider" "side-header" "side";
+  grid-template-areas: "main" "divider" "side-header" "side";
 }
 
 .sidebar-region [data-region="main"] {
@@ -183,10 +184,6 @@ openclaw-chat-sidebar-region,
 
 .sidebar-region [data-region="side"] {
   grid-area: side;
-}
-
-.sidebar-region [data-region-header="main"] {
-  grid-area: main-header;
 }
 
 .sidebar-region [data-region-header="side"] {
@@ -330,7 +327,7 @@ openclaw-chat-sidebar-region,
 }
 
 .sidebar-region--narrow.sidebar-region--open:not(.sidebar-region--expanded) {
-  grid-template-rows: auto minmax(0, 1fr) auto auto minmax(0, 1fr);
+  grid-template-rows: minmax(0, 1fr) auto auto minmax(0, 1fr);
 }
 
 .chat-workspace-rail {

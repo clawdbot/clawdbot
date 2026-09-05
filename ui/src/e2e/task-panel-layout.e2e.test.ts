@@ -105,7 +105,7 @@ suite.define(() => {
         await composer.fill("Keep this chat draft");
         const chat = page.locator(".sidebar-region__primary");
         const dashboard = page.locator('[data-panel-slot="dashboard"]');
-        const mainHeader = page.locator('[data-region-header="main"]');
+        const taskHeader = page.locator(".chat-pane__header");
         const sideHeader = page.locator('[data-region-header="side"]');
         const swap = page.locator(".chat-panel-swap");
         const layoutMenu = page.locator(".chat-panel-layout-menu");
@@ -129,6 +129,8 @@ suite.define(() => {
           await page.mouse.move(0, 0);
         };
 
+        expect(await taskHeader.count()).toBe(1);
+        expect(await page.locator('[data-region-header="main"]').count()).toBe(0);
         expect(await swap.count()).toBe(1);
         expect(await layoutMenu.count()).toBe(1);
         expect(await page.getByRole("button", { name: "Layout", exact: true }).count()).toBe(1);
@@ -162,11 +164,11 @@ suite.define(() => {
             expect(chatBox!.x < dashboardBox!.x).toBe(dock === "left");
             expect(chatBox!.width).toBeCloseTo(width, 0);
           }
-          await mainHeader.getByRole("button", { name: "Focus", exact: true }).click();
+          await taskHeader.getByRole("button", { name: "Focus", exact: true }).click();
           await chat.waitFor({ state: "hidden" });
           expect(await swap.isVisible()).toBe(false);
           await expectContinuity();
-          await mainHeader.getByRole("button", { name: "Restore split", exact: true }).click();
+          await taskHeader.getByRole("button", { name: "Restore split", exact: true }).click();
           await chat.waitFor();
           await swap.waitFor();
           await expectContinuity();
@@ -180,13 +182,8 @@ suite.define(() => {
         await sideHeader.getByRole("button", { name: "Close", exact: true }).click();
         await chat.waitFor({ state: "hidden" });
         expect(await swap.isVisible()).toBe(false);
-        await mainHeader.getByRole("button", { name: "Focus", exact: true }).click();
-        await mainHeader.getByRole("button", { name: "Restore split", exact: true }).click();
-        await chat.waitFor();
         await expectContinuity();
-        await sideHeader.getByRole("button", { name: "Close", exact: true }).click();
-        await chat.waitFor({ state: "hidden" });
-        await mainHeader.getByRole("button", { name: "Side panel", exact: true }).click();
+        await taskHeader.locator(".chat-side-panel-toggle").click();
         await chat.waitFor();
         await expectSwapLabel("Swap Dashboard and Chat");
         await expectContinuity();
@@ -211,8 +208,8 @@ suite.define(() => {
         await page.locator('[data-panel-slot="terminal"][data-region="main"]').waitFor();
         await expectSwapLabel("Swap Terminal and Dashboard");
         await dockChatSidePanel(page, "right");
-        await mainHeader.getByRole("button", { name: "Focus", exact: true }).click();
-        await mainHeader.getByRole("button", { name: "Restore split", exact: true }).click();
+        await taskHeader.getByRole("button", { name: "Focus", exact: true }).click();
+        await taskHeader.getByRole("button", { name: "Restore split", exact: true }).click();
         expect(await gateway.getRequests("terminal.open")).toHaveLength(1);
         expect(await gateway.getRequests("terminal.close")).toHaveLength(0);
 
@@ -227,8 +224,8 @@ suite.define(() => {
         expect(await page.evaluate(() => document.documentElement.scrollWidth)).toBe(400);
         expect(await layoutMenu.isVisible()).toBe(false);
         for (const control of [
-          mainHeader.getByRole("button", { name: "Focus", exact: true }),
-          mainHeader.getByRole("button", { name: "Side panel", exact: true }),
+          taskHeader.getByRole("button", { name: "Focus", exact: true }),
+          taskHeader.locator(".chat-side-panel-toggle"),
           swap,
           sideHeader.getByRole("button", { name: "Close", exact: true }),
         ]) {
@@ -242,8 +239,8 @@ suite.define(() => {
         await expect
           .poll(() => swap.getAttribute("aria-label"))
           .toBe("Swap Dashboard and Terminal");
-        await mainHeader.getByRole("button", { name: "Focus", exact: true }).click();
-        await mainHeader.getByRole("button", { name: "Restore split", exact: true }).click();
+        await taskHeader.getByRole("button", { name: "Focus", exact: true }).click();
+        await taskHeader.getByRole("button", { name: "Restore split", exact: true }).click();
         await terminal.locator(".tp-host canvas").waitFor();
       },
     );
