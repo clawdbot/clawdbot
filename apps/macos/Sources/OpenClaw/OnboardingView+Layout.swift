@@ -7,6 +7,10 @@ extension OnboardingView {
         false
     }
 
+    private var automaticInferenceProbeIntent: InferenceProbeIntent {
+        self.activePageIndex == self.aiPageIndex ? .startSetup : .resumePending
+    }
+
     var body: some View {
         GeometryReader { windowGeometry in
             let contentHeight = self.contentHeight(for: windowGeometry.size.height)
@@ -74,7 +78,7 @@ extension OnboardingView {
         .task {
             await self.configuredGatewayProbe.consumeReconnects {
                 self.probeConfiguredGatewayForDashboard(
-                    startAISetupWhenMissing: self.activePageIndex == self.aiPageIndex)
+                    intent: self.automaticInferenceProbeIntent)
             }
         }
     }
@@ -125,13 +129,13 @@ extension OnboardingView {
         if let updatePageMonitoring {
             updatePageMonitoring(self.activePageIndex)
             self.probeConfiguredGatewayForDashboard(
-                startAISetupWhenMissing: self.activePageIndex == aiPageIndex)
+                intent: self.automaticInferenceProbeIntent)
             return
         }
         // A mode swap can keep the same page cursor, so its onChange hook may not restart AI setup.
         updateMonitoring(for: self.activePageIndex)
         self.probeConfiguredGatewayForDashboard(
-            startAISetupWhenMissing: self.activePageIndex == aiPageIndex)
+            intent: self.automaticInferenceProbeIntent)
     }
 
     func resetGatewayBoundAIState() {
@@ -143,7 +147,7 @@ extension OnboardingView {
 
     @discardableResult
     func probeConfiguredGatewayForDashboard(
-        startAISetupWhenMissing: Bool = false,
+        intent: InferenceProbeIntent = .resumePending,
         knownVisible: Bool = false,
         knownAISetupPage: Bool = false) -> Task<Void, Never>?
     {
@@ -184,7 +188,9 @@ extension OnboardingView {
             let pendingState = OnboardingSystemAgentResumeStore.pendingState(
                 for: expectedRouteIdentity,
                 defaults: self.systemAgentDefaults)
-            self.schedulePendingActivationRecheckIfNeeded(pendingState)
+            if intent != .inspectOnly {
+                self.schedulePendingActivationRecheckIfNeeded(pendingState, routeIdentity: expectedRouteIdentity)
+            }
 
             switch outcome {
             case let .configured(modelRef, _):
@@ -194,7 +200,7 @@ extension OnboardingView {
                     // reconnect must not downgrade connected state or fork a
                     // second resume operation.
                     guard !self.aiSetup.connected else { return }
-                    self.resumePendingSystemAgent(modelRef: modelRef)
+                    await self.resumePendingSystemAgent(modelRef: modelRef, intent: intent).value
                     return
                 case .verified:
                     // Inference was observed, but the dropped activation can
@@ -209,7 +215,7 @@ extension OnboardingView {
                 // that inference is configured or usable, so first run must
                 // live-verify it before completing onboarding. A definitive
                 // verification failure falls through to normal detection.
-                self.resumePendingSystemAgent(modelRef: modelRef)
+                await self.resumePendingSystemAgent(modelRef: modelRef, intent: intent).value
             case .missing:
                 // A route-bound activation/verification can complete while the
                 // earlier agents.list request is suspended. Never let that
@@ -224,7 +230,8 @@ extension OnboardingView {
                 case .activationExpired, .completed:
                     // The absence result was dispatched for the receipt visible
                     // at probe start. A replacement attempt owns its own retry.
-                    guard expectedPendingState != .none,
+                    guard intent != .inspectOnly,
+                          expectedPendingState != .none,
                           let expectedRouteIdentity,
                           OnboardingSystemAgentResumeStore.clear(
                               ifOwnedBy: expectedRouteIdentity,
@@ -236,7 +243,7 @@ extension OnboardingView {
                 case .none:
                     break
                 }
-                if startAISetupWhenMissing,
+                if intent == .startSetup,
                    knownAISetupPage || self.activePageIndex == self.aiPageIndex
                 {
                     self.aiSetup.startIfNeeded()
@@ -288,12 +295,14 @@ extension OnboardingView {
     }
 
     private func schedulePendingActivationRecheckIfNeeded(
-        _ pendingState: OnboardingSystemAgentResumeStore.PendingState)
+        _ pendingState: OnboardingSystemAgentResumeStore.PendingState,
+        routeIdentity: String?)
     {
         switch pendingState {
         case let .activating(deadline), let .verified(deadline):
             self.configuredGatewayProbe.schedulePendingActivationRecheck(deadline: deadline) {
-                self.probeConfiguredGatewayForDashboard(startAISetupWhenMissing: true)
+                guard self.aiSetupRouteIdentityProvider() == routeIdentity else { return }
+                self.probeConfiguredGatewayForDashboard(intent: .startSetup)
             }
         case .activationExpired, .completed, .none:
             break

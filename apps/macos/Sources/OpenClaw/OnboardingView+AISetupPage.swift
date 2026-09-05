@@ -9,6 +9,12 @@ struct GatewayAuthenticationReturnDecision: Equatable {
 }
 
 extension OnboardingView {
+    enum InferenceProbeIntent: Equatable {
+        case inspectOnly
+        case resumePending
+        case startSetup
+    }
+
     /// Structured AI setup: detect what's already available on the Gateway, test the
     /// best option live, fall through automatically, offer an API-key form
     /// when nothing works. OpenClaw becomes available only after inference
@@ -33,7 +39,7 @@ extension OnboardingView {
             OnboardingAISetupView(
                 model: self.aiSetup,
                 returnToGatewayAuthentication: { self.returnToGatewayAuthentication() },
-                retryConfiguredGatewayProbe: { self.retryConfiguredGatewayProbe() })
+                retryConfiguredGatewayProbe: { self.retryConfiguredGatewayProbe(intent: $0) })
         }
         .padding(.horizontal, 28)
         .padding(.top, 48)
@@ -60,7 +66,7 @@ extension OnboardingView {
         self.prepareSystemAgentHandoff()
         // A selected/reconnected Gateway may already have a configured default
         // agent. Check that route before setup tries to author inference.
-        probeConfiguredGatewayForDashboard(startAISetupWhenMissing: true)
+        probeConfiguredGatewayForDashboard(intent: .startSetup)
     }
 
     func prepareSystemAgentHandoff() {
@@ -68,7 +74,8 @@ extension OnboardingView {
             let currentRouteIdentity = self.aiSetupRouteIdentityProvider()
             guard currentRouteIdentity == routeIdentity else { return }
             self.configuredGatewayProbe.schedulePendingActivationRecheck(deadline: deadline) {
-                self.probeConfiguredGatewayForDashboard(startAISetupWhenMissing: true)
+                guard self.aiSetupRouteIdentityProvider() == routeIdentity else { return }
+                self.probeConfiguredGatewayForDashboard(intent: .startSetup)
             }
         }
         if aiSetup.onConnected == nil {
@@ -81,7 +88,10 @@ extension OnboardingView {
     }
 
     @discardableResult
-    func resumePendingSystemAgent(modelRef: String) -> Task<Void, Never> {
+    func resumePendingSystemAgent(
+        modelRef: String,
+        intent: InferenceProbeIntent = .resumePending) -> Task<Void, Never>
+    {
         self.prepareSystemAgentHandoff()
         let expectedRouteIdentity = self.aiSetupRouteIdentityProvider()
         aiSetup.resumeConfiguredInference(modelRef: modelRef)
@@ -90,6 +100,10 @@ extension OnboardingView {
         }
         return Task {
             let outcome = await self.aiSetup.verifyPendingConfiguredInference()
+            if case let .freshSetupAllowed(context) = outcome {
+                if intent != .inspectOnly { self.aiSetup.resumeSetup(ifCurrent: context) }
+                return
+            }
             // The outcome belongs to the exact attempt and route captured by
             // verification. Never infer success from newer mutable UI state.
             let currentRouteIdentity = self.aiSetupRouteIdentityProvider()
@@ -112,12 +126,14 @@ extension OnboardingView {
     }
 
     @discardableResult
-    func retryConfiguredGatewayProbe() -> Task<Void, Never>? {
+    func retryConfiguredGatewayProbe(intent: InferenceProbeIntent = .startSetup) -> Task<Void, Never>? {
+        // The action carries intent; expiry or a changed view state must never
+        // turn Check again into a new activation. Timer/reconnect callers own auto-resume.
         aiSetup.beginConfiguredGatewayProbeRetry()
         // The retry button itself proves the onboarding view is visible even
         // before SwiftUI commits an @State visibility write.
         return probeConfiguredGatewayForDashboard(
-            startAISetupWhenMissing: true,
+            intent: intent,
             knownVisible: true,
             knownAISetupPage: true)
     }

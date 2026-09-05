@@ -1,3 +1,7 @@
+import type {
+  SetupInferenceActivationRejection,
+  SetupInferenceFailureStatus,
+} from "../../packages/gateway-protocol/src/schema/setup-inference.js";
 import type { loadPersistedAuthProfileStore } from "../agents/auth-profiles/persisted.js";
 import type {
   loadAuthProfileStoreForRuntime,
@@ -108,17 +112,8 @@ export type SetupInferenceDetection = {
   setupComplete: boolean;
 };
 
-export type SetupInferenceStatus =
-  | "ok"
-  | "auth"
-  | "rate_limit"
-  | "billing"
-  | "timeout"
-  | "format"
-  | "unavailable"
-  | "unknown";
-
-export type SetupInferenceFailureStatus = Exclude<SetupInferenceStatus, "ok">;
+export type { SetupInferenceFailureStatus };
+export type SetupInferenceStatus = "ok" | SetupInferenceFailureStatus;
 
 export type ActivateSetupInferenceResult =
   | {
@@ -128,7 +123,12 @@ export type ActivateSetupInferenceResult =
       lines: string[];
       gatewayRestartRequired?: true;
     }
-  | { ok: false; status: SetupInferenceFailureStatus; error: string };
+  | {
+      ok: false;
+      status: SetupInferenceFailureStatus;
+      error: string;
+      disposition?: SetupInferenceActivationRejection["disposition"];
+    };
 
 /**
  * The config commit may have happened, so callers must verify current setup

@@ -211,14 +211,13 @@ jobs:
           run_owner() {
             if [ "$RUNNER_OS" = "Linux" ]; then
               # Later fetch steps reuse workflow code outside the selected/deletable checkout.
-              cat > "$RUNNER_TEMP/ci-git-owner.py"
+              printf '%s' "$1" > "$RUNNER_TEMP/ci-git-owner.py"
               exec "$python_command" -I -S "$RUNNER_TEMP/ci-git-owner.py"
             fi
-            exec "$python_command" -I -S -
+            exec "$python_command" -I -S -c "$1"
           }
-          run_owner <<'PYTHON'
           # Generated from .github/actions/git-owner/owner.py; do not edit here.
-          import base64
+          run_owner 'import base64
           import builtins
           import json
           import os
@@ -258,7 +257,7 @@ jobs:
 
           # The bootstrap inherits only this Job handle and stdio, joins before spawning Git,
           # then closes its copy. Even owner death before assignment kills it on that close.
-          windows_api = '''
+          windows_api = '\'''\'''\''
           import ctypes as c
           from ctypes import wintypes as w
           import os, subprocess, sys
@@ -273,7 +272,7 @@ jobs:
               function.errcheck = checked
               return function
           close_handle = bind("CloseHandle", w.BOOL, w.HANDLE)
-          '''
+          '\'''\'''\''
           if os.name == "nt":
               exec(windows_api)
 
@@ -312,14 +311,14 @@ jobs:
               set_job = bind("SetInformationJobObject", w.BOOL, w.HANDLE, c.c_int, c.c_void_p, w.DWORD)
               query_job = bind("QueryInformationJobObject", w.BOOL, w.HANDLE, c.c_int, c.c_void_p, w.DWORD, c.c_void_p)
               terminate_job = bind("TerminateJobObject", w.BOOL, w.HANDLE, w.UINT)
-              bootstrap = windows_api + '''
+              bootstrap = windows_api + '\'''\'''\''
           job = int(sys.argv[1])
           assign = bind("AssignProcessToJobObject", w.BOOL, w.HANDLE, w.HANDLE)
           current = bind("GetCurrentProcess", w.HANDLE)
           assign(job, current())
           close_handle(job)
           sys.exit(subprocess.call(sys.argv[2:], stdin=subprocess.DEVNULL))
-          '''
+          '\'''\'''\''
 
 
           def group_signal(pgid, signum, deadline):
@@ -344,7 +343,7 @@ jobs:
               except PermissionError:
                   pass  # EPERM can mean zombie-only; the census must still prove extinction.
               # Darwin -g selects a group; procps selects its session (a superset because
-              # run_git starts a new session). Pin Darwin's standard, not legacy, -g syntax.
+              # run_git starts a new session). Pin Darwin'\''s standard, not legacy, -g syntax.
               try:
                   result = subprocess.run(
                       ["ps", "-o", "pgid=,stat=", "-g", str(pgid)], stdin=subprocess.DEVNULL,
@@ -450,7 +449,7 @@ jobs:
 
 
           def git_auth_environment(remote, token):
-              # Git's promisor fetch inherits this process-only config from checkout.
+              # Git'\''s promisor fetch inherits this process-only config from checkout.
               # Reject redirects: http.<url> matching does not re-scope redirected requests.
               count = int(os.environ.get("GIT_CONFIG_COUNT", "0"))
               if count < 0:
@@ -518,7 +517,7 @@ jobs:
                       if child is not None:
                           drain(child, job)
                           if previous_locks is not None and (timed_out or cancelled or child.returncode):
-                              # Forced termination skips Git's lockfile cleanup. This checkout is exclusive;
+                              # Forced termination skips Git'\''s lockfile cleanup. This checkout is exclusive;
                               # reclaim only newly created locks after tree extinction, never existing locks.
                               for lock in sorted(git_lock_files(directory) - previous_locks):
                                   os.unlink(lock)
@@ -634,7 +633,7 @@ jobs:
                   # Rooted non-cone patterns keep the kind-owned workflow files exact.
                   # Sparse first, then blob-less avoids downloading a second repository snapshot.
                   run_git(harness, "sparse-checkout", "set", "--no-cone", *sparse_paths)
-                  fetch(harness, f"+{os.environ['WORKFLOW_SHA']}:refs/remotes/origin/ci-harness",
+                  fetch(harness, f"+{os.environ['\''WORKFLOW_SHA'\'']}:refs/remotes/origin/ci-harness",
                         max_attempts=1, blobless=True)
                   # Checkout now materializes the sparse blobs over the network, so it carries the
                   # fetch deadline instead of running unbounded like a local checkout.
@@ -720,8 +719,8 @@ jobs:
               if kind == "prepare":
                   raise SystemExit(0)
               workspace = os.environ["GITHUB_WORKSPACE"]
-              remote = f"https://github.com/{os.environ['CHECKOUT_REPO']}.git"
-              # The workflow's token is repository-bound; never lend it to a sibling checkout.
+              remote = f"https://github.com/{os.environ['\''CHECKOUT_REPO'\'']}.git"
+              # The workflow'\''s token is repository-bound; never lend it to a sibling checkout.
               token = os.environ.pop("CHECKOUT_TOKEN", "")
               if token and os.environ["CHECKOUT_REPO"] == os.environ.get("GITHUB_REPOSITORY"):
                   checkout_environment.update(git_auth_environment(remote, token))
@@ -821,7 +820,8 @@ jobs:
                   except BaseException:
                       pass
               raise SystemExit(exit_code)
-          PYTHON
+          '
+          # End generated CI Git owner.
 
       - name: Resolve checkout SHA
         id: checkout_ref

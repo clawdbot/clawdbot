@@ -1740,6 +1740,7 @@
     {"id":"native.apple.a7cd4b18600a62c2","source":"A saved Watch message expired after 48 hours. Check Chat on iPhone.","surface":"apple","sites":[{"kind":"ui-localized-call","path":"apps/ios/WatchApp/Sources/WatchInboxChatDelivery.swift"}]},
     {"id":"native.apple.b96c69383bb1ea99","source":"AI agent online","surface":"apple","sites":[{"kind":"ui-localized-call","path":"apps/ios/WatchApp/Sources/WatchInboxView.swift"}]},
     {"id":"native.apple.852aaf805bb657d0","source":"AI setup didn’t complete","surface":"apple","sites":[{"kind":"ui-localized-call","path":"apps/macos/Sources/OpenClaw/OnboardingAISetupSheet.swift"}]},
+    {"id":"native.apple.724aeb15159b2d91","source":"AI setup needs verification","surface":"apple","sites":[{"kind":"ui-named-argument","path":"apps/macos/Sources/OpenClaw/OnboardingAISetupView.swift"}]},
     {"id":"native.apple.78d69f7757f25ed2","source":"API Key","surface":"apple","sites":[{"kind":"ui-call","path":"apps/ios/Sources/Design/SettingsProTabSections.swift"}]},
     {"id":"native.apple.8b4fd41812651842","source":"API Keys","surface":"apple","sites":[{"kind":"ui-call","path":"apps/macos/Sources/OpenClaw/OnboardingAISetupView.swift"}]},
     {"id":"native.apple.d0fa5785b4dcc4a3","source":"API key","surface":"apple","sites":[{"kind":"ui-call","path":"apps/ios/Sources/Design/AgentProTab+Skills.swift"}]},
