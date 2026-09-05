@@ -1,4 +1,5 @@
 // Telegram tests cover account throttler plugin behavior.
+import { Api } from "grammy";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import { getOrCreateAccountThrottler } from "./account-throttler.js";
 import { resetTelegramAccountThrottlersForTest } from "./runtime.test-support.js";
@@ -40,6 +41,51 @@ describe("getOrCreateAccountThrottler", () => {
 
     expect(second).toBe(first);
     expect(other).not.toBe(first);
+  });
+
+  it("preserves the group message budget while sending topic actions", async () => {
+    vi.useFakeTimers();
+    const sent: string[] = [];
+    const api = new Api("123:typing-budget", {
+      fetch: async (input) => {
+        const url =
+          typeof input === "string" ? input : input instanceof URL ? input.href : input.url;
+        const method = url.slice(url.lastIndexOf("/") + 1);
+        sent.push(method);
+        return new Response(
+          JSON.stringify({
+            ok: true,
+            result:
+              method === "sendChatAction"
+                ? true
+                : {
+                    message_id: sent.length,
+                    date: 0,
+                    chat: { id: -100123, type: "supergroup", title: "Topics" },
+                    text: "Complete",
+                  },
+          }),
+        );
+      },
+    });
+    api.config.use(getOrCreateAccountThrottler("typing-budget"));
+    const actions = Array.from({ length: 21 }, (_, index) =>
+      api.sendChatAction(-100123, "typing", { message_thread_id: index + 1 }),
+    );
+    const replies = Array.from({ length: 21 }, () => api.sendMessage(-100123, "Complete"));
+    try {
+      await vi.advanceTimersByTimeAsync(100);
+      expect(sent.filter((method) => method === "sendChatAction")).toHaveLength(1);
+      await vi.advanceTimersByTimeAsync(21_000);
+      expect(sent.filter((method) => method === "sendChatAction")).toHaveLength(21);
+      expect(sent.filter((method) => method === "sendMessage")).toHaveLength(20);
+      await vi.advanceTimersByTimeAsync(40_000);
+      expect(sent.filter((method) => method === "sendMessage")).toHaveLength(21);
+    } finally {
+      await vi.advanceTimersByTimeAsync(180_000);
+      await Promise.all([...actions, ...replies]);
+      vi.useRealTimers();
+    }
   });
 
   it("round-robins group topic requests before entering the Telegram throttler", async () => {

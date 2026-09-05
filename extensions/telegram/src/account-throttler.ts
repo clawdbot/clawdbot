@@ -1,6 +1,7 @@
 // Telegram plugin module implements account throttler behavior.
 import { expectDefined } from "openclaw/plugin-sdk/expect-runtime";
 import { parseStrictInteger } from "openclaw/plugin-sdk/number-runtime";
+import { sleepWithAbort } from "openclaw/plugin-sdk/runtime-env";
 import { apiThrottler } from "./bot.runtime.js";
 
 type ApiThrottlerTransformer = ReturnType<typeof apiThrottler>;
@@ -16,11 +17,30 @@ type QueuedApiRequest<T> = {
   reject: (err: unknown) => void;
 };
 
-class GroupFairQueue {
+class GroupRequestScheduler {
   private readonly lanes = new Map<string, Array<QueuedApiRequest<unknown>>>();
   private laneOrder: string[] = [];
   private nextLaneIndex = 0;
   private running = false;
+  private actionTail = Promise.resolve();
+  private nextActionAtMs = 0;
+
+  enqueueAction<T>(run: () => Promise<T>, signal?: AbortSignal): Promise<T> {
+    const result = this.actionTail.then(async () => {
+      const waitMs = this.nextActionAtMs - Date.now();
+      if (waitMs > 0) {
+        await sleepWithAbort(waitMs, signal);
+      }
+      // Retain the existing peer spacing without consuming the message quota.
+      this.nextActionAtMs = Date.now() + 1_000;
+      return run();
+    });
+    this.actionTail = result.then(
+      () => undefined,
+      () => undefined,
+    );
+    return result;
+  }
 
   enqueue<T>(laneKey: string, run: () => Promise<T>): Promise<T> {
     return new Promise<T>((resolve, reject) => {
@@ -143,7 +163,7 @@ function createTelegramAccountThrottler(
   createThrottler: () => ApiThrottlerTransformer = apiThrottler,
 ): ApiThrottlerTransformer {
   const baseThrottler = createThrottler();
-  const fairQueuesByChat = new Map<string, GroupFairQueue>();
+  const schedulersByChat = new Map<string, GroupRequestScheduler>();
 
   return (prev, method, payload, signal) => {
     const apiPayload = readPayload(payload);
@@ -152,14 +172,17 @@ function createTelegramAccountThrottler(
       return baseThrottler(prev, method, payload, signal);
     }
 
-    let fairQueue = fairQueuesByChat.get(groupChatKey);
-    if (!fairQueue) {
-      fairQueue = new GroupFairQueue();
-      fairQueuesByChat.set(groupChatKey, fairQueue);
+    let scheduler = schedulersByChat.get(groupChatKey);
+    if (!scheduler) {
+      scheduler = new GroupRequestScheduler();
+      schedulersByChat.set(groupChatKey, scheduler);
+    }
+    if (method === "sendChatAction") {
+      return scheduler.enqueueAction(() => prev(method, payload, signal), signal);
     }
 
     const laneKey = resolveForumLaneKey(apiPayload);
-    return fairQueue.enqueue(laneKey, () => baseThrottler(prev, method, payload, signal));
+    return scheduler.enqueue(laneKey, () => baseThrottler(prev, method, payload, signal));
   };
 }
 
