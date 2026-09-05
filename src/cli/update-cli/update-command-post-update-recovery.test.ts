@@ -250,8 +250,8 @@ describe("failed update recovery restart", () => {
         { mode: "git", status: "skipped", reason: "dirty" },
         { mode: "pnpm", status: "error", reason: "global install swap" },
       ] as const
-    ).flatMap((outcome) =>
-      (["healthy", "failed"] as const).map((service) => ({ ...outcome, service })),
+    ).flatMap(({ mode, status, reason }) =>
+      (["healthy", "failed"] as const).map((service) => ({ mode, status, reason, service })),
     ),
   )(
     "reports the terminal $service recovery for a $mode $status update",
