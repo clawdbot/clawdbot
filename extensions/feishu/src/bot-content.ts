@@ -312,7 +312,7 @@ export function normalizeMentions(
     replacements.set(mention.key, replacement);
   }
   // Longest keys win; a single pass keeps placeholder-like display names literal.
-  const keys = [...replacements.keys()].sort((a, b) => b.length - a.length).map(escaped);
+  const keys = [...replacements.keys()].toSorted((a, b) => b.length - a.length).map(escaped);
   return text.replace(new RegExp(keys.join("|"), "g"), (key) => replacements.get(key)!).trim();
 }
 
