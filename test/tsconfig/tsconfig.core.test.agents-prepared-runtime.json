@@ -1,13 +1,9 @@
 {
   "extends": "./tsconfig.core.test.shard.json",
   "compilerOptions": {
-    "tsBuildInfoFile": "../../.artifacts/tsgo-cache/core-test-agents-root.tsbuildinfo"
+    "tsBuildInfoFile": "../../.artifacts/tsgo-cache/core-test-agents-prepared-runtime.tsbuildinfo"
   },
   "include": [
-    "../../src/agents/*.test.ts",
-    "../../src/agents/*.test.tsx"
-  ],
-  "exclude": [
     "../../src/agents/prepared-model-runtime*.test.ts",
     "../../src/agents/prepared-model-runtime*.test.tsx"
   ]

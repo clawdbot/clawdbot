@@ -7,6 +7,11 @@ export const TSGO_CORE_TEST_SHARDS = [
     config: "test/tsconfig/tsconfig.core.test.agents-root.json",
   },
   {
+    name: "agents-prepared-runtime",
+    group: "src",
+    config: "test/tsconfig/tsconfig.core.test.agents-prepared-runtime.json",
+  },
+  {
     name: "agents-other",
     group: "src",
     config: "test/tsconfig/tsconfig.core.test.agents-other.json",
