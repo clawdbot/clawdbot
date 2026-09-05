@@ -1,5 +1,6 @@
 import { createPluginRuntimeMock } from "openclaw/plugin-sdk/channel-test-helpers";
 import type { OpenClawConfig } from "openclaw/plugin-sdk/config-contracts";
+import { createDeferred } from "openclaw/plugin-sdk/extension-shared";
 import { describe, expect, it, vi } from "vitest";
 import {
   BOT_PUBLIC_KEY,
@@ -13,6 +14,7 @@ import {
   firstDispatch,
   handleBuzzInbound,
 } from "./inbound.test-helpers.js";
+import type { BuzzInboundMessage } from "./message-event.js";
 import { setBuzzRuntime } from "./runtime.js";
 
 describe("handleBuzzInbound", () => {
@@ -80,6 +82,50 @@ describe("handleBuzzInbound", () => {
       await handleBuzzInbound({ ...params, message: replyMessage() });
 
       expect(firstDispatch(runtime).ctxPayload.ReplyToBody).toBeUndefined();
+    });
+
+    it("drops a member removed while the reply lookup was pending from passive history", async () => {
+      const runtime = createPluginRuntimeMock();
+      setBuzzRuntime(runtime);
+      const params = createHistoryParams();
+      const lookup = createDeferred<BuzzInboundMessage | null>();
+      vi.mocked(params.bus.fetchMessageById).mockReturnValue(lookup.promise);
+      await handleBuzzInbound({
+        ...params,
+        message: createMessage({
+          id: "passive",
+          senderPubkey: OTHER_PUBLIC_KEY,
+          // Same thread as the reply: passive history is keyed by room and thread.
+          threadId: PARENT_EVENT_ID,
+          text: "said while still a member",
+        }),
+      });
+
+      const reply = handleBuzzInbound({ ...params, message: replyMessage() });
+      await vi.waitFor(() => expect(params.bus.fetchMessageById).toHaveBeenCalled());
+      // The roster changes while the lookup still awaits the relay. Membership
+      // filtering only holds if the snapshot is built after that await.
+      params.bus.directory.replaceMemberships(
+        new Map([
+          [
+            ROOM_ID,
+            {
+              roomId: ROOM_ID,
+              createdAt: 1_777_000_001,
+              eventId: "membership-removal",
+              publisherPublicKey: OTHER_PUBLIC_KEY,
+              members: new Set([BOT_PUBLIC_KEY, SENDER_PUBLIC_KEY]),
+              roles: new Map<string, string>(),
+            },
+          ],
+        ]),
+      );
+      lookup.resolve(null);
+      await reply;
+
+      expect(firstDispatch(runtime).ctxPayload.BodyForAgent).not.toContain(
+        "said while still a member",
+      );
     });
 
     it("still dispatches when the reply target cannot be fetched", async () => {

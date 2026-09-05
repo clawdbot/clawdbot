@@ -219,15 +219,6 @@ export async function handleBuzzInbound(params: {
     return;
   }
 
-  const history = snapshotBuzzPendingHistory({
-    historyMap: params.historyMap,
-    key: historyKey,
-    limit: historyLimit,
-    channelId,
-    directory: bus.directory,
-    currentMessage: textForAgent,
-  });
-
   const senderName = bus.directory.resolveSenderName(message.senderPubkey);
   const roomName = bus.directory.resolveRoomName(channelId);
   const replyQuote = await resolveBuzzReplyQuote({
@@ -243,6 +234,18 @@ export async function handleBuzzInbound(params: {
   // The lookup yielded to the relay: membership may have changed underneath it,
   // and a shutdown mid-lookup must not commit the dedupe claim.
   params.assertCurrent();
+  // Build passive history only after that await. Rendering it earlier freezes a
+  // roster the lookup then outlives: `assertCurrent` re-checks this turn's sender
+  // alone, so an author removed mid-lookup would keep contributing model-visible
+  // text that Buzz's membership filter is meant to withhold.
+  const history = snapshotBuzzPendingHistory({
+    historyMap: params.historyMap,
+    key: historyKey,
+    limit: historyLimit,
+    channelId,
+    directory: bus.directory,
+    currentMessage: textForAgent,
+  });
   const contextVisibility = resolveChannelContextVisibilityMode({
     cfg,
     channel: "buzz",
