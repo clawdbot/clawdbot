@@ -150,6 +150,7 @@ export function startManagedGatewayConfigReloader(
     stopRestartRetries,
   } = createGatewayReloadHandlers({
     ...params,
+    releaseChannelRouteHandoffs: params.channelManager.releaseChannelRouteHandoffs,
     pruneInactiveChannelAccountState: params.channelManager.pruneInactiveChannelAccountState,
     createGmailRestartAbortController,
     clearGmailRestartAbortController: (abortController) => {
