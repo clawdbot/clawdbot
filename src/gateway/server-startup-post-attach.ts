@@ -1205,7 +1205,7 @@ export async function startGatewayPostAttachRuntime(
     onPostReadySidecars?: (postReadySidecars: GatewayPostReadySidecarHandle[]) => void;
     onGatewayLifetimeSidecars?: (sidecars: GatewayPostReadySidecarHandle[]) => void;
     unregisterConnectionDependentSidecar: (sidecar: GatewayPostReadySidecarHandle) => void;
-    trackStartupWork: <T>(run: () => Promise<T>) => Promise<T>;
+    trackStartupWork: <T>(run: (signal: AbortSignal) => Promise<T>) => Promise<T>;
     startWorkerEnvironmentRuntime?: () => Awaitable<GatewayPostReadySidecarHandle | null>;
     onSidecarsReady?: () => void;
     isClosing?: () => boolean;
@@ -1582,7 +1582,7 @@ export async function startGatewayPostAttachRuntime(
   // retains dependency loads and hooks even when readiness has already settled.
   const sidecarsPromise = params.trackStartupWork(startSidecars);
   void params
-    .trackStartupWork(async () => {
+    .trackStartupWork(async (signal) => {
       const sidecarsResult = await sidecarsPromise;
       if (params.minimalTestGateway) {
         return;
@@ -1597,13 +1597,17 @@ export async function startGatewayPostAttachRuntime(
       if (params.isClosing?.()) {
         return;
       }
-      const sentinelRefresh = runWithGatewayIndependentRootWorkAdmission(async () => {
-        await measureStartup(params.startupTrace, "post-attach.update-sentinel", async () => {
-          if (!params.isClosing?.()) {
-            await runtimeDeps.refreshLatestUpdateRestartSentinel();
-          }
-        });
-      }, "startup:update-sentinel").catch((err: unknown) => {
+      const sentinelRefresh = runWithGatewayIndependentRootWorkAdmission(
+        async () => {
+          await measureStartup(params.startupTrace, "post-attach.update-sentinel", async () => {
+            if (!params.isClosing?.()) {
+              await runtimeDeps.refreshLatestUpdateRestartSentinel();
+            }
+          });
+        },
+        "startup:update-sentinel",
+        signal,
+      ).catch((err: unknown) => {
         params.log.warn(`restart sentinel refresh failed: ${String(err)}`);
       });
       try {
@@ -1619,25 +1623,29 @@ export async function startGatewayPostAttachRuntime(
         if (params.isClosing?.()) {
           return;
         }
-        await runWithGatewayIndependentRootWorkAdmission(async () => {
-          if (params.isClosing?.()) {
-            return;
-          }
-          await withPluginHttpRouteRegistry(sidecarsResult.pluginRegistry, () =>
-            hookRunner.runGatewayStart(
-              { port: params.port },
-              {
-                port: params.port,
-                config: params.gatewayPluginConfigAtStart,
-                workspaceDir: params.defaultWorkspaceDir,
-                getCron: () =>
-                  (params.getCronService?.() ?? params.deps.cron) as
-                    | PluginHookGatewayCronService
-                    | undefined,
-              },
-            ),
-          );
-        }, "hooks:gateway-start").catch((err: unknown) => {
+        await runWithGatewayIndependentRootWorkAdmission(
+          async () => {
+            if (params.isClosing?.()) {
+              return;
+            }
+            await withPluginHttpRouteRegistry(sidecarsResult.pluginRegistry, () =>
+              hookRunner.runGatewayStart(
+                { port: params.port },
+                {
+                  port: params.port,
+                  config: params.gatewayPluginConfigAtStart,
+                  workspaceDir: params.defaultWorkspaceDir,
+                  getCron: () =>
+                    (params.getCronService?.() ?? params.deps.cron) as
+                      | PluginHookGatewayCronService
+                      | undefined,
+                },
+              ),
+            );
+          },
+          "hooks:gateway-start",
+          signal,
+        ).catch((err: unknown) => {
           params.log.warn(`gateway_start hook failed: ${String(err)}`);
         });
       } finally {

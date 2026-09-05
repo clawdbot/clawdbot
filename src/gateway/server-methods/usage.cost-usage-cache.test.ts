@@ -67,7 +67,7 @@ describe("costUsageCache bounded growth", () => {
     try {
       const stale = await owner.track(() => testApi.loadCostUsageSummaryCached(params));
       expect(stale).toEqual(first);
-      // Keep the original producer joinable even against the broken owner on red.
+      // Retain the original refresh for cleanup if scope tracking regresses.
       refresh = Array.from(testApi.costUsageCache.values())[0]?.inFlight;
       expect(refresh).toBeDefined();
       await replacementOwner.track(() =>

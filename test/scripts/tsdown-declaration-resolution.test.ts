@@ -11,8 +11,7 @@ import {
   createFixture,
   declarationCacheRecords,
   expectStagingClean,
-  loader,
-  runFixture,
+  runFixtureModule,
   runUnifiedWriter,
   runWriter,
   treeHashes,
@@ -131,11 +130,8 @@ describe("tsdown checkout declaration resolution", () => {
           expect(fs.realpathSync(alias)).not.toBe(alias);
           expect(fs.realpathSync(alias)).not.toBe(root);
         }
-        const result = runFixture(root, [
-          "--import",
-          loader,
-          "--input-type=module",
-          "--eval",
+        const result = runFixtureModule(
+          root,
           `
 import assert from "node:assert/strict";
 import fs from "node:fs";
@@ -169,7 +165,7 @@ try {
   const declaration = fs.readFileSync(path.join(outDir, "shared.d.mts"), "utf8");
   assert.match(declaration, /inferredOrigin: "local"/);
   assert.match(declaration, /directoryName\\(\\): "declared-cwd"/);
-  const inputs = readDeclarationInputs(outDir, ["alias"]);
+  const inputs = readDeclarationInputs(outDir, "alias");
   assert.ok(inputs.includes(${JSON.stringify(localInput)}));
   const { globalContext } = await import(pathToFileURL(resolveDeclarationInputCaptureModule()).href);
   const consumed = [...new Set(globalContext.programs.flatMap(program => program.getSourceFiles()
@@ -180,7 +176,7 @@ try {
   fs.rmSync(stage, { recursive: true, force: true });
 }
 `,
-        ]);
+        );
         expect(result.status, result.stdout + result.stderr).toBe(0);
       },
     );
@@ -188,11 +184,8 @@ try {
 
   it("preserves object and registration hooks while enforcing the declaration boundary", () => {
     const { root } = nestedFixture();
-    const result = runFixture(root, [
-      "--import",
-      loader,
-      "--input-type=module",
-      "--eval",
+    const result = runFixtureModule(
+      root,
       `
 import assert from "node:assert/strict";
 import fs from "node:fs";
@@ -217,7 +210,7 @@ for (const registration of [false, true]) {
   }
 }
 `,
-    ]);
+    );
     expect(result.status, result.stdout + result.stderr).toBe(0);
   });
 
@@ -228,18 +221,18 @@ for (const registration of [false, true]) {
     write("tsdown.ai.config.ts", fs.readFileSync("tsdown.ai.config.ts", "utf8"));
     const outside = path.join(path.dirname(root), "runtime.ts");
     fs.writeFileSync(outside, 'export const runtimeValue = "outside-runtime";');
-    const result = runFixture(root, [
-      "--import",
-      loader,
-      "--input-type=module",
-      "--eval",
+    const result = runFixtureModule(
+      root,
       `
 import assert from "node:assert/strict";
 import fs from "node:fs";
+import { createRequire } from "node:module";
 import path from "node:path";
 import { build } from "tsdown";
-import ts from "typescript";
+import { resolveDeclarationInputCaptureModule } from "./scripts/lib/tsdown-declaration-boundary.mts";
+const ts = createRequire(resolveDeclarationInputCaptureModule())("typescript");
 const root = process.cwd();
+const canonicalRoot = fs.realpathSync.native(root);
 const original = { ...ts.sys };
 process.env.OPENCLAW_RUN_NODE_SKIP_DTS_BUILD = ${JSON.stringify(dts ? "1" : "0")};
 const { default: configs } = await import("./tsdown.config.ts");
@@ -263,7 +256,10 @@ const bundles = await build({
     const resolved = await config.inputOptions?.(input, format, context) ?? input;
     return { ...resolved, plugins: [resolved.plugins, {
       name: "fixture-independent-cjs",
-      buildStart: { order: "post", async handler() {
+      buildStart: { order: context.cjsDts ? "post" : "pre", async handler() {
+        if (${dts} && !context.cjsDts) {
+          assert.equal(ts.sys.getCurrentDirectory(), canonicalRoot, "callback plugin started before boundary acquisition");
+        }
         // CJS declarations must remain bounded after the runtime sibling finishes.
         if (context.cjsDts) await runtimeDone;
       } },
@@ -308,7 +304,7 @@ try {
 }
 console.log("resolved declaration override honored");
 `,
-    ]);
+    );
     expect(result.status, result.stdout + result.stderr).toBe(0);
     expect(result.stdout).toContain("resolved declaration override honored");
   });
@@ -320,11 +316,8 @@ console.log("resolved declaration override honored");
       "src/second.ts",
       'import "synthetic-wrapper"; export const secondOrigin = declarationOrigin;',
     );
-    const result = runFixture(root, [
-      "--import",
-      loader,
-      "--input-type=module",
-      "--eval",
+    const result = runFixtureModule(
+      root,
       `
 import assert from "node:assert/strict";
 import fs from "node:fs";
@@ -407,7 +400,7 @@ for (const failure of [false, true]) {
 }
 console.log("workspace/AI lifecycle restored after success and failure");
 `,
-    ]);
+    );
     expect(result.status, result.stdout + result.stderr).toBe(0);
     expect(result.stdout).toContain("workspace/AI lifecycle restored after success and failure");
   });
@@ -426,14 +419,16 @@ console.log("workspace/AI lifecycle restored after success and failure");
       `${fs.readFileSync(path.join(root, "tsdown.config.ts"), "utf8")}
 for (const config of configs) {
   if (!config.dts?.emitDtsOnly) continue;
-  const done = config.hooks["build:done"];
-  config.hooks["build:done"] = async context => {
-    await done(context);
-    const marker = ".artifacts/replace-input";
-    if (!fs.existsSync(marker)) return;
-    const file = fs.readFileSync(marker, "utf8") === "ancestor" ? ${JSON.stringify(ancestorInput)} : ${JSON.stringify(localInput)};
-    fs.writeFileSync(file + ".replacement", fs.readFileSync(file));
-    fs.renameSync(file + ".replacement", file);
+  const register = config.hooks;
+  config.hooks = async hooks => {
+    await register(hooks);
+    hooks.hook("build:done", () => {
+      const marker = ".artifacts/replace-input";
+      if (!fs.existsSync(marker)) return;
+      const file = fs.readFileSync(marker, "utf8") === "ancestor" ? ${JSON.stringify(ancestorInput)} : ${JSON.stringify(localInput)};
+      fs.writeFileSync(file + ".replacement", fs.readFileSync(file));
+      fs.renameSync(file + ".replacement", file);
+    });
   };
 }
 `,

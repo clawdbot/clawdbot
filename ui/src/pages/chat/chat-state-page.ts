@@ -17,7 +17,7 @@ import {
   isUiSelectedGlobalSessionKey,
 } from "../../lib/sessions/session-key.ts";
 import { resolveAgentIdForSession } from "./chat-avatar.ts";
-import { CHAT_TRANSCRIPT_LOADING_CHANGED_EVENT } from "./chat-history-state.ts";
+import { CHAT_TRANSCRIPT_LOADING_CHANGED_EVENT } from "./chat-history-events.ts";
 import { removeQueuedMessage } from "./chat-queue.ts";
 import { attachChatRealtimeActions, createInitialChatRealtimeState } from "./chat-realtime.ts";
 import {

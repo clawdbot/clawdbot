@@ -228,9 +228,9 @@ export async function finishGatewayStartup(params: {
     () => import("./server-active-work.js"),
   );
   const activeWorkInspectors = createGatewayServerActiveWorkInspectors(gatewayRequestContext);
-  const trackStartupWork = <T>(run: () => Promise<T>): Promise<T> => {
+  const trackStartupWork = <T>(run: (signal: AbortSignal) => Promise<T>): Promise<T> => {
     // Register before starting, without lending the connection scope to long-lived services.
-    const operation = Promise.resolve().then(run);
+    const operation = Promise.resolve().then(() => run(runtime.connectionWork.signal));
     return runtime.connectionWork.track(() => operation);
   };
   const postAttachHandles = await trackStartupWork(() =>
@@ -437,6 +437,7 @@ export async function finishGatewayStartup(params: {
       }
     },
     getPluginMetadataSnapshot,
+    getPluginRegistry: () => runtime.pluginRuntime.registry,
     startChannel,
     stopChannel,
     getChannelAutostartSuppression: channelManager.getAutostartSuppression,

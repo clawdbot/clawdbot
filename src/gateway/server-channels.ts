@@ -7,12 +7,10 @@ import { buildChannelAccountSnapshotFromInspection } from "../channels/account-s
 import { isChannelIngressUnavailableError } from "../channels/message/ingress-unavailable.js";
 import { resolveChannelDefaultAccountId } from "../channels/plugins/helpers.js";
 import {
-  type ChannelId,
-  getChannelPlugin,
-  listChannelPlugins,
-  resolveChannelPluginRegistration,
-} from "../channels/plugins/index.js";
-import type { ChannelAccountSnapshot } from "../channels/plugins/types.public.js";
+  getLoadedChannelPluginEntryById,
+  listLoadedChannelPluginsForRegistry,
+} from "../channels/plugins/registry-loaded.js";
+import type { ChannelAccountSnapshot, ChannelId } from "../channels/plugins/types.public.js";
 import {
   applyChannelAccountState,
   resolveChannelAccountState,
@@ -42,14 +40,11 @@ import {
 } from "../plugins/capability-lease.js";
 import { withPluginHttpRouteRegistry } from "../plugins/http-registry.js";
 import type { PluginRegistry } from "../plugins/registry.js";
+import { withPluginRuntimeRegistryScope } from "../plugins/runtime/gateway-request-scope.js";
 import type { PluginRuntimeChannel } from "../plugins/runtime/types-channel.js";
 import { runOutsideGatewayRootWorkAdmission } from "../process/gateway-work-admission.js";
 import { resolveAccountEntry, resolveNormalizedAccountEntry } from "../routing/account-lookup.js";
-import {
-  DEFAULT_ACCOUNT_ID,
-  normalizeAccountId,
-  normalizeOptionalAccountId,
-} from "../routing/session-key.js";
+import { normalizeAccountId, normalizeOptionalAccountId } from "../routing/session-key.js";
 import type { RuntimeEnv } from "../runtime.js";
 import {
   assertSecretOwnerAvailable,
@@ -156,15 +151,6 @@ function createRuntimeStore(): ChannelRuntimeStore {
   };
 }
 
-function resolveDefaultRuntime(channelId: ChannelId): ChannelAccountSnapshot {
-  const plugin = getChannelPlugin(channelId);
-  return plugin?.status?.defaultRuntime ?? { accountId: DEFAULT_ACCOUNT_ID };
-}
-
-function cloneDefaultRuntime(channelId: ChannelId, accountId: string): ChannelAccountSnapshot {
-  return { ...resolveDefaultRuntime(channelId), accountId };
-}
-
 async function waitForChannelStopGracefully(task: Promise<unknown> | undefined, timeoutMs: number) {
   if (!task) {
     return true;
@@ -194,6 +180,7 @@ async function waitForChannelStopGracefully(task: Promise<unknown> | undefined, 
 
 type ChannelManagerOptions = {
   getRuntimeConfig: () => OpenClawConfig;
+  getPluginRegistry: () => PluginRegistry;
   channelLogs: Partial<Record<ChannelId, SubsystemLogger>>;
   channelRuntimeEnvs: Partial<Record<ChannelId, RuntimeEnv>>;
   /**
@@ -214,6 +201,7 @@ type ChannelManagerOptions = {
    *
    * const channelManager = createChannelManager({
    *   getRuntimeConfig,
+   *   getPluginRegistry,
    *   channelLogs,
    *   channelRuntimeEnvs,
    *   channelRuntime: createPluginRuntime().channel,
@@ -233,7 +221,6 @@ type ChannelManagerOptions = {
    * `createPluginRuntime().channel` surface.
    */
   resolveChannelRuntime?: () => PluginRuntimeChannel | Promise<PluginRuntimeChannel>;
-  getPluginHttpRouteRegistry?: () => PluginRegistry;
   startupTrace?: GatewayStartupTrace;
   deferStartupAccountStartsUntil?: Promise<void>;
   getNativeApprovalRuntime?: () => GatewayNativeApprovalRuntime | undefined;
@@ -300,9 +287,25 @@ export function createChannelManager(opts: ChannelManagerOptions): ChannelManage
     channelRuntimeEnvs,
     channelRuntime,
     resolveChannelRuntime,
-    getPluginHttpRouteRegistry,
+    getPluginRegistry,
     startupTrace,
   } = opts;
+
+  // Each operation retains its Gateway's registry; later retries select its successor.
+  // Ambient request or process registries may belong to another live Gateway.
+  const withRegistry = <T>(run: (registry: PluginRegistry) => T): T => {
+    const registry = getPluginRegistry();
+    return withPluginRuntimeRegistryScope(registry, () => run(registry));
+  };
+  const getChannelPlugin = (channelId: ChannelId) =>
+    getLoadedChannelPluginEntryById(channelId, getPluginRegistry())?.plugin;
+  const cloneDefaultRuntime = (
+    channelId: ChannelId,
+    accountId: string,
+  ): ChannelAccountSnapshot => ({
+    ...getChannelPlugin(channelId)?.status?.defaultRuntime,
+    accountId,
+  });
 
   const channelStores = new Map<ChannelId, ChannelRuntimeStore>();
   let channelStartPause: ReturnType<ChannelManager["pauseChannelStarts"]> | undefined;
@@ -491,18 +494,18 @@ export function createChannelManager(opts: ChannelManagerOptions): ChannelManage
   };
 
   const startChannelProcessOwned = async (
+    registry: PluginRegistry,
     channelId: ChannelId,
     accountId?: string,
     optsValue: StartChannelOptions = {},
   ): Promise<ReadonlyMap<string, ChannelAccountStartOutcome>> => {
-    const registry = getPluginHttpRouteRegistry?.();
     const assertStartCurrent = () => {
-      if (channelStartPause || registry !== getPluginHttpRouteRegistry?.()) {
+      if (channelStartPause || registry !== getPluginRegistry()) {
         throw new Error("Channel plugins are reloading; retry the start after reload completes.");
       }
     };
     assertStartCurrent();
-    const registration = resolveChannelPluginRegistration(channelId);
+    const registration = getLoadedChannelPluginEntryById(channelId, registry);
     const plugin = registration?.plugin;
     const startAccount = plugin?.gateway?.startAccount;
     if (!startAccount) {
@@ -895,10 +898,11 @@ export function createChannelManager(opts: ChannelManagerOptions): ChannelManage
                   throw error;
                 }
               };
-              const routeRegistry = getPluginHttpRouteRegistry?.();
-              startAccountTask = routeRegistry
-                ? withPluginHttpRouteRegistry(routeRegistry, runStartAccount, capabilityLease)
-                : runStartAccount();
+              startAccountTask = withPluginHttpRouteRegistry(
+                registry,
+                runStartAccount,
+                capabilityLease,
+              );
             });
             if (!startAccountTask) {
               return;
@@ -1128,16 +1132,19 @@ export function createChannelManager(opts: ChannelManagerOptions): ChannelManage
 
   // Channel lifetimes outlive the RPC or timer requesting startup, so their
   // provider, approval, cleanup, and restart descendants must be process-owned.
-  const startChannelInternal = (...args: Parameters<typeof startChannelProcessOwned>) =>
-    runOutsideGatewayRootWorkAdmission(() => startChannelProcessOwned(...args));
+  const startChannelInternal: ChannelManager["startChannel"] = (...args) =>
+    withRegistry((registry) =>
+      runOutsideGatewayRootWorkAdmission(() => startChannelProcessOwned(registry, ...args)),
+    );
 
-  const stopChannel = async (
+  const stopChannelInRegistry = async (
+    registry: PluginRegistry,
     channelId: ChannelId,
     accountId?: string,
     optsLocal: StopChannelOptions = {},
   ) => {
     const manual = optsLocal.manual ?? true;
-    const plugin = getChannelPlugin(channelId);
+    const plugin = getLoadedChannelPluginEntryById(channelId, registry)?.plugin;
     const store = getStore(channelId);
     const lifecycleIds = new Set<string>([
       ...store.aborts.keys(),
@@ -1209,11 +1216,10 @@ export function createChannelManager(opts: ChannelManagerOptions): ChannelManage
                   );
                 },
               });
-              const routeRegistry = getPluginHttpRouteRegistry?.();
-              const stopAccountAttempt = (
-                routeRegistry
-                  ? withPluginHttpRouteRegistry(routeRegistry, runStopAccount, capabilityLease)
-                  : runStopAccount()
+              const stopAccountAttempt = withPluginHttpRouteRegistry(
+                registry,
+                runStopAccount,
+                capabilityLease,
               ).catch((error: unknown) => {
                 if (stopAttemptAbandoned) {
                   log.warn?.(
@@ -1326,6 +1332,9 @@ export function createChannelManager(opts: ChannelManagerOptions): ChannelManage
     }
   };
 
+  const stopChannel: ChannelManager["stopChannel"] = (...args) =>
+    withRegistry((registry) => stopChannelInRegistry(registry, ...args));
+
   const startChannelsWithOptions = async (startOptions: StartChannelOptions = {}) => {
     let releaseAccountStarts: (() => void) | undefined;
     const deferAccountStartUntil =
@@ -1341,20 +1350,22 @@ export function createChannelManager(opts: ChannelManagerOptions): ChannelManage
     try {
       await runTasksWithConcurrency({
         limit: CHANNEL_STARTUP_CONCURRENCY,
-        tasks: [...listChannelPlugins()].map((plugin) => async () => {
-          try {
-            await measureStartup(`channels.${plugin.id}.start`, () =>
-              startChannelInternal(plugin.id, undefined, {
-                ...startOptions,
-                ...(deferAccountStartUntil ? { deferAccountStartUntil } : {}),
-              }),
-            );
-          } catch (err) {
-            ensureChannelLog(plugin.id).error?.(
-              `[${plugin.id}] channel startup failed: ${formatErrorMessage(err)}`,
-            );
-          }
-        }),
+        tasks: listLoadedChannelPluginsForRegistry(getPluginRegistry()).map(
+          (plugin) => async () => {
+            try {
+              await measureStartup(`channels.${plugin.id}.start`, () =>
+                startChannelInternal(plugin.id, undefined, {
+                  ...startOptions,
+                  ...(deferAccountStartUntil ? { deferAccountStartUntil } : {}),
+                }),
+              );
+            } catch (err) {
+              ensureChannelLog(plugin.id).error?.(
+                `[${plugin.id}] channel startup failed: ${formatErrorMessage(err)}`,
+              );
+            }
+          },
+        ),
       });
     } finally {
       releaseAccountStarts?.();
@@ -1400,10 +1411,11 @@ export function createChannelManager(opts: ChannelManagerOptions): ChannelManage
   };
 
   const getRuntimeSnapshot = (): ChannelRuntimeSnapshot => {
+    const registry = getPluginRegistry();
     const cfg = getRuntimeConfig();
     const channels: ChannelRuntimeSnapshot["channels"] = {};
     const channelAccounts: ChannelRuntimeSnapshot["channelAccounts"] = {};
-    for (const plugin of listChannelPlugins()) {
+    for (const plugin of listLoadedChannelPluginsForRegistry(registry)) {
       const store = getStore(plugin.id);
       const accountIds = plugin.config.listAccountIds(cfg);
       const defaultAccountId = resolveChannelDefaultAccountId({
@@ -1415,6 +1427,7 @@ export function createChannelManager(opts: ChannelManagerOptions): ChannelManage
       for (const id of accountIds) {
         const current = store.runtimes.get(id) ?? cloneDefaultRuntime(plugin.id, id);
         const unavailable = resolveUnavailableChannelAccountSnapshot(cfg, {
+          registry,
           channelId: plugin.id,
           accountId: id,
           runtime: current,

@@ -1766,7 +1766,9 @@ describe("handleControlUiHttpRequest", () => {
             headers,
           });
           expect(image.res.statusCode).toBe(200);
-          expect(image.end.mock.calls[0]?.[0]).toEqual(avatar);
+          const imageBytes = image.end.mock.calls[0]?.[0];
+          expect(Buffer.isBuffer(imageBytes)).toBe(true);
+          expect(imageBytes?.length).toBeLessThan(4096);
           const unchanged = await runBootstrapConfigRequest(request);
           expect(parseBootstrapPayload(unchanged.end).assistantAvatar).toBe(parsed.assistantAvatar);
           const replacementPath = path.join(tmp, "replacement.png");
@@ -1783,7 +1785,7 @@ describe("handleControlUiHttpRequest", () => {
     },
   );
 
-  it("preserves an exact-cap IDENTITY.md data URL in bootstrap", async () => {
+  it("keeps an exact-cap IDENTITY.md data URL out of bootstrap", async () => {
     await withControlUiRoot({
       fn: async (tmp) => {
         const dataUrl = `data:image/svg+xml;base64,${Buffer.alloc(AVATAR_MAX_BYTES).toString("base64")}`;
@@ -1801,7 +1803,7 @@ describe("handleControlUiHttpRequest", () => {
 
         expect(handled).toBe(true);
         expect(parseBootstrapPayload(end)).toMatchObject({
-          assistantAvatar: dataUrl,
+          assistantAvatar: expect.stringMatching(/^\/avatar\/main\?v=[a-f0-9]+$/),
           assistantAvatarStatus: "data",
         });
       },

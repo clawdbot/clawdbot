@@ -18,7 +18,6 @@ import {
   redactChromeMcpLocalPathForDiagnostic,
   redactChromeMcpProfileLabelForDiagnostic,
 } from "./chrome-mcp-diagnostics.js";
-import { buildChromeMcpSessionCacheKey } from "./chrome-mcp-options.js";
 import {
   closeTrackedChromeMcpSession,
   refreshChromeMcpCleanupProcess,
@@ -48,10 +47,10 @@ async function withChromeMcpHandshakeTimeout<T>(task: Promise<T>): Promise<T> {
 }
 
 async function createRealSession(
+  cacheKey: string,
   profileName: string,
   options: NormalizedChromeMcpProfileOptions,
 ): Promise<ChromeMcpSession> {
-  const cacheKey = buildChromeMcpSessionCacheKey(profileName, options);
   const transport = new StdioClientTransport({
     command: options.command,
     args: options.args,
@@ -66,34 +65,29 @@ async function createRealSession(
   );
   // Capture before connect starts the subprocess so failed handshakes retain stderr.
   const getStderr = drainStderr(transport);
-  const closeTransport = transport.close.bind(transport);
+  const startTransport = transport.start.bind(transport);
   let spawned = false;
   const session: ChromeMcpSession = {
     client,
     transport,
-    closeTransport: () => {
-      spawned ||= transport.pid !== null;
-      return closeTransport();
-    },
+    closeTransport: transport.close.bind(transport),
     ready: Promise.resolve(),
     processCleanup: { status: "open" },
   };
-  // Initialize failure also makes the SDK close its transport. Capture descendants
-  // before that native close clears the PID, and let every caller join this owner.
-  const closeSession = () => {
-    const closing = closeTrackedChromeMcpSession(cacheKey, session);
-    void closing.catch(() => {});
-    return closing;
+  transport.start = async () => {
+    await startTransport();
+    // Spawn success owns the stderr lifetime; close may already have cleared the PID.
+    spawned = true;
+    await refreshChromeMcpCleanupProcess(session);
   };
-  transport.close = closeSession;
-  // SDK initialize failure discards client.close(); return the handled owner promise directly.
-  client.close = closeSession;
+  // SDK initialization and read-buffer failures can close before connect settles.
+  // Funnel both SDK entry points through the same owner before it clears the PID.
+  client.close = transport.close = () => closeTrackedChromeMcpSession(cacheKey, session);
   const ready = (async () => {
     try {
       await withChromeMcpHandshakeTimeout(
         (async () => {
           await client.connect(transport);
-          await refreshChromeMcpCleanupProcess(session);
           const tools = await client.listTools();
           if (!tools.tools.some((tool) => tool.name === "list_pages")) {
             throw new Error("Chrome MCP server did not expose the expected navigation tools.");
@@ -224,7 +218,10 @@ export function createChromeMcpSession(
   options: NormalizedChromeMcpProfileOptions,
   signal?: AbortSignal,
 ): { promise: Promise<ChromeMcpSession>; cleanup: Promise<void> } {
-  const created = (getChromeMcpSessionFactory() ?? createRealSession)(profileName, options);
+  const factory = getChromeMcpSessionFactory();
+  const created = factory
+    ? factory(profileName, options)
+    : createRealSession(cacheKey, profileName, options);
   let adopted = false;
   let closePromise: Promise<void> | undefined;
   const closeCreated = async (session: ChromeMcpSession) => {

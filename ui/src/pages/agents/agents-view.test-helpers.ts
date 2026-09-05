@@ -16,7 +16,6 @@ export function createAgentViewTestProps(
       canRunCron: true,
     },
     basePath: "",
-    authToken: null,
     loading: false,
     error: null,
     agentsList: {

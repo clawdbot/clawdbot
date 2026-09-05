@@ -358,12 +358,13 @@ allowed app can be installed and authenticated before it becomes callable.
 OpenClaw provisionally admits only ownership-proven, policy-approved apps,
 creates the thread with `_default.enabled = false` and explicit app overrides,
 then calls `app/installed` once with that thread's ID and `forceRefresh: false`.
-It exposes an app only when Codex confirms the app is enabled and callable for
-the actual thread. Managed restrictions, workspace policy, missing metadata,
-revoked auth, and unavailable tools still fail closed.
+If that snapshot reports missing, disabled, or non-callable apps, OpenClaw logs
+one warning and continues with the remaining tools. Codex still enforces
+managed restrictions, workspace policy, and app/tool permissions; unavailable
+apps gain no access.
 
-Attestation completes before OpenClaw injects history, starts a turn, or
-persists the native thread binding. On failure, OpenClaw deletes a persistent
+The check completes before OpenClaw injects history, starts a turn, or
+persists the native thread binding. If the snapshot request fails, OpenClaw deletes a persistent
 provisional thread with `thread/delete` or unsubscribes an ephemeral thread
 with `thread/unsubscribe`. If safe cleanup cannot be confirmed, it retires the
 owning app-server connection. Supervised branches also clean up their temporary

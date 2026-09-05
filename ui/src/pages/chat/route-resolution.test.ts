@@ -1,6 +1,9 @@
 // @vitest-environment node
-import { describe, expect, it, vi } from "vitest";
-import { GatewayRequestError } from "../../api/gateway.ts";
+import { createRouter } from "@openclaw/uirouter";
+import { describe, expect, it, onTestFinished, vi } from "vitest";
+import type { SessionsResolveResult } from "../../../../packages/gateway-protocol/src/index.js";
+import { createDeferred } from "../../../../test/helpers/promise.js";
+import { GatewayRequestError, type GatewayEventListener } from "../../api/gateway.ts";
 import type { GatewaySessionRow, SessionsListResult } from "../../api/types.ts";
 import { INTERNAL_SESSION_PATH_PARAM } from "../../app-route-paths.ts";
 import type { ApplicationContext } from "../../app/context.ts";
@@ -50,12 +53,25 @@ function contextFor(
   }) => SessionsListResult | null,
   cachedSessions: GatewaySessionRow[] = [],
 ) {
+  const router = createRouter({ routes: [] });
+  const lifecycle = new AbortController();
+  const gatewayListeners = new Set<Parameters<ApplicationContext["gateway"]["subscribe"]>[0]>();
+  const eventListeners = new Set<GatewayEventListener>();
+  onTestFinished(() => {
+    lifecycle.abort();
+    router.stop();
+    expect(gatewayListeners.size).toBe(0);
+    expect(eventListeners.size).toBe(0);
+  });
   const client = {};
   const list = vi.fn(async (options: { search?: string; offset?: number } = {}) =>
     listResult(options),
   );
   const context = {
     basePath: "",
+    // These tests invoke the loader directly; there is no outlet-owned match.
+    router,
+    lifecycleAbortSignal: lifecycle.signal,
     gateway: {
       snapshot: {
         phase: "connected",
@@ -63,11 +79,18 @@ function contextFor(
         hello: null,
         sessionKey: "agent:roboclaw:main",
       },
-      subscribe: vi.fn(() => () => undefined),
+      subscribe: (listener: Parameters<ApplicationContext["gateway"]["subscribe"]>[0]) => {
+        gatewayListeners.add(listener);
+        return () => gatewayListeners.delete(listener);
+      },
+      subscribeEvents: (listener: GatewayEventListener) => {
+        eventListeners.add(listener);
+        return () => eventListeners.delete(listener);
+      },
     },
     agents: { state: { agentsList: { mainKey: "main" } } },
     agentSelection: { state: { selectedId: "roboclaw" } },
-    sessions: { state: { result: result(cachedSessions) }, list },
+    sessions: { state: { result: result(cachedSessions) }, canonicalListRevision: 0, list },
   } as unknown as ApplicationContext;
   return { context, list };
 }
@@ -80,7 +103,7 @@ function installShortResolver(
     : { ok: false },
 ) {
   const request = vi.fn(async (method: string, _params: Record<string, unknown>) => {
-    if (method === "sessions.resolve") {
+    if (method === "sessions.resolve" || method === "chat.startup") {
       const present = ({ key }: { key: string }) => {
         const session = rows.find((candidate) => candidate.key === key);
         return {
@@ -90,12 +113,13 @@ function installShortResolver(
           ...(session?.boardFace ? { boardFace: session.boardFace } : {}),
         };
       };
-      return resolved.ok
+      const resolution = resolved.ok
         ? { ok: true, ...present(resolved) }
         : {
             ok: false,
             ...(resolved.candidates ? { candidates: resolved.candidates.map(present) } : {}),
           };
+      return method === "chat.startup" ? { resolution, messages: [] } : resolution;
     }
     throw new Error(`Unexpected gateway request: ${method}`);
   });
@@ -459,11 +483,12 @@ describe("gateway-backed session route resolution", () => {
     // Both ids start with 12345678; the slug says which one, so the short link still
     // resolves instead of bouncing to the chooser.
     expect(loaded).toMatchObject({ kind: "session", sessionKey: rows[1]?.key });
-    expect(request).toHaveBeenNthCalledWith(1, "sessions.resolve", {
+    expect(request).toHaveBeenNthCalledWith(1, "chat.startup", {
       shortId: "12345678",
       slugHint: "deploy-monitor",
       agentId: "roboclaw",
-      allowMissing: true,
+      limit: 80,
+      maxBytes: 256 * 1024,
     });
     expect(request).toHaveBeenCalledOnce();
   });
@@ -490,7 +515,7 @@ describe("gateway-backed session route resolution", () => {
     const { context, list } = contextFor(() => result([]));
     const rejection = new GatewayRequestError({
       code: "INVALID_REQUEST",
-      message: "invalid sessions.resolve params: at root: unexpected property 'shortId'",
+      message: "invalid chat.startup params: at root: unexpected property 'shortId'",
     });
     const request = vi.fn(async () => {
       throw rejection;
@@ -511,15 +536,8 @@ describe("gateway-backed session route resolution", () => {
   it("rejects a short-route result after navigation ownership is aborted", async () => {
     const storedRow = row({ displayName: "Deploy monitor" });
     const { context, list } = contextFor(() => result([storedRow]));
-    let finishResolution:
-      | ((result: { ok: true; key: string; agentId: string }) => void)
-      | undefined;
-    const request = vi.fn(
-      async () =>
-        await new Promise<{ ok: true; key: string; agentId: string }>((resolve) => {
-          finishResolution = resolve;
-        }),
-    );
+    const resolution = createDeferred<{ resolution: SessionsResolveResult; messages: unknown[] }>();
+    const request = vi.fn(() => resolution.promise);
     (context.gateway.snapshot.client as unknown as { request: typeof request }).request = request;
     const controller = new AbortController();
     const navigation = loadChatRoute(
@@ -531,7 +549,10 @@ describe("gateway-backed session route resolution", () => {
     await vi.waitFor(() => expect(request).toHaveBeenCalledOnce());
     const reason = new Error("navigation superseded");
     controller.abort(reason);
-    finishResolution?.({ ok: true, key: storedRow.key, agentId: "roboclaw" });
+    resolution.resolve({
+      resolution: { ok: true, key: storedRow.key, agentId: "roboclaw" },
+      messages: [],
+    });
 
     await expect(navigation).rejects.toBe(reason);
     expect(list).not.toHaveBeenCalled();
@@ -859,7 +880,7 @@ describe("gateway-backed session route resolution", () => {
       ),
     ).resolves.toMatchObject({ kind: "session", sessionKey: shortMatch.key });
     expect(request).toHaveBeenCalledWith(
-      "sessions.resolve",
+      "chat.startup",
       expect.objectContaining({ shortId: "567890abcdef" }),
     );
   });
@@ -903,11 +924,12 @@ describe("gateway-backed session route resolution", () => {
 
     expect(loaded).toMatchObject({ kind: "session", sessionKey: short.key });
     expect(list).not.toHaveBeenCalled();
-    expect(request).toHaveBeenNthCalledWith(1, "sessions.resolve", {
+    expect(request).toHaveBeenNthCalledWith(1, "chat.startup", {
       shortId: "deadbeef",
       slugHint: "default-mode",
       agentId: "roboclaw",
-      allowMissing: true,
+      limit: 80,
+      maxBytes: 256 * 1024,
     });
   });
 

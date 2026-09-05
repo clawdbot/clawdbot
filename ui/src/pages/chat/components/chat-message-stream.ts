@@ -101,7 +101,7 @@ export function renderStreamGroupParts(
 // arrives as several stream segments renders under a single avatar/footer
 // instead of flashing a separate avatar+bubble per segment (#63956).
 export function renderStreamGroup(parts: StreamGroupPart[], opts: StreamGroupOptions = {}) {
-  const { assistant, resourceBasePath, assistantAttachmentAuthToken } = opts;
+  const { assistant, resourceBasePath } = opts;
   const name = assistant?.name ?? "Assistant";
   // Footer (sender + time) anchors to the earliest streamed segment; a run that
   // is only the reading indicator has no timestamp and therefore no footer.
@@ -117,13 +117,7 @@ export function renderStreamGroup(parts: StreamGroupPart[], opts: StreamGroupOpt
   const avatar =
     workingOnly || opts.showAssistantAvatar === false
       ? nothing
-      : renderChatAvatar(
-          "assistant",
-          assistant,
-          undefined,
-          resourceBasePath,
-          assistantAttachmentAuthToken,
-        );
+      : renderChatAvatar("assistant", assistant, undefined, resourceBasePath);
   const groupClass = `chat-group assistant${workingOnly ? " chat-group--working" : ""}${footerStartedAt !== null ? " chat-group--with-footer" : ""}`;
 
   return html`

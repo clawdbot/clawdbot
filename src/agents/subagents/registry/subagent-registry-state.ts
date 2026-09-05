@@ -141,6 +141,21 @@ function rememberPersistedSubagentRunsSnapshot(
   );
 }
 
+/** Publishes registry rows already committed by a cross-owner shared-state transaction. */
+export function publishSubagentRunsAfterAtomicStore(
+  runs: Map<string, SubagentRunRecord>,
+  changedRunIds: readonly string[],
+  deferredObserverEvents?: Array<() => void>,
+): void {
+  rememberPersistedSubagentRunsSnapshot(runs, changedRunIds);
+  const emit = () => emitSubagentRegistryPersisted();
+  if (deferredObserverEvents) {
+    deferredObserverEvents.push(emit);
+  } else {
+    emit();
+  }
+}
+
 function shouldReadPersistedSubagentRuns(): boolean {
   return !isVitestRuntimeEnv() || process.env.OPENCLAW_TEST_READ_SUBAGENT_RUNS_FROM_SQLITE === "1";
 }

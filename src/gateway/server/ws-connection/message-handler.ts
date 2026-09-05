@@ -168,7 +168,9 @@ export function attachGatewayWsMessageHandler(params: GatewayWsMessageHandlerPar
     // Connect-triggered mutations outlive hello-ok. Give each tail its own
     // root lease so suspension cannot report ready while one is still active.
     void params.connectionWork
-      .track(() => runWithGatewayIndependentRootWorkAdmission(run, "ws:preauth"))
+      .track(() =>
+        runWithGatewayIndependentRootWorkAdmission(run, "ws:preauth", params.connectionWork.signal),
+      )
       .catch(onError);
   };
 

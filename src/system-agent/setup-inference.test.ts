@@ -60,7 +60,7 @@ import { WizardCancelledError, WizardNavigationError } from "../wizard/prompts.j
 import { cleanupSystemAgentSession, createSystemAgentSession } from "./agent-turn.js";
 import { runSystemAgentTurnWithDeps } from "./agent-turn.test-support.js";
 import { resolveSystemAgentConfiguredRouteFromConfig } from "./inference-route.js";
-import { setupInferenceLog } from "./setup-inference-core.js";
+import { setupInferenceLog, type ActivateSetupInferenceDeps } from "./setup-inference-core.js";
 import { resolveSetupInferenceProbeStreamParams } from "./setup-inference-probe.js";
 import { runSetupInferenceTest } from "./setup-inference-test.js";
 import {
@@ -515,6 +515,7 @@ function successfulRun(provider: string, model: string, params?: SuccessfulRunPa
   );
   return {
     meta: {
+      durationMs: 1,
       finalAssistantVisibleText: "OK",
       executionTrace: { winnerProvider: provider, winnerModel: params?.reportedModel ?? model },
     },
@@ -2119,20 +2120,39 @@ describe("activateSetupInference", () => {
   it.each([
     {
       name: "auto-enables the lean surface for a verified local model",
+      providerId: "lmstudio",
       initialConfig: {} satisfies OpenClawConfig,
       expectedLean: true,
       expectedAnnouncement: true,
     },
     {
       name: "preserves an explicit localModelLean=false",
+      providerId: "lmstudio",
       initialConfig: {
         agents: { defaults: { experimental: { localModelLean: false } } },
       } satisfies OpenClawConfig,
       expectedLean: false,
       expectedAnnouncement: false,
     },
-  ])("$name", async ({ initialConfig, expectedLean, expectedAnnouncement }) => {
-    const modelRef = "lmstudio/qwen-local";
+    {
+      name: "stages and announces lean tools for a newly configured managed provider",
+      providerId: "llama-cpp",
+      initialConfig: {} satisfies OpenClawConfig,
+      expectedLean: true,
+      expectedAnnouncement: true,
+    },
+    ...[false, true].map((localModelLean) => ({
+      name: `preserves explicit lean=${localModelLean} for a managed provider`,
+      providerId: "llama-cpp",
+      initialConfig: {
+        agents: { defaults: { experimental: { localModelLean } } },
+      } satisfies OpenClawConfig,
+      expectedLean: localModelLean,
+      expectedAnnouncement: false,
+    })),
+  ])("$name", async ({ providerId, initialConfig, expectedLean, expectedAnnouncement }) => {
+    const modelRef = `${providerId}/qwen-local`;
+    const managed = providerId === "llama-cpp";
     const detect = vi.fn(async () => ({ modelRef, detail: "qwen-local at localhost" }));
     const prepare = vi.fn(async () => ({
       profiles: [],
@@ -2141,9 +2161,10 @@ describe("activateSetupInference", () => {
         models: {
           mode: "merge" as const,
           providers: {
-            lmstudio: {
+            [providerId]: {
               baseUrl: "http://127.0.0.1:1234/v1",
               api: "openai-completions" as const,
+              ...(managed ? { localService: { command: "/usr/bin/model-server" } } : {}),
               models: [
                 {
                   id: "qwen-local",
@@ -2161,9 +2182,9 @@ describe("activateSetupInference", () => {
       },
     }));
     const provider: ProviderPlugin = {
-      id: "lmstudio",
+      id: providerId,
       label: "LM Studio",
-      pluginId: "lmstudio",
+      pluginId: providerId,
       auth: [
         {
           id: "custom",
@@ -2176,18 +2197,36 @@ describe("activateSetupInference", () => {
     };
     const configHarness = createConfigTransformHarness(initialConfig);
     const updateAuthStore = vi.fn();
-    const runEmbeddedAgent = vi.fn(successfulRunner("lmstudio", "qwen-local"));
+    const runEmbeddedAgent = vi.fn<NonNullable<ActivateSetupInferenceDeps["runEmbeddedAgent"]>>(
+      async (input) => {
+        expect(input.config?.agents?.defaults?.experimental?.localModelLean).toBe(expectedLean);
+        const result = await successfulRunner(providerId, "qwen-local")(input);
+        if (input.onAgentToolResult) {
+          const contents = await fs.readFile(
+            path.join(input.workspaceDir, "verification.txt"),
+            "utf8",
+          );
+          input.onAgentToolResult({
+            toolName: "read",
+            result: { content: [{ type: "text", text: contents }] },
+            isError: false,
+          });
+          result.meta.finalAssistantVisibleText = contents;
+        }
+        return result;
+      },
+    );
 
     const result = await activateSetupInference({
-      kind: "provider-auto:lmstudio",
+      kind: `provider-auto:${providerId}`,
       modelRef,
       deps: {
         readConfigFileSnapshot: mockConfigSnapshot(initialConfig, { includeMetadata: true }),
         resolveManifestProviderAuthChoice: () => ({
-          pluginId: "lmstudio",
-          providerId: "lmstudio",
+          pluginId: providerId,
+          providerId,
           methodId: "custom",
-          choiceId: "lmstudio",
+          choiceId: providerId,
           choiceLabel: "LM Studio",
           appGuidedDiscovery: true,
         }),
@@ -2204,15 +2243,11 @@ describe("activateSetupInference", () => {
     }
     expect(result.lines).toEqual([
       `Inference verified: ${modelRef}`,
-      ...(expectedAnnouncement
-        ? [
-            "This model is small, so I set up the lean surface — switching to a bigger model later lifts it.",
-          ]
-        : []),
+      ...(expectedAnnouncement ? ["I enabled the lean tool surface for this local runtime."] : []),
     ]);
     expect(runEmbeddedAgent).toHaveBeenCalledWith(
       expect.objectContaining({
-        provider: "lmstudio",
+        provider: providerId,
         model: "qwen-local",
         streamParams: { maxTokens: 256 },
       }),
@@ -2225,13 +2260,13 @@ describe("activateSetupInference", () => {
       agents: { defaults: { model: modelRef, experimental: { localModelLean: expectedLean } } },
       models: {
         providers: {
-          lmstudio: {
+          [providerId]: {
             baseUrl: "http://127.0.0.1:1234/v1",
             models: [expect.objectContaining({ id: "qwen-local" })],
           },
         },
       },
-      plugins: { entries: { lmstudio: { enabled: true } } },
+      plugins: { entries: { [providerId]: { enabled: true } } },
     });
   });
 
@@ -6496,6 +6531,8 @@ describe("verifySetupInference", () => {
       provider: "openai",
       model: "gpt-5.5",
       runner: "embedded",
+      runId: expect.stringMatching(/^probe-setup-inference-/u),
+      phase: "response",
       status: "timeout",
       timeoutMs: 90_000,
       durationMs: expect.any(Number),

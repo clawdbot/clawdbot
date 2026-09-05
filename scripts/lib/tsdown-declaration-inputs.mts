@@ -68,24 +68,18 @@ export function createDeclarationInputCapture(name: string) {
   };
 }
 
-export function readDeclarationInputs(output: string, groups: readonly string[]) {
-  return [
-    ...new Set(
-      groups.flatMap((name) => {
-        const receipt: { roots: string[]; inputs?: unknown } = JSON.parse(
-          fs.readFileSync(receiptPath(output, name), "utf8"),
-        );
-        if (
-          !Array.isArray(receipt.inputs) ||
-          // Bounded selections can leave empty partitions; only those requests
-          // may finish successfully without creating a compiler Program.
-          (!receipt.inputs.length && receipt.roots.length > 0) ||
-          !receipt.inputs.every((input): input is string => typeof input === "string")
-        ) {
-          throw new Error(`Missing successful compiler membership for ${name}`);
-        }
-        return receipt.inputs;
-      }),
-    ),
-  ].toSorted();
+export function readDeclarationInputs(output: string, name: string) {
+  const receipt: { roots: string[]; inputs?: unknown } = JSON.parse(
+    fs.readFileSync(receiptPath(output, name), "utf8"),
+  );
+  if (
+    !Array.isArray(receipt.inputs) ||
+    // Bounded selections can leave empty partitions; only those requests
+    // may finish successfully without creating a compiler Program.
+    (!receipt.inputs.length && receipt.roots.length > 0) ||
+    !receipt.inputs.every((input): input is string => typeof input === "string")
+  ) {
+    throw new Error(`Missing successful compiler membership for ${name}`);
+  }
+  return receipt.inputs;
 }
