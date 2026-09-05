@@ -82,6 +82,7 @@ beforeEach(async () => {
     },
   });
   await state.writeConfig({ plugins: { enabled: false }, update: { channel: "stable" } });
+  await state.writeText("events.jsonl", "");
   await fs.writeFile(state.path("package.json"), JSON.stringify({ version: "1.0.0" }));
   entrypoint = await state.writeText(
     "entry.mjs",
@@ -110,7 +111,7 @@ async function writeScenario(
   lane: Lane,
   scenario: Omit<LeaseScenario, "lane"> = {},
 ): Promise<void> {
-  await state.writeJson("scenario.json", { ...scenario, lane });
+  await state.writeJson("scenario.json", { pluginUpdate: pluginResult, ...scenario, lane });
 }
 
 async function invoke(lane: Lane): Promise<void> {
@@ -136,7 +137,7 @@ async function invoke(lane: Lane): Promise<void> {
       status: "ok",
       mode: "npm",
       root: state.root,
-      before: { version: "2.0.0" },
+      before: { version: lane === "fresh-process" ? "0.9.0" : "2.0.0" },
       after: { version: "1.0.0" },
       steps: [],
       durationMs: 1,
@@ -147,7 +148,7 @@ async function invoke(lane: Lane): Promise<void> {
     requestedChannel: null,
     storedChannel: "stable",
     channel: "stable",
-    downgradeRisk: true,
+    downgradeRisk: lane !== "fresh-process",
     shouldRestart: false,
     opts: { json: true, yes: true },
     ownedManagedUpdateEnv: { ...process.env },
@@ -159,11 +160,6 @@ async function invoke(lane: Lane): Promise<void> {
 }
 
 async function invokeReportedFailure(lane: Lane): Promise<void> {
-  if (lane === "resume") {
-    await invoke(lane);
-    expect(defaultRuntime.exit).toHaveBeenCalledWith(0);
-    return;
-  }
   await expect(invoke(lane)).rejects.toMatchObject(
     lane === "repair"
       ? { name: "ExitError", code: 1 }
@@ -176,6 +172,7 @@ async function events(): Promise<string[]> {
   return (await fs.readFile(state.statePath("events.jsonl"), "utf8"))
     .trim()
     .split("\n")
+    .filter(Boolean)
     .map((line) => {
       const event = JSON.parse(line) as { event: string; pid: number };
       expect(event.pid).not.toBe(process.pid);
@@ -193,18 +190,23 @@ function expectDoctorDiagnostics(): void {
 
 function expectSuccess(lane: Lane, doctorExpected = true): void {
   expect(defaultRuntime.exit).not.toHaveBeenCalledWith(1);
-  const output =
-    lane === "current-process"
-      ? mocks.print.mock.lastCall?.[0]
-      : vi.mocked(defaultRuntime.writeJson).mock.lastCall?.[0];
-  expect(output).toMatchObject({ status: "ok", postUpdate: { plugins: { status: "ok" } } });
+  expect(reportedResult(lane)).toMatchObject({
+    status: "ok",
+    postUpdate: { plugins: { status: "ok" } },
+  });
   if (doctorExpected) {
     expectDoctorDiagnostics();
   }
 }
 
+function reportedResult(lane: Lane): unknown {
+  return lane === "resume" || lane === "repair"
+    ? vi.mocked(defaultRuntime.writeJson).mock.lastCall?.[0]
+    : mocks.print.mock.lastCall?.[0];
+}
+
 describe("update orchestration lifecycle ownership", () => {
-  it.each(["resume", "current-process", "repair"] as const)(
+  it.each(["fresh-process", "current-process", "repair"] as const)(
     "%s releases plugin ownership for fresh doctor without delegating Gateway activation",
     async (lane) => {
       await writeScenario(lane, {
@@ -228,6 +230,7 @@ describe("update orchestration lifecycle ownership", () => {
       );
       expect(await events()).toEqual([
         ...(lane === "repair" ? ["pre-attempt", "pre-acquired"] : []),
+        ...(lane === "fresh-process" ? ["packages-acquired", "packages-released"] : []),
         "post-attempt",
         "post-acquired",
         "validate",
@@ -239,7 +242,11 @@ describe("update orchestration lifecycle ownership", () => {
           expect.objectContaining({ shouldRestart: false }),
         );
       }
-      expect(mocks.plugins).toHaveBeenCalledOnce();
+      if (lane === "fresh-process") {
+        expect(mocks.plugins).not.toHaveBeenCalled();
+      } else {
+        expect(mocks.plugins).toHaveBeenCalledOnce();
+      }
       const after = await runExec(process.execPath, [entrypoint, "probe"], { timeoutMs: 15_000 });
       expect(after.stdout).toBe("acquired");
     },
@@ -332,7 +339,7 @@ describe("update orchestration lifecycle ownership", () => {
       await writePersistedInstalledPluginIndexInstallRecords(current);
       await writeScenario("resume");
       await invoke("resume");
-      expectSuccess("resume");
+      expectSuccess("resume", false);
       expect(mocks.plugins).toHaveBeenCalledWith(
         expect.objectContaining({
           configSnapshot: expect.objectContaining({
@@ -341,34 +348,32 @@ describe("update orchestration lifecycle ownership", () => {
           pluginInstallRecords: current,
         }),
       );
-      expect(await events()).toEqual(["post-attempt", "post-acquired", "validate", "readiness"]);
+      expect(await events()).toEqual([]);
     },
   );
 
-  it.each(["resume", "repair"] as const)(
+  it.each(["fresh-process", "current-process", "repair"] as const)(
     "%s does not run a final doctor when no plugins changed",
     async (lane) => {
-      await writeScenario(lane);
+      await writeScenario(lane, { pluginUpdate: { ...pluginResult, changed: false } });
       mocks.plugins.mockResolvedValueOnce({ ...pluginResult, changed: false });
       await invoke(lane);
       expectSuccess(lane, lane === "repair");
       expect(await events()).toEqual([
         ...(lane === "repair" ? ["pre-attempt", "pre-acquired"] : []),
+        ...(lane === "fresh-process" ? ["packages-acquired", "packages-released"] : []),
+        "validate",
         "readiness",
       ]);
     },
   );
 
-  it.each(["resume", "current-process", "repair"] as const)(
+  it.each(["fresh-process", "current-process", "repair"] as const)(
     "%s retains strict fresh validation after releasing the lease",
     async (lane) => {
       await writeScenario(lane, { invalidConfig: true });
       await invokeReportedFailure(lane);
-      const output =
-        lane === "current-process"
-          ? mocks.print.mock.lastCall?.[0]
-          : vi.mocked(defaultRuntime.writeJson).mock.lastCall?.[0];
-      expect(output).toMatchObject({
+      expect(reportedResult(lane)).toMatchObject({
         status: "error",
         postUpdate: { plugins: { reason: "post-plugin-doctor-invalid-config" } },
       });
@@ -449,12 +454,12 @@ describe("update orchestration lifecycle ownership", () => {
 
   it.each([
     {
-      lane: "resume" as const,
+      lane: "fresh-process" as const,
       failure: "finding" as const,
       reason: "post-plugin-update-readiness-failed",
     },
     {
-      lane: "resume" as const,
+      lane: "fresh-process" as const,
       failure: "execution" as const,
       reason: "post-plugin-update-readiness-execution-failed",
     },
@@ -488,17 +493,14 @@ describe("update orchestration lifecycle ownership", () => {
 
       await invokeReportedFailure(lane);
 
-      const output =
-        lane === "current-process"
-          ? mocks.print.mock.lastCall?.[0]
-          : vi.mocked(defaultRuntime.writeJson).mock.lastCall?.[0];
-      expect(output).toMatchObject({
+      expect(reportedResult(lane)).toMatchObject({
         status: "error",
         postUpdate: { plugins: { reason } },
       });
       expect(mocks.restart).not.toHaveBeenCalled();
       expect(await events()).toEqual([
         ...(lane === "repair" ? ["pre-attempt", "pre-acquired"] : []),
+        ...(lane === "fresh-process" ? ["packages-acquired", "packages-released"] : []),
         "post-attempt",
         "post-acquired",
         "validate",
@@ -509,11 +511,13 @@ describe("update orchestration lifecycle ownership", () => {
 
   it.each([
     { lane: "resume", valid: true },
+    { lane: "fresh-process", valid: true },
     { lane: "repair", valid: true },
     { lane: "resume", valid: false },
+    { lane: "fresh-process", valid: false },
     { lane: "repair", valid: false },
   ] as const)(
-    "$lane preserves downgrade startup eligibility after a Doctor error (valid=$valid)",
+    "$lane stamps only strictly valid downgrade config (valid=$valid)",
     async ({ lane, valid }) => {
       const futureVersion = "2099.1.1";
       await state.writeConfig({
@@ -524,18 +528,22 @@ describe("update orchestration lifecycle ownership", () => {
       });
       await writeScenario(lane, { failDoctor: "post", invalidConfig: !valid });
 
-      await invokeReportedFailure(lane);
-
-      expect(vi.mocked(defaultRuntime.writeJson).mock.lastCall?.[0]).toMatchObject({
-        status: "error",
-        postUpdate: {
-          plugins: {
-            reason: valid
-              ? "post-plugin-doctor-execution-failed"
-              : "post-plugin-doctor-invalid-config",
+      if (lane === "resume") {
+        await invoke(lane);
+        expectSuccess(lane, false);
+      } else {
+        await invokeReportedFailure(lane);
+        expect(reportedResult(lane)).toMatchObject({
+          status: "error",
+          postUpdate: {
+            plugins: {
+              reason: valid
+                ? "post-plugin-doctor-execution-failed"
+                : "post-plugin-doctor-invalid-config",
+            },
           },
-        },
-      });
+        });
+      }
       const persisted = JSON.parse(await fs.readFile(state.configPath, "utf8")) as OpenClawConfig;
       expect(persisted.meta?.lastTouchedVersion).toBe(valid ? VERSION : futureVersion);
       expect(persisted.update?.channel).toBe("stable");
@@ -545,13 +553,18 @@ describe("update orchestration lifecycle ownership", () => {
         env: {},
       });
       expect(startupBlock === null).toBe(valid);
-      expect(await events(), JSON.stringify(vi.mocked(defaultRuntime.error).mock.calls)).toEqual([
-        ...(lane === "repair" ? ["pre-attempt", "pre-acquired"] : []),
-        "post-attempt",
-        "post-acquired",
-        "validate",
-        ...(valid ? ["readiness"] : []),
-      ]);
+      expect(await events(), JSON.stringify(vi.mocked(defaultRuntime.error).mock.calls)).toEqual(
+        lane === "resume"
+          ? []
+          : [
+              ...(lane === "repair" ? ["pre-attempt", "pre-acquired"] : []),
+              ...(lane === "fresh-process" ? ["packages-acquired", "packages-released"] : []),
+              "post-attempt",
+              "post-acquired",
+              "validate",
+              ...(valid ? ["readiness"] : []),
+            ],
+      );
     },
   );
 });

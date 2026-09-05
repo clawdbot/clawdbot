@@ -124,8 +124,11 @@ copied configuration and verified database snapshots. Migrations on these
 copies rehearse the upgrade without changing live state. A validation failure
 leaves the old Gateway running; an `already-current` no-op never stops it.
 The detached helper also waits for the `activating` phase before parking its
-parent Gateway. Only the swap, required live migrations, and service start
-belong in the activation window.
+parent Gateway. The first activation window contains the swap, required live
+migrations, and service start. Plugin package download and sync run while the
+core Gateway serves. A changed plugin snapshot requires a second measured
+activation window: full Doctor migrations under exclusive maintenance, then
+restart and verification. Unchanged plugins do not run another full Doctor pass.
 
 After activation, the updater verifies the managed service, the expected
 version/build identity, a 12-probe health settle, plugin activation, channels,

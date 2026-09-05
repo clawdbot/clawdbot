@@ -51,6 +51,7 @@ import {
   maybeRestartService,
   maybeRestartServiceAfterFailedMutableUpdate,
   maybeResumeWindowsTaskAutoStartAfterPackageUpdate,
+  maybeStopManagedServiceBeforeMutableUpdate,
   revalidateManagedGatewayServiceAfterUpdate,
   resolvePostUpdateServiceStateReadEnv,
   resolveUpdatedGatewayRestartPort,
@@ -355,8 +356,8 @@ export async function finishUpdate(params: FinishUpdateParams): Promise<UpdateRu
     }
 
     const postUpdateRoot = params.result.root ?? params.root;
-    const convergePlugins = async () => {
-      const convergence = await convergeUpdatePlugins(params);
+    const convergePlugins = async (beforeDoctor?: () => Promise<void>) => {
+      const convergence = await convergeUpdatePlugins({ ...params, beforeDoctor });
       if (convergence.resultWithPostUpdate.status === "error") {
         const reported = await reportResult(convergence.resultWithPostUpdate);
         throw new UpdateCommandFailure(
@@ -543,7 +544,32 @@ export async function finishUpdate(params: FinishUpdateParams): Promise<UpdateRu
       );
     let restartOk = await restart();
     if (restartOk && deferPluginConvergence) {
-      ({ resultWithPostUpdate, postUpdateConfigSnapshot } = await convergePlugins());
+      ({ resultWithPostUpdate, postUpdateConfigSnapshot } = await convergePlugins(async () => {
+        const before = params.preManagedServiceStop;
+        if (!before) {
+          throw new Error("Plugin maintenance lost its update service owner.");
+        }
+        await before.windowsTaskAutoStartRecovery?.complete(true);
+        // Package work finished online. Full Doctor owns state migrations, so
+        // park only now and retain this suspension through verified activation.
+        const stopped = await maybeStopManagedServiceBeforeMutableUpdate({
+          updateRun: params.opts.run,
+          updateInstallKind: resultWithPostUpdate.mode === "git" ? "git" : "package",
+          root: postUpdateRoot,
+          shouldRestart: true,
+          jsonMode: Boolean(params.opts.json),
+          expectedService: { serviceEnv: gatewayServiceEnv, serviceUpdateVerdict },
+          timeoutMs: params.updateStepTimeoutMs,
+        });
+        before.windowsTaskAutoStartRecovery = stopped.windowsTaskAutoStartRecovery;
+        if (stopped.blockMessage || !stopped.stopped) {
+          throw new Error(
+            stopped.blockMessage ?? "Gateway could not be parked for plugin maintenance.",
+          );
+        }
+        stopped.windowsTaskAutoStartRecovery?.beginMutation();
+        pendingRestartAtMs = stopped.stoppedAtMs;
+      }));
       if (resultWithPostUpdate.postUpdate?.plugins?.changed) {
         // Convergence awaited package managers and plugin hooks. Revalidate the
         // exact native owner again before a changed plugin snapshot is activated.
@@ -562,10 +588,15 @@ export async function finishUpdate(params: FinishUpdateParams): Promise<UpdateRu
           },
         });
         gatewayServiceEnv = state.env;
-        pendingRestartAtMs = Date.now();
+        gatewayPort = await resolveUpdatedGatewayRestartPort({
+          serviceEnv: state.env,
+          serviceCommand: state.command,
+        });
+        pendingRestartAtMs ??= Date.now();
         lastVerifiedAtMs = undefined;
         restartScriptPath = null;
         refreshGatewayServiceEnv = false;
+        await restoreWindowsAutoStart(resultWithPostUpdate);
         restartOk = await restart();
         if (lastVerifiedAtMs !== undefined) {
           extraDowntimeMs += Math.max(0, lastVerifiedAtMs - pendingRestartAtMs);

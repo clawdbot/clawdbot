@@ -6,12 +6,16 @@ import { parse as parseYaml, stringify as stringifyYaml } from "yaml";
 import { sha256Hex } from "./crypto-digest.js";
 import { resolveBunGlobalInstallOwner } from "./detect-package-manager.js";
 import { hasErrnoCode } from "./errors.js";
-import { isPathInside } from "./path-guards.js";
 import { mergePathPrepend } from "./path-prepend.js";
 import {
   resolvePnpmGlobalDirFromGlobalRoot,
   type ResolvedGlobalInstallTarget,
 } from "./update-global.js";
+import {
+  relocateRuntimePath,
+  relocateRuntimeSymlink,
+  type RuntimeRelocation,
+} from "./update-runtime-relocation.js";
 
 export type NativePackageStage = {
   prefix: string;
@@ -21,13 +25,8 @@ export type NativePackageStage = {
   liveBinDir: string;
   globalRoot: string;
   env: NodeJS.ProcessEnv;
+  configArgs: string[];
   assertUnchanged: () => Promise<void>;
-};
-
-type Relocation = {
-  sourceRoot: string;
-  destinationRoot: string;
-  sourceAliases?: string[];
 };
 
 export class NativePackageRollbackError extends Error {
@@ -102,38 +101,11 @@ async function nativeProjectFingerprint(
   return fingerprint;
 }
 
-function relocatePath(value: string, relocation: Relocation): string {
-  const root = [relocation.sourceRoot, ...(relocation.sourceAliases ?? [])].find((candidate) =>
-    isPathInside(candidate, value),
-  );
-  return root ? path.join(relocation.destinationRoot, path.relative(root, value)) : value;
-}
-
-async function relocateSymlink(
-  file: string,
-  sourceFile: string,
-  destinationFile: string,
-  relocation: Relocation,
-): Promise<void> {
-  const link = await fs.readlink(file);
-  const target = relocatePath(path.resolve(path.dirname(sourceFile), link), relocation);
-  const replacement = path.isAbsolute(link)
-    ? target
-    : path.relative(path.dirname(destinationFile), target);
-  if (replacement === link) {
-    return;
-  }
-  const type =
-    process.platform === "win32" && (await fs.stat(file)).isDirectory() ? "junction" : "file";
-  await fs.unlink(file);
-  await fs.symlink(replacement, file, type);
-}
-
 async function relocateLauncher(
   file: string,
   sourceFile: string,
   destinationFile: string,
-  relocation: Relocation,
+  relocation: RuntimeRelocation,
 ): Promise<void> {
   const original = await fs.readFile(file, "utf8");
   // pnpm cmd-shim uses these directory-relative references on sh, cmd and PowerShell.
@@ -148,7 +120,7 @@ async function relocateLauncher(
         path.dirname(sourceFile),
         relative.replaceAll("\\", path.sep),
       );
-      const target = relocatePath(sourceTarget, relocation);
+      const target = relocateRuntimePath(sourceTarget, relocation);
       if (target === sourceTarget) {
         // Bin-local runtime lookups belong to the destination bin, not the copied project.
         return match;
@@ -175,7 +147,7 @@ async function relocateLauncher(
   }
 }
 
-async function relocateModulesManifest(file: string, relocation: Relocation): Promise<void> {
+async function relocateModulesManifest(file: string, relocation: RuntimeRelocation): Promise<void> {
   const original = await fs.readFile(file, "utf8");
   const manifest: unknown = parseYaml(original);
   if (!isRecord(manifest)) {
@@ -187,7 +159,7 @@ async function relocateModulesManifest(file: string, relocation: Relocation): Pr
   for (const key of ["virtualStoreDir", "storeDir"]) {
     const value = manifest[key];
     if (typeof value === "string" && path.isAbsolute(value)) {
-      const replacement = relocatePath(value, relocation);
+      const replacement = relocateRuntimePath(value, relocation);
       if (replacement !== value) {
         manifest[key] = replacement;
         changed = true;
@@ -202,7 +174,7 @@ async function relocateModulesManifest(file: string, relocation: Relocation): Pr
   }
 }
 
-async function relocateProjectTree(root: string, relocation: Relocation): Promise<void> {
+async function relocateProjectTree(root: string, relocation: RuntimeRelocation): Promise<void> {
   async function visit(directory: string): Promise<void> {
     for (const entry of await fs.readdir(directory, { withFileTypes: true })) {
       const file = path.join(directory, entry.name);
@@ -210,7 +182,7 @@ async function relocateProjectTree(root: string, relocation: Relocation): Promis
       const sourceFile = path.join(relocation.sourceRoot, relative);
       const destinationFile = path.join(relocation.destinationRoot, relative);
       if (entry.isSymbolicLink()) {
-        await relocateSymlink(file, sourceFile, destinationFile, relocation);
+        await relocateRuntimeSymlink(file, sourceFile, destinationFile, relocation);
       } else if (entry.isDirectory()) {
         await visit(file);
       } else if (entry.isFile()) {
@@ -278,13 +250,13 @@ export async function prepareNativePackageStage(params: {
       destinationRoot: projectRoot,
       sourceAliases: [ownerRoot],
     });
-    if (installTarget.manager === "pnpm") {
-      for (const configPrefix of ["pnpm_config", "PNPM_CONFIG", "npm_config", "NPM_CONFIG"]) {
-        const uppercase = configPrefix === configPrefix.toUpperCase();
-        env[`${configPrefix}_${uppercase ? "GLOBAL_DIR" : "global_dir"}`] = projectRoot;
-        env[`${configPrefix}_${uppercase ? "GLOBAL_BIN_DIR" : "global_bin_dir"}`] = binDir;
-      }
-    } else {
+    // pnpm 11 derives its destinations before reading environment config. Explicit
+    // CLI config selects the copied project and bin in both pnpm 10 and pnpm 11.
+    const configArgs =
+      installTarget.manager === "pnpm"
+        ? [`--config.global-dir=${projectRoot}`, `--config.global-bin-dir=${binDir}`]
+        : [];
+    if (installTarget.manager === "bun") {
       env.BUN_INSTALL_GLOBAL_DIR = projectRoot;
       env.BUN_INSTALL_BIN = binDir;
       if (bunOwner?.bunInstall) {
@@ -301,6 +273,7 @@ export async function prepareNativePackageStage(params: {
       liveBinDir: path.resolve(liveBinDir),
       globalRoot: path.join(projectRoot, path.relative(ownerRoot, installTarget.globalRoot)),
       env,
+      configArgs,
       assertUnchanged: async () => {
         if (!isDeepStrictEqual(await nativeProjectFingerprint(liveProjectRoot), fingerprint)) {
           throw new Error(
@@ -330,7 +303,7 @@ export async function finalizeNativePackageStage(
     const file = path.join(stage.binDir, entry.name);
     const destinationFile = path.join(stage.liveBinDir, entry.name);
     if (entry.isSymbolicLink()) {
-      await relocateSymlink(file, file, destinationFile, relocation);
+      await relocateRuntimeSymlink(file, file, destinationFile, relocation);
     } else if (entry.isFile()) {
       await relocateLauncher(file, file, destinationFile, relocation);
     }

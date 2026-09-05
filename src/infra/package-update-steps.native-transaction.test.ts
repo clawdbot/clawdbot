@@ -1,6 +1,6 @@
 import fs from "node:fs/promises";
 import path from "node:path";
-import { describe, expect, it } from "vitest";
+import { describe, expect, it, vi } from "vitest";
 import { createDeferred } from "../../test/helpers/promise.js";
 import { withTestDir } from "../test-helpers/temp-dir.js";
 import {
@@ -9,6 +9,17 @@ import {
 } from "./package-update-steps.js";
 import { writePackageRoot } from "./package-update-steps.test-support.js";
 import type { ResolvedGlobalInstallTarget } from "./update-global.js";
+
+function readPnpmStageArgs(argv: string[]) {
+  return {
+    projectRoot: argv
+      .find((arg) => arg.startsWith("--config.global-dir="))
+      ?.slice("--config.global-dir=".length),
+    binDir: argv
+      .find((arg) => arg.startsWith("--config.global-bin-dir="))
+      ?.slice("--config.global-bin-dir=".length),
+  };
+}
 
 describe.runIf(process.platform !== "win32")("native package transactions", () => {
   it.each(
@@ -75,21 +86,40 @@ describe.runIf(process.platform !== "win32")("native package transactions", () =
           installTarget: target,
           installSpec: "openclaw@2.0.0",
           packageName: "openclaw",
-          env: { PATH: process.env.PATH, BUN_INSTALL_GLOBAL_DIR: project, BUN_INSTALL_BIN: binDir },
-          runCommand: async (argv) => ({
-            code: 0,
-            stderr: "",
-            stdout: argv.includes("root") ? `${globalRoot}\n` : `${binDir}\n`,
-          }),
+          env: {
+            PATH: process.env.PATH,
+            PNPM_HOME: path.dirname(project),
+            pnpm_config_global_dir: project,
+            pnpm_config_global_bin_dir: binDir,
+            BUN_INSTALL_GLOBAL_DIR: project,
+            BUN_INSTALL_BIN: binDir,
+          },
+          runCommand: async (argv, options) => {
+            const stage = readPnpmStageArgs(argv);
+            if (stage.projectRoot) {
+              expect(options.cwd).toBe(stage.projectRoot);
+              expect(stage.projectRoot).not.toBe(project);
+              expect(stage.binDir).not.toBe(binDir);
+              phases.push(`probe ${argv[1]}`);
+            }
+            return {
+              code: 0,
+              stderr: "",
+              stdout: argv.includes("root")
+                ? `${stage.projectRoot ? path.join(stage.projectRoot, path.relative(project, globalRoot)) : globalRoot}\n`
+                : `${stage.binDir ?? binDir}\n`,
+            };
+          },
           runStep: async ({ name, argv, cwd, env }) => {
             expect(argv[0]).toBe(manager);
+            const stageArgs = readPnpmStageArgs(argv);
             const stageProject =
-              manager === "bun" ? env?.BUN_INSTALL_GLOBAL_DIR : env?.npm_config_global_dir;
-            const stageBin =
-              manager === "bun" ? env?.BUN_INSTALL_BIN : env?.npm_config_global_bin_dir;
+              manager === "bun" ? env?.BUN_INSTALL_GLOBAL_DIR : stageArgs.projectRoot;
+            const stageBin = manager === "bun" ? env?.BUN_INSTALL_BIN : stageArgs.binDir;
             if (!stageProject || !stageBin) {
-              throw new Error("native staging environment missing");
+              throw new Error("native staging destinations missing");
             }
+            expect(cwd).toBe(stageProject);
             expect(stageProject).not.toBe(project);
             await expect(
               fs.readFile(path.join(stageProject, "sibling-package"), "utf8"),
@@ -188,7 +218,11 @@ describe.runIf(process.platform !== "win32")("native package transactions", () =
           expect(result.failedStep?.stderrTail).toContain("native global installation changed");
           expect(result.afterVersion).toBe("1.0.0");
           expect(retained).toBeUndefined();
-          expect(phases).toEqual(["validate", "stop"]);
+          expect(phases).toEqual([
+            ...(manager === "pnpm" ? ["probe root", "probe bin"] : []),
+            "validate",
+            "stop",
+          ]);
           await expect(fs.readFile(launcher, "utf8")).resolves.toBe("old launcher\n");
           expect(
             (await fs.readdir(path.dirname(project))).filter((entry) => entry.startsWith(".")),
@@ -196,7 +230,11 @@ describe.runIf(process.platform !== "win32")("native package transactions", () =
           return;
         }
         expect(result.failedStep).toBeNull();
-        expect(phases).toEqual(["validate", "stop"]);
+        expect(phases).toEqual([
+          ...(manager === "pnpm" ? ["probe root", "probe bin"] : []),
+          "validate",
+          "stop",
+        ]);
         expect(result.afterVersion).toBe("2.0.0");
         await expect(fs.readFile(metadata, "utf8")).resolves.toBe("candidate metadata\n");
         await expect(fs.readFile(sibling, "utf8")).resolves.toBe("unrelated package\n");
@@ -264,6 +302,70 @@ describe.runIf(process.platform !== "win32")("native package transactions", () =
         expect(
           (await fs.readdir(path.dirname(project))).filter((entry) => entry.startsWith(".")),
         ).toEqual([]);
+      });
+    },
+  );
+
+  it.each(["root", "bin", "probe-error"] as const)(
+    "refuses pnpm staging before install when the effective destination fails (%s)",
+    async (failure) => {
+      await withTestDir({ prefix: "openclaw-pnpm-stage-destination-" }, async (base) => {
+        const project = path.join(base, "global");
+        const globalRoot = path.join(project, "5", "node_modules");
+        const packageRoot = path.join(globalRoot, "openclaw");
+        const binDir = path.join(base, "bin");
+        await writePackageRoot(packageRoot, "1.0.0");
+        await fs.mkdir(binDir);
+        await fs.writeFile(path.join(binDir, "openclaw"), "live launcher\n");
+        const beforeActivate = vi.fn(async () => {});
+        const runStep = vi.fn(async () => {
+          throw new Error("installation must not run after a refused destination probe");
+        });
+        let stageRoot: string | undefined;
+        let stageBin: string | undefined;
+        const result = await runGlobalPackageUpdateSteps({
+          installTarget: { manager: "pnpm", command: "pnpm", globalRoot, packageRoot },
+          packageName: "openclaw",
+          installSpec: "openclaw@2.0.0",
+          runCommand: async (argv, options) => {
+            const stage = readPnpmStageArgs(argv);
+            if (!stage.projectRoot) {
+              return { code: 0, stdout: `${binDir}\n`, stderr: "" };
+            }
+            stageRoot = stage.projectRoot;
+            stageBin = stage.binDir;
+            expect(options.cwd).toBe(stageRoot);
+            if (failure === "probe-error") {
+              return { code: 1, stdout: "", stderr: "pnpm destination configuration rejected" };
+            }
+            return {
+              code: 0,
+              stdout:
+                argv[1] === "root"
+                  ? `${failure === "root" ? globalRoot : path.join(stageRoot, "5", "node_modules")}\n`
+                  : `${failure === "bin" ? binDir : stageBin}\n`,
+              stderr: "",
+            };
+          },
+          runStep,
+          beforeActivate,
+          timeoutMs: 1000,
+        });
+        expect(result.failedStep).toMatchObject({ name: "pnpm staging preflight", exitCode: 1 });
+        expect(result.failedStep?.stderrTail).toContain(
+          failure === "probe-error" ? "configuration rejected" : `pnpm ${failure} selected`,
+        );
+        expect(result.recovery).toEqual({ serviceRestartSafe: true, version: "1.0.0" });
+        expect(runStep).not.toHaveBeenCalled();
+        expect(beforeActivate).not.toHaveBeenCalled();
+        expect(await fs.readFile(path.join(packageRoot, "package.json"), "utf8")).toContain(
+          '"version":"1.0.0"',
+        );
+        expect(await fs.readFile(path.join(binDir, "openclaw"), "utf8")).toBe("live launcher\n");
+        expect(stageRoot).toBeDefined();
+        expect(stageBin).toBeDefined();
+        await expect(fs.stat(stageRoot!)).rejects.toMatchObject({ code: "ENOENT" });
+        await expect(fs.stat(stageBin!)).rejects.toMatchObject({ code: "ENOENT" });
       });
     },
   );

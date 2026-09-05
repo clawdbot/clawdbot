@@ -4,9 +4,11 @@ import fs from "node:fs/promises";
 import path from "node:path";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import type { PluginInstallRecord } from "../../config/types.plugins.js";
+import type { PostCorePluginUpdateResult } from "./update-command-plugins.js";
 
 export type LeaseScenario = {
-  lane: "resume" | "current-process" | "repair";
+  lane: "resume" | "fresh-process" | "current-process" | "repair";
+  pluginUpdate?: PostCorePluginUpdateResult;
   preDoctorChannel?: string;
   invalidConfig?: boolean;
   failDoctor?: "pre" | "post";
@@ -78,6 +80,18 @@ export async function runUpdateLeaseChild(): Promise<void> {
     return;
   }
   const { withPluginLifecycleLease } = await import("../../plugins/plugin-lifecycle-lease.js");
+  if (command === "update") {
+    assert.equal(scenario.lane, "fresh-process");
+    const resultPath = process.env.OPENCLAW_UPDATE_POST_CORE_RESULT_PATH;
+    assert.ok(resultPath && scenario.pluginUpdate);
+    await withPluginLifecycleLease({ waitMs: 0 }, async () => record("packages-acquired"));
+    await record("packages-released");
+    const { readConfigFileSnapshot } = await import("../../config/config.js");
+    const { persistValidatedDowngradeConfig } = await import("./update-command-config.js");
+    await persistValidatedDowngradeConfig(await readConfigFileSnapshot());
+    await fs.writeFile(resultPath, JSON.stringify(scenario.pluginUpdate));
+    return;
+  }
   if (command === "doctor") {
     const phase = process.env.OPENCLAW_UPDATE_POST_CORE_CONVERGENCE === "1" ? "post" : "pre";
     assert.deepEqual(process.argv.slice(3), [

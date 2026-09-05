@@ -14,8 +14,21 @@ async function git(root: string, ...args: string[]) {
   return result.stdout.trim();
 }
 
-async function writeRuntime(root: string, sha: string) {
+const runtimeImports = [
+  "../node_modules/identity.cjs",
+  "workspace-runtime",
+  "relative-workspace-runtime",
+  "external-runtime",
+  "absolute-external-runtime",
+  "../packages/runtime/node_modules/external-runtime",
+];
+
+async function writeRuntime(root: string, sha: string, store: string) {
+  root = await fs.realpath(root);
   const dist = path.join(root, "dist");
+  const external = path.join(store, sha);
+  await fs.mkdir(external, { recursive: true });
+  await fs.writeFile(path.join(external, "index.js"), `module.exports = ${JSON.stringify(sha)};`);
   await fs.mkdir(path.join(dist, "control-ui"), { recursive: true });
   await fs.mkdir(path.join(root, "node_modules"), { recursive: true });
   await fs.mkdir(path.join(root, "packages", "runtime", "node_modules"), { recursive: true });
@@ -25,6 +38,20 @@ async function writeRuntime(root: string, sha: string) {
     path.join(root, "node_modules", "workspace-runtime"),
     "junction",
   );
+  for (const [relative, target, absolute] of [
+    ["node_modules/relative-workspace-runtime", path.join(root, "packages", "runtime"), false],
+    ["node_modules/external-runtime", external, false],
+    ["node_modules/absolute-external-runtime", external, true],
+    ["packages/runtime/node_modules/external-runtime", external, false],
+  ] as const) {
+    const file = path.join(root, relative);
+    await fs.rm(file, { force: true });
+    await fs.symlink(
+      absolute || process.platform === "win32" ? target : path.relative(path.dirname(file), target),
+      file,
+      process.platform === "win32" ? "junction" : "dir",
+    );
+  }
   await Promise.all([
     fs.writeFile(
       path.join(root, "packages", "runtime", "node_modules", "nested.cjs"),
@@ -36,7 +63,9 @@ async function writeRuntime(root: string, sha: string) {
     ),
     fs.writeFile(
       path.join(dist, "entry.js"),
-      "console.log(require('../node_modules/identity.cjs')); console.log(require('workspace-runtime'));",
+      runtimeImports
+        .map((specifier) => `console.log(require(${JSON.stringify(specifier)}));`)
+        .join("\n"),
     ),
     fs.writeFile(path.join(dist, "build-info.json"), JSON.stringify({ commit: sha, buildId: sha })),
     fs.writeFile(path.join(dist, ".buildstamp"), JSON.stringify({ head: sha })),
@@ -76,7 +105,7 @@ describe("Git candidate activation", () => {
     );
     await fs.writeFile(
       path.join(remote, ".gitignore"),
-      "node_modules/\ndist/\n.artifacts/\n*.tmp\n",
+      "node_modules/\ndist/\n.artifacts\n*.tmp\n",
     );
     await git(remote, "add", ".");
     await git(remote, "commit", "-m", "base");
@@ -84,7 +113,7 @@ describe("Git candidate activation", () => {
     await git(directory, "clone", "--quiet", remote, root);
     await git(root, "config", "user.name", "OpenClaw Test");
     await git(root, "config", "user.email", "openclaw@example.com");
-    await writeRuntime(root, beforeSha);
+    await writeRuntime(root, beforeSha, path.join(directory, "shared-store"));
     events = [];
     stopped = false;
     runCommand = async (argv, options) => {
@@ -95,7 +124,11 @@ describe("Git candidate activation", () => {
         if (argv[1] === "build") {
           expect(stopped).toBe(false);
           expect(options.cwd).not.toBe(root);
-          await writeRuntime(options.cwd!, await git(options.cwd!, "rev-parse", "HEAD"));
+          await writeRuntime(
+            options.cwd!,
+            await git(options.cwd!, "rev-parse", "HEAD"),
+            path.join(directory, "shared-store"),
+          );
           events.push("build");
         }
         return { code: 0, stdout: argv[1] === "--version" ? "12.0.0" : "", stderr: "" };
@@ -134,6 +167,13 @@ describe("Git candidate activation", () => {
           expect(stopped).toBe(false);
           expect(await git(root, "rev-parse", "HEAD")).toBe(beforeSha);
           expect(candidateRoot).not.toBe(root);
+          const child = await runCommandWithTimeout(
+            [process.execPath, path.join(candidateRoot, "dist", "entry.js")],
+            { timeoutMs: 5000 },
+          );
+          expect(child.code, child.stderr).toBe(0);
+          const candidateSha = await git(candidateRoot, "rev-parse", "HEAD");
+          expect(child.stdout.trim().split("\n")).toEqual(runtimeImports.map(() => candidateSha));
           events.push("validate");
         },
         beforeGitMutation: async () => {
@@ -189,11 +229,14 @@ describe("Git candidate activation", () => {
     async (localCommit) => {
       const target = await advanceRemote();
       if (localCommit) {
+        const artifacts = path.join(directory, "external-artifacts");
+        await fs.mkdir(artifacts);
+        await fs.symlink(artifacts, path.join(root, ".artifacts"), "junction");
         await fs.writeFile(path.join(root, "local.txt"), "operator change\n");
         await git(root, "add", "local.txt");
         await git(root, "commit", "-m", "local change");
         beforeSha = await git(root, "rev-parse", "HEAD");
-        await writeRuntime(root, beforeSha);
+        await writeRuntime(root, beforeSha, path.join(directory, "shared-store"));
       }
       const unrelated = path.join(root, "operator-project", "node_modules", "keep.cjs");
       await fs.mkdir(path.dirname(unrelated), { recursive: true });
@@ -213,7 +256,8 @@ describe("Git candidate activation", () => {
         [process.execPath, path.join(root, "dist", "entry.js")],
         { timeoutMs: 5000 },
       );
-      expect(child.stdout.trim().split("\n")).toEqual([current, current]);
+      expect(child.code, child.stderr).toBe(0);
+      expect(child.stdout.trim().split("\n")).toEqual(runtimeImports.map(() => current));
       expect(await fs.readdir(path.join(root, ".artifacts"))).toEqual([]);
     },
   );
@@ -293,7 +337,8 @@ describe("Git candidate activation", () => {
         [process.execPath, path.join(root, "dist", "entry.js")],
         { timeoutMs: 5000 },
       );
-      expect(child.stdout.trim().split("\n")).toEqual([beforeSha, beforeSha]);
+      expect(child.code, child.stderr).toBe(0);
+      expect(child.stdout.trim().split("\n")).toEqual(runtimeImports.map(() => beforeSha));
     },
   );
 });

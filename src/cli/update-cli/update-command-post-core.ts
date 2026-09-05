@@ -42,11 +42,11 @@ import {
   writePostCoreSourceConfigFile,
 } from "./update-command-config.js";
 import type { PostCorePluginUpdateResult } from "./update-command-plugins.js";
+import { isPackageManagerUpdateMode } from "./update-command-service-command.js";
 import {
   disableUpdatedPackageCompileCacheEnv,
   stripGatewayServiceMarkerEnv,
 } from "./update-command-service-env.js";
-import { isPackageManagerUpdateMode } from "./update-command-service-recovery.js";
 
 const POST_CORE_UPDATE_RESULT_POLL_MS = 100;
 // v2026.4.29 first shipped target-owned channel persistence during resume.

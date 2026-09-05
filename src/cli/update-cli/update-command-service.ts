@@ -36,6 +36,7 @@ import { createUpdateConfigSnapshot } from "./update-command-config-snapshot.js"
 import { runUpdateInferenceProbe } from "./update-command-inference.js";
 import {
   DEFINITION_DENIAL,
+  isPackageManagerUpdateMode,
   runUpdatedInstallGatewayCommand,
 } from "./update-command-service-command.js";
 import { resolveServiceRefreshEnv } from "./update-command-service-env.js";
@@ -52,7 +53,6 @@ import {
 import {
   formatPostUpdateGatewayRecoveryInstructions,
   hasLoadedLaunchdKeepAliveSupervisor,
-  isPackageManagerUpdateMode,
   recoverLaunchAgentAndRecheckGatewayHealth,
   shouldUseLegacyProcessRestartAfterUpdate,
 } from "./update-command-service-recovery.js";

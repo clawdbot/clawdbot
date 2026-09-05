@@ -13,7 +13,8 @@ const mocks = vi.hoisted(() => ({
   waitForGatewayHttpReadiness: vi.fn(),
   runUpdateInferenceProbe: vi.fn(),
 }));
-vi.mock("./update-command-service-command.js", () => ({
+vi.mock("./update-command-service-command.js", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("./update-command-service-command.js")>()),
   runUpdatedInstallGatewayCommand: mocks.runUpdatedInstallGatewayCommand,
 }));
 vi.mock("./update-command-inference.js", () => ({

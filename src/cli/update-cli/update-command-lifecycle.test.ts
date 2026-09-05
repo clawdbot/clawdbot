@@ -163,8 +163,6 @@ function expectLifecycleBoundary(preLeaseEvent: string): void {
     expect(mocks.events).toContain(event);
   }
   expect(mocks.events.indexOf("plugin-update:true")).toBeGreaterThan(authoritativeReadIndex);
-  const lastLeaseExit = mocks.events.lastIndexOf("lease-exit:false");
-  expect(mocks.events.indexOf("complete:false")).toBeGreaterThan(lastLeaseExit);
 }
 
 describe("update plugin lifecycle lease boundaries", () => {
@@ -183,7 +181,7 @@ describe("update plugin lifecycle lease boundaries", () => {
     vi.spyOn(defaultRuntime, "writeJson").mockImplementation(() => undefined);
   });
 
-  it("resumes committed migrations without repeating doctor and rereads state under the lease", async () => {
+  it("returns resumed package work without Doctor completion and rereads state under the lease", async () => {
     await resumePostCoreUpdate({
       root: "/tmp/openclaw",
       channel: "stable",
@@ -196,6 +194,8 @@ describe("update plugin lifecycle lease boundaries", () => {
     expect(mocks.events).not.toContain("fresh-doctor:true");
     expect(mocks.events).not.toContain("config-snapshot:false");
     expect(mocks.events).not.toContain("config-snapshot:true");
+    expect(mocks.events).not.toContain("complete:false");
+    expect(mocks.events).not.toContain("complete:true");
     expect(mocks.events).toContain("persisted-index:true");
   });
 
@@ -210,6 +210,9 @@ describe("update plugin lifecycle lease boundaries", () => {
     expectLifecycleBoundary("fresh-doctor");
     const doctorIndex = mocks.events.indexOf("fresh-doctor:false");
     expect(mocks.events.slice(0, doctorIndex)).toContain("read-config:true");
+    expect(mocks.events.indexOf("complete:false")).toBeGreaterThan(
+      mocks.events.lastIndexOf("lease-exit:false"),
+    );
     expect(mocks.events).not.toContain("persisted-index:true");
   });
 });

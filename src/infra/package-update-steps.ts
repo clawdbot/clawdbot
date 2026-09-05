@@ -105,13 +105,14 @@ async function runPnpmPreflightProbe(params: {
   timeoutMs: number;
   env?: NodeJS.ProcessEnv;
   name?: string;
+  cwd?: string;
 }): Promise<{
   result: Awaited<ReturnType<CommandRunner>> | null;
   failedStep: UpdateStepResult | null;
 }> {
   const startedAt = Date.now();
   const argv = [params.installTarget.command, ...params.args];
-  const probeCwd = params.installTarget.globalRoot ?? undefined;
+  const probeCwd = params.cwd ?? params.installTarget.globalRoot ?? undefined;
   try {
     // pnpm reads project packageManager/config for every command. Keep all
     // ownership probes in one manager-owned context before mutation.
@@ -824,6 +825,41 @@ export async function runGlobalPackageUpdateSteps(params: {
     const commandEnv = stagedInstall?.native?.env ?? effectiveInstallEnv;
     const installEnv = commandEnv === undefined ? {} : { env: commandEnv };
 
+    if (params.installTarget.manager === "pnpm" && stagedInstall?.native) {
+      const stage = stagedInstall.native;
+      for (const [probeName, expectedPath] of [
+        ["root", stage.globalRoot],
+        ["bin", stage.binDir],
+      ] as const) {
+        const args = [probeName, "-g", ...stage.configArgs];
+        const probe = await runPnpmPreflightProbe({
+          ...params,
+          args,
+          cwd: stage.projectRoot,
+          env: stage.env,
+          name: "pnpm staging preflight",
+        });
+        const reportedPath = probe.result && readPackageManagerProbeValue(probe.result.stdout);
+        if (
+          !reportedPath ||
+          (await resolveCanonicalPath(reportedPath)) !== (await resolveCanonicalPath(expectedPath))
+        ) {
+          const failedStep = probe.failedStep ?? {
+            name: "pnpm staging preflight",
+            command: [params.installTarget.command, ...args].join(" "),
+            cwd: stage.projectRoot,
+            durationMs: 0,
+            exitCode: 1,
+            stderrTail: `pnpm ${probeName} selected ${reportedPath || "an unknown path"}, expected staged destination ${expectedPath}. The live installation was left unchanged.`,
+          };
+          return await packageUpdateFailure(failedStep, originalPackageRoot, [
+            ...steps,
+            failedStep,
+          ]);
+        }
+      }
+    }
+
     const installCommandTarget = stagedInstall?.installTarget ?? params.installTarget;
     const preparedSpec = await prepareNpmGitSourceInstallSpec({
       installTarget: installCommandTarget,
@@ -858,14 +894,17 @@ export async function runGlobalPackageUpdateSteps(params: {
     liveTreeMutated ||= !stagedInstall;
     const updateStep = await params.runStep({
       name: "global update",
-      argv: globalInstallArgs(
-        installCommandTarget,
-        updateInstallSpec,
-        undefined,
-        stagedInstall?.prefix,
-        preparedSpec.installCwd,
-        npmPreflight.policy ?? undefined,
-      ),
+      argv: [
+        ...globalInstallArgs(
+          installCommandTarget,
+          updateInstallSpec,
+          undefined,
+          stagedInstall?.prefix,
+          preparedSpec.installCwd,
+          npmPreflight.policy ?? undefined,
+        ),
+        ...(stagedInstall?.native?.configArgs ?? []),
+      ],
       ...(updateCwd ? { cwd: updateCwd } : {}),
       ...installEnv,
       timeoutMs: params.timeoutMs,

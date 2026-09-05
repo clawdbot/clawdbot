@@ -3,6 +3,7 @@ import fs from "node:fs/promises";
 import path from "node:path";
 import { hasErrnoCode } from "./errno.js";
 import type { CommandRunner } from "./update-runner-types.js";
+import { relocateRuntimeSymlink, type RuntimeRelocation } from "./update-runtime-relocation.js";
 
 async function collectRuntimeDirectories(
   root: string,
@@ -50,38 +51,30 @@ async function collectRuntimeDirectories(
 
 async function rebindRuntimeLinks(
   staged: string,
-  candidateRoot: string,
-  root: string,
+  relative: string,
+  relocation: RuntimeRelocation,
 ): Promise<void> {
   const stat = await fs.lstat(staged);
   if (stat.isDirectory()) {
     for (const entry of await fs.readdir(staged, { withFileTypes: true })) {
       if (entry.isDirectory() || entry.isSymbolicLink()) {
-        await rebindRuntimeLinks(path.join(staged, entry.name), candidateRoot, root);
+        await rebindRuntimeLinks(
+          path.join(staged, entry.name),
+          path.join(relative, entry.name),
+          relocation,
+        );
       }
     }
     return;
   }
-  if (!stat.isSymbolicLink()) {
-    return;
+  if (stat.isSymbolicLink()) {
+    await relocateRuntimeSymlink(
+      staged,
+      path.join(relocation.sourceRoot, relative),
+      path.join(relocation.destinationRoot, relative),
+      relocation,
+    );
   }
-  const target = await fs.readlink(staged);
-  if (!path.isAbsolute(target)) {
-    return;
-  }
-  const relative = path.relative(candidateRoot, target);
-  if (relative.startsWith(`..${path.sep}`) || relative === ".." || path.isAbsolute(relative)) {
-    return;
-  }
-  // pnpm's Windows workspace junctions carry absolute candidate paths. Rebind
-  // only those owned links; external store links keep their original owner.
-  const targetStat = await fs.stat(target);
-  await fs.unlink(staged);
-  await fs.symlink(
-    path.join(root, relative),
-    staged,
-    targetStat.isDirectory() ? "junction" : "file",
-  );
 }
 
 /** Stage on the destination filesystem; activation only renames the already validated runtime. */
@@ -92,6 +85,11 @@ export async function prepareGitRuntimePromotion(
   timeoutMs: number,
 ) {
   const directories = await collectRuntimeDirectories(candidateRoot, runCommand, timeoutMs);
+  const relocation: RuntimeRelocation = {
+    sourceRoot: await fs.realpath(candidateRoot),
+    destinationRoot: await fs.realpath(root),
+    sourceAliases: [candidateRoot],
+  };
   const staged: Array<{ destination: string; temporary: string; previous: boolean }> = [];
   const promoted: typeof staged = [];
   const cleanup = async () => {
@@ -113,7 +111,7 @@ export async function prepareGitRuntimePromotion(
         recursive: true,
         verbatimSymlinks: true,
       });
-      await rebindRuntimeLinks(candidate, candidateRoot, root);
+      await rebindRuntimeLinks(candidate, relative, relocation);
     }
   } catch (error) {
     await cleanup();

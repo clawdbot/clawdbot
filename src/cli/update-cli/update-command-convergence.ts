@@ -38,6 +38,7 @@ export async function convergeUpdatePlugins(params: {
   startedAt: number;
   packageUpdateNodeRunner?: string;
   updateStepTimeoutMs: number;
+  beforeDoctor?: () => Promise<void>;
 }): Promise<{
   resultWithPostUpdate: UpdateRunResult;
   postUpdateConfigSnapshot?: Awaited<ReturnType<typeof readConfigFileSnapshot>>;
@@ -87,13 +88,25 @@ export async function convergeUpdatePlugins(params: {
     );
   }
 
-  let postCorePluginUpdate;
-  let pluginsUpdatedInFreshProcess = false;
-  if (shouldResumePostCoreInFreshProcess) {
-    const freshProcessResult = await withOwnedManagedUpdateEnv(
-      params.ownedManagedUpdateEnv,
-      async () =>
-        await continuePostCoreUpdateInFreshProcess({
+  return await withOwnedManagedUpdateEnv(params.ownedManagedUpdateEnv, async () => {
+    const previousCompatibilityHostVersion = process.env.OPENCLAW_COMPATIBILITY_HOST_VERSION;
+    const postUpdateInstalledVersion = await readPackageVersion(postUpdateRoot);
+    const versionComparison =
+      postUpdateInstalledVersion && VERSION
+        ? compareSemverStrings(VERSION, postUpdateInstalledVersion)
+        : null;
+    const compatibilityDowngradeTarget =
+      versionComparison != null && versionComparison > 0 ? postUpdateInstalledVersion : null;
+    if (compatibilityDowngradeTarget) {
+      // The parent still reports its pre-update VERSION. Convergence and fresh
+      // completion must both use the installed target's compatibility contract.
+      process.env.OPENCLAW_COMPATIBILITY_HOST_VERSION = compatibilityDowngradeTarget;
+    }
+    try {
+      let postCorePluginUpdate;
+      let pluginsUpdatedInFreshProcess = false;
+      if (shouldResumePostCoreInFreshProcess) {
+        const freshProcessResult = await continuePostCoreUpdateInFreshProcess({
           root: postUpdateRoot,
           channel: params.channel,
           requestedChannel: params.requestedChannel,
@@ -103,28 +116,23 @@ export async function convergeUpdatePlugins(params: {
           timeoutMs: params.updateStepTimeoutMs,
           nodeRunner: params.packageUpdateNodeRunner,
           preUpdateConfig,
-        }),
-    );
-    if (freshProcessResult.exitCode !== undefined) {
-      return {
-        resultWithPostUpdate: {
-          ...params.result,
-          status: "error" as const,
-          reason: "post-core-update-failed",
-        },
-        detail: freshProcessResult.error,
-      };
-    }
-    pluginsUpdatedInFreshProcess = freshProcessResult.resumed;
-    postCorePluginUpdate = freshProcessResult.pluginUpdate;
-  }
+        });
+        if (freshProcessResult.exitCode !== undefined) {
+          return {
+            resultWithPostUpdate: {
+              ...params.result,
+              status: "error" as const,
+              reason: "post-core-update-failed",
+            },
+            detail: freshProcessResult.error,
+          };
+        }
+        pluginsUpdatedInFreshProcess = freshProcessResult.resumed;
+        postCorePluginUpdate = freshProcessResult.pluginUpdate;
+      }
 
-  if (!pluginsUpdatedInFreshProcess) {
-    await withOwnedManagedUpdateEnv(params.ownedManagedUpdateEnv, async () => {
-      const previousCompatibilityHostVersion = process.env.OPENCLAW_COMPATIBILITY_HOST_VERSION;
-      let compatibilityDowngradeTarget: string | null = null;
-      try {
-        const initialPluginUpdate = await withPluginLifecycleLease({}, async () => {
+      if (!pluginsUpdatedInFreshProcess) {
+        postCorePluginUpdate = await withPluginLifecycleLease({}, async () => {
           postUpdateConfigSnapshot = await readConfigFileSnapshot({
             skipPluginValidation: true,
             suppressFutureVersionWarning: shouldResumePostCoreInFreshProcess,
@@ -138,19 +146,6 @@ export async function convergeUpdatePlugins(params: {
             preUpdateConfig,
           );
           postUpdateConfigSnapshot = restoredConfig.snapshot;
-          // Current-process post-core convergence still reports the pre-update
-          // VERSION. During downgrades, pin compatibility checks to the installed
-          // target so incompatible newer plugins are disabled before restart.
-          const postUpdateInstalledVersion = await readPackageVersion(postUpdateRoot);
-          const versionComparison =
-            postUpdateInstalledVersion && VERSION
-              ? compareSemverStrings(VERSION, postUpdateInstalledVersion)
-              : null;
-          compatibilityDowngradeTarget =
-            versionComparison != null && versionComparison > 0 ? postUpdateInstalledVersion : null;
-          if (compatibilityDowngradeTarget) {
-            process.env.OPENCLAW_COMPATIBILITY_HOST_VERSION = compatibilityDowngradeTarget;
-          }
           const pluginInstallRecords = await loadInstalledPluginIndexInstallRecords();
           return await updatePluginsAfterCoreUpdate({
             root: postUpdateRoot,
@@ -164,53 +159,57 @@ export async function convergeUpdatePlugins(params: {
             pluginInstallRecords,
           });
         });
-        // Fresh doctor acquires this same cross-process lease; completion must run after release.
+      }
+
+      if (postCorePluginUpdate) {
+        // Both package paths release the plugin lease before Doctor; the parent
+        // owns the service boundary after package and network work has finished.
         const completedPluginUpdate = await completePostCorePluginUpdate({
           root: postUpdateRoot,
-          pluginUpdate: initialPluginUpdate,
-          // Core migrations already ran before service activation; only plugin changes need Doctor now.
-          freshDoctorRequired: initialPluginUpdate.changed,
+          pluginUpdate: postCorePluginUpdate,
+          freshDoctorRequired: postCorePluginUpdate.changed,
           yes: params.opts.yes === true,
           json: params.opts.json === true,
           timeoutMs: params.updateStepTimeoutMs,
+          beforeDoctor: params.beforeDoctor,
           ...(params.packageUpdateNodeRunner ? { nodeRunner: params.packageUpdateNodeRunner } : {}),
         });
         postCorePluginUpdate = completedPluginUpdate.pluginUpdate;
         postUpdateConfigSnapshot = completedPluginUpdate.configSnapshot;
-      } finally {
-        if (compatibilityDowngradeTarget) {
-          if (previousCompatibilityHostVersion === undefined) {
-            delete process.env.OPENCLAW_COMPATIBILITY_HOST_VERSION;
-          } else {
-            process.env.OPENCLAW_COMPATIBILITY_HOST_VERSION = previousCompatibilityHostVersion;
+      }
+
+      const resultWithPostUpdate: UpdateRunResult = postCorePluginUpdate
+        ? {
+            ...params.result,
+            status: postCorePluginUpdate.status === "error" ? "error" : params.result.status,
+            ...(postCorePluginUpdate.status === "error" ? { reason: "post-update-plugins" } : {}),
+            postUpdate: {
+              ...params.result.postUpdate,
+              plugins: postCorePluginUpdate,
+            },
           }
+        : params.result;
+      if (params.opts.run) {
+        recordUpdateRunStep(
+          params.opts.run.runId,
+          {
+            step: "post-update verification",
+            status: postCorePluginUpdate?.status === "error" ? "failed" : "completed",
+            endedAtMs: Date.now(),
+          },
+          { env: params.opts.run.env },
+        );
+      }
+
+      return { resultWithPostUpdate, postUpdateConfigSnapshot };
+    } finally {
+      if (compatibilityDowngradeTarget) {
+        if (previousCompatibilityHostVersion === undefined) {
+          delete process.env.OPENCLAW_COMPATIBILITY_HOST_VERSION;
+        } else {
+          process.env.OPENCLAW_COMPATIBILITY_HOST_VERSION = previousCompatibilityHostVersion;
         }
       }
-    });
-  }
-
-  const resultWithPostUpdate: UpdateRunResult = postCorePluginUpdate
-    ? {
-        ...params.result,
-        status: postCorePluginUpdate.status === "error" ? "error" : params.result.status,
-        ...(postCorePluginUpdate.status === "error" ? { reason: "post-update-plugins" } : {}),
-        postUpdate: {
-          ...params.result.postUpdate,
-          plugins: postCorePluginUpdate,
-        },
-      }
-    : params.result;
-  if (params.opts.run) {
-    recordUpdateRunStep(
-      params.opts.run.runId,
-      {
-        step: "post-update verification",
-        status: postCorePluginUpdate?.status === "error" ? "failed" : "completed",
-        endedAtMs: Date.now(),
-      },
-      { env: params.opts.run.env },
-    );
-  }
-
-  return { resultWithPostUpdate, postUpdateConfigSnapshot };
+    }
+  });
 }

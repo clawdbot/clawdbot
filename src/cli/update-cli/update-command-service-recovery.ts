@@ -20,7 +20,10 @@ import {
   recoverInstalledLaunchAgentAfterUpdate,
   type PostUpdateLaunchAgentRecoveryResult,
 } from "./update-command-launch-agent-recovery.js";
-import { runUpdatedInstallGatewayCommand } from "./update-command-service-command.js";
+import {
+  isPackageManagerUpdateMode,
+  runUpdatedInstallGatewayCommand,
+} from "./update-command-service-command.js";
 import {
   revalidateManagedGatewayServiceAfterUpdate,
   type PreManagedServiceStop,
@@ -31,12 +34,6 @@ import {
 } from "./update-command-service-plan.js";
 
 const CLI_NAME = resolveCliName();
-
-export function isPackageManagerUpdateMode(
-  mode: UpdateRunResult["mode"],
-): mode is "npm" | "pnpm" | "bun" {
-  return mode === "npm" || mode === "pnpm" || mode === "bun";
-}
 
 export function shouldUseLegacyProcessRestartAfterUpdate(params: {
   updateMode: UpdateRunResult["mode"];

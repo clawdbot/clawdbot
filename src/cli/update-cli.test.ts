@@ -3654,7 +3654,7 @@ describe("update-cli", () => {
     },
   );
 
-  it("post-core resume mode skips the core update and only runs post-update tasks", async () => {
+  it("post-core resume returns package work without running core update or Doctor completion", async () => {
     await runPostCoreCommand({ restart: false }, { OPENCLAW_UPDATE_POST_CORE_CONVERGENCE: "1" });
 
     expect(runGatewayUpdate).not.toHaveBeenCalled();
@@ -3689,34 +3689,21 @@ describe("update-cli", () => {
     });
   });
 
-  it("runs the final fresh doctor for convergence-only post-core changes", async () => {
-    vi.mocked(resolveGatewayInstallEntrypoint).mockResolvedValueOnce(FRESH_POST_UPDATE_ENTRYPOINT);
+  it("returns convergence-only post-core changes for the parent to complete", async () => {
     runPostCorePluginConvergenceSpy.mockResolvedValueOnce(
       postCoreConvergenceResult({
         changes: ["Repaired configured plugin install records."],
       }),
     );
 
-    await runPostCoreCommand({ restart: false });
+    await runPostCoreCommand({ restart: false, json: true });
 
     expect(syncPluginCall()?.config).toBeDefined();
     expect(updateNpmInstalledPlugins).toHaveBeenCalledTimes(1);
-    const doctorCalls = vi.mocked(runExec).mock.calls.filter(([, args]) => args[1] === "doctor");
-    expect(doctorCalls).toHaveLength(1);
-    expect(doctorCalls[0]?.[2]).toMatchObject({
-      env: { OPENCLAW_UPDATE_POST_CORE_CONVERGENCE: "1" },
-    });
-    const strictValidationCall = vi
-      .mocked(runExec)
-      .mock.calls.find(
-        ([, args]) =>
-          args[0] === FRESH_POST_UPDATE_ENTRYPOINT &&
-          args[1] === "config" &&
-          args[2] === "validate" &&
-          args[3] === "--json",
-      );
-    expect(strictValidationCall?.[2]).toMatchObject({
-      env: { OPENCLAW_UPDATE_IN_PROGRESS: "0" },
+    expect(runExec).not.toHaveBeenCalled();
+    expect(lastWriteJsonCall()).toMatchObject({
+      status: "ok",
+      postUpdate: { plugins: { changed: true } },
     });
   });
 
@@ -3821,21 +3808,20 @@ describe("update-cli", () => {
     expect(result.npm.outcomes).toContainEqual(consentOutcome);
   });
 
-  it("keeps fresh doctor output off stdout during json post-core resume", async () => {
+  it("returns changed package results without Doctor output during JSON post-core resume", async () => {
     mockNpmPluginOutcomes([], true);
-    vi.mocked(runExec).mockImplementation(async (_file, args) => ({
-      stdout: args.includes("doctor") ? "doctor ui output" : "",
-      stderr: args.includes("doctor") ? "doctor diagnostic output" : "",
-    }));
 
     await runPostCoreCommand({ json: true, restart: false });
 
-    expectFreshPostUpdateDoctor({ yes: false });
-    expect(getLogOutput()).not.toContain("doctor ui output");
-    expect(getErrorOutput()).toContain("doctor ui output");
-    expect(getErrorOutput()).toContain("doctor diagnostic output");
+    expect(runExec).not.toHaveBeenCalled();
+    expect(getLogOutput()).toBe("");
     expect(defaultRuntime.writeJson).toHaveBeenCalledWith(
-      expect.objectContaining({ status: "ok" }),
+      expect.objectContaining({
+        status: "ok",
+        postUpdate: expect.objectContaining({
+          plugins: expect.objectContaining({ changed: true }),
+        }),
+      }),
     );
   });
 
@@ -3971,6 +3957,7 @@ describe("update-cli", () => {
 
       if (mode === "resume") {
         await runPostCoreCommand({ restart: false, json: true });
+        expect(runExec).not.toHaveBeenCalled();
       } else {
         vi.mocked(resolveGatewayInstallEntrypoint).mockResolvedValueOnce(
           FRESH_POST_UPDATE_ENTRYPOINT,

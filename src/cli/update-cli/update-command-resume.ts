@@ -20,7 +20,6 @@ import {
   readPostCorePreUpdateSourceConfig,
   restoreDroppedPreUpdateChannels,
 } from "./update-command-config.js";
-import { completePostCorePluginUpdate } from "./update-command-fresh-doctor.js";
 import { updatePluginsAfterCoreUpdate } from "./update-command-plugins.js";
 import {
   readPostCorePluginInstallRecordsFile,
@@ -91,7 +90,7 @@ async function resumePostCoreUpdateInternal(params: ResumePostCoreUpdateParams):
   const parentPluginInstallRecords = await readPostCorePluginInstallRecordsFile(
     process.env[POST_CORE_UPDATE_INSTALL_RECORDS_PATH_ENV],
   );
-  const initialPluginUpdate = await withPluginLifecycleLease({}, async () => {
+  const pluginUpdate = await withPluginLifecycleLease({}, async () => {
     // The core migration owner committed before activation. This fresh process
     // reads that generation and only owns plugin convergence.
     configSnapshot = await readConfigFileSnapshot({
@@ -131,17 +130,9 @@ async function resumePostCoreUpdateInternal(params: ResumePostCoreUpdateParams):
       pluginInstallRecords,
     });
   });
-  // Fresh doctor acquires this same cross-process lease; completion must run after release.
-  const completed = await completePostCorePluginUpdate({
-    root: params.root,
-    pluginUpdate: initialPluginUpdate,
-    freshDoctorRequired: initialPluginUpdate.changed,
-    yes: params.opts.yes === true,
-    json: params.opts.json === true,
-    timeoutMs: params.timeoutMs,
-  });
-  const { pluginUpdate } = completed;
-  await persistValidatedDowngradeConfig(completed.configSnapshot);
+  // Only the target process may restamp an unchanged downgrade config. Plugin
+  // migrations that still invalidate it will write through the target Doctor later.
+  await persistValidatedDowngradeConfig(await readConfigFileSnapshot());
   if (process.env[POST_CORE_UPDATE_RESULT_PATH_ENV]) {
     await writePostCorePluginUpdateResultFile(
       process.env[POST_CORE_UPDATE_RESULT_PATH_ENV],
