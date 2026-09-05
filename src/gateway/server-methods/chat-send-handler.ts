@@ -398,7 +398,7 @@ async function handleChatSendWithOptions(
     // message: normal reply dispatch tolerates media-understanding failures by
     // proceeding with the raw content, so steer injection keeps the same
     // contract and falls back to the original text.
-    const steerDocumentContextText =
+    const steerDocumentContext =
       messageInjectionTarget && !isInternalTextSlashCommandTurn
         ? await mediaDocumentContextLoader
             .load()
@@ -421,7 +421,7 @@ async function handleChatSendWithOptions(
       admittedSessionSettings: admitted.value.admittedSessionSettings,
       turn: preparedUserTurn,
       imageOrder,
-      documentContextText: steerDocumentContextText,
+      documentContext: steerDocumentContext,
       userTurnTranscriptRecorder: userTurnRecorder,
     });
     const preAckReplyContextPromise =

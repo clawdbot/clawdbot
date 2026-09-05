@@ -11,7 +11,9 @@ import {
   updateSessionEntry,
 } from "../../config/sessions/session-accessor.js";
 import { logMessageProcessed } from "../../logging/diagnostic.js";
+import type { SteerDocumentContext } from "../../media-understanding/apply.js";
 import { prepareSessionParticipantInput } from "../../sessions/session-participant-input.js";
+import type { ChatImageContent } from "../chat-attachments.js";
 import { broadcastChatError, broadcastChatFinal } from "./chat-broadcast.js";
 import {
   createChatSendMessageInjectionStarter,
@@ -157,7 +159,8 @@ describe("createChatSendMessageInjectionStarter", () => {
   function makeStarterParams(params?: {
     body?: string;
     rawMessage?: string;
-    documentContextText?: string;
+    documentContext?: SteerDocumentContext;
+    replyOptionImages?: ChatImageContent[];
     isInternalTextSlashCommandTurn?: boolean;
   }) {
     return {
@@ -171,11 +174,11 @@ describe("createChatSendMessageInjectionStarter", () => {
       turn: {
         ctx: { Provider: "dashboard", Body: params?.body },
         isInternalTextSlashCommandTurn: params?.isInternalTextSlashCommandTurn ?? false,
-        replyOptionImages: [],
+        replyOptionImages: params?.replyOptionImages ?? [],
         replyOptionMedia: [],
       },
       imageOrder: [],
-      ...(params?.documentContextText ? { documentContextText: params.documentContextText } : {}),
+      ...(params?.documentContext ? { documentContext: params.documentContext } : {}),
       userTurnTranscriptRecorder: vi.fn(),
     } as unknown as Parameters<typeof createChatSendMessageInjectionStarter>[0];
   }
@@ -185,7 +188,10 @@ describe("createChatSendMessageInjectionStarter", () => {
     createChatSendMessageInjectionStarter(
       makeStarterParams({
         body: "see attached",
-        documentContextText: '<file name="note.txt" mime="text/plain">doc body</file>',
+        documentContext: {
+          text: '<file name="note.txt" mime="text/plain">doc body</file>',
+          images: [],
+        },
       }),
     )();
 
@@ -212,7 +218,7 @@ describe("createChatSendMessageInjectionStarter", () => {
     createChatSendMessageInjectionStarter(
       makeStarterParams({
         rawMessage: "",
-        documentContextText: '<file name="note.txt" mime="text/plain">x</file>',
+        documentContext: { text: '<file name="note.txt" mime="text/plain">x</file>', images: [] },
       }),
     )();
 
@@ -220,6 +226,58 @@ describe("createChatSendMessageInjectionStarter", () => {
       expect.anything(),
       '<file name="note.txt" mime="text/plain">x</file>',
       expect.anything(),
+    );
+  });
+
+  it("merges extracted page images after the prepared inbound images", () => {
+    vi.mocked(beginReplyMessageInjectionTarget).mockReturnValueOnce({} as never);
+    createChatSendMessageInjectionStarter(
+      makeStarterParams({
+        body: "see attached",
+        replyOptionImages: [
+          { type: "image", data: "inbound-photo", mimeType: "image/png", sourceIndex: 0 },
+        ],
+        documentContext: {
+          text: "[PDF content rendered to images]",
+          images: [
+            { type: "image", data: "page-1", mimeType: "image/png", attachmentIndex: 1 },
+            { type: "image", data: "page-2", mimeType: "image/png", attachmentIndex: 1 },
+          ],
+        },
+      }),
+    )();
+
+    expect(beginReplyMessageInjectionTarget).toHaveBeenCalledWith(
+      expect.anything(),
+      "see attached\n\n[PDF content rendered to images]",
+      expect.objectContaining({
+        images: [
+          { type: "image", data: "inbound-photo", mimeType: "image/png", sourceIndex: 0 },
+          { type: "image", data: "page-1", mimeType: "image/png", sourceIndex: 1 },
+          { type: "image", data: "page-2", mimeType: "image/png", sourceIndex: 1 },
+        ],
+      }),
+    );
+  });
+
+  it("injects extracted page images when the steer carries no inbound images", () => {
+    vi.mocked(beginReplyMessageInjectionTarget).mockReturnValueOnce({} as never);
+    createChatSendMessageInjectionStarter(
+      makeStarterParams({
+        body: "scan attached",
+        documentContext: {
+          text: "[PDF content rendered to images]",
+          images: [{ type: "image", data: "page-1", mimeType: "image/png", attachmentIndex: 0 }],
+        },
+      }),
+    )();
+
+    expect(beginReplyMessageInjectionTarget).toHaveBeenCalledWith(
+      expect.anything(),
+      "scan attached\n\n[PDF content rendered to images]",
+      expect.objectContaining({
+        images: [{ type: "image", data: "page-1", mimeType: "image/png", sourceIndex: 0 }],
+      }),
     );
   });
 

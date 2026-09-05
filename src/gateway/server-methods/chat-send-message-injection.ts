@@ -19,9 +19,11 @@ import type { SessionEntry } from "../../config/sessions.js";
 import { updateSessionEntry } from "../../config/sessions/session-accessor.js";
 import { isDiagnosticsEnabled } from "../../infra/diagnostic-events.js";
 import { logMessageProcessed, logMessageReceived } from "../../logging/diagnostic.js";
+import type { SteerDocumentContext } from "../../media-understanding/apply.js";
 import { getGlobalHookRunner } from "../../plugins/hook-runner-global.js";
 import { recordAcceptedSessionParticipantInput } from "../../sessions/session-participant-input-recording.js";
 import { setGatewayDedupeEntry } from "../agent-turn/agent-job.js";
+import type { ChatImageContent } from "../chat-attachments.js";
 import { broadcastChatError, broadcastChatFinal } from "./chat-broadcast.js";
 import { buildChatSendReplyInjectionText } from "./chat-send-reply-context.js";
 import type { NormalizedChatSendRequest } from "./chat-send-request.js";
@@ -39,7 +41,7 @@ export function createChatSendMessageInjectionStarter(params: {
   imageOrder: ReplyBackendQueueMessageOptions["imageOrder"];
   /** Document-attachment context rendered before the fork: the active run never
    * reaches reply dispatch, so its prompt would otherwise see bare media facts. */
-  documentContextText?: string;
+  documentContext?: SteerDocumentContext;
   userTurnTranscriptRecorder: NonNullable<
     ReplyBackendQueueMessageOptions["userTurnTranscriptRecorder"]
   >;
@@ -58,12 +60,30 @@ export function createChatSendMessageInjectionStarter(params: {
       inlineMode: p.queueMode,
     });
     const baseText = ctx.BodyForAgent ?? ctx.Body ?? rawMessage;
-    const documentContext = params.documentContextText?.trim();
+    const documentContext = params.documentContext?.text.trim();
     let text = baseText;
     if (documentContext) {
       const base = baseText?.trim();
       text = base ? `${baseText?.trimEnd()}\n\n${documentContext}` : documentContext;
     }
+    const documentImages = params.documentContext?.images ?? [];
+    const injectionImages: ChatImageContent[] | undefined =
+      documentImages.length > 0
+        ? [
+            ...(replyOptionImages ?? []),
+            // Extracted page images follow the prepared inbound images, the
+            // same inline-then-extracted ordering reply dispatch produces; each
+            // keeps its attachment index as ordering provenance.
+            ...documentImages.map(
+              (image): ChatImageContent => ({
+                type: "image",
+                data: image.data,
+                mimeType: image.mimeType,
+                sourceIndex: image.attachmentIndex,
+              }),
+            ),
+          ]
+        : replyOptionImages;
     const authorization = resolveCommandAuthorization({
       ctx,
       cfg,
@@ -87,7 +107,7 @@ export function createChatSendMessageInjectionStarter(params: {
           senderIsOwner: authorization.senderIsOwner,
           disableTools: false,
         }),
-        ...(replyOptionImages?.length ? { images: replyOptionImages } : {}),
+        ...(injectionImages?.length ? { images: injectionImages } : {}),
         ...(params.imageOrder?.length ? { imageOrder: params.imageOrder } : {}),
         ...(replyOptionMedia?.length ? { media: replyOptionMedia } : {}),
         waitForTranscriptCommit: true,

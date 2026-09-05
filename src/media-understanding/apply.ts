@@ -600,22 +600,31 @@ export async function applyMediaUnderstanding(params: {
   }
 }
 
+/** Rendered document context for a steered turn: prompt text plus page images. */
+export type SteerDocumentContext = {
+  text: string;
+  images: ExtractedFileImage[];
+};
+
 /**
  * Renders document-attachment context for steer injections, which bypass reply
  * dispatch and therefore never reach `applyMediaUnderstanding`. Read-only on
  * `ctx`: the caller appends the returned text to the injected prompt, so a
  * fallback to full reply dispatch can still run the complete pipeline exactly
  * once. Image/audio/video attachments stay out of the blocks — their model
- * input is owned by the images/audio channels of the injected turn.
+ * input is owned by the images/audio channels of the injected turn, so scanned
+ * PDFs return their rendered page images alongside the marker text instead of
+ * a rendering claim with no pages behind it. Undefined means no document
+ * attachments; the injection then stays exactly as it was before.
  */
 export async function renderInboundDocumentContext(params: {
   ctx: MsgContext;
   cfg: OpenClawConfig;
   workspaceDir?: string;
-}): Promise<string> {
+}): Promise<SteerDocumentContext | undefined> {
   const attachments = normalizeMediaAttachments(params.ctx);
   if (!attachments || attachments.length === 0) {
-    return "";
+    return undefined;
   }
   const cache = createMediaAttachmentCache(attachments, {
     localPathRoots: resolveMediaAttachmentLocalRoots({
@@ -636,10 +645,12 @@ export async function renderInboundDocumentContext(params: {
       // wrong self-serve path cannot leak into the injected prompt (#122411).
       selfServePathsEnabled: false,
     });
-    return appendFileBlocks(
-      undefined,
-      fileContext.blocks.map((block) => block.text),
-    );
+    return {
+      // The marker budget is the reply-dispatch contract for skipped
+      // attachments; larger steer batches must not grow the prompt unbounded.
+      text: appendFileBlocks(undefined, applyAttachmentMarkerBudget(fileContext.blocks)),
+      images: fileContext.images,
+    };
   } finally {
     await cache.cleanup();
   }
