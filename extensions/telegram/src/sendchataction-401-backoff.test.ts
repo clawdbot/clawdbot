@@ -1,22 +1,54 @@
 // Telegram tests cover sendchataction 401 and transient backoff plugin behavior.
+import { Api } from "grammy";
 import { createDeferred } from "openclaw/plugin-sdk/extension-shared";
 import { beforeAll, describe, expect, it, vi } from "vitest";
+import { asTelegramClientFetch } from "./client-fetch.js";
 
 const mocks = vi.hoisted(() => ({
   sleepWithAbort: vi.fn().mockResolvedValue(undefined),
 }));
 
 // Mock the runtime-exported backoff sleep that the handler actually imports.
-vi.mock("openclaw/plugin-sdk/runtime-env", () => ({
+vi.mock("openclaw/plugin-sdk/runtime-env", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("openclaw/plugin-sdk/runtime-env")>()),
   computeBackoff: vi.fn((_policy, attempt: number) => attempt * 1000),
   sleepWithAbort: mocks.sleepWithAbort,
 }));
 
-let createTelegramSendChatActionHandler: typeof import("./sendchataction-401-backoff.js").createTelegramSendChatActionHandler;
+type Handler = import("./sendchataction-401-backoff.js").TelegramSendChatActionHandler;
+type HandlerOptions = Parameters<
+  typeof import("./sendchataction-401-backoff.js").createTelegramSendChatActionHandler
+>[0];
+let createTelegramSendChatActionHandler: (
+  params: HandlerOptions & {
+    sendChatActionFn: (...args: Parameters<Handler["sendChatAction"]>) => Promise<true>;
+  },
+) => Handler;
 
 describe("createTelegramSendChatActionHandler", () => {
   beforeAll(async () => {
-    ({ createTelegramSendChatActionHandler } = await import("./sendchataction-401-backoff.js"));
+    const { createTelegramSendChatActionHandler: createHandler } =
+      await import("./sendchataction-401-backoff.js");
+    createTelegramSendChatActionHandler = (params) => {
+      const controller = createHandler(params);
+      return {
+        ...controller,
+        sendChatAction: (chatId, action, threadParams) =>
+          controller.sendChatAction(chatId, action, threadParams, async () => {
+            const api = new Api("123:backoff", {
+              fetch: asTelegramClientFetch(
+                async () => new Response(JSON.stringify({ ok: true, result: true })),
+              ),
+            });
+            api.config.use(async (prev, method, payload, signal) => {
+              await params.sendChatActionFn(chatId, action, threadParams);
+              return prev(method, payload, signal);
+            });
+            api.config.use(controller.apiTransformer);
+            return api.sendChatAction(chatId, action, threadParams);
+          }),
+      };
+    };
   });
 
   const make401Error = () => new Error("401 Unauthorized");
@@ -403,7 +435,7 @@ describe("createTelegramSendChatActionHandler", () => {
       retry.reject(make401Error());
       await Promise.all([firstFailure, secondFailure]);
     }
-    expect(mocks.sleepWithAbort.mock.calls).toEqual([[1000], [2000]]);
+    expect(mocks.sleepWithAbort.mock.calls.map(([delay]) => delay)).toEqual([1000, 2000]);
     expect(handler.isSuspended()).toBe(true);
   });
 
