@@ -17,6 +17,7 @@ import {
 } from "../lifecycle/workspace-skill-write.js";
 import { resolveAllowedSkillSymlinkTargetRealPaths } from "../loading/symlink-targets.js";
 import { bumpSkillsSnapshotVersion } from "../runtime/refresh-state.js";
+import { validateApplyBody } from "./apply-body-validation.js";
 import { resolveSkillWorkshopConfig } from "./config.js";
 import { readProposalFrontmatter, stripProposalFrontmatterForSkill } from "./frontmatter.js";
 import { isWorkshopOwnedSkillDir } from "./ownership.js";
@@ -256,11 +257,14 @@ export async function applySkillProposalTransition(
         }
       }
 
+      const skillContent = stripProposalFrontmatterForSkill(content);
+      validateApplyBody(skillContent);
+
       const mutation = await prepareWorkspaceSkillMutation({
         workspaceDir: input.workspaceDir,
         skillDir: record.target.skillDir,
         skillFile: record.target.skillFile,
-        content: stripProposalFrontmatterForSkill(content),
+        content: skillContent,
         supportFiles,
         mode: record.kind,
         symlinkPolicy,
