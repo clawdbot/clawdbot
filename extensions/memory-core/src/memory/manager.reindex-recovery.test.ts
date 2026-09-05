@@ -14,6 +14,7 @@ import type { EmbeddingProvider } from "./embeddings.js";
 import { resetMemoryDatabase } from "./manager-db.js";
 import { waitForMemoryReindexLock } from "./manager-reindex-lock.js";
 import type { MemoryIndexMeta } from "./manager-reindex-state.js";
+import { tryAcquireMemorySqliteLease } from "./manager-sqlite-lease.js";
 import type { MemoryIndexManager } from "./manager.js";
 import { isolateMemoryManagerTestConfig } from "./test-config-helpers.js";
 
@@ -334,6 +335,10 @@ describe("memory manager reindex recovery", () => {
     expect(harness.db.prepare("SELECT text FROM memory_index_chunks").get()).toEqual({
       text: "incremental beta",
     });
+    const releasedLock = await waitForMemoryReindexLock(
+      resolveOpenClawAgentSqlitePath({ agentId: "main" }),
+    );
+    releasedLock.release();
   });
 
   it("rejects a full reindex while another process owns the build lock", async () => {
@@ -381,6 +386,18 @@ describe("memory manager reindex recovery", () => {
     const activeSync = memoryManager.sync({ reason: "session-delta" });
     try {
       await embeddingStarted;
+      const shadowPrefix = `${path.basename(databasePath)}.memory-reindex-`;
+      expect(
+        (await fs.readdir(path.dirname(databasePath))).some((name) =>
+          name.startsWith(shadowPrefix),
+        ),
+      ).toBe(false);
+      const concurrentIncremental = tryAcquireMemorySqliteLease(
+        `${databasePath}.reindex-lock.sqlite`,
+        "shared",
+      );
+      expect(concurrentIncremental).toBeDefined();
+      concurrentIncremental?.release();
       await expect(reset()).rejects.toMatchObject({ code: "SQLITE_BUSY" });
       expect(harness.db.prepare("SELECT text FROM memory_index_chunks").all()).toEqual([
         { text: "published alpha" },
