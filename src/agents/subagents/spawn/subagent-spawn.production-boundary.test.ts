@@ -1,9 +1,6 @@
 /** Recursive spawn authority must survive the real Gateway and agent-command admission path. */
-import { writeFile } from "node:fs/promises";
-import path from "node:path";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { createDeferred } from "../../../../test/helpers/promise.js";
-import { useAutoCleanupTempDirTracker } from "../../../../test/helpers/temp-dir.js";
 import {
   clearConfigCache,
   clearRuntimeConfigSnapshot,
@@ -26,15 +23,21 @@ import {
   resetTaskRegistryForTests,
   setTaskRegistryControlRuntimeForTests,
 } from "../../../tasks/task-registry.test-support.js";
-import { captureEnv, setTestEnvValue } from "../../../test-utils/env.js";
-import { cleanupSessionStateForTest } from "../../../test-utils/session-state-cleanup.js";
+import {
+  createOpenClawTestState,
+  type OpenClawTestState,
+} from "../../../test-utils/openclaw-test-state.js";
 import {
   createOperationalRunInstanceRef,
   getAdmittedRunDelegatedAuthority,
   prepareAgentRunAdmission,
 } from "../../admitted-run-context.js";
 import type { EmbeddedAgentRunResult } from "../../embedded-agent.js";
-import { getPreparedModelRuntimeMocks } from "../../prepared-model-runtime.test-harness.js";
+import {
+  cleanupPreparedModelRuntimeHarness,
+  getPreparedModelRuntimeMocks,
+  resetPreparedModelRuntimeHarness,
+} from "../../prepared-model-runtime.test-harness.js";
 import {
   createAdmittedGatewayToolCallerIdentity,
   withGatewayToolCallerIdentity,
@@ -59,21 +62,9 @@ vi.mock("../../embedded-agent.js", async (importOriginal) => ({
 
 const parentSessionKey = "agent:main:subagent:production-boundary-parent";
 const parentRunId = "production-boundary-parent";
-const env = captureEnv(["OPENCLAW_STATE_DIR", "OPENCLAW_CONFIG_PATH"]);
-const tempDirs = useAutoCleanupTempDirTracker(afterEach);
+let state: OpenClawTestState;
 let stateDir = "";
 let runtimeConfig: OpenClawConfig;
-
-type PreparedRuntimeTestApi = {
-  resetPreparedModelRuntimeSnapshotsForTest(): void;
-};
-
-function resetPreparedRuntime() {
-  const api = (globalThis as Record<PropertyKey, unknown>)[
-    Symbol.for("openclaw.preparedModelRuntimeTestApi")
-  ] as PreparedRuntimeTestApi | undefined;
-  api?.resetPreparedModelRuntimeSnapshotsForTest();
-}
 
 async function writeTestConfig() {
   const config = {
@@ -106,18 +97,17 @@ async function writeTestConfig() {
       },
     },
   } satisfies OpenClawConfig;
-  await writeFile(path.join(stateDir, "openclaw.json"), JSON.stringify(config));
+  await state.writeConfig(config);
   clearConfigCache();
   clearRuntimeConfigSnapshot();
   return config;
 }
 
 beforeEach(async () => {
-  resetPreparedRuntime();
+  state = await createOpenClawTestState({ label: "spawn-production-boundary" });
+  resetPreparedModelRuntimeHarness(state);
   runEmbeddedAgent.mockReset();
-  stateDir = tempDirs.make("openclaw-spawn-production-boundary-");
-  setTestEnvValue("OPENCLAW_STATE_DIR", stateDir);
-  setTestEnvValue("OPENCLAW_CONFIG_PATH", path.join(stateDir, "openclaw.json"));
+  stateDir = state.stateDir;
   runtimeConfig = await writeTestConfig();
   const preparedRuntime = getPreparedModelRuntimeMocks();
   const model = {
@@ -133,7 +123,7 @@ beforeEach(async () => {
     reasoning: false,
   };
   preparedRuntime.configuredAgentIds = ["main"];
-  preparedRuntime.configuredAgentDirs.set("main", path.join(stateDir, "agents", "main", "agent"));
+  preparedRuntime.configuredAgentDirs.set("main", state.agentDir("main"));
   preparedRuntime.configuredWorkspaces.set("main", stateDir);
   preparedRuntime.buildPreparedModelCatalogSnapshot.mockResolvedValue({
     entries: [model],
@@ -155,18 +145,16 @@ beforeEach(async () => {
   });
 });
 
-afterEach(async () => {
+afterEach(async ({ task }) => {
   await settleSubagentRegistryPersistenceWork();
   resetSubagentRegistryForTests({ persist: false });
   resetTaskRegistryForTests({ persist: false });
   resetTaskFlowRegistryForTests({ persist: false });
   resetTaskRegistryControlRuntimeForTests();
   registryTesting.setDepsForTest();
-  resetPreparedRuntime();
-  await cleanupSessionStateForTest({ stateDir });
   clearRuntimeConfigSnapshot();
   clearConfigCache();
-  env.restore();
+  await cleanupPreparedModelRuntimeHarness(state, task.result?.state === "fail");
 });
 
 async function createBoundParent() {
@@ -274,12 +262,10 @@ describe("recursive spawn production boundary", () => {
     let childRunId: string | undefined;
     try {
       const result = await createBoundSpawnInvocation(bound)();
-      expect(result).toMatchObject({
-        details: {
-          status: "accepted",
-          childSessionKey: expect.any(String),
-          runId: expect.any(String),
-        },
+      expect(result.details, JSON.stringify(result)).toMatchObject({
+        status: "accepted",
+        childSessionKey: expect.any(String),
+        runId: expect.any(String),
       });
       const details = result.details as { childSessionKey: string; runId: string };
       childRunId = details.runId;
