@@ -52,17 +52,18 @@ it.each(["close", "error", "finish", "unpipe"])(
     });
     const dispose = pipeProcessOutput(source, destination, () => {});
     try {
-      source.end(Buffer.alloc(1024));
+      source.write(Buffer.alloc(1024));
       expect(source.isPaused()).toBe(true);
+      source.end(Buffer.alloc(1024));
       if (ending === "finish") {
         destination.end();
+        finishWrite?.();
+        finishWrite = undefined;
       } else if (ending === "unpipe") {
         source.unpipe(destination);
       } else {
         destination.destroy(ending === "error" ? new Error("destination failed") : undefined);
       }
-      finishWrite?.();
-      finishWrite = undefined;
       await new Promise<void>((resolve) => {
         setImmediate(resolve);
       });
