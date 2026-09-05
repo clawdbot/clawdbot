@@ -6,9 +6,19 @@
     {
       "id": "google",
       "label": "Google",
-      "providerIds": ["google", "google-antigravity", "google-gemini-cli", "google-vertex"],
-      "runtimeIds": ["google-gemini-cli"],
-      "cliSessionKeys": ["google-gemini-cli", "gemini-cli"],
+      "providerIds": [
+        "google",
+        "google-antigravity",
+        "google-gemini-cli",
+        "google-vertex"
+      ],
+      "runtimeIds": [
+        "google-gemini-cli"
+      ],
+      "cliSessionKeys": [
+        "google-gemini-cli",
+        "gemini-cli"
+      ],
       "authProfilePrefixes": [
         "google:",
         "google-antigravity:",
@@ -22,9 +32,17 @@
     "onStartup": false
   },
   "enabledByDefault": true,
-  "providers": ["google", "google-gemini-cli", "google-vertex"],
+  "providers": [
+    "google",
+    "google-gemini-cli",
+    "google-vertex"
+  ],
   "providerCatalogEntry": "./provider-discovery.ts",
-  "autoEnableWhenConfiguredProviders": ["google", "google-gemini-cli", "google-vertex"],
+  "autoEnableWhenConfiguredProviders": [
+    "google",
+    "google-gemini-cli",
+    "google-vertex"
+  ],
   "modelIdNormalization": {
     "providers": {
       "google": {
@@ -65,6 +83,218 @@
   "modelCatalog": {
     "discovery": {
       "google": "runtime"
+    },
+    "providers": {
+      "google": {
+        "baseUrl": "https://generativelanguage.googleapis.com/v1beta",
+        "api": "google-generative-ai",
+        "models": [
+          {
+            "id": "gemini-2.5-pro",
+            "name": "Gemini 2.5 Pro",
+            "reasoning": true,
+            "input": [
+              "text",
+              "image",
+              "video"
+            ],
+            "cost": {
+              "input": 0,
+              "output": 0,
+              "cacheRead": 0,
+              "cacheWrite": 0
+            },
+            "contextWindow": 1048576,
+            "maxTokens": 65536
+          },
+          {
+            "id": "gemini-2.5-flash",
+            "name": "Gemini 2.5 Flash",
+            "reasoning": true,
+            "input": [
+              "text",
+              "image",
+              "video"
+            ],
+            "cost": {
+              "input": 0,
+              "output": 0,
+              "cacheRead": 0,
+              "cacheWrite": 0
+            },
+            "contextWindow": 1048576,
+            "maxTokens": 65536
+          },
+          {
+            "id": "gemini-2.5-flash-lite",
+            "name": "Gemini 2.5 Flash-Lite",
+            "reasoning": true,
+            "input": [
+              "text",
+              "image",
+              "video"
+            ],
+            "cost": {
+              "input": 0,
+              "output": 0,
+              "cacheRead": 0,
+              "cacheWrite": 0
+            },
+            "contextWindow": 1048576,
+            "maxTokens": 65536
+          },
+          {
+            "id": "gemini-3.5-flash",
+            "name": "Gemini 3.5 Flash",
+            "reasoning": true,
+            "input": [
+              "text",
+              "image",
+              "video"
+            ],
+            "cost": {
+              "input": 0,
+              "output": 0,
+              "cacheRead": 0,
+              "cacheWrite": 0
+            },
+            "contextWindow": 1048576,
+            "maxTokens": 65536,
+            "compat": {
+              "codeMode": "preferred"
+            }
+          },
+          {
+            "id": "gemini-3.6-flash",
+            "name": "Gemini 3.6 Flash",
+            "reasoning": true,
+            "input": [
+              "text",
+              "image",
+              "video"
+            ],
+            "cost": {
+              "input": 0,
+              "output": 0,
+              "cacheRead": 0,
+              "cacheWrite": 0
+            },
+            "contextWindow": 1048576,
+            "maxTokens": 65536,
+            "compat": {
+              "codeMode": "preferred"
+            }
+          },
+          {
+            "id": "gemini-3.7-flash",
+            "name": "Gemini 3.7 Flash",
+            "reasoning": true,
+            "input": [
+              "text",
+              "image",
+              "video"
+            ],
+            "cost": {
+              "input": 0,
+              "output": 0,
+              "cacheRead": 0,
+              "cacheWrite": 0
+            },
+            "contextWindow": 1048576,
+            "maxTokens": 65536,
+            "thinkingLevelMap": {
+              "minimal": null
+            },
+            "compat": {
+              "codeMode": "preferred"
+            }
+          },
+          {
+            "id": "gemini-3.5-flash-lite",
+            "name": "Gemini 3.5 Flash-Lite",
+            "reasoning": true,
+            "input": [
+              "text",
+              "image",
+              "video"
+            ],
+            "cost": {
+              "input": 0,
+              "output": 0,
+              "cacheRead": 0,
+              "cacheWrite": 0
+            },
+            "contextWindow": 1048576,
+            "maxTokens": 65536,
+            "compat": {
+              "codeMode": "preferred"
+            }
+          },
+          {
+            "id": "gemini-3.1-pro-preview",
+            "name": "Gemini 3.1 Pro Preview",
+            "reasoning": true,
+            "input": [
+              "text",
+              "image",
+              "video"
+            ],
+            "cost": {
+              "input": 0,
+              "output": 0,
+              "cacheRead": 0,
+              "cacheWrite": 0
+            },
+            "contextWindow": 1048576,
+            "maxTokens": 65536,
+            "compat": {
+              "codeMode": "preferred"
+            }
+          },
+          {
+            "id": "gemini-3.1-flash-lite",
+            "name": "Gemini 3.1 Flash Lite",
+            "reasoning": true,
+            "input": [
+              "text",
+              "image",
+              "video"
+            ],
+            "cost": {
+              "input": 0,
+              "output": 0,
+              "cacheRead": 0,
+              "cacheWrite": 0
+            },
+            "contextWindow": 1048576,
+            "maxTokens": 65536,
+            "compat": {
+              "codeMode": "preferred"
+            }
+          },
+          {
+            "id": "gemini-3-flash-preview",
+            "name": "Gemini 3 Flash Preview",
+            "reasoning": true,
+            "input": [
+              "text",
+              "image",
+              "video"
+            ],
+            "cost": {
+              "input": 0,
+              "output": 0,
+              "cacheRead": 0,
+              "cacheWrite": 0
+            },
+            "contextWindow": 1048576,
+            "maxTokens": 65536,
+            "compat": {
+              "codeMode": "preferred"
+            }
+          }
+        ]
+      }
     },
     "suppressions": [
       {
@@ -639,26 +869,36 @@
   "providerEndpoints": [
     {
       "endpointClass": "google-generative-ai",
-      "hosts": ["generativelanguage.googleapis.com"]
+      "hosts": [
+        "generativelanguage.googleapis.com"
+      ]
     },
     {
       "endpointClass": "google-vertex",
-      "hosts": ["aiplatform.googleapis.com"],
+      "hosts": [
+        "aiplatform.googleapis.com"
+      ],
       "googleVertexRegion": "global"
     },
     {
       "endpointClass": "google-vertex",
-      "hosts": ["aiplatform.eu.rep.googleapis.com"],
+      "hosts": [
+        "aiplatform.eu.rep.googleapis.com"
+      ],
       "googleVertexRegion": "eu"
     },
     {
       "endpointClass": "google-vertex",
-      "hosts": ["aiplatform.us.rep.googleapis.com"],
+      "hosts": [
+        "aiplatform.us.rep.googleapis.com"
+      ],
       "googleVertexRegion": "us"
     },
     {
       "endpointClass": "google-vertex",
-      "hostSuffixes": ["-aiplatform.googleapis.com"],
+      "hostSuffixes": [
+        "-aiplatform.googleapis.com"
+      ],
       "googleVertexRegionHostSuffix": "-aiplatform.googleapis.com"
     }
   ],
@@ -679,8 +919,12 @@
     "providers": [
       {
         "id": "google-vertex",
-        "authMethods": ["api-key"],
-        "envVars": ["GOOGLE_CLOUD_API_KEY"],
+        "authMethods": [
+          "api-key"
+        ],
+        "envVars": [
+          "GOOGLE_CLOUD_API_KEY"
+        ],
         "authEvidence": [
           {
             "type": "local-file-with-env",
@@ -690,8 +934,13 @@
               "${HOME}/.config/gcloud/application_default_credentials.json",
               "${APPDATA}/gcloud/application_default_credentials.json"
             ],
-            "requiresAnyEnv": ["GOOGLE_CLOUD_PROJECT", "GCLOUD_PROJECT"],
-            "requiresAllEnv": ["GOOGLE_CLOUD_LOCATION"],
+            "requiresAnyEnv": [
+              "GOOGLE_CLOUD_PROJECT",
+              "GCLOUD_PROJECT"
+            ],
+            "requiresAllEnv": [
+              "GOOGLE_CLOUD_LOCATION"
+            ],
             "credentialMarker": "gcp-vertex-credentials",
             "source": "gcloud adc"
           }
@@ -699,11 +948,16 @@
       },
       {
         "id": "google",
-        "envVars": ["GEMINI_API_KEY", "GOOGLE_API_KEY"]
+        "envVars": [
+          "GEMINI_API_KEY",
+          "GOOGLE_API_KEY"
+        ]
       }
     ]
   },
-  "cliBackends": ["google-gemini-cli"],
+  "cliBackends": [
+    "google-gemini-cli"
+  ],
   "providerAuthChoices": [
     {
       "provider": "google",
@@ -745,22 +999,47 @@
   },
   "configContracts": {
     "secretInputs": {
-      "paths": [{ "path": "webSearch.headers.*", "expected": "string" }]
+      "paths": [
+        {
+          "path": "webSearch.headers.*",
+          "expected": "string"
+        }
+      ]
     }
   },
   "contracts": {
-    "mediaUnderstandingProviders": ["google"],
-    "embeddingProviders": ["gemini"],
-    "imageGenerationProviders": ["google"],
-    "musicGenerationProviders": ["google"],
-    "realtimeVoiceProviders": ["google"],
-    "speechProviders": ["google"],
-    "videoGenerationProviders": ["google"],
-    "webSearchProviders": ["gemini"]
+    "mediaUnderstandingProviders": [
+      "google"
+    ],
+    "embeddingProviders": [
+      "gemini"
+    ],
+    "imageGenerationProviders": [
+      "google"
+    ],
+    "musicGenerationProviders": [
+      "google"
+    ],
+    "realtimeVoiceProviders": [
+      "google"
+    ],
+    "speechProviders": [
+      "google"
+    ],
+    "videoGenerationProviders": [
+      "google"
+    ],
+    "webSearchProviders": [
+      "gemini"
+    ]
   },
   "mediaUnderstandingProviderMetadata": {
     "google": {
-      "capabilities": ["image", "audio", "video"],
+      "capabilities": [
+        "image",
+        "audio",
+        "video"
+      ],
       "defaultModels": {
         "image": "gemini-3-flash-preview",
         "audio": "gemini-3-flash-preview",
@@ -771,7 +1050,9 @@
         "audio": 40,
         "video": 10
       },
-      "nativeDocumentInputs": ["pdf"]
+      "nativeDocumentInputs": [
+        "pdf"
+      ]
     }
   },
   "configSchema": {
@@ -783,7 +1064,10 @@
         "additionalProperties": false,
         "properties": {
           "apiKey": {
-            "type": ["string", "object"]
+            "type": [
+              "string",
+              "object"
+            ]
           },
           "model": {
             "type": "string"
@@ -794,7 +1078,10 @@
           "headers": {
             "type": "object",
             "additionalProperties": {
-              "type": ["string", "object"]
+              "type": [
+                "string",
+                "object"
+              ]
             }
           }
         }
