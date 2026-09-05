@@ -158,14 +158,10 @@ export function createTelegramSendChatActionHandler({
       );
     }
 
-    // Include message_thread_id in the coalescing key so concurrent turns in
-    // different forum topics of the same supergroup each get their own typing
-    // indicator (#138763). Non-forum actions pass no thread id and keep
-    // coalescing per chat+action as before.
     const threadId = threadParams?.message_thread_id;
     const key =
       minIntervalMs > 0
-        ? `${String(chatId)}:${action}${typeof threadId === "number" ? `:${threadId}` : ""}`
+        ? `${String(chatId)}:${action}${threadId === undefined ? "" : `:${threadId}`}`
         : undefined;
     if (key) {
       const blockedUntil = blockedUntilByKey.get(key);

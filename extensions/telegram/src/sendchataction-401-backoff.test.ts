@@ -41,7 +41,7 @@ describe("createTelegramSendChatActionHandler", () => {
     expect(handler.isSuspended()).toBe(false);
   });
 
-  it("coalesces duplicate chat actions in the same forum topic while one is pending", async () => {
+  it.each([undefined, 1, 42])("coalesces pending actions within topic %s", async (threadId) => {
     let resolveSend: ((value: true) => void) | undefined;
     const send = new Promise<true>((resolve) => {
       resolveSend = resolve;
@@ -54,34 +54,48 @@ describe("createTelegramSendChatActionHandler", () => {
       minIntervalMs: 4000,
     });
 
-    const first = handler.sendChatAction(-100, "typing", { message_thread_id: 1 });
-    await handler.sendChatAction(-100, "typing", { message_thread_id: 1 });
+    const threadParams = threadId === undefined ? undefined : { message_thread_id: threadId };
+    const first = handler.sendChatAction(-100, "typing", threadParams);
+    await handler.sendChatAction(-100, "typing", threadParams);
 
     expect(fn).toHaveBeenCalledTimes(1);
-    expect(fn).toHaveBeenCalledWith(-100, "typing", { message_thread_id: 1 });
+    expect(fn).toHaveBeenCalledWith(-100, "typing", threadParams);
 
     resolveSend?.(true);
     await first;
   });
 
-  it("does not coalesce typing actions in different forum topics of the same supergroup (#138763)", async () => {
-    const fn = vi.fn().mockResolvedValue(true);
+  it.each([undefined, 1, 42])("keeps topic %s independent from another topic", async (threadId) => {
+    let now = 1000;
+    const pending = Promise.withResolvers<true>();
+    const fn = vi.fn().mockReturnValueOnce(pending.promise).mockResolvedValue(true);
     const logger = vi.fn();
     const handler = createTelegramSendChatActionHandler({
       sendChatActionFn: fn,
       logger,
       minIntervalMs: 4000,
+      now: () => now,
     });
 
-    await handler.sendChatAction(-100, "typing", { message_thread_id: 1 });
+    const threadParams = threadId === undefined ? undefined : { message_thread_id: threadId };
+    const first = handler.sendChatAction(-100, "typing", threadParams);
     await handler.sendChatAction(-100, "typing", { message_thread_id: 2 });
 
-    // Different message_thread_id → independent coalescing keys, so both
-    // underlying sendChatActionFn calls fire instead of one suppressing the
-    // other's forum-topic typing indicator.
     expect(fn).toHaveBeenCalledTimes(2);
-    expect(fn).toHaveBeenNthCalledWith(1, -100, "typing", { message_thread_id: 1 });
+    expect(fn).toHaveBeenNthCalledWith(1, -100, "typing", threadParams);
     expect(fn).toHaveBeenNthCalledWith(2, -100, "typing", { message_thread_id: 2 });
+    pending.resolve(true);
+    await first;
+
+    now = 4999;
+    await handler.sendChatAction(-100, "typing", threadParams);
+    await handler.sendChatAction(-100, "typing", { message_thread_id: 2 });
+    expect(fn).toHaveBeenCalledTimes(2);
+
+    now = 5000;
+    await handler.sendChatAction(-100, "typing", threadParams);
+    await handler.sendChatAction(-100, "typing", { message_thread_id: 2 });
+    expect(fn).toHaveBeenCalledTimes(4);
   });
 
   it("coalesces recent same-chat actions after the pending send resolves", async () => {
@@ -211,13 +225,13 @@ describe("createTelegramSendChatActionHandler", () => {
       now: () => now,
     });
 
-    await expect(handler.sendChatAction(123, "typing")).rejects.toThrow();
+    await expect(handler.sendChatAction(123, "typing", { message_thread_id: 1 })).rejects.toThrow();
     expect(logger.mock.calls.at(-1)).toEqual([
       `sendChatAction transient error (1). Cooling down ${expectedCooldownMs}ms before retry.`,
     ]);
 
     now += expectedCooldownMs - 1;
-    await expect(handler.sendChatAction(123, "typing")).rejects.toThrow(
+    await expect(handler.sendChatAction(123, "typing", { message_thread_id: 2 })).rejects.toThrow(
       "transient cooldown active",
     );
     expect(fn).toHaveBeenCalledTimes(1);
@@ -313,8 +327,12 @@ describe("createTelegramSendChatActionHandler", () => {
     });
 
     // Different chatIds all contribute to the same failure counter
-    await expect(handler.sendChatAction(111, "typing")).rejects.toThrow("401");
-    await expect(handler.sendChatAction(222, "typing")).rejects.toThrow("401");
+    await expect(handler.sendChatAction(111, "typing", { message_thread_id: 1 })).rejects.toThrow(
+      "401",
+    );
+    await expect(handler.sendChatAction(111, "typing", { message_thread_id: 2 })).rejects.toThrow(
+      "401",
+    );
     await expect(handler.sendChatAction(333, "typing")).rejects.toThrow("401");
 
     expect(handler.isSuspended()).toBe(true);
