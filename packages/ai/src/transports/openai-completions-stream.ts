@@ -708,10 +708,6 @@ export async function processCompletionsStream(
   }
 }
 
-function resolveOpenAICompletionsReasoningEffort(options: OpenAICompletionsOptions | undefined) {
-  return options?.reasoningEffort ?? options?.reasoning ?? "high";
-}
-
 export function shouldEmitOpenAICompletionsReasoning(
   model: OpenAIModeModel,
   options: OpenAICompletionsOptions | undefined,
@@ -719,7 +715,7 @@ export function shouldEmitOpenAICompletionsReasoning(
   if (!model.reasoning) {
     return false;
   }
-  const effort = resolveOpenAICompletionsReasoningEffort(options);
+  const effort = options?.reasoningEffort ?? options?.reasoning ?? "high";
   if (!effort || !isOpenAICompletionsThinkingEnabled(effort)) {
     return false;
   }
