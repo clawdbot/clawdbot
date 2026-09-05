@@ -23,6 +23,10 @@ Plaintext credentials remain agent-readable when they sit in files the agent can
 
 To move supported credentials out of plaintext, follow this three-step workflow:
 
+<Warning>
+The `secrets configure` step is interactive and requires a TTY; run it from a terminal rather than a non-interactive shell. Applying the migration is one-way for migrated plaintext values: the apply step scrubs them, and OpenClaw does not create rollback backups that retain those values.
+</Warning>
+
 <Steps>
   <Step title="Audit current state">
     ```bash
@@ -30,8 +34,6 @@ To move supported credentials out of plaintext, follow this three-step workflow:
     ```
   </Step>
   <Step title="Configure and apply SecretRefs">
-    Run this step from an interactive TTY. Applying a migration is one-way for migrated plaintext values: after you confirm, targeted plaintext credentials are scrubbed and cannot be restored by the CLI. Review the proposed changes before confirming.
-
     ```bash
     openclaw secrets configure --apply
     ```
@@ -45,6 +47,10 @@ To move supported credentials out of plaintext, follow this three-step workflow:
 
 If the migration includes exec SecretRefs or providers, use this complete exec-aware variant so both audits resolve them:
 
+<Warning>
+The `secrets configure` step is interactive and requires a TTY; run it from a terminal rather than a non-interactive shell. Applying the migration is one-way for migrated plaintext values: the apply step scrubs them, and OpenClaw does not create rollback backups that retain those values.
+</Warning>
+
 <Steps>
   <Step title="Audit current state">
     ```bash
@@ -52,8 +58,6 @@ If the migration includes exec SecretRefs or providers, use this complete exec-a
     ```
   </Step>
   <Step title="Configure and apply SecretRefs">
-    Run this step from an interactive TTY. Applying a migration is one-way for migrated plaintext values: after you confirm, targeted plaintext credentials are scrubbed and cannot be restored by the CLI. Review the proposed changes before confirming.
-
     ```bash
     openclaw secrets configure --apply --allow-exec
     ```
