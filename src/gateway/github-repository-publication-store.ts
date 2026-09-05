@@ -125,6 +125,26 @@ export function listRepositoryGitHubPublications(
   ).rows.map(checked);
 }
 
+/** A pushed branch outlives its publisher and the request's PR outcome. */
+export function readRepositoryGitHubPublicationBranch(input: {
+  workspaceId: string;
+  branch: string;
+  pushRepository: string;
+}) {
+  const rows = listRepositoryGitHubPublications({ workspaceId: input.workspaceId }).filter(
+    (row) => row.branch === input.branch && row.push_repository === input.pushRepository,
+  );
+  const pushed = rows.filter((row) => row.pushed_head_commit !== null);
+  // Retried ancestors may have newer timestamps; follow recorded parent links instead.
+  const ancestors = new Set(pushed.map((row) => row.previous_head_commit));
+  return {
+    head: pushed.findLast((row) => !ancestors.has(row.pushed_head_commit)),
+    unsettled: rows.some(
+      (row) => !terminalRepositoryGitHubPublication(row) && row.effect_state === "dispatched",
+    ),
+  };
+}
+
 export function readRepositoryGitHubPublication(
   requestId: string,
 ): RepositoryGitHubPublicationRow | undefined {

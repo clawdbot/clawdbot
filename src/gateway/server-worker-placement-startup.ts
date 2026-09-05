@@ -408,10 +408,18 @@ export function createGatewayWorkerPlacementRuntime(
       }),
       resolveWorkspace,
       prepareGatewayMove: (identity) =>
-        materializeSessionRepositoryWorkspaceOnGateway({
-          cfg: getRuntimeConfig(),
-          ...identity,
-        }),
+        params.placements.withWorkspaceExclusion(
+          identity.sessionId,
+          async (assertOwned) =>
+            await materializeSessionRepositoryWorkspaceOnGateway({
+              cfg: getRuntimeConfig(),
+              ...identity,
+              assertCurrent: () => {
+                assertOwned();
+                identity.assertCurrent();
+              },
+            }),
+        ),
       workspaceOperations,
       prepareAcceptedWorkspacePublication,
       publishAcceptedWorkspace,

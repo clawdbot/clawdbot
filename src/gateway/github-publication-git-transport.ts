@@ -134,20 +134,29 @@ async function readOptionalAttributeFile(file: string): Promise<Buffer | undefin
   }
 }
 
-async function assertGitHubPublicationTreeHasNoFilters(
+export async function readGitHubPublicationTree(
   cwd: string,
   workspaceTree: string,
   run: (argv: string[], options?: GitCommandOptions) => Promise<GitCommandResult>,
-): Promise<void> {
+): Promise<Buffer> {
   const listing = await run(["git", "ls-tree", "-r", "-z", "--full-tree", workspaceTree], {
     cwd,
     maxOutputBytes: TREE_LISTING_MAX_OUTPUT_BYTES,
   });
   if (listing.code !== 0) {
-    throw new Error("GitHub publication workspace attributes could not be verified.");
+    throw new Error("GitHub publication workspace tree could not be verified.");
   }
+  return listing.stdout;
+}
+
+async function assertGitHubPublicationTreeHasNoFilters(
+  cwd: string,
+  workspaceTree: string,
+  run: (argv: string[], options?: GitCommandOptions) => Promise<GitCommandResult>,
+): Promise<void> {
+  const listing = await readGitHubPublicationTree(cwd, workspaceTree, run);
   const attributeObjects = new Set<string>();
-  for (const record of listing.stdout.toString("latin1").split("\0")) {
+  for (const record of listing.toString("latin1").split("\0")) {
     const tab = record.indexOf("\t");
     if (tab < 0) {
       continue;

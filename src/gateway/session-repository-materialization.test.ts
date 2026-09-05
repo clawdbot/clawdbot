@@ -13,6 +13,7 @@ import { managedWorktrees } from "../agents/worktrees/service.js";
 import * as sessionEntries from "../config/sessions/session-accessor.js";
 import { loadSessionEntry, upsertSessionEntryCore } from "../config/sessions/session-accessor.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
+import * as cloneRuntime from "../projects/project-clone-runtime.js";
 import { ProjectCloneError } from "../projects/project-clone-runtime.js";
 import * as projectCloning from "../projects/project-clone.js";
 import { registerClonedProjectRegistry } from "../projects/project-registry.js";
@@ -168,168 +169,175 @@ describe("explicit repository move to Gateway", () => {
     },
   );
 
-  it.each(["success", "revoked", "postcommit failure", "publication unavailable"] as const)(
-    "retains only committed materialization: %s",
-    async (outcome) => {
-      await withOpenClawTestState({ label: "repository-materialize" }, async (state) => {
-        const cfg = {
-          agents: { entries: { main: { workspace: state.workspaceDir } } },
-          tools: { github: { profileId: "ghp_11111111111111111111111111111111" } },
-        };
-        await state.writeConfig(cfg);
-        const source = state.path("source");
-        await fsp.mkdir(source);
-        await git(source, ["init", "-b", "main"]);
-        await git(source, ["config", "user.name", "OpenClaw Test"]);
-        await git(source, ["config", "user.email", "test@example.invalid"]);
-        await fsp.writeFile(path.join(source, ".gitignore"), "*.ignored\n");
-        await fsp.writeFile(path.join(source, ".worktreeinclude"), "retained.ignored\n");
-        await fsp.writeFile(path.join(source, "edited.txt"), "base\n");
-        await fsp.writeFile(path.join(source, "deleted.txt"), "delete me\n");
-        await git(source, ["add", "."]);
-        await git(source, ["commit", "-m", "base"]);
-        const baseCommit = await git(source, ["rev-parse", "HEAD"]);
-        const url = "https://github.com/openclaw/materialization-fixture.git";
-        await registerClonedProjectRegistry({ path: source, name: "Fixture", originUrl: url });
-        const base = await readActualWorkspaceManifest({ root: source, baseCommit });
-        const remote = state.path("remote");
-        await exec("git", ["clone", "--", source, remote]);
-        await fsp.writeFile(path.join(remote, "published[1].ignored"), "publishable\n");
-        await fsp.writeFile(path.join(remote, "retained.ignored"), "recovery only\n");
-        await git(remote, ["--literal-pathspecs", "add", "-f", "--", "published[1].ignored"]);
-        await fsp.writeFile(path.join(remote, "edited.txt"), "accepted\n");
-        await fsp.writeFile(path.join(remote, "added.txt"), "new\n");
-        await fsp.rm(path.join(remote, "deleted.txt"));
-        const current = await readActualWorkspaceManifest({ root: remote, baseCommit });
-        const publicationStagingRoot = state.path("publication-snapshot");
-        const publicationDigest =
-          outcome === "publication unavailable"
-            ? undefined
-            : (
-                await exec(process.execPath, [
-                  "-e",
-                  REMOTE_GITHUB_PUBLICATION_SNAPSHOT_JS,
-                  remote,
-                  baseCommit,
-                  publicationStagingRoot,
-                ])
-              ).stdout.trim();
-        const scope = { agentId: "main", sessionKey: "agent:main:dashboard:materialization" };
-        const repositories = getSessionRepositoryWorkspaceStore();
-        let repository = repositories.create({
-          ...scope,
-          url,
-          runSetupScript: false,
-          assertCurrent: () => {},
-        });
-        repository = repositories.bindBase({
-          workspaceId: repository.workspaceId,
-          expectedRevision: repository.revision,
-          baseCommit,
-          baseManifestHash: base.manifestRef,
-          assertCurrent: () => {},
-        });
-        const checkpoint = await stageSessionRepositoryCheckpoint({
-          workspaceId: repository.workspaceId,
-          expectedRevision: repository.revision,
-          stagingRoot: remote,
-          ...(publicationDigest ? { publicationStagingRoot, publicationDigest } : {}),
-          baseManifestRaw: serializeWorkerWorkspaceManifest(base.manifest),
-          currentManifestRaw: serializeWorkerWorkspaceManifest(current.manifest),
-          baseManifestRef: base.manifestRef,
-          currentManifestRef: current.manifestRef,
-          assertCurrent: () => {},
-        });
-        repository = await checkpoint.publish();
-        const sessionId = "repository-materialization-session";
-        await upsertSessionEntryCore(scope, {
-          sessionId,
-          repositoryWorkspaceId: repository.workspaceId,
-        });
-        const assertCurrent = () => {
-          const worktree = managedWorktrees.findLiveByOwner("session", scope.sessionKey);
-          if (
-            outcome === "revoked" &&
-            worktree &&
-            fs.existsSync(path.join(worktree.path, "added.txt"))
-          ) {
-            throw new Error("move authority revoked");
-          }
-        };
-        if (outcome === "postcommit failure") {
-          const patchSessionEntry = sessionEntries.patchSessionEntryCore;
-          vi.spyOn(sessionEntries, "patchSessionEntryCore").mockImplementationOnce(
-            async (...args) => {
-              await patchSessionEntry(...args);
-              throw new Error("postcommit observer failed");
-            },
-          );
+  it.each([
+    "success",
+    "revoked",
+    "postcommit failure",
+    "publication unavailable",
+    "requested topic",
+  ] as const)("retains only committed materialization: %s", async (outcome) => {
+    await withOpenClawTestState({ label: "repository-materialize" }, async (state) => {
+      const cfg = {
+        agents: { entries: { main: { workspace: state.workspaceDir } } },
+        tools: { github: { profileId: "ghp_11111111111111111111111111111111" } },
+      };
+      await state.writeConfig(cfg);
+      const source = state.path("source");
+      await fsp.mkdir(source);
+      await git(source, ["init", "-b", "main"]);
+      await git(source, ["config", "user.name", "OpenClaw Test"]);
+      await git(source, ["config", "user.email", "test@example.invalid"]);
+      await fsp.writeFile(path.join(source, ".gitignore"), "*.ignored\n");
+      await fsp.writeFile(path.join(source, ".worktreeinclude"), "retained.ignored\n");
+      await fsp.writeFile(path.join(source, "edited.txt"), "base\n");
+      await fsp.writeFile(path.join(source, "deleted.txt"), "delete me\n");
+      await git(source, ["add", "."]);
+      await git(source, ["commit", "-m", "base"]);
+      const baseCommit = await git(source, ["rev-parse", "HEAD"]);
+      const url = "https://github.com/openclaw/materialization-fixture.git";
+      await registerClonedProjectRegistry({ path: source, name: "Fixture", originUrl: url });
+      const base = await readActualWorkspaceManifest({ root: source, baseCommit });
+      const remote = state.path("remote");
+      await exec("git", ["clone", "--", source, remote]);
+      await fsp.writeFile(path.join(remote, "published[1].ignored"), "publishable\n");
+      await fsp.writeFile(path.join(remote, "retained.ignored"), "recovery only\n");
+      await git(remote, ["--literal-pathspecs", "add", "-f", "--", "published[1].ignored"]);
+      await fsp.writeFile(path.join(remote, "edited.txt"), "accepted\n");
+      await fsp.writeFile(path.join(remote, "added.txt"), "new\n");
+      await fsp.rm(path.join(remote, "deleted.txt"));
+      const current = await readActualWorkspaceManifest({ root: remote, baseCommit });
+      const publicationStagingRoot = state.path("publication-snapshot");
+      const publicationDigest =
+        outcome === "publication unavailable"
+          ? undefined
+          : (
+              await exec(process.execPath, [
+                "-e",
+                REMOTE_GITHUB_PUBLICATION_SNAPSHOT_JS,
+                remote,
+                baseCommit,
+                publicationStagingRoot,
+              ])
+            ).stdout.trim();
+      const scope = { agentId: "main", sessionKey: "agent:main:dashboard:materialization" };
+      const repositories = getSessionRepositoryWorkspaceStore();
+      let repository = repositories.create({
+        ...scope,
+        url,
+        requestedRef: outcome === "requested topic" ? "topic" : undefined,
+        runSetupScript: false,
+        assertCurrent: () => {},
+      });
+      repository = repositories.bindBase({
+        workspaceId: repository.workspaceId,
+        expectedRevision: repository.revision,
+        baseCommit,
+        baseManifestHash: base.manifestRef,
+        assertCurrent: () => {},
+      });
+      const checkpoint = await stageSessionRepositoryCheckpoint({
+        workspaceId: repository.workspaceId,
+        expectedRevision: repository.revision,
+        stagingRoot: remote,
+        ...(publicationDigest ? { publicationStagingRoot, publicationDigest } : {}),
+        baseManifestRaw: serializeWorkerWorkspaceManifest(base.manifest),
+        currentManifestRaw: serializeWorkerWorkspaceManifest(current.manifest),
+        baseManifestRef: base.manifestRef,
+        currentManifestRef: current.manifestRef,
+        assertCurrent: () => {},
+      });
+      repository = await checkpoint.publish();
+      const sessionId = "repository-materialization-session";
+      await upsertSessionEntryCore(scope, {
+        sessionId,
+        repositoryWorkspaceId: repository.workspaceId,
+      });
+      const assertCurrent = () => {
+        const worktree = managedWorktrees.findLiveByOwner("session", scope.sessionKey);
+        if (
+          outcome === "revoked" &&
+          worktree &&
+          fs.existsSync(path.join(worktree.path, "added.txt"))
+        ) {
+          throw new Error("move authority revoked");
         }
-        const operation = materializeSessionRepositoryWorkspaceOnGateway({
+      };
+      vi.spyOn(cloneRuntime, "readProjectCheckoutRemoteHead").mockImplementation(
+        async ({ branch }) =>
+          outcome === "requested topic" && branch === "topic" ? baseCommit : undefined,
+      );
+      if (outcome === "postcommit failure") {
+        const patchSessionEntry = sessionEntries.patchSessionEntryCore;
+        vi.spyOn(sessionEntries, "patchSessionEntryCore").mockImplementationOnce(
+          async (...args) => {
+            await patchSessionEntry(...args);
+            throw new Error("postcommit observer failed");
+          },
+        );
+      }
+      const operation = materializeSessionRepositoryWorkspaceOnGateway({
+        ...scope,
+        cfg,
+        sessionId,
+        assertCurrent,
+      });
+      if (outcome === "revoked") {
+        await expect(operation).rejects.toThrow("move authority revoked");
+        expect(loadSessionEntry(scope)?.repositoryWorkspaceId).toBe(repository.workspaceId);
+        expect(managedWorktrees.findLiveByOwner("session", scope.sessionKey)).toBeUndefined();
+      } else {
+        if (outcome === "postcommit failure") {
+          await expect(operation).rejects.toThrow("postcommit observer failed");
+        } else {
+          await operation;
+        }
+        const entry = loadSessionEntry(scope)!;
+        const worktree = managedWorktrees.findLiveByOwner("session", scope.sessionKey)!;
+        expect(entry.repositoryWorkspaceId).toBeUndefined();
+        expect(entry.worktree?.id).toBe(worktree.id);
+        expect(worktree.baseRef).toBe(outcome === "requested topic" ? "topic" : "HEAD");
+        expect(entry.spawnedCwd).toBe(worktree.path);
+        expect(await fsp.readFile(path.join(worktree.path, "edited.txt"), "utf8")).toBe(
+          "accepted\n",
+        );
+        expect(await fsp.readFile(path.join(worktree.path, "added.txt"), "utf8")).toBe("new\n");
+        await expect(fsp.stat(path.join(worktree.path, "deleted.txt"))).rejects.toMatchObject({
+          code: "ENOENT",
+        });
+        expect(await git(worktree.path, ["rev-parse", "HEAD"])).toBe(baseCommit);
+        expect(await fsp.readFile(path.join(worktree.path, "published[1].ignored"), "utf8")).toBe(
+          "publishable\n",
+        );
+        expect(await fsp.readFile(path.join(worktree.path, "retained.ignored"), "utf8")).toBe(
+          "recovery only\n",
+        );
+        expect(await git(worktree.path, ["ls-files", "--", "published[1].ignored"])).toBe(
+          publicationDigest ? "published[1].ignored" : "",
+        );
+        expect(await git(worktree.path, ["ls-files", "--", "retained.ignored"])).toBe("");
+        expect(await git(worktree.path, ["diff", "--cached", "--name-only"])).toBe(
+          publicationDigest ? "deleted.txt" : "",
+        );
+        const normalized = await captureGitHubPublicationWorkspaceSnapshot({
+          cwd: worktree.path,
+        });
+        const published = (
+          await git(worktree.path, ["ls-tree", "-r", "--name-only", normalized.workspaceTree])
+        ).split("\n");
+        expect(published.includes("published[1].ignored")).toBe(Boolean(publicationDigest));
+        expect(published).not.toContain("retained.ignored");
+        await materializeSessionRepositoryWorkspaceOnGateway({
           ...scope,
           cfg,
           sessionId,
           assertCurrent,
         });
-        if (outcome === "revoked") {
-          await expect(operation).rejects.toThrow("move authority revoked");
-          expect(loadSessionEntry(scope)?.repositoryWorkspaceId).toBe(repository.workspaceId);
-          expect(managedWorktrees.findLiveByOwner("session", scope.sessionKey)).toBeUndefined();
-        } else {
-          if (outcome === "postcommit failure") {
-            await expect(operation).rejects.toThrow("postcommit observer failed");
-          } else {
-            await operation;
-          }
-          const entry = loadSessionEntry(scope)!;
-          const worktree = managedWorktrees.findLiveByOwner("session", scope.sessionKey)!;
-          expect(entry.repositoryWorkspaceId).toBeUndefined();
-          expect(entry.worktree?.id).toBe(worktree.id);
-          expect(entry.spawnedCwd).toBe(worktree.path);
-          expect(await fsp.readFile(path.join(worktree.path, "edited.txt"), "utf8")).toBe(
-            "accepted\n",
-          );
-          expect(await fsp.readFile(path.join(worktree.path, "added.txt"), "utf8")).toBe("new\n");
-          await expect(fsp.stat(path.join(worktree.path, "deleted.txt"))).rejects.toMatchObject({
-            code: "ENOENT",
-          });
-          expect(await git(worktree.path, ["rev-parse", "HEAD"])).toBe(baseCommit);
-          expect(await fsp.readFile(path.join(worktree.path, "published[1].ignored"), "utf8")).toBe(
-            "publishable\n",
-          );
-          expect(await fsp.readFile(path.join(worktree.path, "retained.ignored"), "utf8")).toBe(
-            "recovery only\n",
-          );
-          expect(await git(worktree.path, ["ls-files", "--", "published[1].ignored"])).toBe(
-            publicationDigest ? "published[1].ignored" : "",
-          );
-          expect(await git(worktree.path, ["ls-files", "--", "retained.ignored"])).toBe("");
-          expect(await git(worktree.path, ["diff", "--cached", "--name-only"])).toBe(
-            publicationDigest ? "deleted.txt" : "",
-          );
-          const normalized = await captureGitHubPublicationWorkspaceSnapshot({
-            cwd: worktree.path,
-          });
-          const published = (
-            await git(worktree.path, ["ls-tree", "-r", "--name-only", normalized.workspaceTree])
-          ).split("\n");
-          expect(published.includes("published[1].ignored")).toBe(Boolean(publicationDigest));
-          expect(published).not.toContain("retained.ignored");
-          await materializeSessionRepositoryWorkspaceOnGateway({
-            ...scope,
-            cfg,
-            sessionId,
-            assertCurrent,
-          });
-          expect(managedWorktrees.findLiveByOwner("session", scope.sessionKey)?.id).toBe(
-            worktree.id,
-          );
-        }
-        // Retained publication may still need the original immutable source after the move.
-        expect(repositories.get(repository.workspaceId)).toEqual(repository);
-        expect(fs.existsSync(repositories.artifactPath(repository.workspaceId))).toBe(true);
-        expect(await fsp.readFile(path.join(source, "edited.txt"), "utf8")).toBe("base\n");
-      });
-    },
-  );
+        expect(managedWorktrees.findLiveByOwner("session", scope.sessionKey)?.id).toBe(worktree.id);
+      }
+      // Retained publication may still need the original immutable source after the move.
+      expect(repositories.get(repository.workspaceId)).toEqual(repository);
+      expect(fs.existsSync(repositories.artifactPath(repository.workspaceId))).toBe(true);
+      expect(await fsp.readFile(path.join(source, "edited.txt"), "utf8")).toBe("base\n");
+    });
+  });
 });

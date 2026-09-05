@@ -1,4 +1,5 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
+import { patchSessionEntryCore } from "../config/sessions/session-accessor.js";
 import { createDeferredCore } from "../shared/deferred.js";
 import { deletePersonalGitHubSessionReceipts } from "../state/github-personal-publication-lifecycle.js";
 import { openOpenClawStateDatabase } from "../state/openclaw-state-db.js";
@@ -361,9 +362,14 @@ describe("repository checkpoint GitHub publication", () => {
     expect(f.runtime.effects).toEqual(["push"]);
   });
 
-  it.each(["shared", "personal"] as const)(
-    "records an in-flight %s push after reset before retiring publication authority",
-    async (source) => {
+  it.each([
+    { source: "shared", boundary: "reset" },
+    { source: "personal", boundary: "reset" },
+    { source: "shared", boundary: "move" },
+    { source: "personal", boundary: "move" },
+  ] as const)(
+    "records an in-flight $source push after $boundary before retiring publication authority",
+    async ({ source, boundary }) => {
       const f = await repositoryFixture();
       const person = source === "personal" ? await createPersonalPublicationFixture() : undefined;
       if (person) {
@@ -400,7 +406,26 @@ describe("repository checkpoint GitHub publication", () => {
           });
       try {
         await entered.promise;
-        await f.closeSession("reset");
+        await expect(
+          f.placements.withWorkspaceExclusion(SESSION_ID, async () => {}),
+        ).rejects.toThrow();
+        if (boundary === "reset") {
+          await f.closeSession("reset");
+        } else {
+          await patchSessionEntryCore(
+            {
+              agentId: "main",
+              sessionKey: SESSION_KEY,
+              storePath: mocks.loadSession(SESSION_KEY).storePath,
+            },
+            (current) => ({
+              ...current,
+              repositoryWorkspaceId: undefined,
+            }),
+            { replaceEntry: true },
+          );
+          expect(mocks.loadSession(SESSION_KEY).entry.repositoryWorkspaceId).toBeUndefined();
+        }
         const recovering = createTestGitHubPublicationCoordinator({ placements: f.placements });
         await recovering.resumeSessionRequests();
         expect(listRepositoryGitHubPublications()[0]).toMatchObject({
@@ -420,6 +445,21 @@ describe("repository checkpoint GitHub publication", () => {
         pushed_head_commit: f.runtime.head,
       });
       expect(f.runtime.effects).toEqual(["push"]);
+      if (boundary === "move") {
+        if (person) {
+          expect(
+            person.coordinator.personalStatus(
+              person.action,
+              person.action,
+              listRepositoryGitHubPublications()[0]!.request_id,
+            ),
+          ).toMatchObject({
+            result: { status: "failed", code: "session_changed" },
+            confirmation: null,
+          });
+        }
+        return;
+      }
       await f.capture("new session edit\n", "after-reset");
       const next = await f.coordinator.requestForSession({
         agentId: "main",
@@ -818,7 +858,7 @@ describe("repository checkpoint GitHub publication", () => {
     },
   );
 
-  it.each(["turn", "reset"] as const)(
+  it.each(["turn", "reset", "move"] as const)(
     "requires the same personal owner after restart and a later %s",
     async (boundary) => {
       const f = await repositoryFixture();
@@ -857,6 +897,28 @@ describe("repository checkpoint GitHub publication", () => {
           first.requestId,
         ),
       ).toThrow();
+      if (boundary === "move") {
+        await patchSessionEntryCore(
+          {
+            agentId: "main",
+            sessionKey: SESSION_KEY,
+            storePath: mocks.loadSession(SESSION_KEY).storePath,
+          },
+          (current) => ({
+            ...current,
+            repositoryWorkspaceId: undefined,
+          }),
+          { replaceEntry: true },
+        );
+        expect(mocks.loadSession(SESSION_KEY).entry.repositoryWorkspaceId).toBeUndefined();
+        expect(
+          person.coordinator.personalStatus(person.action, person.action, first.requestId),
+        ).toMatchObject({
+          result: { status: "failed", code: "session_changed" },
+          confirmation: null,
+        });
+        return;
+      }
       if (boundary === "reset") {
         await f.closeSession("reset");
         const status = await callPersonalPublicationRpc(person, "sessions.github.status", {

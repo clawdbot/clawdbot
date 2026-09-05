@@ -48,8 +48,7 @@ export function resolveReceiptOwner(row: RepositoryGitHubPublicationRow) {
     workspace.agentId !== row.agent_id ||
     workspace.sessionKey !== row.session_key ||
     workspace.branch !== row.branch ||
-    (loaded.entry.repositoryWorkspaceId !== undefined &&
-      loaded.entry.repositoryWorkspaceId !== row.workspace_id)
+    loaded.entry.repositoryWorkspaceId !== row.workspace_id
   ) {
     return undefined;
   }

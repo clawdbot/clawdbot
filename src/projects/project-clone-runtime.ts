@@ -142,6 +142,32 @@ export async function cloneProjectCheckout(
   });
 }
 
+function runProjectCheckoutGit(
+  input: { url: string; target: string },
+  options: ProjectCloneOptions,
+  args: string[],
+) {
+  return runCommandWithTimeout(
+    [
+      "git",
+      "-c",
+      `core.hooksPath=${os.devNull}`,
+      "-c",
+      "core.fsmonitor=false",
+      "-C",
+      input.target,
+      ...args,
+    ],
+    {
+      env: cloneCommandEnv(options.token, options.env ?? process.env),
+      timeoutMs: options.timeoutMs ?? PROJECT_CLONE_TIMEOUT_MS,
+      signal: options.signal,
+      killProcessTree: true,
+      maxOutputBytes: 256 * 1024,
+    },
+  );
+}
+
 /** Fetch the pinned source when a reused project clone predates the remote session. */
 export async function ensureProjectCheckoutCommit(
   input: { url: string; target: string; commit: string },
@@ -150,26 +176,7 @@ export async function ensureProjectCheckoutCommit(
   if (!/^[a-f0-9]{40}(?:[a-f0-9]{24})?$/u.test(input.commit)) {
     throw new ProjectCloneError("clone_failed", "The repository commit is invalid.");
   }
-  const command = (args: string[]) =>
-    runCommandWithTimeout(
-      [
-        "git",
-        "-c",
-        `core.hooksPath=${os.devNull}`,
-        "-c",
-        "core.fsmonitor=false",
-        "-C",
-        input.target,
-        ...args,
-      ],
-      {
-        env: cloneCommandEnv(options.token, options.env ?? process.env),
-        timeoutMs: options.timeoutMs ?? PROJECT_CLONE_TIMEOUT_MS,
-        signal: options.signal,
-        killProcessTree: true,
-        maxOutputBytes: 256 * 1024,
-      },
-    );
+  const command = (args: string[]) => runProjectCheckoutGit(input, options, args);
   const present = await command(["cat-file", "-e", `${input.commit}^{commit}`]);
   if (present.code === 0 && present.termination === "exit") {
     return;
@@ -189,4 +196,39 @@ export async function ensureProjectCheckoutCommit(
       timedOut: fetched.termination === "timeout" || fetched.termination === "no-output-timeout",
     });
   }
+}
+
+/** Observe only the named source branch using the same shared fetch identity as cloning. */
+export async function readProjectCheckoutRemoteHead(
+  input: { url: string; target: string; branch: string },
+  options: ProjectCloneOptions = {},
+): Promise<string | undefined> {
+  const ref = `refs/heads/${input.branch}`;
+  const result = await runProjectCheckoutGit(input, options, [
+    "ls-remote",
+    "--refs",
+    "--",
+    input.url,
+    ref,
+  ]);
+  if (result.code !== 0 || result.termination !== "exit") {
+    throw new ProjectCloneError(
+      "network",
+      "The repository branch could not be verified; retry the Gateway move.",
+    );
+  }
+  const raw = result.stdout.trim();
+  if (!raw) {
+    return undefined;
+  }
+  const [sha, observedRef, ...extra] = raw.split(/\s+/u);
+  if (
+    !sha ||
+    !/^[a-f0-9]{40}(?:[a-f0-9]{24})?$/u.test(sha) ||
+    observedRef !== ref ||
+    extra.length
+  ) {
+    throw new ProjectCloneError("clone_failed", "The repository branch observation is invalid.");
+  }
+  return sha;
 }

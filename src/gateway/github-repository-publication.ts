@@ -40,6 +40,7 @@ import {
   deferRepositoryGitHubPublicationClaims,
   insertRepositoryGitHubPublication,
   listRepositoryGitHubPublications,
+  readRepositoryGitHubPublicationBranch,
   markRepositoryGitHubPublicationReported,
   readRepositoryGitHubPublication,
   requireRepositoryGitHubPublication,
@@ -49,6 +50,7 @@ import {
 } from "./github-repository-publication-store.js";
 import {
   repositoryOwner,
+  resolveReceiptOwner,
   assertReceiptOwner,
   captureCheckpoint,
   type PreparedRepositoryPublicationSnapshot,
@@ -97,6 +99,7 @@ export function createRepositoryGitHubPublicationCoordinator(
       pending &&
       (row.session_id !== session.sessionId ||
         row.session_lifecycle_revision !== (session.lifecycleRevision ?? null) ||
+        !resolveReceiptOwner(row) ||
         connection?.generation !== row.connection_generation ||
         connection.account?.accountId !== row.identity_account_id ||
         connection.account.login.toLowerCase() !== row.identity_login.toLowerCase());
@@ -107,7 +110,8 @@ export function createRepositoryGitHubPublicationCoordinator(
           status: "failed",
           error_code:
             row.session_id !== session.sessionId ||
-            row.session_lifecycle_revision !== (session.lifecycleRevision ?? null)
+            row.session_lifecycle_revision !== (session.lifecycleRevision ?? null) ||
+            !resolveReceiptOwner(row)
               ? "session_changed"
               : "identity_changed",
           next_action:
@@ -173,8 +177,9 @@ export function createRepositoryGitHubPublicationCoordinator(
       throw new Error("My GitHub publication owner changed.");
     }
     const assertExecution = () => {
-      assertCurrent();
+      // Classify source loss before personal preparation can turn it into a retryable error.
       assertReceiptOwner(row);
+      assertCurrent();
       bound?.assertCurrent();
     };
     const publish = async (captured: PreparedRepositoryPublicationSnapshot) => {
@@ -266,18 +271,11 @@ export function createRepositoryGitHubPublicationCoordinator(
     generation?: string;
     claim?: WorkerSessionTurnClaim;
   }): RepositoryGitHubPublicationRow => {
-    const pushed = listRepositoryGitHubPublications({
+    const { head: previous } = readRepositoryGitHubPublicationBranch({
       workspaceId: input.workspace.workspaceId,
-    }).filter(
-      (row) =>
-        row.pushed_head_commit &&
-        row.branch === input.workspace.branch &&
-        row.push_repository === input.target.pushRepository,
-    );
-    // PR failure does not relinquish a pushed branch; retrying an old receipt must not
-    // reorder its successful push after a newer descendant by updating its timestamp.
-    const ancestors = new Set(pushed.map((row) => row.previous_head_commit));
-    const previous = pushed.findLast((row) => !ancestors.has(row.pushed_head_commit));
+      branch: input.workspace.branch,
+      pushRepository: input.target.pushRepository,
+    });
     const now = Date.now();
     const row: RepositoryGitHubPublicationRow = {
       request_id: randomUUID(),

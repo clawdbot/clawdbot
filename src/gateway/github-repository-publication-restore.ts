@@ -1,5 +1,9 @@
 import { NODE_WORKER_WORKSPACE_STDIN_MAX_BYTES } from "../worker/node-workspace-protocol.js";
 import { GITHUB_PUBLICATION_CONFIG_GUARD_JS } from "./github-publication-base.js";
+import {
+  createGitHubPublicationCommandRunner,
+  readGitHubPublicationTree,
+} from "./github-publication-git-transport.js";
 import { readGitHubRepositoryPublicationMetadata } from "./github-repository-publication-snapshot.js";
 import type { WorkerWorkspaceManifest } from "./worker-environments/workspace-manifest.js";
 
@@ -34,6 +38,7 @@ export async function prepareRepositoryPublicationRestore(params: {
   current: WorkerWorkspaceManifest;
   publicationStagingRoot?: string;
   publicationDigest?: string;
+  indexBase?: { root: string; commit: string; assertCurrent: () => void };
 }): Promise<Array<{ argv: string[]; input: string }>> {
   if (!params.publicationStagingRoot || !params.publicationDigest) {
     return [];
@@ -46,20 +51,69 @@ export async function prepareRepositoryPublicationRestore(params: {
     throw new Error("Repository publication paths differ from the restored source baseline");
   }
   const current = new Map(params.current.entries.map((entry) => [entry.path, entry]));
-  const added = snapshot.entries.flatMap((entry) => {
+  const overlay = new Map(snapshot.entries.map((entry) => [entry.path, entry]));
+  const accepted = new Map(overlay);
+  const removed = new Set(
+    snapshot.entries
+      .filter((entry) => entry.sha === null && entry.mode !== "160000")
+      .map((entry) => entry.path),
+  );
+  let indexed: Set<string> | undefined;
+  if (params.indexBase) {
+    const { root, commit, assertCurrent } = params.indexBase;
+    const { run } = createGitHubPublicationCommandRunner(assertCurrent);
+    const readTree = async (tree: string) => {
+      const raw = await readGitHubPublicationTree(root, tree, run);
+      const text = raw.toString("utf8");
+      if (!Buffer.from(text).equals(raw)) {
+        throw new Error("Repository publication paths are not valid UTF-8");
+      }
+      return text
+        .split("\0")
+        .filter(Boolean)
+        .map((record) => {
+          const tab = record.indexOf("\t");
+          const [mode, , sha] = record.slice(0, tab).split(" ");
+          if (tab < 0 || !mode || !sha) {
+            throw new Error("Repository publication tree inventory is invalid");
+          }
+          return { path: record.slice(tab + 1), mode, sha };
+        });
+    };
+    const [baseTree, indexTree] = await Promise.all([
+      readTree(snapshot.baseTree),
+      readTree(commit),
+    ]);
+    indexed = new Set(indexTree.map((entry) => entry.path));
+    // C's delta is relative to A, while this fresh index now represents pushed B.
+    // Overlay A before comparing membership; B-only ignored files may remain raw recovery files.
+    for (const entry of baseTree) {
+      if (
+        !overlay.has(entry.path) &&
+        (entry.mode === "100644" || entry.mode === "100755" || entry.mode === "120000")
+      ) {
+        accepted.set(entry.path, { ...entry, mode: entry.mode, sha: entry.sha });
+      }
+    }
+    for (const entry of indexTree) {
+      if (entry.mode !== "160000" && !accepted.get(entry.path)?.sha) {
+        removed.add(entry.path);
+      }
+    }
+  }
+  const added = [...accepted.values()].flatMap((entry) => {
     const raw = current.get(entry.path);
     const file = (entry.mode === "100644" || entry.mode === "100755") && raw?.type === "file";
     const symlink = entry.mode === "120000" && raw?.type === "symlink";
-    return entry.sha && (file || symlink) ? [entry.path] : [];
+    return entry.sha && !indexed?.has(entry.path) && (file || symlink || !overlay.has(entry.path))
+      ? [entry.path]
+      : [];
   });
-  const removed = snapshot.entries
-    .filter((entry) => entry.sha === null && entry.mode !== "160000")
-    .map((entry) => entry.path);
   const commands: Array<{ argv: string[]; input: string }> = [];
   // Deletions remove only index entries; raw recovery bytes stay available.
   // Added contents remain unstaged through intent-to-add. Never enroll raw-only paths.
   for (const [action, paths] of [
-    ["remove", removed],
+    ["remove", [...removed]],
     ["add", added],
   ] as const) {
     let batch: string[] = [];
