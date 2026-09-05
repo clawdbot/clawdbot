@@ -32,6 +32,7 @@ import {
   requireSkillLibraryEntry,
   requireSkillLibraryProfile,
   requireSkillLibraryUpload,
+  requireSkillLibraryUploadMetadata,
   selectSkillLibraryOwner,
   skillLibraryDb,
   type SkillLibraryAuthority,
@@ -230,7 +231,12 @@ export async function uploadSkillLibrary(
           receipt: await publishDirectory(
             {
               ...authority,
-              assertCurrent: readOwned,
+              assertCurrent: () =>
+                requireSkillLibraryUploadMetadata(
+                  openOpenClawStateDatabase(options).db,
+                  params.uploadId,
+                  authority,
+                ),
             },
             upload.slug,
             rootDir,

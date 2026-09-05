@@ -9,12 +9,14 @@ import ai.openclaw.app.NodeRuntime
 import ai.openclaw.app.NodeRuntimeMode
 import ai.openclaw.app.R
 import ai.openclaw.app.SecurePrefs
+import ai.openclaw.app.chat.ChatCacheScope
 import ai.openclaw.app.chat.ChatController
 import ai.openclaw.app.chat.ChatThinkingLevelOption
 import ai.openclaw.app.chat.questionsForSession
 import ai.openclaw.app.closeNodeRuntimeTestFixture
 import ai.openclaw.app.gateway.GatewayRegistryEntry
 import ai.openclaw.app.gateway.GatewayRegistryEntryKind
+import ai.openclaw.app.gateway.GatewaySession
 import ai.openclaw.app.i18n.NativeStringResources
 import ai.openclaw.app.i18n.nativeString
 import ai.openclaw.app.ui.design.ClawDesignTheme
@@ -163,12 +165,20 @@ class ChatComposerLayoutTest {
   }
 
   @Test
-  fun overflowingLoadedHistoryKeepsJumpOutsideMessagesAndReachesLatest() {
+  fun overflowingLoadedHistoryStartsAtLatestAndManualReadingOffersJump() {
     withReaderHistory(assistantCount = 24) {
       val transcript = readerTranscript()
       val before = transcript.getUnclippedBoundsInRoot()
+      val initialRange = transcript.fetchSemanticsNode().config[SemanticsProperties.VerticalScrollAxisRange]
+      assertEquals("The overflowing transcript must start at the latest reply", 0f, initialRange.value(), 0f)
+      assertTrue("The sibling remains overflowing at the latest edge", initialRange.maxValue() > 0f)
+      assertReaderMessageVisible("OpenClaw", "Reader answer 24")
+      composeRule.onNodeWithContentDescription(nativeString("Jump to latest")).assertDoesNotExist()
+
+      transcript.performTouchInput { swipeDown() }
+      composeRule.waitForIdle()
       assertTrue(
-        "The overflowing transcript must start above the latest reply",
+        "Manual reading must move above the latest reply",
         transcript.fetchSemanticsNode().config[SemanticsProperties.VerticalScrollAxisRange].value() > 0f,
       )
       assertReaderHeaderControl("Jump to latest")
@@ -198,10 +208,6 @@ class ChatComposerLayoutTest {
         "Fixture precondition: the transcript viewport must be fully visible: $viewport within $root",
         viewport.left >= root.left && viewport.right <= root.right && viewport.top >= root.top && viewport.bottom <= root.bottom,
       )
-      assertReaderHeaderControl("Jump to latest")
-      readerHeaderControl("Jump to latest").performClick()
-      composeRule.waitForIdle()
-
       val replyNode = composeRule.onNode(hasContentDescription(nativeString("OpenClaw")) and hasText(tail))
       val atLatest = replyNode.getUnclippedBoundsInRoot()
       assertTrue(
@@ -252,6 +258,8 @@ class ChatComposerLayoutTest {
     withReaderHistory(assistantCount = assistantCount, viewportHeight = { viewportHeight.value }) {
       val transcript = readerTranscript()
       val before = transcript.getUnclippedBoundsInRoot()
+      transcript.performTouchInput { swipeDown() }
+      composeRule.waitForIdle()
       assertTrue(
         "The smaller viewport must hide newer replies",
         transcript.fetchSemanticsNode().config[SemanticsProperties.VerticalScrollAxisRange].value() > 0f,
@@ -285,6 +293,12 @@ class ChatComposerLayoutTest {
     ) {
       val transcript = readerTranscript()
       val before = transcript.getUnclippedBoundsInRoot()
+      transcript.performTouchInput { swipeDown() }
+      composeRule.waitForIdle()
+      assertTrue(
+        "Manual reading must move above the latest reply",
+        transcript.fetchSemanticsNode().config[SemanticsProperties.VerticalScrollAxisRange].value() > 0f,
+      )
       val controls = listOf("Show Sidebar", "Jump to latest", "Chat actions").map(::assertReaderHeaderControl)
       val sidebar = controls.first()
       controls.drop(1).forEach { bounds ->
@@ -1285,15 +1299,28 @@ class ChatComposerLayoutTest {
           },
         )
       }.toString()
-    val requestField = ChatController::class.java.getDeclaredField("requestGatewayForGateway").apply { isAccessible = true }
+    val leaseField = ChatController::class.java.getDeclaredField("captureRequestLease").apply { isAccessible = true }
 
     @Suppress("UNCHECKED_CAST")
-    val request = requestField.get(controller) as suspend (String, String, String?) -> String
-    val progressRequest: suspend (String, String, String?) -> String = { gatewayId, method, params ->
-      if (method == "progressCard.get") response else request(gatewayId, method, params)
+    val captureLease = leaseField.get(controller) as (ChatCacheScope?) -> GatewaySession.RequestLease?
+    val progressLease: (ChatCacheScope?) -> GatewaySession.RequestLease? = { gatewayScope ->
+      captureLease(gatewayScope)?.let { lease ->
+        GatewaySession.RequestLease(
+          endpointStableId = lease.endpointStableId,
+          isCurrentImpl = lease::isCurrent,
+          commitIfCurrentImpl = lease::commitIfCurrent,
+        ) { method, params, timeoutMs, withEnqueue ->
+          if (method == "progressCard.get") {
+            withEnqueue {}
+            response
+          } else {
+            lease.request(method, params, timeoutMs, withEnqueue)
+          }
+        }
+      }
     }
     composeRule.runOnIdle {
-      requestField.set(controller, progressRequest)
+      leaseField.set(controller, progressLease)
       controller.handleGatewayEvent(
         "progressCard.changed",
         """{"sessionKey":"${controller.sessionKey.value}","revision":1}""",

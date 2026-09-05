@@ -3,7 +3,6 @@ export { resolveSessionStoreKey } from "./session-store-key.js";
 export type {
   GatewaySessionRow,
   SessionsListResult,
-  SessionsPatchResult,
   SessionsPreviewEntry,
   SessionsPreviewResult,
 } from "./session-utils.types.js";

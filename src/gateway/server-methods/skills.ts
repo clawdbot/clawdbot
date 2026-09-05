@@ -26,9 +26,12 @@ import {
   validateSkillsUpdateParams,
 } from "../../../packages/gateway-protocol/src/index.js";
 import type { SkillLibrarySelection } from "../../../packages/gateway-protocol/src/schema/skill-library.js";
-import { tryResolveAmbientOwnerAgentId } from "../../agents/agent-scope-config.js";
+import {
+  listAgentIds,
+  resolveAgentWorkspaceDir,
+  tryResolveAmbientOwnerAgentId,
+} from "../../agents/agent-scope-config.js";
 import { resolveNodeExecEligibility } from "../../agents/exec-defaults.js";
-import { listAgentWorkspaceDirs } from "../../agents/workspace-dirs.js";
 import { redactConfigObject } from "../../config/redact-snapshot.js";
 import { fetchClawHubSkillDetail } from "../../infra/clawhub-skills.js";
 import { formatErrorMessage } from "../../infra/errors.js";
@@ -348,10 +351,14 @@ export const skillsHandlers: GatewayRequestHandlers = {
       return;
     }
     const cfg = context.getRuntimeConfig();
-    const workspaceDirs = listAgentWorkspaceDirs(cfg);
     const bins = new Set<string>();
-    for (const workspaceDir of workspaceDirs) {
-      const entries = loadWorkspaceSkills(workspaceDir, { config: cfg });
+    for (const agentId of listAgentIds(cfg)) {
+      // Node inventories include missing requirements, not only locally usable skills.
+      const entries = loadWorkspaceSkills(resolveAgentWorkspaceDir(cfg, agentId), {
+        config: cfg,
+        agentId,
+        agentSkillFilter: "ignore",
+      });
       for (const bin of collectSkillBins(entries)) {
         bins.add(bin);
       }
@@ -430,7 +437,7 @@ export const skillsHandlers: GatewayRequestHandlers = {
       context,
       validate: validateSkillsProposalsListParams,
       run: (_parsedParams, resolved) =>
-        listSkillProposals({ agentId: resolved.agentId, workspaceDir: resolved.workspaceDir }),
+        listSkillProposals({ config: resolved.cfg, agentId: resolved.agentId }),
     });
   },
   "skills.proposals.events.list": async ({ params, respond, context }) => {
@@ -442,8 +449,8 @@ export const skillsHandlers: GatewayRequestHandlers = {
       validate: validateSkillsProposalEventsListParams,
       run: async (parsedParams, resolved) =>
         listSkillProposalEvents({
-          workspaceDir: resolved.workspaceDir,
           agentId: resolved.agentId,
+          config: resolved.cfg,
           proposalId: parsedParams.proposalId,
           afterSequence: parsedParams.afterSequence,
           limit: parsedParams.limit,
@@ -460,7 +467,7 @@ export const skillsHandlers: GatewayRequestHandlers = {
       run: async (parsedParams, resolved) => {
         const proposal = await inspectSkillProposal(parsedParams.proposalId, {
           agentId: resolved.agentId,
-          workspaceDir: resolved.workspaceDir,
+          config: resolved.cfg,
         });
         if (!proposal) {
           respond(
@@ -489,6 +496,7 @@ export const skillsHandlers: GatewayRequestHandlers = {
           workspaceDir: resolved.workspaceDir,
           agentId: resolved.agentId,
           eventActor: { type: "gateway" },
+          config: resolved.cfg,
           proposalId: parsedParams.proposalId,
           expectedRevisionHash: parsedParams.expectedRevisionHash,
           correlationId: parsedParams.correlationId,
@@ -578,7 +586,7 @@ export const skillsHandlers: GatewayRequestHandlers = {
         const expectedRevisionHash = parsedParams.expectedRevisionHash;
         const proposal = await inspectSkillProposal(parsedParams.proposalId, {
           agentId: resolved.agentId,
-          workspaceDir: resolved.workspaceDir,
+          config: resolved.cfg,
         });
         if (!proposal) {
           respond(
@@ -652,6 +660,7 @@ export const skillsHandlers: GatewayRequestHandlers = {
           workspaceDir: resolved.workspaceDir,
           agentId: resolved.agentId,
           eventActor: { type: "gateway" },
+          config: resolved.cfg,
           proposalId: parsedParams.proposalId,
           expectedRevisionHash: parsedParams.expectedRevisionHash,
           correlationId: parsedParams.correlationId,
@@ -671,6 +680,7 @@ export const skillsHandlers: GatewayRequestHandlers = {
           workspaceDir: resolved.workspaceDir,
           agentId: resolved.agentId,
           eventActor: { type: "gateway" },
+          config: resolved.cfg,
           proposalId: parsedParams.proposalId,
           expectedRevisionHash: parsedParams.expectedRevisionHash,
           correlationId: parsedParams.correlationId,
@@ -776,6 +786,7 @@ export const skillsHandlers: GatewayRequestHandlers = {
     };
     const result = await installSkill({
       workspaceDir: workspaceDirRaw,
+      agentId: resolved.agentId,
       skillName: p.name,
       installId: p.installId,
       timeoutMs: p.timeoutMs,

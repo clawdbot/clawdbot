@@ -477,7 +477,7 @@ async function updateCommandInternal(
     { env: run.env },
   );
   recordUpdateRunPhase(run.runId, "validating", undefined, { env: run.env });
-  const packageSchemaPreflight = checkTargetDatabaseSchemas(packageTargetSchemaVersions);
+  const packageSchemaPreflight = await checkTargetDatabaseSchemas(packageTargetSchemaVersions);
   if (!opts.dryRun && hasSchemaRefusal(packageSchemaPreflight)) {
     await refuseUpdate(
       "database-schema-preflight",

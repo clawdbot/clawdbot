@@ -230,10 +230,8 @@ const agentScopeMocks = vi.hoisted(() => ({
 // The projection is a pure function; use the real implementation so tests that
 // swap in real availability resolvers (reply-fallback) keep prod semantics.
 vi.mock("./agent-scope.js", async () => ({
+  ...(await vi.importActual<typeof import("./agent-scope.js")>("./agent-scope.js")),
   ...agentScopeMocks,
-  modelFallbackOverrideFromAvailability: (
-    await vi.importActual<typeof import("./agent-scope.js")>("./agent-scope.js")
-  ).modelFallbackOverrideFromAvailability,
 }));
 vi.mock("./agent-scope-config.js", async (importOriginal) => ({
   ...(await importOriginal<typeof import("./agent-scope-config.js")>()),
@@ -242,7 +240,8 @@ vi.mock("./agent-scope-config.js", async (importOriginal) => ({
   resolveAgentWorkspaceDir: agentScopeMocks.resolveAgentWorkspaceDir,
 }));
 
-vi.mock("./legacy-inherited-auth-dir.js", () => ({
+vi.mock("./legacy-inherited-auth-dir.js", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("./legacy-inherited-auth-dir.js")>()),
   resolveLegacyInheritedAuthDir: () => agentScopeMocks.resolveDefaultAgentDir(),
 }));
 
@@ -314,7 +313,8 @@ vi.mock("./auth-profiles/runtime-materializations.js", () => ({
   },
 }));
 
-vi.mock("./auth-profiles/runtime-snapshots.js", () => ({
+vi.mock("./auth-profiles/runtime-snapshots.js", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("./auth-profiles/runtime-snapshots.js")>()),
   getPreparedRuntimeAuthProfileStoreSnapshotCore: () => preparedModelRuntimeMocks.preparedAuthStore,
   getRuntimeAuthProfileStoreSnapshot: () => preparedModelRuntimeMocks.preparedAuthStore,
   getRuntimeAuthProfileStoreSnapshotRevision: () => 0,
@@ -363,7 +363,16 @@ vi.mock("./embedded-agent-runner/model.static-catalog.js", () => ({
 }));
 
 vi.mock("../logging/subsystem.js", () => ({
-  createSubsystemLogger: () => ({ warn: preparedModelRuntimeMocks.warn }),
+  createSubsystemLogger: () => {
+    const logger = {
+      child: () => logger,
+      debug: vi.fn(),
+      error: vi.fn(),
+      info: vi.fn(),
+      warn: preparedModelRuntimeMocks.warn,
+    };
+    return logger;
+  },
 }));
 
 type PreparedModelRuntimeTestApi = {

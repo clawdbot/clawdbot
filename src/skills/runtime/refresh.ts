@@ -1,4 +1,3 @@
-// Skill runtime refresh helpers reload active skill state and notify subscribers.
 import { AsyncLocalStorage } from "node:async_hooks";
 import fs from "node:fs";
 import os from "node:os";
@@ -20,6 +19,7 @@ import {
   resolveAllowedSkillSymlinkTargetRealPaths,
   tryRealpath,
 } from "../loading/symlink-targets.js";
+import { createWorkshopWatcherKey, resolveWorkshopWatchRoots } from "../workshop/skills-root.js";
 import {
   bumpSkillsSnapshotVersion,
   clearSkillsSnapshotVersionForWorkspace,
@@ -108,6 +108,7 @@ const DEFAULT_SKILLS_WATCH_IGNORED: RegExp[] = [
 function resolveWatchTargets(
   workspaceDir: string,
   config: OpenClawConfig | undefined,
+  agentId: string | undefined,
   executionSkillsDir: string | undefined,
   watcherKey: string,
   pluginMetadataSnapshot: PluginMetadataSnapshot | undefined,
@@ -123,6 +124,7 @@ function resolveWatchTargets(
   if (executionSkillsDir) {
     baseRoots.push({ path: executionSkillsDir, source: "openclaw-workspace" });
   }
+  baseRoots.push(...resolveWorkshopWatchRoots(config, agentId));
   baseRoots.push({ path: path.join(CONFIG_DIR, "skills"), source: "openclaw-managed" });
   if (isDefaultStateDir()) {
     baseRoots.push({
@@ -677,15 +679,14 @@ export function ensureSkillsWatcher(params: {
   workspaceDir: string;
   executionSkillsDir?: string;
   config?: OpenClawConfig;
+  agentId?: string;
   pluginMetadataSnapshot?: PluginMetadataSnapshot;
 }) {
   const workspaceDir = params.workspaceDir.trim();
   if (!workspaceDir) {
     return;
   }
-  const watcherKey = params.executionSkillsDir
-    ? JSON.stringify([workspaceDir, params.executionSkillsDir])
-    : workspaceDir;
+  const watcherKey = createWorkshopWatcherKey(workspaceDir, params);
   workspaceWatchOwnerDirs.set(watcherKey, workspaceDir);
   const now = Date.now();
   const watchEnabled = params.config?.skills?.load?.watch !== false;
@@ -701,6 +702,7 @@ export function ensureSkillsWatcher(params: {
   const watchTargets = resolveWatchTargets(
     workspaceDir,
     params.config,
+    params.agentId,
     params.executionSkillsDir,
     watcherKey,
     params.pluginMetadataSnapshot,

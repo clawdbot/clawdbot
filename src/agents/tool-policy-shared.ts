@@ -54,16 +54,16 @@ export function readToolAllowlistIntersection(
   return (toolsAllow as ToolAllowlistWithIntersection)[TOOL_ALLOWLIST_INTERSECTION];
 }
 
-/** Normalizes a tool name or alias to the policy id used for matching. */
 /** Refusal for a tool that keeps its schema but sits outside the run's execution allowlist. */
 export const TOOL_EXECUTION_GATED_MESSAGE =
-  "Unavailable during skill review. Use skill_workshop or finish with NOTHING_TO_LEARN.";
+  "Unavailable during skill review. Do not retry this tool. Continue with skill_workshop under the review instructions.";
 
 export function isToolExecutionAllowed(allowNames: readonly string[], toolName: string): boolean {
   const target = normalizeToolPolicyName(toolName);
   return allowNames.some((name) => normalizeToolPolicyName(name) === target);
 }
 
+/** Normalizes a tool name or alias to the policy id used for matching. */
 export function normalizeToolPolicyName(name: string): string {
   const normalized = normalizeLowercaseStringOrEmpty(name);
   return TOOL_NAME_ALIASES.get(normalized) ?? normalized;

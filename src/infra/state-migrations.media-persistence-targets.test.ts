@@ -160,25 +160,25 @@ describe("media persistence migration targets", () => {
       schemaVersion: PREVIOUS_VERSION,
     });
 
-    expect(() =>
+    await expect(
       assertOpenClawDatabasesReady({
         env,
         operation: "doctor",
         configuredAgentDatabaseTargets: [],
       }),
-    ).toThrow(/uses schema version 16/);
+    ).rejects.toThrow(/uses schema version 16/);
     const result = await migrateLegacyMediaPersistence({ env });
 
     expect(result.warnings).toEqual([]);
     expect(readUserVersion(filesystemPath)).toBe(OPENCLAW_AGENT_SCHEMA_VERSION);
     expect(readUserVersion(lexicalPath)).toBe(PREVIOUS_VERSION);
-    expect(() =>
+    await expect(
       assertOpenClawDatabasesReady({
         env,
         operation: "doctor",
         configuredAgentDatabaseTargets: [],
       }),
-    ).not.toThrow();
+    ).resolves.toBeUndefined();
   });
 
   it("unregisters foreign registry paths without touching their databases", async () => {
@@ -285,13 +285,13 @@ describe("media persistence migration targets", () => {
       schemaVersion: PREVIOUS_VERSION,
     });
 
-    expect(() =>
+    await expect(
       assertOpenClawDatabasesReady({
         env,
         operation: "doctor",
         configuredAgentDatabaseTargets: [{ agentId: "new", path: databasePath }],
       }),
-    ).toThrow(/uses schema version 16/);
+    ).rejects.toThrow(/uses schema version 16/);
     expect(
       listOpenClawRegisteredAgentDatabases({ env, includeIncompatibleSchemaVersions: true }),
     ).toEqual([expect.objectContaining({ agentId: "old", path: databasePath })]);
@@ -328,13 +328,13 @@ describe("media persistence migration targets", () => {
     insert.run("missing", missingPath, OPENCLAW_AGENT_SCHEMA_VERSION, 1, null);
     insert.run("archived", archivedPath, 8, 1, null);
 
-    expect(() =>
+    await expect(
       assertOpenClawDatabasesReady({
         env,
         operation: "doctor",
         configuredAgentDatabaseTargets: [],
       }),
-    ).not.toThrow();
+    ).resolves.toBeUndefined();
     expect(
       state.db.prepare("SELECT agent_id FROM agent_databases ORDER BY agent_id").all(),
     ).toEqual([{ agent_id: "archived" }, { agent_id: "missing" }]);

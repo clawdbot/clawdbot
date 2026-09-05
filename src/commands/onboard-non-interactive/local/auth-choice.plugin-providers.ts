@@ -5,7 +5,6 @@
  * non-interactive method, and installs runtime plugins required by the model.
  */
 import type { ApiKeyCredential } from "../../../agents/auth-profiles/types.js";
-import { applyAutoLocalModelLean } from "../../../config/local-model-lean-auto.js";
 import { resolveAgentModelPrimaryValue } from "../../../config/model-input.js";
 import type { OpenClawConfig } from "../../../config/types.openclaw.js";
 import { enablePluginWithCapabilityConsent } from "../../../plugins/enable.js";
@@ -298,19 +297,5 @@ export async function applyNonInteractivePluginProviderChoice(params: {
       nonInteractive: true,
     });
   }
-  const previousModel = providerConfig.agents?.defaults?.model;
-  const previousAutoModel = enableResult.config.wizard?.localModelLeanAutoModel;
-  const retainsAutoModelOwnership =
-    previousAutoModel !== undefined &&
-    previousAutoModel === resolveAgentModelPrimaryValue(previousModel) &&
-    previousAutoModel === runtimes.cfg.wizard?.localModelLeanAutoModel;
-
-  return projectProviderResult(
-    applyAutoLocalModelLean({
-      config: runtimes.cfg,
-      providerId: providerChoice.provider.id,
-      modelRef: selectedModel,
-      ...(retainsAutoModelOwnership ? { previousModelRef: previousAutoModel } : {}),
-    }).config,
-  );
+  return projectProviderResult(runtimes.cfg);
 }
