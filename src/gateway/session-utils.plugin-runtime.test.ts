@@ -59,6 +59,7 @@ describe("gateway session list plugin runtime normalization", () => {
 
     const listed = await sessionUtils.listSessionsFromStoreAsync({
       cfg,
+      agentIdBySessionKey: new Map(Object.keys(store).map((key) => [key, "main"])),
       storePath: "",
       store,
       opts: {},
@@ -90,6 +91,7 @@ describe("gateway session list plugin runtime normalization", () => {
 
     const row = sessionUtils.buildGatewaySessionRow({
       cfg,
+      agentId: "main",
       storePath: "",
       store: {},
       key: "main",

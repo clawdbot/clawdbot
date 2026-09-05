@@ -1,5 +1,6 @@
 // Read-only session queries.
 import { setImmediate as yieldToEventLoop } from "node:timers/promises";
+import { expectDefined } from "@openclaw/normalization-core";
 import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
 import {
   ErrorCodes,
@@ -269,7 +270,13 @@ export const sessionReadHandlers: GatewayRequestHandlers = {
             );
             loaded = { ...loadedStore, modelCatalogByAgent: preparedModelCatalogByAgent };
           }
-          const { durableStorePath, durableTargets, modelCatalogByAgent, storePath } = loaded;
+          const {
+            agentIdBySessionKey,
+            durableStorePath,
+            durableTargets,
+            modelCatalogByAgent,
+            storePath,
+          } = loaded;
           const entryFilter = listFilter({ p, loaded, defaultsAgentId, client, cfg, options });
           const selectionRuns = p.search?.trim()
             ? createVisibleActiveSessionRunProjector(context)
@@ -283,6 +290,7 @@ export const sessionReadHandlers: GatewayRequestHandlers = {
                 ...(entryFilter ? { entryFilter } : {}),
                 storePath,
                 store: loaded.store,
+                agentIdBySessionKey,
                 modelCatalog: modelCatalogByAgent,
                 opts: p,
                 ...(selectionRuns
@@ -311,22 +319,19 @@ export const sessionReadHandlers: GatewayRequestHandlers = {
             () => {
               // Recheck only this page after row projection yields; unrelated sessions
               // must not be materialized again to refresh visibility and membership.
+              const targets = result.sessions.map(({ key }) => ({
+                sessionKey: key,
+                agentId: expectDefined(agentIdBySessionKey.get(key), "sharing row owner"),
+              }));
               const resolvedSharingTargets = resolveSessionSharingTargets({
                 cfg,
                 // Preserve the listing's registered stores, including alternate agent paths.
                 targetDiscoveryCache: createGatewaySessionStoreDiscoveryCache({
                   cfg,
                   targets: durableTargets,
-                  agentIds: result.sessions.map((session) =>
-                    session.key === "global" && p.agentId
-                      ? p.agentId
-                      : resolveSessionStoreAgentId(cfg, session.key),
-                  ),
+                  agentIds: targets.map(({ agentId }) => agentId),
                 }),
-                targets: result.sessions.map((session) => ({
-                  sessionKey: session.key,
-                  ...(session.key === "global" && p.agentId ? { agentId: p.agentId } : {}),
-                })),
+                targets,
               });
               const resolvedMembershipKeys = new Set<string>();
               if (identityId && !isGatewayAdmin(client)) {

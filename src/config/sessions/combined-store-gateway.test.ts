@@ -1,13 +1,50 @@
 import fs from "node:fs/promises";
 import path from "node:path";
 import { expect, it } from "vitest";
-import { filterAndSortSessionEntries } from "../../gateway/session-utils-list.js";
+import {
+  filterAndSortSessionEntries,
+  listSessionsFromStoreAsync,
+} from "../../gateway/session-utils-list.js";
 import { openOpenClawAgentDatabase } from "../../state/openclaw-agent-db.js";
 import { withOpenClawTestState } from "../../test-utils/openclaw-test-state.js";
 import type { OpenClawConfig } from "../types.openclaw.js";
 import { loadCombinedSessionStoreForGatewayCore } from "./combined-store-gateway.js";
 import { replaceSessionEntrySync } from "./session-accessor.js";
 import { setCanonicalSqliteSessionMainKey } from "./session-canonical-key.js";
+
+it.each(["global", "unknown"])("projects the recorded aggregate %s owner", async (sessionKey) => {
+  await withOpenClawTestState({ label: "combined-list-owner" }, async () => {
+    const cfg: OpenClawConfig = {
+      session: { scope: "global" },
+      agents: {
+        entries: {
+          main: { default: true, model: { primary: "openai/gpt-5.4" } },
+          research: { model: { primary: "openai/gpt-5.5" } },
+        },
+      },
+    };
+    replaceSessionEntrySync(
+      { agentId: "research", sessionKey },
+      { sessionId: "research-only", updatedAt: 42 },
+    );
+    const combined = loadCombinedSessionStoreForGatewayCore(cfg);
+    expect(combined.agentIdBySessionKey.get(sessionKey)).toBe("research");
+    const opts = { includeGlobal: true, includeUnknown: true };
+    const result = await listSessionsFromStoreAsync({ cfg, ...combined, opts });
+    expect
+      .soft(result.sessions)
+      .toMatchObject([
+        { key: sessionKey, sessionId: "research-only", agentId: "research", model: "gpt-5.5" },
+      ]);
+    const searched = await listSessionsFromStoreAsync({
+      cfg,
+      ...combined,
+      opts: { ...opts, search: "gpt-5.5" },
+    });
+    expect.soft(searched.sessions.map((row) => row.sessionId)).toEqual(["research-only"]);
+    expect(searched.defaults).toEqual(result.defaults);
+  });
+});
 
 it("projects shared rows under their logical owner while retaining the physical database owner", async () => {
   await withOpenClawTestState({ label: "combined-store-owner" }, async (state) => {

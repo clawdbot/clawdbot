@@ -60,9 +60,11 @@ function selectSessionKeys(params: {
   now?: number;
 }): string[] {
   const now = params.now ?? Date.now();
+  const store = params.store ?? makeStore(now);
   return filterAndSortSessionEntries({
     cfg: params.cfg ?? baseCfg,
-    store: params.store ?? makeStore(now),
+    store,
+    agentIdBySessionKey: new Map(Object.keys(store).map((key) => [key, "main"])),
     opts: params.opts,
     now,
   }).map(([key]) => key);

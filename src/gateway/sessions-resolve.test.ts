@@ -248,6 +248,10 @@ describe("resolveSessionKeyFromResolveParams", () => {
   ])("resolves %j from raw metadata without hydrating session rows", async (p) => {
     hoisted.loadCombinedSessionStoreForGatewayMock.mockReturnValue({
       storePath,
+      agentIdBySessionKey: new Map([
+        ["agent:main:noisy", "main"],
+        ["agent:main:target", "main"],
+      ]),
       store: {
         "agent:main:noisy": {
           sessionId: "sess-noisy",

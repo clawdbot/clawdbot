@@ -25,7 +25,7 @@ import { hasOperatorBoundary } from "./operator-role-policy.js";
 import type { GatewayClient } from "./server-methods/types.js";
 import { resolveRequestedSessionAgentId } from "./session-request-agent.js";
 import { prepareSessionSharing } from "./session-sharing.js";
-import { resolveSessionStoreAgentId, resolveSessionStoreKey } from "./session-store-key.js";
+import { resolveSessionStoreKey } from "./session-store-key.js";
 import type { SessionListRowContext } from "./session-utils-contracts.js";
 import { resolveGatewaySessionDisplayName } from "./session-utils-display.js";
 import { buildSessionListRowMetadataContext } from "./session-utils-projection.js";
@@ -452,7 +452,9 @@ export async function resolveSessionKeyFromResolveParams(params: {
     };
   }
 
-  const { store } = loadCombinedSessionStoreForGatewayCore(cfg, { agentId: p.agentId });
+  const { store, agentIdBySessionKey } = loadCombinedSessionStoreForGatewayCore(cfg, {
+    agentId: p.agentId,
+  });
   const now = Date.now();
   // Keep list-discovery snapshot semantics without hydrating display rows.
   let rowContext: SessionListRowContext | undefined;
@@ -493,10 +495,6 @@ export async function resolveSessionKeyFromResolveParams(params: {
   return {
     ok: true,
     key: labelKey,
-    agentId: normalizeAgentId(
-      parseAgentSessionKey(labelKey)?.agentId ??
-        p.agentId ??
-        resolveSessionStoreAgentId(cfg, labelKey),
-    ),
+    agentId: expectDefined(agentIdBySessionKey.get(labelKey), "label session agent"),
   };
 }
