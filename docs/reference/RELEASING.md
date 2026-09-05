@@ -768,7 +768,24 @@ at the exact release SHA. Each verifier still independently checks that manifest
 against the artifact's recorded source hash, together with the tarball hashes
 and producer identity.
 
-ClawHub OIDC publication requires the executing release parent to authorize the exact child run, attempt, and package inventories. A direct `Plugin ClawHub Release` dry run can prepare packages without publication authority, but a standalone publish cannot replace the parent. A direct human `Plugin ClawHub Release` dispatch with `release_publish_run_id` now uploads the `openclaw-clawhub-recovery-approval-<run-id>-<run-attempt>` receipt from the `approve_plugins_clawhub_release` environment job, supplying the child-side evidence ClawHub's explicit-recovery route requires; bot-dispatched children never upload it. ClawHub still also requires a parent authorization receipt bound to that exact recovery child, which a completed parent cannot issue, so failed-parent recovery remains blocked on that parent-side contract. Do not retry publication with copied receipts or treat staging as completed publication.
+ClawHub OIDC publication requires the executing release parent to authorize the exact child run, attempt, and package inventories. A direct `Plugin ClawHub Release` dry run can prepare packages without publication authority, but a standalone publish cannot replace the parent. Bot-dispatched children stay on the automated route and are terminal once their exact parent attempt completes without success.
+
+A direct human `Plugin ClawHub Release` dispatch with `release_publish_run_id` always takes ClawHub's explicit-recovery route. The `approve_plugins_clawhub_release` environment job uploads the version 2 `openclaw-clawhub-recovery-approval-<run-id>-<run-attempt>` receipt, which names the original child attempt (`authorizedChildRunId`/`authorizedChildRunAttempt`) whose parent receipt `openclaw-clawhub-parent-authorization-v2-<parent-run-id>-<parent-run-attempt>-<child-run-id>-<child-run-attempt>` the completed parent already uploaded; a completed parent cannot mint a new one. ClawHub resolves that parent receipt through the authorized child and requires the recovery child to run the same workflow ref and SHA, candidate SHA, tooling, parent attempt, and exact package inventory, so dispatch recovery from the parent's tooling ref with the parent's inputs. Pass `recovered_clawhub_run_id` and `recovered_clawhub_run_attempt` to name the original child explicitly; when omitted, the approval job discovers it from the parent run's single matching receipt and fails with the candidate list when zero or several exist. Version 1 recovery receipts are rejected. Do not retry publication with copied receipts or treat staging as completed publication.
+
+```bash
+gh workflow run plugin-clawhub-release.yml \
+  --ref <parent-tooling-ref> \
+  -f publish_scope=all-publishable \
+  -f ref=<full-40-character-release-sha> \
+  -f release_tag=vYYYY.M.PATCH \
+  -f release_publish_run_id=<parent-run-id> \
+  -f release_publish_run_attempt=<parent-run-attempt> \
+  -f release_publish_branch=<parent-tooling-ref> \
+  -f release_publish_full_ref=<parent-tooling-full-ref> \
+  -f release_publish_workflow_sha=<parent-tooling-sha> \
+  -f recovered_clawhub_run_id=<original-child-run-id> \
+  -f recovered_clawhub_run_attempt=<original-child-run-attempt>
+```
 
 Before dispatching a ClawHub publisher, the parent refuses dispatch if a run for
 the same tooling ref is waiting, pending, queued, or in progress. Follow the

@@ -83,7 +83,14 @@ async function listAgentsViaRpc(
       ...catalogContext,
     } as unknown as GatewayRequestContext,
     client: includeSystem
-      ? ({ connect: { caps: [GATEWAY_CLIENT_CAPS.AGENT_KIND] } } as never)
+      ? {
+          connect: {
+            minProtocol: 1,
+            maxProtocol: 1,
+            client: { id: "test", version: "test", platform: "test", mode: "test" },
+            caps: [GATEWAY_CLIENT_CAPS.AGENT_KIND],
+          },
+        }
       : null,
     isWebchatConnect: () => false,
   });

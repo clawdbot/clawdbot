@@ -1,3 +1,4 @@
+import { readGitHubPublicationSelectionRejectedError } from "@openclaw/gateway-protocol/gateway-error-details";
 import type { Static } from "typebox";
 import type {
   GitHubPublicationPublisher,
@@ -210,15 +211,29 @@ export class GitHubPublicationController {
       return;
     }
     await this.run(async (owner, current) => {
+      const firstInvocation = this.attempt === null;
       const attempt = this.attempt ?? { idempotencyKey: generateUUID(), selection };
       this.attempt = attempt;
-      const result = await owner.client.request<SessionGitHubPublicationResult>(
-        "sessions.github.publish",
-        {
+      const result = await owner.client
+        .request<SessionGitHubPublicationResult>("sessions.github.publish", {
           sessionKey: owner.sessionKey,
           ...attempt,
-        },
-      );
+        })
+        .catch((error: unknown) => {
+          // A rejected retry says nothing about an earlier same-key call still preparing.
+          if (
+            firstInvocation &&
+            current() &&
+            this.attempt === attempt &&
+            readGitHubPublicationSelectionRejectedError(error)?.idempotencyKey ===
+              attempt.idempotencyKey
+          ) {
+            this.attempt = null;
+            this.selection = null;
+            this.options = null;
+          }
+          throw error;
+        });
       if (!current()) {
         return;
       }

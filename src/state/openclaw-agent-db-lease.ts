@@ -72,17 +72,15 @@ export function renewAgentDatabaseMaintenanceAuthorityIfPresent(): void {
   authority.renew();
 }
 
-export function claimOpenClawAgentDatabaseLease(params: {
-  agentId: string;
-  path: string;
-  env?: NodeJS.ProcessEnv;
-}): string {
+export function claimOpenClawAgentDatabaseLease(
+  params: { agentId: string; path: string; env?: NodeJS.ProcessEnv },
+  leaseId: string = crypto.randomUUID(),
+): string {
   const agentId = normalizeAgentId(params.agentId);
   const deletionFence = prepareAgentDeletionPathFence(
     { agentId, path: params.path },
     { env: params.env },
   );
-  const leaseId = crypto.randomUUID();
   const ownerStartTime = getFileLockProcessStartTime(process.pid);
   runOpenClawStateWriteTransaction(
     (database) => {

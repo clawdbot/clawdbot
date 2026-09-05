@@ -20,7 +20,8 @@ const sessionSnapshot = buildGatewaySessionSnapshot({
   sessionRow: { key: sessionKey, sessionId, kind: "direct", updatedAt: 42 },
 });
 
-async function readContents(contents: string[]) {
+async function readContents(contents: string[], requestedMaxBytes?: number) {
+  const byteLimit = Math.min(requestedMaxBytes ?? maxBytes, maxBytes);
   const scope = {
     agentId: "main",
     sessionKey,
@@ -47,7 +48,11 @@ async function readContents(contents: string[]) {
       },
     });
   }
-  const raw = readTranscriptDisplayDelta(scope, { cursor: head.cursor, maxBytes, maxEvents: 200 });
+  const raw = readTranscriptDisplayDelta(scope, {
+    cursor: head.cursor,
+    maxBytes: byteLimit,
+    maxEvents: 200,
+  });
   expect(raw).toMatchObject({
     kind: "page",
     hasMore: false,
@@ -56,11 +61,12 @@ async function readContents(contents: string[]) {
   if (raw.kind !== "page") {
     throw new Error("Expected a complete raw delta");
   }
-  expect(raw.serializedBytes).toBeLessThan(maxBytes);
+  expect(raw.serializedBytes).toBeLessThan(byteLimit);
   expect(JSON.stringify(raw.events)).toContain("PRIVATE_REPLAY");
   return readChatHistoryDelta({
     agentId: "main",
     cursor: head.cursor,
+    maxBytes: requestedMaxBytes,
     scope,
     sessionKey,
     sessionSnapshot,
@@ -69,25 +75,30 @@ async function readContents(contents: string[]) {
 
 describe("chat history delta display budget", () => {
   it.each([
-    [1, 0],
-    [1, 1],
-    [2, 0],
-    [2, 1],
-  ])(
-    "preserves the UTF-8 boundary with %i envelopes at limit + %i bytes",
-    async (count, extraBytes) => {
+    [1, 0, undefined],
+    [1, 1, undefined],
+    [2, 0, undefined],
+    [2, 1, undefined],
+    [2, 0, 64 * 1024],
+    [2, 1, 64 * 1024],
+    [2, 0, 2 * maxBytes],
+    [2, 1, 2 * maxBytes],
+  ] as const)(
+    "preserves the UTF-8 boundary with %i envelopes at limit + %i bytes (requested maxBytes: %s)",
+    async (count, extraBytes, requestedMaxBytes) => {
+      const byteLimit = Math.min(requestedMaxBytes ?? maxBytes, maxBytes);
       const prefix = 'escaped: "\\\n🤖\ud800';
       const contents = Array.from({ length: count }, () => prefix);
-      const small = await readContents(contents);
+      const small = await readContents(contents, requestedMaxBytes);
       if (small.kind !== "delta") {
         throw new Error("Expected the small delta");
       }
       contents[0] =
         prefix +
         "x".repeat(
-          maxBytes - Buffer.byteLength(JSON.stringify(small.messages), "utf8") + extraBytes,
+          byteLimit - Buffer.byteLength(JSON.stringify(small.messages), "utf8") + extraBytes,
         );
-      const result = await readContents(contents);
+      const result = await readContents(contents, requestedMaxBytes);
       if (extraBytes > 0) {
         expect(result).toEqual({ kind: "reset" });
         return;
@@ -105,7 +116,7 @@ describe("chat history delta display budget", () => {
         throw new Error("Expected the exact-limit delta");
       }
       const serialized = JSON.stringify(result.messages);
-      expect(Buffer.byteLength(serialized, "utf8")).toBe(maxBytes);
+      expect(Buffer.byteLength(serialized, "utf8")).toBe(byteLimit);
       expect(serialized).not.toContain("PRIVATE_REPLAY");
       expect(serialized).not.toContain("PRIVATE_UPSTREAM");
     },

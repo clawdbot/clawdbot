@@ -1,7 +1,8 @@
 // Covers model-catalog metadata failure and recovery on the new-session page.
-import { mkdir } from "node:fs/promises";
+import { mkdir, writeFile } from "node:fs/promises";
 import path from "node:path";
 import { expect, it } from "vitest";
+import { takeControlUiViewportScreenshot } from "../test-helpers/control-ui-e2e-screenshot.ts";
 import {
   createNewSessionPageE2eSuite,
   installMockGateway,
@@ -501,14 +502,14 @@ suite.define(() => {
       expect(await page.getByText("Models unavailable", { exact: true }).count()).toBe(0);
       await expect.poll(async () => (await gateway.getRequests("chat.metadata")).length).toBe(2);
       if (captureUiProof) {
-        await page.screenshot({
-          animations: "disabled",
-          fullPage: true,
-          path: path.join(
-            path.join(suite.artifactDir, "new-session-catalog-retry"),
-            "01-cli-agents-retry.png",
+        await writeFile(
+          path.join(suite.artifactDir, "new-session-catalog-retry", "01-cli-agents-retry.png"),
+          await takeControlUiViewportScreenshot(
+            page,
+            page.locator('.chat-controls__model-picker wa-popup [part="popup"]'),
+            [errorState],
           ),
-        });
+        );
       }
 
       await gateway.setMethodResponse("sessions.catalog.list", {
@@ -554,14 +555,14 @@ suite.define(() => {
       ).toBe("Claude Code");
       expect(await errorState.count()).toBe(0);
       if (captureUiProof) {
-        await page.screenshot({
-          animations: "disabled",
-          fullPage: true,
-          path: path.join(
-            path.join(suite.artifactDir, "new-session-catalog-retry"),
-            "02-cli-agents-recovered.png",
+        await writeFile(
+          path.join(suite.artifactDir, "new-session-catalog-retry", "02-cli-agents-recovered.png"),
+          await takeControlUiViewportScreenshot(
+            page,
+            page.locator('.chat-controls__model-picker wa-popup [part="popup"]'),
+            [page.locator('[data-chat-model-target="anthropic"]')],
           ),
-        });
+        );
       }
     } finally {
       await context.close();

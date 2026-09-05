@@ -599,6 +599,9 @@ export function startSerializedSnapshotBuildBatch(
   const startBuild = (async () => {
     if (previousBuildCompletions.length > 0) {
       await Promise.all(previousBuildCompletions);
+      // Queued publications register while the prior build settles. Recheck them here so a
+      // retired owner cannot start expensive workspace preparation ahead of its replacement.
+      assertPreparedModelRuntimeCandidatesCurrent(candidates);
     }
     return {
       actualBuild: buildSnapshotBatch(

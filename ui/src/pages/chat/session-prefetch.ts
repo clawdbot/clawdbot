@@ -4,8 +4,11 @@ import type { GatewayBrowserClient } from "../../api/gateway.ts";
 import type { GatewaySessionRow } from "../../api/types.ts";
 import type { ApplicationContext } from "../../app/context.ts";
 import { isSessionRunActive } from "../../lib/session-run-state.ts";
+import {
+  CHAT_PANE_LIFECYCLE_CHANGED_EVENT,
+  CHAT_TRANSCRIPT_LOADING_CHANGED_EVENT,
+} from "./chat-history-events.ts";
 import { requestChatSessionSnapshot } from "./chat-history-request.ts";
-import { CHAT_TRANSCRIPT_LOADING_CHANGED_EVENT } from "./chat-history-state.ts";
 import type { ChatPaneElement } from "./route-draft-focus-handoff.ts";
 import { MAX_CACHED_CHAT_SESSIONS } from "./session-cache.ts";
 import {
@@ -18,7 +21,7 @@ import {
 import { resolveChatSnapshotKey } from "./session-snapshot-invalidation.ts";
 import type { SessionSnapshotStore } from "./session-snapshot-store.ts";
 
-const SESSION_PREFETCH_COUNT = 5;
+const SESSION_PREFETCH_COUNT = 2;
 const SESSION_PREFETCH_INITIAL_DELAY_MS = 250;
 const SESSION_PREFETCH_COOLDOWN_MS = 30_000;
 const SESSION_PREFETCH_LOCK_NAME = "openclaw-chat-prefetch";
@@ -30,6 +33,7 @@ type SessionPrefetchSnapshot = {
   isCurrent: () => boolean;
   listRevision: number;
   openSessionKeys: readonly string[];
+  intentSessionKey: string | null;
   /** False while a presented pane is still fetching its transcript. */
   presentedTranscriptsReady: boolean;
   rows: readonly GatewaySessionRow[] | null;
@@ -98,6 +102,7 @@ class SessionPrefetcher {
       !previous ||
       previous.client !== snapshot.client ||
       previous.listRevision !== snapshot.listRevision ||
+      previous.intentSessionKey !== snapshot.intentSessionKey ||
       previous.presentedTranscriptsReady !== snapshot.presentedTranscriptsReady ||
       !sameKeys(previous.openSessionKeys, snapshot.openSessionKeys)
     ) {
@@ -346,9 +351,12 @@ class SessionPrefetcher {
       ),
     );
     const maxPrefetchedSessions = Math.max(0, MAX_CACHED_CHAT_SESSIONS - openKeys.size);
-    const rows = (snapshot.rows ?? []).toSorted(
-      (left, right) => sessionActivityAt(right) - sessionActivityAt(left),
-    );
+    const rows = (snapshot.rows ?? []).toSorted((left, right) => {
+      const intentOrder =
+        Number(right.key === snapshot.intentSessionKey) -
+        Number(left.key === snapshot.intentSessionKey);
+      return intentOrder || sessionActivityAt(right) - sessionActivityAt(left);
+    });
     const candidates: SessionPrefetchCandidate[] = [];
     const seen = new Set<string>();
     let deferMs: number | null = null;
@@ -464,12 +472,14 @@ class SessionPrefetcher {
   }
 }
 
-type SessionPrefetchHost = ReactiveControllerHost & ParentNode;
+type SessionPrefetchHost = ReactiveControllerHost & HTMLElement;
 
 class SessionPrefetchController implements ReactiveController {
   private readonly prefetcher: SessionPrefetcher;
   private context: ApplicationContext | undefined;
   private subscriptions: Array<() => void> = [];
+  private intentSessionKey: string | null = null;
+  private paneRoot: Element;
 
   constructor(
     private readonly host: SessionPrefetchHost,
@@ -477,14 +487,19 @@ class SessionPrefetchController implements ReactiveController {
     snapshotStore: SessionSnapshotStore,
     private readonly readContext: () => ApplicationContext | undefined,
   ) {
+    this.paneRoot = host;
     this.prefetcher = new SessionPrefetcher(cache, snapshotStore);
     host.addController(this);
   }
 
   hostConnected(): void {
-    // Panes start and finish transcript loads inside their own updates, which
-    // never re-render the page; the pane reports both edges instead.
-    this.host.addEventListener(CHAT_TRANSCRIPT_LOADING_CHANGED_EVENT, this.sync);
+    // Home is a sibling of the page. Observe every pane on this socket through
+    // its shell, including lifecycle edges that cannot bubble after removal.
+    this.paneRoot = this.host.closest("openclaw-app-shell") ?? this.host;
+    this.paneRoot.addEventListener(CHAT_TRANSCRIPT_LOADING_CHANGED_EVENT, this.sync);
+    this.paneRoot.addEventListener(CHAT_PANE_LIFECYCLE_CHANGED_EVENT, this.sync);
+    this.paneRoot.addEventListener("pointerover", this.handleNavigationIntent);
+    this.paneRoot.addEventListener("focusin", this.handleNavigationIntent);
     this.prefetcher.connect();
     this.sync();
   }
@@ -494,10 +509,30 @@ class SessionPrefetchController implements ReactiveController {
   }
 
   hostDisconnected(): void {
-    this.host.removeEventListener(CHAT_TRANSCRIPT_LOADING_CHANGED_EVENT, this.sync);
+    this.paneRoot.removeEventListener(CHAT_TRANSCRIPT_LOADING_CHANGED_EVENT, this.sync);
+    this.paneRoot.removeEventListener(CHAT_PANE_LIFECYCLE_CHANGED_EVENT, this.sync);
+    this.paneRoot.removeEventListener("pointerover", this.handleNavigationIntent);
+    this.paneRoot.removeEventListener("focusin", this.handleNavigationIntent);
     this.clearSubscriptions();
     this.prefetcher.disconnect();
   }
+
+  private readonly handleNavigationIntent = (event: Event) => {
+    const row = event
+      .composedPath()
+      .find(
+        (target): target is HTMLElement =>
+          target instanceof HTMLElement && target.hasAttribute("data-session-key"),
+      );
+    if (row && row.closest("openclaw-app-shell") !== this.paneRoot.closest("openclaw-app-shell")) {
+      return;
+    }
+    const sessionKey = row?.dataset.sessionKey ?? null;
+    if (sessionKey !== this.intentSessionKey) {
+      this.intentSessionKey = sessionKey;
+      this.sync();
+    }
+  };
 
   private readonly sync = () => {
     const context = this.readContext();
@@ -514,7 +549,9 @@ class SessionPrefetchController implements ReactiveController {
     if (!context) {
       return;
     }
-    const panes = [...this.host.querySelectorAll<ChatPaneElement>("openclaw-chat-pane")];
+    const panes = [...this.paneRoot.querySelectorAll<ChatPaneElement>("openclaw-chat-pane")].filter(
+      (pane) => pane.closest("openclaw-app-shell") === this.paneRoot.closest("openclaw-app-shell"),
+    );
     const openSessionKeys = panes.flatMap((pane) => (pane.sessionKey ? [pane.sessionKey] : []));
     const sessions = context.sessions;
     const connection = sessions.captureConnectionScope();
@@ -527,6 +564,7 @@ class SessionPrefetchController implements ReactiveController {
         sessions.isConnectionScopeCurrent(connection),
       listRevision: context.sessions.canonicalListRevision,
       openSessionKeys,
+      intentSessionKey: this.intentSessionKey,
       presentedTranscriptsReady: !panes.some(
         (pane) => pane.presented !== false && pane.transcriptLoading === true,
       ),

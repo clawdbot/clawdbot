@@ -394,13 +394,6 @@ export function normalizeReplyPayloadsForDelivery(
   return projectOutboundPayloadPlanForDelivery(createOutboundPayloadPlan(payloads));
 }
 
-/** Normalizes reply payloads into JSON-safe outbound envelope payloads. */
-export function normalizeOutboundPayloadsForJson(
-  payloads: readonly ReplyPayload[],
-): OutboundPayloadJson[] {
-  return projectOutboundPayloadPlanForJson(createOutboundPayloadPlan(payloads));
-}
-
 /** Formats normalized outbound payload text and attachments for logs. */
 export function formatOutboundPayloadLog(
   payload: Pick<NormalizedOutboundPayload, "text" | "channelData"> & {

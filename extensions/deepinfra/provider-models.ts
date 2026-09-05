@@ -1,6 +1,5 @@
-// Deepinfra provider module implements model/runtime integration.
-
 import { withTrustedEnvProxyGuardedFetchMode } from "openclaw/plugin-sdk/fetch-runtime";
+// Deepinfra provider module implements model/runtime integration.
 import { isProviderApiKeyConfigured } from "openclaw/plugin-sdk/provider-auth";
 import {
   fetchLiveProviderModelRows,
@@ -16,6 +15,11 @@ import { createSubsystemLogger } from "openclaw/plugin-sdk/runtime-env";
 import { hasConfiguredSecretInput } from "openclaw/plugin-sdk/secret-input";
 import { fetchWithSsrFGuard } from "openclaw/plugin-sdk/ssrf-runtime";
 import { asPositiveSafeInteger } from "openclaw/plugin-sdk/string-coerce-runtime";
+import {
+  DEEPINFRA_BASE_URL,
+  DEEPINFRA_TTS_FALLBACK_CATALOG,
+  type DeepInfraSurfaceModel,
+} from "./media-models.js";
 import manifest from "./openclaw.plugin.json" with { type: "json" };
 import { parseDeepInfraPricingCatalog } from "./pricing-api.js";
 
@@ -26,7 +30,6 @@ const DEEPINFRA_MANIFEST_PROVIDER = buildManifestModelProviderConfig({
   catalog: manifest.modelCatalog.providers.deepinfra,
 });
 
-export const DEEPINFRA_BASE_URL = DEEPINFRA_MANIFEST_PROVIDER.baseUrl;
 const DEEPINFRA_MODELS_URL = `${DEEPINFRA_BASE_URL}/models?sort_by=openclaw&filter=with_meta`;
 const DEEPINFRA_PRICING_URL = "https://api.deepinfra.com/models/list";
 
@@ -52,21 +55,7 @@ type DeepInfraAuthConfig = {
   models?: { providers?: Record<string, { apiKey?: unknown } | undefined> };
 };
 
-// Wire format — mirrors deepapi/agent_models_api.AgentOpenAIModelsOut.
-interface DeepInfraAgentModelPricing {
-  // chat / vlm / embed
-  input_tokens?: number;
-  output_tokens?: number;
-  cache_read_tokens?: number;
-  // image-gen
-  per_image_unit?: number;
-  // video-gen
-  output_seconds?: number;
-  // tts
-  input_characters?: number;
-  // stt
-  input_seconds?: number;
-}
+type DeepInfraAgentModelPricing = DeepInfraSurfaceModel["pricing"];
 
 interface DeepInfraAgentModelMetadata {
   description?: string;
@@ -85,19 +74,6 @@ interface DeepInfraAgentModelEntry {
 }
 
 type DeepInfraSurface = "chat" | "vlm" | "embed" | "image-gen" | "video-gen" | "tts" | "stt";
-
-export interface DeepInfraSurfaceModel {
-  id: string;
-  name: string;
-  description?: string;
-  tags: string[];
-  contextWindow?: number;
-  maxTokens?: number;
-  pricing: DeepInfraAgentModelPricing;
-  defaultWidth?: number;
-  defaultHeight?: number;
-  defaultIterations?: number;
-}
 
 interface DeepInfraDiscoveredCatalog {
   chat: DeepInfraSurfaceModel[];
@@ -283,35 +259,7 @@ const STATIC_NON_CHAT_FALLBACK: DeepInfraSurfaceModel[] = [
   // video-gen — DeepInfra has no live video-gen catalog rows today;
   // intentionally empty here. Live discovery picks up text-to-video
   // models as soon as the backend tags them, no static row required.
-  // tts — Kokoro first so the shipped default voice (af_bella) pairs with
-  // the chosen default model; the rest are alternative TTS providers
-  // currently served by DeepInfra. Qwen3-TTS / chatterbox-turbo / csm-1b
-  // each require their own voice; they ship as discoverable alternatives,
-  // not the implicit default.
-  {
-    id: "hexgrad/Kokoro-82M",
-    name: "hexgrad/Kokoro-82M",
-    tags: ["tts"],
-    pricing: { input_characters: 0.65 },
-  },
-  {
-    id: "Qwen/Qwen3-TTS",
-    name: "Qwen/Qwen3-TTS",
-    tags: ["tts"],
-    pricing: { input_characters: 0.65 },
-  },
-  {
-    id: "ResembleAI/chatterbox-turbo",
-    name: "ResembleAI/chatterbox-turbo",
-    tags: ["tts"],
-    pricing: { input_characters: 1 },
-  },
-  {
-    id: "sesame/csm-1b",
-    name: "sesame/csm-1b",
-    tags: ["tts"],
-    pricing: { input_characters: 7 },
-  },
+  ...DEEPINFRA_TTS_FALLBACK_CATALOG,
   // stt
   {
     id: "openai/whisper-large-v3-turbo",

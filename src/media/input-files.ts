@@ -271,11 +271,17 @@ function withInputFileTimeout<T>(params: {
   });
 }
 
-async function normalizeInputImage(params: {
+/** Validates image bytes and converts HEIC/HEIF to JPEG, keeping the original Buffer otherwise. */
+export async function normalizeInputImageBuffer(params: {
   buffer: Buffer;
   mimeType?: string;
-  limits: InputImageLimits;
-}): Promise<InputImageContent> {
+  limits: Pick<InputImageLimits, "allowedMimes" | "maxBytes">;
+}): Promise<{ buffer: Buffer; mimeType: string }> {
+  if (params.buffer.byteLength > params.limits.maxBytes) {
+    throw new Error(
+      `Image too large: ${params.buffer.byteLength} bytes (limit: ${params.limits.maxBytes} bytes)`,
+    );
+  }
   const declaredMime = normalizeMimeType(params.mimeType) ?? "application/octet-stream";
   const detectedMime = normalizeMimeType(
     await detectMime({ buffer: params.buffer, headerMime: params.mimeType }),
@@ -292,11 +298,7 @@ async function normalizeInputImage(params: {
   }
 
   if (!HEIC_INPUT_IMAGE_MIMES.has(sourceMime)) {
-    return {
-      type: "image",
-      data: params.buffer.toString("base64"),
-      mimeType: sourceMime,
-    };
+    return { buffer: params.buffer, mimeType: sourceMime };
   }
 
   // Normalize HEIC/HEIF to JPEG because downstream model and channel surfaces expect common images.
@@ -306,11 +308,7 @@ async function normalizeInputImage(params: {
       `Image too large after HEIC conversion: ${normalizedBuffer.byteLength} bytes (limit: ${params.limits.maxBytes} bytes)`,
     );
   }
-  return {
-    type: "image",
-    data: normalizedBuffer.toString("base64"),
-    mimeType: NORMALIZED_INPUT_IMAGE_MIME,
-  };
+  return { buffer: normalizedBuffer, mimeType: NORMALIZED_INPUT_IMAGE_MIME };
 }
 
 /** Extracts and normalizes an input_image source from base64 or guarded URL input. */
@@ -318,26 +316,17 @@ export async function extractImageContentFromSource(
   source: InputImageSource,
   limits: InputImageLimits,
 ): Promise<InputImageContent> {
+  let buffer: Buffer;
+  let mimeType: string | undefined;
   if (source.type === "base64") {
     rejectOversizedBase64Payload({ data: source.data, maxBytes: limits.maxBytes, label: "Image" });
     const canonicalData = canonicalizeBase64(source.data);
     if (!canonicalData) {
       throw new Error("input_image base64 source has invalid 'data' field");
     }
-    const buffer = Buffer.from(canonicalData, "base64");
-    if (buffer.byteLength > limits.maxBytes) {
-      throw new Error(
-        `Image too large: ${buffer.byteLength} bytes (limit: ${limits.maxBytes} bytes)`,
-      );
-    }
-    return await normalizeInputImage({
-      buffer,
-      mimeType: normalizeMimeType(source.mediaType) ?? "image/png",
-      limits,
-    });
-  }
-
-  if (source.type === "url") {
+    buffer = Buffer.from(canonicalData, "base64");
+    mimeType = normalizeMimeType(source.mediaType) ?? "image/png";
+  } else if (source.type === "url") {
     if (!limits.allowUrl) {
       throw new Error("input_image URL sources are disabled by config");
     }
@@ -352,14 +341,13 @@ export async function extractImageContentFromSource(
       },
       auditContext: "openresponses.input_image",
     });
-    return await normalizeInputImage({
-      buffer: result.buffer,
-      mimeType: parseContentType(result.contentType).mimeType,
-      limits,
-    });
+    buffer = result.buffer;
+    mimeType = parseContentType(result.contentType).mimeType;
+  } else {
+    throw new Error(`Unsupported input_image source type: ${(source as { type: string }).type}`);
   }
-
-  throw new Error(`Unsupported input_image source type: ${(source as { type: string }).type}`);
+  const image = await normalizeInputImageBuffer({ buffer, mimeType, limits });
+  return { type: "image", data: image.buffer.toString("base64"), mimeType: image.mimeType };
 }
 
 /** Extracts model-visible text and images from an input_file source after MIME validation. */

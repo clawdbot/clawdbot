@@ -35,7 +35,8 @@ const mocks = vi.hoisted(() => ({
   resolveReplySessionPreprocessingState: vi.fn(),
 }));
 
-vi.mock("../../globals.js", () => ({
+vi.mock("../../globals.js", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("../../globals.js")>()),
   logVerbose: vi.fn(),
 }));
 vi.mock("../../hooks/internal-hooks.js", () => ({

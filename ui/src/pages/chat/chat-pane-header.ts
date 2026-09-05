@@ -60,11 +60,14 @@ import {
   renderChatSessionSharing,
 } from "./components/chat-session-sharing.ts";
 import type { SessionWorkspaceProps } from "./components/chat-session-workspace.ts";
+import type { SidebarPanelDefinition } from "./components/chat-sidebar-region-types.ts";
 import { renderContinueInTerminalDialog } from "./components/continue-in-terminal-dialog.ts";
 import { hasDirectSessionRun } from "./run-lifecycle.ts";
 import {
+  ensureSidebarConversation,
   promoteSidebarPanel,
   setSidebarDock,
+  setSidebarExpanded,
   sidebarActivePanel,
   sidebarDock,
   sidebarMainPanel,
@@ -98,19 +101,50 @@ export abstract class ChatPaneHeader extends ChatPaneDiscussion {
     };
   }
 
-  private renderPanelLayoutActions(layout: SidebarLayout | undefined) {
-    if (!layout?.open || layout.expanded) {
+  private renderPanelLayoutActions(
+    layout: SidebarLayout | undefined,
+    definitions: SidebarPanelDefinition[],
+  ) {
+    if (!layout) {
       return nothing;
     }
     const side = sidebarActivePanel(layout);
-    const definitions = sidebarPanelDefinitions();
     const mainSlot = sidebarMainPanel(layout)?.slot ?? "conversation";
-    const swapLabel = t("chat.sidePanel.swap", {
-      main: definitions.find((definition) => definition.slot === mainSlot)!.label,
-      side: side ? definitions.find((definition) => definition.slot === side.slot)!.label : "",
-    });
+    const mainDefinition = definitions.find((definition) => definition.slot === mainSlot);
+    const sideDefinition = definitions.find((definition) => definition.slot === side?.slot);
+    const split = layout.open === true && !layout.expanded;
+    const focusLabel = t(layout.expanded ? "chat.sidePanel.restore" : "chat.sidePanel.expand");
+    const swapLabel =
+      mainDefinition && sideDefinition
+        ? t("chat.sidePanel.swap", { main: mainDefinition.label, side: sideDefinition.label })
+        : "";
     return html`${
-      side
+      mainDefinition?.headerAction
+        ? html`<span class="side-panel__action-group side-panel__action-group--content"
+            >${mainDefinition.headerAction}</span
+          >`
+        : nothing
+    }
+    ${
+      split || layout.expanded
+        ? html`<openclaw-tooltip .content=${focusLabel}>
+            <button
+              class="btn btn--ghost btn--icon chat-icon-btn chat-panel-focus"
+              type="button"
+              aria-pressed=${String(layout.expanded === true)}
+              aria-label=${focusLabel}
+              @click=${() =>
+                this.state?.updateSidebarLayout(
+                  setSidebarExpanded(ensureSidebarConversation(layout), layout.expanded !== true),
+                )}
+            >
+              ${layout.expanded ? icons.minimize : icons.maximize}
+            </button>
+          </openclaw-tooltip>`
+        : nothing
+    }
+    ${
+      split && side && swapLabel
         ? html`<openclaw-tooltip .content=${swapLabel}>
             <button
               class="btn btn--ghost btn--icon chat-icon-btn chat-panel-swap"
@@ -124,7 +158,7 @@ export abstract class ChatPaneHeader extends ChatPaneDiscussion {
         : nothing
     }
     ${
-      this.narrow
+      this.narrow || !split
         ? nothing
         : html`<wa-dropdown
             class="chat-panel-layout-menu"
@@ -172,6 +206,7 @@ export abstract class ChatPaneHeader extends ChatPaneDiscussion {
     workspaceGit: boolean,
     placementStartupStatus: ApplicationPlacementStartupStatus | null | undefined,
     sidebarLayout?: SidebarLayout,
+    panelDefinitions = sidebarPanelDefinitions(),
   ) {
     const workspace = resolveSessionWorkspace({
       session: row,
@@ -507,8 +542,8 @@ export abstract class ChatPaneHeader extends ChatPaneDiscussion {
       copiedAction: this.headerCopiedAction,
       renameDisabledReason,
       actionsDisabled: this.state?.connected !== true,
-      panelActions: html`${browserPanelAction}${backgroundTasksAction}${sidePanelAction}`,
-      panelLayoutActions: this.renderPanelLayoutActions(currentLayout),
+      panelActions: html`${browserPanelAction}${backgroundTasksAction}`,
+      panelLayoutActions: html`${this.renderPanelLayoutActions(currentLayout, panelDefinitions)}${sidePanelAction}`,
       discussionAction: nothing,
       diffAction: nothing,
       backgroundTasksAction: nothing,

@@ -29,7 +29,7 @@ export function loadConfigFromContext(
   context: ConfigIoContext,
   options: { skipSuspiciousRecovery?: boolean } = {},
 ): OpenClawConfig {
-  const { deps, configPath } = context;
+  const { deps, configPath, pathResolution } = context;
   let envBeforeRead: Record<string, string | undefined> | undefined;
   try {
     maybeLoadDotEnvForConfig(deps.env);
@@ -45,12 +45,12 @@ export function loadConfigFromContext(
         env: deps.env,
       });
       return context.finalizeLoadedRuntimeConfig(
-        materializeRuntimeConfig(
-          config,
-          context.options.pluginValidation === "core-only"
+        materializeRuntimeConfig(config, {
+          ...pathResolution,
+          ...(context.options.pluginValidation === "core-only"
             ? { manifestRegistry: { plugins: [] } }
-            : { loadManifestRegistry: () => metadata.load(config).manifestRegistry },
-        ),
+            : { loadManifestRegistry: () => metadata.load(config).manifestRegistry }),
+        }),
       );
     }
     const raw = deps.fs.readFileSync(configPath, "utf-8");
@@ -89,10 +89,10 @@ export function loadConfigFromContext(
     // below like any invalid config — never load as an empty config marked
     // valid, which would run with defaults and poison lastKnownGood.
     if (typeof validationConfigRaw === "object" && validationConfigRaw !== null) {
-      const duplicates = findDuplicateAgentDirs(validationConfigRaw as OpenClawConfig, {
-        env: deps.env,
-        homedir: deps.homedir,
-      });
+      const duplicates = findDuplicateAgentDirs(
+        validationConfigRaw as OpenClawConfig,
+        pathResolution,
+      );
       if (duplicates.length > 0) {
         throw new DuplicateAgentDirError(duplicates);
       }
@@ -102,7 +102,7 @@ export function loadConfigFromContext(
       env: deps.env,
     });
     const validated = validateConfigObjectWithPlugins(validationConfigRaw, {
-      env: deps.env,
+      ...pathResolution,
       pluginValidation: context.options.pluginValidation,
       loadPluginMetadataSnapshot: pluginMetadata.load,
       sourceRaw: snapshotParsed,
@@ -160,6 +160,7 @@ export function loadConfigFromContext(
       }
     }
     const cfg = materializeRuntimeConfig(validated.config, {
+      ...pathResolution,
       manifestRegistry: pluginMetadata.getManifestRegistry(),
     });
     context.observeLoadConfigSnapshot(

@@ -1385,8 +1385,8 @@ function buildRecoveryToolResultReplacementPlan(params: {
     if (
       entry.type !== "message" ||
       !entry.message ||
-      finalEntry?.type !== "message" ||
-      !finalEntry.message ||
+      !finalEntry?.message ||
+      entry.message === finalEntry.message ||
       JSON.stringify(entry.message) === JSON.stringify(finalEntry.message)
     ) {
       return [];

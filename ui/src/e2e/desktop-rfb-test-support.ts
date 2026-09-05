@@ -1,5 +1,6 @@
 import { deflateSync } from "node:zlib";
 import type { Locator, Page } from "playwright";
+import type { DesktopClient } from "../components/desktop/desktop-client.ts";
 
 export function createRfbClipboardProvide(format: 1 | 2): number[] {
   const text = Buffer.from("Clipboard continuity: Café Ω\0");
@@ -34,12 +35,7 @@ export async function installDesktopClientFake(panel: Locator): Promise<void> {
   await panel.evaluate((element) => {
     (
       element as HTMLElement & {
-        desktopClientFactory: () => {
-          connect(options: { credentials?: { username?: string; password?: string } }): Promise<{
-            disconnect(): void;
-            disableInput(): void;
-          }>;
-        };
+        desktopClientFactory: () => Pick<DesktopClient, "connect">;
       }
     ).desktopClientFactory = () => ({
       async connect(options) {
@@ -47,6 +43,10 @@ export async function installDesktopClientFake(panel: Locator): Promise<void> {
         element.dataset.usedCredentials = options.credentials?.password ? "true" : "false";
         return {
           disableInput() {},
+          sendBackspace() {},
+          sendKeyboardEvent() {},
+          sendText() {},
+          setScaleViewport() {},
           disconnect() {
             element.dataset.disconnectCount = String(
               Number(element.dataset.disconnectCount ?? "0") + 1,

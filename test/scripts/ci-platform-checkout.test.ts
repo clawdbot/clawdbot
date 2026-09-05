@@ -1205,7 +1205,11 @@ owner.main()
   ]);
 });
 
-it.each(["raises", "malformed traceback"])("keeps terminal exit 125 with %s metadata", (fault) => {
+it.each(
+  ["raises", "malformed traceback"].flatMap((fault) =>
+    [false, true].map((cyclic) => ({ fault, cyclic })),
+  ),
+)("keeps terminal exit 125 with $fault metadata (cyclic=$cyclic)", ({ fault, cyclic }) => {
   const { diagnostic } = runOwnerDiagnostic(`
 class BrokenMetadata(Exception):
     def __getattribute__(self, name):
@@ -1214,7 +1218,10 @@ class BrokenMetadata(Exception):
         if name == "__traceback__" and ${JSON.stringify(fault)} == "malformed traceback":
             return self
         return super().__getattribute__(name)
-raise BrokenMetadata(secret)
+error = BrokenMetadata(secret)
+if ${cyclic ? "True" : "False"}:
+    error.__context__ = error
+raise error
 `);
   expect(diagnostic).toBe("unavailable");
 });

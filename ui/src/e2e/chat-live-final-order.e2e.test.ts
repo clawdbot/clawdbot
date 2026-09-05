@@ -1,7 +1,9 @@
+import { writeFile } from "node:fs/promises";
 import path from "node:path";
 import { expect, it } from "vitest";
 import { buildWidgetDocument } from "../../../src/canvas/wrap.js";
 import { createControlUiE2eArtifactDir } from "../test-helpers/control-ui-e2e-artifacts.ts";
+import { takeControlUiViewportScreenshot } from "../test-helpers/control-ui-e2e-screenshot.ts";
 import { useCanvasSandboxFixture } from "./canvas-sandbox.test-support.ts";
 import {
   createChatFlowE2eSuite,
@@ -173,7 +175,10 @@ suite.define(() => {
     });
     const page = await context.newPage();
     const runId = "multi-reply-run";
-    const replies = ["First part of the current answer.", "Second part of the current answer."];
+    const replies = [
+      "First part of the current answer.",
+      "Second part of the current answer.",
+    ] as const;
     const previous = "Previous durable conversation.";
     const prompt = "Please give me both parts.";
     try {
@@ -233,10 +238,12 @@ suite.define(() => {
         await page.locator(".chat-thread-inner").getByText(text, { exact: true }).waitFor();
       }
       if (artifactDir) {
-        await page.screenshot({
-          path: path.join(artifactDir, "multi-reply-order.png"),
-          fullPage: true,
-        });
+        await writeFile(
+          path.join(artifactDir, "multi-reply-order.png"),
+          await takeControlUiViewportScreenshot(page, page.locator(".shell"), [
+            page.locator(".chat-thread-inner").getByText(replies[1], { exact: true }),
+          ]),
+        );
       }
       await expect
         .poll(() =>

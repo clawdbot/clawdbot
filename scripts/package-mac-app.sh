@@ -416,8 +416,17 @@ else
   echo "WARN: Swift compatibility library not found at $SWIFT_COMPAT_LIB (continuing)" >&2
 fi
 
-echo "🖼  Copying app icon"
-cp "$ROOT_DIR/apps/macos/Sources/OpenClaw/Resources/OpenClaw.icns" "$APP_ROOT/Contents/Resources/OpenClaw.icns"
+echo "🖼  Compiling app icon"
+xcrun actool "$ROOT_DIR/apps/macos/Icon.icon" \
+  --compile "$APP_ROOT/Contents/Resources" \
+  --output-format human-readable-text --notices --warnings --errors \
+  --output-partial-info-plist "$APP_STAGE_DIR/icon.plist" \
+  --app-icon Icon --include-all-app-icons --enable-on-demand-resources NO \
+  --development-region en --target-device mac \
+  --minimum-deployment-target "$(plist_print_required "$APP_ROOT/Contents/Info.plist" LSMinimumSystemVersion)" \
+  --platform macosx
+mv "$APP_ROOT/Contents/Resources/Icon.icns" "$APP_ROOT/Contents/Resources/OpenClaw.icns"
+cp -R "$ROOT_DIR/apps/macos/Sources/OpenClaw/Resources/AppIcons" "$APP_ROOT/Contents/Resources/AppIcons"
 
 echo "📦 Copying device model resources"
 rm -rf "$APP_ROOT/Contents/Resources/DeviceModels"

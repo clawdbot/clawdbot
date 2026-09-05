@@ -691,13 +691,12 @@ export function listCoreGatewayHandlerMethodNames(): ReadonlyMap<
   readonly string[]
 > {
   const methodsByFamily = new Map<CoreGatewayHandlerFamily, string[]>();
-  for (const spec of CORE_GATEWAY_METHOD_SPEC_LIST) {
-    if (!spec.family) {
+  for (const [name, family] of CORE_GATEWAY_METHOD_SPECS) {
+    if (!family) {
       continue;
     }
-    const family = spec.family as CoreGatewayHandlerFamily;
     const methods = methodsByFamily.get(family) ?? [];
-    methods.push(spec.name);
+    methods.push(name);
     methodsByFamily.set(family, methods);
   }
   return methodsByFamily;

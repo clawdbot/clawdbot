@@ -270,6 +270,14 @@ Factory tools declare `outputSchema` on the concrete `AnyAgentTool` they
 return. The static `tool({ factory })` declaration does not accept a separate
 output schema because it could drift from the runtime tool.
 
+OpenClaw also grades the call outcome from `details`, so `status`, `ok`,
+`success`, `error`, `timedOut`, and `exitCode` are reserved names. A `status`
+of `blocked`, `denied`, `invalid`, `cancelled`, or any other failure value
+marks the call failed unless `ok` or `success` is explicitly `true`, even when
+`execute` returned normally. Domain data that
+uses one of those names belongs under a wrapper key, such as `{ card }`,
+instead of at the top level of `details`.
+
 ## Configuration
 
 `configSchema` is optional. Omit it and OpenClaw applies a strict empty object

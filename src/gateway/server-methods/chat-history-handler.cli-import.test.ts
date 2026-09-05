@@ -24,6 +24,7 @@ type HistoryPage = {
 
 type HistoryRequest = {
   limit?: number;
+  maxBytes?: number;
   messageId?: string;
   offset?: number;
 };
@@ -113,9 +114,9 @@ describe("CLI-imported history anchors", () => {
       await withImportedHistory(
         method,
         6,
-        "External conversation",
+        "External conversation ".repeat(100),
         async ({ read, importedIds }) => {
-          const newest = await read({ limit: 2 });
+          const newest = await read({ limit: 2, maxBytes: 1024 });
           expect(newest.messages).toHaveLength(8);
           expect(newest).toMatchObject({
             completeSnapshot: true,

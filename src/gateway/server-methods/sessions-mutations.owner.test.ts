@@ -10,6 +10,7 @@ import {
 } from "../../config/sessions/session-accessor.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import { registerInternalHook, unregisterInternalHook } from "../../hooks/internal-hooks.js";
+import { trackAsyncWork } from "../../shared/async-work-scope.js";
 import { createDeferredCore } from "../../shared/deferred.js";
 import { closeOpenClawAgentDatabasesForTest } from "../../state/openclaw-agent-db.js";
 import { ensureProfileForEmail } from "../../state/user-profiles.js";
@@ -62,6 +63,7 @@ function client(profileId?: string): GatewayClient {
 
 function context(cfg: OpenClawConfig) {
   return {
+    trackExecution: trackAsyncWork,
     getRuntimeConfig: () => cfg,
     getSessionEventSubscriberConnIds: () => new Set(["observer"]),
     broadcastToConnIds: vi.fn(),

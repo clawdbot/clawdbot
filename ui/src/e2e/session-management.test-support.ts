@@ -1,7 +1,9 @@
+import { writeFile } from "node:fs/promises";
 import path from "node:path";
 import { createRequireRecord } from "openclaw/plugin-sdk/test-fixtures";
 import type { Locator, Page } from "playwright";
 import { expect } from "vitest";
+import { takeControlUiViewportScreenshot } from "../test-helpers/control-ui-e2e-screenshot.ts";
 import {
   controlUiSessionPath,
   controlUiSessionUrl,
@@ -170,12 +172,20 @@ export async function captureUiProof(
   owner: { readonly artifactDir: string },
   page: Page,
   fileName: string,
+  surface: Locator = page.locator(".shell"),
+  content: readonly Locator[] = [surface],
 ) {
   if (!captureUiProofEnabled) {
     return;
   }
-  // Dialogs and menus fade in, so an undisabled capture can land mid-transition
-  // and prove nothing about the state it was taken for.
+  if (page.video()) {
+    await writeFile(
+      path.join(owner.artifactDir, fileName),
+      await takeControlUiViewportScreenshot(page, surface, content),
+    );
+    return;
+  }
+  // Nonrecording proof keeps its existing full-document framing.
   await page.screenshot({
     animations: "disabled",
     fullPage: true,

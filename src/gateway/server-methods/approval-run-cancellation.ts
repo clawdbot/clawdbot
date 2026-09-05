@@ -7,9 +7,14 @@ import {
   type WorkerSessionTurnClaim,
 } from "../worker-environments/placement-record.js";
 
+type ApprovalCancellationManager<TPayload> = Pick<
+  ExecApprovalManager<TPayload>,
+  "listPendingRecords" | "forceDenyDetailed"
+>;
+
 function cancelMatchingApprovals<TPayload>(params: {
   reason?: "run-aborted" | "permission-change" | "approval-scope-closed";
-  manager: ExecApprovalManager<TPayload>;
+  manager: ApprovalCancellationManager<TPayload>;
   matches: (record: ExecApprovalRecord<TPayload>) => boolean;
   publish: (record: OperatorApprovalRecord, liveRecord: ExecApprovalRecord<TPayload>) => void;
 }): number {
@@ -41,7 +46,7 @@ function cancelMatchingApprovals<TPayload>(params: {
 export function cancelAgentRuntimeBoundApprovals<TPayload>(params: {
   authority: AgentRunDelegatedAuthority;
   reason?: "run-aborted" | "permission-change" | "approval-scope-closed";
-  manager: ExecApprovalManager<TPayload>;
+  manager: ApprovalCancellationManager<TPayload>;
   publish: (record: OperatorApprovalRecord, liveRecord: ExecApprovalRecord<TPayload>) => void;
 }): number {
   return cancelMatchingApprovals({
@@ -64,7 +69,7 @@ export function cancelAgentRuntimeBoundApprovals<TPayload>(params: {
 /** Settles approvals whose authoritative worker turn claim has been fenced. */
 export function cancelWorkerTurnClaimBoundApprovals<TPayload>(params: {
   claim: WorkerSessionTurnClaim;
-  manager: ExecApprovalManager<TPayload>;
+  manager: ApprovalCancellationManager<TPayload>;
   publish: (record: OperatorApprovalRecord, liveRecord: ExecApprovalRecord<TPayload>) => void;
 }): number {
   return cancelMatchingApprovals({
@@ -84,7 +89,7 @@ export function cancelWorkerTurnClaimBoundApprovals<TPayload>(params: {
 /** Preserves legacy run-id abort cleanup only for records without delegated authority. */
 export function cancelUnboundRunApprovals<TPayload extends { runId?: string | null }>(params: {
   runId: string;
-  manager: ExecApprovalManager<TPayload>;
+  manager: ApprovalCancellationManager<TPayload>;
   publish: (record: OperatorApprovalRecord, liveRecord: ExecApprovalRecord<TPayload>) => void;
 }): number {
   return cancelMatchingApprovals({

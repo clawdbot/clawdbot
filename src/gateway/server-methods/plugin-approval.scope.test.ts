@@ -1,12 +1,14 @@
 import { expectDefined } from "@openclaw/normalization-core";
-import { describe, expect, it, vi } from "vitest";
+import { describe, expect, it, vi, type TestContext } from "vitest";
 import type { PluginApprovalRequestPayload } from "../../infra/plugin-approvals.js";
-import { ExecApprovalManager } from "../exec-approval-manager.js";
+import { createTestApprovalManager } from "../exec-approval-manager.test-support.js";
 import { createPluginApprovalHandlers } from "./plugin-approval.js";
 import type { GatewayRequestHandlerOptions } from "./types.js";
 
-function createApprovalScopeRequest(scope: unknown) {
-  const manager = new ExecApprovalManager<PluginApprovalRequestPayload>({ approvalKind: "plugin" });
+function createApprovalScopeRequest(testContext: TestContext, scope: unknown) {
+  const manager = createTestApprovalManager<PluginApprovalRequestPayload>(testContext, {
+    approvalKind: "plugin",
+  });
   const respond = vi.fn();
   const params = {
     title: "Sensitive action",
@@ -33,8 +35,8 @@ function createApprovalScopeRequest(scope: unknown) {
 }
 
 describe("plugin approval request scopes", () => {
-  it("sanitizes owner-declared scope before storing or broadcasting the approval", async () => {
-    const { manager, handler, options } = createApprovalScopeRequest({
+  it("sanitizes owner-declared scope before storing or broadcasting the approval", async (testContext) => {
+    const { manager, handler, options } = createApprovalScopeRequest(testContext, {
       kind: "message-send",
       target: "email\u202Esystem",
       recipientCount: 3,
@@ -56,8 +58,8 @@ describe("plugin approval request scopes", () => {
     await pending;
   });
 
-  it("drops scope after escaped text exceeds its bounds without rejecting approval", async () => {
-    const { manager, handler, options } = createApprovalScopeRequest({
+  it("drops scope after escaped text exceeds its bounds without rejecting approval", async (testContext) => {
+    const { manager, handler, options } = createApprovalScopeRequest(testContext, {
       kind: "external-post",
       target: `github${"\u202E".repeat(20)}`,
       visibility: "public",
@@ -71,11 +73,11 @@ describe("plugin approval request scopes", () => {
     await pending;
   });
 
-  it.each([
+  it.for([
     { kind: "untyped", target: "email" },
     { kind: "external-post", target: "github", visibility: "public", extra: true },
-  ])("rejects malformed or non-closed owner-declared scope", async (scope) => {
-    const { manager, respond, handler, options } = createApprovalScopeRequest(scope);
+  ])("rejects malformed or non-closed owner-declared scope", async (scope, testContext) => {
+    const { manager, respond, handler, options } = createApprovalScopeRequest(testContext, scope);
     await handler(options);
 
     expect(respond).toHaveBeenCalledWith(

@@ -1,7 +1,21 @@
 import { isRecord } from "@openclaw/normalization-core/record-coerce";
 import { sortUniqueStrings } from "@openclaw/normalization-core/string-normalization";
+import { resolveAgentDir } from "../agents/agent-scope-config.js";
+import {
+  createProviderHttpError,
+  readProviderJsonResponse,
+  readProviderTextResponse,
+} from "../agents/provider-http-errors.js";
+import { resolveProviderRequestHeaders } from "../agents/provider-request-config.js";
 import * as talk from "../config/talk.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
+import { warn } from "../globals.js";
+import { formatErrorMessage } from "../infra/errors.js";
+import { fetchWithSsrFGuard } from "../infra/net/fetch-guard.js";
+import { redactSensitiveText } from "../logging/redact.js";
+import { createDebugProxyWebSocketAgent, resolveDebugProxySettings } from "../proxy-capture/env.js";
+import { captureWsEvent } from "../proxy-capture/runtime.js";
+import { createRealtimeTranscriptionWebSocketSession } from "../realtime-transcription/websocket-session.js";
 import { resolveVoiceModelRefs } from "../tts/voice-models.js";
 import {
   getLoadedRuntimePluginRegistry,
@@ -10,6 +24,8 @@ import {
 import { loadBundledCapabilityRuntimeRegistry } from "./bundled-capability-runtime.js";
 import { withBundledPluginEnablementCompat } from "./bundled-compat.js";
 import { isBundledProviderCompatContract } from "./bundled-provider-compat.js";
+import type { PluginCapabilityCatalogContext } from "./capability-catalog-context.types.js";
+import type { PluginCapabilityCatalog } from "./capability-catalog.types.js";
 import { normalizePluginsConfig, type NormalizedPluginsConfig } from "./config-state.js";
 import { getCurrentPluginMetadataSnapshot } from "./current-plugin-metadata-snapshot.js";
 import { resolveRuntimePluginRegistry, type PluginLoadOptions } from "./loader.js";
@@ -20,6 +36,11 @@ import {
   loadManifestContractSnapshot,
 } from "./manifest-contract-eligibility.js";
 import type { PluginMetadataSnapshot } from "./plugin-metadata-snapshot.types.js";
+import {
+  isProviderApiKeyConfigured,
+  isProviderAuthProfileConfigured,
+  resolveProviderAuthProfileApiKey,
+} from "./provider-auth-availability.js";
 import { normalizeCapabilityProviderId } from "./provider-registry-shared.js";
 import type { PluginRegistry } from "./registry-types.js";
 import { getPluginRuntimeGatewayRequestScope } from "./runtime/gateway-request-scope.js";
@@ -28,6 +49,30 @@ import {
   getPluginRuntimeLoadContext,
   type PluginRuntimeLoadContext,
 } from "./runtime/load-context.js";
+
+// Supply native host operations here; importing auth discovery from the loader creates a cycle.
+const capabilityCatalogContext: PluginCapabilityCatalogContext = Object.freeze({
+  isProviderApiKeyConfigured,
+  isProviderAuthProfileConfigured,
+  resolveAgentDir,
+  createRealtimeTranscriptionWebSocketSession,
+  resolveProviderRequestHeaders,
+  resolveProviderAuthProfileApiKey,
+  resolveApiKeyForProvider: async (
+    params: Parameters<PluginCapabilityCatalogContext["resolveApiKeyForProvider"]>[0],
+  ) =>
+    (await import("./runtime/runtime-model-auth.runtime.js")).resolveProviderRuntimeApiKey(params),
+  captureWsEvent,
+  createDebugProxyWebSocketAgent,
+  resolveDebugProxySettings,
+  fetchWithSsrFGuard,
+  createProviderHttpError,
+  readProviderJsonResponse,
+  readProviderTextResponse,
+  formatErrorMessage,
+  warn,
+  redactSensitiveText,
+});
 
 type CapabilityProviderRegistryKey =
   | "embeddingProviders"
@@ -200,7 +245,7 @@ function mergeCapabilityProviderEntries<K extends CapabilityProviderRegistryKey>
 ): PluginRegistry[K] {
   const merged = new Map<string, PluginRegistry[K][number]>();
   const unnamed: Array<PluginRegistry[K][number]> = [];
-  const addEntries = (entries: PluginRegistry[K]) => {
+  for (const entries of [left, right]) {
     for (const entry of entries) {
       const provider = entry.provider as { id?: string };
       if (!provider.id) {
@@ -211,10 +256,7 @@ function mergeCapabilityProviderEntries<K extends CapabilityProviderRegistryKey>
         merged.set(provider.id, entry);
       }
     }
-  };
-
-  addEntries(left);
-  addEntries(right);
+  }
   return [...merged.values(), ...unnamed] as PluginRegistry[K];
 }
 
@@ -321,7 +363,7 @@ function collectRequestedCapabilityProviderIds(params: {
 
 function shouldScopeCapabilityLoadToRequestedProviders(
   key: CapabilityProviderRegistryKey,
-): boolean {
+): key is keyof PluginCapabilityCatalog {
   return (
     key === "speechProviders" ||
     key === "realtimeTranscriptionProviders" ||
@@ -455,7 +497,17 @@ function loadCapabilityProviderEntries<K extends CapabilityProviderRegistryKey>(
         workspaceDir: params.loadOptions.workspaceDir,
         requiredPluginIds: params.loadOptions.onlyPluginIds,
       });
-  const registry = loadedRegistry ?? resolveRuntimePluginRegistry(params.loadOptions);
+  const catalogFamily = shouldScopeCapabilityLoadToRequestedProviders(params.key)
+    ? params.key
+    : undefined;
+  const registry =
+    loadedRegistry ??
+    resolveRuntimePluginRegistry({
+      ...params.loadOptions,
+      ...(catalogFamily
+        ? { capabilityCatalog: { family: catalogFamily, context: capabilityCatalogContext } }
+        : {}),
+    });
   const entries = filterAllowedEntries(registry);
   const missingRequested =
     params.requested && params.requested.size > 0 ? new Set(params.requested) : undefined;
@@ -465,13 +517,22 @@ function loadCapabilityProviderEntries<K extends CapabilityProviderRegistryKey>(
   if (entries.length > 0 && (!missingRequested || missingRequested.size === 0)) {
     return entries;
   }
-  if (params.bundledCompatPluginIds.length === 0) {
+  const bundledCompatPluginIds = params.bundledCompatPluginIds.filter(
+    (pluginId) =>
+      !registry?.plugins.some(
+        (plugin) =>
+          plugin.id === pluginId &&
+          catalogFamily &&
+          plugin.capabilityCatalog?.includes(catalogFamily),
+      ),
+  );
+  if (bundledCompatPluginIds.length === 0) {
     return entries;
   }
   const captured = filterAllowedEntries(
     loadBundledCapabilityRuntimeRegistry({
       ...params.loadOptions,
-      pluginIds: params.bundledCompatPluginIds,
+      pluginIds: bundledCompatPluginIds,
     }),
   );
   return entries.length > 0 ? mergeCapabilityProviderEntries(entries, captured) : captured;

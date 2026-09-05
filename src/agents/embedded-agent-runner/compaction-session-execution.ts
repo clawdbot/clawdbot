@@ -261,10 +261,9 @@ export async function executePreparedCompactionSession(runtime: PreparedCompacti
       while (true) {
         // A thinking retry starts a new attempt; setup/endpoint failures must not reuse its predecessor's cause.
         setCompactionSafeguardCancellation(sessionManager, undefined);
-        // Rebuild the compaction session on retry so provider wrappers, payload
-        // shaping, and the embedded system prompt all reflect the fallback level.
+        // Rebuild on retry so provider wrappers and payload shaping use the fallback effort.
         attemptedThinking.add(thinkLevel);
-        const systemPromptText = buildSystemPromptText(thinkLevel);
+        const systemPromptText = buildSystemPromptText();
         let session: AgentSession | undefined;
         let diagnosticOwner: DiagnosticEmbeddedRunOwner | undefined;
         let resetCompactionTimeout: (() => void) | undefined;

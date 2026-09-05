@@ -7,7 +7,6 @@ import { createWorkboardCapability } from "./lib/workboard/capability.ts";
 import { WORKBOARD_CHANGED_EVENT } from "./lib/workboard/types.ts";
 import { createWorkboardPage, workboardPageTarget } from "./pages/workboard/workboard-page.ts";
 import { createWorkboardSessionAccessory } from "./session-accessory.ts";
-import { createWorkboardSessionAction } from "./session-action.ts";
 import { createWorkboardWidget } from "./widgets.ts";
 import "./styles/workboard.css";
 import "./styles/widgets.css";
@@ -77,9 +76,6 @@ export default defineControlUiPlugin({
                 : "Workboard board",
           mount: createWorkboardWidget(host, id),
         }),
-      ),
-      ...(["header", "session"] as const).map((placement) =>
-        host.ui.registerAction(createWorkboardSessionAction(host, workboard, placement)),
       ),
       workboard.subscribe(host.ui.invalidate),
       host.subscribe(() => catalog.sync(client, host.connection.connected)),

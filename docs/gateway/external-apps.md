@@ -84,6 +84,9 @@ call resume. The
 that cannot speak WebSocket at all. If every control path is lost, the
 two-minute lease expiry reopens admission automatically.
 
+Closing the Gateway cancels background work queued by operator reconnects without
+waiting for suspension expiry. Shutdown still waits for work already running to finish.
+
 The hello snapshot includes `suspension: { phase }`, and `gateway.suspension`
 events publish admission changes immediately. The phase is `accepting`,
 `preparing`, `draining`, or `prepared`; neither surface exposes suspension IDs.

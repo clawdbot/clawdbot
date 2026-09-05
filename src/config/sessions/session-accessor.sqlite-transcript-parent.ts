@@ -3,7 +3,6 @@ import {
   executeSqliteQueryTakeFirstSync,
   iterateSqliteQuerySync,
 } from "../../infra/kysely-sync.js";
-import { coerceRequiredSqliteNumber as sqliteNumber } from "../../infra/sqlite-number.js";
 import type { OpenClawAgentDatabase } from "../../state/openclaw-agent-db.js";
 import type { TranscriptMessageAppendOptions } from "./session-accessor.sqlite-contract.js";
 import { readTranscriptIdentityByEventId } from "./session-accessor.sqlite-read.js";
@@ -24,43 +23,37 @@ export function resolveTranscriptMessageAppendParent<TMessage>(
   if (options.parentId === undefined) {
     return tailId;
   }
-  if (options.appendIntent !== "active-branch" || tailId === options.parentId) {
+  if (options.appendIntent !== "active-branch" || tailId === options.parentId || tailId === null) {
     return options.parentId;
   }
 
   const db = getSessionKysely(database.db);
-  const countRow = executeSqliteQueryTakeFirstSync(
+  // UNION visits each parent once, so cycles terminate without a transcript-wide count.
+  // Keep dangling and null parents in the walk: they can be the requested ancestor.
+  const ancestor = executeSqliteQueryTakeFirstSync(
     database.db,
     db
-      .selectFrom("transcript_event_identities")
-      .select((expression) => expression.fn.countAll<number | bigint>().as("count"))
-      .where("session_id", "=", sessionId),
+      .withRecursive("transcript_ancestors", (query) =>
+        query
+          .selectFrom("transcript_event_identities")
+          .select("parent_id")
+          .where("session_id", "=", sessionId)
+          .where("event_id", "=", tailId)
+          .union(
+            query
+              .selectFrom("transcript_event_identities as ti")
+              .innerJoin("transcript_ancestors as ancestor", "ti.event_id", "ancestor.parent_id")
+              .select("ti.parent_id")
+              .where("ti.session_id", "=", sessionId),
+          ),
+      )
+      .selectFrom("transcript_ancestors")
+      .select("parent_id")
+      .where("parent_id", options.parentId === null ? "is" : "=", options.parentId)
+      .limit(1),
   );
-  const maxAncestors = sqliteNumber(countRow?.count ?? 0);
-  let ancestorId: string | null = tailId;
-  for (let depth = 0; depth <= maxAncestors; depth += 1) {
-    if (ancestorId === options.parentId) {
-      // Active appends extend the append-only tree even when their manager snapshot is stale.
-      // Rebase only along known ancestry so deliberate branches keep their explicit parent.
-      return tailId;
-    }
-    if (ancestorId === null) {
-      break;
-    }
-    const row = executeSqliteQueryTakeFirstSync(
-      database.db,
-      db
-        .selectFrom("transcript_event_identities")
-        .select("parent_id")
-        .where("session_id", "=", sessionId)
-        .where("event_id", "=", ancestorId),
-    );
-    if (!row) {
-      break;
-    }
-    ancestorId = row.parent_id;
-  }
-  return options.parentId;
+  // Active appends rebase only along known ancestry; deliberate branches keep their parent.
+  return ancestor?.parent_id === options.parentId ? tailId : options.parentId;
 }
 
 function readActiveTranscriptAppendParentId(

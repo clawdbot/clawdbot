@@ -417,7 +417,12 @@ vi.mock("./audio.js", async () => {
   const { PassThrough } = await import("node:stream");
   return {
     ...actual,
-    createDiscordOpusEncodeStream: vi.fn(() => new PassThrough()),
+    createDiscordOpusEncodeStream: vi.fn(() =>
+      Object.assign(new PassThrough(), {
+        flushPartialFrame: () => false,
+        takePcmBytes: (packet: Buffer) => packet.length,
+      }),
+    ),
     createDiscordOpusPlaybackStream: vi.fn(() => new PassThrough()),
     decodeOpusStream: (...args: Parameters<typeof actual.decodeOpusStream>) =>
       decodeOpusStreamMock.getMockImplementation()

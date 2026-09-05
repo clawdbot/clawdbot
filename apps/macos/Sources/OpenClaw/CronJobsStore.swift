@@ -177,9 +177,18 @@ final class CronJobsStore {
     }
 
     func refreshJobs() async {
-        guard !self.isLoadingJobs, !Task.isCancelled else { return }
-        // Manual and scheduled refreshes share the active consumers' lifetime; the final
-        // stop also invalidates callers whose task is not owned by this store.
+        guard !Task.isCancelled else { return }
+        let task = self.scheduleRefresh(delayMs: 0)
+        await withTaskCancellationHandler {
+            await task.value
+        } onCancel: {
+            // A newer refresh may already own the store; cancel only this caller's task.
+            task.cancel()
+        }
+    }
+
+    private func loadJobs() async {
+        guard !Task.isCancelled else { return }
         self.jobsGeneration &+= 1
         let generation = self.jobsGeneration
         let sourceRevision = self.gateway.selectedEndpointRevision
@@ -405,8 +414,6 @@ final class CronJobsStore {
             self.scheduleRefresh(delayMs: 0)
         }
         switch push {
-        case .snapshot:
-            self.scheduleRefresh(delayMs: 0)
         case let .event(evt) where evt.event == "cron":
             guard let payload = evt.payload else { return }
             if let cronEvt = try? GatewayPayloadDecoding.decode(payload, as: CronEvent.self) {
@@ -429,15 +436,18 @@ final class CronJobsStore {
         }
     }
 
-    private func scheduleRefresh(delayMs: Int = 250) {
+    @discardableResult
+    private func scheduleRefresh(delayMs: Int = 250) -> Task<Void, Never> {
         let previousTask = self.refreshTask
         previousTask?.cancel()
-        self.refreshTask = Task { [weak self] in
+        let task = Task { [weak self] in
             // Even a canceled debounce must drain its predecessor before a replacement can refresh.
             await previousTask?.value
             guard await SimpleTaskSupport.waitForNextOperation(interval: TimeInterval(delayMs) / 1000) else { return }
-            await self?.refreshJobs()
+            await self?.loadJobs()
         }
+        self.refreshTask = task
+        return task
     }
 
     private func clearSelectedJob() {

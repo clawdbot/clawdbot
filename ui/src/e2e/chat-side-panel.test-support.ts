@@ -24,7 +24,10 @@ export async function failNextDeviceIdentityMint(page: Page): Promise<void> {
 
 export async function openChatSidePanelType(page: Page, label: string): Promise<void> {
   const panel = page.locator(".sidebar-region__right-runtime .side-panel");
-  if (!(await panel.locator('[data-region-header="side"]').isVisible())) {
+  if (
+    !(await panel.locator('[data-region-header="side"]').isVisible()) &&
+    !(await panel.locator(".side-panel-empty--selector").isVisible())
+  ) {
     await page.locator(".chat-side-panel-toggle").click();
   }
   // An empty panel offers its type list; a populated one offers the header "+" menu,
@@ -44,7 +47,7 @@ export async function openChatSidePanelType(page: Page, label: string): Promise<
 export async function focusChatSidePanel(page: Page): Promise<void> {
   await page.locator(".chat-panel-swap").click();
   await page
-    .locator('[data-region-header="main"]')
+    .locator(".chat-pane__header")
     .getByRole("button", { name: "Focus", exact: true })
     .click();
   await page.getByRole("button", { name: "Restore split", exact: true }).waitFor();

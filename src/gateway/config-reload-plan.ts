@@ -104,7 +104,7 @@ const CORE_RELOAD_POLICIES: ReloadPolicy[] = [
       "gateway.http.securityHeaders.strictTransportSecurity",
       "gateway.tools",
       "gateway.cliAgents",
-      "gateway.publicOrigin",
+      "gateway.controlUi.enabled",
       "gateway.controlUi.environment",
       "gateway.controlUi.communityInvite",
       "gateway.controlUi.github",
@@ -169,7 +169,7 @@ const CORE_RELOAD_POLICIES: ReloadPolicy[] = [
     actions: ["reconcileSystemJobs"],
   },
   { prefixes: ["cron"], kind: "hot", actions: ["restartCron"] },
-  { prefixes: ["mcp"], kind: "hot", actions: ["disposeMcpRuntimes"] },
+  { prefixes: ["mcp", "gateway.publicOrigin"], kind: "hot", actions: ["disposeMcpRuntimes"] },
   // Capability ownership changes replace the plugin generation that owns its routes.
   {
     prefixes: ["talk.provider", "talk.realtime.provider"],
@@ -282,7 +282,6 @@ function getReloadPolicyCatalog() {
         "channels.defaults",
         "channels.modelByChannel",
         "messages.inbound",
-        "messages.ackReactionScope",
         "commands",
         "accessGroups",
         "tts",

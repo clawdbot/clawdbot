@@ -283,16 +283,14 @@ async function expectExpandedSidePanelFillsRegion(page: Page): Promise<void> {
       const panel = element.getBoundingClientRect();
       const shell = element.closest(".sidebar-region");
       const region = shell?.getBoundingClientRect();
-      const header = shell?.querySelector('[data-region-header="main"]')?.getBoundingClientRect();
-      if (!region || !header) {
+      if (!region) {
         throw new Error("Expanded side panel has no sidebar region");
       }
       return {
         bottom: Math.abs(panel.bottom - region.bottom),
         left: Math.abs(panel.left - region.left),
         right: Math.abs(panel.right - region.right),
-        top: Math.abs(header.top - region.top),
-        headerGap: Math.abs(panel.top - header.bottom),
+        top: Math.abs(panel.top - region.top),
       };
     });
   for (const delta of Object.values(geometry)) {
@@ -786,7 +784,10 @@ suite.define(() => {
             .toBe("none");
           await expectExpandedSidePanelFillsRegion(page);
           await captureRichPanel(page, `rails-tabs-expanded-${themeMode}`);
-          await sidePanel(page).getByRole("button", { name: "Restore split", exact: true }).click();
+          await page
+            .locator(".chat-pane__header")
+            .getByRole("button", { name: "Restore split", exact: true })
+            .click();
           await restoreChatAsMain(page);
 
           await sidePanel(page).getByRole("button", { name: "Close", exact: true }).click();

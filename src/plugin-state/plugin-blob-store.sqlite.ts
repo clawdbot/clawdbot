@@ -2,6 +2,7 @@
 import type { DatabaseSync } from "node:sqlite";
 import { resolveExpiresAtMsFromDurationMs } from "@openclaw/normalization-core/number-coercion";
 import type { Insertable, Selectable } from "kysely";
+import { hasErrnoCode } from "../infra/errno.js";
 import {
   executeSqliteQuerySync,
   executeSqliteQueryTakeFirstSync,
@@ -11,6 +12,10 @@ import {
   coerceRequiredSqliteNumber as sqliteNumber,
   normalizeSqliteNumber,
 } from "../infra/sqlite-number.js";
+import {
+  hasOpenClawStateTablesBeyondStartupCheckpoint,
+  withExistingOpenClawStateDatabaseReadOnly,
+} from "../state/openclaw-state-db-readonly.js";
 import type { DB as OpenClawStateKyselyDatabase } from "../state/openclaw-state-db.generated.js";
 import {
   openOpenClawStateDatabase,
@@ -96,6 +101,47 @@ function openDatabase(operation: PluginBlobStoreOperation, env?: NodeJS.ProcessE
       operation,
       "PLUGIN_BLOB_OPEN_FAILED",
       "Failed to open plugin blob store.",
+      env,
+    );
+  }
+}
+
+function readDatabase<T>(
+  operation: "lookup" | "entries",
+  read: (db: DatabaseSync) => T,
+  env?: NodeJS.ProcessEnv,
+): T | undefined {
+  let readStarted = false;
+  try {
+    return withExistingOpenClawStateDatabaseReadOnly(
+      ({ db }) => {
+        readStarted = true;
+        try {
+          return read(db);
+        } catch (error) {
+          if (
+            error instanceof Error &&
+            hasErrnoCode(error, "ERR_SQLITE_ERROR") &&
+            error.message === "no such table: plugin_blob_entries" &&
+            !hasOpenClawStateTablesBeyondStartupCheckpoint(db)
+          ) {
+            return undefined;
+          }
+          throw error;
+        }
+      },
+      env ? { env } : {},
+    );
+  } catch (error) {
+    throw wrapError(
+      error,
+      operation,
+      readStarted ? "PLUGIN_BLOB_READ_FAILED" : "PLUGIN_BLOB_OPEN_FAILED",
+      readStarted
+        ? operation === "lookup"
+          ? "Failed to read plugin blob entry."
+          : "Failed to list plugin blob entries."
+        : "Failed to open plugin blob store.",
       env,
     );
   }
@@ -502,24 +548,19 @@ export function pluginBlobLookup<TMetadata>(params: {
   key: string;
   env?: NodeJS.ProcessEnv;
 }): PluginBlobEntry<TMetadata> | undefined {
-  try {
-    const { db } = openDatabase("lookup", params.env);
-    const row = selectLiveBlob(db, { ...params, now: Date.now() });
-    return row
-      ? {
-          ...decodeBlobInfo<TMetadata>(row, "lookup", params.env),
-          bytes: Uint8Array.from(row.blob),
-        }
-      : undefined;
-  } catch (error) {
-    throw wrapError(
-      error,
-      "lookup",
-      "PLUGIN_BLOB_READ_FAILED",
-      "Failed to read plugin blob entry.",
-      params.env,
-    );
-  }
+  return readDatabase(
+    "lookup",
+    (db) => {
+      const row = selectLiveBlob(db, { ...params, now: Date.now() });
+      return row
+        ? {
+            ...decodeBlobInfo<TMetadata>(row, "lookup", params.env),
+            bytes: Uint8Array.from(row.blob),
+          }
+        : undefined;
+    },
+    params.env,
+  );
 }
 
 export function pluginBlobEntries<TMetadata>(params: {
@@ -527,20 +568,16 @@ export function pluginBlobEntries<TMetadata>(params: {
   namespace: string;
   env?: NodeJS.ProcessEnv;
 }): PluginBlobEntryInfo<TMetadata>[] {
-  try {
-    const { db } = openDatabase("entries", params.env);
-    return selectLiveInfo(db, { ...params, now: Date.now() }).map((row) =>
-      decodeBlobInfo<TMetadata>(row, "entries", params.env),
-    );
-  } catch (error) {
-    throw wrapError(
-      error,
+  return (
+    readDatabase(
       "entries",
-      "PLUGIN_BLOB_READ_FAILED",
-      "Failed to list plugin blob entries.",
+      (db) =>
+        selectLiveInfo(db, { ...params, now: Date.now() }).map((row) =>
+          decodeBlobInfo<TMetadata>(row, "entries", params.env),
+        ),
       params.env,
-    );
-  }
+    ) ?? []
+  );
 }
 
 export function pluginBlobDelete(params: {

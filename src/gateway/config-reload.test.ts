@@ -416,7 +416,6 @@ describe("buildGatewayReloadPlan", () => {
     "gateway.port",
     "gateway.bind",
     "gateway.tls.enabled",
-    "gateway.controlUi.enabled",
     "gateway.controlUi.basePath",
     "gateway.controlUi.root",
     "gateway.controlUi.experimental.customPlugins",
@@ -464,6 +463,7 @@ describe("buildGatewayReloadPlan", () => {
     "gateway.tools.allow",
     "gateway.tools.deny",
     "gateway.cliAgents.enabled",
+    "gateway.controlUi.enabled",
     "gateway.controlUi.environment.label",
     "gateway.controlUi.communityInvite",
     "gateway.controlUi.github.token",
@@ -481,7 +481,6 @@ describe("buildGatewayReloadPlan", () => {
     "gateway.nodes.browser.mode",
     "gateway.nodes.browser.node",
     "gateway.push.apns.relay.baseUrl",
-    "gateway.publicOrigin",
     "mcp.apps.sandboxOrigin",
     "approvals.exec.enabled",
     "approvals.plugin.targets",
@@ -600,6 +599,10 @@ describe("buildGatewayReloadPlan", () => {
     },
     {
       path: "mcp.servers.context7.command",
+      expected: { disposeMcpRuntimes: true },
+    },
+    {
+      path: "gateway.publicOrigin",
       expected: { disposeMcpRuntimes: true },
     },
     {
@@ -770,6 +773,21 @@ describe("buildGatewayReloadPlan", () => {
     expect(plan.restartChannels).toEqual(new Set(["telegram"]));
   });
 
+  it.each<[OpenClawConfig, OpenClawConfig]>([
+    [{}, { messages: { ackReactionScope: "all" } }],
+    [{ messages: { ackReactionScope: "all" } }, {}],
+    [{ messages: { ackReactionScope: "off" } }, { messages: { ackReactionScope: "all" } }],
+  ])(
+    "keeps running channels connected when acknowledgement scope changes: %j → %j",
+    (prev, next) => {
+      const paths = diffGatewayReloadPaths(prev, next, listConfigReloadRefinementPrefixes());
+      const plan = buildGatewayReloadPlan(paths);
+      expect(isNoopGatewayReloadPlan(plan)).toBe(true);
+      expect(plan.restartChannels).toEqual(new Set());
+      expect(plan.restartChannelAccounts).toEqual(new Map());
+    },
+  );
+
   const sharedChannelSettings = [
     {
       path: "tts",
@@ -817,12 +835,6 @@ describe("buildGatewayReloadPlan", () => {
       path: "messages.inbound",
       before: { messages: { inbound: { debounceMs: 100 } } },
       after: { messages: { inbound: { debounceMs: 500 } } },
-      empty: { messages: {} },
-    },
-    {
-      path: "messages.ackReactionScope",
-      before: { messages: { ackReactionScope: "group-mentions" } },
-      after: { messages: { ackReactionScope: "all" } },
       empty: { messages: {} },
     },
     {

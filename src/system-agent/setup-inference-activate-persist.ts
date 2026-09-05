@@ -2,6 +2,7 @@ import { isDeepStrictEqual } from "node:util";
 import type { AgentExecutionAuthBinding } from "../agents/execution-auth-binding.js";
 import { applyAutoLocalModelLean } from "../config/local-model-lean-auto.js";
 import { applyMergePatch } from "../config/merge-patch.js";
+import { resolveAgentModelPrimaryValue } from "../config/model-input.js";
 import {
   attachRuntimeConfigWriteApplication,
   createRuntimeConfigWriteApplication,
@@ -126,7 +127,7 @@ export async function persistActivatedSetupInference(input: {
   const stageCandidate = (
     current: OpenClawConfig,
     configKind: "runtime" | "source",
-  ): OpenClawConfig => {
+  ): { config: OpenClawConfig; autoLocalModelLeanApplied: boolean } => {
     let next = codexPluginPatch === undefined ? current : stripPendingPluginInstallRecords(current);
     if (plan.manualAuth) {
       next = applyManualAuthConfig(
@@ -149,21 +150,18 @@ export async function persistActivatedSetupInference(input: {
       }
       next = enabledCodex.config;
     }
-    next = applyAutoLocalModelLean({
+    const autoLocalModelLean = applyAutoLocalModelLean({
       config: next,
       providerId: testPlan.provider,
       modelRef: plan.modelRef,
-    }).config;
-    next = selectModel ? selectModel(next) : next;
-    if (!pendingCodexInstall) {
-      return next;
-    }
+      previousModelRef: resolveAgentModelPrimaryValue(current.agents?.defaults?.model),
+    });
+    next = selectModel ? selectModel(autoLocalModelLean.config) : autoLocalModelLean.config;
     return {
-      ...next,
-      plugins: {
-        ...next.plugins,
-        installs: { codex: pendingCodexInstall },
-      },
+      config: pendingCodexInstall
+        ? { ...next, plugins: { ...next.plugins, installs: { codex: pendingCodexInstall } } }
+        : next,
+      autoLocalModelLeanApplied: autoLocalModelLean.enabled,
     };
   };
   // Pending install records are probe-only discovery input. The config
@@ -171,12 +169,14 @@ export async function persistActivatedSetupInference(input: {
   // so post-write reconciliation must compare against the stripped route
   // and verify the exact index record separately below.
   const persistedRoute = pendingCodexInstall
-    ? await projectRoute(stripPendingPluginInstallRecords(stageCandidate(cfg, "runtime")))
+    ? await projectRoute(stripPendingPluginInstallRecords(stageCandidate(cfg, "runtime").config))
     : verifiedRoute;
   // Runtime config may materialize provider defaults that are intentionally
   // absent from authored config. Compare source writes against the candidate
   // produced from the original source shape, without ignoring concurrent rows.
-  const expectedSourceCandidateRoute = await projectRoute(stageCandidate(sourceCfg, "source"));
+  const expectedSourceCandidateRoute = await projectRoute(
+    stageCandidate(sourceCfg, "source").config,
+  );
   // Resolve every fallible config-commit dependency before writing a
   // credential into the real agent store. From this point onward, any
   // failure is inside the rollback boundary below.
@@ -188,7 +188,7 @@ export async function persistActivatedSetupInference(input: {
     throwIfSetupInferenceCancelled(params);
     await params.beforePersistentEffect?.();
     throwIfSetupInferenceCancelled(params);
-    const initialCandidate = stageCandidate(cfg, "runtime");
+    const initialCandidate = stageCandidate(cfg, "runtime").config;
     const initialRoute = await projectRoute(initialCandidate);
     const resolvedRoute = await resolveRoute(initialCandidate);
     if (
@@ -252,7 +252,7 @@ export async function persistActivatedSetupInference(input: {
         const latestRuntime = context.snapshot.runtimeConfig ?? context.snapshot.config;
         // Validate that the candidate is still admissible before reporting
         // broader route drift, so policy revocations retain their actionable error.
-        const stagedRuntime = stageCandidate(latestRuntime, "runtime");
+        const stagedRuntime = stageCandidate(latestRuntime, "runtime").config;
         const latestBaseline = await projectRoute(latestRuntime);
         if (!sameDefaultInferenceRoute(latestBaseline, baselineRoute)) {
           throw new Error(
@@ -299,12 +299,7 @@ export async function persistActivatedSetupInference(input: {
             "The authored target model metadata changed during its live inference test, so the verified candidate was not saved. Review the current model settings and retry.",
           );
         }
-        const autoLocalModelLean = applyAutoLocalModelLean({
-          config: current,
-          providerId: testPlan.provider,
-          modelRef: plan.modelRef,
-        });
-        const nextConfig = stageCandidate(current, "source");
+        const { config: nextConfig, autoLocalModelLeanApplied } = stageCandidate(current, "source");
         const nextRouteProjection = await projectRoute(nextConfig);
         const nextResolvedRoute = await resolveRoute(nextConfig);
         if (
@@ -328,7 +323,7 @@ export async function persistActivatedSetupInference(input: {
         throwIfSetupInferenceCancelled(params);
         params.onCommitStarted?.(current);
         commitMayHaveStarted = true;
-        state.autoLocalModelLeanApplied = autoLocalModelLean.enabled;
+        state.autoLocalModelLeanApplied = autoLocalModelLeanApplied;
         return { nextConfig };
       },
     });
