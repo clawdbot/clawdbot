@@ -3240,20 +3240,12 @@ describe("chrome MCP page parsing", () => {
   it("honors timeoutMs for ephemeral availability probes", async () => {
     vi.useFakeTimers();
     const closeMock = vi.fn().mockResolvedValue(undefined);
-    const factory: ChromeMcpSessionFactory = async () =>
-      ({
-        client: {
-          callTool: vi.fn(),
-          listTools: vi.fn(),
-          close: closeMock,
-          connect: vi.fn(),
-        },
-        transport: {
-          pid: 123,
-        },
-        closeTransport: closeMock,
-        ready: new Promise<void>(() => {}),
-      }) as unknown as ChromeMcpSession;
+    const factory: ChromeMcpSessionFactory = async () => {
+      const session = createFakeSession();
+      session.client.close = closeMock;
+      session.ready = new Promise<void>(() => {});
+      return session;
+    };
     setChromeMcpSessionFactoryForTest(factory);
 
     const promise = ensureChromeMcpAvailable("chrome-live", undefined, {
@@ -3271,20 +3263,12 @@ describe("chrome MCP page parsing", () => {
   it("redacts home-relative profile labels from availability timeout diagnostics", async () => {
     vi.useFakeTimers();
     const closeMock = vi.fn().mockResolvedValue(undefined);
-    const factory: ChromeMcpSessionFactory = async () =>
-      ({
-        client: {
-          callTool: vi.fn(),
-          listTools: vi.fn(),
-          close: closeMock,
-          connect: vi.fn(),
-        },
-        transport: {
-          pid: 123,
-        },
-        closeTransport: closeMock,
-        ready: new Promise<void>(() => {}),
-      }) as unknown as ChromeMcpSession;
+    const factory: ChromeMcpSessionFactory = async () => {
+      const session = createFakeSession();
+      session.client.close = closeMock;
+      session.ready = new Promise<void>(() => {});
+      return session;
+    };
     setChromeMcpSessionFactoryForTest(factory);
 
     const homeDir = os.homedir();
@@ -3305,22 +3289,12 @@ describe("chrome MCP page parsing", () => {
 
   it("honors abort signals while waiting for ephemeral availability probes", async () => {
     const closeMock = vi.fn().mockResolvedValue(undefined);
-    const factory: ChromeMcpSessionFactory = vi.fn(
-      async () =>
-        ({
-          client: {
-            callTool: vi.fn(),
-            listTools: vi.fn(),
-            close: closeMock,
-            connect: vi.fn(),
-          },
-          transport: {
-            pid: 123,
-          },
-          closeTransport: closeMock,
-          ready: new Promise<void>(() => {}),
-        }) as unknown as ChromeMcpSession,
-    );
+    const factory: ChromeMcpSessionFactory = vi.fn(async () => {
+      const session = createFakeSession();
+      session.client.close = closeMock;
+      session.ready = new Promise<void>(() => {});
+      return session;
+    });
     setChromeMcpSessionFactoryForTest(factory);
 
     const ctrl = new AbortController();

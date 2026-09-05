@@ -437,6 +437,7 @@ export async function finishGatewayStartup(params: {
       }
     },
     getPluginMetadataSnapshot,
+    getPluginRegistry: () => runtime.pluginRuntime.registry,
     startChannel,
     stopChannel,
     getChannelAutostartSuppression: channelManager.getAutostartSuppression,

@@ -28,7 +28,11 @@ import {
 } from "../logging/subsystem.js";
 import { registerPluginHttpRoute } from "../plugins/http-registry.js";
 import { createEmptyPluginRegistry, type PluginRegistry } from "../plugins/registry.js";
-import { getActivePluginRegistry, setActivePluginRegistry } from "../plugins/runtime.js";
+import {
+  getActivePluginRegistry,
+  requireActivePluginChannelRegistry,
+  setActivePluginRegistry,
+} from "../plugins/runtime.js";
 import { createRuntimeChannel } from "../plugins/runtime/runtime-channel.js";
 import type { PluginRuntime } from "../plugins/runtime/types.js";
 import {
@@ -277,7 +281,7 @@ function createManager(options?: {
   tryRecoverAutostartSuppression?: () => boolean;
   isClosing?: () => boolean;
   getNativeApprovalRuntime?: () => GatewayNativeApprovalRuntime | undefined;
-  getPluginHttpRouteRegistry?: () => PluginRegistry;
+  getPluginRegistry?: () => PluginRegistry;
 }) {
   const log = createSubsystemLogger("gateway/server-channels-test");
   const channelLogs = { discord: log } as Record<ChannelId, SubsystemLogger>;
@@ -292,6 +296,7 @@ function createManager(options?: {
   }
   const manager = createChannelManager({
     getRuntimeConfig: () => options?.getRuntimeConfig?.() ?? {},
+    getPluginRegistry: options?.getPluginRegistry ?? requireActivePluginChannelRegistry,
     channelLogs,
     channelRuntimeEnvs,
     ...(options?.channelRuntime ? { channelRuntime: options.channelRuntime } : {}),
@@ -311,9 +316,6 @@ function createManager(options?: {
     ...(options?.isClosing ? { isClosing: options.isClosing } : {}),
     ...(options?.getNativeApprovalRuntime
       ? { getNativeApprovalRuntime: options.getNativeApprovalRuntime }
-      : {}),
-    ...(options?.getPluginHttpRouteRegistry
-      ? { getPluginHttpRouteRegistry: options.getPluginHttpRouteRegistry }
       : {}),
   });
   createdManagers.push({ channelIds, manager });
@@ -355,6 +357,103 @@ describe("server-channels auto restart", () => {
     }
     setActiveDegradedSecretOwners([]);
     setActivePluginRegistry(previousRegistry ?? createEmptyPluginRegistry());
+  });
+
+  it("keeps channel hooks and snapshots bound to their Gateway registry", async () => {
+    const joined: AbortSignal[] = [];
+    const createLifecycle = (id: ChannelId) => {
+      const startAccount = vi.fn(async ({ abortSignal }: ChannelGatewayContext<TestAccount>) => {
+        await new Promise<void>((resolve) => {
+          abortSignal.addEventListener("abort", () => resolve(), { once: true });
+        });
+        joined.push(abortSignal);
+      });
+      const stopAccount = vi.fn(async (_ctx: ChannelGatewayContext<TestAccount>) => undefined);
+      return {
+        plugin: createTestPlugin({ id, startAccount, stopAccount }),
+        startAccount,
+        stopAccount,
+      };
+    };
+    const a = createLifecycle("discord");
+    const b = createLifecycle("discord");
+    const bOnly = createLifecycle("slack");
+    const registryA = installTestRegistry(a.plugin);
+    const managerA = createManager({
+      channelIds: ["discord", "slack"],
+      getPluginRegistry: () => registryA,
+    });
+    await managerA.startChannels();
+    await waitForImmediate();
+    expect(a.startAccount).toHaveBeenCalledTimes(1);
+    const originalA = firstStartAccountContext(a.startAccount).abortSignal;
+
+    const registryB = installTestRegistry(b.plugin, bOnly.plugin);
+    const managerB = createManager({
+      channelIds: ["discord", "slack"],
+      getPluginRegistry: () => registryB,
+    });
+    try {
+      await managerB.startChannels();
+      await waitForImmediate();
+      expect(b.startAccount).toHaveBeenCalledTimes(1);
+      expect(bOnly.startAccount).toHaveBeenCalledTimes(1);
+      const originalB = firstStartAccountContext(b.startAccount).abortSignal;
+      const originalBOnly = firstStartAccountContext(bOnly.startAccount).abortSignal;
+      const snapshotChannels = Object.keys(
+        managerA.getRuntimeSnapshot().channelAccounts,
+      ).toSorted();
+
+      await managerA.stopChannel("discord", DEFAULT_ACCOUNT_ID, { manual: false });
+      const stopped = {
+        aHook: a.stopAccount.mock.calls.length,
+        bHook: b.stopAccount.mock.calls.length,
+        aHookReceivedOwnSignal: a.stopAccount.mock.calls[0]?.[0].abortSignal === originalA,
+        foreignHookReceivedASignal: b.stopAccount.mock.calls.some(
+          ([ctx]) => ctx.abortSignal === originalA,
+        ),
+        aAborted: originalA.aborted,
+        aJoined: joined.includes(originalA),
+        bAborted: originalB.aborted,
+        bOnlyAborted: originalBOnly.aborted,
+      };
+      await managerA.startChannels();
+      await waitForImmediate();
+      expect(
+        {
+          snapshotChannels,
+          stopped,
+          starts: [a, b, bOnly].map(({ startAccount }) => startAccount.mock.calls.length),
+          bStillLive: !originalB.aborted && !originalBOnly.aborted,
+        },
+        "channel manager borrowed another Gateway registry",
+      ).toEqual({
+        snapshotChannels: ["discord"],
+        stopped: {
+          aHook: 1,
+          bHook: 0,
+          aHookReceivedOwnSignal: true,
+          foreignHookReceivedASignal: false,
+          aAborted: true,
+          aJoined: true,
+          bAborted: false,
+          bOnlyAborted: false,
+        },
+        starts: [2, 1, 1],
+        bStillLive: true,
+      });
+    } finally {
+      await Promise.all(
+        [managerA, managerB].flatMap((manager) =>
+          ["discord", "slack"].map((id) => manager.stopChannel(id)),
+        ),
+      );
+      const signals = [a, b, bOnly].flatMap(({ startAccount }) =>
+        startAccount.mock.calls.map(([ctx]) => ctx.abortSignal),
+      );
+      expect(signals.every((signal) => signal.aborted && joined.includes(signal))).toBe(true);
+      expect(joined).toHaveLength(signals.length);
+    }
   });
 
   it("keeps a channel task admitted after the starting request finishes", async () => {
@@ -1908,7 +2007,8 @@ describe("server-channels auto restart", () => {
           },
         }),
       );
-      const manager = createManager({ getPluginHttpRouteRegistry: () => routeRegistry });
+      routeRegistry.channels = registry.channels;
+      const manager = createManager({ getPluginRegistry: () => routeRegistry });
       await manager.startChannel("discord", DEFAULT_ACCOUNT_ID);
       const stopping = manager
         .stopChannel("discord", DEFAULT_ACCOUNT_ID)
@@ -2014,7 +2114,7 @@ describe("server-channels auto restart", () => {
       const registry = installTestRegistry(
         createTestPlugin({ startAccount, stopAccount, isConfigured }),
       );
-      const manager = createManager({ getPluginHttpRouteRegistry: () => registry });
+      const manager = createManager({ getPluginRegistry: () => registry });
       const server = createTestGatewayServer({
         resolvedAuth: AUTH_NONE,
         overrides: {
@@ -2647,6 +2747,7 @@ describe("server-channels auto restart", () => {
     const channelRuntimeEnvs = {} as Record<ChannelId, RuntimeEnv>;
     const manager = createChannelManager({
       getRuntimeConfig: () => ({}),
+      getPluginRegistry: requireActivePluginChannelRegistry,
       channelLogs,
       channelRuntimeEnvs,
     });
@@ -2840,7 +2941,7 @@ describe("server-channels auto restart", () => {
       });
     });
     let registry = installTestRegistry(createTestPlugin({ startAccount }));
-    const manager = createManager({ getPluginHttpRouteRegistry: () => registry });
+    const manager = createManager({ getPluginRegistry: () => registry });
     const firstPause = manager.pauseChannelStarts();
     firstPause("rollback");
     await manager.startChannel("discord", "default");
@@ -2893,7 +2994,7 @@ describe("server-channels auto restart", () => {
       );
       let registry = installTestRegistry(createTestPlugin({ startAccount: originalStart }));
       const manager = createManager({
-        getPluginHttpRouteRegistry: () => registry,
+        getPluginRegistry: () => registry,
         startupTrace: {
           measure: async (name, run) => {
             const result = await run();

@@ -351,7 +351,8 @@ export function readPluginSdkSurfaceBudgets(env: NodeJS.ProcessEnv = process.env
       // +2: browser-safe Date timestamp validation and UTF-16 truncation primitives.
       // +3: capability catalog descriptors, entry factories, and native host context.
       // +2: canonical paragraph grouping and UTF-16 boundaries for channel-owned chunking.
-      4433,
+      // +1: retained runtime config reader preserves channel owner and scoped config identity.
+      4434,
       env,
     ),
     publicFunctionExports: readPluginSdkSurfaceBudgetEnv(
@@ -473,7 +474,8 @@ export function readPluginSdkSurfaceBudgets(env: NodeJS.ProcessEnv = process.env
       // +4: defineFeatureContract, createFeatureClient, defineFeaturePlugin, defineControlUiPlugin.
       // +2: browser-safe Date timestamp validation and UTF-16 truncation primitives.
       // +2: canonical paragraph grouping and UTF-16 boundaries for channel-owned chunking.
-      2618,
+      // +1: retained runtime config reader preserves channel owner and scoped config identity.
+      2619,
       env,
     ),
     publicDeprecatedExports: readPluginSdkSurfaceBudgetEnv(

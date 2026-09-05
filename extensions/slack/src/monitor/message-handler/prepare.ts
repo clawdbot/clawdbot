@@ -2,7 +2,6 @@
 import {
   resolveAckReaction,
   shouldAckReaction as shouldAckReactionGate,
-  type AckReactionScope,
 } from "openclaw/plugin-sdk/channel-feedback";
 import {
   buildChannelInboundEventContext,
@@ -1416,7 +1415,7 @@ export async function prepareSlackMessage(params: {
     Boolean(
       ackReaction &&
       shouldAckReactionGate({
-        scope: ctx.ackReactionScope as AckReactionScope | undefined,
+        scope: cfg.messages?.ackReactionScope,
         inboundEventKind,
         isDirect: isDirectMessage,
         isGroup: isRoomish,

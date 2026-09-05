@@ -350,17 +350,19 @@ describe("write-unified-entry-dts", () => {
         "tsdown.config.ts",
         `${fs.readFileSync(path.join(root, "tsdown.config.ts"), "utf8")}
 const selected = configs.find(config => config.name === ${JSON.stringify(last)});
+const register = selected.hooks;
+selected.hooks = async hooks => {
+  await register(hooks);
 ${
   failure === "missing successful receipt"
-    ? "selected.hooks = {};"
-    : `const done = selected.hooks["build:done"];
-selected.hooks = { "build:done": async (context) => {
-  await done(context);
-  if (fs.existsSync(".artifacts/mutate-cached-input")) {
-    fs.appendFileSync(${JSON.stringify(declarations[TSDOWN_NON_SDK_DTS_CONFIG_GROUPS[0]!]![0])}, "\\nexport const cachedRevision = 'after';\\n");
-  }
-}};`
+    ? '  hooks.clearHook("build:done");'
+    : `  hooks.hook("build:done", () => {
+    if (fs.existsSync(".artifacts/mutate-cached-input")) {
+      fs.appendFileSync(${JSON.stringify(declarations[TSDOWN_NON_SDK_DTS_CONFIG_GROUPS[0]!]![0])}, "\\nexport const cachedRevision = 'after';\\n");
+    }
+  });`
 }
+};
 `,
       );
     }

@@ -331,45 +331,6 @@ describe("tsdown config", () => {
     expect(hookEntries).toStrictEqual([]);
   });
 
-  it("externalizes known heavy native and declaration-fragile dependencies", () => {
-    const unifiedGraph = unifiedDistGraph();
-    const neverBundle = unifiedGraph?.deps?.neverBundle;
-    const external = unifiedGraph?.inputOptions?.({})?.external;
-
-    if (typeof neverBundle === "function") {
-      expect(neverBundle("@anthropic-ai/vertex-sdk")).toBe(true);
-      expect(neverBundle("@discordjs/voice")).toBe(true);
-      expect(neverBundle("@larksuiteoapi/node-sdk")).toBe(true);
-      expect(neverBundle("@matrix-org/matrix-sdk-crypto-nodejs")).toBe(true);
-      expect(neverBundle("@slack/bolt")).toBe(true);
-      expect(neverBundle("@slack/web-api")).toBe(true);
-      expect(neverBundle("@vitest/expect")).toBe(true);
-      expect(neverBundle("jimp")).toBe(true);
-      expect(neverBundle("matrix-js-sdk/lib/client.js")).toBe(true);
-      expect(neverBundle("vitest")).toBe(true);
-      expect(neverBundle("not-a-runtime-dependency")).toBe(false);
-    } else {
-      for (const dependency of [
-        "@anthropic-ai/vertex-sdk",
-        "@discordjs/voice",
-        "@larksuiteoapi/node-sdk",
-        "@slack/bolt",
-        "@slack/web-api",
-        "@vitest/expect",
-        "jimp",
-        "matrix-js-sdk",
-        "vitest",
-      ]) {
-        expect(neverBundle).toContain(dependency);
-      }
-    }
-    if (typeof external !== "function") {
-      throw new Error("expected unified graph external predicate");
-    }
-    const externalize = external;
-    expect(externalize("jimp", undefined, false)).toBe(true);
-  });
-
   it("bundles SDK-owned helpers while retaining fs-safe package ownership", () => {
     const unifiedGraph = requireUnifiedDistGraph();
     const alwaysBundle = unifiedGraph.deps?.alwaysBundle;

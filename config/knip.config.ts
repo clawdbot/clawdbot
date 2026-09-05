@@ -234,6 +234,8 @@ const rootEntries = [
   "src/mcp/plugin-tools-serve.ts!",
   // Dedicated tsdown entry exercised against built plugin singletons.
   "src/plugins/build-smoke-entry.ts!",
+  // Released Gateways still import this stable entry after an on-disk update.
+  "src/gateway/plugin-channel-reload-targets.ts!",
   // Package-script owners invoke these generated-artifact modules directly.
   "src/config/doc-baseline.ts!",
   "src/plugins/runtime-sidecar-paths-baseline.ts!",

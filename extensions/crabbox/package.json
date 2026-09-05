@@ -1,6 +1,6 @@
 {
   "name": "@openclaw/crabbox-provider",
-  "version": "2026.8.1",
+  "version": "2026.9.1",
   "private": true,
   "description": "OpenClaw cloud worker provider backed by the Crabbox CLI",
   "type": "module",

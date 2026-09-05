@@ -1,8 +1,7 @@
 import { resolveActiveEmbeddedRunSessionId } from "../agents/embedded-agent-runner/active-run-projections.js";
 import { fenceSessionSuspensionWritesForGatewayShutdown } from "../agents/session-suspension.js";
 import { getTotalPendingReplies } from "../auto-reply/reply/dispatcher-registry.js";
-import { listLoadedChannelPlugins } from "../channels/plugins/registry-loaded.js";
-import type { ChannelId } from "../channels/plugins/types.public.js";
+import { listLoadedChannelPluginsForRegistry } from "../channels/plugins/registry-loaded.js";
 import { getRuntimeConfig } from "../config/io.js";
 import { upsertPresence } from "../infra/system-presence.js";
 import { startDiagnosticHeartbeat, stopDiagnosticHeartbeat } from "../logging/diagnostic.js";
@@ -542,7 +541,9 @@ export async function prepareGatewayLifecycle(params: {
     // Startup may still publish cleanup owners while received work settles.
     // Resolve their handles only when the caller reaches final teardown.
     return async () => {
-      const channelIds = listLoadedChannelPlugins().map((plugin) => plugin.id as ChannelId);
+      const channelIds = listLoadedChannelPluginsForRegistry(pluginRuntime.registry).map(
+        (plugin) => plugin.id,
+      );
       const transport = transportBridge.current();
       await transport?.portalService.closeAll();
       await shutdownRuntime.completeGatewayClose(

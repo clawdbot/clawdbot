@@ -1842,7 +1842,6 @@ describe("slack prepareSlackMessage inbound contract", () => {
     });
     slackCtx.resolveUserName = async () => ({ name: "Alice" });
     slackCtx.resolveChannelName = async () => ({ name: "general", type: "channel" });
-    slackCtx.ackReactionScope = "group-all";
 
     const prepared = await prepareMessageWith(slackCtx, defaultAccount, {
       channel: "C123",
@@ -1883,7 +1882,6 @@ describe("slack prepareSlackMessage inbound contract", () => {
     });
     slackCtx.resolveUserName = async () => ({ name: "Alice" });
     slackCtx.resolveChannelName = async () => ({ name: "general", type: "channel" });
-    slackCtx.ackReactionScope = "all";
 
     const prepared = await prepareMessageWith(slackCtx, defaultAccount, {
       channel: "C123",
@@ -5067,6 +5065,7 @@ describe("prepareSlackMessage sender prefix", () => {
       cfg: {
         agents: { defaults: { model: "anthropic/claude-opus-4-5", workspace: "/tmp/openclaw" } },
         channels: { slack: params.channels },
+        messages: { ackReactionScope: "off" },
       },
       accountId: "default",
       botToken: "xoxb",
@@ -5101,7 +5100,6 @@ describe("prepareSlackMessage sender prefix", () => {
       threadInheritParent: false,
       slashCommand: params.slashCommand,
       textLimit: 2000,
-      ackReactionScope: "off",
       mediaMaxBytes: 1000,
       logger: { info: vi.fn(), warn: vi.fn() },
       shouldDropMismatchedSlackEvent: () => false,
