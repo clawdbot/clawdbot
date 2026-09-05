@@ -111,14 +111,19 @@ export async function prepareGatewayServerBootstrap(input: {
       import("../state/openclaw-state-db-contract.js"),
     ]),
   );
-  const databaseSchemas = await startupTrace.measure("state.schema-preflight", () =>
+  const inspectDatabaseSchemas = (signal?: AbortSignal) =>
     preflightOpenClawDatabaseSchemas({
+      signal,
       env: process.env,
       supportedVersions: {
         state: stateDatabase.OPENCLAW_STATE_SCHEMA_VERSION,
         agent: agentDatabase.OPENCLAW_AGENT_SCHEMA_VERSION,
       },
-    }),
+    });
+  const databaseSchemas = await startupTrace.measure("state.schema-preflight", () =>
+    opts.startupOperation
+      ? opts.startupOperation(inspectDatabaseSchemas)
+      : inspectDatabaseSchemas(),
   );
   if (databaseSchemas.incompatible.length > 0) {
     for (const database of databaseSchemas.incompatible) {

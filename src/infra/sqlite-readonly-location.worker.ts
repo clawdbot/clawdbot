@@ -12,6 +12,7 @@ import {
 async function runWorker(): Promise<void> {
   const mode = process.argv[3];
   const pathname = process.argv[4];
+  const stagingRoot = process.argv[5];
   if ((mode !== "sync" && mode !== "async") || !pathname) {
     process.exitCode = 1;
     process.stdout.write(
@@ -25,8 +26,8 @@ async function runWorker(): Promise<void> {
   try {
     const prepared =
       mode === "sync"
-        ? prepareSqliteReadOnlyLocationSyncInProcess(pathname)
-        : await prepareSqliteReadOnlyLocationInProcess(pathname);
+        ? prepareSqliteReadOnlyLocationSyncInProcess(pathname, stagingRoot)
+        : await prepareSqliteReadOnlyLocationInProcess(pathname, stagingRoot);
     process.stdout.write(JSON.stringify({ ok: true, location: prepared.location }));
   } catch (error) {
     process.exitCode = 1;
