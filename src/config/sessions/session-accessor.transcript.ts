@@ -1,4 +1,5 @@
 import { safeParseJsonRecord } from "@openclaw/normalization-core";
+import { publishTranscriptRewriteSync } from "./session-accessor.sqlite-branch-rewrite.js";
 import { readTranscriptRawDelta } from "./session-accessor.sqlite-delta.js";
 import { resolveSessionKeyBySessionId as resolveTranscriptSessionKeyBySessionId } from "./session-accessor.sqlite-entry.js";
 import { publishTranscriptUpdate } from "./session-accessor.sqlite-events.js";
@@ -47,6 +48,7 @@ export {
   appendTranscriptEventSync,
   appendTranscriptMessage,
   appendTranscriptMessageSync,
+  publishTranscriptRewriteSync,
   findTranscriptEvent,
   hasSessionTranscriptMessage,
   inspectTranscriptEventsSync,

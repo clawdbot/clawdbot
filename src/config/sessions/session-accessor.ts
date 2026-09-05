@@ -256,6 +256,7 @@ export {
   loadTranscriptTailEventsSync,
   persistCompactionBoundaryWithSessionEntrySync,
   preflightSessionTranscriptForManualCompact,
+  publishTranscriptRewriteSync,
   publishTranscriptUpdate,
   readLatestTranscriptAssistantText,
   readTranscriptEventAtSeqSync,

@@ -1,6 +1,10 @@
 /** Rewrites transcript entries by branching and re-appending the active suffix. */
 import { stripCompactionReplayCheckpoint } from "@openclaw/ai/transports";
-import { withSessionPendingInputRelocation } from "../../config/sessions/session-accessor.js";
+import {
+  loadTranscriptEventsSync,
+  publishTranscriptRewriteSync,
+  withSessionPendingInputRelocation,
+} from "../../config/sessions/session-accessor.js";
 import type {
   TranscriptRewriteReplacement,
   TranscriptRewriteResult,
@@ -148,7 +152,15 @@ export function rewriteTranscriptEntriesInSessionManager(params: {
     };
   }
 
-  const branch = params.sessionManager.getBranch();
+  const persistenceTarget = params.sessionManager.getSessionTarget();
+  const expectedEvents = persistenceTarget
+    ? loadTranscriptEventsSync(persistenceTarget)
+    : undefined;
+  // Prepare on a detached tree so partial replay never mutates live memory or storage.
+  const rewriteManager = expectedEvents
+    ? SessionManager.fromEntries(expectedEvents, params.sessionManager.getCwd())
+    : params.sessionManager;
+  const branch = rewriteManager.getBranch();
   if (branch.length === 0) {
     return {
       changed: false,
@@ -182,15 +194,22 @@ export function rewriteTranscriptEntriesInSessionManager(params: {
     };
   }
 
+  const activeState = {
+    leafId: rewriteManager.getLeafId(),
+    appendParentId: rewriteManager.getAppendParentId(),
+    ...(rewriteManager.getAppendMode() ? { appendMode: rewriteManager.getAppendMode() } : {}),
+  };
+  const existingEntryCount = rewriteManager.getEntries().length;
+
   if (!firstMatchedEntry.parentId) {
-    params.sessionManager.resetLeaf();
+    rewriteManager.resetLeaf();
   } else {
-    params.sessionManager.branch(firstMatchedEntry.parentId);
+    rewriteManager.branch(firstMatchedEntry.parentId);
   }
 
   // Maintenance rewrites should preserve the exact requested history without
   // re-running persistence hooks or size truncation on replayed messages.
-  const rawAppendMessage = getRawSessionAppendMessage(params.sessionManager);
+  const rawAppendMessage = getRawSessionAppendMessage(rewriteManager);
   // Deliberate copies retain ingress keys without adopting their old branch entries.
   const appendMessage: SessionManagerLike["appendMessage"] = (message) =>
     rawAppendMessage(message, { idempotencyLookup: "caller-checked" });
@@ -201,7 +220,7 @@ export function rewriteTranscriptEntriesInSessionManager(params: {
     const newEntryId =
       replacement === undefined
         ? appendBranchEntry({
-            sessionManager: params.sessionManager,
+            sessionManager: rewriteManager,
             entry,
             rewrittenEntryIds,
             appendMessage,
@@ -217,6 +236,25 @@ export function rewriteTranscriptEntriesInSessionManager(params: {
             );
           })();
     rewrittenEntryIds.set(entry.id, newEntryId);
+  }
+
+  if (persistenceTarget && expectedEvents) {
+    const finalLeafId = rewriteManager.getLeafId();
+    if (!finalLeafId) {
+      throw new Error("Transcript rewrite did not produce a final leaf");
+    }
+    const outcome = publishTranscriptRewriteSync(persistenceTarget, {
+      active: activeState,
+      entries: rewriteManager.getEntries().slice(existingEntryCount),
+      expectedEvents,
+      finalLeafId,
+    });
+    if (!outcome.ok || !outcome.value) {
+      throw new Error("Session transcript rewrite was not persisted", {
+        cause: outcome.ok ? undefined : outcome.error,
+      });
+    }
+    params.sessionManager.reloadPersistedTranscript();
   }
 
   return {

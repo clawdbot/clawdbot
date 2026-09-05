@@ -56,7 +56,7 @@ import { createSessionTranscriptHeader } from "./transcript-header.js";
 
 type TranscriptAppendOptions = {
   allowStoredAlias?: boolean;
-  idempotencyKeyMode?: "dedupe" | "preserve-owner" | "relocate-owner";
+  idempotencyKeyMode?: "dedupe" | "preserve-owner" | "relocate-owner" | "stage";
   onProjectionReconcileNeeded?: () => void;
   scheduleProjectionReconcile?: boolean;
   touchMutation?: boolean;
@@ -196,7 +196,8 @@ function appendTranscriptEvent(
       );
     }
     identity.messageIdempotencyKey =
-      idempotencyKeyOwner && options.idempotencyKeyMode !== "relocate-owner"
+      options.idempotencyKeyMode === "stage" ||
+      (idempotencyKeyOwner && options.idempotencyKeyMode !== "relocate-owner")
         ? null
         : identity.messageIdempotencyKey;
     cursor.insertIdentity ??= createTranscriptIdentityInserter(database, scope.sessionId, true);
@@ -580,6 +581,41 @@ function readIdempotencyKeyOwner(
       .limit(1),
   );
   return row ? { eventId: row.event_id, seq: row.seq } : undefined;
+}
+
+/** Transfers keyed-message ownership only when a staged branch becomes active. */
+export function claimStagedTranscriptIdempotencyKeysInTransaction(
+  database: OpenClawAgentDatabase,
+  sessionId: string,
+  events: readonly TranscriptEvent[],
+): void {
+  const db = getSessionKysely(database.db);
+  for (const event of events) {
+    const identity = readTranscriptEventIdentity(event);
+    const idempotencyKey = identity?.messageIdempotencyKey;
+    if (!identity || !idempotencyKey) {
+      continue;
+    }
+    const currentOwner = readIdempotencyKeyOwner(database, sessionId, idempotencyKey);
+    if (currentOwner?.eventId !== identity.eventId) {
+      executeSqliteQuerySync(
+        database.db,
+        db
+          .updateTable("transcript_event_identities")
+          .set({ message_idempotency_key: null })
+          .where("session_id", "=", sessionId)
+          .where("message_idempotency_key", "=", idempotencyKey),
+      );
+    }
+    executeSqliteQuerySync(
+      database.db,
+      db
+        .updateTable("transcript_event_identities")
+        .set({ message_idempotency_key: idempotencyKey })
+        .where("session_id", "=", sessionId)
+        .where("event_id", "=", identity.eventId),
+    );
+  }
 }
 
 function readTranscriptMessageByIdempotencyKey(

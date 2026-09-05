@@ -13,6 +13,7 @@ import {
   loadTranscriptEvents,
   readActiveTranscriptEntryAnchor,
   replaceSessionEntry,
+  resolveSessionTranscriptDatabasePath,
 } from "../../config/sessions/session-accessor.js";
 import {
   bindSessionPendingInputSources,
@@ -22,6 +23,7 @@ import {
 } from "../../config/sessions/session-accessor.pending-inputs.js";
 import { waitForSessionTranscriptProjection } from "../../config/sessions/session-transcript-reconcile.js";
 import type { SessionEntry } from "../../config/sessions/types.js";
+import { openOpenClawAgentDatabase } from "../../state/openclaw-agent-db.js";
 
 let rewriteTranscriptEntriesInSessionManager: typeof import("./transcript-rewrite.js").rewriteTranscriptEntriesInSessionManager;
 let installSessionToolResultGuard: typeof import("../session-tool-result-guard.js").installSessionToolResultGuard;
@@ -521,9 +523,6 @@ describe("rewriteTranscriptEntriesInSessionManager", () => {
       expect(result.changed).toBe(true);
       const storedEvents = await loadTranscriptEvents(target);
       expect(storedEvents.slice(0, originalRows.length)).toEqual(originalRows);
-      expect(storedEvents).toHaveLength(
-        originalRows.length + originalBranch.length - replacementIndex,
-      );
       const reopened = SessionManager.open(target, dir);
       const activeBranch = reopened.getBranch();
       expect(getBranchMessages(reopened)).toEqual(
@@ -562,4 +561,51 @@ describe("rewriteTranscriptEntriesInSessionManager", () => {
       }
     },
   );
+
+  it("keeps the complete active branch when suffix replay is interrupted", async () => {
+    const dir = tempDirs.make("openclaw-transcript-rewrite-interrupted-");
+    const storePath = path.join(dir, "sessions.json");
+    const target = {
+      agentId: "main",
+      sessionId: "interrupted-runtime-rewrite",
+      sessionKey: "agent:main:interrupted-runtime-rewrite",
+      storePath,
+    };
+    await replaceSessionEntry({ sessionKey: target.sessionKey, storePath }, {
+      sessionId: target.sessionId,
+      updatedAt: 10,
+    } as SessionEntry);
+    const sessionManager = SessionManager.open(target, dir);
+    const entryIds = appendSessionMessages(sessionManager, [
+      asAppendMessage({ role: "user", content: "run tool", timestamp: 1 }),
+      asAppendMessage(createToolResultReplacement("exec", "before rewrite", 2)),
+      asAppendMessage({
+        role: "assistant",
+        content: createTextContent("replay interruption sentinel"),
+        timestamp: 3,
+      }),
+    ]);
+    const originalMessages = getBranchMessages(sessionManager);
+    const database = openOpenClawAgentDatabase({
+      agentId: target.agentId,
+      path: resolveSessionTranscriptDatabasePath(target),
+    });
+    database.db.exec(`CREATE TRIGGER reject_interrupted_rewrite BEFORE INSERT ON transcript_events
+      WHEN json_extract(NEW.event_json, '$.message.content[0].text') = 'replay interruption sentinel'
+      BEGIN SELECT RAISE(ABORT, 'suffix replay interrupted'); END;`);
+
+    expect(() =>
+      rewriteTranscriptEntriesInSessionManager({
+        sessionManager,
+        replacements: [
+          {
+            entryId: expectDefined(entryIds[1], "tool result entry id"),
+            message: createToolResultReplacement("exec", "rewritten before interruption", 2),
+          },
+        ],
+      }),
+    ).toThrow("suffix replay interrupted");
+
+    expect(getBranchMessages(SessionManager.open(target, dir))).toEqual(originalMessages);
+  });
 });
