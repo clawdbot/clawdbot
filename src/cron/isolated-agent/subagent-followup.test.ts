@@ -567,7 +567,7 @@ describe("waitForDescendantSubagentSummary", () => {
     expect(result).toBe("Completed despite gateway error.");
   });
 
-  it("keeps synthesis grace within the original monotonic budget after a wall-clock step", async () => {
+  it("keeps active-descendant synthesis grace within the original monotonic budget after a wall-clock step", async () => {
     vi.useFakeTimers();
     const dateNow = vi.spyOn(Date, "now").mockReturnValue(1_000);
     const monotonicNow = vi
