@@ -26,6 +26,7 @@ import {
 } from "../../../plugins/installed-plugin-index-records.js";
 import { loadInstalledPluginIndex } from "../../../plugins/installed-plugin-index.js";
 import { readLegacyNpmPluginDeclaration } from "../../../plugins/legacy-npm-declaration.js";
+import { resolveRetainedManagedNpmInstallPackageInfo } from "../../../plugins/managed-npm-retention.js";
 import { loadManifestMetadataSnapshot } from "../../../plugins/manifest-contract-eligibility.js";
 import type { PluginPackageInstall } from "../../../plugins/manifest.js";
 import {
@@ -586,6 +587,8 @@ function collectInstalledPluginMissingRequiredDependencies(params: {
     }
     const status = buildPluginDependencyStatus({
       rootDir,
+      dependencyRootDir:
+        resolveRetainedManagedNpmInstallPackageInfo(rootDir)?.projectRoot ?? rootDir,
       ...normalizePluginDependencySpecs({
         dependencies: plugin.packageDependencies,
         optionalDependencies: plugin.packageOptionalDependencies,
