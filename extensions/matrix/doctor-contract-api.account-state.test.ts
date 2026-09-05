@@ -183,7 +183,6 @@ describe("Matrix account state Doctor migration", () => {
     fs.writeFileSync(archivedDatabasePath, rawFixture);
 
     const beforeRepairRowsSha256 = matrixStateRowsSha256(databasePath);
-    const archivedRowsSha256 = matrixStateRowsSha256(archivedDatabasePath);
     const staleStore = new SqliteBackedMatrixSyncStore(storageRootDir);
     await expect(staleStore.getSavedSyncToken()).resolves.toBe("cursor-a");
     await staleStore.setSyncData(matrixSyncResponse("cursor-after-repair"));
@@ -214,14 +213,7 @@ describe("Matrix account state Doctor migration", () => {
       "Migrated shared state audit event ledger → versioned message lifecycle schema",
     );
     expect(matrixStateRowsSha256(databasePath)).toBe(beforeRepairRowsSha256);
-    const archived = new DatabaseSync(archivedDatabasePath, { readOnly: true });
-    try {
-      expect(archived.prepare("PRAGMA user_version").get()).toEqual({ user_version: 1 });
-      expect(archived.prepare("PRAGMA integrity_check").get()).toEqual({ integrity_check: "ok" });
-    } finally {
-      archived.close();
-    }
-    expect(matrixStateRowsSha256(archivedDatabasePath)).toBe(archivedRowsSha256);
+    expect(fs.readFileSync(archivedDatabasePath)).toEqual(rawFixture);
 
     const repairedStore = new SqliteBackedMatrixSyncStore(storageRootDir);
     await expect(repairedStore.getSavedSyncToken()).resolves.toBe("cursor-a");

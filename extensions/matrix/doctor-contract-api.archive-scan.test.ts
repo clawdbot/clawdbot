@@ -16,6 +16,8 @@ import {
 import type { PluginDoctorStateMigrationContext } from "openclaw/plugin-sdk/runtime-doctor-migrations";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { stateMigrations } from "./doctor-contract-api.js";
+import { SqliteBackedMatrixSyncStore } from "./src/matrix/client/file-sync-store.js";
+import { createMatrixInboundEventDeduper } from "./src/matrix/monitor/inbound-dedupe.js";
 import { installMatrixTestRuntime } from "./src/test-runtime.js";
 import { useAutoCleanupTempDirTracker } from "./test-support.js";
 
@@ -61,6 +63,54 @@ function writeLegacySyncCache(storageRootDir: string, nextBatch: string): void {
   );
 }
 
+function createStateRoots(stateDir: string) {
+  const matrixRoot = path.join(stateDir, "matrix");
+  const tokenParent = path.join(matrixRoot, "accounts", "ops", "matrix.example.org__bot");
+  return {
+    activeRoots: [
+      path.join(matrixRoot, "accounts", "legacy"),
+      path.join(
+        matrixRoot,
+        "accounts",
+        "sync-cache-backup",
+        "matrix.example.org__bot",
+        "0123456789abcdef",
+      ),
+    ],
+    excludedRoots: [
+      "0123456789abcdef.apr24-cutover-20260424",
+      "fedcba9876543210.reset-20260720",
+      "0123456789abcdef.pre-stable-token-20260716",
+      "fedcba9876543210.migrated",
+      "sync-cache-backup",
+      "_archive",
+    ]
+      .map((name) => path.join(tokenParent, name))
+      .concat(
+        ["crypto-backup-20260720", ".apr24-cutover-20260424", "operator-copy"].map((name) =>
+          path.join(
+            matrixRoot,
+            name,
+            "accounts",
+            "ops",
+            "matrix.example.org__bot",
+            "fedcba9876543210",
+          ),
+        ),
+      ),
+  };
+}
+
+function trackVisitedDirectories(): string[] {
+  const visitedDirs: string[] = [];
+  const originalReaddir = fsPromises.readdir.bind(fsPromises);
+  vi.spyOn(fsPromises, "readdir").mockImplementation(async (...args) => {
+    visitedDirs.push(path.resolve(String(args[0])));
+    return originalReaddir(...args);
+  });
+  return visitedDirs;
+}
+
 function expectRootNotVisited(visitedDirs: string[], storageRootDir: string): void {
   const root = path.resolve(storageRootDir);
   expect(
@@ -85,67 +135,12 @@ describe("matrix doctor archive scan boundaries", () => {
 
   it("keeps archive-like account IDs active while excluding token-root archives", async () => {
     const stateDir = tempDirs.make("openclaw-matrix-doctor-");
-    const matrixRoot = path.join(stateDir, "matrix");
-    const activeRoots = [
-      path.join(matrixRoot, "accounts", "legacy"),
-      path.join(
-        matrixRoot,
-        "accounts",
-        "sync-cache-backup",
-        "matrix.example.org__bot",
-        "0123456789abcdef",
-      ),
-    ];
-    const excludedRoots = [
-      path.join(
-        matrixRoot,
-        "accounts",
-        "ops",
-        "matrix.example.org__bot",
-        "0123456789abcdef.apr24-cutover-20260424",
-      ),
-      path.join(
-        matrixRoot,
-        "accounts",
-        "ops",
-        "matrix.example.org__bot",
-        "fedcba9876543210.reset-20260720",
-      ),
-      path.join(matrixRoot, "accounts", "ops", "matrix.example.org__bot", "sync-cache-backup"),
-      path.join(
-        matrixRoot,
-        "crypto-backup-20260720",
-        "accounts",
-        "ops",
-        "matrix.example.org__bot",
-        "fedcba9876543210",
-      ),
-      path.join(
-        matrixRoot,
-        "accounts",
-        "ops",
-        "matrix.example.org__bot",
-        "fedcba9876543210.migrated",
-      ),
-      path.join(
-        matrixRoot,
-        "operator-copy",
-        "accounts",
-        "ops",
-        "matrix.example.org__bot",
-        "fedcba9876543210",
-      ),
-    ];
+    const { activeRoots, excludedRoots } = createStateRoots(stateDir);
     for (const [index, storageRootDir] of [...activeRoots, ...excludedRoots].entries()) {
       writeLegacySyncCache(storageRootDir, `legacy-token-${index}`);
     }
 
-    const visitedDirs: string[] = [];
-    const originalReaddir = fsPromises.readdir.bind(fsPromises);
-    vi.spyOn(fsPromises, "readdir").mockImplementation(async (...args) => {
-      visitedDirs.push(path.resolve(String(args[0])));
-      return originalReaddir(...args);
-    });
+    const visitedDirs = trackVisitedDirectories();
 
     const migration = migrationById("matrix-sync-cache-json-to-plugin-state");
     await expect(migration.detectLegacyState(createMigrationParams(stateDir))).resolves.toEqual({
@@ -157,7 +152,9 @@ describe("matrix doctor archive scan boundaries", () => {
 
     expect(result.warnings).toEqual([]);
     expect(result.changes).toHaveLength(activeRoots.length * 2);
-    for (const storageRootDir of activeRoots) {
+    for (const [index, storageRootDir] of activeRoots.entries()) {
+      const store = new SqliteBackedMatrixSyncStore(storageRootDir);
+      await expect(store.getSavedSyncToken()).resolves.toBe(`legacy-token-${index}`);
       expect(fs.existsSync(path.join(storageRootDir, "bot-storage.json"))).toBe(false);
       expect(fs.existsSync(path.join(storageRootDir, "bot-storage.json.migrated"))).toBe(true);
     }
@@ -169,42 +166,7 @@ describe("matrix doctor archive scan boundaries", () => {
 
   it("imports dedupe state for archive-like account IDs without opening token archives", async () => {
     const stateDir = tempDirs.make("openclaw-matrix-doctor-");
-    const matrixRoot = path.join(stateDir, "matrix");
-    const activeRoots = [
-      path.join(matrixRoot, "accounts", "legacy"),
-      path.join(
-        matrixRoot,
-        "accounts",
-        "sync-cache-backup",
-        "matrix.example.org__bot",
-        "0123456789abcdef",
-      ),
-    ];
-    const archivedRoots = [
-      path.join(
-        matrixRoot,
-        "accounts",
-        "home",
-        "matrix.example.org__bot",
-        "0123456789abcdef.pre-stable-token-20260716",
-      ),
-      path.join(matrixRoot, "accounts", "home", "matrix.example.org__bot", "sync-cache-backup"),
-      path.join(
-        matrixRoot,
-        ".apr24-cutover-20260424",
-        "accounts",
-        "home",
-        "matrix.example.org__bot",
-        "fedcba9876543210",
-      ),
-      path.join(
-        matrixRoot,
-        "accounts",
-        "home",
-        "matrix.example.org__bot",
-        "fedcba9876543210.migrated",
-      ),
-    ];
+    const { activeRoots, excludedRoots } = createStateRoots(stateDir);
     const now = Date.now();
     for (const [index, storageRootDir] of activeRoots.entries()) {
       fs.mkdirSync(storageRootDir, { recursive: true });
@@ -220,7 +182,7 @@ describe("matrix doctor archive scan boundaries", () => {
         JSON.stringify({ accountId: index === 0 ? "sync-cache-backup" : "legacy" }),
       );
     }
-    for (const storageRootDir of archivedRoots) {
+    for (const storageRootDir of excludedRoots) {
       fs.mkdirSync(path.join(storageRootDir, "state"), { recursive: true });
       fs.writeFileSync(
         path.join(storageRootDir, "state", "openclaw.sqlite"),
@@ -235,12 +197,7 @@ describe("matrix doctor archive scan boundaries", () => {
       );
     }
 
-    const visitedDirs: string[] = [];
-    const originalReaddir = fsPromises.readdir.bind(fsPromises);
-    vi.spyOn(fsPromises, "readdir").mockImplementation(async (...args) => {
-      visitedDirs.push(path.resolve(String(args[0])));
-      return originalReaddir(...args);
-    });
+    const visitedDirs = trackVisitedDirectories();
 
     const result = await migrationById(
       "matrix-inbound-dedupe-to-claimable-dedupe",
@@ -255,7 +212,16 @@ describe("matrix doctor archive scan boundaries", () => {
       ),
       "Recorded Matrix inbound dedupe migration completion (0 SQLite roots, 2 JSON roots scanned)",
     ]);
-    for (const storageRootDir of archivedRoots) {
+    for (const [index, accountId] of ["sync-cache-backup", "legacy"].entries()) {
+      const deduper = createMatrixInboundEventDeduper({
+        auth: { accountId },
+        env: { OPENCLAW_STATE_DIR: stateDir },
+      });
+      await expect(
+        deduper.claim({ roomId: "!room:example.org", eventId: `$active-${index}` }),
+      ).resolves.toEqual({ kind: "duplicate" });
+    }
+    for (const storageRootDir of excludedRoots) {
       expect(fs.existsSync(path.join(storageRootDir, "inbound-dedupe.json"))).toBe(true);
       expect(fs.readFileSync(path.join(storageRootDir, "state", "openclaw.sqlite"), "utf8")).toBe(
         "archived SQLite sentinel must not be opened",
