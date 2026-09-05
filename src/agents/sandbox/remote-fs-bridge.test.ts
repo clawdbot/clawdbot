@@ -112,6 +112,11 @@ describe("remote sandbox fs bridge", () => {
         const filePath = "quoted ' \" $() `literal`.bin";
         const payload = Buffer.from([0, 255, 128, 10, 13, 39, 34, 36, 96]);
         const createFileExclusive = bridge.createFileExclusive!.bind(bridge);
+        if (!bridge.readDirectory) {
+          throw new Error("The remote bridge must support directory discovery.");
+        }
+        await expect(bridge.readDirectory({ filePath: "." })).resolves.toEqual([]);
+        await expect(bridge.readDirectory({ filePath: "../" })).rejects.toThrow();
         if (workspaceAccess === "ro") {
           await expect(createFileExclusive({ filePath, data: payload })).rejects.toThrow(
             "read-only",
@@ -122,6 +127,9 @@ describe("remote sandbox fs bridge", () => {
 
         await expect(createFileExclusive({ filePath, data: payload })).resolves.toBe("created");
         await expect(bridge.readFile({ filePath })).resolves.toEqual(payload);
+        await expect(bridge.readDirectory({ filePath: "." })).resolves.toEqual([
+          { name: filePath, isDirectory: false },
+        ]);
         await expect(
           createFileExclusive({ filePath, data: Buffer.alloc(1_048_576) }),
         ).resolves.toBe("exists");

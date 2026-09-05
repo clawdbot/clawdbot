@@ -22,6 +22,7 @@ import {
   buildAgentMainSessionKey,
   canonicalUiSessionKeyForPersistence,
   normalizeSessionKeyForUiComparison,
+  parseAgentSessionKey,
   resolveAgentIdFromSessionKey,
   resolveUiConversationIdentity,
 } from "../../lib/sessions/session-key.ts";
@@ -302,6 +303,9 @@ export abstract class ChatPaneBoard extends ChatPaneHistory {
         ${error ? t("dashboardDocument.loadFailed", { error }) : t("common.loading")}
       </div>`;
     }
+    // Only the loaded board acknowledgment supplies a missing owner; its display key
+    // must not replace the original session target (notably global versus a literal key).
+    session.agentId ??= parseAgentSessionKey(board.snapshot.sessionKey)?.agentId;
     const boardActive = isSidebarSlotVisible(layout, "dashboard") && this.visuallyPresented;
     const renderSurface = (active: boolean) =>
       renderBoardSessionSurface({

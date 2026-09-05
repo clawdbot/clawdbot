@@ -134,7 +134,7 @@ describe("chat history model selection defaults", () => {
   });
 
   it.each(["chat.history", "chat.startup"] as const)(
-    "%s projects the non-primary agent's resolved selection target",
+    "%s keeps selection session-only for an agent with an explicit default",
     async (method) => {
       await withOpenClawTestState({ scenario: "minimal" }, async (state) => {
         const cfg = {
@@ -173,7 +173,7 @@ describe("chat history model selection defaults", () => {
         });
 
         const response = expectDefined(asOptionalRecord(result), "history response");
-        expect(response.defaults).toMatchObject({ modelSelectionTarget: "agent" });
+        expect(response.defaults).toMatchObject({ modelSelectionTarget: "session" });
       });
     },
   );

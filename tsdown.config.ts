@@ -187,6 +187,7 @@ function workerDeployBuildConfig(): UserConfig {
     env,
     define: {
       WORKER_DEPLOY_BUILD: "true",
+      SEALED_RUNTIME_BUILD: "true",
       WORKER_DEPLOY_VERSION: JSON.stringify(workerDeployVersion),
     },
     alias: {

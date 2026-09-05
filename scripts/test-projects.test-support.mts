@@ -585,14 +585,19 @@ const BROAD_CHANGED_FALLBACK_PATTERNS = [
 ];
 const PRECISE_SOURCE_TEST_TARGETS = new Map<string, string[]>([
   [
-    "patches/vitest@4.1.11.patch",
+    "patches/vitest@5.0.0.patch",
     [
       "test/scripts/run-vitest-profile.test.ts",
       "test/scripts/run-vitest-state-cleanup.test.ts",
       "test/scripts/vitest-fork-shutdown.test.ts",
+      "test/scripts/vitest-runner-task-updates.test.ts",
     ],
   ],
   ["test/fixtures/vitest-fork-shutdown.mjs", ["test/scripts/vitest-fork-shutdown.test.ts"]],
+  ...["clock", "runner"].map<[string, string[]]>((part) => [
+    `test/fixtures/vitest-runner-task-updates.${part}.mjs`,
+    ["test/scripts/vitest-runner-task-updates.test.ts"],
+  ]),
   ...[
     "src/system-agent/setup-inference-persist.ts",
     "src/agents/embedded-agent-runner/run/attempt-dispatch-preparation.ts",

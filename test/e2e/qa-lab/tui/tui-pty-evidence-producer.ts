@@ -48,7 +48,7 @@ export type TuiPtyProducerOptions = {
 };
 
 type VitestAssertionResult = {
-  fullName?: unknown;
+  ancestorTitles?: unknown;
   status?: unknown;
   title?: unknown;
 };
@@ -316,10 +316,15 @@ async function runProducerCommand(
 }
 
 function assertionName(assertion: VitestAssertionResult) {
-  if (typeof assertion.fullName === "string") {
-    return assertion.fullName;
+  // Native JSON fullName uses spaces; reproduce the v5 CLI's title-chain matching.
+  if (
+    typeof assertion.title === "string" &&
+    Array.isArray(assertion.ancestorTitles) &&
+    assertion.ancestorTitles.every((title) => typeof title === "string")
+  ) {
+    return [...assertion.ancestorTitles, assertion.title].join(" > ");
   }
-  return typeof assertion.title === "string" ? assertion.title : undefined;
+  return undefined;
 }
 
 async function canonicalizeReportedTestPath(repoRoot: string, reportedPath: string) {

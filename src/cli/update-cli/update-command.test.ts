@@ -693,7 +693,7 @@ describe("recoverInstalledLaunchAgentAfterUpdate", () => {
         running: false,
         env: recoveredEnv,
         command: null,
-        runtime: { status: "unknown", missingSupervision: true },
+        runtime: { status: "stopped" },
       }));
       const message =
         "Gateway LaunchAgent was installed but not loaded; re-bootstrapped launchd service.";

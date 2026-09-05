@@ -95,15 +95,18 @@ export async function prepareEmbeddedAttemptSystemPrompt(params: {
   });
   const resolveToolSchemaDirectoryPrompt = () =>
     params.toolSearchDirectoryEnabled
-      ? buildToolSchemaDirectoryPrompt({
-          config: attempt.config,
-          runtimeConfig: params.toolSearchRuntimeConfig,
-          agentId: params.sessionAgentId,
-          sessionKey: params.sandboxSessionKey,
-          sessionId: attempt.sessionId,
-          runId: attempt.runId,
-          catalogRef: params.toolSearchCatalogRef,
-        })
+      ? buildToolSchemaDirectoryPrompt(
+          {
+            config: attempt.config,
+            runtimeConfig: params.toolSearchRuntimeConfig,
+            agentId: params.sessionAgentId,
+            sessionKey: params.sandboxSessionKey,
+            sessionId: attempt.sessionId,
+            runId: attempt.runId,
+            catalogRef: params.toolSearchCatalogRef,
+          },
+          { contextTokenBudget: attempt.contextTokenBudget },
+        )
       : undefined;
 
   const toolSchemaDirectoryPrompt = resolveToolSchemaDirectoryPrompt();

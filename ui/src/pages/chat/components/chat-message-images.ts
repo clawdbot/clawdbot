@@ -370,6 +370,7 @@ function openMessageImage(
 class MessageImagesDirective extends Directive {
   private slots: { image: ImageBlock; key: symbol }[] = [];
   private scope = "";
+  private policyKey: string | undefined;
   private canonicalMessageKey: string | undefined;
   private localSubmission = false;
 
@@ -380,7 +381,6 @@ class MessageImagesDirective extends Directive {
       opts?.resourceBasePath,
       opts?.sessionKey,
       opts?.agentId,
-      opts?.policyKey,
     ]);
     // Custody keeps local ownership; imported history must end it even when
     // the outer row reuses the same submission key.
@@ -412,9 +412,19 @@ class MessageImagesDirective extends Directive {
           : slot?.image.factIndex === undefined
             ? slot?.key
             : undefined;
-      return { image, key: (continuing && previous) || Symbol("image-slot") };
+      // Workspace hydration does not replace uploaded pixels. Their resource
+      // still rechecks access; filesystem images discard the old presentation.
+      const preservePresentation =
+        this.policyKey === opts?.policyKey ||
+        isInlineImageSource(image.url) ||
+        isCanonicalInboundMediaSource(image.url);
+      return {
+        image,
+        key: (continuing && preservePresentation && previous) || Symbol("image-slot"),
+      };
     });
     this.scope = scope;
+    this.policyKey = opts?.policyKey;
     this.canonicalMessageKey = opts?.canonicalMessageKey;
     this.localSubmission =
       localSubmission &&

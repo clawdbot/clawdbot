@@ -11,7 +11,7 @@ import {
   loadPatternListFromEnv,
   relativizeScopedPatterns,
 } from "../test/vitest/vitest.pattern-file.ts";
-import { loadVitestExperimentalConfig } from "../test/vitest/vitest.performance-config.ts";
+import { loadVitestPerformanceConfig } from "../test/vitest/vitest.performance-config.ts";
 import {
   jsdomOptimizedDeps,
   nonIsolatedRunnerPath,
@@ -107,7 +107,7 @@ function includeUiTests(patterns: string[], env = process.env): string[] {
 }
 
 const sharedUiTestConfig = {
-  ...loadVitestExperimentalConfig(process.env, process.platform, here),
+  ...loadVitestPerformanceConfig(process.env, process.platform, here),
   // Preserve calls recorded during shared setup and beforeAll hooks.
   clearMocks: false,
   isolate: false,
@@ -175,6 +175,9 @@ export function createUiBrowserVitestConfig(env = process.env): ViteUserConfig {
     },
     test: {
       ...sharedUiTestConfig,
+      // File-project loading overrides Vite's root with the config directory.
+      // Keep discovery and setup paths rooted in the UI in every entrypoint.
+      root: here,
       name: "browser",
       // No cleanup runner: it imports node:fs and repo server modules, which
       // cannot load in browser mode. Browser files own their own teardown.

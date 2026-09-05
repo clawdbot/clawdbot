@@ -405,7 +405,15 @@ export async function finalizeCodexAttempt(
       attemptSucceeded,
       completedTurnStatus,
     } = projectTerminalOutcome();
-    terminalState.turnSucceeded = turnSucceeded;
+    terminalState.settledTurnStatus = turnSucceeded
+      ? "completed"
+      : completedTurnStatus === "failed" &&
+          !finalAborted &&
+          !effectiveTimedOut &&
+          !state.clientClosedPromptError &&
+          !resourceState.executionDisconnectError
+        ? "failed"
+        : undefined;
     terminalState.sharedAbortAllowedAfterTerminalOutcome = shouldKeepCodexSharedAbortOpen({
       trigger: params.trigger,
       result,
