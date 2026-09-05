@@ -302,7 +302,11 @@ Existing package build entry paths and Vitest source parents stay unchanged. The
 CLI fork-recovery regression also compiles the real CLI entry and its concurrent
 rebind's session accessor and binding helper together. Both processes use the same
 runtime graph while retaining the durable-write race and process-exit assertions.
-Other Worker-thread entries and arbitrary source CLI fixtures remain outside this declared set.
+Doctor process output tests with bundled plugins disabled reuse that compiled CLI
+inside one lazily created package fixture per test run, keeping real UI checks on
+fixture-owned assets and each scenario’s state separate. Standalone and watch runs
+use live source inside the same fixture. Other
+Worker-thread entries and arbitrary source CLI fixtures remain outside this declared set.
 
 The session-title and child-link retention tests declare their title-reader,
 session-utils, and listing roots in this same generation. Each fresh
