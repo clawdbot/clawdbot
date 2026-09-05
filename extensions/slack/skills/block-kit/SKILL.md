@@ -24,7 +24,7 @@ Use plain text for short answers and casual conversation where structure adds no
 For a reply in Slack, call the `message` tool with `action: "send"` and a portable `presentation`. The Slack plugin renders it as native Block Kit. Use the exact schema exposed by the current tool; supported block types can include `text`, `context`, `divider`, `buttons`, `select`, `chart`, and `table`.
 
 - Put the outcome first. Keep titles, labels, and context concise.
-- Give interactive controls real follow-up semantics. Prefer typed `callback` actions for conversational choices, `command` only for an actual command, and `url` for an external destination.
+- Give interactive controls real follow-up semantics. Use typed `callback` actions for conversational choices and `url` for an external destination. Do not use generic `command` actions for Slack controls; Slack renders them as text fallback rather than clickable controls.
 - Include a useful `message` fallback that preserves the meaning without the rich layout.
 - After the visible send succeeds, do not repeat the same content in the final response.
 
