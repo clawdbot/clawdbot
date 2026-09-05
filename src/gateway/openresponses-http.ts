@@ -41,9 +41,9 @@ import { bindGatewayContextResolver } from "../plugins/runtime/gateway-request-s
 import { retainGatewayRootWorkAdmissionContinuation } from "../process/gateway-work-admission.js";
 import { defaultRuntime } from "../runtime.js";
 import {
-  isReplaceableAssistantStreamEvent,
-  resolveAssistantStreamDeltaText,
-  resolveAssistantStreamSnapshotText,
+  mergeAssistantText,
+  resolveAssistantTextInput,
+  type AssistantTextSnapshot,
 } from "./agent-event-assistant-text.js";
 import type { AuthRateLimiter } from "./auth-rate-limit.js";
 import type { ResolvedGatewayAuth } from "./auth.js";
@@ -874,7 +874,7 @@ export async function handleOpenResponsesHttpRequest(
 
   setSseHeaders(res);
 
-  let accumulatedText = "";
+  let assistantText: AssistantTextSnapshot = { text: "" };
   let streamedAssistantText = "";
   let bufferedReplaceableAssistantContent = "";
   let sawAssistantDelta = false;
@@ -912,7 +912,7 @@ export async function handleOpenResponsesHttpRequest(
       }
       const usage = finalUsage;
       const finalText =
-        accumulatedText || bufferedReplaceableAssistantContent || finalizeRequested.text;
+        assistantText.text || bufferedReplaceableAssistantContent || finalizeRequested.text;
 
       closed = true;
       stopWatchingDisconnect();
@@ -1059,65 +1059,37 @@ export async function handleOpenResponsesHttpRequest(
     }
 
     if (evt.stream === "assistant") {
-      if (isReplaceableAssistantStreamEvent(evt)) {
-        const snapshot = resolveAssistantStreamSnapshotText(evt);
-        if (snapshot) {
+      const input = resolveAssistantTextInput(evt.data);
+      if (!input) {
+        return;
+      }
+      if (input.replaceable) {
+        const snapshot = input.text ?? (input.delta || undefined);
+        if (snapshot !== undefined) {
           bufferedReplaceableAssistantContent = snapshot;
         }
         return;
       }
 
-      const text = evt.data?.text;
-      const replace = evt.data?.replace === true;
-      if (replace && typeof text === "string") {
-        accumulatedText = text;
-        if (toolChoiceConstraint) {
-          return;
-        }
-        // Responses deltas can only append. A conflicting replacement must
-        // fail after usage resolves instead of claiming inconsistent success.
-        if (!text.startsWith(streamedAssistantText)) {
-          unrepresentableAssistantReplacement = true;
-          return;
-        }
-        unrepresentableAssistantReplacement = false;
-        const replacementDelta = text.slice(streamedAssistantText.length);
-        if (replacementDelta) {
-          sawAssistantDelta = true;
-          streamedAssistantText = text;
-          writeSseEvent(res, {
-            type: "response.output_text.delta",
-            item_id: outputItemId,
-            output_index: 0,
-            content_index: 0,
-            delta: replacementDelta,
-          });
-        }
+      assistantText = mergeAssistantText(assistantText, input, "append-only");
+      // Unconfirmed tool-choice prose may still be corrected before it is sent.
+      if (toolChoiceConstraint) {
         return;
       }
-
-      const content =
-        typeof text === "string" && text.startsWith(streamedAssistantText)
-          ? text.slice(streamedAssistantText.length)
-          : resolveAssistantStreamDeltaText(evt);
+      // Keep physical wire progress separate from a corrected item snapshot.
+      if (!assistantText.text.startsWith(streamedAssistantText)) {
+        unrepresentableAssistantReplacement = true;
+        return;
+      }
+      if (input.replace && input.text !== undefined) {
+        unrepresentableAssistantReplacement = false;
+      }
+      const content = assistantText.text.slice(streamedAssistantText.length);
       if (!content) {
         return;
       }
-      streamedAssistantText += content;
-
-      // Hold assistant prose until the tool-choice contract is confirmed. A
-      // `required`/pinned request must reject text-only turns, so streaming
-      // deltas now could leak output we may have to fail. Buffered text is
-      // still flushed as commentary if a matching tool call arrives, matching
-      // the openai-http.ts streaming buffer.
-      if (toolChoiceConstraint) {
-        accumulatedText += content;
-        return;
-      }
-
+      streamedAssistantText = assistantText.text;
       sawAssistantDelta = true;
-      accumulatedText += content;
-
       writeSseEvent(res, {
         type: "response.output_text.delta",
         item_id: outputItemId,
@@ -1132,7 +1104,7 @@ export async function handleOpenResponsesHttpRequest(
       const phase = evt.data?.phase;
       if (phase === "end" || phase === "error") {
         const finalText =
-          accumulatedText || bufferedReplaceableAssistantContent || "No response from OpenClaw.";
+          assistantText.text || bufferedReplaceableAssistantContent || "No response from OpenClaw.";
         const finalStatus = phase === "error" ? "failed" : "completed";
         const errorMessage =
           phase === "error" && typeof evt.data?.error === "string"
@@ -1237,7 +1209,7 @@ export async function handleOpenResponsesHttpRequest(
       ) {
         const usage = finalUsage ?? createEmptyUsage();
         const finalText =
-          accumulatedText || resultPayloadText || bufferedReplaceableAssistantContent;
+          assistantText.text || resultPayloadText || bufferedReplaceableAssistantContent;
 
         if (finalText && !sawAssistantDelta) {
           sawAssistantDelta = true;
@@ -1336,7 +1308,7 @@ export async function handleOpenResponsesHttpRequest(
         const content =
           resultPayloadText || bufferedReplaceableAssistantContent || "No response from OpenClaw.";
 
-        accumulatedText = content;
+        assistantText.text = content;
         sawAssistantDelta = true;
         if (finalizeStatus !== null) {
           finalizeRequested = { status: finalizeStatus, text: content };

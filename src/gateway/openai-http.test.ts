@@ -2371,19 +2371,60 @@ describe("OpenAI-compatible HTTP API (e2e)", () => {
     expect(agentCommandMock).toHaveBeenCalledTimes(1);
   });
 
-  it("preserves buffered leading content in cumulative assistant snapshots", async () => {
-    const expected = "<xiaohai-banli>milk tea</xiaohai-banli>";
+  it.each([
+    {
+      name: "buffered leading content in cumulative assistant snapshots",
+      events: [
+        {
+          text: "<xiaohai-banli>milk tea</xiaohai-banli>",
+          delta: "xiaohai-banli>milk tea</xiaohai-banli>",
+        },
+      ],
+      expected: "<xiaohai-banli>milk tea</xiaohai-banli>",
+    },
+    {
+      name: "identical snapshots from distinct assistant items",
+      events: [
+        { itemId: "answer-1", text: "Echo", delta: "Echo" },
+        { itemId: "answer-2", text: "Echo", delta: "Echo" },
+      ],
+      expected: "EchoEcho",
+    },
+    {
+      name: "replayed and growing snapshots across assistant items",
+      events: [
+        { itemId: "answer-1", text: "Echo", delta: "Echo" },
+        { itemId: "answer-1", text: "Echo", delta: "Echo" },
+        { itemId: "answer-2", text: "Echo", delta: "Echo" },
+        { itemId: "answer-2", text: "Echo", delta: "Echo" },
+        { itemId: "answer-2", text: "Echo!", delta: "!" },
+      ],
+      expected: "EchoEcho!",
+    },
+    {
+      name: "repeated delta-only text within an assistant item",
+      events: [
+        { itemId: "answer-1", delta: "Echo" },
+        { itemId: "answer-1", delta: "Echo" },
+      ],
+      expected: "EchoEcho",
+    },
+    {
+      name: "text beyond the live display cap",
+      events: [
+        { itemId: "answer-1", text: "x".repeat(500_001), delta: "x".repeat(500_001) },
+        { itemId: "answer-2", text: "tail", delta: "tail" },
+      ],
+      expected: `${"x".repeat(500_001)}tail`,
+    },
+  ])("preserves $name in official SDK assistant streams", async ({ events, expected }) => {
     agentCommandMock.mockClear();
     agentCommandMock.mockImplementationOnce((async (opts: unknown) => {
       const runId = (opts as { runId?: string } | undefined)?.runId ?? "";
-      emitAgentEvent({
-        runId,
-        stream: "assistant",
-        data: {
-          text: expected,
-          delta: "xiaohai-banli>milk tea</xiaohai-banli>",
-        },
-      });
+      for (const data of events) {
+        emitAgentEvent({ runId, stream: "assistant", data });
+      }
+      emitAgentEvent({ runId, stream: "lifecycle", data: { phase: "end" } });
       return { payloads: [{ text: expected }] };
     }) as never);
 
@@ -3506,46 +3547,72 @@ describe("OpenAI-compatible HTTP API (e2e)", () => {
     await vi.waitFor(() => expect(getActiveGatewayRootWorkCount()).toBe(idleRootCount));
   });
 
-  it("buffers replaceable assistant events for streaming chat completions", async () => {
-    const port = enabledPort;
-    agentCommandMock.mockClear();
-    agentCommandMock.mockImplementationOnce((async (opts: unknown) => {
-      const runId = (opts as { runId?: string } | undefined)?.runId ?? "";
-      emitAgentEvent({
-        runId,
-        stream: "assistant",
-        data: { text: "coordination draft", delta: "coordination draft", replaceable: true },
+  it.each([
+    {
+      name: "a completed replacement",
+      replacement: { text: "final answer", delta: "", replace: true },
+      finalText: "final answer",
+      expected: "final answer",
+    },
+    {
+      name: "an empty snapshot",
+      replacement: { text: "", delta: "" },
+      finalText: "",
+      expected: "No response from OpenClaw.",
+    },
+    {
+      name: "an empty replacement snapshot",
+      replacement: { text: "", delta: "", replace: true },
+      finalText: "",
+      expected: "No response from OpenClaw.",
+    },
+    {
+      name: "an empty delta without a snapshot",
+      replacement: { delta: "" },
+      finalText: "",
+      expected: "coordination draft",
+    },
+  ])(
+    "buffers replaceable assistant events through $name",
+    async ({ replacement, finalText, expected }) => {
+      agentCommandMock.mockClear();
+      agentCommandMock.mockImplementationOnce((async (opts: unknown) => {
+        const runId = (opts as { runId?: string } | undefined)?.runId ?? "";
+        emitAgentEvent({
+          runId,
+          stream: "assistant",
+          data: { text: "coordination draft", delta: "coordination draft", replaceable: true },
+        });
+        emitAgentEvent({
+          runId,
+          stream: "assistant",
+          data: { ...replacement, replaceable: true },
+        });
+        if (finalText) {
+          emitAgentEvent({ runId, stream: "assistant", data: { text: finalText } });
+        }
+        emitAgentEvent({ runId, stream: "lifecycle", data: { phase: "end" } });
+        return { payloads: finalText ? [{ text: finalText }] : [] };
+      }) as never);
+
+      const stream = await createOpenAiChatClient(enabledPort).chat.completions.create({
+        stream: true,
+        model: "openclaw",
+        messages: [{ role: "user", content: "hi" }],
       });
-      emitAgentEvent({
-        runId,
-        stream: "assistant",
-        data: { text: "final answer", delta: "", replace: true, replaceable: true },
-      });
-      emitAgentEvent({ runId, stream: "assistant", data: { text: "final answer" } });
-      emitAgentEvent({ runId, stream: "lifecycle", data: { phase: "end" } });
-      return { payloads: [{ text: "final answer" }] };
-    }) as never);
 
-    const res = await postChatCompletions(port, {
-      stream: true,
-      model: "openclaw",
-      messages: [{ role: "user", content: "hi" }],
-    });
-
-    expect(res.status).toBe(200);
-    const data = parseSseDataLines(await res.text());
-    const chunks = data
-      .filter((d) => d !== "[DONE]")
-      .map((d) => JSON.parse(d) as Record<string, unknown>);
-    const allContent = chunks
-      .flatMap((chunk) => (chunk.choices as Array<Record<string, unknown>> | undefined) ?? [])
-      .map((choice) => (choice.delta as Record<string, unknown> | undefined)?.content)
-      .filter((content): content is string => typeof content === "string")
-      .join("");
-
-    expect(allContent).toBe("final answer");
-    expect(allContent).not.toContain("coordination draft");
-  });
+      const content: string[] = [];
+      const finishReasons: Array<string | null> = [];
+      for await (const chunk of stream) {
+        for (const choice of chunk.choices) {
+          content.push(choice.delta.content ?? "");
+          finishReasons.push(choice.finish_reason);
+        }
+      }
+      expect(content.join("")).toBe(expected);
+      expect(finishReasons.at(-1)).toBe("stop");
+    },
+  );
 
   it("prefers final result text over buffered replaceable chat drafts", async () => {
     const port = enabledPort;
