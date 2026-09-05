@@ -368,6 +368,13 @@ export type ReplyPayloadMetadata = {
   heartbeatTerminalToolFailure?: {
     toolName: string;
   };
+  /**
+   * Private scratch proposal captured from a heartbeat_respond tool call.
+   * Travels via this WeakMap (not a payload property) so it survives the
+   * object spreads used by the reply/media-merge pipeline. The runner reads
+   * it to perform the post-turn `writeCronJobScratch` CAS. See #139088.
+   */
+  heartbeatScratchProposal?: string;
 };
 
 const replyPayloadMetadata = new WeakMap<object, ReplyPayloadMetadata>();
