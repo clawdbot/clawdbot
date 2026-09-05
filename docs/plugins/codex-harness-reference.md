@@ -1058,9 +1058,11 @@ Codex harness forwards the other bootstrap files as developer instructions:
   collaboration instructions. Native Codex subagents do not inherit them,
   which keeps subagent turns from picking up the parent agent's persona and
   user profile.
-- The compact loaded OpenClaw skills list is also forwarded as turn-scoped
-  collaboration developer instructions, so native Codex subagents do not
-  inherit it either.
+- The compact loaded OpenClaw skills list is forwarded as ordinary thread
+  developer instructions. Model-owned collaboration-mode messages cannot
+  replace this catalog. Native Codex subagents can inherit the catalog with
+  the parent thread's developer instructions; this does not move workspace
+  persona or memory context into that carrier.
 - Heartbeat turns receive generic initiative guidance through collaboration
   mode. Monitor cron scratch is appended to the heartbeat prompt instead of
   injected as workspace context.

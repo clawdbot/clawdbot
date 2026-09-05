@@ -151,7 +151,6 @@ export async function prepareCodexAttemptTurnRequest(
               modelProvider: resourceState.thread.modelProvider,
             }),
         turnScopedDeveloperInstructions: workspaceBootstrapContext.turnScopedDeveloperInstructions,
-        skillsCollaborationInstructions: context.skillsCollaborationInstructions,
         memoryCollaborationInstructions: workspaceBootstrapContext.memoryCollaborationInstructions,
         preserveNativeTurnSettings: usesSupervisionConnection,
         messageToolAvailable: toolBridge.availableTools.some((tool) => tool.name === "message"),
