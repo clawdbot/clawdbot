@@ -139,7 +139,7 @@ export function assertCronJobsStoreUnchanged(
   db: DatabaseSync,
   storePath: string,
   expectedJobsFingerprint: string,
-): void {
+): undefined {
   const resolvedStorePath = path.resolve(storePath);
   if (readCronJobsFingerprint(db, cronStoreKey(resolvedStorePath)) !== expectedJobsFingerprint) {
     throw new CronJobsStoreChangedError(resolvedStorePath);
@@ -155,7 +155,7 @@ function repairLoadedCronRuntimeAuthority(params: {
   }
   const repaired = runOpenClawStateWriteTransaction(
     ({ db }) => {
-      const rows = loadCronRows(db, params.storeKey);
+      const rows = loadCronRows(db, params.storeKey, new Set(params.jobIds));
       if (rows.length === 0) {
         return false;
       }

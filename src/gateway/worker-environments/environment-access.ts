@@ -166,10 +166,6 @@ export function createWorkerEnvironmentAccess(options: WorkerEnvironmentAccessOp
         stopStartup = async () => await nodeTunnels.stop(record.environmentId, record.ownerEpoch);
         return;
       }
-      // Native node workspaces outlive worker RPC admission credentials; SSH does not.
-      if (credential.expiresAtMs <= now()) {
-        throw serviceError("invalid_state", "Worker tunnel owner credential is not current");
-      }
       if (!record.sshEndpoint) {
         throw serviceError("invalid_state", "Worker environment has no supported tunnel transport");
       }

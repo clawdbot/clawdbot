@@ -83,93 +83,173 @@ describe("plugin host cleanup session stores", () => {
     });
   });
 
-  it("clears plugin-owned session state across resolved stores without touching unrelated rows", async () => {
-    stateDir = await fs.mkdtemp(
-      path.join(resolvePreferredOpenClawTmpDir(), "openclaw-host-cleanup-multistore-"),
-    );
-    setTestEnvValue("OPENCLAW_STATE_DIR", stateDir);
-    const firstStorePath = path.join(stateDir, "agents", "a", "sessions", "sessions.json");
-    const secondStorePath = path.join(stateDir, "agents", "b", "sessions", "sessions.json");
-    const beforeUpdatedAt = 100;
-    const unrelatedUpdatedAt = Date.now();
-    const firstEntry: SessionEntry = {
-      sessionId: "shared-session",
-      updatedAt: beforeUpdatedAt,
-      pluginExtensions: {
-        cleanup: { state: { active: true } },
-        other: { state: { preserved: true } },
-      },
-      pluginNextTurnInjections: {
-        cleanup: [
-          {
-            id: "remove",
-            pluginId: "cleanup",
-            text: "remove",
-            placement: "append_context",
-            createdAt: beforeUpdatedAt,
+  it.each([
+    [
+      "Matrix group",
+      "agent:main:matrix:group:!Room:server",
+      "agent:main:matrix:group:!room:server",
+      "AGENT:MAIN:MATRIX:GROUP:!Room:server",
+    ],
+    [
+      "Matrix channel",
+      "agent:main:matrix:channel:!Room:server",
+      "agent:main:matrix:channel:!room:server",
+      "agent:main:matrix:channel:!Room:server",
+    ],
+    [
+      "Matrix thread",
+      "agent:main:matrix:group:!Room:server:thread:$Event",
+      "agent:main:matrix:group:!Room:server:thread:$event",
+      "agent:main:matrix:group:!Room:server:THREAD:$Event",
+    ],
+    [
+      "Signal group",
+      "agent:main:signal:group:AbCdEf==",
+      "agent:main:signal:group:abcdef==",
+      "AGENT:MAIN:SIGNAL:GROUP:AbCdEf==",
+    ],
+  ])(
+    "clears only the selected %s session's plugin state",
+    async (_, targetKey, siblingKey, filter) => {
+      stateDir = await fs.mkdtemp(
+        path.join(resolvePreferredOpenClawTmpDir(), "openclaw-host-cleanup-opaque-"),
+      );
+      setTestEnvValue("OPENCLAW_STATE_DIR", stateDir);
+      const storePath = path.join(stateDir, "sessions.json");
+      for (const [sessionKey, sessionId] of [
+        [targetKey, "target"],
+        [siblingKey, "sibling"],
+      ] as const) {
+        await replaceSessionEntry({ sessionKey, storePath }, {
+          sessionId,
+          updatedAt: Date.now(),
+          pluginExtensions: {
+            cleanup: { state: { sessionId } },
+            other: { state: { preserved: true } },
           },
-        ],
-      },
-    };
-    const secondEntry: SessionEntry = {
-      sessionId: "shared-session",
-      updatedAt: beforeUpdatedAt,
-      pluginExtensions: {
-        cleanup: { state: { active: true } },
-      },
-    };
-    const unrelatedEntry: SessionEntry = {
-      sessionId: "unrelated-session",
-      updatedAt: unrelatedUpdatedAt,
-      delivery: { kind: "none" },
-      pluginExtensions: {
-        cleanup: { state: { keep: true } },
-      },
-    };
-    await replaceSessionEntry(
-      { sessionKey: "agent:a:telegram:group:shared-room", storePath: firstStorePath },
-      firstEntry,
-    );
-    await replaceSessionEntry(
-      { sessionKey: "agent:a:telegram:group:unrelated-room", storePath: firstStorePath },
-      unrelatedEntry,
-    );
-    await replaceSessionEntry(
-      { sessionKey: "agent:b:telegram:group:shared-room", storePath: secondStorePath },
-      secondEntry,
-    );
+          pluginNextTurnInjections: {
+            cleanup: [
+              {
+                id: sessionId,
+                pluginId: "cleanup",
+                text: sessionId,
+                placement: "append_context",
+                createdAt: Date.now(),
+              },
+            ],
+          },
+        } satisfies SessionEntry);
+      }
+      const siblingBefore = loadSessionEntry({ sessionKey: siblingKey, storePath });
+      expect(siblingBefore?.sessionId).toBe("sibling");
 
-    const result = await runPluginHostCleanup({
-      cfg: { session: { store: firstStorePath } },
-      registry: createEmptyPluginRegistry(),
-      pluginId: "cleanup",
-      reason: "disable",
-      sessionKey: "shared-session",
-      sessionStorePaths: [firstStorePath, secondStorePath],
-    });
+      const result = await runPluginHostCleanup({
+        cfg: { session: { store: storePath } },
+        registry: createEmptyPluginRegistry(),
+        pluginId: "cleanup",
+        reason: "delete",
+        sessionKey: filter,
+      });
 
-    expect(result).toEqual({ cleanupCount: 2, failures: [] });
-    const firstMain = loadSessionEntry({
-      sessionKey: "agent:a:telegram:group:shared-room",
-      storePath: firstStorePath,
-    });
-    const firstUnrelated = loadSessionEntry({
-      sessionKey: "agent:a:telegram:group:unrelated-room",
-      storePath: firstStorePath,
-    });
-    const secondOther = loadSessionEntry({
-      sessionKey: "agent:b:telegram:group:shared-room",
-      storePath: secondStorePath,
-    });
-    expect(firstMain?.pluginExtensions).toEqual({
-      other: { state: { preserved: true } },
-    });
-    expect(firstMain?.pluginNextTurnInjections).toBeUndefined();
-    expect(firstMain?.updatedAt).toBeGreaterThan(beforeUpdatedAt);
-    expect(firstUnrelated).toEqual(unrelatedEntry);
-    expect(secondOther?.pluginExtensions).toBeUndefined();
-    expect(secondOther?.updatedAt).toBeGreaterThan(beforeUpdatedAt);
-  });
+      expect(result).toEqual({ cleanupCount: 1, failures: [] });
+      closeOpenClawAgentDatabasesForTest();
+      const target = loadSessionEntry({ sessionKey: targetKey, storePath });
+      expect(target?.pluginExtensions).toEqual({ other: { state: { preserved: true } } });
+      expect(target?.pluginNextTurnInjections).toBeUndefined();
+      expect(loadSessionEntry({ sessionKey: siblingKey, storePath })).toEqual(siblingBefore);
+    },
+  );
+
+  it.each(["shared-session", "signal:group: Opaque"])(
+    "matches runtime session ID %s case-insensitively without interpreting it as a key",
+    async (runtimeSessionId) => {
+      stateDir = await fs.mkdtemp(
+        path.join(resolvePreferredOpenClawTmpDir(), "openclaw-host-cleanup-multistore-"),
+      );
+      setTestEnvValue("OPENCLAW_STATE_DIR", stateDir);
+      const firstStorePath = path.join(stateDir, "agents", "a", "sessions", "sessions.json");
+      const secondStorePath = path.join(stateDir, "agents", "b", "sessions", "sessions.json");
+      const beforeUpdatedAt = 100;
+      const unrelatedUpdatedAt = Date.now();
+      const firstEntry: SessionEntry = {
+        sessionId: runtimeSessionId,
+        updatedAt: beforeUpdatedAt,
+        pluginExtensions: {
+          cleanup: { state: { active: true } },
+          other: { state: { preserved: true } },
+        },
+        pluginNextTurnInjections: {
+          cleanup: [
+            {
+              id: "remove",
+              pluginId: "cleanup",
+              text: "remove",
+              placement: "append_context",
+              createdAt: beforeUpdatedAt,
+            },
+          ],
+        },
+      };
+      const secondEntry: SessionEntry = {
+        sessionId: runtimeSessionId,
+        updatedAt: beforeUpdatedAt,
+        pluginExtensions: {
+          cleanup: { state: { active: true } },
+        },
+      };
+      const unrelatedEntry: SessionEntry = {
+        sessionId: "unrelated-session",
+        updatedAt: unrelatedUpdatedAt,
+        delivery: { kind: "none" },
+        pluginExtensions: {
+          cleanup: { state: { keep: true } },
+        },
+      };
+      await replaceSessionEntry(
+        { sessionKey: "agent:a:telegram:group:shared-room", storePath: firstStorePath },
+        firstEntry,
+      );
+      await replaceSessionEntry(
+        { sessionKey: "agent:a:telegram:group:unrelated-room", storePath: firstStorePath },
+        unrelatedEntry,
+      );
+      await replaceSessionEntry(
+        { sessionKey: "agent:b:telegram:group:shared-room", storePath: secondStorePath },
+        secondEntry,
+      );
+
+      const result = await runPluginHostCleanup({
+        cfg: { session: { store: firstStorePath } },
+        registry: createEmptyPluginRegistry(),
+        pluginId: "cleanup",
+        reason: "disable",
+        sessionKey: runtimeSessionId.toUpperCase(),
+        sessionStorePaths: [firstStorePath, secondStorePath],
+      });
+
+      expect(result).toEqual({ cleanupCount: 2, failures: [] });
+      const firstMain = loadSessionEntry({
+        sessionKey: "agent:a:telegram:group:shared-room",
+        storePath: firstStorePath,
+      });
+      const firstUnrelated = loadSessionEntry({
+        sessionKey: "agent:a:telegram:group:unrelated-room",
+        storePath: firstStorePath,
+      });
+      const secondOther = loadSessionEntry({
+        sessionKey: "agent:b:telegram:group:shared-room",
+        storePath: secondStorePath,
+      });
+      expect(firstMain?.pluginExtensions).toEqual({
+        other: { state: { preserved: true } },
+      });
+      expect(firstMain?.pluginNextTurnInjections).toBeUndefined();
+      expect(firstMain?.updatedAt).toBeGreaterThan(beforeUpdatedAt);
+      expect(firstUnrelated).toEqual(unrelatedEntry);
+      expect(secondOther?.pluginExtensions).toBeUndefined();
+      expect(secondOther?.updatedAt).toBeGreaterThan(beforeUpdatedAt);
+    },
+  );
 
   it("clears shared custom SQLite stores for each resolved agent", async () => {
     stateDir = await fs.mkdtemp(

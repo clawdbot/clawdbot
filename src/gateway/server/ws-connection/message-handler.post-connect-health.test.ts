@@ -1,6 +1,6 @@
 // WebSocket message-handler health tests cover post-connect startup-unavailable and health-gated dispatch.
 import type { IncomingMessage } from "node:http";
-import { beforeEach, describe, expect, it, onTestFinished, vi } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, onTestFinished, vi } from "vitest";
 import type { WebSocket } from "ws";
 import { ConnectErrorDetailCodes } from "../../../../packages/gateway-protocol/src/connect-error-details.js";
 import { ErrorCodes, PROTOCOL_VERSION } from "../../../../packages/gateway-protocol/src/index.js";
@@ -31,6 +31,7 @@ import type { HealthSummary } from "../../health/types.js";
 import type { GatewayAttributedIngress } from "../../ingress-attribution.js";
 import { getGatewayLocalUserIngress } from "../../local-user-ingress.js";
 import { getOperatorApprovalRuntimeToken } from "../../operator-approval-runtime-token.js";
+import { GatewayConnectionWork } from "../../server-connection-work.js";
 import { MAX_PREAUTH_PAYLOAD_BYTES } from "../../server-constants.js";
 import { handleGatewayRequest } from "../../server-methods.js";
 import { resolveGatewayCronCreatorAuthorityAdmission } from "../../server-methods/cron-creator-authority-admission.js";
@@ -160,6 +161,53 @@ const DEVICE_TOKEN_MUTATION_PARAMS = {
 const NODE_PAIR_REMOVE_PARAMS = {
   nodeId: "device-1",
 } as const satisfies Record<string, unknown>;
+
+const harnessCleanups: Array<() => Promise<void>> = [];
+const fixtureGateReleases: Array<() => void> = [];
+let harnessCleanupPromise: Promise<void> | undefined;
+
+function createGatewayHarnessGate<T = void>() {
+  const gate = createDeferred<T>();
+  // Cleanup can precede a mock's first call; cancel its gate without an unhandled rejection.
+  void gate.promise.catch(() => {});
+  fixtureGateReleases.push(() => gate.reject(new Error("Gateway test fixture closed")));
+  return gate;
+}
+
+function cleanupGatewayHarnesses() {
+  // A native timeout can overlap afterEach with the state callback's finally.
+  return (harnessCleanupPromise ??= Promise.resolve().then(async () => {
+    for (const release of fixtureGateReleases.splice(0)) {
+      release();
+    }
+    const results = await Promise.allSettled(harnessCleanups.splice(0).map((cleanup) => cleanup()));
+    const errors = results.flatMap((result) =>
+      result.status === "rejected" ? [result.reason] : [],
+    );
+    if (errors.length > 0) {
+      throw new AggregateError(errors, "Gateway test connections failed to close");
+    }
+  }));
+}
+
+beforeEach(() => {
+  harnessCleanupPromise = undefined;
+});
+afterEach(cleanupGatewayHarnesses);
+
+async function withGatewayTestState(
+  options: Parameters<typeof withOpenClawTestState>[0],
+  run: () => Promise<void>,
+) {
+  await withOpenClawTestState(options, async () => {
+    try {
+      await run();
+    } finally {
+      // Test-finished hooks run after this state owner has already restored its environment.
+      await cleanupGatewayHarnesses();
+    }
+  });
+}
 
 function waitForFast(assertion: () => void | Promise<void>) {
   return vi.waitFor(assertion, { interval: 1 });
@@ -294,6 +342,18 @@ function attachGatewayHarness(options: {
   isClosed?: () => boolean;
   setCloseCause?: SetCloseCause;
 }) {
+  const connectionWork = new GatewayConnectionWork();
+  let closed = false;
+  const close = options.close ?? createCloseMock();
+  const closeSocket: CloseGatewayConnection = (code, reason) => {
+    closed = true;
+    close(code, reason);
+  };
+  harnessCleanups.push(async () => {
+    closeSocket();
+    connectionWork.beginClose();
+    await connectionWork.drain();
+  });
   const socketSend = vi.fn((_payload: string, cb?: (err?: Error) => void) => {
     cb?.();
   });
@@ -338,6 +398,7 @@ function attachGatewayHarness(options: {
   });
   attachGatewayWsMessageHandler({
     socket,
+    connectionWork,
     bootId: "post-connect-health-test-boot",
     upgradeReq: {
       headers: {
@@ -383,8 +444,8 @@ function attachGatewayHarness(options: {
     refreshHealthSnapshot:
       options.refreshHealthSnapshot ?? vi.fn(async () => createHealthSummary()),
     send,
-    close: options.close ?? createCloseMock(),
-    isClosed: options.isClosed ?? vi.fn(() => false),
+    close: closeSocket,
+    isClosed: () => closed || options.isClosed?.() === true,
     clearHandshakeTimer: vi.fn(),
     getClient: () => client as never,
     setClient: (next) => {
@@ -794,106 +855,86 @@ describe("attachGatewayWsMessageHandler post-connect health refresh", () => {
     expect(handleGatewayRequest).not.toHaveBeenCalled();
   });
 
-  it("waits for credential mutation requests before dispatching later queued requests", async () => {
-    let releaseMutation: (() => void) | undefined;
-    const close = createCloseMock();
-    const setCloseCause = createSetCloseCauseMock();
-    const client = createConnectedTestClient({ connId: "conn-invalidating" });
-    vi.mocked(handleGatewayRequest).mockImplementation(async (opts) => {
-      expect(opts.req.method).toBe("device.token.revoke");
-      await new Promise<void>((resolve) => {
-        releaseMutation = resolve;
-      });
-      client.invalidated = true;
-      client.invalidatedReason = "device-token-revoked";
-    });
-
-    const harness = attachGatewayHarness({
+  it.each([
+    {
+      name: "credential mutation requests",
+      method: "device.token.revoke",
+      params: DEVICE_TOKEN_MUTATION_PARAMS,
       connId: "conn-invalidating",
       connectNonce: "nonce-invalidating",
-      client,
-      close,
-      setCloseCause,
-    });
-
-    harness.sendRequest("revoke-1", "device.token.revoke", DEVICE_TOKEN_MUTATION_PARAMS);
-    harness.sendRequest("queued-1", "status.summary");
-
-    await waitForFast(() => {
-      expect(handleGatewayRequest).toHaveBeenCalledTimes(1);
-      expect(releaseMutation).toBeTypeOf("function");
-    });
-
-    releaseMutation?.();
-
-    await waitForFast(() => {
-      expect(close).toHaveBeenCalledWith(4001, "client invalidated: device-token-revoked");
-    });
-    expect(handleGatewayRequest).toHaveBeenCalledTimes(1);
-    expect(setCloseCause).toHaveBeenCalledWith("client-invalidated", {
+      requestId: "revoke-1",
       reason: "device-token-revoked",
-      method: "status.summary",
-    });
-  });
-
-  it("waits for device-backed node removal before dispatching later queued requests", async () => {
-    let releaseMutation: (() => void) | undefined;
-    const close = createCloseMock();
-    const setCloseCause = createSetCloseCauseMock();
-    const client = createConnectedTestClient({ connId: "conn-node-invalidating" });
-    vi.mocked(handleGatewayRequest).mockImplementation(async (opts) => {
-      expect(opts.req.method).toBe("node.pair.remove");
-      await new Promise<void>((resolve) => {
-        releaseMutation = resolve;
-      });
-      client.invalidated = true;
-      client.invalidatedReason = "device-pair-removed";
-    });
-
-    const harness = attachGatewayHarness({
+    },
+    {
+      name: "device-backed node removal",
+      method: "node.pair.remove",
+      params: NODE_PAIR_REMOVE_PARAMS,
       connId: "conn-node-invalidating",
       connectNonce: "nonce-node-invalidating",
-      client,
-      close,
-      setCloseCause,
-    });
-
-    harness.sendRequest("remove-node-1", "node.pair.remove", NODE_PAIR_REMOVE_PARAMS);
-    harness.sendRequest("queued-1", "status.summary");
-
-    await waitForFast(() => {
-      expect(handleGatewayRequest).toHaveBeenCalledTimes(1);
-      expect(releaseMutation).toBeTypeOf("function");
-    });
-
-    releaseMutation?.();
-
-    await waitForFast(() => {
-      expect(close).toHaveBeenCalledWith(4001, "client invalidated: device-pair-removed");
-    });
-    expect(handleGatewayRequest).toHaveBeenCalledTimes(1);
-    expect(setCloseCause).toHaveBeenCalledWith("client-invalidated", {
+      requestId: "remove-node-1",
       reason: "device-pair-removed",
-      method: "status.summary",
-    });
-  });
+    },
+  ])(
+    "waits for $name before dispatching later queued requests",
+    async ({ method, params, connId, connectNonce, requestId, reason }) => {
+      const mutation = createGatewayHarnessGate();
+      let releaseMutation: (() => void) | undefined;
+      const close = createCloseMock();
+      const setCloseCause = createSetCloseCauseMock();
+      const client = createConnectedTestClient({ connId });
+      vi.mocked(handleGatewayRequest).mockImplementation(async (opts) => {
+        expect(opts.req.method).toBe(method);
+        releaseMutation = mutation.resolve;
+        await mutation.promise;
+        client.invalidated = true;
+        client.invalidatedReason = reason;
+      });
+
+      const harness = attachGatewayHarness({
+        connId,
+        connectNonce,
+        client,
+        close,
+        setCloseCause,
+      });
+
+      harness.sendRequest(requestId, method, params);
+      harness.sendRequest("queued-1", "status.summary");
+
+      await waitForFast(() => {
+        expect(handleGatewayRequest).toHaveBeenCalledTimes(1);
+        expect(releaseMutation).toBeTypeOf("function");
+      });
+
+      releaseMutation?.();
+
+      await waitForFast(() => {
+        expect(close).toHaveBeenCalledWith(4001, `client invalidated: ${reason}`);
+      });
+      expect(handleGatewayRequest).toHaveBeenCalledTimes(1);
+      expect(setCloseCause).toHaveBeenCalledWith("client-invalidated", {
+        reason,
+        method: "status.summary",
+      });
+    },
+  );
 
   it("drains credential mutation barriers installed by earlier queued requests", async () => {
+    const firstMutation = createGatewayHarnessGate();
+    const secondMutation = createGatewayHarnessGate();
     let releaseFirstMutation: (() => void) | undefined;
     let releaseSecondMutation: (() => void) | undefined;
     const close = createCloseMock();
     const client = createConnectedTestClient({ connId: "conn-chained-invalidating" });
     vi.mocked(handleGatewayRequest).mockImplementation(async (opts) => {
       if (opts.req.method === "device.token.rotate") {
-        await new Promise<void>((resolve) => {
-          releaseFirstMutation = resolve;
-        });
+        releaseFirstMutation = firstMutation.resolve;
+        await firstMutation.promise;
         return;
       }
       expect(opts.req.method).toBe("device.token.revoke");
-      await new Promise<void>((resolve) => {
-        releaseSecondMutation = resolve;
-      });
+      releaseSecondMutation = secondMutation.resolve;
+      await secondMutation.promise;
       client.invalidated = true;
       client.invalidatedReason = "device-token-revoked";
     });
@@ -932,13 +973,12 @@ describe("attachGatewayWsMessageHandler post-connect health refresh", () => {
   });
 
   it("uses the injected runtime-aware health refresh after hello", async () => {
+    const refresh = createGatewayHarnessGate<HealthSummary>();
     let resolveRefresh: (() => void) | undefined;
-    const refreshHealthSnapshot = vi.fn<GatewayRequestContext["refreshHealthSnapshot"]>(
-      () =>
-        new Promise((resolve) => {
-          resolveRefresh = () => resolve(createHealthSummary());
-        }),
-    );
+    const refreshHealthSnapshot = vi.fn<GatewayRequestContext["refreshHealthSnapshot"]>(() => {
+      resolveRefresh = () => refresh.resolve(createHealthSummary());
+      return refresh.promise;
+    });
     const isClosed = vi.fn(() => false);
     const harness = attachGatewayHarness({
       connId: "conn-1",
@@ -998,7 +1038,7 @@ describe("attachGatewayWsMessageHandler post-connect health refresh", () => {
   it("projects a stable durable profile into presence and refreshes avatar state on reconnect", async () => {
     const clock = vi.spyOn(Date, "now").mockReturnValue(1_800_000_000_000);
     try {
-      await withOpenClawTestState({ label: "gateway-profile-presence" }, async () => {
+      await withGatewayTestState({ label: "gateway-profile-presence" }, async () => {
         const connect = async (suffix: string) => {
           const connId = `conn-trusted-proxy-user-${suffix}`;
           const harness = connectTrustedProxyUser(connId);
@@ -1087,23 +1127,14 @@ describe("attachGatewayWsMessageHandler post-connect health refresh", () => {
   });
 
   it("registers a verified profile before detached Tailscale avatar adoption completes", async () => {
-    await withOpenClawTestState({ label: "gateway-tailscale-avatar-detached" }, async () => {
-      let resolveAvatar:
-        | ((profile: {
-            id: string;
-            displayName: string | null;
-            avatarMime: "image/png" | "image/jpeg" | "image/webp" | null;
-            mergedInto: string | null;
-            createdAt: number;
-            updatedAt: number;
-          }) => void)
-        | undefined;
-      adoptTailscaleProfileAvatarMock.mockImplementationOnce(
-        async () =>
-          await new Promise((resolve) => {
-            resolveAvatar = resolve;
-          }),
-      );
+    await withGatewayTestState({ label: "gateway-tailscale-avatar-detached" }, async () => {
+      const avatar =
+        createGatewayHarnessGate<ReturnType<typeof ensureProfileForTailscaleIdentity>>();
+      let resolveAvatar: typeof avatar.resolve | undefined;
+      adoptTailscaleProfileAvatarMock.mockImplementationOnce(async () => {
+        resolveAvatar = avatar.resolve;
+        return await avatar.promise;
+      });
       resolveConnectAuthStateMock.mockResolvedValueOnce({
         authResult: {
           ok: true,
@@ -1187,16 +1218,15 @@ describe("attachGatewayWsMessageHandler post-connect health refresh", () => {
   it.each([false, true])(
     "completes deferred identity sync only while its socket is live (closed=%s)",
     async (closedBeforeSync) => {
-      await withOpenClawTestState({ label: "gateway-github-profile-deferred" }, async () => {
+      await withGatewayTestState({ label: "gateway-github-profile-deferred" }, async () => {
         const canonical = ensureProfileForEmail("canonical@example.test");
+        const syncCompletion = createGatewayHarnessGate<{ profileId: string; updatedAt: number }>();
         let finishSync: (() => void) | undefined;
-        const sync = vi.fn(
-          async () =>
-            await new Promise<{ profileId: string; updatedAt: number }>((resolve) => {
-              finishSync = () =>
-                resolve({ profileId: canonical.id, updatedAt: canonical.updatedAt });
-            }),
-        );
+        const sync = vi.fn(async () => {
+          finishSync = () =>
+            syncCompletion.resolve({ profileId: canonical.id, updatedAt: canonical.updatedAt });
+          return await syncCompletion.promise;
+        });
         createAuthenticatedGitHubIdentitySyncMock.mockReturnValueOnce(sync);
         resolveConnectAuthStateMock.mockResolvedValueOnce({
           authResult: {
@@ -1282,9 +1312,9 @@ describe("attachGatewayWsMessageHandler post-connect health refresh", () => {
   );
 
   it("resolves a GitHub-backed role before registering the connection or sending hello", async () => {
-    await withOpenClawTestState({ label: "gateway-github-role-before-hello" }, async () => {
+    await withGatewayTestState({ label: "gateway-github-role-before-hello" }, async () => {
       const canonical = ensureProfileForEmail("canonical@example.test");
-      const syncCompletion = createDeferred<{ profileId: string; updatedAt: number }>();
+      const syncCompletion = createGatewayHarnessGate<{ profileId: string; updatedAt: number }>();
       const sync = vi.fn(async () => await syncCompletion.promise);
       createAuthenticatedGitHubIdentitySyncMock.mockReturnValueOnce(sync);
       loadConfigMock.mockImplementationOnce(() => ({
@@ -1371,7 +1401,7 @@ describe("attachGatewayWsMessageHandler post-connect health refresh", () => {
     async ({ error, message, retryAfterMs }) => {
       const clock = vi.spyOn(Date, "now").mockReturnValue(1_800_000_000_000);
       onTestFinished(() => clock.mockRestore());
-      await withOpenClawTestState(
+      await withGatewayTestState(
         { label: "gateway-github-role-verification-failure" },
         async () => {
           createAuthenticatedGitHubIdentitySyncMock.mockReturnValueOnce(
@@ -1449,7 +1479,7 @@ describe("attachGatewayWsMessageHandler post-connect health refresh", () => {
   );
 
   it("keeps a mutable GitHub alias unattributed when immutable sync fails", async () => {
-    await withOpenClawTestState({ label: "gateway-github-profile-failure" }, async () => {
+    await withGatewayTestState({ label: "gateway-github-profile-failure" }, async () => {
       syncGitHubIdentity({
         identity: { accountId: 10, login: "prior-owner" },
         authenticationAlias: { kind: "github-login", login: "released-login" },
@@ -1704,7 +1734,7 @@ describe("attachGatewayWsMessageHandler post-connect health refresh", () => {
     expect(newGeneration).toBeTypeOf("string");
     const generationState = { current: oldGeneration, required: null };
     const preparationStarted = createDeferred();
-    const releasePreparation = createDeferred();
+    const releasePreparation = createGatewayHarnessGate();
     prepareGatewayNodeConnectMock.mockImplementationOnce(async () => {
       preparationStarted.resolve();
       await releasePreparation.promise;

@@ -1,9 +1,9 @@
-// Vydra tests cover shared download timeout plugin behavior.
+// Vydra tests cover shared URL extraction and download behavior.
 import { once } from "node:events";
 import http from "node:http";
 import { installPinnedHostnameTestHooks } from "openclaw/plugin-sdk/test-media-understanding";
 import { afterEach, describe, expect, it, vi } from "vitest";
-import { downloadVydraAsset } from "./shared.js";
+import { downloadVydraAsset, extractVydraResultUrls } from "./shared.js";
 
 describe("downloadVydraAsset", () => {
   installPinnedHostnameTestHooks();
@@ -214,4 +214,45 @@ describe("downloadVydraAsset", () => {
     expect(result).toBeInstanceOf(Error);
     expect(result).toMatchObject({ message: "broken success body" });
   });
+});
+
+it("preserves URL priority, traversal bounds and independent result arrays", () => {
+  const payload = {
+    audioUrl: "https://cdn.example/other.mp3",
+    videoUrl: "https://cdn.example/other.mp4",
+    imageUrls: ["https://cdn.example/second.png", [" https://cdn.example/first.png "]],
+    imageUrl: " \thttps://cdn.example/first.png\n",
+    url: "https://cdn.example/shared.png",
+    resultUrl: "https://cdn.example/result.png",
+    outputs: [
+      { imageUrl: "https://cdn.example/second.png", url: "https://cdn.example/nested.png" },
+      [[{ imageUrl: "https://cdn.example/array.png" }]],
+    ],
+    data: {
+      data: {
+        data: {
+          data: {
+            data: {
+              imageUrl: "https://cdn.example/edge.png",
+              data: { imageUrl: "https://cdn.example/too-deep.png" },
+            },
+          },
+        },
+      },
+    },
+  };
+  const expected = [
+    "https://cdn.example/first.png",
+    "https://cdn.example/second.png",
+    "https://cdn.example/result.png",
+    "https://cdn.example/shared.png",
+    "https://cdn.example/nested.png",
+    "https://cdn.example/array.png",
+    "https://cdn.example/edge.png",
+  ];
+
+  const urls = extractVydraResultUrls(payload, "image");
+  expect(urls).toEqual(expected);
+  urls.push("https://cdn.example/caller-owned.png");
+  expect(extractVydraResultUrls(payload, "image")).toEqual(expected);
 });

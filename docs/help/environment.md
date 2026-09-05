@@ -185,6 +185,13 @@ snapshots or redirect the snapshot cache.
 
 ## Runtime-injected env vars
 
+Gateway port-listener diagnostics and lock-owner identity probes run native utilities with
+a limited environment containing executable paths, OS bootstrap and account directories,
+temporary directories, and known locale and timezone settings. These children do not inherit provider credentials,
+application tokens, proxies, runtime injection variables, or arbitrary application settings.
+This boundary leaves the parent environment and normal agent, Gateway, and updater payload
+environments unchanged.
+
 OpenClaw also injects context markers into spawned child processes:
 
 - `OPENCLAW_SHELL=exec`: set for commands run through the `exec` tool.

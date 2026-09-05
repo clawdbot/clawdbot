@@ -83,6 +83,8 @@ export type PluginManifestRecord = {
   channels: string[];
   providers: string[];
   providerDiscoverySource?: string;
+  /** Undefined is undeclared; null retains a rejected declaration without enabling full-entry fallback. */
+  capabilityCatalogSource?: string | null;
   modelSupport?: PluginManifestModelSupport;
   modelCatalog?: PluginManifestModelCatalog;
   modelPricing?: PluginManifestModelPricing;

@@ -55,7 +55,6 @@ import {
   persistManualAuthProfiles,
   restoreSetupPluginMetadata,
   retainUnownedCodexInstall,
-  runSetupInferenceTest,
 } from "./setup-inference-persist.js";
 import {
   configureCodexCliPreparedAuth,
@@ -63,6 +62,7 @@ import {
   resolveSetupAgentRuntimeId,
 } from "./setup-inference-plan-helpers.js";
 import { buildTestPlan } from "./setup-inference-plan.js";
+import { runSetupInferenceTest } from "./setup-inference-test.js";
 import { applySystemAgentModelSelection } from "./setup-model-selection.js";
 import {
   captureSystemAgentOwnerPluginArtifacts,
@@ -462,6 +462,7 @@ async function activateSetupInferenceUnredacted(
           // already exist in the isolated store and every other route stays read-only.
           authProfileStateMode: "read-only",
           requireExecutionOwner: true,
+          verifyAgentTools: true,
           ...(params.signal ? { signal: params.signal } : {}),
         }),
       );

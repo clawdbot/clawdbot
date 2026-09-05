@@ -9,6 +9,7 @@ import {
   executeSqliteQuerySync,
   executeSqliteQueryTakeFirstSync,
   getNodeSqliteKysely,
+  iterateSqliteQuerySync,
 } from "../infra/kysely-sync.js";
 import { coerceRequiredSqliteNumber as sqliteNumber } from "../infra/sqlite-number.js";
 import { withOpenClawAgentDatabaseReadOnly } from "../state/openclaw-agent-db-readonly.js";
@@ -46,11 +47,6 @@ type SqliteTrajectoryRuntimeReadScope = Omit<
 
 type SqliteTrajectoryRuntimeEventRow = {
   event: TrajectoryEvent;
-  seq: number;
-};
-
-type TrajectoryRuntimeRow = {
-  event_json: string;
   seq: number;
 };
 
@@ -299,16 +295,26 @@ function trimSqliteTrajectoryRuntimeWindow(
   maxRuntimeBytes: number,
 ): void {
   const db = getTrajectoryKysely(database.db);
-  const rows = executeSqliteQuerySync(
+  const rows = iterateSqliteQuerySync(
     database.db,
     db
       .selectFrom("trajectory_runtime_events")
       .select(["seq", "event_json"])
       .where("session_id", "=", sessionId)
-      .orderBy("seq", "asc"),
-  ).rows;
-  const removableSeqs = oldestTrajectorySeqsPastByteWindow(rows, maxRuntimeBytes);
-  if (removableSeqs.length === 0) {
+      .orderBy("seq", "desc"),
+  );
+  let retainedBytes = 0;
+  let removeThroughSeq: number | undefined;
+  // Retention removes an oldest prefix. Stop once the newest suffix fills the
+  // UTF-8 byte budget, then close the iterator before deleting that prefix.
+  for (const row of rows) {
+    retainedBytes += Buffer.byteLength(row.event_json, "utf8") + 1;
+    if (!(retainedBytes <= maxRuntimeBytes)) {
+      removeThroughSeq = row.seq;
+      break;
+    }
+  }
+  if (removeThroughSeq === undefined) {
     return;
   }
   executeSqliteQuerySync(
@@ -316,28 +322,8 @@ function trimSqliteTrajectoryRuntimeWindow(
     db
       .deleteFrom("trajectory_runtime_events")
       .where("session_id", "=", sessionId)
-      .where("seq", "in", removableSeqs),
+      .where("seq", "<=", removeThroughSeq),
   );
-}
-
-function oldestTrajectorySeqsPastByteWindow(
-  rows: readonly TrajectoryRuntimeRow[],
-  maxRuntimeBytes: number,
-): number[] {
-  let totalBytes = rows.reduce((total, row) => total + trajectoryJsonlRowBytes(row.event_json), 0);
-  const removableSeqs: number[] = [];
-  for (const row of rows) {
-    if (totalBytes <= maxRuntimeBytes) {
-      break;
-    }
-    removableSeqs.push(row.seq);
-    totalBytes -= trajectoryJsonlRowBytes(row.event_json);
-  }
-  return removableSeqs;
-}
-
-function trajectoryJsonlRowBytes(eventJson: string): number {
-  return Buffer.byteLength(eventJson, "utf8") + 1;
 }
 
 function readTrajectoryEventTimestamp(event: TrajectoryEvent): number | undefined {

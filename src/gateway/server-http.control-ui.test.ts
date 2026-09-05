@@ -6,6 +6,38 @@ import { withTempDir } from "../test-utils/temp-dir.js";
 import { AUTH_NONE, sendRequest, withGatewayServer } from "./server-http.test-harness.js";
 
 describe("Gateway Control UI identity", () => {
+  it("applies dashboard enablement to subsequent requests without replacing the listener", async () => {
+    await withTempDir("openclaw-http-toggle-", async (controlUiRoot) => {
+      await fs.writeFile(nodePath.join(controlUiRoot, "index.html"), "<html>synthetic UI</html>\n");
+      await fs.mkdir(nodePath.join(controlUiRoot, "assets"));
+      await fs.writeFile(nodePath.join(controlUiRoot, "assets", "app.js"), "// synthetic asset\n");
+      let enabled: boolean | undefined = false;
+      await withGatewayServer({
+        prefix: "control-ui-enablement",
+        resolvedAuth: AUTH_NONE,
+        overrides: {
+          controlUiEnabled: undefined,
+          controlUiBasePath: "",
+          controlUiRoot: { kind: "resolved", path: controlUiRoot },
+          getRuntimeConfig: () => ({ gateway: { controlUi: { enabled } } }),
+        },
+        run: async (server) => {
+          for (const next of [false, true, false, undefined]) {
+            enabled = next;
+            for (const path of ["/", "/chat", "/assets/app.js", "/control-ui-config.json"]) {
+              const response = await sendRequest(server, { path, method: "GET" });
+              expect(response.res.statusCode, `${path}, enabled=${enabled}`).toBe(
+                enabled === false ? 404 : 200,
+              );
+            }
+            const health = await sendRequest(server, { path: "/healthz", method: "GET" });
+            expect(health.res.statusCode).toBe(200);
+          }
+        },
+      });
+    });
+  });
+
   it("keeps static requests independent of workspace identity reads while bootstrap resolves identity", async () => {
     await withTempDir("openclaw-http-identity-", async (controlUiRoot) => {
       await fs.writeFile(nodePath.join(controlUiRoot, "index.html"), "<html>synthetic UI</html>\n");

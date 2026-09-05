@@ -30,6 +30,7 @@ const repositoryScriptEntries = [
   "scripts/check-control-ui-precompressed-assets.mts!",
   "scripts/check-live-cache.ts!",
   "scripts/check-package-dist-imports.mjs!",
+  "scripts/check-plugin-sdk-exports.mts!",
   // Cloudflare deployment template: wrangler bundles the Worker from this entry.
   "scripts/cloudflare/src/index.ts!",
   // Invoked by the documented macOS Computer Use live-proof shell rig.
@@ -280,6 +281,7 @@ const bundledPluginEntries = [
   // Provider catalogs and web tools resolve these manifest/convention-owned
   // modules from the plugin root at runtime.
   "provider-discovery.ts!",
+  "capability-catalog.ts!",
   "{web-search,web-fetch}-provider.ts!",
   "{api,contract-api,helper-api,runtime-api,light-runtime-api,update-offset-runtime-api,channel-plugin-api,provider-plugin-api,setup-api}.ts!",
   "subagent-hooks-api.ts!",

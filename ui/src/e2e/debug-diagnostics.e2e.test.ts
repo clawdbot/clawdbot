@@ -1,7 +1,8 @@
-import { mkdir } from "node:fs/promises";
+import { mkdir, writeFile } from "node:fs/promises";
 import path from "node:path";
 import { beforeEach, expect, it } from "vitest";
 import { createControlUiE2eArtifactDir } from "../test-helpers/control-ui-e2e-artifacts.ts";
+import { takeControlUiViewportScreenshot } from "../test-helpers/control-ui-e2e-screenshot.ts";
 import { installMockGateway } from "../test-helpers/control-ui-e2e.ts";
 import { createControlUiE2eSuite } from "./control-ui-e2e-suite.test-support.ts";
 
@@ -104,11 +105,12 @@ suite.define(() => {
         }
 
         if (captureUiProof) {
-          await page.screenshot({
-            animations: "disabled",
-            fullPage: true,
-            path: path.join(proofDir, "diagnostic-snapshots.png"),
-          });
+          await writeFile(
+            path.join(proofDir, "diagnostic-snapshots.png"),
+            await takeControlUiViewportScreenshot(page, snapshots, [
+              snapshots.getByRole("heading", { name: "Snapshots" }),
+            ]),
+          );
           await models.scrollIntoViewIfNeeded();
           await page.screenshot({
             animations: "disabled",

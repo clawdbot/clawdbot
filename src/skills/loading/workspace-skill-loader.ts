@@ -21,19 +21,14 @@ import { loadSkillLibrarySelection } from "../library/selection.js";
 import { getSkillsSnapshotVersion } from "../runtime/refresh-state.js";
 import { mergeRemoteNodeSkillEntries } from "../runtime/remote-skills.js";
 import { fingerprintSkillSnapshotConfig } from "../runtime/snapshot-config-fingerprint.js";
-import type {
-  ParsedSkillFrontmatter,
-  SkillEligibilityContext,
-  SkillEntry,
-  SkillSnapshot,
-} from "../types.js";
+import type { SkillEligibilityContext, SkillEntry, SkillSnapshot } from "../types.js";
 import { resolveBundledSkillsDir } from "./bundled-dir.js";
 import { resolveBundledAllowlist, shouldIncludeSkill } from "./config.js";
 import { resolveSkillInvocationPolicy, resolveSkillKey } from "./frontmatter.js";
 import {
   loadSingleSkillDirectory,
   loadSkillsFromDirSafe,
-  readSkillFrontmatterSafe,
+  type LoadedLocalSkill,
   type LocalSkillLoadDiagnostic,
 } from "./local-loader.js";
 import {
@@ -61,10 +56,7 @@ const MAX_SKILL_ENTRY_CACHE_SIZE = 64;
 const skillEntryCache = new Map<string, SkillEntry[]>();
 const reportedSkillCollisions = new Map<string, true>();
 
-type LoadedSkillRecord = {
-  skill: Skill;
-  frontmatter?: ParsedSkillFrontmatter;
-  rejectHardlinks: boolean;
+type LoadedSkillRecord = LoadedLocalSkill & {
   syncSourceDir?: string;
   syncDirName?: string;
 };
@@ -198,13 +190,7 @@ function loadContainedSkillRecords(params: {
     rejectHardlinks: params.rejectHardlinks,
     onDiagnostic: (diagnostic) => warnInvalidSkill(params.source, diagnostic),
   });
-  const records = loaded.skills
-    .map((skill) => ({
-      skill,
-      frontmatter: loaded.frontmatterByFilePath.get(skill.filePath),
-      rejectHardlinks: params.rejectHardlinks,
-    }))
-    .filter((record) => path.resolve(record.skill.baseDir) === expectedBaseDir);
+  const records = loaded.filter((record) => path.resolve(record.skill.baseDir) === expectedBaseDir);
   const canonicalSkillDir = params.canonicalSkillDir;
   return canonicalSkillDir
     ? records.map((record) => canonicalizeLoadedSkillRecord(record, canonicalSkillDir))
@@ -485,16 +471,7 @@ function loadSkillEntries(
   const entries = Array.from(merged.values())
     .toSorted((a, b) => a.skill.name.localeCompare(b.skill.name, "en"))
     .map((record) => {
-      const skill = record.skill;
-      const frontmatter =
-        record.frontmatter ??
-        readSkillFrontmatterSafe({
-          rootDir: skill.baseDir,
-          filePath: skill.filePath,
-          maxBytes: limits.maxSkillFileBytes,
-          rejectHardlinks: record.rejectHardlinks,
-        }) ??
-        ({} as ParsedSkillFrontmatter);
+      const { skill, frontmatter } = record;
       const invocation = resolveSkillInvocationPolicy(frontmatter);
       const entry: SkillEntry = {
         skill,

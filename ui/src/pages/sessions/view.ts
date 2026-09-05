@@ -64,7 +64,7 @@ import { formatSessionArchiveReason } from "../../lib/sessions/session-archive-r
 import { parseSessionKeyParts } from "../../lib/sessions/session-key.ts";
 import { SESSIONS_PAGE_DEFAULT_LIMIT } from "../../lib/sessions/session-requests.ts";
 
-export type TranscriptSearchState =
+type TranscriptSearchState =
   | { status: "idle" }
   | { status: "loading" }
   | { status: "error"; message: string }

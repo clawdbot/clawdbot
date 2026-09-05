@@ -455,7 +455,7 @@ export async function cleanupPreparedModelRuntimeHarness(
   // A failed assertion may precede an async owner's terminal join. Reset is not a drain;
   // keep that namespace alive rather than deleting files a late build may still capture.
   if (failed) {
-    state.restoreEnv();
+    await state.restoreEnv();
     console.warn(`Retained prepared-model fixture after failed test: ${state.root}`);
     return;
   }

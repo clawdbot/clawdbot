@@ -9,6 +9,7 @@ import { requireNodeSqlite } from "./node-sqlite.js";
 import { runtimeProcessEntrypoints } from "./runtime-process-entrypoints.js";
 import { resolveRuntimeWorkerArgv, resolveRuntimeWorkerUrl } from "./runtime-worker-url.js";
 import { startSqliteConcurrentWriter } from "./sqlite-concurrent-writer.test-support.js";
+import { readMainDatabasePosixLocks } from "./sqlite-posix-locks.test-support.js";
 import {
   prepareSqliteReadOnlyLocation,
   prepareSqliteReadOnlyLocationInProcess,
@@ -84,43 +85,6 @@ function readLogicalFamily(pathname: string): Map<string, Buffer> {
   const family = readFamily(pathname);
   family.delete("-shm");
   return family;
-}
-
-type PosixLock = {
-  length: number;
-  pid: number;
-  start: number;
-  type: string;
-};
-
-function readMainDatabasePosixLocks(pathname: string): PosixLock[] {
-  const result = spawnSync(
-    "python3",
-    [
-      "-c",
-      `
-import fcntl, json, os, struct, sys
-layout = struct.Struct("hhqqi4x")
-request = layout.pack(fcntl.F_WRLCK, os.SEEK_SET, 1073741826, 510, 0)
-with open(sys.argv[1], "rb") as database:
-    result = layout.unpack(fcntl.fcntl(database.fileno(), fcntl.F_GETLK, request))
-lock_type, _, start, length, pid = result
-locks = [] if lock_type == fcntl.F_UNLCK else [{
-    "length": length,
-    "pid": pid,
-    "start": start,
-    "type": "read" if lock_type == fcntl.F_RDLCK else "write",
-}]
-print(json.dumps(locks))
-`,
-      pathname,
-    ],
-    { encoding: "utf8" },
-  );
-  if (result.status !== 0) {
-    throw new Error(result.stderr || "POSIX lock probe failed");
-  }
-  return JSON.parse(result.stdout) as PosixLock[];
 }
 
 describe("prepareSqliteReadOnlyLocation", () => {
@@ -566,7 +530,9 @@ describe("prepareSqliteReadOnlyLocation", () => {
       const locksBefore = readMainDatabasePosixLocks(databasePath);
       const cleanups: Array<() => boolean> = [];
       try {
-        expect(locksBefore).toHaveLength(1);
+        expect(locksBefore).toEqual([
+          { length: 510, pid: process.pid, start: 1073741826, type: "read" },
+        ]);
 
         const preparedAsync = await prepareSqliteReadOnlyLocation(databasePath);
         cleanups.push(preparedAsync.cleanup);

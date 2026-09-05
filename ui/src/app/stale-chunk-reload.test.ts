@@ -1,6 +1,7 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { CONTROL_UI_BUILD_INFO } from "../build-info.ts";
 import { i18n } from "../i18n/index.ts";
+import { registerControlUiReloadGuard } from "./document-reload-guard.ts";
 import {
   installMissingStylesheetRecovery,
   installStaleChunkReloadListener,
@@ -85,6 +86,76 @@ describe("isStaleChunkImportError", () => {
     expect(isStaleChunkImportError(new Error("request failed"))).toBe(false);
     expect(isStaleChunkImportError("Importing a module script failed.")).toBe(false);
     expect(isStaleChunkImportError(undefined)).toBe(false);
+  });
+});
+
+describe("document reload ownership", () => {
+  it.each(["automatic", "manual"])(
+    "checks live owners before and after the %s document probe",
+    async (mode) => {
+      const response = deferred<Response>();
+      const fetchMock = vi
+        .fn<typeof fetch>()
+        .mockImplementationOnce(() => response.promise)
+        .mockResolvedValue(new Response(null, { status: 200 }));
+      vi.stubGlobal("fetch", fetchMock);
+      const reload = vi.fn();
+      const storage = memoryStorage();
+      let allowed = false;
+      let clock = 1000;
+      const onBlocked = vi.fn();
+      const release = registerControlUiReloadGuard(() => allowed, onBlocked);
+      const attempt = () =>
+        mode === "automatic"
+          ? scheduleStaleChunkReload({ storage, reload, now: () => clock })
+          : retryStaleChunkReloadWhenReachable({ storage, reload, timeoutMs: 0 });
+      try {
+        await expect(attempt()).resolves.toBe(false);
+        expect(fetchMock).not.toHaveBeenCalled();
+        expect(onBlocked).toHaveBeenCalledTimes(mode === "manual" ? 1 : 0);
+
+        allowed = true;
+        const pending = attempt();
+        expect(fetchMock).toHaveBeenCalledOnce();
+        allowed = false;
+        response.resolve(new Response(null, { status: 200 }));
+        await expect(pending).resolves.toBe(false);
+        expect(reload).not.toHaveBeenCalled();
+        expect(storage.getItem(GUARD_KEY)).toBeNull();
+        expect(onBlocked).toHaveBeenCalledTimes(mode === "manual" ? 2 : 0);
+
+        release();
+        clock += 6000;
+        await expect(attempt()).resolves.toBe(true);
+        expect(reload).toHaveBeenCalledOnce();
+      } finally {
+        release();
+      }
+    },
+  );
+
+  it("does not release another owner's reload protection", async () => {
+    const firstBlocked = vi.fn();
+    const secondBlocked = vi.fn();
+    const releaseFirst = registerControlUiReloadGuard(() => false, firstBlocked);
+    const releaseSecond = registerControlUiReloadGuard(() => false, secondBlocked);
+    const probe = vi.fn(async () => true);
+    const reload = vi.fn();
+    const retry = () =>
+      retryStaleChunkReloadWhenReachable({ probe, reload, storage: memoryStorage() });
+    try {
+      releaseFirst();
+      await expect(retry()).resolves.toBe(false);
+      expect(probe).not.toHaveBeenCalled();
+      expect(firstBlocked).not.toHaveBeenCalled();
+      expect(secondBlocked).toHaveBeenCalledOnce();
+      releaseSecond();
+      await expect(retry()).resolves.toBe(true);
+      expect(reload).toHaveBeenCalledOnce();
+    } finally {
+      releaseFirst();
+      releaseSecond();
+    }
   });
 });
 

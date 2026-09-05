@@ -1,5 +1,6 @@
 // Compile-time identity for the Control UI artifact.
 import { isRecord } from "@openclaw/normalization-core/record-coerce";
+import { canReloadControlUiDocument } from "./app/document-reload-guard.ts";
 import { normalizeControlUiBuildInfo } from "./build-info-normalizers.ts";
 import type { ControlUiBuildInfo } from "./build-info-types.ts";
 
@@ -22,7 +23,8 @@ export function reloadControlUiIfStale(identity: {
 }): boolean {
   if (
     typeof window !== "undefined" &&
-    controlUiVersionDiffersFrom(identity.version ?? undefined, identity.sha ?? undefined)
+    controlUiVersionDiffersFrom(identity.version ?? undefined, identity.sha ?? undefined) &&
+    canReloadControlUiDocument()
   ) {
     window.location.reload();
     return true;

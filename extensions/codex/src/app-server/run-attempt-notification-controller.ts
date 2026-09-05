@@ -1,4 +1,6 @@
+import { isDeepStrictEqual } from "node:util";
 import { embeddedAgentLog } from "openclaw/plugin-sdk/agent-harness-runtime";
+import { acknowledgeInternalToolResult } from "openclaw/plugin-sdk/agent-harness-tool-runtime";
 import { isTerminalCodexTurnNotificationForTurn } from "./attempt-notification-state.js";
 import {
   isCodexTurnAbortMarkerNotification,
@@ -35,6 +37,7 @@ export function createCodexAttemptNotificationController(
     steeringQueueRef,
     activeTurnItemIds,
     pendingOpenClawDynamicToolCompletionIds,
+    openClawDynamicToolExecutions,
     completeTurn,
     noteProgress,
     deadlines,
@@ -104,6 +107,25 @@ export function createCodexAttemptNotificationController(
             scheduleTerminalDynamicToolReleaseCheck();
           }
           const item = readCodexNotificationItem(notification.params);
+          if (item?.type === "dynamicToolCall" && typeof item.id === "string") {
+            const response = await openClawDynamicToolExecutions.get({
+              threadId: resourceState.thread.threadId,
+              turnId,
+              callId: item.id,
+            });
+            // Codex emits these fields after accepting the response; decode failures
+            // instead complete with a replacement error. A pipe write is not acceptance.
+            if (
+              response &&
+              !state.projectionClosed &&
+              !runAbortController.signal.aborted &&
+              turnIdRef.current === turnId &&
+              item.success === response.success &&
+              isDeepStrictEqual(item.contentItems, response.contentItems)
+            ) {
+              acknowledgeInternalToolResult(response);
+            }
+          }
           if (item?.type === "userMessage" && typeof item.clientId === "string") {
             await steeringQueueRef.current?.confirmConsumed(item.clientId);
           }

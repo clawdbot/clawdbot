@@ -1,3 +1,4 @@
+import { toUSVString } from "node:util";
 import { uniqueStrings } from "@openclaw/normalization-core/string-normalization";
 import {
   executeSqliteQuerySync,
@@ -165,11 +166,18 @@ export function readReferencedSessionIds(
   excludedSessionKeys: ReadonlySet<string> = new Set(),
 ): Set<string> {
   const db = getSessionKysely(database.db);
+  // Only push down keys unchanged by Node/SQLite text conversion; retain exact membership below.
+  const excludedKeys = [...excludedSessionKeys].filter(
+    (key) => toUSVString(key) === key && !key.includes("\0") && !/[\uFFFE\uFFFF]/u.test(key),
+  );
   const rows = iterateSqliteQuerySync(
     database.db,
     db
       .selectFrom("session_nodes")
-      .select([sessionEntryMetadataJson, "current_session_id", "session_key"]),
+      .select([sessionEntryMetadataJson, "current_session_id", "session_key"])
+      .$if(excludedKeys.length > 0, (query) =>
+        query.where("session_key", "not in", sqliteStringSet(excludedKeys)),
+      ),
   );
   const sessionIds = new Set<string>();
   for (const row of rows) {

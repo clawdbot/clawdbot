@@ -1,5 +1,6 @@
 // Covers root work counting and reversible suspension admission transitions.
 import { afterEach, beforeEach, expect, it, vi } from "vitest";
+import { createDeferredCore } from "../shared/deferred.js";
 import {
   beginGatewayRestartSignalAdmission,
   beginGatewayRootWorkAdmissionWhenOpen,
@@ -18,6 +19,7 @@ import {
   resetGatewayWorkAdmission,
   rollbackGatewayRestartSignalFence,
   runWithGatewayIndependentRootWorkContinuation,
+  runWithRetainedGatewayRootWork,
   runOutsideGatewayRootWorkAdmission,
   tryBeginGatewayPreparedRestartRootWorkAdmission,
   tryBeginGatewayRestartStartupRootWorkAdmission,
@@ -335,6 +337,62 @@ it("retains an admitted request root across its handler return", async () => {
   expect(subordinateAdmissionClosed).toBe(false);
   releaseContinuation();
   releaseContinuation();
+  expect(getActiveGatewayRootWorkCount()).toBe(0);
+});
+
+it.each(["resolve", "reject"] as const)(
+  "retains the original root through a started effect's %s without adding admission",
+  async (outcome) => {
+    const release = createDeferredCore();
+    const root = tryBeginGatewayRootWorkAdmission();
+    const started = vi.fn();
+    let effect: Promise<void> | undefined;
+    try {
+      await root?.run(async () => {
+        effect = runWithRetainedGatewayRootWork(async () => {
+          started();
+          await release.promise;
+          expect(isGatewaySubordinateWorkAdmissionClosed()).toBe(false);
+          if (outcome === "reject") {
+            throw new Error("effect failed");
+          }
+        });
+        void effect.catch(() => {});
+        expect(started).toHaveBeenCalledOnce();
+        expect(getActiveGatewayRootWorkCount()).toBe(1);
+      });
+      root?.release();
+      expect(getActiveGatewayRootWorkCount()).toBe(1);
+      release.resolve();
+      if (outcome === "reject") {
+        await expect(effect).rejects.toThrow("effect failed");
+      } else {
+        await effect;
+      }
+      expect(getActiveGatewayRootWorkCount()).toBe(0);
+    } finally {
+      release.resolve();
+      await effect?.catch(() => {});
+      root?.release();
+    }
+  },
+);
+
+it("does not park unrooted started effects behind suspension or restart admission", async () => {
+  const suspension = tryBeginGatewaySuspendAdmission(() => {});
+  expect(suspension?.commit()).toBe(true);
+  const started = vi.fn(() => "finished");
+  const suspended = runWithRetainedGatewayRootWork(started);
+  try {
+    expect(started).toHaveBeenCalledOnce();
+    await expect(suspended).resolves.toBe("finished");
+    expect(getActiveGatewayRootWorkCount()).toBe(0);
+  } finally {
+    suspension?.release();
+    await suspended;
+  }
+  markGatewayRestartDraining();
+  await expect(runWithRetainedGatewayRootWork(started)).resolves.toBe("finished");
   expect(getActiveGatewayRootWorkCount()).toBe(0);
 });
 

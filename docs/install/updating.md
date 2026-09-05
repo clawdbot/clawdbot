@@ -767,6 +767,17 @@ The failed update retains its nonzero exit code even if the agent repairs it.
 - Check: [Troubleshooting](/gateway/troubleshooting)
 - Ask in Discord: [https://discord.gg/clawd](https://discord.gg/clawd)
 
+To repair using OpenClaw's configured inference, run `openclaw triage --run`
+in a terminal on the Gateway host. It checks Doctor lint, then runs up to one
+embedded repair turn with time and tool-call limits and checks Doctor again.
+It uses the system-agent owner's model and configured fallbacks before trying
+other agents' authenticated routes. Operator-owned updates and explicit repair requests
+replace interactive exec approval with a prompt-free run scoped to the installation
+or staged candidate root (`fs.workspaceOnly: true`), preserving safe-bin and tool
+allowlists and refusing explicit exec or repair-tool denies with `exec-denied-by-policy`
+and an `openclaw triage` external handoff. See [Triage](/cli/triage#installation-target-and-embedded-handoff)
+for the repair contract, installation targeting, and validation results.
+
 ## Related
 
 - [Install overview](/install): all installation methods.

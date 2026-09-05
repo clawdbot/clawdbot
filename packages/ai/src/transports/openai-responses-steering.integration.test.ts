@@ -192,12 +192,105 @@ function start(
   return { first, events, socket, control: ready.promise, cleanup };
 }
 
+async function startRequiredInput(historicalUpdate = false) {
+  const sentUpdate = { type: "configuration_update" as const, reasoning: { effort: "medium" } };
+  const harness = start(
+    { reasoning: { effort: "low" } },
+    historicalUpdate ? [sentUpdate, initialUser] : [initialUser],
+  );
+  const control = await harness.control;
+  const admission = control.steer([{ ...update, timestamp: 1 }]);
+  harness.socket.emit(accepted);
+  await admission;
+  const toolCall = {
+    type: "function_call" as const,
+    id: "fc_1",
+    call_id: "call_1",
+    name: "lookup",
+    arguments: "{}",
+    status: "completed" as const,
+  };
+  harness.socket.emit({
+    type: "response.completed",
+    response: { id: "resp_1", status: "completed", output: [toolCall] },
+  });
+  harness.socket.emit({
+    type: "response.steer.pending",
+    steer: accepted.steer,
+    reason: "waiting_for_required_input",
+    required_input: [{ type: "function_call_output", call_id: "call_1", name: "lookup" }],
+  });
+  await harness.events;
+  harness.first.finish();
+  const toolResult = {
+    type: "function_call_output" as const,
+    call_id: "call_1",
+    output: "lookup result",
+  };
+  return { ...harness, sentUpdate, toolCall, toolResult };
+}
+
 afterEach(() => {
   cleanupSessionResources();
   sockets.instances.length = 0;
 });
 
 describe("Responses WebSocket steering handoff", () => {
+  it("keeps runtime context with its user through steering and the automatic successor", async () => {
+    const context: Context = {
+      messages: [
+        { role: "user", content: "original", timestamp: 0 },
+        {
+          role: "user",
+          content: "runtime context",
+          timestamp: 0,
+          runtimeContextCarrier: true,
+        },
+      ],
+    };
+    const ready = createDeferred<Parameters<NonNullable<StreamOptions["onActiveResponse"]>>[0]>();
+    const stream = createOpenAIResponsesTransportStreamFn();
+    const options = {
+      apiKey: "test-key",
+      sessionId: "runtime-context-steering",
+      transport: "websocket-cached" as const,
+    };
+    const first = (
+      await stream(model, context, {
+        ...options,
+        onActiveResponse: (control) => {
+          ready.resolve(control);
+        },
+      })
+    ).result();
+    await vi.waitFor(() => expect(sockets.instances).toHaveLength(1));
+    const socket = sockets.instances[0];
+    assert(socket);
+    socket.emit({ type: "response.created", response: { id: "resp_1" } });
+    const steeringUser = { role: "user" as const, content: "new requirement", timestamp: 1 };
+    const admission = (await ready.promise).steer([steeringUser]);
+    try {
+      await vi.waitFor(() => expect(socket.requests).toHaveLength(2));
+      expect(socket.requests[1]).toMatchObject({
+        type: "response.steer",
+        input: [{ role: "user", content: [{ type: "input_text", text: "new requirement" }] }],
+      });
+      socket.emit(accepted);
+      expect(await admission).toBe(true);
+    } finally {
+      socket.emit(completed("resp_1", [output("original answer")]));
+      await first;
+    }
+    context.messages.push(await first, steeringUser);
+    socket.emit({ type: "response.created", response: { id: "resp_2" } });
+    socket.emit(completed("resp_2", [output("steered answer", "msg_2")]));
+    const second = await (await stream(model, context, options)).result();
+    expect(second.stopReason).not.toBe("error");
+    expect(second.content).toMatchObject([{ type: "text", text: "steered answer" }]);
+    expect(socket.requests.filter((request) => request.type === "response.create")).toHaveLength(1);
+    expect(socket.streamCalls).toBe(1);
+  });
+
   it.each(["prune", "prepend"])(
     "handles %s payload projection against the active prefix",
     async (mode) => {
@@ -567,55 +660,114 @@ describe("Responses WebSocket steering handoff", () => {
     expect(creates.flatMap((request) => request.input)).toEqual([initialUser, toolResult]);
   });
 
-  it("returns required tool input with current settings without repeating accepted steering", async () => {
-    const harness = start();
-    const control = await harness.control;
-    const admission = control.steer([{ ...update, timestamp: 1 }]);
-    harness.socket.emit(accepted);
-    await admission;
-    const toolCall = {
-      type: "function_call" as const,
-      id: "fc_1",
-      call_id: "call_1",
-      name: "lookup",
-      arguments: "{}",
-      status: "completed" as const,
-    };
-    harness.socket.emit({
-      type: "response.completed",
-      response: { id: "resp_1", status: "completed", output: [toolCall] },
-    });
-    harness.socket.emit({
-      type: "response.steer.pending",
-      steer: accepted.steer,
-      reason: "waiting_for_required_input",
-      required_input: [{ type: "function_call_output", call_id: "call_1", name: "lookup" }],
-    });
-    await harness.events;
-    harness.first.finish();
-    const toolResult = {
-      type: "function_call_output" as const,
-      call_id: "call_1",
-      output: "lookup result",
-    };
-    const settings = {
-      instructions: "Summarize the lookup result",
-      tools: [{ type: "function", name: "summarize", parameters: { type: "object" } }],
-    };
-    const second = createStream([initialUser, toolCall, toolResult, update], undefined, settings);
-    const secondEvents = collect(second.stream);
+  it.each(
+    [
+      {
+        name: "instructions and tools",
+        settings: {
+          instructions: "Summarize the lookup result",
+          tools: [{ type: "function", name: "summarize", parameters: { type: "object" } }],
+        },
+      },
+      { name: "output limit", settings: { max_output_tokens: 512 } },
+      { name: "reasoning effort", settings: { reasoning: { effort: "high" } } },
+      {
+        name: "reasoning summary",
+        settings: { reasoning: { effort: "low", summary: "detailed" } },
+      },
+    ].flatMap((entry) =>
+      [false, true].map((historicalUpdate) => Object.assign({}, entry, { historicalUpdate })),
+    ),
+  )(
+    "returns required input with current $name (historical update: $historicalUpdate)",
+    async ({ settings, historicalUpdate }) => {
+      const harness = await startRequiredInput(historicalUpdate);
+      const { toolCall, toolResult } = harness;
+      const currentSettings = { reasoning: { effort: "low" }, ...settings };
+      const second = createStream(
+        [initialUser, toolCall, toolResult, update],
+        undefined,
+        currentSettings,
+      );
+      const secondEvents = collect(second.stream);
+      harness.socket.emit({ type: "response.created", response: { id: "resp_2" } });
+      harness.socket.emit(completed("resp_2"));
+      expect(await secondEvents).toContainEqual(completed("resp_2"));
+      second.finish();
+      expect(harness.socket.requests.at(-1)).toMatchObject({
+        type: "response.create",
+        previous_response_id: "resp_1",
+        input: [toolResult],
+        ...currentSettings,
+      });
+      expect(harness.socket.streamCalls).toBe(1);
+
+      // The next request must match the actual delivery prefix, including old controls.
+      const followUp = user("Continue from that result");
+      const third = createStream(
+        [initialUser, toolCall, update, toolResult, output("answer"), followUp],
+        undefined,
+        currentSettings,
+      );
+      const thirdEvents = collect(third.stream);
+      harness.socket.emit(completed("resp_3"));
+      await thirdEvents;
+      third.finish();
+      expect(third.request.previous_response_id).toBe("resp_2");
+      expect(third.request.input?.at(-1)).toEqual(followUp);
+    },
+  );
+
+  it("returns required input with inherited controls when request reasoning is omitted", async () => {
+    const harness = await startRequiredInput(true);
+    const second = createStream([initialUser, harness.toolCall, harness.toolResult, update]);
+    const events = collect(second.stream);
+    harness.socket.emit({ type: "response.created", response: { id: "resp_2" } });
+    harness.socket.emit(completed("resp_2"));
+    expect(await events).toContainEqual(completed("resp_2"));
+    second.finish();
     expect(harness.socket.requests.at(-1)).toMatchObject({
       type: "response.create",
       previous_response_id: "resp_1",
-      input: [toolResult],
-      ...settings,
+      input: [harness.toolResult],
     });
-    harness.socket.emit({ type: "response.created", response: { id: "resp_2" } });
-    harness.socket.emit(completed("resp_2"));
-    expect(await secondEvents).toContainEqual(completed("resp_2"));
-    second.finish();
-    expect(harness.socket.streamCalls).toBe(1);
+    expect(harness.socket.requests.at(-1)).not.toHaveProperty("reasoning");
   });
+
+  it.each(
+    [
+      { name: "another model", settings: { model: "gpt-5.6-luna" } },
+      { name: "pro mode", settings: { reasoning: { mode: "pro", effort: "high" } } },
+      { name: "multi-agent mode", settings: { multi_agent: { enabled: true } } },
+      { name: "automatic truncation", settings: { truncation: "auto" } },
+      {
+        name: "automatic compaction",
+        settings: { context_management: [{ type: "compaction", compact_threshold: 1000 }] },
+      },
+    ].flatMap((entry) =>
+      [false, true].map((includeControl) => Object.assign({}, entry, { includeControl })),
+    ),
+  )(
+    "rejects required-input history with configuration updates in $name (control present: $includeControl)",
+    async ({ settings, includeControl }) => {
+      const harness = await startRequiredInput(true);
+      const input = [initialUser, harness.toolCall, harness.toolResult, update];
+      let failure: unknown;
+      try {
+        createStream(includeControl ? [harness.sentUpdate, ...input] : input, undefined, {
+          reasoning: { effort: "high" },
+          ...settings,
+        });
+      } catch (error) {
+        failure = error;
+      }
+      expectPostDispatchError(failure, /steering continuation changed its request or history/);
+      expect(harness.socket.closed).toBe(true);
+      expect(
+        harness.socket.requests.filter((request) => request.type === "response.create"),
+      ).toHaveLength(1);
+    },
+  );
 
   it("rejects unresolved steering on disconnect and closes retained control", async () => {
     const harness = start();

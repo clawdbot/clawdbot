@@ -1,8 +1,10 @@
-import { copyFile, mkdir, rm } from "node:fs/promises";
+import { copyFile, mkdir, rm, writeFile } from "node:fs/promises";
 import path from "node:path";
 import type { BrowserContext, Page } from "playwright";
 import { expect, it } from "vitest";
 import { createControlUiE2eSuite } from "../../e2e/control-ui-e2e-suite.test-support.ts";
+import { createControlUiE2eArtifactDir } from "../../test-helpers/control-ui-e2e-artifacts.ts";
+import { takeControlUiViewportScreenshot } from "../../test-helpers/control-ui-e2e-screenshot.ts";
 import {
   controlUiE2eWaitTimeoutMs,
   installMockGateway,
@@ -17,7 +19,7 @@ const suite = createControlUiE2eSuite({
 });
 
 const captureUiProofEnabled = process.env.OPENCLAW_CAPTURE_UI_PROOF === "1";
-const artifactDir = path.resolve(process.cwd(), ".artifacts/control-ui-e2e/workboard-routing");
+const artifactParent = path.resolve(process.cwd(), ".artifacts/control-ui-e2e/workboard-routing");
 const boards = [
   { id: "default", total: 0, active: 0, archived: 0, byStatus: {} },
   {
@@ -54,14 +56,16 @@ function sessionsListResponse() {
   };
 }
 
-async function newRecordedPage(label: string): Promise<{
+async function newRecordedPage(
+  artifactDir: string,
+  label: string,
+): Promise<{
   context: BrowserContext;
   page: Page;
   rawVideoDir: string;
 }> {
   const rawVideoDir = path.join(artifactDir, `${label}-raw`);
   if (captureUiProofEnabled) {
-    await rm(rawVideoDir, { force: true, recursive: true });
     await mkdir(rawVideoDir, { recursive: true });
   }
   const context = await suite.browser.newContext({
@@ -79,6 +83,7 @@ async function newRecordedPage(label: string): Promise<{
 
 async function closeRecordedPage(
   recorded: Awaited<ReturnType<typeof newRecordedPage>>,
+  artifactDir: string,
   label: string,
 ) {
   const video = recorded.page.video();
@@ -93,10 +98,10 @@ async function closeRecordedPage(
 
 suite.define(() => {
   it("routes, pins, persists, and normalizes Workboard boards", async () => {
-    if (captureUiProofEnabled) {
-      await rm(artifactDir, { force: true, recursive: true });
-    }
-    const recorded = await newRecordedPage("routing");
+    const artifactDir = captureUiProofEnabled
+      ? createControlUiE2eArtifactDir("workboard-routing", artifactParent)
+      : "";
+    const recorded = await newRecordedPage(artifactDir, "routing");
     const { page } = recorded;
     try {
       await installMockGateway(page, {
@@ -118,10 +123,10 @@ suite.define(() => {
       await expect.poll(() => headerGlyph.getAttribute("style")).toContain("#22c55e");
       await page.locator(".workboard-select--toolbar-board").waitFor();
       if (captureUiProofEnabled) {
-        await page.screenshot({
-          fullPage: true,
-          path: path.join(artifactDir, "01-board-route.png"),
-        });
+        await writeFile(
+          path.join(artifactDir, "01-board-route.png"),
+          await takeControlUiViewportScreenshot(page, page.locator(".shell"), [headerGlyph]),
+        );
       }
 
       const sidebar = page.locator("openclaw-app-sidebar");
@@ -138,10 +143,10 @@ suite.define(() => {
       await pinnedBoard.waitFor();
       expect(await pinnedBoard.getAttribute("href")).toBe("/workboard/ops");
       if (captureUiProofEnabled) {
-        await page.screenshot({
-          fullPage: true,
-          path: path.join(artifactDir, "02-pinned-board.png"),
-        });
+        await writeFile(
+          path.join(artifactDir, "02-pinned-board.png"),
+          await takeControlUiViewportScreenshot(page, page.locator(".shell"), [pinnedBoard]),
+        );
       }
 
       await page.goto(`${suite.server.baseUrl}workboard?board=ops&agent=main`);
@@ -157,10 +162,12 @@ suite.define(() => {
       await sidebar.locator('[data-sidebar-entry="plugin:workboard/board-ops"] a').waitFor();
       await page.locator(".workboard-page-title", { hasText: "Operations" }).waitFor();
       if (captureUiProofEnabled) {
-        await page.screenshot({
-          fullPage: true,
-          path: path.join(artifactDir, "03-legacy-normalized-and-persisted.png"),
-        });
+        await writeFile(
+          path.join(artifactDir, "03-legacy-normalized-and-persisted.png"),
+          await takeControlUiViewportScreenshot(page, page.locator(".shell"), [
+            page.locator(".workboard-page-title", { hasText: "Operations" }),
+          ]),
+        );
       }
 
       const historyBeforeMissingBoard = await page.evaluate(() => history.length);
@@ -174,7 +181,7 @@ suite.define(() => {
       await page.locator(".workboard-page-title", { hasText: "Workboard" }).waitFor();
       expect(await page.evaluate(() => history.length)).toBe(historyBeforeMissingBoard + 1);
     } finally {
-      await closeRecordedPage(recorded, "routing");
+      await closeRecordedPage(recorded, artifactDir, "routing");
     }
   });
 

@@ -153,6 +153,7 @@ export {
   listSessionEntryKeysReadOnly,
   loadExactSessionEntry,
   loadExactSessionEntryCandidates,
+  loadExactSessionEntryCandidatesReadOnlyBatch,
   loadExactSessionEntryReadOnly,
   loadSessionEntry,
   loadSessionEntryReadOnly,
@@ -314,3 +315,8 @@ export {
   resolveSessionTranscriptRuntimeTarget,
   resolveSessionTranscriptRuntimeTarget as resolveSessionTranscriptRuntimeReadTarget,
 } from "./session-accessor.transcript-target.js";
+
+export {
+  appendSessionTranscriptReport,
+  readLatestSessionTranscriptReport,
+} from "./session-accessor.sqlite-transcript-reports.js";

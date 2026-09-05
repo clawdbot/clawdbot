@@ -14,6 +14,7 @@ import { waitForControlUiGatewayReady } from "../test-helpers/control-ui-e2e-rea
 import { controlUiSessionUrl } from "../test-helpers/control-ui-e2e.ts";
 import { createControlUiE2eSuite } from "./control-ui-e2e-suite.test-support.ts";
 
+const captureEnabled = process.env.OPENCLAW_CAPTURE_UI_PROOF === "1";
 let instance: OpenClawTestInstance | undefined;
 const suite = createControlUiE2eSuite({
   name: "Control UI widget sandbox with a real Gateway",
@@ -171,7 +172,9 @@ suite.define(() => {
         viewport: { width: 1440, height: 900 },
         serviceWorkers: "block",
         permissions: ["local-network-access"],
-        recordVideo: { dir: suite.artifactDir, size: { width: 1440, height: 900 } },
+        ...(captureEnabled
+          ? { recordVideo: { dir: suite.artifactDir, size: { width: 1440, height: 900 } } }
+          : {}),
       },
       async ({ page }) => {
         const canvasReads: unknown[] = [];
@@ -211,15 +214,17 @@ suite.define(() => {
           }
         });
         expect(opaque).toBe(true);
-        await page.screenshot({ path: path.join(suite.artifactDir, "real-gateway-widget.png") });
-        await writeFile(
-          path.join(suite.artifactDir, "real-gateway-evidence.json"),
-          JSON.stringify(
-            { docId, a2uiDocId, canvasReads, opaque, sessionKey, gatewayPort: owner.port },
-            null,
-            2,
-          ),
-        );
+        if (captureEnabled) {
+          await page.screenshot({ path: path.join(suite.artifactDir, "real-gateway-widget.png") });
+          await writeFile(
+            path.join(suite.artifactDir, "real-gateway-evidence.json"),
+            JSON.stringify(
+              { docId, a2uiDocId, canvasReads, opaque, sessionKey, gatewayPort: owner.port },
+              null,
+              2,
+            ),
+          );
+        }
       },
     );
   });

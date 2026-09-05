@@ -2820,7 +2820,10 @@ describe("server-channels auto restart", () => {
     const firstStart = manager.startChannel("discord", DEFAULT_ACCOUNT_ID);
     const secondStart = manager.startChannel("discord", DEFAULT_ACCOUNT_ID);
 
-    await Promise.resolve();
+    await waitForMicrotaskCondition(
+      () => isConfigured.mock.calls.length === 1,
+      "expected the shared account startup preflight",
+    );
     expect(isConfigured).toHaveBeenCalledTimes(1);
     expect(startAccount).not.toHaveBeenCalled();
 
@@ -3582,7 +3585,10 @@ describe("server-channels auto restart", () => {
     const manager = createManager();
 
     const start = manager.startChannel("discord");
-    await flushMicrotasks();
+    await waitForMicrotaskCondition(
+      () => isConfigured.mock.calls.length === 4,
+      "expected first account startup wave",
+    );
 
     expect(isConfigured).toHaveBeenCalledTimes(4);
     expect(maxActive).toBe(4);
@@ -3632,7 +3638,10 @@ describe("server-channels auto restart", () => {
     const manager = createManager({ channelIds });
 
     const start = manager.startChannels();
-    await flushMicrotasks();
+    await waitForMicrotaskCondition(
+      () => releases.length === 4,
+      "expected first channel startup wave",
+    );
 
     expect(releases).toHaveLength(4);
     expect(maxActive).toBe(4);

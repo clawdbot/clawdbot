@@ -4,6 +4,7 @@ import type { Page } from "playwright";
 import { afterEach, expect, it } from "vitest";
 // Control UI E2E tests cover session-list event scope through the Gateway WebSocket.
 import { SIDEBAR_SESSION_ROSTER_LIMIT } from "../../../src/shared/session-list-limits.ts";
+import { takeControlUiViewportScreenshot } from "../test-helpers/control-ui-e2e-screenshot.ts";
 import { installMockGateway } from "../test-helpers/control-ui-e2e.ts";
 import { createControlUiE2eSuite } from "./control-ui-e2e-suite.test-support.ts";
 
@@ -184,11 +185,12 @@ suite.define(() => {
       if (!captureUiProof) {
         return;
       }
-      await currentPage.screenshot({
-        path: path.join(suite.artifactDir, `${stage}.png`),
-        animations: "disabled",
-        fullPage: true,
-      });
+      await writeFile(
+        path.join(suite.artifactDir, `${stage}.png`),
+        await takeControlUiViewportScreenshot(currentPage, currentPage.locator(".shell"), [
+          visibleRow,
+        ]),
+      );
       await writeFile(
         path.join(suite.artifactDir, `${stage}.json`),
         JSON.stringify(await gateway.getRequests("sessions.list"), null, 2),

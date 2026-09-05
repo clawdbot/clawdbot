@@ -140,13 +140,18 @@ export function buildChatItems(props: BuildChatItemsProps): Array<ChatItem | Mes
   const searchFiltering = props.searchOpen === true && Boolean(props.searchQuery?.trim());
   const persistedCanvasIdentities = new Set<string>();
   const normalizedHistory = history.map(safeNormalizeMessage);
-  let canvasTurn: { previews: CanvasToolPreview[]; lastMatchingAssistantIndex: number } = {
+  const historyItems = buildMessageItems(history);
+  let canvasTurn: {
+    previews: { preview: CanvasToolPreview; item: (typeof historyItems)[number] }[];
+    lastMatchingAssistantIndex: number;
+  } = {
     previews: [],
     lastMatchingAssistantIndex: -1,
   };
   // Rows in one turn share these facts so a tool result can see the assistant
   // projection that follows it, without consuming a view from another turn.
-  const canvasTurns = normalizedHistory.map((message, index) => {
+  const canvasTurns = historyItems.map((item, index) => {
+    const message = normalizedHistory[index];
     const role = message && normalizeRoleForGrouping(message.role);
     if (role === "user" || role === "system") {
       canvasTurn = { previews: [], lastMatchingAssistantIndex: -1 };
@@ -158,7 +163,9 @@ export function buildChatItems(props: BuildChatItemsProps): Array<ChatItem | Mes
     ) {
       canvasTurn.lastMatchingAssistantIndex = index;
       canvasTurn.previews.push(
-        ...message.content.flatMap((block) => (block.type === "canvas" ? [block.preview] : [])),
+        ...message.content.flatMap((block) =>
+          block.type === "canvas" ? [{ preview: block.preview, item }] : [],
+        ),
       );
     }
     return canvasTurn;
@@ -168,7 +175,7 @@ export function buildChatItems(props: BuildChatItemsProps): Array<ChatItem | Mes
     ? `divider:compaction:live:${compaction.runId}:${compaction.itemId ?? "manual"}`
     : undefined;
   let hasPersistedCompaction = false;
-  for (const [i, item] of buildMessageItems(history).entries()) {
+  for (const [i, item] of historyItems.entries()) {
     const msg = item.message;
     const itemKey = item.key;
     const raw = asRecord(msg) ?? {};
@@ -214,11 +221,23 @@ export function buildChatItems(props: BuildChatItemsProps): Array<ChatItem | Mes
         persistedCanvasIdentities.add(identity);
       }
     }
+    const matchingCanvas =
+      persistedCanvasSource &&
+      canvasTurns[i]!.previews.find(({ preview }) =>
+        canvasPreviewsMatch(preview, persistedCanvasSource.preview),
+      );
+    if (persistedCanvasSource && matchingCanvas) {
+      // Enrich the owned display row, including a later assistant shortcode,
+      // without changing transcript input or introducing a second widget card.
+      matchingCanvas.item.message = appendCanvasBlockToAssistantMessage(
+        matchingCanvas.item.message,
+        persistedCanvasSource.preview,
+        persistedCanvasSource.text,
+      );
+    }
     const renderPersistedPreview =
       persistedCanvasSource != null &&
-      !canvasTurns[i]!.previews.some((preview) =>
-        canvasPreviewsMatch(preview, persistedCanvasSource.preview),
-      ) &&
+      !matchingCanvas &&
       (!searchFiltering || canvasTurns[i]!.lastMatchingAssistantIndex > i);
     if (persistedCanvasSource && renderPersistedPreview) {
       items.push({

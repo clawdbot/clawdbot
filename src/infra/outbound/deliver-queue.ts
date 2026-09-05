@@ -1,9 +1,11 @@
 // Owns durable queue admission and hands stable custody to the execution loop.
+import { readAskUserQuestionId } from "../../auto-reply/reply-payload.js";
 import { deriveDurableFinalDeliveryRequirementsForBatch } from "../../channels/message/capabilities.js";
 import { createRenderedMessageBatchPlan } from "../../channels/message/rendered-batch.js";
 import { createSubsystemLogger } from "../../logging/subsystem.js";
 import { getGlobalHookRunner } from "../../plugins/hook-runner-global.js";
 import { formatErrorMessage } from "../errors.js";
+import { runWithQuestionChannelDeliveries } from "../question-channel-runtime.js";
 import { resolveDeferredDeliveryAdmission } from "./deferred-delivery-admission.js";
 import { resolveOutboundDurableFinalDeliverySupport } from "./deliver-channel.js";
 import type { DeliverOutboundPayloadsParams } from "./deliver-contracts.js";
@@ -60,6 +62,14 @@ export async function runOutboundDelivery(
 export async function runOutboundDeliveryInternal(
   input: DeliverOutboundPayloadsParams,
 ): Promise<OutboundDeliveryResult[]> {
+  return await runWithQuestionChannelDeliveries(input.payloads.map(readAskUserQuestionId), () =>
+    runOutboundDeliveryWithIntent(input),
+  );
+}
+
+async function runOutboundDeliveryWithIntent(
+  input: DeliverOutboundPayloadsParams,
+): Promise<OutboundDeliveryResult[]> {
   const { replyToId, replyToMode, ...currentParams } = input;
   const reply = normalizeOutboundReplyFacts({ reply: input.reply, replyToId, replyToMode });
   const params = { ...currentParams, ...(reply ? { reply } : {}) };
@@ -98,40 +108,47 @@ async function deliverWithProducerLease(
   params: DeliverOutboundPayloadsParams,
   queueId: string | null,
   auditStartedAt: number,
-  producerClaimId?: string,
+  producerClaimId: string | undefined,
+  questionBinding: "captured" | "unbound",
 ): Promise<OutboundDeliveryResult[]> {
-  if (params.deliveryProducerLeaseRequired !== true) {
-    return await deliverOutboundPayloadsWithQueueCleanup(
-      params,
-      queueId,
-      auditStartedAt,
-      producerClaimId,
-    );
-  }
-  const platformQueueId = queueId ?? params.deliveryQueueId;
-  if (!platformQueueId || !producerClaimId) {
-    throw new Error("Delivery producer lease requires an exact queue owner");
-  }
-  const stateDir = queueId ? undefined : params.deliveryQueueStateDir;
-  const lease = await startDeliveryProducerLease({
-    id: platformQueueId,
-    renew: async () =>
-      await renewDeliveryPlatformSendLease(platformQueueId, stateDir, producerClaimId),
-  });
-  const abortSignal = params.abortSignal
-    ? AbortSignal.any([params.abortSignal, lease.signal])
-    : lease.signal;
-  try {
-    return await deliverOutboundPayloadsWithQueueCleanup(
-      { ...params, abortSignal },
-      queueId,
-      auditStartedAt,
-      producerClaimId,
-      lease.signal,
-    );
-  } finally {
-    lease.stop();
-  }
+  return await runWithQuestionChannelDeliveries(
+    params.payloads.map(readAskUserQuestionId),
+    async () => {
+      if (params.deliveryProducerLeaseRequired !== true) {
+        return await deliverOutboundPayloadsWithQueueCleanup(
+          params,
+          queueId,
+          auditStartedAt,
+          producerClaimId,
+        );
+      }
+      const platformQueueId = queueId ?? params.deliveryQueueId;
+      if (!platformQueueId || !producerClaimId) {
+        throw new Error("Delivery producer lease requires an exact queue owner");
+      }
+      const stateDir = queueId ? undefined : params.deliveryQueueStateDir;
+      const lease = await startDeliveryProducerLease({
+        id: platformQueueId,
+        renew: async () =>
+          await renewDeliveryPlatformSendLease(platformQueueId, stateDir, producerClaimId),
+      });
+      const abortSignal = params.abortSignal
+        ? AbortSignal.any([params.abortSignal, lease.signal])
+        : lease.signal;
+      try {
+        return await deliverOutboundPayloadsWithQueueCleanup(
+          { ...params, abortSignal },
+          queueId,
+          auditStartedAt,
+          producerClaimId,
+          lease.signal,
+        );
+      } finally {
+        lease.stop();
+      }
+    },
+    { unbound: questionBinding === "unbound" },
+  );
 }
 
 async function runOutboundDeliveryWithQueue(
@@ -354,6 +371,7 @@ async function runOutboundDeliveryWithQueue(
       null,
       auditStartedAt,
       params.deliveryProducerClaimId,
+      existingStableDelivery || params.deliveryQueueId !== undefined ? "unbound" : "captured",
     );
   }
 
@@ -392,6 +410,7 @@ async function runOutboundDeliveryWithQueue(
       queueId,
       auditStartedAt,
       producerClaimId,
+      queued?.created === true ? "captured" : "unbound",
     );
   };
   if (stableIntentClaimHeld) {

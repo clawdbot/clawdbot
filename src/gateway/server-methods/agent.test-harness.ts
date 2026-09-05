@@ -17,6 +17,7 @@ import type {
 } from "../../config/sessions/session-accessor.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import { resetDiagnosticEventsForTest } from "../../infra/diagnostic-events.js";
+import { trackAsyncWork } from "../../shared/async-work-scope.js";
 import {
   resetDetachedTaskLifecycleRuntimeForTests,
   resetTaskRegistryForTests,
@@ -400,6 +401,7 @@ vi.mock("../../channels/message/runtime.js", async () => {
 
 export const makeContext = (): GatewayRequestContext =>
   ({
+    trackExecution: trackAsyncWork,
     dedupe: new Map(),
     addChatRun: vi.fn(),
     removeChatRun: vi.fn(),
