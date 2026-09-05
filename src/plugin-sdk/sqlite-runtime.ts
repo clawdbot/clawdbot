@@ -10,6 +10,7 @@ export { withOpenClawAgentDatabaseReadOnly } from "../state/openclaw-agent-db-re
 export { assertOpenClawAgentDatabaseForMaintenance } from "../state/openclaw-agent-db-maintenance.js";
 export { ensureOpenClawAgentStandingIntentsSchema } from "../state/openclaw-agent-standing-intents-schema.js";
 export {
+  compileSqliteQueryBindings,
   executeSqliteQuerySync,
   executeSqliteQueryTakeFirstSync,
   getNodeSqliteKysely,
