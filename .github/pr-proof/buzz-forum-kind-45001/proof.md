@@ -38,4 +38,8 @@ Local source validation for this PR:
 - `node_modules/.bin/oxlint --tsconfig extensions/tsconfig.json extensions/buzz/src/message-event.ts extensions/buzz/src/buzz-bus.ts extensions/buzz/src/gateway.ts extensions/buzz/src/buzz-bus.test.ts extensions/buzz/src/gateway.lifecycle.test.ts`
 - `git diff --check`
 
+The current PR body was also checked locally against
+`scripts/github/real-behavior-proof-policy.mjs`; it passes the external PR
+context/evidence section policy.
+
 The relay signer stayed in local custody during diagnostics; no private key or secret material is present in this artifact.
