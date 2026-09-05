@@ -90,6 +90,7 @@ type ResolvedPlanTargetEntry = {
 
 type ConfigTargetMutationResult = {
   resolvedTargets: ResolvedPlanTargetEntry[];
+  survivingTargets: SecretsPlanTarget[];
   scrubbedValues: Set<string>;
   providerTargets: Set<string>;
   configChanged: boolean;
@@ -361,7 +362,7 @@ async function projectPlanState(params: {
     configPath,
     stateDir,
     scrubbedValues: targetMutations.scrubbedValues,
-    plannedTargets: params.plan.targets,
+    survivingTargets: targetMutations.survivingTargets,
     env: params.env,
     changedFiles,
     enabled: options.scrubEnv,
@@ -395,6 +396,17 @@ async function projectPlanState(params: {
   };
 }
 
+function getPlanTargetDestinationKey(
+  target: SecretsPlanTarget,
+  resolved: NonNullable<ReturnType<typeof resolveValidatedPlanTarget>>,
+): string {
+  if (resolved.entry.configFile === "auth-profile-store") {
+    const agentId = (target.agentId ?? "").trim();
+    return `auth-profile-store:${agentId}:${target.path}`;
+  }
+  return `config:${target.path}`;
+}
+
 function applyConfigTargetMutations(params: {
   planTargets: SecretsPlanTarget[];
   nextConfig: OpenClawConfig;
@@ -410,9 +422,12 @@ function applyConfigTargetMutations(params: {
   }));
   const scrubbedValues = new Set<string>();
   const providerTargets = new Set<string>();
+  const survivingTargetsByDestination = new Map<string, SecretsPlanTarget>();
   let configChanged = false;
 
   for (const { target, resolved } of resolvedTargets) {
+    const destinationKey = getPlanTargetDestinationKey(target, resolved);
+    survivingTargetsByDestination.set(destinationKey, target);
     if (resolved.entry.configFile === "auth-profile-store") {
       const authStoreChanged = applyAuthProfileTargetMutation({
         target,
@@ -475,6 +490,7 @@ function applyConfigTargetMutations(params: {
 
   return {
     resolvedTargets,
+    survivingTargets: Array.from(survivingTargetsByDestination.values()),
     scrubbedValues,
     providerTargets,
     configChanged,
@@ -728,7 +744,7 @@ function scrubEnvFiles(params: {
   configPath: string;
   stateDir: string;
   scrubbedValues: Set<string>;
-  plannedTargets: readonly SecretsPlanTarget[];
+  survivingTargets: readonly SecretsPlanTarget[];
   env: NodeJS.ProcessEnv;
   changedFiles: Set<string>;
   enabled: boolean;
@@ -739,7 +755,7 @@ function scrubEnvFiles(params: {
   }
   const knownSecretEnvVars = new Set(listKnownSecretEnvVarNames());
   const envRefValuesAwaitingSource = new Map<string, string>();
-  for (const target of params.plannedTargets) {
+  for (const target of params.survivingTargets) {
     if (target.ref.source === "env") {
       const value = params.env[target.ref.id];
       if (isNonEmptyString(value)) {

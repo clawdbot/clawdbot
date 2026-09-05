@@ -852,16 +852,16 @@ Do not treat the migration as complete until the re-audit is clean. If the audit
 
 An `env` SecretRef leaves its backing value on disk by design, so the re-audit keeps reporting that `.env` key as `PLAINTEXT_FOUND`. `secrets apply` retains exactly one assignment per ref: in the first file it scrubs whose effective value for that name equals the value apply validated the ref against. Deleting that line leaves the ref unresolvable in a fresh process that has no other source for the name.
 
-`secrets apply` scrubs two files, in the order the gateway loads them:
+`secrets apply` scrubs up to two files:
 
 1. The state-directory `.env` (`OPENCLAW_STATE_DIR`, otherwise `~/.openclaw`).
 2. The active config directory's `.env`, when `OPENCLAW_CONFIG_PATH` points outside the state directory.
 
-Only `openclaw gateway run` loads both. Normal CLI commands load the working-directory `.env` and the state-directory `.env`, and never the active config directory's `.env`, so a ref whose only retained source is the config-directory file resolves in the gateway but not in a fresh CLI such as the post-apply `openclaw secrets audit`. Move that assignment into the state-directory `.env` if you need both.
+Note that `resolveConfigDir` prioritizes `OPENCLAW_STATE_DIR` over `OPENCLAW_CONFIG_PATH`. When `OPENCLAW_STATE_DIR` is set, gateway pre-bootstrap deduplicates both paths to the state directory and only loads the state-directory `.env`. Loading both files only occurs when `OPENCLAW_STATE_DIR` is unset (defaulting state to `~/.openclaw`) while `OPENCLAW_CONFIG_PATH` points outside `~/.openclaw`. Normal CLI commands load the working-directory `.env` and the state-directory `.env`, and never the active config directory's `.env`, so a ref whose only retained source is the config-directory file does not resolve in a fresh CLI such as the post-apply `openclaw secrets audit`. Move that assignment into the state-directory `.env` if you need it to resolve across all CLI and gateway contexts.
 
-Across files the first assignment of a name wins, and an inherited process-environment value wins over every file. Within one file the last assignment of a name wins, so apply removes the other assignments of a retained name in that file; without that removal the ref could resolve after restart to a value apply never validated. A ref validated against a value exported only in the operator's shell has no retained file source at all, and that shell export has to keep supplying it. Working-directory `.env` files are never scrubbed and never retained.
+Across files the first assignment of a name wins, and an inherited process-environment value wins over every file. Within one file the last assignment of a name wins, so apply removes other assignments of a retained name in that file; without that removal the ref could resolve after restart to a value apply never validated. A ref validated against a value exported only in the operator's shell has no retained file source at all, and that shell export has to keep supplying it. Working-directory `.env` files are never scrubbed and never retained.
 
-Everything else is still scrubbed: a stale value under the same name, a duplicate of the same name, and any redundant copy in a lower-precedence source.
+Scrubbing removes all instances of values present in `migratedValues` across scrubbed files, as well as same-file duplicate assignments of retained keys. It does not delete assignments whose values were not among the migrated plaintext values.
 
 The retained line is unmigrated plaintext, not a completed migration, so both a clean re-audit and the agent-access boundary above still require `file` or `exec` SecretRefs, whose values live outside the agent-readable dotenv directories.
 
