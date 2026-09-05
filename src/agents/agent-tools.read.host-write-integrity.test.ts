@@ -6,6 +6,14 @@ import { afterEach, describe, expect, it, vi } from "vitest";
 import { createHostWorkspaceEditTool, createHostWorkspaceWriteTool } from "./agent-tools.read.js";
 import { createApplyPatchTool } from "./apply-patch.js";
 
+function toWindowsPosixDrivePath(nativePath: string, prefix: "" | "cygdrive/" | "mnt/"): string {
+  const drive = nativePath[0]?.toLowerCase();
+  if (!drive || nativePath[1] !== ":") {
+    throw new Error(`Expected a Windows drive path, got ${nativePath}`);
+  }
+  return `/${prefix}${drive}${nativePath.slice(2).replaceAll("\\", "/")}`;
+}
+
 describe("unrestricted host tool writes", () => {
   let tempDir = "";
 
@@ -23,6 +31,37 @@ describe("unrestricted host tool writes", () => {
     await fs.writeFile(filePath, content);
     return filePath;
   }
+
+  it.runIf(process.platform === "win32").each(["", "cygdrive/", "mnt/"] as const)(
+    "writes through the host tool using the %s form",
+    async (prefix) => {
+      await createFile("existing");
+      const nativePath = path.join(tempDir, "written.txt");
+      const tool = createHostWorkspaceWriteTool(tempDir);
+
+      await tool.execute("write-posix-drive", {
+        path: toWindowsPosixDrivePath(nativePath, prefix),
+        content: "written",
+      });
+
+      await expect(fs.readFile(nativePath, "utf8")).resolves.toBe("written");
+    },
+  );
+
+  it.runIf(process.platform === "win32").each(["", "cygdrive/", "mnt/"] as const)(
+    "edits through the host tool using the %s form",
+    async (prefix) => {
+      const nativePath = await createFile("before");
+      const tool = createHostWorkspaceEditTool(tempDir);
+
+      await tool.execute("edit-posix-drive", {
+        path: toWindowsPosixDrivePath(nativePath, prefix),
+        edits: [{ oldText: "before", newText: "after" }],
+      });
+
+      await expect(fs.readFile(nativePath, "utf8")).resolves.toBe("after");
+    },
+  );
 
   it.each(["write", "edit", "apply_patch"] as const)(
     "fences %s after asynchronous file preparation when permissions change",
