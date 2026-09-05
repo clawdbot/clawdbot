@@ -1155,7 +1155,12 @@ describe("repairMissingConfiguredPluginInstalls", () => {
         const pluginId = "dependency-plugin";
         const rootDir = path.join(parent, "node_modules", packageName);
         fs.mkdirSync(rootDir, { recursive: true });
-        createColdPluginFixture({ rootDir, pluginId, packageName });
+        createColdPluginFixture({
+          rootDir,
+          pluginId,
+          packageName,
+          packageJson: { dependencies: { "required-runtime": "1.0.0" } },
+        });
         const originalManifest = fs.readFileSync(path.join(rootDir, "package.json"), "utf8");
         const markerPath = resolveRetainedManagedNpmInstallMarkerPath(rootDir);
         if (preexisting) {
@@ -1230,6 +1235,14 @@ describe("repairMissingConfiguredPluginInstalls", () => {
                 : outcome === "consent-error"
                   ? "error"
                   : outcome;
+            if (status === "updated" || status === "unchanged") {
+              fs.mkdirSync(replacementRecord.installPath, { recursive: true });
+              createColdPluginFixture({
+                rootDir: replacementRecord.installPath,
+                pluginId,
+                packageName,
+              });
+            }
             return {
               config: { plugins: { installs: { [pluginId]: replacementRecord } } },
               changed: status === "updated" || status === "unchanged",
