@@ -124,7 +124,7 @@ function createPublicationPane(scope?: "global" | "per-sender") {
   };
   const selection = {
     ...initial.agentSelection,
-    state: { selectedId: agentId },
+    state: { selectedId: agentId, scopeId: agentId },
     subscribe: () => () => {},
   };
   const context: ApplicationContext = {
