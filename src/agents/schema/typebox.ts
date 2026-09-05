@@ -16,8 +16,7 @@ export function executionTitleSchema() {
   return Type.Optional(
     Type.String({
       maxLength: 120,
-      description:
-        "Short plain-language purpose of this call, e.g. Checking failing tests. Include it on every call. Describe intended work, never claim success; omit secrets.",
+      description: "Every call: short purpose; never claim success. No secrets.",
     }),
   );
 }
