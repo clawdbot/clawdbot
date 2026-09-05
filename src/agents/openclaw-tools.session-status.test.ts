@@ -252,7 +252,6 @@ function createProviderUsageModuleMock() {
       updatedAt: Date.now(),
       providers: [],
     }),
-    formatUsageSummaryLine: () => null,
   };
 }
 
