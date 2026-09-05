@@ -95,6 +95,7 @@ describe("chat session sharing menu", () => {
               members: [],
               identities: [],
               role: "owner",
+              allowedVisibilities: ["shared"],
             },
           },
           publicShareDisabledReason: blocked === "read-only" ? "Requires write" : undefined,

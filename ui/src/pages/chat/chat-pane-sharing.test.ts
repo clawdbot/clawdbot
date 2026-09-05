@@ -1,6 +1,7 @@
 /* @vitest-environment jsdom */
 /* @vitest-environment-options {"url":"http://chat-pane-sharing.test/"} */
 
+import { asOptionalRecord } from "@openclaw/normalization-core/record-coerce";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import type { SessionSuggestion } from "../../../../packages/gateway-protocol/src/index.js";
 import { createDeferred } from "../../../../test/helpers/promise.js";
@@ -173,9 +174,9 @@ describe("public session sharing", () => {
       const row = sessionRow();
       const publicShare = { id: "a".repeat(48), sessionId: row.sessionId!, createdAt: 1 };
       let enabled = false;
-      const request = vi.fn(async (method: string, params?: { enabled?: boolean }) => {
+      const request = vi.fn(async (method: string, params?: unknown) => {
         if (method === "session.publicShare.set") {
-          enabled = params?.enabled === true;
+          enabled = asOptionalRecord(params)?.enabled === true;
           return { ok: true, sessionKey: row.key, ...(enabled ? { publicShare } : {}) };
         }
         if (method === "session.members.listEvidence") {
@@ -189,7 +190,7 @@ describe("public session sharing", () => {
       });
       const pane = testPane as SharingPane;
       const hello = pane.context.gateway.snapshot.hello!;
-      pane.context.basePath = "/control";
+      pane.context = { ...pane.context, basePath: "/control" };
       hello.controlUiUrl = advertised
         ? "https://example.test/control/?token=never-copy"
         : undefined;
