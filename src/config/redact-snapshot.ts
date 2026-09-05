@@ -41,10 +41,7 @@ function isWholeObjectSensitivePath(path: string): boolean {
 }
 
 function hasSensitiveUrlHintPath(hints: ConfigUiHints | undefined, paths: string[]): boolean {
-  if (!hints) {
-    return false;
-  }
-  return paths.some((path) => hasSensitiveUrlHintTag(hints[path]));
+  return paths.some((path) => hasSensitiveUrlHintTag(hints?.[path]));
 }
 
 function collectSensitiveStrings(value: unknown, values: string[]): void {
@@ -75,10 +72,7 @@ function collectSensitiveStrings(value: unknown, values: string[]): void {
 }
 
 function isExplicitlyNonSensitivePath(hints: ConfigUiHints | undefined, paths: string[]): boolean {
-  if (!hints) {
-    return false;
-  }
-  return paths.some((path) => hints[path]?.sensitive === false);
+  return paths.some((path) => hints?.[path]?.sensitive === false);
 }
 
 /**
@@ -615,44 +609,29 @@ function restoreRedactedValue(
     const candidate = context.lookup
       ? [path, wildcardPath].find((entry) => context.lookup?.has(entry))
       : undefined;
-    if (candidate) {
-      if (
-        value === REDACTED_SENTINEL &&
-        (context.hints?.[candidate]?.sensitive === true ||
-          hasSensitiveUrlHintPath(context.hints, [candidate, path, wildcardPath]) ||
-          isSensitiveUrlConfigPath(path))
-      ) {
-        result[key] = restoreOriginalValueOrThrow(orig, key, candidate, context);
-      } else if (typeof value === "object" && value !== null) {
-        const restoredSecretRef = maybeRestoreSecretRefId({
-          incoming: value,
-          original: orig[key],
-          path,
-        });
-        result[key] = restoredSecretRef.handled
-          ? restoredSecretRef.value
-          : restoreRedactedValue(value, orig[key], candidate, context);
-      } else {
-        result[key] = value;
-      }
-      continue;
-    }
-
     const hintPaths = [path, wildcardPath];
+    // Match redaction: explicit false disables name guessing, not URL credential protection.
     const canRestore =
-      !isExplicitlyNonSensitivePath(context.hints, hintPaths) &&
-      (isSensitivePath(path) ||
-        hasSensitiveUrlHintPath(context.hints, hintPaths) ||
-        isSensitiveUrlConfigPath(path));
+      (candidate
+        ? context.hints?.[candidate]?.sensitive === true
+        : !isExplicitlyNonSensitivePath(context.hints, hintPaths) && isSensitivePath(path)) ||
+      hasSensitiveUrlHintPath(context.hints, hintPaths) ||
+      isSensitiveUrlConfigPath(path);
     if (value === REDACTED_SENTINEL && canRestore) {
-      result[key] = restoreOriginalValueOrThrow(orig, key, path, context);
+      result[key] = restoreOriginalValueOrThrow(orig, key, candidate ?? path, context);
     } else if (typeof value === "object" && value !== null) {
-      const restoredSecretRef = canRestore
-        ? maybeRestoreSecretRefId({ incoming: value, original: orig[key], path })
-        : { handled: false as const };
+      const restoredSecretRef =
+        candidate || canRestore
+          ? maybeRestoreSecretRefId({ incoming: value, original: orig[key], path })
+          : { handled: false as const };
       result[key] = restoredSecretRef.handled
         ? restoredSecretRef.value
-        : restoreRedactedValue(value, orig[key], path, fallbackContext);
+        : restoreRedactedValue(
+            value,
+            orig[key],
+            candidate ?? path,
+            candidate ? context : fallbackContext,
+          );
     } else {
       result[key] = value;
     }
