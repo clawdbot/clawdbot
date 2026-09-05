@@ -1,10 +1,30 @@
 import { AsyncLocalStorage } from "node:async_hooks";
 import { resolveGlobalSingleton } from "../shared/global-singleton.js";
-import type { PluginInstance } from "./plugin-instance.js";
+import type { PluginInstanceAdmission } from "./plugin-instance.types.js";
 import type { PluginRecord, PluginRegistry } from "./registry-types.js";
 
 /** Runtime consumers retain capabilities, never the concrete loader implementation. */
-export type PluginInstanceHandle = Omit<PluginInstance, "controller" | "globals">;
+export interface PluginInstanceHandle extends PluginInstanceAdmission {
+  readonly pluginId: string;
+  readonly owner?: PluginInstanceOwner;
+  readonly slots: Map<string | symbol, { runtime: unknown }>;
+  sourceDigest?: string;
+  toolRegistrationComplete: boolean;
+  wrap<T>(value: T): T;
+  runCleanup<T>(run: () => T): T;
+  bindModuleLoader(
+    load: (source: string) => unknown,
+    hasSource?: (source: string) => boolean,
+  ): void;
+  loadModule(source: string): unknown;
+  hasModuleSource(source: string): boolean | undefined;
+  loadBuiltin(specifier: string, load: (specifier: string) => unknown): unknown;
+  prepareGlobals(load: (specifier: string) => unknown): Record<string, unknown>;
+  quiesce(): boolean;
+  drain(): Promise<void>;
+  resume(): void;
+  dispose(beforeCleanup?: () => void | Promise<void>): Promise<void>;
+}
 
 export type PluginInstanceOwner = {
   record: PluginRecord;

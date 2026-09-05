@@ -72,6 +72,7 @@ export class PluginInstance {
   readonly slots = new Map<string | symbol, { runtime: unknown }>();
   readonly controller = new AbortController();
   readonly lifecycle: PluginInstanceLifecycle;
+  toolRegistrationComplete = false;
   sourceDigest?: string;
   private moduleLoader?: (source: string) => unknown;
   private moduleSourceExists?: (source: string) => boolean;

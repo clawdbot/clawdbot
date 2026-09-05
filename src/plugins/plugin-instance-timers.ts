@@ -48,8 +48,11 @@ export class PluginInstanceTimers {
         options?: Parameters<typeof promiseTimers.scheduler.wait>[1],
       ) {
         return instance.run(() => ({
-          // oxlint-disable-next-line typescript/unbound-method -- Reflect.apply supplies Node's scheduler receiver.
-          timer: Reflect.apply(promiseTimers.scheduler.wait, this, [delay, timerOptions(options)]),
+          // Preserve native option validation while binding the caller's scheduler receiver.
+          timer: Reflect.apply(promiseTimers.scheduler.wait.bind(this), undefined, [
+            delay,
+            timerOptions(options),
+          ]),
         })).timer;
       },
       yield(this: typeof promiseTimers.scheduler) {

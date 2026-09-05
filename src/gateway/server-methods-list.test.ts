@@ -83,11 +83,14 @@ describe("listGatewayMethods", () => {
     const legacyCount = LEGACY_ADVERTISED_GATEWAY_METHODS.length;
 
     expect(methods.slice(0, legacyCount)).toEqual(LEGACY_ADVERTISED_GATEWAY_METHODS);
-    expect(methods.slice(legacyCount, legacyCount + 5)).toEqual([
+    expect(methods.slice(legacyCount, legacyCount + 8)).toEqual([
       "plugins.controlUi.list",
       "plugins.controlUi.reload",
       "plugins.controlUi.report",
       "plugins.controlUi.status",
+      "update.runs.get",
+      "update.runs.list",
+      "gateway.suspend.handoff",
       "plugins.reload",
     ]);
   });

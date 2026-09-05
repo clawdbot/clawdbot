@@ -300,11 +300,13 @@ export function resolvePluginTools(params: {
     { registry: PluginRegistry; tools: PluginToolRegistration[] }
   >();
   for (const pluginId of onlyPluginIds) {
+    const record = runtimeRegistry?.plugins.find((candidate) => candidate.id === pluginId);
+    const instance = record && getPluginInstance(record);
     if (
       runtimeRegistry &&
-      runtimeRegistry.plugins.some(
-        (record) => record.id === pluginId && getPluginInstance(record),
-      ) &&
+      instance &&
+      (instance.toolRegistrationComplete ||
+        runtimeRegistry.tools.some((entry) => entry.pluginId === pluginId)) &&
       registryMatchesManifestPluginIds(runtimeRegistry, snapshot.plugins, [pluginId])
     ) {
       toolOwners.set(pluginId, { registry: runtimeRegistry, tools: [] });

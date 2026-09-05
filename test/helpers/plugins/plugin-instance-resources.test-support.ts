@@ -11,10 +11,10 @@ import os from "node:os";
 import path from "node:path";
 import { PassThrough } from "node:stream";
 import { promisify } from "node:util";
-import { createDeferred } from "../../test/helpers/promise.js";
+import { PluginInstance } from "../../../src/plugins/plugin-instance.js";
+import { createDeferred } from "../promise.js";
 import { verifyNativeSignalLifecycle } from "./plugin-instance-resources-signals.test-support.js";
 import { verifyWatchLifecycle } from "./plugin-instance-resources-watch.test-support.js";
-import { PluginInstance } from "./plugin-instance.js";
 
 const require = createRequire(import.meta.url);
 export async function verifyResourceLifecycle(scenario: string): Promise<void> {

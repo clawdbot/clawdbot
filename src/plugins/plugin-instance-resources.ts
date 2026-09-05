@@ -1,7 +1,6 @@
 import { EventEmitter } from "node:events";
 import { unwatchFile, watchFile } from "node:fs";
 import { watch as watchPromise } from "node:fs/promises";
-import { ClientRequest } from "node:http";
 import { Server, Socket } from "node:net";
 import { resolve as resolvePath } from "node:path";
 import { fileURLToPath } from "node:url";
@@ -25,6 +24,7 @@ type Resource = EventEmitter & Record<PropertyKey, unknown>;
 type OwnedResource = {
   resource: Resource;
   closeEvent: "close" | "exit";
+  clientRequest: boolean;
   parent?: OwnedResource;
   closed?: Promise<void>;
   closing?: Promise<void>;
@@ -214,7 +214,7 @@ export class PluginInstanceResources {
         // upgrade/CONNECT transfers them out of the Agent before closing the request.
         const event = values[0];
         const childIndex =
-          resource instanceof ClientRequest && (event === "upgrade" || event === "connect")
+          this.owned.get(resource)?.clientRequest && (event === "upgrade" || event === "connect")
             ? 2
             : typeof event === "string" && childEvents.has(event)
               ? 1
@@ -412,12 +412,13 @@ export class PluginInstanceResources {
     boundary?: object,
     closeEvent: "close" | "exit" = "close",
     parent?: OwnedResource,
+    clientRequest = false,
   ): Resource {
     if (this.owned.has(resource)) {
       return resource;
     }
     this.instrument(resource, nativePrototype, boundary);
-    const entry = { resource, closeEvent, parent };
+    const entry = { resource, closeEvent, parent, clientRequest };
     this.owned.set(resource, entry);
     this.emitters.set(resource, resource);
     if (resource instanceof Socket) {
@@ -571,6 +572,8 @@ export class PluginInstanceResources {
               constructing && boundary ? nativePrototype : Object.getPrototypeOf(value),
               constructing ? boundary : undefined,
               closeEvent,
+              undefined,
+              (module === "http" || module === "https") && (key === "request" || key === "get"),
             );
           }
           return value;

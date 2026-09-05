@@ -67,6 +67,8 @@ export function runPluginRegisterSyncInRegistry(
   const owner = getPluginValueInstance(api);
   if (owner) {
     owner.run(run);
+    owner.toolRegistrationComplete ||=
+      api.registrationMode === "full" || api.registrationMode === "tool-discovery";
   } else {
     run();
   }

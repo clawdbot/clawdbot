@@ -14,6 +14,7 @@ import {
   type DiagnosticExporterHealthUpdate,
 } from "../logging/diagnostic-stability.js";
 import { createSubsystemLogger } from "../logging/subsystem.js";
+import { createDeferredCore } from "../shared/deferred.js";
 import { resolveRuntimeServiceBuildId } from "../version.js";
 import {
   createPluginRuntimeCapabilityLease,
@@ -157,8 +158,10 @@ export async function startPluginServices(
               withPluginHttpRouteRegistry(registry, () => entry.stop?.(), entry.lease),
             ));
           } catch (error) {
-            // oxlint-disable-next-line typescript/prefer-promise-reject-errors -- Keep the plugin's original thrown value for all cleanup observers.
-            return (entry.stopping = Promise.reject(error));
+            // Cache the exact rejection, including non-Error values thrown by plugin hooks.
+            const failure = createDeferredCore();
+            failure.reject(error);
+            return (entry.stopping = failure.promise);
           }
         };
         await runBeforeDeadline(cleanup, deadline, "plugin service stop");

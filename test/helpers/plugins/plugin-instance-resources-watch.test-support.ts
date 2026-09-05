@@ -4,7 +4,7 @@ import { createRequire } from "node:module";
 import os from "node:os";
 import path from "node:path";
 import { setImmediate as yieldImmediate } from "node:timers/promises";
-import type { PluginInstance } from "./plugin-instance.js";
+import type { PluginInstance } from "../../../src/plugins/plugin-instance.js";
 
 const require = createRequire(import.meta.url);
 

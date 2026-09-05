@@ -12,10 +12,7 @@ import { setGatewayPluginMetadataSnapshot } from "./current-plugin-metadata-snap
 import { getGatewayPluginMetadataSnapshot } from "./current-plugin-metadata-state.js";
 import { resolvePluginInstallDir } from "./install-paths.js";
 import { writePersistedInstalledPluginIndex } from "./installed-plugin-index-store-write.js";
-import {
-  readInstalledPluginIndexRow,
-  readPersistedInstalledPluginIndex,
-} from "./installed-plugin-index-store.js";
+import { readPersistedInstalledPluginIndex } from "./installed-plugin-index-store.js";
 import { loadInstalledPluginIndex } from "./installed-plugin-index.js";
 import { clearPluginMetadataLifecycleCaches } from "./plugin-metadata-lifecycle.js";
 import { loadPluginMetadataSnapshot } from "./plugin-metadata-snapshot.js";
@@ -193,7 +190,10 @@ it.each(["live", "closed"] as const)(
     );
 
     const db = openOpenClawStateDatabase().db;
-    const before = readInstalledPluginIndexRow(db);
+    const indexRow = db.prepare(
+      "SELECT value_json, updated_at_ms FROM config_machine_state WHERE state_key = 'plugins.installedIndex'",
+    );
+    const before = indexRow.get();
     expect(before).toBeDefined();
     const pending = uninstallManagedPlugin({
       pluginId: fixture.pluginId,
@@ -207,7 +207,7 @@ it.each(["live", "closed"] as const)(
     if (authority === "closed") {
       await expect(pending).rejects.toBe(closed);
       // Compensation cannot make an unauthorized index revision acceptable.
-      expect(readInstalledPluginIndexRow(db)).toEqual(before);
+      expect(indexRow.get()).toEqual(before);
       expect(fs.existsSync(pluginRoot)).toBe(true);
       return;
     }

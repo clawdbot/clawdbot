@@ -9,12 +9,16 @@ import type { SecretRef } from "../config/types.secrets.js";
 import { createDedupeCache } from "../infra/dedupe.js";
 import { resetLogger, setLoggerOverride } from "../logging/logger.js";
 import { loggingState } from "../logging/state.js";
+import { buildPluginApi } from "./api-builder.js";
+import { instrumentPluginInstanceApi } from "./api-facades.js";
 import { resolveInstalledPluginIndexPolicyHash } from "./installed-plugin-index-policy.js";
+import { runPluginRegisterSyncInRegistry } from "./loader-module-runtime.js";
 import type { PluginLoadOptions } from "./loader-types.js";
 import { adoptProcessPluginCache, createPluginCache } from "./plugin-cache.js";
 import { getPluginInstance } from "./plugin-instance-scope.js";
 import { PluginInstance } from "./plugin-instance.js";
 import { createEmptyPluginRegistry } from "./registry-empty.js";
+import { createPluginRuntime } from "./runtime/index.js";
 import { createPluginRecord } from "./status.test-helpers.js";
 import { appendRuntimePluginToolGrant } from "./tool-grant-allowlist.js";
 
@@ -201,7 +205,10 @@ function createResolveToolsParams(params?: {
   };
 }
 
-function createToolRegistry(entries: MockRegistryToolEntry[]) {
+function createToolRegistry(
+  entries: MockRegistryToolEntry[],
+  registrationMode: "full" | "discovery" | "tool-discovery" = "full",
+) {
   const registry = {
     ...createEmptyPluginRegistry(),
     plugins: entries.map((entry) =>
@@ -213,13 +220,27 @@ function createToolRegistry(entries: MockRegistryToolEntry[]) {
     ),
     tools: entries,
   };
-  registry.tools = entries.map((entry, index) => ({
-    ...entry,
-    factory: new PluginInstance(entry.pluginId, {
+  registry.tools = entries.map((entry, index) => {
+    const instance = new PluginInstance(entry.pluginId, {
       record: registry.plugins[index]!,
       registry: registry as never,
-    }).wrap(entry.factory),
-  }));
+    });
+    const api = instrumentPluginInstanceApi(
+      buildPluginApi({
+        id: entry.pluginId,
+        name: entry.pluginId,
+        source: entry.source,
+        registrationMode,
+        config: {},
+        runtime: createPluginRuntime(),
+        logger: { info() {}, warn() {}, error() {} },
+        resolvePath: (value) => value,
+      }),
+      instance,
+    );
+    runPluginRegisterSyncInRegistry(() => {}, api, registry as never, entry.pluginId);
+    return { ...entry, factory: instance.wrap(entry.factory) };
+  });
   return registry;
 }
 
@@ -1122,9 +1143,10 @@ describe("resolvePluginTools optional tools", () => {
           return { content: [{ type: "text", text: "retained" }] };
         },
       }));
-      const retainedRegistry = setRegistry([
-        createNamedToolEntry("retained-owner", "retained_tool", { factory: retainedFactory }),
-      ]);
+      const retainedRegistry = createToolRegistry(
+        [createNamedToolEntry("retained-owner", "retained_tool", { factory: retainedFactory })],
+        "discovery",
+      );
       const siblingRegistry = createToolRegistry([
         createNamedToolEntry("new-owner", "new_tool", {
           factory: () => ({
@@ -1183,7 +1205,7 @@ describe("resolvePluginTools optional tools", () => {
     "retains the %s registry when its selected plugin registered no tools",
     async (mode) => {
       const entry = createNamedToolEntry("empty-owner", "owner_tool");
-      const empty = createToolRegistry([entry]);
+      const empty = createToolRegistry([entry], mode === "standalone" ? "tool-discovery" : "full");
       empty.tools.length = 0;
       const other = createToolRegistry([entry]);
       installToolManifestSnapshot({
@@ -1200,6 +1222,13 @@ describe("resolvePluginTools optional tools", () => {
       try {
         if (mode === "standalone") {
           expect(ensureStandalonePluginToolRegistryLoaded(createResolveToolsParams())).toBe(empty);
+          expect(
+            resolvePluginTools({
+              ...createResolveToolsParams(),
+              runtimeRegistry: empty as never,
+            }),
+          ).toEqual([]);
+          expect(loadOpenClawPluginsMock).toHaveBeenCalledOnce();
         } else {
           expect(resolvePluginTools(createResolveToolsParams())).toEqual([]);
           expect(loadOpenClawPluginsMock).not.toHaveBeenCalled();
