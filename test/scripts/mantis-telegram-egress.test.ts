@@ -34,6 +34,10 @@ it.each([
   ["sendMessage", "/telegram/bot1:fixture/sendMessage", "", false],
   ["wrong alias", "/telegram/bot1:other/getMe", "", false],
   ["query", "/telegram/bot1:fixture/getMe?x=1", "", false],
+  ["absolute URL", "http://example.invalid/getMe", "", false],
+  ["network path", "//example.invalid/getMe", "", false],
+  ["traversal", "/telegram/bot1:fixture/../../getMe", "", false],
+  ["encoded traversal", "/telegram/bot1:fixture/%2e%2e/getMe", "", false],
   ["body", "/telegram/bot1:fixture/getMe", "{}", false],
 ] as const)(
   "allows only bounded GET startup probes (%s)",

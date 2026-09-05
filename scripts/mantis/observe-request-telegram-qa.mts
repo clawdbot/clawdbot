@@ -98,7 +98,9 @@ const bridge = http.createServer((request, response) => {
       throw new Error("Diagnostic GET must not contain a body");
     }
     stage = "upstream-fetch";
-    const result = await fetch(new URL(requestUrl, upstream), {
+    const upstreamUrl = new URL(upstream);
+    upstreamUrl.pathname = requestUrl;
+    const result = await fetch(upstreamUrl, {
       method: request.method,
       headers: { "content-type": request.headers["content-type"] ?? "application/json" },
       body: request.method === "POST" ? Buffer.concat(chunks) : undefined,

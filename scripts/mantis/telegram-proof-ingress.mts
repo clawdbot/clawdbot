@@ -54,9 +54,12 @@ export async function startTelegramProofIngress(options: {
       }
     | undefined;
   const readers = new Set<AbortController>();
-  const forwardingStopped = Promise.withResolvers<Error>();
+  let stopForwarding!: (error: Error) => void;
+  const forwardingStopped = new Promise<Error>((resolve) => {
+    stopForwarding = resolve;
+  });
   const cancelForwarding = () => {
-    forwardingStopped.resolve(new Error("Telegram proof forwarding stopped"));
+    stopForwarding(new Error("Telegram proof forwarding stopped"));
     for (const controller of readers) {
       controller.abort();
     }
@@ -82,7 +85,7 @@ export async function startTelegramProofIngress(options: {
   const upstream = await startProxy({
     leaseHealth: {
       assertHealthy: assertForwardingHealthy,
-      whenUnhealthy: Promise.race([options.lease.whenUnhealthy, forwardingStopped.promise]),
+      whenUnhealthy: Promise.race([options.lease.whenUnhealthy, forwardingStopped]),
     },
     fetchImpl: options.fetchImpl ?? fetch,
   });
@@ -271,10 +274,13 @@ export async function startTelegramProofIngress(options: {
         // Body collection yielded to concurrent requests. Authority must still
         // belong to this active proof at the last point before forwarding.
         assertForwardingHealthy();
-        const result = await fetch(`${upstream.apiRoot}/bot${options.sutToken}/${method}`, {
+        const upstreamUrl = new URL(upstream.apiRoot);
+        upstreamUrl.pathname = `/bot${options.sutToken}/${method}`;
+        const result = await fetch(upstreamUrl, {
           method: "POST",
           headers: { "Content-Type": "application/json" },
           body: JSON.stringify(upstreamRecord),
+          redirect: "error",
           signal: AbortSignal.any([controller.signal, AbortSignal.timeout(40_000)]),
         });
         const text = await result.text();

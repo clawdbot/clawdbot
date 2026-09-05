@@ -16,7 +16,17 @@ it("admits canonical read-only probes without opening arbitrary GET or Bot API m
   for (const method of ["sendMessage", "getUpdates", "deleteWebhook"]) {
     expect(isTelegramQaBotApiRequest("GET", method)).toBe(false);
   }
-  for (const method of ["getMe?extra=1", "getMe/", "../getMe", "reset", "sendDocument", ""]) {
+  for (const method of [
+    "getMe?extra=1",
+    "getMe/",
+    "../getMe",
+    "%2e%2e/getMe",
+    "http://example.invalid/getMe",
+    "//example.invalid/getMe",
+    "reset",
+    "sendDocument",
+    "",
+  ]) {
     expect(isTelegramQaBotApiRequest("POST", method)).toBe(false);
   }
   for (const method of [undefined, "HEAD", "PUT", "DELETE"]) {

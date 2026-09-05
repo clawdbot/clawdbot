@@ -64,11 +64,6 @@ export const telegramReplyObservationSchema = z.union([
     in_reply_to: z.null(),
   }),
 ]);
-export const telegramObservationFiles = [
-  "telegram-send.json",
-  "provider-request.json",
-  "telegram-reply.json",
-] as const;
 export function telegramProofDigest(value: string | Uint8Array): string {
   return createHash("sha256").update(value).digest("hex");
 }

@@ -116,6 +116,21 @@ describe("check-deadcode-exports", () => {
     );
   });
 
+  it("models path-launched Mantis runtime roots separately from its cross-repository test fixture", () => {
+    const runtimeEntries = [
+      "scripts/mantis/observe-request-telegram-qa.mts!",
+      "scripts/mantis/observe-request-web-ui.mts!",
+      "scripts/mantis/telegram-proof-bridge.mjs!",
+    ];
+    for (const workspace of [knipConfig.workspaces["."], fullRootWorkspace, scriptRootWorkspace]) {
+      expect(workspace.entry).toEqual(expect.arrayContaining(runtimeEntries));
+    }
+    const fixture = "test/fixtures/mantis-request-producer.mts!";
+    expect(fullRootWorkspace.entry).toContain(fixture);
+    expect(knipConfig.workspaces["."].entry).not.toContain(fixture);
+    expect(scriptRootWorkspace.entry).not.toContain(fixture);
+  });
+
   it("keeps the script unused-export scan scoped to real executable roots", () => {
     expect(scriptRootWorkspace.entry).toEqual(
       expect.arrayContaining([

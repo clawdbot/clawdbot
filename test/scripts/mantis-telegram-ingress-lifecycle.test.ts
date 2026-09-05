@@ -6,6 +6,7 @@ import path from "node:path";
 import { expect, it } from "vitest";
 import { startTelegramProofIngress } from "../../scripts/mantis/telegram-proof-ingress.mts";
 import { telegramProofPrompt } from "../../scripts/mantis/telegram-request-proof.ts";
+import { createDeferred } from "../helpers/promise.js";
 
 it.each([
   ["invalid-request", false],
@@ -18,9 +19,9 @@ it.each([
     process.platform === "win32"
       ? `\\\\.\\pipe\\mantis-${randomUUID()}`
       : path.join(root, "api.sock");
-  const forwarded = Promise.withResolvers<AbortSignal>();
-  const upstreamReply = Promise.withResolvers<Response>();
-  const admitted = Promise.withResolvers<void>();
+  const forwarded = createDeferred<AbortSignal>();
+  const upstreamReply = createDeferred<Response>();
+  const admitted = createDeferred();
   let watchAdmission = false;
   let forwardingCount = 0;
   const ingress = await startTelegramProofIngress({
@@ -47,7 +48,7 @@ it.each([
     },
   });
   const begin = (requestPath: string, authorization?: string) => {
-    const status = Promise.withResolvers<number>();
+    const status = createDeferred<number>();
     const request = http.request(
       {
         socketPath: socket,
