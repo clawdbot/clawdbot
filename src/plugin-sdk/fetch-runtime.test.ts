@@ -4,7 +4,7 @@
 import path from "node:path";
 import { pathToFileURL } from "node:url";
 import { beforeAll, describe, expect, it, vi } from "vitest";
-import { createDeferred } from "../test-utils/deferred.js";
+import { createDeferred } from "../../test/helpers/promise.js";
 import { execNodeEvalSync } from "../test-utils/node-process.js";
 import { responseWithRelease } from "./fetch-runtime.js";
 

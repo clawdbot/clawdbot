@@ -1,12 +1,19 @@
 // Capability-token helpers for plugin-hosted node surfaces.
 import { randomBytes } from "node:crypto";
+import { isDeepStrictEqual } from "node:util";
 import {
   asDateTimestampMs,
   asPositiveSafeInteger,
   isFutureDateTimestampMs,
   resolveExpiresAtMsFromDurationMs,
 } from "@openclaw/normalization-core/number-coercion";
+import type { ConnectParams } from "../../packages/gateway-protocol/src/schema/frames.js";
+import { PROTOCOL_VERSION } from "../../packages/gateway-protocol/src/version.js";
 import { safeEqualSecret } from "../security/secret-equal.js";
+import {
+  invalidateGatewayPolicyClient,
+  type GatewayPolicyClient,
+} from "./server/ws-policy-close.js";
 
 /** Path marker used to scope plugin-hosted node URLs with one-time capabilities. */
 export const PLUGIN_NODE_CAPABILITY_PATH_PREFIX = "/__openclaw__/cap";
@@ -21,8 +28,10 @@ export type PluginNodeCapabilitySurface = {
   scopeKey?: string;
 };
 
-/** Client-side storage for surface URLs and minted plugin-node capabilities. */
+/** Client state used to authorize plugin-node surface capabilities. */
 export type PluginNodeCapabilityClient = {
+  /** Retired clients cannot back HTTP capability auth or its renewal while close is pending. */
+  invalidated?: boolean;
   pluginSurfaceUrls?: Record<string, string>;
   pluginNodeCapabilitySurfaces?: Record<string, PluginNodeCapabilitySurface>;
   pluginNodeCapabilities?: Record<string, { capability: string; expiresAtMs: number }>;
@@ -48,6 +57,34 @@ export function indexPluginNodeCapabilitySurfaces(
     }
   }
   return indexed;
+}
+
+/** Reconnect changed nodes so the handshake owns newly scoped URLs and capabilities. */
+export function reconcileClientPluginNodeCapabilities(
+  client: PluginNodeCapabilityClient & GatewayPolicyClient & { connect: ConnectParams },
+  surfaces: Record<string, PluginNodeCapabilitySurface>,
+  close?: () => void,
+): boolean {
+  // Legacy descriptor changes alter session protocol ceilings. Current nodes only
+  // need affected caps or URLs, including URLs retained after policy narrows caps.
+  if (
+    client.connect.role !== "node" ||
+    (client.connect.maxProtocol < PROTOCOL_VERSION
+      ? isDeepStrictEqual(client.pluginNodeCapabilitySurfaces ?? {}, surfaces)
+      : [...(client.connect.caps ?? []), ...Object.keys(client.pluginSurfaceUrls ?? {})].every(
+          (surface) =>
+            isDeepStrictEqual(client.pluginNodeCapabilitySurfaces?.[surface], surfaces[surface]),
+        ))
+  ) {
+    return true;
+  }
+  invalidateGatewayPolicyClient(client, {
+    reason: "plugin-node-capabilities-changed",
+    code: 1012,
+    message: "node capabilities changed",
+    close,
+  });
+  return false;
 }
 
 /** Parsed URL details after extracting path/query capability tokens. */
@@ -346,6 +383,9 @@ export function hasAuthorizedPluginNodeCapability(params: {
     return false;
   }
   for (const client of params.clients) {
+    if (client.invalidated) {
+      continue;
+    }
     const entry = client.pluginNodeCapabilities?.[storageKey];
     if (!entry || !isFutureDateTimestampMs(entry.expiresAtMs, { nowMs })) {
       continue;

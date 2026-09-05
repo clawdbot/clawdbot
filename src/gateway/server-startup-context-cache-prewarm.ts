@@ -1,6 +1,6 @@
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { getActiveGatewayRootWorkCount } from "../process/gateway-work-admission.js";
-import { scheduleGatewayIdleTask } from "./server-idle-task.js";
+import { scheduleGatewayIdleTask, type GatewayIdleTaskHandle } from "./server-idle-task.js";
 
 const CONTEXT_CACHE_PREWARM_START_DELAY_MS = 5_000;
 const CONTEXT_CACHE_PREWARM_RETRY_DELAY_MS = 250;
@@ -9,23 +9,22 @@ type StartupTrace = {
   measure: <T>(name: string, run: () => T | Promise<T>) => Promise<T>;
 };
 
-type ContextCachePrewarmHandle = {
-  stop: () => void | Promise<void>;
-};
-
 export function scheduleContextCachePrewarm(params: {
-  cfgAtStart: OpenClawConfig;
+  getConfig: () => OpenClawConfig;
   startupTrace?: StartupTrace;
   log: { warn: (msg: string) => void };
-}): ContextCachePrewarmHandle {
+}): GatewayIdleTaskHandle {
   let stopped = false;
   const warm = async () => {
     if (stopped) {
       return;
     }
-    const { ensureContextWindowCacheLoaded } = await import("../agents/context.js");
+    const { prewarmContextWindowCacheAfterReady } = await import("../agents/context.js");
     if (!stopped) {
-      await ensureContextWindowCacheLoaded(params.cfgAtStart);
+      await prewarmContextWindowCacheAfterReady({
+        config: params.getConfig(),
+        isCancelled: () => stopped,
+      });
     }
   };
 
@@ -47,7 +46,7 @@ export function scheduleContextCachePrewarm(params: {
   return {
     stop: () => {
       stopped = true;
-      idleTask.stop();
+      return idleTask.stop();
     },
   };
 }

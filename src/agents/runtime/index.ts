@@ -25,11 +25,11 @@ export {
   COMPACTION_SUMMARY_PREFIX,
   COMPACTION_SUMMARY_SUFFIX,
   DEFAULT_COMPACTION_SETTINGS,
+  IMAGE_BLOCK_TOKENS,
 } from "../../plugin-sdk/agent-core.js";
 export type {
   AfterToolCallContext,
   AfterToolCallResult,
-  AfterToolOutcomeContext,
   AgentEvent,
   AgentMessage,
   AgentOptions,
@@ -46,6 +46,7 @@ export type {
   CompactionPreparation,
   CompactionResult,
   CompactionSettings,
+  CompactionSummaryPrompt,
   ContextUsageEstimate,
   FileOperations,
   Result,

@@ -397,7 +397,7 @@ export function resolvePositionalSeg(seg: string, container: PositionalContainer
 /**
  * Wildcard tokens permitted in `findOcPaths` patterns.
  * `*` matches one sub-segment; `**` matches zero or more (recursive).
- * Reject in resolve/set via `hasWildcard`.
+ * Reject in resolve/set via `isPattern`.
  */
 export const WILDCARD_SINGLE = "*";
 export const WILDCARD_RECURSIVE = "**";
@@ -407,7 +407,7 @@ export const WILDCARD_RECURSIVE = "**";
  * union `{a,b,c}`, or predicate `[k=v]`). Single-match verbs reject
  * these; only `findOcPaths` consumes them.
  */
-function isPattern(path: OcPath): boolean {
+export function isPattern(path: OcPath): boolean {
   for (const slot of [path.section, path.item, path.field]) {
     if (slot === undefined) {
       continue;
@@ -428,9 +428,6 @@ function isPattern(path: OcPath): boolean {
   }
   return false;
 }
-
-/** @deprecated v1 — use {@link isPattern}. Behaviorally identical. */
-export const hasWildcard = isPattern;
 
 /** Union segment `{a,b,c}` matches each comma-separated alternative. */
 export function isUnionSeg(seg: string): boolean {

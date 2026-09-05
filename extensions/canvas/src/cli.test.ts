@@ -1,365 +1,136 @@
-// Canvas tests cover cli plugin behavior.
+import {
+  GatewayClientRequestError,
+  GatewayClientRequestTimeoutError,
+} from "@openclaw/gateway-client";
 import { Command } from "commander";
-import { describe, expect, it, vi } from "vitest";
+import { beforeEach, describe, expect, it, vi } from "vitest";
+
+const gatewayMocks = vi.hoisted(() => ({
+  callGatewayFromCli: vi.fn(),
+}));
+
+vi.mock("openclaw/plugin-sdk/gateway-runtime", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("openclaw/plugin-sdk/gateway-runtime")>()),
+  callGatewayFromCli: gatewayMocks.callGatewayFromCli,
+}));
+
 import {
   createDefaultCanvasCliDependencies,
   registerNodesCanvasCommands,
   type CanvasCliDependencies,
 } from "./cli.js";
 
-function createCanvasCliDeps() {
-  const writtenFiles: Array<{ filePath: string; base64: string }> = [];
+function createDeps() {
   const runtime = {
     log: vi.fn(),
     error: vi.fn(),
-    exit: vi.fn((code: number) => {
-      throw new Error(`exit ${code}`);
-    }),
+    exit: vi.fn(),
     writeJson: vi.fn(),
   };
+  const defaults = createDefaultCanvasCliDependencies();
   const deps: CanvasCliDependencies = {
+    ...defaults,
     defaultRuntime: runtime,
-    nodesCallOpts: (cmd, defaults) =>
-      cmd
-        .option("--url <url>", "Gateway WebSocket URL")
-        .option("--token <token>", "Gateway token")
-        .option("--timeout <ms>", "Timeout in ms", String(defaults?.timeoutMs ?? 10_000))
-        .option("--json", "Output JSON", false),
-    runNodesCommand: async (_label, action) => {
-      await action();
-    },
+    runNodesCommand: (_label, action) => action(),
     getNodesTheme: () => ({ ok: (value) => value }),
-    parseTimeoutMs: (raw) => (typeof raw === "string" ? Number.parseInt(raw, 10) : undefined),
-    resolveNodeId: async (opts) => opts.node ?? "ios-node",
-    buildNodeInvokeParams: ({ nodeId, command, params, timeoutMs }) => ({
-      nodeId,
-      command,
-      params,
-      ...(typeof timeoutMs === "number" ? { timeoutMs } : {}),
-    }),
-    callGatewayCli: vi.fn(async () => ({
-      payload: {
-        format: "png",
-        base64: "aGk=",
-      },
-    })),
-    writeBase64ToFile: async (filePath, base64) => {
-      writtenFiles.push({ filePath, base64 });
-    },
-    shortenHomePath: (filePath) => filePath,
+    resolveNodeId: vi.fn(async () => "mac-1"),
+    callGatewayCli: vi.fn(async () => ({ ok: true })),
   };
-  return { deps, runtime, writtenFiles };
+  return { deps, runtime };
 }
 
-function createCanvasCliDepsWithDefaultParsers() {
-  const baseDeps = createDefaultCanvasCliDependencies();
-  const harness = createCanvasCliDeps();
-  return {
-    ...harness,
-    deps: {
-      ...baseDeps,
-      defaultRuntime: harness.runtime,
-      nodesCallOpts: harness.deps.nodesCallOpts,
-      runNodesCommand: harness.deps.runNodesCommand,
-      getNodesTheme: harness.deps.getNodesTheme,
-      resolveNodeId: harness.deps.resolveNodeId,
-      buildNodeInvokeParams: harness.deps.buildNodeInvokeParams,
-      callGatewayCli: harness.deps.callGatewayCli,
-      writeBase64ToFile: harness.deps.writeBase64ToFile,
-      shortenHomePath: harness.deps.shortenHomePath,
-    },
-  };
+function createProgram(deps: CanvasCliDependencies) {
+  const program = new Command();
+  program.exitOverride();
+  registerNodesCanvasCommands(program.command("nodes"), deps);
+  return program;
 }
 
-const canvasAcknowledgementCommands = [
-  {
-    args: ["present"],
-    command: "canvas.present",
-    message: "canvas present ok",
-  },
-  {
-    args: ["hide"],
-    command: "canvas.hide",
-    message: "canvas hide ok",
-  },
-  {
-    args: ["navigate", "https://example.com"],
-    command: "canvas.navigate",
-    message: "canvas navigate ok",
-  },
-  {
-    args: ["a2ui", "push", "--text", "hello"],
-    command: "canvas.a2ui.pushJSONL",
-    message: "canvas a2ui push ok (v0.8, 2 messages)",
-  },
-  {
-    args: ["a2ui", "reset"],
-    command: "canvas.a2ui.reset",
-    message: "canvas a2ui reset ok",
-  },
-] as const;
-
-const canvasInvocationCommands = [
-  ...canvasAcknowledgementCommands,
-  { args: ["snapshot"], command: "canvas.snapshot" },
-  { args: ["eval", "1 + 1"], command: "canvas.eval" },
-] as const;
-
-describe("canvas CLI", () => {
-  it("registers under nodes and captures a snapshot media path", async () => {
-    const program = new Command();
-    program.exitOverride();
-    const nodes = program.command("nodes");
-    const { deps, runtime, writtenFiles } = createCanvasCliDeps();
-
-    registerNodesCanvasCommands(nodes, deps);
-    await program.parseAsync(["nodes", "canvas", "snapshot", "--node", "ios-node"], {
-      from: "user",
-    });
-
-    expect(deps.callGatewayCli).toHaveBeenCalledTimes(1);
-    expect(deps.callGatewayCli).toHaveBeenCalledWith(
-      "node.invoke",
-      {
-        node: "ios-node",
-        format: "jpg",
-        timeout: "60000",
-        json: false,
-        invokeTimeout: "20000",
-      },
-      {
-        nodeId: "ios-node",
-        command: "canvas.snapshot",
-        params: {
-          format: "jpeg",
-          maxWidth: undefined,
-          quality: undefined,
-        },
-        timeoutMs: 20000,
-      },
-      { transportTimeoutMs: 60_000 },
-    );
-    expect(writtenFiles).toHaveLength(1);
-    const [writtenFile] = writtenFiles;
-    if (!writtenFile) {
-      throw new Error("Expected canvas snapshot file");
-    }
-    expect(writtenFile.filePath).toMatch(/openclaw-canvas-snapshot-.*\.png$/);
-    expect(writtenFile.base64).toBe("aGk=");
-    expect(runtime.log).toHaveBeenCalledTimes(1);
-    const savedPath = runtime.log.mock.calls[0]?.[0];
-    expect(savedPath?.startsWith("MEDIA:")).toBe(false);
-    expect(savedPath?.endsWith(".png")).toBe(true);
+describe("nodes canvas CLI", () => {
+  beforeEach(() => {
+    vi.clearAllMocks();
+    gatewayMocks.callGatewayFromCli.mockReset();
   });
 
-  it("rejects node-controlled snapshot formats before writing", async () => {
-    const program = new Command();
-    program.exitOverride();
-    const nodes = program.command("nodes");
-    const { deps, writtenFiles } = createCanvasCliDeps();
-    vi.mocked(deps.callGatewayCli).mockResolvedValueOnce({
-      payload: {
-        format: "/../../target.sh",
-        base64: "aGk=",
-      },
-    });
+  it("registers only presenter commands", () => {
+    const { deps } = createDeps();
+    const program = createProgram(deps);
+    const canvas = program.commands[0]?.commands.find((command) => command.name() === "canvas");
 
-    registerNodesCanvasCommands(nodes, deps);
-
-    await expect(
-      program.parseAsync(["nodes", "canvas", "snapshot", "--node", "ios-node"], {
-        from: "user",
-      }),
-    ).rejects.toThrow(/invalid canvas\.snapshot payload/i);
-    expect(writtenFiles).toHaveLength(0);
+    expect(canvas?.commands.map((command) => command.name())).toEqual([
+      "present",
+      "hide",
+      "navigate",
+    ]);
   });
 
-  it("rejects malformed node-controlled snapshot base64 before writing", async () => {
-    const program = new Command();
-    program.exitOverride();
-    const nodes = program.command("nodes");
-    const { deps, writtenFiles } = createCanvasCliDeps();
-    vi.mocked(deps.callGatewayCli).mockResolvedValueOnce({
-      payload: {
-        format: "png",
-        base64: "Zh==",
-      },
-    });
+  it.each([
+    {
+      args: ["present"],
+      command: "canvas.present",
+      params: {},
+      message: "canvas present ok",
+    },
+    {
+      args: ["hide"],
+      command: "canvas.hide",
+      params: undefined,
+      message: "canvas hide ok",
+    },
+    {
+      args: ["navigate", "/__openclaw__/canvas/documents/cv_1/index.html"],
+      command: "canvas.navigate",
+      params: { url: "/__openclaw__/canvas/documents/cv_1/index.html" },
+      message: "canvas navigate ok",
+    },
+  ])(
+    "invokes $command and prints its acknowledgement",
+    async ({ args, command, params, message }) => {
+      const { deps, runtime } = createDeps();
+      const program = createProgram(deps);
 
-    registerNodesCanvasCommands(nodes, deps);
-
-    await expect(
-      program.parseAsync(["nodes", "canvas", "snapshot", "--node", "ios-node"], {
-        from: "user",
-      }),
-    ).rejects.toThrow(/invalid canvas\.snapshot payload/i);
-    expect(writtenFiles).toHaveLength(0);
-  });
-
-  it("rejects unsupported snapshot formats before invoking the node", async () => {
-    const program = new Command();
-    program.exitOverride();
-    const nodes = program.command("nodes");
-    const { deps, writtenFiles } = createCanvasCliDeps();
-
-    registerNodesCanvasCommands(nodes, deps);
-
-    await expect(
-      program.parseAsync(["nodes", "canvas", "snapshot", "--node", "ios-node", "--format", "gif"], {
-        from: "user",
-      }),
-    ).rejects.toThrow(/invalid format: gif/i);
-    expect(deps.callGatewayCli).not.toHaveBeenCalled();
-    expect(writtenFiles).toHaveLength(0);
-  });
-
-  it("prints an empty canvas eval result instead of a success placeholder", async () => {
-    const program = new Command();
-    program.exitOverride();
-    const nodes = program.command("nodes");
-    const { deps, runtime } = createCanvasCliDeps();
-    vi.mocked(deps.callGatewayCli).mockResolvedValueOnce({ payload: { result: "" } });
-
-    registerNodesCanvasCommands(nodes, deps);
-    await program.parseAsync(["nodes", "canvas", "eval", `""`, "--node", "ios-node"], {
-      from: "user",
-    });
-
-    expect(runtime.log).toHaveBeenCalledWith("");
-    expect(runtime.log).not.toHaveBeenCalledWith("canvas eval ok");
-  });
-
-  it.each(canvasInvocationCommands)(
-    "keeps the default $command Gateway deadline longer than the node deadline",
-    async ({ args, command }) => {
-      const program = new Command();
-      program.exitOverride();
-      const { deps } = createCanvasCliDeps();
-
-      registerNodesCanvasCommands(program.command("nodes"), deps);
-      await program.parseAsync(["nodes", "canvas", ...args, "--node", "ios-node"], {
+      await program.parseAsync(["nodes", "canvas", ...args, "--node", "Studio"], {
         from: "user",
       });
 
-      const invokeTimeoutMs = command === "canvas.snapshot" ? 20_000 : 30_000;
-      const transportTimeoutMs = command === "canvas.snapshot" ? 60_000 : 40_000;
+      expect(deps.resolveNodeId).toHaveBeenCalledWith(expect.any(Object), "Studio");
       expect(deps.callGatewayCli).toHaveBeenCalledWith(
         "node.invoke",
         expect.any(Object),
-        expect.objectContaining({ command, timeoutMs: invokeTimeoutMs }),
-        { transportTimeoutMs },
-      );
-    },
-  );
-
-  it.each(canvasInvocationCommands)(
-    "keeps an explicit $command Gateway deadline longer than the node deadline",
-    async ({ args, command }) => {
-      const program = new Command();
-      program.exitOverride();
-      const { deps } = createCanvasCliDeps();
-
-      registerNodesCanvasCommands(program.command("nodes"), deps);
-      await program.parseAsync(
-        ["nodes", "canvas", ...args, "--node", "ios-node", "--invoke-timeout", "35000"],
-        { from: "user" },
-      );
-
-      expect(deps.callGatewayCli).toHaveBeenCalledWith(
-        "node.invoke",
-        expect.any(Object),
-        expect.objectContaining({ command, timeoutMs: 35_000 }),
-        { transportTimeoutMs: command === "canvas.snapshot" ? 60_000 : 45_000 },
-      );
-    },
-  );
-
-  it("preserves an explicit Gateway timeout longer than the node deadline and grace", async () => {
-    const program = new Command();
-    program.exitOverride();
-    const { deps } = createCanvasCliDeps();
-
-    registerNodesCanvasCommands(program.command("nodes"), deps);
-    await program.parseAsync(
-      [
-        "nodes",
-        "canvas",
-        "present",
-        "--node",
-        "ios-node",
-        "--invoke-timeout",
-        "35000",
-        "--timeout",
-        "120000",
-      ],
-      { from: "user" },
-    );
-
-    expect(deps.callGatewayCli).toHaveBeenCalledWith(
-      "node.invoke",
-      expect.objectContaining({ timeout: "120000" }),
-      expect.objectContaining({ timeoutMs: 35_000 }),
-      { transportTimeoutMs: 120_000 },
-    );
-  });
-
-  it("preserves the snapshot command's existing longer Gateway timeout", async () => {
-    const program = new Command();
-    program.exitOverride();
-    const { deps } = createCanvasCliDeps();
-    deps.nodesCallOpts = createDefaultCanvasCliDependencies().nodesCallOpts;
-
-    registerNodesCanvasCommands(program.command("nodes"), deps);
-    await program.parseAsync(["nodes", "canvas", "snapshot", "--node", "ios-node"], {
-      from: "user",
-    });
-
-    expect(deps.callGatewayCli).toHaveBeenCalledWith(
-      "node.invoke",
-      expect.objectContaining({ timeout: "60000" }),
-      expect.objectContaining({ timeoutMs: 20_000 }),
-      { transportTimeoutMs: 60_000 },
-    );
-  });
-
-  it("preserves an invalid explicit Gateway timeout for its existing validation", async () => {
-    const program = new Command();
-    program.exitOverride();
-    const { deps } = createCanvasCliDepsWithDefaultParsers();
-    deps.callGatewayCli = vi.fn(async (_method, _opts, _params, callOpts) => {
-      if (callOpts?.transportTimeoutMs !== undefined) {
-        throw new Error("invalid Gateway timeout was replaced");
-      }
-      throw new Error('Invalid --timeout. Received: "20ms".');
-    });
-
-    registerNodesCanvasCommands(program.command("nodes"), deps);
-
-    await expect(
-      program.parseAsync(
-        ["nodes", "canvas", "present", "--node", "ios-node", "--timeout", "20ms"],
         {
-          from: "user",
+          nodeId: "mac-1",
+          command,
+          params,
+          timeoutMs: 30_000,
+          idempotencyKey: expect.any(String),
         },
-      ),
-    ).rejects.toThrow('Invalid --timeout. Received: "20ms".');
-  });
+        { transportTimeoutMs: 40_000 },
+      );
+      expect(runtime.log).toHaveBeenCalledWith(message);
+    },
+  );
 
-  it("caps oversized node and Gateway deadlines to the timer-safe maximum", async () => {
-    const program = new Command();
-    program.exitOverride();
-    const { deps } = createCanvasCliDepsWithDefaultParsers();
+  it("preserves present target and placement fields", async () => {
+    const { deps } = createDeps();
+    const program = createProgram(deps);
 
-    registerNodesCanvasCommands(program.command("nodes"), deps);
     await program.parseAsync(
       [
         "nodes",
         "canvas",
         "present",
         "--node",
-        "ios-node",
-        "--invoke-timeout",
-        String(Number.MAX_SAFE_INTEGER),
+        "mac-1",
+        "--target",
+        "openclaw://widget/local",
+        "--x",
+        "10.5",
+        "--y",
+        "-2",
+        "--width",
+        "640",
+        "--height",
+        "480",
       ],
       { from: "user" },
     );
@@ -367,170 +138,180 @@ describe("canvas CLI", () => {
     expect(deps.callGatewayCli).toHaveBeenCalledWith(
       "node.invoke",
       expect.any(Object),
-      expect.objectContaining({ timeoutMs: 2_147_000_000 }),
-      { transportTimeoutMs: 2_147_000_000 },
+      expect.objectContaining({
+        command: "canvas.present",
+        params: {
+          url: "openclaw://widget/local",
+          placement: { x: 10.5, y: -2, width: 640, height: 480 },
+        },
+      }),
+      expect.any(Object),
     );
   });
 
-  it.each(canvasAcknowledgementCommands)(
-    "prints the full successful $command Gateway response with --json",
-    async ({ args, command }) => {
-      const program = new Command();
-      program.exitOverride();
-      const nodes = program.command("nodes");
-      const { deps, runtime } = createCanvasCliDeps();
-      const response = {
-        ok: true,
-        nodeId: "ios-node",
-        command,
-        payload: { acknowledged: true },
-        payloadJSON: '{"acknowledged":true}',
-      };
-      vi.mocked(deps.callGatewayCli).mockResolvedValueOnce(response);
+  it("prints the full Gateway response in JSON mode", async () => {
+    const { deps, runtime } = createDeps();
+    const response = { ok: true, command: "canvas.hide", payload: { acknowledged: true } };
+    vi.mocked(deps.callGatewayCli).mockResolvedValue(response);
+    const program = createProgram(deps);
 
-      registerNodesCanvasCommands(nodes, deps);
-      await program.parseAsync(["nodes", "canvas", ...args, "--node", "ios-node", "--json"], {
-        from: "user",
-      });
+    await program.parseAsync(["nodes", "canvas", "hide", "--node", "mac-1", "--json"], {
+      from: "user",
+    });
 
-      expect(deps.callGatewayCli).toHaveBeenCalledTimes(1);
-      expect(runtime.writeJson).toHaveBeenCalledExactlyOnceWith(response);
-      expect(runtime.log).not.toHaveBeenCalled();
-    },
-  );
-
-  it.each(canvasAcknowledgementCommands)(
-    "preserves the human-readable $command acknowledgement",
-    async ({ args, message }) => {
-      const program = new Command();
-      program.exitOverride();
-      const nodes = program.command("nodes");
-      const { deps, runtime } = createCanvasCliDeps();
-
-      registerNodesCanvasCommands(nodes, deps);
-      await program.parseAsync(["nodes", "canvas", ...args, "--node", "ios-node"], {
-        from: "user",
-      });
-
-      expect(runtime.log).toHaveBeenCalledExactlyOnceWith(message);
-      expect(runtime.writeJson).not.toHaveBeenCalled();
-    },
-  );
-
-  it("does not print a machine-readable success response when a Canvas invocation fails", async () => {
-    const program = new Command();
-    program.exitOverride();
-    const nodes = program.command("nodes");
-    const { deps, runtime } = createCanvasCliDeps();
-    vi.mocked(deps.callGatewayCli).mockRejectedValueOnce(new Error("node disconnected"));
-
-    registerNodesCanvasCommands(nodes, deps);
-
-    await expect(
-      program.parseAsync(["nodes", "canvas", "present", "--node", "ios-node", "--json"], {
-        from: "user",
-      }),
-    ).rejects.toThrow("node disconnected");
-    expect(runtime.writeJson).not.toHaveBeenCalled();
+    expect(runtime.writeJson).toHaveBeenCalledWith(response);
     expect(runtime.log).not.toHaveBeenCalled();
   });
 
-  it.each([
-    ["--max-width", "640px", "--max-width must be a positive integer."],
-    ["--quality", "0.8x", "--quality must be a number."],
-    ["--quality", "-0.1", "--quality must be between 0 and 1."],
-    ["--quality", "5", "--quality must be between 0 and 1."],
-  ])("rejects partial numeric snapshot %s values", async (flag, value, message) => {
-    const program = new Command();
-    program.exitOverride();
-    const nodes = program.command("nodes");
-    const { deps } = createCanvasCliDeps();
+  it("keeps the Gateway deadline longer than an explicit node deadline", async () => {
+    const { deps } = createDeps();
+    const program = createProgram(deps);
 
-    registerNodesCanvasCommands(nodes, deps);
+    await program.parseAsync(
+      ["nodes", "canvas", "hide", "--node", "mac-1", "--invoke-timeout", "35000"],
+      { from: "user" },
+    );
+
+    expect(deps.callGatewayCli).toHaveBeenCalledWith(
+      "node.invoke",
+      expect.any(Object),
+      expect.objectContaining({ timeoutMs: 35_000 }),
+      { transportTimeoutMs: 45_000 },
+    );
+  });
+
+  it.each([
+    ["--x", "1x", "--x must be a number."],
+    ["--width", "640px", "--width must be a number."],
+    ["--invoke-timeout", "20ms", "--invoke-timeout must be a positive integer."],
+  ])("rejects invalid present %s values", async (flag, value, message) => {
+    const { deps } = createDeps();
+    const program = createProgram(deps);
 
     await expect(
-      program.parseAsync(["nodes", "canvas", "snapshot", "--node", "ios-node", flag, value], {
+      program.parseAsync(["nodes", "canvas", "present", "--node", "mac-1", flag, value], {
         from: "user",
       }),
     ).rejects.toThrow(message);
     expect(deps.callGatewayCli).not.toHaveBeenCalled();
   });
 
-  it.each(["0", "1"])("accepts snapshot --quality boundary value %s", async (quality) => {
-    const program = new Command();
-    program.exitOverride();
-    const nodes = program.command("nodes");
-    const { deps } = createCanvasCliDeps();
+  it("resolves and invokes a paired node when an older Gateway lacks node.list", async () => {
+    const { deps } = createDeps();
+    deps.resolveNodeId = createDefaultCanvasCliDependencies().resolveNodeId;
+    gatewayMocks.callGatewayFromCli
+      .mockRejectedValueOnce(
+        new GatewayClientRequestError({
+          code: "INVALID_REQUEST",
+          message: "unknown method: node.list",
+        }),
+      )
+      .mockResolvedValueOnce({
+        pending: [],
+        paired: [{ nodeId: "legacy-node", displayName: "Legacy Node" }],
+      });
 
-    registerNodesCanvasCommands(nodes, deps);
+    await createProgram(deps).parseAsync(["nodes", "canvas", "hide", "--node", "Legacy Node"], {
+      from: "user",
+    });
 
-    await program.parseAsync(
-      ["nodes", "canvas", "snapshot", "--node", "ios-node", "--quality", quality],
-      {
-        from: "user",
-      },
-    );
+    expect(gatewayMocks.callGatewayFromCli.mock.calls.map(([method]) => method)).toEqual([
+      "node.list",
+      "node.pair.list",
+    ]);
     expect(deps.callGatewayCli).toHaveBeenCalledWith(
       "node.invoke",
       expect.any(Object),
-      expect.objectContaining({
-        params: expect.objectContaining({
-          quality: Number(quality),
-        }),
-      }),
-      { transportTimeoutMs: 60_000 },
+      expect.objectContaining({ nodeId: "legacy-node", command: "canvas.hide" }),
+      expect.any(Object),
     );
   });
 
   it.each([
-    ["snapshot"],
-    ["present"],
-    ["hide"],
-    ["navigate", "https://example.com"],
-    ["eval", "1 + 1"],
-    ["a2ui", "push", "--text", "hello"],
-    ["a2ui", "reset"],
-  ])("rejects invalid %s invoke timeouts before invoking the node", async (...args) => {
-    const program = new Command();
-    program.exitOverride();
-    const nodes = program.command("nodes");
-    const { deps } = createCanvasCliDepsWithDefaultParsers();
-    deps.resolveNodeId = vi.fn(async () => {
-      throw new Error("resolveNodeId should not be called");
+    {
+      label: "a local request timeout",
+      error: new GatewayClientRequestTimeoutError({
+        method: "node.list",
+        timeoutMs: 80,
+        requestSent: true,
+      }),
+    },
+    {
+      label: "an authorization rejection",
+      error: new GatewayClientRequestError({
+        code: "FORBIDDEN",
+        message: "unknown method: node.list",
+      }),
+    },
+    {
+      label: "an INVALID_REQUEST authentication failure",
+      error: new GatewayClientRequestError({
+        code: "INVALID_REQUEST",
+        message: "unauthorized",
+      }),
+    },
+    {
+      label: "a retryable unknown-method rejection",
+      error: new GatewayClientRequestError({
+        code: "INVALID_REQUEST",
+        message: "unknown method: node.list",
+        retryable: true,
+      }),
+    },
+    {
+      label: "an unknown-method rejection for another method",
+      error: new GatewayClientRequestError({
+        code: "INVALID_REQUEST",
+        message: "unknown method: node.list.extra",
+      }),
+    },
+    {
+      label: "malformed request retry metadata",
+      error: new GatewayClientRequestError({
+        code: "INVALID_REQUEST",
+        message: "unknown method: node.list",
+        retryAfterMs: -1,
+      }),
+    },
+    {
+      label: "a network connection error",
+      error: Object.assign(new Error("connect ECONNREFUSED 127.0.0.1:18789"), {
+        code: "ECONNREFUSED",
+      }),
+    },
+    {
+      label: "a closed Gateway transport",
+      error: new Error("gateway closed (1006): connection lost"),
+    },
+    {
+      label: "a malformed request-error lookalike",
+      error: Object.assign(new Error("unknown method: node.list"), {
+        name: "GatewayClientRequestError",
+        gatewayCode: "INVALID_REQUEST",
+      }),
+    },
+    {
+      label: "a plain unknown-method error",
+      error: new Error("unknown method: node.list"),
+    },
+  ])("preserves $label without resolving or invoking a stale node", async ({ error }) => {
+    const { deps, runtime } = createDeps();
+    deps.resolveNodeId = createDefaultCanvasCliDependencies().resolveNodeId;
+    gatewayMocks.callGatewayFromCli.mockRejectedValueOnce(error).mockResolvedValueOnce({
+      pending: [],
+      paired: [{ nodeId: "stale-node", displayName: "Stale Node" }],
     });
 
-    registerNodesCanvasCommands(nodes, deps);
-
     await expect(
-      program.parseAsync(
-        ["nodes", "canvas", ...args, "--node", "ios-node", "--invoke-timeout", "20ms"],
-        {
-          from: "user",
-        },
-      ),
-    ).rejects.toThrow("--invoke-timeout must be a positive integer.");
-    expect(deps.resolveNodeId).not.toHaveBeenCalled();
-    expect(deps.callGatewayCli).not.toHaveBeenCalled();
-  });
-
-  it.each([
-    ["--x", "1x"],
-    ["--y", "2px"],
-    ["--width", "800wide"],
-    ["--height", "600tall"],
-  ])("rejects partial numeric present %s values", async (flag, value) => {
-    const program = new Command();
-    program.exitOverride();
-    const nodes = program.command("nodes");
-    const { deps } = createCanvasCliDeps();
-
-    registerNodesCanvasCommands(nodes, deps);
-
-    await expect(
-      program.parseAsync(["nodes", "canvas", "present", "--node", "ios-node", flag, value], {
+      createProgram(deps).parseAsync(["nodes", "canvas", "hide", "--node", "Stale Node"], {
         from: "user",
       }),
-    ).rejects.toThrow(`${flag} must be a number.`);
+    ).rejects.toBe(error);
+
+    expect(gatewayMocks.callGatewayFromCli.mock.calls.map(([method]) => method)).toEqual([
+      "node.list",
+    ]);
     expect(deps.callGatewayCli).not.toHaveBeenCalled();
+    expect(runtime.log).not.toHaveBeenCalled();
   });
 });

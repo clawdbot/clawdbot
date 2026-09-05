@@ -10,19 +10,19 @@ type WriteTextAtomicBeforeRename = (params: {
 export {
   JsonFileReadError,
   readJson,
-  readJson as readJsonFileStrict,
+  readJson as readJsonFileStrict, // Sanctioned domain alias.
   readJsonIfExists,
-  readJsonIfExists as readDurableJsonFile,
+  readJsonIfExists as readDurableJsonFile, // Sanctioned domain alias.
   readJsonSync,
   readRootJsonObjectSync,
   readRootJsonSync,
   readRootStructuredFileSync,
   tryReadJson,
-  tryReadJson as readJsonFile,
+  tryReadJson as readJsonFile, // Sanctioned domain alias.
   tryReadJsonSync,
-  tryReadJsonSync as readJsonFileSync,
+  tryReadJsonSync as readJsonFileSync, // Sanctioned domain alias.
   writeJson,
-  writeJson as writeJsonAtomic,
+  writeJson as writeJsonAtomic, // Sanctioned domain alias.
   writeJsonSync,
 } from "@openclaw/fs-safe/json";
 

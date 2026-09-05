@@ -59,7 +59,7 @@ title: "Hugging Face (inference)"
 ### Non-interactive setup
 
 ```bash
-openclaw onboard --non-interactive \
+openclaw onboard --non-interactive --accept-risk --skip-health \
   --mode local \
   --auth-choice huggingface-api-key \
   --huggingface-api-key "$HF_TOKEN"

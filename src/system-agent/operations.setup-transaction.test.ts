@@ -1,4 +1,4 @@
-import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 import { useAutoCleanupTempDirTracker } from "../../test/helpers/temp-dir.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { resetPluginStateStoreForTests } from "../plugin-state/plugin-state-store.js";
@@ -7,7 +7,11 @@ import { captureEnv, setTestEnvValue } from "../test-utils/env.js";
 import { SystemAgentInferenceUnavailableError } from "./inference-error.js";
 import { executeSystemAgentOperation, type SystemAgentCommandDeps } from "./operations.js";
 import type { SystemAgentSetupApplyResult } from "./setup-apply.js";
-import { createSystemAgentTestRuntime } from "./system-agent.test-helpers.js";
+import { createSystemAgentTestRuntime } from "./system-agent.runtime.test-support.js";
+import {
+  installSystemAgentPluginMetadataTestSnapshot,
+  type SystemAgentPluginMetadataTestSnapshot,
+} from "./system-agent.test-helpers.js";
 
 const mocks = vi.hoisted(() => ({ ensureOnboardingAgent: vi.fn() }));
 
@@ -43,8 +47,10 @@ const mockConfig = vi.hoisted(() => {
     exists: true,
     config: { agents: { entries: { main: { default: true } } } } as OpenClawConfig,
   };
+  let bindPluginMetadata = (_config: OpenClawConfig) => {};
   const snapshot = () => {
     const config = structuredClone(state.config);
+    bindPluginMetadata(config);
     return {
       exists: state.exists,
       valid: state.exists,
@@ -66,6 +72,7 @@ const mockConfig = vi.hoisted(() => {
       state.path = "/tmp/openclaw.json";
       state.exists = true;
       state.config = { agents: { entries: { main: { default: true } } } };
+      bindPluginMetadata(state.config);
       readConfigFileSnapshot.mockReset().mockImplementation(async () => snapshot());
       withConfigMutationExclusive
         .mockReset()
@@ -74,9 +81,17 @@ const mockConfig = vi.hoisted(() => {
     missing(configPath: string) {
       state.path = configPath;
       state.exists = false;
+      bindPluginMetadata(state.config);
     },
     setConfig(config: OpenClawConfig) {
       state.config = structuredClone(config);
+      bindPluginMetadata(state.config);
+    },
+    bindPluginMetadata(config: OpenClawConfig) {
+      bindPluginMetadata(config);
+    },
+    setPluginMetadataBinder(binder: (config: OpenClawConfig) => void) {
+      bindPluginMetadata = binder;
     },
     readConfigFileSnapshot,
     withConfigMutationExclusive,
@@ -160,6 +175,20 @@ function createRecoverySetupDeps(
 }
 
 const opTempDirs = useAutoCleanupTempDirTracker(afterEach);
+let pluginMetadataSnapshot: SystemAgentPluginMetadataTestSnapshot | undefined;
+
+beforeAll(() => {
+  pluginMetadataSnapshot = installSystemAgentPluginMetadataTestSnapshot();
+  mockConfig.setPluginMetadataBinder((config) => {
+    pluginMetadataSnapshot?.bindForConfig(config);
+  });
+  mockConfig.reset();
+});
+
+afterAll(() => {
+  mockConfig.setPluginMetadataBinder(() => {});
+  pluginMetadataSnapshot?.restore();
+});
 
 describe("system-agent setup transaction", () => {
   let stateDirSnapshot: ReturnType<typeof captureEnv> | undefined;
@@ -188,6 +217,7 @@ describe("system-agent setup transaction", () => {
         list: [{ id: "main", default: true }],
       },
     } satisfies OpenClawConfig;
+    mockConfig.bindPluginMetadata(config);
     mockConfig.readConfigFileSnapshot.mockResolvedValue({
       exists: true,
       valid: true,
@@ -225,7 +255,7 @@ describe("system-agent setup transaction", () => {
     setTestEnvValue("OPENCLAW_STATE_DIR", opTempDirs.make("openclaw-recovery-complete-"));
     const pending = createPendingLocalOnboarding();
     const applySetup = vi.fn(async () => createRecoverySetupResult());
-    const beforePersistentApply = vi.fn(async () => {});
+    const beforePersistentApply = vi.fn(() => {});
     const { runtime } = createSystemAgentTestRuntime();
 
     const result = await executeSystemAgentOperation({ kind: "setup" }, runtime, {
@@ -237,7 +267,7 @@ describe("system-agent setup transaction", () => {
     expect(result.applied).toBe(true);
     expect(applySetup).toHaveBeenCalledWith(
       expect.objectContaining({ workspace: pending.workspace, resume: true, surface: "cli" }),
-      { commit: expect.any(Function) },
+      { beforePersistentApply },
     );
     expect(localOnboarding.complete).toHaveBeenCalledWith({
       configPath: pending.configPath,
@@ -265,7 +295,7 @@ describe("system-agent setup transaction", () => {
 
     expect(result.applied).toBe(true);
     expect(applySetup).toHaveBeenCalledWith(expect.not.objectContaining({ resume: true }), {
-      commit: expect.any(Function),
+      beforePersistentApply: undefined,
     });
     expect(localOnboarding.complete).not.toHaveBeenCalled();
     expect(localOnboarding.states.get(pending.configPath)).toEqual(pending);
@@ -482,7 +512,7 @@ describe("system-agent setup transaction", () => {
     const pending = createPendingLocalOnboarding();
     const applySetup = vi.fn(async () => createRecoverySetupResult());
     let authorizations = 0;
-    const beforePersistentApply = vi.fn(async () => {
+    const beforePersistentApply = vi.fn(() => {
       if (++authorizations > 1) {
         throw new SystemAgentInferenceUnavailableError("conversation");
       }
@@ -508,7 +538,7 @@ describe("system-agent setup transaction", () => {
     const pending = createPendingLocalOnboarding();
     const applySetup = vi.fn(async () => createRecoverySetupResult());
     let authorizations = 0;
-    const beforePersistentApply = vi.fn(async () => {
+    const beforePersistentApply = vi.fn(() => {
       if (++authorizations > 1) {
         setRecoveryConfig(pending, "2026-08-03T00:00:00.000Z");
       }
@@ -563,7 +593,7 @@ describe("system-agent setup transaction", () => {
 
     expect(result.applied).toBe(true);
     expect(applySetup).toHaveBeenCalledWith(expect.not.objectContaining({ resume: true }), {
-      commit: expect.any(Function),
+      beforePersistentApply: undefined,
     });
     expect(localOnboarding.readForConfig).not.toHaveBeenCalled();
     expect(localOnboarding.complete).not.toHaveBeenCalled();

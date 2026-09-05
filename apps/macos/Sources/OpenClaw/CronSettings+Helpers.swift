@@ -1,11 +1,6 @@
 import SwiftUI
 
 extension CronSettings {
-    var selectedJob: CronJob? {
-        guard let id = self.store.selectedJobId else { return nil }
-        return self.store.jobs.first(where: { $0.id == id })
-    }
-
     func statusTint(_ status: String?) -> Color {
         switch (status ?? "").lowercased() {
         case "ok": .green

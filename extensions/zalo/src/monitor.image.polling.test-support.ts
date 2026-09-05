@@ -320,4 +320,44 @@ describe("Zalo polling image handling", () => {
       server.close(() => resolve());
     });
   });
+
+  it.each([
+    { mediaMaxMb: 0, expectedMaxBytes: 5 * 1024 * 1024 },
+    { mediaMaxMb: -5, expectedMaxBytes: 5 * 1024 * 1024 },
+    { mediaMaxMb: 2, expectedMaxBytes: 2 * 1024 * 1024 },
+  ])(
+    "caps inbound image downloads at $expectedMaxBytes bytes when mediaMaxMb is $mediaMaxMb",
+    async ({ mediaMaxMb, expectedMaxBytes }) => {
+      getUpdatesMock
+        .mockResolvedValueOnce({
+          ok: true,
+          result: createImageUpdate({ messageId: `zalo-image-cap-${mediaMaxMb}` }),
+        })
+        .mockImplementation(() => new Promise(() => {}));
+
+      const { monitorZaloProvider } = await loadCachedLifecycleMonitorModule("zalo-image-polling");
+      const abort = new AbortController();
+      const runtime = createRuntimeEnv();
+      const { account, config } = createLifecycleMonitorSetup({
+        accountId: "default",
+        dmPolicy: "open",
+        mediaMaxMb,
+      });
+      const run = monitorZaloProvider({
+        token: "zalo-token", // pragma: allowlist secret
+        account,
+        config,
+        runtime,
+        abortSignal: abort.signal,
+      });
+
+      await settleAsyncWork();
+      expect(saveRemoteMediaMock).toHaveBeenCalledWith(
+        expect.objectContaining({ maxBytes: expectedMaxBytes }),
+      );
+
+      abort.abort();
+      await run;
+    },
+  );
 });

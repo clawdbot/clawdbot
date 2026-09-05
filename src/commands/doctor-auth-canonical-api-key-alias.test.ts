@@ -3,7 +3,7 @@ import fs from "node:fs";
 import path from "node:path";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { loadPersistedAuthProfileStore } from "../agents/auth-profiles/persisted.js";
-import { clearRuntimeAuthProfileStoreSnapshots } from "../agents/auth-profiles/store.js";
+import { clearRuntimeAuthProfileStoreSnapshots } from "../agents/auth-profiles/runtime-snapshots.js";
 import { closeOpenClawAgentDatabasesForTest } from "../state/openclaw-agent-db.js";
 import { closeOpenClawStateDatabaseForTest } from "../state/openclaw-state-db.js";
 import {
@@ -109,7 +109,12 @@ describe("canonical SQLite migration for historical API-key aliases", () => {
       prompter,
       env: state.env,
     });
-    expect(rerun).toEqual({ detected: [], changes: [], warnings: [] });
+    expect(rerun).toEqual({
+      detected: [],
+      changes: [],
+      configOwnerMigrationApplied: false,
+      warnings: [],
+    });
     expect(prompter.confirmAutoFix).toHaveBeenCalledOnce();
   });
 
@@ -145,7 +150,12 @@ describe("canonical SQLite migration for historical API-key aliases", () => {
       env: state.env,
     });
 
-    expect(result).toEqual({ detected: [authPath], changes: [], warnings: [] });
+    expect(result).toEqual({
+      detected: [authPath],
+      changes: [],
+      configOwnerMigrationApplied: false,
+      warnings: [],
+    });
     expect(fs.readFileSync(authPath)).toEqual(original);
     expect(loadPersistedAuthProfileStore(state.agentDir())).toBeNull();
   });

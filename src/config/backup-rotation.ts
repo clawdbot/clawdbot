@@ -1,6 +1,5 @@
 // Rotates config backup files while preserving recent recovery points.
 import path from "node:path";
-import { logVerbose } from "../globals.js";
 
 const CONFIG_BACKUP_COUNT = 5;
 
@@ -8,7 +7,6 @@ interface BackupRotationFs {
   unlink: (path: string) => Promise<void>;
   rename: (from: string, to: string) => Promise<void>;
   chmod?: (path: string, mode: number) => Promise<void>;
-  readdir?: (path: string) => Promise<string[]>;
 }
 
 interface BackupMaintenanceFs extends BackupRotationFs {
@@ -61,47 +59,6 @@ async function hardenBackupPermissions(configPath: string, ioFs: BackupRotationF
   }
 }
 
-/** Prunes stale `.bak.*` files that are outside the managed numbered ring. */
-async function cleanOrphanBackups(configPath: string, ioFs: BackupRotationFs): Promise<void> {
-  if (!ioFs.readdir) {
-    return;
-  }
-  const dir = path.dirname(configPath);
-  const base = path.basename(configPath);
-  const bakPrefix = `${base}.bak.`;
-
-  const validSuffixes = new Set<string>();
-  for (let i = 1; i < CONFIG_BACKUP_COUNT; i++) {
-    validSuffixes.add(String(i));
-  }
-
-  let entries: string[];
-  try {
-    entries = await ioFs.readdir(dir);
-  } catch (error) {
-    // best-effort: surface the reason so operators can see why orphan cleanup
-    // did not run instead of silently accumulating backups (#105199).
-    logVerbose(`config orphan backup cleanup skipped: cannot read ${dir}: ${String(error)}`);
-    return;
-  }
-
-  for (const entry of entries) {
-    if (!entry.startsWith(bakPrefix)) {
-      continue;
-    }
-    const suffix = entry.slice(bakPrefix.length);
-    if (validSuffixes.has(suffix)) {
-      continue;
-    }
-    const orphanPath = path.join(dir, entry);
-    await ioFs.unlink(orphanPath).catch((error: unknown) => {
-      // best-effort: log so a locked/undeletable orphan does not accumulate
-      // silently and slowly exhaust disk without any operator signal (#105199).
-      logVerbose(`config orphan backup cleanup failed to remove ${orphanPath}: ${String(error)}`);
-    });
-  }
-}
-
 interface PreUpdateSnapshotFs {
   writeFile: (
     path: string,
@@ -147,7 +104,7 @@ export async function createPreUpdateConfigSnapshot(params: {
   }
 }
 
-/** Runs rotation, primary copy, permission hardening, then orphan pruning. */
+/** Runs rotation, primary copy, and permission hardening. */
 export async function maintainConfigBackups(
   configPath: string,
   ioFs: BackupMaintenanceFs,
@@ -157,5 +114,4 @@ export async function maintainConfigBackups(
     // best-effort
   });
   await hardenBackupPermissions(configPath, ioFs);
-  await cleanOrphanBackups(configPath, ioFs);
 }

@@ -83,7 +83,7 @@ describe("wake cron payload", () => {
     });
     expect(() => assertSupportedJobSpec(base)).not.toThrow();
     expect(() => assertSupportedJobSpec({ ...base, sessionTarget: "isolated" })).toThrow(
-      /isolated cron jobs require/,
+      /wake cron jobs require sessionTarget="main"/,
     );
     expect(() =>
       assertSupportedJobSpec({

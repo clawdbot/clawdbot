@@ -1,4 +1,5 @@
 // Pairing CLI tests cover pairing command registration and pairing status output.
+import { expectDefined } from "@openclaw/normalization-core";
 import { Command } from "commander";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import { theme } from "../../packages/terminal-core/src/theme.js";
@@ -43,14 +44,6 @@ const pairingIdLabels: Record<string, string> = {
   telegram: "telegramUserId",
   discord: "discordUserId",
 };
-
-function requireFirstMockCall(calls: readonly unknown[][], label: string): unknown[] {
-  const call = calls.at(0);
-  if (!call) {
-    throw new Error(`expected ${label} call`);
-  }
-  return call;
-}
 
 vi.mock("../pairing/pairing-store.js", () => ({
   listChannelPairingRequests: mocks.listChannelPairingRequests,
@@ -181,6 +174,29 @@ describe("pairing cli", () => {
     }
   });
 
+  it("displays a raw sender id retained by a qualified pending request", async () => {
+    listPairingChannels.mockReturnValueOnce(["slack"]);
+    listChannelPairingRequests.mockResolvedValueOnce([
+      {
+        id: "team:T123:user:U123",
+        code: "ABC123",
+        createdAt: "2026-01-08T00:00:00Z",
+        lastSeenAt: "2026-01-08T00:00:00Z",
+        meta: { senderId: "U123", teamId: "T123" },
+      },
+    ]);
+
+    const log = vi.spyOn(console, "log").mockImplementation(() => {});
+    try {
+      await runPairing(["pairing", "list", "--channel", "slack"]);
+      const output = log.mock.calls.map((call) => call.join(" ")).join("\n");
+      expect(output).toContain("U123");
+      expect(output).not.toContain("team:T123:user:U123");
+    } finally {
+      log.mockRestore();
+    }
+  });
+
   it("accepts channel as positional for list", async () => {
     listChannelPairingRequests.mockResolvedValueOnce([]);
 
@@ -275,8 +291,8 @@ describe("pairing cli", () => {
         channel: "telegram",
         code: "ABCDEFGH",
       });
-      const replaceCall = requireFirstMockCall(
-        replaceConfigFile.mock.calls,
+      const replaceCall = expectDefined<unknown[]>(
+        replaceConfigFile.mock.calls.at(0),
         "config replace",
       )[0] as { nextConfig?: { commands?: { ownerAllowFrom?: string[] } } } | undefined;
       expect(replaceCall?.nextConfig?.commands?.ownerAllowFrom).toEqual(["telegram:123"]);

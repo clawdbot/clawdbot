@@ -6,7 +6,7 @@ import { withTempDirSync } from "../../test-helpers/temp-dir.js";
 import type { SessionConfig } from "../types.base.js";
 import { resolveSessionWorkStartError } from "./lifecycle.js";
 import {
-  resolveSessionFilePath,
+  resolveSessionFilePathCore,
   resolveSessionFilePathOptions,
   resolveSessionTranscriptPathInDir,
   validateSessionId,
@@ -33,6 +33,34 @@ it("filters legacy row metadata with a noncanonical transcript id", () => {
       pluginExtensions: { memory: { mode: "legacy" } },
     }),
   ).toBeUndefined();
+});
+
+it("keeps only recognized archive reasons on archived rows", () => {
+  expect(
+    normalizePersistedSessionEntryShape({
+      sessionId: "archived-session",
+      updatedAt: 42,
+      archivedAt: 41,
+      archiveReason: "active-session-cap",
+    }),
+  ).toMatchObject({ archiveReason: "active-session-cap" });
+  expect(
+    normalizePersistedSessionEntryShape({
+      sessionId: "active-session",
+      updatedAt: 42,
+      archivedBy: { type: "human", id: "stale-actor" },
+      archiveReason: "active-session-cap",
+    }),
+  ).not.toMatchObject({ archivedBy: expect.anything(), archiveReason: expect.anything() });
+  expect(
+    normalizePersistedSessionEntryShape({
+      sessionId: "legacy-archive",
+      updatedAt: 42,
+      archivedAt: 41,
+      archivedBy: { type: "human", id: "operator-1" },
+      archiveReason: "unknown",
+    }),
+  ).toMatchObject({ archivedBy: { type: "human", id: "operator-1" } });
 });
 
 it("preserves shipped pending key-as-session-id rows without a transcript id", () => {
@@ -78,6 +106,35 @@ it("normalizes boolean-only pending delivery as transport-only", () => {
     }),
   ).toMatchObject({
     pendingFinalDelivery: { kind: "transport-only", createdAt: 42 },
+  });
+});
+
+it("normalizes exact pending-final delivery owners", () => {
+  expect(
+    normalizePersistedSessionEntryShape({
+      sessionId: "session-1",
+      updatedAt: 42,
+      pendingFinalDelivery: {
+        kind: "replayable",
+        text: "durable reply",
+        createdAt: 41,
+        intentId: "intent-1",
+        deliveries: [
+          { id: "delivery-prepared", state: "prepared" },
+          { id: "delivery-delivered", state: "delivered" },
+          { id: "", state: "queued" },
+          { id: "delivery-invalid", state: "invalid" },
+        ],
+      },
+    }),
+  ).toMatchObject({
+    pendingFinalDelivery: {
+      intentId: "intent-1",
+      deliveries: [
+        { id: "delivery-prepared", state: "prepared" },
+        { id: "delivery-delivered", state: "delivered" },
+      ],
+    },
   });
 });
 
@@ -144,13 +201,38 @@ it("drops malformed assistant transcript repair records", () => {
 });
 
 describe("session path safety", () => {
+  it("preserves path-safe Unicode session IDs", () => {
+    const sessionsDir = "/tmp/openclaw/agents/main/sessions";
+
+    for (const sessionId of ["volume-main-会議-000000", "volume-main-हिन्दी-000001"]) {
+      expect(validateSessionId(sessionId)).toBe(sessionId);
+      expect(normalizePersistedSessionEntryShape({ sessionId, updatedAt: 42 })).toMatchObject({
+        sessionId,
+        updatedAt: 42,
+      });
+      expect(resolveSessionTranscriptPathInDir(sessionId, sessionsDir)).toBe(
+        path.resolve(sessionsDir, `${sessionId}.jsonl`),
+      );
+    }
+  });
+
+  it("rejects noncanonical Unicode session IDs", () => {
+    for (const sessionId of ["session-Å", "session-A\u030A", "session-e\u0301"]) {
+      expect(() => validateSessionId(sessionId), sessionId).toThrow(/Invalid session ID/);
+      expect(normalizePersistedSessionEntryShape({ sessionId, updatedAt: 42 })).toBeUndefined();
+    }
+  });
+
   it("rejects unsafe session IDs", () => {
     const unsafeSessionIds = [
       "../etc/passwd",
       "a/b",
       "a\\b",
       "/abs",
+      "session:legacy",
+      "session-🙂",
       "sess.checkpoint.11111111-1111-4111-8111-111111111111",
+      `session-${"会".repeat(82)}`,
     ];
     for (const sessionId of unsafeSessionIds) {
       expect(() => validateSessionId(sessionId), sessionId).toThrow(/Invalid session ID/);
@@ -164,10 +246,19 @@ describe("session path safety", () => {
     expect(resolved).toBe(path.resolve(sessionsDir, "sess-1-topic-topic%2Fa%2Bb.jsonl"));
   });
 
+  it("rejects topic-qualified transcript filenames over 255 bytes", () => {
+    const sessionId = "会".repeat(82);
+
+    expect(validateSessionId(sessionId)).toBe(sessionId);
+    expect(() => resolveSessionTranscriptPathInDir(sessionId, "/tmp/sessions", 1)).toThrow(
+      /Invalid session transcript filename/,
+    );
+  });
+
   it("falls back to derived path when sessionFile is outside known agent sessions dirs", () => {
     const sessionsDir = "/tmp/openclaw/agents/main/sessions";
 
-    const resolved = resolveSessionFilePath(
+    const resolved = resolveSessionFilePathCore(
       "sess-1",
       { sessionFile: "/tmp/openclaw/agents/work/not-sessions/abc-123.jsonl" },
       { sessionsDir },
@@ -194,7 +285,11 @@ describe("session path safety", () => {
       fs.symlinkSync(realRoot, aliasRoot, "dir");
       const viaAlias = path.join(aliasRoot, "agents", "main", "sessions", "sess-1.jsonl");
       fs.writeFileSync(path.join(sessionsDir, "sess-1.jsonl"), "");
-      const resolved = resolveSessionFilePath("sess-1", { sessionFile: viaAlias }, { sessionsDir });
+      const resolved = resolveSessionFilePathCore(
+        "sess-1",
+        { sessionFile: viaAlias },
+        { sessionsDir },
+      );
       expect(fs.realpathSync(resolved)).toBe(
         fs.realpathSync(path.join(sessionsDir, "sess-1.jsonl")),
       );
@@ -215,7 +310,7 @@ describe("session path safety", () => {
       const symlinkPath = path.join(sessionsDir, "escaped.jsonl");
       fs.symlinkSync(outsideFile, symlinkPath, "file");
 
-      const resolved = resolveSessionFilePath(
+      const resolved = resolveSessionFilePathCore(
         "sess-1",
         { sessionFile: symlinkPath },
         { sessionsDir },
@@ -383,6 +478,37 @@ describe("session work admission", () => {
     expect(
       resolveSessionWorkStartError("agent:main:pending", {
         sessionId: "pending-session",
+      }),
+    ).toBeUndefined();
+  });
+
+  it("keeps restart-recovery tombstones terminal when archive metadata is missing", () => {
+    const entry = {
+      sessionId: "failed-session",
+      mainRestartRecovery: {
+        cycleId: "cycle-1",
+        revision: 4,
+        chargedAttempts: 3,
+        tombstone: {
+          reason: "automatic recovery exhausted",
+          recoveredSessionId: "dashboard-successor",
+          recoveredSessionKey: "agent:main:dashboard:successor",
+        },
+      },
+    };
+
+    expect(resolveSessionWorkStartError("agent:main:matrix:channel:room-a", entry)).toContain(
+      "ended during restart recovery",
+    );
+    expect(
+      resolveSessionWorkStartError("agent:main:matrix:channel:room-a", {
+        ...entry,
+        modelSelectionLocked: true,
+      }),
+    ).toContain("Open it in WebChat and use Resume in new session");
+    expect(
+      resolveSessionWorkStartError("agent:main:matrix:channel:room-a", entry, {
+        allowRestartTombstoneReplacement: true,
       }),
     ).toBeUndefined();
   });

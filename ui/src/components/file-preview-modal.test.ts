@@ -1,6 +1,7 @@
 /* @vitest-environment jsdom */
 
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { createDeferred } from "../../../test/helpers/promise.js";
 import { i18n } from "../i18n/index.ts";
 import { OpenClawFilePreviewModal } from "./file-preview-modal.ts";
 
@@ -68,6 +69,8 @@ describe("openclaw-file-preview-modal", () => {
     container.replaceChildren();
     container.remove();
     vi.restoreAllMocks();
+    vi.unstubAllGlobals();
+    delete (document as unknown as { execCommand?: unknown }).execCommand;
   });
 
   it("filters files by path or contents", async () => {
@@ -237,44 +240,77 @@ describe("openclaw-file-preview-modal", () => {
 
     await vi.waitFor(() => {
       expect(writeText).toHaveBeenCalledWith(contents);
-      expect(copyButton?.dataset.copied).toBe("1");
+      expect(copyButton?.getAttribute("aria-label")).toBe("Copied!");
     });
   });
 
-  it("rerenders default copy when the locale changes", async () => {
-    const modal = await renderPreview();
-    i18n.registerTranslation("pt-BR", {
-      common: { close: "Fechar" },
-      filePreview: {
-        label: "Arquivos de suporte",
-        listLabel: "Arquivos",
-        searchPlaceholder: "Buscar arquivos…",
-        readOnly: "somente leitura",
-        emptyTitle: "Nenhum arquivo corresponde",
-        emptySubtitle: "Tente outro nome ou conteúdo.",
-        copyFile: "Copiar arquivo",
-        fileCount: "{count} arquivos",
-        filteredFileCount: "{count}/{total} arquivos",
-        noMatches: "Nenhum arquivo corresponde.",
-        navigate: "navegar",
-        kind: {
-          text: "Texto",
-          shell: "Shell",
-          file: "Arquivo",
+  it.each([true, false])(
+    "restores localized file-copy labels after pending success %s",
+    async (copied) => {
+      const write = createDeferred();
+      const writeText = vi.fn(() => write.promise);
+      vi.stubGlobal("navigator", { clipboard: { writeText } });
+      Object.defineProperty(document, "execCommand", { configurable: true, value: () => false });
+      const schedule = vi.spyOn(window, "setTimeout");
+      const modal = await renderPreview();
+      const button = modal.shadowRoot!.querySelector<HTMLButtonElement>(".chat-copy-btn")!;
+      button.click();
+      expect(button.disabled).toBe(true);
+      i18n.registerTranslation("pt-BR", {
+        common: { close: "Fechar", copied: "Copiado!", copyFailed: "Falha ao copiar" },
+        filePreview: {
+          label: "Arquivos de suporte",
+          listLabel: "Arquivos",
+          searchPlaceholder: "Buscar arquivos…",
+          readOnly: "somente leitura",
+          emptyTitle: "Nenhum arquivo corresponde",
+          emptySubtitle: "Tente outro nome ou conteúdo.",
+          copyFile: "Copiar arquivo",
+          fileCount: "{count} arquivos",
+          filteredFileCount: "{count}/{total} arquivos",
+          noMatches: "Nenhum arquivo corresponde.",
+          navigate: "navegar",
+          kind: {
+            text: "Texto",
+            shell: "Shell",
+            file: "Arquivo",
+          },
         },
-      },
-    });
+      });
 
-    await i18n.setLocale("pt-BR");
-    await modal.updateComplete;
+      await i18n.setLocale("pt-BR");
+      await modal.updateComplete;
 
-    expect(
-      modal.shadowRoot?.querySelector<HTMLElement & { label: string }>("openclaw-modal-dialog")
-        ?.label,
-    ).toBe("Arquivos de suporte");
-    expect(shadowText(modal)).toContain("2 arquivos");
-    expect(shadowText(modal)).toContain("Fechar");
-  });
+      expect(
+        modal.shadowRoot?.querySelector<HTMLElement & { label: string }>("openclaw-modal-dialog")
+          ?.label,
+      ).toBe("Arquivos de suporte");
+      expect(shadowText(modal)).toContain("2 arquivos");
+      expect(shadowText(modal)).toContain("Fechar");
+      expect(button.getAttribute("aria-label")).toBe("Copiar arquivo");
+      if (copied) {
+        write.resolve();
+      } else {
+        write.reject(new DOMException("Clipboard access denied"));
+      }
+      const feedback = modal.shadowRoot!.querySelector<HTMLElement>("[role=status]")!;
+      await vi.waitFor(() =>
+        expect(feedback.textContent).toBe(copied ? "Copiado!" : "Falha ao copiar"),
+      );
+      expect(feedback.hidden).toBe(false);
+      expect(button.getAttribute("aria-label")).toBe(feedback.textContent);
+      expect(writeText).toHaveBeenCalledWith("Morning digest template");
+      const reset = schedule.mock.calls.find(
+        ([, delay]) => delay === (copied ? 1_500 : 2_000),
+      )?.[0];
+      if (typeof reset !== "function") {
+        throw new Error("Expected copy feedback to schedule its reset");
+      }
+      reset();
+      expect(button.getAttribute("aria-label")).toBe("Copiar arquivo");
+      expect(feedback.hidden).toBe(true);
+    },
+  );
 
   it("localizes generic file-kind chips", async () => {
     i18n.registerTranslation("pt-BR", {

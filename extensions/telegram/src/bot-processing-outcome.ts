@@ -14,6 +14,7 @@ type TelegramSpooledReplayLifecycle = {
   abortSignal: AbortSignal;
   onAdopted: () => void | Promise<void>;
   onDeferred: () => void;
+  onDeferredHeartbeat?: () => void;
   /** Clears pre-adoption stall while durable adoption finalization is held. */
   onAdoptionFinalizing?: () => void;
   onAbandoned: () => void | Promise<void>;
@@ -94,6 +95,9 @@ export function createTelegramSpooledReplayParticipant(
 ): TelegramSpooledReplayDeferredParticipant {
   const abortController = new AbortController();
   const ownerAbortSignal = telegramSpooledReplayFrames.getStore()?.lifecycle?.abortSignal;
+  const abortSignal = ownerAbortSignal
+    ? AbortSignal.any([abortController.signal, ownerAbortSignal])
+    : abortController.signal;
   let settled = false;
   let ownerAbortedWhilePending = ownerAbortSignal?.aborted === true;
   let settlementHeld = false;
@@ -121,7 +125,9 @@ export function createTelegramSpooledReplayParticipant(
   };
   return {
     key,
-    abortSignal: abortController.signal,
+    // Buffered work outlives the ALS frame, so its signal must retain the
+    // claim owner's pre-adoption cancellation boundary.
+    abortSignal,
     task,
     isSettled: () => settled,
     wasOwnerAbortedWhilePending: () => ownerAbortedWhilePending,

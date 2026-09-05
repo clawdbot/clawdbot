@@ -89,16 +89,6 @@ flow:
                 expr: config.prompt
               timeoutMs:
                 expr: liveTurnTimeoutMs(env, 30000)
-        - call: waitForOutboundMessage
-          saveAs: outbound
-          args:
-            - ref: state
-            - lambda:
-                params: [candidate]
-                expr: "candidate.conversation.id === 'qa-operator' && candidate.text.includes(nonce)"
-            - expr: liveTurnTimeoutMs(env, 30000)
-            - sinceIndex:
-                ref: outboundStartIndex
         - set: scenarioRequests
           value:
             expr: "(await fetchJson(`${env.mock.baseUrl}/debug/requests?after=${requestCursorBefore}`)).filter((request) => String(request.allInputText ?? '').includes(config.promptSnippet))"
@@ -127,6 +117,16 @@ flow:
             expr: "getResultRequest.toolOutputCallId === searchResultRequest.plannedToolCallId && getResultRequest.toolOutputStructuredError !== true && String(getResultRequest.toolOutput ?? '').includes(nonce) && String(getResultRequest.allInputText ?? '').includes(nonce) && !getResultRequest.plannedToolName"
             message:
               expr: "`memory_get result was not consumed before terminal generation: ${JSON.stringify(getResultRequest)}`"
+        - call: waitForOutboundMessage
+          saveAs: outbound
+          args:
+            - ref: state
+            - lambda:
+                params: [candidate]
+                expr: "candidate.conversation.id === 'qa-operator' && candidate.text.includes(nonce)"
+            - expr: liveTurnTimeoutMs(env, 30000)
+            - sinceIndex:
+                ref: outboundStartIndex
         - set: terminalOutbounds
           value:
             expr: "state.getSnapshot().messages.filter((message) => message.direction === 'outbound').slice(outboundStartIndex)"

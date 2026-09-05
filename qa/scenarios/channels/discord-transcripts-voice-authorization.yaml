@@ -1,0 +1,22 @@
+title: Discord transcript capture enforces voice authorization
+scenario:
+  id: discord-transcripts-voice-authorization
+  surface: channels
+  coverage:
+    primary:
+      - discord.sender-authorization
+      - discord.voice-channel-lifecycle
+  execution:
+    kind: flow
+    channel: discord
+    providerMode: live-frontier
+    timeoutMs: 120000
+    retryCount: 0
+    suiteIsolation: isolated
+    isolationReason: Mutates Discord voice-channel authorization and starts then stops live capture.
+flow:
+  module: ./live-transports/discord/scenario-runtime.js
+  call: runDiscordScenario
+  args:
+    - { expr: discordScenarioContext }
+    - { moduleExport: discordQaTranscriptsVoiceAuthorizationScenario }

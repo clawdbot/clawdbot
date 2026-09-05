@@ -2,7 +2,7 @@
 import { normalizeLowercaseStringOrEmpty } from "@openclaw/normalization-core/string-coerce";
 import { loadBundledCapabilityRuntimeRegistry } from "../bundled-capability-runtime.js";
 import { discoverOpenClawPlugins } from "../discovery.js";
-import { loadPluginManifestRegistry } from "../manifest-registry.js";
+import { loadPluginManifestRegistryCore } from "../manifest-registry.js";
 import { resolveBundledExplicitProviderContractsFromPublicArtifacts } from "../provider-contract-public-artifacts.js";
 import type { ProviderPlugin, WebFetchProviderPlugin, WebSearchProviderPlugin } from "../types.js";
 import { resolveBundledExplicitWebSearchProvidersFromPublicArtifacts } from "../web-provider-public-artifacts.explicit.js";
@@ -10,7 +10,7 @@ import {
   BUNDLED_PLUGIN_CONTRACT_SNAPSHOTS,
   type BundledPluginContractSnapshot,
 } from "./inventory/bundled-capability-metadata.js";
-import { uniqueStrings } from "./shared.js";
+import { normalizeContractStringValues } from "./shared.js";
 
 type BundledCapabilityRuntimeRegistry = ReturnType<typeof loadBundledCapabilityRuntimeRegistry>;
 type CapabilityContractEntry<T> = {
@@ -34,7 +34,7 @@ function normalizeProviderEnvVars(
   return Object.fromEntries(
     Object.entries(providerEnvVars ?? {}).map(([providerId, envVars]) => [
       providerId,
-      uniqueStrings(envVars),
+      normalizeContractStringValues(envVars),
     ]),
   );
 }
@@ -44,7 +44,7 @@ function resolvePluginProviderEnvVars(plugin: {
 }): Record<string, string[]> {
   const envVars: Record<string, string[]> = {};
   for (const provider of plugin.setup?.providers ?? []) {
-    envVars[provider.id] = uniqueStrings(provider.envVars ?? []);
+    envVars[provider.id] = normalizeContractStringValues(provider.envVars ?? []);
   }
   return normalizeProviderEnvVars(envVars);
 }
@@ -74,7 +74,7 @@ function resolveBundledManifestContracts(): PluginRegistrationContractEntry[] {
       toolNames: [...entry.toolNames],
     }));
   }
-  return loadPluginManifestRegistry({})
+  return loadPluginManifestRegistryCore({})
     .plugins.filter(
       (plugin) =>
         plugin.origin === "bundled" &&
@@ -99,29 +99,49 @@ function resolveBundledManifestContracts(): PluginRegistrationContractEntry[] {
     )
     .map((plugin) => ({
       pluginId: plugin.id,
-      cliBackendIds: uniqueStrings(plugin.cliBackends),
-      providerIds: uniqueStrings(plugin.providers),
+      cliBackendIds: normalizeContractStringValues(plugin.cliBackends),
+      providerIds: normalizeContractStringValues(plugin.providers),
       providerEnvVars: resolvePluginProviderEnvVars(plugin),
-      workerProviderIds: uniqueStrings(plugin.contracts?.workerProviders ?? []),
-      embeddingProviderIds: uniqueStrings(plugin.contracts?.embeddingProviders ?? []),
-      speechProviderIds: uniqueStrings(plugin.contracts?.speechProviders ?? []),
-      realtimeTranscriptionProviderIds: uniqueStrings(
+      workerProviderIds: normalizeContractStringValues(plugin.contracts?.workerProviders ?? []),
+      embeddingProviderIds: normalizeContractStringValues(
+        plugin.contracts?.embeddingProviders ?? [],
+      ),
+      speechProviderIds: normalizeContractStringValues(plugin.contracts?.speechProviders ?? []),
+      realtimeTranscriptionProviderIds: normalizeContractStringValues(
         plugin.contracts?.realtimeTranscriptionProviders ?? [],
       ),
-      realtimeVoiceProviderIds: uniqueStrings(plugin.contracts?.realtimeVoiceProviders ?? []),
-      mediaUnderstandingProviderIds: uniqueStrings(
+      realtimeVoiceProviderIds: normalizeContractStringValues(
+        plugin.contracts?.realtimeVoiceProviders ?? [],
+      ),
+      mediaUnderstandingProviderIds: normalizeContractStringValues(
         plugin.contracts?.mediaUnderstandingProviders ?? [],
       ),
-      transcriptSourceProviderIds: uniqueStrings(plugin.contracts?.transcriptSourceProviders ?? []),
-      documentExtractorIds: uniqueStrings(plugin.contracts?.documentExtractors ?? []),
-      imageGenerationProviderIds: uniqueStrings(plugin.contracts?.imageGenerationProviders ?? []),
-      videoGenerationProviderIds: uniqueStrings(plugin.contracts?.videoGenerationProviders ?? []),
-      musicGenerationProviderIds: uniqueStrings(plugin.contracts?.musicGenerationProviders ?? []),
-      webContentExtractorIds: uniqueStrings(plugin.contracts?.webContentExtractors ?? []),
-      webFetchProviderIds: uniqueStrings(plugin.contracts?.webFetchProviders ?? []),
-      webSearchProviderIds: uniqueStrings(plugin.contracts?.webSearchProviders ?? []),
-      migrationProviderIds: uniqueStrings(plugin.contracts?.migrationProviders ?? []),
-      toolNames: uniqueStrings(plugin.contracts?.tools ?? []),
+      transcriptSourceProviderIds: normalizeContractStringValues(
+        plugin.contracts?.transcriptSourceProviders ?? [],
+      ),
+      documentExtractorIds: normalizeContractStringValues(
+        plugin.contracts?.documentExtractors ?? [],
+      ),
+      imageGenerationProviderIds: normalizeContractStringValues(
+        plugin.contracts?.imageGenerationProviders ?? [],
+      ),
+      videoGenerationProviderIds: normalizeContractStringValues(
+        plugin.contracts?.videoGenerationProviders ?? [],
+      ),
+      musicGenerationProviderIds: normalizeContractStringValues(
+        plugin.contracts?.musicGenerationProviders ?? [],
+      ),
+      webContentExtractorIds: normalizeContractStringValues(
+        plugin.contracts?.webContentExtractors ?? [],
+      ),
+      webFetchProviderIds: normalizeContractStringValues(plugin.contracts?.webFetchProviders ?? []),
+      webSearchProviderIds: normalizeContractStringValues(
+        plugin.contracts?.webSearchProviders ?? [],
+      ),
+      migrationProviderIds: normalizeContractStringValues(
+        plugin.contracts?.migrationProviders ?? [],
+      ),
+      toolNames: normalizeContractStringValues(plugin.contracts?.tools ?? []),
     }));
 }
 

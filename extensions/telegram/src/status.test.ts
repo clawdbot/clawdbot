@@ -6,8 +6,8 @@ import type { TelegramChatDetails, TelegramGetChat } from "./bot/types.js";
 import { collectTelegramStatusIssues } from "./status-issues.js";
 import {
   buildTelegramStatusReactionVariants,
-  isTelegramSupportedReactionEmoji,
-  resolveTelegramAllowedEmojiReactions,
+  resolveTelegramAllowedReactions,
+  resolveTelegramReactionEmoji,
   resolveTelegramReactionVariant,
   resolveTelegramStatusReactionEmojis,
 } from "./status-reaction-variants.js";
@@ -335,20 +335,20 @@ describe("buildTelegramStatusReactionVariants", () => {
   });
 });
 
-describe("isTelegramSupportedReactionEmoji", () => {
+describe("resolveTelegramReactionEmoji", () => {
   it("accepts Telegram-supported reaction emojis", () => {
-    expect(isTelegramSupportedReactionEmoji("👀")).toBe(true);
-    expect(isTelegramSupportedReactionEmoji("👨‍💻")).toBe(true);
+    expect(resolveTelegramReactionEmoji("👀")).toBe("👀");
+    expect(resolveTelegramReactionEmoji("👨‍💻")).toBe("👨‍💻");
   });
 
   it("rejects unsupported emojis", () => {
-    expect(isTelegramSupportedReactionEmoji("🫠")).toBe(false);
+    expect(resolveTelegramReactionEmoji("🫠")).toBeUndefined();
   });
 });
 
-describe("resolveTelegramAllowedEmojiReactions", () => {
+describe("resolveTelegramAllowedReactions", () => {
   it("assumes no restriction when chat does not include available_reactions", async () => {
-    const result = await resolveTelegramAllowedEmojiReactions({
+    const result = await resolveTelegramAllowedReactions({
       chat: { id: 1 } satisfies TelegramChatDetails,
       chatId: 1,
     });
@@ -356,68 +356,107 @@ describe("resolveTelegramAllowedEmojiReactions", () => {
   });
 
   it("returns null when available_reactions is omitted/null", async () => {
-    const result = await resolveTelegramAllowedEmojiReactions({
+    const result = await resolveTelegramAllowedReactions({
       chat: { available_reactions: null } satisfies TelegramChatDetails,
       chatId: 1,
     });
     expect(result).toBeNull();
   });
 
-  it("extracts emoji reactions only", async () => {
-    const result = await resolveTelegramAllowedEmojiReactions({
+  it("preserves standard and custom reactions while omitting paid reactions", async () => {
+    const result = await resolveTelegramAllowedReactions({
       chat: {
         available_reactions: [
           { type: "emoji", emoji: "👍" },
           { type: "custom_emoji", custom_emoji_id: "abc" },
           { type: "emoji", emoji: "🔥" },
+          { type: "paid" },
         ],
       } satisfies TelegramChatDetails,
       chatId: 1,
     });
-    expect(result ? Array.from(result).toSorted() : null).toEqual(["👍", "🔥"]);
+    expect(result).toEqual([
+      { type: "emoji", emoji: "👍" },
+      { type: "custom_emoji", custom_emoji_id: "abc" },
+      { type: "emoji", emoji: "🔥" },
+    ]);
+  });
+
+  it("normalizes emoji presentation selectors while retaining custom reactions", async () => {
+    const result = await resolveTelegramAllowedReactions({
+      chat: {
+        available_reactions: [
+          { type: "emoji", emoji: "❤️" },
+          { type: "custom_emoji", custom_emoji_id: "❤️" },
+        ],
+      } as never,
+      chatId: 1,
+    });
+
+    expect(result).toEqual([
+      { type: "emoji", emoji: "❤" },
+      { type: "custom_emoji", custom_emoji_id: "❤️" },
+    ]);
   });
 
   it("treats malformed available_reactions payloads as an empty allowlist instead of throwing", async () => {
     await expect(
-      resolveTelegramAllowedEmojiReactions({
+      resolveTelegramAllowedReactions({
         chat: { available_reactions: { type: "emoji", emoji: "👍" } } as never,
         chatId: 1,
       }),
-    ).resolves.toEqual(new Set<string>());
+    ).resolves.toEqual([]);
   });
-});
 
-describe("resolveTelegramAllowedEmojiReactions", () => {
   it("uses getChat lookup when message chat does not include available_reactions", async () => {
     const getChat: TelegramGetChat = async () => ({
       available_reactions: [{ type: "emoji", emoji: "👍" }],
     });
 
-    const result = await resolveTelegramAllowedEmojiReactions({
+    const result = await resolveTelegramAllowedReactions({
       chat: { id: 1 } satisfies TelegramChatDetails,
       chatId: 1,
       getChat,
     });
 
-    expect(result ? Array.from(result) : null).toEqual(["👍"]);
+    expect(result).toEqual([{ type: "emoji", emoji: "👍" }]);
   });
 
-  it("falls back to unrestricted reactions when getChat lookup fails", async () => {
+  it("surfaces getChat lookup failures so interactive discovery does not misreport restrictions", async () => {
     const getChat = async () => {
       throw new Error("lookup failed");
     };
 
-    const result = await resolveTelegramAllowedEmojiReactions({
-      chat: { id: 1 } satisfies TelegramChatDetails,
-      chatId: 1,
-      getChat,
-    });
-
-    expect(result).toBeNull();
+    await expect(
+      resolveTelegramAllowedReactions({
+        chat: { id: 1 } satisfies TelegramChatDetails,
+        chatId: 1,
+        getChat,
+      }),
+    ).rejects.toThrow("lookup failed");
   });
 });
 
 describe("resolveTelegramReactionVariant", () => {
+  it.each([
+    ["❤️", "❤"],
+    ["❤︎", "❤"],
+    ["⚡️", "⚡"],
+    ["✍️", "✍"],
+    ["🕊️", "🕊"],
+    ["☃️", "☃"],
+    ["❤️‍🔥", "❤‍🔥"],
+    ["🤷‍♂️", "🤷‍♂"],
+  ] as const)("selects the canonical Telegram reaction for %s", (requestedEmoji, expectedEmoji) => {
+    expect(
+      resolveTelegramReactionVariant({
+        requestedEmoji,
+        variantsByRequestedEmoji: new Map(),
+        allowedEmojiReactions: new Set([expectedEmoji]),
+      }),
+    ).toBe(expectedEmoji);
+  });
+
   it("returns requested emoji when already Telegram-supported", () => {
     const variantsByEmoji = buildTelegramStatusReactionVariants({
       ...DEFAULT_EMOJIS,

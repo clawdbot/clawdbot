@@ -2,7 +2,8 @@
 import fs from "node:fs";
 import path from "node:path";
 import { afterEach, describe, expect, it, vi } from "vitest";
-import { cleanupTempDirs, makeTempRepoRoot, writeJsonFile } from "../../test/helpers/temp-repo.js";
+import { cleanupTempDirs, makeTempDir as makeTempRepoRoot } from "../../test/helpers/temp-dir.js";
+import { writeJsonFile } from "../../test/helpers/temp-repo.js";
 import type { PluginChannelCatalogEntry } from "../plugins/channel-catalog-registry.js";
 
 // Delegate to the plugin-dir resolver for candidate-order policy; mock it here
@@ -27,6 +28,12 @@ vi.mock("../plugins/channel-catalog-registry.js", () => ({
   listChannelCatalogEntries: listChannelCatalogEntriesMock,
 }));
 
+const bundledOfficialExternalCatalogEntriesMock = vi.hoisted((): unknown[] => []);
+
+vi.mock("../plugins/official-external-plugin-bundled-catalogs.js", () => ({
+  BUNDLED_OFFICIAL_EXTERNAL_PLUGIN_CATALOG_ENTRIES: bundledOfficialExternalCatalogEntriesMock,
+}));
+
 // The channel-catalog.json fallback still walks package roots via
 // resolveOpenClawPackageRootSync. Isolate from the real repo by mocking
 // moduleUrl/argv1 resolution to null and deriving only from the tmp cwd.
@@ -39,7 +46,10 @@ vi.mock("../infra/openclaw-root.js", () => ({
 
 import { resolveBundledPluginsDir } from "../plugins/bundled-dir.js";
 import { clearPluginMetadataLifecycleCaches } from "../plugins/plugin-metadata-lifecycle.js";
-import { listBundledChannelCatalogEntries } from "./bundled-channel-catalog-read.js";
+import {
+  findBundledChannelCatalogMetadata,
+  listBundledChannelCatalogEntries,
+} from "./bundled-channel-catalog-read.js";
 import { listBundledChannelIds } from "./plugins/bundled-ids.js";
 
 const tempDirs: string[] = [];
@@ -58,6 +68,7 @@ afterEach(() => {
     process.env.OPENCLAW_TEST_TRUST_BUNDLED_PLUGINS_DIR = originalTrustBundledPluginsDir;
   }
   cleanupTempDirs(tempDirs);
+  bundledOfficialExternalCatalogEntriesMock.length = 0;
   vi.restoreAllMocks();
   vi.mocked(resolveBundledPluginsDir).mockReset();
   listChannelCatalogEntriesMock.mockReset();
@@ -126,6 +137,12 @@ function seedGeneratedChannelCatalog(
     label: string;
     docsPath: string;
     blurb: string;
+    doctorCapabilities?: {
+      dmAllowFromMode?: "topOnly" | "nestedOnly";
+      groupModel?: "sender" | "route" | "hybrid";
+      groupAllowFromFallbackToAllowFrom?: boolean;
+      warnOnEmptyGroupSenderAllowlist?: boolean;
+    };
   },
 ): void {
   const { packageName, ...channel } = params;
@@ -208,7 +225,7 @@ describe("listBundledChannelCatalogEntries", () => {
       label: "Telegram",
     });
     seedGeneratedChannelCatalog(root, {
-      packageName: "@openclaw/qqbot",
+      packageName: "@tencent-connect/openclaw-qqbot",
       id: "qqbot",
       label: "QQ Bot",
       docsPath: "/channels/qqbot",
@@ -220,6 +237,53 @@ describe("listBundledChannelCatalogEntries", () => {
     const ids = new Set(entries.map((entry) => entry.id));
     expect(ids.has("qqbot")).toBe(true);
     expect(ids.has("telegram")).toBe(true);
+  });
+
+  it("uses bundled external channel metadata before a dist catalog exists", () => {
+    seedRoot("bcr-bundled-external-");
+    bundledOfficialExternalCatalogEntriesMock.push({
+      name: "@tencent-connect/openclaw-qqbot",
+      openclaw: {
+        channel: {
+          id: "qqbot",
+          label: "QQ Bot",
+          docsPath: "/channels/qqbot",
+          approvalFlags: ["native"],
+          doctorCapabilities: { openDmRequiresAllowFromWildcard: false },
+        },
+      },
+    });
+    useBundledPluginsDir(undefined);
+
+    expect(findBundledChannelCatalogMetadata("qqbot")).toMatchObject({
+      approvalFlags: ["native"],
+      doctorCapabilities: { openDmRequiresAllowFromWildcard: false },
+    });
+  });
+
+  it("finds doctor capabilities from the generated catalog when the package is excluded", () => {
+    const root = seedRoot("bcr-generated-doctor-");
+    useBundledPluginsDir(undefined);
+    seedGeneratedChannelCatalog(root, {
+      packageName: "@openclaw/discord",
+      id: "discord",
+      label: "Discord",
+      docsPath: "/channels/discord",
+      blurb: "downloadable channel",
+      doctorCapabilities: {
+        dmAllowFromMode: "topOnly",
+        groupModel: "route",
+        groupAllowFromFallbackToAllowFrom: false,
+        warnOnEmptyGroupSenderAllowlist: false,
+      },
+    });
+
+    expect(findBundledChannelCatalogMetadata("Discord")?.doctorCapabilities).toEqual({
+      dmAllowFromMode: "topOnly",
+      groupModel: "route",
+      groupAllowFromFallbackToAllowFrom: false,
+      warnOnEmptyGroupSenderAllowlist: false,
+    });
   });
 
   it("keeps bundled package metadata when generated catalog entries are stale", () => {

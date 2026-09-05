@@ -1,7 +1,10 @@
 // TTS config helpers read and normalize text-to-speech provider settings.
 import { existsSync, readFileSync } from "node:fs";
 import path from "node:path";
-import { isRecord as isPlainObject } from "@openclaw/normalization-core/record-coerce";
+import {
+  asOptionalRecord as asObjectRecord,
+  isRecord as isPlainObject,
+} from "@openclaw/normalization-core/record-coerce";
 import {
   normalizeLowercaseStringOrEmpty,
   normalizeOptionalString,
@@ -60,10 +63,6 @@ function resolveRecordEntry<T>(
 
 function asTtsConfig(value: unknown): TtsConfig | undefined {
   return isPlainObject(value) ? (value as TtsConfig) : undefined;
-}
-
-function asObjectRecord(value: unknown): Record<string, unknown> | undefined {
-  return isPlainObject(value) ? value : undefined;
 }
 
 function resolveChannelConfig(

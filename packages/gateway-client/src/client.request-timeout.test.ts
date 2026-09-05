@@ -1,6 +1,9 @@
 import { afterEach, expect, test, vi } from "vitest";
 import { GatewayClient, GatewayClientRequestTimeoutError } from "./client.js";
-import type { GatewayProtocolSocket } from "./protocol-client.js";
+import {
+  GatewayProtocolRequestTimeoutError,
+  type GatewayProtocolSocket,
+} from "./protocol-client.js";
 
 afterEach(() => {
   vi.useRealTimers();
@@ -28,7 +31,9 @@ test("reports that a timed-out request crossed the transport send boundary", asy
 
   const error = await outcome;
   expect(error).toBeInstanceOf(GatewayClientRequestTimeoutError);
+  expect(error).toBeInstanceOf(GatewayProtocolRequestTimeoutError);
   expect(error).toMatchObject({
+    code: "CLIENT_TIMEOUT",
     method: "node.invoke",
     timeoutMs: 100,
     requestSent: true,

@@ -1,11 +1,11 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
+import { createDeferred } from "../../test/helpers/promise.js";
 import type {
   ManagedRun,
   ProcessSupervisor,
   RunExit,
   SpawnInput,
 } from "../process/supervisor/types.js";
-import { createDeferred } from "../test-utils/deferred.js";
 import {
   createCronStreamMatchingJob,
   createCronStreamWatcherFixture,

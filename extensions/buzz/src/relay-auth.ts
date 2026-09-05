@@ -1,4 +1,5 @@
 import { type EventTemplate, finalizeEvent, Relay, type VerifiedEvent } from "nostr-tools";
+import { readProviderJsonObjectResponse } from "openclaw/plugin-sdk/provider-http";
 import {
   fetchWithSsrFGuard,
   ssrfPolicyFromHttpBaseUrlAllowedOrigin,
@@ -91,10 +92,7 @@ async function resolveBuzzRelayPublicKey(params: {
       await response.body?.cancel().catch(() => undefined);
       throw new Error(`Buzz relay information request failed with HTTP ${response.status}`);
     }
-    const document = (await response.json()) as {
-      self?: unknown;
-      software?: unknown;
-    };
+    const document = await readProviderJsonObjectResponse(response, "Buzz relay information");
     const relayPublicKey =
       typeof document.self === "string" ? document.self.trim().toLowerCase() : "";
     if (HEX_PUBLIC_KEY_PATTERN.test(relayPublicKey)) {

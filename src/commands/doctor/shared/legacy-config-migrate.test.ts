@@ -5,8 +5,10 @@ import { describe, expect, it } from "vitest";
 import { findLegacyConfigIssues } from "../../../config/legacy.js";
 import type { LegacyConfigMigrationContext } from "../../../config/legacy.shared.js";
 import type { OpenClawConfig } from "../../../config/types.js";
+import { validateConfigObjectRaw } from "../../../config/validation.js";
 import { legacyCodexProviderIdentityKey } from "./codex-route-model-ref.js";
 import { pruneBindingsForMissingAgents } from "./legacy-config-binding-repair.js";
+import { migrateLegacyConfig } from "./legacy-config-migrate.js";
 import { LEGACY_CONFIG_MIGRATIONS } from "./legacy-config-migrations.js";
 import { collectBlockedLegacyOpenAICodexProviderPlan } from "./legacy-config-migrations.runtime.models.js";
 
@@ -78,6 +80,101 @@ describe("legacy session typing config migrate", () => {
 });
 
 describe("compatibility binding repair migrate", () => {
+  it("migrates route and ACP dm peer kinds through validation and is idempotent", () => {
+    const raw = {
+      agents: { entries: { main: {} } },
+      bindings: [
+        {
+          type: "route",
+          agentId: "main",
+          match: { channel: "telegram", peer: { kind: "dm", id: "123" } },
+        },
+        {
+          type: "acp",
+          agentId: "main",
+          match: { channel: "discord", peer: { kind: "dm", id: "456" } },
+          acp: { mode: "persistent" },
+        },
+        {
+          type: "route",
+          agentId: "main",
+          match: { channel: "telegram", peer: { kind: "direct", id: "789" } },
+        },
+        {
+          type: "route",
+          agentId: "main",
+          match: { channel: "discord", peer: { kind: "group", id: "abc" } },
+        },
+      ],
+    };
+
+    expect(findLegacyConfigIssues(raw)).toEqual([expect.objectContaining({ path: "bindings" })]);
+
+    const res = migrateLegacyConfig(raw);
+    const bindings = res.config?.bindings as Array<{ match?: { peer?: { kind?: unknown } } }>;
+    expect(bindings.map((binding) => binding.match?.peer?.kind)).toEqual([
+      "direct",
+      "direct",
+      "direct",
+      "group",
+    ]);
+    expect(res.changes).toContain(
+      'Moved deprecated bindings[].match.peer.kind "dm" → "direct" for 2 bindings.',
+    );
+    expect(res.partiallyValid).toBeUndefined();
+    const validation = validateConfigObjectRaw(res.config);
+    expect(validation.ok, validation.ok ? undefined : JSON.stringify(validation.issues)).toBe(true);
+    expect(migrateLegacyConfig(res.config)).toEqual({ config: null, changes: [] });
+  });
+
+  it("rewrites only exact dm values and leaves malformed peer kinds visible to validation", () => {
+    const raw = {
+      bindings: [
+        {
+          type: "route",
+          agentId: "main",
+          match: { channel: "telegram", peer: { kind: "dm", id: "exact" } },
+        },
+        {
+          type: "route",
+          agentId: "main",
+          match: { channel: "telegram", peer: { kind: "DM", id: "uppercase" } },
+        },
+        {
+          type: "route",
+          agentId: "main",
+          match: { channel: "telegram", peer: { kind: " dm ", id: "spaced" } },
+        },
+        {
+          type: "route",
+          agentId: "main",
+          match: { channel: "telegram", peer: { kind: 42, id: "number" } },
+        },
+      ],
+    };
+
+    expect(findLegacyConfigIssues(raw)).toEqual([expect.objectContaining({ path: "bindings" })]);
+
+    const res = migrateLegacyConfig(raw);
+    const bindings =
+      (
+        res.config as {
+          bindings?: Array<{ match?: { peer?: { kind?: unknown } } }>;
+        }
+      )?.bindings ?? [];
+    expect(bindings.map((binding) => binding.match?.peer?.kind)).toEqual([
+      "direct",
+      "DM",
+      " dm ",
+      42,
+    ]);
+    expect(res.changes).toContain(
+      'Moved deprecated bindings[].match.peer.kind "dm" → "direct" for 1 binding.',
+    );
+    expect(res.partiallyValid).toBe(true);
+    expect(validateConfigObjectRaw(res.config).ok).toBe(false);
+  });
+
   it("prunes bindings for missing agents when agents.list is valid", () => {
     const res = repairBindingsForTest({
       agents: {
@@ -1092,8 +1189,8 @@ describe("legacy memory search config migrate", () => {
 
     expect(findLegacyConfigIssues(raw).map((issue) => issue.path)).toEqual([
       "agents.defaults.memorySearch",
-      "agents.list",
-      "agents.list",
+      "agents",
+      "agents",
       "agents.list",
     ]);
 
@@ -1104,10 +1201,10 @@ describe("legacy memory search config migrate", () => {
     expect(res.config?.agents?.list?.[1]?.memory?.search?.provider).toBe("openai-compatible");
     expect(res.changes).toEqual([
       "Moved legacy memorySearch defaults → memory.search.",
-      "Moved agents.list.0.memorySearch → agents.list.0.memory.search.",
-      "Moved agents.list.1.memorySearch → agents.list.1.memory.search.",
+      "Moved agents.list[0].memorySearch → agents.list[0].memory.search.",
+      "Moved agents.list[1].memorySearch → agents.list[1].memory.search.",
       'Moved memory.search.provider from legacy "auto" to "openai".',
-      'Moved agents.list.0.memory.search.provider from legacy "auto" to "openai".',
+      'Moved agents.list[0].memory.search.provider from legacy "auto" to "openai".',
     ]);
   });
 });
@@ -1203,7 +1300,7 @@ describe("legacy agent system prompt override config migrate", () => {
 
     expect(findLegacyConfigIssues(raw).map((issue) => issue.path)).toEqual([
       "agents.defaults.systemPromptOverride",
-      "agents.list",
+      "agents",
       "agents.list",
     ]);
 
@@ -1214,7 +1311,7 @@ describe("legacy agent system prompt override config migrate", () => {
     expect(res.config?.agents?.list?.[1]).toEqual({ id: "beta" });
     expect(res.changes).toEqual([
       "Removed agents.defaults.systemPromptOverride.",
-      "Removed agents.list.0.systemPromptOverride.",
+      "Removed agents.list[0].systemPromptOverride.",
     ]);
   });
 });
@@ -1565,8 +1662,8 @@ describe("legacy agent model timeout migrate", () => {
     expect(res.changes).toStrictEqual([
       "Removed agents.defaults.model.timeoutMs; agent model config only selects models.",
       "Removed agents.defaults.subagents.model.timeoutMs; agent model config only selects models.",
-      "Removed agents.list.0.model.timeoutMs; agent model config only selects models.",
-      "Removed agents.list.0.subagents.model.timeoutMs; agent model config only selects models.",
+      "Removed agents.list[0].model.timeoutMs; agent model config only selects models.",
+      "Removed agents.list[0].subagents.model.timeoutMs; agent model config only selects models.",
       "Moved agents.defaults.imageGenerationModel → agents.defaults.mediaModels.image.",
     ]);
   });
@@ -1796,6 +1893,76 @@ describe("legacy diagnostics OTel protocol migrate", () => {
     expect(res.changes).toStrictEqual([
       'Removed unsupported diagnostics.otel.protocol "grpc"; use "http/protobuf" with an OTLP/HTTP collector.',
     ]);
+  });
+});
+
+describe("retired gateway Tailscale cleanup config migrate", () => {
+  it.each([
+    [true, "managed Tailscale routes now end automatically"],
+    [false, "Removed retired gateway.tailscale.resetOnExit"],
+  ])("removes resetOnExit=%s while preserving sibling settings", (resetOnExit, message) => {
+    const raw = {
+      gateway: {
+        bind: "loopback",
+        tailscale: {
+          mode: "serve",
+          resetOnExit,
+          preserveFunnel: true,
+        },
+      },
+    };
+
+    expect(findLegacyConfigIssues(raw).map((issue) => issue.path)).toContain(
+      "gateway.tailscale.resetOnExit",
+    );
+    const res = migrateLegacyConfigForTest(raw);
+
+    expect(res.config?.gateway?.tailscale).toEqual({
+      mode: "serve",
+      preserveFunnel: true,
+    });
+    expect(res.changes).toEqual([expect.stringContaining(message)]);
+    expect(migrateLegacyConfigForTest(res.config)).toEqual({ config: null, changes: [] });
+  });
+
+  it("removes a managed Service and disables ingress until the operator chooses a device route", () => {
+    const raw = {
+      gateway: {
+        bind: "loopback",
+        tailscale: {
+          mode: "serve",
+          serviceName: "svc:openclaw",
+        },
+      },
+    };
+
+    expect(findLegacyConfigIssues(raw).map((issue) => issue.path)).toContain(
+      "gateway.tailscale.serviceName",
+    );
+    const res = migrateLegacyConfigForTest(raw);
+
+    expect(res.config?.gateway?.tailscale).toEqual({ mode: "off" });
+    expect(res.changes).toEqual([
+      expect.stringMatching(/serviceName.*mode=off.*tailscale serve clear/s),
+    ]);
+    expect(migrateLegacyConfigForTest(res.config)).toEqual({ config: null, changes: [] });
+  });
+
+  it("removes an ignored Service name without disabling Funnel", () => {
+    const raw = {
+      gateway: {
+        tailscale: {
+          mode: "funnel",
+          serviceName: "svc:ignored",
+        },
+      },
+    };
+
+    const res = migrateLegacyConfigForTest(raw);
+
+    expect(res.config?.gateway?.tailscale).toEqual({ mode: "funnel" });
+    expect(res.changes).toEqual([expect.stringContaining("current Tailscale mode is unchanged")]);
+    expect(migrateLegacyConfigForTest(res.config)).toEqual({ config: null, changes: [] });
   });
 });
 
@@ -2280,8 +2447,8 @@ describe("legacy migrate sandbox scope aliases", () => {
 
     expect(res.changes).toStrictEqual([
       "Removed agents.defaults.embeddedHarness; runtime is now provider/model scoped.",
-      "Removed agents.list.0.embeddedHarness; runtime is now provider/model scoped.",
-      "Removed agents.list.0.agentRuntime; runtime is now provider/model scoped.",
+      "Removed agents.list[0].embeddedHarness; runtime is now provider/model scoped.",
+      "Removed agents.list[0].agentRuntime; runtime is now provider/model scoped.",
     ]);
     expect(res.config?.agents?.defaults).toStrictEqual({});
     expect(res.config?.agents?.list?.[0]).toEqual({
@@ -2299,7 +2466,10 @@ describe("legacy migrate sandbox scope aliases", () => {
             fallbacks: ["anthropic/claude-sonnet-4-6", "openai/gpt-5.5"],
           },
           models: {
-            "anthropic/claude-opus-4-7": { alias: "Opus" },
+            "anthropic/claude-opus-4-7": {
+              alias: "Opus",
+              agentRuntime: { id: "auto", mode: "strict" },
+            },
           },
         },
         list: [
@@ -2315,8 +2485,8 @@ describe("legacy migrate sandbox scope aliases", () => {
     expect(res.changes).toStrictEqual([
       "Moved agents.defaults.agentRuntime.id claude-cli to matching anthropic model runtime policy.",
       "Removed agents.defaults.agentRuntime; runtime is now provider/model scoped.",
-      "Moved agents.list.0.agentRuntime.id claude-cli to matching anthropic model runtime policy.",
-      "Removed agents.list.0.agentRuntime; runtime is now provider/model scoped.",
+      "Moved agents.list[0].agentRuntime.id claude-cli to matching anthropic model runtime policy.",
+      "Removed agents.list[0].agentRuntime; runtime is now provider/model scoped.",
       "Copied the legacy default model map to agents.defaults.modelPolicy.allow.",
     ]);
     expect(res.config?.agents?.defaults).toEqual({
@@ -2327,7 +2497,7 @@ describe("legacy migrate sandbox scope aliases", () => {
       models: {
         "anthropic/claude-opus-4-7": {
           alias: "Opus",
-          agentRuntime: { id: "claude-cli" },
+          agentRuntime: { id: "claude-cli", mode: "strict" },
         },
         "anthropic/claude-sonnet-4-6": {
           agentRuntime: { id: "claude-cli" },
@@ -2396,7 +2566,7 @@ describe("legacy migrate sandbox scope aliases", () => {
 
     expect(res.changes).toStrictEqual([
       "Moved agents.defaults.embeddedPi → agents.defaults.embeddedAgent.",
-      "Moved agents.list.0.embeddedPi → agents.list.0.embeddedAgent.",
+      "Moved agents.list[0].embeddedPi → agents.list[0].embeddedAgent.",
     ]);
     expect(res.config?.agents?.defaults).toEqual({
       embeddedAgent: {
@@ -2472,7 +2642,7 @@ describe("legacy migrate sandbox scope aliases", () => {
     });
 
     expect(res.changes).toStrictEqual([
-      "Moved agents.list.0.sandbox.perSession → agents.list.0.sandbox.scope (shared).",
+      "Moved agents.list[0].sandbox.perSession → agents.list[0].sandbox.scope (shared).",
     ]);
     expect(res.config?.agents?.list?.[0]?.sandbox).toEqual({
       scope: "shared",
@@ -2617,7 +2787,7 @@ describe("legacy migrate sandbox scope aliases", () => {
       },
     };
 
-    expect(findLegacyConfigIssues(raw).map((issue) => issue.path)).toEqual(["agents.entries"]);
+    expect(findLegacyConfigIssues(raw).map((issue) => issue.path)).toEqual(["agents"]);
     const res = migrateLegacyConfigForTest(raw);
 
     expect(res.changes).toStrictEqual([
@@ -2650,13 +2820,13 @@ describe("legacy migrate sandbox scope aliases", () => {
     };
 
     expect(findLegacyConfigIssues(raw)).toContainEqual({
-      path: "agents.list",
+      path: "agents",
       message: expect.stringContaining('sandbox.browser.network = "none"'),
     });
     const res = migrateLegacyConfigForTest(raw);
 
     expect(res.changes).toStrictEqual([
-      'Disabled agents.list.0.sandbox.browser and moved its unsupported network "none" → "openclaw-sandbox-browser".',
+      'Disabled agents.list[0].sandbox.browser and moved its unsupported network "none" → "openclaw-sandbox-browser".',
     ]);
     expect(res.config?.agents?.entries?.legacy?.sandbox?.browser).toEqual({
       enabled: false,
@@ -3661,6 +3831,40 @@ describe("legacy model compat migrate", () => {
     expect(res.config?.models?.providers?.google?.models?.[0]?.id).toBe("gemini-3.1-pro-preview");
     expect(res.config?.models?.providers?.myproxy?.models?.[0]?.id).toBe(canonical);
     expect(res.config?.models?.providers?.openai?.models?.[0]?.id).toBe("gpt-5.5");
+  });
+
+  it("canonicalizes persisted OpenAI GPT-5.6 aliases without affecting GitHub Copilot", () => {
+    const copilot = "github-copilot/gpt-5.6";
+    const res = migrateLegacyConfigForTest({
+      agents: {
+        defaults: {
+          model: { primary: "openai/gpt-5.6@openai:work" },
+          modelPolicy: { allow: ["openai/gpt-5.6", copilot] },
+          models: {
+            "openai/gpt-5.6": { alias: "GPT" },
+            "openai/gpt-5.6-sol": { agentRuntime: { id: "openclaw" } },
+            [copilot]: { alias: "Copilot GPT" },
+          },
+        },
+      },
+      models: {
+        providers: {
+          openai: { models: [{ id: "gpt-5.6", name: "GPT alias" }] },
+          "github-copilot": { models: [{ id: "gpt-5.6", name: "Copilot GPT" }] },
+        },
+      },
+    });
+    const defaults = res.config?.agents?.defaults;
+    expect(defaults).toMatchObject({
+      model: { primary: "openai/gpt-5.6-sol@openai:work" },
+      modelPolicy: { allow: ["openai/gpt-5.6-sol", copilot] },
+    });
+    expect(defaults?.models).toEqual({
+      "openai/gpt-5.6-sol": { alias: "GPT", agentRuntime: { id: "openclaw" } },
+      [copilot]: { alias: "Copilot GPT" },
+    });
+    expect(res.config?.models?.providers?.openai?.models?.[0]?.id).toBe("gpt-5.6-sol");
+    expect(res.config?.models?.providers?.["github-copilot"]?.models?.[0]?.id).toBe("gpt-5.6");
   });
 
   it("merges provider catalog rows that normalize to an explicitly canonical id", () => {

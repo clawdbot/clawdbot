@@ -35,6 +35,7 @@ beforeEach(() => {
 
 function createRuntime() {
   return {
+    log: vi.fn(),
     error: vi.fn(),
     exit: vi.fn(),
   };
@@ -91,28 +92,77 @@ describe("resolveNonInteractiveApiKey", () => {
     expect(runtime.exit).not.toHaveBeenCalled();
   });
 
-  it("rejects command-shaped flag keys before returning them", async () => {
+  it.each([
+    { source: "flag", flagValue: "malformed" },
+    { source: "environment", resolvedEnv: true },
+    { source: "secret-ref environment", resolvedEnv: true, secretInputMode: "ref" as const },
+  ])("rejects command-shaped $source keys before returning them", async (testCase) => {
     const runtime = createRuntime();
-    resolveEnvApiKey.mockImplementation(() => {
-      throw new Error("env lookup should not run for a malformed explicit flag");
-    });
+    const malformedKey =
+      "openclaw onboard --non-interactive --auth-choice=zai-coding-global --zai-api-key $ZAI_API_KEY";
+    if (testCase.resolvedEnv) {
+      resolveEnvApiKey.mockReturnValue({
+        apiKey: malformedKey,
+        source: "env: ZAI_API_KEY",
+      });
+    } else {
+      resolveEnvApiKey.mockImplementation(() => {
+        throw new Error("env lookup should not run for a malformed explicit flag");
+      });
+    }
 
     const result = await resolveNonInteractiveApiKey({
       provider: "zai",
       cfg: {},
-      flagValue:
-        "openclaw onboard --non-interactive --auth-choice=zai-coding-global --zai-api-key $ZAI_API_KEY",
+      flagValue: testCase.flagValue === "malformed" ? malformedKey : undefined,
       flagName: "--zai-api-key",
       envVar: "ZAI_API_KEY",
       runtime: runtime as never,
+      secretInputMode: testCase.secretInputMode,
     });
 
     expect(result).toBeNull();
-    expect(resolveEnvApiKey).not.toHaveBeenCalled();
+    expect(resolveEnvApiKey).toHaveBeenCalledTimes(testCase.resolvedEnv ? 1 : 0);
     expect(runtime.error).toHaveBeenCalledWith(
-      "Paste the API key value, not an OpenClaw onboarding command.",
+      testCase.resolvedEnv
+        ? "Paste the API key value, not an OpenClaw onboarding command. Check ZAI_API_KEY."
+        : "Paste the API key value, not an OpenClaw onboarding command.",
     );
     expect(runtime.exit).toHaveBeenCalledWith(1);
+  });
+
+  it("rejects a command-shaped explicit env key before a secret-ref flag", async () => {
+    const runtime = createRuntime();
+    const previousZaiApiKey = process.env.ZAI_API_KEY;
+    process.env.ZAI_API_KEY = "openclaw onboard --non-interactive --auth-choice zai-api-key"; // pragma: allowlist secret
+    resolveEnvApiKey.mockImplementation(() => {
+      throw new Error("broad env lookup should not run for an explicit ref-mode flag");
+    });
+
+    try {
+      const result = await resolveNonInteractiveApiKey({
+        provider: "zai",
+        cfg: {},
+        flagValue: "zai-flag-key",
+        flagName: "--zai-api-key",
+        envVar: "ZAI_API_KEY",
+        runtime: runtime as never,
+        secretInputMode: "ref",
+      });
+
+      expect(result).toBeNull();
+      expect(resolveEnvApiKey).not.toHaveBeenCalled();
+      expect(runtime.error).toHaveBeenCalledWith(
+        "Paste the API key value, not an OpenClaw onboarding command. Check ZAI_API_KEY.",
+      );
+      expect(runtime.exit).toHaveBeenCalledWith(1);
+    } finally {
+      if (previousZaiApiKey === undefined) {
+        delete process.env.ZAI_API_KEY;
+      } else {
+        process.env.ZAI_API_KEY = previousZaiApiKey;
+      }
+    }
   });
 
   it.each([
@@ -290,5 +340,55 @@ describe("resolveNonInteractiveApiKey", () => {
     expect(result).toBeNull();
     expect(runtime.error).not.toHaveBeenCalled();
     expect(runtime.exit).not.toHaveBeenCalled();
+  });
+
+  it.each([
+    {
+      rejection: "a missing required key",
+      expectedMessage: "Missing --fixture-api-key",
+    },
+    {
+      rejection: "a command-shaped key",
+      flagValue: "openclaw onboard --non-interactive --auth-choice fixture-api-key",
+      expectedMessage: "Paste the API key value",
+    },
+    {
+      rejection: "a literal key in reference mode",
+      flagValue: "fixture-api-key",
+      secretInputMode: "ref" as const,
+      expectedMessage: "cannot be used with --secret-input-mode ref",
+    },
+    {
+      rejection: "a provider-discovered key without an environment name",
+      envVar: "",
+      secretInputMode: "ref" as const,
+      resolvedEnv: { apiKey: "fixture-api-key", source: "provider discovery" },
+      expectedMessage: "requires an explicit environment variable",
+    },
+  ])("emits one options JSON object for $rejection", async (testCase) => {
+    const runtime = createRuntime();
+    resolveEnvApiKey.mockReturnValue(testCase.resolvedEnv ?? null);
+
+    const result = await resolveNonInteractiveApiKey({
+      provider: "fixture",
+      cfg: {},
+      flagName: "--fixture-api-key",
+      envVar: testCase.envVar ?? "OPENCLAW_ONBOARD_MISSING_FIXTURE_KEY",
+      flagValue: testCase.flagValue,
+      secretInputMode: testCase.secretInputMode,
+      runtime,
+      json: true,
+    });
+
+    expect(result).toBeNull();
+    expect(runtime.exit).toHaveBeenCalledWith(1);
+    expect(runtime.log).toHaveBeenCalledOnce();
+    const payload = JSON.parse(String(runtime.log.mock.calls[0]?.[0]));
+    expect(payload).toEqual({
+      ok: false,
+      phase: "options",
+      message: expect.stringContaining(testCase.expectedMessage),
+    });
+    expect(runtime.error).toHaveBeenCalledWith(payload.message);
   });
 });

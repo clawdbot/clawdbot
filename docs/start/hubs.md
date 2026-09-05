@@ -32,7 +32,7 @@ Use these hubs to discover every page, including deep dives and reference docs t
 - [Docker](/install/docker)
 - [Nix](/install/nix)
 - [Updating / rollback](/install/updating)
-- [Bun workflow (experimental)](/install/bun)
+- [Bun workflow](/install/bun)
 
 ## Core concepts
 
@@ -95,7 +95,7 @@ Use these hubs to discover every page, including deep dives and reference docs t
 - [Dashboard](/web/dashboard)
 - [Control UI](/web/control-ui)
 - [Remote access](/gateway/remote)
-- [Remote gateway README](/gateway/remote-gateway-readme)
+- [macOS SSH tunnel](/gateway/remote#macos-persistent-ssh-tunnel-via-launchagent)
 - [Tailscale](/gateway/tailscale)
 - [Security](/gateway/security)
 - [Troubleshooting](/gateway/troubleshooting)
@@ -103,7 +103,6 @@ Use these hubs to discover every page, including deep dives and reference docs t
 ## Tools + automation
 
 - [Tools surface](/tools)
-- [OpenProse](/prose)
 - [CLI reference](/cli)
 - [Exec tool](/tools/exec)
 - [PDF tool](/tools/pdf)
@@ -146,15 +145,14 @@ Use these hubs to discover every page, including deep dives and reference docs t
 - [macOS voice wake](/platforms/mac/voicewake)
 - [macOS voice overlay](/platforms/mac/voice-overlay)
 - [macOS WebChat](/platforms/mac/webchat)
-- [macOS Canvas](/platforms/mac/canvas)
-- [macOS child process](/platforms/mac/child-process)
+- [macOS widget panel](/platforms/mac/canvas)
+- [macOS gateway (launchd)](/platforms/mac/bundled-gateway)
 - [macOS health](/platforms/mac/health)
 - [macOS icon](/platforms/mac/icon)
 - [macOS logging](/platforms/mac/logging)
 - [macOS permissions](/platforms/mac/permissions)
 - [macOS remote](/platforms/mac/remote)
 - [macOS signing](/platforms/mac/signing)
-- [macOS gateway (launchd)](/platforms/mac/bundled-gateway)
 - [macOS XPC](/platforms/mac/xpc)
 - [macOS skills](/platforms/mac/skills)
 - [macOS Peekaboo](/platforms/mac/peekaboo)
@@ -168,7 +166,7 @@ Use these hubs to discover every page, including deep dives and reference docs t
 - [Agent tools](/plugins/building-plugins#registering-agent-tools)
 - [Plugin bundles](/plugins/bundles)
 - [ClawHub](/clawhub)
-- [Capability cookbook](/tools/capability-cookbook)
+- [Adding capabilities](/plugins/adding-capabilities)
 - [Voice call plugin](/plugins/voice-call)
 - [Zalo user plugin](/plugins/zalouser)
 

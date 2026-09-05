@@ -1,5 +1,8 @@
 // Msteams helper module supports monitor handler helpers behavior.
-import type { PreparedInboundReply } from "openclaw/plugin-sdk/channel-inbound";
+import {
+  buildChannelInboundEventContext,
+  type PreparedInboundReply,
+} from "openclaw/plugin-sdk/channel-inbound";
 import { createTestInboundDebounceFlush } from "openclaw/plugin-sdk/channel-test-helpers";
 import { vi } from "vitest";
 import type { OpenClawConfig, PluginRuntime, RuntimeEnv } from "../runtime-api.js";
@@ -180,6 +183,7 @@ export function installMSTeamsTestRuntime(options: MSTeamsTestRuntimeOptions = {
         resolveStorePath,
       },
       inbound: {
+        buildContext: buildChannelInboundEventContext,
         run: run as unknown as PluginRuntime["channel"]["inbound"]["run"],
       },
     },

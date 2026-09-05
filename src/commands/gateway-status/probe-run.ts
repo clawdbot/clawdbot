@@ -5,6 +5,7 @@ import {
 } from "@openclaw/normalization-core/string-coerce";
 import type { OpenClawConfig } from "../../config/types.js";
 import { probeGateway } from "../../gateway/probe.js";
+import { isAbortError } from "../../infra/abort-signal.js";
 import {
   discoverGatewayBeacons,
   type GatewayBonjourBeacon,
@@ -46,6 +47,7 @@ export async function runGatewayStatusProbePass(params: {
   sshIdentity: string | null;
   loadSshTunnelModule: () => Promise<typeof import("../../infra/ssh-tunnel.js")>;
   localTlsFingerprint?: string;
+  signal?: AbortSignal;
 }): Promise<{
   discovery: GatewayBonjourBeacon[];
   probed: GatewayStatusProbedTarget[];
@@ -66,6 +68,10 @@ export async function runGatewayStatusProbePass(params: {
     if (!sshTarget) {
       return null;
     }
+    if (params.signal?.aborted) {
+      sshTunnelError = "Aborted";
+      return null;
+    }
     try {
       const { startSshPortForward } = await params.loadSshTunnelModule();
       const tunnel = await startSshPortForward({
@@ -74,10 +80,15 @@ export async function runGatewayStatusProbePass(params: {
         localPortPreferred: params.remotePort,
         remotePort: params.remotePort,
         timeoutMs: Math.min(1500, params.overallTimeoutMs),
+        signal: params.signal,
       });
       sshTunnelStarted = true;
       return tunnel;
     } catch (err) {
+      if (isAbortError(err)) {
+        sshTunnelError = "Aborted";
+        return null;
+      }
       sshTunnelError = formatErrorMessage(err);
       return null;
     }
@@ -131,6 +142,14 @@ export async function runGatewayStatusProbePass(params: {
         });
         const probe = await probeGateway({
           url: target.url,
+          config: params.cfg,
+          // Explicit, configured-remote, and SSH targets must not inherit the
+          // local Gateway's device token, even when the transport is loopback.
+          ...(target.kind === "sshTunnel"
+            ? { suppressStoredDeviceAuth: true }
+            : target.kind !== "localLoopback"
+              ? { originScopedDeviceAuth: true }
+              : {}),
           auth: {
             token: authResolution.token,
             password: authResolution.password,
@@ -140,6 +159,7 @@ export async function runGatewayStatusProbePass(params: {
               ? params.localTlsFingerprint
               : undefined,
           timeoutMs: resolveProbeBudgetMs(params.overallTimeoutMs, target),
+          signal: params.signal,
         });
         return {
           target,

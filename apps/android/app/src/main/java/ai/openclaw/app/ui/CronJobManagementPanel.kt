@@ -396,7 +396,7 @@ private fun CronScheduleEditor(
     color = ClawTheme.colors.textMuted,
   )
   when (schedule) {
-    is GatewayCronScheduleEdit.At ->
+    is GatewayCronScheduleEdit.At -> {
       ClawTextField(
         value = schedule.at,
         onValueChange = { onChange(schedule.copy(at = it)) },
@@ -404,6 +404,8 @@ private fun CronScheduleEditor(
         label = nativeString("Run at"),
         enabled = enabled,
       )
+    }
+
     is GatewayCronScheduleEdit.Every -> {
       ClawTextField(
         value = schedule.everyMs,
@@ -420,6 +422,7 @@ private fun CronScheduleEditor(
         enabled = enabled,
       )
     }
+
     is GatewayCronScheduleEdit.Cron -> {
       ClawTextField(
         value = schedule.expression,
@@ -447,6 +450,7 @@ private fun CronScheduleEditor(
         )
       }
     }
+
     is GatewayCronScheduleEdit.OnExit -> {
       ClawTextField(
         value = schedule.command,
@@ -479,7 +483,7 @@ private fun CronPayloadEditor(
     color = ClawTheme.colors.textMuted,
   )
   when (payload) {
-    is GatewayCronPayloadEdit.SystemEvent ->
+    is GatewayCronPayloadEdit.SystemEvent -> {
       ClawTextField(
         value = payload.text,
         onValueChange = { onChange(payload.copy(text = it)) },
@@ -488,6 +492,8 @@ private fun CronPayloadEditor(
         enabled = enabled,
         minLines = 3,
       )
+    }
+
     is GatewayCronPayloadEdit.AgentTurn -> {
       ClawTextField(
         value = payload.message,
@@ -516,6 +522,7 @@ private fun CronPayloadEditor(
         )
       }
     }
+
     is GatewayCronPayloadEdit.Command -> {
       val commandCwdCanBeCleared = originalCommandCwd == null
       ClawTextField(
@@ -550,6 +557,7 @@ private fun CronPayloadEditor(
         )
       }
     }
+
     is GatewayCronPayloadEdit.ReadOnlyScript -> {
       ClawTextField(
         value = payload.script,
@@ -565,12 +573,14 @@ private fun CronPayloadEditor(
         color = ClawTheme.colors.textMuted,
       )
     }
-    GatewayCronPayloadEdit.ReadOnlyWake ->
+
+    GatewayCronPayloadEdit.ReadOnlyWake -> {
       Text(
         text = nativeString("Wake-only payloads are preserved unchanged."),
         style = ClawTheme.type.caption,
         color = ClawTheme.colors.textMuted,
       )
+    }
   }
 }
 
@@ -608,11 +618,13 @@ private fun CronRunHistoryPanel(
     )
   }
   when {
-    error != null ->
+    error != null -> {
       ClawPanel {
         Text(text = error, style = ClawTheme.type.body, color = ClawTheme.colors.warning)
       }
-    runs.isEmpty() ->
+    }
+
+    runs.isEmpty() -> {
       ClawPanel {
         Text(
           text = if (loading) nativeString("Loading recent runs…") else nativeString("No recent runs yet."),
@@ -620,7 +632,11 @@ private fun CronRunHistoryPanel(
           color = ClawTheme.colors.textMuted,
         )
       }
-    else -> ClawListPanel(items = runs) { run -> CronRunHistoryRow(run) }
+    }
+
+    else -> {
+      ClawListPanel(items = runs) { run -> CronRunHistoryRow(run) }
+    }
   }
 }
 

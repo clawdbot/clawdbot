@@ -115,9 +115,13 @@ describe("Matrix QA CLI runtime stream errors", () => {
     childProcessMocks.spawn.mockClear();
   });
 
-  it.each(["stdout", "stderr"] as const)(
-    "rejects after cleaning up when %s emits a stream error",
-    async (streamName) => {
+  it.each([
+    ["stdout", false],
+    ["stderr", false],
+    ["stdout", true],
+  ] as const)(
+    "rejects after cleaning up when %s emits a stream error (after exit: %s)",
+    async (streamName, afterExit) => {
       const { grandchildPidPath, grandchildReadyPath, root } = await createCliRoot();
       let child: ChildProcess | undefined;
       let grandchildPid: number | undefined;
@@ -142,7 +146,13 @@ describe("Matrix QA CLI runtime stream errors", () => {
         grandchildPid = await waitForPidFile(grandchildPidPath, 2_000);
         await waitForFile(grandchildReadyPath, 2_000);
 
-        child[streamName]?.emit("error", new Error(`${streamName} pipe failed`));
+        const streamError = new Error(`${streamName} pipe failed`);
+        if (afterExit) {
+          child.once("exit", () => child?.[streamName]?.emit("error", streamError));
+          child.kill("SIGTERM");
+        } else {
+          child[streamName]?.emit("error", streamError);
+        }
 
         await expect(session.wait()).rejects.toThrow(
           `${streamName} stream error: ${streamName} pipe failed`,

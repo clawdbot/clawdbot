@@ -965,34 +965,6 @@ rules:
             }
           }
           heredocLine = "";
-  - id: ghsa-66r7-m7xm-v49h.qqbot-outbound-media-unvalidated-local-path
-    languages:
-      - typescript
-      - javascript
-    severity: ERROR
-    message: QQBot outbound helper resolves local media paths without media-root boundary validation.
-    patterns:
-      - pattern-either:
-          - pattern: |
-              const $MEDIA = resolveQQBotLocalMediaPath(normalizePath(...));
-          - pattern: |
-              const $MEDIA = resolveQQBotLocalMediaPath($PATH);
-      - pattern-inside: |
-          export async function $FN(...){
-            ...
-          }
-      - metavariable-regex:
-          metavariable: $FN
-          regex: ^(sendPhoto|sendVoice|sendVideoMsg|sendDocument|sendMedia|sendVoiceMessage)$
-      - pattern-not-inside: |
-          const $RESOLVED = resolveOutboundMediaPath(...);
-          ...
-    metadata:
-      ghsa: GHSA-66R7-M7XM-V49H
-      advisory-url: https://github.com/openclaw/openclaw/security/advisories/GHSA-66R7-M7XM-V49H
-      detector-bucket: precise
-      source-run: 2026-04-17T07-37-10Z
-      source-rule-id: qqbot-outbound-media-unvalidated-local-path
   - id: ghsa-6g25-pc82-vfwp.oauth-state-reuses-pkce-verifier
     languages:
       - typescript
@@ -1617,46 +1589,6 @@ rules:
       detector-bucket: precise
       source-run: 2026-04-17T07-37-10Z
       source-rule-id: openclaw-skill-env-host-injection
-  - id: ghsa-846p-hgpv-vphc.qqbot-outbound-local-read-without-boundary-check
-    message: QQ Bot outbound local media handling reads a user-influenced path after resolveQQBotLocalMediaPath() without resolveOutboundMediaPath()/resolveQQBotPayloadLocalFilePath() boundary enforcement.
-    severity: ERROR
-    languages:
-      - typescript
-      - javascript
-    patterns:
-      - pattern-either:
-          - pattern: |
-              $MP = resolveQQBotLocalMediaPath(normalizePath($RAW));
-              ...
-              readFileAsync($MP)
-          - pattern: |
-              $MP = resolveQQBotLocalMediaPath(normalizePath($RAW));
-              ...
-              audioFileToSilkBase64($MP, ...)
-          - pattern: |
-              $MP = resolveQQBotLocalMediaPath(normalizePath($RAW));
-              ...
-              checkFileSize($MP)
-      - pattern-not: |
-          $RES = resolveOutboundMediaPath($RAW, ..., ...)
-          ...
-      - pattern-not: |
-          $SAFE = resolveQQBotPayloadLocalFilePath($MP)
-          ...
-      - pattern-not: |
-          if (!resolveQQBotPayloadLocalFilePath($MP)) {
-            ...
-          }
-    metadata:
-      category: security
-      technology:
-        - qqbot
-      confidence: medium
-      ghsa: GHSA-846P-HGPV-VPHC
-      advisory-url: https://github.com/openclaw/openclaw/security/advisories/GHSA-846P-HGPV-VPHC
-      detector-bucket: precise
-      source-run: 2026-04-17T07-37-10Z
-      source-rule-id: qqbot-outbound-local-read-without-boundary-check
   - id: ghsa-8689-gm9g-jgr6.plivo-v3-replay-key-uses-unsorted-url
     languages:
       - typescript

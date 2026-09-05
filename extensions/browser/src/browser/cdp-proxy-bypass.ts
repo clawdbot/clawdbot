@@ -9,8 +9,8 @@
  */
 import http from "node:http";
 import https from "node:https";
+import { isLoopbackHost } from "openclaw/plugin-sdk/ssrf-runtime";
 import { registerManagedProxyBrowserCdpBypass } from "openclaw/plugin-sdk/ssrf-runtime-internal";
-import { isLoopbackHost } from "../gateway/net.js";
 import { hasProxyEnvConfigured } from "../infra/net/proxy-env.js";
 
 /** HTTP agent that never uses a proxy — for localhost CDP connections. */

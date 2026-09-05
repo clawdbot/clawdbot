@@ -1,6 +1,7 @@
 import { spawn } from "node:child_process";
 import { sliceUtf16Safe } from "@openclaw/normalization-core/utf16-slice";
 import { redactSensitiveText } from "../../logging/redact.js";
+import { releaseChildProcessOutputAfterExit } from "../../process/child-process.js";
 import {
   runCommandWithTimeout,
   type CommandOptions,
@@ -10,11 +11,13 @@ import {
 export const WORKER_TUNNEL_READY_MARKER = "OPENCLAW_WORKER_TUNNEL_READY";
 
 const STOP_GRACE_MS = 1_500;
+const STOP_KILL_WAIT_MS = 2_000;
 const STDERR_LIMIT = 4_096;
 
 type WorkerSshProcessExit = {
   code: number | null;
   signal: NodeJS.Signals | null;
+  stderrTail?: string;
 };
 
 export type WorkerSshProcess = {
@@ -29,8 +32,13 @@ export type WorkerSshRunner = {
 };
 
 export function workerSshProcessError(stderr: string): Error {
-  const detail = redactSensitiveText(stderr, { mode: "tools" }).replace(/\s+/gu, " ").trim();
+  const detail = workerSshStderrTail(stderr);
   return new Error(detail ? `Worker SSH tunnel failed: ${detail}` : "Worker SSH tunnel failed");
+}
+
+function workerSshStderrTail(stderr: string): string | undefined {
+  const redacted = redactSensitiveText(stderr, { mode: "tools" }).replace(/\s+/gu, " ").trim();
+  return redacted ? sliceUtf16Safe(redacted, -STDERR_LIMIT) : undefined;
 }
 
 /** Production runner that treats the remote post-forward marker as connection readiness. */
@@ -44,11 +52,15 @@ export function createWorkerSshRunner(): WorkerSshRunner {
       }
       const child = spawn(command, args, {
         env: options.baseEnv,
+        signal: options.signal,
         stdio: ["pipe", "pipe", "pipe"],
         windowsHide: true,
       });
+      const releaseOutput = releaseChildProcessOutputAfterExit(child);
       let closed = false;
+      let exitedSettled = false;
       let readySettled = false;
+      let childExited = false;
       let resolveReady!: () => void;
       let rejectReady!: (error: Error) => void;
       let resolveExited!: (exit: WorkerSshProcessExit) => void;
@@ -56,6 +68,9 @@ export function createWorkerSshRunner(): WorkerSshRunner {
         resolveReady = resolve;
         rejectReady = reject;
       });
+      // Readiness can reject after its awaiter timed out and moved on (stop()/late close);
+      // observe it here so lifecycle settles never become unhandled rejections.
+      void ready.catch(() => {});
       const exited = new Promise<WorkerSshProcessExit>((resolve) => {
         resolveExited = resolve;
       });
@@ -68,10 +83,19 @@ export function createWorkerSshRunner(): WorkerSshRunner {
         readySettled = true;
         rejectReady(workerSshProcessError(stderr));
       };
+      const settleExited = (exit: WorkerSshProcessExit) => {
+        if (exitedSettled) {
+          return;
+        }
+        exitedSettled = true;
+        releaseOutput();
+        const stderrTail = workerSshStderrTail(stderr);
+        resolveExited({ ...exit, ...(stderrTail ? { stderrTail } : {}) });
+      };
       child.stdout.setEncoding("utf8");
       child.stdout.on("error", () => {});
       child.stdout.on("data", (chunk: string) => {
-        if (readySettled) {
+        if (readySettled || childExited) {
           return;
         }
         stdout = sliceUtf16Safe(`${stdout}${chunk}`, -STDERR_LIMIT);
@@ -85,11 +109,26 @@ export function createWorkerSshRunner(): WorkerSshRunner {
       child.stderr.on("data", (chunk: string) => {
         stderr = sliceUtf16Safe(`${stderr}${chunk}`, -STDERR_LIMIT);
       });
-      child.once("error", settleReadyError);
+      child.once("error", () => {
+        settleReadyError();
+        // "error" also fires for abort/kill-delivery failures on a live child; only a child
+        // that never spawned (no pid) gets a synthesized exit, otherwise close/stop() settle it.
+        // The no-pid case is terminal: mark it closed so stop() never signals an unspawned child.
+        if (child.pid === undefined) {
+          closed = true;
+          settleExited({ code: null, signal: null });
+        }
+      });
+      // Fence readiness at real exit, but retain diagnostics until stdio closes.
+      // The shared output owner bounds draining if descendants retain the pipes.
+      child.once("exit", () => {
+        childExited = true;
+        child.stdin.destroy();
+      });
       child.once("close", (code, signal) => {
         closed = true;
         settleReadyError();
-        resolveExited({ code, signal });
+        settleExited({ code, signal });
       });
       child.stdin.on("error", () => {});
       if (options.input !== undefined) {
@@ -117,9 +156,32 @@ export function createWorkerSshRunner(): WorkerSshRunner {
               }),
             ]);
             clearTimeout(timer);
-            if (!closed) {
-              child.kill("SIGKILL");
-              await exited;
+            if (!closed && !exitedSettled) {
+              // A false return can also mean the child died a moment ago with its "exit"
+              // event still queued; always take the bounded wait before judging.
+              const killDelivered = child.kill("SIGKILL");
+              let killTimer: ReturnType<typeof setTimeout> | undefined;
+              let killWaitExpired = false;
+              await Promise.race([
+                exited,
+                new Promise<void>((resolve) => {
+                  killTimer = setTimeout(() => {
+                    killWaitExpired = true;
+                    resolve();
+                  }, STOP_KILL_WAIT_MS);
+                  killTimer.unref?.();
+                }),
+              ]);
+              clearTimeout(killTimer);
+              if (killWaitExpired) {
+                // Neither delivered SIGKILL nor failed delivery proves termination without
+                // an exit event; fail the stop so the owner keeps tracking the live child.
+                throw workerSshProcessError(
+                  killDelivered
+                    ? "SSH child did not exit after SIGKILL; it may still be running"
+                    : "SIGKILL delivery failed; SSH child may still be running",
+                );
+              }
             }
           })());
         },

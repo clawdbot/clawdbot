@@ -1,0 +1,13 @@
+diff --git a/dist/chunk-artifact.js b/dist/chunk-artifact.js
+index 1f3db9bac2448d085c881ded1ec0f3a37cda6a13..62d6532b38245750b4fc53529cfd856d34e5f75b 100644
+--- a/dist/chunk-artifact.js
++++ b/dist/chunk-artifact.js
+@@ -2846 +2846 @@ function throttle(fn, ms) {
+-		if (now - last > ms) {
++		if (now - last >= ms) {
+@@ -2853 +2853,4 @@ function throttle(fn, ms) {
+-		pendingCall ??= setTimeout(() => call.bind(this)(...args), ms);
++		pendingCall ??= setTimeout(() => {
++			pendingCall = undefined;
++			call.apply(this, args);
++		}, ms);

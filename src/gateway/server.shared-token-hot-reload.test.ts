@@ -6,10 +6,10 @@ import { afterAll, beforeAll, beforeEach, describe, expect, it } from "vitest";
 import { deleteTestEnvValue, setTestEnvValue } from "../test-utils/env.js";
 import { openAuthenticatedGatewayWs, waitForGatewayWsClose } from "./shared-auth.test-helpers.js";
 import {
-  getFreePort,
+  getGatewayTestPort,
   installGatewayTestHooks,
   rpcReq,
-  startGatewayServer,
+  startTestGatewayServer,
   testState,
 } from "./test-helpers.js";
 
@@ -20,7 +20,7 @@ const SECRET_REF_TOKEN_ID = "OPENCLAW_SHARED_TOKEN_HOT_RELOAD_SECRET_REF";
 const OLD_TOKEN = "shared-token-hot-reload-old";
 const NEW_TOKEN = "shared-token-hot-reload-new";
 
-let server: Awaited<ReturnType<typeof startGatewayServer>>;
+let server: Awaited<ReturnType<typeof startTestGatewayServer>>;
 let port = 0;
 
 function buildSharedTokenReloadConfig(): Record<string, unknown> {
@@ -42,7 +42,7 @@ beforeAll(async () => {
   if (!configPath) {
     throw new Error("OPENCLAW_CONFIG_PATH missing in gateway test environment");
   }
-  port = await getFreePort();
+  port = await getGatewayTestPort();
   testState.gatewayAuth = undefined;
   setTestEnvValue(SECRET_REF_TOKEN_ID, OLD_TOKEN);
   await fs.writeFile(
@@ -50,7 +50,7 @@ beforeAll(async () => {
     `${JSON.stringify(buildSharedTokenReloadConfig(), null, 2)}\n`,
     "utf-8",
   );
-  server = await startGatewayServer(port, { controlUiEnabled: true });
+  server = await startTestGatewayServer(port, { controlUiEnabled: true });
 });
 
 beforeEach(() => {
@@ -69,17 +69,13 @@ describe("gateway shared token hot reload rotation", () => {
     try {
       const closed = waitForGatewayWsClose(ws);
       setTestEnvValue(SECRET_REF_TOKEN_ID, NEW_TOKEN);
-      const reload = await rpcReq<{ warningCount?: number }>(ws, "secrets.reload", {}).catch(
-        (err: unknown) => (err instanceof Error ? err : new Error(String(err))),
-      );
+      const reload = await rpcReq<{ warningCount?: number }>(ws, "secrets.reload", {});
 
       await expect(closed).resolves.toEqual({
         code: 4001,
         reason: "gateway auth changed",
       });
-      if (!(reload instanceof Error)) {
-        expect(reload.ok).toBe(true);
-      }
+      expect(reload.ok).toBe(true);
 
       const freshWs = await openAuthenticatedGatewayWs(port, NEW_TOKEN);
       freshWs.close();

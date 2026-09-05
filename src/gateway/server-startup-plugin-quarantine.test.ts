@@ -3,23 +3,23 @@ import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
 import { afterEach, describe, expect, it, vi } from "vitest";
-import { runPluginPayloadSmokeCheck } from "../cli/update-cli/plugin-payload-validation.js";
+import { runPluginPayloadSmokeCheck } from "../plugins/payload-verification.js";
 import {
   buildDegradedPluginsFromVerificationFailures,
   listActiveDegradedPlugins,
   setActiveDegradedPlugins,
 } from "../plugins/runtime-degraded-state.js";
 import {
-  getFreePort,
+  getGatewayTestPort,
   installGatewayTestHooks,
   setTestPluginRegistry,
-  startGatewayServer,
+  startTestGatewayServer,
 } from "./test-helpers.js";
 
 installGatewayTestHooks({ scope: "suite" });
 
 describe("Gateway startup plugin quarantine", () => {
-  let server: Awaited<ReturnType<typeof startGatewayServer>> | undefined;
+  let server: Awaited<ReturnType<typeof startTestGatewayServer>> | undefined;
   const tempDirs: string[] = [];
 
   afterEach(async () => {
@@ -157,8 +157,8 @@ describe("Gateway startup plugin quarantine", () => {
       plugins: pluginConfig,
     });
 
-    const port = await getFreePort();
-    server = await startGatewayServer(port, { auth: { mode: "none" } });
+    const port = await getGatewayTestPort();
+    server = await startTestGatewayServer(port, { auth: { mode: "none" } });
     const ready = await fetch(`http://127.0.0.1:${port}/readyz`);
 
     expect(ready.status).toBe(200);

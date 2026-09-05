@@ -1,0 +1,35 @@
+{
+  "fill": {
+    "solid": "extended-srgb:0.96078,0.96863,0.97647,1.00000"
+  },
+  "groups": [
+    {
+      "layers": [
+        {
+          "image-name": "molty.svg",
+          "name": "Clawmark",
+          "position": {
+            "scale": 0.96,
+            "translation-in-points": [
+              0,
+              0
+            ]
+          }
+        }
+      ],
+      "shadow": {
+        "kind": "neutral",
+        "opacity": 0.18
+      },
+      "translucency": {
+        "enabled": false,
+        "value": 0.5
+      }
+    }
+  ],
+  "supported-platforms": {
+    "squares": [
+      "macOS"
+    ]
+  }
+}

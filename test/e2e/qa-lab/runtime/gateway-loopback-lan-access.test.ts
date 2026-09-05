@@ -1,4 +1,5 @@
 import { describe, expect, it } from "vitest";
+import { snapshotGatewayStartupEnv } from "../../../../src/gateway/test-helpers.env.js";
 import {
   assertGatewayLoopbackLanProof,
   parseGatewayLoopbackLanOptions,
@@ -36,7 +37,9 @@ describe("Gateway loopback and LAN access producer", () => {
   });
 
   it("proves real loopback isolation, LAN reachability, and shared-token authentication", async () => {
+    const gatewayStartupEnv = snapshotGatewayStartupEnv();
     const proof = await runGatewayLoopbackLanProof();
+    expect(snapshotGatewayStartupEnv()).toEqual(gatewayStartupEnv);
     expect(proof).toEqual({
       loopback: {
         authenticatedHealthRpc: true,

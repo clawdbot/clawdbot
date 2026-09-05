@@ -1,0 +1,188 @@
+title: Full-access tools survive an interrupted Gateway turn
+
+scenario:
+  id: gateway-restart-full-access-live
+  surface: runtime
+  coverage:
+    primary:
+      - session-memory.recovery-restart-recovery
+    secondary:
+      - gateway.restart-and-stop-gateway-restart
+      - session-memory.recovery-delivery
+  gatewayRuntime:
+    preserveDebugArtifacts: true
+  gatewayConfigPatch:
+    tools:
+      exec:
+        mode: full
+      alsoAllow:
+        - qa_restart_wait
+      codeMode:
+        enabled: true
+        timeoutMs: 60000
+  objective: Verify ordinary full-access task continuation retains shell and delegation after an ambiguous interrupted Code Mode call, without replaying its side effect.
+  successCriteria:
+    - An ordinary non-replay-safe Code Mode call records one shell side effect and remains pending during Gateway replacement.
+    - Recovery preserves the session's shell and session-spawn tools and executes fresh work.
+    - The prior shell side effect occurs exactly once and recovery delivers one final response without another user turn.
+  docsRefs:
+    - docs/tools/code-mode.md
+    - docs/channels/qa-channel.md
+  codeRefs:
+    - src/agents/main-session-recovery/main-session-restart-recovery.ts
+    - extensions/qa-lab/src/suite-runtime-gateway.ts
+  execution:
+    kind: flow
+    runtime: openclaw
+    retryCount: 0
+    summary: Run a live OpenAI full-access task across one real Gateway replacement, verify fresh shell and delegation capabilities, and reject duplicate prior effects.
+    suiteIsolation: isolated
+    isolationReason: Replaces its private Gateway while an ordinary Code Mode call is pending.
+    config:
+      requiredProviderMode: live-frontier
+      requiredProvider: openai
+      requiredModel: gpt-5.6-luna
+      finalMarker: FULL-ACCESS-RESTART-OK
+      failureMarker: FULL-ACCESS-RESTART-BLOCKED
+      prompt: |-
+        Complete this restart-resilience task in this one user turn. A Gateway replacement is expected halfway through. Do not ask me to send another message.
+
+        In the initial lifecycle, make one ordinary Code Mode exec without restartSafe, using this exact JavaScript (yield_control is already a built-in function; never search for or shadow it):
+        const shell = (await catalog.search("exec")).find(tool => tool.toolName === "exec");
+        await shell({command: "echo original-effect >> restart-original.txt"});
+        const target = (await catalog.search("qa_restart_wait")).find(tool => tool.toolName === "qa_restart_wait");
+        await Promise.all([target({}), yield_control("FULL-ACCESS-CHECKPOINT")]);
+        return "FULL-ACCESS-CHECKPOINT";
+        When exec reports waiting, call wait exactly once. Do not issue any further actions until the Gateway recovery system message arrives. Do not send assistant text before that recovery message.
+
+        After the Gateway recovery message, the interrupted execution has an unknown outcome. Do not replay that original exec or append to restart-original.txt again. Discover the shell execution and sessions_spawn tools afresh. If either is absent, reply exactly FULL-ACCESS-RESTART-BLOCKED and name the absent capability. Otherwise use the shell tool to read restart-original.txt and verify it contains one line original-effect, then execute `echo fresh-effect > restart-fresh.txt`. Use sessions_spawn with label restart-proof-child and agentId qa to ask a child to reply exactly CHILD-RESTART-OK, and wait for its completion using the available session tools or completion notification. Do not claim success before the child completes.
+
+        Finish with exactly FULL-ACCESS-RESTART-OK only after verifying the original single side effect, successful fresh shell work, and the child's CHILD-RESTART-OK reply. Do not perform unrelated work.
+
+flow:
+  steps:
+    - name: verifies the live full-access lane
+      actions:
+        - assert:
+            expr: "env.providerMode === config.requiredProviderMode"
+            message: scenario requires live-frontier provider mode
+        - set: selected
+          value:
+            expr: splitModelRef(env.primaryModel)
+        - assert:
+            expr: "selected?.provider === config.requiredProvider && selected?.model === config.requiredModel"
+            message: scenario requires its declared OpenAI model
+        - assert:
+            expr: "env.cfg.tools?.exec?.mode === 'full'"
+            message: scenario requires full access
+    - name: preserves full access through an ambiguous interrupted call
+      actions:
+        - call: waitForGatewayHealthy
+          args: [{ ref: env }, 180000]
+        - call: waitForQaChannelReady
+          args: [{ ref: env }, 180000]
+        - call: reset
+        - set: startIndex
+          value:
+            expr: state.getSnapshot().messages.length
+        - set: conversationId
+          value:
+            expr: "`restart-full-access-${randomUUID().slice(0, 8)}`"
+        - set: sessionKey
+          value:
+            expr: "buildAgentSessionKey({ agentId: 'qa', channel: 'qa-channel', accountId: transport.accountId, peer: { kind: 'direct', id: `dm:${conversationId}` }, dmScope: env.cfg.session?.dmScope, identityLinks: env.cfg.session?.identityLinks })"
+        - sendInbound:
+            accountId: default
+            conversation: { id: { ref: conversationId }, kind: direct }
+            senderId: { ref: conversationId }
+            senderName: QA Restart Operator
+            text: { expr: config.prompt }
+          saveAs: inbound
+        - call: waitForCondition
+          saveAs: checkpoint
+          args:
+            - lambda:
+                async: true
+                expr: "readSessionTranscriptSummary(env, sessionKey, { pendingCodeModeExecNeedle: 'FULL-ACCESS-CHECKPOINT' }).then((summary) => summary.hasPendingCodeModeWait ? summary : undefined).catch(() => undefined)"
+            - expr: liveTurnTimeoutMs(env, 180000)
+            - 50
+        - call: fs.readFile
+          saveAs: originalBefore
+          args:
+            - expr: "path.join(env.gateway.workspaceDir, 'restart-original.txt')"
+            - utf8
+        - assert:
+            expr: "originalBefore === 'original-effect' + String.fromCharCode(10)"
+            message: initial side effect did not occur exactly once
+        - call: restartGatewayWithConfigPatch
+          args:
+            - env: { ref: env }
+              patch:
+                gateway:
+                  controlUi:
+                    allowedOrigins: ["http://127.0.0.1:64221"]
+        - call: waitForGatewayHealthy
+          args: [{ ref: env }, 180000]
+        - call: waitForQaChannelReady
+          args: [{ ref: env }, 180000]
+        - call: waitForOutboundMessage
+          saveAs: outbound
+          args:
+            - ref: state
+            - lambda:
+                params: [candidate]
+                expr: "candidate.conversation.id === conversationId && (candidate.text.includes(config.finalMarker) || candidate.text.includes(config.failureMarker))"
+            - expr: liveTurnTimeoutMs(env, 300000)
+            - sinceIndex: { ref: startIndex }
+        - assert:
+            expr: "outbound.text.includes(config.finalMarker) && !outbound.text.includes(config.failureMarker)"
+            message:
+              expr: "`full-access recovery lost capabilities: ${outbound.text}`"
+        - call: fs.readFile
+          saveAs: originalAfter
+          args:
+            - expr: "path.join(env.gateway.workspaceDir, 'restart-original.txt')"
+            - utf8
+        - call: fs.readFile
+          saveAs: freshAfter
+          args:
+            - expr: "path.join(env.gateway.workspaceDir, 'restart-fresh.txt')"
+            - utf8
+        - assert:
+            expr: "originalAfter === 'original-effect' + String.fromCharCode(10) && freshAfter === 'fresh-effect' + String.fromCharCode(10)"
+            message: recovered work either repeated the prior side effect or failed to execute fresh shell work
+        - call: waitForCondition
+          saveAs: childTask
+          args:
+            - lambda:
+                async: true
+                expr: "(await env.gateway.call('tasks.list', { agentId: 'qa', limit: 100 })).tasks?.find(task => task.title === 'restart-proof-child' && task.sessionKey === sessionKey && task.status === 'completed')"
+            - expr: liveTurnTimeoutMs(env, 60000)
+            - 50
+        - call: readSessionTranscriptSummary
+          saveAs: childTranscript
+          args:
+            - ref: env
+            - expr: childTask.childSessionKey
+        - assert:
+            expr: "childTranscript.finalText.trim() === 'CHILD-RESTART-OK'"
+            message: no successful child response was recorded
+        - set: outboundCountAfterDelivery
+          value:
+            expr: "state.getSnapshot().messages.filter(message => message.direction === 'outbound').length"
+        - waitForNoOutbound:
+            quietMs: 3000
+            sinceIndex: { ref: outboundCountAfterDelivery }
+        - set: finalMatches
+          value:
+            expr: "state.getSnapshot().messages.slice(startIndex).filter(message => message.direction === 'outbound' && message.conversation.id === conversationId && message.text.includes(config.finalMarker))"
+        - assert:
+            expr: "finalMatches.length === 1 && state.getSnapshot().messages.slice(startIndex).filter(message => message.direction === 'inbound' && message.conversation.id === conversationId).every(message => message.id === inbound.id)"
+            message: recovery required another user turn or delivered the final response more than once
+        - call: readSessionTranscriptSummary
+          saveAs: finalTranscript
+          args: [{ ref: env }, { ref: sessionKey }]
+        - assert:
+            expr: "finalTranscript.lastAssistantStopReason !== 'error' && finalTranscript.lastAssistantStopReason !== 'aborted'"
+            message: task did not automatically finish as a single original user turn
+      detailsExpr: "`session=${sessionKey} originalEffects=1 freshShellEffect=1 childCompleted=true final=${outbound.text}`"

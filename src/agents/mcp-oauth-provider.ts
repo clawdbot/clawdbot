@@ -6,12 +6,8 @@ import type { OAuthClientMetadata, OAuthTokens } from "@modelcontextprotocol/sdk
 import type { FetchLike } from "@modelcontextprotocol/sdk/shared/transport.js";
 import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
 import type { OpenClawStateLeaseContext } from "../state/openclaw-state-lease.js";
-import {
-  readMcpOAuthStore,
-  resolveMcpOAuthStoreKey,
-  updateMcpOAuthStore,
-  type McpOAuthStore,
-} from "./mcp-oauth-store.js";
+import type { McpOAuthIdentity } from "./mcp-oauth-identity.js";
+import { readMcpOAuthStore, updateMcpOAuthStore, type McpOAuthStore } from "./mcp-oauth-store.js";
 
 export type McpOAuthConfig = {
   scope?: unknown;
@@ -82,25 +78,21 @@ function beginMcpOAuthAuthorization(store: McpOAuthStore): McpOAuthStore {
 
 /** Creates the MCP SDK OAuth provider backed by canonical shared SQLite state. */
 export function createMcpOAuthClientProvider(params: {
-  serverName: string;
-  serverUrl: string;
+  identity: McpOAuthIdentity;
   config?: McpOAuthConfig;
-  onAuthorizationUrl?: (url: URL) => void | Promise<void>;
   allowAuthorizationRedirect?: boolean;
   suppressStoredTokens?: boolean;
   lease?: OpenClawStateLeaseContext;
 }): OAuthClientProvider {
   const config = params.config ?? {};
-  const storeKey = resolveMcpOAuthStoreKey(params.serverName, params.serverUrl);
+  const storeKey = params.identity.storeKey;
   const assertOwnedInTransaction = bindMcpOAuthLeaseAssertion(params.lease);
   const updateStore = (update: (store: McpOAuthStore) => McpOAuthStore) =>
     updateMcpOAuthStore(storeKey, update, assertOwnedInTransaction);
-  const allowAuthorizationRedirect =
-    params.allowAuthorizationRedirect ?? Boolean(params.onAuthorizationUrl);
   const assertAuthorizationRedirectAllowed = () => {
-    if (!allowAuthorizationRedirect) {
+    if (params.allowAuthorizationRedirect !== true) {
       throw new Error(
-        `MCP server "${params.serverName}" requires OAuth authorization. Run openclaw mcp login ${params.serverName}.`,
+        `MCP server "${params.identity.serverName}" requires OAuth authorization. Run openclaw mcp login ${params.identity.serverName}.`,
       );
     }
   };
@@ -124,13 +116,30 @@ export function createMcpOAuthClientProvider(params: {
       updateStore((store) => ({ ...beginMcpOAuthAuthorization(store), clientInformation }));
     },
     tokens() {
-      return params.suppressStoredTokens ? undefined : readMcpOAuthStore(storeKey).tokens;
+      if (params.suppressStoredTokens) {
+        return undefined;
+      }
+      const store = readMcpOAuthStore(storeKey);
+      const discoveredAuthorizationServerUrl = store.discoveryState?.authorizationServerUrl;
+      if (!store.tokens?.refresh_token || discoveredAuthorizationServerUrl === undefined) {
+        return store.tokens;
+      }
+      return store.tokensAuthorizationServerUrl !== undefined &&
+        discoveredAuthorizationServerUrl === store.tokensAuthorizationServerUrl
+        ? store.tokens
+        : undefined;
     },
     saveTokens(tokens) {
       updateStore((store) => {
         const next: McpOAuthStore = { ...store, tokens };
         delete next.credentialState;
         delete next.pendingAuthorizationChallenge;
+        const issuedBy = store.discoveryState?.authorizationServerUrl;
+        if (issuedBy === undefined) {
+          delete next.tokensAuthorizationServerUrl;
+        } else {
+          next.tokensAuthorizationServerUrl = issuedBy;
+        }
         const tokenExpiresAt = resolveTokenExpiresAt(tokens);
         if (tokenExpiresAt === undefined) {
           delete next.tokenExpiresAt;
@@ -145,8 +154,8 @@ export function createMcpOAuthClientProvider(params: {
       updateStore((store) => ({
         ...beginMcpOAuthAuthorization(store),
         lastAuthorizationUrl: authorizationUrl.toString(),
+        redirectUrl: resolveOAuthRedirectUrl(config, store),
       }));
-      await params.onAuthorizationUrl?.(authorizationUrl);
     },
     saveCodeVerifier(codeVerifier) {
       assertAuthorizationRedirectAllowed();
@@ -168,6 +177,7 @@ export function createMcpOAuthClientProvider(params: {
         if ((scope === "all" || scope === "tokens") && params.suppressStoredTokens !== true) {
           delete next.tokens;
           delete next.tokenExpiresAt;
+          delete next.tokensAuthorizationServerUrl;
           next.credentialState = "cleared";
         }
         if (scope === "all" || scope === "verifier") {

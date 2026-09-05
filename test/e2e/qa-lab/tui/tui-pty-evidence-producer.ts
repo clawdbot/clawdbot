@@ -11,6 +11,7 @@ import {
   type QaEvidenceSummaryJson,
   type QaSeedScenarioWithSource,
 } from "../../../../extensions/qa-lab/api.js";
+import { coerceErrorMessage as formatErrorMessage } from "../../../../scripts/lib/error-format.mts";
 import { createQaScriptEvidenceWriter } from "../runtime/script-evidence.js";
 
 const SOURCE_PATH = "test/e2e/qa-lab/tui/tui-pty-evidence-producer.ts";
@@ -24,6 +25,7 @@ const BUILT_CLI_REQUIREMENT =
   "cliMode=built requires readable openclaw.mjs and at least one readable dist/entry.js or dist/entry.mjs";
 
 export const TUI_PTY_TEST_FILE_ALLOWLIST = [
+  "src/tui/tui-pty-harness-assertion-test-support.test.ts",
   "src/tui/tui-pty-harness.e2e.test.ts",
   LOCAL_PTY_TEST_FILE,
   "src/tui/tui-reset-transition-pty.e2e.test.ts",
@@ -87,10 +89,6 @@ type ProducerDependencies = {
 type ProofMatrixCase = TuiPtyCase & {
   matchedAssertions: string[];
 };
-
-function formatErrorMessage(error: unknown) {
-  return error instanceof Error ? error.message : String(error);
-}
 
 function readOptionValue(argv: readonly string[], index: number, option: string) {
   const value = argv[index + 1];
@@ -175,10 +173,11 @@ function readTuiPtyCase(value: unknown, index: number): TuiPtyCase {
     );
   }
   try {
-    new RegExp(testNamePattern);
+    RegExp(testNamePattern);
   } catch (error) {
     throw new Error(
       `execution.config.tuiPtyCases[${index}].testNamePattern is invalid: ${formatErrorMessage(error)}`,
+      { cause: error },
     );
   }
   return { coverageId, testFile, testNamePattern };
@@ -265,6 +264,10 @@ export function buildTuiPtyVitestCommand(params: {
   const env: NodeJS.ProcessEnv = {
     ...process.env,
     OPENCLAW_BEHAVIOR_EVIDENCE: "1",
+    OPENCLAW_VITEST_FS_MODULE_CACHE_PATH: path.join(
+      path.dirname(params.reportPath),
+      "vitest-fs-module-cache",
+    ),
   };
   if (usesLocalPty) {
     env.OPENCLAW_TUI_PTY_INCLUDE_LOCAL = "1";
@@ -445,8 +448,6 @@ export async function runTuiPtyEvidenceProducer(
     codeRefs: scenario.codeRefs,
     docsRefs: scenario.docsRefs,
     id: scenario.id,
-    primaryCoverageIds: scenario.coverage?.primary ?? [],
-    secondaryCoverageIds: scenario.coverage?.secondary ?? [],
     sourcePath: SOURCE_PATH,
     title: scenario.title,
   };

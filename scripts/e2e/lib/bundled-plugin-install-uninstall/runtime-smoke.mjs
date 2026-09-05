@@ -6,9 +6,11 @@ import path from "node:path";
 import process from "node:process";
 import { setTimeout as delay } from "node:timers/promises";
 import { fileURLToPath } from "node:url";
+import { appendBoundedTail } from "../../../lib/bounded-output-tail.mjs";
 import {
   createBoundedResponseTooLargeError,
   readBoundedResponseText,
+  toLintErrorObject,
 } from "../../../lib/bounded-response.mjs";
 import { isRecord } from "../../../lib/record-shared.mjs";
 import { resolveWindowsTaskkillPath } from "../../../lib/windows-taskkill.mjs";
@@ -377,15 +379,6 @@ function isNonEmptyString(value) {
   return typeof value === "string" && value.trim().length > 0;
 }
 
-export function appendBoundedOutput(buffer, chunk, maxChars = OUTPUT_CAPTURE_CHARS) {
-  const nextText = buffer.text + String(chunk);
-  if (nextText.length <= maxChars) {
-    return { text: nextText, truncatedChars: buffer.truncatedChars };
-  }
-  const truncatedChars = buffer.truncatedChars + nextText.length - maxChars;
-  return { text: nextText.slice(-maxChars), truncatedChars };
-}
-
 function formatCapturedOutput(label, buffer) {
   if (!buffer.text) {
     return "";
@@ -452,10 +445,10 @@ export function runCommand(command, args, options = {}) {
     let timedOut = false;
     let settled = false;
     child.stdout?.on("data", (chunk) => {
-      stdout = appendBoundedOutput(stdout, chunk);
+      stdout = appendBoundedTail(stdout, chunk, OUTPUT_CAPTURE_CHARS);
     });
     child.stderr?.on("data", (chunk) => {
-      stderr = appendBoundedOutput(stderr, chunk);
+      stderr = appendBoundedTail(stderr, chunk, OUTPUT_CAPTURE_CHARS);
     });
     const clearCommandTimer = timeoutMs
       ? setTimeout(() => {
@@ -1549,18 +1542,4 @@ async function main(argv = process.argv.slice(2)) {
 
 if (process.argv[1] && path.resolve(process.argv[1]) === fileURLToPath(import.meta.url)) {
   await main();
-}
-
-function toLintErrorObject(value, fallbackMessage) {
-  if (value instanceof Error) {
-    return value;
-  }
-  if (typeof value === "string") {
-    return new Error(value);
-  }
-  const error = new Error(fallbackMessage, { cause: value });
-  if ((typeof value === "object" && value !== null) || typeof value === "function") {
-    Object.assign(error, value);
-  }
-  return error;
 }

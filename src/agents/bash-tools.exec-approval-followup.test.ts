@@ -3,6 +3,7 @@
  * Covers denied prompts, agent-session resume, wait handling, direct fallback,
  * and elevated runtime handoff routing.
  */
+import { createRequireRecord } from "openclaw/plugin-sdk/test-fixtures";
 import { afterEach, describe, expect, it, vi } from "vitest";
 
 vi.mock("./tools/gateway.js", () => ({
@@ -25,7 +26,12 @@ import {
   type DiagnosticEventPayload,
 } from "../infra/diagnostic-events.js";
 import { sendMessage } from "../infra/outbound/message.js";
+import {
+  claimExecApprovalFollowupRuntimeHandoff,
+  finalizeExecApprovalFollowupRuntimeHandoff,
+} from "./bash-tools.exec-approval-followup-state.js";
 import { sendExecApprovalFollowup } from "./bash-tools.exec-approval-followup.js";
+import { sendExecApprovalFollowupResult } from "./bash-tools.exec-host-shared.js";
 import { callGatewayTool } from "./tools/gateway.js";
 
 const tempStoreDirs: string[] = [];
@@ -66,12 +72,7 @@ afterEach(() => {
   }
 });
 
-function requireRecord(value: unknown, label: string): Record<string, unknown> {
-  if (!value || typeof value !== "object" || Array.isArray(value)) {
-    throw new Error(`expected ${label}`);
-  }
-  return value as Record<string, unknown>;
-}
+const requireRecord = createRequireRecord("record", "expected-label");
 
 function requireFirstMockCall(mock: unknown, label: string): unknown[] {
   const call = (mock as { mock?: { calls?: unknown[][] } }).mock?.calls?.[0];
@@ -150,6 +151,17 @@ function expectStableDirectDelivery(params: Record<string, unknown>, approvalId:
 }
 
 describe("exec approval followup", () => {
+  it("carries the prepared agent owner for a bare session key", async () => {
+    await sendExecApprovalFollowup({
+      approvalId: "req-bare-owner",
+      agentId: "research",
+      sessionKey: "global",
+      resultText: "Exec finished (gateway id=req-bare-owner, code 0)\nok",
+    });
+
+    expectGatewayAgentFollowup({ sessionKey: "global", agentId: "research" });
+  });
+
   it("uses an explicit denial prompt when the command did not run", async () => {
     await sendExecApprovalFollowup({
       approvalId: "req-1",
@@ -762,6 +774,38 @@ describe("exec approval followup", () => {
     expect(callGatewayTool).not.toHaveBeenCalled();
   });
 
+  it.each([
+    {
+      suppressionReason: "cancelled_by_message_sending_hook",
+      expectedMessage: "delivery was suppressed",
+    },
+    {
+      suppressionReason: "adapter_returned_no_identity",
+      expectedMessage: "delivery could not be confirmed",
+    },
+  ] as const)(
+    "rejects direct followup after $suppressionReason",
+    async ({ suppressionReason, expectedMessage }) => {
+      vi.mocked(sendMessage).mockResolvedValueOnce({
+        channel: "discord",
+        to: "123",
+        via: "direct",
+        mediaUrl: null,
+        deliveryStatus: "suppressed",
+        suppressionReason,
+      });
+
+      await expect(
+        sendExecApprovalFollowup({
+          approvalId: `req-${suppressionReason}`,
+          turnSourceChannel: "discord",
+          turnSourceTo: "123",
+          resultText: "Exec finished (gateway id=req-suppressed, code 0)\nall good",
+        }),
+      ).rejects.toThrow(expectedMessage);
+    },
+  );
+
   it("redacts credentials before direct delivery", async () => {
     const secret = "sk-abcdefghijklmnopqrstuvwxyz123456";
 
@@ -785,7 +829,8 @@ describe("exec approval followup", () => {
   it("can force direct delivery even when a session key exists", async () => {
     await sendExecApprovalFollowup({
       approvalId: "req-direct",
-      sessionKey: "agent:main:telegram:direct:123",
+      agentId: "research",
+      sessionKey: "global",
       turnSourceChannel: "telegram",
       turnSourceTo: "123",
       turnSourceAccountId: "default",
@@ -798,6 +843,7 @@ describe("exec approval followup", () => {
       channel: "telegram",
       to: "123",
       accountId: "default",
+      agentId: "research",
       content: "pasteable diagnostics report",
       idempotencyKey: "exec-approval-followup:req-direct",
     });
@@ -932,21 +978,45 @@ describe("exec approval followup", () => {
     expect(sendMessage).not.toHaveBeenCalled();
   });
 
-  it("carries the runtime handoff separately from idempotency without exposing elevated defaults", async () => {
-    await sendExecApprovalFollowup({
+  it("registers the runtime handoff before default followup dispatch without exposing elevated defaults", async () => {
+    const target = {
       approvalId: "req-elevated-75832",
       sessionKey: "agent:main:telegram:direct:123",
       turnSourceChannel: "telegram",
-      resultText: "Exec finished (gateway id=req-elevated-75832, code 0)\nok",
-      internalRuntimeHandoffId: "handoff-75832",
-      idempotencyKey: "exec-approval-followup:req-elevated-75832:nonce:nonce-75832",
+      bashElevated: { enabled: true, allowed: true, defaultLevel: "on" as const },
+    };
+    const resultText = "Exec finished (gateway id=req-elevated-75832, code 0)\nok";
+    let handoff: ReturnType<typeof claimExecApprovalFollowupRuntimeHandoff>;
+    vi.mocked(callGatewayTool).mockImplementationOnce(async (_method, _options, rawParams) => {
+      const params = requireRecord(rawParams, "followup dispatch params");
+      const handoffId = String(params.internalRuntimeHandoffId);
+      handoff = claimExecApprovalFollowupRuntimeHandoff({
+        handoffId,
+        approvalId: target.approvalId,
+        sessionKey: target.sessionKey,
+        idempotencyKey: String(params.idempotencyKey),
+        claimId: "followup-default-dispatch",
+      });
+      finalizeExecApprovalFollowupRuntimeHandoff({
+        handoffId,
+        claimId: "followup-default-dispatch",
+      });
+      return { status: "ok" };
     });
+    await sendExecApprovalFollowupResult(target, resultText);
 
     const agentArgs = expectGatewayAgentFollowup({
       sessionKey: "agent:main:telegram:direct:123",
       channel: "telegram",
-      idempotencyKey: "exec-approval-followup:req-elevated-75832:nonce:nonce-75832",
-      internalRuntimeHandoffId: "handoff-75832",
+    });
+    expectAuthenticatedHandoff(agentArgs, target);
+    expect(handoff).toEqual({
+      kind: "exec-approval-followup",
+      approvalId: target.approvalId,
+      sessionKey: target.sessionKey,
+      idempotencyKey: agentArgs.idempotencyKey,
+      bashElevated: target.bashElevated,
+      resultText,
     });
     expect(agentArgs.message).toContain("ok");
     expect(agentArgs.inputProvenance).toEqual({

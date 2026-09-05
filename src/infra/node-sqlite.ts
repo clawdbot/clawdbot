@@ -1,6 +1,7 @@
 // Loads node:sqlite with OpenClaw warning handling.
 import { createRequire } from "node:module";
 import path from "node:path";
+import { pathToFileURL } from "node:url";
 import { formatErrorMessage } from "./errors.js";
 import { isSqliteWalResetSafeVersion } from "./sqlite-runtime-version.js";
 import { isSqliteLockError } from "./sqlite-transaction.js";
@@ -27,6 +28,20 @@ export function resolveNodeSqliteLocation(location: string): string {
     return location;
   }
   return resolveSqliteFilesystemPath(location);
+}
+
+/** Build an immutable SQLite URI without losing the Windows long-path namespace. */
+export function resolveImmutableSqliteFileUri(
+  pathname: string,
+  platform: NodeJS.Platform = process.platform,
+): string {
+  if (platform === "win32") {
+    const namespacedPath = path.win32.toNamespacedPath(path.win32.resolve(pathname));
+    // SQLite decodes path escapes after separating the query string, so the
+    // encoded \\?\ prefix reaches the Windows VFS without becoming URI syntax.
+    return `file:${encodeURIComponent(namespacedPath)}?mode=ro&immutable=1`;
+  }
+  return `${pathToFileURL(path.resolve(pathname)).href}?mode=ro&immutable=1`;
 }
 
 function assertSqliteWalResetSafeVersion(version: string, nodeVersion: string): void {
@@ -98,14 +113,30 @@ export function openNodeSqliteDatabase(
     : new sqlite.DatabaseSync(resolvedLocation, options);
 }
 
+/** Compare versions only across reads on the same connection. */
+export function readSqliteDataVersion(database: import("node:sqlite").DatabaseSync): number {
+  // SAFETY: SQLite names this PRAGMA's column data_version; its numeric value is checked below.
+  const row = database.prepare("PRAGMA data_version").get() as { data_version?: unknown };
+  if (typeof row.data_version !== "number") {
+    throw new Error("SQLite did not return a numeric PRAGMA data_version");
+  }
+  return row.data_version;
+}
+
 /** Hold a raw exclusive transaction until release for cross-process coordination. */
 export function tryAcquireExclusiveSqliteCoordinator(
   location: string,
+  options: { busyTimeoutMs?: number } = {},
 ): { release: () => void } | null {
+  const busyTimeoutMs = Math.max(0, Math.trunc(options.busyTimeoutMs ?? 0));
   const database = openNodeSqliteDatabase(location);
   try {
     // Kysely transaction callbacks cannot own a lock beyond their synchronous commit section.
-    database.exec("PRAGMA busy_timeout = 0; BEGIN EXCLUSIVE;");
+    // This handle never writes or commits data. Keep the empty database's initial
+    // journal in memory so acquiring a lock does not create filesystem artifacts.
+    database.exec(
+      `PRAGMA busy_timeout = ${busyTimeoutMs}; PRAGMA journal_mode = MEMORY; BEGIN EXCLUSIVE;`,
+    );
   } catch (error) {
     database.close();
     if (isSqliteLockError(error)) {
@@ -115,10 +146,22 @@ export function tryAcquireExclusiveSqliteCoordinator(
   }
   return {
     release: () => {
+      const errors: unknown[] = [];
       try {
         database.exec("ROLLBACK");
-      } finally {
+      } catch (error) {
+        errors.push(error);
+      }
+      try {
         database.close();
+      } catch (error) {
+        errors.push(error);
+      }
+      if (errors.length === 1) {
+        throw errors[0];
+      }
+      if (errors.length > 1) {
+        throw new AggregateError(errors, "SQLite coordinator rollback and close both failed");
       }
     },
   };

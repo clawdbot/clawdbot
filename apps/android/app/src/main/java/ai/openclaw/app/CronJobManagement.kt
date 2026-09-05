@@ -288,10 +288,17 @@ internal fun CronEditorDraftState.reconcileRestoredAction(
   // Preserve pending only when the restored runtime still owns this Save.
   val retainedSaveState =
     when (actionState) {
-      is GatewayCronActionState.Running ->
+      is GatewayCronActionState.Running -> {
         actionState.id == jobId && actionState.action == GatewayCronAction.Save
-      is GatewayCronActionState.Notice -> actionState.id == jobId
-      GatewayCronActionState.Idle -> false
+      }
+
+      is GatewayCronActionState.Notice -> {
+        actionState.id == jobId
+      }
+
+      GatewayCronActionState.Idle -> {
+        false
+      }
     }
   return if (isConnected && retainedSaveState) this else saveAborted()
 }
@@ -362,44 +369,70 @@ internal fun GatewayCronJobDetail.toCronJobEdit(): GatewayCronJobEdit =
     deleteAfterRun = deleteAfterRun && scheduleKind == "at",
     schedule =
       when (scheduleKind) {
-        "at" -> GatewayCronScheduleEdit.At(at = scheduleAt.orEmpty())
-        "every" ->
+        "at" -> {
+          GatewayCronScheduleEdit.At(at = scheduleAt.orEmpty())
+        }
+
+        "every" -> {
           GatewayCronScheduleEdit.Every(
             everyMs = scheduleEveryMs?.toString().orEmpty(),
             anchorMs = scheduleAnchorMs?.toString().orEmpty(),
           )
-        "cron" ->
+        }
+
+        "cron" -> {
           GatewayCronScheduleEdit.Cron(
             expression = scheduleCronExpr.orEmpty(),
             timezone = scheduleTimezone.orEmpty(),
             staggerMs = scheduleStaggerMs?.toString().orEmpty(),
           )
-        "on-exit" ->
+        }
+
+        "on-exit" -> {
           GatewayCronScheduleEdit.OnExit(
             command = scheduleCommand.orEmpty(),
             cwd = scheduleCwd.orEmpty(),
           )
-        else -> error("Unsupported cron schedule kind: $scheduleKind")
+        }
+
+        else -> {
+          error("Unsupported cron schedule kind: $scheduleKind")
+        }
       },
     sessionTarget = sessionTarget,
     wakeMode = wakeMode,
     payload =
       when (payloadKind) {
-        "systemEvent" -> GatewayCronPayloadEdit.SystemEvent(text = payloadText.orEmpty())
-        "agentTurn" ->
+        "systemEvent" -> {
+          GatewayCronPayloadEdit.SystemEvent(text = payloadText.orEmpty())
+        }
+
+        "agentTurn" -> {
           GatewayCronPayloadEdit.AgentTurn(
             message = payloadText.orEmpty(),
             model = payloadModel.orEmpty(),
             thinking = payloadThinking.orEmpty(),
           )
-        "command" ->
+        }
+
+        "command" -> {
           GatewayCronPayloadEdit.Command(
             argvJson = JsonArray(payloadCommandArgv.orEmpty().map(::JsonPrimitive)).toString(),
             cwd = payloadCommandCwd.orEmpty(),
           )
-        "script" -> GatewayCronPayloadEdit.ReadOnlyScript(script = payloadText.orEmpty())
-        "wake" -> GatewayCronPayloadEdit.ReadOnlyWake
-        else -> error("Unsupported cron payload kind: $payloadKind")
+        }
+
+        "script" -> {
+          GatewayCronPayloadEdit.ReadOnlyScript(script = payloadText.orEmpty())
+        }
+
+        "wake" -> {
+          GatewayCronPayloadEdit.ReadOnlyWake
+        }
+
+        else -> {
+          error("Unsupported cron payload kind: $payloadKind")
+        }
       },
   )
 
@@ -511,6 +544,7 @@ private fun buildCronSchedulePatch(
         }
       }
     }
+
     is GatewayCronScheduleEdit.Every -> {
       require(original.scheduleKind == "every") { "Changing schedule type is not supported here." }
       val everyMs = edit.everyMs.trim().toLongOrNull()
@@ -526,6 +560,7 @@ private fun buildCronSchedulePatch(
         }
       }
     }
+
     is GatewayCronScheduleEdit.Cron -> {
       require(original.scheduleKind == "cron") { "Changing schedule type is not supported here." }
       val expression = edit.expression.trim()
@@ -549,6 +584,7 @@ private fun buildCronSchedulePatch(
         }
       }
     }
+
     is GatewayCronScheduleEdit.OnExit -> {
       require(original.scheduleKind == "on-exit") { "Changing schedule type is not supported here." }
       val command = edit.command.trim()
@@ -584,6 +620,7 @@ private fun buildCronPayloadPatch(
         }
       }
     }
+
     is GatewayCronPayloadEdit.AgentTurn -> {
       require(original.payloadKind == "agentTurn") { "Changing payload type is not supported here." }
       val message = edit.message.trim()
@@ -607,6 +644,7 @@ private fun buildCronPayloadPatch(
         }
       }
     }
+
     is GatewayCronPayloadEdit.Command -> {
       require(original.payloadKind == "command") { "Changing payload type is not supported here." }
       val argv = parseCommandArgv(edit.argvJson)
@@ -626,12 +664,14 @@ private fun buildCronPayloadPatch(
         }
       }
     }
+
     is GatewayCronPayloadEdit.ReadOnlyScript -> {
       require(original.payloadKind == "script" && edit.script == original.payloadText) {
         "Script payloads are read-only on Android."
       }
       null
     }
+
     GatewayCronPayloadEdit.ReadOnlyWake -> {
       require(original.payloadKind == "wake") { "Changing payload type is not supported here." }
       null

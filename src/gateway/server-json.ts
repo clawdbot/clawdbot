@@ -3,7 +3,7 @@
 import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
 
 /** Safely parses an optional JSON string, returning a payloadJSON wrapper on parse failure. */
-export function safeParseJson(value: string | null | undefined): unknown {
+export function parseGatewayPayload(value: string | null | undefined): unknown {
   const trimmed = normalizeOptionalString(value);
   if (!trimmed) {
     return undefined;

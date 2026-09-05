@@ -2,8 +2,16 @@ import { createHash } from "node:crypto";
 import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
+import { runBestEffortCleanup } from "../../infra/non-fatal-cleanup.js";
+import { createSubsystemLogger } from "../../logging/subsystem.js";
 import { runCommandBuffered, runCommandWithTimeout } from "../../process/exec.js";
 import type { WorkerWorkspaceReconcileRequest } from "./tunnel-contract.js";
+import { boundedWorkerError } from "./worker-error.js";
+import {
+  activeWorkspaceHashContext,
+  withWorkspaceHashContext,
+  withWorkspaceHashMemo,
+} from "./workspace-hash-memo.js";
 import {
   MAX_RECONCILIATION_ENTRIES,
   MAX_RECONCILIATION_FILE_BYTES,
@@ -17,12 +25,18 @@ import { reconciliationEntries } from "./workspace-reconcile-derived-paths.js";
 import { absoluteEntryMatches, localPath } from "./workspace-reconcile-fs.js";
 import {
   applyStagedWorkerWorkspace,
-  changedEntryPaths,
   inspectAcceptedWorkerWorkspace,
+  manifestNodes,
   type WorkerWorkspaceApplyResult,
 } from "./workspace-reconcile.js";
+import {
+  requireWorkspaceResultGit as requireGit,
+  updateWorkspaceResultRefs,
+  withWorkspaceResultRefMutation,
+  workspaceResultGitCommand as gitCommand,
+  WORKSPACE_RESULT_GIT_TIMEOUT_MS as PATCH_TIMEOUT_MS,
+} from "./workspace-result-git.js";
 
-const PATCH_TIMEOUT_MS = 10 * 60_000;
 // Match managed-worktree refs/openclaw/snapshots: deleting the owning ref is
 // sufficient; unreachable objects may remain until normal Git GC.
 const WORKER_RESULT_REF_PREFIX = "refs/openclaw/worker-results";
@@ -31,45 +45,51 @@ const WORKER_RESULT_CLEANUP_REF_PREFIX = "refs/openclaw/worker-result-cleanup";
 const WORKER_RESULT_CLAIM_ID_PATTERN = /^[A-Za-z0-9-]+$/u;
 const STAGED_RESULT_MESSAGE = "OpenClaw worker workspace result";
 const STAGED_RESULT_METADATA_LIMIT = 128 * 1024 * 1024 + 4_096;
-// Git documents the platform null device as the per-command way to disable
-// hooks. An unowned path under a shared temp dir could be populated by another user.
-const DISABLED_GIT_HOOKS_PATH = os.devNull;
-
-function gitCommand(cwd: string, args: string[]): string[] {
-  return ["git", "-c", `core.hooksPath=${DISABLED_GIT_HOOKS_PATH}`, "-C", cwd, ...args];
-}
+const workspaceLog = createSubsystemLogger("gateway/worker-workspace");
 
 export function workerWorkspaceTransferPaths(
   current: WorkerWorkspaceManifest,
   base: WorkerWorkspaceManifest,
 ): string[] {
   // Staging is directory-agnostic because it transfers file and symlink bytes only.
-  const changed = changedEntryPaths(base, current);
-  const paths = reconciliationEntries(current.entries)
-    .filter((entry) => changed.has(entry.path))
-    .map((entry) => {
-      if (entry.type === "file" && entry.size > MAX_RECONCILIATION_FILE_BYTES) {
-        throw new Error(`Cloud workspace result is too large: ${entry.path}`);
-      }
-      return entry.path;
-    });
-  if (paths.length > MAX_RECONCILIATION_ENTRIES) {
+  return parseChangedWorkspaceResult(base, current).entries.map((entry) => entry.path);
+}
+
+function parseChangedWorkspaceResult(
+  base: WorkerWorkspaceManifest,
+  current: WorkerWorkspaceManifest,
+  enforceRecordLimit = true,
+): { changed: boolean; entries: WorkerWorkspaceManifestEntry[] } {
+  const baseNodes = manifestNodes(base);
+  const currentNodes = manifestNodes(current);
+  const changed = new Set(
+    [...new Set([...baseNodes.keys(), ...currentNodes.keys()])].filter(
+      (entryPath) =>
+        JSON.stringify(baseNodes.get(entryPath)) !== JSON.stringify(currentNodes.get(entryPath)),
+    ),
+  );
+  const recordCount = [...changed].reduce(
+    (count, entryPath) =>
+      count + Number(baseNodes.has(entryPath)) + Number(currentNodes.has(entryPath)),
+    0,
+  );
+  if (enforceRecordLimit && recordCount > MAX_RECONCILIATION_ENTRIES) {
     throw new Error(
       `Cloud workspace reconciliation exceeds the ${MAX_RECONCILIATION_ENTRIES} entry limit`,
     );
   }
-  return paths;
-}
-
-async function requireGit(cwd: string, args: string[]): Promise<string> {
-  const result = await runCommandWithTimeout(gitCommand(cwd, args), {
-    timeoutMs: PATCH_TIMEOUT_MS,
-    maxOutputBytes: 1024 * 1024,
-  });
-  if (result.termination !== "exit" || result.code !== 0) {
-    throw new Error((result.stderr || result.stdout || `git ${args[0]} failed`).trim());
+  let totalBytes = 0;
+  const entries = reconciliationEntries(current.entries).filter((entry) => changed.has(entry.path));
+  for (const entry of entries) {
+    if (entry.type === "file" && entry.size > MAX_RECONCILIATION_FILE_BYTES) {
+      throw new Error(`Cloud workspace result is too large: ${entry.path}`);
+    }
+    totalBytes += entry.type === "file" ? entry.size : Buffer.byteLength(entry.target);
+    if (totalBytes > MAX_RECONCILIATION_TOTAL_BYTES) {
+      throw new Error("Cloud workspace staged result exceeds its byte limit");
+    }
   }
-  return result.stdout.trim();
+  return { changed: recordCount > 0, entries };
 }
 
 function requireWorkerResultStorageRef(ref: string): string {
@@ -187,7 +207,7 @@ function stagedResultMessage(params: {
   const base = Buffer.from(params.baseManifestRaw);
   const current = Buffer.from(params.currentManifestRaw);
   const header = Buffer.from(
-    `${STAGED_RESULT_MESSAGE}\nversion 1\nbase-ref ${params.baseManifestRef}\ncurrent-ref ${params.currentManifestRef}\nbase-bytes ${base.byteLength}\ncurrent-bytes ${current.byteLength}\n\n`,
+    `${STAGED_RESULT_MESSAGE}\nversion 2\nbase-ref ${params.baseManifestRef}\ncurrent-ref ${params.currentManifestRef}\nbase-bytes ${base.byteLength}\ncurrent-bytes ${current.byteLength}\n\n`,
   );
   return Buffer.concat([header, base, current]);
 }
@@ -244,25 +264,14 @@ async function stageWorkerWorkspaceResult(params: {
     params.currentManifestRaw,
     params.currentManifestRef,
   );
-  // This ref is the complete worker-result artifact, not a patch cache. Keep
-  // unchanged blobs too so recovery is self-contained after the worker dies.
-  const entries = reconciliationEntries(current.entries).toSorted((left, right) =>
+  // The authenticated manifests define the complete result. The durable tree
+  // stores only changed resulting blobs; deletions intentionally have no blob.
+  const entries = parseChangedWorkspaceResult(base, current).entries.toSorted((left, right) =>
     left.path.localeCompare(right.path),
   );
-  if (entries.length > MAX_RECONCILIATION_ENTRIES) {
-    throw new Error(
-      `Cloud workspace reconciliation exceeds the ${MAX_RECONCILIATION_ENTRIES} entry limit`,
-    );
-  }
-  const changed = changedEntryPaths(base, current);
   const blobs: Array<{ entry: WorkerWorkspaceManifestEntry; mark: number; content: Buffer }> = [];
-  let totalBytes = 0;
   for (const [index, entry] of entries.entries()) {
-    if (entry.type === "file" && entry.size > MAX_RECONCILIATION_FILE_BYTES) {
-      throw new Error(`Cloud workspace result is too large: ${entry.path}`);
-    }
-    const sourceRoot = changed.has(entry.path) ? params.stagingRoot : root;
-    const source = localPath(sourceRoot, entry.path);
+    const source = localPath(params.stagingRoot, entry.path);
     if (!(await absoluteEntryMatches(source, entry))) {
       throw new Error(`Cloud workspace staged payload is invalid: ${entry.path}`);
     }
@@ -274,10 +283,6 @@ async function stageWorkerWorkspaceResult(params: {
         createHash("sha256").update(content).digest("hex") !== entry.sha256)
     ) {
       throw new Error(`Cloud workspace staged payload changed while reading: ${entry.path}`);
-    }
-    totalBytes += content.byteLength;
-    if (totalBytes > MAX_RECONCILIATION_TOTAL_BYTES) {
-      throw new Error("Cloud workspace staged result exceeds its byte limit");
     }
     blobs.push({ entry, mark: index + 1, content });
   }
@@ -304,11 +309,13 @@ async function stageWorkerWorkspaceResult(params: {
     chunks.push(Buffer.from(`M ${mode} :${blob.mark} ${quoteFastImportPath(blob.entry.path)}\n`));
   }
   chunks.push(Buffer.from("done\n"));
-  const imported = await runCommandBuffered(gitCommand(root, ["fast-import", "--quiet"]), {
-    input: Buffer.concat(chunks),
-    timeoutMs: PATCH_TIMEOUT_MS,
-    maxOutputBytes: { stdout: 1024 * 1024, stderr: 1024 * 1024 },
-  });
+  const imported = await withWorkspaceResultRefMutation(root, () =>
+    runCommandBuffered(gitCommand(root, ["fast-import", "--quiet"]), {
+      input: Buffer.concat(chunks),
+      timeoutMs: PATCH_TIMEOUT_MS,
+      maxOutputBytes: { stdout: 1024 * 1024, stderr: 1024 * 1024 },
+    }),
+  );
   if (imported.termination !== "exit" || imported.code !== 0) {
     throw new Error(imported.stderr.toString("utf8").trim() || "git fast-import failed");
   }
@@ -320,6 +327,8 @@ type LoadedStagedWorkerWorkspace = {
   currentManifestRef: string;
   base: WorkerWorkspaceManifest;
   current: WorkerWorkspaceManifest;
+  changed: boolean;
+  changedEntries: WorkerWorkspaceManifestEntry[];
   objectsByPath: Map<string, { mode: string; objectId: string }>;
 };
 
@@ -345,6 +354,7 @@ async function loadStagedWorkerWorkspace(
     throw new Error("Cloud workspace staged result metadata is invalid");
   }
   const lines = message.subarray(0, metadataEnd).toString("utf8").split("\n");
+  const version = lines[1] === "version 1" ? 1 : lines[1] === "version 2" ? 2 : undefined;
   const match = /^sha256:[a-f0-9]{64}$/u;
   const baseManifestRef = lines[2]?.slice("base-ref ".length) ?? "";
   const currentManifestRef = lines[3]?.slice("current-ref ".length) ?? "";
@@ -352,7 +362,7 @@ async function loadStagedWorkerWorkspace(
   const currentBytes = Number(lines[5]?.slice("current-bytes ".length));
   if (
     lines[0] !== STAGED_RESULT_MESSAGE ||
-    lines[1] !== "version 1" ||
+    version === undefined ||
     !lines[2]?.startsWith("base-ref ") ||
     !lines[3]?.startsWith("current-ref ") ||
     !lines[4]?.startsWith("base-bytes ") ||
@@ -375,6 +385,12 @@ async function loadStagedWorkerWorkspace(
   const currentRaw = manifests.subarray(baseBytes).toString("utf8");
   const base = parseWorkerWorkspaceManifest(baseRaw, baseManifestRef);
   const current = parseWorkerWorkspaceManifest(currentRaw, currentManifestRef);
+  // Shipped v1 refs carry a complete current tree and predate the conservative
+  // manifest worst-case record gate. Recovery still validates their manifests,
+  // tree shape, and changed payload bytes; the apply owner caps actual records.
+  const changedResult = parseChangedWorkspaceResult(base, current, version !== 1);
+  const changedEntries = changedResult.entries;
+  const treeEntries = version === 1 ? reconciliationEntries(current.entries) : changedEntries;
   const tree = await runCommandBuffered(
     gitCommand(root, ["ls-tree", "-r", "-z", "--full-tree", ref]),
     { timeoutMs: PATCH_TIMEOUT_MS, maxOutputBytes: 2 * MAX_RECONCILIATION_FILE_BYTES },
@@ -392,11 +408,10 @@ async function loadStagedWorkerWorkspace(
     }
     objectsByPath.set(parsed[3]!, { mode: parsed[1]!, objectId: parsed[2]! });
   }
-  const entries = reconciliationEntries(current.entries);
-  if (objectsByPath.size !== entries.length) {
+  if (objectsByPath.size !== treeEntries.length) {
     throw new Error("Cloud workspace staged result tree does not match its manifest");
   }
-  for (const entry of entries) {
+  for (const entry of treeEntries) {
     const object = objectsByPath.get(entry.path);
     const expectedMode =
       entry.type === "symlink" ? "120000" : (entry.mode & 0o111) !== 0 ? "100755" : "100644";
@@ -404,7 +419,15 @@ async function loadStagedWorkerWorkspace(
       throw new Error(`Cloud workspace staged result tree is invalid: ${entry.path}`);
     }
   }
-  return { baseManifestRef, currentManifestRef, base, current, objectsByPath };
+  return {
+    baseManifestRef,
+    currentManifestRef,
+    base,
+    current,
+    changed: changedResult.changed,
+    changedEntries,
+    objectsByPath,
+  };
 }
 
 async function materializeStagedEntry(params: {
@@ -440,6 +463,14 @@ export async function applyStagedWorkerWorkspaceResult(params: {
     conflictPaths: string[];
   }) => Promise<void>;
 }): Promise<WorkerWorkspaceApplyResult & { changed: boolean }> {
+  return await withWorkspaceHashContext(
+    async () => await applyStagedWorkerWorkspaceResultWithMemo(params),
+  );
+}
+
+async function applyStagedWorkerWorkspaceResultWithMemo(
+  params: Parameters<typeof applyStagedWorkerWorkspaceResult>[0],
+): Promise<WorkerWorkspaceApplyResult & { changed: boolean }> {
   const root = await fs.realpath(params.root);
   const staged = await loadStagedWorkerWorkspace(root, params.stagedResultRef);
   if (params.alreadyAccepted || staged.baseManifestRef !== params.expectedBaseManifestRef) {
@@ -459,16 +490,12 @@ export async function applyStagedWorkerWorkspaceResult(params: {
     params.journal.commit(accepted.manifestRef);
     return {
       ...accepted,
-      changed: changedEntryPaths(staged.base, staged.current).size > 0,
+      changed: staged.changed,
     };
   }
-  const changed = changedEntryPaths(staged.base, staged.current);
   const stagingRoot = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-staged-result-"));
   try {
-    for (const entry of reconciliationEntries(staged.current.entries)) {
-      if (!changed.has(entry.path)) {
-        continue;
-      }
+    for (const entry of staged.changedEntries) {
       const object = staged.objectsByPath.get(entry.path)!;
       const content = await readGitBlob({
         root,
@@ -494,9 +521,13 @@ export async function applyStagedWorkerWorkspaceResult(params: {
       journal: params.journal,
       publishAcceptedManifest: params.publishAcceptedManifest,
     });
-    return { ...applied, changed: changed.size > 0 };
+    return { ...applied, changed: staged.changed };
   } finally {
-    await fs.rm(stagingRoot, { recursive: true, force: true });
+    await runBestEffortCleanup({
+      cleanup: () => fs.rm(stagingRoot, { recursive: true, force: true }),
+      onError: (error) =>
+        workspaceLog.warn(`worker workspace staging cleanup failed: ${boundedWorkerError(error)}`),
+    });
   }
 }
 
@@ -523,6 +554,9 @@ async function prepareRequestedWorkerWorkspaceResult(params: {
     throw new Error("Cloud workspace durable result staging was not requested");
   }
   const candidateRef = preparedWorkerWorkspaceResultRef(stagedResult.ref);
+  const active = activeWorkspaceHashContext();
+  const hashMemo = active?.memo ?? new Map();
+  const metrics = active?.metrics;
   let appliedWorkspaceResult: WorkerWorkspaceApplyResult | undefined;
   await stageWorkerWorkspaceResult({
     root: params.request.localPath,
@@ -536,13 +570,18 @@ async function prepareRequestedWorkerWorkspaceResult(params: {
   return {
     applyPreparedStagedResult: async () => {
       const root = await ensureWorkerWorkspaceResultRepository(params.request.localPath);
-      appliedWorkspaceResult = await applyStagedWorkerWorkspaceResult({
-        root,
-        stagedResultRef: candidateRef,
-        expectedBaseManifestRef: params.request.baseManifestRef,
-        journal: params.request.journal,
-        publishAcceptedManifest: params.publishAcceptedManifest,
-      });
+      appliedWorkspaceResult = await withWorkspaceHashMemo(
+        hashMemo,
+        async () =>
+          await applyStagedWorkerWorkspaceResult({
+            root,
+            stagedResultRef: candidateRef,
+            expectedBaseManifestRef: params.request.baseManifestRef,
+            journal: params.request.journal,
+            publishAcceptedManifest: params.publishAcceptedManifest,
+          }),
+        metrics,
+      );
     },
     getAppliedWorkspaceResult: () => appliedWorkspaceResult,
     verifyLocalStable: async () => {
@@ -554,8 +593,10 @@ async function prepareRequestedWorkerWorkspaceResult(params: {
     publishStagedResult: async () => {
       const root = await ensureWorkerWorkspaceResultRepository(params.request.localPath);
       const commit = await requireGit(root, ["rev-parse", `${candidateRef}^{commit}`]);
-      await requireGit(root, ["update-ref", stagedResult.ref, commit]);
-      await requireGit(root, ["update-ref", "-d", candidateRef]);
+      await updateWorkspaceResultRefs(root, [
+        { ref: stagedResult.ref, objectId: commit },
+        { ref: candidateRef },
+      ]);
       // Final fences precede publishing. Preserve the canonical ref on any
       // SQLite failure so restart recovery can discover the verified result.
       stagedResult.record(stagedResult.ref);
@@ -575,10 +616,12 @@ export async function deleteStagedWorkerWorkspaceResult(params: {
 }): Promise<void> {
   const root = await fs.realpath(params.root);
   const stagedResultRef = requireWorkerResultStorageRef(params.stagedResultRef);
-  await requireGit(root, ["update-ref", "-d", stagedResultRef]);
-  if (stagedResultRef.startsWith(`${WORKER_RESULT_REF_PREFIX}/`)) {
-    await requireGit(root, ["update-ref", "-d", preparedWorkerWorkspaceResultRef(stagedResultRef)]);
-  }
+  await updateWorkspaceResultRefs(root, [
+    { ref: stagedResultRef },
+    ...(stagedResultRef.startsWith(`${WORKER_RESULT_REF_PREFIX}/`)
+      ? [{ ref: preparedWorkerWorkspaceResultRef(stagedResultRef) }]
+      : []),
+  ]);
 }
 
 export async function moveStagedWorkerWorkspaceResultToCleanup(params: {
@@ -589,10 +632,13 @@ export async function moveStagedWorkerWorkspaceResultToCleanup(params: {
   const stagedResultRef = requireWorkerResultRef(params.stagedResultRef);
   const cleanupRef = cleanupWorkerWorkspaceResultRef(stagedResultRef);
   const commit = await requireGit(root, ["rev-parse", `${stagedResultRef}^{commit}`]);
-  // The temporary cleanup namespace survives the SQLite fence removal. Either
-  // side of this two-step move is therefore discoverable after a crash.
-  await requireGit(root, ["update-ref", cleanupRef, commit]);
-  await deleteStagedWorkerWorkspaceResult({ root, stagedResultRef });
+  // Complete the ref move before removing the SQLite fence, keeping an
+  // inspectable result on either side of a crash.
+  await updateWorkspaceResultRefs(root, [
+    { ref: cleanupRef, objectId: commit },
+    { ref: stagedResultRef },
+    { ref: preparedWorkerWorkspaceResultRef(stagedResultRef) },
+  ]);
   return cleanupRef;
 }
 
@@ -608,13 +654,15 @@ export async function restoreStagedWorkerWorkspaceResultFromCleanup(params: {
   }
   const stagedResultRef = requireWorkerResultRef(params.stagedResultRef);
   const commit = await requireGit(root, ["rev-parse", `${cleanupRef}^{commit}`]);
-  await requireGit(root, ["update-ref", stagedResultRef, commit]);
-  await requireGit(root, ["update-ref", "-d", cleanupRef]);
+  await updateWorkspaceResultRefs(root, [
+    { ref: stagedResultRef, objectId: commit },
+    { ref: cleanupRef },
+  ]);
 }
 
 export async function deleteWorkerWorkspaceResultCleanupRefs(params: {
   root: string;
-  retainedRefs?: ReadonlySet<string>;
+  retainedRefs?: () => ReadonlySet<string>;
 }): Promise<void> {
   const root = await fs.realpath(params.root);
   const output = await requireGit(root, [
@@ -622,11 +670,17 @@ export async function deleteWorkerWorkspaceResultCleanupRefs(params: {
     "--format=%(refname)",
     `${WORKER_RESULT_CLEANUP_REF_PREFIX}/`,
   ]);
-  for (const cleanupRef of output.split("\n").filter(Boolean)) {
-    requireWorkerResultStorageRef(cleanupRef);
-    if (!params.retainedRefs?.has(cleanupRef)) {
-      await requireGit(root, ["update-ref", "-d", cleanupRef]);
-    }
+  const cleanupRefs = output.split("\n").filter(Boolean);
+  if (cleanupRefs.length > 0) {
+    await updateWorkspaceResultRefs(root, () => {
+      // Read fences after inventory and the shared ref queue wait. Later
+      // claims cannot appear in these immutable claim refs.
+      const retainedRefs = params.retainedRefs?.();
+      return cleanupRefs
+        .map(requireWorkerResultStorageRef)
+        .filter((ref) => !retainedRefs?.has(ref))
+        .map((ref) => ({ ref }));
+    });
   }
 }
 

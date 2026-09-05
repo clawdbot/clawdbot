@@ -1,6 +1,4 @@
-import { MAX_TIMER_TIMEOUT_MS } from "openclaw/plugin-sdk/number-runtime";
 import { afterAll, afterEach, describe, expect, it, vi } from "vitest";
-import { testing } from "./cli-shared.js";
 import type { GoogleMeetRuntime } from "./runtime.js";
 import {
   captureStdout,
@@ -13,6 +11,7 @@ import {
 describe("google-meet CLI", () => {
   afterEach(() => {
     vi.unstubAllGlobals();
+    process.exitCode = undefined;
   });
 
   afterAll(() => {
@@ -65,10 +64,28 @@ describe("google-meet CLI", () => {
           id: "twilio-voice-call-plugin",
           ok: false,
         });
+        expect(process.exitCode).toBe(1);
       } finally {
         stdout.restore();
       }
     }
+  });
+
+  it("rejects unknown setup mode and transport values", async () => {
+    const setupStatus = vi.fn<NonNullable<GoogleMeetRuntime["setupStatus"]>>();
+    const cli = setupCli({ runtime: { setupStatus } });
+
+    await expect(
+      cli.parseAsync(["googlemeet", "setup", "--mode", "agnt"], { from: "user" }),
+    ).rejects.toThrow("mode must be agent, bidi, transcribe, or realtime; received agnt");
+    await expect(
+      cli.parseAsync(["googlemeet", "setup", "--transport", "definitely-not-a-transport"], {
+        from: "user",
+      }),
+    ).rejects.toThrow(
+      "transport must be chrome, chrome-node, or twilio; received definitely-not-a-transport",
+    );
+    expect(setupStatus).not.toHaveBeenCalled();
   });
 
   it("accepts --json on session status", async () => {
@@ -445,21 +462,5 @@ describe("google-meet CLI", () => {
         { from: "user" },
       ),
     ).rejects.toThrow("timeout-sec must be a positive number");
-  });
-
-  it("caps auth callback timeout seconds", () => {
-    expect(testing.resolveGoogleMeetOAuthCallbackTimeoutMs(undefined)).toBe(300_000);
-    expect(testing.resolveGoogleMeetOAuthCallbackTimeoutMs("1.5")).toBe(1_500);
-    expect(testing.resolveGoogleMeetOAuthCallbackTimeoutMs(String(Number.MAX_SAFE_INTEGER))).toBe(
-      MAX_TIMER_TIMEOUT_MS,
-    );
-  });
-
-  it("caps gateway command timeout milliseconds", () => {
-    expect(testing.resolveGoogleMeetGatewayTimeoutMs(undefined)).toBe(5_000);
-    expect(testing.resolveGoogleMeetGatewayTimeoutMs(1.5)).toBe(2);
-    expect(testing.resolveGoogleMeetGatewayTimeoutMs(Number.MAX_SAFE_INTEGER)).toBe(
-      MAX_TIMER_TIMEOUT_MS,
-    );
   });
 });

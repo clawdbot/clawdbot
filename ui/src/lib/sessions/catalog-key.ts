@@ -4,6 +4,7 @@ import type {
   SessionsCatalogListResult,
 } from "../../../../packages/gateway-protocol/src/index.ts";
 import type { GatewayBrowserClient } from "../../api/gateway.ts";
+import { normalizeAgentId } from "./session-key.ts";
 
 export type CatalogSessionKey = {
   catalogId: string;
@@ -16,7 +17,10 @@ export type CatalogSessionKey = {
     instead of waiting for the next catalog poll. */
 export const CATALOG_SESSION_CONTINUED_EVENT = "openclaw-session-catalog-continued";
 
-export type CatalogSessionContinuedDetail = CatalogSessionKey & { sessionKey: string };
+export type CatalogSessionContinuedDetail = CatalogSessionKey & {
+  agentId: string;
+  sessionKey: string;
+};
 
 export function announceCatalogSessionContinued(detail: CatalogSessionContinuedDetail): void {
   document.dispatchEvent(
@@ -38,14 +42,16 @@ type CatalogSessionLookup = {
 export async function lookupCatalogSession(params: {
   client: Pick<GatewayBrowserClient, "request">;
   key: CatalogSessionKey;
+  agentId: string;
   isCurrent: () => boolean;
 }): Promise<CatalogSessionLookup | null> {
-  const { client, key } = params;
+  const { agentId, client, key } = params;
   let cursor: string | undefined;
   const seenCursors = new Set<string>();
   let host: SessionCatalogHost | null = null;
   for (let pageIndex = 0; pageIndex < CATALOG_SESSION_LOOKUP_MAX_PAGES; pageIndex += 1) {
     const listed = await client.request<SessionsCatalogListResult>("sessions.catalog.list", {
+      agentId,
       catalogId: key.catalogId,
       hostIds: [key.hostId],
       limitPerHost: CATALOG_SESSION_LOOKUP_PAGE_LIMIT,
@@ -70,8 +76,10 @@ export async function lookupCatalogSession(params: {
   return { host, session: null };
 }
 
-export function buildCatalogSessionKey(key: CatalogSessionKey): string {
-  return `catalog:${encodeURIComponent(key.catalogId)}:${encodeURIComponent(key.hostId)}:${encodeURIComponent(key.threadId)}`;
+export function buildCatalogSessionKey(key: CatalogSessionKey, agentId?: string): string {
+  const source = `catalog:${encodeURIComponent(key.catalogId)}:${encodeURIComponent(key.hostId)}:${encodeURIComponent(key.threadId)}`;
+  // Source rows are ownerless; routed panes carry the agent through retention and split focus.
+  return agentId ? `agent:${normalizeAgentId(agentId)}:${source}` : source;
 }
 
 export function catalogSessionSearch(key: CatalogSessionKey): string {
@@ -91,10 +99,12 @@ export function catalogSessionKeyFromSearch(search: string): CatalogSessionKey |
 }
 
 export function parseCatalogSessionKey(value: string | null | undefined): CatalogSessionKey | null {
-  if (!value?.startsWith("catalog:")) {
+  // Strip only the owner prefix: native source identifiers are case-sensitive.
+  const source = value?.replace(/^agent:[^:]+:/u, "");
+  if (!source?.startsWith("catalog:")) {
     return null;
   }
-  const parts = value.slice("catalog:".length).split(":");
+  const parts = source.slice("catalog:".length).split(":");
   if (parts.length !== 3 || parts.some((part) => !part)) {
     return null;
   }

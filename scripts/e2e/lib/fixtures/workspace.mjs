@@ -1,26 +1,15 @@
 // Workspace fixture writer commands for E2E scenarios.
 import fs from "node:fs";
 import path from "node:path";
+import { readPositiveIntEnv } from "../env-limits.mjs";
 import { readTextFileTail } from "../text-file-utils.mjs";
-import { assert, readJson, requireArg, write, writeJson } from "./common.mjs";
+import { assert, readJson, requireArg, write } from "./common.mjs";
 
 const AGENTS_DELETE_OUTPUT_MAX_BYTES = readPositiveIntEnv(
   "OPENCLAW_FIXTURE_AGENTS_DELETE_OUTPUT_MAX_BYTES",
   1024 * 1024,
 );
 const ERROR_DETAIL_TAIL_BYTES = 16 * 1024;
-
-function readPositiveIntEnv(name, fallback) {
-  const text = String(process.env[name] ?? fallback).trim();
-  if (!/^\d+$/u.test(text)) {
-    throw new Error(`invalid ${name}: ${text}`);
-  }
-  const value = Number(text);
-  if (!Number.isSafeInteger(value) || value <= 0) {
-    throw new Error(`invalid ${name}: ${text}`);
-  }
-  return value;
-}
 
 function writeOpenWebUiWorkspace() {
   const workspace =
@@ -34,24 +23,9 @@ function writeOpenWebUiWorkspace() {
   fs.rmSync(path.join(workspace, "BOOTSTRAP.md"), { force: true });
 }
 
-function writeAgentsDeleteConfig() {
-  const stateDir = requireArg(process.env.OPENCLAW_STATE_DIR, "OPENCLAW_STATE_DIR");
-  const sharedWorkspace = requireArg(process.env.SHARED_WORKSPACE, "SHARED_WORKSPACE");
-  const gatewayToken = process.env.OPENCLAW_GATEWAY_TOKEN?.trim();
-  fs.mkdirSync(sharedWorkspace, { recursive: true });
-  writeJson(path.join(stateDir, "openclaw.json"), {
-    agents: {
-      entries: {
-        main: { workspace: sharedWorkspace },
-        ops: { workspace: sharedWorkspace },
-      },
-    },
-    ...(gatewayToken ? { gateway: { auth: { mode: "token", token: gatewayToken } } } : {}),
-  });
-}
-
-function assertAgentsDeleteResult([outputPath]) {
+function assertAgentsDeleteResult([outputPath, agentsPath]) {
   const resolvedOutputPath = requireArg(outputPath, "outputPath");
+  const resolvedAgentsPath = requireArg(agentsPath, "agentsPath");
   const outputStat = fs.statSync(resolvedOutputPath);
   if (outputStat.isFile() && outputStat.size > AGENTS_DELETE_OUTPUT_MAX_BYTES) {
     throw new Error(
@@ -76,28 +50,29 @@ function assertAgentsDeleteResult([outputPath]) {
     [parsed.workspace, process.env.SHARED_WORKSPACE, "workspace"],
     [parsed.workspaceRetained, true, "workspaceRetained"],
     [parsed.workspaceRetainedReason, "shared", "workspaceRetainedReason"],
+    [parsed.transport, "gateway", "transport"],
   ];
   for (const [actual, expected, label] of comparisons) {
     assert(actual === expected, `${label} mismatch: ${JSON.stringify(actual)}`);
   }
   assert(
-    Array.isArray(parsed.workspaceSharedWith) && parsed.workspaceSharedWith.includes("main"),
-    "missing shared-with main marker",
+    Array.isArray(parsed.workspaceSharedWith) && parsed.workspaceSharedWith.includes("alpha"),
+    "missing shared-with alpha marker",
   );
   assert(fs.existsSync(process.env.SHARED_WORKSPACE), "shared workspace was removed");
-  const remaining =
-    readJson(path.join(process.env.OPENCLAW_STATE_DIR, "openclaw.json"))?.agents?.entries ?? {};
+  const agents = readJson(resolvedAgentsPath);
+  assert(Array.isArray(agents), "agents list did not emit an array");
+  assert(!agents.some((entry) => entry?.id === "ops"), "deleted agent remained in agent list");
   assert(
-    remaining && typeof remaining === "object" && !Array.isArray(remaining),
-    "agents entries missing after delete",
+    agents.some(
+      (entry) => entry?.id === "alpha" && entry?.workspace === process.env.SHARED_WORKSPACE,
+    ),
+    "shared surviving agent missing from agent list",
   );
-  assert(!Object.hasOwn(remaining, "ops"), "deleted agent remained in config");
-  assert(Object.hasOwn(remaining, "main"), "main agent missing after delete");
   console.log("agents delete shared workspace smoke ok");
 }
 
 export const workspaceCommands = {
   "openwebui-workspace": writeOpenWebUiWorkspace,
-  "agents-delete-config": writeAgentsDeleteConfig,
   "agents-delete-assert": assertAgentsDeleteResult,
 };

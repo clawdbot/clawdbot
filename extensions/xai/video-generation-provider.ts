@@ -1,7 +1,6 @@
 // Xai provider module implements model/runtime integration.
 import { toImageDataUrl } from "openclaw/plugin-sdk/image-generation";
 import { resolveGeneratedMediaMaxBytes } from "openclaw/plugin-sdk/media-generation-runtime";
-import { isProviderApiKeyConfigured } from "openclaw/plugin-sdk/provider-auth";
 import { resolveApiKeyForProvider } from "openclaw/plugin-sdk/provider-auth-runtime";
 import {
   assertOkOrThrowHttpError,
@@ -17,42 +16,24 @@ import {
 import { isRecord, normalizeOptionalString } from "openclaw/plugin-sdk/string-coerce-runtime";
 import type {
   VideoGenerationProvider,
-  VideoGenerationProviderCapabilities,
   VideoGenerationRequest,
 } from "openclaw/plugin-sdk/video-generation";
+import {
+  DEFAULT_XAI_VIDEO_BASE_URL,
+  DEFAULT_XAI_VIDEO_MODEL,
+  XAI_VIDEO_ASPECT_RATIOS,
+  XAI_VIDEO_DEFAULT_TIMEOUT_MS,
+  createXaiVideoGenerationProviderMetadata,
+  isXaiVideo15Model,
+} from "./capability-provider-metadata.js";
 import {
   downloadXaiVideo,
   fetchXaiVideoResponse,
   type XaiVideoRequestPolicy,
 } from "./video-generation-transport.js";
 
-const DEFAULT_XAI_VIDEO_BASE_URL = "https://api.x.ai/v1";
-const DEFAULT_XAI_VIDEO_MODEL = "grok-imagine-video";
-const XAI_VIDEO_15_MODEL = "grok-imagine-video-1.5";
-const XAI_VIDEO_15_MODEL_IDS = new Set([
-  XAI_VIDEO_15_MODEL,
-  "grok-imagine-video-1.5-preview",
-  "grok-imagine-video-1.5-2026-05-30",
-]);
-const DEFAULT_TIMEOUT_MS = 600_000;
 const POLL_INTERVAL_MS = 5_000;
 const MAX_POLL_ATTEMPTS = 120;
-const XAI_VIDEO_ASPECT_RATIOS = new Set(["1:1", "16:9", "9:16", "4:3", "3:4", "3:2", "2:3"]);
-const XAI_VIDEO_15_CAPABILITIES = {
-  imageToVideo: {
-    enabled: true,
-    maxVideos: 1,
-    maxInputImages: 1,
-    maxDurationSeconds: 15,
-    aspectRatios: [...XAI_VIDEO_ASPECT_RATIOS],
-    resolutions: ["480P", "720P", "1080P"],
-    supportsAspectRatio: true,
-    supportsResolution: true,
-  },
-  videoToVideo: {
-    enabled: false,
-  },
-} satisfies VideoGenerationProviderCapabilities;
 const XAI_VIDEO_MALFORMED_RESPONSE = "xAI video generation response malformed";
 // xAI documents these as the only meaningful values; everything else (queued,
 // processing, submitted, pending, in_progress, ...) means "keep polling".
@@ -167,11 +148,6 @@ function resolveRequiredImageUrl(input: VideoGenerationSourceInput): string {
 
 function isReferenceImage(input: VideoGenerationSourceInput): boolean {
   return normalizeOptionalString(input.role)?.toLowerCase() === "reference_image";
-}
-
-function isXaiVideo15Model(model: string | undefined): boolean {
-  const normalized = normalizeOptionalString(model);
-  return normalized ? XAI_VIDEO_15_MODEL_IDS.has(normalized) : false;
 }
 
 function isFirstFrameImage(input: VideoGenerationSourceInput): boolean {
@@ -385,9 +361,9 @@ async function pollXaiVideo(
       },
       timeoutMs: createProviderOperationTimeoutResolver({
         deadline,
-        defaultTimeoutMs: DEFAULT_TIMEOUT_MS,
+        defaultTimeoutMs: XAI_VIDEO_DEFAULT_TIMEOUT_MS,
       }),
-      defaultTimeoutMs: DEFAULT_TIMEOUT_MS,
+      defaultTimeoutMs: XAI_VIDEO_DEFAULT_TIMEOUT_MS,
       allowPrivateNetwork: params.allowPrivateNetwork,
       dispatcherPolicy: params.dispatcherPolicy,
       fetchFn: params.fetchFn,
@@ -418,52 +394,7 @@ async function pollXaiVideo(
 
 export function buildXaiVideoGenerationProvider(): VideoGenerationProvider {
   return {
-    id: "xai",
-    label: "xAI",
-    defaultModel: DEFAULT_XAI_VIDEO_MODEL,
-    defaultTimeoutMs: DEFAULT_TIMEOUT_MS,
-    models: [DEFAULT_XAI_VIDEO_MODEL, XAI_VIDEO_15_MODEL],
-    catalogByModel: {
-      [XAI_VIDEO_15_MODEL]: {
-        capabilities: XAI_VIDEO_15_CAPABILITIES,
-        modes: ["imageToVideo"],
-      },
-    },
-    isConfigured: (ctx) => isProviderApiKeyConfigured({ provider: "xai", ...ctx }),
-    capabilities: {
-      generate: {
-        maxVideos: 1,
-        maxDurationSeconds: 15,
-        aspectRatios: [...XAI_VIDEO_ASPECT_RATIOS],
-        resolutions: ["480P", "720P"],
-        supportsAspectRatio: true,
-        supportsResolution: true,
-      },
-      imageToVideo: {
-        enabled: true,
-        maxVideos: 1,
-        maxInputImages: 7,
-        maxDurationSeconds: 15,
-        aspectRatios: [...XAI_VIDEO_ASPECT_RATIOS],
-        resolutions: ["480P", "720P"],
-        supportsAspectRatio: true,
-        supportsResolution: true,
-      },
-      videoToVideo: {
-        enabled: true,
-        maxVideos: 1,
-        maxInputVideos: 1,
-        maxDurationSeconds: 10,
-        supportsAspectRatio: false,
-        supportsResolution: false,
-      },
-    },
-    resolveModelCapabilities: ({ model }): VideoGenerationProviderCapabilities | undefined => {
-      if (!isXaiVideo15Model(model)) {
-        return undefined;
-      }
-      return XAI_VIDEO_15_CAPABILITIES;
-    },
+    ...createXaiVideoGenerationProviderMetadata(),
     async generateVideo(req) {
       // Validate provider/model mode constraints before auth or HTTP setup so
       // unsupported 1.5 requests cannot be submitted and billed accidentally.
@@ -507,7 +438,7 @@ export function buildXaiVideoGenerationProvider(): VideoGenerationProvider {
         body: createBody,
         timeoutMs: resolveProviderOperationTimeoutMs({
           deadline,
-          defaultTimeoutMs: DEFAULT_TIMEOUT_MS,
+          defaultTimeoutMs: XAI_VIDEO_DEFAULT_TIMEOUT_MS,
         }),
         fetchFn,
         allowPrivateNetwork,
@@ -528,7 +459,7 @@ export function buildXaiVideoGenerationProvider(): VideoGenerationProvider {
           headers,
           timeoutMs: resolveProviderOperationTimeoutMs({
             deadline,
-            defaultTimeoutMs: DEFAULT_TIMEOUT_MS,
+            defaultTimeoutMs: XAI_VIDEO_DEFAULT_TIMEOUT_MS,
           }),
           baseUrl,
           allowPrivateNetwork,
@@ -543,9 +474,9 @@ export function buildXaiVideoGenerationProvider(): VideoGenerationProvider {
           url: videoUrl,
           timeoutMs: createProviderOperationTimeoutResolver({
             deadline,
-            defaultTimeoutMs: DEFAULT_TIMEOUT_MS,
+            defaultTimeoutMs: XAI_VIDEO_DEFAULT_TIMEOUT_MS,
           }),
-          defaultTimeoutMs: DEFAULT_TIMEOUT_MS,
+          defaultTimeoutMs: XAI_VIDEO_DEFAULT_TIMEOUT_MS,
           allowPrivateNetwork,
           dispatcherPolicy,
           fetchFn,

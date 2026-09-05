@@ -1,9 +1,6 @@
 // Memory Core tests cover generic embedding provider.bridge plugin behavior.
 import type { OpenClawConfig } from "openclaw/plugin-sdk/config-contracts";
-import type {
-  EmbeddingInput,
-  EmbeddingProviderCallOptions,
-} from "openclaw/plugin-sdk/embedding-providers";
+import type { EmbeddingProvider } from "openclaw/plugin-sdk/embedding-providers";
 import {
   createPluginRegistryFixture,
   registerVirtualTestPlugin,
@@ -16,23 +13,12 @@ import {
   listRegisteredEmbeddingProviders,
   type RegisteredEmbeddingProvider,
   restoreRegisteredEmbeddingProviders,
-  clearMemoryEmbeddingProviders,
-  listRegisteredMemoryEmbeddingProviders,
-  type RegisteredMemoryEmbeddingProvider,
-  restoreRegisteredMemoryEmbeddingProviders,
   setActivePluginRegistry,
 } from "openclaw/plugin-sdk/plugin-test-runtime";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import { createEmbeddingProvider, resolveEmbeddingProviderIndexIdentity } from "./embeddings.js";
 
-type CapturedCall = {
-  kind: "embed" | "embedBatch";
-  input: EmbeddingInput | EmbeddingInput[];
-  options: EmbeddingProviderCallOptions | undefined;
-};
-
 let embeddingProvidersSnapshot: RegisteredEmbeddingProvider[];
-let memoryEmbeddingProvidersSnapshot: RegisteredMemoryEmbeddingProvider[];
 let previousPluginRegistry: ReturnType<typeof getActivePluginRegistry>;
 
 function createOptions(config: OpenClawConfig) {
@@ -49,22 +35,18 @@ function createOptions(config: OpenClawConfig) {
 beforeEach(() => {
   previousPluginRegistry = getActivePluginRegistry();
   embeddingProvidersSnapshot = listRegisteredEmbeddingProviders();
-  memoryEmbeddingProvidersSnapshot = listRegisteredMemoryEmbeddingProviders();
   clearEmbeddingProviders();
-  clearMemoryEmbeddingProviders();
 });
 
 afterEach(() => {
   clearEmbeddingProviders();
-  clearMemoryEmbeddingProviders();
   setActivePluginRegistry(previousPluginRegistry ?? createEmptyPluginRegistry());
   restoreRegisteredEmbeddingProviders(embeddingProvidersSnapshot);
-  restoreRegisteredMemoryEmbeddingProviders(memoryEmbeddingProvidersSnapshot);
 });
 
-describe("memory-core generic embedding provider bridge", () => {
-  it("adapts a contract-declared generic embedding plugin into explicit memory requests", async () => {
-    const calls: CapturedCall[] = [];
+describe("memory-core generic embedding provider contract", () => {
+  it("preserves a contract-declared provider and its identity metadata", async () => {
+    let createdProvider: EmbeddingProvider | undefined;
     const { config, registry } = createPluginRegistryFixture({
       plugins: {
         enabled: false,
@@ -106,23 +88,16 @@ describe("memory-core generic embedding provider bridge", () => {
             expect(options.model).toBe("virtual-model");
             expect(options.dimensions).toBe(7);
             expect(options.config).toBe(config);
+            createdProvider = {
+              id: "virtual-generic",
+              model: options.model,
+              dimensions: options.dimensions,
+              maxInputTokens: 2048,
+              embed: async () => [1, 2, 3],
+              embedBatch: async (inputs) => inputs.map((_input, index) => [index, 7]),
+            };
             return {
-              provider: {
-                id: "virtual-generic",
-                model: options.model,
-                dimensions: options.dimensions,
-                maxInputTokens: 2048,
-                embed: async (input, callOptions) => {
-                  calls.push({ kind: "embed", input, options: callOptions });
-                  return callOptions?.inputType === "query" ? [1, 2, 3] : [0];
-                },
-                embedBatch: async (inputs, callOptions) => {
-                  calls.push({ kind: "embedBatch", input: inputs, options: callOptions });
-                  return inputs.map((_input, index) =>
-                    callOptions?.inputType === "document" ? [index, 7] : [0],
-                  );
-                },
-              },
+              provider: createdProvider,
               runtime: {
                 id: "virtual-generic",
                 inlineQueryTimeoutMs: 1234,
@@ -156,8 +131,6 @@ describe("memory-core generic embedding provider bridge", () => {
     expect(registry.registry.embeddingProviders.map((entry) => entry.provider.id)).toEqual([
       "virtual-generic",
     ]);
-    expect(listRegisteredMemoryEmbeddingProviders()).toEqual([]);
-
     expect(resolveEmbeddingProviderIndexIdentity(createOptions(config))).toEqual({
       provider: { id: "virtual-generic", model: "virtual-model" },
       cacheKeyData: {
@@ -206,41 +179,6 @@ describe("memory-core generic embedding provider bridge", () => {
       ],
     });
 
-    await expect(result.provider?.embedQuery("query")).resolves.toEqual([1, 2, 3]);
-    await expect(result.provider?.embedBatch(["doc-a", "doc-b"])).resolves.toEqual([
-      [0, 7],
-      [1, 7],
-    ]);
-    await expect(
-      result.provider?.embedBatchInputs?.([
-        {
-          text: "structured doc",
-          parts: [{ type: "text", text: "structured doc" }],
-        },
-      ]),
-    ).resolves.toEqual([[0, 7]]);
-
-    expect(calls).toEqual([
-      {
-        kind: "embed",
-        input: "query",
-        options: { inputType: "query" },
-      },
-      {
-        kind: "embedBatch",
-        input: ["doc-a", "doc-b"],
-        options: { inputType: "document" },
-      },
-      {
-        kind: "embedBatch",
-        input: [
-          {
-            text: "structured doc",
-            parts: [{ type: "text", text: "structured doc" }],
-          },
-        ],
-        options: { inputType: "document" },
-      },
-    ]);
+    expect(result.provider).toBe(createdProvider);
   });
 });

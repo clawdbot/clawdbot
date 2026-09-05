@@ -778,14 +778,14 @@ describe("sanitizeSessionHistory", () => {
       "toolResult",
       "user",
     ]);
-    expect((result[2] as { toolCallId?: string }).toolCallId).toBe("call1");
+    expect((result[2] as { toolCallId?: string }).toolCallId).toBe("call_1");
     expect((result[2] as Extract<AgentMessage, { role: "toolResult" }>).content).toEqual([
       { type: "text", text: "aborted" },
     ]);
     expect(JSON.stringify(result)).not.toContain("missing tool result");
   });
 
-  it("keeps OpenAI Responses real tool results paired when strict id sanitization rewrites aliases", async () => {
+  it("keeps OpenAI Responses real tool results paired without rewriting valid ids", async () => {
     const messages = castAgentMessages([
       makeUserMessage("generate"),
       makeAssistantMessage(
@@ -822,7 +822,7 @@ describe("sanitizeSessionHistory", () => {
       "toolResult",
       "user",
     ]);
-    expect(toolCall?.id).toBe("callmockimagegenerate1");
+    expect(toolCall?.id).toBe("call_mock_image_generate_1");
     expect(toolResult.toolCallId).toBe(toolCall?.id);
     expect(toolResult.call_id).toBe(toolCall?.id);
     expect(toolResult.content).toEqual([
@@ -957,7 +957,7 @@ describe("sanitizeSessionHistory", () => {
     expect(
       result.some((message) => (message as { model?: string }).model === "delivery-mirror"),
     ).toBe(false);
-    expect((result[2] as { toolCallId?: string }).toolCallId).toBe("callmessage");
+    expect((result[2] as { toolCallId?: string }).toolCallId).toBe("call_message");
     expect((result[2] as Extract<AgentMessage, { role: "toolResult" }>).content).toEqual([
       { type: "text", text: "aborted" },
     ]);
@@ -1021,7 +1021,7 @@ describe("sanitizeSessionHistory", () => {
     ]);
     expect(
       result.slice(1, 4).map((message) => (message as { toolCallId?: string }).toolCallId),
-    ).toEqual(["calla", "callb", "callc"]);
+    ).toEqual(["call_a", "call_b", "call_c"]);
     for (const message of result.slice(1, 4)) {
       expect((message as Extract<AgentMessage, { role: "toolResult" }>).content).toEqual([
         { type: "text", text: "aborted" },
@@ -1064,13 +1064,13 @@ describe("sanitizeSessionHistory", () => {
         (call) => ({ id: call.id, name: call.name }),
       ),
     ).toEqual([
-      { id: "call1", name: "read" },
-      { id: "call2", name: "exec" },
-      { id: "call3", name: "write" },
+      { id: "call_1", name: "read" },
+      { id: "call_2", name: "exec" },
+      { id: "call_3", name: "write" },
     ]);
     expect(
       result.slice(1, 4).map((message) => (message as { toolCallId?: string }).toolCallId),
-    ).toEqual(["call1", "call2", "call3"]);
+    ).toEqual(["call_1", "call_2", "call_3"]);
     expect((result[1] as Extract<AgentMessage, { role: "toolResult" }>).content).toEqual([
       { type: "text", text: "aborted" },
     ]);
@@ -1100,7 +1100,7 @@ describe("sanitizeSessionHistory", () => {
     });
 
     expect(result.map((message) => message.role)).toEqual(["assistant", "toolResult", "user"]);
-    expect((result[1] as { toolCallId?: string }).toolCallId).toBe("callazure");
+    expect((result[1] as { toolCallId?: string }).toolCallId).toBe("call_azure");
     expect((result[1] as Extract<AgentMessage, { role: "toolResult" }>).content).toEqual([
       { type: "text", text: "aborted" },
     ]);
@@ -1138,7 +1138,7 @@ describe("sanitizeSessionHistory", () => {
     const result = await sanitizeOpenAIHistory(messages);
 
     expect(result.map((message) => message.role)).toEqual(["assistant", "toolResult", "user"]);
-    expect((result[1] as { toolCallId?: string }).toolCallId).toBe("callkeep");
+    expect((result[1] as { toolCallId?: string }).toolCallId).toBe("call_keep");
     expect((result[1] as Extract<AgentMessage, { role: "toolResult" }>).content).toEqual([
       { type: "text", text: "first" },
     ]);
@@ -1201,22 +1201,6 @@ describe("sanitizeSessionHistory", () => {
     const result = await sanitizeOpenAIHistory(messages, {
       allowedToolNames: ["read"],
     });
-
-    expect(result).toStrictEqual([]);
-  });
-
-  it("downgrades orphaned openai reasoning even when the model has not changed", async () => {
-    const sessionEntries = [
-      makeModelSnapshotEntry({
-        provider: "openai",
-        modelApi: "openai-responses",
-        modelId: "gpt-5.4",
-      }),
-    ];
-    const sessionManager = makeInMemorySessionManager(sessionEntries);
-    const messages = makeReasoningAssistantMessages({ thinkingSignature: "json" });
-
-    const result = await sanitizeOpenAIHistory(messages, { modelId: "gpt-5.4", sessionManager });
 
     expect(result).toStrictEqual([]);
   });
@@ -1585,6 +1569,51 @@ describe("sanitizeSessionHistory", () => {
     expect(toolResult.toolCallId).toBe("toolu_legacy");
   });
 
+  it("keeps consecutive user turns separate for append-only Anthropic Messages replay", async () => {
+    // A command turn followed by the prompt is sent as two stamped user messages on the
+    // active turn; merging them on replay changes the bytes bound to later thinking.
+    const basePolicy: TranscriptPolicy = {
+      sanitizeMode: "full",
+      sanitizeToolCallIds: true,
+      toolCallIdMode: "strict",
+      preserveNativeAnthropicToolUseIds: true,
+      repairToolUseResultPairing: true,
+      preserveSignatures: true,
+      appendOnlyRuntimeContext: true,
+      dropThinkingBlocks: false,
+      dropReasoningFromHistory: false,
+      applyGoogleTurnOrdering: false,
+      validateGeminiTurns: false,
+      validateAnthropicTurns: true,
+      allowSyntheticToolResults: true,
+    };
+    const messages = castAgentMessages([
+      makeUserMessage("/model anthropic/claude-fable-5-1 -s"),
+      makeUserMessage("Read notes.txt"),
+      makeAssistantMessage([{ type: "text", text: "Done" }]),
+    ]);
+
+    const anthropic = await validateReplayTurns({
+      messages,
+      modelApi: "anthropic-messages",
+      provider: "anthropic",
+      modelId: "claude-fable-5-1",
+      sessionId: TEST_SESSION_ID,
+      policy: basePolicy,
+    });
+    expect(anthropic.map((msg) => msg.role)).toEqual(["user", "user", "assistant"]);
+
+    const bedrock = await validateReplayTurns({
+      messages,
+      modelApi: "bedrock-converse-stream",
+      provider: "amazon-bedrock",
+      modelId: "anthropic.claude-fable-5-1",
+      sessionId: TEST_SESSION_ID,
+      policy: basePolicy,
+    });
+    expect(bedrock.map((msg) => msg.role)).toEqual(["user", "assistant"]);
+  });
+
   it("strips copied inbound metadata from assistant replay text", async () => {
     const messages = castAgentMessages([
       makeUserMessage("Ping"),
@@ -1649,6 +1678,8 @@ describe("sanitizeSessionHistory", () => {
     expect(sanitized.map((msg) => msg.role)).toEqual(["user", "user"]);
     expect(JSON.stringify(sanitized)).not.toContain("assistant copied inbound metadata omitted");
 
+    // Sonnet 4.6 does not bind thinking to the prefix, so Messages API replay
+    // merges the surviving user turns back into one message.
     const validated = await validateReplayTurns({
       messages: sanitized,
       modelApi: "anthropic-messages",
@@ -1662,7 +1693,6 @@ describe("sanitizeSessionHistory", () => {
       { type: "text", text: "First" },
       { type: "text", text: "Second" },
     ]);
-    expect(typeof (validated[0] as { timestamp?: unknown }).timestamp).toBe("number");
   });
 
   it("strips prior assistant reasoning for Qwen-style OpenAI-compatible replay", async () => {

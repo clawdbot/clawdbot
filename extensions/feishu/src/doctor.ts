@@ -7,6 +7,7 @@ import type {
   ChannelDoctorSequenceResult,
 } from "openclaw/plugin-sdk/channel-contract";
 import type { OpenClawConfig } from "openclaw/plugin-sdk/config-contracts";
+import { isPathStrictlyInside } from "openclaw/plugin-sdk/file-access-runtime";
 import { normalizeAgentId } from "openclaw/plugin-sdk/routing";
 import {
   isValidAgentHarnessSessionStoreEntry,
@@ -17,7 +18,10 @@ import {
   resolveStorePath,
 } from "openclaw/plugin-sdk/session-store-runtime";
 import { resolveStateDir } from "openclaw/plugin-sdk/state-paths";
-import { isRecord } from "openclaw/plugin-sdk/string-coerce-runtime";
+import {
+  isRecord,
+  normalizeLowercaseStringOrEmpty,
+} from "openclaw/plugin-sdk/string-coerce-runtime";
 import { legacyConfigRules, normalizeCompatibilityConfig } from "./doctor-contract.js";
 
 const FEISHU_STATE_DIR = "feishu";
@@ -130,13 +134,6 @@ function safeReadDir(dir: string): fs.Dirent[] {
   }
 }
 
-function isPathWithinRoot(targetPath: string, rootPath: string): boolean {
-  const resolvedTarget = path.resolve(targetPath);
-  const resolvedRoot = path.resolve(rootPath);
-  const relative = path.relative(resolvedRoot, resolvedTarget);
-  return relative !== "" && !relative.startsWith("..") && !path.isAbsolute(relative);
-}
-
 function formatDisplayPath(filePath: string): string {
   const home = os.homedir();
   const resolved = path.resolve(filePath);
@@ -175,10 +172,6 @@ function isFeishuAcpBindingSessionKey(key: string): boolean {
   return /^agent:[^:]+:acp:binding:feishu(?::|$)/.test(key.trim().toLowerCase());
 }
 
-function normalizeMetadataString(value: unknown): string {
-  return typeof value === "string" ? value.trim().toLowerCase() : "";
-}
-
 function isFeishuSessionEntry(key: string, value: unknown): boolean {
   if (isFeishuAcpBindingSessionKey(key)) {
     return false;
@@ -190,29 +183,29 @@ function isFeishuSessionEntry(key: string, value: unknown): boolean {
     return false;
   }
   if (
-    normalizeMetadataString(value.channel) === "feishu" ||
-    normalizeMetadataString(value.lastChannel) === "feishu"
+    normalizeLowercaseStringOrEmpty(value.channel) === "feishu" ||
+    normalizeLowercaseStringOrEmpty(value.lastChannel) === "feishu"
   ) {
     return true;
   }
   const route = isRecord(value.route) ? value.route : null;
-  if (normalizeMetadataString(route?.channel) === "feishu") {
+  if (normalizeLowercaseStringOrEmpty(route?.channel) === "feishu") {
     return true;
   }
   const deliveryContext = isRecord(value.deliveryContext) ? value.deliveryContext : null;
-  if (normalizeMetadataString(deliveryContext?.channel) === "feishu") {
+  if (normalizeLowercaseStringOrEmpty(deliveryContext?.channel) === "feishu") {
     return true;
   }
   const pendingDeliveryContext = isRecord(value.pendingFinalDeliveryContext)
     ? value.pendingFinalDeliveryContext
     : null;
-  if (normalizeMetadataString(pendingDeliveryContext?.channel) === "feishu") {
+  if (normalizeLowercaseStringOrEmpty(pendingDeliveryContext?.channel) === "feishu") {
     return true;
   }
   const origin = isRecord(value.origin) ? value.origin : null;
-  const originProvider = normalizeMetadataString(origin?.provider);
-  const originSurface = normalizeMetadataString(origin?.surface);
-  const originFrom = normalizeMetadataString(origin?.from);
+  const originProvider = normalizeLowercaseStringOrEmpty(origin?.provider);
+  const originSurface = normalizeLowercaseStringOrEmpty(origin?.surface);
+  const originFrom = normalizeLowercaseStringOrEmpty(origin?.from);
   return (
     originProvider === "feishu" ||
     originSurface.startsWith("feishu") ||
@@ -328,8 +321,8 @@ function resolveSessionTranscriptCandidates(params: {
     const resolved = path.isAbsolute(candidate)
       ? path.resolve(candidate)
       : path.resolve(sessionsDir, candidate);
-    const isStoreCandidate = isPathWithinRoot(resolved, sessionsDir);
-    const isAgentSessionCandidate = isPathWithinRoot(resolved, agentSessionsDir);
+    const isStoreCandidate = isPathStrictlyInside(sessionsDir, resolved);
+    const isAgentSessionCandidate = isPathStrictlyInside(agentSessionsDir, resolved);
     if (
       resolved === sessionsDir ||
       resolved === agentSessionsDir ||

@@ -1,5 +1,10 @@
 // Zalouser plugin module implements channel.adapters behavior.
+import { DEFAULT_ACCOUNT_ID, normalizeAccountId } from "openclaw/plugin-sdk/account-id";
 import { createScopedDmSecurityResolver } from "openclaw/plugin-sdk/channel-config-helpers";
+import type {
+  ChannelGroupContext,
+  ChannelMessageActionAdapter,
+} from "openclaw/plugin-sdk/channel-contract";
 import {
   defineChannelMessageAdapter,
   type ChannelMessageSendResult,
@@ -14,11 +19,20 @@ import {
   type ChannelOutboundAdapter,
   type OutboundDeliveryResult,
 } from "openclaw/plugin-sdk/channel-send-result";
+import type { GroupToolPolicyConfig, OpenClawConfig } from "openclaw/plugin-sdk/config-contracts";
 import { createStaticReplyToModeResolver } from "openclaw/plugin-sdk/conversation-runtime";
+import { isDangerousNameMatchingEnabled } from "openclaw/plugin-sdk/dangerous-name-runtime";
 import { createLazyRuntimeModule } from "openclaw/plugin-sdk/lazy-runtime";
+import {
+  isNumericTargetId,
+  sendPayloadWithChunkedTextAndMedia,
+} from "openclaw/plugin-sdk/reply-payload";
 import type { RuntimeEnv } from "openclaw/plugin-sdk/runtime-env";
 import { normalizeLowercaseStringOrEmpty } from "openclaw/plugin-sdk/string-coerce-runtime";
-import { sanitizeAssistantVisibleText } from "openclaw/plugin-sdk/text-chunking";
+import {
+  chunkTextForOutbound,
+  sanitizeAssistantVisibleText,
+} from "openclaw/plugin-sdk/text-chunking";
 import {
   checkZcaAuthenticated,
   listZalouserAccountIds,
@@ -26,20 +40,6 @@ import {
   resolveZalouserAccountSync,
   type ResolvedZalouserAccount,
 } from "./accounts.js";
-import type {
-  ChannelGroupContext,
-  ChannelMessageActionAdapter,
-  GroupToolPolicyConfig,
-  OpenClawConfig,
-} from "./channel-api.js";
-import {
-  DEFAULT_ACCOUNT_ID,
-  chunkTextForOutbound,
-  isDangerousNameMatchingEnabled,
-  isNumericTargetId,
-  normalizeAccountId,
-  sendPayloadWithChunkedTextAndMedia,
-} from "./channel-api.js";
 import { buildZalouserGroupCandidates, resolveZalouserGroupScope } from "./group-policy.js";
 import { resolveZalouserReactionMessageIds } from "./message-sid.js";
 import { writeQrDataUrlToTempFile } from "./qr-temp-file.js";
@@ -49,6 +49,7 @@ import {
   parseZalouserOutboundTarget,
   resolveZalouserOutboundSessionRoute,
 } from "./session-route.js";
+import { resolveZalouserDmSessionScope } from "./session-scope.js";
 import type { ZaloSendResult } from "./types.js";
 
 const loadZalouserChannelRuntime = createLazyRuntimeModule(() => import("./channel.runtime.js"));
@@ -162,6 +163,7 @@ async function sendZalouserMediaFromContext({
     mediaUrl,
     mediaLocalRoots,
     mediaReadFile,
+    mediaMaxBytes: account.mediaMaxBytes,
     textMode: "markdown",
     textChunkMode: resolveZalouserOutboundChunkMode(cfg, account.accountId),
     textChunkLimit: resolveZalouserOutboundTextChunkLimit(cfg, account.accountId),
@@ -435,6 +437,9 @@ export const zalouserAuthAdapter = {
 
 export const zalouserSecurityAdapter = {
   resolveDmPolicy: resolveZalouserDmPolicy,
+  dmRouting: {
+    resolveDmScope: ({ cfg }: { cfg: OpenClawConfig }) => resolveZalouserDmSessionScope(cfg),
+  },
   collectAuditFindings: async (params: {
     accountId?: string | null;
     account: ResolvedZalouserAccount;
@@ -486,6 +491,13 @@ export const zalouserOutboundAdapter = {
 export const zalouserMessagingAdapter = {
   targetPrefixes: ["zalouser", "zlu"],
   normalizeTarget: (raw: string) => normalizeZalouserTarget(raw),
+  inferTargetChatType: ({ to }: { to: string }) => {
+    try {
+      return parseZalouserOutboundTarget(to).isGroup ? ("group" as const) : ("direct" as const);
+    } catch {
+      return undefined;
+    }
+  },
   resolveOutboundSessionRoute: (
     params: Parameters<typeof resolveZalouserOutboundSessionRoute>[0],
   ) => resolveZalouserOutboundSessionRoute(params),

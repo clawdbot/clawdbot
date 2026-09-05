@@ -1,5 +1,5 @@
 // Feishu plugin module implements card interaction behavior.
-import { isRecord } from "./comment-shared.js";
+import { isRecord } from "openclaw/plugin-sdk/string-coerce-runtime";
 
 export const FEISHU_CARD_INTERACTION_VERSION = "ocf1";
 

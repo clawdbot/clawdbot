@@ -3,6 +3,7 @@ import type {
   ResolvedApprovalView,
 } from "openclaw/plugin-sdk/approval-handler-runtime";
 import type { OpenClawConfig } from "openclaw/plugin-sdk/config-contracts";
+import { createDeferred } from "openclaw/plugin-sdk/extension-shared";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import type { ResolvedGoogleChatAccount } from "./accounts.js";
 import {
@@ -69,7 +70,7 @@ function createPendingView(): ExecApprovalPendingView {
     agentId: "main",
     warningText: null,
     commandAnalysis: null,
-    commandText: "echo hi",
+    commandText: `<tag> & &amp; "double" 'single'`,
     commandPreview: null,
     cwd: "/tmp",
     envKeys: [],
@@ -106,20 +107,6 @@ function createPendingView(): ExecApprovalPendingView {
     ],
     expiresAtMs: Date.now() + 60_000,
   };
-}
-
-function createDeferred<T>(): {
-  promise: Promise<T>;
-  reject: (reason?: unknown) => void;
-  resolve: (value: T) => void;
-} {
-  let resolve: (value: T) => void = () => {};
-  let reject: (reason?: unknown) => void = () => {};
-  const promise = new Promise<T>((innerResolve, innerReject) => {
-    resolve = innerResolve;
-    reject = innerReject;
-  });
-  return { promise, reject, resolve };
 }
 
 type CardPayloadWithTextWidgets = {
@@ -246,6 +233,8 @@ describe("googleChatApprovalNativeRuntime", () => {
     });
 
     expect(JSON.stringify(pendingPayload)).toContain("cardsV2");
+    const commandText = getTextParagraphText(pendingPayload, "Command");
+    expect(commandText).toBe(`&lt;tag&gt; &amp; &amp;amp; "double" 'single'`);
     expect(JSON.stringify(pendingPayload.cardsV2)).toContain(
       "https://chat-app.example.test/googlechat",
     );
@@ -348,6 +337,13 @@ describe("googleChatApprovalNativeRuntime", () => {
       accountId: "default",
       context: { account },
       entry,
+      request: {
+        id: "approval-1",
+        request: { command: "echo hi" },
+        createdAtMs: 0,
+        expiresAtMs: view.expiresAtMs,
+      },
+      approvalKind: "exec",
       payload: final.payload,
       phase: "resolved",
     });

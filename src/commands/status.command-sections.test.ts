@@ -1,9 +1,12 @@
 // Status command section tests cover footer, health, and report section rendering.
 import { describe, expect, it } from "vitest";
+import { formatHealthChannelLines } from "./health-format.js";
 import type { HealthSummary } from "./health.js";
 import {
   buildStatusFooterLines,
+  buildStatusAgentsValue,
   buildStatusHealthRows,
+  buildStatusHeartbeatValue,
   buildStatusModelSelectionLines,
   buildStatusPairingRecoveryLines,
   buildStatusPluginCompatibilityLines,
@@ -15,6 +18,62 @@ import {
 } from "./status.command-sections.ts";
 
 describe("status.command-sections", () => {
+  it("does not label an arbitrary agent as the default in an explicit fleet", () => {
+    expect(
+      buildStatusAgentsValue({
+        agentStatus: {
+          defaultId: null,
+          bootstrapPendingCount: 0,
+          totalSessions: 0,
+          agents: [
+            {
+              id: "alpha",
+              workspaceDir: "/tmp/alpha",
+              bootstrapPending: false,
+              sessionsPath: "/tmp/alpha/sessions.json",
+              sessionsCount: 0,
+              lastUpdatedAt: null,
+              lastActiveAgeMs: null,
+            },
+            {
+              id: "beta",
+              workspaceDir: "/tmp/beta",
+              bootstrapPending: false,
+              sessionsPath: "/tmp/beta/sessions.json",
+              sessionsCount: 0,
+              lastUpdatedAt: null,
+              lastActiveAgeMs: null,
+            },
+          ],
+        },
+        formatTimeAgo: () => "now",
+      }),
+    ).toBe("2 · no workspaces bootstrapping · sessions 0");
+  });
+
+  it("shows when heartbeat is waiting for a delivery route", () => {
+    expect(
+      buildStatusHeartbeatValue({
+        summary: {
+          heartbeat: {
+            defaultAgentId: "main",
+            agents: [
+              {
+                agentId: "main",
+                enabled: true,
+                every: "30m",
+                everyMs: 1_800_000,
+                waitingForRoute: true,
+              },
+            ],
+          },
+        },
+      }),
+    ).toBe(
+      "30m (main; waiting for delivery route — set commands.ownerAllowFrom or channel allowFrom, or heartbeat.target)",
+    );
+  });
+
   it("formats security audit lines with finding caps and follow-up commands", () => {
     const lines = buildStatusSecurityAuditLines({
       securityAudit: {
@@ -231,6 +290,149 @@ describe("status.command-sections", () => {
       { Item: "Matrix", Status: "ok(LINKED)", Detail: "linked" },
       { Item: "Pager", Status: "warn(UNLINKED)", Detail: "not linked" },
     ]);
+  });
+
+  it.each([
+    { account: {}, status: "ok(OK)", detail: "healthy" },
+    {
+      account: { probe: { ok: false, error: "sync rejected" } },
+      status: "warn(WARN)",
+      detail: "failed (unknown) - sync rejected",
+    },
+    {
+      account: { healthState: "blocked" },
+      status: "warn(WARN)",
+      detail: "blocked",
+    },
+    {
+      account: { healthState: "unknown" },
+      status: "warn(WARN)",
+      detail: "unknown",
+    },
+    {
+      account: { statusState: "unstable" },
+      status: "warn(WARN)",
+      detail: "auth stabilizing",
+    },
+    {
+      account: { configured: false },
+      status: "muted(OFF)",
+      detail: "not configured",
+    },
+  ])("classifies the real channel health detail $detail", ({ account, status, detail }) => {
+    const health: HealthSummary = {
+      ok: true,
+      ts: 0,
+      durationMs: 42,
+      heartbeatSeconds: 60,
+      defaultAgentId: "main",
+      agents: [],
+      sessions: { path: "/tmp/sessions.json", count: 0, recent: [] },
+      channels: {
+        whatsapp: {
+          accountId: "default",
+          configured: true,
+          linked: true,
+          healthState: "healthy",
+          ...account,
+        },
+      },
+      channelOrder: ["whatsapp"],
+      channelLabels: { whatsapp: "WhatsApp" },
+    };
+    const rows = buildStatusHealthRows({
+      health,
+      formatHealthChannelLines,
+      ok: (value) => `ok(${value})`,
+      warn: (value) => `warn(${value})`,
+      muted: (value) => `muted(${value})`,
+    });
+
+    expect(rows).toContainEqual({ Item: "WhatsApp", Status: status, Detail: detail });
+  });
+
+  it("marks activated plugin service failures as warnings in deep health rows", () => {
+    const health: HealthSummary = {
+      ok: true,
+      ts: 0,
+      durationMs: 42,
+      heartbeatSeconds: 60,
+      defaultAgentId: "main",
+      agents: [],
+      sessions: { path: "/tmp/sessions.json", count: 0, recent: [] },
+      channels: {},
+      channelOrder: [],
+      channelLabels: {},
+      plugins: {
+        loaded: ["calendar"],
+        errors: [
+          {
+            id: "calendar",
+            origin: "workspace",
+            activated: true,
+            failurePhase: "service",
+            error: "service scheduler: address already in use",
+          },
+        ],
+      },
+    };
+    const rows = buildStatusHealthRows({
+      health,
+      formatHealthChannelLines,
+      ok: (value) => `ok(${value})`,
+      warn: (value) => `warn(${value})`,
+      muted: (value) => `muted(${value})`,
+    });
+
+    expect(rows).toContainEqual({
+      Item: "Plugin calendar",
+      Status: "warn(WARN)",
+      Detail: "failed - service scheduler: address already in use; run openclaw doctor",
+    });
+  });
+
+  it("shows blocked ingress even when the channel connection is healthy", () => {
+    const rows = buildStatusHealthRows({
+      health: {
+        ok: true,
+        ts: 0,
+        durationMs: 42,
+        heartbeatSeconds: 60,
+        defaultAgentId: "main",
+        agents: [],
+        sessions: { path: "/tmp/sessions.json", count: 0, recent: [] },
+        channels: {},
+        channelOrder: [],
+        channelLabels: {},
+        deliveryQueues: {
+          failed: [],
+          ingressPressure: [
+            {
+              channelId: "telegram",
+              accountId: "ops",
+              laneCount: 1,
+              pendingCount: 2,
+              claimedCount: 0,
+              blockedCount: 1,
+              oldestReceivedAt: Date.now(),
+            },
+          ],
+        },
+      },
+      formatHealthChannelLines: () => ["Telegram: healthy"],
+      ok: (value) => `ok(${value})`,
+      warn: (value) => `warn(${value})`,
+      muted: (value) => `muted(${value})`,
+    });
+
+    expect(rows).toContainEqual({ Item: "Telegram", Status: "ok(OK)", Detail: "healthy" });
+    expect(rows).toContainEqual({
+      Item: "Delivery queue",
+      Status: "warn(WARN)",
+      Detail: expect.stringContaining(
+        "inbound telegram/ops: 1 pressured lane, 2 pending, 0 claimed, 1 blocked",
+      ),
+    });
   });
 
   it("adds degraded event-loop health to status rows", () => {

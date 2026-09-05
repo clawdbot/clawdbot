@@ -10,6 +10,7 @@ import { isRecord } from "openclaw/plugin-sdk/channel-secret-basic-runtime";
 import { collectErrorGraphCandidates, formatErrorMessage } from "openclaw/plugin-sdk/error-runtime";
 import { KeyedAsyncQueue } from "openclaw/plugin-sdk/keyed-async-queue";
 import type { RuntimeEnv } from "openclaw/plugin-sdk/runtime-env";
+import { asSafeIntegerInRange } from "openclaw/plugin-sdk/string-coerce-runtime";
 import { getIMessageRuntime } from "../runtime.js";
 import { parseIMessageNotification } from "./parse-notification.js";
 import type { IMessagePayload } from "./types.js";
@@ -62,8 +63,7 @@ function rawMessageRecord(raw: unknown): Record<string, unknown> | null {
 }
 
 function rawRowid(raw: unknown): number | null {
-  const rowid = rawMessageRecord(raw)?.id;
-  return typeof rowid === "number" && Number.isSafeInteger(rowid) && rowid >= 0 ? rowid : null;
+  return asSafeIntegerInRange(rawMessageRecord(raw)?.id, { min: 0 }) ?? null;
 }
 
 /** Read only stable transport metadata; payload normalization waits for dispatch. */

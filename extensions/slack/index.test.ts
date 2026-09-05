@@ -1,9 +1,8 @@
 // Slack tests cover index plugin behavior.
-import { assertBundledChannelEntries } from "openclaw/plugin-sdk/channel-test-helpers";
 import type { OpenClawPluginApi } from "openclaw/plugin-sdk/plugin-entry";
 import { createTestPluginApi } from "openclaw/plugin-sdk/plugin-test-api";
 import { describe, expect, it, vi } from "vitest";
-import entry from "./index.js";
+import "./index.js";
 import setupEntry from "./setup-entry.js";
 
 const httpRegistryMocks = vi.hoisted(() => ({
@@ -32,13 +31,6 @@ vi.mock("./src/http/registry.js", () => ({
 }));
 
 describe("slack bundled entries", () => {
-  assertBundledChannelEntries({
-    entry,
-    expectedId: "slack",
-    expectedName: "Slack",
-    setupEntry,
-  });
-
   it("does not register webhook routes during tool discovery", () => {
     const registerHttpRoute = vi.fn();
     entryContractMocks.registerFull?.(

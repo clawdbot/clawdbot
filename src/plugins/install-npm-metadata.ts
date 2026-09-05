@@ -46,11 +46,14 @@ type TrustedOfficialPrereleaseResolution =
 async function loadNpmPackageVersions(params: {
   packageName: string;
   timeoutMs: number;
+  signal?: AbortSignal;
 }): Promise<string[] | null> {
   const versions = await runCommandWithTimeout(
     ["npm", "view", params.packageName, "versions", "--json"],
     {
       timeoutMs: Math.max(params.timeoutMs, 60_000),
+      signal: params.signal,
+      killProcessTree: true,
       env: createNpmMetadataEnv(),
     },
   );
@@ -73,6 +76,7 @@ export async function resolveTrustedOfficialPrereleaseResolution(params: {
   spec: ParsedRegistryNpmSpec;
   resolvedPrereleaseVersion: string;
   timeoutMs: number;
+  signal?: AbortSignal;
   logger: PluginInstallLogger;
 }): Promise<TrustedOfficialPrereleaseResolution | null> {
   if (!params.spec.name.startsWith("@openclaw/")) {
@@ -81,6 +85,7 @@ export async function resolveTrustedOfficialPrereleaseResolution(params: {
   const semverVersions = await loadNpmPackageVersions({
     packageName: params.spec.name,
     timeoutMs: params.timeoutMs,
+    signal: params.signal,
   });
   if (!semverVersions) {
     return null;
@@ -100,6 +105,7 @@ export async function resolveTrustedOfficialPrereleaseResolution(params: {
         const metadataResult = await resolveNpmSpecMetadata({
           spec: prereleaseSpec,
           timeoutMs: params.timeoutMs,
+          signal: params.signal,
         });
         if (!metadataResult.ok) {
           return null;
@@ -121,6 +127,7 @@ export async function resolveTrustedOfficialPrereleaseResolution(params: {
   const metadataResult = await resolveNpmSpecMetadata({
     spec: stableSpec,
     timeoutMs: params.timeoutMs,
+    signal: params.signal,
   });
   if (!metadataResult.ok) {
     return null;
@@ -187,6 +194,7 @@ export async function resolveLatestCompatibleNpmResolution(params: {
   expectedPluginId?: string;
   currentResolution: NpmSpecResolution;
   timeoutMs: number;
+  signal?: AbortSignal;
   logger: PluginInstallLogger;
 }): Promise<NpmSpecResolution | null> {
   if (!params.currentResolution.version) {
@@ -207,6 +215,7 @@ export async function resolveLatestCompatibleNpmResolution(params: {
   const versions = await loadNpmPackageVersions({
     packageName: params.parsedSpec.name,
     timeoutMs: params.timeoutMs,
+    signal: params.signal,
   });
   if (!versions) {
     return null;
@@ -226,6 +235,7 @@ export async function resolveLatestCompatibleNpmResolution(params: {
     const metadataResult = await resolveNpmSpecMetadata({
       spec,
       timeoutMs: params.timeoutMs,
+      signal: params.signal,
     });
     if (!metadataResult.ok) {
       params.logger.warn?.(

@@ -3,12 +3,12 @@
 // value that drains replies to the wrong room and replays there after a restart). It must refuse;
 // crons carrying an explicit target / their own delivery context are unaffected.
 import { afterAll, afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { parseTelegramTargetForTest } from "../../../test/helpers/infra/telegram-targets.js";
 import type { ChannelOutboundAdapter } from "../../channels/plugins/types.public.js";
 import type { OpenClawConfig } from "../../config/config.js";
 import type { SessionEntry } from "../../config/sessions/types.js";
 import {
   forumMessagingForTest,
-  parseTelegramTargetForTest,
   telegramMessagingForTest,
 } from "../../infra/outbound/targets.test-helpers.js";
 import { resetPluginRuntimeStateForTest, setActivePluginRegistry } from "../../plugins/runtime.js";
@@ -29,7 +29,7 @@ vi.mock("../../config/sessions/delivery-info.js", () => ({
 }));
 
 vi.mock("../../config/sessions/paths.js", () => ({
-  resolveStorePath: vi.fn().mockReturnValue("/tmp/test-store.json"),
+  resolveSessionStorePathCore: vi.fn().mockReturnValue("/tmp/test-store.json"),
 }));
 
 vi.mock("../../config/sessions/session-accessor.js", () => {

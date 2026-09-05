@@ -29,14 +29,28 @@ function plugin(
   } = {},
 ) {
   const { origin = "global", channelId = id, enabledByDefault = false, ...metadata } = options;
-  return { id, origin, channels: [channelId], enabledByDefault, ...metadata };
+  const rootDir = `/plugins/${id}`;
+  return {
+    id,
+    origin,
+    channels: [channelId],
+    providers: [],
+    cliBackends: [],
+    skills: [],
+    hooks: [],
+    enabledByDefault,
+    rootDir,
+    source: `${rootDir}/index.ts`,
+    manifestPath: `${rootDir}/openclaw.plugin.json`,
+    ...metadata,
+  };
 }
 
 function mockManifestPlugins(plugins: unknown[]) {
-  vi.spyOn(manifestRegistry, "loadPluginManifestRegistry").mockReturnValue({
+  vi.spyOn(manifestRegistry, "loadPluginManifestRegistryCore").mockReturnValue({
     plugins,
     diagnostics: [],
-  } as unknown as ReturnType<typeof manifestRegistry.loadPluginManifestRegistry>);
+  } as unknown as ReturnType<typeof manifestRegistry.loadPluginManifestRegistryCore>);
 }
 
 describe("channel plugin blockers", () => {
@@ -46,10 +60,12 @@ describe("channel plugin blockers", () => {
   });
 
   it("returns no blockers when config and package env have no channel surfaces", () => {
-    const registrySpy = vi.spyOn(manifestRegistry, "loadPluginManifestRegistry").mockReturnValue({
-      plugins: [],
-      diagnostics: [],
-    });
+    const registrySpy = vi
+      .spyOn(manifestRegistry, "loadPluginManifestRegistryCore")
+      .mockReturnValue({
+        plugins: [],
+        diagnostics: [],
+      });
 
     const hits = scanConfiguredChannelPluginBlockers({
       channels: {
@@ -100,10 +116,12 @@ describe("channel plugin blockers", () => {
   });
 
   it("uses provided manifest records without loading the registry", () => {
-    const registrySpy = vi.spyOn(manifestRegistry, "loadPluginManifestRegistry").mockReturnValue({
-      plugins: [],
-      diagnostics: [],
-    });
+    const registrySpy = vi
+      .spyOn(manifestRegistry, "loadPluginManifestRegistryCore")
+      .mockReturnValue({
+        plugins: [],
+        diagnostics: [],
+      });
 
     const hits = scanConfiguredChannelPluginBlockers(
       {
@@ -348,7 +366,7 @@ describe("channel plugin blockers", () => {
     ]);
   });
 
-  it("suppresses ambient-only package env blockers for dev gateway startup", () => {
+  it("suppresses ambient-only package env blockers for gateway startup", () => {
     mockManifestPlugins([
       plugin("discord", {
         packageChannel: createPackageChannelEnv("discord", ["DISCORD_FAKE_TEST_TRIGGER"]),

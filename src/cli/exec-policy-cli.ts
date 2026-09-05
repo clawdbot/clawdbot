@@ -6,7 +6,7 @@ import { getTerminalTableWidth, renderTable } from "../../packages/terminal-core
 import { isRich, theme } from "../../packages/terminal-core/src/theme.js";
 import { readConfigFileSnapshot, replaceConfigFile } from "../config/config.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
-import { sanitizeExecApprovalDisplayText } from "../infra/exec-approval-command-display.js";
+import { sanitizeExecApprovalDisplayText } from "../infra/exec-approval-text-sanitize.js";
 import {
   collectExecPolicyScopeSnapshots,
   SESSION_EXEC_OVERRIDES_NOTE,
@@ -20,7 +20,7 @@ import {
   normalizeExecSecurity,
   normalizeExecTarget,
   readExecApprovalsSnapshot,
-  resolveExecModeFromPolicy,
+  resolveExactExecModeFromPolicy,
   resolveExecModePolicy,
   resolveExecApprovalsFromFile,
   restoreExecApprovalsSnapshotLocked,
@@ -103,15 +103,8 @@ type ExecPolicyShowScope = Omit<
   };
 };
 
-class ExecPolicyCliError extends Error {
-  constructor(message: string) {
-    super(message);
-    this.name = "ExecPolicyCliError";
-  }
-}
-
 function failExecPolicy(message: string): never {
-  throw new ExecPolicyCliError(message);
+  throw new Error(message);
 }
 
 function formatExecPolicyError(err: unknown): string {
@@ -197,14 +190,15 @@ function applyConfigExecPolicy(draft: Record<string, unknown>, policy: ExecPolic
     });
     const security = policy.security ?? currentPolicy.security;
     const ask = policy.ask ?? currentPolicy.ask;
-    if (ask === "always" || (security === "full" && ask === "on-miss")) {
+    const mode = resolveExactExecModeFromPolicy({ security, ask });
+    if (mode) {
+      root.tools.exec.mode = mode;
+      delete root.tools.exec.security;
+      delete root.tools.exec.ask;
+    } else {
       delete root.tools.exec.mode;
       root.tools.exec.security = security;
       root.tools.exec.ask = ask;
-    } else {
-      root.tools.exec.mode = resolveExecModeFromPolicy({ security, ask });
-      delete root.tools.exec.security;
-      delete root.tools.exec.ask;
     }
   }
 }

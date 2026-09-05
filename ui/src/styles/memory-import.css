@@ -33,7 +33,7 @@
   padding: 7px 12px;
   border-top: 1px solid var(--border);
   color: var(--muted);
-  cursor: pointer;
+  cursor: var(--cursor-action);
   font-size: 10px;
   font-weight: 650;
   list-style: none;
@@ -59,7 +59,7 @@
   align-items: flex-start;
   gap: 9px;
   min-width: 0;
-  cursor: pointer;
+  cursor: var(--cursor-action);
 }
 
 .memory-import__collection-choice input {
@@ -222,9 +222,10 @@
 .memory-import__skeleton {
   height: 96px;
   border-radius: var(--radius-md);
-  background: linear-gradient(90deg, var(--bg-muted), var(--bg-elevated), var(--bg-muted));
-  background-size: 200% 100%;
-  animation: memory-import-pulse 1.4s ease infinite;
+}
+
+.memory-import__skeleton::after {
+  animation-duration: 1.4s;
 }
 
 .memory-import__confirm .callout {
@@ -284,15 +285,9 @@
   font-size: 10px;
 }
 
-@media (max-width: 720px) {
+@media (max-width: 768px) {
   .memory-import__backfill-dates,
   .memory-import__backfill-actions {
     justify-content: flex-start;
-  }
-}
-
-@keyframes memory-import-pulse {
-  to {
-    background-position: -200% 0;
   }
 }

@@ -1,9 +1,11 @@
+import { buildControlUiCatalogSessionUrl } from "@openclaw/session-url-contract";
 import { describe, expect, it } from "vitest";
 import type { ApplicationContext } from "../../app/context.ts";
 import { buildCatalogSessionKey } from "./catalog-key.ts";
 import {
   resolveSessionPreferredFace,
   resolveSessionPreferredFaceForKey,
+  SESSION_DASHBOARD_EXPANDED_PARAM,
   SESSION_FACE_PREFERENCE_PARAM,
   SESSION_NAVIGATION_KEY_PARAM,
   sessionNavigationTarget,
@@ -44,21 +46,33 @@ describe("sessionNavigationTarget", () => {
   });
 
   it("requires the destination face while preserving catalog identity", () => {
+    const catalogKey = {
+      catalogId: "claude",
+      hostId: "gateway:local",
+      threadId: "thread-1",
+    };
     const target = sessionNavigationTarget({
       face: "dashboard",
-      sessionKey: buildCatalogSessionKey({
-        catalogId: "claude",
-        hostId: "gateway:local",
-        threadId: "thread-1",
-      }),
-      fallbackAgentId: "research",
+      sessionKey: buildCatalogSessionKey(catalogKey, "research"),
+      fallbackAgentId: "main",
+      basePath: "/admin/openclaw/",
       mainKey: "workspace",
     });
 
+    const canonicalHref = buildControlUiCatalogSessionUrl({
+      namespace: "dashboard",
+      agentId: "research",
+      basePath: "/admin/openclaw/",
+      catalog: catalogKey.catalogId,
+      host: catalogKey.hostId,
+      thread: catalogKey.threadId,
+    });
+    expect(canonicalHref).not.toBeNull();
+    expect(target.href).toBe(canonicalHref);
     expect(target).toEqual({
-      href: "/dashboard/research?catalog=claude&host=gateway%3Alocal&thread=thread-1",
+      href: "/admin/openclaw/dashboard/research?catalog=claude&host=gateway%3Alocal&thread=thread-1",
       options: {
-        pathname: "/dashboard/research",
+        pathname: "/admin/openclaw/dashboard/research",
         search: "?catalog=claude&host=gateway%3Alocal&thread=thread-1",
       },
     });
@@ -75,6 +89,35 @@ describe("sessionNavigationTarget", () => {
       href: "/chat/research/telegram/12345",
       options: { pathname: "/chat/research/telegram/12345" },
     });
+  });
+
+  it("builds a shareable expanded-dashboard destination", () => {
+    const sessionKey = "agent:main:dashboard:12345678-90ab-cdef-1234-567890abcdef";
+    const target = sessionNavigationTarget({
+      face: "dashboard",
+      sessionKey,
+      fallbackAgentId: "main",
+      dashboardExpanded: true,
+    });
+
+    expect(target.href).toBe(
+      `/dashboard/main/12345678?${SESSION_DASHBOARD_EXPANDED_PARAM}=expanded`,
+    );
+    expect(target.options).toEqual({
+      pathname: "/dashboard/main/12345678",
+      search: `?${SESSION_DASHBOARD_EXPANDED_PARAM}=expanded`,
+    });
+  });
+
+  it("opens a gallery dashboard through its owning chat session", () => {
+    const target = sessionNavigationTarget({
+      face: "chat",
+      sessionKey: "agent:main:dashboard:12345678-90ab-cdef-1234-567890abcdef",
+      fallbackAgentId: "main",
+      dashboardExpanded: true,
+    });
+
+    expect(target.href).toBe(`/chat/main/12345678?${SESSION_DASHBOARD_EXPANDED_PARAM}=expanded`);
   });
 
   it("marks an uncached preference-derived face for in-app navigation but keeps href shareable", () => {

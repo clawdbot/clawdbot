@@ -11,7 +11,6 @@ import { applyExtraParamsToAgent } from "./extra-params.js";
 import type { ProviderThinkLevel } from "./utils.js";
 
 type ExtraParamsTestApi = {
-  supportsGptParallelToolCallsPayload(api: unknown): boolean;
   setProviderRuntimeDepsForTest(
     deps:
       | Partial<{

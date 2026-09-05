@@ -1,4 +1,6 @@
 // Plans release workflow matrix entries from profile and suite inputs.
+import { isDirectRunUrl } from "./lib/direct-run.mjs";
+
 const DOCKER_E2E_CHUNKS = [
   {
     chunk_id: "core",
@@ -8,13 +10,25 @@ const DOCKER_E2E_CHUNKS = [
   },
   {
     chunk_id: "package-update-openai",
-    label: "package/update OpenAI",
+    label: "package/update OpenAI and recovery",
     timeout_minutes: 45,
     profiles: "beta minimum stable full",
   },
   {
-    chunk_id: "package-update-core",
-    label: "package/update core",
+    chunk_id: "package-update-onboarding",
+    label: "package/update onboarding",
+    timeout_minutes: 60,
+    profiles: "beta minimum stable full",
+  },
+  {
+    chunk_id: "package-update-migrations",
+    label: "package/update migrations",
+    timeout_minutes: 60,
+    profiles: "beta minimum stable full",
+  },
+  {
+    chunk_id: "package-update-self-upgrade",
+    label: "package/update self-upgrade",
     timeout_minutes: 60,
     profiles: "beta minimum stable full",
   },
@@ -236,7 +250,7 @@ function writeOutputs(plan) {
   }
 }
 
-if (import.meta.url === `file://${process.argv[1]}`) {
+if (isDirectRunUrl(process.argv[1], import.meta.url)) {
   const plan = createReleaseWorkflowMatrixPlan({
     dockerLanes: process.env.DOCKER_LANES,
     includeLiveSuites: process.env.INCLUDE_LIVE_SUITES,

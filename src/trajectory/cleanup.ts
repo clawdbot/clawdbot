@@ -3,7 +3,8 @@ import fs from "node:fs";
 import path from "node:path";
 import { isRecord } from "@openclaw/normalization-core/record-coerce";
 import { parseSqliteSessionFileMarker } from "../config/sessions/legacy-sqlite-marker.js";
-import { resolveSessionFilePath } from "../config/sessions/paths.js";
+import { resolveSessionFilePathCore } from "../config/sessions/paths.js";
+import { resolveRealpathOrAbsolute as canonicalizePathForComparison } from "../infra/boundary-path.js";
 import { readFileWindowFullySync } from "../infra/file-read.js";
 import { isPathInside } from "../infra/path-guards.js";
 import { readRegularFileSync } from "../infra/regular-file.js";
@@ -22,15 +23,6 @@ type RemovedTrajectoryArtifact = {
 type TrajectoryPointer = {
   runtimeFile: string;
 };
-
-function canonicalizePathForComparison(filePath: string): string {
-  const resolved = path.resolve(filePath);
-  try {
-    return fs.realpathSync(resolved);
-  } catch {
-    return resolved;
-  }
-}
 
 function isPathWithinDir(parentDir: string, filePath: string): boolean {
   const resolvedParent = canonicalizePathForComparison(parentDir);
@@ -146,7 +138,7 @@ function resolveRemovedSessionFile(params: {
   storePath: string;
 }): string | null {
   try {
-    return resolveSessionFilePath(
+    return resolveSessionFilePathCore(
       params.sessionId,
       params.sessionFile ? { sessionFile: params.sessionFile } : undefined,
       { sessionsDir: path.dirname(params.storePath) },

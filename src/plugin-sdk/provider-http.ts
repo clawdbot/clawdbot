@@ -24,6 +24,10 @@ export {
   truncateErrorDetail,
 } from "../agents/provider-http-errors.js";
 export {
+  readProviderResponseErrorText,
+  redactProviderResponseErrorText,
+} from "../agents/provider-request-header-redaction.js";
+export {
   buildAudioTranscriptionFormData,
   createProviderOperationDeadline,
   createProviderOperationTimeoutResolver,

@@ -4,7 +4,11 @@ import path from "node:path";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import * as noteModule from "../../packages/terminal-core/src/note.js";
 import { useAutoCleanupTempDirTracker } from "../../test/helpers/temp-dir.js";
-import { COMPLETION_SKIP_PLUGIN_COMMANDS_ENV } from "../cli/completion-runtime.js";
+import {
+  COMPLETION_SKIP_PLUGIN_COMMANDS_ENV,
+  formatCompletionReloadCommand,
+  resolveCompletionCachePath,
+} from "../cli/completion-runtime.js";
 import { captureEnv, setTestEnvValue } from "../test-utils/env.js";
 import {
   checkShellCompletionStatus,
@@ -326,22 +330,24 @@ describe("doctorShellCompletion", () => {
     { code: "EACCES", usesSlowPattern: false, action: "installed" },
     { code: "EPERM", usesSlowPattern: false, action: "installed" },
     { code: "EROFS", usesSlowPattern: false, action: "installed" },
-  ])("keeps $action completion best-effort for wrapped $code errors", async (testCase) => {
+  ])("offers session recovery when completion is not $action after $code", async (testCase) => {
     const profilePath = await setupDoctorCompletionTest(testCase.usesSlowPattern);
-    installCompletionMock.mockRejectedValue(wrappedFsError(testCase.code, profilePath));
+    const failedPath = path.dirname(profilePath);
+    installCompletionMock.mockRejectedValue(wrappedFsError(testCase.code, failedPath));
     const noteSpy = vi.spyOn(noteModule, "note");
 
     await expect(doctorShellCompletion({} as never, mockPrompter())).resolves.not.toThrow();
 
+    const command = formatCompletionReloadCommand(
+      "bash",
+      resolveCompletionCachePath("bash", "openclaw"),
+    );
+    expect(noteSpy).toHaveBeenCalledWith(expect.stringContaining(command), "Shell completion");
     expect(noteSpy).toHaveBeenCalledWith(
-      expect.stringMatching(
-        new RegExp(
-          `Shell completion not ${testCase.action}: .* is not writable.*completion --install`,
-        ),
-      ),
+      expect.stringContaining("session only"),
       "Shell completion",
     );
-    expect(noteSpy).toHaveBeenCalledWith(expect.stringContaining(profilePath), "Shell completion");
+    expect(noteSpy).toHaveBeenCalledWith(expect.stringContaining(failedPath), "Shell completion");
   });
 
   it("re-throws non-permission errors from installCompletion", async () => {

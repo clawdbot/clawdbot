@@ -1,5 +1,9 @@
 {
   "id": "msteams",
+  "doctorContract": {
+    "configRepair": true,
+    "stateMigrations": true
+  },
   "name": "Microsoft Teams",
   "description": "OpenClaw Microsoft Teams channel plugin for bot conversations.",
   "activation": {

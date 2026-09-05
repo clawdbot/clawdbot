@@ -21,7 +21,7 @@ export const stubTool = (name: string): StubTool => ({
 });
 
 vi.mock("../tools/image-tool.js", () => ({
-  createImageTool: () => stubTool("image"),
+  createImageTool: () => stubTool("view_image"),
 }));
 
 vi.mock("../tools/image-generate-tool.js", () => ({
@@ -38,9 +38,5 @@ vi.mock("../tools/web-tools.js", () => ({
 }));
 
 vi.mock("../../plugins/tools.js", () => ({
-  buildPluginToolMetadataKey: (pluginId: string, toolName: string) =>
-    JSON.stringify([pluginId, toolName]),
-  copyPluginToolMeta: (_from: unknown, to: unknown) => to,
-  getPluginToolMeta: () => undefined,
   resolvePluginTools: () => [],
 }));

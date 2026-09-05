@@ -17,6 +17,7 @@ import {
 } from "./tui-pty-evidence-producer.js";
 
 const SOURCE_PATH = "test/e2e/qa-lab/tui/tui-pty-evidence-producer.ts";
+const ASSERTION_SUPPORT_FILE = "src/tui/tui-pty-harness-assertion-test-support.test.ts";
 const HARNESS_FILE = "src/tui/tui-pty-harness.e2e.test.ts";
 const LOCAL_FILE = "src/tui/tui-pty-local.e2e.test.ts";
 const RESET_FILE = "src/tui/tui-reset-transition-pty.e2e.test.ts";
@@ -53,7 +54,7 @@ function makeScenario(
           config,
         };
   return {
-    id: "tui-pty-producer-test",
+    id: "tui-pty-evidence-producer-contract",
     title: "TUI PTY producer test",
     surface: "tui",
     objective: "Prove the TUI PTY evidence producer contract.",
@@ -78,7 +79,7 @@ function makeCase(overrides: Partial<TuiPtyCase> = {}): TuiPtyCase {
 
 async function makeTempRepo() {
   const repoRoot = tempDirs.make("openclaw-tui-pty-producer-");
-  for (const testFile of [HARNESS_FILE, LOCAL_FILE, RESET_FILE]) {
+  for (const testFile of [ASSERTION_SUPPORT_FILE, HARNESS_FILE, LOCAL_FILE, RESET_FILE]) {
     const absolutePath = path.join(repoRoot, testFile);
     await fs.mkdir(path.dirname(absolutePath), { recursive: true });
     await fs.writeFile(absolutePath, "// fixture\n", "utf8");
@@ -231,6 +232,7 @@ describe("TUI PTY evidence producer", () => {
   it("builds fake and local PTY commands with the required environment", () => {
     vi.stubEnv("OPENCLAW_TUI_PTY_INCLUDE_LOCAL", "1");
     vi.stubEnv("OPENCLAW_TUI_PTY_USE_BUILT_CLI", "inherited");
+    vi.stubEnv("OPENCLAW_VITEST_FS_MODULE_CACHE_PATH", "/shared/vitest-cache");
     const fake = buildTuiPtyVitestCommand({
       cases: [makeCase()],
       cliMode: "source",
@@ -251,16 +253,33 @@ describe("TUI PTY evidence producer", () => {
     expect(fake.env.OPENCLAW_BEHAVIOR_EVIDENCE).toBe("1");
     expect(fake.env.OPENCLAW_TUI_PTY_INCLUDE_LOCAL).toBeUndefined();
     expect(fake.env.OPENCLAW_TUI_PTY_USE_BUILT_CLI).toBeUndefined();
+    expect(fake.env.OPENCLAW_VITEST_FS_MODULE_CACHE_PATH).toBe(
+      path.join("/artifacts", "vitest-fs-module-cache"),
+    );
+
+    const oracle = buildTuiPtyVitestCommand({
+      cases: [makeCase({ testFile: ASSERTION_SUPPORT_FILE })],
+      cliMode: "source",
+      repoRoot: "/repo",
+      reportPath: "/artifacts/report.json",
+    });
+    expect(oracle.args).toContain(ASSERTION_SUPPORT_FILE);
 
     const local = buildTuiPtyVitestCommand({
       cases: [makeCase({ testFile: LOCAL_FILE })],
       cliMode: "built",
       repoRoot: "/repo",
-      reportPath: "/artifacts/report.json",
+      reportPath: "/artifacts-local/report.json",
     });
     expect(local.args).toContain(LOCAL_FILE);
     expect(local.env.OPENCLAW_TUI_PTY_INCLUDE_LOCAL).toBe("1");
     expect(local.env.OPENCLAW_TUI_PTY_USE_BUILT_CLI).toBe("1");
+    expect(oracle.env.OPENCLAW_VITEST_FS_MODULE_CACHE_PATH).toBe(
+      fake.env.OPENCLAW_VITEST_FS_MODULE_CACHE_PATH,
+    );
+    expect(local.env.OPENCLAW_VITEST_FS_MODULE_CACHE_PATH).not.toBe(
+      fake.env.OPENCLAW_VITEST_FS_MODULE_CACHE_PATH,
+    );
   });
 
   it("rejects wrong-file and unmatched-pattern reports", async () => {

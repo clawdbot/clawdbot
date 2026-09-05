@@ -1,9 +1,10 @@
-// Openrouter tests cover video generation provider plugin behavior.
 import { clearLiveCatalogCacheForTests } from "openclaw/plugin-sdk/provider-catalog-shared";
 import {
   expectExplicitVideoGenerationCapabilities,
   expectUnifiedModelCatalogEntries,
 } from "openclaw/plugin-sdk/provider-test-contracts";
+// Openrouter tests cover video generation provider plugin behavior.
+import { createRequireRecord } from "openclaw/plugin-sdk/test-fixtures";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import {
   buildOpenRouterVideoGenerationProvider,
@@ -142,12 +143,7 @@ function requireFetchCallHeaders(index: number): Headers {
   return new Headers(init.headers);
 }
 
-function requireRecord(value: unknown, label: string): Record<string, unknown> {
-  if (typeof value !== "object" || value === null) {
-    throw new Error(`${label} was not an object`);
-  }
-  return value as Record<string, unknown>;
-}
+const requireRecord = createRequireRecord("object", "label-not-object");
 
 function expectRecordFields(record: Record<string, unknown>, fields: Record<string, unknown>) {
   for (const [key, value] of Object.entries(fields)) {
@@ -380,10 +376,14 @@ describe("openrouter video generation provider", () => {
     expect(rows?.map((row) => row.model)).toEqual(["google/veo-3.1"]);
   });
 
-  it("returns an empty catalog for a malformed OpenRouter video catalog envelope", async () => {
-    fetchWithTimeoutGuardedMock.mockResolvedValueOnce(releasedJson(null));
+  it("does not cache a malformed OpenRouter video catalog envelope", async () => {
+    fetchWithTimeoutGuardedMock.mockResolvedValueOnce(releasedJson({})).mockResolvedValueOnce(
+      releasedJson({
+        data: [{ id: "google/veo-3.1", name: "Veo 3.1" }],
+      }),
+    );
 
-    const rows = await listOpenRouterVideoModelCatalog({
+    const ctx = {
       config: {} as never,
       env: {},
       resolveProviderApiKey: () => ({
@@ -396,9 +396,15 @@ describe("openrouter video generation provider", () => {
         mode: "api_key" as const,
         source: "env" as const,
       }),
-    });
+    };
 
-    expect(rows).toEqual([]);
+    await expect(listOpenRouterVideoModelCatalog(ctx)).rejects.toThrow(
+      /OpenRouter video models request failed.*malformed JSON response/,
+    );
+    await expect(listOpenRouterVideoModelCatalog(ctx)).resolves.toMatchObject([
+      { model: "google/veo-3.1" },
+    ]);
+    expect(fetchWithTimeoutGuardedMock).toHaveBeenCalledTimes(2);
   });
 
   it("lets configured auth replace the OpenRouter catalog default", async () => {

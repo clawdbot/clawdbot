@@ -5,6 +5,7 @@ import path from "node:path";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import {
   closeOpenClawStateDatabaseForTest,
+  openExistingOpenClawStateDatabaseReadOnly,
   openOpenClawStateDatabase,
 } from "../state/openclaw-state-db.js";
 import { resolveOpenClawStateSqlitePath } from "../state/openclaw-state-db.paths.js";
@@ -12,6 +13,7 @@ import {
   createOpenClawTestState,
   type OpenClawTestState,
 } from "../test-utils/openclaw-test-state.js";
+import { resolveWorkspaceStateIdentity } from "./workspace-state-identity.js";
 import {
   clearExpiredWorkspaceStateForVanishedWorkspace,
   deleteWorkspaceState,
@@ -19,7 +21,6 @@ import {
   prepareWorkspaceStateDeletion,
   readWorkspaceStateSnapshot,
   replaceWorkspaceAttestation,
-  resolveWorkspaceStateIdentity,
   WORKSPACE_LEGACY_STATE_MIGRATION_KIND,
 } from "./workspace-state-store.js";
 
@@ -53,14 +54,29 @@ function insertPersistedAttestationHash(filename: string, sha256: string): void 
   const identity = resolveWorkspaceStateIdentity(workspaceDir());
   const db = openOpenClawStateDatabase().db;
   db.prepare(
-    "INSERT INTO workspace_attestations (workspace_key, attested_at_ms, updated_at_ms) VALUES (?, 1, 1)",
-  ).run(identity.workspaceKey);
+    `INSERT INTO workspace_setup_state (
+      workspace_key, workspace_path, attested_at_ms, attestation_updated_at_ms
+    ) VALUES (?, ?, 1, 1)`,
+  ).run(identity.workspaceKey, identity.workspacePath);
   db.prepare(
     "INSERT INTO workspace_generated_bootstrap_hashes (workspace_key, filename, sha256) VALUES (?, ?, ?)",
   ).run(identity.workspaceKey, filename, sha256);
 }
 
 describe("workspace state store", () => {
+  it("does not create shared state for a read-only snapshot", () => {
+    const statePath = resolveOpenClawStateSqlitePath(testState!.env);
+    expect(fs.existsSync(statePath)).toBe(false);
+
+    expect(
+      readWorkspaceStateSnapshot(workspaceDir(), {
+        env: testState!.env,
+        readOnly: true,
+      }),
+    ).toMatchObject({ setupExists: false, setup: { version: 1 } });
+    expect(fs.existsSync(statePath)).toBe(false);
+  });
+
   it("round-trips setup and attestation state after a database restart", () => {
     const dir = workspaceDir();
     mergeWorkspaceSetupState(dir, {
@@ -175,7 +191,11 @@ describe("workspace state store", () => {
       nowMs: 4_000,
     });
 
-    const attestation = readWorkspaceStateSnapshot(dir).attestation;
+    const snapshot = readWorkspaceStateSnapshot(dir);
+    // Attestation-only rows carry NULL setup columns: recording hashes before
+    // any setup write must not fabricate setup state.
+    expect(snapshot.setupExists).toBe(false);
+    const attestation = snapshot.attestation;
     expect(attestation?.attestedAtMs).toBe(3_000);
     expect([...attestation!.generatedHashes.entries()]).toStrictEqual([
       ["SOUL.md", "c".repeat(64)],
@@ -255,6 +275,57 @@ describe("workspace state store", () => {
     expect(resolveWorkspaceStateIdentity(alias)).not.toStrictEqual(identity);
     expect(readWorkspaceStateSnapshot(alias).identity).toStrictEqual(identity);
     expect(clearExpiredWorkspaceStateForVanishedWorkspace(alias, 2_000)).toBe(false);
+  });
+
+  it("registers missing aliases in the caller-selected state database", () => {
+    const dir = workspaceDir();
+    const alias = testState!.path("workspace-link");
+    const env = {
+      ...process.env,
+      OPENCLAW_STATE_DIR: testState!.path("custom-state"),
+    };
+    fs.symlinkSync(dir, alias, process.platform === "win32" ? "junction" : "dir");
+    const identity = resolveWorkspaceStateIdentity(dir);
+    mergeWorkspaceSetupState(dir, { bootstrapSeededAt: "2026-07-16T01:00:00.000Z" }, 1_000, {
+      env,
+    });
+
+    expect(readWorkspaceStateSnapshot(alias, { env }).identity).toStrictEqual(identity);
+    fs.unlinkSync(alias);
+
+    expect(readWorkspaceStateSnapshot(alias, { env }).identity).toStrictEqual(identity);
+    expect(readWorkspaceStateSnapshot(alias, { env }).setupExists).toBe(true);
+    expect(resolveOpenClawStateSqlitePath(env)).not.toBe(resolveOpenClawStateSqlitePath());
+    expect(readWorkspaceStateSnapshot(alias).setupExists).toBe(false);
+  });
+
+  it("does not register missing aliases through a read-only database", async () => {
+    const dir = workspaceDir();
+    const alias = testState!.path("workspace-link");
+    const env = {
+      ...process.env,
+      OPENCLAW_STATE_DIR: testState!.path("custom-state"),
+    };
+    mergeWorkspaceSetupState(dir, { bootstrapSeededAt: "2026-07-16T01:00:00.000Z" }, 1_000, {
+      env,
+    });
+    closeOpenClawStateDatabaseForTest();
+    fs.symlinkSync(dir, alias, process.platform === "win32" ? "junction" : "dir");
+    const database = await openExistingOpenClawStateDatabaseReadOnly({ env });
+    if (!database) {
+      throw new Error("expected read-only database");
+    }
+
+    try {
+      expect(readWorkspaceStateSnapshot(alias, { database, env, readOnly: true }).setupExists).toBe(
+        true,
+      );
+    } finally {
+      database.walMaintenance.close();
+    }
+    fs.unlinkSync(alias);
+
+    expect(readWorkspaceStateSnapshot(alias, { env }).setupExists).toBe(false);
   });
 
   it("fails closed when a persisted symlink alias is repointed", () => {

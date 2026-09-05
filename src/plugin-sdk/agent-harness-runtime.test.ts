@@ -1,32 +1,34 @@
 /**
  * Tests agent harness runtime helpers and task dispatch behavior.
  */
-import { beforeEach, describe, expect, expectTypeOf, it, vi } from "vitest";
+import { describe, expect, expectTypeOf, it, vi } from "vitest";
+import { getReplyPayloadMetadata } from "../auto-reply/reply-payload.js";
 import {
+  agentHarnessStructuredInput,
   attachModelProviderRequestTransport,
   buildAgentHarnessUserInputAnswers,
   classifyAgentHarnessTerminalOutcome,
   deliverAgentHarnessUserInputPrompt,
   formatAgentHarnessUserInputPrompt,
   getModelProviderRequestTransport,
+  queueAgentHarnessMessage,
+  setActiveEmbeddedRun,
+  type AgentHarness,
+  type AgentHarnessQuestionGatewayCall,
+  type AgentHarnessAttemptParams,
+  type AgentHarnessAttemptParamsV2,
+  type AgentHarnessSideQuestionParams,
+  type AgentHarnessSideQuestionParamsV2,
   type AgentHarnessSupportContext,
   type AgentHarnessTerminalOutcomeClassification,
+  type AgentHarnessV2,
+  type EmbeddedRunAttemptParams,
+  type EmbeddedRunAttemptParamsV2,
 } from "./agent-harness-runtime.js";
 import type {
   ProviderModelRouteRuntimePolicy,
   ProviderRouteOverridePresence,
 } from "./provider-model-types.js";
-
-const { loadResearchAutocapture } = vi.hoisted(() => ({
-  loadResearchAutocapture: vi.fn(),
-}));
-
-vi.mock("../skills/research/autocapture.js", () => {
-  loadResearchAutocapture();
-  return {
-    runSkillResearchAutoCapture: vi.fn(),
-  };
-});
 
 describe("classifyAgentHarnessTerminalOutcome", () => {
   it("does not classify an in-flight turn", () => {
@@ -152,14 +154,101 @@ describe("classifyAgentHarnessTerminalOutcome", () => {
 });
 
 describe("agent harness runtime SDK facade", () => {
-  beforeEach(() => {
-    loadResearchAutocapture.mockClear();
+  it("exposes structured input through one frozen named runtime surface", () => {
+    expect(Object.isFrozen(agentHarnessStructuredInput)).toBe(true);
+    expect(Object.keys(agentHarnessStructuredInput).toSorted()).toEqual([
+      "compileForm",
+      "compileQuestions",
+      "compileUrl",
+      "isRecord",
+      "run",
+      "snapshot",
+    ]);
   });
 
-  it("does not load research autocapture when the SDK facade is imported", async () => {
-    await import("./agent-harness-runtime.js");
+  it("keeps legacy harness implementations source-compatible while requiring capabilities in V2", () => {
+    const legacyHarness = {
+      id: "legacy-test",
+      label: "Legacy test harness",
+      supports: () => ({ supported: true as const, priority: 1 }),
+      runAttempt: async (_params: AgentHarnessAttemptParams) => {
+        throw new Error("type-only legacy harness");
+      },
+      runSideQuestion: async (_params: AgentHarnessSideQuestionParams) => ({ text: "legacy" }),
+    } satisfies AgentHarness;
 
-    expect(loadResearchAutocapture).not.toHaveBeenCalled();
+    expectTypeOf(legacyHarness).toMatchTypeOf<AgentHarness>();
+    expectTypeOf<AgentHarnessV2>().toMatchTypeOf<AgentHarness>();
+    expectTypeOf<
+      Omit<AgentHarnessSideQuestionParams, "hostCapabilities">
+    >().toMatchTypeOf<AgentHarnessSideQuestionParams>();
+    expectTypeOf<
+      Omit<AgentHarnessAttemptParams, "hostCapabilities">
+    >().toMatchTypeOf<AgentHarnessAttemptParams>();
+    expectTypeOf<
+      Omit<EmbeddedRunAttemptParams, "hostCapabilities">
+    >().toMatchTypeOf<EmbeddedRunAttemptParams>();
+    expectTypeOf<
+      Omit<AgentHarnessAttemptParamsV2, "hostCapabilities"> extends AgentHarnessAttemptParamsV2
+        ? true
+        : false
+    >().toEqualTypeOf<false>();
+    expectTypeOf<
+      Omit<EmbeddedRunAttemptParamsV2, "hostCapabilities"> extends EmbeddedRunAttemptParamsV2
+        ? true
+        : false
+    >().toEqualTypeOf<false>();
+    expectTypeOf<
+      Omit<
+        AgentHarnessSideQuestionParamsV2,
+        "hostCapabilities"
+      > extends AgentHarnessSideQuestionParamsV2
+        ? true
+        : false
+    >().toEqualTypeOf<false>();
+
+    // v2026.8.1 queue/register callers need neither a source predicate nor V2.
+    type QueueOptions = Parameters<typeof queueAgentHarnessMessage>[2];
+    const legacyInjection = {
+      isAvailable: () => true,
+      queueMessage: async (_text: string, _options?: QueueOptions) => {},
+    };
+    const legacyHandle = {
+      queueMessage: legacyInjection.queueMessage,
+      messageInjection: legacyInjection,
+      isStreaming: () => true,
+      isCompacting: () => false,
+      abort: () => {},
+    } satisfies Parameters<typeof setActiveEmbeddedRun>[1];
+    expectTypeOf(legacyHandle).toMatchTypeOf<Parameters<typeof setActiveEmbeddedRun>[1]>();
+    expectTypeOf(queueAgentHarnessMessage).returns.toEqualTypeOf<boolean>();
+    type GuardedInjection = NonNullable<
+      Parameters<typeof setActiveEmbeddedRun>[1]["messageInjectionV2"]
+    >;
+    expectTypeOf<Parameters<GuardedInjection["queueMessage"]>[2]>().toEqualTypeOf<() => void>();
+    expectTypeOf<Parameters<GuardedInjection["queueMessage"]>[3]>().toEqualTypeOf<
+      "run" | "source-bound"
+    >();
+    expectTypeOf<Parameters<GuardedInjection["queueMessage"]>["length"]>().toEqualTypeOf<4>();
+  });
+
+  it("keeps legacy question callbacks and requires explicit guarded dispatch authority", () => {
+    type Legacy = (
+      method: string,
+      opts: { timeoutMs?: number },
+      params?: unknown,
+      extra?: { signal?: AbortSignal },
+    ) => Promise<unknown>;
+    expectTypeOf<AgentHarnessQuestionGatewayCall>().toEqualTypeOf<Legacy>();
+    type Override = Parameters<typeof agentHarnessStructuredInput.run>[0]["gatewayCall"];
+    expectTypeOf<Legacy>().toMatchTypeOf<Override>();
+    expectTypeOf<undefined>().toMatchTypeOf<Override>();
+    type Dispatcher = Exclude<Override, Legacy | undefined>;
+    type Request = Parameters<Dispatcher["call"]>[0];
+    type Protected = Extract<Request["authority"], { kind: "source-bound" }>;
+    expectTypeOf<Dispatcher["version"]>().toEqualTypeOf<2>();
+    expectTypeOf<Protected["assertCurrent"]>().toEqualTypeOf<() => void>();
+    expectTypeOf<Omit<Protected, "assertCurrent">>().not.toMatchTypeOf<Protected>();
   });
 
   it("exposes attached model request transport metadata helpers", () => {
@@ -181,9 +270,32 @@ describe("agent harness runtime SDK facade", () => {
       NonNullable<AgentHarnessSupportContext["modelProvider"]>["runtimePolicy"]
     >().toEqualTypeOf<ProviderModelRouteRuntimePolicy | undefined>();
   });
+
+  it("exports the V2 isolated-completion authorization contract through the harness", () => {
+    type IsolatedCompletionV2 = NonNullable<AgentHarnessV2["runIsolatedCompletionV2"]>;
+
+    expectTypeOf<Parameters<IsolatedCompletionV2>[0]["authorization"]["owner"]>().toEqualTypeOf<
+      "host" | "harness"
+    >();
+    expectTypeOf<Awaited<ReturnType<IsolatedCompletionV2>>["assistant"]>().not.toBeNever();
+  });
 });
 
 describe("agent harness user input helpers", () => {
+  it("authorizes host-owned text-only harness updates without altering their visible payload", async () => {
+    const onBlockReply = vi.fn();
+
+    await deliverAgentHarnessUserInputPrompt({ onBlockReply }, [], {
+      intro: "Which environment should I use?",
+    });
+
+    const payload = onBlockReply.mock.calls[0]?.[0];
+    expect(payload).toEqual({ text: "Which environment should I use?", presentation: undefined });
+    expect(getReplyPayloadMetadata(payload)).toMatchObject({
+      deliverDespiteSourceReplySuppression: true,
+    });
+  });
+
   it("formats prompts and delivers through blocking replies first", async () => {
     const onBlockReply = vi.fn();
 
@@ -239,6 +351,42 @@ describe("agent harness user input helpers", () => {
         repo: { answers: ["openclaw"] },
       },
     });
+  });
+
+  it("normalizes every selected option in a multi-select answer", () => {
+    expect(
+      buildAgentHarnessUserInputAnswers(
+        [
+          {
+            id: "checks",
+            header: "Checks",
+            question: "Which checks should run?",
+            multiSelect: true,
+            isOther: true,
+            options: [{ label: "Unit" }, { label: "Lint" }, { label: "Deploy preview" }],
+          },
+        ],
+        "1, Deploy preview",
+      ),
+    ).toEqual({ answers: { checks: { answers: ["Unit", "Deploy preview"] } } });
+  });
+
+  it("keeps a comma-containing option label as one multi-select answer", () => {
+    expect(
+      buildAgentHarnessUserInputAnswers(
+        [
+          {
+            id: "region",
+            header: "Region",
+            question: "Which region should deploy?",
+            multiSelect: true,
+            isOther: true,
+            options: [{ label: "Frankfurt, Germany" }, { label: "Dublin, Ireland" }],
+          },
+        ],
+        "Frankfurt, Germany",
+      ),
+    ).toEqual({ answers: { region: { answers: ["Frankfurt, Germany"] } } });
   });
 
   it("supports runtime-specific text formatting", () => {

@@ -2,9 +2,11 @@
 import { createServer } from "node:http";
 import type { AddressInfo } from "node:net";
 import * as Lark from "@larksuiteoapi/node-sdk";
+import { isChannelPartialDeliveryError } from "openclaw/plugin-sdk/channel-inbound";
 import { describe, expect, it } from "vitest";
 import type { ClawdbotConfig } from "../runtime-api.js";
 import { sendMediaFeishu } from "./media.js";
+import { feishuOutbound } from "./outbound.js";
 import { sendCardFeishu, sendMessageFeishu } from "./send.js";
 
 type RecordedFeishuRequest = {
@@ -16,10 +18,12 @@ type RecordedFeishuRequest = {
   appId?: string;
   authorization?: string;
   replyInThread?: boolean;
+  content?: string;
+  platformMessageId?: string;
 };
 
 describe("Feishu DM delivery over the real Lark SDK", () => {
-  it("authenticates conversation replies and preserves account, group, thread, and error boundaries", async () => {
+  it("preserves routing, card byte envelopes and physical-send receipts", async () => {
     const requests: RecordedFeishuRequest[] = [];
     const server = createServer((request, response) => {
       void (async () => {
@@ -46,6 +50,7 @@ describe("Feishu DM delivery over the real Lark SDK", () => {
             ? { authorization: request.headers.authorization }
             : {}),
           ...(body.reply_in_thread === true ? { replyInThread: true } : {}),
+          ...(typeof body.content === "string" ? { content: body.content } : {}),
         };
         requests.push(record);
 
@@ -81,11 +86,17 @@ describe("Feishu DM delivery over the real Lark SDK", () => {
           return;
         }
 
-        if (path === "/open-apis/im/v1/messages/om_dm_thread_root/reply") {
+        if (
+          path === "/open-apis/im/v1/messages/om_dm_thread_root/reply" ||
+          path === "/open-apis/im/v1/messages/om_card_split_root/reply"
+        ) {
+          record.platformMessageId = path.includes("om_dm_thread_root")
+            ? "om_dm_thread_reply"
+            : `om_dm_loopback_${requests.length}`;
           sendJson(200, {
             code: 0,
             msg: "success",
-            data: { message_id: "om_dm_thread_reply" },
+            data: { message_id: record.platformMessageId },
           });
           return;
         }
@@ -108,10 +119,19 @@ describe("Feishu DM delivery over the real Lark SDK", () => {
           return;
         }
 
+        if (
+          body.receive_id === "oc_card_partial" &&
+          requests.filter((entry) => entry.receiveId === body.receive_id).length === 3
+        ) {
+          sendJson(400, { code: 230027, msg: "Lack of necessary permissions." });
+          return;
+        }
+
+        record.platformMessageId = `om_dm_loopback_${requests.length}`;
         sendJson(200, {
           code: 0,
           msg: "success",
-          data: { message_id: `om_dm_loopback_${requests.length}` },
+          data: { message_id: record.platformMessageId },
         });
       })().catch((error: unknown) => {
         response.writeHead(500, { "content-type": "application/json" });
@@ -288,6 +308,138 @@ describe("Feishu DM delivery over the real Lark SDK", () => {
           }),
         ]),
       );
+
+      const sendText = feishuOutbound.sendText!;
+      for (const fixture of [
+        { name: "default limit", body: "漢".repeat(11_000), limit: 4_000, header: "Header" },
+        { name: "UTF-8 bytes", body: "漢".repeat(11_000), limit: 25_000, header: "Header" },
+        { name: "JSON escapes", body: '"\\'.repeat(8_000), limit: 25_000, header: "Header" },
+        {
+          name: "header and fence overhead",
+          body: "x".repeat(24_576),
+          limit: 25_000,
+          header: "界".repeat(2_000),
+        },
+      ]) {
+        for (const thread of [false, true]) {
+          const before = requests.length;
+          const deliveries: string[] = [];
+          const result = await sendText({
+            cfg: {
+              ...cfg,
+              channels: { feishu: { ...cfg.channels!.feishu, textChunkLimit: fixture.limit } },
+            },
+            to: "chat:oc_dm_conversation",
+            text: `\`\`\`text\n${fixture.body}\n\`\`\``,
+            identity: { name: fixture.header },
+            ...(thread ? { threadId: "om_card_split_root" } : {}),
+            onDeliveryResult: (delivery) => {
+              deliveries.push(delivery.messageId);
+            },
+          });
+          const sent = requests.slice(before).filter((request) => request.messageType);
+          expect
+            .soft(sent.length, `${fixture.name}: split direct card, thread=${thread}`)
+            .toBeGreaterThan(1);
+          const bodies: string[] = [];
+          for (const request of sent) {
+            expect(request.messageType).toBe("interactive");
+            expect(request.path).toBe(
+              thread
+                ? "/open-apis/im/v1/messages/om_card_split_root/reply"
+                : "/open-apis/im/v1/messages",
+            );
+            expect(request.replyInThread).toBe(thread ? true : undefined);
+            expect
+              .soft(Buffer.byteLength(request.content!, "utf8"), fixture.name)
+              .toBeLessThanOrEqual(30 * 1024);
+            const card = JSON.parse(request.content!) as {
+              header: { title: { content: string } };
+              body: { elements: Array<{ tag: string; content: string }> };
+            };
+            expect(card.header.title.content).toBe(fixture.header);
+            const markdown = card.body.elements[0]?.content;
+            if (markdown === undefined) {
+              throw new Error("Expected a Markdown card body");
+            }
+            expect(markdown.startsWith("```text\n")).toBe(true);
+            expect(markdown.endsWith("\n```")).toBe(true);
+            bodies.push(markdown.slice(8, -4));
+          }
+          expect(bodies.join("")).toBe(fixture.body);
+          expect(deliveries).toEqual(sent.map((request) => request.platformMessageId));
+          expect.soft(result.receipt?.platformMessageIds, fixture.name).toEqual(deliveries);
+          expect(result.messageId).toBe(deliveries.at(-1));
+          expect(result.receipt?.primaryPlatformMessageId).toBe(result.messageId);
+        }
+      }
+
+      const postStart = requests.length;
+      const post = await sendText({
+        cfg,
+        to: "chat:oc_dm_conversation",
+        text: "漢".repeat(11_000),
+      });
+      const postIds = requests
+        .slice(postStart)
+        .flatMap((request) => request.platformMessageId ?? []);
+      expect(postIds.length).toBeGreaterThan(1);
+      expect
+        .soft(post.receipt?.platformMessageIds, "logical post receipt contains every physical send")
+        .toEqual(postIds);
+
+      const partialStart = requests.length;
+      let partialError: unknown;
+      try {
+        await sendText({
+          cfg: { ...cfg, channels: { feishu: { ...cfg.channels!.feishu, textChunkLimit: 10 } } },
+          to: "chat:oc_card_partial",
+          text: "abcdefghij".repeat(3),
+        });
+      } catch (error) {
+        partialError = error;
+      }
+      const acceptedIds = requests
+        .slice(partialStart)
+        .flatMap((request) => request.platformMessageId ?? []);
+      expect(acceptedIds).toHaveLength(2);
+      expect
+        .soft(
+          isChannelPartialDeliveryError(partialError),
+          "later rejection preserves accepted chunks",
+        )
+        .toBe(true);
+      if (isChannelPartialDeliveryError(partialError)) {
+        expect(partialError.deliveryResult.visibleReplySent).toBe(true);
+        expect(partialError.deliveryResult.messageIds).toEqual(acceptedIds);
+      }
+
+      const callbackStart = requests.length;
+      let callbackError: unknown;
+      let callbacks = 0;
+      try {
+        await sendText({
+          cfg,
+          to: "chat:oc_dm_conversation",
+          text: "漢".repeat(11_000),
+          onDeliveryResult: () => {
+            if (++callbacks === 2) {
+              throw new Error("recording failed");
+            }
+          },
+        });
+      } catch (error) {
+        callbackError = error;
+      }
+      const callbackIds = requests
+        .slice(callbackStart)
+        .flatMap((request) => request.platformMessageId ?? []);
+      expect(callbacks).toBe(2);
+      expect(callbackIds).toHaveLength(2);
+      expect(isChannelPartialDeliveryError(callbackError)).toBe(true);
+      if (isChannelPartialDeliveryError(callbackError)) {
+        expect(callbackError.deliveryResult.messageIds).toEqual(callbackIds);
+      }
     } finally {
       Lark.defaultHttpInstance.interceptors.request.eject(loopbackInterceptor);
       await new Promise<void>((resolve, reject) => {

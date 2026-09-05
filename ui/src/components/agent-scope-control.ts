@@ -1,4 +1,4 @@
-import { html } from "lit";
+import { html, nothing } from "lit";
 import type { GatewayAgentRow } from "../api/types.ts";
 import type { AgentSelectionCapability } from "../app/agent-selection.ts";
 import { t } from "../i18n/index.ts";
@@ -26,6 +26,9 @@ export function renderAgentScopeControl(params: AgentScopeControlParams) {
       (agent) => agent.kind === "system" && normalizeAgentId(agent.id) === agentId,
     );
   const selectableAgents = listSelectableAgents(params.agents);
+  if (selectableAgents.length <= 1) {
+    return nothing;
+  }
   const agentsById = new Map(
     selectableAgents.map((agent) => {
       const agentId = normalizeAgentId(agent.id);
@@ -60,16 +63,15 @@ export function renderAgentScopeControl(params: AgentScopeControlParams) {
       agent,
     })),
   ];
-  // The picker already labels its own trigger. A wrapping native label would
-  // forward an option click to that trigger and reopen the closed dropdown.
   return html`
     <div class="agent-scope-control">
-      <span class="agent-scope-control__label">${t("agentScope.label")}</span>
       <openclaw-agent-select
         .options=${options}
         .value=${selected}
         .accessibleLabel=${t("agentScope.label")}
-        .onSelect=${(value: string) => params.selection.setScope(value || null)}
+        .menuLabel=${t("agentScope.label")}
+        .onSelect=${(value: string) =>
+          allowAll ? params.selection.setScope(value || null) : params.selection.set(value || null)}
       ></openclaw-agent-select>
     </div>
   `;

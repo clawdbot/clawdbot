@@ -23,17 +23,17 @@ Slack support covers DMs and channels via Slack app integrations. Default transp
 
 Socket Mode and HTTP Request URLs reach feature parity for messaging, slash commands, App Home, and interactivity. Pick by deployment shape, not features.
 
-| Concern                      | Socket Mode (default)                                                                                                                                | HTTP Request URLs                                                                                              |
-| ---------------------------- | ---------------------------------------------------------------------------------------------------------------------------------------------------- | -------------------------------------------------------------------------------------------------------------- |
-| Public Gateway URL           | Not required                                                                                                                                         | Required (DNS, TLS, reverse proxy or tunnel)                                                                   |
-| Outbound network             | Outbound WSS to `wss-primary.slack.com` must be reachable                                                                                            | No outbound WS; inbound HTTPS only                                                                             |
-| Tokens needed                | Bot identity: bot token + App-Level Token with `connections:write`; user identity: user token + App-Level Token                                      | Bot identity: bot token + Signing Secret; user identity: user token + Signing Secret                           |
-| Dev laptop / behind firewall | Works as-is                                                                                                                                          | Needs a public tunnel (ngrok, Cloudflare Tunnel, Tailscale Funnel) or staging Gateway                          |
-| Horizontal scaling           | One Socket Mode session per app per host; multiple Gateways need separate Slack apps                                                                 | Stateless POST handler; multiple Gateway replicas can share one app behind a load balancer                     |
-| Multi-account on one Gateway | Supported; each account opens its own WS                                                                                                             | Supported; each account needs a unique `webhookPath` (default `/slack/events`) so registrations do not collide |
-| Slash command transport      | Delivered over the WS connection; `slash_commands[].url` is ignored                                                                                  | Slack POSTs to `slash_commands[].url`; field is required for the command to dispatch                           |
-| Request signing              | Not used (auth is the App-Level Token)                                                                                                               | Slack signs every request; OpenClaw verifies with `signingSecret`                                              |
-| Recovery on connection drop  | Slack SDK auto-reconnect is enabled; OpenClaw also restarts failed Socket Mode sessions with bounded backoff. Pong-timeout transport tuning applies. | No persistent connection to drop; retries are per-request from Slack                                           |
+| Concern                      | Socket Mode (default)                                                                                                                                  | HTTP Request URLs                                                                                              |
+| ---------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------ | -------------------------------------------------------------------------------------------------------------- |
+| Public Gateway URL           | Not required                                                                                                                                           | Required (DNS, TLS, reverse proxy or tunnel)                                                                   |
+| Outbound network             | Outbound WSS to `wss-primary.slack.com` must be reachable                                                                                              | No outbound WS; inbound HTTPS only                                                                             |
+| Tokens needed                | Bot identity: bot token + App-Level Token with `connections:write`; user identity: user token + App-Level Token                                        | Bot identity: bot token + Signing Secret; user identity: user token + Signing Secret                           |
+| Dev laptop / behind firewall | Works as-is                                                                                                                                            | Needs a public tunnel (ngrok, Cloudflare Tunnel, Tailscale Funnel) or staging Gateway                          |
+| Horizontal scaling           | One Socket Mode session per app per host; multiple Gateways need separate Slack apps                                                                   | Stateless POST handler; multiple Gateway replicas can share one app behind a load balancer                     |
+| Multi-account on one Gateway | Supported; each account opens its own WS                                                                                                               | Supported; each account needs a unique `webhookPath` (default `/slack/events`) so registrations do not collide |
+| Slash command transport      | Delivered over the WS connection; `slash_commands[].url` is ignored                                                                                    | Slack POSTs to `slash_commands[].url`; field is required for the command to dispatch                           |
+| Request signing              | Not used (auth is the App-Level Token)                                                                                                                 | Slack signs every request; OpenClaw verifies with `signingSecret`                                              |
+| Recovery on connection drop  | Slack SDK auto-reconnect is enabled; OpenClaw also restarts failed Socket Mode sessions with bounded backoff. A fixed 15s client pong timeout applies. | No persistent connection to drop; retries are per-request from Slack                                           |
 
 <Note>
   **Pick Socket Mode** for single-Gateway hosts, dev laptops, and on-prem networks that can reach `*.slack.com` outbound but cannot accept inbound HTTPS.
@@ -69,11 +69,13 @@ The relay URL must use `wss://` unless it targets localhost. Treat the bearer to
 
 ### Enterprise Grid org-wide installs
 
-One Slack account can receive messages from every workspace covered by an
-Enterprise Grid org-wide installation. Choose direct Socket Mode or HTTP
-Request URLs; relay mode is not supported for enterprise accounts. Both
-least-privilege manifests below enable only the V1 `message` and `app_mention`
-event path, immediate replies, and listener-owned status reactions.
+One Slack account can receive messages and interactions from every workspace
+covered by an Enterprise Grid org-wide installation. Choose direct Socket Mode
+or HTTP Request URLs; relay mode is not supported for enterprise accounts. Both
+least-privilege manifests below enable the Enterprise message, mention,
+reaction, pin, channel-created, and channel-renamed event paths, immediate
+replies, listener-owned status reactions, Slack interactivity for Block Kit
+actions and modal submissions, and the single `/openclaw` slash command.
 
 #### Socket Mode
 
@@ -84,7 +86,14 @@ event path, immediate replies, and listener-owned status reactions.
     "description": "Slack connector for OpenClaw"
   },
   "features": {
-    "bot_user": { "display_name": "OpenClaw", "always_online": true }
+    "bot_user": { "display_name": "OpenClaw", "always_online": true },
+    "slash_commands": [
+      {
+        "command": "/openclaw",
+        "description": "Send a message to OpenClaw",
+        "should_escape": false
+      }
+    ]
   },
   "oauth_config": {
     "scopes": {
@@ -93,6 +102,7 @@ event path, immediate replies, and listener-owned status reactions.
         "channels:history",
         "channels:read",
         "chat:write",
+        "commands",
         "files:read",
         "files:write",
         "groups:history",
@@ -101,6 +111,8 @@ event path, immediate replies, and listener-owned status reactions.
         "im:read",
         "mpim:history",
         "mpim:read",
+        "pins:read",
+        "reactions:read",
         "reactions:write",
         "users:read"
       ]
@@ -109,13 +121,22 @@ event path, immediate replies, and listener-owned status reactions.
   "settings": {
     "org_deploy_enabled": true,
     "socket_mode_enabled": true,
+    "interactivity": { "is_enabled": true },
     "event_subscriptions": {
       "bot_events": [
         "app_mention",
+        "channel_created",
+        "channel_rename",
         "message.channels",
         "message.groups",
         "message.im",
-        "message.mpim"
+        "message.mpim",
+        "member_joined_channel",
+        "member_left_channel",
+        "pin_added",
+        "pin_removed",
+        "reaction_added",
+        "reaction_removed"
       ]
     }
   }
@@ -135,9 +156,9 @@ uses the org-installed bot token:
     slack: {
       enabled: true,
       mode: "socket",
-      enterpriseOrgInstall: true,
       appToken: { source: "env", provider: "default", id: "SLACK_APP_TOKEN" },
       botToken: { source: "env", provider: "default", id: "SLACK_BOT_TOKEN" },
+      slashCommand: { enabled: true, name: "openclaw" },
       dmPolicy: "open",
       allowFrom: ["*"],
       groupPolicy: "allowlist",
@@ -162,7 +183,15 @@ Socket Mode connection. Replace the example URL with the Gateway's public
     "description": "Slack connector for OpenClaw"
   },
   "features": {
-    "bot_user": { "display_name": "OpenClaw", "always_online": true }
+    "bot_user": { "display_name": "OpenClaw", "always_online": true },
+    "slash_commands": [
+      {
+        "command": "/openclaw",
+        "description": "Send a message to OpenClaw",
+        "should_escape": false,
+        "url": "https://gateway-host.example.com/slack/events"
+      }
+    ]
   },
   "oauth_config": {
     "scopes": {
@@ -171,6 +200,7 @@ Socket Mode connection. Replace the example URL with the Gateway's public
         "channels:history",
         "channels:read",
         "chat:write",
+        "commands",
         "files:read",
         "files:write",
         "groups:history",
@@ -179,6 +209,8 @@ Socket Mode connection. Replace the example URL with the Gateway's public
         "im:read",
         "mpim:history",
         "mpim:read",
+        "pins:read",
+        "reactions:read",
         "reactions:write",
         "users:read"
       ]
@@ -186,14 +218,26 @@ Socket Mode connection. Replace the example URL with the Gateway's public
   },
   "settings": {
     "org_deploy_enabled": true,
+    "interactivity": {
+      "is_enabled": true,
+      "request_url": "https://gateway-host.example.com/slack/events"
+    },
     "event_subscriptions": {
       "request_url": "https://gateway-host.example.com/slack/events",
       "bot_events": [
         "app_mention",
+        "channel_created",
+        "channel_rename",
         "message.channels",
         "message.groups",
         "message.im",
-        "message.mpim"
+        "message.mpim",
+        "member_joined_channel",
+        "member_left_channel",
+        "pin_added",
+        "pin_removed",
+        "reaction_added",
+        "reaction_removed"
       ]
     }
   }
@@ -212,42 +256,71 @@ the enterprise account with the same Request URL path:
     slack: {
       enabled: true,
       mode: "http",
-      enterpriseOrgInstall: true,
       botToken: { source: "env", provider: "default", id: "SLACK_BOT_TOKEN" },
       signingSecret: {
         source: "env",
         provider: "default",
         id: "SLACK_SIGNING_SECRET",
       },
+      slashCommand: { enabled: true, name: "openclaw" },
       webhookPath: "/slack/events",
       dmPolicy: "open",
       allowFrom: ["*"],
       groupPolicy: "allowlist",
       channels: {
-        C0123456789: { requireMention: true },
+        "team:T0123456789:channel:C0123456789": { requireMention: true },
       },
     },
   },
 }
 ```
 
-At startup, OpenClaw verifies `enterpriseOrgInstall` with Slack `auth.test`.
-An org-installed token without the flag, or a workspace token with the flag,
-fails startup. Slack remains the source of truth for which workspaces have
-granted the installation; OpenClaw then applies the configured channel, user,
-DM, and mention policies to each delivered event. Enterprise V1 rejects all
-bot-authored `message` and `app_mention` events before dispatch, regardless of
-`allowBots`, because org installs do not provide a stable workspace-qualified
-bot identity for loop prevention.
+For each selected workspace, open it in Slack's web app and copy the `T...`
+workspace ID from `https://app.slack.com/client/T.../...`. Use that workspace ID
+with the channel's `C...` ID in every qualified policy key, as shown above.
 
-Enterprise support is intentionally limited to direct Socket Mode or HTTP
-`message` and `app_mention` events and their immediate replies. Relay mode,
-slash commands, interactions, App Home, reaction event listeners, pins, Slack
-action tools, Slack-native approvals, bindings, queued or scheduled delivery,
-and proactive sends are unavailable for an enterprise account. Outbound
-acknowledgment, typing, and status reactions are supported through the
-listener-owned Slack client and require `reactions:write`; inbound reaction
-notifications and reaction action tools remain unavailable.
+At startup, OpenClaw uses Slack `auth.test` to detect whether the token belongs
+to a workspace installation or an Enterprise Grid org-wide installation. No
+installation-mode setting is required. Slack remains the source of truth for
+which workspaces have granted the installation; OpenClaw then applies the
+configured channel, user, DM, and mention policies to each delivered event.
+Enterprise installs reject bot-authored `message` and `app_mention` events by
+default. Set `allowBots` on the account or channel to admit them under the same
+loop-prevention rules used by workspace installs. OpenClaw retains the org
+installation's `auth.test` `user_id` and `bot_id` for that check.
+
+Enterprise support accepts direct Socket Mode or HTTP message, mention,
+membership, reaction, pin, channel-created, channel-renamed, Block Kit action,
+modal, and configured shortcut and slash-command payloads plus
+workspace-qualified outbound messages and presence polling. Add any shortcuts to the app manifest's
+`features.shortcuts` list; OpenClaw accepts their callback IDs through the same
+interaction path. The manifest examples register the single `/openclaw`
+command; native command mode still requires the administrator-managed command
+entries described below. Relay mode, channel-ID-change events, App Home, Agent
+and Assistant lifecycle events, configured ACP bindings, and runtime
+current-conversation bindings remain unavailable for an enterprise account.
+Static agent route bindings are supported when a binding without a peer
+specifies `match.teamId`, or a peer ID uses
+`team:<team-id>:channel:<channel-id>` or
+`team:<team-id>:user:<user-id>`.
+Slack-native approvals that originate from a delivered, workspace-qualified
+Slack turn are supported; approval buttons use the same listener-owned,
+workspace-scoped interaction path. Slack action tools are supported for
+enterprise accounts across every group listed in
+[Actions and gates](#actions-and-gates); the configured
+`channels.slack.actions.*` gates and OAuth scopes still apply. Inbound
+membership, reaction, pin, channel-created, and channel-renamed notifications
+use validated listener-owned, workspace-scoped event routing. Outbound
+acknowledgment, typing, and status reactions are also supported through that
+client and require `reactions:write`.
+
+OpenClaw records Enterprise Grid destinations as
+`team:<team-id>:channel:<channel-id>` or `team:<team-id>:user:<user-id>`.
+Current-conversation Slack tool actions inherit that workspace. Detached or
+proactive calls must provide a workspace-qualified target; bare channel and
+user IDs fail closed because those IDs can be reused by different workspaces.
+Actions without a destination parameter, such as `member-info` and
+`emoji-list`, require trusted current Slack conversation context.
 
 Immediate replies reuse the standard Slack delivery behavior for chunks,
 media, metadata, identity fallback, unfurls, and receipts, but only while the
@@ -255,30 +328,41 @@ validated listener-owned client remains in the active event turn. The
 in-memory send queue and thread-participation records are partitioned by that
 event's workspace; the client itself is never serialized or persisted.
 
-Channel policy keys and `dm.groupChannels` entries must use raw stable Slack channel IDs or the
-`channel:<id>` form. OpenClaw normalizes either form to the raw channel ID for
-runtime matching; `slack:`, `group:`, and `mpim:` prefixes fail startup.
-User policy entries must use stable Slack user IDs; names, slugs, display names,
-and email addresses fail startup. IDs must use Slack's canonical uppercase
-prefix and body (for example, `C0123456789` or `U0123456789`); lowercase and
-short lookalikes fail startup. Enterprise accounts cannot enable
+Enterprise channel policy keys must use
+`team:<team-id>:channel:<channel-id>` or the `"*"` wildcard.
+`dm.groupChannels` requires the workspace-qualified form and does not accept
+`"*"`. A delivered Enterprise event never falls back from its qualified
+workspace and channel identity to a bare channel ID. Workspace installations
+retain raw stable channel IDs and `channel:<id>` compatibility. The channel
+prefixes `slack:`, `group:`, and `mpim:` fail startup.
+
+Enterprise user policy entries in `allowFrom`, `reactionAllowlist`, and
+per-channel `users` accept raw stable Slack user IDs, `slack:<user-id>`,
+`user:<user-id>`, `team:<team-id>:user:<user-id>`, or `"*"`. Unqualified
+entries compare only the user ID and can match an org-wide user in any
+workspace. Qualified entries compare both the workspace and user ID.
+Enterprise `toolsBySender` keys accept raw stable user IDs, `id:<user-id>`,
+`channel:slack:<user-id>`, or `"*"`. Names, slugs, display names, and email
+addresses fail startup. IDs must use Slack's canonical uppercase prefix and body
+(for example, `C0123456789` or `U0123456789`); lowercase and short lookalikes
+fail startup. Enterprise accounts cannot enable
 `dangerouslyAllowNameMatching`. Enterprise accounts may set the global
-`mentionPatterns.mode`, but `mentionPatterns.allowIn` and
-`mentionPatterns.denyIn` fail startup because bare Slack channel IDs are not
-workspace-qualified and can be reused across workspaces. Workspace installs
-retain the existing scoped mention-pattern behavior. Each accepted workspace
+`mentionPatterns.mode`. Enterprise `mentionPatterns.allowIn` and
+`mentionPatterns.denyIn` entries use
+`team:<team-id>:channel:<channel-id>`; bare channel IDs fail startup because
+they can be reused across workspaces. Workspace installs retain the existing
+bare-channel scoped mention-pattern behavior. Each accepted workspace
 gets separate routing, session, transcript, dedupe, history, and cache identity
 even when Slack IDs overlap. Within the `message` stream, ordinary user messages
 and user-authored `file_share` events are supported; other message subtypes are
 rejected before authorization or system-event handling.
 
-Enterprise DMs must either be disabled (`dm.enabled=false` or
-`dmPolicy="disabled"`) or explicitly open with `dmPolicy="open"` and
-an effective account `allowFrom` containing the literal `"*"`. An empty
-allowlist or user-specific IDs without `"*"` fails startup. Pairing and
-per-user DM allowlists are rejected because Slack user IDs are not
-workspace-qualified in those authorization stores. Channel and sender policy
-continues to apply to channel messages.
+Enterprise DMs support the same `disabled`, `open`, `allowlist`, and `pairing`
+policies as workspace installs. Pairing approvals are stored as
+`team:<team-id>:user:<user-id>` and are applied only to events from that
+workspace. Explicit account `allowFrom` entries can omit the workspace for an
+org-wide user ID or include it to limit access to one workspace; channel and
+sender policy continues to apply to channel messages.
 
 ## Install
 
@@ -370,6 +454,8 @@ Enterprise Grid organization installation, use the dedicated
         "app_home_opened",
         "app_mention",
         "app_context_changed",
+        "agent_session_stopped",
+        "agent_session_title_changed",
         "channel_rename",
         "member_joined_channel",
         "member_left_channel",
@@ -444,6 +530,8 @@ Enterprise Grid organization installation, use the dedicated
         "app_home_opened",
         "app_mention",
         "app_context_changed",
+        "agent_session_stopped",
+        "agent_session_title_changed",
         "message.channels",
         "message.groups",
         "message.im"
@@ -489,7 +577,7 @@ openclaw config patch --file ./slack.socket.patch.json5 --dry-run
 openclaw config patch --file ./slack.socket.patch.json5
 ```
 
-        Env fallback (default account only):
+        Default-account credential fallback after `channels.slack` is configured:
 
 ```bash
 SLACK_APP_TOKEN=slack-app-token-example
@@ -585,6 +673,8 @@ openclaw gateway
         "app_home_opened",
         "app_mention",
         "app_context_changed",
+        "agent_session_stopped",
+        "agent_session_title_changed",
         "channel_rename",
         "member_joined_channel",
         "member_left_channel",
@@ -665,6 +755,8 @@ openclaw gateway
         "app_home_opened",
         "app_mention",
         "app_context_changed",
+        "agent_session_stopped",
+        "agent_session_title_changed",
         "message.channels",
         "message.groups",
         "message.im"
@@ -774,7 +866,7 @@ Socket Mode configuration:
 {
   channels: {
     slack: {
-      identity: "user",
+      postAs: "user",
       userToken: "<xoxp>",
       appToken: "<xapp>",
     },
@@ -788,7 +880,7 @@ HTTP Request URL configuration:
 {
   channels: {
     slack: {
-      identity: "user",
+      postAs: "user",
       mode: "http",
       userToken: "<xoxp>",
       signingSecret: "<signing-secret>",
@@ -806,30 +898,12 @@ OpenClaw automatically drops user-scope message events authored by the resolved 
 
 ## Socket Mode transport tuning
 
-OpenClaw sets the Slack SDK client pong timeout to 15 seconds by default for Socket Mode. Override the transport settings only when you need workspace- or host-specific tuning:
-
-```json5
-{
-  channels: {
-    slack: {
-      mode: "socket",
-      socketMode: {
-        clientPingTimeout: 20000,
-        serverPingTimeout: 30000,
-        pingPongLoggingEnabled: false,
-      },
-    },
-  },
-}
-```
-
-Use this only for Socket Mode workspaces that log Slack websocket pong/server-ping timeouts or run on hosts with known event-loop starvation. `clientPingTimeout` is the pong wait after the SDK sends a client ping; `serverPingTimeout` is the wait for Slack server pings. App messages and events remain application state, not transport liveness signals.
+OpenClaw sets the Slack SDK client pong timeout to 15 seconds for Socket Mode. This is a fixed internal default and is not operator-configurable.
 
 Notes:
 
-- `socketMode` is ignored in HTTP Request URL mode.
-- Base `channels.slack.socketMode` settings apply to all Slack accounts unless overridden. Per-account overrides use `channels.slack.accounts.<accountId>.socketMode`; because this is an object override, include every socket tuning field you want for that account.
-- Only `clientPingTimeout` has an OpenClaw default (`15000`). `serverPingTimeout` and `pingPongLoggingEnabled` are passed to the Slack SDK only when configured.
+- The `channels.slack.socketMode` object, including `clientPingTimeout`, `serverPingTimeout`, and `pingPongLoggingEnabled`, is retired and is no longer read at runtime. `openclaw doctor` flags retired layout tuning knobs with a general notice rather than a per-key path. `openclaw doctor --fix` removes those three fields wherever they appear, at the channel root and under `accounts.<accountId>`, and drops the `socketMode` object once it is empty. Any other key you added inside it is left alone, so delete it by hand.
+- App messages and events remain application state, not transport liveness signals.
 - Socket Mode restart backoff starts around 2 seconds and caps around 30 seconds. Recoverable start, start-wait, and disconnect failures retry until the channel stops. Permanent account and credential errors such as invalid auth, revoked tokens, or missing scopes fail fast instead of retrying forever.
 
 ## Manifest and scope checklist
@@ -906,6 +980,8 @@ Base manifest (Socket Mode default):
         "app_home_opened",
         "app_mention",
         "app_context_changed",
+        "agent_session_stopped",
+        "agent_session_title_changed",
         "channel_rename",
         "member_joined_channel",
         "member_left_channel",
@@ -944,6 +1020,8 @@ For **HTTP Request URLs mode**, replace `settings` with the HTTP variant and add
         "app_home_opened",
         "app_mention",
         "app_context_changed",
+        "agent_session_stopped",
+        "agent_session_title_changed",
         "channel_rename",
         "member_joined_channel",
         "member_left_channel",
@@ -970,9 +1048,11 @@ For **HTTP Request URLs mode**, replace `settings` with the HTTP variant and add
 
 Surface different features that extend the above defaults.
 
-The default manifest enables the Slack App Home **Home** tab and subscribes to `app_home_opened`. When a workspace member opens the Home tab, OpenClaw publishes a safe default Home view with `views.publish`; no conversation payload or private configuration is included. When single slash command mode is enabled, the command hint uses `channels.slack.slashCommand.name`; installations using native commands or no slash commands omit that hint. The **Messages** tab remains enabled for Slack DMs. New apps use Slack Agent View through `features.agent_view`, `assistant:write`, and `app_context_changed`. Each visible Agent View root routes to its own OpenClaw thread session, and Slack's ordered active-view entities reach the agent only as untrusted context.
+The default manifest enables the Slack App Home **Home** tab and subscribes to `app_home_opened`. When a workspace member opens the Home tab, OpenClaw publishes a safe default Home view with `views.publish`; no conversation payload or private configuration is included. When single slash command mode is enabled, the command hint uses `channels.slack.slashCommand.name`; installations using native commands or no slash commands omit that hint. The **Messages** tab remains enabled for Slack DMs. New apps use Slack Agent View through `features.agent_view`, `assistant:write`, and `app_context_changed`. See [Agent View DMs](/channels/slack#agent-view-dms) for how OpenClaw detects the experience and routes each visible root to its own session.
 
-Existing apps that already use `features.assistant_view` can keep their current manifest. OpenClaw continues to handle `assistant_thread_started` and `assistant_thread_context_changed` for those installs. Slack makes migration from Assistant View to Agent View irreversible and requires users to hard refresh afterward, so do not replace `assistant_view` on an existing app until you intend to migrate the whole workspace.
+OpenClaw drives Slack session status: `processing` while a turn runs, `suspended` while a native approval waits, and `active` when done. The native **Stop** button requires the `agent_session_stopped` event subscription and aborts the run like `/stop`, with the same authorization checks. Session titles follow the OpenClaw session display name; the `agent_session_title_changed` subscription lets user renames flow back to OpenClaw.
+
+Existing apps that already use `features.assistant_view` can keep that feature setting. OpenClaw continues to handle `assistant_thread_started` and `assistant_thread_context_changed` for those installs; add the same session event subscriptions for Stop and title synchronization. Slack makes migration from Assistant View to Agent View irreversible and requires users to hard refresh afterward, so do not replace `assistant_view` on an existing app until you intend to migrate the whole workspace.
 
 <AccordionGroup>
   <Accordion title="Optional native slash commands">
@@ -1186,7 +1266,7 @@ Status snapshot behavior:
   `userTokenStatus` + `appTokenStatus` for user identity.
 
 <Tip>
-For bot identity, actions and directory reads can prefer an optional user token; writes continue to use the bot token unless `userTokenReadOnly: false` allows fallback. For `identity: "user"`, reads and writes always use `userToken`.
+For bot identity, actions and directory reads can prefer an optional user token; writes continue to use the bot token unless `userTokenReadOnly: false` allows fallback. For `postAs: "user"`, reads and writes always use `userToken`.
 </Tip>
 
 ## Actions and gates
@@ -1203,7 +1283,27 @@ Available action groups in current Slack tooling:
 | memberInfo | enabled |
 | emojiList  | enabled |
 
-Current Slack message actions include `send`, `upload-file`, `download-file`, `read`, `edit`, `delete`, `pin`, `unpin`, `list-pins`, `member-info`, and `emoji-list`. `download-file` accepts Slack file IDs shown in inbound file placeholders and returns image previews for images or local file metadata for other file types.
+Current Slack message actions include `send`, `conversation-open`, `upload-file`, `download-file`, `read`, `edit`, `delete`, `pin`, `unpin`, `list-pins`, `member-info`, and `emoji-list`. `download-file` accepts Slack file IDs shown in inbound file placeholders and returns image previews for images or local file metadata for other file types.
+
+Use `emoji-list` to discover workspace custom emoji and aliases:
+
+```json
+{ "action": "emoji-list", "channel": "slack", "limit": 25 }
+```
+
+Results are sorted by shortcode name. `limit` defaults to and cannot exceed 100:
+
+```json
+{
+  "ok": true,
+  "emojis": [
+    { "name": "celebrate", "identifier": "celebrate", "aliasOf": "party" },
+    { "name": "party", "identifier": "party" }
+  ]
+}
+```
+
+Use an entry's `identifier` directly as the `react` emoji; surrounding colons are optional. `channels.slack.actions.emojiList` controls discovery separately from the `reactions` gate, and the app needs the `emoji:read` scope.
 
 ## Access control and routing
 
@@ -1230,6 +1330,8 @@ Current Slack message actions include `send`, `upload-file`, `download-file`, `r
 
     Multi-account precedence:
 
+    - Omitted account `dmPolicy` and `groupPolicy` inherit the channel root. Explicit account policies win; with neither scope set, defaults remain `pairing` and `allowlist` respectively.
+    - `userTokenReadOnly` also inherits the channel setting when omitted; its default remains `true`.
     - `channels.slack.accounts.default.allowFrom` applies only to the `default` account.
     - Named accounts inherit `channels.slack.allowFrom` when their own `allowFrom` is unset.
     - Named accounts do not inherit `channels.slack.accounts.default.allowFrom`.
@@ -1247,9 +1349,11 @@ Current Slack message actions include `send`, `upload-file`, `download-file`, `r
     - `allowlist`
     - `disabled`
 
-    Channel allowlist lives under `channels.slack.channels` and **must use stable Slack channel IDs** (for example `C12345678`) as config keys.
+    Channel allowlist lives under `channels.slack.channels` and **must use stable Slack channel IDs** (for example `C12345678`) as config keys. Enterprise Grid org installs require `team:<team-id>:channel:<channel-id>` so policies cannot cross workspace boundaries.
 
-    Runtime note: if `channels.slack` is completely missing (env-only setup), runtime falls back to `groupPolicy="allowlist"` and logs a warning (even if `channels.defaults.groupPolicy` is set).
+    When invited into an allowed channel, OpenClaw posts one short introduction grounded in the channel name, purpose or topic, and available recent messages. Set `channels.slack.joinIntro: false` to disable these introductions; `channels.slack.accounts.<accountId>.joinIntro` overrides the channel-wide setting. Introductions are enabled by default and do not require a mention, but they never bypass channel access policy or run in direct messages.
+
+    Without a `channels.slack` block, the Gateway does not auto-start Slack from `SLACK_*` environment variables. Once the block exists, those variables remain default-account credential fallbacks. Passing `--ambient-channels` opts into env-only auto-configuration; that path uses `groupPolicy="allowlist"` and logs a warning, even if `channels.defaults.groupPolicy` is set.
 
     Name/ID resolution:
 
@@ -1340,13 +1444,25 @@ Slack group DMs, also called multi-person direct messages or MPDMs, are not chan
 To bring the app into a group DM, use one of these Slack-supported paths:
 
 1. Convert the group DM to a private channel, then ask a current member to invite the app with `/invite @YourBot`. An API-based invite must call `conversations.invite` with a token whose actor is already a member and allowed to invite the app.
-2. Have the app open a new MPDM with `conversations.open` using a bot token with `mpim:write`, passing the human recipients in `users`. Slack includes the calling bot user automatically.
+2. Ask the app to use the message tool's `conversation-open` action with the human recipients in `userIds`. It calls `conversations.open` using the configured write identity; bot accounts need `mpim:write`. Slack includes the calling account automatically.
+
+```json
+{
+  "action": "conversation-open",
+  "channel": "slack",
+  "userIds": ["U12345678", "U23456789"]
+}
+```
+
+Provide 1-8 distinct member IDs, excluding the calling account. One recipient opens a 1:1 DM (requiring `im:write`); multiple recipients open or reuse a group DM with that exact audience. The result contains `channelId` and a routable `target`. Send the message with `action: "send"` and that exact `target`.
+
+Use `accountId` to select a configured Slack account and `teamId` for an explicit workspace. The current workspace is inherited only for the same originating account; detached Enterprise operations require `teamId`. Opening is controlled by the `messages` action gate. It does not change DM/read policy, grant history access, or send a message by itself.
 
 ## Threading, sessions, and reply tags
 
 - DMs route as `direct`; channels as `channel`; MPIMs as `group`.
 - Slack route bindings accept raw peer IDs plus Slack target forms such as `channel:C12345678`, `user:U12345678`, and `<@U12345678>`.
-- With default `session.dmScope=main`, ordinary Slack DMs collapse to the agent main session. Agent View roots and existing Assistant View threads remain isolated as `:thread:<threadTs>` sessions.
+- With default `session.dmScope=main`, ordinary Slack DMs collapse to the agent main session. Agent View roots and existing Assistant View threads remain isolated as `:thread:<threadTs>` sessions; see [Agent View DMs](/channels/slack#agent-view-dms).
 - Channel sessions: `agent:<agentId>:slack:channel:<channelId>`.
 - Ordinary top-level channel messages stay on the per-channel session, even when `replyToMode` is non-`off`.
 - Slack channel, MPIM, Agent View, and Assistant View thread replies use the parent Slack `thread_ts` for session suffixes (`:thread:<threadTs>`). Ordinary DM reply threads remain a UI affordance on the base DM session.
@@ -1377,11 +1493,24 @@ When a `message` tool call runs inside a Slack thread and targets the same chann
 `replyToMode="off"` disables optional outbound Slack reply threading, including explicit `[[reply_to_*]]` tags. Agent View and Assistant View are Slack-managed threaded experiences, so their replies and status remain on the visible root regardless of this setting. It does not flatten other inbound Slack thread sessions. This differs from Telegram, where explicit tags are still honored in `"off"` mode. Slack threads hide messages from the channel while Telegram replies stay visible inline.
 </Note>
 
+### Agent View DMs
+
+Slack Agent View (`features.agent_view`) is Slack's messaging experience for AI apps. Slack marks the app as an agent, and in the app's **Messages** tab each message typed in the top-level composer starts a new root that Slack threads on its own; follow-ups belong inside that root's thread. OpenClaw treats every root as a separate conversation:
+
+- Each root gets a `:thread:<rootTs>` suffix on top of whatever base session `session.dmScope` selects, so roots stay isolated even under the default `main` scope. With `per-channel-peer` a root looks like `agent:main:slack:direct:U12345678:thread:1777244748.777299`; with `main` it looks like `agent:main:main:thread:1777244748.777299`.
+- Follow-ups inside the root's thread stay on that root's session. A new top-level composer message starts a new session.
+- Replies and thread status stay on the visible root regardless of `replyToMode`, because Slack owns the threading.
+- Slack's active-view entities (`app_context`) reach the agent only as structured untrusted context in Slack's relevance order; a DM without `app_context` clears the entities for that turn rather than reusing stale ones.
+
+Slack never states which experience an app uses, so OpenClaw records Agent View from the first of these signals it sees: an `app_context_changed` event, a DM that carries `app_context`, or the threadless `assistant.threads.setSuggestedPrompts` call OpenClaw makes when a member opens the **Messages** tab. Slack answers that call with `ok` or `internal_error` for Agent View apps and with `not_agent_app` for Assistant View apps, so both `ok` and `internal_error` count as evidence; transport failures stay inconclusive and are retried on the next open. A DM whose `thread_ts` equals its own `ts` is recognized as a Slack-managed root on its own. Until one of these signals has been seen, a plain DM root follows ordinary DM routing.
+
+The marker is durable and keyed by account, workspace, and Slack app ID, so Agent View survives Gateway restarts once the app ID is known. Socket Mode reads the app ID from the app token at startup. HTTP mode learns it from the first signed event after startup and logs `slack app id <id> learned from signed event` once. Relay mode has no app ID source, so its marker lives only in the running process. Existing apps on `features.assistant_view` keep Assistant View threads instead; see [Additional manifest settings](/channels/slack#additional-manifest-settings).
+
 ## Ack reactions
 
 `ackReaction` sends an acknowledgement emoji while OpenClaw is processing an inbound message. `ackReactionScope` decides _when_ that emoji is actually sent.
 
-By default, the acknowledgement stays static while Slack's native agent/assistant thread status shows progress with rotating loading messages. Set `messages.statusReactions.enabled: true` to opt into the queued/thinking/tool/done/error reaction lifecycle instead.
+The acknowledgement stays static during work. With `messages.statusReactions.enabled: true`, actual failures briefly show an error reaction before restoring the acknowledgement. Tool calls, thinking, compaction, and long-running tools do not cycle or accumulate reactions, and successful completion does not flash a separate success emoji.
 
 ### Emoji (`ackReaction`)
 
@@ -1410,7 +1539,7 @@ Values:
 - `"off"` / `"none"`: never react.
 
 <Note>
-The default scope (`"group-mentions"`) does not fire ack reactions in direct messages or ambient room events. To see the configured `ackReaction` (for example `"eyes"`) on inbound Slack DMs and quiet room events, set `messages.ackReactionScope` to `"all"`. `messages.ackReactionScope` is read at Slack provider startup, so a gateway restart is needed for the change to take effect.
+The default scope (`"group-mentions"`) does not fire ack reactions in direct messages or ambient room events. To see the configured `ackReaction` (for example `"eyes"`) on inbound Slack DMs and quiet room events, set `messages.ackReactionScope` to `"all"`. Scope changes apply to the next message without reconnecting Slack.
 </Note>
 
 ```json5
@@ -1427,13 +1556,13 @@ The default scope (`"group-mentions"`) does not fire ack reactions in direct mes
 `channels.slack.streaming` controls live preview behavior:
 
 - `off`: disable live preview streaming.
-- `partial` (default): replace preview text with the latest partial output.
+- `partial`: replace preview text with the latest partial output. Set this to restore the previous default behavior.
 - `block`: append chunked preview updates.
-- `progress`: show progress status text while generating, then send final text.
-- `streaming.preview.toolProgress`: when draft preview is active, route tool/progress updates into the same edited preview message (default: `true`). Set `false` to keep separate tool/progress messages.
-- `streaming.preview.commandText` / `streaming.progress.commandText`: set to `status` to keep compact tool-progress lines while hiding raw command/exec text (default: `raw`).
+- `progress` (default): show structured progress in one native task card when Slack supports it, with a Block Kit session-card fallback.
+- `streaming.progress.toolProgress`: `progress` mode is quiet by default (`false`). Set `true` to add one task row (native card) or activity line (Block Kit card) per tool call, plus tool/file/time counters on the Block Kit card. `streaming.preview.toolProgress` controls tool previews in `partial` and `block` modes (default: `true`).
+- `streaming.preview.commandText` / `streaming.progress.commandText`: `status` keeps compact tool-progress lines while hiding raw command/exec text (default); set `raw` to opt into command text.
 
-Hide raw command/exec text while keeping compact progress lines:
+Show the tool log while hiding raw command/exec text:
 
 ```json
 {
@@ -1453,15 +1582,45 @@ Hide raw command/exec text while keeping compact progress lines:
 
 `channels.slack.streaming.nativeTransport` controls Slack native text streaming when `channels.slack.streaming.mode` is `partial` (default: `true`).
 
-Slack native progress task cards are opt-in for progress mode. Set `channels.slack.streaming.progress.nativeTaskCards` to `true` with `channels.slack.streaming.mode="progress"` to send a Slack-native plan/task card while work is running, then update the same task card at completion. Without this flag, progress mode keeps the portable draft-preview behavior.
+In `progress` mode, Slack's native agent card is the default: the whole turn is one streamed message that interleaves narration with a live plan/task card and finishes with the assistant's answer in that same message. The card shows authored plan steps when the agent publishes a plan, otherwise one stable work-summary row; approval requests and failed commands get their own row. With `progress.toolProgress: true`, it also shows per-tool task rows alongside any authored plan. Routine updates coalesce at one-second intervals; approvals, failures, and completion bypass that delay. A tool failure shows as a red attention row while the turn runs; if the turn still completes successfully, that row settles as `Recovered: …` instead of staying red. The card appears only once a turn does real work — tool or plan activity still running after a short delay — so a plain question is answered without one.
 
-- A reply thread must be available for native text streaming and Slack assistant thread status to appear. Thread selection still follows `replyToMode`.
+Set `channels.slack.streaming.progress.nativeTaskCards` to `false` to fall back to the Block Kit session card, which posts a separate message showing title, narration, plan checklist, and authored commentary, and finalizes to success or error. With `progress.toolProgress: true` it also lists recent tool activity, tool/file totals, and elapsed time.
+
+Set `channels.slack.streaming.progress.style` to `"compact"` for one plain-text progress draft instead of either card surface. Explicitly setting `progress.toolProgress: false` also selects compact style when `style` is unset; leaving both options unset keeps the default quiet card. Set `style: "card"` to keep a card with `toolProgress: false`. Commentary appears as italic text, and authored reasoning, approval requests, and failures remain visible. The final response is posted as a new message, then the temporary preview is deleted after Slack confirms delivery. Older previews displaced by human replies are cleaned up with it; durable messages and videos stay in the conversation.
+
+For streamed preambles, Slack waits for the first complete preamble before creating the message, so its notification contains the full thought rather than a single token. Once that message exists, later preambles can stream as edits without another notification.
+
+```json5
+{
+  channels: {
+    slack: {
+      streaming: {
+        mode: "progress",
+        progress: {
+          style: "compact",
+          label: false,
+          commentary: true,
+          toolProgress: false,
+        },
+      },
+    },
+  },
+}
+```
+
+Compact progress always uses normal final delivery, including for media and errors. Other draft modes use normal delivery when the reply cannot safely replace the draft, including oversized text, split block payloads, custom outbound identity, or an edit failure.
+
+Both surfaces link the session with **Open in OpenClaw**, but only when that link can work: `gateway.publicOrigin` must be set (the externally reachable Gateway origin) and the Control UI must not be disabled via `gateway.controlUi.enabled: false`. Installations that leave `publicOrigin` unset — where there is no way to reach OpenClaw from Slack — get no link rather than a dead one. If the Control UI is served below a path prefix, also set `gateway.controlUi.basePath`.
+
+- A reply thread must be available for native text streaming and Slack session status to appear. Thread selection still follows `replyToMode`.
 - Channel, group-chat, and top-level DM roots can still use the normal draft preview when native streaming is unavailable or no reply thread exists.
 - Top-level Slack DMs stay off-thread by default, so they do not show Slack's thread-style native stream/status preview; OpenClaw posts and edits a draft preview in the DM instead.
-- Custom outbound username/icon settings keep portable previews enabled. OpenClaw keeps the preview app-authored so partial/block previews can be removed before a separately customized final; progress mode may instead collapse the app-authored draft into a receipt. Slack does not allow impersonated messages to be deleted.
+- Custom outbound username/icon settings keep portable previews enabled. OpenClaw keeps the preview or session card app-authored and delivers the customized final separately. Slack does not allow impersonated messages to be deleted.
 - Media and non-text payloads fall back to normal delivery.
-- Media/error finals cancel pending preview edits; eligible text/block finals flush only when they can edit the preview in place.
-- If streaming fails mid-reply, OpenClaw falls back to normal delivery for remaining payloads.
+- Outside compact progress, media/error finals cancel pending preview edits; eligible text/block finals flush only when they can edit the preview in place.
+- Native streamed replies wait for Slack's acknowledgement before delivery is marked successful. Each complete reply block flushes separately, including short blocks; routine progress updates still coalesce. A later progress-card finalization failure does not discard an already acknowledged reply.
+- Explicit HTTP 429 rate-limit rejections are retried up to twice by default, after Slack's `Retry-After` delay. This also applies to ordinary messages and upload completion; lost responses and server errors are not replayed.
+- Definite recipient or scope rejections fall back to normal delivery for buffered text. Ambiguous streaming failures (such as a lost response) report failure without replaying the unacknowledged text, because Slack may already have accepted it. Later payloads use normal delivery.
 
 Use draft preview instead of Slack native text streaming:
 
@@ -1478,7 +1637,7 @@ Use draft preview instead of Slack native text streaming:
 }
 ```
 
-Opt in to Slack native progress task cards:
+Select Slack native progress task cards explicitly:
 
 ```json5
 {
@@ -1488,7 +1647,6 @@ Opt in to Slack native progress task cards:
         mode: "progress",
         progress: {
           nativeTaskCards: true,
-          render: "rich",
         },
       },
     },
@@ -1505,7 +1663,7 @@ Legacy keys:
 
 ## Typing reaction fallback
 
-`typingReaction` adds a temporary reaction to the inbound Slack message while OpenClaw is processing a reply, then removes it when the run finishes. This is most useful outside of thread replies, which use a default "is typing..." status indicator.
+`typingReaction` adds a temporary reaction to the inbound Slack message while OpenClaw is processing a reply, then removes it when the run finishes. This is most useful outside of thread replies, which use Slack's `processing` session status.
 
 Resolution order:
 
@@ -1750,6 +1908,11 @@ Slack can act as a native approval client with interactive buttons and interacti
 - Plugin approval DMs use Slack plugin approvers from `channels.slack.allowFrom`, named-account `allowFrom`, or the account default route.
 - Approver authorization is still enforced: exec-only approvers cannot approve plugin requests unless they are also plugin approvers.
 
+For Enterprise Grid org installs, the originating event's validated workspace
+is retained for the approval prompt, approver DM, button callback, and final
+message update. Approval delivery fails closed when an org-installed account
+does not have that event-owned workspace scope.
+
 This uses the same shared approval button surface as other channels. When `interactivity` is enabled in your Slack app settings, approval prompts render as Block Kit buttons directly in the conversation.
 When those buttons are present, they are the primary approval UX; OpenClaw
 should only include a manual `/approve` command when the tool result says chat
@@ -1762,26 +1925,30 @@ Config path:
 - `channels.slack.execApprovals.target` (`dm` | `channel` | `both`, default: `dm`)
 - `agentFilter`, `sessionFilter`
 
-Slack auto-enables native exec approvals when `enabled` is unset or `"auto"` and at least one
-exec approver resolves. Slack can also handle native plugin approvals through this native-client
-path when Slack plugin approvers resolve and the request matches the native-client filters. Set
-`enabled: false` to disable Slack as a native approval client explicitly. Set `enabled: true` to
-force native approvals on when approvers resolve. Disabling Slack exec approvals does not disable
-native Slack plugin approval delivery that is enabled through `approvals.plugin`; plugin approval
-delivery uses Slack plugin approvers instead.
+Slack native exec approvals require `enabled: true` or `"auto"` and at least one
+resolved exec approver. Leaving `enabled` unset or setting it to `false` disables
+native exec approval delivery. Slack can also handle native plugin approvals
+through this native-client path when Slack plugin approvers resolve and the
+request matches its filters. Disabling Slack exec approvals does not disable
+native plugin approval delivery enabled through `approvals.plugin`, which uses
+Slack plugin approvers instead.
 
-Default behavior with no explicit Slack exec approval config:
+Minimal Slack-native configuration using command owners as approvers:
 
 ```json5
 {
+  channels: {
+    slack: {
+      execApprovals: { enabled: "auto" },
+    },
+  },
   commands: {
     ownerAllowFrom: ["slack:U12345678"],
   },
 }
 ```
 
-Explicit Slack-native config is only needed when you want to override approvers, add filters, or
-opt into origin-chat delivery:
+To override approvers, add filters, or opt into origin-chat delivery:
 
 ```json5
 {
@@ -1810,6 +1977,7 @@ Same-chat `/approve` also works in Slack channels and DMs that already support c
 - Thread broadcasts ("Also send to channel" thread replies) are processed as normal user messages.
 - Reaction add/remove events are mapped into system events.
 - Member join/leave, channel created/renamed, and pin add/remove events are mapped into system events.
+- When the bot itself joins an allowed channel, it posts one introduction grounded in the channel name, purpose or topic, and available recent messages. Introductions are enabled by default, never run in direct messages, and can be disabled with `channels.slack.joinIntro: false` or overridden per account with `channels.slack.accounts.<accountId>.joinIntro`. See [group join introductions](/channels#group-join-introductions) for the history limits, once-per-room behavior, and untrusted-content handling.
 - Optional presence polling can map an observed human participant's `away` to `active` transition into the participant's most recently active eligible Slack session. The default is off.
 - `channel_id_changed` can migrate channel config keys when `configWrites` is enabled.
 - Channel topic/purpose metadata is treated as untrusted context and can be injected into routing context.
@@ -1832,7 +2000,10 @@ Slack does not send presence changes through the Events API or Socket Mode. Open
 {
   channels: {
     slack: {
-      presenceEvents: { mode: "auto" },
+      presenceEvents: {
+        mode: "auto",
+        prompt: "Do not send a greeting. Stay silent.",
+      },
       channels: {
         C0123456789: { presenceEvents: { mode: "on" } },
         C0987654321: { presenceEvents: { mode: "off" } },
@@ -1846,9 +2017,13 @@ Slack does not send presence changes through the Events API or Socket Mode. Open
 - `auto`: monitor DMs, MPIMs, and Slack threads active in the last 24 hours with at most 8 observed human participants. Top-level channel sessions are excluded.
 - `on`: monitor the same conversations without the participant cap and include top-level channel sessions. Use a per-channel override to force or suppress one channel.
 
-OpenClaw polls at most 45 unique users per minute per Slack account, seeds the first result without waking the agent, and only wakes on an observed `away` to `active` transition. A durable 8-hour cooldown applies per Slack account and user, even if that person participates in several threads. The event routes only to that person's most recently active eligible conversation and tells the agent to consult memory/wiki and known timezone context before deciding whether to send one short greeting. The agent may stay silent.
+OpenClaw polls at most 45 unique workspace-user pairs per minute per Slack account, seeds the first result without waking the agent, and only wakes on an observed `away` to `active` transition. A durable 8-hour cooldown applies per Slack account, workspace, and user, even if that person participates in several threads. The event routes only to that person's most recently active eligible conversation and tells the agent to consult memory/wiki and known timezone context before deciding whether to send one short greeting. The agent may stay silent.
 
-The bot token needs `users:read`, which is already included in the recommended manifest. Presence events are unavailable for Enterprise Grid org-wide installs.
+The event includes `observed_away_at_ms`, `observed_active_at_ms`, and `observed_away_duration_ms`. The duration is the elapsed time between the first sampled `away` state in the current monitor run and the later sampled `active` state. It is not exact time away because presence can change between polls, and the observation starts fresh after the monitor restarts or the target expires. The event records what Slack reported, not whether the person was at their keyboard; Slack can mark someone away automatically or manually, and `users.getPresence` does not distinguish those cases for another user.
+
+`presenceEvents.prompt` replaces the default greeting guidance after the event facts. The account-level value applies by default, and `channels.<channel-id>.presenceEvents.prompt` can override it for one channel. The custom value is included verbatim and is limited to 20,000 characters, matching the default per-file `AGENTS.md` bootstrap limit. Set it to an empty string to omit event-specific guidance and let workspace instructions such as `AGENTS.md` decide how to handle the event. The presence facts are always included.
+
+The bot token needs `users:read`, which is already included in the recommended manifest. Enterprise Grid org-wide installs create a workspace-scoped polling client only after an authorized event identifies that workspace; presence state, cooldowns, and delivery targets remain partitioned by workspace.
 
 ## Configuration reference
 
@@ -1856,12 +2031,13 @@ Primary reference: [Configuration reference - Slack](/gateway/config-channels#sl
 
 <Accordion title="High-signal Slack fields">
 
-- mode/auth: `identity`, `mode`, `enterpriseOrgInstall`, `botToken`, `appToken`, `userToken`, `signingSecret`, `webhookPath`, `accounts.*`
+- mode/auth: `postAs`, `mode`, `botToken`, `appToken`, `userToken`, `signingSecret`, `webhookPath`, `accounts.*`
 - DM access: `dm.enabled`, `dmPolicy`, `allowFrom` (legacy: `dm.policy`, `dm.allowFrom`), `dm.groupEnabled`, `dm.groupChannels`
 - compatibility toggle: `dangerouslyAllowNameMatching` (break-glass; keep off unless needed)
 - channel access: `groupPolicy`, `channels.*`, `channels.*.users`, `channels.*.requireMention`, `implicitMentions.*`
+- group introductions: `joinIntro`, `accounts.*.joinIntro` (default: `true`)
 - threading/history: `replyToMode`, `replyToModeByChatType`, `thread.*`, `historyLimit`, `dmHistoryLimit`, `dms.*.historyLimit`
-- presence wakes: `presenceEvents.mode`, `channels.*.presenceEvents.mode` (`off|auto|on`; default `off`)
+- presence wakes: `presenceEvents.mode`, `presenceEvents.prompt`, `channels.*.presenceEvents.*` (`off|auto|on`; default `off`)
 - delivery: `textChunkLimit`, `streaming.chunkMode`, `mediaMaxMb`, `streaming`, `streaming.nativeTransport`, `streaming.preview.toolProgress`
 - unfurls: `unfurlLinks` (default: `false`), `unfurlMedia` for `chat.postMessage` link/media preview control; set `unfurlLinks: true` to opt back into link previews
 - ops/features: `configWrites`, `commands.native`, `slashCommand.*`, `actions.*`, `userToken`, `userTokenReadOnly`
@@ -1875,7 +2051,7 @@ Primary reference: [Configuration reference - Slack](/gateway/config-channels#sl
     Check, in order:
 
     - `groupPolicy`
-    - channel allowlist (`channels.slack.channels`) — **keys must be channel IDs** (`C12345678`), not names (`#channel-name`). Name-based keys silently fail under `groupPolicy: "allowlist"` because channel routing is ID-first by default. To find an ID: right-click the channel in Slack → **Copy link** — the `C...` value at the end of the URL is the channel ID.
+    - channel allowlist (`channels.slack.channels`) — **keys must be channel IDs** (`C12345678`) or workspace-qualified channel targets (`team:<team-id>:channel:<channel-id>`), not names (`#channel-name`). Name-based keys silently fail under `groupPolicy: "allowlist"` because channel routing is ID-first by default. To find an ID: right-click the channel in Slack → **Copy link** — the `C...` value at the end of the URL is the channel ID.
     - `requireMention`
     - per-channel `users` allowlist
     - `messages.groupChat.visibleReplies`: normal group/channel requests default to `"automatic"`. If you opted into `"message_tool"` and logs show assistant text with no `message(action=send)` call, the model missed the visible message-tool path. Final text stays private in this mode; inspect the gateway verbose log for suppressed payload metadata, or set it to `"automatic"` if you want every normal assistant final reply posted through the legacy path.
@@ -1899,6 +2075,11 @@ openclaw logs --follow
 openclaw doctor
 ```
 
+    When preparation rejects an inbound event, the info-level log records
+    `Slack inbound event rejected during preparation` with a reason and routing IDs.
+    Records describe attempts: a rejected `message` event can still be followed by a
+    successful `app_mention` event for the same post. Self-message loop prevention stays quiet.
+
   </Accordion>
 
   <Accordion title="DM messages ignored">
@@ -1915,6 +2096,20 @@ openclaw doctor
 ```bash
 openclaw pairing list slack
 ```
+
+  </Accordion>
+
+  <Accordion title="Agent View DMs share one session">
+    Symptom: every top-level message in the app's **Messages** tab lands on the same session (the main session, or one `slack:direct:<userId>` session) instead of its own `:thread:<rootTs>` session, even though Slack shows each message as its own thread.
+
+    Check, in order:
+
+    - The manifest uses `features.agent_view` with `assistant:write` and subscribes to `app_context_changed`. Apps still on `features.assistant_view` get Assistant View threads instead, and Slack cannot move an app back once it switches to Agent View.
+    - OpenClaw has seen an Agent View signal since the app was installed: open the app's **Messages** tab once, or send a DM from the Agent View composer. In verbose logs, `slack suggested prompts update failed for channel D...: internal_error` on a Messages-tab open is expected for an Agent View app and counts as evidence.
+    - In HTTP mode, the Gateway has received at least one signed event since it started; `slack app id <id> learned from signed event` in the logs confirms the durable marker can be read. Socket Mode reads the app ID from the app token at startup, so no event is needed.
+    - `Slack Agent View state failed to open`, `persist`, or `load` warnings mean the durable marker could not be stored or read. A signal already detected in the running process still applies. After a restart, Agent View resumes when OpenClaw successfully reads a stored marker or detects a new signal.
+
+    See [Agent View DMs](/channels/slack#agent-view-dms).
 
   </Accordion>
 
@@ -1962,8 +2157,10 @@ openclaw pairing list slack
 
     Slack does not create or remove slash commands automatically. `commands.native: "auto"` does not enable Slack native commands; use `true` and create the matching commands in the Slack app. In HTTP mode, every Slack slash command must include the Gateway URL. In Socket Mode, command payloads arrive over the websocket and Slack ignores `slash_commands[].url`.
 
-    Also check `commands.useAccessGroups`, DM authorization, channel allowlists,
-    and per-channel `users` allowlists. Slack returns ephemeral errors for
+    Also check `commands.allowFrom` (when configured), DM authorization,
+    channel allowlists, and per-channel `users` allowlists. Access-group
+    entries in channel allowlists are resolved automatically. Slack returns
+    ephemeral errors for
     blocked slash-command senders, including:
 
     - `This channel is not allowed.`
@@ -2014,6 +2211,8 @@ When a single Slack message contains multiple file attachments:
 - Downloaded media references are aggregated into the message context.
 - Processing order follows Slack's file order in the event payload.
 - A failure in one attachment's download does not block others.
+- Failed or blocked files remain in the agent context with a bounded reason, and each failed file produces one warning after any URL refresh retry.
+- Files beyond the eight-file limit are not downloaded. Their references carry an `omitted: 8-file limit` reason. Long unavailable-file lists are visibly truncated, while the notice retains the total unavailable attachment count.
 
 ### Size, download, and model limits
 

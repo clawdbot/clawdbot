@@ -72,6 +72,7 @@ export const SessionTypingParamsSchema = closedObject({
   ...SessionSuggestionTargetParamsSchema,
   sessionId: NonEmptyString,
   typing: Type.Boolean(),
+  preview: Type.Optional(Type.String({ maxLength: 400 })),
 });
 
 export const SessionTypingResultSchema = closedObject({
@@ -85,6 +86,7 @@ export const SessionTypingEventSchema = closedObject({
   agentId: NonEmptyString,
   actor: SessionSharingIdentitySchema,
   typing: Type.Boolean(),
+  preview: Type.Optional(Type.String({ maxLength: 400 })),
   ts: Type.Integer({ minimum: 0 }),
 });
 

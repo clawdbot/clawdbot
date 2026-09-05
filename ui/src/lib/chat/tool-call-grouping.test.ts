@@ -65,7 +65,7 @@ describe("summarizeToolGroup", () => {
         { name: "str_replace_editor", args: { path: "/repo/a.ts" } },
         { name: "str_replace_based_edit_tool", args: { command: "rename" } },
       ],
-      "Used str_replace_editor, str_replace_based_edit_tool",
+      "Used Str Replace Editor, Str Replace Based Edit Tool",
     ],
     [
       "multi-file apply_patch targets",
@@ -86,7 +86,7 @@ describe("summarizeToolGroup", () => {
           },
         },
       ],
-      "Edited 2 files",
+      "Edited a file, created a file",
     ],
     [
       "structured Codex change targets",
@@ -101,13 +101,25 @@ describe("summarizeToolGroup", () => {
           },
         },
       ],
-      "Edited 2 files",
+      "Edited a file, created a file",
     ],
-    ["one generic tool by name", [{ name: "mcp__linear" }], "Used mcp__linear"],
+    [
+      "deleted Codex targets",
+      [
+        {
+          name: "apply_patch",
+          args: {
+            changes: [{ path: "src/obsolete.ts", kind: { type: "delete" } }],
+          },
+        },
+      ],
+      "Deleted a file",
+    ],
+    ["one generic tool by name", [{ name: "mcp__linear" }], "Used Mcp Linear"],
     [
       "repeat generic tool with a multiplier",
-      [{ name: "mcp__linear" }, { name: "mcp__linear" }],
-      "Used mcp__linear ×2",
+      [{ name: "heartbeat_respond" }, { name: "heartbeat_respond" }],
+      "Used Heartbeat Respond ×2",
     ],
     [
       "many distinct generic tools as a count",

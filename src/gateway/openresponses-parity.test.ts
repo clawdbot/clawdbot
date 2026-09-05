@@ -3,6 +3,7 @@ import { IMAGE_ONLY_USER_MESSAGE } from "./agent-prompt.js";
 import { CreateResponseBodySchema } from "./open-responses.schema.js";
 import { wrapUntrustedFileContent } from "./openresponses-file-content.js";
 import { buildAgentPrompt } from "./openresponses-prompt.js";
+import { createAssistantOutputItem, createFunctionCallOutputItem } from "./openresponses-shape.js";
 
 describe("OpenResponses aggregate behavior", () => {
   it("validates image, file, and tool request inputs", () => {
@@ -34,6 +35,56 @@ describe("OpenResponses aggregate behavior", () => {
         input: [{ type: "function_call_output", call_id: "call-1", output: '{"ok":true}' }],
       }).success,
     ).toBe(true);
+  });
+
+  it.each([
+    createAssistantOutputItem({
+      id: "msg_1",
+      text: "Checking.",
+      phase: "commentary",
+      status: "completed",
+    }),
+    createFunctionCallOutputItem({
+      id: "fc_1",
+      callId: "call_1",
+      name: "lookup",
+      arguments: "{}",
+      status: "completed",
+    }),
+  ])("accepts supported output metadata on replay: $type", (item) => {
+    const body = { model: "openclaw", input: [item] };
+    expect(CreateResponseBodySchema.safeParse(body).success).toBe(true);
+    for (const extra of [{ unexpected: true }, { status: "invented" }]) {
+      expect(
+        CreateResponseBodySchema.safeParse({ ...body, input: [{ ...item, ...extra }] }).success,
+      ).toBe(false);
+    }
+  });
+
+  it("preserves function identities and arguments alongside multiple returned results", () => {
+    const result = buildAgentPrompt([
+      { type: "message", role: "user", content: "Compare the accounts." },
+      {
+        type: "function_call",
+        call_id: "call_1",
+        name: "lookup",
+        arguments: '{"account":"alpha"}',
+      },
+      { type: "function_call", call_id: "call_2", name: "lookup", arguments: '{"account":"beta"}' },
+      { type: "function_call_output", call_id: "call_2", output: "42" },
+      { type: "function_call_output", call_id: "call_1", output: "17" },
+    ]);
+    expect(result.message).toContain(
+      'tool_call id=call_1 name=lookup arguments={"account":"alpha"}',
+    );
+    expect(result.message).toContain(
+      'tool_call id=call_2 name=lookup arguments={"account":"beta"}',
+    );
+    expect(result.message).toContain("Tool:call_2: 42");
+    expect(result.message).toContain("Tool:call_1: 17");
+    expect(result.message.indexOf("tool_call id=call_2")).toBeLessThan(
+      result.message.indexOf("Tool:call_2"),
+    );
   });
 
   it("rejects invalid image media types through the aggregate request schema", () => {
@@ -111,6 +162,23 @@ describe("OpenResponses aggregate behavior", () => {
         },
       ]).message.toLowerCase(),
     ).toContain("file");
+  });
+
+  it("does not treat historical attachment-only input as the active turn after tool output", () => {
+    const result = buildAgentPrompt([
+      {
+        type: "message",
+        role: "user",
+        content: [
+          { type: "input_image", source: { type: "url", url: "https://example.com/cat.png" } },
+        ],
+      },
+      { type: "message", role: "assistant", content: "Checking the attachment." },
+      { type: "function_call_output", call_id: "call-1", output: "The attachment is blue." },
+    ]);
+
+    expect(result.message).toContain("The attachment is blue.");
+    expect(result.message).not.toContain(IMAGE_ONLY_USER_MESSAGE);
   });
 
   it("marks extracted file text as untrusted", () => {

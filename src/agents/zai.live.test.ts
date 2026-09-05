@@ -21,7 +21,7 @@ const describeLive = LIVE && !CODING_LIVE && ZAI_KEY ? describe : describe.skip;
 const describeCodingLive = CODING_LIVE && ZAI_KEY ? describe : describe.skip;
 
 async function expectModelReturnsAssistantText(
-  modelId: "glm-5.2" | "glm-5-turbo" | "glm-5.1",
+  modelId: "glm-5.3" | "glm-5.2" | "glm-5-turbo" | "glm-5.1",
   baseUrl = ZAI_GLOBAL_BASE_URL,
 ) {
   const model: Model<"openai-completions"> = {
@@ -33,8 +33,8 @@ async function expectModelReturnsAssistantText(
     reasoning: true,
     input: ["text"],
     cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
-    contextWindow: modelId === "glm-5.2" ? 1_000_000 : 202_800,
-    maxTokens: modelId === "glm-5.2" ? 131_072 : 131_100,
+    contextWindow: modelId === "glm-5.3" ? 1_048_576 : modelId === "glm-5.2" ? 1_000_000 : 202_800,
+    maxTokens: modelId === "glm-5.3" || modelId === "glm-5.2" ? 131_072 : 131_100,
   };
   const complete = (maxTokens: number) =>
     completeSimple(
@@ -42,7 +42,7 @@ async function expectModelReturnsAssistantText(
       {
         messages: createSingleUserPromptMessage(),
       },
-      { apiKey: ZAI_KEY, maxTokens },
+      { apiKey: ZAI_KEY, maxTokens, reasoning: modelId === "glm-5.3" ? "max" : undefined },
     );
 
   // A small probe cap can occasionally yield only hidden reasoning even though
@@ -72,9 +72,9 @@ async function expectModelReturnsAssistantText(
 
 describeCodingLive("zai Coding Plan live", () => {
   it(
-    "glm-5.2 returns assistant text through the Coding Plan endpoint",
+    "glm-5.3 returns assistant text through the Coding Plan endpoint",
     async () => {
-      await expectModelReturnsAssistantText("glm-5.2", ZAI_CODING_GLOBAL_BASE_URL);
+      await expectModelReturnsAssistantText("glm-5.3", ZAI_CODING_GLOBAL_BASE_URL);
     },
     ZAI_LIVE_TIMEOUT_MS,
   );

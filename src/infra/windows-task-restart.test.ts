@@ -61,14 +61,6 @@ function decodeCmdPathArg(value: string): string {
   return withoutQuotes.replace(/\^!/g, "!").replace(/%%/g, "%");
 }
 
-function requireFirstMockCall<T>(mock: { mock: { calls: T[][] } }, label: string): T[] {
-  const call = mock.mock.calls[0];
-  if (!call) {
-    throw new Error(`expected ${label} call`);
-  }
-  return call;
-}
-
 afterEach(() => {
   envSnapshot.restore();
   for (const scriptPath of createdScriptPaths) {
@@ -123,7 +115,7 @@ describe("relaunchGatewayScheduledTask", () => {
     expect(result.method).toBe("schtasks");
     expect(result.tried).toContain('schtasks /Run /TN "OpenClaw Gateway (work)"');
     expect(result.tried).toContain(`${cmdExePath} /d /s /c ${seenCommandArg}`);
-    const spawnCall = requireFirstMockCall(spawnMock, "restart helper spawn");
+    const spawnCall = expectDefined(spawnMock.mock.calls[0], "restart helper spawn call");
     expect(spawnCall[0]).toBe(cmdExePath);
     expect(spawnCall[1]).toStrictEqual(["/d", "/s", "/c", seenCommandArg]);
     expect(spawnCall[2]).toStrictEqual({
@@ -219,7 +211,7 @@ describe("relaunchGatewayScheduledTask", () => {
     relaunchGatewayScheduledTask({ OPENCLAW_PROFILE: "work" });
 
     expect(spawnMock).toHaveBeenCalledOnce();
-    const spawnCall = requireFirstMockCall(spawnMock, "restart helper spawn");
+    const spawnCall = expectDefined(spawnMock.mock.calls[0], "restart helper spawn call");
     const commandArgs = spawnCall[1];
     if (!Array.isArray(commandArgs)) {
       throw new Error("expected cmd.exe argument array");

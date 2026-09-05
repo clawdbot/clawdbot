@@ -3,4 +3,5 @@ export { loadManifestModelCatalog } from "./model-catalog.js";
 export {
   loadPreparedModelCatalog,
   loadPreparedModelCatalogSnapshot,
+  loadProviderScopedThinkingCatalog,
 } from "./prepared-model-catalog.js";

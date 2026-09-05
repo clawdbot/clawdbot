@@ -4,6 +4,7 @@ import fs from "node:fs/promises";
 import path from "node:path";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { useAutoCleanupTempDirTracker } from "../../../test/helpers/temp-dir.js";
+import { ensureStagedInputDirectory, stagedInputDirectory } from "../../media/staged-inputs.js";
 import { runCommandWithTimeout } from "../../process/exec.js";
 import type {
   WorkerWorkspaceManifest,
@@ -12,6 +13,7 @@ import type {
 import {
   applyStagedWorkerWorkspace,
   assertWorkspaceMatchesManifest,
+  MAX_RECONCILIATION_ENTRIES,
   MAX_RECONCILIATION_FILE_BYTES,
   parseWorkerWorkspaceManifest,
   recoverWorkerWorkspaceReconciliation,
@@ -190,10 +192,16 @@ describe("worker workspace reconciliation recovery", () => {
     await expect(fs.stat(oversizedPath)).resolves.toMatchObject({
       size: MAX_RECONCILIATION_FILE_BYTES + 1,
     });
-    expect(applied.manifest.entries).toEqual([]);
+    expect(applied.manifest.entries).toEqual([
+      expect.objectContaining({
+        path: "result.bin",
+        type: "file",
+        size: MAX_RECONCILIATION_FILE_BYTES + 1,
+      }),
+    ]);
   });
 
-  it("omits an unrelated oversized local file while applying other worker changes", async () => {
+  it("records an unrelated oversized local file while applying other worker changes", async () => {
     const local = await temporaryDirectory("workspace-oversized-local-only");
     const staged = await temporaryDirectory("workspace-oversized-local-only-staged");
     await fs.writeFile(path.join(local, "result.txt"), "base\n");
@@ -215,7 +223,10 @@ describe("worker workspace reconciliation recovery", () => {
     await expect(fs.stat(oversizedPath)).resolves.toMatchObject({
       size: MAX_RECONCILIATION_FILE_BYTES + 1,
     });
-    expect(applied.manifest.entries.map((entry) => entry.path)).toEqual(["result.txt"]);
+    expect(applied.manifest.entries.map((entry) => entry.path)).toEqual([
+      "local-only.bin",
+      "result.txt",
+    ]);
   });
 
   it("allows a remote file to replace a base directory containing only derived entries", async () => {
@@ -507,35 +518,44 @@ describe("worker workspace reconciliation recovery", () => {
     );
   });
 
-  it("rolls back atomically when durable manifest acceptance fails", async () => {
-    const local = await temporaryDirectory("workspace-rollback");
-    const staged = await temporaryDirectory("workspace-rollback-staged");
-    await gitInit(local);
-    await fs.writeFile(path.join(local, "file.txt"), "base");
-    const base = await manifestFor(local);
-    await fs.writeFile(path.join(staged, "file.txt"), "remote");
-    await fs.writeFile(path.join(staged, "added.txt"), "remote");
-    const current = await manifestFor(staged);
-    let aborted = false;
+  it.each(["ordinary", "private input"])(
+    "rolls back when durable acceptance fails (%s)",
+    async (mode) => {
+      const local = await temporaryDirectory("workspace-rollback");
+      const staged = await temporaryDirectory("workspace-rollback-staged");
+      await gitInit(local);
+      const directory = stagedInputDirectory("b".repeat(64));
+      if (mode === "private input") {
+        await ensureStagedInputDirectory(local, directory);
+        await ensureStagedInputDirectory(staged, directory);
+      }
+      const file = mode === "private input" ? `${directory}/input-cache.pyc` : "file.txt";
+      await fs.writeFile(path.join(local, file), "base");
+      const base = await manifestFor(local);
+      await fs.writeFile(path.join(staged, file), "remote");
+      await fs.writeFile(path.join(staged, "added.txt"), "remote");
+      const current = await manifestFor(staged);
+      let aborted = false;
 
-    await expect(
-      applyWorkspace({
-        root: local,
-        stagingRoot: staged,
-        base,
-        current,
-        commit: () => {
-          throw new Error("placement write failed");
-        },
-        abort: () => {
-          aborted = true;
-        },
-      }),
-    ).rejects.toThrow("placement write failed");
-    expect(aborted).toBe(true);
-    await expect(fs.readFile(path.join(local, "file.txt"), "utf8")).resolves.toBe("base");
-    await expect(fs.access(path.join(local, "added.txt"))).rejects.toThrow();
-  });
+      await expect(
+        applyWorkspace({
+          root: local,
+          stagingRoot: staged,
+          base,
+          current,
+          commit: () => {
+            throw new Error("placement write failed");
+          },
+          abort: () => {
+            aborted = true;
+          },
+        }),
+      ).rejects.toThrow("placement write failed");
+      expect(aborted).toBe(true);
+      await expect(fs.readFile(path.join(local, file), "utf8")).resolves.toBe("base");
+      await expect(fs.access(path.join(local, "added.txt"))).rejects.toThrow();
+    },
+  );
 
   it("refuses to roll back a file-to-directory replacement over a later local child", async () => {
     const local = await temporaryDirectory("workspace-file-directory-recovery-local-child");
@@ -753,5 +773,36 @@ describe("worker workspace reconciliation recovery", () => {
         { version: 1, baseCommit: null, entries: [] },
       ),
     ).toThrow("too large");
+  });
+
+  it("counts serialized reconciliation records at the exact transfer boundary", () => {
+    const entries = (count: number, hash: string) =>
+      Array.from({ length: count }, (_, index) => ({
+        path: `entry-${index.toString().padStart(5, "0")}`,
+        type: "file" as const,
+        mode: 0o644,
+        size: 1,
+        sha256: hash.repeat(64),
+      }));
+    const manifest = (values: WorkerWorkspaceManifestEntry[]): WorkerWorkspaceManifest => ({
+      version: 1,
+      baseCommit: null,
+      entries: values,
+    });
+    const modificationBoundary = MAX_RECONCILIATION_ENTRIES / 2;
+    const base = manifest(entries(modificationBoundary, "a"));
+    const current = manifest(entries(modificationBoundary, "b"));
+    expect(workerWorkspaceTransferPaths(current, base)).toHaveLength(modificationBoundary);
+
+    const overBase = manifest(entries(modificationBoundary + 1, "a"));
+    const overCurrent = manifest(entries(modificationBoundary + 1, "b"));
+    expect(() => workerWorkspaceTransferPaths(overCurrent, overBase)).toThrow(
+      `exceeds the ${MAX_RECONCILIATION_ENTRIES} entry limit`,
+    );
+
+    const additions = manifest(entries(MAX_RECONCILIATION_ENTRIES, "c"));
+    const empty = manifest([]);
+    expect(workerWorkspaceTransferPaths(additions, empty)).toHaveLength(MAX_RECONCILIATION_ENTRIES);
+    expect(workerWorkspaceTransferPaths(empty, additions)).toEqual([]);
   });
 });

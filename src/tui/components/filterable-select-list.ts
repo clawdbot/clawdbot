@@ -12,6 +12,7 @@ import {
   visibleWidth,
 } from "@earendil-works/pi-tui";
 import chalk from "chalk";
+import { sanitizeRenderableLine } from "../tui-formatters.js";
 
 export interface FilterableSelectItem extends SelectItem {
   /** Additional searchable fields beyond label */
@@ -32,7 +33,6 @@ export class FilterableSelectList implements Component, Focusable {
   private allItems: FilterableSelectItem[];
   private maxVisible: number;
   private theme: FilterableSelectListTheme;
-  private filterText = "";
 
   onSelect?: (item: SelectItem) => void;
   onCancel?: () => void;
@@ -42,7 +42,15 @@ export class FilterableSelectList implements Component, Focusable {
     this.maxVisible = maxVisible;
     this.theme = theme;
     this.input = new Input();
-    this.selectList = new SelectList(this.allItems, maxVisible, theme);
+    // Input owns terminal key decoding; clearing follows the normal filter refresh.
+    this.input.onEscape = () => {
+      if (this.input.getValue()) {
+        this.input.setValue("");
+      } else {
+        this.onCancel?.();
+      }
+    };
+    this.selectList = this.createSelectList(this.allItems);
   }
 
   get focused(): boolean {
@@ -54,14 +62,30 @@ export class FilterableSelectList implements Component, Focusable {
   }
 
   private applyFilter(): void {
-    if (!this.filterText.trim()) {
-      this.selectList = new SelectList(this.allItems, this.maxVisible, this.theme);
+    const filterText = this.input.getValue();
+    if (!filterText.trim()) {
+      this.selectList = this.createSelectList(this.allItems);
       return;
     }
-    const filtered = fuzzyFilter(this.allItems, this.filterText, (item) =>
+    const filtered = fuzzyFilter(this.allItems, filterText, (item) =>
       [item.label, item.description, item.searchText].filter(Boolean).join(" "),
     );
-    this.selectList = new SelectList(filtered, this.maxVisible, this.theme);
+    this.selectList = this.createSelectList(filtered);
+  }
+
+  private createSelectList(items: FilterableSelectItem[]): SelectList {
+    return new SelectList(
+      items.map((item) => ({
+        ...item,
+        label:
+          sanitizeRenderableLine(item.label || item.value) ||
+          sanitizeRenderableLine(item.value) ||
+          "(unnamed)",
+        description: sanitizeRenderableLine(item.description ?? ""),
+      })),
+      this.maxVisible,
+      this.theme,
+    );
   }
 
   invalidate(): void {
@@ -110,25 +134,12 @@ export class FilterableSelectList implements Component, Focusable {
       return;
     }
 
-    // Escape: clear filter or cancel
-    if (matchesKey(keyData, "escape") || keyData === "\u0003") {
-      if (this.filterText) {
-        this.filterText = "";
-        this.input.setValue("");
-        this.applyFilter();
-      } else {
-        this.onCancel?.();
-      }
-      return;
-    }
-
     // All other input goes to filter
     const prevValue = this.input.getValue();
     this.input.handleInput(keyData);
     const newValue = this.input.getValue();
 
     if (newValue !== prevValue) {
-      this.filterText = newValue;
       this.applyFilter();
     }
   }
@@ -138,6 +149,6 @@ export class FilterableSelectList implements Component, Focusable {
   }
 
   getFilterText(): string {
-    return this.filterText;
+    return this.input.getValue();
   }
 }

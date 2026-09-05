@@ -2,6 +2,7 @@
  * Server channel approval bootstrap tests.
  */
 import { afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
+import { createDeferred } from "../../test/helpers/promise.js";
 import type { ChannelId, ChannelPlugin } from "../channels/plugins/types.public.js";
 import { getGatewayNativeApprovalRuntime } from "../infra/approval-gateway-runtime-context.js";
 import type { GatewayNativeApprovalRuntime } from "../infra/approval-gateway-runtime.types.js";
@@ -11,7 +12,11 @@ import {
   type SubsystemLogger,
 } from "../logging/subsystem.js";
 import { createEmptyPluginRegistry, type PluginRegistry } from "../plugins/registry.js";
-import { getActivePluginRegistry, setActivePluginRegistry } from "../plugins/runtime.js";
+import {
+  getActivePluginRegistry,
+  requireActivePluginChannelRegistry,
+  setActivePluginRegistry,
+} from "../plugins/runtime.js";
 import { createRuntimeChannel } from "../plugins/runtime/runtime-channel.js";
 import type { PluginRuntime } from "../plugins/runtime/types.js";
 import { DEFAULT_ACCOUNT_ID } from "../routing/session-key.js";
@@ -24,14 +29,6 @@ const hoisted = vi.hoisted(() => ({
 vi.mock("../infra/approval-handler-bootstrap.js", () => ({
   startChannelApprovalHandlerBootstrap: hoisted.startChannelApprovalHandlerBootstrap,
 }));
-
-function createDeferred() {
-  let resolvePromise = () => {};
-  const promise = new Promise<void>((resolve) => {
-    resolvePromise = resolve;
-  });
-  return { promise, resolve: resolvePromise };
-}
 
 function createTestPlugin(params: {
   startAccount: NonNullable<NonNullable<ChannelPlugin["gateway"]>["startAccount"]>;
@@ -102,6 +99,7 @@ function createManager(
   const channelRuntimeEnvs = { discord: runtime } as unknown as Record<ChannelId, RuntimeEnv>;
   return createChannelManager({
     getRuntimeConfig: () => ({}),
+    getPluginRegistry: requireActivePluginChannelRegistry,
     channelLogs,
     channelRuntimeEnvs,
     ...(options?.channelRuntime ? { channelRuntime: options.channelRuntime } : {}),

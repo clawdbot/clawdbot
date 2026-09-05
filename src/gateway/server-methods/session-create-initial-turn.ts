@@ -36,10 +36,7 @@ export function resolveSessionCreateInitialTurn(params: {
   };
 }
 
-export function shouldAttachPendingMessageSeq(params: {
-  cached?: boolean;
-  payload: unknown;
-}): boolean {
+export function isFreshChatSendStarted(params: { cached?: boolean; payload: unknown }): boolean {
   if (params.cached) {
     return false;
   }

@@ -9,6 +9,7 @@ import {
   TrimmedNonEmptyStringFieldSchema,
   parseOptionalField,
 } from "./delivery-field-schemas.js";
+import { snapshotOwnCronRecord } from "./own-record.js";
 
 type UnknownRecord = Record<string, unknown>;
 
@@ -66,7 +67,7 @@ function hasAgentTurnOnlyPayloadHint(payload: UnknownRecord): boolean {
 }
 
 export function normalizeCronPayload(payload: UnknownRecord): UnknownRecord {
-  const next: UnknownRecord = { ...payload };
+  const next = snapshotOwnCronRecord(payload);
   const kindRaw = normalizeLowercaseStringOrEmpty(next.kind);
   if (kindRaw === "agentturn") {
     next.kind = "agentTurn";
@@ -74,10 +75,12 @@ export function normalizeCronPayload(payload: UnknownRecord): UnknownRecord {
     next.kind = "systemEvent";
   } else if (kindRaw === "command") {
     next.kind = "command";
-  } else if (kindRaw === "script") {
-    next.kind = "script";
   } else if (kindRaw === "wake") {
     return { kind: "wake" };
+  } else if (kindRaw === "script") {
+    next.kind = "script";
+  } else if (kindRaw === "skillcollectionreview") {
+    next.kind = "skillCollectionReview";
   } else if (kindRaw) {
     next.kind = kindRaw;
   }
@@ -260,5 +263,5 @@ export function normalizeCronPayload(payload: UnknownRecord): UnknownRecord {
     delete next.noOutputTimeoutSeconds;
     delete next.outputMaxBytes;
   }
-  return next;
+  return { ...next };
 }

@@ -24,6 +24,7 @@ set +e
 docker_e2e_run_with_harness \
   --name "$CONTAINER_NAME" \
   -e "OPENCLAW_TEST_STATE_SCRIPT_B64=$OPENCLAW_TEST_STATE_SCRIPT_B64" \
+  -e "OPENCLAW_SUPERVISOR_MODE=external" \
   "$IMAGE_NAME" \
   bash -lc "set -euo pipefail
     source scripts/lib/openclaw-e2e-instance.sh

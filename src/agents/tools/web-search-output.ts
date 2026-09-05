@@ -7,6 +7,7 @@
  * re-wrapped here unconditionally, so no provider-controlled metadata can
  * spoof the trust marker and transport-specific extras never reach the model.
  */
+import { asFiniteNumber as readFiniteNumber } from "@openclaw/normalization-core/number-coercion";
 import { isRecord } from "@openclaw/normalization-core/record-coerce";
 import { truncateUtf16Safe } from "@openclaw/normalization-core/utf16-slice";
 import type { Static } from "typebox";
@@ -117,10 +118,6 @@ type WebSearchOutputBudget = { remaining: number; truncated: boolean };
 
 function unwrapEnvelopes(value: string): string {
   return value.replace(ENVELOPE_OPEN_RE, "").replace(ENVELOPE_END_RE, "").trim();
-}
-
-function readFiniteNumber(value: unknown): number | undefined {
-  return typeof value === "number" && Number.isFinite(value) ? value : undefined;
 }
 
 // URLs are emitted canonicalized (percent-encoded), so whitespace or readable
@@ -281,9 +278,7 @@ export function normalizeWebSearchOutput(params: {
 
   // A results branch requires conforming rows; anything else is preserved as
   // raw so nonstandard external payloads are never silently gutted.
-  // Array.from densifies holes into undefined so sparse arrays cannot slip
-  // past row conformance and serialize as null rows.
-  const rows = Array.isArray(result.results) ? Array.from(result.results) : undefined;
+  const rows = Array.isArray(result.results) ? result.results : undefined;
   const conformingRows = rows?.every(
     (entry): entry is Record<string, unknown> =>
       isRecord(entry) &&

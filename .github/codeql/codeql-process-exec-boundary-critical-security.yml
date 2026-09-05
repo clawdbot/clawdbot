@@ -31,7 +31,6 @@ paths:
   - extensions/file-transfer/src
   - extensions/google-meet/src
   - extensions/imessage/src
-  - extensions/memory-core/src/memory/qmd-manager.ts
   - extensions/memory-wiki/src/obsidian.ts
   - extensions/microsoft-foundry/cli.ts
   - extensions/ollama/src/wsl2-crash-loop-check.ts

@@ -16,25 +16,36 @@ export function buildGuardedModelFetch(
   return host.buildModelFetch(model) ?? globalThis.fetch;
 }
 
-export function resolveProviderEndpoint(baseUrl?: string): { endpointClass: string } {
-  return { endpointClass: getAiTransportHost().resolveProviderEndpointClass(baseUrl) };
+export function resolveProviderEndpoint(model: { baseUrl?: string }): { endpointClass: string } {
+  return {
+    endpointClass: getAiTransportHost().resolveProviderRequestCapabilities({
+      baseUrl: model.baseUrl,
+      model,
+    }).endpointClass,
+  };
 }
 
-export function resolveProviderRequestCapabilities(input: AiProviderRequestPolicyInput) {
-  return getAiTransportHost().resolveProviderRequestCapabilities(input);
+export function resolveProviderRequestCapabilities(
+  input: AiProviderRequestPolicyInput,
+  model?: object,
+) {
+  return getAiTransportHost().resolveProviderRequestCapabilities({ ...input, model });
 }
 
-export function resolveProviderRequestPolicyConfig(input: {
-  provider?: string;
-  api?: string;
-  baseUrl?: string;
-  capability?: string;
-  transport?: string;
-  providerHeaders?: Record<string, string>;
-  callerHeaders?: Record<string, string>;
-  precedence?: "caller-wins" | "defaults-win";
-}): { headers?: Record<string, string> } {
-  return { headers: getAiTransportHost().resolveProviderRequestHeaders(input) };
+export function resolveProviderRequestPolicyConfig(
+  model: Model,
+  input: {
+    provider?: string;
+    api?: string;
+    baseUrl?: string;
+    capability?: string;
+    transport?: string;
+    providerHeaders?: Record<string, string>;
+    callerHeaders?: Record<string, string>;
+    precedence?: "caller-wins" | "defaults-win";
+  },
+): { headers?: Record<string, string> } {
+  return { headers: getAiTransportHost().resolveProviderRequestHeaders({ ...input, model }) };
 }
 
 export function resolveModelRequestTimeoutMs(model: Model, timeoutMs?: number): number | undefined {
@@ -59,6 +70,7 @@ export function transformTransportMessages(
   options?: {
     normalizeSameModelToolCallIds?: boolean;
     preserveCrossModelToolCallThoughtSignature?: boolean;
+    preserveUnframedToolResults?: boolean;
   },
 ): Context["messages"] {
   return getAiTransportHost().transformTransportMessages(

@@ -25,6 +25,7 @@ scenario:
     - test/e2e/qa-lab/runtime/cached-health-snapshot-boundaries.ts
   execution:
     kind: script
+    parallelSafe: true
     path: test/e2e/qa-lab/runtime/cached-health-snapshot-boundaries.ts
     summary: Exercises the production health handler cache boundary and crosses a real authenticated Gateway plugin-tool invocation.
     args:

@@ -3,7 +3,7 @@
  */
 import { normalizeStringEntries } from "@openclaw/normalization-core/string-normalization";
 import { normalizeThinkLevel, type ThinkLevel } from "../../auto-reply/thinking.js";
-import { isReasoningConstraintErrorMessage } from "./errors.js";
+import { isReasoningConstraintErrorMessage } from "../failover/classify.js";
 
 function extractSupportedValues(raw: string): string[] {
   const match =

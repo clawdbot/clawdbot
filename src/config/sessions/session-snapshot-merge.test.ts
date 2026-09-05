@@ -28,6 +28,24 @@ describe("session snapshot merge", () => {
     });
   });
 
+  it.each([undefined, "inherit"] as const)(
+    "preserves a required creation sandbox against a %s patch",
+    (sandbox) => {
+      const existing: SessionEntry = {
+        ...initial,
+        sandbox: "required",
+      };
+      const patch: Partial<SessionEntry> = {};
+      Object.assign(patch, { sandbox });
+
+      expect(mergeSessionEntry(existing, patch)).toMatchObject({ sandbox: "required" });
+    },
+  );
+
+  it("does not add a creation sandbox to an existing unstamped session", () => {
+    expect(mergeSessionEntry(initial, { sandbox: "required" })).not.toHaveProperty("sandbox");
+  });
+
   it("keeps a concurrently changed model pair", () => {
     const next = { ...initial, model: "claude-sonnet-4-6", updatedAt: 2 };
     const current = {
@@ -167,6 +185,7 @@ describe("session snapshot merge", () => {
         reason: "rate_limit",
       },
       contextTokens: 100_000,
+      contextTokensSource: "resolved",
       contextBudgetStatus: {
         schemaVersion: 1,
         source: "pre-prompt-estimate",
@@ -195,6 +214,7 @@ describe("session snapshot merge", () => {
       model: undefined,
       fallbackNotice: undefined,
       contextTokens: undefined,
+      contextTokensSource: undefined,
       contextBudgetStatus: undefined,
     };
     const current: SessionEntry = {
@@ -208,6 +228,7 @@ describe("session snapshot merge", () => {
         activeModel: "openai/gpt-5.4-nano",
       },
       contextTokens: 80_000,
+      contextTokensSource: "runtime",
     };
 
     const merged = mergeSessionSnapshotChanges({ initial: initialOverride, next, current });
@@ -221,6 +242,7 @@ describe("session snapshot merge", () => {
     expect(merged.model).toBeUndefined();
     expect(merged.fallbackNotice).toBeUndefined();
     expect(merged.contextTokens).toBeUndefined();
+    expect(merged.contextTokensSource).toBeUndefined();
     expect(merged.contextBudgetStatus).toBeUndefined();
   });
 
@@ -360,6 +382,29 @@ describe("session snapshot merge", () => {
     expect(mergeSessionSnapshotChanges({ initial, next, current })).toEqual(current);
   });
 
+  it("projects a runtime admission without losing its refreshed recovery budget", () => {
+    const initialRecovery: SessionEntry = {
+      ...initial,
+      mainRestartRecovery: { cycleId: "cycle-1", revision: 4, chargedAttempts: 3 },
+    };
+    const next: SessionEntry = {
+      ...initialRecovery,
+      mainRestartRecovery: {
+        ...initialRecovery.mainRestartRecovery!,
+        revision: 5,
+        startedAttempt: 3,
+      },
+    };
+
+    const merged = mergeSessionSnapshotChanges({
+      initial: initialRecovery,
+      next,
+      current: initialRecovery,
+    });
+
+    expect(merged.mainRestartRecovery).toEqual(next.mainRestartRecovery);
+  });
+
   it("preserves the recovery aggregate when a restart marker wins a stale healthy clear", () => {
     const initialRecovery: SessionEntry = {
       ...initial,
@@ -398,7 +443,7 @@ describe("session snapshot merge", () => {
     expect(merged.mainRestartRecovery).toEqual(current.mainRestartRecovery);
   });
 
-  it("marks a claimed recovery healthy without erasing its owner aggregate", () => {
+  it("keeps a claimed recovery interrupted until its lifecycle owner settles", () => {
     const initialRecovery: SessionEntry = {
       ...initial,
       abortedLastRun: true,
@@ -429,7 +474,7 @@ describe("session snapshot merge", () => {
 
     const merged = mergeSessionSnapshotChanges({ initial: initialRecovery, next, current });
 
-    expect(merged.abortedLastRun).toBe(false);
+    expect(merged.abortedLastRun).toBe(true);
     expect(merged.restartRecoveryRuns).toBeUndefined();
     expect(merged.mainRestartRecovery).toEqual(current.mainRestartRecovery);
   });
@@ -469,7 +514,7 @@ describe("session snapshot merge", () => {
     expect(merged.mainRestartRecovery).toBeUndefined();
   });
 
-  it("preserves every concurrent owner while marking a recovered session healthy", () => {
+  it("preserves every concurrent owner and interruption until lifecycle settlement", () => {
     const initialRecovery: SessionEntry = {
       ...initial,
       abortedLastRun: true,
@@ -500,7 +545,7 @@ describe("session snapshot merge", () => {
 
     const merged = mergeSessionSnapshotChanges({ initial: initialRecovery, next, current });
 
-    expect(merged.abortedLastRun).toBe(false);
+    expect(merged.abortedLastRun).toBe(true);
     expect(merged.mainRestartRecovery?.foregroundClaims?.tokens).toEqual(["owner-1", "owner-2"]);
   });
 

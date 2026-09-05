@@ -1,10 +1,11 @@
-// Narrow primitive coercion helpers for plugins that do not need the full text-runtime barrel.
+// Browser-safe primitive coercion, normalization, and UTF-16 helpers for plugins.
 
 export {
   hasNonEmptyString,
   localeLowercasePreservingWhitespace,
   lowercasePreservingWhitespace,
   normalizeFastMode,
+  normalizeBoundedOptionalString,
   normalizeLowercaseStringOrEmpty,
   normalizeNullableString,
   normalizeOptionalLowercaseString,
@@ -12,9 +13,12 @@ export {
   normalizeOptionalStringifiedId,
   normalizeStringifiedEntries,
   normalizeStringifiedOptionalString,
+  readNonBlankString,
+  readNonEmptyStringPreservingWhitespace,
   readStringValue,
 } from "../../packages/normalization-core/src/string-coerce.js";
 export {
+  asDateTimestampMs,
   asFiniteNumberInRange,
   asFiniteNumber,
   asPositiveSafeInteger,
@@ -28,12 +32,17 @@ export {
 export { asBoolean, parseBooleanValue } from "../utils/boolean.js";
 export {
   asRecord,
+  asNonArrayRecord,
+  asNullableObjectRecord,
   asNullableRecord,
+  asOptionalObjectRecord,
   asOptionalRecord,
+  filterStringRecord,
+  isRecord,
   readStringField,
 } from "../../packages/normalization-core/src/record-coerce.js";
-export { isRecord } from "../utils.js";
 export {
+  filterStringEntries,
   normalizeAtHashSlug,
   normalizeHyphenSlug,
   normalizeOptionalTrimmedStringList,
@@ -48,4 +57,5 @@ export {
   uniqueStrings,
   uniqueValues,
 } from "../../packages/normalization-core/src/string-normalization.js";
+export { truncateUtf16Safe } from "../../packages/normalization-core/src/utf16-slice.js";
 export { summarizeStringEntries } from "../shared/string-sample.js";

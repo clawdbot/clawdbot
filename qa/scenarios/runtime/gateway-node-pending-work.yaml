@@ -17,7 +17,7 @@ scenario:
     - docs/gateway/protocol.md
     - docs/nodes/camera.md
   codeRefs:
-    - src/gateway/server-methods/nodes-pending.ts
+    - src/gateway/server-methods/nodes.pending-work.ts
     - src/gateway/server-methods/nodes.invoke.ts
     - src/gateway/server-methods/nodes.pending.ts
     - test/e2e/qa-lab/runtime/gateway-node-pending-work.e2e.test.ts

@@ -1,13 +1,10 @@
 import type { ApprovalResolveResult } from "openclaw/plugin-sdk/approval-gateway-runtime";
 import { truncateUtf16Safe } from "openclaw/plugin-sdk/text-utility-runtime";
+import { escapeGoogleChatApprovalCardText as escapeGoogleChatText } from "./approval-card-text.js";
 import type { GoogleChatCardV2 } from "./types.js";
 
 const GOOGLECHAT_APPROVAL_CARD_ID = "openclaw-approval";
 const MAX_TEXT_PARAGRAPH_CHARS = 1800;
-
-function escapeGoogleChatText(text: string): string {
-  return text.replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;");
-}
 
 function truncateText(text: string): string {
   return text.length <= MAX_TEXT_PARAGRAPH_CHARS

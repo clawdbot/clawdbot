@@ -151,7 +151,37 @@ private actor GatewayEndpointRemoteEnsureGate {
     }
 }
 
+@Suite(.gatewayTLSStoreIsolated)
 struct GatewayEndpointStoreTests {
+    @MainActor
+    @Test func `live local source uses canonical default and named profile ports`() async throws {
+        let configPath = TestIsolation.tempConfigPath()
+        try Data(#"{"gateway":{"mode":"local"}}"#.utf8)
+            .write(to: URL(fileURLWithPath: configPath))
+        defer { try? FileManager.default.removeItem(atPath: configPath) }
+
+        try await TestIsolation.withIsolatedState(
+            env: [
+                "OPENCLAW_CONFIG_PATH": configPath,
+                "OPENCLAW_GATEWAY_PORT": nil,
+            ],
+            defaults: ["gatewayPort": nil])
+        {
+            let state = AppState(preview: true)
+            let base = try await GatewayEndpointStore._testLiveSourceSnapshot(
+                state: state,
+                profile: AppProfile(environment: [:]),
+                beforeConfigRead: {})
+            let workProfile = AppProfile(environment: ["OPENCLAW_PROFILE": "work"])
+            let work = try await GatewayEndpointStore._testLiveSourceSnapshot(
+                state: state,
+                profile: workProfile,
+                beforeConfigRead: {})
+            #expect(base.localPort == 18789)
+            #expect(work.localPort == workProfile.defaultGatewayPort)
+        }
+    }
+
     private func makeLaunchAgentSnapshot(
         env: [String: String] = [:],
         token: String? = nil,
@@ -189,6 +219,7 @@ struct GatewayEndpointStoreTests {
         password: String? = nil,
         localHost: String = "127.0.0.1",
         bindMode: String? = "loopback",
+        scheme: String = "ws",
         transport: AppState.RemoteTransport = .ssh,
         directURL: URL? = nil,
         tlsFingerprint: String? = nil,
@@ -203,7 +234,7 @@ struct GatewayEndpointStoreTests {
             deviceAuthGatewayID: deviceAuthGatewayID,
             localPort: 18789,
             localHost: localHost,
-            scheme: "ws",
+            scheme: scheme,
             bindMode: bindMode,
             remoteTransport: .init(transport),
             directRemoteURL: directURL,
@@ -238,6 +269,7 @@ struct GatewayEndpointStoreTests {
             token: token,
             password: { nil },
             localPort: { 18789 },
+            localUnavailableReason: { nil },
             remoteRouteIfRunning: remoteRouteIfRunning,
             remoteRouteIsCurrent: remoteRouteIsCurrent,
             canStartRemoteTunnel: canStartRemoteTunnel,
@@ -262,6 +294,84 @@ struct GatewayEndpointStoreTests {
         }
         let root: [String: Any] = gateway.isEmpty ? [:] : ["gateway": gateway]
         return ConnectionModeResolver.resolve(root: root, defaults: defaults)
+    }
+
+    @Test func `local conflict remains unavailable across refresh until cleared`() async throws {
+        let source = self.source(mode: .local)
+        let store = self.makeStore(sourceSnapshot: { source })
+
+        await store.setLocalUnavailableReason("Profile port conflict")
+        await store.refresh()
+        #expect(await store.currentState() == .unavailable(
+            mode: .local,
+            reason: "Profile port conflict",
+            routeRevision: store.routeRevision))
+        await #expect(throws: Error.self) {
+            _ = try await store.requireEndpoint()
+        }
+
+        await store.setLocalUnavailableReason(nil)
+        await store.refresh()
+        guard case .ready = await store.currentState() else {
+            Issue.record("Expected local endpoint to recover after conflict clears")
+            return
+        }
+    }
+
+    @Test func `stale local conflict cannot replace a healthy remote endpoint`() async throws {
+        try await TestIsolation.withUserDefaultsValues([connectionModeKey: "unconfigured"]) {
+            let remoteURL = try #require(URL(string: "ws://192.168.1.20:18789"))
+            let localSource = self.source(mode: .local, token: "local-token")
+            let remoteSource = self.source(
+                mode: .remote,
+                token: "remote-token",
+                transport: .direct,
+                directURL: remoteURL)
+            let sourceGate = GatewayEndpointSourceGate(localSource)
+            let store = self.makeStore(sourceSnapshot: { await sourceGate.snapshot() })
+            _ = try await store.requireEndpoint()
+
+            await sourceGate.update(remoteSource)
+            let remote = try await store.requireEndpoint()
+            await store.setLocalUnavailableReason("Profile port conflict")
+
+            #expect(try await store.currentState() == .ready(
+                mode: .remote,
+                url: remoteURL,
+                token: "remote-token",
+                password: nil,
+                routeRevision: #require(remote.revision)))
+            #expect(try await store.requireEndpoint().revision == remote.revision)
+
+            await sourceGate.update(localSource)
+            await store.refresh()
+            #expect(await store.currentState() == .unavailable(
+                mode: .local,
+                reason: "Profile port conflict",
+                routeRevision: store.routeRevision))
+
+            await store.setLocalUnavailableReason(nil)
+            #expect(try await store.currentState() == .ready(
+                mode: .local,
+                url: #require(URL(string: "ws://127.0.0.1:18789")),
+                token: "local-token",
+                password: nil,
+                routeRevision: #require(try await store.requireEndpoint().revision)))
+        }
+    }
+
+    @Test func `local conflict does not claim an unconfigured endpoint`() async {
+        await TestIsolation.withUserDefaultsValues([connectionModeKey: "unconfigured"]) {
+            let source = self.source(mode: .unconfigured)
+            let store = self.makeStore(sourceSnapshot: { source })
+
+            await store.setLocalUnavailableReason("Profile port conflict")
+
+            #expect(await store.currentState() == .unavailable(
+                mode: .unconfigured,
+                reason: "Gateway not configured",
+                routeRevision: store.routeRevision))
+        }
     }
 
     private func dashboardURL(
@@ -505,6 +615,165 @@ struct GatewayEndpointStoreTests {
 }
 
 extension GatewayEndpointStoreTests {
+    @Test func `intentional tailnet fallback replaces its captured loopback endpoint`() async throws {
+        try await TestIsolation.withUserDefaultsValues([connectionModeKey: "unconfigured"]) {
+            let sourceGate = GatewayEndpointSourceGate(self.source(mode: .local, bindMode: "tailnet"))
+            let store = self.makeStore(sourceSnapshot: { await sourceGate.snapshot() })
+            let loopback = try await store.requireEndpoint()
+            await sourceGate.update(self.source(mode: .local, localHost: "100.64.1.8", bindMode: "tailnet"))
+
+            let result = await store.maybeFallbackToTailnet(from: loopback.config.url)
+            let fallback = try #require(result)
+
+            #expect(fallback.config.url.host == "100.64.1.8")
+            #expect(fallback.revision != loopback.revision)
+        }
+    }
+
+    @Test func `ensuring an already running SSH route preserves compatibility ownership`() async throws {
+        try await TestIsolation.withUserDefaultsValues([connectionModeKey: "unconfigured"]) {
+            let source = self.source(mode: .remote, transport: .ssh)
+            let route = RemoteTunnelManager.Route(localPort: 49218, generation: 7)
+            let ensureCalls = LockIsolated(0)
+            let store = self.makeStore(
+                sourceSnapshot: { source },
+                remoteRouteIfRunning: { route },
+                ensureRemoteTunnel: {
+                    ensureCalls.withValue { $0 += 1 }
+                    return route
+                })
+            let original = try await store.requireEndpoint()
+            var alerts = ControlChannelCompatibilityAlerts()
+            _ = alerts.observeEndpoint(revision: store.routeRevision)
+            let issue = try #require(GatewayCompatibilityIssue(error: GatewayConnectAuthError(
+                message: "protocol mismatch",
+                detailCode: "INVALID_REQUEST",
+                canRetryWithDeviceToken: false,
+                expectedProtocol: 3)))
+            let presentation = alerts.prepare(issue, generation: alerts.routeGeneration)
+            #expect(presentation != nil)
+
+            let port = try await store.ensureRemoteControlTunnel()
+            let reused = try await store.requireEndpoint()
+            _ = alerts.observeEndpoint(revision: store.routeRevision)
+
+            #expect(port == route.localPort)
+            #expect(ensureCalls.value == 0)
+            #expect(reused.revision == original.revision)
+            #expect(alerts.presentation == presentation)
+        }
+    }
+
+    @MainActor
+    @Test(arguments: [AppState.RemoteTransport.direct, .ssh])
+    func `non-ready route replacement retires the previous compatibility presentation`(
+        transport: AppState.RemoteTransport) async throws
+    {
+        try await TestIsolation.withUserDefaultsValues([connectionModeKey: "unconfigured"]) {
+            let url = try #require(URL(string: "wss://gateway-a.example.test:49217"))
+            let sourceA = self.source(mode: .remote, transport: .direct, directURL: url, routingGeneration: 1)
+            let sourceGate = GatewayEndpointSourceGate(sourceA)
+            let store = self.makeStore(
+                sourceSnapshot: { await sourceGate.snapshot() },
+                canStartRemoteTunnel: { false })
+            var alerts = ControlChannelCompatibilityAlerts()
+            await store.refresh()
+            _ = alerts.observeEndpoint(revision: store.routeRevision)
+            let issue = try #require(GatewayCompatibilityIssue(error: GatewayConnectAuthError(
+                message: "protocol mismatch",
+                detailCode: "INVALID_REQUEST",
+                canRetryWithDeviceToken: false,
+                expectedProtocol: 3)))
+            let original = alerts.prepare(issue, generation: alerts.routeGeneration)
+            #expect(original != nil)
+
+            await sourceGate.update(self.source(
+                mode: .remote,
+                localHost: "100.64.1.8",
+                bindMode: "tailnet",
+                scheme: "wss",
+                transport: .direct,
+                directURL: url,
+                routingGeneration: 2))
+            await store.refresh()
+            _ = alerts.observeEndpoint(revision: store.routeRevision)
+            #expect(alerts.presentation == original)
+
+            await sourceGate.update(self.source(mode: .remote, transport: transport, routingGeneration: 3))
+            await store.refresh()
+            let replacement = await store.currentState()
+            #expect(replacement.routeRevision == store.routeRevision)
+            _ = alerts.observeEndpoint(revision: store.routeRevision)
+            if case .ready = replacement {
+                Issue.record("replacement must remain non-ready")
+            }
+            #expect(alerts.presentation == nil)
+            let projected = alerts.updateConnection(
+                generation: alerts.routeGeneration,
+                state: .degraded("replacement route unavailable"))
+            #expect(projected == .degraded("replacement route unavailable"))
+
+            let pendingRoute = alerts.routeGeneration
+            await sourceGate.update(self.source(
+                mode: .remote, transport: transport, deviceAuthGatewayID: "another-route", routingGeneration: 4))
+            await store.refresh()
+            #expect(await store.currentState().routeRevision != replacement.routeRevision)
+            _ = alerts.observeEndpoint(revision: store.routeRevision)
+            let staleSuccess = alerts.updateConnection(generation: pendingRoute, state: .connected)
+            #expect(staleSuccess == nil)
+        }
+    }
+
+    @MainActor
+    @Test(arguments: [AppState.ConnectionMode.local, .remote])
+    func `first readiness preserves the admitted mismatch and still refreshes the control connection`(
+        mode: AppState.ConnectionMode) async throws
+    {
+        try await TestIsolation.withUserDefaultsValues([connectionModeKey: "unconfigured"]) {
+            let url = try #require(URL(string: "wss://gateway.example.test:49217"))
+            let source = self.source(mode: mode, transport: .direct, directURL: url)
+            let store = self.makeStore(sourceSnapshot: { source })
+            var transitions = GatewayEndpointTransition()
+            var alerts = ControlChannelCompatibilityAlerts()
+            let initial = await store.currentState()
+            #expect(initial.routeRevision > 0)
+            let refreshInitially = transitions.shouldRefresh(for: initial)
+            #expect(!refreshInitially)
+            _ = alerts.observeEndpoint(revision: store.routeRevision)
+            let admittedGeneration = alerts.routeGeneration
+
+            let endpoint = try await store.requireEndpoint()
+            let ready = await store.currentState()
+            #expect(endpoint.revision == initial.routeRevision)
+            let refreshOnReady = transitions.shouldRefresh(for: ready)
+            let refreshOnDuplicate = transitions.shouldRefresh(for: ready)
+            #expect(refreshOnReady)
+            #expect(!refreshOnDuplicate)
+            _ = alerts.observeEndpoint(revision: store.routeRevision)
+            let issue = try #require(GatewayCompatibilityIssue(error: GatewayConnectAuthError(
+                message: "protocol mismatch",
+                detailCode: "INVALID_REQUEST",
+                canRetryWithDeviceToken: false,
+                expectedProtocol: 3)))
+            let first = alerts.prepare(issue, generation: admittedGeneration)
+            #expect(first != nil)
+
+            guard mode == .local else { return }
+            await store.setLocalUnavailableReason("Profile port conflict")
+            let unavailable = await store.currentState()
+            #expect(unavailable.routeRevision != ready.routeRevision)
+            let refreshUnavailable = transitions.shouldRefresh(for: unavailable)
+            #expect(!refreshUnavailable)
+            _ = alerts.observeEndpoint(revision: store.routeRevision)
+            #expect(alerts.presentation == nil)
+            await store.setLocalUnavailableReason(nil)
+            let recovered = await store.currentState()
+            #expect(recovered.routeRevision == unavailable.routeRevision)
+            let refreshRecovered = transitions.shouldRefresh(for: recovered)
+            #expect(refreshRecovered)
+        }
+    }
+
     @Test func `remote tunnel waits for primary app launch admission`() async {
         await TestIsolation.withUserDefaultsValues([connectionModeKey: "unconfigured"]) {
             let admitted = LockIsolated(false)
@@ -554,8 +823,7 @@ extension GatewayEndpointStoreTests {
             let sourceGate = GatewayEndpointSourceGate(source)
             let store = self.makeStore(
                 sourceSnapshot: { await sourceGate.snapshot() },
-                liveSourceIsCurrent: { $0.routingGeneration == 7 },
-            )
+                liveSourceIsCurrent: { $0.routingGeneration == 7 })
 
             _ = try await store.requireEndpoint()
             #expect(await sourceGate.reads() == 1)
@@ -614,26 +882,24 @@ extension GatewayEndpointStoreTests {
     }
 
     @Test func `persisting active first use pin keeps endpoint revision stable`() async throws {
-        try await withFakeGatewayTLSKeychain {
-            try await TestIsolation.withUserDefaultsValues([connectionModeKey: "unconfigured"]) {
-                let url = try #require(URL(string: "wss://gateway.example.invalid"))
-                let storeKey = GatewayTLSRoute.storeKey(for: url)
-                let source = self.source(
-                    mode: .remote,
-                    transport: .direct,
-                    directURL: url)
-                let store = self.makeStore(sourceSnapshot: { source })
+        try await TestIsolation.withUserDefaultsValues([connectionModeKey: "unconfigured"]) {
+            let url = try #require(URL(string: "wss://gateway.example.invalid"))
+            let storeKey = GatewayTLSRoute.storeKey(for: url)
+            let source = self.source(
+                mode: .remote,
+                transport: .direct,
+                directURL: url)
+            let store = self.makeStore(sourceSnapshot: { source })
 
-                let first = try await store.requireEndpoint()
-                let fingerprint = String(repeating: "a", count: 64)
-                _ = GatewayTLSStore.claimFirstUseFingerprint(fingerprint, stableID: storeKey)
-                let second = try await store.requireEndpoint()
+            let first = try await store.requireEndpoint()
+            let fingerprint = String(repeating: "a", count: 64)
+            _ = GatewayTLSStore.claimFirstUseFingerprint(fingerprint, stableID: storeKey)
+            let second = try await store.requireEndpoint()
 
-                #expect(first.revision == second.revision)
-                #expect(second.tls?.params.allowTOFU == false)
-                #expect(second.tls?.params.expectedFingerprint == fingerprint)
-                #expect(GatewayTLSRoute.hasSameConnectionIdentity(first.tls, second.tls))
-            }
+            #expect(first.revision == second.revision)
+            #expect(second.tls?.params.allowTOFU == false)
+            #expect(second.tls?.params.expectedFingerprint == fingerprint)
+            #expect(GatewayTLSRoute.hasSameConnectionIdentity(first.tls, second.tls))
         }
     }
 
@@ -651,8 +917,7 @@ extension GatewayEndpointStoreTests {
             let routeGate = GatewayEndpointRouteLookupGate()
             let store = self.makeStore(
                 sourceSnapshot: { await sourceGate.snapshot() },
-                remoteRouteIfRunning: { await routeGate.lookup() },
-            )
+                remoteRouteIfRunning: { await routeGate.lookup() })
 
             let staleRequest = Task { try await store.requireEndpoint() }
             await routeGate.waitUntilStarted()
@@ -680,7 +945,7 @@ extension GatewayEndpointStoreTests {
                 routingGeneration: 1)
             let sourceB = self.source(
                 mode: .remote,
-                token: "same-token",
+                token: "replacement-token",
                 transport: .direct,
                 directURL: remoteURL,
                 routingGeneration: 2)
@@ -696,15 +961,73 @@ extension GatewayEndpointStoreTests {
             let staleRequest = Task { try await store.requireEndpoint() }
             await sourceGate.waitUntilSuspendedReadStarts()
             currentRoutingGeneration.withValue { $0 = 2 }
+            await sourceGate.update(sourceB)
+            let currentEndpoint = try await store.requireEndpoint()
             await sourceGate.releaseSuspendedRead()
 
             await #expect(throws: CancellationError.self) {
                 try await staleRequest.value
             }
-            await sourceGate.update(sourceB)
-            let currentEndpoint = try await store.requireEndpoint()
+            #expect(store.routeRevision == currentEndpoint.revision)
+            #expect(await store.currentState().routeRevision == store.routeRevision)
+            let reused = try await store.requireEndpoint()
+            #expect(reused.revision == currentEndpoint.revision)
             #expect(currentEndpoint.config.url == remoteURL)
-            #expect(currentEndpoint.config.token == "same-token")
+            #expect(currentEndpoint.config.token == "replacement-token")
+        }
+    }
+
+    @Test(arguments: [false, true])
+    func `newer source survives an older overlapping adoption`(obsoleteOlderSource: Bool) async throws {
+        try await TestIsolation.withUserDefaultsValues([connectionModeKey: "unconfigured"]) {
+            let sourceA = self.source(
+                mode: obsoleteOlderSource ? .unconfigured : .remote,
+                transport: .direct,
+                directURL: URL(string: "wss://gateway-a.example.test"),
+                routingGeneration: 1)
+            let sourceB = self.source(
+                mode: .remote,
+                transport: .direct,
+                directURL: URL(string: "wss://gateway-b.example.test"),
+                routingGeneration: 2)
+            let older = GatewayEndpointSourceGate(sourceA)
+            let newer = GatewayEndpointSourceGate(sourceA)
+            await older.suspendNextRead(returningCapturedSource: true)
+            await newer.suspendNextRead()
+            let reads = LockIsolated(0)
+            let currentRoutingGeneration = LockIsolated<UInt64>(1)
+            let store = self.makeStore(
+                sourceSnapshot: {
+                    let read = reads.withValue {
+                        $0 += 1
+                        return $0
+                    }
+                    return await (read == 1 ? older : newer).snapshot()
+                },
+                liveSourceIsCurrent: { source in
+                    currentRoutingGeneration.withValue { $0 == source.routingGeneration }
+                })
+
+            let oldRequest = Task { try await store.requireEndpoint() }
+            await older.waitUntilSuspendedReadStarts()
+            let newRequest = Task { try await store.requireEndpoint() }
+            await newer.waitUntilSuspendedReadStarts()
+            if obsoleteOlderSource {
+                currentRoutingGeneration.withValue { $0 = 2 }
+            }
+            await older.releaseSuspendedRead()
+            if obsoleteOlderSource {
+                await #expect(throws: CancellationError.self) { try await oldRequest.value }
+            } else {
+                #expect(try await oldRequest.value.config.url == sourceA.directRemoteURL)
+            }
+            currentRoutingGeneration.withValue { $0 = 2 }
+            await newer.update(sourceB)
+            await newer.releaseSuspendedRead()
+
+            let endpoint = try await newRequest.value
+            #expect(endpoint.config.url == sourceB.directRemoteURL)
+            #expect(await store.currentState().routeRevision == endpoint.revision)
         }
     }
 
@@ -741,8 +1064,7 @@ extension GatewayEndpointStoreTests {
             let sourceGate = GatewayEndpointSourceGate(fallbackSource)
             let store = self.makeStore(
                 sourceSnapshot: { await sourceGate.snapshot() },
-                token: { "local-token" },
-            )
+                token: { "local-token" })
             let initialURL = try #require(URL(string: "ws://127.0.0.1:18789"))
 
             await sourceGate.suspendNextRead()
@@ -801,6 +1123,139 @@ extension GatewayEndpointStoreTests {
         }
     }
 
+    @Test(arguments: [false, true])
+    func `remote recovery publishes its outcome after its only waiter cancels`(fails: Bool) async throws {
+        try await TestIsolation.withUserDefaultsValues([connectionModeKey: "unconfigured"]) {
+            let source = self.source(mode: .remote, token: "remote-token", transport: .ssh)
+            let oldRoute = LockIsolated<RemoteTunnelManager.Route?>(.init(localPort: 28788, generation: 6))
+            let remoteGate = GatewayEndpointRemoteEnsureGate(route: .init(localPort: 28789, generation: 7))
+            let store = self.makeStore(
+                sourceSnapshot: { source },
+                remoteRouteIfRunning: {
+                    if let route = oldRoute.value { return route }
+                    return await remoteGate.routeIfRunning()
+                },
+                remoteRouteIsCurrent: { await remoteGate.isCurrent($0) },
+                ensureRemoteTunnel: {
+                    let route = await remoteGate.ensure()
+                    if fails {
+                        throw NSError(domain: "TunnelFixture", code: 1, userInfo: [
+                            NSLocalizedDescriptionKey: "fixture tunnel unavailable",
+                        ])
+                    }
+                    return route
+                })
+            let original = try await store.requireEndpoint()
+            oldRoute.setValue(nil)
+            let stream = await store.subscribe(bufferingNewest: 10)
+            let recovery = Task { try await store.ensureRemoteControlTunnel() }
+            await remoteGate.waitUntilEnsureStarts()
+            let connecting = await store.currentState()
+            #expect(connecting.routeRevision != original.revision)
+            recovery.cancel()
+            await remoteGate.releaseEnsure()
+            await #expect(throws: CancellationError.self) { try await recovery.value }
+
+            // Observe publication only. Another endpoint read would hide this bug by
+            // completing the abandoned waiter's ready/error publication itself.
+            let outcome = try? await AsyncTimeout.withTimeout(
+                seconds: 1,
+                onTimeout: { CancellationError() },
+                operation: { () async -> GatewayEndpointState? in
+                    for await state in stream where state.routeRevision == connecting.routeRevision {
+                        if case .connecting = state { continue }
+                        return state
+                    }
+                    return nil
+                })
+            if fails {
+                #expect(outcome == .unavailable(
+                    mode: .remote,
+                    reason: "Remote control tunnel failed (fixture tunnel unavailable)",
+                    routeRevision: connecting.routeRevision))
+            } else {
+                #expect(outcome == .ready(
+                    mode: .remote,
+                    url: URL(string: "ws://127.0.0.1:28789")!,
+                    token: "remote-token",
+                    password: nil,
+                    routeRevision: connecting.routeRevision))
+            }
+        }
+    }
+
+    @Test(arguments: [false, true])
+    func `completed remote ensure cannot publish over a replacement selection`(fails: Bool) async throws {
+        try await TestIsolation.withUserDefaultsValues([connectionModeKey: "unconfigured"]) {
+            let sourceGate = GatewayEndpointSourceGate(self.source(mode: .remote, token: "token-a", transport: .ssh))
+            let remoteGate = GatewayEndpointRemoteEnsureGate(route: .init(localPort: 28789, generation: 7))
+            let store = self.makeStore(
+                sourceSnapshot: { await sourceGate.snapshot() },
+                remoteRouteIfRunning: { await remoteGate.routeIfRunning() },
+                remoteRouteIsCurrent: { await remoteGate.isCurrent($0) },
+                ensureRemoteTunnel: {
+                    let route = await remoteGate.ensure()
+                    if fails { throw URLError(.cannotConnectToHost) }
+                    return route
+                })
+            let stale = Task { try await store.requireEndpoint() }
+            await remoteGate.waitUntilEnsureStarts()
+            let sourceB = self.source(
+                mode: .remote,
+                token: "token-b",
+                transport: .direct,
+                directURL: URL(string: "wss://gateway-b.example.test"),
+                deviceAuthGatewayID: "route-b")
+            await sourceGate.update(sourceB)
+            _ = try await store.requireEndpoint()
+            let replacement = await store.currentState()
+            await remoteGate.releaseEnsure()
+            await #expect(throws: CancellationError.self) { try await stale.value }
+            #expect(await store.currentState() == replacement)
+        }
+    }
+
+    @Test func `older tunnel lookup cannot retire a concurrently completed endpoint`() async throws {
+        try await TestIsolation.withUserDefaultsValues([connectionModeKey: "unconfigured"]) {
+            let source = self.source(mode: .remote, token: "remote-token", transport: .ssh)
+            let lookupGate = GatewayEndpointRouteLookupGate()
+            let route = RemoteTunnelManager.Route(localPort: 28789, generation: 7)
+            let remoteGate = GatewayEndpointRemoteEnsureGate(route: route)
+            let lookups = LockIsolated(0)
+            let store = self.makeStore(
+                sourceSnapshot: { source },
+                remoteRouteIfRunning: {
+                    let first = lookups.withValue { count in
+                        count += 1
+                        return count == 1
+                    }
+                    return await (first ? lookupGate.lookup() : remoteGate.routeIfRunning())
+                },
+                remoteRouteIsCurrent: { await remoteGate.isCurrent($0) },
+                ensureRemoteTunnel: {
+                    if let running = await remoteGate.routeIfRunning() { return running }
+                    return await remoteGate.ensure()
+                })
+            let olderRefresh = Task { await store.refresh() }
+            await lookupGate.waitUntilStarted()
+            let request = Task { try await store.requireEndpoint() }
+            await remoteGate.waitUntilEnsureStarts()
+            await remoteGate.releaseEnsure()
+            let endpoint = try await request.value
+            await lookupGate.release()
+            await olderRefresh.value
+
+            let revision = try #require(endpoint.revision)
+            #expect(store.routeRevision == revision)
+            #expect(await store.currentState() == .ready(
+                mode: .remote,
+                url: endpoint.config.url,
+                token: "remote-token",
+                password: nil,
+                routeRevision: revision))
+        }
+    }
+
     @Test func `cancelling one remote waiter does not poison a shared tunnel ensure`() async throws {
         try await TestIsolation.withUserDefaultsValues([connectionModeKey: "unconfigured"]) {
             let source = self.source(
@@ -813,8 +1268,7 @@ extension GatewayEndpointStoreTests {
                 sourceSnapshot: { source },
                 remoteRouteIfRunning: { await remoteGate.routeIfRunning() },
                 remoteRouteIsCurrent: { await remoteGate.isCurrent($0) },
-                ensureRemoteTunnel: { await remoteGate.ensure() },
-            )
+                ensureRemoteTunnel: { await remoteGate.ensure() })
 
             let cancelledWaiter = Task { try await store.requireEndpoint() }
             await remoteGate.waitUntilEnsureStarts()
@@ -849,8 +1303,7 @@ extension GatewayEndpointStoreTests {
                 sourceSnapshot: { source },
                 remoteRouteIfRunning: { await remoteGate.routeIfRunning() },
                 remoteRouteIsCurrent: { await remoteGate.isCurrent($0) },
-                ensureRemoteTunnel: { await remoteGate.ensure() },
-            )
+                ensureRemoteTunnel: { await remoteGate.ensure() })
 
             let first = Task { try await store.requireEndpoint() }
             await remoteGate.waitUntilEnsureStarts()

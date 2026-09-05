@@ -29,51 +29,6 @@ extension ExecApprovalsSecurity {
     }
 }
 
-enum ExecApprovalQuickMode: String, CaseIterable, Identifiable {
-    case deny
-    case ask
-    case allow
-
-    var id: String {
-        rawValue
-    }
-
-    var title: String {
-        switch self {
-        case .deny: "Deny"
-        case .ask: "Always Ask"
-        case .allow: "Always Allow"
-        }
-    }
-
-    var security: ExecSecurity {
-        switch self {
-        case .deny: .deny
-        case .ask: .allowlist
-        case .allow: .full
-        }
-    }
-
-    var ask: ExecAsk {
-        switch self {
-        case .deny: .off
-        case .ask: .onMiss
-        case .allow: .off
-        }
-    }
-
-    static func from(security: ExecSecurity, ask _: ExecAsk) -> ExecApprovalQuickMode {
-        switch security {
-        case .deny:
-            .deny
-        case .full:
-            .allow
-        case .allowlist:
-            .ask
-        }
-    }
-}
-
 extension ExecApprovalsAsk {
     var title: String {
         switch self {
@@ -262,38 +217,65 @@ enum ExecApprovalHelpers {
 actor SkillBinsCache {
     static let shared = SkillBinsCache()
 
-    private var bins: Set<String> = []
-    private var trustByName: [String: Set<String>] = [:]
-    private var lastRefresh: Date?
+    nonisolated let gateway: GatewayConnection
+
+    init(gateway: GatewayConnection = .shared) {
+        self.gateway = gateway
+    }
+
+    struct Snapshot: Sendable {
+        let gateway: GatewayConnection
+        let source: GatewayConnection.ServerLease
+        let revision: UInt64?
+        let refreshedAt: Date
+        let index: SkillBinTrustIndex
+
+        /// Approval contexts, execution commits and Settings can outlive the supplying read.
+        var isCurrent: Bool {
+            self.revision == self.gateway.selectedEndpointRevision &&
+                self.gateway.serverLeaseMatchesCurrentRoute(self.source)
+        }
+
+        var bins: Set<String> {
+            self.isCurrent ? self.index.names : []
+        }
+
+        var trustByName: [String: Set<String>] {
+            self.isCurrent ? self.index.pathsByName : [:]
+        }
+    }
+
+    private var cached: Snapshot?
     private let refreshInterval: TimeInterval = 90
 
-    func currentBins(force: Bool = false) async -> Set<String> {
-        if force || self.isStale() {
-            await self.refresh()
+    func current(force: Bool = false) async -> Snapshot? {
+        let previous = self.cached
+        if let previous, previous.isCurrent, !force,
+           Date().timeIntervalSince(previous.refreshedAt) <= self.refreshInterval
+        {
+            return previous
         }
-        return self.bins
-    }
-
-    func currentTrust(force: Bool = false) async -> [String: Set<String>] {
-        if force || self.isStale() {
-            await self.refresh()
-        }
-        return self.trustByName
-    }
-
-    func refresh() async {
-        do {
-            let report = try await GatewayConnection.shared.skillsStatus()
-            let trust = Self.buildTrustIndex(report: report, searchPaths: CommandResolver.preferredPaths())
-            self.bins = trust.names
-            self.trustByName = trust.pathsByName
-            self.lastRefresh = Date()
-        } catch {
-            if self.lastRefresh == nil {
-                self.bins = []
-                self.trustByName = [:]
+        let revision = self.gateway.selectedEndpointRevision
+        if let source = try? await self.gateway.acquireServerLease(),
+           let report = try? await self.gateway.skillsStatus(on: source)
+        {
+            guard !Task.isCancelled else { return nil }
+            if revision == self.gateway.selectedEndpointRevision,
+               self.gateway.serverLeaseMatchesCurrentState(source)
+            {
+                let snapshot = Snapshot(
+                    gateway: self.gateway,
+                    source: source,
+                    revision: revision,
+                    refreshedAt: Date(),
+                    index: Self.buildTrustIndex(report: report, searchPaths: CommandResolver.preferredPaths()))
+                self.cached = snapshot
+                return snapshot
             }
         }
+        // Failed or retired refreshes keep only their captured, current-route trust.
+        // An old read must not inherit a newer route's cache after suspension.
+        return previous?.isCurrent == true ? previous : nil
     }
 
     static func normalizeSkillBinName(_ value: String) -> String? {
@@ -344,11 +326,6 @@ actor SkillBinsCache {
         return CommandResolver.findExecutable(named: expanded, searchPaths: searchPaths)
     }
 
-    private func isStale() -> Bool {
-        guard let lastRefresh else { return true }
-        return Date().timeIntervalSince(lastRefresh) > self.refreshInterval
-    }
-
     static func _testBuildTrustIndex(
         report: SkillsStatusReport,
         searchPaths: [String]) -> SkillBinTrustIndex
@@ -357,7 +334,7 @@ actor SkillBinsCache {
     }
 }
 
-struct SkillBinTrustIndex {
+struct SkillBinTrustIndex: Sendable {
     let names: Set<String>
     let pathsByName: [String: Set<String>]
 }

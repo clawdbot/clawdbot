@@ -69,3 +69,18 @@ export type ProviderNormalizeModelCatalogIdContext = {
   provider: string;
   modelId: string;
 };
+
+/** Compares reported response identity without rewriting authored route identity. */
+export type ProviderResponseModelEquivalenceContext = {
+  provider: string;
+  requestedModelId: string;
+  responseModelId: string;
+};
+
+/** Provider-owned default for one resolved inference route; never an authored config setting. */
+export type ProviderToolSearchPolicyContext = {
+  provider: string;
+  modelId: string;
+  api: string;
+  baseUrl?: string;
+};

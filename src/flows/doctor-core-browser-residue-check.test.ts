@@ -7,6 +7,10 @@ import type { HealthRepairContext } from "./health-checks.js";
 const browserMocks = vi.hoisted(() => ({
   detectLegacyClawdBrowserProfileResidue: vi.fn(),
   maybeArchiveLegacyClawdBrowserProfileResidue: vi.fn(),
+  maybeRepairOwnedChromeExtensionNativeHosts: vi.fn().mockResolvedValue({
+    changes: [],
+    warnings: [],
+  }),
   noteChromeMcpBrowserReadiness: vi.fn(),
 }));
 
@@ -14,6 +18,8 @@ vi.mock("../commands/doctor-browser.js", () => ({
   detectLegacyClawdBrowserProfileResidue: browserMocks.detectLegacyClawdBrowserProfileResidue,
   maybeArchiveLegacyClawdBrowserProfileResidue:
     browserMocks.maybeArchiveLegacyClawdBrowserProfileResidue,
+  maybeRepairOwnedChromeExtensionNativeHosts:
+    browserMocks.maybeRepairOwnedChromeExtensionNativeHosts,
   noteChromeMcpBrowserReadiness: browserMocks.noteChromeMcpBrowserReadiness,
 }));
 

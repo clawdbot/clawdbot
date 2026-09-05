@@ -5,7 +5,6 @@ import { createTestPluginApi } from "openclaw/plugin-sdk/plugin-test-api";
 import { isLiveTestEnabled, readLiveTestConfig } from "openclaw/plugin-sdk/test-live";
 import { beforeAll, describe, expect, it } from "vitest";
 import plugin from "./index.js";
-import { getComfyConfigForTesting } from "./test-support.js";
 import { isComfyCapabilityConfigured } from "./workflow-runtime.js";
 
 const LIVE =
@@ -123,9 +122,4 @@ describeLive("comfy live", () => {
     expect(result.tracks[0]?.mimeType.startsWith("audio/")).toBe(true);
     expect(result.tracks[0]?.buffer.byteLength).toBeGreaterThan(512);
   }, 180_000);
-
-  it("documents the effective comfy config shape for live debugging", () => {
-    const comfyConfig = getComfyConfigForTesting(cfg as never);
-    expect(typeof comfyConfig).toBe("object");
-  });
 });

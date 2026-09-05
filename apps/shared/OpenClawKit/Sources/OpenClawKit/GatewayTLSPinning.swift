@@ -264,6 +264,25 @@ struct GatewayTLSKeychainOperations: @unchecked Sendable {
         delete: { SecItemDelete($0) })
 }
 
+struct GatewayTLSKeychainNamespaceState {
+    private(set) var suffix: String?
+    private(set) var used = false
+
+    mutating func configure(suffix: String) -> Bool {
+        if let configured = self.suffix {
+            return configured == suffix
+        }
+        guard !self.used || suffix.isEmpty else { return false }
+        self.suffix = suffix
+        return true
+    }
+
+    mutating func service(base: String) -> String {
+        self.used = true
+        return base + (self.suffix ?? "")
+    }
+}
+
 public enum GatewayTLSStore {
     @TaskLocal static var keychainOperations = GatewayTLSKeychainOperations.live
 
@@ -273,7 +292,19 @@ public enum GatewayTLSStore {
         case unavailable
     }
 
-    private static let keychainService = "ai.openclaw.tls-pinning"
+    private static let baseKeychainService = "ai.openclaw.tls-pinning"
+    private static let keychainServiceLock = NSLock()
+    private nonisolated(unsafe) static var keychainNamespace = GatewayTLSKeychainNamespaceState()
+    private static var keychainService: String {
+        self.keychainServiceLock.withLock {
+            self.keychainNamespace.service(base: self.baseKeychainService)
+        }
+    }
+
+    private static var usesDefaultKeychainService: Bool {
+        self.keychainServiceLock.withLock { (self.keychainNamespace.suffix ?? "").isEmpty }
+    }
+
     private static let keychainAccountPrefix = "fingerprint.v3."
     private static let legacyCanonicalAccountPrefix = "fingerprint.v2."
 
@@ -281,6 +312,19 @@ public enum GatewayTLSStore {
     private static let legacySuiteName = "ai.openclaw.shared"
     private static let legacyKeyPrefix = "gateway.tls."
     private static let firstUseClaims = GatewayTLSFirstUseClaims()
+
+    /// The macOS app profile is immutable for the process lifetime. Configure its
+    /// Keychain namespace before constructing any Gateway connection.
+    @discardableResult
+    public static func configureKeychainServiceSuffix(_ suffix: String) -> Bool {
+        self.keychainServiceLock.withLock {
+            self.keychainNamespace.configure(suffix: suffix)
+        }
+    }
+
+    static func resolvedKeychainService(suffix: String) -> String {
+        self.baseKeychainService + suffix
+    }
 
     public static func loadFingerprint(stableID: String) -> String? {
         guard case let .value(fingerprint) = self.loadFingerprintResult(stableID: stableID) else {
@@ -508,6 +552,7 @@ public enum GatewayTLSStore {
     }
 
     private static func readLegacyDefaultsFingerprint(stableID: String) -> FingerprintRead {
+        guard self.usesDefaultKeychainService else { return .missing }
         guard let defaults = UserDefaults(suiteName: self.legacySuiteName) else { return .unavailable }
         let key = self.legacyKeyPrefix + stableID
         guard let value = defaults.object(forKey: key) else { return .missing }
@@ -604,8 +649,10 @@ public enum GatewayTLSStore {
         } ?? true
         guard self.canSafelyReadLegacyRawStorageKey(stableID) else { return removedV2 }
         let removedRaw = self.deleteFingerprint(account: stableID)
-        UserDefaults(suiteName: self.legacySuiteName)?
-            .removeObject(forKey: self.legacyKeyPrefix + stableID)
+        if self.usesDefaultKeychainService {
+            UserDefaults(suiteName: self.legacySuiteName)?
+                .removeObject(forKey: self.legacyKeyPrefix + stableID)
+        }
         return removedRaw && removedV2
     }
 
@@ -620,6 +667,7 @@ public enum GatewayTLSStore {
     }
 
     private static func clearAllLegacyFingerprints() {
+        guard self.usesDefaultKeychainService else { return }
         guard let defaults = UserDefaults(suiteName: self.legacySuiteName) else { return }
         for key in defaults.dictionaryRepresentation().keys where key.hasPrefix(self.legacyKeyPrefix) {
             defaults.removeObject(forKey: key)
@@ -631,25 +679,49 @@ public protocol GatewayTLSRouteMetadataProviding: AnyObject {
     var effectiveTLSFingerprintSHA256: String? { get }
 }
 
-struct GatewayTLSAuthority: Equatable, Sendable {
-    let host: String
-    let port: Int
+public struct GatewayTLSAuthority: Equatable, Sendable {
+    public let scheme: String
+    public let host: String
+    public let port: Int
+    private let defaultPort: Int
 
-    init?(url: URL) {
-        guard let host = Self.normalizedHost(url.host) else { return nil }
+    public init?(url: URL) {
+        guard let scheme = url.scheme?.lowercased(),
+              let defaultPort = Self.defaultPort(for: scheme),
+              let host = Self.normalizedHost(url.host)
+        else { return nil }
+        self.scheme = scheme
         self.host = host
-        self.port = url.port ?? (url.scheme?.lowercased() == "wss" ? 443 : 80)
+        self.port = url.port ?? defaultPort
+        self.defaultPort = defaultPort
     }
 
-    init?(host: String, port: Int) {
-        guard let host = Self.normalizedHost(host) else { return nil }
-        self.host = host
-        self.port = port
+    public func matches(host: String, port: Int) -> Bool {
+        // URLProtectionSpace uses 0 for the protocol's default port. Normalize it here so
+        // every pinned Apple transport reaches the same authority decision.
+        let challengePort = port == 0 ? self.defaultPort : port
+        return Self.normalizedHost(host) == self.host && challengePort == self.port
+    }
+
+    public var serialized: String {
+        let hostPart = self.host.contains(":") ? "[\(self.host)]" : self.host
+        return "\(self.scheme)://\(hostPart)" + (self.port == self.defaultPort ? "" : ":\(self.port)")
+    }
+
+    private static func defaultPort(for scheme: String) -> Int? {
+        switch scheme {
+        case "http", "ws": 80
+        case "https", "wss": 443
+        default: nil
+        }
     }
 
     private static func normalizedHost(_ host: String?) -> String? {
         let value = host?.trimmingCharacters(in: .whitespacesAndNewlines).lowercased() ?? ""
-        return value.isEmpty ? nil : value
+        guard !value.isEmpty else { return nil }
+        return value.hasPrefix("[") && value.hasSuffix("]")
+            ? String(value.dropFirst().dropLast())
+            : value
     }
 }
 
@@ -676,23 +748,39 @@ struct GatewayTLSPinningState {
     }
 }
 
-public final class GatewayTLSPinningSession: NSObject, WebSocketSessioning, URLSessionDelegate,
+public final class GatewayTLSPinningSession: NSObject, WebSocketSessioning, URLSessionTaskDelegate,
     GatewayTLSFailureProviding, GatewayDeviceTokenRetryTrustProviding, GatewayTLSRouteMetadataProviding,
     @unchecked Sendable
 {
     private let params: GatewayTLSParams
+    private let allowsRedirects: Bool
+    private let allowsStoredCredentials: Bool
     private let failureLock = NSLock()
     private var lastTLSFailure: GatewayTLSValidationFailure?
     private var pinningState: GatewayTLSPinningState
     private var expectedAuthority: GatewayTLSAuthority?
     private lazy var session: URLSession = {
-        let config = URLSessionConfiguration.default
+        let config = self.allowsStoredCredentials ? URLSessionConfiguration.default : .ephemeral
+        if !self.allowsStoredCredentials {
+            // Explicit per-request authority cannot inherit or persist another
+            // account's cookies, HTTP credentials, or authenticated cache entries.
+            config.httpShouldSetCookies = false
+            config.httpCookieStorage = nil
+            config.urlCredentialStorage = nil
+            config.urlCache = nil
+        }
         config.waitsForConnectivity = true
         return URLSession(configuration: config, delegate: self, delegateQueue: nil)
     }()
 
-    public init(params: GatewayTLSParams) {
+    public init(
+        params: GatewayTLSParams,
+        allowsRedirects: Bool = true,
+        allowsStoredCredentials: Bool = true)
+    {
         self.params = params
+        self.allowsRedirects = allowsRedirects
+        self.allowsStoredCredentials = allowsStoredCredentials
         self.pinningState = GatewayTLSPinningState(expectedFingerprint: params.expectedFingerprint)
         super.init()
     }
@@ -768,13 +856,21 @@ public final class GatewayTLSPinningSession: NSObject, WebSocketSessioning, URLS
         return WebSocketTaskBox(task: task)
     }
 
-    public func data(for request: URLRequest, maximumBytes: Int) async throws -> (Data, URLResponse) {
+    public func data(
+        for request: URLRequest,
+        maximumBytes: Int,
+        isCurrent: @Sendable () -> Bool = { true }) async throws -> (Data, URLResponse)
+    {
         self.registerExpectedAuthority(url: request.url)
         guard maximumBytes >= 0 else {
             throw GatewayBoundedDataError.responseTooLarge(maximumBytes: maximumBytes)
         }
 
-        let (bytes, response) = try await self.session.bytes(for: request)
+        try Task.checkCancellation()
+        guard isCurrent() else { throw CancellationError() }
+        // AsyncBytes owns a task delegate; without ours, its authentication
+        // handling bypasses the session-level certificate policy.
+        let (bytes, response) = try await self.session.bytes(for: request, delegate: self)
         let expectedLength = response.expectedContentLength
         guard expectedLength < 0 || expectedLength <= Int64(maximumBytes) else {
             bytes.task.cancel()
@@ -785,23 +881,49 @@ public final class GatewayTLSPinningSession: NSObject, WebSocketSessioning, URLS
         if expectedLength > 0 {
             data.reserveCapacity(Int(expectedLength))
         }
-        do {
-            for try await byte in bytes {
-                guard data.count < maximumBytes else {
-                    bytes.task.cancel()
-                    throw GatewayBoundedDataError.responseTooLarge(maximumBytes: maximumBytes)
+        return try await withTaskCancellationHandler {
+            do {
+                for try await byte in bytes {
+                    guard data.count < maximumBytes else {
+                        bytes.task.cancel()
+                        throw GatewayBoundedDataError.responseTooLarge(maximumBytes: maximumBytes)
+                    }
+                    data.append(byte)
                 }
-                data.append(byte)
+            } catch {
+                bytes.task.cancel()
+                throw error
             }
-        } catch {
+            return (data, response)
+        } onCancel: {
+            // Cancellation after headers must also interrupt a stalled body.
             bytes.task.cancel()
-            throw error
         }
-        return (data, response)
     }
 
     public func finishTasksAndInvalidate() {
         self.session.finishTasksAndInvalidate()
+    }
+
+    public func urlSession(
+        _: URLSession,
+        task _: URLSessionTask,
+        willPerformHTTPRedirection _: HTTPURLResponse,
+        newRequest request: URLRequest,
+        completionHandler: @escaping @Sendable (URLRequest?) -> Void)
+    {
+        // Browser-session headers are origin-bound credentials. Their callers
+        // disable redirects so URLSession cannot forward them to a sign-in or HTTP endpoint.
+        completionHandler(self.allowsRedirects ? request : nil)
+    }
+
+    public func urlSession(
+        _ session: URLSession,
+        task _: URLSessionTask,
+        didReceive challenge: URLAuthenticationChallenge,
+        completionHandler: @escaping @Sendable (URLSession.AuthChallengeDisposition, URLCredential?) -> Void)
+    {
+        self.urlSession(session, didReceive: challenge, completionHandler: completionHandler)
     }
 
     public func urlSession(
@@ -819,9 +941,8 @@ public final class GatewayTLSPinningSession: NSObject, WebSocketSessioning, URLS
         let host = challenge.protectionSpace.host
         let port = challenge.protectionSpace.port
         let expected = self.currentEnforcedFingerprint()
-        let challengedAuthority = GatewayTLSAuthority(host: host, port: port)
         guard let expectedAuthority = self.currentExpectedAuthority(),
-              challengedAuthority == expectedAuthority
+              expectedAuthority.matches(host: host, port: port)
         else {
             self.recordTLSFailure(GatewayTLSValidationFailure(
                 kind: .authorityMismatch,

@@ -9,16 +9,8 @@ import type {
   MusicGenerationProvider,
   MusicGenerationRequest,
 } from "../../../../src/music-generation/types.js";
-import {
-  withBundledPluginEnablementCompat,
-  withBundledPluginVitestCompat,
-} from "../../../../src/plugins/bundled-compat.js";
 import { prepareMediaCapabilityProviders } from "../../../../src/plugins/capability-provider-runtime.js";
-import {
-  captureCurrentPluginMetadataSnapshotState,
-  restoreCurrentPluginMetadataSnapshotState,
-  setCurrentPluginMetadataSnapshot,
-} from "../../../../src/plugins/current-plugin-metadata-snapshot.js";
+import { installTemporaryCurrentPluginMetadataSnapshot } from "../../../../src/plugins/current-plugin-metadata-snapshot.js";
 import { resolvePluginRegistryLoadCacheKey } from "../../../../src/plugins/loader.js";
 import type { PluginManifestRecord } from "../../../../src/plugins/manifest-registry.js";
 import { createEmptyPluginRegistry } from "../../../../src/plugins/registry.js";
@@ -108,6 +100,11 @@ function createMusicFixture() {
     },
   };
   const config: OpenClawConfig = {
+    plugins: {
+      allow: [PLUGIN_ID],
+      entries: { [PLUGIN_ID]: { enabled: true } },
+      slots: { memory: "none" },
+    },
     agents: {
       defaults: {
         mediaModels: {
@@ -186,23 +183,16 @@ describe("music generation controls QA product proof", () => {
   it("lists capabilities, falls back in config order, normalizes controls, and persists audio", async () => {
     const fixture = createMusicFixture();
     const activeRegistry = captureActivePluginRegistrySnapshot();
-    const metadataSnapshot = captureCurrentPluginMetadataSnapshotState();
+    const metadataLease = installTemporaryCurrentPluginMetadataSnapshot(
+      fixture.pluginMetadataSnapshot,
+      {
+        config: fixture.config,
+      },
+    );
     try {
-      setCurrentPluginMetadataSnapshot(fixture.pluginMetadataSnapshot, {
-        config: fixture.config,
-      });
       const pluginIds = [PLUGIN_ID];
-      const enabledConfig = withBundledPluginEnablementCompat({
-        config: fixture.config,
-        pluginIds,
-      });
-      const loadConfig = withBundledPluginVitestCompat({
-        config: enabledConfig,
-        pluginIds,
-        env: process.env,
-      });
       const cacheKey = resolvePluginRegistryLoadCacheKey({
-        ...(loadConfig ? { config: loadConfig } : {}),
+        config: fixture.config,
         onlyPluginIds: pluginIds,
         activate: false,
       });
@@ -230,11 +220,11 @@ describe("music generation controls QA product proof", () => {
         "capabilities: modes=generate, maxDurationSeconds=60, lyrics, instrumental, duration, format, supportedFormats=mp3/wav",
       );
     } finally {
-      restoreCurrentPluginMetadataSnapshotState(metadataSnapshot);
+      metadataLease.release();
       restoreActivePluginRegistrySnapshot(activeRegistry);
     }
 
-    const stateDir = await fs.realpath(tempDirs.make("openclaw-qa-music-controls-"));
+    const stateDir = tempDirs.make("openclaw-qa-music-controls-");
     await withEnvAsync({ OPENCLAW_STATE_DIR: stateDir }, async () => {
       const vocalResult = (await fixture.tool.execute("music-vocal-fallback", {
         prompt: "bright QA chorus",

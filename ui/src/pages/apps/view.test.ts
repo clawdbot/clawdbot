@@ -3,6 +3,7 @@
 import { render } from "lit";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import { i18n } from "../../i18n/index.ts";
+import { buildMacGatewayLaunchUrl } from "./gateway-launch.ts";
 import { renderApps } from "./view.ts";
 
 const EXPECTED_EXTERNAL_HREFS = [
@@ -18,8 +19,8 @@ const EXPECTED_EXTERNAL_HREFS = [
   "https://docs.openclaw.ai/platforms/windows",
   "https://github.com/openclaw/openclaw/releases",
   "https://docs.openclaw.ai/platforms/linux",
-  "https://docs.openclaw.ai/tools/chrome-extension",
   "https://chromewebstore.google.com/detail/openclaw/kcdjddhmeafeomebliikmbpblkmkfoig",
+  "https://docs.openclaw.ai/tools/chrome-extension",
   "https://clawhub.ai",
   "https://discord.gg/clawd",
   "https://docs.openclaw.ai",
@@ -80,6 +81,29 @@ describe("renderApps", () => {
     expect(onNavigate).toHaveBeenCalledExactlyOnceWith("plugins");
   });
 
+  it("opens the connected Gateway in the Mac app without losing the download option", () => {
+    const container = document.createElement("div");
+    render(
+      renderApps({
+        onNavigate: vi.fn(),
+        macGatewayLaunchUrl: buildMacGatewayLaunchUrl("wss://research.example:8443/assistant"),
+      }),
+      container,
+    );
+    const launch = container.querySelector<HTMLAnchorElement>("a[href^='openclaw:']");
+    expect(launch?.textContent?.trim()).toBe("Open in Mac app");
+    const url = new URL(launch!.href);
+    expect(url.host).toBe("gateway");
+    expect(url.pathname).toBe("/add");
+    expect([...url.searchParams]).toEqual([["url", "https://research.example:8443/assistant"]]);
+    expect(launch?.getAttribute("target")).toBeNull();
+    const card = launch?.closest(".apps-card");
+    expect(card?.querySelector("h3")?.textContent).toBe("macOS");
+    expect(
+      card?.querySelector("a[href='https://github.com/openclaw/openclaw/releases']")?.textContent?.trim(),
+    ).toBe("Download");
+  });
+
   it("offers device pairing from the phone section only when permitted", () => {
     const withoutPair = renderIntoContainer();
     expect(withoutPair.querySelector(".apps-pair-hint")).toBeNull();
@@ -92,7 +116,7 @@ describe("renderApps", () => {
     expect(onPairDevice).toHaveBeenCalledOnce();
   });
 
-  it("badges the watch apps as bundled and the extension as coming to the store", () => {
+  it("badges only the bundled watch apps", () => {
     const container = renderIntoContainer();
     const badges = Array.from(container.querySelectorAll(".apps-card__badge")).map(
       (badge) => badge.textContent?.trim(),
@@ -100,7 +124,6 @@ describe("renderApps", () => {
     expect(badges).toEqual([
       "Included with the iOS app",
       "Included with the Android app",
-      "Chrome Web Store · coming soon",
     ]);
   });
 

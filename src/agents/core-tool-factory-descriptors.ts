@@ -7,8 +7,8 @@ import { AUTOMATIONS_TOOL_NAME } from "./tools/automations-tool-name.js";
 export type CoreToolFactoryFamily = "base-coding" | "shell" | "openclaw";
 
 type CoreToolFactoryDescriptor = {
-  name: string;
-  family: CoreToolFactoryFamily;
+  readonly name: string;
+  readonly family: CoreToolFactoryFamily;
 };
 
 const CORE_TOOL_FACTORY_DESCRIPTORS = [
@@ -28,11 +28,15 @@ const CORE_TOOL_FACTORY_DESCRIPTORS = [
   { name: "conversations_send", family: "openclaw" },
   { name: "conversations_turn", family: "openclaw" },
   { name: AUTOMATIONS_TOOL_NAME, family: "openclaw" },
+  { name: "screen", family: "openclaw" },
+  { name: "secrets", family: "openclaw" },
   { name: "dashboard", family: "openclaw" },
   { name: "gateway", family: "openclaw" },
   { name: "get_goal", family: "openclaw" },
+  { name: "github_identity_status", family: "openclaw" },
+  { name: "github_publish", family: "openclaw" },
   { name: "heartbeat_respond", family: "openclaw" },
-  { name: "image", family: "openclaw" },
+  { name: "view_image", family: "openclaw" },
   { name: "image_generate", family: "openclaw" },
   { name: "message", family: "openclaw" },
   { name: "mobile_ui", family: "openclaw" },
@@ -41,6 +45,7 @@ const CORE_TOOL_FACTORY_DESCRIPTORS = [
   { name: "pdf", family: "openclaw" },
   { name: "session_status", family: "openclaw" },
   { name: "show_widget", family: "openclaw" },
+  { name: "progress_card", family: "openclaw" },
   { name: "sessions", family: "openclaw" },
   { name: "sessions_history", family: "openclaw" },
   { name: "sessions_list", family: "openclaw" },
@@ -50,14 +55,14 @@ const CORE_TOOL_FACTORY_DESCRIPTORS = [
   { name: "sessions_yield", family: "openclaw" },
   { name: "structured_output", family: "openclaw" },
   { name: "skill_workshop", family: "openclaw" },
-  { name: "spawn_task", family: "openclaw" },
+  { name: "suggest_task", family: "openclaw" },
   { name: "create_goal", family: "openclaw" },
   { name: "subagents", family: "openclaw" },
   { name: "terminal", family: "openclaw" },
+  { name: "portal", family: "openclaw" },
   { name: "transcripts", family: "openclaw" },
   { name: "tts", family: "openclaw" },
   { name: "update_goal", family: "openclaw" },
-  { name: "update_plan", family: "openclaw" },
   { name: "dismiss_task", family: "openclaw" },
   { name: "video_generate", family: "openclaw" },
   { name: "web_fetch", family: "openclaw" },
@@ -78,6 +83,10 @@ export type OpenClawCodingToolConstructionPlan = {
 
 export function resolveCoreToolFactoryFamily(name: string): CoreToolFactoryFamily | undefined {
   return CORE_TOOL_FACTORY_FAMILY_BY_NAME.get(name);
+}
+
+export function listCoreToolFactoryDescriptors(): readonly CoreToolFactoryDescriptor[] {
+  return CORE_TOOL_FACTORY_DESCRIPTORS;
 }
 
 /**

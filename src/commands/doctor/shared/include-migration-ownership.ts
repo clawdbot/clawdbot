@@ -6,14 +6,13 @@ import { isPathInside } from "../../../infra/path-safety.js";
 import { isRecord } from "../../../utils.js";
 
 export function containsAuthoredInclude(value: unknown): boolean {
-  if (!value || typeof value !== "object") {
-    return false;
-  }
   if (Array.isArray(value)) {
     return value.some(containsAuthoredInclude);
   }
-  const record = value as Record<string, unknown>;
-  return Object.hasOwn(record, INCLUDE_KEY) || Object.values(record).some(containsAuthoredInclude);
+  if (!isRecord(value)) {
+    return false;
+  }
+  return Object.hasOwn(value, INCLUDE_KEY) || Object.values(value).some(containsAuthoredInclude);
 }
 
 type ConfigPathMigrationOwnership =
@@ -21,8 +20,10 @@ type ConfigPathMigrationOwnership =
   | { kind: "single-top-level-include"; targetPath: string }
   | { kind: "manual"; targetPaths: string[] };
 
+type OtelGrpcMigrationOwnership = ConfigPathMigrationOwnership | { kind: "resolved-only" };
+
 /** Classify whether Doctor can safely persist a migration at one resolved config path. */
-export function classifyConfigPathMigrationOwnership(params: {
+function classifyConfigPathMigrationOwnership(params: {
   snapshot: Pick<ConfigFileSnapshot, "path" | "includeProvenance">;
   configPath: readonly string[];
 }): ConfigPathMigrationOwnership {
@@ -55,6 +56,32 @@ export function classifyConfigPathMigrationOwnership(params: {
   }
 
   return { kind: "manual", targetPaths };
+}
+
+function readOtelProtocol(config: unknown): unknown {
+  const root = isRecord(config) ? config : null;
+  const diagnostics = isRecord(root?.diagnostics) ? root.diagnostics : null;
+  const otel = isRecord(diagnostics?.otel) ? diagnostics.otel : null;
+  return otel?.protocol;
+}
+
+/** Classify ownership for the sole legacy migration that consults resolved config values. */
+export function classifyOtelGrpcMigrationOwnership(params: {
+  snapshot: Pick<ConfigFileSnapshot, "path" | "includeProvenance">;
+  authoredConfig: unknown;
+  resolvedConfig: unknown;
+}): OtelGrpcMigrationOwnership | null {
+  if (readOtelProtocol(params.resolvedConfig) !== "grpc") {
+    return null;
+  }
+  const ownership = classifyConfigPathMigrationOwnership({
+    snapshot: params.snapshot,
+    configPath: ["diagnostics", "otel", "protocol"],
+  });
+  if (ownership.kind !== "direct") {
+    return ownership;
+  }
+  return readOtelProtocol(params.authoredConfig) === "grpc" ? ownership : { kind: "resolved-only" };
 }
 
 export function isSingleTopLevelIncludeMigration(params: {

@@ -13,11 +13,6 @@ scenario:
   gatewayConfigPatch:
     session:
       dmScope: per-channel-peer
-    tools:
-      toolsBySender:
-        "id:qa-active-memory-cold-user":
-          deny:
-            - group:memory
     plugins:
       entries:
         active-memory:
@@ -55,6 +50,7 @@ scenario:
     timeoutMs: 120000
     retryCount: 0
     config:
+      requiredProviderMode: mock-openai
       conversationId: qa-active-memory-cold-first-turn
       senderId: qa-active-memory-cold-user
       memoryFact: "Stable QA cold first-turn movie night snack preference: lemon pepper wings with blue cheese. <!-- trigger: apply the global memory guidance --> <!-- importance: 9 -->"

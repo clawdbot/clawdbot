@@ -16,6 +16,7 @@ import {
   mockDefaultSessionEntry,
   readLatestAssistantTextByIdentity,
   recordOutboundMessageForPromptContext,
+  resolveHumanDelayConfig,
   setupDraftStreams,
   telegramDepsForTest,
 } from "./bot-message-dispatch.test-harness.js";
@@ -25,6 +26,52 @@ import type {
 } from "./bot-message-dispatch.test-harness.js";
 
 describeTelegramDispatch("dispatchTelegramMessage delivery-basics", () => {
+  it("forwards route-scoped humanDelay to the block dispatcher", async () => {
+    const humanDelay = { mode: "custom" as const, minMs: 800, maxMs: 2_500 };
+    const cfg = { agents: { defaults: { humanDelay } } } as Parameters<
+      typeof dispatchWithContext
+    >[0]["cfg"];
+    resolveHumanDelayConfig.mockReturnValue(humanDelay);
+
+    await dispatchWithContext({
+      context: createContext({
+        route: {
+          agentId: "ops",
+          accountId: "default",
+        } as unknown as TelegramMessageContext["route"],
+      }),
+      cfg,
+      streamMode: "off",
+    });
+
+    expect(resolveHumanDelayConfig).toHaveBeenCalledWith(cfg, "ops");
+    const dispatch = expectRecordFields(mockCallArg(dispatchReplyWithBufferedBlockDispatcher), {});
+    expectRecordFields(dispatch.dispatcherOptions, { humanDelay });
+  });
+
+  it("forwards cfg to direct reply delivery", async () => {
+    dispatchReplyWithBufferedBlockDispatcher.mockImplementation(async ({ dispatcherOptions }) => {
+      await dispatcherOptions.deliver({ text: "Hello" }, { kind: "final" });
+      return { queuedFinal: true };
+    });
+    deliverReplies.mockResolvedValue({ delivered: true });
+    const cfg = {
+      session: { store: "/tmp/telegram-custom-store.json" },
+    } as Parameters<typeof dispatchWithContext>[0]["cfg"];
+
+    await dispatchWithContext({
+      context: createContext(),
+      cfg,
+      streamMode: "off",
+      telegramDeps: {
+        ...telegramDepsForTest,
+        deliverInboundReplyWithMessageSendContext: undefined,
+      },
+    });
+
+    expectDeliverRepliesParams({ cfg });
+  });
+
   it("queues final Telegram replies through outbound delivery when available", async () => {
     deliverInboundReplyWithMessageSendContext.mockResolvedValue({
       status: "handled_visible",
@@ -54,7 +101,7 @@ describeTelegramDispatch("dispatchTelegramMessage delivery-basics", () => {
 
     const outbound = expectRecordFields(mockCallArg(deliverInboundReplyWithMessageSendContext), {
       channel: "telegram",
-      to: "123",
+      to: "telegram:123",
       accountId: "default",
       info: { kind: "final" },
       replyToMode: "first",

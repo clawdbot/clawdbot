@@ -1,5 +1,6 @@
-// Setup helper tests cover channel setup helper outputs and lifecycle cleanup.
 import { expectDefined } from "@openclaw/normalization-core";
+// Setup helper tests cover channel setup helper outputs and lifecycle cleanup.
+import { createRequireRecord } from "openclaw/plugin-sdk/test-fixtures";
 import { afterAll, beforeEach, describe, expect, it } from "vitest";
 import type { OpenClawConfig } from "../../config/config.js";
 import { resetPluginRuntimeStateForTest, setActivePluginRegistry } from "../../plugins/runtime.js";
@@ -22,12 +23,7 @@ function asConfig(value: unknown): OpenClawConfig {
   return value as OpenClawConfig;
 }
 
-function requireRecord(value: unknown): Record<string, unknown> {
-  if (!value || typeof value !== "object" || Array.isArray(value)) {
-    throw new Error("Expected a non-array record");
-  }
-  return value as Record<string, unknown>;
-}
+const requireRecord = createRequireRecord("record", "expected-non-array-record");
 
 function channelRecord(cfg: OpenClawConfig, channelKey: string): Record<string, unknown> {
   return requireRecord(cfg.channels?.[channelKey]);
@@ -364,6 +360,42 @@ describe("createPatchedAccountSetupAdapter", () => {
 });
 
 describe("moveSingleAccountChannelSectionToDefaultAccount", () => {
+  it.each([undefined, {}])(
+    "seeds an empty default for ordinary single-account promotion: %j",
+    (accounts) => {
+      const cfg = asConfig({
+        channels: { demo: { enabled: true, ...(accounts ? { accounts } : {}) } },
+      });
+      const next = moveSingleAccountChannelSectionToDefaultAccount({ cfg, channelKey: "demo" });
+      expect(next.channels?.demo).toEqual({ enabled: true, accounts: { default: {} } });
+      expect(cfg.channels?.demo).toEqual({ enabled: true, ...(accounts ? { accounts } : {}) });
+    },
+  );
+
+  it.each([undefined, {}, { ada: { enabled: true } }])(
+    "does not create an empty default for explicit preserve-root: %j",
+    (accounts) => {
+      const cfg = asConfig({
+        channels: { demo: { enabled: true, ...(accounts ? { accounts } : {}) } },
+      });
+      expect(
+        moveSingleAccountChannelSectionToDefaultAccount({
+          cfg,
+          channelKey: "demo",
+          setupSurface: {
+            configPromotion: "preserve-root",
+            applyAccountConfig: ({ cfg: currentConfig }) => currentConfig,
+          },
+        }),
+      ).toBe(cfg);
+    },
+  );
+
+  it("does not add a default when an ordinary named account already exists and no keys move", () => {
+    const cfg = asConfig({ channels: { demo: { enabled: true, accounts: { ada: {} } } } });
+    expect(moveSingleAccountChannelSectionToDefaultAccount({ cfg, channelKey: "demo" })).toBe(cfg);
+  });
+
   it("moves Matrix allowBots into the promoted default account", () => {
     const next = moveSingleAccountChannelSectionToDefaultAccount({
       cfg: asConfig({

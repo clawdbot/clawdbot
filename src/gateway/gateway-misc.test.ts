@@ -27,13 +27,12 @@ import {
   resolveNodeCommandAllowlist,
 } from "./node-command-policy.js";
 import { createGatewayBroadcaster } from "./server-broadcast.js";
-import { createSessionMessageSubscriberRegistry } from "./server-chat-state.js";
-import { createChatRunRegistry } from "./server-chat.js";
+import { createChatRunState, createSessionMessageSubscriberRegistry } from "./server-chat-state.js";
 import { MAX_BUFFERED_BYTES } from "./server-constants.js";
 import { handleNodeInvokeResult } from "./server-methods/nodes.handlers.invoke-result.js";
-import type { GatewayClient as GatewayMethodClient } from "./server-methods/types.js";
-import type { GatewayRequestContext, RespondFn } from "./server-methods/types.js";
+import type * as GatewayMethodTypes from "./server-methods/types.js";
 import { formatError, normalizeVoiceWakeTriggers } from "./server-utils.js";
+import { GatewayClientRegistry } from "./server/client-registry.js";
 import type { GatewayWsClient } from "./server/ws-types.js";
 
 function makeControlUiResponse() {
@@ -57,6 +56,7 @@ const wsMockState = vi.hoisted(() => ({
 
 vi.mock("ws", () => ({
   WebSocket: class MockWebSocket {
+    static readonly OPEN = 1;
     on = vi.fn();
     close = vi.fn();
     send = vi.fn();
@@ -110,7 +110,11 @@ describe("GatewayClient", () => {
   ) {
     const { res } = makeControlUiResponse();
     const handled = await handleControlUiHttpRequest(
-      { url: params.url, method: params.method ?? "GET" } as IncomingMessage,
+      {
+        url: params.url,
+        method: params.method ?? "GET",
+        headers: { host: "gateway.example.test" },
+      } as IncomingMessage,
       res,
       { root: { kind: "resolved", path: tmp } },
     );
@@ -181,7 +185,7 @@ describe("GatewayClient", () => {
   test("does not force a direct agent for remote Gateway WebSocket connections", () => {
     expectNoGatewayClientAgent({
       url: "wss://gateway.example.com",
-      tlsFingerprint: "SHA256:AA:BB",
+      tlsFingerprint: "ab".repeat(32),
     });
   });
 
@@ -270,9 +274,11 @@ describe("GatewayClient", () => {
 });
 
 type TestSocket = {
+  readyState: number;
   bufferedAmount: number;
   send: (payload: string) => void;
   close: (code: number, reason: string) => void;
+  terminate: () => void;
 };
 
 type EventFrame = {
@@ -289,11 +295,13 @@ type RecordingSocket = TestSocket & {
 function makeRecordingSocket(): RecordingSocket {
   const sent: EventFrame[] = [];
   return {
+    readyState: 1,
     bufferedAmount: 0,
     send: vi.fn((payload: string) => {
       sent.push(JSON.parse(payload) as EventFrame);
     }),
     close: vi.fn(),
+    terminate: vi.fn(),
     sent,
   };
 }
@@ -321,7 +329,7 @@ function makeOperatorWsClient(connId: string, socket: TestSocket, scopes: string
 function makeOperatorWsClients(
   entries: Array<{ connId: string; socket: TestSocket; scopes: string[] }>,
 ) {
-  return new Set<GatewayWsClient>(
+  return new GatewayClientRegistry(
     entries.map(({ connId, socket, scopes }) => makeOperatorWsClient(connId, socket, scopes)),
   );
 }
@@ -343,7 +351,7 @@ function makeScopedBroadcastClients() {
   const talkSocket = makeRecordingSocket();
   const writeSocket = makeRecordingSocket();
   const adminSocket = makeRecordingSocket();
-  const clients = new Set<GatewayWsClient>([
+  const clients = new GatewayClientRegistry([
     makeOperatorWsClient("c-pairing", pairingSocket, ["operator.pairing"]),
     makeGatewayWsClient("c-node", nodeSocket, {
       role: "node",
@@ -360,10 +368,11 @@ function makeScopedBroadcastClients() {
 
 function makeScopedBroadcastContext() {
   const scoped = makeScopedBroadcastClients();
-  return {
-    ...scoped,
-    ...createGatewayBroadcaster({ clients: scoped.clients }),
-  };
+  const broadcaster = createGatewayBroadcaster({
+    clients: scoped.clients,
+    preparePresenceProjection: (presence) => () => presence,
+  });
+  return { ...scoped, ...broadcaster };
 }
 
 function sentEvents(socket: RecordingSocket) {
@@ -400,7 +409,7 @@ describe("gateway broadcaster", () => {
     const socket = makeRecordingSocket();
     socket.bufferedAmount = 1234;
     const client = makeOperatorWsClient("c-admin", socket, ["operator.admin"]);
-    const clients = new Set<GatewayWsClient>([client]);
+    const clients = new GatewayClientRegistry([client]);
     const { getBufferedAmount } = createGatewayBroadcaster({ clients });
 
     expect(getBufferedAmount("c-admin")).toBe(1234);
@@ -430,8 +439,31 @@ describe("gateway broadcaster", () => {
     broadcastToConnIds("session.message", payload, new Set(["slow-session", "healthy-session"]));
 
     expect(slowSocket.close).toHaveBeenCalledWith(1008, "slow consumer");
+    expect(slowSocket.terminate).toHaveBeenCalledOnce();
     expect(slowSocket.send).not.toHaveBeenCalled();
-    expect(healthySocket.sent).toEqual([{ type: "event", event: "session.message", payload }]);
+    expect(healthySocket.sent).toEqual([
+      { type: "event", event: "session.message", payload, seq: 1 },
+    ]);
+  });
+
+  it("stamps targeted frames on the per-client sequence so drops surface as gaps", () => {
+    const socket = makeRecordingSocket();
+    const client = makeOperatorWsClient("c-seq", socket, ["operator.read"]);
+    const clients = new GatewayClientRegistry([client]);
+    const { broadcast, broadcastToConnIds } = createGatewayBroadcaster({ clients });
+
+    broadcastToConnIds("tick", { ts: 1 }, new Set(["c-seq"]));
+    broadcast("heartbeat", { ts: 2 });
+    // A slow-consumer drop between targeted sends must consume a sequence
+    // number: the next delivered frame exposes the loss to gap detection.
+    socket.bufferedAmount = MAX_BUFFERED_BYTES + 1;
+    broadcastToConnIds("tick", { ts: 3 }, new Set(["c-seq"]), { dropIfSlow: true });
+    expect(socket.close).not.toHaveBeenCalled();
+    expect(socket.terminate).not.toHaveBeenCalled();
+    socket.bufferedAmount = 0;
+    broadcastToConnIds("tick", { ts: 4 }, new Set(["c-seq"]));
+
+    expect(socket.sent.map((frame) => frame.seq)).toEqual([1, 2, 4]);
   });
 
   it("keeps workers outside all generic and targeted gateway broadcasts", () => {
@@ -441,7 +473,7 @@ describe("gateway broadcaster", () => {
       scopes: [],
     } as unknown as GatewayWsClient["connect"]);
     worker.connectionKind = "worker";
-    const clients = new Set<GatewayWsClient>([worker]);
+    const clients = new GatewayClientRegistry([worker]);
     const { broadcast, broadcastToConnIds } = createGatewayBroadcaster({ clients });
 
     for (const event of ["heartbeat", "presence", "health", "tick", "shutdown", "chat"]) {
@@ -457,7 +489,7 @@ describe("gateway broadcaster", () => {
     const client = makeOperatorWsClient("c-invalidated", socket, ["operator.read"]);
     client.invalidated = true;
     const { broadcast, broadcastToConnIds } = createGatewayBroadcaster({
-      clients: new Set([client]),
+      clients: new GatewayClientRegistry([client]),
     });
 
     broadcast("heartbeat", { ts: 1 });
@@ -484,7 +516,7 @@ describe("gateway broadcaster", () => {
       platform: "chrome",
       mode: GATEWAY_CLIENT_MODES.UI,
     };
-    const clients = new Set([legacy, first, second]);
+    const clients = new GatewayClientRegistry([legacy, first, second]);
     const sessionMessageSubscribers = createSessionMessageSubscriberRegistry();
     sessionMessageSubscribers.subscribe(first.connId, "session-a");
     sessionMessageSubscribers.subscribe(second.connId, "session-b");
@@ -508,42 +540,35 @@ describe("gateway broadcaster", () => {
   });
 
   it("filters approval and pairing events by scope", () => {
-    const approvalsSocket: TestSocket = {
-      bufferedAmount: 0,
-      send: vi.fn(),
-      close: vi.fn(),
-    };
-    const pairingSocket: TestSocket = {
-      bufferedAmount: 0,
-      send: vi.fn(),
-      close: vi.fn(),
-    };
-    const readSocket: TestSocket = {
-      bufferedAmount: 0,
-      send: vi.fn(),
-      close: vi.fn(),
-    };
+    const approvalsSocket = makeRecordingSocket();
+    const pairingSocket = makeRecordingSocket();
+    const readSocket = makeRecordingSocket();
+    const adminSocket = makeRecordingSocket();
 
-    const clients = new Set<GatewayWsClient>([
+    const clients = new GatewayClientRegistry([
       makeOperatorWsClient("c-approvals", approvalsSocket, ["operator.approvals"]),
       makeOperatorWsClient("c-pairing", pairingSocket, ["operator.pairing"]),
       makeOperatorWsClient("c-read", readSocket, ["operator.read"]),
+      makeOperatorWsClient("c-admin", adminSocket, ["operator.admin"]),
     ]);
 
     const { broadcast, broadcastToConnIds } = createGatewayBroadcaster({ clients });
 
     broadcast("exec.approval.requested", { id: "1" });
     broadcast("device.pair.requested", { requestId: "r1" });
+    broadcast("device.pair.changed", {});
 
     expect(approvalsSocket.send).toHaveBeenCalledTimes(1);
-    expect(pairingSocket.send).toHaveBeenCalledTimes(1);
+    expect(pairingSocket.send).toHaveBeenCalledTimes(2);
     expect(readSocket.send).toHaveBeenCalledTimes(0);
+    expect(adminSocket.send).toHaveBeenCalledTimes(3);
 
     broadcastToConnIds("tick", { ts: 1 }, new Set(["c-read"]));
     broadcastToConnIds("talk.event", { type: "session.ready" }, new Set(["c-read"]));
     expect(readSocket.send).toHaveBeenCalledTimes(2);
     expect(approvalsSocket.send).toHaveBeenCalledTimes(1);
-    expect(pairingSocket.send).toHaveBeenCalledTimes(1);
+    expect(pairingSocket.send).toHaveBeenCalledTimes(2);
+    expect(adminSocket.send).toHaveBeenCalledTimes(3);
   });
 
   it("requires operator.read for chat-class broadcast events", () => {
@@ -577,9 +602,9 @@ describe("gateway broadcaster", () => {
   });
 
   it("requires operator.questions for question broadcasts", () => {
-    const questionSocket: TestSocket = { bufferedAmount: 0, send: vi.fn(), close: vi.fn() };
-    const readSocket: TestSocket = { bufferedAmount: 0, send: vi.fn(), close: vi.fn() };
-    const clients = new Set<GatewayWsClient>([
+    const questionSocket = makeRecordingSocket();
+    const readSocket = makeRecordingSocket();
+    const clients = new GatewayClientRegistry([
       makeOperatorWsClient("c-questions", questionSocket, ["operator.questions"]),
       makeOperatorWsClient("c-read", readSocket, ["operator.read"]),
     ]);
@@ -623,17 +648,19 @@ describe("gateway broadcaster", () => {
     expectSentEvents(adminSocket, ["task"]);
   });
 
-  it("requires operator.read for node presence broadcasts", () => {
+  it("requires operator.read for node topology broadcasts", () => {
     const { pairingSocket, nodeSocket, readSocket, writeSocket, adminSocket, broadcast } =
       makeScopedBroadcastContext();
 
     broadcast("node.presence", { nodeId: "mac-1", lastActiveAtMs: 100 });
+    broadcast("node.runnerInventory.changed", { nodeId: "mac-1" });
 
     expect(pairingSocket.send).not.toHaveBeenCalled();
     expect(nodeSocket.send).not.toHaveBeenCalled();
-    expectSentEvents(readSocket, ["node.presence"]);
-    expectSentEvents(writeSocket, ["node.presence"]);
-    expectSentEvents(adminSocket, ["node.presence"]);
+    const expectedEvents = ["node.presence", "node.runnerInventory.changed"];
+    expectSentEvents(readSocket, expectedEvents);
+    expectSentEvents(writeSocket, expectedEvents);
+    expectSentEvents(adminSocket, expectedEvents);
   });
 
   it("allows plugin.* broadcast events for operator.write and operator.admin", () => {
@@ -722,20 +749,12 @@ describe("gateway broadcaster", () => {
 
     expectSentEvents(pairingSocket, [
       "heartbeat",
-      "presence",
       "health",
       "tick",
       "shutdown",
       "update.available",
     ]);
-    expectSentEvents(nodeSocket, [
-      "heartbeat",
-      "presence",
-      "health",
-      "tick",
-      "shutdown",
-      "update.available",
-    ]);
+    expectSentEvents(nodeSocket, ["heartbeat", "health", "tick", "shutdown", "update.available"]);
     expectSentEvents(readSocket, [
       "cron",
       "voicewake.changed",
@@ -750,7 +769,6 @@ describe("gateway broadcaster", () => {
     expectSentEvents(talkSocket, [
       "talk.mode",
       "heartbeat",
-      "presence",
       "health",
       "tick",
       "shutdown",
@@ -781,9 +799,14 @@ describe("gateway broadcaster", () => {
       readSocket,
     );
 
-    const { broadcast } = createGatewayBroadcaster({ clients });
+    const { broadcast, broadcastToConnIds } = createGatewayBroadcaster({
+      clients,
+      preparePresenceProjection: (presence) => () => presence,
+    });
 
     broadcast("chat", chatPayload());
+    broadcast("presence", { presence: [] });
+    broadcastToConnIds("presence", { presence: [] }, new Set(["c-pairing", "c-read"]));
     broadcast("heartbeat", { ts: 1 });
     broadcast("chat.side_result", chatSideResultPayload());
     broadcast("tick", { ts: 2 });
@@ -794,9 +817,11 @@ describe("gateway broadcaster", () => {
     ]);
     expect(sentEventSeq(readSocket)).toEqual([
       ["chat", 1],
-      ["heartbeat", 2],
-      ["chat.side_result", 3],
-      ["tick", 4],
+      ["presence", 2],
+      ["presence", 3],
+      ["heartbeat", 4],
+      ["chat.side_result", 5],
+      ["tick", 6],
     ]);
   });
 
@@ -862,7 +887,7 @@ describe("gateway broadcaster", () => {
     try {
       const slowReadSocket = makeRecordingSocket();
       slowReadSocket.bufferedAmount = MAX_BUFFERED_BYTES + 1;
-      const clients = new Set<GatewayWsClient>([
+      const clients = new GatewayClientRegistry([
         makeOperatorWsClient("c-slow-read", slowReadSocket, ["operator.read"]),
       ]);
 
@@ -890,7 +915,7 @@ describe("gateway broadcaster", () => {
 
 describe("chat run registry", () => {
   test("queues and removes runs per session", () => {
-    const registry = createChatRunRegistry();
+    const registry = createChatRunState().registry;
 
     registry.add("s1", { sessionKey: "main", clientRunId: "c1" });
     registry.add("s1", { sessionKey: "main", clientRunId: "c2" });
@@ -921,14 +946,14 @@ describe("late-arriving invoke results", () => {
     ] as const;
 
     for (const params of cases) {
-      const respond = vi.fn<RespondFn>();
+      const respond = vi.fn<GatewayMethodTypes.RespondFn>();
       const context = {
         nodeRegistry: { handleInvokeResult: () => false },
         logGateway: { debug: vi.fn() },
-      } as unknown as GatewayRequestContext;
+      } as unknown as GatewayMethodTypes.GatewayRequestContext;
       const client = {
         connect: { device: { id: nodeId } },
-      } as unknown as GatewayMethodClient;
+      } as unknown as GatewayMethodTypes.GatewayClient;
 
       await handleNodeInvokeResult({
         req: { method: "node.invoke.result" } as unknown as RequestFrame,

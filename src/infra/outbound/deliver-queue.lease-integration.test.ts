@@ -1,4 +1,5 @@
 import { afterEach, beforeAll, describe, expect, it, vi } from "vitest";
+import { createDeferred } from "../../../test/helpers/promise.js";
 import { onTrustedMessageAuditEvent } from "../../audit/message-audit-events.js";
 import { createMessageReceiptFromOutboundResults } from "../../channels/message/receipt.js";
 import type { ChannelMessageSendTextContext } from "../../channels/message/types.js";
@@ -12,8 +13,7 @@ import {
   matrixOutboundForQueueTest,
 } from "./deliver.queue-integration.test-support.js";
 import { OUTBOUND_DELIVERY_QUEUE_NAME } from "./delivery-queue-media-staging.js";
-import { claimDeliveryPlatformSendAttempt } from "./delivery-queue-storage.js";
-import { enqueueDeliveryOnce } from "./delivery-queue.js";
+import { claimDeliveryPlatformSendAttempt, enqueueDeliveryOnce } from "./delivery-queue-storage.js";
 import {
   installDeliveryQueueTmpDirHooks,
   readQueuedEntry,
@@ -22,12 +22,57 @@ import {
 
 let deliverOutboundPayloads: typeof import("./deliver.js").deliverOutboundPayloads;
 
-function createDeferred() {
-  let resolve!: () => void;
-  const promise = new Promise<void>((resolvePromise) => {
-    resolve = resolvePromise;
+async function startBlockedFreshDelivery(params: { tmpDir: string }) {
+  process.env.OPENCLAW_STATE_DIR = params.tmpDir;
+  const preparationEntered = createDeferred();
+  const releasePreparation = createDeferred();
+  const queueIdReady = createDeferred<string>();
+  const messageId = "fresh-live-message";
+  const sendText = vi.fn(async (ctx: ChannelMessageSendTextContext) => {
+    await ctx.onPlatformSendDispatch?.();
+    return {
+      messageId,
+      receipt: createMessageReceiptFromOutboundResults({
+        results: [{ channel: "matrix", messageId }],
+        kind: "text",
+      }),
+    };
   });
-  return { promise, resolve };
+  setActivePluginRegistry(
+    createTestRegistry([
+      {
+        pluginId: "matrix",
+        source: "test",
+        plugin: {
+          ...createOutboundTestPlugin({ id: "matrix", outbound: matrixOutboundForQueueTest }),
+          message: {
+            id: "matrix",
+            durableFinal: { capabilities: { text: true } },
+            send: {
+              lifecycle: {
+                beforeSendAttempt: async () => {
+                  preparationEntered.resolve();
+                  await releasePreparation.promise;
+                },
+              },
+              text: sendText,
+            },
+          },
+        },
+      },
+    ]),
+  );
+  const delivery = deliverOutboundPayloads({
+    cfg: {} as OpenClawConfig,
+    channel: "matrix",
+    to: "!room:example",
+    payloads: [{ text: "fresh live content" }],
+    queuePolicy: "best_effort",
+    onDeliveryIntent: ({ id }) => queueIdReady.resolve(id),
+  });
+  const queueId = await queueIdReady.promise;
+  await preparationEntered.promise;
+  return { delivery, messageId, queueId, releasePreparation: releasePreparation.resolve, sendText };
 }
 
 async function startBlockedStableDelivery(params: {
@@ -240,7 +285,7 @@ async function startBlockedProviderStableDelivery(params: {
   return { delivery, onDeliveryResult, releaseProvider: releaseProvider.resolve, sendText };
 }
 
-describe("stable delivery producer lease integration", () => {
+describe("delivery producer lease integration", () => {
   const fixtures = installDeliveryQueueTmpDirHooks();
 
   beforeAll(async () => {
@@ -252,6 +297,42 @@ describe("stable delivery producer lease integration", () => {
     resetPluginRuntimeStateForTest();
     setActivePluginRegistry(createEmptyPluginRegistry());
   });
+
+  it.for([0, 38_000])(
+    "retains fresh delivery ownership before provider I/O after a %ims scheduling stall",
+    async (stallMs) => {
+      vi.useFakeTimers();
+      vi.setSystemTime(new Date("2026-09-02T23:00:00.000Z"));
+      const tmpDir = fixtures.tmpDir();
+      let blocked: Awaited<ReturnType<typeof startBlockedFreshDelivery>> | undefined;
+      try {
+        blocked = await startBlockedFreshDelivery({ tmpDir });
+        // Advancing wall time without timers models a blocked Gateway: no
+        // heartbeat can run before the delayed provider boundary resumes.
+        vi.setSystemTime(Date.now() + stallMs);
+        const entry = readQueuedEntry(tmpDir, blocked.queueId);
+
+        expect(entry).toMatchObject({
+          recoveryState: "producer_claimed",
+          requiresProducerClaim: true,
+          producerClaimId: expect.any(String),
+          availableAt: expect.any(Number),
+        });
+        expect(entry.availableAt as number).toBeGreaterThan(Date.now());
+        expect(await claimDeliveryPlatformSendAttempt(blocked.queueId, tmpDir)).toBeUndefined();
+
+        blocked.releasePreparation();
+        await expect(blocked.delivery).resolves.toMatchObject([{ messageId: blocked.messageId }]);
+        expect(blocked.sendText).toHaveBeenCalledOnce();
+        expect(
+          getDeliveryQueueEntryStatus(OUTBOUND_DELIVERY_QUEUE_NAME, blocked.queueId, tmpDir),
+        ).toBeUndefined();
+      } finally {
+        blocked?.releasePreparation();
+        await blocked?.delivery.catch(() => undefined);
+      }
+    },
+  );
 
   it("upgrades and renews a legacy reused intent through long channel preparation", async () => {
     vi.useFakeTimers();
@@ -265,7 +346,7 @@ describe("stable delivery producer lease integration", () => {
         deliveryIntentId,
         requiresProducerClaim: false,
       });
-      await vi.advanceTimersByTimeAsync(35_000);
+      await vi.advanceTimersByTimeAsync(65_000);
 
       expect(await claimDeliveryPlatformSendAttempt(deliveryIntentId, tmpDir)).toBeUndefined();
       expect(readQueuedEntry(tmpDir, deliveryIntentId)).toMatchObject({
@@ -306,10 +387,10 @@ describe("stable delivery producer lease integration", () => {
         retryCount: 0,
         producerClaimId: "replacement-owner",
       });
-      await vi.advanceTimersByTimeAsync(10_001);
+      await vi.advanceTimersByTimeAsync(20_001);
 
       const rejected = expect(blocked.delivery).rejects.toThrow(
-        `Stable delivery platform claim was lost: ${deliveryIntentId}`,
+        `Delivery platform claim was lost: ${deliveryIntentId}`,
       );
       blocked.releasePreparation();
       await rejected;
@@ -344,10 +425,10 @@ describe("stable delivery producer lease integration", () => {
         retryCount: 0,
         availableAt: Date.now() - 1,
       });
-      await vi.advanceTimersByTimeAsync(10_001);
+      await vi.advanceTimersByTimeAsync(20_001);
 
       const rejected = expect(blocked.delivery).rejects.toThrow(
-        `Stable delivery platform claim was lost: ${deliveryIntentId}`,
+        `Delivery platform claim was lost: ${deliveryIntentId}`,
       );
       blocked.releasePreparation();
       await rejected;
@@ -385,10 +466,10 @@ describe("stable delivery producer lease integration", () => {
         retryCount: 0,
         availableAt: Date.now() - 1,
       });
-      await vi.advanceTimersByTimeAsync(10_001);
+      await vi.advanceTimersByTimeAsync(20_001);
 
       const rejected = expect(blocked.delivery).rejects.toThrow(
-        `Stable delivery platform claim was lost: ${deliveryIntentId}`,
+        `Delivery platform claim was lost: ${deliveryIntentId}`,
       );
       blocked.releaseRender();
       await rejected;
@@ -418,7 +499,7 @@ describe("stable delivery producer lease integration", () => {
     vi.setSystemTime(new Date("2026-08-02T10:00:00.000Z"));
     const tmpDir = fixtures.tmpDir();
     const deliveryIntentId = "cron-direct-delivery:v1:expire-owner-after-dispatch";
-    const auditEvents: unknown[] = [];
+    const auditEvents: Array<{ outcome: string }> = [];
     const unsubscribe = onTrustedMessageAuditEvent((event) => auditEvents.push(event));
     let blocked: Awaited<ReturnType<typeof startBlockedProviderStableDelivery>> | undefined;
     try {
@@ -436,17 +517,17 @@ describe("stable delivery producer lease integration", () => {
         platformSendStartedAt: dispatched.platformSendStartedAt as number,
         availableAt: Date.now() - 1,
       });
-      await vi.advanceTimersByTimeAsync(10_001);
+      await vi.advanceTimersByTimeAsync(20_001);
 
       const rejected = expect(blocked.delivery).rejects.toThrow(
-        `Stable delivery platform claim was lost: ${deliveryIntentId}`,
+        `Delivery platform claim was lost: ${deliveryIntentId}`,
       );
       blocked.releaseProvider();
       await rejected;
 
       expect(blocked.sendText).toHaveBeenCalledOnce();
       expect(blocked.onDeliveryResult).not.toHaveBeenCalled();
-      expect(auditEvents).toEqual([]);
+      expect(auditEvents.map((event) => event.outcome)).toEqual(["queued", "platform_started"]);
       expect(
         getDeliveryQueueEntryStatus(OUTBOUND_DELIVERY_QUEUE_NAME, deliveryIntentId, tmpDir),
       ).toBe("pending");

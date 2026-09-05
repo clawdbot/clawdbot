@@ -2,7 +2,7 @@
 import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
-import { describe, expect, it } from "vitest";
+import { describe, expect, it, vi } from "vitest";
 import { createMockCronStateForJobs } from "./service.test-harness.js";
 import { list, listPage } from "./service/ops-read.js";
 import type { CronJob } from "./types.js";
@@ -242,6 +242,35 @@ describe("cron listPage sort guards", () => {
     expect(page.jobs[0]?.state.lastStatus).toBeUndefined();
   });
 
+  it("listPage does not clone the complete store, detaches only requested rows, and revisions cover off-page changes", async () => {
+    const jobs = [
+      createBaseJob({ id: "job-a", name: "alpha" }),
+      createBaseJob({ id: "job-b", name: "beta" }),
+      createBaseJob({ id: "job-c", name: "gamma" }),
+    ];
+    const state = createMockCronStateForJobs({ jobs });
+    const clone = vi.spyOn(globalThis, "structuredClone");
+
+    try {
+      const options = { limit: 1, offset: 1, sortBy: "name" as const };
+      const page = await listPage(state, options);
+      const clonedArrays = clone.mock.calls.filter(([value]) => Array.isArray(value));
+
+      expect(clone).not.toHaveBeenCalledWith(state.store);
+      expect(clonedArrays).toHaveLength(1);
+      expect(clonedArrays[0]?.[0]).toEqual([jobs[1]]);
+      expect(page.jobs[0]).not.toBe(jobs[1]);
+
+      jobs[2]!.state.lastStatus = "ok";
+      const changed = await listPage(state, options);
+
+      expect(changed.jobs.map((job) => job.id)).toEqual(["job-b"]);
+      expect(changed.snapshotRevision).not.toBe(page.snapshotRevision);
+    } finally {
+      clone.mockRestore();
+    }
+  });
+
   it("matches job ids in listPage text search", async () => {
     const jobs = [
       createBaseJob({ id: "daily-report", name: "Morning report" }),
@@ -254,7 +283,7 @@ describe("cron listPage sort guards", () => {
     expect(page.jobs.map((job) => job.id)).toEqual(["tax-digest"]);
   });
 
-  it("applies schedule and last-run status filters before paging", async () => {
+  it("applies schedule, status, and trigger filters before paging", async () => {
     const nextRunAtMs = Date.parse("2030-02-27T15:30:00.000Z");
     const jobs = [
       createBaseJob({
@@ -270,6 +299,12 @@ describe("cron listPage sort guards", () => {
       createBaseJob({
         id: "cron-unknown",
         schedule: { kind: "cron", expr: "0 10 * * *" },
+        trigger: { script: "json({ fire: true })" },
+        state: { nextRunAtMs },
+      }),
+      createBaseJob({
+        id: "cron-unknown-plain",
+        schedule: { kind: "cron", expr: "0 11 * * *" },
         state: { nextRunAtMs },
       }),
     ];
@@ -281,6 +316,7 @@ describe("cron listPage sort guards", () => {
       const page = await listPage(state, {
         scheduleKind: "cron",
         lastRunStatus: "unknown",
+        trigger: "conditional",
         limit: 1,
       });
 

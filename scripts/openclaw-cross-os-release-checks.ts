@@ -5,28 +5,36 @@
 import { mkdirSync } from "node:fs";
 import { join, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
+import {
+  resolveCrossOsPackageSet,
+  startCrossOsPackageRegistry,
+} from "./lib/cross-os-release-checks/companions.ts";
 import type { CandidateBuild, LaneResult } from "./lib/cross-os-release-checks/config.ts";
 import {
-  isSupportedCrossOsSuite,
   parseArgs,
   readRunnerOverrideEnv,
   resolveProviderConfig,
   resolveRunnerMatrix,
 } from "./lib/cross-os-release-checks/config.ts";
-import { prepareCandidate, readProvidedCandidate } from "./lib/cross-os-release-checks/install.ts";
+import {
+  npmCommand,
+  prepareCandidate,
+  readProvidedCandidate,
+} from "./lib/cross-os-release-checks/install.ts";
 import {
   runDevUpdateSuite,
   runFreshLane,
   runInstallerFreshSuite,
   runUpgradeLane,
 } from "./lib/cross-os-release-checks/lanes.ts";
-import { startStaticFileServer } from "./lib/cross-os-release-checks/process.ts";
+import { runCommand, startStaticFileServer } from "./lib/cross-os-release-checks/process.ts";
 import {
   requireArg,
   writeCandidateManifest,
   writeSummary,
 } from "./lib/cross-os-release-checks/reporting.ts";
 import { formatError } from "./lib/cross-os-release-checks/shared.ts";
+import { isSupportedCrossOsSuite } from "./lib/cross-os-release-checks/suite-filter.mjs";
 
 const SCRIPT_PATH = fileURLToPath(import.meta.url);
 
@@ -70,6 +78,16 @@ async function main(argv: string[]) {
     return;
   }
 
+  if (args["resolve-provider-required-companion-packages"] === "true") {
+    const provider = args["provider"]?.trim() || "";
+    const selectedProvider = resolveProviderConfig(provider);
+    if (!selectedProvider) {
+      throw new Error(`Unsupported provider "${provider}".`);
+    }
+    process.stdout.write(`${JSON.stringify(selectedProvider.requiredCompanionPackages)}\n`);
+    return;
+  }
+
   const outputDir = resolve(requireArg(args, "output-dir"));
   const prepareOnly = args["prepare-only"] === "true";
   const sourceDir = args["source-dir"]?.trim() ? resolve(args["source-dir"].trim()) : "";
@@ -89,7 +107,24 @@ async function main(argv: string[]) {
     : "";
   const providedCandidateVersion = args["candidate-version"]?.trim() || "";
   const providedSourceSha = args["source-sha"]?.trim() || "";
+  const pluginRegistryDir = args["plugin-registry-dir"]?.trim();
+  const pluginRegistryManifestSha256 = args["plugin-registry-manifest-sha256"]?.trim();
+  if (Boolean(pluginRegistryDir) !== Boolean(pluginRegistryManifestSha256)) {
+    throw new Error(
+      "--plugin-registry-dir and --plugin-registry-manifest-sha256 must be provided together.",
+    );
+  }
+  const pluginRegistry =
+    pluginRegistryDir && pluginRegistryManifestSha256
+      ? { dir: resolve(pluginRegistryDir), manifestSha256: pluginRegistryManifestSha256 }
+      : undefined;
   const runDiscordRoundtrip = args["run-discord-roundtrip"] === "true";
+
+  const selectedProvider = resolveProviderConfig(provider);
+  if (!selectedProvider) {
+    throw new Error(`Unsupported provider "${provider}".`);
+  }
+  const requiredCompanionPackages = [...selectedProvider.requiredCompanionPackages];
 
   mkdirSync(outputDir, { recursive: true });
   const logsDir = join(outputDir, "logs");
@@ -112,10 +147,6 @@ async function main(argv: string[]) {
     throw new Error(`Unsupported suite "${suite}".`);
   }
 
-  const selectedProvider = resolveProviderConfig(provider);
-  if (!selectedProvider) {
-    throw new Error(`Unsupported provider "${provider}".`);
-  }
   const providerSecretValue = process.env[selectedProvider.secretEnv]?.trim();
   if (!providerSecretValue) {
     throw new Error(`Missing ${selectedProvider.secretEnv}.`);
@@ -125,6 +156,8 @@ async function main(argv: string[]) {
     platform: process.platform,
     runnerOs: process.env.OPENCLAW_RELEASE_CHECK_OS ?? "",
     runnerLabel: process.env.OPENCLAW_RELEASE_CHECK_RUNNER ?? "",
+    nodeVersion: process.version,
+    npmVersion: await readNpmVersion(logsDir),
     provider,
     mode,
     suite,
@@ -142,6 +175,11 @@ async function main(argv: string[]) {
   };
 
   let build: CandidateBuild;
+  let registry: Awaited<ReturnType<typeof startCrossOsPackageRegistry>>;
+  const previousRegistry = {
+    NPM_CONFIG_REGISTRY: process.env.NPM_CONFIG_REGISTRY,
+    npm_config_registry: process.env.npm_config_registry,
+  };
   try {
     build = sourceDir
       ? await prepareCandidate({
@@ -157,10 +195,31 @@ async function main(argv: string[]) {
     summary.sourceSha = build.sourceSha;
     summary.candidateVersion = build.candidateVersion;
     summary.candidateTgz = build.candidateTgz;
+    if (requiredCompanionPackages.length > 0 && !pluginRegistry) {
+      throw new Error(
+        `Provider "${provider}" requires an immutable prerelease companion registry.`,
+      );
+    }
+    const packageSet = pluginRegistry
+      ? resolveCrossOsPackageSet({
+          artifactDir: pluginRegistry.dir,
+          candidateVersion: build.candidateVersion,
+          manifestSha256: pluginRegistry.manifestSha256,
+          requiredPackages: requiredCompanionPackages,
+          sourceSha: build.sourceSha,
+        })
+      : { companions: [], packages: [] };
+    const { companions } = packageSet;
+    registry = await startCrossOsPackageRegistry(packageSet.packages, logsDir);
+    if (registry) {
+      process.env.NPM_CONFIG_REGISTRY = registry.url;
+      process.env.npm_config_registry = registry.url;
+    }
 
     if (suite === "packaged-fresh") {
       summary.result = await runFreshLane({
         build,
+        companions,
         logsDir,
         providerConfig: selectedProvider,
         providerSecretValue,
@@ -175,6 +234,7 @@ async function main(argv: string[]) {
           baselineSpec,
           baselineTgz: providedBaselineTgz,
           build,
+          companions,
           candidateUrl: tgzServer.url,
           logsDir,
           providerConfig: selectedProvider,
@@ -186,6 +246,7 @@ async function main(argv: string[]) {
     } else if (suite === "installer-fresh") {
       summary.result = await runInstallerFreshSuite({
         build,
+        companions,
         logsDir,
         providerConfig: selectedProvider,
         providerSecretValue,
@@ -194,6 +255,7 @@ async function main(argv: string[]) {
     } else {
       summary.result = await runDevUpdateSuite({
         baselineSpec,
+        companions,
         logsDir,
         providerConfig: selectedProvider,
         providerSecretValue,
@@ -207,11 +269,34 @@ async function main(argv: string[]) {
       status: "fail",
       error: formatError(error),
     };
+  } finally {
+    await registry?.close();
+    for (const name of ["NPM_CONFIG_REGISTRY", "npm_config_registry"] as const) {
+      const value = previousRegistry[name];
+      if (value === undefined) {
+        delete process.env[name];
+      } else {
+        process.env[name] = value;
+      }
+    }
   }
 
   writeSummary(outputDir, summary);
 
   if (summary.result.status !== "pass") {
     process.exit(1);
+  }
+}
+
+async function readNpmVersion(logsDir: string) {
+  try {
+    const result = await runCommand(npmCommand(), ["--version"], {
+      logPath: join(logsDir, "npm-version.log"),
+      timeoutMs: 30_000,
+      check: false,
+    });
+    return result.exitCode === 0 ? result.stdout.trim() || "unknown" : "unknown";
+  } catch {
+    return "unknown";
   }
 }

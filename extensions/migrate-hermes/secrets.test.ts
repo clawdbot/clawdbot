@@ -9,19 +9,24 @@ import {
 } from "openclaw/plugin-sdk/agent-runtime";
 import type { MigrationProviderContext } from "openclaw/plugin-sdk/plugin-entry";
 import type { OpenClawConfig } from "openclaw/plugin-sdk/provider-auth";
-import { afterEach, describe, expect, it, vi } from "vitest";
+import {
+  resolvePreferredOpenClawTmpDir,
+  tempWorkspace,
+  type TempWorkspace,
+} from "openclaw/plugin-sdk/temp-path";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import {
   HERMES_REASON_AUTH_PROFILE_EXISTS,
   HERMES_REASON_SECRET_NO_LONGER_PRESENT,
 } from "./items.js";
 import { buildHermesMigrationProvider } from "./provider.js";
 import {
-  cleanupTempRoots,
   makeConfigRuntime,
   makeContext as makeProviderContext,
-  makeTempRoot,
   writeFile,
 } from "./test/provider-helpers.js";
+
+let testWorkspace: TempWorkspace;
 
 async function expectMissingPath(filePath: string): Promise<void> {
   try {
@@ -58,7 +63,7 @@ const HERMES_ACCESS_FIELD = ["access", "token"].join("_");
 const HERMES_REFRESH_FIELD = ["refresh", "token"].join("_");
 
 async function makeHermesSecretFixture(sourceName = "hermes") {
-  const root = await makeTempRoot();
+  const root = testWorkspace.dir;
   const source = path.join(root, sourceName);
   const workspaceDir = path.join(root, "workspace");
   const stateDir = path.join(root, "state");
@@ -84,9 +89,16 @@ async function makeHermesSecretFixture(sourceName = "hermes") {
 }
 
 describe("Hermes migration secret items", () => {
+  beforeEach(async () => {
+    testWorkspace = await tempWorkspace({
+      rootDir: resolvePreferredOpenClawTmpDir(),
+      prefix: "openclaw-migrate-hermes-",
+    });
+  });
+
   afterEach(async () => {
     vi.unstubAllEnvs();
-    await cleanupTempRoots();
+    await testWorkspace.cleanup();
   });
 
   it("uses configured agentDir for secret planning and imports without runtime helpers", async () => {
@@ -646,6 +658,7 @@ describe("Hermes migration secret items", () => {
       reportDir,
     });
     const plan = await provider.plan(ctx);
+    const plannedTarget = authProfileTarget(agentDir, "openai:hermes-import");
     writeAuthProfileStore(agentDir, {
       version: 1,
       profiles: {
@@ -665,7 +678,7 @@ describe("Hermes migration secret items", () => {
         kind: "secret",
         action: "create",
         source: path.join(source, ".env"),
-        target: authProfileTarget(agentDir, "openai:hermes-import"),
+        target: plannedTarget,
         status: "conflict",
         sensitive: true,
         reason: HERMES_REASON_AUTH_PROFILE_EXISTS,

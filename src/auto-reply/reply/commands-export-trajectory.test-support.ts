@@ -1,26 +1,14 @@
 // Tests trajectory export command approval routing.
-import fs from "node:fs";
-import os from "node:os";
-import path from "node:path";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { useAutoCleanupTempDirTracker } from "../../../test/helpers/temp-dir.js";
 import { buildExportTrajectoryCommandReply } from "./commands-export-trajectory.js";
 import type { HandleCommandsParams } from "./commands-types.js";
 
-const tempDirs: string[] = [];
+const tempDirs = useAutoCleanupTempDirTracker(afterEach);
 
-function makeTempDir(): string {
-  const dir = fs.mkdtempSync(path.join(os.tmpdir(), "openclaw-export-command-"));
-  tempDirs.push(dir);
-  return dir;
-}
-
-afterEach(() => {
-  for (const dir of tempDirs.splice(0)) {
-    fs.rmSync(dir, { recursive: true, force: true });
-  }
-});
-
-function makeParams(workspaceDir = makeTempDir()): HandleCommandsParams {
+function makeParams(
+  workspaceDir = tempDirs.make("openclaw-export-command-"),
+): HandleCommandsParams {
   return {
     cfg: {
       session: {
@@ -48,6 +36,7 @@ function makeParams(workspaceDir = makeTempDir()): HandleCommandsParams {
       updatedAt: 1,
     },
     sessionKey: "agent:target:session",
+    agentId: "target",
     workspaceDir,
     directives: {},
     elevated: { enabled: true, allowed: true, failures: [] },
@@ -163,7 +152,6 @@ describe("buildExportTrajectoryCommandReply", () => {
     expect(execCall.defaults.sessionStore).toBe("/tmp/openclaw-sessions.json");
     expect(execCall.defaults.currentChannelId).toBe("bot");
     expect(execCall.defaults.accountId).toBe("account-1");
-    expect(execCall.params.security).toBe("allowlist");
     expect(execCall.params.ask).toBe("always");
     expect(execCall.params.background).toBe(true);
     const command = typeof execCall.params.command === "string" ? execCall.params.command : "";

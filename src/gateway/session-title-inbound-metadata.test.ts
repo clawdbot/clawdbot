@@ -9,7 +9,7 @@ import { closeOpenClawStateDatabaseForTest } from "../state/openclaw-state-db.js
 import { captureEnv, setTestEnvValue } from "../test-utils/env.js";
 import {
   readSessionTitleFieldsFromTranscript,
-  readSessionTitleFieldsFromTranscriptAsync,
+  readSessionTitleFieldsFromTranscriptBatch,
 } from "./session-transcript-title-reader.js";
 import { deriveSessionTitle } from "./session-utils-core.js";
 
@@ -64,9 +64,9 @@ describe("session titles with inbound Gateway metadata", () => {
 
       const entry: SessionEntry = { sessionId, updatedAt: 0 };
       const syncFields = readSessionTitleFieldsFromTranscript(scope);
-      const asyncFields = await readSessionTitleFieldsFromTranscriptAsync(scope);
+      const [batchFields] = readSessionTitleFieldsFromTranscriptBatch([scope]);
 
-      expect(asyncFields).toEqual(syncFields);
+      expect(batchFields).toEqual(syncFields);
       expect(deriveSessionTitle(entry, syncFields.firstUserMessage)).toBe(
         "Help me investigate the flaky deployment",
       );
@@ -74,10 +74,10 @@ describe("session titles with inbound Gateway metadata", () => {
     },
   );
 
-  test("falls back to the session id when the first message contains only metadata", () => {
+  test("does not derive a title when the first message contains only metadata", () => {
     const entry: SessionEntry = { sessionId: "abcd1234-rest-of-session", updatedAt: 0 };
 
-    expect(deriveSessionTitle(entry, senderMetadata)).toBe("abcd1234");
+    expect(deriveSessionTitle(entry, senderMetadata)).toBeUndefined();
   });
 
   test("preserves unmarked sender-like user text", () => {

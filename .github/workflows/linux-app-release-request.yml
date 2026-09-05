@@ -1,0 +1,37 @@
+name: Linux App Release Request
+
+run-name: Linux App Release Request [${{ inputs.tag }}] desktop=${{ inputs['desktop-test-bundles'] }}
+
+on:
+  workflow_dispatch:
+    inputs:
+      tag:
+        description: Existing OpenClaw release tag to receive Linux companion bundles, for example v2026.7.1
+        required: true
+        type: string
+      desktop-test-bundles:
+        description: Also build unsigned macOS/Windows test bundles
+        default: false
+        type: boolean
+
+permissions: {}
+
+concurrency:
+  group: linux-app-release-request-${{ inputs.tag }}
+  cancel-in-progress: false
+
+jobs:
+  validate_request:
+    name: Validate release request
+    runs-on: ubuntu-22.04
+    timeout-minutes: 5
+    steps:
+      - name: Validate tag input format
+        env:
+          RELEASE_TAG: ${{ inputs.tag }}
+        run: |
+          set -euo pipefail
+          if [[ ! "${RELEASE_TAG}" =~ ^v[0-9]{4}\.[1-9][0-9]*\.[1-9][0-9]*(-[1-9][0-9]*)?$ ]]; then
+            echo "Linux bundles ship for stable release tags only (vYYYY.M.PATCH or vYYYY.M.PATCH-N); got: ${RELEASE_TAG}"
+            exit 1
+          fi

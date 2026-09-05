@@ -1,5 +1,4 @@
 import fs from "node:fs";
-import os from "node:os";
 import path from "node:path";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
@@ -29,13 +28,13 @@ function resetPluginState(): void {
 const tempBundledRoots: string[] = [];
 
 function createLinuxNodeBundledRoot(): string {
-  const root = fs.mkdtempSync(path.join(os.tmpdir(), "openclaw-linux-node-plugin-"));
+  // Keep workspace dependencies resolvable from the copied integration package.
+  const root = fs.mkdtempSync(path.resolve(".linux-node-plugin-test-"));
   try {
-    fs.symlinkSync(
-      path.resolve("extensions/linux-node"),
-      path.join(root, "linux-node"),
-      process.platform === "win32" ? "junction" : "dir",
-    );
+    // Bundled discovery requires the package itself to stay inside its physical root.
+    fs.cpSync(path.resolve("extensions/linux-node"), path.join(root, "linux-node"), {
+      recursive: true,
+    });
   } catch (error) {
     fs.rmSync(root, { force: true, recursive: true });
     throw error;
@@ -102,7 +101,9 @@ describe("linux-node node-host integration", () => {
       const prepared = await prepareNodeHostRuntime({ config, env: process.env });
       const registered = listRegisteredNodeHostCapsAndCommands({ config, env: process.env });
 
-      expect(registered.commands).toEqual(LINUX_NODE_COMMANDS);
+      expect(registered.commands, JSON.stringify(getNodeHostPluginRegistry()?.diagnostics)).toEqual(
+        LINUX_NODE_COMMANDS,
+      );
       expect(registered.caps).toEqual(["camera", "location"]);
       expect(prepared.manifest.commands).toEqual(expect.arrayContaining([...LINUX_NODE_COMMANDS]));
 

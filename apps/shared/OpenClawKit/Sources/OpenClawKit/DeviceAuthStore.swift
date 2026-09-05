@@ -139,6 +139,7 @@ public enum DeviceAuthStore {
             .appendingPathComponent("openclaw.sqlite", isDirectory: false)
         guard let identity = try? DeviceIdentitySQLiteStore.loadExisting(
             databaseURL: databaseURL,
+            destinationStateDirURL: stateDirectoryURL,
             profile: profile)
         else { return }
         try? self.withStore(profile: profile) { database in
@@ -146,6 +147,24 @@ public enum DeviceAuthStore {
             try statement.bindText(identity.deviceId, at: 1)
             _ = try statement.step()
         }
+    }
+
+    /// Retires one Gateway's previous authority before an issuer session replaces it.
+    /// Report failure so the caller cannot claim that a stale device credential was revoked.
+    public static func clearGatewayTokensPersisted(
+        deviceId: String,
+        gatewayID: String,
+        profile: GatewayDeviceIdentityProfile = .primary) -> Bool
+    {
+        guard let gatewayID = self.normalizeGatewayID(gatewayID) else { return false }
+        return (try? self.withStore(profile: profile) { database in
+            for key in try self.storedRoles(database, deviceId: deviceId)
+                where self.decodeTokenKey(key).gatewayID == gatewayID
+            {
+                try self.deleteEntry(database, deviceId: deviceId, storedRole: key)
+            }
+            return true
+        }) ?? false
     }
 
     /// Claims one legacy role token for a caller-proven gateway identity.

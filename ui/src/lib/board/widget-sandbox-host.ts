@@ -1,51 +1,76 @@
-import type { BoardViewWidget, BoardWidgetFrameUrl } from "./view-types.ts";
+import { formatUiError } from "../format-error.ts";
+import { WidgetRenderTimeoutError, WidgetSandboxHost } from "../widget-sandbox-host.ts";
+import type { BoardWidget } from "./types.ts";
+import type { BoardWidgetFrameUrl } from "./view-types.ts";
 import {
   BoardWidgetBridgeController,
   type BoardWidgetBridgeGatewayClient,
   isBoardWidgetBridgeRequest,
 } from "./widget-bridge.ts";
 
-const SANDBOX_READY_TIMEOUT_MS = 10_000;
-
 type BoardWidgetSandboxHostOptions = {
   frame: HTMLIFrameElement;
-  widget: BoardViewWidget;
+  widget: BoardWidget;
+  bridgeEnabled?: boolean;
   sandboxOrigin: string;
   sandboxUrl: string;
   sourceOrigin: string;
+  controlUiBaseUrl?: string;
   client?: BoardWidgetBridgeGatewayClient;
   resolveFrameUrl: BoardWidgetFrameUrl;
   confirmPrompt: (text: string) => boolean;
   onFrameUrl: (url: string) => void;
-  onLoadFailed: (widget: BoardViewWidget) => void;
-  onUnauthorized: (widget: BoardViewWidget) => void;
+  onLoadFailed: (widget: BoardWidget) => void;
+  onUnauthorized: (widget: BoardWidget) => void;
   onReadyTimeout: () => void;
   onLoaded: () => void;
+  onRendered?: () => void;
   onError: (error: unknown) => void;
 };
+
+class WidgetDocumentError extends Error {
+  constructor(
+    readonly kind: "unauthorized" | "invalid-url",
+    message: string,
+  ) {
+    super(message);
+  }
+}
 
 /** Owns one trusted outer sandbox frame and its ticket-bound inner widget bridge. */
 export class BoardWidgetSandboxHost {
   private options: BoardWidgetSandboxHostOptions;
+  private active = true;
   private bridgeController: BoardWidgetBridgeController | null = null;
   private bridgeClient: BoardWidgetBridgeGatewayClient | undefined;
   private bridgePort: MessagePort | null = null;
   private adoptedTicket = "";
   private offeredTicket = "";
-  private ready = false;
-  private readyTimer: number | null = null;
-  private loadedDocumentKey = "";
-  private loadGeneration = 0;
+  private readonly documentHost: WidgetSandboxHost;
   private requestGeneration = 0;
   private readonly pendingRequests = new Map<string, number>();
 
   constructor(options: BoardWidgetSandboxHostOptions) {
     this.options = options;
-    this.scheduleReadyTimeout();
+    this.documentHost = new WidgetSandboxHost(this.documentOptions());
   }
 
   get frame(): HTMLIFrameElement {
     return this.options.frame;
+  }
+
+  setActive(active: boolean): void {
+    if (active === this.active) {
+      return;
+    }
+    this.active = active;
+    this.documentHost.setActive(active);
+    if (!active) {
+      this.cancelPendingRequests("Widget inactive");
+      this.requestGeneration += 1;
+      return;
+    }
+    this.postHostInit();
   }
 
   update(options: BoardWidgetSandboxHostOptions): void {
@@ -62,12 +87,6 @@ export class BoardWidgetSandboxHost {
       this.bridgeController = null;
       this.bridgeClient = undefined;
     }
-    if (sandboxChanged) {
-      // A CSP change navigates the outer proxy. Wait for that exact navigation
-      // before sending bytes so they can never run under the prior policy.
-      this.ready = false;
-      this.scheduleReadyTimeout();
-    }
     if (previousClient !== options.client) {
       // A reconnect can swap authenticated Gateway identity without changing
       // the widget document. Settle the wrapper promises without allowing a
@@ -76,23 +95,25 @@ export class BoardWidgetSandboxHost {
       this.requestGeneration += 1;
       this.bridgeController = null;
       this.bridgeClient = undefined;
+      // A pending HTTP response also belongs to its initiating connection.
+      // Retain an already rendered document, but refetch unfinished work.
+      if (!this.documentHost.loaded) {
+        this.documentHost.reset();
+      }
     }
+    this.documentHost.update(this.documentOptions());
     if (options.widget.viewTicket && !documentChanged) {
       if (this.adoptedTicket) {
         this.bridgeController?.updateIdentity(options.frame, this.adoptedTicket);
       }
       this.postHostInit();
     }
-    if (this.ready && this.documentKey() !== this.loadedDocumentKey) {
-      void this.loadDocument();
-    }
   }
 
   reset(): void {
-    this.loadGeneration += 1;
+    this.documentHost.reset();
     this.requestGeneration += 1;
     this.pendingRequests.clear();
-    this.loadedDocumentKey = "";
     this.bridgePort?.close();
     this.bridgePort = null;
     this.adoptedTicket = "";
@@ -100,9 +121,9 @@ export class BoardWidgetSandboxHost {
   }
 
   dispose(): void {
-    this.clearReadyTimeout();
+    this.active = false;
     this.reset();
-    this.ready = false;
+    this.documentHost.dispose();
     this.bridgeController = null;
     this.bridgeClient = undefined;
   }
@@ -115,32 +136,27 @@ export class BoardWidgetSandboxHost {
   }
 
   handleFrameError(): void {
-    if (this.ready || !this.options.frame.isConnected) {
-      return;
-    }
-    this.clearReadyTimeout();
-    this.retrySandboxFrame();
+    this.documentHost.handleFrameError();
   }
 
   handleMessage(event: MessageEvent): void {
     if (!this.accepts(event)) {
       return;
     }
-    if (
-      event.data?.method === "ui/notifications/sandbox-proxy-ready" &&
-      event.data?.params?.sandboxUrl === this.options.sandboxUrl
-    ) {
-      this.ready = true;
-      this.clearReadyTimeout();
-      void this.loadDocument();
+    this.documentHost.handleMessage(event);
+    if (event.data?.method === "ui/notifications/sandbox-proxy-ready") {
       return;
     }
-    if (!this.ready) {
+    if (!this.documentHost.ready) {
+      return;
+    }
+    if (event.data?.type === "openclaw:widget-prompt-offer") {
+      event.ports[0]?.close();
       return;
     }
     if (event.data?.type === "openclaw:widget-bridge-port-offer") {
       const port = event.ports[0];
-      if (!port || this.bridgePort) {
+      if (this.options.bridgeEnabled === false || !port || this.bridgePort) {
         port?.close();
         return;
       }
@@ -160,6 +176,9 @@ export class BoardWidgetSandboxHost {
   }
 
   private handleBridgeMessage(data: unknown): void {
+    if (this.options.bridgeEnabled === false) {
+      return;
+    }
     if (
       data &&
       typeof data === "object" &&
@@ -179,11 +198,17 @@ export class BoardWidgetSandboxHost {
       this.postHostInit();
       return;
     }
+    if (!this.active) {
+      if (isBoardWidgetBridgeRequest(data)) {
+        this.postResponse(data.id, false, undefined, "Widget inactive");
+      }
+      return;
+    }
     this.handleBridgeRequest(data);
   }
 
   private handleBridgeRequest(data: unknown): void {
-    if (!this.ready || !isBoardWidgetBridgeRequest(data)) {
+    if (!this.documentHost.ready || !isBoardWidgetBridgeRequest(data)) {
       return;
     }
     const client = this.options.client;
@@ -221,13 +246,7 @@ export class BoardWidgetSandboxHost {
         this.completeRequest(data.id, generation, true, result);
       })
       .catch((error: unknown) => {
-        this.completeRequest(
-          data.id,
-          generation,
-          false,
-          undefined,
-          error instanceof Error ? error.message : String(error),
-        );
+        this.completeRequest(data.id, generation, false, undefined, formatUiError(error));
       });
   }
 
@@ -254,42 +273,6 @@ export class BoardWidgetSandboxHost {
     this.pendingRequests.clear();
   }
 
-  private clearReadyTimeout(): void {
-    if (this.readyTimer !== null) {
-      window.clearTimeout(this.readyTimer);
-      this.readyTimer = null;
-    }
-  }
-
-  private scheduleReadyTimeout(): void {
-    if (this.ready || this.readyTimer !== null) {
-      return;
-    }
-    this.readyTimer = window.setTimeout(() => {
-      this.readyTimer = null;
-      if (this.ready || !this.options.frame.isConnected) {
-        return;
-      }
-      // Browsers do not expose iframe HTTP failures through `error`. Bound the
-      // proxy handshake so an unavailable adjacent listener cannot stay blank.
-      this.retrySandboxFrame();
-    }, SANDBOX_READY_TIMEOUT_MS);
-  }
-
-  private retrySandboxFrame(): void {
-    const { frame, sandboxUrl } = this.options;
-    if (!frame.isConnected) {
-      return;
-    }
-    this.ready = false;
-    this.reset();
-    // Assigning the current URL again starts a real navigation. Refreshing only
-    // the ticket cannot recover an outer proxy load that never reached ready.
-    frame.src = sandboxUrl;
-    this.options.onReadyTimeout();
-    this.scheduleReadyTimeout();
-  }
-
   private documentKey(): string {
     const sourceUrl = this.options.resolveFrameUrl(
       this.options.widget.name,
@@ -299,79 +282,99 @@ export class BoardWidgetSandboxHost {
     // Ticket renewal keeps the same generation, while delete/recreate gets a
     // new one even if the name, source path, bytes, and revision are reused.
     const generation = this.options.widget.viewGeneration ?? this.options.widget.viewTicket ?? "";
-    return `${sourceIdentity}\0${this.options.widget.revision}\0${generation}`;
+    // Switching between an interactive board and a passive preview must replace
+    // the wrapper document so no previously adopted bridge port crosses modes.
+    const bridgeMode = this.options.bridgeEnabled === false ? "passive" : "interactive";
+    return `${sourceIdentity}\0${this.options.widget.revision}\0${generation}\0${bridgeMode}`;
   }
 
   private postHostInit(): void {
     const ticket = this.options.widget.viewTicket;
     if (
-      !this.ready ||
+      this.options.bridgeEnabled === false ||
+      !this.documentHost.ready ||
+      !this.active ||
       !this.bridgePort ||
       !ticket ||
-      this.loadedDocumentKey !== this.documentKey() ||
+      !this.documentHost.loaded ||
       ticket === this.adoptedTicket ||
       this.offeredTicket !== ""
     ) {
       return;
     }
     this.offeredTicket = ticket;
-    this.bridgePort.postMessage({ type: "openclaw:widget-host-init", ticket }, []);
+    const controlUiBaseUrl = this.options.controlUiBaseUrl?.trim();
+    this.bridgePort.postMessage(
+      {
+        type: "openclaw:widget-host-init",
+        ticket,
+        ...(controlUiBaseUrl ? { controlUiBaseUrl } : {}),
+      },
+      [],
+    );
   }
 
-  private async loadDocument(): Promise<void> {
-    const { frame, widget, resolveFrameUrl } = this.options;
-    if (!frame.contentWindow) {
-      return;
-    }
-    const unresolvedSourceUrl = resolveFrameUrl(widget.name, widget.revision);
+  private documentOptions(): ConstructorParameters<typeof WidgetSandboxHost>[0] {
+    const options = this.options;
+    return {
+      frame: options.frame,
+      sandboxOrigin: options.sandboxOrigin,
+      sandboxUrl: options.sandboxUrl,
+      documentKey: this.documentKey(),
+      loadDocument: (signal) => this.fetchDocument(options, signal),
+      onLoaded: () => {
+        this.options.onLoaded();
+        this.postHostInit();
+      },
+      onRendered: options.onRendered ? () => this.options.onRendered?.() : undefined,
+      onError: (error) => {
+        if (error instanceof WidgetRenderTimeoutError) {
+          this.options.onError(error);
+          return;
+        }
+        if (error instanceof WidgetDocumentError) {
+          if (error.kind === "unauthorized") {
+            this.options.onUnauthorized(this.options.widget);
+          } else {
+            this.options.onError(error);
+          }
+          return;
+        }
+        this.options.onLoadFailed(this.options.widget);
+      },
+      onReadyTimeout: () => {
+        this.reset();
+        this.options.onReadyTimeout();
+      },
+    };
+  }
+
+  private async fetchDocument(
+    options: BoardWidgetSandboxHostOptions,
+    signal: AbortSignal,
+  ): Promise<string> {
+    const { widget, resolveFrameUrl, sourceOrigin } = options;
     let sourceUrl: URL;
     try {
-      sourceUrl = new URL(unresolvedSourceUrl, this.options.sourceOrigin);
+      sourceUrl = new URL(resolveFrameUrl(widget.name, widget.revision), sourceOrigin);
     } catch (error) {
-      this.options.onError(error);
-      return;
+      throw new WidgetDocumentError("invalid-url", formatUiError(error));
     }
-    if (sourceUrl.origin !== this.options.sourceOrigin) {
-      this.options.onError(new Error("widget content URL is outside the active Gateway"));
-      return;
-    }
-    const sourceHref = sourceUrl.href;
-    this.options.onFrameUrl(sourceHref);
-    const generation = ++this.loadGeneration;
-    try {
-      const response = await fetch(sourceHref, { cache: "no-store" });
-      if (generation !== this.loadGeneration || !frame.isConnected) {
-        return;
-      }
-      if (response.status === 401) {
-        this.options.onUnauthorized(widget);
-        return;
-      }
-      if (!response.ok) {
-        throw new Error(`widget content request failed (${response.status})`);
-      }
-      const documentHtml = await response.text();
-      if (generation !== this.loadGeneration || !frame.isConnected) {
-        return;
-      }
-      frame.contentWindow?.postMessage(
-        {
-          jsonrpc: "2.0",
-          method: "ui/notifications/sandbox-resource-ready",
-          params: { html: documentHtml },
-        },
-        this.options.sandboxOrigin,
+    if (sourceUrl.origin !== sourceOrigin) {
+      throw new WidgetDocumentError(
+        "invalid-url",
+        "widget content URL is outside the active Gateway",
       );
-      this.loadedDocumentKey = this.documentKey();
-      this.options.onLoaded();
-      // The wrapper may offer its private port while the source fetch is still
-      // pending. Complete the handshake once these exact bytes become current.
-      this.postHostInit();
-    } catch {
-      if (generation === this.loadGeneration) {
-        this.options.onLoadFailed(widget);
-      }
     }
+    options.onFrameUrl(sourceUrl.href);
+    const response = await fetch(sourceUrl.href, { cache: "no-store", signal });
+    if (response.status === 401) {
+      throw new WidgetDocumentError("unauthorized", "widget content request failed (401)");
+    }
+    if (!response.ok) {
+      throw new Error(`widget content request failed (${response.status})`);
+    }
+    return await response.text();
   }
 
   private postResponse(id: string, ok: boolean, result?: unknown, error?: string): void {

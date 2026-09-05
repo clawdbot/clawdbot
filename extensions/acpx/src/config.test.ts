@@ -2,7 +2,9 @@
 import fs from "node:fs";
 import { createRequire } from "node:module";
 import path from "node:path";
+import { buildPluginConfigSchema } from "openclaw/plugin-sdk/plugin-entry";
 import { describe, expect, it } from "vitest";
+import { AcpxPluginConfigSchema } from "./config-schema.js";
 import { resolveAcpxPluginConfig, resolveAcpxPluginRoot } from "./config.js";
 
 const requireFromTest = createRequire(import.meta.url);
@@ -188,100 +190,8 @@ describe("embedded acpx plugin config", () => {
       fs.readFileSync(path.join(pluginRoot, "openclaw.plugin.json"), "utf8"),
     ) as { configSchema?: unknown };
 
-    expect(manifest.configSchema).toStrictEqual({
-      type: "object",
-      additionalProperties: false,
-      properties: {
-        cwd: {
-          type: "string",
-          minLength: 1,
-        },
-        stateDir: {
-          type: "string",
-          minLength: 1,
-        },
-        permissionMode: {
-          type: "string",
-          enum: ["approve-all", "approve-reads", "deny-all"],
-        },
-        nonInteractivePermissions: {
-          type: "string",
-          enum: ["deny", "fail"],
-        },
-        pluginToolsMcpBridge: {
-          type: "boolean",
-        },
-        openClawToolsMcpBridge: {
-          type: "boolean",
-        },
-        strictWindowsCmdWrapper: {
-          type: "boolean",
-        },
-        timeoutSeconds: {
-          type: "number",
-          minimum: 0.001,
-          default: 120,
-        },
-        queueOwnerTtlSeconds: {
-          type: "number",
-          minimum: 0,
-        },
-        piSessionCatalog: {
-          type: "object",
-          additionalProperties: false,
-          properties: {
-            enabled: {
-              type: "boolean",
-              default: true,
-            },
-          },
-        },
-        probeAgent: {
-          type: "string",
-          minLength: 1,
-        },
-        mcpServers: {
-          type: "object",
-          additionalProperties: {
-            type: "object",
-            properties: {
-              command: {
-                type: "string",
-                minLength: 1,
-                description: "Command to run the MCP server",
-              },
-              args: {
-                type: "array",
-                items: { type: "string" },
-                description: "Arguments to pass to the command",
-              },
-              env: {
-                type: "object",
-                additionalProperties: { type: "string" },
-                description: "Environment variables for the MCP server",
-              },
-            },
-            required: ["command"],
-          },
-        },
-        agents: {
-          type: "object",
-          additionalProperties: {
-            type: "object",
-            properties: {
-              command: {
-                type: "string",
-                minLength: 1,
-              },
-              args: {
-                type: "array",
-                items: { type: "string" },
-              },
-            },
-            required: ["command"],
-          },
-        },
-      },
-    });
+    expect(buildPluginConfigSchema(AcpxPluginConfigSchema).jsonSchema).toEqual(
+      manifest.configSchema,
+    );
   });
 });

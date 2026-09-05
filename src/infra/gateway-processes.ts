@@ -14,7 +14,7 @@ import {
 const GATEWAY_PS_PROBE_TIMEOUT_MS = 1_000;
 
 /** Read command argv for a PID using the current platform's process APIs. */
-export function readGatewayProcessArgsSync(pid: number): string[] | null {
+function readGatewayProcessArgsSync(pid: number): string[] | null {
   if (process.platform === "linux") {
     try {
       return parseProcCmdline(fsSync.readFileSync(`/proc/${pid}/cmdline`, "utf8"));

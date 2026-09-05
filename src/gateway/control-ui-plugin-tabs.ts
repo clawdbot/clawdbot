@@ -1,10 +1,13 @@
 // Projects plugin "tab" Control UI descriptors into the hello payload so the
 // dashboard renders plugin tabs without hardcoding plugin ids in core.
 // Descriptors come from the process-root registry installed by the gateway.
+import { getRuntimeConfigSnapshot } from "../config/runtime-snapshot.js";
 import type { PluginControlUiDescriptor } from "../plugins/host-hooks.js";
 import type { PluginRegistry } from "../plugins/registry.js";
 import { getActivePluginSessionExtensionRegistry } from "../plugins/runtime.js";
 import { resolveControlUiPluginTabPathname } from "./control-ui-contract.js";
+import { controlUiPluginAssetPrefix } from "./control-ui-plugin-assets-contract.js";
+import { isControlUiPluginAllowed } from "./control-ui-plugin-policy.js";
 import {
   authorizeOperatorScopesForRequiredScope,
   READ_SCOPE,
@@ -20,6 +23,7 @@ type ControlUiPluginTab = {
   description?: string;
   icon?: string;
   path?: string;
+  placement?: string;
   group?: "control" | "agent";
   order?: number;
   requiresGatewayAuth?: boolean;
@@ -30,6 +34,12 @@ type ControlUiPluginWidgetKind = {
   kind: string;
   label: string;
 };
+
+// `session` is a core-reserved widget-kind namespace. Core owns progress cards,
+// so their availability is scope-gated rather than plugin-gated.
+const CORE_CONTROL_UI_WIDGET_KINDS: readonly ControlUiPluginWidgetKind[] = [
+  { pluginId: "session", kind: "session:progress", label: "Session progress" },
+];
 
 function findControlUiTabGatewayRoute(
   registry: PluginRegistry,
@@ -62,6 +72,7 @@ export type ControlUiPluginTabAuthGrant = {
   path: string;
   match: "exact" | "prefix";
   scopes: OperatorScope[];
+  profileId?: string;
 };
 
 /** Pure projection of tab descriptors visible to the presented scopes. */
@@ -88,6 +99,7 @@ function projectControlUiPluginTabs(
       description: descriptor.description,
       icon: descriptor.icon,
       path: descriptor.path,
+      placement: descriptor.placement,
       group: descriptor.group,
       order: descriptor.order,
     });
@@ -124,32 +136,40 @@ export function listControlUiPluginTabs(
 export function listControlUiPluginWidgetKinds(
   scopes: readonly string[],
 ): ControlUiPluginWidgetKind[] {
-  const entries = getActivePluginSessionExtensionRegistry()?.controlUiDescriptors ?? [];
-  return entries
-    .flatMap((entry) => {
-      const descriptor = entry.descriptor;
-      if (descriptor.surface !== "widget") {
-        return [];
-      }
-      const visible = (descriptor.requiredScopes ?? []).every(
-        (scope) => authorizeOperatorScopesForRequiredScope(scope, scopes).allowed,
-      );
-      return visible
-        ? [
-            {
-              pluginId: entry.pluginId,
-              kind: `${entry.pluginId}:${descriptor.id}`,
-              label: descriptor.label,
-            },
-          ]
-        : [];
-    })
-    .toSorted(
-      (left, right) => left.label.localeCompare(right.label) || left.kind.localeCompare(right.kind),
+  const registry = getActivePluginSessionExtensionRegistry();
+  const entries = registry?.controlUiDescriptors ?? [];
+  const disabled = new Set(
+    registry?.plugins
+      .filter((plugin) => plugin.controlUi && !isControlUiPluginAllowed(plugin))
+      .map((plugin) => plugin.id),
+  );
+  const coreEntries = authorizeOperatorScopesForRequiredScope(READ_SCOPE, scopes).allowed
+    ? CORE_CONTROL_UI_WIDGET_KINDS
+    : [];
+  const pluginEntries = entries.flatMap((entry) => {
+    const descriptor = entry.descriptor;
+    if (descriptor.surface !== "widget" || disabled.has(entry.pluginId)) {
+      return [];
+    }
+    const visible = (descriptor.requiredScopes ?? []).every(
+      (scope) => authorizeOperatorScopesForRequiredScope(scope, scopes).allowed,
     );
+    return visible
+      ? [
+          {
+            pluginId: entry.pluginId,
+            kind: `${entry.pluginId}:${descriptor.id}`,
+            label: descriptor.label,
+          },
+        ]
+      : [];
+  });
+  return [...coreEntries, ...pluginEntries].toSorted(
+    (left, right) => left.label.localeCompare(right.label) || left.kind.localeCompare(right.kind),
+  );
 }
 
-/** Builds least-privilege grants only for visible tabs backed by same-plugin gateway routes. */
+/** Grants read access to active native assets and visible same-plugin Gateway tabs. */
 export function listControlUiPluginTabAuthGrants(
   callerScopes: readonly string[],
 ): ControlUiPluginTabAuthGrant[] {
@@ -158,6 +178,24 @@ export function listControlUiPluginTabAuthGrants(
     return [];
   }
   const grants = new Map<string, ControlUiPluginTabAuthGrant>();
+  const basePath = getRuntimeConfigSnapshot()?.gateway?.controlUi?.basePath;
+  for (const plugin of registry.plugins) {
+    if (
+      !plugin.enabled ||
+      plugin.status !== "loaded" ||
+      !plugin.controlUi ||
+      !isControlUiPluginAllowed(plugin)
+    ) {
+      continue;
+    }
+    const assetPath = controlUiPluginAssetPrefix(plugin.id, basePath);
+    grants.set(`${plugin.id}\n${assetPath}`, {
+      pluginId: plugin.id,
+      path: assetPath,
+      match: "prefix",
+      scopes: [READ_SCOPE],
+    });
+  }
   for (const tab of projectControlUiPluginTabs(registry.controlUiDescriptors ?? [], callerScopes)) {
     if (!tab.path) {
       continue;

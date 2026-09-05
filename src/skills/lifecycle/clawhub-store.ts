@@ -1,14 +1,24 @@
 import fsSync from "node:fs";
 import path from "node:path";
+import { normalizeOptionalString as normalizeOptionalStringValue } from "@openclaw/normalization-core/string-coerce";
+import type { ClawHubDownloadResult } from "../../infra/clawhub-artifacts.js";
 import {
+  CLAWHUB_SKILLS_SH_REF_PREFIX,
   CLAWHUB_SKILLS_SH_TRUST_STATE,
-  type ClawHubDownloadResult,
   type ClawHubSkillVerificationResponse,
   type ClawHubSkillsShTrustState,
-} from "../../infra/clawhub.js";
-import { formatErrorMessage } from "../../infra/errors.js";
-import { readJsonIfExists, tryReadJson, writeJson } from "../../infra/json-files.js";
+} from "../../infra/clawhub-skills.js";
+import { formatErrorMessage, hasErrnoCode } from "../../infra/errors.js";
+import {
+  JsonFileReadError,
+  readJson,
+  readJsonIfExists,
+  tryReadJson,
+  writeJson,
+} from "../../infra/json-files.js";
 import { normalizeTrackedSkillSlug, validateRequestedSkillSlug } from "./archive-install.js";
+
+export { normalizeOptionalStringValue };
 
 const DOT_DIR = ".clawhub";
 const LEGACY_DOT_DIR = ".clawdhub";
@@ -107,8 +117,8 @@ export function parseRequestedClawHubSkillRef(raw: string): ClawHubSkillRef {
   if (value.startsWith("skills-sh/")) {
     throw new Error(`Invalid skills.sh skill reference: ${raw}`);
   }
-  if (value.startsWith("skills-sh:")) {
-    const parts = value.slice("skills-sh:".length).split("/");
+  if (value.startsWith(CLAWHUB_SKILLS_SH_REF_PREFIX)) {
+    const parts = value.slice(CLAWHUB_SKILLS_SH_REF_PREFIX.length).split("/");
     if (parts.length !== 3) {
       throw new Error(`Invalid skills.sh skill reference: ${raw}`);
     }
@@ -154,10 +164,6 @@ export function formatClawHubSkillRef(ref: ClawHubSkillRef): string {
 export function normalizeStoredRegistry(registry: string): string {
   const trimmed = registry.trim();
   return trimmed.replace(/\/+$/, "") || trimmed;
-}
-
-export function normalizeOptionalStringValue(raw: unknown): string | undefined {
-  return typeof raw === "string" && raw.trim() ? raw.trim() : undefined;
 }
 
 export function normalizeGitHubCommitSegment(raw: unknown): string | undefined {
@@ -266,17 +272,29 @@ function normalizeClawHubSkillOrigin(
   };
 }
 
+function parseClawHubSkillsLockfile(
+  raw: Partial<ClawHubSkillsLockfile> | null,
+): ClawHubSkillsLockfile {
+  if (raw?.version !== 1 || !raw.skills || typeof raw.skills !== "object") {
+    throw new Error("expected version 1 lockfile with skills");
+  }
+  return { version: 1, skills: raw.skills };
+}
+
 export async function readClawHubSkillsLockfile(
   workspaceDir: string,
 ): Promise<ClawHubSkillsLockfile> {
   for (const candidate of metadataPaths(workspaceDir, "lock.json")) {
     try {
-      const raw = await tryReadJson<Partial<ClawHubSkillsLockfile>>(candidate);
-      if (raw?.version === 1 && raw.skills && typeof raw.skills === "object") {
-        return { version: 1, skills: raw.skills };
+      return parseClawHubSkillsLockfile(await readJson<Partial<ClawHubSkillsLockfile>>(candidate));
+    } catch (err) {
+      if (err instanceof JsonFileReadError && hasErrnoCode(err.cause, "ENOENT")) {
+        continue;
       }
-    } catch {
-      // ignore
+      throw new Error(
+        `Malformed workspace ClawHub lockfile at ${candidate}: ${formatErrorMessage(err)}. Repair or restore it before retrying.`,
+        { cause: err },
+      );
     }
   }
   return { version: 1, skills: {} };
@@ -313,14 +331,11 @@ export function readClawHubSkillsLockfileStatusSync(
       if (!read.exists) {
         continue;
       }
-      const raw = read.value as Partial<ClawHubSkillsLockfile>;
-      return raw?.version === 1 && raw.skills && typeof raw.skills === "object"
-        ? { kind: "found", path: candidate, lock: { version: 1, skills: raw.skills } }
-        : {
-            kind: "malformed",
-            path: candidate,
-            error: "expected version 1 lockfile with skills",
-          };
+      return {
+        kind: "found",
+        path: candidate,
+        lock: parseClawHubSkillsLockfile(read.value as Partial<ClawHubSkillsLockfile>),
+      };
     } catch (err) {
       return { kind: "malformed", path: candidate, error: formatErrorMessage(err) };
     }

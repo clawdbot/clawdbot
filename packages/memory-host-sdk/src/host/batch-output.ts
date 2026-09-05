@@ -84,10 +84,6 @@ export async function readEmbeddingBatchJsonl<T>(
     return options.onRecord(parsed as T);
   };
 
-  const cancel = async () => {
-    await reader.cancel().catch(() => {});
-  };
-
   try {
     while (true) {
       const { done, value } = await reader.read();
@@ -102,7 +98,8 @@ export async function readEmbeddingBatchJsonl<T>(
         }
         appendRecordPart(value.subarray(offset, index));
         if (!emitRecord()) {
-          await cancel();
+          // Release the reader without waiting for a retained capture tee.
+          void reader.cancel().catch(() => {});
           return;
         }
         offset = index + 1;
@@ -113,7 +110,7 @@ export async function readEmbeddingBatchJsonl<T>(
       emitRecord();
     }
   } catch (error) {
-    await cancel();
+    void reader.cancel().catch(() => {});
     throw error;
   } finally {
     reader.releaseLock();

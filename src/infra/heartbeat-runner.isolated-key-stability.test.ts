@@ -1,6 +1,7 @@
 // Covers heartbeat system-event isolation by stable session keys.
 import { afterEach, describe, expect, it, vi } from "vitest";
 import * as replyModule from "../auto-reply/reply.js";
+import type { MsgContext } from "../auto-reply/templating.js";
 import type { OpenClawConfig } from "../config/config.js";
 import { resolveMainSessionKey } from "../config/sessions.js";
 import { runHeartbeatOnce } from "./heartbeat-runner.js";
@@ -26,11 +27,7 @@ afterEach(() => {
   resetSystemEventsForTest();
 });
 
-type HeartbeatReplyContext = {
-  Body?: string;
-  Provider?: string;
-  SessionKey?: string;
-};
+type HeartbeatReplyContext = Pick<MsgContext, "Body" | "InternalTurnSource" | "SessionKey">;
 
 function replyCall(replySpy: { mock: { calls: unknown[][] } }, index = 0): HeartbeatReplyContext {
   return (replySpy.mock.calls[index]?.at(0) ?? {}) as HeartbeatReplyContext;
@@ -163,6 +160,49 @@ describe("runHeartbeatOnce – isolated session key stability (#59493)", () => {
     });
   });
 
+  it("recovers an archived isolated session on the next heartbeat tick", async () => {
+    await withTempHeartbeatSandbox(async ({ tmpDir, storePath }) => {
+      const cfg = makeIsolatedHeartbeatConfig(tmpDir, storePath);
+      const baseSessionKey = resolveMainSessionKey(cfg);
+      const isolatedSessionKey = `${baseSessionKey}:heartbeat`;
+      const nowMs = Date.now();
+      await seedSessionStore(storePath, isolatedSessionKey, {
+        sessionId: "archived-heartbeat-session-id",
+        updatedAt: nowMs - 1000,
+        archivedAt: nowMs - 500,
+        heartbeatIsolatedBaseSessionKey: baseSessionKey,
+        lastChannel: "whatsapp",
+        lastProvider: "whatsapp",
+        lastTo: "+1555",
+      });
+      const replySpy = vi.spyOn(replyModule, "getReplyFromConfig");
+      replySpy.mockResolvedValue({ text: "HEARTBEAT_OK" });
+
+      const result = await runHeartbeatOnce({
+        cfg,
+        agentId: "main",
+        reason: "interval",
+        deps: {
+          getQueueSize: () => 0,
+          nowMs: () => nowMs,
+        },
+      });
+
+      expect(result.status).toBe("ran");
+      expect(replySpy).toHaveBeenCalledTimes(1);
+      const store = readSessionStoreForTest<{
+        archivedAt?: number;
+        heartbeatIsolatedBaseSessionKey?: string;
+        sessionId?: string;
+      }>(storePath);
+      expect(store[isolatedSessionKey]).toMatchObject({
+        heartbeatIsolatedBaseSessionKey: baseSessionKey,
+      });
+      expect(store[isolatedSessionKey]?.archivedAt).toBeUndefined();
+      expect(store[isolatedSessionKey]?.sessionId).not.toBe("archived-heartbeat-session-id");
+    });
+  });
+
   it("stays stable even with multiply-accumulated suffixes", async () => {
     await withTempHeartbeatSandbox(async ({ tmpDir, storePath }) => {
       const cfg = makeIsolatedHeartbeatConfig(tmpDir, storePath);
@@ -219,9 +259,9 @@ describe("runHeartbeatOnce – isolated session key stability (#59493)", () => {
         .mockResolvedValueOnce({ text: "Relay this cron update now" })
         .mockResolvedValueOnce({ text: "HEARTBEAT_OK" });
 
-      enqueueSystemEvent("Cron: QMD maintenance completed", {
+      enqueueSystemEvent("Cron: memory maintenance completed", {
         sessionKey: baseSessionKey,
-        contextKey: "cron:qmd-maintenance",
+        contextKey: "cron:memory-maintenance",
       });
 
       await runHeartbeatOnce({
@@ -251,10 +291,10 @@ describe("runHeartbeatOnce – isolated session key stability (#59493)", () => {
       const secondCtx = replyCall(replySpy, 1);
 
       expect(firstCtx.SessionKey).toBe(`${baseSessionKey}:heartbeat`);
-      expect(firstCtx.Provider).toBe("cron-event");
-      expect(firstCtx.Body).toContain("Cron: QMD maintenance completed");
+      expect(firstCtx.InternalTurnSource).toBe("cron");
+      expect(firstCtx.Body).toContain("Cron: memory maintenance completed");
       expect(secondCtx.SessionKey).toBe(`${baseSessionKey}:heartbeat`);
-      expect(secondCtx.Body).not.toContain("Cron: QMD maintenance completed");
+      expect(secondCtx.Body).not.toContain("Cron: memory maintenance completed");
     });
   });
 
@@ -317,7 +357,7 @@ describe("runHeartbeatOnce – isolated session key stability (#59493)", () => {
       expect(result.status).toBe("ran");
       const calledCtx = replyCall(replySpy);
       expect(calledCtx.SessionKey).toBe(isolatedSessionKey);
-      expect(calledCtx.Provider).toBe("exec-event");
+      expect(calledCtx.InternalTurnSource).toBe("exec");
     });
   });
 

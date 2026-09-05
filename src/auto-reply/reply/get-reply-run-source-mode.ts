@@ -2,6 +2,11 @@ import type { TemplateContext } from "../templating.js";
 import type { InternalGetReplyOptions } from "./get-reply-run.types.js";
 import { isInternalSourceReplyChannel } from "./source-reply-delivery-mode.js";
 
+/**
+ * Resolves the turn's effective source-reply mode and surfaces dispatch's
+ * injected session-stable mode separately, so the caller owns the synthetic
+ * fallback in one place instead of un-mixing the two afterwards.
+ */
 export function resolvePromptSourceReplyMode(params: {
   promptSessionCtx: TemplateContext;
   opts?: InternalGetReplyOptions;
@@ -15,7 +20,6 @@ export function resolvePromptSourceReplyMode(params: {
         : params.opts?.sourceReplyDeliveryMode;
   return {
     sourceReplyDeliveryMode,
-    sessionPromptSourceReplyDeliveryMode:
-      params.opts?.sessionPromptSourceReplyDeliveryMode ?? sourceReplyDeliveryMode,
+    injectedSessionStableMode: params.opts?.sessionPromptSourceReplyDeliveryMode,
   };
 }

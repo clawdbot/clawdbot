@@ -1,0 +1,156 @@
+/* Miami palette; selected by index.html and app/theme.ts. */
+
+:root[data-theme="miami"] {
+  /*
+   * Accent — hot magenta and cyan on violet-black.
+   *
+   * WCAG 2.1 AA audit (bg = #140f1e, relative luminance ≈ 0.0058):
+   *   --accent #f472b6  contrast ≈ 7.1:1 AA ✓
+   *   --primary-foreground #3c0a24 on #f472b6 button: 6.2:1 ✓
+   *   --destructive-foreground #3a0712 on #ef5d78 button: 5.4:1 ✓
+   *   body text --text #cfc7e8: 11.6:1 ✓
+   *   worst text pairing --muted on --bg-muted: 5.2:1 ✓
+   */
+  --ring: #f472b6;
+  --accent: #f472b6;
+  --accent-hover: #f78fc5;
+  --accent-muted: #f472b6;
+  --accent-subtle: rgba(244, 114, 182, 0.13);
+  --accent-glow: rgba(244, 114, 182, 0.22);
+  --primary: #f472b6;
+  --primary-hover: #f78fc5;
+  --primary-foreground: #3c0a24;
+
+  --destructive: #ef5d78;
+  --destructive-hover: #e84763;
+  --destructive-foreground: #3a0712;
+
+  --focus: rgba(244, 114, 182, 0.18);
+  --focus-ring: 0 0 0 2px var(--bg), 0 0 0 3px color-mix(in srgb, var(--ring) 75%, transparent);
+  --focus-glow: 0 0 0 2px var(--bg), 0 0 0 3px var(--ring), 0 0 16px var(--accent-glow);
+
+  --bg: #140f1e;
+  --bg-accent: #181226;
+  --bg-elevated: #1c1530;
+  --bg-hover: #251b40;
+  --bg-muted: #251b40;
+
+  --card: #1c1530;
+  --card-foreground: #efeaf9;
+  --card-highlight: rgba(220, 213, 242, 0.05);
+  --popover: #221a3a;
+  --popover-foreground: #efeaf9;
+
+  --panel: #140f1e;
+  --panel-strong: #1c1530;
+  --panel-hover: #251b40;
+  --chrome: rgba(20, 15, 30, 0.96);
+  --chrome-strong: rgba(20, 15, 30, 0.98);
+
+  --text: #cfc7e8;
+  --text-strong: #efeaf9;
+  --chat-text: #cfc7e8;
+  --muted: #968bbd;
+  --muted-strong: #aa9fce;
+  --muted-foreground: #968bbd;
+
+  --border: #2c2150;
+  --border-strong: #453471;
+  --border-hover: #5f4a94;
+  --input: #2c2150;
+
+  --secondary: #1c1530;
+  --secondary-foreground: #efeaf9;
+  --accent-2: #5fd7e8;
+  --accent-2-muted: rgba(95, 215, 232, 0.7);
+  --accent-2-subtle: rgba(95, 215, 232, 0.12);
+
+  --shadow-sm: 0 1px 2px rgba(4, 0, 14, 0.45);
+  --shadow-md: 0 4px 16px rgba(4, 0, 14, 0.55);
+  --shadow-lg: 0 12px 32px rgba(4, 0, 14, 0.65);
+  --overlay-shadow: var(--shadow-md);
+
+  --grid-line: rgba(220, 213, 242, 0.04);
+
+  --font-body: "Space Grotesk", -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif;
+  --font-display: var(--font-body);
+  --font-chat: var(--font-body);
+}
+
+:root[data-theme="miami-light"] {
+  /*
+   * Accent — deep magenta on pink-cast daylight.
+   *
+   * WCAG 2.1 AA audit (bg = #f7f3f6, relative luminance ≈ 0.918):
+   *   --accent #b0246f  contrast ≈ 5.8:1 AA ✓
+   *   --primary-foreground #ffffff on #b0246f button: 6.3:1 ✓
+   *   --destructive-foreground #ffffff on #c22f4f button: 5.5:1 ✓
+   *   body text --text #3c3244: 9.7:1 ✓
+   *   worst text pairing --muted on --bg-muted: 4.8:1 ✓
+   */
+  --ring: #b0246f;
+  --accent: #b0246f;
+  --accent-hover: #971d5e;
+  --accent-muted: #b0246f;
+  --accent-subtle: rgba(176, 36, 111, 0.09);
+  --accent-glow: rgba(176, 36, 111, 0.14);
+  --primary: #b0246f;
+  --primary-foreground: #ffffff;
+
+  --destructive: #c22f4f;
+  --destructive-hover: #ac2844;
+
+  --bg: #f7f3f6;
+  --bg-accent: #f1e9f0;
+  --bg-elevated: #fefcfe;
+  --bg-hover: #e6dbe4;
+  --bg-muted: #ece4ec;
+  --bg-content: #f3edf2;
+
+  --card: #fefcfe;
+  --card-foreground: #241c2b;
+  --card-highlight: rgba(60, 30, 60, 0.02);
+  --popover: #fefcfe;
+  --popover-foreground: #241c2b;
+  --session-hovercard-surface: var(--card);
+  --session-hovercard-progress-surface: color-mix(
+    in srgb,
+    var(--card) 52%,
+    var(--panel-strong) 48%
+  );
+
+  --panel: #f7f3f6;
+  --panel-strong: #ece4ec;
+  --panel-hover: #e0d3df;
+  --chrome: rgba(247, 243, 246, 0.96);
+  --chrome-strong: rgba(247, 243, 246, 0.98);
+
+  --text: #3c3244;
+  --text-strong: #241c2b;
+  --chat-text: #3c3244;
+  --muted: #6b5f74;
+  --muted-strong: #574c60;
+  --muted-foreground: #6b5f74;
+
+  --border: #e2d7e0;
+  --border-strong: #c4b4c2;
+  --border-hover: #9f8b9d;
+  --input: #e2d7e0;
+
+  --secondary: #ece4ec;
+  --secondary-foreground: #3c3244;
+  --accent-2: #0f6f7d;
+  --accent-2-muted: rgba(15, 111, 125, 0.75);
+  --accent-2-subtle: rgba(15, 111, 125, 0.1);
+
+  --shadow-sm: 0 1px 2px rgba(60, 25, 55, 0.05);
+  --shadow-md: 0 4px 12px rgba(60, 25, 55, 0.07);
+  --shadow-lg: 0 12px 28px rgba(60, 25, 55, 0.09);
+  --overlay-shadow: var(--shadow-md);
+
+  --grid-line: rgba(60, 30, 60, 0.04);
+
+  --font-body: "Space Grotesk", -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif;
+  --font-display: var(--font-body);
+  --font-chat: var(--font-body);
+}

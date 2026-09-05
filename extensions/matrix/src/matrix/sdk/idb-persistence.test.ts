@@ -3,6 +3,7 @@ import "fake-indexeddb/auto";
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
+import { createDeferred } from "openclaw/plugin-sdk/extension-shared";
 import { resetFileLockStateForTest } from "openclaw/plugin-sdk/file-lock";
 import { resetPluginStateStoreForTests } from "openclaw/plugin-sdk/plugin-state-test-runtime";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
@@ -165,5 +166,56 @@ describe("Matrix IndexedDB persistence", () => {
         storeName: "sessions",
       }),
     ).resolves.toEqual([{ key: "room-1", value: { session: "abc123" } }]);
+  });
+
+  it("strictly propagates final IndexedDB persistence failures", async () => {
+    const cause = new Error("indexeddb unavailable");
+    const databasesSpy = vi.spyOn(indexedDB, "databases").mockRejectedValue(cause);
+
+    try {
+      await expect(
+        persistIdbToDisk({
+          snapshotPath: path.join(tmpDir, "crypto-idb-snapshot.json"),
+          databasePrefix: DATABASE_PREFIX,
+          strict: true,
+        }),
+      ).rejects.toBe(cause);
+    } finally {
+      databasesSpy.mockRestore();
+    }
+  });
+
+  it("cancels an active snapshot before writing without warning", async () => {
+    const snapshotPath = path.join(tmpDir, "crypto-idb-snapshot.json");
+    await seedDatabase({
+      name: cryptoDatabaseName,
+      storeName: "sessions",
+      records: [{ key: "room-1", value: { session: "abc123" } }],
+    });
+    const databaseList = await indexedDB.databases();
+    const pendingDatabases = createDeferred<IDBDatabaseInfo[]>();
+    const databasesSpy = vi.spyOn(indexedDB, "databases").mockReturnValue(pendingDatabases.promise);
+    const abortController = new AbortController();
+
+    try {
+      const persistence = persistIdbToDisk({
+        snapshotPath,
+        databasePrefix: DATABASE_PREFIX,
+        abortSignal: abortController.signal,
+      });
+      await vi.waitFor(() => {
+        expect(databasesSpy).toHaveBeenCalledTimes(1);
+      });
+
+      abortController.abort();
+      pendingDatabases.resolve(databaseList);
+
+      await expect(persistence).resolves.toBeUndefined();
+      expect(readMatrixIdbSnapshotJson(tmpDir)).toBeNull();
+      expect(warnSpy).not.toHaveBeenCalled();
+    } finally {
+      pendingDatabases.resolve(databaseList);
+      databasesSpy.mockRestore();
+    }
   });
 });

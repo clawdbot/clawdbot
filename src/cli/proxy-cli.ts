@@ -1,6 +1,6 @@
+import { parseStrictInteger } from "@openclaw/normalization-core/number-coercion";
 // Commander registration for debug proxy capture, validation, query, and blob commands.
 import { InvalidArgumentError, type Command } from "commander";
-import { parseStrictInteger } from "../infra/parse-finite-number.js";
 import type { CaptureQueryPreset } from "../proxy-capture/types.js";
 import { createLazyImportLoader } from "../shared/lazy-promise.js";
 import { setCommandJsonMode } from "./program/json-mode.js";

@@ -1,8 +1,8 @@
 // Normalizes env flag values and logs env warnings lazily.
-import { normalizeLowercaseStringOrEmpty } from "@openclaw/normalization-core/string-coerce";
 import { truncateUtf16Safe } from "@openclaw/normalization-core/utf16-slice";
 import type { SubsystemLogger } from "../logging/subsystem.js";
 import { createLazyPromise } from "../shared/lazy-runtime.js";
+import { parseBooleanValue } from "../utils/boolean.js";
 export { isFastTestRuntimeEnv, isVitestRuntimeEnv } from "./test-runtime-env.js";
 
 let log: SubsystemLogger | null = null;
@@ -95,18 +95,7 @@ export function resolveEnvNormalizationKeys(key: string): readonly string[] {
 
 /** Interprets common human/operator truthy env strings. */
 export function isTruthyEnvValue(value?: string): boolean {
-  if (typeof value !== "string") {
-    return false;
-  }
-  switch (normalizeLowercaseStringOrEmpty(value)) {
-    case "1":
-    case "on":
-    case "true":
-    case "yes":
-      return true;
-    default:
-      return false;
-  }
+  return parseBooleanValue(value) === true;
 }
 
 /** Applies process-wide env normalization before runtime configuration is read. */

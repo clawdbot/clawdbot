@@ -1,10 +1,8 @@
 // Speaker-selection compatibility helpers for plugins that renamed voice fields
 // over time but still need one normalized config object.
-type SpeakerSelectionConfig = Record<string, unknown>;
+import { normalizeOptionalString as readString } from "@openclaw/normalization-core/string-coerce";
 
-function readString(value: unknown): string | undefined {
-  return typeof value === "string" && value.trim() ? value.trim() : undefined;
-}
+type SpeakerSelectionConfig = Record<string, unknown>;
 
 /** Populate canonical and legacy speaker voice fields together. */
 export function withSpeakerSelectionCompat(
@@ -16,8 +14,10 @@ export function withSpeakerSelectionCompat(
   const voice = readString(next.voice);
   const voiceName = readString(next.voiceName);
   const voiceId = readString(next.voiceId);
-  const canonicalVoice = speakerVoice ?? voice ?? voiceName;
-  const canonicalVoiceId = speakerVoiceId ?? voiceId;
+  // Do not promote a legacy alias above an authored canonical selection of the
+  // other kind. Providers may accept both names and ids with their own precedence.
+  const canonicalVoice = speakerVoice ?? (speakerVoiceId ? undefined : (voice ?? voiceName));
+  const canonicalVoiceId = speakerVoiceId ?? (speakerVoice ? undefined : voiceId);
   if (canonicalVoice) {
     next.speakerVoice = canonicalVoice;
     next.voice = canonicalVoice;

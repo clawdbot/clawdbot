@@ -1,6 +1,7 @@
 import fs from "node:fs/promises";
 import path from "node:path";
 import { beforeEach, describe, expect, it, vi } from "vitest";
+import { z } from "zod";
 // Covers restart sentinel persistence, summaries, and messages.
 
 const { mockWarn, mockThrowOpen, mockThrowWrite } = vi.hoisted(() => ({
@@ -30,12 +31,17 @@ vi.mock("../state/openclaw-state-db.js", async (importOriginal) => {
   };
 });
 
+vi.mock("../version.js", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("../version.js")>();
+  return { ...actual, resolveRuntimeServiceCommit: () => "aaaaaaa" };
+});
+
 import type { DB as OpenClawStateKyselyDatabase } from "../state/openclaw-state-db.generated.js";
 import {
   closeOpenClawStateDatabaseForTest,
   openOpenClawStateDatabase,
 } from "../state/openclaw-state-db.js";
-import { withTempDir } from "../test-helpers/temp-dir.js";
+import { withTestDir } from "../test-helpers/temp-dir.js";
 import { withEnvAsync } from "../test-utils/env.js";
 import {
   executeSqliteQuerySync,
@@ -52,12 +58,12 @@ import {
   hasRestartSentinel,
   markUpdateRestartSentinelFailure,
   readRestartSentinel,
+  readVerifiedGitUpdateReceipt,
   summarizeRestartSentinel,
   trimLogTail,
   writeRestartSentinel,
 } from "./restart-sentinel.js";
 import {
-  CONTROL_PLANE_UPDATE_RESTART_HEALTH_PENDING_REASON,
   buildControlPlaneUpdateRestartHealthPendingResult,
   isPendingControlPlaneUpdateRestartSentinel,
 } from "./update-control-plane-sentinel.js";
@@ -70,7 +76,7 @@ beforeEach(() => {
 });
 
 async function withRestartSentinelStateDir(run: () => Promise<void>): Promise<void> {
-  await withTempDir({ prefix: "openclaw-sentinel-" }, async (tempDir) => {
+  await withTestDir({ prefix: "openclaw-sentinel-" }, async (tempDir) => {
     try {
       await withEnvAsync({ OPENCLAW_STATE_DIR: tempDir }, run);
     } finally {
@@ -211,7 +217,33 @@ describe("restart sentinel", () => {
     });
   });
 
-  it("reconstructs typed columns when payload_json is corrupt", async () => {
+  it.each([
+    { name: "the shadow payload is corrupt", columns: { payload_json: "not-json" } },
+    {
+      name: "recovery has an unknown reason and extra field",
+      columns: {
+        stats_json: JSON.stringify({
+          mode: "npm",
+          reason: "pending",
+          recovery: { serviceRestartSafe: false, reason: "future-recovery-reason", detail: "new" },
+        }),
+      },
+    },
+    {
+      name: "recovery has a known reason and extra field",
+      columns: {
+        stats_json: JSON.stringify({
+          mode: "npm",
+          reason: "pending",
+          recovery: {
+            serviceRestartSafe: false,
+            reason: "runtime-verification-failed",
+            detail: "new",
+          },
+        }),
+      },
+    },
+  ])("keeps notices readable and consumable when $name", async ({ columns }) => {
     await withRestartSentinelStateDir(async () => {
       const payload = {
         kind: "update" as const,
@@ -226,9 +258,13 @@ describe("restart sentinel", () => {
         stats: { mode: "npm", reason: "pending" },
       };
       const written = await writeRestartSentinel(payload);
-      updateSentinelRow({ payload_json: "not-json" });
+      updateSentinelRow(columns);
 
-      await expect(readRestartSentinel()).resolves.toEqual(written);
+      const read = await readRestartSentinel();
+      expect(read).toEqual(written);
+      expect(formatRestartSentinelMessage(read!.payload)).toContain(payload.message);
+      await expect(clearRestartSentinelIfRevision(read!.revision)).resolves.toBe(true);
+      await expect(readRestartSentinel()).resolves.toBeNull();
     });
   });
 
@@ -509,6 +545,27 @@ describe("restart sentinel", () => {
     });
   });
 
+  it("uses the loaded build commit when finalizing an update", async () => {
+    await withRestartSentinelStateDir(async () => {
+      await writeRestartSentinel({
+        kind: "update",
+        status: "ok",
+        ts: Date.now(),
+        stats: {
+          mode: "git",
+          root: process.cwd(),
+          after: { sha: "aaaaaaa", version: "actual-version" },
+        },
+      });
+
+      await finalizeUpdateRestartSentinelRunningVersion("actual-version");
+
+      await expect(readRestartSentinel()).resolves.toMatchObject({
+        payload: { status: "ok" },
+      });
+    });
+  });
+
   it("does not rewrite update sentinels when the running version is already current", async () => {
     await withRestartSentinelStateDir(async () => {
       const ts = Date.now();
@@ -536,6 +593,165 @@ describe("restart sentinel", () => {
             },
           },
         },
+      });
+    });
+  });
+
+  it.each([
+    { name: "successful update", status: "ok", reason: undefined },
+    {
+      name: "failed handoff",
+      status: "error",
+      reason: "managed-service-handoff-failed",
+    },
+  ] as const)("persists the verified Git install receipt after a $name", async (testCase) => {
+    await withRestartSentinelStateDir(async () => {
+      await withTestDir({ prefix: "openclaw-install-root-" }, async (tempDir) => {
+        const installRoot = path.join(tempDir, "checkout");
+        const installAlias = path.join(tempDir, "checkout-alias");
+        await fs.mkdir(installRoot);
+        await fs.symlink(installRoot, installAlias, "dir");
+        const ts = Date.now();
+        await writeRestartSentinel({
+          kind: "update",
+          status: testCase.status,
+          ts,
+          stats: {
+            mode: "git",
+            ...(testCase.reason ? { reason: testCase.reason } : {}),
+            root: installAlias,
+            before: { sha: "aaaaaaaa" },
+            after: {
+              sha: " bbbbbbbb ",
+              upstreamRef: " origin/main ",
+              version: "expected-version",
+            },
+          },
+        });
+
+        await finalizeUpdateRestartSentinelRunningVersion(
+          "actual-version",
+          process.env,
+          "bbbbbbbb1234",
+          installRoot,
+        );
+        await clearRestartSentinel();
+
+        await expect(readVerifiedGitUpdateReceipt()).resolves.toEqual({
+          root: await fs.realpath(installRoot),
+          sha: "bbbbbbbb",
+          upstreamRef: "origin/main",
+          installedAtMs: ts,
+        });
+      });
+    });
+  });
+
+  it("does not advance install time when a successful Git run keeps the same revision", async () => {
+    await withRestartSentinelStateDir(async () => {
+      await writeRestartSentinel({
+        kind: "update",
+        status: "ok",
+        ts: Date.now(),
+        stats: {
+          mode: "git",
+          root: process.cwd(),
+          before: { sha: "aaaaaaaa" },
+          after: { sha: "aaaaaaaa", version: "expected-version" },
+        },
+      });
+
+      await finalizeUpdateRestartSentinelRunningVersion(
+        "actual-version",
+        process.env,
+        "aaaaaaaa",
+        process.cwd(),
+      );
+
+      await expect(readVerifiedGitUpdateReceipt()).resolves.toBeNull();
+    });
+  });
+
+  it.each([
+    {
+      name: "successful update",
+      status: "ok",
+      runningCommit: "cccccccc",
+      beforeSha: undefined,
+      expectedReason: "restart-revision-mismatch",
+    },
+    {
+      name: "error-status update",
+      status: "error",
+      runningCommit: "aaaaaaaa",
+      beforeSha: "aaaaaaaa",
+      expectedReason: "managed-service-handoff-failed",
+    },
+  ] as const)("rejects a $name whose running Git revision does not match", async (testCase) => {
+    await withRestartSentinelStateDir(async () => {
+      await writeRestartSentinel({
+        kind: "update",
+        status: testCase.status,
+        ts: Date.now(),
+        stats: {
+          mode: "git",
+          root: process.cwd(),
+          ...(testCase.beforeSha ? { before: { sha: testCase.beforeSha } } : {}),
+          ...(testCase.status === "error" ? { reason: "managed-service-handoff-failed" } : {}),
+          after: { sha: "bbbbbbbb", version: "expected-version" },
+        },
+      });
+
+      await finalizeUpdateRestartSentinelRunningVersion(
+        "actual-version",
+        process.env,
+        testCase.runningCommit,
+        process.cwd(),
+      );
+
+      await expect(readRestartSentinel()).resolves.toMatchObject({
+        payload: {
+          status: "error",
+          stats: { reason: testCase.expectedReason },
+        },
+      });
+      await expect(readVerifiedGitUpdateReceipt()).resolves.toBeNull();
+    });
+  });
+
+  it("rejects the same Git revision when the restarted checkout root differs", async () => {
+    await withRestartSentinelStateDir(async () => {
+      await withTestDir({ prefix: "openclaw-install-root-mismatch-" }, async (tempDir) => {
+        const expectedRoot = path.join(tempDir, "expected");
+        const runningRoot = path.join(tempDir, "running");
+        await fs.mkdir(expectedRoot);
+        await fs.mkdir(runningRoot);
+        await writeRestartSentinel({
+          kind: "update",
+          status: "ok",
+          ts: Date.now(),
+          stats: {
+            mode: "git",
+            root: expectedRoot,
+            before: { sha: "aaaaaaaa" },
+            after: { sha: "bbbbbbbb", version: "expected-version" },
+          },
+        });
+
+        await finalizeUpdateRestartSentinelRunningVersion(
+          "actual-version",
+          process.env,
+          "bbbbbbbb1234",
+          runningRoot,
+        );
+
+        await expect(readRestartSentinel()).resolves.toMatchObject({
+          payload: {
+            status: "error",
+            stats: { reason: "restart-root-mismatch" },
+          },
+        });
+        await expect(readVerifiedGitUpdateReceipt()).resolves.toBeNull();
       });
     });
   });
@@ -635,6 +851,92 @@ describe("restart success continuation", () => {
 });
 
 describe("control-plane update restart sentinel", () => {
+  it.each([
+    { serviceRestartSafe: false, reason: "runtime-verification-failed" },
+    { serviceRestartSafe: true, version: "1.0.0", service: "failed" },
+    {
+      serviceRestartSafe: true,
+      version: "1.0.0",
+      buildId: "restored-git-build",
+      service: "healthy",
+    },
+    { serviceRestartSafe: false, reason: "state-migration-started" },
+  ] as const)(
+    "preserves recovery through the typed sentinel round trip ($serviceRestartSafe)",
+    async (recovery) => {
+      await withRestartSentinelStateDir(async () => {
+        await writeRestartSentinel(
+          buildUpdateRestartSentinelPayload({
+            result: { status: "error", mode: "npm", recovery, steps: [], durationMs: 1 },
+            meta: {},
+          }),
+        );
+        expect((await readRestartSentinel())?.payload.stats?.recovery).toEqual(recovery);
+      });
+    },
+  );
+
+  it.each([true, false])(
+    "keeps package rollback diagnostics out of prior-runtime sentinel recovery (%s)",
+    async (packageRollbackVerified) => {
+      const priorUnsafeRecoverySchema = z.strictObject({
+        serviceRestartSafe: z.literal(false),
+        reason: z.enum([
+          "source-rollback-failed",
+          "state-migration-started",
+          "manager-unavailable",
+          "deps-install-failed",
+          "build-failed",
+          "rollback-checkout-dirty",
+          "runtime-verification-failed",
+        ]),
+      });
+      const recovery = {
+        serviceRestartSafe: false as const,
+        reason: "runtime-verification-failed" as const,
+        packageRollbackVerified,
+      };
+      const payload = buildUpdateRestartSentinelPayload({
+        result: { status: "error", mode: "npm", recovery, steps: [], durationMs: 1 },
+        meta: {},
+      });
+
+      expect(recovery.packageRollbackVerified).toBe(packageRollbackVerified);
+      expect(payload.stats?.recovery).toEqual({
+        serviceRestartSafe: false,
+        reason: "runtime-verification-failed",
+      });
+      expect(priorUnsafeRecoverySchema.safeParse(payload.stats?.recovery).success).toBe(true);
+
+      await withRestartSentinelStateDir(async () => {
+        await writeRestartSentinel(payload);
+        expect((await readRestartSentinel())?.payload.stats?.recovery).toEqual({
+          serviceRestartSafe: false,
+          reason: "runtime-verification-failed",
+        });
+      });
+    },
+  );
+
+  it("reports a successful same-revision Git run as already current", () => {
+    const payload = buildUpdateRestartSentinelPayload({
+      result: {
+        status: "ok",
+        mode: "git",
+        before: { sha: "aaaaaaaa" },
+        after: { sha: "aaaaaaaa" },
+        steps: [],
+        durationMs: 42,
+      },
+      meta: {},
+      nowMs: 1,
+    });
+
+    expect(payload.status).toBe("skipped");
+    expect(payload.stats?.reason).toBe("already-current");
+    expect(payload.continuation).toBeUndefined();
+  });
+
   it("keeps restart-health-pending sentinels continuation-free until final success", () => {
     const result = {
       status: "ok" as const,
@@ -658,7 +960,7 @@ describe("control-plane update restart sentinel", () => {
     });
 
     expect(pendingPayload.status).toBe("skipped");
-    expect(pendingPayload.stats?.reason).toBe(CONTROL_PLANE_UPDATE_RESTART_HEALTH_PENDING_REASON);
+    expect(pendingPayload.stats?.reason).toBe("restart-health-pending");
     expect(pendingPayload.continuation).toBeUndefined();
     expect(isPendingControlPlaneUpdateRestartSentinel(pendingPayload)).toBe(true);
 

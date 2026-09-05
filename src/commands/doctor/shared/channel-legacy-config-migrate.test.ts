@@ -12,6 +12,8 @@ const loadBundledChannelDoctorContractApi = vi.hoisted(() => vi.fn());
 const getBootstrapChannelPlugin = vi.hoisted(() => vi.fn());
 
 vi.mock("../../../plugins/doctor-contract-registry.js", () => ({
+  collectDoctorConfigRepairPluginIds: (...args: unknown[]) =>
+    collectRelevantDoctorPluginIds(...args),
   applyPluginDoctorCompatibilityMigrations: (...args: unknown[]) =>
     applyPluginDoctorCompatibilityMigrations(...args),
   collectRelevantDoctorPluginIds: (...args: unknown[]) => collectRelevantDoctorPluginIds(...args),
@@ -48,6 +50,23 @@ function firstMigrationCall() {
 }
 
 describe("bundled channel legacy config migrations", () => {
+  it("does not treat channel metadata or blank ids as channel plugins", () => {
+    collectRelevantDoctorPluginIds.mockReturnValue([]);
+    applyPluginDoctorCompatibilityMigrations.mockReturnValue({ config: {}, changes: [] });
+
+    applyChannelDoctorCompatibilityMigrations({
+      channels: {
+        defaults: {},
+        modelByChannel: { discord: "openai/gpt-5.6-luna" },
+        " ": {},
+      },
+    });
+
+    expect(loadBundledChannelDoctorContractApi).not.toHaveBeenCalled();
+    expect(getBootstrapChannelPlugin).not.toHaveBeenCalled();
+    expect(applyPluginDoctorCompatibilityMigrations).not.toHaveBeenCalled();
+  });
+
   it("only renames heartbeat blocks that use the common visibility shape", () => {
     collectRelevantDoctorPluginIds.mockReturnValue([]);
     loadBundledChannelDoctorContractApi.mockReturnValue({

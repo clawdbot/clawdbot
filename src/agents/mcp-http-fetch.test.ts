@@ -13,6 +13,7 @@ import {
   withSameOriginMcpHttpHeaders,
 } from "./mcp-http-fetch.js";
 import { withMcpOAuthBearer } from "./mcp-oauth-fetch.js";
+import { operatorMcpOAuthIdentity } from "./mcp-oauth-identity.js";
 
 const testGlobal = globalThis as Record<string, unknown>;
 const TEST_UNDICI_RUNTIME_DEPS_KEY = "__OPENCLAW_TEST_UNDICI_RUNTIME_DEPS__";
@@ -321,8 +322,7 @@ describe("MCP HTTP fetch helpers", () => {
     const fetch = withMcpOAuthBearer({
       fetchFn: buildMcpHttpFetch({ resourceUrl }),
       authFetchFn: buildMcpHttpFetch({ resourceUrl }),
-      serverName: "docs",
-      resourceUrl,
+      identity: operatorMcpOAuthIdentity("docs", resourceUrl),
     });
 
     const response = await fetch(resourceUrl, {

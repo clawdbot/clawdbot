@@ -2,7 +2,6 @@
 import type { webhook } from "@line/bot-sdk";
 import {
   bindIngressLifecycleToReplyOptions,
-  createChannelIngressError,
   createChannelIngressMonitor,
   DEFAULT_INGRESS_ADOPTION_STALL_MS,
   DEFAULT_INGRESS_RETRY_MAX_ATTEMPTS,
@@ -10,21 +9,22 @@ import {
 } from "openclaw/plugin-sdk/channel-outbound";
 import { formatErrorMessage } from "openclaw/plugin-sdk/error-runtime";
 import { danger, type RuntimeEnv, warn } from "openclaw/plugin-sdk/runtime-env";
-import { normalizeNullableString as nonEmptyString } from "openclaw/plugin-sdk/string-coerce-runtime";
 import { runDetachedWebhookWork } from "openclaw/plugin-sdk/webhook-request-guards";
 import { getLineRuntime } from "./runtime.js";
+import {
+  eventIdFor,
+  laneKeyFor,
+  LINE_WEBHOOK_SPOOL_INVALID_EVENT_REASON,
+  LINE_WEBHOOK_SPOOL_INVALID_PAYLOAD_MESSAGE,
+  LINE_WEBHOOK_SPOOL_VERSION,
+  LineWebhookPayloadError,
+  type LineWebhookSpoolPayload,
+} from "./webhook-spool-contract.js";
 
-const LINE_WEBHOOK_SPOOL_VERSION = 1;
 const LINE_WEBHOOK_DRAIN_INTERVAL_MS = 500;
 const LINE_WEBHOOK_MAX_CONCURRENT_DELIVERIES = 8;
 const LINE_WEBHOOK_DRAIN_SCAN_LIMIT = 100;
 const LINE_WEBHOOK_ACTIVE_DELIVERY_STOP_GRACE_MS = 5_000;
-
-type LineWebhookSpoolPayload = {
-  version: number;
-  rawEvent: string;
-  destination: string;
-};
 
 type LineWebhookIngressEvent = {
   event: webhook.Event;
@@ -51,8 +51,6 @@ type LineWebhookSpoolOptions = {
   queue?: ChannelIngressQueue<LineWebhookSpoolPayload>;
 };
 
-const LineWebhookPayloadError = createChannelIngressError("LineWebhookPayloadError");
-
 export class LineWebhookTerminalDeliveryError extends Error {
   readonly reason = "delivery-side-effects-committed" as const;
 
@@ -63,59 +61,10 @@ export class LineWebhookTerminalDeliveryError extends Error {
 }
 
 type LineWebhookSpool = {
-  accept: (body: webhook.CallbackRequest) => Promise<void>;
+  accept: (body: webhook.CallbackRequest) => Promise<"durable" | "ignored">;
   start: () => void;
   stop: () => Promise<void>;
 };
-
-/** Message ids preserve the shipped replay-guard keyspace; other events use LINE's delivery id. */
-function eventIdFor(event: unknown): string {
-  if (!event || typeof event !== "object") {
-    throw new LineWebhookPayloadError("LINE webhook event must be an object.");
-  }
-  const candidate = event as {
-    type?: unknown;
-    message?: { id?: unknown };
-    webhookEventId?: unknown;
-  };
-  if (candidate.type === "message") {
-    const messageId = nonEmptyString(candidate.message?.id);
-    if (messageId) {
-      return `message:${messageId}`;
-    }
-  }
-  const webhookEventId = nonEmptyString(candidate.webhookEventId);
-  if (webhookEventId) {
-    return `event:${webhookEventId}`;
-  }
-  throw new LineWebhookPayloadError("LINE webhook event is missing a stable delivery id.");
-}
-
-function laneKeyFor(event: unknown, eventId: string): string {
-  if (!event || typeof event !== "object") {
-    return eventId;
-  }
-  const source = (event as { source?: Record<string, unknown> }).source;
-  if (source?.type === "group") {
-    const groupId = nonEmptyString(source.groupId);
-    if (groupId) {
-      return `group:${groupId}`;
-    }
-  }
-  if (source?.type === "room") {
-    const roomId = nonEmptyString(source.roomId);
-    if (roomId) {
-      return `room:${roomId}`;
-    }
-  }
-  if (source?.type === "user") {
-    const userId = nonEmptyString(source.userId);
-    if (userId) {
-      return `user:${userId}`;
-    }
-  }
-  return eventId;
-}
 
 function parseStoredEvent(rawEvent: string): webhook.Event {
   let event: unknown;
@@ -190,7 +139,7 @@ export function createLineWebhookSpool(options: LineWebhookSpoolOptions): LineWe
       }),
       decode: (payload) => {
         if (typeof payload.rawEvent !== "string" || typeof payload.destination !== "string") {
-          throw new LineWebhookPayloadError("LINE webhook spool payload is invalid.");
+          throw new LineWebhookPayloadError(LINE_WEBHOOK_SPOOL_INVALID_PAYLOAD_MESSAGE);
         }
         return {
           version: payload.version,
@@ -200,7 +149,7 @@ export function createLineWebhookSpool(options: LineWebhookSpoolOptions): LineWe
       createClaimError: (kind) =>
         new LineWebhookPayloadError(
           kind === "invalid-version"
-            ? "LINE webhook spool payload is invalid."
+            ? LINE_WEBHOOK_SPOOL_INVALID_PAYLOAD_MESSAGE
             : "LINE webhook event identity changed after durable admission.",
         ),
     },
@@ -278,7 +227,7 @@ export function createLineWebhookSpool(options: LineWebhookSpoolOptions): LineWe
       },
       resolveNonRetryableFailure: (error) => {
         if (error instanceof LineWebhookPayloadError) {
-          return { reason: "invalid-event", message: error.message };
+          return { reason: LINE_WEBHOOK_SPOOL_INVALID_EVENT_REASON, message: error.message };
         }
         if (error instanceof LineWebhookTerminalDeliveryError) {
           return { reason: error.reason, message: error.message };
@@ -300,14 +249,16 @@ export function createLineWebhookSpool(options: LineWebhookSpoolOptions): LineWe
 
   return {
     accept: async (body) => {
-      const events = body.events ?? [];
+      // Standby deliveries belong to the channel holding LINE chat control.
+      const events = (body.events ?? []).filter((event) => event.mode !== "standby");
       if (events.length === 0) {
-        return;
+        return "ignored";
       }
-      await monitor.admitBatch(
+      const admissions = await monitor.admitBatch(
         events.map((event) => ({ event, destination: body.destination ?? "" })),
         { receivedAt: Date.now() },
       );
+      return admissions.some((admission) => admission.kind === "durable") ? "durable" : "ignored";
     },
     start: () => {
       if (!stopTask) {

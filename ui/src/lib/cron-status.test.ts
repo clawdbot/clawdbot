@@ -15,4 +15,15 @@ describe("isCronJobActiveFailure", () => {
     expect(isCronJobActiveFailure(failedJob(true))).toBe(true);
     expect(isCronJobActiveFailure(failedJob(false))).toBe(false);
   });
+
+  it("keeps auto-disabled jobs visible as failures", () => {
+    // Auto-disable is the escalated failure state; without this the job drops
+    // out of every failure surface at the moment the problem became permanent.
+    const job = failedJob(false);
+    job.state = {
+      ...job.state,
+      autoDisabled: { reason: "consecutive-failures", atMs: 1, consecutiveErrors: 10 },
+    };
+    expect(isCronJobActiveFailure(job)).toBe(true);
+  });
 });

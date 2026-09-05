@@ -5,6 +5,7 @@ import {
   callGatewayFromCli,
   type GatewayRpcOpts,
 } from "openclaw/plugin-sdk/gateway-runtime";
+import { normalizeAgentId } from "openclaw/plugin-sdk/routing";
 import type {
   SessionCatalogHost as CodexSessionCatalogHost,
   SessionCatalogSession as CodexSessionCatalogSession,
@@ -19,6 +20,7 @@ import {
 
 type CodexSessionCatalogResult = { hosts: CodexSessionCatalogHost[] };
 type CodexSessionCatalogParams = {
+  agentId?: string;
   search?: string;
   limitPerHost?: number;
   hostIds?: string[];
@@ -26,6 +28,7 @@ type CodexSessionCatalogParams = {
 };
 
 type CodexGatewayOptions = GatewayRpcOpts & {
+  agent?: string;
   json?: boolean;
 };
 
@@ -36,11 +39,20 @@ type CodexSessionsCliOptions = CodexGatewayOptions & {
   cursor?: string;
 };
 
-type CodexArchiveCliOptions = CodexGatewayOptions & {
+type CodexActionCliOptions = CodexGatewayOptions & {
+  host?: string;
+};
+
+type CodexArchiveCliOptions = CodexActionCliOptions & {
   confirmNoOtherRunner?: boolean;
 };
 
 const CODEX_SESSION_CATALOG_CLI_TIMEOUT_MS = 75_000;
+
+function requestedAgentId(options: CodexGatewayOptions): string | undefined {
+  const agentId = options.agent?.trim();
+  return agentId ? normalizeAgentId(agentId) : undefined;
+}
 
 function writeLine(value = ""): void {
   process.stdout.write(`${value}\n`);
@@ -173,6 +185,7 @@ function filterHosts(
 }
 
 async function listCodexSessions(options: CodexSessionsCliOptions): Promise<void> {
+  const agentId = requestedAgentId(options);
   const host = options.host?.trim() || undefined;
   const cursor = options.cursor?.trim() || undefined;
   if (cursor && !host) {
@@ -181,6 +194,7 @@ async function listCodexSessions(options: CodexSessionsCliOptions): Promise<void
   const search = options.search?.trim() || undefined;
   const limitPerHost = parsePageLimit(options.limit);
   const params: CodexSessionCatalogParams = {
+    ...(agentId ? { agentId } : {}),
     ...(search ? { search } : {}),
     ...(limitPerHost !== undefined ? { limitPerHost } : {}),
     ...(host ? { hostIds: [host] } : {}),
@@ -237,13 +251,20 @@ function readThreadId(value: string): string {
 
 async function continueCodexSession(
   threadIdValue: string,
-  options: CodexGatewayOptions,
+  options: CodexActionCliOptions,
 ): Promise<void> {
   const threadId = readThreadId(threadIdValue);
+  const agentId = requestedAgentId(options);
+  const hostId = options.host?.trim() || CODEX_LOCAL_SESSION_HOST_ID;
   const raw = await callGatewayFromCli(
     "sessions.catalog.continue",
     gatewayOptions(options),
-    { catalogId: "codex", hostId: CODEX_LOCAL_SESSION_HOST_ID, threadId },
+    {
+      catalogId: "codex",
+      hostId,
+      threadId,
+      ...(agentId ? { agentId } : {}),
+    },
     { mode: "cli", scopes: ["operator.write"] },
   );
   if (!isRecord(raw) || typeof raw.sessionKey !== "string" || !raw.sessionKey.trim()) {
@@ -262,6 +283,8 @@ async function archiveCodexSession(
   options: CodexArchiveCliOptions,
 ): Promise<void> {
   const threadId = readThreadId(threadIdValue);
+  const agentId = requestedAgentId(options);
+  const hostId = options.host?.trim() || CODEX_LOCAL_SESSION_HOST_ID;
   if (options.confirmNoOtherRunner !== true) {
     throw new Error(
       "--confirm-no-other-runner is required because Codex client and runner activity is process-local",
@@ -272,8 +295,9 @@ async function archiveCodexSession(
     gatewayOptions(options),
     {
       catalogId: "codex",
-      hostId: CODEX_LOCAL_SESSION_HOST_ID,
+      hostId,
       threadId,
+      ...(agentId ? { agentId } : {}),
       confirmNoOtherRunner: true,
     },
     { mode: "cli", scopes: ["operator.write"] },
@@ -299,6 +323,7 @@ export function registerCodexSessionCli(program: Command): void {
     codex
       .command("sessions")
       .description("List non-archived Codex app-server sessions across connected hosts")
+      .option("--agent <id>", "Agent id that owns the Codex sessions")
       .option("--search <text>", "Search session titles (case-insensitive)")
       .option("--host <id>", "Filter by stable host id")
       .option("--limit <count>", "Maximum sessions returned per host")
@@ -313,8 +338,10 @@ export function registerCodexSessionCli(program: Command): void {
     codex
       .command("continue <thread-id>")
       .description("Continue a Gateway-local Codex thread as an OpenClaw branch")
+      .option("--agent <id>", "Agent id that owns the Codex session")
+      .option("--host <id>", "Stable local host id from codex sessions")
       .option("--json", "Print the structured response", false),
-  ).action(async (threadId: string, options: CodexGatewayOptions) => {
+  ).action(async (threadId: string, options: CodexActionCliOptions) => {
     await continueCodexSession(threadId, options);
   });
 
@@ -322,6 +349,8 @@ export function registerCodexSessionCli(program: Command): void {
     codex
       .command("archive <thread-id>")
       .description("Archive a stored or idle Gateway-local Codex thread")
+      .option("--agent <id>", "Agent id that owns the Codex session")
+      .option("--host <id>", "Stable local host id from codex sessions")
       .option(
         "--confirm-no-other-runner",
         "Confirm no other Codex client or OpenClaw runner is using this thread",

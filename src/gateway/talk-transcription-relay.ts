@@ -22,7 +22,10 @@ import {
   closeTalkRelaySessionsForConnection,
   requireActiveTalkRelaySession,
 } from "./talk-relay-session-lifecycle.js";
-import { forgetUnifiedTalkSession } from "./talk-session-registry.js";
+import {
+  forgetUnifiedTalkSession,
+  registerTalkConnectionCleanup,
+} from "./talk-session-registry.js";
 
 /**
  * Gateway-owned relay for streaming speech-to-text providers used by Talk.
@@ -214,7 +217,7 @@ function closeTranscriptionSession(
 }
 
 /** Releases every transcription relay owned by a disconnected gateway connection. */
-export function closeTalkTranscriptionRelaySessionsForConnection(connId: string): void {
+function closeTalkTranscriptionRelaySessionsForConnection(connId: string): void {
   closeTalkRelaySessionsForConnection({
     sessions: transcriptionSessions.values(),
     connId,
@@ -375,6 +378,9 @@ export function createTalkTranscriptionRelaySession(
   relayRef.current = relay;
   relay.cleanupTimer.unref?.();
   transcriptionSessions.set(transcriptionSessionId, relay);
+  registerTalkConnectionCleanup(params.connId, "transcription-relay", () => {
+    closeTalkTranscriptionRelaySessionsForConnection(params.connId);
+  });
   sttSession
     .connect()
     .then(() => {
@@ -500,26 +506,4 @@ export function stopTalkTranscriptionRelaySession(params: {
     closeTranscriptionSession(session, "completed");
     throw error;
   }
-}
-
-/** Cancels the active transcription turn and closes the relay. */
-export function cancelTalkTranscriptionRelayTurn(params: {
-  transcriptionSessionId: string;
-  connId: string;
-  reason?: string;
-}): void {
-  const session = getTranscriptionSession(params.transcriptionSessionId, params.connId);
-  const turnId = ensureTranscriptionTurn(session);
-  const cancelled = session.talk.cancelTurn({
-    turnId,
-    payload: { reason: params.reason ?? "client-cancelled" },
-  });
-  broadcastToOwner(session.context, session.connId, {
-    transcriptionSessionId: session.id,
-    type: "transcript",
-    text: "",
-    final: true,
-    talkEvent: cancelled.ok ? cancelled.event : undefined,
-  });
-  closeTranscriptionSession(session, "completed");
 }
