@@ -1,17 +1,24 @@
 // Vitest pattern file helper reads include and exclude patterns from files.
 import fs from "node:fs";
+import { createRequire } from "node:module";
 import path from "node:path";
-import { Minimatch } from "minimatch";
+import type { Minimatch } from "minimatch";
 import { collectVitestFileFilters } from "../../scripts/lib/vitest-cli-mode.mts";
 
 const repoRoot = path.resolve(import.meta.dirname, "../..");
+const require = createRequire(import.meta.url);
 const globMatchers = new Map<string, Minimatch>();
 
 export function matchesVitestGlob(value: string, pattern: string): boolean {
+  // CI plans tests before installing dependencies; keep Node's matcher dependency-free.
+  if (!process.versions.bun) {
+    return path.matchesGlob(value, pattern);
+  }
   let matcher = globMatchers.get(pattern);
   if (!matcher) {
     // Keep Node's path.matchesGlob semantics when Bun does not support extglobs.
-    matcher = new Minimatch(pattern, {
+    const { Minimatch: Matcher }: typeof import("minimatch") = require("minimatch");
+    matcher = new Matcher(pattern, {
       nocase: process.platform === "win32" || process.platform === "darwin",
       windowsPathsNoEscape: true,
       nonegate: true,
