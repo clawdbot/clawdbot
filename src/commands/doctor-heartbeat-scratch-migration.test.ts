@@ -197,9 +197,12 @@ describe("HEARTBEAT.md cron scratch migration", () => {
 
   it("leaves a shared workspace file untouched when only a disabled agent is enrolled", async () => {
     const fixture = await createFixture();
+    // No ambient heartbeat owner: the "0m" entry is the only enrolled agent.
+    // With `agents.defaults.heartbeat` set, the sibling agent inherits that
+    // cadence and owns the migration (covered by the next case).
     const cfg = {
       agents: {
-        defaults: { heartbeat: { every: "30m" }, workspace: fixture.workspace },
+        defaults: { workspace: fixture.workspace },
         list: [
           { id: "main", workspace: fixture.workspace },
           { id: "ollama", workspace: fixture.workspace, heartbeat: { every: "0m" } },
