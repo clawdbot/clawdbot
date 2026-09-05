@@ -200,22 +200,6 @@ export function clearOpenClawAgentDatabaseOpenFailure(
   return cleared;
 }
 
-function logSlowAgentDatabaseOpen(params: {
-  agentId: string;
-  elapsedMs: number;
-  path: string;
-}): void {
-  if (params.elapsedMs < OPENCLAW_AGENT_DB_SLOW_OPEN_MS) {
-    return;
-  }
-  agentDbLog.warn("slow OpenClaw agent database open", {
-    agentId: params.agentId,
-    elapsedMs: params.elapsedMs,
-    path: params.path,
-    thresholdMs: OPENCLAW_AGENT_DB_SLOW_OPEN_MS,
-  });
-}
-
 /** Read a database's durable role and agent owner without mutating it. */
 export function inspectOpenClawAgentDatabaseOwner(
   pathname: string,
@@ -430,11 +414,15 @@ export function openOpenClawAgentDatabase(
     // Safety net for processes that end without an orderly close: agent DBs have
     // no shutdown owner like the ACP/gateway state DB closes. Closing unregisters.
     cache.unregisterExitClose ??= registerSqliteCacheExitClose(closeOpenClawAgentDatabases);
-    logSlowAgentDatabaseOpen({
-      agentId,
-      elapsedMs: Date.now() - openStartedAt,
-      path: pathname,
-    });
+    const elapsedMs = Date.now() - openStartedAt;
+    if (elapsedMs >= OPENCLAW_AGENT_DB_SLOW_OPEN_MS) {
+      agentDbLog.warn("slow OpenClaw agent database open", {
+        agentId,
+        elapsedMs,
+        path: pathname,
+        thresholdMs: OPENCLAW_AGENT_DB_SLOW_OPEN_MS,
+      });
+    }
     cache.leases.set(pathname, { leaseId, env: leaseEnvironment });
     cache.databases.set(pathname, database);
     return database;

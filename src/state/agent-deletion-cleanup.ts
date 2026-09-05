@@ -7,7 +7,6 @@ import type {
   OpenClawAgentDatabase,
   OpenClawAgentDatabaseOptions,
 } from "./openclaw-agent-db-contract.js";
-import type { isSameOpenClawAgentDatabasePath } from "./openclaw-agent-db-registry.js";
 import { resolveOpenClawAgentSqlitePath } from "./openclaw-agent-db.paths.js";
 import { resolveOpenClawStateSqlitePath } from "./openclaw-state-db.paths.js";
 
@@ -142,7 +141,7 @@ export function assertAgentDeletionDatabaseCleanupAccess(
 
 export function assertAgentDeletionCleanupAliases(
   options: OpenClawAgentDatabaseOptions,
-  isSamePath: typeof isSameOpenClawAgentDatabasePath,
+  isSamePath: (left: string, right: string) => boolean,
 ): void {
   // Only cleanup-held files need this rare physical alias check on a cache miss.
   const pathname = resolveOpenClawAgentSqlitePath(options);
