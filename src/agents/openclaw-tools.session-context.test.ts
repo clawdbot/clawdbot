@@ -3,6 +3,7 @@ import { afterEach, describe, expect, it, vi } from "vitest";
 import { clearRuntimeConfigSnapshot, setRuntimeConfigSnapshot } from "../config/config.js";
 import { setEmbeddedMode } from "../infra/embedded-mode.js";
 import { createOpenClawTools } from "./openclaw-tools.js";
+import * as inProcessGateway from "./tools/in-process-gateway.js";
 
 type GatewayRequest = { method: string; params?: Record<string, unknown> };
 type OpenClawToolsOptions = NonNullable<Parameters<typeof createOpenClawTools>[0]>;
@@ -69,6 +70,48 @@ afterEach(() => {
 });
 
 describe("openclaw session lookup context", () => {
+  it.each([
+    { scope: "global", mainKey: "main", runSessionKey: "global" },
+    {
+      scope: "global",
+      mainKey: "conversation",
+      runSessionKey: "global",
+    },
+    { scope: "per-sender", mainKey: "main", runSessionKey: "global" },
+    {
+      scope: "global",
+      mainKey: "main",
+      runSessionKey: "agent:research:dashboard:control",
+    },
+  ] as const)("routes progress cards to $runSessionKey under $scope scope", async (scenario) => {
+    const gatewayCall = vi.spyOn(inProcessGateway, "callInProcessGatewayTool").mockResolvedValue({
+      card: null,
+    });
+    try {
+      const tools = createOpenClawTools({
+        config: {
+          agents: { ownership: "explicit", entries: { ops: {}, research: {} } },
+          session: { scope: scenario.scope, mainKey: scenario.mainKey },
+        },
+        agentSessionKey: "agent:research:main",
+        runSessionKey: scenario.runSessionKey,
+        requesterAgentIdOverride: "research",
+        disablePluginTools: true,
+        disableMessageTool: true,
+        wrapBeforeToolCallHook: false,
+      });
+
+      await requireTool(tools, "progress_card").execute("synthetic-progress", {});
+
+      expect(gatewayCall).toHaveBeenCalledWith("progressCard.put", {
+        sessionKey: scenario.runSessionKey,
+        agentId: "research",
+      });
+    } finally {
+      gatewayCall.mockRestore();
+    }
+  });
+
   it("binds nested session lookups to the durable caller", async () => {
     const runSessionKey = "agent:research:main";
     setEmbeddedMode(true);

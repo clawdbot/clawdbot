@@ -48,8 +48,6 @@ export const CORE_FIELD_HELP: Record<string, string> = {
   "wizard.lastRunCommit": "Source commit used by the last development wizard run.",
   "wizard.lastRunCommand": "Command that invoked the last wizard run.",
   "wizard.lastRunMode": 'Whether the last wizard run targeted "local" or "remote" setup.',
-  "wizard.localModelLeanAutoModel":
-    "Model reference whose lean-mode setting remains owned by onboarding.",
   "wizard.securityAcknowledgedAt":
     "Timestamp of the setup security acknowledgement, committed with the target config.",
   "logging.audit":

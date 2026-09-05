@@ -1,3 +1,4 @@
+import type { BoardGetParams } from "@openclaw/gateway-protocol";
 import type { TemplateResult } from "lit";
 import type { GatewayControlUiPluginWidgetKind } from "../../../api/gateway.ts";
 import { t } from "../../../i18n/index.ts";
@@ -5,7 +6,7 @@ import type { BoardWidget } from "../types.ts";
 
 export type PluginBoardWidgetRenderer = (props: {
   widget: BoardWidget;
-  sessionKey: string;
+  session: BoardGetParams;
   active: boolean;
   canMutate: boolean;
   requestUpdate: () => void;

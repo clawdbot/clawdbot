@@ -67,6 +67,7 @@ const GATEWAY_SERVICES_EXTRA_CHECK_ID = "core/doctor/gateway-services/extra";
 const TELEGRAM_GENERAL_TOPIC_CONVERSATIONS_CHECK_ID =
   "core/doctor/telegram-general-topic-conversations";
 const SKILL_WORKSHOP_TOOL_POLICY_CHECK_ID = "core/doctor/skill-workshop-tool-policy";
+const SKILL_WORKSHOP_RELOCATION_CHECK_ID = "core/doctor/skill-workshop-relocation";
 type CoreHealthCheckContext = HealthCheckContext & {
   readonly deep?: boolean;
 };
@@ -347,6 +348,40 @@ const skillWorkshopToolPolicyCheck: HealthCheck = {
       requirement: "Autonomous Skill Workshop review requires the skill_workshop tool.",
       fixHint: diagnostic.fix,
     }));
+  },
+};
+
+const skillWorkshopRelocationCheck: HealthCheck = {
+  id: SKILL_WORKSHOP_RELOCATION_CHECK_ID,
+  kind: "core",
+  description: "Skill Workshop files and proposals use each agent's Workshop directory.",
+  source: "doctor",
+  async detect(ctx) {
+    const { inspectLegacySkillWorkshopMigration } =
+      await import("../commands/doctor-skill-workshop-sqlite.js");
+    const inspection = await inspectLegacySkillWorkshopMigration({
+      config: ctx.cfg,
+      env: process.env,
+    });
+    if (inspection.externalProposalCount === 0 && inspection.legacyBackupRootCount === 0) {
+      return [];
+    }
+    return [
+      {
+        checkId: SKILL_WORKSHOP_RELOCATION_CHECK_ID,
+        severity: "warning",
+        message: `Skill Workshop has ${inspection.externalProposalCount} proposal target${inspection.externalProposalCount === 1 ? "" : "s"} outside agent directories (${Object.entries(
+          inspection.externalProposalCountsByAgent,
+        )
+          .map(([agentId, count]) => `${agentId}: ${count}`)
+          .join(
+            ", ",
+          )}) and ${inspection.legacyBackupRootCount} legacy collection backup root${inspection.legacyBackupRootCount === 1 ? "" : "s"}.`,
+        path: "skills.workshop",
+        fixHint:
+          "Run `openclaw doctor --fix` to relocate Workshop-owned skills and retire legacy backup roots.",
+      },
+    ];
   },
 };
 
@@ -1411,6 +1446,7 @@ function createConvertedWorkflowChecks(
     createRuntimeToolSchemaCheck(deps),
     createWorkspaceSuggestionsCheck(deps),
     skillWorkshopToolPolicyCheck,
+    skillWorkshopRelocationCheck,
     ...(isExperimentalClawsEnabled()
       ? [
           {

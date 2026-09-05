@@ -15,6 +15,7 @@ import {
   readSessionTranscriptContextMessages,
   readSessionTranscriptModelContext,
   validateSessionTranscriptContextAdmission,
+  validateSessionTranscriptContextAnchor,
   validateSessionTranscriptContextVersion,
 } from "../../config/sessions/session-accessor.sqlite-model-context.js";
 import { readSessionTranscriptModelContextAsync } from "../../config/sessions/session-model-context-worker-runtime.js";
@@ -22,6 +23,7 @@ import {
   resolveSessionTranscriptReadFence,
   withSessionContextAdmission,
 } from "../../config/sessions/session-transcript-read-fence.js";
+import type { TranscriptEntryAnchor } from "../../config/sessions/transcript-entry-anchor.js";
 import { CURRENT_SESSION_VERSION } from "../../config/sessions/version.js";
 import type { Message } from "../../llm/types.js";
 import type { UserTurnTranscriptAdmissionReceipt } from "../../sessions/user-turn-transcript.types.js";
@@ -139,10 +141,11 @@ export class SessionManager extends SessionManagerBranching {
     options: {
       cwd?: string;
       admission?: UserTurnTranscriptAdmissionReceipt;
+      through?: TranscriptEntryAnchor;
     } = {},
   ): SessionManager {
     const context = withSessionContextAdmission(target, options.admission, () =>
-      readSessionTranscriptModelContext(target),
+      readSessionTranscriptModelContext(target, options.through),
     );
     return SessionManager.fromModelContextEntries(context.events, options.cwd);
   }
@@ -154,21 +157,26 @@ export class SessionManager extends SessionManagerBranching {
       cwd?: string;
       admission?: UserTurnTranscriptAdmissionReceipt;
       signal?: AbortSignal;
+      through?: TranscriptEntryAnchor;
     } = {},
   ): Promise<SessionManager> {
     const readTarget = { ...target };
     const receipt = options.admission ?? resolveSessionTranscriptReadFence(readTarget);
     const admission = receipt ? { ...receipt } : undefined;
+    const through = options.through ? { ...options.through } : undefined;
     const context = await withSessionContextAdmission(readTarget, admission, () =>
-      readSessionTranscriptModelContextAsync(readTarget, admission, options.signal),
+      readSessionTranscriptModelContextAsync(readTarget, admission, options.signal, through),
     );
     options.signal?.throwIfAborted();
     // Even process-local reads yield here. Admitted history may exclude later
     // appends; unadmitted context must still match the snapshot being accepted.
     if (admission) {
       validateSessionTranscriptContextAdmission(readTarget, admission);
-    } else {
+    } else if (!through) {
       validateSessionTranscriptContextVersion(readTarget, context.version);
+    }
+    if (through) {
+      validateSessionTranscriptContextAnchor(readTarget, through);
     }
     return SessionManager.fromModelContextEntries(context.events, options.cwd);
   }

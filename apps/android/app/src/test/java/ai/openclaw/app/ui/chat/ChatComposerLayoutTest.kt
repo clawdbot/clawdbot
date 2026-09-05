@@ -9,12 +9,14 @@ import ai.openclaw.app.NodeRuntime
 import ai.openclaw.app.NodeRuntimeMode
 import ai.openclaw.app.R
 import ai.openclaw.app.SecurePrefs
+import ai.openclaw.app.chat.ChatCacheScope
 import ai.openclaw.app.chat.ChatController
 import ai.openclaw.app.chat.ChatThinkingLevelOption
 import ai.openclaw.app.chat.questionsForSession
 import ai.openclaw.app.closeNodeRuntimeTestFixture
 import ai.openclaw.app.gateway.GatewayRegistryEntry
 import ai.openclaw.app.gateway.GatewayRegistryEntryKind
+import ai.openclaw.app.gateway.GatewaySession
 import ai.openclaw.app.i18n.NativeStringResources
 import ai.openclaw.app.i18n.nativeString
 import ai.openclaw.app.ui.design.ClawDesignTheme
@@ -1285,15 +1287,28 @@ class ChatComposerLayoutTest {
           },
         )
       }.toString()
-    val requestField = ChatController::class.java.getDeclaredField("requestGatewayForGateway").apply { isAccessible = true }
+    val leaseField = ChatController::class.java.getDeclaredField("captureRequestLease").apply { isAccessible = true }
 
     @Suppress("UNCHECKED_CAST")
-    val request = requestField.get(controller) as suspend (String, String, String?) -> String
-    val progressRequest: suspend (String, String, String?) -> String = { gatewayId, method, params ->
-      if (method == "progressCard.get") response else request(gatewayId, method, params)
+    val captureLease = leaseField.get(controller) as (ChatCacheScope?) -> GatewaySession.RequestLease?
+    val progressLease: (ChatCacheScope?) -> GatewaySession.RequestLease? = { gatewayScope ->
+      captureLease(gatewayScope)?.let { lease ->
+        GatewaySession.RequestLease(
+          endpointStableId = lease.endpointStableId,
+          isCurrentImpl = lease::isCurrent,
+          commitIfCurrentImpl = lease::commitIfCurrent,
+        ) { method, params, timeoutMs, withEnqueue ->
+          if (method == "progressCard.get") {
+            withEnqueue {}
+            response
+          } else {
+            lease.request(method, params, timeoutMs, withEnqueue)
+          }
+        }
+      }
     }
     composeRule.runOnIdle {
-      requestField.set(controller, progressRequest)
+      leaseField.set(controller, progressLease)
       controller.handleGatewayEvent(
         "progressCard.changed",
         """{"sessionKey":"${controller.sessionKey.value}","revision":1}""",
