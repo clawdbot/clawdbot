@@ -19,7 +19,31 @@ export async function installOpenAiTalkFixture(page: Page) {
     Object.defineProperty(navigator.mediaDevices, "getUserMedia", {
       configurable: true,
       value: async (constraints: MediaStreamConstraints) => {
-        const stream = await getUserMedia(constraints);
+        let stream: MediaStream;
+        // Chromium's fake capture can stall audio-only Talk startup; keep native video
+        // capture so camera dimensions and lifecycle assertions remain meaningful.
+        if (Boolean(constraints.audio) && !constraints.video) {
+          const context = new AudioContext();
+          stream = context.createMediaStreamDestination().stream;
+          const tracks = stream.getAudioTracks();
+          const [track] = tracks;
+          if (tracks.length !== 1 || !track) {
+            void context.close().catch(() => undefined);
+            throw new Error(`Expected one synthetic audio track, received ${tracks.length}`);
+          }
+          const stop = track.stop.bind(track);
+          let stopped = false;
+          track.stop = () => {
+            if (stopped) {
+              return;
+            }
+            stopped = true;
+            stop();
+            void context.close().catch(() => undefined);
+          };
+        } else {
+          stream = await getUserMedia(constraints);
+        }
         (
           window as Window & {
             openclawVideoTalkTracks?: MediaStreamTrack[];
