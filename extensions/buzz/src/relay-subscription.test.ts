@@ -199,6 +199,56 @@ describe("queryBuzzRelaySnapshot query capacity", () => {
     }
   });
 
+  it("rejects a query cancelled after a free slot was granted", async () => {
+    const { relay, prepareSubscription } = createRelay(async () => {});
+    const controller = new AbortController();
+
+    // Capacity is free, so the lease resolves without queueing -- but awaiting it
+    // still yields, and the abort lands in that gap.
+    const pending = queryBuzzRelaySnapshot(
+      snapshotParams(relay, { signal: controller.signal, abortMessage: "query aborted" }),
+    );
+    controller.abort(new Error("gateway shutting down"));
+
+    await expect(pending).rejects.toThrow("gateway shutting down");
+    expect(prepareSubscription).not.toHaveBeenCalled();
+    // The slot must come back, or the reserve leaks one per cancelled turn.
+    const afterwards = [];
+    for (let index = 0; index < BUZZ_MAX_CONCURRENT_RELAY_QUERIES; index += 1) {
+      afterwards.push(await acquireBuzzQueryLease(relay, { wait: false }));
+    }
+    expect(afterwards.every((release) => release !== null)).toBe(true);
+    for (const release of afterwards) {
+      release?.();
+    }
+  });
+
+  it("rejects a query cancelled between the slot hand-off and the subscription", async () => {
+    const { relay, prepareSubscription } = createRelay(async () => {});
+    const held = [];
+    for (let index = 0; index < BUZZ_MAX_CONCURRENT_RELAY_QUERIES; index += 1) {
+      held.push(await acquireBuzzQueryLease(relay));
+    }
+    const controller = new AbortController();
+
+    const pending = queryBuzzRelaySnapshot(
+      snapshotParams(relay, { signal: controller.signal, abortMessage: "query aborted" }),
+    );
+    await Promise.resolve();
+    // Hand the queued caller its slot and let the lease's own abort check pass,
+    // so the cancellation lands in the gap the caller's `await` leaves open.
+    held[0]?.();
+    await Promise.resolve();
+    controller.abort(new Error("gateway shutting down"));
+
+    await expect(pending).rejects.toThrow("gateway shutting down");
+    expect(prepareSubscription).not.toHaveBeenCalled();
+
+    for (const release of held.slice(1)) {
+      release?.();
+    }
+  });
+
   it("holds its query slot until a timed-out subscription actually closes", async () => {
     let releaseSend: (() => void) | undefined;
     const { close, relay } = createRelay(

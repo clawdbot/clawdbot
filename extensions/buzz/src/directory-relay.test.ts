@@ -225,6 +225,9 @@ describe("Buzz directory relay", () => {
       signal: abort.signal,
     });
 
+    // Let the subscription open first: this covers cleanup deferred to EOSE for
+    // an already-open request, not the abort that now precedes one.
+    await vi.waitFor(() => expect(handlers).toBeDefined());
     abort.abort(new Error("stop"));
     await expect(query).rejects.toThrow("stop");
     expect(close).not.toHaveBeenCalled();

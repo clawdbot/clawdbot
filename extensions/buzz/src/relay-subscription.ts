@@ -133,6 +133,12 @@ export async function queryBuzzRelaySnapshot<TResult>(
   }
   const cleanup: PendingSnapshotCleanup = {};
   try {
+    // Awaiting the lease yields even when a slot was free, so an abort can land
+    // between the grant and this continuation. Re-check before opening a relay
+    // request, and inside this `try` so `finally` still returns the slot.
+    if (params.signal?.aborted) {
+      throw params.signal.reason ?? new Error(params.abortMessage);
+    }
     return await runBuzzRelaySnapshot(params, cleanup);
   } finally {
     // A timed-out lookup closes its subscription only once its REQ frame has
