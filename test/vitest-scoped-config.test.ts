@@ -670,6 +670,7 @@ describe("scoped vitest configs", () => {
     );
     expect(sharedConfig.exclude).toEqual(expect.arrayContaining(scopedIsolatedFiles));
     expect(isolatedConfig.include).toEqual(scopedIsolatedFiles);
+    expect(isolatedConfig.fileParallelism).toBe(false);
     expect(isolatedConfig.isolate).toBe(true);
     expect(isolatedConfig.runner).toBeUndefined();
   });
