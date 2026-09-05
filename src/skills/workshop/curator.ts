@@ -239,23 +239,3 @@ export function registerSkillUsageTracking(options: OpenClawStateDatabaseOptions
     { include: ["skill.used"] },
   );
 }
-
-export function clearSkillUsageForRemovedSkills(
-  skillFiles: readonly string[],
-  options: OpenClawStateDatabaseOptions = {},
-): void {
-  if (skillFiles.length === 0) {
-    return;
-  }
-  runOpenClawStateWriteTransaction(({ db }) => {
-    const kysely = getNodeSqliteKysely<CuratorDatabase>(db);
-    executeSqliteQuerySync(
-      db,
-      kysely.deleteFrom("skill_usage").where(
-        "skill_file",
-        "in",
-        skillFiles.map((skillFile) => canonicalizePath(skillFile)),
-      ),
-    );
-  }, options);
-}

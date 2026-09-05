@@ -1,6 +1,5 @@
 import { afterEach, describe, expect, it } from "vitest";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
-import type { SkillCollectionReviewResult } from "../../skills/workshop/collection-review-state.js";
 import { openOpenClawStateDatabase } from "../../state/openclaw-state-db.js";
 import { createOpenClawTestState } from "../../test-utils/openclaw-test-state.js";
 import { createTrackedTempDirs } from "../../test-utils/tracked-temp-dirs.js";
@@ -12,7 +11,12 @@ const cleanups: Array<() => Promise<void>> = [];
 function recordSkillCollectionReviewHistory(
   agentId: string,
   time: number,
-  result: SkillCollectionReviewResult,
+  result: {
+    backupId: string;
+    kept: string[];
+    written: string[];
+    dropped: Array<{ name: string; reason: string }>;
+  },
   options: { env: NodeJS.ProcessEnv },
 ) {
   openOpenClawStateDatabase(options)

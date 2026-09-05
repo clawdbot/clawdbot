@@ -23,7 +23,7 @@ describe("collection review prompt", () => {
         (skill_file, skill_key, skill_name, skill_source, first_used_at_ms, last_used_at_ms, use_count, last_agent_id)
         VALUES (?, ?, ?, ?, ?, ?, ?, ?)`)
         .run(
-          path.join(root, files[0]),
+          path.join(root, "skill-0/SKILL.md"),
           "skill-0",
           "skill-0",
           "openclaw-workshop",

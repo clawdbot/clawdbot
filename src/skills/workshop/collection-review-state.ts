@@ -24,12 +24,15 @@ type SkillCuratorState = {
   lastAttemptAtMs: number;
   lastSuccessAtMs: number | null;
   lastError: string | null;
-  lastResult: Record<string, unknown>;
+  lastResult: {
+    collectionReviews?: Record<string, SkillCollectionReviewStatus>;
+    experienceReviews?: Record<string, SkillExperienceReviewStatus>;
+  };
 };
 
 type SkillCollectionReviewOutcome = SkillCollectionReviewResult & { createTime: number };
 
-export type SkillCollectionReviewResult = {
+type SkillCollectionReviewResult = {
   backupId: string;
   kept: string[];
   written: string[];
@@ -54,24 +57,11 @@ function experienceReviewKey(agentId: string, workspaceDir: string): string {
   return sha256Hex(`${agentId}\0${path.resolve(workspaceDir)}`);
 }
 
-function reviewMap<T>(state: Record<string, unknown>, field: string): Record<string, T> {
-  // These are retained collection records and entries from the experience-review writer.
-  return (asNullableRecord(state[field]) ?? {}) as Record<string, T>;
-}
-
-function readReviewState(options: OpenClawStateDatabaseOptions): Record<string, unknown> {
-  return (
-    asNullableRecord(
-      readConfigMachineState<SkillCuratorState>("skills.curatorState", options)?.lastResult,
-    ) ?? {}
-  );
-}
-
 export function readSkillReviewOutcomes(options: OpenClawStateDatabaseOptions = {}) {
-  const state = readReviewState(options);
+  const state = readConfigMachineState<SkillCuratorState>("skills.curatorState", options);
   return {
-    collectionReviews: reviewMap<SkillCollectionReviewStatus>(state, "collectionReviews"),
-    experienceReviews: reviewMap<SkillExperienceReviewStatus>(state, "experienceReviews"),
+    collectionReviews: state?.lastResult.collectionReviews ?? {},
+    experienceReviews: state?.lastResult.experienceReviews ?? {},
   };
 }
 
@@ -85,7 +75,7 @@ export function recordSkillExperienceReviewOutcome(
   updateConfigMachineState<SkillCuratorState>(
     "skills.curatorState",
     (current) => {
-      const state = asNullableRecord(current?.lastResult) ?? {};
+      const state = current?.lastResult;
       return {
         lastAttemptAtMs: 0,
         lastSuccessAtMs: null,
@@ -94,7 +84,7 @@ export function recordSkillExperienceReviewOutcome(
         lastResult: {
           ...state,
           experienceReviews: {
-            ...asNullableRecord(state.experienceReviews),
+            ...state?.experienceReviews,
             [entryKey]: review,
           },
         },

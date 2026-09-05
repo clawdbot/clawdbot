@@ -120,8 +120,8 @@ files. Zero recorded use alone never justifies removal.
 
 The file tools stay rooted at the Workshop directory. Shell commands use the
 operator's existing cron execution and approval policy; enabling review does not
-grant additional shell access. With the default policy and no approval client,
-shell commands are denied. File discovery does not need a shell.
+grant additional shell access. An approval-required policy can refuse unattended
+shell commands; a full-access policy permits them. File discovery does not need a shell.
 
 Reviews require the embedded runtime. If an enabled sandbox has
 `workspaceAccess: "ro"` or `"none"`, the turn refuses to run rather than editing
