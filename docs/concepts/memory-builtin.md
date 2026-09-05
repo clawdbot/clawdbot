@@ -120,9 +120,26 @@ When the index identity reports an OpenClaw chunking-implementation change,
 a normal or CLI search rebuilds it before returning results. The rebuild uses
 the agent's current embedding settings; status inspection remains read-only.
 
-Search-triggered maintenance applies pending memory and session changes
-incrementally while searches remain available. A failed full rebuild retains
-its full-retry state; ordinary dirty content does not itself force a rebuild.
+Resident searches use the published index without starting ordinary source-wide
+reconciliation. File watchers and session indexing continue to apply pending
+changes. A lifecycle safety sweep recovers missed memory events and pending
+session changes: the first sweep is scheduled after 60 seconds, with subsequent
+sweeps scheduled five minutes after the previous sweep finishes. Active watcher,
+query, sync, or maintenance work defers the sweep by 30 seconds. Sustained
+activity can keep deferring it, so these intervals are not a guaranteed freshness
+deadline.
+
+Standalone CLI searches inspect source state and await any required refresh
+before reading results. This includes file additions, edits, deletions, newly
+discovered transcripts, and full retries, even when ordinary changes and a full
+retry affect different sources. Failed refreshes retain the existing stale-result
+reporting.
+
+Search-time recovery remains available for empty-index bootstrap, missing index
+identity metadata, and OpenClaw chunking-implementation changes. A failed full
+rebuild retains its full-retry state; resident searches can retry it in the
+background, while CLI searches wait for it. Ordinary dirty content does not itself
+force a rebuild.
 
 Full reindexes build a replacement in a temporary database and publish the
 memory tables atomically. Concurrent searches and status reads keep using the
