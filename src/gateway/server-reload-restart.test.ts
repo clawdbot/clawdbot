@@ -1,7 +1,7 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import type { GatewayReloadPlan } from "./config-reload.js";
-import { nextGatewayReloadGeneration } from "./server-reload-contracts.js";
+import { nextGatewayReloadGeneration } from "./server-reload-generation.js";
 import { createGatewayRestartCoordinator } from "./server-reload-restart.js";
 
 const zeroActiveCounts = {

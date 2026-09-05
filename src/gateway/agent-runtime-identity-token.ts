@@ -24,7 +24,7 @@ import {
   withAgentRuntimeExecutionLineageRedemption,
 } from "./agent-runtime-execution-lineage.js";
 import type { AgentRuntimeSessionSpawnContext } from "./agent-runtime-session-spawn-context.js";
-import type { CronCreatorAuthorityGrant } from "./cron-creator-authority-grant.js";
+import type { CronCreatorAuthorityGrant } from "./cron-creator-authority-grant.types.js";
 import {
   resolveMessageActionTurnCapability,
   type AgentRuntimeMessageActionContext,
@@ -60,6 +60,7 @@ export type AgentRuntimeIdentity = {
   cronToolsAllowCapture?: "final-executable-surface";
   cronExecToolTarget?: { host: "gateway"; ask?: "always" };
   cronCreatorAuthorityGrant?: CronCreatorAuthorityGrant;
+  cronManagementGrant?: CronCreatorAuthorityGrant;
   sessionSpawnContext?: AgentRuntimeSessionSpawnContext;
 };
 
@@ -74,25 +75,8 @@ export type AgentRuntimeDelegatedAuthority = AgentRunDelegatedAuthority &
 
 export type { AgentRuntimeSessionSpawnContext } from "./agent-runtime-session-spawn-context.js";
 
-type AgentRuntimeIdentityTokenPayload = {
+type AgentRuntimeIdentityTokenPayload = Omit<AgentRuntimeIdentity, "kind"> & {
   kind: typeof AGENT_RUNTIME_IDENTITY_TOKEN_KIND;
-  agentId: string;
-  sessionKey: string;
-  operationalRunInstance: OperationalRunInstanceRef;
-  delegatedAuthority: AgentRuntimeDelegatedAuthority;
-  approvalOwnerPluginId?: string;
-  executionIdentity?: ExecutionIdentityAdmissionToken;
-  turnSourceChannel?: string;
-  turnSourceLocal?: true;
-  turnSourceTo?: string;
-  turnSourceAccountId?: string;
-  turnSourceThreadId?: string | number;
-  messageActionContext?: AgentRuntimeMessageActionContext;
-  cronSelfManagementContext?: AgentRuntimeCronSelfManagementContext;
-  cronToolsAllowCapture?: "final-executable-surface";
-  cronExecToolTarget?: { host: "gateway"; ask?: "always" };
-  cronCreatorAuthorityGrant?: CronCreatorAuthorityGrant;
-  sessionSpawnContext?: AgentRuntimeSessionSpawnContext;
   executionLineageHandoffId?: string;
 };
 
@@ -227,6 +211,7 @@ const agentRuntimeIdentityTokenPayloadSchema = z.object({
     .object({ host: z.literal("gateway"), ask: z.literal("always").optional() })
     .optional(),
   cronCreatorAuthorityGrant: cronCreatorAuthorityGrantSchema.optional(),
+  cronManagementGrant: cronCreatorAuthorityGrantSchema.optional(),
   sessionSpawnContext: sessionSpawnContextSchema.optional(),
   executionLineageHandoffId: normalizedRequiredStringSchema.optional(),
 });
@@ -406,6 +391,7 @@ function decodePayload(value: string, nowMs: number): AgentRuntimeIdentityTokenP
       ...(cronToolsAllowCapture ? { cronToolsAllowCapture } : {}),
       ...(cronExecToolTarget ? { cronExecToolTarget } : {}),
       ...(cronCreatorAuthorityGrant ? { cronCreatorAuthorityGrant } : {}),
+      ...(raw.cronManagementGrant ? { cronManagementGrant: raw.cronManagementGrant } : {}),
       ...(executionIdentity ? { executionIdentity } : {}),
     };
   } catch {
@@ -429,6 +415,7 @@ export type AgentRuntimeIdentityTokenParams = {
   cronToolsAllowCapture?: "final-executable-surface";
   cronExecToolTarget?: { host: "gateway"; ask?: "always" };
   cronCreatorAuthorityGrant?: CronCreatorAuthorityGrant;
+  cronManagementGrant?: CronCreatorAuthorityGrant;
   sessionSpawnContext?: AgentRuntimeSessionSpawnContext;
   executionLineageHandoffId?: string;
   workerTurnClaim?: WorkerSessionTurnClaim;
@@ -546,6 +533,7 @@ function prepareAgentRuntimeIdentityTokenPayload(params: AgentRuntimeIdentityTok
     ...(params.cronCreatorAuthorityGrant
       ? { cronCreatorAuthorityGrant: params.cronCreatorAuthorityGrant }
       : {}),
+    ...(params.cronManagementGrant ? { cronManagementGrant: params.cronManagementGrant } : {}),
     ...(sessionSpawnContext ? { sessionSpawnContext } : {}),
     ...(executionLineageHandoffId ? { executionLineageHandoffId } : {}),
     ...(params.executionIdentityToken?.runId === operationalRunId
@@ -633,6 +621,7 @@ export async function verifyAgentRuntimeIdentityToken(
       ? { cronToolsAllowCapture: payload.cronToolsAllowCapture }
       : {}),
     ...(payload.cronExecToolTarget ? { cronExecToolTarget: payload.cronExecToolTarget } : {}),
+    ...(payload.cronManagementGrant ? { cronManagementGrant: payload.cronManagementGrant } : {}),
     ...(payload.cronCreatorAuthorityGrant
       ? { cronCreatorAuthorityGrant: payload.cronCreatorAuthorityGrant }
       : {}),

@@ -314,27 +314,27 @@ describe("directive parsing", () => {
 
   it("preserves the trailing /model --session scope for native slash commands", () => {
     const model = parseInlineSessionDirectives("/model openai/gpt-4.1-mini --session", {
-      nativeCommand: "model",
+      command: { kind: "native", name: "model" },
     });
 
     expect(model.cleaned).toBe("");
     expect(model.rawModelDirective).toBe("openai/gpt-4.1-mini");
     expect(model.modelScope).toBe("session");
-    expect(model.nativeCommand).toEqual({ name: "model" });
+    expect(model.command).toEqual({ name: "model" });
   });
 
   it.each(["--runtime codex -s", "-s --runtime codex", "runtime=codex -s", "-s harness=codex"])(
     "parses /model runtime and session options from %s",
     (options) => {
       const model = parseInlineSessionDirectives(`/model openai/gpt-4.1-mini ${options}`, {
-        nativeCommand: "model",
+        command: { kind: "native", name: "model" },
       });
 
       expect(model.cleaned).toBe("");
       expect(model.rawModelDirective).toBe("openai/gpt-4.1-mini");
       expect(model.rawModelRuntime).toBe("codex");
       expect(model.modelScope).toBe("session");
-      expect(model.nativeCommand).toEqual({ name: "model" });
+      expect(model.command).toEqual({ name: "model" });
     },
   );
 
@@ -353,13 +353,13 @@ describe("directive parsing", () => {
   it("rejects duplicate native /model options through unconsumed arguments", () => {
     const model = parseInlineSessionDirectives(
       "/model openai/gpt-4.1-mini --runtime codex --runtime acp",
-      { nativeCommand: "model" },
+      { command: { kind: "native", name: "model" } },
     );
 
     expect(model.rawModelDirective).toBe("openai/gpt-4.1-mini");
     expect(model.rawModelRuntime).toBe("codex");
     expect(model.cleaned).toBe("--runtime acp");
-    expect(model.nativeCommand).toEqual({
+    expect(model.command).toEqual({
       name: "model",
       unconsumedArguments: "--runtime acp",
     });
@@ -386,7 +386,7 @@ describe("directive parsing", () => {
     ["--global", "global"],
   ] as const)("preserves explicit /model %s scope", (option, scope) => {
     const model = parseInlineSessionDirectives(`/model openai/gpt-4.1-mini ${option}`, {
-      nativeCommand: "model",
+      command: { kind: "native", name: "model" },
     });
 
     expect(model.cleaned).toBe("");
@@ -576,11 +576,13 @@ describe("native directive commands own their complete argument boundary", () =>
   ])(
     "preserves the invalid first argument for native /$command",
     ({ body, command, invalidArgument, rawKey, trailingArguments }) => {
-      const parsed = parseInlineSessionDirectives(body, { nativeCommand: command });
+      const parsed = parseInlineSessionDirectives(body, {
+        command: { kind: "native", name: command },
+      });
 
       expect(parsed[rawKey]).toBe(invalidArgument);
       expect(parsed.cleaned).toBe(trailingArguments);
-      expect(parsed.nativeCommand).toEqual({
+      expect(parsed.command).toEqual({
         name: command,
         unconsumedArguments: trailingArguments,
       });
@@ -589,18 +591,20 @@ describe("native directive commands own their complete argument boundary", () =>
 
   it("retains unexpected arguments after a valid native queue mode", () => {
     const parsed = parseInlineSessionDirectives("/queue collect please help", {
-      nativeCommand: "queue",
+      command: { kind: "native", name: "queue" },
     });
 
     expect(parsed.queueMode).toBe("collect");
-    expect(parsed.nativeCommand).toEqual({
+    expect(parsed.command).toEqual({
       name: "queue",
       unconsumedArguments: "please help",
     });
   });
 
   it("does not interpret another directive inside native command arguments", () => {
-    const parsed = parseInlineSessionDirectives("/queue /think high", { nativeCommand: "queue" });
+    const parsed = parseInlineSessionDirectives("/queue /think high", {
+      command: { kind: "native", name: "queue" },
+    });
 
     expect(parsed.hasQueueDirective).toBe(true);
     expect(parsed.rawQueueMode).toBe("/think");
@@ -611,7 +615,7 @@ describe("native directive commands own their complete argument boundary", () =>
     const parsed = parseInlineSessionDirectives("/think about my deployment plan");
 
     expect(parsed.rawThinkLevel).toBeUndefined();
-    expect(parsed.nativeCommand).toBeUndefined();
+    expect(parsed.command).toBeUndefined();
     expect(parsed.cleaned).toBe("about my deployment plan");
   });
 });

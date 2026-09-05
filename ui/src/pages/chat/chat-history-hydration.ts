@@ -22,12 +22,12 @@ import {
   clearHistoryCursor,
 } from "./chat-history-snapshot.ts";
 import {
-  chatHistoryRequests,
   beginHistoryRequest,
   ownsHistoryRequest,
   acceptsHistoryResult,
   resetChatHistoryProjection,
   setChatError,
+  setChatHistoryLoad,
 } from "./chat-history-state.ts";
 import {
   materializeVisibleAssistantStreamMessages,
@@ -50,6 +50,7 @@ import {
   recordControlUiPerformanceEvent,
   roundedControlUiDurationMs,
 } from "./performance.ts";
+import { consumeChatRouteStartup } from "./route-startup.ts";
 import { applySessionMessagePayload } from "./session-message-apply.ts";
 import { rolloverChatStream } from "./stream-causal-boundary.ts";
 import {
@@ -119,18 +120,22 @@ export async function hydrateChatHistory(
   try {
     const requestModeKey = deltaCursor === undefined ? "page" : `cursor:${deltaCursor}`;
     const requestKey = `${requestKeyPrefix}${requestModeKey}`;
-    let response = await requestSharedHistory(
-      client,
-      requestKey,
-      method,
-      sessionKey,
-      requestAgentId,
-      state,
-      () => acceptsHistoryResult(state, ownership),
-      deltaCursor,
-      state.sessions?.canonicalListRevision,
-      inputRunIds,
-    );
+    const startup =
+      method === "chat.startup" ? consumeChatRouteStartup(client, sessionKey) : undefined;
+    let response =
+      (inputRunIds.length === 0 ? startup : undefined) ??
+      (await requestSharedHistory(
+        client,
+        requestKey,
+        method,
+        sessionKey,
+        requestAgentId,
+        state,
+        () => acceptsHistoryResult(state, ownership),
+        deltaCursor,
+        state.sessions?.canonicalListRevision,
+        inputRunIds,
+      ));
     if (!acceptsHistoryResult(state, ownership)) {
       recordChatHistoryTiming(state, "stale", startedAtMs, {
         requestSessionKey: sessionKey,
@@ -417,7 +422,7 @@ export async function hydrateChatHistory(
       state.chatThinkingLevel = null;
       state.chatVerboseLevel = null;
     }
-    chatHistoryRequests(state).historyLoad = {
+    setChatHistoryLoad(state, {
       phase: "failed",
       sessionKey,
       requestAgentId,
@@ -426,7 +431,7 @@ export async function hydrateChatHistory(
         ? formatMissingOperatorReadScopeMessage("existing chat history")
         : formatUiError(err),
       retryable: err instanceof GatewayRequestError && err.retryable,
-    };
+    });
     state.requestUpdate?.();
   } finally {
     if (ownsHistoryRequest(state, ownership)) {

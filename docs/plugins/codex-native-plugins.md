@@ -23,7 +23,7 @@ working.
 - `plugins.entries.codex.enabled` is `true`.
 - `plugins.entries.codex.config.codexPlugins.enabled` is `true`.
 - Codex app-server reports `0.149.0` or newer. The official plugin ships
-  `@openai/codex` `0.153.0`; newer custom, remote, and macOS desktop-owned
+  `@openai/codex` `0.153.4`; newer custom, remote, and macOS desktop-owned
   binaries continue with a compatibility warning and normal runtime validation.
 - The target Codex app-server can see the expected marketplace, plugin, and
   app inventory.
@@ -401,12 +401,16 @@ An app can be installed and authenticated but non-callable in the account-wide
 snapshot while `_default` is disabled. OpenClaw provisionally admits only
 ownership-proven, policy-allowed apps, creates the restrictive thread, and then
 rereads `app/installed` once with the resulting thread ID and
-`forceRefresh: false`. Codex must confirm each admitted app is enabled and
-callable under the thread's effective app, managed, workspace, and tool
-policies before the turn proceeds. If that attestation fails, the provisional
-thread is never bound or used. OpenClaw deletes a failed persistent provisional
-thread, unsubscribes a failed ephemeral thread, and retires the app-server
-connection if safe cleanup cannot be confirmed.
+`forceRefresh: false`. If the snapshot reports an app missing, disabled, or
+non-callable, OpenClaw logs one warning listing the unavailable apps and
+continues with the remaining tools. Codex still enforces the thread's effective
+app, managed, workspace, and tool policies. An unavailable optional app does
+not block unrelated chat or heartbeat runs.
+
+If the snapshot request itself fails, the provisional thread is never bound
+or used. OpenClaw deletes a failed persistent provisional thread, unsubscribes
+a failed ephemeral thread, and retires the app-server connection if safe
+cleanup cannot be confirmed.
 
 `destructive_enabled` on each app comes from the effective global or
 per-plugin `allow_destructive_actions` policy; `true`, `"auto"`, and `"ask"`

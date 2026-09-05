@@ -88,6 +88,7 @@ export async function deliverOutboundPayloadsCore(
       gifPlayback: params.gifPlayback,
       forceDocument: params.forceDocument,
       silent: params.silent,
+      abortSignal,
       mediaAccess: resolveMediaAccess(mediaSources),
       gatewayClientScopes: params.gatewayClientScopes,
       conversationReadOrigin: params.conversationReadOrigin,

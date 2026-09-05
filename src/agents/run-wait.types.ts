@@ -16,4 +16,5 @@ export type AgentWaitResult = {
   timeoutPhase?: AgentRunTimeoutPhase;
   providerStarted?: boolean;
   terminalReply?: AgentRunTerminalReplySnapshot;
+  sourceReplyDelivered?: true;
 };

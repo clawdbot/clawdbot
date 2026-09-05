@@ -36,7 +36,7 @@ type ContextSessionNavigationTargetParams<TRouteId extends string> = {
   sessionKey: string;
   agentId?: string;
   fallbackAgentId?: never;
-  basePath?: never;
+  basePath?: string;
   row?: never;
   mainKey?: never;
   shortIdLength?: number;
@@ -133,7 +133,7 @@ export function sessionNavigationTarget<TRouteId extends string>(
       hello: context.gateway.snapshot.hello,
     };
     fallbackAgentId = resolveSessionNavigationAgentId(context, params.agentId);
-    basePath = context.basePath;
+    basePath = params.basePath ?? context.basePath;
     mainKey = resolveUiConfiguredMainKey(defaults);
     row = findUiSessionRow(context, sessionKey, fallbackAgentId);
   } else {

@@ -235,7 +235,9 @@ State is stored in the per-agent SQLite auth state under `usageStats`:
 
 ## Billing disables
 
-Billing/credit failures (for example "insufficient credits" / "credit balance too low") are treated as failover-worthy, but they're usually not transient. Instead of a short cooldown, OpenClaw marks the profile as **disabled** (with a longer backoff) and rotates to the next profile/provider.
+Billing/credit failures (for example "insufficient credits" / "credit balance too low") are treated as failover-worthy. OpenClaw marks the credential as **disabled** for ten minutes initially and rotates to the next eligible profile/provider.
+
+Configured inline API keys cannot retry during an active disable window. After the window expires, they become eligible again; another billing failure starts a new ten-minute window. Stored auth profiles can also recover through bounded primary-provider probes during a disable window. Recharging does not itself clear persisted state, and upgrading leaves an already-active window at its existing deadline.
 
 <Note>
 Not every billing-shaped response is `402`, and not every HTTP `402` lands here. OpenClaw keeps explicit billing text in the billing lane even when a provider returns `401` or `403` instead, but provider-specific matchers stay scoped to the provider that owns them (for example OpenRouter `403 Key limit exceeded`).
@@ -243,7 +245,7 @@ Not every billing-shaped response is `402`, and not every HTTP `402` lands here.
 Meanwhile temporary `402` usage-window and organization/workspace spend-limit errors are classified as `rate_limit` when the message looks retryable (for example `weekly usage limit exhausted`, `daily limit reached, resets tomorrow`, or `organization spending limit exceeded`). Those stay on the short cooldown/failover path instead of the long billing-disable path.
 </Note>
 
-High-confidence permanent-auth failures (revoked/deactivated keys, deactivated workspaces) get a similar disabled lane, but recover much sooner than billing since some providers surface auth-looking payloads transiently during incidents.
+High-confidence permanent-auth failures (revoked/deactivated keys, deactivated workspaces) use the same ten-minute initial disable window because some providers surface auth-looking payloads transiently during incidents.
 
 State is stored in the per-agent SQLite auth state:
 
@@ -269,6 +271,8 @@ Provider-busy signals such as `ModelNotReadyException` land in the overloaded bu
 The embedded failover controller owns transient retries, including overloads and server errors. `retry.provider.maxRetries` sets the retry budget (default: 3), with jittered backoff, provider retry pacing, and a fixed 90-second retry window. Once that budget or window is exhausted, recovery proceeds to profile rotation, configured model fallback, or a visible error. Provider SDKs and the reply runner do not add separate replay loops. Retry and any fallback winner remain turn-local, and replay-unsafe attempts are not retried.
 
 Visible failure messages preserve the provider's HTTP status independently of retry classification. A provider HTTP 500 remains a server error in the final reply, even when recovery groups it with timeout-shaped failures. Raw provider response details stay out of that reply.
+
+Provider overloads and HTTP 5xx failures use transient recovery guidance. A message saying only that a model is "not available" does not establish that it was retired or that your configuration needs to change. Configuration guidance requires a missing-model response or an explicit account/model restriction. Codex turn errors retain their overload and HTTP-status information even after Codex stops retrying the turn.
 
 When a run starts from the configured default primary, a cron job primary, an agent primary with explicit fallbacks, or an auto-selected fallback override, OpenClaw can walk the matching configured fallback chain. Agent primaries without explicit fallbacks and explicit user selections (for example `/model ollama/qwen3.5:27b`, the model picker, `sessions.patch`, or one-off CLI provider/model overrides) are strict: if that provider/model is unreachable or fails before producing a reply, OpenClaw reports the failure instead of answering from an unrelated fallback.
 

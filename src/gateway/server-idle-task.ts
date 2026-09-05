@@ -1,14 +1,11 @@
 import {
+  getGatewayRestartDrainSignal,
   isGatewayRestartDrainError,
-  runWithGatewayIndependentRootWorkAdmission,
+  tryBeginGatewayIndependentRootWorkAdmission,
 } from "../process/gateway-work-admission.js";
 
-type GatewayIdleTaskLogger = {
-  warn: (message: string) => void;
-};
-
 export type GatewayIdleTaskHandle = {
-  stop: () => void;
+  stop: () => void | Promise<void>;
 };
 
 /** Schedules one low-priority task, retrying until the gateway has no active request roots. */
@@ -18,40 +15,54 @@ export function scheduleGatewayIdleTask(params: {
   isClosing: () => boolean;
   isBusy: () => boolean;
   run: () => Promise<void>;
-  log: GatewayIdleTaskLogger;
+  log: { warn: (message: string) => void };
   errorMessage: string;
 }): GatewayIdleTaskHandle {
   let stopped = false;
   let timer: ReturnType<typeof setTimeout> | null = null;
+  let running: Promise<void> | undefined;
+  const isClosing = () => stopped || params.isClosing() || getGatewayRestartDrainSignal().aborted;
+  const run = async () => {
+    if (isClosing()) {
+      return;
+    }
+    // Newly admitted request work takes priority over maintenance.
+    if (params.isBusy()) {
+      schedule(params.retryDelayMs);
+    } else {
+      await params.run();
+    }
+  };
   const schedule = (delayMs: number) => {
-    if (stopped || params.isClosing()) {
+    if (isClosing()) {
       return;
     }
     timer = setTimeout(() => {
       timer = null;
-      if (stopped || params.isClosing()) {
+      if (isClosing()) {
         return;
       }
-      if (params.isBusy()) {
+      // Optional work retries admission instead of waiting behind a suspend fence
+      // that shutdown may never reopen.
+      const admission = params.isBusy()
+        ? null
+        : tryBeginGatewayIndependentRootWorkAdmission("idle-task");
+      if (!admission) {
         schedule(params.retryDelayMs);
         return;
       }
-      void runWithGatewayIndependentRootWorkAdmission(async () => {
-        if (stopped || params.isClosing()) {
-          return;
-        }
-        // Recheck inside admission so work that arrived while this task was
-        // joining the root set gets priority over non-urgent maintenance.
-        if (params.isBusy()) {
-          schedule(params.retryDelayMs);
-          return;
-        }
-        await params.run();
-      }, "idle-task").catch((error: unknown) => {
-        if (!isGatewayRestartDrainError(error)) {
-          params.log.warn(`${params.errorMessage}: ${String(error)}`);
-        }
-      });
+      // Publish the join before callbacks can synchronously initiate shutdown.
+      running = Promise.resolve()
+        .then(() => admission.run(run))
+        .catch((error: unknown) => {
+          if (!isGatewayRestartDrainError(error)) {
+            params.log.warn(`${params.errorMessage}: ${String(error)}`);
+          }
+        })
+        .finally(() => {
+          admission.release();
+          running = undefined;
+        });
     }, delayMs);
     timer.unref?.();
   };
@@ -63,6 +74,7 @@ export function scheduleGatewayIdleTask(params: {
         clearTimeout(timer);
         timer = null;
       }
+      return running;
     },
   };
 }

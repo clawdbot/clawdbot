@@ -432,23 +432,16 @@ function handleSessionsChangedEvent(
       supersedeInFlight: true,
     }).finally(() => state.requestUpdate?.());
   }
-  if (
-    result.applied &&
-    event &&
-    runIdBeforeApply &&
-    matchesChat &&
+  // The session capability owns roster invalidation, including unapplied events.
+  // A pane refresh here bypasses its debounce and multiplies reads across split panes.
+  if (result.applied && event && runIdBeforeApply && matchesChat) {
     finishSessionMessageRunReconcile(
       state,
       event.key,
       event.clientRunId ?? event.runId ?? runIdBeforeApply,
       result.row,
       presentation,
-    )
-  ) {
-    return;
-  }
-  if (!result.applied && event?.isChatTurn !== true) {
-    void refreshCurrentChatSessionList(state);
+    );
   }
 }
 

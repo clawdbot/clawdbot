@@ -156,6 +156,8 @@ type RuntimeCreateSessionEntryParams = RuntimeCreateSessionEntryBaseParams &
       }
   );
 type RuntimeSessionStoreEntryPatchParams = RuntimeSessionStoreReadParams & {
+  /** Synchronous final ownership check executed inside the commit transaction. */
+  assertCommitAllowed?: () => void;
   fallbackEntry?: RuntimeSessionEntry;
   maintenanceConfig?: import("../../config/sessions/store-maintenance.js").ResolvedSessionMaintenanceConfigInput;
   preserveActivity?: boolean;

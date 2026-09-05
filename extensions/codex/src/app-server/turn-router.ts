@@ -69,11 +69,15 @@ export type CodexAppServerTurnRouter = {
     turnId: string;
     timeoutMs: number;
     signal?: AbortSignal;
+    onStarted?: () => void;
   }) => CodexNativeTurnCompletionWatch;
 };
 
 type CodexNativeTurnCompletionWatch = {
   completion: Promise<boolean>;
+  /** Native receipts and closure win over queued start/RPC promise callbacks. */
+  readonly state: "pending" | "confirmed" | "unconfirmed";
+  readonly settledSignal: AbortSignal;
   cancel: () => void;
 };
 
@@ -103,6 +107,7 @@ type Route = {
 type NativeTurnCompletionWatcher = {
   turnId: string;
   finish: (completed: boolean) => void;
+  onStarted?: () => void;
 };
 
 const routers = new WeakMap<CodexAppServerClient, ClientTurnRouter>();
@@ -191,43 +196,63 @@ class ClientTurnRouter implements CodexAppServerTurnRouter {
     turnId: string;
     timeoutMs: number;
     signal?: AbortSignal;
+    onStarted?: () => void;
   }): CodexNativeTurnCompletionWatch {
     this.assertActive();
     const threadId = requireId(options.threadId, "thread id");
     const turnId = requireId(options.turnId, "turn id");
     if (options.signal?.aborted) {
-      return { completion: Promise.resolve(false), cancel: () => {} };
+      return {
+        completion: Promise.resolve(false),
+        state: "unconfirmed",
+        settledSignal: AbortSignal.abort(),
+        cancel: () => {},
+      };
     }
     // Resume discovers the active turn only after its route starts buffering;
     // preserve an exact completion that arrived before the watcher could exist.
-    if (this.routes.get(threadId)?.completedNativeTurnIds.delete(turnId)) {
-      return { completion: Promise.resolve(true), cancel: () => {} };
+    if (this.routes.get(threadId)?.completedNativeTurnIds.has(turnId)) {
+      return {
+        completion: Promise.resolve(true),
+        state: "confirmed",
+        settledSignal: AbortSignal.abort(),
+        cancel: () => {},
+      };
     }
     const { promise: completion, resolve: settle } = createDeferred<boolean>();
+    const settlement = new AbortController();
     const watchers =
       this.nativeTurnCompletionWatchers.get(threadId) ?? new Set<NativeTurnCompletionWatcher>();
     this.nativeTurnCompletionWatchers.set(threadId, watchers);
-    let settled = false;
+    let state: CodexNativeTurnCompletionWatch["state"] = "pending";
     const finish = (completed: boolean) => {
-      if (settled) {
+      if (state !== "pending") {
         return;
       }
-      settled = true;
+      state = completed ? "confirmed" : "unconfirmed";
       watchers.delete(watcher);
       if (watchers.size === 0) {
         this.nativeTurnCompletionWatchers.delete(threadId);
       }
       clearTimeout(timeout);
       options.signal?.removeEventListener("abort", abort);
+      settlement.abort();
       settle(completed);
     };
-    const watcher = { turnId, finish };
+    const watcher = { turnId, finish, onStarted: options.onStarted };
     watchers.add(watcher);
     const timeout = setTimeout(() => finish(false), Math.max(1, options.timeoutMs));
     timeout.unref?.();
     const abort = () => finish(false);
     options.signal?.addEventListener("abort", abort, { once: true });
-    return { completion, cancel: () => finish(false) };
+    return {
+      completion,
+      settledSignal: settlement.signal,
+      get state() {
+        return state;
+      },
+      cancel: () => finish(false),
+    };
   }
 
   private dispose(cause?: Error): void {
@@ -353,6 +378,8 @@ class ClientTurnRouter implements CodexAppServerTurnRouter {
       for (const watcher of watchers) {
         if (watcher.turnId === scope.turnId && notification.method === "turn/completed") {
           watcher.finish(true);
+        } else if (watcher.turnId === scope.turnId && notification.method === "turn/started") {
+          watcher.onStarted?.();
         }
       }
     }
@@ -364,10 +391,16 @@ class ClientTurnRouter implements CodexAppServerTurnRouter {
       ...(scope.turnId ? { turnId: scope.turnId } : {}),
     };
     const receivedAtMs = Date.now();
-    if (route.gate !== "bound" && scope.turnId) {
+    if (scope.turnId && (route.gate !== "bound" || scope.turnId === route.turnId)) {
       if (notification.method === "turn/started") {
+        route.completedNativeTurnIds.delete(scope.turnId);
         route.observedNativeTurn = { id: scope.turnId, completed: false };
       } else if (notification.method === "turn/completed") {
+        // A bound route retains only its own terminal fact until the next arm.
+        // Cleanup can then confirm completion without trusting an interrupt error.
+        if (route.gate === "bound") {
+          route.completedNativeTurnIds.clear();
+        }
         route.completedNativeTurnIds.add(scope.turnId);
         if (
           !route.observedNativeTurn ||

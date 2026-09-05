@@ -1,9 +1,11 @@
 // Control UI tests cover debug behavior.
 import { render, type LitElement } from "lit";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { flattenTranslations } from "../../../../scripts/lib/control-ui-i18n-sync-plan.ts";
 import type { GatewayBrowserClient } from "../../api/gateway.ts";
 import type { ApplicationContext, ApplicationGatewaySnapshot } from "../../app/context.ts";
 import { i18n } from "../../i18n/index.ts";
+import { zh_CN } from "../../i18n/locales/zh-CN.ts";
 import { createStorageMock } from "../../test-helpers/storage.ts";
 import "./debug-overlay.ts";
 import "./debug-page.ts";
@@ -62,10 +64,15 @@ function deferred<T>() {
 
 function createDebugApplicationContext(
   request: (method: string) => Promise<unknown>,
+  phase: ApplicationGatewaySnapshot["phase"] = "connected",
 ): ApplicationContext {
   const client = { request } as unknown as GatewayBrowserClient;
   const gateway = {
-    snapshot: { phase: "connected", client } as ApplicationGatewaySnapshot,
+    snapshot: {
+      phase,
+      client: phase === "connected" ? client : null,
+      offlineStable: phase === "offline",
+    } as ApplicationGatewaySnapshot,
     eventLog: [],
     subscribe: () => () => undefined,
     subscribeEventLog: () => () => undefined,
@@ -128,6 +135,8 @@ function expectSnapshots(page: TestDebugPage, marker: string): void {
 
 function createProps(overrides: Partial<DebugProps> = {}): DebugProps {
   return {
+    connected: true,
+    offlineStable: false,
     loading: false,
     status: null,
     health: null,
@@ -167,6 +176,39 @@ afterEach(async () => {
 });
 
 describe("renderDebug", () => {
+  it("disables refresh and explains how to recover while disconnected", () => {
+    const container = document.createElement("div");
+    render(
+      renderDebug(
+        createProps({
+          connected: false,
+          offlineStable: true,
+        }),
+      ),
+      container,
+    );
+    expect(container.querySelector<HTMLButtonElement>("button")?.disabled).toBe(true);
+    expect(normalizedText(container.querySelector(".settings-section"))).toContain(
+      "Offline Connect to the Gateway to refresh diagnostics.",
+    );
+  });
+  it("shows in-card refresh progress without hiding last-good snapshots", () => {
+    const container = document.createElement("div");
+    render(
+      renderDebug(
+        createProps({
+          loading: true,
+          status: { version: "last-good" },
+        }),
+      ),
+      container,
+    );
+    expect(normalizedText(container.querySelector(".settings-section"))).toContain(
+      "Refreshing… Refreshing Gateway diagnostics.",
+    );
+    expect(container.textContent).toContain("last-good");
+  });
+
   it("keeps the security audit command styled as monospace", async () => {
     await i18n.setLocale("zh-CN");
     const container = document.createElement("div");
@@ -193,8 +235,14 @@ describe("renderDebug", () => {
       throw new Error("expected debug security audit command");
     }
     const status = container.querySelector(".settings-status");
+    const chinese = flattenTranslations(zh_CN);
     expect(status?.className).toContain("settings-status--warn");
-    expect(normalizedText(status)).toBe("1 个警告 · 2 条信息");
+    expect(normalizedText(status)).toBe(
+      [
+        chinese.get("debug.security.warnings")?.replace("{count}", "1"),
+        chinese.get("debug.security.info")?.replace("{count}", "2"),
+      ].join(" · "),
+    );
     expect(command.textContent).toBe("openclaw security audit --deep");
   });
 
@@ -261,6 +309,17 @@ describe("renderDebug", () => {
 });
 
 describe("DebugPage", () => {
+  it("does not report a transient Gateway reconnect as offline", async () => {
+    const request = vi.fn(async (method: string) => diagnosticResponse(method));
+    const page = document.createElement("openclaw-debug-page") as TestDebugPage;
+    page.context = createDebugApplicationContext(request, "reconnecting");
+    document.body.append(page);
+    await page.updateComplete;
+    const refresh = page.querySelector<HTMLButtonElement>("button");
+    expect(refresh?.disabled).toBe(true);
+    expect(normalizedText(page.querySelector(".settings-section"))).not.toContain("Offline");
+  });
+
   it.each([
     { label: "response", staleError: false },
     { label: "error", staleError: true },

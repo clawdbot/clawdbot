@@ -59,7 +59,7 @@ export function buildSkillWorkshopToolSchema(collectionOnly: boolean, proposalRe
             ? "inspect = read the exact operator-reviewed proposal; revise = update only that proposal with the run-bound expected revision hash."
             : collectionOnly
               ? SKILL_COLLECTION_ACTION_DESCRIPTION
-              : "create = new skill; read = existing live skill when complete content fits; prepare_patch = authorize one exact non-empty span and return bounded context, with only one prepared span active per skill; patch = targeted find-and-replace after read or prepare_patch; update = full-body rewrite; history = show up to 20 recent collection review outcomes and drop reasons; restore_collection = restore the collection backup retained by the last cleanup; revise = existing pending proposal; list/inspect discover pending proposals (not filesystem search); evaluate runs plugin evaluators for the exact draft; apply/reject/quarantine are explicit lifecycle actions; complete = finish an internal review when available.",
+              : "create = stage a pending proposal for a new skill; read = existing live skill when complete content fits; prepare_patch = authorize one exact non-empty span and return bounded context, with only one prepared span active per skill; patch = targeted find-and-replace after read or prepare_patch; update = stage a full-body rewrite; history = show up to 20 recent collection review outcomes and drop reasons; restore_collection = restore the collection backup retained by the last cleanup; revise = existing pending proposal; list/inspect discover pending proposals (not filesystem search); evaluate runs plugin evaluators for the exact draft; apply/reject/quarantine are explicit lifecycle actions; complete = finish an internal review when available.",
         },
       ),
       proposal_id: Type.Optional(
@@ -120,7 +120,7 @@ export function buildSkillWorkshopToolSchema(collectionOnly: boolean, proposalRe
       proposal_content: Type.Optional(
         Type.String({
           description:
-            "Complete final skill body for action=create or action=update, or when action=revise changes the body. Must be the full skill content ready to become the active SKILL.md — not a plan, diff, change description, or implementation notes. On revise, omit this field to preserve the current body. On update/revise, preserve all existing content except changes the user explicitly requested. Proposal frontmatter is added automatically. Keep under configured skills.workshop.maxSkillBytes; default max is 40000 bytes.",
+            "Complete final skill body for action=create or action=update, or when action=revise changes the body. Must be the full skill content ready for a later apply step — not a plan, diff, change description, or implementation notes. On revise, omit this field to preserve the current body. On update/revise, preserve unrelated existing content. Proposal frontmatter is added automatically. Keep under configured skills.workshop.maxSkillBytes; default max is 40000 bytes.",
         }),
       ),
       support_files: Type.Optional(

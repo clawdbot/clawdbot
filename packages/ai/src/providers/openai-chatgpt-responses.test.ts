@@ -371,37 +371,80 @@ describe("streamOpenAICodexResponses transport", () => {
     expect(connections).toBe(2);
   });
 
-  it("preserves max for GPT-5.6 simple Codex Responses requests", async () => {
+  it.each([
+    { id: "gpt-5.6-sol", withCatalog: true },
+    { id: "gpt-5.6-sol", withCatalog: false },
+    { id: "gpt-6-astra", withCatalog: true },
+    { id: "gpt-6-astra", withCatalog: false },
+  ])(
+    "preserves max for $id simple requests with catalog=$withCatalog",
+    async ({ id, withCatalog }) => {
+      let capturedPayload: Record<string, unknown> | undefined;
+      const stream = streamSimpleOpenAICodexResponses(
+        {
+          ...model,
+          id,
+          name: id,
+          contextWindow: 372_000,
+          ...(withCatalog ? { thinkingLevelMap: { xhigh: "xhigh", max: "max" } as const } : {}),
+        },
+        context,
+        {
+          apiKey: createJwt({
+            "https://api.openai.com/auth": {
+              chatgpt_account_id: "acct-1",
+            },
+          }),
+          reasoning: "max",
+          transport: "sse",
+          onPayload: (payload) => {
+            capturedPayload = payload as Record<string, unknown>;
+            throw new Error("stop after payload");
+          },
+        },
+      );
+
+      await stream.result();
+
+      expect(capturedPayload).toMatchObject({
+        reasoning: { effort: "max", summary: "auto" },
+      });
+    },
+  );
+
+  it.each([
+    { id: "gpt-6-astra", effort: "none", map: undefined, expected: undefined },
+    { id: "gpt-6-astra", effort: "none", map: { off: null }, expected: undefined },
+    { id: "gpt-6-astra", effort: "minimal", map: undefined, expected: "low" },
+    { id: "custom-reasoning", effort: "xhigh", map: undefined, expected: "xhigh" },
+    { id: "custom-reasoning", effort: "high", map: { high: "HIGH" }, expected: "HIGH" },
+  ] as const)("normalizes raw $id $effort with map=$map", async ({ id, effort, map, expected }) => {
     let capturedPayload: Record<string, unknown> | undefined;
-    const stream = streamSimpleOpenAICodexResponses(
+    const result = await streamOpenAICodexResponses(
       {
         ...model,
-        id: "gpt-5.6-sol",
-        name: "GPT-5.6 Sol",
-        contextWindow: 372_000,
-        thinkingLevelMap: { xhigh: "xhigh", max: "max" },
+        id,
+        name: id,
+        thinkingLevelMap: map,
       },
       context,
       {
         apiKey: createJwt({
-          "https://api.openai.com/auth": {
-            chatgpt_account_id: "acct-1",
-          },
+          "https://api.openai.com/auth": { chatgpt_account_id: "acct-1" },
         }),
-        reasoning: "max",
+        reasoningEffort: effort,
         transport: "sse",
         onPayload: (payload) => {
           capturedPayload = payload as Record<string, unknown>;
           throw new Error("stop after payload");
         },
       },
+    ).result();
+
+    expect(result.errorMessage).toBe("stop after payload");
+    expect(capturedPayload?.reasoning).toEqual(
+      expected ? { effort: expected, summary: "auto" } : undefined,
     );
-
-    await stream.result();
-
-    expect(capturedPayload).toMatchObject({
-      reasoning: { effort: "max", summary: "auto" },
-    });
   });
 
   it("does not fall back to SSE when websocket transport is explicit", async () => {

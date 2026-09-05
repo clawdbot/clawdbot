@@ -179,6 +179,11 @@ module.exports = {
       id: ${JSON.stringify(PROVIDER_ID)},
       label: "Worker catalog fixture",
       auth: [],
+      resolveDynamicModel(context) {
+        if (context.modelId !== "configured-dynamic-model") return undefined;
+        const template = context.modelRegistry.find(context.provider, "sqlite-model");
+        return template && { ...template, id: context.modelId, name: "Configured dynamic model" };
+      },
       resolveExternalAuthProfiles() {
         const credentialPath = process.env[${JSON.stringify(EXTERNAL_AUTH_PATH_ENV)}];
         if (!credentialPath || !fs.existsSync(credentialPath)) {
@@ -418,7 +423,17 @@ async function expectNativeHarnessModelsPublished(params: {
   const previousRegistry = captureActivePluginRegistrySnapshot();
   setActivePluginRegistry(createEmptyPluginRegistry());
   try {
+    expect(params.snapshot.modelCatalog.entries).toContainEqual(
+      expect.objectContaining({ provider: PROVIDER_ID, id: "configured-dynamic-model" }),
+    );
     const catalog = await params.snapshot.loadFullModelCatalog?.();
+    expect(catalog?.staticEntries).toContainEqual(
+      expect.objectContaining({
+        provider: PROVIDER_ID,
+        id: "configured-dynamic-model",
+        name: "Configured dynamic model",
+      }),
+    );
     const nativeEntry = catalog?.entries.find(({ id }) => id === "account-scoped-model");
     expect(nativeEntry).toMatchObject({ provider: PROVIDER_ID, nativeRuntime: HARNESS_ID });
     if (!catalog) {
@@ -461,6 +476,17 @@ async function expectNativeHarnessModelsPublished(params: {
         id: "account-scoped-model",
         available: true,
       }),
+    );
+    expect(preparedModels.models).toContainEqual(
+      expect.objectContaining({
+        provider: PROVIDER_ID,
+        id: "configured-dynamic-model",
+        name: "Configured dynamic model",
+        available: false,
+      }),
+    );
+    expect(catalog.staticEntries).not.toContainEqual(
+      expect.objectContaining({ provider: PROVIDER_ID, id: "unresolved-configured-model" }),
     );
 
     const chatMetadata = createGatewayChatMetadataRuntime({
@@ -509,6 +535,8 @@ export async function expectNativeHarnessModelsPublishedFromWorker(params: {
         models: {
           [`${PROVIDER_ID}/sqlite-model`]: { agentRuntime: { id: HARNESS_ID } },
           [`${PROVIDER_ID}/account-scoped-model`]: { agentRuntime: { id: HARNESS_ID } },
+          [`${PROVIDER_ID}/configured-dynamic-model`]: { agentRuntime: { id: "openclaw" } },
+          [`${PROVIDER_ID}/unresolved-configured-model`]: { agentRuntime: { id: "openclaw" } },
         },
       },
     },

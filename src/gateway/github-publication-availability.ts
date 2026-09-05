@@ -8,7 +8,11 @@ import { managedWorktrees } from "../agents/worktrees/service.js";
 import { getRuntimeConfig } from "../config/config.js";
 import { getActiveSecretsRuntimeConfigSnapshot } from "../secrets/runtime-state.js";
 import { requestCurrentGitHubOAuthRefresh } from "./github-oauth-lifecycle.js";
-import { GitHubPublicationWorkspaceChangedError } from "./github-publication-failure.js";
+import {
+  GitHubPublicationWorkspaceChangedError,
+  rejectGitHubPublicationSelection,
+  type GitHubPublicationPreparation,
+} from "./github-publication-failure.js";
 import { loadGatewaySessionEntryReadOnly } from "./session-utils.js";
 
 function publicationConfigSnapshot() {
@@ -23,6 +27,7 @@ function publicationConfigSnapshot() {
 export function assertExpectedSharedGitHubPublisher(
   expected: GitHubPublicationPublisher | undefined,
   actual: GitHubPublicationPublisher,
+  preparation?: GitHubPublicationPreparation,
 ): void {
   if (
     actual.source === "personal" ||
@@ -31,8 +36,9 @@ export function assertExpectedSharedGitHubPublisher(
         expected.accountId !== actual.accountId ||
         expected.login.toLowerCase() !== actual.login.toLowerCase()))
   ) {
-    throw new Error(
+    rejectGitHubPublicationSelection(
       "GitHub publication identity changed; review the current shared account and try again.",
+      preparation,
     );
   }
 }

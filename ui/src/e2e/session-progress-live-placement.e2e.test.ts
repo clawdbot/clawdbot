@@ -1,8 +1,9 @@
-import { mkdir, unlink } from "node:fs/promises";
+import { mkdir, unlink, writeFile } from "node:fs/promises";
 import path from "node:path";
 import { MAX_DATE_TIMESTAMP_MS } from "@openclaw/normalization-core/number-coercion";
 import type { Locator, Page } from "playwright";
 import { expect, it } from "vitest";
+import { takeControlUiViewportScreenshot } from "../test-helpers/control-ui-e2e-screenshot.ts";
 import {
   controlUiBundledGatewayUrl,
   controlUiBundledSettingsStorageKey,
@@ -17,7 +18,11 @@ import {
   requireRecord,
   requireString,
 } from "./chat-flow.test-support.ts";
-import { openChatSidePanelType } from "./chat-side-panel.test-support.ts";
+import {
+  focusChatSidePanel,
+  openChatSidePanelType,
+  restoreChatAsMain,
+} from "./chat-side-panel.test-support.ts";
 
 async function captureProof(page: Page, fileName: string): Promise<void> {
   if (!captureUiProofEnabled) {
@@ -84,12 +89,13 @@ suite.define(() => {
       sessionKey,
     });
     const card = page.locator('[data-progress-card-placement="composer"]');
-    const captureLifecycleState = async (fileName: string) => {
+    const captureLifecycleState = async (fileName: string, surface = card) => {
       if (captureUiProofEnabled) {
         await page.waitForTimeout(250);
-      }
-      await captureProof(page, fileName);
-      if (captureUiProofEnabled) {
+        await writeFile(
+          path.join(suite.artifactDir, "session-progress-live-placement", fileName),
+          await takeControlUiViewportScreenshot(page, surface, [surface]),
+        );
         await page.waitForTimeout(500);
       }
     };
@@ -143,7 +149,7 @@ suite.define(() => {
           settingSwitch.evaluate((element) => Boolean((element as { checked?: boolean }).checked)),
         )
         .toBe(true);
-      await captureLifecycleState("01-setting-enabled.png");
+      await captureLifecycleState("01-setting-enabled.png", settingRow);
 
       await page.goto(controlUiSessionUrl(suite.server.baseUrl, sessionKey));
       const runOneId = await send("Run the first progress cycle");
@@ -361,14 +367,18 @@ suite.define(() => {
         await captureProof(page, "composer-with-side-chat.png");
 
         const sidePanel = visiblePane.locator(".sidebar-region__right-runtime .side-panel");
-        await sidePanel.locator(".side-panel__expand").click();
+        await focusChatSidePanel(page);
         await expect
           .poll(() => visiblePane.locator('[data-progress-card-placement="composer"]').count())
           .toBe(1);
         await expect
           .poll(() => visiblePane.locator('[data-progress-card-placement="rail"]').count())
           .toBe(0);
-        await sidePanel.locator(".side-panel__expand").click();
+        await page
+          .locator(".chat-pane__header")
+          .getByRole("button", { name: "Restore split", exact: true })
+          .click();
+        await restoreChatAsMain(page);
 
         await page.setViewportSize({ height: 900, width: 560 });
         await expect
@@ -377,8 +387,9 @@ suite.define(() => {
         await expect
           .poll(() => visiblePane.locator('[data-progress-card-placement="rail"]').count())
           .toBe(0);
-        await sidePanel.locator(".side-panel__minimize").click();
-        await sidePanel.waitFor({ state: "hidden" });
+        const sideHeader = sidePanel.locator('[data-region-header="side"]');
+        await sideHeader.getByRole("button", { name: "Close", exact: true }).click();
+        await sideHeader.waitFor({ state: "hidden" });
         await expect.poll(() => visiblePane.locator(".session-progress-card").count()).toBe(1);
         await expect
           .poll(() => visiblePane.locator('[data-progress-card-placement="composer"]').isVisible())

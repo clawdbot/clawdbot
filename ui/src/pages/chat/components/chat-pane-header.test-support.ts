@@ -43,6 +43,7 @@ export function mountChatPaneHeader(
     copiedAction: null,
     renameDisabledReason: undefined,
     panelActions: nothing,
+    panelLayoutActions: nothing,
     discussionAction: nothing,
     diffAction: nothing,
     backgroundTasksAction: nothing,

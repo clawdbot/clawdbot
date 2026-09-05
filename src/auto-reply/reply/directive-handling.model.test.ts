@@ -376,9 +376,20 @@ vi.mock("../../agents/prepared-model-catalog.js", () => {
   return {
     loadPreparedModelCatalog: loadModelCatalog,
     loadProviderScopedThinkingCatalog: loadModelCatalog,
-    loadPreparedModelCatalogOwnerSnapshot: async () => {
+    withPreparedModelCatalogOwner: async (
+      _params: unknown,
+      read: (owner: {
+        modelCatalog: { entries: ModelCatalogEntry[]; routeVariants: ModelCatalogEntry[] };
+        authModes: object;
+        isCurrent: () => boolean;
+      }) => unknown,
+    ) => {
       const entries = await loadModelCatalog();
-      return { modelCatalog: { entries, routeVariants: entries }, authModes: {} };
+      return read({
+        modelCatalog: { entries, routeVariants: entries },
+        authModes: {},
+        isCurrent: () => true,
+      });
     },
   };
 });
@@ -682,7 +693,7 @@ async function persistModelDirectiveForTest(params: {
           directiveAck: undefined,
           errorText: Array.isArray(result.reply) ? result.reply[0]?.text : result.reply?.text,
         };
-  return { persisted, sessionEntry };
+  return { persisted, sessionEntry, result };
 }
 
 type HandleDirectiveParams = Parameters<typeof handleDirectiveOnly>[0];
@@ -1828,22 +1839,29 @@ describe("/model chat UX", () => {
     expect(queueMocks.refreshQueuedFollowupSession).not.toHaveBeenCalled();
   });
 
-  it("persists an atomic model/runtime/thinking transaction when the runtime supports it", async () => {
+  it("commits model/runtime selection while keeping supported mixed thinking on its turn", async () => {
     setOpenAiRuntimeScopedUltraProvider();
     const sessionEntry = createSessionEntry({ thinkingLevel: "high" });
-    const { persisted } = await persistModelDirectiveForTest({
+    const { persisted, result } = await persistModelDirectiveForTest({
       command: "/model openai/gpt-5.6-luna --runtime openclaw /think ultra please solve",
       allowedModelKeys: ["openai/gpt-5.6-luna"],
       sessionEntry,
     });
 
     expect(persisted.errorText).toBeUndefined();
+    expect(result).toMatchObject({
+      kind: "continue",
+      provider: "openai",
+      model: "gpt-5.6-luna",
+      directives: { thinkLevel: "ultra" },
+      directiveAck: { text: expect.stringContaining("Thinking level set to ultra.") },
+    });
     expect(sessionEntry).toMatchObject({
       providerOverride: "openai",
       modelOverride: "gpt-5.6-luna",
       modelOverrideSource: "user",
       agentRuntimeOverride: "openclaw",
-      thinkingLevel: "ultra",
+      thinkingLevel: "high",
     });
   });
 

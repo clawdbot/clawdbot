@@ -2,10 +2,36 @@
 import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
 import { normalizeStringEntries } from "@openclaw/normalization-core/string-normalization";
 import { note } from "../../packages/terminal-core/src/note.js";
+import { normalizeChatChannelId } from "../channels/ids.js";
 import { formatCliCommand } from "../cli/command-format.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import type { PairingChannel } from "../pairing/pairing-store.types.js";
 import { INTERNAL_MESSAGE_CHANNEL } from "../utils/message-channel-constants.js";
+
+/** Persist legacy channel-qualified owners before runtime compares native sender IDs. */
+export function migrateLegacyCommandOwners(cfg: OpenClawConfig, changes: string[]): OpenClawConfig {
+  const owners = cfg.commands?.ownerAllowFrom;
+  if (!Array.isArray(owners)) {
+    return cfg;
+  }
+  let changed = false;
+  const ownerAllowFrom = owners.map((entry, index) => {
+    // Only the old channel:user:id envelope is unambiguous. Keep native IDs containing
+    // colons (for example Matrix and workspace-qualified Slack IDs) untouched.
+    const legacy =
+      typeof entry === "string" ? /^([^:]+):user:([^:\s*]+)$/i.exec(entry.trim()) : null;
+    const channel = legacy && normalizeChatChannelId(legacy[1]);
+    if (!channel || !legacy) {
+      return entry;
+    }
+    changed = true;
+    changes.push(
+      `Normalized commands.ownerAllowFrom[${index}] from ${channel}:user:id to ${channel}:id.`,
+    );
+    return `${channel}:${legacy[2]}`;
+  });
+  return changed ? { ...cfg, commands: { ...cfg.commands, ownerAllowFrom } } : cfg;
+}
 
 function resolveConfiguredCommandOwners(cfg: OpenClawConfig): string[] {
   const owners = cfg.commands?.ownerAllowFrom;

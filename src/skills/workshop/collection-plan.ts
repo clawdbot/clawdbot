@@ -9,45 +9,32 @@ export function validateSkillCollectionPlan(
   current: readonly WritableSkillCollectionEntry[],
   readSkillHashes: ReadonlyMap<string, string>,
   maxDecisions: number,
-  approvedSkillNamesByAgent?: readonly ReadonlySet<string>[],
 ): SkillCollectionPlanEntry[] {
   if (input.length > maxDecisions) {
     throw new Error(`A skill collection can contain at most ${maxDecisions} decisions.`);
   }
-  const currentNames = new Set(current.map((skill) => skill.name));
-  const currentByName = new Map(current.map((skill) => [skill.name, skill]));
+  const currentSkillKeys = new Set(current.map((skill) => skill.skillKey));
   const seen = new Set<string>();
   for (const entry of input) {
-    const normalized = normalizeSkillIndexName(entry.name);
-    if (!normalized || normalized !== entry.name) {
-      throw new Error(`Invalid skill name: ${entry.name}`);
+    const normalized = normalizeSkillIndexName(entry.skillKey);
+    if (!normalized || normalized !== entry.skillKey) {
+      throw new Error(`Invalid skill key: ${entry.skillKey}`);
     }
-    if (seen.has(entry.name)) {
-      throw new Error(`Duplicate skill decision: ${entry.name}`);
+    if (seen.has(entry.skillKey)) {
+      throw new Error(`Duplicate skill decision: ${entry.skillKey}`);
     }
-    seen.add(entry.name);
-    if (entry.action !== "write" && !currentNames.has(entry.name)) {
-      throw new Error(`Cannot ${entry.action} a skill that does not exist: ${entry.name}`);
+    seen.add(entry.skillKey);
+    if (entry.action !== "write" && !currentSkillKeys.has(entry.skillKey)) {
+      throw new Error(`Cannot ${entry.action} a skill that does not exist: ${entry.skillKey}`);
     }
-    if (currentNames.has(entry.name) && !readSkillHashes.has(entry.name)) {
-      throw new Error(`Read the skill before changing it: ${entry.name}`);
+    if (currentSkillKeys.has(entry.skillKey) && !readSkillHashes.has(entry.skillKey)) {
+      throw new Error(`Read the skill before changing it: ${entry.skillKey}`);
     }
     if (entry.action === "drop" && !entry.reason.trim()) {
-      throw new Error(`Drop reason required: ${entry.name}`);
+      throw new Error(`Drop reason required: ${entry.skillKey}`);
     }
     if (entry.action === "write" && (!entry.description.trim() || !entry.content.trim())) {
-      throw new Error(`Complete description and content required: ${entry.name}`);
-    }
-    if (currentByName.has(entry.name) && !currentByName.get(entry.name)!.workshopOwned) {
-      throw new Error(`User-authored skill must stay unchanged: ${entry.name}`);
-    }
-  }
-  const dropped = new Set(
-    input.filter((entry) => entry.action === "drop").map((entry) => entry.name),
-  );
-  for (const approvedNames of approvedSkillNamesByAgent ?? []) {
-    if (approvedNames.size > 0 && ![...approvedNames].some((name) => !dropped.has(name))) {
-      throw new Error("Every sharing agent must retain a visible skill after reconciliation.");
+      throw new Error(`Complete description and content required: ${entry.skillKey}`);
     }
   }
   return [...input];

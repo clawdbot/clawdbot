@@ -7,8 +7,11 @@
  */
 import { normalizeStringEntries } from "../../packages/normalization-core/src/string-normalization.js";
 import {
+  clearTopLevelChannelConfigFields,
   deleteAccountFromConfigSection as deleteAccountFromConfigSectionInSection,
   setAccountEnabledInConfigSection as setAccountEnabledInConfigSectionInSection,
+  setTopLevelChannelEnabledInConfigSection,
+  writeChannelSection,
 } from "../channels/plugins/config-helpers.js";
 import {
   resolveChannelConfigWritesShared,
@@ -322,61 +325,6 @@ export function createScopedChannelConfigAdapter<
   });
 }
 
-function setTopLevelChannelEnabledInConfigSection<Config extends OpenClawConfig>(params: {
-  cfg: Config;
-  sectionKey: string;
-  enabled: boolean;
-}): Config {
-  const section = params.cfg.channels?.[params.sectionKey] as Record<string, unknown> | undefined;
-  return {
-    ...params.cfg,
-    channels: {
-      ...params.cfg.channels,
-      [params.sectionKey]: {
-        ...section,
-        enabled: params.enabled,
-      },
-    },
-  } as Config;
-}
-
-function removeTopLevelChannelConfigSection<Config extends OpenClawConfig>(params: {
-  cfg: Config;
-  sectionKey: string;
-}): Config {
-  const nextChannels = { ...params.cfg.channels } as Record<string, unknown>;
-  delete nextChannels[params.sectionKey];
-  const nextCfg = { ...params.cfg };
-  if (Object.keys(nextChannels).length > 0) {
-    nextCfg.channels = nextChannels as Config["channels"];
-  } else {
-    delete nextCfg.channels;
-  }
-  return nextCfg;
-}
-
-function clearTopLevelChannelConfigFields<Config extends OpenClawConfig>(params: {
-  cfg: Config;
-  sectionKey: string;
-  clearBaseFields: string[];
-}): Config {
-  const section = params.cfg.channels?.[params.sectionKey] as Record<string, unknown> | undefined;
-  if (!section) {
-    return params.cfg;
-  }
-  const nextSection = { ...section };
-  for (const field of params.clearBaseFields) {
-    delete nextSection[field];
-  }
-  return {
-    ...params.cfg,
-    channels: {
-      ...params.cfg.channels,
-      [params.sectionKey]: nextSection,
-    },
-  } as Config;
-}
-
 /** Build CRUD/config helpers for top-level single-account channels. */
 export function createTopLevelChannelConfigBase<
   ResolvedAccount,
@@ -425,10 +373,7 @@ export function createTopLevelChannelConfigBase<
             sectionKey: params.sectionKey,
             clearBaseFields: params.clearBaseFields ?? [],
           })
-        : removeTopLevelChannelConfigSection({
-            cfg: cfg as Config,
-            sectionKey: params.sectionKey,
-          });
+        : writeChannelSection(cfg, params.sectionKey, undefined);
     },
   };
 }

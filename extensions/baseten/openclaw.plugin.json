@@ -20,6 +20,9 @@
     }
   },
   "modelCatalog": {
+    "modelsDev": {
+      "baseten": "baseten"
+    },
     "providers": {
       "baseten": {
         "baseUrl": "https://inference.baseten.co/v1",

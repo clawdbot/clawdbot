@@ -24,6 +24,8 @@ Scheduled heartbeats require automations. When `cron.enabled` is `false` or `OPE
 
 Setting `heartbeat.every: "0m"` also disables only the recurring cadence. A targeted event-driven wake can still run one agent turn, such as the completion follow-up requested by a background exec task. It does not create or re-enable a recurring schedule. Use tool policy and sandboxing, rather than heartbeat cadence, to control whether those agent turns may execute commands.
 
+Targeted event wakes retain the same per-agent rate limits when recurring cadence is disabled: a 30-second minimum between event turns, and a flood guard after five starts within 60 seconds. Deferred work resumes when its guard expires. Config reloads preserve this accounting without enrolling the agent in recurring or broadcast heartbeats.
+
 Troubleshooting: [Automations](/automation/cron-jobs#troubleshooting)
 
 ## Quick start (beginner)
@@ -252,7 +254,7 @@ Use `accountId` to target a specific account on multi-account channels like Tele
   When true, heartbeat runs use lightweight bootstrap context and skip workspace bootstrap files. Monitor scratch is injected by the heartbeat runner either way.
 </ParamField>
 <ParamField path="isolatedSession" type="boolean" default="false">
-  When true, each heartbeat runs in a fresh session with no prior conversation history. Uses the same isolation pattern as automation jobs with `sessionTarget: "isolated"`. Dramatically reduces per-heartbeat token cost. Combine with `lightContext: true` for maximum savings. Delivery routing still uses the main session context.
+  When true, each heartbeat runs in a fresh session with no prior conversation history. Uses the same isolation pattern as automation jobs with `sessionTarget: "isolated"`. Dramatically reduces per-heartbeat token cost. Combine with `lightContext: true` for maximum savings. Delivery routing and conversation context still follow the selected conversation, including its channel, account, and topic. A background command's completion keeps its original event route if that conversation later moves; it does not borrow the new room's description or activation policy.
 </ParamField>
 <ParamField path="session" type="string">
   Optional session key for heartbeat runs.

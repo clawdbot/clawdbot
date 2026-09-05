@@ -3,6 +3,7 @@
 // same curated-rows-above-schema shape). The pickers and the raw form patch the
 // same config draft, so both stay in sync without narrowing the schema.
 import { html, nothing, type TemplateResult } from "lit";
+import type { NativeDeviceSettingsCapability } from "../../app/native-device-settings.ts";
 import { renderModelPicker } from "../../components/model-picker.ts";
 import {
   renderSettingsRow,
@@ -13,6 +14,11 @@ import {
 } from "../../components/settings-ui.ts";
 import { t } from "../../i18n/index.ts";
 import { renderSettingsSelectRow } from "./settings-select-row.ts";
+import {
+  renderDeviceTalk,
+  renderVoiceWakeEditor,
+  type VoiceWakeEditorState,
+} from "./talk-device.ts";
 import { isTalkGptLiveModel, type TalkRealtimeSelection } from "./talk-schema.ts";
 
 /** One realtime provider row from talk.catalog, reduced to what the pickers use. */
@@ -44,6 +50,8 @@ export type TalkCatalogState =
     };
 
 type TalkViewProps = {
+  nativeDeviceSettings?: NativeDeviceSettingsCapability | null;
+  voiceWake?: { state: VoiceWakeEditorState; onInput: (text: string) => void; onRetry: () => void };
   selection: TalkRealtimeSelection;
   catalog: TalkCatalogState;
   configBusy: boolean;
@@ -277,6 +285,8 @@ export function renderTalk(props: TalkViewProps) {
   return html`
     <section class="talk-page">
       <div class="settings-page">
+        ${renderDeviceTalk(props.nativeDeviceSettings)}
+        ${props.voiceWake ? renderVoiceWakeEditor(props.voiceWake.state, props.voiceWake.onInput, props.voiceWake.onRetry) : nothing}
         ${renderSettingsSection(
           {
             title: t("talkPage.voiceSection.title"),

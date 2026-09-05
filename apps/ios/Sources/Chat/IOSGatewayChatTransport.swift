@@ -615,13 +615,24 @@ struct IOSGatewayChatTransport: OpenClawChatTransport {
         return await self.gateway.supportsServerMethod(method, ifCurrentRoute: route)
     }
 
-    func fetchProgressCard(sessionKey: String) async throws -> ProgressCard? {
-        let target = self.sessionTarget(for: sessionKey)
-        let request = OpenClawChatGatewayRequests.progressCardGet(sessionKey: target.sessionKey)
-        let data = try await gateway.request(request)
-        let result = try JSONDecoder().decode(ProgressCardGetResult.self, from: data)
-        guard !(result.card.value is NSNull) else { return nil }
-        return try GatewayPayloadDecoding.decode(result.card, as: ProgressCard.self)
+    func fetchProgressCard(sessionKey: String, agentID: String?) async throws -> ProgressCard? {
+        let target = self.sessionTarget(for: sessionKey, overrideAgentID: agentID)
+        let request = OpenClawChatGatewayRequests.progressCardGet(
+            sessionKey: target.sessionKey,
+            agentID: target.agentID)
+        guard let route = await self.currentSessionMutationRoute() else { throw CancellationError() }
+        if request.params["agentId"] != nil {
+            guard let supported = await self.gateway.supportsServerCapability(
+                .progressCardAgentScope,
+                ifCurrentRoute: route) else { throw CancellationError() }
+            guard supported else {
+                throw OpenClawChatProgressCardError.ownerScopeUnavailable
+            }
+        }
+        let data = try await self.gateway.request(request, ifCurrentRoute: route)
+        return try OpenClawChatGatewayPayloadCodec.decodeProgressCard(
+            data,
+            agentID: OpenClawChatSessionKey.agentID(from: target.sessionKey) ?? target.agentID)
     }
 
     func resolveInlineWidgetResource(

@@ -1,7 +1,10 @@
 // Control UI E2E tests cover chat composer catalog discovery.
 import { expect, it } from "vitest";
+import { buildGatewaySessionSnapshot } from "../../../src/gateway/session-event-payload.ts";
+import type { GatewaySessionRow } from "../api/types.ts";
 import { createControlUiE2eArtifactDir } from "../test-helpers/control-ui-e2e-artifacts.ts";
 import {
+  type ControlUiMockGateway,
   controlUiSessionUrl,
   installMockGateway,
   navigateToControlUiSession,
@@ -69,6 +72,134 @@ suite.define(() => {
       });
     },
   );
+
+  it("clears the active fallback model after recovery while retaining the selected preference", async () => {
+    const artifactDir = suite.artifactDir;
+    await suite.withPage(
+      { viewport: { width: 1280, height: 900 }, recordVideo: { dir: artifactDir } },
+      async ({ page }) => {
+        const selectedModel = { id: "gpt-5.5", name: "GPT-5.5", provider: "codex" };
+        const activeModel = { id: "qwen3.5:9b", name: "Qwen 3.5 9B", provider: "ollama" };
+        const session = {
+          key: "agent:main:fallback-recovery",
+          sessionId: "fallback-recovery-session",
+          kind: "direct",
+          model: selectedModel.id,
+          modelProvider: selectedModel.provider,
+          status: "done",
+          updatedAt: Date.now(),
+        } satisfies GatewaySessionRow;
+        const gateway = await installMockGateway(page, {
+          sessionKey: session.key,
+          agentModel: "codex/gpt-5.5",
+          models: [selectedModel, activeModel],
+          methodResponses: {
+            "sessions.list": {
+              count: 1,
+              defaults: { model: selectedModel.id, modelProvider: selectedModel.provider },
+              sessions: [
+                {
+                  ...session,
+                  activeModel: activeModel.id,
+                  activeModelProvider: activeModel.provider,
+                },
+              ],
+              path: "",
+              ts: Date.now(),
+            },
+          },
+        });
+
+        await page.goto(controlUiSessionUrl(suite.server.baseUrl, session.key));
+        await gateway.waitForRequest("chat.startup");
+        const composer = page.locator(".agent-chat__input");
+        const trigger = composer.locator('[data-chat-model-select="true"]');
+
+        await expect.poll(() => trigger.textContent()).toContain("Qwen 3.5 9B");
+        await expect
+          .poll(() =>
+            composer
+              .locator('[data-chat-model-option="codex/gpt-5.5"]')
+              .getAttribute("aria-selected"),
+          )
+          .toBe("true");
+        await page.screenshot({ path: `${artifactDir}/active-fallback-model.png` });
+        const recovered = { ...session, updatedAt: session.updatedAt + 1 };
+        const message = {
+          role: "assistant",
+          content: "The selected model recovered.",
+          timestamp: recovered.updatedAt,
+        };
+        await gateway.setHistoryMessages([message]);
+        await gateway.setMethodResponse("chat.history", {
+          messages: [message],
+          sessionId: session.sessionId,
+          sessionInfo: recovered,
+        });
+        // Swarm child hydration shares sessions.list with the primary roster.
+        // Hold all later replies so only the event/history can repair this label.
+        const releaseLists = await page.evaluateHandle((row) => {
+          const fixture = (
+            window as Window & {
+              openclawControlUiE2eGateway?: ControlUiMockGateway;
+            }
+          ).openclawControlUiE2eGateway;
+          if (!fixture) {
+            throw new Error("Mock Gateway is not installed");
+          }
+          const waiting: Array<() => void> = [];
+          let released = false;
+          const snapshot = {
+            count: 1,
+            defaults: { model: row.model, modelProvider: row.modelProvider },
+            sessions: [row],
+            path: "",
+            ts: row.updatedAt,
+          };
+          fixture.setRequestHandler("sessions.list", ({ respond }) => {
+            if (released) {
+              respond(snapshot);
+            } else {
+              waiting.push(() => respond(snapshot));
+            }
+          });
+          return () => {
+            released = true;
+            for (const respond of waiting.splice(0)) {
+              respond();
+            }
+          };
+        }, recovered);
+        try {
+          await gateway.emitGatewayEvent("session.message", {
+            sessionKey: session.key,
+            agentId: "main",
+            message,
+            messageId: "model-recovered",
+            messageSeq: 1,
+            ...buildGatewaySessionSnapshot({
+              sessionRow: recovered,
+              agentId: "main",
+              includeSession: true,
+              activeRunState: { active: false, runIds: [] },
+            }),
+          });
+          await gateway.waitForRequest("chat.history");
+          await page.getByText(message.content, { exact: true }).waitFor();
+          await expect.poll(() => trigger.textContent()).toContain(selectedModel.name);
+          expect(
+            await composer
+              .locator('[data-chat-model-option="codex/gpt-5.5"]')
+              .getAttribute("aria-selected"),
+          ).toBe("true");
+          await page.screenshot({ path: `${artifactDir}/recovered-model.png` });
+        } finally {
+          await releaseLists.evaluate((release) => release());
+          await releaseLists.dispose();
+        }
+      },
+    );
+  });
 
   it("refreshes the configured usable catalog after advertised chat metadata", async () => {
     await suite.withPage({ viewport: { width: 1280, height: 900 } }, async ({ page }) => {
@@ -587,8 +718,12 @@ suite.define(() => {
 
       const composer = page.locator(".agent-chat__input");
       const pickerTrigger = composer.locator('[data-chat-model-select="true"]');
+      const metadataRequestCount = (await gateway.getRequests("chat.metadata")).length;
       await pickerTrigger.click();
       await expect.poll(async () => (await gateway.getRequests("models.list")).length).toBe(1);
+      // The startup snapshot is already visible. Wait for the refresh to commit
+      // its cooldown before moving Date; completion invalidates chat metadata.
+      await gateway.waitForRequest("chat.metadata", { after: metadataRequestCount });
       await expect
         .poll(() => composer.locator('[data-chat-model-option="openai/gpt-5.6-luna"]').isVisible())
         .toBe(true);

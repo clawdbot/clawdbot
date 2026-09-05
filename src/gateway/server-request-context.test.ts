@@ -8,6 +8,7 @@ import {
   GATEWAY_CLIENT_MODES,
 } from "../../packages/gateway-protocol/src/client-info.js";
 import { listSystemPresence } from "../infra/system-presence.js";
+import { trackAsyncWork } from "../shared/async-work-scope.js";
 import {
   ensureProfileForEmail,
   getUserProfileDisplay,
@@ -31,7 +32,7 @@ function makeCronState(overrides: Partial<TestCronState> = {}): TestCronState {
     reconcileExitWatchers: vi.fn(async () => {}),
     reconcileStreamWatchers: vi.fn(async () => {}),
     stopStreamWatchers: vi.fn(async () => {}),
-    reconcileHeartbeatJobs: vi.fn(async () => "converged" as const),
+    reconcileSystemJobs: vi.fn(async () => "converged" as const),
     ...overrides,
   };
 }
@@ -47,6 +48,7 @@ function makeContextParams(
     }),
   };
   return {
+    trackExecution: trackAsyncWork,
     deps: {} as never,
     runtimeState,
     getRuntimeConfig: vi.fn(() => config),

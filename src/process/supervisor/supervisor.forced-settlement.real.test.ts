@@ -157,6 +157,7 @@ describe.skipIf(process.platform === "win32")("supervisor forced settlement outp
       expect(hashFailures).toEqual([]);
       expect(delivered).toEqual(settledDelivered);
       expect(supervisor.getRecord(run.runId)?.lastOutputAtMs).toBe(settledOutputAtMs);
+      await expect(supervisor.shutdown()).rejects.toThrow("cleanup could not be confirmed");
     },
     FORCED_SETTLEMENT_TEST_TIMEOUT_MS,
   );

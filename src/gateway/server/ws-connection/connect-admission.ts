@@ -99,6 +99,7 @@ export async function rejectUnavailableProfileConnect(
     error instanceof ControlUiGitHubError && error.statusCode === 429
       ? "GitHub is rate limiting profile verification. Retry shortly; if this continues, ask a gateway administrator to check the GitHub API credential."
       : undefined,
+    error instanceof ControlUiGitHubError ? error.retryAfterMs : undefined,
   );
   context.markHandshakeFailure("authenticated-profile-unavailable");
   context.sendHandshakeErrorResponse(ErrorCodes.UNAVAILABLE, failure.message, failure);

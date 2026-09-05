@@ -3,7 +3,9 @@ import { spawnSync } from "node:child_process";
 import fs from "node:fs";
 import { createRequire } from "node:module";
 import path from "node:path";
+import { pathToFileURL } from "node:url";
 import { afterEach, describe, expect, it } from "vitest";
+import { createNodeEvalArgs } from "../src/test-utils/node-process.ts";
 import { useAutoCleanupTempDirTracker } from "./helpers/temp-dir.js";
 import { loadVitestExperimentalConfig } from "./vitest/vitest.performance-config.ts";
 
@@ -110,34 +112,74 @@ describe("filesystem module cache ownership", () => {
     path.dirname(createRequire(import.meta.url).resolve("vitest/package.json")),
     "vitest.mjs",
   );
+  const runNode = (
+    root: string,
+    checkout: string,
+    args: string[],
+    env: NodeJS.ProcessEnv = {},
+    expectedStatus = 0,
+  ) => {
+    const result = spawnSync(process.execPath, args, {
+      cwd: checkout,
+      encoding: "utf8",
+      env: {
+        PATH: process.env.PATH,
+        SystemRoot: process.env.SystemRoot,
+        CI: "1",
+        HOME: root,
+        ...env,
+      },
+      timeout: 15_000,
+    });
+    expect(result.status, `${result.error ?? ""}\n${result.stdout}\n${result.stderr}`).toBe(
+      expectedStatus,
+    );
+    return result;
+  };
   const run = (
     root: string,
     checkout: string,
     args: string[] = [],
     env: NodeJS.ProcessEnv = {},
     expectedStatus = 0,
-  ) => {
-    const result = spawnSync(
-      process.execPath,
+  ) =>
+    runNode(
+      root,
+      checkout,
       [cli, "run", "--config", path.join(checkout, "vitest.config.mjs"), ...args],
-      {
-        cwd: checkout,
-        encoding: "utf8",
-        env: {
-          PATH: process.env.PATH,
-          SystemRoot: process.env.SystemRoot,
-          CI: "1",
-          HOME: root,
-          ...env,
-        },
-        timeout: 15_000,
-      },
-    );
-    expect(result.status, `${result.error ?? ""}\n${result.stdout}\n${result.stderr}`).toBe(
+      env,
       expectedStatus,
     );
-    return result;
+  const prepareCacheFixture = (name: string) => {
+    const root = fs.realpathSync(tempDirs.make(`oc-vitest-cache-${name}-`));
+    fs.mkdirSync(path.join(root, "node_modules"));
+    fs.writeFileSync(
+      path.join(root, "package.json"),
+      JSON.stringify({ name: `cache-${name}`, type: "module", workspaces: [] }),
+    );
+    const generation = path.join(root, "dependency-generation.txt");
+    const transitionLock = (version: string) => {
+      // bun.lock is only a recognized hash input; no package manager is invoked.
+      fs.writeFileSync(path.join(root, "bun.lock"), JSON.stringify({ version }));
+      fs.writeFileSync(generation, version);
+    };
+    transitionLock("1.0.0");
+    return { root, generation, transitionLock };
   };
+  const runCacheApi = (root: string, source: string) =>
+    runNode(
+      root,
+      root,
+      createNodeEvalArgs(`
+import assert from "node:assert/strict";
+import fs from "node:fs";
+import path from "node:path";
+import { createVitest } from ${JSON.stringify(pathToFileURL(createRequire(import.meta.url).resolve("vitest/node")).href)};
+const root = ${JSON.stringify(root)};
+const experimental = ${JSON.stringify(loadVitestExperimentalConfig({}, "linux", root).experimental)};
+${source}
+`),
+    );
 
   it("preserves another checkout's cache when shared dependencies change", () => {
     const root = tempDirs.make("oc-vitest-cache-ownership-");
@@ -189,19 +231,25 @@ describe("filesystem module cache ownership", () => {
   });
 
   it("reuses shared project transforms after a lock transition without serving a stale later project", () => {
-    const root = fs.realpathSync(tempDirs.make("oc-vitest-cache-projects-"));
-    fs.mkdirSync(path.join(root, "node_modules"));
+    const { root, generation, transitionLock } = prepareCacheFixture("projects");
+    // Reporter imports precede test execution and must observe the same dependency
+    // generation as the selected projects after a lock transition.
+    const reporterEvents = path.join(root, "reporter-events.txt");
     fs.writeFileSync(
-      path.join(root, "package.json"),
-      JSON.stringify({ name: "cache-projects", type: "module", workspaces: [] }),
+      path.join(root, "reporter-subject.js"),
+      'export const version = "__DEPENDENCY_VERSION__";\n',
     );
-    const generation = path.join(root, "dependency-generation.txt");
-    const transitionLock = (version: string) => {
-      // bun.lock is only a recognized hash input; no package manager is invoked.
-      fs.writeFileSync(path.join(root, "bun.lock"), JSON.stringify({ version }));
-      fs.writeFileSync(generation, version);
-    };
-    transitionLock("1.0.0");
+    fs.writeFileSync(
+      path.join(root, "reporter.js"),
+      `import { appendFileSync } from "node:fs";
+import { version } from "./reporter-subject.js";
+export default class {
+  onInit() {
+    appendFileSync(${JSON.stringify(reporterEvents)}, version + "\\n");
+  }
+}
+`,
+    );
     for (const name of ["A", "B"]) {
       const project = path.join(root, name);
       fs.mkdirSync(project);
@@ -246,7 +294,17 @@ const scoped = createScopedVitestConfig([], { env: {}, argv: [] });
 const subjectFile = "subject.js";
 export default {
   root,
+  plugins: [{
+    name: "fixture-reporter-plugin",
+    transform(code, id) {
+      if (id !== path.join(root, "reporter-subject.js").replaceAll("\\\\", "/")) return;
+      const version = readFileSync(${JSON.stringify(generation)}, "utf8");
+      appendFileSync(path.join(root, "reporter-transforms.txt"), version + "\\n");
+      return { code: code.replace("__DEPENDENCY_VERSION__", version), map: null };
+    },
+  }],
   test: {
+    reporters: ["default", path.join(root, "reporter.js")],
     experimental: aggregate.test.experimental,
     projects: ["A", "B"].map((name) => ({
       extends: false,
@@ -281,20 +339,28 @@ export default {
       OPENCLAW_VITEST_FS_MODULE_CACHE: "1",
       OPENCLAW_VITEST_FS_MODULE_CACHE_PATH: cacheConfig.experimental?.fsModuleCachePath,
     };
-    const check = (projects: string[], expected: [number, number], args: string[] = []) => {
+    const reporterGenerations: string[] = [];
+    const check = (projects: string[], expected: [number, number, number], args: string[] = []) => {
       run(root, root, [...projects.flatMap((name) => ["--project", name]), ...args], env);
+      reporterGenerations.push(fs.readFileSync(generation, "utf8"));
+      expect(fs.readFileSync(reporterEvents, "utf8").trimEnd().split("\n")).toEqual(
+        reporterGenerations,
+      );
       const counts = ["A", "B"].map(
         (name) =>
           fs.readFileSync(path.join(root, name, "transforms.txt"), "utf8").split("\n").length - 1,
       );
+      counts.push(
+        fs.readFileSync(path.join(root, "reporter-transforms.txt"), "utf8").split("\n").length - 1,
+      );
       expect(counts, `subject transforms after selecting ${projects.join("+")}`).toEqual(expected);
     };
-    check(["A", "B"], [1, 1], ["--testNamePattern=(?!)"]);
+    check(["A", "B"], [1, 1, 1], ["--testNamePattern=(?!)"]);
     for (const name of ["A", "B"]) {
       expect(fs.readFileSync(path.join(root, name, "events.txt"), "utf8")).toBe("collect:1.0.0\n");
       expect(fs.existsSync(path.join(root, name, "body-transforms.txt"))).toBe(false);
     }
-    check(["A", "B"], [1, 1]);
+    check(["A", "B"], [1, 1, 1]);
     for (const name of ["A", "B"]) {
       expect(fs.readFileSync(path.join(root, name, "events.txt"), "utf8")).toBe(
         "collect:1.0.0\ncollect:1.0.0\nbeforeAll\nbody\n",
@@ -302,14 +368,14 @@ export default {
       expect(fs.readFileSync(path.join(root, name, "body-transforms.txt"), "utf8")).toBe("1.0.0\n");
     }
     transitionLock("2.0.0");
-    check(["A"], [2, 1]);
-    check(["A"], [2, 1]);
-    check(["B"], [2, 2]);
-    check(["B"], [2, 2]);
+    check(["A"], [2, 1, 2]);
+    check(["A"], [2, 1, 2]);
+    check(["B"], [2, 2, 2]);
+    check(["B"], [2, 2, 2]);
 
     // Reuse must still respect ordinary source and config invalidation.
     fs.appendFileSync(path.join(root, "A", "subject.js"), "\n// source edit\n");
-    check(["A", "B"], [3, 2]);
+    check(["A", "B"], [3, 2, 2]);
     fs.writeFileSync(
       configFile,
       fs
@@ -319,8 +385,8 @@ export default {
           'const subjectFile = "configured-subject.js";',
         ),
     );
-    check(["A", "B"], [4, 3]);
-    check(["A", "B"], [4, 3]);
+    check(["A", "B"], [4, 3, 3]);
+    check(["A", "B"], [4, 3, 3]);
 
     fs.appendFileSync(
       path.join(root, "A", "configured-subject.js"),
@@ -329,6 +395,159 @@ export default {
     const failedCollection = run(root, root, ["--project", "A", "--testNamePattern=(?!)"], env, 1);
     expect(`${failedCollection.stdout}\n${failedCollection.stderr}`).toContain(
       "fixture collection import failure",
+    );
+  });
+
+  it("imports the current lock generation through awaited configureVitest hooks", () => {
+    const { root, generation } = prepareCacheFixture("hook-imports");
+    runCacheApi(
+      root,
+      `
+const generation = ${JSON.stringify(generation)};
+const names = ["project-subject.js", "vitest-subject.js", "post-init.js"];
+for (const name of names) {
+  fs.writeFileSync(path.join(root, name), 'export const version = "__DEPENDENCY_VERSION__";');
+}
+let importInHook = false;
+let hookValues;
+const keyed = new Set();
+const plugin = {
+  name: "fixture-hook-imports",
+  transform(code, id) {
+    if (!names.some(name => id === path.join(root, name).replaceAll("\\\\", "/"))) return;
+    return { code: code.replace("__DEPENDENCY_VERSION__", fs.readFileSync(generation, "utf8")), map: null };
+  },
+  async configureVitest({ project, vitest, experimental_defineCacheKeyGenerator }) {
+    experimental_defineCacheKeyGenerator(({ id }) => {
+      keyed.add(id);
+      return "fixture-hook-imports";
+    });
+    if (importInHook) {
+      const first = await project.import("./project-subject.js");
+      const second = await vitest.import("./vitest-subject.js");
+      hookValues = [first.version, second.version];
+    }
+  },
+};
+const create = () => createVitest("test", {
+  root, config: false, watch: false, experimental,
+}, { plugins: [plugin] });
+let ctx;
+try {
+  ctx = await create();
+  assert.equal((await ctx.getRootProject().import("./project-subject.js")).version, "1.0.0");
+  assert.equal((await ctx.import("./vitest-subject.js")).version, "1.0.0");
+  assert.ok(fs.readdirSync(experimental.fsModuleCachePath).length > 1);
+  await ctx.close();
+  ctx = undefined;
+  fs.writeFileSync(path.join(root, "bun.lock"), JSON.stringify({ version: "2.0.0" }));
+  fs.writeFileSync(generation, "2.0.0");
+  importInHook = true;
+  ctx = await create();
+  assert.deepEqual(hookValues, ["2.0.0", "2.0.0"], "configureVitest imports must use the current generation");
+  assert.equal((await ctx.import("./post-init.js")).version, "2.0.0");
+  assert.ok(keyed.has(path.join(root, "post-init.js").replaceAll("\\\\", "/")));
+} finally {
+  await ctx?.close();
+}
+`,
+    );
+  });
+
+  it("keeps selected projects on the current lock generation with separate cache roots", () => {
+    const { root, generation } = prepareCacheFixture("separate-projects");
+    runCacheApi(
+      root,
+      `
+const generation = ${JSON.stringify(generation)};
+const names = ["A", "B"];
+for (const name of names) {
+  fs.mkdirSync(path.join(root, name));
+  fs.writeFileSync(path.join(root, name, "subject.js"), 'export const version = "__DEPENDENCY_VERSION__";');
+}
+let transforms = 0;
+const run = async (selected, version) => {
+  const ctx = await createVitest("test", {
+    root, config: false, watch: false, experimental, project: selected,
+    projects: names.map((name) => ({
+      extends: false, root: path.join(root, name),
+      plugins: [{
+        name: "fixture-separate-project-generation",
+        transform(code, id) {
+          if (id !== path.join(root, name, "subject.js").replaceAll("\\\\", "/")) return;
+          transforms += 1;
+          return { code: code.replace("__DEPENDENCY_VERSION__", fs.readFileSync(generation, "utf8")), map: null };
+        },
+      }],
+      test: {
+        name,
+        experimental: { fsModuleCache: true, fsModuleCachePath: path.join(root, "cache-" + name) },
+      },
+    })),
+  });
+  try {
+    assert.deepEqual(ctx.projects.map((project) => project.name).sort(), [...selected].sort());
+    for (const name of selected) {
+      assert.equal((await ctx.getProjectByName(name).import("./subject.js")).version, version, "project " + name);
+    }
+  } finally {
+    await ctx.close();
+  }
+};
+await run(names, "1.0.0");
+assert.equal(transforms, 2);
+await run(names, "1.0.0");
+assert.equal(transforms, 2, "same-generation project transforms must stay warm");
+fs.writeFileSync(path.join(root, "bun.lock"), JSON.stringify({ version: "2.0.0" }));
+fs.writeFileSync(generation, "2.0.0");
+await run(["A"], "2.0.0");
+assert.equal(transforms, 3);
+await run(["B"], "2.0.0");
+assert.equal(transforms, 4);
+`,
+    );
+  });
+
+  it("imports an unseen module after an awaited idle cache clear", () => {
+    const { root, generation } = prepareCacheFixture("idle-clear");
+    runCacheApi(
+      root,
+      `
+const generation = ${JSON.stringify(generation)};
+fs.writeFileSync(path.join(root, "first.js"), "export const value = 1;");
+fs.writeFileSync(path.join(root, "next.js"), 'export const value = 2; export const version = "__DEPENDENCY_VERSION__";');
+const create = () => createVitest("test", { root, config: false, watch: false, experimental }, {
+  plugins: [{
+    name: "fixture-clear-generation",
+    transform(code, id) {
+      if (id !== path.join(root, "next.js").replaceAll("\\\\", "/")) return;
+      return { code: code.replace("__DEPENDENCY_VERSION__", fs.readFileSync(generation, "utf8")), map: null };
+    },
+  }],
+});
+let ctx = await create();
+try {
+  assert.equal((await ctx.import("./first.js")).value, 1);
+  assert.ok(fs.readdirSync(experimental.fsModuleCachePath).length > 1);
+  await ctx.waitForTestRunEnd();
+  await ctx.experimental_clearCache();
+  assert.equal(fs.existsSync(experimental.fsModuleCachePath), false);
+  const next = await ctx.import("./next.js");
+  assert.equal(next.value, 2);
+  assert.equal(next.version, "1.0.0");
+  assert.ok(fs.readdirSync(experimental.fsModuleCachePath).length > 0);
+  await ctx.close();
+  ctx = undefined;
+  fs.writeFileSync(path.join(root, "bun.lock"), JSON.stringify({ version: "2.0.0" }));
+  fs.writeFileSync(generation, "2.0.0");
+  ctx = await create();
+  const current = await ctx.import("./next.js");
+  assert.equal(current.value, 2);
+  assert.equal(current.version, "2.0.0", "post-clear entries must use the current generation after restart");
+} finally {
+  await ctx?.close();
+}
+`,
     );
   });
 });

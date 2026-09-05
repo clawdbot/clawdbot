@@ -1,4 +1,3 @@
-// Control UI module implements app scroll behavior.
 import { resolveScrollBehavior } from "../../lib/scroll-behavior.ts";
 import { areUiSessionKeysEquivalent } from "../../lib/sessions/session-key.ts";
 import type { RenderLifecycle } from "./render-lifecycle.ts";
@@ -89,9 +88,6 @@ export function captureChatSessionScrollPosition(target: {
 
 export type ChatScrollHost = {
   renderLifecycle: RenderLifecycle;
-  chatScrollCommitCleanup: (() => void) | null;
-  chatScrollFrame: number | null;
-  chatScrollGeneration: number;
   chatLastScrollTop: number;
   chatLastScrollHeight?: number;
   chatHasAutoScrolled: boolean;
@@ -113,18 +109,11 @@ type ChatScrollOptions = {
   source?: "auto" | "manual" | "resize";
 };
 
-function cancelCommittedChatScroll(host: ChatScrollHost): void {
-  if (host.chatScrollFrame != null) {
-    cancelAnimationFrame(host.chatScrollFrame);
-    host.chatScrollFrame = null;
-  }
-}
+type PendingChatScroll = { manual: boolean; cancel: () => void };
+const pendingChatScrolls = new WeakMap<ChatScrollHost, PendingChatScroll>();
 
 export function cancelChatScroll(host: ChatScrollHost): void {
-  host.chatScrollGeneration += 1;
-  host.chatScrollCommitCleanup?.();
-  host.chatScrollCommitCleanup = null;
-  cancelCommittedChatScroll(host);
+  pendingChatScrolls.get(host)?.cancel();
 }
 
 function setNewMessagesBelow(host: ChatScrollHost, next: boolean): void {
@@ -137,6 +126,105 @@ function setNewMessagesBelow(host: ChatScrollHost, next: boolean): void {
   host.renderLifecycle.invalidate();
 }
 
+function applyChatScroll(
+  host: ChatScrollHost,
+  force: boolean,
+  smooth: boolean,
+  options: ChatScrollOptions,
+): void {
+  const target = host.chatScrollElement?.();
+  if (!target) {
+    return;
+  }
+  const distanceFromBottom = target.scrollHeight - target.scrollTop - target.clientHeight;
+  const contentGrew = target.scrollHeight > (host.chatLastScrollHeight ?? 0) + 1;
+  host.chatLastScrollHeight = target.scrollHeight;
+  const contentChanged = options.contentChanged ?? options.source !== "resize";
+  const manualScroll = options.source === "manual";
+
+  // force=true only overrides when we haven't auto-scrolled yet (initial load).
+  // After initial load, respect the user's scroll position.
+  const effectiveForce = force && !host.chatHasAutoScrolled;
+  const shouldStick =
+    manualScroll ||
+    effectiveForce ||
+    (!host.chatFollowLocked &&
+      (options.source === "resize" ||
+        host.chatUserNearBottom ||
+        distanceFromBottom < NEAR_BOTTOM_THRESHOLD));
+
+  if (!shouldStick) {
+    if (contentChanged || (options.source === "resize" && contentGrew)) {
+      setNewMessagesBelow(host, true);
+    }
+    return;
+  }
+  const behavior = resolveScrollBehavior(smooth ? "smooth" : "auto");
+  // Restoration owns the viewport until it settles or an explicit command
+  // replaces it. Automatic follow must not change policy when it is declined.
+  if (
+    !host.chatScrollToEnd?.({
+      behavior,
+      source: manualScroll ? "manual" : "auto",
+    })
+  ) {
+    return;
+  }
+  if (effectiveForce) {
+    host.chatHasAutoScrolled = true;
+  }
+  host.chatFollowLocked = false;
+  host.chatUserNearBottom = true;
+  setNewMessagesBelow(host, false);
+}
+
+function queueChatScroll(
+  host: ChatScrollHost,
+  force: boolean,
+  smooth: boolean,
+  options: ChatScrollOptions,
+  committed: boolean,
+): void {
+  // A send/latest command keeps its place through incidental render and resize
+  // requests. Reader takeover and lifecycle cancellation retire the whole request.
+  if (options.source !== "manual" && pendingChatScrolls.get(host)?.manual) {
+    return;
+  }
+  cancelChatScroll(host);
+  let frame: number | null = null;
+  let cancelCommit: (() => void) | undefined;
+  const request: PendingChatScroll = {
+    manual: options.source === "manual",
+    cancel: () => {
+      if (pendingChatScrolls.get(host) !== request) {
+        return;
+      }
+      pendingChatScrolls.delete(host);
+      cancelCommit?.();
+      if (frame !== null) {
+        cancelAnimationFrame(frame);
+      }
+    },
+  };
+  pendingChatScrolls.set(host, request);
+  const enqueue = (complete?: () => void) => {
+    frame = requestAnimationFrame(() => {
+      if (pendingChatScrolls.get(host) !== request) {
+        return;
+      }
+      pendingChatScrolls.delete(host);
+      complete?.();
+      applyChatScroll(host, force, smooth, options);
+    });
+    return request.cancel;
+  };
+  if (committed) {
+    enqueue();
+  } else {
+    cancelCommit = host.renderLifecycle.afterCommit(enqueue, request.cancel);
+  }
+}
+
 /** Schedule layout work when the caller already runs after the DOM commit. */
 export function scheduleCommittedChatScroll(
   host: ChatScrollHost,
@@ -144,58 +232,7 @@ export function scheduleCommittedChatScroll(
   smooth = false,
   options: ChatScrollOptions = {},
 ): void {
-  cancelCommittedChatScroll(host);
-  const generation = host.chatScrollGeneration;
-  host.chatScrollFrame = requestAnimationFrame(() => {
-    host.chatScrollFrame = null;
-    if (generation !== host.chatScrollGeneration) {
-      return;
-    }
-    const target = host.chatScrollElement?.();
-    if (!target) {
-      return;
-    }
-    const distanceFromBottom = target.scrollHeight - target.scrollTop - target.clientHeight;
-    const contentGrew = target.scrollHeight > (host.chatLastScrollHeight ?? 0) + 1;
-    host.chatLastScrollHeight = target.scrollHeight;
-    const contentChanged = options.contentChanged ?? options.source !== "resize";
-    const manualScroll = options.source === "manual";
-
-    // force=true only overrides when we haven't auto-scrolled yet (initial load).
-    // After initial load, respect the user's scroll position.
-    const effectiveForce = force && !host.chatHasAutoScrolled;
-    const shouldStick =
-      manualScroll ||
-      effectiveForce ||
-      (!host.chatFollowLocked &&
-        (options.source === "resize" ||
-          host.chatUserNearBottom ||
-          distanceFromBottom < NEAR_BOTTOM_THRESHOLD));
-
-    if (!shouldStick) {
-      if (contentChanged || (options.source === "resize" && contentGrew)) {
-        setNewMessagesBelow(host, true);
-      }
-      return;
-    }
-    const behavior = resolveScrollBehavior(smooth ? "smooth" : "auto");
-    // Restoration owns the viewport until it settles or an explicit command
-    // replaces it. Automatic follow must not change policy when it is declined.
-    if (
-      !host.chatScrollToEnd?.({
-        behavior,
-        source: manualScroll ? "manual" : "auto",
-      })
-    ) {
-      return;
-    }
-    if (effectiveForce) {
-      host.chatHasAutoScrolled = true;
-    }
-    host.chatFollowLocked = false;
-    host.chatUserNearBottom = true;
-    setNewMessagesBelow(host, false);
-  });
+  queueChatScroll(host, force, smooth, options, true);
 }
 
 export function scheduleChatScroll(
@@ -204,20 +241,7 @@ export function scheduleChatScroll(
   smooth = false,
   options: ChatScrollOptions = {},
 ): void {
-  cancelChatScroll(host);
-  const generation = host.chatScrollGeneration;
-  let committed = false;
-  const cancelCommit = host.renderLifecycle.afterCommit(() => {
-    committed = true;
-    if (generation !== host.chatScrollGeneration) {
-      return;
-    }
-    host.chatScrollCommitCleanup = null;
-    scheduleCommittedChatScroll(host, force, smooth, options);
-  });
-  if (!committed) {
-    host.chatScrollCommitCleanup = cancelCommit;
-  }
+  queueChatScroll(host, force, smooth, options, false);
 }
 
 export function handleChatScroll(host: ChatScrollHost, event: Event): void {

@@ -149,6 +149,11 @@ original weight. `MEMORY.md`, `USER.md`, and undated files under `memory/`
 remain evergreen. Dated `YYYY-MM-DD.md` and `YYYY-MM-DD-<slug>.md` files decay
 at any depth, including session-memory notes and nested dreaming reports.
 
+Session transcript hits use the source activity timestamp captured during
+indexing. Retained transcript archives use their indexed file modification
+time. Individual message timestamps remain provenance metadata and do not
+determine the source's recency weight.
+
 ### MMR (diversity)
 
 Reduces redundant results. If five notes all mention the same router config,
@@ -182,6 +187,9 @@ experimental complement.
 Optionally index session transcripts so `memory_search` can recall earlier
 conversations. This is opt-in: set `experimental.sessionMemory: true` and add
 `"sessions"` to `sources` (default `sources` is `["memory"]`).
+
+Use `corpus: "memory"` to search only memory notes. Results containing no session
+transcripts do not load session history or perform session-visibility lookups.
 
 Session hits obey `tools.sessions.visibility`, which defaults to `"all"`.
 `memory_search` still searches the selected agent's indexed corpus; use

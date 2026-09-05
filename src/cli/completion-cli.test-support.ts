@@ -361,11 +361,16 @@ export class PowerShellCompletionRunner {
     child.stderr.setEncoding("utf8");
     this.stdoutLines = createInterface({ input: child.stdout });
     this.readyPromise = new Promise<void>((resolve, reject) => {
-      const readyTimeout = setTimeout(() => {
-        const error = new Error("PowerShell completion runner did not become ready");
+      const readyTimeout = setTimeout(
+        () => fail(new Error("PowerShell completion runner did not become ready")),
+        POWERSHELL_CASE_TIMEOUT_MS,
+      );
+      // Before READY there are no pending requests; poisoning alone would strand the queue.
+      const fail = (error: Error) => {
+        clearTimeout(readyTimeout);
         reject(error);
         this.poison(error);
-      }, POWERSHELL_CASE_TIMEOUT_MS);
+      };
       this.stdoutLines?.on("line", (line) => {
         if (line === `${this.framePrefix}READY`) {
           clearTimeout(readyTimeout);
@@ -373,14 +378,14 @@ export class PowerShellCompletionRunner {
           return;
         }
         if (!line.startsWith(this.framePrefix)) {
-          this.poison(new Error(`Unexpected PowerShell completion stdout: ${line}`));
+          fail(new Error(`Unexpected PowerShell completion stdout: ${line}`));
           return;
         }
         try {
           const response = decodePowerShellCompletionResponse(line.slice(this.framePrefix.length));
           const pending = this.pending.get(response.id);
           if (!pending) {
-            this.poison(new Error(`Unexpected PowerShell completion response id: ${response.id}`));
+            fail(new Error(`Unexpected PowerShell completion response id: ${response.id}`));
             return;
           }
           clearTimeout(pending.timeout);
@@ -393,25 +398,21 @@ export class PowerShellCompletionRunner {
             );
           }
         } catch (error) {
-          this.poison(error instanceof Error ? error : new Error(String(error)));
+          fail(error instanceof Error ? error : new Error(String(error)));
         }
       });
-      child.once("error", (error) => {
-        reject(error);
-        this.poison(error);
-      });
+      child.once("error", fail);
       child.stderr.on("data", (chunk: string) => {
         const stderr = chunk.trim();
         if (stderr) {
-          this.poison(new Error(`Unexpected PowerShell completion stderr: ${stderr}`));
+          fail(new Error(`Unexpected PowerShell completion stderr: ${stderr}`));
         }
       });
       this.exitPromise = new Promise((exitResolve) => {
         child.once("exit", (code, signal) => {
-          clearTimeout(readyTimeout);
           exitResolve({ code, signal });
           if (!this.closing || code !== 0 || signal !== null) {
-            this.poison(
+            fail(
               new Error(
                 `PowerShell completion runner exited unexpectedly with code ${String(code)} signal ${String(signal)}`,
               ),

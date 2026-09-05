@@ -46,6 +46,8 @@ export type GatewayRecoveryRuntime = {
     threadId?: string | number;
     text: string;
     idempotencyKey: string;
+    /** Revalidated after lazy runtime loading and immediately before outbound dispatch. */
+    isCurrent?: () => boolean;
   }) => Promise<{
     /** True when delivery produced zero platform results (policy/channel suppression). */
     suppressed: boolean;

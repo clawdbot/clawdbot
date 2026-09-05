@@ -4,6 +4,7 @@ read_when:
   - Diagnosing a newer database schema error
   - Checking database compatibility before an update or downgrade
   - Proposing a SQLite or persistent-store change
+  - Preparing storage operations for another database backend
   - Recovering a database for an older OpenClaw release
 title: "Database schemas"
 ---
@@ -17,7 +18,7 @@ OpenClaw stores control-plane state in a global SQLite database and agent data i
 | Global control plane | `~/.openclaw/state/openclaw.sqlite`                        | Shared configuration state, registries, approvals, plugin state, and shared runtime state             |
 | Per-agent data plane | `~/.openclaw/agents/<agentId>/agent/openclaw-agent.sqlite` | Sessions, transcripts, memory indexes, auth state, conversation state, and agent-scoped runtime state |
 
-A few high-volume or lifecycle-specific features use dedicated SQLite stores, including the task registry and trajectory data.
+The task registry uses the global control-plane database. Runtime trajectory events live with their sessions in the per-agent database or a configured shared session SQLite store.
 
 ### Meeting transcript tables
 
@@ -80,6 +81,29 @@ One current summary per capture. The primary key is
 
 These are existing feature-local tables. Occupancy episodes and model-backed
 notes do not change their schema or database version.
+
+### Update run ledger
+
+`update_runs` stores one durable record per update in the shared
+`state/openclaw.sqlite` database. `src/infra/update-run-ledger.ts` owns writes
+from the admitting Gateway, orchestrator CLI, and restarted Gateway. The table
+is additive at shared schema version 15: the canonical schema declares it and
+first use ensures it inside the same write transaction. Existing tables and the
+schema version stay unchanged; older readers ignore the new table.
+
+`run_id` is the UUID primary key. Rows retain creation/update timestamps,
+trigger, phase, status, reason, origin, target, before/after versions, steps,
+verification facts, repair attempts, confirmation/finish timestamps, and known
+downtime. Each JSON column has a 16 KiB hard limit with deterministic truncation
+and redaction. The ledger stores bounded diagnostic summaries, not raw logs or
+credentials. There is no automatic history deletion.
+
+The CLI and Gateway share WAL-backed transactions, including while the Gateway
+is stopped. The first terminal outcome wins; subsequent verification can enrich
+its observed facts without rewriting success, failure, skip, or rollback status.
+The restart sentinel carries `stats.runId` and remains the continuation owner;
+consuming it does not delete the run row. Chat, CLI, and status reports read that
+row. See [Run history and reports](/cli/update#run-history-and-reports).
 
 ## Versioning contract
 
@@ -274,6 +298,76 @@ client state.
 The [accepted design](https://github.com/openclaw/openclaw/issues/136617) records
 the schema, migration, ownership, retention and validation boundaries.
 
+## Preparing for another database backend
+
+SQLite remains the supported runtime store. Preparation for PostgreSQL should
+improve the existing store owners and their tests before adding a driver or
+configuration option. The initial target is remote persistence for one Gateway;
+multiple active Gateways would require a separate ownership and coordination
+design. A shared database alone does not make process-local writer queues,
+session lifecycles, or host-owned leases safe across Gateway instances.
+
+### Keep operations at the owning store
+
+Callers should request domain operations, such as claiming a cron run or
+appending a transcript report, from the store that owns the invariant. That
+owner selects and decodes rows, validates current authority, commits changes,
+and publishes the result. Avoid exposing a generic SQL callback to application
+code or adding an asynchronous wrapper around an existing asynchronous facade.
+The plugin KV API already has asynchronous methods over its SQLite owner.
+
+Use Kysely for ordinary queries and mutations. The current
+`getNodeSqliteKysely` facade compiles queries; `executeSqliteQuerySync` runs them
+on the supplied `node:sqlite` connection. Calling Kysely's asynchronous
+`execute` method on that facade is an error. Query compilation with another
+dialect can identify syntax coupling, but does not prove driver behavior,
+isolation, or database compatibility.
+
+Acquire a connection once for an operation and pass that exact connection
+through its transactional helpers. SQLite write callbacks remain synchronous:
+finish asynchronous planning first, then reread authoritative rows after write
+admission. Publish live session changes and other dependent effects only after
+the durable write succeeds. A future network-backed owner must preserve that
+ordering while awaiting its driver.
+
+### Preserve the data and concurrency contracts
+
+An adapter must make these contracts explicit and verify them against a real
+database:
+
+| Contract           | Required behavior                                                                                                                                                                                                                   |
+| ------------------ | ----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| Store identity     | Keep global and per-agent ownership, incognito lifetime, quarantine, and disposal explicit. Filesystem paths currently participate in admission and registry identity; replacing a path with a connection string is not sufficient. |
+| Read consistency   | Define whether each operation needs one snapshot or a fresh authoritative reread. Keep ordered, bounded queries and batch enrichment inside that consistency boundary.                                                              |
+| Conditional writes | Preserve exact revision, session generation, writer claim, and lease-owner predicates. A stale or refused mutation must not publish a success result or alter live state.                                                           |
+| Canonical payloads | Preserve serialized transcript and record text where byte identity, replay, or exact JSON comparison is part of the contract. Keep derived query projections separate.                                                              |
+| Scalar decoding    | Decode driver values at the store boundary, including counts, integer ranges, nullable booleans, timestamps, JSON, and binary bytes. Match TypeScript declarations to observed driver values.                                       |
+| Failure and retry  | Define which failures permit retry of the whole operation. Keep external effects outside a retried transaction, and revalidate authority after awaited work.                                                                        |
+
+Kysely's TypeScript types do not convert driver results; the driver determines
+runtime values. See [Kysely data types](https://kysely.dev/docs/recipes/data-types).
+PostgreSQL transactions must use one acquired client, and its default Read
+Committed isolation can give successive statements different snapshots. An
+adapter therefore needs operation-specific isolation and retry decisions, not
+a mechanical replacement of `BEGIN IMMEDIATE`. See
+[node-postgres transactions](https://node-postgres.com/features/transactions)
+and [PostgreSQL isolation](https://www.postgresql.org/docs/current/transaction-iso.html).
+
+Do not automatically convert canonical JSON text to `jsonb`: PostgreSQL's
+`jsonb` representation changes whitespace, object-key order, and duplicate-key
+handling. A searchable `jsonb` projection would need an explicit design and
+migration decision. See [PostgreSQL JSON types](https://www.postgresql.org/docs/current/datatype-json.html).
+
+### Keep engine-specific capabilities owned
+
+SQLite FTS5/BM25, vector tables, JSON table-valued queries, attached shadow
+databases, WAL maintenance, integrity checks, and backup operations remain
+SQLite capabilities. Keep their implementation behind the memory or database
+lifecycle owner. A future backend must supply equivalent product behavior or
+an explicit capability boundary; a second SQL dialect alone cannot replace
+these features. Schema, retention, migration, and multi-host changes still use
+the review checkpoint below.
+
 ## Review checkpoint for material changes
 
 Before implementing a material SQLite or persistent-store change, open or link a maintainer discussion and record acceptance of the design. A schema-version bump is always material, but a change can be material even when the numeric version stays the same.
@@ -380,6 +474,34 @@ Normal admission remains bounded at 32 identities. Same-store alias repair sums 
 | 13      | State consolidation: cron jobs and subagent runs become JSON-canonical (113 projection columns, five unused indexes removed); installed_plugin_index and shared auth-profile singletons fold into config_machine_state; workspace_attestations merges into workspace_setup_state; gateway origin device tokens become canonical | Unreleased          |
 | 14      | Source-qualified cron creator capture; historical human job creators remain unknown                                                                                                                                                                                                                                             | Unreleased          |
 | 15      | Conversation bindings use exact target keys; redundant agent/session projections removed                                                                                                                                                                                                                                        | Unreleased          |
+| 16      | Skill Workshop ownership moves from workspace/provenance columns to per-agent directory containment                                                                                                                                                                                                                             | Unreleased          |
+
+### State schema 16
+
+Schema 16 removes `workspace_dir` and `claim_released_time` from
+`skill_workshop_proposals`. It also removes `workspace_dir` and
+`idx_skill_workshop_collection_reviews_workspace_time` from collection review
+history and adds `owner_agent_id` plus its owner/time index. Proposal rows remain intact. A proposal whose claim a
+collection review had released becomes `stale` with a status reason, so the
+skill path it once created stays user-owned and Doctor never relocates it.
+
+Skill Workshop ownership is now the physical
+`<state-dir>/agents/<agentId>/agent/workshop-skills` directory. Startup and `openclaw doctor --fix`
+drop the retired columns and index in the shared schema transaction. Both then
+run the same migration to relocate applied legacy Workshop creates to the
+inferred owner agent and retarget eligible pending creates. Conflicts and ambiguous ownership become
+stale proposals and leave the legacy directories unchanged. Review history rows
+map to a unique owner agent when possible; otherwise the schema migration discards them as
+cache-class state.
+
+Skill-only workspace relocation uses the existing `migration_runs` and
+`migration_sources` tables to save pre-move directory identity, file hashes,
+and the workspace attestation timestamp. After relocation, only matching
+attestation-only state is retired; setup state, path aliases, and newer
+attestations remain intact. Interrupted migrations reuse the saved pre-move
+facts rather than inferring them from an empty directory. Workspace reset
+removes pending workspace-scoped receipts. No additional schema version or
+table is required.
 
 ### State schema 15
 
@@ -405,21 +527,31 @@ Schema 9 stores an `agent_databases.path` value relative to the state directory 
 
 ## Integrity checks
 
-| When                                        | Check                                                           |
-| ------------------------------------------- | --------------------------------------------------------------- |
-| Every open                                  | Validate the `schema_meta` table and primary metadata row       |
-| Before a pending migration                  | Run a full integrity, foreign-key, role, schema, and index scan |
-| Gateway background verifier                 | Run the full scan about once daily and log results              |
-| Doctor, backup verification, and compaction | Run the full scan before accepting or rewriting the database    |
+| When                                        | Check                                                               |
+| ------------------------------------------- | ------------------------------------------------------------------- |
+| Every open                                  | Validate the `schema_meta` table and primary metadata row           |
+| Every physical writable agent-database open | Run full integrity, foreign-key, schema, and canonical-index checks |
+| Before a pending migration                  | Run a full integrity, foreign-key, role, schema, and index scan     |
+| Gateway background verifier                 | Run the full scan about once daily and log results                  |
+| Doctor, backup verification, and compaction | Run the full scan before accepting or rewriting the database        |
 
-The Gateway startup preflight reads schema headers only. `openclaw database preflight` performs the release-local shape comparison for an explicit copied file. The background verifier owns the slower recurring full scan for live databases that do not need migration.
+The Gateway startup preflight reads schema headers only. `openclaw database preflight` performs the release-local shape comparison for an explicit copied file. The background verifier also scans already-open databases about once daily.
+
+Memory search and maintenance managers borrow the verified per-agent connection. Acquisition does not reopen or rescan a healthy shared handle. Native and transformed plugin modules share the same process-owned connection lifecycle, query cache, and commit observers. Nested synchronous writes use SQLite savepoints on that connection. A manager retains that exact connection against cache eviction until its work drains, then releases its borrow without closing the database. Explicit quarantine and disposal still revoke it. Full memory rebuilds use separate temporary shadow databases and publish their derived tables in one synchronous transaction. Read-only memory status keeps its separate diagnostic connection and does not create or migrate a missing database.
+
+The shared cache targets 64 handles, but live borrows, synchronous transactions, and incognito state are not evicted. After owners release them, the next new connection trims idle handles back to that target.
+
 Quarantine decisions live only in a dedicated `openclaw-quarantine.sqlite` store, so they survive damage to the databases being quarantined. Verification results are logged.
+
+Background verification errors retain the original name and message and append bounded Node `code` and SQLite `errcode` values from up to eight cause-chain nodes. These diagnostics do not change the verdict: I/O failures remain inconclusive, while proven corruption is reconfirmed by the database owner before quarantine. A generic `disk I/O error` (`errcode=10`) does not establish disk exhaustion.
 
 Agent database maintenance fences other writers with a 60-second lease in the shared state database. A dedicated worker renews that lease during synchronous integrity scans and migration phases. Maintenance still checks the exact persisted owner before mutations and commit, and stops if the heartbeat fails or ownership expires or changes. Finishing or cancelling maintenance stops renewal before releasing the lease; process death leaves at most the remaining lease duration.
 
 The heartbeat proves ownership, not migration progress. A live but stuck maintenance process can keep its lease; stop that process before retrying Doctor.
 
 ## Troubleshooting
+
+`SQLite read-only worker` failures append `code` and numeric SQLite `errcode` diagnostics when the underlying error supplies valid values, including through a bounded cause chain. Report the full code suffix when investigating a failure. A generic `disk I/O error` or `SQLITE_IOERR` alone does not prove the disk is full.
 
 ### Why you cannot go back after updating to 2026.7.2
 

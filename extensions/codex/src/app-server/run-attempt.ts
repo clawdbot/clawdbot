@@ -28,91 +28,103 @@ export async function runCodexAppServerAttempt(
   const connection = await preparation.measure("connection", () =>
     prepareCodexAttemptConnection({ params, options }),
   );
-  const runtime = await preparation.measure("runtime", () =>
-    prepareCodexAttemptRuntime(connection),
-  );
-  const attemptTools = await preparation.measure("tools", () => prepareCodexAttemptTools(runtime));
-  const attemptContext = await preparation.measure("context", () =>
-    prepareCodexAttemptContext(runtime, attemptTools),
-  );
-  const attemptPrompt = await preparation.measure("prompt", () =>
-    prepareCodexAttemptPrompt(attemptContext),
-  );
-  const resources = prepareCodexAttemptResources(attemptPrompt);
-  attemptTools.runtimeYieldCompletionClaim.current = () =>
-    resources.state.nativeHookRelay?.hasClaimedDirectChild() ?? false;
-  await preparation.measure("runtime-start", () => startCodexAttemptRuntime(resources));
-
-  const turnRuntime = createCodexAttemptTurnState(resources);
   try {
-    const lifecycle = createCodexAttemptLifecycleController(resources, turnRuntime);
-    const notifications = createCodexAttemptNotificationController(
-      resources,
-      turnRuntime,
-      lifecycle,
+    const runtime = await preparation.measure("runtime", () =>
+      prepareCodexAttemptRuntime(connection),
     );
-    const serverRequests = createCodexAttemptServerRequestController(
-      resources,
-      turnRuntime,
-      lifecycle,
+    const attemptTools = await preparation.measure("tools", () =>
+      prepareCodexAttemptTools(runtime),
     );
-    const { ensureCurrentThreadRoute } = await preparation.measure("thread-route", () =>
-      prepareCodexAttemptRoute(
-        resources,
-        turnRuntime,
-        notifications,
-        serverRequests.handleServerRequest,
-      ),
-    );
-    const turnRequest = await preparation.measure("turn-request", () =>
-      prepareCodexAttemptTurnRequest(
-        resources,
-        turnRuntime,
-        ensureCurrentThreadRoute,
-        notifications.waitForActiveNativeTurnCompletion,
-      ),
-    );
-    preparation.ready();
-    const turnStart = await startCodexAttemptTurn(
-      resources,
-      turnRuntime,
-      notifications,
-      turnRequest,
-    );
-    if ("result" in turnStart) {
-      return turnStart.result;
-    }
-    const activeTurn = activateCodexAttemptTurn(
-      resources,
-      turnRuntime,
-      lifecycle,
-      notifications,
-      turnStart.turn,
-    );
-    let finalizedResult: EmbeddedRunAttemptResult;
+    // Tool preparation transfers these leases before context or native startup can fail.
     try {
-      await activeTurn.ready;
-      finalizedResult = await finalizeCodexAttempt(
-        resources,
-        turnRuntime,
-        lifecycle,
-        notifications,
-        turnRequest,
-        activeTurn,
+      const attemptContext = await preparation.measure("context", () =>
+        prepareCodexAttemptContext(runtime, attemptTools),
       );
+      const attemptPrompt = await preparation.measure("prompt", () =>
+        prepareCodexAttemptPrompt(attemptContext),
+      );
+      const resources = prepareCodexAttemptResources(attemptPrompt);
+      attemptTools.runtimeYieldCompletionClaim.current = () =>
+        resources.state.nativeHookRelay?.hasClaimedDirectChild() ?? false;
+      await preparation.measure("runtime-start", () => startCodexAttemptRuntime(resources));
+
+      const turnRuntime = createCodexAttemptTurnState(resources);
+      try {
+        const lifecycle = createCodexAttemptLifecycleController(resources, turnRuntime);
+        const notifications = createCodexAttemptNotificationController(
+          resources,
+          turnRuntime,
+          lifecycle,
+        );
+        const serverRequests = createCodexAttemptServerRequestController(
+          resources,
+          turnRuntime,
+          lifecycle,
+        );
+        const { ensureCurrentThreadRoute } = await preparation.measure("thread-route", () =>
+          prepareCodexAttemptRoute(
+            resources,
+            turnRuntime,
+            notifications,
+            serverRequests.handleServerRequest,
+          ),
+        );
+        const turnRequest = await preparation.measure("turn-request", () =>
+          prepareCodexAttemptTurnRequest(
+            resources,
+            turnRuntime,
+            ensureCurrentThreadRoute,
+            notifications.waitForActiveNativeTurnCompletion,
+          ),
+        );
+        preparation.ready();
+        const turnStart = await startCodexAttemptTurn(
+          resources,
+          turnRuntime,
+          notifications,
+          turnRequest,
+        );
+        if ("result" in turnStart) {
+          return turnStart.result;
+        }
+        const activeTurn = activateCodexAttemptTurn(
+          resources,
+          turnRuntime,
+          lifecycle,
+          notifications,
+          turnStart.turn,
+        );
+        let finalizedResult: EmbeddedRunAttemptResult;
+        try {
+          await activeTurn.ready;
+          finalizedResult = await finalizeCodexAttempt(
+            resources,
+            turnRuntime,
+            lifecycle,
+            notifications,
+            turnRequest,
+            activeTurn,
+          );
+        } finally {
+          await cleanupCodexAttempt(resources, turnRuntime, lifecycle, turnRequest, activeTurn);
+        }
+        // Cleanup retires the execution lease; only then can device loss no longer
+        // race the final result captured during asynchronous terminal processing.
+        if (
+          resources.state.executionDisconnectError &&
+          !connection.terminalState.explicitCancellationObserved
+        ) {
+          throw resources.state.executionDisconnectError;
+        }
+        return finalizedResult;
+      } finally {
+        turnRuntime.deadlines.dispose();
+      }
     } finally {
-      await cleanupCodexAttempt(resources, turnRuntime, lifecycle, turnRequest, activeTurn);
+      await attemptTools.disposeMcpTools();
     }
-    // Cleanup retires the execution lease; only then can device loss no longer
-    // race the final result captured during asynchronous terminal processing.
-    if (
-      resources.state.executionDisconnectError &&
-      !connection.terminalState.explicitCancellationObserved
-    ) {
-      throw resources.state.executionDisconnectError;
-    }
-    return finalizedResult;
   } finally {
-    turnRuntime.deadlines.dispose();
+    // Preparation can fail before the active turn installs its terminal freeze.
+    params.abortSignal?.removeEventListener("abort", connection.abortFromUpstream);
   }
 }

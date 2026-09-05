@@ -14,6 +14,7 @@ import { requiresDurableToolResultDelivery } from "./dispatch-from-config.payloa
 import type { AdmittedFollowupTurn, FollowupRunnerParams } from "./followup-turn-admission.js";
 import type { InternalGetReplyOptions } from "./get-reply.types.js";
 import { drainPendingToolTasks } from "./pending-tool-task-drain.js";
+import { recordReplyOperationAgentTurn } from "./reply-operation-run-state.js";
 import { hasReplyOperationExecutionStarted } from "./reply-run-registry.js";
 import { createTypingSignaler, type TypingSignaler } from "./typing-mode.js";
 
@@ -78,6 +79,9 @@ export async function executeFollowupTurn(params: {
   const roomEvent = turn.queued.currentInboundEventKind === "room_event";
   const progressAllowed = () => turn.sendPolicy === "allow" && !roomEvent;
   const currentVerboseLevel = (): VerboseLevel => {
+    if (turn.queued.run.verboseLevelOverride !== undefined) {
+      return turn.queued.run.verboseLevelOverride;
+    }
     const session = turn.session;
     if (session.kind === "session" && session.storePath) {
       try {
@@ -260,7 +264,6 @@ export async function executeFollowupTurn(params: {
               : false,
           )
       : undefined,
-    suppressToolErrorWarnings: sourceOpts?.suppressToolErrorWarnings,
     onToolResult: async (payload) => {
       return await enqueueProgressResult(async () => {
         if (!progressAllowed()) {
@@ -410,6 +413,12 @@ export async function executeFollowupTurn(params: {
       };
     }
   }
+  // Runner defaults may be newer; only the queued sources own this execution result.
+  recordReplyOperationAgentTurn(
+    turn.queued.replyOperationRunStates,
+    turn.operation,
+    execution.outcome,
+  );
   return {
     commentaryPayloadsEnabled,
     execution,

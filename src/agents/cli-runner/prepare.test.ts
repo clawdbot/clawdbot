@@ -10,7 +10,14 @@ import { Type } from "typebox";
 import { afterEach, beforeEach, describe, expect, it, vi, type MockInstance } from "vitest";
 import { createDeferred } from "../../../test/helpers/promise.js";
 import { buildGroupChatContext, buildGroupIntro } from "../../auto-reply/reply/groups.js";
+import {
+  createReplyOperation,
+  replyRunRegistry,
+  type ReplyOperation,
+} from "../../auto-reply/reply/reply-run-registry.js";
+import { prepareReplyToolAuthority } from "../../auto-reply/reply/reply-tool-authority.js";
 import type { ChannelPlugin } from "../../channels/plugins/types.plugin.js";
+import { getRuntimeConfigSnapshot } from "../../config/runtime-snapshot.js";
 import {
   loadSessionEntryReadOnly,
   loadTranscriptEventsSync,
@@ -20,6 +27,7 @@ import { registerContextEngineForOwner } from "../../context-engine/registry.js"
 import type { ContextEngine } from "../../context-engine/types.js";
 import { CliBackendAuthProfilePreparationError } from "../../plugins/cli-backend-errors.js";
 import type {
+  CliBackendExecute,
   CliBackendExecuteContext,
   CliBackendPlugin,
 } from "../../plugins/cli-backend.types.js";
@@ -46,7 +54,9 @@ import {
 import { captureEnv, setTestEnvValue } from "../../test-utils/env.js";
 import {
   createOperationalRunInstanceRef,
+  getAdmittedRunDelegatedAuthority,
   prepareAgentRunAdmission,
+  prepareSystemAgentRunAdmission,
 } from "../admitted-run-context.js";
 import {
   createTestAdmittedRunContext,
@@ -76,6 +86,8 @@ import {
 } from "../cli-runner.test-helpers.js";
 import { hashCliSessionText } from "../cli-session.js";
 import { resetContextWindowCacheForTest } from "../context.js";
+import { claimPendingAgentQuestionAnswerFromCaller } from "../harness/gateway-question.js";
+import { withQuestionGateway } from "../harness/gateway-question.test-support.js";
 import {
   buildActiveImageGenerationTaskPromptContextForSession,
   buildActiveMusicGenerationTaskPromptContextForSession,
@@ -89,6 +101,7 @@ import {
 } from "../test-helpers/model-routing-decision-e2e-fixtures.js";
 import type { SystemAgentToolOptions } from "../tools/system-agent-tool.js";
 import { prepareClaudeCliSkillsPlugin } from "./claude-skills-plugin.js";
+import { executePluginOwnedProcess } from "./execute-plugin.js";
 import { prepareCliRunContext } from "./prepare.js";
 import {
   resetCliRunnerPrepareTestDeps,
@@ -124,8 +137,9 @@ const getRuntimeConfigMock = vi.hoisted(() => vi.fn(() => ({})));
 const ensureSandboxWorkspaceForSessionMock = vi.hoisted(() =>
   vi.fn<() => Promise<SandboxWorkspaceInfo | null>>(async () => null),
 );
-vi.mock("../../config/config.js", () => ({
+vi.mock("../../config/config.js", async () => ({
   getRuntimeConfig: getRuntimeConfigMock,
+  resolveGatewayPort: (await import("../../config/paths.js")).resolveGatewayPort,
 }));
 
 vi.mock("../sandbox.js", () => ({
@@ -273,6 +287,51 @@ type CliContextBudgetTestCase = {
 
 describe("prepareCliRunContext", () => {
   let fixture: ReturnType<typeof createCliRunnerPrepareFixture>;
+
+  async function prepareNativeAuthority(
+    capabilities: readonly string[],
+    overrides: Parameters<typeof fixture.prepare>[0] = {},
+  ) {
+    const mintMcpLoopbackClientGrant = vi.fn(createTestMcpLoopbackClientGrant);
+    const projectNativeToolAuthority = vi.fn((_tools: readonly string[]) => capabilities);
+    const captureNativeToolAuthority = vi.fn((_names: readonly string[] | null) => true);
+    setCliRunnerPrepareTestDeps({
+      getActiveMcpLoopbackRuntime: vi.fn(() => ({
+        port: 31783,
+        ownerToken: "loopback-owner-token",
+        nonOwnerToken: "loopback-non-owner-token",
+      })),
+      mintMcpLoopbackClientGrant,
+      activateMcpLoopbackClientGrantCapture: vi.fn(() => ({ captureNativeToolAuthority })),
+    });
+    setRawCliBackendForPrepareTest({
+      id: "native-cli",
+      pluginId: "native-plugin",
+      bundleMcp: true,
+      bundleMcpMode: "claude-config-file",
+      nativeToolMode: "selectable",
+      toolAvailabilityEnforcement: "execution-args",
+      resolveExecutionArgs: ({ baseArgs }) => baseArgs,
+      projectNativeToolAuthority,
+      config: {
+        command: "native-cli",
+        args: ["--print"],
+        output: "jsonl",
+        input: "stdin",
+        sessionMode: "existing",
+      },
+    });
+    const context = await fixture.prepare({ provider: "native-cli", ...overrides });
+    const capture = expectDefined(context.preparedBackend.mcpClientGrantCapture, "native capture");
+    const observe = expectDefined(capture.captureNativeTools, "native tools observer");
+    return {
+      capture,
+      observe,
+      mintMcpLoopbackClientGrant,
+      projectNativeToolAuthority,
+      captureNativeToolAuthority,
+    };
+  }
 
   it("preserves outer fallback route provenance through CLI admission", async () => {
     const runId = "run-cli-model-fallback-receipt";
@@ -3163,7 +3222,9 @@ describe("prepareCliRunContext", () => {
     }));
     const ensureMcpLoopbackServer = vi.fn(createTestMcpLoopbackServer);
     const createMcpLoopbackServerConfig = vi.fn(createTestMcpLoopbackServerConfig);
-    const activateMcpLoopbackClientGrantCapture = vi.fn(() => true);
+    const activateMcpLoopbackClientGrantCapture = vi.fn(() => ({
+      captureNativeToolAuthority: vi.fn((_names: readonly string[] | null) => true),
+    }));
     const deactivateMcpLoopbackClientGrantCapture = vi.fn(() => true);
     const mintMcpLoopbackClientGrant = vi.fn(createTestMcpLoopbackClientGrant);
     const revokeMcpLoopbackClientGrant = vi.fn(() => true);
@@ -3348,7 +3409,9 @@ describe("prepareCliRunContext", () => {
         ownerToken: "loopback-owner-token",
         nonOwnerToken: "loopback-non-owner-token",
       }));
-      const activateMcpLoopbackClientGrantCapture = vi.fn(() => true);
+      const activateMcpLoopbackClientGrantCapture = vi.fn(() => ({
+        captureNativeToolAuthority: vi.fn((_names: readonly string[] | null) => true),
+      }));
       const deactivateMcpLoopbackClientGrantCapture = vi.fn(() => true);
       const transferMcpLoopbackClientGrant = vi.fn(() => true);
       const mintMcpLoopbackClientGrant = vi.fn(createTestMcpLoopbackClientGrant);
@@ -3498,6 +3561,7 @@ describe("prepareCliRunContext", () => {
         },
         runtimeOwnerToken: "loopback-owner-token",
         admittedRunContext: context.params.admittedRunContext,
+        bindQuestionAnswerAuthority: expect.any(Function),
         toolAuth: {
           agentDir: expect.any(String),
           store: expect.objectContaining({ version: 1, profiles: {} }),
@@ -3607,6 +3671,171 @@ describe("prepareCliRunContext", () => {
     });
   });
 
+  it("keeps native authority pending until the activated runtime reports its tools", async () => {
+    const {
+      capture,
+      observe,
+      mintMcpLoopbackClientGrant,
+      projectNativeToolAuthority,
+      captureNativeToolAuthority,
+    } = await prepareNativeAuthority(["read", "exec"]);
+
+    expect(
+      mintMcpLoopbackClientGrant.mock.calls[0]?.[0]?.context.nativeCronCreatorToolAllowlist,
+    ).toBeNull();
+    expect(projectNativeToolAuthority).not.toHaveBeenCalled();
+    expect(captureNativeToolAuthority).not.toHaveBeenCalled();
+    capture.activate("native-capture");
+    observe(["Read", "Bash"]);
+
+    expect(projectNativeToolAuthority).toHaveBeenCalledExactlyOnceWith(["Read", "Bash"]);
+    expect(captureNativeToolAuthority.mock.calls).toEqual([[null], [["read", "exec"]]]);
+  });
+
+  it.each([
+    {
+      name: "host selection",
+      observed: ["Read", "Bash", "Write"],
+      selected: ["Read"],
+      projected: ["Read"],
+      capabilities: ["read"],
+    },
+    {
+      name: "native removal",
+      observed: ["Read"],
+      selected: ["Read", "Bash"],
+      projected: ["Read"],
+      capabilities: ["read"],
+    },
+    {
+      name: "observed empty surface",
+      observed: [],
+      selected: undefined,
+      projected: [],
+      capabilities: [],
+    },
+    {
+      name: "host empty surface",
+      observed: ["Read", "Bash"],
+      selected: [],
+      projected: [],
+      capabilities: [],
+    },
+  ])(
+    "bounds native authority by $name",
+    async ({ observed, selected, projected, capabilities }) => {
+      const { capture, observe, projectNativeToolAuthority, captureNativeToolAuthority } =
+        await prepareNativeAuthority(
+          capabilities,
+          selected === undefined
+            ? {}
+            : { cliToolAvailability: { native: selected, openClaw: ["message"] } },
+        );
+      capture.activate("native-capture");
+      observe(observed);
+
+      expect(projectNativeToolAuthority).toHaveBeenCalledExactlyOnceWith(projected);
+      expect(captureNativeToolAuthority).toHaveBeenLastCalledWith(capabilities);
+    },
+  );
+
+  it("does not project native authority for a node-placed Claude CLI run", async () => {
+    const mintMcpLoopbackClientGrant = vi.fn(createTestMcpLoopbackClientGrant);
+    const projectNativeToolAuthority = vi.fn(() => ["read", "exec"]);
+    setCliRunnerPrepareTestDeps({
+      getActiveMcpLoopbackRuntime: vi.fn(() => ({
+        port: 31783,
+        ownerToken: "loopback-owner-token",
+        nonOwnerToken: "loopback-non-owner-token",
+      })),
+      createMcpLoopbackServerConfig: vi.fn(createTestMcpLoopbackServerConfig),
+      mintMcpLoopbackClientGrant,
+    });
+    setRawCliBackendForPrepareTest({
+      id: "claude-cli",
+      pluginId: "anthropic",
+      bundleMcp: true,
+      bundleMcpMode: "claude-config-file",
+      nativeToolMode: "selectable",
+      toolAvailabilityEnforcement: "execution-args",
+      resolveExecutionArgs: ({ baseArgs }) => baseArgs,
+      projectNativeToolAuthority,
+      config: {
+        command: "claude",
+        args: ["--print"],
+        output: "jsonl",
+        input: "stdin",
+        sessionMode: "existing",
+      },
+    });
+
+    await fixture.prepare({
+      provider: "claude-cli",
+      sessionEntry: { execHost: "node", execNode: "node-a" } as never,
+      cliToolAvailability: { native: ["Read", "Bash"], openClaw: ["message"] },
+    });
+
+    expect(projectNativeToolAuthority).not.toHaveBeenCalled();
+    // Node placement disables bundled MCP, so no loopback grant exists to carry authority.
+    expect(mintMcpLoopbackClientGrant).not.toHaveBeenCalled();
+  });
+
+  it("drops web_search from observed native authority when disabled for the run", async () => {
+    const { capture, observe, captureNativeToolAuthority } = await prepareNativeAuthority(
+      ["read", "web_fetch", "web_search"],
+      { toolOverrides: { webSearch: false } },
+    );
+    capture.activate("native-capture");
+    observe(["Read", "WebFetch", "WebSearch"]);
+
+    expect(captureNativeToolAuthority).toHaveBeenLastCalledWith(["read", "web_fetch"]);
+  });
+
+  it.each([
+    { name: "missing", tools: undefined },
+    { name: "null", tools: null },
+    { name: "scalar", tools: "Read" },
+    { name: "mixed", tools: ["Read", 7] },
+  ])("clears native authority before rejecting a $name runtime snapshot", async ({ tools }) => {
+    const { capture, observe, projectNativeToolAuthority, captureNativeToolAuthority } =
+      await prepareNativeAuthority(["read"]);
+    capture.activate("native-capture");
+    observe(["Read"]);
+    projectNativeToolAuthority.mockClear();
+
+    expect(() => observe(tools)).toThrow("invalid tool list");
+    expect(captureNativeToolAuthority).toHaveBeenLastCalledWith(null);
+    expect(projectNativeToolAuthority).not.toHaveBeenCalled();
+  });
+
+  it("clears native authority before rejecting a non-canonical backend projection", async () => {
+    const { capture, observe, projectNativeToolAuthority, captureNativeToolAuthority } =
+      await prepareNativeAuthority(["read"]);
+    capture.activate("native-capture");
+    observe(["Read"]);
+    projectNativeToolAuthority.mockReturnValue(["Bash"]);
+
+    expect(() => observe(["Read", "Bash"])).toThrow('non-canonical native capability "Bash"');
+    expect(captureNativeToolAuthority).toHaveBeenLastCalledWith(null);
+  });
+
+  it.each(["unactivated", "stale"] as const)(
+    "rejects native authority updates while capture is %s",
+    async (state) => {
+      const { capture, observe, projectNativeToolAuthority, captureNativeToolAuthority } =
+        await prepareNativeAuthority(["read"]);
+      if (state === "stale") {
+        capture.activate("native-capture");
+        observe(["Read"]);
+        captureNativeToolAuthority.mockReturnValue(false);
+        projectNativeToolAuthority.mockClear();
+      }
+
+      expect(() => observe(["Read", "Bash"])).toThrow("capture is no longer active");
+      expect(projectNativeToolAuthority).not.toHaveBeenCalled();
+    },
+  );
+
   it("fails closed with upgrade guidance when a backend cannot enforce a runtime toolsAllow", async () => {
     const getActiveMcpLoopbackRuntime = vi.fn(() => ({
       port: 31783,
@@ -3653,10 +3882,37 @@ describe("prepareCliRunContext", () => {
     });
     setCliRunnerPrepareTestDeps({ resolveMcpLoopbackPolicyTools });
 
+    const originalToolsAllow = ["write"];
     const context = await fixture.prepare({
       provider: "selectable-cli",
-      toolsAllow: ["write"],
+      sessionKey: "agent:main:main",
+      modelProvider: "policy-provider",
+      model: "policy-model",
+      senderIsOwner: false,
+      clientCaps: ["original-client"],
+      toolsAllow: originalToolsAllow,
     });
+    const bindQuestionAuthority = expectDefined(
+      context.bindQuestionAnswerAuthority,
+      "question authority",
+    );
+    const questionAuthority = bindQuestionAuthority(() => {});
+    originalToolsAllow.push("exec");
+    const caller = {
+      senderIsOwner: false,
+      disableTools: false,
+      clientCaps: ["original-client"],
+      toolsAllow: ["write"],
+      traceAuthorized: false,
+    };
+    expect(context.params.toolsAllow).toBeUndefined();
+    expect(() => questionAuthority.assertCaller(caller)).not.toThrow();
+    expect(() => questionAuthority.assertCaller({ ...caller, toolsAllow: undefined })).toThrow(
+      "caller policy",
+    );
+    expect(() => questionAuthority.assertCaller({ ...caller, clientCaps: [] })).toThrow(
+      "caller policy",
+    );
 
     expect(context.params.cliToolAvailability).toEqual({
       native: [],
@@ -3665,6 +3921,260 @@ describe("prepareCliRunContext", () => {
     expect(resolveMcpLoopbackPolicyTools).toHaveBeenCalledWith(
       expect.objectContaining({ toolsAllow: ["write"] }),
     );
+  });
+
+  it.each([
+    "direct-with-placeholder",
+    "reply-owned",
+    "creator-closed",
+    "caller-retired",
+    "request-cancelled",
+    "retained-after-exit",
+  ] as const)("binds prepared %s native questions to the actual CLI creator", async (mode) => {
+    const config = { tools: { exec: { security: "full", ask: "off" } } } satisfies OpenClawConfig;
+    const runId = `native-question-${mode}`;
+    const admission = prepareSystemAgentRunAdmission(
+      config,
+      runId,
+      "main",
+      "native-question-proof",
+    );
+    const sourceAbort = new AbortController();
+    const requestAbort = new AbortController();
+    let callerCurrent = true;
+    const promptDelivered = createDeferred();
+    const nativeToolCallId = `native-input-${mode}`;
+    const questionId = `${nativeToolCallId}:0`;
+    const request = {
+      toolName: "AskUserQuestion",
+      toolCallId: nativeToolCallId,
+      abortSignal: requestAbort.signal,
+      questions: [
+        {
+          id: "choice",
+          header: "Choice",
+          question: "Continue?",
+          isOther: true,
+          options: [{ label: "Continue" }, { label: "Stop" }],
+        },
+      ],
+    };
+    let retainedRequest: CliBackendExecuteContext["requestUserInput"] | undefined;
+    let nativeAnswer: Awaited<ReturnType<CliBackendExecuteContext["requestUserInput"]>> | undefined;
+    const execute: CliBackendExecute = async function* (execution) {
+      retainedRequest = execution.requestUserInput;
+      expect(execution.modelId).toBe("creator-model");
+      if (mode !== "retained-after-exit") {
+        nativeAnswer = await execution.requestUserInput(request);
+      }
+      yield {
+        type: "result",
+        subtype: "success",
+        is_error: false,
+        result: "completed",
+        session_id: "native-session",
+      };
+    };
+    setRawCliBackendForPrepareTest({
+      id: "native-question-cli",
+      pluginId: "native-question-plugin",
+      bundleMcp: false,
+      nativeToolMode: "selectable",
+      toolAvailabilityEnforcement: "execution-args",
+      resolveExecutionArgs: ({ baseArgs }) => [...baseArgs],
+      prepareExecution: async () => ({ execute }),
+      config: {
+        command: "/bin/sh",
+        args: [],
+        input: "stdin",
+        output: "jsonl",
+        sessionMode: "existing",
+      },
+    });
+    const session = fixture.session;
+    const original = {
+      sessionId: session.sessionTarget.sessionId,
+      sessionKey: session.sessionTarget.sessionKey,
+      sessionFile: session.sessionFile,
+      workspaceDir: session.dir,
+      cwd: session.dir,
+      agentId: "main",
+      provider: "native-question-cli",
+      modelProvider: "question-policy",
+      model: "creator-model",
+      config,
+      messageProvider: "webchat",
+      senderIsOwner: false,
+      clientCaps: ["creator-client"],
+      approvalReviewerDeviceId: "creator-reviewer",
+      cliToolAvailability: { native: ["AskUserQuestion"], openClaw: [] },
+    };
+    const sourceRoute = { provider: original.modelProvider, model: original.model };
+    const caller = {
+      senderIsOwner: false,
+      disableTools: false,
+      messageProvider: "webchat",
+      clientCaps: ["creator-client"],
+      approvalReviewerDeviceId: "creator-reviewer",
+      traceAuthorized: mode === "reply-owned",
+    };
+    let sourceOperation: ReplyOperation | undefined;
+    let answeringPlaceholder: ReplyOperation | undefined;
+    let cleanup: (() => Promise<void>) | undefined;
+    try {
+      if (mode === "reply-owned") {
+        sourceOperation = createReplyOperation({
+          sessionId: original.sessionId,
+          sessionKey: original.sessionKey,
+          resetTriggered: false,
+        });
+        sourceOperation.bindToolAuthoritySnapshot(
+          prepareReplyToolAuthority({
+            run: { ...original, provider: sourceRoute.provider, traceAuthorized: true },
+          }),
+        );
+      }
+      const toolAuthorityFingerprint = sourceOperation?.bindToolAuthorityRoute(sourceRoute);
+      const context = await fixture.prepare({
+        ...original,
+        runId,
+        timeoutMs: 10_000,
+        preparedRunAdmission: admission,
+        abortSignal: sourceAbort.signal,
+        assertCurrent: () => {
+          if (!callerCurrent) {
+            throw new Error("original CLI caller retired");
+          }
+        },
+        replyOperation: sourceOperation,
+        toolAuthorityFingerprint,
+        onPartialReply: async () => promptDelivered.resolve(),
+      });
+      cleanup = context.preparedBackend.cleanup;
+      sourceOperation?.setPhase("running");
+      const target = context.executionTarget;
+      if (target.kind !== "plugin") {
+        throw new Error("Expected the prepared native plugin execution target");
+      }
+      await withQuestionGateway(async (gateway) => {
+        // This suite normally stubs runtime config; the shared peer owns the exact test port.
+        getRuntimeConfigMock.mockImplementation(() =>
+          expectDefined(getRuntimeConfigSnapshot(), "isolated question Gateway config"),
+        );
+        const processRun = executePluginOwnedProcess({
+          context,
+          execute: target.execute,
+          executionCommand: "/bin/sh",
+          executionArgs: [],
+          env: { PATH: "/bin:/usr/bin" },
+          prompt: context.params.prompt,
+          useResume: false,
+          noOutputTimeoutMs: 5_000,
+          consumeStdout: () => {},
+        });
+        void processRun.catch(() => undefined);
+        try {
+          if (mode === "retained-after-exit") {
+            await processRun;
+            const invoke = expectDefined(retainedRequest, "retained native input callback");
+            await expect(invoke(request)).resolves.toMatchObject({ status: "cancelled" });
+            expect(gateway.requests).toHaveLength(0);
+            return;
+          }
+          await Promise.race([
+            promptDelivered.promise,
+            processRun.then(() => {
+              throw new Error("Native process ended before its question was presented");
+            }),
+          ]);
+          if (mode === "direct-with-placeholder") {
+            // A later answer can own a different next-turn model; it is not this question's creator.
+            answeringPlaceholder = createReplyOperation({
+              sessionId: original.sessionId,
+              sessionKey: original.sessionKey,
+              resetTriggered: false,
+            });
+            const nextRoute = { provider: "next-policy", model: "next-model" };
+            answeringPlaceholder.bindToolAuthoritySnapshot(
+              prepareReplyToolAuthority({
+                run: { ...original, ...nextRoute, clientCaps: [] },
+              }),
+            );
+            answeringPlaceholder.bindToolAuthorityRoute(nextRoute);
+            expect(replyRunRegistry.get(original.sessionKey)).toBe(answeringPlaceholder);
+          }
+          const answer = () =>
+            claimPendingAgentQuestionAnswerFromCaller({
+              sessionKey: original.sessionKey,
+              text: "Continue",
+              caller,
+              assertSourceCurrent: () => {},
+            });
+          if (mode === "creator-closed") {
+            admission.close();
+            await expect(answer()).rejects.toThrow("no longer active");
+            expect(
+              gateway.requests.filter((frame) => frame.method === "question.resolve"),
+            ).toHaveLength(0);
+            requestAbort.abort();
+            await processRun;
+            expect(nativeAnswer).toMatchObject({ status: "cancelled" });
+          } else if (mode === "caller-retired") {
+            callerCurrent = false;
+            await expect(answer()).rejects.toThrow("original CLI caller retired");
+            expect(
+              gateway.requests.filter((frame) => frame.method === "question.resolve"),
+            ).toHaveLength(0);
+            // A late Gateway answer cannot revive the retired native caller.
+            gateway.manager.resolve(questionId, { answers: { choice: ["Continue"] } });
+            await processRun;
+            expect(nativeAnswer).toMatchObject({ status: "cancelled" });
+            expect(sourceAbort.signal.aborted).toBe(false);
+            expect(requestAbort.signal.aborted).toBe(false);
+            expect(
+              getAdmittedRunDelegatedAuthority(context.params.admittedRunContext),
+            ).toBeDefined();
+          } else if (mode === "request-cancelled") {
+            requestAbort.abort();
+            await processRun;
+            expect(nativeAnswer).toMatchObject({ status: "cancelled" });
+            await expect(answer()).resolves.toBe(false);
+            await expect(gateway.manager.waitAnswer(questionId)).resolves.toMatchObject({
+              status: "cancelled",
+            });
+          } else {
+            await expect(
+              claimPendingAgentQuestionAnswerFromCaller({
+                sessionKey: original.sessionKey,
+                text: "Continue",
+                caller: { ...caller, clientCaps: [] },
+                assertSourceCurrent: () => {},
+              }),
+            ).rejects.toThrow("caller policy");
+            expect(
+              gateway.requests.filter((frame) => frame.method === "question.resolve"),
+            ).toHaveLength(0);
+            await expect(answer()).resolves.toBe(true);
+            await processRun;
+            expect(nativeAnswer).toEqual({ status: "answered", answers: { choice: ["Continue"] } });
+            if (sourceOperation) {
+              expect(sourceOperation.toolAuthorityRoute).toEqual(sourceRoute);
+            }
+          }
+        } finally {
+          requestAbort.abort();
+          sourceAbort.abort();
+          await processRun.catch(() => undefined);
+        }
+      });
+    } finally {
+      requestAbort.abort();
+      sourceAbort.abort();
+      answeringPlaceholder?.complete();
+      sourceOperation?.complete();
+      admission.close();
+      await cleanup?.();
+    }
   });
 
   it("translates disableTools into an exact empty cap for selectable backends", async () => {

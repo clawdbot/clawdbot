@@ -39,6 +39,8 @@ describe("SessionRowSchema", () => {
     const roundTripped = structuredClone(row);
 
     expect(SessionRowSchema.properties.activeLeafEntryId).toBeDefined();
+    expect(SessionRowSchema.properties.activeModel).toBeDefined();
+    expect(SessionRowSchema.properties.activeModelProvider).toBeDefined();
     expect(SessionRowSchema.properties.lastRunId).toBeDefined();
     expect(Value.Check(SessionRowSchema, roundTripped)).toBe(true);
     expect(Value.Check(SessionRowSchema, { ...roundTripped, activeLeafEntryId: null })).toBe(true);

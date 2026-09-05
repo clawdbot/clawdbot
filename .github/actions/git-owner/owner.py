@@ -1,4 +1,5 @@
 import base64
+import builtins
 import json
 import os
 import re
@@ -9,6 +10,7 @@ import subprocess
 import sys
 import tempfile
 import time
+from types import TracebackType
 
 linux = os.environ.get("RUNNER_OS", sys.platform) in ("Linux", "linux")
 fetch_timeout_seconds = 120 if linux else 90
@@ -121,15 +123,40 @@ def group_alive(pgid, deadline):
         return False
     except PermissionError:
         pass  # EPERM can mean zombie-only; the census must still prove extinction.
-    # Zombies are terminated, not writers. A failed/ambiguous inspection
-    # never authorizes checkout reuse, including after a denied signal probe.
-    result = subprocess.run(
-        ["ps", "-axo", "pgid=,stat="], stdin=subprocess.DEVNULL,
-        stdout=subprocess.PIPE, text=True, check=True,
-        timeout=max(0.001, deadline - time.monotonic()),
-    )
-    return any(int(group) == pgid and not state.startswith("Z")
-               for group, state in (line.split() for line in result.stdout.splitlines()))
+    # Darwin -g selects a group; procps selects its session (a superset because
+    # run_git starts a new session). Pin Darwin's standard, not legacy, -g syntax.
+    try:
+        result = subprocess.run(
+            ["ps", "-o", "pgid=,stat=", "-g", str(pgid)], stdin=subprocess.DEVNULL,
+            stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True,
+            env={**os.environ, "COMMAND_MODE": "unix2003"},
+            timeout=max(0.001, deadline - time.monotonic()),
+        )
+    except subprocess.TimeoutExpired as error:
+        print((error.stderr or b"").decode(errors="replace"), end="", file=sys.stderr)
+        raise
+    if result.stderr:
+        print(result.stderr, end="", file=sys.stderr)
+    states = []
+    if result.returncode != 1 or result.stdout or result.stderr:
+        result.check_returncode()
+        # Validate the complete census before ignoring zombies; Darwin ps can
+        # report sysctl errors on stderr with exit 0. Neither permits reuse.
+        if result.stderr or not re.fullmatch(
+            r"(?:[ \t]*[1-9][0-9]*[ \t]+[RSDTtXZxKWPIU?][<+NLlsEVWX]*[ \t]*\n)+", result.stdout
+        ):
+            raise RuntimeError("Invalid process group census")
+        states = [state for group, state in (line.split() for line in result.stdout.splitlines())
+                  if int(group) == pgid]
+    if states:
+        return any(not state.startswith("Z") for state in states)
+    # Empty selection (exit 1), or a session with only other groups, can race
+    # extinction. Require native ESRCH; a bare status 1 or EPERM proves nothing.
+    try:
+        os.killpg(pgid, 0)
+    except ProcessLookupError:
+        return False
+    raise RuntimeError("Process group census missed a present group")
 
 
 def drain(child, job):
@@ -367,6 +394,14 @@ def checkout_harness(sha):
     if kind == "linux-node" and not os.path.isfile(os.path.join(workspace, action)):
         raise GitFailure(1)
     harness = os.path.join(workspace, ".ci-harness")
+    # This owner creates the harness, not candidate source. Keep strict source-status
+    # checks useful without hiding tracked edits or similarly named nested paths.
+    exclude = os.path.join(workspace, git_output(workspace, "rev-parse", "--git-path", "info/exclude").strip())
+    os.makedirs(os.path.dirname(exclude), exist_ok=True)
+    with open(exclude, "a+b") as output:
+        output.seek(0)
+        if output.read().splitlines()[-1:] != [b"/.ci-harness/"]:
+            output.write(b"\n/.ci-harness/\n")
     os.makedirs(harness, exist_ok=True)
     if sha == os.environ["WORKFLOW_SHA"]:
         # Export the workflow revision from the freshly populated index, replacing
@@ -507,14 +542,70 @@ def main():
         checkout_environment.clear()
 
 
+def terminal_diagnostic(error, owner_code):
+    # Code identity, not a filename supplied by policy, proves source provenance.
+    codes = {id(owner_code): owner_code}
+    pending = [owner_code]
+    while pending:
+        for value in pending.pop().co_consts:
+            if type(value) is type(owner_code):
+                codes[id(value)] = value
+                pending.append(value)
+    names = {value: value.__name__ for value in vars(builtins).values()
+             if isinstance(value, type) and issubclass(value, BaseException)}
+    names.update({FetchTimeout: "FetchTimeout", GitFailure: "GitFailure"})
+    records, seen, via = [], set(), "terminal"
+    while error is not None and id(error) not in seen and len(records) < 4:
+        seen.add(id(error))
+        record = {"type": names.get(type(error), "unknown"), "via": via}
+        for field in ("errno", "winerror"):
+            value = getattr(error, field, None)
+            if type(value) is int and -(2 ** 31) <= value < 2 ** 32:
+                record[field] = value
+        frames, trace = [], error.__traceback__
+        # Bound traversal as well as output; malformed metadata cannot stall exit.
+        for _ in range(256):
+            if trace is None:
+                break
+            if type(trace) is not TracebackType:
+                raise TypeError
+            frame, code = trace.tb_frame, trace.tb_frame.f_code
+            if frame.f_globals is globals() and id(code) in codes and 0 < trace.tb_lineno < 2 ** 31:
+                frames.append({"function": code.co_name[:64], "line": trace.tb_lineno})
+                frames = frames[-6:]
+            trace = trace.tb_next
+        record["owner_frames"] = frames
+        if trace is not None:
+            record["traceback_truncated"] = 1
+        records.append(record)
+        cause = error.__cause__
+        error, via = (cause, "cause") if cause is not None else (error.__context__, "context")
+    return records
+
+
 if __name__ == "__main__":
+    exit_code, terminal_error = 0, None
     try:
         main()
     except FetchTimeout:
-        raise SystemExit(124)
+        exit_code = 124
     except GitFailure as error:
-        raise SystemExit(error.code)
+        exit_code = error.code
     except Exception as error:
-        # Do not print command arguments or environment: Git may carry credentials.
-        print(f"::error::Git ownership/setup failed ({type(error).__name__}); refusing reuse or retry", file=sys.stderr)
-        raise SystemExit(125)
+        exit_code, terminal_error = 125, error
+    # Leave the handler before diagnostics or exit can raise: older Python's
+    # implicit exception chaining can loop on an already-cyclic context.
+    if terminal_error is not None:
+        name, diagnostic = "unknown", "unavailable"
+        try:
+            records = terminal_diagnostic(terminal_error, sys._getframe().f_code)
+            diagnostic = json.dumps(records, separators=(",", ":"))
+            name = records[0]["type"]
+        except BaseException:
+            pass  # Diagnostics must never replace the authoritative terminal exit.
+        try:
+            print(f"::error::Git ownership/setup failed ({name}); refusing reuse or retry", file=sys.stderr)
+            print(f"[ci-git-owner] diagnostic={diagnostic}", file=sys.stderr)
+        except BaseException:
+            pass
+    raise SystemExit(exit_code)

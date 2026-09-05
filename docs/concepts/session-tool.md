@@ -145,7 +145,12 @@ An accepted result keeps target admission separate from announcement delivery.
 `delivery.status` describes only the later announcement as `pending` or `skipped`.
 Neither field is a target-completion receipt.
 
-A waited send that finishes without visible assistant text returns `status: "no_reply"`. That is a terminal, intentional non-outcome: no announcement remains pending. Continue without waiting, or send a new message if a response is required.
+Replies come from the completed run's terminal result. When a same-session
+target has already delivered its final reply to the source conversation through
+`message`, OpenClaw skips the duplicate channel announcement. Progress messages
+and replies stored only in the internal UI do not count as external delivery.
+
+A waited send that finishes without visible assistant text returns `status: "no_reply"`; no announcement remains pending. If the target delivered its final reply directly, the result says so and tells the caller not to resend. Otherwise, continue without waiting or send a new message if a response is required.
 
 Thread-scoped chat sessions, such as keys ending in `:thread:<id>`, are not valid `sessions_send` targets. Use the parent channel session key for inter-agent coordination so tool-routed messages do not appear inside an active human-facing thread.
 
@@ -191,7 +196,7 @@ Key options:
 - `context: "fork"` when the child needs the current requester transcript; this requires `runtime: "subagent"` and the same agent as the requester, whether the child is hidden or visible. Use `context: "isolated"` explicitly for a clean child. Omission means isolated context for non-thread spawns; thread-bound native sub-agents follow `threadBindings.defaultSpawnContext`, which defaults to `fork`.
 - `visible: true` to create a persistent dashboard session instead of a hidden sub-agent session. Visible spawns support an explicit sidebar `group`, model, working directory, same-agent transcript fork, and an optional [managed worktree](/concepts/managed-worktrees); see [Sub-agents](/tools/subagents#tool-parameters) for the exact compatibility limits. The accepted result is a receipt: it includes the child session key, run id, a Control UI `sessionUrl` (omitted when the Control UI is disabled), and an `owner` record naming the requesting agent. When acknowledging the spawn in a channel, put the session URL on the first line and `Owner: <label>` on the second. The spawned session is attributed to the requesting agent in the sidebar; see [Multi-user mode](/concepts/multi-user#agent-spawned-sessions).
 
-Default leaf sub-agents do not get session tools. When `maxSpawnDepth >= 2`, depth-1 orchestrator sub-agents additionally receive `sessions_spawn`, `subagents`, `sessions_list`, and `sessions_history` so they can manage their own children. Leaf runs still do not get recursive orchestration tools.
+Sub-agents below the default depth limit of `5` receive `sessions_spawn`, `subagents`, `sessions_list`, and `sessions_history` so they can manage their own children. Set a lower `maxSpawnDepth` to turn sessions at that depth into leaves sooner.
 
 Ordinary announcing runs return a completion event to the requester. Follow the accepted receipt for other completion modes: collectors require explicit collection, directly routed thread sessions reply in the bound thread, and quiet runs send no completion notification. Announce delivery preserves bound thread/topic routing when available, and if the completion origin only identifies a channel, OpenClaw can still reuse the requester session's stored route (`lastChannel` / `lastTo`) for direct delivery.
 

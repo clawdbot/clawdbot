@@ -5,6 +5,7 @@ export function copyAttemptDeliveryState(attempt: EmbeddedRunAttemptResult) {
     latestMcpAppChannelView: attempt.latestMcpAppChannelView,
     latestMcpConnectAction: attempt.latestMcpConnectAction,
     didSendViaMessagingTool: attempt.didSendViaMessagingTool,
+    sourceReplyDelivered: attempt.sourceReplyDelivered,
     didDeliverSourceReplyViaMessageTool: attempt.didDeliverSourceReplyViaMessageTool === true,
     didSendDeterministicApprovalPrompt: attempt.didSendDeterministicApprovalPrompt,
     messagingToolSentTexts: attempt.messagingToolSentTexts,

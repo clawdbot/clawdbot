@@ -1,7 +1,9 @@
 // Control UI E2E tests cover composable skill references in the chat composer.
+import { writeFile } from "node:fs/promises";
 import path from "node:path";
 import { expect, it } from "vitest";
 import { createControlUiE2eArtifactDir } from "../test-helpers/control-ui-e2e-artifacts.ts";
+import { takeControlUiViewportScreenshot } from "../test-helpers/control-ui-e2e-screenshot.ts";
 import { installMockGateway } from "../test-helpers/control-ui-e2e.ts";
 import { createControlUiE2eSuite } from "./control-ui-e2e-suite.test-support.ts";
 
@@ -94,10 +96,10 @@ suite.define(() => {
           .poll(() => picker.getByRole("option").first().textContent())
           .toContain("Auto Review");
         if (artifactDir) {
-          await page.screenshot({
-            path: path.join(artifactDir, "skill-reference-picker.png"),
-            fullPage: true,
-          });
+          await writeFile(
+            path.join(artifactDir, "skill-reference-picker.png"),
+            await takeControlUiViewportScreenshot(page, page.locator(".shell"), [picker]),
+          );
         }
         await composer.press("Enter");
         await expect.poll(() => composer.inputValue()).toBe("Review this with $autoreview ");
@@ -110,10 +112,10 @@ suite.define(() => {
           .toBe("Review this with $autoreview and $technical_documentation ");
 
         if (artifactDir) {
-          await page.screenshot({
-            path: path.join(artifactDir, "skill-references-selected.png"),
-            fullPage: true,
-          });
+          await writeFile(
+            path.join(artifactDir, "skill-references-selected.png"),
+            await takeControlUiViewportScreenshot(page, page.locator(".shell"), [composer]),
+          );
         }
 
         await page.getByRole("button", { name: "Send message" }).click();

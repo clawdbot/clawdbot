@@ -9,7 +9,7 @@ import {
   runOpenClawStateWriteTransaction,
   type OpenClawStateDatabaseOptions,
 } from "./openclaw-state-db.js";
-import { emitUserProfilesChanged } from "./user-profile-events.js";
+import { emitUserProfilesChanged, publishUserProfileAliasChange } from "./user-profile-events.js";
 import { userProfilesDb } from "./user-profiles-internal.js";
 import { readGatewayOwnerProfileRows } from "./user-profiles-owner.js";
 
@@ -55,6 +55,9 @@ export function repairMergedGatewayOwnerProfile(
             .set({ merged_into: null, updated_at: now })
             .where("id", "=", GATEWAY_OWNER_PROFILE_ID),
         );
+        if (owner.merged_into) {
+          deferSqlitePostCommitPublication(db, publishUserProfileAliasChange);
+        }
       } else {
         // A merged legacy UUID is a person's tombstone, never a reusable owner head.
         executeSqliteQuerySync(

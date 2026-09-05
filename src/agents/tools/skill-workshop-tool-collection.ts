@@ -71,7 +71,7 @@ export const skillCollectionPlanSchema = Type.Optional(
     Type.Object(
       {
         action: stringEnum(["write", "drop"] as const),
-        name: Type.String(),
+        skill_key: Type.String(),
         description: Type.Optional(Type.String()),
         content: Type.Optional(Type.String()),
         reason: Type.Optional(Type.String()),
@@ -81,7 +81,7 @@ export const skillCollectionPlanSchema = Type.Optional(
     {
       maxItems: MAX_RECONCILED_SKILLS,
       description:
-        "Only the skills to change; unlisted skills stay. write requires description and complete SKILL.md content; drop requires a reason. Skills not created by Skill Workshop are read-only.",
+        "Only Workshop-generated skills to change, identified by canonical skill_key; unlisted skills stay. write requires description and complete SKILL.md content; drop requires a reason.",
     },
   ),
 );
@@ -91,7 +91,7 @@ export async function executeSkillCollectionReconcile(params: {
   workspaceDir: string;
   readSkillHashes: ReadonlyMap<string, string>;
   context?: SkillCollectionReconcileContext;
-  config?: OpenClawConfig;
+  config: OpenClawConfig;
   agentId?: string;
   env?: NodeJS.ProcessEnv;
 }) {
@@ -110,8 +110,6 @@ export async function executeSkillCollectionReconcile(params: {
       readSkillTreeHashes: params.context?.readSkillTreeHashes ?? new Map(),
       config: params.config,
       agentId: params.agentId,
-      agentIds: params.context?.agentIds,
-      approvedSkillNamesByAgent: params.context?.approvedSkillNamesByAgent,
       env: params.env,
       ...(params.context?.assertCurrent ? { assertCurrent: params.context.assertCurrent } : {}),
     });
@@ -131,9 +129,21 @@ export async function executeSkillCollectionReconcile(params: {
 
 export async function executeSkillCollectionRestore(params: {
   workspaceDir: string;
+  config: OpenClawConfig;
+  agentId?: string;
   env?: NodeJS.ProcessEnv;
 }) {
-  const result = await restoreLatestSkillCollectionBackup(params);
+  if (!params.agentId) {
+    throw new ToolInputError(
+      "Skill Workshop restore requires the active agent configuration and id",
+    );
+  }
+  const result = await restoreLatestSkillCollectionBackup({
+    workspaceDir: params.workspaceDir,
+    config: params.config,
+    agentId: params.agentId,
+    ...(params.env ? { env: params.env } : {}),
+  });
   return textResult(
     `Restored skill collection backup ${result.backupId}: restored ${result.restored.length}, removed ${result.removed.length}.`,
     result,
@@ -143,12 +153,17 @@ export async function executeSkillCollectionRestore(params: {
 export function executeSkillCollectionHistory(
   params: {
     workspaceDir: string;
+    config: OpenClawConfig;
+    agentId?: string;
     env?: NodeJS.ProcessEnv;
   },
   maxChars: number,
 ) {
+  if (!params.agentId) {
+    throw new ToolInputError("Skill Workshop history requires the active agent id");
+  }
   const outcomes = listSkillCollectionReviewOutcomes(
-    params.workspaceDir,
+    params.agentId,
     params.env ? { env: params.env } : {},
   );
   const reviews = [];
@@ -196,18 +211,18 @@ function readCollectionPlanParam(params: Record<string, unknown>): SkillCollecti
       throw new ToolInputError(`collection[${index}] must be an object`);
     }
     const action = readToolStringParam(entry, "action", { required: true });
-    const name = readToolStringParam(entry, "name", { required: true });
+    const skillKey = readToolStringParam(entry, "skill_key", { required: true });
     if (action === "drop") {
       return {
         action,
-        name,
+        skillKey,
         reason: readToolStringParam(entry, "reason", { required: true }),
       };
     }
     if (action === "write") {
       return {
         action,
-        name,
+        skillKey,
         description: readToolStringParam(entry, "description", { required: true }),
         content: readToolStringParam(entry, "content", { required: true, trim: false }),
       };
@@ -217,4 +232,4 @@ function readCollectionPlanParam(params: Record<string, unknown>): SkillCollecti
 }
 
 export const SKILL_COLLECTION_ACTION_DESCRIPTION =
-  "read = inspect one current skill; reconcile = one atomic call that rewrites, creates, or drops the listed skills; unlisted skills stay.";
+  "read = inspect one current skill; reconcile = one atomic call that rewrites, creates, or drops the listed skills by canonical skill_key; unlisted skills stay.";

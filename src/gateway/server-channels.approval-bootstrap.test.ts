@@ -12,7 +12,11 @@ import {
   type SubsystemLogger,
 } from "../logging/subsystem.js";
 import { createEmptyPluginRegistry, type PluginRegistry } from "../plugins/registry.js";
-import { getActivePluginRegistry, setActivePluginRegistry } from "../plugins/runtime.js";
+import {
+  getActivePluginRegistry,
+  requireActivePluginChannelRegistry,
+  setActivePluginRegistry,
+} from "../plugins/runtime.js";
 import { createRuntimeChannel } from "../plugins/runtime/runtime-channel.js";
 import type { PluginRuntime } from "../plugins/runtime/types.js";
 import { DEFAULT_ACCOUNT_ID } from "../routing/session-key.js";
@@ -95,6 +99,7 @@ function createManager(
   const channelRuntimeEnvs = { discord: runtime } as unknown as Record<ChannelId, RuntimeEnv>;
   return createChannelManager({
     getRuntimeConfig: () => ({}),
+    getPluginRegistry: requireActivePluginChannelRegistry,
     channelLogs,
     channelRuntimeEnvs,
     ...(options?.channelRuntime ? { channelRuntime: options.channelRuntime } : {}),

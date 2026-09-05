@@ -48,7 +48,10 @@ const transformProviderSystemPrompt: Parameters<
   typeof buildAttemptSystemPrompt
 >[0]["transformProviderSystemPrompt"] = ({ context }) => context.systemPrompt;
 
-async function preparePermissionPrompt(isRawModelRun = false) {
+async function preparePermissionPrompt(
+  isRawModelRun = false,
+  thinkLevel?: EmbeddedRunAttemptParams["thinkLevel"],
+) {
   const tool = (name: string): AgentTool => ({
     name,
     label: name,
@@ -75,6 +78,7 @@ async function preparePermissionPrompt(isRawModelRun = false) {
     sessionKey: "agent:main:permission-prompt",
     workspaceDir: "/tmp/openclaw",
     config: {},
+    thinkLevel,
   } as EmbeddedRunAttemptParams;
   const capabilityToolNames = new Set(tools.map(({ name }) => name));
   const prepared = await prepareEmbeddedAttemptSystemPrompt({
@@ -118,6 +122,16 @@ async function preparePermissionPrompt(isRawModelRun = false) {
 }
 
 describe("buildAttemptSystemPrompt", () => {
+  it("keeps model instructions identical when only reasoning effort changes", async () => {
+    const prompts = [];
+    for (const effort of ["low", "high", "medium"] as const) {
+      prompts.push((await preparePermissionPrompt(false, effort)).prepared.systemPromptText);
+    }
+    expect(prompts[0]).not.toBe("");
+    expect(prompts[1]).toBe(prompts[0]);
+    expect(prompts[2]).toBe(prompts[0]);
+  });
+
   it.each([
     { sandboxSessionKey: "global", mode: "off", sandboxed: false },
     { sandboxSessionKey: "agent:main:policy", mode: "all", sandboxed: true },

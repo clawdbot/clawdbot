@@ -37,6 +37,7 @@ import {
 import { resolveSessionWorkspace } from "../../lib/sessions/workspace.ts";
 import { displayedChatSessionBranches } from "./chat-history-branches.ts";
 import { ChatPaneDiscussion } from "./chat-pane-discussion.ts";
+import { sidebarPanelDefinitions } from "./chat-pane-embedded-panels.ts";
 import { resolveChatPaneDesktopTarget, resolveChatPanePlacement } from "./chat-pane-placement.ts";
 import { readChatSessionActionAccess } from "./chat-session-action-access.ts";
 import { renderBackgroundTasksToggle } from "./components/chat-background-tasks-render.ts";
@@ -47,7 +48,6 @@ import type {
   HeaderMenuAction,
   HeaderMenuActionKind,
   HeaderMenuQuickAction,
-  HeaderMenuStatusAction,
 } from "./components/chat-header-session-menu.ts";
 import {
   canRevealSessionWorkspace,
@@ -60,9 +60,19 @@ import {
   renderChatSessionSharing,
 } from "./components/chat-session-sharing.ts";
 import type { SessionWorkspaceProps } from "./components/chat-session-workspace.ts";
+import type { SidebarPanelDefinition } from "./components/chat-sidebar-region-types.ts";
 import { renderContinueInTerminalDialog } from "./components/continue-in-terminal-dialog.ts";
-import { hasAbortableSessionRun } from "./run-lifecycle.ts";
-import type { SidebarLayout } from "./sidebar-layout.ts";
+import { hasDirectSessionRun } from "./run-lifecycle.ts";
+import {
+  ensureSidebarConversation,
+  promoteSidebarPanel,
+  setSidebarDock,
+  setSidebarExpanded,
+  sidebarActivePanel,
+  sidebarDock,
+  sidebarMainPanel,
+  type SidebarLayout,
+} from "./sidebar-layout.ts";
 
 export abstract class ChatPaneHeader extends ChatPaneDiscussion {
   /** Gateway-served project icon for a session workspace, on the same credentials as agent avatars. */
@@ -91,21 +101,100 @@ export abstract class ChatPaneHeader extends ChatPaneDiscussion {
     };
   }
 
-  private compactHeaderStatusActions(): HeaderMenuStatusAction[] {
-    if (!this.narrow || !this.context.overlays.snapshot.controlUiRefreshRequired) {
-      return [];
+  private renderPanelLayoutActions(
+    layout: SidebarLayout | undefined,
+    definitions: SidebarPanelDefinition[],
+  ) {
+    if (!layout) {
+      return nothing;
     }
-    return [
-      {
-        id: "refresh",
-        label: `${t("chat.sidebar.serverUpdatedTitle")} · ${t(
-          "chat.sidebar.serverUpdatedRefresh",
-        )}`,
-        icon: icons.refresh,
-        tone: "info",
-        onActivate: () => globalThis.location.reload(),
-      },
-    ];
+    const side = sidebarActivePanel(layout);
+    const mainSlot = sidebarMainPanel(layout)?.slot ?? "conversation";
+    const mainDefinition = definitions.find((definition) => definition.slot === mainSlot);
+    const sideDefinition = definitions.find((definition) => definition.slot === side?.slot);
+    const split = layout.open === true && !layout.expanded;
+    const focusLabel = t(layout.expanded ? "chat.sidePanel.restore" : "chat.sidePanel.expand");
+    const swapLabel =
+      mainDefinition && sideDefinition
+        ? t("chat.sidePanel.swap", { main: mainDefinition.label, side: sideDefinition.label })
+        : "";
+    return html`${
+      mainDefinition?.headerAction
+        ? html`<span class="side-panel__action-group side-panel__action-group--content"
+            >${mainDefinition.headerAction}</span
+          >`
+        : nothing
+    }
+    ${
+      split || layout.expanded
+        ? html`<openclaw-tooltip .content=${focusLabel}>
+            <button
+              class="btn btn--ghost btn--icon chat-icon-btn chat-panel-focus"
+              type="button"
+              aria-pressed=${String(layout.expanded === true)}
+              aria-label=${focusLabel}
+              @click=${() =>
+                this.state?.updateSidebarLayout(
+                  setSidebarExpanded(ensureSidebarConversation(layout), layout.expanded !== true),
+                )}
+            >
+              ${layout.expanded ? icons.minimize : icons.maximize}
+            </button>
+          </openclaw-tooltip>`
+        : nothing
+    }
+    ${
+      split && side && swapLabel
+        ? html`<openclaw-tooltip .content=${swapLabel}>
+            <button
+              class="btn btn--ghost btn--icon chat-icon-btn chat-panel-swap"
+              type="button"
+              aria-label=${swapLabel}
+              @click=${() => this.state?.updateSidebarLayout(promoteSidebarPanel(layout, side.id))}
+            >
+              ${icons.arrowLeftRight}
+            </button>
+          </openclaw-tooltip>`
+        : nothing
+    }
+    ${
+      this.narrow || !split
+        ? nothing
+        : html`<wa-dropdown
+            class="chat-panel-layout-menu"
+            placement="bottom-end"
+            @wa-select=${(event: CustomEvent<{ item: { value?: string } }>) => {
+              const dock = event.detail.item.value;
+              if (dock === "left" || dock === "right" || dock === "bottom") {
+                this.state?.updateSidebarLayout(setSidebarDock(layout, dock));
+              }
+            }}
+          >
+            <button
+              slot="trigger"
+              class="btn btn--ghost btn--icon chat-icon-btn"
+              type="button"
+              aria-label=${t("chat.sidePanel.layout")}
+              title=${t("chat.sidePanel.layout")}
+            >
+              ${icons.columns2}
+            </button>
+            ${(
+              [
+                ["left", "dockLeft", icons.panelLeftOpen],
+                ["right", "dockRight", icons.panelRightOpen],
+                ["bottom", "dockBottom", icons.panelBottomOpen],
+              ] as const
+            ).map(
+              ([dock, label, icon]) => html`<wa-dropdown-item
+                value=${dock}
+                type="checkbox"
+                ?checked=${sidebarDock(layout) === dock}
+                ><span slot="icon">${icon}</span>${t(`chat.sidePanel.${label}`)}</wa-dropdown-item
+              >`,
+            )}
+          </wa-dropdown>`
+    }`;
   }
 
   protected renderPaneHeader(
@@ -117,6 +206,7 @@ export abstract class ChatPaneHeader extends ChatPaneDiscussion {
     workspaceGit: boolean,
     placementStartupStatus: ApplicationPlacementStartupStatus | null | undefined,
     sidebarLayout?: SidebarLayout,
+    panelDefinitions = sidebarPanelDefinitions(),
   ) {
     const workspace = resolveSessionWorkspace({
       session: row,
@@ -144,8 +234,7 @@ export abstract class ChatPaneHeader extends ChatPaneDiscussion {
     const branchSwitchWorking = this.state
       ? this.state.chatSending ||
         isChatRunWorking({
-          canAbort: hasAbortableSessionRun(this.state),
-          onAbort: () => undefined,
+          runActive: hasDirectSessionRun(this.state),
           queue: this.state.chatQueue,
           runStatus: this.state.chatRunStatus,
           sessionKey: this.state.sessionKey,
@@ -239,7 +328,8 @@ export abstract class ChatPaneHeader extends ChatPaneDiscussion {
       desktopEnvironmentId !== null && isDesktopPanelAvailable(this.context.gateway.snapshot);
     const openDesktopPanel = sessionWorkspace.onToggleDesktop ?? (() => undefined);
     const discussion = this.resolveSessionDiscussionAction();
-    const sidePanelOpen = (sidebarLayout ?? this.state?.sidebarLayout)?.open === true;
+    const currentLayout = sidebarLayout ?? this.state?.sidebarLayout;
+    const sidePanelOpen = currentLayout?.open === true && !currentLayout.expanded;
     const toggleSidePanel = () => this.setChatSidePanelOpen(!sidePanelOpen, sidebarLayout);
     const sidePanelAction = html`<openclaw-tooltip
       .content=${t(sidePanelOpen ? "chat.sidePanel.minimize" : "chat.sidePanel.label")}
@@ -452,7 +542,8 @@ export abstract class ChatPaneHeader extends ChatPaneDiscussion {
       copiedAction: this.headerCopiedAction,
       renameDisabledReason,
       actionsDisabled: this.state?.connected !== true,
-      panelActions: html`${browserPanelAction}${backgroundTasksAction}${sidePanelAction}`,
+      panelActions: html`${browserPanelAction}${backgroundTasksAction}`,
+      panelLayoutActions: html`${this.renderPanelLayoutActions(currentLayout, panelDefinitions)}${sidePanelAction}`,
       discussionAction: nothing,
       diffAction: nothing,
       backgroundTasksAction: nothing,
@@ -517,7 +608,6 @@ export abstract class ChatPaneHeader extends ChatPaneDiscussion {
               .settings=${this.state.settings}
               .panelActions=${panelMenuActions}
               .layoutActions=${layoutMenuActions}
-              .statusActions=${this.compactHeaderStatusActions()}
               .sharing=${sharing}
               .groups=${knownGroups}
               .currentOwner=${row.owner?.actor ?? null}

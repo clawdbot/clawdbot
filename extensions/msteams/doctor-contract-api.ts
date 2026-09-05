@@ -9,6 +9,7 @@ import {
   type PluginDoctorStateMigration,
   type PluginStateKeyedStore,
 } from "openclaw/plugin-sdk/runtime-doctor-migrations";
+import { resolveStorePath } from "openclaw/plugin-sdk/session-store-paths";
 import { isRecord } from "openclaw/plugin-sdk/string-coerce-runtime";
 import { normalizeStoredConversationId } from "./src/conversation-store-helpers.js";
 import {
@@ -143,13 +144,10 @@ function listAgentIds(config: OpenClawConfig): string[] {
   return [...ids];
 }
 
-async function listCandidateStorePaths(params: {
+function listCandidateStorePaths(params: {
   config: Parameters<PluginDoctorStateMigration["migrateLegacyState"]>[0]["config"];
   env: NodeJS.ProcessEnv;
-}): Promise<string[]> {
-  // Doctor enumeration cold-loads this closure; session-store-runtime pulls the
-  // session-accessor/kysely graph, so it stays behind a lazy import here.
-  const { resolveStorePath } = await import("openclaw/plugin-sdk/session-store-runtime");
+}): string[] {
   const paths = new Set<string>();
   for (const agentId of listAgentIds(params.config)) {
     paths.add(resolveStorePath(params.config.session?.store, { agentId, env: params.env }));
@@ -615,9 +613,7 @@ export const stateMigrations: PluginDoctorStateMigration[] = [
     async detectLegacyState(params) {
       const files = (
         await Promise.all(
-          (await listCandidateStorePaths(params)).map((storePath) =>
-            listLegacyLearningFiles(storePath),
-          ),
+          listCandidateStorePaths(params).map((storePath) => listLegacyLearningFiles(storePath)),
         )
       ).flat();
       if (files.length === 0) {
@@ -634,9 +630,7 @@ export const stateMigrations: PluginDoctorStateMigration[] = [
       const warnings: string[] = [];
       const files = (
         await Promise.all(
-          (await listCandidateStorePaths(params)).map((storePath) =>
-            listLegacyLearningFiles(storePath),
-          ),
+          listCandidateStorePaths(params).map((storePath) => listLegacyLearningFiles(storePath)),
         )
       ).flat();
       const store = params.context.openPluginStateKeyedStore<FeedbackLearningEntry>({

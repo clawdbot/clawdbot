@@ -151,8 +151,9 @@ export function setupWorkerEnvironmentServiceSuite() {
   });
 
   afterEach(async () => {
-    await testState.service?.stop();
+    // Shutdown may schedule cleanup after a test leaves fake timers installed.
     vi.useRealTimers();
+    await testState.service?.stop();
     closeOpenClawStateDatabaseForTest();
     await fs.rm(testState.root, { recursive: true, force: true });
   });
@@ -207,6 +208,7 @@ export function createService(
       | "now"
       | "nodeTunnelManager"
       | "nodeDesktopCarrier"
+      | "nodePortalCarrier"
       | "placementStore"
       | "workerCredentialTtlMs"
     >

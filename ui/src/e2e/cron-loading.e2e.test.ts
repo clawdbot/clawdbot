@@ -1,3 +1,5 @@
+import { writeFileSync } from "node:fs";
+import path from "node:path";
 import { isRecord } from "@openclaw/normalization-core/record-coerce";
 import { expect, it } from "vitest";
 import {
@@ -32,6 +34,76 @@ function tableListRequests(requests: MockGatewayRequest[]) {
 }
 
 suite.define(() => {
+  it("bounds a held cron event burst and displays the completed run", async () => {
+    const artifactDir = suite.artifactDir;
+    await suite.withPage(
+      {
+        locale: "en-US",
+        serviceWorkers: "block",
+        viewport: { height: 900, width: 1_280 },
+        recordVideo: { dir: artifactDir, size: { height: 900, width: 1_280 } },
+      },
+      async ({ page }) => {
+        const summary = "Synthetic automation completed successfully";
+        const runs = {
+          entries: [
+            {
+              ts: Date.parse("2026-08-01T12:00:00Z"),
+              jobId: "synthetic-job",
+              action: "finished",
+              status: "ok",
+              summary,
+            },
+          ],
+          total: 1,
+          offset: 0,
+          limit: 50,
+          hasMore: false,
+          nextOffset: null,
+        };
+        const gateway = await installMockGateway(page, {
+          heldMethods: ["cron.status", "cron.runs"],
+          methodResponses: {
+            "cron.list": emptyList,
+            "cron.runs": runs,
+            "cron.status": { enabled: true, jobs: 0, nextWakeAtMs: null },
+          },
+        });
+        await page.goto(`${suite.server.baseUrl}cron`);
+        await page.getByText("No automations yet").waitFor({ state: "visible" });
+        await gateway.waitForRequest("cron.runs");
+        await page.getByRole("tab", { name: "Run history", exact: true }).click();
+        await page.screenshot({ path: path.join(artifactDir, "before-events.png") });
+        const countRequests = async () => ({
+          status: (await gateway.getRequests("cron.status")).length,
+          runs: (await gateway.getRequests("cron.runs")).length,
+        });
+        const before = await countRequests();
+        for (let index = 0; index < 20; index += 1) {
+          await gateway.emitGatewayEvent("cron", { jobId: "synthetic-job", action: "finished" });
+        }
+        const held = await countRequests();
+        writeFileSync(
+          path.join(artifactDir, "requests.json"),
+          JSON.stringify({ before, held }, null, 2),
+        );
+        await page.screenshot({ path: path.join(artifactDir, "held-event-burst.png") });
+        expect(held).toEqual(before);
+        await gateway.resolveDeferred("cron.status");
+        await gateway.resolveDeferred("cron.runs");
+        await page.getByText(summary).waitFor({ state: "visible" });
+        await expect
+          .poll(async () => (await gateway.getRequests("cron.runs")).length)
+          .toBe(before.runs + 1);
+        writeFileSync(
+          path.join(artifactDir, "requests.json"),
+          JSON.stringify({ before, held, completed: await countRequests() }, null, 2),
+        );
+        await page.screenshot({ path: path.join(artifactDir, "completed-run.png") });
+      },
+    );
+  });
+
   it("shows pending before empty and keeps empty visible after a run-history failure", async () => {
     await suite.withPage(
       {

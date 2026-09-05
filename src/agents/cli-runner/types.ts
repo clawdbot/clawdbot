@@ -29,6 +29,7 @@ import type { ContextEngine } from "../../context-engine/types.js";
 import type { CronScheduledToolCallerOrigin } from "../../cron/scheduled-tool-policy.js";
 import type { ExecMode } from "../../infra/exec-approvals.js";
 import type { ImageContent } from "../../llm/types.js";
+import type { DiagnosticEmbeddedRunOwner } from "../../logging/diagnostic-run-activity.js";
 import type { MediaFact } from "../../media/media-facts.js";
 import type { PromptImageOrderEntry } from "../../media/prompt-image-order.js";
 import type {
@@ -63,6 +64,7 @@ import type { ExecPolicyOverrides } from "../exec-defaults.js";
 import type { FastModeAutoProgressState } from "../fast-mode.js";
 import type { ContextEngineLogicalTurnLease } from "../harness/context-engine-logical-turn.js";
 import type { ContextEngineTurnAttemptFacts } from "../harness/context-engine-turn-attempt.js";
+import type { PreparedQuestionAnswerAuthority } from "../harness/host-private-capabilities.js";
 import type { AgentHarnessIsolatedCompletionParamsV2 } from "../harness/types.js";
 import type { ModelFallbackAttemptProvenance } from "../model-fallback.types.js";
 import type { ScheduledToolPolicyContext } from "../scheduled-tool-policy.js";
@@ -86,6 +88,8 @@ type CliSessionRetryParams = {
 export type RunCliAgentParams = {
   admittedRunContext?: AdmittedRunContext;
   preparedRunAdmission?: PreparedAgentRunAdmission;
+  /** Core lifecycle owner; never forwarded to the plugin execution context. */
+  diagnosticOwner?: DiagnosticEmbeddedRunOwner;
   /** Caller-owned in-memory transcript for ephemeral helper runs. */
   sessionManager?: SessionManager;
   sessionId: string;
@@ -332,6 +336,7 @@ type CliPreparedBackend = {
     revokeProcessToken: () => void;
     activate: (captureKey: string) => void;
     deactivate: (captureKey: string) => void;
+    captureNativeTools?: (tools: unknown) => void;
   };
   mcpConfigHash?: string;
   mcpResumeHash?: string;
@@ -355,6 +360,8 @@ export type CliSessionBindingFacts = {
 /** Fully prepared execution context consumed by the CLI runner executor. */
 export type PreparedCliRunContext = {
   params: RunCliAgentParams & { admittedRunContext: AdmittedRunContext };
+  /** Core-only original caller policy, bound to each native request's exact lifetime. */
+  bindQuestionAnswerAuthority?: (assertActive: () => void) => PreparedQuestionAnswerAuthority;
   effectiveAuthProfileId?: string;
   /** Selected profile snapshot used only for terminal health settlement. */
   authProfileStore?: AuthProfileStore;

@@ -91,6 +91,7 @@ describe("sessions-list-tool", () => {
     const sessions = entries.map(([key, entry]) =>
       buildGatewaySessionRow({
         cfg: VALID_CONFIG,
+        agentId: "main",
         storePath: "/tmp/sessions.json",
         store,
         key,

@@ -1,7 +1,6 @@
 // Subsystem logger tests cover per-subsystem log routing and filtering.
 import fs from "node:fs";
 import path from "node:path";
-import { Logger as TsLogger } from "tslog";
 import { afterAll, afterEach, beforeAll, describe, expect, it, vi } from "vitest";
 import { mockCall } from "../test-utils/mock-call-assertions.js";
 import { setConsoleSubsystemFilter, shouldLogSubsystemToConsole } from "./console.js";
@@ -364,39 +363,41 @@ describe("createSubsystemLogger().isEnabled", () => {
     expect(fs.readFileSync(firstDay, "utf8")).not.toContain("second day subsystem log");
   });
 
-  it("reuses its file child until logger invalidation advances the generation", () => {
+  it("keeps a retained logger on the new file after reset", async () => {
     const firstFile = logPathTracker.nextPath();
     const secondFile = logPathTracker.nextPath();
-    const getSubLogger = vi.spyOn(TsLogger.prototype, "getSubLogger");
     setLoggerOverride({ level: "info", consoleLevel: "silent", file: firstFile });
     const log = createSubsystemLogger("diagnostics");
 
     log.info("first line");
     log.info("second line");
-    expect(getSubLogger).toHaveBeenCalledTimes(1);
 
     resetLogger();
     setLoggerOverride({ level: "info", consoleLevel: "silent", file: secondFile });
     log.info("after reset");
-    expect(getSubLogger).toHaveBeenCalledTimes(2);
+    await testApi.flushFileLogQueueForTests();
+    expect(fs.readFileSync(firstFile, "utf8")).toContain("first line");
+    expect(fs.readFileSync(firstFile, "utf8")).not.toContain("after reset");
+    expect(fs.readFileSync(secondFile, "utf8")).toContain("after reset");
   });
 
-  it("publishes applied config and rebuilds its child for the new generation", () => {
+  it("applies the new file and level to a retained logger", async () => {
     const firstFile = logPathTracker.nextPath();
     const secondFile = logPathTracker.nextPath();
     vi.stubEnv("OPENCLAW_TEST_FILE_LOG", "1");
     applyLoggingConfig({ level: "info", consoleLevel: "silent", file: firstFile });
-    const getSubLogger = vi.spyOn(TsLogger.prototype, "getSubLogger");
     const log = createSubsystemLogger("diagnostics");
 
     log.info("first line");
     log.info("second line");
-    expect(getSubLogger).toHaveBeenCalledTimes(1);
     expect(log.isEnabled("debug", "file")).toBe(false);
 
     applyLoggingConfig({ level: "debug", consoleLevel: "silent", file: secondFile });
     expect(log.isEnabled("debug", "file")).toBe(true);
     log.debug("after applied config");
-    expect(getSubLogger).toHaveBeenCalledTimes(2);
+    await testApi.flushFileLogQueueForTests();
+    expect(fs.readFileSync(firstFile, "utf8")).toContain("first line");
+    expect(fs.readFileSync(firstFile, "utf8")).not.toContain("after applied config");
+    expect(fs.readFileSync(secondFile, "utf8")).toContain("after applied config");
   });
 });

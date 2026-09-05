@@ -82,11 +82,13 @@ export function buildSilentFallbackFailurePayload(params: {
   hasSuccessfulTerminalDelivery: boolean;
   allowEmptyAssistantReplyAsSilent?: boolean;
   silentExpected?: boolean;
+  hasExplicitSilentReply?: boolean;
 }): ReplyPayload | undefined {
   if (
     params.isHeartbeat ||
     params.allowEmptyAssistantReplyAsSilent === true ||
     params.silentExpected === true ||
+    params.hasExplicitSilentReply === true ||
     params.hasSuccessfulTerminalDelivery ||
     !params.fallbackTransition.fallbackActive ||
     !params.fallbackFailureKnown
@@ -221,17 +223,13 @@ export function resolveFallbackOriginModel(params: {
 
 export function buildInlinePluginStatusPayload(params: {
   entry: SessionEntry | undefined;
+  includeStatusLines: boolean;
   includeTraceLines: boolean;
 }): ReplyPayload | undefined {
-  const statusLines =
-    params.entry?.verboseLevel && params.entry.verboseLevel !== "off"
-      ? resolveSessionPluginStatusLines(params.entry)
-      : [];
-  const traceLines =
-    params.includeTraceLines &&
-    (params.entry?.traceLevel === "on" || params.entry?.traceLevel === "raw")
-      ? resolveSessionPluginTraceLines(params.entry)
-      : [];
+  const statusLines = params.includeStatusLines
+    ? resolveSessionPluginStatusLines(params.entry)
+    : [];
+  const traceLines = params.includeTraceLines ? resolveSessionPluginTraceLines(params.entry) : [];
   const lines = [...statusLines, ...traceLines];
   if (lines.length === 0) {
     return undefined;
@@ -253,6 +251,7 @@ export function refreshSessionEntryFromStore(params: {
   sessionKey?: string;
   fallbackEntry?: SessionEntry;
   activeSessionStore?: Record<string, SessionEntry>;
+  expectedGeneration?: Pick<SessionEntry, "sessionId" | "lifecycleRevision">;
 }): SessionEntry | undefined {
   const { storePath, sessionKey, fallbackEntry, activeSessionStore } = params;
   if (!storePath || !sessionKey) {
@@ -264,6 +263,14 @@ export function refreshSessionEntryFromStore(params: {
       sessionKey,
     });
     if (!latestEntry) {
+      return fallbackEntry;
+    }
+    // Completion may refresh facts, but only admission can adopt a replacement generation.
+    if (
+      params.expectedGeneration &&
+      (latestEntry.sessionId !== params.expectedGeneration.sessionId ||
+        latestEntry.lifecycleRevision !== params.expectedGeneration.lifecycleRevision)
+    ) {
       return fallbackEntry;
     }
     if (activeSessionStore) {

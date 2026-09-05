@@ -7,6 +7,42 @@ import { runBuiltCli } from "./cli-json-stdout.test-support.js";
 
 describe("cli json stdout contract", () => {
   it.each([
+    ["memory", "status", "--json"],
+    ["nodes", "canvas", "snapshot", "--json"],
+  ])("reports invalid config before discovering plugin command %s", async (...args) => {
+    await withTempHome(
+      async (tempHome) => {
+        const configPath = path.join(tempHome, "openclaw.json");
+        const stateDir = path.join(tempHome, "state");
+        await fs.writeFile(configPath, JSON.stringify({ gateway: { port: "invalid-port" } }));
+
+        const result = runBuiltCli(
+          tempHome,
+          args,
+          {
+            OPENCLAW_CONFIG_PATH: configPath,
+            OPENCLAW_STATE_DIR: stateDir,
+          },
+          { inheritEnvironment: false },
+        );
+
+        expect(result.error).toBeUndefined();
+        expect(result.status, result.stderr).toBe(1);
+        expect(JSON.parse(result.stdout)).toMatchObject({
+          ok: false,
+          error: { type: "cli_error", message: expect.stringContaining("Invalid config at") },
+        });
+        expect(result.stdout).toContain("gateway.port");
+        expect(result.stderr).toContain("openclaw doctor");
+        await expect(
+          fs.access(path.join(stateDir, "state", "openclaw.sqlite")),
+        ).rejects.toMatchObject({ code: "ENOENT" });
+      },
+      { prefix: "openclaw-plugin-invalid-config-" },
+    );
+  });
+
+  it.each([
     {
       name: "node identity",
       args: ["node", "identity", "--json"],

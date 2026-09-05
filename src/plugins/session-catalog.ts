@@ -28,6 +28,10 @@ export type SessionCatalogListProviderParams = {
   listNodes?: () => ReturnType<PluginRuntime["nodes"]["list"]>;
   /** Publishes completed hosts without waiting for slower machines in the same list. */
   onHost?: (host: SessionCatalogHost) => void;
+  /** Register bounded host publication work before `list` settles; includes the onHost callback. */
+  waitUntil?: (completion: Promise<void>) => void;
+  /** Catalog owner retirement, independent of the requesting connection's lifetime. */
+  signal?: AbortSignal;
 };
 export type SessionCatalogReadProviderParams = Omit<SessionsCatalogReadParams, "catalogId"> & {
   /** Gateway always supplies this; optional only for pre-existing external provider types. */

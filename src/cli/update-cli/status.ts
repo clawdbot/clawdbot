@@ -13,6 +13,8 @@ import {
   resolveUpdateChannelDisplay,
 } from "../../infra/update-channels.js";
 import { checkUpdateStatus, formatGitInstallLabel } from "../../infra/update-check.js";
+import { findActiveUpdateRun, listUpdateRuns } from "../../infra/update-run-ledger.js";
+import { renderUpdateRunReport } from "../../infra/update-run-report.js";
 import { defaultRuntime } from "../../runtime.js";
 import { VERSION } from "../../version.js";
 import { parseTimeoutMsOrExit, resolveUpdateRoot, type UpdateStatusOptions } from "./shared.js";
@@ -52,6 +54,9 @@ export async function updateStatusCommand(opts: UpdateStatusOptions): Promise<vo
 
   const updateAvailability = resolveUpdateAvailability(update);
 
+  const activeRun = findActiveUpdateRun();
+  const lastRun = listUpdateRuns({ limit: 1 })[0];
+
   if (opts.json) {
     defaultRuntime.writeJson({
       update,
@@ -62,6 +67,8 @@ export async function updateStatusCommand(opts: UpdateStatusOptions): Promise<vo
         config: configChannel,
       },
       availability: updateAvailability,
+      ...(activeRun ? { activeRun } : {}),
+      ...(lastRun ? { lastRun } : {}),
     });
     return;
   }
@@ -99,6 +106,16 @@ export async function updateStatusCommand(opts: UpdateStatusOptions): Promise<vo
     }).trimEnd(),
   );
   defaultRuntime.log("");
+
+  const run = activeRun ?? lastRun;
+  if (run) {
+    const report = renderUpdateRunReport(run);
+    defaultRuntime.log(report.headline);
+    for (const line of report.lines) {
+      defaultRuntime.log(line);
+    }
+    defaultRuntime.log("");
+  }
 
   const updateHint = formatUpdateAvailableHint(update);
   if (updateHint) {
