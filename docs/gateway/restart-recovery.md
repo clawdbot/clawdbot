@@ -308,8 +308,24 @@ marked lost after a grace period instead of hanging forever.
 When the agent itself triggers a restart (applying a config change, updating
 the gateway, or an explicit restart request), a restart sentinel is written to
 SQLite before the process exits. After boot the gateway posts the outcome back
-to the originating chat and dispatches a one-shot continuation turn so the
-agent picks up exactly where it left off, on the same channel and thread.
+to the originating chat and dispatches any requested one-shot continuation turn
+so the agent picks up exactly where it left off, on the same channel and thread.
+
+For updates, the sentinel carries `stats.runId`, linking the detached updater to
+its durable `update_runs` record. The new Gateway records its observed running
+version, build, and startup facts there. It preserves a terminal outcome already
+written by the updater and waits while a managed handoff is still pending.
+If the existing restart-verification retry window expires, a still-running row
+finishes as failed with `restart-unhealthy`; an already-finalized CLI outcome
+stays intact.
+The post-restart notice is rendered from that row using the same report as
+`openclaw update status`; consuming the sentinel does not remove run history.
+Sentinels left by older releases retain their existing delivery route.
+
+Any update run with an existing internal origin session, including Control UI
+and webchat, appends its report directly to that session's transcript, even when
+the caller supplied only `sessionKey` and no `deliveryContext`. A completed
+update with no continuation does not wake the model to deliver the report.
 
 The sentinel's typed SQLite columns are authoritative for restart handling;
 its `payload_json` value is a replay/debug shadow only. Runtime reads, writes,

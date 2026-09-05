@@ -139,16 +139,9 @@ export const sessionCreateHandlers: GatewayRequestHandlers = {
       return;
     }
     const explicitlyRequestedKey = normalizeOptionalString(p.key);
-    const explicitlyRequestedAgentId = normalizeOptionalString(p.agentId);
-    // An omitted key means the selected agent's main alias, not the compatibility owner's alias.
-    const agentSelectionKey =
-      explicitlyRequestedKey ??
-      (explicitlyRequestedAgentId
-        ? `agent:${normalizeAgentId(explicitlyRequestedAgentId)}:main`
-        : "main");
     const explicitlyRequestedAgent = resolveRequestedGlobalAgentId(
       cfg,
-      agentSelectionKey,
+      explicitlyRequestedKey ?? (p.agentId === undefined ? "main" : undefined),
       p.agentId ?? parseAgentSessionKey(explicitlyRequestedKey)?.agentId,
     );
     if (!explicitlyRequestedAgent.ok) {
@@ -193,6 +186,7 @@ export const sessionCreateHandlers: GatewayRequestHandlers = {
       hasInitialTurn,
       message: initialMessage,
     } = initialTurn;
+    let sessionKey = explicitlyRequestedKey;
     const initialRunId = randomUUID();
     if (p.mentions?.length) {
       if (catalogId || p.incognito) {
@@ -206,9 +200,11 @@ export const sessionCreateHandlers: GatewayRequestHandlers = {
         );
         return;
       }
+      // Mention validation and later creation must use the same real child target.
+      sessionKey ??= buildDashboardSessionKey(explicitlyRequestedAgent.agentId);
       const normalized = normalizeChatSendRequest({
         params: {
-          sessionKey: agentSelectionKey,
+          sessionKey,
           message: initialMessage ?? "",
           mentions: p.mentions,
           idempotencyKey: initialRunId,
@@ -355,7 +351,6 @@ export const sessionCreateHandlers: GatewayRequestHandlers = {
         return;
       }
     }
-    let sessionKey = p.key;
     let sessionAgentId = catalogAgentId ?? explicitlyRequestedAgent.agentId;
     let preparedWorktree: PreparedGatewaySessionLifecycle | undefined;
     let pendingWorktree: InternalSessionEntry["pendingWorktree"];
@@ -382,9 +377,8 @@ export const sessionCreateHandlers: GatewayRequestHandlers = {
     if (p.worktree === true) {
       // Workspace-contained cwd and registry-authorized projects stay at operator.write;
       // arbitrary host paths still require operator.admin before reaching this block.
-      const explicitKey = explicitlyRequestedKey;
       const agentId = explicitlyRequestedAgent.agentId;
-      let targetKey = explicitKey;
+      let targetKey = sessionKey;
       let preservesUnspecifiedKey = false;
       if (
         !targetKey &&

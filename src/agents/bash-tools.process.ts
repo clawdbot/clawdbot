@@ -350,9 +350,9 @@ export function createProcessTool(
               },
               s.endedAt !== undefined
                 ? {
+                    ...finishedSessionDetails(s.id, s),
+                    status: s.terminalStatus ?? "running",
                     endedAt: s.endedAt,
-                    exitCode: s.exitCode ?? undefined,
-                    exitSignal: s.exitSignal ?? undefined,
                   }
                 : Object.assign(
                     { pid: s.pid ?? undefined },
@@ -362,10 +362,16 @@ export function createProcessTool(
           );
         const lines = sessions.map((s) => {
           const label = s.name ? truncateMiddle(s.name, 80) : truncateMiddle(s.command, 120);
+          const timeoutReason =
+            "exitReason" in s &&
+            (s.exitReason === "overall-timeout" || s.exitReason === "no-output-timeout")
+              ? s.exitReason
+              : undefined;
+          const timeoutMarker = timeoutReason ? ` [${timeoutReason}]` : "";
           const marker = "waitingForInput" in s && s.waitingForInput ? " [input-wait]" : "";
           return `${s.sessionId} ${padProcessStatus(s.status, 9)} ${
             formatDurationCompact(s.runtimeMs) ?? "n/a"
-          }${marker} :: ${label}`;
+          }${timeoutMarker}${marker} :: ${label}`;
         });
         return textResult(lines.join("\n") || "No running or recent sessions.", {
           status: "completed",

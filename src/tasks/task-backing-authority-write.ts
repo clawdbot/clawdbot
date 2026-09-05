@@ -47,12 +47,10 @@ export function prepareCanonicalTaskActivation(
   ) {
     return { current, next };
   }
-  Object.assign(next, {
-    status: "running" as const,
-    startedAt: current.startedAt ?? params.startedAt,
-    lastEventAt: params.startedAt,
-    deliveryStatus: "pending" as const,
-  });
+  next.status = "running";
+  next.startedAt = current.startedAt ?? params.startedAt;
+  next.lastEventAt = params.startedAt;
+  next.deliveryStatus = "pending";
   delete next.endedAt;
   delete next.cleanupAfter;
   delete next.error;

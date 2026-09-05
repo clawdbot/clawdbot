@@ -18,6 +18,7 @@ import {
 import { clearInlineDirectives } from "./get-reply-directives-utils.js";
 import { resolveReplyDirectives } from "./get-reply-directives.js";
 import { withFastReplyConfig } from "./get-reply-fast-path.test-support.js";
+import { prepareReplyConversation } from "./prompt-session-context.js";
 import { createBlockReplyDeliveryHandler } from "./reply-delivery.js";
 import { buildTestCtx } from "./test-ctx.js";
 import { createTypingSignaler } from "./typing-mode.js";
@@ -137,7 +138,7 @@ async function resolveModelDirective(params: {
     sessionStore: { [sessionKey]: sessionEntry },
     sessionKey,
     sessionScope: "per-sender",
-    groupResolution: undefined,
+    conversation: prepareReplyConversation({ ctx: sessionCtx, sessionEntry }),
     isGroup: false,
     triggerBodyNormalized: body,
     resetTriggered: false,

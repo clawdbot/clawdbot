@@ -145,15 +145,10 @@ function rememberPersistedSubagentRunsSnapshot(
 export function publishSubagentRunsAfterAtomicStore(
   runs: Map<string, SubagentRunRecord>,
   changedRunIds: readonly string[],
-  deferredObserverEvents?: Array<() => void>,
+  deferredObserverEvents: Array<() => void>,
 ): void {
   rememberPersistedSubagentRunsSnapshot(runs, changedRunIds);
-  const emit = () => emitSubagentRegistryPersisted();
-  if (deferredObserverEvents) {
-    deferredObserverEvents.push(emit);
-  } else {
-    emit();
-  }
+  deferredObserverEvents.push(() => emitSubagentRegistryPersisted());
 }
 
 function shouldReadPersistedSubagentRuns(): boolean {

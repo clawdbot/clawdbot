@@ -210,6 +210,69 @@ describe("chat transcript invalidation", () => {
     expect(userRow.querySelector(".chat-avatar")).not.toBeNull();
   });
 
+  it("rechecks visible images when the same session changes workspace protection", async () => {
+    const source = "/outside/project/policy-preview.png";
+    const props = threadProps("pane-media-policy", "agent:main:media-policy", [
+      {
+        role: "assistant",
+        content: [{ type: "image", url: source, alt: "Policy preview" }],
+        timestamp: 1_000,
+      },
+    ]);
+    props.selectedSession = {
+      key: props.sessionKey,
+      kind: "direct",
+      updatedAt: 1,
+      permissionMode: "full",
+    };
+    const fetchMock = vi.fn(async () => ({
+      ok: true,
+      json: async () =>
+        props.selectedSession?.permissionMode === "full"
+          ? {
+              available: true,
+              mediaTicket: "full-access-image",
+              mediaTicketExpiresAt: new Date(Date.now() + 90_000).toISOString(),
+            }
+          : {
+              available: false,
+              reason: "Outside allowed folders",
+              canAllow: true,
+              retryable: false,
+            },
+    }));
+    vi.stubGlobal("fetch", fetchMock);
+    const transcript = createTestTranscript();
+    const container = document.body.appendChild(document.createElement("div"));
+    const rerender = () => {
+      render(renderChatThread(props, transcript), container);
+      transcript.hostUpdated();
+    };
+    props.onRequestUpdate = rerender;
+    rerender();
+    transcript.hostConnected();
+    transcript.hostUpdated();
+    await flushDeferredRowPrune();
+    expect(container.querySelector("img.chat-message-image")).not.toBeNull();
+
+    for (const permissionMode of ["workspace", "full", "workspace"] as const) {
+      props.selectedSession = { ...props.selectedSession, permissionMode };
+      rerender();
+      await flushDeferredRowPrune();
+      expect(Boolean(container.querySelector("img.chat-message-image"))).toBe(
+        permissionMode === "full",
+      );
+      if (permissionMode === "workspace") {
+        expect(container.querySelector(".chat-assistant-attachment-card")?.textContent).toContain(
+          "Allow image",
+        );
+      }
+    }
+    expect(fetchMock).toHaveBeenCalledTimes(4);
+    releaseChatMediaResourceSubscriber(rerender);
+    transcript.hostDisconnected();
+  });
+
   it("rebinds guarded transcript images when the gateway rotates its auth token", async () => {
     const NativeUrl = URL;
     const blobUrl = `blob:transcript-media-${crypto.randomUUID()}`;
@@ -329,6 +392,16 @@ describe("chat transcript invalidation", () => {
           );
         });
       }
+      if (fetchMock.mock.calls.length === 2) {
+        return Promise.resolve({
+          ok: true,
+          json: async () => ({
+            available: false,
+            reason: "Outside allowed folders",
+            retryable: false,
+          }),
+        } as Response);
+      }
       return Promise.resolve({
         ok: true,
         json: async () => ({
@@ -389,7 +462,7 @@ describe("chat transcript invalidation", () => {
 
     const previousResource = observeChatMediaResource(
       "assistant-attachment",
-      `::test-auth-token::${source}`,
+      JSON.stringify(["", "test-auth-token", state.sessionKey, undefined, undefined, source]),
     );
     expect(fetchMock).toHaveBeenCalledTimes(1);
     expect(previousResource.subscribers.size).toBe(1);
@@ -405,7 +478,7 @@ describe("chat transcript invalidation", () => {
 
     expect(previousSignal?.aborted).toBe(true);
     expect(isChatMediaResourceCurrent(previousResource)).toBe(false);
-    expect(fetchMock).toHaveBeenCalledTimes(1);
+    expect(fetchMock).toHaveBeenCalledTimes(2);
     expect(
       container.querySelector(".chat-assistant-attachment-card__status-meta")?.textContent,
     ).toContain("Outside allowed folders");
@@ -418,10 +491,10 @@ describe("chat transcript invalidation", () => {
 
     const restoredResource = observeChatMediaResource(
       "assistant-attachment",
-      `::test-auth-token::${source}`,
+      JSON.stringify(["", "test-auth-token", state.sessionKey, undefined, undefined, source]),
     );
     const metadataCalls = fetchMock.mock.calls.filter(([input]) => input.includes("meta=1"));
-    expect(metadataCalls).toHaveLength(2);
+    expect(metadataCalls).toHaveLength(3);
     expect(new Headers(metadataCalls[1]?.[1]?.headers).get("Authorization")).toBe(
       "Bearer test-auth-token",
     );

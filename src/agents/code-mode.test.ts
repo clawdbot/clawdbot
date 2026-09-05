@@ -255,6 +255,11 @@ describe("Code Mode catalog and model-visible surface", () => {
     const parameters = execTool.parameters as {
       properties?: Record<string, Record<string, unknown>>;
     };
+    expect(parameters.properties?.title).toMatchObject({
+      type: "string",
+      maxLength: 120,
+      description: expect.stringContaining("never claim success"),
+    });
 
     expect(execTool.description).toContain("Node.js modules");
     expect(execTool.description).toContain("`require`/`import` are NOT available");

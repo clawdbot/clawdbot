@@ -13,14 +13,8 @@ describe("memory search after a chunking upgrade", () => {
     closeAllMemorySearchManagers,
   });
 
-  function createConfig(onSearch: boolean, onSessionStart: boolean, model = "mock-embed") {
-    const cfg = fixture.createConfig({ onSearch, model, vectorEnabled: false });
-    const search = cfg.memory?.search;
-    if (!search) {
-      throw new Error("fixture memory search configuration is missing");
-    }
-    search.sync = { ...search.sync, onSearch, onSessionStart, watch: false, intervalMinutes: 0 };
-    return cfg;
+  function createConfig(model = "mock-embed") {
+    return fixture.createConfig({ model, vectorEnabled: false });
   }
 
   function withDatabase<T>(dbPath: string, run: (db: DatabaseSync) => T): T {
@@ -67,30 +61,28 @@ describe("memory search after a chunking upgrade", () => {
     return dbPath;
   }
 
-  it.each([
-    { mode: "search sync", onSearch: true, onSessionStart: false, purpose: "default" },
-    { mode: "session-start sync", onSearch: false, onSessionStart: true, purpose: "default" },
-    { mode: "CLI search", onSearch: true, onSessionStart: false, purpose: "cli" },
-  ] as const)("rebuilds unchanged prior-version content through $mode", async (settings) => {
-    const cfg = createConfig(settings.onSearch, settings.onSessionStart);
+  it.each(["default", "cli"] as const)(
+    "rebuilds unchanged prior-version content on the first %s search",
+    async (purpose) => {
+      const cfg = createConfig();
+      const dbPath = await seedIndex(cfg);
+      const manager = await fixture.getFreshManager(cfg, purpose);
+
+      const results = await manager.search("alpha", { lexicalOnly: true });
+
+      expect(results).toEqual(
+        expect.arrayContaining([expect.objectContaining({ path: "memory/2026-01-12.md" })]),
+      );
+      expect(manager.status().custom?.indexIdentity).toEqual({ status: "valid" });
+      expect(withDatabase(dbPath, readMeta).chunkingVersion).toBe(MEMORY_CHUNKING_VERSION);
+    },
+  );
+
+  it("keeps status inspection read-only during an upgrade", async () => {
+    const cfg = createConfig();
     const dbPath = await seedIndex(cfg);
-    const manager = await fixture.getFreshManager(cfg, settings.purpose);
+    const manager = await fixture.getFreshManager(cfg, "status");
 
-    const results = await manager.search("alpha", { lexicalOnly: true });
-
-    expect(results).toEqual(
-      expect.arrayContaining([expect.objectContaining({ path: "memory/2026-01-12.md" })]),
-    );
-    expect(manager.status().custom?.indexIdentity).toEqual({ status: "valid" });
-    expect(withDatabase(dbPath, readMeta).chunkingVersion).toBe(MEMORY_CHUNKING_VERSION);
-  });
-
-  it("preserves the upgrade mismatch when automatic search sync is disabled", async () => {
-    const cfg = createConfig(false, false);
-    const dbPath = await seedIndex(cfg);
-    const manager = await fixture.getFreshManager(cfg);
-
-    await expect(manager.search("alpha", { lexicalOnly: true })).resolves.toEqual([]);
     expect(manager.status().custom?.indexIdentity).toMatchObject({
       status: "mismatched",
       code: "chunking_version",
@@ -100,8 +92,8 @@ describe("memory search after a chunking upgrade", () => {
   });
 
   it("preserves configuration-only mismatch behavior", async () => {
-    await seedIndex(createConfig(true, false, "old-model"), false);
-    const manager = await fixture.getFreshManager(createConfig(true, false, "new-model"));
+    await seedIndex(createConfig("old-model"), false);
+    const manager = await fixture.getFreshManager(createConfig("new-model"));
 
     await expect(manager.search("alpha", { lexicalOnly: true })).resolves.toEqual([]);
     expect(manager.status().custom?.indexIdentity).toMatchObject({
@@ -112,8 +104,8 @@ describe("memory search after a chunking upgrade", () => {
   });
 
   it("uses current configured settings when an eligible upgrade rebuild runs", async () => {
-    const dbPath = await seedIndex(createConfig(true, false, "old-model"));
-    const manager = await fixture.getFreshManager(createConfig(true, false, "new-model"));
+    const dbPath = await seedIndex(createConfig("old-model"));
+    const manager = await fixture.getFreshManager(createConfig("new-model"));
 
     expect(await manager.search("alpha", { lexicalOnly: true })).not.toEqual([]);
     expect(withDatabase(dbPath, readMeta)).toMatchObject({

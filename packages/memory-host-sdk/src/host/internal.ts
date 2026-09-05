@@ -565,9 +565,6 @@ export function chunkMarkdown(
   chunking: { tokens: number; overlap: number; perEntry?: boolean },
 ): MemoryChunk[] {
   const lines = content.split("\n");
-  if (lines.length === 0) {
-    return [];
-  }
   const maxChars = Math.max(32, chunking.tokens * CHARS_PER_TOKEN_ESTIMATE);
   const overlapChars = Math.max(0, chunking.overlap * CHARS_PER_TOKEN_ESTIMATE);
   const chunks: MemoryChunk[] = [];
@@ -636,6 +633,17 @@ export function chunkMarkdown(
     currentChars = acc;
   };
 
+  const appendSegment = (segment: string, lineNo: number, chars: number) => {
+    const lineSize = chars + 1;
+    if (currentChars + lineSize > maxChars && current.length > 0) {
+      flush();
+      // Carry and the incoming segment share one budget, including line separators.
+      carryOverlap(Math.min(overlapChars, Math.max(0, maxChars - lineSize)));
+    }
+    current.push({ line: segment, lineNo });
+    currentChars += lineSize;
+  };
+
   const finishEntry = (entryEndLine: number) => {
     if (entryStartLine === undefined) {
       return;
@@ -662,43 +670,34 @@ export function chunkMarkdown(
       entryStartLine = curatedEntry.kind === "entry" ? lineNo : undefined;
       entryFirstChunk = chunks.length;
     }
-    const segments: string[] = [];
     if (line.length === 0) {
-      segments.push("");
+      appendSegment("", lineNo, 0);
     } else {
-      // First pass: slice at maxChars (preserves original behaviour for Latin).
-      // Second pass: if a segment's *weighted* size still exceeds the budget
-      // (happens for CJK-heavy text where 1 char ≈ 1 token), re-split it at
-      // chunking.tokens so the chunk stays within the token budget.
       for (let start = 0; start < line.length;) {
         const coarse = truncateUtf16Safe(line.slice(start), maxChars);
-        if (estimateStringChars(coarse) > maxChars) {
-          const fineStep = Math.max(1, chunking.tokens);
-          for (let j = 0; j < coarse.length;) {
-            let end = Math.min(j + fineStep, coarse.length);
-            const lastCodeUnit = coarse.charCodeAt(end - 1);
-            if (lastCodeUnit >= 0xd800 && lastCodeUnit <= 0xdbff && end < coarse.length) {
-              end += 1;
+        const coarseChars = estimateStringChars(coarse);
+        if (coarseChars > maxChars) {
+          // Rare and supplementary ideographs can cost several tokens each.
+          // Split by the estimator's units while keeping every code point intact.
+          let partStart = 0;
+          let partEnd = 0;
+          let partChars = 0;
+          for (const character of coarse) {
+            const chars = estimateStringChars(character);
+            if (partChars + chars > maxChars) {
+              appendSegment(coarse.slice(partStart, partEnd), lineNo, partChars);
+              partStart = partEnd;
+              partChars = 0;
             }
-            segments.push(coarse.slice(j, end));
-            j = end;
+            partEnd += character.length;
+            partChars += chars;
           }
+          appendSegment(coarse.slice(partStart), lineNo, partChars);
         } else {
-          segments.push(coarse);
+          appendSegment(coarse, lineNo, coarseChars);
         }
         start += coarse.length;
       }
-    }
-    for (const segment of segments) {
-      const lineSize = estimateStringChars(segment) + 1;
-      if (currentChars + lineSize > maxChars && current.length > 0) {
-        flush();
-        // Bound the carried overlap so the next chunk stays within budget:
-        // carried content plus the incoming segment must not exceed maxChars.
-        carryOverlap(Math.min(overlapChars, Math.max(0, maxChars - lineSize)));
-      }
-      current.push({ line: segment, lineNo });
-      currentChars += lineSize;
     }
   }
   flush();

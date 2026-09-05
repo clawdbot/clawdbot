@@ -55,6 +55,9 @@ const markGatewaySigusr1RestartHandled = vi.fn();
 const peekGatewaySigusr1RestartReason = vi.fn<() => string | undefined>(() => undefined);
 const resetGatewayRestartStateForInProcessRestart = vi.fn();
 const resetGatewaySuspendCoordinatorForLifecycleRestart = vi.fn();
+const consumeGatewaySuspendHandoff =
+  vi.fn<typeof import("../../infra/gateway-suspend-coordinator.js").consumeGatewaySuspendHandoff>();
+const disarmGatewaySuspendHandoff = vi.fn();
 const rollbackGatewayRestartSignalAdmission = vi.fn();
 const requestGatewayRestartWithSignalAdmission = vi.fn(() => ({ status: "emitted" as const }));
 const writeGatewayRestartHandoffSync = vi.fn(
@@ -224,6 +227,9 @@ vi.mock("../../infra/update-managed-service-handoff.js", () => ({
 }));
 
 vi.mock("../../infra/gateway-suspend-coordinator.js", () => ({
+  consumeGatewaySuspendHandoff: (...args: Parameters<typeof consumeGatewaySuspendHandoff>) =>
+    consumeGatewaySuspendHandoff(...args),
+  disarmGatewaySuspendHandoff: (...args: unknown[]) => disarmGatewaySuspendHandoff(...args),
   resetGatewaySuspendCoordinatorForLifecycleRestart: () =>
     resetGatewaySuspendCoordinatorForLifecycleRestart(),
 }));
@@ -530,6 +536,9 @@ beforeEach(async () => {
   // clearAllMocks preserves queued one-shot results. A skipped lifecycle branch
   // must not shift a stale supervisor or respawn decision into the next case.
   consumeGatewaySigusr1RestartIntent.mockReset();
+  consumeGatewayRestartIntentPayloadSync.mockReset().mockReturnValue(null);
+  consumeGatewaySuspendHandoff.mockReset().mockReturnValue({ ok: true, value: false });
+  disarmGatewaySuspendHandoff.mockClear();
   consumeGatewaySigusr1RestartIntent.mockReturnValue(null);
   peekGatewaySigusr1RestartReason.mockReset();
   peekGatewaySigusr1RestartReason.mockReturnValue(undefined);
@@ -575,6 +584,69 @@ afterEach(() => {
 });
 
 describe("runGatewayLoop", () => {
+  it.each([false, true])(
+    "joins external restart cleanup without creating a successor (close failure: %s)",
+    async (fails) => {
+      vi.clearAllMocks();
+      await withIsolatedSignals(async ({ captureSignal }) => {
+        const { close, start, runtime, exited } = await createSignaledLoopHarness(undefined, true);
+        const host = start.mock.calls[0]?.[0]?.hostLifecycle;
+        const joined = createDeferredCore();
+        close.mockImplementationOnce(async () => {
+          await joined.promise;
+          if (fails) {
+            throw new Error("external cleanup failed");
+          }
+        });
+        consumeGatewaySuspendHandoff.mockImplementationOnce((owner) => {
+          expect(owner).toBe(host?.externalRestart);
+          expect(owner?.isCurrent()).toBe(true);
+          expect(gatewayWorkAdmissionActual.isGatewayWorkAdmissionClosed()).toBe(false);
+          return { ok: true, value: true };
+        });
+        try {
+          const sigterm = captureSignal("SIGTERM");
+          sigterm();
+          await waitForLoopCondition(
+            () => close.mock.calls.length === 1,
+            "external cleanup did not begin",
+          );
+          sigterm();
+          expect(host?.externalRestart?.isCurrent()).toBe(false);
+          expectRestartCloseCall(close, 0);
+          expect(waitForGatewayActiveWork).not.toHaveBeenCalled();
+          expect(runtime.exit).not.toHaveBeenCalled();
+        } finally {
+          joined.resolve();
+        }
+        await expect(exited).resolves.toBe(fails ? 1 : 0);
+        expect(consumeGatewaySuspendHandoff).toHaveBeenCalledOnce();
+        expect(start).toHaveBeenCalledOnce();
+        expect(restartGatewayProcessWithFreshPid).not.toHaveBeenCalled();
+        expect(respawnGatewayProcessForUpdate).not.toHaveBeenCalled();
+        expect(writeGatewayRestartHandoffSync).not.toHaveBeenCalled();
+        expect(cancelShutdownHardExitWatchdog).toHaveBeenCalled();
+      });
+    },
+  );
+
+  it("keeps the ordinary drain when a handoff refuses late terminal persistence", async () => {
+    vi.clearAllMocks();
+    await withIsolatedSignals(async ({ captureSignal }) => {
+      const { close, exited } = await createSignaledLoopHarness(undefined, true);
+      consumeGatewaySuspendHandoff.mockReturnValueOnce({
+        ok: false,
+        error: "gateway terminal persistence is still pending",
+      });
+      captureSignal("SIGTERM")();
+      await expect(exited).resolves.toBe(0);
+      expect(waitForGatewayActiveWork).toHaveBeenCalledWith(315_000, expect.any(Object));
+      expect(close).toHaveBeenCalledWith({ reason: "gateway stopping", restartExpectedMs: null });
+      expect(gatewayLog.warn).toHaveBeenCalledWith(
+        "external restart handoff refused: gateway terminal persistence is still pending",
+      );
+    });
+  });
   it("does not grant process control to a nonexclusive embedded host", async () => {
     await withIsolatedSignals(async ({ captureSignal }) => {
       const { start, close, exited, runtime } = await createSignaledLoopHarness();

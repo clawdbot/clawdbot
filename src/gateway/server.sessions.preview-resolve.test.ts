@@ -386,6 +386,15 @@ test("sessions.resolve filters discovery selectors with sessions.list visibility
   );
   expect(exactKey).toMatchObject({ ok: true, payload: { ok: true, key: hiddenOnlyKey } });
 
+  for (const key of [hiddenOnlyKey, "agent:main:hidden-only"]) {
+    const reference = await directSessionReq(
+      "sessions.resolve",
+      { reference: { key, slug: "hidden-only" }, agentId: "main", allowMissing: true },
+      { client },
+    );
+    expect(reference).toMatchObject({ ok: true, payload: { ok: false } });
+  }
+
   const ownerDraft = await directSessionReq<{ ok: true; key: string }>(
     "sessions.resolve",
     { shortId: "deadbeef" },

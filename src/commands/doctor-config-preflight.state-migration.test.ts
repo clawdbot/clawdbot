@@ -72,8 +72,9 @@ const repairLegacyCronStoreWithoutPrompt = vi.hoisted(() =>
 const collectCronCodexRuntimePolicyTargetsReadOnly = vi.hoisted(() =>
   vi.fn(async () => ({ targets: [] as Array<{ modelRef: string }>, warnings: [] as string[] })),
 );
-const needsStateMigrationCheckpoint = vi.hoisted(() => vi.fn(() => false));
-const needsStartupMigrationCheckpoint = vi.hoisted(() => vi.fn(() => false));
+const readMigrationCheckpointStatus = vi.hoisted(() =>
+  vi.fn<() => "stale" | "state-current" | "startup-current">(() => "startup-current"),
+);
 const startupMigrationLeaseHeartbeat = vi.hoisted(() => vi.fn());
 const startupMigrationLeaseRelease = vi.hoisted(() => vi.fn());
 const startupMigrationLeaseAssertOwnedInTransaction = vi.hoisted(() => vi.fn());
@@ -201,8 +202,7 @@ vi.mock("./doctor/cron/legacy-repair.js", () => ({
 
 vi.mock("../infra/startup-migration-checkpoint.js", () => ({
   acquireStartupMigrationLeaseWithWait,
-  needsStateMigrationCheckpoint,
-  needsStartupMigrationCheckpoint,
+  readMigrationCheckpointStatus,
   recordSuccessfulStateMigrations,
   recordSuccessfulStartupMigrations,
 }));
@@ -255,8 +255,8 @@ describe("runDoctorConfigPreflight state migration", () => {
     findDoctorLegacyConfigIssues.mockReset();
     findDoctorLegacyConfigIssues.mockReturnValue([]);
     setActiveDegradedPlugins([]);
-    needsStartupMigrationCheckpoint.mockReturnValue(false);
-    needsStateMigrationCheckpoint.mockImplementation(() => needsStartupMigrationCheckpoint());
+    readMigrationCheckpointStatus.mockReset();
+    readMigrationCheckpointStatus.mockReturnValue("startup-current");
     runPostCorePluginConvergence.mockResolvedValue(makeStartupConvergenceResult());
     planStartupPluginConvergence.mockResolvedValue({ required: true, installRecords: {} });
     planPristineStartupStateMigrations.mockReturnValue({
@@ -338,7 +338,7 @@ describe("runDoctorConfigPreflight state migration", () => {
       measuredStages.push(name);
       return await run();
     };
-    needsStartupMigrationCheckpoint.mockReturnValue(false);
+    readMigrationCheckpointStatus.mockReturnValue("startup-current");
 
     await runDoctorConfigPreflight({
       migrateState: true,
@@ -366,7 +366,7 @@ describe("runDoctorConfigPreflight state migration", () => {
     { name: "leaves the checkpoint stale after a warning", needed: true, warnings: ["warning"] },
   ])("$name", async ({ needed, warnings }) => {
     vi.clearAllMocks();
-    needsStateMigrationCheckpoint.mockReturnValue(needed);
+    readMigrationCheckpointStatus.mockReturnValue(needed ? "stale" : "state-current");
     autoMigrateLegacyStateDir.mockResolvedValue({
       migrated: false,
       skipped: false,
@@ -430,7 +430,7 @@ describe("runDoctorConfigPreflight state migration", () => {
   });
 
   it("does not touch the startup checkpoint before the startup guard accepts", async () => {
-    needsStartupMigrationCheckpoint.mockReturnValue(true);
+    readMigrationCheckpointStatus.mockReturnValue("stale");
 
     await expect(
       runDoctorConfigPreflight({
@@ -441,13 +441,13 @@ describe("runDoctorConfigPreflight state migration", () => {
       }),
     ).rejects.toThrow("selected config changed during startup");
 
-    expect(needsStartupMigrationCheckpoint).not.toHaveBeenCalled();
+    expect(readMigrationCheckpointStatus).not.toHaveBeenCalled();
     expect(acquireStartupMigrationLeaseWithWait).not.toHaveBeenCalled();
     expect(readConfigFileSnapshot).not.toHaveBeenCalled();
   });
 
   it("releases the startup lease when the fresh config guard rejects", async () => {
-    needsStartupMigrationCheckpoint.mockReturnValue(true);
+    readMigrationCheckpointStatus.mockReturnValue("stale");
     const previousStateDir = process.env.OPENCLAW_STATE_DIR;
     process.env.OPENCLAW_STATE_DIR = "/tmp/openclaw-original-state";
     let leaseEnv: NodeJS.ProcessEnv | undefined;
@@ -493,7 +493,7 @@ describe("runDoctorConfigPreflight state migration", () => {
   });
 
   it("releases the startup lease before propagating a deferred service exit", async () => {
-    needsStartupMigrationCheckpoint.mockReturnValue(true);
+    readMigrationCheckpointStatus.mockReturnValue("stale");
     const deferredExit = new ExitError(78);
     const beforeStateMigrations = vi
       .fn<(_snapshot?: Record<string, unknown>) => Promise<boolean>>()
@@ -577,8 +577,7 @@ describe("runDoctorConfigPreflight state migration", () => {
   });
 
   it("rechecks the checkpoint after acquisition before running migrations", async () => {
-    needsStateMigrationCheckpoint.mockReturnValueOnce(true).mockReturnValue(false);
-    needsStartupMigrationCheckpoint.mockReturnValueOnce(true).mockReturnValue(false);
+    readMigrationCheckpointStatus.mockReturnValueOnce("stale").mockReturnValue("startup-current");
 
     await runDoctorConfigPreflight(startupCheckpointOptions);
 
@@ -591,7 +590,7 @@ describe("runDoctorConfigPreflight state migration", () => {
   });
 
   it("pins startup plugin convergence without re-persisting the installed record snapshot", async () => {
-    needsStartupMigrationCheckpoint.mockReturnValue(true);
+    readMigrationCheckpointStatus.mockReturnValue("stale");
     const previousHostVersion = process.env.OPENCLAW_COMPATIBILITY_HOST_VERSION;
     process.env.OPENCLAW_COMPATIBILITY_HOST_VERSION = "2026.7.2-beta.7";
 
@@ -613,7 +612,7 @@ describe("runDoctorConfigPreflight state migration", () => {
   });
 
   it("repairs managed host links before plugin state migration", async () => {
-    needsStartupMigrationCheckpoint.mockReturnValue(true);
+    readMigrationCheckpointStatus.mockReturnValue("stale");
     const migrationOrder: string[] = [];
     maybeRepairPluginOpenClawHostLinks.mockImplementationOnce(async ({ env, prompter }) => {
       migrationOrder.push("host-links");
@@ -632,7 +631,7 @@ describe("runDoctorConfigPreflight state migration", () => {
   });
 
   it("refuses startup when fresh plugin migration inputs change during convergence", async () => {
-    needsStartupMigrationCheckpoint.mockReturnValue(true);
+    readMigrationCheckpointStatus.mockReturnValue("stale");
     pluginMigrationFingerprint.mockImplementation((allowCurrentPluginMetadata) =>
       runPostCorePluginConvergence.mock.calls.length > 0 && allowCurrentPluginMetadata === false
         ? "plugin-migrations-after"
@@ -655,7 +654,7 @@ describe("runDoctorConfigPreflight state migration", () => {
   });
 
   it("records the authoritative startup checkpoint after notices and runtime replacement", async () => {
-    needsStartupMigrationCheckpoint.mockReturnValue(true);
+    readMigrationCheckpointStatus.mockReturnValue("stale");
     pluginMigrationFingerprint.mockImplementation((allowCurrentPluginMetadata) =>
       runPostCorePluginConvergence.mock.calls.length > 0 && allowCurrentPluginMetadata !== false
         ? "plugin-migrations-runtime-current"
@@ -682,7 +681,7 @@ describe("runDoctorConfigPreflight state migration", () => {
   });
 
   it("checkpoints after a dreaming conflict is archived without a migration warning", async () => {
-    needsStartupMigrationCheckpoint.mockReturnValue(true);
+    readMigrationCheckpointStatus.mockReturnValue("stale");
     autoMigrateLegacyPluginDoctorState.mockResolvedValueOnce({
       migrated: true,
       skipped: false,
@@ -738,7 +737,7 @@ describe("runDoctorConfigPreflight state migration", () => {
   });
 
   it("keeps ownerless install-record failures blocking", async () => {
-    needsStartupMigrationCheckpoint.mockReturnValue(true);
+    readMigrationCheckpointStatus.mockReturnValue("stale");
     queueConfigSnapshot(
       {
         exists: true,
@@ -791,7 +790,7 @@ describe("runDoctorConfigPreflight state migration", () => {
   });
 
   it("checkpoints startup migrations without loading plugin convergence when the plan is empty", async () => {
-    needsStartupMigrationCheckpoint.mockReturnValue(true);
+    readMigrationCheckpointStatus.mockReturnValue("stale");
     planStartupPluginConvergence.mockResolvedValueOnce({ required: false, installRecords: {} });
 
     await runDoctorConfigPreflight({
@@ -809,7 +808,7 @@ describe("runDoctorConfigPreflight state migration", () => {
   });
 
   it("skips legacy migration loading for a prepared pristine state root", async () => {
-    needsStartupMigrationCheckpoint.mockReturnValue(true);
+    readMigrationCheckpointStatus.mockReturnValue("stale");
     planStartupPluginConvergence.mockResolvedValueOnce({ required: false, installRecords: {} });
     const beforeStateMigrations = vi.fn(async () => true);
 
@@ -834,7 +833,7 @@ describe("runDoctorConfigPreflight state migration", () => {
   });
 
   it("runs only plugin-owned migrations for a pristine core state root", async () => {
-    needsStartupMigrationCheckpoint.mockReturnValue(true);
+    readMigrationCheckpointStatus.mockReturnValue("stale");
     planPristineStartupStateMigrations.mockReturnValueOnce({
       skipAllStateMigrations: false,
       skipCoreStateMigrations: true,
@@ -858,7 +857,7 @@ describe("runDoctorConfigPreflight state migration", () => {
   });
 
   it("retains the prepared core-state fact and explicit Doctor repair authority", async () => {
-    needsStartupMigrationCheckpoint.mockReturnValue(true);
+    readMigrationCheckpointStatus.mockReturnValue("stale");
 
     await runDoctorConfigPreflight({
       migrateLegacyConfig: false,
@@ -877,35 +876,31 @@ describe("runDoctorConfigPreflight state migration", () => {
     });
   });
 
-  it.each([false, true])(
-    "allows warning-only startup with checkpoint required=%s",
-    async (required) => {
-      needsStateMigrationCheckpoint.mockReturnValue(true);
-      needsStartupMigrationCheckpoint.mockReturnValue(required);
-      autoMigrateLegacyStateDir.mockResolvedValueOnce({
-        migrated: false,
-        skipped: false,
-        changes: [],
-        warnings: ["Left legacy config health state in place."],
-      });
+  it("allows warning-only startup without certifying completion", async () => {
+    readMigrationCheckpointStatus.mockReturnValue("stale");
+    autoMigrateLegacyStateDir.mockResolvedValueOnce({
+      migrated: false,
+      skipped: false,
+      changes: [],
+      warnings: ["Left legacy config health state in place."],
+    });
 
-      await expect(runDoctorConfigPreflight(startupCheckpointOptions)).resolves.toBeDefined();
+    await expect(runDoctorConfigPreflight(startupCheckpointOptions)).resolves.toBeDefined();
 
-      expect(readStartupMigrationWarning()).toContain("Left legacy config health state in place.");
-      expect(readStartupMigrationWarning()).toContain(
-        'Run "openclaw doctor --fix" against the same state/config, then restart the gateway.',
-      );
-      expect(note.mock.calls.filter(([, title]) => title === "Doctor warnings")).toHaveLength(0);
-      expect(recordSuccessfulStateMigrations).not.toHaveBeenCalled();
-      expect(recordSuccessfulStartupMigrations).not.toHaveBeenCalled();
-      expect(startupMigrationLeaseRelease).toHaveBeenCalledOnce();
-      await runDoctorConfigPreflight(startupCheckpointOptions);
-      expect(readStartupMigrationWarning()).toContain("Left legacy config health state in place.");
-    },
-  );
+    expect(readStartupMigrationWarning()).toContain("Left legacy config health state in place.");
+    expect(readStartupMigrationWarning()).toContain(
+      'Run "openclaw doctor --fix" against the same state/config, then restart the gateway.',
+    );
+    expect(note.mock.calls.filter(([, title]) => title === "Doctor warnings")).toHaveLength(0);
+    expect(recordSuccessfulStateMigrations).not.toHaveBeenCalled();
+    expect(recordSuccessfulStartupMigrations).not.toHaveBeenCalled();
+    expect(startupMigrationLeaseRelease).toHaveBeenCalledOnce();
+    await runDoctorConfigPreflight(startupCheckpointOptions);
+    expect(readStartupMigrationWarning()).toContain("Left legacy config health state in place.");
+  });
 
   it("bounds and redacts startup warnings while preserving the Doctor follow-up", async () => {
-    needsStartupMigrationCheckpoint.mockReturnValue(true);
+    readMigrationCheckpointStatus.mockReturnValue("stale");
     const credential = "sk-" + "syntheticfixture".repeat(4);
     autoMigrateLegacyStateDir.mockResolvedValueOnce({
       migrated: false,
@@ -924,7 +919,7 @@ describe("runDoctorConfigPreflight state migration", () => {
   });
 
   it("refuses startup and releases the lease when a migration errors", async () => {
-    needsStartupMigrationCheckpoint.mockReturnValue(true);
+    readMigrationCheckpointStatus.mockReturnValue("stale");
     autoMigrateLegacyState.mockRejectedValueOnce(new Error("Canonical state cannot be read"));
 
     await expect(runDoctorConfigPreflight(startupCheckpointOptions)).rejects.toThrow(
@@ -936,7 +931,7 @@ describe("runDoctorConfigPreflight state migration", () => {
   });
 
   it("blocks gateway readiness when plugin repair warnings remain", async () => {
-    needsStartupMigrationCheckpoint.mockReturnValue(true);
+    readMigrationCheckpointStatus.mockReturnValue("stale");
     runPostCorePluginConvergence.mockResolvedValueOnce(
       makeStartupConvergenceResult({
         warnings: [
@@ -971,7 +966,7 @@ describe("runDoctorConfigPreflight state migration", () => {
   });
 
   it("quarantines a plugin payload verification failure and checkpoints readiness", async () => {
-    needsStartupMigrationCheckpoint.mockReturnValue(true);
+    readMigrationCheckpointStatus.mockReturnValue("stale");
     queueConfigSnapshot(
       {
         exists: true,
@@ -1045,7 +1040,7 @@ describe("runDoctorConfigPreflight state migration", () => {
   });
 
   it("does not checkpoint startup migrations when the config snapshot is invalid", async () => {
-    needsStartupMigrationCheckpoint.mockReturnValue(true);
+    readMigrationCheckpointStatus.mockReturnValue("stale");
     queueConfigSnapshot(
       {
         exists: true,

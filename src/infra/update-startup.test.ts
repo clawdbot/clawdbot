@@ -19,6 +19,7 @@ import { writeUpdateInstallReceiptRowSync } from "./restart-sentinel-store.js";
 import { readRestartSentinel, writeRestartSentinel } from "./restart-sentinel.js";
 import { UpdateCampaignController } from "./update-campaign.js";
 import type { UpdateCheckResult } from "./update-check.js";
+import { getUpdateRun, listUpdateRuns } from "./update-run-ledger.js";
 
 const {
   cancelManagedServiceUpdateHandoffMock,
@@ -1303,6 +1304,7 @@ describe("update-startup", () => {
 
     await vi.advanceTimersByTimeAsync(60_000);
     expect(runAutoUpdate).toHaveBeenCalledWith({
+      runId: listUpdateRuns()[0]?.runId,
       signal: expect.any(AbortSignal),
       channel: "dev",
       mode: "git",
@@ -1320,6 +1322,7 @@ describe("update-startup", () => {
   it("pins managed dev campaign handoffs to the announced commit", async () => {
     mockDevGitStatus({ upstreamSha: "frozen-upstream-sha" });
     detectRespawnSupervisorMock.mockReturnValue("launchd");
+    const onUpdateRunCreated = vi.fn();
 
     await runGatewayUpdateCheck({
       cfg: { update: { channel: "dev", auto: { enabled: true } } },
@@ -1327,10 +1330,19 @@ describe("update-startup", () => {
       isNixMode: false,
       allowInTests: true,
       activeWorkInspectors: idleActiveWorkInspectors(),
+      onUpdateRunCreated,
     });
     await vi.advanceTimersByTimeAsync(60_000);
 
     const [handoffParams] = startManagedServiceUpdateHandoffMock.mock.calls[0] ?? [];
+    const run = getUpdateRun(handoffParams!.meta!.runId!);
+    expect(run).toMatchObject({
+      trigger: "campaign",
+      status: "running",
+      origin: { campaignId: getUpdateSchedule()?.campaign?.id },
+      target: { kind: "git", sha: "frozen-upstream-sha" },
+    });
+    expect(onUpdateRunCreated).toHaveBeenCalledOnce();
     expect(handoffParams?.devTarget).toEqual({
       mode: "tracked",
       upstreamRef: "origin/main",
@@ -1373,6 +1385,14 @@ describe("update-startup", () => {
 
     expect(startManagedServiceUpdateHandoffMock).not.toHaveBeenCalled();
     expect(scheduleGatewaySigusr1RestartMock).not.toHaveBeenCalled();
+    expect(listUpdateRuns()).toEqual([
+      expect.objectContaining({
+        trigger: "campaign",
+        status: "failed",
+        reason: "preflight-no-good-commit",
+        phase: "finished",
+      }),
+    ]);
     expect(log.info).toHaveBeenCalledWith(
       "auto-update attempt failed",
       expect.objectContaining({ reason: "preflight-no-good-commit" }),
@@ -2419,6 +2439,7 @@ describe("update-startup", () => {
     expect(runAutoUpdate).toHaveBeenCalledTimes(1);
     expect(runAutoUpdate).toHaveBeenCalledWith({
       channel: "stable",
+      runId: listUpdateRuns()[0]?.runId,
       signal: expect.any(AbortSignal),
       mode: "npm",
       timeoutMs: 45 * 60 * 1000,
@@ -2439,6 +2460,7 @@ describe("update-startup", () => {
     expect(runAutoUpdate).toHaveBeenCalledTimes(1);
     expect(runAutoUpdate).toHaveBeenCalledWith({
       channel: "beta",
+      runId: listUpdateRuns()[0]?.runId,
       signal: expect.any(AbortSignal),
       mode: "npm",
       timeoutMs: 45 * 60 * 1000,
@@ -2609,6 +2631,7 @@ describe("update-startup", () => {
         supervisor: "launchd",
         handoffId: expect.any(String),
         meta: {
+          runId: expect.any(String),
           handoffId: expect.any(String),
           note: "background auto-update",
         },
@@ -2743,6 +2766,14 @@ describe("update-startup", () => {
 
     expect(scheduleGatewaySigusr1RestartMock).not.toHaveBeenCalled();
     expect(runUpdateFailureTriageMock).not.toHaveBeenCalled();
+    expect(listUpdateRuns()).toEqual([
+      expect.objectContaining({
+        trigger: "campaign",
+        status: "skipped",
+        reason: "managed-service-handoff-already-running",
+        finishedAtMs: expect.any(Number),
+      }),
+    ]);
   });
 
   it("uses managed systemd handoff for Linux gateway service auto-updates", async () => {

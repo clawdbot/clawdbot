@@ -9,6 +9,7 @@ import { sanitizeForLog } from "../../packages/terminal-core/src/ansi.js";
 import type { OpenClawConfig } from "../config/types.js";
 import type { PluginInstallRecord } from "../config/types.plugins.js";
 import { isBlockedObjectKey } from "../infra/prototype-keys.js";
+import { redactSensitiveText } from "../logging/redact.js";
 import { resolveUserPath } from "../utils.js";
 import { resolveCompatibilityHostVersion } from "../version.js";
 import { loadBundleManifest } from "./bundle-manifest.js";
@@ -26,6 +27,7 @@ import {
 } from "./discovery.js";
 import { shouldRejectHardlinkedPluginFiles } from "./hardlink-policy.js";
 import { loadInstalledPluginIndexInstallRecordsSync } from "./installed-plugin-index-record-reader.js";
+import { resolveInstalledPluginIndexStorePath } from "./installed-plugin-index-store-path.js";
 import { recordPluginManifestInstallOwner } from "./manifest-install-owner.js";
 import type {
   BundledChannelConfigCollector,
@@ -61,6 +63,7 @@ import {
 } from "./plugin-cache-files.js";
 import type { PluginOrigin } from "./plugin-origin.types.js";
 import { normalizePluginPolicyId } from "./plugin-policy-id.js";
+import type { PluginTrust } from "./plugin-trust.js";
 
 export type {
   BundledChannelConfigCollector,
@@ -413,7 +416,7 @@ function buildRecord(params: {
   schemaCacheKey?: string;
   configSchema?: Record<string, unknown>;
   bundledChannelConfigCollector?: BundledChannelConfigCollector;
-  trustedOfficialInstall?: boolean;
+  trust: PluginTrust;
 }): PluginManifestRecord {
   const pluginId = params.candidate.effectivePluginId ?? params.manifest.id;
   const providerSourceEntry =
@@ -519,7 +522,8 @@ function buildRecord(params: {
     packageOptionalDependencies: params.candidate.packageOptionalDependencies,
     packageChannel: params.candidate.packageManifest?.channel,
     packageInstall: params.candidate.packageManifest?.install,
-    trustedOfficialInstall: params.trustedOfficialInstall === true ? true : undefined,
+    trustedOfficialInstall: params.trust.reason === "trusted-official" ? true : undefined,
+    trust: params.trust,
     qaRunners: params.manifest.qaRunners,
     dashboard: params.manifest.dashboard,
     controlUi: params.manifest.controlUi,
@@ -762,16 +766,31 @@ function matchesInstalledPluginRecord(params: {
   );
 }
 
-function isTrustedOfficialPluginInstall(params: {
+function resolvePluginTrust(params: {
   pluginId: string;
   candidate: PluginCandidate;
   env: NodeJS.ProcessEnv;
   installRecords: Record<string, PluginInstallRecord>;
-}): boolean {
+  registryPath: string;
+}): PluginTrust {
   const installOwner = resolveCandidateInstallOwner(params);
-  if (
-    !installOwner ||
-    (params.candidate.origin !== "global" && params.candidate.origin !== "config") ||
+  const record = installOwner ? params.installRecords[installOwner] : undefined;
+  const origin = params.candidate.origin;
+  let reason: PluginTrust["reason"];
+  if (origin === "bundled") {
+    reason = "bundled";
+  } else if (isPluginCandidateInstallOwnerAmbiguous(params.candidate)) {
+    reason = "owner-ambiguous";
+  } else if (
+    origin === "workspace" ||
+    record?.source === "path" ||
+    (record?.source === "npm" &&
+      (record.artifactKind !== undefined || record.sourcePath !== undefined))
+  ) {
+    reason = "origin-path";
+  } else if (!record || !installOwner) {
+    reason = "record-missing";
+  } else if (
     !matchesInstalledPluginRecord({
       pluginId: params.pluginId,
       candidate: params.candidate,
@@ -780,21 +799,36 @@ function isTrustedOfficialPluginInstall(params: {
       installPathOnly: true,
     })
   ) {
-    return false;
-  }
-  const packageName = params.candidate.packageName?.trim();
-  if (!packageName) {
-    return false;
-  }
-  const installRecord = params.installRecords[installOwner];
-  return Boolean(
-    installRecord &&
+    reason = "install-path-mismatch";
+  } else if (
     isTrustedOfficialPluginInstallRecord({
       pluginId: installOwner,
-      packageName,
-      record: installRecord,
-    }),
-  );
+      packageName: params.candidate.packageName,
+      record,
+    })
+  ) {
+    reason = "trusted-official";
+  } else if (
+    (record.source === "npm" &&
+      record.spec === undefined &&
+      record.resolvedName === undefined &&
+      record.resolvedSpec === undefined) ||
+    (record.source === "clawhub" &&
+      record.clawhubUrl === undefined &&
+      record.clawhubChannel === undefined)
+  ) {
+    reason = "provenance-missing";
+  } else {
+    reason = "provenance-invalid";
+  }
+  return {
+    reason,
+    registryPath: params.registryPath,
+    origin,
+    installSource: record?.source,
+    installSpec:
+      record?.spec === undefined ? undefined : redactSensitiveText(record.spec, { mode: "tools" }),
+  };
 }
 
 function resolveDuplicatePrecedenceRank(params: {
@@ -888,6 +922,7 @@ function isSameGlobalPackageDuplicate(left: PluginCandidate, right: PluginCandid
 
 export function loadPluginManifestRegistryCore(
   params: {
+    registryPath?: string;
     config?: OpenClawConfig;
     workspaceDir?: string;
     env?: NodeJS.ProcessEnv;
@@ -909,6 +944,7 @@ export function loadPluginManifestRegistryCore(
   const config = params.config ?? {};
   const normalized = normalizePluginsConfigWithResolver(config.plugins);
   const env = params.env ?? process.env;
+  const registryPath = params.registryPath ?? resolveInstalledPluginIndexStorePath({ env });
   let installRecords = params.installRecords;
   let installRecordsLoaded = Boolean(params.installRecords);
   const getInstallRecords = (): Record<string, PluginInstallRecord> => {
@@ -1090,7 +1126,8 @@ export function loadPluginManifestRegistryCore(
           rejectHardlinks,
           schemaCacheKey,
           configSchema,
-          trustedOfficialInstall: isTrustedOfficialPluginInstall({
+          trust: resolvePluginTrust({
+            registryPath,
             pluginId: effectivePluginId,
             candidate,
             env,

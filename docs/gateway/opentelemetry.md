@@ -559,6 +559,11 @@ Liveness warnings also emit:
 - `openclaw.liveness.event_loop_utilization` (histogram, attrs: `openclaw.liveness.reason`)
 - `openclaw.liveness.cpu_core_ratio` (histogram, attrs: `openclaw.liveness.reason`)
 
+The CPU ratio measures whole-process CPU usage in core equivalents, including
+worker and native threads, and can exceed `1`. Event-loop delay and utilization
+measure the main thread separately. See
+[CPU pressure and event-loop delay](/gateway/health#cpu-pressure-and-event-loop-delay).
+
 ### Gateway event-loop observation windows
 
 - `openclaw.gateway.event_loop.delay_max_ms` (histogram, no attrs; maximum delay per completed health-monitor window)
@@ -567,17 +572,19 @@ Liveness warnings also emit:
 These metrics use the existing diagnostics plugin setup and require metrics to
 be active. Each accepted health-monitor window is recorded once, so a later
 healthy readiness result does not erase an earlier high-delay observation.
-Cached reads do not add samples. The process-wide observations carry no request
+Health and scrape reads do not commit or reset samples. The process-wide observations carry no request
 trace context and create no spans or logs, including with a preloaded SDK.
 
-Windows follow existing health readers, normally completing after at least one
-second or sooner for a delay warning. Counts and quantiles describe completed
-windows and their maxima, not individual stalls or the native delay distribution's
+The monitor samples elapsed event-loop intervals every 20 milliseconds and
+completes windows after at least one second or sooner for a delay warning.
+Ordinary window resets preserve the pending interval even when health is read
+before an overdue sample. Counts and quantiles describe completed windows and
+their maxima, not individual stalls or the sampled delay distribution's
 overall p99. Intentional monitor resets discard unfinished windows; collection
 does not backfill periods without an interested exporter. Diagnostic queue drops,
 SDK/export failures, and restarts limit coverage. Use the represented-duration
-counter and exporter/drop telemetry to assess it. Readiness and persistent
-liveness-warning behavior are unchanged. For pull metrics and example queries,
+counter and exporter/drop telemetry to assess it. Readiness decisions and
+persistent liveness-warning thresholds are unchanged. For pull metrics and example queries,
 see [Prometheus event-loop windows](/gateway/prometheus#event-loop-observation-windows).
 
 ### Harness lifecycle

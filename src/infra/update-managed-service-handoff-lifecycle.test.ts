@@ -48,6 +48,7 @@ import {
 } from "./update-managed-service-handoff-result.test-support.js";
 import { registerManagedUpdateHandoffTriageTests } from "./update-managed-service-handoff-triage.test-support.js";
 import { signalMockManagedUpdateHandoffReady } from "./update-managed-service-handoff.test-support.js";
+import { createUpdateRun, getUpdateRun } from "./update-run-ledger.js";
 
 const { forceKillChildProcessTreeMock, spawnMock } = vi.hoisted(() => ({
   forceKillChildProcessTreeMock: vi.fn(),
@@ -223,6 +224,18 @@ async function runManagedServiceManagerBoundary(
     OPENCLAW_CONFIG_PATH: path.join(root, "openclaw.json"),
     PATH: `${root}${path.delimiter}${process.env.PATH ?? ""}`,
   };
+  const run = options?.ledger ? createUpdateRun({ trigger: "api" }, { env }) : undefined;
+  if (run) {
+    await fs.appendFile(
+      recoveryModulePath,
+      `
+      const { register } = await import(${JSON.stringify(pathToFileURL(createRequire(import.meta.url).resolve("tsx/esm/api")).href)});
+      register();
+      const ledger = await import(${JSON.stringify(new URL("./update-run-ledger.ts", import.meta.url).href)});
+      export const { finishUpdateRun, recordUpdateRunPhase, recordUpdateRunVerification } = ledger;
+    `,
+    );
+  }
   if (options?.requester) {
     await fs.writeFile(
       env.OPENCLAW_CONFIG_PATH,
@@ -249,6 +262,7 @@ async function runManagedServiceManagerBoundary(
   let helper: import("node:child_process").ChildProcess | undefined;
   try {
     await startManagedServiceUpdateHandoff({
+      runId: run?.runId,
       root,
       restartDrainTimeoutMs: 300_000,
       parentPid,
@@ -501,6 +515,7 @@ async function runManagedServiceManagerBoundary(
         }
       : null;
     return {
+      ...(run ? { run: getUpdateRun(run.runId, { env }) } : {}),
       commands: (await fs.readFile(commandsPath, "utf8").catch(() => ""))
         .trim()
         .split("\n")

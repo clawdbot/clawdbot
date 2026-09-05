@@ -61,6 +61,18 @@ been published yet. Read once per turn and carry that snapshot through admission
 and replies. Process-wide controls such as diagnostics should read at the point
 of emission.
 
+`createChannelInboundDebouncer` keeps its returned numeric `debounceMs` and default
+queue timing as startup snapshots. For live timing, pass its existing
+`resolveDebounceMs(entry)` callback and resolve with the bound config reader.
+If pending-key or shutdown bookkeeping also depends on the delay, capture one
+value on the entry and use it for both bookkeeping and the callback.
+
+A channel's `reload.noopPrefixes` opts only that channel out of shared-policy
+refresh. Declare a prefix only after every retained consumer reads it live or
+does not consume it. Undeclared channels still refresh; one channel's declaration
+cannot suppress a sibling's reload. A narrower `reload.configPrefixes` entry can
+retain restart behavior under a broader no-op prefix.
+
 ## Reusable runtime utilities
 
 Native command probes should use `runCommandWithTimeout` from
@@ -68,6 +80,12 @@ Native command probes should use `runCommandWithTimeout` from
 `killProcessTree: true`. Await its result so timeout or cancellation cleanup finishes
 before returning. For commands whose output is always UTF-8, such as JSON status
 probes, use `runUtf8CommandWithTimeout` from the same subpath.
+
+Use `splitCommandArgs(raw)` from the same subpath to group quoted process
+arguments. Backslashes and `#` stay literal; there is no shell expansion.
+Unfinished quotes return `null` unless the caller passes
+`{ allowUnclosedQuotes: true }` to preserve an existing permissive input contract.
+Empty quoted arguments are omitted.
 
 Existing process owners can use `signalProcessTree`. Its `onComplete` callback runs after Unix
 signaling or the bounded Windows `taskkill` attempt, not proof that every process
@@ -1129,7 +1147,7 @@ snapshots; OpenClaw owns all persistence and lifecycle coordination.
     `openChannelIngressDrain(...)` opens the core channel-agnostic worker over that queue (or creates a queue when none is supplied). The drain owns stale-claim recovery, per-lane claim serialization, complete-at-adoption or complete-on-dispatch-return, retry/dead-letter disposition, optional pre-adoption supersede, and claim→adoption stall timeout. Wire claim ownership into reply generation with `turnAdoptionLifecycle` (via `bindIngressLifecycleToReplyOptions` from `plugin-sdk/channel-outbound`). Channel plugins keep accept-side enqueue, lane derivation, non-retryable classification, and any supersede authorization policy.
 
     <Warning>
-    `openBlobStore`, `openKeyedStore`, `openSyncKeyedStore`, `openChannelIngressQueue`, and `openChannelIngressDrain` are available only to bundled plugins and trusted official plugin installations in this release. The rejection names the plugin id and the origin it loaded from; a channel plugin loaded from `plugins.load.paths` or an unofficial install is untrusted, so its ingress monitor fails channel start instead of running without a durable queue.
+    `openBlobStore`, `openKeyedStore`, `openSyncKeyedStore`, `openChannelIngressQueue`, and `openChannelIngressDrain` are available only to bundled plugins and trusted official plugin installations in this release. Refusals include the recorded reason, registry database path, origin, and install source/spec; `plugins inspect` reports the same trust facts. A load path selecting the recorded official installation preserves trust; an untracked local copy does not. See [Trusted plugin state refused](/tools/plugin#trusted-plugin-state-refused) for doctor migrations and cause-specific remedies. An untrusted channel's ingress monitor fails channel start instead of running without a durable queue.
     </Warning>
 
   </Accordion>

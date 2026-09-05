@@ -1,5 +1,6 @@
 import type { TriageUpdateFailure } from "../commands/triage-update.js";
 import { buildUpdateRestartSentinelPayload } from "./update-restart-sentinel-payload.js";
+import type { UpdateRunRecord } from "./update-run-record.js";
 import type { UpdateRunResult } from "./update-runner-types.js";
 
 type ManagedSystemdPostExitState = {
@@ -12,6 +13,7 @@ type ManagedSystemdPostExitState = {
 };
 
 export type ManagedServiceManagerBoundaryOptions = {
+  ledger?: boolean;
   cancelAfterPark?: boolean;
   parentExitTimeoutMs?: number;
   launchdFault?: "wrong-parent" | "missing-restored-pid" | "dead-restored-pid";
@@ -55,6 +57,7 @@ export type ManagedServiceCommandTiming = {
 };
 
 export type ManagedServiceManagerBoundaryResult = {
+  run?: UpdateRunRecord;
   commands: string[];
   parentSignal: NodeJS.Signals | null;
   state: Record<string, unknown>;

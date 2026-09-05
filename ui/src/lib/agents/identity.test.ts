@@ -2,6 +2,7 @@ import { afterEach, expect, it, vi } from "vitest";
 import type { GatewayBrowserClient } from "../../api/gateway.ts";
 import type { AgentIdentityResult } from "../../api/types.ts";
 import type { ApplicationGatewayPhase } from "../../app/gateway.ts";
+import { createTestGatewayClient } from "../../test-helpers/gateway-client.ts";
 import { createAgentIdentityCapability } from "./identity.ts";
 
 afterEach(() => {
@@ -111,7 +112,7 @@ it("shares identity requests between the sidebar and the selected chat", async (
   const { fetchAssistantIdentity } = await import("../../app/assistant-identity.ts");
   const result = { agentId: "main", name: "Main", avatar: "/avatar/main?v=1" };
   const request = vi.fn().mockResolvedValue(result);
-  const client = { request } as unknown as GatewayBrowserClient;
+  const client = createTestGatewayClient(request);
   const capability = createAgentIdentityCapability({
     snapshot: { client, phase: "connected" },
     subscribe: () => () => undefined,
@@ -135,7 +136,7 @@ it.each(["sidebar", "chat"])(
     const replacement = { ...oldIdentity, avatar: "/avatar/main?v=replaced" };
     const refresh = deferred<AgentIdentityResult>();
     const request = vi.fn().mockResolvedValueOnce(oldIdentity).mockReturnValueOnce(refresh.promise);
-    const client = { request } as unknown as GatewayBrowserClient;
+    const client = createTestGatewayClient(request);
     const capability = createAgentIdentityCapability({
       snapshot: { client, phase: "connected" },
       subscribe: () => () => undefined,

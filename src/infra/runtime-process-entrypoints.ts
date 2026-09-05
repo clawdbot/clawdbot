@@ -12,6 +12,11 @@ export const runtimeProcessEntrypoints = {
     sourceWorkerName: "sqlite-readonly-location.worker",
     distWorkerPath: "infra/sqlite-readonly-location.worker.js",
   },
+  sqliteIntegrity: {
+    currentModuleUrl,
+    sourceWorkerName: "sqlite-integrity.worker",
+    distWorkerPath: "infra/sqlite-integrity.worker.js",
+  },
   databaseVerify: {
     currentModuleUrl,
     sourceWorkerName: "../state/openclaw-database-verify.worker",

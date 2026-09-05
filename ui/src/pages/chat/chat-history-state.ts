@@ -108,10 +108,6 @@ export function getChatHistoryLoadState(state: ChatState): ChatHistoryLoadState 
   return requests.historyLoad;
 }
 
-export function getChatHistoryVersion(state: ChatState): number {
-  return chatHistoryRequests(state).historyVersion;
-}
-
 type ChatHistoryRequestOwnership = {
   version: number;
   client: GatewayBrowserClient;

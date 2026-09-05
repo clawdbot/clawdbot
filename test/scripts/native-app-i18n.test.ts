@@ -506,8 +506,12 @@ describe("native app i18n inventory", () => {
     expect(
       entries.some(
         (entry) =>
+          hasSite(
+            entry,
+            (site) => site.path === "apps/ios/WatchApp/Sources/WatchInboxView.swift",
+          ) &&
           entry.source ===
-          "Direct mode supports device info, status, and notifications. Chat, Talk, and approvals still use the iPhone.",
+            "Direct mode supports device info, status, and notifications. Set up standalone voice on iPhone to use Talk on Watch. Chat and approvals still use the iPhone.",
       ),
     ).toBe(true);
     expect(entries.some((entry) => entry.source === "Session target")).toBe(true);
@@ -630,15 +634,12 @@ describe("native app i18n inventory", () => {
     expect(
       entries.some(
         (entry) =>
+          hasSite(
+            entry,
+            (site) => site.path === "apps/ios/Sources/Design/SettingsProTabSections.swift",
+          ) &&
           entry.source ===
-          "Direct mode supports device info, status, and notifications. Chat, Talk, and approvals still use the iPhone.",
-      ),
-    ).toBe(true);
-    expect(
-      entries.some(
-        (entry) =>
-          entry.source ===
-          "The watch receives a one-time pairing code and stores its own device token. A reachable secure Gateway URL is required away from the iPhone.",
+            "The watch receives a one-time pairing code and stores its own device token. Standalone voice also grants read and Talk access, without admin access. A reachable secure Gateway URL is required away from the iPhone.",
       ),
     ).toBe(true);
     expect(

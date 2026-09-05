@@ -36,7 +36,7 @@ vi.mock("./audit.js", () => ({ appendSystemAgentAuditEntry: mocks.audit }));
 vi.mock("../cli/plugins-install-config.js", () => ({
   loadConfigForInstall: async () => ({ config: {}, baseHash: "config", writeOptions: {} }),
 }));
-vi.mock("../plugins/management-service.js", () => ({ installManagedPluginSource: mocks.install }));
+vi.mock("../plugins/management-install.js", () => ({ installManagedPluginSource: mocks.install }));
 vi.mock("../plugins/plugin-lifecycle-lease.js", () => ({
   withPluginLifecycleLease: async (
     _params: unknown,

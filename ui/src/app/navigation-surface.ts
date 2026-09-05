@@ -139,6 +139,11 @@ export function renderFloatingUpdateCard(params: {
   updateSchedule?: ApplicationContext["overlays"]["snapshot"]["updateSchedule"];
   heldUpdateCampaignId?: string | null;
   updateBusy: boolean;
+  updateRun?: ApplicationContext["overlays"]["snapshot"]["updateRun"];
+  updateRunAcknowledged?: boolean;
+  connected?: boolean;
+  onAcknowledge?: () => void;
+  onCheckStatus?: () => Promise<void>;
   statusBanner?: ApplicationContext["overlays"]["snapshot"]["updateStatusBanner"];
   watchUpdateProgress?: (listener: (progress: UpdateProgress) => void) => () => void;
   canUpdate?: boolean;
@@ -172,6 +177,11 @@ export function renderFloatingUpdateCard(params: {
           .updateSchedule=${params.updateSchedule ?? null}
           .heldUpdateCampaignId=${params.heldUpdateCampaignId ?? null}
           .updateBusy=${params.updateBusy}
+          .updateRun=${params.updateRun ?? null}
+          .updateRunAcknowledged=${params.updateRunAcknowledged ?? false}
+          .connected=${params.connected ?? false}
+          .onAcknowledge=${params.onAcknowledge}
+          .onCheckStatus=${params.onCheckStatus}
           .statusBanner=${params.statusBanner ?? null}
           .watchUpdateProgress=${params.watchUpdateProgress}
           .canUpdate=${params.canUpdate ?? false}

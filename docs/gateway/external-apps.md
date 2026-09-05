@@ -77,8 +77,8 @@ its own lease. New node and worker connections remain fenced. A prepared
 Gateway fences every method except `gateway.suspend.*` and one exact
 predecessor-bound restart. That exception requires a non-safe
 `gateway.restart.request` whose `target` matches the live Gateway lock; safe and
-untargeted restart requests remain fenced. No restart exception is available
-while the Gateway is still draining. Controllers may reconnect after thaw and
+untargeted restart requests remain fenced. That restart RPC exception is not
+available while the Gateway is still draining. Controllers may reconnect after thaw and
 call resume. The
 [Admin HTTP RPC plugin](/plugins/admin-http-rpc) remains available for hosts
 that cannot speak WebSocket at all. If every control path is lost, the
@@ -105,6 +105,8 @@ The RPC contract is:
   `{ "suspensionId": "id-from-prepare" }`
 - `gateway.suspend.resume` — `operator.admin`; params
   `{ "suspensionId": "id-from-prepare" }`
+- `gateway.suspend.handoff` — `operator.admin`; params
+  `{ "suspensionId": "id-from-prepare", "target": { "pid": 123, "processInstanceId": "id-from-system-info" } }`
 
 `terminalPolicy` and `drain` are optional. `terminalPolicy` accepts only
 `"preserve"` or `"terminate"` and defaults to `"preserve"`; `drain` defaults
@@ -197,6 +199,25 @@ Wait for the lease to become `ready` before performing the checked restart.
 Terminal commands and scrollback are not recovered after restart; see
 [Restart recovery](/gateway/restart-recovery#what-is-not-resumed).
 
+An external deployment controller that explicitly authorizes interrupting
+remaining work can instead call `gateway.suspend.handoff` after its own graceful
+drain budget. The target must match the `pid` and `processInstanceId` obtained from
+`system.info` before suspension. This arms
+restart cleanup for that exact lease and host iteration's next `SIGTERM`; it
+does not send a signal or create a successor. The controller still owns the
+native service restart. A successful response is
+`{ "status": "armed", "suspensionId": "...", "expiresAtMs": ... }`.
+
+The arm expires with the lease. Repeating prepare or handoff does not extend
+armed authority. Resume, replacement, another accepted lifecycle action, or
+host retirement invalidates it. Pending final-chat persistence refuses arming
+and is checked again when `SIGTERM` consumes the arm. If that check refuses,
+the Gateway logs the refusal and retains ordinary graceful-stop behavior.
+An accepted handoff uses the existing restart recovery and abort cleanup,
+then exits for the external controller. An ordinary stop without an arm keeps
+waiting for active work. Controllers must defer on unsupported methods or
+refused handoffs; a draining lease alone never authorizes interruption.
+
 A competing request ID or transient scheduler-resume failure returns retryable
 `UNAVAILABLE` with `retryAfterMs`. During scheduler recovery, prepare, status,
 and resume all return that error, the Gateway remains not-ready and
@@ -218,7 +239,7 @@ completion and reconciliation continue.
 
 Both draining and ready leases last two minutes. Repeat `prepare` before
 `expiresAtMs` with the same `requestId`, terminal policy, and drain mode to renew
-the same `suspensionId`; changing any of those values conflicts with the
+the same `suspensionId` unless a restart handoff is armed; changing any of those values conflicts with the
 existing lease. Use `status` for routine polling and reserve `prepare` for
 renewal to avoid consuming the write budget. Explicit resume and lease expiry
 restore scheduling before reopening admission. Leases remain in memory and

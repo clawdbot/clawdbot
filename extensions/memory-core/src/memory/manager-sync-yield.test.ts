@@ -265,15 +265,27 @@ describe("embedding cache seed responsiveness", () => {
   it("commits each materialized page before yielding", async () => {
     const sourceDb = createDb();
     const targetDb = createDb();
+    const { StatementSync } = requireNodeSqlite();
+    const prepare = vi.spyOn(targetDb, "prepare");
+    const columns = vi.spyOn(StatementSync.prototype, "columns");
     try {
       const insert = sourceDb.prepare(
         `INSERT INTO memory_embedding_cache
            (provider, model, provider_key, hash, embedding, dims, updated_at)
          VALUES (?, ?, ?, ?, ?, ?, ?)`,
       );
+      const rawLargeEmbedding = ` ${JSON.stringify(Array.from({ length: 4096 }, () => 0.1234567890123456))}\n`;
       sourceDb.exec("BEGIN");
       for (let index = 0; index < 101; index += 1) {
-        insert.run("test", "model", "key", `hash-${index}`, "[0.5]", 1, index);
+        insert.run(
+          "test",
+          "model",
+          "key",
+          `hash-${index}`,
+          index === 0 ? " malformed JSON \n" : index === 1 ? rawLargeEmbedding : "[ 0.5 ]",
+          index === 0 ? null : index === 1 ? 4096 : 1,
+          index - 1,
+        );
       }
       sourceDb.exec("COMMIT");
 
@@ -306,7 +318,14 @@ describe("embedding cache seed responsiveness", () => {
         rows: 100,
       });
       expect(countCacheRows(targetDb)).toBe(101);
+      expect(prepare.mock.calls.filter(([sql]) => /^insert/i.test(sql))).toHaveLength(1);
+      expect(columns).not.toHaveBeenCalled();
+      const readCache = (db: DatabaseSync) =>
+        db.prepare("SELECT * FROM memory_embedding_cache ORDER BY hash").all();
+      expect(readCache(targetDb)).toEqual(readCache(sourceDb));
     } finally {
+      prepare.mockRestore();
+      columns.mockRestore();
       sourceDb.close();
       targetDb.close();
     }

@@ -13,7 +13,7 @@ import {
 } from "./message-forwarded.js";
 import { formatDiscordMediaText } from "./message-media.js";
 
-export function resolveDiscordEmbedText(
+function resolveDiscordEmbedText(
   embeds?: readonly { title?: string | null; description?: string | null }[] | null,
 ): string {
   return (embeds ?? [])
@@ -142,7 +142,7 @@ function collectDiscordTextDisplayContent(value: unknown, parts: string[]): void
   collectDiscordTextDisplayContent(component.component, parts);
 }
 
-export function resolveDiscordForwardedMessagesTextFromSnapshots(snapshots: unknown): string {
+function resolveDiscordForwardedMessagesTextFromSnapshots(snapshots: unknown): string {
   const forwardedBlocks = normalizeDiscordMessageSnapshots(snapshots)
     .map((snapshot) => buildDiscordForwardedMessageBlock(snapshot.message))
     .filter((entry): entry is string => Boolean(entry));
@@ -158,7 +158,7 @@ function buildDiscordForwardedMessageBlock(
   if (!snapshotMessage) {
     return null;
   }
-  const text = resolveDiscordSnapshotMessageText(snapshotMessage);
+  const text = resolveDiscordRawMessageText(snapshotMessage);
   if (!text) {
     return null;
   }
@@ -167,14 +167,18 @@ function buildDiscordForwardedMessageBlock(
   return `${heading}\n${text}`;
 }
 
-function resolveDiscordSnapshotMessageText(snapshot: DiscordSnapshotMessage): string {
-  const content = normalizeOptionalString(snapshot.content) ?? "";
-  const attachmentText = formatDiscordMediaText({
-    attachments: snapshot.attachments ?? undefined,
-    stickers: resolveDiscordSnapshotStickers(snapshot),
+/** Single owner for raw Discord message payloads (REST fetches and forwarded snapshots). */
+export function resolveDiscordRawMessageText(
+  message: DiscordSnapshotMessage & { message_snapshots?: unknown },
+): string {
+  const content = normalizeOptionalString(message.content) ?? "";
+  const mediaText = formatDiscordMediaText({
+    attachments: message.attachments ?? undefined,
+    stickers: resolveDiscordSnapshotStickers(message),
   });
-  const embedText = resolveDiscordEmbedText(snapshot.embeds);
-  const componentText = extractDiscordComponentsV2Text(snapshot.components);
-  const text = content || embedText || componentText;
-  return [text, attachmentText].filter(Boolean).join("\n");
+  const embedText = resolveDiscordEmbedText(message.embeds);
+  const componentText = extractDiscordComponentsV2Text(message.components);
+  const forwardedText = resolveDiscordForwardedMessagesTextFromSnapshots(message.message_snapshots);
+  const text = content || embedText || componentText || forwardedText;
+  return [text, mediaText].filter(Boolean).join("\n");
 }

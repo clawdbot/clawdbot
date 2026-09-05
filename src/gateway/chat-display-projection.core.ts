@@ -350,6 +350,12 @@ export function projectChatDisplayMessagesWithState(
     return {
       ...asOptionalRecord(message),
       runId: activity.details.runId,
+      // The entry dedupe key identifies a nested call, not its owning run.
+      // Publish validated ownership where history and live clients read it.
+      __openclaw: {
+        ...asOptionalRecord(asOptionalRecord(message)?.["__openclaw"]),
+        runId: activity.details.runId,
+      },
       content: [call, sanitized],
     };
   });

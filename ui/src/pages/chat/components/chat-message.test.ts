@@ -4934,19 +4934,34 @@ describe("grouped chat rendering", () => {
     expect(container.querySelector(".chat-assistant-attachment-card--blocked")).toBeNull();
   });
 
-  it("renders local files outside preview roots as unavailable", () => {
-    const container = document.createElement("div");
-    renderAssistantMessage(
-      container,
-      createAssistantMessage("Blocked\nMEDIA:/Users/test/Documents/private.pdf\nDone", {
-        id: "assistant-blocked-local-media",
-      }),
-      {
-        showToolCalls: false,
-        resourceBasePath: "/openclaw",
-        localMediaPreviewRoots: ["/tmp/openclaw"],
-      },
+  it("renders the Gateway's outside-workspace denial for a local document", async () => {
+    vi.stubGlobal(
+      "fetch",
+      vi.fn(async () => ({
+        ok: true,
+        json: async () => ({
+          available: false,
+          reason: "Outside allowed folders",
+          retryable: false,
+        }),
+      })),
     );
+    const container = document.createElement("div");
+    const rerender = () =>
+      renderAssistantMessage(
+        container,
+        createAssistantMessage("Blocked\nMEDIA:/Users/test/Documents/private.pdf\nDone", {
+          id: "assistant-blocked-local-media",
+        }),
+        {
+          showToolCalls: false,
+          resourceBasePath: "/openclaw",
+          localMediaPreviewRoots: ["/tmp/openclaw"],
+          onRequestUpdate: rerender,
+        },
+      );
+    rerender();
+    await flushAssistantAttachmentAvailabilityChecks();
 
     expect(container.querySelector(".chat-assistant-attachment-card__download")).toBeNull();
     const blocked = container.querySelector(".chat-assistant-attachment-card--blocked");

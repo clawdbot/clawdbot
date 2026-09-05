@@ -320,6 +320,30 @@ The page intentionally focuses on inventory, discovery, install, enablement,
 and removal. Use [`openclaw plugins`](/cli/plugins) for arbitrary npm, git, or
 local-path sources, updates, and advanced plugin configuration.
 
+## Updates
+
+Open **Settings → Updates** (`/settings/updates`) to check the installed version,
+update policy, and active or most recent update. **Update now** opens a
+confirmation showing the target and restart impact. Choose **Update and restart**
+to start; canceling leaves the Gateway untouched.
+
+After confirmation, one update view shows the ordered phases, current or last
+step details, and verification results for the service, version, plugins,
+channels, and inference. The details area follows new lines until you scroll up.
+The dialog stays open with **Gateway restarting…** while the connection is down.
+After reconnecting, it reads the same run from the Gateway; reloading the page
+also restores the active or latest run in Settings.
+
+Every completed run keeps a report, including success. Failed runs retain
+**Check status**, **Retry update**, and Triage recovery actions. The sidebar update
+card shows the active phase and opens the same view. A completed run can appear
+there for up to 24 hours until you acknowledge it in that browser.
+
+The report is shared with chat and the CLI. See [Updating](/install/updating)
+for installation-specific behavior and [Run history and reports](/cli/update#run-history-and-reports)
+for inspecting a run from the Gateway host. In the signed macOS app, an app-owned
+local Gateway still uses **Update Mac app + Gateway** and the native update flow.
+
 ## Apps and extensions
 
 Open **Apps** from the sidebar **More** menu, the command palette, or the
@@ -491,7 +515,7 @@ are Gateway settings and remain available in every browser.
     - Talk through browser realtime sessions. OpenAI supports browser WebRTC and Gateway-relayed provider WebSockets, Google Live uses a constrained one-use browser token over WebSocket, and backend-only realtime voice plugins use Gateway relay. Video-capable browser sessions can choose a device-local camera in Settings or flip cameras from the live preview; the browser captures JPEG frames for the realtime provider without streaming camera video through the Gateway. Client-owned provider sessions start with `talk.client.create`; Gateway relay sessions start with `talk.session.create`. The relay keeps provider credentials on the Gateway while the browser streams microphone PCM through `talk.session.appendAudio`, forwards provider delegations or `openclaw_agent_consult` tool calls through Gateway policy and the larger configured OpenClaw model, and routes active-run voice steering through `talk.client.steer` or `talk.session.steer`. Browser WebRTC GPT-Live delegates on the Gateway-owned sideband, but each delegation has the same spoken-confirmation gate and browser-owned `talk.client.steer` lifecycle; a newer spoken task can also supersede the running delegation. Gateway-relayed GPT-Live uses the normal relay consult and steering path. Configure the realtime provider, model, and speaker voice on **Settings → Talk**, whose pickers come from `talk.catalog` and show whether the selection is ready to use.
     - Stream tool calls and live tool output cards in Chat (agent events). Tool activity renders as kind-aware rows: shell commands show the syntax-highlighted command with terminal-style output; supported edit and write calls show bounded inline diffs with source syntax highlighting, line numbers when available, and `+added -removed` stats; and consecutive calls collapse into a summary such as "Ran 13 commands, read 6 files, edited 9 files". While a run is live, the newest running call names the group header. Expand a row to inspect its remaining arguments and raw output.
     - Tool activity counts distinct calls, not start/update/result events, repeated history or live projections, or Gateway observation RPCs. Nested calls count independently, even when their names and arguments match. File summaries count distinct file paths; expand the activity to see each call.
-    - Optional AI purpose titles for complex tool calls (long shell commands, argument-heavy plugin tools), enabled with `gateway.controlUi.toolTitles: true` (default off). Titles come from the batched `chat.toolTitles` method through standard utility-model routing — an explicit `utilityModel` (operator-chosen provider, like other utility tasks), else the session provider's declared small-model default — and cache gateway-side per agent. When the opt-in is off or no cheap model is usable, rows keep their deterministic labels and no model call happens.
+    - Tool activity automatically displays a short purpose description supplied by the acting agent when available, with commands and results expandable underneath. Calls without descriptions keep deterministic labels. Viewing activity makes no additional model calls. The former `gateway.controlUi.toolTitles` option is retired; `openclaw doctor --fix` removes it from existing configs.
     - Start or dismiss ephemeral model-suggested follow-up tasks; accepted suggestions open a fresh managed-worktree session with the proposed prompt.
     - Activity tab with browser-local, redaction-first summaries of live tool activity from existing `session.tool` / tool event delivery.
 
@@ -837,7 +861,11 @@ Chat error banners, including cloud runner failures, show short messages in full
 
     Persistent provider, model, voice, transport, reasoning effort, exact VAD threshold, silence duration, and prefix padding defaults live in **Settings → Communications → Talk**; changing them requires `operator.admin` access. Configuring Gateway relay forces the backend relay path; configuring WebRTC keeps the session client-owned and fails instead of silently falling back to relay if the provider cannot create a browser session.
 
-    The Talk control itself is the microphone button in the composer toolbar. Its caret lists **System default** and every microphone exposed by the browser, including USB, Bluetooth, and virtual inputs. The selected device ID stays browser-local and is never sent to the Gateway; if that exact device disappears, Talk asks you to choose another input instead of silently recording from a different microphone. While Talk is live, the microphone button becomes a pill showing the live input-level meter; clicking it stops voice input, and hovering it reveals the stop glyph. Screen readers announce `Connecting voice input...`, `Listening...`, or `Asking OpenClaw...` while a realtime tool call is consulting the configured larger model through `talk.client.toolCall`. Stopping a running agent response stays a separate square **Stop** control next to the pill.
+    The Talk control itself is the microphone button in the composer toolbar. Its caret lists **System default** and every microphone exposed by the browser, including USB, Bluetooth, and virtual inputs. The selected device ID stays browser-local and is never sent to the Gateway; if that exact device disappears or the browser cannot open it, Talk asks you to choose another input instead of silently recording from a different microphone.
+
+    For a selected-microphone constraint failure, click **Use System default for this call** to explicitly retry with the system default. This does not change your saved microphone preference. Until you click, no different microphone opens and no provider session is allocated. Dismissing the error, leaving the chat, disconnecting, or starting another call cancels that recovery action. For dictation, choose another input or **System default** from the existing microphone picker, then start again; dictation never switches microphones automatically.
+
+    While Talk is live, the microphone button becomes a pill showing the live input-level meter; clicking it stops voice input, and hovering it reveals the stop glyph. Screen readers announce `Connecting voice input...`, `Listening...`, or `Asking OpenClaw...` while a realtime tool call is consulting the configured larger model through `talk.client.toolCall`. Stopping a running agent response stays a separate square **Stop** control next to the pill.
 
     **Video Talk** is available for OpenAI Platform Realtime WebRTC and Google Live browser sessions; GPT-Live is audio-only. Click the camera button, allow camera and microphone access, and confirm the local preview. OpenAI sends one bounded JPEG frame over its browser data channel when `describe_view` requests visual context. Google Live sends bounded JPEG frames directly from the browser to the provider at the supported maximum of one frame per second and answers `describe_view` function calls with the camera-stream state. Camera frames never pass through the Gateway. Stopping Talk closes the preview and releases both media tracks. See Google's [Live API capabilities](https://ai.google.dev/gemini-api/docs/live-api/capabilities#video) and [function-calling guide](https://ai.google.dev/gemini-api/docs/live-api/tools) for the provider wire contracts.
 
@@ -1159,11 +1187,31 @@ If you disable gateway auth (not recommended on shared hosts), the avatar route 
 
 ## Assistant media route auth
 
+Local image previews follow the chat's filesystem permissions. Project chats use
+their session workspace, including managed worktrees. Full Access, or disabled
+workspace-only filesystem protection, also permits image previews outside that
+workspace. An explicit session permission mode takes precedence over the agent's
+filesystem setting.
+
+Full Access also preserves playback and downloads for existing attachments in
+the agent's configured workspace. It does not permit arbitrary outside
+non-image files.
+
+With workspace protection enabled, an outside image shows **Outside allowed
+folders**. Hover over its filename to inspect the source path. Administrators can
+select **Allow image** to preview that exact file without changing the session's
+permissions or allowing its parent folder. The allowance uses a short-lived media
+ticket; replacing the file or restarting the Gateway requires a new allowance.
+
 When gateway auth is configured, assistant local-media previews use a two-step route:
 
-- `GET /__openclaw__/assistant-media?meta=1&source=<path>` requires the normal Control UI operator auth; the browser sends the gateway token as a bearer header when checking availability.
-- Successful metadata responses include a short-lived `mediaTicket` scoped to that exact source path.
+- `GET /__openclaw__/assistant-media?meta=1&source=<path>&sessionKey=<key>&agentId=<id>` requires the normal Control UI operator auth and access to the selected session; the browser sends the gateway token as a bearer header when checking availability.
+- Successful metadata responses include a short-lived `mediaTicket` scoped to the file and session. Explicit outside-image allowances use an authenticated administrator `POST` to the same route with `meta=1&allow=1`.
 - Browser-rendered image, audio, video, and document URLs use `mediaTicket=<ticket>` instead of the active gateway token or password. The ticket expires quickly and cannot authorize a different source.
+
+Tickets remain bound to the issuing reader's current access. Losing session
+visibility or role permissions stops new reads through existing tickets, even
+before they expire.
 
 This keeps media rendering compatible with browser-native media elements without putting reusable gateway credentials in visible media URLs.
 

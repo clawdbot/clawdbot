@@ -393,6 +393,7 @@ export async function executePluginOwnedProcess(params: {
   context: PreparedCliRunContext;
   execute: CliBackendExecute;
   executionCommand: string;
+  executionArgv0?: string;
   executionArgs: readonly string[];
   env: Record<string, string>;
   prompt: string;
@@ -519,6 +520,7 @@ export async function executePluginOwnedProcess(params: {
       liveSession = createCliLiveSessionCapability({
         context: params.context,
         argv: [command, ...params.executionArgs],
+        argv0: params.executionArgv0,
         env: params.env,
         ...params.liveSession,
         abortSignal: signal,
@@ -529,6 +531,7 @@ export async function executePluginOwnedProcess(params: {
     signal.throwIfAborted();
     const execution = params.execute({
       command,
+      argv0: params.executionArgv0,
       args: params.executionArgs,
       cwd,
       env: params.env,

@@ -49,17 +49,21 @@ export async function recoverInterruptedSubagentRow(
   }
   const pendingNotice = params.entry.resumptionNotice;
   if (pendingNotice) {
+    const isNoticeOwnerCurrent = () =>
+      isRecoveryAttemptLifecycleCurrent() &&
+      params.isCurrent(params.runId, params.entry) &&
+      params.entry.resumptionNotice === pendingNotice;
     const confirmed = await confirmAcceptedRecoveryResumption({
       childSessionKey,
       gatewayRuntime: params.gatewayRuntime,
       idempotencyKey: pendingNotice.idempotencyKey,
-      isOwnerCurrent: () =>
-        isRecoveryAttemptLifecycleCurrent() &&
-        params.isCurrent(params.runId, params.entry) &&
-        params.entry.resumptionNotice === pendingNotice,
+      isOwnerCurrent: isNoticeOwnerCurrent,
       owner: params.entry,
       warn: params.warn,
     });
+    if (!isNoticeOwnerCurrent()) {
+      return { status: "handled" };
+    }
     const endedAt = params.entry.execution.endedAt;
     const terminalNoticeExpired =
       typeof endedAt === "number" &&

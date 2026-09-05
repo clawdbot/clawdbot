@@ -110,7 +110,6 @@ export function createFixture(
   // validates the fixture's entire dependency topology before and after emit.
   for (const name of [
     ".bin",
-    "@anthropic-ai/claude-agent-sdk",
     "@openclaw/fs-safe",
     "@typescript/native-preview",
     "playwright-core",

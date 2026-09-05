@@ -693,7 +693,7 @@ gh variable set OPENCLAW_CI_RUNNER_BACKEND --repo openclaw/openclaw --body githu
 
 The `github` override also routes Full Release Validation orchestration, npm qualification, live QA, performance, package Telegram, OpenWebUI, and release runtime-pair jobs to GitHub-hosted Ubuntu. Existing explicit hosted-runner inputs remain supported. Runner placement changes; coverage, artifact identities, approvals, worker limits, and timeouts do not. Already-running jobs are not moved. Keep OpenWebUI disk requirements and performance baseline hardware differences in mind when interpreting hosted results.
 
-Hosted `ci.yml` paths use the same setup exercised by manual dispatches and fork pull requests. Fork PRs are forced into the logical `github` planner profile even when repository variables are unavailable, so broad core lint and test-type workloads retain hosted stripes instead of falling back to oversized all-in-one jobs. Frozen targets opt into this event-aware profile through `hosted-runner-profile-contract-v1`; targets without the marker retain their historical workload shape. Blacksmith-only Docker and sticky-disk steps are skipped, dependency setup uses the ordinary Actions pnpm-store cache, and low-memory Android builds use separate Gradle processes. Hybrid attempt-1 Blacksmith Node and plateau lanes restore the exact workspace dependency archive from the trusted warmer. Eligibility uses the actual runner environment, so hosted lanes and retries stay on the ordinary store cache. The exact key includes the resolved Node patch, OS, architecture, and semantic dependency inputs; a different runner image safely misses and follows the existing store-install path. The Node toolchain itself is also cached through that API: Blacksmith's image tracks an older runner-images snapshot whose toolcache Node patches (measured 2026-08-16: 20.20.0, 22.22.0, 24.13.0) sit just under this repo's `engines` floor, so every job otherwise re-downloads Node from nodejs.org. Restores are prefix-keyed and saves carry the resolved patch, because an exact-key hit suppresses the post-job save and would pin the first payload forever once the floor advanced past it. A restored payload below the floor is rejected, pruned, and replaced. Vitest transform and Node compile caches still use the upstream Actions cache API; their Linux-only `runner.os != 'Windows'` conditions do not exclude Blacksmith labels, and the trusted warmer alone publishes each backend-local protected seed. The warmer's selected runner route determines whether that publication reaches Blacksmith's cache or GitHub's cache. Core oxlint keeps five deterministic hosted Programs with one lint thread each. Ordinary non-frozen hybrid push/PR runs pair stripes 1+2 and 3+4 sequentially, leaving stripe 5 alone, across three jobs. A failing stripe stops its row. The `github` profile, frozen targets, manual dispatches, and release gates retain five jobs; GitHub plugin stripes keep their existing owners. Plugin lint ownership is described below; script lint and optional UI and format checks stay in the existing `check-lint` row. Extension type-aware lint discovers `extensions/tsconfig.json` for plugin tests and helpers, retaining imported dependencies and shared ambient declarations without adding unrelated core/UI/package source roots. Plugin production files keep their existing package-boundary projects. Eligible test-only pull requests reuse the local changed-check selector: `check-test-types` validates the complete core graph boundary once, then compiles every graph that consumes the changed tests. Preflight omits both `check-test-types-core-*` jobs before runner allocation, and the additional-boundary lane transfers its core graph check to this required central row. Ambiguous compiler ownership or a removed test falls back to all 16 graphs in the central row. Pushes, manual and frozen targets, shared or mixed changes, and unsupported targets retain the full path. For full runs with stripe support on `github` or `hybrid`, the two `check-test-types-core-*` rows run stripes 1+2 and 3+4 sequentially, and `check-test-types` runs stripe 5 before the extensions/root/scripts tail. Targets without stripe support and the all-Blacksmith profile keep the full central path. Each core type row preserves at most two concurrent compiler children and one builder per child. Core checks retain the standalone resource policy; the remaining type commands retain their existing environment. A failed boundary or compiler stops its row before another command starts.
+Hosted `ci.yml` paths use the same setup exercised by manual dispatches and fork pull requests. Fork PRs are forced into the logical `github` planner profile even when repository variables are unavailable, so broad core lint and test-type workloads retain hosted stripes instead of falling back to oversized all-in-one jobs. Frozen targets opt into this event-aware profile through `hosted-runner-profile-contract-v1`; targets without the marker retain their historical workload shape. Blacksmith-only Docker and sticky-disk steps are skipped, dependency setup uses the ordinary Actions pnpm-store cache, and low-memory Android builds use separate Gradle processes. Hybrid attempt-1 Blacksmith Node and plateau lanes restore the exact workspace dependency archive from the trusted warmer. Eligibility uses the actual runner environment, so hosted lanes and retries stay on the ordinary store cache. The exact key includes the resolved Node patch, OS, architecture, and semantic dependency inputs; a different runner image safely misses and follows the existing store-install path. The Node toolchain itself is also cached through that API: Blacksmith's image tracks an older runner-images snapshot whose toolcache Node patches (measured 2026-08-16: 20.20.0, 22.22.0, 24.13.0) sit just under this repo's `engines` floor, so every job otherwise re-downloads Node from nodejs.org. Restores are prefix-keyed and saves carry the resolved patch, because an exact-key hit suppresses the post-job save and would pin the first payload forever once the floor advanced past it. A restored payload below the floor is rejected, pruned, and replaced. Vitest transform and Node compile caches still use the upstream Actions cache API; their Linux-only `runner.os != 'Windows'` conditions do not exclude Blacksmith labels, and the trusted warmer alone publishes each backend-local protected seed. The warmer's selected runner route determines whether that publication reaches Blacksmith's cache or GitHub's cache. Core oxlint keeps five deterministic hosted Programs with one lint thread each. Ordinary non-frozen hybrid push/PR runs group stripes 1+2 and 3+4+5 sequentially across two jobs. A failing stripe stops its row. The `github` profile, frozen targets, manual dispatches, and release gates retain five jobs; GitHub plugin stripes keep their existing owners. Plugin lint ownership is described below; script lint and optional UI and format checks stay in the existing `check-lint` row. Extension type-aware lint discovers `extensions/tsconfig.json` for plugin tests and helpers, retaining imported dependencies and shared ambient declarations without adding unrelated core/UI/package source roots. Plugin production files keep their existing package-boundary projects. Eligible test-only pull requests reuse the local changed-check selector: `check-test-types` validates the complete core graph boundary once, then compiles every graph that consumes the changed tests. Preflight omits both `check-test-types-core-*` jobs before runner allocation, and the additional-boundary lane transfers its core graph check to this required central row. Ambiguous compiler ownership or a removed test falls back to all 16 graphs in the central row. Pushes, manual and frozen targets, shared or mixed changes, and unsupported targets retain the full path. For full runs with stripe support on `github` or `hybrid`, the two `check-test-types-core-*` rows run stripes 1+2 and 3+4 sequentially, and `check-test-types` runs stripe 5 before the extensions/root/scripts tail. Targets without stripe support and the all-Blacksmith profile keep the full central path. Each core type row preserves at most two concurrent compiler children and one builder per child. Core checks retain the standalone resource policy; the remaining type commands retain their existing environment. A failed boundary or compiler stops its row before another command starts.
 
 On hosts with less than 24 GiB RAM, serial plugin lint runs use the same eight-directory chunks as Windows. This bounds each type-aware process while covering every plugin and root source file. Outside Windows, explicit full-speed or parallel overrides keep the previous unsplit workload. The Windows chunk-size override remains Windows-only. Lint prepares only the SDK declaration tree; the separate package TypeScript boundary check still prepares the SDK and plugin declarations.
 
@@ -907,6 +907,64 @@ failure or timeout after verified cleanup permits recovery; owner setup, census,
 cleanup failure, and cancellation stop before fallback, retry, replay, or success.
 Full Release Validation continues to disable the publisher entirely and retains
 performance evidence only as workflow artifacts.
+
+### Vitest paired benchmark
+
+The manual-only `vitest-pair` mode compares two exact commits with the workflow
+implementation from the candidate commit:
+
+```bash
+gh workflow run openclaw-performance.yml \
+  --ref <candidate-branch> \
+  -f mode=vitest-pair \
+  -f baseline_ref=<40-character-baseline-sha> \
+  -f target_ref=<40-character-candidate-sha>
+```
+
+Both inputs must be lowercase full SHAs, `target_ref` must equal the workflow
+SHA selected by `--ref`, and reruns are refused. Dispatch a fresh workflow run
+instead of retrying an attempt. Kova, source probes, report publication, and
+their artifact-only guard stay skipped in this mode. The benchmark job has
+read-only repository permission, does not receive secrets, does not restore or
+save Actions caches, and checks out the helper, candidate, and baseline with
+credentials disabled.
+
+The committed lane manifest covers representative core unit, Gateway, Control
+UI jsdom, and worker-lifecycle tests. Both commits must expose identical
+selected test/config paths and bytes and pass correctness before timing state
+is created. Correctness also requires both sides to report the same normalized
+test files, test identities, statuses, and counts. Every later run must match
+that established execution digest. The harness then runs one excluded warmup
+per side and lane, seven paired rounds with alternating side order and rotated
+lane order, plus one separately labeled cold pair with fresh caches. Frozen
+installs are setup and are never timed.
+
+Each child has a fixed deadline and process-group owner. A separate 165-minute
+harness deadline reserves 15 minutes inside the 180-minute job timeout for
+cleanup, terminal-manifest finalization, and artifact upload. It aborts and joins
+the active managed child before refusing further child starts. Every install,
+correctness, warmup, measured, and cold process receives the exact pinned pnpm
+executable through `npm_execpath`, with private Corepack and pnpm state; the
+resolved executable and version are recorded in the environment and run
+records.
+
+The artifact includes raw logs, raw Vitest JSON reports, execution digests and
+counts, GNU time user/system CPU, wall timing, environment and Git identities,
+source/config hashes, per-run records, paired-ratio analysis, and a terminal
+success or failure manifest. The workflow attempts finalization and artifact
+upload after harness failures. Runner loss or external workflow cancellation
+can still prevent those steps from running. Mutable pnpm and runtime caches stay
+in an unuploaded scratch tree. Thresholds are fixed in
+`scripts/vitest-pair-benchmark-lanes.json`. Acceptance uses the median of seven
+per-round aggregate ratios, with each round weighted by total lane duration, and
+fails above 5%. A critical lane fails only when its median measured ratio is
+above 10% and its median paired delta is at least one second. The single cold
+pair remains diagnostic evidence and never fails acceptance. The report claims
+an improvement only when every representative lane's median clears the
+improvement ratio and at least five of its seven pairs individually meet that
+ratio. Otherwise it reports per-lane evidence without a broad improvement
+claim. Artifacts use only the trusted workflow run ID and attempt in their name;
+the exact baseline and candidate commits remain recorded inside the artifact.
 
 ## Full Release Validation
 
