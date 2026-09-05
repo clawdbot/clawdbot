@@ -805,15 +805,21 @@ describe("convertToOllamaMessages", () => {
     expect(result).toEqual([{ role: "tool", content: "file1.txt\nfile2.txt" }]);
   });
 
-  it("preserves significant boundary whitespace in tool results", () => {
+  it.each([
+    "  indented\n",
+    `${"file row with significant trailing spaces   \n".repeat(370)}😀\n[Use offset=225 to continue.]\n`,
+  ])("preserves producer-budgeted tool text and continuation on the Ollama wire: %#", (text) => {
     const result = convertToOllamaMessages([
       {
         role: "toolResult",
         toolCallId: "call_ws",
-        content: [{ type: "text", text: "  indented\n" }],
+        toolName: "read",
+        content: [{ type: "text", text }],
       },
     ]);
-    expect(result).toEqual([{ role: "tool", content: "  indented\n", tool_call_id: "call_ws" }]);
+    expect(result).toEqual([
+      { role: "tool", content: text, tool_call_id: "call_ws", tool_name: "read" },
+    ]);
   });
 
   it("converts SDK 'toolResult' role to Ollama 'tool' role", () => {

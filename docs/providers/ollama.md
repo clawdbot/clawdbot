@@ -744,6 +744,9 @@ Replace model IDs with exact names from `ollama list` or
     App, interactive CLI, and non-interactive setup use a 32,768-token runtime
     context, or the model's native window if smaller. The advertised native window
     is retained separately; known cloud routes keep their hosted context.
+    Large file reads use OpenClaw's context-based paging. The native adapter
+    preserves those text pages and their continuation instructions; structured
+    fallback data is bounded separately.
     Bound any explicit context override to what the host can support:
 
     ```json5
