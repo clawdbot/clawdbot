@@ -40,7 +40,7 @@ import type {
   ResolvedChannelMessageIngress,
 } from "./runtime-types.js";
 import { resolveChannelIngressState } from "./state.js";
-import { readChannelIngressStoreAllowFromForDmPolicy } from "./store-allow-from.js";
+import { readChannelIngressDefaultPairingStore } from "./store-allow-from.js";
 import type {
   AccessGraphGate,
   ChannelIngressChannelId,
@@ -85,29 +85,31 @@ async function readStoreAllowFrom(
   ) {
     return { entries: [], readFailed: false };
   }
-  let readFailed = false;
-  const entries = params.readStoreAllowFrom
-    ? await params
-        .readStoreAllowFrom({
+  const read = params.readStoreAllowFrom
+    ? async () =>
+        await params.readStoreAllowFrom?.({
           channelId: params.channelId,
           accountId: params.accountId,
           dmPolicy: params.policy.dmPolicy,
         })
-        .catch(() => {
-          readFailed = true;
-          return [];
-        })
     : params.useDefaultPairingStore
-      ? await readChannelIngressStoreAllowFromForDmPolicy({
-          provider: params.channelId as PairingChannel,
-          accountId: params.accountId,
-          dmPolicy: params.policy.dmPolicy,
-          onReadFailure: () => {
-            readFailed = true;
-          },
-        })
-      : [];
-  return { entries: [...(entries ?? [])], readFailed };
+      ? async () =>
+          await readChannelIngressDefaultPairingStore({
+            provider: params.channelId as PairingChannel,
+            accountId: params.accountId,
+          })
+      : undefined;
+  if (!read) {
+    return { entries: [], readFailed: false };
+  }
+  try {
+    return { entries: [...((await read()) ?? [])], readFailed: false };
+  } catch {
+    // The store rejected rather than resolving empty. Record that here, in the
+    // ingress owner, so every reader contract - default, scoped or plugin
+    // supplied - reports an unavailable store the same way.
+    return { entries: [], readFailed: true };
+  }
 }
 
 function commandRequested(policy: ChannelIngressPolicyInput): boolean {

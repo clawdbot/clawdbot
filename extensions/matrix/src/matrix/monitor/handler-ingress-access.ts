@@ -9,11 +9,7 @@ import type { ReservedHistorySlot } from "./room-history.js";
 import { createRoomHistoryTracker } from "./room-history.js";
 import { resolveMatrixRoomConfig } from "./rooms.js";
 import { resolveMatrixThreadRootId, resolveMatrixThreadRouting } from "./threads.js";
-import type {
-  MatrixRawEvent,
-  MatrixStoreAllowFromResult,
-  RoomMessageEventContent,
-} from "./types.js";
+import type { MatrixRawEvent, RoomMessageEventContent } from "./types.js";
 
 export type MatrixIngressAccessParams = {
   audioPreflightMode?: "defer" | "run";
@@ -32,7 +28,7 @@ export async function resolveMatrixIngressAccess(config: {
   eventTs?: number;
   senderId: string;
   isReactionEvent: boolean;
-  readStoreAllowFrom: () => Promise<MatrixStoreAllowFromResult>;
+  readStoreAllowFrom: () => Promise<string[]>;
   shouldSendPairingReply: (senderId: string, created: boolean) => boolean;
   resolveLiveAccountAllowlists: () => Promise<{
     liveDmAllowFrom: string[];
@@ -178,16 +174,13 @@ export async function resolveMatrixIngressAccess(config: {
     senderNamePromise ??= getMemberDisplayName(roomId, senderId).catch(() => senderId);
     return await senderNamePromise;
   };
-  const storeAllowFromResult =
-    isDirectMessage && dmPolicy !== "allowlist" && dmPolicy !== "open"
-      ? await readStoreAllowFrom()
-      : { entries: [], readFailed: false };
   const roomUsers = roomConfig?.users ?? [];
   const { liveDmAllowFrom, liveGroupAllowFrom } = await resolveLiveAccountAllowlists();
   const accessState = await resolveMatrixMonitorAccessState({
     allowFrom: liveDmAllowFrom,
-    storeAllowFrom: storeAllowFromResult.entries,
-    storeReadFailed: storeAllowFromResult.readFailed,
+    // Hand over the reader rather than a resolved list: the shared resolver
+    // gates the read on the DM policy and classifies a rejection itself.
+    readStoreAllowFrom,
     dmPolicy,
     groupPolicy,
     groupAllowFrom: liveGroupAllowFrom,

@@ -8,7 +8,7 @@ const participantDescriptors = vi.hoisted(
       import("openclaw/plugin-sdk/channel-ingress-runtime").ChannelIngressIdentityDescriptor
     >,
 );
-const readChannelIngressStoreAllowFromForDmPolicyMock = vi.hoisted(() => vi.fn());
+const readChannelAllowFromStoreMock = vi.hoisted(() => vi.fn());
 let authorizeSlackBotRoomMessage: typeof import("./auth.js").authorizeSlackBotRoomMessage;
 let authorizeSlackSystemEventSender: typeof import("./auth.js").authorizeSlackSystemEventSender;
 let resolveSlackEffectiveAllowFrom: typeof import("./auth.js").resolveSlackEffectiveAllowFrom;
@@ -26,7 +26,7 @@ beforeAll(async () => {
 });
 
 beforeEach(() => {
-  readChannelIngressStoreAllowFromForDmPolicyMock.mockReset();
+  readChannelAllowFromStoreMock.mockReset();
   delete process.env.OPENCLAW_SLACK_CHANNEL_MEMBERS_CACHE_TTL_MS;
 });
 
@@ -47,8 +47,16 @@ vi.mock("openclaw/plugin-sdk/channel-ingress-runtime", async () => {
       participantDescriptors.push(identity);
       return identity;
     },
-    readChannelIngressStoreAllowFromForDmPolicy: (...args: unknown[]) =>
-      readChannelIngressStoreAllowFromForDmPolicyMock(...args),
+  };
+});
+
+vi.mock("openclaw/plugin-sdk/conversation-runtime", async () => {
+  const actual = await vi.importActual<typeof import("openclaw/plugin-sdk/conversation-runtime")>(
+    "openclaw/plugin-sdk/conversation-runtime",
+  );
+  return {
+    ...actual,
+    readChannelAllowFromStore: (...args: unknown[]) => readChannelAllowFromStoreMock(...args),
   };
 });
 
@@ -156,29 +164,28 @@ describe("resolveSlackEffectiveAllowFrom", () => {
   it.each([
     [
       "falls back to channel config allowFrom when pairing store throws",
-      () =>
-        readChannelIngressStoreAllowFromForDmPolicyMock.mockRejectedValueOnce(new Error("boom")),
+      () => readChannelAllowFromStoreMock.mockRejectedValueOnce(new Error("boom")),
       true,
       { allowFrom: ["u1"], storeReadFailed: true },
       undefined,
     ],
     [
       "treats malformed non-array pairing-store responses as empty",
-      () => readChannelIngressStoreAllowFromForDmPolicyMock.mockReturnValueOnce(undefined),
+      () => readChannelAllowFromStoreMock.mockReturnValueOnce(undefined),
       true,
       { allowFrom: ["u1"], storeReadFailed: false },
       undefined,
     ],
     [
       "reads pairing-store allowFrom when requested",
-      () => readChannelIngressStoreAllowFromForDmPolicyMock.mockResolvedValue(["u2"]),
+      () => readChannelAllowFromStoreMock.mockResolvedValue(["u2"]),
       true,
       { allowFrom: ["u1", "u2"], storeReadFailed: false },
       1,
     ],
     [
       "does not read pairing-store allowFrom unless requested",
-      () => readChannelIngressStoreAllowFromForDmPolicyMock.mockResolvedValue(["u2"]),
+      () => readChannelAllowFromStoreMock.mockResolvedValue(["u2"]),
       false,
       { allowFrom: ["u1"], storeReadFailed: false },
       0,
@@ -192,12 +199,12 @@ describe("resolveSlackEffectiveAllowFrom", () => {
 
     expect(effective).toEqual(expected);
     if (expectedCalls !== undefined) {
-      expect(readChannelIngressStoreAllowFromForDmPolicyMock).toHaveBeenCalledTimes(expectedCalls);
+      expect(readChannelAllowFromStoreMock).toHaveBeenCalledTimes(expectedCalls);
     }
   });
 
   it("reads only the current Enterprise workspace's pairing approvals", async () => {
-    readChannelIngressStoreAllowFromForDmPolicyMock.mockResolvedValue([
+    readChannelAllowFromStoreMock.mockResolvedValue([
       "ULEGACY123",
       "team:T11111111:user:U11111111",
       "team:T22222222:user:U22222222",
@@ -512,7 +519,7 @@ describe("authorizeSlackSystemEventSender", () => {
   });
 
   it("does not use pairing-store allowFrom for MPIM system events", async () => {
-    readChannelIngressStoreAllowFromForDmPolicyMock.mockResolvedValue(["U_ATTACKER"]);
+    readChannelAllowFromStoreMock.mockResolvedValue(["U_ATTACKER"]);
     const result = await authorizeSlackSystemEventSender({
       ctx: makeAuthorizeCtx({
         allowFrom: [],
@@ -529,11 +536,11 @@ describe("authorizeSlackSystemEventSender", () => {
       channelType: "mpim",
       channelName: "group-dm",
     });
-    expect(readChannelIngressStoreAllowFromForDmPolicyMock).not.toHaveBeenCalled();
+    expect(readChannelAllowFromStoreMock).not.toHaveBeenCalled();
   });
 
   it("fails closed instead of wildcard-authorizing an interactive DM sender when the pairing store read fails", async () => {
-    readChannelIngressStoreAllowFromForDmPolicyMock.mockRejectedValue(new Error("boom"));
+    readChannelAllowFromStoreMock.mockRejectedValue(new Error("boom"));
     const result = await authorizeSlackSystemEventSender({
       ctx: makeAuthorizeCtx({
         allowFrom: [],

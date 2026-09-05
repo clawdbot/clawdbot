@@ -58,8 +58,10 @@ function resolveMatrixGroupIngress(params: {
 
 export async function resolveMatrixMonitorAccessState(params: {
   allowFrom: Array<string | number>;
-  storeAllowFrom: Array<string | number>;
-  storeReadFailed?: boolean;
+  /** Resolved entries for callers that already hold them; ignored when `readStoreAllowFrom` is set. */
+  storeAllowFrom?: Array<string | number>;
+  /** Pairing-store reader; a rejection is classified by the shared ingress resolver. */
+  readStoreAllowFrom?: () => Promise<Array<string | number>>;
   dmPolicy?: "open" | "pairing" | "allowlist" | "disabled";
   groupPolicy?: "open" | "allowlist" | "disabled";
   groupAllowFrom: Array<string | number>;
@@ -85,15 +87,7 @@ export async function resolveMatrixMonitorAccessState(params: {
     channelId: "matrix",
     accountId,
     identity: matrixIngressIdentity,
-    readStoreAllowFrom: async () => {
-      // The caller resolves the store read eagerly (for TTL caching); rethrow its
-      // recorded failure here so the shared ingress resolver's own catch can tell
-      // a read failure apart from a legitimately empty store.
-      if (params.storeReadFailed) {
-        throw new Error("Matrix pairing-store read failed");
-      }
-      return params.storeAllowFrom;
-    },
+    readStoreAllowFrom: params.readStoreAllowFrom ?? (async () => params.storeAllowFrom ?? []),
   });
   const resolveMessageIngress = async (
     contextBinding?: ChannelIngressContextBinding,

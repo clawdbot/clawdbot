@@ -5,8 +5,8 @@ import {
   type ChannelIngressPolicyInput,
   type ChannelIngressStateInput,
   createChannelIngressResolver,
-  readChannelIngressStoreAllowFromForDmPolicy,
 } from "openclaw/plugin-sdk/channel-ingress-runtime";
+import { readChannelAllowFromStore } from "openclaw/plugin-sdk/conversation-runtime";
 import { formatErrorMessage } from "openclaw/plugin-sdk/error-runtime";
 import {
   asDateTimestampMs,
@@ -106,19 +106,19 @@ export async function resolveSlackEffectiveAllowFrom(
   if (options?.includePairingStore !== true) {
     return { allowFrom: base, storeReadFailed: false };
   }
+  // Same gating the shared ingress resolver applies: a policy that never
+  // consults stored approvals must not read the store at all.
+  if (ctx.dmPolicy === "allowlist" || ctx.dmPolicy === "open") {
+    return { allowFrom: base, storeReadFailed: false };
+  }
   let storeReadFailed = false;
   let storeAllowFrom: string[];
   try {
-    const resolved = await readChannelIngressStoreAllowFromForDmPolicy({
-      provider: "slack",
-      accountId: ctx.accountId,
-      dmPolicy: ctx.dmPolicy,
-      onReadFailure: () => {
-        storeReadFailed = true;
-      },
-    });
+    const resolved = await readChannelAllowFromStore("slack", process.env, ctx.accountId);
     storeAllowFrom = Array.isArray(resolved) ? resolved : [];
   } catch {
+    // An unavailable store is not an empty allowlist: report it so the DM gate
+    // denies instead of treating the sender as never paired.
     storeReadFailed = true;
     storeAllowFrom = [];
   }

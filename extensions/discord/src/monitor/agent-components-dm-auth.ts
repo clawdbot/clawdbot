@@ -7,7 +7,7 @@ import {
   resolveDiscordChannelContext,
 } from "./agent-components-context.js";
 import {
-  readChannelIngressStoreAllowFromForDmPolicy,
+  readChannelAllowFromStore,
   upsertChannelPairingRequest,
 } from "./agent-components-helpers.runtime.js";
 import { replySilently } from "./agent-components-reply.js";
@@ -46,23 +46,11 @@ async function ensureDmComponentAuthorized(params: {
     allowNameMatching: isDangerousNameMatchingEnabled(ctx.discordConfig),
     cfg: ctx.cfg,
     token: ctx.token,
-    readStoreAllowFrom: async ({ accountId, dmPolicy: dmPolicyLocal }) => {
-      let readFailed = false;
-      const entries = await readChannelIngressStoreAllowFromForDmPolicy({
-        provider: "discord",
-        accountId,
-        dmPolicy: dmPolicyLocal,
-        onReadFailure: () => {
-          readFailed = true;
-        },
-      });
-      // The helper swallows a read failure to []; rethrow so the caller sees a
-      // rejection instead of an indistinguishable, successfully-empty store.
-      if (readFailed) {
-        throw new Error("Discord pairing-store read failed");
-      }
-      return entries;
-    },
+    // The shared resolver only calls this when the DM policy admits a store
+    // read, and it classifies a rejection as an unavailable store, so read
+    // the store directly instead of swallowing the failure here.
+    readStoreAllowFrom: async ({ accountId }) =>
+      await readChannelAllowFromStore("discord", process.env, accountId),
     eventKind: "button",
   });
   if (access.senderAccess.decision === "allow") {

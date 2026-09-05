@@ -320,6 +320,12 @@ export type IngressReasonCode =
   | "dm_policy_open"
   | "dm_policy_allowlisted"
   | "dm_policy_pairing_required"
+  /**
+   * The pairing store could not be read, so pairing state is unknown. Fails
+   * closed: the sender is denied without a pairing challenge, and statically
+   * configured access is unaffected. Additive - existing reason codes keep
+   * their meaning, and consumers that do not know this code see a plain block.
+   */
   | "dm_policy_pairing_store_unavailable"
   | "dm_policy_not_allowlisted"
   | "group_policy_disabled"
