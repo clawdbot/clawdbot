@@ -293,8 +293,10 @@ export function readClawWorkspaceFiles(
       )
       .orderBy("target_path"),
   );
-  // Preserve native list-read errors; write transactions own their separate failure lifecycle.
-  const rows = db.prepare(compiled.sql).all(...bind(agentId)) as WorkspaceFileRow[];
+  const rows =
+    db /* sqlite-allow-raw: preserve native list errors outside the write-transaction owner. */
+      .prepare(compiled.sql)
+      .all(...bind(agentId)) as WorkspaceFileRow[];
   return rows.map((row) => rowToWorkspaceFile(row));
 }
 
@@ -306,8 +308,11 @@ export function readAllClawWorkspaceFiles(
     return [];
   }
   const compiled = selectWorkspaceFiles(db).orderBy("agent_id").orderBy("target_path").compile();
-  // SAFETY: The canonical table and shared explicit projection provide this generated row shape.
-  const rows = db.prepare(compiled.sql).all() as WorkspaceFileRow[];
+  const rows =
+    db /* sqlite-allow-raw: preserve native orphan inventory errors without a write transaction. */
+      .prepare(compiled.sql)
+      // SAFETY: The canonical table and shared explicit projection provide this generated row shape.
+      .all() as WorkspaceFileRow[];
   // Orphan inventory reports the stored version; per-agent inventory uses the current constant.
   return rows.map((row) =>
     rowToWorkspaceFile(row, row.schema_version as PersistedClawWorkspaceFile["schemaVersion"]),

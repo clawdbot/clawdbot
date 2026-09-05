@@ -149,10 +149,10 @@ export function readAttachedCronJobs(
       )
       .orderBy("job_id");
   });
-  // Keep native inventory failure handling outside the write-transaction owner.
-  const rows = db.prepare(compiled.sql).all(...bind(agentId)) as Array<
-    Omit<AttachedCronJob, "enabled"> & { enabled: number }
-  >;
+  const rows =
+    db /* sqlite-allow-raw: preserve native inventory errors outside the write-transaction owner. */
+      .prepare(compiled.sql)
+      .all(...bind(agentId)) as Array<Omit<AttachedCronJob, "enabled"> & { enabled: number }>;
   return rows.map((row) => ({
     id: row.id,
     name: row.name,
