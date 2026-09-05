@@ -89,24 +89,6 @@ function is401Error(error: unknown): boolean {
   return normalizeLowercaseStringOrEmpty(message).includes("unauthorized");
 }
 
-/**
- * Extracts a key fragment that distinguishes concurrent forum topics within
- * the same supergroup (#138763). `threadParams` carries `message_thread_id`
- * only for forum-topic typing actions; non-forum actions produce no fragment so
- * they keep coalescing per chat+action as before.
- */
-function resolveChatActionThreadKeyFragment(
-  threadParams: TelegramSendChatActionParams | undefined,
-): string {
-  if (!threadParams || typeof threadParams !== "object") {
-    return "";
-  }
-  // SAFETY: the guard above narrows threadParams to a non-null object; the cast
-  // only adds optional property access for grammy's Other params shape.
-  const threadId = (threadParams as { message_thread_id?: unknown }).message_thread_id;
-  return typeof threadId === "number" ? `:${threadId}` : "";
-}
-
 function isTransientSendChatActionError(error: unknown): boolean {
   return (
     isTelegramRateLimitError(error) ||
@@ -176,8 +158,15 @@ export function createTelegramSendChatActionHandler({
       );
     }
 
-    const threadKeyFragment = resolveChatActionThreadKeyFragment(threadParams);
-    const key = minIntervalMs > 0 ? `${String(chatId)}:${action}${threadKeyFragment}` : undefined;
+    // Include message_thread_id in the coalescing key so concurrent turns in
+    // different forum topics of the same supergroup each get their own typing
+    // indicator (#138763). Non-forum actions pass no thread id and keep
+    // coalescing per chat+action as before.
+    const threadId = threadParams?.message_thread_id;
+    const key =
+      minIntervalMs > 0
+        ? `${String(chatId)}:${action}${typeof threadId === "number" ? `:${threadId}` : ""}`
+        : undefined;
     if (key) {
       const blockedUntil = blockedUntilByKey.get(key);
       if (blockedUntil !== undefined && attemptedAt < blockedUntil) {
