@@ -333,8 +333,6 @@ describe("loadWebMedia", () => {
       "xl/workbook.xml",
       '<workbook xmlns="http://schemas.openxmlformats.org/spreadsheetml/2006/main"/>',
     );
-    // Opaque test payload checks byte preservation, not VBA validity or execution.
-    zip.file("xl/vbaProject.bin", Buffer.from("synthetic-vba-payload"));
     return await zip.generateAsync({ type: "nodebuffer" });
   }
 
@@ -914,9 +912,7 @@ describe("loadWebMedia", () => {
       const result = await loadDocumentWithHostRead(fileName, body);
 
       expect(result.kind).toBe("document");
-      expect(result.contentType?.toLowerCase()).toBe(
-        "application/vnd.ms-excel.sheet.macroenabled.12",
-      );
+      expect(result.contentType).toBe("application/vnd.ms-excel.sheet.macroenabled.12");
       expect(result.fileName).toBe(fileName);
       expect(result.buffer).toEqual(body);
     },
