@@ -50,7 +50,10 @@ export function renderAssistantRequestFailureCopy(
   const unclassified =
     !facts.reason || facts.reason === "unclassified" || facts.reason === "unknown";
   if (!reason && !status && (!target || unclassified)) {
-    return target ? `⚠️ Agent run failed (${model ? "model" : "provider"}: ${target}).` : undefined;
+    // Unclassified (harness-internal) failures must not name the provider/model
+    // even when a target is present — the provider was never contacted. Defer to
+    // the caller's GENERIC_ASSISTANT_ERROR_TEXT neutral fallback. See #137845.
+    return undefined;
   }
   const details = [reason, status].filter(Boolean);
   const summary = `⚠️ ${target ? `${target} request failed` : "LLM request failed"}${details.length > 0 ? ` (${details.join(", ")})` : ""}.`;

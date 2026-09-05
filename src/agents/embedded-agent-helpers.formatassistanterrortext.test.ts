@@ -200,13 +200,16 @@ describe("formatAssistantErrorText", () => {
   it.each([
     "Session transcript projection is rebuilding: private-session",
     "opaque-private-provider-detail",
-  ])("keeps model context without assigning an unclassified failure: %s", (raw) => {
+  ])("defers to neutral fallback without assigning an unclassified failure: %s", (raw) => {
+    // Harness-internal errors (e.g. session-store projection failures) must
+    // not attribute the failure to the provider that was never contacted.
+    // The neutral GENERIC_ASSISTANT_ERROR_TEXT fallback handles them. See #137845.
     expect(
       formatUserFacingAssistantErrorText(makeAssistantError(raw), {
         provider: "openai",
         model: "test-model",
       }),
-    ).toBe("⚠️ Agent run failed (model: openai/test-model).");
+    ).toBe(GENERIC_ASSISTANT_ERROR_TEXT);
   });
 
   it("keeps the generic last resort when no classified facts are available", () => {
