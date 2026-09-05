@@ -113,6 +113,8 @@ Profile fields:
 
 ### Warm images
 
+Use [Crabbox 0.49.1](https://github.com/openclaw/crabbox/releases/tag/v0.49.1) or newer for coordinator-backed warm images. Older binaries can complete a cold start but reject a later `checkpoint fork --lease-id`; update the binary used by the Gateway before starting the profile. Keep the fixed lease ID: it prevents duplicate allocations when dispatch is retried.
+
 Warm images are on by default when a class is known from `settings.class` or the placement's `machineClass`, unless the profile declares a nonempty `setupEnv`. With no effective class and no explicit `warmImage`, provisioning stays cold without requiring `warmImage: false`. Placement overrides are resolved before choosing this default.
 
 Forwarded host environment values reach setup, so whatever setup derives from them could persist in a shared image. Profiles with nonempty `setupEnv` capture only when you explicitly set `settings.warmImage: true`, after checking that setup leaves no credential on disk. Explicit `true` requires a known configured or placement class before any provider command. Explicit `false` always keeps provisioning cold, for example when snapshot storage charges or provider-side retention of repository content are unwanted.
