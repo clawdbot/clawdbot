@@ -302,6 +302,20 @@ export class CodexEventProjection {
     }
   }
 
+  handleRetry(params: JsonObject): void {
+    const rateLimited =
+      isJsonObject(params.error) && params.error.codexErrorInfo === "rateLimitExceeded";
+    this.emitAgentEvent({
+      stream: "run_status",
+      data: {
+        phase: "retrying",
+        message: rateLimited
+          ? "Rate limited. The provider is retrying."
+          : "Connection interrupted. The provider is retrying.",
+      },
+    });
+  }
+
   flushPendingGuardianWarning(): void {
     const pending = this.pendingGuardianWarning;
     if (!pending) {

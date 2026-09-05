@@ -63,13 +63,10 @@ type CodexAppServerTranscriptMirrorResult = {
 };
 
 function readMirroredAssistantText(message: MirroredAgentMessage | undefined): string | undefined {
-  if (message?.role !== "assistant") {
-    return undefined;
-  }
-  const text = message.content
-    .flatMap((part) => (part.type === "text" ? [part.text] : []))
-    .join("\n");
-  return text || undefined;
+  return message?.role === "assistant"
+    ? message.content.flatMap((part) => (part.type === "text" ? [part.text] : [])).join("\n") ||
+        undefined
+    : undefined;
 }
 
 /** Imports a bounded, user-visible Codex history tail into a new OpenClaw transcript. */
