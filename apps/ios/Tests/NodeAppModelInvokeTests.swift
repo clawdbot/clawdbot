@@ -6434,7 +6434,9 @@ private final class TimingOutDeviceStatusService: DeviceStatusServicing {
                     })
             }
             await fixture.coordinator.resume(gatewayStableID: nil)
-            try #require(await waitForMainActorWork { oldTransfer.commandIDs == [command.commandId] })
+            // Await transport entry without repeatedly rescheduling the main actor.
+            try #require(try await oldTransfer.waitForFirstSend() == command.commandId)
+            try #require(oldTransfer.commandIDs == [command.commandId])
             if suspension == "activation" {
                 try #require(activation.beginActivation())
                 activation.complete(activated: true, errorDescription: nil)
@@ -6446,7 +6448,8 @@ private final class TimingOutDeviceStatusService: DeviceStatusServicing {
             // The new wake must survive the occupied task; no further event rescues it after release.
             await fixture.coordinator.resume(gatewayStableID: nil)
             oldTransfer.release()
-            try #require(await waitForMainActorWork { successfulTransfers.commandIDs == [command.commandId] })
+            try #require(try await successfulTransfers.waitForFirstSend() == command.commandId)
+            try #require(successfulTransfers.commandIDs == [command.commandId])
             #expect(fixture.messaging.sentChatReceipts == [receipt, receipt])
             #expect(try await fixture.journal.pendingReceipts().first?.receipt == receipt)
             let terminal = try #require(receipt.terminal)
