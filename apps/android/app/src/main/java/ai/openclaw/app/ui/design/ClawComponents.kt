@@ -436,7 +436,7 @@ internal fun ClawIconBadge(
   }
 }
 
-/** Reusable one-line list row with optional subtitle, metadata, slots, and click handling. */
+/** Keeps labels and metadata in one wrapping column beside fixed-width row controls. */
 @Composable
 internal fun ClawListItem(
   title: String,
@@ -470,21 +470,14 @@ internal fun ClawListItem(
         text = title,
         style = ClawTheme.type.body,
         color = ClawTheme.colors.text,
-        maxLines = 1,
-        overflow = TextOverflow.Ellipsis,
       )
-      if (subtitle != null) {
+      listOfNotNull(subtitle, metadata).forEach { detail ->
         Text(
-          text = subtitle,
+          text = detail,
           style = ClawTheme.type.caption,
-          color = ClawTheme.colors.textSubtle,
-          maxLines = 1,
-          overflow = TextOverflow.Ellipsis,
+          color = ClawTheme.colors.textMuted,
         )
       }
-    }
-    if (metadata != null) {
-      Text(text = metadata, style = ClawTheme.type.caption, color = ClawTheme.colors.textSubtle, maxLines = 1)
     }
     trailing?.invoke()
   }
