@@ -302,8 +302,14 @@ export async function updateGitCheckout(params: {
       step,
       validateCandidate: opts.validateCandidate,
       prepareGitExposure: opts.prepareGitExposure,
-      prepareCandidate: async (root) => {
-        runtimePromotion = await prepareGitRuntimePromotion(gitRoot, root, runCommand, timeoutMs);
+      prepareCandidate: async (root, cleanupRoot) => {
+        runtimePromotion = await prepareGitRuntimePromotion(
+          gitRoot,
+          root,
+          runCommand,
+          timeoutMs,
+          cleanupRoot,
+        );
       },
     });
     if (preflight.status !== "ok") {

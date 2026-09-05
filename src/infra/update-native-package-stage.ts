@@ -1,8 +1,6 @@
 import fs from "node:fs/promises";
 import path from "node:path";
 import { isDeepStrictEqual } from "node:util";
-import { isRecord } from "@openclaw/normalization-core/record-coerce";
-import { parse as parseYaml, stringify as stringifyYaml } from "yaml";
 import { sha256Hex } from "./crypto-digest.js";
 import { resolveBunGlobalInstallOwner } from "./detect-package-manager.js";
 import { hasErrnoCode } from "./errors.js";
@@ -12,9 +10,9 @@ import {
   type ResolvedGlobalInstallTarget,
 } from "./update-global.js";
 import {
-  relocateRuntimePath,
+  relocateRuntimeLauncher,
   relocateRuntimeSymlink,
-  type RuntimeRelocation,
+  relocateRuntimeTree,
 } from "./update-runtime-relocation.js";
 
 export type NativePackageStage = {
@@ -101,103 +99,6 @@ async function nativeProjectFingerprint(
   return fingerprint;
 }
 
-async function relocateLauncher(
-  file: string,
-  sourceFile: string,
-  destinationFile: string,
-  relocation: RuntimeRelocation,
-): Promise<void> {
-  const original = await fs.readFile(file, "utf8");
-  // pnpm cmd-shim uses these directory-relative references on sh, cmd and PowerShell.
-  // Resolve them before changing the directory; absolute store/runtime paths stay external.
-  let content = original.replace(
-    /(\$(?:basedir|basedir_win)[/\\]|%~dp0\\)([^"\r\n]+)/gu,
-    (match, prefix: string, relative: string) => {
-      if (/[$%]/u.test(relative)) {
-        return match;
-      }
-      const sourceTarget = path.resolve(
-        path.dirname(sourceFile),
-        relative.replaceAll("\\", path.sep),
-      );
-      const target = relocateRuntimePath(sourceTarget, relocation);
-      if (target === sourceTarget) {
-        // Bin-local runtime lookups belong to the destination bin, not the copied project.
-        return match;
-      }
-      const replacement = path.relative(path.dirname(destinationFile), target);
-      return `${prefix}${prefix.startsWith("%") ? replacement.replaceAll("/", "\\") : replacement.replaceAll("\\", "/")}`;
-    },
-  );
-  for (const sourceRoot of [relocation.sourceRoot, ...(relocation.sourceAliases ?? [])]) {
-    // NODE_PATH and the shim's target comment can carry absolute project paths.
-    content = content.replaceAll(
-      `${sourceRoot}${path.sep}`,
-      `${relocation.destinationRoot}${path.sep}`,
-    );
-    if (path.sep === "\\") {
-      content = content.replaceAll(
-        `${sourceRoot.replaceAll("\\", "/")}/`,
-        `${relocation.destinationRoot.replaceAll("\\", "/")}/`,
-      );
-    }
-  }
-  if (content !== original) {
-    await fs.writeFile(file, content);
-  }
-}
-
-async function relocateModulesManifest(file: string, relocation: RuntimeRelocation): Promise<void> {
-  const original = await fs.readFile(file, "utf8");
-  const manifest: unknown = parseYaml(original);
-  if (!isRecord(manifest)) {
-    return;
-  }
-  let changed = false;
-  // pnpm persists absolute virtualStoreDir on Windows and storeDir on every platform.
-  // Only owned paths move; a shared external content store retains its identity.
-  for (const key of ["virtualStoreDir", "storeDir"]) {
-    const value = manifest[key];
-    if (typeof value === "string" && path.isAbsolute(value)) {
-      const replacement = relocateRuntimePath(value, relocation);
-      if (replacement !== value) {
-        manifest[key] = replacement;
-        changed = true;
-      }
-    }
-  }
-  if (changed) {
-    const content = original.trimStart().startsWith("{")
-      ? `${JSON.stringify(manifest, null, 2)}\n`
-      : stringifyYaml(manifest);
-    await fs.writeFile(file, content);
-  }
-}
-
-async function relocateProjectTree(root: string, relocation: RuntimeRelocation): Promise<void> {
-  async function visit(directory: string): Promise<void> {
-    for (const entry of await fs.readdir(directory, { withFileTypes: true })) {
-      const file = path.join(directory, entry.name);
-      const relative = path.relative(root, file);
-      const sourceFile = path.join(relocation.sourceRoot, relative);
-      const destinationFile = path.join(relocation.destinationRoot, relative);
-      if (entry.isSymbolicLink()) {
-        await relocateRuntimeSymlink(file, sourceFile, destinationFile, relocation);
-      } else if (entry.isDirectory()) {
-        await visit(file);
-      } else if (entry.isFile()) {
-        if (entry.name === ".modules.yaml") {
-          await relocateModulesManifest(file, relocation);
-        } else if (path.basename(directory) === ".bin" && !entry.name.endsWith(".exe")) {
-          await relocateLauncher(file, sourceFile, destinationFile, relocation);
-        }
-      }
-    }
-  }
-  // Traverse the copied tree only; following a package/store symlink would mutate live data.
-  await visit(root);
-}
-
 /** Stage a native global project without changing its live package, metadata, or launchers. */
 export async function prepareNativePackageStage(params: {
   installTarget: ResolvedGlobalInstallTarget;
@@ -245,18 +146,25 @@ export async function prepareNativePackageStage(params: {
     binDir = await fs.mkdtemp(`${prefix}.bin-`);
     await fs.cp(liveProjectRoot, projectRoot, { recursive: true, verbatimSymlinks: true });
     await fs.chmod(projectRoot, (await fs.stat(liveProjectRoot)).mode);
-    await relocateProjectTree(projectRoot, {
-      sourceRoot: liveProjectRoot,
-      destinationRoot: projectRoot,
-      sourceAliases: [ownerRoot],
-    });
+    await relocateRuntimeTree(projectRoot, liveProjectRoot, projectRoot, [
+      {
+        sourceRoot: liveProjectRoot,
+        destinationRoot: projectRoot,
+        sourceAliases: [ownerRoot],
+      },
+    ]);
     // pnpm 11 derives its destinations before reading environment config. Explicit
     // CLI config selects the copied project and bin in both pnpm 10 and pnpm 11.
     const configArgs =
       installTarget.manager === "pnpm"
         ? [`--config.global-dir=${projectRoot}`, `--config.global-bin-dir=${binDir}`]
         : [];
-    if (installTarget.manager === "bun") {
+    if (installTarget.manager === "pnpm") {
+      // External project stores can prune the serving generation. The global CLI
+      // rejects this selector; normalize its env spellings to keep the store private.
+      delete env.pnpm_config_virtual_store_dir;
+      env.PNPM_CONFIG_VIRTUAL_STORE_DIR = ".pnpm";
+    } else {
       env.BUN_INSTALL_GLOBAL_DIR = projectRoot;
       env.BUN_INSTALL_BIN = binDir;
       if (bunOwner?.bunInstall) {
@@ -297,15 +205,20 @@ export async function finalizeNativePackageStage(
   packageName: string,
 ): Promise<() => Promise<void>> {
   await stage.assertUnchanged();
-  const relocation = { sourceRoot: stage.projectRoot, destinationRoot: stage.liveProjectRoot };
-  await relocateProjectTree(stage.projectRoot, relocation);
+  const relocations = [{ sourceRoot: stage.projectRoot, destinationRoot: stage.liveProjectRoot }];
+  await relocateRuntimeTree(
+    stage.projectRoot,
+    stage.projectRoot,
+    stage.liveProjectRoot,
+    relocations,
+  );
   for (const entry of await fs.readdir(stage.binDir, { withFileTypes: true })) {
     const file = path.join(stage.binDir, entry.name);
     const destinationFile = path.join(stage.liveBinDir, entry.name);
     if (entry.isSymbolicLink()) {
-      await relocateRuntimeSymlink(file, file, destinationFile, relocation);
+      await relocateRuntimeSymlink(file, file, destinationFile, relocations);
     } else if (entry.isFile()) {
-      await relocateLauncher(file, file, destinationFile, relocation);
+      await relocateRuntimeLauncher(file, file, destinationFile, relocations);
     }
   }
   // Candidate installation rewrites shared locks and pnpm group links. Capture their

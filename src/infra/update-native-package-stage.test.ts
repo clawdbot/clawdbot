@@ -84,6 +84,17 @@ describe.skipIf(process.platform === "win32")("native package stage", () => {
           JSON.parse(await fs.readFile(path.join(candidateRoot, ".modules.yaml"), "utf8")),
         ).toEqual({ virtualStoreDir: path.join(stage.projectRoot, "store"), storeDir: external });
         await fs.writeFile(candidateEntry, '#!/usr/bin/env node\nconsole.log("candidate");\n');
+        const externalEntry = path.join(external, "entry.mjs");
+        await fs.writeFile(externalEntry, 'console.log("external");\n');
+        const externalLauncher = path.join(stage.binDir, "shared");
+        await fs.writeFile(
+          externalLauncher,
+          `#!/bin/sh\nbasedir=$(dirname "$0")\nexec node "$basedir/${path.relative(stage.binDir, externalEntry)}" "$@"\n`,
+          { mode: 0o755 },
+        );
+        expect((await runFile(externalLauncher, [], { timeout: 5000 })).stdout.trim()).toBe(
+          "external",
+        );
         const launcher = path.join(stage.binDir, "openclaw");
         if (layout === "bun") {
           await fs.symlink(path.relative(stage.binDir, candidateEntry), launcher);
@@ -117,10 +128,14 @@ describe.skipIf(process.platform === "win32")("native package stage", () => {
         await fs.rename(project, `${project}.previous`);
         await fs.rename(stage.projectRoot, project);
         await fs.cp(launcher, path.join(liveBinDir, "openclaw"), { verbatimSymlinks: true });
+        await fs.copyFile(externalLauncher, path.join(liveBinDir, "shared"));
         await fs.rm(stage.binDir, { recursive: true });
         expect(
           (await runFile(path.join(liveBinDir, "openclaw"), [], { timeout: 5000 })).stdout.trim(),
         ).toBe(layout === "bun" ? "candidate" : "bin-runtime\ncandidate");
+        expect(
+          (await runFile(path.join(liveBinDir, "shared"), [], { timeout: 5000 })).stdout.trim(),
+        ).toBe("external");
         expect(await fs.realpath(path.join(project, "owned-package"))).toBe(packageRoot);
         expect(await fs.readFile(path.join(project, "shared-package", "dependency"), "utf8")).toBe(
           "shared dependency",

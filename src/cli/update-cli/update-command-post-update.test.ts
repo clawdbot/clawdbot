@@ -788,7 +788,14 @@ describe("successful update finalization ordering", () => {
         mocks.stopService.mockImplementationOnce(async () => {
           events.push("stop");
           windowsEvents.push("next-suspend");
-          return { stopped: true, stoppedAtMs: now, windowsTaskAutoStartRecovery: nextRecovery };
+          return {
+            stopped: true,
+            inspected: true,
+            runtimeInspected: true,
+            running: true,
+            stoppedAtMs: now,
+            windowsTaskAutoStartRecovery: nextRecovery,
+          };
         });
         mocks.completePluginUpdate.mockImplementationOnce(
           async (params: { beforeDoctor?: () => Promise<void> }) => {

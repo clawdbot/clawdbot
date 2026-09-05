@@ -3,6 +3,7 @@ import os from "node:os";
 import path from "node:path";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { runCommandWithTimeout } from "../process/exec.js";
+import { prepareGitRuntimePromotion } from "./update-runner-git-runtime.js";
 import { updateGitCheckout } from "./update-runner-git.js";
 import type { CommandRunner, UpdateRunnerOptions } from "./update-runner-types.js";
 
@@ -21,9 +22,18 @@ const runtimeImports = [
   "external-runtime",
   "absolute-external-runtime",
   "../packages/runtime/node_modules/external-runtime",
+  "virtual-runtime",
 ];
 
-async function writeRuntime(root: string, sha: string, store: string) {
+type VirtualStoreLayout =
+  | "node_modules/.pnpm"
+  | ".pnpm"
+  | "cache/deps"
+  | "../store"
+  | "external"
+  | "symlink";
+
+async function writeRuntime(root: string, sha: string, store: string, layout: VirtualStoreLayout) {
   root = await fs.realpath(root);
   const dist = path.join(root, "dist");
   const external = path.join(store, sha);
@@ -32,6 +42,22 @@ async function writeRuntime(root: string, sha: string, store: string) {
   await fs.mkdir(path.join(dist, "control-ui"), { recursive: true });
   await fs.mkdir(path.join(root, "node_modules"), { recursive: true });
   await fs.mkdir(path.join(root, "packages", "runtime", "node_modules"), { recursive: true });
+  const virtualStore =
+    layout === "external"
+      ? path.join(store, "virtual-store")
+      : path.resolve(root, layout === "symlink" ? ".pnpm" : layout);
+  if (layout === "symlink") {
+    const linkedStore = path.join(store, "linked-store", sha);
+    await fs.mkdir(linkedStore, { recursive: true });
+    await fs.rm(virtualStore, { force: true });
+    await fs.symlink(linkedStore, virtualStore, "junction");
+  }
+  const virtualPackage = path.join(virtualStore, sha, "node_modules", "virtual-runtime");
+  await fs.mkdir(virtualPackage, { recursive: true });
+  await fs.writeFile(
+    path.join(virtualPackage, "index.js"),
+    `module.exports = ${JSON.stringify(sha)};`,
+  );
   await fs.rm(path.join(root, "node_modules", "workspace-runtime"), { force: true });
   await fs.symlink(
     path.join(root, "packages", "runtime"),
@@ -43,6 +69,7 @@ async function writeRuntime(root: string, sha: string, store: string) {
     ["node_modules/external-runtime", external, false],
     ["node_modules/absolute-external-runtime", external, true],
     ["packages/runtime/node_modules/external-runtime", external, false],
+    ["node_modules/virtual-runtime", virtualPackage, false],
   ] as const) {
     const file = path.join(root, relative);
     await fs.rm(file, { force: true });
@@ -53,6 +80,15 @@ async function writeRuntime(root: string, sha: string, store: string) {
     );
   }
   await Promise.all([
+    fs.writeFile(
+      path.join(root, "node_modules", ".modules.yaml"),
+      JSON.stringify({
+        virtualStoreDir:
+          process.platform === "win32"
+            ? virtualStore
+            : path.relative(path.join(root, "node_modules"), virtualStore),
+      }),
+    ),
     fs.writeFile(
       path.join(root, "packages", "runtime", "node_modules", "nested.cjs"),
       `module.exports = ${JSON.stringify(sha)};`,
@@ -74,6 +110,17 @@ async function writeRuntime(root: string, sha: string, store: string) {
   ]);
 }
 
+async function expectRuntime(root: string, sha: string) {
+  const child = await runCommandWithTimeout(
+    [process.execPath, path.join(root, "dist", "entry.js")],
+    {
+      timeoutMs: 5000,
+    },
+  );
+  expect(child.code, child.stderr).toBe(0);
+  expect(child.stdout.trim().split("\n")).toEqual(runtimeImports.map(() => sha));
+}
+
 describe("Git candidate activation", () => {
   let directory: string;
   let root: string;
@@ -82,6 +129,7 @@ describe("Git candidate activation", () => {
   let events: string[];
   let stopped: boolean;
   let runCommand: CommandRunner;
+  let virtualStoreLayout: VirtualStoreLayout;
 
   beforeEach(async () => {
     directory = await fs.realpath(
@@ -105,7 +153,7 @@ describe("Git candidate activation", () => {
     );
     await fs.writeFile(
       path.join(remote, ".gitignore"),
-      "node_modules/\ndist/\n.artifacts\n*.tmp\n",
+      "node_modules/\ndist/\n.artifacts\n.pnpm\ncache/\n*.tmp\n",
     );
     await git(remote, "add", ".");
     await git(remote, "commit", "-m", "base");
@@ -113,7 +161,8 @@ describe("Git candidate activation", () => {
     await git(directory, "clone", "--quiet", remote, root);
     await git(root, "config", "user.name", "OpenClaw Test");
     await git(root, "config", "user.email", "openclaw@example.com");
-    await writeRuntime(root, beforeSha, path.join(directory, "shared-store"));
+    virtualStoreLayout = "node_modules/.pnpm";
+    await writeRuntime(root, beforeSha, path.join(directory, "shared-store"), virtualStoreLayout);
     events = [];
     stopped = false;
     runCommand = async (argv, options) => {
@@ -128,6 +177,7 @@ describe("Git candidate activation", () => {
             options.cwd!,
             await git(options.cwd!, "rev-parse", "HEAD"),
             path.join(directory, "shared-store"),
+            virtualStoreLayout,
           );
           events.push("build");
         }
@@ -167,13 +217,8 @@ describe("Git candidate activation", () => {
           expect(stopped).toBe(false);
           expect(await git(root, "rev-parse", "HEAD")).toBe(beforeSha);
           expect(candidateRoot).not.toBe(root);
-          const child = await runCommandWithTimeout(
-            [process.execPath, path.join(candidateRoot, "dist", "entry.js")],
-            { timeoutMs: 5000 },
-          );
-          expect(child.code, child.stderr).toBe(0);
           const candidateSha = await git(candidateRoot, "rev-parse", "HEAD");
-          expect(child.stdout.trim().split("\n")).toEqual(runtimeImports.map(() => candidateSha));
+          await expectRuntime(candidateRoot, candidateSha);
           events.push("validate");
         },
         beforeGitMutation: async () => {
@@ -224,9 +269,19 @@ describe("Git candidate activation", () => {
     expect(await git(root, "rev-parse", "HEAD")).toBe(beforeSha);
   });
 
-  it.each([false, true])(
-    "activates only the validated build, preserving local commits: %s",
-    async (localCommit) => {
+  it.each([
+    { layout: "node_modules/.pnpm", localCommit: false },
+    { layout: "node_modules/.pnpm", localCommit: true },
+    { layout: ".pnpm", localCommit: false },
+    { layout: "cache/deps", localCommit: false },
+    { layout: "../store", localCommit: false },
+    { layout: "external", localCommit: false },
+    { layout: "symlink", localCommit: false },
+  ] as const)(
+    "activates the validated $layout runtime (preserving local commits: $localCommit)",
+    async ({ layout, localCommit }) => {
+      virtualStoreLayout = layout;
+      await writeRuntime(root, beforeSha, path.join(directory, "shared-store"), layout);
       const target = await advanceRemote();
       if (localCommit) {
         const artifacts = path.join(directory, "external-artifacts");
@@ -236,7 +291,7 @@ describe("Git candidate activation", () => {
         await git(root, "add", "local.txt");
         await git(root, "commit", "-m", "local change");
         beforeSha = await git(root, "rev-parse", "HEAD");
-        await writeRuntime(root, beforeSha, path.join(directory, "shared-store"));
+        await writeRuntime(root, beforeSha, path.join(directory, "shared-store"), layout);
       }
       const unrelated = path.join(root, "operator-project", "node_modules", "keep.cjs");
       await fs.mkdir(path.dirname(unrelated), { recursive: true });
@@ -252,13 +307,50 @@ describe("Git candidate activation", () => {
       if (localCommit) {
         expect(await fs.readFile(path.join(root, "local.txt"), "utf8")).toBe("operator change\n");
       }
-      const child = await runCommandWithTimeout(
-        [process.execPath, path.join(root, "dist", "entry.js")],
-        { timeoutMs: 5000 },
+      await expectRuntime(root, current);
+      const manifest: { virtualStoreDir: string } = JSON.parse(
+        await fs.readFile(path.join(root, "node_modules", ".modules.yaml"), "utf8"),
       );
-      expect(child.code, child.stderr).toBe(0);
-      expect(child.stdout.trim().split("\n")).toEqual(runtimeImports.map(() => current));
+      const expectedStore =
+        layout === "external"
+          ? path.join(directory, "shared-store", "virtual-store")
+          : layout === "symlink"
+            ? path.join(directory, "shared-store", "linked-store", current)
+            : path.resolve(root, layout);
+      expect(await fs.realpath(path.resolve(root, "node_modules", manifest.virtualStoreDir))).toBe(
+        expectedStore,
+      );
+      expect(await fs.realpath(path.join(root, "node_modules", "virtual-runtime"))).toBe(
+        path.join(expectedStore, current, "node_modules", "virtual-runtime"),
+      );
       expect(await fs.readdir(path.join(root, ".artifacts"))).toEqual([]);
+    },
+  );
+
+  it.each([".", "..", "../checkout", ".artifacts/checkout"])(
+    "refuses virtual store %s before promotion can replace a checkout",
+    async (store) => {
+      const cleanupRoot = path.join(directory, "candidate-scope");
+      const candidateRoot = path.join(cleanupRoot, "worktree");
+      const modules = path.join(candidateRoot, "node_modules");
+      await fs.mkdir(modules, { recursive: true });
+      await fs.mkdir(path.resolve(candidateRoot, store), { recursive: true });
+      if (store === ".artifacts/checkout") {
+        await fs.symlink(directory, path.join(root, ".artifacts"), "junction");
+      }
+      await git(candidateRoot, "init", "--initial-branch=main");
+      await fs.writeFile(path.join(candidateRoot, ".gitignore"), "node_modules/\n");
+      await fs.writeFile(
+        path.join(modules, ".modules.yaml"),
+        JSON.stringify({
+          virtualStoreDir: path.relative(modules, path.resolve(candidateRoot, store)),
+        }),
+      );
+      await expect(
+        prepareGitRuntimePromotion(root, candidateRoot, runCommand, 5000, cleanupRoot),
+      ).rejects.toThrow(/virtual store/i);
+      expect(await git(root, "rev-parse", "HEAD")).toBe(beforeSha);
+      await expectRuntime(root, beforeSha);
     },
   );
 
@@ -280,9 +372,15 @@ describe("Git candidate activation", () => {
     expect(await fs.readdir(path.join(root, ".artifacts"))).toEqual([]);
   });
 
-  it.each([true, false])(
-    "verifies runtime recovery after activation failure (source restored: %s)",
-    async (restoreSource) => {
+  it.each([
+    { layout: "node_modules/.pnpm", restoreSource: true },
+    { layout: "node_modules/.pnpm", restoreSource: false },
+    { layout: "../store", restoreSource: true },
+  ] as const)(
+    "verifies $layout runtime recovery after activation failure (source restored: $restoreSource)",
+    async ({ layout, restoreSource }) => {
+      virtualStoreLayout = layout;
+      await writeRuntime(root, beforeSha, path.join(directory, "shared-store"), layout);
       const candidateSha = await advanceRemote();
       const command = runCommand;
       let resetFaultInjected = false;
@@ -333,12 +431,7 @@ describe("Git candidate activation", () => {
           ...(restoreSource ? {} : { stderrTail: `expected ${beforeSha}, found ${candidateSha}` }),
         }),
       );
-      const child = await runCommandWithTimeout(
-        [process.execPath, path.join(root, "dist", "entry.js")],
-        { timeoutMs: 5000 },
-      );
-      expect(child.code, child.stderr).toBe(0);
-      expect(child.stdout.trim().split("\n")).toEqual(runtimeImports.map(() => beforeSha));
+      await expectRuntime(root, beforeSha);
     },
   );
 });

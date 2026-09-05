@@ -339,12 +339,13 @@ function classifyPreflightFailure(step: UpdateStepResult): "failed" | "insuffici
 async function testPreflightCandidate(params: {
   gitRoot: string;
   worktreeDir: string;
+  preflightRoot: string;
   sha: string;
   rebaseFrom?: string;
   runLint: boolean;
   validateCandidate?: (root: string) => Promise<void>;
   prepareGitExposure?: (root: string, sha: string) => Promise<void>;
-  prepareCandidate?: (root: string) => Promise<void>;
+  prepareCandidate?: (root: string, cleanupRoot: string) => Promise<void>;
   runCommand: CommandRunner;
   timeoutMs: number;
   defaultCommandEnv: NodeJS.ProcessEnv | undefined;
@@ -502,7 +503,7 @@ async function testPreflightCandidate(params: {
     // the resulting candidate only after that preparation finishes.
     await params.prepareGitExposure?.(params.worktreeDir, candidateSha);
     await params.validateCandidate?.(params.worktreeDir);
-    await params.prepareCandidate?.(params.worktreeDir);
+    await params.prepareCandidate?.(params.worktreeDir, params.preflightRoot);
     return { status: "ok", candidateSha };
   } finally {
     await manager.cleanup?.();
@@ -516,7 +517,7 @@ export async function runGitCandidatePreflight(params: {
   beforeSha?: string | null;
   validateCandidate?: (root: string) => Promise<void>;
   prepareGitExposure?: (root: string, sha: string) => Promise<void>;
-  prepareCandidate?: (root: string) => Promise<void>;
+  prepareCandidate?: (root: string, cleanupRoot: string) => Promise<void>;
   needsCheckoutMain: boolean;
   runCommand: CommandRunner;
   timeoutMs: number;
@@ -631,6 +632,7 @@ export async function runGitCandidatePreflight(params: {
       const candidate = await testPreflightCandidate({
         ...params,
         worktreeDir,
+        preflightRoot,
         sha,
         rebaseFrom,
         runLint: !params.targetRevision && shouldRunDevPreflightLint(),

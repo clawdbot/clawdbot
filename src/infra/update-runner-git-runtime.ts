@@ -1,9 +1,15 @@
 import { randomUUID } from "node:crypto";
 import fs from "node:fs/promises";
 import path from "node:path";
+import { resolvePathViaExistingAncestorSync } from "./boundary-path.js";
 import { hasErrnoCode } from "./errno.js";
+import { isPathInside } from "./path-guards.js";
 import type { CommandRunner } from "./update-runner-types.js";
-import { relocateRuntimeSymlink, type RuntimeRelocation } from "./update-runtime-relocation.js";
+import {
+  readRuntimeModulesManifest,
+  relocateRuntimeTree,
+  type RuntimeRelocation,
+} from "./update-runtime-relocation.js";
 
 async function collectRuntimeDirectories(
   root: string,
@@ -49,47 +55,78 @@ async function collectRuntimeDirectories(
   );
 }
 
-async function rebindRuntimeLinks(
-  staged: string,
-  relative: string,
-  relocation: RuntimeRelocation,
-): Promise<void> {
-  const stat = await fs.lstat(staged);
-  if (stat.isDirectory()) {
-    for (const entry of await fs.readdir(staged, { withFileTypes: true })) {
-      if (entry.isDirectory() || entry.isSymbolicLink()) {
-        await rebindRuntimeLinks(
-          path.join(staged, entry.name),
-          path.join(relative, entry.name),
-          relocation,
-        );
-      }
-    }
-    return;
-  }
-  if (stat.isSymbolicLink()) {
-    await relocateRuntimeSymlink(
-      staged,
-      path.join(relocation.sourceRoot, relative),
-      path.join(relocation.destinationRoot, relative),
-      relocation,
-    );
-  }
-}
-
 /** Stage on the destination filesystem; activation only renames the already validated runtime. */
 export async function prepareGitRuntimePromotion(
   root: string,
   candidateRoot: string,
   runCommand: CommandRunner,
   timeoutMs: number,
+  cleanupRoot: string,
 ) {
-  const directories = await collectRuntimeDirectories(candidateRoot, runCommand, timeoutMs);
   const relocation: RuntimeRelocation = {
     sourceRoot: await fs.realpath(candidateRoot),
     destinationRoot: await fs.realpath(root),
     sourceAliases: [candidateRoot],
   };
+  const directories = await collectRuntimeDirectories(relocation.sourceRoot, runCommand, timeoutMs);
+  const copiedRoots = new Map<string, RuntimeRelocation>();
+  for (const relative of directories) {
+    const sourceRoot = path.join(relocation.sourceRoot, relative);
+    copiedRoots.set(sourceRoot, {
+      sourceRoot,
+      destinationRoot: path.join(relocation.destinationRoot, relative),
+    });
+  }
+  const stores = new Map<string, RuntimeRelocation>();
+  const ownedRoot = await fs.realpath(cleanupRoot);
+  for (const relative of directories) {
+    if (path.basename(relative) !== "node_modules") {
+      continue;
+    }
+    const modulesDir = path.join(relocation.sourceRoot, relative);
+    const contents = await readRuntimeModulesManifest(path.join(modulesDir, ".modules.yaml"));
+    const virtualStoreDir = contents?.manifest.virtualStoreDir;
+    if (typeof virtualStoreDir !== "string") {
+      continue;
+    }
+    const store = path.resolve(modulesDir, virtualStoreDir);
+    // Own the directory entry, not a symlink's external payload. A sibling store
+    // can be outside the worktree but still inside its disposable preflight tree.
+    const sourceRoot = path.join(await fs.realpath(path.dirname(store)), path.basename(store));
+    const owned = isPathInside(ownedRoot, sourceRoot);
+    const storeRelocation = {
+      sourceRoot,
+      destinationRoot: owned
+        ? path.resolve(relocation.destinationRoot, path.relative(relocation.sourceRoot, sourceRoot))
+        : sourceRoot,
+      sourceAliases: [store],
+    };
+    const destinationEntry = path.join(
+      resolvePathViaExistingAncestorSync(path.dirname(storeRelocation.destinationRoot)),
+      path.basename(storeRelocation.destinationRoot),
+    );
+    if (
+      isPathInside(sourceRoot, relocation.sourceRoot) ||
+      (owned && isPathInside(destinationEntry, relocation.destinationRoot))
+    ) {
+      throw new Error(
+        "Candidate pnpm virtual store overlaps the source or live checkout; use a dedicated store directory before updating.",
+      );
+    }
+    stores.set(sourceRoot, storeRelocation);
+    if (owned) {
+      copiedRoots.set(sourceRoot, storeRelocation);
+    }
+  }
+  // A store reached through a symlinked parent retains its physical external owner;
+  // resolve that specific mapping before the encompassing checkout mapping.
+  const relocations = [...stores.values(), relocation];
+  const roots = [...copiedRoots.values()].filter(
+    (entry) =>
+      ![...copiedRoots.keys()].some(
+        (other) => other !== entry.sourceRoot && isPathInside(other, entry.sourceRoot),
+      ),
+  );
   const staged: Array<{ destination: string; temporary: string; previous: boolean }> = [];
   const promoted: typeof staged = [];
   const cleanup = async () => {
@@ -98,8 +135,7 @@ export async function prepareGitRuntimePromotion(
     );
   };
   try {
-    for (const relative of directories) {
-      const destination = path.join(root, relative);
+    for (const { sourceRoot, destinationRoot: destination } of roots) {
       // .artifacts may point at another volume. A sibling of each destination
       // guarantees rename-only activation, including nested workspace outputs.
       const temporary = `${destination}.openclaw-update-${randomUUID()}.tmp`;
@@ -107,11 +143,11 @@ export async function prepareGitRuntimePromotion(
       staged.push(entry);
       await fs.mkdir(temporary, { recursive: true });
       const candidate = path.join(temporary, "candidate");
-      await fs.cp(path.join(candidateRoot, relative), candidate, {
+      await fs.cp(sourceRoot, candidate, {
         recursive: true,
         verbatimSymlinks: true,
       });
-      await rebindRuntimeLinks(candidate, relative, relocation);
+      await relocateRuntimeTree(candidate, sourceRoot, destination, relocations);
     }
   } catch (error) {
     await cleanup();
