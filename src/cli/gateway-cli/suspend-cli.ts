@@ -1,4 +1,5 @@
 import { randomBytes } from "node:crypto";
+import { parseStrictFiniteNumber } from "@openclaw/normalization-core/number-coercion";
 import type {
   GatewaySuspendPrepareResult,
   GatewaySuspendResumeResult,
@@ -25,7 +26,11 @@ function parseWaitMs(value: string | number | undefined): number | undefined {
   if (value === undefined) {
     return undefined;
   }
-  const seconds = typeof value === "number" ? value : Number(value.trim() || Number.NaN);
+  const seconds =
+    typeof value === "number" ? value : (parseStrictFiniteNumber(value) ?? Number.NaN);
+  // parseStrictFiniteNumber (unlike Number) rejects JS radix literals, so
+  // --wait 0x10 / 0b101 / 0o17 fail here instead of silently suspending for
+  // a non-decimal seconds value; decimal/exponent seconds still parse.
   if (!Number.isFinite(seconds) || seconds < 0) {
     throw new Error("--wait must be a non-negative number of seconds");
   }
