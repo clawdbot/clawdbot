@@ -775,22 +775,17 @@ export function prepareTaskMirroredFlowSync(
 /** Publishes a mirrored flow record already committed by a shared-state transaction. */
 export function publishTaskFlowAfterAtomicStore(
   prepared: PreparedTaskMirroredFlowSync,
-  deferredObserverEvents?: Array<() => void>,
-): TaskFlowRecord {
+  deferredObserverEvents: Array<() => void>,
+): void {
   const next = cloneFlowRecord(prepared.next);
   flows.set(next.flowId, next);
-  const emit = () =>
+  deferredObserverEvents.push(() =>
     emitFlowRegistryObserverEvent(() => ({
       kind: "upserted",
       flow: cloneFlowRecord(next),
       previous: cloneFlowRecord(prepared.current),
-    }));
-  if (deferredObserverEvents) {
-    deferredObserverEvents.push(emit);
-  } else {
-    emit();
-  }
-  return cloneFlowRecord(next);
+    })),
+  );
 }
 
 export function getTaskFlowById(flowId: string): TaskFlowRecord | undefined {

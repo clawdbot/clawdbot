@@ -12,7 +12,11 @@ import type { WorkerConnectionIdentity } from "../../../gateway/worker-environme
 import { createWorkerLiveEventReceiver } from "../../../gateway/worker-environments/live-events.js";
 import { createWorkerSessionPlacementStore } from "../../../gateway/worker-environments/placement-store.js";
 import { createWorkerSessionPlacementGate } from "../../../gateway/worker-environments/placement-worker-gate.js";
-import { getAgentEventLifecycleGeneration, onAgentEvent } from "../../../infra/agent-events.js";
+import {
+  emitAgentEvent,
+  getAgentEventLifecycleGeneration,
+  onAgentEvent,
+} from "../../../infra/agent-events.js";
 import {
   getAgentRunContext,
   getAgentRunContextOwnership,
@@ -432,9 +436,47 @@ it("rearms the canonical task and mirrored flow for an interrupted run's success
   expect(getTaskById(originalTask.taskId)).toEqual(task);
   expect(getTaskFlowById(flowId)).toEqual(flow);
 
+  const activityAt = task.lastEventAt! + 60_001;
+  const clock = vi.spyOn(Date, "now").mockReturnValue(activityAt);
+  try {
+    emitAgentEvent({
+      runId: successor.runId,
+      sessionKey: childSessionKey,
+      stream: "assistant",
+      data: { text: "Resumed work is progressing" },
+    });
+    expect
+      .soft(getTaskActivitySnapshot(task.taskId)?.lastActivity)
+      .toBe("Resumed work is progressing");
+    expect.soft(getTaskById(task.taskId)?.lastEventAt).toBe(activityAt);
+    emitAgentEvent({
+      runId: successor.runId,
+      sessionKey: childSessionKey,
+      stream: "tool",
+      data: { phase: "start", name: "read" },
+    });
+    expect.soft(getTaskById(task.taskId)).toMatchObject({
+      toolUseCount: 1,
+      lastToolName: "read",
+    });
+    const currentActivity = getTaskActivitySnapshot(task.taskId);
+    const currentTask = getTaskById(task.taskId);
+    for (const event of [
+      { stream: "assistant", data: { text: "Retired owner progress" } },
+      { stream: "tool", data: { phase: "start", name: "write" } },
+      { stream: "error", data: { error: "Retired owner error" } },
+    ]) {
+      emitAgentEvent({ runId: previous.runId, sessionKey: childSessionKey, ...event });
+    }
+    expect.soft(getTaskActivitySnapshot(task.taskId)).toEqual(currentActivity);
+    expect.soft(getTaskById(task.taskId)).toEqual(currentTask);
+  } finally {
+    clock.mockRestore();
+  }
+
   const staleFlow = failFlow({
     flowId,
-    expectedRevision: flow.revision,
+    expectedRevision: getTaskFlowById(flowId)!.revision,
     endedAt: Date.now(),
   });
   expect(staleFlow.applied).toBe(true);
