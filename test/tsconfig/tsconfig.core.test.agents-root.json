@@ -12,6 +12,9 @@
     "../../dist",
     "../../**/dist/**",
     "../../src/agents/bash-tools.exec-runtime*.test.ts",
-    "../../src/agents/bash-tools.exec-runtime*.test.tsx"
+    "../../src/agents/bash-tools.exec-runtime*.test.tsx",
+    "../../src/agents/agent-tools.read.workspace-root-guard.test.ts",
+    "../../src/agents/agent-tools.read.workspace-root-lazy.test.ts",
+    "../../src/agents/agent-tools.workspace-paths.test.ts"
   ]
 }
