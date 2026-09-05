@@ -99,6 +99,46 @@ describe("Codex native project-document snapshots", () => {
     );
   });
 
+  it("preflights fallback candidates selected by the effective native config", async () => {
+    const cwd = path.join(workspaceDir, "packages", "worker");
+    const rootMarker = path.join(workspaceDir, ".workspace-root");
+    const instructions = path.join(workspaceDir, "WORKFLOW.md");
+    await fs.mkdir(cwd, { recursive: true });
+    await fs.writeFile(rootMarker, "");
+    await fs.writeFile(instructions, "native configured authority");
+    const readNativeConfig = vi.fn(async () => ({
+      config: {
+        project_doc_fallback_filenames: ["WORKFLOW.md"],
+        project_root_markers: [".workspace-root"],
+      },
+      layers: [
+        {
+          name: { type: "user" },
+          config: {
+            project_doc_fallback_filenames: ["WORKFLOW.md"],
+            project_root_markers: [".workspace-root"],
+          },
+        },
+      ],
+    }));
+    const sourceIdentitiesBeforeRequest =
+      await snapshotCodexNativeProjectInstructionSourceIdentities({
+        cwd,
+        config: { project_doc_max_bytes: 10 },
+        readNativeConfig,
+      });
+
+    await expect(
+      captureCodexNativeProjectInstructions({
+        cwd,
+        instructionSources: [instructions],
+        config: { project_doc_max_bytes: 10 },
+        sourceIdentitiesBeforeRequest,
+      }),
+    ).resolves.toContain("native con");
+    expect(readNativeConfig).toHaveBeenCalledWith(cwd);
+  });
+
   it("shares the configured byte budget across Codex-selected sources", async () => {
     const cwd = path.join(workspaceDir, "nested");
     const rootInstructions = path.join(workspaceDir, "AGENTS.md");
@@ -208,6 +248,107 @@ describe("Codex native project-document snapshots", () => {
         sourceIdentitiesBeforeRequest,
       }),
     ).resolves.toContain("secondary environment authority");
+  });
+
+  it("uses the primary effective config for every selected environment", async () => {
+    const primaryCwd = path.join(workspaceDir, "primary");
+    const secondaryCwd = path.join(workspaceDir, "secondary");
+    const secondaryInstructions = path.join(secondaryCwd, "PRIMARY.md");
+    await fs.mkdir(primaryCwd);
+    await fs.mkdir(secondaryCwd);
+    await fs.writeFile(secondaryInstructions, "primary-config authority in secondary cwd");
+    const readNativeConfig = vi.fn(async () => ({
+      config: { project_doc_fallback_filenames: ["PRIMARY.md"] },
+      layers: [],
+    }));
+    const sourceIdentitiesBeforeRequest =
+      await snapshotCodexNativeProjectInstructionSourceIdentities({
+        cwd: primaryCwd,
+        environmentSelection: [
+          { environmentId: "primary", cwd: primaryCwd },
+          { environmentId: "secondary", cwd: secondaryCwd },
+        ],
+        readNativeConfig,
+      });
+
+    await expect(
+      captureCodexNativeProjectInstructions({
+        cwd: primaryCwd,
+        instructionSources: [secondaryInstructions],
+        sourceIdentitiesBeforeRequest,
+      }),
+    ).resolves.toContain("primary-config authority in secondary cwd");
+    expect(readNativeConfig).toHaveBeenCalledTimes(1);
+    expect(readNativeConfig).toHaveBeenCalledWith(primaryCwd);
+  });
+
+  it("excludes project-layer values when resolving native root markers", async () => {
+    const projectDir = path.join(workspaceDir, "project");
+    const cwd = path.join(projectDir, "packages", "worker");
+    const instructions = path.join(workspaceDir, "PRIMARY.md");
+    await fs.mkdir(cwd, { recursive: true });
+    await fs.writeFile(path.join(workspaceDir, ".user-root"), "");
+    await fs.writeFile(path.join(projectDir, ".project-root"), "");
+    await fs.writeFile(instructions, "authority above the project config boundary");
+    const sourceIdentitiesBeforeRequest =
+      await snapshotCodexNativeProjectInstructionSourceIdentities({
+        cwd,
+        readNativeConfig: async () => ({
+          config: {
+            project_doc_fallback_filenames: ["PRIMARY.md"],
+            project_root_markers: [".project-root"],
+          },
+          layers: [
+            {
+              name: { type: "project" },
+              config: { project_root_markers: [".project-root"] },
+            },
+            {
+              name: { type: "user" },
+              config: { project_root_markers: [".user-root"] },
+            },
+          ],
+        }),
+      });
+
+    await expect(
+      captureCodexNativeProjectInstructions({
+        cwd,
+        instructionSources: [instructions],
+        sourceIdentitiesBeforeRequest,
+      }),
+    ).resolves.toContain("authority above the project config boundary");
+  });
+
+  it("preflights managed and thread-patch root-marker precedence candidates", async () => {
+    const cwd = path.join(workspaceDir, "packages", "worker");
+    const instructions = path.join(workspaceDir, "AGENTS.md");
+    await fs.mkdir(cwd, { recursive: true });
+    await fs.writeFile(path.join(workspaceDir, ".managed-root"), "");
+    await fs.writeFile(path.join(workspaceDir, "packages", ".patch-root"), "");
+    await fs.writeFile(instructions, "managed precedence authority");
+    const sourceIdentitiesBeforeRequest =
+      await snapshotCodexNativeProjectInstructionSourceIdentities({
+        cwd,
+        config: { project_root_markers: [".patch-root"] },
+        readNativeConfig: async () => ({
+          config: { project_root_markers: [".managed-root"] },
+          layers: [
+            {
+              name: { type: "legacyManagedConfigTomlFromFile" },
+              config: { project_root_markers: [".managed-root"] },
+            },
+          ],
+        }),
+      });
+
+    await expect(
+      captureCodexNativeProjectInstructions({
+        cwd,
+        instructionSources: [instructions],
+        sourceIdentitiesBeforeRequest,
+      }),
+    ).resolves.toContain("managed precedence authority");
   });
 
   it("probes only Codex project-document candidates instead of unrelated ancestor files", async () => {

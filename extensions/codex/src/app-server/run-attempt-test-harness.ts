@@ -633,7 +633,7 @@ export function createStartedThreadHarness(
       return { requirements: null };
     }
     if (method === "config/read") {
-      return { config: {}, origins: {} };
+      return { config: {}, origins: {}, layers: [] };
     }
     if (method === "thread/start") {
       return threadStartResult();
@@ -659,7 +659,7 @@ export function createResumeHarness(
         return { requirements: null };
       }
       if (method === "config/read") {
-        return { config: {}, origins: {} };
+        return { config: {}, origins: {}, layers: [] };
       }
       if (method === "thread/resume") {
         // Resume must echo the requested thread; a different id is rejected as

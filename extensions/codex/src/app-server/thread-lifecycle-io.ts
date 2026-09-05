@@ -180,6 +180,12 @@ export async function resumeExistingCodexThread(
             cwd: params.cwd,
             config: resumeParams.config,
             environmentSelection: params.environmentSelection,
+            readNativeConfig: (cwd) =>
+              params.client.request(
+                "config/read",
+                { cwd, includeLayers: true },
+                { signal: params.signal },
+              ),
           }),
         )
       : undefined;
@@ -535,6 +541,12 @@ export async function startFreshCodexThread(
           cwd: params.cwd,
           config: startParams.config,
           environmentSelection: params.environmentSelection,
+          readNativeConfig: (cwd) =>
+            params.client.request(
+              "config/read",
+              { cwd, includeLayers: true },
+              { signal: params.signal },
+            ),
         }),
       )
     : undefined;
@@ -747,3 +759,5 @@ export async function startFreshCodexThread(
     },
   };
 }
+
+/* oxlint-disable max-lines -- TODO: split this grandfathered oversized file. */

@@ -33,16 +33,50 @@ export async function snapshotCodexNativeProjectInstructionSourceIdentities(para
   cwd: string;
   config?: JsonObject;
   environmentSelection?: readonly CodexTurnEnvironmentParams[];
+  readNativeConfig?: (cwd: string) => Promise<unknown>;
 }): Promise<CodexNativeProjectInstructionSourceIdentitySnapshot> {
   const environmentCwds = resolveCodexProjectInstructionEnvironmentCwds(params);
-  const candidateFilenames = resolveCodexProjectDocCandidateFilenames(params.config);
-  const rootMarkers = resolveCodexProjectRootMarkers(params.config);
+  const nativeConfigResponse = await params.readNativeConfig?.(path.resolve(params.cwd));
+  let nativeConfig: JsonObject | undefined;
+  let nativeConfigLayers: unknown[] | undefined;
+  if (nativeConfigResponse !== undefined) {
+    if (
+      !isJsonObject(nativeConfigResponse) ||
+      !isJsonObject(nativeConfigResponse.config) ||
+      !Array.isArray(nativeConfigResponse.layers)
+    ) {
+      throw new Error("Codex config/read returned an invalid effective project-doc config");
+    }
+    nativeConfig = nativeConfigResponse.config;
+    nativeConfigLayers = nativeConfigResponse.layers;
+  }
+  // Codex resolves one effective Config from the thread's primary cwd and uses
+  // that same Config while loading project documents in every selected environment.
+  const effectiveConfig = mergeCodexThreadConfigs(nativeConfig, params.config);
+  const candidateFilenames = new Set([
+    ...resolveCodexProjectDocCandidateFilenames(nativeConfig),
+    ...resolveCodexProjectDocCandidateFilenames(effectiveConfig),
+  ]);
+  const nativeRootMarkerConfig =
+    nativeConfigLayers === undefined
+      ? params.config
+      : resolveCodexNativeProjectRootMarkerConfig(nativeConfigLayers);
+  const rootMarkerSets = [resolveCodexProjectRootMarkers(nativeRootMarkerConfig)];
+  if (
+    nativeConfigLayers !== undefined &&
+    params.config &&
+    Object.hasOwn(params.config, "project_root_markers")
+  ) {
+    rootMarkerSets.push(resolveCodexProjectRootMarkers(params.config));
+  }
   const candidatePaths = new Set<string>();
   for (const cwd of environmentCwds) {
-    const directories = await resolveCodexProjectDocSearchDirectories(cwd, rootMarkers);
-    for (const directory of directories) {
-      for (const filename of candidateFilenames) {
-        candidatePaths.add(path.resolve(directory, filename));
+    for (const rootMarkers of dedupeStringLists(rootMarkerSets)) {
+      const directories = await resolveCodexProjectDocSearchDirectories(cwd, rootMarkers);
+      for (const directory of directories) {
+        for (const filename of candidateFilenames) {
+          candidatePaths.add(path.resolve(directory, filename));
+        }
       }
     }
   }
@@ -63,6 +97,10 @@ export async function snapshotCodexNativeProjectInstructionSourceIdentities(para
     },
   );
   return { identities, environmentCwds };
+}
+
+function isJsonObject(value: unknown): value is JsonObject {
+  return typeof value === "object" && value !== null && !Array.isArray(value);
 }
 
 /**
@@ -179,6 +217,47 @@ function resolveCodexProjectRootMarkers(config?: JsonObject): string[] {
     return [...CODEX_NATIVE_PROJECT_ROOT_MARKERS];
   }
   return [...configured];
+}
+
+function resolveCodexNativeProjectRootMarkerConfig(
+  nativeConfigLayers: readonly unknown[],
+): JsonObject | undefined {
+  // config/read layers are highest-precedence first. Codex intentionally
+  // excludes project layers when resolving the directory-search boundary.
+  for (const layer of nativeConfigLayers) {
+    if (!isJsonObject(layer)) {
+      throw new Error("Codex config/read returned an invalid project-doc config layer");
+    }
+    if (layer.disabledReason !== undefined && layer.disabledReason !== null) {
+      if (typeof layer.disabledReason !== "string") {
+        throw new Error("Codex config/read returned an invalid disabled project-doc config layer");
+      }
+      continue;
+    }
+    if (
+      !isJsonObject(layer.name) ||
+      typeof layer.name.type !== "string" ||
+      !isJsonObject(layer.config)
+    ) {
+      throw new Error("Codex config/read returned an invalid project-doc config layer");
+    }
+    if (layer.name.type !== "project" && Object.hasOwn(layer.config, "project_root_markers")) {
+      return layer.config;
+    }
+  }
+  return undefined;
+}
+
+function dedupeStringLists(values: readonly string[][]): string[][] {
+  const seen = new Set<string>();
+  return values.filter((value) => {
+    const key = JSON.stringify(value);
+    if (seen.has(key)) {
+      return false;
+    }
+    seen.add(key);
+    return true;
+  });
 }
 
 async function resolveCodexProjectDocSearchDirectories(

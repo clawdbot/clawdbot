@@ -5248,6 +5248,79 @@ describe("runCodexAppServerAttempt", () => {
     expect(resumeRequest?.developerInstructions).not.toContain(replacementGuidance);
   });
 
+  it("captures a fallback selected by effective native config on a local start", async () => {
+    const { sessionFile, workspaceDir } = createRunPaths();
+    const nestedDir = path.join(workspaceDir, "packages", "worker");
+    const workflowPath = path.join(workspaceDir, "WORKFLOW.md");
+    const capturedGuidance = "Freeze the native-configured fallback for this thread.";
+    await fs.mkdir(nestedDir, { recursive: true });
+    await fs.writeFile(path.join(workspaceDir, ".workspace-root"), "");
+    await fs.writeFile(workflowPath, capturedGuidance);
+    const harness = createStartedThreadHarness(async (method) => {
+      if (method === "config/read") {
+        return {
+          config: {
+            project_doc_fallback_filenames: ["WORKFLOW.md"],
+            project_root_markers: [".workspace-root"],
+          },
+          origins: {},
+          layers: [
+            {
+              name: { type: "user" },
+              config: {
+                project_doc_fallback_filenames: ["WORKFLOW.md"],
+                project_root_markers: [".workspace-root"],
+              },
+            },
+          ],
+        };
+      }
+      if (method === "thread/start") {
+        return threadStartResult("thread-native-config-fallback", {
+          cwd: nestedDir,
+          instructionSources: [workflowPath],
+        });
+      }
+      return undefined;
+    });
+    const params = createParams(sessionFile, workspaceDir);
+    params.cwd = nestedDir;
+    setAgentWorkspaceForTest(params, workspaceDir);
+
+    const run = runCodexAppServerAttempt(params);
+    await harness.waitForMethod("turn/start");
+    await harness.completeTurn({ threadId: "thread-native-config-fallback", turnId: "turn-1" });
+    await run;
+
+    expect(harness.requests.find((request) => request.method === "config/read")?.params).toEqual({
+      cwd: nestedDir,
+      includeLayers: true,
+    });
+    await expect(readCodexAppServerBinding(sessionFile)).resolves.toMatchObject({
+      agentWorkspaceDeveloperInstructions: expect.stringContaining(capturedGuidance),
+    });
+  });
+
+  it("rejects malformed effective native config before starting a local thread", async () => {
+    const { sessionFile, workspaceDir } = createRunPaths();
+    await fs.mkdir(workspaceDir, { recursive: true });
+    const harness = createStartedThreadHarness(async (method) => {
+      if (method === "config/read") {
+        return { config: {}, origins: {} };
+      }
+      if (method === "thread/start") {
+        throw new Error("unsafe thread/start reached");
+      }
+      return undefined;
+    });
+
+    await expect(runCodexAppServerAttempt(createParams(sessionFile, workspaceDir))).rejects.toThrow(
+      "invalid effective project-doc config",
+    );
+    expect(harness.requests.map((request) => request.method)).not.toContain("thread/start");
+    await expect(readCodexAppServerBinding(sessionFile)).resolves.toBeUndefined();
+  });
+
   it("rejects a selected instruction source mutated while the native thread starts", async () => {
     const { sessionFile, workspaceDir } = createRunPaths();
     const agentsPath = path.join(workspaceDir, "AGENTS.md");

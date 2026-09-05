@@ -10,8 +10,8 @@ import codexPlugin from "../extensions/codex/index.js";
 import {
   CODEX_FROZEN_EMPTY_PROJECT_DOCS_AUTHORITY,
   CODEX_UNAVAILABLE_PROJECT_DOCS_AUTHORITY,
-} from "../extensions/codex/src/app-server/session-binding.js";
-import { createCanonicalForkFixtureForTest } from "../extensions/codex/test-api.js";
+  createCanonicalForkFixtureForTest,
+} from "../extensions/codex/test-api.js";
 import openaiPlugin from "../extensions/openai/index.js";
 import {
   prepareAgentRunAdmission,

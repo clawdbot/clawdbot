@@ -27,6 +27,10 @@ import {
 } from "./src/app-server/thread-lifecycle.js";
 
 export { CODEX_APP_SERVER_VERSION } from "./src/app-server/version.js";
+export {
+  CODEX_FROZEN_EMPTY_PROJECT_DOCS_AUTHORITY,
+  CODEX_UNAVAILABLE_PROJECT_DOCS_AUTHORITY,
+} from "./src/app-server/session-binding.js";
 
 /** Keeps host integration tests on the plugin's test boundary without exposing runtime internals. */
 export async function createCodexSessionInitializationFixtureForTest(params: {

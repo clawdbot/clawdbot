@@ -2833,6 +2833,12 @@ describe("Codex plugin binding recovery", () => {
     const stateStore = createCodexTestBindingStateStore();
     const bindingStore = createCodexAppServerBindingStore(stateStore);
     const request = vi.fn(async (method: string) => {
+      if (method === "config/read") {
+        return { config: {}, origins: {}, layers: [] };
+      }
+      if (method === "configRequirements/read") {
+        return { requirements: null };
+      }
       if (method === "thread/start") {
         return {
           ...threadStartResult("thread-remote-instructions"),
@@ -4222,6 +4228,12 @@ describe("Codex app-server supervised branch lifecycle", () => {
       if (method === "thread/fork") {
         return nativeThreadResult(probeThreadId, "native-effective", "native-provider");
       }
+      if (method === "config/read") {
+        return { config: {}, origins: {}, layers: [] };
+      }
+      if (method === "configRequirements/read") {
+        return { requirements: null };
+      }
       if (method === "thread/start") {
         return {
           ...nativeThreadResult(finalThreadId, "native-effective", "native-provider"),
@@ -4262,17 +4274,20 @@ describe("Codex app-server supervised branch lifecycle", () => {
     const materialized = await startOrResumeThread(commonParams);
 
     expect(request.mock.calls.map(([method]) => method)).toEqual([
+      "config/read",
+      "configRequirements/read",
       "thread/read",
       "thread/fork",
       "thread/unsubscribe",
+      "config/read",
       "thread/start",
       "thread/inject_items",
     ]);
-    expect(request.mock.calls[0]?.[1]).toEqual({
+    expect(request.mock.calls[2]?.[1]).toEqual({
       threadId: sourceThreadId,
       includeTurns: true,
     });
-    const forkParams = request.mock.calls[1]?.[1] as Record<string, unknown>;
+    const forkParams = request.mock.calls[3]?.[1] as Record<string, unknown>;
     expect(forkParams).toMatchObject({
       threadId: sourceThreadId,
       lastTurnId,
@@ -4330,7 +4345,7 @@ describe("Codex app-server supervised branch lifecycle", () => {
     expect(
       JSON.stringify(request.mock.calls.find(([method]) => method === "thread/inject_items")?.[1]),
     ).not.toContain("secret-tool");
-    expect(request.mock.calls[2]?.[1]).toEqual({ threadId: probeThreadId });
+    expect(request.mock.calls[4]?.[1]).toEqual({ threadId: probeThreadId });
     expect(materialized).toMatchObject({
       threadId: finalThreadId,
       model: "native-effective",
@@ -4375,18 +4390,22 @@ describe("Codex app-server supervised branch lifecycle", () => {
 
     expect(request.mock.calls.map(([method]) => method)).toEqual([
       "thread/read",
+      "config/read",
+      "configRequirements/read",
       "thread/read",
       "thread/resume",
       "thread/inject_items",
     ]);
     expect(request.mock.calls[0]?.[1]).toEqual({ threadId: finalThreadId, includeTurns: false });
-    expect(request.mock.calls[2]?.[1]).not.toHaveProperty("model");
-    expect(request.mock.calls[2]?.[1]).not.toHaveProperty("modelProvider");
-    expect(request.mock.calls[2]?.[1]).toMatchObject({
+    expect(request.mock.calls[4]?.[1]).not.toHaveProperty("model");
+    expect(request.mock.calls[4]?.[1]).not.toHaveProperty("modelProvider");
+    expect(request.mock.calls[4]?.[1]).toMatchObject({
       developerInstructions: expect.stringContaining(capturedGuidance),
       config: { project_doc_max_bytes: 0 },
     });
-    expect(request.mock.calls[3]?.[1]).toMatchObject({
+    expect(
+      request.mock.calls.find(([method]) => method === "thread/inject_items")?.[1],
+    ).toMatchObject({
       threadId: finalThreadId,
       items: [
         {
@@ -4642,7 +4661,9 @@ describe("Codex app-server supervised branch lifecycle", () => {
       developerInstructions: agentWorkspaceDeveloperInstructions,
       config: { project_doc_max_bytes: 0 },
     });
-    expect(request.mock.calls[3]?.[1]).toMatchObject({
+    expect(
+      request.mock.calls.find(([method]) => method === "thread/inject_items")?.[1],
+    ).toMatchObject({
       threadId: finalThreadId,
       items: [
         {

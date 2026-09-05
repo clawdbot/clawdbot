@@ -271,6 +271,12 @@ export async function materializePendingSupervisionBranch(
             cwd: params.cwd,
             config: startParams.config,
             environmentSelection: params.environmentSelection,
+            readNativeConfig: (cwd) =>
+              params.client.request(
+                "config/read",
+                { cwd, includeLayers: true },
+                { signal: params.signal },
+              ),
           }),
         )
       : undefined;
