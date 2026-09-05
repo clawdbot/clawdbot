@@ -437,7 +437,7 @@ export async function replacePreparedModelRuntimeSnapshotAfterCatalogGenerationM
     adoptAuthPublication: (replacement) => authPublication.adopt(replacement.gateId),
     commitReplacement: (replacement) => {
       authPublication.commitAdopted(replacement, owners, () => {
-        replyDispatchPublication.rebuild(owners.values());
+        replyDispatchPublication.replacePublished(owners.values());
         pendingModelRuntimeReplacement = undefined;
       });
       notifyPreparedModelRuntimePublication({ phase: "published" });

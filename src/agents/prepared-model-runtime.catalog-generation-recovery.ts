@@ -69,11 +69,7 @@ export class PreparedModelCatalogGenerationRecoveryOwner {
     notifyPreparedModelRuntimePublication({ phase: "invalidated" });
 
     const recovery = dependencies.enqueuePublication(async () => {
-      if (
-        !isReplacementCurrent() ||
-        dependencies.owners.get(key) !== owner ||
-        owner.snapshot !== snapshot
-      ) {
+      if (!isReplacementCurrent() || dependencies.owners.get(key) !== owner) {
         return;
       }
       await publishPreparedModelRuntimeOwnerBatch({

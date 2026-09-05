@@ -11,6 +11,7 @@ import {
 } from "../test-utils/openclaw-test-state.js";
 import { PreparedModelRuntimeAuthPublicationOwner } from "./prepared-model-runtime-auth-publication.js";
 import {
+  advancePreparedModelRuntimeConfig,
   getPreparedModelRuntimeSnapshot,
   loadPublishedGatewayReplyDispatchRuntime,
   prepareModelRuntimeSnapshot,
@@ -129,6 +130,84 @@ describe("prepared model runtime catalog recovery", () => {
     } finally {
       resolveSpy.mockRestore();
     }
+  });
+
+  it("continues queued recovery after a model-neutral config stamp", async () => {
+    mocks.configuredAgentIds = ["default", "secondary"];
+    const config = {};
+    await refreshPreparedModelRuntimeSnapshots(config, { gatewayLifecycle: true });
+    const defaultInput = {
+      agentId: "default",
+      config,
+      agentDir: "/tmp/unused-agent",
+      inheritedAuthDir: "/tmp/unused-agent",
+      workspaceDir: "/tmp/unused-workspace",
+    };
+    const initialDefault = getPreparedModelRuntimeSnapshot(defaultInput);
+    expect(initialDefault).toBeDefined();
+    if (!initialDefault) {
+      throw new Error("default prepared model runtime owner was not published");
+    }
+
+    let releaseAuthBuild: (() => void) | undefined;
+    const authBuildBlocked = new Promise<void>((resolve) => {
+      releaseAuthBuild = resolve;
+    });
+    mocks.ensureOpenClawModelsJson.mockImplementationOnce(async (...args: unknown[]) => {
+      await authBuildBlocked;
+      return { agentDir: String(args[1]), wrote: false };
+    });
+    mocks.mutationListener?.({
+      agentDir: "/tmp/configured-secondary",
+      affectsInheritedStores: false,
+    });
+    await vi.waitFor(() => expect(mocks.ensureOpenClawModelsJson).toHaveBeenCalledTimes(3));
+
+    const recovery =
+      replacePreparedModelRuntimeSnapshotAfterCatalogGenerationMismatch(initialDefault);
+    const stampedConfig = { logging: { level: "debug" as const } };
+    advancePreparedModelRuntimeConfig(stampedConfig);
+    releaseAuthBuild?.();
+
+    await expect(recovery).resolves.toBe(true);
+    await expect(
+      loadPublishedGatewayReplyDispatchRuntime({ agentId: "default" }),
+    ).resolves.toMatchObject({ agentId: "default", config: stampedConfig });
+  });
+
+  it("publishes recovered dispatch while an unrelated owner remains degraded", async () => {
+    mocks.configuredAgentIds = ["default", "secondary"];
+    const config = {};
+    await refreshPreparedModelRuntimeSnapshots(config, { gatewayLifecycle: true });
+    const defaultInput = {
+      agentId: "default",
+      config,
+      agentDir: "/tmp/unused-agent",
+      inheritedAuthDir: "/tmp/unused-agent",
+      workspaceDir: "/tmp/unused-workspace",
+    };
+    const initialDefault = getPreparedModelRuntimeSnapshot(defaultInput);
+    expect(initialDefault).toBeDefined();
+    if (!initialDefault) {
+      throw new Error("default prepared model runtime owner was not published");
+    }
+
+    mocks.ensureOpenClawModelsJson.mockRejectedValueOnce(new Error("secondary auth failed"));
+    mocks.mutationListener?.({
+      agentDir: "/tmp/configured-secondary",
+      affectsInheritedStores: false,
+    });
+    await vi.waitFor(() => expect(mocks.warn).toHaveBeenCalledOnce());
+
+    await expect(
+      replacePreparedModelRuntimeSnapshotAfterCatalogGenerationMismatch(initialDefault),
+    ).resolves.toBe(true);
+    await expect(
+      loadPublishedGatewayReplyDispatchRuntime({ agentId: "default" }),
+    ).resolves.toMatchObject({ agentId: "default" });
+    await expect(
+      loadPublishedGatewayReplyDispatchRuntime({ agentId: "secondary" }),
+    ).rejects.toThrow("prepared reply dispatch runtime owner was not published for secondary");
   });
 
   it("defers to a config replacement that supersedes recovery", async () => {
