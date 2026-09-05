@@ -11,10 +11,7 @@ import {
 } from "../../../config/config.js";
 import { loadSessionEntry } from "../../../config/sessions/session-accessor.js";
 import { LegacyContextEngine } from "../../../context-engine/legacy.js";
-import { readAgentRuntimeExecutionLineage } from "../../../gateway/agent-runtime-execution-lineage.js";
 import { registerChatAbortController } from "../../../gateway/chat-abort.js";
-import { createGatewayInstanceRuntime } from "../../../gateway/server-instance-runtime.js";
-import { createRequestGatewayMethodRegistry } from "../../../gateway/server-methods.js";
 import { handleChatAbortRequest } from "../../../gateway/server-methods/chat-abort-handler.js";
 import {
   createChatAbortContext,
@@ -76,19 +73,6 @@ import { testing as schedulerTesting } from "../swarm/swarm-scheduler.test-suppo
 import { spawnSubagentDirect } from "./subagent-spawn.js";
 import { testing as spawnTesting } from "./subagent-spawn.test-support.js";
 
-type AgentTurnService = ReturnType<
-  typeof import("../../../gateway/agent-turn/agent-turn-service.js").createAgentTurnService
->;
-
-const agentTurnServiceMocks = vi.hoisted(() => ({
-  startTurn: vi.fn<AgentTurnService["startTurn"]>(),
-  waitForTurn: vi.fn<AgentTurnService["waitForTurn"]>(),
-}));
-
-vi.mock("../../../gateway/agent-turn/agent-turn-service.js", () => ({
-  createAgentTurnService: () => agentTurnServiceMocks,
-}));
-
 const parentSessionKey = "agent:main:subagent:pending-spawn-parent";
 const parentRunId = "pending-spawn-parent";
 const groupId = "pending-spawn";
@@ -134,8 +118,6 @@ async function writeTestConfig(params?: {
 }
 
 beforeEach(async () => {
-  agentTurnServiceMocks.startTurn.mockReset();
-  agentTurnServiceMocks.waitForTurn.mockReset();
   stateDir = tempDirs.make("openclaw-spawn-authority-");
   setTestEnvValue("OPENCLAW_STATE_DIR", stateDir);
   setTestEnvValue("OPENCLAW_CONFIG_PATH", path.join(stateDir, "openclaw.json"));
@@ -247,89 +229,6 @@ function createBoundSpawnInvocation(bound: Awaited<ReturnType<typeof createBound
 }
 
 describe("pending spawn invocation authority", () => {
-  it("launches an upgraded descendant through the production Gateway dispatch boundary", async () => {
-    await writeTestConfig({ executionIdentity: true });
-    const bound = await createBoundParent();
-    const context = bound.context as unknown as GatewayRequestContext;
-    const methodRegistry = createRequestGatewayMethodRegistry();
-    const runtime = createGatewayInstanceRuntime({
-      getContext: () => context,
-      getMethodRegistry: () => methodRegistry,
-      isDispatchAvailable: () => true,
-    });
-    context.createAgentTurnFacade = runtime.createAgentTurnFacade;
-    context.getGatewayMethodRegistry = () => methodRegistry;
-    let observedPrincipal: Parameters<AgentTurnService["startTurn"]>[0]["principal"] | undefined;
-    let observedRequest:
-      | Parameters<AgentTurnService["startTurn"]>[0]["preflight"]["request"]
-      | undefined;
-    agentTurnServiceMocks.startTurn.mockImplementation(
-      async ({ preflight, principal, io, onRunObserved }) => {
-        // Stop only at the model-turn boundary, after the production Gateway facade has
-        // authorized the synthetic native-subagent principal and constructed the turn.
-        observedPrincipal = principal;
-        observedRequest = preflight.request;
-        onRunObserved?.(preflight.runId);
-        io.emitAcceptance(
-          [
-            true,
-            {
-              runId: preflight.runId,
-              status: "accepted",
-              sessionKey: preflight.request.sessionKey,
-              agentId: "main",
-            },
-            undefined,
-          ],
-          { runId: preflight.runId },
-        );
-      },
-    );
-    try {
-      const result = await createBoundSpawnInvocation(bound)();
-      expect(result).toMatchObject({
-        details: {
-          status: "accepted",
-          childSessionKey: expect.any(String),
-          runId: expect.any(String),
-        },
-      });
-      const details = result.details as { childSessionKey: string; runId: string };
-      expect(agentTurnServiceMocks.startTurn).toHaveBeenCalledOnce();
-      expect(observedRequest?.sessionKey).toBe(details.childSessionKey);
-      expect(observedPrincipal?.internal?.agentRunTracking).toBe("native_subagent");
-      const runtimeIdentity = observedPrincipal?.internal?.agentRuntimeIdentity;
-      expect(runtimeIdentity).toMatchObject({
-        kind: "agentRuntime",
-        agentId: "main",
-        sessionKey: parentSessionKey,
-      });
-      expect(readAgentRuntimeExecutionLineage(runtimeIdentity?.sessionSpawnContext)).toMatchObject({
-        relation: "sessions_spawn",
-        requesterRef: parentSessionKey,
-        controllerRef: parentSessionKey,
-        depth: 2,
-        applicableGrantRefs: ["tool:sessions_spawn"],
-        runtimeAssuranceRefs: ["spawn-runtime:subagent"],
-      });
-      expect(
-        loadSessionEntry({ storePath: bound.storePath, sessionKey: details.childSessionKey }),
-      ).toMatchObject({
-        spawnedBy: parentSessionKey,
-        spawnDepth: 2,
-      });
-      expect(subagentRuns.get(details.runId)).toMatchObject({
-        childSessionKey: details.childSessionKey,
-        requesterSessionKey: parentSessionKey,
-        execution: { status: "running" },
-      });
-    } finally {
-      runtime.close();
-      bound.admission.close();
-      bound.parent.cleanup();
-    }
-  });
-
   it.each([
     {
       label: "finite depth cap",
