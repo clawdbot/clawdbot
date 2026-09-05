@@ -505,6 +505,7 @@ are Gateway settings and remain available in every browser.
 
 <AccordionGroup>
   <Accordion title="Chat and Talk">
+    - Subagent transcripts hide author avatars in both the main chat view and task details; sender names remain visible.
     - Chat with the model via Gateway WS (`chat.history`, `chat.send`, `chat.abort`, `chat.inject`). Archived sessions keep the composer disabled and show a banner with an **Unarchive** action before the conversation can continue.
     - Opening or refreshing chat requests up to 80 recent messages. Each background warming pass reads at most two inactive sessions sequentially, with up to 20 messages per session, after presented chat loads finish. Automatic warming waits for a visible conversation on the current page; dashboard-only views still warm the session you hover or keyboard-focus. Scrolling back requests up to 1,000 older messages per page and prefetches the next page. Per-message text caps and response-byte limits can reduce these counts.
     - A previous run's error banner clears when Chat adopts a new run or history confirms a newer successful run. Retiring the banner does not erase recorded diagnostics. A late error from the same run can remain visible beside its delivered answer; reconnecting or refreshing metadata alone does not establish recovery.
