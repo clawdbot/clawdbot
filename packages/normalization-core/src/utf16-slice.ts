@@ -12,6 +12,25 @@ function isLowSurrogate(codeUnit: number): boolean {
   return codeUnit >= 0xdc00 && codeUnit <= 0xdfff;
 }
 
+/** Replaces unpaired UTF-16 surrogates while preserving valid surrogate pairs. */
+export function toWellFormedUtf16(input: string): string {
+  let output = "";
+  for (let index = 0; index < input.length; index += 1) {
+    const codeUnit = input.charCodeAt(index);
+    if (isHighSurrogate(codeUnit)) {
+      if (index + 1 < input.length && isLowSurrogate(input.charCodeAt(index + 1))) {
+        output += input.slice(index, index + 2);
+        index += 1;
+      } else {
+        output += "\uFFFD";
+      }
+      continue;
+    }
+    output += isLowSurrogate(codeUnit) ? "\uFFFD" : input[index];
+  }
+  return output;
+}
+
 /** Moves a chunk boundary away from the middle of a UTF-16 surrogate pair. */
 export function avoidTrailingHighSurrogateBreak(text: string, start: number, end: number): number {
   if (
