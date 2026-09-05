@@ -1,4 +1,3 @@
-import type { SDKStatusMessage } from "@anthropic-ai/claude-agent-sdk";
 import { describe, expect, it } from "vitest";
 import { buildAnthropicCliBackend } from "./cli-backend.js";
 
@@ -26,7 +25,7 @@ function parseResult(result: string) {
 }
 
 describe("Claude CLI output validation", () => {
-  it("projects Claude SDK compaction status lifecycle without inferring from the boundary", () => {
+  it("projects Claude CLI compaction status lifecycle without inferring from the boundary", () => {
     const backend = buildAnthropicCliBackend();
     const parseLifecycle = (event: unknown) =>
       backend.parseJsonlLifecycleEvent?.(JSON.stringify(event), {
@@ -34,7 +33,7 @@ describe("Claude CLI output validation", () => {
         backend: backend.config,
       });
 
-    const sdkCompactionEvents = [
+    const compactionEvents = [
       {
         type: "system",
         subtype: "status",
@@ -58,18 +57,18 @@ describe("Claude CLI output validation", () => {
         uuid: "00000000-0000-4000-8000-000000000004",
         session_id: "00000000-0000-4000-8000-000000000002",
       },
-    ] satisfies SDKStatusMessage[];
+    ];
 
-    expect(parseLifecycle(sdkCompactionEvents[0])).toEqual({
+    expect(parseLifecycle(compactionEvents[0])).toEqual({
       kind: "compaction",
       phase: "start",
     });
-    expect(parseLifecycle(sdkCompactionEvents[1])).toEqual({
+    expect(parseLifecycle(compactionEvents[1])).toEqual({
       kind: "compaction",
       phase: "end",
       completed: true,
     });
-    expect(parseLifecycle(sdkCompactionEvents[2])).toEqual({
+    expect(parseLifecycle(compactionEvents[2])).toEqual({
       kind: "compaction",
       phase: "end",
       completed: false,

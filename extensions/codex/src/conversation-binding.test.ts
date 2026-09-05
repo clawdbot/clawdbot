@@ -4076,7 +4076,7 @@ describe("codex conversation binding", () => {
         expect(request).toHaveBeenCalledWith(
           "turn/interrupt",
           { threadId: "thread-1", turnId: "turn-1" },
-          { timeoutMs: 5_000 },
+          { timeoutMs: 5_000, signal: expect.any(AbortSignal) },
         );
         expect(request.mock.calls.map(([method]) => method)).toEqual([
           "turn/start",
@@ -4158,7 +4158,7 @@ describe("codex conversation binding", () => {
         expect(request).toHaveBeenCalledWith(
           "turn/interrupt",
           { threadId: "thread-1", turnId: "turn-1" },
-          { timeoutMs: 5_000 },
+          { timeoutMs: 5_000, signal: expect.any(AbortSignal) },
         );
         if (acknowledged) {
           expect(readCodexConversationActiveTurn(identity)).toMatchObject({

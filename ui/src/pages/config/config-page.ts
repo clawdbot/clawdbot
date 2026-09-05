@@ -33,7 +33,11 @@ import {
 import { startThemeTransition } from "../../app/theme-transition.ts";
 import { resolveTheme, type ThemeMode, type ThemeName } from "../../app/theme.ts";
 import type { TypefaceId } from "../../app/typography.ts";
-import { confirmAndStartUpdate, type UpdateProgress } from "../../app/update-confirmation.ts";
+import {
+  confirmAndStartUpdate,
+  createUpdateProgressWatcher,
+  type UpdateProgress,
+} from "../../app/update-confirmation.ts";
 import { CONTROL_UI_BUILD_INFO } from "../../build-info.ts";
 import {
   loadStoredHiddenSessionCatalogIds,
@@ -1048,23 +1052,8 @@ export class ConfigPage extends OpenClawLightDomElement {
 
   // The update dialog outlives this page and the connection, so it reads live
   // snapshots rather than the values captured during a render.
-  private readonly watchUpdateProgress = (listener: (progress: UpdateProgress) => void) => {
-    const emit = () => {
-      const banner = this.context.overlays.snapshot.updateStatusBanner;
-      listener({
-        busy: this.isUpdateBusy(),
-        connected: this.context.gateway.snapshot.phase === "connected",
-        failure: banner && banner.tone !== "info" ? banner.text : null,
-      });
-    };
-    const stopOverlays = this.context.overlays.subscribe(emit);
-    const stopGateway = this.context.gateway.subscribe(emit);
-    emit();
-    return () => {
-      stopOverlays();
-      stopGateway();
-    };
-  };
+  private readonly watchUpdateProgress = (listener: (progress: UpdateProgress) => void) =>
+    createUpdateProgressWatcher(this.context)(listener);
 
   private isCuratedConfigMutationDisabled(): boolean {
     const runtimeState = this.context.runtimeConfig.state;
@@ -1100,7 +1089,8 @@ export class ConfigPage extends OpenClawLightDomElement {
         heldUpdateCampaignId: overlaySnapshot.heldUpdateCampaignId,
         updateAvailable: overlaySnapshot.updateAvailable,
         statusBanner: overlaySnapshot.updateStatusBanner,
-        recordedAttempt: overlaySnapshot.recordedUpdateAttempt,
+        run: overlaySnapshot.updateRun,
+        connected: gatewaySnapshot.phase === "connected",
         configBusy: this.isCuratedConfigMutationDisabled(),
         canAdmin,
         canUpdate: canCallGatewayMethod(gatewaySnapshot, "update.run", "operator.admin"),
@@ -1116,6 +1106,8 @@ export class ConfigPage extends OpenClawLightDomElement {
           void confirmAndStartUpdate({
             startGatewayUpdate: () => void this.context.overlays.runUpdate(),
             watchUpdateProgress: this.watchUpdateProgress,
+            onCheckStatus: () => this.context.overlays.refreshUpdateStatus(),
+            onAcknowledge: () => this.context.overlays.acknowledgeUpdateRun(),
             updateAvailable: overlaySnapshot.updateAvailable,
             updateSchedule: overlaySnapshot.updateSchedule,
             // This row has no native-decline listener, so a handoff the Mac app

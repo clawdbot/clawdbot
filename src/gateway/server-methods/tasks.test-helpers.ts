@@ -1,7 +1,7 @@
 import { expectDefined } from "@openclaw/normalization-core";
 import type { TaskRecord } from "../../tasks/task-registry.types.js";
 import { tasksHandlers } from "./tasks.js";
-import type { GatewayClient, RespondFn } from "./types.js";
+import type { GatewayClient, GatewayRequestContext, RespondFn } from "./types.js";
 
 type TaskResponsePayload = {
   tasks?: Array<Record<string, unknown>>;
@@ -73,7 +73,7 @@ export async function runTaskHandler(
   params: Record<string, unknown>,
   config: Record<string, unknown> = {},
   client: GatewayClient | null = null,
-  context = createContext(config),
+  context: GatewayRequestContext = createContext(config),
 ) {
   const { calls, respond } = captureRespond();
   await expectDefined(

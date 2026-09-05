@@ -206,8 +206,18 @@ export function createInstalledPluginEnabledPredicate(
 ): (pluginId: string) => boolean {
   let source: PluginActivationConfigSource | undefined;
   let bundledSource: PluginActivationConfigSource | undefined;
+  let records: Map<string, InstalledPluginIndexRecord> | undefined;
   return (pluginId) => {
-    const record = plugins.find((plugin) => plugin.pluginId === pluginId);
+    if (!records) {
+      records = new Map();
+      // Inventory is fixed for this operation; retain the first duplicate like find().
+      for (const entry of plugins) {
+        if (!records.has(entry.pluginId)) {
+          records.set(entry.pluginId, entry);
+        }
+      }
+    }
+    const record = records.get(pluginId);
     if (!record || !config) {
       return record?.enabled ?? false;
     }

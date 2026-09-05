@@ -289,13 +289,14 @@ export function executeSqliteQuerySync<Row>(
   return executeCompiledSqliteQuerySync<Row>(db, query.compile());
 }
 
-/** Compile a fixed query once; bind fresh values through the normal sync executor on each call. */
-export function prepareSqliteQuerySync<Params, Row = unknown>(
-  db: DatabaseSync,
-  build: (
-    parameter: <Value extends SQLInputValue>(read: (params: Params) => Value) => RawBuilder<Value>,
-  ) => Compilable<Row>,
-): (params: Params) => QueryResult<Row> {
+type SqliteQueryBindingBuilder<Params, Row> = (
+  parameter: <Value extends SQLInputValue>(read: (params: Params) => Value) => RawBuilder<Value>,
+) => Compilable<Row>;
+
+/** Compile fixed SQL and fresh bindings without taking ownership of a native statement. */
+export function compileSqliteQueryBindings<Params, Row = unknown>(
+  build: SqliteQueryBindingBuilder<Params, Row>,
+) {
   const bindings = new Map<unknown, (params: Params) => SQLInputValue>();
   const compiled = build((read) => {
     const marker = Symbol("sqlite-query-parameter");
@@ -306,11 +307,24 @@ export function prepareSqliteQuerySync<Params, Row = unknown>(
     return kyselySql<ReturnType<typeof read>>`${marker}`;
   }).compile();
   const readers = compiled.parameters.map((value) => bindings.get(value) ?? (() => value));
+  return {
+    compiled,
+    // Keep bindings invocation-local: SQLite callbacks can re-enter the caller.
+    // SAFETY: Kysely bindings pass through unchanged; node:sqlite validates their runtime types.
+    bind: (params: Params) => readers.map((read) => read(params)) as SQLInputValue[],
+  };
+}
+
+/** Compile a fixed query once; bind fresh values through the normal sync executor on each call. */
+export function prepareSqliteQuerySync<Params, Row = unknown>(
+  db: DatabaseSync,
+  build: SqliteQueryBindingBuilder<Params, Row>,
+): (params: Params) => QueryResult<Row> {
+  const { compiled, bind } = compileSqliteQueryBindings(build);
   return (params) =>
     executeCompiledSqliteQuerySync(db, {
       ...compiled,
-      // Keep bindings invocation-local: SQLite callbacks can re-enter this runner.
-      parameters: readers.map((read) => read(params)),
+      parameters: bind(params),
     });
 }
 

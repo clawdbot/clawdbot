@@ -4,7 +4,6 @@ import path from "node:path";
 import type { DatabaseSync } from "node:sqlite";
 import { StringDecoder } from "node:string_decoder";
 import { gunzipSync, gzipSync } from "node:zlib";
-import { normalizeNullableString as normalizeObservedValue } from "@openclaw/normalization-core/string-coerce";
 import { normalizeUniqueStringEntries } from "@openclaw/normalization-core/string-normalization";
 import { sha256Hex } from "../infra/crypto-digest.js";
 import { openNodeSqliteDatabase } from "../infra/node-sqlite.js";
@@ -22,11 +21,14 @@ import {
   runOpenClawStateWriteTransaction,
   type OpenClawStateDatabase,
 } from "../state/openclaw-state-db.js";
-import { readDebugProxyCaptureBlob, readDebugProxyCaptureSessionEvents } from "./store-readonly.js";
+import {
+  readDebugProxyCaptureBlob,
+  readDebugProxyCaptureSessionEvents,
+  summarizeDebugProxyCaptureSessionCoverage,
+} from "./store-readonly.js";
 import type {
   CaptureBlobRecord,
   CaptureEventRecord,
-  CaptureObservedDimension,
   CaptureQueryPreset,
   CaptureQueryRow,
   CaptureSessionCoverageSummary,
@@ -180,26 +182,6 @@ function openPathBasedDebugProxyCaptureStore(
 
 function serializeJson(value: unknown): string | null {
   return value == null ? null : JSON.stringify(value);
-}
-
-// Metadata is optional and user/tool supplied, so parse defensively for coverage
-// summaries instead of assuming every event has valid JSON.
-function parseMetaJson(metaJson: unknown): Record<string, unknown> | null {
-  if (typeof metaJson !== "string" || metaJson.trim().length === 0) {
-    return null;
-  }
-  try {
-    const parsed = JSON.parse(metaJson) as unknown;
-    return parsed && typeof parsed === "object" ? (parsed as Record<string, unknown>) : null;
-  } catch {
-    return null;
-  }
-}
-
-function sortObservedCounts(counts: Map<string, number>): CaptureObservedDimension[] {
-  return [...counts.entries()]
-    .map(([value, count]) => ({ value, count }))
-    .toSorted((left, right) => right.count - left.count || left.value.localeCompare(right.value));
 }
 
 type SharedDebugProxyCaptureState = {
@@ -468,56 +450,7 @@ class DebugProxyCaptureStoreImpl {
   }
 
   summarizeSessionCoverage(sessionId: string): CaptureSessionCoverageSummary {
-    const rows = this.db
-      .prepare(
-        `SELECT host, meta_json AS metaJson
-         FROM capture_events
-         WHERE session_id = ?`,
-      )
-      .all(sessionId) as Array<{ host?: string | null; metaJson?: string | null }>;
-    const providers = new Map<string, number>();
-    const apis = new Map<string, number>();
-    const models = new Map<string, number>();
-    const hosts = new Map<string, number>();
-    const localPeers = new Map<string, number>();
-    let unlabeledEventCount = 0;
-    for (const row of rows) {
-      const meta = parseMetaJson(row.metaJson);
-      const provider = normalizeObservedValue(meta?.provider);
-      const api = normalizeObservedValue(meta?.api);
-      const model = normalizeObservedValue(meta?.model);
-      const host = normalizeObservedValue(row.host);
-      if (!provider && !api && !model) {
-        unlabeledEventCount += 1;
-      }
-      if (provider) {
-        providers.set(provider, (providers.get(provider) ?? 0) + 1);
-      }
-      if (api) {
-        apis.set(api, (apis.get(api) ?? 0) + 1);
-      }
-      if (model) {
-        models.set(model, (models.get(model) ?? 0) + 1);
-      }
-      if (host) {
-        hosts.set(host, (hosts.get(host) ?? 0) + 1);
-        // Local model/provider endpoints are useful to surface separately when
-        // debugging why cloud-provider labels are absent.
-        if (host.startsWith("127.0.0.1:") || host.startsWith("localhost:")) {
-          localPeers.set(host, (localPeers.get(host) ?? 0) + 1);
-        }
-      }
-    }
-    return {
-      sessionId,
-      totalEvents: rows.length,
-      unlabeledEventCount,
-      providers: sortObservedCounts(providers),
-      apis: sortObservedCounts(apis),
-      models: sortObservedCounts(models),
-      hosts: sortObservedCounts(hosts),
-      localPeers: sortObservedCounts(localPeers),
-    };
+    return summarizeDebugProxyCaptureSessionCoverage(this.db, sessionId);
   }
 
   readBlob(blobId: string): string | null {

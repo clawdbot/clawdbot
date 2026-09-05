@@ -2161,7 +2161,6 @@ openclaw-chat-session-rail {
 }
 
 :root[data-theme-mode="light"] .code-block,
-:root[data-theme-mode="light"] .list-item,
 :root[data-theme-mode="light"] .chip {
   background: var(--bg);
 }
@@ -2397,69 +2396,8 @@ openclaw-chat-session-rail {
   container-type: inline-size;
 }
 
-.list-item {
-  display: grid;
-  grid-template-columns: minmax(0, 1fr) minmax(200px, 260px);
-  gap: 16px;
-  align-items: start;
-  border: 1px solid var(--border);
-  border-radius: var(--radius-md);
-  padding: 12px;
-  background: var(--card);
-  transition: border-color var(--duration-fast) ease;
-}
-
-.list-item-clickable {
-  text-decoration: none;
-}
-
-.list-item-clickable:hover {
-  border-color: var(--border-strong);
-}
-
-.list-main {
-  display: grid;
-  gap: 4px;
-  min-width: 0;
-}
-
 .list-title {
   font-weight: 500;
-}
-
-.list-sub {
-  color: var(--muted);
-  font-size: 12px;
-}
-
-.list-meta {
-  text-align: right;
-  color: var(--muted);
-  font-size: 12px;
-  display: grid;
-  gap: 4px;
-  min-width: 200px;
-}
-
-.list-meta .btn {
-  padding: 6px 10px;
-}
-
-.list-meta .field input,
-.list-meta .field textarea,
-.list-meta .field select {
-  width: 100%;
-}
-
-@container (max-width: 560px) {
-  .list-item {
-    grid-template-columns: 1fr;
-  }
-
-  .list-meta {
-    min-width: 0;
-    text-align: left;
-  }
 }
 
 /* ===========================================

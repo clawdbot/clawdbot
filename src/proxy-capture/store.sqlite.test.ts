@@ -2,7 +2,7 @@
 import fs from "node:fs";
 import path from "node:path";
 import { constants } from "node:sqlite";
-import { afterEach, describe, expect, it, vi } from "vitest";
+import { afterEach, describe, expect, it, vi, type MockInstance } from "vitest";
 import { cleanupTempDirs, makeTempDir } from "../../test/helpers/temp-dir.js";
 import { resolveSqliteDatabaseFilePaths } from "../infra/sqlite-files.js";
 import { closeOpenClawStateDatabaseForTest } from "../state/openclaw-state-db.js";
@@ -40,6 +40,105 @@ function readMode(target: string): number {
 }
 
 describe("DebugProxyCaptureStore", () => {
+  it.each(["shared", "path"] as const)(
+    "summarizes %s capture labels without materializing every metadata row",
+    (kind) => {
+      const env = makeStateEnv("openclaw-proxy-capture-coverage-");
+      const store =
+        kind === "shared"
+          ? new DebugProxyCaptureStore({ env })
+          : new DebugProxyCaptureStore(
+              path.join(env.OPENCLAW_STATE_DIR!, "capture.sqlite"),
+              path.join(env.OPENCLAW_STATE_DIR!, "blobs"),
+            );
+      const events = [
+        { host: " localhost:7 ", metaJson: '{"provider":" alpha ","api":"chat","model":"one"}' },
+        { host: "localhost:7", metaJson: '{"provider":"alpha","api":"chat","model":"two"}' },
+        { host: "remote", metaJson: '{"provider":"beta","api":"other","model":"two"}' },
+        { host: "localhost", metaJson: '{"provider":1,"api":[],"model":false}' },
+        { host: "LOCALHOST:7", metaJson: "invalid" },
+        { host: "[::1]:7", metaJson: "[]" },
+        { metaJson: " " },
+        {},
+        { metaJson: "null" },
+        { metaJson: "42" },
+        { metaJson: '"text"' },
+        { host: "remote", metaJson: '{"provider":"gamma","api":" ","model":""}' },
+      ];
+      try {
+        for (const [index, event] of [
+          ...events,
+          { metaJson: '{"provider":"excluded"}' },
+        ].entries()) {
+          store.recordEvent({
+            sessionId: index < events.length ? "coverage" : "other",
+            ts: index,
+            sourceScope: "openclaw",
+            sourceProcess: "test",
+            protocol: "http",
+            direction: "local",
+            kind: "request",
+            flowId: `flow-${index}`,
+            ...event,
+          });
+        }
+        const prepare = store.db.prepare.bind(store.db);
+        const materializations: MockInstance[] = [];
+        vi.spyOn(store.db, "prepare").mockImplementation((sql) => {
+          const statement = prepare(sql);
+          materializations.push(vi.spyOn(statement, "all"));
+          return statement;
+        });
+
+        const summary = store.summarizeSessionCoverage("coverage");
+
+        expect(summary).toMatchObject({
+          sessionId: "coverage",
+          totalEvents: 12,
+          unlabeledEventCount: 8,
+          providers: [
+            { value: "alpha", count: 2 },
+            { value: "beta", count: 1 },
+            { value: "gamma", count: 1 },
+          ],
+          apis: [
+            { value: "chat", count: 2 },
+            { value: "other", count: 1 },
+          ],
+          models: [
+            { value: "two", count: 2 },
+            { value: "one", count: 1 },
+          ],
+          localPeers: [{ value: "localhost:7", count: 2 }],
+        });
+        expect(Object.fromEntries(summary.hosts.map(({ value, count }) => [value, count]))).toEqual(
+          {
+            "localhost:7": 2,
+            remote: 2,
+            localhost: 1,
+            "LOCALHOST:7": 1,
+            "[::1]:7": 1,
+          },
+        );
+        expect(store.summarizeSessionCoverage("missing")).toEqual({
+          sessionId: "missing",
+          totalEvents: 0,
+          unlabeledEventCount: 0,
+          providers: [],
+          apis: [],
+          models: [],
+          hosts: [],
+          localPeers: [],
+        });
+        for (const materialization of materializations) {
+          expect(materialization).not.toHaveBeenCalled();
+        }
+      } finally {
+        store.close();
+      }
+    },
+  );
+
   it("keeps the cached store open until the last lease releases", () => {
     const options = { env: makeStateEnv("openclaw-proxy-capture-lease-") };
 

@@ -272,49 +272,53 @@ export class ChatPane extends ChatPaneLayoutRender {
         });
     const composerState = getChatComposerState(this.presentationId);
     const publicationScope = this.captureConnectionScope();
-    const publicationOwnerKey = () =>
-      JSON.stringify([
-        resolveCurrentSelfUser({
-          snapshotUser: this.context.gateway.snapshot.selfUser,
-          presenceEntries: readPresenceEntries(this.presencePayload),
-          presenceInstanceId: this.context.gateway.snapshot.client?.instanceId,
-        })?.identity ?? null,
-        this.context.gateway.snapshot.hello?.auth?.role,
-        this.context.gateway.snapshot.hello?.auth?.scopes,
-        selectedChatSessionRow(state)?.sessionId,
-        selectedChatSessionRow(state)?.sharingRole,
-        selectedChatSessionRow(state)?.visibility,
-        this.isCurrentSessionArchived(state),
-        sessionParticipationBlocked,
-      ]);
-    const publicationOwner = publicationOwnerKey();
-    const publicationAvailable = Boolean(
-      publicationScope &&
-      selectedSession?.key &&
-      isGatewayMethodAdvertised(gatewaySnapshot, "sessions.github.publish") === true,
-    );
-    this.githubPublication.sync(
-      publicationAvailable && publicationScope && selectedSession
-        ? {
-            client: publicationScope.client,
-            key: `${publicationScope.generation}:${selectedSession.key}:${publicationOwner}`,
-            sessionKey: selectedSession.key,
-            canWrite:
-              !selectedSessionArchived &&
-              !sessionParticipationBlocked &&
-              hasOperatorWriteAccess(gatewaySnapshot.hello?.auth ?? null),
-            personalReady:
-              !hasAbortableSessionRun(state) &&
-              !isCloudWorkerPlacementState(placement?.state) &&
-              !workspaceConflict,
-            isCurrent: () =>
-              this.presented &&
-              this.isConnectionScopeCurrent(publicationScope) &&
-              selectedChatSessionRow(state)?.key === selectedSession.key &&
-              publicationOwnerKey() === publicationOwner,
-          }
-        : null,
-    );
+    const readPublicationRow = () => {
+      const row = selectedChatSessionRow(state);
+      return (
+        row && {
+          ...row,
+          agentId: row.agentId ?? resolveChatAgentId(state) ?? undefined,
+          archived: this.isCurrentSessionArchived(state),
+        }
+      );
+    };
+    const publicationRow = readPublicationRow();
+    if (
+      !publicationScope ||
+      !publicationRow ||
+      !isGatewayMethodAdvertised(gatewaySnapshot, "sessions.github.publish")
+    ) {
+      this.githubPublication?.detach();
+      this.githubPublication = null;
+    } else {
+      if (!this.githubPublication?.matches(publicationRow)) {
+        this.githubPublication?.detach();
+        this.githubPublication = this.context.sessions.githubPublication.attach(
+          publicationRow,
+          () => this.requestUpdate(),
+        );
+      }
+      const publication = this.githubPublication;
+      publication?.sync({
+        canWrite:
+          !selectedSessionArchived &&
+          !sessionParticipationBlocked &&
+          hasOperatorWriteAccess(gatewaySnapshot.hello?.auth ?? null),
+        personalReady:
+          !hasAbortableSessionRun(state) &&
+          !isCloudWorkerPlacementState(placement?.state) &&
+          !workspaceConflict,
+        isPresented: () => this.presented,
+        isCurrent: () => {
+          const row = readPublicationRow();
+          return (
+            this.isConnectionScopeCurrent(publicationScope) &&
+            row !== undefined &&
+            publication?.matches(row)
+          );
+        },
+      });
+    }
     const sessionDisabledBanner = this.sessionDisabledBanner({
       catalogDisabledReason,
       modelSetupRequired,
@@ -521,7 +525,7 @@ export class ChatPane extends ChatPaneLayoutRender {
         this.requestUpdate();
       },
       onDismissPullRequest: this.dismissSessionPullRequest,
-      githubPublication: this.githubPublication.view(),
+      githubPublication: this.githubPublication?.view(),
       onOpenWorkspaceFile: (target) => openSessionWorkspaceFile(state, target),
       onOpenSessionLink: (target) => navigateMarkdownSession(this.context, target),
       onRevealWorkspaceFile: (path) => revealSessionWorkspaceFile(state, path),
@@ -579,6 +583,7 @@ export class ChatPane extends ChatPaneLayoutRender {
           search: `?session=${encodeURIComponent(state.sessionKey)}${status}`,
         });
       },
+      onUseSystemDefaultMicrophone: state.realtimeTalkUseSystemDefault ?? undefined,
       onToggleRealtimeTalk: () => void state.toggleRealtimeTalk(),
       onToggleRealtimeCamera: () => void state.toggleRealtimeTalkCamera(),
       onSwitchRealtimeCamera: () => void state.switchRealtimeTalkCamera(),
@@ -656,6 +661,7 @@ export class ChatPane extends ChatPaneLayoutRender {
       userAvatar: selfUser?.avatarUrl ?? state.userAvatar,
       personActivity: personActivityRouting(this.context),
       localMediaPreviewRoots: state.localMediaPreviewRoots,
+      mediaPolicyEpoch: state.mediaPolicyEpoch,
       connectionEpoch: state.connectionEpoch,
       embedSandboxMode: state.embedSandboxMode,
       allowExternalEmbedUrls: state.allowExternalEmbedUrls,

@@ -9,6 +9,7 @@ import {
 } from "../infra/kysely-sync.js";
 import { openNodeSqliteDatabase, resolveImmutableSqliteFileUri } from "../infra/node-sqlite.js";
 import { assertSqliteIntegrity } from "../infra/sqlite-integrity.js";
+import { prepareSqliteReadOnlyLocationSync } from "../infra/sqlite-readonly-location.js";
 import {
   collectSqliteSchemaIssues,
   type SqliteSchemaIssue,
@@ -338,9 +339,13 @@ export function preflightOpenClawDatabaseSchemas(options: {
   const statePath = path.resolve(resolveOpenClawStateSqlitePath(options.env));
   let registeredDatabases: ReturnType<typeof readRegisteredAgentDatabases> = [];
   let stateDatabase: DatabaseSync | undefined;
+  let stateSnapshot: ReturnType<typeof prepareSqliteReadOnlyLocationSync> | undefined;
   try {
     if (existsSync(statePath)) {
-      stateDatabase = openNodeSqliteDatabase(statePath, {
+      // Even a read-only source connection can create WAL/SHM. The sync worker
+      // preserves source artifacts and cannot release this process's writer locks.
+      stateSnapshot = prepareSqliteReadOnlyLocationSync(realpathSync.native(statePath));
+      stateDatabase = openNodeSqliteDatabase(stateSnapshot.location, {
         readOnly: true,
       });
       stateDatabase.exec(`PRAGMA busy_timeout = ${OPENCLAW_SQLITE_BUSY_TIMEOUT_MS};`);
@@ -389,9 +394,13 @@ export function preflightOpenClawDatabaseSchemas(options: {
     });
     return result;
   } finally {
-    if (stateDatabase) {
-      clearNodeSqliteKyselyCacheForDatabase(stateDatabase);
-      stateDatabase.close();
+    try {
+      if (stateDatabase) {
+        clearNodeSqliteKyselyCacheForDatabase(stateDatabase);
+        stateDatabase.close();
+      }
+    } finally {
+      stateSnapshot?.cleanup();
     }
   }
   let agentTargets = registeredDatabases;
@@ -427,13 +436,16 @@ export function preflightOpenClawDatabaseSchemas(options: {
       continue;
     }
     let agentDatabase: DatabaseSync | undefined;
+    let agentSnapshot: ReturnType<typeof prepareSqliteReadOnlyLocationSync> | undefined;
     try {
-      const realAgentPath = realpathSync(agentPath);
+      // Preserve SQLite's filesystem traversal through symlink/.. locators.
+      const realAgentPath = realpathSync.native(agentPath);
       if (row.agentId === undefined && inspectedAgentPaths.has(realAgentPath)) {
         continue;
       }
       inspectedAgentPaths.add(realAgentPath);
-      agentDatabase = openNodeSqliteDatabase(agentPath, {
+      agentSnapshot = prepareSqliteReadOnlyLocationSync(realAgentPath);
+      agentDatabase = openNodeSqliteDatabase(agentSnapshot.location, {
         readOnly: true,
       });
       agentDatabase.exec(`PRAGMA busy_timeout = ${OPENCLAW_SQLITE_BUSY_TIMEOUT_MS};`);
@@ -465,7 +477,11 @@ export function preflightOpenClawDatabaseSchemas(options: {
         reason: formatErrorMessage(error),
       });
     } finally {
-      agentDatabase?.close();
+      try {
+        agentDatabase?.close();
+      } finally {
+        agentSnapshot?.cleanup();
+      }
     }
   }
   return result;

@@ -1,7 +1,11 @@
+import { setImmediate as yieldImmediate } from "node:timers/promises";
 import { describe, expect, it, vi } from "vitest";
 import { interruptCodexTurnAndWaitBestEffort } from "./attempt-client-cleanup.js";
 import { createCodexAttemptLifecycleController } from "./run-attempt-lifecycle-controller.js";
 import { buildCodexLifecycleTerminalMeta } from "./run-attempt-lifecycle-terminal.js";
+import { createCodexAttemptTurnState } from "./run-attempt-turn-state.js";
+import { createClientHarness } from "./test-support.js";
+import { getCodexAppServerTurnRouter } from "./turn-router.js";
 
 function createTerminalReleaseHarness() {
   const order: string[] = [];
@@ -130,6 +134,81 @@ describe("buildCodexLifecycleTerminalMeta", () => {
 });
 
 describe("Codex terminal dynamic-tool release", () => {
+  it("keeps native yield cleanup alive after its subscription route is released", async () => {
+    const physical = createClientHarness({
+      onWrite: (line, send) => {
+        const request = JSON.parse(line) as { id: number; method: string };
+        if (request.method === "turn/interrupt") {
+          send({ id: request.id, result: {} });
+        }
+      },
+    });
+    const router = getCodexAppServerTurnRouter(physical.client);
+    const route = router.reserveThread({ threadId: "thread-1", onNotification: vi.fn() });
+    const peerRoute = router.reserveThread({ threadId: "thread-peer", onNotification: vi.fn() });
+    const resources = {
+      prompt: {
+        context: {
+          runtime: {
+            connection: {
+              params: { timeoutMs: 60_000 },
+              options: {},
+              attemptStartedAt: Date.now(),
+              runAbortController: new AbortController(),
+              fastModeAutoProgressState: {},
+            },
+          },
+        },
+      },
+      state: { client: physical.client, thread: { threadId: "thread-1" }, turnRoute: route },
+      projectorRef: {},
+      startupTimeoutMs: 1_000,
+    };
+    const runtime = createCodexAttemptTurnState(resources as never);
+    runtime.steeringQueueRef.current = { cancel: vi.fn() } as never;
+    const interrupt = vi.spyOn(runtime, "interruptTurn");
+    const controller = createCodexAttemptLifecycleController(resources as never, runtime);
+    try {
+      route.armTurn();
+      await route.bindTurn("turn-1");
+      controller.scheduleTurnReleaseAfterTerminalDynamicTool(terminalYieldResult(true));
+      await yieldImmediate();
+      expect(runtime.state.completed).toBe(true);
+      expect(interrupt).toHaveBeenCalledOnce();
+      const nativeCleanup = interrupt.mock.results[0]?.value;
+      const settled = vi.fn();
+      void nativeCleanup?.then(settled, settled);
+
+      route.release();
+      await yieldImmediate();
+      expect(settled).not.toHaveBeenCalled();
+      expect(physical.stdinDestroyed).toBe(false);
+      expect(peerRoute.signal.aborted).toBe(false);
+      physical.send({
+        method: "turn/completed",
+        params: {
+          threadId: "thread-peer",
+          turn: { id: "peer-turn", status: "completed" },
+        },
+      });
+      await yieldImmediate();
+      expect(settled).not.toHaveBeenCalled();
+      physical.send({
+        method: "turn/completed",
+        params: {
+          threadId: "thread-1",
+          turn: { id: "turn-1", status: "interrupted" },
+        },
+      });
+      await expect(nativeCleanup).resolves.toBe(true);
+      expect(physical.stdinDestroyed).toBe(false);
+      expect(peerRoute.signal.aborted).toBe(false);
+    } finally {
+      runtime.deadlines.dispose();
+      physical.client.close();
+    }
+  });
+
   it("completes a successful yield before native interrupt completion", async () => {
     const harness = createTerminalReleaseHarness();
 
@@ -142,7 +221,7 @@ describe("Codex terminal dynamic-tool release", () => {
     expect(harness.request).toHaveBeenCalledWith(
       "turn/interrupt",
       { threadId: "thread-1", turnId: "turn-1" },
-      { timeoutMs: 5_000 },
+      expect.objectContaining({ timeoutMs: 5_000 }),
     );
     expect(harness.order.indexOf("cancel")).toBeLessThan(harness.order.indexOf("turn/interrupt"));
     expect(harness.state.completed).toBe(true);

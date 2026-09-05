@@ -3,10 +3,14 @@ import { note } from "../../packages/terminal-core/src/note.js";
 import { sanitizeTerminalText } from "../../packages/terminal-core/src/safe-text.js";
 import { formatCliCommand } from "../cli/command-format.js";
 import { probeGatewayStatus } from "../cli/daemon-cli/probe.js";
-import { compareCliGatewayStateDirs, type GatewayHello } from "../cli/state-dir-gateway-check.js";
+import {
+  compareCliGatewayStateDirs,
+  GATEWAY_SERVICE_PATHS_UNVERIFIED,
+  inspectInstalledGatewayStatePaths,
+  type GatewayHello,
+} from "../cli/state-dir-gateway-check.js";
 import { resolveConfigPath, resolveStateDir } from "../config/paths.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
-import { resolveGatewayService } from "../daemon/service.js";
 import {
   buildGatewayConnectionDetails,
   buildGatewayProbeConnectionDetails,
@@ -107,36 +111,14 @@ async function noteInstalledGatewayStateDirectory(cfg: OpenClawConfig, timeoutMs
     if (!isLoopbackGatewayUrl(buildGatewayConnectionDetails({ config: cfg }).url)) {
       return;
     }
-    const serviceEnv = { ...process.env };
-    // CLI path overrides select its store, not the installed service's environment.
-    delete serviceEnv.OPENCLAW_STATE_DIR;
-    delete serviceEnv.OPENCLAW_CONFIG_PATH;
-    delete serviceEnv.OPENCLAW_HOME;
-    const command = await resolveGatewayService().readCommand(serviceEnv, {
-      timeoutMs: Math.min(timeoutMs, 3_000),
-      requireEffective: true,
-    });
-    if (!command) {
-      return;
+    const paths = await inspectInstalledGatewayStatePaths(Math.min(timeoutMs, 3_000));
+    if (paths.kind === "known") {
+      noteGatewayStateDirectory(paths, "installed Gateway service");
+    } else if (paths.kind === "unknown") {
+      note(GATEWAY_SERVICE_PATHS_UNVERIFIED, "Gateway state directory");
     }
-    const environment = command.environment;
-    if (
-      !environment ||
-      !["OPENCLAW_STATE_DIR", "OPENCLAW_HOME", "HOME", "USERPROFILE"].some((key) =>
-        environment[key]?.trim(),
-      )
-    ) {
-      throw new Error("Service state paths are unavailable");
-    }
-    noteGatewayStateDirectory(
-      { stateDir: resolveStateDir(environment), configPath: resolveConfigPath(environment) },
-      "installed Gateway service",
-    );
   } catch {
-    note(
-      "Installed Gateway service state and config paths could not be verified. Inspect the service environment with `openclaw gateway status --deep` before repairing plugin state.",
-      "Gateway state directory",
-    );
+    note(GATEWAY_SERVICE_PATHS_UNVERIFIED, "Gateway state directory");
   }
 }
 

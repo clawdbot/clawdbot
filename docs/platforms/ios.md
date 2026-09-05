@@ -3,6 +3,7 @@ summary: "iOS node app: connect to the Gateway, pairing, device capabilities, an
 read_when:
   - Pairing or reconnecting the iOS node
   - Using voice input and spoken replies on Apple Watch
+  - Setting up standalone Apple Watch voice
   - Enabling or troubleshooting the direct Apple Watch node
   - Running the iOS app from source
   - Debugging gateway discovery or iOS node commands
@@ -145,16 +146,26 @@ setup, invocation, payload fields, privacy behavior, and troubleshooting.
 
 ## Apple Watch voice and chat
 
-The Watch companion supports one voice turn at a time: watchOS dictation
-produces text, the paired iPhone sends that text to Gateway chat, and the Watch
-reads the matching reply aloud with the system voice. It does not stream
-microphone audio, run a realtime Talk session, or run an agent on the Watch.
-The Watch Talk controls operate Talk on the paired iPhone.
+OpenClaw has two separate Watch voice paths:
+
+- **Talk to Claw** uses watchOS dictation, text relayed through the paired
+  iPhone, and system-voice readback on the Watch, one turn at a time.
+- **Talk on Watch** starts an opt-in realtime audio call from the Watch after
+  separate setup. The iPhone is not its audio or chat relay.
+
+Neither path runs a full agent or the stock Codex runtime on the Watch. The
+Gateway owns agent execution and tool policy; the Watch provides input,
+playback, and call controls.
 
 Pair the Watch with the iPhone in Apple's Watch app, install OpenClaw from
 **Watch app -> My Watch -> Available Apps**, then open OpenClaw once on both
-devices. The companion uses the iPhone relay and does not need separate
-Gateway pairing.
+devices.
+
+### Talk to Claw with the iPhone
+
+This companion path does not need separate Watch Gateway pairing. Its Talk
+controls operate Talk on the paired iPhone; they do not enable a standalone
+Watch call.
 
 1. Connect the iPhone to your Gateway and select the chat you want to use.
 2. On the Watch, open **Talk to Claw**, then tap the voice button beside
@@ -243,10 +254,74 @@ These are [app-local SQLite journals](/reference/database-schemas#apple-companio
 They migrate when the apps open and do not require a Gateway database upgrade
 or `openclaw doctor` run.
 
-[Direct Watch node mode](/platforms/ios#optional-direct-apple-watch-node) does not remove the
-iPhone requirement for chat or voice. It only exposes the device and
-notification commands listed below. For continuous voice on a supported
-client, see [Talk mode](/nodes/talk).
+### Standalone voice
+
+Standalone voice needs a current Gateway with Gateway-controlled WebRTC Talk,
+an iPhone connection with `operator.admin` for setup, and a secure Gateway URL
+the Watch can reach independently. Use the same secure endpoint and initial
+pairing requirements as [direct Watch node setup](/platforms/ios#optional-direct-apple-watch-node):
+watchOS must trust the HTTPS certificate, and an iPhone-only or
+tailnet-only route is not enough when the Watch is away from the phone.
+
+1. Configure realtime [Talk mode](/nodes/talk) on the Gateway with `webrtc`
+   transport and a provider/authentication combination that supports
+   `gateway-control-v1` and returns an ICE-lite answer with UDP candidates.
+   Provider credentials stay on the Gateway.
+2. On iPhone, open **Settings -> Apple Watch -> Enable Standalone Voice**.
+   This also pairs the direct node; **Enable Direct Gateway Connection**
+   alone does not grant voice access.
+3. Open OpenClaw on the Watch before the setup code expires. Open **Talk on
+   Watch** and wait for **Ready to talk**.
+4. Tap **Start**, allow microphone access, and choose an agent if prompted.
+   Keep OpenClaw on screen until it shows **Connected**. Opening the voice
+   screen alone does not start the microphone.
+5. Speak, use **Mute** or **Unmute** as needed, and tap **End** to finish.
+   The screen shows the latest user and assistant transcripts; the Gateway
+   retains the conversation history.
+
+The one-time setup gives the Watch its own node credential and an operator
+credential with exactly `operator.read` and `operator.talk`. It does not grant
+admin access or copy the iPhone's saved Gateway token or password. Setup
+configuration is stored in the Watch Keychain; issued device credentials are
+stored in its protected native-state SQLite database, scoped to that Gateway.
+If setup is incomplete or expired, send it again from iPhone Settings.
+
+Audio uses native WebRTC with Opus over UDP between the Watch and provider.
+The secure Gateway WebSocket carries call control and transcript events, not
+microphone audio. The Gateway controls provider tools and agent consultations;
+the Watch does not open a provider data channel or receive a permanent provider
+API key. Unsupported provider/authentication or transport choices fail visibly
+instead of switching to a different voice path. The native Watch transport
+requires ICE-lite; support for Gateway-controlled WebRTC alone is not sufficient.
+
+Provider error notifications appear on the Watch without ending an otherwise
+active call. You can try another turn; an explicit session closure or an
+unrecoverable connection failure still ends the call.
+
+Each new call uses a separate session for its selected agent. Network recovery
+is bounded and keeps that agent and chat session; **Try Again** after a terminal
+error starts a new call. This does not resume the iPhone's currently selected
+chat, and the companion chat and approval features still use the iPhone relay.
+
+For OpenAI Gateway-controlled WebRTC calls, the Gateway schedules a 30-minute
+active-session lease during setup; audio activity does not renew it. When the
+Watch receives the session-ended event from lease expiry, it shows **Call unavailable**
+and does not retry automatically. Bring OpenClaw to the foreground and tap
+**Try Again** to start a new call. The lease is not a guarantee of 30 minutes of
+usable audio, and calls may end earlier.
+
+An established call uses background audio and is not intentionally ended merely
+because the display dims or the app backgrounds. Startup that backgrounds before
+connecting stops with a message asking you to keep OpenClaw on screen. Navigating
+back, tapping **End**, disabling, changing or forgetting the Watch's Gateway connection,
+an audio interruption, or an unrecoverable failure ends the call.
+
+Physical-Watch microphone/speaker routing, wrist-down operation, Wi-Fi/cellular
+handoff, battery use, and multi-hour reliability still need device validation.
+Simulator tests and native macOS provider-audio probes do not establish those
+behaviors. This is not an arbitrary always-on Gateway connection: watchOS
+low-level networking depends on an active audio session. UDP must be reachable;
+the Watch transport does not configure a TURN relay or TCP/WebSocket media fallback.
 
 ## Review command approvals
 
@@ -296,10 +371,11 @@ Requirements:
   pairing](/gateway/pairing) for endpoint configuration. Loopback, iPhone-only,
   and tailnet-only routes are not independently reachable by the watch.
 - Cellular use requires a cellular-capable Apple Watch with active service.
-- OpenClaw is active on the watch. Apple does not allow ordinary watchOS apps to
-  keep generic WebSocket/TCP connections, so the direct node uses short HTTPS
-  polls and reconnects when the app returns to the foreground. See Apple's
-  [watchOS low-level networking guidance](https://developer.apple.com/documentation/technotes/tn3135-low-level-networking-on-watchOS).
+- OpenClaw is active on the watch. The non-voice direct node uses short HTTPS
+  polls and reconnects when the app returns to the foreground; it does not
+  maintain a generic background connection. Standalone voice uses the separate
+  active-audio networking path. See Apple's
+  [watchOS low-level networking guidance](https://developer.apple.com/documentation/technotes/tn3135-low-level-networking-on-watchos).
 
 Setup:
 
@@ -311,9 +387,10 @@ Setup:
 The setup code contains a short-lived, node-only bootstrap credential; treat it
 like a password until it expires. It never contains the iPhone's saved Gateway
 password or token. After pairing, the watch stores its own device token and
-deletes the bootstrap credential. Direct mode covers only the commands below.
-Chat, Talk, approvals, and the existing `watch.*` notification flow remain
-iPhone-relay features and still require the paired iPhone.
+deletes the bootstrap credential. This node-only setup covers the commands
+below. For independent audio calls, use [Enable Standalone Voice](/platforms/ios#standalone-voice)
+instead. Companion chat, iPhone Talk controls, approvals, and the existing
+`watch.*` notification flow remain iPhone-relay features.
 
 A `watch.notify` receipt reports Watch transport delivery or queuing, not
 completion of the best-effort iPhone notification mirror. Cancellation is

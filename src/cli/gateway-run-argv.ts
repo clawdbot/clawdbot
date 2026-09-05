@@ -1,6 +1,7 @@
 // Fast-path argv parser for `openclaw gateway ...` without full Commander registration.
 import {
   consumeRootOptionToken,
+  findRootCommandIndex,
   getCommandPositionalsWithRootOptions,
   isValueToken,
 } from "../infra/cli-root-options.js";
@@ -109,47 +110,29 @@ export function consumeGatewayFastPathRootOptionToken(
   return 0;
 }
 
-function resolveGatewayCommandStart(argv: string[]): {
-  args: string[];
-  startIndex: number;
-} | null {
-  const args = argv.slice(2);
-  for (let index = 0; index < args.length; index += 1) {
-    const arg = args[index];
-    if (!arg || arg === "--") {
-      return null;
-    }
-    const consumed = consumeRootOptionToken(args, index);
-    if (consumed > 0) {
-      index += consumed - 1;
-      continue;
-    }
-    if (arg.startsWith("-")) {
-      continue;
-    }
-    return arg === "gateway" ? { args, startIndex: index + 1 } : null;
-  }
-  return null;
+function resolveGatewayCommandStart(argv: string[]): number | null {
+  const index = findRootCommandIndex(argv);
+  return index !== null && argv[index] === "gateway" ? index + 1 : null;
 }
 
 /** Resolve the gateway command path from raw argv without full Commander registration. */
 export function resolveGatewayCommandPath(argv: string[], depth = 2): string[] | null {
-  const gateway = resolveGatewayCommandStart(argv);
-  if (!gateway) {
+  const startIndex = resolveGatewayCommandStart(argv);
+  if (startIndex === null) {
     return null;
   }
   const commandPath = ["gateway"];
-  for (let index = gateway.startIndex; index < gateway.args.length; index += 1) {
-    const arg = gateway.args[index];
+  for (let index = startIndex; index < argv.length; index += 1) {
+    const arg = argv[index];
     if (!arg || arg === "--") {
       break;
     }
-    const rootConsumed = consumeRootOptionToken(gateway.args, index);
+    const rootConsumed = consumeRootOptionToken(argv, index);
     if (rootConsumed > 0) {
       index += rootConsumed - 1;
       continue;
     }
-    const consumed = consumeGatewayRunOptionToken(gateway.args, index);
+    const consumed = consumeGatewayRunOptionToken(argv, index);
     if (consumed > 0) {
       index += consumed - 1;
       continue;
@@ -175,16 +158,16 @@ export function resolveGatewayCatalogCommandPath(argv: string[]): string[] | nul
 export function resolveGatewayRunPreBootstrapOptions(
   argv: string[],
 ): { force: boolean; reset: boolean } | null {
-  const gateway = resolveGatewayCommandStart(argv);
-  if (!gateway) {
+  const startIndex = resolveGatewayCommandStart(argv);
+  if (startIndex === null) {
     return null;
   }
   let force = false;
   let reset = false;
   let sawRun = false;
 
-  for (let index = gateway.startIndex; index < gateway.args.length; index += 1) {
-    const arg = gateway.args[index];
+  for (let index = startIndex; index < argv.length; index += 1) {
+    const arg = argv[index];
     if (!arg || arg === "--") {
       break;
     }
@@ -192,7 +175,7 @@ export function resolveGatewayRunPreBootstrapOptions(
       sawRun = true;
       continue;
     }
-    const consumed = consumeGatewayRunPreBootstrapOptionToken(gateway.args, index);
+    const consumed = consumeGatewayRunPreBootstrapOptionToken(argv, index);
     if (consumed > 0) {
       if (arg === "--force") {
         force = true;

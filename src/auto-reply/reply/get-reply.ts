@@ -151,7 +151,7 @@ function loadCommandsCoreRuntime() {
 }
 
 function hasLinkCandidate(ctx: MsgContext): boolean {
-  const message = ctx.commandText;
+  const message = ctx.agentText;
   if (!message) {
     return false;
   }

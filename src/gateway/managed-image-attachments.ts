@@ -70,7 +70,10 @@ import {
 } from "./managed-image-record-store.js";
 import { authorizeOperatorScopesForMethod } from "./method-scopes.js";
 import { tryResolveSessionCompatibilityOwnerAgentId } from "./session-request-agent.js";
-import { readSessionMessagesWithSourceAsync } from "./session-transcript-readers.js";
+import {
+  readSessionMessagesMatchingIdAsync,
+  readSessionMessagesWithSourceAsync,
+} from "./session-transcript-readers.js";
 import { loadGatewaySessionEntryReadOnly } from "./session-utils.js";
 
 const OUTGOING_IMAGE_ROUTE_PREFIX = "/api/chat/media/outgoing";
@@ -170,17 +173,6 @@ type CleanupManagedOutgoingMediaRecordsResult = {
 };
 
 type SessionManagedOutgoingAttachmentIndex = Set<string>;
-type SessionManagedOutgoingAttachmentIndexRead =
-  | { kind: "available"; index: SessionManagedOutgoingAttachmentIndex | null }
-  | {
-      kind: "unavailable";
-      reason:
-        | "database-missing"
-        | "schema-missing"
-        | "table-missing"
-        | "row-invalid"
-        | "read-failed";
-    };
 type ManagedOutgoingTranscriptMatch = "match" | "missing" | "unavailable";
 type SessionStoreAvailabilityRead = ReturnType<
   typeof resolveExistingAgentSessionStoreTargetsReadOnlyResult
@@ -1066,24 +1058,28 @@ async function loadPendingPreparedAttachmentIds(stateDir: string): Promise<Set<s
   }
 }
 
-async function getSessionManagedOutgoingAttachmentIndex(
-  sessionKey: string,
+async function recordMatchesTranscriptMessage(
+  record: ManagedImageRecord,
   cache?: Map<string, SessionManagedOutgoingAttachmentIndex | null>,
-  agentId?: string,
   storeAvailabilityCache?: Map<string, SessionStoreAvailabilityRead>,
   storeTargetsReadCache?: SessionStoreTargetsReadCache,
   stateDir?: string,
-): Promise<SessionManagedOutgoingAttachmentIndexRead> {
+): Promise<ManagedOutgoingTranscriptMatch> {
+  if (!record.messageId) {
+    return "missing";
+  }
+  const { sessionKey, agentId, messageId: requestedMessageId } = record;
+  const refKey = buildManagedOutgoingAttachmentRefKey(requestedMessageId, record.attachmentId);
   const cacheKey = buildSessionManagedOutgoingAttachmentIndexCacheKey(sessionKey, agentId);
   if (cache?.has(cacheKey)) {
-    return { kind: "available", index: cache.get(cacheKey) ?? null };
+    return cache.get(cacheKey)?.has(refKey) ? "match" : "missing";
   }
   const cfg = getRuntimeConfig();
   const ownerAgentId =
     resolveManagedSessionOwnerAgentId(sessionKey, agentId) ??
     tryResolveSessionCompatibilityOwnerAgentId(cfg, sessionKey);
   if (!ownerAgentId) {
-    return { kind: "unavailable", reason: "read-failed" };
+    return "unavailable";
   }
   const discovery =
     storeAvailabilityCache?.get(ownerAgentId) ??
@@ -1093,7 +1089,7 @@ async function getSessionManagedOutgoingAttachmentIndex(
     });
   storeAvailabilityCache?.set(ownerAgentId, discovery);
   if (!discovery.available) {
-    return { kind: "unavailable", reason: discovery.reason };
+    return "unavailable";
   }
   const usesRuntimeState = !stateDir || path.resolve(stateDir) === path.resolve(resolveStateDir());
   const env = stateDir ? { ...process.env, OPENCLAW_STATE_DIR: stateDir } : process.env;
@@ -1108,7 +1104,7 @@ async function getSessionManagedOutgoingAttachmentIndex(
       storePath: target.storePath,
     });
     if (!exact.found) {
-      return { kind: "unavailable", reason: exact.reason };
+      return "unavailable";
     }
     let targetEntry = exact.value?.entry;
     if (!targetEntry) {
@@ -1124,12 +1120,12 @@ async function getSessionManagedOutgoingAttachmentIndex(
           { readOnly: true },
         ).existing;
       } catch {
-        return { kind: "unavailable", reason: "row-invalid" };
+        return "unavailable";
       }
     }
     if (targetEntry) {
       if (matched) {
-        return { kind: "unavailable", reason: "read-failed" };
+        return "unavailable";
       }
       matched = { entry: targetEntry, storePath: target.storePath };
     }
@@ -1145,7 +1141,7 @@ async function getSessionManagedOutgoingAttachmentIndex(
       storePath: loaded.storePath,
     });
     if (!exact.found) {
-      return { kind: "unavailable", reason: exact.reason };
+      return "unavailable";
     }
     entry = exact.value?.entry ?? loaded.entry;
     storePath = loaded.storePath;
@@ -1153,25 +1149,21 @@ async function getSessionManagedOutgoingAttachmentIndex(
   const sessionId = entry?.sessionId;
   if (!sessionId) {
     cache?.set(cacheKey, null);
-    return { kind: "available", index: null };
+    return "missing";
   }
 
   // Archive file stats cannot establish current SQLite visibility. Reuse membership
   // only within a cleanup pass; each new request must select canonical history again.
-  const { messages } = await readSessionMessagesWithSourceAsync(
-    {
-      agentId,
-      sessionEntry: entry,
-      sessionId,
-      sessionKey,
-      storePath,
-    },
-    {
-      mode: "full",
-      reason: "managed outgoing attachment index",
-      allowResetArchiveFallback: true,
-    },
-  );
+  const scope = { agentId, sessionEntry: entry, sessionId, sessionKey, storePath };
+  const messages = cache
+    ? (
+        await readSessionMessagesWithSourceAsync(scope, {
+          mode: "full",
+          reason: "managed outgoing attachment index",
+          allowResetArchiveFallback: true,
+        })
+      ).messages
+    : await readSessionMessagesMatchingIdAsync(scope, requestedMessageId);
   const index: SessionManagedOutgoingAttachmentIndex = new Set();
   for (const message of messages) {
     const meta = (message as { __openclaw?: { id?: string } } | null)?.["__openclaw"];
@@ -1188,35 +1180,7 @@ async function getSessionManagedOutgoingAttachmentIndex(
   }
 
   cache?.set(cacheKey, index);
-  return { kind: "available", index };
-}
-
-async function recordMatchesTranscriptMessage(
-  record: ManagedImageRecord,
-  cache?: Map<string, SessionManagedOutgoingAttachmentIndex | null>,
-  storeAvailabilityCache?: Map<string, SessionStoreAvailabilityRead>,
-  storeTargetsReadCache?: SessionStoreTargetsReadCache,
-  stateDir?: string,
-): Promise<ManagedOutgoingTranscriptMatch> {
-  if (!record.messageId) {
-    return "missing";
-  }
-  const read = await getSessionManagedOutgoingAttachmentIndex(
-    record.sessionKey,
-    cache,
-    record.agentId,
-    storeAvailabilityCache,
-    storeTargetsReadCache,
-    stateDir,
-  );
-  if (read.kind === "unavailable") {
-    return "unavailable";
-  }
-  return read.index?.has(
-    buildManagedOutgoingAttachmentRefKey(record.messageId, record.attachmentId),
-  )
-    ? "match"
-    : "missing";
+  return index.has(refKey) ? "match" : "missing";
 }
 
 async function resolveManagedOutgoingMediaArtifactDownloadForRecord(

@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { UpdateRunRecordSchema as LedgerRecordSchema } from "../../../src/infra/update-run-record.js";
+import { UpdateRunRecordSchema as LedgerRecordSchema } from "../../../src/infra/update-run-schema.js";
 import {
   validateUpdateRunChangedEvent,
   validateUpdateRunRecord,

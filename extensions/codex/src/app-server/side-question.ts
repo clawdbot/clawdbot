@@ -30,7 +30,7 @@ import { readStringField as readString } from "openclaw/plugin-sdk/string-coerce
 import { resolveCodexAppServerForModelProvider } from "./app-server-policy.js";
 import { handleCodexAppServerApprovalRequest } from "./approval-bridge.js";
 import {
-  isCodexAlreadyTerminalInterruptError,
+  interruptCodexTurnAndWaitBestEffort,
   retireUnsafeCodexTurnClientBestEffort,
   unsubscribeCodexThreadBestEffort,
 } from "./attempt-client-cleanup.js";
@@ -1421,19 +1421,15 @@ async function cleanupCodexSideThread(
     return;
   }
   if (params.interrupt && params.turnId !== undefined) {
-    try {
-      await client.request(
-        "turn/interrupt",
-        { threadId: params.threadId, turnId: params.turnId },
-        { timeoutMs: params.timeoutMs },
-      );
-    } catch (error) {
-      if (!isCodexAlreadyTerminalInterruptError(error)) {
-        embeddedAgentLog.debug("codex /btw side thread interrupt cleanup failed", { error });
-        await retireUnsafeCodexTurnClientBestEffort(client, "side turn interrupt");
-        // An unconfirmed native turn must never lose its only visible subscription.
-        return;
-      }
+    const confirmed = await interruptCodexTurnAndWaitBestEffort(client, {
+      threadId: params.threadId,
+      turnId: params.turnId,
+      timeoutMs: params.timeoutMs,
+    });
+    if (!confirmed) {
+      await retireUnsafeCodexTurnClientBestEffort(client, "side turn interrupt");
+      // An unconfirmed native turn must never lose its only visible subscription.
+      return;
     }
   }
   if (

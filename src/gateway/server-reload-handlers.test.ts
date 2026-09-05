@@ -44,11 +44,18 @@ import {
   setGatewaySigusr1RestartPolicy,
   setPreRestartDeferralCheck,
 } from "../infra/restart.js";
+import { createPluginRuntimeCapabilityLease } from "../plugins/capability-lease.js";
 import { registerPluginCommandInRegistry } from "../plugins/command-registration.js";
+import {
+  createPluginHttpRouteHandoff,
+  registerPluginHttpRoute,
+  withPluginHttpRouteRegistry,
+} from "../plugins/http-registry.js";
 import {
   createPluginCommandRuntime,
   type PluginCommandCatalogDecision,
 } from "../plugins/plugin-command-runtime.js";
+import { createEmptyPluginRegistry } from "../plugins/registry-empty.js";
 import {
   captureActivePluginRegistrySnapshot,
   requireActivePluginChannelRegistry,
@@ -168,6 +175,7 @@ function createGatewayReloadHandlers(
     setState: vi.fn(),
     startChannel: vi.fn(async () => new Map()),
     stopChannel: vi.fn(async () => {}),
+    releaseChannelRouteHandoffs: vi.fn(),
     pruneInactiveChannelAccountState: vi.fn(),
     stopPostReadySidecars: vi.fn(),
     reloadPlugins: vi.fn(async () => makePluginReloadResult()),
@@ -230,7 +238,10 @@ function startManagedGatewayConfigReloader(params: ManagedReloaderTestParams) {
     logChannels: { info: vi.fn(), error: vi.fn() },
     logCron: { error: vi.fn() },
     logReload: { info: vi.fn(), warn: vi.fn(), error: vi.fn() },
-    channelManager: { pruneInactiveChannelAccountState: vi.fn() } as never,
+    channelManager: {
+      pruneInactiveChannelAccountState: vi.fn(),
+      releaseChannelRouteHandoffs: vi.fn(),
+    } as never,
     activateRuntimeSecrets: vi.fn(async (config: OpenClawConfig) =>
       makePreparedSecretsSnapshot(config),
     ) as never,
@@ -3162,7 +3173,10 @@ describe("gateway hot reload superseded tail recovery", () => {
     releaseStop.resolve();
     await reloadA;
 
-    expect(stopChannel).toHaveBeenCalledWith("discord", undefined, { manual: false });
+    expect(stopChannel).toHaveBeenCalledWith("discord", undefined, {
+      manual: false,
+      routeHandoff: true,
+    });
     expect(startChannel).toHaveBeenCalledWith("discord", undefined, {
       preserveManualStop: true,
       skipUnavailableAccounts: true,
@@ -4018,7 +4032,10 @@ describe("gateway restart deferral preflight", () => {
       restoreChannelReloadEnv();
     }
 
-    expect(stopChannel).toHaveBeenCalledWith("discord", undefined, { manual: false });
+    expect(stopChannel).toHaveBeenCalledWith("discord", undefined, {
+      manual: false,
+      routeHandoff: true,
+    });
     expect(startChannel).toHaveBeenCalledWith("discord", undefined, {
       preserveManualStop: true,
       skipUnavailableAccounts: true,
@@ -4065,7 +4082,10 @@ describe("gateway restart deferral preflight", () => {
       restoreChannelReloadEnv();
     }
 
-    expect(stopChannel).toHaveBeenCalledWith("telegram", undefined, { manual: false });
+    expect(stopChannel).toHaveBeenCalledWith("telegram", undefined, {
+      manual: false,
+      routeHandoff: true,
+    });
     expect(startChannel).toHaveBeenCalledWith("telegram", undefined, {
       preserveManualStop: true,
       skipUnavailableAccounts: true,
@@ -6304,7 +6324,10 @@ describe("gateway plugin hot reload handlers", () => {
 
     expect(runtimeEnv.env[envKey]).toBeUndefined();
     expect(targetEnv[envKey]).toBeUndefined();
-    expect(stopChannel).toHaveBeenCalledWith("discord", undefined, { manual: false });
+    expect(stopChannel).toHaveBeenCalledWith("discord", undefined, {
+      manual: false,
+      routeHandoff: true,
+    });
     expect(startChannel).toHaveBeenCalledWith("discord", undefined, {
       preserveManualStop: true,
       skipUnavailableAccounts: true,
@@ -6904,6 +6927,7 @@ describe("gateway plugin hot reload handlers", () => {
       }
       expect(channels.stop).toHaveBeenCalledExactlyOnceWith("discord", undefined, {
         manual: false,
+        routeHandoff: true,
       });
       expect(channels.start).toHaveBeenCalledExactlyOnceWith("discord", undefined, {
         preserveManualStop: true,
@@ -7215,7 +7239,7 @@ describe("gateway plugin hot reload handlers", () => {
             await root?.run(async () => {
               await expect(
                 applyHotReload(createPluginReloadPlan(), { plugins: { enabled: false } }),
-              ).rejects.toThrow("failed to stop channels before plugin reload: discord");
+              ).rejects.toThrow("plugin reload cancellation rollback failed for: discord");
               await waitForFast(() => expect(monitorStarts).toEqual(["telegram"]));
             });
           } finally {
@@ -7231,6 +7255,9 @@ describe("gateway plugin hot reload handlers", () => {
           ]);
           expect(logChannels.error).toHaveBeenCalledWith(
             "failed to stop discord channel before plugin reload: stop failed",
+          );
+          expect(logChannels.error).toHaveBeenCalledWith(
+            expect.stringContaining("replacement not admitted: stop-in-flight"),
           );
           expect(startChannel).toHaveBeenCalledWith("telegram", undefined, {
             preserveManualStop: true,
@@ -7324,8 +7351,8 @@ describe("gateway plugin hot reload handlers", () => {
     });
     expect(reloadParamsRecord?.sourceConfig).toBe(sourceConfig);
     expect(stopChannel.mock.calls).toEqual([
-      ["discord", undefined, { manual: false }],
-      ["slack", undefined, { manual: false }],
+      ["discord", undefined, { manual: false, routeHandoff: true }],
+      ["slack", undefined, { manual: false, routeHandoff: true }],
     ]);
     expect(startChannel).toHaveBeenCalledExactlyOnceWith("slack", undefined, {
       preserveManualStop: true,
@@ -7347,6 +7374,7 @@ describe("gateway plugin hot reload handlers", () => {
     const restoreChannelReloadEnv = enableChannelReloadsForTest();
     const gatewayState = createDefaultGatewayReloadState();
     const setState = vi.fn();
+    const releaseChannelRouteHandoffs = vi.fn();
     const logChannels = { info: vi.fn(), error: vi.fn() };
     const events: string[] = [];
     const startChannel = vi.fn(async (channel: ChannelKind) => {
@@ -7373,6 +7401,7 @@ describe("gateway plugin hot reload handlers", () => {
       setState,
       startChannel,
       stopChannel,
+      releaseChannelRouteHandoffs,
       reloadPlugins,
       getChannelAutostartSuppression: () => ({
         reason: "crash-loop-breaker",
@@ -7391,8 +7420,13 @@ describe("gateway plugin hot reload handlers", () => {
       restoreChannelReloadEnv();
     }
 
-    expect(stopChannel).toHaveBeenCalledWith("discord", undefined, { manual: false });
+    expect(stopChannel).toHaveBeenCalledWith("discord", undefined, {
+      manual: false,
+      routeHandoff: true,
+    });
     expect(startChannel).not.toHaveBeenCalled();
+    expect(stopChannel).toHaveBeenCalledTimes(1);
+    expect(releaseChannelRouteHandoffs).toHaveBeenCalledExactlyOnceWith("discord", undefined);
     expect(events).toEqual(["reload:start", "stop:discord", "registry:replace"]);
     expect(logChannels.info).toHaveBeenCalledWith(
       "channel restart during hot reload suppressed by crash-loop breaker for channels: discord",
@@ -7418,16 +7452,15 @@ describe("deferred channel reload abort generation", () => {
   const createTestHandlers = (
     logChannels: any,
     channels: any,
-    options?: {
-      reloadPlugins?: ReloadHandlerParams["reloadPlugins"];
-      requestRecoveryRestart?: ReloadHandlerParams["requestRecoveryRestart"];
-    },
+    options?: Pick<
+      Partial<ReloadHandlerParams>,
+      "reloadPlugins" | "requestRecoveryRestart" | "releaseChannelRouteHandoffs"
+    >,
   ) =>
     createGatewayReloadHandlers({
       startChannel: channels.start,
       stopChannel: channels.stop,
-      ...(options?.reloadPlugins ? { reloadPlugins: options.reloadPlugins } : {}),
-      requestRecoveryRestart: options?.requestRecoveryRestart,
+      ...options,
       logChannels,
     });
 
@@ -7463,6 +7496,7 @@ describe("deferred channel reload abort generation", () => {
       expect(oldChannels.start).not.toHaveBeenCalled();
       expect(nextChannels.stop).toHaveBeenCalledExactlyOnceWith("whatsapp", undefined, {
         manual: false,
+        routeHandoff: true,
       });
       expect(nextChannels.start).toHaveBeenCalledExactlyOnceWith("whatsapp", undefined, {
         preserveManualStop: true,
@@ -7523,7 +7557,10 @@ describe("deferred channel reload abort generation", () => {
       "config hot reload cancelled by config supersession or in-process restart",
     );
 
-    expect(channels.stop).toHaveBeenCalledWith("whatsapp", undefined, { manual: false });
+    expect(channels.stop).toHaveBeenCalledWith("whatsapp", undefined, {
+      manual: false,
+      routeHandoff: true,
+    });
     expect(channels.start).not.toHaveBeenCalled();
   });
 
@@ -7552,18 +7589,39 @@ describe("deferred channel reload abort generation", () => {
       "config hot reload cancelled by config supersession or in-process restart",
     );
 
-    expect(channels.stop).toHaveBeenCalledWith("whatsapp", undefined, { manual: false });
+    expect(channels.stop).toHaveBeenCalledWith("whatsapp", undefined, {
+      manual: false,
+      routeHandoff: true,
+    });
     expect(channels.start).not.toHaveBeenCalled();
     expect(requestRecoveryRestart).not.toHaveBeenCalled();
   });
 
   it("schedules recovery when plugin cancellation rollback cannot restart a channel", async () => {
     const logChannels = { info: vi.fn(), error: vi.fn() };
+    const registry = createEmptyPluginRegistry();
+    const lease = createPluginRuntimeCapabilityLease("rollback channel test");
+    const handoff = createPluginHttpRouteHandoff();
+    withPluginHttpRouteRegistry(
+      registry,
+      () =>
+        registerPluginHttpRoute({
+          path: "/rollback-webhook",
+          auth: "plugin",
+          pluginId: "whatsapp",
+          handler: vi.fn(),
+        }),
+      lease,
+    );
     const channels = {
       start: vi.fn(async () => {
         throw new Error("channel restart failed");
       }),
-      stop: vi.fn(async () => {}),
+      stop: vi.fn(async () => {
+        handoff.park(lease);
+        lease.revoke();
+        expect(registry.httpRoutes[0]?.handoff).toBe(true);
+      }),
     };
     const reloadPlugins: NonNullable<ReloadHandlerParams["reloadPlugins"]> = async (params) => {
       await params.beforeReplace(new Set(["whatsapp"]));
@@ -7575,11 +7633,13 @@ describe("deferred channel reload abort generation", () => {
     const { applyHotReload } = createTestHandlers(logChannels, channels, {
       reloadPlugins,
       requestRecoveryRestart,
+      releaseChannelRouteHandoffs: () => handoff.release(),
     });
 
     await expect(applyHotReload(createPluginReloadPlan(), {})).rejects.toThrow(
       "plugin reload cancellation rollback failed for: whatsapp",
     );
+    expect(registry.httpRoutes).toEqual([]);
 
     expect(requestRecoveryRestart).toHaveBeenCalledWith(
       expect.stringContaining("hot reload recovery: plugin channel rollback"),
@@ -8012,7 +8072,10 @@ describe("deferred channel reload abort generation", () => {
       await vi.advanceTimersByTimeAsync(500); // wake up, see active=0, drain complete
       await expect(reloadPromise).resolves.toBe("applied");
 
-      expect(channels.stop).toHaveBeenCalledWith("whatsapp", undefined, { manual: false });
+      expect(channels.stop).toHaveBeenCalledWith("whatsapp", undefined, {
+        manual: false,
+        routeHandoff: true,
+      });
       expect(channels.start).toHaveBeenCalledWith("whatsapp", undefined, {
         preserveManualStop: true,
         skipUnavailableAccounts: true,

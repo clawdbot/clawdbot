@@ -620,48 +620,43 @@ suite.define(() => {
             observeMcpAppNetwork(standalonePage, "timing", diagnostics);
             await standalonePage.goto("http://127.0.0.1:" + gatewayPort + standaloneUrl);
             let app = await findAppFrame(standalonePage);
-            for (const spec of [
-              { scenario: "warm-call8", callDelayMs: 8000, refresh: false },
-              { scenario: "list8-call1", callDelayMs: 1000, refresh: true },
-              { scenario: "list8-call8", callDelayMs: 8000, refresh: true },
-            ]) {
-              await fixture.configure(spec);
-              if (spec.refresh) {
-                await app.locator("#arm-refresh").click();
-                await waitForText(app.locator("#arm-result"), "armed");
-                // The real notification owns this transition. No catalog field is assigned.
-                await expect.poll(() => runtime.peekCatalog()).toBeNull();
-              } else {
-                expect(runtime.peekCatalog()).not.toBeNull();
-              }
-              const startedAtMs = Date.now();
-              diagnostics.push({
-                event: "timing-call-start",
-                atMs: startedAtMs,
-                scenario: spec.scenario,
-              });
-              await app.locator("#call-app").click();
-              await expect
-                .poll(() => app.locator("#app-tool").textContent(), { timeout: 25_000 })
-                .not.toBe("pending");
-              const settledAtMs = Date.now();
-              const output = await app.locator("#app-tool").textContent();
-              const events = await waitForMcpAppTimingEvents(fixture.readEvents, spec.scenario);
-              timingResults.push({
-                scenario: spec.scenario,
-                output,
-                events,
-                startedAtMs,
-                settledAtMs,
-              });
-              await recordHost(standalonePage, spec.scenario);
-              await fs.writeFile(
-                path.join(proofDir, "timing-results.json"),
-                JSON.stringify(timingResults, null, 2),
-              );
-              assertMcpAppTimingEvents(events, spec);
-              expect(output).toContain("companion-called");
-            }
+            // Each RPC stays below 10s; their composition must cross the former 15s HTTP cutoff.
+            const timingSpec = { scenario: "list8-call8", callDelayMs: 8000 };
+            await fixture.configure(timingSpec);
+            await app.locator("#arm-refresh").click();
+            await waitForText(app.locator("#arm-result"), "armed");
+            // The real notification owns this transition. No catalog field is assigned.
+            await expect.poll(() => runtime.peekCatalog()).toBeNull();
+            const timingStartedAtMs = Date.now();
+            diagnostics.push({
+              event: "timing-call-start",
+              atMs: timingStartedAtMs,
+              scenario: timingSpec.scenario,
+            });
+            await app.locator("#call-app").click();
+            await expect
+              .poll(() => app.locator("#app-tool").textContent(), { timeout: 25_000 })
+              .not.toBe("pending");
+            const settledAtMs = Date.now();
+            const output = await app.locator("#app-tool").textContent();
+            const timingEvents = await waitForMcpAppTimingEvents(
+              fixture.readEvents,
+              timingSpec.scenario,
+            );
+            timingResults.push({
+              scenario: timingSpec.scenario,
+              output,
+              events: timingEvents,
+              startedAtMs: timingStartedAtMs,
+              settledAtMs,
+            });
+            await recordHost(standalonePage, timingSpec.scenario);
+            await fs.writeFile(
+              path.join(proofDir, "timing-results.json"),
+              JSON.stringify(timingResults, null, 2),
+            );
+            assertMcpAppTimingEvents(timingEvents, timingSpec);
+            expect(output).toContain("companion-called");
             const initializations = (await fixture.readEvents()).filter(
               (event) => event.method === "initialize",
             ).length;

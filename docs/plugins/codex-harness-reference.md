@@ -277,6 +277,29 @@ managed stdio or the local Unix control socket for production workloads.
 | `networkProxy`                   | disabled                                               | Opt into Codex permissions-profile networking for app-server commands. OpenClaw defines the selected `permissions.<profile>.network` config and selects it with `default_permissions` instead of sending `sandbox`.                                                                                                                                                                                                                |
 | `experimental.sandboxExecServer` | `false`                                                | Preview opt-in that registers an OpenClaw sandbox-backed Codex environment with the supported Codex app-server so native Codex execution can run inside the active OpenClaw sandbox.                                                                                                                                                                                                                                               |
 
+`appServer.args` accepts an array (recommended) or a quoted argument string.
+`OPENCLAW_CODEX_APP_SERVER_ARGS` uses the same string parsing on every platform:
+single and double quotes group words, backslashes and `#` stay literal, and an
+unfinished quote groups the remaining text. This preserves the string grammar
+shipped in `v2026.9.1`; strings do not use shell escaping.
+
+Use array entries for values containing embedded quotes, such as
+`'model="gpt-5.6-luna"'`. For a directory containing a literal backslash, both
+forms below pass the same path to Codex:
+
+```json5 validate=false
+args: "app-server --listen stdio:// -c log_dir=/tmp/openclaw\\logs"
+```
+
+```json5 validate=false
+args: ["app-server", "--listen", "stdio://", "-c", "log_dir=/tmp/openclaw\\logs"]
+```
+
+The `\\` in JSON5 encodes one backslash. Array entries preserve embedded quotes
+and backslashes, but surrounding whitespace is trimmed and empty entries are
+omitted. Strings also omit empty quoted arguments. Account for these limits
+before converting existing strings to arrays.
+
 `appServer.serviceTier` is used only when no shared Fast-mode run control is
 supplied. On Codex harness turns, shared Fast on sends `priority`, Fast off
 sends `null` to clear the OpenClaw-owned tier, and auto decides for each model

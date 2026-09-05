@@ -30,6 +30,10 @@ import {
 } from "./embeddings.js";
 import { MemoryManagerDatabaseContext } from "./manager-database-context.js";
 import {
+  prepareMemoryEmbeddingCacheUpsert,
+  type MemoryEmbeddingCacheRow,
+} from "./manager-embedding-cache.js";
+import {
   resolveMemoryPrimaryProviderRequest,
   type MemoryProviderLifecycleState,
 } from "./manager-provider-state.js";
@@ -628,16 +632,7 @@ export abstract class MemoryManagerSyncBase extends MemoryManagerDatabaseContext
     if (!this.cache.enabled) {
       return;
     }
-    type CacheRow = {
-      rowid: number;
-      provider: string;
-      model: string;
-      provider_key: string;
-      hash: string;
-      embedding: string;
-      dims: number | null;
-      updated_at: number;
-    };
+    type CacheRow = MemoryEmbeddingCacheRow & { rowid: number };
     const selectBatch = sourceDb.prepare(
       `SELECT rowid, provider, model, provider_key, hash, embedding, dims, updated_at
        FROM ${EMBEDDING_CACHE_TABLE}
@@ -645,14 +640,7 @@ export abstract class MemoryManagerSyncBase extends MemoryManagerDatabaseContext
        ORDER BY rowid
        LIMIT ?`,
     );
-    const insert = this.db.prepare(
-      `INSERT INTO ${EMBEDDING_CACHE_TABLE} (provider, model, provider_key, hash, embedding, dims, updated_at)
-       VALUES (?, ?, ?, ?, ?, ?, ?)
-       ON CONFLICT(provider, model, provider_key, hash) DO UPDATE SET
-         embedding=excluded.embedding,
-         dims=excluded.dims,
-         updated_at=excluded.updated_at`,
-    );
+    const upsert = prepareMemoryEmbeddingCacheUpsert(this.db);
     let lastRowid = 0;
     while (true) {
       // Materialize each source page so neither a read cursor nor a write
@@ -665,15 +653,7 @@ export abstract class MemoryManagerSyncBase extends MemoryManagerDatabaseContext
         this.db,
         () => {
           for (const row of batch) {
-            insert.run(
-              row.provider,
-              row.model,
-              row.provider_key,
-              row.hash,
-              row.embedding,
-              row.dims,
-              row.updated_at,
-            );
+            upsert(row);
           }
         },
         { operationLabel: "memory.embedding-cache.seed" },

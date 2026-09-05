@@ -67,6 +67,9 @@ it("keeps global boards under each owner's canonical session row across reopen",
     expect(boardStore.readWidgetHtml(target, "status")?.html).toBe(
       buildWidgetDocument("status", `<p>${agentId}</p>`),
     );
+    expect(boardStore.readWidgetHtml({ sessionKey: `agent:${agentId}:main` }, "status")?.html).toBe(
+      buildWidgetDocument("status", `<p>${agentId}</p>`),
+    );
     for (const params of [target, { sessionKey: `agent:${agentId}:main` }]) {
       const snapshot = await invoke("board.get", params);
       expect(snapshot).toHaveBeenCalledWith(

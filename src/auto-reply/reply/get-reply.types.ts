@@ -9,6 +9,7 @@ import type { SkillWorkshopProposalRevisionConstraint } from "../../skills/works
 import type { GetReplyOptions } from "../get-reply-options.types.js";
 import type { ReplyPayload } from "../reply-payload.js";
 import type { MsgContext } from "../templating.js";
+import type { VerboseLevel } from "../thinking.js";
 import type { FollowupQueueDisposition, QueuedFollowupReplyBatch } from "./queue/types.js";
 import type { ReplyOptionsWithAdmissionTicket } from "./reply-admission-ticket.js";
 import type { ReplyOptionsWithOperationRunState } from "./reply-operation-run-state.js";
@@ -24,6 +25,11 @@ export type PendingContinuationSettlement = {
   settle: (statusDelivered: boolean) => Promise<void>;
 };
 
+export type ReplyRunVerbosity = {
+  verboseLevelOverride?: VerboseLevel;
+  resolvedVerboseLevel: VerboseLevel;
+};
+
 type InternalReplySessionOptions = {
   prepareAssistantTranscriptMessage?: PrepareAssistantTranscriptMessage;
   /** Exact authority-bearing settings captured by Gateway chat admission. */
@@ -37,6 +43,8 @@ type InternalReplySessionOptions = {
   /** Defers the child-completion wake until the visible waiting status is delivered. */
   onPendingContinuation?: (settlement?: PendingContinuationSettlement) => void;
   onSessionPrepared?: (binding: ReplySessionBinding) => void;
+  /** Publishes each executing turn's preferences without persisting them to its session. */
+  onRunVerbosityResolved?: (settings: ReplyRunVerbosity) => void;
   /** Prevent implicit rollover after a caller has durably admitted this exact session. */
   pinExpectedExistingSession?: boolean;
   requestedSessionId?: string;

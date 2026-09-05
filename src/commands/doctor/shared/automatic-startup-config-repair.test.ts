@@ -170,6 +170,13 @@ describe("automatic startup config repair", () => {
   it.each([
     { name: "a non-legacy type error", config: { gateway: { port: "not-a-number" } } },
     {
+      name: "ambiguous legacy default owners",
+      config: {
+        session: { idleMinutes: 45 },
+        agents: { entries: { main: { default: true }, ops: { default: true } } },
+      },
+    },
+    {
       name: "a migration with a remaining type error",
       config: { session: { idleMinutes: 45 }, gateway: { port: "not-a-number" } },
     },

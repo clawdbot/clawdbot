@@ -332,10 +332,12 @@ export function appendTranscriptEventSync(
       return;
     }
     result = ok(
-      appendTranscriptEventInTransaction(
-        database,
-        resolved,
-        resolveTranscriptEventAppendParent(database, resolved.sessionId, event, options),
+      Boolean(
+        appendTranscriptEventInTransaction(
+          database,
+          resolved,
+          resolveTranscriptEventAppendParent(database, resolved.sessionId, event, options),
+        ),
       ),
     );
   }, toDatabaseOptions(resolved));

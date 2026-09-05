@@ -39,9 +39,36 @@ function createA2aInboundFixture(peerName = "hermes") {
 }
 
 describe("A2A channel inbound dispatch", () => {
+  it.each(["/status", "  /reset", "/approve pending allow-once", "/ custom-command"])(
+    "rejects peer slash command %s before dispatch even with a command allowlist",
+    async (text) => {
+      const fixture = createA2aInboundFixture();
+      try {
+        await dispatchA2aInbound({
+          ...fixture.params,
+          text,
+          config: { commands: { allowFrom: { "*": ["*"] } } },
+        });
+
+        expect(fixture.store.get(fixture.task.id)?.status).toMatchObject({
+          state: "TASK_STATE_REJECTED",
+          message: { parts: [{ text: expect.stringContaining("only users") }] },
+        });
+        expect(fixture.runtime.channel.inbound.dispatch).not.toHaveBeenCalled();
+      } finally {
+        fixture.store.stop();
+      }
+    },
+  );
+
   it("ignores non-final replies and completes the task with its final artifact", async () => {
     const fixture = createA2aInboundFixture();
     vi.mocked(fixture.runtime.channel.inbound.dispatch).mockImplementation(async (turn) => {
+      expect(turn.ctxPayload).toMatchObject({
+        BodyForAgent: fixture.params.text,
+        CommandAuthorized: false,
+        CommandInterpretationSuppressed: true,
+      });
       await turn.delivery.deliver({ text: "preview" }, { kind: "block" });
       expect(fixture.store.get(fixture.task.id)?.status.state).toBe("TASK_STATE_WORKING");
       await turn.delivery.deliver({ text: "agent answer" }, { kind: "final" });

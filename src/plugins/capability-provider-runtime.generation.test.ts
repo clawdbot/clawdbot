@@ -245,6 +245,45 @@ describe("capability loading from a Gateway generation", () => {
     },
   );
 
+  it.each(["source", "built"] as const)(
+    "scopes complete requested ids to their declared %s catalog owner",
+    (artifact) => {
+      withSpeechFixture((fixture) => {
+        fixture.config.plugins = { enabled: true };
+        fixture.config.tts = { provider: id, providers: { "fixture-secondary": {} } };
+        const { pluginDir, runtimeImported } = declareCapabilityCatalog(fixture);
+        const manifestPath = path.join(pluginDir, "openclaw.plugin.json");
+        const manifest = JSON.parse(fs.readFileSync(manifestPath, "utf8"));
+        manifest.contracts.speechProviders.push("fixture-secondary");
+        fs.writeFileSync(manifestPath, JSON.stringify(manifest));
+        const unrelatedDir = path.join(fixture.root, "extensions", "fixture-seed");
+        const unrelatedManifestPath = path.join(unrelatedDir, "openclaw.plugin.json");
+        const unrelatedManifest = JSON.parse(fs.readFileSync(unrelatedManifestPath, "utf8"));
+        unrelatedManifest.contracts = { speechProviders: ["fixture-unrequested"] };
+        unrelatedManifest.capabilityCatalogEntry = "./capability-catalog.cjs";
+        fs.writeFileSync(unrelatedManifestPath, JSON.stringify(unrelatedManifest));
+        fs.writeFileSync(
+          path.join(unrelatedDir, "capability-catalog.cjs"),
+          'throw new Error("unrequested catalog must not be evaluated");',
+        );
+        if (artifact === "source") {
+          fs.rmSync(path.join(fixture.root, "dist"), { recursive: true, force: true });
+        }
+        publishMetadata(fixture);
+        const registry = loadGatewayGeneration(fixture);
+        withPluginRuntimeRegistryScope(registry, () => {
+          const providers = speechProviders(fixture.config);
+          expect(providers.map((provider) => provider.id)).toEqual([id, "fixture-secondary"]);
+          expect(providers.map((provider) => provider.label)).toEqual([
+            `${artifact}:catalog`,
+            `${artifact}:catalog`,
+          ]);
+          expect(fs.existsSync(runtimeImported)).toBe(false);
+        });
+      });
+    },
+  );
+
   it.each(voiceKeys)("uses register() for an uncovered %s family", (key) => {
     withSpeechFixture((fixture) => {
       fixture.config.plugins = { enabled: true };

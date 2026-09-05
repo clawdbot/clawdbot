@@ -113,8 +113,9 @@ vi.mock("../../config/config.js", () => ({
 
 vi.mock("../../config/commands.flags.js", () => ({ isRestartEnabled: isRestartEnabledMock }));
 
-vi.mock("../../config/sessions.js", () => ({
-  extractDeliveryInfo: (sessionKey: string | undefined) => {
+vi.mock("../../config/sessions.js", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("../../config/sessions.js")>()),
+  extractDeliveryInfo: vi.fn((sessionKey: string | undefined) => {
     if (!sessionKey) {
       return { deliveryContext: undefined, threadId: undefined };
     }
@@ -129,7 +130,7 @@ vi.mock("../../config/sessions.js", () => ({
       deliveryContext: { channel: "webchat", to: "webchat:user-123", accountId: "default" },
       threadId: undefined,
     };
-  },
+  }),
 }));
 
 vi.mock("../../infra/restart-sentinel.js", async () => {
@@ -274,7 +275,7 @@ beforeEach(() => {
   });
   detectRespawnSupervisorMock.mockReset();
   detectRespawnSupervisorMock.mockReturnValue(null);
-  runGatewayUpdateMock.mockClear();
+  runGatewayUpdateMock.mockReset();
   runGatewayUpdateMock.mockResolvedValue({
     status: "ok",
     mode: "npm",
@@ -302,7 +303,7 @@ beforeEach(() => {
   refreshLatestUpdateRestartSentinelMock.mockClear();
   refreshLatestUpdateRestartSentinelMock.mockResolvedValue(null);
   recordLatestUpdateRestartSentinelMock.mockClear();
-  startManagedServiceUpdateHandoffMock.mockClear();
+  startManagedServiceUpdateHandoffMock.mockReset();
   startManagedServiceUpdateHandoffMock.mockImplementation(async (params) => ({
     status: "started",
     pid: 12345,

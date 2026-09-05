@@ -28,10 +28,7 @@ import {
   resolvePersistedSessionRuntimeId,
   resolveSessionRuntimeOverrideForProvider,
 } from "../../agents/session-runtime-compat.js";
-import {
-  resolveCandidateThinkingLevel,
-  resolveEffectiveAgentRuntime,
-} from "../../agents/thinking-runtime.js";
+import { resolveEffectiveAgentRuntime } from "../../agents/thinking-runtime.js";
 import {
   deriveContextPromptTokens,
   hasNonzeroUsage,
@@ -76,6 +73,7 @@ import type { AgentTurnCompaction } from "./agent-runner-execution.types.js";
 import {
   buildEmbeddedRunExecutionParams,
   resolveModelFallbackOptions,
+  resolveRunThinkingLevelForFallbackCandidate,
 } from "./agent-runner-utils.js";
 import type { CompactionNoticePhase } from "./compaction-notice.js";
 import {
@@ -1531,11 +1529,11 @@ export async function runMemoryFlushIfNeeded(params: {
             entry: activeSessionEntry,
             cfg: params.cfg,
           });
-          const candidateThinkLevel = resolveCandidateThinkingLevel({
+          const candidateThinkLevel = resolveRunThinkingLevelForFallbackCandidate({
             cfg: params.cfg,
             provider,
             modelId: model,
-            level: params.followupRun.run.thinkLevel,
+            run: params.followupRun.run,
             catalog: params.followupRun.run.thinkingCatalog,
             agentId: params.followupRun.run.agentId,
             sessionKey:

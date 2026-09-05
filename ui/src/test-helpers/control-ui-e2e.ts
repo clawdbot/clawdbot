@@ -310,6 +310,8 @@ export const defaultControlUiFeatureMethods = [
   "tools.github.authorize.cancel",
   "update.hold",
   "update.run",
+  "update.runs.get",
+  "update.runs.list",
   "update.status",
   "worktrees.branches",
 ] as const;
@@ -2073,10 +2075,20 @@ function installControlUiMockGateway(
         return { artifacts: [] };
       case "artifacts.download":
         return null;
+      case "sessions.resolve":
+        return sessions.resolve(isRecord(params) ? params : {});
       case "chat.history":
       case "chat.startup": {
-        const key =
-          isRecord(params) && typeof params.sessionKey === "string"
+        const resolution =
+          method === "chat.startup" && isRecord(params) && typeof params.shortId === "string"
+            ? sessions.resolve(params)
+            : undefined;
+        if (resolution && !resolution.ok) {
+          return { resolution, messages: [] };
+        }
+        const key = resolution?.ok
+          ? resolution.key
+          : isRecord(params) && typeof params.sessionKey === "string"
             ? params.sessionKey
             : scenario.sessionKey;
         const row = sessions.read(key);
@@ -2087,6 +2099,7 @@ function installControlUiMockGateway(
             : null;
         return {
           messages: scenario.historyMessages,
+          ...(resolution ? { resolution } : {}),
           sessionId: row.sessionId,
           ...(info || override ? { sessionInfo: { ...info, ...override } } : {}),
           thinkingLevel: null,
