@@ -25,9 +25,12 @@ export const TransportProtocolSchemas = {
   UnknownAgentIdErrorDetails: errorCodes.UnknownAgentIdErrorDetailsSchema,
   WizardNotFoundErrorDetails: errorCodes.WizardNotFoundErrorDetailsSchema,
   SetupAdmissionBusyErrorDetails: errorCodes.SetupAdmissionBusyErrorDetailsSchema,
+  GitHubPublicationSelectionRejectedErrorDetails:
+    errorCodes.GitHubPublicationSelectionRejectedErrorDetailsSchema,
   GatewayErrorDetails: errorCodes.GatewayErrorDetailsSchema,
   ProjectCloneErrorDetails: errorCodes.ProjectCloneErrorDetailsSchema,
   GatewaySuspendTaskBlocker: gatewaySuspend.GatewaySuspendTaskBlockerSchema,
+  GatewaySuspension: gatewaySuspend.GatewaySuspensionSchema,
   GatewaySuspendBlocker: gatewaySuspend.GatewaySuspendBlockerSchema,
   GatewaySuspendPrepareParams: gatewaySuspend.GatewaySuspendPrepareParamsSchema,
   GatewaySuspendPrepareBusyResult: gatewaySuspend.GatewaySuspendPrepareBusyResultSchema,
@@ -41,5 +44,7 @@ export const TransportProtocolSchemas = {
   GatewaySuspendStatusResult: gatewaySuspend.GatewaySuspendStatusResultSchema,
   GatewaySuspendResumeParams: gatewaySuspend.GatewaySuspendResumeParamsSchema,
   GatewaySuspendResumeResult: gatewaySuspend.GatewaySuspendResumeResultSchema,
+  GatewaySuspendHandoffParams: gatewaySuspend.GatewaySuspendHandoffParamsSchema,
+  GatewaySuspendHandoffResult: gatewaySuspend.GatewaySuspendHandoffResultSchema,
   UserPrefsLimitExceededErrorDetails: errorCodes.UserPrefsLimitExceededErrorDetailsSchema,
 } as const;

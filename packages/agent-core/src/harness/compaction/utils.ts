@@ -251,6 +251,11 @@ export function serializeConversation(messages: Message[]): string {
   let omissionMessages = 0;
 
   for (const msg of messages) {
+    // Carriers remain in replay for thinking-prefix binding, not in summaries
+    // where runtime-only context could become durable assistant-authored text.
+    if (msg.role === "user" && msg.runtimeContextCarrier === true) {
+      continue;
+    }
     if (msg.role === "user" || msg.role === "toolResult") {
       const { text, omissionText } = getCompactionContent(msg.content);
       // Fixed ASCII bounds additions to 8 * (82 markers + 17 wrapper) + 55 overflow = 847 bytes.

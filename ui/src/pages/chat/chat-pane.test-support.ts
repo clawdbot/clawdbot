@@ -1,5 +1,5 @@
 import { html, type TemplateResult } from "lit";
-import { vi } from "vitest";
+import { onTestFinished, vi } from "vitest";
 import type {
   SessionSuggestion,
   SessionSuggestionEvent,
@@ -19,10 +19,12 @@ import type {
   GatewayEventListener,
 } from "../../api/gateway.ts";
 import type { GatewaySessionRow } from "../../api/types.ts";
+import { createApplicationTheme } from "../../app/bootstrap-theme.ts";
 import { createChatAttachmentHandoff } from "../../app/chat-attachment-handoff.ts";
 import { createChatSubmissions } from "../../app/chat-submissions.ts";
 import type { ApplicationContext } from "../../app/context.ts";
 import type { ApplicationPlacementStartupStatus } from "../../app/session-placement-startup.ts";
+import { loadSettings } from "../../app/settings.ts";
 import type { CatalogSessionKey } from "../../lib/sessions/catalog-key.ts";
 import type { SessionCapability } from "../../lib/sessions/index.ts";
 import type { TaskSuggestionAcceptMode } from "../../lib/task-suggestion-acceptance.ts";
@@ -40,8 +42,10 @@ import type { ChatProps } from "./chat-view.ts";
 import { createBackgroundTasksProps } from "./components/chat-background-tasks.ts";
 import type { HeaderMenuAction } from "./components/chat-header-session-menu.ts";
 import { createSessionWorkspaceProps } from "./components/chat-session-workspace.ts";
+import type { SidebarPanelDefinition } from "./components/chat-sidebar-region-types.ts";
 import type { ChatMessageCache } from "./session-message-cache.ts";
 import type { SessionSnapshotStore } from "./session-snapshot-store.ts";
+import type { SidebarLayout } from "./sidebar-layout.ts";
 
 export type TestChatPane = HTMLElement & {
   catalogMessages: unknown[];
@@ -172,6 +176,8 @@ export type TestChatPane = HTMLElement & {
     agentWorkspace: undefined,
     workspaceGit: boolean,
     placementStartupStatus: ApplicationPlacementStartupStatus | null | undefined,
+    sidebarLayout?: SidebarLayout,
+    panelDefinitions?: SidebarPanelDefinition[],
   ) => TemplateResult;
 };
 
@@ -185,8 +191,17 @@ export function createGatewayBrowserClientFixture(
   return overrides as typeof overrides & GatewayBrowserClient;
 }
 
+function withLivePreferences(context: Omit<ApplicationContext, "theme">): ApplicationContext {
+  const theme = createApplicationTheme(
+    loadSettings(context.gateway.connection.gatewayUrl),
+    context.gateway,
+  );
+  onTestFinished(() => theme.dispose());
+  return { ...context, theme };
+}
+
 export function createInitializationContext(): ApplicationContext {
-  return {
+  return withLivePreferences({
     basePath: "",
     gateway: {
       snapshot: {
@@ -202,6 +217,12 @@ export function createInitializationContext(): ApplicationContext {
       },
       subscribe: () => () => {},
       subscribeEvents: () => () => {},
+      connection: {
+        gatewayUrl: loadSettings().gatewayUrl,
+        token: "",
+        bootstrapToken: "",
+        password: "",
+      },
     },
     config: {
       current: {
@@ -214,7 +235,6 @@ export function createInitializationContext(): ApplicationContext {
           avatarReason: null,
         },
         serverVersion: null,
-        localMediaPreviewRoots: [],
         embedSandboxMode: "strict",
         allowExternalEmbedUrls: false,
         terminalEnabled: false,
@@ -237,7 +257,7 @@ export function createInitializationContext(): ApplicationContext {
     chatSubmissions: createChatSubmissions(),
     chatAttachmentHandoff: createChatAttachmentHandoff(),
     sessions: { state: { modelOverrides: {} } },
-  } as unknown as ApplicationContext;
+  } as unknown as Omit<ApplicationContext, "theme">);
 }
 
 export function nativeHistoryMessage(seq: number, text = `message ${seq}`) {
@@ -269,7 +289,7 @@ export function createSessionContext(
   const snapshotListeners = new Set<
     (snapshot: ApplicationContext["gateway"]["snapshot"]) => void
   >();
-  return {
+  return withLivePreferences({
     gateway: {
       snapshot: {
         client,
@@ -326,7 +346,7 @@ export function createSessionContext(
     nativeChatDrafts: { subscribe: () => () => undefined },
     placementStartup: { get: vi.fn(() => null), pause: vi.fn() },
     sessions,
-  } as unknown as ApplicationContext;
+  } as unknown as Omit<ApplicationContext, "theme">);
 }
 
 export function createTestChatPane(params: {
@@ -373,8 +393,6 @@ export function createTestChatPane(params: {
     sidebarLayout: { columns: [] },
     ...createInitialChatRealtimeState(),
     // Minimal scroll host so scheduleChatScroll is a no-op instead of throwing.
-    chatScrollGeneration: 0,
-    chatScrollCommitCleanup: null,
     handleChatScroll: vi.fn(),
     resetToolStream: vi.fn(),
     renderLifecycle: { afterCommit: () => () => {}, invalidate: () => {} },

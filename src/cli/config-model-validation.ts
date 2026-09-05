@@ -49,6 +49,16 @@ function isPathPrefix(prefix: readonly string[], path: readonly string[]): boole
   return prefix.length <= path.length && prefix.every((segment, index) => path[index] === segment);
 }
 
+function pathMayAffectTextModelRefs(path: readonly string[]): boolean {
+  if (path[0] !== "agents" || path.length === 1) {
+    return path[0] === "agents";
+  }
+  if (path[1] === "defaults") {
+    return path.length === 2 || path[2] === "model";
+  }
+  return path[1] === "entries" || path[1] === "list";
+}
+
 function collectTextModelConfigRefs(params: {
   model: unknown;
   path: string;
@@ -471,6 +481,9 @@ export async function checkTouchedTextModelRefs(params: {
   createModelRefResolver?: () => Promise<ConfigModelRefResolver>;
   redactDependencyValues?: boolean;
 }): Promise<ConfigModelRefCheckResult> {
+  if (!params.touchedPaths.some(pathMayAffectTextModelRefs)) {
+    return { refsChecked: 0, refsTotal: 0, errors: [] };
+  }
   // Config mutation validation sees authored pre-roster objects, unlike normal
   // runtime callers. Materialize only the absent-roster compatibility shape;
   // explicit empty or malformed rosters must remain visible to schema repair.

@@ -232,6 +232,8 @@ document API), so untouched bytes usually survive; markdown rebuilds the file
 from its parsed structure on any edit, which can normalize incidental
 formatting outside the changed leaf. Add `--diff` when you want the preview
 as a focused before/after patch instead of the full rendered file.
+The patch records line-ending changes and missing final newlines, so applying
+it produces the same bytes as the write.
 
 ## Examples
 

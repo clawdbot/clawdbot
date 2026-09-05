@@ -122,48 +122,54 @@ function renderChatTaskSuggestions(props: {
             <header class="task-suggestion__header">
               <div class="task-suggestion__eyebrow" title=${cwd}>
                 ${t("chat.taskSuggestions.eyebrow", { repo })}
-                ${multiple
-                  ? html`<span class="task-suggestion__position"
-                      >${index + 1} / ${props.suggestions.length}</span
-                    >`
-                  : nothing}
+                ${
+                  multiple
+                    ? html`<span class="task-suggestion__position"
+                        >${index + 1} / ${props.suggestions.length}</span
+                      >`
+                    : nothing
+                }
               </div>
               <div class="task-suggestion__header-actions">
-                ${multiple
-                  ? html`
-                      <button
-                        class="task-suggestion__header-action"
-                        type="button"
-                        aria-label=${t("chat.taskSuggestions.previous")}
-                        data-task-prev
-                        @click=${() => props.onNavigate(suggestion.id, "previous")}
-                      >
-                        ${icons.chevronLeft}
-                      </button>
-                      <button
-                        class="task-suggestion__header-action"
-                        type="button"
-                        aria-label=${t("chat.taskSuggestions.next")}
-                        data-task-next
-                        @click=${() => props.onNavigate(suggestion.id, "next")}
-                      >
-                        ${icons.chevronRight}
-                      </button>
-                    `
-                  : nothing}
-                ${props.canDismiss
-                  ? html`
-                      <button
-                        class="task-suggestion__header-action task-suggestion__dismiss"
-                        type="button"
-                        ?disabled=${busy}
-                        aria-label=${t("chat.taskSuggestions.dismiss", { title })}
-                        @click=${() => props.onDismiss(suggestion)}
-                      >
-                        ${icons.x}
-                      </button>
-                    `
-                  : nothing}
+                ${
+                  multiple
+                    ? html`
+                        <button
+                          class="task-suggestion__header-action"
+                          type="button"
+                          aria-label=${t("chat.taskSuggestions.previous")}
+                          data-task-prev
+                          @click=${() => props.onNavigate(suggestion.id, "previous")}
+                        >
+                          ${icons.chevronLeft}
+                        </button>
+                        <button
+                          class="task-suggestion__header-action"
+                          type="button"
+                          aria-label=${t("chat.taskSuggestions.next")}
+                          data-task-next
+                          @click=${() => props.onNavigate(suggestion.id, "next")}
+                        >
+                          ${icons.chevronRight}
+                        </button>
+                      `
+                    : nothing
+                }
+                ${
+                  props.canDismiss
+                    ? html`
+                        <button
+                          class="task-suggestion__header-action task-suggestion__dismiss"
+                          type="button"
+                          ?disabled=${busy}
+                          aria-label=${t("chat.taskSuggestions.dismiss", { title })}
+                          @click=${() => props.onDismiss(suggestion)}
+                        >
+                          ${icons.x}
+                        </button>
+                      `
+                    : nothing
+                }
               </div>
             </header>
             <div class="task-suggestion__body">
@@ -206,9 +212,11 @@ function renderChatTaskSuggestions(props: {
                   @click=${() => accept("worktree")}
                 >
                   ${icons.play}
-                  ${busy
-                    ? t("chat.taskSuggestions.starting")
-                    : t("chat.taskSuggestions.startWorktree")}
+                  ${
+                    busy
+                      ? t("chat.taskSuggestions.starting")
+                      : t("chat.taskSuggestions.startWorktree")
+                  }
                 </button>
                 ${html`
                   <wa-dropdown
@@ -243,45 +251,53 @@ function renderChatTaskSuggestions(props: {
                     >
                       ${icons.chevronDown}
                     </button>
-                    ${props.canAcceptModes
-                      ? html`
-                          <wa-dropdown-item value="local" ?disabled=${busy || !props.canAccept}>
-                            ${t("chat.taskSuggestions.startLocal")}
-                          </wa-dropdown-item>
-                          ${cloudProfiles.length === 0
-                            ? html`
-                                <wa-dropdown-item
-                                  value="cloud"
-                                  disabled
-                                  title=${t("chat.taskSuggestions.noCloudConfigured")}
-                                >
-                                  ${t("chat.taskSuggestions.startCloudGeneric")}
-                                </wa-dropdown-item>
-                              `
-                            : cloudProfiles.map(
-                                (profile) => html`
-                                  <wa-dropdown-item
-                                    value="cloud"
-                                    data-cloud-profile=${profile.id}
-                                    ?disabled=${busy || !props.canAccept}
-                                  >
-                                    ${cloudProfiles.length > 1
-                                      ? t("chat.taskSuggestions.startCloud", {
-                                          profile: profile.label,
-                                        })
-                                      : t("chat.taskSuggestions.startCloudGeneric")}
-                                  </wa-dropdown-item>
-                                `,
-                              )}
-                          <wa-dropdown-item value="session" ?disabled=${busy || !props.canAccept}>
-                            ${t("chat.taskSuggestions.fixInSession")}
-                          </wa-dropdown-item>
-                        `
-                      : nothing}
+                    ${
+                      props.canAcceptModes
+                        ? html`
+                            <wa-dropdown-item value="local" ?disabled=${busy || !props.canAccept}>
+                              ${t("chat.taskSuggestions.startLocal")}
+                            </wa-dropdown-item>
+                            ${
+                              cloudProfiles.length === 0
+                                ? html`
+                                    <wa-dropdown-item
+                                      value="cloud"
+                                      disabled
+                                      title=${t("chat.taskSuggestions.noCloudConfigured")}
+                                    >
+                                      ${t("chat.taskSuggestions.startCloudGeneric")}
+                                    </wa-dropdown-item>
+                                  `
+                                : cloudProfiles.map(
+                                    (profile) => html`
+                                      <wa-dropdown-item
+                                        value="cloud"
+                                        data-cloud-profile=${profile.id}
+                                        ?disabled=${busy || !props.canAccept}
+                                      >
+                                        ${
+                                          cloudProfiles.length > 1
+                                            ? t("chat.taskSuggestions.startCloud", {
+                                                profile: profile.label,
+                                              })
+                                            : t("chat.taskSuggestions.startCloudGeneric")
+                                        }
+                                      </wa-dropdown-item>
+                                    `,
+                                  )
+                            }
+                            <wa-dropdown-item value="session" ?disabled=${busy || !props.canAccept}>
+                              ${t("chat.taskSuggestions.fixInSession")}
+                            </wa-dropdown-item>
+                          `
+                        : nothing
+                    }
                     <wa-dropdown-item value="copy-prompt">
-                      ${props.copiedIds.has(suggestion.id)
-                        ? t("chat.taskSuggestions.promptCopied")
-                        : t("chat.taskSuggestions.copyPrompt")}
+                      ${
+                        props.copiedIds.has(suggestion.id)
+                          ? t("chat.taskSuggestions.promptCopied")
+                          : t("chat.taskSuggestions.copyPrompt")
+                      }
                     </wa-dropdown-item>
                   </wa-dropdown>
                 `}

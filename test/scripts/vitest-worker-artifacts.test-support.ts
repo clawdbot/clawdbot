@@ -179,15 +179,16 @@ export function waitForFixtureFile(
       (expected === undefined || fs.readFileSync(filename, "utf8") === expected);
     const check = () => {
       if (matches()) {
-        fs.unwatchFile(filename, check);
+        clearInterval(poll);
         resolve();
       }
     };
-    // Readiness is the file state, including on hosts without native watch events.
-    fs.watchFile(filename, { interval: 50 }, check);
+    // watchFile can adopt a newly created receipt in its first stat without an event.
+    // Poll the persistent state itself so readiness never depends on that race.
+    const poll = setInterval(check, 50);
     void completion.then(
       () => {
-        fs.unwatchFile(filename, check);
+        clearInterval(poll);
         if (matches()) {
           resolve();
         } else {
@@ -195,7 +196,7 @@ export function waitForFixtureFile(
         }
       },
       (error: unknown) => {
-        fs.unwatchFile(filename, check);
+        clearInterval(poll);
         reject(new Error(`Child failed before writing ${filename}`, { cause: error }));
       },
     );
@@ -297,8 +298,8 @@ export function workerProbe(
           fs.appendFileSync(${JSON.stringify(path.join(directory, "generations.jsonl"))}, JSON.stringify(generation)+'\\n');
           const release = inject('releaseFile');
           if (release) await new Promise(resolve => {
-            const check = () => {if(fs.existsSync(release)){fs.unwatchFile(release,check);resolve();}};
-            fs.watchFile(release,{interval:50},check);
+            const check = () => {if(fs.existsSync(release)){clearInterval(poll);resolve();}};
+            const poll=setInterval(check,50);
             check();
           });
         } finally {prepared.cleanup();}
@@ -311,7 +312,7 @@ export function workerProbe(
   const cacheDirectory = path.join(directory, "cache");
   // Vitest keeps invocation metadata at the root cache even for inline projects.
   // Share the fixture's transform directory so cleanup owns both.
-  const experimental = cacheProof ? { fsModuleCache: true, fsModuleCachePath: cacheDirectory } : {};
+  const cacheConfig = cacheProof ? { fsModuleCache: true, fsModuleCachePath: cacheDirectory } : {};
   const config = writeFixture(
     directory,
     "vitest.config.mts",
@@ -321,8 +322,8 @@ export function workerProbe(
     const probe = {name:'fixture:transform-counter', transform(code,id) {
       if (${Boolean(cacheProof)} && ${JSON.stringify(transformFiles)}.includes(id)) fs.appendFileSync(${JSON.stringify(path.join(directory, "transforms.jsonl"))},JSON.stringify(id)+'\\n');
     }};
-    const project = name => ({plugins:[...shared.plugins,probe],resolve:{...shared.resolve,alias:[{find:'#fixture-value',replacement:${JSON.stringify(value)}},...shared.resolve.alias]},test:{name,include:[${JSON.stringify(convertPathToPattern(test))}],pool:'forks',maxWorkers:1,testTimeout:shared.test.testTimeout,experimental:${JSON.stringify(experimental)},provide:{launcherArgv:process.argv,configValue:'first',releaseFile:${holdSecond} && name==='second' ? ${JSON.stringify(path.join(directory, "release"))} : null}}});
-    export default async () => ({root:${JSON.stringify(root)},${cacheProof === "single" ? "...project('first')" : `plugins:shared.plugins,test:{${cacheProof ? `experimental:${JSON.stringify(experimental)},` : ""}projects:[project('first'),project('second')]}`}});
+    const project = name => ({extends:false,plugins:[...shared.plugins,probe],resolve:{...shared.resolve,alias:[{find:'#fixture-value',replacement:${JSON.stringify(value)}},...shared.resolve.alias]},test:{name,include:[${JSON.stringify(convertPathToPattern(test))}],pool:'forks',maxWorkers:1,testTimeout:shared.test.testTimeout,...${JSON.stringify(cacheConfig)},provide:{launcherArgv:process.argv,configValue:'first',releaseFile:${holdSecond} && name==='second' ? ${JSON.stringify(path.join(directory, "release"))} : null}}});
+    export default async () => ({root:${JSON.stringify(root)},${cacheProof === "single" ? "...project('first')" : `plugins:shared.plugins,test:{${cacheProof ? `...${JSON.stringify(cacheConfig)},` : ""}projects:[project('first'),project('second')]}`}});
   `,
   );
   return { config, value, configuredValue, parent, cacheDirectory };

@@ -15,9 +15,9 @@ const SLACK_WRITE_CLIENT_CACHE_MAX = 32;
 const SLACK_STARTUP_AUTH_TIMEOUT_MS = 10_000;
 const SLACK_STARTUP_AUTH_RETRY_BUDGET_MS = 35_000;
 const slackWriteClientCache = new Map<string, WebClient>();
-const slackListenerUploadCompletionClientCache = new WeakMap<
+const slackListenerWriteClientCache = new WeakMap<
   WebClient,
-  { teamId: string; client: WebClient }
+  { teamId: string | undefined; client: WebClient }
 >();
 
 type SlackWriteClientCacheOptions = Pick<WebClientOptions, "slackApiUrl" | "teamId">;
@@ -120,20 +120,20 @@ export function getSlackWriteClient(
   return client;
 }
 
-export function getSlackListenerUploadCompletionClient(params: {
+export function getSlackListenerWriteClient(params: {
   listenerClient: WebClient;
-  teamId: string;
+  teamId?: string;
   clientOptions?: WebClientOptions;
 }): WebClient | undefined {
   const token = params.listenerClient.token?.trim();
-  const teamId = params.teamId.trim().toUpperCase();
-  if (!token || !teamId) {
+  const teamId = params.teamId?.trim().toUpperCase();
+  if (!token) {
     return undefined;
   }
-  const cached = slackListenerUploadCompletionClientCache.get(params.listenerClient);
+  const cached = slackListenerWriteClientCache.get(params.listenerClient);
   if (cached) {
     // Bolt pools listener clients by authorized team. Reusing one for a
-    // different team is invalid scope, not another completion-client key.
+    // different team is invalid scope, not another write-client key.
     return cached.teamId === teamId ? cached.client : undefined;
   }
   const headers = Object.fromEntries(
@@ -141,7 +141,7 @@ export function getSlackListenerUploadCompletionClient(params: {
       ([name]) => name.toLowerCase() !== "authorization",
     ),
   );
-  // Completion is one-shot. Clone Bolt's public transport options and team
+  // Stream writes and upload completion are one-shot. Preserve transport and team
   // scope, but never inherit its retry policy or request deadline.
   const client = new WebClient(
     token,
@@ -154,6 +154,6 @@ export function getSlackListenerUploadCompletionClient(params: {
       timeout: 0,
     }),
   );
-  slackListenerUploadCompletionClientCache.set(params.listenerClient, { teamId, client });
+  slackListenerWriteClientCache.set(params.listenerClient, { teamId, client });
   return client;
 }

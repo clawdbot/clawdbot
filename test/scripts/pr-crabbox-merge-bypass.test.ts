@@ -361,6 +361,9 @@ else if (args[0] === "pr" && args[1] === "checks" && args.includes("--required")
 } else if (args[0] === "pr" && args[1] === "view") out(args.includes("--jq") ? pr.headRefOid : pr);
 else if (args[0] === "pr" && args[1] === "merge") out("synthetic merge request accepted");
 else if (args[0] === "workflow" && args[1] === "run") { value.dispatched = true; save(); }
+else if (endpoint === "graphql" && args.some(arg => arg.includes("viewerMergeBodyText"))) {
+  out({data:{repository:{pullRequest:{...pr,viewerMergeBodyText:"Reviewed fixture body"}}}});
+}
 else if (endpoint === "graphql" && args.some(arg => arg.includes("repository(owner:"))) {
   out({data:{repository:{...repo,ref:{target:{oid:"${mainSha}"}},pullRequest:pr}}});
 } else if (endpoint === "user") out(args[args.indexOf("--jq")+1] === ".login" ? "relay-reader" : {login:"relay-reader"});
@@ -615,6 +618,8 @@ describe("Crabbox authorization before final effects", () => {
           "--admin",
           "--match-head-commit",
           headSha,
+          "--body-file",
+          expect.any(String),
         ]);
         expect(result.calls.indexOf(requests[0]!)).toBeGreaterThan(
           result.calls.indexOf(memberships[1]!),
@@ -629,7 +634,7 @@ describe("Crabbox authorization before final effects", () => {
       if (revoke) {
         expect(output).toContain("merge-verify passed for PR #131091");
         expect(
-          result.calls.filter((args) => args.some((arg) => arg.includes("repository(owner:"))),
+          result.calls.filter((args) => args.some((arg) => arg.includes("ref(qualifiedName:"))),
         ).toHaveLength(2);
       }
     },

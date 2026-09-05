@@ -59,7 +59,9 @@ See [Cloud Workers](/gateway/cloud-workers) for profiles, requirements, dispatch
 
 ## Viewing the session desktop
 
-Open **Desktop** from a session to view its execution machine. Cloud sessions select their worker desktop; sessions on paired devices select that device. The pop-out window keeps the session in its link. Both viewers follow placement changes and disconnect from the previous machine when the session moves or stops. A stopped cloud session does not switch either viewer to the Gateway desktop.
+Open **Desktop** from a session to view its execution machine. Cloud sessions select their worker desktop; sessions on paired devices select that device. By default, the pop-out window keeps the session in its link, so both viewers follow placement changes and disconnect from the previous machine when the session moves or stops. A stopped cloud session does not switch either viewer to the Gateway desktop.
+
+If you choose a source in the Desktop picker, the panel keeps that choice when the session's placement changes. **Open desktop in new window** opens that source and requests the panel's current view-only or control mode. Desktop links contain no credentials and do not grant control; the new viewer still performs its normal authentication and permission checks.
 
 The machine must already support desktop viewing. For cloud workers, enable the [Cloud Worker Desktop lab and desktop profile setting](/gateway/cloud-workers#desktop-interactive). Opening Desktop starts in view-only mode and does not change the machine's permissions or the agent's tool policy. The global Desktop command in the command palette still opens the machine picker, including on chat pages.
 
@@ -72,6 +74,8 @@ Use a vision-capable model and a tool profile that permits `computer`. For the `
 Worker transcripts retain screenshots. Codex exposes the computer tool directly, outside code mode, so screenshot results reach the model as images. To keep later model requests within the transport limit, OpenClaw can replace older, already processed images with a text marker in the model context while preserving the current computer frame and unprocessed images. Opaque provider replay remains unchanged; if its required context cannot fit, the turn fails with recovery guidance.
 
 Computer control stays bound to the admitted turn, placement, node connection, and provider. If an OpenClaw worker disconnects, its computer execution closes even between tool calls; start a new turn to regain computer control after reconnecting. Other durable session operations can still finish. Stopping or replacing the machine invalidates old tool handles; an unavailable desktop never selects another connected computer. Disposable cloud desktops remain absent from the ordinary paired-computer picker. See [Computer use](/nodes/computer-use) for supported actions and [Cloud Worker Desktop](/gateway/cloud-workers#desktop-interactive) for setup and viewing permissions.
+
+For `remote-exec` turns, computer cleanup finishes before workspace reconciliation. If cleanup fails, OpenClaw keeps the captured reply, usage, delivery evidence, and any earlier error or interruption, adds a bounded cleanup diagnostic, and does not automatically replay the turn. A workspace recovery failure reports both problems. Security-sensitive resource cleanup still rejects completion rather than becoming an advisory warning; resolve the reported cleanup problem before retrying.
 
 ## Automatic load balancing across devices
 
@@ -94,7 +98,7 @@ Suspension never interrupts work: sessions with an active turn, queued messages,
 
 ## What stays with the Gateway
 
-Placement is disposable; the session is not. The transcript, the last-reconciled workspace files, placement history, and every provider credential live with the Gateway in all placements. After a clean reclaim or idle suspension, the next message provisions a replacement — warm when an image exists, cold otherwise. Failed placements keep their diagnostic visible; resolve pending cleanup, then redispatch and retry. An offline paired device is different by design: the placement stays active and waits for the device to reconnect, and **Continue on Gateway…** is an explicit action that can lose unsynced device files. Workspace changes made after the last reconciliation are the only loss window, and clean stops (including auto-suspension) reconcile before releasing the machine.
+Placement is disposable; the session is not. The transcript, the last-reconciled workspace files, placement history, and every provider credential live with the Gateway in all placements. After a clean reclaim or idle suspension, the next message provisions a replacement — warm when an image exists, cold otherwise. Failed placements keep their diagnostic visible; resolve pending cleanup, then redispatch and retry. An offline paired device is different by design: the placement stays active and waits for the device to reconnect, and **Continue on Gateway…** works while the device is offline, resuming from the last Gateway-synced workspace and discarding unsynced device changes. Workspace changes made after the last reconciliation are the only loss window, and clean stops (including auto-suspension) reconcile before releasing the machine.
 
 ## Related
 

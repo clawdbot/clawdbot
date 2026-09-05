@@ -1,11 +1,42 @@
 import { describe, expect, it } from "vitest";
 import {
+  boundCodeModeError,
+  boundCodeModeValue,
   captureCodeModeOutput,
   captureCodeModeValue,
   toCodeModeJsonSafe,
 } from "./code-mode-json.js";
 
 describe("Code Mode JSON normalization", () => {
+  it.each([
+    { limit: 20, prefix: "" },
+    { limit: 24, prefix: 'a"' },
+    { limit: 35, prefix: 'a"\\\n\r\t\b\f' },
+    { limit: 50, prefix: 'a"\\\n\r\t\b\f\u0000\u0001é' },
+    { limit: 72, prefix: 'a"\\\n\r\t\b\f\u0000\u0001é中🌍�za"\\\n\r\t' },
+  ])("fits escaped diagnostics at $limit bytes", ({ limit, prefix }) => {
+    const error = 'a"\\\n\r\t\b\f\u0000\u0001é中🌍\ud800z'.repeat(8);
+    expect(boundCodeModeError(error, limit)).toBe(`${prefix} [error truncated]`);
+  });
+
+  it("preserves whole lone surrogates and decodes only partial diagnostics", () => {
+    expect(boundCodeModeError("\ud800x", 20)).toBe("\ud800x");
+    expect(boundCodeModeError("\ud800".repeat(6), 30)).toBe("��� [error truncated]");
+  });
+
+  it.each([
+    { limit: 107, prefix: "", omittedBytes: 1000 },
+    { limit: 108, prefix: '"', omittedBytes: 999 },
+    { limit: 109, prefix: '"a', omittedBytes: 998 },
+  ])("fits marker digit-width transitions at $limit bytes", ({ limit, prefix, omittedBytes }) => {
+    expect(boundCodeModeValue("a".repeat(998), limit)).toEqual({
+      truncated: true,
+      omittedBytes,
+      guidance: "Output truncated; rerun with narrower args.",
+      prefix,
+    });
+  });
+
   it.each([
     { name: "undefined", value: undefined, expected: null },
     { name: "null", value: null, expected: null },

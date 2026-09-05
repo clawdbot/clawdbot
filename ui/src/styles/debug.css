@@ -134,6 +134,10 @@ openclaw-debug-overlay {
   gap: 8px;
 }
 
+.debug-overlay__disks {
+  margin-top: 8px;
+}
+
 .debug-overlay__vital {
   position: relative;
   display: flex;
@@ -160,6 +164,18 @@ openclaw-debug-overlay {
   letter-spacing: 0.08em;
   white-space: nowrap;
   text-transform: uppercase;
+}
+
+.debug-overlay__vital--disk .debug-vital__head {
+  display: grid;
+  gap: 2px;
+}
+
+.debug-overlay__vital--disk .debug-vital__label {
+  letter-spacing: normal;
+  white-space: normal;
+  text-transform: none;
+  overflow-wrap: anywhere;
 }
 
 .debug-vital__sub {

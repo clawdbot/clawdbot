@@ -544,16 +544,18 @@ async function dispatchMessage(params: {
 describe("handleFeishuMessage ACP routing", () => {
   beforeEach(() => {
     vi.clearAllMocks();
-    mockResolveConfiguredBindingRoute.mockReset().mockImplementation(
-      ({
-        route,
-      }: {
-        route: NonNullable<ConfiguredBindingRoute>["route"];
-      }): ConfiguredBindingRoute => ({
-        bindingResolution: null,
-        route,
-      }),
-    );
+    mockResolveConfiguredBindingRoute
+      .mockReset()
+      .mockImplementation(
+        ({
+          route,
+        }: {
+          route: NonNullable<ConfiguredBindingRoute>["route"];
+        }): ConfiguredBindingRoute => ({
+          bindingResolution: null,
+          route,
+        }),
+      );
     mockEnsureConfiguredBindingRouteReady.mockReset().mockResolvedValue({ ok: true });
     mockResolveBoundConversation.mockReset().mockReturnValue(null);
     mockTouchBinding.mockReset();
@@ -1077,16 +1079,18 @@ describe("handleFeishuMessage command authorization", () => {
     mockListFeishuThreadMessages.mockReset().mockResolvedValue([]);
     mockReadSessionUpdatedAt.mockReturnValue(undefined);
     mockResolveStorePath.mockReturnValue("/tmp/feishu-sessions.json");
-    mockResolveConfiguredBindingRoute.mockReset().mockImplementation(
-      ({
-        route,
-      }: {
-        route: NonNullable<ConfiguredBindingRoute>["route"];
-      }): ConfiguredBindingRoute => ({
-        bindingResolution: null,
-        route,
-      }),
-    );
+    mockResolveConfiguredBindingRoute
+      .mockReset()
+      .mockImplementation(
+        ({
+          route,
+        }: {
+          route: NonNullable<ConfiguredBindingRoute>["route"];
+        }): ConfiguredBindingRoute => ({
+          bindingResolution: null,
+          route,
+        }),
+      );
     mockEnsureConfiguredBindingRouteReady.mockReset().mockResolvedValue({ ok: true });
     mockResolveBoundConversation.mockReset().mockReturnValue(null);
     mockTouchBinding.mockReset();
@@ -3739,11 +3743,13 @@ describe("createFeishuMessageReceiveHandler media dedupe", () => {
 
     const call = mockCallArg<{
       event?: FeishuMessageEvent;
+      preparedContent?: string;
       messageDedupeKey?: string;
     }>(handleMessage, 0, 0);
-    expect(call.event?.message.content).toBe(JSON.stringify({ text: "first\nsecond" }));
+    expect(call.event?.message.content).toBe(last.message.content);
+    expect(call.preparedContent).toBe("first\nsecond");
     expect(call.messageDedupeKey).toBe(resolveFeishuMessageDedupeKey(last));
-    expect(resolveFeishuMessageDedupeKey(call.event as FeishuMessageEvent)).not.toBe(
+    expect(resolveFeishuMessageDedupeKey(call.event as FeishuMessageEvent)).toBe(
       call.messageDedupeKey,
     );
   });

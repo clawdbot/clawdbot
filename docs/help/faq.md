@@ -231,8 +231,8 @@ First-run Q&A - install, onboard, auth routes, subscriptions, initial failures -
 
     Debug:
     ```bash
-    openclaw cron run <jobId>
-    openclaw cron runs --id <jobId> --limit 50
+    openclaw automations run <jobId>
+    openclaw automations runs <jobId> --limit 50
     ```
 
     Docs: [Cron jobs](/automation/cron-jobs), [Automation](/automation).
@@ -251,7 +251,7 @@ First-run Q&A - install, onboard, auth routes, subscriptions, initial failures -
 
     Debug:
     ```bash
-    openclaw cron runs --id <jobId> --limit 50
+    openclaw automations runs <jobId> --limit 50
     openclaw tasks show <lookup>
     ```
 
@@ -268,7 +268,7 @@ First-run Q&A - install, onboard, auth routes, subscriptions, initial failures -
 
     Debug:
     ```bash
-    openclaw cron runs --id <jobId> --limit 50
+    openclaw automations runs <jobId> --limit 50
     ```
 
     Docs: [Cron jobs](/automation/cron-jobs), [cron CLI](/cli/cron).

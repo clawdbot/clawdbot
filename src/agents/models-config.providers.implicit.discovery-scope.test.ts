@@ -3,6 +3,15 @@ import os from "node:os";
 import { fileURLToPath } from "node:url";
 import { afterEach, beforeEach, describe, expect, it, vi, type MockInstance } from "vitest";
 import type { PluginMetadataSnapshotOwnerMaps } from "../plugins/plugin-metadata-snapshot.js";
+import { createPluginMetadataSnapshotFixture } from "../plugins/plugin-metadata.test-support.js";
+import {
+  prepareProviderExternalAuthWithPlugin,
+  resolveProviderSyntheticAuthWithPlugin,
+} from "../plugins/provider-runtime.js";
+import {
+  prepareSyntheticAuthWithProvider,
+  resolveSyntheticAuthWithProvider,
+} from "../plugins/provider-synthetic-auth.js";
 import type { ProviderPlugin } from "../plugins/types.js";
 import { withEnvAsync } from "../test-utils/env.js";
 import {
@@ -18,6 +27,15 @@ const mocks = vi.hoisted(() => ({
   runProviderStaticCatalog: vi.fn(),
 }));
 const BUNDLED_PLUGINS_DIR = fileURLToPath(new URL("../../extensions/", import.meta.url));
+
+vi.mock("../plugins/provider-runtime.js", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("../plugins/provider-runtime.js")>();
+  return {
+    ...actual,
+    prepareProviderExternalAuthWithPlugin: vi.fn(actual.prepareProviderExternalAuthWithPlugin),
+    resolveProviderSyntheticAuthWithPlugin: vi.fn(actual.resolveProviderSyntheticAuthWithPlugin),
+  };
+});
 
 vi.mock("../plugins/provider-discovery.js", () => ({
   resolveRuntimePluginDiscoveryProviders: mocks.resolveRuntimePluginDiscoveryProviders,
@@ -206,6 +224,103 @@ describe("resolveImplicitProviders startup discovery scope", () => {
 
     expect(mocks.runProviderCatalog).toHaveBeenCalledOnce();
   });
+
+  it.each([
+    { scoped: false, api: "openai-completions" as const },
+    { scoped: true, api: "openai-completions" as const },
+    { scoped: false, api: "openai-responses" as const },
+    { scoped: true, api: "openai-responses" as const },
+  ])(
+    "prepares configured native auth within the discovery scope (scoped: $scoped, api: $api)",
+    async ({ scoped, api }) => {
+      const prepareNative = vi.fn<NonNullable<ProviderPlugin["prepareSyntheticAuth"]>>(
+        async () => ({ apiKey: "native-auth-ready", source: "native fixture", mode: "oauth" }),
+      );
+      const provider: ProviderPlugin = {
+        ...createProvider("openai-completions"),
+        pluginId: "auth-owner",
+        hookAliases: ["openai-responses"],
+        prepareSyntheticAuth: prepareNative,
+      };
+      const metadata = createPluginMetadataSnapshotFixture({
+        plugins: [{ id: "auth-owner", providers: [provider.id] }],
+      });
+      const pluginMetadataSnapshot = {
+        ...metadata,
+        index: {
+          ...metadata.index,
+          plugins: metadata.index.plugins.map((plugin) =>
+            Object.assign({}, plugin, { syntheticAuthRefs: [provider.id] }),
+          ),
+        },
+      };
+      const config = {
+        models: {
+          providers: {
+            "custom-native": {
+              api,
+              baseUrl: "https://native.example.test",
+              models: [],
+            },
+            "unrelated-provider": {
+              baseUrl: "https://unrelated.example.test",
+              models: [],
+            },
+          },
+        },
+      };
+      const prepared = vi
+        .mocked(prepareProviderExternalAuthWithPlugin)
+        .mockImplementation((params) =>
+          prepareSyntheticAuthWithProvider(provider, params.context, params),
+        );
+      const resolved = vi
+        .mocked(resolveProviderSyntheticAuthWithPlugin)
+        .mockImplementation((params) =>
+          resolveSyntheticAuthWithProvider(provider, params.context, params),
+        );
+      mocks.resolveRuntimePluginDiscoveryProviders.mockResolvedValue([provider]);
+      let discoveryApiKey: string | undefined;
+      mocks.runProviderCatalog.mockImplementationOnce(
+        async ({
+          resolveProviderAuth,
+        }: Parameters<typeof import("../plugins/provider-discovery.js").runProviderCatalog>[0]) => {
+          const auth = resolveProviderAuth("custom-native");
+          discoveryApiKey = auth.discoveryApiKey;
+          return {
+            providers: {
+              [provider.id]: {
+                apiKey: auth.apiKey,
+                baseUrl: "https://native.example.test",
+                models: [],
+              },
+            },
+          };
+        },
+      );
+      try {
+        await resolveImplicitProviders({
+          agentDir: state.agentDir(),
+          authStore: { version: 1, profiles: {} },
+          config,
+          env: state.env,
+          pluginMetadataSnapshot,
+          ...(scoped ? { providerDiscoveryProviderIds: [provider.id] } : {}),
+        });
+        expect(mocks.runProviderCatalog).toHaveBeenCalledOnce();
+        expect(discoveryApiKey).toBe(scoped ? undefined : "native-auth-ready");
+        expect(
+          prepareNative.mock.calls.filter(([context]) => context.provider === "custom-native"),
+        ).toHaveLength(scoped ? 0 : 1);
+        expect(prepared.mock.calls.map(([params]) => params.provider)).not.toContain(
+          "unrelated-provider",
+        );
+      } finally {
+        prepared.mockRestore();
+        resolved.mockRestore();
+      }
+    },
+  );
 
   it("loads configured provider entrypoints but runs static hooks only for unresolved refs", async () => {
     const openai = createStaticOnlyProvider("openai");
@@ -771,9 +886,9 @@ describe("resolveImplicitProviders startup discovery scope", () => {
     });
 
     const providers = await resolveImplicitProviders({
-      agentDir: "/tmp/openclaw-agent",
+      agentDir: state.agentDir(),
       config: { models: { providers: { "amazon-bedrock": explicitProvider } } },
-      env: { AWS_PROFILE: "default" } as NodeJS.ProcessEnv,
+      env: { ...state.env, AWS_PROFILE: "default" },
       explicitProviders: { "amazon-bedrock": explicitProvider },
       sourceModelFields: new Map([
         ["amazon-bedrock/vision-model", { inputOmitted: true, cost: undefined }],

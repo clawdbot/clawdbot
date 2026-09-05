@@ -207,6 +207,31 @@ describe("models set + fallbacks", () => {
   );
 
   it.each(fallbackGroups)(
+    "does not duplicate a provider alias in models $name add",
+    async ({ name, key }) => {
+      mockConfigSnapshot({
+        agents: { defaults: { [key]: { fallbacks: ["moonshotai/kimi-k3"] } } },
+      });
+
+      await runFallbackCommand(name, "add", "moonshot/kimi-k3");
+
+      expect(getWrittenConfig().agents?.defaults?.[key]).toEqual({
+        fallbacks: ["moonshotai/kimi-k3"],
+      });
+    },
+  );
+
+  it.each(fallbackGroups)("removes a provider alias from models $name", async ({ name, key }) => {
+    mockConfigSnapshot({
+      agents: { defaults: { [key]: { fallbacks: ["moonshotai/kimi-k3"] } } },
+    });
+
+    await runFallbackCommand(name, "remove", "moonshot-ai/kimi-k3");
+
+    expect(getWrittenConfig().agents?.defaults?.[key]).toEqual({ fallbacks: [] });
+  });
+
+  it.each(fallbackGroups)(
     "removes aliases and clears only models $name",
     async ({ name, key, label, singular }) => {
       const siblingKey = key === "model" ? "imageModel" : "model";

@@ -44,11 +44,15 @@ function captureMiniMaxOAuthFetchTimeout() {
     timeout?: number,
     ...args: unknown[]
   ) => {
+    // Body readers share this duration and need a refreshable timer handle.
+    const timer = originalSetTimeout(() => callback(...args), timeout);
     if (timeout === MINIMAX_OAUTH_FETCH_TIMEOUT_MS) {
-      fireTimeout = () => callback(...args);
-      return 0 as unknown as ReturnType<typeof setTimeout>;
+      fireTimeout = () => {
+        clearTimeout(timer);
+        callback(...args);
+      };
     }
-    return originalSetTimeout(() => callback(...args), timeout);
+    return timer;
   }) as typeof setTimeout);
   return {
     setTimeoutSpy,

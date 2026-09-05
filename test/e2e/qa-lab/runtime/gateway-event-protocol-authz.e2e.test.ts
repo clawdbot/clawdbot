@@ -2,6 +2,7 @@ import { afterEach, describe, expect, it, vi } from "vitest";
 import { WebSocket } from "ws";
 import { createGatewayBroadcaster } from "../../../../src/gateway/server-broadcast.js";
 import { MAX_PREAUTH_PAYLOAD_BYTES } from "../../../../src/gateway/server-constants.js";
+import { GatewayClientRegistry } from "../../../../src/gateway/server/client-registry.js";
 import type { GatewayWsClient } from "../../../../src/gateway/server/ws-types.js";
 import {
   createGatewaySuiteHarness,
@@ -74,7 +75,7 @@ describe("Gateway event and protocol authorization", () => {
     const readSocket = makeRecordingSocket();
     const writeSocket = makeRecordingSocket();
     const adminSocket = makeRecordingSocket();
-    const clients = new Set<GatewayWsClient>([
+    const clients = new GatewayClientRegistry([
       makeClient("pairing", pairingSocket, "operator", ["operator.pairing"]),
       makeClient("node", nodeSocket, "node", ["operator.read"]),
       makeClient("read", readSocket, "operator", ["operator.read"]),

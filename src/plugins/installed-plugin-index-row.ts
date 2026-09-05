@@ -5,6 +5,8 @@ import {
   type InstalledPluginIndexStoreOptions,
 } from "./installed-plugin-index-store-path.js";
 
+export const INSTALLED_PLUGIN_INDEX_STATE_KEY = "plugins.installedIndex";
+
 /** Read failures must escape before either projection can authorize recovery or rebuilding. */
 export function readPersistedInstalledPluginIndexRowSync(
   options: InstalledPluginIndexStoreOptions,
@@ -20,7 +22,7 @@ export function readPersistedInstalledPluginIndexRowSync(
       db
         .prepare("SELECT value_json FROM config_machine_state WHERE state_key = ?")
         // SAFETY: config_machine_state.value_json is TEXT NOT NULL under STRICT.
-        .get("plugins.installedIndex") as { value_json: string } | undefined
+        .get(INSTALLED_PLUGIN_INDEX_STATE_KEY) as { value_json: string } | undefined
     );
   }, resolveInstalledPluginIndexStateDatabaseOptions(options));
 }

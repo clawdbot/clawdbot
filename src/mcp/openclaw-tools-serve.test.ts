@@ -217,7 +217,7 @@ describe("OpenClaw tools MCP server", () => {
     expect(armedServer.env?.[OPENCLAW_TOOLS_MCP_SYSTEM_AGENT_APPROVAL_ARMED_ENV]).toBe("1");
   });
 
-  it("reconstructs the delegated refusal from env on the native CLI MCP tool", async () => {
+  it("reconstructs delegated proposal staging from env on the native CLI MCP tool", async () => {
     const operation = {
       kind: "config-set",
       path: "agents.defaults.subagents.thinking",
@@ -241,8 +241,9 @@ describe("OpenClaw tools MCP server", () => {
 
     const text = JSON.stringify(result);
     expect(text).toContain("needs-approval:");
-    expect(text).toContain("OpenClaw operator UI");
-    expect(text).toContain("cannot be applied from this chat");
+    expect(text).toContain("requesting session's permission policy");
+    expect(text).toContain("returns the final outcome");
+    expect(text).not.toContain("OpenClaw operator UI");
     expect(text).not.toContain("ask the user to reply yes");
   });
 });

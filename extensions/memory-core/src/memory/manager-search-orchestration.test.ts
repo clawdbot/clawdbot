@@ -536,7 +536,7 @@ describe("memory index", () => {
 
   it("does not block querying on session reconciliation", async () => {
     const manager = await getPersistentManager(
-      createCfg({ provider: "none", minScore: 0, onSearch: true, hybrid: { enabled: true } }),
+      createCfg({ provider: "none", minScore: 0, hybrid: { enabled: true } }),
     );
     await manager.sync({ reason: "test" });
 
@@ -581,16 +581,10 @@ describe("memory index", () => {
         sources: ["memory", "sessions"],
         sessionMemory: true,
         minScore: 0,
-        onSearch: true,
         hybrid: { enabled: true },
       });
       const manager = await getPersistentManager(cfg);
       await manager.sync({ reason: "test", force: true });
-      // This fixture supplies one exact dirty generation, without later native
-      // watcher notifications adding another generation during the handoff.
-      (
-        manager as unknown as { closeNativeMemoryWatchPairs: () => void }
-      ).closeNativeMemoryWatchPairs();
       const content = "Current memory appears only after the dirty search sync.";
       if (source === "memory") {
         await fs.writeFile(path.join(fixture.paths.memory, "search-sync.md"), content);
@@ -697,7 +691,6 @@ describe("memory index", () => {
       provider: "none",
       sources: ["memory"],
       minScore: 0,
-      onSearch: true,
       hybrid: { enabled: true },
     });
     const manager = await getPersistentManager(cfg);
@@ -788,7 +781,6 @@ describe("memory index", () => {
     const cfg = createCfg({
       provider: "none",
       minScore: 0,
-      onSearch: false,
       hybrid: { enabled: true },
     });
     const initialManager = await getFreshManager(cfg, "cli");
@@ -879,7 +871,7 @@ describe("memory index", () => {
     "restores a failed maintenance generation after $name and still closes its transient manager",
     async ({ error: syncError, expectedSyncCalls }) => {
       const manager = await getPersistentManager(
-        createCfg({ provider: "none", minScore: 0, onSearch: true, hybrid: { enabled: true } }),
+        createCfg({ provider: "none", minScore: 0, hybrid: { enabled: true } }),
       );
       await manager.sync({ reason: "test" });
       const maintenance = {
@@ -934,7 +926,6 @@ describe("memory index", () => {
     const cfg = createCfg({
       provider: "none",
       minScore: 0,
-      onSearch: true,
       hybrid: { enabled: true },
     });
     const manager = await getPersistentManager(cfg);
@@ -960,7 +951,7 @@ describe("memory index", () => {
 
   it("does not let a no-op sync hide a later detached failure", async () => {
     const manager = await getPersistentManager(
-      createCfg({ provider: "none", minScore: 0, onSearch: true, hybrid: { enabled: true } }),
+      createCfg({ provider: "none", minScore: 0, hybrid: { enabled: true } }),
     );
     await manager.sync({ reason: "baseline" });
     const maintenanceStarted = createDeferred<void>();
@@ -1005,7 +996,6 @@ describe("memory index", () => {
     const cfg = createCfg({
       fallback: "fallback-provider",
       minScore: 0,
-      onSearch: true,
       hybrid: { enabled: true },
     });
     const manager = await getPersistentManager(cfg);
@@ -1057,7 +1047,7 @@ describe("memory index", () => {
 
   it("does not let a rejected maintenance handoff abort manager teardown", async () => {
     const manager = await getPersistentManager(
-      createCfg({ provider: "none", minScore: 0, onSearch: true, hybrid: { enabled: true } }),
+      createCfg({ provider: "none", minScore: 0, hybrid: { enabled: true } }),
     );
     await manager.sync({ reason: "test" });
     Reflect.set(manager, "dirty", true);

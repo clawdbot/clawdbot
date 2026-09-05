@@ -3,12 +3,14 @@ import { DEFAULT_GATEWAY_REQUEST_TIMEOUT_MS } from "../../packages/gateway-clien
 import type { ChannelPlugin } from "../channels/plugins/types.public.js";
 import type { GatewayNativeApprovalMethod } from "../infra/approval-gateway-runtime-methods.js";
 import type { ExecApprovalRequest } from "../infra/exec-approvals.js";
+import { findDeliveryIntentOwner } from "../infra/outbound/delivery-queue-storage.js";
 import {
   captureActivePluginRegistrySnapshot,
   restoreActivePluginRegistrySnapshot,
   stageActivePluginRegistry,
 } from "../plugins/runtime.js";
 import { getActiveGatewayRootWorkCount } from "../process/gateway-work-admission.js";
+import { trackAsyncWork } from "../shared/async-work-scope.js";
 import { createTestRegistry } from "../test-utils/channel-plugins.js";
 import { withOpenClawTestState } from "../test-utils/openclaw-test-state.js";
 import { captureAgentTurnPrincipal } from "./agent-turn/principal.js";
@@ -21,6 +23,7 @@ import { getGatewayRecoveryRuntime } from "./server-recovery-runtime-context.js"
 
 function createContext(): GatewayRequestContext {
   return {
+    trackExecution: trackAsyncWork,
     deps: {},
     getRuntimeConfig: () => ({}),
     logGateway: {
@@ -177,7 +180,15 @@ describe("createGatewayInstanceRuntime", () => {
 
   it("sends recovery notices through normal outbound without invoking plugin actions", async () => {
     await withOpenClawTestState({ layout: "state-only", prefix: "recovery-notice-" }, async () => {
-      const sendText = vi.fn(async () => ({ channel: "signal", messageId: "signal-message-1" }));
+      let releasePlatformDispatch: (() => void) | undefined;
+      let platformDispatchHold: Promise<void> | undefined;
+      const visibleSend = vi.fn();
+      const sendText = vi.fn(async (ctx: { onPlatformSendDispatch?: () => Promise<void> }) => {
+        await platformDispatchHold;
+        await ctx.onPlatformSendDispatch?.();
+        visibleSend();
+        return { channel: "signal", messageId: "signal-message-1" };
+      });
       const handleAction = vi.fn(async () => {
         throw new Error("recovery notice must not invoke message actions");
       });
@@ -224,16 +235,39 @@ describe("createGatewayInstanceRuntime", () => {
       });
 
       try {
-        await runtime.recovery.sendRecoveryNotice({
+        const idempotencyKey = "main-session-restart-recovery:run-1:failed-notice";
+        const notice = {
           channel: "signal",
           to: "+15551234567",
           accountId: "work",
           threadId: "thread-1",
           text: "Recovery notice",
-          idempotencyKey: "main-session-restart-recovery:run-1:failed-notice",
-        });
+          idempotencyKey,
+        } as const;
+        await runtime.recovery.sendRecoveryNotice(notice);
+        await runtime.recovery.sendRecoveryNotice(notice);
 
-        expect(sendText).toHaveBeenCalledOnce();
+        expect(findDeliveryIntentOwner(idempotencyKey)).toMatchObject({ status: "completed" });
+        expect(visibleSend).toHaveBeenCalledOnce();
+
+        let ownerCurrent = true;
+        platformDispatchHold = new Promise<void>((resolve) => {
+          releasePlatformDispatch = resolve;
+        });
+        const staleDelivery = runtime.recovery.sendRecoveryNotice({
+          ...notice,
+          idempotencyKey: "main-session-restart-recovery:run-2:failed-notice",
+          isCurrent: () => ownerCurrent,
+        });
+        await vi.waitFor(() => expect(sendText).toHaveBeenCalledTimes(2));
+        ownerCurrent = false;
+        releasePlatformDispatch?.();
+
+        await expect(staleDelivery).rejects.toThrow(
+          "Recovery notice owner retired before delivery",
+        );
+
+        expect(visibleSend).toHaveBeenCalledOnce();
         expect(sendText).toHaveBeenCalledWith(
           expect.objectContaining({
             to: "+15551234567",

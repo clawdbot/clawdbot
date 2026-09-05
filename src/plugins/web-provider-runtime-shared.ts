@@ -27,7 +27,7 @@ type ResolvePluginWebProvidersParams = {
   manifestRecords?: readonly PluginManifestRecord[];
 };
 
-type ResolveWebProviderRuntimeDeps<TEntry> = {
+export type WebProviderRuntimeResolution<TEntry> = {
   resolveBundledResolutionConfig: (params: {
     config?: PluginLoadOptions["config"];
     workspaceDir?: string;
@@ -82,7 +82,7 @@ type WebProviderRuntimeContext = {
 
 function resolveWebProviderRuntimeContext<TEntry>(
   params: ResolvePluginWebProvidersParams,
-  deps: ResolveWebProviderRuntimeDeps<TEntry>,
+  deps: WebProviderRuntimeResolution<TEntry>,
 ): WebProviderRuntimeContext {
   const env = params.env ?? process.env;
   const workspaceDir = params.workspaceDir ?? getActivePluginRegistryWorkspaceDir();
@@ -162,7 +162,7 @@ function resolveWebProviderLoadOptions(
 /** Resolves plugin web providers from setup, active runtime, or a scoped load. */
 export function resolvePluginWebProviders<TEntry>(
   params: ResolvePluginWebProvidersParams,
-  deps: ResolveWebProviderRuntimeDeps<TEntry>,
+  deps: WebProviderRuntimeResolution<TEntry>,
 ): TEntry[] {
   const env = params.env ?? process.env;
   const workspaceDir = params.workspaceDir ?? getActivePluginRegistryWorkspaceDir();

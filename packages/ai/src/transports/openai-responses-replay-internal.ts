@@ -190,133 +190,132 @@ export async function createResponsesStreamWithEncryptedContentRetry(params: {
   response: Response;
   attempt: ResponsesEncryptedContentAttempt<OpenAIResponsesRequestParams>;
 }> {
-  const sendAttempt = async (
-    attempt: ResponsesEncryptedContentAttempt<OpenAIResponsesRequestParams>,
+  const send = async (
+    initialAttempt: ResponsesEncryptedContentAttempt<OpenAIResponsesRequestParams>,
   ) => {
-    const { data, response } = await params.client.responses
-      .create(attempt.request as never, params.requestOptions as never)
-      .withResponse();
-    commitResponsesEncryptedContentAttempt(attempt, (checkpoint) => {
-      if (checkpoint) {
-        params.onCompactionRejected?.(checkpoint);
+    let attempt = initialAttempt;
+    for (;;) {
+      // Observer failures are not provider rejections and must never enter recovery.
+      params.observePrompt?.(attempt.request, {
+        egress: "responses-sdk",
+        payloadVariant: attempt.kind,
+      });
+      try {
+        const { data, response } = await params.client.responses
+          .create(attempt.request as never, params.requestOptions as never)
+          .withResponse();
+        // Commit a resolved attempt before rejecting a non-stream response.
+        commitResponsesEncryptedContentAttempt(attempt, (checkpoint) => {
+          if (checkpoint) {
+            params.onCompactionRejected?.(checkpoint);
+          }
+        });
+        if (!isAsyncIterable(data)) {
+          throw new Error("OpenAI Responses streaming request returned a non-stream response");
+        }
+        return { stream: data, response, attempt };
+      } catch (error) {
+        let nextAttempt = await resolveNextResponsesEncryptedContentAttempt(attempt, error, {
+          buildFullHistoryRequest: params.buildFullHistoryRequest,
+        });
+        if (
+          !nextAttempt &&
+          attempt.request.previous_response_id &&
+          error &&
+          typeof error === "object" &&
+          typeof (error as { status?: unknown }).status === "number" &&
+          (error as { code?: unknown }).code === "previous_response_not_found"
+        ) {
+          const request = {
+            ...(params.buildFullHistoryRequest
+              ? await params.buildFullHistoryRequest()
+              : attempt.request),
+          };
+          delete request.previous_response_id;
+          nextAttempt = { kind: "continuation-rejected", request };
+        }
+        if (!nextAttempt) {
+          throw error;
+        }
+        const retryDescription =
+          nextAttempt.kind === "reasoning-stripped"
+            ? "without encrypted reasoning content"
+            : nextAttempt.kind === "compaction-stripped"
+              ? "without encrypted compaction content"
+              : "full history after rejected previous_response_id";
+        log.warn(
+          `[responses] retrying ${retryDescription} provider=${params.model.provider} ` +
+            `api=${params.model.api} model=${params.model.id}`,
+        );
+        attempt = nextAttempt;
       }
-    });
-    if (!isAsyncIterable(data)) {
-      throw new Error("OpenAI Responses streaming request returned a non-stream response");
     }
-    return { stream: data, response, attempt };
   };
-
-  let attempt: ResponsesEncryptedContentAttempt<OpenAIResponsesRequestParams> = {
+  const result = await send({
     kind: params.initialAttemptKind ?? "initial",
     request: params.request,
     ...(params.initialRejectedCompaction
       ? { rejectedCompaction: params.initialRejectedCompaction }
       : {}),
-  };
-  while (true) {
-    params.observePrompt?.(attempt.request, {
-      egress: "responses-sdk",
-      payloadVariant: attempt.kind,
-    });
-    try {
-      const result = await sendAttempt(attempt);
-      return {
-        ...result,
-        stream: {
-          async *[Symbol.asyncIterator]() {
-            let rejectedEvent: unknown;
-            try {
-              for await (const event of params.wrapStream?.(result) ?? result.stream) {
-                if (isRecord(event)) {
-                  const failure =
-                    event.type === "response.failed" && isRecord(event.response)
-                      ? event.response.error
-                      : event.type === "error"
-                        ? (event.error ?? event)
-                        : undefined;
-                  if (
-                    isRecord(failure) &&
-                    params.canRetryStream?.() === true &&
-                    isInvalidEncryptedContentError(failure)
-                  ) {
-                    rejectedEvent = event;
-                    const message = typeof failure.message === "string" ? failure.message : "";
-                    throw Object.assign(new Error(message), {
-                      code: failure.code,
-                      status: failure.status,
-                    });
-                  }
+  });
+  return {
+    ...result,
+    stream: {
+      async *[Symbol.asyncIterator]() {
+        let current = result;
+        // Advance the source after rejection; retain the caller's one live parser and hooks.
+        for (;;) {
+          let rejectedEvent: unknown;
+          try {
+            for await (const event of params.wrapStream?.(current) ?? current.stream) {
+              if (isRecord(event)) {
+                const failure =
+                  event.type === "response.failed" && isRecord(event.response)
+                    ? event.response.error
+                    : event.type === "error"
+                      ? (event.error ?? event)
+                      : undefined;
+                if (
+                  isRecord(failure) &&
+                  params.canRetryStream?.() === true &&
+                  isInvalidEncryptedContentError(failure)
+                ) {
+                  rejectedEvent = event;
+                  const message = typeof failure.message === "string" ? failure.message : "";
+                  throw Object.assign(new Error(message), {
+                    code: failure.code,
+                    status: failure.status,
+                  });
                 }
-                yield event;
               }
-            } catch (error) {
-              // Response hooks can abort the request before any output exists; retrying their
-              // failures would reissue an already-canceled request as provider recovery.
-              const nextAttempt =
-                params.canRetryStream?.() === true && !params.requestOptions?.signal?.aborted
-                  ? await resolveNextResponsesEncryptedContentAttempt(result.attempt, error, {
-                      buildFullHistoryRequest: params.buildFullHistoryRequest,
-                    })
-                  : undefined;
-              if (!nextAttempt) {
-                if (rejectedEvent !== undefined) {
-                  yield rejectedEvent;
-                  return;
-                }
-                throw error;
-              }
-              log.warn(
-                `[responses] retrying streamed encrypted content provider=${params.model.provider} ` +
-                  `api=${params.model.api} model=${params.model.id}`,
-              );
-              const recovered = await createResponsesStreamWithEncryptedContentRetry({
-                ...params,
-                request: nextAttempt.request,
-                initialAttemptKind: nextAttempt.kind,
-                initialRejectedCompaction: nextAttempt.rejectedCompaction,
-              });
-              yield* recovered.stream;
+              yield event;
             }
-          },
-        },
-      };
-    } catch (error) {
-      let nextAttempt = await resolveNextResponsesEncryptedContentAttempt(attempt, error, {
-        buildFullHistoryRequest: params.buildFullHistoryRequest,
-      });
-      if (
-        !nextAttempt &&
-        attempt.request.previous_response_id &&
-        error &&
-        typeof error === "object" &&
-        typeof (error as { status?: unknown }).status === "number" &&
-        (error as { code?: unknown }).code === "previous_response_not_found"
-      ) {
-        const request = {
-          ...(params.buildFullHistoryRequest
-            ? await params.buildFullHistoryRequest()
-            : attempt.request),
-        };
-        delete request.previous_response_id;
-        nextAttempt = { kind: "continuation-rejected", request };
-      }
-      if (!nextAttempt) {
-        throw error;
-      }
-      const retryDescription =
-        nextAttempt.kind === "reasoning-stripped"
-          ? "without encrypted reasoning content"
-          : nextAttempt.kind === "compaction-stripped"
-            ? "without encrypted compaction content"
-            : "full history after rejected previous_response_id";
-      log.warn(
-        `[responses] retrying ${retryDescription} provider=${params.model.provider} ` +
-          `api=${params.model.api} model=${params.model.id}`,
-      );
-      attempt = nextAttempt;
-    }
-  }
+            return;
+          } catch (error) {
+            // Hook cancellation before output must not reissue an already-cancelled request.
+            const nextAttempt =
+              params.canRetryStream?.() === true && !params.requestOptions?.signal?.aborted
+                ? await resolveNextResponsesEncryptedContentAttempt(current.attempt, error, {
+                    buildFullHistoryRequest: params.buildFullHistoryRequest,
+                  })
+                : undefined;
+            if (!nextAttempt) {
+              if (rejectedEvent !== undefined) {
+                yield rejectedEvent;
+                return;
+              }
+              throw error;
+            }
+            log.warn(
+              `[responses] retrying streamed encrypted content provider=${params.model.provider} ` +
+                `api=${params.model.api} model=${params.model.id}`,
+            );
+            current = await send(nextAttempt);
+          }
+        }
+      },
+    },
+  };
 }
 
 export function resolveAzureOpenAIApiVersion(env = process.env): string {

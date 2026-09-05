@@ -296,8 +296,9 @@ NODE
 node "$ROOT_DIR/scripts/prepare-apple-mermaid.mjs"
 
 # pnpm build owns the Control UI and content-checked build stamps as well.
-mkdir -p "$(dirname "$APP_DESTINATION")"
-APP_STAGE_DIR="$(mktemp -d "$ROOT_DIR/dist/.openclaw-package.XXXXXX")"
+# Private Swift and worker staging must stay outside the published dist tree.
+mkdir -p "$(dirname "$APP_DESTINATION")" "$ROOT_DIR/.artifacts"
+APP_STAGE_DIR="$(mktemp -d "$ROOT_DIR/.artifacts/.openclaw-package.XXXXXX")"
 APP_ROOT="$APP_STAGE_DIR/OpenClaw.app"
 
 echo "🔨 Building $PRODUCT ($BUILD_CONFIG) [${BUILD_ARCHS[*]}]"
@@ -415,8 +416,17 @@ else
   echo "WARN: Swift compatibility library not found at $SWIFT_COMPAT_LIB (continuing)" >&2
 fi
 
-echo "🖼  Copying app icon"
-cp "$ROOT_DIR/apps/macos/Sources/OpenClaw/Resources/OpenClaw.icns" "$APP_ROOT/Contents/Resources/OpenClaw.icns"
+echo "🖼  Compiling app icon"
+xcrun actool "$ROOT_DIR/apps/macos/Icon.icon" \
+  --compile "$APP_ROOT/Contents/Resources" \
+  --output-format human-readable-text --notices --warnings --errors \
+  --output-partial-info-plist "$APP_STAGE_DIR/icon.plist" \
+  --app-icon Icon --include-all-app-icons --enable-on-demand-resources NO \
+  --development-region en --target-device mac \
+  --minimum-deployment-target "$(plist_print_required "$APP_ROOT/Contents/Info.plist" LSMinimumSystemVersion)" \
+  --platform macosx
+mv "$APP_ROOT/Contents/Resources/Icon.icns" "$APP_ROOT/Contents/Resources/OpenClaw.icns"
+cp -R "$ROOT_DIR/apps/macos/Sources/OpenClaw/Resources/AppIcons" "$APP_ROOT/Contents/Resources/AppIcons"
 
 echo "📦 Copying device model resources"
 rm -rf "$APP_ROOT/Contents/Resources/DeviceModels"
@@ -437,6 +447,11 @@ else
   echo "🖥  Staging embedded CUA driver"
   "$ROOT_DIR/scripts/stage-cua-driver-macos.sh" "$APP_ROOT/Contents/Resources/cua-driver"
 fi
+
+echo "📦 Staging browser sign-in helper"
+for arch in "${BUILD_ARCHS[@]}"; do
+  bash "$ROOT_DIR/scripts/stage-cloudflared-macos.sh" "$arch" "$APP_ROOT/Contents/Resources/cloudflared"
+done
 
 echo "📦 Copying CLI installer"
 INSTALL_CLI_SRC="$ROOT_DIR/scripts/install-cli.sh"
@@ -563,7 +578,7 @@ fi
 "$ROOT_DIR/scripts/codesign-mac-app.sh" "$APP_ROOT"
 codesign --verify --deep --strict "$APP_ROOT"
 for arch in "${BUILD_ARCHS[@]}"; do
-  env -i HOME="$APP_STAGE_DIR" PATH="/usr/bin:/bin:/usr/sbin:/sbin" TMPDIR="$APP_STAGE_DIR" \
+  env -i HOME="$APP_STAGE_DIR" PATH="/usr/bin:/bin:/usr/sbin:/sbin" TMPDIR="${TMPDIR:-/tmp}" \
     "$APP_ROOT/Contents/Resources/node-worker/$arch/bin/node" \
     "$ROOT_DIR/scripts/verify-mac-node-worker.mjs" \
     "$APP_ROOT/Contents/Resources/node-worker/$arch" "$ROOT_DIR/dist/build-info.json"

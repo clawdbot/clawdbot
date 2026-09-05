@@ -632,7 +632,7 @@ export function createWorkerPlacementDispatchService(options: WorkerPlacementDis
             if (failedPlacement?.state !== "failed") {
               throw new Error("Failed cloud worker placement changed during reclaim");
             }
-            await failure.retryFailedTeardown(failedPlacement, reauthorize);
+            const cleanupError = await failure.retryFailedTeardown(failedPlacement, reauthorize);
             const failed = placements.get(request.sessionId);
             if (failed?.state !== "failed") {
               throw new Error("Failed cloud worker placement changed during reclaim");
@@ -643,7 +643,9 @@ export function createWorkerPlacementDispatchService(options: WorkerPlacementDis
                 placement: failed,
               })
             ) {
-              throw new Error("Failed cloud worker environment cleanup is still pending");
+              throw new Error(
+                cleanupError ?? "Failed cloud worker environment cleanup is still pending",
+              );
             }
             const local = placements.transition({
               sessionId: request.sessionId,

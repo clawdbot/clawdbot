@@ -5,6 +5,7 @@ import type { ChatProps } from "../chat-view.ts";
 import { openSlot, type SidebarLayout } from "../sidebar-layout.ts";
 import type { BackgroundTasksProps } from "./chat-background-tasks.types.ts";
 import "./chat-sidebar.ts";
+import { assistantMediaPolicyKey } from "./chat-message-media.ts";
 import { openSessionWorkspaceFile, revealSessionWorkspaceFile } from "./chat-session-workspace.ts";
 import type { SidebarContent } from "./chat-sidebar.ts";
 import { resetTaskDetail, type TaskDetailHost } from "./chat-task-detail-state.ts";
@@ -14,7 +15,7 @@ import type { ChatTranscriptController } from "./chat-transcript-controller.ts";
 // Region close collapses the detail slot but leaves sidebarContent set, so
 // "task content exists" is not "panel visible"; consumers (panel render, rail
 // open-row highlight) must gate on the layout, not the content.
-export function detailSlotOpen(layout: SidebarLayout): boolean {
+function detailSlotOpen(layout: SidebarLayout): boolean {
   return layout.columns.some((column) => column.panels.some((panel) => panel.slot === "detail"));
 }
 
@@ -58,9 +59,14 @@ export function renderChatDetailSlot(params: {
       .content=${content}
       .execNode=${selectedChatSessionRow(host)?.execNode ?? null}
       .attachmentRuntime=${{
+        sessionKey: params.chat.sessionKey,
+        agentId: params.chat.fullMessageAgentId,
+        policyKey: assistantMediaPolicyKey(
+          params.chat.selectedSession,
+          params.chat.mediaPolicyEpoch,
+        ),
         authToken: params.chat.assistantAttachmentAuthToken,
         connectionEpoch: params.chat.connectionEpoch,
-        localMediaPreviewRoots: params.chat.localMediaPreviewRoots ?? [],
         resourceBasePath: params.chat.resourceBasePath,
         resolveArtifactDownload: params.chat.resolveArtifactDownload,
       }}

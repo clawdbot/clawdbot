@@ -19,7 +19,7 @@ import {
   openMatrixStorageMetaStoreOptions,
   writeMatrixStorageMetaStateToStore,
   type MatrixStorageMetadata,
-} from "./src/matrix/client/storage.js";
+} from "./src/matrix/client/storage-metadata.js";
 import {
   hasMatrixSyncCacheStateInStore,
   openMatrixSyncCacheStoreOptions,
@@ -65,7 +65,10 @@ import {
   type MatrixInboundDedupeMigrationIo,
 } from "./src/matrix/monitor/inbound-dedupe-migration.js";
 import type { MatrixStoredRecoveryKey } from "./src/matrix/sdk/types.js";
-import { resolveMatrixCredentialsDir } from "./src/storage-paths.js";
+import {
+  resolveMatrixCredentialsDir,
+  resolveMatrixStateLayoutChildDepth,
+} from "./src/storage-paths.js";
 
 export { normalizeCompatibilityConfig, legacyConfigRules } from "./config-doctor-api.js";
 
@@ -140,7 +143,7 @@ async function collectLegacyMatrixStateRoots(
 ): Promise<string[]> {
   const matrixRoot = path.join(stateDir, "matrix");
   const roots: string[] = [];
-  async function visit(dir: string): Promise<void> {
+  async function visit(dir: string, depth: number): Promise<void> {
     let entries: Dirent[];
     try {
       entries = await fs.readdir(dir, { withFileTypes: true });
@@ -149,16 +152,23 @@ async function collectLegacyMatrixStateRoots(
     }
     for (const entry of entries) {
       const entryPath = path.join(dir, entry.name);
-      if (entry.isFile() && entry.name === filename) {
+      const isStorageRoot = depth === 0 || depth === 2 || depth === 4;
+      if (isStorageRoot && entry.isFile() && entry.name === filename) {
         roots.push(dir);
         continue;
       }
-      if (entry.isDirectory()) {
-        await visit(entryPath);
+      if (!entry.isDirectory()) {
+        continue;
+      }
+      // Only enter owned layout containers; archived and arbitrary descendants
+      // must never become migration roots just because they contain a known file.
+      const childDepth = resolveMatrixStateLayoutChildDepth(depth, entry.name);
+      if (childDepth !== null) {
+        await visit(entryPath, childDepth);
       }
     }
   }
-  await visit(matrixRoot);
+  await visit(matrixRoot, 0);
   return roots
     .filter((root) => options?.includeMatrixRoot || path.resolve(root) !== path.resolve(matrixRoot))
     .toSorted();

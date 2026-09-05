@@ -211,6 +211,7 @@ describe("anthropic provider replay hooks", () => {
       sanitizeToolCallIds: true,
       toolCallIdMode: "strict",
       preserveNativeAnthropicToolUseIds: true,
+      appendOnlyRuntimeContext: false,
       preserveSignatures: true,
       repairToolUseResultPairing: true,
       validateAnthropicTurns: true,
@@ -218,25 +219,33 @@ describe("anthropic provider replay hooks", () => {
     });
   });
 
-  it("preserves Fable thinking in its same-model replay policy", async () => {
-    const provider = await registerSingleProviderPlugin(anthropicPlugin);
-    const fableContext = {
-      provider: "anthropic",
-      modelApi: "anthropic-messages",
-      modelId: "claude-fable-5",
-    };
+  it.each([
+    ["claude-fable-5", false],
+    ["claude-fable-5-1", true],
+    ["claude-mythos-5-1", false],
+  ])(
+    "preserves thinking and scopes runtime context for %s",
+    async (modelId, appendOnlyRuntimeContext) => {
+      const provider = await registerSingleProviderPlugin(anthropicPlugin);
+      const fableContext = {
+        provider: "anthropic",
+        modelApi: "anthropic-messages",
+        modelId,
+      };
 
-    expect(provider.buildReplayPolicy?.(fableContext)).toEqual({
-      sanitizeMode: "full",
-      sanitizeToolCallIds: true,
-      toolCallIdMode: "strict",
-      preserveNativeAnthropicToolUseIds: true,
-      preserveSignatures: true,
-      repairToolUseResultPairing: true,
-      validateAnthropicTurns: true,
-      allowSyntheticToolResults: true,
-    });
-  });
+      expect(provider.buildReplayPolicy?.(fableContext)).toEqual({
+        sanitizeMode: "full",
+        sanitizeToolCallIds: true,
+        toolCallIdMode: "strict",
+        preserveNativeAnthropicToolUseIds: true,
+        appendOnlyRuntimeContext,
+        preserveSignatures: true,
+        repairToolUseResultPairing: true,
+        validateAnthropicTurns: true,
+        allowSyntheticToolResults: true,
+      });
+    },
+  );
 
   it.each([
     ["provider", "anthropic"],
@@ -1452,11 +1461,11 @@ describe("anthropic provider replay hooks", () => {
       const provider = await registerSingleProviderPlugin(anthropicPlugin);
       const config = {};
 
-      const runtimeAuth = provider.resolveSyntheticAuth?.({
+      const runtimeAuth = await provider.prepareSyntheticAuth?.({
         config,
         provider: "claude-cli",
       } as never);
-      const discoveryAuth = anthropicProviderDiscovery.resolveSyntheticAuth?.({
+      const discoveryAuth = await anthropicProviderDiscovery.prepareSyntheticAuth?.({
         config,
         provider: "claude-cli",
       } as never);
@@ -1471,40 +1480,12 @@ describe("anthropic provider replay hooks", () => {
             : undefined,
         );
       }
-      expect(probeClaudeCliAuthStatusMock).toHaveBeenCalledOnce();
+      expect(
+        await provider.prepareSyntheticAuth?.({ provider: "claude-cli" } as never),
+      ).toBeUndefined();
+      expect(probeClaudeCliAuthStatusMock).toHaveBeenCalledTimes(2);
     },
   );
-
-  it("reuses native login facts within one config generation and reprobes its replacement", async () => {
-    probeClaudeCliAuthStatusMock.mockReturnValue({ status: "available" });
-    const provider = await registerSingleProviderPlugin(anthropicPlugin);
-    const firstConfig = {};
-
-    for (let request = 0; request < 4; request += 1) {
-      expect(
-        anthropicProviderDiscovery.resolveSyntheticAuth?.({
-          config: firstConfig,
-          provider: "claude-cli",
-        } as never)?.apiKey,
-      ).toBe(CLAUDE_CLI_NATIVE_AUTH_MARKER);
-      expect(
-        provider.resolveSyntheticAuth?.({ config: firstConfig, provider: "claude-cli" } as never)
-          ?.apiKey,
-      ).toBe(CLAUDE_CLI_NATIVE_AUTH_MARKER);
-    }
-    expect(probeClaudeCliAuthStatusMock).toHaveBeenCalledOnce();
-
-    probeClaudeCliAuthStatusMock.mockReturnValue({ status: "missing" });
-    expect(
-      anthropicProviderDiscovery.resolveSyntheticAuth?.({
-        config: {},
-        provider: "claude-cli",
-      } as never),
-    ).toBeUndefined();
-    expect(probeClaudeCliAuthStatusMock).toHaveBeenCalledTimes(2);
-    expect(provider.resolveSyntheticAuth?.({ provider: "claude-cli" } as never)).toBeUndefined();
-    expect(probeClaudeCliAuthStatusMock).toHaveBeenCalledTimes(2);
-  });
 
   it("does not copy native Claude auth during anthropic cli migration", async () => {
     probeClaudeCliAuthStatusMock.mockReturnValue({ status: "available" });

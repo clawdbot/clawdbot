@@ -177,7 +177,7 @@ describe("realtime Talk microphone inputs", () => {
       },
     });
 
-    await expect(discoverRealtimeTalkInputs(false)).resolves.toEqual({
+    await expect(discoverRealtimeTalkInputs(() => false)).resolves.toEqual({
       devices: [
         { deviceId: "built-in", label: "Built-in Microphone" },
         { deviceId: "usb", label: "Microphone 2" },
@@ -203,7 +203,7 @@ describe("realtime Talk microphone inputs", () => {
     }));
     vi.stubGlobal("navigator", { mediaDevices: { enumerateDevices, getUserMedia } });
 
-    await expect(discoverRealtimeTalkInputs(true)).resolves.toEqual({
+    await expect(discoverRealtimeTalkInputs(() => true)).resolves.toEqual({
       devices: [
         { deviceId: "built-in", label: "Built-in Microphone" },
         { deviceId: "loopback", label: "Loopback Audio" },
@@ -227,7 +227,7 @@ describe("realtime Talk microphone inputs", () => {
       },
     });
 
-    const result = await discoverRealtimeTalkInputs(true);
+    const result = await discoverRealtimeTalkInputs(() => true);
 
     expect(result.devices).toEqual([]);
     expect(result.permissionRequired).toBe(true);
@@ -244,7 +244,7 @@ describe("realtime Talk microphone inputs", () => {
       },
     });
 
-    await expect(discoverRealtimeTalkInputs(true)).resolves.toEqual({
+    await expect(discoverRealtimeTalkInputs(() => true)).resolves.toEqual({
       devices: [],
       permissionRequired: true,
       issue: "none-found",
@@ -272,7 +272,7 @@ describe("realtime Talk microphone inputs", () => {
   it("reports an unsupported enumeration instead of a generic access failure", async () => {
     vi.stubGlobal("navigator", { mediaDevices: {} });
 
-    await expect(discoverRealtimeTalkInputs(true)).resolves.toEqual({
+    await expect(discoverRealtimeTalkInputs(() => true)).resolves.toEqual({
       devices: [],
       permissionRequired: false,
       issue: "list-unsupported",
@@ -288,23 +288,54 @@ describe("realtime Talk microphone inputs", () => {
     );
   });
 
-  it("explains a legacy WebKit overconstraint without silently falling back", async () => {
-    const getUserMedia = vi.fn(async () => {
-      throw legacyWebKitOverconstrainedError();
+  it("rejects a legacy WebKit overconstraint without opening a different microphone", async () => {
+    const fallback = microphoneFixture();
+    const getUserMedia = vi
+      .fn()
+      .mockRejectedValueOnce(legacyWebKitOverconstrainedError())
+      .mockResolvedValueOnce(fallback.stream);
+    vi.stubGlobal("navigator", { mediaDevices: { getUserMedia } });
+    vi.stubGlobal("location", { host: "localhost", pathname: "/", protocol: "http:" });
+
+    await expect(openMicrophone("selected-mic")).rejects.toThrow(
+      "The selected microphone is unavailable",
+    );
+    expect(getUserMedia).toHaveBeenCalledOnce();
+    expect(getUserMedia).toHaveBeenNthCalledWith(1, {
+      audio: {
+        autoGainControl: true,
+        echoCancellation: true,
+        noiseSuppression: true,
+        deviceId: { exact: "selected-mic" },
+      },
     });
+    expect(fallback.track.stop).not.toHaveBeenCalled();
+  });
+
+  it("does not fall back when a standard overconstraint reports a missing microphone", async () => {
+    const getUserMedia = vi
+      .fn()
+      .mockRejectedValue(new DOMException("missing", "OverconstrainedError"));
     vi.stubGlobal("navigator", { mediaDevices: { getUserMedia } });
 
     await expect(openMicrophone("missing-mic")).rejects.toThrow(
       "The selected microphone is unavailable",
     );
-    expect(getUserMedia).toHaveBeenCalledWith({
-      audio: {
-        autoGainControl: true,
-        echoCancellation: true,
-        noiseSuppression: true,
-        deviceId: { exact: "missing-mic" },
-      },
+    expect(getUserMedia).toHaveBeenCalledOnce();
+  });
+
+  it("does not fall back for an Error-backed missing-device constraint", async () => {
+    const error = Object.assign(new Error("missing"), {
+      name: "OverconstrainedError",
+      constraint: "deviceId",
     });
+    const getUserMedia = vi.fn().mockRejectedValue(error);
+    vi.stubGlobal("navigator", { mediaDevices: { getUserMedia } });
+
+    await expect(openMicrophone("missing-mic")).rejects.toThrow(
+      "The selected microphone is unavailable",
+    );
+    expect(getUserMedia).toHaveBeenCalledOnce();
   });
 
   it("enables voice processing with exact device selection", async () => {
@@ -460,7 +491,7 @@ describe("realtime Talk camera inputs", () => {
       },
     });
 
-    await expect(discoverRealtimeTalkCameras(false)).resolves.toEqual({
+    await expect(discoverRealtimeTalkCameras(() => false)).resolves.toEqual({
       devices: [
         { deviceId: "front", label: "Front Camera" },
         { deviceId: "back", label: "Camera 2" },
@@ -480,7 +511,7 @@ describe("realtime Talk camera inputs", () => {
     const getUserMedia = vi.fn(async () => ({ getTracks: () => [{ stop }] }));
     vi.stubGlobal("navigator", { mediaDevices: { enumerateDevices, getUserMedia } });
 
-    await expect(discoverRealtimeTalkCameras(true)).resolves.toEqual({
+    await expect(discoverRealtimeTalkCameras(() => true)).resolves.toEqual({
       devices: [{ deviceId: "camera", label: "Desk Camera" }],
       permissionRequired: false,
       issue: null,

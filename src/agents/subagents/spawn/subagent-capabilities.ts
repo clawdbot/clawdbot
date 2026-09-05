@@ -11,8 +11,12 @@ import {
   normalizeOptionalLowercaseString,
   normalizeOptionalString,
 } from "@openclaw/normalization-core/string-coerce";
-import { DEFAULT_SUBAGENT_MAX_SPAWN_DEPTH } from "../../../config/agent-limits.js";
+import {
+  DEFAULT_SUBAGENT_MAX_SPAWN_DEPTH,
+  isSubagentSpawnDepthAllowed,
+} from "../../../config/agent-limits.js";
 import { resolveSessionStorePathCore } from "../../../config/sessions.js";
+import type { SessionEntry } from "../../../config/sessions/types.js";
 import type { OpenClawConfig } from "../../../config/types.openclaw.js";
 import {
   isAcpSessionKey,
@@ -40,33 +44,24 @@ const SUBAGENT_SESSION_ROLES: readonly SubagentSessionRole[] = [
 type SubagentControlScope = "children" | "none";
 const SUBAGENT_CONTROL_SCOPES: readonly SubagentControlScope[] = ["children", "none"] as const;
 
+type PersistedSessionCapabilityEntry = Pick<
+  SessionEntry,
+  | "sessionId"
+  | "spawnDepth"
+  | "subagentRole"
+  | "subagentControlScope"
+  | "spawnedBy"
+  | "completionOwnerSessionKey"
+  | "inheritedToolPolicyVersion"
+  | "inheritedToolAllow"
+  | "inheritedToolDeny"
+>;
 type SessionCapabilityEntry = {
-  sessionId?: unknown;
-  spawnDepth?: unknown;
-  subagentRole?: unknown;
-  subagentControlScope?: unknown;
-  spawnedBy?: unknown;
-  completionOwnerSessionKey?: unknown;
-  inheritedToolPolicyVersion?: unknown;
-  inheritedToolAllow?: unknown;
-  inheritedToolDeny?: unknown;
+  [Key in keyof PersistedSessionCapabilityEntry]?: unknown;
 };
 
 /** Minimal persisted session-store shape needed to resolve subagent capabilities. */
-export type SessionCapabilityStore = Record<
-  string,
-  {
-    sessionId?: unknown;
-    spawnDepth?: unknown;
-    subagentRole?: unknown;
-    subagentControlScope?: unknown;
-    spawnedBy?: unknown;
-    completionOwnerSessionKey?: unknown;
-    inheritedToolPolicyVersion?: unknown;
-    inheritedToolAllow?: unknown;
-    inheritedToolDeny?: unknown;
-  }
->;
+export type SessionCapabilityStore = Record<string, SessionCapabilityEntry>;
 
 type PersistedSubagentToolPolicyEnvelope = {
   sessionKey: string;
@@ -137,7 +132,7 @@ function resolveSessionCapabilityEntry(params: {
   const storePath = resolveSessionStorePathCore(params.cfg.session?.store, {
     agentId: parsed.agentId,
   });
-  const store = readSubagentSessionStore<SessionCapabilityEntry>(storePath, parsed.agentId);
+  const store = readSubagentSessionStore(storePath, parsed.agentId);
   return store[params.sessionKey] ?? findSubagentSessionEntryById(store, params.sessionKey);
 }
 
@@ -173,7 +168,7 @@ export function resolveSubagentCapabilityStore(
   const storePath = resolveSessionStorePathCore(opts.cfg.session?.store, {
     agentId: parsed.agentId,
   });
-  return readSubagentSessionStore<SessionCapabilityEntry>(storePath, parsed.agentId);
+  return readSubagentSessionStore(storePath, parsed.agentId);
 }
 
 /** Resolve depth-derived role/scope booleans for a subagent position. */
@@ -190,7 +185,7 @@ function resolveSubagentRoleForDepth(params: {
   if (depth <= 0) {
     return "main";
   }
-  return depth < maxSpawnDepth ? "orchestrator" : "leaf";
+  return isSubagentSpawnDepthAllowed(depth, maxSpawnDepth) ? "orchestrator" : "leaf";
 }
 
 function resolveSubagentControlScopeForRole(role: SubagentSessionRole): SubagentControlScope {
@@ -403,18 +398,10 @@ export function resolveStoredSubagentCapabilities(
   if (!isSubagentEnvelopeSession(normalizedSessionKey, { ...opts, store, entry })) {
     return resolveSubagentCapabilities({ depth, maxSpawnDepth });
   }
-  const storedRole = normalizeSubagentRole(entry?.subagentRole);
-  const storedControlScope = normalizeSubagentControlScope(entry?.subagentControlScope);
-  const fallback = resolveSubagentCapabilities({ depth, maxSpawnDepth });
-  const role = storedRole ?? fallback.role;
-  const controlScope = storedControlScope ?? resolveSubagentControlScopeForRole(role);
-  return {
-    depth,
-    role,
-    controlScope,
-    canSpawn: role === "main" || role === "orchestrator",
-    canControlChildren: controlScope === "children",
-  };
+  // Current policy is authoritative. Persisted role/scope describe the policy
+  // at creation time and must not leave existing sessions permanently stale
+  // after an operator changes the depth cap or upgrades to a new default.
+  return resolveSubagentCapabilities({ depth, maxSpawnDepth });
 }
 
 /** Resolve inherited tool deny rules stored on a subagent envelope. */

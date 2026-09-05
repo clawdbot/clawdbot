@@ -152,6 +152,14 @@ export type MemoryProviderStatus = {
   lastSyncError?: string;
   workspaceDir?: string;
   dbPath?: string;
+  /** Explicit diagnostics for the whole shared agent database; payload sizes are not additive. */
+  storage?: {
+    databaseBytes: number;
+    walBytes: number;
+    reusableBytes: number;
+    embeddingCacheBytes: number;
+    embeddingCacheEntries: number;
+  };
   extraPaths?: MemoryExtraPath[];
   sources?: MemorySource[];
   sourceCounts?: Array<{

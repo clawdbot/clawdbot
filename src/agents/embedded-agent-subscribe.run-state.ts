@@ -48,7 +48,6 @@ export function createEmbeddedAgentSubscribeState(
     lastDeliveredBlockReplyText: undefined,
     deferBlockReplyDelivery: typeof params.onBeforeTerminalDelivery === "function",
     deferredBlockReplies: [],
-    deferredAssistantEvents: [],
     toolExecutionSinceLastBlockReply: false,
     reasoningStreamOpen: false,
     assistantMessageIndex: 0,

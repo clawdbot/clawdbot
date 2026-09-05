@@ -106,15 +106,20 @@ export function captureReplyDispatchDeliveryOutcome(payload: ReplyPayload): {
   promise: Promise<ReplyDispatchDeliveryOutcome>;
   isTracked: () => boolean;
 } {
-  let resolveOutcome!: (outcome: ReplyDispatchDeliveryOutcome) => void;
-  const tracker: ReplyDispatchDeliveryOutcomeTracker = {
-    promise: new Promise((resolve) => {
-      resolveOutcome = resolve;
-    }),
-    resolve: (outcome) => resolveOutcome(outcome),
-    tracked: false,
-  };
-  deliveryOutcomeTrackers.set(payload, tracker);
+  // Nested dispatch observers share the next enqueue's receipt. Enqueue consumes
+  // it so a later send of the same payload owns a separate settlement.
+  let tracker = deliveryOutcomeTrackers.get(payload);
+  if (!tracker) {
+    let resolveOutcome!: (outcome: ReplyDispatchDeliveryOutcome) => void;
+    tracker = {
+      promise: new Promise((resolve) => {
+        resolveOutcome = resolve;
+      }),
+      resolve: (outcome) => resolveOutcome(outcome),
+      tracked: false,
+    };
+    deliveryOutcomeTrackers.set(payload, tracker);
+  }
   return { promise: tracker.promise, isTracked: () => tracker.tracked };
 }
 
@@ -473,6 +478,8 @@ export function createReplyDispatcher(options: ReplyDispatcherOptions): ReplyDis
     });
 
   const enqueue = (kind: ReplyDispatchKind, payload: ReplyPayload) => {
+    const deliveryOutcomeTracker = deliveryOutcomeTrackers.get(payload);
+    deliveryOutcomeTrackers.delete(payload);
     const fallback = undeliveredFallbacks.get(payload);
     undeliveredFallbacks.delete(payload);
     const originalWasExactSilent = isSilentReplyText(payload.text, SILENT_REPLY_TOKEN);
@@ -507,7 +514,6 @@ export function createReplyDispatcher(options: ReplyDispatcherOptions): ReplyDis
         : null;
     queuedCounts[kind] += 1;
     pending += 1;
-    const deliveryOutcomeTracker = deliveryOutcomeTrackers.get(payload);
     if (deliveryOutcomeTracker) {
       deliveryOutcomeTracker.tracked = true;
     }
@@ -541,7 +547,6 @@ export function createReplyDispatcher(options: ReplyDispatcherOptions): ReplyDis
         deliveryOutcome = "failed-before-deliver";
       } finally {
         deliveryOutcomeTracker?.resolve(deliveryOutcome);
-        deliveryOutcomeTrackers.delete(payload);
         try {
           options.onDeliverySettled?.(dispatchInfo);
         } catch (err: unknown) {

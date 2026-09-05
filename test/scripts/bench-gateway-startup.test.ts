@@ -5,9 +5,12 @@ import { createServer, type RequestListener } from "node:http";
 import os from "node:os";
 import path from "node:path";
 import { performance } from "node:perf_hooks";
+import { collectConfiguredModelRefs } from "@openclaw/model-catalog-core/configured-model-refs";
 import { afterEach, beforeAll, describe, expect, it } from "vitest";
 import { testing } from "../../scripts/bench-gateway-startup.ts";
 import { isStartupTraceDuration } from "../../scripts/lib/gateway-startup-trace-ranking.js";
+import type { OpenClawConfig } from "../../src/config/types.openclaw.js";
+import { validateConfigObject } from "../../src/config/validation.js";
 import { useAutoCleanupTempDirTracker } from "../helpers/temp-dir.js";
 import { registerStopChildBehaviorTests } from "./bench-gateway-child-test-support.js";
 
@@ -678,6 +681,27 @@ describe("gateway startup benchmark script", () => {
     } finally {
       fs.rmSync(root, { recursive: true, force: true });
     }
+  });
+
+  it("builds a valid large plugin-model startup case", () => {
+    const root = tempDirs.make("openclaw-large-plugin-model-bench-test-");
+    const benchCase = testing.parseOptions(["--case", "largePluginModelConfig"]).cases[0];
+    if (!benchCase) {
+      throw new Error("expected large plugin-model benchmark case");
+    }
+    const configPath = testing.writeConfig(root, benchCase);
+    const config = JSON.parse(fs.readFileSync(configPath, "utf8")) as OpenClawConfig;
+    const entries = Object.values(config.agents?.entries ?? {});
+    const modelRefs = collectConfiguredModelRefs(config, { includeChannelModelOverrides: false });
+
+    expect(benchCase.completionTracePhase).toBe("config.snapshot.auto-enable");
+    expect(validateConfigObject(config).ok).toBe(true);
+    expect(entries).toHaveLength(256);
+    expect(modelRefs).toHaveLength(256 * 58);
+    expect(new Set(modelRefs.map(({ value }) => value.slice(0, value.indexOf("/"))))).toEqual(
+      new Set(["openai", "google", "minimax"]),
+    );
+    expect(config.plugins?.allow).toEqual(["openai", "google", "minimax"]);
   });
 
   it("builds prepared-runtime scale cases with shared and distinct workspaces", () => {

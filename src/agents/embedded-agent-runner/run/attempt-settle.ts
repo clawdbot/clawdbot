@@ -138,10 +138,8 @@ export async function runEmbeddedAttemptSettledPhase(
     agentSession: {
       activeSession,
       clientToolCallSlots,
-      getCodeModeRecoveryCandidate,
       hasDeliveredSourceReply,
       hookRunner,
-      setCodeModeReconciliationReadAuthorized,
       setActiveSessionSystemPrompt,
       settingsManager,
     },
@@ -217,7 +215,7 @@ export async function runEmbeddedAttemptSettledPhase(
   };
 
   try {
-    const { promptStartedAt } = await runEmbeddedAttemptPromptPhase({
+    const { promptStartedAt, transcriptLeafId } = await runEmbeddedAttemptPromptPhase({
       attempt,
       activeSession,
       sessionManager,
@@ -246,6 +244,7 @@ export async function runEmbeddedAttemptSettledPhase(
         },
       },
       context: {
+        appendOnlyRuntimeContext: sessionRuntime.transcriptPolicy.appendOnlyRuntimeContext,
         ...(boundaryTimezone ? { boundaryTimezone } : {}),
         includeBoundaryTimestamp,
         isRawModelRun: input.isRawModelRun,
@@ -284,6 +283,7 @@ export async function runEmbeddedAttemptSettledPhase(
       },
       toolPolicy: input.prepared.promptToolPolicy,
       preflight: {
+        appendOnlyRuntimeContext: sessionRuntime.transcriptPolicy.appendOnlyRuntimeContext,
         ...(input.activeContextEngine ? { activeContextEngine: input.activeContextEngine } : {}),
         compactionReplayEnabled: sessionRuntime.transport.compactionReplayEnabled,
         contextEngineAssemblySucceeded,
@@ -295,6 +295,7 @@ export async function runEmbeddedAttemptSettledPhase(
           : {}),
       },
       submission: {
+        appendOnlyRuntimeContext: sessionRuntime.transcriptPolicy.appendOnlyRuntimeContext,
         promptActiveSession,
         sessionPromptState,
         toolResultPromptProjectionState,
@@ -325,7 +326,6 @@ export async function runEmbeddedAttemptSettledPhase(
         setPromptCacheChangesForTurn: (changes) => {
           promptCacheChangesForTurn = changes;
         },
-        setCodeModeReconciliationReadAuthorized,
         setFinalPromptText: (prompt) => {
           finalPromptText = prompt;
         },
@@ -433,6 +433,7 @@ export async function runEmbeddedAttemptSettledPhase(
           attempt,
           activeSession,
           sessionManager,
+          toolResultPromptProjectionState,
           withOwnedTranscriptWrite: input.sessionLock.withOwnedTranscriptWrite,
           state: streamSettleState,
           getRunAbortDeadlineAtMs,
@@ -543,6 +544,7 @@ export async function runEmbeddedAttemptSettledPhase(
         messagesSnapshot: settledStream.messagesSnapshot,
         nestedToolActivities,
         prePromptMessageCount: sessionRuntimeState.prePromptMessageCount,
+        transcriptLeafId,
         contextEngineAfterTurnCheckpoint: contextGuards.getAfterTurnCheckpoint(),
         lastCallUsage: settledStream.lastCallUsage,
         promptCache: settledStream.promptCache,
@@ -622,7 +624,6 @@ export async function runEmbeddedAttemptSettledPhase(
       lastAssistant,
       currentAttemptAssistant,
       currentAttemptCompletedAssistant,
-      codeModeRecoveryCandidate: getCodeModeRecoveryCandidate(),
       successfulNestedToolNames,
       attemptUsage,
       promptCache: sessionRuntimeState.promptCache,

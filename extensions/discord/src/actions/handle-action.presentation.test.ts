@@ -39,7 +39,7 @@ describe("handleDiscordMessageAction presentations", () => {
         action: "sendMessage",
         accountId: undefined,
         to: "channel:123",
-        content: "",
+        content: undefined,
         mediaUrl: undefined,
         filename: undefined,
         replyTo: undefined,

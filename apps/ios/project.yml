@@ -164,6 +164,7 @@ targets:
           UIApplicationSupportsMultipleScenes: false
         UIBackgroundModes:
           - audio
+          - fetch
           - location
           - remote-notification
         BGTaskSchedulerPermittedIdentifiers:
@@ -319,6 +320,12 @@ targets:
         group: Sources/Services
       - path: Sources/Services/ExactOpaqueIdentifier.swift
         group: Sources/Services
+      - path: Sources/Permissions/PermissionRequestBridge.swift
+        group: Sources/Permissions
+      - path: Sources/Voice/TalkRealtimeClientSession.swift
+        group: Sources/Voice
+      - path: Resources/Licenses/str0m.txt
+        buildPhase: resources
       # Universal talk waveform, compiled directly to keep the watch styling local.
       - path: ../shared/OpenClawKit/Sources/OpenClawChatUI/TalkWaveformView.swift
         group: Shared
@@ -340,8 +347,18 @@ targets:
         product: OpenClawKit
       - sdk: AppIntents.framework
       - sdk: AVFAudio.framework
+      - sdk: Network.framework
+      - sdk: Security.framework
       - sdk: WatchConnectivity.framework
       - sdk: UserNotifications.framework
+    preBuildScripts:
+      - name: Build Watch WebRTC
+        basedOnDependencyAnalysis: false
+        script: |
+          set -euo pipefail
+          export PATH="$PATH:$HOME/.cargo/bin:/opt/homebrew/bin:/usr/local/bin"
+          "$SRCROOT/../shared/OpenClawWatchRTC/build.sh" \
+            "$PLATFORM_NAME" "$DERIVED_FILE_DIR/WatchRTC" $ARCHS
     configFiles:
       Debug: Config/Signing.xcconfig
       Release: Config/Signing.xcconfig
@@ -361,6 +378,10 @@ targets:
         PROVISIONING_PROFILE_SPECIFIER: "$(OPENCLAW_WATCH_APP_PROFILE)"
         SWIFT_STRICT_CONCURRENCY: complete
         SWIFT_VERSION: "6.0"
+        SWIFT_INCLUDE_PATHS: "$(inherited) $(SRCROOT)/../shared/OpenClawWatchRTC/include"
+        HEADER_SEARCH_PATHS: "$(inherited) $(SRCROOT)/../shared/OpenClawWatchRTC/include"
+        LIBRARY_SEARCH_PATHS: "$(inherited) $(DERIVED_FILE_DIR)/WatchRTC"
+        OTHER_LDFLAGS: "$(inherited) -lopenclaw_watch_rtc"
       configs:
         Debug:
           ASSETCATALOG_COMPILER_APPICON_NAME: AppIconDebug
@@ -378,6 +399,9 @@ targets:
         WKApplication: true
         WKPrefersNetworkUponForeground: true
         NSLocalNetworkUsageDescription: OpenClaw connects this Apple Watch directly to your Gateway on trusted local networks.
+        NSMicrophoneUsageDescription: OpenClaw uses the microphone for voice conversations you start on Apple Watch.
+        UIBackgroundModes:
+          - audio
         UIAppFonts:
           - RedHatDisplay[wght].ttf
           - Inter[opsz,wght].ttf
@@ -398,7 +422,13 @@ targets:
           - Logic
       - path: ../macos/Tests/OpenClawIPCTests/GatewayWebSocketTestSupport.swift
         group: Tests
+      - path: ../shared/OpenClawKit/Tests/OpenClawKitTests/NativeGatewayWebSocketFixture.swift
+        group: Tests
       - path: ../shared/OpenClawKit/Tests/OpenClawKitTests/ChatMermaidRenderModelTests.swift
+        group: Tests
+      - path: ../shared/OpenClawKit/Tests/OpenClawKitTests/ChatSelectableTextViewTests.swift
+        group: Tests
+      - path: ../shared/OpenClawKit/Tests/OpenClawKitTests/ChatPasteboardTests.swift
         group: Tests
       - path: WatchApp/Sources/WatchDeferredPayloadOrdering.swift
         group: WatchApp/Sources
@@ -536,6 +566,8 @@ targets:
         SWIFT_STRICT_CONCURRENCY: complete
         TEST_HOST: "$(BUILT_PRODUCTS_DIR)/OpenClawWatchApp.app/OpenClawWatchApp"
         BUNDLE_LOADER: "$(TEST_HOST)"
+        SWIFT_INCLUDE_PATHS: "$(inherited) $(SRCROOT)/../shared/OpenClawWatchRTC/include"
+        HEADER_SEARCH_PATHS: "$(inherited) $(SRCROOT)/../shared/OpenClawWatchRTC/include"
       configs:
         Debug:
           CODE_SIGN_STYLE: Automatic

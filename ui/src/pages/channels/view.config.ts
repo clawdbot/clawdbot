@@ -150,9 +150,11 @@ export function renderChannelConfigSection(params: { channelId: string; props: C
         onShowAdvanced: props.onShowAdvancedSettings,
         onPatch: props.onConfigPatch,
       })}
-      ${props.configError
-        ? html`<div class="callout danger" role="alert">${props.configError}</div>`
-        : null}
+      ${
+        props.configError
+          ? html`<div class="callout danger" role="alert">${props.configError}</div>`
+          : null
+      }
       <div class="settings-row__control">
         <button
           class="btn primary"

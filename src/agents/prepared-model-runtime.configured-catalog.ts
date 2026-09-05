@@ -3,6 +3,7 @@ import { normalizeProviderId } from "@openclaw/model-catalog-core/provider-id";
 import type { InlineModelEntry } from "./embedded-agent-runner/model.inline-provider.js";
 import type { ModelCatalogEntry } from "./model-catalog.js";
 import type { ModelCatalogSnapshot } from "./model-catalog.types.js";
+import type { PreparedModelRuntimeCatalogFacts } from "./prepared-model-runtime.catalog-contract.js";
 import {
   toStaticCatalogEntry,
   type PreparedConfiguredRuntimeModel,
@@ -15,13 +16,6 @@ type ConfiguredCatalogAgentFacts = {
 
 type ConfiguredCatalogWorkspaceFacts = {
   configuredCatalogEntries: readonly ModelCatalogEntry[];
-  inlineProviderModels: readonly InlineModelEntry[];
-};
-
-type ConfiguredRuntimeFacts = {
-  templateModelRegistry: ModelRegistry;
-  modelCatalog: ModelCatalogSnapshot;
-  configuredRuntimeModels: readonly PreparedConfiguredRuntimeModel[];
   inlineProviderModels: readonly InlineModelEntry[];
 };
 
@@ -70,7 +64,7 @@ export function prepareConfiguredRuntimeFacts(params: {
   workspaceFacts: ConfiguredCatalogWorkspaceFacts;
   templateModelRegistry: ModelRegistry;
   configuredRuntimeModels: readonly PreparedConfiguredRuntimeModel[];
-}): ConfiguredRuntimeFacts {
+}): PreparedModelRuntimeCatalogFacts {
   return {
     templateModelRegistry: params.templateModelRegistry,
     modelCatalog: createConfiguredModelCatalogSnapshot(params),

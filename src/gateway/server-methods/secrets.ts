@@ -27,6 +27,7 @@ import {
   writeSecretStoreEntry,
 } from "../../secrets/store/secret-store.js";
 import { isKnownCoreSecretTargetId, isKnownSecretTargetId } from "../../secrets/target-registry.js";
+import { holdGatewayPolicyResponse } from "../server/ws-policy-close.js";
 import { createAgentRuntimeAuthorityGuard } from "./agent-runtime-authority.js";
 import type { GatewayClient, GatewayRequestHandlers } from "./types.js";
 import { assertValidParams } from "./validation.js";
@@ -185,6 +186,7 @@ export function createSecretsHandlers(params: {
   return {
     "secrets.reload": async ({ respond }) => {
       try {
+        holdGatewayPolicyResponse(respond);
         const result = await params.reloadSecrets();
         respond(true, { ok: true, warningCount: result.warningCount });
       } catch (error) {
@@ -313,6 +315,7 @@ export function createSecretsHandlers(params: {
       }
       let saved = false;
       try {
+        holdGatewayPolicyResponse(respond);
         params.storeWriteService.write({
           name: requestParams.name,
           value: requestParams.value,
@@ -370,6 +373,7 @@ export function createSecretsHandlers(params: {
         if (!createAgentRuntimeAuthorityGuard(client, context, respond).ensureActive()) {
           return;
         }
+        holdGatewayPolicyResponse(respond);
         deleteSecretStoreEntry({ scope: teamScope, name: requestParams.name });
         deleted = true;
         const reload = await params.storeWriteService.reloadReference(requestParams.name);

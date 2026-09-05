@@ -92,6 +92,7 @@ type PromptPreflightPhaseInput = Omit<
 };
 type PromptSubmissionPhaseInput = Pick<
   PromptSubmissionInput,
+  | "appendOnlyRuntimeContext"
   | "promptActiveSession"
   | "sessionPromptState"
   | "toolResultPromptProjectionState"
@@ -128,7 +129,6 @@ export async function runEmbeddedAttemptPromptPhase(input: {
     setPromptCacheChangesForTurn: (
       changes: PromptAssemblyResult["promptCacheChangesForTurn"],
     ) => void;
-    setCodeModeReconciliationReadAuthorized: (value: boolean) => void;
     setFinalPromptText: (prompt: string) => void;
     markBeforeAgentRunBlocked: (outcome: BeforeAgentRunOutcome) => void;
     markYieldAborted: () => void;
@@ -140,7 +140,7 @@ export async function runEmbeddedAttemptPromptPhase(input: {
     stopAcceptingSteerMessages: () => void;
     takePendingMidTurnPrecheckRequest: () => MidTurnPrecheckRequest | null | undefined;
   };
-}): Promise<{ promptStartedAt: number }> {
+}): Promise<{ promptStartedAt: number; transcriptLeafId: string | null }> {
   const { activeSession, attempt, sessionManager } = input;
   let skipPromptSubmission = false;
   let leasedSteering: PromptAssemblyResult["leasedSteering"];
@@ -170,6 +170,7 @@ export async function runEmbeddedAttemptPromptPhase(input: {
       request,
       sessionAgentId: input.context.sessionAgentId,
       sessionManager,
+      toolResultPromptProjectionState: input.context.toolResultPromptProjectionState,
       prePromptMessageCount: input.lifecycle.getPrePromptMessageCount(),
       replaceSessionMessages: (messages) => {
         activeSession.agent.state.messages = messages;
@@ -191,9 +192,7 @@ export async function runEmbeddedAttemptPromptPhase(input: {
     sessionManager,
     ...input.assembly,
     applyPromptBuildToolsAllow: (toolsAllow) => {
-      const promptToolSurface = input.toolPolicy.apply(toolsAllow);
-      input.lifecycle.setCodeModeReconciliationReadAuthorized(promptToolSurface.coreReadAuthorized);
-      return promptToolSurface.activeToolNames;
+      return input.toolPolicy.apply(toolsAllow).activeToolNames;
     },
     setLeasedSteering: (lease) => {
       leasedSteering = lease;
@@ -409,5 +408,5 @@ export async function runEmbeddedAttemptPromptPhase(input: {
     });
   }
 
-  return { promptStartedAt };
+  return { promptStartedAt, transcriptLeafId };
 }

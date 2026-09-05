@@ -91,11 +91,7 @@ export async function recoverEmbeddedRunAttempt(input: {
       authRetryPending: boolean;
       codexAppServerRecoveryRetries: number;
       lastRetryFailoverReason: FailoverReason | null;
-      thinkLevel: PreparedRuntime["snapshot"] extends () => infer Snapshot
-        ? Snapshot extends { thinkLevel: infer ThinkLevel }
-          ? ThinkLevel
-          : never
-        : never;
+      thinkLevel: ReturnType<PreparedRuntime["snapshot"]>["thinkLevel"];
     }
   | { action: "proceed" }
 > {

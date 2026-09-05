@@ -68,7 +68,6 @@ import {
   buildExecApprovalTurnSourceContext,
   registerExecApprovalRequestForHostOrThrow,
 } from "./bash-tools.exec-approval-request.js";
-import { shouldAwaitExecApprovalInline } from "./bash-tools.exec-approval-wait.js";
 import {
   buildHeadlessExecApprovalDeniedMessage,
   buildExecApprovalFollowupTarget,
@@ -1330,7 +1329,9 @@ export async function processGatewayAllowlist(
       };
     };
 
-    if (unavailableReason === null && shouldAwaitExecApprovalInline(params)) {
+    // Keep the original run and its delivery callback until approval resolves.
+    // Only callers with an explicit follow-up owner may detach this work.
+    if (unavailableReason === null && params.approvalFollowupMode === undefined) {
       if (params.runId) {
         emitAgentEvent({
           runId: params.runId,

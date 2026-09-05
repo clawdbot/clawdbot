@@ -1,9 +1,14 @@
 // Control UI tests cover shared Settings control styling through the mocked Gateway.
 import { Buffer } from "node:buffer";
+import { writeFile } from "node:fs/promises";
 import path from "node:path";
 import type { Page } from "playwright";
 import { beforeEach, expect, it } from "vitest";
 import { createControlUiE2eArtifactDir } from "../test-helpers/control-ui-e2e-artifacts.ts";
+import {
+  takeControlUiElementScreenshot,
+  waitForControlUiProofSurface,
+} from "../test-helpers/control-ui-e2e-screenshot.ts";
 import { installMockGateway } from "../test-helpers/control-ui-e2e.ts";
 import { createControlUiE2eSuite } from "./control-ui-e2e-suite.test-support.ts";
 
@@ -95,15 +100,36 @@ async function captureBrowserSettingProof(
   if (!captureUiProofEnabled) {
     return;
   }
-  await section.screenshot({
-    animations: "disabled",
-    path: path.join(uiProofArtifactDir, `${name}-desktop.png`),
-  });
+  if (page.video()) {
+    await writeFile(
+      path.join(uiProofArtifactDir, `${name}-desktop.png`),
+      await takeControlUiElementScreenshot(page, section, [
+        section.locator(".settings-row").first(),
+      ]),
+    );
+  } else {
+    await section.screenshot({
+      animations: "disabled",
+      path: path.join(uiProofArtifactDir, `${name}-desktop.png`),
+    });
+  }
   await page.setViewportSize({ height: 844, width: 390 });
-  await section.screenshot({
-    animations: "disabled",
-    path: path.join(uiProofArtifactDir, `${name}-narrow.png`),
-  });
+  if (page.video()) {
+    await waitForControlUiProofSurface(page.locator(".shell.shell--mobile-nav"), [
+      section.locator(".settings-row").first(),
+    ]);
+    await writeFile(
+      path.join(uiProofArtifactDir, `${name}-narrow.png`),
+      await takeControlUiElementScreenshot(page, section, [
+        section.locator(".settings-row").first(),
+      ]),
+    );
+  } else {
+    await section.screenshot({
+      animations: "disabled",
+      path: path.join(uiProofArtifactDir, `${name}-narrow.png`),
+    });
+  }
 }
 
 suite.define(() => {
@@ -320,7 +346,11 @@ suite.define(() => {
               const messages: unknown[] = [];
               const appWindow = window as Window & {
                 openclawNativeLinkMessages?: unknown[];
-                webkit?: unknown;
+                webkit?: {
+                  messageHandlers?: {
+                    openclawLink?: { postMessage: (message: unknown) => void };
+                  };
+                };
               };
               appWindow.openclawNativeLinkMessages = messages;
               appWindow.webkit = {

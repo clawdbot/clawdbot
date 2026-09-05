@@ -1,7 +1,7 @@
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
-import { afterEach, beforeEach, describe, expect, it } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { SessionManager } from "../../agents/sessions/session-manager.js";
 import {
   closeOpenClawAgentDatabasesForTest,
@@ -335,11 +335,13 @@ describe("incognito transcript access", () => {
         },
       });
 
-      expect(
-        listSessionEntriesCore({ agentId: "main", env, storePath }).map(
-          (summary) => summary.sessionKey,
-        ),
-      ).toEqual([activeScope.sessionKey]);
+      await vi.waitFor(() => {
+        expect(
+          listSessionEntriesCore({ agentId: "main", env, storePath }).map(
+            (summary) => summary.sessionKey,
+          ),
+        ).toEqual([activeScope.sessionKey]);
+      });
       await expect(
         loadTranscriptEvents({
           ...staleScope,

@@ -502,6 +502,29 @@ struct MacNodeRuntimeTests {
         #expect(response.ok == false)
     }
 
+    @Test @MainActor func `cancelled notification cannot present an overlay`() async throws {
+        let overlay = NotifyOverlayController.shared
+        try #require(!overlay.model.isVisible)
+        defer { overlay.dismiss() }
+        let runtime = MacNodeRuntime()
+        let params = OpenClawSystemNotifyParams(
+            title: "Cancelled notification test",
+            body: "This overlay must not appear.",
+            delivery: .overlay)
+        let request = Task { @MainActor in
+            try await self.invoke(
+                runtime,
+                "cancelled-overlay",
+                OpenClawSystemCommand.notify.rawValue,
+                params: params)
+        }
+        request.cancel()
+        let response = try await request.value
+
+        #expect(!response.ok)
+        #expect(!overlay.model.isVisible)
+    }
+
     @Test func `handle invoke camera list requires enabled camera`() async {
         await TestIsolation.withUserDefaultsValues([cameraEnabledKey: false]) {
             let runtime = MacNodeRuntime()
@@ -514,6 +537,8 @@ struct MacNodeRuntimeTests {
     @Test func `handle location invoke applies authorization required by mode`() async throws {
         let authorizedWhenInUse = try #require(CLAuthorizationStatus(rawValue: 4))
         let cases: [(mode: OpenClawLocationMode, status: CLAuthorizationStatus, accepted: Bool)] = [
+            (.off, authorizedWhenInUse, false),
+            (.off, .authorizedAlways, false),
             (.whileUsing, authorizedWhenInUse, true),
             (.always, authorizedWhenInUse, false),
             (.whileUsing, .authorizedAlways, true),
@@ -531,6 +556,9 @@ struct MacNodeRuntimeTests {
                     runtime, "req-location", OpenClawLocationCommand.get.rawValue)
 
                 #expect(response.ok == testCase.accepted)
+                if testCase.mode == .off {
+                    #expect(response.error?.message == "LOCATION_DISABLED: enable Location in Settings")
+                }
             }
         }
     }

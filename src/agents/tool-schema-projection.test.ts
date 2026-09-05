@@ -289,6 +289,27 @@ describe("runtime tool input schema projection", () => {
     });
   });
 
+  it("snapshots tool references before schema getters replace later array entries", () => {
+    const captured = { name: "captured", parameters: { type: "object" } };
+    const replacement = { name: "replacement", parameters: { type: "array" } };
+    const tools = [
+      {
+        name: "first",
+        get parameters() {
+          tools[1] = replacement;
+          return { type: "object" };
+        },
+      },
+      captured,
+    ];
+
+    expect(filterRuntimeCompatibleTools(tools)).toEqual({
+      tools: [tools[0], captured],
+      diagnostics: [],
+    });
+    expect(tools[1]).toBe(replacement);
+  });
+
   it("keeps provider-normalizable object schemas for provider-specific cleanup", () => {
     const dynamicSchema = {
       name: "fuzzplugin_dynamic_ref",

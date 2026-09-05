@@ -1,8 +1,12 @@
 /** Tests ACP event ledger recording, replay, retention, and SQLite persistence. */
 import path from "node:path";
+import { constants } from "node:sqlite";
 import { afterEach, describe, expect, it } from "vitest";
 import { requireNodeSqlite } from "../infra/node-sqlite.js";
-import { closeOpenClawStateDatabaseForTest } from "../state/openclaw-state-db.js";
+import {
+  closeOpenClawStateDatabaseForTest,
+  openOpenClawStateDatabase,
+} from "../state/openclaw-state-db.js";
 import { withTestDir } from "../test-helpers/temp-dir.js";
 import { createInMemoryAcpEventLedger, createSqliteAcpEventLedger } from "./event-ledger.js";
 
@@ -112,7 +116,7 @@ describe("ACP event ledger", () => {
     });
   });
 
-  it("persists SQLite-backed replay state across ledger instances", async () => {
+  it("persists replay without reading old payloads during session writes or rejected replays", async () => {
     await withTestDir({ prefix: "openclaw-acp-ledger-" }, async (dir) => {
       const databasePath = path.join(dir, "openclaw.sqlite");
       const first = createSqliteAcpEventLedger({ path: databasePath, now: () => 1000 });
@@ -131,19 +135,66 @@ describe("ACP event ledger", () => {
           content: { type: "text", text: "Thinking" },
         },
       });
+      await expect(
+        first.readReplay({ sessionId: "session-1", sessionKey: "agent:main:work" }),
+      ).resolves.toMatchObject({ complete: true });
+
+      const session = {
+        sessionId: "session-1",
+        sessionKey: "agent:main:canonical-work",
+        cwd: "/new-work",
+        complete: false,
+      };
+      const { db } = openOpenClawStateDatabase({ path: databasePath });
+      // Payload access is unnecessary for append/metadata work and rejected
+      // replay; making it fail exposes accidental full-history hydration.
+      db.setAuthorizer((action, table, column) =>
+        action === constants.SQLITE_READ &&
+        table === "acp_replay_events" &&
+        column === "update_json"
+          ? constants.SQLITE_DENY
+          : constants.SQLITE_OK,
+      );
+      try {
+        await first.recordUpdate({
+          ...session,
+          runId: "run-1",
+          update: {
+            sessionUpdate: "agent_message_chunk",
+            content: { type: "text", text: "Answer" },
+          },
+        });
+        await first.startSession(session);
+        await expect(
+          first.readReplay({ ...session, sessionKey: "agent:main:work" }),
+        ).resolves.toEqual({ complete: false, events: [] });
+        await first.markIncomplete(session);
+        await expect(first.readReplay(session)).resolves.toEqual({ complete: false, events: [] });
+        await expect(first.readReplayBySessionId(session)).resolves.toEqual({
+          complete: false,
+          events: [],
+        });
+        await first.startSession({ ...session, complete: true });
+      } finally {
+        db.setAuthorizer(null);
+      }
 
       closeOpenClawStateDatabaseForTest();
       const second = createSqliteAcpEventLedger({ path: databasePath });
-      const replay = await second.readReplay({
-        sessionId: "session-1",
-        sessionKey: "agent:main:work",
-      });
+      const replay = await second.readReplay(session);
 
       expect(replay.complete).toBe(true);
-      expect(replay.events).toHaveLength(1);
+      expect(replay.events.map((event) => [event.seq, event.sessionKey])).toEqual([
+        [1, "agent:main:work"],
+        [2, "agent:main:canonical-work"],
+      ]);
       expect(replay.events[0]?.update).toEqual({
         sessionUpdate: "agent_thought_chunk",
         content: { type: "text", text: "Thinking" },
+      });
+      expect(replay.events[1]?.update).toEqual({
+        sessionUpdate: "agent_message_chunk",
+        content: { type: "text", text: "Answer" },
       });
     });
   });

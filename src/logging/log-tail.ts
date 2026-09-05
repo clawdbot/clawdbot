@@ -148,10 +148,10 @@ async function readLogSlice(params: {
     const bytesRead = await readFileWindowFully(handle, buffer, start);
     const text = buffer.toString("utf8", 0, bytesRead);
     let lines = text.split("\n");
-    lines = lines.slice(0, -1);
+    lines.pop();
     if (start > 0 && prefix !== "\n") {
       // Drop the first partial line when starting in the middle of a file.
-      lines = lines.slice(1);
+      lines.shift();
     }
     if (params.filter) {
       // Sparse consumers inspect the full byte-bounded window before the shared line cap.

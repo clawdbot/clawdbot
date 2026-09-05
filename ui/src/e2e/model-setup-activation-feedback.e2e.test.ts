@@ -156,6 +156,7 @@ suite.define(() => {
                 done: true,
                 status: "error",
                 error: "Authentication failed (provider returned HTTP 401).",
+                activationRejection: { disposition: "rejected-before-promotion", status: "auth" },
               },
               "openclaw.setup.detect": {
                 candidates:
@@ -357,6 +358,7 @@ suite.define(() => {
               done: true,
               status: "error",
               error: "The model did not finish the setup test in time.",
+              activationRejection: { disposition: "rejected-before-promotion", status: "timeout" },
             });
             await gateway.resolveDeferred("openclaw.setup.activate.start", {
               sessionId: "activation-session",

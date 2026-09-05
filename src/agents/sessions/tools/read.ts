@@ -392,7 +392,7 @@ export function createReadToolDefinition(
         path,
         offset,
         limit,
-        cursor,
+        cursor = 0,
         optional,
       }: { path: string; offset?: number; limit?: number; cursor?: number; optional?: true },
       signal?: AbortSignal,
@@ -404,7 +404,7 @@ export function createReadToolDefinition(
       if (offset !== undefined && (!Number.isSafeInteger(offset) || offset < 1)) {
         throw new Error("Offset must be an integer at least 1");
       }
-      if (cursor !== undefined && (!Number.isSafeInteger(cursor) || cursor < 0)) {
+      if (!Number.isSafeInteger(cursor) || cursor < 0) {
         throw new Error("Cursor must be an integer at least 0");
       }
       return new Promise<{
@@ -535,7 +535,7 @@ export function createReadToolDefinition(
                     : `File contains no readable text (${buffer.length} bytes).`;
               } else if (startLine >= totalFileLines) {
                 outputText = `Offset ${offset} is beyond end of file (${totalFileLines} lines total). Retry with offset <= ${totalFileLines}.`;
-              } else if (cursor !== undefined && cursor >= allLines[startLine]!.length) {
+              } else if (cursor > 0 && cursor >= allLines[startLine]!.length) {
                 const nextLine =
                   startLine + 1 < totalFileLines
                     ? ` Use offset=${startLineDisplay + 1} to continue.`
@@ -543,11 +543,7 @@ export function createReadToolDefinition(
                 outputText = `Cursor ${cursor} is at or beyond the end of line ${startLineDisplay} (${allLines[startLine]!.length} characters).${nextLine}`;
               } else {
                 const firstLine = allLines[startLine]!;
-                if (
-                  cursor !== undefined &&
-                  cursor > 0 &&
-                  firstLine.codePointAt(cursor - 1)! > 0xffff
-                ) {
+                if (cursor > 0 && firstLine.codePointAt(cursor - 1)! > 0xffff) {
                   throw new Error(
                     `Cursor ${cursor} splits a UTF-16 surrogate pair; retry with cursor=${cursor - 1} or cursor=${cursor + 1}.`,
                   );
@@ -560,9 +556,7 @@ export function createReadToolDefinition(
                         totalFileLines,
                       );
                 const selectedLines = allLines.slice(startLine, endLine);
-                if (cursor !== undefined) {
-                  selectedLines[0] = firstLine.slice(cursor);
-                }
+                selectedLines[0] = firstLine.slice(cursor);
                 const userLimitedLines = limit === undefined ? undefined : endLine - startLine;
                 if (selectedLines.every((line) => line.length === 0)) {
                   const selectedLineCount = selectedLines.length;

@@ -1,62 +1,90 @@
-import Foundation
+import Synchronization
 
-private actor AsyncTimeoutRace<T: Sendable> {
-    private enum Outcome {
-        case success(T)
-        case failure(any Error)
+private final class AsyncTimeoutRace<T: Sendable>: Sendable {
+    private enum State {
+        case pending
+        case cancelledBeforeStart
+        case running(CheckedContinuation<T, any Error>, [Task<Void, Never>])
+        case resolved([Task<Void, Never>])
     }
 
-    private var outcome: Outcome?
-    private var continuation: CheckedContinuation<T, any Error>?
-    private var tasks: [Task<Void, Never>] = []
+    private let state = Mutex<State>(.pending)
 
-    func wait(for tasks: [Task<Void, Never>]) async throws -> T {
-        if let outcome {
-            tasks.forEach { $0.cancel() }
-            return try self.value(from: outcome)
+    func wait(
+        seconds: Double,
+        onTimeout: @escaping @Sendable () -> Error,
+        operation: @escaping @Sendable () async throws -> T) async throws -> T
+    {
+        try await withCheckedThrowingContinuation { continuation in
+            let cancelled = self.state.withLock { state in
+                switch state {
+                case .cancelledBeforeStart:
+                    return true
+                case .running, .resolved:
+                    preconditionFailure("A timeout race has only one waiter")
+                case .pending:
+                    // Admission and handle installation share cancellation's lock.
+                    // A cancelled caller cannot leave an unregistered operation running.
+                    let operationTask = Task {
+                        do {
+                            let value = try await operation()
+                            self.resolve(.success(value))
+                        } catch {
+                            self.resolveFailure(error)
+                        }
+                    }
+                    var tasks = [operationTask]
+                    if seconds > 0 {
+                        tasks.append(Task {
+                            do {
+                                try await Task.sleep(nanoseconds: UInt64(seconds * 1_000_000_000))
+                                self.resolveFailure(onTimeout())
+                            } catch is CancellationError {
+                                // The operation or caller resolved the race first.
+                            } catch {
+                                self.resolveFailure(error)
+                            }
+                        })
+                    }
+                    state = .running(continuation, tasks)
+                    return false
+                }
+            }
+            if cancelled {
+                continuation.resume(throwing: CancellationError())
+            }
         }
-        self.tasks = tasks
-        return try await withCheckedThrowingContinuation { continuation in
-            self.continuation = continuation
-        }
     }
 
-    private func resolve(_ outcome: @autoclosure () -> Outcome) {
-        // Timeout factories can log; only evaluate the winner's outcome.
-        guard self.outcome == nil else { return }
-        let outcome = outcome()
-        self.outcome = outcome
-        self.tasks.forEach { $0.cancel() }
-        self.tasks.removeAll()
-        if let continuation {
-            self.continuation = nil
-            self.resume(continuation, with: outcome)
-        }
-    }
-
-    func resolveSuccess(_ value: T) {
-        self.resolve(.success(value))
-    }
-
-    func resolveFailure(_ error: @autoclosure @Sendable () -> any Error) {
+    func resolveFailure(_ error: @autoclosure () -> any Error) {
         self.resolve(.failure(error()))
     }
 
-    private func resume(_ continuation: CheckedContinuation<T, any Error>, with outcome: Outcome) {
-        switch outcome {
-        case let .success(value):
-            continuation.resume(returning: value)
-        case let .failure(error):
-            continuation.resume(throwing: error)
-        }
-    }
-
-    private func value(from outcome: Outcome) throws -> T {
-        switch outcome {
-        case let .success(value):
-            return value
-        case let .failure(error):
-            throw error
+    private func resolve(_ outcome: @autoclosure () -> Result<T, any Error>) {
+        let (continuation, tasks): (CheckedContinuation<T, any Error>?, [Task<Void, Never>]) =
+            self.state.withLock { state in
+                switch state {
+                case .pending:
+                    // Only caller cancellation can precede atomic racer installation.
+                    state = .cancelledBeforeStart
+                    return (nil, [])
+                case .cancelledBeforeStart:
+                    return (nil, [])
+                case let .running(continuation, tasks):
+                    state = .resolved(tasks)
+                    return (continuation, tasks)
+                case let .resolved(tasks):
+                    return (nil, tasks)
+                }
+            }
+        guard !tasks.isEmpty else { return }
+        // Handlers may reenter the race. Keep handles visible until cancellation is applied,
+        // but cancel and resume outside the lock to avoid Swift runtime lock inversion.
+        tasks.forEach { $0.cancel() }
+        self.state.withLock { $0 = .resolved([]) }
+        if let continuation {
+            // Only the winner consumes its factory; it may log or call back into a caller.
+            continuation.resume(with: outcome())
         }
     }
 }
@@ -67,43 +95,13 @@ public enum AsyncTimeout {
         onTimeout: @escaping @Sendable () -> Error,
         operation: @escaping @Sendable () async throws -> T) async throws -> T
     {
-        let clamped = max(0, seconds)
-        // Unstructured racers let the caller return without awaiting a cancellation-ignoring loser.
-        // The actor resumes once and cancels every racer; noncooperative work may still finish later,
-        // so callers must own resource cleanup and stale-result safety.
+        // Unstructured racers avoid joining a cancellation-ignoring loser. Cancellation
+        // marks every racer synchronously; callers still own cleanup and stale-result safety.
         let race = AsyncTimeoutRace<T>()
         return try await withTaskCancellationHandler {
-            try Task.checkCancellation()
-
-            let operationTask = Task {
-                do {
-                    let value = try await operation()
-                    await race.resolveSuccess(value)
-                } catch {
-                    await race.resolveFailure(error)
-                }
-            }
-            var tasks = [operationTask]
-            if clamped > 0 {
-                let timeoutTask = Task {
-                    do {
-                        try await Task.sleep(nanoseconds: UInt64(clamped * 1_000_000_000))
-                        await race.resolveFailure(onTimeout())
-                    } catch is CancellationError {
-                        // The operation or caller resolved the race first.
-                    } catch {
-                        await race.resolveFailure(error)
-                    }
-                }
-                tasks.append(timeoutTask)
-            }
-            if Task.isCancelled {
-                tasks.forEach { $0.cancel() }
-                throw CancellationError()
-            }
-            return try await race.wait(for: tasks)
+            try await race.wait(seconds: max(0, seconds), onTimeout: onTimeout, operation: operation)
         } onCancel: {
-            Task { await race.resolveFailure(CancellationError()) }
+            race.resolveFailure(CancellationError())
         }
     }
 

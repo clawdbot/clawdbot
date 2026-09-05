@@ -15,6 +15,12 @@ import {
 import { auditGatewayServiceConfig, SERVICE_AUDIT_CODES } from "./service-audit.js";
 import { buildServiceEnvironment } from "./service-env.js";
 
+// Install tests control registration separately; runtime probes never inspect host tasks.
+vi.mock("node:child_process", async () => ({
+  ...(await vi.importActual<typeof import("node:child_process")>("node:child_process")),
+  spawnSync: vi.fn(() => ({ status: 0, stdout: '{"state":4}', stderr: "" })),
+}));
+
 const resolveWindowsOemEncodingMock = vi.hoisted(() => vi.fn((): string | null => null));
 
 // Pin code page detection so launcher encoding never depends on the host ACP.

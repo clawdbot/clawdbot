@@ -9,6 +9,7 @@ import type { HeartbeatToolResponse } from "../auto-reply/heartbeat-tool-respons
 import type { ReplyMediaAttachment } from "../auto-reply/reply-payload.js";
 import type { ReplyDirectiveParseResult } from "../auto-reply/reply/reply-directives.js";
 import type { ReasoningLevel } from "../auto-reply/thinking.js";
+import type { ThinkingContent } from "../llm/types.js";
 import type { HookRunner } from "../plugins/hooks.js";
 import type { AssistantPhase } from "../shared/chat-message-content.js";
 import type { AcceptedSessionSpawn } from "./accepted-session-spawn.js";
@@ -66,14 +67,6 @@ export type AssistantStreamData = {
   managedMediaUrls?: string[];
   phase?: AssistantPhase;
   itemId?: string;
-};
-
-/** Deferred assistant stream event plus whether it should emit partial replies. */
-type AssistantStreamDelivery = {
-  data: AssistantStreamData;
-  eventData?: AssistantStreamData;
-  emitPartialReply: boolean;
-  finalMessage?: boolean;
 };
 
 /** Incremental tag and Markdown parsing state, owned by one stream lane. */
@@ -172,7 +165,6 @@ export type EmbeddedAgentSubscribeState = {
   lastDeliveredBlockReplyText?: string;
   deferBlockReplyDelivery: boolean;
   deferredBlockReplies: BlockReplyPayload[];
-  deferredAssistantEvents: AssistantStreamDelivery[];
   toolExecutionSinceLastBlockReply: boolean;
   reasoningStreamOpen: boolean;
   assistantMessageIndex: number;
@@ -215,6 +207,7 @@ export type EmbeddedAgentSubscribeState = {
   messagingToolSentMediaUrls: string[];
   messagingToolSourceReplyPayloads: MessagingToolSourceReplyPayload[];
   messageToolOnlySourceReplyDelivered: boolean;
+  sourceReplyDelivered?: true;
   pendingMessagingTexts: Map<string, string>;
   pendingMessagingTargets: Map<string, MessagingToolSend>;
   successfulCronAdds: number;
@@ -273,7 +266,7 @@ export type EmbeddedAgentSubscribeContext = {
     final?: boolean;
     finalReply?: ReplyDirectiveParseResult;
   }) => void | Promise<void>;
-  emitReasoningStream: (text: string) => void;
+  emitReasoningStream: (text: string | ThinkingContent, fallback?: string) => void;
   consumePartialReplyDirectives: (
     text: string,
     options?: { final?: boolean },
@@ -308,9 +301,9 @@ export type EmbeddedAgentSubscribeContext = {
     payload: BlockReplyPayload,
     options?: { assistantMessageIndex?: number; consumePendingToolMedia?: boolean },
   ) => void;
-  flushDeferredAssistantEvents: () => void;
+  flushAssistantStream: () => void;
   flushDeferredBlockReplies: () => void;
-  clearDeferredAssistantEvents: () => void;
+  clearAssistantStream: () => void;
   clearDeferredBlockReplies: () => void;
 };
 
@@ -383,6 +376,7 @@ type ToolHandlerState = Pick<
   | "messagingToolSentMediaUrls"
   | "messagingToolSourceReplyPayloads"
   | "messageToolOnlySourceReplyDelivered"
+  | "sourceReplyDelivered"
   | "messagingToolSentTargets"
   | "heartbeatToolResponse"
   | "successfulCronAdds"

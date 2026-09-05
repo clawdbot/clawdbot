@@ -2,9 +2,12 @@
 import { describe, expect, it, vi } from "vitest";
 import { projectProviderError } from "../../../../packages/ai/src/utils/provider-error.js";
 import { buildRealtimeVoiceAgentErrorProviderResult } from "../../../talk/agent-run-control.js";
+import { buildAgentRunTerminalOutcomeFromLifecycleEvent } from "../../agent-run-terminal-outcome.js";
 import { formatBillingErrorMessage } from "../../embedded-agent-helpers.js";
 import { FailoverError } from "../../failover-error.js";
+import { resolveAgentRunErrorLifecycleFields } from "../../run-termination.js";
 import { handleAssistantFailover, isShortWindowRateLimitMessage } from "./assistant-failover.js";
+import { resolveEmbeddedRunAttemptTerminalState } from "./terminal-outcome.js";
 
 type Params = Parameters<typeof handleAssistantFailover>[0];
 type Outcome = Awaited<ReturnType<typeof handleAssistantFailover>>;
@@ -14,10 +17,14 @@ function makeParams(overrides: Partial<Params> = {}): Params {
   // the branch-specific signals they need.
   const provider = "Anthropic";
   const model = "claude-haiku-4-5-20251001";
+  const terminal: Params["terminal"] = overrides.terminal ?? { kind: "ok" };
   const defaults: Params = {
     initialDecision: { action: "surface_error", reason: "billing" },
-    terminal: { kind: "ok" },
-    signalOwnedInterruption: false,
+    terminal,
+    terminalState: resolveEmbeddedRunAttemptTerminalState({
+      attempt: { terminal },
+      assistant: undefined,
+    }),
     fallbackConfigured: false,
     failoverFailure: true,
     failoverReason: "billing",
@@ -61,6 +68,66 @@ function expectThrownFailoverError(outcome: Outcome): FailoverError {
 }
 
 describe("handleAssistantFailover", () => {
+  it.each([
+    { action: "surface_error", terminal: { kind: "ok" }, timeout: false },
+    { action: "fallback_model", terminal: { kind: "ok" }, timeout: false },
+    {
+      action: "fallback_model",
+      terminal: { kind: "timeout", phase: "prompt", source: "idle" },
+      timeout: true,
+    },
+    {
+      action: "fallback_model",
+      terminal: { kind: "timeout", phase: "compaction", source: "observation" },
+      timeout: false,
+    },
+    {
+      action: "fallback_model",
+      terminal: { kind: "timeout", phase: "compaction", source: "runtime" },
+      timeout: true,
+    },
+    {
+      action: "fallback_model",
+      terminal: { kind: "timeout", phase: "tool_execution", source: "runtime" },
+      timeout: true,
+    },
+  ] satisfies Array<{
+    action: "surface_error" | "fallback_model";
+    terminal: Params["terminal"];
+    timeout: boolean;
+  }>)(
+    "carries timeout facts independently of the retry reason ($action, $terminal, $timeout)",
+    async ({ action, terminal, timeout }) => {
+      const outcome = await handleAssistantFailover(
+        makeParams({
+          initialDecision: { action, reason: "timeout" },
+          terminal,
+          failoverReason: "timeout",
+          billingFailure: false,
+          lastAssistant: {
+            errorMessage: "500 injected provider failure",
+          } as Params["lastAssistant"],
+        }),
+      );
+      const error = expectThrownFailoverError(outcome);
+
+      expect(error.reason).toBe("timeout");
+      const fields = resolveAgentRunErrorLifecycleFields(error, undefined);
+      const providerTimeout = terminal.kind === "timeout" && terminal.phase === "prompt";
+      expect(fields).toEqual(
+        timeout
+          ? {
+              stopReason: "timeout",
+              ...(providerTimeout ? { timeoutPhase: "provider", providerStarted: true } : {}),
+            }
+          : {},
+      );
+      expect(
+        buildAgentRunTerminalOutcomeFromLifecycleEvent({ phase: "error", data: fields }).reason,
+      ).toBe(timeout ? (providerTimeout ? "hard_timeout" : "timed_out") : "failed");
+    },
+  );
+
   describe("rotate_profile branch", () => {
     it("rotates before waiting on auth profile failure marking", async () => {
       // Rotation is latency-sensitive; profile failure marking can persist in
@@ -665,25 +732,46 @@ describe("handleAssistantFailover", () => {
       expect(err.rawError).toBe(rawError);
     });
 
-    it("preserves the raw provider error on surfaced failures", async () => {
-      const rawError = '  400 {"error":{"message":"credit balance is too low"}}  ';
-      const outcome = await handleAssistantFailover(
-        makeParams({
-          initialDecision: { action: "surface_error", reason: "billing" },
-          failoverReason: "billing",
-          billingFailure: true,
-          lastAssistant: {
-            errorMessage: rawError,
-            model: "claude-haiku-4-5-20251001",
-            provider: "Anthropic",
-          } as Params["lastAssistant"],
-        }),
-      );
+    it.each([
+      [
+        "surface_error",
+        "billing",
+        '  400 {"error":{"message":"credit balance is too low"}}  ',
+        400,
+      ],
+      ["surface_error", "timeout", "500 provider returned HTTP 500", 500],
+      ["surface_error", "timeout", "503 service unavailable", 503],
+      ["surface_error", "timeout", "request timed out", 408],
+      ["fallback_model", "timeout", "500 provider returned HTTP 500", 500],
+      ["fallback_model", "timeout", "503 service unavailable", 503],
+      ["fallback_model", "timeout", "request timed out", 408],
+      ["rotate_profile", "overloaded", "529 overloaded", 529],
+      ["rotate_profile", "overloaded", "503 overloaded", 503],
+    ] as const)(
+      "preserves provider status and raw error through %s: %s / %s",
+      async (action, reason, rawError, status) => {
+        const outcome = await handleAssistantFailover(
+          makeParams({
+            initialDecision: { action, reason },
+            failoverReason: reason,
+            fallbackConfigured: action !== "surface_error",
+            overloadProfileRotations: 3,
+            billingFailure: reason === "billing",
+            lastAssistant: {
+              stopReason: "error",
+              errorMessage: rawError,
+              model: "claude-haiku-4-5-20251001",
+              provider: "Anthropic",
+            } as Params["lastAssistant"],
+          }),
+        );
 
-      const err = expectThrownFailoverError(outcome);
-      expect(err.reason).toBe("billing");
-      expect(err.rawError).toBe(rawError.trim());
-    });
+        const err = expectThrownFailoverError(outcome);
+        expect(err.reason).toBe(reason);
+        expect(err.status).toBe(status);
+        expect(err.rawError).toBe(rawError.trim());
+      },
+    );
 
     it("coerces a null decision reason onto the most specific non-timeout failure signal", async () => {
       const outcome = await handleAssistantFailover(

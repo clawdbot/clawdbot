@@ -135,7 +135,6 @@ describe("memory manager FTS-only reindex", () => {
           model: "",
           store,
           cache: { enabled: false },
-          sync: { watch: false, onSessionStart: false, onSearch: false },
         },
       },
       agents: {

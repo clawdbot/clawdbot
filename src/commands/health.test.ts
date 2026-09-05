@@ -240,6 +240,27 @@ describe("healthCommand", () => {
     expect(output).not.toContain("inactive plugin load failed");
   });
 
+  it.each([
+    { everyMs: 65_001, expected: "1m 5s 1ms" },
+    { everyMs: 604_800_001, expected: "1w 1ms" },
+    { everyMs: 691_200_000, expected: "1w 1d" },
+  ])(
+    "preserves configured duration precision in heartbeat: $everyMs ms",
+    async ({ everyMs, expected }) => {
+      const snapshot = createHealthSummary();
+      const agent = createMainAgentSummary();
+      agent.heartbeat = { ...agent.heartbeat, every: `${everyMs}ms`, everyMs };
+      snapshot.agents = [agent];
+      snapshot.heartbeatSeconds = Math.round(everyMs / 1_000);
+      callGatewayMock.mockResolvedValueOnce(snapshot);
+
+      await healthCommand({ json: false, timeoutMs: 1000, config: {} }, runtime);
+
+      const output = stripAnsi(runtime.log.mock.calls.map((call) => String(call[0])).join("\n"));
+      expect(output).toContain(`Heartbeat interval: ${expected} (main)`);
+    },
+  );
+
   it("prints the gateway probe duration in text output", async () => {
     const snapshot = createHealthSummary();
     callGatewayMock.mockResolvedValueOnce(snapshot);

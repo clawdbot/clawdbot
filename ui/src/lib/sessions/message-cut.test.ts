@@ -1,14 +1,7 @@
 import { describe, expect, it, vi } from "vitest";
+import { createDeferred } from "../../../../test/helpers/promise.js";
 import type { GatewayBrowserClient, GatewayEventFrame, GatewayHelloOk } from "../../api/gateway.ts";
-import { createSessionCapability } from "./index.ts";
-
-function deferred<T>() {
-  let resolve: (value: T) => void = () => undefined;
-  const promise = new Promise<T>((next) => {
-    resolve = next;
-  });
-  return { promise, resolve };
-}
+import { createTestSessionCapability } from "./session-capability.test-support.ts";
 
 function createGatewayHarness(client: GatewayBrowserClient) {
   let snapshot: {
@@ -51,7 +44,7 @@ function createGatewayHarness(client: GatewayBrowserClient) {
 
 describe("session capability message cuts", () => {
   it("returns a committed rewind result after the connection is replaced", async () => {
-    const committed = deferred<{
+    const committed = createDeferred<{
       editorText?: string;
       editorAttachments?: Array<{ mimeType: string; data: string }>;
     }>();
@@ -63,7 +56,7 @@ describe("session capability message cuts", () => {
     });
     const client = { request } as unknown as GatewayBrowserClient;
     const harness = createGatewayHarness(client);
-    const sessions = createSessionCapability(harness.gateway);
+    const sessions = createTestSessionCapability(harness.gateway);
 
     const pending = sessions.rewind("agent:main:main", "user-entry");
     harness.publish(false);
@@ -99,7 +92,7 @@ describe("session capability message cuts", () => {
     });
     const client = { request } as unknown as GatewayBrowserClient;
     const { gateway } = createGatewayHarness(client);
-    const sessions = createSessionCapability(gateway);
+    const sessions = createTestSessionCapability(gateway);
 
     await expect(sessions.forkAtMessage("agent:main:main", "user-entry")).resolves.toEqual({
       sessionKey: "agent:main:dashboard:forked",
@@ -134,7 +127,7 @@ describe("session capability message cuts", () => {
     });
     const client = { request } as unknown as GatewayBrowserClient;
     const { gateway } = createGatewayHarness(client);
-    const sessions = createSessionCapability(gateway);
+    const sessions = createTestSessionCapability(gateway);
 
     await expect(sessions.listBranches("agent:main:main")).resolves.toEqual([branch]);
     await expect(sessions.switchBranch("agent:main:main", "branch-b")).resolves.toEqual({});

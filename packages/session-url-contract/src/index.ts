@@ -86,9 +86,8 @@ export function buildControlUiSessionPath(params: BuildControlUiSessionPathParam
   const normalizedRest = rest.toLowerCase();
   const mainKey = normalizeNullableString(params.mainKey)?.toLowerCase() ?? DEFAULT_MAIN_KEY;
   if (
-    (!parsed && normalizedRest === DEFAULT_MAIN_KEY) ||
     normalizedRest === mainKey ||
-    normalizedRest === "global"
+    (!parsed && (normalizedRest === DEFAULT_MAIN_KEY || normalizedRest === "global"))
   ) {
     return `${namespace}/${encodedAgentId}`;
   }
@@ -96,7 +95,8 @@ export function buildControlUiSessionPath(params: BuildControlUiSessionPathParam
   if (segments.some((segment) => !segment)) {
     return null;
   }
-  if (params.exactKey) {
+  // Qualified global keys are literal sessions, distinct from the unqualified home sentinel.
+  if (params.exactKey || normalizedRest === "global") {
     const segment = segments[0] ?? "";
     return segments.length === 1 &&
       (isReservedSessionRest(segment, params.mainKey) || parseShortSessionRef(segment))

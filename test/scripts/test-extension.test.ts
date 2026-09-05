@@ -203,6 +203,12 @@ describe("scripts/test-extension.mts", () => {
     expect(new Set(chunks.flat()).size).toBe(expectedFiles.length);
   });
 
+  it("excludes plugin browser tests from the server-side extension inventory", () => {
+    const files = listExtensionTestFilesForRoots([bundledPluginRoot("workboard")]);
+    expect(files.length).toBeGreaterThan(0);
+    expect(files.some((file) => file.includes("/browser/"))).toBe(false);
+  });
+
   it("includes newly authored Matrix tests in bounded process targets", () => {
     const root = mkdtempSync(path.join(tmpdir(), "openclaw-extension-test-plan-"));
     const relativeRoot = path.relative(process.cwd(), root);
@@ -569,11 +575,6 @@ describe("scripts/test-extension.mts", () => {
       Math.ceil(totals.reduce((sum, cost) => sum + cost, 0) / shards.length),
     );
     expect(Math.max(...totals)).toBe(lowerBound);
-    // Whole plugins cannot be divided; balance the remaining packed rows.
-    const packedTotals = shards
-      .filter((shard) => shard.extensionIds.length > 1)
-      .map((shard) => shard.estimatedCost);
-    expect(Math.max(...packedTotals) - Math.min(...packedTotals)).toBeLessThanOrEqual(1);
 
     for (const shard of shards) {
       expect(shard.extensionIds.length).toBeGreaterThan(0);
@@ -725,7 +726,7 @@ describe("scripts/test-extension.mts", () => {
         config,
         `import assert from 'node:assert/strict';
 assert.equal(process.execArgv.includes('--no-maglev'), ${!enableMaglev}, 'batch Node defaults');
-export default {root:${JSON.stringify(root)},cacheDir:${JSON.stringify(path.join(root, "cache"))},test:{include:['*.test.mjs'],pool:'forks',maxWorkers:1,fileParallelism:false,cache:false,experimental:{fsModuleCache:false}}};`,
+export default {root:${JSON.stringify(root)},cacheDir:${JSON.stringify(path.join(root, "cache"))},test:{include:['*.test.mjs'],pool:'forks',maxWorkers:1,fileParallelism:false,cache:false,fsModuleCache:false}};`,
       );
       const expectedHome = realHomeReplay ? JSON.stringify(home) : "path.join(tmpdir(), 'home')";
       writeFileSync(

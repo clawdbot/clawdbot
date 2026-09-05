@@ -1259,10 +1259,11 @@ describe("runHeartbeatOnce", () => {
           To: "120363401234567890@g.us",
           OriginatingChannel: "whatsapp",
           OriginatingTo: "120363401234567890@g.us",
+          ChatType: "group",
           InternalTurnSource: "heartbeat",
           Provider: undefined,
         },
-        { isHeartbeat: true, suppressToolErrorWarnings: false },
+        { isHeartbeat: true },
         cfg,
       );
     } finally {
@@ -1338,7 +1339,7 @@ describe("runHeartbeatOnce", () => {
           InternalTurnSource: "heartbeat",
           Provider: undefined,
         },
-        { isHeartbeat: true, suppressToolErrorWarnings: false },
+        { isHeartbeat: true },
         cfg,
       );
     } finally {
@@ -1438,7 +1439,7 @@ describe("runHeartbeatOnce", () => {
             InternalTurnSource: "heartbeat",
             Provider: undefined,
           },
-          { isHeartbeat: true, suppressToolErrorWarnings: false },
+          { isHeartbeat: true },
           cfg,
         );
       } finally {

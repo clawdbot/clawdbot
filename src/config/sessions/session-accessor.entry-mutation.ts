@@ -290,6 +290,7 @@ export function resolveSessionAbortTarget(
  * storage-sized operation. Runtime abort side effects remain with callers.
  */
 export async function markSessionAbortTarget(params: {
+  isCurrent?: () => boolean;
   resolveAbortCutoff?: (context: SessionAbortTargetContext) => SessionAbortTargetCutoff | undefined;
   scope: SessionAccessScope;
   now?: () => number;
@@ -300,6 +301,9 @@ export async function markSessionAbortTarget(params: {
     const updated = await patchSessionEntryCore(
       params.scope,
       (currentEntry) => {
+        if (params.isCurrent?.() === false) {
+          return null;
+        }
         resolution.target = {
           entry: { ...currentEntry },
           persisted: false,
@@ -323,9 +327,16 @@ export async function markSessionAbortTarget(params: {
       {
         replaceEntry: true,
         skipMaintenance: true,
+        // The patch callback yields before BEGIN; the conversation can move without
+        // changing this session row, so its snapshot comparison cannot fence Stop.
+        assertCommitAllowed: () => {
+          if (resolution.target && params.isCurrent?.() === false) {
+            throw new Error("The selected session changed before it could be stopped.");
+          }
+        },
       },
     );
-    return updated
+    return updated && resolution.target
       ? {
           entry: { ...updated },
           persisted: true,

@@ -58,8 +58,10 @@ export async function withDistArtifactOwnership<T>(rootDir: string, run: () => P
   try {
     lock = await acquireFileLock(ownerPath, {
       lockPath: ownerPath,
-      // Bounded-root fs-safe locks retain their file on process exit. Only the
-      // explicit release after our child joins may remove this owner record.
+      // This owner record is deliberately fail-closed: it must survive natural
+      // process exit, so only the explicit release after our child joins may
+      // remove it. Stale recovery stays caller-owned via shouldReclaim.
+      retainOnExit: true,
       lockRoot: await openLockRoot(directory),
       payload: () => ({ pid: process.pid, startedAt: new Date().toISOString() }),
       timeoutMs: Number.POSITIVE_INFINITY,

@@ -343,12 +343,10 @@ export function buildSlackPresentationBlocks(
       } else {
         const fallback = renderSlackMessagePresentationChartFallbackText(block);
         blocks.push(
-          ...chunkTextForOutbound(fallback, SLACK_SECTION_TEXT_MAX).map(
-            (text): SlackBlock => ({
-              type: "context",
-              elements: [{ type: "mrkdwn", text, verbatim: true }],
-            }),
-          ),
+          ...chunkTextForOutbound(fallback, SLACK_SECTION_TEXT_MAX).map((text): SlackBlock => ({
+            type: "context",
+            elements: [{ type: "mrkdwn", text, verbatim: true }],
+          })),
         );
       }
       continue;

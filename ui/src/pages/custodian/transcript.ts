@@ -259,54 +259,62 @@ export function renderCustodianTranscriptEntry(params: {
   const question = params.message.question;
   const step = params.message.step;
   return html`
-    ${params.message.text
-      ? renderMessageGroup(toCustodianMessageGroup(params.message), {
-          showReasoning: false,
-          showToolCalls: false,
-          assistantName: t("custodian.title"),
-          assistantAvatar: params.assistantAvatar,
-        })
-      : nothing}
+    ${
+      params.message.text
+        ? renderMessageGroup(toCustodianMessageGroup(params.message), {
+            showReasoning: false,
+            showToolCalls: false,
+            assistantName: t("custodian.title"),
+            assistantAvatar: params.assistantAvatar,
+          })
+        : nothing
+    }
     ${renderCustodianEarlierDivider(params.message, params.boundaryAfterId)}
-    ${params.showQuestion && question
-      ? renderCustodianQuestionCard({
-          question,
-          disabled: params.questionDisabled,
-          onSelect: params.onSelect,
-          onSkip: params.onSkip,
-        })
-      : nothing}
-    ${params.showWizardStep && step
-      ? html`<section
-          class="custodian__wizard-step"
-          aria-label=${formatUiExternalText(step.title ?? step.message, "Setup")}
-        >
-          ${step.title
-            ? html`<strong class="custodian__wizard-title"
-                >${formatUiExternalText(step.title)}</strong
-              >`
-            : nothing}
-          ${renderWizardStepControls({
-            step,
-            value: params.wizardValue,
-            busy: params.wizardDisabled,
-            inputId: `custodian-wizard-input-${params.message.id}`,
-            sensitiveRevealed: params.wizardSecretVisible,
-            onValueChange: params.onWizardValueChange,
-            onAnswer: params.onWizardAnswer,
-            leadingAction: params.showWizardCancel
-              ? html`<button
-                  class="btn btn--ghost custodian__wizard-cancel"
-                  type="button"
-                  ?disabled=${params.wizardDisabled}
-                  @click=${params.onWizardCancel}
-                >
-                  ${t("custodian.cancel")}
-                </button>`
-              : undefined,
-            onToggleSensitiveVisibility: params.onToggleWizardSecretVisibility,
-          })}
-        </section>`
-      : nothing}
+    ${
+      params.showQuestion && question
+        ? renderCustodianQuestionCard({
+            question,
+            disabled: params.questionDisabled,
+            onSelect: params.onSelect,
+            onSkip: params.onSkip,
+          })
+        : nothing
+    }
+    ${
+      params.showWizardStep && step
+        ? html`<section
+            class="custodian__wizard-step"
+            aria-label=${formatUiExternalText(step.title ?? step.message, "Setup")}
+          >
+            ${
+              step.title
+                ? html`<strong class="custodian__wizard-title"
+                    >${formatUiExternalText(step.title)}</strong
+                  >`
+                : nothing
+            }
+            ${renderWizardStepControls({
+              step,
+              value: params.wizardValue,
+              busy: params.wizardDisabled,
+              inputId: `custodian-wizard-input-${params.message.id}`,
+              sensitiveRevealed: params.wizardSecretVisible,
+              onValueChange: params.onWizardValueChange,
+              onAnswer: params.onWizardAnswer,
+              leadingAction: params.showWizardCancel
+                ? html`<button
+                    class="btn btn--ghost custodian__wizard-cancel"
+                    type="button"
+                    ?disabled=${params.wizardDisabled}
+                    @click=${params.onWizardCancel}
+                  >
+                    ${t("custodian.cancel")}
+                  </button>`
+                : undefined,
+              onToggleSensitiveVisibility: params.onToggleWizardSecretVisibility,
+            })}
+          </section>`
+        : nothing
+    }
   `;
 }

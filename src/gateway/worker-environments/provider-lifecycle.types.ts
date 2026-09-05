@@ -20,6 +20,12 @@ import type {
 } from "./store.js";
 import type { WorkerTunnelStopReason } from "./tunnel-contract.js";
 
+export type WorkerEnvironmentAbandonment = {
+  sessionId: string;
+  ownerEpoch: number;
+  authorize?: () => void;
+};
+
 export type WorkerProviderLifecycleInputOptions = {
   store: WorkerEnvironmentStore;
   getConfig: () => OpenClawConfig;
@@ -43,6 +49,7 @@ export type WorkerProviderLifecycleInputOptions = {
   ensureNodeWorkerBundle?: (params: {
     deviceId: string;
     artifact: Extract<WorkerInstallationArtifact, { install: "bundle" }>;
+    prewarm: boolean;
     signal?: AbortSignal;
   }) => Promise<WorkerAdmissionHandshake>;
   prepareNodeBootstrap?: (record: WorkerEnvironmentRecord, signal?: AbortSignal) => Promise<void>;

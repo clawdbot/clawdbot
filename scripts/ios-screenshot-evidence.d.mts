@@ -31,8 +31,3 @@ export function reduceIosScreenshotEvidence(options: {
   outputRoot: string;
   expectedProvenance: IosScreenshotProvenance;
 }): Record<string, unknown>;
-
-export function parseIosScreenshotEvidenceArgs(argv: string[]): {
-  command: string | undefined;
-  options: Record<string, string>;
-};

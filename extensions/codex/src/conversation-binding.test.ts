@@ -191,7 +191,7 @@ async function writeTestConversationBinding(
 }
 
 async function readTestConversationBinding(sessionFile: string) {
-  return await testCodexAppServerBindingStore.read(testConversationIdentity(sessionFile));
+  return testCodexAppServerBindingStore.read(testConversationIdentity(sessionFile));
 }
 
 function boundConversationClaim(sessionFile: string, sessionKey?: string) {
@@ -466,11 +466,10 @@ describe("codex conversation binding", () => {
     await writeTestConversationBinding(sessionFile, { threadId: "bound-thread", cwd: tempDir });
     const notificationHandlers = new Set<(notification: unknown) => unknown>();
     const requestHandlers = new Set<(request: unknown) => unknown>();
-    const siblingRequestOwner = vi.fn(
-      (request: { method: string }): JsonValue =>
-        request.method === "item/tool/call"
-          ? { contentItems: [], success: true }
-          : { decision: "accept" },
+    const siblingRequestOwner = vi.fn((request: { method: string }): JsonValue =>
+      request.method === "item/tool/call"
+        ? { contentItems: [], success: true }
+        : { decision: "accept" },
     );
     const siblingResponses: unknown[] = [];
     let releaseSiblingRoute: (() => void) | undefined;
@@ -664,10 +663,8 @@ describe("codex conversation binding", () => {
       });
       const bindingStore = {
         ...testCodexAppServerBindingStore,
-        read: async (
-          requestedIdentity: Parameters<typeof testCodexAppServerBindingStore.read>[0],
-        ) => {
-          const binding = await testCodexAppServerBindingStore.read(requestedIdentity);
+        read: (requestedIdentity: Parameters<typeof testCodexAppServerBindingStore.read>[0]) => {
+          const binding = testCodexAppServerBindingStore.read(requestedIdentity);
           capturedOwner?.();
           return binding;
         },
@@ -700,9 +697,9 @@ describe("codex conversation binding", () => {
       });
       expect(sharedClientMocks.getSharedCodexAppServerClient).not.toHaveBeenCalled();
       if (outcome !== "replaced") {
-        await expect(testCodexAppServerBindingStore.read(identity)).resolves.toBeUndefined();
+        expect(testCodexAppServerBindingStore.read(identity)).toBeUndefined();
       } else {
-        await expect(testCodexAppServerBindingStore.read(identity)).resolves.toMatchObject({
+        expect(testCodexAppServerBindingStore.read(identity)).toMatchObject({
           threadId: "thread-replacement",
         });
       }
@@ -929,9 +926,9 @@ describe("codex conversation binding", () => {
       }
 
       if (turnFails && ephemeral) {
-        await expect(
+        expect(
           testCodexAppServerBindingStore.read({ kind: "conversation", bindingId }),
-        ).resolves.toBeUndefined();
+        ).toBeUndefined();
         return;
       }
 
@@ -952,9 +949,9 @@ describe("codex conversation binding", () => {
         method: "thread/unsubscribe",
         params: { threadId: "thread-mixed-source-lifecycle" },
       });
-      await expect(
+      expect(
         testCodexAppServerBindingStore.read({ kind: "conversation", bindingId }),
-      ).resolves.toBeUndefined();
+      ).toBeUndefined();
     },
   );
 
@@ -1229,7 +1226,7 @@ describe("codex conversation binding", () => {
             workspaceDir: tempDir,
             bindingStore: {
               ...testCodexAppServerBindingStore,
-              read: async (identity) => {
+              read: (identity) => {
                 if (resumeAccepted) {
                   if (expiresDuring === "binding-read") {
                     throw new Error("Invalid Codex app-server binding row");
@@ -1238,7 +1235,7 @@ describe("codex conversation binding", () => {
                     vi.setSystemTime(startedAt + 1_001);
                   }
                 }
-                return await testCodexAppServerBindingStore.read(identity);
+                return testCodexAppServerBindingStore.read(identity);
               },
               mutate: async (...args) => {
                 if (expiresDuring === "commit") {
@@ -1891,7 +1888,7 @@ describe("codex conversation binding", () => {
       },
     });
 
-    await expect(testCodexAppServerBindingStore.read(identity)).resolves.toBeUndefined();
+    expect(testCodexAppServerBindingStore.read(identity)).toBeUndefined();
     await expect(consumeCodexAppServerLiveThread(client, "thread-sibling-0")).resolves.toEqual(
       expect.objectContaining({ release: expect.any(Function) }),
     );
@@ -1946,7 +1943,7 @@ describe("codex conversation binding", () => {
       expect.objectContaining({ timeoutMs: expect.any(Number) }),
     );
     expect(release).toHaveBeenCalledOnce();
-    await expect(testCodexAppServerBindingStore.read(identity)).resolves.toBeUndefined();
+    expect(testCodexAppServerBindingStore.read(identity)).toBeUndefined();
   });
 
   it("keeps a denied conversation binding when native unsubscribe fails", async () => {
@@ -1954,9 +1951,9 @@ describe("codex conversation binding", () => {
     const request = vi.fn(async () => {
       throw new Error("native unsubscribe failed");
     });
-    const close = vi.fn();
+    const closeAndWait = vi.fn(async () => true);
     sharedClientMocks.retainSharedCodexAppServerClientByInstanceId.mockReturnValue({
-      client: { request, close },
+      client: { request, closeAndWait },
       release: vi.fn(),
     });
     await testCodexAppServerBindingStore.mutate(identity, {
@@ -2001,9 +1998,10 @@ describe("codex conversation binding", () => {
       { threadId: "thread-failed-denial" },
       expect.objectContaining({ timeoutMs: expect.any(Number) }),
     );
-    await expect(testCodexAppServerBindingStore.read(identity)).resolves.toMatchObject({
+    expect(testCodexAppServerBindingStore.read(identity)).toMatchObject({
       threadId: "thread-failed-denial",
     });
+    expect(closeAndWait).toHaveBeenCalledOnce();
   });
 
   it("preserves the live conversation generation when a replacement bind is denied", async () => {
@@ -2036,7 +2034,7 @@ describe("codex conversation binding", () => {
       },
     });
 
-    await expect(testCodexAppServerBindingStore.read(identity)).resolves.toMatchObject({
+    expect(testCodexAppServerBindingStore.read(identity)).toMatchObject({
       threadId: "thread-old",
       conversationStartId: "start-old",
     });
@@ -2063,7 +2061,7 @@ describe("codex conversation binding", () => {
       }),
     ).rejects.toThrow("owned by another OpenClaw session");
     expect(request).not.toHaveBeenCalled();
-    await expect(testCodexAppServerBindingStore.read(otherIdentity)).resolves.toMatchObject({
+    expect(testCodexAppServerBindingStore.read(otherIdentity)).toMatchObject({
       threadId: "thread-owned",
     });
   });
@@ -2822,7 +2820,7 @@ describe("codex conversation binding", () => {
     expect(requests.map((request) => request.method)).toEqual(["thread/resume", "turn/start"]);
     expect(requests[0]?.params.threadId).toBe("thread-target");
     expect(requests[1]?.params.cwd).toBe("/new-repo");
-    await expect(testCodexAppServerBindingStore.read(identity)).resolves.toMatchObject({
+    expect(testCodexAppServerBindingStore.read(identity)).toMatchObject({
       threadId: "thread-target",
       cwd: "/new-repo",
       conversationStartId: "start-new",
@@ -2984,7 +2982,7 @@ describe("codex conversation binding", () => {
       { role: "assistant", content: [{ text: "Earlier answer" }] },
     ]);
     expect(releaseSource).toHaveBeenCalledExactlyOnceWith("thread-source");
-    await expect(testCodexAppServerBindingStore.read(sourceIdentity)).resolves.toBeUndefined();
+    expect(testCodexAppServerBindingStore.read(sourceIdentity)).toBeUndefined();
     await expect(consumeCodexAppServerLiveThread(client, "thread-bound")).resolves.toEqual(
       expect.objectContaining({ release: expect.any(Function) }),
     );
@@ -3067,15 +3065,15 @@ describe("codex conversation binding", () => {
 
       expect(result?.reply?.text).toContain("active run");
       expect(request.mock.calls.map(([method]) => method)).toEqual(["thread/start"]);
-      await expect(testCodexAppServerBindingStore.read(sourceIdentity)).resolves.toMatchObject({
+      expect(testCodexAppServerBindingStore.read(sourceIdentity)).toMatchObject({
         threadId: source.threadId,
       });
-      await expect(
+      expect(
         testCodexAppServerBindingStore.read({
           kind: "conversation",
           bindingId: "binding-active-source",
         }),
-      ).resolves.not.toHaveProperty("conversationSourceTransferComplete", true);
+      ).not.toHaveProperty("conversationSourceTransferComplete", true);
     } finally {
       if (!exposeClient) {
         clearActiveEmbeddedRun(source.sessionId, activeRun, source.sessionKey);
@@ -4078,7 +4076,7 @@ describe("codex conversation binding", () => {
         expect(request).toHaveBeenCalledWith(
           "turn/interrupt",
           { threadId: "thread-1", turnId: "turn-1" },
-          { timeoutMs: 5_000 },
+          { timeoutMs: 5_000, signal: expect.any(AbortSignal) },
         );
         expect(request.mock.calls.map(([method]) => method)).toEqual([
           "turn/start",
@@ -4160,7 +4158,7 @@ describe("codex conversation binding", () => {
         expect(request).toHaveBeenCalledWith(
           "turn/interrupt",
           { threadId: "thread-1", turnId: "turn-1" },
-          { timeoutMs: 5_000 },
+          { timeoutMs: 5_000, signal: expect.any(AbortSignal) },
         );
         if (acknowledged) {
           expect(readCodexConversationActiveTurn(identity)).toMatchObject({

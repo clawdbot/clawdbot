@@ -327,6 +327,10 @@ describe("setup-registry module loader", () => {
     fs.mkdirSync(path.dirname(artifactSetup), { recursive: true });
     fs.writeFileSync(sourceSetup, "export default {};\n", "utf-8");
     fs.writeFileSync(artifactSetup, "export default {};\n", "utf-8");
+    fs.writeFileSync(
+      path.join(path.dirname(artifactSetup), "package.json"),
+      JSON.stringify({ openclaw: { extensions: ["./index.js"] } }),
+    );
     mocks.loadPluginManifestRegistry.mockReturnValue({
       plugins: [
         {

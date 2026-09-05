@@ -704,10 +704,7 @@ extension OpenClawChatViewModel {
         let historyContext = beginHistoryRequest(for: attempt.draft.session)
         let refresh = await refreshHistoryAfterRun(historyRequest: historyContext)
         guard isCurrentSession(attempt.draft.session) else { return }
-        let hasInFlightRunSnapshot = refresh.applied &&
-            refresh.runSnapshotApplied &&
-            refresh.hasInFlightRun
-        if hasInFlightRunSnapshot ||
+        if refresh.hasInFlightRun || (refresh.applied && !refresh.runSnapshotApplied) ||
             !clearPendingRunIfAssistantMessagePresent(
                 runId: response.runId,
                 after: attempt.userMessageTimestamp)

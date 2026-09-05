@@ -393,11 +393,8 @@ impl RequestFailure {
 
     fn tls(message: impl Into<String>) -> Self {
         Self {
-            message: message.into(),
-            disconnect: true,
-            connect_details: ConnectErrorDetails::default(),
-            connect_state: None,
             tls_failure: true,
+            ..Self::transport(message)
         }
     }
 
@@ -424,6 +421,7 @@ struct CanvasSurfaceState {
     url: Option<String>,
 }
 
+#[derive(Default)]
 struct GatewayClientInner {
     config: Mutex<Option<GatewayWsConfig>>,
     config_generation: AtomicU64,
@@ -447,55 +445,24 @@ pub struct GatewayClient {
 impl GatewayClient {
     pub fn new() -> Self {
         Self {
-            inner: Arc::new(GatewayClientInner {
-                config: Mutex::new(None),
-                config_generation: AtomicU64::new(0),
-                commands: Mutex::new(None),
-                agents_cache: Mutex::new(None),
-                identity: Mutex::new(None),
-                canvas_surface: Mutex::new(CanvasSurfaceState::default()),
-                user_accent: Mutex::new(None),
-                connection_notice: Mutex::new(None),
-                connection_state: AtomicU64::new(GatewayConnectionState::Down as u64),
-                reconnect_paused: AtomicBool::new(false),
-                sleep_cycle_depth: AtomicU64::new(0),
-                running: AtomicBool::new(false),
-            }),
+            inner: Arc::default(),
         }
     }
 
     pub fn configure(&self, app: &AppHandle, config: GatewayWsConfig) {
-        *self
-            .inner
-            .config
-            .lock()
-            .expect("gateway config mutex poisoned") = Some(config);
-        *self
-            .inner
-            .agents_cache
-            .lock()
-            .expect("gateway agents cache mutex poisoned") = None;
-        let generation = self.inner.config_generation.fetch_add(1, Ordering::SeqCst) + 1;
-        self.set_canvas_surface_url(generation, None);
-        self.inner.reconnect_paused.store(false, Ordering::SeqCst);
-        self.set_connection_state(app, GatewayConnectionState::Down, None);
-        if let Some(commands) = self
-            .inner
-            .commands
-            .lock()
-            .expect("gateway command mutex poisoned")
-            .as_ref()
-        {
-            let _ = commands.try_send(DriverCommand::Reconfigure);
-        }
+        self.set_configuration(app, Some(config));
     }
 
     pub fn clear_configuration(&self, app: &AppHandle) {
+        self.set_configuration(app, None);
+    }
+
+    fn set_configuration(&self, app: &AppHandle, config: Option<GatewayWsConfig>) {
         *self
             .inner
             .config
             .lock()
-            .expect("gateway config mutex poisoned") = None;
+            .expect("gateway config mutex poisoned") = config;
         *self
             .inner
             .agents_cache
@@ -505,15 +472,7 @@ impl GatewayClient {
         self.set_canvas_surface_url(generation, None);
         self.inner.reconnect_paused.store(false, Ordering::SeqCst);
         self.set_connection_state(app, GatewayConnectionState::Down, None);
-        if let Some(commands) = self
-            .inner
-            .commands
-            .lock()
-            .expect("gateway command mutex poisoned")
-            .as_ref()
-        {
-            let _ = commands.try_send(DriverCommand::Reconfigure);
-        }
+        self.resume_reconnect();
     }
 
     pub fn activate(&self, app: AppHandle) {
@@ -680,21 +639,6 @@ impl GatewayClient {
     }
 
     #[cfg(target_os = "linux")]
-    pub fn route_token(&self) -> Option<String> {
-        self.inner
-            .config
-            .lock()
-            .expect("gateway config mutex poisoned")
-            .as_ref()
-            .map(|config| config.ws_url.clone())
-    }
-
-    #[cfg(target_os = "linux")]
-    pub fn is_loopback_route(&self) -> bool {
-        self.loopback_route_token().is_some()
-    }
-
-    #[cfg(target_os = "linux")]
     pub fn loopback_route_token(&self) -> Option<String> {
         self.inner
             .config
@@ -733,11 +677,12 @@ impl GatewayClient {
         // Depth, not a boolean: an older wake task ending late must not park the
         // driver while a newer sleep cycle is still active. Saturate at zero so
         // an unbalanced end can never wrap into a permanently active driver.
-        let _ = self.inner.sleep_cycle_depth.fetch_update(
-            Ordering::SeqCst,
-            Ordering::SeqCst,
-            |depth| depth.checked_sub(1),
-        );
+        let _ =
+            self.inner
+                .sleep_cycle_depth
+                .try_update(Ordering::SeqCst, Ordering::SeqCst, |depth| {
+                    depth.checked_sub(1)
+                });
     }
 
     #[cfg(target_os = "linux")]
@@ -1260,12 +1205,13 @@ fn classify_connect_failure(
     if detail_code == Some(PAIRING_REQUIRED_DETAIL_CODE) {
         return Some(GatewayConnectionState::PairingRequired);
     }
-    let credential_required = !has_local_credential
-        && detail_code.is_some_and(|code| {
-            code == AUTH_TOKEN_MISSING_DETAIL_CODE
-                || code == AUTH_PASSWORD_MISSING_DETAIL_CODE
-                || (code.starts_with("AUTH_") && code.ends_with("_MISMATCH"))
-        });
+    // A retained device token can fail because the Gateway now requires shared credentials.
+    // Mismatch errors remain credential-aware so configured auth keeps its existing recovery path.
+    let credential_required = detail_code.is_some_and(|code| {
+        code == AUTH_TOKEN_MISSING_DETAIL_CODE
+            || code == AUTH_PASSWORD_MISSING_DETAIL_CODE
+            || (!has_local_credential && code.starts_with("AUTH_") && code.ends_with("_MISMATCH"))
+    });
     credential_required.then_some(GatewayConnectionState::CredentialRequired)
 }
 
@@ -1603,20 +1549,6 @@ struct ValidatedHello {
     canvas_surface_url: Option<String>,
 }
 
-impl ValidatedHello {
-    fn new(
-        device_token: Option<String>,
-        tick_watch_timeout: Duration,
-        canvas_surface_url: Option<String>,
-    ) -> Self {
-        Self {
-            device_token,
-            tick_watch_timeout,
-            canvas_surface_url,
-        }
-    }
-}
-
 fn gated_canvas_surface_url(
     canvas_surface_url: Option<String>,
     inline_widgets_available: bool,
@@ -1674,17 +1606,16 @@ fn validate_hello(payload: Value) -> Result<ValidatedHello, String> {
         .and_then(|policy| policy.tick_interval_ms)
         .unwrap_or(30_000)
         .max(1);
-    let issued_device_auth = hello.auth.device_token;
     let canvas_surface_url = hello
         .plugin_surface_urls
         .and_then(|surface_urls| surface_urls.get("canvas").cloned())
         .map(|value| value.trim().to_string())
         .filter(|value| !value.is_empty());
-    Ok(ValidatedHello::new(
-        issued_device_auth,
-        Duration::from_millis(tick_interval_ms).saturating_mul(2),
+    Ok(ValidatedHello {
+        device_token: hello.auth.device_token,
+        tick_watch_timeout: Duration::from_millis(tick_interval_ms).saturating_mul(2),
         canvas_surface_url,
-    ))
+    })
 }
 
 fn classify_chat_ack(ack: &ChatSendAck) -> Result<(), String> {
@@ -1699,20 +1630,15 @@ fn classify_chat_ack(ack: &ChatSendAck) -> Result<(), String> {
 
 fn ack_error_message(ack: &ChatSendAck) -> String {
     ack.message
-        .clone()
-        .or_else(|| {
-            ack.error
-                .as_ref()
-                .and_then(Value::as_str)
-                .map(ToOwned::to_owned)
-        })
+        .as_deref()
+        .or_else(|| ack.error.as_ref().and_then(Value::as_str))
         .or_else(|| {
             ack.error
                 .as_ref()
                 .and_then(|error| error.get("message"))
                 .and_then(Value::as_str)
-                .map(ToOwned::to_owned)
         })
+        .map(str::to_string)
         .unwrap_or_else(|| format!("Gateway chat.send {}.", ack.status))
 }
 
@@ -1859,7 +1785,14 @@ mod tests {
                     r#"#!/bin/sh
 case "$*" in
   --version) echo '0.0.0-test' ;;
-  'gateway status --json') echo '{"service":{"loaded":true,"runtime":{"status":"running"}},"rpc":{"ok":true}}' ;;
+  'gateway status --json')
+    if test -f "$(dirname "$0")/stopped"; then
+      echo '{"service":{"loaded":true,"runtime":{"status":"stopped"}},"rpc":{"ok":false}}'
+    else
+      echo '{"service":{"loaded":true,"runtime":{"status":"running"}},"rpc":{"ok":true}}'
+    fi ;;
+  'gateway stop --json --force') touch "$(dirname "$0")/stopped"; echo '{"ok":true}' ;;
+  'gateway start --json'|'gateway restart --json') rm -f "$(dirname "$0")/stopped"; echo '{"ok":true}' ;;
   'dashboard --json --no-open') cat "$(dirname "$0")/dashboard.json" ;;
   *) echo 'Unexpected CLI invocation' >&2; exit 1 ;;
 esac
@@ -1892,6 +1825,23 @@ esac
                     None => std::env::remove_var("OPENCLAW_DESKTOP_CLI"),
                 }
                 let _ = fs::remove_dir_all(&self.directory);
+            }
+        }
+
+        #[test]
+        fn gateway_actions_supply_stop_consent_without_forcing_restart() {
+            let _fixture = CliFixture::new();
+            let cli = OpenClawCli::discover().expect("discover fixture CLI");
+            for action in [
+                gateway::GatewayAction::Stop,
+                gateway::GatewayAction::Start,
+                gateway::GatewayAction::Restart,
+                gateway::GatewayAction::Stop,
+            ] {
+                let snapshot = gateway::act(&cli, action).expect("CLI accepts desktop action");
+                let running = !matches!(action, gateway::GatewayAction::Stop);
+                assert_eq!(snapshot.running, running);
+                assert_eq!(snapshot.reachable, running);
             }
         }
 
@@ -2490,6 +2440,69 @@ esac
         assert!(should_clear_stored_device_token(
             &stale_device_auth,
             &GatewayAuth::DeviceToken("stale".to_string())
+        ));
+    }
+
+    #[test]
+    fn missing_gateway_credentials_override_retained_device_auth() {
+        for detail_code in [
+            AUTH_TOKEN_MISSING_DETAIL_CODE,
+            AUTH_PASSWORD_MISSING_DETAIL_CODE,
+        ] {
+            let details = json!({
+                "code": detail_code,
+                "retryable": false,
+                "pauseReconnect": true
+            });
+            let auth = GatewayAuth::DeviceToken("retained-device-token".to_string());
+            let failure = RequestFailure::method_with_details("credential missing", Some(&details))
+                .classify_connect(&auth);
+
+            assert_eq!(
+                failure.connect_state,
+                Some(GatewayConnectionState::CredentialRequired)
+            );
+            assert!(should_pause_reconnect(&failure.connect_details));
+            assert!(!should_clear_stored_device_token(&failure, &auth));
+            let state = failure.connect_state.expect("classified state");
+            let notice = connection_notice(state, &failure.connect_details, true);
+            assert_eq!(
+                notice.as_deref(),
+                Some("Gateway requires a credential — open the dashboard on the gateway host")
+            );
+            assert_eq!(
+                serde_json::to_value(GatewayStateEvent::new(state, notice, None, None))
+                    .expect("serialize credential-required state"),
+                json!({
+                    "state": "credential-required",
+                    "notice": "Gateway requires a credential — open the dashboard on the gateway host"
+                })
+            );
+        }
+    }
+
+    #[tokio::test]
+    async fn reopening_quick_chat_resumes_only_a_paused_reconnect() {
+        let client = GatewayClient::new();
+        let (commands, mut receiver) = mpsc::channel(2);
+        *client
+            .inner
+            .commands
+            .lock()
+            .expect("gateway command mutex poisoned") = Some(commands);
+
+        client.resume_paused_reconnect();
+        assert!(
+            tokio::time::timeout(Duration::from_millis(25), receiver.recv())
+                .await
+                .is_err()
+        );
+
+        client.inner.reconnect_paused.store(true, Ordering::SeqCst);
+        client.resume_paused_reconnect();
+        assert!(matches!(
+            receiver.recv().await,
+            Some(DriverCommand::Reconfigure)
         ));
     }
 

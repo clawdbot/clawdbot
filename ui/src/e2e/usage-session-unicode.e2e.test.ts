@@ -57,7 +57,12 @@ function usageResponse(sessionKey?: string) {
               ...usageTotals,
               activityDates: [day],
               dailyBreakdown: [
-                { date: day, tokens: usageTotals.totalTokens, cost: usageTotals.totalCost },
+                {
+                  ...usageTotals,
+                  date: day,
+                  tokens: usageTotals.totalTokens,
+                  cost: usageTotals.totalCost,
+                },
               ],
               messageCounts: {
                 total: 2,

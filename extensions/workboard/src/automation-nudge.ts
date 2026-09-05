@@ -15,6 +15,7 @@ type WorkboardAutomationNudgeInput = {
 };
 
 type WorkboardAutomationNudgeService = OpenClawPluginService & {
+  stop: () => void;
   nudge: (input: WorkboardAutomationNudgeInput) => Promise<void>;
 };
 

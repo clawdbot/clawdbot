@@ -90,7 +90,7 @@ final class CLIInstallPrompter {
             case .alertFirstButtonReturn:
                 return target
             case .alertThirdButtonReturn:
-                self.openSettings(tab: .connection)
+                AppNavigationActions.openConnection()
                 return nil
             default:
                 return nil
@@ -278,14 +278,6 @@ final class CLIInstallPrompter {
             try? await Task.sleep(nanoseconds: 150_000_000)
         }
         return false
-    }
-
-    private func openSettings(tab: SettingsTab) {
-        SettingsTabRouter.request(tab)
-        SettingsWindowOpener.shared.open()
-        DispatchQueue.main.async {
-            NotificationCenter.default.post(name: .openclawSelectSettingsTab, object: tab)
-        }
     }
 
     private static func appVersion() -> String? {

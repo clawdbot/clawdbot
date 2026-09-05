@@ -26,7 +26,7 @@ async function runFixture(files: GuardFixture) {
 }
 
 const directViolation: GuardFixture = {
-  "src/inner.ts": "export function runTask() { return 'inner'; }\n",
+  "src/inner.js": "export function runTask() { return 'inner'; }\n",
   "src/outer.ts": [
     'import { runTask as runTaskInner } from "./inner.js";',
     "export function runTask() {",
@@ -40,7 +40,7 @@ describe("wrapper shadowing guard", () => {
   it("fails for a same-name wrapper around an imported implementation", async () => {
     const result = await runFixture(directViolation);
 
-    expect(result).toEqual([{ name: "runTask", wrapped: "src/inner.ts", wrapper: "src/outer.ts" }]);
+    expect(result).toEqual([{ name: "runTask", wrapped: "src/inner.js", wrapper: "src/outer.ts" }]);
   });
 
   it("passes for a pure re-export", async () => {

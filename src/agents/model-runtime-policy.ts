@@ -14,6 +14,28 @@ import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { resolveAgentEntry } from "./agent-scope-config.js";
 import { resolveSessionAgentIds } from "./agent-scope.js";
 
+/** A stored-row owner is already selected; request hints still require normal admission. */
+export type AgentRuntimePolicyScope = { sessionKey?: string } & (
+  | { agentId?: string; agentScope?: never }
+  | { agentId?: never; agentScope: { kind: "prepared"; agentId: string } }
+);
+
+/** Resolve request hints; prepared owner facts never re-admit a canonical sentinel. */
+export function resolveAgentRuntimePolicyAgentId(
+  params: AgentRuntimePolicyScope & { config?: OpenClawConfig },
+): string | undefined {
+  if (params.agentScope?.kind === "prepared") {
+    return params.agentScope.agentId;
+  }
+  return params.config && (params.agentId?.trim() || params.sessionKey?.trim())
+    ? resolveSessionAgentIds({
+        config: params.config,
+        agentId: params.agentId,
+        sessionKey: params.sessionKey,
+      }).sessionAgentId
+    : params.agentId;
+}
+
 /** Config surface that supplied a resolved model runtime policy. */
 type ModelRuntimePolicySource = "model" | "provider";
 
@@ -147,25 +169,15 @@ function resolveAgentModelEntryRuntimePolicy(params: {
   provider?: string;
   modelId?: string;
   agentId?: string;
-  sessionKey?: string;
   matchKind: Exclude<ModelEntryMatchKind, "none">;
 }): AgentModelRuntimePolicyResolution {
   const modelId = normalizeModelIdForProvider(params.provider, params.modelId);
   if (!params.config || (!modelId && params.matchKind !== "provider-wildcard")) {
     return {};
   }
-  const hasSessionScope = Boolean(params.agentId?.trim() || params.sessionKey?.trim());
-  const sessionAgentId = hasSessionScope
-    ? resolveSessionAgentIds({
-        config: params.config,
-        agentId: params.agentId,
-        sessionKey: params.sessionKey,
-      }).sessionAgentId
-    : tryResolveLegacyCompatibilityAgentId(params.config);
   // Point lookup: projecting the whole roster per model ref made runtime
   // collection O(agents² × models) on large fleets (#135743).
-  const agentEntry =
-    sessionAgentId && params.config ? resolveAgentEntry(params.config, sessionAgentId) : undefined;
+  const agentEntry = params.agentId ? resolveAgentEntry(params.config, params.agentId) : undefined;
   const modelMaps: Array<Record<string, AgentModelEntryConfig> | undefined> = [
     agentEntry?.models,
     params.config.agents?.defaults?.models,
@@ -211,13 +223,13 @@ function resolveModelConfig(params: {
 }
 
 /** Resolves the effective runtime policy for an agent/model/provider selection. */
-export function resolveModelRuntimePolicy(params: {
-  config?: OpenClawConfig;
-  provider?: string;
-  modelId?: string;
-  agentId?: string;
-  sessionKey?: string;
-}): ResolvedModelRuntimePolicy {
+export function resolveModelRuntimePolicy(
+  params: {
+    config?: OpenClawConfig;
+    provider?: string;
+    modelId?: string;
+  } & AgentRuntimePolicyScope,
+): ResolvedModelRuntimePolicy {
   const callerProvider = normalizeProviderId(params.provider ?? "");
   const effectiveProvider = resolveEffectiveProvider(params.provider, params.modelId);
   const inferredMatchedProvider = callerProvider ? undefined : effectiveProvider;
@@ -228,8 +240,15 @@ export function resolveModelRuntimePolicy(params: {
     }
   }
 
+  const hasAgentScope = Boolean(
+    params.agentScope || params.agentId?.trim() || params.sessionKey?.trim(),
+  );
+  const agentId = hasAgentScope
+    ? resolveAgentRuntimePolicyAgentId(params)
+    : params.config && tryResolveLegacyCompatibilityAgentId(params.config);
   const agentModelPolicy = resolveAgentModelEntryRuntimePolicy({
     ...params,
+    agentId,
     provider: effectiveProvider,
     matchKind: "exact",
   });
@@ -254,6 +273,7 @@ export function resolveModelRuntimePolicy(params: {
   }
   const agentWildcardModelPolicy = resolveAgentModelEntryRuntimePolicy({
     ...params,
+    agentId,
     provider: effectiveProvider,
     matchKind: "provider-wildcard",
   });

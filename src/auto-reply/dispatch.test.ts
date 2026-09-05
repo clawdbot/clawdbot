@@ -248,27 +248,63 @@ describe("withReplyDispatcher", () => {
     expect(order).toEqual(["run", "markComplete", "waitForIdle", "settledTask", "onSettled"]);
   });
 
-  it("still drains dispatcher after run throws", async () => {
-    const order: string[] = [];
-    const dispatcher = createDispatcher(order);
-    const onSettled = vi.fn(() => {
-      order.push("onSettled");
-    });
+  it.each(["run", "waitForIdle", "settledTask"])(
+    "runs every cleanup and preserves the original %s failure",
+    async (failedStage) => {
+      const order: string[] = [];
+      const failure = new Error(`${failedStage} failed`);
+      const laterFailure = new Error("later cleanup failed");
+      const visit = (stage: string) => {
+        order.push(stage);
+        if (stage === failedStage) {
+          throw failure;
+        }
+      };
+      const dispatcher = createDispatcher(order);
+      dispatcher.waitForIdle = async () => {
+        visit("waitForIdle");
+      };
+      registerReplyDispatcherSettledTask(dispatcher, () => {
+        visit("settledTask");
+      });
+      registerReplyDispatcherSettledTask(dispatcher, () => {
+        order.push("laterTask");
+        throw laterFailure;
+      });
+      registerReplyDispatcherSettledTask(dispatcher, () => {
+        order.push("lastTask");
+      });
 
-    await expect(
-      withReplyDispatcher({
+      await expect(
+        withReplyDispatcher({
+          dispatcher,
+          run: async () => {
+            visit("run");
+          },
+          onSettled: () => {
+            order.push("onSettled");
+            throw laterFailure;
+          },
+        }),
+      ).rejects.toBe(failure);
+
+      expect(order).toEqual([
+        "run",
+        "markComplete",
+        "waitForIdle",
+        "settledTask",
+        "laterTask",
+        "lastTask",
+        "onSettled",
+      ]);
+      dispatcher.waitForIdle = async () => undefined;
+      await withReplyDispatcher({
         dispatcher,
-        run: async () => {
-          order.push("run");
-          throw new Error("boom");
-        },
-        onSettled,
-      }),
-    ).rejects.toThrow("boom");
-
-    expect(onSettled).toHaveBeenCalledTimes(1);
-    expect(order).toEqual(["run", "markComplete", "waitForIdle", "onSettled"]);
-  });
+        run: async () => undefined,
+      });
+      expect(order.filter((stage) => stage === "settledTask")).toHaveLength(1);
+    },
+  );
 
   it("dispatchInboundMessageWithBufferedDispatcher cleans up typing after a resolver starts it", async () => {
     const typing = {

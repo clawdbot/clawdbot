@@ -1,10 +1,12 @@
-import { mkdtempSync, realpathSync, rmSync, writeFileSync } from "node:fs";
+import { globSync, mkdtempSync, realpathSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
 import { afterEach, expect, it, vi } from "vitest";
 import type { TestSpecification } from "vitest/node";
+import { createE2EVitestConfig } from "../vitest/vitest.e2e.config.ts";
 import { RepoE2eSequencer } from "../vitest/vitest.e2e.sequencer.ts";
+import { createUiE2eVitestConfig } from "../vitest/vitest.ui-e2e.config.ts";
 import { selectWeightedShard } from "../vitest/vitest.weighted-sharding.ts";
 
 const { timings } = vi.hoisted(() => ({ timings: {} as Record<string, number> }));
@@ -14,6 +16,15 @@ vi.mock("../../scripts/lib/ci-test-timings.mts", () => ({
 
 const repoRoot = fileURLToPath(new URL("../../", import.meta.url));
 const directories: string[] = [];
+
+it("collects browser suites only in their Control UI projects", () => {
+  const ui = createUiE2eVitestConfig({}, []).test!;
+  const gateway = createE2EVitestConfig({}).test!;
+  const browserFiles = new Set(globSync(ui.include!, { cwd: repoRoot, exclude: ui.exclude }));
+  expect(browserFiles.size).toBeGreaterThan(0);
+  const gatewayFiles = globSync(gateway.include!, { cwd: repoRoot, exclude: gateway.exclude });
+  expect(gatewayFiles.filter((file) => browserFiles.has(file))).toEqual([]);
+});
 
 afterEach(() => {
   for (const directory of directories.splice(0)) {
@@ -74,12 +85,12 @@ it("uses source bytes for every file when timing data is absent", async () => {
 
 it("keeps shared UI/Gateway partition ties deterministic without collapsing specifications", () => {
   const files = testFiles([1, 1, 1]);
-  const secondProject = { ...files[0] } as TestSpecification;
+  const secondProject = { moduleId: files[0]!.moduleId } as TestSpecification;
   const discovered = [...files, secondProject];
   const shards = [1, 2].map((index) =>
     selectWeightedShard(discovered, { index, count: 2 }, () => 1),
   );
-  expect(shards.map((files) => files.length)).toEqual([2, 2]);
+  expect(shards.map((shard) => shard.length)).toEqual([2, 2]);
   expect(shards.flat()).toHaveLength(discovered.length);
   expect(new Set(shards.flat())).toEqual(new Set(discovered));
 });

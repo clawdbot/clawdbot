@@ -155,13 +155,15 @@ export function renderLogs(props: LogsProps) {
           <span class="settings-row__value">${t("gatewayLogs.autoFollow")}</span>
         </div>
       </div>
-      ${props.truncated
-        ? html`
-            <div class="settings-row">
-              ${renderSettingsStatus({ kind: "warn", label: t("gatewayLogs.truncated") })}
-            </div>
-          `
-        : nothing}
+      ${
+        props.truncated
+          ? html`
+              <div class="settings-row">
+                ${renderSettingsStatus({ kind: "warn", label: t("gatewayLogs.truncated") })}
+              </div>
+            `
+          : nothing
+      }
       <div class="log-stream" @scroll=${props.onScroll}>${streamContent}</div>
     </div>
   `;

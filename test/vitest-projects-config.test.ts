@@ -39,6 +39,7 @@ import {
 import { createGatewayVitestConfig } from "./vitest/vitest.gateway.config.ts";
 import { createPluginSdkLightVitestConfig } from "./vitest/vitest.plugin-sdk-light.config.ts";
 import {
+  repoRoot,
   resolveSharedVitestWorkerConfig,
   sharedVitestConfig,
 } from "./vitest/vitest.shared.config.ts";
@@ -53,6 +54,8 @@ const patternFiles = createPatternFileHelper("openclaw-vitest-projects-config-")
 const scopedGatewayMethodsIsolatedTestFiles = [
   "server-methods/agent.test.ts",
   "server-methods/board.runtime-boundaries.test.ts",
+  "server-methods/usage.test.ts",
+  "server-methods/usage.sessions-usage.test.ts",
 ];
 
 function requireTestConfig<T extends { test?: unknown }>(config: T): NonNullable<T["test"]> {
@@ -272,7 +275,9 @@ describe("projects vitest config", () => {
     expect(rootToolingProjects).toHaveLength(toolingProjects.length);
   });
 
-  it("disables vite env-file loading for vitest lanes", () => {
+  it("keeps shared roots explicit and disables vite env-file loading", () => {
+    expect(sharedVitestConfig.root).toBe(repoRoot);
+    expect(sharedVitestConfig.test.root).toBe(repoRoot);
     expect(baseConfig.envDir).toBe(false);
     expect(sharedVitestConfig.envDir).toBe(false);
   });

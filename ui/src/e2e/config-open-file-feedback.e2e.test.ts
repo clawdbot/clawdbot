@@ -78,6 +78,34 @@ async function expectOpenFailure(page: Page, message: string): Promise<void> {
 }
 
 suite.define(() => {
+  it("announces when the host opener succeeds", async () => {
+    await suite.withPage({ serviceWorkers: "block" }, async ({ page }) => {
+      await openRawSettings(page, { ok: true, path: configPath });
+      const proofDir = captureProof
+        ? createControlUiE2eArtifactDir("config-open-file-feedback")
+        : null;
+      if (proofDir) {
+        const proofPath = path.join(proofDir, "initial.png");
+        await page.screenshot({ animations: "disabled", fullPage: true, path: proofPath });
+      }
+
+      await page.getByRole("button", { name: "Open", exact: true }).click();
+
+      const status = page
+        .getByRole("status")
+        .filter({ hasText: "Configuration file opened on Gateway host." });
+      await expect.poll(() => status.count()).toBe(1);
+      expect(await status.textContent()).not.toContain(configPath);
+      expect(await page.evaluate(() => Reflect.get(globalThis, "configOpenFileCopied"))).toEqual(
+        [],
+      );
+      if (proofDir) {
+        const proofPath = path.join(proofDir, "success-after.png");
+        await page.screenshot({ animations: "disabled", fullPage: true, path: proofPath });
+      }
+    });
+  });
+
   it("announces the path fallback when the host opener returns a failure", async () => {
     await suite.withPage({ serviceWorkers: "block" }, async ({ page }) => {
       await openRawSettings(page, {

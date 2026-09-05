@@ -6,17 +6,14 @@
 import type { CliSessionBinding, SessionEntry } from "../config/sessions.js";
 import { getCliSessionBinding } from "../config/sessions/cli-session-binding.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
+import { resolveSessionPinnedHarnessId } from "../sessions/agent-harness-session-key.js";
 import { isDefaultAgentRuntimeId, normalizeOptionalAgentRuntimeId } from "./agent-runtime-id.js";
 import { isCliRuntimeAliasForProvider } from "./model-runtime-aliases.js";
 
 /** Persisted runtime fields used to recover session runtime compatibility. */
 type SessionRuntimeCompatEntry = Pick<
   SessionEntry,
-  "agentHarnessId" | "agentRuntimeOverride" | "modelSelectionLocked"
->;
-type SessionRuntimeOverrideEntry = Pick<
-  SessionEntry,
-  "agentHarnessId" | "agentRuntimeOverride" | "modelSelectionLocked"
+  "agentHarnessId" | "agentRuntimeOverride" | "modelSelectionLocked" | "pluginOwnerId"
 >;
 type ManualCompactionRuntimeEntry = Pick<
   SessionEntry,
@@ -26,6 +23,7 @@ type ManualCompactionRuntimeEntry = Pick<
   | "claudeCliSessionId"
   | "cliSessionIds"
   | "modelSelectionLocked"
+  | "pluginOwnerId"
 >;
 
 type ManualCompactionCliTarget = {
@@ -38,19 +36,15 @@ type ManualCompactionCliTarget = {
 export function resolvePersistedSessionRuntimeId(
   entry?: SessionRuntimeCompatEntry,
 ): string | undefined {
-  const harnessRuntime = normalizeOptionalAgentRuntimeId(entry?.agentHarnessId);
-  if (
-    entry?.modelSelectionLocked === true &&
-    harnessRuntime &&
-    !isDefaultAgentRuntimeId(harnessRuntime)
-  ) {
-    return harnessRuntime;
+  const pinnedHarness = resolveSessionPinnedHarnessId(entry);
+  if (pinnedHarness && !isDefaultAgentRuntimeId(pinnedHarness)) {
+    return pinnedHarness;
   }
   const runtimeOverride = normalizeOptionalAgentRuntimeId(entry?.agentRuntimeOverride);
   if (runtimeOverride && !isDefaultAgentRuntimeId(runtimeOverride)) {
     return runtimeOverride;
   }
-  return harnessRuntime;
+  return normalizeOptionalAgentRuntimeId(entry?.agentHarnessId);
 }
 /** Resolves a runtime id only when it can serve the selected provider. */
 export function resolveCompatibleAgentRuntimeForProvider(params: {
@@ -75,15 +69,11 @@ export function resolveCompatibleAgentRuntimeForProvider(params: {
 /** Resolves a persisted runtime override only when it can serve the selected provider. */
 export function resolveSessionRuntimeOverrideForProvider(params: {
   provider?: string | null;
-  entry?: SessionRuntimeOverrideEntry;
+  entry?: SessionRuntimeCompatEntry;
   cfg?: OpenClawConfig;
 }): string | undefined {
-  const lockedHarness = normalizeOptionalAgentRuntimeId(params.entry?.agentHarnessId);
-  if (
-    params.entry?.modelSelectionLocked === true &&
-    lockedHarness &&
-    !isDefaultAgentRuntimeId(lockedHarness)
-  ) {
+  const lockedHarness = resolveSessionPinnedHarnessId(params.entry);
+  if (lockedHarness && !isDefaultAgentRuntimeId(lockedHarness)) {
     // A locked transcript stays with its creating harness; provider metadata on
     // internal turns must not reinterpret that runtime as a CLI backend.
     return lockedHarness;

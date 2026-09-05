@@ -15,6 +15,7 @@ import ai.openclaw.app.GatewayCronJobSummary
 import ai.openclaw.app.GatewayCronRunHistoryState
 import ai.openclaw.app.GatewayExecApprovalNotice
 import ai.openclaw.app.GatewayExecApprovalSummary
+import ai.openclaw.app.GatewaySummaryState
 import ai.openclaw.app.GatewayTalkSetupReadiness
 import ai.openclaw.app.GatewayTalkSetupState
 import ai.openclaw.app.GatewayUsageProviderSummary
@@ -35,6 +36,7 @@ import ai.openclaw.app.gatewayExecApprovalTextForDisplay
 import ai.openclaw.app.gatewayTalkSetupDescription
 import ai.openclaw.app.gatewayTalkSetupStatusText
 import ai.openclaw.app.hasPhotoReadPermission
+import ai.openclaw.app.i18n.NativeText
 import ai.openclaw.app.i18n.nativeString
 import ai.openclaw.app.i18n.resolveNativeText
 import ai.openclaw.app.i18n.resolveNativeTextResource
@@ -177,35 +179,6 @@ import java.text.DateFormat
 import java.util.Date
 
 /**
- * Detail routes reachable from the Android settings home surface.
- */
-internal enum class SettingsRoute {
-  Home,
-  Profile,
-  Voice,
-  Agents,
-  ProvidersModels,
-  Approvals,
-  CronJobs,
-  Usage,
-  Skills,
-  SkillWorkshop,
-  SystemAgent,
-  NodesDevices,
-  Channels,
-  Dreaming,
-  Terminal,
-  Desktop,
-  Notifications,
-  PhoneCapabilities,
-  Gateway,
-  Appearance,
-  Health,
-  About,
-  Licenses,
-}
-
-/**
  * Dispatches a selected settings route to its detail screen without changing navigation ownership.
  */
 @Composable
@@ -246,13 +219,9 @@ private fun UsageSettingsScreen(
   viewModel: MainViewModel,
   onBack: () -> Unit,
 ) {
-  val usageSummary by viewModel.usageSummary.collectAsState()
-  val usageRefreshing by viewModel.usageRefreshing.collectAsState()
-  val usageErrorText by viewModel.usageErrorText.collectAsState()
+  val usageState by viewModel.usageState.collectAsState()
   val isConnected by viewModel.isConnected.collectAsState()
-  val providerCount = usageSummary.providers.size
-  val issueCount = usageSummary.providers.count { it.error != null }
-  val usageConverging = usageRefreshVisible(usageRefreshing, usageSummary.refreshing)
+  val usageConverging = usageRefreshVisible(usageState.refreshing, usageState.summary?.refreshing == true)
 
   LaunchedEffect(isConnected) {
     if (isConnected) {
@@ -261,38 +230,19 @@ private fun UsageSettingsScreen(
   }
 
   SettingsDetailFrame(title = nativeString("Usage"), subtitle = nativeString("Provider limits and quota health."), icon = Icons.Default.Storage, onBack = onBack) {
-    SettingsMetricPanel(
-      rows =
-        listOf(
-          SettingsMetric(nativeString("Providers"), providerCount.toString()),
-          SettingsMetric(nativeString("Issues"), issueCount.toString()),
-          SettingsMetric(nativeString("Updated"), formatUsageUpdated(usageSummary.updatedAtMs)),
-        ),
-    )
-    Row(modifier = Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-      ClawSecondaryButton(text = if (usageConverging) nativeString("Refreshing") else nativeString("Refresh"), onClick = viewModel::refreshUsage, enabled = isConnected && !usageConverging, modifier = Modifier.weight(1f))
-    }
-    usageErrorText?.let { errorText ->
-      ClawPanel {
-        Text(text = errorText, style = ClawTheme.type.body, color = ClawTheme.colors.warning)
-      }
-    }
-    when {
-      !isConnected -> {
-        ClawPanel {
-          Text(text = nativeString("Connect the gateway to load usage."), style = ClawTheme.type.body, color = ClawTheme.colors.textMuted)
-        }
-      }
-
-      usageSummary.providers.isNotEmpty() -> {
+    SettingsRefreshControls(isConnected, usageConverging, usageState.errorText, viewModel::refreshUsage)
+    SettingsSummaryContent(usageState, isConnected, nativeString("Connect the gateway to load usage.")) { usageSummary ->
+      SettingsMetricPanel(
+        rows =
+          listOf(
+            SettingsMetric(nativeString("Providers"), usageSummary.providers.size.toString()),
+            SettingsMetric(nativeString("Issues"), usageSummary.providers.count { it.error != null }.toString()),
+            SettingsMetric(nativeString("Updated"), formatUsageUpdated(usageSummary.updatedAtMs)),
+          ),
+      )
+      if (usageSummary.providers.isNotEmpty()) {
         UsageProvidersPanel(providers = usageSummary.providers)
-      }
-
-      // The warning panel above already reports a failed load; adding
-      // "No usage data yet." beside it claims the operator has no providers.
-      usageErrorText != null -> {}
-
-      else -> {
+      } else if (usageState.errorText == null) {
         ClawPanel {
           Column(verticalArrangement = Arrangement.spacedBy(3.dp)) {
             Text(text = if (usageConverging) nativeString("Refreshing") else nativeString("No usage data yet."), style = ClawTheme.type.section, color = ClawTheme.colors.text)
@@ -1833,7 +1783,7 @@ private fun GatewaySettingsScreen(
       rows =
         listOf(
           SettingsMetric(nativeString("Connection"), if (gatewayConnectionDisplay.isConnected) nativeString("Connected") else nativeString("Offline")),
-          SettingsMetric(nativeString("Node"), if (isNodeConnected) nativeString("Online") else nativeString("Not paired")),
+          SettingsMetric(nativeString("Node"), if (isNodeConnected) nativeString("Online") else nativeString("Offline")),
           SettingsMetric(
             nativeString("Access"),
             gatewayAccessLabel(
@@ -1905,7 +1855,7 @@ private fun GatewaySettingsScreen(
           overflow = TextOverflow.Ellipsis,
         )
         ClawSecondaryButton(text = nativeString("Scan QR"), onClick = viewModel::pairNewGateway, modifier = Modifier.fillMaxWidth(), icon = Icons.Default.QrCode2)
-        ClawTextField(value = setupCode, onValueChange = { setupCode = it }, placeholder = nativeString("Setup code"))
+        ClawTextField(value = setupCode, onValueChange = { setupCode = it }, placeholder = nativeString("Setup code"), secret = true)
         ClawSecondaryButton(text = nativeString("Connect"), onClick = ::connectSetupCode, modifier = Modifier.fillMaxWidth(), icon = Icons.Default.Cloud)
         TextButton(onClick = { showSetupCodeHelp = !showSetupCodeHelp }) {
           Text(nativeString("Where do I get a setup code?"))
@@ -2016,10 +1966,10 @@ private fun GatewaySettingsScreen(
           )
         }
         Row(modifier = Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-          ClawTextField(value = tokenInput, onValueChange = { tokenInput = it }, placeholder = nativeString("Token"), modifier = Modifier.weight(1f))
-          ClawTextField(value = bootstrapTokenInput, onValueChange = { bootstrapTokenInput = it }, placeholder = nativeString("Bootstrap"), modifier = Modifier.weight(1.05f))
+          ClawTextField(value = tokenInput, onValueChange = { tokenInput = it }, placeholder = nativeString("Token"), modifier = Modifier.weight(1f), secret = true)
+          ClawTextField(value = bootstrapTokenInput, onValueChange = { bootstrapTokenInput = it }, placeholder = nativeString("Bootstrap"), modifier = Modifier.weight(1.05f), secret = true)
         }
-        ClawTextField(value = passwordInput, onValueChange = { passwordInput = it }, placeholder = nativeString("Password"))
+        ClawTextField(value = passwordInput, onValueChange = { passwordInput = it }, placeholder = nativeString("Password"), secret = true)
         validationText?.let {
           Text(text = it, style = ClawTheme.type.caption, color = ClawTheme.colors.warning)
         }
@@ -2280,7 +2230,13 @@ private fun AppLanguageRow(
 
 private fun appLanguageTitle(language: AppLanguage): String = if (language == AppLanguage.System) nativeString("System") else language.displayName
 
-internal fun appearanceThemeSummary(mode: AppearanceThemeMode): String = nativeString(mode.displayLabel)
+// Literal lookups keep every mode visible to the phone localization extractor.
+internal fun appearanceThemeSummary(mode: AppearanceThemeMode): String =
+  when (mode) {
+    AppearanceThemeMode.System -> nativeString("System")
+    AppearanceThemeMode.Dark -> nativeString("Dark")
+    AppearanceThemeMode.Light -> nativeString("Light")
+  }
 
 internal fun appearanceThemeOptions(): List<String> = AppearanceThemeMode.entries.map(::appearanceThemeSummary)
 
@@ -2529,9 +2485,54 @@ private fun aboutUpdateText(latestVersion: String?): String =
     nativeString("A Gateway update is available. Run the update from the Web UI or CLI when you are ready.")
   }
 
-/**
- * Shared settings detail shell with back navigation, title, subtitle, and section content.
- */
+@Composable
+internal fun SettingsRefreshControls(
+  connected: Boolean,
+  refreshing: Boolean,
+  errorText: NativeText?,
+  onRefresh: () -> Unit,
+  label: String = nativeString("Refresh"),
+) {
+  ClawSecondaryButton(
+    text = if (refreshing) nativeString("Refreshing") else label,
+    onClick = onRefresh,
+    enabled = connected && !refreshing,
+    modifier = Modifier.fillMaxWidth(),
+  )
+  errorText?.let { error ->
+    ClawPanel {
+      Text(text = error.resolveNativeTextResource(), style = ClawTheme.type.body, color = ClawTheme.colors.warning)
+    }
+  }
+}
+
+@Composable
+internal fun <T> SettingsSummaryContent(
+  state: GatewaySummaryState<T>,
+  connected: Boolean,
+  disconnectedText: String,
+  content: @Composable (T) -> Unit,
+) {
+  val summary = state.summary
+  when {
+    !connected -> {
+      ClawPanel {
+        Text(text = disconnectedText, style = ClawTheme.type.body, color = ClawTheme.colors.textMuted)
+      }
+    }
+
+    summary != null -> {
+      content(summary)
+    }
+
+    !state.refreshing && state.errorText == null -> {
+      ClawPanel {
+        Text(text = nativeString("Load from gateway"), style = ClawTheme.type.body, color = ClawTheme.colors.textMuted)
+      }
+    }
+  }
+}
+
 @Composable
 internal fun SettingsDetailFrame(
   title: String,

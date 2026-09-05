@@ -1,6 +1,6 @@
 import { formatErrorMessage } from "../infra/errors.js";
 import { createSubsystemLogger } from "../logging/subsystem.js";
-import { FORCED_WORKER_ABANDONMENT_ERROR } from "./worker-environments/placement-force-abandon.js";
+import { FORCED_WORKER_ABANDONMENT_ERROR } from "./worker-environments/placement-record.js";
 import type { WorkerSessionPlacementStore } from "./worker-environments/placement-store.js";
 import { recoverWorkerWorkspaceReconciliation } from "./worker-environments/workspace-reconcile.js";
 

@@ -34,6 +34,8 @@ describe("findSettingsSearchBlocks", () => {
       "updates.page.intro",
       "updates.channel.stable",
       "updates.installKind.git",
+      "modelProviders.title",
+      "modelProviders.defaults.utilityHelpPurpose",
     ];
     try {
       for (const key of lazyKeys) {
@@ -70,6 +72,10 @@ describe("findSettingsSearchBlocks", () => {
       expect(find("check for updates")).toEqual([
         expect.objectContaining({ routeId: "updates", label: "Updates" }),
       ]);
+      expect(runtime.t("modelProviders.title")).toBe("Configured providers");
+      expect(runtime.t("modelProviders.modelsAvailable", { available: "2", count: "3" })).toBe(
+        "2 of 3 models available",
+      );
       expect(runtime.t("settings.missing.key")).toBe("settings.missing.key");
       await runtime.i18n.setLocale("en");
       expect(find("collapse task progress")).toEqual([
@@ -154,30 +160,27 @@ describe("findSettingsSearchBlocks", () => {
     ]);
   });
 
-  it.each(["localModelLeanAutoModel", "securityAcknowledgedAt"])(
-    "does not offer machine-owned %s in search",
-    (key) => {
-      expect(
-        findSettingsSearchBlocks({
-          query: "internal bookkeeping",
-          schema: {
-            type: "object",
-            properties: {
-              wizard: {
-                type: "object",
-                properties: {
-                  [key]: { type: "string", title: "Internal Bookkeeping" },
-                  accessMode: { type: "string" },
-                },
+  it.each(["securityAcknowledgedAt"])("does not offer machine-owned %s in search", (key) => {
+    expect(
+      findSettingsSearchBlocks({
+        query: "internal bookkeeping",
+        schema: {
+          type: "object",
+          properties: {
+            wizard: {
+              type: "object",
+              properties: {
+                [key]: { type: "string", title: "Internal Bookkeeping" },
+                accessMode: { type: "string" },
               },
             },
           },
-          value: { wizard: { [key]: "internal bookkeeping" } },
-          uiHints: {},
-        }),
-      ).toEqual([]);
-    },
-  );
+        },
+        value: { wizard: { [key]: "internal bookkeeping" } },
+        uiHints: {},
+      }),
+    ).toEqual([]);
+  });
 
   it("matches schema sections to their owning settings page", () => {
     const matches = findSettingsSearchBlocks({

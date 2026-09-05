@@ -235,7 +235,7 @@ export function buildSandboxHostProxyHtml(csp?: SandboxHostCsp): string {
   };
   let inner = createInner();
   document.body.appendChild(inner);
-  let widgetBridgePortOffered = false;
+  const widgetPortsOffered = new Set();
   const blockDescendantFrames = ${blockDescendantFrames};
   const descendantSelector = "iframe,frame,object,embed,portal,fencedframe,webview,browser";
   const hasBlockedDescendant = root => {
@@ -265,7 +265,15 @@ export function buildSandboxHostProxyHtml(csp?: SandboxHostCsp): string {
           // Replace the browsing context so a superseded document cannot race
           // the new wrapper's first private bridge-port offer.
           const nextInner = createInner();
-          widgetBridgePortOffered = false;
+          nextInner.addEventListener("load", () => {
+            if (inner !== nextInner || typeof params.renderId !== "string") return;
+            window.parent.postMessage({
+              jsonrpc: "2.0",
+              method: "ui/notifications/sandbox-resource-loaded",
+              params: { renderId: params.renderId },
+            }, hostOrigin);
+          }, { once: true });
+          widgetPortsOffered.clear();
           nextInner.srcdoc = guardedHtml;
           inner.replaceWith(nextInner);
           inner = nextInner;
@@ -278,10 +286,12 @@ export function buildSandboxHostProxyHtml(csp?: SandboxHostCsp): string {
     }
     if (event.source === inner.contentWindow) {
       if (typeof event.data?.method === "string" && event.data.method.startsWith("ui/notifications/sandbox-")) return;
-      if (event.data?.type === "openclaw:widget-bridge-port-offer") {
+      if (event.data?.type === "openclaw:widget-bridge-port-offer" || event.data?.type === "openclaw:widget-prompt-offer") {
         const port = event.ports[0];
-        if (!widgetBridgePortOffered && port) {
-          widgetBridgePortOffered = true;
+        // Each wrapper offers its private channels before untrusted code runs.
+        // Only the first offer of each kind belongs to this document instance.
+        if (!widgetPortsOffered.has(event.data.type) && port) {
+          widgetPortsOffered.add(event.data.type);
           window.parent.postMessage(event.data, hostOrigin, [port]);
         } else {
           port?.close();

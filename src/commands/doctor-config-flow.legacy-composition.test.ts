@@ -1,41 +1,17 @@
 // Exercises legacy values through the actual snapshot, Doctor, atomic write, and reread.
 import fs from "node:fs/promises";
 import path from "node:path";
-import { afterEach, describe, expect, it, vi } from "vitest";
+import { afterEach, describe, expect, it } from "vitest";
 import { readConfigFileSnapshot } from "../config/config.js";
 import { withEnvOverride, withTempHome, writeOpenClawConfig } from "../config/test-helpers.js";
 import { runInitialConfigWriteHealth } from "../flows/doctor-health-contribution-runners.config.js";
-import type { DoctorHealthFlowContext } from "../flows/doctor-health-contribution-types.js";
-import type { RuntimeEnv } from "../runtime.js";
 import { closeOpenClawStateDatabaseForTest } from "../state/openclaw-state-db.js";
-import { loadAndMaybeMigrateDoctorConfig } from "./doctor-config-flow.js";
-import { createDoctorPrompter, type DoctorOptions } from "./doctor-prompter.js";
+import { prepareDoctorContext } from "./doctor-config-flow.test-support.js";
 
 async function repairConfig(configPath: string) {
-  const runtime: RuntimeEnv = { error: vi.fn(), exit: vi.fn(), log: vi.fn() };
-  const options: DoctorOptions = { nonInteractive: true, repair: true };
-  const prompter = createDoctorPrompter({ runtime, options });
-  const configResult = await loadAndMaybeMigrateDoctorConfig({
-    options,
-    confirm: (params) => prompter.confirm(params),
-    runtime,
-    prompter,
-  });
-  const ctx: DoctorHealthFlowContext = {
-    runtime,
-    options,
-    prompter,
-    configResult,
-    cfg: configResult.cfg,
-    cfgForPersistence: structuredClone(configResult.cfg),
-    sourceConfigValid: configResult.sourceConfigValid ?? true,
-    configPath,
-    stateDirExistedAtStart: true,
-    runWithPluginMetadataSnapshot: configResult.runWithPluginMetadataSnapshot,
-    invalidatePluginMetadataSnapshot: configResult.invalidatePluginMetadataSnapshot,
-  };
+  const ctx = await prepareDoctorContext(configPath);
   await runInitialConfigWriteHealth(ctx);
-  return { ...configResult, configWriteRefusal: ctx.configWriteRefusal };
+  return { ...ctx.configResult, configWriteRefusal: ctx.configWriteRefusal };
 }
 
 describe("Doctor legacy config composition", () => {

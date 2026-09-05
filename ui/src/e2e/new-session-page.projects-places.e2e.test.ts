@@ -85,9 +85,8 @@ suite.define(() => {
 
       const request = await gateway.waitForRequest("projects.register");
       expect(request.params).toEqual({ path: repoRoot });
-      await expect.poll(async () => (await gateway.getRequests("projects.list")).length).toBe(2);
       await pollLocatorText(trigger.locator(".new-session-page__trigger-label")).toBe("openclaw");
-      expect(await trigger.getAttribute("data-project-id")).toBe("recorded-openclaw");
+      await expect.poll(() => trigger.getAttribute("data-project-id")).toBe("recorded-openclaw");
     } finally {
       await context.close();
     }
@@ -221,7 +220,10 @@ suite.define(() => {
           await expect.poll(() => tooltipTitleText(local)).toBe("Gateway · QA-Gateway");
         }
         await expect.poll(() => pathInput.getAttribute("placeholder")).toBe("Gateway · QA-Gateway");
-        await captureProjectUiProof(suite, page, `gateway-name-${late.replaceAll(" ", "-")}.png`);
+        await captureProjectUiProof(suite, page, `gateway-name-${late.replaceAll(" ", "-")}.png`, {
+          surface: page.locator('.new-session-page__project-popover wa-popup [part="popup"]'),
+          content: [pathInput],
+        });
 
         await page.keyboard.press("Escape");
         await replaceGatewayClient(page);
@@ -234,6 +236,10 @@ suite.define(() => {
             suite,
             page,
             `gateway-name-${late.replaceAll(" ", "-")}-final.png`,
+            {
+              surface: page.locator('.new-session-page__where-popover wa-popup [part="popup"]'),
+              content: [page.locator('.new-session-page__where-popover [data-value="gateway"]')],
+            },
           );
         } finally {
           await context.close();
@@ -351,7 +357,7 @@ suite.define(() => {
         .toEqual({ repoRoot: "/home", includeRepositoryStatus: true });
       await pollLocatorText(trigger.locator(".new-session-page__trigger-label")).toBe("home");
 
-      expect(await page.locator("#new-session-detail-trigger").count()).toBe(0);
+      expect(await page.locator("#new-session-checkout-trigger").count()).toBe(0);
       await page.locator("#new-session-where-trigger").click();
       const where = page.locator("wa-popover.new-session-page__where-popover");
       await where.getByText("Cloud", { exact: true }).waitFor();

@@ -12,11 +12,11 @@ import {
 import type { ChatPageHost } from "./chat-state-host.ts";
 import { isSidebarSlotVisible, openSlot } from "./sidebar-layout.ts";
 
-function dispatchWorkspaceShortcut(pane: TestChatPane) {
+function dispatchPanelShortcut(pane: TestChatPane, key: "b" | "s") {
   const event = new KeyboardEvent("keydown", {
     cancelable: true,
-    key: "и",
-    code: "KeyB",
+    key: key === "b" ? "и" : "ы",
+    code: key === "b" ? "KeyB" : "KeyS",
     metaKey: true,
     shiftKey: true,
   });
@@ -52,24 +52,27 @@ describe("chat pane sidebar toggles", () => {
     expect(isSidebarSlotVisible(state.sidebarLayout, "workspace")).toBe(true);
   });
 
-  it("activates a stored Workspace tab from the keyboard shortcut", () => {
+  it.each([
+    { key: "b", slot: "workspace" },
+    { key: "s", slot: "companion" },
+  ] as const)("activates a stored $slot tab from its keyboard shortcut", ({ key, slot }) => {
     const { pane, state } = createTestChatPane({
       client: createGatewayBrowserClientFixture(),
       sessions: createSessionCapabilityFixture(),
     });
     pane.active = true;
     state.connected = false;
-    state.sidebarLayout = openSlot(openSlot({ columns: [] }, "workspace"), "terminal");
+    state.sidebarLayout = openSlot(openSlot({ columns: [] }, slot), "terminal");
 
-    expect(isSidebarSlotVisible(state.sidebarLayout, "workspace")).toBe(false);
+    expect(isSidebarSlotVisible(state.sidebarLayout, slot)).toBe(false);
 
-    const event = dispatchWorkspaceShortcut(pane);
+    const event = dispatchPanelShortcut(pane, key);
 
     expect(event.defaultPrevented).toBe(true);
     expect(state.sidebarLayout.columns[0]?.panels.map((panel) => panel.slot)).toEqual([
-      "workspace",
+      slot,
       "terminal",
     ]);
-    expect(isSidebarSlotVisible(state.sidebarLayout, "workspace")).toBe(true);
+    expect(isSidebarSlotVisible(state.sidebarLayout, slot)).toBe(true);
   });
 });

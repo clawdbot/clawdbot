@@ -15,7 +15,7 @@ import {
 } from "./subagent-registry.store.sqlite.js";
 import type { SubagentRunReadRecord, SubagentRunRecord } from "./subagent-registry.types.js";
 
-const SUBAGENT_RUNS_READ_CACHE_TTL_MS = 500;
+export const SUBAGENT_RUNS_READ_CACHE_TTL_MS = 500;
 
 type SubagentRunsSnapshot<T extends SubagentRunReadRecord> = {
   loadedAtMs: number;
@@ -141,6 +141,16 @@ function rememberPersistedSubagentRunsSnapshot(
   );
 }
 
+/** Publishes registry rows already committed by a cross-owner shared-state transaction. */
+export function publishSubagentRunsAfterAtomicStore(
+  runs: Map<string, SubagentRunRecord>,
+  changedRunIds: readonly string[],
+  deferredObserverEvents: Array<() => void>,
+): void {
+  rememberPersistedSubagentRunsSnapshot(runs, changedRunIds);
+  deferredObserverEvents.push(() => emitSubagentRegistryPersisted());
+}
+
 function shouldReadPersistedSubagentRuns(): boolean {
   return !isVitestRuntimeEnv() || process.env.OPENCLAW_TEST_READ_SUBAGENT_RUNS_FROM_SQLITE === "1";
 }
@@ -238,28 +248,23 @@ function getSubagentRunsSnapshot<T extends SubagentRunReadRecord>(
   inMemoryRuns: Map<string, SubagentRunRecord>,
   cache: SubagentRunsCache<T>,
   scope?: {
-    key: string;
-    load: (key: string) => T[];
-    matches: (entry: T, key: string) => boolean;
+    load?: () => Iterable<T>;
+    matches: (entry: T) => boolean;
   },
 ): Map<string, T> {
   const merged = new Map<string, T>();
-  const key = scope?.key.trim() ?? "";
-  if (scope && !key) {
-    return merged;
-  }
   if (shouldReadPersistedSubagentRuns()) {
     try {
       // Persisted state lets other worker processes observe active runs.
       // Scoped reads use indexed SQL unless a fresh local write owns the result.
-      const cached = scope ? getFreshPersistedSubagentRunsSnapshot(cache, Date.now()) : null;
-      const persisted = scope
-        ? cached
-          ? [...cached.values()].filter((entry) => scope.matches(entry, key))
-          : scope.load(key)
+      const cached = scope?.load ? getFreshPersistedSubagentRunsSnapshot(cache, Date.now()) : null;
+      const persisted = scope?.load
+        ? (cached?.values() ?? scope.load())
         : loadPersistedSubagentRunsForRead(cache).values();
       for (const entry of persisted) {
-        merged.set(entry.runId, scope ? structuredClone(entry) : entry);
+        if (!scope || scope.matches(entry)) {
+          merged.set(entry.runId, scope?.load ? structuredClone(entry) : entry);
+        }
       }
     } catch {
       // Ignore disk read failures and fall back to local memory.
@@ -267,7 +272,7 @@ function getSubagentRunsSnapshot<T extends SubagentRunReadRecord>(
   }
   for (const [runId, entry] of inMemoryRuns) {
     const projected = cache.project(entry);
-    if (!scope || scope.matches(projected, key)) {
+    if (!scope || scope.matches(projected)) {
       merged.set(runId, projected);
     } else {
       // Live memory wins even when a run moved out of the persisted scope.
@@ -279,8 +284,13 @@ function getSubagentRunsSnapshot<T extends SubagentRunReadRecord>(
 
 export function getSubagentRunsSnapshotForRead(
   inMemoryRuns: Map<string, SubagentRunRecord>,
+  include?: (entry: SubagentRunRecord) => boolean,
 ): Map<string, SubagentRunRecord> {
-  return getSubagentRunsSnapshot(inMemoryRuns, persistedSubagentRunsReadCache);
+  return getSubagentRunsSnapshot(
+    inMemoryRuns,
+    persistedSubagentRunsReadCache,
+    include ? { matches: include } : undefined,
+  );
 }
 
 export function getSubagentSessionListRunsSnapshotForRead(
@@ -293,11 +303,13 @@ export function getSubagentRunsSnapshotForController(
   inMemoryRuns: Map<string, SubagentRunRecord>,
   controllerSessionKey: string,
 ): Map<string, SubagentRunRecord> {
+  const key = controllerSessionKey.trim();
+  if (!key) {
+    return new Map();
+  }
   return getSubagentRunsSnapshot(inMemoryRuns, persistedSubagentRunsReadCache, {
-    key: controllerSessionKey,
-    load: loadSubagentRunsForControllerFromSqlite,
-    matches: (entry, key) =>
-      (entry.controllerSessionKey?.trim() || entry.requesterSessionKey) === key,
+    load: () => loadSubagentRunsForControllerFromSqlite(key),
+    matches: (entry) => (entry.controllerSessionKey?.trim() || entry.requesterSessionKey) === key,
   });
 }
 
@@ -305,9 +317,12 @@ export function getSubagentRunsSnapshotForChildSession(
   inMemoryRuns: Map<string, SubagentRunRecord>,
   childSessionKey: string,
 ): Map<string, SubagentRunRecord> {
+  const key = childSessionKey.trim();
+  if (!key) {
+    return new Map();
+  }
   return getSubagentRunsSnapshot(inMemoryRuns, persistedSubagentRunsReadCache, {
-    key: childSessionKey,
-    load: loadSubagentRunsForChildSessionFromSqlite,
-    matches: (entry, key) => entry.childSessionKey === key,
+    load: () => loadSubagentRunsForChildSessionFromSqlite(key),
+    matches: (entry) => entry.childSessionKey === key,
   });
 }

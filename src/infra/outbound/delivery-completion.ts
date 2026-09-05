@@ -9,7 +9,7 @@ import {
   markConversationDeliveryUnknown,
   type ConversationDeliveryRecord,
 } from "../../config/sessions/conversation-delivery-store.js";
-import { updateSessionEntry } from "../../config/sessions/session-accessor.js";
+import { patchSessionEntryCore } from "../../config/sessions/session-accessor.js";
 import type { InternalSessionEntry } from "../../config/sessions/types.js";
 import type { OutboundDeliveryResult } from "./deliver-types.js";
 
@@ -83,11 +83,11 @@ export async function settlePendingFinalDelivery(
   completion: Extract<DurableDeliveryCompletion, { kind: "pending-final" }>,
   state: Exclude<DurableDeliveryCompletionResult["state"], "rejected" | "stale">,
   expectedStates?: readonly ("prepared" | "queued" | "unknown")[],
-  stateDir?: string,
+  options: { stateDir?: string; preserveActivity?: boolean } = {},
 ): Promise<DurableDeliveryCompletionResult> {
   let settled: DurableDeliveryCompletionResult["state"] = "stale";
   let wakeRecovery = false;
-  await updateSessionEntry(
+  await patchSessionEntryCore(
     { sessionKey: completion.sessionKey, storePath: completion.storePath },
     (entry) => {
       const internalEntry: InternalSessionEntry = entry;
@@ -162,10 +162,9 @@ export async function settlePendingFinalDelivery(
           deliveries: updatedDeliveries,
         },
         ...(clearsNotice ? { pendingDeliveryNotice: undefined } : owedNotice),
-        updatedAt: Date.now(),
       };
     },
-    { skipMaintenance: true, takeCacheOwnership: true },
+    { skipMaintenance: true, takeCacheOwnership: true, preserveActivity: options.preserveActivity },
   );
   if (wakeRecovery) {
     const { scheduleMainSessionRecoveryPendingTarget } =
@@ -173,7 +172,7 @@ export async function settlePendingFinalDelivery(
     scheduleMainSessionRecoveryPendingTarget({
       sessionId: completion.sessionId,
       sessionKey: completion.sessionKey,
-      ...(stateDir !== undefined ? { stateDir } : {}),
+      ...(options.stateDir !== undefined ? { stateDir: options.stateDir } : {}),
       storePath: completion.storePath,
     });
   }
@@ -215,7 +214,7 @@ export async function completeDurableDelivery(
   stateDir?: string,
 ): Promise<DurableDeliveryCompletionResult> {
   return completion.kind === "pending-final"
-    ? await settlePendingFinalDelivery(completion, "delivered", undefined, stateDir)
+    ? await settlePendingFinalDelivery(completion, "delivered", undefined, { stateDir })
     : conversationResult(() =>
         markConversationDeliverySent(
           scopeForCompletion(completion),
@@ -231,7 +230,7 @@ async function suppressDurableDelivery(
   stateDir?: string,
 ): Promise<DurableDeliveryCompletionResult> {
   return completion.kind === "pending-final"
-    ? await settlePendingFinalDelivery(completion, "suppressed", undefined, stateDir)
+    ? await settlePendingFinalDelivery(completion, "suppressed", undefined, { stateDir })
     : conversationResult(() =>
         markConversationDeliverySuppressed(scopeForCompletion(completion), completion.operationId),
       );
@@ -246,7 +245,7 @@ export async function rejectDurableDelivery(
   // Proven no-send: terminal suppression, not the unknown state that owes an
   // uncertainty notice for a send the provider asserts never began.
   return completion.kind === "pending-final"
-    ? await settlePendingFinalDelivery(completion, "suppressed", undefined, stateDir)
+    ? await settlePendingFinalDelivery(completion, "suppressed", undefined, { stateDir })
     : conversationResult(() =>
         markConversationDeliveryRejected(
           scopeForCompletion(completion),
@@ -262,7 +261,7 @@ export async function failDurableDelivery(
   stateDir?: string,
 ): Promise<DurableDeliveryCompletionResult> {
   return completion.kind === "pending-final"
-    ? await settlePendingFinalDelivery(completion, "unknown", undefined, stateDir)
+    ? await settlePendingFinalDelivery(completion, "unknown", undefined, { stateDir })
     : conversationResult(() =>
         markConversationDeliveryUnknown(scopeForCompletion(completion), completion.operationId),
       );

@@ -9,20 +9,19 @@ import {
   normalizeAccountId,
   normalizeOptionalAccountId,
 } from "openclaw/plugin-sdk/account-id";
-import { listAgentIds, resolveDefaultAgentId } from "openclaw/plugin-sdk/agent-scope-runtime";
+import { listAgentIds } from "openclaw/plugin-sdk/agent-scope-runtime";
 import type { OpenClawConfig } from "openclaw/plugin-sdk/config-contracts";
-import { normalizeAgentId } from "openclaw/plugin-sdk/routing";
+import { resolveDefaultAgentBoundAccountId } from "openclaw/plugin-sdk/routing";
 import { normalizeLowercaseStringOrEmpty } from "openclaw/plugin-sdk/string-coerce-runtime";
 
 function resolveBindingAccount(params: {
   binding: unknown;
   channelId: string;
-}): { agentId: string; accountId: string } | null {
+}): { accountId: string } | null {
   if (!params.binding || typeof params.binding !== "object") {
     return null;
   }
   const binding = params.binding as {
-    agentId?: unknown;
     match?: { channel?: unknown; accountId?: unknown };
   };
   if (normalizeLowercaseStringOrEmpty(binding.match?.channel) !== params.channelId) {
@@ -33,7 +32,6 @@ function resolveBindingAccount(params: {
     return null;
   }
   return {
-    agentId: normalizeAgentId(typeof binding.agentId === "string" ? binding.agentId : undefined),
     accountId: normalizeAccountId(accountId),
   };
 }
@@ -47,20 +45,6 @@ function listBoundAccountIds(cfg: OpenClawConfig, channelId: string): string[] {
     }
   }
   return [...ids].toSorted((left, right) => left.localeCompare(right));
-}
-
-function resolveDefaultAgentBoundAccountId(cfg: OpenClawConfig, channelId: string): string | null {
-  if (cfg.agents?.ownership === "explicit" && listAgentIds(cfg).length !== 1) {
-    return null;
-  }
-  const defaultAgentId = resolveDefaultAgentId(cfg);
-  for (const binding of cfg.bindings ?? []) {
-    const resolved = resolveBindingAccount({ binding, channelId });
-    if (resolved?.agentId === defaultAgentId) {
-      return resolved.accountId;
-    }
-  }
-  return null;
 }
 
 function hasImplicitDefaultTelegramAccount(cfg: OpenClawConfig): boolean {
@@ -88,7 +72,11 @@ export function resolveDefaultTelegramAccountSelection(cfg: OpenClawConfig): {
   accountIds: string[];
   shouldWarnMissingDefault: boolean;
 } {
-  const boundDefault = resolveDefaultAgentBoundAccountId(cfg, "telegram");
+  // Explicit fleets use channel defaults, not a retained legacy migration owner.
+  const boundDefault =
+    cfg.agents?.ownership === "explicit" && listAgentIds(cfg).length !== 1
+      ? null
+      : resolveDefaultAgentBoundAccountId(cfg, "telegram");
   if (boundDefault) {
     return {
       accountId: boundDefault,

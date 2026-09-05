@@ -17,7 +17,7 @@ import { buildAgentSystemPrompt } from "../../system-prompt.js";
 import type { NormalizedUsage } from "../../usage.js";
 import {
   resolveEmbeddedAgentBaseStreamFn,
-  resolveEmbeddedAgentStreamFn as resolveEmbeddedAgentStreamFnImpl,
+  resolveEmbeddedAgentStream as resolveEmbeddedAgentStreamImpl,
 } from "../stream-resolution.js";
 import { buildContextEnginePromptCacheInfo } from "./attempt-context-engine-helpers.js";
 import {
@@ -40,10 +40,10 @@ const llmRuntime = {
   streamSimple,
 } as LlmRuntime;
 
-function resolveEmbeddedAgentStreamFn(
-  params: Omit<Parameters<typeof resolveEmbeddedAgentStreamFnImpl>[0], "llmRuntime">,
+function resolveEmbeddedAgentStream(
+  params: Omit<Parameters<typeof resolveEmbeddedAgentStreamImpl>[0], "llmRuntime">,
 ) {
-  return resolveEmbeddedAgentStreamFnImpl({ ...params, llmRuntime });
+  return resolveEmbeddedAgentStreamImpl({ ...params, llmRuntime });
 }
 
 type FakeWrappedStream = {
@@ -487,7 +487,7 @@ describe("mergeOrphanedTrailingUserPrompt", () => {
   });
 });
 
-describe("resolveEmbeddedAgentStreamFn", () => {
+describe("resolveEmbeddedAgentStream", () => {
   it("reuses the session's original base stream across later wrapper mutations", () => {
     const baseStreamFn = vi.fn();
     const wrapperStreamFn = vi.fn();
@@ -504,7 +504,7 @@ describe("resolveEmbeddedAgentStreamFn", () => {
 
   it("injects authStorage api keys into provider-owned stream functions", async () => {
     const providerStreamFn = vi.fn(async (_model, _context, options) => options);
-    const streamFn = resolveEmbeddedAgentStreamFn({
+    const { streamFn } = resolveEmbeddedAgentStream({
       currentStreamFn: undefined,
       providerStreamFn,
       sessionId: "session-1",
@@ -533,7 +533,7 @@ describe("resolveEmbeddedAgentStreamFn", () => {
 
   it("strips the internal cache boundary before provider-owned stream calls", async () => {
     const providerStreamFn = vi.fn(async (_model, context) => context);
-    const streamFn = resolveEmbeddedAgentStreamFn({
+    const { streamFn } = resolveEmbeddedAgentStream({
       currentStreamFn: undefined,
       providerStreamFn,
       sessionId: "session-1",
@@ -557,7 +557,7 @@ describe("resolveEmbeddedAgentStreamFn", () => {
     expect(providerStreamFn).toHaveBeenCalledTimes(1);
   });
   it("routes supported default streamSimple fallbacks through boundary-aware transports", () => {
-    const streamFn = resolveEmbeddedAgentStreamFn({
+    const { streamFn } = resolveEmbeddedAgentStream({
       currentStreamFn: undefined,
       sessionId: "session-1",
       model: {
@@ -572,7 +572,7 @@ describe("resolveEmbeddedAgentStreamFn", () => {
 
   it("keeps explicit custom currentStreamFn values unchanged", () => {
     const currentStreamFn = vi.fn();
-    const streamFn = resolveEmbeddedAgentStreamFn({
+    const { streamFn } = resolveEmbeddedAgentStream({
       currentStreamFn: currentStreamFn as never,
       sessionId: "session-1",
       model: {
@@ -587,7 +587,7 @@ describe("resolveEmbeddedAgentStreamFn", () => {
 
   it("routes runtime-auth custom currentStreamFn values through boundary-aware transports", async () => {
     const currentStreamFn = vi.fn();
-    const streamFn = resolveEmbeddedAgentStreamFn({
+    const { streamFn } = resolveEmbeddedAgentStream({
       currentStreamFn: currentStreamFn as never,
       sessionId: "session-1",
       model: {

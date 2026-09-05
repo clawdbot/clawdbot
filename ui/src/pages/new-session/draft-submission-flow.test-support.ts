@@ -9,19 +9,20 @@ import type { NewSessionRouteData } from "./location.ts";
 import { TestReactiveControllerHost } from "./reactive-controller-host.test-support.ts";
 
 type FixtureOptions = {
+  takePreparedTitle?: () => string | undefined;
   phase?: "connected" | "connecting";
   agents?: unknown[];
   methods?: string[];
   scopes?: string[];
   selfUser?: { id: string };
   data?: NewSessionRouteData;
-  request?: (method: string) => Promise<unknown>;
+  request?: (method: string, params?: unknown) => Promise<unknown>;
 };
 
 export function createDraftFixture(options: FixtureOptions = {}) {
-  const request = vi.fn((method: string) => {
+  const request = vi.fn((method: string, params?: unknown) => {
     if (options.request) {
-      return options.request(method);
+      return options.request(method, params);
     }
     return Promise.resolve({});
   });
@@ -96,6 +97,7 @@ export function createDraftFixture(options: FixtureOptions = {}) {
         recoveryScope: "",
       },
       agentsHydrated: place?.agentsHydrated ?? false,
+      runtimeId: place?.devicePlacementRuntime()?.id ?? "",
     }),
     {
       requestUpdate: vi.fn(),
@@ -147,7 +149,7 @@ export function createDraftFixture(options: FixtureOptions = {}) {
     gateway,
     place,
     () => ({ context, data: options.data, isConnected: phase === "connected" }),
-    { requestUpdate, closeTransientUi: vi.fn() },
+    { requestUpdate, closeTransientUi: vi.fn(), takePreparedTitle: options.takePreparedTitle },
   );
   gateway.synchronize(context.gateway);
   place.setAgentsHydrated(true);

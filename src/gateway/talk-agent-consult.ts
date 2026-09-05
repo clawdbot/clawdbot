@@ -14,6 +14,7 @@ import {
 import { abortChatRunById } from "./chat-abort.js";
 import { handleTrustedInternalChatSend } from "./server-methods/chat-send-handler.js";
 import type { GatewayRequestHandlerOptions } from "./server-methods/shared-types.js";
+import { prepareTalkAgentConsultTranscript } from "./talk-agent-consult-transcript.js";
 import { resolveTalkAgentConsultAuthority } from "./talk-client-gateway-control.js";
 import { registerTalkRealtimeRelayAgentRun } from "./talk-realtime-relay.js";
 import type { PreparedTalkSessionTarget } from "./talk-session-target.types.js";
@@ -75,7 +76,10 @@ export async function startTalkRealtimeAgentConsult(
   }
   const idempotencyKey = `talk-${params.callId}-${randomUUID()}`;
   const normalizedTalk = normalizeTalkSection(request.context.getRuntimeConfig().talk);
-  const authority = resolveTalkAgentConsultAuthority(request.client?.connect?.scopes);
+  const authority = resolveTalkAgentConsultAuthority(
+    request.client?.connect?.scopes,
+    request.client,
+  );
   let acknowledgedRunId: string | undefined;
   const chatResponse = await new Promise<
     { ok: true; result: unknown } | { ok: false; error: ErrorShape } | undefined
@@ -83,6 +87,13 @@ export async function startTalkRealtimeAgentConsult(
     let acknowledged = false;
     const chatSendOptions = {
       ...request,
+      client:
+        request.client && authority.replyCaller
+          ? {
+              ...request.client,
+              connect: { ...request.client.connect, caps: authority.replyCaller.GatewayClientCaps },
+            }
+          : request.client,
       req: {
         type: "req",
         id: `${request.req.id}:talk-tool-call`,
@@ -153,6 +164,7 @@ export async function startTalkRealtimeAgentConsult(
     const chatSendResult = handleTrustedInternalChatSend(chatSendOptions, undefined, {
       toolsAllow: authority.toolsAllow,
       transcript: { display: false, excludeFromContext: true },
+      prepareAssistantTranscriptMessage: prepareTalkAgentConsultTranscript,
     });
     void Promise.resolve(chatSendResult).then(
       () => {

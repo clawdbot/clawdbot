@@ -38,30 +38,15 @@ function resolveAbortTarget(params: {
 }): AbortTarget {
   const targetSessionKey =
     normalizeOptionalString(params.ctx.CommandTargetSessionKey) || params.sessionKey;
-  const { entry, key } = resolveCommandSessionEntryForKey(params.sessionStore, targetSessionKey);
-  if (entry && key) {
-    return {
-      entry,
-      key,
-      sessionId: replyRunRegistry.resolveSessionId(key) ?? entry.sessionId,
-    };
-  }
-  if (
-    params.sessionEntry &&
-    params.sessionKey &&
-    (!targetSessionKey || targetSessionKey === params.sessionKey)
-  ) {
-    return {
-      entry: params.sessionEntry,
-      key: params.sessionKey,
-      sessionId:
-        replyRunRegistry.resolveSessionId(params.sessionKey) ?? params.sessionEntry.sessionId,
-    };
-  }
+  const resolved = resolveCommandSessionEntryForKey(params.sessionStore, targetSessionKey);
+  const entry =
+    resolved.entry ??
+    (targetSessionKey && targetSessionKey === params.sessionKey ? params.sessionEntry : undefined);
+  const key = resolved.key ?? targetSessionKey;
   return {
-    entry: undefined,
-    key: targetSessionKey,
-    sessionId: targetSessionKey ? replyRunRegistry.resolveSessionId(targetSessionKey) : undefined,
+    entry,
+    key,
+    sessionId: (key ? replyRunRegistry.resolveSessionId(key) : undefined) ?? entry?.sessionId,
   };
 }
 
@@ -82,6 +67,8 @@ function resolveAbortCutoffForTarget(params: {
 }
 
 async function applyAbortTarget(params: {
+  isCurrent?: () => boolean;
+  clearQueues?: boolean;
   abortTarget: AbortTarget;
   sessionStore?: Record<string, SessionEntry>;
   storePath?: string;
@@ -89,6 +76,17 @@ async function applyAbortTarget(params: {
   abortCutoff?: AbortCutoff;
 }) {
   const { abortTarget } = params;
+  if (params.isCurrent?.() === false) {
+    throw new Error("The selected session changed before it could be stopped.");
+  }
+  if (params.clearQueues) {
+    const cleared = clearSessionQueues([abortTarget.key, abortTarget.sessionId]);
+    if (cleared.followupCleared > 0 || cleared.laneCleared > 0) {
+      logVerbose(
+        `stop: cleared followups=${cleared.followupCleared} lane=${cleared.laneCleared} keys=${cleared.keys.join(",")}`,
+      );
+    }
+  }
   const abortOutcome = abortSessionRunTargetWithOutcome({
     key: abortTarget.key,
     sessionId: abortTarget.sessionId,
@@ -98,13 +96,14 @@ async function applyAbortTarget(params: {
   }
 
   const persisted = await persistAbortTargetEntry({
+    isCurrent: params.isCurrent,
     entry: abortTarget.entry,
     key: abortTarget.key,
     sessionStore: params.sessionStore,
     storePath: params.storePath,
     abortCutoff: params.abortCutoff,
   });
-  if (!persisted && params.abortKey) {
+  if (!persisted && params.abortKey && params.isCurrent?.() !== false) {
     setAbortMemory(params.abortKey, true);
   }
   return abortOutcome;
@@ -115,6 +114,7 @@ function buildAbortTargetApplyParams(
   abortTarget: AbortTarget,
 ) {
   return {
+    isCurrent: params.opts?.isCommandTargetCurrent,
     abortTarget,
     sessionStore: params.sessionStore,
     storePath: params.storePath,
@@ -144,31 +144,34 @@ export const handleStopCommand: CommandHandler = async (params, allowTextCommand
     sessionEntry: params.sessionEntry,
     sessionStore: params.sessionStore,
   });
-  const cleared = clearSessionQueues([abortTarget.key, abortTarget.sessionId]);
-  if (cleared.followupCleared > 0 || cleared.laneCleared > 0) {
-    logVerbose(
-      `stop: cleared followups=${cleared.followupCleared} lane=${cleared.laneCleared} keys=${cleared.keys.join(",")}`,
-    );
-  }
-  const abortOutcome = await applyAbortTarget(buildAbortTargetApplyParams(params, abortTarget));
-
-  // Trigger internal hook for stop command
-  const hookEvent = createInternalHookEvent(
-    "command",
-    "stop",
-    abortTarget.key ?? params.sessionKey ?? "",
-    {
-      sessionEntry: abortTarget.entry,
-      sessionId: abortTarget.sessionId,
-      commandSource: params.command.surface,
-      senderId: params.command.senderId,
-    },
-  );
-  await triggerInternalHook(hookEvent);
-
+  let abortOutcome = { active: false, aborted: false };
+  // Capture child generations before signalling the parent; cleanup must not discover
+  // a replacement conversation's children after the original publisher finishes.
   const { stopped, failed } = await stopSubagentsForRequester({
     cfg: params.cfg,
     requesterSessionKey: abortTarget.key ?? params.sessionKey,
+    requesterAgentId: params.agentId,
+    beforeKill: async () => {
+      abortOutcome = await applyAbortTarget({
+        ...buildAbortTargetApplyParams(params, abortTarget),
+        clearQueues: true,
+      });
+
+      // Trigger internal hook for stop command
+      const hookEvent = createInternalHookEvent(
+        "command",
+        "stop",
+        abortTarget.key ?? params.sessionKey ?? "",
+        {
+          sessionEntry: abortTarget.entry,
+          sessionId: abortTarget.sessionId,
+          commandSource: params.command.surface,
+          senderId: params.command.senderId,
+        },
+      );
+      await triggerInternalHook(hookEvent);
+      return true;
+    },
   });
 
   const rejectionReason =

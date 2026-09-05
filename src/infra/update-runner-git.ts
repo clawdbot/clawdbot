@@ -403,7 +403,6 @@ export async function updateGitCheckout(params: {
     gitRoot,
     timeoutMs,
     defaultCommandEnv,
-    "require-preferred",
   );
   if (manager.kind === "missing-required") {
     return await rollbackError(manager.reason);
@@ -430,12 +429,14 @@ export async function updateGitCheckout(params: {
       ),
     );
     if (installStep.exitCode !== 0 && shouldInstallWithoutScriptsOnWindows(manager.manager)) {
-      const retryArgv = managerInstallIgnoreScriptsArgs(manager.manager);
-      if (retryArgv) {
-        installStep = await runStep(
-          step("deps install (ignore scripts)", retryArgv, gitRoot, installEnv),
-        );
-      }
+      installStep = await runStep(
+        step(
+          "deps install (ignore scripts)",
+          managerInstallIgnoreScriptsArgs(manager.manager),
+          gitRoot,
+          installEnv,
+        ),
+      );
     }
     if (installStep.exitCode !== 0) {
       return await rollbackError("deps-install-failed");

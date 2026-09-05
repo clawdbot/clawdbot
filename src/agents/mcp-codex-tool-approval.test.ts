@@ -34,6 +34,14 @@ describe("Codex MCP tool approval projection", () => {
         url: "http://127.0.0.1:18789/mcp",
       }),
     ).toBe("approve");
+    expect(
+      resolveProjectedMcpCodexToolApprovalMode(
+        "example",
+        {},
+        { tools: { write: { approval_mode: "approve" } } },
+        "write",
+      ),
+    ).toBe("approve");
   });
 
   it.each([

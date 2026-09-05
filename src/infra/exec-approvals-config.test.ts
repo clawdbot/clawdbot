@@ -17,7 +17,7 @@ import {
   type ExecApprovalsFile,
 } from "./exec-approvals.js";
 
-describe.sequential("exec approval temp fixture cleanup", () => {
+describe("exec approval temp fixture cleanup", { concurrent: false }, () => {
   let cleanupProbeRoot = "";
 
   it("creates a disposable fixture root", () => {

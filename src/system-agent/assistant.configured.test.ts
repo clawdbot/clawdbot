@@ -109,6 +109,49 @@ function snapshot(config: OpenClawConfig) {
 }
 
 describe("OpenClaw configured-model planner", () => {
+  it.each(["embedded", "cli"] as const)(
+    "rejects a failed %s completion before interpreting retained command text",
+    async (runner) => {
+      const config: OpenClawConfig = {
+        agents: {
+          defaults: {
+            model:
+              runner === "cli" ? "claude-cli/claude-opus-4-8@claude-cli:ops" : "openai/gpt-5.5",
+          },
+        },
+      };
+      const { binding, deps } = await createSystemAgentVerifiedInferenceTestFixture(config);
+      useFastVerifiedInference(binding);
+      const run = vi.fn(async () => ({
+        meta: {
+          finalAssistantVisibleText: '{"reply":"I will restart it.","command":"restart gateway"}',
+          error: { kind: "incomplete_turn", message: "The setup turn timed out." },
+        },
+      }));
+      const removeTempDir = vi.fn(async () => {});
+      await expect(
+        planSystemAgentCommandWithConfiguredModel({
+          input: "restart the gateway",
+          overview: overview(),
+          verifiedInference: binding,
+          deps: {
+            ...deps,
+            ...(runner === "cli"
+              ? { runCliAgent: run as never }
+              : { runEmbeddedAgent: run as never }),
+            createTempDir: async () => "/tmp/openclaw-planner",
+            removeTempDir,
+          },
+        }),
+      ).rejects.toMatchObject({
+        code: "SYSTEM_AGENT_INFERENCE_UNAVAILABLE",
+        stage: "planner",
+        message: expect.stringContaining("The setup turn timed out."),
+      });
+      expect(removeTempDir).toHaveBeenCalledOnce();
+    },
+  );
+
   it("rejects a low-level missing binding before config lookup or model execution", async () => {
     const readConfigFileSnapshot = vi.fn();
     const runCliAgent = vi.fn();

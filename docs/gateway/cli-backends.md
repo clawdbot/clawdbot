@@ -91,7 +91,7 @@ plugin code registered with `api.registerCliBackend(...)`.
 
 1. Selects a backend by provider prefix (`claude-cli/...`).
 2. Builds a system prompt using the same OpenClaw prompt and workspace context.
-3. Executes the CLI with a session id (if supported) so history stays consistent. The bundled `claude-cli` backend uses Anthropic's official Agent SDK and keeps its authenticated Claude Code subprocess warm across compatible agent turns.
+3. Executes the CLI with a session id (if supported) so history stays consistent. The bundled `claude-cli` backend communicates directly with the installed Claude Code executable and keeps its authenticated subprocess warm across compatible agent turns.
 4. Parses output (JSON or plain text) and returns the final text.
 5. Persists session ids per backend so follow-ups reuse the same CLI session.
 
@@ -118,21 +118,21 @@ The `openclaw agent` command also has its own request deadline. Its 600-second f
 
 ### Claude CLI specifics
 
-The bundled Anthropic plugin runs the installed Claude Code executable through
-Anthropic's official Agent SDK. Claude Code owns its existing local login and
+The bundled Anthropic plugin communicates directly with the installed Claude Code
+executable over its structured stdio protocol. Claude Code owns its existing local login and
 subscription. OpenClaw uses a non-secret route marker. It never reads, persists,
 refreshes, or forwards native tokens, or sends synthesized Anthropic API
-requests. Compatible agent turns share one warm SDK query and
-Claude Code subprocess. A changed model, system prompt, or tool policy starts a
-new query; persisted Claude session IDs still provide
+requests. Compatible agent turns share one warm Claude Code subprocess.
+A changed model, system prompt, or tool policy starts a
+new subprocess; persisted Claude session IDs still provide
 conversation continuity when the gateway or subprocess restarts.
 
-For local SDK-backed turns, prompt-build hook context stays private: Claude
+For local plugin-managed turns, prompt-build hook context stays private: Claude
 receives it as a native hook attachment, while OpenClaw history preserves the original user message. The
 native session retains the context for resume; imported visible history and
 cross-provider fallback preludes do not copy private hook attachments.
 
-Keep Claude Code updated, especially if the SDK reports an incompatible
+Keep Claude Code updated, especially if OpenClaw reports an incompatible
 installed executable:
 
 ```bash
@@ -143,8 +143,8 @@ claude update
 
 The bundled `claude-cli` backend prefers Claude Code's native skill resolver. When the current skills snapshot has at least one selected skill with a materialized path, OpenClaw passes a temporary Claude Code plugin via `--plugin-dir` and omits the duplicate OpenClaw skills catalog from the appended system prompt. Without a materialized plugin skill, OpenClaw keeps the prompt catalog as a fallback. Skill env/API key overrides still apply to the child process environment for the run.
 
-The Agent SDK always runs with Claude Code's default permission mode.
-OpenClaw's SDK permission callback and `PreToolUse` hook keep native tools under
+OpenClaw always launches Claude Code with its default permission mode.
+OpenClaw's permission responses and `PreToolUse` hook keep native tools under
 host control, including when user or enterprise settings would otherwise
 preapprove a call. Native requests pass through canonical `before_tool_call`
 policy before exec policy and approval, with native tool names and file
@@ -152,6 +152,12 @@ arguments projected into their OpenClaw equivalents. Per-agent and session
 restrictions still override broader global policy. OpenClaw-owned MCP tools
 remain authorized by the Gateway rather than receiving duplicate native
 approval; other MCP tools stay host-permission controlled.
+
+Claude's native `AskUserQuestion` uses OpenClaw's structured question flow. When
+OpenClaw rejects malformed questions, it reports the failed field and
+constraint without repeating the submitted text, and asks Claude to correct
+the field and retry. Invalid questions do not prompt the user. If the user
+skips a valid question, Claude instead continues with its best judgment.
 
 When the effective exec ask setting is `on-miss` or `always`, OpenClaw relays
 native or extension tool requests as interactive approvals to the session's
@@ -190,7 +196,7 @@ register a small wrapper backend plugin.
   - `always`: always send a session id (new UUID if none stored).
   - `existing`: only send a session id if one was stored before.
   - `none`: never send a session id.
-- `claude-cli` defaults to `liveSession: "claude-stdio"`, `output: "jsonl"`, and `input: "stdin"`. The owning Anthropic plugin keeps one official Agent SDK query and Claude Code subprocess warm for compatible consecutive agent turns. If the gateway restarts or the idle process exits, OpenClaw resumes from the stored Claude session id. Stored session ids are verified against a readable project transcript before resume; a missing transcript clears the binding (logged as `reason=transcript-missing`) instead of silently starting a fresh session under `--resume`.
+- `claude-cli` defaults to `liveSession: "claude-stdio"`, `output: "jsonl"`, and `input: "stdin"`. The owning Anthropic plugin keeps one Claude Code subprocess warm for compatible consecutive agent turns through its direct CLI transport. If the gateway restarts or the idle process exits, OpenClaw resumes from the stored Claude session id. Stored session ids are verified against a readable project transcript before resume; a missing transcript clears the binding (logged as `reason=transcript-missing`) instead of silently starting a fresh session under `--resume`.
 - Stored CLI sessions are provider-owned continuity. Automatic reset is disabled by default; `/reset` and explicit daily or idle `session.reset` policies still cut them.
 - Fresh CLI sessions normally reseed from OpenClaw's latest compaction summary, the messages retained by that compaction, and subsequent turns on the active branch. OpenClaw reads this history from the canonical session SQLite database; it does not require an OpenClaw JSONL transcript file. To recover short sessions invalidated before compaction, a backend can opt in with `reseedFromRawTranscriptWhenUncompacted: true`. Raw transcript reseed stays bounded and limited to safe invalidations, such as a missing CLI transcript, an orphaned tool-use tail, message-policy/system-prompt/cwd/MCP changes, or a session-expired retry; auth profile or credential-epoch changes never reseed raw transcript history.
 - Helper runs with a caller-owned in-memory transcript use that history for hooks and fresh-session reseeding, including meaningful history before compaction. Empty memory stays empty even when the run carries another session's storage identity. Context-engine maintenance rewrites that same memory before the helper returns, even when the engine requests background maintenance. Durable transcripts retain their background maintenance path. An explicitly owned native CLI binding can still resume; resumed turns send the current prompt without injecting the memory history again.
@@ -252,7 +258,7 @@ The bundled Anthropic plugin registers for `claude-cli`:
 | `modelArg`            | `--model`                                                                                                                                                                                                     |
 | `sessionArgs`         | `["--session-id", "{sessionId}"]`                                                                                                                                                                             |
 | `sessionMode`         | `always`                                                                                                                                                                                                      |
-| agent runtime         | Anthropic Agent SDK with a warm, session-scoped Claude Code query                                                                                                                                             |
+| agent runtime         | Direct stdio transport to a warm, session-scoped Claude Code subprocess                                                                                                                                       |
 | `imageArg`            | `@`                                                                                                                                                                                                           |
 | `imagePathScope`      | `workspace`                                                                                                                                                                                                   |
 | `systemPromptFileArg` | `--append-system-prompt-file`                                                                                                                                                                                 |
@@ -302,7 +308,7 @@ api.registerTextTransforms({
 
 `input` rewrites the system prompt and user prompt passed to the CLI. `output` rewrites streamed assistant text and parsed final text before OpenClaw handles its own control markers and channel delivery; for provider-backed model calls it also restores string values inside structured tool-call arguments after stream repair and before tool execution. Raw provider JSON fragments are left unchanged; consumers should use the structured partial, end, or result payload.
 
-For CLIs that emit provider-specific JSONL events, set `jsonlDialect` on that backend's config: `claude-stream-json` for Claude Code-compatible streams, `gemini-stream-json` for Gemini CLI `stream-json` events.
+For CLIs that emit provider-specific JSONL events, set `jsonlDialect` on that backend's config: `claude-stream-json` for Claude Code-compatible streams, `gemini-stream-json` for Gemini CLI `stream-json` events. Declaring `claude-stream-json` is a contract: the backend's `result` records carry Claude Code's terminal semantics, including `terminal_reason`. A reply-less `result` whose `terminal_reason` says the CLI ended the turn on purpose after work may have run (`hook_stopped`, `stop_hook_prevented`, `aborted_tools`, `aborted_streaming`, `budget_exhausted`, or `max_turns`) is a recorded turn stop: OpenClaw reports that reason to the user and does not replay the turn on a fallback model, because the backend's tool actions may already have run.
 
 ## Native compaction ownership
 
@@ -409,7 +415,7 @@ Claude CLI backends scale this cap with the resolved Claude context window inste
 
 ## Troubleshooting
 
-When a local Claude Agent SDK subprocess fails, its run error includes a bounded,
+When a local Claude Code subprocess fails, its run error includes a bounded,
 redacted stderr diagnostic when available. Check the run error or `openclaw logs`
 for the underlying launch, permission, or runtime failure. Successful turns do not
 forward stderr into logs. Each live process has its own diagnostic buffer. Since

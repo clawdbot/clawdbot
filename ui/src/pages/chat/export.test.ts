@@ -1,5 +1,5 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
-import { exportChatMarkdown } from "./export.ts";
+import { buildChatMarkdown, exportChatMarkdown } from "./export.ts";
 
 afterEach(() => {
   vi.restoreAllMocks();
@@ -33,11 +33,40 @@ describe("exportChatMarkdown", () => {
     expect(createObjectURL).toHaveBeenCalledOnce();
     expect(click).toHaveBeenCalledOnce();
     expect(revokeObjectURL).toHaveBeenCalledWith("blob:chat-export");
+    expect((createObjectURL.mock.calls[0]![0] as Blob).type).toBe("text/markdown");
     const markdown = await (createObjectURL.mock.calls[0]![0] as Blob).text();
     expect(markdown).toContain("# Chat with OpenClaw");
     expect(markdown).toContain("## You");
     expect(markdown).toContain("What can you export?");
     expect(markdown).toContain("## OpenClaw");
     expect(markdown).toContain("A readable conversation.");
+  });
+
+  it("uses transcript speaker normalization without inventing timestamps or exporting silent replies", () => {
+    const markdown = buildChatMarkdown(
+      [
+        {
+          role: "USER",
+          senderLabel: "Kai (123e4567-e89b-12d3-a456-426614174000)",
+          content: "Please check the build.",
+        },
+        {
+          role: "ASSISTANT",
+          __openclaw: { senderName: "Build assistant" },
+          content: [{ type: "output_text", text: "The build passed." }],
+          timestamp: 1_000,
+        },
+        { role: "tool_result", content: "exit 0" },
+        { role: "assistant", content: "NO_REPLY" },
+      ],
+      "OpenClaw",
+    );
+
+    expect(markdown).toBe(
+      "# Chat with OpenClaw\n\n" +
+        "## Kai\n\nPlease check the build.\n\n" +
+        "## Build assistant (1970-01-01T00:00:01.000Z)\n\nThe build passed.\n\n" +
+        "## Tool\n\nexit 0\n",
+    );
   });
 });

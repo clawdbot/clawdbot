@@ -70,12 +70,16 @@ Where does the **Gateway** run?
   Local setup reuses a compatible CLI installation or uses the bundled installer
   to install `openclaw` and Node in a private managed runtime. It does not require
   a global npm, pnpm, or bun install.
+
+Attaching to an independently managed local Gateway skips CLI installation
+and proceeds to AI checks without taking over its CLI or service installation.
+See [Gateway on macOS](/platforms/mac/bundled-gateway#automatic-setup).
 </Step>
 <Step title="Connect your AI">
-  If the connected Gateway already has a configured agent model, the app
-  verifies it with a real completion before opening the normal dashboard.
-  A configured model name alone does not skip verification. Fresh or incomplete
-  Gateways continue through provider setup.
+If the connected Gateway already has a configured agent model, the app
+verifies it with a real completion before opening the normal dashboard.
+A configured model name alone does not skip verification. Fresh or incomplete
+Gateways continue through provider setup.
 
 Once the Gateway is ready, onboarding looks for AI access you already have:
 a Claude Code or Codex login, `OPENAI_API_KEY` / `ANTHROPIC_API_KEY`, or a
@@ -93,8 +97,18 @@ model that is only installed on disk requires explicit setup through
 When a connection needs a runtime plugin, the app and dashboard show the
 staged package's source and capabilities, with integrity when available before installing or
 enabling it. Review the details, then explicitly confirm acceptance to continue.
-Declining, confirmed cancellation, or an interactive setup error stops that attempt without selecting another
-inference route. You can retry or choose a different connection.
+Declining or confirmed cancellation stops that attempt without selecting another
+inference route. When the Gateway confirms that the live AI test failed before
+saving the connection, the app shows the failure and lets you retry or choose a
+different connection. Runtime plugins installed for that attempt are kept.
+
+If the result is uncertain or settings may already have been saved, the app keeps
+replacement setup blocked while it checks the Gateway. **Check again** repeats
+that check without starting another activation; it does not discard the pending
+attempt or shorten its wait. If reconciliation still cannot confirm completion
+after the wait, the app returns to connection choices with the error visible
+instead of automatically retrying a detected credential. Retry that connection
+or choose another one to start a new activation.
 
 The macOS setup sheet shows the selected provider and current activity with a
 spinner while the Gateway works. Plugin installation does not estimate a

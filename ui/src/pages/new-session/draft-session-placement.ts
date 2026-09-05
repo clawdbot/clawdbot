@@ -52,6 +52,7 @@ export function projectDraftSessionPlacementRecovery(recovery: SessionPlacementR
     placement,
     draft: {
       message: recovery.message,
+      ...(recovery.mentions?.length ? { mentions: recovery.mentions } : {}),
       attachments: restoreChatApiAttachments(recovery.attachments),
       visibility,
       toolOverrides: recovery.createParams?.toolOverrides ?? null,

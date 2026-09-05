@@ -43,7 +43,6 @@ export {
   authorizeOpenAiCompatibleHttpModelOverride,
   authorizeGatewayHttpRequestOrReply,
   authorizeScopedGatewayHttpRequestOrReply,
-  authorizeScopedUserProfileAvatarHttpRequestOrReply,
   checkGatewayHttpRequestAuth,
   getBearerToken,
   getHeader,
@@ -198,7 +197,7 @@ export async function resolveOpenAiCompatModelOverride(params: {
 
   // Overrides must pass the same visibility policy as model picker surfaces;
   // otherwise API clients could target hidden plugin/provider models by header.
-  const catalog = await loadGatewayModelCatalog();
+  const catalog = await loadGatewayModelCatalog({ agentId: params.agentId });
   const policy = createModelVisibilityPolicy({
     cfg,
     catalog,
@@ -324,9 +323,7 @@ export function authorizeOpenAiCompatibleHttpSession(params: {
     cfg,
     client: createSyntheticPluginRuntimeClient({
       ...(authenticatedUserProfile ? { authenticatedUserProfile } : {}),
-      ...(params.senderIsOwner && !authenticatedUserProfile
-        ? { operatorRoleActor: { kind: "system" as const } }
-        : {}),
+      operatorRoleActor: params.requestAuth.operatorRoleActor,
       scopes: params.senderIsOwner ? [ADMIN_SCOPE] : [],
     }),
     sessionKey: params.sessionKey,

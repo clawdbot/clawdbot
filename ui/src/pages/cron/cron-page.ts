@@ -1,7 +1,7 @@
 import { consume } from "@lit/context";
 import { html, type PropertyValues } from "lit";
 import { property, state } from "lit/decorators.js";
-import type { AgentsListResult, CronJob } from "../../api/types.ts";
+import type { AgentsListResult, CronJob, CronScratchGetResult } from "../../api/types.ts";
 import { subtitleForRoute, titleForRoute } from "../../app-navigation.ts";
 import { applicationContext, type ApplicationContext } from "../../app/context.ts";
 import { readGatewayOperatorAccess } from "../../app/operator-access.ts";
@@ -16,6 +16,7 @@ import {
   cancelCronEdit,
   createInitialCronState,
   hasCronFormErrors,
+  invalidateCronRefresh,
   loadCronJobsPage,
   loadCronModelSuggestions,
   loadCronRuns,
@@ -56,18 +57,22 @@ class CronPage extends OpenClawLightDomElement {
   @state() private cronModelSuggestions: string[] = [];
   @state() private listTab: CronListTab = "tasks";
   @state() private detailTab: CronDetailTab = "settings";
+  @state() private heartbeatScratch = "";
 
   private pendingRouteData: ReturnType<typeof resolveCronRouteData> | null = null;
   private routeJobState: CronState | null = null;
   private highlightedRunId: string | null = null;
   private pendingRunScroll = false;
   private modelSuggestionsState: CronState | null = null;
+  private heartbeatScratchRequest = 0;
   private readonly gateway = new GatewayPageController(this, {
     getGateway: () => this.context?.gateway,
     invalidateRequests: (change) => this.resetGatewayState(change.snapshot),
     onSnapshot: (change) => {
       if (change.initial) {
         this.resetGatewayState(change.snapshot);
+      } else if (!readGatewayOperatorAccess(change.snapshot).canAdmin) {
+        this.clearHeartbeatScratch();
       }
     },
     ensureInitialData: () => this.ensureInitialData(),
@@ -116,7 +121,7 @@ class CronPage extends OpenClawLightDomElement {
             this.gateway.client &&
             event.event === "cron"
           ) {
-            void this.refreshCron({ tableFilters: true });
+            void this.refreshCron({ tableFilters: true, coalesce: true });
           }
         }),
     );
@@ -127,6 +132,8 @@ class CronPage extends OpenClawLightDomElement {
   }
 
   private resetGatewayState(snapshot?: ApplicationContext["gateway"]["snapshot"]) {
+    this.clearHeartbeatScratch();
+    invalidateCronRefresh(this.cron);
     const connected = snapshot?.phase === "connected";
     this.cron = createInitialCronState({
       client: snapshot?.client ?? null,
@@ -150,7 +157,7 @@ class CronPage extends OpenClawLightDomElement {
       void this.context.agents.ensureList();
     }
     if (!this.cron.cronStatus && !this.cron.cronLoading) {
-      void this.refreshCron({ tableFilters: true });
+      void this.refreshCron({ tableFilters: true, coalesce: true });
     } else if (!this.cron.cronRuns.length && !this.cron.cronRunsLoadingMore) {
       void this.loadRuns(this.cron.cronRunsScope === "all" ? null : this.cron.cronRunsJobId);
     }
@@ -224,24 +231,24 @@ class CronPage extends OpenClawLightDomElement {
     }
   }
 
-  private async refreshCron(options: { tableFilters: boolean }) {
+  private async refreshCron(options: { tableFilters: boolean; coalesce?: boolean }) {
     const cronState = this.cron;
     if (!cronState.connected || !cronState.client) {
       return;
     }
     const activeCronJobId = cronState.cronRunsScope === "job" ? cronState.cronRunsJobId : null;
-    void this.loadRuns(activeCronJobId);
+    void this.loadRuns(activeCronJobId, options.coalesce);
     void this.context.channels.refresh(false);
     await Promise.all([
-      this.runCronTask((current) => loadCronStatus(current)),
+      this.runCronTask((current) => loadCronStatus(current, options)),
       this.runCronTask((current) =>
         loadCronJobsPage(current, { tableFilters: options.tableFilters }),
       ),
     ]);
   }
 
-  private loadRuns(jobId: string | null) {
-    return this.runCronTask((cronState) => loadCronRuns(cronState, jobId));
+  private loadRuns(jobId: string | null, coalesce = false) {
+    return this.runCronTask((cronState) => loadCronRuns(cronState, jobId, { coalesce }));
   }
 
   private async loadModelSuggestions(cronState: CronState) {
@@ -292,6 +299,7 @@ class CronPage extends OpenClawLightDomElement {
   }
 
   private selectJob(job: CronJob, runId: string | null = null) {
+    this.clearHeartbeatScratch();
     this.pendingRouteData = null;
     this.highlightedRunId = runId;
     this.pendingRunScroll = Boolean(runId);
@@ -301,6 +309,9 @@ class CronPage extends OpenClawLightDomElement {
     this.cron.cronCreateOpen = false;
     startCronEdit(this.cron, job);
     this.requestCronUpdate();
+    if (job.payload?.kind === "heartbeat") {
+      void this.loadHeartbeatScratch(this.cron, job.id, this.heartbeatScratchRequest);
+    }
     void this.runCronTask(async (cronState) => {
       updateCronRunsFilter(cronState, { cronRunsScope: "job" });
       // Claim the run pane before awaiting: loadCronRuns drops responses whose
@@ -311,10 +322,47 @@ class CronPage extends OpenClawLightDomElement {
     });
   }
 
+  private clearHeartbeatScratch() {
+    this.heartbeatScratchRequest += 1;
+    this.heartbeatScratch = "";
+  }
+
+  private async loadHeartbeatScratch(cronState: CronState, jobId: string, requestId: number) {
+    const client = cronState.client;
+    if (!this.canManageCron || !client || !cronState.connected) {
+      return;
+    }
+    const connectionScope = this.gateway.capture();
+    if (!connectionScope) {
+      return;
+    }
+    // Scratch is admin-only and selection-owned. Revalidate every owner after
+    // the request so a stale response cannot survive a scope or panel change.
+    const isCurrent = () =>
+      this.cron === cronState &&
+      this.heartbeatScratchRequest === requestId &&
+      this.gateway.isCurrent(connectionScope) &&
+      this.canManageCron &&
+      cronState.cronEditingJob?.id === jobId &&
+      cronState.cronForm.payloadKind === "heartbeat";
+    try {
+      const result = await client.request<CronScratchGetResult>("cron.scratch.get", { id: jobId });
+      if (isCurrent()) {
+        this.heartbeatScratch = result.scratch?.content ?? "";
+      }
+    } catch (error) {
+      if (isCurrent()) {
+        cronState.cronError = formatUiError(error);
+        this.requestCronUpdate(cronState);
+      }
+    }
+  }
+
   private openCreate(patch?: Partial<CronFormState>) {
     if (!this.canManageCron) {
       return;
     }
+    this.clearHeartbeatScratch();
     this.pendingRouteData = null;
     cancelCronEdit(this.cron, this.context.agentSelection.state.selectedId);
     this.cron.cronCreateOpen = true;
@@ -329,6 +377,7 @@ class CronPage extends OpenClawLightDomElement {
     if (!this.canManageCron) {
       return;
     }
+    this.clearHeartbeatScratch();
     this.pendingRouteData = null;
     // A clone is a prefilled create: the editor submits cron.add, not update.
     startCronClone(this.cron, job);
@@ -388,6 +437,7 @@ class CronPage extends OpenClawLightDomElement {
   }
 
   private closePanel() {
+    this.clearHeartbeatScratch();
     this.pendingRouteData = null;
     cancelCronEdit(this.cron, this.context.agentSelection.state.selectedId);
     this.cron.cronCreateOpen = false;
@@ -471,6 +521,7 @@ class CronPage extends OpenClawLightDomElement {
           error: this.cron.cronError,
           busy: this.cron.cronBusy,
           form: this.cron.cronForm,
+          heartbeatScratch: canManage ? this.heartbeatScratch : "",
           channels: channels.channelsSnapshot?.channelMeta?.length
             ? channels.channelsSnapshot.channelMeta.map((entry) => entry.id)
             : (channels.channelsSnapshot?.channelOrder ?? []),

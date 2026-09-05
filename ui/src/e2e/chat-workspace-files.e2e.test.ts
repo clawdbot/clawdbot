@@ -164,7 +164,7 @@ suite.define(() => {
         .waitFor({ timeout: 10_000 });
 
       await page.setViewportSize({ height: 900, width: 640 });
-      await page.locator(".side-panel--narrow").waitFor();
+      await page.locator(".sidebar-region--narrow").waitFor();
       const workspaceRail = page.locator(".chat-workspace-rail");
       await expect
         .poll(async () => {

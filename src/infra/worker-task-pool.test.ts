@@ -1,6 +1,7 @@
 import assert from "node:assert/strict";
 import { execFile } from "node:child_process";
 import { channel } from "node:diagnostics_channel";
+import { fileURLToPath } from "node:url";
 import { promisify } from "node:util";
 import { Worker } from "node:worker_threads";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
@@ -65,6 +66,53 @@ describe("worker task pool", () => {
       await Promise.allSettled([completion]);
     }
   });
+
+  it.each(["complete", "abort", "close"] as const)(
+    "keeps tasks without a deadline pending until %s",
+    async (ending) => {
+      const pool = createPool();
+      const counters = new SharedArrayBuffer(8);
+      const view = new Int32Array(counters);
+      const controller = new AbortController();
+      const reason = new Error(`explicit ${ending}`);
+      vi.useFakeTimers({ toFake: ["setTimeout", "clearTimeout"] });
+      const active = pool.run(
+        { label: "active", counters, wait: true },
+        ending === "abort" ? { signal: controller.signal } : {},
+      );
+      const queued = pool.run({ label: "queued" }, {});
+      const settled = Promise.allSettled([active, queued]);
+      try {
+        // Omission must not install the pool's historical 60-second default timer.
+        await vi.advanceTimersByTimeAsync(60_001);
+        if (ending === "abort") {
+          controller.abort(reason);
+        } else if (ending === "close") {
+          await pool.close(reason);
+        } else {
+          Atomics.store(view, 1, 1);
+          Atomics.notify(view, 1);
+        }
+        const outcomes = await settled;
+        expect(outcomes[0]).toEqual(
+          ending === "complete"
+            ? { status: "fulfilled", value: expect.objectContaining({ label: "active" }) }
+            : { status: "rejected", reason },
+        );
+        expect(outcomes[1]).toEqual(
+          ending === "close"
+            ? { status: "rejected", reason }
+            : { status: "fulfilled", value: expect.objectContaining({ label: "queued" }) },
+        );
+      } finally {
+        Atomics.store(view, 1, 1);
+        Atomics.notify(view, 1);
+        await pool.close();
+        await settled;
+        vi.useRealTimers();
+      }
+    },
+  );
 
   it("expires queued work and never launches cancelled asynchronous preparation", async () => {
     const pool = createPool();
@@ -179,6 +227,23 @@ describe("worker task pool", () => {
     expect(next.threadId).not.toBe(result.threadId);
   });
 
+  it("arms idle retirement on the clock the pool was created under", async () => {
+    const pool = createPool({ workerUrl, idleTimeoutMs: 20 });
+    await pool.run({ label: "warm" }, { timeoutMs: 10_000 });
+    // Process-wide pools finish work on worker messages, which can arrive inside an
+    // unrelated test's fake-timer window; that clock must not receive the idle timer.
+    vi.useFakeTimers({ toFake: ["setTimeout", "clearTimeout"] });
+    try {
+      await pool.run({ label: "under a fake clock" }, {});
+      expect(vi.getTimerCount()).toBe(0);
+    } finally {
+      vi.useRealTimers();
+    }
+    const worker = workers.at(-1);
+    assert.ok(worker);
+    await expect.poll(() => worker.threadId).toBe(-1);
+  });
+
   it("lets a headless process exit while warm workers are idle", async () => {
     const moduleUrl = new URL("./worker-task-pool.ts", import.meta.url);
     const { stdout } = await promisify(execFile)(
@@ -196,4 +261,17 @@ describe("worker task pool", () => {
     );
     expect(stdout.trim()).toBe("finished");
   }, 20_000);
+
+  it("releases parent inputs while their worker copies are still executing", async () => {
+    await promisify(execFile)(
+      process.execPath,
+      [
+        "--expose-gc",
+        "--import",
+        "tsx",
+        fileURLToPath(new URL("./worker-task-pool.retention.test-support.ts", import.meta.url)),
+      ],
+      { timeout: 20_000 },
+    );
+  }, 25_000);
 });
