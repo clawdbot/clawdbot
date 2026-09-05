@@ -300,16 +300,25 @@ describe("Feishu Card Action question button answers", () => {
   it("allows a re-answer once the dedupe window has expired", async () => {
     vi.useFakeTimers();
     const questionId = "ask_99999999999999999999999999999999";
-    const event = createQuestionAnswerEvent({
+    // A fresh card-action token per tap: the 15-minute token dedupe must not
+    // block the second tap, so this exercises the 60-second question dedupe
+    // window expiring and allowing a re-answer.
+    const firstTap = createQuestionAnswerEvent({
       token: "tok-q-ttl-1",
       questionId,
       optionValue: "Option A",
       contextOpenMessageId: "om_question_card_9",
     });
+    const secondTap = createQuestionAnswerEvent({
+      token: "tok-q-ttl-2",
+      questionId,
+      optionValue: "Option A",
+      contextOpenMessageId: "om_question_card_9",
+    });
 
-    await handleFeishuCardAction({ cfg, event, runtime });
+    await handleFeishuCardAction({ cfg, event: firstTap, runtime });
     await vi.advanceTimersByTimeAsync(61_000);
-    await handleFeishuCardAction({ cfg, event, runtime });
+    await handleFeishuCardAction({ cfg, event: secondTap, runtime });
 
     expect(resolveOptionMock).toHaveBeenCalledTimes(2);
     vi.useRealTimers();
