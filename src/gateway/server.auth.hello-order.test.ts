@@ -1,4 +1,5 @@
 import { once } from "node:events";
+import { rawDataToString } from "@openclaw/gateway-client/websocket-data";
 import { describe, expect, test, vi } from "vitest";
 import { WebSocket } from "ws";
 import { writeConfigFile } from "../config/config.js";
@@ -55,7 +56,7 @@ async function openBrowser(port: number, instanceId: string) {
     "x-forwarded-user": `${instanceId}@example.com`,
   });
   const frames: ObservedFrame[] = [];
-  socket.on("message", (data) => frames.push(JSON.parse(data.toString())));
+  socket.on("message", (data) => frames.push(JSON.parse(rawDataToString(data))));
   return {
     socket,
     frames,
