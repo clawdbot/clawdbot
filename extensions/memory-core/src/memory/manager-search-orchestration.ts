@@ -86,7 +86,7 @@ export abstract class MemorySearchOrchestration extends MemoryKeywordRetrieval {
         this.assertRequiredProviderAvailable("search");
       }
       let hasIndexedContent = this.hasIndexedContent();
-      if (!hasIndexedContent) {
+      if (!hasIndexedContent && this.purpose !== "search") {
         try {
           // A fresh process can receive its first search before background watch/session
           // syncs have built the index. Force one synchronous bootstrap so the first
@@ -176,7 +176,7 @@ export abstract class MemorySearchOrchestration extends MemoryKeywordRetrieval {
         : this.refreshIndexIdentityDirty({
             providerKeyKnown: this.providerInitialized,
           });
-      if (indexIdentity.status === "missing" && hasIndexedContent) {
+      if (indexIdentity.status === "missing" && hasIndexedContent && this.purpose !== "search") {
         // Missing metadata cannot identify a safe published generation. Repair it
         // synchronously before a detached handoff or a read-generation lease.
         await this.syncAdmitted(

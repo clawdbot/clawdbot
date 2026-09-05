@@ -224,14 +224,14 @@ export type MemoryPluginRuntime = {
   getMemorySearchManager(params: {
     cfg: OpenClawConfig;
     agentId: string;
-    purpose?: "default" | "status" | "cli";
+    purpose?: "default" | "status" | "cli" | "search";
     /** Request a read-only source freshness scan; runtimes may ignore unsupported diagnostics. */
     inspectSources?: boolean;
   }): Promise<{
     manager: RegisteredMemorySearchManager | null;
     debug?: {
       backend?: "builtin";
-      purpose?: "default" | "status" | "cli";
+      purpose?: "default" | "status" | "cli" | "search";
       managerMs?: number;
     };
     error?: string;

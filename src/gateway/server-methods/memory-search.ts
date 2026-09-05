@@ -125,12 +125,12 @@ export const memorySearchHandlers: GatewayRequestHandlers = {
     }
     let acquired: Awaited<ReturnType<typeof getActiveMemorySearchManagerCore>>;
     try {
-      // Use the transient CLI lifecycle so request cleanup cannot close a shared manager.
-      // manager.search owns the same lazy/on-search sync behavior as the existing CLI path.
+      // Pure Gateway searches share one read-only manager per agent/config identity.
+      // Writer/sync managers retain their independent schema and integrity lifecycle.
       acquired = await getActiveMemorySearchManagerCore({
         cfg,
         agentId,
-        purpose: "cli",
+        purpose: "search",
       });
     } catch (error) {
       respond(
@@ -170,8 +170,6 @@ export const memorySearchHandlers: GatewayRequestHandlers = {
         undefined,
         errorShape(ErrorCodes.UNAVAILABLE, `memory search failed: ${formatErrorMessage(error)}`),
       );
-    } finally {
-      await manager.close?.().catch(() => {});
     }
   },
 };

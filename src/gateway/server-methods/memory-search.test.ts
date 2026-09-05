@@ -111,7 +111,7 @@ describe("memory.search gateway method", () => {
       maxResults: expected,
       minScore: 0.42,
     });
-    expect(manager.close).toHaveBeenCalledOnce();
+    expect(manager.close).not.toHaveBeenCalled();
   });
 
   it("rejects an unknown agentId without acquiring a manager", async () => {
@@ -219,7 +219,7 @@ describe("memory.search gateway method", () => {
     expect(getActiveMemorySearchManagerCore).toHaveBeenCalledWith({
       cfg,
       agentId: configured,
-      purpose: "cli",
+      purpose: "search",
     });
     expect(resolveDefaultAgentId).not.toHaveBeenCalled();
     expect(respond).toHaveBeenCalledWith(

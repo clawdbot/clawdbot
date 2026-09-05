@@ -26,7 +26,12 @@ import { runInMemoryBackgroundContext } from "./background-context.js";
 import type { MemoryCoreAcquireLocalService } from "./embedding-local-service.js";
 import type { EmbeddingProvider, EmbeddingProviderRequest } from "./embeddings.js";
 import { MemoryIndexDatabase } from "./manager-database-context.js";
-import { memoryDatabaseTableExists, openMemoryDatabaseReadOnlyAtPath } from "./manager-db.js";
+import {
+  assertMemorySearchDatabaseSchema,
+  assertMemorySearchIndexReady,
+  memoryDatabaseTableExists,
+  openMemoryDatabaseReadOnlyAtPath,
+} from "./manager-db.js";
 import {
   clearMemoryEmbeddingProbeCache,
   resolveEffectiveMemorySearchSettings,
@@ -40,7 +45,6 @@ import {
   type MemoryProviderLifecycleState,
 } from "./manager-provider-state.js";
 import {
-  isTransientMemoryIndexManagerPurpose,
   MemoryManagerRegistry,
   normalizeMemoryIndexManagerPurpose,
   resolveMemoryIndexManagerCacheKey,
@@ -77,6 +81,10 @@ export async function closeMemoryIndexManagersForAgent(params: { agentId: string
   await INDEX_MANAGER_REGISTRY.closeForAgent({
     agentId: params.agentId,
     purpose: "maintenance",
+  });
+  await INDEX_MANAGER_REGISTRY.closeForAgent({
+    agentId: params.agentId,
+    purpose: "search",
   });
 }
 
@@ -205,7 +213,7 @@ export class MemoryIndexManager extends MemorySearchOrchestration implements Mem
     }
     const dbPath = resolveUserPath(effectiveSettings.store.databasePath);
     const vectorEnabled = effectiveSettings.store.vector.enabled;
-    const readOnly = this.purpose === "status";
+    const readOnly = this.purpose === "status" || this.purpose === "search";
     const connection = readOnly
       ? openMemoryDatabaseReadOnlyAtPath(dbPath, vectorEnabled, this.agentId)
       : borrowOpenClawAgentDatabase({ agentId: this.agentId, path: dbPath });
@@ -217,7 +225,13 @@ export class MemoryIndexManager extends MemorySearchOrchestration implements Mem
         maxEntries: effectiveSettings.cache.maxEntries,
       };
       this.fts.enabled = effectiveSettings.query.hybrid.enabled;
-      if (this.purpose === "status") {
+      if (this.purpose === "search") {
+        assertMemorySearchDatabaseSchema(this.db, {
+          ftsEnabled: this.fts.enabled,
+          ftsTokenizer: this.settings.store.fts.tokenizer,
+        });
+        this.fts.available = this.fts.enabled;
+      } else if (this.purpose === "status") {
         this.fts.available =
           this.fts.enabled && memoryDatabaseTableExists(this.db, "main", MEMORY_INDEX_FTS_TABLE);
       } else {
@@ -234,10 +248,20 @@ export class MemoryIndexManager extends MemorySearchOrchestration implements Mem
         providerKeyKnown: false,
       });
       this.indexIdentityState = initialIndexIdentity;
+      if (this.purpose === "search") {
+        assertMemorySearchIndexReady({
+          db: this.db,
+          identity: initialIndexIdentity,
+          vectorEnabled: this.vector.enabled,
+          metaVectorDims: meta?.vectorDims,
+          hasSemanticChunks: this.hasSemanticChunks(),
+        });
+      }
       this.indexIdentityDirty =
         initialIndexIdentity.status === "mismatched" ||
         (initialIndexIdentity.status === "missing" && this.sources.has("memory"));
-      const transient = isTransientMemoryIndexManagerPurpose(this.purpose);
+      // Cached search readers remain separate from the default writer lifecycle.
+      const ownsWriteLifecycle = this.purpose === "default";
       const invalidatedSources = new Set(
         (
           this.db
@@ -250,7 +274,7 @@ export class MemoryIndexManager extends MemorySearchOrchestration implements Mem
       this.memorySourceProvenanceRepairPending =
         this.sources.has("memory") && invalidatedSources.has("memory");
       this.dirty =
-        (this.sources.has("memory") && (!transient || !meta)) ||
+        (this.sources.has("memory") && (ownsWriteLifecycle || !meta)) ||
         this.memorySourceProvenanceRepairPending;
       if (this.sources.has("sessions") && invalidatedSources.has("sessions")) {
         // Migration cannot map a durable session source path back to one live
@@ -260,7 +284,7 @@ export class MemoryIndexManager extends MemorySearchOrchestration implements Mem
         this.sessionsFullRetryDirty = true;
       }
       this.batch = this.resolveBatchConfig();
-      if (!transient) {
+      if (ownsWriteLifecycle) {
         runInMemoryBackgroundContext(() => {
           this.ensureWatcher();
           this.ensureSessionListener();
@@ -277,6 +301,9 @@ export class MemoryIndexManager extends MemorySearchOrchestration implements Mem
   async sync(params?: MemorySyncParams): Promise<void> {
     if (this.purpose === "status") {
       throw new Error("Memory status managers are read-only");
+    }
+    if (this.purpose === "search") {
+      throw new Error("Read-only memory search manager cannot sync or mutate the index");
     }
     return await this.withPublishedDatabase(() => this.syncPublished(params));
   }
@@ -327,6 +354,9 @@ export class MemoryIndexManager extends MemorySearchOrchestration implements Mem
       queuedSessionOwner?: boolean;
     },
   ): Promise<void> {
+    if (this.purpose === "search") {
+      throw new Error("Read-only memory search manager cannot sync or mutate the index");
+    }
     if (this.syncing) {
       if (hasTargetedSessionSyncParams(params)) {
         if (options?.queuedSessionOwner) {
