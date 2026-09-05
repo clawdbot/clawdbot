@@ -883,7 +883,7 @@ describe("Ghost reminder bug (issue #13317)", () => {
         if (noise) {
           expect(await runOnce()).toMatchObject({
             status: "skipped",
-            reason: "empty-heartbeat-file",
+            reason: "empty-heartbeat-scratch",
           });
           expect(replySpy).toHaveBeenCalledTimes(1);
           expect(sendTelegram).not.toHaveBeenCalled();

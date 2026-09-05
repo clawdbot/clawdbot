@@ -57,7 +57,7 @@ and troubleshooting see the main [FAQ](/help/faq).
     | Skip reason | Meaning |
     | --- | --- |
     | `quiet-hours` | Outside the configured active-hours window |
-    | `empty-heartbeat-file` | Heartbeat monitor scratch exists but only has blank, comment, header, fence, or empty-checklist scaffolding |
+    | `empty-heartbeat-scratch` | Heartbeat monitor scratch exists but only has blank, comment, header, fence, or empty-checklist scaffolding |
     | `alerts-disabled` | All heartbeat visibility is off (`showOk`, `showAlerts`, and `useIndicator` all disabled) |
 
     Older heartbeat `tasks:` blocks migrate to independently scheduled cron jobs with `openclaw doctor --fix`.
