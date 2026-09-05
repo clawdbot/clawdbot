@@ -140,6 +140,46 @@ describe("prepareWorkerGitHubEnvironment", () => {
     },
   );
 
+  it("fast-forwards with more than 1 MiB of unrelated ignored paths", async () => {
+    const tracked = "tracked.txt";
+    const incoming = "incoming.txt";
+    await fs.writeFile(path.join(cwd, tracked), "base\n");
+    initialHead = await commit(cwd, "Track base file");
+    await git(cwd, "push", "--quiet", "--force", "origin", "HEAD:refs/heads/main");
+    const seed = path.join(root, "earlier-worker");
+    await git(root, "clone", "--quiet", "--branch", "main", origin, seed);
+    await fs.writeFile(path.join(seed, tracked), "remote edit\n");
+    await fs.writeFile(path.join(seed, incoming), "remote file\n");
+    const remoteHead = await commit(seed, "Earlier turn");
+    await git(seed, "push", "--quiet", "origin", `HEAD:refs/heads/${binding.branch}`);
+
+    const ignoredDir = path.join(cwd, "cache");
+    await fs.mkdir(ignoredDir);
+    await fs.writeFile(path.join(cwd, ".git", "info", "exclude"), "cache/\n");
+    const ignoredNames = Array.from(
+      { length: 4_500 },
+      (_, index) => `${index.toString().padStart(4, "0")}-${"x".repeat(230)}`,
+    );
+    for (let index = 0; index < ignoredNames.length; index += 100) {
+      await Promise.all(
+        ignoredNames
+          .slice(index, index + 100)
+          .map((name) => fs.writeFile(path.join(ignoredDir, name), "")),
+      );
+    }
+    expect(
+      ignoredNames.reduce((bytes, name) => bytes + Buffer.byteLength(`cache/${name}\0`), 0),
+    ).toBeGreaterThan(1_048_576);
+
+    await prepare();
+
+    expect((await git(cwd, "rev-parse", "HEAD")).trim()).toBe(remoteHead);
+    await expect(fs.readFile(path.join(cwd, tracked), "utf8")).resolves.toBe("base\n");
+    await expect(fs.readFile(path.join(cwd, incoming), "utf8")).resolves.toBe("remote file\n");
+    expect(await git(cwd, "status", "--porcelain", "-z")).toBe(` M ${tracked}\0`);
+    expect(warn).not.toHaveBeenCalled();
+  });
+
   it.each([
     { scenario: "untracked", ignored: false },
     { scenario: "ignored", ignored: true },

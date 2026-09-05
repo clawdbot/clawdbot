@@ -6,6 +6,7 @@ import {
   type PreparedGitHubToolEnvironment,
 } from "../agents/github-tool-identity.js";
 import { sha256HexPrefixCore } from "../infra/crypto-digest.js";
+import { isMissingPathError } from "../infra/errno.js";
 import { isPathCaseInsensitive } from "../infra/path-case.js";
 import { inspectPathPermissions } from "../infra/permissions.js";
 import { registerSecretValueForRedaction } from "../logging/secret-redaction-registry.js";
@@ -88,33 +89,75 @@ async function bindWorkerGitHubCheckout(
     }
     const listPaths = async (args: string[]) =>
       (await requireGit(args)).split("\0").filter(Boolean);
-    const [added, tracked, untracked, ignored] = await Promise.all([
-      listPaths([
-        "diff",
-        "--name-only",
-        "--diff-filter=A",
-        "--no-renames",
-        "-z",
-        "HEAD",
-        "FETCH_HEAD",
-        "--",
-      ]),
-      listPaths(["diff", "--name-only", "--no-renames", "-z", "HEAD", "--"]),
-      listPaths(["ls-files", "--others", "--exclude-standard", "-z"]),
-      listPaths(["ls-files", "--others", "--ignored", "--exclude-standard", "-z"]),
+    const added = await listPaths([
+      "diff",
+      "--name-only",
+      "--diff-filter=A",
+      "--no-renames",
+      "-z",
+      "HEAD",
+      "FETCH_HEAD",
+      "--",
     ]);
-    const normalizePath = isPathCaseInsensitive(cwd)
-      ? (value: string) => value.toLowerCase()
-      : (value: string) => value;
-    const localPaths = [...tracked, ...untracked, ...ignored].map(normalizePath);
-    const hasPathPrefixCollision = added
-      .map(normalizePath)
-      .some((addedPath) =>
-        localPaths.some(
-          (localPath) =>
-            addedPath.startsWith(`${localPath}/`) || localPath.startsWith(`${addedPath}/`),
-        ),
-      );
+    const caseInsensitive = isPathCaseInsensitive(cwd);
+    const localEntriesByDirectory = new Map<
+      string,
+      Promise<Map<string, { name: string; isDirectory: boolean }>>
+    >();
+    const findLocalEntry = async (directory: string, name: string) => {
+      try {
+        const stats = await fs.lstat(path.join(directory, name));
+        return { name, isDirectory: stats.isDirectory() };
+      } catch (error) {
+        if (!isMissingPathError(error)) {
+          throw error;
+        }
+        if (!caseInsensitive) {
+          return undefined;
+        }
+      }
+      let entries = localEntriesByDirectory.get(directory);
+      if (!entries) {
+        entries = fs
+          .readdir(directory, { withFileTypes: true })
+          .then(
+            (items) =>
+              new Map(
+                items.map((item) => [
+                  item.name.toLowerCase(),
+                  { name: item.name, isDirectory: item.isDirectory() },
+                ]),
+              ),
+          );
+        localEntriesByDirectory.set(directory, entries);
+      }
+      return (await entries).get(name.toLowerCase());
+    };
+    let hasPathPrefixCollision = false;
+    // Inspect only incoming path components; unrelated workspace inventories can exceed output caps.
+    for (const addedPath of added) {
+      const segments = addedPath.split("/");
+      let directory = cwd;
+      for (const [index, segment] of segments.entries()) {
+        const entry = await findLocalEntry(directory, segment);
+        if (!entry) {
+          break;
+        }
+        const isExactPath = index === segments.length - 1;
+        if (!entry.isDirectory) {
+          hasPathPrefixCollision = !isExactPath;
+          break;
+        }
+        if (isExactPath) {
+          hasPathPrefixCollision = true;
+          break;
+        }
+        directory = path.join(directory, entry.name);
+      }
+      if (hasPathPrefixCollision) {
+        break;
+      }
+    }
     if (hasPathPrefixCollision) {
       log.warn(`GitHub checkout fast-forward skipped: local path conflicts with ${binding.branch}`);
       return;
