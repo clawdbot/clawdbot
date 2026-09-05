@@ -32,6 +32,7 @@ function buildPrompt(silentReplyPromptMode: AttemptParams["silentReplyPromptMode
       tools: [],
       modelAliasLines: [],
       userTimezone: "UTC",
+      userDate: "2026-01-05",
       bootstrapMode: "full",
       contextFiles: [],
     },
