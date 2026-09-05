@@ -291,7 +291,7 @@ describe("Discord show_widget contextual presenter process proof", () => {
   const tempDirs = useAutoCleanupTempDirTracker(afterEach);
 
   it(
-    "preserves message bodies and component attachment filenames through the public Gateway message action",
+    "preserves component attachment filenames through the public Gateway message action",
     { timeout: 180_000 },
     async () => {
       const head = execFileSync("git", ["rev-parse", "HEAD"], {
