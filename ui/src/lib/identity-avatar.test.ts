@@ -270,6 +270,10 @@ describe("authenticated profile avatar cache", () => {
     ["/api/users/profile-ada/avatar?v=7", "image/png"],
     ["/avatar/research", "image/png"],
     ["/avatar/research", "image/svg+xml"],
+    ["/avatar/research?v=7", "image/avif"],
+    ["/avatar/research?v=7", "image/x-icon"],
+    ["/avatar/research?v=7", "image/bmp"],
+    ["/avatar/research?v=7", "image/tiff"],
   ])("shares one authenticated fetch for %s (%s)", async (avatarPath, mimeType) => {
     setAvatarGatewayOrigin("wss://gateway.example.test/ws", ["profile-token"]);
     const fetchAvatar = vi.spyOn(globalThis, "fetch").mockResolvedValue(avatarResponse(mimeType));

@@ -20,6 +20,9 @@ import { createControlUiE2eSuite } from "./control-ui-e2e-suite.test-support.ts"
 const selectedKey = "agent:main:loading-proof-12345678-0000-4000-8000-000000000001";
 const homeKey = "agent:main:main";
 const transcriptLength = 900;
+// A synthetic 1×1 red AVIF; embedding bytes keeps live proof independent of host encoders.
+const avifAvatar =
+  "data:image/avif;base64,AAAAHGZ0eXBhdmlmAAAAAG1pZjFhdmlmbWlhZgAAANZtZXRhAAAAAAAAACFoZGxyAAAAAAAAAABwaWN0AAAAAAAAAAAAAAAAAAAAACJpbG9jAAAAAERAAAEAAQAAAAAA+gABAAAAAAAAACgAAAAjaWluZgAAAAAAAQAAABVpbmZlAgAAAAABAABhdjAxAAAAAA5waXRtAAAAAAABAAAAVmlwcnAAAAA4aXBjbwAAAAxhdjFDgUBsAAAAABRpc3BlAAAAAAAAAAEAAAABAAAAEHBpeGkAAAAAAwwMDAAAABZpcG1hAAAAAAAAAAEAAQOBAgMAAAAwbWRhdBIACghYAAa0BDQbhDIaGUeHhiGJpppmgAAAkD+bDGFLK02PUUVOpCA=";
 const viewport = { width: 1440, height: 900 };
 let instance: OpenClawTestInstance | undefined;
 let config: OpenClawConfig;
@@ -656,6 +659,94 @@ suite.define(() => {
         expect(cache.bytes).toBeLessThan(originalAvatarBytes / 10);
         expect(cache.control).toContain("immutable");
         expect(cache.revalidatedStatus).toBe(304);
+
+        // Change identity only after the loading sample is frozen; exercise each
+        // format through the same authenticated HTTP loader used by the sidebar.
+        const percentPng = encodePngRgba(
+          Buffer.from([0, 128, 0, 255, 0, 128, 0, 255, 0, 128, 0, 255, 0, 128, 0, 255]),
+          2,
+          2,
+        );
+        const avatarFormats = [];
+        await page.setViewportSize(viewport);
+        for (const fixture of [
+          { stage: "06-avif-avatar", dataUrl: avifAvatar, mime: "image/avif", width: 1, height: 1 },
+          {
+            stage: "07-percent-png-avatar",
+            dataUrl: `data:image/png,${[...percentPng].map((byte) => `%${byte.toString(16).padStart(2, "0")}`).join("")}`,
+            mime: "image/png",
+            width: 2,
+            height: 2,
+          },
+        ]) {
+          const updated = await cliJson([
+            "gateway",
+            "call",
+            "agents.update",
+            "--params",
+            JSON.stringify({ agentId: "main", avatar: fixture.dataUrl }),
+            "--json",
+          ]);
+          expect(updated.ok).toBe(true);
+          let versionedAvatarUrl = "";
+          await expect
+            .poll(async () => {
+              const response = await context.request.get(
+                `${suite.server.baseUrl}avatar/main?meta=1`,
+                {
+                  headers: avatarAuth,
+                },
+              );
+              expect(response.status()).toBe(200);
+              const metadata: unknown = await response.json();
+              if (!isRecord(metadata)) {
+                throw new Error("Avatar metadata was not an object");
+              }
+              versionedAvatarUrl = typeof metadata.avatarUrl === "string" ? metadata.avatarUrl : "";
+              return metadata.avatarSource;
+            })
+            .toBe(fixture.dataUrl);
+          expect(versionedAvatarUrl).toMatch(/^\/avatar\/main\?v=/u);
+          const responseReady = page.waitForResponse(
+            (response) => response.url() === new URL(versionedAvatarUrl, suite.server.baseUrl).href,
+          );
+          await page.reload();
+          await waitForControlUiGatewayReady(page);
+          const response = await responseReady;
+          expect(response.status()).toBe(200);
+          expect(response.headers()["content-type"]).toBe(fixture.mime);
+          const avatarImage = page.locator(".sidebar-agent-card__avatar img");
+          await expect
+            .poll(() =>
+              avatarImage.evaluate((image: HTMLImageElement) => ({
+                complete: image.complete,
+                width: image.naturalWidth,
+                height: image.naturalHeight,
+                blob: image.src.startsWith("blob:"),
+              })),
+            )
+            .toEqual({
+              complete: true,
+              width: fixture.width,
+              height: fixture.height,
+              blob: true,
+            });
+          const dimensions = await avatarImage.evaluate((image: HTMLImageElement) => ({
+            width: image.naturalWidth,
+            height: image.naturalHeight,
+          }));
+          avatarFormats.push({
+            format: fixture.stage,
+            contentType: response.headers()["content-type"],
+            responseBytes: (await response.body()).length,
+            ...dimensions,
+          });
+          await page.screenshot({ path: path.join(artifactDir, `${fixture.stage}.png`) });
+          await writeFile(
+            path.join(artifactDir, "avatar-format-evidence.json"),
+            JSON.stringify(avatarFormats, null, 2),
+          );
+        }
       },
     );
   });

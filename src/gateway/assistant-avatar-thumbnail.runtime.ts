@@ -1,7 +1,9 @@
+import { normalizeMimeType } from "@openclaw/media-core/mime";
 import { fileTypeFromBuffer } from "file-type";
 import { readFileDescriptorBounded } from "../infra/boundary-file-read.js";
 import { pruneMapToMaxSize } from "../infra/map-size.js";
 import { createImageProcessor } from "../media/image-ops.js";
+import { isAvatarImageMimeType, isRenderableAvatarImageDataUrl } from "../shared/avatar-limits.js";
 import { AVATAR_MAX_BYTES, resolveAvatarMime } from "../shared/avatar-policy.js";
 import {
   gatewayAvatarImageRevision,
@@ -9,7 +11,6 @@ import {
 } from "./assistant-avatar-cache.js";
 import {
   createHttpImageRepresentation,
-  resolveHttpImageMimeType,
   type HttpImageRepresentation,
 } from "./http-image-response.js";
 
@@ -25,23 +26,24 @@ async function createAvatarThumbnail(
     body = await readFileDescriptorBounded(source.file.fd, AVATAR_MAX_BYTES);
     contentType = resolveAvatarMime(source.file.path);
   } else {
-    const comma = source.dataUrl.indexOf(",");
-    const metadata = source.dataUrl.slice(5, comma).split(";");
-    const mime = resolveHttpImageMimeType(metadata[0]);
-    if (comma < 0 || !mime) {
+    if (!isRenderableAvatarImageDataUrl(source.dataUrl)) {
       throw new Error("Unsupported avatar data URL");
     }
-    const payload = source.dataUrl.slice(comma + 1);
-    body = metadata.some((part) => part.toLowerCase() === "base64")
-      ? Buffer.from(payload, "base64")
-      : Buffer.from(decodeURIComponent(payload), "utf8");
-    contentType = mime;
+    // The validated data: scheme uses native byte decoding without network I/O.
+    // Preserve charset parameters for unchanged SVG/XML representations.
+    const response = await fetch(source.dataUrl);
+    contentType = response.headers.get("content-type") ?? "";
+    body = Buffer.from(await response.arrayBuffer());
     if (body.length > AVATAR_MAX_BYTES) {
       throw new Error("Avatar data URL exceeds size limit");
     }
   }
+  const mime = normalizeMimeType(contentType);
+  if (!mime || !isAvatarImageMimeType(mime)) {
+    throw new Error("Unsupported avatar image type");
+  }
   // Preserve animation/vector bytes; Rastermill's PNG output contains only one frame.
-  if (["image/png", "image/jpeg", "image/webp"].includes(contentType)) {
+  if (["image/png", "image/jpeg", "image/webp"].includes(mime)) {
     const detectedMime = (await fileTypeFromBuffer(body))?.mime;
     // Rastermill's probe has no animation flag. RFC 9649 §2.7 puts the WebP
     // VP8X animation bit at byte 20: https://www.rfc-editor.org/rfc/rfc9649.html#section-2.7

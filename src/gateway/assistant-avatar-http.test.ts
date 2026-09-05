@@ -7,6 +7,8 @@ import { useAutoCleanupTempDirTracker } from "../../test/helpers/temp-dir.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { readImageMetadataFromHeader } from "../media/image-ops.js";
 import { encodePngRgba } from "../media/png-encode.js";
+import { AVATAR_MAX_BYTES } from "../shared/avatar-limits.js";
+import { readGatewayAvatarThumbnail } from "./assistant-avatar-thumbnail.runtime.js";
 import { resolveGatewayAssistantAvatar } from "./assistant-avatar.js";
 import { resolveAssistantIdentity } from "./assistant-identity.js";
 import { handleControlUiAvatarRequest } from "./control-ui.js";
@@ -16,9 +18,36 @@ import { makeMockHttpResponse } from "./test-http-response.js";
 const tempRoots = useAutoCleanupTempDirTracker(afterEach);
 afterEach(() => vi.restoreAllMocks());
 
+it.each(["https://example.test/avatar.png", "data:text/html,<html>avatar</html>"])(
+  "rejects %s before invoking the native data decoder",
+  async (dataUrl) => {
+    const fetch = vi.spyOn(globalThis, "fetch").mockRejectedValue(new Error("Unexpected fetch"));
+    await expect(readGatewayAvatarThumbnail({ dataUrl })).rejects.toThrow(
+      "Unsupported avatar data URL",
+    );
+    expect(fetch).not.toHaveBeenCalled();
+  },
+);
+
+it("bounds decoded data bytes independently of the encoded URL limit", async () => {
+  await expect(
+    readGatewayAvatarThumbnail({
+      dataUrl: `data:image/svg+xml,${"x".repeat(AVATAR_MAX_BYTES + 1)}`,
+    }),
+  ).rejects.toThrow("Avatar data URL exceeds size limit");
+});
+
 // Two 2×2 red/blue frames encoded with img2webp; VP8X animation flag and timing are retained.
 const ANIMATED_WEBP = Buffer.from(
   "UklGRoQAAABXRUJQVlA4WAoAAAACAAAAAQAAAQAAQU5JTQYAAAD/////AABBTk1GKAAAAAAAAAAAAAEAAAEAAGQAAAJWUDhMDwAAAC8BQAAABxD9j/4HIqL/AQBBTk1GKAAAAAAAAAAAAAEAAAEAAGQAAABWUDhMDwAAAC8BQAAABxDR//4HIqL/AQA=",
+  "base64",
+);
+const BMP_BYTES = Buffer.from(
+  "Qk06AAAAAAAAADYAAAAoAAAAAQAAAAEAAAABABgAAAAAAAQAAAAAAAAAAAAAAAAAAAAAAAAAAAD/AA==",
+  "base64",
+);
+const AVIF_BYTES = Buffer.from(
+  "AAAAHGZ0eXBhdmlmAAAAAG1pZjFhdmlmbWlhZgAAANZtZXRhAAAAAAAAACFoZGxyAAAAAAAAAABwaWN0AAAAAAAAAAAAAAAAAAAAACJpbG9jAAAAAERAAAEAAQAAAAAA+gABAAAAAAAAACgAAAAjaWluZgAAAAAAAQAAABVpbmZlAgAAAAABAABhdjAxAAAAAA5waXRtAAAAAAABAAAAVmlwcnAAAAA4aXBjbwAAAAxhdjFDgUBsAAAAABRpc3BlAAAAAAAAAAEAAAABAAAAEHBpeGkAAAAAAwwMDAAAABZpcG1hAAAAAAAAAAEAAQOBAgMAAAAwbWRhdBIACghYAAa0BDQbhDIaGUeHhiGJpppmgAAAkD+bDGFLK02PUUVOpCA=",
   "base64",
 );
 
@@ -26,16 +55,37 @@ it.each(
   [
     { format: "APNG", filename: "avatar.png", mime: "image/apng", body: APNG_BYTES },
     { format: "animated WebP", filename: "avatar.webp", mime: "image/webp", body: ANIMATED_WEBP },
+    { format: "BMP", filename: undefined, mime: "image/bmp", body: BMP_BYTES },
+    { format: "AVIF", filename: undefined, mime: "image/avif", body: AVIF_BYTES },
+    {
+      format: "Latin-1 SVG",
+      filename: undefined,
+      mime: "image/svg+xml;charset=iso-8859-1",
+      body: Buffer.from(
+        '<svg xmlns="http://www.w3.org/2000/svg"><text>café</text></svg>',
+        "latin1",
+      ),
+    },
   ].flatMap((fixture) =>
-    ["local", "data"].map((sourceKind) => Object.assign({}, fixture, { sourceKind })),
+    (fixture.filename
+      ? ["local", "data", "percent-data", "escaped-base64"]
+      : ["data", "percent-data"]
+    ).map((sourceKind) => Object.assign({}, fixture, { sourceKind })),
   ),
 )(
-  "preserves all frames of a $sourceKind $format avatar",
+  "preserves the bytes of a $sourceKind $format avatar",
   async ({ filename, mime, body, sourceKind }) => {
     const workspace = tempRoots.make("openclaw-avatar-animation-");
-    fs.writeFileSync(path.join(workspace, filename), body);
+    if (filename) {
+      fs.writeFileSync(path.join(workspace, filename), body);
+    }
+    const base64 = body.toString("base64");
     const avatar =
-      sourceKind === "local" ? filename : `data:${mime};base64,${body.toString("base64")}`;
+      sourceKind === "local"
+        ? filename
+        : sourceKind === "percent-data"
+          ? `data:${mime},${Array.from(body, (byte) => `%${byte.toString(16).padStart(2, "0")}`).join("")}`
+          : `data:${mime};base64,${sourceKind === "escaped-base64" ? encodeURIComponent(base64) : base64}`;
     const config: OpenClawConfig = {
       agents: { list: [{ id: "main", workspace, identity: { avatar } }] },
     };
@@ -52,6 +102,9 @@ it.each(
     );
     expect(response.res.statusCode).toBe(200);
     expect(response.end).toHaveBeenCalledWith(body);
+    if (sourceKind !== "local") {
+      expect(response.setHeader).toHaveBeenCalledWith("content-type", mime);
+    }
   },
 );
 

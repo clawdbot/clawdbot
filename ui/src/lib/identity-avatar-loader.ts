@@ -1,5 +1,5 @@
 import type { ReactiveController, ReactiveControllerHost } from "lit";
-import { AVATAR_MAX_BYTES } from "../../../src/shared/avatar-limits.js";
+import { AVATAR_MAX_BYTES, isAvatarImageMimeType } from "../../../src/shared/avatar-limits.js";
 import {
   fetchGatewayContextResource,
   readAvatarGatewayContext,
@@ -10,14 +10,6 @@ import { resolveTrustedAvatarUrl } from "./identity-avatar.ts";
 const IDENTITY_AVATAR_CACHE_MAX_ENTRIES = 128;
 const IDENTITY_AVATAR_FETCH_TIMEOUT_MS = 30_000;
 const IDENTITY_AVATAR_FAILURE_TTL_MS = 60_000;
-// Agent identity files also support SVG; these blobs render only as <img>, never inline markup.
-const IDENTITY_AVATAR_MIME_TYPES = new Set([
-  "image/gif",
-  "image/jpeg",
-  "image/png",
-  "image/webp",
-  "image/svg+xml",
-]);
 
 type CachedIdentityAvatar = {
   blobUrl: string | null;
@@ -84,11 +76,7 @@ function loadIdentityAvatar(url: string): string | Promise<string | null> {
         return null;
       }
       const blob = await response.blob();
-      if (
-        blob.size === 0 ||
-        blob.size > AVATAR_MAX_BYTES ||
-        !IDENTITY_AVATAR_MIME_TYPES.has(blob.type.toLowerCase())
-      ) {
+      if (blob.size === 0 || blob.size > AVATAR_MAX_BYTES || !isAvatarImageMimeType(blob.type)) {
         return null;
       }
       const blobUrl = URL.createObjectURL(blob);
