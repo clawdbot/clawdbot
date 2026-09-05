@@ -4,12 +4,34 @@ import { afterEach, describe, expect, it, vi } from "vitest";
 import type { GatewaySessionRow } from "../../api/types.ts";
 import { resetComposerFixture } from "./chat-composer.test-support.ts";
 import { createRefreshChatPane } from "./chat-pane-history.test-support.ts";
+import { createGatewayBrowserClientFixture } from "./chat-pane.test-support.ts";
 import { renderChatComposer } from "./components/chat-composer.ts";
 
 const defaults = { modelProvider: null, model: null, contextTokens: null };
 
 afterEach(async () => {
   await resetComposerFixture();
+});
+
+it("blocks model setup without disabled-reason text", () => {
+  const { pane, state, context } = createRefreshChatPane(
+    createGatewayBrowserClientFixture({ recoveryScopeReady: true }),
+  );
+  state.sessionKey = "agent:main:setup";
+  context.agents.state.agentsList = {
+    defaultId: "main",
+    mainKey: "main",
+    scope: "global",
+    agents: [{ id: "main" }],
+  };
+  state.handleSendChat = vi.fn();
+  pane.render();
+
+  expect(pane.chatProps?.modelSetupRequired).toBe(true);
+  expect(pane.chatProps?.disabledReason).toBeNull();
+  expect(pane.chatProps?.canSend).toBe(false);
+  void pane.chatProps?.onSend();
+  expect(state.handleSendChat).not.toHaveBeenCalled();
 });
 
 describe("subagent composer", () => {

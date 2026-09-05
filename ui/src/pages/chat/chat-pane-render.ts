@@ -332,7 +332,12 @@ export class ChatPane extends ChatPaneLayoutRender {
         sessionDisabledBanner?.kind !== "composer-replacement" &&
         (catalogKey
           ? this.catalogSession?.canContinue === true
-          : !disabledReason && !placementComposer.blocksSend && !sendHoldReason),
+          : !modelSetupRequired &&
+            !disabledReason &&
+            !selectedSessionArchived &&
+            !restartRecoveryTombstoned &&
+            !placementComposer.blocksSend &&
+            !sendHoldReason),
       disabledReason:
         catalogDisabledReason ??
         disabledReason ??
@@ -646,8 +651,7 @@ export class ChatPane extends ChatPaneLayoutRender {
       currentAgentId,
       ...chatProps,
       onAgentChange: (agentId) => {
-        const nextSessionKey = buildAgentMainSessionKey({ agentId });
-        this.onPaneSessionChange?.(this.paneId, nextSessionKey);
+        this.onPaneSessionChange?.(this.paneId, buildAgentMainSessionKey({ agentId }));
       },
       onSessionSelect: (next) => {
         this.onPaneSessionChange?.(this.paneId, next);
