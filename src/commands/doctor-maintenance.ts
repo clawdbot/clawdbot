@@ -129,14 +129,14 @@ export async function beginDoctorMaintenance(params: {
     try {
       if (repairStoresMayBeOpen) {
         repairStoresMayBeOpen = false;
-        const [{ closeOpenClawAgentDatabases }, { closeOpenClawStateDatabaseByPath }] =
+        const [{ closeOpenClawAgentDatabasesAsync }, { closeOpenClawStateDatabaseByPath }] =
           await Promise.all([
             import("../state/openclaw-agent-db.js"),
             import("../state/openclaw-state-db.js"),
           ]);
         // Agent handles release leases through shared state. Close them before
         // handing off the coordinators, or the restarted Gateway sees Doctor as a writer.
-        closeOpenClawAgentDatabases();
+        await closeOpenClawAgentDatabasesAsync();
         closeOpenClawStateDatabaseByPath(resolveOpenClawStateSqlitePath(env));
       }
     } finally {

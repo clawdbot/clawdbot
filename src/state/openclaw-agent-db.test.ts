@@ -2265,6 +2265,10 @@ describe("openclaw agent database", () => {
       openOpenClawAgentDatabase({ agentId: "worker-2", env, path: database.path }),
     ).toThrow("initialization close failed");
     close.mockRestore();
+    expect(inspectOpenClawAgentDatabaseOwner(database.path)).toEqual({
+      status: "owned",
+      agentId: "worker-1",
+    });
     expect(() => assertNoOpenClawAgentDatabaseLeases("worker-2", { env })).toThrow(
       "database is still open",
     );
@@ -4535,12 +4539,11 @@ describe("openclaw agent database", () => {
       env: { OPENCLAW_STATE_DIR: stateDir },
     });
     const databasePath = database.path;
+    const expectedOwner = { status: "owned", agentId: "worker-1" };
+    expect(inspectOpenClawAgentDatabaseOwner(databasePath)).toEqual(expectedOwner);
     closeOpenClawAgentDatabasesForTest();
 
-    expect(inspectOpenClawAgentDatabaseOwner(databasePath)).toEqual({
-      status: "owned",
-      agentId: "worker-1",
-    });
+    expect(inspectOpenClawAgentDatabaseOwner(databasePath)).toEqual(expectedOwner);
   });
 
   it.each([null, "", "   "])(
