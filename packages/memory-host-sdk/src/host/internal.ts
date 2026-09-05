@@ -589,8 +589,8 @@ export function chunkMarkdown(
     });
   };
 
-  const carryOverlap = () => {
-    if (overlapChars <= 0 || current.length === 0) {
+  const carryOverlap = (window: number) => {
+    if (window <= 0 || current.length === 0) {
       current = [];
       currentChars = 0;
       return;
@@ -602,9 +602,24 @@ export function chunkMarkdown(
       if (!entry) {
         continue;
       }
-      acc += estimateStringChars(entry.line) + 1;
+      const entrySize = estimateStringChars(entry.line) + 1;
+      if (entrySize > window) {
+        // A segment wider than the overlap window would carry its full bulk
+        // into the next chunk, overshooting the budget; keep only its
+        // trailing window instead.
+        const tailStart = Math.max(0, entry.line.length - (window - 1));
+        let tail = entry.line.slice(tailStart);
+        const firstCodeUnit = tail.charCodeAt(0);
+        if (firstCodeUnit >= 0xdc00 && firstCodeUnit <= 0xdfff) {
+          tail = tail.slice(1);
+        }
+        kept.unshift({ line: tail, lineNo: entry.lineNo });
+        acc += estimateStringChars(tail) + 1;
+        break;
+      }
+      acc += entrySize;
       kept.unshift(entry);
-      if (acc >= overlapChars) {
+      if (acc >= window) {
         break;
       }
     }
@@ -669,7 +684,9 @@ export function chunkMarkdown(
       const lineSize = estimateStringChars(segment) + 1;
       if (currentChars + lineSize > maxChars && current.length > 0) {
         flush();
-        carryOverlap();
+        // Bound the carried overlap so the next chunk stays within budget:
+        // carried content plus the incoming segment must not exceed maxChars.
+        carryOverlap(Math.min(overlapChars, Math.max(0, maxChars - lineSize)));
       }
       current.push({ line: segment, lineNo });
       currentChars += lineSize;

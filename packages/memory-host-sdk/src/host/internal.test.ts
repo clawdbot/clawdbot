@@ -516,6 +516,29 @@ describe("memory host SDK package internals", () => {
     }
   });
 
+  it("keeps chunks within budget when overlap carries a long segment", () => {
+    // A 3000-char line is sliced into 1600-char segments; without a bounded
+    // carry the emitted chunk used to reach 3001 chars (budget 1600).
+    const chunks = chunkMarkdown("a".repeat(3000), { tokens: 400, overlap: 80 });
+
+    for (const chunk of chunks) {
+      expect(chunk.text.length).toBeLessThanOrEqual(1600);
+    }
+    expect(chunks.map((chunk) => chunk.text).join("")).toContain("a".repeat(100));
+  });
+
+  it("keeps chunks within budget for mixed short and long lines", () => {
+    const content = ["intro line", "b".repeat(3000), "outro line"].join("\n");
+
+    const chunks = chunkMarkdown(content, { tokens: 400, overlap: 80 });
+
+    for (const chunk of chunks) {
+      expect(chunk.text.length).toBeLessThanOrEqual(1600);
+    }
+    expect(chunks.map((chunk) => chunk.text).join("\n")).toContain("intro line");
+    expect(chunks.map((chunk) => chunk.text).join("\n")).toContain("outro line");
+  });
+
   it("chunks top-level curated entries without carrying neighboring bullets", () => {
     const text = [
       "# Curated memory",
