@@ -17,9 +17,10 @@ const maybeRepairPluginOpenClawHostLinks = vi.hoisted(() =>
   ),
 );
 
-vi.mock("./doctor-plugin-host-links.js", () => ({
-  maybeRepairPluginOpenClawHostLinks,
-}));
+vi.mock("./doctor-plugin-host-links.js", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("./doctor-plugin-host-links.js")>();
+  return { ...actual, maybeRepairPluginOpenClawHostLinks };
+});
 
 export function getMaybeRepairPluginOpenClawHostLinksMock() {
   return maybeRepairPluginOpenClawHostLinks;

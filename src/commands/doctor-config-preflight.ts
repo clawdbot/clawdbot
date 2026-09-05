@@ -162,18 +162,17 @@ export async function runDoctorConfigPreflight(
       baseConfig: snapshot.sourceConfig ?? snapshot.config ?? {},
       pluginMigrationFingerprint,
     });
-    shouldRecordStateCheckpoint =
-      stateMigrationsRequested &&
-      checkpoint.needsStateMigrationCheckpoint({
+    shouldRecordStateCheckpoint = stateMigrationsRequested;
+    shouldRecordStartupCheckpoint = gatewayStartupCheckpointRequired;
+    if (shouldRecordStateCheckpoint || shouldRecordStartupCheckpoint) {
+      // One admitted read supplies both decisions; each physical open scans the whole database.
+      const checkpointStatus = checkpoint.readMigrationCheckpointStatus({
         env: startupMigrationEnv,
         identity: migrationCheckpointIdentity,
       });
-    shouldRecordStartupCheckpoint =
-      gatewayStartupCheckpointRequired &&
-      checkpoint.needsStartupMigrationCheckpoint({
-        env: startupMigrationEnv,
-        identity: migrationCheckpointIdentity,
-      });
+      shouldRecordStateCheckpoint &&= checkpointStatus === "stale";
+      shouldRecordStartupCheckpoint &&= checkpointStatus !== "startup-current";
+    }
     shouldPersistRefreshedPluginIndex = needsRefreshedPluginIndexPersistence(snapshotRead);
   };
   const ensureStartupMigrationLease = async () => {
