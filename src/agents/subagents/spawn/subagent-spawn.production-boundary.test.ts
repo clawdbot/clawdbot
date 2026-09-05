@@ -7,7 +7,7 @@ import { useAutoCleanupTempDirTracker } from "../../../../test/helpers/temp-dir.
 import {
   clearConfigCache,
   clearRuntimeConfigSnapshot,
-  getRuntimeConfig,
+  type OpenClawConfig,
 } from "../../../config/config.js";
 import { loadSessionEntry } from "../../../config/sessions/session-accessor.js";
 import { readAgentRuntimeExecutionLineage } from "../../../gateway/agent-runtime-execution-lineage.js";
@@ -67,6 +67,7 @@ const parentRunId = "production-boundary-parent";
 const env = captureEnv(["OPENCLAW_STATE_DIR", "OPENCLAW_CONFIG_PATH"]);
 const tempDirs = useAutoCleanupTempDirTracker(afterEach);
 let stateDir = "";
+let runtimeConfig: OpenClawConfig;
 
 type PreparedRuntimeTestApi = {
   resetPreparedModelRuntimeSnapshotsForTest(): void;
@@ -94,22 +95,21 @@ async function waitForStage<T>(label: string, task: Promise<T>, timeoutMs = 30_0
 }
 
 async function writeTestConfig() {
-  await writeFile(
-    path.join(stateDir, "openclaw.json"),
-    JSON.stringify({
-      logging: { audit: { enabled: true, executionIdentity: true } },
-      agents: {
-        ownership: "explicit",
-        defaults: {
-          workspace: stateDir,
-          systemAgent: { agentId: "main" },
-        },
-        entries: { main: { workspace: stateDir } },
+  const config = {
+    logging: { audit: { enabled: true, executionIdentity: true } },
+    agents: {
+      ownership: "explicit",
+      defaults: {
+        workspace: stateDir,
+        systemAgent: { agentId: "main" },
       },
-    }),
-  );
+      entries: { main: { workspace: stateDir } },
+    },
+  } satisfies OpenClawConfig;
+  await writeFile(path.join(stateDir, "openclaw.json"), JSON.stringify(config));
   clearConfigCache();
   clearRuntimeConfigSnapshot();
+  return config;
 }
 
 beforeEach(async () => {
@@ -118,7 +118,7 @@ beforeEach(async () => {
   stateDir = tempDirs.make("openclaw-spawn-production-boundary-");
   setTestEnvValue("OPENCLAW_STATE_DIR", stateDir);
   setTestEnvValue("OPENCLAW_CONFIG_PATH", path.join(stateDir, "openclaw.json"));
-  await writeTestConfig();
+  runtimeConfig = await writeTestConfig();
   resetSubagentRegistryForTests({ persist: false });
   resetTaskRegistryForTests({ persist: false });
   resetTaskFlowRegistryForTests({ persist: false });
@@ -149,7 +149,7 @@ afterEach(async () => {
 });
 
 async function createBoundParent() {
-  const cfg = getRuntimeConfig();
+  const cfg = runtimeConfig;
   const storePath = await waitForStage(
     "parent session persistence",
     writeSubagentSessionEntry({
