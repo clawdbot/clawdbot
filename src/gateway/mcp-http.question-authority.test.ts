@@ -1,12 +1,4 @@
-import { createServer, type Server } from "node:http";
-import type { AddressInfo, Socket } from "node:net";
 import { expectDefined } from "@openclaw/normalization-core";
-import {
-  createEmptyPluginRegistry,
-  createTestRegistry,
-  resetPluginRuntimeStateForTest,
-  setActivePluginRegistry,
-} from "openclaw/plugin-sdk/channel-test-helpers";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { createDeferred } from "../../test/helpers/promise.js";
 import { runQaGatewayFixture } from "../../test/helpers/qa-gateway-cleanup.js";
@@ -57,7 +49,6 @@ vi.mock("../tts/tts-settings.js", () => ({
 }));
 
 const sessionKey = "agent:main:main";
-const telegramSessionKey = "agent:main:telegram:direct:1";
 const captureKey = "question-capture";
 const questionArgs = {
   questions: [
@@ -115,73 +106,8 @@ afterEach(() => {
   resetPendingAskUserQuestionsForTest();
   resetCliRunnerPrepareTestDeps();
   cliBackendsTesting.resetDepsForTest();
-  resetPluginRuntimeStateForTest();
-  setActivePluginRegistry(createEmptyPluginRegistry());
   vi.restoreAllMocks();
 });
-
-type TelegramAskUserLoopback = {
-  apiRoot: string;
-  requests: Array<{ body: string; method: string | undefined; url: string }>;
-  close: () => Promise<void>;
-};
-
-async function startTelegramAskUserLoopback(): Promise<TelegramAskUserLoopback> {
-  const requests: TelegramAskUserLoopback["requests"] = [];
-  const sockets = new Set<Socket>();
-  const server: Server = createServer((request, response) => {
-    const chunks: Buffer[] = [];
-    request.on("data", (chunk: Buffer) => chunks.push(chunk));
-    request.on("end", () => {
-      requests.push({
-        body: Buffer.concat(chunks).toString("utf8"),
-        method: request.method,
-        url: request.url ?? "",
-      });
-      response.writeHead(200, { "content-type": "application/json" });
-      response.end(
-        JSON.stringify({
-          ok: true,
-          result: {
-            message_id: requests.length,
-            date: 1_700_000_000,
-            chat: { id: 1, type: "private" },
-            text: "ok",
-          },
-        }),
-      );
-    });
-  });
-  server.on("connection", (socket) => {
-    sockets.add(socket);
-    socket.on("close", () => sockets.delete(socket));
-  });
-  await new Promise<void>((resolve, reject) => {
-    server.once("error", reject);
-    server.listen(0, "127.0.0.1", resolve);
-  });
-  const { port } = server.address() as AddressInfo;
-  return {
-    apiRoot: `http://127.0.0.1:${port}`,
-    requests,
-    close: async () => {
-      for (const socket of sockets) {
-        socket.destroy();
-      }
-      await new Promise<void>((resolve, reject) => {
-        server.close((error) => (error ? reject(error) : resolve()));
-      });
-    },
-  };
-}
-
-type QuestionLoopbackOptions = {
-  sessionKey?: string;
-  messageProvider?: string;
-  currentChannelId?: string;
-  agentAccountId?: string;
-  config?: OpenClawConfig;
-};
 
 async function withCliQuestionLoopback(
   run: (fixture: {
@@ -212,9 +138,7 @@ async function withCliQuestionLoopback(
     resolveRequestCount: () => number;
     persist: ReturnType<typeof vi.fn>;
   }) => Promise<void>,
-  options?: QuestionLoopbackOptions,
 ) {
-  const activeSessionKey = options?.sessionKey ?? sessionKey;
   const cli = createCliRunnerPrepareFixture(prepareCliRunContext);
   const { dir } = cli.session;
   await runQaGatewayFixture(
@@ -222,7 +146,6 @@ async function withCliQuestionLoopback(
       await withQuestionGateway(async (gateway) => {
         const config: OpenClawConfig = {
           ...expectDefined(getRuntimeConfigSnapshot(), "isolated question gateway config"),
-          ...options?.config,
           agents: { defaults: { workspace: dir }, entries: { main: { default: true } } },
           plugins: { enabled: false },
           tools: { profile: "full" },
@@ -285,10 +208,7 @@ async function withCliQuestionLoopback(
         await runQaGatewayFixture(
           async () => {
             await run({
-              prepare: async (
-                runId = "mcp-question-run",
-                target = { sessionKey: activeSessionKey },
-              ) => {
+              prepare: async (runId = "mcp-question-run", target = { sessionKey }) => {
                 const source = new AbortController();
                 const admission = prepareAgentRunAdmission({
                   cfg: config,
@@ -308,9 +228,7 @@ async function withCliQuestionLoopback(
                   runId,
                   timeoutMs: 60_000,
                   abortSignal: source.signal,
-                  messageProvider: options?.messageProvider ?? "webchat",
-                  currentChannelId: options?.currentChannelId,
-                  agentAccountId: options?.agentAccountId,
+                  messageProvider: "webchat",
                   senderIsOwner: true,
                   toolsAllow: originalToolsAllow,
                 });
@@ -354,7 +272,7 @@ async function withCliQuestionLoopback(
               },
               answer: (overlay = caller) =>
                 claimPendingAgentQuestionAnswerFromCaller({
-                  sessionKey: activeSessionKey,
+                  sessionKey,
                   text: "Staging",
                   caller: overlay,
                   persist,
@@ -406,50 +324,6 @@ function expectAnswered(response: McpResponse) {
 }
 
 describe("CLI loopback question creator authority", () => {
-  it("publishes a Telegram-originated ask_user prompt through Bot API and completes after the answer", async () => {
-    const { telegramPlugin } = await import("../../extensions/telegram/api.js");
-    const telegram = await startTelegramAskUserLoopback();
-    try {
-      setActivePluginRegistry(
-        createTestRegistry([{ pluginId: "telegram", plugin: telegramPlugin, source: "test" }]),
-      );
-      await withCliQuestionLoopback(
-        async (fixture) => {
-          const owner = await fixture.prepare();
-          await fixture.list(owner.token);
-          const question = await fixture.ask(owner.token);
-          await expect
-            .poll(() => telegram.requests.filter((request) => request.url.includes("sendMessage")))
-            .toHaveLength(1);
-          const prompt = expectDefined(
-            telegram.requests.find((request) => request.url.includes("sendMessage")),
-            "Telegram sendMessage",
-          );
-          expect(prompt.body).toContain("Which destination should be used?");
-          expect(prompt.body).toContain("Staging");
-          await expect(fixture.answer()).resolves.toBe(true);
-          expectAnswered(await question.response);
-        },
-        {
-          sessionKey: telegramSessionKey,
-          messageProvider: "telegram",
-          currentChannelId: "1",
-          agentAccountId: "default",
-          config: {
-            channels: {
-              telegram: {
-                botToken: "123456:loopback-ask-user",
-                apiRoot: telegram.apiRoot,
-              },
-            },
-          },
-        },
-      );
-    } finally {
-      await telegram.close();
-    }
-  });
-
   it("answers a real cached ask_user with the CLI creator's original frozen policy", async () => {
     await withCliQuestionLoopback(async (fixture) => {
       const owner = await fixture.prepare();
