@@ -33,8 +33,13 @@ type VirtualStoreLayout =
   | "external"
   | "symlink";
 
-async function writeRuntime(root: string, sha: string, store: string, layout: VirtualStoreLayout) {
-  root = await fs.realpath(root);
+async function writeRuntime(
+  directory: string,
+  sha: string,
+  store: string,
+  layout: VirtualStoreLayout,
+) {
+  const root = await fs.realpath(directory);
   const dist = path.join(root, "dist");
   const external = path.join(store, sha);
   await fs.mkdir(external, { recursive: true });

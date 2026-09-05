@@ -177,8 +177,8 @@ function createManagedServiceIdentityFixture() {
 
 async function finishSuccessfulPackageSwitch(
   params: {
-    previousRoot: string;
-    packageRoot: string;
+    previousRoot?: string;
+    packageRoot?: string;
     restartEnvironment?: NodeJS.ProcessEnv;
     json?: boolean;
     sealed?: boolean;
@@ -190,16 +190,17 @@ async function finishSuccessfulPackageSwitch(
       FinishUpdateParams["preManagedServiceStop"]
     >["windowsTaskAutoStartRecovery"];
   } = {
-    previousRoot: "/tmp/openclaw-update",
-    packageRoot: "/tmp/openclaw-update",
     restartEnvironment: process.env,
   },
+  overrides: Partial<FinishUpdateParams> = {},
 ): Promise<void> {
+  const packageRoot = params.packageRoot ?? "/tmp/openclaw-update";
+  const previousRoot = params.previousRoot ?? packageRoot;
   await finishUpdate({
     result: {
       status: "ok",
       mode: params.updateMode ?? "npm",
-      root: params.packageRoot,
+      root: packageRoot,
       ...(params.sealed && {
         before: { version: "2026.4.23" },
         after: {
@@ -210,8 +211,8 @@ async function finishSuccessfulPackageSwitch(
       steps: [],
       durationMs: 1,
     },
-    root: params.packageRoot,
-    previousInstallRoot: params.previousRoot,
+    root: packageRoot,
+    previousInstallRoot: previousRoot,
     installKindChanged: !params.restartEnvironment,
     configSnapshot: validConfigSnapshot,
     requestedChannel: null,
@@ -232,7 +233,7 @@ async function finishSuccessfulPackageSwitch(
         ...(params.sealed && {
           serviceUpdateVerdict: {
             kind: "owned",
-            root: params.previousRoot,
+            root: previousRoot,
             refreshDefinition: false,
             fingerprint: "sealed",
           },
@@ -240,6 +241,7 @@ async function finishSuccessfulPackageSwitch(
       },
       ownedManagedUpdateEnv: params.restartEnvironment,
     }),
+    ...overrides,
   } as unknown as FinishUpdateParams);
 }
 
@@ -302,7 +304,6 @@ describe("successful update finalization ordering", () => {
     );
 
     await finishSuccessfulPackageSwitch({
-      previousRoot: root,
       packageRoot: root,
       restartEnvironment: process.env,
     });
@@ -349,7 +350,6 @@ describe("successful update finalization ordering", () => {
     Object.defineProperty(process.stdin, "isTTY", { configurable: true, value: true });
 
     await finishSuccessfulPackageSwitch({
-      previousRoot: root,
       packageRoot: root,
       restartEnvironment: process.env,
       json: true,
@@ -428,8 +428,6 @@ describe("successful update finalization ordering", () => {
 
     await expect(
       finishSuccessfulPackageSwitch({
-        previousRoot: "/tmp/openclaw-update",
-        packageRoot: "/tmp/openclaw-update",
         restartEnvironment: process.env,
         json: true,
         windowsTaskAutoStartRecovery: {
@@ -461,8 +459,14 @@ describe("successful update finalization ordering", () => {
     );
   });
 
-  it("retires the wrapper before persisting and printing success", async () => {
-    const home = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-finalize-order-"));
+  it.each([
+    { name: "retires the wrapper before persisting and printing success", denied: false },
+    {
+      name: "marks and prints an error without persisting success when retirement fails",
+      denied: true,
+    },
+  ])("$name", async ({ denied }) => {
+    const home = tempDirs.make("openclaw-finalize-wrapper-");
     const previousRoot = path.join(home, "old-root");
     const wrapper = path.join(home, ".local", "bin", "openclaw");
     await fs.mkdir(path.dirname(wrapper), { recursive: true });
@@ -471,15 +475,34 @@ describe("successful update finalization ordering", () => {
       `#!/usr/bin/env bash\nset -euo pipefail\nexec /usr/bin/node ${previousRoot}/dist/entry.js "$@"\n`,
       { mode: 0o755 },
     );
-    const previousPath = process.env.PATH;
-    process.env.PATH = path.dirname(wrapper);
+    vi.stubEnv("PATH", path.dirname(wrapper));
     const unlink = vi.spyOn(fs, "unlink");
-    try {
-      await finishSuccessfulPackageSwitch({
-        previousRoot,
-        packageRoot: path.join(home, "package"),
+    if (denied) {
+      unlink.mockRejectedValueOnce(new Error("unlink denied"));
+    }
+    const finishing = finishSuccessfulPackageSwitch({
+      previousRoot,
+      packageRoot: path.join(home, "package"),
+    });
+    if (denied) {
+      await expect(finishing).rejects.toMatchObject({
+        name: "UpdateCommandFailure",
+        exitCode: 1,
+        detail: expect.stringContaining("unlink denied"),
+        result: { status: "error", reason: "wrapper-retirement-failed" },
       });
-
+      expect(mocks.writeSentinel).toHaveBeenCalledOnce();
+      expect(mocks.printResult).toHaveBeenCalledWith(
+        expect.objectContaining({ status: "error", reason: "wrapper-retirement-failed" }),
+        expect.any(Object),
+        expect.any(Object),
+      );
+      expect(mocks.markSentinelFailure).toHaveBeenCalledWith(
+        expect.objectContaining({ reason: "wrapper-retirement-failed" }),
+      );
+      expect(defaultRuntime.exit).not.toHaveBeenCalled();
+    } else {
+      await finishing;
       expect(mocks.writeSentinel).toHaveBeenCalledTimes(2);
       expect(unlink.mock.invocationCallOrder[0]).toBeLessThan(
         mocks.writeSentinel.mock.invocationCallOrder[1] ?? Number.POSITIVE_INFINITY,
@@ -487,10 +510,6 @@ describe("successful update finalization ordering", () => {
       expect(mocks.writeSentinel.mock.invocationCallOrder[1]).toBeLessThan(
         mocks.printResult.mock.invocationCallOrder[0] ?? Number.POSITIVE_INFINITY,
       );
-    } finally {
-      unlink.mockRestore();
-      process.env.PATH = previousPath;
-      await fs.rm(home, { recursive: true, force: true });
     }
   });
 
@@ -533,78 +552,16 @@ describe("successful update finalization ordering", () => {
       };
     });
 
-    await finishUpdate({
-      result: {
-        status: "ok",
-        mode: "npm",
-        root: "/tmp/openclaw-update",
-        steps: [],
-        durationMs: 1,
-      },
-      root: "/tmp/openclaw-update",
-      installKindChanged: false,
-      configSnapshot: validConfigSnapshot,
-      requestedChannel: null,
-      storedChannel: null,
-      channel: "stable",
-      downgradeRisk: false,
-      shouldRestart: false,
-      opts: {},
-      ownedManagedUpdateEnv,
-      controlPlaneUpdateSentinelMeta: {},
-      preUpdatePluginInstallRecords: {},
-      startedAt: Date.now(),
-      updateStepTimeoutMs: 1_000,
-    } as unknown as FinishUpdateParams);
+    await finishSuccessfulPackageSwitch(
+      {},
+      { installKindChanged: false, downgradeRisk: false, ownedManagedUpdateEnv },
+    );
 
     expect(mocks.readConfig).toHaveBeenCalledOnce();
     expect(mocks.loadPluginRecords).toHaveBeenCalledOnce();
     expect(mocks.updatePlugins).toHaveBeenCalledOnce();
     expect(mocks.completePluginUpdate).toHaveBeenCalledOnce();
     expect(mocks.leaseActive).toBe(false);
-  });
-
-  it("marks and prints an error without persisting success when retirement fails", async () => {
-    const home = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-finalize-failure-"));
-    const previousRoot = path.join(home, "old-root");
-    const wrapper = path.join(home, ".local", "bin", "openclaw");
-    await fs.mkdir(path.dirname(wrapper), { recursive: true });
-    await fs.writeFile(
-      wrapper,
-      `#!/usr/bin/env bash\nset -euo pipefail\nexec /usr/bin/node ${previousRoot}/dist/entry.js "$@"\n`,
-      { mode: 0o755 },
-    );
-    const previousPath = process.env.PATH;
-    process.env.PATH = path.dirname(wrapper);
-    const unlink = vi.spyOn(fs, "unlink").mockRejectedValueOnce(new Error("unlink denied"));
-    try {
-      await expect(
-        finishSuccessfulPackageSwitch({
-          previousRoot,
-          packageRoot: path.join(home, "package"),
-        }),
-      ).rejects.toMatchObject({
-        name: "UpdateCommandFailure",
-        exitCode: 1,
-        detail: expect.stringContaining("unlink denied"),
-        result: { status: "error", reason: "wrapper-retirement-failed" },
-      });
-
-      expect(mocks.writeSentinel).toHaveBeenCalledOnce();
-      expect(mocks.printResult).toHaveBeenCalledWith(
-        expect.objectContaining({ status: "error", reason: "wrapper-retirement-failed" }),
-        expect.any(Object),
-        expect.any(Object),
-      );
-      expect(mocks.markSentinelFailure).toHaveBeenCalledWith(
-        expect.objectContaining({ reason: "wrapper-retirement-failed" }),
-      );
-      expect(defaultRuntime.exit).not.toHaveBeenCalled();
-    } finally {
-      unlink.mockRestore();
-      process.env.PATH = previousPath;
-      await fs.rm(home, { recursive: true, force: true });
-    }
   });
 
   it("removes operator overrides and process identity from the managed install environment", async () => {
@@ -649,8 +606,6 @@ describe("successful update finalization ordering", () => {
         delete ownedUpdateEnvironment[key];
       }
       await finishSuccessfulPackageSwitch({
-        previousRoot: "/tmp/openclaw-update",
-        packageRoot: "/tmp/openclaw-update",
         restartEnvironment: ownedUpdateEnvironment,
       });
 
@@ -676,24 +631,20 @@ describe("successful update finalization ordering", () => {
     const { createConfigIO } =
       await vi.importActual<typeof import("../../config/io.js")>("../../config/io.js");
     mocks.createServiceConfigIO.mockImplementation(createConfigIO);
-    const home = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-restart-config-"));
+    const home = tempDirs.make("openclaw-restart-config-");
     const configPath = path.join(home, "openclaw.json");
     await fs.writeFile(configPath, JSON.stringify({ gateway: { mode: "local", port: 19600 } }));
-    try {
-      expect(
-        await resolveUpdatedGatewayRestartPort({
-          config: { gateway: { port: 19601 } },
-          processEnv: { OPENCLAW_GATEWAY_PORT: "19602" },
-          serviceEnv: { HOME: home, OPENCLAW_STATE_DIR: home, OPENCLAW_CONFIG_PATH: configPath },
-          serviceCommand: {
-            programArguments: ["/usr/bin/node", "/srv/openclaw/dist/index.js", "gateway"],
-          },
-        }),
-      ).toBe(19600);
-      expect(await fs.readdir(home)).toEqual(["openclaw.json"]);
-    } finally {
-      await fs.rm(home, { recursive: true, force: true });
-    }
+    expect(
+      await resolveUpdatedGatewayRestartPort({
+        config: { gateway: { port: 19601 } },
+        processEnv: { OPENCLAW_GATEWAY_PORT: "19602" },
+        serviceEnv: { HOME: home, OPENCLAW_STATE_DIR: home, OPENCLAW_CONFIG_PATH: configPath },
+        serviceCommand: {
+          programArguments: ["/usr/bin/node", "/srv/openclaw/dist/index.js", "gateway"],
+        },
+      }),
+    ).toBe(19600);
+    expect(await fs.readdir(home)).toEqual(["openclaw.json"]);
   });
 
   describe("managed service finalization", () => {
@@ -809,8 +760,6 @@ describe("successful update finalization ordering", () => {
           },
         );
         await finishSuccessfulPackageSwitch({
-          previousRoot: "/tmp/openclaw-update",
-          packageRoot: "/tmp/openclaw-update",
           restartEnvironment: serviceEnv,
           sealed: true,
           stoppedAtMs: 500,
@@ -866,10 +815,6 @@ describe("successful update finalization ordering", () => {
           shouldRestart: true,
           refreshServiceEnv: false,
           serviceInstallEnv: null,
-        }),
-      );
-      expect(mocks.restartService).toHaveBeenCalledWith(
-        expect.objectContaining({
           serviceUpdateVerdict: expect.objectContaining({ refreshDefinition: false }),
         }),
       );
@@ -909,8 +854,6 @@ describe("successful update finalization ordering", () => {
       });
       vi.stubEnv("OPENCLAW_GATEWAY_PORT", "");
       await finishSuccessfulPackageSwitch({
-        previousRoot: "/tmp/openclaw-update",
-        packageRoot: "/tmp/openclaw-update",
         restartEnvironment: { ...process.env },
         sealed,
       });
@@ -954,8 +897,6 @@ describe("successful update finalization ordering", () => {
         }
         await expect(
           finishSuccessfulPackageSwitch({
-            previousRoot: "/tmp/openclaw-update",
-            packageRoot: "/tmp/openclaw-update",
             restartEnvironment: { ...process.env },
             sealed: true,
             json: true,
@@ -1014,8 +955,6 @@ describe("successful update finalization ordering", () => {
         return activated;
       });
       const finishing = finishSuccessfulPackageSwitch({
-        previousRoot: "/tmp/openclaw-update",
-        packageRoot: "/tmp/openclaw-update",
         restartEnvironment: { ...process.env },
         sealed: true,
         updateMode: unloaded ? "git" : "npm",
@@ -1093,7 +1032,6 @@ describe("successful update finalization ordering", () => {
       process.env.USERPROFILE = home;
 
       await finishSuccessfulPackageSwitch({
-        previousRoot: home,
         packageRoot: home,
         restartEnvironment: { ...process.env },
         stoppedForUpdate: false,
