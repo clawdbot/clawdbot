@@ -1,4 +1,5 @@
 import { afterEach, expect, it, vi } from "vitest";
+import { CHAT_ROUTE_READY_EVENT } from "../../app/route-transition.ts";
 import { createDraftFixture } from "./draft-submission-flow.test-support.ts";
 
 afterEach(() => {
@@ -37,12 +38,20 @@ it.each(["main", "work"])(
     await place.browser.refreshProjects();
     place.selectAgentId(agentId === "main" ? "work" : "main");
     place.selectProjectId(`workspace:${agentId}`);
-    vi.mocked(context.sessions.createResult).mockResolvedValue({ key: `agent:${agentId}:new` });
+    vi.mocked(context.sessions.createResult).mockResolvedValue({
+      key: `agent:${agentId}:new`,
+      initialRun: { status: "idle" },
+    });
+    vi.mocked(context.navigateAndWait).mockImplementation(async () => {
+      queueMicrotask(() => document.dispatchEvent(new Event(CHAT_ROUTE_READY_EVENT)));
+    });
     flow.setMessage("Check this workspace");
     await vi.waitFor(() => expect(flow.submitBlock()).toBeUndefined());
 
     await flow.submit();
 
+    expect(flow.error).toBeNull();
+    expect(context.navigateAndWait).toHaveBeenCalledOnce();
     expect(context.sessions.createResult).toHaveBeenCalledWith(
       expect.objectContaining({
         agentId,
