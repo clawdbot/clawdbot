@@ -62,16 +62,25 @@ internal class ChatReaderPositionFence {
   private val generations = mutableMapOf<Key, Long>()
   private var nextGeneration = 0L
 
-  suspend fun <T> bind(
+  suspend fun bind(
     gatewayId: String,
     sessionKey: String,
-    load: suspend () -> T,
-  ): Pair<Long, T> =
+  ): Long =
     mutex.withLock {
-      val value = load()
       val generation = ++nextGeneration
       generations[Key(gatewayId, sessionKey)] = generation
-      generation to value
+      generation
+    }
+
+  suspend fun <T> load(
+    gatewayId: String,
+    sessionKey: String,
+    generation: Long,
+    read: suspend () -> T,
+  ): T? =
+    mutex.withLock {
+      if (generations[Key(gatewayId, sessionKey)] != generation) return@withLock null
+      read()
     }
 
   suspend fun save(
@@ -110,9 +119,13 @@ internal class ChatReaderPositionStore(
     gatewayId: String,
     sessionKey: String,
   ): ChatReaderPositionBinding {
-    val (generation, position) =
-      fence.bind(gatewayId, sessionKey) {
-        database()
+    // Reserve the UI generation before database readiness. Startup recovery can then
+    // invalidate it without waiting behind a bind that is awaiting initialization.
+    val generation = fence.bind(gatewayId, sessionKey)
+    val state = database()
+    val position =
+      fence.load(gatewayId, sessionKey, generation) {
+        state
           .readerPositionDao()
           .load(gatewayId, sessionKey)
           ?.let { ChatReaderPosition(it.messageId, it.itemOffset, it.messageVersion) }
@@ -123,27 +136,36 @@ internal class ChatReaderPositionStore(
   suspend fun save(
     binding: ChatReaderPositionBinding,
     position: ChatReaderPosition,
-  ) = fence.save(binding) {
-    database()
-      .readerPositionDao()
-      .upsert(
-        ChatReaderPositionEntity(
-          gatewayId = binding.gatewayId,
-          sessionKey = binding.sessionKey,
-          messageId = position.messageId,
-          itemOffset = position.itemOffset,
-          messageVersion = position.messageVersion,
-        ),
-      )
+  ) {
+    val state = database()
+    fence.save(binding) {
+      state
+        .readerPositionDao()
+        .upsert(
+          ChatReaderPositionEntity(
+            gatewayId = binding.gatewayId,
+            sessionKey = binding.sessionKey,
+            messageId = position.messageId,
+            itemOffset = position.itemOffset,
+            messageVersion = position.messageVersion,
+          ),
+        )
+    }
   }
 
   suspend fun deleteSession(
     gatewayId: String,
     sessionKey: String,
-  ) = fence.deleteSession(gatewayId, sessionKey) { database().readerPositionDao().deleteSession(gatewayId, sessionKey) }
+  ) {
+    val state = database()
+    fence.deleteSession(gatewayId, sessionKey) { state.readerPositionDao().deleteSession(gatewayId, sessionKey) }
+  }
 
   suspend fun <T> clearGateway(
     gatewayId: String,
     clear: suspend (ClientStateDatabase) -> T,
-  ): T = fence.clearGateway(gatewayId) { clear(database()) }
+  ): T {
+    val state = database()
+    return fence.clearGateway(gatewayId) { clear(state) }
+  }
 }

@@ -7,6 +7,13 @@ import ai.openclaw.app.chat.ChatReaderPosition
 import ai.openclaw.app.gateway.QuestionAnswers
 import ai.openclaw.app.gateway.QuestionRecord
 import androidx.compose.runtime.saveable.SaverScope
+import kotlinx.coroutines.CoroutineStart
+import kotlinx.coroutines.awaitCancellation
+import kotlinx.coroutines.cancelAndJoin
+import kotlinx.coroutines.flow.flow
+import kotlinx.coroutines.launch
+import kotlinx.coroutines.test.runTest
+import kotlinx.coroutines.yield
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertFalse
 import org.junit.Assert.assertNotEquals
@@ -15,6 +22,27 @@ import org.junit.Assert.assertTrue
 import org.junit.Test
 
 class ChatReaderScrollControllerTest {
+  @Test
+  fun cancellingViewportDebounceFlushesLatestPosition() =
+    runTest {
+      val expected = ChatReaderPosition(messageId = "message-1", itemOffset = 37)
+      val positions =
+        flow {
+          emit(true to expected)
+          awaitCancellation()
+        }
+      val saved = mutableListOf<ChatReaderPosition>()
+      val collector =
+        launch(start = CoroutineStart.UNDISPATCHED) {
+          collectChatReaderPositionSaves(positions) { position -> saved += position }
+        }
+
+      yield()
+      collector.cancelAndJoin()
+
+      assertEquals(listOf(expected), saved)
+    }
+
   @Test
   fun initialHistoryRestoresLatestContentAtLiveEdge() {
     val timeline = timeline(user("user-1"), assistant("assistant-1"))

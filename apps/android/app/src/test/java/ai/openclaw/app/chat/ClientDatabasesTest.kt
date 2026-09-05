@@ -6,11 +6,16 @@ import androidx.room3.executeSQL
 import androidx.room3.useReaderConnection
 import androidx.room3.useWriterConnection
 import androidx.room3.withWriteTransaction
+import kotlinx.coroutines.CompletableDeferred
 import kotlinx.coroutines.CoroutineStart
+import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.async
 import kotlinx.coroutines.cancel
 import kotlinx.coroutines.currentCoroutineContext
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.test.runTest
+import kotlinx.coroutines.withContext
+import kotlinx.coroutines.withTimeout
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertFalse
 import org.junit.Assert.assertNull
@@ -80,6 +85,42 @@ class ClientDatabasesTest {
         store.save(binding, ChatReaderPosition("message-a", 37))
 
         assertNull(store.bind("gateway-a", "main").position)
+      }
+    }
+
+  @Test
+  fun pendingInitializationDoesNotHoldReaderFenceAgainstRecovery() =
+    runTest {
+      val names = databaseNames()
+      withDatabases(names) { databases ->
+        val state = databases.clientStateDatabase()
+        val fence = ChatReaderPositionFence()
+        val recoveryComplete = CompletableDeferred<Unit>()
+        val deferredStore =
+          ChatReaderPositionStore(
+            database = {
+              recoveryComplete.await()
+              state
+            },
+            fence = fence,
+          )
+        val recoveryStore = ChatReaderPositionStore({ state }, fence)
+
+        withContext(Dispatchers.IO) {
+          val binding = async { deferredStore.bind("gateway-a", "main") }
+          val recovery =
+            async {
+              recoveryStore.clearGateway("gateway-a") { database ->
+                database.readerPositionDao().clearGateway("gateway-a")
+              }
+              recoveryComplete.complete(Unit)
+            }
+
+          withTimeout(5_000) {
+            recovery.await()
+            binding.await()
+          }
+        }
       }
     }
 

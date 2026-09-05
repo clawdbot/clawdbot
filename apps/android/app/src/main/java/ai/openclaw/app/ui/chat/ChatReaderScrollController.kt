@@ -27,6 +27,7 @@ import androidx.compose.ui.unit.dp
 import kotlinx.coroutines.CoroutineStart
 import kotlinx.coroutines.NonCancellable
 import kotlinx.coroutines.delay
+import kotlinx.coroutines.flow.Flow
 import kotlinx.coroutines.flow.collectLatest
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
@@ -197,29 +198,25 @@ internal fun rememberChatReaderScrollController(
     applyTransition(transition)
   }
 
-  LaunchedEffect(gatewayId, sessionKey) {
+  LaunchedEffect(gatewayId, sessionKey, positionBinding) {
     gatewayId?.takeIf(String::isNotBlank) ?: return@LaunchedEffect
-    snapshotFlow {
-      val position =
-        if (positionLoaded && readerState.initialized && applyingScrollCount == 0) {
-          currentTimeline.readerPosition(
-            index = listState.firstVisibleItemIndex,
-            offset = listState.firstVisibleItemScrollOffset,
-          )
-        } else {
-          null
-        }
-      listState.isScrollInProgress to position
-    }.collectLatest { (scrolling, position) ->
-      position ?: return@collectLatest
-      if (scrolling) delay(250)
-      // Finish the settled viewport write when navigation disposes this composition;
-      // otherwise reopening immediately can observe the preceding position.
-      val binding = positionBinding ?: return@collectLatest
-      withContext(NonCancellable) {
-        runCatching { currentSavePosition(binding, position) }
-      }
-    }
+    val binding = positionBinding ?: return@LaunchedEffect
+    collectChatReaderPositionSaves(
+      positions =
+        snapshotFlow {
+          val position =
+            if (positionLoaded && readerState.initialized && applyingScrollCount == 0) {
+              currentTimeline.readerPosition(
+                index = listState.firstVisibleItemIndex,
+                offset = listState.firstVisibleItemScrollOffset,
+              )
+            } else {
+              null
+            }
+          listState.isScrollInProgress to position
+        },
+      save = { position -> currentSavePosition(binding, position) },
+    )
   }
 
   LaunchedEffect(gatewayId, sessionKey) {
@@ -262,6 +259,30 @@ internal fun rememberChatReaderScrollController(
     onManualNavigation = ::pauseFollowing,
     nestedScrollConnection = nestedScroll,
   )
+}
+
+internal suspend fun collectChatReaderPositionSaves(
+  positions: Flow<Pair<Boolean, ChatReaderPosition?>>,
+  save: suspend (ChatReaderPosition) -> Unit,
+) {
+  var pendingPosition: ChatReaderPosition? = null
+  try {
+    positions.collectLatest { (scrolling, position) ->
+      pendingPosition = position
+      position ?: return@collectLatest
+      if (scrolling) delay(250)
+      withContext(NonCancellable) {
+        val saved = runCatching { save(position) }.isSuccess
+        if (saved && pendingPosition == position) pendingPosition = null
+      }
+    }
+  } finally {
+    pendingPosition?.let { position ->
+      // Composition disposal must flush the last observed viewport even when it
+      // cancels the debounce before the settled save begins.
+      withContext(NonCancellable) { runCatching { save(position) } }
+    }
+  }
 }
 
 internal fun initialChatReaderTransition(
