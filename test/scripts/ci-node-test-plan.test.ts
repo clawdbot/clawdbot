@@ -135,6 +135,28 @@ function listAllToolingTestFiles(): string[] {
   }
 }
 
+function withToolingInventory(
+  run: (owners: ReturnType<typeof createNodeTestShards>, timings: Record<string, number>) => void,
+) {
+  const owners = createNodeTestShards().filter((shard) =>
+    /^core-tooling-\d+$/u.test(shard.shardName),
+  );
+  const originalFiles = owners.map((owner) => owner.includePatterns!.slice());
+  const removed = fullSuiteVitestShards.pop()!;
+  const timings = Object.fromEntries(owners.map((owner) => [owner.shardName, 100]));
+  vi.spyOn(testTimings, "readCompactGroupTimings").mockReturnValue(timings);
+  try {
+    run(owners, timings);
+  } finally {
+    for (const [index, owner] of owners.entries()) {
+      owner.includePatterns!.splice(0, owner.includePatterns!.length, ...originalFiles[index]!);
+    }
+    fullSuiteVitestShards.push(removed);
+  }
+}
+const hostedToolingOptions = { compactMode: "pull-request", runnerBackend: "github" } as const;
+const isHostedTooling = (name: string) => /^core-tooling-\d+-hosted-\d+$/u.test(name);
+
 describe("scripts/lib/ci-node-test-plan.mts", () => {
   // Read-only cases share this baseline; inventory and timing mutations build fresh plans.
   let defaultShards: ReturnType<typeof createNodeTestShards>;
@@ -2001,6 +2023,104 @@ describe("scripts/lib/ci-node-test-plan.mts", () => {
         "test/vitest/vitest.tooling-isolated.config.ts",
       ],
       requiresDist: false,
+    });
+
+    const addedFile = "test/scripts/synthetic-unmeasured-verifier.test.ts";
+    stripes[6]!.includePatterns!.push(addedFile);
+    try {
+      const jobs = createNodeTestShardBundles(hostedToolingOptions);
+      const toolingJobs = jobs.filter((job) =>
+        job.groups.some((group) => isHostedTooling(group.shard_name)),
+      );
+      const files = toolingJobs.flatMap((job) =>
+        job.groups.flatMap((group) => group.includePatterns ?? []),
+      );
+      const ownerNames = (job: CompactNodeTestShard) =>
+        job.groups
+          .filter((group) => isHostedTooling(group.shard_name))
+          .map((group) => group.shard_name.replace(/-hosted-\d+$/u, ""));
+      expect(jobs.length).toBeLessThanOrEqual(80);
+      expect(files.filter((file) => file === addedFile)).toEqual([addedFile]);
+      expect(toolingJobs.some((job) => ownerNames(job).length > 1)).toBe(true);
+      const isolatedJob = toolingJobs.find((job) =>
+        job.groups.some((group) => group.shard_name === "core-tooling-isolated"),
+      );
+      expect(isolatedJob?.groups.some((group) => isHostedTooling(group.shard_name))).toBe(true);
+      for (const job of toolingJobs) {
+        const owners = ownerNames(job);
+        expect(new Set(owners).size).toBe(owners.length);
+        if (job.groups.flatMap((group) => group.includePatterns ?? []).length > 1) {
+          expect(job.predictedSeconds).toBeLessThanOrEqual(150);
+        }
+      }
+    } finally {
+      stripes[6]!.includePatterns!.pop();
+    }
+  });
+  it("preserves hosted parent floors, membership keys, and sibling profiles", () => {
+    withToolingInventory((owners, timings) => {
+      const siblings = () =>
+        JSON.stringify([
+          createNodeTestShardBundles(),
+          createNodeTestShardBundles({ ...hostedToolingOptions, runnerBackend: "blacksmith" }),
+          createNodeTestShardBundles({ ...hostedToolingOptions, runnerBackend: "hybrid" }),
+          createNodeTestShardBundles({ compactMode: "push", runnerBackend: "github" }),
+        ]);
+      const before = siblings();
+      const initial = createNodeTestShardBundles(hostedToolingOptions);
+      expect(initial.reduce((sum, job) => sum + job.predictedSeconds!, 0) >= 1_600).toBe(true);
+      const [first, second] = owners;
+      const selectedOwners = new Set([first!.shardName, second!.shardName]);
+      const keysFor = (jobs: CompactNodeTestShard[]) =>
+        jobs
+          .flatMap((job) => job.groups)
+          .filter((group) => selectedOwners.has(group.shard_name.replace(/-hosted-\d+$/u, "")))
+          .map((group) => group.timing_key!);
+      const keys = keysFor(initial);
+      Object.assign(timings, Object.fromEntries(keys.map((key) => [key, 1])));
+      expect(createNodeTestShardBundles(hostedToolingOptions)).toEqual(initial);
+      const firstFile = first!.includePatterns![0]!;
+      first!.includePatterns![0] = second!.includePatterns![0]!;
+      second!.includePatterns![0] = firstFile;
+      const changedKeys = keysFor(createNodeTestShardBundles(hostedToolingOptions));
+      second!.includePatterns![0] = first!.includePatterns![0]!;
+      first!.includePatterns![0] = firstFile;
+      expect(changedKeys.every((key) => !keys.includes(key!))).toBe(true);
+      expect(siblings()).toBe(before);
+    });
+  });
+  it("isolates measured overflow and indivisible oversized tooling files", () => {
+    withToolingInventory((owners, timings) => {
+      const measured = createNodeTestShardBundles(hostedToolingOptions)
+        .flatMap((job) => (job.groups.length > 1 ? job.groups : []))
+        .find(
+          (group) =>
+            (group.includePatterns?.length ?? 0) > 2 &&
+            !group.pretestBuildMode &&
+            isHostedTooling(group.shard_name),
+        )!;
+      timings[measured.timing_key!] = 301;
+      const replacements = createNodeTestShardBundles(hostedToolingOptions).flatMap((job) =>
+        job.groups
+          .filter((group) =>
+            group.includePatterns?.some((file) => measured.includePatterns!.includes(file)),
+          )
+          .map((group) => ({ group, job })),
+      );
+      expect(replacements.flatMap(({ group }) => group.includePatterns ?? []).toSorted()).toEqual(
+        measured.includePatterns!.toSorted(),
+      );
+      expect(replacements.every(({ job }) => job.predictedSeconds! <= 150)).toBe(true);
+      owners[0]!.includePatterns!.splice(1);
+      timings[owners[0]!.shardName] = 301;
+      const oversized = createNodeTestShardBundles(hostedToolingOptions).find(({ groups }) =>
+        groups.some(({ includePatterns }) =>
+          includePatterns?.includes(owners[0]!.includePatterns![0]!),
+        ),
+      )!;
+      expect(oversized.groups).toHaveLength(1);
+      expect(oversized.groups[0]!.includePatterns).toEqual(owners[0]!.includePatterns);
+      expect(oversized.predictedSeconds).toBe(301);
     });
   });
 
