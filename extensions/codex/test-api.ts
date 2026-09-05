@@ -28,6 +28,15 @@ import {
 
 export { CODEX_APP_SERVER_VERSION } from "./src/app-server/version.js";
 
+/**
+ * Loads the full run-attempt fixture only for integration suites that exercise
+ * the app-server transport. Keeping this lazy lets snapshot generators import
+ * the shared test API without evaluating Vitest mocks.
+ */
+export async function loadCodexRunAttemptHarnessForTest() {
+  return await import("./src/app-server/run-attempt-test-harness.js");
+}
+
 /** Keeps host integration tests on the plugin's test boundary without exposing runtime internals. */
 export async function createCodexSessionInitializationFixtureForTest(params: {
   runtime: PluginRuntime;

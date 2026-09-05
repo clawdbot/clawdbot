@@ -21,13 +21,7 @@ import {
 } from "openclaw/plugin-sdk/plugin-test-runtime";
 import { readStringValue } from "openclaw/plugin-sdk/string-coerce-runtime";
 import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
-import {
-  createParams as createCodexRunAttemptParamsForTest,
-  createStartedThreadHarness as createCodexStartedThreadHarnessForTest,
-  runCodexAppServerAttempt as runCodexAppServerAttemptForTest,
-  setupRunAttemptTestHooks as setupCodexRunAttemptTestHooks,
-  tempDir as codexRunAttemptTempDir,
-} from "../extensions/codex/src/app-server/run-attempt-test-harness.js";
+import { loadCodexRunAttemptHarnessForTest } from "../extensions/codex/test-api.js";
 import type { OpenClawConfig } from "../extensions/memory-wiki/api.js";
 import {
   activateExistingMemoryWikiVault,
@@ -68,8 +62,9 @@ const EVERY_CLAIM = [REQUESTER_CLAIM, FALLBACK_CLAIM, SESSION_CLAIM];
 const TEST_HOME = "/Users/tester";
 
 const { createTempDir } = createMemoryWikiTestHarness();
+const codexRunAttemptHarness = await loadCodexRunAttemptHarnessForTest();
 
-setupCodexRunAttemptTestHooks();
+codexRunAttemptHarness.setupRunAttemptTestHooks();
 
 const knownAgentsConfig = {
   agents: {
@@ -193,7 +188,7 @@ function readWireFrames(writes: string[]): WireFrame[] {
  * all stay live and `writes` holds the bytes Codex would actually receive.
  */
 function createWireHarness() {
-  const harness = createCodexStartedThreadHarnessForTest(async () => undefined, {
+  const harness = codexRunAttemptHarness.createStartedThreadHarness(async () => undefined, {
     persistedThreads: [],
   });
   if (!("writes" in harness)) {
@@ -217,15 +212,15 @@ function startCodexAttempt(options: {
         sessionKey: options.runParams.sessionKey,
       }
     : { sessionKey: SESSION_KEY };
-  const params = createCodexRunAttemptParamsForTest(
-    path.join(codexRunAttemptTempDir, `${options.name}.jsonl`),
-    path.join(codexRunAttemptTempDir, `${options.name}-workspace`),
+  const params = codexRunAttemptHarness.createParams(
+    path.join(codexRunAttemptHarness.tempDir, `${options.name}.jsonl`),
+    path.join(codexRunAttemptHarness.tempDir, `${options.name}-workspace`),
     identity,
   );
   params.agentId = options.runParams?.agentId ?? SESSION_AGENT_ID;
   params.memoryPromptAgentId = options.memoryPromptAgentId;
   params.contextEngine = contextEngine;
-  return runCodexAppServerAttemptForTest(params);
+  return codexRunAttemptHarness.runCodexAppServerAttempt(params);
 }
 
 /**
