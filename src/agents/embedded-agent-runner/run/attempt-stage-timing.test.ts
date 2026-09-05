@@ -4,6 +4,7 @@ import {
   createEmbeddedRunStageTracker,
   EMBEDDED_RUN_ATTEMPT_DISPATCH_STAGE,
   formatEmbeddedRunStageSummary,
+  measureBootstrapSubstage,
   shouldWarnEmbeddedRunStageSummary,
 } from "./attempt-stage-timing.js";
 
@@ -108,5 +109,46 @@ describe("embedded run stage timing", () => {
     expect(formatEmbeddedRunStageSummary("startup", tracker.snapshot())).toBe(
       "startup totalMs=91 stages=attempt-workspace:10ms@10ms,attempt-prompt:30ms@40ms,attempt-runtime-plan:50ms@90ms,attempt-dispatch:1ms@91ms",
     );
+  });
+});
+
+describe("measureBootstrapSubstage", () => {
+  it("records a duration that includes the awaited work", async () => {
+    // Regression: a sync wrapper returning the promise recorded ~0ms before the
+    // awaited work settled, hiding slow bootstrap substages from diagnostics.
+    const delayMs = 40;
+    const recorded: Array<{ name: string; durationMs: number }> = [];
+    const record = (name: string, durationMs: number) => recorded.push({ name, durationMs });
+
+    const result = await measureBootstrapSubstage(record, "bootstrap-routing", async () => {
+      await new Promise<void>((resolve) => {
+        setTimeout(resolve, delayMs);
+      });
+      return "routed";
+    });
+
+    expect(result).toBe("routed");
+    expect(recorded).toHaveLength(1);
+    expect(recorded[0]?.name).toBe("bootstrap-routing");
+    // Allow small timer slack; the point is the awaited delay is counted, not ~0.
+    expect(recorded[0]?.durationMs).toBeGreaterThanOrEqual(delayMs - 5);
+  });
+
+  it("records the duration even when the awaited work rejects", async () => {
+    const recorded: Array<{ name: string; durationMs: number }> = [];
+    const record = (name: string, durationMs: number) => recorded.push({ name, durationMs });
+
+    await expect(
+      measureBootstrapSubstage(record, "continuation-scan", async () => {
+        await new Promise<void>((resolve) => {
+          setTimeout(resolve, 10);
+        });
+        throw new Error("boom");
+      }),
+    ).rejects.toThrow("boom");
+
+    expect(recorded).toHaveLength(1);
+    expect(recorded[0]?.name).toBe("continuation-scan");
+    expect(recorded[0]?.durationMs).toBeGreaterThanOrEqual(5);
   });
 });

@@ -62,6 +62,25 @@ export function createEmbeddedRunStageTracker(options?: {
   };
 }
 
+/**
+ * Awaits `fn` and records its wall-clock duration under `name` via `record` in a
+ * `finally`, so the recorded substage time includes the awaited work. A plain
+ * sync wrapper that returns the promise would record ~0ms before the awaited
+ * work settles, misleading the slow-bootstrap diagnostic.
+ */
+export async function measureBootstrapSubstage<T>(
+  record: (name: string, durationMs: number) => void,
+  name: string,
+  fn: () => Promise<T>,
+): Promise<T> {
+  const startedAt = performance.now();
+  try {
+    return await fn();
+  } finally {
+    record(name, performance.now() - startedAt);
+  }
+}
+
 /** Returns true when either total runtime or any single stage exceeds warning thresholds. */
 export function shouldWarnEmbeddedRunStageSummary(
   summary: EmbeddedRunStageSummary,

@@ -1,13 +1,16 @@
 import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
-import { afterEach, describe, expect, it } from "vitest";
+import { performance } from "node:perf_hooks";
+import { afterEach, describe, expect, it, vi } from "vitest";
+import { log } from "../logger.js";
 import { prepareEmbeddedAttemptBootstrap } from "./attempt-bootstrap-prepare.js";
 import type { EmbeddedRunAttemptParams } from "./types.js";
 
 const tempDirs: string[] = [];
 
 afterEach(async () => {
+  vi.restoreAllMocks();
   await Promise.all(tempDirs.splice(0).map((dir) => fs.rm(dir, { recursive: true, force: true })));
 });
 
@@ -98,5 +101,54 @@ describe("prepareEmbeddedAttemptBootstrap", () => {
     });
 
     expect(explicit).toEqual(omitted);
+  });
+
+  it("warns with the substage breakdown when bootstrap-context exceeds the slow threshold", async () => {
+    // A bootstrap-context run over 2000ms emits its per-substage breakdown at
+    // warn level so a stalled default run is visible without enabling debug
+    // logging. A monotonic performance.now stub forces the total past the
+    // threshold; each call returns a larger value, so the final elapsed delta is
+    // always well over 2000ms regardless of how many substages ran.
+    const workspace = await fs.realpath(
+      await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-slow-bootstrap-")),
+    );
+    tempDirs.push(workspace);
+    await fs.writeFile(path.join(workspace, "AGENTS.md"), "Slow workspace instructions");
+
+    let nowCalls = 0;
+    vi.spyOn(performance, "now").mockImplementation(() => {
+      nowCalls += 1;
+      return nowCalls * 5_000;
+    });
+    const warnSpy = vi.spyOn(log, "warn").mockImplementation(() => undefined);
+
+    await prepareEmbeddedAttemptBootstrap({
+      attempt: {
+        runId: "run-slow",
+        sessionId: "session-slow",
+        sessionKey: "agent:main:session-slow",
+        trigger: "user",
+        isCanonicalWorkspace: true,
+        config: { agents: { defaults: { workspace } } },
+      } as EmbeddedRunAttemptParams,
+      effectiveWorkspace: workspace,
+      hasReadTool: true,
+      isRawModelRun: false,
+      markStage: () => undefined,
+      resolvedWorkspace: workspace,
+      sessionAgentId: "main",
+      sessionLabel: "agent:main:session-slow",
+    });
+
+    const breakdownWarn = warnSpy.mock.calls
+      .map((call) => call[0])
+      .find(
+        (message) =>
+          typeof message === "string" && message.includes("bootstrap-context substages:"),
+      );
+    expect(breakdownWarn).toBeDefined();
+    expect(breakdownWarn).toContain("runId=run-slow");
+    expect(breakdownWarn).toContain("sessionId=session-slow");
+    expect(breakdownWarn).toMatch(/totalMs=\d/);
   });
 });

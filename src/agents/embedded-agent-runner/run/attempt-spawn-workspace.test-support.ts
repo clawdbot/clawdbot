@@ -534,6 +534,7 @@ vi.mock("../../bootstrap-files.js", async () => {
     makeBootstrapWarn: () => () => {},
     isWorkspaceBootstrapPending: hoisted.isWorkspaceBootstrapPendingMock,
     resolveBootstrapFilesForRun: hoisted.resolveBootstrapFilesForRunMock,
+    resolveBootstrapFilesForRunWithTiming: hoisted.resolveBootstrapFilesForRunMock,
     resolveBootstrapContextForRun: hoisted.resolveBootstrapContextForRunMock,
     resolveContextInjectionMode: hoisted.resolveContextInjectionModeMock,
     hasCompletedBootstrapTurn: hoisted.hasCompletedBootstrapTurnMock,

@@ -8,8 +8,8 @@ import syncFs from "node:fs";
 import fs from "node:fs/promises";
 import path from "node:path";
 import { setTimeout as delay } from "node:timers/promises";
+import { promisify } from "node:util";
 import { truncateUtf16Safe } from "@openclaw/normalization-core/utf16-slice";
-import { Minimatch } from "minimatch";
 import { extractFrontmatterBlock } from "../../packages/markdown-core/src/frontmatter.js";
 import type { ChatType } from "../channels/chat-type.js";
 import {
@@ -20,7 +20,6 @@ import { isHardlinkFallbackError } from "../infra/directory-durability.js";
 import { hasErrnoCode } from "../infra/errno.js";
 import { sameFileIdentity, tempFile, type FileIdentityStat } from "../infra/fs-safe-advanced.js";
 import { FsSafeError, pathExists, root as fsSafeRoot } from "../infra/fs-safe.js";
-import { isPathInside } from "../infra/path-guards.js";
 import { retryAsync } from "../infra/retry.js";
 import { createSubsystemLogger } from "../logging/subsystem.js";
 import {
@@ -38,6 +37,11 @@ import {
   readWorkspaceBootstrapFile,
 } from "./workspace-bootstrap-read.js";
 import { DEFAULT_AGENT_WORKSPACE_DIR } from "./workspace-default.js";
+import {
+  hasGlobPattern,
+  patternWalkRootStaysInWorkspace,
+  resolveExtraBootstrapPatternPaths,
+} from "./workspace-extra-bootstrap-walker.js";
 import {
   assertNoUnmigratedWorkspaceState,
   LEGACY_WORKSPACE_STATE_CURRENT_FILENAME,
@@ -138,7 +142,15 @@ export function workspaceFilesShareSourceIdentity(left: object, right: object): 
   );
 }
 
-async function readWorkspaceFileWithGuards(params: {
+// Bounded per-fd close used by the guarded workspace read; suppress-error
+// handling stays at the call sites so a close fault never masks the read result.
+// The indirection must stay dynamic (call syncFs.close at call time, not a bound
+// reference) so fs.close mocks/spies installed after import still apply.
+const closeFdAsync = promisify((fd: number, cb: (error: NodeJS.ErrnoException | null) => void) => {
+  syncFs.close(fd, cb);
+});
+
+export async function readWorkspaceFileWithGuards(params: {
   filePath: string;
   workspaceDir: string;
   useCache?: boolean;
@@ -146,10 +158,19 @@ async function readWorkspaceFileWithGuards(params: {
   try {
     // A transient FS race (EAGAIN/EWOULDBLOCK/EINTR under load) on the open or
     // read must not drop the agent's bootstrap file for the turn — this reader
-    // runs every turn for AGENTS/SOUL/TOOLS/etc. Retry the whole open+read so
-    // each attempt uses a fresh fd (retrying readFileSync on the same fd could
+    // runs every turn for AGENTS/SOUL/HEARTBEAT/etc. Retry the whole open+read so
+    // each attempt uses a fresh fd (retrying the read on the same fd could
     // return truncated content after a partial read); the inode-identity guard
     // in openRootFile still protects against a swapped file between attempts.
+    // The bounded read and the fd close run through the async helpers below
+    // (readWorkspaceBootstrapFile / closeFdAsync); only the identity-pinned OPEN
+    // is synchronous — a deliberate TOCTOU-atomic primitive owned by
+    // @openclaw/fs-safe (openPinnedFileSync: lstat -> open -> fstat comparing the
+    // pre-open realpath stat to the fd's fstat). fs-safe exposes no async pinned
+    // open, and inserting await points into that lstat/open/fstat window would
+    // reopen the swap race the pin closes; the sync open is a bounded per-file
+    // primitive, so keeping the read/close async moves the bulk of the work off
+    // the event loop without weakening the identity guard.
     return await retryAsync(
       async () => {
         const opened = await openRootFileFollowingParents({
@@ -173,7 +194,7 @@ async function readWorkspaceFileWithGuards(params: {
         const cached =
           params.useCache === false ? undefined : workspaceFileCache.get(params.filePath);
         if (cached?.identity === identity) {
-          syncFs.closeSync(opened.fd);
+          await closeFdAsync(opened.fd).catch(() => {});
           return { ok: true, content: cached.content, sourceIdentity };
         }
 
@@ -184,7 +205,9 @@ async function readWorkspaceFileWithGuards(params: {
           }
           return { ok: true, content, sourceIdentity };
         } finally {
-          syncFs.closeSync(opened.fd);
+          // Suppress close errors to avoid masking the original read error
+          // or causing unhandled rejections on NFS/FUSE filesystems.
+          await closeFdAsync(opened.fd).catch(() => {});
         }
       },
       {
@@ -1280,30 +1303,31 @@ export async function loadWorkspaceBootstrapFiles(dir: string): Promise<Workspac
     },
   ];
 
-  const result: WorkspaceBootstrapFile[] = [];
-  for (const entry of entries) {
-    if (
-      (entry.name === DEFAULT_MEMORY_FILENAME || entry.name === DEFAULT_USER_FILENAME) &&
-      !(await exactWorkspaceEntryExists(resolvedDir, entry.name))
-    ) {
-      continue;
-    }
-    const loaded = await readWorkspaceFileWithGuards({
-      filePath: entry.filePath,
-      workspaceDir: resolvedDir,
-    });
-    if (loaded.ok) {
-      const file: WorkspaceBootstrapFile = {
-        name: entry.name,
-        path: entry.filePath,
-        content: loaded.content,
-        missing: false,
-      };
-      setWorkspaceFileSourceIdentity(file, loaded.sourceIdentity);
-      result.push(file);
-    } else if (isRootFileMissingFailure(loaded)) {
-      result.push({ name: entry.name, path: entry.filePath, missing: true });
-    } else {
+  const results = await Promise.all(
+    entries.map(async (entry): Promise<WorkspaceBootstrapFile | null> => {
+      if (
+        (entry.name === DEFAULT_MEMORY_FILENAME || entry.name === DEFAULT_USER_FILENAME) &&
+        !(await exactWorkspaceEntryExists(resolvedDir, entry.name))
+      ) {
+        return null;
+      }
+      const loaded = await readWorkspaceFileWithGuards({
+        filePath: entry.filePath,
+        workspaceDir: resolvedDir,
+      });
+      if (loaded.ok) {
+        const file: WorkspaceBootstrapFile = {
+          name: entry.name,
+          path: entry.filePath,
+          content: loaded.content,
+          missing: false,
+        };
+        setWorkspaceFileSourceIdentity(file, loaded.sourceIdentity);
+        return file;
+      }
+      if (isRootFileMissingFailure(loaded)) {
+        return { name: entry.name, path: entry.filePath, missing: true };
+      }
       const fallbackReason = `workspace file could not be read (${loaded.reason})`;
       const rawReason = loaded.error instanceof Error ? loaded.error.message : fallbackReason;
       const reason = truncateUtf16Safe(
@@ -1316,15 +1340,15 @@ export async function loadWorkspaceBootstrapFiles(dir: string): Promise<Workspac
         reason,
         consoleMessage: `Workspace bootstrap file is unreadable: file=${entry.filePath} reason=${reason}`,
       });
-      result.push({
+      return {
         name: entry.name,
         path: entry.filePath,
         content: `[UNREADABLE: ${reason}]`,
         missing: false,
-      });
-    }
-  }
-  return result;
+      };
+    }),
+  );
+  return results.filter((file): file is WorkspaceBootstrapFile => file !== null);
 }
 
 const SUBAGENT_BOOTSTRAP_ALLOWLIST = new Set([DEFAULT_AGENTS_FILENAME]);
@@ -1396,114 +1420,6 @@ export function filterBootstrapFilesForSession(
   return privacyFilteredFiles;
 }
 
-function hasGlobPattern(pattern: string): boolean {
-  // Keep square brackets literal here; workspace paths commonly contain them.
-  return /[?*{}]/u.test(pattern);
-}
-
-function normalizeWorkspacePatternPath(value: string): string {
-  return value
-    .replaceAll(path.sep, "/")
-    .replaceAll("\\", "/")
-    .replace(/^\.\/+/u, "");
-}
-
-function resolveGlobWalkRoot(pattern: string): string {
-  const normalized = normalizeWorkspacePatternPath(pattern);
-  const globIndex = normalized.search(/[?*{}]/u);
-  if (globIndex === -1) {
-    return normalized;
-  }
-  const slashIndex = normalized.lastIndexOf("/", globIndex);
-  return slashIndex === -1 ? "." : normalized.slice(0, slashIndex) || ".";
-}
-
-async function* walkWorkspaceFiles(
-  workspaceDir: string,
-  initialRelativeDir: string,
-  strictRead: boolean,
-  matcher: Minimatch,
-): AsyncGenerator<string> {
-  const stack = [initialRelativeDir === "." ? "" : initialRelativeDir];
-  while (stack.length > 0) {
-    const currentRelativeDir = stack.pop() ?? "";
-    const currentDir = path.resolve(workspaceDir, currentRelativeDir);
-    if (!isPathInside(workspaceDir, currentDir)) {
-      continue;
-    }
-
-    let entries: syncFs.Dirent[];
-    try {
-      entries = await fs.readdir(currentDir, { withFileTypes: true });
-    } catch (error) {
-      if (strictRead && (error as NodeJS.ErrnoException).code !== "ENOENT") {
-        throw error;
-      }
-      continue;
-    }
-
-    for (const entry of entries) {
-      const childRelativePath = currentRelativeDir
-        ? path.join(currentRelativeDir, entry.name)
-        : entry.name;
-      const normalizedChildPath = normalizeWorkspacePatternPath(childRelativePath);
-      if (entry.isDirectory()) {
-        if (matcher.match(normalizedChildPath, true)) {
-          stack.push(childRelativePath);
-        }
-        continue;
-      }
-      if ((entry.isFile() || entry.isSymbolicLink()) && matcher.match(normalizedChildPath)) {
-        yield normalizedChildPath;
-      }
-    }
-  }
-}
-
-async function resolveExtraBootstrapPatternPaths(
-  workspaceDir: string,
-  pattern: string,
-  strictRead: boolean,
-): Promise<string[]> {
-  if (!strictRead && typeof fs.glob === "function") {
-    try {
-      const matches: string[] = [];
-      for await (const match of fs.glob(pattern, { cwd: workspaceDir })) {
-        matches.push(match);
-      }
-      return matches;
-    } catch {
-      // Fall through to the local matcher before treating the pattern as literal.
-    }
-  }
-
-  if (typeof path.matchesGlob !== "function") {
-    return [pattern];
-  }
-
-  const normalizedPattern = normalizeWorkspacePatternPath(pattern);
-  const matcher = new Minimatch(normalizedPattern, {
-    nocomment: true,
-    nonegate: true,
-    windowsPathsNoEscape: true,
-  });
-  const matches: string[] = [];
-  for await (const candidate of walkWorkspaceFiles(
-    workspaceDir,
-    resolveGlobWalkRoot(normalizedPattern),
-    strictRead,
-    matcher,
-  )) {
-    matches.push(candidate);
-  }
-  return matches.length > 0 ? matches : [pattern];
-}
-
-function patternWalkRootStaysInWorkspace(workspaceDir: string, pattern: string): boolean {
-  const walkRoot = path.resolve(workspaceDir, resolveGlobWalkRoot(pattern));
-  return isPathInside(workspaceDir, walkRoot);
-}
-
 export async function loadWorkspacePatternFilesWithDiagnostics(
   dir: string,
   extraPatterns: string[],
@@ -1524,7 +1440,7 @@ export async function loadWorkspacePatternFilesWithDiagnostics(
   const diagnostics: ExtraBootstrapLoadDiagnostic[] = [];
   const resolvedPaths = new Set<string>();
   for (const pattern of extraPatterns) {
-    if (!patternWalkRootStaysInWorkspace(resolvedDir, pattern)) {
+    if (!(await patternWalkRootStaysInWorkspace(resolvedDir, pattern))) {
       diagnostics.push({
         path: path.resolve(resolvedDir, pattern),
         reason: "security",
@@ -1534,15 +1450,15 @@ export async function loadWorkspacePatternFilesWithDiagnostics(
     }
     try {
       if (hasGlobPattern(pattern)) {
-        const matches = await resolveExtraBootstrapPatternPaths(
-          resolvedDir,
-          pattern,
-          options.strictPatternRead === true,
-        );
+        const matches = await resolveExtraBootstrapPatternPaths(resolvedDir, pattern);
         for (const match of matches) {
           resolvedPaths.add(match);
         }
       } else {
+        // A pattern with no `? * { }` is a literal path — square brackets stay
+        // literal, so `pkg[1]` and `pkg[ab]` name their real on-disk directories
+        // rather than expanding as character classes. path.resolve below
+        // normalizes separators, so the raw pattern opens its real path directly.
         resolvedPaths.add(pattern);
       }
     } catch (error) {

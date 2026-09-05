@@ -1,4 +1,5 @@
 // Internal hook tests cover dispatch for command, session, agent, and gateway hooks.
+import { performance } from "node:perf_hooks";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { createEmptyPluginRegistry } from "../plugins/registry-empty.js";
 import { resetPluginRuntimeStateForTest, setActivePluginRegistry } from "../plugins/runtime.js";
@@ -12,6 +13,7 @@ import {
   registerInternalHook,
   setInternalHooksEnabled,
   triggerInternalHook,
+  triggerInternalHookWithScheduling,
   unregisterInternalHook,
   type AgentBootstrapHookContext,
   type GatewayStartupHookContext,
@@ -20,11 +22,33 @@ import {
 } from "./internal-hooks.js";
 
 const INTERNAL_HOOK_HANDLERS_KEY = Symbol.for("openclaw.internalHookHandlers");
+const loggerMocks = vi.hoisted(() => ({
+  warn: vi.fn(),
+  error: vi.fn(),
+}));
+
+vi.mock("../logging/subsystem.js", () => ({
+  createSubsystemLogger: () => ({
+    subsystem: "internal-hooks",
+    isEnabled: () => false,
+    trace: vi.fn(),
+    debug: vi.fn(),
+    info: vi.fn(),
+    warn: loggerMocks.warn,
+    error: loggerMocks.error,
+    fatal: vi.fn(),
+    raw: vi.fn(),
+    child: vi.fn(),
+  }),
+}));
 
 describe("hooks", () => {
   beforeEach(() => {
     clearInternalHooks();
     setInternalHooksEnabled(true);
+    vi.restoreAllMocks();
+    loggerMocks.warn.mockClear();
+    loggerMocks.error.mockClear();
   });
 
   afterEach(() => {
@@ -179,6 +203,55 @@ describe("hooks", () => {
       globalHooks.set("command:new", [injectedHandler]);
       await triggerInternalHook(event);
       expect(injectedHandler).toHaveBeenCalledWith(event);
+    });
+
+    it("executes all handlers in order when yielding between handlers", async () => {
+      const calls: string[] = [];
+      registerInternalHook("command:new", () => {
+        calls.push("first");
+      });
+      registerInternalHook("command:new", () => {
+        calls.push("second");
+      });
+
+      await triggerInternalHookWithScheduling(
+        createInternalHookEvent("command", "new", "test-session"),
+        {
+          yieldBetweenHandlers: true,
+        },
+      );
+
+      expect(calls).toStrictEqual(["first", "second"]);
+    });
+
+    it("logs a warning for slow handlers on the bootstrap diagnostic path", async () => {
+      vi.spyOn(performance, "now").mockReturnValueOnce(0).mockReturnValueOnce(501);
+      registerInternalHook("command:new", () => {});
+
+      await triggerInternalHookWithScheduling(
+        createInternalHookEvent("command", "new", "test-session"),
+        {
+          yieldBetweenHandlers: true,
+        },
+      );
+
+      expect(loggerMocks.warn).toHaveBeenCalledWith(
+        "Slow hook handler [command:new] index=0 durationMs=501.0",
+      );
+    });
+
+    it("does not warn for slow non-blocking handlers off the diagnostic path", async () => {
+      // Awaited wall time outside the bootstrap dispatch usually reflects
+      // non-blocking network/file work, so the slow-handler warning must stay
+      // scoped to yieldBetweenHandlers.
+      vi.spyOn(performance, "now").mockReturnValueOnce(0).mockReturnValueOnce(501);
+      registerInternalHook("command:new", () => {});
+
+      await triggerInternalHookWithScheduling(
+        createInternalHookEvent("command", "new", "test-session"),
+      );
+
+      expect(loggerMocks.warn).not.toHaveBeenCalled();
     });
   });
 
