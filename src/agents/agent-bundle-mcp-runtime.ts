@@ -445,10 +445,11 @@ function createServerMcpRuntime(
 ): ServerMcpRuntime {
   const { loaded, fingerprint: computedFingerprint } = params.serverConfig;
   const serverName = params.serverName;
-  // The server's own tool filter and the session's denials for it ride on the
-  // failure diagnostics this runtime records so outage admission judges them with
-  // the tool policy as healthy discovery does, instead of naming a hidden server.
-  // The retirement notice follows a config change, so both are stale for it.
+  // The server's own tool filter and the session's denials for it ride on every
+  // diagnostic this runtime records, retirement included, so outage admission
+  // judges them with the tool policy as healthy discovery does, instead of
+  // naming a hidden server. Both are fixed for the runtime's lifetime: the
+  // manager fingerprints them and builds a new runtime when either changes.
   const rawServerConfig = loaded.mcpServers[serverName];
   const toolFilter = normalizeMcpToolFilter(
     isRecord(rawServerConfig) ? rawServerConfig.toolFilter : undefined,
@@ -1159,6 +1160,11 @@ function createServerMcpRuntime(
               safeServerName: params.safeServerNamesByServer?.get(serverName) ?? serverName,
               launchSummary: serverName,
               message: "MCP server runtime retired; retry discovery on the next turn.",
+              // Retirement follows any config publication, not only one touching
+              // this server, so the run still holding this runtime's lease keeps
+              // judging the outage under the filter and denials it listed with.
+              ...(toolFilter ? { toolFilter } : {}),
+              ...(deniedToolList.length > 0 ? { deniedToolNames: deniedToolList } : {}),
             },
           ],
         };

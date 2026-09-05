@@ -2216,6 +2216,26 @@ process.on("SIGINT", shutdown);`,
     }
   });
 
+  it("carries the tool filter and session denials on the retirement diagnostic", async () => {
+    const runtime = await makeStdioRuntime("session-retired-filter", "notes", "unused.mjs", {
+      server: { toolFilter: { exclude: ["unused_*"] } },
+      toolOverrides: { mcpToolsDeny: { notes: ["denied_tool"] } },
+    });
+
+    await runtime.dispose();
+
+    // Retirement follows any config publication, so the diagnostic must keep the
+    // filter and denials the runtime listed under or a hidden server gets named.
+    expect(runtime.peekCatalog()?.diagnostics).toEqual([
+      expect.objectContaining({
+        serverName: "notes",
+        message: expect.stringMatching(/retired/),
+        toolFilter: { exclude: ["unused_*"] },
+        deniedToolNames: ["denied_tool"],
+      }),
+    ]);
+  });
+
   it("does not pause MCP servers for normal tool error results", async () => {
     const tempDir = await fs.mkdtemp(path.join(os.tmpdir(), "bundle-mcp-error-backoff-"));
     const serverPath = path.join(tempDir, "error-backoff.mjs");
