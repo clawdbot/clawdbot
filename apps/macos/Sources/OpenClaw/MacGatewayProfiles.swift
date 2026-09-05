@@ -110,7 +110,7 @@ actor MacGatewayProfileStore {
     }
 
     private var committingBrowserSignIns: [UUID: CommitState] = [:]
-    private var principalTransitions = Set<String>()
+    private var credentialTransitions = Set<String>()
 
     static func migratingLegacyPrimaryConnection(
         root: [String: Any],
@@ -160,7 +160,7 @@ actor MacGatewayProfileStore {
         guard self.browserSignInAttempts[attempt.profileID]?.id == attempt.id else { return }
         self.browserSignInAttempts.removeValue(forKey: attempt.profileID)?.revoke()
         self.finishCommit(attempt.id)
-        self.reconcilePrincipalTransition(profileID: attempt.profileID)
+        self.reconcileCredentialTransition(profileID: attempt.profileID)
     }
 
     func saveBrowserSession(
@@ -200,14 +200,14 @@ actor MacGatewayProfileStore {
         let changesPrincipal = oldStoreID != nil && oldStoreID != newStoreID
         guard self.committingBrowserSignIns[attempt.id] == nil else { throw GatewayBrowserSessionError.superseded }
         self.committingBrowserSignIns[attempt.id] = CommitState(removesProfile: credentials == nil)
+        self.credentialTransitions.insert(attempt.profileID)
         defer {
             self.finishCommit(attempt.id)
             if self.browserSignInAttempts[attempt.profileID]?.id == attempt.id {
-                self.reconcilePrincipalTransition(profileID: attempt.profileID)
+                self.reconcileCredentialTransition(profileID: attempt.profileID)
             }
         }
         if changesPrincipal {
-            self.principalTransitions.insert(attempt.profileID)
             // Close account-owned presentations before a successor can publish
             // credentials. Their retained transports are revoked independently.
             await MainActor.run {
@@ -225,6 +225,13 @@ actor MacGatewayProfileStore {
                 profileID: attempt.profileID, ifCurrent: { attempt.isCurrent && !Task.isCancelled })
         }
         try self.requireCurrentAttempt(attempt)
+        try await DashboardBrowserSessionStore.prepareProfileChange(
+            profileID: attempt.profileID,
+            registryNamespace: Self.service,
+            previous: old?.credentials.browserSession,
+            next: credentials?.browserSession,
+            ifCurrent: { attempt.isCurrent && !Task.isCancelled })
+        try self.requireCurrentAttempt(attempt)
         try credentials?.browserSession?.validate(for: attempt.url)
         if credentials?.browserSession != nil {
             // Join the old socket before revocation so its pending hello cannot
@@ -240,7 +247,7 @@ actor MacGatewayProfileStore {
         if let credentials { registry.profiles.append(StoredProfile(profile: profile, credentials: credentials)) }
         try self.saveRegistry(registry)
         self.browserSignInAttempts.removeValue(forKey: attempt.profileID)?.revoke()
-        self.principalTransitions.remove(profile.id)
+        self.credentialTransitions.remove(profile.id)
         self.postChange(profileID: profile.id, removed: credentials == nil, changeID: attempt.id)
         return profile
     }
@@ -252,10 +259,10 @@ actor MacGatewayProfileStore {
         }
     }
 
-    private func reconcilePrincipalTransition(profileID: String) {
-        guard self.principalTransitions.remove(profileID) != nil else { return }
-        // Only the current attempt's completion/cancellation restores the
-        // authoritative registry after closing account-owned presentations.
+    private func reconcileCredentialTransition(profileID: String) {
+        guard self.credentialTransitions.remove(profileID) != nil else { return }
+        // Only the current attempt restores authoritative registry credentials
+        // after retiring browser leases/cookies, including a failed renewal.
         let removed = self.cachedRegistry?.profiles.contains { $0.profile.id == profileID } != true
         self.postChange(profileID: profileID, removed: removed)
     }

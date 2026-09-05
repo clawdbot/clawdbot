@@ -166,7 +166,7 @@ final class DashboardManager {
                                 self.openForCommandTask?.cancel()
                                 self.openForCommandTask = nil
                             }
-                            self.invalidateProfileDocument(profileID: profileID)
+                            self.invalidateProfileDocument(profileID: profileID, retireManualDocuments: true)
                             self.profileObservations.removeValue(forKey: target)?.task?.cancel()
                         }
                         return
@@ -237,7 +237,7 @@ final class DashboardManager {
         self.unavailableProfileIDs.insert(profileID)
         self.profileCredentialRevisions[profileID, default: 0] &+= 1
         self.navigationIntents[.profile(profileID)] = nil
-        let cleanup = self.browserStore(profileID: profileID).invalidate()
+        let cleanup = self.browserStore(profileID: profileID).removeData()
         self.profileRemovalTasks[profileID] = (removalID ?? UUID(), cleanup)
         if self.mainTarget == .primary, AppStateStore.shared.connectionMode == .unconfigured {
             retirePresentation()
@@ -639,7 +639,7 @@ final class DashboardManager {
         return DashboardGatewaySnapshot(gateways: self.gatewayEntries, currentId: target.bridgeID)
     }
 
-    private func refreshGatewaySnapshots() async {
+    func refreshGatewaySnapshots() async {
         synchronizeProfileObservations()
         self.gatewaySnapshotGeneration &+= 1
         let generation = self.gatewaySnapshotGeneration
@@ -711,7 +711,7 @@ final class DashboardManager {
         }
     }
 
-    private func target(for source: DashboardWindowController) -> DashboardGatewayTarget? {
+    func target(for source: DashboardWindowController) -> DashboardGatewayTarget? {
         if self.controller === source {
             return self.mainTarget
         }
@@ -725,7 +725,7 @@ final class DashboardManager {
     }
 
     @discardableResult
-    private func switchTarget(
+    func switchTarget(
         _ target: DashboardGatewayTarget,
         in source: DashboardWindowController,
         forceReload: Bool = false,
@@ -898,28 +898,45 @@ extension DashboardManager {
         self.navigationIntents[target] = nil
     }
 
-    private func recordSelection(_ target: DashboardGatewayTarget) {
+    func recordSelection(_ target: DashboardGatewayTarget) {
         if self.pendingInitialSelection != nil, self.controller == nil { self.mainTarget = target }
         self.pendingInitialSelection = nil
         self.selection.select(target)
     }
 
-    private func browserStore(profileID: String) -> DashboardBrowserSessionStore {
+    private func browserStore(
+        profileID: String,
+        currentSession: GatewayBrowserSession? = nil) -> DashboardBrowserSessionStore
+    {
+        if self.websiteDataStore.isPersistent {
+            let store = DashboardBrowserSessionStore.persistent(
+                profileID: profileID,
+                registryNamespace: MacGatewayProfileStore.service,
+                currentSession: currentSession)
+            self.profileBrowserStores[profileID] = store
+            return store
+        }
         if let store = profileBrowserStores[profileID] {
             return store
         }
-        let store = DashboardBrowserSessionStore(dataStore: websiteDataStore.isPersistent
-            ? WKWebsiteDataStore(forIdentifier: DashboardBrowserSessionStore.identifier(
-                profileID: profileID, registryNamespace: MacGatewayProfileStore.service))
-            : .nonPersistent())
+        let store = DashboardBrowserSessionStore(dataStore: .nonPersistent())
         self.profileBrowserStores[profileID] = store
         return store
     }
 
-    private func invalidateProfileDocument(profileID: String, error: GatewayBrowserSessionError? = nil) {
+    private func invalidateProfileDocument(
+        profileID: String,
+        error: GatewayBrowserSessionError? = nil,
+        retireManualDocuments: Bool = false)
+    {
         self.profileCredentialRevisions[profileID, default: 0] &+= 1
-        self.profileBrowserStores[profileID]?.invalidate()
-        for instance in dashboardControllers() where instance.target == .profile(profileID) {
+        for instance in dashboardControllers() where instance.target == .profile(profileID) &&
+            (instance.controller.browserSession != nil || retireManualDocuments)
+        {
+            if error == .expired {
+                guard let session = instance.controller.browserSession, session.expiresAt <= Date() else { continue }
+                self.profileBrowserStores[profileID]?.expire(session)
+            }
             instance.controller.invalidateBrowserSession(error: error)
         }
     }
@@ -1001,8 +1018,10 @@ extension DashboardManager {
         reusingWindow: NSWindow? = nil) -> DashboardWindowController
     {
         let primaryLocal = !auxiliary && target == .primary && configuration.mode == .local
-        let browserStore: DashboardBrowserSessionStore? = if case let .profile(profileID) = target {
-            self.browserStore(profileID: profileID)
+        let browserStore: DashboardBrowserSessionStore? = if configuration.browserSession != nil,
+                                                             case let .profile(profileID) = target
+        {
+            self.browserStore(profileID: profileID, currentSession: configuration.browserSession)
         } else {
             nil
         }
@@ -1535,40 +1554,6 @@ extension DashboardManager {
             return self.openWindow(for: target, reuseExisting: true)
         }
         return self.switchTarget(target, in: frontmost.controller, present: true)
-    }
-
-    func presentSetPrimaryConfirmation(
-        _ target: DashboardGatewayTarget,
-        source: DashboardWindowController?)
-    {
-        guard case let .profile(profileID) = target,
-              let entry = gatewayEntries.first(where: { $0.id == target.bridgeID }),
-              entry.canPromote
-        else {
-            return
-        }
-        let alert = DashboardWindowController.makeSetPrimaryAlert(gatewayName: entry.name)
-        let apply: (NSApplication.ModalResponse) -> Void = { [weak self, weak source] response in
-            guard response == .alertFirstButtonReturn, let self else { return }
-            Task { @MainActor in
-                do {
-                    try await DashboardPrimaryGatewayAdapter(state: AppStateStore.shared).apply(profileID: profileID)
-                    self.recordSelection(.primary)
-                    if let source, self.target(for: source) != nil {
-                        await self.switchTarget(.primary, in: source)?.value
-                    } else {
-                        await self.refreshGatewaySnapshots()
-                    }
-                } catch {
-                    Self.showGatewayError(error, message: String(localized: "Could Not Set Primary Gateway"))
-                }
-            }
-        }
-        if let window = source?.window {
-            alert.beginSheetModal(for: window, completionHandler: apply)
-        } else {
-            apply(alert.runModal())
-        }
     }
 }
 

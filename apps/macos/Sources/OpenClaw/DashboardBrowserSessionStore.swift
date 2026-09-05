@@ -35,13 +35,68 @@ final class DashboardBrowserSessionStore {
 
     let dataStore: WKWebsiteDataStore
     private var session: GatewayBrowserSession?
+    private final class Ownership {
+        weak var store: DashboardBrowserSessionStore?
+        var principal: String?
+        var requiresRemoval = false
+    }
+
+    private static var persistentOwners: [UUID: Ownership] = [:]
+    private let ownership: Ownership
     private var revision: UInt64 = 0
     private var preparation: Task<Void, Error>?
     private var cookieRule: WKContentRuleList?
     private var publishedRevision: UInt64?
 
-    init(dataStore: WKWebsiteDataStore) {
+    convenience init(dataStore: WKWebsiteDataStore) {
+        self.init(dataStore: dataStore, ownership: Ownership())
+    }
+
+    private init(dataStore: WKWebsiteDataStore, ownership: Ownership) {
         self.dataStore = dataStore
+        self.ownership = ownership
+    }
+
+    static func persistent(
+        profileID: String,
+        registryNamespace: String,
+        currentSession: GatewayBrowserSession? = nil) -> DashboardBrowserSessionStore
+    {
+        let id = self.identifier(profileID: profileID, registryNamespace: registryNamespace)
+        let ownership = self.persistentOwners[id] ?? Ownership()
+        // MacGatewayProfileStore clears data before publishing a changed Keychain
+        // principal. That current session owns persisted data even after a cold
+        // restart with no cookie; pending removals must never be overridden.
+        if ownership.principal == nil, !ownership.requiresRemoval {
+            ownership.principal = currentSession?.browserDataPrincipal
+        }
+        if let store = ownership.store { return store }
+        let store = DashboardBrowserSessionStore(dataStore: WKWebsiteDataStore(forIdentifier: id), ownership: ownership)
+        ownership.store = store
+        self.persistentOwners[id] = ownership
+        return store
+    }
+
+    static func prepareProfileChange(
+        profileID: String,
+        registryNamespace: String,
+        previous: GatewayBrowserSession?,
+        next: GatewayBrowserSession?,
+        ifCurrent: @Sendable () -> Bool) async throws
+    {
+        guard previous != nil || next != nil else { return }
+        try Task.checkCancellation()
+        guard ifCurrent() else { throw GatewayBrowserSessionError.superseded }
+        let store = self.persistent(profileID: profileID, registryNamespace: registryNamespace)
+        let samePrincipal = previous != nil && previous?.browserDataPrincipal == next?.browserDataPrincipal
+        let preparation = samePrincipal
+            ? store.invalidate(previousPrincipal: previous?.browserDataPrincipal)
+            : store.removeData()
+        let revision = store.revision
+        try await preparation.value
+        try Task.checkCancellation()
+        guard ifCurrent(), store.revision == revision else { throw GatewayBrowserSessionError.superseded }
+        store.ownership.principal = next?.browserDataPrincipal
     }
 
     static func identifier(profileID: String, registryNamespace: String) -> UUID {
@@ -62,15 +117,28 @@ final class DashboardBrowserSessionStore {
     }
 
     @discardableResult
-    func invalidate() -> Task<Void, Error> {
-        self.replaceSession(nil, clearWebsiteData: true)
+    func invalidate(previousPrincipal: String? = nil) -> Task<Void, Error> {
+        if self.ownership.principal == nil { self.ownership.principal = previousPrincipal }
+        return self.replaceSession(nil)
+    }
+
+    func expire(_ session: GatewayBrowserSession) {
+        guard self.session == session, session.expiresAt <= Date() else { return }
+        self.invalidate()
     }
 
     @discardableResult
-    private func replaceSession(
-        _ session: GatewayBrowserSession?, clearWebsiteData: Bool = false) -> Task<Void, Error>
-    {
-        let clearWebsiteData = clearWebsiteData || self.session != nil
+    func removeData() -> Task<Void, Error> {
+        self.ownership.requiresRemoval = true
+        return self.replaceSession(nil)
+    }
+
+    @discardableResult
+    private func replaceSession(_ session: GatewayBrowserSession?) -> Task<Void, Error> {
+        let principal = session?.browserDataPrincipal
+        if let previous = self.ownership.principal, let principal, previous != principal {
+            self.ownership.requiresRemoval = true
+        }
         self.revision &+= 1
         let revision = self.revision
         self.session = session
@@ -93,26 +161,28 @@ final class DashboardBrowserSessionStore {
             }
             let cookies = await self.dataStore.httpCookieStore.allCookies()
             guard self.revision == revision else { throw GatewayBrowserSessionError.superseded }
-            let cookie = try session?.cookie()
             let current = cookies.filter { $0.name == "CF_Authorization" }
-            if !clearWebsiteData, let cookie, current.count == 1,
-               current[0].value == cookie.value, current[0].domain == cookie.domain,
-               current[0].path == cookie.path, current[0].isSecure, current[0].isHTTPOnly
-            {
-                // Retire workers from an earlier process before re-publishing the
-                // cookie under this controller's request policy. Keep UI preferences.
+            let samePrincipal = principal != nil && principal == self.ownership.principal
+            let clearWebsiteData = self.ownership.requiresRemoval ||
+                (session != nil && !samePrincipal)
+            if clearWebsiteData {
+                await self.dataStore.removeData(
+                    ofTypes: WKWebsiteDataStore.allWebsiteDataTypes(), modifiedSince: .distantPast)
+            } else {
+                // Credential retirement must stop old workers and cookie use,
+                // while same-account renewals retain website preferences.
                 await self.dataStore.removeData(
                     ofTypes: [WKWebsiteDataTypeServiceWorkerRegistrations], modifiedSince: .distantPast)
                 for cookie in current {
                     await self.dataStore.httpCookieStore.deleteCookie(cookie)
                 }
-            } else if clearWebsiteData || cookie != nil || !current.isEmpty {
-                // Account replacement also retires cached profile data and service
-                // workers; changing only the cookie leaves the old person's UI state.
-                await self.dataStore.removeData(
-                    ofTypes: WKWebsiteDataStore.allWebsiteDataTypes(), modifiedSince: .distantPast)
             }
             guard self.revision == revision else { throw GatewayBrowserSessionError.superseded }
+            // A superseded task cannot consume a pending account-data removal.
+            if clearWebsiteData { self.ownership.requiresRemoval = false
+                self.ownership.principal = nil
+            }
+            if let principal { self.ownership.principal = principal }
             self.cookieRule = rule
         }
         self.preparation = preparation

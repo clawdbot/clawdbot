@@ -27,12 +27,12 @@ private final class DashboardCookieNavigationObserver: NSObject, WKNavigationDel
 @Suite(.serialized)
 @MainActor
 struct DashboardBrowserSessionTests {
-    private func session(_ token: String) throws -> GatewayBrowserSession {
+    private func session(_ token: String, subject: String = "fixture-account") throws -> GatewayBrowserSession {
         try GatewayBrowserSession(
             origin: #require(URL(string: "https://gateway.example/")),
             issuer: #require(URL(string: "https://identity.cloudflareaccess.com/")),
             audience: "dashboard-fixture",
-            subject: "fixture-account",
+            subject: subject,
             token: token,
             expiresAt: Date().addingTimeInterval(300))
     }
@@ -93,7 +93,7 @@ struct DashboardBrowserSessionTests {
         let first = DashboardBrowserSessionStore(dataStore: .nonPersistent())
         let second = DashboardBrowserSessionStore(dataStore: .nonPersistent())
         let oldSession = try session("old-account")
-        let newSession = try session("new-account")
+        let newSession = try session("new-account", subject: "replacement-account")
         let otherSession = try session("other-profile")
         let stale = first.lease(for: oldSession)
         let current = first.lease(for: newSession)
@@ -107,7 +107,26 @@ struct DashboardBrowserSessionTests {
         #expect(await first.dataStore.httpCookieStore.allCookies().map(\.value) == ["new-account"])
         #expect(await second.dataStore.httpCookieStore.allCookies().map(\.value) == ["other-profile"])
 
+        let preference = try #require(HTTPCookie(properties: [
+            .name: "ui-theme", .value: "dark", .originURL: newSession.origin, .path: "/",
+        ]))
+        await first.dataStore.httpCookieStore.setCookie(preference)
         first.invalidate()
+        let renewal = try self.session("renewed-account", subject: "replacement-account")
+        let renewalLease = first.lease(for: renewal)
+        try await renewalLease.prepare(for: renewal.origin, in: WKUserContentController())
+        first.expire(newSession)
+        first.expire(renewal)
+        #expect(renewalLease.isCurrent)
+        #expect(await first.dataStore.httpCookieStore.allCookies().first {
+            $0.name == "CF_Authorization"
+        }?.value == "renewed-account")
+        #expect(await first.dataStore.httpCookieStore.allCookies().first { $0.name == "ui-theme" }?.value == "dark")
+        let replacement = try self.session("different-account", subject: "another-account")
+        try await first.lease(for: replacement).prepare(for: replacement.origin, in: WKUserContentController())
+        #expect(await first.dataStore.httpCookieStore.allCookies().contains { $0.name == "ui-theme" } == false)
+        await first.dataStore.httpCookieStore.setCookie(preference)
+        first.removeData()
         try await first.lease(for: nil).prepare(for: newSession.origin, in: WKUserContentController())
         await #expect(throws: GatewayBrowserSessionError.superseded) {
             try await current.prepare(for: newSession.origin, in: WKUserContentController())
@@ -116,7 +135,7 @@ struct DashboardBrowserSessionTests {
         #expect(await second.dataStore.httpCookieStore.allCookies().map(\.value) == ["other-profile"])
     }
 
-    @Test func `profile changes fence a first open and each profile owns one isolated browser store`() async throws {
+    @Test func `manual profile changes fence a first open and retain the existing browser store`() async throws {
         try await TestIsolation.withIsolatedState {
             let server = try await DashboardHTTPFixture.start()
             defer { server.stop() }
@@ -124,6 +143,7 @@ struct DashboardBrowserSessionTests {
             let fixture = try DashboardIdentityFixture(announcement: nil, source: source)
             let lookup = DashboardWindowOwnershipPresentationGate()
             let primaryStore = WKWebsiteDataStore.nonPersistent()
+            var profileName = "first-open"
             let target = DashboardGatewayTarget.profile("first-open")
             let manager = DashboardManager._testMake(
                 websiteDataStore: primaryStore,
@@ -137,7 +157,7 @@ struct DashboardBrowserSessionTests {
                 gatewayEntriesProvider: { ["first-open", "same-origin"].map {
                     DashboardGatewayEntry(
                         id: "profile:\($0)",
-                        name: $0,
+                        name: $0 == "first-open" ? profileName : $0,
                         kind: "remote",
                         isPrimary: false,
                         canPromote: false,
@@ -158,7 +178,7 @@ struct DashboardBrowserSessionTests {
             do {
                 let opened = try #require(manager._testAuxiliaryWindows().first?.controller)
                 #expect(opened.auth.token == "after")
-                #expect(opened._testDashboardDataStore !== primaryStore)
+                #expect(opened._testDashboardDataStore === primaryStore)
                 await manager._testOpenWindow(for: target)
                 await manager._testOpenWindow(for: .profile("same-origin"))
                 let windows = manager._testAuxiliaryWindows()
@@ -168,34 +188,33 @@ struct DashboardBrowserSessionTests {
                     $0.controller._testDashboardDataStore === opened._testDashboardDataStore
                 })
                 let other = try #require(windows.first { $0.target != target }?.controller)
-                #expect(other._testDashboardDataStore !== opened._testDashboardDataStore)
-
-                // Saving a name or the same credentials must leave existing windows navigable.
-                let shells = sameProfile.compactMap(\.controller.window)
-                for shell in shells {
-                    let webView = try #require((shell.windowController as? DashboardWindowController)?.webView)
-                    let deadline = ContinuousClock.now + .seconds(5)
-                    while await (try? webView.evaluateJavaScript("document.body.innerText")) as? String != "Ready",
-                          ContinuousClock.now < deadline
-                    {
-                        try await Task.sleep(for: .milliseconds(10))
-                    }
-                    _ = try await webView.evaluateJavaScript("document.body.innerText = 'Before save'")
+                #expect(other._testDashboardDataStore === primaryStore)
+                let readyDeadline = ContinuousClock.now + .seconds(5)
+                while await (try? opened.webView.evaluateJavaScript("document.body.innerText")) as? String != "Ready",
+                      ContinuousClock.now < readyDeadline
+                {
+                    try await Task.sleep(for: .milliseconds(10))
                 }
+                _ = try await opened.webView.evaluateJavaScript(
+                    "document.body.innerText = 'Before save'; localStorage.setItem('ui-theme', 'dark')")
+                profileName = "Renamed"
                 NotificationCenter.default.post(
                     name: MacGatewayProfileStore.didChangeNotification,
                     object: nil,
                     userInfo: [MacGatewayProfileStore.changedProfileIDKey: "first-open"])
-                for shell in shells {
-                    var text = ""
-                    let deadline = ContinuousClock.now + .seconds(5)
-                    while text != "Ready", ContinuousClock.now < deadline {
-                        let webView = try #require((shell.windowController as? DashboardWindowController)?.webView)
-                        text = await (try? webView.evaluateJavaScript("document.body.innerText")) as? String ?? ""
-                        try await Task.sleep(for: .milliseconds(10))
-                    }
-                    #expect(text == "Ready")
+                let refreshedDeadline = ContinuousClock.now + .seconds(5)
+                while opened.gatewaySnapshot?.gateways.first(where: { $0.id == target.bridgeID })?.name != "Renamed",
+                      ContinuousClock.now < refreshedDeadline
+                {
+                    try await Task.sleep(for: .milliseconds(10))
                 }
+                #expect(opened.gatewaySnapshot?.gateways.first { $0.id == target.bridgeID }?.name == "Renamed")
+                #expect(try await opened.webView
+                    .evaluateJavaScript("document.body.innerText") as? String == "Before save")
+                #expect(try await opened.webView
+                    .evaluateJavaScript("localStorage.getItem('ui-theme')") as? String == "dark")
+                #expect(opened.isWindowOpen)
+
                 result = .success(())
             } catch {
                 result = .failure(error)
@@ -218,6 +237,32 @@ struct DashboardBrowserSessionTests {
             browserSessionLease: lease,
             windowAutosaveName: "",
             requestBrowserProfileImportOffer: { _ in false })
+    }
+
+    @Test(arguments: [false, true])
+    func `only browser sign-in profiles use an isolated website store`(_ browserSignIn: Bool) async throws {
+        let tls = try DashboardTLSFixture()
+        let server = try await DashboardHTTPFixture.start(tlsIdentity: tls.identity)
+        defer { server.stop() }
+        let session = try GatewayBrowserSession(
+            origin: server.url(),
+            issuer: #require(URL(string: "https://issuer.example/")),
+            audience: "fixture",
+            subject: "account",
+            token: "synthetic",
+            expiresAt: Date().addingTimeInterval(300))
+        let existingStore = WKWebsiteDataStore.nonPersistent()
+        let manager = DashboardManager._testMake(
+            websiteDataStore: existingStore,
+            profileEndpointProvider: { _ in .init(
+                config: (url: server.websocketURL(), token: "manual-token", password: nil),
+                routeAuthority: nil,
+                browserSession: browserSignIn ? session : nil)
+            })
+        defer { manager.close() }
+        await manager._testOpenWindow(for: .profile("storage-owner"))
+        let controller = try #require(manager._testAuxiliaryWindows().first?.controller)
+        #expect((controller._testDashboardDataStore === existingStore) == !browserSignIn)
     }
 
     @Test func `browser-only setup reopens its Gateway without configuring machine integrations`() async throws {
@@ -364,6 +409,38 @@ struct DashboardBrowserSessionTests {
         try result.get()
     }
 
+    @Test func `registry principal restores cookie-free preferences and respects pending removal`() async throws {
+        let namespace = "cold-browser-registry-\(UUID().uuidString)"
+        let identifier = DashboardBrowserSessionStore.identifier(profileID: "gateway", registryNamespace: namespace)
+        let result: Result<Void, Error>
+        do {
+            try await self.verifyColdPrincipalRestore(namespace: namespace, identifier: identifier)
+            result = .success(())
+        } catch {
+            result = .failure(error)
+        }
+        try await WKWebsiteDataStore.remove(forIdentifier: identifier)
+        try result.get()
+    }
+
+    private func verifyColdPrincipalRestore(namespace: String, identifier: UUID) async throws {
+        let dataStore = WKWebsiteDataStore(forIdentifier: identifier)
+        let session = try self.session("current-keychain-session")
+        let preference = try #require(HTTPCookie(properties: [
+            .name: "ui-theme", .value: "dark", .originURL: session.origin, .path: "/",
+        ]))
+        await dataStore.httpCookieStore.setCookie(preference)
+        let owner = DashboardBrowserSessionStore.persistent(
+            profileID: "gateway", registryNamespace: namespace, currentSession: session)
+        try await owner.lease(for: session).prepare(for: session.origin, in: WKUserContentController())
+        #expect(await dataStore.httpCookieStore.allCookies().first { $0.name == "ui-theme" }?.value == "dark")
+        owner.removeData()
+        let reopened = DashboardBrowserSessionStore.persistent(
+            profileID: "gateway", registryNamespace: namespace, currentSession: session)
+        try await reopened.lease(for: session).prepare(for: session.origin, in: WKUserContentController())
+        #expect(await dataStore.httpCookieStore.allCookies().contains { $0.name == "ui-theme" } == false)
+    }
+
     private func verifyIsolatedRegistryCookies(_ identifiers: [UUID]) async throws {
         let work = DashboardBrowserSessionStore(dataStore: WKWebsiteDataStore(forIdentifier: identifiers[0]))
         let personal = DashboardBrowserSessionStore(dataStore: WKWebsiteDataStore(forIdentifier: identifiers[1]))
@@ -375,7 +452,7 @@ struct DashboardBrowserSessionTests {
             in: WKUserContentController())
         #expect(await work.dataStore.httpCookieStore.allCookies().map(\.value) == ["work-account-cookie"])
         #expect(await personal.dataStore.httpCookieStore.allCookies().map(\.value) == ["personal-account-cookie"])
-        try await work.invalidate().value
+        try await work.removeData().value
         #expect(await work.dataStore.httpCookieStore.allCookies().isEmpty)
         #expect(await personal.dataStore.httpCookieStore.allCookies().map(\.value) == ["personal-account-cookie"])
     }

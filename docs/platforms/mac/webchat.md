@@ -54,14 +54,19 @@ Secure token/password profiles maintain their own system-trust-gated first-use c
 and do not inherit `gateway.remote.tlsFingerprint` from the primary Gateway.
 Dashboard windows enforce that same saved-profile pinning policy.
 Browser sessions use normal HTTPS trust and remain bound to their authenticated
-Gateway origin, including its port. Each saved profile has its own dashboard
-browser data, isolated across named app profiles. Links opened beside a browser-authenticated dashboard use a separate
-temporary browser session.
+Gateway origin, including its port. Each browser-authenticated profile has its
+own dashboard browser data, isolated across named app profiles. Manual
+token/password profiles retain their existing browser store and preferences.
+Signing in with your browser starts a personal store without copying credentials
+from the shared browser store. Links opened beside a browser-authenticated
+dashboard use a separate temporary browser session.
 Removing a profile closes its native chat and dashboard windows and shuts down
 its secondary connection.
 Updating a saved profile's credentials refreshes its open dashboard windows.
-Use **Reconnect** to renew an expired browser session. Removing the profile
-also removes its saved sign-in and dashboard browser data.
+Use **Reconnect** to renew an expired browser session. Reconnecting the same
+account retains its browser preferences. Changing accounts or removing a
+browser-authenticated profile clears its isolated dashboard browser data;
+removing any profile also removes its saved credentials.
 
 Choose **File → New Gateway Window…** or press Cmd-N, then select one of those
 saved profiles. The picker remembers the most recently used profile. Every

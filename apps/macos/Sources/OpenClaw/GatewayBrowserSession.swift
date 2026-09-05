@@ -105,6 +105,10 @@ struct GatewayBrowserSession: Codable, Equatable, Sendable {
         return "\(profileID):account:\(digest)"
     }
 
+    var browserDataPrincipal: String {
+        self.chatStoreID(profileID: self.origin.absoluteString)
+    }
+
     func cookie(now: Date = Date()) throws -> HTTPCookie {
         try self.validate(for: self.origin, now: now)
         guard let cookie = HTTPCookie(properties: [

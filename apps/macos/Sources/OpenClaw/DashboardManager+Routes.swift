@@ -183,3 +183,39 @@ extension DashboardManager {
         self.presentSetPrimaryConfirmation(target, source: nil)
     }
 }
+
+extension DashboardManager {
+    func presentSetPrimaryConfirmation(
+        _ target: DashboardGatewayTarget,
+        source: DashboardWindowController?)
+    {
+        guard case let .profile(profileID) = target,
+              let entry = gatewayEntries.first(where: { $0.id == target.bridgeID }),
+              entry.canPromote
+        else {
+            return
+        }
+        let alert = DashboardWindowController.makeSetPrimaryAlert(gatewayName: entry.name)
+        let apply: (NSApplication.ModalResponse) -> Void = { [weak self, weak source] response in
+            guard response == .alertFirstButtonReturn, let self else { return }
+            Task { @MainActor in
+                do {
+                    try await DashboardPrimaryGatewayAdapter(state: AppStateStore.shared).apply(profileID: profileID)
+                    self.recordSelection(.primary)
+                    if let source, self.target(for: source) != nil {
+                        await self.switchTarget(.primary, in: source)?.value
+                    } else {
+                        await self.refreshGatewaySnapshots()
+                    }
+                } catch {
+                    Self.showGatewayError(error, message: String(localized: "Could Not Set Primary Gateway"))
+                }
+            }
+        }
+        if let window = source?.window {
+            alert.beginSheetModal(for: window, completionHandler: apply)
+        } else {
+            apply(alert.runModal())
+        }
+    }
+}
