@@ -17,6 +17,7 @@ import {
 } from "../plugins/provider-synthetic-auth.js";
 import type { ProviderPlugin } from "../plugins/types.js";
 import { SecretSurfaceUnavailableError } from "../secrets/runtime-degraded-state.js";
+import { createDeferredCore } from "../shared/deferred.js";
 import { withEnvAsync } from "../test-utils/env.js";
 import {
   createOpenClawTestState,
@@ -623,7 +624,7 @@ describe("resolveImplicitProviders startup discovery scope", () => {
       const family = createProvider("family");
       const healthy = createProvider("healthy");
       mocks.resolveRuntimePluginDiscoveryProviders.mockResolvedValue([family, healthy]);
-      const completion = Promise.withResolvers<void>();
+      const completion = createDeferredCore();
       let lateCatalog: Promise<void> | undefined;
       const outcomes: Array<{ provider: string; status: string }> = [];
       mocks.runProviderCatalog.mockImplementation((params) => {
@@ -675,7 +676,7 @@ describe("resolveImplicitProviders startup discovery scope", () => {
         { provider: "family-plan", status: "unavailable" },
       ];
       try {
-        expect(providers?.healthy.models.map((model) => model.id)).toEqual(["healthy-live"]);
+        expect(providers?.healthy?.models.map((model) => model.id)).toEqual(["healthy-live"]);
         expect(outcomes).toEqual(expected);
       } finally {
         completion.resolve();

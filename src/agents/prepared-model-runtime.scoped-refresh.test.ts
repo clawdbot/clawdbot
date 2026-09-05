@@ -6,11 +6,13 @@ import {
   resetPreparedModelRuntimeHarness,
 } from "./prepared-model-runtime.test-harness.js";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
+import type { ModelProviderConfig } from "../config/types.models.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { loadPreparedGatewayModelCatalogSnapshot } from "../gateway/server-model-catalog.js";
 import { refreshModelRuntimeAfterHotReload } from "../gateway/server-reload-model-runtime-scope.js";
 import { createPluginManifestRecordFixture } from "../plugins/plugin-metadata.test-support.js";
 import { createEmptyPluginRegistry } from "../plugins/registry-empty.js";
+import { createDeferredCore } from "../shared/deferred.js";
 import {
   createOpenClawTestState,
   type OpenClawTestState,
@@ -114,7 +116,10 @@ describe("prepared model runtime scoped refresh", () => {
       expect(failed.entries).toMatchObject([learned, sibling]);
       expect(failed.routeVariants).toMatchObject([variant, sibling]);
       expect(failed.authoritative).toBe(false);
-      expect(failed.providerOutcomes).toEqual(snapshots[1].providerOutcomes);
+      expect(failed.providerOutcomes).toEqual([
+        { provider: "provider-a", profileId, status: "unavailable" },
+        { provider: "provider-b", status: "ready" },
+      ]);
       const failedAgain = await owner.loadFullModelCatalog!({ refresh: true });
       expect(failedAgain.entries).toMatchObject([learned, sibling]);
       const recovered = await owner.loadFullModelCatalog!({ refresh: true });
@@ -361,25 +366,26 @@ describe("prepared model runtime scoped refresh", () => {
     mocks.configuredAgentIds = ["pro"];
     const originalIndex = mocks.pluginMetadataSnapshot.index;
     mocks.pluginMetadataSnapshot.index = { ...originalIndex };
+    const configuredProvider: ModelProviderConfig = {
+      baseUrl: "https://original.example.test/v1",
+      models: [
+        {
+          id: "configured",
+          name: "Configured",
+          reasoning: false,
+          input: ["text"],
+          cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
+          contextWindow: 32_000,
+          maxTokens: 4096,
+        },
+      ],
+    };
     const config: OpenClawConfig = {
       agents: { entries: { pro: {} } },
       plugins: { allow: ["demo"], entries: { demo: { enabled: true } } },
       models: {
         providers: {
-          demo: {
-            baseUrl: "https://original.example.test/v1",
-            models: [
-              {
-                id: "configured",
-                name: "Configured",
-                reasoning: false,
-                input: ["text"],
-                cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
-                contextWindow: 32_000,
-                maxTokens: 4096,
-              },
-            ],
-          },
+          demo: configuredProvider,
         },
       },
     };
@@ -403,8 +409,7 @@ describe("prepared model runtime scoped refresh", () => {
                       change === "endpoint"
                         ? "https://replacement.example.test/v1"
                         : "https://original.example.test/v1",
-                    models:
-                      change === "configured-models" ? [] : config.models!.providers!.demo.models,
+                    models: change === "configured-models" ? [] : configuredProvider.models,
                   },
                 },
               },
@@ -632,8 +637,8 @@ describe("prepared model runtime scoped refresh", () => {
   });
 
   it("recomposes configured models and retires native rows on a compatible reload", async () => {
-    const nativeStarted = Promise.withResolvers<void>();
-    const releaseNative = Promise.withResolvers<void>();
+    const nativeStarted = createDeferredCore();
+    const releaseNative = createDeferredCore();
     let holdNative = false;
     mocks.resolveStaticCatalogModel.mockImplementation(({ provider, modelId }) => ({
       provider,
