@@ -465,8 +465,9 @@ export function resolveGatewaySessionStoreTargetWithStore(
 export function resolveGatewaySessionStoreTargetsReadOnly(params: {
   cfg: OpenClawConfig;
   targets: readonly { key: string; agentId?: string }[];
+  targetDiscoveryCache?: GatewaySessionStoreDiscoveryCache;
 }): GatewaySessionStoreTargetWithStore[] {
-  const targetDiscoveryCache: GatewaySessionStoreDiscoveryCache = new Map();
+  const targetDiscoveryCache = params.targetDiscoveryCache ?? new Map();
   const requests = params.targets.map((target) => {
     const lookup: GatewaySessionStoreLookupParams = {
       ...target,

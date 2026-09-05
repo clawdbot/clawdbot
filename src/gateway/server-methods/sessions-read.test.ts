@@ -296,6 +296,14 @@ test("sessions.resolve preserves presentation facts on unique and ambiguous wire
       boardFace: "dashboard",
     },
   });
+  for (const reference of [
+    { key: firstKey },
+    { key: "agent:main:deploy-monitor", slug: "deploy-monitor" },
+  ]) {
+    expect(await directSessionReq("sessions.resolve", { reference, agentId: "main" })).toEqual(
+      unique,
+    );
+  }
 
   await replaceSessionEntry(
     { agentId: "main", sessionKey: secondKey, storePath },
@@ -320,6 +328,40 @@ test("sessions.resolve preserves presentation facts on unique and ambiguous wire
       ],
     },
   });
+});
+
+test("named references keep discovery privacy while exact key reads retain their contract", async () => {
+  const sessionKey = "agent:main:thread:12345678-0000-4000-8000-000000000001";
+  const creatorId = ensureProfileForEmail("reference-creator@example.com").id;
+  const viewerId = ensureProfileForEmail("reference-viewer@example.com").id;
+  await replaceSessionEntry(
+    { agentId: "main", sessionKey, storePath: resolveStorePath(undefined, { agentId: "main" }) },
+    {
+      sessionId: "reference-draft",
+      updatedAt: 1,
+      displayName: "Hidden dashboard",
+      visibility: "draft",
+      createdActor: { type: "human", source: "profile", id: creatorId },
+    },
+  );
+  const options = { client: identifiedClient(viewerId) };
+  expect(await directSessionReq("sessions.resolve", { key: sessionKey }, options)).toMatchObject({
+    ok: true,
+    payload: { ok: true, key: sessionKey },
+  });
+  for (const key of [sessionKey, "agent:main:hidden-dashboard"]) {
+    expect(
+      await directSessionReq(
+        "sessions.resolve",
+        {
+          reference: { key, slug: "hidden-dashboard" },
+          agentId: "main",
+          allowMissing: true,
+        },
+        options,
+      ),
+    ).toMatchObject({ ok: true, payload: { ok: false } });
+  }
 });
 
 test("unknown-agent session reads return missing results without provisioning an agent", async () => {

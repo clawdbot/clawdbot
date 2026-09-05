@@ -42,15 +42,13 @@ import {
   isGatewayAdmin,
   prepareSessionSharing,
   resolveSessionSharingTarget,
+  resolveSessionSharingTargets,
   resolveSessionVisibility,
 } from "../session-sharing.js";
 import { resolveSessionStoreAgentId } from "../session-store-key.js";
 import { readSessionPreviewItemsFromTranscript } from "../session-transcript-readers.js";
 import { projectGatewaySessionActiveRun } from "../session-utils-display.js";
-import {
-  createGatewaySessionStoreDiscoveryCache,
-  type GatewaySessionStoreCache,
-} from "../session-utils-store-lookup.js";
+import { createGatewaySessionStoreDiscoveryCache } from "../session-utils-store-lookup.js";
 import {
   listSessionsFromStoreAsync,
   loadCombinedSessionStoreForGatewayCore,
@@ -311,27 +309,25 @@ export const sessionReadHandlers: GatewayRequestHandlers = {
           const { sharingTargets, membershipKeys } = await measureDiagnosticsTimelineSpan(
             "gateway.sessions.list.sharing",
             () => {
-              // One cache for the whole listing: sharing resolution otherwise
-              // materialized every entry of a candidate store once per row.
-              const sharingStoreCache: GatewaySessionStoreCache = new Map();
-              const targetDiscoveryCache = createGatewaySessionStoreDiscoveryCache({
+              // Recheck only this page after row projection yields; unrelated sessions
+              // must not be materialized again to refresh visibility and membership.
+              const resolvedSharingTargets = resolveSessionSharingTargets({
                 cfg,
-                targets: durableTargets,
-                agentIds: result.sessions.map((session) =>
-                  session.key === "global" && p.agentId
-                    ? p.agentId
-                    : resolveSessionStoreAgentId(cfg, session.key),
-                ),
-              });
-              const resolvedSharingTargets = result.sessions.map((session) =>
-                resolveSessionSharingTarget({
+                // Preserve the listing's registered stores, including alternate agent paths.
+                targetDiscoveryCache: createGatewaySessionStoreDiscoveryCache({
                   cfg,
-                  sessionKey: session.key,
-                  storeCache: sharingStoreCache,
-                  targetDiscoveryCache,
-                  ...(session.key === "global" && p.agentId ? { agentId: p.agentId } : {}),
+                  targets: durableTargets,
+                  agentIds: result.sessions.map((session) =>
+                    session.key === "global" && p.agentId
+                      ? p.agentId
+                      : resolveSessionStoreAgentId(cfg, session.key),
+                  ),
                 }),
-              );
+                targets: result.sessions.map((session) => ({
+                  sessionKey: session.key,
+                  ...(session.key === "global" && p.agentId ? { agentId: p.agentId } : {}),
+                })),
+              });
               const resolvedMembershipKeys = new Set<string>();
               if (identityId && !isGatewayAdmin(client)) {
                 const groups = new Map<

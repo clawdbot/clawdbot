@@ -6107,6 +6107,7 @@ public struct SessionsResolveParams: Codable, Sendable {
     public let key: String?
     public let sessionid: String?
     public let label: String?
+    public let reference: [String: AnyCodable]?
     public let shortid: String?
     public let slughint: String?
     public let agentid: String?
@@ -6119,6 +6120,7 @@ public struct SessionsResolveParams: Codable, Sendable {
         key: String? = nil,
         sessionid: String? = nil,
         label: String? = nil,
+        reference: [String: AnyCodable]? = nil,
         shortid: String? = nil,
         slughint: String? = nil,
         agentid: String? = nil,
@@ -6130,6 +6132,7 @@ public struct SessionsResolveParams: Codable, Sendable {
         self.key = key
         self.sessionid = sessionid
         self.label = label
+        self.reference = reference
         self.shortid = shortid
         self.slughint = slughint
         self.agentid = agentid
@@ -6143,6 +6146,7 @@ public struct SessionsResolveParams: Codable, Sendable {
         case key
         case sessionid = "sessionId"
         case label
+        case reference
         case shortid = "shortId"
         case slughint = "slugHint"
         case agentid = "agentId"
