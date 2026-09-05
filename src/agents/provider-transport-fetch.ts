@@ -40,10 +40,8 @@ import {
   swapSecretSentinelsInText,
 } from "../secrets/sentinel.js";
 import { ProviderHttpError, readResponseTextLimited } from "./provider-http-errors.js";
-import {
-  ensureModelProviderLocalService,
-  type ProviderLocalServiceLease,
-} from "./provider-local-service.js";
+import type { ProviderLocalServiceLease } from "./provider-local-service-target.js";
+import { ensureModelProviderLocalService } from "./provider-local-service.js";
 import {
   buildProviderRequestDispatcherPolicy,
   getModelProviderRequestRouteFacts,

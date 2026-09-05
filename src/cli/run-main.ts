@@ -1597,7 +1597,7 @@ async function runCliWithPreparedOutputMode(
           const ctx = getProgramContext(program);
           if (ctx) {
             const { registerCoreCliByName } = await import("./program/command-registry.js");
-            await registerCoreCliByName(program, ctx, primary, parseArgv);
+            await registerCoreCliByName(program, ctx, primary);
           }
           const { registerSubCliByName } = await import("./program/register.subclis.js");
           await registerSubCliByName(program, primary, parseArgv);

@@ -59,7 +59,7 @@ class OpenClawSessionProgressWidget extends OpenClawLightDomElement {
     const card = this.store?.get(this.target);
     const errorNotice = loadError
       ? html`<div
-          class="board-widget__plugin-loading"
+          class=${card ? "callout info" : "board-widget__plugin-loading"}
           data-test-id="session-progress-error"
           role="alert"
         >
@@ -67,9 +67,7 @@ class OpenClawSessionProgressWidget extends OpenClawLightDomElement {
             >${t(
               loadError === "access-denied"
                 ? "sessionProgressCard.widgetAccessDenied"
-                : loadError === "unsupported-owner"
-                  ? "sessionProgressCard.ownerUnsupported"
-                  : "sessionProgressCard.widgetUnavailable",
+                : "sessionProgressCard.widgetUnavailable",
             )}</span
           >
           ${
@@ -81,7 +79,7 @@ class OpenClawSessionProgressWidget extends OpenClawLightDomElement {
           }
         </div>`
       : nothing;
-    if (loadError && (loadError !== "unsupported-owner" || !card)) {
+    if (loadError && !card) {
       return errorNotice;
     }
     if (card === undefined) {

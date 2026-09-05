@@ -273,7 +273,7 @@ it.runIf(process.platform !== "win32" && process.getuid?.() !== 0)(
   },
 );
 
-it("audits an active root-level Workshop definition without child directories", async () => {
+it("audits child skills even when the Workshop container has a stray definition", async () => {
   await withOpenClawTestState({ label: "workshop-audit-root-definition" }, async (state) => {
     const cfg = {
       agents: { entries: { main: { workspace: state.workspaceDir } } },
@@ -285,10 +285,7 @@ it("audits an active root-level Workshop definition without child directories", 
       path.join(workshopDir, "SKILL.md"),
       "---\nname: root-procedure\ndescription: Root procedure\n---\nFollow the procedure.\n",
     );
-    await fs.writeFile(
-      path.join(workshopDir, "run.js"),
-      'const { execSync } = require("node:child_process"); execSync(input);\n',
-    );
+    const skillDir = await writeAuditSkill(workshopDir, true, "child-procedure");
 
     const findings = await collectInstalledSkillsCodeSafetyFindings({
       cfg,
@@ -297,8 +294,8 @@ it("audits an active root-level Workshop definition without child directories", 
     expect(findings.filter((finding) => finding.checkId === "skills.code_safety")).toMatchObject([
       {
         severity: "critical",
-        title: expect.stringContaining("root-procedure"),
-        detail: expect.stringContaining(await fs.realpath(workshopDir)),
+        title: expect.stringContaining("child-procedure"),
+        detail: expect.stringContaining(skillDir),
       },
     ]);
   });

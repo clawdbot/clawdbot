@@ -16,6 +16,7 @@ const saveIndicator = () => ({
   applying: false,
   applyDisabled: false,
   onRetry: vi.fn(),
+  onSave: vi.fn(),
   onReload: vi.fn(),
   onApply: vi.fn(),
 });

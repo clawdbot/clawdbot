@@ -6,6 +6,7 @@ import {
   type OpenClawTestState,
 } from "../../test-utils/openclaw-test-state.js";
 import { createTrackedTempDirs } from "../../test-utils/tracked-temp-dirs.js";
+import { loadSkillRootRecords } from "../loading/skill-root-loader.js";
 import { proposeUpdateSkill } from "./service.js";
 import { resolveWorkshopSkillsDir } from "./skills-root.js";
 import {
@@ -38,6 +39,24 @@ async function writeSkill(dir: string, name: string, body = ""): Promise<void> {
 }
 
 describe("listWritableWorkshopSkillSummaries", () => {
+  it("ignores a SKILL.md placed directly in the Workshop root", async () => {
+    const workshopDir = resolveWorkshopSkillsDir({}, "main", testState.env);
+    await fs.mkdir(workshopDir, { recursive: true });
+    await fs.writeFile(path.join(workshopDir, "SKILL.md"), "# Root skill\n");
+    await writeSkill(path.join(workshopDir, "real"), "real");
+
+    expect(
+      listWritableWorkshopSkillSummaries({ config: {}, agentId: "main", env: testState.env }).map(
+        (skill) => skill.name,
+      ),
+    ).toEqual(["real"]);
+    expect(
+      loadSkillRootRecords({ dir: workshopDir, source: "openclaw-workshop" }).map(
+        ({ skill }) => skill.name,
+      ),
+    ).toEqual(["real"]);
+  });
+
   it("uses the declared name for grouped skills when reading and updating", async () => {
     const baseDir = path.join(
       resolveWorkshopSkillsDir({}, "main", testState.env),

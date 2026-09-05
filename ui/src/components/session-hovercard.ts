@@ -54,7 +54,6 @@ type SessionHovercardInput = {
   personActivity?: PersonActivityRouting;
   pullRequests?: ControlUiSessionPullRequestSnapshot;
   progressCard?: ProgressCard | null;
-  progressCardError?: string;
 };
 
 let channelAvatarElementLoad: Promise<unknown> | undefined;
@@ -648,7 +647,7 @@ export function renderSessionHovercard(input: SessionHovercardInput) {
   const lastMessagePreview = input.progressCard
     ? undefined
     : input.row?.lastMessagePreview?.trim() || undefined;
-  if (!input.row && !hasPullRequestDetails && !input.progressCard && !input.progressCardError) {
+  if (!input.row && !hasPullRequestDetails && !input.progressCard) {
     return nothing;
   }
   return html`<div class="session-hovercard">
@@ -681,6 +680,5 @@ export function renderSessionHovercard(input: SessionHovercardInput) {
         : nothing
     }
     ${renderAgentNotepad(input.progressCard)}
-    ${input.progressCardError ? html`<section class="session-hovercard__section" role="status">${input.progressCardError}</section>` : nothing}
   </div>`;
 }

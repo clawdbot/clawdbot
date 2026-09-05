@@ -2058,7 +2058,7 @@ src/agents/tools/sessions-spawn-tool.ts	5
 src/agents/tools/sessions-tool.ts	1
 src/agents/tools/sessions-yield-tool.ts	1
 src/agents/tools/skill-workshop-tool-helpers.ts	3
-src/agents/tools/structured-output-tool.ts	3
+src/agents/tools/structured-output-tool.ts	2
 src/agents/tools/subagents-tool.ts	2
 src/agents/tools/system-agent-tool.ts	1
 src/agents/tools/task-suggestion-tools.ts	2
@@ -2836,7 +2836,6 @@ src/gateway/server-methods/chat-broadcast.ts	1
 src/gateway/server-methods/chat-history-budget.ts	6
 src/gateway/server-methods/chat-history-handler.ts	2
 src/gateway/server-methods/chat-message-get-handler.ts	3
-src/gateway/server-methods/chat-restart-recovery.ts	1
 src/gateway/server-methods/chat-send-attachments.ts	1
 src/gateway/server-methods/chat-send-reply-dispatch.ts	2
 src/gateway/server-methods/chat-send-request.ts	1
@@ -3521,7 +3520,7 @@ src/projects/project-registry.ts	1
 src/provider-runtime/operation-retry.ts	3
 src/proxy-capture/env.ts	1
 src/proxy-capture/runtime.ts	10
-src/proxy-capture/store.sqlite.ts	16
+src/proxy-capture/store.sqlite.ts	4
 src/realtime-transcription/websocket-session.ts	2
 src/routing/binding-scope.ts	1
 src/runtime.ts	4

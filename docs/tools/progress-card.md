@@ -101,7 +101,7 @@ The composer and dashboard placements show the local time of the last progress u
 
 Keep the original session and agent together for subsequent reads and clears. The returned card and change event use an agent-qualified display key; that key alone cannot distinguish a retained `global` session from an ordinary session whose key is `agent:<agentId>:global`. Both methods use the selected session’s normal access checks, in addition to their operator read or write scope.
 
-Gateways advertise `progress-card-agent-scope-v1` in `hello.features.capabilities` when progress-card requests accept `agentId`. Independently upgraded clients must check that capability before sending the field. For an ordinary session key that remains agent-qualified, omit redundant `agentId`. A canonical `global` target with an explicit owner requires this capability; otherwise the client reports that a Gateway update is needed.
+The Control UI ships with its Gateway and follows the captured session owner without version negotiation: ordinary agent-qualified keys omit redundant `agentId`, while raw targets retain their explicit owner. Gateways also advertise `progress-card-agent-scope-v1` in `hello.features.capabilities` for independently upgraded clients, such as native apps. Those clients check the capability before sending `agentId`: ordinary agent-qualified keys can omit the field, while a canonical `global` target with an explicit owner requires it. If that capability is missing, the independently upgraded client reports that a Gateway update is needed.
 
 ## Pin the card to the dashboard
 

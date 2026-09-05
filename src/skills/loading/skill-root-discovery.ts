@@ -476,7 +476,8 @@ export function discoverSkillCandidates(params: {
     return { candidates: [], rootIsSkill: false };
   }
 
-  if (hasSkillFileCandidate(baseDir)) {
+  const rootIsContainer = params.source === "openclaw-workshop";
+  if (!rootIsContainer && hasSkillFileCandidate(baseDir)) {
     const rootSkillRealPath = resolveSkillFilePath({
       source: params.source,
       skillDir: baseDir,
@@ -509,14 +510,13 @@ export function discoverSkillCandidates(params: {
     maxCandidateDirs: maxCandidatesPerRoot,
     onDiagnostic: params.onDiagnostic,
   });
-  const childDirs = childDirScan.dirs;
+  const childDirs = childDirScan.dirs.toSorted();
   discoveryBudget.truncated ||= childDirs.length > maxCandidatesPerRoot;
-  const sortedChildDirs = childDirs.toSorted();
   const limitedChildren =
-    maxSkillsLoadedPerSource === 0 ? [] : sortedChildDirs.slice(0, maxCandidatesPerRoot);
+    maxSkillsLoadedPerSource === 0 ? [] : childDirs.slice(0, maxCandidatesPerRoot);
   if (
     maxSkillsLoadedPerSource > 0 &&
-    sortedChildDirs.includes("skills") &&
+    childDirs.includes("skills") &&
     !limitedChildren.includes("skills")
   ) {
     limitedChildren.push("skills");
@@ -543,7 +543,7 @@ export function discoverSkillCandidates(params: {
   }
 
   let configuredRootCandidate: CandidateSkillDir | undefined;
-  if (path.resolve(baseDir) !== rootDir && hasSkillFileCandidate(rootDir)) {
+  if (!rootIsContainer && path.resolve(baseDir) !== rootDir && hasSkillFileCandidate(rootDir)) {
     const configuredRootSkillRealPath = resolveSkillFilePath({
       source: params.source,
       skillDir: rootDir,

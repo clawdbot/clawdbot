@@ -4,15 +4,16 @@ import fs from "node:fs/promises";
 import path from "node:path";
 import type { OpenClawStateDatabaseSchemaMigration } from "openclaw/plugin-sdk/doctor-repair-runtime";
 import type { PluginDoctorStateMigration } from "openclaw/plugin-sdk/runtime-doctor-migrations";
+import { resolveMatrixStateLayoutChildDepth } from "../storage-paths.js";
 import { resolveMatrixSqliteStateEnv } from "./sqlite-state.js";
 
 const STATE_DATABASE_FILENAME = "openclaw.sqlite";
 
 async function collectMatrixAccountStateRoots(stateDir: string): Promise<string[]> {
-  const accountsRoot = path.join(stateDir, "matrix", "accounts");
+  const matrixRoot = path.join(stateDir, "matrix");
   const roots = new Set<string>();
 
-  async function visit(dir: string, allowMissing = false): Promise<void> {
+  async function visit(dir: string, depth: number, allowMissing = false): Promise<void> {
     let entries: Dirent[];
     try {
       entries = await fs.readdir(dir, { withFileTypes: true });
@@ -30,19 +31,26 @@ async function collectMatrixAccountStateRoots(stateDir: string): Promise<string[
     }
     for (const entry of entries) {
       const entryPath = path.join(dir, entry.name);
-      if (
-        entry.isFile() &&
-        entry.name === STATE_DATABASE_FILENAME &&
-        path.basename(dir) === "state"
-      ) {
+      if (entry.isFile() && depth === 5 && entry.name === STATE_DATABASE_FILENAME) {
         roots.add(path.dirname(dir));
-      } else if (entry.isDirectory()) {
-        await visit(entryPath);
+        continue;
+      }
+      if (!entry.isDirectory()) {
+        continue;
+      }
+      const isStorageRoot = depth === 2 || depth === 4;
+      if (isStorageRoot && entry.name === "state") {
+        await visit(entryPath, 5);
+        continue;
+      }
+      const childDepth = resolveMatrixStateLayoutChildDepth(depth, entry.name);
+      if (childDepth !== null) {
+        await visit(entryPath, childDepth);
       }
     }
   }
 
-  await visit(accountsRoot, true);
+  await visit(matrixRoot, 0, true);
   return [...roots].toSorted();
 }
 

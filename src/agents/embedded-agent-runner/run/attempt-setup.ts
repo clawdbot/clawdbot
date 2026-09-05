@@ -105,8 +105,9 @@ type AttemptWorkspaceParams = Pick<
   | "sessionId"
   | "sessionKey"
   | "sessionRoot"
-  | "skillWorkshopCollectionReconcile"
   | "skillsSnapshot"
+  | "requireWritableSandbox"
+  | "requireWorkspaceOnly"
   | "workspaceDir"
 >;
 
@@ -121,22 +122,21 @@ export async function resolveAttemptWorkspaceSandbox(params: AttemptWorkspacePar
   await fs.mkdir(resolvedWorkspace, { recursive: true });
   const sessionKey = params.sessionKey?.trim() || params.sessionId;
   const sandboxSessionKey = params.sandboxSessionKey?.trim() || sessionKey;
-  // Collection review is a host-owned maintenance run with one restricted tool.
-  // Sandboxing would hide that tool or redirect it to a disposable workspace.
-  const sandbox = params.skillWorkshopCollectionReconcile
-    ? null
-    : await resolveSandboxContext({
-        config: params.config,
-        // Independent policy sessions keep their own owner; unscoped execution retains its prepared one.
-        agentId:
-          params.sandboxAgentId ?? (sandboxSessionKey === sessionKey ? sessionAgentId : undefined),
-        execOverrides: params.execOverrides,
-        sessionKey: sandboxSessionKey,
-        skillsSnapshot: params.skillsSnapshot,
-        workspaceDir: resolvedWorkspace,
-      });
+  const sandbox = await resolveSandboxContext({
+    config: params.config,
+    // Independent policy sessions keep their own owner; unscoped execution retains its prepared one.
+    agentId:
+      params.sandboxAgentId ?? (sandboxSessionKey === sessionKey ? sessionAgentId : undefined),
+    execOverrides: params.execOverrides,
+    sessionKey: sandboxSessionKey,
+    skillsSnapshot: params.skillsSnapshot,
+    workspaceDir: resolvedWorkspace,
+  });
   const effectiveWorkspace =
     sandbox?.enabled && sandbox.workspaceAccess !== "rw" ? sandbox.workspaceDir : resolvedWorkspace;
+  if (params.requireWritableSandbox && sandbox?.enabled && sandbox.workspaceAccess !== "rw") {
+    throw new Error("sandbox workspace is not read-write; collection review skipped");
+  }
   const requestedCwd = params.cwd ? resolveUserPath(params.cwd) : undefined;
   // Recorded roots pin worktree/explicit-cwd boundaries; rootless sessions use
   // the agent's canonical workspace as their permission boundary.
@@ -155,10 +155,12 @@ export async function resolveAttemptWorkspaceSandbox(params: AttemptWorkspacePar
   await fs.mkdir(effectiveWorkspace, { recursive: true });
   return {
     effectiveCwd: sandbox?.enabled ? effectiveWorkspace : (requestedCwd ?? effectiveWorkspace),
-    effectiveFsWorkspaceOnly: resolveAttemptFsWorkspaceOnly({
-      config: params.config,
-      sessionAgentId,
-    }),
+    effectiveFsWorkspaceOnly:
+      params.requireWorkspaceOnly === true ||
+      resolveAttemptFsWorkspaceOnly({
+        config: params.config,
+        sessionAgentId,
+      }),
     effectiveWorkspace,
     resolvedWorkspace,
     sessionPermissionRoot,
