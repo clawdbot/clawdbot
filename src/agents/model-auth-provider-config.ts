@@ -654,12 +654,11 @@ export function providerConfigMatchesRuntimeSnapshot(params: {
   if (!inputProvider || !runtimeProvider) {
     return false;
   }
-  const toComparableConfig = (providerConfig: ModelProviderConfig): OpenClawConfig => ({
-    models: { providers: { [params.provider]: providerConfig } },
-  });
+  const fingerprint = (providerConfig: ModelProviderConfig) =>
+    hashRuntimeConfigValue({ models: { providers: { [params.provider]: providerConfig } } });
+  // Shared provider snapshots already match; avoid rehashing the catalog per model.
   return (
-    hashRuntimeConfigValue(toComparableConfig(inputProvider)) ===
-    hashRuntimeConfigValue(toComparableConfig(runtimeProvider))
+    inputProvider === runtimeProvider || fingerprint(inputProvider) === fingerprint(runtimeProvider)
   );
 }
 
