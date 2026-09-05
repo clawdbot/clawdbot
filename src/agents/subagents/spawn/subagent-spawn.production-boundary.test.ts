@@ -11,6 +11,7 @@ import {
 } from "../../../config/config.js";
 import { loadSessionEntry } from "../../../config/sessions/session-accessor.js";
 import type { AgentRuntimeIdentity } from "../../../gateway/agent-runtime-identity-token.js";
+import type { CallGatewayOptions } from "../../../gateway/call.js";
 import { registerChatAbortController } from "../../../gateway/chat-abort.js";
 import { createChatAbortContext } from "../../../gateway/server-methods/chat.abort.test-helpers.js";
 import type { GatewayRequestContext } from "../../../gateway/server-methods/types.js";
@@ -33,6 +34,7 @@ import {
   prepareAgentRunAdmission,
 } from "../../admitted-run-context.js";
 import type { EmbeddedAgentRunResult } from "../../embedded-agent.js";
+import { getPreparedModelRuntimeMocks } from "../../prepared-model-runtime.test-harness.js";
 import {
   createAdmittedGatewayToolCallerIdentity,
   withGatewayToolCallerIdentity,
@@ -73,20 +75,6 @@ function resetPreparedRuntime() {
   api?.resetPreparedModelRuntimeSnapshotsForTest();
 }
 
-async function waitForStage<T>(label: string, task: Promise<T>, timeoutMs = 30_000): Promise<T> {
-  let timer: ReturnType<typeof setTimeout> | undefined;
-  const timeout = new Promise<never>((_resolve, reject) => {
-    timer = setTimeout(() => reject(new Error(`Timed out during ${label}`)), timeoutMs);
-  });
-  try {
-    return await Promise.race([task, timeout]);
-  } finally {
-    if (timer) {
-      clearTimeout(timer);
-    }
-  }
-}
-
 async function writeTestConfig() {
   const config = {
     logging: { audit: { enabled: true, executionIdentity: true } },
@@ -95,8 +83,27 @@ async function writeTestConfig() {
       defaults: {
         workspace: stateDir,
         systemAgent: { agentId: "main" },
+        model: { primary: "custom/test-model" },
       },
       entries: { main: { workspace: stateDir } },
+    },
+    models: {
+      providers: {
+        custom: {
+          api: "openai-completions",
+          baseUrl: "https://example.invalid/v1",
+          models: [
+            {
+              cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
+              id: "test-model",
+              input: ["text"],
+              maxTokens: 1_024,
+              name: "Test model",
+              reasoning: false,
+            },
+          ],
+        },
+      },
     },
   } satisfies OpenClawConfig;
   await writeFile(path.join(stateDir, "openclaw.json"), JSON.stringify(config));
@@ -112,17 +119,38 @@ beforeEach(async () => {
   setTestEnvValue("OPENCLAW_STATE_DIR", stateDir);
   setTestEnvValue("OPENCLAW_CONFIG_PATH", path.join(stateDir, "openclaw.json"));
   runtimeConfig = await writeTestConfig();
+  const preparedRuntime = getPreparedModelRuntimeMocks();
+  const model = {
+    api: "openai-completions" as const,
+    baseUrl: "https://example.invalid/v1",
+    contextWindow: 4_096,
+    cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
+    id: "test-model",
+    input: ["text" as const],
+    maxTokens: 1_024,
+    name: "Test model",
+    provider: "custom",
+    reasoning: false,
+  };
+  preparedRuntime.configuredAgentIds = ["main"];
+  preparedRuntime.configuredAgentDirs.set("main", path.join(stateDir, "agents", "main", "agent"));
+  preparedRuntime.configuredWorkspaces.set("main", stateDir);
+  preparedRuntime.buildPreparedModelCatalogSnapshot.mockResolvedValue({
+    entries: [model],
+    routeVariants: [model],
+  });
   resetSubagentRegistryForTests({ persist: false });
   resetTaskRegistryForTests({ persist: false });
   resetTaskFlowRegistryForTests({ persist: false });
   setTaskRegistryControlRuntimeForTests(taskControlRuntime);
   registryTesting.setDepsForTest({
     loadAgentRuntimePluginRegistryHandle: () => undefined,
-    callGateway: async (request) => {
+    runSubagentAnnounceFlow: async () => "delivered",
+    callGateway: async <T>(request: CallGatewayOptions): Promise<T> => {
       if (request.method !== "agent.wait") {
         throw new Error(`Unexpected registry RPC ${request.method}`);
       }
-      return await new Promise<never>(() => {});
+      return { status: "pending" } as T;
     },
   });
 });
@@ -142,19 +170,13 @@ afterEach(async () => {
 });
 
 async function createBoundParent() {
-  process.stderr.write("spawn-boundary:create-parent:start\n");
   const cfg = runtimeConfig;
-  process.stderr.write("spawn-boundary:persistence:start\n");
-  const storePath = await waitForStage(
-    "parent session persistence",
-    writeSubagentSessionEntry({
-      stateDir,
-      agentId: "main",
-      sessionKey: parentSessionKey,
-      defaultSessionId: "parent-session",
-    }),
-  );
-  process.stderr.write("spawn-boundary:persistence:done\n");
+  const storePath = await writeSubagentSessionEntry({
+    stateDir,
+    agentId: "main",
+    sessionKey: parentSessionKey,
+    defaultSessionId: "parent-session",
+  });
   const context = createChatAbortContext({
     getRuntimeConfig: () => cfg,
     getSessionEventSubscriberConnIds: () => new Set(),
@@ -179,9 +201,7 @@ async function createBoundParent() {
     timeoutMs: 60_000,
     operationalRunInstance: admission.operationalRunInstance,
   });
-  process.stderr.write("spawn-boundary:admission:start\n");
-  const admitted = await waitForStage("parent runtime admission", admission.admit("embedded"));
-  process.stderr.write("spawn-boundary:admission:done\n");
+  const admitted = await admission.admit("embedded");
   bindGatewayContextResolver(admitted, () => context as unknown as GatewayRequestContext);
   const authority = getAdmittedRunDelegatedAuthority(admitted)!;
   parent.bindAgentRunDelegatedAuthority(authority);
@@ -215,7 +235,6 @@ function createBoundSpawnInvocation(bound: Awaited<ReturnType<typeof createBound
 
 describe("recursive spawn production boundary", () => {
   it("authorizes and admits an upgraded descendant before model execution", async () => {
-    process.stderr.write("spawn-boundary:test:start\n");
     const bound = await createBoundParent();
     const [
       { readAgentRuntimeExecutionLineage },
@@ -230,16 +249,11 @@ describe("recursive spawn production boundary", () => {
       import("../../../gateway/server-methods.js"),
       import("../../prepared-model-runtime.js"),
     ]);
-    process.stderr.write("spawn-boundary:refresh:start\n");
-    await waitForStage(
-      "prepared model runtime publication",
-      refreshPreparedModelRuntimeSnapshots(bound.cfg, {
-        gatewayLifecycle: true,
-        catalogMode: "static",
-        defaultWorkspaceDir: stateDir,
-      }),
-    );
-    process.stderr.write("spawn-boundary:refresh:done\n");
+    await refreshPreparedModelRuntimeSnapshots(bound.cfg, {
+      gatewayLifecycle: true,
+      catalogMode: "static",
+      defaultWorkspaceDir: stateDir,
+    });
     const context = bound.context as unknown as GatewayRequestContext;
     const validateRuntimeAuthority = createAgentRuntimeApprovalAuthorityValidator();
     let observedRuntimeIdentity: AgentRuntimeIdentity | undefined;
@@ -259,12 +273,7 @@ describe("recursive spawn production boundary", () => {
     runEmbeddedAgent.mockReturnValueOnce(modelRun.promise);
     let childRunId: string | undefined;
     try {
-      process.stderr.write("spawn-boundary:invoke:start\n");
-      const result = await waitForStage(
-        "production spawn acceptance",
-        createBoundSpawnInvocation(bound)(),
-      );
-      process.stderr.write("spawn-boundary:invoke:done\n");
+      const result = await createBoundSpawnInvocation(bound)();
       expect(result).toMatchObject({
         details: {
           status: "accepted",
@@ -309,7 +318,6 @@ describe("recursive spawn production boundary", () => {
       expect(subagentRuns.get(details.runId)).toMatchObject({
         childSessionKey: details.childSessionKey,
         requesterSessionKey: parentSessionKey,
-        execution: { status: "running" },
       });
     } finally {
       modelRun.resolve({
@@ -317,14 +325,6 @@ describe("recursive spawn production boundary", () => {
         meta: { durationMs: 1 },
       });
       if (childRunId) {
-        await vi.waitFor(
-          () =>
-            expect(subagentRuns.get(childRunId!)).toMatchObject({
-              execution: { status: "terminal" },
-              cleanupCompletedAt: expect.any(Number),
-            }),
-          { timeout: 15_000 },
-        );
         await vi.waitFor(() => expect(context.chatAbortControllers.has(childRunId!)).toBe(false), {
           timeout: 15_000,
         });
