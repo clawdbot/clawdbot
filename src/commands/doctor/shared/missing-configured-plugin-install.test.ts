@@ -1028,7 +1028,18 @@ describe("repairMissingConfiguredPluginInstalls", () => {
       const dependencyDir = path.join(rootDir, "node_modules", "required-runtime");
       const packageName = "dependency-plugin";
       const pluginId = "dependency-plugin";
-      createColdPluginFixture({ rootDir, pluginId, packageName });
+      fs.mkdirSync(rootDir, { recursive: true });
+      createColdPluginFixture({
+        rootDir,
+        pluginId,
+        packageName: scenario === "package-mismatch" ? "another-package" : packageName,
+        packageJson: {
+          dependencies: { "required-runtime": "1.0.0" },
+          ...(scenario === "optional"
+            ? { optionalDependencies: { "required-runtime": "2.0.0" } }
+            : {}),
+        },
+      });
       const cfg: OpenClawConfig = { plugins: { entries: { [pluginId]: { enabled: true } } } };
       const record = {
         source:
@@ -1039,6 +1050,7 @@ describe("repairMissingConfiguredPluginInstalls", () => {
       };
       if (scenario === "different-root") {
         record.installPath = path.join(parent, "recorded-copy");
+        fs.mkdirSync(record.installPath);
         createColdPluginFixture({ rootDir: record.installPath, pluginId, packageName });
       } else if (scenario === "symlink-root") {
         record.installPath = path.join(parent, "linked-copy");
@@ -1069,7 +1081,7 @@ describe("repairMissingConfiguredPluginInstalls", () => {
             id: pluginId,
             origin: scenario === "bundled" ? "bundled" : "global",
             rootDir,
-            source: path.join(rootDir, "index.js"),
+            source: path.join(rootDir, "index.cjs"),
             packageName: scenario === "package-mismatch" ? "another-package" : packageName,
             packageDependencies: { "required-runtime": "1.0.0" },
             packageOptionalDependencies:
