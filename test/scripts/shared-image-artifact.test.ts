@@ -63,6 +63,7 @@ function verifyUploadedArtifact(
     env?: NodeJS.ProcessEnv;
     runAttempt?: string;
     runId?: string;
+    timeoutMs?: number;
   } = {},
 ) {
   return spawnSync(
@@ -80,6 +81,7 @@ function verifyUploadedArtifact(
     {
       encoding: "utf8",
       env: { ...fixture.env, ...params.env },
+      timeout: params.timeoutMs,
     },
   );
 }
@@ -231,6 +233,18 @@ case "$path" in
       printf '%s\\n' "\${FAKE_GH_ARTIFACT_ERROR:-gh: request failed}" >&2
       exit 1
     fi
+    if [[ "$count" -le "\${FAKE_GH_ARTIFACT_HANGS:-0}" ]]; then
+      # Simulate a stalled connection: accepts the request but never responds.
+      if [[ "\${FAKE_GH_ARTIFACT_TERM_RESISTANT:-0}" == "1" ]]; then
+        # exec removes this shell: a plain child sleep would die to the
+        # process-group TERM and end the script via set -e without ever
+        # reaching --kill-after. The replacement survives TERM, so only KILL
+        # escalation (status 137) can stop the request.
+        exec term-resistant-hang
+      fi
+      # Absolute path bypasses the fake sleep shim so the request really hangs.
+      /bin/sleep 30
+    fi
     if [[ -n "\${FAKE_ARTIFACT_JSON:-}" ]]; then
       printf '%s\\n' "$FAKE_ARTIFACT_JSON"
       exit 0
@@ -264,6 +278,18 @@ esac
     `#!/usr/bin/env bash
 set -euo pipefail
 printf '%s\\n' "$*" >> "$FAKE_SLEEP_LOG"
+`,
+  );
+
+  writeExecutable(
+    join(bin, "term-resistant-hang"),
+    `#!/usr/bin/env bash
+# Survive SIGTERM and record its delivery; only SIGKILL escalation stops this
+# process. No set -e: the TERM-killed sleep below must not end the loop.
+trap 'echo term-survived >> "$FAKE_GH_STATE/term-deliveries"' TERM
+while :; do
+  /bin/sleep 1
+done
 `,
   );
 
@@ -371,6 +397,110 @@ describe("shared Docker image artifacts", () => {
       const calls = readFileSync(fixture.ghLog, "utf8");
       expect(calls.match(/actions\/artifacts/g)).toHaveLength(2);
       expect(calls.match(/actions\/runs/g)).toHaveLength(1);
+    } finally {
+      rmSync(fixture.root, { force: true, recursive: true });
+    }
+  });
+
+  it("retries a stalled gh api request past the request deadline and then succeeds", () => {
+    const fixture = createFixture();
+    try {
+      const verified = verifyUploadedArtifact(fixture, {
+        env: {
+          FAKE_GH_ARTIFACT_HANGS: "1",
+          OPENCLAW_GH_API_GET_REQUEST_TIMEOUT: "1s",
+        },
+        timeoutMs: 20_000,
+      });
+      expect(verified.error).toBeUndefined();
+      expect(verified.status, `${verified.stdout}\n${verified.stderr}`).toBe(0);
+      expect(verified.stderr).toContain("request deadline");
+      expect(verified.stderr).toContain(
+        "artifact metadata GitHub API GET failed transiently on attempt 1/3; retrying in 2s",
+      );
+      const calls = readFileSync(fixture.ghLog, "utf8");
+      expect(calls.match(/actions\/artifacts/g)).toHaveLength(2);
+      expect(calls.match(/actions\/runs/g)).toHaveLength(1);
+    } finally {
+      rmSync(fixture.root, { force: true, recursive: true });
+    }
+  });
+
+  it("retries a TERM-resistant stalled gh api request after KILL escalation and then succeeds", () => {
+    const fixture = createFixture();
+    try {
+      const verified = verifyUploadedArtifact(fixture, {
+        env: {
+          FAKE_GH_ARTIFACT_HANGS: "1",
+          FAKE_GH_ARTIFACT_TERM_RESISTANT: "1",
+          OPENCLAW_GH_API_GET_REQUEST_TIMEOUT: "1s",
+          OPENCLAW_GH_API_GET_REQUEST_KILL_GRACE: "1s",
+        },
+        timeoutMs: 30_000,
+      });
+      expect(verified.error).toBeUndefined();
+      expect(verified.status, `${verified.stdout}\n${verified.stderr}`).toBe(0);
+      expect(verified.stderr).toContain("request deadline");
+      expect(verified.stderr).toContain(
+        "artifact metadata GitHub API GET failed transiently on attempt 1/3; retrying in 2s",
+      );
+      // The fake recorded a survived TERM, so the retry could only have come
+      // from --kill-after KILL escalation (status 137): without it, timeout
+      // would wait forever on the surviving process instead of retrying.
+      expect(readFileSync(join(fixture.root, "gh-state", "term-deliveries"), "utf8").trim()).toBe(
+        "term-survived",
+      );
+      const calls = readFileSync(fixture.ghLog, "utf8");
+      expect(calls.match(/actions\/artifacts/g)).toHaveLength(2);
+      expect(calls.match(/actions\/runs/g)).toHaveLength(1);
+    } finally {
+      rmSync(fixture.root, { force: true, recursive: true });
+    }
+  });
+
+  it("fails verify-upload when every gh api request stalls past the deadline", () => {
+    const fixture = createFixture();
+    try {
+      const failed = verifyUploadedArtifact(fixture, {
+        env: {
+          FAKE_GH_ARTIFACT_HANGS: "3",
+          OPENCLAW_GH_API_GET_REQUEST_TIMEOUT: "1s",
+        },
+        timeoutMs: 20_000,
+      });
+      expect(failed.error).toBeUndefined();
+      expect(failed.status).toBe(1);
+      expect(failed.stderr).toContain("request deadline");
+      expect(failed.stderr).toContain("GitHub API GET failed after 3 attempt(s)");
+      const calls = readFileSync(fixture.ghLog, "utf8");
+      expect(calls.match(/actions\/artifacts/g)).toHaveLength(3);
+      expect(calls).not.toContain("actions/runs");
+    } finally {
+      rmSync(fixture.root, { force: true, recursive: true });
+    }
+  });
+
+  it.each([
+    {
+      name: "a zero request timeout",
+      env: { OPENCLAW_GH_API_GET_REQUEST_TIMEOUT: "0" },
+    },
+    {
+      name: "a zero-suffixed request timeout",
+      env: { OPENCLAW_GH_API_GET_REQUEST_TIMEOUT: "0s" },
+    },
+    {
+      name: "a zero kill grace",
+      env: { OPENCLAW_GH_API_GET_REQUEST_KILL_GRACE: "0s" },
+    },
+  ])("rejects $name because GNU timeout would disable the deadline", ({ env }) => {
+    const fixture = createFixture();
+    try {
+      const failed = verifyUploadedArtifact(fixture, { env });
+      expect(failed.error).toBeUndefined();
+      expect(failed.status).toBe(1);
+      expect(failed.stderr).toContain("must be a positive GNU timeout duration");
+      expect(readFileSync(fixture.ghLog, "utf8")).toBe("");
     } finally {
       rmSync(fixture.root, { force: true, recursive: true });
     }
