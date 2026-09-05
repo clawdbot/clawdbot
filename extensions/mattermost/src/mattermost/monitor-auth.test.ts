@@ -14,14 +14,12 @@ describe("mattermost monitor auth", () => {
   let formatMattermostDirectMessageDropLog: typeof import("./monitor-auth.js").formatMattermostDirectMessageDropLog;
   let isMattermostSenderAllowed: typeof import("./monitor-auth.js").isMattermostSenderAllowed;
   let normalizeMattermostAllowEntry: typeof import("./ingress-identity.js").normalizeMattermostAllowEntry;
-  let normalizeMattermostAllowList: typeof import("./monitor-auth.js").normalizeMattermostAllowList;
 
   beforeAll(async () => {
     ({
       authorizeMattermostCommandInvocation,
       formatMattermostDirectMessageDropLog,
       isMattermostSenderAllowed,
-      normalizeMattermostAllowList,
     } = await import("./monitor-auth.js"));
     ({ normalizeMattermostAllowEntry } = await import("./ingress-identity.js"));
   });
@@ -36,10 +34,6 @@ describe("mattermost monitor auth", () => {
     expect(normalizeMattermostAllowEntry("mattermost:Bob")).toBe("bob");
     expect(normalizeMattermostAllowEntry("accessGroup:Ops")).toBe("accessGroup:Ops");
     expect(normalizeMattermostAllowEntry("*")).toBe("*");
-    expect(normalizeMattermostAllowList([" Alice ", "user:alice", "ALICE", "*"])).toEqual([
-      "alice",
-      "*",
-    ]);
   });
 
   it("checks sender allowlists against normalized ids and names", () => {
@@ -175,6 +169,40 @@ describe("mattermost monitor auth", () => {
       channelName: "town-square",
       channelDisplay: "Town Square",
       roomLabel: "#town-square",
+    });
+  });
+
+  it("fails closed instead of issuing a pairing challenge when the pairing store read fails", async () => {
+    isDangerousNameMatchingEnabled.mockReturnValue(false);
+    resolveAllowlistMatchSimple.mockReturnValue({ allowed: false });
+
+    await expect(
+      authorizeMattermostCommandInvocation({
+        account: {
+          config: { dmPolicy: "pairing" },
+        } as never,
+        cfg: {} as never,
+        senderId: "alice",
+        senderName: "Alice",
+        channelId: "dm-1",
+        channelInfo: { type: "D", name: "alice", display_name: "Alice" } as never,
+        readStoreAllowFrom: () => Promise.reject(new Error("store unavailable")),
+        allowTextCommands: true,
+        hasControlCommand: true,
+      }),
+    ).resolves.toEqual({
+      // A read failure must not be indistinguishable from a legitimately empty
+      // store: it must not resolve to "dm-pairing" (which would send an
+      // already-paired sender a misleading pairing challenge).
+      ok: false,
+      denyReason: "unauthorized",
+      commandAuthorized: false,
+      channelInfo: { type: "D", name: "alice", display_name: "Alice" },
+      kind: "direct",
+      chatType: "direct",
+      channelName: "alice",
+      channelDisplay: "Alice",
+      roomLabel: "#alice",
     });
   });
 });

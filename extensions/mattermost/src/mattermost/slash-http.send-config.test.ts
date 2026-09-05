@@ -38,7 +38,6 @@ const mockState = vi.hoisted(() => ({
     display_name: "Town Square",
   })),
   sendMessageMattermost: vi.fn(async () => ({ messageId: "post-1", channelId: "chan-1" })),
-  normalizeMattermostAllowList: vi.fn((value: unknown) => value),
   getMattermostCommand: vi.fn(async () => ({
     id: "cmd-1",
     token: "valid-token",
@@ -124,7 +123,6 @@ vi.mock("./model-picker.js", () => ({
 
 vi.mock("./monitor-auth.js", () => ({
   authorizeMattermostCommandInvocation: mockState.authorizeMattermostCommandInvocation,
-  normalizeMattermostAllowList: mockState.normalizeMattermostAllowList,
 }));
 
 vi.mock("./reply-delivery.js", () => ({
