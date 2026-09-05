@@ -278,6 +278,74 @@ describe("TwilioProvider", () => {
       "https://example.ngrok.app/voice/webhook?callId=call-1&type=status",
     );
     expect(params).not.toHaveProperty("Twiml");
+    expect(params).not.toHaveProperty("Record");
+  });
+
+  it("requests dual-channel recording and normalizes the completion callback", async () => {
+    const provider = createProvider();
+    const apiRequest = createApiRequestMock(async () => ({ sid: "CA123", status: "queued" }));
+    (
+      provider as unknown as {
+        apiRequest: TwilioApiRequest;
+      }
+    ).apiRequest = apiRequest;
+
+    await provider.initiateCall({
+      callId: "call-recorded",
+      from: "+14155550100",
+      to: "+14155550123",
+      webhookUrl: "https://example.ngrok.app/voice/webhook",
+      record: true,
+    });
+
+    const [, params] = expectDefined(apiRequest.mock.calls[0], "Twilio API call");
+    expect(params).toMatchObject({
+      Record: "true",
+      RecordingChannels: "dual",
+      RecordingTrack: "both",
+      RecordingStatusCallback:
+        "https://example.ngrok.app/voice/webhook?callId=call-recorded&type=recording",
+      RecordingStatusCallbackEvent: ["completed", "absent"],
+    });
+
+    const callback = provider.parseWebhookEvent(
+      createContext(
+        "CallSid=CA123&RecordingSid=RE123&RecordingStatus=completed&RecordingUrl=https%3A%2F%2Fapi.twilio.com%2Frecordings%2FRE123&RecordingDuration=42&RecordingChannels=2",
+        { callId: "call-recorded", type: "recording" },
+      ),
+    );
+
+    expect(callback.events).toEqual([
+      expect.objectContaining({
+        type: "call.recording",
+        callId: "call-recorded",
+        providerCallId: "CA123",
+        recordingSid: "RE123",
+        recordingUrl: "https://api.twilio.com/recordings/RE123",
+        status: "completed",
+        durationSeconds: 42,
+        channels: 2,
+      }),
+    ]);
+  });
+
+  it("keeps recorded call status callbacks on the terminal lifecycle path", () => {
+    const provider = createProvider();
+    const callback = provider.parseWebhookEvent(
+      createContext(
+        "CallSid=CA123&CallStatus=completed&RecordingSid=RE123&RecordingUrl=https%3A%2F%2Fapi.twilio.com%2Frecordings%2FRE123&RecordingDuration=42",
+        { callId: "call-recorded", type: "status" },
+      ),
+    );
+
+    expect(callback.events).toEqual([
+      expect.objectContaining({
+        type: "call.ended",
+        callId: "call-recorded",
+        providerCallId: "CA123",
+        reason: "completed",
+      }),
+    ]);
   });
 
   it("returns streaming TwiML for outbound conversation calls before in-progress", () => {

@@ -15,6 +15,7 @@ type VoiceCallStatus = Pick<
   | "answeredAt"
   | "endedAt"
   | "endReason"
+  | "recording"
 >;
 
 export class VoiceCallCommandInputError extends Error {}
@@ -30,6 +31,7 @@ function toVoiceCallStatus(call: CallRecord): VoiceCallStatus {
     ...(call.answeredAt !== undefined ? { answeredAt: call.answeredAt } : {}),
     ...(call.endedAt !== undefined ? { endedAt: call.endedAt } : {}),
     ...(call.endReason !== undefined ? { endReason: call.endReason } : {}),
+    ...(call.recording !== undefined ? { recording: call.recording } : {}),
   };
 }
 
@@ -100,6 +102,7 @@ export function createVoiceCallCommandService(ensureRuntime: () => Promise<Voice
         dtmfSequence?: string;
         requesterSessionKey?: string;
         agentId?: string;
+        record?: boolean;
       },
       missingToMessage = "to required",
     ) {
@@ -111,6 +114,7 @@ export function createVoiceCallCommandService(ensureRuntime: () => Promise<Voice
         dtmfSequence: params.dtmfSequence,
         ...(params.requesterSessionKey ? { requesterSessionKey: params.requesterSessionKey } : {}),
         ...(params.agentId ? { agentId: params.agentId } : {}),
+        ...(params.record ? { record: true } : {}),
       });
       requireSuccess(result, "initiate failed");
       return { callId: result.callId, initiated: true };

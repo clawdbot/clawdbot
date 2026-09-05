@@ -13,7 +13,7 @@ import type { CallRecord, HangupCallInput, NormalizedEvent } from "../types.js";
 import { processEvent } from "./events.js";
 import { speakInitialMessage } from "./outbound.js";
 import { MAX_CALL_REPLAY_KEYS } from "./replay-keys.js";
-import { persistCallRecord } from "./store.js";
+import { findCallInStore, persistCallRecord } from "./store.js";
 
 const logSpy = vi.hoisted(() => {
   const logEntries: string[] = [];
@@ -688,6 +688,51 @@ describe("processEvent (functional)", () => {
         digits: "1",
       }),
     ).toEqual({ kind: "ignored" });
+  });
+
+  it("persists a recording callback that arrives after the call ended", () => {
+    const ctx = createContext();
+    const endedAt = Date.now();
+    persistCallRecord(ctx.storePath, {
+      callId: "call-recorded",
+      providerCallId: "CA-recorded",
+      provider: "twilio",
+      direction: "outbound",
+      state: "completed",
+      from: "+15550000000",
+      to: "+15550000001",
+      startedAt: endedAt - 30_000,
+      endedAt,
+      endReason: "completed",
+      transcript: [],
+      processedEventIds: [],
+      metadata: { recordingRequested: true },
+    });
+
+    const result = processEvent(ctx, {
+      id: "evt-recording-completed",
+      dedupeKey: "recording:RE123:completed",
+      type: "call.recording",
+      callId: "call-recorded",
+      providerCallId: "CA-recorded",
+      timestamp: endedAt + 1_000,
+      recordingSid: "RE123",
+      recordingUrl: "https://api.twilio.com/recordings/RE123",
+      status: "completed",
+      durationSeconds: 28,
+      channels: 2,
+    });
+
+    expect(result).toEqual({ kind: "processed" });
+    expect(findCallInStore(ctx.storePath, "call-recorded")?.recording).toEqual({
+      sid: "RE123",
+      url: "https://api.twilio.com/recordings/RE123",
+      status: "completed",
+      durationSeconds: 28,
+      channels: 2,
+      updatedAt: endedAt + 1_000,
+    });
+    expect(ctx.processedEventIds.has("recording:RE123:completed")).toBe(true);
   });
 
   it("keeps retryable call.error events replayable", () => {

@@ -834,6 +834,14 @@ describe("voice-call plugin", () => {
       state: "completed",
       endReason: "completed",
       endedAt: Date.UTC(2026, 4, 2, 9, 18, 23),
+      recording: {
+        sid: "RE123",
+        url: "https://api.twilio.com/recordings/RE123",
+        status: "completed",
+        durationSeconds: 18,
+        channels: 2,
+        updatedAt: Date.UTC(2026, 4, 2, 9, 18, 25),
+      },
     });
     runtimeStub.manager.getCallFromMemoryOrStore = vi.fn(async () => completed);
     const { tools } = setup({ provider: "mock" });
@@ -843,10 +851,16 @@ describe("voice-call plugin", () => {
     const result = (await tool.execute("id", {
       action: "get_status",
       callId: "call-1",
-    })) as { details: { found?: boolean; call?: { state?: string } } };
+    })) as {
+      details: {
+        found?: boolean;
+        call?: { state?: string; recording?: { sid?: string; status?: string } };
+      };
+    };
     expect(runtimeStub.manager["getCallFromMemoryOrStore"]).toHaveBeenCalledWith("call-1");
     expect(result.details.found).toBe(true);
     expect(result.details.call?.state).toBe("completed");
+    expect(result.details.call?.recording).toMatchObject({ sid: "RE123", status: "completed" });
   });
 
   it("tool get_status reports found:false when the call is neither active nor persisted", async () => {

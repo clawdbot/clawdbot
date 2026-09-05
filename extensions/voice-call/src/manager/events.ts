@@ -177,6 +177,21 @@ export function processEvent(ctx: EventContext, event: NormalizedEvent): Process
     if (!retained && providerCallId && providerCallId !== event.callId) {
       retained = findCallInStore(ctx.storePath, providerCallId);
     }
+    if (retained && event.type === "call.recording") {
+      retained.recording = {
+        sid: event.recordingSid,
+        ...(event.recordingUrl ? { url: event.recordingUrl } : {}),
+        status: event.status,
+        ...(event.durationSeconds !== undefined ? { durationSeconds: event.durationSeconds } : {}),
+        ...(event.channels !== undefined ? { channels: event.channels } : {}),
+        ...(event.errorCode ? { errorCode: event.errorCode } : {}),
+        updatedAt: event.timestamp,
+      };
+      appendCallReplayKey(retained.processedEventIds, dedupeKey);
+      persistCallRecord(ctx.storePath, retained);
+      rememberManagerReplayKey(ctx.processedEventIds, dedupeKey);
+      return { kind: "processed" };
+    }
     // A policy rejection records an attempt, not confirmed carrier termination.
     if (retained && retained.metadata?.rejectionReason !== "inbound-policy") {
       call = ctx.activeCalls.get(retained.callId);
@@ -262,6 +277,7 @@ export function processEvent(ctx: EventContext, event: NormalizedEvent): Process
     answeredAt: activeCall.answeredAt,
     endedAt: activeCall.endedAt,
     endReason: activeCall.endReason,
+    recording: activeCall.recording,
     transcriptLength: activeCall.transcript.length,
     processedEventIds: [...activeCall.processedEventIds],
   };
@@ -397,6 +413,20 @@ export function processEvent(ctx: EventContext, event: NormalizedEvent): Process
       case "call.dtmf":
         break;
 
+      case "call.recording":
+        activeCall.recording = {
+          sid: event.recordingSid,
+          ...(event.recordingUrl ? { url: event.recordingUrl } : {}),
+          status: event.status,
+          ...(event.durationSeconds !== undefined
+            ? { durationSeconds: event.durationSeconds }
+            : {}),
+          ...(event.channels !== undefined ? { channels: event.channels } : {}),
+          ...(event.errorCode ? { errorCode: event.errorCode } : {}),
+          updatedAt: event.timestamp,
+        };
+        break;
+
       case "call.ended":
         finalizeCall({
           ctx,
@@ -439,6 +469,7 @@ export function processEvent(ctx: EventContext, event: NormalizedEvent): Process
       answeredAt: previousCall.answeredAt,
       endedAt: previousCall.endedAt,
       endReason: previousCall.endReason,
+      recording: previousCall.recording,
     });
     activeCall.transcript.length = previousCall.transcriptLength;
     activeCall.processedEventIds.splice(

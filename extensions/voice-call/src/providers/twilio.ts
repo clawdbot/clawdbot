@@ -35,6 +35,10 @@ import { guardedJsonApiRequest } from "./shared/guarded-json-api.js";
 import { resolveTwilioApiBaseUrl, type TwilioRegion } from "./twilio-region.js";
 import type { TwilioProviderOptions } from "./twilio.types.js";
 import { TwilioApiError, twilioApiRequest } from "./twilio/api.js";
+import {
+  buildTwilioRecordingRequestFields,
+  normalizeTwilioRecordingEvent,
+} from "./twilio/recording.js";
 import { decideTwimlResponse, readTwimlRequestView } from "./twilio/twiml-policy.js";
 import { verifyTwilioProviderWebhook } from "./twilio/webhook.js";
 export type { TwilioProviderOptions } from "./twilio.types.js";
@@ -289,11 +293,13 @@ export class TwilioProvider implements VoiceCallProvider {
       const params = new URLSearchParams(ctx.rawBody);
       const callIdFromQuery = normalizeOptionalString(ctx.query?.callId);
       const turnTokenFromQuery = normalizeOptionalString(ctx.query?.turnToken);
+      const callbackType = normalizeOptionalString(ctx.query?.type);
       const dedupeKey = createTwilioRequestDedupeKey(ctx, options?.verifiedRequestKey);
       const event = this.normalizeEvent(params, {
         callIdOverride: callIdFromQuery,
         dedupeKey,
         turnToken: turnTokenFromQuery,
+        callbackType,
       });
 
       if (
@@ -351,6 +357,7 @@ export class TwilioProvider implements VoiceCallProvider {
       callIdOverride?: string;
       dedupeKey?: string;
       turnToken?: string;
+      callbackType?: string;
     },
   ): NormalizedEvent | null {
     const callSid = params.get("CallSid") || "";
@@ -367,6 +374,13 @@ export class TwilioProvider implements VoiceCallProvider {
       from: params.get("From") || undefined,
       to: params.get("To") || undefined,
     };
+
+    if (options?.callbackType === "recording") {
+      const recordingEvent = normalizeTwilioRecordingEvent(params, baseEvent);
+      if (recordingEvent) {
+        return recordingEvent;
+      }
+    }
 
     // Handle speech result (from <Gather>)
     const speechResult = params.get("SpeechResult");
@@ -577,6 +591,11 @@ export class TwilioProvider implements VoiceCallProvider {
       StatusCallback: statusUrl.toString(),
       StatusCallbackEvent: ["initiated", "ringing", "answered", "completed"],
       Timeout: "30",
+      ...buildTwilioRecordingRequestFields({
+        webhookUrl: input.webhookUrl,
+        callId: input.callId,
+        record: input.record,
+      }),
     };
 
     if (input.inlineTwiml) {
