@@ -68,10 +68,18 @@ saved profiles. The picker remembers the most recently used profile. Every
 selection creates a new independent window, so the same Gateway can appear in
 multiple windows with different active sessions and navigation state.
 
-Each saved profile owns one shared Gateway connection, device-auth scope,
-transcript cache, offline outbox, and route leases. Windows for that profile
-reuse those resources while staying independently navigable. Windows for
-different profiles stay connected and run chats simultaneously.
+The dashboard also reopens your selected Gateway after an app restart.
+Choosing **Primary** switches startup back to the primary Gateway. Background
+connection refreshes do not change this selection.
+
+Windows for the same saved profile and browser account share a Gateway
+connection, transcript cache, offline outbox, and route leases while staying
+independently navigable. Renewing that account's session preserves its queued
+messages. Switching accounts closes the old account's native chat windows;
+its cached history and queued messages stay with that account and are available
+when you sign back in. Token/password profiles retain their profile-scoped
+cache and device authentication. Windows for different profiles stay connected
+and run chats simultaneously.
 
 The menu-bar app's configured Gateway remains the owner of Mac node
 capabilities and Talk Mode. Additional Gateway windows are operator-only, so a

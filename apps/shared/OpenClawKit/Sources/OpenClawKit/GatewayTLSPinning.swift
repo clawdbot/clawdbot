@@ -754,19 +754,33 @@ public final class GatewayTLSPinningSession: NSObject, WebSocketSessioning, URLS
 {
     private let params: GatewayTLSParams
     private let allowsRedirects: Bool
+    private let allowsStoredCredentials: Bool
     private let failureLock = NSLock()
     private var lastTLSFailure: GatewayTLSValidationFailure?
     private var pinningState: GatewayTLSPinningState
     private var expectedAuthority: GatewayTLSAuthority?
     private lazy var session: URLSession = {
-        let config = URLSessionConfiguration.default
+        let config = self.allowsStoredCredentials ? URLSessionConfiguration.default : .ephemeral
+        if !self.allowsStoredCredentials {
+            // Explicit per-request authority cannot inherit or persist another
+            // account's cookies, HTTP credentials, or authenticated cache entries.
+            config.httpShouldSetCookies = false
+            config.httpCookieStorage = nil
+            config.urlCredentialStorage = nil
+            config.urlCache = nil
+        }
         config.waitsForConnectivity = true
         return URLSession(configuration: config, delegate: self, delegateQueue: nil)
     }()
 
-    public init(params: GatewayTLSParams, allowsRedirects: Bool = true) {
+    public init(
+        params: GatewayTLSParams,
+        allowsRedirects: Bool = true,
+        allowsStoredCredentials: Bool = true)
+    {
         self.params = params
         self.allowsRedirects = allowsRedirects
+        self.allowsStoredCredentials = allowsStoredCredentials
         self.pinningState = GatewayTLSPinningState(expectedFingerprint: params.expectedFingerprint)
         super.init()
     }
@@ -842,12 +856,18 @@ public final class GatewayTLSPinningSession: NSObject, WebSocketSessioning, URLS
         return WebSocketTaskBox(task: task)
     }
 
-    public func data(for request: URLRequest, maximumBytes: Int) async throws -> (Data, URLResponse) {
+    public func data(
+        for request: URLRequest,
+        maximumBytes: Int,
+        isCurrent: @Sendable () -> Bool = { true }) async throws -> (Data, URLResponse)
+    {
         self.registerExpectedAuthority(url: request.url)
         guard maximumBytes >= 0 else {
             throw GatewayBoundedDataError.responseTooLarge(maximumBytes: maximumBytes)
         }
 
+        try Task.checkCancellation()
+        guard isCurrent() else { throw CancellationError() }
         let (bytes, response) = try await self.session.bytes(for: request)
         let expectedLength = response.expectedContentLength
         guard expectedLength < 0 || expectedLength <= Int64(maximumBytes) else {
@@ -859,19 +879,24 @@ public final class GatewayTLSPinningSession: NSObject, WebSocketSessioning, URLS
         if expectedLength > 0 {
             data.reserveCapacity(Int(expectedLength))
         }
-        do {
-            for try await byte in bytes {
-                guard data.count < maximumBytes else {
-                    bytes.task.cancel()
-                    throw GatewayBoundedDataError.responseTooLarge(maximumBytes: maximumBytes)
+        return try await withTaskCancellationHandler {
+            do {
+                for try await byte in bytes {
+                    guard data.count < maximumBytes else {
+                        bytes.task.cancel()
+                        throw GatewayBoundedDataError.responseTooLarge(maximumBytes: maximumBytes)
+                    }
+                    data.append(byte)
                 }
-                data.append(byte)
+            } catch {
+                bytes.task.cancel()
+                throw error
             }
-        } catch {
+            return (data, response)
+        } onCancel: {
+            // Cancellation after headers must also interrupt a stalled body.
             bytes.task.cancel()
-            throw error
         }
-        return (data, response)
     }
 
     public func finishTasksAndInvalidate() {

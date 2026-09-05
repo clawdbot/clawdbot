@@ -91,6 +91,7 @@ struct DashboardBrowserCookieBoundaryTests {
             origin: gateway.url(),
             issuer: #require(URL(string: "https://issuer.example/")),
             audience: "fixture",
+            subject: "fixture-account",
             token: token,
             expiresAt: Date().addingTimeInterval(300))
         let store = DashboardBrowserSessionStore(dataStore: .nonPersistent())
@@ -148,6 +149,7 @@ struct DashboardBrowserCookieBoundaryTests {
             origin: #require(URL(string: origin)),
             issuer: #require(URL(string: "https://issuer.example/")),
             audience: "fixture",
+            subject: "fixture-account",
             token: "synthetic",
             expiresAt: Date().addingTimeInterval(300))
         let store = DashboardBrowserSessionStore(dataStore: .nonPersistent())

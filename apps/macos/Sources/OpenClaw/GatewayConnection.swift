@@ -204,6 +204,7 @@ actor GatewayConnection: Observable {
     private let clientShutdown: @Sendable (GatewayChannelActor) async -> Void
     private let decoder = JSONDecoder()
     private var browserSessionExpiryTask: Task<Void, Never>?
+    var managedMediaTransfers: [UUID: Task<(Data, URLResponse), Error>] = [:]
 
     private struct ConfiguredConnection {
         let client: GatewayChannelActor
@@ -975,7 +976,10 @@ extension GatewayConnection {
         return await connection.client.authSource()
     }
 
-    func shutdown() async {
+    func shutdown(ifCurrent: @Sendable () -> Bool = { true }) async {
+        // Revalidate at the socket owner, after the actor hop: a superseded
+        // credential save must not disconnect a newer same-account renewal.
+        guard ifCurrent() else { return }
         let client = self.retireConfiguredConnection(disconnection: .disconnected(nil))
         self.shutdownGeneration &+= 1
         if let client {
@@ -1017,7 +1021,8 @@ extension GatewayConnection {
             WebSocketSessionBox(session: GatewayTLSPinningSession(
                 params: GatewayTLSParams(
                     required: true, expectedFingerprint: nil, allowTOFU: false, storeKey: nil),
-                allowsRedirects: false))
+                allowsRedirects: false,
+                allowsStoredCredentials: false))
         }
         let client = GatewayChannelActor(
             url: config.url,
@@ -1414,6 +1419,12 @@ extension GatewayConnection {
             }
             return lease
         }
+        // HTTP media belongs to this socket lease just like its ticket RPC.
+        // Cancel before notifying observers, including requests still waiting for headers.
+        for transfer in self.managedMediaTransfers.values {
+            transfer.cancel()
+        }
+        self.managedMediaTransfers.removeAll()
         guard let lease else { return }
         // The terminal outcome survives its socket, but a replacement owner
         // invalidates it before it can degrade the newly selected Gateway.
@@ -1691,18 +1702,5 @@ extension GatewayConnection {
         }
         let data = try await self.request(request)
         return try self.decoder.decode(OpenClawChatSendResponse.self, from: data)
-    }
-
-    // MARK: - VoiceWake
-
-    func voiceWakeSetTriggers(_ triggers: [String]) async {
-        do {
-            try await self.requestVoid(
-                method: .voicewakeSet,
-                params: ["triggers": AnyCodable(triggers)],
-                timeoutMs: 10000)
-        } catch {
-            // Best-effort only.
-        }
     }
 }

@@ -80,11 +80,25 @@ extension GatewayConnection {
             storeKey: nil)
         let session = GatewayTLSPinningSession(
             params: tls,
-            allowsRedirects: lease.route.browserSession == nil)
+            allowsRedirects: lease.route.browserSession == nil,
+            allowsStoredCredentials: lease.route.browserSession == nil)
         defer { session.finishTasksAndInvalidate() }
-        let (data, urlResponse) = try await session.data(
-            for: urlRequest,
-            maximumBytes: maximumBytes)
+        guard await self.isCurrentServerLease(lease) else {
+            throw OpenClawChatTransportSendError.notDispatched
+        }
+        let transferID = UUID()
+        let transfer = Task { [urlRequest] in
+            try await session.data(for: urlRequest, maximumBytes: maximumBytes) { [weak self] in
+                self?.serverLeaseMatchesCurrentState(lease) == true
+            }
+        }
+        self.managedMediaTransfers[transferID] = transfer
+        defer { self.managedMediaTransfers[transferID] = nil }
+        let (data, urlResponse) = try await withTaskCancellationHandler {
+            try await transfer.value
+        } onCancel: {
+            transfer.cancel()
+        }
         guard await self.isCurrentServerLease(lease) else {
             throw OpenClawChatTransportSendError.notDispatched
         }

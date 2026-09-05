@@ -4,6 +4,19 @@ import OpenClawKit
 import OpenClawProtocol
 
 extension GatewayConnection {
+    // MARK: - VoiceWake
+
+    func voiceWakeSetTriggers(_ triggers: [String]) async {
+        do {
+            try await self.requestVoid(
+                method: .voicewakeSet,
+                params: ["triggers": AnyCodable(triggers)],
+                timeoutMs: 10000)
+        } catch {
+            // Best-effort only.
+        }
+    }
+
     func talkMode(enabled: Bool, phase: String? = nil) async {
         var params: [String: AnyCodable] = ["enabled": AnyCodable(enabled)]
         if let phase {

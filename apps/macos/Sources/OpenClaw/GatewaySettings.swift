@@ -188,12 +188,9 @@ struct GatewaySettings: View {
         defer { self.isRemoving = false }
         do {
             let dashboards = DashboardManager.shared
-            try await MacGatewayProfileStore.shared.remove(profileID: profile.id)
-            try await dashboards.closeGatewayWindows(profileID: profile.id)
-            // Reflect the durable removal before connection shutdown suspends;
-            // a same-endpoint re-add during shutdown must remain visible.
-            self.profiles.removeAll { $0.id == profile.id }
-            await WebChatManager.shared.closeGatewayWindows(profileID: profile.id)
+            let removalID = try await MacGatewayProfileStore.shared.remove(profileID: profile.id)
+            try await dashboards.finishGatewayRemoval(profileID: profile.id, removalID: removalID)
+            await self.refresh()
         } catch {
             self.errorMessage = error.localizedDescription
         }

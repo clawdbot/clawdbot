@@ -32,6 +32,7 @@ struct DashboardBrowserSessionTests {
             origin: #require(URL(string: "https://gateway.example/")),
             issuer: #require(URL(string: "https://identity.cloudflareaccess.com/")),
             audience: "dashboard-fixture",
+            subject: "fixture-account",
             token: token,
             expiresAt: Date().addingTimeInterval(300))
     }
@@ -260,7 +261,10 @@ struct DashboardBrowserSessionTests {
         let server = try await DashboardHTTPFixture.start()
         defer { server.stop() }
         let lookup = DashboardWindowOwnershipPresentationGate(released: true)
+        let connection = GatewayConnection(testEndpointProvider: { throw CancellationError() })
         let manager = DashboardManager._testMake(
+            connectionProvider: { _ in connection },
+            observeGatewayChanges: true,
             profileEndpointProvider: { _ in
                 await lookup.waitForRelease()
                 return .init(config: (url: server.websocketURL(), token: "saved", password: nil), routeAuthority: nil)
@@ -280,11 +284,21 @@ struct DashboardBrowserSessionTests {
         await lookup.hold()
         let pending = Task { @MainActor in await manager._testOpenWindow(for: .profile("removed")) }
         await lookup.waitUntilRequested()
-        try await manager.closeGatewayWindows(profileID: "removed")
+        let removalID = self.postRemoval(profileID: "removed")
+        try await manager.finishGatewayRemoval(profileID: "removed", removalID: removalID)
         await lookup.release()
         await pending.value
         #expect(manager._testAuxiliaryWindows().isEmpty)
         #expect(windows.allSatisfy { !$0.isWindowOpen && !$0.canDeliverNativeCommands })
+        NotificationCenter.default.post(
+            name: MacGatewayProfileStore.didChangeNotification,
+            object: nil,
+            userInfo: [MacGatewayProfileStore.changedProfileIDKey: "removed"])
+        await manager._testOpenWindow(for: .profile("removed"))
+        let successor = try #require(manager._testAuxiliaryWindows().first?.controller)
+        try await manager.finishGatewayRemoval(profileID: "removed", removalID: removalID)
+        #expect(successor.isWindowOpen)
+        await connection.shutdown()
     }
 
     @Test func `removal clears a persisted browser session before any window opens in this process`() async throws {
@@ -310,12 +324,31 @@ struct DashboardBrowserSessionTests {
         let store = WKWebsiteDataStore(forIdentifier: identifier)
         let session = try self.session("previous-process")
         try await store.httpCookieStore.setCookie(session.cookie())
-        let manager = DashboardManager._testMake(websiteDataStore: .default())
+        let connection = GatewayConnection(testEndpointProvider: { throw CancellationError() })
+        let manager = DashboardManager._testMake(
+            websiteDataStore: .default(),
+            connectionProvider: { _ in connection },
+            observeGatewayChanges: true)
         defer { manager.close() }
-        try await manager.closeGatewayWindows(profileID: profileID)
+        let removalID = self.postRemoval(profileID: profileID)
+        try await manager.finishGatewayRemoval(profileID: profileID, removalID: removalID)
         #expect(await store.httpCookieStore.allCookies().isEmpty)
         #expect(manager._testController() == nil)
         #expect(manager._testAuxiliaryWindows().isEmpty)
+        await connection.shutdown()
+    }
+
+    private func postRemoval(profileID: String) -> UUID {
+        let removalID = UUID()
+        NotificationCenter.default.post(
+            name: MacGatewayProfileStore.didChangeNotification,
+            object: nil,
+            userInfo: [
+                MacGatewayProfileStore.changedProfileIDKey: profileID,
+                MacGatewayProfileStore.removedProfileKey: true,
+                MacGatewayProfileStore.changeIDKey: removalID,
+            ])
+        return removalID
     }
 
     @Test func `expired browser sign-in is terminal and explains how to reconnect`() async throws {

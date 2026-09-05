@@ -179,6 +179,7 @@ enum CloudflareAccessLogin {
             origin: origin,
             issuer: application.issuer,
             audience: application.audience,
+            subject: claims.sub,
             token: token,
             expiresAt: Date(timeIntervalSince1970: claims.exp))
         try session.validate(for: origin)

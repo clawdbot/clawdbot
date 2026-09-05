@@ -25,7 +25,8 @@ Mac node capabilities and Talk Mode.
    Gateway and complete any sign-in prompts there.
 4. Return to OpenClaw. The saved Gateway's dashboard opens; check the account
    name in its sidebar footer. You can open more windows from
-   **File → New Gateway Window…**.
+   **File → New Gateway Window…**. The app reopens your selected Gateway after
+   restart, including when a separate primary Gateway supplies Mac capabilities.
 
 Cloudflare Access issues the personal application session through its
 [browser-to-client sign-in flow](https://developers.cloudflare.com/cloudflare-one/tutorials/cli/).
@@ -45,7 +46,13 @@ Gateway. The Gateway's existing [automatic device approval policy](/gateway/trus
 determines whether verified proxy identities can enroll automatically.
 
 When the browser session expires, choose **Reconnect** for that saved Gateway,
-then **Connect** to sign in again. To sign out of that Gateway in the Mac app,
+then **Connect** to sign in again. Renewing the same account keeps its native
+chat cache and queued messages. Signing in with a different account closes the
+previous account's native chat windows and uses that account's own cache and
+queue. Previously queued messages remain with their original account; sign
+back into that account to access them.
+
+To sign out of that Gateway in the Mac app,
 remove it from **Settings → Gateways** and confirm **Remove**. This removes its
 saved credentials and dashboard browser data. Use your identity provider's
 session controls to revoke account access more broadly.

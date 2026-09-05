@@ -161,3 +161,25 @@ extension DashboardManager {
         return auth.hasCredential ? (mode, url, auth, endpoint.tls?.params) : nil
     }
 }
+
+extension DashboardManager {
+    func navigateBack() {
+        guard let controller = frontmostDashboard()?.controller,
+              controller.window?.isKeyWindow == true else { return }
+        controller.navigateBack()
+    }
+
+    func navigateForward() {
+        guard let controller = frontmostDashboard()?.controller,
+              controller.window?.isKeyWindow == true else { return }
+        controller.navigateForward()
+    }
+
+    func switchFrontmostDashboard(to target: DashboardGatewayTarget) {
+        self.performSwitchFrontmostDashboard(to: target)
+    }
+
+    func confirmSetPrimary(_ target: DashboardGatewayTarget) {
+        self.presentSetPrimaryConfirmation(target, source: nil)
+    }
+}

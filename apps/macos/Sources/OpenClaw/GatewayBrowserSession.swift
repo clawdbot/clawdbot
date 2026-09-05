@@ -36,14 +36,16 @@ struct GatewayBrowserSession: Codable, Equatable, Sendable {
     let origin: URL
     let issuer: URL
     let audience: String
+    let subject: String
     let expiresAt: Date
     private let token: String
 
-    init(origin: URL, issuer: URL, audience: String, token: String, expiresAt: Date) throws {
+    init(origin: URL, issuer: URL, audience: String, subject: String, token: String, expiresAt: Date) throws {
         self.provider = .cloudflareAccess
         self.origin = try Self.httpsOrigin(origin)
         self.issuer = try Self.httpsOrigin(issuer)
         guard !audience.isEmpty, audience.utf8.count <= 4096,
+              !subject.isEmpty, subject.utf8.count <= 512,
               !token.isEmpty, token.utf8.count <= 32768,
               token.utf8.allSatisfy({
                   (48...57).contains($0) || (65...90).contains($0) || (97...122).contains($0) ||
@@ -53,12 +55,13 @@ struct GatewayBrowserSession: Codable, Equatable, Sendable {
               expiresAt.timeIntervalSince1970 > 0
         else { throw GatewayBrowserSessionError.invalidSession }
         self.audience = audience
+        self.subject = subject
         self.token = token
         self.expiresAt = expiresAt
     }
 
     private enum CodingKeys: String, CodingKey {
-        case provider, origin, issuer, audience, expiresAt, token
+        case provider, origin, issuer, audience, subject, expiresAt, token
     }
 
     init(from decoder: Decoder) throws {
@@ -68,6 +71,7 @@ struct GatewayBrowserSession: Codable, Equatable, Sendable {
             origin: values.decode(URL.self, forKey: .origin),
             issuer: values.decode(URL.self, forKey: .issuer),
             audience: values.decode(String.self, forKey: .audience),
+            subject: values.decode(String.self, forKey: .subject),
             token: values.decode(String.self, forKey: .token),
             expiresAt: values.decode(Date.self, forKey: .expiresAt))
     }
@@ -90,6 +94,15 @@ struct GatewayBrowserSession: Codable, Equatable, Sendable {
 
     var credentialFingerprint: String {
         SHA256.hash(data: Data(self.token.utf8)).map { String(format: "%02x", $0) }.joined()
+    }
+
+    func chatStoreID(profileID: String) -> String {
+        // Issuer-verified identity survives token renewal; endpoint-only keys
+        // would let another account read cached history or replay queued work.
+        let identity = [self.provider.rawValue, self.issuer.absoluteString, self.audience, self.subject]
+            .map { "\($0.utf8.count):\($0)" }.joined()
+        let digest = SHA256.hash(data: Data(identity.utf8)).map { String(format: "%02x", $0) }.joined()
+        return "\(profileID):account:\(digest)"
     }
 
     func cookie(now: Date = Date()) throws -> HTTPCookie {

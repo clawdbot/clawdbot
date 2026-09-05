@@ -1,11 +1,13 @@
 import ConcurrencyExtras
 import Foundation
+import OpenClawChatUI
 import Testing
 @testable import OpenClaw
 @testable import OpenClawKit
 
 func gatewayBrowserSessionFixture(
     origin: String = "https://gateway.example.test/",
+    subject: String = "fixture-account",
     token: String = "synthetic-browser-session",
     expiresAt: Date = Date().addingTimeInterval(3600)) throws -> GatewayBrowserSession
 {
@@ -13,6 +15,7 @@ func gatewayBrowserSessionFixture(
         origin: #require(URL(string: origin)),
         issuer: #require(URL(string: "https://issuer.example.test/")),
         audience: "synthetic-application",
+        subject: subject,
         token: token,
         expiresAt: expiresAt)
 }
@@ -68,7 +71,12 @@ struct GatewayBrowserSessionTests {
 
     @Test func `old Keychain registry remains readable and empty forms preserve browser sign-in`() throws {
         let old = Data(
-            #"{"version":1,"profiles":[{"profile":{"id":"saved","name":"Saved","url":"wss://gateway.example.test/"},"credentials":{"token":"owner"}}]}"#
+            #"""
+            {"version":1,"profiles":[{
+              "profile":{"id":"saved","name":"Saved","url":"wss://gateway.example.test/"},
+              "credentials":{"token":"owner"}
+            }]}
+            """#
                 .utf8)
         let registry = try JSONDecoder().decode(MacGatewayProfileStore.Registry.self, from: old)
         #expect(registry.profiles.first?.credentials.browserSession == nil)
@@ -142,15 +150,14 @@ struct GatewayConnectionBrowserSessionTests {
             #expect(await connection.isCurrentServerLease(oldLease) == false)
             _ = try await connection.request(method: "health", params: nil)
             let successor = try await AsyncTimeout.withTimeout(
-                seconds: 2, onTimeout: { URLError(.timedOut) })
-            {
-                for await delivery in subscription {
-                    if case .snapshot = delivery.push, delivery.isCurrent {
-                        return delivery.serverLease
+                seconds: 2, onTimeout: { URLError(.timedOut) }, operation: {
+                    for await delivery in subscription {
+                        if case .snapshot = delivery.push, delivery.isCurrent {
+                            return delivery.serverLease
+                        }
                     }
-                }
-                throw CancellationError()
-            }
+                    throw CancellationError()
+                })
             #expect(successor != oldLease)
             #expect(successor.route.browserSession == replacement)
             #expect(recorder.requests.value.map { $0.value(forHTTPHeaderField: "CF-Access-Token") } == [
@@ -199,13 +206,12 @@ struct GatewayConnectionBrowserSessionTests {
             #expect(await connection.isCurrentServerLease(lease))
             let sentBeforeExpiry = recorder.sentMessageCount.value
             let retirement = try await AsyncTimeout.withTimeout(
-                seconds: 20, onTimeout: { URLError(.timedOut) })
-            {
-                for await delivery in subscription {
-                    if case .disconnected = delivery.event { return delivery }
-                }
-                throw CancellationError()
-            }
+                seconds: 20, onTimeout: { URLError(.timedOut) }, operation: {
+                    for await delivery in subscription {
+                        if case .disconnected = delivery.event { return delivery }
+                    }
+                    throw CancellationError()
+                })
             #expect(retirement.serverLease == lease)
             guard case let .disconnected(reason) = retirement.event else {
                 throw CancellationError()
@@ -229,12 +235,201 @@ struct GatewayConnectionBrowserSessionTests {
 @Suite(.serialized)
 struct MacGatewayBrowserSessionStoreTests {
     @Test @MainActor
+    func `deletion cannot admit an intervening owner while the retired socket shuts down`() async throws {
+        try await self.withIsolatedStore { store in
+            let host = "deletion-\(UUID().uuidString.lowercased()).example.test"
+            let url = try #require(URL(string: "wss://\(host)/"))
+            let session = try gatewayBrowserSessionFixture(origin: "https://\(host)/")
+            let attempt = try await store.beginBrowserSignIn(url: url)
+            let profile = try await store.saveBrowserSession(name: "Deleted", session: session, attempt: attempt)
+            let owner = await MacGatewayConnectionFleet.shared.connection(profileID: profile.id)
+            let entered = AsyncStream.makeStream(of: Void.self)
+            let release = DispatchSemaphore(value: 0)
+            defer { release.signal() }
+            let held = Task.detached { await owner.holdForDeletionAdmission(
+                entered: entered.continuation,
+                release: release) }
+            var enteredIterator = entered.stream.makeAsyncIterator()
+            await enteredIterator.next()
+            let removing = AsyncStream.makeStream(of: Void.self)
+            let observation = NotificationCenter.default.addObserver(
+                forName: MacGatewayProfileStore.willChangePrincipalNotification, object: nil, queue: .main)
+            { notification in
+                if notification.userInfo?[MacGatewayProfileStore.changedProfileIDKey] as? String == profile.id {
+                    removing.continuation.yield()
+                }
+            }
+            defer { NotificationCenter.default.removeObserver(observation) }
+            let deletion = Task { try await store.remove(profileID: profile.id) }
+            var removalIterator = removing.stream.makeAsyncIterator()
+            await removalIterator.next()
+            let lookupStarted = AsyncStream.makeStream(of: Void.self)
+            let identity = Task {
+                try await store.identityDuringDeletion(profileID: profile.id, started: lookupStarted.continuation)
+            }
+            var lookupIterator = lookupStarted.stream.makeAsyncIterator()
+            await lookupIterator.next()
+            #expect(try await store.profiles().contains { $0.id == profile.id })
+            let binding = Task { try await MacGatewayConnectionFleet.shared.binding(profileID: profile.id) }
+            let cancelled = Task { try await store.chatStoreID(profileID: profile.id) }
+            cancelled.cancel()
+            await #expect(throws: CancellationError.self) { try await cancelled.value }
+            release.signal()
+            #expect(await held.value)
+            try await deletion.value
+            await #expect(throws: MacGatewayProfileError.profileNotFound) { try await identity.value }
+            await #expect(throws: MacGatewayProfileError.profileNotFound) { try await binding.value }
+            let readd = try await store.beginBrowserSignIn(url: url)
+            _ = try await store.saveBrowserSession(name: "Re-added", session: session, attempt: readd)
+            await #expect(throws: GatewayBrowserSessionError.superseded) {
+                try await owner.request(method: "health", params: nil)
+            }
+            try await store.remove(profileID: profile.id)
+        }
+    }
+
+    @Test @MainActor
+    func `superseded credential retirement cannot remove a successor owner or disconnect its socket`() async throws {
+        try await self.withIsolatedStore { store in
+            let host = "late-retirement-\(UUID().uuidString.lowercased()).example.test"
+            let url = try #require(URL(string: "wss://\(host)/"))
+            let session = try gatewayBrowserSessionFixture(origin: "https://\(host)/")
+            let stale = try await store.beginBrowserSignIn(url: url)
+            let current = try await store.beginBrowserSignIn(url: url)
+            let profile = try await store.saveBrowserSession(name: "Successor", session: session, attempt: current)
+            let owner = await MacGatewayConnectionFleet.shared.connection(profileID: profile.id)
+            let recorder = BrowserSessionWebSocketRecorder()
+            let connection = GatewayConnection(
+                testEndpointProvider: { try await store.endpoint(profileID: profile.id) },
+                sessionBox: WebSocketSessionBox(session: recorder))
+            let result: Result<Void, Error>
+            do {
+                _ = try await connection.request(method: "health", params: nil)
+                let lease = try #require(await connection.captureServerLease())
+                // Run work admitted by the old attempt only after its successor
+                // owns the profile; actor enqueue order cannot grant it authority.
+                _ = await MacGatewayConnectionFleet.shared.remove(
+                    profileID: profile.id, ifCurrent: { stale.isCurrent })
+                await connection.shutdown(ifCurrent: { stale.isCurrent })
+                #expect(await MacGatewayConnectionFleet.shared.connection(profileID: profile.id) === owner)
+                #expect(await connection.isCurrentServerLease(lease))
+                _ = try await connection.request(method: "health", params: nil)
+                #expect(recorder.requests.value.count == 1)
+                result = .success(())
+            } catch {
+                result = .failure(error)
+            }
+            await connection.shutdown()
+            try await store.remove(profileID: profile.id)
+            try result.get()
+        }
+    }
+
+    @Test @MainActor
+    func `account replacement isolates queued attachments and cannot revive retained transports`() async throws {
+        try await self.withIsolatedStore { store in
+            let host = "accounts-\(UUID().uuidString.lowercased()).example.test"
+            let url = try #require(URL(string: "wss://\(host)/gateway/"))
+            let accountA = try gatewayBrowserSessionFixture(origin: "https://\(host)/", subject: "account-a")
+            let accountB = try gatewayBrowserSessionFixture(origin: "https://\(host)/", subject: "account-b")
+            let attemptA = try await store.beginBrowserSignIn(url: url)
+            let profile = try await store.saveBrowserSession(name: "Accounts", session: accountA, attempt: attemptA)
+            let directory = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
+            defer { try? FileManager.default.removeItem(at: directory) }
+            let result: Result<Void, Error>
+            do {
+                let first = try await MacGatewayConnectionFleet.shared.binding(profileID: profile.id)
+                let firstStoreID = first.chatStoreID
+                let outboxA = try #require(MacChatTranscriptCache.store(
+                    databaseDirectoryURL: directory, gatewayID: firstStoreID))
+                let attachment = OpenClawChatOutboxAttachment(
+                    type: "file", mimeType: "text/plain", fileName: "account-a.txt", data: Data("private-a".utf8))
+                #expect(await outboxA.enqueueCommand(OpenClawChatOutboxCommand(
+                    id: UUID().uuidString,
+                    sessionKey: "main",
+                    text: "Queued by account A",
+                    attachments: [attachment],
+                    thinking: "off",
+                    createdAt: Date().timeIntervalSince1970,
+                    status: .queued,
+                    retryCount: 0,
+                    lastError: nil)))
+
+                let renewal = try gatewayBrowserSessionFixture(
+                    origin: "https://\(host)/", subject: "account-a", token: "renewed-token")
+                let renewalAttempt = try await store.beginBrowserSignIn(url: url)
+                _ = try await store.saveBrowserSession(name: "Accounts", session: renewal, attempt: renewalAttempt)
+                let renewed = try await MacGatewayConnectionFleet.shared.binding(profileID: profile.id)
+                #expect(renewed.chatStoreID == firstStoreID)
+                #expect(renewed.connection === first.connection)
+
+                let attemptB = try await store.beginBrowserSignIn(url: url)
+                _ = try await store.saveBrowserSession(name: "Accounts", session: accountB, attempt: attemptB)
+                let second = try await MacGatewayConnectionFleet.shared.binding(profileID: profile.id)
+                #expect(second.connection !== first.connection)
+                let secondStoreID = second.chatStoreID
+                #expect(secondStoreID != firstStoreID)
+                let outboxB = try #require(MacChatTranscriptCache.store(
+                    databaseDirectoryURL: directory, gatewayID: secondStoreID))
+                #expect(await outboxB.loadCommands().isEmpty)
+                #expect(await outboxB.claimNextCommand() == nil)
+                await #expect(throws: GatewayBrowserSessionError.superseded) {
+                    try await first.connection.request(method: "chat.send", params: nil)
+                }
+
+                let returnAttempt = try await store.beginBrowserSignIn(url: url)
+                _ = try await store.saveBrowserSession(name: "Accounts", session: renewal, attempt: returnAttempt)
+                let returned = try await MacGatewayConnectionFleet.shared.binding(profileID: profile.id)
+                #expect(returned.chatStoreID == firstStoreID)
+                #expect(returned.connection !== first.connection)
+                let restored = try #require(MacChatTranscriptCache.store(
+                    databaseDirectoryURL: directory, gatewayID: returned.chatStoreID))
+                let commands = await restored.loadCommands()
+                #expect(commands.map(\.text) == ["Queued by account A"])
+                #expect(commands.first?.attachments == [attachment])
+                await #expect(throws: GatewayBrowserSessionError.superseded) {
+                    try await first.connection.request(method: "chat.send", params: nil)
+                }
+                await #expect(throws: GatewayBrowserSessionError.superseded) {
+                    try await second.connection.request(method: "chat.send", params: nil)
+                }
+                let manualAttempt = try await store.beginBrowserSignIn(url: url)
+                _ = try await store.saveConnection(
+                    name: "Accounts", token: "explicit-owner", password: nil, attempt: manualAttempt)
+                let manual = try await MacGatewayConnectionFleet.shared.binding(profileID: profile.id)
+                #expect(manual.chatStoreID == profile.id)
+                await #expect(throws: GatewayBrowserSessionError.superseded) {
+                    try await returned.connection.request(method: "chat.send", params: nil)
+                }
+                try await store.remove(profileID: profile.id)
+                let readd = try await store.beginBrowserSignIn(url: url)
+                _ = try await store.saveBrowserSession(name: "Accounts", session: renewal, attempt: readd)
+                await #expect(throws: GatewayBrowserSessionError.superseded) {
+                    try await manual.connection.request(method: "chat.send", params: nil)
+                }
+                result = .success(())
+            } catch {
+                result = .failure(error)
+            }
+            if try await store.profiles().contains(where: { $0.id == profile.id }) {
+                try await store.remove(profileID: profile.id)
+            }
+            try result.get()
+        }
+    }
+
+    @Test @MainActor
     func `browser sign-in atomically replaces Owner and survives reopening the profile store`() async throws {
         try await self.withIsolatedStore { store in
             let host = "signin-\(UUID().uuidString.lowercased()).example.test"
             let url = try #require(URL(string: "wss://\(host)/gateway/"))
             let session = try gatewayBrowserSessionFixture(origin: "https://\(host)/")
-            let profile = try await store.upsert(name: "Before", url: url, token: "owner", password: nil)
+            let initial = try await store.beginBrowserSignIn(url: url)
+            let profile = try await store.saveConnection(
+                name: "Before",
+                token: "owner",
+                password: nil,
+                attempt: initial)
             let observedConnection = await MacGatewayConnectionFleet.shared.connection(profileID: profile.id)
             let identity = try #require(DeviceIdentityStore.loadOrCreatePersisted())
             #expect(DeviceAuthStore.storeTokenPersisted(
@@ -244,7 +439,11 @@ struct MacGatewayBrowserSessionStoreTests {
                 let attempt = try await store.beginBrowserSignIn(url: url)
                 let saved = try await store.saveBrowserSession(name: "Personal", session: session, attempt: attempt)
                 #expect(saved.id == profile.id)
-                #expect(await MacGatewayConnectionFleet.shared.connection(profileID: profile.id) === observedConnection)
+                let browserConnection = await MacGatewayConnectionFleet.shared.connection(profileID: profile.id)
+                #expect(browserConnection !== observedConnection)
+                await #expect(throws: GatewayBrowserSessionError.superseded) {
+                    try await observedConnection.request(method: "health", params: nil)
+                }
                 let reopened = try await MacGatewayProfileStore().endpoint(profileID: profile.id)
                 #expect(reopened.config.url.absoluteString == "wss://\(host):443/gateway/")
                 #expect(reopened.config.token == nil)
@@ -261,15 +460,17 @@ struct MacGatewayBrowserSessionStoreTests {
                 let successor = try gatewayBrowserSessionFixture(
                     origin: "https://\(host)/", token: "successor-browser-session")
                 _ = try await store.saveBrowserSession(name: "Personal", session: successor, attempt: reconnect)
-                #expect(await MacGatewayConnectionFleet.shared.connection(profileID: profile.id) === observedConnection)
+                #expect(await MacGatewayConnectionFleet.shared.connection(profileID: profile.id) === browserConnection)
                 #expect(try await store.endpoint(profileID: profile.id).browserSession == successor)
                 result = .success(())
             } catch {
                 result = .failure(error)
             }
+            let removedConnection = await MacGatewayConnectionFleet.shared.connection(profileID: profile.id)
             try await store.remove(profileID: profile.id)
-            let removedConnection = await MacGatewayConnectionFleet.shared.remove(profileID: profile.id)
-            #expect(removedConnection === observedConnection)
+            await #expect(throws: GatewayBrowserSessionError.superseded) {
+                try await removedConnection.request(method: "health", params: nil)
+            }
             try result.get()
         }
     }
@@ -281,7 +482,12 @@ struct MacGatewayBrowserSessionStoreTests {
             let host = "signin-\(UUID().uuidString.lowercased()).example.test"
             let url = try #require(URL(string: "wss://\(host)/gateway/"))
             let session = try gatewayBrowserSessionFixture(origin: "https://\(host)/")
-            let profile = try await store.upsert(name: "Before", url: url, token: "owner", password: nil)
+            let initial = try await store.beginBrowserSignIn(url: url)
+            let profile = try await store.saveConnection(
+                name: "Before",
+                token: "owner",
+                password: nil,
+                attempt: initial)
             let attempt = try await store.beginBrowserSignIn(url: url)
             let result: Result<Void, Error>
             do {
@@ -291,7 +497,12 @@ struct MacGatewayBrowserSessionStoreTests {
                     let next = try await store.beginBrowserSignIn(url: url)
                     await store.cancelBrowserSignIn(next)
                 case "edited":
-                    _ = try await store.upsert(name: "Edited", url: url, token: "replacement", password: nil)
+                    let edit = try await store.beginBrowserSignIn(url: url)
+                    _ = try await store.saveConnection(
+                        name: "Edited",
+                        token: "replacement",
+                        password: nil,
+                        attempt: edit)
                 default: try await store.remove(profileID: profile.id)
                 }
                 await #expect(throws: GatewayBrowserSessionError.superseded) {
@@ -348,8 +559,28 @@ struct MacGatewayBrowserSessionStoreTests {
             "OPENCLAW_STATE_DIR": directory.path,
         ]) {
             try await DeviceIdentityStore.withStateDirectory(directory) {
-                try await body(MacGatewayProfileStore())
+                try await body(MacGatewayProfileStore.shared)
             }
         }
+    }
+}
+
+extension GatewayConnection {
+    fileprivate func holdForDeletionAdmission(
+        entered: AsyncStream<Void>.Continuation,
+        release: DispatchSemaphore) -> Bool
+    {
+        entered.yield()
+        return release.wait(timeout: .now() + 10) == .success
+    }
+}
+
+extension MacGatewayProfileStore {
+    fileprivate func identityDuringDeletion(
+        profileID: String,
+        started: AsyncStream<Void>.Continuation) async throws -> String
+    {
+        started.yield()
+        return try await self.chatStoreID(profileID: profileID)
     }
 }
