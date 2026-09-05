@@ -1281,7 +1281,7 @@ openclaw-tooltip.chat-tasks-status__preview {
 
 .chat-subagent-activity__row {
   display: grid;
-  grid-template-columns: 18px auto minmax(0, 1fr) auto;
+  grid-template-columns: 18px auto minmax(0, 1fr);
   align-items: center;
   gap: 7px;
   min-height: 22px;
