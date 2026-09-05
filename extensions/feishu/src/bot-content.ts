@@ -290,11 +290,7 @@ export function checkBotMentioned(event: FeishuMessageLike, botOpenId?: string):
   return false;
 }
 
-export function normalizeMentions(
-  text: string,
-  mentions?: FeishuMention[],
-  botStripId?: string,
-): string {
+export function normalizeMentions(text: string, mentions?: FeishuMention[]): string {
   if (!mentions || mentions.length === 0) {
     return text;
   }
@@ -303,12 +299,9 @@ export function normalizeMentions(
   let result = text;
   for (const mention of mentions) {
     const mentionId = mention.id.open_id;
-    const replacement =
-      botStripId && mentionId === botStripId
-        ? ""
-        : mentionId
-          ? `<at user_id="${mentionId}">${escapeName(mention.name)}</at>`
-          : `@${mention.name}`;
+    const replacement = mentionId
+      ? `<at user_id="${mentionId}">${escapeName(mention.name)}</at>`
+      : `@${mention.name}`;
     result = result.replace(new RegExp(escaped(mention.key), "g"), () => replacement).trim();
   }
   return result;

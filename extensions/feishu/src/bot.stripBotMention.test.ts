@@ -52,15 +52,15 @@ describe("normalizeMentions (via parseFeishuMessageEvent)", () => {
     });
   });
 
-  it("strips bot mention in p2p (addressing prefix, not semantic content)", () => {
+  it("preserves bot mention in p2p agent-facing content", () => {
     const ctx = parseFeishuMessageEvent(
       makeEvent("@_bot_1 hello", [{ key: "@_bot_1", name: "Bot", id: { open_id: "ou_bot" } }]),
       BOT_OPEN_ID,
     );
-    expect(ctx.content).toBe("hello");
+    expect(ctx.content).toBe('<at user_id="ou_bot">Bot</at> hello');
   });
 
-  it("strips bot mention in group so slash commands work (#35994)", () => {
+  it("preserves bot mention in group agent-facing content", () => {
     const ctx = parseFeishuMessageEvent(
       makeEvent(
         "@_bot_1 hello",
@@ -69,10 +69,10 @@ describe("normalizeMentions (via parseFeishuMessageEvent)", () => {
       ),
       BOT_OPEN_ID,
     );
-    expect(ctx.content).toBe("hello");
+    expect(ctx.content).toBe('<at user_id="ou_bot">Bot</at> hello');
   });
 
-  it("strips bot mention in group preserving slash command prefix (#35994)", () => {
+  it("preserves bot mention before a group slash command", () => {
     const ctx = parseFeishuMessageEvent(
       makeEvent(
         "@_bot_1 /model",
@@ -81,10 +81,10 @@ describe("normalizeMentions (via parseFeishuMessageEvent)", () => {
       ),
       BOT_OPEN_ID,
     );
-    expect(ctx.content).toBe("/model");
+    expect(ctx.content).toBe('<at user_id="ou_bot">Bot</at> /model');
   });
 
-  it("strips bot mention but normalizes other mentions in p2p (mention-forward)", () => {
+  it("normalizes bot and target mentions in p2p mention-forward content", () => {
     const ctx = parseFeishuMessageEvent(
       makeEvent("@_bot_1 @_user_alice hello", [
         { key: "@_bot_1", name: "Bot", id: { open_id: "ou_bot" } },
@@ -92,7 +92,9 @@ describe("normalizeMentions (via parseFeishuMessageEvent)", () => {
       ]),
       BOT_OPEN_ID,
     );
-    expect(ctx.content).toBe('<at user_id="ou_alice">Alice</at> hello');
+    expect(ctx.content).toBe(
+      '<at user_id="ou_bot">Bot</at> <at user_id="ou_alice">Alice</at> hello',
+    );
   });
 
   it("falls back to @name when open_id is absent", () => {
@@ -130,6 +132,28 @@ describe("normalizeMentions (via parseFeishuMessageEvent)", () => {
     expect(ctx.content).toBe(
       '<at user_id="ou_bot_1">Bot One</at> hi <at user_id="ou_user_2">User Two</at>',
     );
+  });
+
+  it("preserves both bot mentions from each receiver perspective", () => {
+    const event = makeEvent(
+      "@_bot_a @_bot_b coordinate",
+      [
+        { key: "@_bot_a", name: "Bot A", id: { open_id: "ou_bot_a" } },
+        { key: "@_bot_b", name: "Bot B", id: { open_id: "ou_bot_b" } },
+      ],
+      "group",
+    );
+
+    const expectedContent =
+      '<at user_id="ou_bot_a">Bot A</at> <at user_id="ou_bot_b">Bot B</at> coordinate';
+    expect(parseFeishuMessageEvent(event, "ou_bot_a")).toMatchObject({
+      content: expectedContent,
+      mentionedBot: true,
+    });
+    expect(parseFeishuMessageEvent(event, "ou_bot_b")).toMatchObject({
+      content: expectedContent,
+      mentionedBot: true,
+    });
   });
 
   it("treats $ in display name as literal (no replacement-pattern interpolation)", () => {
