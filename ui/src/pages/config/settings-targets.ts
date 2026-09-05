@@ -25,6 +25,7 @@ export type SettingsSearchTarget = {
   readonly search?: string;
   readonly aliases?: string;
   readonly requiresIdentity?: true;
+  readonly requiresNativeDeviceSettings?: true;
 };
 
 // Keep destinations and translation keys together without importing page
@@ -51,10 +52,19 @@ export const SETTINGS_SEARCH_TARGETS = {
     hash: "",
     searchKeys: [
       "configPage.deviceSettings.app",
+      "configPage.deviceSettings.appearance",
+      "configPage.deviceSettings.notificationsEnabled",
       "configPage.deviceSettings.showDockIcon",
       "configPage.deviceSettings.launchAtLogin",
       "configPage.deviceSettings.quickChat",
       "configPage.deviceSettings.capabilities",
+      "configPage.deviceSettings.camera",
+      "configPage.deviceSettings.keepAwake",
+      "configPage.deviceSettings.healthSummary",
+      "configPage.deviceSettings.panels.diagnostics",
+      "configPage.deviceSettings.panels.licenses",
+      "configPage.deviceSettings.panels.about",
+      "configPage.deviceSettings.panels.watch",
       "configPage.deviceSettings.computerControl",
       "configPage.deviceSettings.browser",
       "configPage.deviceSettings.cookieSync",
@@ -68,7 +78,24 @@ export const SETTINGS_SEARCH_TARGETS = {
     searchKeys: [
       "configPage.deviceSettings.systemAccess",
       "configPage.deviceSettings.location",
+      "configPage.deviceSettings.preciseLocation",
+      "configPage.deviceSettings.permissions.contacts.title",
+      "configPage.deviceSettings.permissions.calendars.title",
+      "configPage.deviceSettings.permissions.reminders.title",
+      "configPage.deviceSettings.permissions.photos.title",
       "configPage.deviceSettings.activePresence",
+    ],
+  },
+  deviceTalk: {
+    routeId: "talk",
+    labelKey: "configPage.deviceTalk.wakeEnabled",
+    hash: "",
+    requiresNativeDeviceSettings: true,
+    searchKeys: [
+      "configPage.deviceTalk.talkEnabled",
+      "configPage.deviceTalk.talkButtonEnabled",
+      "configPage.deviceTalk.talkBackgroundEnabled",
+      "configPage.deviceTalk.speakerphoneEnabled",
     ],
   },
   updates: {

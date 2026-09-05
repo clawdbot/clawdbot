@@ -4,7 +4,10 @@ import { render } from "lit";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import type { NativeDeviceSettingsCapability } from "../../app/native-device-settings.ts";
 import { i18n } from "../../i18n/index.ts";
-import { createNativeDeviceSettingsSnapshot } from "../../test-helpers/native-device-settings.ts";
+import {
+  createIosNativeDeviceSettingsSnapshot,
+  createNativeDeviceSettingsSnapshot,
+} from "../../test-helpers/native-device-settings.ts";
 import { createUpdateRunFixture } from "../../test-helpers/update-run.ts";
 import { renderUpdates } from "./updates.ts";
 
@@ -84,6 +87,34 @@ beforeEach(async () => {
 });
 
 describe("renderUpdates", () => {
+  it.each(["ios", "waiting"])(
+    "keeps Gateway updates without an advertised device updater: %s",
+    (host) => {
+      const nativeDeviceSettings = {
+        snapshot: host === "ios" ? createIosNativeDeviceSettingsSnapshot() : null,
+        subscribe: () => () => undefined,
+        set: vi.fn(),
+        requestPermission: vi.fn(),
+        openSystemSettings: vi.fn(),
+        openPanel: vi.fn(),
+        checkForUpdates: vi.fn(),
+        refresh: vi.fn(),
+        dispose: vi.fn(),
+      } satisfies NativeDeviceSettingsCapability;
+      const props = createProps({ nativeDeviceSettings });
+      render(renderUpdates(props), container);
+      expect(container.textContent).not.toContain("This Mac");
+      expect(container.textContent).not.toContain("This iPhone");
+      expect(container.textContent).not.toContain("This device");
+      expect(container.textContent).not.toContain("App version");
+      expect(container.textContent).not.toContain("Check for updates automatically");
+      expect(row("Gateway version").textContent).toContain("2026.8.1");
+      row("Update now").querySelector<HTMLButtonElement>("button")?.click();
+      expect(props.onUpdateNow).toHaveBeenCalledOnce();
+      expect(nativeDeviceSettings.checkForUpdates).not.toHaveBeenCalled();
+    },
+  );
+
   it("keeps Mac updater controls native and available independently of Gateway admin access", () => {
     const nativeDeviceSettings = {
       snapshot: createNativeDeviceSettingsSnapshot(),

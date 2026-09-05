@@ -93,6 +93,7 @@ export function findSettingsSearchBlocks(params: {
       ? STATIC_SETTINGS_BLOCKS.filter(
           (block) =>
             (params.identityAvailable || !block.requiresIdentity) &&
+            (params.nativeDeviceSettings || !block.requiresNativeDeviceSettings) &&
             isSettingsNavigationRouteVisible(
               block.routeId,
               params.canAdmin !== false,
