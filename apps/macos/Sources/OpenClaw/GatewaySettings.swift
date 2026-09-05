@@ -2,12 +2,19 @@ import SwiftUI
 
 @MainActor
 struct GatewaySettings: View {
+    // Keep inputs and sheet identity together so reconnect cannot initialize
+    // the editor's state from an earlier blank Add Gateway presentation.
+    private struct EditorPresentation: Identifiable {
+        let id = UUID()
+        var name = ""
+        var address = ""
+    }
+
     @State private var profiles: [MacGatewayProfile]
     @State private var hasLoaded: Bool
     @State private var isLoading = false
     @State private var isRemoving = false
-    @State private var showsAddGateway = false
-    @State private var reconnectingProfile: MacGatewayProfile?
+    @State private var editorPresentation: EditorPresentation?
     @State private var pendingRemoval: MacGatewayProfile?
     @State private var errorMessage: String?
     private let isPreview: Bool
@@ -34,10 +41,10 @@ struct GatewaySettings: View {
             self.hasLoaded = true
             await self.refresh()
         }
-        .sheet(isPresented: self.$showsAddGateway) {
+        .sheet(item: self.$editorPresentation) { presentation in
             GatewayProfileEditor(
-                name: self.reconnectingProfile?.name ?? "",
-                address: self.reconnectingProfile?.url.absoluteString ?? "")
+                name: presentation.name,
+                address: presentation.address)
             { profile in
                 self.profiles.removeAll { $0.id == profile.id }
                 self.profiles.append(profile)
@@ -97,8 +104,7 @@ struct GatewaySettings: View {
             Spacer(minLength: 16)
             Button {
                 guard !self.isRemoving else { return }
-                self.reconnectingProfile = nil
-                self.showsAddGateway = true
+                self.editorPresentation = EditorPresentation()
             } label: {
                 Label("Add Gateway", systemImage: "plus")
             }
@@ -153,8 +159,9 @@ struct GatewaySettings: View {
                                 }
                                 .disabled(self.isRemoving)
                                 Button("Reconnect") {
-                                    self.reconnectingProfile = profile
-                                    self.showsAddGateway = true
+                                    self.editorPresentation = EditorPresentation(
+                                        name: profile.name,
+                                        address: profile.url.absoluteString)
                                 }
                                 .disabled(self.isRemoving)
                                 Button(role: .destructive) {
