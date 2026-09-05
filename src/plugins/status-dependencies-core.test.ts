@@ -164,7 +164,9 @@ describe("buildPluginDependencyStatus", () => {
     });
 
     expect(status.requiredInstalled).toBe(true);
-    expect(status.dependencies[0]?.resolvedPath).toBe(availableDir);
+    expect(fs.realpathSync(status.dependencies[0]?.resolvedPath ?? "<unresolved>")).toBe(
+      availableDir,
+    );
   });
 
   it("keeps missing optional overrides out of required failures", () => {
