@@ -150,37 +150,36 @@ async function repairMissingPluginInstalls(params: {
     let failure: unknown;
     try {
       result = await repairMissingPluginInstallsWithLease(params, dependencyRepairMarkers);
-      return result;
     } catch (error) {
       failure = error;
-      throw error;
-    } finally {
-      // Keep only committed replacements retained, and never clear another owner's marker.
-      const cleanupErrors: unknown[] = [];
-      for (const [pluginId, packageDir] of dependencyRepairMarkers) {
-        if (result?.repairedPluginIds?.includes(pluginId)) {
-          continue;
-        }
-        try {
-          await clearRetainedManagedNpmInstallMarker(packageDir);
-        } catch (error) {
-          cleanupErrors.push(error);
-        }
+    }
+    // Settle owned markers before returning success or rethrowing the original failure.
+    const cleanupErrors: unknown[] = [];
+    for (const [pluginId, packageDir] of dependencyRepairMarkers) {
+      if (result?.repairedPluginIds?.includes(pluginId)) {
+        continue;
       }
-      if (cleanupErrors.length > 0) {
-        if (!result) {
-          throw new AggregateError(
-            [failure, ...cleanupErrors],
-            "Plugin dependency repair failed and its retention markers could not be cleared.",
-          );
-        }
-        result.warnings.push(
-          ...cleanupErrors.map(
-            (error) => `Failed to clear dependency repair retention marker: ${String(error)}`,
-          ),
-        );
+      try {
+        await clearRetainedManagedNpmInstallMarker(packageDir);
+      } catch (error) {
+        cleanupErrors.push(error);
       }
     }
+    if (!result) {
+      if (cleanupErrors.length > 0) {
+        throw new AggregateError(
+          [failure, ...cleanupErrors],
+          "Plugin dependency repair failed and its retention markers could not be cleared.",
+        );
+      }
+      throw failure;
+    }
+    result.warnings.push(
+      ...cleanupErrors.map(
+        (error) => `Failed to clear dependency repair retention marker: ${String(error)}`,
+      ),
+    );
+    return result;
   });
 }
 
