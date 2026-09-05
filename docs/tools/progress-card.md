@@ -95,6 +95,8 @@ Transient refresh failures retain the last loaded card. The dashboard widget sho
 
 The composer and dashboard placements show the local time of the last progress update. The hovercard instead shows the current-or-next plan step and its completed/total count, followed by Markdown in a separate Agent Notepad when a note is present.
 
+Without a matching terminal outcome, unfinished steps appear paused when the Gateway reports no active run or the card predates a later run. The last-update time shows when the agent last revised the card; elapsed time alone does not expire a card belonging to an active run.
+
 ## Gateway requests
 
 `progressCard.get` and `progressCard.put` accept a required `sessionKey` and optional `agentId`. Pass both when selecting an agent explicitly, for example `{ "sessionKey": "global", "agentId": "research" }`. Omitting `agentId` retains the Gateway's existing session-owner resolution. An unknown agent or an agent that conflicts with the session owner is rejected.
