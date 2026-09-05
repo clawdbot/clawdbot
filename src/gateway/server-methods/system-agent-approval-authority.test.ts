@@ -546,13 +546,18 @@ describe("prepareDelegatedSystemAgentApproval", () => {
         operation: { kind: "gateway-restart" as const },
         hash: "e".repeat(64),
       };
+      const resolveOperatorApproval = vi.fn().mockResolvedValue({
+        text: "Applied",
+        action: "none" as const,
+        applied: true,
+      });
       const session = {
         engine: {
           historyLength: () => 0,
           historySince: () => [],
           noteAssistantMessage: vi.fn(),
           getPendingOperatorProposal: () => proposal,
-          resolveOperatorApproval: vi.fn().mockResolvedValue(null),
+          resolveOperatorApproval,
         },
         lastUsedAt: 1,
         ownerKey: "agent:main:main",
@@ -634,25 +639,23 @@ describe("prepareDelegatedSystemAgentApproval", () => {
       expect(manager.getSnapshot(firstApprovalId)?.agentRuntimeDelegatedAuthority).toMatchObject({
         claimId: firstAuthority.claimId,
       });
-      expect(session.engine.resolveOperatorApproval).not.toHaveBeenCalled();
+      expect(resolveOperatorApproval).not.toHaveBeenCalled();
       const completion = session.pendingApproval?.completion;
       expect(completion).toBeDefined();
       (abortLease === "first" ? firstController : secondController).abort();
       expect(manager.resolve(firstApprovalId, "allow-once", "operator-ui")).toBe(applies);
       await completion;
       if (applies) {
-        expect(session.engine.resolveOperatorApproval).toHaveBeenCalledWith(
+        expect(resolveOperatorApproval).toHaveBeenCalledWith(
           "allow-once",
           proposal.hash,
           expect.any(Function),
           undefined,
         );
       } else {
-        expect(
-          session.engine.resolveOperatorApproval.mock.calls.some(
-            ([decision]) => decision === "allow-once",
-          ),
-        ).toBe(false);
+        expect(resolveOperatorApproval.mock.calls.some(([decision]) => decision === "allow-once")).toBe(
+          false,
+        );
       }
     },
   );
