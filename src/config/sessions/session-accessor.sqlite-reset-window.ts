@@ -358,6 +358,56 @@ export function* iterateVisibleMessageRange(
   }
 }
 
+export function hasUnindexedVisibleMessages(
+  projection: CurrentTranscriptProjection,
+  start: number,
+  endExclusive: number,
+): boolean {
+  return selectVisibleMessageRanges(projection, start, endExclusive).some(
+    (range) =>
+      executeSqliteQueryTakeFirstSync(
+        projection.database.db,
+        range.query
+          .leftJoin("transcript_event_identities as identity", (join) =>
+            join
+              .onRef("identity.session_id", "=", "active.session_id")
+              .onRef("identity.seq", "=", "active.event_seq"),
+          )
+          .select("active.event_seq")
+          .where("identity.seq", "is", null)
+          .limit(1),
+      ) !== undefined,
+  );
+}
+
+/** Validate the whole selected history without materializing ordinary payloads in JavaScript. */
+export function assertVisibleMessageRangeJson(
+  projection: CurrentTranscriptProjection,
+  start: number,
+  endExclusive: number,
+): void {
+  for (const range of selectVisibleMessageRanges(projection, start, endExclusive)) {
+    for (const row of iterateSqliteQuerySync(
+      projection.database.db,
+      range.query
+        .select(["active.event_seq", "active.message_position", "event.event_json"])
+        .where((eb) =>
+          eb.or([
+            // The raw check rejects extra values; the enclosing array cannot end at a NUL.
+            /* kysely-allow-raw: validate ordinary payloads without materializing them in JavaScript. */
+            eb(sql<number>`json_valid(event.event_json)`, "=", 0),
+            /* kysely-allow-raw: require a closing delimiter beyond SQLite's NUL-terminated JSON input. */
+            eb(sql<number>`json_valid('[' || event.event_json || ']')`, "=", 0),
+          ]),
+        ),
+    )) {
+      // SQLite's nesting limit is stricter than JSON.parse. Keep readable deep
+      // rows and let the existing parser own actual malformed-row failures.
+      parseActiveTranscriptMessageRow(row);
+    }
+  }
+}
+
 /** Sizes the same logical ranges without fetching or parsing excluded payloads. */
 export function readVisibleMessageMetadata(
   projection: CurrentTranscriptProjection,

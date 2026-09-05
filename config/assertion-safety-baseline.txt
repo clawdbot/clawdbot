@@ -2949,7 +2949,7 @@ src/gateway/session-sharing-target-input.ts	2
 src/gateway/session-sharing.ts	1
 src/gateway/session-transcript-derived-readers.ts	2
 src/gateway/session-transcript-files.fs.ts	2
-src/gateway/session-transcript-message.ts	4
+src/gateway/session-transcript-message.ts	3
 src/gateway/session-transcript-title-reader.ts	1
 src/gateway/session-utils-core.ts	1
 src/gateway/session-utils-row.ts	1
