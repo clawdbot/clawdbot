@@ -515,6 +515,7 @@ function successfulRun(provider: string, model: string, params?: SuccessfulRunPa
   );
   return {
     meta: {
+      durationMs: 1,
       finalAssistantVisibleText: "OK",
       executionTrace: { winnerProvider: provider, winnerModel: params?.reportedModel ?? model },
     },
