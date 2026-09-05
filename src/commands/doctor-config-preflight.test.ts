@@ -534,6 +534,53 @@ describe("runDoctorConfigPreflight", () => {
     },
   );
 
+  it("preserves a legacy multi-agent owner when repairing active config before recovery", async () => {
+    await withTempHome(async (home) => {
+      const configPath = await writeOpenClawConfig(home, {
+        gateway: { mode: "local", port: 19091 },
+      });
+      await promoteConfigSnapshotToLastKnownGood(await readConfigFileSnapshot());
+      await fs.writeFile(
+        configPath,
+        JSON.stringify({
+          meta: { lastTouchedAt: "2026-08-01T00:00:00.000Z" },
+          gateway: { mode: "local", port: 19092 },
+          update: { channel: "beta" },
+          agents: { list: [{ id: "ops" }, { id: "main", default: true }] },
+        }),
+      );
+
+      const before = await readConfigFileSnapshot();
+      const repaired = await withEnvOverride({ OPENCLAW_UPDATE_IN_PROGRESS: "1" }, () =>
+        runDoctorConfigPreflight({
+          migrateState: false,
+          migrateLegacyConfig: false,
+          repairPrefixedConfig: true,
+          invalidConfigNote: false,
+        }),
+      );
+
+      expect(repaired.snapshot.valid).toBe(true);
+      expect(isStartupConfigRepairResult(before, repaired.snapshot)).toBe(true);
+      expect(repaired.snapshot.config.gateway?.port).toBe(19092);
+      expect(repaired.snapshot.config.update?.channel).toBe("beta");
+      expect(Object.keys(repaired.snapshot.config.agents?.entries ?? {}).toSorted()).toEqual([
+        "main",
+        "ops",
+      ]);
+      expect(repaired.snapshot.config.agents?.defaults?.systemAgent?.agentId).toBe("main");
+      expect(repaired.snapshot.config).not.toHaveProperty("meta.lastTouchedAt");
+      const persisted = JSON.parse(await fs.readFile(configPath, "utf-8"));
+      expect(persisted.agents.ownership).toBe("explicit");
+      expect(persisted.agents).not.toHaveProperty("list");
+      const reread = await readConfigFileSnapshot();
+      expect(reread.valid).toBe(true);
+      expect(reread.config.agents?.defaults?.systemAgent?.agentId).toBe("main");
+      const entries = await fs.readdir(path.dirname(configPath));
+      expect(entries.filter((entry) => entry.startsWith("openclaw.json.clobbered."))).toEqual([]);
+    });
+  });
+
   it("migrates readable active config after preserving its state locators", async () => {
     await withTempHome(async (home) => {
       const storePath = path.join(home, "custom-cron", "jobs.json");
