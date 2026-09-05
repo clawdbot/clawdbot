@@ -756,6 +756,7 @@ describe("gateway server cron", () => {
         name: "daily",
         enabled: true,
         scheduleKind: "every",
+        schedule: { kind: "every", everyMs: 60_000 },
         lastRunStatus: null,
       });
       expect(Object.keys(compactJobs?.[0] ?? {}).toSorted()).toEqual(
@@ -768,6 +769,7 @@ describe("gateway server cron", () => {
           "name",
           "nextRunAtMs",
           "scheduleKind",
+          "schedule",
         ].toSorted(),
       );
       expect(

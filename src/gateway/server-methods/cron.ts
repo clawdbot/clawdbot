@@ -246,6 +246,10 @@ function compactCronListJob(job: CronJob) {
     enabled: job.enabled,
     nextRunAtMs: job.state.nextRunAtMs ?? null,
     scheduleKind: job.schedule.kind,
+    // Disabled jobs have no next run. Keep their timing without exposing event commands.
+    ...(job.schedule.kind === "at" || job.schedule.kind === "every" || job.schedule.kind === "cron"
+      ? { schedule: job.schedule }
+      : {}),
     ...(job.trigger ? { trigger: true } : {}),
     lastRunAtMs: job.state.lastRunAtMs ?? null,
     lastRunStatus: job.state.lastRunStatus ?? job.state.lastStatus ?? null,
