@@ -541,6 +541,7 @@ export async function installPluginFromManagedNpmRoot(
 
     const dependencyStatus = buildPluginDependencyStatus({
       rootDir: installRoot,
+      dependencyRootDir: npmRoot,
       ...normalizePluginDependencySpecs(packageManifestResult.manifest ?? {}),
     });
     if (!dependencyStatus.requiredInstalled) {
