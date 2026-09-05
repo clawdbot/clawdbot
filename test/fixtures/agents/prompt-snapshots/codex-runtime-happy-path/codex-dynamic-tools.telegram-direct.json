@@ -1,6 +1,6 @@
 [
   {
-    "description": "List configured agent ids with name/model/runtime metadata, allowed as `sessions_spawn(runtime:\"subagent\")` targets.",
+    "description": "List configured agent ids with name/description/model/runtime metadata, allowed as `sessions_spawn(runtime:\"subagent\")` targets.",
     "inputSchema": {
       "additionalProperties": false,
       "properties": {},
