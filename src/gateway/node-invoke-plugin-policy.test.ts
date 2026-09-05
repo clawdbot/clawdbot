@@ -16,8 +16,9 @@ import {
 import { createEmptyPluginRegistry } from "../plugins/registry-empty.js";
 import { resetPluginRuntimeStateForTest, setActivePluginRegistry } from "../plugins/runtime.js";
 import type { OpenClawPluginNodeInvokePolicyContext } from "../plugins/types.js";
-import { closeOpenClawStateDatabaseForTest } from "../state/openclaw-state-db.js";
+import { closeOpenClawStateDatabaseByPath } from "../state/openclaw-state-db.js";
 import { ExecApprovalManager } from "./exec-approval-manager.js";
+import { createTestApprovalManager } from "./exec-approval-manager.test-support.js";
 import { applyPluginNodeInvokePolicy } from "./node-invoke-plugin-policy.js";
 import {
   createApprovalClient,
@@ -59,8 +60,8 @@ describe("applyPluginNodeInvokePolicy", () => {
 
   afterEach(() => {
     resetPluginRuntimeStateForTest();
-    closeOpenClawStateDatabaseForTest();
     for (const dir of tempDirs.splice(0)) {
+      closeOpenClawStateDatabaseByPath(path.join(dir, "state.sqlite"));
       fs.rmSync(dir, { force: true, recursive: true });
     }
   });
@@ -130,8 +131,10 @@ describe("applyPluginNodeInvokePolicy", () => {
     expect(invoke).toHaveBeenCalledTimes(2);
   });
 
-  it("preserves one approval and session identity through streaming readiness recovery", async () => {
-    const manager = new ExecApprovalManager<PluginApprovalRequestPayload>();
+  it("preserves one approval and session identity through streaming readiness recovery", async (testContext) => {
+    const manager = createTestApprovalManager<PluginApprovalRequestPayload>(testContext, {
+      approvalKind: "plugin",
+    });
     const nodeSession = createNodeSession();
     nodeSession.pairingGeneration = "paired-generation-1";
     const reviewer = createOperatorClient("conn-owner-approval");
@@ -217,8 +220,10 @@ describe("applyPluginNodeInvokePolicy", () => {
     expect(invoke.mock.calls[0]?.[0]?.isDispatchAuthorized?.()).toBe(false);
   });
 
-  it("does not trust a plugin-owned invocation session without host attestation", async () => {
-    const manager = new ExecApprovalManager<PluginApprovalRequestPayload>();
+  it("does not trust a plugin-owned invocation session without host attestation", async (testContext) => {
+    const manager = createTestApprovalManager<PluginApprovalRequestPayload>(testContext, {
+      approvalKind: "plugin",
+    });
     setDangerousDemoCommandRegistry([createApprovalRequestPolicy()]);
     const reviewer = createOperatorClient("conn-owner-approval");
     const { context } = createContext({
@@ -613,8 +618,10 @@ describe("applyPluginNodeInvokePolicy", () => {
     expect(invoke).toHaveBeenCalledOnce();
   });
 
-  it.each([false, true])("routes approvals for synthetic=%s", async (synthetic) => {
-    const manager = new ExecApprovalManager<PluginApprovalRequestPayload>();
+  it.for([false, true])("routes approvals for synthetic=%s", async (synthetic, testContext) => {
+    const manager = createTestApprovalManager<PluginApprovalRequestPayload>(testContext, {
+      approvalKind: "plugin",
+    });
     // The carried connection is turn provenance, never this approval's
     // presenter, so it stays eligible as a reviewer for both provenance shapes.
     const visibleConnIds = new Set(["conn-owner-approval", "conn-requester"]);
@@ -651,8 +658,10 @@ describe("applyPluginNodeInvokePolicy", () => {
     await expectApprovalResolution(resultPromise, manager, record);
   });
 
-  it("keeps a sole-reviewer operator requester routable instead of no-route denying", async () => {
-    const manager = new ExecApprovalManager<PluginApprovalRequestPayload>();
+  it("keeps a sole-reviewer operator requester routable instead of no-route denying", async (testContext) => {
+    const manager = createTestApprovalManager<PluginApprovalRequestPayload>(testContext, {
+      approvalKind: "plugin",
+    });
     const requester = createOperatorClient();
     setDangerousDemoCommandRegistry([createApprovalRequestPolicy()]);
     const { context } = createContext({
@@ -672,8 +681,10 @@ describe("applyPluginNodeInvokePolicy", () => {
     await expectApprovalResolution(resultPromise, manager, record);
   });
 
-  it("sanitizes node-policy approval titles at creation like the RPC ingress", async () => {
-    const manager = new ExecApprovalManager<PluginApprovalRequestPayload>();
+  it("sanitizes node-policy approval titles at creation like the RPC ingress", async (testContext) => {
+    const manager = createTestApprovalManager<PluginApprovalRequestPayload>(testContext, {
+      approvalKind: "plugin",
+    });
     const getApprovalClientConnIds = createApprovalClientLookup([
       createOperatorClient("conn-owner-approval"),
     ]);
@@ -699,8 +710,9 @@ describe("applyPluginNodeInvokePolicy", () => {
     await expectApprovalResolution(resultPromise, manager, record);
   });
 
-  it("limits explicitly one-shot node-policy approvals to allow-once or deny", async () => {
-    const manager = new ExecApprovalManager<PluginApprovalRequestPayload>({
+  it("limits explicitly one-shot node-policy approvals to allow-once or deny", async (testContext) => {
+    const manager = createTestApprovalManager<PluginApprovalRequestPayload>(testContext, {
+      approvalKind: "plugin",
       resolveAllowedDecisions: resolveCanonicalPluginApprovalRequestAllowedDecisions,
     });
     setDangerousDemoCommandRegistry([
@@ -722,8 +734,9 @@ describe("applyPluginNodeInvokePolicy", () => {
     await expectApprovalResolution(resultPromise, manager, record);
   });
 
-  it("forwards plugin policy approvals to the originating turn source", async () => {
-    const manager = new ExecApprovalManager<PluginApprovalRequestPayload>({
+  it("forwards plugin policy approvals to the originating turn source", async (testContext) => {
+    const manager = createTestApprovalManager<PluginApprovalRequestPayload>(testContext, {
+      approvalKind: "plugin",
       validateAgentRuntimeDelegatedAuthority: () => true,
     });
     const getApprovalClientConnIds = vi.fn(() => new Set<string>());
@@ -797,8 +810,10 @@ describe("applyPluginNodeInvokePolicy", () => {
     await expectApprovalResolution(resultPromise, manager, record);
   });
 
-  it("delivers plugin policy approvals to visible iOS reviewers", async () => {
-    const manager = new ExecApprovalManager<PluginApprovalRequestPayload>();
+  it("delivers plugin policy approvals to visible iOS reviewers", async (testContext) => {
+    const manager = createTestApprovalManager<PluginApprovalRequestPayload>(testContext, {
+      approvalKind: "plugin",
+    });
     const handleRequested = vi.fn(
       async (
         _request: PluginApprovalRequest,
@@ -836,8 +851,10 @@ describe("applyPluginNodeInvokePolicy", () => {
     await expectApprovalResolution(resultPromise, manager, record);
   });
 
-  it("sends an iOS cleanup wake when a plugin policy approval expires", async () => {
-    const manager = new ExecApprovalManager<PluginApprovalRequestPayload>();
+  it("sends an iOS cleanup wake when a plugin policy approval expires", async (testContext) => {
+    const manager = createTestApprovalManager<PluginApprovalRequestPayload>(testContext, {
+      approvalKind: "plugin",
+    });
     const handleExpired = vi.fn(async () => {});
     setDangerousDemoCommandRegistry([createApprovalRequestPolicy()]);
     const { context } = createContext({
@@ -861,8 +878,10 @@ describe("applyPluginNodeInvokePolicy", () => {
     expect(handleExpired).toHaveBeenCalledWith(expect.objectContaining({ id: record.id }));
   });
 
-  it("ignores approval routes from unsigned node.invoke clients", async () => {
-    const manager = new ExecApprovalManager<PluginApprovalRequestPayload>();
+  it("ignores approval routes from unsigned node.invoke clients", async (testContext) => {
+    const manager = createTestApprovalManager<PluginApprovalRequestPayload>(testContext, {
+      approvalKind: "plugin",
+    });
     const forwardPluginApprovalRequest = vi.fn(async () => false);
     setDangerousDemoCommandRegistry([createApprovalRequestPolicy()]);
     const { context } = createContext({
@@ -902,8 +921,10 @@ describe("applyPluginNodeInvokePolicy", () => {
     );
   });
 
-  it("caps plugin policy approval timeouts through the shared approval policy", async () => {
-    const manager = new ExecApprovalManager<PluginApprovalRequestPayload>();
+  it("caps plugin policy approval timeouts through the shared approval policy", async (testContext) => {
+    const manager = createTestApprovalManager<PluginApprovalRequestPayload>(testContext, {
+      approvalKind: "plugin",
+    });
     setDangerousDemoCommandRegistry([
       createApprovalRequestPolicy({ timeoutMs: Number.MAX_SAFE_INTEGER }),
     ]);
@@ -921,8 +942,10 @@ describe("applyPluginNodeInvokePolicy", () => {
     await expectApprovalResolution(resultPromise, manager, record);
   });
 
-  it("fails closed when the allow-once claim cannot be consumed", async () => {
-    const manager = new ExecApprovalManager<PluginApprovalRequestPayload>();
+  it("fails closed when the allow-once claim cannot be consumed", async (testContext) => {
+    const manager = createTestApprovalManager<PluginApprovalRequestPayload>(testContext, {
+      approvalKind: "plugin",
+    });
     vi.spyOn(manager, "consumeAllowOnce").mockReturnValue(false);
     setDangerousDemoCommandRegistry([createApprovalRequestPolicy()]);
     const { context } = createContext({
@@ -986,8 +1009,10 @@ describe("applyPluginNodeInvokePolicy", () => {
     expect(result).toBeNull();
   });
 
-  it("keeps approval payload fields on UTF-16 boundaries", async () => {
-    const manager = new ExecApprovalManager<PluginApprovalRequestPayload>();
+  it("keeps approval payload fields on UTF-16 boundaries", async (testContext) => {
+    const manager = createTestApprovalManager<PluginApprovalRequestPayload>(testContext, {
+      approvalKind: "plugin",
+    });
     setDangerousDemoCommandRegistry([
       createApprovalRequestPolicy({
         title: `${"a".repeat(79)}🚀tail`,

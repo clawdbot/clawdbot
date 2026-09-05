@@ -35,6 +35,7 @@ import { retryAsync } from "../retry.js";
 import { resolvePreferredOpenClawTmpDir } from "../tmp-openclaw-dir.js";
 import { prepareOutboundPayloadBatch } from "./deliver-prepare.js";
 import { countPhysicalOutboundSends, PlatformMessageNotDispatchedError } from "./deliver-types.js";
+import { createOutboundPayloadPlan, projectOutboundPayloadPlanForOutbound } from "./payloads.js";
 import { createUnmodifiedPreparedOutboundBatch } from "./prepared-batch.js";
 
 type AppendAssistantTranscript =
@@ -3344,6 +3345,54 @@ describe("deliverOutboundPayloads", () => {
       undefined,
       { replyToId: "hooked-reply" },
     );
+  });
+
+  it("leaves projected Gateway reset status notices unchanged for banner hooks", async () => {
+    hookMocks.runner.hasHooks.mockImplementation(
+      (hookName?: string) => hookName === "reply_payload_sending",
+    );
+    hookMocks.runner.runReplyPayloadSending.mockImplementation(async (event) => {
+      const payload = (event as { payload: { text?: string; isStatusNotice?: boolean } }).payload;
+      if (payload.isStatusNotice) {
+        return { payload };
+      }
+      return {
+        payload: {
+          ...payload,
+          text: `${payload.text ?? ""}\n⏳ session too long, try /new`,
+        },
+      };
+    });
+    const sendText = vi.fn().mockResolvedValue({
+      channel: "matrix" as const,
+      messageId: "ack",
+      roomId: "!room",
+    });
+    const projected = projectOutboundPayloadPlanForOutbound(
+      createOutboundPayloadPlan([{ text: "✅ New session started.", isStatusNotice: true }]),
+    );
+
+    await deliverMatrix({
+      to: "!room",
+      payloads: projected,
+      deps: { matrix: sendText },
+      replyPayloadSendingHook: {
+        kind: "final",
+        channel: "matrix",
+        context: { channelId: "matrix", conversationId: "!room" },
+      },
+    });
+
+    expect(hookMocks.runner.runReplyPayloadSending).toHaveBeenCalledWith(
+      expect.objectContaining({
+        payload: expect.objectContaining({
+          text: "✅ New session started.",
+          isStatusNotice: true,
+        }),
+      }),
+      expect.anything(),
+    );
+    expect(requireMatrixSendCall(sendText)[1]).toBe("✅ New session started.");
   });
 
   it("strips internal runtime scaffolding before adapter payload normalization copies text", async () => {

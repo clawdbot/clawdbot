@@ -1,7 +1,9 @@
+import { writeFile } from "node:fs/promises";
 import path from "node:path";
 import type { BrowserContext, Locator, Page } from "playwright";
 import { beforeEach, expect, it } from "vitest";
 import { createControlUiE2eArtifactDir } from "../test-helpers/control-ui-e2e-artifacts.ts";
+import { takeControlUiViewportScreenshot } from "../test-helpers/control-ui-e2e-screenshot.ts";
 import {
   installMockGateway,
   waitForControlUiSettingsTakeover,
@@ -55,11 +57,14 @@ async function gatewayPhase(page: Page): Promise<string | undefined> {
   });
 }
 
-async function captureProof(page: Page, name: string): Promise<void> {
+async function captureProof(page: Page, name: string, surface: Locator): Promise<void> {
   if (!proofDir) {
     return;
   }
-  await page.screenshot({ fullPage: true, path: path.join(proofDir, name) });
+  await writeFile(
+    path.join(proofDir, name),
+    await takeControlUiViewportScreenshot(page, surface, [surface]),
+  );
 }
 
 async function createContext(viewport = { height: 900, width: 1280 }): Promise<BrowserContext> {
@@ -130,13 +135,13 @@ suite.define(() => {
     const desktopPanel = await openInbox(desktop);
     const desktopItem = await openLimitedAccessItem(desktopPanel);
     await desktopItem.getByRole("button", { name: "Request admin" }).waitFor();
-    await captureProof(desktop, "desktop-inbox-limited-access.png");
+    await captureProof(desktop, "desktop-inbox-limited-access.png", desktopPanel);
     await desktopPanel.getByRole("button", { name: "Dismiss shown" }).click();
     await expect.poll(() => desktopInbox.getAttribute("aria-label")).toBe("0 inbox items");
     await expect.poll(() => desktopItem.count()).toBe(0);
     await desktopPanel.getByRole("tab", { name: "All", exact: true }).waitFor();
     await desktopPanel.getByRole("tab", { name: "System", exact: true }).waitFor();
-    await captureProof(desktop, "desktop-inbox-limited-access-dismissed.png");
+    await captureProof(desktop, "desktop-inbox-limited-access-dismissed.png", desktopPanel);
 
     await gateway.setOnline(false);
     await expect.poll(() => gatewayPhase(desktop)).toBe("reconnecting");
@@ -150,7 +155,7 @@ suite.define(() => {
     const reloadedPanel = await openInbox(desktop);
     await reloadedPanel.getByRole("tab", { name: /System/u }).click();
     expect(await reloadedPanel.locator('[data-attention-kind="scopeUpgrade"]').count()).toBe(0);
-    await captureProof(desktop, "desktop-inbox-limited-access-dismissed-reload.png");
+    await captureProof(desktop, "desktop-inbox-limited-access-dismissed-reload.png", reloadedPanel);
 
     const mobileContext = await createContext({ width: 390, height: 844 });
     const mobile = await mobileContext.newPage();
@@ -159,19 +164,23 @@ suite.define(() => {
 
     await mobile.locator(".topbar-search").waitFor();
     expect(await mobile.locator(".scope-upgrade-status-trigger").count()).toBe(0);
-    await captureProof(mobile, "mobile-activity-clean-header.png");
+    await captureProof(
+      mobile,
+      "mobile-activity-clean-header.png",
+      mobile.locator(".topbar-search"),
+    );
     await mobile.getByRole("button", { name: "Expand sidebar" }).click();
     await waitForAnimations(mobile.locator(".nav-drawer"));
     const mobileInbox = mobile.locator(".sidebar-issues-button");
     await expect.poll(() => mobileInbox.getAttribute("aria-label")).toBe("1 inbox item");
-    await captureProof(mobile, "mobile-sidebar-inbox-badge.png");
+    await captureProof(mobile, "mobile-sidebar-inbox-badge.png", mobile.locator(".nav-drawer"));
     await mobileInbox.click();
     const mobilePanel = mobile.locator("#sidebar-issues-panel");
     await mobilePanel.waitFor();
     await waitForAnimations(mobilePanel);
     const mobileItem = await openLimitedAccessItem(mobilePanel);
     await mobileItem.getByRole("button", { name: "Dismiss Limited access" }).waitFor();
-    await captureProof(mobile, "mobile-inbox-limited-access.png");
+    await captureProof(mobile, "mobile-inbox-limited-access.png", mobilePanel);
   });
 
   it("resurfaces when manual guidance becomes an actionable upgrade", async () => {
@@ -250,7 +259,11 @@ suite.define(() => {
     const wait = await gateway.waitForRequest("device.scopes.waitUpgrade");
     expect(wait.params).toEqual({ requestId: "upgrade-1" });
     await waitForPendingUpgradeItem(item);
-    await captureProof(page, "desktop-inbox-upgrade-pending.png");
+    await captureProof(
+      page,
+      "desktop-inbox-upgrade-pending.png",
+      page.locator("#sidebar-issues-panel"),
+    );
 
     await closeInbox(page);
     await page.locator(".sidebar-brand__collapse").click();
@@ -271,7 +284,11 @@ suite.define(() => {
       .click();
     await waitForControlUiSettingsTakeover(page);
     expect(await page.locator(".sidebar-issues-button").count()).toBe(0);
-    await captureProof(page, "settings-without-inbox-pending.png");
+    await captureProof(
+      page,
+      "settings-without-inbox-pending.png",
+      page.locator(".settings-workspace"),
+    );
     expect(await gateway.getRequests("device.scopes.requestUpgrade")).toHaveLength(1);
     expect(await gateway.getRequests("device.scopes.waitUpgrade")).toHaveLength(1);
 
@@ -318,7 +335,11 @@ suite.define(() => {
     await item.locator(".sidebar-issues-panel__body").getByText(message, { exact: true }).waitFor();
 
     expect(await item.getByText(message, { exact: true }).count()).toBe(1);
-    await captureProof(page, "desktop-inbox-upgrade-error.png");
+    await captureProof(
+      page,
+      "desktop-inbox-upgrade-error.png",
+      page.locator("#sidebar-issues-panel"),
+    );
   });
 
   it.each(SCOPE_UPGRADE_METHODS)(
@@ -345,7 +366,7 @@ suite.define(() => {
         .locator(".sidebar-issues-panel__body")
         .getByText(denial, { exact: false })
         .waitFor();
-      await captureProof(page, `${method}-role-denied.png`);
+      await captureProof(page, `${method}-role-denied.png`, page.locator("#sidebar-issues-panel"));
       expect(await item.getByRole("button", { name: "Retry", exact: true }).count()).toBe(0);
       expect(await gateway.getRequests("device.scopes.requestUpgrade")).toHaveLength(1);
 
@@ -365,7 +386,11 @@ suite.define(() => {
         .poll(async () => (await gateway.getRequests("device.scopes.requestUpgrade")).length)
         .toBe(3);
       await waitForPendingUpgradeItem(item);
-      await captureProof(page, `${method}-retry-pending.png`);
+      await captureProof(
+        page,
+        `${method}-retry-pending.png`,
+        page.locator("#sidebar-issues-panel"),
+      );
       for (const status of ["rejected", "expired"] as const) {
         const requestCount = (await gateway.getRequests("device.scopes.requestUpgrade")).length;
         await gateway.resolveDeferred("device.scopes.waitUpgrade", {
@@ -427,7 +452,11 @@ suite.define(() => {
     expect(await page.locator(".sidebar-attention--floating").count()).toBe(0);
     const item = await openLimitedAccessItem(await openInbox(page));
     await item.getByRole("button", { name: "Request admin" }).waitFor();
-    await captureProof(page, "onboarding-header-inbox-limited-access.png");
+    await captureProof(
+      page,
+      "onboarding-header-inbox-limited-access.png",
+      page.locator("#sidebar-issues-panel"),
+    );
   });
 
   it("offers the admin upgrade without crypto.subtle", async () => {

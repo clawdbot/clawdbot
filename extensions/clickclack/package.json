@@ -1,6 +1,6 @@
 {
   "name": "@openclaw/clickclack",
-  "version": "2026.8.1",
+  "version": "2026.9.1",
   "description": "OpenClaw ClickClack channel plugin",
   "type": "module",
   "exports": {
@@ -17,7 +17,7 @@
     "openclaw": "workspace:*"
   },
   "peerDependencies": {
-    "openclaw": ">=2026.8.1"
+    "openclaw": ">=2026.9.1"
   },
   "peerDependenciesMeta": {
     "openclaw": {
@@ -128,7 +128,9 @@
               "flags": "--use-env",
               "description": "Use CLICKCLACK_BOT_TOKEN"
             },
-            "envVars": ["CLICKCLACK_BOT_TOKEN"]
+            "envVars": [
+              "CLICKCLACK_BOT_TOKEN"
+            ]
           }
         ]
       }
@@ -141,10 +143,10 @@
       "allowInvalidConfigRecovery": true
     },
     "compat": {
-      "pluginApi": ">=2026.8.1"
+      "pluginApi": ">=2026.9.1"
     },
     "build": {
-      "openclawVersion": "2026.8.1",
+      "openclawVersion": "2026.9.1",
       "bundledDist": false
     },
     "release": {

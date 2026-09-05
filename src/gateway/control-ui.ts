@@ -41,16 +41,21 @@ import {
 import { extractOriginalFilename } from "../media/store.js";
 import { safeEqualSecret } from "../security/secret-equal.js";
 import { AVATAR_MAX_BYTES, resolveAvatarMime } from "../shared/avatar-policy.js";
+import { createLazyRuntimeModule } from "../shared/lazy-runtime.js";
 import { resolveUserPath } from "../utils.js";
 import { resolveRuntimeServiceBuildId, resolveRuntimeServiceVersion } from "../version.js";
-import { openGatewayAssistantAvatar, resolveGatewayAssistantAvatar } from "./assistant-avatar.js";
+import { gatewayAvatarImageRevision } from "./assistant-avatar-cache.js";
+import {
+  gatewayAssistantAvatarUrl,
+  openGatewayAssistantAvatar,
+  resolveGatewayAssistantAvatar,
+} from "./assistant-avatar.js";
 import { DEFAULT_ASSISTANT_IDENTITY, resolveAssistantIdentity } from "./assistant-identity.js";
 import { buildAssistantMediaContentDisposition } from "./assistant-media-content-disposition.js";
 import type { AuthRateLimiter } from "./auth-rate-limit.js";
 import type { ResolvedGatewayAuth } from "./auth.js";
 import type { ControlUiAssetRetention } from "./control-ui-asset-retention.js";
 import {
-  buildControlUiResourcePath,
   buildControlUiRootAssetPath,
   CONTROL_UI_BASE_PATH_ATTRIBUTE,
   CONTROL_UI_BOOTSTRAP_CONFIG_PATH,
@@ -95,6 +100,7 @@ import {
   resolveByteResponse,
   writeByteHeaders,
 } from "./http-byte-range.js";
+import { sendHttpImageResponse } from "./http-image-response.js";
 import { authorizeControlUiReadRequestOrReply } from "./http-utils.js";
 import { isTerminalConfigEnabled } from "./terminal/enabled.js";
 
@@ -105,6 +111,9 @@ const CONTROL_UI_ASSISTANT_MEDIA_TICKET_TTL_MS = 5 * 60 * 1000;
 const CONTROL_UI_ASSETS_MISSING_MESSAGE =
   "Control UI assets not found. Build them with `pnpm ui:build` (auto-installs UI deps), or run `pnpm ui:dev` during development.";
 const controlUiAssistantMediaTicketSecret = randomBytes(32);
+const loadAvatarThumbnail = createLazyRuntimeModule(
+  () => import("./assistant-avatar-thumbnail.runtime.js"),
+);
 
 type ControlUiRequestOptions = {
   basePath?: string;
@@ -622,17 +631,42 @@ export async function handleControlUiAvatarRequest(
     try {
       const meta = controlUiAvatarResolutionMeta(resolved);
       const avatarUrl =
-        resolved?.kind === "local"
-          ? buildControlUiResourcePath("agentAvatar", basePath, agentId)
-          : resolved?.kind === "remote" || resolved?.kind === "data"
-            ? resolved.url
-            : null;
+        gatewayAssistantAvatarUrl(projection, basePath, agentId) ??
+        (resolved?.kind === "remote" ? resolved.url : null);
       sendJson(res, 200, {
         avatarUrl,
         avatarSource: meta.avatarSource,
         avatarStatus: meta.avatarStatus,
         avatarReason: meta.avatarReason,
       } satisfies ControlUiAvatarMeta);
+    } finally {
+      if (projection.openedFile) {
+        fs.closeSync(projection.openedFile.fd);
+      }
+    }
+    return true;
+  }
+
+  if (url.searchParams.has("v") && (projection.openedFile || resolved?.kind === "data")) {
+    const source = projection.openedFile
+      ? { file: projection.openedFile }
+      : { dataUrl: identity.avatar };
+    try {
+      const image = await (await loadAvatarThumbnail()).readGatewayAvatarThumbnail(source);
+      // Browser HTTP caches must not reuse authenticated bytes after a credential switch.
+      res.setHeader("vary", "Authorization, Cookie");
+      sendHttpImageResponse({
+        req,
+        res,
+        image,
+        filename: "avatar",
+        cacheControl:
+          url.searchParams.get("v") === gatewayAvatarImageRevision(source)
+            ? "private, max-age=31536000, immutable"
+            : "private, no-cache",
+      });
+    } catch {
+      respondControlUiNotFound(res);
     } finally {
       if (projection.openedFile) {
         fs.closeSync(projection.openedFile.fd);

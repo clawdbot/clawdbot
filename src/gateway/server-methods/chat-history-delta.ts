@@ -54,13 +54,15 @@ function containsTranscriptDiscontinuity(
 export function readChatHistoryDelta(params: {
   agentId: string;
   cursor: string;
+  maxBytes?: number;
   scope: SessionTranscriptReadScope;
   sessionKey: string;
   sessionSnapshot: Record<string, unknown>;
 }): ChatHistoryDeltaRead {
+  const maxBytes = Math.min(params.maxBytes ?? Infinity, CHAT_HISTORY_DELTA_MAX_BYTES);
   const result = readTranscriptDisplayDelta(params.scope, {
     cursor: params.cursor,
-    maxBytes: CHAT_HISTORY_DELTA_MAX_BYTES,
+    maxBytes,
     maxEvents: CHAT_HISTORY_DELTA_MAX_EVENTS,
   });
   if (result.kind !== "page" || result.hasMore || containsTranscriptDiscontinuity(result)) {
@@ -96,7 +98,7 @@ export function readChatHistoryDelta(params: {
       messages.push(projected.payload);
     }
   }
-  if (Buffer.byteLength(JSON.stringify(messages), "utf8") > CHAT_HISTORY_DELTA_MAX_BYTES) {
+  if (Buffer.byteLength(JSON.stringify(messages), "utf8") > maxBytes) {
     return { kind: "reset" };
   }
   return {

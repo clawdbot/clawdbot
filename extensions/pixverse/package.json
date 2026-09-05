@@ -1,6 +1,6 @@
 {
   "name": "@openclaw/pixverse-provider",
-  "version": "2026.8.1",
+  "version": "2026.9.1",
   "description": "OpenClaw PixVerse video generation provider plugin.",
   "repository": {
     "type": "git",
@@ -12,7 +12,7 @@
     "openclaw": "workspace:*"
   },
   "peerDependencies": {
-    "openclaw": ">=2026.8.1"
+    "openclaw": ">=2026.9.1"
   },
   "peerDependenciesMeta": {
     "openclaw": {
@@ -30,10 +30,10 @@
       "minHostVersion": ">=2026.5.26"
     },
     "compat": {
-      "pluginApi": ">=2026.8.1"
+      "pluginApi": ">=2026.9.1"
     },
     "build": {
-      "openclawVersion": "2026.8.1",
+      "openclawVersion": "2026.9.1",
       "bundledDist": false
     },
     "release": {

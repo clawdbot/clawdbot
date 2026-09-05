@@ -6,7 +6,86 @@ import WebKit
 @testable import OpenClaw
 
 @MainActor
+private final class DashboardNotificationAlertCapture: NSObject {
+    private(set) var textValues: [String] = []
+
+    @objc func captureAndAbortModal() {
+        if let contentView = NSApp.modalWindow?.contentView {
+            self.textValues = Self.textValues(in: contentView)
+        }
+        NSApp.abortModal()
+    }
+
+    private static func textValues(in view: NSView) -> [String] {
+        let current = (view as? NSTextField).map { [$0.stringValue] } ?? []
+        return current + view.subviews.flatMap { self.textValues(in: $0) }
+    }
+}
+
+private struct DashboardNotificationEndpointFailure: Error {}
+
+@MainActor
 extension DashboardWindowOwnershipTests {
+    @Test func `localized background session failure title`() async throws {
+        let probeKey = "OPENCLAW_LOCALIZED_GATEWAY_ERROR_PROBE"
+        if ProcessInfo.processInfo.environment[probeKey] != "1" {
+            let arguments = ProcessInfo.processInfo.arguments
+            let bundleFlagIndex = try #require(arguments.firstIndex(of: "--test-bundle-path"))
+            let bundlePathIndex = arguments.index(after: bundleFlagIndex)
+            let testBundlePath = try #require(
+                arguments.indices.contains(bundlePathIndex) ? arguments[bundlePathIndex] : nil)
+            let process = Process()
+            process.executableURL = URL(fileURLWithPath: arguments[0])
+            process.arguments = [
+                "--test-bundle-path", testBundlePath,
+                "--testing-library", "swift-testing",
+                "--filter", "localized background session failure title",
+            ]
+            var environment = ProcessInfo.processInfo.environment
+            environment[probeKey] = "1"
+            process.environment = environment
+            let output = Pipe()
+            process.standardOutput = output
+            process.standardError = output
+            try process.run()
+            process.waitUntilExit()
+            let text = String(decoding: output.fileHandleForReading.readDataToEndOfFile(), as: UTF8.self)
+            #expect(process.terminationStatus == 0, Comment(rawValue: text))
+            #expect(text.contains("\(probeKey)=ok"), Comment(rawValue: text))
+            return
+        }
+
+        let defaults = UserDefaults.standard
+        let argumentDomain = UserDefaults.argumentDomain
+        let previousArguments = defaults.volatileDomain(forName: argumentDomain)
+        var localizedArguments = previousArguments
+        localizedArguments["NSDoubleLocalizedStrings"] = true
+        defaults.setVolatileDomain(localizedArguments, forName: argumentDomain)
+        defer { defaults.setVolatileDomain(previousArguments, forName: argumentDomain) }
+
+        _ = NSApplication.shared
+        let expectedTitle = String(localized: "Could Not Open Background Session")
+        #expect(expectedTitle == "Could Not Open Background Session Could Not Open Background Session")
+        let manager = DashboardManager._testMake(
+            primaryEndpointProvider: { _ in throw DashboardNotificationEndpointFailure() })
+        defer { manager.close() }
+        let capture = DashboardNotificationAlertCapture()
+        let timer = Timer(
+            timeInterval: 0.01,
+            target: capture,
+            selector: #selector(DashboardNotificationAlertCapture.captureAndAbortModal),
+            userInfo: nil,
+            repeats: false)
+        RunLoop.main.add(timer, forMode: .modalPanel)
+
+        let sourceURL = try #require(URL(string: "https://gateway.example"))
+        try await manager.openBackgroundSession(
+            self.completion(), target: .primary, sourceURL: sourceURL)
+
+        #expect(capture.textValues.contains(expectedTitle))
+        print("\(probeKey)=ok")
+    }
+
     @Test func `background completion restores a failed dashboard before navigating`() async throws {
         let server = try await DashboardHTTPFixture.start()
         defer { server.stop() }
@@ -515,24 +594,15 @@ extension DashboardWindowOwnershipTests {
 
     private func waitForDashboard(_ controller: DashboardWindowController, path: String) async throws {
         let deadline = ContinuousClock.now + .seconds(5)
-        while true {
-            if controller.canDeliverNativeCommands, !controller.webView.isLoading,
-               controller.webView.url?.path == path
-            {
-                return
-            }
-            // MainActor may resume this observer after the deadline even when
-            // WebKit has finished. Check readiness before rejecting another wait.
-            guard ContinuousClock.now < deadline else { break }
+        // Check readiness even when the main actor resumes after the deadline.
+        while !controller.canDeliverNativeCommands || controller.webView.isLoading ||
+            controller.webView.url?.path != path,
+            ContinuousClock.now < deadline
+        {
             try await Task.sleep(for: .milliseconds(10))
         }
-        #expect(controller.canDeliverNativeCommands)
-        #expect(controller.webView.url?.path == path)
-        throw URLError(.timedOut, userInfo: [
-            NSLocalizedDescriptionKey: "Dashboard document timed out: expected path=\(path), " +
-                "actual path=\(controller.webView.url?.path ?? "nil"), " +
-                "canDeliverNativeCommands=\(controller.canDeliverNativeCommands), " +
-                "isLoading=\(controller.webView.isLoading)",
-        ])
+        try #require(controller.canDeliverNativeCommands)
+        try #require(!controller.webView.isLoading)
+        try #require(controller.webView.url?.path == path)
     }
 }

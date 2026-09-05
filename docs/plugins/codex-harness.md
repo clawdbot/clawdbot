@@ -103,8 +103,8 @@ channel is the communication surface.
 
 - The official `@openclaw/codex` plugin installed. Include `codex` in
   `plugins.allow` if your config uses an allowlist.
-- Managed Codex app-server `0.153.0`. The plugin ships and manages
-  `@openai/codex` `0.153.0` by default, so a `codex` command on `PATH` does not
+- Managed Codex app-server `0.153.4`. The plugin ships and manages
+  `@openai/codex` `0.153.4` by default, so a `codex` command on `PATH` does not
   affect normal startup. Explicit custom, remote, and macOS desktop-owned
   app-servers must report a parseable semantic version of `0.149.0` or newer.
   Newer versions continue with a compatibility warning and normal runtime
@@ -1166,14 +1166,14 @@ An authorized app can initially appear disabled or non-callable because Codex
 has not yet applied the target thread's restrictive app configuration.
 OpenClaw provisionally admits only explicitly allowed, ownership-proven apps,
 starts the thread with `_default.enabled = false`, and reads `app/installed`
-once with that thread's ID and `forceRefresh: false`. An app is exposed only
-after Codex confirms it is enabled and callable for the actual thread. Missing
-metadata, revoked auth, managed restrictions, workspace policy, and unavailable
-tools remain fail-closed.
+once with that thread's ID and `forceRefresh: false`. Missing, disabled, or
+non-callable apps produce one warning without blocking unrelated chat or
+heartbeat runs. Codex still enforces app/tool permissions, managed restrictions,
+and workspace policy; continuing the conversation does not enable an unavailable app.
 
-The check runs before OpenClaw starts a turn or commits a thread binding. A
-failed persistent provisional thread is deleted; an ephemeral thread is
-unsubscribed. If cleanup cannot be confirmed, OpenClaw retires the app-server
+The check runs before OpenClaw starts a turn or commits a thread binding. If the
+snapshot request fails, a persistent provisional thread is deleted and an
+ephemeral thread is unsubscribed. If cleanup cannot be confirmed, OpenClaw retires the app-server
 connection instead of reusing an unsafe thread.
 
 Account-wide app access never overrides an explicitly disabled configured

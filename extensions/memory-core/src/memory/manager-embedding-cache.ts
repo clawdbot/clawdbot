@@ -23,16 +23,8 @@ export function loadMemoryEmbeddingCache(params: {
   if (!params.enabled || params.providerIdentities.length === 0 || params.hashes.length === 0) {
     return new Map();
   }
-  const unique: string[] = [];
-  const seen = new Set<string>();
-  for (const hash of params.hashes) {
-    if (!hash || seen.has(hash)) {
-      continue;
-    }
-    seen.add(hash);
-    unique.push(hash);
-  }
-  if (unique.length === 0) {
+  const unresolved = new Set(params.hashes.filter(Boolean));
+  if (unresolved.size === 0) {
     return new Map();
   }
 
@@ -40,9 +32,13 @@ export function loadMemoryEmbeddingCache(params: {
   const out = new Map<string, number[]>();
   const batchSize = 400;
   for (const identity of params.providerIdentities) {
+    if (unresolved.size === 0) {
+      break;
+    }
+    const hashes = [...unresolved];
     const baseParams: SQLInputValue[] = [identity.provider, identity.model, identity.providerKey];
-    for (let start = 0; start < unique.length; start += batchSize) {
-      const batch = unique.slice(start, start + batchSize);
+    for (let start = 0; start < hashes.length; start += batchSize) {
+      const batch = hashes.slice(start, start + batchSize);
       const placeholders = batch.map(() => "?").join(", ");
       const rows = params.db
         .prepare(
@@ -51,9 +47,9 @@ export function loadMemoryEmbeddingCache(params: {
         )
         .all(...baseParams, ...batch) as Array<{ hash: string; embedding: string }>;
       for (const row of rows) {
-        if (!out.has(row.hash)) {
-          out.set(row.hash, parseEmbedding(row.embedding));
-        }
+        // The first stored row wins even when its vector needs to be regenerated.
+        out.set(row.hash, parseEmbedding(row.embedding));
+        unresolved.delete(row.hash);
       }
     }
   }

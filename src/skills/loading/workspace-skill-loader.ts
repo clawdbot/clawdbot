@@ -310,8 +310,7 @@ function loadSkillEntries(
   const entries = Array.from(merged.values())
     .toSorted((a, b) => a.skill.name.localeCompare(b.skill.name, "en"))
     .map((record) => {
-      const skill = record.skill;
-      const frontmatter = record.frontmatter;
+      const { skill, frontmatter } = record;
       const invocation = resolveSkillInvocationPolicy(frontmatter);
       const entry: SkillEntry = {
         skill,

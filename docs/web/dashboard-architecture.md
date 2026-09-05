@@ -59,12 +59,14 @@ Principles:
   on the session's board. The agent can pass `pin: true` to do the same. A
   channel presenter can instead make the same core document visible on the
   current transport.
-- **Board view:** the first pinned widget opens a resizable dashboard side panel
-  beside chat. The task toolbar's **Swap** button exchanges the main view and
+- **Board view:** **Dashboard** in the side panel opens the current task's board,
+  including its empty state, without editing the chat draft. The first pinned
+  widget opens a resizable dashboard beside chat unless a task layout is already
+  saved. The task toolbar's **Swap** button exchanges the main view and
   active side-panel content, including Chat, Dashboard, Browser, Terminal,
   Files, and Review. Its tooltip names the two views. The same toolbar's
   **Layout** menu positions the side panel left, right, or below. **Focus** in
-  the main pane header gives that view the full task area; **Restore split**
+  the same toolbar gives the main view the full task area; **Restore split**
   restores the side panel.
   Later board updates preserve the user's current layout. Closing the Dashboard
   tab removes only its view; closing the whole side panel hides it without

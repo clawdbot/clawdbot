@@ -149,35 +149,14 @@ export function startManagedGatewayConfigReloader(
     restoreConservativeRestartDebt,
     stopRestartRetries,
   } = createGatewayReloadHandlers({
-    deps: params.deps,
-    broadcast: params.broadcast,
-    ...(params.resolveGatewayContext
-      ? { resolveGatewayContext: params.resolveGatewayContext }
-      : {}),
-    getState: params.getState,
-    setState: params.setState,
-    getPluginMetadataSnapshot: params.getPluginMetadataSnapshot,
-    startChannel: params.startChannel,
-    stopChannel: params.stopChannel,
+    ...params,
     pruneInactiveChannelAccountState: params.channelManager.pruneInactiveChannelAccountState,
-    getChannelAutostartSuppression: params.getChannelAutostartSuppression,
-    stopPostReadySidecars: params.stopPostReadySidecars,
-    reloadPlugins: params.reloadPlugins,
-    logHooks: params.logHooks,
-    logChannels: params.logChannels,
-    logCron: params.logCron,
-    logReload: params.logReload,
-    cronReconciliation: params.cronReconciliation,
     createGmailRestartAbortController,
     clearGmailRestartAbortController: (abortController) => {
       if (activeGmailRestartAbortController === abortController) {
         activeGmailRestartAbortController = null;
       }
     },
-    ...(params.onCronRestart ? { onCronRestart: params.onCronRestart } : {}),
-    ...(params.requestRecoveryRestart
-      ? { requestRecoveryRestart: params.requestRecoveryRestart }
-      : {}),
     assertRestartReady: () =>
       import("../state/openclaw-database-preflight.js").then(({ assertOpenClawDatabasesReady }) =>
         assertOpenClawDatabasesReady({ env: process.env, operation: "gateway-restart" }),

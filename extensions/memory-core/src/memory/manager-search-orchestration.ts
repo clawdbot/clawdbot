@@ -516,9 +516,7 @@ export abstract class MemorySearchOrchestration extends MemoryKeywordRetrieval {
       sourceFilterVec: this.buildSourceFilter("c", sourceFilterList),
       sourceFilterChunks: this.buildSourceFilter(undefined, sourceFilterList),
     });
-    return this.attachRecallMetadata(
-      results.map((entry) => entry as MemorySearchResult & { id: string }),
-    );
+    return this.attachRecallMetadata(results);
   }
 
   private mergeHybridResults(params: {

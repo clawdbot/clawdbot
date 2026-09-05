@@ -330,8 +330,7 @@ export async function prepareGatewayServerBootstrap(input: {
   const reloadAuthOverride = authBootstrap.generatedToken
     ? mergeGatewayAuthConfig(resolvedStartupAuthOverride, { token: authBootstrap.generatedToken })
     : resolvedStartupAuthOverride;
-  const diagnosticsEnabled = isDiagnosticsEnabled(cfgAtStart);
-  setDiagnosticsEnabledForProcess(diagnosticsEnabled);
+  setDiagnosticsEnabledForProcess(isDiagnosticsEnabled(cfgAtStart));
   setGatewaySigusr1RestartPolicy({ allowExternal: isRestartEnabled(cfgAtStart) });
   const activeTaskCount = { get: () => 0 };
   setPreRestartDeferralCheck(
@@ -567,7 +566,6 @@ export async function prepareGatewayServerBootstrap(input: {
     generatedStartupAuthToken: authBootstrap.generatedToken !== undefined,
     resolvedStartupAuthOverride,
     startupTailscaleOverride,
-    diagnosticsEnabled,
     activeTaskCount,
     applyFixedGatewayOverlays,
     prepareReloadCandidate,

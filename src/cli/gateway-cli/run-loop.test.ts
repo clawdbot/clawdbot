@@ -7,6 +7,7 @@ import type { HostedGatewayStop } from "../../daemon/hosted-stop.js";
 import type { GatewayServer } from "../../gateway/server-public.js";
 import type { GatewayBonjourBeacon } from "../../infra/bonjour-discovery.js";
 import type { GatewayActiveWorkSnapshot } from "../../infra/gateway-active-work.js";
+import type { GatewayBootLifecycleCompletion } from "../../infra/gateway-boot-lifecycle.js";
 import type { GatewayRestartIntent } from "../../infra/restart-intent.js";
 import { SUPERVISOR_HINT_ENV_VARS } from "../../infra/supervisor-markers.js";
 import { createDeferredCore } from "../../shared/deferred.js";
@@ -438,6 +439,7 @@ async function runLoopWithStart(params: {
   lockPort?: number;
   healthHost?: string;
   waitForHealthyChild?: (port: number, pid?: number, host?: string) => Promise<boolean>;
+  completeBoot?: (completion: GatewayBootLifecycleCompletion) => void;
 }) {
   vi.resetModules();
   const { runGatewayLoop } = await import("./run-loop.js");
@@ -448,6 +450,7 @@ async function runLoopWithStart(params: {
     lockPort: params.lockPort,
     healthHost: params.healthHost,
     waitForHealthyChild: params.waitForHealthyChild,
+    completeBoot: params.completeBoot,
   });
   return { loopPromise };
 }
@@ -762,97 +765,199 @@ describe("runGatewayLoop", () => {
     });
   });
 
-  it("routes deferred startup failure through first-boot failure handling", async () => {
-    await withIsolatedSignals(async () => {
-      const startupError = new Error("deferred startup failed");
-      const close = createCloseMock();
-      let rejectStartup: (error: Error) => void = () => {};
-      const startupSettled = new Promise<void>((_resolve, reject) => {
-        rejectStartup = reject;
-      });
-      let markStarted: () => void = () => {};
-      const started = new Promise<void>((resolve) => {
-        markStarted = resolve;
-      });
-      const { runtime } = createRuntimeWithExitSignal();
-      const completeBoot = vi.fn();
-      const { runGatewayLoop } = await import("./run-loop.js");
-      const start = vi.fn(async () => {
-        markStarted();
-        return createGatewayServer(close, startupSettled);
-      });
-      const loop = runGatewayLoop({
-        start,
-        runtime: runtime as unknown as Parameters<typeof runGatewayLoop>[0]["runtime"],
-        completeBoot,
-      });
+  it.each(["clean", "failed"] as const)(
+    "routes deferred startup failure through first-boot handling with %s cleanup",
+    async (cleanup) => {
+      vi.clearAllMocks();
+      await withIsolatedSignals(async () => {
+        const { runGatewayLoop } = await import("./run-loop.js");
+        const startupError = new Error("deferred startup failed");
+        const cleanupError = new Error("deferred startup cleanup failed");
+        const startup = createDeferredCore();
+        const close = createCloseMock();
+        if (cleanup === "failed") {
+          close.mockRejectedValueOnce(cleanupError);
+        }
+        const { start, started } = createSignaledStart(close, startup.promise);
+        const { runtime } = createRuntimeWithExitSignal();
+        const completeBoot = vi.fn();
+        const loop = runGatewayLoop({ start, runtime, completeBoot });
+        const settled = Promise.allSettled([loop, startup.promise]);
+        try {
+          await Promise.race([started, loop]);
+          startup.reject(startupError);
 
-      await started;
-      rejectStartup(startupError);
-
-      await expect(loop).rejects.toBe(startupError);
-      expect(close).toHaveBeenCalledWith({ reason: "gateway startup failed" });
-      expect(completeBoot).toHaveBeenCalledWith({
-        outcome: "startup_failed",
-        reason: startupError.message,
+          if (cleanup === "failed") {
+            await expect(loop).rejects.toBeInstanceOf(AggregateError);
+            await expect(loop).rejects.toMatchObject({
+              cause: startupError,
+              errors: expect.arrayContaining([startupError, cleanupError]),
+            });
+          } else {
+            await expect(loop).rejects.toBe(startupError);
+          }
+          expect(start).toHaveBeenCalledOnce();
+          expect(close).toHaveBeenCalledExactlyOnceWith({ reason: "gateway startup failed" });
+          expect(completeBoot).toHaveBeenCalledWith({
+            outcome: "startup_failed",
+            reason: startupError.message,
+          });
+        } finally {
+          startup.reject(startupError);
+          await settled;
+        }
       });
-    });
-  });
+    },
+  );
 
-  it("keeps running when deferred startup fails after a SIGUSR1 replacement", async () => {
+  it.each(["clean", "failed"] as const)(
+    "fences replacement after deferred startup with %s cleanup",
+    async (cleanup) => {
+      vi.clearAllMocks();
+      await withIsolatedSignals(async ({ captureSignal }) => {
+        const { runGatewayLoop } = await import("./run-loop.js");
+        const firstStartup = createDeferredCore();
+        const thirdStarted = createDeferredCore();
+        const startupError = new Error("replacement deferred startup failed");
+        const cleanupError = new Error("replacement cleanup failed");
+        const closeFirst = createCloseMock();
+        const closeSecond = createCloseMock();
+        if (cleanup === "failed") {
+          closeSecond.mockRejectedValueOnce(cleanupError);
+        }
+        const closeThird = createCloseMock();
+        const start = vi
+          .fn<Parameters<typeof runGatewayLoop>[0]["start"]>()
+          .mockResolvedValueOnce(createGatewayServer(closeFirst, firstStartup.promise))
+          .mockImplementationOnce(async () =>
+            createGatewayServer(closeSecond, Promise.reject(startupError)),
+          )
+          .mockImplementationOnce(async () => {
+            thirdStarted.resolve();
+            return createGatewayServer(closeThird);
+          });
+        const { runtime, exited } = createRuntimeWithExitSignal();
+        const loop = runGatewayLoop({ start, runtime });
+        const loopRejected = vi.fn<(error: unknown) => void>();
+        const loopSettled = loop.catch(loopRejected);
+        let stop: (() => void) | undefined;
+        try {
+          await waitForLoopCondition(
+            () => start.mock.calls.length === 1,
+            "expected initial deferred startup",
+          );
+          const restart = captureSignal("SIGUSR1");
+          stop = captureSignal("SIGTERM");
+          restart();
+          // Observe either outcome, so incorrect recovery fails an assertion immediately.
+          await waitForLoopCondition(
+            () =>
+              loopRejected.mock.calls.length > 0 ||
+              gatewayLog.error.mock.calls.some(([message]) =>
+                String(message).startsWith("gateway startup failed:"),
+              ),
+            "expected replacement startup to reject or enter recovery",
+          );
+          expect(closeSecond).toHaveBeenCalledExactlyOnceWith({
+            reason: "gateway startup failed",
+          });
+          if (cleanup === "clean") {
+            expect(loopRejected).not.toHaveBeenCalled();
+            restart();
+            await thirdStarted.promise;
+            expect(start).toHaveBeenCalledTimes(3);
+            stop();
+            await expect(exited).resolves.toBe(0);
+          } else {
+            expect(loopRejected).toHaveBeenCalledOnce();
+            await expect(loop).rejects.toBeInstanceOf(AggregateError);
+            await expect(loop).rejects.toMatchObject({
+              cause: startupError,
+              errors: expect.arrayContaining([startupError, cleanupError]),
+            });
+            expect(start).toHaveBeenCalledTimes(2);
+            expect(runtime.exit).not.toHaveBeenCalled();
+          }
+        } finally {
+          firstStartup.resolve();
+          await firstStartup.promise;
+          if (
+            loopRejected.mock.calls.length === 0 &&
+            runtime.exit.mock.calls.length === 0 &&
+            stop
+          ) {
+            stop();
+            await exited;
+          }
+          if (loopRejected.mock.calls.length > 0) {
+            await loopSettled;
+          }
+        }
+      });
+    },
+  );
+
+  it("rejects an unclean replacement acquisition before admitting another lifecycle", async () => {
     await withIsolatedSignals(async ({ captureSignal }) => {
-      const unresolvedFirstStartup = new Promise<void>(() => {});
-      const replacementError = new Error("replacement deferred startup failed");
-      const cleanupError = new Error("replacement cleanup failed");
-      const closeFirst = createCloseMock();
-      const closeSecond = vi.fn<GatewayCloseFn>(async () => {
-        throw cleanupError;
-      });
-      const closeThird = createCloseMock();
-      let markThirdStarted: (() => void) | undefined;
-      const thirdStarted = new Promise<void>((resolve) => {
-        markThirdStarted = resolve;
-      });
+      const { GatewayStartupCleanupError } = await import("../../gateway/server-shutdown.js");
+      const { runGatewayLoop } = await import("./run-loop.js");
+      const startupError = new Error("replacement listener failed");
+      const cleanupError = new Error("replacement required cleanup failed");
+      const failure = new GatewayStartupCleanupError(startupError, cleanupError);
+      let lockCallsAtFailure = 0;
+      let cancellationsAtFailure = 0;
+      let commitsAtFailure = 0;
       const start = vi
-        .fn()
-        .mockResolvedValueOnce(createGatewayServer(closeFirst, unresolvedFirstStartup))
-        .mockImplementationOnce(async () =>
-          createGatewayServer(closeSecond, Promise.reject(replacementError)),
-        )
+        .fn<Parameters<typeof runGatewayLoop>[0]["start"]>()
+        .mockResolvedValueOnce(createGatewayServer(createCloseMock()))
         .mockImplementationOnce(async () => {
-          markThirdStarted?.();
-          return createGatewayServer(closeThird);
+          lockCallsAtFailure = acquireGatewayLock.mock.calls.length;
+          cancellationsAtFailure = cancelManagedServiceUpdateHandoff.mock.calls.length;
+          commitsAtFailure = commitManagedServiceUpdateHandoff.mock.calls.length;
+          throw failure;
         });
       const { runtime, exited } = createRuntimeWithExitSignal();
-      const { runGatewayLoop } = await import("./run-loop.js");
-      void runGatewayLoop({
-        start: start as unknown as Parameters<typeof runGatewayLoop>[0]["start"],
-        runtime: runtime as unknown as Parameters<typeof runGatewayLoop>[0]["runtime"],
-      });
-      await waitForLoopCondition(
-        () => start.mock.calls.length === 1,
-        "expected first deferred startup server",
-      );
-      const sigusr1 = captureSignal("SIGUSR1");
-      const sigterm = captureSignal("SIGTERM");
-
-      sigusr1();
-      await waitForLoopCondition(
-        () =>
-          gatewayLog.error.mock.calls.some(([message]) =>
-            String(message).includes(replacementError.message),
-          ),
-        "expected replacement deferred startup failure",
-      );
-      expect(closeSecond).toHaveBeenCalledWith({ reason: "gateway startup failed" });
-      expect(gatewayLog.warn).toHaveBeenCalledWith(expect.stringContaining(cleanupError.message));
-
-      sigusr1();
-      await thirdStarted;
-      expect(start).toHaveBeenCalledTimes(3);
-
-      sigterm();
-      await expect(exited).resolves.toBe(0);
+      const completeBoot = vi.fn();
+      const loop = runGatewayLoop({ start, runtime, completeBoot });
+      const rejected = vi.fn<(error: unknown) => void>();
+      const settled = loop.catch(rejected);
+      let stop: (() => void) | undefined;
+      try {
+        await waitForLoopCondition(() => start.mock.calls.length === 1, "expected first startup");
+        // The first generation has completed startup before its restart is requested.
+        await new Promise<void>((resolve) => {
+          setImmediate(resolve);
+        });
+        stop = captureSignal("SIGTERM");
+        captureSignal("SIGUSR1")();
+        await waitForLoopCondition(
+          () =>
+            rejected.mock.calls.length > 0 ||
+            gatewayLog.error.mock.calls.some(([message]) =>
+              String(message).startsWith("gateway startup failed:"),
+            ),
+          "expected replacement acquisition failure",
+        );
+        expect(rejected).toHaveBeenCalledExactlyOnceWith(failure);
+        await expect(loop).rejects.toBe(failure);
+        expect(start).toHaveBeenCalledTimes(2);
+        expect(acquireGatewayLock).toHaveBeenCalledTimes(lockCallsAtFailure);
+        expect(cancelManagedServiceUpdateHandoff).toHaveBeenCalledTimes(cancellationsAtFailure);
+        expect(commitManagedServiceUpdateHandoff).toHaveBeenCalledTimes(commitsAtFailure);
+        expect(completeBoot).toHaveBeenCalledWith({
+          outcome: "startup_failed",
+          reason: expect.stringContaining(startupError.message),
+        });
+        expect(runtime.exit).not.toHaveBeenCalled();
+      } finally {
+        if (rejected.mock.calls.length === 0 && stop) {
+          stop();
+          await exited;
+        }
+        if (rejected.mock.calls.length > 0) {
+          await settled;
+        }
+      }
     });
   });
 
@@ -1019,7 +1124,7 @@ describe("runGatewayLoop", () => {
     });
   });
 
-  it("names and canonically formats a gateway close failure", async () => {
+  it("reports a gateway close failure with a nonzero exit", async () => {
     vi.clearAllMocks();
 
     await withIsolatedSignals(async ({ captureSignal }) => {
@@ -1028,44 +1133,67 @@ describe("runGatewayLoop", () => {
       });
       const { start, started } = createSignaledStart(close);
       const { runtime, exited } = createRuntimeWithExitSignal();
-      await runLoopWithStart({ start, runtime });
+      const completeBoot = vi.fn();
+      await runLoopWithStart({ start, runtime, completeBoot });
       await waitForStart(started);
 
       captureSignal("SIGTERM")();
 
-      await expect(exited).resolves.toBe(0);
-      expect(gatewayLog.error).toHaveBeenCalledWith(
-        "shutdown step failed (gateway server close): close owner failed",
-      );
-    });
-  });
-
-  it("exits instead of starting a new lifecycle when restart close fails", async () => {
-    vi.clearAllMocks();
-
-    await withIsolatedSignals(async ({ captureSignal }) => {
-      const close = vi.fn<GatewayCloseFn>(async () => {
-        throw new TypeError("close owner failed");
-      });
-      const { start, started } = createSignaledStart(close);
-      const { runtime, exited } = createRuntimeWithExitSignal();
-      await runLoopWithStart({ start, runtime });
-      await waitForStart(started);
-
-      captureSignal("SIGUSR1")();
-
-      await waitForLoopCondition(
-        () => runtime.exit.mock.calls.length > 0 || start.mock.calls.length > 1,
-        "expected restart close failure to exit or start a new lifecycle",
-      );
-      expect(runtime.exit).toHaveBeenCalledWith(1);
       await expect(exited).resolves.toBe(1);
-      expect(start).toHaveBeenCalledOnce();
+      expect(completeBoot).toHaveBeenCalledWith({
+        outcome: "forced_stop",
+        reason: "gateway.stop_close_failed",
+      });
       expect(gatewayLog.error).toHaveBeenCalledWith(
         "shutdown step failed (gateway server close): close owner failed",
       );
     });
   });
+
+  it.each(["ordinary", "managed restoration"] as const)(
+    "exits instead of starting a new lifecycle when restart close fails during %s",
+    async (mode) => {
+      vi.clearAllMocks();
+      if (mode === "managed restoration") {
+        consumeGatewaySigusr1RestartIntent.mockReturnValueOnce({
+          reason: "update.run",
+          successorOwner: managedUpdateSuccessorOwner,
+        });
+        cancelManagedServiceUpdateHandoff
+          .mockResolvedValueOnce("restart-after-exit")
+          .mockResolvedValueOnce("restored-in-process");
+        commitManagedServiceUpdateHandoff.mockResolvedValueOnce(false);
+      }
+      await withIsolatedSignals(async ({ captureSignal }) => {
+        const close = vi.fn<GatewayCloseFn>(async () => {
+          throw new TypeError("close owner failed");
+        });
+        const { start, started } = createSignaledStart(close);
+        const { runtime, exited } = createRuntimeWithExitSignal();
+        await runLoopWithStart({ start, runtime });
+        await waitForStart(started);
+        const stop = captureSignal("SIGINT");
+        try {
+          captureSignal("SIGUSR1")();
+          await waitForLoopCondition(
+            () => runtime.exit.mock.calls.length > 0 || start.mock.calls.length > 1,
+            "expected restart close failure to exit or start a new lifecycle",
+          );
+          expect(runtime.exit).toHaveBeenCalledWith(1);
+          await expect(exited).resolves.toBe(1);
+          expect(start).toHaveBeenCalledOnce();
+          expect(gatewayLog.error).toHaveBeenCalledWith(
+            "shutdown step failed (gateway server close): close owner failed",
+          );
+        } finally {
+          if (runtime.exit.mock.calls.length === 0) {
+            stop();
+          }
+          await exited;
+        }
+      });
+    },
+  );
 
   it("completes SIGTERM shutdown while sidecar startup remains unresolved", async () => {
     vi.clearAllMocks();

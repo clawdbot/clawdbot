@@ -12,7 +12,7 @@ import {
   type SkillsHomeEnvSnapshot,
 } from "../test-support/home-env.test-support.js";
 import { resolveWorkshopSkillsDir } from "../workshop/skills-root.js";
-import { readSkillFrontmatterSafe } from "./local-loader.js";
+import { loadSingleSkillDirectory } from "./local-loader.js";
 import { loadWorkspaceSkills } from "./workspace-skill-loader.js";
 
 vi.mock("./plugin-skills.js", () => ({
@@ -421,10 +421,11 @@ describe("skill path containment", () => {
         description: "Readable from filesystem root",
       });
 
-      const frontmatter = readSkillFrontmatterSafe({
-        rootDir: path.parse(skillDir).root,
-        filePath: path.join(skillDir, "SKILL.md"),
-      });
+      const frontmatter = loadSingleSkillDirectory({
+        skillDir,
+        source: "openclaw-workspace",
+        rootRealPath: path.parse(skillDir).root,
+      })?.frontmatter;
 
       expect(frontmatter?.name).toBe("root-allowed");
       expect(frontmatter?.description).toBe("Readable from filesystem root");

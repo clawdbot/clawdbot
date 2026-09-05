@@ -164,11 +164,9 @@ export default definePluginEntry({
     // so they require write scope while derived text stays readable.
     registerRead("logbook.days", () => ({ days: requireService().listDays() }));
 
-    registerRead("logbook.timeline", (params) => {
-      const day = readDayParam(params);
-      const svc = requireService();
-      return { day, cards: svc.cardsForDay(day), stats: svc.dayStats(day) };
-    });
+    registerRead("logbook.timeline", (params) =>
+      requireService().timelineForDay(readDayParam(params)),
+    );
 
     registerWrite("logbook.frames", (params) => {
       const startMs = readNumberParam(params, "startMs");

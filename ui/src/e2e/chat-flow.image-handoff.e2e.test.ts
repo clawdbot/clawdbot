@@ -1,6 +1,10 @@
-import { readFile } from "node:fs/promises";
+import { readFile, writeFile } from "node:fs/promises";
 import path from "node:path";
 import { expect, it } from "vitest";
+import {
+  takeControlUiElementScreenshot,
+  takeControlUiViewportScreenshot,
+} from "../test-helpers/control-ui-e2e-screenshot.ts";
 import {
   captureUiProofEnabled,
   createChatFlowE2eSuite,
@@ -72,7 +76,12 @@ suite.define(() => {
         });
         const capture = async (stage: string) => {
           if (proofDir) {
-            await page.screenshot({ path: path.join(proofDir, `${stage}.png`), fullPage: true });
+            await writeFile(
+              path.join(proofDir, `${stage}.png`),
+              await takeControlUiViewportScreenshot(page, page.locator(".shell"), [
+                page.locator(".chat-group.user img.chat-message-image"),
+              ]),
+            );
           }
         };
 
@@ -107,7 +116,7 @@ suite.define(() => {
             .toBe(180);
           expect(await userImage.getAttribute("src")).toMatch(/^blob:/u);
           const displayed = expectDefined(await userImage.elementHandle(), "submitted image");
-          const initialPixels = await userImage.screenshot({ animations: "disabled" });
+          const initialPixels = await takeControlUiElementScreenshot(page, userImage, [userImage]);
           const continuity = await displayed.evaluateHandle((image) => {
             const frames: boolean[] = [];
             const initialBounds = image.getBoundingClientRect();
@@ -141,7 +150,9 @@ suite.define(() => {
             // Native pending sources may report zero dimensions while the browser
             // still paints the current decoded image. Compare the actual pixels.
             expect(
-              (await userImage.screenshot({ animations: "disabled" })).equals(initialPixels),
+              (await takeControlUiElementScreenshot(page, userImage, [userImage])).equals(
+                initialPixels,
+              ),
               `${stage} preserves the displayed image pixels`,
             ).toBe(true);
             expect(await page.locator(".chat-group.user [aria-busy='true']").count()).toBe(0);

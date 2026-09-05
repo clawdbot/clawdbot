@@ -542,7 +542,10 @@ export function createWorkerEnvironmentService(options: WorkerEnvironmentService
     options.liveEvents?.clear();
     options.stopNodeWorkerBundleTransfers?.();
     try {
-      await Promise.all([environmentAccess.stopAllTunnels(), options.nodePortalCarrier?.stopAll()]);
+      await joinWorkerTunnelStops([
+        environmentAccess.stopAllTunnels(),
+        options.nodePortalCarrier?.stopAll(),
+      ]);
     } finally {
       // Tunnel failures cannot release shutdown before admitted owner-bound operations drain.
       const reconciliation = reconcileInFlight;

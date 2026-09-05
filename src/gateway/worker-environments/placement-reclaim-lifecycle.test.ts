@@ -286,14 +286,16 @@ describe("placement reclaim with provider-owned node teardown", () => {
           await vi.advanceTimersByTimeAsync(1_001);
         }
         const outcome = await result;
-        expect(primaryError).toMatchObject({ code: "provider_failure" });
+        const expectedError =
+          failure === "timeout"
+            ? "Worker provider operation timed out after 1000ms"
+            : "provider destruction is indeterminate";
+        expect(primaryError).toMatchObject({ code: "provider_failure", message: expectedError });
         if (operation === "recovery") {
           expect(outcome).toBeUndefined();
           expect
             .soft(harness.reportWorkspaceResultRecoveryFailure)
-            .toHaveBeenCalledWith(
-              expect.objectContaining({ error: "Worker provider operation failed" }),
-            );
+            .toHaveBeenCalledWith(expect.objectContaining({ error: expectedError }));
           expect(placements.get(active.sessionId)?.state).toBe("draining");
         } else {
           expect.soft(outcome).toBe(primaryError);

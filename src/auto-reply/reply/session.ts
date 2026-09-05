@@ -5,7 +5,7 @@ import {
   normalizeOptionalString,
 } from "@openclaw/normalization-core/string-coerce";
 import { retireSessionMcpRuntime } from "../../agents/agent-bundle-mcp-tools.js";
-import { resolveSessionAgentId } from "../../agents/agent-scope.js";
+import { resolveAgentWorkspaceDir, resolveSessionAgentId } from "../../agents/agent-scope.js";
 import { clearBootstrapSnapshotOnSessionBoundary } from "../../agents/bootstrap-cache.js";
 import { clearAllCliSessions, getCliSessionBinding } from "../../agents/cli-session.js";
 import { resetRegisteredAgentHarnessSessions } from "../../agents/harness/registry.js";
@@ -1065,7 +1065,9 @@ async function initSessionStateAttemptLocked(
         warn: (message) => log.warn(message),
       });
     },
-    ...(resetBoundary ? { resetBoundary } : {}),
+    ...(resetBoundary
+      ? { resetBoundary: { ...resetBoundary, cwd: resolveAgentWorkspaceDir(cfg, agentId) } }
+      : {}),
     beforeEntryMutation: async ({ currentEntry, sessionEntry: entryToCommit }) => {
       if (!previousSessionEntry || !currentEntry) {
         return;

@@ -20,6 +20,8 @@ export type ChatPaneElement = HTMLElement & {
   presented?: boolean;
   sessionKey?: string;
   transcriptLoading?: boolean;
+  transcriptReady?: boolean;
+  updateComplete?: Promise<unknown>;
   visuallyPresented?: boolean;
 };
 

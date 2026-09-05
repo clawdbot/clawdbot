@@ -5,7 +5,8 @@ import {
   accessSync,
   chmodSync,
   constants,
-  cpSync,
+  copyFileSync,
+  lstatSync,
   mkdirSync,
   mkdtempSync,
   readFileSync,
@@ -486,6 +487,33 @@ function probeCrabboxMetadata(command: string, commandArgs: string[]) {
     return first;
   }
   return checkedOutput(command, commandArgs, CRABBOX_METADATA_PROBE_RETRY_TIMEOUT_MS);
+}
+
+function supportsPreparedTestboxArtifacts() {
+  const metadata = checkedOutput(binary, ["providers", "describe", "blacksmith-testbox", "--json"]);
+  if (metadata.status !== 0) {
+    return false;
+  }
+  try {
+    const description: unknown = JSON.parse(metadata.stdout);
+    if (
+      !isRecord(description) ||
+      description.schemaVersion !== 2 ||
+      !isRecord(description.provider) ||
+      description.provider.canonical !== "blacksmith-testbox" ||
+      !isRecord(description.capabilities)
+    ) {
+      return false;
+    }
+    const features = description.capabilities.features;
+    return (
+      Array.isArray(features) &&
+      features.every((feature) => typeof feature === "string") &&
+      features.includes("prepared-artifact-workspace")
+    );
+  } catch {
+    return false;
+  }
 }
 
 function parseCrabboxVersion(value: string) {
@@ -1381,30 +1409,66 @@ function observeBlacksmithTimingJSONLine(line: string) {
   }
 }
 
-function preserveTemporaryCrabboxRuns() {
+function preserveTemporaryCrabboxArtifacts() {
   if (childCwd === repoRoot) {
     return;
   }
-
-  const sourceRuns = resolve(childCwd, ".crabbox", "runs");
-  if (!pathExists(sourceRuns)) {
+  const sourceRoot = resolve(childCwd, ".crabbox");
+  if (!crabboxArtifactDirectoryExists(sourceRoot)) {
+    return;
+  }
+  const directories = ["runs", "captures"].filter((name) => {
+    const source = resolve(sourceRoot, name);
+    return crabboxArtifactDirectoryExists(source) && readdirSync(source).length > 0;
+  });
+  if (directories.length === 0) {
     return;
   }
 
-  const targetRuns = resolve(repoRoot, ".crabbox", "runs");
-  mkdirSync(targetRuns, { recursive: true });
-  let preserved = 0;
-  for (const entry of readdirSync(sourceRuns)) {
-    cpSync(resolve(sourceRuns, entry), resolve(targetRuns, entry), {
-      recursive: true,
-      force: true,
-    });
-    preserved += 1;
+  // Native artifacts reuse lease names. Keep each invocation together without
+  // overwriting earlier evidence, and copy only outputs, never other Crabbox state.
+  const retainedRoot = resolve(repoRoot, ".crabbox", "wrapper-artifacts");
+  for (const directory of [dirname(retainedRoot), retainedRoot]) {
+    if (!crabboxArtifactDirectoryExists(directory)) {
+      mkdirSync(directory, { mode: 0o700 });
+    }
   }
-  if (preserved > 0) {
-    console.error(
-      `[crabbox] preserved ${preserved} temporary run artifact ${preserved === 1 ? "directory" : "directories"} under ${relative(repoRoot, targetRuns)}`,
-    );
+  const destination = mkdtempSync(resolve(retainedRoot, "run-"));
+  try {
+    for (const name of directories) {
+      copyCrabboxArtifact(resolve(sourceRoot, name), resolve(destination, name));
+    }
+  } catch (error) {
+    rmSync(destination, { recursive: true, force: true });
+    throw error;
+  }
+  console.error(
+    `[crabbox] preserved temporary artifacts: ${sourceRoot} -> ${relative(repoRoot, destination)}`,
+  );
+}
+
+function crabboxArtifactDirectoryExists(directory: string) {
+  const info = lstatSync(directory, { throwIfNoEntry: false });
+  if (info && !info.isDirectory()) {
+    throw new Error(`artifact path must be a real directory: ${directory}`);
+  }
+  return Boolean(info);
+}
+
+function copyCrabboxArtifact(source: string, destination: string) {
+  // Links can escape the output allowlist or point back into the deleted capsule.
+  // Copy only regular files and real directories; diagnostics remain private bytes.
+  const info = lstatSync(source);
+  if (info.isDirectory()) {
+    mkdirSync(destination, { mode: 0o700 });
+    for (const entry of readdirSync(source)) {
+      copyCrabboxArtifact(resolve(source, entry), resolve(destination, entry));
+    }
+  } else if (info.isFile()) {
+    copyFileSync(source, destination, constants.COPYFILE_EXCL);
+    chmodSync(destination, 0o600);
+  } else {
+    throw new Error(`artifact must be a regular file or directory: ${source}`);
   }
 }
 
@@ -3655,8 +3719,9 @@ function applyRunTransforms(
     provider: string;
   },
 ) {
+  const testboxWorkspace = canonicalProviderName(options.provider) === "blacksmith-testbox";
   const sourceBootstrap = options.capsule
-    ? remoteSourceBootstrap(options.capsule, options.changedGateAlias)
+    ? remoteSourceBootstrap(options.capsule, options.changedGateAlias, testboxWorkspace)
     : "";
   const markedArgs = injectRemoteChangedGateEnvironment(initialInvocation, initialFacts);
   const localArgs =
@@ -3883,6 +3948,16 @@ if (canonicalProvider === "blacksmith-testbox") {
     );
     process.exit(2);
   }
+  const artifactRun =
+    normalizedArgs[0] === "run" &&
+    (hasOption(normalizedArgs, "--artifact-glob") ||
+      hasOption(normalizedArgs, "--require-artifact"));
+  if (artifactRun && !supportsPreparedTestboxArtifacts()) {
+    console.error(
+      "[crabbox] Testbox artifact collection requires Crabbox's prepared-artifact-workspace capability. Update Crabbox and retry; refusing to collect from the disposable sync checkout.",
+    );
+    process.exit(2);
+  }
 }
 
 const explicitProviderRequested = Boolean(commandProviderValue);
@@ -3932,7 +4007,7 @@ let childCwd = repoRoot;
 let cleanupChildCwd = () => {};
 let fullCheckout = null;
 let stopFullCheckoutKeepalive = () => {};
-let cleanupDone = false;
+let cleanupSucceeded: boolean | undefined;
 let sourceCapsule: CrabboxSourceCapsule | null = null;
 let remoteChangedGateAlias = "";
 let capturedBlacksmithLeaseId = "";
@@ -3994,10 +4069,10 @@ try {
 }
 
 function cleanupOnce() {
-  if (cleanupDone) {
-    return;
+  if (cleanupSucceeded !== undefined) {
+    return cleanupSucceeded;
   }
-  cleanupDone = true;
+  cleanupSucceeded = false;
   stopFullCheckoutKeepalive();
   wsl2ScriptBootstrap.cleanup();
   scriptBootstrap.cleanup();
@@ -4006,8 +4081,18 @@ function cleanupOnce() {
     // so restore the real repo or every later reuse needs --reclaim.
     restoreTemporaryBlacksmithTestboxClaim(normalizedArgs, capturedBlacksmithLeaseId);
   }
-  preserveTemporaryCrabboxRuns();
+  try {
+    preserveTemporaryCrabboxArtifacts();
+  } catch (error) {
+    console.error(
+      `[crabbox] artifact preservation failed: ${error instanceof Error ? error.message : String(error)}; temporary checkout retained at ${childCwd}. Recover .crabbox/runs and .crabbox/captures from this checkout before removing it.`,
+    );
+    process.exitCode ||= 1;
+    return false;
+  }
   cleanupChildCwd();
+  cleanupSucceeded = true;
+  return true;
 }
 
 const invocation = parseCommandInvocation(help.text, normalizedArgs);
@@ -4203,12 +4288,12 @@ child.on("exit", (code, signal) => {
       exitCode = 2;
     }
   }
-  cleanupOnce();
+  const artifactsPreserved = cleanupOnce();
   if (signal) {
     process.exit(signalExitCodes.get(signal) ?? 1);
     return;
   }
-  const finalExitCode = fullCheckoutAvailable ? (exitCode ?? 1) : 1;
+  const finalExitCode = (exitCode ?? 1) || (fullCheckoutAvailable && artifactsPreserved ? 0 : 1);
   if (
     finalExitCode !== 0 &&
     reusedRunLeaseId &&

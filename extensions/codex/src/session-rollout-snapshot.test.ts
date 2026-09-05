@@ -47,7 +47,8 @@ describe("bounded native rollout snapshot", () => {
       const snapshot = await f.read();
       expect(snapshot.metadata).toEqual(meta().payload);
       await snapshot.assertUnchanged();
-      expect(await fs.readFile(f.selectedPath)).toEqual(before);
+      // Deep equality expands every byte into entries; compare the full buffers natively.
+      expect((await fs.readFile(f.selectedPath)).equals(before)).toBe(true);
     },
   );
 

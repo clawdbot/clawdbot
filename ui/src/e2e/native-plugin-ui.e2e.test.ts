@@ -161,9 +161,15 @@ const actionPluginModule = `export default { id:"ui-fixture", activate(host) {
 } };`;
 
 async function selectView(page: Page, label: string, value: string) {
-  await page.getByRole("button", { name: "Customize UI", exact: true }).click();
+  await openCustomizeUi(page);
   await page.getByRole("combobox", { name: label, exact: true }).selectOption(value);
   await page.getByRole("button", { name: "Close", exact: true }).last().click();
+}
+
+async function openCustomizeUi(page: Page) {
+  await page.locator("button.plugin-ui-recovery").evaluate((button) => {
+    (button as HTMLButtonElement).click();
+  });
 }
 
 suite.define(() => {
@@ -604,6 +610,7 @@ suite.define(() => {
         await expect.poll(() => page.locator(".board-session-surface").isVisible()).toBe(false);
         await expectOneAccessory();
         await page.screenshot({ path: path.join(suite.artifactDir, "before.png"), fullPage: true });
+        expect(await page.locator("button.plugin-ui-recovery").isVisible()).toBe(false);
         for (const replacement of [
           "",
           "ui-fixture/delegated-composer",
@@ -654,7 +661,7 @@ suite.define(() => {
         await page
           .getByLabel("Fixture draft", { exact: true })
           .fill("Send through the canonical composer");
-        await page.getByRole("button", { name: "Customize UI", exact: true }).click();
+        await openCustomizeUi(page);
         const composerSelect = page.getByRole("combobox", { name: "Composer", exact: true });
         expect(await composerSelect.inputValue()).toBe("ui-fixture/composer");
         await composerSelect.selectOption("");
@@ -695,12 +702,13 @@ suite.define(() => {
         });
         await selectView(page, "Workspace", "ui-fixture/workspace");
         await page.getByRole("heading", { name: "Custom workspace" }).waitFor();
-        await page.getByRole("button", { name: "Customize UI", exact: true }).waitFor();
         await page.screenshot({
           path: path.join(suite.artifactDir, "custom-workspace.png"),
           fullPage: true,
         });
-        await page.getByRole("button", { name: "Show built-in workspace" }).click();
+        await page.getByRole("button", { name: "Customize UI", exact: true }).click();
+        await page.getByRole("combobox", { name: "Workspace", exact: true }).selectOption("");
+        await page.getByRole("button", { name: "Close", exact: true }).last().click();
         await page.getByRole("link", { name: "UI fixture", exact: true }).waitFor();
         await page.getByRole("link", { name: "UI fixture", exact: true }).click();
         await page.getByRole("heading", { name: "Fixture revision one" }).waitFor();
@@ -775,7 +783,7 @@ suite.define(() => {
           await gateway.emitGatewayEvent("plugins.controlUi.changed", { revision });
         };
         const readComposerSelection = async () => {
-          await page.getByRole("button", { name: "Customize UI", exact: true }).click();
+          await openCustomizeUi(page);
           const selected = await page
             .getByRole("combobox", { name: "Composer", exact: true })
             .inputValue();
@@ -783,7 +791,7 @@ suite.define(() => {
           return selected;
         };
         await gateway.setMethodResponse("plugins.controlUi.list", catalog("two"));
-        await page.getByRole("button", { name: "Customize UI", exact: true }).click();
+        await openCustomizeUi(page);
         await page.getByRole("button", { name: "Reload plugin UI", exact: true }).click();
         await gateway.waitForRequest("plugins.controlUi.reload");
         await page.getByRole("button", { name: "Close", exact: true }).last().click();
@@ -796,7 +804,7 @@ suite.define(() => {
         expect(await gateway.getRequests("fixture.stale")).toHaveLength(0);
         await selectView(page, "Composer", "ui-fixture/composer");
         const sameRevisionListed = (await gateway.getRequests("plugins.controlUi.list")).length;
-        await page.getByRole("button", { name: "Customize UI", exact: true }).click();
+        await openCustomizeUi(page);
         const reloadButton = page.getByRole("button", { name: "Reload plugin UI", exact: true });
         await reloadButton.click();
         await gateway.waitForRequest("plugins.controlUi.list", { after: sameRevisionListed });
@@ -836,7 +844,7 @@ suite.define(() => {
           await expect
             .poll(() => page.getByLabel("Fixture outcome").textContent())
             .toBe("completed");
-          await page.getByRole("button", { name: "Customize UI", exact: true }).click();
+          await openCustomizeUi(page);
           for (const surface of ["Composer", "Workspace"]) {
             expect(
               await page.getByRole("combobox", { name: surface, exact: true }).inputValue(),
@@ -982,7 +990,7 @@ suite.define(() => {
         });
         await gateway.setMethodResponse("plugins.controlUi.list", next);
         await gateway.setMethodResponse("plugins.controlUi.reload", next);
-        await page.getByRole("button", { name: "Customize UI", exact: true }).click();
+        await openCustomizeUi(page);
         const reload = page.getByRole("button", { name: "Reload plugin UI", exact: true });
         await reload.click();
         await gateway.waitForRequest("fixture.peerStarted");

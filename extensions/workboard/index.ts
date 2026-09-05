@@ -23,6 +23,20 @@ export default definePluginEntry({
   description: "Dashboard workboard for agent-owned issues and sessions.",
   register(api) {
     const store = WorkboardStore.openSqlite();
+    api.lifecycle.registerRuntimeLifecycle({
+      id: "workboard-sqlite-store",
+      cleanup: ({ reason, sessionKey, runId }) => {
+        // Session cleanup shares this hook, but only registry retirement owns the whole store.
+        if (
+          sessionKey === undefined &&
+          runId === undefined &&
+          (reason === "disable" || reason === "restart")
+        ) {
+          return store.close();
+        }
+        return undefined;
+      },
+    });
     const automationNudge = createWorkboardAutomationNudgeService({
       store,
       gateway: api.runtime.gateway,
@@ -67,22 +81,26 @@ export default definePluginEntry({
     api.registerService(lifecycleSync);
     api.on("gateway_start", () => lifecycleSync.onGatewayStart());
     api.on("gateway_stop", () => lifecycleSync.onGatewayStop());
-    api.on("subagent_ended", async (event) => {
-      await syncWorkboardSubagentEnded({
-        store,
-        worktrees: api.runtime.worktrees,
-        event,
-        onMatched: automationNudge.nudge,
-      });
-    });
-    api.on("agent_end", async (event, context) => {
-      await syncWorkboardAgentEnded({
-        store,
-        event,
-        context,
-        onMatched: automationNudge.nudge,
-      });
-    });
+    api.on("subagent_ended", (event) =>
+      store.runOperation(async () => {
+        await syncWorkboardSubagentEnded({
+          store,
+          worktrees: api.runtime.worktrees,
+          event,
+          onMatched: automationNudge.nudge,
+        });
+      }),
+    );
+    api.on("agent_end", (event, context) =>
+      store.runOperation(async () => {
+        await syncWorkboardAgentEnded({
+          store,
+          event,
+          context,
+          onMatched: automationNudge.nudge,
+        });
+      }),
+    );
     api.registerCli(
       async ({ program }) => {
         const { registerWorkboardCli } = await import("./src/cli.js");

@@ -1,6 +1,6 @@
 {
   "name": "@openclaw/geolocation-plugin",
-  "version": "2026.8.1",
+  "version": "2026.9.1",
   "description": "OpenClaw geolocation plugin resolving client IP addresses to a coarse city using a locally cached IP-geolocation database.",
   "repository": {
     "type": "git",
@@ -18,10 +18,10 @@
       "./index.ts"
     ],
     "compat": {
-      "pluginApi": ">=2026.8.1"
+      "pluginApi": ">=2026.9.1"
     },
     "build": {
-      "openclawVersion": "2026.8.1"
+      "openclawVersion": "2026.9.1"
     }
   }
 }

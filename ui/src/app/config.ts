@@ -10,6 +10,7 @@ import {
 } from "../../../src/gateway/control-ui-bootstrap-contract.js";
 import { normalizeAssistantIdentity } from "../lib/assistant-identity.ts";
 import { resolveControlUiAuthCandidates } from "./control-ui-auth.ts";
+import { canReloadControlUiDocument } from "./document-reload-guard.ts";
 
 type ApplicationConfigAuthSource = {
   hello?: { auth?: { deviceToken?: string | null } | null } | null;
@@ -253,7 +254,9 @@ export function createApplicationConfigCapability(params: {
         if (documentTerminalEnabled !== null && next.terminalEnabled !== documentTerminalEnabled) {
           // CSP headers cannot change on a live document. Reload in either
           // direction so the document and accepted terminal state stay aligned.
-          window.location.reload();
+          if (canReloadControlUiDocument()) {
+            window.location.reload();
+          }
           return next;
         }
         current = next;

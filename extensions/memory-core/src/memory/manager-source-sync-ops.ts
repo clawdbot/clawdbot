@@ -71,12 +71,11 @@ export abstract class MemoryManagerSourceSyncOps extends MemoryManagerSessionSyn
       batch: this.batch.enabled,
       concurrency: this.getIndexConcurrency(),
     });
-    const existingState = loadMemorySourceFileState({
+    const existingRows = loadMemorySourceFileState({
       db: this.db,
       source: "memory",
     });
-    const existingRows = existingState.rows;
-    const existingHashes = existingState.hashes;
+    const existingHashes = new Map(existingRows.map((row) => [row.path, row.hash]));
     const activePaths = new Set(fileEntries.map((entry) => entry.path));
     if (params.progress) {
       params.progress.total += fileEntries.length;
@@ -204,7 +203,7 @@ export abstract class MemoryManagerSourceSyncOps extends MemoryManagerSessionSyn
         : loadMemorySourceFileState({
             db: this.db,
             source: "sessions",
-          }).rows,
+          }),
       sessionPathForFile: (file) => this.sessionPathForCorpusEntry(corpusEntryForPath(file)),
     });
     const { activePaths, existingRows, existingHashes, indexAll } = sessionPlan;
@@ -267,7 +266,7 @@ export abstract class MemoryManagerSourceSyncOps extends MemoryManagerSessionSyn
         loadMemorySourceFileState({
           db: this.db,
           source: "sessions",
-        }).rows.map((row) => row.path),
+        }).map((row) => row.path),
       );
       for (const file of targetArchiveFiles) {
         const corpusEntry = corpusEntryForPath(file);

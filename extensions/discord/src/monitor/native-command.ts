@@ -525,15 +525,21 @@ async function dispatchDiscordCommandInteraction(params: {
           readOnly: true,
         })
       : undefined;
-  const menu = resolveCommandArgMenu({
-    command,
-    args: commandArgs,
-    cfg,
-    provider: menuModelContext?.provider,
-    model: menuModelContext?.model,
-    agentRuntime: menuModelContext?.agentRuntime,
-    ...(menuModelCatalog?.length ? { catalog: menuModelCatalog } : {}),
-  });
+  const menuRouteState = command.key === "verbose" ? await getNativeRouteState() : undefined;
+  // Normal dispatch owns the unavailable-binding reply; do not offer choices it cannot apply.
+  const menu =
+    menuRouteState?.bindingReadiness?.ok === false
+      ? null
+      : resolveCommandArgMenu({
+          command,
+          args: commandArgs,
+          cfg,
+          session: menuRouteState?.effectiveRoute,
+          provider: menuModelContext?.provider,
+          model: menuModelContext?.model,
+          agentRuntime: menuModelContext?.agentRuntime,
+          ...(menuModelCatalog?.length ? { catalog: menuModelCatalog } : {}),
+        });
   if (menu) {
     const menuPayload = buildDiscordCommandArgMenu({
       command,

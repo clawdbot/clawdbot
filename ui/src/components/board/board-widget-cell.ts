@@ -78,6 +78,7 @@ class OpenClawBoardWidgetCell extends OpenClawLightDomElement {
   @property({ attribute: false }) widgetFrameUrl?: BoardWidgetFrameUrl;
   @property({ attribute: false }) callbacks?: BoardWidgetCellCallbacks;
   @property({ type: Boolean }) active = true;
+  @property({ type: Boolean }) bridgeEnabled = true;
   @property({ type: Boolean }) dragging = false;
   @property({ type: Number }) focusTabIndex = -1;
   @property({ type: Number }) positionInSet = 1;
@@ -106,6 +107,7 @@ class OpenClawBoardWidgetCell extends OpenClawLightDomElement {
   });
   private readonly frame = new BoardWidgetFrameLifecycle({
     active: () => this.active,
+    bridgeEnabled: () => this.bridgeEnabled,
     connected: () => this.isConnected,
     context: () => this.context,
     refreshFrame: () => this.callbacks?.frameLoadFailed,

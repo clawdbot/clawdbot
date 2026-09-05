@@ -8,6 +8,7 @@ import {
   GATEWAY_CLIENT_MODES,
 } from "../../packages/gateway-protocol/src/client-info.js";
 import { listSystemPresence } from "../infra/system-presence.js";
+import { trackAsyncWork } from "../shared/async-work-scope.js";
 import {
   ensureProfileForEmail,
   getUserProfileDisplay,
@@ -47,6 +48,7 @@ function makeContextParams(
     }),
   };
   return {
+    trackExecution: trackAsyncWork,
     deps: {} as never,
     runtimeState,
     getRuntimeConfig: vi.fn(() => config),

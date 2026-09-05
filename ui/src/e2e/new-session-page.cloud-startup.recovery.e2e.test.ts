@@ -1,6 +1,7 @@
-import { mkdir } from "node:fs/promises";
+import { mkdir, writeFile } from "node:fs/promises";
 import path from "node:path";
 import { expect, it } from "vitest";
+import { takeControlUiViewportScreenshot } from "../test-helpers/control-ui-e2e-screenshot.ts";
 import {
   SESSION_LIST_DEFAULTS,
   WORKSPACE,
@@ -181,11 +182,12 @@ suite.define(() => {
           .toBe("false");
       } finally {
         if (captureUiProof) {
-          await page.screenshot({
-            animations: "disabled",
-            fullPage: true,
-            path: path.join(suite.artifactDir, "personal-account-recovery.png"),
-          });
+          await writeFile(
+            path.join(suite.artifactDir, "personal-account-recovery.png"),
+            await takeControlUiViewportScreenshot(page, page.locator(".shell"), [
+              page.locator(".new-session-page__message"),
+            ]),
+          );
         }
       }
       await page.getByRole("button", { name: "Start session" }).click();
@@ -430,13 +432,10 @@ suite.define(() => {
         await expect.poll(() => start.isDisabled()).toBe(true);
         if (captureUiProof) {
           await mkdir(path.join(suite.artifactDir, "cloud-session-recovery"), { recursive: true });
-          await page.screenshot({
-            path: path.join(
-              path.join(suite.artifactDir, "cloud-session-recovery"),
-              "01-interrupted.png",
-            ),
-            fullPage: true,
-          });
+          await writeFile(
+            path.join(suite.artifactDir, "cloud-session-recovery", "01-interrupted.png"),
+            await takeControlUiViewportScreenshot(page, page.locator(".shell"), [interrupted]),
+          );
         }
         const reset = interrupted.getByRole("button", { name: "Reset", exact: true });
         expect(await reset.count()).toBe(1);
@@ -448,13 +447,10 @@ suite.define(() => {
         await expect.poll(() => start.isEnabled()).toBe(true);
         expect(await readRecovery()).toBeNull();
         if (captureUiProof) {
-          await page.screenshot({
-            path: path.join(
-              path.join(suite.artifactDir, "cloud-session-recovery"),
-              "02-recovered.png",
-            ),
-            fullPage: true,
-          });
+          await writeFile(
+            path.join(suite.artifactDir, "cloud-session-recovery", "02-recovered.png"),
+            await takeControlUiViewportScreenshot(page, page.locator(".shell"), [composer]),
+          );
         }
 
         const previousCreateCount = (await gateway.getRequests("sessions.create")).length;

@@ -78,7 +78,7 @@ export async function prepareCodexAttemptContext(
       ...(transcriptReadFence ? { admission: transcriptReadFence } : {}),
     });
     connection.runAbortController.signal.throwIfAborted();
-    params.hostCapabilities.assertActive();
+    connection.assertCurrent();
     return messages;
   };
   const historyState = {

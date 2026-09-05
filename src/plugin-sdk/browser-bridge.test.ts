@@ -1,4 +1,4 @@
-// Browser bridge tests protect async activation and lifecycle delegation.
+// Browser bridge tests protect narrow loading, async activation, and lifecycle delegation.
 import { createServer, type Server } from "node:http";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import type { BrowserBridge, startBrowserBridgeServer } from "./browser-bridge.js";
@@ -69,7 +69,7 @@ describe("browser bridge facade", () => {
   });
 
   for (const operation of ["startBrowserBridgeServer", "stopBrowserBridgeServer"] as const) {
-    it(`awaits activation before ${operation} and preserves argument and result identity`, async () => {
+    it(`awaits activation of the bridge-only artifact before ${operation} and preserves identity`, async () => {
       const surface = createSurface();
       let resolveActivation!: (value: typeof surface) => void;
       const activation = new Promise<typeof surface>((resolve) => {
@@ -96,7 +96,7 @@ describe("browser bridge facade", () => {
       );
       expect(loaders.async).toHaveBeenCalledWith({
         dirName: "browser",
-        artifactBasename: "runtime-api.js",
+        artifactBasename: "bridge-api.js",
       });
     });
 

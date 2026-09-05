@@ -26,10 +26,10 @@ type DesktopConnectOptions = {
 export type DesktopConnectionHandle = {
   disconnect(): void;
   disableInput(): void;
-  sendBackspace?(): void;
-  sendKeyboardEvent?(event: KeyboardEvent): void;
-  sendText?(text: string): void;
-  setScaleViewport?(enabled: boolean): void;
+  sendBackspace(): void;
+  sendKeyboardEvent(event: KeyboardEvent): void;
+  sendText(text: string): void;
+  setScaleViewport(enabled: boolean): void;
 };
 
 type RfbClient = EventTarget & {

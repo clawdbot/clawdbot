@@ -8,6 +8,7 @@ import type { ResolvedGatewayAuth } from "../auth.js";
 import type { PluginNodeCapabilitySurface } from "../plugin-node-capability.js";
 import { createGatewayBroadcaster } from "../server-broadcast.js";
 import { MAX_BUFFERED_BYTES } from "../server-constants.js";
+import { GatewayClientRegistry } from "./client-registry.js";
 import {
   attachGatewayWsForTest,
   createGatewayWsTestLogger,
@@ -556,7 +557,7 @@ describe("attachGatewayWsConnectionHandler", () => {
   it("keeps a closing node discoverable throughout pending lifecycle dispatch and fanout", async () => {
     const unregister = vi.fn(() => "draining-node");
     const get = vi.fn(() => undefined);
-    const clients = new Set<GatewayWsClient>();
+    const clients = new GatewayClientRegistry();
     const socket = createGatewayWsTestSocket();
     const { passed } = await connectTestWs({
       clients,

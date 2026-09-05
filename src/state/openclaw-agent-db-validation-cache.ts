@@ -1,4 +1,5 @@
 import path from "node:path";
+import { isPathInside } from "../infra/path-guards.js";
 import { resolveGlobalSingleton } from "../shared/global-singleton.js";
 
 // Physical close retains validation for cheap reopens. Registry lifecycle changes
@@ -28,6 +29,10 @@ export function invalidateOpenClawAgentDatabaseValidationsForAgent(agentId: stri
   }
 }
 
-export function clearOpenClawAgentDatabaseValidationCache(): void {
-  validatedPaths.clear();
+export function clearOpenClawAgentDatabaseValidationCache(rootPath?: string): void {
+  for (const pathname of validatedPaths.keys()) {
+    if (rootPath === undefined || isPathInside(rootPath, pathname)) {
+      validatedPaths.delete(pathname);
+    }
+  }
 }

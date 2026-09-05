@@ -2878,7 +2878,6 @@ func TestContextualProtectedProductLinksRecognizeCanonicalDestinations(t *testin
 		{"fal", "/providers/fal"},
 		{"Fal", "/providers/fal"},
 		{"Fireworks", "/providers/fireworks"},
-		{"Inferrs", "/providers/inferrs"},
 		{"Meta", "/providers/meta"},
 		{"Runway", "/providers/runway"},
 		{"Synthetic", "/providers/synthetic"},

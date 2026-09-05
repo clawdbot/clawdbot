@@ -11,6 +11,7 @@ import type { QuestionRequestQuestion } from "../../../packages/gateway-protocol
 import type { ReplyPayload } from "../../auto-reply/reply-payload.js";
 import { resolveControlUiSessionLinkBase } from "../../config/control-ui-link-base.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
+import { runWithQuestionChannelDeliveries } from "../../infra/question-channel-runtime.js";
 import { buildAgentHarnessQuestionPromptPayload } from "../harness/user-input-bridge.js";
 
 /** Tools whose call opens a question a person must answer before the turn continues. */
@@ -38,7 +39,9 @@ export async function sendQuestionToolPrompt(params: {
   config?: OpenClawConfig;
   send: QuestionPromptSend;
 }): Promise<void> {
-  const { questionId, questions, send } = params;
+  const { questionId, questions } = params;
+  const send: QuestionPromptSend = (payload) =>
+    runWithQuestionChannelDeliveries([questionId], () => params.send(payload));
   if (params.toolName === "secrets") {
     const binding = questions[0]?.secretStore;
     if (!binding) {

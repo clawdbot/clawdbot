@@ -6,6 +6,7 @@ import {
 } from "../../state/openclaw-state-db.js";
 import { STALE_WORKER_BUILD_REASON } from "./admission.js";
 import type { WorkerNodeDesktopCarrier } from "./node-desktop-carrier.js";
+import { createWorkerNodePortalCarrier } from "./portal-node-carrier.js";
 import * as support from "./service.test-support.js";
 import { createWorkerEnvironmentStore } from "./store.js";
 import type { WorkerTunnelManager } from "./tunnel.js";
@@ -19,6 +20,13 @@ describe("worker environment service", () => {
   it("drains all tunnel owners before reporting an independent shutdown failure", async () => {
     const shutdownError = new Error("SSH tunnel shutdown failed");
     const nodeShutdown = createDeferred();
+    const portalShutdown = createDeferred();
+    const portalStopStarted = createDeferred();
+    const nodePortalCarrier = createWorkerNodePortalCarrier({ store: support.testState.store });
+    vi.spyOn(nodePortalCarrier, "stopAll").mockImplementation(async () => {
+      portalStopStarted.resolve();
+      await portalShutdown.promise;
+    });
     const tunnelManager = {
       stopAll: vi.fn().mockRejectedValueOnce(shutdownError).mockResolvedValue(undefined),
     } as unknown as WorkerTunnelManager;
@@ -40,6 +48,7 @@ describe("worker environment service", () => {
       tunnelManager,
       nodeTunnelManager,
       nodeDesktopCarrier,
+      nodePortalCarrier,
     });
     const stopping = workerService.stop();
     const settled = vi.fn();
@@ -54,9 +63,16 @@ describe("worker environment service", () => {
       expect(nodeDesktopCarrier.stopAll).toHaveBeenCalledOnce();
 
       nodeShutdown.resolve();
+      await portalStopStarted.promise;
+      await new Promise<void>((resolve) => {
+        setImmediate(resolve);
+      });
+      expect(settled).not.toHaveBeenCalled();
+      portalShutdown.resolve();
       await expect(stopping).rejects.toBe(shutdownError);
     } finally {
       nodeShutdown.resolve();
+      portalShutdown.resolve();
       await stopping.catch(() => undefined);
     }
   });

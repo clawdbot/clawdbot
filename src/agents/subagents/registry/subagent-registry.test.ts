@@ -271,6 +271,19 @@ vi.mock("./subagent-registry-state.js", () => ({
   restoreSubagentRunsFromDisk: mocks.restoreSubagentRunsFromDisk,
 }));
 
+vi.mock("./subagent-registry-replacement-store.js", () => ({
+  commitSubagentTaskReplacement: vi.fn(
+    (
+      params: Parameters<
+        typeof import("./subagent-registry-replacement-store.js").commitSubagentTaskReplacement
+      >[0],
+    ) => {
+      mocks.persistSubagentRunsToDiskOrThrow(params.runs, params.changedRunIds);
+      return params.task.next;
+    },
+  ),
+}));
+
 vi.mock("../announce/subagent-announce.js", () => ({
   captureSubagentCompletionReply: mocks.captureSubagentCompletionReply,
   runSubagentAnnounceFlow: mocks.runSubagentAnnounceFlow,
@@ -1434,6 +1447,116 @@ describe("subagent registry seam flow", () => {
     } finally {
       resetTaskRegistryForTests({ persist: false });
       resetTaskFlowRegistryForTests({ persist: false });
+    }
+  });
+
+  it.each(["done"] as const)(
+    "settles and announces a retired running row whose saved session completed as %s",
+    async (status) => {
+      resetTaskRegistryForTests({ persist: false });
+      resetTaskFlowRegistryForTests({ persist: false });
+      try {
+        const startedAt = Date.now() - 2_000;
+        const endedAt = Date.now() - 1_000;
+        const runId = "run-restored-completed-session";
+        const childSessionKey = "agent:main:subagent:restored-completed-session";
+        mocks.loadSessionStore.mockReturnValue(
+          createSessionStore(
+            {
+              status,
+              startedAt,
+              endedAt,
+              updatedAt: endedAt,
+              lifecycleRevision: "revision-child",
+              lifecycleRunId: runId,
+              abortedLastRun: false,
+            },
+            childSessionKey,
+          ),
+        );
+        expect(
+          createRunningTaskRun(
+            makeRunningTaskParams({ runId, childSessionKey, startedAt, task: "saved completion" }),
+          ),
+        ).not.toBeNull();
+        const restored = createSubagentRunRecord({
+          runId,
+          childSessionKey,
+          task: "saved completion",
+          createdAt: startedAt,
+          execution: { status: "running", startedAt, lifecycleGeneration: "retired-generation" },
+        });
+        mocks.restoreSubagentRunsFromDisk.mockImplementation(((params: {
+          runs: Map<string, SubagentRunRecord>;
+        }) => {
+          params.runs.set(runId, restored);
+          return 1;
+        }) as never);
+        mockGatewayMethods(mocks.callGateway, { "agent.wait": { status: "timeout" } });
+
+        hydrateAndActivateRegistry();
+
+        await waitForFast(() => {
+          expect(findRequesterRun(runId)).toMatchObject({
+            execution: { status: "terminal", endedAt, outcome: { status: "ok" } },
+            endedReason: SUBAGENT_ENDED_REASON_COMPLETE,
+            delivery: { status: "delivered" },
+          });
+          expect(findTaskByRunIdForStatus(runId)).toMatchObject({ status: "succeeded", endedAt });
+        });
+        expect(mocks.runSubagentAnnounceFlow).toHaveBeenCalledExactlyOnceWith(
+          expect.objectContaining({
+            childRunId: runId,
+            outcome: expect.objectContaining({ status: "ok" }),
+          }),
+        );
+        expect(mocks.dispatchRecoveryAgent).not.toHaveBeenCalled();
+      } finally {
+        resetTaskRegistryForTests({ persist: false });
+        resetTaskFlowRegistryForTests({ persist: false });
+      }
+    },
+  );
+
+  it.each([
+    { name: "exact retired orphan", retired: true, sameRun: true, aborted: false, waits: false },
+    { name: "newer session run", retired: true, sameRun: false, aborted: false, waits: true },
+    { name: "current lifecycle", retired: false, sameRun: true, aborted: false, waits: true },
+    { name: "aborted session", retired: false, sameRun: false, aborted: true, waits: false },
+  ])("routes restored waits for a $name", ({ retired, sameRun, aborted, waits }) => {
+    const runId = "run-restored-orphan-routing";
+    const restored = createSubagentRunRecord({
+      runId,
+      execution: {
+        status: "running",
+        lifecycleGeneration: retired ? "retired-generation" : mocks.lifecycleGeneration,
+      },
+    });
+    mocks.loadSessionStore.mockReturnValue(
+      createSessionStore({
+        status: "running",
+        lifecycleRunId: sameRun ? runId : "newer-run",
+        abortedLastRun: aborted,
+      }),
+    );
+    mocks.restoreSubagentRunsFromDisk.mockImplementation(((params: {
+      runs: Map<string, SubagentRunRecord>;
+    }) => {
+      params.runs.set(runId, restored);
+      return 1;
+    }) as never);
+    mockPendingAgentWait();
+
+    hydrateAndActivateRegistry();
+
+    expect(mocks.callGateway).toHaveBeenCalledTimes(waits ? 1 : 0);
+    if (waits) {
+      expect(mocks.callGateway).toHaveBeenCalledWith(
+        expect.objectContaining({
+          method: "agent.wait",
+          params: expect.objectContaining({ runId }),
+        }),
+      );
     }
   });
 
@@ -5545,33 +5668,34 @@ describe("subagent registry seam flow", () => {
     );
   });
 
-  it("retains an already-running replacement when its durable write fails", () => {
+  it("restores the source owner when replacement persistence fails", () => {
     mockPendingAgentWait();
     mod.registerSubagentRun({
       runId: "run-replacement-persist-old",
       childSessionKey: "agent:main:subagent:replacement-persist",
       task: "keep live successor tracked",
     });
-    mocks.persistSubagentRunsToDiskOrThrow.mockImplementationOnce(() => {
+    mocks.persistSubagentRunsToDiskOrThrow.mockClear();
+    mocks.persistSubagentRunsToDiskOrThrow.mockImplementation(() => {
       throw new Error("disk full");
     });
 
-    expect(
+    expect(() =>
       mod.replaceSubagentRunAfterSteerCore({
         previousRunId: "run-replacement-persist-old",
         nextRunId: "run-replacement-persist-new",
       }),
-    ).toBe(true);
+    ).toThrow("disk full");
 
     const runs = mod.listSubagentRunsForRequester("agent:main:main");
-    expect(runs.some((entry) => entry.runId === "run-replacement-persist-old")).toBe(false);
     expect(runs).toEqual([
       expect.objectContaining({
-        runId: "run-replacement-persist-new",
+        runId: "run-replacement-persist-old",
         taskRunId: "run-replacement-persist-old",
       }),
     ]);
-    expect(mocks.persistSubagentRunsToDisk).toHaveBeenCalled();
+    expect(mocks.persistSubagentRunsToDiskOrThrow).toHaveBeenCalledOnce();
+    expect(mocks.persistSubagentRunsToDisk).not.toHaveBeenCalled();
   });
 
   it("rolls back an older kill ownership boundary when registration persistence fails", () => {

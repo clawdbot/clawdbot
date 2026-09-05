@@ -71,6 +71,47 @@ describe("subagent spawn cleanup identity", () => {
     expect(callGateway).toHaveBeenCalledOnce();
   });
 
+  it("stops without deleting a durable session when the accepted run already ended", async () => {
+    const callGateway = vi.fn(async () => ({
+      ok: true,
+      aborted: false,
+      runIds: [],
+    }));
+
+    await terminateAcceptedCollectorRun({
+      childSessionKey: "agent:main:subagent:child",
+      gatewayRunId: "gateway-run",
+      sessionCleanup: "preserve",
+      callGateway,
+    });
+
+    expect(callGateway).toHaveBeenCalledOnce();
+  });
+
+  it("retries abort without deleting a durable session after a gateway error", async () => {
+    const callGateway = vi
+      .fn()
+      .mockRejectedValueOnce(new Error("gateway unavailable"))
+      .mockResolvedValueOnce({ ok: true, aborted: false, runIds: [] });
+
+    await terminateAcceptedCollectorRun({
+      childSessionKey: "agent:main:subagent:child",
+      gatewayRunId: "gateway-run",
+      sessionCleanup: "preserve",
+      callGateway,
+    });
+
+    expect(callGateway).toHaveBeenCalledTimes(2);
+    expect(callGateway).toHaveBeenNthCalledWith(2, {
+      method: "chat.abort",
+      params: {
+        sessionKey: "agent:main:subagent:child",
+        runId: "gateway-run",
+      },
+      timeoutMs: 60_000,
+    });
+  });
+
   it("stops cleanup when guarded deletion observes a successor lifecycle", async () => {
     const callGateway = vi
       .fn()
