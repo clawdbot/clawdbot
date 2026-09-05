@@ -1,7 +1,6 @@
 /** Lifecycle-owned auth/model discovery snapshots for agent runs. */
 import { toStringifiedError } from "@openclaw/normalization-core/error-coercion";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
-import { createSubsystemLogger } from "../logging/subsystem.js";
 import type { PluginMetadataSnapshot } from "../plugins/plugin-metadata-snapshot.types.js";
 import { registerRuntimeAuthProfileStoreMutationListener } from "./auth-profiles/runtime-snapshots.js";
 import type { ModelCatalogSnapshot } from "./model-catalog.types.js";
@@ -46,6 +45,7 @@ import {
 } from "./prepared-model-runtime.owner.js";
 import {
   notifyPreparedModelRuntimePublication,
+  reportPreparedModelRuntimeAuthRefreshFailure,
   resetPreparedModelRuntimePublicationListenersForTest,
 } from "./prepared-model-runtime.publication-events.js";
 import {
@@ -70,7 +70,6 @@ export type {
   PreparedModelRuntimeStores,
 } from "./prepared-model-runtime.owner.js";
 
-const log = createSubsystemLogger("agents/prepared-model-runtime");
 // This bound only detects hung builds; overlap safety comes from the completion
 // chain, and a timeout here is fatal to gateway startup. Cold builds (plugin
 // metadata + model catalog + stores) legitimately exceed 30s on slow or loaded
@@ -446,7 +445,7 @@ export async function replacePreparedModelRuntimeSnapshotAfterCatalogGenerationM
       authPublication.rejectAdopted(replacement.gateId, error),
     removeReplyDispatch: (agentIds) => replyDispatchPublication.remove(agentIds),
     enqueuePublication: enqueuePreparedModelRuntimePublication,
-    drainPendingAuthMutations: (commit, required) => drainAuth(commit, required),
+    drainPendingAuthMutations: (commit, required, error) => drainAuth(commit, required, error),
   });
 }
 
@@ -628,7 +627,11 @@ function enqueuePreparedModelRuntimePublication(task: () => Promise<void>): Prom
   return publication;
 }
 
-async function drainAuth(commit?: () => void, required?: PreparedModelRuntimeOwner): Promise<void> {
+async function drainAuth(
+  commit?: () => void,
+  required?: PreparedModelRuntimeOwner,
+  requiredError?: unknown,
+): Promise<void> {
   await authPublication.drain({
     owners,
     publish: async (entries, includeCredentialProviders) =>
@@ -642,15 +645,10 @@ async function drainAuth(commit?: () => void, required?: PreparedModelRuntimeOwn
       }),
     publishOwners: (publishedOwners) => replyDispatchPublication.replace(publishedOwners),
     commit,
-    onOwnerFailure: reportAuthRefreshFailure,
+    onOwnerFailure: reportPreparedModelRuntimeAuthRefreshFailure,
+    requiredError,
     requiredOwner: required,
   });
-}
-
-function reportAuthRefreshFailure(error: unknown): void {
-  const refreshError = toStringifiedError(error);
-  notifyPreparedModelRuntimePublication({ phase: "failed", error: refreshError });
-  log.warn(`auth-triggered model runtime refresh failed: ${String(refreshError)}`);
 }
 
 function invalidateForAuthMutation(event: PreparedModelRuntimeAuthMutation): void {
@@ -733,7 +731,7 @@ function invalidateForAuthMutation(event: PreparedModelRuntimeAuthMutation): voi
     }
     const refreshError = toStringifiedError(error);
     authPublication.reject(transaction, refreshError);
-    reportAuthRefreshFailure(refreshError);
+    reportPreparedModelRuntimeAuthRefreshFailure(refreshError);
   });
 }
 

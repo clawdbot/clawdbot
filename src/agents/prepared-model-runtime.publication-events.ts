@@ -1,3 +1,4 @@
+import { toStringifiedError } from "@openclaw/normalization-core/error-coercion";
 import { createSubsystemLogger } from "../logging/subsystem.js";
 
 const log = createSubsystemLogger("agents/prepared-model-runtime");
@@ -26,6 +27,12 @@ export function notifyPreparedModelRuntimePublication(
       log.warn(`prepared model runtime publication listener failed: ${String(error)}`);
     }
   }
+}
+
+export function reportPreparedModelRuntimeAuthRefreshFailure(error: unknown): void {
+  const refreshError = toStringifiedError(error);
+  notifyPreparedModelRuntimePublication({ phase: "failed", error: refreshError });
+  log.warn(`auth-triggered model runtime refresh failed: ${String(refreshError)}`);
 }
 
 export function resetPreparedModelRuntimePublicationListenersForTest(): void {

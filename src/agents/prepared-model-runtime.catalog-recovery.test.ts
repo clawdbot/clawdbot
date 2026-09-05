@@ -272,8 +272,121 @@ describe("prepared model runtime catalog recovery", () => {
     ).resolves.toMatchObject({ agentId: "tertiary" });
   });
 
-  it("rejects recovery when its adopted auth refresh fails", async () => {
-    mocks.configuredAgentIds = ["default"];
+  it.each([
+    ["recovery first", ["secondary", "tertiary"]],
+    ["sibling first", ["tertiary", "secondary"]],
+  ])("settles an independent owner when adopted auth fails for the %s", async (_label, order) => {
+    mocks.configuredAgentIds = ["default", "secondary", "tertiary"];
+    const config = {};
+    await refreshPreparedModelRuntimeSnapshots(config, { gatewayLifecycle: true });
+    const secondaryInput = {
+      agentId: "secondary",
+      config,
+      agentDir: "/tmp/configured-secondary",
+      inheritedAuthDir: "/tmp/unused-agent",
+      workspaceDir: "/tmp/workspace-secondary",
+    };
+    const initialSecondary = getPreparedModelRuntimeSnapshot(secondaryInput);
+    expect(initialSecondary).toBeDefined();
+    if (!initialSecondary) {
+      throw new Error("secondary prepared model runtime owner was not published");
+    }
+
+    let signalRecoveryBuildStarted: (() => void) | undefined;
+    const recoveryBuildStarted = new Promise<void>((resolve) => {
+      signalRecoveryBuildStarted = resolve;
+    });
+    let releaseRecoveryBuild: (() => void) | undefined;
+    const recoveryBuildBlocked = new Promise<void>((resolve) => {
+      releaseRecoveryBuild = resolve;
+    });
+    const authError = new Error("adopted default auth failed");
+    mocks.ensureOpenClawModelsJson.mockImplementationOnce(async (...args: unknown[]) => {
+      signalRecoveryBuildStarted?.();
+      await recoveryBuildBlocked;
+      return { agentDir: String(args[1]), wrote: false };
+    });
+    for (const agentId of order) {
+      mocks.ensureOpenClawModelsJson.mockImplementationOnce(async (...args: unknown[]) => {
+        if (agentId === "secondary") {
+          throw authError;
+        }
+        return { agentDir: String(args[1]), wrote: false };
+      });
+    }
+
+    const recovery =
+      replacePreparedModelRuntimeSnapshotAfterCatalogGenerationMismatch(initialSecondary);
+    await recoveryBuildStarted;
+    for (const agentId of order) {
+      mocks.mutationListener?.({
+        agentDir:
+          agentId === "secondary" ? "/tmp/configured-secondary" : "/tmp/configured-tertiary",
+        affectsInheritedStores: false,
+      });
+    }
+    releaseRecoveryBuild?.();
+
+    await expect(recovery).rejects.toBe(authError);
+    await expect(
+      loadPublishedGatewayReplyDispatchRuntime({ agentId: "secondary" }),
+    ).rejects.toThrow("prepared reply dispatch runtime owner was not published for secondary");
+    await expect(
+      loadPublishedGatewayReplyDispatchRuntime({ agentId: "tertiary" }),
+    ).resolves.toMatchObject({ agentId: "tertiary" });
+  });
+
+  it("keeps a completed owner pending when later auth work links it to failed recovery", async () => {
+    mocks.configuredAgentIds = ["default", "secondary", "tertiary"];
+    const config = {};
+    await refreshPreparedModelRuntimeSnapshots(config, { gatewayLifecycle: true });
+    const secondaryInput = {
+      agentId: "secondary",
+      config,
+      agentDir: "/tmp/configured-secondary",
+      inheritedAuthDir: "/tmp/unused-agent",
+      workspaceDir: "/tmp/workspace-secondary",
+    };
+    const initialSecondary = getPreparedModelRuntimeSnapshot(secondaryInput);
+    expect(initialSecondary).toBeDefined();
+    if (!initialSecondary) {
+      throw new Error("secondary prepared model runtime owner was not published");
+    }
+
+    const authError = new Error("adopted secondary auth failed");
+    mocks.ensureOpenClawModelsJson
+      .mockImplementationOnce(async (...args: unknown[]) => ({
+        agentDir: String(args[1]),
+        wrote: false,
+      }))
+      .mockImplementationOnce(async (...args: unknown[]) => ({
+        agentDir: String(args[1]),
+        wrote: false,
+      }))
+      .mockImplementationOnce(async () => {
+        mocks.mutationListener?.({ affectsInheritedStores: true });
+        throw authError;
+      });
+
+    const recovery =
+      replacePreparedModelRuntimeSnapshotAfterCatalogGenerationMismatch(initialSecondary);
+    mocks.mutationListener?.({
+      agentDir: "/tmp/configured-tertiary",
+      affectsInheritedStores: false,
+    });
+    mocks.mutationListener?.({
+      agentDir: "/tmp/configured-secondary",
+      affectsInheritedStores: false,
+    });
+
+    await expect(recovery).rejects.toBe(authError);
+    await expect(loadPublishedGatewayReplyDispatchRuntime({ agentId: "tertiary" })).rejects.toThrow(
+      "prepared reply dispatch runtime owner was not published for tertiary",
+    );
+  });
+
+  it("settles adopted auth work when the recovery build fails", async () => {
+    mocks.configuredAgentIds = ["default", "secondary"];
     const config = {};
     await refreshPreparedModelRuntimeSnapshots(config, { gatewayLifecycle: true });
     const defaultInput = {
@@ -289,36 +402,24 @@ describe("prepared model runtime catalog recovery", () => {
       throw new Error("default prepared model runtime owner was not published");
     }
 
-    let signalRecoveryBuildStarted: (() => void) | undefined;
-    const recoveryBuildStarted = new Promise<void>((resolve) => {
-      signalRecoveryBuildStarted = resolve;
+    const recoveryError = new Error("default recovery failed");
+    mocks.ensureOpenClawModelsJson.mockImplementationOnce(async () => {
+      mocks.mutationListener?.({
+        agentDir: "/tmp/configured-secondary",
+        affectsInheritedStores: false,
+      });
+      throw recoveryError;
     });
-    let releaseRecoveryBuild: (() => void) | undefined;
-    const recoveryBuildBlocked = new Promise<void>((resolve) => {
-      releaseRecoveryBuild = resolve;
-    });
-    const authError = new Error("adopted default auth failed");
-    mocks.ensureOpenClawModelsJson
-      .mockImplementationOnce(async (...args: unknown[]) => {
-        signalRecoveryBuildStarted?.();
-        await recoveryBuildBlocked;
-        return { agentDir: String(args[1]), wrote: false };
-      })
-      .mockRejectedValueOnce(authError);
 
-    const recovery =
-      replacePreparedModelRuntimeSnapshotAfterCatalogGenerationMismatch(initialDefault);
-    await recoveryBuildStarted;
-    mocks.mutationListener?.({
-      agentDir: "/tmp/unused-agent",
-      affectsInheritedStores: false,
-    });
-    releaseRecoveryBuild?.();
-
-    await expect(recovery).rejects.toBe(authError);
+    await expect(
+      replacePreparedModelRuntimeSnapshotAfterCatalogGenerationMismatch(initialDefault),
+    ).rejects.toBe(recoveryError);
     await expect(loadPublishedGatewayReplyDispatchRuntime({ agentId: "default" })).rejects.toThrow(
       "prepared reply dispatch runtime owner was not published for default",
     );
+    await expect(
+      loadPublishedGatewayReplyDispatchRuntime({ agentId: "secondary" }),
+    ).resolves.toMatchObject({ agentId: "secondary" });
   });
 
   it("defers to a config replacement that supersedes recovery", async () => {

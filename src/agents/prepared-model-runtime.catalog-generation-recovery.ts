@@ -23,6 +23,7 @@ type RecoveryDependencies = {
   drainPendingAuthMutations: (
     commit: () => void,
     requiredOwner: PreparedModelRuntimeOwner,
+    requiredError?: unknown,
   ) => Promise<void>;
 };
 
@@ -75,22 +76,34 @@ export class PreparedModelCatalogGenerationRecoveryOwner {
       if (!isReplacementCurrent() || dependencies.owners.get(key) !== owner) {
         return;
       }
-      await publishPreparedModelRuntimeOwnerBatch({
-        entries: [{ owner, input: owner.input }],
-        owners: dependencies.owners,
-        agentBuildCompletions: dependencies.agentBuildCompletions,
-        buildTimeoutMs: dependencies.buildTimeoutMs,
-        isPublicationCurrent: isReplacementCurrent,
-        isBuildCurrent: isReplacementCurrent,
-      });
+      let recoveryError: Error | undefined;
+      try {
+        await publishPreparedModelRuntimeOwnerBatch({
+          entries: [{ owner, input: owner.input }],
+          owners: dependencies.owners,
+          agentBuildCompletions: dependencies.agentBuildCompletions,
+          buildTimeoutMs: dependencies.buildTimeoutMs,
+          isPublicationCurrent: isReplacementCurrent,
+          isBuildCurrent: isReplacementCurrent,
+        });
+      } catch (error) {
+        if (!isReplacementCurrent()) {
+          return;
+        }
+        recoveryError = toStringifiedError(error);
+      }
       if (!isReplacementCurrent()) {
         return;
       }
-      await dependencies.drainPendingAuthMutations(() => {
-        if (isReplacementCurrent()) {
-          dependencies.commitReplacement(replacement);
-        }
-      }, owner);
+      await dependencies.drainPendingAuthMutations(
+        () => {
+          if (isReplacementCurrent()) {
+            dependencies.commitReplacement(replacement);
+          }
+        },
+        owner,
+        recoveryError,
+      );
     });
     this.#recoveries.set(owner, recovery);
     try {

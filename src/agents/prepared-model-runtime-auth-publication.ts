@@ -1,3 +1,4 @@
+import { toStringifiedError } from "@openclaw/normalization-core/error-coercion";
 import { createDeferredCore, type Deferred } from "../shared/deferred.js";
 import { PreparedModelRuntimePublicationSupersededError } from "./prepared-model-runtime.errors.js";
 import { ownerKey, resolveConfiguredOwner } from "./prepared-model-runtime.owner.js";
@@ -149,8 +150,9 @@ export class PreparedModelRuntimeAuthPublicationOwner {
     componentOwners: readonly PreparedModelRuntimeOwner[],
     owners: Map<string, PreparedModelRuntimeOwner>,
     publishOwners: (owners: readonly PreparedModelRuntimeOwner[]) => void,
+    allowAdopted = false,
   ): void {
-    if (this.#transaction !== transaction || transaction.adoptedBy) {
+    if (this.#transaction !== transaction || (transaction.adoptedBy && !allowAdopted)) {
       return;
     }
     const queuedOwners = new Set(this.#events.flat());
@@ -236,11 +238,25 @@ export class PreparedModelRuntimeAuthPublicationOwner {
     publishOwners: (owners: readonly PreparedModelRuntimeOwner[]) => void;
     commit?: () => void;
     onOwnerFailure?: (error: unknown) => void;
+    requiredError?: unknown;
     requiredOwner?: PreparedModelRuntimeOwner;
   }): Promise<void> {
+    const blockedOwners = new Set<PreparedModelRuntimeOwner>();
+    const completedAdoptedComponents: PreparedModelRuntimeOwner[][] = [];
+    let requiredError = params.requiredError;
     while (this.#events.length > 0) {
       const components = partitionAuthMutationOwners(this.#events.splice(0));
       for (const componentOwners of components) {
+        if (
+          requiredError &&
+          params.requiredOwner &&
+          componentOwners.includes(params.requiredOwner)
+        ) {
+          for (const owner of componentOwners) {
+            blockedOwners.add(owner);
+          }
+          continue;
+        }
         const entries = componentOwners.flatMap((owner) =>
           params.owners.get(ownerKey(owner.input)) === owner ? [{ owner, input: owner.input }] : [],
         );
@@ -250,15 +266,27 @@ export class PreparedModelRuntimeAuthPublicationOwner {
           }
           const transaction = this.#transaction;
           if (transaction) {
-            this.settleComponent(transaction, componentOwners, params.owners, params.publishOwners);
+            if (transaction.adoptedBy && params.requiredOwner) {
+              completedAdoptedComponents.push(componentOwners);
+            } else {
+              this.settleComponent(
+                transaction,
+                componentOwners,
+                params.owners,
+                params.publishOwners,
+              );
+            }
           }
         } catch (error) {
-          if (
-            this.#transaction?.adoptedBy &&
-            (!params.requiredOwner || componentOwners.includes(params.requiredOwner))
-          ) {
-            // A replacement cannot commit when the owner it requires fails to publish.
+          if (this.#transaction?.adoptedBy && !params.requiredOwner) {
             throw error;
+          }
+          if (params.requiredOwner && componentOwners.includes(params.requiredOwner)) {
+            for (const owner of componentOwners) {
+              blockedOwners.add(owner);
+            }
+            requiredError ??= error;
+            continue;
           }
           const transaction = this.#transaction;
           if (transaction && this.rejectComponentOwners(transaction, componentOwners, error) > 0) {
@@ -266,6 +294,23 @@ export class PreparedModelRuntimeAuthPublicationOwner {
           }
         }
       }
+    }
+    if (requiredError) {
+      const transaction = this.#transaction;
+      if (transaction?.adoptedBy) {
+        for (const componentOwners of completedAdoptedComponents) {
+          if (!componentOwners.some((owner) => blockedOwners.has(owner))) {
+            this.settleComponent(
+              transaction,
+              componentOwners,
+              params.owners,
+              params.publishOwners,
+              true,
+            );
+          }
+        }
+      }
+      throw toStringifiedError(requiredError);
     }
     // The queue check and commit share one synchronous section so no mutation can be orphaned.
     params.commit?.();
