@@ -4,6 +4,7 @@ import { Type } from "typebox";
 import { SYSTEM_AGENT_ID } from "../../system-agent/agent-id.js";
 import { resolveExecDefaults } from "../exec-defaults.js";
 import type { OpenClawToolsOptions } from "../openclaw-tools.types.js";
+import { DEFAULT_ASK_USER_TIMEOUT_SECONDS } from "./ask-user-tool-normalization.js";
 import { jsonResult, readToolStringParam, type AnyAgentTool } from "./common.js";
 import { withGatewayToolCallerIdentity } from "./gateway-caller-context.js";
 import { callInProcessGatewayTool } from "./in-process-gateway.js";
@@ -102,18 +103,24 @@ export function createOpenClawDelegateToolsForRun(
           }
         : undefined;
       const result = await withGatewayToolCallerIdentity(caller, () =>
-        callInProcessGatewayTool<OpenClawDelegateResult>("openclaw.chat", {
-          sessionId,
-          message,
-          delegation: {
-            agentId: options.sessionAgentId,
-            ...(sessionKey ? { sessionKey } : {}),
-            ...(options.agentChannel ? { turnSourceChannel: options.agentChannel } : {}),
-            ...(turnSourceTo ? { turnSourceTo } : {}),
-            ...(options.agentAccountId ? { turnSourceAccountId: options.agentAccountId } : {}),
-            ...(turnSourceThreadId !== undefined ? { turnSourceThreadId } : {}),
+        callInProcessGatewayTool<OpenClawDelegateResult>(
+          "openclaw.chat",
+          {
+            sessionId,
+            message,
+            delegation: {
+              agentId: options.sessionAgentId,
+              ...(sessionKey ? { sessionKey } : {}),
+              ...(options.agentChannel ? { turnSourceChannel: options.agentChannel } : {}),
+              ...(turnSourceTo ? { turnSourceTo } : {}),
+              ...(options.agentAccountId ? { turnSourceAccountId: options.agentAccountId } : {}),
+              ...(turnSourceThreadId !== undefined ? { turnSourceThreadId } : {}),
+            },
           },
-        }),
+          // Match the established human-interaction budget. The outer CLI owner
+          // retains its separate grace for post-decision completion.
+          { timeoutMs: DEFAULT_ASK_USER_TIMEOUT_SECONDS * 1_000 },
+        ),
       );
       return jsonResult({
         reply: result.reply,
