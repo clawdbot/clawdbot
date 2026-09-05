@@ -292,9 +292,13 @@ export function classifyExecAllowlistScope(
   if (generated && (pattern.startsWith("=command:") || pattern.startsWith("=node-command:"))) {
     return "command text";
   }
-  // matchAllowlist skips path-only and legacy-hashed generated grants outright,
-  // so an allow-always entry authorizes nothing unless it is cwd-bound.
-  if (generated && !isCwdBoundHashedArgPattern(entry.argPattern)) {
+  // matchAllowlist skips path-only generated grants outright, and matchArgPattern
+  // rejects every legacy sha256:argv hash whatever its source, so neither entry
+  // authorizes anything; only a cwd-bound hash is a live argument restriction.
+  const legacyHashed =
+    typeof entry.argPattern === "string" &&
+    entry.argPattern.startsWith(LEGACY_HASHED_ARG_PATTERN_PREFIX);
+  if (legacyHashed || (generated && !isCwdBoundHashedArgPattern(entry.argPattern))) {
     return "inactive";
   }
   if (isCwdBoundHashedArgPattern(entry.argPattern)) {

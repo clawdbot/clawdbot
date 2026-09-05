@@ -5,7 +5,9 @@ import type { ExecAllowlistEntry } from "./exec-approvals.types.js";
 import { classifyExecAllowlistScope } from "./exec-command-resolution.js";
 
 function isObsoleteGeneratedEntry(entry: ExecAllowlistEntry): boolean {
-  return classifyExecAllowlistScope(entry) === "inactive";
+  // Doctor owns only the grants allow-always wrote. A manual entry that is
+  // inactive (a hand-written legacy hash) stays for the operator to delete.
+  return entry.source === "allow-always" && classifyExecAllowlistScope(entry) === "inactive";
 }
 
 export function countObsoleteGeneratedExecApprovals(file: ExecApprovalsFile): number {

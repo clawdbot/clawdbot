@@ -224,6 +224,29 @@ describe("exec approvals CLI", () => {
     expect(commandRows[1]).toContain("command text");
   });
 
+  it("marks a manual legacy argv hash inactive instead of an argument restriction", async () => {
+    const pattern = "/usr/bin/tool";
+    localSnapshot.file = {
+      version: 1,
+      agents: {
+        main: {
+          allowlist: [{ pattern, argPattern: "sha256:argv:obsolete", lastUsedAt: 1 }],
+        },
+      },
+    };
+
+    await runApprovalsCommand(["approvals", "get"]);
+
+    // matchArgPattern never matches a legacy hash, so the audit must not present
+    // the entry as a live argument restriction.
+    const rows = loggedOutput()
+      .split("\n")
+      .filter((line) => line.includes(pattern));
+    expect(rows).toHaveLength(1);
+    expect(rows[0]).toContain("inactive");
+    expect(rows[0]).not.toMatch(/\bargv\b/);
+  });
+
   it("redacts the socket token from local get JSON while preserving its path", async () => {
     localSnapshot.file = {
       version: 1,
