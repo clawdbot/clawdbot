@@ -106,6 +106,10 @@ export async function prepareReplyRunAdmission(context: PreparedReplyRunContext)
   } = params;
   let { sessionEntry, prefixedBodyBase } = context;
   let { resolvedThinkLevel } = params;
+  let thinkLevelOverride =
+    explicitThinkingLevelOverride ??
+    directives.thinkLevel ??
+    (directives.clearThinkLevel ? ("default" as const) : undefined);
 
   // Extract first-token think hint from the user body BEFORE prepending system events.
   // If done after, the System: prefix becomes the first token and silently shadows any
@@ -129,6 +133,7 @@ export async function prepareReplyRunAdmission(context: PreparedReplyRunContext)
       })
     ) {
       resolvedThinkLevel = maybeLevel;
+      thinkLevelOverride = maybeLevel;
       prefixedBodyBase = removeDirectiveSpan(prefixedBodyBase, 0, firstToken.length);
     }
   }
@@ -648,6 +653,7 @@ export async function prepareReplyRunAdmission(context: PreparedReplyRunContext)
     kind: "ready",
     context,
     resolvedThinkLevel,
+    thinkLevelOverride,
     thinkingCatalog,
     sessionEntry,
     skillsSnapshot,

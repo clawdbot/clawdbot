@@ -102,7 +102,6 @@ export async function prepareReplyAgentPayloads(state: {
     sessionModel,
     terminalFailurePayload,
     usage,
-    verboseEnabled,
   } = accounting;
   let { activeSessionEntry, didLogHeartbeatStrip } = accounting;
   const deliberateSilentTerminalReply = hasDeliberateSilentTerminalReply(runResult);
@@ -613,12 +612,15 @@ export async function prepareReplyAgentPayloads(state: {
     replyUsageState,
   });
 
-  if (verboseEnabled) {
+  // Refresh inherited verbosity even when it started off: session preferences
+  // and plugin diagnostics may change while the model runs.
+  if (followupRun.run.verboseLevelOverride !== "off" || followupRun.run.traceAuthorized === true) {
     activeSessionEntry = refreshSessionEntryFromStore({
       storePath,
       sessionKey,
       fallbackEntry: activeSessionEntry,
       activeSessionStore,
+      expectedGeneration: accounting.expectedSession,
     });
   }
 

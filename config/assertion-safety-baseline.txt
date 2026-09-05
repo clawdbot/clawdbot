@@ -2107,7 +2107,6 @@ src/auto-reply/reply/agent-runner-execution.ts	1
 src/auto-reply/reply/agent-runner-failure-reply.ts	1
 src/auto-reply/reply/agent-runner-fallback-candidate.ts	1
 src/auto-reply/reply/agent-runner-memory.ts	6
-src/auto-reply/reply/agent-runner-result-complete.ts	3
 src/auto-reply/reply/agent-runner-run.ts	1
 src/auto-reply/reply/agent-runner-session-reset.ts	1
 src/auto-reply/reply/agent-runner-trace.ts	1
