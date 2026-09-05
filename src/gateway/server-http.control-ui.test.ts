@@ -18,11 +18,12 @@ describe("Gateway Control UI identity", () => {
       overrides: { controlUiEnabled: true, controlUiBasePath: basePath },
       run: async (server) => {
         const base = basePath.replace(/\/$/, "");
-        for (const path of [
-          `${base}/avatar/main?meta=1`,
-          `${base}/__openclaw__/assistant-media?source=missing.png`,
-        ]) {
-          const response = await sendRequest(server, { path, method: "GET" });
+        for (const [method, path] of [
+          ["GET", `${base}/avatar/main?meta=1`],
+          ["GET", `${base}/__openclaw__/assistant-media?source=missing.png`],
+          ["POST", `${base}/__openclaw__/assistant-media?meta=1&allow=1&source=missing.png`],
+        ] as const) {
+          const response = await sendRequest(server, { path, method });
           expect(response.res.statusCode, path).toBe(401);
         }
       },
@@ -49,6 +50,32 @@ describe("Gateway Control UI identity", () => {
       },
     });
   });
+
+  it.each(["", "/console/"])(
+    "leaves unclaimed media writes to startup at base %j",
+    async (basePath) => {
+      await withGatewayServer({
+        prefix: "control-ui-unclaimed-media-write",
+        resolvedAuth: AUTH_TOKEN,
+        overrides: {
+          controlUiEnabled: true,
+          controlUiBasePath: basePath,
+          isStartupPluginRuntimeReady: () => false,
+        },
+        run: async (server) => {
+          const base = basePath.replace(/\/$/, "");
+          for (const query of ["meta=1", "allow=1", "meta=1&allow=0"]) {
+            const response = await sendRequest(server, {
+              method: "POST",
+              path: `${base}/__openclaw__/assistant-media?${query}&source=missing.png`,
+            });
+            expect(response.res.statusCode, query).toBe(503);
+            expect(response.getBody()).toBe("Plugin runtime is starting");
+          }
+        },
+      });
+    },
+  );
 
   it("applies dashboard enablement to subsequent requests without replacing the listener", async () => {
     await withTempDir("openclaw-http-toggle-", async (controlUiRoot) => {

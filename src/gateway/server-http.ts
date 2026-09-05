@@ -27,6 +27,7 @@ import type { ResolvedGatewayAuth } from "./auth.js";
 import { parseControlUiUserAvatarPath, parseControlUiResourcePath } from "./control-ui-contract.js";
 import { respondNotFound, respondPlainText } from "./control-ui-http-utils.js";
 import { controlUiPluginAssetRoot } from "./control-ui-plugin-assets-contract.js";
+import { resolveAssistantMediaRoutePath } from "./control-ui-resource-routes.js";
 import {
   classifyControlUiRequest,
   isControlUiApprovalDocumentPath,
@@ -359,16 +360,17 @@ export function createGatewayHttpServer(opts: {
       };
       const loadControlUi = () => {
         const url = req.url ? new URL(req.url, "http://localhost") : undefined;
-        // UI resources share the document route boundary. Classify at dispatch
-        // so plugin fallthrough sees its current URL without loading unrelated UI code.
+        // Media owns its method/query policy, including explicit-allow POSTs.
+        // Classify the current URL so plugin fallthrough cannot load unrelated UI code.
         return url &&
-          classifyControlUiRequest({
-            basePath: normalizeControlUiBasePath(controlUiBasePath),
-            pathname: url.pathname,
-            search: url.search,
-            method: req.method,
-            accept: req.headers.accept,
-          }).kind !== "not-control-ui"
+          (url.pathname === resolveAssistantMediaRoutePath(controlUiBasePath) ||
+            classifyControlUiRequest({
+              basePath: normalizeControlUiBasePath(controlUiBasePath),
+              pathname: url.pathname,
+              search: url.search,
+              method: req.method,
+              accept: req.headers.accept,
+            }).kind !== "not-control-ui")
           ? getControlUiModule()
           : undefined;
       };

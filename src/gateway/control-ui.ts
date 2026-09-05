@@ -78,6 +78,7 @@ import {
   respondNotFound as respondControlUiNotFound,
   respondPlainText,
 } from "./control-ui-http-utils.js";
+import { resolveAssistantMediaRoutePath } from "./control-ui-resource-routes.js";
 import {
   classifyControlUiRequest,
   isControlUiApprovalDocumentPath,
@@ -111,7 +112,6 @@ import { authorizeControlUiReadRequestOrReply } from "./http-utils.js";
 import { isTerminalConfigEnabled } from "./terminal/enabled.js";
 
 const ROOT_PREFIX = "/";
-const CONTROL_UI_ASSISTANT_MEDIA_PREFIX = "/__openclaw__/assistant-media";
 const CONTROL_UI_ASSISTANT_MEDIA_TICKET_SCOPE = "assistant-media";
 const CONTROL_UI_ASSISTANT_MEDIA_TICKET_TTL_MS = 5 * 60 * 1000;
 const CONTROL_UI_ASSETS_MISSING_MESSAGE =
@@ -265,12 +265,6 @@ function normalizeAssistantMediaSource(source: string): string | null {
     return resolveUserPath(trimmed);
   }
   return trimmed;
-}
-
-function resolveAssistantMediaRoutePath(basePath?: string): string {
-  const normalizedBasePath =
-    basePath && basePath !== "/" ? (basePath.endsWith("/") ? basePath.slice(0, -1) : basePath) : "";
-  return `${normalizedBasePath}${CONTROL_UI_ASSISTANT_MEDIA_PREFIX}`;
 }
 
 type AssistantMediaAvailability =
