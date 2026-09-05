@@ -4909,6 +4909,87 @@ describe("update-cli", () => {
     expect(defaultRuntime.writeJson).toHaveBeenCalled();
   });
 
+  it.each(["progress initialization", "triage preparation"] as const)(
+    "finishes the admitted run when %s fails before update execution",
+    async (boundary) => {
+      const { closeOpenClawStateDatabaseByPath } = await import("../state/openclaw-state-db.js");
+      const stateDir = tempDirs.make("openclaw-update-run-initialization-");
+      const failure = new Error(`${boundary} failed`);
+      if (boundary === "progress initialization") {
+        const progress = await import("./update-cli/progress.js");
+        vi.spyOn(progress, "createUpdateProgress").mockImplementationOnce(() => {
+          throw failure;
+        });
+      } else {
+        const triage = await import("../infra/update-triage.js");
+        vi.spyOn(triage, "prepareUpdateFailureTriage").mockRejectedValueOnce(failure);
+      }
+
+      await withEnvAsync({ OPENCLAW_STATE_DIR: stateDir }, async () => {
+        await expect(updateCommand({ yes: true, json: true })).rejects.toBe(failure);
+
+        const runs = listUpdateRuns();
+        expect(runs).toHaveLength(1);
+        expect(runs[0]).toMatchObject({
+          trigger: "cli",
+          phase: "finished",
+          status: "failed",
+          reason: "update-failed",
+          steps: expect.arrayContaining([
+            expect.objectContaining({
+              step: "requested",
+              status: "failed",
+              detail: failure.message,
+            }),
+          ]),
+        });
+        expect(runs[0]?.steps.some((step) => step.status === "in_progress")).toBe(false);
+      }).finally(() => {
+        closeOpenClawStateDatabaseByPath(
+          resolveOpenClawStateSqlitePath({ ...process.env, OPENCLAW_STATE_DIR: stateDir }),
+        );
+      });
+
+      expectNoSideEffects(
+        cleanupStaleManagedServiceUpdateHandoffs,
+        replaceConfigFile,
+        runGatewayUpdate,
+        runDaemonInstall,
+        runDaemonRestart,
+        serviceStop,
+        serviceStart,
+        serviceRestart,
+        runRestartScript,
+        doctorCommand,
+        syncPluginsForUpdateChannel,
+        updateNpmInstalledPlugins,
+        launchdUpdateCleanupMocks.disableCurrentOpenClawUpdateLaunchdJob,
+      );
+      expect(packageInstallCommandCall()).toBeUndefined();
+    },
+  );
+
+  it("does not reopen the ledger after migrated finalization fails", async () => {
+    const migrated = await import("./update-cli/update-command-migrated.js");
+    const ledgerReads = vi.spyOn(await import("../infra/update-run-ledger.js"), "getUpdateRun");
+    const failure = new Error("candidate finalization failed");
+    let readsAtHandoff = 0;
+    vi.spyOn(migrated, "inspectActivatedUpdateState").mockResolvedValueOnce(
+      "state-migrated-no-rollback",
+    );
+    vi.spyOn(migrated, "continueMigratedUpdateInFreshProcess").mockImplementationOnce(async () => {
+      readsAtHandoff = ledgerReads.mock.calls.length;
+      throw failure;
+    });
+    mockOwnedGitService();
+    mockGitUpdateAfterMutation(makeOkUpdateResult({ root: process.cwd() }));
+
+    await expect(updateCommand({ yes: true, json: true })).rejects.toBe(failure);
+
+    expect(migrated.continueMigratedUpdateInFreshProcess).toHaveBeenCalledOnce();
+    expect(ledgerReads).toHaveBeenCalledTimes(readsAtHandoff);
+  });
+
   it.each([false, true])(
     "records ordered update phases across service stop, restart, and verified health (json=%s)",
     async (json) => {
