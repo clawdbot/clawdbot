@@ -456,4 +456,69 @@ describe("runCronIsolatedAgentTurn — LiveSessionModelSwitchError retry (#57206
     expect(result.status).toBe("error");
     expect(callCount).toBe(1);
   });
+
+  it("retains observed usage across LiveSessionModelSwitchError retries", async () => {
+    // A candidate that reported spend before the model switch must carry its
+    // usage into the retry candidate's budget tripwire. Without the carry,
+    // candidate B starts fresh at 0 and 150 < 200 does not trip; with it,
+    // 150 (A) + 150 (B) = 300 ≥ 200 trips the shared guard.
+    const switchError = new LiveSessionModelSwitchError({
+      provider: "anthropic",
+      model: "claude-sonnet-4-6",
+    });
+    const candidateSignals: Array<{ candidate: string; abortedAfterUsage: boolean }> = [];
+    let callCount = 0;
+    runWithModelFallbackMock.mockImplementation(
+      async ({ run }: { run: (p: string, m: string) => Promise<unknown> }) => {
+        callCount++;
+        if (callCount === 1) {
+          // First attempt: candidate A reports usage then triggers a model switch.
+          const result = await run("anthropic", "claude-opus-4-6");
+          return result;
+        }
+        const result = await run("anthropic", "claude-sonnet-4-6");
+        return { result, provider: "anthropic", model: "claude-sonnet-4-6", attempts: [] };
+      },
+    );
+    runEmbeddedAgentMock.mockImplementation(
+      async (call: {
+        abortSignal?: AbortSignal;
+        onRunUsageTotals?: (usage: { total: number }) => void;
+      }) => {
+        const signal = call.abortSignal;
+        call.onRunUsageTotals?.({ total: 150 });
+        candidateSignals.push({
+          candidate: candidateSignals.length === 0 ? "opus" : "sonnet",
+          abortedAfterUsage: signal?.aborted ?? false,
+        });
+        if (candidateSignals.length === 1) {
+          // First candidate reports 150 then triggers a model switch.
+          throw switchError;
+        }
+        return {
+          payloads: [{ text: "switched result" }],
+          meta: {
+            agentMeta: { provider: "anthropic", model: "claude-sonnet-4-6", usage: { total: 150 } },
+          },
+        };
+      },
+    );
+
+    const result = await runCronIsolatedAgentTurn({
+      ...makeParams(),
+      job: {
+        ...makeJob(),
+        payload: { kind: "agentTurn", message: "run task", tokenBudget: 200 },
+      },
+    });
+
+    expect(candidateSignals).toHaveLength(2);
+    // First candidate reported 150 (no trip yet) then switched.
+    expect(candidateSignals[0]).toEqual({ candidate: "opus", abortedAfterUsage: false });
+    // Second candidate inherited the 150 carry; its 150 report trips 150+150=300.
+    expect(candidateSignals[1].candidate).toBe("sonnet");
+    expect(candidateSignals[1].abortedAfterUsage).toBe(true);
+    expect(result.status).toBe("error");
+    expect(result.error).toContain("Token budget exhausted");
+  });
 });

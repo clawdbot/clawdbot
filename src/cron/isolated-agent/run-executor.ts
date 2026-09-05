@@ -1158,6 +1158,14 @@ export async function executeCronRun(params: CronRunExecutionParams): Promise<Cr
           `[cron:${params.job.id}] Failed to persist model switch session entry: ${String(persistErr)}`,
         );
       }
+      // Retain observed usage before the switch retry so the next
+      // candidate's budget tripwire includes the spend from the
+      // switched-out candidate (onError does this for ordinary
+      // fallback errors; model-switch exits bypass that callback).
+      if (currentCandidateUsage > 0) {
+        carriedTokenUsageTotal += currentCandidateUsage;
+        currentCandidateUsage = 0;
+      }
       continue;
     }
   }
