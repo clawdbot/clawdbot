@@ -742,27 +742,27 @@ describe("secrets apply", () => {
       ...config,
       models: {
         providers: {
-          demo: {
-            ...createOpenAiProviderConfig("sk-demo-plaintext"),
+          openai: {
+            ...createOpenAiProviderConfig("sk-openai-plaintext"),
             headers: {
-              apiKey: "sk-header-plaintext",
+              apiKey: "sk-anthropic-header-plaintext",
             },
           },
-          "demo.headers": createOpenAiProviderConfig("sk-dotted-plaintext"),
+          "openai.headers": createOpenAiProviderConfig("sk-openai-dotted-plaintext"),
         },
       },
     });
 
     await fs.writeFile(
       fixture.envPath,
-      "DEMO_HEADER_KEY=sk-header-plaintext\nDEMO_DOTTED_KEY=sk-dotted-plaintext\nUNRELATED=value\n",
+      "ANTHROPIC_API_KEY=sk-anthropic-header-plaintext\nOPENAI_API_KEY=sk-openai-dotted-plaintext\nUNRELATED=value\n",
       "utf8",
     );
 
     const secretFilePath = path.join(fixture.rootDir, "secrets.json");
     await writeJsonFile(secretFilePath, {
       providers: {
-        demoHeaders: { apiKey: "sk-file-key" },
+        openaiHeaders: { apiKey: "sk-file-key" },
       },
     });
     await fs.chmod(secretFilePath, 0o600);
@@ -770,12 +770,12 @@ describe("secrets apply", () => {
     const fileRef = {
       source: "file" as const,
       provider: "filemain",
-      id: "/providers/demoHeaders/apiKey",
+      id: "/providers/openaiHeaders/apiKey",
     };
     const headerEnvRef = {
       source: "env" as const,
       provider: "default",
-      id: "DEMO_HEADER_KEY",
+      id: "ANTHROPIC_API_KEY",
     };
 
     const plan = createPlan({
@@ -789,15 +789,15 @@ describe("secrets apply", () => {
       targets: [
         {
           type: "models.providers.headers",
-          path: "models.providers.demo.headers.apiKey",
-          pathSegments: ["models", "providers", "demo", "headers", "apiKey"],
+          path: "models.providers.openai.headers.apiKey",
+          pathSegments: ["models", "providers", "openai", "headers", "apiKey"],
           ref: headerEnvRef,
         },
         {
           type: "models.providers.apiKey",
-          path: 'models.providers["demo.headers"].apiKey',
-          pathSegments: ["models", "providers", "demo.headers", "apiKey"],
-          providerId: "demo.headers",
+          path: 'models.providers["openai.headers"].apiKey',
+          pathSegments: ["models", "providers", "openai.headers", "apiKey"],
+          providerId: "openai.headers",
           ref: fileRef,
         },
       ],
@@ -808,16 +808,16 @@ describe("secrets apply", () => {
       plan,
       env: {
         ...fixture.env,
-        DEMO_HEADER_KEY: "sk-header-plaintext",
-        DEMO_DOTTED_KEY: "sk-dotted-plaintext",
+        ANTHROPIC_API_KEY: "sk-anthropic-header-plaintext",
+        OPENAI_API_KEY: "sk-openai-dotted-plaintext",
       },
       write: true,
     });
     expect(applied.changed).toBe(true);
 
     const nextEnv = await fs.readFile(fixture.envPath, "utf8");
-    expect(nextEnv).toContain("DEMO_HEADER_KEY=sk-header-plaintext");
-    expect(nextEnv).not.toContain("DEMO_DOTTED_KEY=sk-dotted-plaintext");
+    expect(nextEnv).toContain("ANTHROPIC_API_KEY=sk-anthropic-header-plaintext");
+    expect(nextEnv).not.toContain("OPENAI_API_KEY=sk-openai-dotted-plaintext");
     expect(nextEnv).toContain("UNRELATED=value");
   });
 
