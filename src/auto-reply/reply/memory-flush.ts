@@ -146,10 +146,20 @@ export function shouldRunMemoryFlush(params: {
    */
   tokenCount?: number;
   threshold: number;
+  /**
+   * Replaces the compaction-cycle dedup for sessions that cannot use it. CLI
+   * backends pass their transcript-byte verdict here so the token threshold
+   * itself stays shared rather than being reimplemented per backend.
+   */
+  alreadyFlushed?: boolean;
 }): boolean {
   const state = resolveMaintenanceGateState(params);
   if (!state || state.totalTokens < state.threshold) {
     return false;
+  }
+
+  if (params.alreadyFlushed !== undefined) {
+    return !params.alreadyFlushed;
   }
 
   if (hasAlreadyFlushedForCurrentCompaction(state.entry)) {

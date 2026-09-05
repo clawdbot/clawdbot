@@ -9,6 +9,7 @@ import { modelKey } from "../../shared/model-key.js";
 import {
   hasAlreadyFlushedForCliRearmBucket,
   resolveCliMemoryFlushRearmBucket,
+  shouldRunMemoryFlush,
   resolveResponsesServerCompactionThreshold,
 } from "./memory-flush.js";
 
@@ -285,6 +286,20 @@ describe("Anthropic server compaction host threshold", () => {
 });
 
 describe("CLI memory-flush re-arm bucket", () => {
+  it("keeps the token threshold shared when an external dedup verdict is supplied", () => {
+    // Fresh persisted totals with no explicit tokenCount: the threshold check
+    // must still see them, so a CLI session reaches the same verdict as an
+    // embedded one instead of silently never firing the token trigger.
+    const entry = {
+      totalTokens: 90_000,
+      totalTokensFresh: true,
+      totalTokensVersion: 1,
+    } as const;
+    expect(shouldRunMemoryFlush({ entry, threshold: 80_000, alreadyFlushed: false })).toBe(true);
+    expect(shouldRunMemoryFlush({ entry, threshold: 80_000, alreadyFlushed: true })).toBe(false);
+    expect(shouldRunMemoryFlush({ entry, threshold: 100_000, alreadyFlushed: false })).toBe(false);
+  });
+
   it("buckets transcript growth for CLI backends", () => {
     const rearmBytes = 256 * 1024;
     expect(resolveCliMemoryFlushRearmBucket({ isCli: true, transcriptByteSize: 0 })).toBe(0);

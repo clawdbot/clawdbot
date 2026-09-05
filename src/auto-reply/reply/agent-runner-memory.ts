@@ -1467,11 +1467,13 @@ export async function runMemoryFlushIfNeeded(params: {
 
   const shouldFlushMemory =
     cliRearmBucket !== undefined
-      ? (shouldForceFlushByTranscriptSize ||
-          (typeof tokenCountForFlush === "number" &&
-            flushThreshold > 0 &&
-            tokenCountForFlush >= flushThreshold)) &&
-        !cliAlreadyFlushed
+      ? shouldRunMemoryFlush({
+          entry,
+          tokenCount: tokenCountForFlush,
+          threshold: flushThreshold,
+          alreadyFlushed: cliAlreadyFlushed,
+        }) ||
+        (shouldForceFlushByTranscriptSize && !cliAlreadyFlushed)
       : shouldRunMemoryFlush({
           entry,
           tokenCount: tokenCountForFlush,
