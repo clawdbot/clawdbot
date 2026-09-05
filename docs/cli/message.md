@@ -50,6 +50,10 @@ Every action accepts: `--channel <name>`, `--account <id>`, `--json`,
 `--dry-run`, `--verbose`. Actions that take a destination also accept
 `-t, --target <dest>`.
 
+Discord message bodies, captions, poll context, and component text retain
+meaningful whitespace before channel formatting and chunking. Existing
+empty-message validation still applies.
+
 Local message actions run the loaded plugins' shutdown hooks before exiting, including
 after an action fails. Cleanup has a 2.5-second overall budget and does not change
 the action's exit status. `message read` skips these shutdown hooks.
