@@ -235,7 +235,10 @@ export async function readScheduledTaskCommand(
         continue;
       }
       if (lower.startsWith("set ")) {
-        const assignment = parseCmdSetAssignment(line.slice(4));
+        const assignment = parseCmdSetAssignment(
+          rawLine.trimStart().slice(4),
+          options?.requireEffective,
+        );
         if (!assignment && options?.requireEffective) {
           throw new Error("Invalid Scheduled Task environment assignment");
         }
@@ -289,8 +292,9 @@ export async function readScheduledTaskCommand(
     ) {
       return null;
     }
-    throw new Error("Effective Scheduled Task service command could not be inspected.");
   }
+  // Native failures can contain raw service credentials; expose only the closed diagnostic.
+  throw new Error("Effective Scheduled Task service command could not be inspected.");
 }
 
 async function isScheduledTaskDefinitionAbsent(

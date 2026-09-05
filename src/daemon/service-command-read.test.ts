@@ -180,21 +180,56 @@ describe("native service command inspection", () => {
     await expect(readScheduledTaskCommand(env, { requireEffective: true })).rejects.toThrow();
   });
 
-  it.each(["set MALFORMED", "set =invalid"])(
-    "rejects a malformed Windows assignment in strict mode: %s",
-    async (line) => {
-      await writeFile(
-        resolveTaskScriptPath(env),
-        `@echo off\nset HOME=/partial-home\n${line}\nnode gateway.js\n`,
-      );
-      await expect(readScheduledTaskCommand(env)).resolves.toMatchObject({
-        environment: { HOME: "/partial-home" },
-      });
-      await expect(readScheduledTaskCommand(env, { requireEffective: true })).rejects.toThrow(
-        "Effective Scheduled Task service command could not be inspected.",
-      );
-    },
-  );
+  it.each([
+    "set MALFORMED",
+    "set =invalid",
+    'set "OPENCLAW_STATE_DIR=%USERPROFILE%\\.openclaw"',
+    'set "OPENCLAW_STATE_DIR=%~dp0state"',
+    'set "OPENCLAW_STATE_DIR=!USERPROFILE!\\.openclaw"',
+    'set "OPENCLAW_STATE_DIR=C:\\literal^^caret"',
+    "set OPENCLAW_STATE_DIR=C:\\first & echo second",
+    "set /a HOME=1",
+    "set /p HOME=prompt",
+  ])("rejects an unresolved Windows assignment in strict mode: %s", async (line) => {
+    await writeFile(
+      resolveTaskScriptPath(env),
+      `@echo off\nset HOME=/partial-home\n${line}\nnode gateway.js\n`,
+    );
+    await expect(readScheduledTaskCommand(env)).resolves.toMatchObject({
+      environment: { HOME: "/partial-home" },
+    });
+    await expect(readScheduledTaskCommand(env, { requireEffective: true })).rejects.toThrow(
+      "Effective Scheduled Task service command could not be inspected.",
+    );
+  });
+
+  it("preserves literal Windows assignments without borrowing the caller's environment", async () => {
+    await writeFile(
+      resolveTaskScriptPath(env),
+      [
+        "@echo off",
+        "set HOME=/literal-home",
+        "set home=/effective-home",
+        'set "OPENCLAW_STATE_DIR=C:\\literal%%USERPROFILE%% & (state)"',
+        'set "NODE_OPTIONS="',
+        'set "QUOTED=  literal spaces  "',
+        "set UNQUOTED=  literal spaces  ",
+        "set PERCENT=%%USERPROFILE%%",
+        "node gateway.js",
+      ].join("\r\n"),
+    );
+    await expect(readScheduledTaskCommand(env, { requireEffective: true })).resolves.toMatchObject({
+      programArguments,
+      environment: {
+        HOME: "/effective-home",
+        OPENCLAW_STATE_DIR: "C:\\literal%USERPROFILE% & (state)",
+        NODE_OPTIONS: "",
+        QUOTED: "  literal spaces  ",
+        UNQUOTED: "  literal spaces  ",
+        PERCENT: "%USERPROFILE%",
+      },
+    });
+  });
 
   it("rejects a malformed existing plist only in strict mode", async () => {
     await writeFile(resolveLaunchAgentPlistPath(env), "<plist><dict/></plist>");
