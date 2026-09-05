@@ -126,7 +126,9 @@ export async function cancelTaskById(params: {
     } else if (task.runtime === "cli") {
       const owner = getTaskRunOwner(task);
       if (!owner) {
-        return notCancelled("Task has no live run owner. Cancel it through its running Gateway.");
+        return notCancelled(
+          "Task has no live run owner. Use openclaw tasks audit to inspect its state.",
+        );
       }
       const result = await owner.cancel(cancellationError);
       return result.ok

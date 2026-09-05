@@ -21,7 +21,10 @@ import {
   createExecutionStartedOwnerBinding,
   isRetainedExecutionOwnerBinding,
 } from "../../audit/execution-owner-binding.js";
-import { readAgentRunTerminalOutcome } from "../../channels/turn/agent-run-terminal-outcome.js";
+import {
+  readAgentRunTerminalError,
+  readAgentRunTerminalOutcome,
+} from "../../channels/turn/agent-run-terminal-outcome.js";
 import { agentCommandFromGatewayIngress } from "../../commands/agent.js";
 import { isAbortError } from "../../infra/abort-signal.js";
 import { isAgentEventLifecycleGenerationCurrent } from "../../infra/agent-events.js";
@@ -29,7 +32,7 @@ import {
   clearAgentRunContext,
   validateAgentRunDelegatedAuthority,
 } from "../../infra/agent-run-registry.js";
-import { readErrorName } from "../../infra/errors.js";
+import { formatErrorMessage, readErrorName } from "../../infra/errors.js";
 import { withTimeout } from "../../infra/fs-safe.js";
 import { defaultRuntime } from "../../runtime.js";
 import { createRunningTaskRun } from "../../tasks/detached-task-runtime.js";
@@ -288,6 +291,7 @@ export function dispatchAgentRunFromGateway(params: {
           ? (result?.meta?.stopReason ?? "rpc")
           : undefined;
       const timeoutPhase = normalizeAgentRunTimeoutPhase(result?.meta?.timeoutPhase);
+      const terminalError = readAgentRunTerminalError(result) ?? result?.meta?.error?.message;
       const terminalOutcome = buildAgentRunTerminalOutcome({
         status:
           aborted || result?.meta?.stopReason === "timeout" || timeoutPhase
@@ -297,7 +301,7 @@ export function dispatchAgentRunFromGateway(params: {
                 result?.meta?.stopReason === "error"
               ? "error"
               : "ok",
-        error: result?.meta?.error,
+        error: terminalError ? formatErrorMessage(terminalError) : undefined,
         stopReason: stopReason ?? result?.meta?.stopReason,
         livenessState: result?.meta?.livenessState,
         timeoutPhase,
@@ -313,7 +317,10 @@ export function dispatchAgentRunFromGateway(params: {
           runId: params.runId,
           sessionKey: trackedTask.childSessionKey,
           status,
-          ...(status === "cancelled" && cancellationReason ? { error: cancellationReason } : {}),
+          error:
+            status === "cancelled"
+              ? (cancellationReason ?? terminalOutcome.error)
+              : terminalOutcome.error,
           terminalSummary:
             responseStatus === "timeout"
               ? "aborted"
