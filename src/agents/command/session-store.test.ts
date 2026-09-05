@@ -632,6 +632,7 @@ describe("updateSessionStoreAfterAgentRun", () => {
             sessionId,
             provider: "deepseek",
             model: "deepseek-v4-flash",
+            agentHarnessId: "openclaw",
           },
         },
       };
@@ -648,8 +649,66 @@ describe("updateSessionStoreAfterAgentRun", () => {
       });
 
       expect(sessionStore[sessionKey]?.contextTokens).toBe(1_000_000);
-      expect(sessionStore[sessionKey]?.contextTokensSource).toBe("resolved");
+      expect(sessionStore[sessionKey]?.contextTokensSource).toBe("resolved-v1");
       expect(loadPersistedSessionEntry(storePath, sessionKey)?.contextTokens).toBe(1_000_000);
+      expect(loadPersistedSessionEntry(storePath, sessionKey)?.contextTokensSource).toBe(
+        "resolved-v1",
+      );
+      // The persisted resolution stays trusted by the canonical projection
+      // owner when a cold reader cannot resolve synchronously.
+      const persistedEntry = loadPersistedSessionEntry(storePath, sessionKey);
+      const { resolveProjectedSessionContextTokens } =
+        await import("../../config/sessions/context-token-provenance.js");
+      expect(
+        resolveProjectedSessionContextTokens({
+          entry: persistedEntry,
+          provider: "deepseek",
+          model: "deepseek-v4-flash",
+          agentHarnessId: "openclaw",
+          resolvedContextTokens: undefined,
+          authoredContextTokens: undefined,
+        }),
+      ).toBe(1_000_000);
+    });
+  });
+
+  it("keeps the generic default budget on the untrusted legacy tag when the model cannot be resolved", async () => {
+    await withTempSessionStore(async ({ storePath }) => {
+      resetContextWindowCacheForTest();
+      const cfg = {} as OpenClawConfig;
+      const sessionKey = "agent:main:explicit:test-unresolved-context";
+      const sessionId = "test-unresolved-context-session";
+      const sessionStore: Record<string, SessionEntry> = {
+        [sessionKey]: { sessionId, updatedAt: 1 },
+      };
+      await seedSessionStore(storePath, sessionStore);
+
+      const result: EmbeddedAgentRunResult = {
+        meta: {
+          durationMs: 1,
+          agentMeta: {
+            sessionId,
+            provider: "custom-host",
+            model: "unknown-model",
+            agentHarnessId: "openclaw",
+          },
+        },
+      };
+
+      await updateSessionStoreAfterAgentRun({
+        cfg,
+        sessionId,
+        sessionKey,
+        storePath,
+        sessionStore,
+        defaultProvider: "custom-host",
+        defaultModel: "unknown-model",
+        result,
+      });
+
+      expect(sessionStore[sessionKey]?.contextTokens).toBe(200_000);
+      expect(sessionStore[sessionKey]?.contextTokensSource).toBe("resolved");
+      expect(loadPersistedSessionEntry(storePath, sessionKey)?.contextTokens).toBe(200_000);
       expect(loadPersistedSessionEntry(storePath, sessionKey)?.contextTokensSource).toBe(
         "resolved",
       );
@@ -700,6 +759,9 @@ describe("updateSessionStoreAfterAgentRun", () => {
       });
 
       expect(sessionStore[sessionKey]?.contextTokens).toBe(272_000);
+      // The config-authored clamp equals the config-only resolution, so the
+      // persisted value keeps the untrusted legacy tag (removed caps cannot
+      // stick as trusted resolutions).
       expect(sessionStore[sessionKey]?.contextTokensSource).toBe("resolved");
       expect(loadPersistedSessionEntry(storePath, sessionKey)?.contextTokens).toBe(272_000);
       expect(loadPersistedSessionEntry(storePath, sessionKey)?.contextTokensSource).toBe(

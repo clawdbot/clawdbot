@@ -91,6 +91,8 @@ export async function updateSessionStoreAfterAgentRun(params: {
   const runtimeContextTokens = normalizeSessionTokenCount(result.meta.agentMeta?.contextTokens);
   const contextBudgetStatus = result.meta.agentMeta?.contextBudgetStatus;
   let contextTokens = runtimeContextTokens;
+  let contextTokensSource: SessionEntry["contextTokensSource"] =
+    result.meta.agentMeta?.contextTokensSource;
   if (contextTokens === undefined) {
     const contextModule = await getContextModule();
     const staticCatalogContext = await contextModule.resolveBundledStaticCatalogContext({
@@ -98,17 +100,31 @@ export async function updateSessionStoreAfterAgentRun(params: {
       provider: providerUsed,
       model: modelUsed,
     });
-    contextTokens =
-      contextModule.resolveContextTokensForModel({
-        cfg,
-        provider: providerUsed,
-        model: modelUsed,
-        ...staticCatalogContext,
-        fallbackContextTokens: DEFAULT_CONTEXT_TOKENS,
-        allowAsyncLoad: false,
-      }) ?? DEFAULT_CONTEXT_TOKENS;
+    const resolutionParams = {
+      cfg,
+      provider: providerUsed,
+      model: modelUsed,
+      allowAsyncLoad: false,
+    } as const;
+    const configOnlyTokens = contextModule.resolveContextTokensForModel(resolutionParams);
+    const resolvedTokens = contextModule.resolveContextTokensForModel({
+      ...resolutionParams,
+      ...staticCatalogContext,
+    });
+    if (resolvedTokens !== undefined) {
+      contextTokens = resolvedTokens;
+      // Only a bundled catalog row that produced or tightened the effective
+      // window is a trusted persisted resolution; config-only clamps and the
+      // generic default stay legacy so removed caps cannot stick.
+      contextTokensSource ??=
+        configOnlyTokens === undefined || resolvedTokens < configOnlyTokens
+          ? "resolved-v1"
+          : "resolved";
+    } else {
+      contextTokens = DEFAULT_CONTEXT_TOKENS;
+    }
   }
-  const contextTokensSource = result.meta.agentMeta?.contextTokensSource ?? "resolved";
+  contextTokensSource ??= "resolved";
 
   const preserveUserFacingRunState = params.preserveUserFacingSessionModelState === true;
   const preserveRuntimeModel = params.preserveRuntimeModel === true || preserveUserFacingRunState;

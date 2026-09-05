@@ -266,6 +266,12 @@ export async function accountAgentTurn(context: AgentTurnAccountingContext) {
     runResult.meta.agentMeta.contextTokens > 0
       ? Math.floor(runResult.meta.agentMeta.contextTokens)
       : undefined;
+  const resolutionParams = {
+    cfg,
+    provider: sessionModel.provider,
+    model: sessionModel.model,
+    allowAsyncLoad: false,
+  } as const;
   const staticCatalogContext =
     runtimeContextTokens === undefined
       ? await resolveBundledStaticCatalogContext({
@@ -274,16 +280,21 @@ export async function accountAgentTurn(context: AgentTurnAccountingContext) {
           model: sessionModel.model,
         })
       : undefined;
+  const configOnlyTokens =
+    runtimeContextTokens === undefined ? resolveContextTokensForModel(resolutionParams) : undefined;
   const resolvedContextTokens =
     runtimeContextTokens === undefined
       ? resolveContextTokensForModel({
-          cfg,
-          provider: sessionModel.provider,
-          model: sessionModel.model,
+          ...resolutionParams,
           ...staticCatalogContext,
-          allowAsyncLoad: false,
         })
       : undefined;
+  // Only a bundled catalog row that produced or tightened the effective window
+  // earns the trusted persisted-resolution tag; config-only resolutions keep
+  // the legacy tag so removed caps cannot stick.
+  const catalogOwnedResolution =
+    resolvedContextTokens !== undefined &&
+    (configOnlyTokens === undefined || resolvedContextTokens < configOnlyTokens);
   const contextTokensUsed =
     runtimeContextTokens ??
     resolvedContextTokens ??
@@ -294,7 +305,9 @@ export async function accountAgentTurn(context: AgentTurnAccountingContext) {
     (runtimeContextTokens !== undefined
       ? "runtime"
       : resolvedContextTokens !== undefined
-        ? "resolved-v1"
+        ? catalogOwnedResolution
+          ? "resolved-v1"
+          : "resolved"
         : undefined);
 
   // Count first: terminal usage restores billing buckets without guessing context chronology.

@@ -11,8 +11,9 @@ const mocks = vi.hoisted(() => ({
 }));
 
 vi.mock("../../agents/context.js", () => ({
-  resolveContextTokensForModel: () => mocks.resolveContextTokensForModel(),
-  resolveBundledStaticCatalogContext: () => mocks.resolveBundledStaticCatalogContext(),
+  resolveContextTokensForModel: (params: unknown) => mocks.resolveContextTokensForModel(params),
+  resolveBundledStaticCatalogContext: (params: unknown) =>
+    mocks.resolveBundledStaticCatalogContext(params),
 }));
 
 vi.mock("../../agents/fast-mode.js", () => ({
@@ -226,21 +227,42 @@ describe("accountFollowupTurn", () => {
     );
   });
 
-  it("marks a successful current model lookup with versioned resolved provenance", async () => {
-    const params = createParams();
+  it("marks a bundled catalog resolution with versioned resolved provenance", async () => {
+    // The bundled catalog row tightens the effective window below the
+    // config-only resolution, so the persisted value is a trusted resolution.
+    mocks.resolveBundledStaticCatalogContext.mockResolvedValue({
+      modelContextWindow: 120_000,
+    });
+    mocks.resolveContextTokensForModel.mockImplementation(
+      (params: { modelContextWindow?: number }) => params.modelContextWindow ?? 200_000,
+    );
+    const runParams = createParams();
 
-    await accountFollowupTurn(params);
+    await accountFollowupTurn(runParams);
 
     expect(mocks.persistSessionUsageUpdate).toHaveBeenCalledWith(
       expect.objectContaining({
-        contextTokensUsed: 200_000,
+        contextTokensUsed: 120_000,
         contextTokensSource: "resolved-v1",
       }),
     );
   });
 
+  it("keeps a config-only resolution on the untrusted legacy tag", async () => {
+    const runParams = createParams();
+
+    await accountFollowupTurn(runParams);
+
+    expect(mocks.persistSessionUsageUpdate).toHaveBeenCalledWith(
+      expect.objectContaining({
+        contextTokensUsed: 200_000,
+        contextTokensSource: "resolved",
+      }),
+    );
+  });
+
   it("does not label a prior context fallback as a current resolution after a model switch", async () => {
-    mocks.resolveContextTokensForModel.mockReturnValueOnce(undefined);
+    mocks.resolveContextTokensForModel.mockReturnValue(undefined);
     const params = createParams();
     const session = params.turn.session as unknown as {
       current: () => SessionEntry;
