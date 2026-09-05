@@ -2849,7 +2849,7 @@ describe("runMemoryFlushIfNeeded", () => {
     expect(runEmbeddedAgentMock).toHaveBeenCalledTimes(1);
   });
 
-  it("does not stamp a fresh total from a stale usage anchor when later transcript growth is unaccounted (issue #138871)", async () => {
+  it("includes appended transcript growth before persisting fresh usage", async () => {
     const storePath = path.join(rootDir, "sessions.json");
     await writeTestSessionTranscript({
       rootDir,
@@ -2876,8 +2876,7 @@ describe("runMemoryFlushIfNeeded", () => {
       updatedAt: Date.now(),
       totalTokensFresh: false,
       compactionCount: 0,
-      // Already flushed for the current compaction cycle so the large corrected
-      // total below cannot also trigger an actual flush attempt in this call.
+      // A prior flush prevents a new model usage report from hiding the stale anchor.
       memoryFlush: { kind: "succeeded", compactionCount: 0 },
     };
     await writeTestSessionStore(storePath, "main", sessionEntry);
@@ -2887,9 +2886,6 @@ describe("runMemoryFlushIfNeeded", () => {
     expect(flushResult.outcome).toBe("skipped");
     const persistedAfterFlush = loadMainSessionEntry(storePath);
     expect(persistedAfterFlush.totalTokensFresh).toBe(true);
-    // The bare usage anchor alone is 40,000 prompt tokens; the 450,000-character
-    // follow-up appended after it must be folded in before the total is trusted
-    // as fresh, or a later compaction check will skip re-reading the transcript.
     expect(persistedAfterFlush.totalTokens).toBeGreaterThan(80_000);
 
     await runDefaultPreflight(persistedAfterFlush, { storePath });
