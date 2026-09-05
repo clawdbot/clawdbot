@@ -3,6 +3,7 @@ import { PreparedModelRuntimePublicationSupersededError } from "./prepared-model
 import { ownerKey, resolveConfiguredOwner } from "./prepared-model-runtime.owner.js";
 import type {
   PreparedModelRuntimeOwner,
+  PreparedModelRuntimeReplacement,
   PreparedModelRuntimeReplacementGateId,
   PreparedModelRuntimeSnapshot,
 } from "./prepared-model-runtime.types.js";
@@ -208,6 +209,19 @@ export class PreparedModelRuntimeAuthPublicationOwner {
     if (this.#transaction?.adoptedBy === gateId) {
       this.reject(this.#transaction, error);
     }
+  }
+
+  commitAdopted(
+    replacement: PreparedModelRuntimeReplacement,
+    owners: Map<string, PreparedModelRuntimeOwner>,
+    commit: () => void,
+  ): void {
+    const transaction = this.prepareAdoptedCommit(replacement.gateId);
+    commit();
+    if (transaction) {
+      this.resolve(transaction, owners);
+    }
+    replacement.resolve();
   }
 
   async drain(params: {

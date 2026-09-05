@@ -4,11 +4,12 @@ import {
   getPreparedModelRuntimeMocks,
   resetPreparedModelRuntimeHarness,
 } from "./prepared-model-runtime.test-harness.js";
-import { afterEach, beforeEach, describe, expect, it } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import {
   createOpenClawTestState,
   type OpenClawTestState,
 } from "../test-utils/openclaw-test-state.js";
+import { PreparedModelRuntimeAuthPublicationOwner } from "./prepared-model-runtime-auth-publication.js";
 import {
   getPreparedModelRuntimeSnapshot,
   loadPublishedGatewayReplyDispatchRuntime,
@@ -74,6 +75,59 @@ describe("prepared model runtime catalog recovery", () => {
       loadPublishedGatewayReplyDispatchRuntime({ agentId: "secondary" }),
     ).resolves.toMatchObject({ agentId: "secondary" });
     expect(mocks.ensureOpenClawModelsJson).toHaveBeenCalledTimes(4);
+  });
+
+  it("publishes an auth mutation queued immediately after the recovery commit", async () => {
+    mocks.configuredAgentIds = ["default", "secondary"];
+    const config = {};
+    await refreshPreparedModelRuntimeSnapshots(config, { gatewayLifecycle: true });
+    const defaultInput = {
+      agentId: "default",
+      config,
+      agentDir: "/tmp/unused-agent",
+      inheritedAuthDir: "/tmp/unused-agent",
+      workspaceDir: "/tmp/unused-workspace",
+    };
+    const initialDefault = getPreparedModelRuntimeSnapshot(defaultInput);
+    expect(initialDefault).toBeDefined();
+    if (!initialDefault) {
+      throw new Error("default prepared model runtime owner was not published");
+    }
+
+    const originalResolve = PreparedModelRuntimeAuthPublicationOwner.prototype.resolve;
+    let injectedMutation = false;
+    const resolveSpy = vi
+      .spyOn(PreparedModelRuntimeAuthPublicationOwner.prototype, "resolve")
+      .mockImplementation(function (...args) {
+        originalResolve.apply(this, args);
+        if (!injectedMutation) {
+          injectedMutation = true;
+          queueMicrotask(() => {
+            mocks.mutationListener?.({
+              agentDir: "/tmp/unused-agent",
+              affectsInheritedStores: false,
+            });
+          });
+        }
+      });
+
+    try {
+      const recovery =
+        replacePreparedModelRuntimeSnapshotAfterCatalogGenerationMismatch(initialDefault);
+      mocks.mutationListener?.({
+        agentDir: "/tmp/configured-secondary",
+        affectsInheritedStores: false,
+      });
+      await expect(recovery).resolves.toBe(true);
+
+      await expect(prepareModelRuntimeSnapshot(defaultInput)).resolves.not.toBe(initialDefault);
+      await expect(
+        loadPublishedGatewayReplyDispatchRuntime({ agentId: "default" }),
+      ).resolves.toMatchObject({ agentId: "default" });
+      expect(mocks.ensureOpenClawModelsJson).toHaveBeenCalledTimes(6);
+    } finally {
+      resolveSpy.mockRestore();
+    }
   });
 
   it("defers to a config replacement that supersedes recovery", async () => {

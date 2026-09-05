@@ -435,12 +435,12 @@ export async function replacePreparedModelRuntimeSnapshotAfterCatalogGenerationM
     getPendingReplacement: () => pendingModelRuntimeReplacement,
     setPendingReplacement: (replacement) => (pendingModelRuntimeReplacement = replacement),
     adoptAuthPublication: (replacement) => authPublication.adopt(replacement.gateId),
-    commitAuthPublication: (replacement) => {
-      const transaction = authPublication.prepareAdoptedCommit(replacement.gateId);
-      replyDispatchPublication.rebuild(owners.values());
-      if (transaction) {
-        authPublication.resolve(transaction, owners);
-      }
+    commitReplacement: (replacement) => {
+      authPublication.commitAdopted(replacement, owners, () => {
+        replyDispatchPublication.rebuild(owners.values());
+        pendingModelRuntimeReplacement = undefined;
+      });
+      notifyPreparedModelRuntimePublication({ phase: "published" });
     },
     rejectAuthPublication: (replacement, error) =>
       authPublication.rejectAdopted(replacement.gateId, error),
@@ -611,8 +611,7 @@ export function refreshPreparedModelRuntimeSnapshots(
       return;
     }
     await drainPendingAuthMutations(
-      // The final queue check, dispatch rebuild, and replacement resolution are one synchronous
-      // commit. A mutation before it is adopted; a mutation after it starts a new auth transaction.
+      // The final queue check, dispatch rebuild, and replacement resolution are one commit.
       commitReplacement,
     );
   }).then(commitReplacement, (error: unknown) => {

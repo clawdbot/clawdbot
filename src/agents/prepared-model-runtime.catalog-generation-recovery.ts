@@ -16,7 +16,7 @@ type RecoveryDependencies = {
   getPendingReplacement: () => PreparedModelRuntimeReplacement | undefined;
   setPendingReplacement: (replacement: PreparedModelRuntimeReplacement | undefined) => void;
   adoptAuthPublication: (replacement: PreparedModelRuntimeReplacement) => void;
-  commitAuthPublication: (replacement: PreparedModelRuntimeReplacement) => void;
+  commitReplacement: (replacement: PreparedModelRuntimeReplacement) => void;
   rejectAuthPublication: (replacement: PreparedModelRuntimeReplacement, error: Error) => void;
   removeReplyDispatch: (agentIds: ReadonlySet<string>) => void;
   enqueuePublication: (task: () => Promise<void>) => Promise<void>;
@@ -89,18 +89,13 @@ export class PreparedModelCatalogGenerationRecoveryOwner {
       }
       await dependencies.drainPendingAuthMutations(() => {
         if (isReplacementCurrent()) {
-          dependencies.commitAuthPublication(replacement);
+          dependencies.commitReplacement(replacement);
         }
       });
     });
     this.#recoveries.set(owner, recovery);
     try {
       await recovery;
-      if (dependencies.getPendingReplacement() === replacement) {
-        dependencies.setPendingReplacement(undefined);
-        replacement.resolve();
-        notifyPreparedModelRuntimePublication({ phase: "published" });
-      }
     } catch (error) {
       const refreshError = toStringifiedError(error);
       if (!isReplacementCurrent()) {
