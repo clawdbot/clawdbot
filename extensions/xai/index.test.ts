@@ -1,5 +1,5 @@
 // Xai tests cover index plugin behavior.
-import type { OpenClawPluginApi } from "openclaw/plugin-sdk/plugin-entry";
+import type { OpenClawPluginApi, ProviderPlugin } from "openclaw/plugin-sdk/plugin-entry";
 import { createTestPluginApi } from "openclaw/plugin-sdk/plugin-test-api";
 import {
   createCapturedPluginRegistration,
@@ -141,8 +141,32 @@ function findXaiFetchInit(
   return fetchMock.mock.calls.find(([input]) => input === url)?.[1];
 }
 
-async function runXaiCatalog(options: { auth?: "none"; apiKey?: false } = {}) {
-  const provider = await registerSingleProviderPlugin(plugin);
+function createXaiPluginLogger() {
+  return { info: vi.fn(), warn: vi.fn(), error: vi.fn(), debug: vi.fn() };
+}
+
+function registerXaiProvider(logger: ReturnType<typeof createXaiPluginLogger>): ProviderPlugin {
+  const providers: ProviderPlugin[] = [];
+  plugin.register(
+    createTestPluginApi({
+      logger,
+      registerProvider(provider) {
+        providers.push(provider);
+      },
+    }),
+  );
+  const provider = providers[0];
+  if (!provider) {
+    throw new Error("expected xAI plugin to register a provider");
+  }
+  return provider;
+}
+
+type XaiCatalogRunOptions = { auth?: "none"; apiKey?: false };
+
+async function runXaiCatalogResult(options: XaiCatalogRunOptions = {}) {
+  const logger = createXaiPluginLogger();
+  const provider = registerXaiProvider(logger);
   const result = await provider.catalog?.run({
     config: { models: {} },
     agentDir: "/agent",
@@ -163,17 +187,28 @@ async function runXaiCatalog(options: { auth?: "none"; apiKey?: false } = {}) {
       discoveryApiKey: options.apiKey === false ? undefined : "env-xai-key",
     }),
   });
+  return { provider, result, logger };
+}
+
+async function runXaiCatalog(options: XaiCatalogRunOptions = {}) {
+  const { provider, result, logger } = await runXaiCatalogResult(options);
   if (!result || !("provider" in result)) {
     throw new Error("expected xAI catalog provider result");
   }
-  return { provider, result: result.provider };
+  return { provider, result: result.provider, logger };
 }
+
+const XAI_OAUTH_REAUTH_HINT =
+  "Re-authenticate with openclaw models auth login --provider xai --method oauth.";
 
 describe("xai provider plugin", () => {
   beforeEach(() => {
     clearLiveCatalogCacheForTests();
     providerAuthRuntimeMocks.resolveApiKeyForProvider.mockReset();
     vi.stubEnv("XAI_API_KEY", "");
+    // Keep the rendered re-auth hint free of profile/container prefixes.
+    vi.stubEnv("OPENCLAW_PROFILE", "");
+    vi.stubEnv("OPENCLAW_CONTAINER_HINT", "");
   });
 
   afterEach(() => {
@@ -312,11 +347,12 @@ describe("xai provider plugin", () => {
         ],
       });
     });
-    const { provider, result } = await runXaiCatalog();
+    const { provider, result, logger } = await runXaiCatalog();
 
     expect(result.baseUrl).toBe("https://cli-chat-proxy.grok.com/v1");
     expect(result.auth).toBe("oauth");
     expect(result.apiKey).toBeUndefined();
+    expect(logger.warn).not.toHaveBeenCalled();
     expect(result.models.map((model) => model.id)).toEqual([
       "auto",
       "grok-composer-2.5-fast",
@@ -440,16 +476,18 @@ describe("xai provider plugin", () => {
   it("keeps the Grok OAuth transport when xAI OAuth discovery is unavailable", async () => {
     mockXaiRuntimeOAuth();
     stubXaiFetch(() => new Response("temporarily unavailable", { status: 503 }));
-    const { result } = await runXaiCatalog();
+    const { result, logger } = await runXaiCatalog();
 
     expect(result.baseUrl).toBe("https://cli-chat-proxy.grok.com/v1");
     expect(result.auth).toBe("oauth");
     expect(result.apiKey).toBeUndefined();
     expect(result.models.map((model) => model.id)).toContain("auto");
     expect(result.models.map((model) => model.id)).toContain("grok-build-0.1");
+    // A discovery outage is not a credential failure; the route did not change.
+    expect(logger.warn).not.toHaveBeenCalled();
   });
 
-  it("falls back to API-key discovery when xAI OAuth credential resolution fails", async () => {
+  it("warns and falls back to API-key discovery when xAI OAuth credential resolution fails", async () => {
     providerAuthRuntimeMocks.resolveApiKeyForProvider.mockRejectedValue(
       new Error("expired oauth profile"),
     );
@@ -458,7 +496,7 @@ describe("xai provider plugin", () => {
         data: [{ id: "grok-4.3", object: "model" }],
       }),
     );
-    const { result } = await runXaiCatalog();
+    const { result, logger } = await runXaiCatalog();
 
     expect(result.baseUrl).toBe("https://api.x.ai/v1");
     expect(result.apiKey).toBe("env-xai-key");
@@ -469,6 +507,35 @@ describe("xai provider plugin", () => {
     expect(new Headers(fetchMock.mock.calls[0]?.[1]?.headers).get("Authorization")).toBe(
       "Bearer env-xai-key",
     );
+    expect(logger.warn).toHaveBeenCalledExactlyOnceWith(
+      `xai: OAuth profile "xai-profile" could not be resolved (expired oauth profile); publishing the API-key catalog at https://api.x.ai/v1, billed to xAI API credits instead of the Grok subscription. ${XAI_OAUTH_REAUTH_HINT}`,
+    );
+  });
+
+  it("warns and publishes nothing when xAI OAuth credential resolution fails without an API key", async () => {
+    providerAuthRuntimeMocks.resolveApiKeyForProvider.mockRejectedValue(
+      new Error('No credentials found for profile "xai-profile".'),
+    );
+    const fetchMock = stubXaiFetch(() => Response.json({ data: [] }));
+    const { result, logger } = await runXaiCatalogResult({ apiKey: false });
+
+    expect(result).toBeNull();
+    expect(fetchMock).not.toHaveBeenCalled();
+    expect(logger.warn).toHaveBeenCalledExactlyOnceWith(
+      `xai: OAuth profile "xai-profile" could not be resolved (No credentials found for profile "xai-profile".); no xAI API key is configured, so xAI models stay unavailable. ${XAI_OAUTH_REAUTH_HINT}`,
+    );
+  });
+
+  it("stays quiet when no xAI OAuth profile is selected and runtime auth is missing", async () => {
+    providerAuthRuntimeMocks.resolveApiKeyForProvider.mockRejectedValue(
+      new Error('No API key found for provider "xai".'),
+    );
+    const fetchMock = stubXaiFetch(() => Response.json({ data: [] }));
+    const { result, logger } = await runXaiCatalogResult({ auth: "none", apiKey: false });
+
+    expect(result).toBeNull();
+    expect(fetchMock).not.toHaveBeenCalled();
+    expect(logger.warn).not.toHaveBeenCalled();
   });
 
   it("uses fallback API-key credentials consistently for xAI live discovery", async () => {
