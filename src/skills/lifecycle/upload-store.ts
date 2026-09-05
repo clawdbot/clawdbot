@@ -308,9 +308,9 @@ function assembleArchive(
   expectedSize: number,
 ): Buffer {
   let offset = 0;
-  const buffers: Buffer[] = [];
+  const buffers: Uint8Array[] = [];
   for (const chunk of chunks) {
-    const bytes = Buffer.from(chunk.chunk_blob);
+    const bytes = chunk.chunk_blob;
     if (chunk.byte_offset !== offset || chunk.size_bytes !== bytes.length || bytes.length < 1) {
       throw new SkillUploadRequestError("uploaded archive chunks are incomplete");
     }
@@ -645,7 +645,7 @@ function createSkillUploadStore(options?: SkillUploadStoreOptions) {
           if (!current.actual_sha256) {
             throw new SkillUploadRequestError("committed upload is missing sha256");
           }
-          if (Buffer.from(current.archive_blob).length !== current.size_bytes) {
+          if (current.archive_blob.byteLength !== current.size_bytes) {
             throw new SkillUploadRequestError("uploaded archive is missing or incomplete");
           }
           executeSqliteQuerySync(
@@ -704,7 +704,8 @@ function createSkillUploadStore(options?: SkillUploadStoreOptions) {
             },
             async (tmp) => {
               const archivePath = path.join(tmp.dir, "archive.zip");
-              await fs.writeFile(archivePath, Buffer.from(row.archive_blob), { mode: 0o600 });
+              // SQLite returned a private byte snapshot that remains stable across this await.
+              await fs.writeFile(archivePath, row.archive_blob, { mode: 0o600 });
               return await action(toSkillUploadRecord(row, archivePath), {
                 remove: async () => {
                   // Only the callback that still owns the install lease may consume the upload.

@@ -337,12 +337,19 @@ describe("skill upload store", () => {
     const { databasePath, store } = await makeStore();
     const db = stateDatabase(databasePath);
     const archiveReads: Array<{ bytes: number; inTransaction: boolean }> = [];
+    const nativeBlobs = new WeakSet<Uint8Array>();
+    const bufferFrom = vi.spyOn(Buffer, "from");
     const nativePrepare = db.prepare.bind(db);
     vi.spyOn(db, "prepare").mockImplementation((sql) => {
       const statement = nativePrepare(sql);
       const iterate = statement.iterate.bind(statement);
       vi.spyOn(statement, "iterate").mockImplementation(function* (...bindings) {
         for (const row of iterate(...bindings)) {
+          for (const bytes of [row.chunk_blob, row.archive_blob]) {
+            if (bytes instanceof Uint8Array) {
+              nativeBlobs.add(bytes);
+            }
+          }
           if (row.archive_blob instanceof Uint8Array) {
             archiveReads.push({
               bytes: row.archive_blob.byteLength,
@@ -407,6 +414,13 @@ describe("skill upload store", () => {
         expect(await fs.readFile(record.archivePath)).toEqual(archive);
       });
       expect(archiveReads).toEqual([{ bytes: archive.length, inTransaction: true }]);
+      const copiedBytes = bufferFrom.mock.calls.reduce((total, [value]) => {
+        const input: unknown = value;
+        return (
+          total + (input instanceof Uint8Array && nativeBlobs.has(input) ? input.byteLength : 0)
+        );
+      }, 0);
+      expect(copiedBytes).toBe(0);
     } finally {
       vi.restoreAllMocks();
     }
