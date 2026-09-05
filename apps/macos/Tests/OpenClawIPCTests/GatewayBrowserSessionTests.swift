@@ -391,8 +391,12 @@ struct MacGatewayBrowserSessionStoreTests {
             let accountB = try gatewayBrowserSessionFixture(origin: "https://\(host)/", subject: "account-b")
             let attemptA = try await store.beginBrowserSignIn(url: url)
             let profile = try await store.saveBrowserSession(name: "Accounts", session: accountA, attempt: attemptA)
-            try await self.setBrowserPreference(profileID: profile.id, origin: accountA.origin)
-            #expect(await self.browserPreference(profileID: profile.id) == "dark")
+            // This models an active dashboard's store lifetime. Dropping its last
+            // owner after setCookie is not a WebKit disk-flush/restart contract.
+            let browser = DashboardBrowserSessionStore.persistent(
+                profileID: profile.id, registryNamespace: MacGatewayProfileStore.service, currentSession: accountA)
+            try await self.setBrowserPreference(in: browser, origin: accountA.origin)
+            #expect(await self.browserPreference(in: browser) == "dark")
             let directory = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
             defer { try? FileManager.default.removeItem(at: directory) }
             let result: Result<Void, Error>
@@ -421,13 +425,13 @@ struct MacGatewayBrowserSessionStoreTests {
                 let renewed = try await MacGatewayConnectionFleet.shared.binding(profileID: profile.id)
                 #expect(renewed.chatStoreID == firstStoreID)
                 #expect(renewed.connection === first.connection)
-                #expect(await self.browserPreference(profileID: profile.id) == "dark")
+                #expect(await self.browserPreference(in: browser) == "dark")
 
                 let attemptB = try await store.beginBrowserSignIn(url: url)
                 _ = try await store.saveBrowserSession(name: "Accounts", session: accountB, attempt: attemptB)
                 let second = try await MacGatewayConnectionFleet.shared.binding(profileID: profile.id)
                 #expect(second.connection !== first.connection)
-                #expect(await self.browserPreference(profileID: profile.id) == nil)
+                #expect(await self.browserPreference(in: browser) == nil)
                 let secondStoreID = second.chatStoreID
                 #expect(secondStoreID != firstStoreID)
                 let outboxB = try #require(MacChatTranscriptCache.store(
@@ -465,7 +469,7 @@ struct MacGatewayBrowserSessionStoreTests {
                 try await store.remove(profileID: profile.id)
                 let readd = try await store.beginBrowserSignIn(url: url)
                 _ = try await store.saveBrowserSession(name: "Accounts", session: renewal, attempt: readd)
-                try await self.setBrowserPreference(profileID: profile.id, origin: accountA.origin)
+                try await self.setBrowserPreference(in: browser, origin: accountA.origin)
                 await #expect(throws: GatewayBrowserSessionError.superseded) {
                     try await manual.connection.request(method: "chat.send", params: nil)
                 }
@@ -476,7 +480,7 @@ struct MacGatewayBrowserSessionStoreTests {
             if try await store.profiles().contains(where: { $0.id == profile.id }) {
                 try await store.remove(profileID: profile.id)
             }
-            #expect(await self.browserPreference(profileID: profile.id) == nil)
+            #expect(await self.browserPreference(in: browser) == nil)
             try result.get()
         }
     }
@@ -612,9 +616,7 @@ struct MacGatewayBrowserSessionStoreTests {
     }
 
     @MainActor
-    private func setBrowserPreference(profileID: String, origin: URL) async throws {
-        let store = DashboardBrowserSessionStore.persistent(
-            profileID: profileID, registryNamespace: MacGatewayProfileStore.service)
+    private func setBrowserPreference(in store: DashboardBrowserSessionStore, origin: URL) async throws {
         let cookie = try #require(HTTPCookie(properties: [
             .name: "ui-theme", .value: "dark", .originURL: origin, .path: "/",
             .expires: Date().addingTimeInterval(3600),
@@ -623,10 +625,8 @@ struct MacGatewayBrowserSessionStoreTests {
     }
 
     @MainActor
-    private func browserPreference(profileID: String) async -> String? {
-        let store = DashboardBrowserSessionStore.persistent(
-            profileID: profileID, registryNamespace: MacGatewayProfileStore.service)
-        return await store.dataStore.httpCookieStore.allCookies().first { $0.name == "ui-theme" }?.value
+    private func browserPreference(in store: DashboardBrowserSessionStore) async -> String? {
+        await store.dataStore.httpCookieStore.allCookies().first { $0.name == "ui-theme" }?.value
     }
 
     @MainActor
