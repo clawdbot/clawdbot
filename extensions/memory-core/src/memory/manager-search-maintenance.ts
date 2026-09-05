@@ -4,7 +4,7 @@ import { MemoryIndexRevisionConflictError } from "./manager-db.js";
 
 type MemorySearchMaintenanceManager<DirtyGeneration> = {
   adoptReindexRetryState(generation: DirtyGeneration): void;
-  sync(params: { reason: string }): Promise<void>;
+  sync(params: { reason: string; force?: boolean }): Promise<void>;
   status(): { dirty?: boolean; lastSyncError?: string };
   close(): Promise<void>;
 };
@@ -42,7 +42,7 @@ export async function runMemorySearchMaintenance<DirtyGeneration>(params: {
       }
       // Retry only this automatic generation. The failed sync released its reindex
       // lease, and the next shadow build starts from the newest live revision.
-      await manager.sync({ reason: params.reason });
+      await manager.sync({ reason: params.reason, force: true });
     }
     const status = manager.status();
     if (status.dirty === true) {

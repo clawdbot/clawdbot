@@ -31,6 +31,7 @@ type ReindexHarness = {
   provider: EmbeddingProvider | null;
   dirty: boolean;
   memoryFullRetryDirty: boolean;
+  fullReindexRetryBackoff: { attempts: number; retryAt: number };
   sessionsDirty: boolean;
   sessionsFullRetryDirty: boolean;
   sessionsDirtyFiles: Set<string>;
@@ -146,6 +147,50 @@ describe("memory manager reindex recovery", () => {
     expect(harness.memoryFullRetryDirty).toBe(true);
     expect(harness.sessionsDirty).toBe(true);
     expect(Array.from(harness.sessionsDirtyFiles)).toEqual([dirtySessionFile]);
+  });
+
+  it("backs off the next search-triggered full reindex and resets after success", async () => {
+    const memoryManager = await openManager(
+      createCfg({
+        provider: "none",
+        sources: ["memory"],
+      }),
+    );
+    await memoryManager.sync({ reason: "baseline", force: true });
+    const harness = memoryManager as unknown as ReindexHarness;
+    const emptySyncPlan = { indexItems: [], finalize: () => undefined };
+    let now = 1_000_000;
+    vi.spyOn(Date, "now").mockImplementation(() => now);
+    harness.dirty = true;
+    harness.memoryFullRetryDirty = true;
+    const syncMemoryFiles = vi
+      .spyOn(harness, "syncMemoryFiles")
+      .mockRejectedValueOnce(new Error("full reindex failed"));
+
+    await expect(memoryManager.sync({ reason: "search" })).rejects.toThrow("full reindex failed");
+    expect(harness.fullReindexRetryBackoff).toEqual({ attempts: 1, retryAt: now + 30_000 });
+
+    await expect(memoryManager.sync({ reason: "search" })).resolves.toBeUndefined();
+    expect(syncMemoryFiles).toHaveBeenCalledTimes(1);
+
+    for (let attempts = 2; attempts <= 8; attempts += 1) {
+      now = harness.fullReindexRetryBackoff.retryAt;
+      syncMemoryFiles.mockRejectedValueOnce(new Error(`full reindex failure ${attempts}`));
+      await expect(memoryManager.sync({ reason: "search" })).rejects.toThrow(
+        `full reindex failure ${attempts}`,
+      );
+      const delay = Math.min(30_000 * 2 ** (attempts - 1), 30 * 60_000);
+      expect(harness.fullReindexRetryBackoff).toEqual({
+        attempts,
+        retryAt: now + delay,
+      });
+    }
+
+    now = harness.fullReindexRetryBackoff.retryAt;
+    syncMemoryFiles.mockResolvedValue(emptySyncPlan);
+    await expect(memoryManager.sync({ reason: "search" })).resolves.toBeUndefined();
+    expect(harness.fullReindexRetryBackoff).toEqual({ attempts: 0, retryAt: 0 });
+    expect(harness.memoryFullRetryDirty).toBe(false);
   });
 
   it("marks clean full reindex work dirty after a shadow full reindex fails late", async () => {

@@ -252,14 +252,23 @@ export abstract class MemoryManagerSyncOps extends MemoryManagerSourceSyncOps {
         meta !== null && meta.chunkingVersion !== MEMORY_CHUNKING_VERSION && !hasTargetArchiveFiles;
       const canRunRetryFullReindex =
         indexIdentity.status !== "missing" || needsInitialIndex || canRebuildMissingIdentity;
+      const retryFullReindexRequested = this.memoryFullRetryDirty || this.sessionsFullRetryDirty;
+      const retryFullReindexBackedOff =
+        retryFullReindexRequested && !params?.force && !this.canRetryFailedFullReindex();
       needsFullReindex =
         (params?.force && !hasTargetArchiveFiles) ||
         needsInitialIndex ||
         needsMissingIdentityReindex ||
         needsExplicitIdentityReindex ||
         needsChunkingVersionReindex ||
-        (this.memoryFullRetryDirty && canRunRetryFullReindex) ||
-        (this.sessionsFullRetryDirty && indexIdentity.status !== "valid" && canRunRetryFullReindex);
+        (this.memoryFullRetryDirty && canRunRetryFullReindex && !retryFullReindexBackedOff) ||
+        (this.sessionsFullRetryDirty &&
+          indexIdentity.status !== "valid" &&
+          canRunRetryFullReindex &&
+          !retryFullReindexBackedOff);
+      if (retryFullReindexBackedOff && !needsFullReindex) {
+        return;
+      }
       const needsFullSessionReindex = needsFullReindex || this.sessionsFullRetryDirty;
       if (indexIdentity.status !== "valid" && !needsFullReindex) {
         this.dirty = true;
@@ -643,6 +652,7 @@ export abstract class MemoryManagerSyncOps extends MemoryManagerSourceSyncOps {
       this.fts.available = shadow.fts.available;
       this.fts.loadError = shadow.fts.loadError;
       this.vector.dims = rebuilt.nextMeta.vectorDims;
+      this.clearFullReindexRetryBackoff();
     } catch (err) {
       this.restoreReindexRetryState(originalRetryState);
       this.markFailedFullReindexRetry({
