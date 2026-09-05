@@ -45,7 +45,7 @@ async function expectPaneHeaderGeometry(page: Page, dock: "left" | "right" | "bo
   for (const [header, content] of [
     [boxes.toolbar, boxes.main],
     [boxes.tabs, boxes.side],
-  ]) {
+  ] as const) {
     expect(header.height).toBeGreaterThan(0);
     expect(content.height).toBeGreaterThan(80);
     expect(header.x).toBeCloseTo(content.x, 0);
