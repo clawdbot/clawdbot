@@ -1,14 +1,6 @@
-import type { OpenClawConfig } from "../config/types.openclaw.js";
-import type { PluginManifestRegistry } from "../plugins/manifest-registry.js";
 import { resolveGlobalSingleton } from "../shared/global-singleton.js";
 import type { CreateSessionMcpRuntime } from "./agent-bundle-mcp-runtime-shared.js";
-import type { SessionMcpRuntime } from "./agent-bundle-mcp-types.js";
-
-export type SessionMcpConfigReload = {
-  cfg: OpenClawConfig;
-  manifestRegistry?: Pick<PluginManifestRegistry, "plugins">;
-  reloadPlugins?: boolean;
-};
+import type { SessionMcpConfigReload, SessionMcpRuntime } from "./agent-bundle-mcp-types.js";
 
 type SessionMcpRuntimeOwner = {
   isCurrent: () => boolean;

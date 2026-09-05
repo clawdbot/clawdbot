@@ -4,7 +4,7 @@ import path from "node:path";
 import { expectDefined } from "@openclaw/normalization-core";
 import { describe, expect, it, vi } from "vitest";
 import type { WebSocket } from "ws";
-import { getOrCreateSessionMcpRuntime } from "../agents/agent-bundle-mcp-tools.js";
+import { getOrCreateSessionMcpRuntime } from "../agents/agent-bundle-mcp-manager.test-support.js";
 import type { SessionMcpRuntime } from "../agents/agent-bundle-mcp-types.js";
 import { fetchMcpAppView } from "../agents/mcp-ui-resource.js";
 import { resolveStateDir } from "../config/paths.js";

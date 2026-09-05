@@ -1,10 +1,7 @@
 /** Session MCP runtime manager lifecycle: maps, idle sweep, dispose, advertised catalog. */
 import { AsyncLocalStorage } from "node:async_hooks";
 import { logWarn } from "../logger.js";
-import {
-  sessionMcpRuntimeOwners,
-  type SessionMcpConfigReload,
-} from "./agent-bundle-mcp-runtime-owner.js";
+import { sessionMcpRuntimeOwners } from "./agent-bundle-mcp-runtime-owner.js";
 import {
   DEFAULT_SESSION_MCP_RUNTIME_IDLE_TTL_MS,
   SESSION_MCP_MAX_IDLE_REQUESTER_RUNTIMES,
@@ -16,6 +13,7 @@ import type {
   McpServerCatalog,
   McpToolCatalog,
   RequesterScopedMcpRuntimeHandle,
+  SessionMcpConfigReload,
   SessionMcpRuntime,
 } from "./agent-bundle-mcp-types.js";
 
