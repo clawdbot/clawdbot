@@ -458,6 +458,11 @@ const CARD_CHILD_TABLES = [
   "workboard_card_notifications",
 ] as const;
 
+type WorkboardCardDatabase = Record<
+  (typeof CARD_CHILD_TABLES)[number] | "workboard_cards" | "workboard_worker_protocol",
+  Row
+>;
+
 /**
  * Child rows for a whole batch of cards, grouped by card id.
  *
@@ -469,7 +474,7 @@ type CardChildRows = {
   workerProtocol: Map<string, Row>;
 };
 
-function groupByCardId(rows: Row[]): Map<string, Row[]> {
+function groupByCardId(rows: Iterable<Row>): Map<string, Row[]> {
   const grouped = new Map<string, Row[]>();
   for (const row of rows) {
     const cardId = stringValue(row, "card_id");
@@ -487,18 +492,26 @@ function groupByCardId(rows: Row[]): Map<string, Row[]> {
 }
 
 function loadCardChildRows(db: DatabaseSync): CardChildRows {
+  // Group raw rows only: every preload must finish before card decoding can fail.
+  const query = getNodeSqliteKysely<WorkboardCardDatabase>(db);
   const byTable = new Map<string, Map<string, Row[]>>();
   for (const table of CARD_CHILD_TABLES) {
     // Same order the per-card query produces, so grouped buckets stay ordinal-sorted.
     byTable.set(
       table,
       groupByCardId(
-        db.prepare(`SELECT * FROM ${table} ORDER BY card_id ASC, ordinal ASC`).all() as Row[],
+        iterateSqliteQuerySync(
+          db,
+          query.selectFrom(table).selectAll().orderBy("card_id", "asc").orderBy("ordinal", "asc"),
+        ),
       ),
     );
   }
   const workerProtocol = new Map<string, Row>();
-  for (const row of db.prepare("SELECT * FROM workboard_worker_protocol").all() as Row[]) {
+  for (const row of iterateSqliteQuerySync(
+    db,
+    query.selectFrom("workboard_worker_protocol").selectAll(),
+  )) {
     const cardId = stringValue(row, "card_id");
     if (cardId) {
       workerProtocol.set(cardId, row);
@@ -521,6 +534,7 @@ function childRows(
     cached.delete(cardId);
     return rows;
   }
+  // Finish native extraction before decoding; a later row can contain the first error.
   return db
     .prepare(`SELECT * FROM ${table} WHERE card_id = ? ORDER BY ordinal ASC`)
     .all(cardId) as Row[];
@@ -848,6 +862,7 @@ function readCard(db: DatabaseSync, row: Row, preloaded?: CardChildRows): Workbo
   };
   const metadata = readMetadata(db, row, preloaded);
   const events = readEvents(db, card.id, preloaded);
+  const execution = readExecution(row);
   return {
     ...card,
     ...(stringValue(row, "notes") ? { notes: stringValue(row, "notes") } : {}),
@@ -856,7 +871,7 @@ function readCard(db: DatabaseSync, row: Row, preloaded?: CardChildRows): Workbo
     ...(stringValue(row, "run_id") ? { runId: stringValue(row, "run_id") } : {}),
     ...(stringValue(row, "task_id") ? { taskId: stringValue(row, "task_id") } : {}),
     ...(stringValue(row, "source_url") ? { sourceUrl: stringValue(row, "source_url") } : {}),
-    ...(readExecution(row) ? { execution: readExecution(row) } : {}),
+    ...(execution ? { execution } : {}),
     ...(numberValue(row, "started_at") !== undefined
       ? { startedAt: numberValue(row, "started_at") }
       : {}),
@@ -905,13 +920,7 @@ function insertChildren<T>(
 function insertCard(db: DatabaseSync, card: WorkboardCard): void {
   const execution = card.execution;
   const metadata = card.metadata;
-  const query =
-    getNodeSqliteKysely<
-      Record<
-        (typeof CARD_CHILD_TABLES)[number] | "workboard_cards" | "workboard_worker_protocol",
-        Row
-      >
-    >(db);
+  const query = getNodeSqliteKysely<WorkboardCardDatabase>(db);
   // Keep payload getters and JSON serialization after native statement preparation.
   const parent = compileSqliteQueryBindings<void>((p) =>
     query
@@ -1201,6 +1210,21 @@ function insertCard(db: DatabaseSync, card: WorkboardCard): void {
 class WorkboardSqliteCardStore implements WorkboardCardStore {
   constructor(private readonly db: DatabaseSync) {}
 
+  private matchesUpdatedAt(key: string, expectedUpdatedAt: number): boolean {
+    const { compiled, bind } = compileSqliteQueryBindings<string>((parameter) =>
+      getNodeSqliteKysely<WorkboardCardDatabase>(this.db)
+        .selectFrom("workboard_cards")
+        .select("updated_at")
+        .where(
+          "id",
+          "=",
+          parameter((value) => value),
+        ),
+    );
+    const current = this.db.prepare(compiled.sql).get(...bind(key));
+    return isRecord(current) && numberValue(current, "updated_at") === expectedUpdatedAt;
+  }
+
   private validatePayload(key: string, value: PersistedWorkboardCard): void {
     if (value.version !== 1 || value.card.id !== key) {
       throw new Error("invalid workboard card payload");
@@ -1230,10 +1254,7 @@ class WorkboardSqliteCardStore implements WorkboardCardStore {
   ): Promise<boolean> {
     this.validatePayload(key, value);
     return runSqliteImmediateTransactionSync(this.db, () => {
-      const current = this.db
-        .prepare("SELECT updated_at FROM workboard_cards WHERE id = ?")
-        .get(key);
-      if (!isRecord(current) || numberValue(current, "updated_at") !== expectedUpdatedAt) {
+      if (!this.matchesUpdatedAt(key, expectedUpdatedAt)) {
         return false;
       }
       insertCard(this.db, value.card);
@@ -1250,10 +1271,7 @@ class WorkboardSqliteCardStore implements WorkboardCardStore {
   ): Promise<WorkboardOwnerClaimResult> {
     this.validatePayload(key, value);
     return runSqliteImmediateTransactionSync(this.db, () => {
-      const current = this.db
-        .prepare("SELECT updated_at FROM workboard_cards WHERE id = ?")
-        .get(key);
-      if (!isRecord(current) || numberValue(current, "updated_at") !== expectedUpdatedAt) {
+      if (!this.matchesUpdatedAt(key, expectedUpdatedAt)) {
         return "conflict";
       }
       const rows: Row[] = this.db.prepare("SELECT * FROM workboard_cards WHERE id <> ?").all(key);
@@ -1271,10 +1289,7 @@ class WorkboardSqliteCardStore implements WorkboardCardStore {
 
   async deleteIfUpdatedAt(key: string, expectedUpdatedAt: number): Promise<boolean> {
     return runSqliteImmediateTransactionSync(this.db, () => {
-      const current = this.db
-        .prepare("SELECT updated_at FROM workboard_cards WHERE id = ?")
-        .get(key);
-      if (!isRecord(current) || numberValue(current, "updated_at") !== expectedUpdatedAt) {
+      if (!this.matchesUpdatedAt(key, expectedUpdatedAt)) {
         return false;
       }
       this.deleteCard(key);
