@@ -412,7 +412,8 @@ else if (endpoint === "graphql" && args.includes("query=query { viewer { login }
       fetch|cat-file|merge-base) exit 0;;
       merge-tree) echo candidate-tree;;
       rev-parse) echo main-tree;;
-      -c) exit 0;;
+      # interpret-trailers drains stdin; an early close can race Node's pipe writer.
+      -c) if [ "$5" = interpret-trailers ]; then cat >/dev/null; fi;;
       *) echo "unexpected fixture git: $*" >&2; exit 19;;
     esac`,
     aws: "exit 19",
@@ -601,9 +602,9 @@ describe("Crabbox authorization before final effects", () => {
         args.includes("orgs/openclaw/memberships/maintainer"),
       );
       const requests = result.calls.filter((args) => args[0] === "pr" && args[1] === "merge");
-      expect(viewers).toHaveLength(reads);
-      expect(memberships).toHaveLength(reads);
-      expect(requests).toHaveLength(merges);
+      expect(viewers, output).toHaveLength(reads);
+      expect(memberships, output).toHaveLength(reads);
+      expect(requests, output).toHaveLength(merges);
       expect(result.calls.some((args) => args.includes("user") || args[0] === "workflow")).toBe(
         false,
       );
@@ -635,6 +636,7 @@ describe("Crabbox authorization before final effects", () => {
         expect(output).toContain("merge-verify passed for PR #131091");
         expect(
           result.calls.filter((args) => args.some((arg) => arg.includes("ref(qualifiedName:"))),
+          output,
         ).toHaveLength(2);
       }
     },
