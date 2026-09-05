@@ -1,6 +1,7 @@
 /** Validate before attaching credentials, including when adapters are used directly. */
 export function parseGuardBaseUrl(value: string): string {
   const invalid = () => new Error("Invalid Reef guard base URL");
+  // oxlint-disable-next-line no-control-regex -- Reject URL normalization of control bytes before attaching credentials.
   if (/[\s\\?#\u0000-\u001f\u007f]/.test(value)) {
     throw invalid();
   }

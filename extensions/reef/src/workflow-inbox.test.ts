@@ -29,7 +29,9 @@ import { classifyReefWorkflowSendError, sendReefWorkflowMessage } from "./workfl
 const disposers: Array<() => void> = [];
 beforeEach(resetFlowStoresForTests);
 afterEach(() => {
-  for (const dispose of disposers.splice(0)) dispose();
+  for (const dispose of disposers.splice(0)) {
+    dispose();
+  }
   resetFlowStoresForTests();
 });
 
@@ -123,7 +125,9 @@ describe("Reef workflow inbox delivery", () => {
       await expect(s.delivered.has(id)).resolves.toBe(true);
       return { result: "deleted" };
     });
-    for (let seq = 1; seq <= 13; seq++) await s.flow.processEntries([await s.entry(seq)]);
+    for (let seq = 1; seq <= 13; seq++) {
+      await s.flow.processEntries([await s.entry(seq)]);
+    }
     expect(accepted.size).toBe(13);
     expect(s.onIngress).not.toHaveBeenCalled();
     expect(s.onOwnerNotice).not.toHaveBeenCalled();

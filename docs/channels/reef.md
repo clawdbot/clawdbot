@@ -127,12 +127,12 @@ The Gateway user must be able to read the credential file, and its ownership and
 ## Plugin workflow inboxes
 
 Plugins can opt in to a guarded workflow inbox for one protocol and one approved,
-cryptographically pinned peer. Load Reef's `runtime-api.js` public surface through
-`loadActivatedBundledPluginPublicSurfaceModuleSync` from
-`openclaw/plugin-sdk/facade-runtime`, with `dirName: "reef"` and
-`artifactBasename: "runtime-api.js"`. Check `REEF_WORKFLOW_API_VERSION === 1`
-before enabling the integration. A missing capability must leave the integration
-disabled.
+cryptographically pinned peer. From a plugin loaded by OpenClaw, lazily import
+`@openclaw/reef/runtime-api.js` when its service starts. The plugin loader resolves
+this public package surface against the host's source or installed artifacts;
+do not hardcode a `dist/extensions` path. Require Reef to be configured and enabled,
+and check `REEF_WORKFLOW_API_VERSION === 1` before enabling the integration.
+A missing package alias or capability must leave the integration disabled.
 
 The surface exports:
 

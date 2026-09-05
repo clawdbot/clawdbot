@@ -42,7 +42,9 @@ const directories: string[] = [];
 
 async function listen(server: Server): Promise<string> {
   servers.push(server);
-  await new Promise<void>((resolve) => server.listen(0, "127.0.0.1", resolve));
+  await new Promise<void>((resolve) => {
+    server.listen(0, "127.0.0.1", resolve);
+  });
   const address = server.address();
   if (!address || typeof address === "string") {
     throw new Error("Missing fixture address");
@@ -54,9 +56,15 @@ afterEach(async () => {
   vi.unstubAllEnvs();
   for (const server of servers.splice(0)) {
     server.closeAllConnections();
-    await new Promise<void>((resolve, reject) =>
-      server.close((error) => (error ? reject(error) : resolve())),
-    );
+    await new Promise<void>((resolve, reject) => {
+      server.close((error) => {
+        if (error) {
+          reject(error);
+        } else {
+          resolve();
+        }
+      });
+    });
   }
   await Promise.all(
     directories.splice(0).map((directory) => rm(directory, { recursive: true, force: true })),
@@ -67,16 +75,18 @@ describe("configured Reef guard", () => {
   it("routes through an actual loopback broker with explicit medium reasoning and marker", async () => {
     const seen: { url?: string; auth?: string; body?: unknown } = {};
     const baseUrl = await listen(
-      createServer(async (incoming, outgoing) => {
-        const chunks: Buffer[] = [];
-        for await (const chunk of incoming) {
-          chunks.push(Buffer.from(chunk));
-        }
-        seen.url = incoming.url;
-        seen.auth = incoming.headers.authorization;
-        seen.body = JSON.parse(Buffer.concat(chunks).toString("utf8"));
-        outgoing.setHeader("content-type", "application/json");
-        outgoing.end(JSON.stringify(response()));
+      createServer((incoming, outgoing) => {
+        void (async () => {
+          const chunks: Buffer[] = [];
+          for await (const chunk of incoming) {
+            chunks.push(Buffer.from(chunk));
+          }
+          seen.url = incoming.url;
+          seen.auth = incoming.headers.authorization;
+          seen.body = JSON.parse(Buffer.concat(chunks).toString("utf8"));
+          outgoing.setHeader("content-type", "application/json");
+          outgoing.end(JSON.stringify(response()));
+        })().catch(() => outgoing.destroy());
       }),
     );
     const adapter = await createConfiguredGuard(
@@ -145,7 +155,10 @@ describe("configured Reef guard", () => {
       expect(fetcher.mock.calls[0]?.[0]).toBe("https://api.openai.com/v1/responses");
       const init = fetcher.mock.calls[0]?.[1];
       expect(new Headers(init?.headers).get("authorization")).toBe("Bearer test-env-key");
-      expect(JSON.parse(String(init?.body))).not.toHaveProperty("reasoning");
+      if (typeof init?.body !== "string") {
+        throw new Error("Expected JSON request body");
+      }
+      expect(JSON.parse(init.body)).not.toHaveProperty("reasoning");
     }
   });
 

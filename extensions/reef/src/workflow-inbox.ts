@@ -105,7 +105,7 @@ export async function acceptReefWorkflowMessage(options: {
       "Reef workflow inbox unavailable for this protocol and peer identity",
     );
   }
-  let result: { accepted: boolean };
+  let result: unknown;
   try {
     result = await inbox.accept({
       ...parsed.data,
@@ -117,7 +117,13 @@ export async function acceptReefWorkflowMessage(options: {
       "Reef workflow inbox commit failed; admission remains pending",
     );
   }
-  if (!inbox.active || result?.accepted !== true) {
+  if (
+    !inbox.active ||
+    !result ||
+    typeof result !== "object" ||
+    !("accepted" in result) ||
+    result.accepted !== true
+  ) {
     throw new ReefInboxEntryParkedError(
       "Reef workflow admission deferred; durable acceptance is required",
     );
