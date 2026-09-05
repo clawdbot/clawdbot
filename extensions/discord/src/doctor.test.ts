@@ -21,6 +21,23 @@ function getDiscordCompatibilityNormalizer(): NonNullable<
 }
 
 describe("discord doctor", () => {
+  it("does not walk legacy TTS keys into Object.prototype", () => {
+    const normalize = getDiscordCompatibilityNormalizer();
+    const payload = JSON.parse('{"__proto__":{"openclawPrototypePollutionProbe":"yes"}}');
+    const result = normalize({
+      cfg: {
+        channels: { discord: { voice: { tts: { openai: payload } } } },
+      } as unknown as OpenClawConfig,
+    });
+
+    // The migration still runs; only the prototype key is skipped.
+    expect(result.changes.some((change) => change.includes("providers.openai"))).toBe(true);
+    expect(({} as Record<string, unknown>).openclawPrototypePollutionProbe).toBeUndefined();
+    expect(
+      (Object.prototype as unknown as Record<string, unknown>).openclawPrototypePollutionProbe,
+    ).toBeUndefined();
+  });
+
   it("promotes shipped nested DM access at root and account scope", () => {
     const normalize = getDiscordCompatibilityNormalizer();
     const result = normalize({

@@ -111,9 +111,14 @@ function hasUnsupportedDiscordRealtimeWakeNames(value: unknown): boolean {
   return hasUnsupportedRealtimeWakeNamesInVoice(entry.voice);
 }
 
+// Legacy config is migrated key by key, so a `__proto__` entry would otherwise be
+// walked into `Object.prototype`. The shared config migration guards the same
+// shape; this copy has to guard it too.
+const BLOCKED_OBJECT_KEYS = new Set(["__proto__", "prototype", "constructor"]);
+
 function mergeMissing(target: Record<string, unknown>, source: Record<string, unknown>) {
   for (const [key, value] of Object.entries(source)) {
-    if (value === undefined) {
+    if (value === undefined || BLOCKED_OBJECT_KEYS.has(key)) {
       continue;
     }
     const existing = target[key];
