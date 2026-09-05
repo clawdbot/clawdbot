@@ -186,14 +186,14 @@ Use an available HTTP capability to POST to `https://slack.com/api/blocks.valida
 
 ```bash
 curl -s -X POST 'https://slack.com/api/blocks.validate' \
-  -d 'blocks=[ ... the blocks array ... ]'
+  --data-urlencode 'blocks=[ ... the blocks array ... ]'
 ```
 
 **For modals and home tabs**, send the complete view object in the `view` field:
 
 ```bash
 curl -s -X POST 'https://slack.com/api/blocks.validate' \
-  -d 'view={ "type": "modal", "title": ..., "blocks": [...] }'
+  --data-urlencode 'view={ "type": "modal", "title": ..., "blocks": [...] }'
 ```
 
 ### 5b. Handle the response

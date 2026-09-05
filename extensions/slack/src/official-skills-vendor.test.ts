@@ -75,6 +75,8 @@ describe("official Slack skill vendor", () => {
 
     expect(guide).toContain("official-common-patterns.md");
     expect(guide).toContain("blocks.validate");
+    expect(guide.match(/--data-urlencode/g)).toHaveLength(2);
+    expect(guide).not.toMatch(/^\s+-d '(?:blocks|view)=/m);
     expect(guide).not.toMatch(
       /slack:slack-(?:api|cli)|AskUserQuestion|WebFetch|Bash tool|`references\/common-patterns\.md`/,
     );
