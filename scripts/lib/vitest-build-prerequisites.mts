@@ -18,7 +18,7 @@ type TestSelection = {
   cli?: { args: string[]; dir: string; env: NodeJS.ProcessEnv };
 };
 
-// These process tests consume built runtime artifacts. Prepare their strongest
+// These tests consume built runtime artifacts. Prepare their strongest
 // prerequisite before admitting any workers: a child build invalidates dist
 // while unrelated workers may still be importing its public plugin facades.
 const runtimeConsumers = [
@@ -57,15 +57,18 @@ const runtimeConsumers = [
     mode: "runtime",
     dir: "",
   },
-  {
-    file: "src/gateway/server.config-patch.test.ts",
+  ...[
+    "src/gateway/server-sidecar-retention.test.ts",
+    "src/gateway/server.config-patch.test.ts",
+  ].map((file) => ({
+    file,
     configs: [
       "test/vitest/vitest.gateway-server.config.ts",
       "test/vitest/vitest.gateway.config.ts",
     ],
-    mode: "runtime",
+    mode: "runtime" as const,
     dir: "src/gateway",
-  },
+  })),
   ...[
     "src/gateway/gateway-active-memory.test.ts",
     "src/gateway/gateway-concurrent-streams.test.ts",

@@ -3,16 +3,25 @@ import { afterEach, describe, expect, it, vi } from "vitest";
 import { useAutoCleanupTempDirTracker } from "../../../test/helpers/temp-dir.js";
 import type { PluginApprovalRequestPayload } from "../../infra/plugin-approvals.js";
 import {
-  closeOpenClawStateDatabaseForTest,
+  closeOpenClawStateDatabaseByPath,
   openOpenClawStateDatabase,
   type OpenClawStateDatabaseOptions,
 } from "../../state/openclaw-state-db.js";
+import { resolveOpenClawStateSqlitePath } from "../../state/openclaw-state-db.paths.js";
 import type { AgentRuntimeIdentity } from "../agent-runtime-identity-token.js";
 import { ExecApprovalManager } from "../exec-approval-manager.js";
+import { createTestApprovalManager } from "../exec-approval-manager.test-support.js";
 import { createPluginApprovalHandlers } from "./plugin-approval.js";
 import type { GatewayRequestHandlerOptions } from "./types.js";
 
-const tempDirs = useAutoCleanupTempDirTracker(afterEach);
+const tempDirs = useAutoCleanupTempDirTracker((cleanup) =>
+  afterEach(() => {
+    for (const dir of tempDirs.dirs) {
+      closeOpenClawStateDatabaseByPath(resolveOpenClawStateSqlitePath({ OPENCLAW_STATE_DIR: dir }));
+    }
+    cleanup();
+  }),
+);
 
 function databaseOptions(): OpenClawStateDatabaseOptions {
   const stateDir = fs.realpathSync(tempDirs.make("plugin-approval-id-"));
@@ -82,12 +91,11 @@ function requestHandler(
 
 afterEach(() => {
   vi.restoreAllMocks();
-  closeOpenClawStateDatabaseForTest();
 });
 
 describe("plugin approval signed agent runtime", () => {
-  it("rejects closed authority before creating a plugin approval", async () => {
-    const manager = new ExecApprovalManager<PluginApprovalRequestPayload>({
+  it("rejects closed authority before creating a plugin approval", async (testContext) => {
+    const manager = createTestApprovalManager<PluginApprovalRequestPayload>(testContext, {
       approvalKind: "plugin",
       validateAgentRuntimeDelegatedAuthority: () => false,
     });
@@ -108,9 +116,9 @@ describe("plugin approval signed agent runtime", () => {
     });
   });
 
-  it("cancels a plugin approval when authority closes after the handshake", async () => {
+  it("cancels a plugin approval when authority closes after the handshake", async (testContext) => {
     let active = true;
-    const manager = new ExecApprovalManager<PluginApprovalRequestPayload>({
+    const manager = createTestApprovalManager<PluginApprovalRequestPayload>(testContext, {
       approvalKind: "plugin",
       validateAgentRuntimeDelegatedAuthority: () => active,
     });
@@ -132,8 +140,8 @@ describe("plugin approval signed agent runtime", () => {
     expect(manager.getSnapshot(record.id)).toMatchObject({ status: "cancelled" });
   });
 
-  it("rejects a signed runtime without a host-resolved approval owner", async () => {
-    const manager = new ExecApprovalManager<PluginApprovalRequestPayload>({
+  it("rejects a signed runtime without a host-resolved approval owner", async (testContext) => {
+    const manager = createTestApprovalManager<PluginApprovalRequestPayload>(testContext, {
       approvalKind: "plugin",
       validateAgentRuntimeDelegatedAuthority: () => true,
     });

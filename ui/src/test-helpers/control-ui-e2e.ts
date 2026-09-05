@@ -3257,7 +3257,7 @@ async function captureControlUiE2eFailureDiagnosticsUnsafe(
       githubJob: process.env.GITHUB_JOB ?? null,
       runAttempt: process.env.GITHUB_RUN_ATTEMPT ?? null,
       runId: process.env.GITHUB_RUN_ID ?? null,
-      shardIndex: process.env.SHARD_INDEX ?? null,
+      shardIndex: process.env.VITEST_SHARD_INDEX ?? null,
       vitestShardCount: process.env.VITEST_SHARD_COUNT ?? null,
     },
     pageEvents: [...pageEvents],

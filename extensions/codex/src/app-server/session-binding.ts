@@ -17,7 +17,6 @@ import {
 } from "openclaw/plugin-sdk/agent-runtime";
 import type { OpenClawConfig } from "openclaw/plugin-sdk/config-contracts";
 import type { PluginStateSyncKeyedStore } from "openclaw/plugin-sdk/plugin-state-runtime";
-import { getSessionEntry, resolveStorePath } from "openclaw/plugin-sdk/session-store-runtime";
 import { asOptionalRecord } from "openclaw/plugin-sdk/string-coerce-runtime";
 import { CODEX_PLUGIN_MARKETPLACE_NAME_PATTERN } from "./config-contracts.js";
 import type { CodexManagedThreadStore } from "./managed-thread-store.js";
@@ -27,6 +26,8 @@ import {
   ownsStoredSessionGeneration,
   readCodexAppServerThreadBinding,
   readCodexBindingTimestamp,
+  readCodexBindingSessionEntry,
+  readCodexSessionOwnershipBinding,
   readCurrentCodexAppServerBinding,
   readStoredCodexAppServerBinding,
   stripUndefinedBinding,
@@ -86,21 +87,8 @@ export function resolveCodexRunSessionBindingAuthority(params: {
   config?: OpenClawConfig;
   storePath?: string;
 }): CodexRunSessionBindingAuthority {
-  const sessionKey = params.identity.sessionKey?.trim();
-  if (!sessionKey) {
-    return "ephemeral";
-  }
   try {
-    const storePath =
-      params.storePath?.trim() ||
-      resolveStorePath(params.config?.session?.store, { agentId: params.identity.agentId });
-    const entry = getSessionEntry({
-      agentId: params.identity.agentId,
-      hydrateSkillPromptRefs: false,
-      readConsistency: "latest",
-      sessionKey,
-      storePath,
-    });
+    const entry = readCodexBindingSessionEntry(params);
     if (!entry) {
       return "ephemeral";
     }
@@ -322,6 +310,7 @@ export type CodexAppServerBindingStore = {
   adoptSessionGeneration(
     identity: Extract<CodexAppServerBindingIdentity, { kind: "session" }>,
     expectedPreviousSessionId: string,
+    assertCurrent?: () => void,
   ): Promise<CodexSessionGenerationAdoptionResult>;
   resetSessionGeneration(
     identity: Extract<CodexAppServerBindingIdentity, { kind: "session" }>,
@@ -369,10 +358,11 @@ export function scopeCodexRunBindingStore(params: {
       params.bindingStore.mutate(mapIdentity(identity), mutation, assertCurrent),
     prepareSessionGenerationReclaim: (identity) =>
       params.bindingStore.prepareSessionGenerationReclaim(mapSessionIdentity(identity)),
-    adoptSessionGeneration: (identity, expectedPreviousSessionId) =>
+    adoptSessionGeneration: (identity, expectedPreviousSessionId, assertCurrent) =>
       params.bindingStore.adoptSessionGeneration(
         mapSessionIdentity(identity),
         expectedPreviousSessionId,
+        assertCurrent,
       ),
     resetSessionGeneration: (identity) =>
       params.bindingStore.resetSessionGeneration(mapSessionIdentity(identity)),
@@ -388,10 +378,12 @@ export function scopeCodexRunBindingStore(params: {
 /** Lets the authoritative OpenClaw session generation claim a stale stable binding row. */
 export async function reclaimCurrentCodexSessionGeneration(params: {
   assertCurrent?: () => void;
+  onHostGenerationVerified?: (assertHostGeneration: () => void) => void;
   bindingStore: CodexAppServerBindingStore;
   identity: Extract<CodexAppServerBindingIdentity, { kind: "session" }>;
   config?: OpenClawConfig;
   storePath?: string;
+  reclaimStale?: boolean;
 }): Promise<boolean> {
   params.assertCurrent?.();
   const sessionKey = params.identity.sessionKey?.trim();
@@ -404,23 +396,45 @@ export async function reclaimCurrentCodexSessionGeneration(params: {
     return plan.result;
   }
 
+  let previousSessionId: string | undefined;
   // Only a stale stable-key owner needs session-store authority. Resolve it before
   // the second mutation so the session read never runs inside the binding write transaction.
   try {
-    const storePath =
-      params.storePath?.trim() ||
-      resolveStorePath(params.config?.session?.store, { agentId: params.identity.agentId });
-    const entry = getSessionEntry({
-      agentId: params.identity.agentId,
-      hydrateSkillPromptRefs: false,
-      readConsistency: "latest",
-      sessionKey,
-      storePath,
-    });
+    const entry = readCodexBindingSessionEntry(params);
     if (entry?.sessionId !== params.identity.sessionId) {
       return false;
     }
+    previousSessionId = entry.previousSessionId;
   } catch {
+    return false;
+  }
+  // Lease waits may outlive host rotation without closing the run. Recheck the
+  // recorded pair immediately before each write, outside the binding transaction.
+  const assertHostGeneration = () => {
+    const entry = readCodexBindingSessionEntry(params);
+    if (
+      entry?.sessionId !== params.identity.sessionId ||
+      entry.previousSessionId !== previousSessionId
+    ) {
+      throw createCodexSessionGenerationSupersededError(params.identity.sessionId);
+    }
+  };
+  const assertCurrent = () => {
+    params.assertCurrent?.();
+    assertHostGeneration();
+  };
+  params.onHostGenerationVerified?.(assertHostGeneration);
+  if (previousSessionId === plan.expectedPreviousSessionId) {
+    const adopted = await params.bindingStore.adoptSessionGeneration(
+      params.identity,
+      previousSessionId,
+      assertCurrent,
+    );
+    if (adopted !== "absent") {
+      return adopted !== "conflict";
+    }
+  }
+  if (params.reclaimStale === false) {
     return false;
   }
   return await params.bindingStore.mutate(
@@ -429,8 +443,62 @@ export async function reclaimCurrentCodexSessionGeneration(params: {
       kind: "reclaim-generation",
       expectedPreviousSessionId: plan.expectedPreviousSessionId,
     },
-    params.assertCurrent,
+    assertCurrent,
   );
+}
+
+/** Resolve continuity before selecting native queues, catalogs, or connections. */
+export async function resolveCodexSessionBinding(params: {
+  bindingStore: CodexAppServerBindingStore;
+  identity: CodexAppServerBindingIdentity;
+  config?: OpenClawConfig;
+  storePath?: string;
+  reclaimStale?: boolean;
+  signal?: AbortSignal;
+  assertCurrent?: () => void;
+  assertBinding?: (binding: CodexAppServerThreadBinding | undefined) => void;
+}): Promise<{
+  binding: CodexAppServerThreadBinding | undefined;
+  assertCurrent: () => void;
+}> {
+  let assertHostGeneration: (() => void) | undefined;
+  const assertCurrent = () => {
+    params.assertCurrent?.();
+    assertHostGeneration?.();
+  };
+  const assertAdmissionCurrent = () => {
+    // Each caller retains its own cancellation error and cleanup behavior.
+    params.assertCurrent?.();
+    params.signal?.throwIfAborted();
+  };
+  assertAdmissionCurrent();
+  if (params.assertBinding) {
+    params.assertBinding(readCodexSessionOwnershipBinding(params));
+  }
+  let binding = params.bindingStore.read(params.identity);
+  if (!binding && params.identity.kind === "session" && params.identity.sessionKey) {
+    if (
+      !(await reclaimCurrentCodexSessionGeneration({
+        ...params,
+        identity: params.identity,
+        reclaimStale: params.reclaimStale === true,
+        assertCurrent: assertAdmissionCurrent,
+        onHostGenerationVerified: (assertHost) => {
+          assertHostGeneration = assertHost;
+        },
+      })) &&
+      params.reclaimStale
+    ) {
+      throw createCodexSessionGenerationSupersededError(params.identity.sessionId);
+    }
+    binding = params.bindingStore.read(params.identity);
+  }
+  assertCurrent();
+  params.signal?.throwIfAborted();
+  params.assertBinding?.(binding);
+  // Adoption can finish before a later host rollover. Carry its exact proof
+  // through caller waits instead of treating the rewritten binding as authority.
+  return { binding, assertCurrent };
 }
 
 /** Creates the single binding facade owned by the Codex plugin runtime. */
@@ -945,7 +1013,7 @@ export function createCodexAppServerBindingStore(
       });
     },
 
-    async adoptSessionGeneration(identity, expectedPreviousSessionId) {
+    async adoptSessionGeneration(identity, expectedPreviousSessionId, assertCurrent) {
       return await runBindingMutation(async () => {
         const key = bindingStoreKey(identity);
         const expectedSessionId = expectedPreviousSessionId.trim();
@@ -953,24 +1021,28 @@ export function createCodexAppServerBindingStore(
         if (!expectedSessionId) {
           throw new Error("Codex session generation adoption requires the previous session id");
         }
-        // Context-engine compaction rotates the physical OpenClaw session before
-        // secondary native compaction. Compare both generations so a delayed hook
-        // cannot move a newer binding back to its stale predecessor.
-        return await transactKey(key, (current) => {
-          if (current?.state !== "active") {
-            return { result: "absent" as const };
-          }
-          if (current.sessionId === targetSessionId) {
-            return { result: "current" as const };
-          }
-          if (current.sessionId !== expectedSessionId) {
-            return { result: "conflict" as const };
-          }
-          return {
-            result: "adopted" as const,
-            next: { ...current, sessionId: targetSessionId },
-          };
-        });
+        // The host may commit first and restart before this fence moves. Only its
+        // recorded predecessor can transfer; a delayed admission cannot move it back.
+        return await transactKey(
+          key,
+          (current) => {
+            if (current?.state !== "active") {
+              return { result: "absent" as const };
+            }
+            if (current.sessionId === targetSessionId) {
+              return { result: "current" as const };
+            }
+            if (current.sessionId !== expectedSessionId) {
+              return { result: "conflict" as const };
+            }
+            return {
+              result: "adopted" as const,
+              next: { ...current, sessionId: targetSessionId },
+            };
+          },
+          undefined,
+          assertCurrent,
+        );
       });
     },
 

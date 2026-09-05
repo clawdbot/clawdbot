@@ -5,7 +5,7 @@ import path from "node:path";
 import { expectDefined } from "@openclaw/normalization-core";
 import { afterAll, afterEach, beforeAll, describe, expect, it, vi } from "vitest";
 import { createDeferred } from "../../../test/helpers/promise.js";
-import { useAutoCleanupTempDirTracker } from "../../../test/helpers/temp-dir.js";
+import { createTempDirTracker } from "../../../test/helpers/temp-dir.js";
 import { createOperationalRunInstanceRef } from "../../agents/admitted-run-context.js";
 import { withGatewayToolCallerIdentity } from "../../agents/tools/gateway-caller-context.js";
 import { createSystemAgentTool } from "../../agents/tools/system-agent-tool.js";
@@ -22,6 +22,8 @@ import {
 } from "../../infra/system-agent-approvals.js";
 import { resetPluginStateStoreForTests } from "../../plugin-state/plugin-state-store.js";
 import { resetCommandQueueStateForTest } from "../../process/command-queue.test-support.js";
+import { AsyncWorkScope } from "../../shared/async-work-scope.js";
+import { closeOpenClawStateDatabaseByPath } from "../../state/openclaw-state-db.js";
 import { SystemAgentChatEngine } from "../../system-agent/chat-engine.js";
 import {
   createSystemAgentVerifiedInferenceTestFixture,
@@ -56,7 +58,11 @@ describe("Full Access delegated chat", () => {
     agents: { defaults: { model: "openai/gpt-5.5@openai:verified" } },
     auth: { profiles: { "openai:verified": { provider: "openai", mode: "api_key" } } },
   };
-  const systemAgentTempDirs = useAutoCleanupTempDirTracker(afterEach);
+  const systemAgentTempDirs = createTempDirTracker();
+  const approvalManagers: Array<{
+    manager: ExecApprovalManager<SystemAgentApprovalRequestPayload>;
+    databasePath: string;
+  }> = [];
   let pluginMetadataSnapshot: SystemAgentPluginMetadataTestSnapshot | undefined;
 
   beforeAll(() => {
@@ -67,13 +73,18 @@ describe("Full Access delegated chat", () => {
     pluginMetadataSnapshot?.restore();
   });
 
-  afterEach(() => {
+  afterEach(async () => {
+    for (const { manager, databasePath } of approvalManagers.splice(0)) {
+      await manager.drain();
+      closeOpenClawStateDatabaseByPath(databasePath);
+    }
     vi.restoreAllMocks();
     vi.resetAllMocks();
     resetPluginStateStoreForTests();
     resetCommandQueueStateForTest();
     vi.unstubAllEnvs();
     pluginMetadataSnapshot?.rebindForCurrentEnv();
+    systemAgentTempDirs.cleanup();
   });
 
   async function createDelegatedChatFixture(
@@ -168,15 +179,12 @@ describe("Full Access delegated chat", () => {
       approvalKind: "system-agent",
       resolveAllowedDecisions: (request) => request.allowedDecisions,
       validateAgentRuntimeDelegatedAuthority: validateAgentRunDelegatedAuthority,
-      ...(["registration-failure", "durable"].includes(previousRun)
-        ? {
-            persistence: {
-              runtimeEpoch: "delegated-approval-test",
-              databaseOptions: { path: approvalDatabasePath },
-            },
-          }
-        : {}),
+      persistence: {
+        runtimeEpoch: "delegated-approval-test",
+        databaseOptions: { path: approvalDatabasePath },
+      },
     });
+    approvalManagers.push({ manager, databasePath: approvalDatabasePath });
     const operationalRunInstance = createOperationalRunInstanceRef("delegated-full-run");
     const authority = claimAgentRunDelegatedAuthority(operationalRunInstance);
     const requested = createDeferred();
@@ -233,6 +241,7 @@ describe("Full Access delegated chat", () => {
     "queued-cancelled",
     "precommit-cancelled",
     "afterDecision-failed",
+    "gateway-close",
   ] as const)(
     "keeps delegated chat pending without blocking other work until %s settles",
     async (outcome) => {
@@ -247,6 +256,7 @@ describe("Full Access delegated chat", () => {
         approvalDatabasePath,
       } = await createDelegatedChatFixture("typed", "durable");
       const controller = new AbortController();
+      const observation = new AsyncWorkScope();
       if (outcome === "expired") {
         vi.useFakeTimers();
       }
@@ -276,11 +286,13 @@ describe("Full Access delegated chat", () => {
           approvalSignals: [controller.signal],
         },
         () =>
-          callChat({
-            sessionId: "delegate-full",
-            message: "config set logging.level debug",
-            delegation: { agentId: "main", sessionKey: "agent:main:main" },
-          }),
+          observation.track(() =>
+            callChat({
+              sessionId: "delegate-full",
+              message: "config set logging.level debug",
+              delegation: { agentId: "main", sessionKey: "agent:main:main" },
+            }),
+          ),
       ).then((result) => {
         settled = true;
         return result;
@@ -291,6 +303,21 @@ describe("Full Access delegated chat", () => {
         await runSystemAgentGatewayTask(async () => undefined);
         expect.soft(settled).toBe(false);
         expect(runConfigSet).not.toHaveBeenCalled();
+        if (outcome === "gateway-close") {
+          const rejected = expect(pending).rejects.toMatchObject({ name: "AbortError" });
+          observation.beginClose();
+          await rejected;
+          await observation.drain();
+          expect(
+            getOperatorApprovalDetailed({
+              id: record.id,
+              databaseOptions: { path: approvalDatabasePath },
+            }),
+          ).toMatchObject({ outcome: "found", record: { status: "pending" } });
+          expect(engine.getPendingOperatorProposal()).not.toBeNull();
+          expect(runConfigSet).not.toHaveBeenCalled();
+          return;
+        }
         if (outcome === "allow") {
           sameOwner = withGatewayToolCallerIdentity(
             { agentId: "main", sessionKey: "agent:main:main", operationalRunInstance },
@@ -382,8 +409,10 @@ describe("Full Access delegated chat", () => {
         for (const record of manager.listPendingRecords()) {
           manager.expire(record.id);
         }
-        await pending;
+        await Promise.allSettled([pending]);
         await sameOwner;
+        await manager.drain();
+        await observation.drain();
         await engine.dispose();
         vi.useRealTimers();
       }

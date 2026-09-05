@@ -1,4 +1,4 @@
-import { copyFile, mkdir, rm } from "node:fs/promises";
+import { copyFile, mkdir, rm, writeFile } from "node:fs/promises";
 import path from "node:path";
 import { expect, it } from "vitest";
 import {
@@ -8,6 +8,7 @@ import {
 } from "../../e2e/chat-side-panel.test-support.ts";
 import { createControlUiE2eSuite } from "../../e2e/control-ui-e2e-suite.test-support.ts";
 import { createControlUiE2eArtifactDir } from "../../test-helpers/control-ui-e2e-artifacts.ts";
+import { takeControlUiViewportScreenshot } from "../../test-helpers/control-ui-e2e-screenshot.ts";
 import { installMockGateway, type MockGatewayRequest } from "../../test-helpers/control-ui-e2e.ts";
 
 const suite = createControlUiE2eSuite({
@@ -286,8 +287,10 @@ suite.define(() => {
   });
 
   it("opens the rail, applies pushed completion, and sends cancel", async () => {
-    await rm(artifactDir, { force: true, recursive: true });
-    const railFlowDir = path.join(artifactDir, "rail-flow");
+    const railFlowDir = path.join(
+      createControlUiE2eArtifactDir("chat-background-tasks", artifactDir),
+      "rail-flow",
+    );
     await mkdir(railFlowDir, { recursive: true });
     await suite.withPage(
       {
@@ -380,7 +383,10 @@ suite.define(() => {
             agentId: "main",
           });
         }
-        await page.screenshot({ path: path.join(railFlowDir, "01-rail-open.png"), fullPage: true });
+        await writeFile(
+          path.join(railFlowDir, "01-rail-open.png"),
+          await takeControlUiViewportScreenshot(page, page.locator(".shell"), [rail]),
+        );
 
         const chatUrl = page.url();
         const mainTranscript = page.locator(".chat-main .chat-thread");
@@ -416,7 +422,7 @@ suite.define(() => {
         expect(withoutElapsedLabels(await mainTranscript.textContent())).toBe(mainTranscriptBefore);
         await focusChatSidePanel(page);
         await expect
-          .poll(() => page.locator(".side-panel__expand").getAttribute("aria-pressed"))
+          .poll(() => page.locator(".chat-panel-focus").getAttribute("aria-pressed"))
           .toBe("true");
         const expandedWidths = await detailPanel.evaluate((taskPanel) => {
           const panel = taskPanel.closest<HTMLElement>(".side-panel__panel");
@@ -429,13 +435,13 @@ suite.define(() => {
           };
         });
         expect(expandedWidths.task).toBeCloseTo(expandedWidths.panel, 0);
-        await page.screenshot({
-          path: path.join(railFlowDir, "02-task-detail-expanded.png"),
-          fullPage: true,
-        });
+        await writeFile(
+          path.join(railFlowDir, "02-task-detail-expanded.png"),
+          await takeControlUiViewportScreenshot(page, page.locator(".shell"), [detailPanel]),
+        );
         await page.getByRole("button", { name: "Restore split", exact: true }).click();
         await expect
-          .poll(() => page.locator(".side-panel__expand").getAttribute("aria-pressed"))
+          .poll(() => page.locator(".chat-panel-focus").getAttribute("aria-pressed"))
           .toBe("false");
         await restoreChatAsMain(page);
 
@@ -463,10 +469,10 @@ suite.define(() => {
             .locator('[data-tasks-section="running"] [data-task-id="task-subagent"]')
             .count(),
         ).toBe(0);
-        await page.screenshot({
-          path: path.join(railFlowDir, "03-pushed-completion.png"),
-          fullPage: true,
-        });
+        await writeFile(
+          path.join(railFlowDir, "03-pushed-completion.png"),
+          await takeControlUiViewportScreenshot(page, page.locator(".shell"), [completedRow]),
+        );
 
         await rail
           .locator('[data-task-id="task-cron"]')
@@ -482,10 +488,10 @@ suite.define(() => {
         await detailPanel.waitFor({ state: "visible" });
         await page.getByText("Background tasks rail proof.").waitFor({ state: "visible" });
         expect(await mainTranscript.textContent()).not.toContain("Task Review layout proof");
-        await page.screenshot({
-          path: path.join(railFlowDir, "04-list-remains-with-detail-open.png"),
-          fullPage: true,
-        });
+        await writeFile(
+          path.join(railFlowDir, "04-list-remains-with-detail-open.png"),
+          await takeControlUiViewportScreenshot(page, page.locator(".shell"), [detailPanel]),
+        );
 
         // Region close leaves sidebarContent set; the rail highlight must
         // follow panel visibility, not retained content.
@@ -502,7 +508,10 @@ suite.define(() => {
   });
 
   it("streams two subagent activity rows and retains final diff chips", async () => {
-    const activityDir = path.join(artifactDir, "subagent-activity");
+    const activityDir = path.join(
+      createControlUiE2eArtifactDir("chat-background-tasks", artifactDir),
+      "subagent-activity",
+    );
     await mkdir(activityDir, { recursive: true });
     await suite.withPage(
       {
@@ -578,10 +587,13 @@ suite.define(() => {
         expect(await secondRow.textContent()).toContain("Checking tool card rendering");
         expect(await firstRow.locator(".chat-diffstat__add").textContent()).toBe("+14");
         expect(await firstRow.locator(".chat-diffstat__del").textContent()).toBe("-3");
-        await page.screenshot({
-          path: path.join(activityDir, "01-two-subagents-streaming.png"),
-          fullPage: true,
-        });
+        await writeFile(
+          path.join(activityDir, "01-two-subagents-streaming.png"),
+          await takeControlUiViewportScreenshot(page, page.locator(".shell"), [
+            firstRow,
+            secondRow,
+          ]),
+        );
 
         await firstRow.click();
         const detailPanel = page.locator("[data-task-detail-panel]");
@@ -642,10 +654,13 @@ suite.define(() => {
         expect(await firstRow.locator(".chat-diffstat__del").textContent()).toBe("-3");
         expect(await secondRow.textContent()).toContain("Subagent working");
         expect(await secondRow.textContent()).toContain("Checking tool card rendering");
-        await page.screenshot({
-          path: path.join(activityDir, "02-one-subagent-finished.png"),
-          fullPage: true,
-        });
+        await writeFile(
+          path.join(activityDir, "02-one-subagent-finished.png"),
+          await takeControlUiViewportScreenshot(page, page.locator(".shell"), [
+            firstRow,
+            secondRow,
+          ]),
+        );
         await page.getByRole("button", { name: "Close Review" }).click();
         await detailPanel.waitFor({ state: "detached" });
       },

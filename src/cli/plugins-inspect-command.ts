@@ -6,7 +6,7 @@ import { getRuntimeConfig } from "../config/config.js";
 import type { PluginInstallRecord } from "../config/types.plugins.js";
 import { formatConsoleDiagnosticLine } from "../logging/json-console-line.js";
 import { resolvePluginControlPlaneWorkspace } from "../plugins/control-plane-workspace.js";
-import { resolveInstalledPluginPackageOwnership } from "../plugins/installed-plugin-package-ownership.js";
+import { createInstalledPluginOwnershipResolver } from "../plugins/installed-plugin-package-ownership.js";
 import type { PluginDiagnostic } from "../plugins/manifest-types.js";
 import { tracePluginLifecyclePhase } from "../plugins/plugin-lifecycle-trace.js";
 import { defaultRuntime } from "../runtime.js";
@@ -152,10 +152,11 @@ export async function runPluginsInspectCommand(
     () => loadPluginMetadataSnapshot({ config: cfg, workspaceDir }),
     { command: "inspect" },
   );
+  const ownershipResolver = createInstalledPluginOwnershipResolver(metadataSnapshot.index);
   const resolveInstallRecord = (pluginId: string) => {
     // Runtime child ids need the package owner's record; ambiguous ownership
     // must not borrow provenance from an unrelated same-id install.
-    const ownership = resolveInstalledPluginPackageOwnership(metadataSnapshot.index, pluginId);
+    const ownership = ownershipResolver.resolvePackage(pluginId);
     return ownership.ok ? ownership.value.installRecord : undefined;
   };
   const loggerParams = opts.json ? { logger: quietPluginJsonLogger } : {};

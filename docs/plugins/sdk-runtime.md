@@ -53,6 +53,13 @@ Internal OpenClaw runtime code follows the same direction: load config once at t
 
 Provider and channel execution paths must use the active runtime config snapshot, not a file snapshot returned for config readback or editing. File snapshots preserve source values such as SecretRef markers for UI and writes; provider callbacks need the resolved runtime view. When a helper may be called with either the active source snapshot or the active runtime snapshot, route through `selectApplicableRuntimeConfig()` before reading credentials.
 
+Retained channel monitors can bind `createRuntimeConfigReader(cfg)` from
+`openclaw/plugin-sdk/runtime-config-snapshot` once at startup. The reader follows
+runtime updates when the supplied config belongs to the active runtime, and
+preserves an explicitly scoped config otherwise, including when no runtime has
+been published yet. Read once per turn and carry that snapshot through admission
+and replies.
+
 ## Reusable runtime utilities
 
 Native command probes should use `runCommandWithTimeout` from

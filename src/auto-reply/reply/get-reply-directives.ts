@@ -23,6 +23,7 @@ import {
 } from "../../skills/discovery/chat-command-invocation.js";
 import type { SkillCommandSpec } from "../../skills/types.js";
 import { isExplicitCommandTurn, resolveCommandTurnContext } from "../command-turn-context.js";
+import { normalizeCommandBody } from "../commands-registry-normalize.js";
 import { shouldHandleTextCommands } from "../commands-text-routing.js";
 import { markCommandReplyForDelivery } from "../reply-payload.js";
 import type {
@@ -321,13 +322,15 @@ export async function resolveReplyDirectives(params: {
   );
   const directiveCommandText =
     explicitDirectiveCommand && commandTurn.kind === "text-slash"
-      ? command.commandBodyNormalized
+      ? normalizeCommandBody(commandText, { botUsername: ctx.BotUsername, preserveArguments: true })
       : commandText;
   const routedDirectives = resolveReplyDirectiveRouting({
     commandText: directiveCommandText,
-    agentText: sessionCtx.agentText,
+    agentText: sessionCtx.agentText === commandText ? directiveCommandText : sessionCtx.agentText,
     modelAliases: configuredAliases,
-    nativeCommand: explicitDirectiveCommand,
+    command: explicitDirectiveCommand
+      ? { kind: commandTurn.kind === "native" ? "native" : "text", name: explicitDirectiveCommand }
+      : undefined,
     canInterpretTextDirectives: canInterpretMessageDirectives,
     isAuthorizedSender: command.isAuthorizedSender,
     isGroup,

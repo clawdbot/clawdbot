@@ -95,6 +95,17 @@ describe("CLI runtime admission", () => {
       ["--config", "test/vitest/vitest.gateway-core.config.ts", "--exclude", "gateway-*.test.ts"],
     ],
     [
+      "Gateway server scoped exclusion",
+      [
+        "--config",
+        "test/vitest/vitest.gateway-server.config.ts",
+        "--exclude",
+        "server-sidecar-retention.test.ts",
+        "--exclude",
+        "server.config-patch.test.ts",
+      ],
+    ],
+    [
       "root scoped exclusion",
       [
         "--config",
@@ -213,9 +224,27 @@ syncBuiltinESMExports();\n`,
       "runtime",
     ],
     [
+      "Gateway server selective exclusion",
+      "scripts/run-vitest.mts",
+      [
+        "run",
+        "--config",
+        "test/vitest/vitest.gateway-server.config.ts",
+        "--exclude",
+        "server-sidecar-retention.test.ts",
+      ],
+      "runtime",
+    ],
+    [
       "Gateway umbrella",
       "scripts/run-vitest.mts",
       ["run", "--config", "test/vitest/vitest.gateway.config.ts"],
+      "runtime",
+    ],
+    [
+      "Gateway umbrella with core consumers excluded",
+      "scripts/run-vitest.mts",
+      ["run", "--config", "test/vitest/vitest.gateway.config.ts", "--exclude", "gateway-*.test.ts"],
       "runtime",
     ],
     [

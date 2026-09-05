@@ -90,6 +90,7 @@ export async function startCodexAttemptRuntime(resources: CodexAttemptResources)
       data: { phase: "startup" },
     });
     const startupResult = await startCodexAttemptThread({
+      assertCurrent: connection.assertCurrent,
       attemptClientFactory,
       bindingStore,
       runtime: connection.options.runtime,

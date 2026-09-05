@@ -35,10 +35,6 @@ import {
   threadStartResult,
   turnStartResult,
 } from "./run-attempt-test-harness.js";
-import {
-  readCodexAppServerBinding,
-  testCodexAppServerBindingStore,
-} from "./session-binding.test-helpers.js";
 
 type ReplyBackend = Parameters<
   NonNullable<ReturnType<typeof createParams>["replyOperation"]>["attachBackend"]
@@ -750,29 +746,6 @@ describe("runCodexAppServerAttempt hooks and model diagnostics", () => {
       promptError: "codex app-server client closed before turn completed",
     });
     expect(result.codexAppServerFailure).toMatchObject({ transport: "websocket" });
-  });
-
-  it("clears a stale binding when completed-turn coverage persistence fails", async () => {
-    const sessionFile = path.join(tempDir, "binding-coverage-failure.jsonl");
-    const workspaceDir = path.join(tempDir, "binding-coverage-workspace");
-    const harness = createStartedThreadHarness();
-    const bindingStore = {
-      ...testCodexAppServerBindingStore,
-      mutate: vi.fn(async (...args: Parameters<typeof testCodexAppServerBindingStore.mutate>) => {
-        const mutation = args[1];
-        if (mutation.kind === "patch" && mutation.patch.historyCoveredThrough) {
-          throw new Error("simulated binding coverage write failure");
-        }
-        return await testCodexAppServerBindingStore.mutate(...args);
-      }),
-    };
-    const run = runCodexAppServerAttempt(createParams(sessionFile, workspaceDir), { bindingStore });
-    await harness.waitForMethod("turn/start");
-
-    await harness.completeTurn({ threadId: "thread-1", turnId: "turn-1" });
-    expect(readAttemptTerminal(await run)).toMatchObject({ promptError: null, aborted: false });
-    expect(bindingStore.mutate).toHaveBeenCalled();
-    await expect(readCodexAppServerBinding(sessionFile)).resolves.toBeUndefined();
   });
 
   it("does not wait for agent_end hooks before resolving channel-backed codex turns", async () => {

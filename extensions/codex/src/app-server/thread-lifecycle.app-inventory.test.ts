@@ -792,15 +792,15 @@ describe("Codex app inventory across physical process restart", () => {
   });
 
   it.each(["cold", "warm"])(
-    "attests provisional apps on the %s loaded thread",
+    "keeps the %s loaded thread when an optional app is disabled",
     async (lifecycle) => {
       const f = await continuation(false, lifecycle);
       const previousBinding = f.readBinding();
       f.process.disabledThreadApps.add(f.first.threadId);
       const boundary = f.calls.length;
-      await expect(f.process.run()).rejects.toThrow("did not expose admitted apps");
-      expect(f.readBinding()).toEqual(previousBinding);
-      expect(f.process.subscribedThreads.has(f.first.threadId)).toBe(false);
+      await expect(f.process.run()).resolves.toMatchObject({ threadId: f.first.threadId });
+      expect(f.readBinding()).toMatchObject({ threadId: previousBinding!.threadId });
+      expect(f.process.subscribedThreads.has(f.first.threadId)).toBe(true);
       expect(f.calls.slice(boundary).some((call) => call.method === "thread/start")).toBe(false);
     },
   );

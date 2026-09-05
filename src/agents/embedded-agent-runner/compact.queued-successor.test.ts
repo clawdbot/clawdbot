@@ -313,8 +313,16 @@ describe("queued compaction successor ownership", () => {
     async (abortAfterCommit) => {
       const controller = new AbortController();
       const onCommitted = vi.fn((accepted: AcceptedCompactionSuccessor) => {
-        expect(loadSessionEntry(target())).toMatchObject({ ...owner, sessionId: "successor" });
-        expect(accepted.entry).toMatchObject({ ...owner, sessionId: "successor" });
+        expect(loadSessionEntry(target())).toMatchObject({
+          ...owner,
+          sessionId: "successor",
+          previousSessionId: owner.sessionId,
+        });
+        expect(accepted.entry).toMatchObject({
+          ...owner,
+          sessionId: "successor",
+          previousSessionId: owner.sessionId,
+        });
         if (abortAfterCommit) {
           controller.abort(new Error("caller closed after commit"));
         }
@@ -328,7 +336,11 @@ describe("queued compaction successor ownership", () => {
         result: { sessionId: "successor", tokensAfter: 40 },
       });
       expect(onCommitted).toHaveBeenCalledOnce();
-      expect(loadSessionEntry(target())).toMatchObject({ ...owner, sessionId: "successor" });
+      expect(loadSessionEntry(target())).toMatchObject({
+        ...owner,
+        sessionId: "successor",
+        previousSessionId: owner.sessionId,
+      });
       expect(maintain).toHaveBeenCalledTimes(abortAfterCommit ? 0 : 1);
       expect(hookRunner.runAfterCompaction).toHaveBeenCalledTimes(abortAfterCommit ? 0 : 1);
       expect(maybeCompactAgentHarnessSessionMock).toHaveBeenCalledTimes(abortAfterCommit ? 0 : 1);

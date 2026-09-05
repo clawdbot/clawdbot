@@ -35,7 +35,7 @@ Manage automations with the `openclaw automations` CLI; `openclaw cron` remains 
   </Step>
   <Step title="See run history">
     ```bash
-    openclaw automations runs --id <job-id>
+    openclaw automations runs <job-id>
     ```
   </Step>
 </Steps>
@@ -592,10 +592,10 @@ openclaw automations run <jobId> --wait --wait-timeout 10m --poll-interval 2s
 openclaw automations run <jobId> --due
 
 # View run history
-openclaw automations runs --id <jobId> --limit 50
+openclaw automations runs <jobId> --limit 50
 
 # View one exact run
-openclaw automations runs --id <jobId> --run-id <runId>
+openclaw automations runs <jobId> --run-id <runId>
 
 # Delete a job
 openclaw automations remove <jobId>
@@ -1044,7 +1044,7 @@ openclaw status
 openclaw gateway status
 openclaw automations status
 openclaw automations list
-openclaw automations runs --id <jobId> --limit 20
+openclaw automations runs <jobId> --limit 20
 openclaw system heartbeat last
 openclaw logs --follow
 openclaw doctor

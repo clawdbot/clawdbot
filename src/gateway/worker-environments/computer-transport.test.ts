@@ -16,7 +16,7 @@ import { createEmptyPluginRegistry } from "../../plugins/registry-empty.js";
 import { resetPluginRuntimeStateForTest, setActivePluginRegistry } from "../../plugins/runtime.js";
 import { createDeferredCore } from "../../shared/deferred.js";
 import { createWorkerComputerTool } from "../../worker/computer-runtime.js";
-import { ExecApprovalManager } from "../exec-approval-manager.js";
+import { createTestApprovalManager } from "../exec-approval-manager.test-support.js";
 import {
   createApprovalClientLookup,
   createOperatorClient,
@@ -290,10 +290,11 @@ describe("session computer transport", () => {
     },
   );
 
-  it("keeps session and live run authority on clientless policy approvals", async () => {
+  it("keeps session and live run authority on clientless policy approvals", async (testContext) => {
     const h = createHarness();
     const { transport, prepared } = await h.prepare();
-    const manager = new ExecApprovalManager<PluginApprovalRequestPayload>({
+    const manager = createTestApprovalManager<PluginApprovalRequestPayload>(testContext, {
+      approvalKind: "plugin",
       validateAgentRuntimeDelegatedAuthority: (authority) =>
         validateAgentRunDelegatedAuthority(authority) &&
         (authority.kind === "local" || h.options.placements.validateTurnClaim(authority.turnClaim)),

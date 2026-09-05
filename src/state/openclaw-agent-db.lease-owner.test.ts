@@ -1,11 +1,14 @@
 import fs from "node:fs";
+import path from "node:path";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { createTempDirTracker } from "../../test/helpers/temp-dir.js";
 import * as nodeSqlite from "../infra/node-sqlite.js";
 import {
   closeOpenClawAgentDatabaseByPath,
   closeOpenClawAgentDatabasesForTest,
+  listOpenClawRegisteredAgentDatabases,
   openOpenClawAgentDatabase,
+  recordOpenClawAgentDatabaseOpenFailure,
   settleOpenClawAgentDatabaseWorkerClose,
 } from "./openclaw-agent-db.js";
 import {
@@ -34,6 +37,41 @@ function createOwner() {
 }
 
 describe("agent database lease acquisition owner", () => {
+  it("resets a recreated fixture root without retiring another root", () => {
+    const now = vi.spyOn(Date, "now").mockReturnValue(1_000);
+    const owner = createOwner();
+    const env = owner.env;
+    const otherEnv = { OPENCLAW_STATE_DIR: owner.nextStateDir };
+    const closed = openOpenClawAgentDatabase({ agentId: "closed", env });
+    closeOpenClawAgentDatabaseByPath(closed.path);
+    const active = openOpenClawAgentDatabase({ agentId: "active", env });
+    const other = openOpenClawAgentDatabase({ agentId: "other", env: otherEnv });
+    const failedPath = path.join(owner.stateDir, "failed.sqlite");
+    const otherFailedPath = path.join(owner.nextStateDir, "failed.sqlite");
+    const failure = new Error("fixture open failure");
+    recordOpenClawAgentDatabaseOpenFailure(failedPath, failure);
+    recordOpenClawAgentDatabaseOpenFailure(otherFailedPath, failure);
+
+    closeOpenClawAgentDatabasesForTest(owner.stateDir);
+
+    expect(active.db.isOpen).toBe(false);
+    expect(owner.leases()).toEqual([]);
+    expect(other.db.isOpen).toBe(true);
+    expect(openOpenClawAgentDatabase({ agentId: "other", env: otherEnv })).toBe(other);
+    expect(() =>
+      openOpenClawAgentDatabase({ agentId: "failed", env: otherEnv, path: otherFailedPath }),
+    ).toThrow(failure);
+    expect(openOpenClawAgentDatabase({ agentId: "failed", env, path: failedPath }).db.isOpen).toBe(
+      true,
+    );
+
+    now.mockReturnValue(2_000);
+    openOpenClawAgentDatabase({ agentId: closed.agentId, env });
+    expect(
+      listOpenClawRegisteredAgentDatabases({ env }).find((entry) => entry.path === closed.path),
+    ).toMatchObject({ lastSeenAt: 2_000 });
+  });
+
   it.each([
     { kind: "ambient environment", ambient: true, external: false, worker: false },
     { kind: "mutated explicit environment", ambient: false, external: false, worker: false },

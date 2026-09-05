@@ -247,7 +247,7 @@ Look for:
     - `messages[...].content: invalid type: sequence, expected a string`: backend rejects structured Chat Completions content parts. Fix: set `models.providers.<provider>.models[].compat.requiresStringContent: true`.
     - `validation.keys` or allowed message keys like `["role","content"]`: backend rejects OpenAI-style replay metadata on Chat Completions messages. Fix: set `models.providers.<provider>.models[].compat.strictMessageKeys: true`.
     - `incomplete turn detected ... stopReason=stop payloads=0`: the backend completed the Chat Completions request but returned no user-visible assistant text for that turn. OpenClaw retries replay-safe empty OpenAI-compatible turns once; persistent failures usually mean the backend is emitting empty/non-text content or suppressing final-answer text.
-    - Direct tiny requests succeed, but OpenClaw agent runs fail with backend/model crashes (for example Gemma on some `inferrs` builds): OpenClaw transport is likely already correct; the backend is failing on the larger agent-runtime prompt shape.
+    - Direct tiny requests succeed, but OpenClaw agent runs fail with backend/model crashes (for example Gemma on some `llama-server` builds behind `llmman`): OpenClaw transport is likely already correct; the backend is failing on the larger agent-runtime prompt shape.
     - Failures shrink after disabling tools but do not disappear: tool schemas were part of the pressure, but the remaining issue is still upstream model/server capacity or a backend bug.
 
   </Accordion>
@@ -766,9 +766,9 @@ Related:
 If cron or heartbeat did not run or did not deliver, verify scheduler state first, then delivery target.
 
 ```bash
-openclaw cron status
-openclaw cron list
-openclaw cron runs --id <jobId> --limit 20
+openclaw automations status
+openclaw automations list
+openclaw automations runs <jobId> --limit 20
 openclaw system heartbeat last
 openclaw logs --follow
 ```

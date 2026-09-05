@@ -515,21 +515,15 @@ extension DashboardWindowOwnershipTests {
 
     private func waitForDashboard(_ controller: DashboardWindowController, path: String) async throws {
         let deadline = ContinuousClock.now + .seconds(5)
-        while ContinuousClock.now < deadline {
-            if controller.canDeliverNativeCommands, !controller.webView.isLoading,
-               controller.webView.url?.path == path
-            {
-                return
-            }
+        // Check readiness even when the main actor resumes after the deadline.
+        while !controller.canDeliverNativeCommands || controller.webView.isLoading ||
+            controller.webView.url?.path != path,
+            ContinuousClock.now < deadline
+        {
             try await Task.sleep(for: .milliseconds(10))
         }
-        #expect(controller.canDeliverNativeCommands)
-        #expect(controller.webView.url?.path == path)
-        throw URLError(.timedOut, userInfo: [
-            NSLocalizedDescriptionKey: "Dashboard document timed out: expected path=\(path), " +
-                "actual path=\(controller.webView.url?.path ?? "nil"), " +
-                "canDeliverNativeCommands=\(controller.canDeliverNativeCommands), " +
-                "isLoading=\(controller.webView.isLoading)",
-        ])
+        try #require(controller.canDeliverNativeCommands)
+        try #require(!controller.webView.isLoading)
+        try #require(controller.webView.url?.path == path)
     }
 }

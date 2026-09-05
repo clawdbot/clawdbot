@@ -13,9 +13,7 @@ import {
 } from "./plugin-thread-config.js";
 import {
   assertCodexBindingMayBeReplaced,
-  createCodexSessionGenerationSupersededError,
   normalizeCodexAppServerBindingModelProvider,
-  reclaimCurrentCodexSessionGeneration,
   type CodexAppServerPendingSupervisionBranch,
   type CodexAppServerThreadBinding,
 } from "./session-binding.js";
@@ -55,13 +53,14 @@ import { resolveCodexAppServerThreadModelSelection } from "./thread-model-select
 import { materializePendingSupervisionBranch } from "./thread-supervision.js";
 
 export async function startOrResumeThread(
-  params: CodexStartOrResumeThreadParams,
+  input: CodexStartOrResumeThreadParams,
 ): Promise<CodexAppServerThreadLifecycleBinding> {
-  const incognito = isIncognitoSessionKey(params.params.sessionKey);
-  const clientId = resolveCodexAppServerClientInstanceId(params.client);
-  return await withCodexThreadLifecycleBinding(params, async (bindingIdentity, currentBinding) => {
+  const incognito = isIncognitoSessionKey(input.params.sessionKey);
+  const clientId = resolveCodexAppServerClientInstanceId(input.client);
+  return await withCodexThreadLifecycleBinding(input, async (bindingIdentity, saved, assert) => {
+    const params = { ...input, assertCurrent: assert };
     const expectedOwnership = params.params.expectedSessionRuntimeOwnership;
-    let binding = currentBinding;
+    let binding = saved;
     if (hasCodexNativeToolCatalog(binding)) {
       // A resumed native catalog is immutable data. Run eligibility only changes
       // the bridge's available executors, never this thread's inherited history.
@@ -72,7 +71,7 @@ export async function startOrResumeThread(
         agentDir: resolveCodexThreadAgentDir(params),
         assertCurrent: () => {
           params.signal?.throwIfAborted();
-          params.params.hostCapabilities.assertActive();
+          assert();
         },
       });
       if (!isDeepStrictEqual(params.dynamicTools, nativeCatalog)) {
@@ -132,20 +131,6 @@ export async function startOrResumeThread(
         threadId,
         assertCurrent,
       });
-    if (!binding && bindingIdentity.kind === "session" && bindingIdentity.sessionKey) {
-      // Reset may rotate the OpenClaw session while this plugin is unloaded. Only
-      // the authoritative session store may let its successor displace that stale owner.
-      const reclaimed = await lifecycleTiming.measure("reclaim-binding-generation", () =>
-        reclaimCurrentCodexSessionGeneration({
-          bindingStore: params.bindingStore,
-          identity: bindingIdentity,
-          config: params.params.config,
-        }),
-      );
-      if (!reclaimed) {
-        throw createCodexSessionGenerationSupersededError(bindingIdentity.sessionId);
-      }
-    }
     if (binding?.pendingSupervisionBranch) {
       await releaseRetainedThread(binding.threadId);
       const pendingBinding = binding as CodexAppServerThreadBinding & {
@@ -196,7 +181,10 @@ export async function startOrResumeThread(
         environmentSelection: params.environmentSelection,
         provisionalAppIds: pluginThreadConfig?.provisionalAppIds,
         signal: params.signal,
-        throwIfAborted,
+        throwIfAborted: () => {
+          throwIfAborted();
+          assert();
+        },
         lifecycleTiming,
         normalizeBindingModelProvider,
         bindingPatch: {
@@ -239,10 +227,14 @@ export async function startOrResumeThread(
         return;
       }
       assertCodexBindingMayBeReplaced(current, operation, expectedOwnership);
-      const cleared = await params.bindingStore.mutate(bindingIdentity, {
-        kind: "clear",
-        threadId: current.threadId,
-      });
+      const cleared = await params.bindingStore.mutate(
+        bindingIdentity,
+        {
+          kind: "clear",
+          threadId: current.threadId,
+        },
+        assert,
+      );
       if (!cleared) {
         throw new CodexThreadBindingConflictError(current.threadId, operation);
       }

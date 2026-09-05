@@ -1,6 +1,7 @@
-import { mkdir } from "node:fs/promises";
+import { mkdir, writeFile } from "node:fs/promises";
 import path from "node:path";
 import { expect, it } from "vitest";
+import { takeControlUiViewportScreenshot } from "../test-helpers/control-ui-e2e-screenshot.ts";
 import { controlUiSessionPath, installMockGateway } from "../test-helpers/control-ui-e2e.ts";
 import { createControlUiE2eSuite } from "./control-ui-e2e-suite.test-support.ts";
 
@@ -180,13 +181,13 @@ suite.define(() => {
         .poll(async () => (await gateway.getRequests("chat.history")).length)
         .toBe(historyCount + 2);
       if (recordProof) {
-        await page.screenshot({
-          fullPage: true,
-          path: path.join(
+        await writeFile(
+          path.join(
             path.join(suite.artifactDir, "dashboard-final-reply-recovery"),
             "dashboard-final-reply-recovered.png",
           ),
-        });
+          await takeControlUiViewportScreenshot(page, page.locator(".shell"), [visibleFinal]),
+        );
       }
     } finally {
       const video = page.video();

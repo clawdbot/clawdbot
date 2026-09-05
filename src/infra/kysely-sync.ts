@@ -67,8 +67,11 @@ export function getNodeSqliteKysely<Database>(db: DatabaseSync): Kysely<Database
 
 /** A single bound set avoids SQLite parameter and JS variadic-call limits. */
 export function sqliteStringSet(values: readonly string[]): RawBuilder<string> {
-  // Match node:sqlite's UTF-8 binding of lone UTF-16 surrogates; JSON preserves them otherwise.
-  const encoded = JSON.stringify(values.map(toUSVString));
+  // Keep node:sqlite's USV binding. SQLite 3.44 needs JSON5 \x00 to retain NUL;
+  // consuming escaped backslashes first preserves literal "\\u0000" keys.
+  const encoded = JSON.stringify(values.map(toUSVString)).replace(/\\(?:\\|u0000)/g, (escape) =>
+    escape === "\\u0000" ? "\\x00" : escape,
+  );
   /* kysely-allow-raw: JSON table-valued selection keeps one read snapshot and outer query ordering. */
   return kyselySql<string>`(SELECT value FROM json_each(${encoded}))`;
 }

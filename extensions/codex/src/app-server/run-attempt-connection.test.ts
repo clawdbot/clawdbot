@@ -3,6 +3,7 @@ import fs from "node:fs/promises";
 import path from "node:path";
 import { initializeGlobalHookRunner } from "openclaw/plugin-sdk/hook-runtime";
 import { createMockPluginRegistry } from "openclaw/plugin-sdk/plugin-test-runtime";
+import { patchSessionEntry, upsertSessionEntry } from "openclaw/plugin-sdk/session-store-runtime";
 import { describe, expect, it, vi } from "vitest";
 import * as appServerPolicy from "./app-server-policy.js";
 import { applyCodexAppServerAuthProfile } from "./auth-bridge.js";
@@ -18,6 +19,7 @@ import {
 } from "./run-attempt-test-harness.js";
 import { createSandboxContext } from "./sandbox-exec-server.test-helpers.js";
 import {
+  createCodexTestBindingStore,
   readCodexAppServerBinding,
   registerCodexTestSessionIdentity,
   testCodexAppServerBindingStore,
@@ -32,6 +34,42 @@ import { withCodexThreadLifecycleBinding } from "./thread-lifecycle-adoption.js"
 setupRunAttemptTestHooks();
 
 describe("prepareCodexAttemptConnection", () => {
+  it("retains the recovered generation fence after connection preparation", async () => {
+    const workspaceDir = path.join(tempDir, "recovered-workspace");
+    const params = createParams(path.join(tempDir, "recovered.jsonl"), workspaceDir);
+    const current = {
+      kind: "session" as const,
+      agentId: "main",
+      sessionKey: params.sessionKey!,
+      sessionId: params.sessionId,
+    };
+    const previous = { ...current, sessionId: "before-compaction" };
+    const scope = {
+      agentId: current.agentId,
+      sessionKey: current.sessionKey,
+      storePath: path.join(tempDir, "admitted", "sessions.json"),
+    };
+    params.sessionTarget = { ...scope, sessionId: current.sessionId };
+    await upsertSessionEntry({ ...scope, entry: { sessionId: previous.sessionId, updatedAt: 1 } });
+    await patchSessionEntry({ ...scope, update: () => ({ sessionId: current.sessionId }) });
+    const bindingStore = createCodexTestBindingStore();
+    const binding = { threadId: "recovered-native-thread", cwd: workspaceDir };
+    await bindingStore.mutate(previous, { kind: "set", binding });
+    const originalHostCapabilities = params.hostCapabilities;
+
+    const connection = await prepareCodexAttemptConnection({ params, options: { bindingStore } });
+    expect(bindingStore.read(current)).toEqual(binding);
+    expect(connection.params.hostCapabilities).toBe(originalHostCapabilities);
+    expect(() => connection.assertCurrent()).not.toThrow();
+    await patchSessionEntry({ ...scope, update: () => ({ sessionId: "next-compaction" }) });
+
+    expect(() => originalHostCapabilities.assertActive()).not.toThrow();
+    expect(() => connection.assertCurrent()).toThrow(
+      "Codex session generation is no longer current",
+    );
+    expect(bindingStore.read(current)).toEqual(binding);
+  });
+
   it.each(["missing", "ordinary", "auth-changed", "model-changed", "provider-changed"] as const)(
     "rejects %s expected native ownership before reclaim or connection preparation",
     async (state) => {
@@ -602,10 +640,11 @@ describe("prepareCodexAttemptConnection", () => {
             options: { bindingStore: testCodexAppServerBindingStore },
           }),
         ).rejects.toBe(rotationError);
-        expect(mutate).toHaveBeenCalledWith(expect.anything(), {
-          kind: "clear",
-          threadId: "thread-existing",
-        });
+        expect(mutate).toHaveBeenCalledWith(
+          expect.anything(),
+          { kind: "clear", threadId: "thread-existing" },
+          expect.any(Function),
+        );
         const remainingListeners = getEventListeners(controller.signal, "abort").length;
         controller.abort("cancelled after rejection");
         expect({

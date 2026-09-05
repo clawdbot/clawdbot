@@ -1,8 +1,9 @@
-import { mkdir } from "node:fs/promises";
+import { mkdir, writeFile } from "node:fs/promises";
 import path from "node:path";
 import { expect, it } from "vitest";
 import { createDeferred } from "../../../test/helpers/promise.js";
 import { CLOUD_PROFILE_RETRY_DELAYS_MS } from "../pages/new-session/cloud-profile-discovery.ts";
+import { takeControlUiViewportScreenshot } from "../test-helpers/control-ui-e2e-screenshot.ts";
 import { tooltipTitleText } from "./control-ui-e2e-suite.test-support.ts";
 import {
   ONE_PIXEL_PNG_B64,
@@ -285,7 +286,10 @@ suite.define(() => {
       await expect.poll(() => effortSelect.getAttribute("data-chat-thinking-value")).toBe("off");
       await thinkingSlider.press("End");
       await expect.poll(() => effortSelect.getAttribute("data-chat-thinking-value")).toBe("high");
-      await captureUiProof(suite, page, "01-cloud-thinking-level.png");
+      await captureUiProof(suite, page, "01-cloud-thinking-level.png", {
+        surface: page.locator('.chat-controls__effort-picker wa-popup [part="popup"]'),
+        content: [thinkingSlider],
+      });
       await effortSelect.click();
       await expect
         .poll(() => effortSelect.evaluate((element) => element.closest("details")?.open ?? false))
@@ -333,7 +337,10 @@ suite.define(() => {
       await pollLocatorText(checkout.locator(".new-session-page__menu-note").last()).toContain(
         "Syncs OpenClaw to the selected runner",
       );
-      await captureUiProof(suite, page, "01-cloud-worker-target.png");
+      await captureUiProof(suite, page, "01-cloud-worker-target.png", {
+        surface: checkout.locator('wa-popup [part="popup"]'),
+        content: [checkout.getByLabel("Name", { exact: true })],
+      });
       await page.keyboard.press("Escape");
 
       const message = "fix the cloud-only failure";
@@ -364,14 +371,12 @@ suite.define(() => {
 
       if (captureUiProofEnabled) {
         await trigger.click();
-        await page.screenshot({
-          animations: "disabled",
-          fullPage: true,
-          path: path.join(
-            path.join(suite.artifactDir, "cloud-profile-refresh-retention"),
-            "01-before-refresh.png",
-          ),
-        });
+        await writeFile(
+          path.join(suite.artifactDir, "cloud-profile-refresh-retention", "01-before-refresh.png"),
+          await takeControlUiViewportScreenshot(page, place.locator('wa-popup [part="popup"]'), [
+            place.getByRole("button", { name: "Cloud · aws" }),
+          ]),
+        );
         await page.keyboard.press("Escape");
       }
 
@@ -388,14 +393,10 @@ suite.define(() => {
       });
       await expect.poll(() => startButton.isDisabled()).toBe(true);
       if (captureUiProofEnabled) {
-        await page.screenshot({
-          animations: "disabled",
-          fullPage: true,
-          path: path.join(
-            path.join(suite.artifactDir, "cloud-profile-refresh-retention"),
-            "02-refresh-pending.png",
-          ),
-        });
+        await writeFile(
+          path.join(suite.artifactDir, "cloud-profile-refresh-retention", "02-refresh-pending.png"),
+          await takeControlUiViewportScreenshot(page, page.locator(".shell"), [startButton]),
+        );
       }
       await gateway.rejectDeferred("environments.list", {
         code: "UNAVAILABLE",
@@ -423,14 +424,16 @@ suite.define(() => {
         .toBe("Cloud worker provider: crabbox");
       await expect.poll(() => place.getByRole("button", { name: /Fast/ }).isVisible()).toBe(true);
       if (captureUiProofEnabled) {
-        await page.screenshot({
-          animations: "disabled",
-          fullPage: true,
-          path: path.join(
-            path.join(suite.artifactDir, "cloud-profile-refresh-retention"),
+        await writeFile(
+          path.join(
+            suite.artifactDir,
+            "cloud-profile-refresh-retention",
             "03-after-retry-exhaustion.png",
           ),
-        });
+          await takeControlUiViewportScreenshot(page, place.locator('wa-popup [part="popup"]'), [
+            retainedCloudProfile,
+          ]),
+        );
       }
       await page.keyboard.press("Escape");
 
@@ -465,14 +468,14 @@ suite.define(() => {
         machineClass: "fast",
       });
       if (captureUiProofEnabled) {
-        await page.screenshot({
-          animations: "disabled",
-          fullPage: true,
-          path: path.join(
-            path.join(suite.artifactDir, "cloud-profile-refresh-retention"),
+        await writeFile(
+          path.join(
+            suite.artifactDir,
+            "cloud-profile-refresh-retention",
             "04-session-dispatch.png",
           ),
-        });
+          await takeControlUiViewportScreenshot(page, page.locator(".shell"), [startupStatus]),
+        );
       }
       const describeRequestsAfterNavigation = (await gateway.getRequests("sessions.describe"))
         .length;
@@ -657,7 +660,10 @@ suite.define(() => {
         .locator("openclaw-session-menu")
         .getByRole("menuitem", { name: "Stop cloud worker…" });
       await stopWorker.waitFor();
-      await captureUiProof(suite, page, "02-active-cloud-worker-stop.png");
+      await captureUiProof(suite, page, "02-active-cloud-worker-stop.png", {
+        surface: page.locator('openclaw-session-menu wa-dropdown [part="menu"]'),
+        content: [stopWorker],
+      });
       expect(await localSessionRow.locator(".session-row-badge--cloud").count()).toBe(0);
       expect(await cloudPlacementBadge.locator("circle").count()).toBe(1);
       expect(await cloudPlacementBadge.locator("rect").count()).toBe(0);

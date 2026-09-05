@@ -103,14 +103,35 @@ it.each([
 });
 
 describe("CI changed Node test plan", () => {
-  it("leaves native Chromium tests to checks-ui while retaining changed Node-driven tests", () => {
+  it("leaves dedicated UI tests to their owners while retaining changed Node-driven tests", () => {
     const browser = "ui/src/components/markdown-mermaid.runtime.browser.test.ts";
     const node = "ui/src/components/form-controls.browser.test.ts";
-    const shards = createChangedNodeTestShards([browser, node]);
+    const uiE2e = [
+      "ui/src/e2e/chat-widget-sandbox.real-gateway.e2e.test.ts",
+      "ui/src/e2e/settings-layout.e2e.test.ts",
+    ];
+    const changedPaths = [browser, node, ...uiE2e];
+    const shards = createChangedNodeTestShards(changedPaths);
     expect(shards).not.toBeNull();
-    const targets = shards?.flatMap((shard) => shard.targets ?? []);
+    const targets = shards?.flatMap((shard) => shard.targets ?? []) ?? [];
     expect(targets).toContain(node);
     expect(targets).not.toContain(browser);
+    expect(targets).toEqual(expect.arrayContaining(uiE2e));
+    expect(createChangedNodeTestShards(changedPaths, { dedicatedUiE2e: false })).toEqual(shards);
+
+    const dedicated = createChangedNodeTestShards(changedPaths, { dedicatedUiE2e: true });
+    expect(dedicated).not.toBeNull();
+    expect(dedicated?.flatMap((shard) => shard.targets ?? [])).toEqual(
+      targets.filter((target) => !uiE2e.includes(target)),
+    );
+    expect(dedicated?.filter((shard) => !shard.targets)).toEqual(
+      shards?.filter((shard) => !shard.targets),
+    );
+    // Core E2E still requires full-suite metadata; UI ownership cannot absorb it.
+    for (const paths of [["src/gateway/gateway.test.ts"], [...changedPaths, "src/deleted.ts"]]) {
+      expect(createChangedNodeTestShards(paths)).toBeNull();
+      expect(createChangedNodeTestShards(paths, { dedicatedUiE2e: true })).toBeNull();
+    }
   });
   it.each([
     "extensions/copilot/index.ts",
@@ -853,6 +874,19 @@ describe("CI changed Node test plan", () => {
         shardName: "changed-extensions-config",
       },
     ]);
+  });
+
+  it("prepares runtime artifacts for the changed Gateway sidecar lifecycle fixture", () => {
+    const target = "src/gateway/server-sidecar-retention.test.ts";
+    const shards = createChangedNodeTestShards([target]);
+    expect(shards).not.toBeNull();
+    const owners = shards?.filter((shard) => shard.targets?.includes(target));
+    expect(owners).toHaveLength(1);
+    expect(owners?.[0]).toMatchObject({
+      configs: [],
+      targets: [target],
+      pretestBuildMode: "runtime",
+    });
   });
 
   it("prebuilds private QA dist before the QA Lab extension fallback", () => {

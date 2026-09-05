@@ -159,11 +159,14 @@ describe("CLI prepared metadata lifetime", () => {
             }),
           );
           const rejected = new Command();
-          expect(
-            await registerPluginCliCommandsFromValidatedConfig(rejected, undefined, undefined, {
+          await expect(
+            registerPluginCliCommandsFromValidatedConfig(rejected, undefined, undefined, {
               session,
             }),
-          ).toBeNull();
+          ).rejects.toMatchObject({
+            code: "INVALID_CONFIG",
+            details: expect.stringContaining("plugins.entries.beta.config.label"),
+          });
           expect(rejected.commands).toEqual([]);
           session.close();
         },

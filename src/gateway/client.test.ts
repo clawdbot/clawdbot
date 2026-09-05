@@ -1663,18 +1663,68 @@ describe("GatewayClient connect auth payload", () => {
     });
   });
 
-  it("keeps canonical platform metadata for non-node-host node clients", () => {
+  it.each([
+    { platform: "macos", deviceFamily: "Mac" },
+    { platform: "win32", deviceFamily: undefined },
+    { platform: "custom-os", deviceFamily: "Workstation" },
+  ])("preserves explicit caller metadata: %j", ({ platform, deviceFamily }) => {
     const client = createClientWithIdentity("device-third-party-node", vi.fn(), {
       role: "node",
       mode: GATEWAY_CLIENT_MODES.NODE,
       clientName: GATEWAY_CLIENT_NAMES.TEST,
-      platform: "macos",
-      deviceFamily: "Mac",
+      platform,
+      deviceFamily,
     });
 
     const { connect } = startClientAndConnect({ client });
-    expect(connect.params?.client?.platform).toBe("macos");
+    expect(connect.params?.client).toMatchObject({
+      platform,
+      ...(deviceFamily ? { deviceFamily } : {}),
+    });
+    if (deviceFamily === undefined) {
+      expect(connect.params?.client).not.toHaveProperty("deviceFamily");
+    }
     client.stop();
+  });
+
+  it.each([undefined, "Workstation"])(
+    "uses canonical Windows metadata and preserves explicit family %s",
+    (deviceFamily) => {
+      const platformSpy = vi.spyOn(process, "platform", "get").mockReturnValue("win32");
+      const client = createClientWithIdentity("device-default-windows", vi.fn(), {
+        clientName: GATEWAY_CLIENT_NAMES.CLI,
+        mode: GATEWAY_CLIENT_MODES.CLI,
+        deviceFamily,
+      });
+
+      try {
+        const { connect } = startClientAndConnect({ client });
+        expect(connect.params?.client).toMatchObject({
+          platform: "windows",
+          deviceFamily: deviceFamily ?? "Windows",
+        });
+      } finally {
+        client.stop();
+        platformSpy.mockRestore();
+      }
+    },
+  );
+
+  it("preserves runtime metadata defaults for platforms without canonical aliases", () => {
+    const platformSpy = vi.spyOn(process, "platform", "get").mockReturnValue("freebsd");
+    const client = createClientWithIdentity("device-freebsd", vi.fn(), {
+      clientName: GATEWAY_CLIENT_NAMES.TEST,
+      mode: GATEWAY_CLIENT_MODES.TEST,
+    });
+
+    try {
+      const { connect } = startClientAndConnect({ client });
+      expect(connect.params?.client).toMatchObject({ platform: "freebsd" });
+      expect(connect.params?.client).not.toHaveProperty("deviceFamily");
+    } finally {
+      client.stop();
+      platformSpy.mockRestore();
+    }
   });
 
   it("does not advertise node plugin tools in the initial connect frame", () => {

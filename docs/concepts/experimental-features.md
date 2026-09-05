@@ -65,7 +65,7 @@ native `sessions_spawn` tool, while the low-level flow also requires
 
 `agents.defaults.experimental.localModelLean: true` drops heavyweight optional tools from the agent's direct surface every turn: `browser`, `cron`, `message`, `image_generate`, `music_generate`, `video_generate`, `tts`, and `pdf`. Explicitly allowed or delivery-required tools remain available, though Tool Search may catalog them instead of exposing them directly. Lean mode also defaults plugin/MCP/client catalogs to structured Tool Search (`tool_search`, `tool_describe`, `tool_call`) when `tools.toolSearch` is not already set. Use `agents.entries.*.experimental.localModelLean` to scope this to one agent.
 
-During onboarding, a verified `ollama` or `lmstudio` inference route automatically sets `agents.defaults.experimental.localModelLean: true` when that value is absent. OpenClaw records that the setting came from onboarding, so a later verified non-local route lifts only the automatic setting. An explicitly configured `true` or `false` is preserved. Other self-hosted and OpenAI-compatible providers are not inferred from model names or URLs.
+Selecting an `ollama`, `lmstudio`, or managed local-model route with `models.providers.<id>.localService` during onboarding automatically sets `agents.defaults.experimental.localModelLean: true` when that value is absent. Hosted Ollama models are excluded. When setup verifies a candidate, it uses the same setting that will be saved. OpenClaw records that the setting came from onboarding, so running setup for a non-local route lifts only the automatic setting. An explicitly configured `true` or `false` is preserved. Other self-hosted and OpenAI-compatible providers are not inferred from model names or URLs.
 
 If you already tune Tool Search globally, OpenClaw leaves that config alone. Set `tools.toolSearch: false` to opt out of the lean-mode Tool Search default.
 
@@ -91,7 +91,7 @@ Enable lean mode once you have proved the model can talk to the Gateway but full
 
 ### When to leave it off
 
-If your backend handles the full default runtime cleanly, leave this off. It is a workaround for local stacks that need a smaller tool surface, not a default for hosted models or well-resourced local rigs.
+If your backend handles the full default runtime cleanly, explicitly set `agents.defaults.experimental.localModelLean: false`. Setup preserves that choice. Lean mode is intended for local stacks that benefit from a smaller tool surface; hosted models do not enable it automatically.
 
 Lean mode does not replace `tools.profile`, `tools.allow`/`tools.deny`, or the model `compat.supportsTools: false` escape hatch. For a permanent narrower tool surface on a specific agent, prefer those stable knobs.
 

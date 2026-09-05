@@ -132,7 +132,8 @@ it("does not promote a provisional task when replacement wins before admin admis
     const result = await pending;
     expect(await admin.mock.results[0]!.value).toEqual({ found: false, killed: false });
     expect.soft(result.cancelled).toBe(false);
-    expect.soft(getTaskById(task.taskId)?.error).toBe(SUBAGENT_KILL_TASK_ERROR);
+    expect.soft(getTaskById(task.taskId)?.status).toBe("running");
+    expect.soft(getTaskById(task.taskId)?.error).toBeUndefined();
     nextWait.resolve({
       status: "ok",
       endedAt: Date.now(),

@@ -49,11 +49,13 @@ function positiveInteger(value: number | undefined): number | undefined {
 
 function truncateText(value: string, maxLength: number | undefined): string {
   const limit = positiveInteger(maxLength);
-  if (!limit) {
+  if (!limit || value.length <= limit) {
     return value;
   }
-  const chars = Array.from(value);
-  return chars.length > limit ? chars.slice(0, limit).join("") : value;
+  // A code point uses at most two UTF-16 units; later units cannot affect this prefix.
+  return Array.from(value.slice(0, limit * 2))
+    .slice(0, limit)
+    .join("");
 }
 
 function truncateUtf8Bytes(value: string, limit: number): string {
@@ -81,8 +83,7 @@ function truncatePresentationText(value: string, limits: TextLimits | undefined)
   if (limits?.encoding === "utf16-units") {
     return truncateUtf16Safe(value, limit);
   }
-  const chars = Array.from(value);
-  return chars.length > limit ? chars.slice(0, limit).join("") : value;
+  return truncateText(value, limit);
 }
 
 function splitPresentationText(value: string, limits: TextLimits | undefined): string[] {

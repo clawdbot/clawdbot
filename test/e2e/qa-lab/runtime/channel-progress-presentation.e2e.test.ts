@@ -1340,6 +1340,11 @@ describe("channel progress presentation through an isolated Gateway", () => {
           const configured = progressConfig(config, channel, native, tools);
           if (channel === "discord") {
             configured.channels!.discord!.proxy = api.proxyUrl;
+            const qa = configured.agents!.entries!.qa!;
+            qa.tools = {
+              ...qa.tools,
+              alsoAllow: [...(qa.tools?.alsoAllow ?? []), "message"],
+            };
           }
           return configured;
         },
@@ -1593,6 +1598,78 @@ describe("channel progress presentation through an isolated Gateway", () => {
           2,
         ),
       );
+      if (channel === "discord") {
+        const text = [
+          "QA-PREFIX-REPORT",
+          ...Array.from(
+            { length: 80 },
+            (_, index) =>
+              `Section ${String(index).padStart(3, "0")} 😀 e\u0301: reviewed and ready.`,
+          ),
+          "QA-PREFIX-END",
+        ].join("\n");
+        expect(Array.from(text).length).toBeGreaterThan(1997);
+        const client = await connectGatewayClient({
+          url: gateway.wsUrl,
+          token: gateway.token,
+          scopes: ["operator.admin", "operator.read", "operator.write"],
+        });
+        cleanups.push(() => disconnectGatewayClient(client));
+        const firstWrite = writes.length;
+        const sent = asRecord(
+          await client.request("tools.invoke", {
+            name: "message",
+            agentId: "qa",
+            sessionKey: "agent:qa:discord:channel:123456789012345678",
+            args: {
+              action: "send",
+              channel: "discord",
+              target: "channel:123456789012345678",
+              presentation: { blocks: [{ type: "text", text }] },
+            },
+          }),
+        );
+        expect(sent.ok).toBe(true);
+        const portableWrites = () =>
+          writes
+            .slice(firstWrite)
+            .filter(
+              (write) => write.method === "POST" && /\/channels\/\d+\/messages$/u.test(write.route),
+            );
+        await waitForFact(
+          () => portableWrites().some((write) => write.accepted),
+          "portable presentation accepted",
+        );
+        expect(portableWrites()).toHaveLength(1);
+        const write = portableWrites()[0]!;
+        expect(write.accepted?.id).toEqual(expect.any(String));
+        const containers = readChunks(write.body.components);
+        expect(containers).toHaveLength(1);
+        // Discord wire types are Container (17) and TextDisplay (10).
+        expect(containers[0]?.type).toBe(17);
+        const displays = readChunks(containers[0]?.components);
+        expect(displays.length).toBeGreaterThan(1);
+        for (const display of displays) {
+          expect(display.type).toBe(10);
+          expect(display.content).toEqual(expect.any(String));
+          expect(Array.from(String(display.content)).length).toBeLessThanOrEqual(1997);
+        }
+        expect(displays.map((display) => display.content).join("")).toBe(text);
+        await fs.writeFile(
+          path.join(evidenceDir, `discord-portable-prefix-tool-progress-${tools}.json`),
+          JSON.stringify(
+            {
+              kind: "mock-gateway",
+              status: "pass",
+              expectedText: text,
+              body: write.body,
+              accepted: write.accepted,
+            },
+            null,
+            2,
+          ),
+        );
+      }
     },
     180_000,
   );

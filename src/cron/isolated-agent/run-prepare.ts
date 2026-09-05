@@ -10,7 +10,6 @@ import {
 } from "../../agents/prepared-model-runtime.js";
 import { preparedModelRuntimeConfigsMatch } from "../../agents/prepared-model-runtime.owner.js";
 import { resolveAgentModelPrimaryValue } from "../../config/model-input.js";
-import type { SessionEntry } from "../../config/sessions.js";
 import { resolveSessionWorkStartError } from "../../config/sessions/lifecycle.js";
 import type { AgentDefaultsConfig } from "../../config/types.agent-defaults.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
@@ -69,6 +68,7 @@ import {
   resolveCronLifecycleRevisionIdentity,
   type CronLiveSelection,
   type CronRunContinuationSession,
+  type CronSessionRowWriter,
   type MutableCronSession,
   type PersistCronSessionEntry,
 } from "./run-session-state.js";
@@ -303,24 +303,17 @@ export async function prepareCronRunContext(params: {
 
   let preparedModelRuntimeLease: PreparedModelRuntimeLease | undefined;
   try {
-    const persistCronSessionRow = async ({
+    const persistCronSessionRow: CronSessionRowWriter = async ({
       storePath,
       sessionKey,
       fallbackEntry,
-      resetBoundaryReason,
+      resetBoundary,
       update,
       assertCommitAllowed,
-    }: {
-      storePath: string;
-      sessionKey: string;
-      fallbackEntry: SessionEntry;
-      resetBoundaryReason?: "cron-stale";
-      update: (entry: SessionEntry | undefined) => SessionEntry;
-      assertCommitAllowed?: () => void;
     }) => {
       const { applySessionEntryLifecycleMutation, patchSessionEntryCore } =
         await loadSessionAccessorRuntime();
-      if (resetBoundaryReason) {
+      if (resetBoundary) {
         await applySessionEntryLifecycleMutation({
           activeSessionKey: sessionKey,
           agentId,
@@ -328,7 +321,7 @@ export async function prepareCronRunContext(params: {
           upserts: [
             {
               sessionKey,
-              resetBoundary: { context: "preserve-tail", reason: resetBoundaryReason },
+              resetBoundary,
               buildEntry: ({ currentEntry }) => update(currentEntry),
             },
           ],
@@ -348,6 +341,7 @@ export async function prepareCronRunContext(params: {
       agentSessionKey,
       createdActor: input.job.createdActor,
       sandbox,
+      workspaceDir,
       persistSessionEntry: persistCronSessionRow,
     });
     const withRunSession: WithRunSession = (result) => ({

@@ -3,6 +3,7 @@ import fs from "node:fs/promises";
 import path from "node:path";
 import { AgentHarnessPreflightError } from "openclaw/plugin-sdk/agent-harness-runtime";
 import { createDeferred } from "openclaw/plugin-sdk/extension-shared";
+import { patchSessionEntry, upsertSessionEntry } from "openclaw/plugin-sdk/session-store-runtime";
 import { describe, expect, it, vi } from "vitest";
 import { resumeThread } from "../command-handler-bindings.js";
 import { resolveCodexCommandDeps } from "../command-handler-deps.js";
@@ -31,6 +32,7 @@ import {
   threadStartResult,
 } from "./run-attempt-test-harness.js";
 import {
+  createCodexTestBindingStore,
   readCodexAppServerBinding,
   registerCodexTestSessionIdentity,
   testCodexAppServerBindingStore,
@@ -599,6 +601,74 @@ async function createLeasedLifecycleWireClient(
 }
 
 describe("Codex app-server thread lifecycle bindings", () => {
+  it("rejects a host-only rotation after recovering the predecessor before the lifecycle lease", async () => {
+    const workspaceDir = path.join(tempDir, "recovered-workspace");
+    const params = createParams(path.join(tempDir, "recovered.jsonl"), workspaceDir);
+    const current = {
+      kind: "session" as const,
+      agentId: "main",
+      sessionKey: params.sessionKey!,
+      sessionId: params.sessionId,
+    };
+    const previous = { ...current, sessionId: "before-compaction" };
+    const scope = {
+      agentId: current.agentId,
+      sessionKey: current.sessionKey,
+      storePath: path.join(tempDir, "admitted", "sessions.json"),
+    };
+    params.sessionTarget = { ...scope, sessionId: current.sessionId };
+    await upsertSessionEntry({ ...scope, entry: { sessionId: previous.sessionId, updatedAt: 1 } });
+    await patchSessionEntry({ ...scope, update: () => ({ sessionId: current.sessionId }) });
+    const native = threadStartResult("recovered-native-thread");
+    const fixture = await createLeasedCodexLifecycleHarness({
+      agentDir: path.join(tempDir, "agent"),
+      respond: async (method) => {
+        if (method === "config/read") {
+          return { config: {}, origins: {}, layers: [] };
+        }
+        if (method === "configRequirements/read") {
+          return { requirements: null };
+        }
+        if (method === "thread/resume") {
+          return native;
+        }
+        throw new Error(`unexpected method: ${method}`);
+      },
+    });
+    fixture.seed(native, { loaded: true, subscribed: false });
+    const bindingStore = createCodexTestBindingStore();
+    const binding = {
+      threadId: native.thread.id,
+      cwd: workspaceDir,
+      preserveNativeModel: true as const,
+      model: native.model,
+      modelProvider: native.modelProvider,
+      webSearchThreadConfigFingerprint: DEFAULT_CODEX_WEB_SEARCH_THREAD_CONFIG_FINGERPRINT,
+    };
+    await bindingStore.mutate(previous, { kind: "set", binding });
+    const withLease = bindingStore.withLease.bind(bindingStore);
+    vi.spyOn(bindingStore, "withLease").mockImplementationOnce(async (identity, run) => {
+      expect(bindingStore.read(current)).toEqual(binding);
+      await patchSessionEntry({ ...scope, update: () => ({ sessionId: "next-compaction" }) });
+      return withLease(identity, run);
+    });
+
+    await expect(
+      startOrResumeThreadImpl({
+        client: fixture.client,
+        params,
+        cwd: workspaceDir,
+        dynamicTools: [],
+        appServer: createThreadLifecycleAppServerOptions(),
+        userMcpServersEnabled: false,
+        signal: new AbortController().signal,
+        bindingStore,
+      }),
+    ).rejects.toThrow("Codex session generation is no longer current");
+    expect(fixture.request.mock.calls.some(([method]) => method === "thread/resume")).toBe(false);
+    expect(bindingStore.read(current)).toEqual(binding);
+  });
+
   it.each([false, true])(
     "resumes idle A with current policy while B stays active and catalog leases come and go (native model: %s)",
     async (nativeModelOwned) => {
@@ -3692,6 +3762,7 @@ describe("Codex app-server thread lifecycle bindings", () => {
       await vi.waitFor(() =>
         expect(request).toHaveBeenCalledWith("thread/start", expect.any(Object), {
           signal: abortController.signal,
+          assertCurrent: expect.any(Function),
         }),
       );
       if (phase === "thread-start") {

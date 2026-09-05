@@ -745,6 +745,9 @@ describe("handleManagedOutgoingImageHttpRequest", () => {
 
     expect(result.statusCode).toBe(200);
     expect(result.headers["content-type"]).toBe("audio/x-caf");
+    expect(result.headers["cache-control"]).toBe("private, no-cache");
+    expect(result.headers.etag).toBeUndefined();
+    expect(result.headers["last-modified"]).toBeUndefined();
     expect(result.body).toEqual(body);
   });
 
@@ -821,6 +824,9 @@ describe("handleManagedOutgoingImageHttpRequest", () => {
       expect.objectContaining({ mimeType: "audio/mpeg", kind: "audio" }),
     );
     expect(result.statusCode).toBe(200);
+    expect(result.headers["cache-control"]).toBe("private, no-cache");
+    expect(result.headers.etag).toBeUndefined();
+    expect(result.headers["last-modified"]).toBeUndefined();
     expect(result.body).toEqual(body);
   });
 
@@ -828,12 +834,13 @@ describe("handleManagedOutgoingImageHttpRequest", () => {
     const transcodedPath = path.join(stateDir, "cached-voice.m4a");
     const transcoded = Buffer.from("normalized-audio");
     await fs.writeFile(transcodedPath, transcoded);
-    resolvePlaybackTranscodeMock.mockResolvedValueOnce({
+    const playback = {
       kind: "transcoded",
       path: transcodedPath,
       contentType: "audio/mp4",
       extension: ".m4a",
-    });
+    } as const;
+    resolvePlaybackTranscodeMock.mockResolvedValueOnce(playback);
     const { attachmentId, sessionKey } = await createFixture(stateDir, {
       filename: "voice.caf",
       contentType: "audio/x-caf",
@@ -849,27 +856,48 @@ describe("handleManagedOutgoingImageHttpRequest", () => {
 
     expect(result.statusCode).toBe(206);
     expect(result.headers["content-type"]).toBe("audio/mp4");
+    expect(result.headers["cache-control"]).toBe("private, no-cache");
+    expect(result.headers.etag).toBeUndefined();
+    expect(result.headers["last-modified"]).toBeUndefined();
     expect(result.headers["content-disposition"]).toContain('filename="voice.m4a"');
     expect(result.headers["content-range"]).toBe(`bytes 11-15/${transcoded.byteLength}`);
     expect(result.body.toString("utf8")).toBe("audio");
+
+    for (const method of ["GET", "HEAD"]) {
+      resolvePlaybackTranscodeMock.mockResolvedValueOnce(playback);
+      const exists = await requestManagedImage({
+        stateDir,
+        pathName: `/api/chat/media/outgoing/${encodeURIComponent(sessionKey)}/${attachmentId}/full?playback=1`,
+        authResponse: { authMethod: "token" },
+        method,
+        headers: { "if-none-match": "*", range: "bytes=11-15" },
+      });
+      expect(exists.result.statusCode).toBe(304);
+      expect(exists.result.headers.etag).toBeUndefined();
+      expect(exists.result.headers["content-length"]).toBeUndefined();
+      expect(exists.result.body).toHaveLength(0);
+    }
   });
 
-  it("advertises byte ranges without a body for HEAD", async () => {
-    const { attachmentId, sessionKey } = await createFixture(stateDir);
+  it.each(["", "?playback=1"])(
+    "advertises immutable image byte ranges without a body for HEAD%s",
+    async (query) => {
+      const { attachmentId, sessionKey } = await createFixture(stateDir);
 
-    const { result } = await requestManagedImage({
-      stateDir,
-      pathName: `/api/chat/media/outgoing/${encodeURIComponent(sessionKey)}/${attachmentId}/full`,
-      method: "HEAD",
-      authResponse: { authMethod: "token" },
-    });
+      const { result } = await requestManagedImage({
+        stateDir,
+        pathName: `/api/chat/media/outgoing/${encodeURIComponent(sessionKey)}/${attachmentId}/full${query}`,
+        method: "HEAD",
+        authResponse: { authMethod: "token" },
+      });
 
-    expect(result.statusCode).toBe(200);
-    expect(result.headers["accept-ranges"]).toBe("bytes");
-    expect(result.headers["content-length"]).toBe("14");
-    expect(result.headers.etag).toMatch(/^"[A-Za-z0-9_-]+"$/);
-    expect(result.body).toHaveLength(0);
-  });
+      expect(result.statusCode).toBe(200);
+      expect(result.headers["accept-ranges"]).toBe("bytes");
+      expect(result.headers["content-length"]).toBe("14");
+      expect(result.headers.etag).toMatch(/^"[A-Za-z0-9_-]+"$/);
+      expect(result.body).toHaveLength(0);
+    },
+  );
 
   it("serves an empty managed image without a body", async () => {
     const { attachmentId, sessionKey, originalPath } = await createFixture(stateDir);

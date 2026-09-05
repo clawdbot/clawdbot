@@ -19,6 +19,8 @@ Single-Gateway setups keep the existing menu unchanged. With two or more Gateway
 
 The Devices and Automations summaries refresh while the menu is open. Closing it stops their menu-owned polling. An active native Cron Jobs settings pane keeps its own refresh running. Cached summaries remain available when reopening the same Primary Gateway. Changing Primary refreshes Devices, Usage, and cost details from the newly selected Gateway.
 
+Manual Cron refreshes and successful job changes supersede older reads, so an in-flight response cannot restore a deleted job to the list.
+
 ## State model
 
 - Source: `WorkActivityStore` (`apps/macos/Sources/OpenClaw/WorkActivityStore.swift`).
