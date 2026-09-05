@@ -404,6 +404,10 @@ isolated temporary state directory. The copied database registry points to the
 copied agent databases. Channels, cron, automatic updates, and other side
 services are suppressed in this canary.
 
+Schema checks also use private SQLite copies so inspection does not create or
+modify WAL sidecars beside live databases. Each schema inspection has a
+30-second deadline; if compatibility cannot be verified, rollback is refused.
+
 The canary binds a free loopback port and must report `/startupz` as `started`,
 then `/readyz` as ready within a five-minute total budget. Failure records the
 phase, elapsed time, and bounded diagnostics; the canary process group and
@@ -413,8 +417,9 @@ Older targets without the required isolated validation support fail before
 activation; use the [manual recovery guidance](/install/updating#roll-back-a-package-install)
 only after checking state compatibility.
 
-Only `activating` stops the managed service. Its offline work is the package or
-checkout swap and required `doctor --fix` migrations, followed by service start
+Only `activating` stops the managed service. Its offline work includes the package
+or checkout swap, required `doctor --fix` migrations, and state compatibility
+inspection, followed by service start
 in `restarting`. In `verifying`, the updater requires the normal 12-probe settle,
 the expected version and Git build identity, no plugin activation errors,
 channel readiness, and HTTP 200 from `/readyz`. A separate inference probe has a

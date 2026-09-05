@@ -26,7 +26,7 @@ import { maybeResumeWindowsTaskAutoStartAfterPackageUpdate } from "./update-comm
 
 const CLI_NAME = resolveCliName();
 
-/** Read headers without reopening migrated state through the previous runtime. */
+/** Inspect private state copies without reopening migrated state through the previous runtime. */
 export async function inspectActivatedUpdateState(
   params: Pick<FinishUpdateParams, "result" | "root" | "schemaVersions"> & {
     config: OpenClawConfig;
