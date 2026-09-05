@@ -53,6 +53,7 @@ async function setupTempHome() {
   return {
     configPath: path.join(stateDir, "openclaw.json"),
     env,
+    stateDir,
     workspace,
   };
 }
@@ -100,7 +101,15 @@ describe("Skill proposal manual-target product proof", () => {
           status: "pending",
           target: {
             skillKey: "manual-gateway-proof",
-            skillFile: path.join(temp.workspace, "skills", "manual-gateway-proof", "SKILL.md"),
+            skillFile: path.join(
+              temp.stateDir,
+              "agents",
+              "main",
+              "agent",
+              "workshop-skills",
+              "manual-gateway-proof",
+              "SKILL.md",
+            ),
           },
         });
 
