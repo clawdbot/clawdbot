@@ -2795,7 +2795,7 @@ src/gateway/node-pairing-ssh-verify.ts	1
 src/gateway/node-registry-private.ts	1
 src/gateway/node-registry.ts	5
 src/gateway/openai-agent-run-usage.ts	1
-src/gateway/openai-http.ts	29
+src/gateway/openai-http.ts	28
 src/gateway/openresponses-http.ts	4
 src/gateway/operator-approval-snapshot.ts	4
 src/gateway/operator-approval-store.ts	8
