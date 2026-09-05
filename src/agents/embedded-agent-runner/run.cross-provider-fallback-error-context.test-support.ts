@@ -128,8 +128,8 @@ function setupCompactionRemovedFallbackAttempt() {
     model: "test-model",
     content: [],
   });
-  // The pinned profile may rotate to another same-provider credential before
-  // the outer model fallback runs, so every credential attempt must fail alike.
+  // model_not_found skips same-provider credential rotation and goes
+  // straight to outer model fallback, so one credential attempt is enough.
   mockedRunEmbeddedAttempt.mockResolvedValue(
     makeAttemptResult({
       assistantTexts: [],
@@ -236,7 +236,7 @@ describe("runEmbeddedAgent cross-provider fallback error handling", () => {
 
     await expect(promise).rejects.toBeInstanceOf(MockedFailoverError);
     await expect(promise).rejects.toThrow("⚠️ Agent run failed (model: anthropic/test-model).");
-    expect(mockedIsFailoverAssistantError).toHaveBeenCalledTimes(2);
+    expect(mockedIsFailoverAssistantError).toHaveBeenCalledTimes(1);
     expect(getLastFormattedAssistant()).toMatchObject({
       provider: "anthropic",
       model: "test-model",
