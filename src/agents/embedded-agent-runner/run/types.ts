@@ -69,6 +69,8 @@ type EmbeddedRunAttemptToolTerminalObservation = {
   toolCallId?: string;
   toolName: string;
   arguments?: unknown;
+  /** Original host result or error; public fields cannot supply effect provenance. */
+  result?: unknown;
   meta?: string;
   executionStarted?: boolean;
   /** Exact-instance replay classification resolved by the host tool catalog. */

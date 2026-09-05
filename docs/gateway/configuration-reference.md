@@ -226,9 +226,6 @@ See [MCP](/cli/mcp#openclaw-as-an-mcp-client-registry) and
       nodeManager: "npm", // npm | pnpm | yarn | bun
       allowUploadedArchives: false,
     },
-    workshop: {
-      allowSymlinkTargetWrites: false,
-    },
     entries: {
       "image-lab": {
         apiKey: { source: "env", provider: "default", id: "GEMINI_API_KEY" }, // or plaintext string
@@ -245,8 +242,6 @@ See [MCP](/cli/mcp#openclaw-as-an-mcp-client-registry) and
 - `load.extraDirs`: extra shared skill roots (lowest precedence).
 - `load.allowSymlinkTargets`: trusted real target roots that skill symlinks may
   resolve into when the link lives outside its configured source root.
-- `workshop.allowSymlinkTargetWrites`: allows Skill Workshop apply to write
-  through already-trusted symlink targets (default: false).
 - `install.preferBrew`: when true, prefer Homebrew installers when `brew` is
   available before falling back to other installer kinds.
 - `install.nodeManager`: node installer preference for `metadata.openclaw.install`
@@ -1172,7 +1167,7 @@ plugin does enforce it.
 | Endpoint             | Payload and result                                                                                                                                                                                                                                                                                                                                                                                     |
 | -------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ |
 | `POST /hooks/wake`   | Required nonempty `text`; optional `mode` (`"now"` default or `"next-heartbeat"`), `agentId`, `sessionKey`. Returns `200 { ok: true, mode, eventOutcome }`; `eventOutcome` is `"queued"` when the queue accepts the wake or `"coalesced"` when the same wake is already the queue's most recent pending event. `now` requests a heartbeat in either case; the result does not prove the heartbeat ran. |
-| `POST /hooks/agent`  | [Agent payload](/gateway/configuration-reference#hook-agent-payload). Returns `200 { ok: true, runId }` after session/global placement admission, not completion.                                                                                                                                                                                                                                      |
+| `POST /hooks/agent`  | [Agent payload](/gateway/configuration-reference#hook-agent-payload). By default returns `200 { ok: true, runId }` after session/global placement admission. With `waitForCompletion: true`, waits for the admitted run and adds bounded terminal execution/delivery facts in `completion`.                                                                                                            |
 | `POST /hooks/<name>` | First matching mapping produces wake/agent actions. No matching mapping returns `404`; no actions returns `204`. Agent fan-out has the [batch response contract](/gateway/configuration-reference#hook-retries-and-fan-out).                                                                                                                                                                           |
 
 The direct `/wake` and `/agent` endpoints take precedence over mappings with
@@ -1200,22 +1195,23 @@ or channel delivery. See [hook verification](/automation/cron-jobs#verify-and-tr
 
 ### Hook agent payload
 
-| Field            | Default                  | Contract                                                                                                                                                                                                                                                     |
-| ---------------- | ------------------------ | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ |
-| `message`        | required                 | Nonempty agent input text; external content is safety-wrapped.                                                                                                                                                                                               |
-| `name`           | `"Hook"`                 | Hook label used in logs/completion events.                                                                                                                                                                                                                   |
-| `agentId`        | resolved owner           | Must name a configured agent when supplied directly. Required when no implicit/retained owner can be resolved.                                                                                                                                               |
-| `sessionKey`     | default/generated key    | Subject to caller-key opt-in and prefix policy.                                                                                                                                                                                                              |
-| `sessionMode`    | `"isolated"`             | `"isolated"` creates a fresh run session; `"persistent"` reuses the resolved session.                                                                                                                                                                        |
-| `idempotencyKey` | unset                    | Optional replay key; headers take precedence. See retries below.                                                                                                                                                                                             |
-| `wakeMode`       | `"now"`                  | `"now"` or `"next-heartbeat"`; controls waking for completion events, not whether the agent is dispatched immediately.                                                                                                                                       |
-| `deliver`        | `true`                   | Only `false` opts out. With no direct destination, successful output can become a main-session completion event. `false` logs successful completion without an announcement and ignores destination fields. Non-ok execution results produce a status event. |
-| `channel`        | none for direct delivery | Registered concrete channel id; must be paired with `to`. Direct `/agent` cannot use `"last"`.                                                                                                                                                               |
-| `to`             | unset                    | Nonempty recipient for direct announce delivery, paired with `channel`.                                                                                                                                                                                      |
-| `accountId`      | channel default          | Selects a configured, enabled account; requires `channel` and `to`. Unknown, disabled, or invalid selections return `400` before dispatch.                                                                                                                   |
-| `model`          | agent/model defaults     | Model id or alias override, subject to model availability and allowlist policy.                                                                                                                                                                              |
-| `thinking`       | agent/model defaults     | Thinking override for the run.                                                                                                                                                                                                                               |
-| `timeoutSeconds` | agent timeout            | Positive numeric turn-timeout override; direct payload values are floored to whole seconds. Invalid/nonpositive values are ignored.                                                                                                                          |
+| Field               | Default                  | Contract                                                                                                                                                                                                                                                     |
+| ------------------- | ------------------------ | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ |
+| `message`           | required                 | Nonempty agent input text; external content is safety-wrapped.                                                                                                                                                                                               |
+| `name`              | `"Hook"`                 | Hook label used in logs/completion events.                                                                                                                                                                                                                   |
+| `agentId`           | resolved owner           | Must name a configured agent when supplied directly. Required when no implicit/retained owner can be resolved.                                                                                                                                               |
+| `sessionKey`        | default/generated key    | Subject to caller-key opt-in and prefix policy.                                                                                                                                                                                                              |
+| `sessionMode`       | `"isolated"`             | `"isolated"` creates a fresh run session; `"persistent"` reuses the resolved session.                                                                                                                                                                        |
+| `idempotencyKey`    | unset                    | Optional replay key; headers take precedence. See retries below.                                                                                                                                                                                             |
+| `waitForCompletion` | `false`                  | Direct `/agent` only. When `true`, keep the HTTP response open after admission and return `completion` with `status` plus available delivery facts. Mappings and fan-out remain admission-only.                                                              |
+| `wakeMode`          | `"now"`                  | `"now"` or `"next-heartbeat"`; controls waking for completion events, not whether the agent is dispatched immediately.                                                                                                                                       |
+| `deliver`           | `true`                   | Only `false` opts out. With no direct destination, successful output can become a main-session completion event. `false` logs successful completion without an announcement and ignores destination fields. Non-ok execution results produce a status event. |
+| `channel`           | none for direct delivery | Registered concrete channel id; must be paired with `to`. Direct `/agent` cannot use `"last"`.                                                                                                                                                               |
+| `to`                | unset                    | Nonempty recipient for direct announce delivery, paired with `channel`.                                                                                                                                                                                      |
+| `accountId`         | channel default          | Selects a configured, enabled account; requires `channel` and `to`. Unknown, disabled, or invalid selections return `400` before dispatch.                                                                                                                   |
+| `model`             | agent/model defaults     | Model id or alias override, subject to model availability and allowlist policy.                                                                                                                                                                              |
+| `thinking`          | agent/model defaults     | Thinking override for the run.                                                                                                                                                                                                                               |
+| `timeoutSeconds`    | agent timeout            | Positive numeric turn-timeout override; direct payload values are floored to whole seconds. Invalid/nonpositive values are ignored.                                                                                                                          |
 
 Omitting all destination fields runs without a direct announce destination.
 Supplying only part of a destination fails with `400` while delivery is enabled.
@@ -1303,9 +1299,24 @@ Agent replay keys resolve in this order: `Idempotency-Key`,
 `X-OpenClaw-Idempotency-Key`, then payload `idempotencyKey`. Only trimmed nonempty
 strings of at most 256 characters are used. The same key replays only for the
 same token, path, and resolved dispatch fields; changing the message or routing
-can create a new run. Completed admission replay entries expire after 5 minutes
-and are bounded to 1,000 entries in memory. Restart clears them. Failed admissions
-remain retryable; a replayed `200` is not a fresh execution or a completion check.
+can create a new run. Pending admissions and admitted runs with unresolved
+completion are retained without TTL or size eviction. After terminal completion
+settles, its replay entry expires after 5 minutes and counts toward the 1,000
+terminal-entry memory bound. Restart clears all replay state. Failed admissions
+remain retryable. Direct retries may change `waitForCompletion` without changing
+dispatch identity: admission-only callers replay the `runId`, while waiting
+callers share the same completion promise and replay its terminal result.
+
+When requested, `completion.status` is `ok`, `error`, or `skipped`, and
+`replyDisposition` is `visible`, `silent`, or `empty`. This disposition exposes
+only whether a terminal model reply existed, never its text. The optional
+delivery fields are `delivered`, `deliveryAttempted`, `deliveryError`, and
+`deliverySuppressionReason` (`empty`, `silent`, `heartbeat`, or
+`channel_transform`). Missing delivery fields remain unknown. Post-admission
+failures still return HTTP `200`; only admission failures use the non-2xx
+statuses above. `deliveryError`, when present, is the fixed categorical value
+`"delivery-failed"`. Provider, runtime, model, target, session, diagnostic,
+output, and summary details are never returned.
 
 For `forEach`, templates/transforms see the original payload with the chosen
 array replaced by `[currentItem]`. Missing, empty, or non-array values produce no

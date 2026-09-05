@@ -11,9 +11,9 @@ import {
 } from "../lifecycle/workspace-skill-write.js";
 
 export async function rollbackSkillCollectionMutation(params: {
-  workspaceDir: string;
+  skillsRoot: string;
   appliedWrites: readonly PreparedWorkspaceSkillMutation[];
-  droppedSkills: readonly { name: string; baseDir: string; stagedDir: string }[];
+  droppedSkills: readonly { skillKey: string; baseDir: string; stagedDir: string }[];
 }): Promise<void> {
   const errors: unknown[] = [];
   for (const mutation of params.appliedWrites.toReversed()) {
@@ -31,15 +31,15 @@ export async function rollbackSkillCollectionMutation(params: {
       errors.push(error);
     }
   }
-  const workspaceRoot = await root(params.workspaceDir);
+  const skillsRootHandle = await root(params.skillsRoot);
   for (const skill of params.droppedSkills.toReversed()) {
     try {
-      const baseRelativePath = relativeSkillCollectionPath(params.workspaceDir, skill.baseDir);
-      if (await workspaceRoot.exists(baseRelativePath)) {
-        throw new Error(`Dropped skill changed before restoration: ${skill.name}`);
+      const baseRelativePath = relativeSkillCollectionPath(params.skillsRoot, skill.baseDir);
+      if (await skillsRootHandle.exists(baseRelativePath)) {
+        throw new Error(`Dropped skill changed before restoration: ${skill.skillKey}`);
       }
-      await workspaceRoot.move(
-        relativeSkillCollectionPath(params.workspaceDir, skill.stagedDir),
+      await skillsRootHandle.move(
+        relativeSkillCollectionPath(params.skillsRoot, skill.stagedDir),
         baseRelativePath,
         { overwrite: true },
       );
@@ -53,48 +53,47 @@ export async function rollbackSkillCollectionMutation(params: {
 }
 
 export async function stageSkillCollectionDrop(params: {
-  workspaceDir: string;
-  name: string;
+  skillsRoot: string;
+  skillKey: string;
   baseDir: string;
-}): Promise<{ name: string; baseDir: string; stagedDir: string }> {
+}): Promise<{ skillKey: string; baseDir: string; stagedDir: string }> {
   const stagedDir = path.join(
     path.dirname(params.baseDir),
     `.openclaw-drop-${path.basename(params.baseDir)}-${randomUUID()}`,
   );
-  const workspaceRoot = await root(params.workspaceDir);
-  await workspaceRoot.move(
-    relativeSkillCollectionPath(params.workspaceDir, params.baseDir),
-    relativeSkillCollectionPath(params.workspaceDir, stagedDir),
+  const skillsRootHandle = await root(params.skillsRoot);
+  await skillsRootHandle.move(
+    relativeSkillCollectionPath(params.skillsRoot, params.baseDir),
+    relativeSkillCollectionPath(params.skillsRoot, stagedDir),
     { overwrite: true },
   );
-  return { name: params.name, baseDir: params.baseDir, stagedDir };
+  return { skillKey: params.skillKey, baseDir: params.baseDir, stagedDir };
 }
 
 export async function discardStagedSkillCollectionDrops(
-  workspaceDir: string,
+  skillsRoot: string,
   droppedSkills: readonly { stagedDir: string }[],
 ): Promise<void> {
   for (const skill of droppedSkills) {
-    await removeSkillCollectionDirectory(workspaceDir, skill.stagedDir).catch((error: unknown) => {
+    await removeSkillCollectionDirectory(skillsRoot, skill.stagedDir).catch((error: unknown) => {
       logWarn(`skill-workshop: failed to discard staged skill drop: ${String(error)}`);
     });
   }
 }
 
 export async function restoreSkillCollectionBackupTransaction(params: {
-  workspaceDir: string;
+  skillsRoot: string;
   backupDir: string;
   skillDirs: readonly string[];
   resultSkillDirs: readonly string[];
-  commit: () => void;
 }): Promise<void> {
   const rollbackDir = path.join(params.backupDir, `.restore-${randomUUID()}`);
   try {
-    await fs.mkdir(path.join(rollbackDir, "workspace"), { recursive: true });
+    await fs.mkdir(path.join(rollbackDir, "skills"), { recursive: true });
     for (const relativeDir of params.resultSkillDirs) {
       await fs.cp(
-        path.join(params.workspaceDir, relativeDir),
-        path.join(rollbackDir, "workspace", relativeDir),
+        path.join(params.skillsRoot, relativeDir),
+        path.join(rollbackDir, "skills", relativeDir),
         { recursive: true, errorOnExist: true, force: false, preserveTimestamps: true },
       );
     }
@@ -105,14 +104,11 @@ export async function restoreSkillCollectionBackupTransaction(params: {
   let discardSnapshot = false;
   try {
     await restoreSkillCollectionBackup(params);
-    // Ownership is the durable commit for this filesystem transition. Keep the
-    // snapshot until it succeeds so a failed commit can restore the retryable result.
-    params.commit();
     discardSnapshot = true;
   } catch (error) {
     try {
       await restoreSkillCollectionBackup({
-        workspaceDir: params.workspaceDir,
+        skillsRoot: params.skillsRoot,
         backupDir: rollbackDir,
         skillDirs: params.resultSkillDirs,
         resultSkillDirs: [...new Set([...params.skillDirs, ...params.resultSkillDirs])],
@@ -135,25 +131,25 @@ export async function restoreSkillCollectionBackupTransaction(params: {
 }
 
 async function restoreSkillCollectionBackup(params: {
-  workspaceDir: string;
+  skillsRoot: string;
   backupDir: string;
   skillDirs: readonly string[];
   resultSkillDirs: readonly string[];
 }): Promise<void> {
   const removeDirs = new Set([
-    ...params.skillDirs.map((relativeDir) => path.join(params.workspaceDir, relativeDir)),
-    ...params.resultSkillDirs.map((relativeDir) => path.join(params.workspaceDir, relativeDir)),
+    ...params.skillDirs.map((relativeDir) => path.join(params.skillsRoot, relativeDir)),
+    ...params.resultSkillDirs.map((relativeDir) => path.join(params.skillsRoot, relativeDir)),
   ]);
   for (const skillDir of [...removeDirs].toSorted((left, right) => right.length - left.length)) {
     if (await pathExists(skillDir)) {
-      await removeSkillCollectionDirectory(params.workspaceDir, skillDir);
+      await removeSkillCollectionDirectory(params.skillsRoot, skillDir);
     }
   }
   for (const relativeDir of params.skillDirs) {
-    await fs.mkdir(path.dirname(path.join(params.workspaceDir, relativeDir)), { recursive: true });
+    await fs.mkdir(path.dirname(path.join(params.skillsRoot, relativeDir)), { recursive: true });
     await fs.cp(
-      path.join(params.backupDir, "workspace", relativeDir),
-      path.join(params.workspaceDir, relativeDir),
+      path.join(params.backupDir, "skills", relativeDir),
+      path.join(params.skillsRoot, relativeDir),
       { recursive: true, errorOnExist: true, force: false, preserveTimestamps: true },
     );
   }
@@ -170,28 +166,25 @@ async function discardRestoreSnapshot(backupDir: string, rollbackDir: string): P
   });
 }
 
-async function removeSkillCollectionDirectory(
-  workspaceDir: string,
-  skillDir: string,
-): Promise<void> {
-  const relativePath = relativeSkillCollectionPath(workspaceDir, skillDir);
+async function removeSkillCollectionDirectory(skillsRoot: string, skillDir: string): Promise<void> {
+  const relativePath = relativeSkillCollectionPath(skillsRoot, skillDir);
   await removePathWithinRoot({
-    rootDir: workspaceDir,
+    rootDir: skillsRoot,
     relativePath,
     recursive: true,
     force: false,
   });
 }
 
-function relativeSkillCollectionPath(workspaceDir: string, skillDir: string): string {
-  const relativePath = path.relative(workspaceDir, skillDir);
+function relativeSkillCollectionPath(skillsRoot: string, skillDir: string): string {
+  const relativePath = path.relative(skillsRoot, skillDir);
   if (
     !relativePath ||
     relativePath === ".." ||
     path.isAbsolute(relativePath) ||
     relativePath.startsWith(`..${path.sep}`)
   ) {
-    throw new Error(`Skill directory must be inside the workspace: ${skillDir}`);
+    throw new Error(`Skill directory must be inside the Skill Workshop directory: ${skillDir}`);
   }
   return relativePath;
 }

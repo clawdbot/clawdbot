@@ -2,6 +2,7 @@ import { join } from "node:path";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { validateCronAddParams } from "../../packages/gateway-protocol/src/index.js";
 import { useAutoCleanupTempDirTracker } from "../../test/helpers/temp-dir.js";
+import { cronJobReadView } from "../cron/job-read-view.js";
 import { normalizeCronJobCreate } from "../cron/normalize.js";
 import {
   closeOpenClawStateDatabaseForTest,
@@ -9,6 +10,7 @@ import {
 } from "../state/openclaw-state-db.js";
 import {
   clawCronGatewayInput,
+  clawCronGatewayJobMatchesRef,
   deleteClawCronRef,
   installClawCronJobs,
   markClawCronRefRemoved,
@@ -69,13 +71,25 @@ function listedCronJob(
   if (!normalized) {
     throw new Error("expected normalized cron job");
   }
-  return {
+  return cronJobReadView({
     ...normalized,
     id,
     createdAtMs: 1,
     updatedAtMs: 1,
-    state: {},
-  };
+    state: {
+      nextRunAtMs: 100,
+      lastRunAtMs: 50,
+      lastStatus: "error",
+      lastError: "Synthetic run error",
+      lastDelivered: false,
+      lastDeliveryStatus: "not-delivered",
+      lastDeliveryError: "Synthetic delivery error",
+      deliverySuppressionReason: "channel_transform",
+      lastFailureNotificationDelivered: false,
+      lastFailureNotificationDeliveryStatus: "not-delivered",
+      lastFailureNotificationDeliveryError: "Synthetic notification error",
+    },
+  });
 }
 
 describe("installClawCronJobs", () => {
@@ -177,7 +191,45 @@ describe("installClawCronJobs", () => {
     ]);
   });
 
-  it("rejects a same-key scheduler job whose declaration drifted", async () => {
+  it("reconciles an unchanged completed job from a status-rich Gateway view", async () => {
+    const current = await fixture();
+    const refs = await installClawCronJobs(current.plan, {
+      env: current.env,
+      gateway: { add: async () => ({ id: "scheduler-123" }) },
+    });
+    const view = listedCronJob("worker-two", refs[0]!, "scheduler-123");
+    const before = structuredClone(view);
+    const add = vi.fn();
+
+    await expect(
+      installClawCronJobs(current.plan, {
+        env: current.env,
+        gateway: { add, list: async () => ({ jobs: [view] }) },
+      }),
+    ).resolves.toEqual(refs);
+    expect(add).not.toHaveBeenCalled();
+    expect(view).toEqual(before);
+    for (const invalid of [
+      null,
+      false,
+      "job",
+      {},
+      { ...view, state: undefined },
+      { ...view, id: undefined },
+      { ...view, schedule: undefined },
+      { ...view, payload: { kind: "invalid" } },
+    ]) {
+      expect(clawCronGatewayJobMatchesRef("worker-two", refs[0]!, invalid)).toBe(false);
+    }
+  });
+
+  it.each([
+    {
+      name: "message",
+      patch: { payload: { kind: "agentTurn", message: "Different declaration" } },
+    },
+    { name: "unknown definition field", patch: { operatorSetting: { mode: "changed" } } },
+  ])("rejects a same-key scheduler job with drifted $name", async ({ patch }) => {
     const current = await fixture();
     await installClawCronJobs(current.plan, {
       env: current.env,
@@ -185,7 +237,7 @@ describe("installClawCronJobs", () => {
     });
     const [ref] = readClawCronRefs("worker-two", { env: current.env });
     const drifted = listedCronJob("worker-two", ref!, "scheduler-123");
-    drifted.payload = { kind: "agentTurn", message: "Different declaration" };
+    Object.assign(drifted, patch);
     const add = vi.fn();
 
     await expect(

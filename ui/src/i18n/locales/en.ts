@@ -283,6 +283,7 @@ export const en: TranslationMap & {
     widgetLoading: "Loading session progress…",
     widgetEmpty: "No progress card yet",
     widgetUnavailable: "Session progress is unavailable.",
+    ownerUnsupported: "Update the Gateway to view progress for this session's agent.",
     widgetAccessDenied: "Select a session you can access or change sharing for this session.",
     countLabel: "{completed} of {total} completed",
     activity: {
@@ -3149,9 +3150,9 @@ export const en: TranslationMap & {
       progress: "{complete} of {total}",
     },
     toolSearch: {
-      title: "Tool Search",
+      title: "Tool Search for all models",
       description:
-        "Keep a bounded tool directory visible and defer the rest behind search, so large MCP and plugin catalogs stop crowding the prompt.",
+        "Local models use Tool Search automatically. Enable this override to defer tool schemas for all models; turning it off restores each model's default.",
     },
     loopDetection: {
       title: "Tool-loop detection",
@@ -3161,7 +3162,7 @@ export const en: TranslationMap & {
     localModelLean: {
       title: "Lean tools for local models",
       description:
-        "Drop heavyweight default tools that smaller local models handle poorly, leaving a shorter set they can use reliably.",
+        "Remove optional tools such as browser and automations. Leave this off to keep those capabilities available through Tool Search.",
     },
     cliAgents: {
       title: "CLI agents",

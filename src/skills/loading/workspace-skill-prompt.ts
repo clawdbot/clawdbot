@@ -39,7 +39,10 @@ function resolveWorkspaceSkillPromptState(
   const limits = opts?.config?.skills?.limits;
   const agentLimits = resolveEffectiveAgentSkillsLimits(opts?.config, opts?.agentId);
   const prepared = prepareSkillsForPrompt({
-    skills: compactPromptSkills(resolvedSkills),
+    skills: compactPromptSkills(resolvedSkills, {
+      config: opts?.config,
+      agentId: opts?.agentId,
+    }),
     maxSkillsInPrompt: limits?.maxSkillsInPrompt,
     maxSkillsPromptChars: agentLimits?.maxSkillsPromptChars ?? limits?.maxSkillsPromptChars,
     remoteNote,

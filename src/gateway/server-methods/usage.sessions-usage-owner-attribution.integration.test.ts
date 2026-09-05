@@ -57,9 +57,9 @@ it.each([undefined, "agent:opus:slack:dm", "global"])(
       }
 
       const projected = loadCombinedSessionStoreForGatewayCore(config);
-      expect(projected.agentIdBySessionKey.get(mainKey)).toBe("main");
+      expect(projected.targetsBySessionKey.get(mainKey)?.agentId).toBe("main");
       if (opusKey) {
-        expect(projected.agentIdBySessionKey.get(opusKey)).toBe("opus");
+        expect(projected.targetsBySessionKey.get(opusKey)?.agentId).toBe("opus");
       }
       const respond = vi.fn();
       await expectDefined(

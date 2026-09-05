@@ -947,24 +947,117 @@ describe("cron method validation", () => {
     expect(String(error?.message)).not.toContain("automation not found");
   });
 
-  it("scopes cron.list to the caller agent", async () => {
-    const context = createCronContext(createCronJob({ agentId: "ops" }));
+  it.each([
+    { kind: "at", at: "2030-01-02T03:04:05.000Z" },
+    { kind: "every", everyMs: 60_000, anchorMs: 1_700_000_000_000 },
+    { kind: "cron", expr: "15 9 * * 1-5", tz: "Europe/Vienna", staggerMs: 60_000 },
+  ] satisfies CronJob["schedule"][])(
+    "lists exact $kind schedules for disabled jobs within caller scope",
+    async (schedule) => {
+      const context = createCronContext([
+        createCronJob({ agentId: "ops", enabled: false, schedule }),
+        createCronJob({ id: "foreign-job", agentId: "other", name: "foreign-private-job" }),
+      ]);
 
-    const { respond } = await invokeCron(
-      "cron.list",
-      { includeDisabled: true, compact: true },
-      { context, client: callerClient("ops") },
-    );
+      const { respond } = await invokeCron(
+        "cron.list",
+        { includeDisabled: true, compact: true },
+        { context, client: callerClient("ops") },
+      );
 
-    expect(context.cron.listPage).toHaveBeenCalledWith(
-      expect.objectContaining({ includeDisabled: true, agentId: undefined }),
+      expect(context.cron.listPage).toHaveBeenCalledWith(
+        expect.objectContaining({ includeDisabled: true, agentId: undefined }),
+      );
+      expect(respond).toHaveBeenCalledWith(
+        true,
+        expect.objectContaining({
+          total: 1,
+          jobs: [
+            expect.objectContaining({
+              id: "cron-1",
+              enabled: false,
+              nextRunAtMs: null,
+              nextRunAt: null,
+              lastRunAtMs: null,
+              lastRunAt: null,
+              scheduleKind: schedule.kind,
+              schedule,
+            }),
+          ],
+        }),
+        undefined,
+      );
+      const payload = requireRecord(respond.mock.calls[0]?.[1], "compact cron.list payload");
+      expect(payload).not.toHaveProperty("deliveryPreviews");
+      const [job] = payload.jobs as Array<Record<string, unknown>>;
+      expect(job).not.toHaveProperty("payload");
+      expect(job).not.toHaveProperty("delivery");
+      expect(JSON.stringify(payload)).not.toContain("foreign-private-job");
+    },
+  );
+
+  it("lists readable run timestamps alongside their exact epoch values", async () => {
+    const context = createCronContext(
+      createCronJob({
+        state: { nextRunAtMs: 1_788_591_095_278, lastRunAtMs: 1_788_587_495_278 },
+      }),
     );
+    const { respond } = await invokeCron("cron.list", { compact: true }, { context });
+
     expect(respond).toHaveBeenCalledWith(
       true,
-      expect.objectContaining({ total: 1, jobs: expect.any(Array) }),
+      expect.objectContaining({
+        jobs: [
+          expect.objectContaining({
+            nextRunAtMs: 1_788_591_095_278,
+            nextRunAt: "2026-09-05T06:51:35.278Z",
+            lastRunAtMs: 1_788_587_495_278,
+            lastRunAt: "2026-09-05T05:51:35.278Z",
+          }),
+        ],
+      }),
       undefined,
     );
   });
+
+  it.each([
+    { kind: "on-exit", command: "fixture-watcher-command", cwd: "/fixture/private-watcher" },
+    {
+      kind: "stream",
+      command: ["fixture-watcher-command"],
+      cwd: "/fixture/private-watcher",
+      mode: "match",
+      match: "fixture-private-match",
+    },
+  ] satisfies CronJob["schedule"][])(
+    "keeps $kind watcher details out of operator compact lists",
+    async (schedule) => {
+      const context = createCronContext(
+        createCronJob({
+          schedule,
+          payload: { kind: "agentTurn", message: "fixture-private-payload" },
+          delivery: { mode: "webhook", to: "https://fixture-private-delivery.invalid" },
+        }),
+      );
+      const { respond } = await invokeCron("cron.list", { compact: true }, { context });
+      const payload = requireRecord(respond.mock.calls[0]?.[1], "compact cron.list payload");
+      const [job] = payload.jobs as Array<Record<string, unknown>>;
+      expect(job).toMatchObject({ id: "cron-1", scheduleKind: schedule.kind });
+      for (const field of ["schedule", "command", "cwd", "payload", "delivery"]) {
+        expect(job).not.toHaveProperty(field);
+      }
+      expect(payload).not.toHaveProperty("deliveryPreviews");
+      for (const value of [
+        "fixture-watcher-command",
+        "/fixture/private-watcher",
+        "fixture-private-match",
+        "fixture-private-payload",
+        "fixture-private-delivery.invalid",
+      ]) {
+        expect(JSON.stringify(payload)).not.toContain(value);
+      }
+    },
+  );
 
   it("filters operator command cron jobs from caller-scoped cron.list", async () => {
     const context = createCronContext([

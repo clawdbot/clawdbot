@@ -37,7 +37,7 @@ function contextFor(resolution: SessionsResolveResult = { ok: false }, mainKey =
       subscribeEvents: vi.fn(() => () => undefined),
     },
     agents: { state: { agentsList: { mainKey } } },
-    sessions: { list },
+    sessions: { list, state: { result: null } },
   } as unknown as ApplicationContext;
   return { context, list, request };
 }
@@ -68,6 +68,7 @@ describe("loadChatRoute", () => {
     expect(redirected).toEqual({
       kind: "session",
       sessionKey,
+      agentId: "main",
       draft: "ship",
       face: "chat",
       canonicalLocation: {
@@ -89,9 +90,15 @@ describe("loadChatRoute", () => {
         "chat",
         signal,
       ),
-    ).resolves.toEqual({ kind: "session", sessionKey, draft: "ship", face: "chat" });
+    ).resolves.toEqual({
+      kind: "session",
+      sessionKey,
+      agentId: "main",
+      draft: "ship",
+      face: "chat",
+    });
     expect(list).not.toHaveBeenCalled();
-    expect(request).toHaveBeenCalledTimes(2);
+    expect(request).toHaveBeenCalledOnce();
   });
 
   it("round-trips literal channel, peer, and cron keys without searching", async () => {
@@ -131,6 +138,7 @@ describe("loadChatRoute", () => {
     ).resolves.toEqual({
       kind: "session",
       sessionKey: target.key,
+      agentId: "main",
       draft: undefined,
       face: "chat",
       shortId: "123456780a",
@@ -199,6 +207,7 @@ describe("loadChatRoute", () => {
       ).resolves.toEqual({
         kind: "session",
         sessionKey: expectedRow?.key,
+        agentId: candidate.agentId,
         draft: "ship",
         focusComposer: true,
         face: "dashboard",

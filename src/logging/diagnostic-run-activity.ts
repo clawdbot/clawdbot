@@ -35,6 +35,7 @@ import {
   shouldIgnoreRecoveredOwnerStartEvent,
 } from "./diagnostic-run-activity-recovery.js";
 import {
+  BLOCKED_TOOL_CALL_ABORT_FLOOR_MS,
   buildDiagnosticSessionActivitySnapshot,
   type DiagnosticSessionActivitySnapshot,
 } from "./diagnostic-run-activity-snapshot.js";
@@ -195,8 +196,13 @@ export function beginDiagnosticBackendActivity(params: {
   owner: DiagnosticEmbeddedRunOwner;
   noOutputTimeoutMs: number;
   assertCurrent: () => void;
-}): { observeOutput: (modelProgress: boolean) => boolean; close: () => void } {
+}): {
+  observeOutput: (modelProgress: boolean) => boolean;
+  setOutstandingWork: (active: boolean) => void;
+  close: () => void;
+} {
   const { owner, noOutputTimeoutMs, assertCurrent } = params;
+  let quietAllowanceMs = noOutputTimeoutMs;
   const registration = resolveCurrentDiagnosticOwner(owner, assertCurrent);
   const backendActivity: DiagnosticBackendActivity = {
     deadlineAtMs: Date.now() + noOutputTimeoutMs,
@@ -205,19 +211,34 @@ export function beginDiagnosticBackendActivity(params: {
   if (registration) {
     registration.backendActivity = backendActivity;
   }
+  const currentActivity = () => {
+    const current = resolveCurrentDiagnosticOwner(owner, assertCurrent);
+    return current?.backendActivity === backendActivity ? current.activity : undefined;
+  };
   return {
     observeOutput: (modelProgress) => {
-      const current = resolveCurrentDiagnosticOwner(owner, assertCurrent);
-      if (!current || current.backendActivity !== backendActivity) {
+      const activity = currentActivity();
+      if (!activity) {
         return false;
       }
       const now = Date.now();
-      backendActivity.deadlineAtMs = now + noOutputTimeoutMs;
-      if (!modelProgress || current.activity.activeTools.size > 0) {
+      backendActivity.deadlineAtMs = now + quietAllowanceMs;
+      if (!modelProgress || activity.activeTools.size > 0) {
         return false;
       }
-      touchSessionActivity(current.activity, "model_call:stream_progress", now);
+      touchSessionActivity(activity, "model_call:stream_progress", now);
       return true;
+    },
+    setOutstandingWork: (active) => {
+      if (!currentActivity()) {
+        return;
+      }
+      const allowanceMs = active
+        ? Math.max(noOutputTimeoutMs, BLOCKED_TOOL_CALL_ABORT_FLOOR_MS)
+        : noOutputTimeoutMs;
+      // Work-state changes preserve the last output's origin, not a new progress clock.
+      backendActivity.deadlineAtMs += allowanceMs - quietAllowanceMs;
+      quietAllowanceMs = allowanceMs;
     },
     close: () => {
       // Compare-release remains valid after abort and cannot retire a later attempt.

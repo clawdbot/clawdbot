@@ -1,6 +1,8 @@
 /* @vitest-environment jsdom */
 /* @vitest-environment-options {"url":"https://gateway.example/"} */
 
+import { webcrypto } from "node:crypto";
+import type { ConnectParams } from "@openclaw/gateway-client/browser";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { ConnectErrorDetailCodes } from "../../../packages/gateway-protocol/src/connect-error-details.js";
 import { createDeferred } from "../../../test/helpers/promise.js";
@@ -8,7 +10,8 @@ import { createStorageMock } from "../test-helpers/storage.ts";
 import { bootstrapApplication, type ApplicationRuntime } from "./bootstrap.ts";
 import { createGatewayStoreTestStore } from "./gateway-store.test-support.ts";
 import * as gatewayStore from "./gateway-store.ts";
-import { loadSettings, persistSessionToken } from "./settings.ts";
+import { loadSettings, loadUiPreferences, patchSettings, persistSessionToken } from "./settings.ts";
+import * as staleChunkReload from "./stale-chunk-reload.ts";
 
 const NATIVE_AUTH_KEY = "__OPENCLAW_NATIVE_CONTROL_AUTH__";
 const originalUrl = window.location.href;
@@ -33,6 +36,142 @@ afterEach(() => {
 });
 
 describe("pending Gateway credentials", () => {
+  it.each([
+    { decision: "confirm", queryGatewayUrl: "" },
+    { decision: "cancel", queryGatewayUrl: "" },
+    { decision: "confirm", queryGatewayUrl: "wss://query-gateway.example" },
+  ] as const)(
+    "binds a reloaded bootstrap after another tab selects a remote ($decision, query: $queryGatewayUrl)",
+    async ({ decision, queryGatewayUrl }) => {
+      const sockets: RecordingWebSocket[] = [];
+      class RecordingWebSocket extends EventTarget {
+        static OPEN = 1;
+        readyState = 0;
+        sent: Array<{ id: string; method: string; params: ConnectParams }> = [];
+
+        constructor(readonly url: string) {
+          super();
+          sockets.push(this);
+        }
+
+        send(data: string) {
+          this.sent.push(JSON.parse(data));
+        }
+
+        close(code = 1000, reason = "") {
+          this.readyState = 3;
+          this.dispatchEvent(new CloseEvent("close", { code, reason }));
+        }
+
+        deliver(frame: unknown) {
+          this.dispatchEvent(new MessageEvent("message", { data: JSON.stringify(frame) }));
+        }
+
+        async connectFrame() {
+          this.readyState = RecordingWebSocket.OPEN;
+          this.dispatchEvent(new Event("open"));
+          this.deliver({
+            type: "event",
+            event: "connect.challenge",
+            payload: { nonce: "synthetic-challenge", ts: Date.now() },
+          });
+          await vi.waitFor(() => expect(this.sent).toHaveLength(1));
+          expect(this.sent[0]?.method).toBe("connect");
+          return this.sent[0]!;
+        }
+      }
+      vi.stubGlobal("WebSocket", RecordingWebSocket);
+      vi.stubGlobal("crypto", webcrypto);
+      const bootstrapToken = "synthetic-bound-bootstrap";
+      const originalGatewayUrl = "wss://gateway.example";
+      const remoteGatewayUrl = "wss://other-gateway.example/openclaw";
+      window.history.replaceState(
+        {},
+        "",
+        `/settings/appearance#bootstrapToken=${bootstrapToken}&bootstrapProfile=owner`,
+      );
+      const probe = createDeferred<Response>();
+      const fetchMock = vi.fn<typeof fetch>(() => probe.promise);
+      vi.stubGlobal("fetch", fetchMock);
+      const reload = vi
+        .spyOn(staleChunkReload, "reloadControlUiDocument")
+        .mockImplementation(() => {});
+      const startDocument = async () => {
+        runtime = bootstrapApplication();
+        vi.spyOn(runtime.router, "start").mockResolvedValue(undefined);
+        await runtime.start();
+        return sockets.at(-1)!;
+      };
+      const originalSocket = await startDocument();
+      const firstConnect = await originalSocket.connectFrame();
+      expect(originalSocket.url).toBe(originalGatewayUrl);
+      expect(firstConnect.params.auth?.bootstrapToken).toBe(bootstrapToken);
+      if (queryGatewayUrl) {
+        window.history.replaceState(
+          {},
+          "",
+          `/settings/appearance?gatewayUrl=${encodeURIComponent(queryGatewayUrl)}`,
+        );
+      }
+      originalSocket.deliver({
+        type: "res",
+        id: firstConnect.id,
+        ok: false,
+        error: {
+          code: "UNAVAILABLE",
+          message: "protocol mismatch: Control UI updated; reload this page to continue",
+          details: {
+            code: ConnectErrorDetailCodes.PROTOCOL_MISMATCH,
+            gatewayBuildId: "replacement-build",
+            reloadRequired: true,
+          },
+        },
+      });
+      await vi.waitFor(() => expect(fetchMock).toHaveBeenCalledOnce());
+
+      // Another tab's selection persists without retargeting this mounted connection.
+      patchSettings({ gatewayUrl: remoteGatewayUrl });
+      expect(loadUiPreferences().gatewayUrl).toBe(remoteGatewayUrl);
+      expect(runtime!.context.gateway.connection.gatewayUrl).toBe(originalGatewayUrl);
+      probe.resolve(new Response(null, { status: 200 }));
+      await vi.waitFor(() => expect(reload).toHaveBeenCalledOnce());
+      const destination = reload.mock.calls[0]![0]!;
+      runtime!.stop();
+      window.history.replaceState({}, "", destination);
+
+      const remoteSocket = await startDocument();
+      const remoteConnect = await remoteSocket.connectFrame();
+      expect(remoteSocket.url).toBe(remoteGatewayUrl);
+      expect(remoteConnect.params.auth?.bootstrapToken).toBeUndefined();
+      expect(runtime!.pendingGatewayConnection?.gatewayUrl).toBe(originalGatewayUrl);
+      expect(loadUiPreferences().gatewayUrl).toBe(remoteGatewayUrl);
+      expect(window.location.hash).toBe("");
+
+      if (decision === "confirm") {
+        runtime!.confirmPendingGatewayConnection();
+        const confirmedSocket = sockets.at(-1)!;
+        const confirmedConnect = await confirmedSocket.connectFrame();
+        expect(confirmedSocket.url).toBe(originalGatewayUrl);
+        expect(confirmedConnect.params.auth?.bootstrapToken).toBe(bootstrapToken);
+        expect(confirmedConnect.params.scopes).toContain("operator.admin");
+        expect(loadUiPreferences().gatewayUrl).toBe(originalGatewayUrl);
+      } else {
+        runtime!.cancelPendingGatewayConnection();
+        runtime!.confirmPendingGatewayConnection();
+        expect(sockets).toHaveLength(2);
+        expect(remoteSocket.sent).toEqual([remoteConnect]);
+        expect(runtime!.context.gateway.connection.gatewayUrl).toBe(remoteGatewayUrl);
+        expect(loadUiPreferences().gatewayUrl).toBe(remoteGatewayUrl);
+      }
+      expect(runtime!.pendingGatewayConnection).toBeNull();
+      for (const storage of [localStorage, sessionStorage]) {
+        for (let index = 0; index < storage.length; index++) {
+          expect(storage.getItem(storage.key(index)!)).not.toContain(bootstrapToken);
+        }
+      }
+    },
+  );
+
   it.each([
     {
       name: "an initial missing token",

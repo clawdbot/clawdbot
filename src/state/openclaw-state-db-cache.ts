@@ -14,8 +14,10 @@ import { createOpenClawDatabaseVerificationError } from "./openclaw-state-db-mai
 import { assertSupportedStateSchemaVersion } from "./openclaw-state-db-schema-version.js";
 
 const cachedDatabases = new Map<string, OpenClawStateDatabase>();
+// Statements retain their native database; key by the plain lifecycle owner so
+// removing that owner releases the statement instead of rooting its own weak key.
 const cachedDataVersionStatements = new WeakMap<
-  DatabaseSync,
+  OpenClawStateDatabase,
   ReturnType<DatabaseSync["prepare"]>
 >();
 const cachedDataVersions = new WeakMap<DatabaseSync, number>();
@@ -31,10 +33,10 @@ function notifyOpenClawStateDatabaseLifecycle(event: OpenClawStateDatabaseLifecy
   }
 }
 
-function readSqliteDataVersion(database: DatabaseSync): number {
+function readSqliteDataVersion(database: OpenClawStateDatabase): number {
   let statement = cachedDataVersionStatements.get(database);
   if (!statement) {
-    statement = database /* sqlite-allow-raw -- Connection-local schema compatibility counter. */
+    statement = database.db /* sqlite-allow-raw -- Connection-local schema compatibility counter. */
       .prepare("PRAGMA data_version");
     cachedDataVersionStatements.set(database, statement);
   }
@@ -114,7 +116,7 @@ const terminalOpenLatch = createSqliteTerminalOpenLatch({
 /** Publish a fully opened handle and bind query corruption to its exact cache owner. */
 function publishOpenClawStateDatabase(database: OpenClawStateDatabase): OpenClawStateDatabase {
   const { db, path: pathname } = database;
-  cachedDataVersions.set(db, readSqliteDataVersion(db));
+  cachedDataVersions.set(db, readSqliteDataVersion(database));
   cachedDatabases.set(pathname, database);
   notifyOpenClawStateDatabaseLifecycle({ kind: "opened", database });
   registerNodeSqliteKyselyQueryErrorHandler(db, (error) => {
@@ -139,7 +141,7 @@ function getOpenClawStateDatabaseRuntimeFailure(pathname: string): Error | undef
     return undefined;
   }
   try {
-    const dataVersion = readSqliteDataVersion(cached.db);
+    const dataVersion = readSqliteDataVersion(cached);
     if (cachedDataVersions.get(cached.db) === dataVersion) {
       return undefined;
     }

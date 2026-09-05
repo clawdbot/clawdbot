@@ -12,7 +12,10 @@ import {
   assertSkillReviewRunSucceeded,
 } from "./review-outcome.js";
 import { runSkillWorkshopReview } from "./review-run.js";
-import type { SkillWorkshopProposalReviewProgress } from "./types.js";
+import type {
+  SkillWorkshopProposalReviewCompletion,
+  SkillWorkshopProposalReviewProgress,
+} from "./types.js";
 
 export const HISTORY_SCAN_SESSION_SEGMENT = "skill-workshop-history-scan";
 const HISTORY_SCAN_TIMEOUT_MS = 10 * 60_000;
@@ -36,26 +39,26 @@ export async function runSkillHistoryScanReview(params: {
     params.modelRef ?? resolveDefaultModelForAgent({ cfg: params.config, agentId: params.agentId });
   const proposalMutationBudget = {
     remaining: params.progress?.remaining ?? HISTORY_SCAN_MAX_PROPOSAL_MUTATIONS,
-    completed: params.progress?.proposalIds.length ?? 0,
     successfulMutations: params.progress?.successfulMutations ?? 0,
     failedMutations: 0,
     mutatedProposalIds: new Set(params.progress?.proposalIds),
   };
-  const proposalReviewCompletion = params.onComplete
-    ? {
-        completed: false,
-        complete: async () => {
-          const ideasFound = resolveSkillHistoryScanReviewOutcome({
-            ideasFound: proposalMutationBudget.completed,
-            proposalMutationBudgetRemaining: proposalMutationBudget.remaining,
-            successfulMutations: proposalMutationBudget.successfulMutations,
-            failedMutations: proposalMutationBudget.failedMutations,
-          });
-          await params.onComplete?.(ideasFound);
-        },
-        recordProgress: params.onProgress,
-      }
-    : undefined;
+  const proposalReviewCompletion: SkillWorkshopProposalReviewCompletion | undefined =
+    params.onComplete
+      ? {
+          phase: "open",
+          complete: async () => {
+            const ideasFound = resolveSkillHistoryScanReviewOutcome({
+              ideasFound: proposalMutationBudget.mutatedProposalIds.size,
+              proposalMutationBudgetRemaining: proposalMutationBudget.remaining,
+              successfulMutations: proposalMutationBudget.successfulMutations,
+              failedMutations: proposalMutationBudget.failedMutations,
+            });
+            await params.onComplete?.(ideasFound);
+          },
+          recordProgress: params.onProgress,
+        }
+      : undefined;
   const runId = params.runId ?? `${HISTORY_SCAN_SESSION_SEGMENT}:${randomUUID()}`;
   let runError: unknown;
   try {
@@ -92,11 +95,11 @@ export async function runSkillHistoryScanReview(params: {
   } catch (error) {
     runError = error;
   }
-  if (proposalReviewCompletion?.completed) {
-    return proposalMutationBudget.completed;
+  if (proposalReviewCompletion?.phase === "completed") {
+    return proposalMutationBudget.mutatedProposalIds.size;
   }
   return resolveSkillHistoryScanReviewOutcome({
-    ideasFound: proposalMutationBudget.completed,
+    ideasFound: proposalMutationBudget.mutatedProposalIds.size,
     proposalMutationBudgetRemaining: proposalMutationBudget.remaining,
     successfulMutations: proposalMutationBudget.successfulMutations,
     failedMutations: proposalMutationBudget.failedMutations,

@@ -1,7 +1,6 @@
 import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import { sha256Hex } from "../../infra/crypto-digest.js";
-import { buildWorkspaceSkillStatus, resolveSkillStatusEntry } from "../discovery/status.js";
 import {
   readWorkspaceSkillFile,
   readWorkspaceSupportFile,
@@ -29,10 +28,10 @@ import {
   type SkillProposalSupportFile,
   type SkillProposalUpdateInput,
 } from "./types.js";
-import { assertWritableSkillTarget } from "./workspace-skill-read.js";
+import { readWritableWorkshopSkill } from "./workspace-skill-read.js";
 
 type SkillWorkshopWorkspaceOptions = {
-  config?: OpenClawConfig;
+  config: OpenClawConfig;
   agentId?: string;
 };
 
@@ -93,7 +92,13 @@ export async function proposeCreateSkill(
   const name = normalizeRequired(input.name, "Skill name");
   const description = normalizeRequired(input.description, "Skill description");
   const config = resolveSkillWorkshopConfig(input.config);
-  const target = resolveSkillProposalTarget({ workspaceDir: input.workspaceDir, skillName: name });
+  const agentId = requireWorkshopAgentId(input.agentId);
+  const target = resolveSkillProposalTarget({
+    skillName: name,
+    config: input.config,
+    agentId,
+    ...(input.env ? { env: input.env } : {}),
+  });
   if ((await readWorkspaceSkillFile(target.skillFile)) !== null) {
     throw new Error(`Skill already exists at ${target.skillFile}.`);
   }
@@ -148,7 +153,7 @@ export async function proposeCreateSkill(
       skillKey: target.skillKey,
       skillDir: target.skillDir,
       skillFile: target.skillFile,
-      source: "openclaw-workspace",
+      source: "openclaw-workshop",
     },
     scan,
     ...(supportFiles.length > 0
@@ -161,15 +166,14 @@ export async function proposeCreateSkill(
     record,
     content: proposalContent,
     supportFiles,
-    workspaceDir: input.workspaceDir,
-    ownerAgentId: input.agentId,
+    ownerAgentId: agentId,
     maxPending: config.maxPending,
     event: createSkillProposalEvent({
       record,
       type: "created",
       actor: input.eventActor,
     }),
-    store: proposalStoreOptions(input.env),
+    store: { ...proposalStoreOptions(input.env), agentId },
   });
   await dispatchSkillProposalChanged({
     event,
@@ -180,7 +184,6 @@ export async function proposeCreateSkill(
   return { record, revisionHash: hashSkillProposalRevision(record), content: proposalContent };
 }
 
-/** Applies a reviewer patch to the live body: unique-match replace, or append when oldString is empty. */
 export function composeSkillBodyPatch(
   body: string,
   patch: { oldString: string; newString: string },
@@ -195,7 +198,6 @@ export function composeSkillBodyPatch(
   return `${body.slice(0, start)}${patch.newString}${body.slice(end)}`;
 }
 
-/** Resolves the one exact live-body span that a targeted patch may replace. */
 export function findUniqueSkillPatchSpan(
   body: string,
   oldString: string,
@@ -219,19 +221,13 @@ export async function proposeUpdateSkill(
 ): Promise<SkillProposalReadResult> {
   const skillName = normalizeRequired(input.skillName, "Skill name");
   const config = resolveSkillWorkshopConfig(input.config);
-  const status = buildWorkspaceSkillStatus(input.workspaceDir, {
+  const agentId = requireWorkshopAgentId(input.agentId);
+  const target = await readWritableWorkshopSkill(skillName, {
     config: input.config,
-    agentId: input.agentId,
+    agentId,
+    env: input.env,
   });
-  const targetSkill = resolveSkillStatusEntry(status.skills, skillName);
-  if (!targetSkill) {
-    throw new Error(`Skill not found: ${skillName}`);
-  }
-  assertWritableSkillTarget(input.workspaceDir, targetSkill);
-  const currentContent = await readWorkspaceSkillFile(targetSkill.filePath);
-  if (currentContent === null) {
-    throw new Error(`Skill file is missing: ${targetSkill.filePath}`);
-  }
+  const currentContent = target.content;
   if (
     input.expectedCurrentContentHash !== undefined &&
     sha256Hex(currentContent) !== input.expectedCurrentContentHash
@@ -249,11 +245,11 @@ export async function proposeUpdateSkill(
   if (draftContent === undefined) {
     throw new Error("Update proposal requires content or composePatch.");
   }
-  const description = resolveUpdateProposalDescription(input.description, targetSkill.description);
+  const description = resolveUpdateProposalDescription(input.description, target.description);
 
   const now = new Date().toISOString();
   const prepared = prepareSkillProposalDraft({
-    name: targetSkill.name,
+    name: target.skillName,
     description,
     content: draftContent,
     fallbackFrontmatterContent: currentContent,
@@ -274,7 +270,7 @@ export async function proposeUpdateSkill(
     scan,
     supportFiles,
   } = prepared.value;
-  const id = createSkillProposalId(targetSkill.skillKey || targetSkill.name);
+  const id = createSkillProposalId(target.skillKey);
   const origin = normalizeProposalOrigin({
     ...input.origin,
     agentId: input.origin?.agentId ?? input.agentId,
@@ -285,7 +281,7 @@ export async function proposeUpdateSkill(
     id,
     kind: "update",
     status: "pending",
-    title: `Update ${targetSkill.name}`,
+    title: `Update ${target.skillName}`,
     description,
     createdAt: now,
     updatedAt: now,
@@ -297,16 +293,16 @@ export async function proposeUpdateSkill(
     draftFile: createSkillProposalGenerationDraftFile(),
     draftHash,
     target: {
-      skillName: targetSkill.name,
-      skillKey: targetSkill.skillKey,
-      skillDir: targetSkill.baseDir,
-      skillFile: targetSkill.filePath,
-      source: targetSkill.source,
+      skillName: target.skillName,
+      skillKey: target.skillKey,
+      skillDir: target.baseDir,
+      skillFile: target.skillFile,
+      source: "openclaw-workshop",
       currentContentHash: hashSkillProposalContent(currentContent),
     },
     scan,
     ...(supportFiles.length > 0
-      ? { supportFiles: await buildSupportFileMetadata(supportFiles, targetSkill.baseDir) }
+      ? { supportFiles: await buildSupportFileMetadata(supportFiles, target.baseDir) }
       : {}),
     ...(goal ? { goal } : {}),
     ...(evidence ? { evidence } : {}),
@@ -315,15 +311,14 @@ export async function proposeUpdateSkill(
     record,
     content: proposalContent,
     supportFiles,
-    workspaceDir: input.workspaceDir,
-    ownerAgentId: input.agentId ?? origin?.agentId,
+    ownerAgentId: agentId,
     maxPending: config.maxPending,
     event: createSkillProposalEvent({
       record,
       type: "created",
       actor: input.eventActor,
     }),
-    store: proposalStoreOptions(input.env),
+    store: { ...proposalStoreOptions(input.env), agentId },
   });
   await dispatchSkillProposalChanged({
     event,
@@ -332,6 +327,13 @@ export async function proposeUpdateSkill(
     ...(input.agentId ? { agentId: input.agentId } : {}),
   });
   return { record, revisionHash: hashSkillProposalRevision(record), content: proposalContent };
+}
+
+function requireWorkshopAgentId(agentId: string | undefined): string {
+  if (!agentId) {
+    throw new Error("Skill Workshop requires the active agent id.");
+  }
+  return agentId;
 }
 
 export async function buildSupportFileMetadata(

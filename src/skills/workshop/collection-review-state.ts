@@ -19,11 +19,12 @@ import type { SkillCollectionReconcileResult } from "./collection-contracts.js";
 import {
   databaseOptions,
   ensureSkillWorkshopSchema,
+  openSkillWorkshopStore,
   type SkillWorkshopStoreOptions,
 } from "./store-sqlite-schema.js";
 
 const REVIEW_CLAIM_MS = 11 * 60_000;
-// Bound per-workspace history so unattended weekly maintenance cannot grow state forever.
+// Bound history so unattended weekly maintenance cannot grow state forever.
 const SKILL_COLLECTION_REVIEW_RETENTION_COUNT = 90;
 const SKILL_COLLECTION_REVIEW_HISTORY_LIMIT = 20;
 type CollectionReviewDatabase = Pick<OpenClawStateDatabase, "skill_workshop_collection_reviews">;
@@ -56,19 +57,19 @@ export type SkillExperienceReviewStatus = {
   usage?: { inputTokens: number; cachedInputTokens: number; outputTokens: number };
 };
 
-function workspaceKey(workspaceDir: string): string {
-  return sha256Hex(path.resolve(workspaceDir));
+function experienceReviewKey(agentId: string, workspaceDir: string): string {
+  return sha256Hex(`${agentId}\0${path.resolve(workspaceDir)}`);
 }
 
 export async function withSkillCollectionReviewClaim<T>(
-  workspaceDir: string,
+  agentId: string,
   run: () => Promise<T>,
   options: OpenClawStateDatabaseOptions = {},
 ): Promise<T> {
   return await withOpenClawStateLease(
     {
       scope: "skill-collection-review",
-      key: workspaceKey(workspaceDir),
+      key: agentId,
       database: { scope: "shared", options },
       leaseMs: REVIEW_CLAIM_MS,
       waitMs: 0,
@@ -80,7 +81,7 @@ export async function withSkillCollectionReviewClaim<T>(
 }
 
 function reviewMap<T>(state: Record<string, unknown>, field: string): Record<string, T> {
-  // SAFETY: cache-class state is written only by recordWorkspaceReview below.
+  // SAFETY: cache-class state is written only by recordReviewEntry below.
   return (asNullableRecord(state[field]) ?? {}) as Record<string, T>;
 }
 
@@ -101,7 +102,7 @@ export function readSkillReviewOutcomes(options: OpenClawStateDatabaseOptions = 
 }
 
 export function recordSkillCollectionReviewStatus(
-  workspaceDir: string,
+  agentId: string,
   review: { attemptedAtMs: number; succeededAtMs?: number; error?: unknown },
   options: OpenClawStateDatabaseOptions = {},
 ): void {
@@ -115,33 +116,33 @@ export function recordSkillCollectionReviewStatus(
           attemptedAtMs: review.attemptedAtMs,
           ...(review.succeededAtMs !== undefined ? { succeededAtMs: review.succeededAtMs } : {}),
         };
-  recordWorkspaceReview(
-    "collectionReviews",
-    workspaceDir,
-    status,
-    {
-      lastAttemptAtMs: status.attemptedAtMs,
-      ...(status.succeededAtMs !== undefined ? { lastSuccessAtMs: status.succeededAtMs } : {}),
-      lastError: status.error ?? null,
-    },
-    options,
-  );
+  recordReviewEntry("collectionReviews", agentId, status, options, {
+    lastAttemptAtMs: status.attemptedAtMs,
+    ...(status.succeededAtMs !== undefined ? { lastSuccessAtMs: status.succeededAtMs } : {}),
+    lastError: status.error ?? null,
+  });
 }
 
 export function recordSkillExperienceReviewOutcome(
+  agentId: string,
   workspaceDir: string,
   review: SkillExperienceReviewStatus,
   options: OpenClawStateDatabaseOptions = {},
 ): void {
-  recordWorkspaceReview("experienceReviews", workspaceDir, review, {}, options);
+  recordReviewEntry(
+    "experienceReviews",
+    experienceReviewKey(agentId, workspaceDir),
+    review,
+    options,
+  );
 }
 
-function recordWorkspaceReview(
+function recordReviewEntry(
   field: "collectionReviews" | "experienceReviews",
-  workspaceDir: string,
+  entryKey: string,
   review: SkillCollectionReviewStatus | SkillExperienceReviewStatus,
-  columns: Partial<Omit<SkillCuratorState, "lastResult">>,
   options: OpenClawStateDatabaseOptions,
+  summary: Partial<Omit<SkillCuratorState, "lastResult">> = {},
 ): void {
   updateConfigMachineState<SkillCuratorState>(
     "skills.curatorState",
@@ -152,12 +153,12 @@ function recordWorkspaceReview(
         lastSuccessAtMs: null,
         lastError: null,
         ...current,
-        ...columns,
+        ...summary,
         lastResult: {
           ...state,
           [field]: {
             ...asNullableRecord(state[field]),
-            [workspaceKey(workspaceDir)]: review,
+            [entryKey]: review,
           },
         },
       };
@@ -191,8 +192,27 @@ function parseStoredDrops(value: string): SkillCollectionReconcileResult["droppe
   });
 }
 
+export function readSkillCollectionBackupDrops(
+  agentId: string,
+  backupId: string,
+  options: SkillWorkshopStoreOptions = {},
+): Set<string> {
+  const { database, kysely } = openSkillWorkshopStore(options);
+  const rows = executeSqliteQuerySync(
+    database.db,
+    kysely
+      .selectFrom("skill_workshop_collection_reviews")
+      .select("dropped_json")
+      .where("owner_agent_id", "=", agentId)
+      .where("backup_id", "=", backupId),
+  ).rows;
+  return new Set(
+    rows.flatMap((row) => parseStoredDrops(row.dropped_json).map((drop) => drop.name)),
+  );
+}
+
 export function listSkillCollectionReviewOutcomes(
-  workspaceDir: string,
+  agentId: string,
   options: SkillWorkshopStoreOptions = {},
 ): SkillCollectionReviewOutcome[] {
   ensureSkillWorkshopSchema(options);
@@ -203,7 +223,7 @@ export function listSkillCollectionReviewOutcomes(
     kysely
       .selectFrom("skill_workshop_collection_reviews")
       .select(["backup_id", "create_time", "kept_names_json", "written_names_json", "dropped_json"])
-      .where("workspace_dir", "=", path.resolve(workspaceDir))
+      .where("owner_agent_id", "=", agentId)
       .orderBy("create_time", "desc")
       .orderBy("review_id", "desc")
       .limit(SKILL_COLLECTION_REVIEW_HISTORY_LIMIT),
@@ -217,7 +237,7 @@ export function listSkillCollectionReviewOutcomes(
 }
 
 export function recordSkillCollectionReviewHistory(
-  workspaceDir: string,
+  agentId: string,
   nowMs: number,
   result: SkillCollectionReconcileResult,
   options: SkillWorkshopStoreOptions = {},
@@ -225,12 +245,11 @@ export function recordSkillCollectionReviewHistory(
   ensureSkillWorkshopSchema(options);
   runOpenClawStateWriteTransaction(({ db }) => {
     const kysely = getNodeSqliteKysely<CollectionReviewDatabase>(db);
-    const resolvedWorkspaceDir = path.resolve(workspaceDir);
     executeSqliteQuerySync(
       db,
       kysely.insertInto("skill_workshop_collection_reviews").values({
         review_id: randomUUID(),
-        workspace_dir: resolvedWorkspaceDir,
+        owner_agent_id: agentId,
         backup_id: result.backupId,
         create_time: nowMs,
         kept_names_json: JSON.stringify(result.kept),
@@ -241,7 +260,7 @@ export function recordSkillCollectionReviewHistory(
     const retainedReviewIds = kysely
       .selectFrom("skill_workshop_collection_reviews")
       .select("review_id")
-      .where("workspace_dir", "=", resolvedWorkspaceDir)
+      .where("owner_agent_id", "=", agentId)
       .orderBy("create_time", "desc")
       .orderBy("review_id", "desc")
       .limit(SKILL_COLLECTION_REVIEW_RETENTION_COUNT);
@@ -249,7 +268,7 @@ export function recordSkillCollectionReviewHistory(
       db,
       kysely
         .deleteFrom("skill_workshop_collection_reviews")
-        .where("workspace_dir", "=", resolvedWorkspaceDir)
+        .where("owner_agent_id", "=", agentId)
         .where("review_id", "not in", retainedReviewIds),
     );
   }, databaseOptions(options));

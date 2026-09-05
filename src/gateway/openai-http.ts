@@ -336,24 +336,6 @@ function writeAssistantFinishChunk(
   });
 }
 
-function splitArgumentsForStreaming(argumentsValue: string): string[] {
-  if (!argumentsValue) {
-    return [""];
-  }
-  const chunkSize = 256;
-  const chunks: string[] = [];
-  for (let start = 0; start < argumentsValue.length;) {
-    const end = avoidTrailingHighSurrogateBreak(
-      argumentsValue,
-      start,
-      Math.min(start + chunkSize, argumentsValue.length),
-    );
-    chunks.push(argumentsValue.slice(start, end));
-    start = end;
-  }
-  return chunks.length > 0 ? chunks : [""];
-}
-
 function writeAssistantToolCallsIncrementalChunks(
   res: ServerResponse,
   params: ChatCompletionStreamIdentity & {
@@ -380,7 +362,14 @@ function writeAssistantToolCallsIncrementalChunks(
       ],
     });
 
-    for (const argsDelta of splitArgumentsForStreaming(call.arguments)) {
+    // Empty arguments still produce a delta after the tool identity frame.
+    let start = 0;
+    do {
+      const end = avoidTrailingHighSurrogateBreak(
+        call.arguments,
+        start,
+        Math.min(start + 256, call.arguments.length),
+      );
       writeChatCompletionChunk(res, params, {
         choices: [
           {
@@ -389,7 +378,7 @@ function writeAssistantToolCallsIncrementalChunks(
               tool_calls: [
                 {
                   index,
-                  function: { arguments: argsDelta },
+                  function: { arguments: call.arguments.slice(start, end) },
                 },
               ],
             },
@@ -397,7 +386,8 @@ function writeAssistantToolCallsIncrementalChunks(
           },
         ],
       });
-    }
+      start = end;
+    } while (start < call.arguments.length);
   }
 }
 
@@ -718,18 +708,6 @@ function buildAgentPrompt(
 }
 
 function resolveAgentResponseText(result: unknown): string {
-  const payloads = (result as { payloads?: Array<{ text?: string }> } | null)?.payloads;
-  if (!Array.isArray(payloads) || payloads.length === 0) {
-    return "No response from OpenClaw.";
-  }
-  const content = payloads
-    .map((p) => (typeof p.text === "string" ? p.text : ""))
-    .filter(Boolean)
-    .join("\n\n");
-  return content || "No response from OpenClaw.";
-}
-
-function resolveAgentResponseCommentary(result: unknown): string {
   const payloads = (result as { payloads?: Array<{ text?: string }> } | null)?.payloads;
   if (!Array.isArray(payloads) || payloads.length === 0) {
     return "";
@@ -1103,7 +1081,7 @@ export async function handleOpenAiHttpRequest(
       }
 
       if (stopReason === "tool_calls" && pendingToolCalls && pendingToolCalls.length > 0) {
-        const commentary = resolveAgentResponseCommentary(result);
+        const commentary = resolveAgentResponseText(result);
         sendJson(res, 200, {
           id: runId,
           object: "chat.completion",
@@ -1128,7 +1106,7 @@ export async function handleOpenAiHttpRequest(
         });
         return true;
       }
-      const content = resolveAgentResponseText(result);
+      const content = resolveAgentResponseText(result) || "No response from OpenClaw.";
 
       sendJson(res, 200, {
         id: runId,
@@ -1391,7 +1369,7 @@ export async function handleOpenAiHttpRequest(
         if (!sawAssistantDelta) {
           // Final payloads own held prose; snapshots may replace provisional deltas.
           const commentary =
-            resolveAgentResponseCommentary(result) ||
+            resolveAgentResponseText(result) ||
             streamedAssistantText ||
             bufferedReplaceableAssistantContent;
           if (commentary) {
@@ -1412,9 +1390,8 @@ export async function handleOpenAiHttpRequest(
 
       if (!sawAssistantDelta) {
         const content =
-          resolveAgentResponseCommentary(result) ||
-          bufferedReplaceableAssistantContent ||
           resolveAgentResponseText(result) ||
+          bufferedReplaceableAssistantContent ||
           "No response from OpenClaw.";
 
         sawAssistantDelta = true;

@@ -183,28 +183,6 @@ function chunkCompactionMessageGroups(
   return chunks;
 }
 
-/** Splits messages into roughly equal token-share chunks without separating active tool pairs. */
-function splitMessagesByTokenShare(
-  messages: AgentMessage[],
-  parts = DEFAULT_PARTS,
-): AgentMessage[][] {
-  if (messages.length === 0) {
-    return [];
-  }
-  const normalizedParts = normalizeCompactionParts(parts, messages.length);
-  if (normalizedParts <= 1) {
-    return [messages];
-  }
-  const perMessageTokens = estimatePerMessageTokens(messages);
-  const totalTokens = perMessageTokens.reduce((sum, tokens) => sum + tokens, 0);
-  return chunkCompactionMessageGroups(
-    messages,
-    totalTokens / normalizedParts,
-    perMessageTokens,
-    normalizedParts,
-  );
-}
-
 /**
  * Compute adaptive chunk ratio based on average message size.
  * When messages are large, we use smaller chunks to avoid exceeding model limits.
@@ -289,18 +267,20 @@ export function buildStageSplitPlan(params: {
 }): StageSplitPlan {
   const minMessagesForSplit = Math.max(2, params.minMessagesForSplit ?? 4);
   const parts = normalizeCompactionParts(params.parts ?? DEFAULT_PARTS, params.messages.length);
-  const totalTokens = estimateMessagesTokens(params.messages);
-
-  if (
-    parts <= 1 ||
-    params.messages.length < minMessagesForSplit ||
-    totalTokens <= params.maxChunkTokens
-  ) {
+  if (parts <= 1 || params.messages.length < minMessagesForSplit) {
     return { mode: "single" };
   }
 
-  const chunks = splitMessagesByTokenShare(params.messages, parts).filter(
-    (chunk) => chunk.length > 0,
+  const perMessageTokens = estimatePerMessageTokens(params.messages);
+  const totalTokens = perMessageTokens.reduce((sum, tokens) => sum + tokens, 0);
+  if (totalTokens <= params.maxChunkTokens) {
+    return { mode: "single" };
+  }
+  const chunks = chunkCompactionMessageGroups(
+    params.messages,
+    totalTokens / parts,
+    perMessageTokens,
+    parts,
   );
   return chunks.length > 1 ? { mode: "split", chunks } : { mode: "single" };
 }
@@ -330,14 +310,19 @@ function pruneHistoryForContextShare(params: {
     params.messages.map((message, index) => [message, index] as const),
   );
 
-  while (keptMessages.length > 0 && estimateMessagesTokens(keptMessages) > budgetTokens) {
-    const chunks = splitMessagesByTokenShare(keptMessages, parts);
-    if (chunks.length <= 1) {
+  while (keptMessages.length > 0) {
+    const splitPlan = buildStageSplitPlan({
+      messages: keptMessages,
+      maxChunkTokens: budgetTokens,
+      minMessagesForSplit: 2,
+      parts,
+    });
+    if (splitPlan.mode === "single") {
       break;
     }
-    const dropped = chunks[0]!;
+    const dropped = splitPlan.chunks[0]!;
     // Dropping a call owner also drops orphaned results; providers reject replay without the pair.
-    const retained = chunks.slice(1).flat();
+    const retained = splitPlan.chunks.slice(1).flat();
     const repairReport = repairToolUseResultPairing(retained);
     const repairedDropped = repairReport.discarded;
 

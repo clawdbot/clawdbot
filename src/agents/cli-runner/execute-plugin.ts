@@ -403,6 +403,7 @@ export async function executePluginOwnedProcess(params: {
   sessionId?: string;
   noOutputTimeoutMs: number;
   consumeStdout: (chunk: string) => void;
+  onOutstandingWorkChange?: (active: boolean) => void;
   activeToolCount?: () => number;
   onNoOutputTimeout?: (error: FailoverError) => void;
   onInterrupted?: (reason: CliTerminalInterruption["reason"]) => boolean;
@@ -433,8 +434,12 @@ export async function executePluginOwnedProcess(params: {
     observed: false,
     replayUnsafe: false,
   };
-  const updatePendingApproval = (delta: number) =>
-    (outstanding.approvals = Math.max(0, outstanding.approvals + delta));
+  const reportOutstandingWork = () =>
+    params.onOutstandingWorkChange?.(outstanding.approvals > 0 || outstanding.background > 0);
+  const updatePendingApproval = (delta: number) => {
+    outstanding.approvals = Math.max(0, outstanding.approvals + delta);
+    reportOutstandingWork();
+  };
   let noOutputTimer: ReturnType<typeof setTimeout> | undefined;
   const overallTimeoutMs = clampPositiveTimerTimeoutMs(run.timeoutMs);
   const noOutputTimeoutMs = clampPositiveTimerTimeoutMs(params.noOutputTimeoutMs);
@@ -583,6 +588,7 @@ export async function executePluginOwnedProcess(params: {
         Array.isArray(next.value.tasks)
       ) {
         outstanding.background = next.value.tasks.filter(isRecord).length;
+        reportOutstandingWork();
       }
       params.consumeStdout(`${JSON.stringify(next.value)}\n`);
       outstanding.observed = true;
@@ -630,6 +636,7 @@ export async function executePluginOwnedProcess(params: {
   } finally {
     clearTimeout(overallTimer);
     clearTimeout(noOutputTimer);
+    params.onOutstandingWorkChange?.(false);
     // Permission callbacks can be retained by the plugin or its subprocess.
     // Closing the turn fences those capabilities before any outer cleanup runs.
     if (!controller.signal.aborted) {
