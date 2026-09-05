@@ -291,6 +291,14 @@ export default definePluginEntry({
               toolAuthority.assertActive();
               return undefined;
             }
+            // Status belongs to this turn. Clear it before awaited preflight work,
+            // which may time out without producing a replacement status.
+            await persistPluginStatusLines({
+              api,
+              agentId: effectiveAgentId,
+              sessionKey: resolvedSessionKey,
+            });
+            toolAuthority.assertActive();
             if (
               shouldSkipActiveMemoryForHarnessSession({
                 api,
@@ -307,11 +315,6 @@ export default definePluginEntry({
             deadlineController.signal.throwIfAborted();
             toolAuthority.assertActive();
             if (sessionDisabled) {
-              await persistPluginStatusLines({
-                api,
-                agentId: effectiveAgentId,
-                sessionKey: resolvedSessionKey,
-              });
               return undefined;
             }
             const sessionContext = {
@@ -319,11 +322,6 @@ export default definePluginEntry({
               sessionKey: resolvedSessionKey ?? ctx.sessionKey,
             };
             if (!isEligibleInteractiveSession(sessionContext)) {
-              await persistPluginStatusLines({
-                api,
-                agentId: effectiveAgentId,
-                sessionKey: resolvedSessionKey,
-              });
               return undefined;
             }
             const destinationContext = {
@@ -416,11 +414,6 @@ export default definePluginEntry({
               );
             }
             if (!activeMemoryAllowed && !productRecallAllowed) {
-              await persistPluginStatusLines({
-                api,
-                agentId: effectiveAgentId,
-                sessionKey: resolvedSessionKey,
-              });
               return laneOneContext ? { prependContext: laneOneContext } : undefined;
             }
             const escalationDecision = resolveRecallEscalationDecision({

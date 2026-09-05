@@ -63,6 +63,9 @@ function createLazyMemoryTool(params: {
   return {
     label: params.contract.label,
     name: params.contract.name,
+    // Keep the deterministic recall tools model-visible under Tool Search catalog
+    // compaction; Active Memory disables itself when they are not on the direct surface.
+    catalogMode: "direct-only",
     description: params.contract.describe(initialContext.sources),
     parameters: params.contract.parameters,
     execute: async (toolCallId, toolParams, signal, onUpdate) => {

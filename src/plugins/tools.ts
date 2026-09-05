@@ -764,6 +764,7 @@ function createCachedDescriptorPluginTool(params: {
     ...(params.descriptor.resultContentSource
       ? { resultContentSource: params.descriptor.resultContentSource }
       : {}),
+    ...(params.descriptor.catalogMode ? { catalogMode: params.descriptor.catalogMode } : {}),
     prepareArguments(args) {
       const currentTool = requireRuntimeTool();
       return currentTool.prepareArguments ? currentTool.prepareArguments(args) : args;

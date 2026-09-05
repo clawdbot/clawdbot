@@ -73,6 +73,7 @@ export function createMemoryTool(params: {
   return {
     label: params.contract.label,
     name: params.contract.name,
+    catalogMode: "direct-only",
     description: params.contract.describe(ctx.sources),
     parameters: params.contract.parameters,
     execute: async (toolCallId, toolParams, signal, onUpdate) => {
