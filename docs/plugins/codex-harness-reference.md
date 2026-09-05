@@ -277,6 +277,13 @@ managed stdio or the local Unix control socket for production workloads.
 | `networkProxy`                   | disabled                                               | Opt into Codex permissions-profile networking for app-server commands. OpenClaw defines the selected `permissions.<profile>.network` config and selects it with `default_permissions` instead of sending `sandbox`.                                                                                                                                                                                                                |
 | `experimental.sandboxExecServer` | `false`                                                | Preview opt-in that registers an OpenClaw sandbox-backed Codex environment with the supported Codex app-server so native Codex execution can run inside the active OpenClaw sandbox.                                                                                                                                                                                                                                               |
 
+`appServer.args` accepts an array (recommended) or a quoted argument string.
+`OPENCLAW_CODEX_APP_SERVER_ARGS` uses the same string parsing. On macOS and
+Linux, backslash escapes preserve quoted TOML values and spaces in paths;
+Windows keeps path backslashes literal. `#` is always a literal argument character.
+Unterminated quotes or incomplete escapes fail before launch. Use the array form
+when arguments need literal quotes or backslashes.
+
 `appServer.serviceTier` is used only when no shared Fast-mode run control is
 supplied. On Codex harness turns, shared Fast on sends `priority`, Fast off
 sends `null` to clear the OpenClaw-owned tier, and auto decides for each model

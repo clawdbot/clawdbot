@@ -2,7 +2,7 @@
 import { describe, expect, it } from "vitest";
 import { z } from "zod";
 import { asBoolean, parseBooleanValue } from "./boolean.js";
-import { splitShellArgs } from "./shell-argv.js";
+import { splitCommandArgs, splitShellArgs } from "./shell-argv.js";
 import { safeParseJsonWithSchema, safeParseWithSchema } from "./zod-parse.js";
 
 describe("asBoolean", () => {
@@ -73,6 +73,26 @@ describe("splitShellArgs", () => {
     expect(splitShellArgs(`echo hi # comment && whoami`)).toEqual(["echo", "hi"]);
     expect(splitShellArgs(`echo "hi # still-literal"`)).toEqual(["echo", "hi # still-literal"]);
     expect(splitShellArgs(`echo hi#tail`)).toEqual(["echo", "hi#tail"]);
+  });
+});
+
+describe("splitCommandArgs", () => {
+  it.each([
+    {
+      platform: "linux",
+      input: String.raw`program "a\"b" some\ path #literal`,
+      expected: ["program", 'a"b', "some path", "#literal"],
+    },
+    {
+      platform: "win32",
+      input: String.raw`program "C:\some path\file.py" \\server\share\ #literal`,
+      expected: ["program", String.raw`C:\some path\file.py`, "\\\\server\\share\\", "#literal"],
+    },
+    { platform: "linux", input: 'program "unfinished', expected: null },
+    { platform: "win32", input: "program 'unfinished", expected: null },
+    { platform: "linux", input: "program unfinished\\", expected: null },
+  ] as const)("parses $platform process arguments: $input", ({ platform, input, expected }) => {
+    expect(splitCommandArgs(input, platform)).toEqual(expected);
   });
 });
 

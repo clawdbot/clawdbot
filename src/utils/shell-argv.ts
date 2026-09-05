@@ -55,6 +55,22 @@ export function hasTopLevelShellControlOperator(raw: string): boolean {
 
 /** Splits a shell-like argv string into tokens, returning null for unterminated quotes or escapes. */
 export function splitShellArgs(raw: string): string[] | null {
+  return splitQuotedArgs(raw, "shell");
+}
+
+/** Splits process arguments without shell comments; Windows paths retain literal backslashes. */
+export function splitCommandArgs(
+  raw: string,
+  platform: NodeJS.Platform = process.platform,
+): string[] | null {
+  return splitQuotedArgs(raw, platform === "win32" ? "windows-command" : "posix-command");
+}
+
+function splitQuotedArgs(
+  raw: string,
+  syntax: "shell" | "posix-command" | "windows-command",
+): string[] | null {
+  const backslashEscapes = syntax !== "windows-command";
   const tokens: string[] = [];
   let buf = "";
   let inSingle = false;
@@ -75,7 +91,7 @@ export function splitShellArgs(raw: string): string[] | null {
       escaped = false;
       continue;
     }
-    if (!inSingle && !inDouble && ch === "\\") {
+    if (backslashEscapes && !inSingle && !inDouble && ch === "\\") {
       escaped = true;
       continue;
     }
@@ -90,7 +106,7 @@ export function splitShellArgs(raw: string): string[] | null {
     if (inDouble) {
       const next = raw[i + 1];
       // Inside double quotes, only POSIX-recognized escapes consume the backslash.
-      if (ch === "\\" && isDoubleQuoteEscape(next)) {
+      if (backslashEscapes && ch === "\\" && isDoubleQuoteEscape(next)) {
         buf += next;
         i += 1;
         continue;
@@ -112,7 +128,7 @@ export function splitShellArgs(raw: string): string[] | null {
     }
     // In POSIX shells, "#" starts a comment only when it begins a word; keep
     // inline hashes inside tokens so URLs/fragments are not truncated.
-    if (ch === "#" && buf.length === 0) {
+    if (syntax === "shell" && ch === "#" && buf.length === 0) {
       break;
     }
     if (/\s/.test(ch)) {
