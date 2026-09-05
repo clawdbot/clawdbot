@@ -22,7 +22,7 @@ pnpm test:install:smoke
 Use existing equivalent exact-SHA release evidence; do not repeat successful
 checks solely because this list mentions them. Required source CI includes
 `pnpm check` and `pnpm check:test-types`. Root Dockerfile/install-smoke and Linux
-cross-OS proof must pass on Code SHA before changelog or tagging. Release SHA
+cross-OS proof must pass on Code SHA before finalizing notes or tagging. Release SHA
 reuses product evidence only through the exact changelog-only policy and still
 qualifies its changed package bytes.
 

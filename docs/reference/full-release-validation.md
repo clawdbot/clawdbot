@@ -22,7 +22,9 @@ or `pnpm release:candidate`. Selected lanes still need terminal evidence.
 Normal CI, npm qualification, Docker, Package Acceptance, and the profile's
 performance and soak requirements keep their existing gates.
 
-Freeze the product-complete pre-changelog commit and its target context as the
+Prepare substantive version-matched draft release notes before qualification:
+package source preflight requires a matching release section. Freeze the
+product-complete commit with those draft notes and its target context as the
 **Code SHA/ref**, and select one trusted workflow commit and context as the
 **Tooling SHA/ref**, then run:
 
@@ -218,8 +220,8 @@ frozen-target tooling; retry provider, approval, or runner failures without a
 source change. Any branch change needs a complete new run. Do not omit required
 package, installer, update, channel, or live behavior because the target is old.
 
-For a regular release, when the Code SHA is green, generate and commit only
-`CHANGELOG.md`. This new commit is the **Release SHA**. Run the same helper for
+For a regular release, when the Code SHA is green, finalize the draft notes and
+commit only `CHANGELOG.md`. This new commit is the **Release SHA**. Run the same helper for
 the Release SHA. Product evidence is reused only when GitHub proves the Release
 SHA descends from the Code SHA and the complete changed path set is exactly
 `CHANGELOG.md`; npm preflight and package/install acceptance still run on the

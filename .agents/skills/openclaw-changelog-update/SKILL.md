@@ -6,7 +6,8 @@ description: Regenerate OpenClaw release changelog sections from git history bef
 # OpenClaw Changelog Update
 
 Use this for changelog rewrites and GitHub release-note source text. For regular
-beta/stable, run it after the Code SHA passes Full Release Validation. For
+beta/stable, draft substantive version-matched notes during preparation, then
+finalize them after the Code SHA passes Full Release Validation. For
 extended-stable, run it before final exact-head validation and tagging. Do not
 rerun it for tooling retries, resumed publication, or promotion.
 Use it with `release-openclaw-maintainer`; this skill owns changelog content,
@@ -27,8 +28,9 @@ every human `Thanks @...` attribution.
   the target; a newer but divergent tag is not a valid history boundary. Use
   an explicit shipped/main-closeout SHA only when it is also reachable from the
   target.
-- Target ref: the exact green Code SHA. The changelog commit created from this
-  input becomes the Release SHA.
+- Target ref: the exact selected preparation SHA for draft notes, or the green
+  Code SHA for final notes. Only the latter's changelog-only commit becomes the
+  Release SHA.
 - Canonical main ref: current `origin/main`, fetched before verification. Release
   notes cite the original merged main PR when the same work is carried by a
   backport. A release-branch PR is used only while no forward-port exists on
@@ -36,12 +38,15 @@ every human `Thanks @...` attribution.
 
 ## Workflow
 
-1. Confirm the release branch is at the fully validated Code SHA:
+1. Record whether this is preparation or finalization:
    - `git fetch --tags origin`
    - confirm clean `git status -sb`
-   - record `git rev-parse HEAD` as the Code SHA
-   - record the successful Full Release Validation run id and attempt
-   - stop if any product/version/backport change is still pending
+   - record `git rev-parse HEAD` as the exact target for history collection
+   - for preparation, generate real notes for this selected tree; refresh them
+     after an operator-approved rebase or additional selected changes
+   - for finalization, require the fully validated Code SHA, record its
+     successful Full Release Validation run id and attempt, and stop if any
+     product/version/backport change is still pending
 2. Audit history, including direct commits:
    - `git log --topo-order --date=iso-strict --pretty=format:'%h%x09%ad%x09%s' <base-tag>..<target-ref>`
    - `git log --topo-order --grep='(#' --date=short --pretty=format:'%h%x09%ad%x09%s' <base-tag>..<target-ref>`
@@ -264,7 +269,10 @@ every human `Thanks @...` attribution.
 - `git diff --check`
 - for docs/changelog-only changes, no broad tests are required
 - stage `CHANGELOG.md` and commit with `git commit -m "docs(changelog): refresh YYYY.M.PATCH notes"`
-- record the new commit as the Release SHA and require
+- preparation stops here: these are draft notes for the selected tree, not
+  publication evidence. Continue version/source preparation and Code SHA proof
+  through the release-maintainer workflow
+- for finalization, record the new commit as the Release SHA and require
   `git diff --name-only <code-sha>..<release-sha>` to print only
   `CHANGELOG.md`
 - push the release branch without rebasing it onto moving `main`

@@ -3,15 +3,25 @@
 ## Freeze and validate code
 
 Read [preparation](preparation.md) before branch or version changes. Record the
-approved version, cut SHA, release branch and product-complete Code SHA. Use
+approved version, cut SHA, release branch and product-complete Code SHA. Draft
+substantive version-matched release notes during preparation, before freezing
+Code SHA; package source preflight requires a matching changelog section. Use
 [validation](validation.md) to select phase-specific gates and
 `$release-openclaw-ci` for dispatch/recovery.
 
 Run deterministic source preflight, then validate the exact Code SHA:
 
 ```bash
+node scripts/package-source-preflight.mjs --ref <code-sha>
 node scripts/full-release-validation-at-sha.mjs --sha <code-sha> --target-ref release/YYYY.M.PATCH --workflow-sha <tooling-sha>
 ```
+
+Run the source preflight from the recorded trusted tooling checkout, where the
+Code SHA is available as a Git object. It reads the selected source without
+executing it and catches missing notes and package-version/dependency drift
+before expensive fanout. Complete the locale, production UI build and provider
+preflights in `$release-openclaw-ci` as well; source metadata alone is not product
+qualification.
 
 Record and reuse the full trusted Tooling SHA. Beta-publish uses
 `release_profile=beta`, `run_release_soak=false`; require `npm-beta-v1` for a
@@ -30,8 +40,9 @@ proven infrastructure noise.
 
 ## Qualify publication bytes
 
-After Code SHA is green, run `$openclaw-changelog-update` once using current
-main for canonical PR provenance. Commit only `CHANGELOG.md` as Release SHA;
+After Code SHA is green, finalize the draft with `$openclaw-changelog-update`,
+using current main for canonical PR provenance without adding unselected code.
+Commit only `CHANGELOG.md` as Release SHA;
 verify the complete Code-to-Release delta is exactly that file.
 
 Dispatch Full Release Validation for Release SHA with evidence reuse. Require

@@ -12,6 +12,28 @@ fixed or proven on the release branch. Keep that repair bounded, use
 `$openclaw-pr-maintainer`, then return to the release. Defer ordinary
 forward-ports until after publication.
 
+## Prepare while the cut is still moving
+
+When the operator expects another rebase, complete version preparation,
+translations, substantive draft release notes, provider readiness and focused
+repairs now. Record the cut and tested SHA for each result. These are preparation
+results, not qualification of a later commit. Run full verification when
+requested, retaining its failures and successes as evidence for that exact SHA.
+
+After an approved rebase, record the new cut, regenerate version-owned outputs,
+refresh the draft notes against the new selected range, and repeat affected
+source checks. Recreate proof environments whose base or dependencies changed.
+Freeze a new Code SHA for final product validation; an old tarball, signature,
+SDK acknowledgement or green parent does not qualify the rebased bytes. Keep
+the recorded Tooling SHA unless a diagnosed tooling change requires replacing it.
+
+Draft notes must describe actual selected changes under the matching numbered
+release heading. Do not insert an empty section to pass packaging. The
+`allow_unreleased_changelog` input only permits an existing meaningful draft
+section; it cannot repair a changelog that contains only an older release.
+After Code SHA passes, finalize notes through a changelog-only Release SHA so
+the existing evidence-reuse policy avoids repeating product tests.
+
 ## Version and channel
 
 `YYYY.M.PATCH` uses a sequential monthly train number, not the calendar day.
@@ -71,16 +93,16 @@ For records whose `warningStarts` or `removeAfter` falls within seven days of
 release, include Upcoming deprecations with code, date, replacement and
 `docsPath` (or `/plugins/compatibility`).
 
-Freeze the product-complete tree, including approved versions and fixes but no
-new release changelog, as **Code SHA**. After this point admit only confirmed
+Freeze the product-complete tree, including approved versions, fixes and
+substantive draft release notes, as **Code SHA**. After this point admit only confirmed
 product, package/provenance, security, or publication-blocking defects; defer
-adjacent improvements. Validate that Code SHA before changelog work.
+adjacent improvements. Validate that Code SHA before finalizing the notes.
 
 ## Changelog and release notes
 
 Use `$openclaw-changelog-update` for source-history inventory, human credit,
-editorial grouping, renderer limits, and verification. Generate once after
-Code SHA passes; same-candidate retries reuse it. Beta notes use the stable-base
+editorial grouping, renderer limits, and verification. Draft before freezing
+Code SHA, then finalize after it passes; same-candidate retries reuse the notes. Beta notes use the stable-base
 `## YYYY.M.PATCH` section, with Highlights, Changes and Fixes. Canonical PR
 provenance follows current `origin/main`; retain a release-branch PR only while
 its change has not been forward-ported. Do not change root README as routine
