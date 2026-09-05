@@ -169,6 +169,7 @@ export function createPageState(
     client: null,
     connected: false,
     connectionEpoch: 0,
+    mediaPolicyEpoch: 0,
     hello: null,
     selfUser: null,
     canvasPluginSurfaceUrl: null,

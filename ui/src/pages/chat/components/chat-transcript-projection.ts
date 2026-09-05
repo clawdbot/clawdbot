@@ -38,6 +38,7 @@ import { renderBackgroundTasksStatusRow } from "./chat-background-tasks-status.t
 import { renderChatDivider, renderChatNotice } from "./chat-divider.ts";
 import { resolveMessageGroupSenderLabel } from "./chat-message-group.ts";
 import { resolveMessageReplyText } from "./chat-message-markdown.ts";
+import { assistantMediaPolicyKey } from "./chat-message-media.ts";
 import {
   getChatMediaRenderVersion,
   renderActivityGroup,
@@ -85,6 +86,7 @@ export function projectChatTranscript(
   const displayStream = props.stream ?? null;
   const sessionHost = props.sessionHost ?? null;
   const activeSession = props.selectedSession;
+  const mediaPolicyKey = assistantMediaPolicyKey(activeSession, props.mediaPolicyEpoch);
   // Global-alias routing ignores the capped session list, which may omit the
   // canonical row. The scope gate keeps per-sender main threads direct.
   const isGlobalAliasKey =
@@ -285,6 +287,7 @@ export function projectChatTranscript(
     onRequestUpdate: requestUpdate,
     resourceBasePath: props.resourceBasePath,
     localMediaPreviewRoots: props.localMediaPreviewRoots ?? [],
+    mediaPolicyKey,
     connectionEpoch: props.connectionEpoch,
     assistantAttachmentAuthToken: props.assistantAttachmentAuthToken ?? null,
     resolveArtifactDownload: props.resolveArtifactDownload,
@@ -647,6 +650,7 @@ export function projectChatTranscript(
     props.userAvatar,
     props.resourceBasePath,
     (props.localMediaPreviewRoots ?? []).join("\u0000"),
+    mediaPolicyKey,
     props.assistantAttachmentAuthToken,
     props.connectionEpoch,
     props.canvasPluginSurfaceUrl,

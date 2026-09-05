@@ -80,6 +80,12 @@ suite.define(() => {
     },
     {
       kind: "image",
+      source: "/projects/chat-worktree/.openclaw/tmp/review/preview.png",
+      ticket: "ticket-project-image",
+      roots: ["/tmp/openclaw"],
+    },
+    {
+      kind: "image",
       source: "FILE:///home/node/.openclaw/media/outbound/bootstrap-uppercase-image.png",
       ticket: "ticket-bootstrap-uppercase-image",
     },
@@ -109,6 +115,7 @@ suite.define(() => {
       const page = await context.newPage();
       const requestedMediaUrls: URL[] = [];
       const expectedSource = "structured" in options ? new URL(source).pathname : source;
+      let mediaAllowed = true;
 
       await page.route("**/__openclaw__/assistant-media?**", async (route) => {
         const request = route.request();
@@ -117,6 +124,18 @@ suite.define(() => {
         expect(url.searchParams.get("source")).toBe(expectedSource);
         if (url.searchParams.get("meta") === "1") {
           expect(request.headers().authorization).toBe("Bearer e2e-device-token");
+          if (!mediaAllowed) {
+            await route.fulfill({
+              contentType: "application/json",
+              body: JSON.stringify({
+                available: false,
+                reason: "Outside allowed folders",
+                retryable: false,
+                canAllow: true,
+              }),
+            });
+            return;
+          }
           await route.fulfill({
             contentType: "application/json",
             body: JSON.stringify({
@@ -143,7 +162,10 @@ suite.define(() => {
         );
       });
 
-      await installMockGateway(page, {
+      const gateway = await installMockGateway(page, {
+        ...("roots" in options && options.roots
+          ? { localMediaPreviewRoots: [...options.roots] }
+          : {}),
         historyMessages: [
           kind === "image"
             ? {
@@ -203,6 +225,26 @@ suite.define(() => {
               ),
             )
             .toBe(180);
+        }
+
+        if ("roots" in options) {
+          mediaAllowed = false;
+          await gateway.emitGatewayEvent("config.changed", { hash: "workspace-protected" });
+          await page.getByRole("button", { name: "Allow image", exact: true }).waitFor();
+          expect(await media.count()).toBe(0);
+
+          mediaAllowed = true;
+          await gateway.emitGatewayEvent("config.changed", { hash: "workspace-unprotected" });
+          await media.waitFor({ state: "visible" });
+          await expect
+            .poll(() => media.evaluate((element) => (element as HTMLImageElement).naturalWidth))
+            .toBe(180);
+          expect(await page.getByRole("button", { name: "Allow image", exact: true }).count()).toBe(
+            0,
+          );
+          expect(
+            requestedMediaUrls.filter((url) => url.searchParams.get("meta") === "1"),
+          ).toHaveLength(3);
         }
 
         if (process.env.OPENCLAW_UI_E2E_ARTIFACT_DIR?.trim()) {
