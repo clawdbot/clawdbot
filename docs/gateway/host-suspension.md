@@ -25,16 +25,22 @@ stopping the process. Work that was already running when the process dies falls
 back to ordinary [restart recovery](/gateway/restart-recovery).
 </Warning>
 
-## The four methods
+## The methods
 
-| Method                      | Scope            | Purpose                                                       |
-| --------------------------- | ---------------- | ------------------------------------------------------------- |
-| `gateway.suspend.preflight` | `operator.read`  | Point-in-time busy inspection. Observes only.                 |
-| `gateway.suspend.prepare`   | `operator.admin` | Fence new work, then report `busy` or `ready`. Authoritative. |
-| `gateway.suspend.status`    | `operator.read`  | Inspect a lease you already own.                              |
-| `gateway.suspend.resume`    | `operator.admin` | Release the lease and reopen admission.                       |
+| Method                      | Scope            | Purpose                                                                |
+| --------------------------- | ---------------- | ---------------------------------------------------------------------- |
+| `gateway.suspend.preflight` | `operator.read`  | Point-in-time busy inspection. Observes only.                          |
+| `gateway.suspend.prepare`   | `operator.admin` | Fence new work, then report `busy` or `ready`. Authoritative.          |
+| `gateway.suspend.status`    | `operator.read`  | Inspect a lease you already own.                                       |
+| `gateway.suspend.resume`    | `operator.admin` | Release the lease and reopen admission.                                |
+| `gateway.suspend.handoff`   | `operator.admin` | Arm restart cleanup for the next `SIGTERM` on this exact host process. |
 
-All four are available over WebSocket RPC and, when the bundled
+The first four are the suspension loop itself and are described on this page.
+`handoff` is the separate escape hatch for a controller that has decided to
+interrupt remaining work after its own drain budget; see
+[external apps](/gateway/external-apps) for its target binding and expiry rules.
+
+All of them are available over WebSocket RPC and, when the bundled
 [`admin-http-rpc`](/plugins/admin-http-rpc) plugin is enabled, over
 `POST /api/v1/admin/rpc`. Prefer the WebSocket client when the controller can
 hold a connection open; use the HTTP route for host tooling that cannot.

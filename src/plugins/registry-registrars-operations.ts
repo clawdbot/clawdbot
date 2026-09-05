@@ -331,12 +331,7 @@ export function createOperationRegistrars(state: PluginRegistryState) {
   ) => {
     const id = participant.id.trim();
     if (!id) {
-      pushDiagnostic({
-        level: "error",
-        pluginId: record.id,
-        source: record.source,
-        message: "gateway suspension participant requires a non-empty id",
-      });
+      reportRegistrationError(record, "gateway suspension participant requires a non-empty id");
       return () => {};
     }
     // Namespace by plugin so two plugins cannot collide on a shared queue name,

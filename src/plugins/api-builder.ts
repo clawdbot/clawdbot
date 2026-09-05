@@ -35,7 +35,7 @@ const noops = {
   registerNodeHostCommand: () => {},
   registerNodeInvokePolicy: () => {},
   registerSecurityAuditCollector: () => {},
-  registerGatewaySuspensionParticipant: () => {},
+  registerGatewaySuspensionParticipant: () => () => {},
   registerService: () => {},
   registerGatewayDiscoveryService: () => {},
   registerCliBackend: () => {},
