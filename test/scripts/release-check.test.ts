@@ -74,6 +74,12 @@ describe("release-check", () => {
         join(root, "scripts/lib/plugin-sdk-private-local-only-subpaths.json"),
         JSON.stringify(["target-private"]),
       );
+      mkdirSync(join(root, "src/shared"), { recursive: true });
+      writeFileSync(
+        join(root, "src/shared/worker-bundle-hash.ts"),
+        'export const WORKER_BUNDLE_ENTRY_PATH = "worker.mjs";\n' +
+          'export const WORKER_BUNDLE_RSYNC_RECEIVER_PATH = "workspace-rsync-receiver.mjs";\n',
+      );
       mkdirSync(join(root, "scripts", "fixtures"));
       writeFileSync(
         join(root, "scripts/fixtures/packed-plugin-sdk-type-smoke.ts"),
@@ -112,7 +118,6 @@ describe("release-check", () => {
       });
 
       copyFileSync("appcast.xml", join(root, "appcast.xml"));
-      mkdirSync(join(root, "src/shared"), { recursive: true });
       const packedRoot = join(root, "package");
       const packedFiles = {
         "package.json": packageJson,
@@ -129,14 +134,16 @@ describe("release-check", () => {
       }
       const tarball = join(root, "target.tgz");
       create({ cwd: root, file: tarball, gzip: true, sync: true }, ["package"]);
-      for (const declaresLauncher of [false, true]) {
+      for (const contract of ["historical", "modern", "malformed"] as const) {
         writeFileSync(
           join(root, "src/shared/worker-bundle-hash.ts"),
           'export const WORKER_BUNDLE_ENTRY_PATH = "worker.mjs";\n' +
             'export const WORKER_BUNDLE_RSYNC_RECEIVER_PATH = "workspace-rsync-receiver.mjs";\n' +
-            (declaresLauncher
+            (contract === "modern"
               ? 'export const WORKER_BUNDLE_GITHUB_EXEC_LAUNCHER_PATH = "github-exec-launcher.mjs";\n'
-              : ""),
+              : contract === "malformed"
+                ? "export const WORKER_BUNDLE_EXTRA_PATH = makePath();\n"
+                : ""),
         );
         const result = spawnSync(
           process.execPath,
@@ -156,9 +163,11 @@ describe("release-check", () => {
         expect(result.status).toBe(1);
         // The two-artifact target reaches the next check; the fixture omits SDK output.
         expect(result.stderr).toContain(
-          declaresLauncher
+          contract === "modern"
             ? "Worker deploy artifact dist/worker/github-exec-launcher.mjs is missing."
-            : "release-check: packed dist/plugin-sdk directory not found.",
+            : contract === "malformed"
+              ? "Target worker artifact declaration is invalid: WORKER_BUNDLE_EXTRA_PATH."
+              : "release-check: packed dist/plugin-sdk directory not found.",
         );
       }
     } finally {

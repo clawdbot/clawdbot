@@ -1334,7 +1334,7 @@ export async function verifyBetaRelease(
       rootDir,
       args.postpublishVerifier,
     );
-    execFileSync("node", ["--import", "tsx", postpublishVerifier, args.version], {
+    execFileSync("node", ["--import", "tsx", postpublishVerifier, args.version, rootDir], {
       stdio: "inherit",
     });
     lines.push("openclaw postpublish verifier OK");

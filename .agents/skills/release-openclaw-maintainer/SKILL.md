@@ -297,8 +297,10 @@ on pinned current `main` as the exact command and validation contract.
    tag checkout and accepts canonical-branch, current-main, or trusted-pinned
    validation evidence; the prepared tarball and every evidence identity must
    still match the candidate SHA.
-8. From a clean current-`main` checkout, run
-   `node --import tsx scripts/openclaw-npm-postpublish-verify.ts YYYY.M.P`.
+8. Let `<validated-frozen-target-root>` be the absolute path to the checkout
+   whose `HEAD` was already proven equal to the immutable release candidate SHA.
+   From a clean current-`main` checkout, run
+   `node --import tsx scripts/openclaw-npm-postpublish-verify.ts YYYY.M.P <validated-frozen-target-root>`.
    Verify signatures, provenance, inventories, exact versions, and selectors.
    Use the generated repair only for the root selector; repair other selectors
    with approved credential-isolated tooling. Never republish a version.
@@ -765,7 +767,7 @@ For a non-root smoke path:
 After npm publish, run:
 
 ```bash
-node --import tsx scripts/openclaw-npm-postpublish-verify.ts <published-version>
+node --import tsx scripts/openclaw-npm-postpublish-verify.ts <published-version> <validated-frozen-target-root>
 ```
 
 - This verifies the published registry install path in a fresh temp prefix.
@@ -839,7 +841,7 @@ node --import tsx scripts/openclaw-npm-postpublish-verify.ts <published-version>
     blocking performance. Native artifact publication retains its own build,
     signing, notarization, and promotion gates.
 - Post-published beta verification roster:
-  - `node --import tsx scripts/openclaw-npm-postpublish-verify.ts <beta-version>`
+  - `node --import tsx scripts/openclaw-npm-postpublish-verify.ts <beta-version> <validated-frozen-target-root>`
   - install/update smoke against the published beta channel
   - Docker install/update coverage that exercises the published beta package
   - published npm Telegram proof: dispatch Actions > `NPM Telegram Beta E2E`
@@ -1173,7 +1175,7 @@ node --import tsx scripts/openclaw-npm-postpublish-verify.ts <published-version>
     Android approval/build/publication remains independent. Report app failures
     and recover only the failed platform. For a failed required publish stage,
     keep immutable child evidence and use the standalone recovery probe:
-    `node --import tsx scripts/openclaw-npm-postpublish-verify.ts <published-version>`.
+    `node --import tsx scripts/openclaw-npm-postpublish-verify.ts <published-version> <validated-frozen-target-root>`.
     For a failed parent after successful children, run
     `pnpm release:verify-beta -- <published-version> ... --skip-github-release`
     with the original child run IDs and an evidence output path before restoring

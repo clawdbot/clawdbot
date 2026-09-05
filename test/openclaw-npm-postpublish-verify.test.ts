@@ -1,9 +1,17 @@
 import { spawnSync } from "node:child_process";
 import { generateKeyPairSync, sign } from "node:crypto";
 // OpenClaw npm postpublish tests validate postpublish verification behavior.
-import { mkdirSync, mkdtempSync, readFileSync, rmSync, truncateSync, writeFileSync } from "node:fs";
+import {
+  mkdirSync,
+  mkdtempSync,
+  readFileSync,
+  rmSync,
+  symlinkSync,
+  truncateSync,
+  writeFileSync,
+} from "node:fs";
 import { tmpdir } from "node:os";
-import { dirname, join } from "node:path";
+import { dirname, join, resolve } from "node:path";
 import { describe, expect, it, vi } from "vitest";
 import { listBundledPluginPackArtifacts } from "../scripts/lib/bundled-plugin-build-entries.mjs";
 import {
@@ -27,12 +35,19 @@ import {
 } from "../scripts/openclaw-npm-postpublish-verify.ts";
 import {
   WORKER_BUNDLE_ENTRY_PATH,
+  WORKER_BUNDLE_GITHUB_EXEC_LAUNCHER_PATH,
   WORKER_BUNDLE_RSYNC_RECEIVER_PATH,
 } from "../src/shared/worker-bundle-hash.js";
 import { withEnv } from "../src/test-utils/env.js";
 
 const INSTALLED_ROOT_DIST_JS_FILE_SCAN_LIMIT = 10_000;
 const requiredBundledPluginPackPaths = listBundledPluginPackArtifacts();
+const workerDeployPaths = [
+  `dist/worker/${WORKER_BUNDLE_ENTRY_PATH}`,
+  `dist/worker/${WORKER_BUNDLE_GITHUB_EXEC_LAUNCHER_PATH}`,
+  `dist/worker/${WORKER_BUNDLE_RSYNC_RECEIVER_PATH}`,
+];
+const workerDistPaths = new Set(workerDeployPaths.map((path) => path.slice("dist/".length)));
 
 describe("parseOpenClawNpmPostpublishVerifyArgs", () => {
   it("keeps trusted release verification independent from target app dependencies", () => {
@@ -49,6 +64,12 @@ describe("parseOpenClawNpmPostpublishVerifyArgs", () => {
     });
     expect(parseOpenClawNpmPostpublishVerifyArgs(["--", "2026.3.23"])).toEqual({
       help: false,
+      targetRoot: resolve("."),
+      version: "2026.3.23",
+    });
+    expect(parseOpenClawNpmPostpublishVerifyArgs(["2026.3.23", "/tmp/target"])).toEqual({
+      help: false,
+      targetRoot: "/tmp/target",
       version: "2026.3.23",
     });
   });
@@ -60,9 +81,21 @@ describe("parseOpenClawNpmPostpublishVerifyArgs", () => {
     expect(() => parseOpenClawNpmPostpublishVerifyArgs(["--tag"])).toThrow(
       "Unknown openclaw npm postpublish verifier option: --tag",
     );
-    expect(() => parseOpenClawNpmPostpublishVerifyArgs(["2026.3.23", "extra"])).toThrow(
+    expect(() => parseOpenClawNpmPostpublishVerifyArgs(["2026.3.23", ".", "extra"])).toThrow(
       "Unexpected openclaw npm postpublish verifier argument: extra",
     );
+  });
+
+  it("binds every release-maintainer invocation to the validated frozen target root", () => {
+    const skill = readFileSync(".agents/skills/release-openclaw-maintainer/SKILL.md", "utf8");
+    const command = "node --import tsx scripts/openclaw-npm-postpublish-verify.ts";
+    const invocations = skill.split("\n").filter((line) => line.includes(command));
+
+    expect(invocations.length).toBeGreaterThan(0);
+    for (const invocation of invocations) {
+      expect(invocation).toContain("<validated-frozen-target-root>");
+    }
+    expect(skill).toContain("already proven equal to the immutable release candidate SHA");
   });
 });
 
@@ -596,6 +629,7 @@ describe("collectInstalledPackageErrors", () => {
       expectedVersion: "2026.3.23-2",
       installedVersion: "2026.3.23",
       packageRoot: "/tmp/empty-openclaw",
+      workerDeployPaths,
     });
 
     expect(errors[0]).toBe(
@@ -617,6 +651,7 @@ describe("collectInstalledPackageErrors", () => {
         expectedVersion: "2026.3.23",
         installedVersion: "2026.3.23",
         packageRoot,
+        workerDeployPaths,
       });
       const sizeError = `installed package root dist file 'worker/${WORKER_BUNDLE_ENTRY_PATH}' is invalid or exceeds 83886080 bytes.`;
 
@@ -662,6 +697,7 @@ describe("collectInstalledPackageErrors", () => {
             expectedVersion: "2026.3.23",
             installedVersion: "2026.3.23",
             packageRoot,
+            workerDeployPaths,
           }),
         ).toContain(expectedError);
       } finally {
@@ -846,6 +882,7 @@ describe("collectInstalledPackageErrors", () => {
           expectedVersion: "2026.3.23",
           installedVersion: "2026.3.23",
           packageRoot,
+          workerDeployPaths,
         }),
       ).toContain(
         "installed package is missing required bundled runtime sidecar: dist/extensions/telegram/runtime-api.js",
@@ -885,8 +922,57 @@ describe("collectInstalledPackageErrors", () => {
           expectedVersion: "2026.3.23",
           installedVersion: "2026.3.23",
           packageRoot,
+          workerDeployPaths,
         }),
       ).toContain(manifestErrors[0]);
+    } finally {
+      rmSync(packageRoot, { recursive: true, force: true });
+    }
+  });
+
+  it.each([
+    [
+      "missing",
+      undefined,
+      "installed package worker deploy artifact is missing: dist/worker/github-exec-launcher.mjs.",
+    ],
+    [
+      "symlink",
+      "symlink",
+      "installed package worker deploy artifact is not a regular file: dist/worker/github-exec-launcher.mjs.",
+    ],
+    [
+      "directory",
+      "directory",
+      "installed package worker deploy artifact is not a regular file: dist/worker/github-exec-launcher.mjs.",
+    ],
+  ])("rejects a %s target-declared worker artifact", (_, kind, expectedError) => {
+    const packageRoot = makeInstalledPackageRoot();
+    const launcherPath = join(
+      packageRoot,
+      `dist/worker/${WORKER_BUNDLE_GITHUB_EXEC_LAUNCHER_PATH}`,
+    );
+    try {
+      mkdirSync(dirname(launcherPath), { recursive: true });
+      writeFileSync(join(packageRoot, "package.json"), '{"version":"2026.3.23"}\n');
+      writeFileSync(join(packageRoot, `dist/worker/${WORKER_BUNDLE_ENTRY_PATH}`), "export {};\n");
+      writeFileSync(
+        join(packageRoot, `dist/worker/${WORKER_BUNDLE_RSYNC_RECEIVER_PATH}`),
+        "export {};\n",
+      );
+      if (kind === "symlink") {
+        symlinkSync(WORKER_BUNDLE_ENTRY_PATH, launcherPath);
+      } else if (kind === "directory") {
+        mkdirSync(launcherPath);
+      }
+      expect(
+        collectInstalledPackageErrors({
+          expectedVersion: "2026.3.23",
+          installedVersion: "2026.3.23",
+          packageRoot,
+          workerDeployPaths,
+        }),
+      ).toContain(expectedError);
     } finally {
       rmSync(packageRoot, { recursive: true, force: true });
     }
@@ -1310,7 +1396,9 @@ describe("collectInstalledRootDependencyManifestErrors", () => {
         writeFileSync(filePath, `/* ${"x".repeat(6 * 1024 * 1024)} */\n`, "utf8");
       }
 
-      expect(collectInstalledRootDependencyManifestErrors(packageRoot)).toEqual(expected);
+      expect(collectInstalledRootDependencyManifestErrors(packageRoot, workerDistPaths)).toEqual(
+        expected,
+      );
     } finally {
       rmSync(packageRoot, { recursive: true, force: true });
     }

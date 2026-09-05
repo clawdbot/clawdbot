@@ -781,6 +781,9 @@ describe("collectMissingPackPaths", () => {
       for (const relativePath of [
         "facade-activation-check.runtime.js",
         "extensions/image-generation-core/runtime-api.js",
+        "worker/github-exec-launcher.mjs",
+        "worker/worker.mjs",
+        "worker/workspace-rsync-receiver.mjs",
       ]) {
         const filePath = join(distDir, relativePath);
         mkdirSync(dirname(filePath), { recursive: true });

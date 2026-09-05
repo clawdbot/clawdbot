@@ -96,7 +96,11 @@ afterEach(() => {
 describe("verifyBetaRelease workflow outcomes", () => {
   const version = "2026.5.10-beta.3";
 
-  function workflowFixture(overrides: Record<string, unknown> = {}, telegram = true) {
+  function workflowFixture(
+    overrides: Record<string, unknown> = {},
+    telegram = true,
+    skipPostpublish = true,
+  ) {
     const rootDir = tempDirs.make("release-workflow-outcome-");
     const binDir = join(rootDir, "bin");
     mkdirSync(binDir);
@@ -135,7 +139,7 @@ if (path.basename(process.argv[1]) === "npm" && args[0] === "view" && args[1] ==
     vi.stubEnv("PATH", `${binDir}:${process.env.PATH}`);
     const args = parseReleaseVerifyBetaArgs([
       version,
-      "--skip-postpublish",
+      ...(skipPostpublish ? ["--skip-postpublish"] : []),
       "--skip-github-release",
       "--skip-clawhub",
       "--workflow-ref",
@@ -222,6 +226,20 @@ if (path.basename(process.argv[1]) === "npm" && args[0] === "view" && args[1] ==
     await expect(verifyBetaRelease(fixture.args, { rootDir: fixture.rootDir })).rejects.toThrow(
       "OpenClaw NPM Release: run 44 is",
     );
+  });
+
+  it("passes the selected target root to postpublish verification", async () => {
+    const fixture = workflowFixture({}, true, false);
+    const capturePath = join(fixture.rootDir, "postpublish-args.json");
+    mkdirSync(join(fixture.rootDir, "scripts"));
+    writeFileSync(
+      join(fixture.rootDir, "scripts/openclaw-npm-postpublish-verify.ts"),
+      `import { writeFileSync } from "node:fs"; writeFileSync(${JSON.stringify(capturePath)}, JSON.stringify(process.argv.slice(2)));`,
+    );
+
+    await verifyBetaRelease(fixture.args, { rootDir: fixture.rootDir });
+
+    expect(JSON.parse(readFileSync(capturePath, "utf8"))).toEqual([version, fixture.rootDir]);
   });
 });
 

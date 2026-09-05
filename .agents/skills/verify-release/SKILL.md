@@ -93,9 +93,11 @@ registry, provenance, and image state directly.
    `publishToNpm === true` official plugin derived from the tag. Compare the
    plugin plan, jobs, and complete readback; never infer inventory from diffs.
 4. **Provenance:** from trusted current tooling, run
-   `node --import tsx scripts/openclaw-npm-postpublish-verify.ts <VERSION>`.
+   `node --import tsx scripts/openclaw-npm-postpublish-verify.ts <VERSION>
+<validated-target-root>`.
    Require signatures, canonical-branch provenance, and publish/preflight
-   digest binding to the release SHA. Preserve output and workflow URLs.
+   digest binding to the release SHA. The target root supplies the exact worker
+   artifact declaration contract. Preserve output and workflow URLs.
 5. **Docker:** verify exact default, slim, browser, and architecture images and
    attestations in both registries. Only the three `extended-stable*` aliases may
    resolve to those digests. Repair aliases through current-main `Docker Channel

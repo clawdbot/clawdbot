@@ -20,7 +20,6 @@ import { basename, dirname, join, resolve, win32 } from "node:path";
 import { pathToFileURL } from "node:url";
 import { parseArgs } from "node:util";
 import { extract } from "tar";
-import { tsImport } from "tsx/esm/api";
 import { expectDefined } from "../packages/normalization-core/src/expect.js";
 import { COMPLETION_SKIP_PLUGIN_COMMANDS_ENV } from "../src/cli/completion-runtime.ts";
 import { escapeRegExp } from "../src/shared/regexp.js";
@@ -47,6 +46,7 @@ import {
   listUnpackagedPrivatePluginSdkDistArtifacts,
 } from "./lib/plugin-sdk-entries.mts";
 import { listStaticExtensionAssetOutputs } from "./lib/static-extension-assets.mts";
+import { readWorkerDeployTargetPaths } from "./lib/worker-deploy-target-contract.mts";
 import {
   runInstalledWorkspaceBootstrapSmoke,
   WORKSPACE_TEMPLATE_PACK_PATHS,
@@ -89,6 +89,7 @@ const targetPluginSdkEntries = JSON.parse(
 const targetPrivatePluginSdkEntries = JSON.parse(
   readFileSync(resolve("scripts/lib/plugin-sdk-private-local-only-subpaths.json"), "utf8"),
 ) as string[];
+const targetWorkerDeployPaths = readWorkerDeployTargetPaths(resolve("."));
 const requiredPathGroups = [
   PACKAGE_DIST_INVENTORY_RELATIVE_PATH,
   ["dist/index.js", "dist/index.mjs"],
@@ -719,6 +720,7 @@ export function collectPackedInstalledPackageVerificationErrors(params: {
     expectedVersion: params.expectedVersion,
     installedVersion: packageJson.version?.trim() ?? "",
     packageRoot: params.packageRoot,
+    workerDeployPaths: targetWorkerDeployPaths,
   });
   if (
     params.installedBinaryVersion !== undefined &&
@@ -1392,7 +1394,7 @@ async function main() {
     if (packedPackage.name !== "openclaw" || packedPackage.version !== rootPackage.version) {
       throw new Error("release-check: prepared tarball does not match the target package version.");
     }
-    await verifyPackedContents(results, packedRoot);
+    verifyPackedContents(results, packedRoot);
     runPackedBundledChannelEntrySmoke(tarballPath, packedRoot);
     console.log("release-check: final npm tarball contents and installed runtime look OK.");
   } finally {
@@ -1400,24 +1402,10 @@ async function main() {
   }
 }
 
-async function verifyPackedContents(results: NpmPackResult[], packedRoot: string): Promise<void> {
-  // WORKER_BUNDLE_*_PATH exports declare the target's sealed deploy artifacts.
-  // Trusted tooling may be newer than the frozen target in the working directory.
-  const workerBundle = await tsImport(
-    pathToFileURL(resolve("src/shared/worker-bundle-hash.ts")).href,
-    import.meta.url,
-  );
-  const workerDeployEntrypoints = Object.entries(workerBundle)
-    .filter(([name]) => /^WORKER_BUNDLE_.*_PATH$/u.test(name))
-    .map(([name, value]) => {
-      if (typeof value !== "string") {
-        throw new Error(`release-check: target worker artifact ${name} must be a path string.`);
-      }
-      return `dist/worker/${value}`;
-    });
+function verifyPackedContents(results: NpmPackResult[], packedRoot: string): void {
   checkCliBootstrapExternalImports({
     rootDir: packedRoot,
-    workerDeployEntrypoints,
+    workerDeployEntrypoints: targetWorkerDeployPaths,
     logger: {
       error: (message: string) => console.error(`release-check: ${message}`),
     },

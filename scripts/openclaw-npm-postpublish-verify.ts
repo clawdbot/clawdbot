@@ -19,10 +19,6 @@ import { pathToFileURL } from "node:url";
 import { expectDefined } from "../packages/normalization-core/src/expect.js";
 import { ALWAYS_ALLOWED_RUNTIME_DIR_NAMES } from "../src/plugin-sdk/facade-activation-contract.ts";
 import { BUNDLED_RUNTIME_SIDECAR_PATHS } from "../src/plugins/runtime-sidecar-paths.ts";
-import {
-  WORKER_BUNDLE_ENTRY_PATH,
-  WORKER_BUNDLE_RSYNC_RECEIVER_PATH,
-} from "../src/shared/worker-bundle-hash.js";
 import { readBoundedResponseText } from "./lib/bounded-response.mjs";
 import { listBundledPluginPackArtifacts } from "./lib/bundled-plugin-build-entries.mjs";
 import { formatErrorMessage } from "./lib/error-format.mts";
@@ -36,6 +32,7 @@ import {
   packageNameFromSpecifier,
 } from "./lib/plugin-package-dependencies.mts";
 import { classifyReleaseTrain } from "./lib/release-version.mjs";
+import { readWorkerDeployTargetPaths } from "./lib/worker-deploy-target-contract.mts";
 import { runInstalledWorkspaceBootstrapSmoke } from "./lib/workspace-bootstrap-smoke.mts";
 import { parseReleaseVersion, resolveNpmCommandInvocation } from "./openclaw-npm-release-check.ts";
 import { buildCmdExeCommandLine, resolveWindowsCmdExePath } from "./windows-cmd-helpers.mjs";
@@ -77,11 +74,6 @@ const MAX_INSTALLED_WORKER_DEPLOY_DIST_JS_BYTES = 80 * 1024 * 1024;
 // Keep the dependency scan bounded while allowing headroom for generated root chunks.
 const MAX_INSTALLED_ROOT_DIST_JS_FILES = 10_000;
 const ROOT_DIST_JAVASCRIPT_MODULE_FILE_RE = /\.(?:c|m)?js$/u;
-// The ~69 MB self-contained worker needs extra headroom, but synchronous read/parse stays bounded.
-const SELF_CONTAINED_WORKER_DEPLOY_DIST_PATHS = new Set([
-  `worker/${WORKER_BUNDLE_ENTRY_PATH}`,
-  `worker/${WORKER_BUNDLE_RSYNC_RECEIVER_PATH}`,
-]);
 const OPTIONAL_OR_EXTERNALIZED_RUNTIME_IMPORTS = new Set([
   // Optional A2UI markdown renderer. The Canvas host bundle catches the missing
   // package and falls back when the optional renderer is unavailable.
@@ -122,6 +114,7 @@ type PublishedInstallScenario = {
 type OpenClawNpmPostpublishVerifyArgs =
   | {
       help: false;
+      targetRoot: string;
       version: string;
     }
   | {
@@ -130,7 +123,7 @@ type OpenClawNpmPostpublishVerifyArgs =
     };
 
 export function openClawNpmPostpublishVerifyUsage(): string {
-  return "Usage: node --import tsx scripts/openclaw-npm-postpublish-verify.ts <version>";
+  return "Usage: node --import tsx scripts/openclaw-npm-postpublish-verify.ts <version> [target-root]";
 }
 
 export function parseOpenClawNpmPostpublishVerifyArgs(
@@ -147,11 +140,13 @@ export function parseOpenClawNpmPostpublishVerifyArgs(
   if (version.startsWith("-")) {
     throw new Error(`Unknown openclaw npm postpublish verifier option: ${version}`);
   }
-  const extraArg = args[1]?.trim();
+  const targetArg = args[1]?.trim() || ".";
+  const targetRoot = isAbsolute(targetArg) ? targetArg : join(process.cwd(), targetArg);
+  const extraArg = args[2]?.trim();
   if (extraArg) {
     throw new Error(`Unexpected openclaw npm postpublish verifier argument: ${extraArg}`);
   }
-  return { help: false, version };
+  return { help: false, targetRoot, version };
 }
 
 export function buildPublishedInstallScenarios(version: string): PublishedInstallScenario[] {
@@ -460,9 +455,11 @@ export function collectInstalledPackageErrors(params: {
   expectedVersion: string;
   installedVersion: string;
   packageRoot: string;
+  workerDeployPaths: readonly string[];
 }): string[] {
   const errors: string[] = [];
   const installedVersion = normalizeInstalledBinaryVersion(params.installedVersion);
+  const workerDistPaths = new Set(params.workerDeployPaths.map((path) => path.slice(5)));
 
   if (installedVersion !== params.expectedVersion) {
     errors.push(
@@ -475,12 +472,20 @@ export function collectInstalledPackageErrors(params: {
       errors.push(`installed package is missing required bundled runtime sidecar: ${relativePath}`);
     }
   }
+  for (const relativePath of params.workerDeployPaths) {
+    const artifactPath = join(params.packageRoot, relativePath);
+    const artifactStat = existsSync(artifactPath) ? lstatSync(artifactPath) : null;
+    if (!artifactStat?.isFile()) {
+      const problem = artifactStat ? "not a regular file" : "missing";
+      errors.push(`installed package worker deploy artifact is ${problem}: ${relativePath}.`);
+    }
+  }
 
   errors.push(...collectInstalledBundledExtensionManifestErrors(params.packageRoot));
   errors.push(...collectInstalledAlwaysAllowedRuntimeFacadeErrors(params.packageRoot));
-  errors.push(...collectInstalledContextEngineRuntimeErrors(params.packageRoot));
+  errors.push(...collectInstalledContextEngineRuntimeErrors(params.packageRoot, workerDistPaths));
   errors.push(...collectInstalledPluginSdkDeclarationErrors(params.packageRoot));
-  errors.push(...collectInstalledRootDependencyManifestErrors(params.packageRoot));
+  errors.push(...collectInstalledRootDependencyManifestErrors(params.packageRoot, workerDistPaths));
 
   return [...new Set(errors)];
 }
@@ -598,9 +603,10 @@ function formatInstalledDistFileScanLimitError(scope: string, limit: number): st
 function readInstalledRootDistJavaScriptFile(
   packageRoot: string,
   filePath: string,
+  workerDistPaths: ReadonlySet<string>,
 ): InstalledRootDistJavaScriptReadResult {
   const relativePath = relative(join(packageRoot, "dist"), filePath).replaceAll("\\", "/");
-  const maxBytes = SELF_CONTAINED_WORKER_DEPLOY_DIST_PATHS.has(relativePath)
+  const maxBytes = workerDistPaths.has(relativePath)
     ? MAX_INSTALLED_WORKER_DEPLOY_DIST_JS_BYTES
     : MAX_INSTALLED_ROOT_DIST_JS_BYTES;
   const fileStat = lstatSync(filePath);
@@ -613,7 +619,10 @@ function readInstalledRootDistJavaScriptFile(
   return { ok: true, relativePath, source: readFileSync(filePath, "utf8") };
 }
 
-export function collectInstalledContextEngineRuntimeErrors(packageRoot: string): string[] {
+export function collectInstalledContextEngineRuntimeErrors(
+  packageRoot: string,
+  workerDistPaths: ReadonlySet<string> = new Set(),
+): string[] {
   const distFiles = listInstalledRootDistJavaScriptFiles(packageRoot);
   if (distFiles.limitExceeded) {
     return [formatInstalledDistFileScanLimitError("root dist", distFiles.limit)];
@@ -621,7 +630,7 @@ export function collectInstalledContextEngineRuntimeErrors(packageRoot: string):
 
   // The legacy marker is a root runtime bundling contract; extension assets are plugin-owned.
   for (const filePath of distFiles.files) {
-    const file = readInstalledRootDistJavaScriptFile(packageRoot, filePath);
+    const file = readInstalledRootDistJavaScriptFile(packageRoot, filePath, workerDistPaths);
     if (!file.ok) {
       return [file.error];
     }
@@ -739,7 +748,10 @@ function extractJavaScriptImportSpecifiers(source: string): ParsedImportSpecifie
   return { ok: true, specifiers };
 }
 
-export function collectInstalledRootDependencyManifestErrors(packageRoot: string): string[] {
+export function collectInstalledRootDependencyManifestErrors(
+  packageRoot: string,
+  workerDistPaths: ReadonlySet<string> = new Set(),
+): string[] {
   const packageJsonPath = join(packageRoot, "package.json");
   if (!existsSync(packageJsonPath)) {
     return ["installed package is missing package.json."];
@@ -769,7 +781,7 @@ export function collectInstalledRootDependencyManifestErrors(packageRoot: string
     collectBundledExtensionRuntimeDependencyOwners(packageRoot);
 
   for (const filePath of distFiles.files) {
-    const file = readInstalledRootDistJavaScriptFile(packageRoot, filePath);
+    const file = readInstalledRootDistJavaScriptFile(packageRoot, filePath, workerDistPaths);
     if (!file.ok) {
       return [file.error];
     }
@@ -1168,9 +1180,10 @@ function readInstalledBinaryVersion(prefixDir: string, cwd: string): string {
   return runNpmVerifyCommand(invocation, cwd);
 }
 
-function verifyScenario(version: string, scenario: PublishedInstallScenario): void {
+function verifyScenario(scenario: PublishedInstallScenario, paths: readonly string[]): void {
   const workingDir = mkdtempSync(join(tmpdir(), `openclaw-postpublish-${scenario.name}.`));
   const prefixDir = join(workingDir, "prefix");
+  const { expectedVersion } = scenario;
 
   try {
     for (const spec of scenario.installSpecs) {
@@ -1183,15 +1196,16 @@ function verifyScenario(version: string, scenario: PublishedInstallScenario): vo
       readFileSync(join(packageRoot, "package.json"), "utf8"),
     ) as InstalledPackageJson;
     const errors = collectInstalledPackageErrors({
-      expectedVersion: scenario.expectedVersion,
+      expectedVersion,
       installedVersion: pkg.version?.trim() ?? "",
       packageRoot,
+      workerDeployPaths: paths,
     });
     const installedBinaryVersion = readInstalledBinaryVersion(prefixDir, workingDir);
 
-    if (normalizeInstalledBinaryVersion(installedBinaryVersion) !== scenario.expectedVersion) {
+    if (normalizeInstalledBinaryVersion(installedBinaryVersion) !== expectedVersion) {
       errors.push(
-        `installed openclaw binary version mismatch: expected ${scenario.expectedVersion}, found ${installedBinaryVersion || "<missing>"}.`,
+        `installed openclaw binary version mismatch: expected ${expectedVersion}, found ${installedBinaryVersion || "<missing>"}.`,
       );
     }
 
@@ -1203,7 +1217,7 @@ function verifyScenario(version: string, scenario: PublishedInstallScenario): vo
       throw new Error(`${scenario.name} failed:\n- ${errors.join("\n- ")}`);
     }
 
-    console.log(`openclaw-npm-postpublish-verify: ${scenario.name} OK (${version})`);
+    console.log(`openclaw-npm-postpublish-verify: ${scenario.name} OK (${expectedVersion})`);
   } finally {
     rmSync(workingDir, { force: true, recursive: true });
   }
@@ -1216,11 +1230,12 @@ async function main(argv = process.argv.slice(2)): Promise<void> {
     return;
   }
 
-  const { version } = args;
+  const { targetRoot, version } = args;
+  const workerDeployPaths = readWorkerDeployTargetPaths(targetRoot);
   const scenarios = buildPublishedInstallScenarios(version);
   await verifyPublishedRegistryProvenance(version);
   for (const scenario of scenarios) {
-    verifyScenario(version, scenario);
+    verifyScenario(scenario, workerDeployPaths);
   }
 
   console.log(
