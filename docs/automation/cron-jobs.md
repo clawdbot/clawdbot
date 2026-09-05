@@ -702,6 +702,34 @@ mean the model finished, a tool succeeded, or a message was delivered. A single
 agent request can wait up to 15 seconds for admission; the model runtime may still
 be preparing when the response arrives.
 
+For callers that need the terminal execution and delivery facts in the same
+request, add `"waitForCompletion": true` to the direct `/hooks/agent` payload.
+The response stays open after admission and returns HTTP `200` when the admitted
+run settles:
+
+```json
+{
+  "ok": true,
+  "runId": "<hook-request-run-id>",
+  "completion": {
+    "status": "ok",
+    "replyDisposition": "silent",
+    "delivered": false,
+    "deliveryAttempted": true,
+    "deliverySuppressionReason": "silent"
+  }
+}
+```
+
+`replyDisposition` records whether the model's terminal reply was `visible`,
+`silent`, or `empty`, without exposing its text. Post-admission execution or
+delivery failures are terminal data in `completion`, not retryable HTTP
+failures. `deliveryError`, when present, is the fixed categorical value
+`"delivery-failed"`; provider, runtime, model, target, session, and diagnostic
+details remain private. The response never includes model output or summaries.
+Use an idempotency key so a lost response can replay the same admitted run and
+completion result without dispatching again.
+
 In `openclaw logs --follow`, search for `hook agent run completed` and the exact HTTP
 `runId`. Runs with `status=ok` and no explicit delivery error log at info level;
 all non-ok statuses (including skipped runs), thrown errors, and explicit delivery
