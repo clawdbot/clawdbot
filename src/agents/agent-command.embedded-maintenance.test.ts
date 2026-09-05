@@ -16,12 +16,15 @@ import {
   GATEWAY_INGRESS_ARGS,
 } from "./agent-command.compaction.test-support.js";
 import type { EmbeddedAgentRunResult } from "./embedded-agent.js";
+import { LiveSessionModelSwitchError } from "./live-model-switch-error.js";
 
 const {
   appendTranscriptEvent,
   appendTranscriptMessage,
   createAgentRunRestartAbortError,
+  loadSessionEntry,
   loadTranscriptEvents,
+  patchSessionEntryCore,
   replaceSessionEntry,
   rotateAgentEventLifecycleGeneration,
 } = compactionTestRuntime;
@@ -117,9 +120,13 @@ describe("agentCommand embedded maintenance", () => {
       return completed;
     });
     state.runSessionCompactionIfNeededMock.mockImplementationOnce(async (params) => {
-      expect(findStoredSessionEntry(sessionKey)?.pendingFinalDelivery).toMatchObject({
-        kind: "replayable",
-        text,
+      expect(findStoredSessionEntry(sessionKey)).toMatchObject({
+        pendingFinalDelivery: { kind: "replayable", text },
+        totalTokens: 904_869,
+        inputTokens: lastCallUsage.input,
+        outputTokens: lastCallUsage.output,
+        cacheRead: lastCallUsage.cacheRead,
+        cacheWrite: lastCallUsage.cacheWrite,
       });
       expect(params).toMatchObject({
         agentHarnessId: "openclaw",
@@ -185,8 +192,127 @@ describe("agentCommand embedded maintenance", () => {
       }),
     );
     expect(state.deliveryFreshEntries.at(-1)?.sessionId).toBe(successorSessionId);
+    expect(findStoredSessionEntry(sessionKey)).toMatchObject({
+      sessionId: successorSessionId,
+      totalTokens: 12_000,
+      totalTokensFresh: true,
+      inputTokens: lastCallUsage.input,
+      outputTokens: lastCallUsage.output,
+      cacheRead: lastCallUsage.cacheRead,
+      cacheWrite: lastCallUsage.cacheWrite,
+    });
     expect(findStoredSessionEntry(sessionKey)?.pendingFinalDelivery).toBeUndefined();
   });
+
+  it.each([
+    {
+      retry: "model context",
+      replaceWriter: false,
+      initialTokens: 42,
+      currentContextSnapshot: { tokens: 95_000 },
+    },
+    {
+      retry: "model context",
+      replaceWriter: true,
+      initialTokens: 42,
+      currentContextSnapshot: { tokens: 95_000 },
+    },
+    {
+      retry: "custody only after unknown compaction",
+      replaceWriter: false,
+      initialTokens: undefined,
+      currentContextSnapshot: undefined,
+    },
+  ])(
+    "keeps count-zero retry $retry on its retained writer (replacement=$replaceWriter)",
+    async ({ replaceWriter, initialTokens, currentContextSnapshot }) => {
+      const sessionId = "retry-context-owner";
+      const sessionKey = `agent:main:explicit:${sessionId}`;
+      const storePath = requireStorePath();
+      let retainedWriter: string | undefined;
+      state.runAgentAttemptMock.mockImplementationOnce(async (params) => {
+        const target = params.sessionTarget;
+        const entry = target ? loadSessionEntry(target) : undefined;
+        if (!target || !entry) {
+          throw new Error("expected the first candidate owner");
+        }
+        retainedWriter = entry.activeWriterRunId;
+        params.onCompactionAccounting?.({
+          kind: "durable",
+          count: 1,
+          currentContextSnapshot: { tokens: initialTokens },
+          target: {
+            ...target,
+            lifecycleRevision: entry.lifecycleRevision,
+            activeWriterRunId: entry.activeWriterRunId,
+          },
+        });
+        throw new LiveSessionModelSwitchError({
+          provider: params.providerOverride,
+          model: params.modelOverride,
+          authProfileId: "switched-profile",
+          authProfileIdSource: "user",
+        });
+      });
+      state.runAgentAttemptMock.mockImplementationOnce(async (params) => {
+        const target = params.sessionTarget;
+        if (!target) {
+          throw new Error("expected the retry target");
+        }
+        if (replaceWriter) {
+          await patchSessionEntryCore(target, () => ({
+            activeWriterRunId: "replacement-writer",
+            compactionCount: 7,
+            totalTokens: 777,
+            totalTokensFresh: true,
+            totalTokensVersion: 1,
+          }));
+        }
+        const entry = loadSessionEntry(target);
+        if (!entry) {
+          throw new Error("expected the retry owner");
+        }
+        params.onCompactionAccounting?.({
+          kind: "durable",
+          count: 0,
+          ...(currentContextSnapshot ? { currentContextSnapshot } : {}),
+          target: {
+            ...target,
+            lifecycleRevision: entry.lifecycleRevision,
+            activeWriterRunId: entry.activeWriterRunId,
+          },
+        });
+        const result = makeResult({ sessionId, text: "retry answer", runner: "embedded" });
+        if (!currentContextSnapshot) {
+          const usage = { input: 95_000, output: 10 };
+          result.meta.agentMeta = {
+            ...result.meta.agentMeta!,
+            promptTokens: 95_000,
+            usage,
+            lastCallUsage: usage,
+          };
+        }
+        return result;
+      });
+
+      await agentCommand({ message: "continue", sessionId, sessionKey });
+
+      expect(state.runAgentAttemptMock).toHaveBeenCalledTimes(2);
+      const stored = findStoredSessionEntry(sessionKey);
+      expect(stored).toMatchObject({
+        sessionId,
+        compactionCount: replaceWriter ? 7 : 1,
+        totalTokensFresh: replaceWriter || currentContextSnapshot !== undefined,
+      });
+      expect(stored?.totalTokens).toBe(replaceWriter ? 777 : currentContextSnapshot?.tokens);
+      if (!currentContextSnapshot) {
+        expect(stored).toMatchObject({ inputTokens: 95_000, outputTokens: 10 });
+      }
+      expect(loadSessionEntry({ sessionKey, storePath })?.activeWriterRunId).toBe(
+        replaceWriter ? "replacement-writer" : retainedWriter,
+      );
+    },
+  );
 
   const excludedEmbeddedRuns: Array<{
     name: string;
@@ -230,6 +356,23 @@ describe("agentCommand embedded maintenance", () => {
     });
     completed.meta = { ...completed.meta, ...testCase.meta };
     state.runAgentAttemptMock.mockImplementationOnce(async (params) => {
+      if (testCase.compactionCount) {
+        const target = params.sessionTarget;
+        const entry = target ? loadSessionEntry(target) : undefined;
+        if (!target || !entry) {
+          throw new Error("expected the in-run compaction owner");
+        }
+        params.onCompactionAccounting?.({
+          kind: "durable",
+          count: testCase.compactionCount,
+          currentContextSnapshot: { tokens: undefined },
+          target: {
+            ...target,
+            lifecycleRevision: entry.lifecycleRevision,
+            activeWriterRunId: entry.activeWriterRunId,
+          },
+        });
+      }
       if (testCase.observeAuth !== false) {
         params.onSuccessfulAuthProfile?.({});
       }

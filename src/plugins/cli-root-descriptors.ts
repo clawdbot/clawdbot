@@ -42,7 +42,7 @@ export async function getPluginCliCommandDescriptors(
         continue;
       }
       seenPluginIds.add(plugin.id);
-      if (!isInstalledPluginEnabled(snapshot.index, plugin.id, context.config)) {
+      if (!isInstalledPluginEnabled(snapshot.index, plugin.id, context.config, context.env)) {
         continue;
       }
       const pluginConfig = normalizedConfig.entries[normalizePluginPolicyId(plugin.id)]?.config;

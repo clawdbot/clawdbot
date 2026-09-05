@@ -15,6 +15,7 @@ import { getFileLockProcessStartTime, isPidAlive } from "../shared/pid-alive.js"
 import { safeParseJsonWithSchema } from "../utils/zod-parse.js";
 import { resolveIdentityPathViaExistingAncestorSync } from "./boundary-path.js";
 import { sha256HexPrefixCore } from "./crypto-digest.js";
+import { hasErrnoCode } from "./errno.js";
 import { createFileLockManager } from "./file-lock-manager.js";
 import {
   isGatewayArgv,
@@ -23,11 +24,10 @@ import {
   parseProcCmdline,
 } from "./gateway-process-argv.js";
 import { tryAcquireExclusiveSqliteCoordinator } from "./node-sqlite.js";
+import { resolveDiagnosticProcessEnv } from "./process-env.js";
 import { acquireGatewayLifecycleCoordinator } from "./state-database-coordinator.js";
-import {
-  readWindowsProcessArgsSync,
-  readWindowsProcessStartTimeSync,
-} from "./windows-port-pids.js";
+import { readWindowsProcessArgsSync } from "./windows-port-pids.js";
+import { readWindowsProcessStartTimeSync } from "./windows-process-start.js";
 
 const DEFAULT_TIMEOUT_MS = 5000;
 const DEFAULT_POLL_INTERVAL_MS = 100;
@@ -151,6 +151,7 @@ function readWindowsCmdline(pid: number): string[] | null {
 function readDarwinCmdline(pid: number): string[] | null {
   try {
     const raw = execFileSync("ps", ["-p", String(pid), "-o", "command="], {
+      env: resolveDiagnosticProcessEnv(),
       encoding: "utf8",
       timeout: CMDLINE_EXEC_TIMEOUT_MS,
       stdio: ["ignore", "pipe", "ignore"],
@@ -245,11 +246,20 @@ async function resolveGatewayOwnerStatus(
   return isGatewayArgv(args, { allowGatewayBinary: true }) ? "alive" : "dead";
 }
 
-async function readLockPayload(lockPath: string): Promise<LockPayload | null> {
+async function readLockPayload(
+  lockPath: string,
+  requireInspection = false,
+): Promise<LockPayload | null> {
   try {
-    const raw = await fs.readFile(lockPath, "utf8");
-    return parseGatewayLockPayload(raw);
-  } catch {
+    const payload = parseGatewayLockPayload(await fs.readFile(lockPath, "utf8"));
+    if (requireInspection && !payload) {
+      throw new GatewayLockError("Gateway lock payload could not be verified");
+    }
+    return payload;
+  } catch (error) {
+    if (requireInspection && !hasErrnoCode(error, "ENOENT")) {
+      throw new GatewayLockError("Gateway lock inspection is unavailable", error);
+    }
     return null;
   }
 }
@@ -309,20 +319,19 @@ function resolveGatewayLockPaths(env: NodeJS.ProcessEnv, suppliedLockDir?: strin
   };
 }
 
+type GatewayLockObservationOptions = Pick<
+  GatewayLockOptions,
+  "env" | "lockDir" | "platform" | "readProcessCmdline" | "readProcessStartTime"
+> & { requireInspection?: boolean };
+
 export async function readActiveGatewayLockPort(
-  opts: Pick<
-    GatewayLockOptions,
-    "env" | "lockDir" | "platform" | "readProcessCmdline" | "readProcessStartTime"
-  > = {},
+  opts: GatewayLockObservationOptions = {},
 ): Promise<number | undefined> {
   return (await readActiveGatewayLockIdentity(opts))?.port;
 }
 
 export async function readActiveGatewayLockIdentity(
-  opts: Pick<
-    GatewayLockOptions,
-    "env" | "lockDir" | "platform" | "readProcessCmdline" | "readProcessStartTime"
-  > = {},
+  opts: GatewayLockObservationOptions = {},
 ): Promise<GatewayLockIdentity | undefined> {
   const env = opts.env ?? process.env;
   const { configLockPath, stateLockPath } = resolveGatewayLockPaths(env, opts.lockDir);
@@ -332,10 +341,10 @@ export async function readActiveGatewayLockIdentity(
 
 async function readVerifiedGatewayLockIdentity(
   lockPath: string,
-  opts: Pick<GatewayLockOptions, "platform" | "readProcessCmdline" | "readProcessStartTime">,
+  opts: GatewayLockObservationOptions,
 ): Promise<GatewayLockIdentity | undefined> {
-  const payload = await readLockPayload(lockPath);
-  if (!payload?.port || (payload.role && payload.role !== "gateway")) {
+  const payload = await readLockPayload(lockPath, opts.requireInspection);
+  if (!payload || (payload.role && payload.role !== "gateway")) {
     return undefined;
   }
   const ownerStatus = await resolveGatewayOwnerStatus(
@@ -346,7 +355,15 @@ async function readVerifiedGatewayLockIdentity(
     opts.readProcessStartTime,
     { trustUnknownCmdlineOwner: false },
   );
-  if (ownerStatus !== "alive") {
+  // Discovery may omit an unverifiable owner; mutation preflight must preserve unknown.
+  if (
+    opts.requireInspection &&
+    ownerStatus !== "dead" &&
+    (ownerStatus === "unknown" || !payload.port)
+  ) {
+    throw new GatewayLockError("Gateway lock owner identity could not be verified");
+  }
+  if (ownerStatus !== "alive" || !payload.port) {
     return undefined;
   }
   return {

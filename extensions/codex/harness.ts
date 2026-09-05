@@ -11,6 +11,10 @@ import { resolvePluginConfigObject } from "openclaw/plugin-sdk/plugin-config-run
 import type { PluginRuntime } from "openclaw/plugin-sdk/plugin-runtime";
 import { runHostPreparedIsolatedCompletion } from "openclaw/plugin-sdk/simple-completion-runtime";
 import { readCodexRuntimeModelId } from "./src/app-server/model-runtime.js";
+import {
+  sessionBindingIdentity,
+  readCodexSessionOwnershipBinding,
+} from "./src/app-server/session-binding-record.js";
 import type { CodexAppServerBindingStore } from "./src/app-server/session-binding.js";
 import type { CodexSessionCatalogControlFactory } from "./src/session-catalog-types.js";
 
@@ -115,6 +119,31 @@ export function createCodexAppServerAgentHarness(
       visibleReplies: "message_tool",
     },
     authBootstrap: "harness",
+    resolveSessionRuntimeOwnership: (params) => {
+      const assertCurrent = () => {
+        params.assertCurrent();
+        if (disposed) {
+          throw new Error("Codex agent harness is disposed");
+        }
+      };
+      assertCurrent();
+      const binding = readCodexSessionOwnershipBinding({
+        bindingStore: options.bindingStore,
+        identity: sessionBindingIdentity(params),
+        config: params.config,
+        storePath: params.storePath,
+      });
+      assertCurrent();
+      return binding?.preserveNativeModel === true
+        ? {
+            model: "native",
+            auth: binding.connectionScope === "supervision" ? "native" : "host",
+            ...(binding.model?.trim() && binding.modelProvider
+              ? { modelRef: { provider: binding.modelProvider, model: binding.model } }
+              : {}),
+          }
+        : undefined;
+    },
     ...(sessionCatalogControlFactory && sessionRuntime
       ? {
           sessionFork: {
@@ -307,7 +336,7 @@ export function createCodexAppServerAgentHarness(
     reset: async (params) => {
       if (params.sessionId && params.reason !== "deleted") {
         const [
-          { reclaimCurrentCodexSessionGeneration, sessionBindingIdentity },
+          { reclaimCurrentCodexSessionGeneration },
           { retireCodexAppServerSessionGeneration },
         ] = await Promise.all([
           import("./src/app-server/session-binding.js"),

@@ -1,6 +1,6 @@
 {
   "name": "@openclaw/ai",
-  "version": "2026.8.1",
+  "version": "2026.9.1",
   "description": "Reusable model provider adapters and streaming runtime from OpenClaw",
   "keywords": [
     "ai",
@@ -108,7 +108,7 @@
     "@mistralai/mistralai": "2.6.4",
     "openai": "7.5.0",
     "partial-json": "0.1.7",
-    "typebox": "1.3.16"
+    "typebox": "1.3.18"
   },
   "devDependencies": {
     "@openclaw/model-catalog-core": "workspace:*",

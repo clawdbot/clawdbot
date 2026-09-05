@@ -1,6 +1,8 @@
+import path from "node:path";
 import { gatewayOriginScope } from "@openclaw/gateway-client/browser";
 import type { BrowserContextOptions, Page } from "playwright";
 import { expect, it } from "vitest";
+import { finishElementAnimations } from "../test-helpers/animations.ts";
 import {
   MOVED_WORKSPACE,
   PICKED,
@@ -15,7 +17,6 @@ import {
   installMockGateway,
   navigateInApp,
   pollLocatorText,
-  projectProofArtifactDir,
   waitForCommittedChatRoute,
   waitForCommittedNewSessionDraft,
 } from "./new-session-page.test-support.ts";
@@ -99,6 +100,18 @@ async function withNewSessionPage(
   } finally {
     await context.close();
   }
+}
+
+function projectProofRecording(): BrowserContextOptions {
+  return captureUiProofEnabled
+    ? {
+        recordVideo: {
+          dir: path.join(suite.artifactDir, "project-registry"),
+          size: { height: 900, width: 1280 },
+        },
+        viewport: { height: 900, width: 1280 },
+      }
+    : {};
 }
 
 suite.define(() => {
@@ -271,7 +284,7 @@ suite.define(() => {
     });
   });
 
-  it("separates model shortcuts from numeric search input by focus", async () => {
+  it("separates model shortcuts, search input, and composer typing by focus", async () => {
     await withNewSessionPage(DESKTOP_CONTEXT, async (page) => {
       await installMockGateway(page, { models: MODELS });
       await page.goto(`${suite.server.baseUrl}new`);
@@ -289,9 +302,9 @@ suite.define(() => {
         .toBe(true);
       const secondShortcut = secondModel.locator('[data-chat-model-shortcut-number="2"]');
       await expect.poll(() => secondShortcut.count()).toBe(1);
-      // wa-popup updates its anchored position asynchronously. Gate the atomic
-      // baseline on that settlement. After focus, poll the same exact geometry so
-      // transient frames settle before enforcing the opacity-only no-reflow contract.
+      // Finish the picker's opening scale before recording its baseline. The top
+      // transform origin keeps the anchor gap stable while box geometry still grows.
+      await picker.locator('wa-popup [part~="popup"]').evaluate(finishElementAnimations);
       const menuGeometry = () =>
         page.evaluate(() => {
           const anchor = document.querySelector('[data-chat-model-select="true"]');
@@ -351,6 +364,10 @@ suite.define(() => {
       await page.keyboard.press("1");
       await expect.poll(() => picker.getAttribute("open")).toBe(null);
       await expect.poll(() => modelSelect.textContent()).toContain("Claude Sonnet 4.6");
+
+      await modelSelect.focus();
+      await page.keyboard.type("1");
+      await expect.poll(() => page.locator(".new-session-page__message").inputValue()).toBe("1");
     });
   });
 
@@ -460,13 +477,15 @@ suite.define(() => {
         },
       });
       await page.goto(`${suite.server.baseUrl}new`);
-      const placeTrigger = page.locator("#new-session-detail-trigger");
+      const placeTrigger = page.locator("#new-session-checkout-trigger");
       const projectTrigger = page.locator("#new-session-project-trigger");
       await choosePackagesFolder(page);
       await placeTrigger.click();
-      await page.getByRole("button", { name: "Worktree" }).click();
-      await page.getByLabel("Base branch").fill("release/next");
-      await page.getByLabel("Worktree name").fill("remembered-task");
+      await page
+        .getByRole("button", { name: "New worktree Isolated copy of the repo", exact: true })
+        .click();
+      await page.getByLabel("From", { exact: true }).fill("release/next");
+      await page.getByLabel("Name", { exact: true }).fill("remembered-task");
       await page.keyboard.press("Escape");
 
       const modelSelect = page.locator('[data-chat-model-select="true"]');
@@ -488,16 +507,18 @@ suite.define(() => {
       ).toBe("Local");
       await expect.poll(() => placeTrigger.getAttribute("data-worktree")).toBe("true");
       await placeTrigger.click();
-      await expect.poll(() => page.getByLabel("Base branch").inputValue()).toBe("release/next");
       await expect
-        .poll(() => page.getByLabel("Worktree name").inputValue())
+        .poll(() => page.getByLabel("From", { exact: true }).inputValue())
+        .toBe("release/next");
+      await expect
+        .poll(() => page.getByLabel("Name", { exact: true }).inputValue())
         .toBe("remembered-task");
       await page.keyboard.press("Escape");
       await expect
         .poll(() => modelSelect.getAttribute("data-chat-select-value"))
         .toBe("anthropic/claude-sonnet-4-6");
       await expect.poll(() => effortSelect.getAttribute("data-chat-thinking-value")).toBe("high");
-      await captureUiProof(page, "new-session-preferences-restored.png");
+      await captureUiProof(suite, page, "new-session-preferences-restored.png");
 
       const branchRequests = await gateway.getRequests("worktrees.branches");
       expect(branchRequests.at(-1)?.params).toMatchObject({ repoRoot: PICKED });
@@ -529,17 +550,8 @@ suite.define(() => {
 
   it("uses identity-scoped server recents without duplicating registered projects", async () => {
     const context = await suite.browser.newContext({
-      locale: "en-US",
-      serviceWorkers: "block",
-      ...(captureUiProofEnabled
-        ? {
-            recordVideo: {
-              dir: projectProofArtifactDir,
-              size: { height: 900, width: 1280 },
-            },
-            viewport: { height: 900, width: 1280 },
-          }
-        : {}),
+      ...BASE_CONTEXT,
+      ...projectProofRecording(),
     });
     const page = await context.newPage();
     const gateway = await installMockGateway(page, {
@@ -591,7 +603,10 @@ suite.define(() => {
       const recentFolder = page.locator(`[data-value="recent:${WORKSPACE}/scratch"]`);
       await project.waitFor();
       await recentFolder.waitFor();
-      await captureProjectUiProof(page, "identity-project-recents-after.png");
+      await captureProjectUiProof(suite, page, "identity-project-recents-after.png", {
+        surface: page.locator('.new-session-page__project-popover wa-popup [part="popup"]'),
+        content: [project, recentFolder],
+      });
       await project.click();
       await page.locator(".new-session-page__message").fill("continue registered work");
       await page.getByRole("button", { name: "Start session" }).click();
@@ -609,14 +624,7 @@ suite.define(() => {
     await withNewSessionPage(
       {
         ...DESKTOP_CONTEXT,
-        ...(captureUiProofEnabled
-          ? {
-              recordVideo: {
-                dir: projectProofArtifactDir,
-                size: { height: 900, width: 1280 },
-              },
-            }
-          : {}),
+        ...projectProofRecording(),
       },
       async (page) => {
         const appUrl = new URL(suite.server.baseUrl);
@@ -692,10 +700,10 @@ suite.define(() => {
           },
         });
         const trigger = page.locator("#new-session-project-trigger");
-        const detailTrigger = page.locator("#new-session-detail-trigger");
+        const checkoutTrigger = page.locator("#new-session-checkout-trigger");
         await pollLocatorText(trigger.locator(".new-session-page__trigger-label")).toBe("packages");
-        await expect.poll(() => detailTrigger.getAttribute("data-worktree")).toBe("true");
-        await captureProjectUiProof(page, "identity-preferences-migrated.png");
+        await expect.poll(() => checkoutTrigger.getAttribute("data-worktree")).toBe("true");
+        await captureProjectUiProof(suite, page, "identity-preferences-migrated.png");
 
         await navigateInApp(page, "chat");
         await waitForCommittedChatRoute(page);
@@ -788,9 +796,11 @@ suite.define(() => {
       });
       await page.goto(`${suite.server.baseUrl}new`);
       await choosePackagesFolder(page);
-      const placeTrigger = page.locator("#new-session-detail-trigger");
+      const placeTrigger = page.locator("#new-session-checkout-trigger");
       await placeTrigger.click();
-      await page.getByRole("button", { name: "Worktree" }).click();
+      await page
+        .getByRole("button", { name: "New worktree Isolated copy of the repo", exact: true })
+        .click();
       await page.keyboard.press("Escape");
       const modelSelect = page.locator('[data-chat-model-select="true"]');
       await modelSelect.click();
@@ -821,9 +831,8 @@ suite.define(() => {
         code: "UNAVAILABLE",
         message: "branch lookup unavailable",
       });
-      // A failed lookup disables the worktree toggle, so restoring the stored
-      // choice would strand the draft behind a control the user cannot clear.
-      // The draft drops it and stays submittable; storage keeps the preference.
+      // A failed lookup drops the unvalidated draft choice and keeps the
+      // session submittable; storage retains the preference for the next visit.
       await expect.poll(() => placeTrigger.count()).toBe(0);
       await expect.poll(() => start.isDisabled()).toBe(false);
       await waitForCommittedNewSessionDraft(page, "keep both remembered choices", 0);
@@ -955,7 +964,7 @@ suite.define(() => {
         "openclaw",
       );
       await expect
-        .poll(() => page.locator("#new-session-detail-trigger").getAttribute("data-worktree"))
+        .poll(() => page.locator("#new-session-checkout-trigger").getAttribute("data-worktree"))
         .toBe("false");
       await expect
         .poll(

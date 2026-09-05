@@ -91,7 +91,6 @@ function normalizeUpdateComparison(content: string): string {
 }
 
 type ApplyPatchOptions = ApplyPatchFileOptions & {
-  signal?: AbortSignal;
   patchInputPaths?: ReadonlyMap<string, string>;
 };
 
@@ -122,6 +121,7 @@ export function createApplyPatchTool(
     root?: string;
     sandbox?: SandboxApplyPatchConfig;
     workspaceOnly?: boolean;
+    abortSignal?: AbortSignal;
     memoryWriteProvenance?: MemoryWriteProvenanceObserver;
   } = {},
 ): AgentTool<typeof applyPatchSchema, ApplyPatchToolDetails> {
@@ -137,12 +137,15 @@ export function createApplyPatchTool(
     parameters: applyPatchSchema,
     outputSchema: ApplyPatchToolOutputSchema,
     execute: async (_toolCallId, args, signal) => {
+      const executionSignal = options.abortSignal
+        ? AbortSignal.any(signal ? [signal, options.abortSignal] : [options.abortSignal])
+        : signal;
       const params = args as { input?: string };
       const input = typeof params.input === "string" ? params.input : "";
       if (!input.trim()) {
         throw new Error("Provide a patch input.");
       }
-      if (signal?.aborted) {
+      if (executionSignal?.aborted) {
         throw createAbortError("Aborted");
       }
 
@@ -152,13 +155,14 @@ export function createApplyPatchTool(
         sandbox,
         workspaceOnly,
         memoryWriteProvenance: options.memoryWriteProvenance,
-        signal,
+        signal: executionSignal,
       });
 
+      // A no-op patch is not terminal — the model may still be mid-task and
+      // needs a continuation, not an ended turn.
       return {
         content: [{ type: "text", text: result.text }],
         details: { summary: result.summary },
-        ...(result.noOp ? { terminate: true } : {}),
       };
     },
   };

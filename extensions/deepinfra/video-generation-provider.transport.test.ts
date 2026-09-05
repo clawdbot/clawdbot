@@ -1,8 +1,7 @@
-// DeepInfra transport tests cover real provider-http request policy forwarding.
 import { createServer, type IncomingMessage, type ServerResponse } from "node:http";
 import { connect, type AddressInfo } from "node:net";
 import { withEnvAsync, withServer } from "openclaw/plugin-sdk/test-env";
-import { describe, expect, it, vi } from "vitest";
+import { afterAll, beforeAll, describe, expect, it, vi } from "vitest";
 
 const resolveApiKeyForProviderMock = vi.hoisted(() =>
   vi.fn(async () => ({
@@ -27,15 +26,21 @@ type DestroyableConnection = {
   destroy: () => void;
 };
 
-async function buildTransportProofProvider() {
+let buildDeepInfraVideoGenerationProvider: typeof import("./video-generation-provider.js").buildDeepInfraVideoGenerationProvider;
+
+beforeAll(async () => {
   vi.resetModules();
   vi.doUnmock("openclaw/plugin-sdk/provider-http");
   vi.doMock("openclaw/plugin-sdk/provider-auth-runtime", () => ({
     resolveApiKeyForProvider: resolveApiKeyForProviderMock,
   }));
-  const { buildDeepInfraVideoGenerationProvider } = await import("./video-generation-provider.js");
-  return buildDeepInfraVideoGenerationProvider();
-}
+  ({ buildDeepInfraVideoGenerationProvider } = await import("./video-generation-provider.js"));
+});
+
+afterAll(() => {
+  vi.doUnmock("openclaw/plugin-sdk/provider-auth-runtime");
+  vi.resetModules();
+});
 
 async function readRequestBody(request: IncomingMessage): Promise<string> {
   const chunks: Buffer[] = [];
@@ -144,7 +149,7 @@ async function generateLocalVideo(params: {
     proxy?: { mode: "env-proxy" };
   };
 }) {
-  const provider = await buildTransportProofProvider();
+  const provider = buildDeepInfraVideoGenerationProvider();
   return await provider.generateVideo({
     provider: "deepinfra",
     model: "deepinfra/Pixverse/Pixverse-T2V",
@@ -239,7 +244,12 @@ describe("deepinfra video generation provider transport", () => {
           baseUrl: `${baseUrl}/v1/openai`,
           request,
         }),
-      ).rejects.toThrow();
+      ).rejects.toThrow(
+        expect.objectContaining({
+          name: "SsrFBlockedError",
+          message: expect.stringContaining("private/internal/special-use IP address"),
+        }),
+      );
       expect(requests).toHaveLength(0);
     });
   });

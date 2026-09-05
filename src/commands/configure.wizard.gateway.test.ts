@@ -245,7 +245,11 @@ describe("runConfigureWizard", () => {
     await runConfigureWizard({ command: "configure", sections: ["health"] }, createRuntime());
 
     expect(mocks.waitForGatewayReachable).toHaveBeenCalledWith(
-      expect.objectContaining({ url: remoteConfig.gateway?.remote?.url, config: remoteConfig }),
+      expect.objectContaining({
+        url: remoteConfig.gateway?.remote?.url,
+        config: remoteConfig,
+        originScopedDeviceAuth: true,
+      }),
     );
     expect(mocks.healthCommand).toHaveBeenCalledWith(
       expect.objectContaining({
@@ -374,6 +378,7 @@ describe("runConfigureWizard", () => {
       expect(localProbe?.timeoutMs).toBe(300);
       expect(remoteProbe).toEqual({
         url: "wss://gateway.example.test",
+        originScopedDeviceAuth: true,
         config: expect.objectContaining({
           gateway: expect.objectContaining({
             remote: expect.objectContaining({

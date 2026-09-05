@@ -473,6 +473,9 @@ export async function performClawHubSkillInstall(
         error: `Skill already exists at ${targetDir}. Re-run with force/update.`,
       };
     }
+    // Reject damaged tracking before installing files; reread at the write boundary
+    // so skills tracked during the download keep their metadata.
+    await readClawHubSkillsLockfile(params.workspaceDir);
 
     let version: string;
     let detail: ClawHubSkillDetail | undefined;

@@ -1,5 +1,6 @@
 // Shared cron CLI formatting, parsing, delivery preview, and warning helpers.
 import {
+  MAX_DATE_TIMESTAMP_MS,
   resolveExpiresAtMsFromDurationMs,
   timestampMsToIsoString,
 } from "@openclaw/normalization-core/number-coercion";
@@ -15,18 +16,18 @@ import { resolveCronStaggerMs } from "../../cron/stagger.js";
 import type { CronDeliveryPreview, CronJob, CronSchedule } from "../../cron/types.js";
 import { danger } from "../../globals.js";
 import { formatErrorMessage } from "../../infra/errors.js";
+import { formatExactDuration } from "../../infra/format-time/format-duration-exact.js";
 import { formatDurationHuman } from "../../infra/format-time/format-duration.ts";
-import {
-  isOffsetlessIsoDateTime,
-  parseOffsetlessIsoDateTimeInTimeZone,
-} from "../../infra/format-time/parse-offsetless-zoned-datetime.js";
+import { parseOffsetlessIsoDateTimeInTimeZone } from "../../infra/format-time/parse-offsetless-zoned-datetime.js";
 import { formatTimestamp } from "../../logging/timestamps.js";
-import { defaultRuntime, type RuntimeEnv } from "../../runtime.js";
+import { defaultRuntime, ExitError, type RuntimeEnv } from "../../runtime.js";
+import { isOffsetlessIsoDateTime } from "../../shared/iso-time.js";
 import { formatLookupMiss } from "../error-format.js";
 import { rethrowExpectedCliError } from "../failure-output.js";
 import type { GatewayRpcOpts } from "../gateway-rpc.js";
 import { callGatewayFromCli } from "../gateway-rpc.js";
 import { isJsonOutputModeActive } from "../json-output-mode.js";
+import { exitCliAfterOutput } from "../one-shot-exit.js";
 import { parseDurationMs as parseSharedDurationMs } from "../parse-duration.js";
 
 function parseCronArgv(value: unknown, flag: string): string[] | undefined {
@@ -228,6 +229,10 @@ function formatCronStatusForDisplay(job: CronJob) {
 }
 
 export function handleCronCliError(err: unknown) {
+  // Completed outcomes must reach CLI cleanup, not become new cron errors.
+  if (err instanceof ExitError) {
+    throw err;
+  }
   rethrowExpectedCliError(err);
   const missingJob = readCronJobNotFoundError(err);
   const message = missingJob ? formatCronLookupMiss(missingJob.jobId) : formatErrorMessage(err);
@@ -235,7 +240,7 @@ export function handleCronCliError(err: unknown) {
     throw missingJob ? new Error(message) : err;
   }
   defaultRuntime.error(danger(message));
-  defaultRuntime.exit(1);
+  exitCliAfterOutput(defaultRuntime, 1);
 }
 
 export const formatCronLookupMiss = (jobId: string) =>
@@ -281,10 +286,7 @@ export async function warnIfCronSchedulerDisabled(opts: GatewayRpcOpts) {
 export function parsePositiveCronDurationMs(input: string): number | null {
   try {
     const result = parseSharedDurationMs(input);
-    if (result <= 0) {
-      return null;
-    }
-    return result;
+    return result > 0 && result <= MAX_DATE_TIMESTAMP_MS ? result : null;
   } catch {
     return null;
   }
@@ -404,13 +406,9 @@ const formatCell = (value: unknown, width: number) => {
 };
 
 const formatIsoMinute = (iso: string) => {
-  const parsed = parseAbsoluteTimeMs(iso);
-  const d = new Date(parsed ?? Number.NaN);
-  if (Number.isNaN(d.getTime())) {
-    return "-";
-  }
-  const isoStr = d.toISOString();
-  return `${isoStr.slice(0, 10)} ${isoStr.slice(11, 16)}Z`;
+  const isoStr = timestampMsToIsoString(parseAbsoluteTimeMs(iso));
+  // Date.toISOString() has a fixed :ss.sssZ suffix but variable-width years.
+  return isoStr ? `${isoStr.slice(0, -8).replace("T", " ")}Z` : "-";
 };
 
 const formatSpan = (ms: number) => (ms < 60_000 ? "<1m" : formatDurationHuman(ms));
@@ -430,7 +428,7 @@ const formatSchedule = (schedule: CronSchedule | undefined, hasTrigger = false) 
     return `at ${formatIsoMinute(schedule.at)}${suffix}`;
   }
   if (schedule?.kind === "every") {
-    return `every ${formatDurationHuman(schedule.everyMs)}${suffix}`;
+    return `every ${formatExactDuration(schedule.everyMs)}${suffix}`;
   }
   if (schedule?.kind === "on-exit") {
     const cwd = schedule.cwd ? ` @ ${schedule.cwd}` : "";
@@ -450,7 +448,7 @@ const formatSchedule = (schedule: CronSchedule | undefined, hasTrigger = false) 
   if (staggerMs <= 0) {
     return `${base} (exact)`;
   }
-  return `${base} (stagger ${formatDurationHuman(staggerMs)})`;
+  return `${base} (stagger ${formatExactDuration(staggerMs)})`;
 };
 
 export function coerceCronDeliveryPreviews(value: unknown): Map<string, CronDeliveryPreview> {

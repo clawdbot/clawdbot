@@ -3,6 +3,7 @@ import { randomBytes, randomUUID } from "node:crypto";
 import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
+import { normalizeOptionalLowercaseString } from "@openclaw/normalization-core/string-coerce";
 import { describe, expect, it } from "vitest";
 import { renderCatFacePngBase64 } from "../../test/helpers/live-image-probe.js";
 import { resolveDefaultAgentDir } from "../agents/agent-scope-config.js";
@@ -14,11 +15,11 @@ import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { isTruthyEnvValue } from "../infra/env.js";
 import { getSessionBindingService } from "../infra/outbound/session-binding-service.js";
 import { findBundledPluginMetadataById } from "../plugins/bundled-plugin-metadata.js";
-import { pluginCommands } from "../plugins/command-registry-state.js";
 import { getCurrentPluginConversationBinding } from "../plugins/conversation-binding.js";
 import { seedPluginConversationBindingApprovalForTest } from "../plugins/conversation-binding.test-fixtures.js";
 import { clearPluginLoaderCache } from "../plugins/loader.test-fixtures.js";
-import { resetPluginRuntimeStateForTest } from "../plugins/runtime.js";
+import { listRegisteredPluginCommands } from "../plugins/plugin-command-registry.js";
+import { requireActivePluginRegistry, resetPluginRuntimeStateForTest } from "../plugins/runtime.js";
 import { clearSecretsRuntimeSnapshot } from "../secrets/runtime.js";
 import { activateTestChannelRegistry, createTestRegistry } from "../test-utils/channel-plugins.js";
 import { deleteTestEnvValue, setTestEnvValue } from "../test-utils/env.js";
@@ -217,9 +218,10 @@ async function sendChatAndWait(params: {
 }
 
 function resolveCodexPluginRoot(): string {
+  const commands = listRegisteredPluginCommands(requireActivePluginRegistry());
   const command =
-    pluginCommands.get("/codex") ??
-    Array.from(pluginCommands.values()).find((candidate) => candidate.pluginId === "codex");
+    commands.find((candidate) => normalizeOptionalLowercaseString(candidate.name) === "codex") ??
+    commands.find((candidate) => candidate.pluginId === "codex");
   if (command?.pluginRoot) {
     return command.pluginRoot;
   }

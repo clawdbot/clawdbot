@@ -1,4 +1,3 @@
-// Mattermost plugin module implements channel behavior.
 import {
   jsonResult,
   readPositiveIntegerParam,
@@ -50,7 +49,6 @@ import {
 } from "./channel-api.js";
 import {
   describeMattermostAccount,
-  isMattermostConfigured,
   mattermostConfigAdapter,
   mattermostMeta as meta,
   normalizeMattermostAllowEntry as normalizeAllowEntry,
@@ -61,6 +59,7 @@ import { mattermostDoctor } from "./doctor.js";
 import { resolveMattermostGroupRequireMention } from "./group-mentions.js";
 import {
   inspectMattermostAccount,
+  isMattermostConfigured,
   listMattermostAccountIds,
   resolveDefaultMattermostAccountId,
   resolveMattermostAccount,
@@ -226,36 +225,6 @@ function extractMattermostToolSend(args: Record<string, unknown>): ChannelToolSe
   };
 }
 
-function extractMattermostToolSendResult(
-  result: unknown,
-  send: ChannelToolSend,
-): ChannelToolSend | null {
-  if (!result || typeof result !== "object") {
-    return null;
-  }
-  const details = (result as { details?: unknown }).details;
-  if (!details || typeof details !== "object") {
-    return null;
-  }
-  const toolSend = (details as { toolSend?: unknown }).toolSend;
-  if (!toolSend || typeof toolSend !== "object") {
-    return null;
-  }
-  const record = toolSend as Record<string, unknown>;
-  const to = normalizeOptionalString(record.to);
-  if (!to) {
-    return null;
-  }
-  const threadId = normalizeOptionalString(record.threadId);
-  const originalTarget = normalizeOptionalString(send.to);
-  const preserveOriginalTarget =
-    originalTarget?.startsWith("user:") === true || originalTarget?.startsWith("@") === true;
-  return {
-    to: preserveOriginalTarget ? originalTarget : to,
-    ...(threadId ? { threadId } : {}),
-  };
-}
-
 function resolveMattermostAutoThreadId(params: {
   to: string;
   replyToId?: string | null;
@@ -371,7 +340,6 @@ const mattermostMessageActions: ChannelMessageActionAdapter = {
   providerOwnedReadGates: ["read"],
   describeMessageTool: describeMattermostMessageTool,
   extractToolSend: ({ args }) => extractMattermostToolSend(args),
-  extractToolSendResult: ({ result, send }) => extractMattermostToolSendResult(result, send),
   prepareSendPayload: ({ ctx, payload }) => {
     if (ctx.action !== "send") {
       return null;
@@ -397,16 +365,13 @@ const mattermostMessageActions: ChannelMessageActionAdapter = {
     };
   },
   supportsAction: ({ action }) => {
-    return action === "send" || action === "react" || action === "read";
+    return action === "react" || action === "read";
   },
   handleAction: async ({
     action,
     params,
     cfg,
     accountId,
-    mediaAccess,
-    mediaLocalRoots,
-    mediaReadFile,
     conversationReadOrigin,
     requesterAccountId,
     toolContext,
@@ -532,69 +497,7 @@ const mattermostMessageActions: ChannelMessageActionAdapter = {
       };
     }
 
-    if (action !== "send") {
-      throw new Error(`Unsupported Mattermost action: ${action}`);
-    }
-
-    // Send action with optional interactive buttons
-    const to =
-      typeof params.to === "string"
-        ? params.to.trim()
-        : typeof params.target === "string"
-          ? params.target.trim()
-          : "";
-    if (!to) {
-      throw new Error("Mattermost send requires a target (to).");
-    }
-
-    const { text: message, buttons } = resolveMattermostPresentation({
-      text: typeof params.message === "string" ? params.message : undefined,
-      presentation: params.presentation,
-    });
-    // Mattermost post root_id is the thread root. A generic replyTo can name
-    // the current child post, so prefer threadId unless the caller supplied the
-    // Mattermost-specific replyToId root directly.
-    const replyToId =
-      normalizeOptionalString(params.replyToId) ??
-      normalizeOptionalString(params.threadId) ??
-      normalizeOptionalString(params.replyTo);
-    const resolvedAccountId = accountId || undefined;
-
-    const mediaUrl = resolveMattermostSendAttachmentMedia(params);
-    const result = await (
-      await loadMattermostChannelRuntime()
-    ).sendMessageMattermost(to, message, {
-      cfg,
-      accountId: resolvedAccountId,
-      replyToId,
-      buttons: buttons.length > 0 ? buttons : undefined,
-      attachmentText: typeof params.attachmentText === "string" ? params.attachmentText : undefined,
-      mediaUrl,
-      mediaLocalRoots: mediaLocalRoots ?? mediaAccess?.localRoots,
-      mediaReadFile: mediaReadFile ?? mediaAccess?.readFile,
-      ...(mediaAccess?.workspaceDir ? { workspaceDir: mediaAccess.workspaceDir } : {}),
-      requireMediaUpload: requiresMattermostMediaUpload(mediaUrl) ? true : undefined,
-    });
-
-    return {
-      content: [
-        {
-          type: "text" as const,
-          text: JSON.stringify({
-            ok: true,
-            channel: "mattermost",
-            messageId: result.messageId,
-            channelId: result.channelId,
-          }),
-        },
-      ],
-      details: {
-        toolSend: {
-          to: `channel:${result.channelId}`,
-          ...(replyToId ? { threadId: replyToId } : {}),
-        },
-      },
-    };
+    throw new Error(`Unsupported Mattermost action: ${action}`);
   },
 };
 
@@ -842,6 +745,7 @@ export const mattermostPlugin: ChannelPlugin<ResolvedMattermostAccount> = create
     },
     reload: {
       configPrefixes: ["channels.mattermost"],
+      noopPrefixes: ["messages.inbound"],
       /**
        * accounts.default is promoted; named resolution merges only channel-wide fields
        * plus the selected account. Monitor debounce and durable ingress use accountId.

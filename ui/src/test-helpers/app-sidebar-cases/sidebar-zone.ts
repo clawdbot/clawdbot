@@ -1,10 +1,5 @@
 import { describe, expect, it, vi } from "vitest";
 import type { GatewayBrowserClient } from "../../api/gateway.ts";
-import { APP_ROUTE_IDS } from "../../app-route-paths.ts";
-import {
-  renderSidebarWorkboardCustomize,
-  renderSidebarWorkboardEntry,
-} from "../../components/app-sidebar-workboard.runtime.ts";
 import {
   createGateway,
   createGatewayHarness,
@@ -14,6 +9,7 @@ import {
 } from "../app-sidebar.ts";
 import { waitForFast } from "../wait-for.ts";
 import "../../components/app-sidebar.ts";
+import "../../plugins/control-ui-view.runtime.ts";
 
 function createDataTransferStub() {
   const data = new Map<string, string>();
@@ -57,24 +53,34 @@ async function mountZone() {
     "agent:main:alpha",
     "agent:main:beta",
   ]);
-  const { sidebar } = await mountSidebar(gateway, sessions.sessions);
+  const { sidebar, context } = await mountSidebar(gateway, sessions.sessions);
   sidebar.connected = true;
-  sidebar.workboardRenderers = {
-    renderEntry: renderSidebarWorkboardEntry,
-    renderCustomize: renderSidebarWorkboardCustomize,
-  };
-  return { sidebar, sessions };
+  return { sidebar, sessions, context };
 }
 
-function sidebarBoard(id: string, metadata: { color?: string; icon?: string; name?: string } = {}) {
-  return {
-    id,
-    total: 0,
-    active: 0,
-    archived: 0,
-    byStatus: {},
-    ...metadata,
-  };
+function pluginNavigation(
+  context: import("../../app/context.ts").ApplicationContext<import("../../app-routes.ts").RouteId>,
+  sidebar: SidebarLifecycleState,
+  ids: string[],
+) {
+  const openPage = vi.fn();
+  const signal = new AbortController().signal;
+  const entries = ids.map((id) => ({
+    key: `example/${id}`,
+    pluginId: "example",
+    signal,
+    value: { id, label: id, defaultVisible: false, page: { id } },
+    host: { navigation: { pageHref: () => `/plugin?plugin=example&id=${id}`, openPage } },
+  }));
+  Object.assign(context, {
+    plugins: {
+      registrations: (kind: string) => (kind === "navigation" ? entries : []),
+      selectedReplacement: () => undefined,
+      subscribe: () => () => {},
+    },
+  });
+  sidebar.requestUpdate();
+  return openPage;
 }
 
 describe("AppSidebar interleaved zone", () => {
@@ -272,133 +278,41 @@ describe("AppSidebar interleaved zone", () => {
     expect(sidebar.querySelector('[data-sidebar-entry="plugin:logbook/logbook"]')).toBeNull();
   });
 
-  it("routes active native plugin tabs to their app page and hides inactive tabs", async () => {
-    const gateway = createGatewayHarness({} as GatewayBrowserClient);
-    const sessions = createSessionsHarness("main", ["agent:main:main"]);
-    const { sidebar } = await mountSidebar(gateway.gateway, sessions.sessions);
-
-    gateway.publish({
-      hello: {
-        type: "hello-ok",
-        protocol: 1,
-        auth: { role: "operator", scopes: ["operator.read"] },
-        controlUiTabs: [
-          {
-            group: "control",
-            id: "workboard",
-            label: "Workboard",
-            placement: "route:workboard",
-            pluginId: "workboard",
-          },
-        ],
-      },
-    });
-    sidebar.workboardBoards = [sidebarBoard("ops", { name: "Operations" })];
-    sidebar.workboardBoardsReady = true;
-    sidebar.activeRouteId = "workboard";
-    sidebar.activeWorkboardBoardId = "ops";
+  it("renders a pinned native plugin destination and dispatches its owned navigation", async () => {
+    const { sidebar, context } = await mountZone();
+    const openPage = pluginNavigation(context, sidebar, ["review"]);
+    sidebar.sidebarEntries = ["plugin:example/review"];
     await sidebar.updateComplete;
-
-    const entry = sidebar.querySelector<HTMLAnchorElement>(
-      '[data-sidebar-entry="plugin:workboard/workboard"] > .nav-item',
+    await waitForFast(() =>
+      expect(
+        sidebar.querySelector('[data-sidebar-entry="plugin:example/review"] a'),
+      ).not.toBeNull(),
     );
-    expect(entry?.textContent).toContain("Workboard");
-    expect(entry?.getAttribute("href")).toBe("/workboard");
-    expect(entry?.classList.contains("nav-item--active")).toBe(true);
-
-    sidebar.sidebarEntries = ["route:workboard", "route:plugins"];
-    await sidebar.updateComplete;
-    const savedEntry = sidebar.querySelector<HTMLAnchorElement>(
-      '[data-sidebar-entry="route:workboard"] > .nav-item',
-    );
-    expect(savedEntry?.getAttribute("href")).toBe("/workboard");
-    expect(sidebar.querySelector('[data-sidebar-entry="plugin:workboard/workboard"]')).toBeNull();
-
-    gateway.publish({
-      hello: {
-        type: "hello-ok",
-        protocol: 1,
-        auth: { role: "operator", scopes: ["operator.read"] },
-        controlUiTabs: [],
-      },
-    });
-    await sidebar.updateComplete;
-    expect(sidebar.querySelector('[data-sidebar-entry="plugin:workboard/workboard"]')).toBeNull();
-    expect(sidebar.querySelector('[data-sidebar-entry="route:workboard"]')).toBeNull();
-  });
-
-  it("renders a pinned Workboard board with its icon, color, label, and route", async () => {
-    const { sidebar } = await mountZone();
-    sidebar.workboardBoards = [
-      sidebarBoard("ops", { name: "Operations", icon: "⚙", color: "#22c55e" }),
-    ];
-    sidebar.workboardBoardsReady = true;
-    sidebar.sidebarEntries = ["workboard:ops"];
-    sidebar.activeRouteId = "workboard";
-    sidebar.activeWorkboardBoardId = "ops";
-    const onNavigate = vi.fn();
-    sidebar.onNavigate = onNavigate;
-    await sidebar.updateComplete;
-
-    const entry = zoneEntry(sidebar, "workboard:ops");
-    const link = entry.querySelector<HTMLAnchorElement>(".nav-item--workboard-board");
-    const glyph = entry.querySelector<HTMLElement>(".workboard-board-glyph");
-    expect(link?.textContent).toContain("Operations (ops)");
-    expect(link?.href).toContain("/workboard/ops");
-    expect(link?.classList.contains("nav-item--active")).toBe(true);
-    expect(glyph?.textContent?.trim()).toBe("⚙");
-    expect(glyph?.getAttribute("style")).toContain("#22c55e");
-
+    const link = zoneEntry(sidebar, "plugin:example/review").querySelector<HTMLAnchorElement>("a");
+    expect(link?.getAttribute("href")).toBe("/plugin?plugin=example&id=review");
     link?.click();
-    expect(onNavigate).toHaveBeenCalledWith("workboard", { pathname: "/workboard/ops" });
+    expect(openPage).toHaveBeenCalledWith({ id: "review" });
   });
 
-  it("hides Workboard board pins and editor choices when the plugin is inactive", async () => {
-    const { sidebar } = await mountZone();
-    sidebar.workboardBoards = [sidebarBoard("ops", { name: "Operations" })];
-    sidebar.workboardBoardsReady = true;
-    sidebar.sidebarEntries = ["workboard:ops", "route:usage"];
-    sidebar.enabledRouteIds = APP_ROUTE_IDS.filter((routeId) => routeId !== "workboard");
+  it("hides an unavailable plugin pin without deleting its saved position", async () => {
+    const { sidebar, context } = await mountZone();
+    pluginNavigation(context, sidebar, []);
+    sidebar.sidebarEntries = ["plugin:example/review", "route:usage"];
     await sidebar.updateComplete;
-
-    expect(sidebar.querySelector('[data-sidebar-entry="workboard:ops"]')).toBeNull();
-    const nav = sidebar.querySelector<HTMLElement>(".sidebar-nav");
-    nav?.dispatchEvent(
-      new MouseEvent("contextmenu", {
-        bubbles: true,
-        cancelable: true,
-        clientX: 20,
-        clientY: 20,
-      }),
-    );
-    await sidebar.updateComplete;
-    expect(sidebar.querySelector(".sidebar-customize-menu__group-title")).toBeNull();
-    expect(sidebar.querySelector('wa-dropdown-item[value="workboard:ops"]')).toBeNull();
+    expect(sidebar.querySelector('[data-sidebar-entry="plugin:example/review"]')).toBeNull();
+    expect(sidebar.sidebarEntries).toEqual(["plugin:example/review", "route:usage"]);
   });
 
-  it("lists active boards in the WorkBoard pin-editor group", async () => {
-    const { sidebar } = await mountZone();
-    sidebar.workboardBoards = [
-      sidebarBoard("default"),
-      sidebarBoard("ops", { name: "Operations", icon: "⚙", color: "#22c55e" }),
-    ];
-    sidebar.workboardBoardsReady = true;
+  it("offers optional plugin destinations in the pin editor", async () => {
+    const { sidebar, context } = await mountZone();
+    pluginNavigation(context, sidebar, ["review", "notes"]);
     const nav = sidebar.querySelector<HTMLElement>(".sidebar-nav");
     nav?.dispatchEvent(
-      new MouseEvent("contextmenu", {
-        bubbles: true,
-        cancelable: true,
-        clientX: 20,
-        clientY: 20,
-      }),
+      new MouseEvent("contextmenu", { bubbles: true, cancelable: true, clientX: 20, clientY: 20 }),
     );
     await sidebar.updateComplete;
-
-    expect(sidebar.querySelector(".sidebar-customize-menu__group-title")?.textContent).toBe(
-      "WorkBoard",
-    );
-    expect(sidebar.querySelector('wa-dropdown-item[value="workboard:default"]')).not.toBeNull();
-    expect(sidebar.querySelector('wa-dropdown-item[value="workboard:ops"]')).not.toBeNull();
+    expect(sidebar.querySelector('wa-dropdown-item[value="plugin:example/review"]')).not.toBeNull();
+    expect(sidebar.querySelector('wa-dropdown-item[value="plugin:example/notes"]')).not.toBeNull();
   });
 
   it("writes reordered entries after a route drop", async () => {
@@ -480,15 +394,14 @@ describe("AppSidebar interleaved zone", () => {
     expect(onUpdate).toHaveBeenCalledWith(["route:plugins"]);
   });
 
-  it("unpins a Workboard board dropped into the session-list region", async () => {
-    const { sidebar } = await mountZone();
-    sidebar.workboardBoards = [sidebarBoard("ops", { name: "Operations" })];
-    sidebar.workboardBoardsReady = true;
-    sidebar.sidebarEntries = ["workboard:ops", "route:usage"];
+  it("unpins a plugin destination dropped into the session-list region", async () => {
+    const { sidebar, context } = await mountZone();
+    pluginNavigation(context, sidebar, ["review"]);
+    sidebar.sidebarEntries = ["plugin:example/review", "route:usage"];
     const onUpdate = vi.fn();
     sidebar.onUpdateSidebarEntries = onUpdate;
     await sidebar.updateComplete;
-    const source = zoneEntry(sidebar, "workboard:ops");
+    const source = zoneEntry(sidebar, "plugin:example/review");
     const target = sidebar.querySelector('[data-session-section="ungrouped"]');
     if (!target) {
       throw new Error("expected session-list region");

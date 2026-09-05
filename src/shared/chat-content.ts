@@ -33,15 +33,12 @@ export function extractTextFromChatContent(
     normalizeText?: (text: string) => string;
   },
 ): string | null {
-  const normalizeText = opts?.normalizeText ?? ((text: string) => text.replace(/\s+/g, " ").trim());
+  const normalize = opts?.normalizeText ?? ((text: string) => text.replace(/\s+/g, " ").trim());
   const joinWith = opts?.joinWith ?? " ";
   const sanitize = (text: unknown): string => {
     const raw = coerceChatContentText(text);
-    const sanitized = opts?.sanitizeText ? opts.sanitizeText(raw) : raw;
-    return coerceChatContentText(sanitized);
+    return opts?.sanitizeText ? opts.sanitizeText(raw) : raw;
   };
-  const normalize = (text: unknown): string =>
-    coerceChatContentText(normalizeText(coerceChatContentText(text)));
 
   if (typeof content === "string") {
     const value = sanitize(content);

@@ -495,6 +495,41 @@ describe("loadSessionDiff", () => {
     expect(result.files.find((file) => file.path === "loose.txt")?.untracked).toBe(true);
   });
 
+  it.skipIf(process.platform === "win32").each(["unborn", "branch", "detached"])(
+    "preserves checkout path bytes for %s baseline and diff reads",
+    async (revision) => {
+      const checkout = path.join(repoRoot, "checkout \n");
+      const nested = path.join(checkout, "nested");
+      fs.mkdirSync(nested, { recursive: true });
+      initRepo(checkout);
+      fs.writeFileSync(path.join(checkout, "tracked.txt"), "initial\n");
+      git(checkout, "add", "tracked.txt");
+      if (revision !== "unborn") {
+        git(checkout, "commit", "-qm", "initial");
+        if (revision === "detached") {
+          git(checkout, "checkout", "--detach", "-q");
+        }
+      }
+      fs.appendFileSync(path.join(checkout, "tracked.txt"), "changed\n");
+      fs.writeFileSync(path.join(checkout, "loose.txt"), "new\n");
+      mockSession(nested);
+
+      const baseline = await captureSessionDiffBaseline({ cwd: nested, sessionId: "s1" });
+      expect(baseline?.root).toBe(checkout);
+      expect(baseline?.files.map((file) => file.path)).toEqual(["loose.txt", "tracked.txt"]);
+      const result = await loadSessionDiff({ sessionKey: "agent:main:s1" });
+      expect(result.root).toBe(checkout);
+      expect(result.branch).toBe(revision === "branch" ? "main" : undefined);
+      expect(result.files.map((file) => file.path)).toEqual(["loose.txt", "tracked.txt"]);
+
+      mockSession(nested, { sessionDiffBaseline: baseline });
+      expect((await loadSessionDiff({ sessionKey: "agent:main:s1" })).files).toEqual([]);
+      fs.appendFileSync(path.join(checkout, "tracked.txt"), "later edit\n");
+      const changed = await loadSessionDiff({ sessionKey: "agent:main:s1" });
+      expect(changed.files.map((file) => file.path)).toEqual(["tracked.txt"]);
+    },
+  );
+
   it("hides unchanged files captured at session start and resurfaces later edits", async () => {
     initRepo(repoRoot);
     fs.writeFileSync(path.join(repoRoot, "AGENTS.md"), "existing bootstrap\n");
@@ -536,6 +571,23 @@ describe("loadSessionDiff", () => {
     const changed = await loadSessionDiff({ sessionKey: "agent:main:s1" });
     expect(changed.files.map((file) => file.path)).toEqual(["icon.bin"]);
     expect(changed.files[0]?.binary).toBe(true);
+  });
+
+  it("keeps pre-session changes hidden when new files exceed the fingerprint budget", async () => {
+    initRepo(repoRoot);
+    fs.writeFileSync(path.join(repoRoot, "z-existing.txt"), "preexisting work\n");
+    const baseline = await captureSessionDiffBaseline({ cwd: repoRoot, sessionId: "s1" });
+    expect(baseline?.files.map((file) => file.path)).toEqual(["z-existing.txt"]);
+    const addedPaths = Array.from({ length: 4 }, (_, index) => `a-new-${index}.bin`);
+    for (const filePath of addedPaths) {
+      fs.writeFileSync(path.join(repoRoot, filePath), Buffer.alloc(4 * 1024 * 1024));
+    }
+    mockSession(repoRoot, { sessionDiffBaseline: baseline });
+
+    const result = await loadSessionDiff({ sessionKey: "agent:main:s1" });
+
+    expect(result.files.map((file) => file.path)).toEqual(addedPaths);
+    expect(result.additions).toBe(0);
   });
 
   it("skips oversized files instead of materializing them during baseline capture", async () => {

@@ -7,6 +7,7 @@ import {
   clearRuntimeAuthProfileStoreSnapshots,
   getRuntimeAuthProfileStoreCredentialsRevision,
   getRuntimeAuthProfileStoreSnapshotCore,
+  getRuntimeAuthProfileStoreSnapshotsRevision,
   noteRuntimeAuthProfileStorePersistedMutation,
   prepareRuntimeAuthProfileStoreSnapshots,
   setRuntimeAuthProfileStoreSnapshot,
@@ -40,7 +41,7 @@ import {
   activateSecretsRuntimeSnapshotState,
   activateSecretsRuntimeSnapshotStateIfCurrent,
   clearSecretsRuntimeSnapshotState,
-  collectSecretStoreRefKeysInConfig,
+  collectSecretStoreRefKeysInSnapshot,
   getActiveSecretsRuntimeConfigSnapshot,
   getActiveSecretsRuntimeSnapshotState,
   getActiveSecretsRuntimeSnapshotRevisionState,
@@ -64,13 +65,18 @@ describe("secret store references", () => {
         },
       },
     } as unknown as OpenClawConfig;
-    expect(collectSecretStoreRefKeysInConfig(config, "TEAM_API_KEY")).toEqual(
-      new Set(["store:default:TEAM_API_KEY"]),
-    );
     expect(
-      collectSecretStoreRefKeysInConfig(
+      collectSecretStoreRefKeysInSnapshot({ sourceConfig: config, authStores: [] }, "TEAM_API_KEY"),
+    ).toEqual(new Set(["store:default:TEAM_API_KEY"]));
+    expect(
+      collectSecretStoreRefKeysInSnapshot(
         {
-          gateway: { auth: { token: { source: "env", provider: "default", id: "TEAM_API_KEY" } } },
+          sourceConfig: {
+            gateway: {
+              auth: { token: { source: "env", provider: "default", id: "TEAM_API_KEY" } },
+            },
+          },
+          authStores: [],
         },
         "TEAM_API_KEY",
       ),
@@ -90,6 +96,7 @@ function preparedSnapshot(
     sourceConfig: {},
     config: {},
     authStoreCredentialsRevision: getRuntimeAuthProfileStoreCredentialsRevision(),
+    authStoreSnapshotsRevision: getRuntimeAuthProfileStoreSnapshotsRevision(),
     warnings: [],
     webTools: {
       search: { providerSource: "none", diagnostics: [] },
@@ -414,6 +421,7 @@ describe("secrets runtime state", () => {
       {
         version: 1,
         profiles: { "openai:default": credential },
+        order: { openai: ["openai:default"] },
         usageStats: { "openai:default": { lastUsed: 1 } },
       },
       agentDir,
@@ -426,6 +434,7 @@ describe("secrets runtime state", () => {
           store: {
             version: 1,
             profiles: { "openai:default": credential },
+            order: { openai: [] },
             usageStats: { "openai:default": { lastUsed: 1 } },
           },
         },
@@ -435,6 +444,8 @@ describe("secrets runtime state", () => {
       {
         version: 1,
         profiles: { "openai:default": credential },
+        order: { openai: ["openai:default"] },
+        lastGood: { openai: "openai:default" },
         usageStats: {
           "openai:default": { lastUsed: 2, cooldownUntil: Date.now() + 60_000 },
         },
@@ -447,6 +458,12 @@ describe("secrets runtime state", () => {
     expect(
       getRuntimeAuthProfileStoreSnapshotCore(agentDir)?.usageStats?.["openai:default"],
     ).toMatchObject({ lastUsed: 2, cooldownUntil: expect.any(Number) });
+    expect(getRuntimeAuthProfileStoreSnapshotCore(agentDir)?.order?.openai).toEqual([
+      "openai:default",
+    ]);
+    expect(getRuntimeAuthProfileStoreSnapshotCore(agentDir)?.lastGood?.openai).toBe(
+      "openai:default",
+    );
   });
 
   it("removes candidate-only auth profiles when rolling config back", () => {
@@ -482,6 +499,28 @@ describe("secrets runtime state", () => {
     expect(
       getRuntimeAuthProfileStoreSnapshotCore(agentDir)?.profiles["anthropic:candidate"],
     ).toBeUndefined();
+  });
+
+  it("publishes prepared bookkeeping when the live snapshot is unchanged", () => {
+    const agentDir = "/tmp/openclaw-auth-order-durable-refresh";
+    const profiles = {
+      "openai:a": { type: "api_key" as const, provider: "openai", key: "sk-a" },
+      "openai:b": { type: "api_key" as const, provider: "openai", key: "sk-b" },
+    };
+    const snapshot = (order: string[]) =>
+      preparedSnapshot({
+        authStores: [{ agentDir, store: { version: 1, profiles, order: { openai: order } } }],
+      });
+    activateSnapshot(snapshot(["openai:a", "openai:b"]));
+    const previousRevision = getActiveSecretsRuntimeSnapshotRevisionState();
+
+    const refreshed = snapshot(["openai:b", "openai:a"]);
+    expect(activateSnapshotIfCurrent(refreshed, { expectedRevision: previousRevision })).toBe(true);
+
+    expect(getRuntimeAuthProfileStoreSnapshotCore(agentDir)?.order?.openai).toEqual([
+      "openai:b",
+      "openai:a",
+    ]);
   });
 
   it("rolls back candidate credentials against the activation-time auth baseline", () => {
@@ -566,24 +605,25 @@ describe("secrets runtime state", () => {
     });
   });
 
-  it("preserves an auth rotation captured by the candidate", () => {
+  it("preserves an auth rotation and order captured by the candidate", () => {
     const finalKey = "sk-candidate";
     const agentDir = "/tmp/openclaw-auth-rollback-sk-candidate";
-    const snapshot = (key: string, port: number) =>
+    const snapshot = (key: string, port: number, order: string[] = []) =>
       preparedGatewayAuthSnapshot(agentDir, port, {
         version: 1,
         profiles: {
           "openai:default": { type: "api_key", provider: "openai", key },
         },
+        order: { openai: order },
       });
     activateSnapshot(snapshot("sk-old", 19_001));
     const previous = getActiveSecretsRuntimeSnapshotState()!;
     const previousRevision = getActiveSecretsRuntimeSnapshotRevisionState();
     setRuntimeAuthProfileStoreSnapshot(
-      snapshot("sk-candidate", 19_002).authStores[0]!.store,
+      snapshot("sk-candidate", 19_002, ["openai:default"]).authStores[0]!.store,
       agentDir,
     );
-    const candidate = snapshot("sk-candidate", 19_002);
+    const candidate = snapshot("sk-candidate", 19_002, ["openai:default"]);
     candidate.authStores[0]!.store.profiles["anthropic:candidate"] = {
       type: "api_key",
       provider: "anthropic",
@@ -597,6 +637,9 @@ describe("secrets runtime state", () => {
     ).toMatchObject({
       key: finalKey,
     });
+    expect(getRuntimeAuthProfileStoreSnapshotCore(agentDir)?.order?.openai).toEqual([
+      "openai:default",
+    ]);
     expect(
       getRuntimeAuthProfileStoreSnapshotCore(agentDir)?.profiles["anthropic:candidate"],
     ).toBeUndefined();

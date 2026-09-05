@@ -181,7 +181,9 @@ extension OnboardingView {
         if count > 0 {
             return count == 1
                 ? String(localized: "1 gateway found on your network — click to choose it.")
-                : String(localized: "\(count) gateways found on your network — click to choose one.")
+                : String(
+                    format: String(localized: "%lld gateways found on your network — click to choose one."),
+                    count)
         }
         return "For advanced setups — use a gateway that runs elsewhere."
     }

@@ -1,22 +1,23 @@
-import { mkdir } from "node:fs/promises";
 import path from "node:path";
 import type { Page } from "playwright";
-import { beforeAll, expect, it } from "vitest";
+import { beforeEach, expect, it } from "vitest";
+import { createControlUiE2eArtifactDir } from "../test-helpers/control-ui-e2e-artifacts.ts";
 import {
   chatSessionListResponse,
   controlUiSessionPath,
   createChatFlowE2eSuite,
+  controlUiSessionUrl,
   installMockGateway,
 } from "./chat-flow.test-support.ts";
 
 const suite = createChatFlowE2eSuite();
 const captureProof = process.env.OPENCLAW_CAPTURE_UI_PROOF === "1";
-const proofDir = path.join(
-  process.cwd(),
-  ".artifacts",
-  "control-ui-e2e",
-  "header-outcomes-followup",
-);
+let proofDir: string;
+beforeEach(() => {
+  if (captureProof) {
+    proofDir = createControlUiE2eArtifactDir("header-outcomes-followup");
+  }
+});
 
 async function capture(page: Page, name: string): Promise<void> {
   if (captureProof) {
@@ -85,8 +86,9 @@ async function installPlacementGateway(page: Page, sessionA: string, sessionB: s
 async function startPlacementReclaim(
   page: Page,
   gateway: Awaited<ReturnType<typeof installMockGateway>>,
+  sessionA: string,
 ): Promise<void> {
-  await page.goto(`${suite.server.baseUrl}chat`);
+  await page.goto(controlUiSessionUrl(suite.server.baseUrl, sessionA));
   await gateway.deferNext("sessions.reclaim");
   await page.getByRole("button", { name: "Runs on Cloud" }).click();
   await page.getByText("Stop cloud worker…", { exact: true }).click();
@@ -95,12 +97,6 @@ async function startPlacementReclaim(
 }
 
 suite.define(() => {
-  beforeAll(async () => {
-    if (captureProof) {
-      await mkdir(proofDir, { recursive: true });
-    }
-  });
-
   it("does not resurrect a reveal failure after navigating away", async () => {
     const context = await suite.newBrowserContext(proofContextOptions());
     const page = await context.newPage();
@@ -131,7 +127,7 @@ suite.define(() => {
     });
 
     try {
-      await page.goto(`${suite.server.baseUrl}chat`);
+      await page.goto(controlUiSessionUrl(suite.server.baseUrl, sessionA));
       await gateway.deferNext("sessions.files.reveal");
       await page.getByRole("button", { name: "Workspace actions for session-a" }).click();
       await page.getByRole("menuitem", { name: "Open in file manager" }).click();
@@ -172,7 +168,7 @@ suite.define(() => {
     const gateway = await installPlacementGateway(page, sessionA, sessionB);
 
     try {
-      await startPlacementReclaim(page, gateway);
+      await startPlacementReclaim(page, gateway, sessionA);
       await capture(page, "01-placement-pending.png");
 
       await navigateAwayAndBack(page, sessionA, sessionB);
@@ -201,7 +197,7 @@ suite.define(() => {
     const gateway = await installPlacementGateway(page, sessionA, sessionB);
 
     try {
-      await startPlacementReclaim(page, gateway);
+      await startPlacementReclaim(page, gateway, sessionA);
       const message = "Current placement failure stays actionable.";
       await gateway.rejectDeferred("sessions.reclaim", { code: "INVALID_REQUEST", message });
 
@@ -213,11 +209,7 @@ suite.define(() => {
           ),
         )
         .toBe(sessionA);
-      await visiblePane
-        .getByRole("alert")
-        .locator("summary")
-        .getByText(message, { exact: true })
-        .waitFor();
+      await visiblePane.getByRole("alert").getByText(message, { exact: true }).waitFor();
 
       await page.getByRole("button", { name: "Runs on Cloud" }).click();
       await page.getByText("Stop cloud worker…", { exact: true }).waitFor();
@@ -262,7 +254,7 @@ suite.define(() => {
     });
 
     try {
-      await page.goto(`${suite.server.baseUrl}chat`);
+      await page.goto(controlUiSessionUrl(suite.server.baseUrl, sessionA));
       await gateway.deferNext("session.visibility.set");
       await page.getByRole("button", { name: "Session sharing" }).click();
       await page.getByText("Publish draft", { exact: true }).click();

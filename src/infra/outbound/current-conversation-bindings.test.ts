@@ -330,6 +330,38 @@ describe("generic current-conversation bindings", () => {
     expectBindingMetadata(resolved, { label: "workspace-dm" });
   });
 
+  it.each([false, true])(
+    "inherits runtime metadata only when refreshing the same target (replace=%s)",
+    async (replace) => {
+      const originalTarget = "plugin-binding:owner-plugin:original";
+      const metadata = {
+        pluginBindingOwner: "plugin",
+        pluginId: "owner-plugin",
+        pluginRoot: "/plugins/owner-plugin",
+        opaque: { runtimeId: "original" },
+      };
+      await bindWorkspaceConversation("user:replacement-owner", {
+        targetSessionKey: originalTarget,
+        metadata,
+      });
+      const targetSessionKey = replace ? "agent:main:acp:replacement" : originalTarget;
+
+      await bindWorkspaceConversation("user:replacement-owner", {
+        targetSessionKey,
+        metadata: { label: "updated" },
+      });
+      closeOpenClawStateDatabaseForTest();
+
+      const binding = expectSessionBinding(resolveWorkspaceConversation("user:replacement-owner"));
+      expect(binding.targetSessionKey).toBe(targetSessionKey);
+      expect(binding.metadata).toEqual({
+        ...(replace ? {} : metadata),
+        label: "updated",
+        lastActivityAt: expect.any(Number),
+      });
+    },
+  );
+
   describe("independent SQLite owners", () => {
     it.each(["bind", "touch", "expiry cleanup", "unbind"] as const)(
       "preserves independently inserted and updated rows during %s",

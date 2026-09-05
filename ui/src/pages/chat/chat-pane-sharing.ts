@@ -29,7 +29,7 @@ import {
   type ChatPaneConnectionScope,
 } from "./chat-pane-shared.ts";
 import { resetSessionCompanion } from "./chat-session-companion.ts";
-import { resolveChatAgentId } from "./chat-state-route.ts";
+import { resolveChatAgentId, selectedChatSessionRow } from "./chat-state-route.ts";
 import { clearTypingActorForSessionMessage } from "./chat-typing-presence.ts";
 import {
   canManageChatSessionSharing,
@@ -388,9 +388,7 @@ export abstract class ChatPaneSharing extends ChatPaneBase {
   protected async loadSessionSuggestions(requestVersion: number): Promise<void> {
     const targetSignature = this.sessionSuggestionTargetSignature;
     const scope = this.captureConnectionScope();
-    const row = scope?.state.sessionsResult?.sessions.find((candidate) =>
-      areUiSessionKeysEquivalent(candidate.key, scope.state.sessionKey),
-    );
+    const row = scope ? selectedChatSessionRow(scope.state) : undefined;
     // Solo dormancy intentionally hides persisted rows too; when a second identity
     // returns, the presence transition below triggers a fresh authoritative list.
     if (
@@ -483,8 +481,12 @@ export abstract class ChatPaneSharing extends ChatPaneBase {
     ) {
       return;
     }
-    if (scope.state.chatAttachments.length > 0) {
-      scope.state.chatError = t("chat.sessionSuggestions.attachmentsUnsupported");
+    if (scope.state.chatMentions?.length || scope.state.chatAttachments.length > 0) {
+      scope.state.chatError = t(
+        scope.state.chatMentions?.length
+          ? "chat.mentions.unsupported"
+          : "chat.sessionSuggestions.attachmentsUnsupported",
+      );
       scope.state.lastError = scope.state.chatError;
       scope.state.requestUpdate?.();
       return;
@@ -509,8 +511,8 @@ export abstract class ChatPaneSharing extends ChatPaneBase {
       ) {
         return;
       }
-      if (scope.state.chatMessage === text) {
-        scope.state.handleChatDraftChange("");
+      if (scope.state.chatMessage === text && !scope.state.chatMentions?.length) {
+        scope.state.handleChatDraftChange("", []);
       }
       this.sessionSuggestions = [
         ...this.sessionSuggestions.filter((item) => item.id !== result.suggestion.id),
@@ -554,14 +556,20 @@ export abstract class ChatPaneSharing extends ChatPaneBase {
       this.isConnectionScopeCurrent(scope) &&
       scope.state.sessionKey === sessionKey &&
       this.sessionSuggestionTargetSignature === targetSignature;
-    const previousEditDraft = resolution === "edit" ? scope.state.chatMessage : undefined;
+    const previousEditDraft =
+      resolution === "edit"
+        ? {
+            text: scope.state.chatMessage,
+            mentions: scope.state.chatMentions?.map((mention) => ({ ...mention })),
+          }
+        : undefined;
     const editOperation = resolution === "edit" ? Symbol("session-suggestion-edit") : undefined;
     if (editOperation) {
       this.sessionSuggestionEditOperation = editOperation;
     }
     this.sessionSuggestionBusyIds.add(suggestion.id);
     if (resolution === "edit") {
-      scope.state.handleChatDraftChange(suggestion.text);
+      scope.state.handleChatDraftChange(suggestion.text, []);
       queueMicrotask(() =>
         this.querySelector<HTMLTextAreaElement>(CHAT_COMPOSER_TEXTAREA_SELECTOR)?.focus({
           preventScroll: true,
@@ -600,9 +608,13 @@ export abstract class ChatPaneSharing extends ChatPaneBase {
           resolution === "edit" &&
           error instanceof GatewayRequestError &&
           previousEditDraft !== undefined &&
-          scope.state.chatMessage === suggestion.text
+          scope.state.chatMessage === suggestion.text &&
+          !scope.state.chatMentions?.length
         ) {
-          scope.state.handleChatDraftChange(previousEditDraft);
+          scope.state.handleChatDraftChange(
+            previousEditDraft.text,
+            previousEditDraft.mentions ?? [],
+          );
         }
         scope.state.chatError = formatUiError(error);
         scope.state.lastError = scope.state.chatError;
@@ -629,9 +641,7 @@ export abstract class ChatPaneSharing extends ChatPaneBase {
   protected handleSessionTypingEvent(event: SessionTypingEvent): void {
     const selfId = this.context.gateway.snapshot.selfUser?.id;
     const state = this.state;
-    const selectedSession = state?.sessionsResult?.sessions.find((row) =>
-      areUiSessionKeysEquivalent(row.key, state.sessionKey),
-    );
+    const selectedSession = state ? selectedChatSessionRow(state) : undefined;
     if (
       !this.hasMultipleIdentities() ||
       event.actor.id === selfId ||
@@ -706,9 +716,7 @@ export abstract class ChatPaneSharing extends ChatPaneBase {
       return;
     }
     const sessionKey = scope.state.sessionKey;
-    const sessionId = scope.state.sessionsResult?.sessions.find((row) =>
-      areUiSessionKeysEquivalent(row.key, sessionKey),
-    )?.sessionId;
+    const sessionId = selectedChatSessionRow(scope.state)?.sessionId;
     if (!sessionId) {
       return;
     }

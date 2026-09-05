@@ -37,7 +37,7 @@ import {
   withFileMutationQueueKeyResolution,
 } from "./file-mutation-queue.js";
 import { type PersistedFileStat, verifyPersistedUtf8File } from "./file-write-verification.js";
-import { resolveToCwd } from "./path-utils.js";
+import { resolveLocalPathToCwd, resolveToCwd } from "./path-utils.js";
 import { invalidArgText, shortenPath, str } from "./render-utils.js";
 import type { EditToolDetails, EditToolInput } from "./tool-contracts.js";
 import { wrapToolDefinition } from "./tool-definition-wrapper.js";
@@ -390,6 +390,7 @@ export function createEditToolDefinition(
   options?: EditToolOptions,
 ): ToolDefinition<typeof editSchema, EditToolDetails, EditRenderState> {
   const ops = options?.operations ?? defaultEditOperations;
+  const resolvePath = options?.operations ? resolveToCwd : resolveLocalPathToCwd;
   return {
     name: "edit",
     label: "edit",
@@ -411,7 +412,7 @@ export function createEditToolDefinition(
       void onUpdate;
       void ctx;
       const { path, edits: originalEdits } = validateEditInput(input);
-      const absolutePath = resolveToCwd(path, cwd);
+      const absolutePath = resolvePath(path, cwd);
       const queueKey = resolveFileMutationQueueKey(absolutePath, ops.resolveQueueKey, signal);
 
       return withFileMutationQueueKeyResolution(queueKey, async () => {
@@ -447,14 +448,13 @@ export function createEditToolDefinition(
           const noOpEdits = editSets.noOpEdits;
           realEdits = editSets.realEdits;
           validateNoOpEditTargets(normalizedContent, noOpEdits, realEdits, path);
+          // No-op: not terminal — the model may still be mid-task and needs a
+          // continuation, not an ended turn.
           if (realEdits.length === 0) {
-            return {
-              ...textResult(
-                `No changes made to ${path}. The replacement text is identical to the original.`,
-                { changed: false } satisfies EditToolDetails,
-              ),
-              terminate: true,
-            };
+            return textResult(
+              `No changes made to ${path}. The replacement text is identical to the original.`,
+              { changed: false } satisfies EditToolDetails,
+            );
           }
           const { baseContent, newContent, finalContent } = applyEditsPreservingLineEndings(
             content,
@@ -513,15 +513,13 @@ export function createEditToolDefinition(
           if (normalizedError.message.includes(EDIT_MISMATCH_MESSAGE)) {
             throw appendMismatchHint(normalizedError, currentContent);
           }
-          // Terminal no-op: the edit matched but produced identical content.
+          // No-op: the edit matched but produced identical content. Not
+          // terminal — see the realEdits.length===0 case above.
           if (normalizedError instanceof EditNoChangeError) {
-            return {
-              ...textResult(
-                `No changes made to ${path}. The replacement produced identical content.`,
-                { changed: false } satisfies EditToolDetails,
-              ),
-              terminate: true,
-            };
+            return textResult(
+              `No changes made to ${path}. The replacement produced identical content.`,
+              { changed: false } satisfies EditToolDetails,
+            );
           }
           throw normalizedError;
         }
@@ -544,14 +542,18 @@ export function createEditToolDefinition(
       if (context.argsComplete && previewInput && !component.preview && !component.previewPending) {
         component.previewPending = true;
         const requestKey = argsKey;
-        void computeEditsDiff(previewInput.path, previewInput.edits, context.cwd, ops).then(
-          (preview) => {
-            if (component.previewArgsKey === requestKey) {
-              setEditPreview(component, preview, requestKey);
-              context.invalidate();
-            }
-          },
-        );
+        void computeEditsDiff(
+          previewInput.path,
+          previewInput.edits,
+          context.cwd,
+          ops,
+          resolvePath,
+        ).then((preview) => {
+          if (component.previewArgsKey === requestKey) {
+            setEditPreview(component, preview, requestKey);
+            context.invalidate();
+          }
+        });
       }
 
       return buildEditCallComponent(component, args, theme);

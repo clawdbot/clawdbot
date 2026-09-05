@@ -1,5 +1,4 @@
 import { randomUUID } from "node:crypto";
-import { prepareSystemAgentRunAdmission } from "../../agents/admitted-run-context.js";
 import {
   createCronCreatorAuthorityCapability,
   runWithCronCreatorAuthorityCapability,
@@ -14,8 +13,10 @@ import { resolveInternalSessionEffectsIdentity } from "../../config/sessions/int
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import { clearAgentRunContext, registerAgentRunContext } from "../../infra/agent-run-registry.js";
 import { createSubsystemLogger } from "../../logging/subsystem.js";
-import { runWithGatewayIndependentRootWorkAdmission } from "../../process/gateway-work-admission.js";
-import { CommandLane } from "../../process/lanes.js";
+import {
+  getGatewayRestartDrainSignal,
+  runWithGatewayIndependentRootWorkAdmission,
+} from "../../process/gateway-work-admission.js";
 import type { RunSkillUsage } from "../runtime/run-usage.js";
 import { applyAutonomousSkillProposal } from "./autonomous-apply.js";
 import { recordSkillExperienceReviewOutcome } from "./collection-review-state.js";
@@ -26,6 +27,7 @@ import {
   selectCurrentSkillTurnMessages,
 } from "./experience-review-prompt.js";
 import { assertSkillReviewRunSucceeded } from "./review-outcome.js";
+import { runSkillWorkshopReview } from "./review-run.js";
 import type { SkillWorkshopProposalMutationBudget } from "./types.js";
 
 const EXPERIENCE_REVIEW_MIN_MODEL_ITERATIONS = 10;
@@ -139,7 +141,10 @@ export async function prepareSkillExperienceReviewCandidate(
   const { mergeAlsoAllowPolicy } = await import("../../agents/tool-policy.js");
   const foreground = candidate.ctx.foregroundPromptContext;
   const sessionKey = candidate.ctx.sessionKey;
-  if (!sessionKey || resolveSandboxRuntimeStatus({ cfg: config, sessionKey }).sandboxed) {
+  if (
+    !sessionKey ||
+    resolveSandboxRuntimeStatus({ cfg: config, sessionKey, agentId: foreground.agentId }).sandboxed
+  ) {
     return undefined;
   }
   const capabilityProfile = resolveConversationCapabilityProfile({
@@ -198,32 +203,28 @@ export function createSkillExperienceReviewScheduler(deps: ExperienceReviewSched
   const setTimer = deps.setTimer ?? ((callback, delayMs) => setTimeout(callback, delayMs));
   const clearTimer = deps.clearTimer ?? clearTimeout;
 
-  const arm = (sessionKey: string, pending: PendingExperienceReview, delayMs: number) => {
+  const arm = (key: string, pending: PendingExperienceReview, delayMs: number) => {
     if (pending.timer) {
       clearTimer(pending.timer);
     }
     const generation = ++pending.generation;
     const timerCallback = () => {
-      if (pendingBySession.get(sessionKey) !== pending || pending.generation !== generation) {
+      if (pendingBySession.get(key) !== pending || pending.generation !== generation) {
         return;
       }
       pending.timer = undefined;
       void Promise.resolve(deps.isSystemActive())
         .then(async (active) => {
-          if (pendingBySession.get(sessionKey) !== pending || pending.generation !== generation) {
+          if (pendingBySession.get(key) !== pending || pending.generation !== generation) {
             return;
           }
-          if (active) {
-            arm(sessionKey, pending, EXPERIENCE_REVIEW_RETRY_IDLE_MS);
-            return;
-          }
-          if (reviewInFlight) {
-            arm(sessionKey, pending, EXPERIENCE_REVIEW_RETRY_IDLE_MS);
+          if (active || reviewInFlight) {
+            arm(key, pending, EXPERIENCE_REVIEW_RETRY_IDLE_MS);
             return;
           }
           reviewInFlight = true;
           try {
-            pendingBySession.delete(sessionKey);
+            pendingBySession.delete(key);
             const candidate = deps.prepareReview
               ? await deps.prepareReview(pending.candidate)
               : pending.candidate;
@@ -237,8 +238,8 @@ export function createSkillExperienceReviewScheduler(deps: ExperienceReviewSched
         })
         .catch((error: unknown) => {
           log.warn(`skill experience review failed: ${String(error)}`);
-          if (pendingBySession.get(sessionKey) === pending && pending.generation === generation) {
-            pendingBySession.delete(sessionKey);
+          if (pendingBySession.get(key) === pending && pending.generation === generation) {
+            pendingBySession.delete(key);
           }
         });
     };
@@ -257,7 +258,9 @@ export function createSkillExperienceReviewScheduler(deps: ExperienceReviewSched
       if (!sessionKey) {
         return;
       }
-      const existing = pendingBySession.get(sessionKey);
+      // Unqualified keys such as global still belong to one foreground agent.
+      const key = JSON.stringify([params.ctx.foregroundPromptContext.agentId, sessionKey]);
+      const existing = pendingBySession.get(key);
       // Errored completions (provider/prompt failures) are transient environment
       // noise, not learnable evidence, and a same-model review would likely hit
       // the same failure. User aborts carry no error and stay eligible: deep
@@ -272,13 +275,13 @@ export function createSkillExperienceReviewScheduler(deps: ExperienceReviewSched
         if (existing.timer) {
           clearTimer(existing.timer);
         }
-        pendingBySession.delete(sessionKey);
+        pendingBySession.delete(key);
         return;
       }
       // Quiet time follows all later foreground work in the session. Candidate
       // eligibility only decides whether that completion can replace the evidence.
       if (existing) {
-        arm(sessionKey, existing, EXPERIENCE_REVIEW_IDLE_MS);
+        arm(key, existing, EXPERIENCE_REVIEW_IDLE_MS);
       }
       if (errored) {
         log.debug(`experience review skipped: reason=errored-completion session=${sessionKey}`);
@@ -346,8 +349,8 @@ export function createSkillExperienceReviewScheduler(deps: ExperienceReviewSched
         };
         const pending = existing ?? { candidate, generation: 0 };
         pending.candidate = candidate;
-        pendingBySession.set(sessionKey, pending);
-        arm(sessionKey, pending, EXPERIENCE_REVIEW_IDLE_MS);
+        pendingBySession.set(key, pending);
+        arm(key, pending, EXPERIENCE_REVIEW_IDLE_MS);
         log.debug(
           `experience review scheduled: session=${sessionKey} iterations=${modelIterations} aborted=${!params.event.success}`,
         );
@@ -373,8 +376,9 @@ export async function runSkillExperienceReview(
   // inherited-context lane enqueue is refused as GatewayDrainingError on a
   // healthy gateway. Re-enter admission as independent root work; real
   // restart drain still refuses it.
-  await runWithGatewayIndependentRootWorkAdmission(() =>
-    runSkillExperienceReviewInner(candidate, deps),
+  await runWithGatewayIndependentRootWorkAdmission(
+    () => runSkillExperienceReviewInner(candidate, deps),
+    "skills:experience-review",
   );
 }
 
@@ -382,6 +386,9 @@ async function runSkillExperienceReviewInner(
   candidate: ExperienceReviewCandidate,
   deps: ExperienceReviewRunDeps,
 ): Promise<void> {
+  // Reset replaces the global controller; this review keeps its original lifetime
+  // across context acquisition, model execution, and entry to autonomous apply.
+  const abortSignal = getGatewayRestartDrainSignal();
   const foregroundPromptContext = candidate.ctx.foregroundPromptContext;
   const workspaceDir = getCanonicalSkillWorkspace() ?? candidate.ctx.workspaceDir;
   const foregroundSessionKey = candidate.ctx.sessionKey;
@@ -410,27 +417,6 @@ async function runSkillExperienceReviewInner(
     remaining: 1,
     readSkillHashes: new Map(),
   };
-  const foregroundSessionTarget = await resolveAgentRunSessionTarget({
-    agentId: foregroundPromptContext.agentId,
-    config,
-    sessionId: foregroundSessionId,
-    sessionKey: foregroundSessionKey,
-    missingSessionKey: "resolve-existing",
-  });
-  const foregroundSession = SessionManager.open(foregroundSessionTarget, workspaceDir);
-  const detachedSession = SessionManager.fromEntries(foregroundSession.getEntries(), workspaceDir);
-  const { listWritableWorkspaceSkillSummaries } = await import("./workspace-skill-read.js");
-  const existingSkills = listWritableWorkspaceSkillSummaries(workspaceDir, {
-    config,
-    agentId: foregroundPromptContext.agentId,
-  });
-  const { runEmbeddedAgent } = await import("../../agents/embedded-agent.js");
-  const preparedRunAdmission = prepareSystemAgentRunAdmission(
-    config,
-    runId,
-    foregroundPromptContext.agentId,
-    "skill-workshop.experience",
-  );
   const attemptedAtMs = Date.now();
   let outcome: "applied" | "proposed" | "nothing";
   let proposalId: string | undefined;
@@ -447,59 +433,64 @@ async function runSkillExperienceReviewInner(
     projectSessionMessages: false,
   });
   try {
-    let embeddedResult: Awaited<ReturnType<typeof runEmbeddedAgent>>;
-    try {
-      const run = () =>
-        runEmbeddedAgent({
-          ...foregroundPromptContext,
-          preparedRunAdmission,
-          sessionId: reviewSession.sessionId,
-          sessionKey: reviewSession.sessionKey,
-          // Delivery authority closes with the foreground turn and cannot be reused by this fork.
-          messageActionTurnCapability: undefined,
-          sessionManager: detachedSession,
-          sessionPersistence: "detached",
-          // Never occupy the foreground agent lane after the idle gate opens.
-          lane: CommandLane.SkillWorkshopReview,
-          agentHarnessId: "openclaw",
-          agentHarnessRuntimeOverride: "openclaw",
-          workspaceDir,
-          config,
-          prompt: buildSkillExperienceReviewPrompt({ ...candidate, existingSkills }),
-          provider: modelProviderId,
-          model: modelId,
-          modelSelectionLocked: true,
-          modelFallbacksOverride: [],
-          ...(candidate.ctx.authProfileId
-            ? { authProfileId: candidate.ctx.authProfileId, authProfileIdSource: "user" as const }
-            : {}),
-          timeoutMs: EXPERIENCE_REVIEW_TIMEOUT_MS,
-          runId,
-          silentExpected: true,
-          allowEmptyAssistantReplyAsSilent: true,
-          terminalReplyExpectation: "optional",
-          toolExecutionAllow: ["skill_workshop"],
-          cleanupBundleMcpOnRunEnd: true,
-          disableTrajectory: true,
-          skillWorkshopProposalOnly: true,
-          skillWorkshopUpdateProposals: true,
-          skillWorkshopAutonomousCapture: true,
-          skillWorkshopProposalMutationBudget: proposalMutationBudget,
-          skillWorkshopOrigin: {
-            agentId: foregroundPromptContext.agentId,
-            sessionKey: foregroundSessionKey,
-            ...(candidate.ctx.runId ? { runId: candidate.ctx.runId } : {}),
-          },
-          verboseLevel: "off",
-          suppressToolErrorWarnings: true,
-          ...(capability ? { cronCreatorAuthorityCapability: capability } : {}),
-        });
-      embeddedResult = capability
-        ? await runWithCronCreatorAuthorityCapability(capability, run)
-        : await run();
-    } finally {
-      preparedRunAdmission.close();
-    }
+    const foregroundSessionTarget = await resolveAgentRunSessionTarget({
+      agentId: foregroundPromptContext.agentId,
+      config,
+      sessionId: foregroundSessionId,
+      sessionKey: foregroundSessionKey,
+      missingSessionKey: "resolve-existing",
+    });
+    abortSignal.throwIfAborted();
+    const detachedSession = await SessionManager.openModelContextAsync(foregroundSessionTarget, {
+      cwd: workspaceDir,
+      signal: abortSignal,
+    });
+    abortSignal.throwIfAborted();
+    const { listWritableWorkspaceSkillSummaries } = await import("./workspace-skill-read.js");
+    abortSignal.throwIfAborted();
+    const existingSkills = listWritableWorkspaceSkillSummaries(workspaceDir, {
+      config,
+      agentId: foregroundPromptContext.agentId,
+    });
+    const run = () =>
+      runSkillWorkshopReview({
+        reviewKind: "experience",
+        ...foregroundPromptContext,
+        sessionId: reviewSession.sessionId,
+        sessionKey: reviewSession.sessionKey,
+        // Delivery authority closes with the foreground turn and cannot be reused by this fork.
+        messageActionTurnCapability: undefined,
+        sessionManager: detachedSession,
+        sessionPersistence: "detached",
+        workspaceDir,
+        config,
+        abortSignal,
+        prompt: buildSkillExperienceReviewPrompt({ ...candidate, existingSkills }),
+        provider: modelProviderId,
+        model: modelId,
+        ...(candidate.ctx.authProfileId
+          ? { authProfileId: candidate.ctx.authProfileId, authProfileIdSource: "user" as const }
+          : {}),
+        timeoutMs: EXPERIENCE_REVIEW_TIMEOUT_MS,
+        runId,
+        silentExpected: true,
+        allowEmptyAssistantReplyAsSilent: true,
+        terminalReplyExpectation: "optional",
+        toolExecutionAllow: ["skill_workshop"],
+        skillWorkshopUpdateProposals: true,
+        skillWorkshopAutonomousCapture: true,
+        skillWorkshopProposalMutationBudget: proposalMutationBudget,
+        skillWorkshopOrigin: {
+          agentId: foregroundPromptContext.agentId,
+          sessionKey: foregroundSessionKey,
+          ...(candidate.ctx.runId ? { runId: candidate.ctx.runId } : {}),
+        },
+        ...(capability ? { cronCreatorAuthorityCapability: capability } : {}),
+      });
+    const embeddedResult = capability
+      ? await runWithCronCreatorAuthorityCapability(capability, run)
+      : await run();
+    abortSignal.throwIfAborted();
 
     // A failed review can leave a pending proposal; never auto-apply it.
     assertSkillReviewRunSucceeded(embeddedResult);
@@ -510,13 +501,18 @@ async function runSkillExperienceReviewInner(
     const currentConfig = deps.getCurrentConfig
       ? await deps.getCurrentConfig()
       : (await import("../../config/config.js")).getRuntimeConfig();
+    abortSignal.throwIfAborted();
     if (resolveSkillWorkshopConfig(currentConfig).autonomous.mode === "auto") {
       const { inspectSkillProposal } = await import("./service.js");
+      abortSignal.throwIfAborted();
       for (const mutatedProposalId of proposalIds) {
+        // An entered apply owns its commit/rollback; fence any subsequent proposal.
+        abortSignal.throwIfAborted();
         const proposal = await inspectSkillProposal(mutatedProposalId, {
           workspaceDir,
           agentId: foregroundPromptContext.agentId,
         });
+        abortSignal.throwIfAborted();
         if (
           !proposal ||
           proposal.record.status !== "pending" ||

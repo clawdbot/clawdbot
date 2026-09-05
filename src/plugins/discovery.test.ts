@@ -3045,7 +3045,7 @@ describe("discoverOpenClawPlugins", () => {
   });
 
   it.runIf(process.platform !== "win32")(
-    "rechecks a rejected configured path under bundled policy after deduplicating scoped attempts",
+    "repairs a world-writable bundled plugin selected by config without warning that it was blocked",
     () => {
       const stateDir = makeTempDir();
       const bundledDir = path.join(stateDir, "bundled");
@@ -3060,10 +3060,12 @@ describe("discoverOpenClawPlugins", () => {
         env: buildDiscoveryEnvWithOverrides(stateDir, { OPENCLAW_BUNDLED_PLUGINS_DIR: bundledDir }),
         extraPaths: [pluginDir, pluginDir],
       });
+      // A host-owned path gets bundled policy on the first attempt, so the repair
+      // runs once and the operator never sees a "blocked" warning for a plugin that
+      // actually loads. Repeating the same path still yields a single candidate.
       expect(result.candidates).toHaveLength(1);
       expectCandidateFields(result.candidates[0]!, { idHint: "repairable", origin: "bundled" });
-      expect(result.diagnostics).toHaveLength(1);
-      expectDiagnostic({ diagnostics: result.diagnostics, messageIncludes: "world-writable path" });
+      expect(result.diagnostics).toEqual([]);
       expect(fs.statSync(pluginDir).mode & 0o777).toBe(0o755);
     },
   );

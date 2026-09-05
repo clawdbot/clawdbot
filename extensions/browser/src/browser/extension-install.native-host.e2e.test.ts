@@ -10,7 +10,7 @@ import {
   predictedId,
   useExtensionInstallFixture,
   useNativeHostLaunchFixture,
-  writeSecurePreferences,
+  writeChromePreferences,
 } from "./extension-install.test-support.js";
 
 const BUILT_NATIVE_HOST_PATH = path.resolve("dist/extensions/browser/native-host-entry.js");
@@ -54,7 +54,7 @@ describe.skipIf(process.platform === "win32")("native host registration", () => 
       throw new Error("missing Chromium fixture root");
     }
     const extensionId = await predictedId(installed, deps.platform);
-    await writeSecurePreferences({
+    await writeChromePreferences({
       userDataDir: chromium.userDataDir,
       profile: "Default",
       entries: { [extensionId]: { location: 4, path: installed } },

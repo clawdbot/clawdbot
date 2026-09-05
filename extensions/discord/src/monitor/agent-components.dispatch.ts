@@ -336,6 +336,7 @@ export async function dispatchDiscordComponentEvent(params: {
               kind: info.kind,
               bindPendingFinalDelivery: info.bindPendingFinalDelivery,
               onPlatformSendDispatch: info.onPlatformSendDispatch,
+              assertPlatformSendAuthorized: info.assertPlatformSendAuthorized,
             });
             if (result.visibleReplySent) {
               replyReference.markSent();

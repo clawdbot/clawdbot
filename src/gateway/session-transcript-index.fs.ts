@@ -9,6 +9,7 @@ import {
   createTranscriptDisplayPosition,
   createTranscriptDisplaySource,
 } from "../sessions/transcript-display-position.js";
+import { isVisibleTranscriptRecord } from "../sessions/transcript-visible-record.js";
 import {
   parseTranscriptRecord,
   type TranscriptRecord,
@@ -48,10 +49,6 @@ export function assertArchiveTranscriptSource(
   if (transcriptArtifactDisplaySource(filePath, stat) !== displaySource) {
     throw new SessionTranscriptProjectionUnavailableError(sessionId);
   }
-}
-
-export function isVisibleTranscriptRecord(record: Record<string, unknown>): boolean {
-  return Boolean(record.message) || record.type === "compaction" || record.type === "reset";
 }
 
 export function selectArchiveTranscriptEntries<T extends TranscriptRecord>(
@@ -127,21 +124,19 @@ async function buildSessionTranscriptIndex(
   }
   const entries = selectArchiveTranscriptEntries(records)
     .filter((entry) => isVisibleTranscriptRecord(entry.record))
-    .map(
-      (entry, index): IndexedTranscriptEntry => ({
-        byteLength: entry.byteLength,
-        id: entry.id,
-        recoveredImageData: entry.recoveredImageData,
-        record: entry.record,
-        seq: index + 1,
-        transcriptPosition: createTranscriptDisplayPosition(
-          displaySource,
-          entry.rawSeq,
-          entry.record.message,
-          (id) => rawSeqById.get(id),
-        ),
-      }),
-    );
+    .map((entry, index): IndexedTranscriptEntry => ({
+      byteLength: entry.byteLength,
+      id: entry.id,
+      recoveredImageData: entry.recoveredImageData,
+      record: entry.record,
+      seq: index + 1,
+      transcriptPosition: createTranscriptDisplayPosition(
+        displaySource,
+        entry.rawSeq,
+        entry.record.message,
+        (id) => rawSeqById.get(id),
+      ),
+    }));
   return {
     entries,
     byId: new Map(entries.flatMap((entry) => (entry.id ? [[entry.id, entry] as const] : []))),

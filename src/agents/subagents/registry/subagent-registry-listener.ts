@@ -55,7 +55,7 @@ export function createSubagentRegistryListener(config: {
             // terminal. Keep capture + persistence inside the suspension fence.
             await runWithGatewayIndependentRootWorkAdmission(async () => {
               await refreshFrozenResultFromSession(sessionKey);
-            });
+            }, "subagents:result-refresh");
           }
           return;
         }

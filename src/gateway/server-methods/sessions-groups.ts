@@ -22,10 +22,11 @@ import {
   listSessionGroups,
   putSessionGroups,
   renameSessionGroup,
+  resolveSessionGroupMutationTargetsByName,
+  SessionGroupNotEmptyError,
   SessionGroupNotFoundError,
   updateSessionGroupDefaults,
 } from "../session-groups.js";
-import { resolveSessionGroupMutationTargetsByName } from "../session-sharing-target-input.js";
 import { SessionMutationAuthorizationChangedError } from "../session-sharing.js";
 import { emitSessionsChanged } from "./session-change-event.js";
 import type { GatewayRequestHandlers } from "./types.js";
@@ -66,16 +67,33 @@ export const sessionGroupHandlers: GatewayRequestHandlers = {
     });
     respond(true, { defaults }, undefined);
   },
-  "sessions.groups.put": async ({ params, respond, context }) => {
+  "sessions.groups.put": async ({ params, respond, context, sessionMutationAuthorization }) => {
     if (
       !assertValidParams(params, validateSessionsGroupsPutParams, "sessions.groups.put", respond)
     ) {
       return;
     }
-    const groups = putSessionGroups(params.names, params.sectionOrder);
-    respond(true, { ok: true, groups, sectionOrder: listSidebarSectionOrder() }, undefined);
-    // Catalog-only changes still need to reach other open clients.
-    emitSessionsChanged(context, { reason: "groups" });
+    try {
+      const groups = putSessionGroups({
+        cfg: context.getRuntimeConfig(),
+        names: params.names,
+        sectionOrder: params.sectionOrder,
+        assertCurrent: sessionMutationAuthorization?.assertCurrent,
+        assertTargetCurrent: sessionMutationAuthorization?.assertTargetCurrent,
+      });
+      respond(true, { ok: true, groups, sectionOrder: listSidebarSectionOrder() }, undefined);
+      // Catalog-only changes still need to reach other open clients.
+      emitSessionsChanged(context, { reason: "groups" });
+    } catch (error) {
+      if (error instanceof SessionMutationAuthorizationChangedError) {
+        throw error;
+      }
+      if (error instanceof SessionGroupNotEmptyError) {
+        respond(false, undefined, errorShape(ErrorCodes.INVALID_REQUEST, error.message));
+        return;
+      }
+      respond(false, undefined, errorShape(ErrorCodes.UNAVAILABLE, formatErrorMessage(error)));
+    }
   },
   "sessions.groups.rename": async ({ params, respond, context, sessionMutationAuthorization }) => {
     if (
@@ -97,7 +115,6 @@ export const sessionGroupHandlers: GatewayRequestHandlers = {
         assertTargetCurrent: sessionMutationAuthorization?.assertTargetCurrent,
       });
       respond(true, { ok: true, ...result }, undefined);
-      emitSessionsChanged(context, { reason: "groups" });
     } catch (error) {
       if (error instanceof SessionMutationAuthorizationChangedError) {
         throw error;
@@ -107,6 +124,9 @@ export const sessionGroupHandlers: GatewayRequestHandlers = {
         return;
       }
       respond(false, undefined, errorShape(ErrorCodes.UNAVAILABLE, formatErrorMessage(error)));
+    } finally {
+      // Interrupted sweeps can retain catalog entries and committed member moves.
+      emitSessionsChanged(context, { reason: "groups" });
     }
   },
   "sessions.groups.update": async ({
@@ -213,12 +233,13 @@ export const sessionGroupHandlers: GatewayRequestHandlers = {
         assertTargetCurrent: sessionMutationAuthorization?.assertTargetCurrent,
       });
       respond(true, { ok: true, ...result }, undefined);
-      emitSessionsChanged(context, { reason: "groups" });
     } catch (error) {
       if (error instanceof SessionMutationAuthorizationChangedError) {
         throw error;
       }
       respond(false, undefined, errorShape(ErrorCodes.UNAVAILABLE, formatErrorMessage(error)));
+    } finally {
+      emitSessionsChanged(context, { reason: "groups" });
     }
   },
 };

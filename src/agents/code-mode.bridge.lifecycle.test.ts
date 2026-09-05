@@ -22,6 +22,7 @@ import {
   resultDetails,
   runUntilCompleted,
   testing,
+  waitUntilCompleted,
 } from "./code-mode.test-support.js";
 import { buildEmbeddedRunPayloads } from "./embedded-agent-runner/run/payloads.js";
 import { emitAssistantTextDeltaAndEnd } from "./embedded-agent-subscribe.e2e-harness.js";
@@ -37,37 +38,57 @@ const tempDirs = useAutoCleanupTempDirTracker(afterEach);
 describe("Code Mode subscribed bridge lifecycle", () => {
   afterEach(() => resetCodeModeTestState());
 
-  it("observes output rejection as the single nested terminal failure", async () => {
-    const harness = createSubscribedCodeModeHarness({ name: "output-rejection" });
-    const target = pluginToolWithExecute("lookup", "Look up a record", async () =>
-      jsonResult({ rejected: true }),
-    );
-    try {
-      await expect(
-        harness.executeTool({
-          tool: target,
-          toolName: target.name,
-          source: "openclaw",
-          toolCallId: "nested-output-rejection",
-          parentToolCallId: "outer-exec",
-          input: {},
-          acceptResultBeforeProjection: async () => {
-            throw new Error("declared output mismatch");
+  it.each(["redacted", "rejected"])(
+    "preserves nested source delivery when output is %s",
+    async (projection) => {
+      const harness = createSubscribedCodeModeHarness({ name: `source-${projection}` });
+      const target = fakeTool("message", "Reply to the source conversation");
+      target.execute = vi.fn(async () =>
+        jsonResult({
+          messageDelivery: {
+            status: "settled",
+            partialDelivery: false,
+            createdThreadIds: [],
+            sourceReplyDelivered: true,
           },
         }),
-      ).rejects.toThrow("declared output mismatch");
-      expect(harness.subscription.toolMetas).toEqual([
-        expect.objectContaining({ toolName: "lookup", isError: true }),
-      ]);
-      expect(harness.subscription.getItemLifecycle()).toMatchObject({
-        startedCount: 1,
-        completedCount: 1,
-        activeCount: 0,
-      });
-    } finally {
-      harness.dispose();
-    }
-  });
+      );
+      try {
+        const result = harness.executeTool({
+          tool: target,
+          toolName: "message",
+          source: "openclaw",
+          sourceName: "core",
+          toolCallId: "nested-source-reply",
+          parentToolCallId: "outer-exec",
+          input: { action: "send", message: "Delivered once" },
+          acceptResultBeforeProjection: async () => {
+            if (projection === "rejected") {
+              throw new Error("declared output mismatch");
+            }
+            return jsonResult({ redacted: true });
+          },
+        });
+        if (projection === "rejected") {
+          await expect(result).rejects.toThrow("declared output mismatch");
+        } else {
+          await expect(result).resolves.toMatchObject({ details: { redacted: true } });
+        }
+        expect(target.execute).toHaveBeenCalledOnce();
+        expect(harness.subscription.getSourceReplyDelivered()).toBe(true);
+        expect(harness.subscription.toolMetas).toEqual([
+          expect.objectContaining({ toolName: "message", isError: projection === "rejected" }),
+        ]);
+        expect(harness.subscription.getItemLifecycle()).toMatchObject({
+          startedCount: 1,
+          completedCount: 1,
+          activeCount: 0,
+        });
+      } finally {
+        harness.dispose();
+      }
+    },
+  );
 
   it("persists concurrent nested starts in order across wait without changing replay or pairing", async () => {
     const clock = vi.spyOn(Date, "now").mockReturnValue(42);
@@ -437,12 +458,10 @@ describe("Code Mode subscribed bridge lifecycle", () => {
         );
         expect(suspended).toMatchObject({ status: "waiting", reason: "yield" });
 
-        const completed = resultDetails(
-          await expectDefined(harness.tools[1], "Code Mode wait test invariant").execute(
-            `code-wait-stage-${stage}`,
-            { runId: suspended.runId },
-          ),
-        );
+        const completed = await waitUntilCompleted({
+          details: suspended,
+          waitTool: expectDefined(harness.tools[1], "Code Mode wait test invariant"),
+        });
         expect(completed).toMatchObject({ status: "completed", value: { finished: true } });
         expect(countActiveToolExecutions(harness.runId)).toBe(0);
       }
@@ -495,7 +514,7 @@ describe("Code Mode subscribed bridge lifecycle", () => {
       expect(testing.activeRuns.size).toBe(0);
       await expect(
         harness.tools[1]!.execute("closed-sibling", { runId: parked.runId }),
-      ).rejects.toThrow(/unavailable|expired/);
+      ).rejects.toBe(handoffReason);
     } finally {
       harness.dispose();
     }
@@ -546,7 +565,7 @@ describe("Code Mode subscribed bridge lifecycle", () => {
         );
         expect(pending.settled).toBeUndefined();
         expect(otherPending.settled).toBeUndefined();
-        expect(ownerState.snapshotBytes.byteLength).toBeGreaterThan(0);
+        expect(ownerState.snapshot.memory.byteLength).toBeGreaterThan(0);
         expect(testing.resumingRunIds.size).toBe(0);
 
         // Both exec calls have returned; no wait is in flight to perform owner cleanup.

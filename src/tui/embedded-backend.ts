@@ -21,10 +21,9 @@ import {
 } from "../agents/agent-scope.js";
 import { ensureContextWindowCacheLoaded } from "../agents/context.js";
 import { DEFAULT_PROVIDER } from "../agents/defaults.js";
-import {
-  queueEmbeddedAgentMessageWithOutcomeAsync,
-  resolveActiveEmbeddedRunSessionId,
-} from "../agents/embedded-agent-runner/runs.js";
+import { resolveActiveEmbeddedRunSessionId } from "../agents/embedded-agent-runner/active-run-projections.js";
+import { queueEmbeddedAgentMessageWithOutcomeAsync } from "../agents/embedded-agent-runner/runs.js";
+import { QuestionAnswerUnconfirmedError } from "../agents/harness/gateway-question-dispatch.js";
 import {
   buildAllowedModelSet,
   buildConfiguredModelCatalog,
@@ -512,7 +511,12 @@ export class EmbeddedTuiBackend implements TuiBackend {
               debounceMs: queueSettings.debounceMs ?? DEFAULT_QUEUE_DEBOUNCE_MS,
               isInboundUserMessage: true,
             },
-          ).catch(() => undefined);
+          ).catch((error: unknown) => {
+            if (error instanceof QuestionAnswerUnconfirmedError) {
+              throw error;
+            }
+            return undefined;
+          });
           if (outcome?.queued) {
             return { runId: queuedAfter.runId };
           }
@@ -881,6 +885,7 @@ export class EmbeddedTuiBackend implements TuiBackend {
     const { runBtwSideQuestion } = await import("../agents/btw.js");
     const reply = await runBtwSideQuestion({
       cfg,
+      agentId: sessionAgentId,
       agentDir: resolveAgentDir(cfg, sessionAgentId),
       provider: resolvedModel.provider,
       model: resolvedModel.model,

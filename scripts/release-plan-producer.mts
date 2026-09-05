@@ -79,6 +79,8 @@ const YAML_PACKAGE_TREE_SHA256 = "610ccacfe592d226ac1eb04842d1f591c5381f2a68b9f7
 const YAML_PACKAGE_MAX_FILES = 512;
 const YAML_PACKAGE_MAX_ENTRIES = 1024;
 const YAML_PACKAGE_MAX_BYTES = 4 * 1024 * 1024;
+// Keep both comparators local: this one precedes tooling verification, and CHILD_RUNNER's precedes
+// loader-hook registration. Importing either would execute code before its integrity boundary.
 const compareAscii = (left: string, right: string) => (left < right ? -1 : left > right ? 1 : 0);
 
 type ToolingModule = { path: string; bytes: Buffer; imports: Array<[string, string]> };
@@ -396,6 +398,10 @@ function retainYamlPackage() {
   let totalBytes = 0;
   const walk = (directory: string, relativeDirectory = "") => {
     for (const name of fs.readdirSync(directory).toSorted(compareAscii)) {
+      // Installer-created dependencies and bin shims are not package bytes or retained modules.
+      if (!relativeDirectory && name === "node_modules") {
+        continue;
+      }
       const path = relativeDirectory ? `${relativeDirectory}/${name}` : name;
       assertSafeYamlPath(path);
       if (entries.length >= YAML_PACKAGE_MAX_ENTRIES) {

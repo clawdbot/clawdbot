@@ -35,6 +35,11 @@ import {
   setDiagnosticsEnabledForProcess,
   waitForDiagnosticEventsDrained,
 } from "../infra/diagnostic-events.js";
+import type {
+  CliBackendConfig,
+  CliBackendExecute,
+  CliBackendLiveSessionHandle,
+} from "../plugins/cli-backend.types.js";
 import { getGlobalHookRunner } from "../plugins/hook-runner-global.js";
 import type { getProcessSupervisor } from "../process/supervisor/index.js";
 import type { RunExit } from "../process/supervisor/types.js";
@@ -46,11 +51,12 @@ import { createTestUserTurnTranscriptTarget } from "../sessions/user-turn-transc
 import { closeOpenClawAgentDatabasesForTest } from "../state/openclaw-agent-db.js";
 import { closeOpenClawStateDatabaseForTest } from "../state/openclaw-state-db.js";
 import { captureEnv, setTestEnvValue } from "../test-utils/env.js";
+import { prepareSystemAgentRunAdmission } from "./admitted-run-context.js";
 import { createTestAdmittedRunContext } from "./admitted-run-context.test-support.js";
 import { testing as cliBackendsTesting } from "./cli-backends.test-support.js";
 import {
   restoreCliRunnerTestDeps,
-  runPreparedCliAgent,
+  runPreparedCliAgent as runPreparedCliAgentCore,
   setCliRunnerTestDeps,
 } from "./cli-runner.js";
 import {
@@ -60,7 +66,8 @@ import {
   supervisorSpawnMock,
 } from "./cli-runner.test-support.js";
 import { runCliRecovery } from "./cli-runner/cli-run-recovery.js";
-import { executePreparedCliRun } from "./cli-runner/execute.js";
+import { executePreparedCliRun as executePreparedCliRunCore } from "./cli-runner/execute.js";
+import { wrapPreparedCliRunWithTestAdmission } from "./cli-runner/execute.test-support.js";
 import {
   resolveCliNoOutputTimeoutMs,
   resolveCliRunTimeoutOverrideMs,
@@ -69,12 +76,15 @@ import { prepareCliRunContext } from "./cli-runner/prepare.js";
 import { hashCliReseedPrompt } from "./cli-runner/reseed-envelope.js";
 import * as sessionHistoryModule from "./cli-runner/session-history.js";
 import type { PreparedCliRunContext } from "./cli-runner/types.js";
+import { isIntermediateAssistantTranscriptMessage } from "./embedded-agent-runner/message-visibility.js";
 import { FailoverError } from "./failover-error.js";
 import { runAgentHarnessBeforeMessageWriteHook } from "./harness/hook-helpers.js";
 import { MAX_AGENT_HOOK_HISTORY_MESSAGES } from "./harness/hook-history.js";
 import { SessionManager } from "./sessions/session-manager.js";
 
 const MAX_CLI_SESSION_HISTORY_MESSAGES = MAX_AGENT_HOOK_HISTORY_MESSAGES;
+const runPreparedCliAgent = wrapPreparedCliRunWithTestAdmission(runPreparedCliAgentCore);
+const executePreparedCliRun = wrapPreparedCliRunWithTestAdmission(executePreparedCliRunCore);
 
 // Gateway unit coverage owns quiet-admission timing. These reliability cases only
 // need to drain calls already in flight, so skip the repeated 250 ms quiet window.
@@ -233,6 +243,87 @@ function makeClaudePreparedContext(
 ): PreparedCliRunContext {
   return buildPreparedContext({ provider: "claude-cli", model: "opus", ...overrides });
 }
+
+async function usePluginLiveBackend(context: PreparedCliRunContext, execute: CliBackendExecute) {
+  const backend: CliBackendConfig = {
+    command: "/bin/sh",
+    args: [],
+    resumeArgs: ["--resume", "{sessionId}"],
+    output: "jsonl",
+    jsonlDialect: "claude-stream-json",
+    input: "stdin",
+    sessionMode: "existing",
+    liveSession: "claude-stdio",
+    freshSessionRecovery: "invalidated-only",
+  };
+  context.preparedBackend.backend = backend;
+  context.backendResolved.config = backend;
+  context.executionTarget = { kind: "plugin", execute };
+  const admission = prepareSystemAgentRunAdmission(
+    {},
+    context.params.runId,
+    "main",
+    "plugin-recovery-test",
+  );
+  context.params.admittedRunContext = await admission.admit("plugin-harness");
+  return { admission, context };
+}
+
+const failClosedPluginResumeCases: Array<{
+  name: string;
+  warm?: boolean;
+  invalidate?: boolean;
+  managed?: boolean;
+  resume?: boolean;
+  event?: Record<string, unknown>;
+}> = [
+  { name: "a valid required generation", warm: true, resume: true },
+  { name: "a fresh managed turn", managed: true },
+  { name: "an unbound managed resume", managed: true, resume: true },
+  { name: "a one-shot turn" },
+  {
+    name: "assistant output",
+    warm: true,
+    invalidate: true,
+    resume: true,
+    event: { type: "assistant", message: { content: [{ type: "text", text: "started" }] } },
+  },
+  {
+    name: "thinking output",
+    warm: true,
+    invalidate: true,
+    resume: true,
+    event: { type: "assistant", message: { content: [{ type: "thinking", thinking: "work" }] } },
+  },
+  {
+    name: "tool output with an active parsed tool",
+    warm: true,
+    invalidate: true,
+    resume: true,
+    event: {
+      type: "assistant",
+      message: { content: [{ type: "tool_use", id: "tool-1", name: "Read", input: {} }] },
+    },
+  },
+  {
+    name: "background work",
+    warm: true,
+    invalidate: true,
+    resume: true,
+    event: {
+      type: "system",
+      subtype: "background_tasks_changed",
+      tasks: [{ task_id: "task-1", task_type: "local_agent" }],
+    },
+  },
+  {
+    name: "an unknown event",
+    warm: true,
+    invalidate: true,
+    resume: true,
+    event: { type: "future_event" },
+  },
+];
 
 function makeRunExit(overrides: Partial<RunExit> = {}): RunExit {
   return {
@@ -2410,30 +2501,125 @@ describe("runCliAgent reliability", () => {
     expect(result.meta.agentMeta?.contextTokens).toBe(150_000);
   });
 
-  it("marks CLI runs as paused after sessions_yield", async () => {
+  it("returns accepted CLI session spawns when sessions_yield pauses the requester", async () => {
+    const { dir, sessionFile, sessionTarget, storePath } = createSessionFixture();
+    const requesterTurnRunId = "run-cli-yield";
+    const childRunId = "run-cli-child";
+    const childSessionKey = "agent:main:subagent:cli-child";
     supervisorSpawnMock.mockImplementationOnce(async (...args: unknown[]) => {
       const input = args[0] as Parameters<ReturnType<typeof getProcessSupervisor>["spawn"]>[0];
+      const spawnCapture = markMcpLoopbackToolCallStarted({
+        captureKey: input.env?.OPENCLAW_MCP_CLI_CAPTURE_KEY,
+        toolName: "sessions_spawn",
+        args: { task: "review" },
+      });
+      if (!spawnCapture) {
+        throw new Error("missing sessions_spawn capture");
+      }
+      recordMcpLoopbackToolCallResult({
+        captureHandle: spawnCapture,
+        toolName: "sessions_spawn",
+        args: { task: "review" },
+        outcome: "completed",
+        result: {
+          details: {
+            status: "accepted",
+            runId: childRunId,
+            childSessionKey,
+            expectsCompletionMessage: true,
+          },
+        },
+      });
+      markMcpLoopbackToolCallFinished(spawnCapture);
       const captureHandle = markMcpLoopbackRequestStarted(input.env?.OPENCLAW_MCP_CLI_CAPTURE_KEY);
       await resolveMcpLoopbackYieldContext(captureHandle)?.onYield("waiting on subagents");
       markMcpLoopbackRequestFinished(captureHandle);
       input.onStdout?.("yield acknowledged");
       return makeManagedRun();
     });
-    const context = buildPreparedContext();
+    const context = buildPreparedContext({
+      sessionKey: "agent:main:main",
+      runId: requesterTurnRunId,
+    });
+    context.mcpDeliveryCapture = true;
+    Object.assign(context.params, {
+      sessionFile,
+      sessionTarget,
+      storePath,
+      workspaceDir: dir,
+      persistAssistantTranscript: true,
+    });
+
+    try {
+      const result = await runPreparedCliAgent(context);
+
+      expect(result).toMatchObject({
+        acceptedSessionSpawns: [
+          { runId: childRunId, childSessionKey, expectsCompletionMessage: true },
+        ],
+        meta: {
+          yielded: true,
+          livenessState: "paused",
+          stopReason: "end_turn",
+          completion: {
+            finishReason: "end_turn",
+            stopReason: "end_turn",
+            refusal: false,
+          },
+        },
+      });
+      const messages = await readTranscriptMessages(sessionTarget);
+      expect(messages).toEqual([
+        expect.objectContaining({
+          role: "assistant",
+          content: [{ type: "text", text: "yield acknowledged" }],
+          idempotencyKey: `cli-assistant:${requesterTurnRunId}`,
+        }),
+      ]);
+      expect(isIntermediateAssistantTranscriptMessage(messages[0])).toBe(true);
+    } finally {
+      fs.rmSync(dir, { recursive: true, force: true });
+    }
+  });
+
+  it.each([
+    ["rejected", { details: { status: "rejected", error: "not accepted" } }],
+    ["malformed accepted", { details: { status: "accepted", runId: "run-without-session" } }],
+  ] as const)("does not retain a %s CLI session spawn", async (_label, spawnResult) => {
+    supervisorSpawnMock.mockImplementationOnce(async (...args: unknown[]) => {
+      const input = args[0] as Parameters<ReturnType<typeof getProcessSupervisor>["spawn"]>[0];
+      const spawnCapture = markMcpLoopbackToolCallStarted({
+        captureKey: input.env?.OPENCLAW_MCP_CLI_CAPTURE_KEY,
+        toolName: "sessions_spawn",
+        args: { task: "review" },
+      });
+      if (!spawnCapture) {
+        throw new Error("missing sessions_spawn capture");
+      }
+      recordMcpLoopbackToolCallResult({
+        captureHandle: spawnCapture,
+        toolName: "sessions_spawn",
+        args: { task: "review" },
+        outcome: "completed",
+        result: spawnResult,
+      });
+      markMcpLoopbackToolCallFinished(spawnCapture);
+      const yieldCapture = markMcpLoopbackRequestStarted(input.env?.OPENCLAW_MCP_CLI_CAPTURE_KEY);
+      await resolveMcpLoopbackYieldContext(yieldCapture)?.onYield("waiting on subagents");
+      markMcpLoopbackRequestFinished(yieldCapture);
+      input.onStdout?.("yield acknowledged");
+      return makeManagedRun();
+    });
+    const context = buildPreparedContext({
+      sessionKey: "agent:main:main",
+      runId: "run-cli-unproven-spawn",
+    });
     context.mcpDeliveryCapture = true;
 
     const result = await runPreparedCliAgent(context);
 
-    expect(result.meta).toMatchObject({
-      yielded: true,
-      livenessState: "paused",
-      stopReason: "end_turn",
-      completion: {
-        finishReason: "end_turn",
-        stopReason: "end_turn",
-        refusal: false,
-      },
-    });
+    expect(result.acceptedSessionSpawns).toBeUndefined();
+    expect(result.meta).toMatchObject({ yielded: true, livenessState: "paused" });
   });
 
   it("seeds fresh CLI sessions from the OpenClaw transcript", async () => {
@@ -4138,6 +4324,210 @@ describe("runCliAgent reliability", () => {
       expect(firstHistoryMessage.content).toBe(`history-5`);
     } finally {
       fs.rmSync(dir, { recursive: true, force: true });
+    }
+  });
+
+  it("fresh-reseeds one invalidated control-only plugin resume without duplicate hooks", async () => {
+    const hookRunner = {
+      hasHooks: vi.fn((hookName: string) =>
+        ["llm_input", "llm_output", "agent_end"].includes(hookName),
+      ),
+      runLlmInput: vi.fn(async () => undefined),
+      runLlmOutput: vi.fn(async () => undefined),
+      runAgentEnd: vi.fn(async () => undefined),
+    };
+    setHookRunnerForTest(hookRunner);
+    let attempts = 0;
+    let liveHandle: CliBackendLiveSessionHandle | undefined;
+    const execute: CliBackendExecute = async function* (execution) {
+      attempts += 1;
+      const capability = execution.liveSession;
+      if (!capability) {
+        throw new Error("Expected a managed live-session capability.");
+      }
+      if (attempts === 1) {
+        const handle: CliBackendLiveSessionHandle = {
+          generation: "warm-generation",
+          fingerprint: capability.fingerprint,
+          isIdle: () => true,
+          close: () => capability.remove(handle),
+          waitForExit: async () => {},
+        };
+        liveHandle = handle;
+        capability.register(handle);
+        yield { type: "result", subtype: "success", is_error: false, result: "warm" };
+        return;
+      }
+      if (attempts === 2) {
+        expect(execution.useResume).toBe(true);
+        yield { type: "system", subtype: "init", session_id: "warm-session" };
+        capability.current()?.close("abort");
+        return;
+      }
+      expect(execution.useResume).toBe(false);
+      expect(execution.prompt).toContain("earlier context");
+      yield {
+        type: "result",
+        subtype: "success",
+        is_error: false,
+        result: "recovered output",
+        session_id: "fresh-session",
+      };
+    };
+    const { admission, context } = await usePluginLiveBackend(
+      makeClaudePreparedContext({
+        sessionKey: "agent:main:plugin-resume-recovery",
+        runId: "run-plugin-resume-recovery",
+        cliSessionId: "warm-session",
+        openClawHistoryPrompt: CLI_RESEED_PROMPT,
+      }),
+      execute,
+    );
+    const clearBeforeRetry = vi.fn(async () => true);
+
+    try {
+      await executePreparedCliRun({ ...context, openClawHistoryPrompt: undefined }, undefined);
+      context.requiredClaudeLiveSessionGeneration = liveHandle?.generation;
+      const result = await runPreparedCliAgent({
+        ...context,
+        params: {
+          ...context.params,
+          onBeforeFreshCliSessionRetry: clearBeforeRetry,
+        },
+      });
+
+      expect(result.payloads).toEqual([{ text: "recovered output" }]);
+      expect(attempts).toBe(3);
+      expect(clearBeforeRetry).toHaveBeenCalledOnce();
+      expect(hookRunner.runLlmInput).toHaveBeenCalledOnce();
+      expect(hookRunner.runLlmOutput).toHaveBeenCalledOnce();
+      expect(hookRunner.runAgentEnd).toHaveBeenCalledOnce();
+    } finally {
+      liveHandle?.close("restart");
+      admission.close();
+    }
+  });
+
+  it.each(failClosedPluginResumeCases)(
+    "keeps the original failure after $name",
+    async ({ name, event, invalidate, managed, resume, warm }) => {
+      let attempts = 0;
+      let liveHandle: CliBackendLiveSessionHandle | undefined;
+      const streamError = new Error("plugin stream failed without a retry-safe termination");
+      const execute: CliBackendExecute = async function* (execution) {
+        attempts += 1;
+        const capability = execution.liveSession;
+        if (warm && attempts === 1) {
+          if (!capability) {
+            throw new Error("Expected a managed live-session capability.");
+          }
+          const handle: CliBackendLiveSessionHandle = {
+            generation: "warm-generation",
+            fingerprint: capability.fingerprint,
+            isIdle: () => true,
+            close: () => capability.remove(handle),
+            waitForExit: async () => {},
+          };
+          liveHandle = handle;
+          capability.register(handle);
+          yield { type: "result", subtype: "success", is_error: false, result: "warm" };
+          return;
+        }
+        yield { type: "system", subtype: "init", session_id: "warm-session" };
+        if (event) {
+          yield event;
+        }
+        if (invalidate) {
+          capability?.current()?.close("abort");
+        }
+        throw streamError;
+      };
+      const { admission, context } = await usePluginLiveBackend(
+        makeClaudePreparedContext({
+          runId: `run-plugin-fail-closed-${name.replaceAll(" ", "-")}`,
+          openClawHistoryPrompt: CLI_RESEED_PROMPT,
+        }),
+        execute,
+      );
+      if (!managed && !warm) {
+        delete context.preparedBackend.backend.liveSession;
+      }
+
+      try {
+        if (warm) {
+          await executePreparedCliRun({ ...context, openClawHistoryPrompt: undefined }, undefined);
+          context.requiredClaudeLiveSessionGeneration = liveHandle?.generation;
+        }
+        await expect(
+          executePreparedCliRun(context, resume ? "warm-session" : undefined),
+        ).rejects.toBe(streamError);
+        expect(attempts).toBe(warm ? 2 : 1);
+      } finally {
+        liveHandle?.close("restart");
+        admission.close();
+      }
+    },
+  );
+
+  it("does not retry again when the fresh plugin recovery attempt fails", async () => {
+    let attempts = 0;
+    let liveHandle: CliBackendLiveSessionHandle | undefined;
+    const freshError = new Error("fresh plugin attempt failed");
+    const execute: CliBackendExecute = async function* (execution) {
+      attempts += 1;
+      const capability = execution.liveSession;
+      if (!capability) {
+        throw new Error("Expected a managed live-session capability.");
+      }
+      if (attempts === 1) {
+        const handle: CliBackendLiveSessionHandle = {
+          generation: "warm-generation",
+          fingerprint: capability.fingerprint,
+          isIdle: () => true,
+          close: () => capability.remove(handle),
+          waitForExit: async () => {},
+        };
+        liveHandle = handle;
+        capability.register(handle);
+        yield { type: "result", subtype: "success", is_error: false, result: "warm" };
+        return;
+      }
+      if (attempts === 2) {
+        yield { type: "system", subtype: "init", session_id: "warm-session" };
+        capability.current()?.close("abort");
+        return;
+      }
+      throw freshError;
+    };
+    const { admission, context } = await usePluginLiveBackend(
+      makeClaudePreparedContext({
+        sessionKey: "agent:main:plugin-resume-recovery-failure",
+        runId: "run-plugin-resume-recovery-failure",
+        cliSessionId: "warm-session",
+        openClawHistoryPrompt: CLI_RESEED_PROMPT,
+      }),
+      execute,
+    );
+    const clearBeforeRetry = vi.fn(async () => true);
+
+    try {
+      await executePreparedCliRun({ ...context, openClawHistoryPrompt: undefined }, undefined);
+      context.requiredClaudeLiveSessionGeneration = liveHandle?.generation;
+      await expect(
+        runPreparedCliAgent({
+          ...context,
+          params: {
+            ...context.params,
+            onBeforeFreshCliSessionRetry: clearBeforeRetry,
+          },
+        }),
+      ).rejects.toBe(freshError);
+
+      expect(attempts).toBe(3);
+      expect(clearBeforeRetry).toHaveBeenCalledOnce();
+    } finally {
+      liveHandle?.close("restart");
+      admission.close();
     }
   });
 

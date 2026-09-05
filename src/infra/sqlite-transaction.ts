@@ -7,8 +7,6 @@ import { createSubsystemLogger, type SubsystemLogger } from "../logging/subsyste
 import { clearNodeSqliteKyselyCacheForDatabase } from "./kysely-sync-cache-state.js";
 import { shouldReportSqliteLockFailure } from "./sqlite-busy-timeout.js";
 
-const transactionDepthByDatabase = new WeakMap<DatabaseSync, number>();
-
 const SQLITE_LOCK_ERROR_CODES = new Set(["SQLITE_BUSY", "SQLITE_LOCKED"]);
 // Node reports SQLite failures with a generic string code and the extended
 // SQLite result in `errcode`; the low byte identifies BUSY or LOCKED.
@@ -20,7 +18,6 @@ const SQLITE_PRIMARY_RESULT_CODE_MASK = 0xff;
 const DEFAULT_SLOW_BUSY_WAIT_MS = 1_000;
 const DEFAULT_SLOW_TRANSACTION_HOLD_MS = 1_000;
 
-let nextSavepointId = 0;
 const transactionLog = createSubsystemLogger("sqlite/transaction");
 
 export type SqliteTransactionOptions = {
@@ -33,11 +30,6 @@ export type SqliteTransactionOptions = {
 
 type SqliteTransactionStep = "begin" | "commit";
 type SqliteTransactionMode = "deferred" | "immediate";
-
-function nextSavepointName(): string {
-  nextSavepointId += 1;
-  return `openclaw_tx_${nextSavepointId}`;
-}
 
 function assertSyncTransactionResult(value: unknown): void {
   if (isPromiseLike(value)) {
@@ -214,88 +206,45 @@ function abortImmediateTransaction(db: DatabaseSync): void {
   }
 }
 
-function getTransactionDepth(db: DatabaseSync): number {
-  return transactionDepthByDatabase.get(db) ?? 0;
-}
-
-function setTransactionDepth(db: DatabaseSync, depth: number): void {
-  if (depth <= 0) {
-    transactionDepthByDatabase.delete(db);
-    return;
-  }
-  transactionDepthByDatabase.set(db, depth);
-}
-
 function runSqliteTransactionSync<T>(
   db: DatabaseSync,
   operation: () => T,
   mode: SqliteTransactionMode,
   options?: SqliteTransactionOptions,
 ): T {
-  const depth = getTransactionDepth(db);
-  if (depth > 0) {
-    const savepointName = nextSavepointName();
-    db.exec(`SAVEPOINT ${savepointName}`);
-    setTransactionDepth(db, depth + 1);
+  if (db.isTransaction) {
+    // SQLite targets the most recent matching savepoint. Reusing its name keeps
+    // nested native/SDK calls correct without module-local depth or counters.
+    db.exec("SAVEPOINT openclaw_tx_nested");
     try {
       const result = operation();
       assertSyncTransactionResult(result);
-      db.exec(`RELEASE SAVEPOINT ${savepointName}`);
+      db.exec("RELEASE SAVEPOINT openclaw_tx_nested");
       return result;
     } catch (error) {
       try {
-        db.exec(`ROLLBACK TO SAVEPOINT ${savepointName}`);
+        db.exec("ROLLBACK TO SAVEPOINT openclaw_tx_nested");
       } finally {
-        db.exec(`RELEASE SAVEPOINT ${savepointName}`);
+        db.exec("RELEASE SAVEPOINT openclaw_tx_nested");
       }
       throw error;
-    } finally {
-      setTransactionDepth(db, depth);
     }
   }
 
   beginTransaction(db, options, mode);
-  setTransactionDepth(db, 1);
-  let transactionStillActive = true;
-  let result: T;
   const transactionStartedAt = Date.now();
   try {
-    result = operation();
+    const result = operation();
     assertSyncTransactionResult(result);
-  } catch (error) {
-    try {
-      abortImmediateTransaction(db);
-      transactionStillActive = false;
-    } catch {
-      // Preserve the original error; rollback failure is secondary.
-    }
-    throw error;
-  } finally {
-    if (!transactionStillActive) {
-      setTransactionDepth(db, 0);
-    }
-  }
-
-  try {
     logSlowTransactionHold({
       elapsedMs: Date.now() - transactionStartedAt,
       options,
     });
     commitImmediateTransaction(db, options);
-    transactionStillActive = false;
     return result;
   } catch (error) {
-    try {
-      abortImmediateTransaction(db);
-      transactionStillActive = false;
-    } catch {
-      // Preserve the original error; rollback failure is secondary.
-    }
+    abortImmediateTransaction(db);
     throw error;
-  } finally {
-    if (!transactionStillActive) {
-      setTransactionDepth(db, 0);
-    }
   }
 }
 

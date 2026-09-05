@@ -235,9 +235,10 @@ export function buildInstalledPluginIndexRecords(params: {
   candidates: readonly PluginCandidate[];
   registry: PluginManifestRegistry;
   config?: OpenClawConfig;
-  env?: NodeJS.ProcessEnv;
   diagnostics: PluginDiagnostic[];
   installRecords: Record<string, InstalledPluginInstallRecordInfo>;
+  /** Index builds scoped to an explicit env stamp that env's compat decisions. */
+  env?: NodeJS.ProcessEnv;
 }): InstalledPluginIndexRecord[] {
   const candidateBySource = buildCandidateLookup(params.candidates);
   const normalizedConfig = normalizePluginsConfig(params.config?.plugins);
@@ -292,6 +293,7 @@ export function buildInstalledPluginIndexRecords(params: {
     const enabled = resolveEffectiveEnableState({
       id: record.id,
       origin: record.origin,
+      channelIds: record.channels,
       config: normalizedConfig,
       rootConfig: params.config,
       enabledByDefault: isPluginEnabledByDefaultForPlatform(record),

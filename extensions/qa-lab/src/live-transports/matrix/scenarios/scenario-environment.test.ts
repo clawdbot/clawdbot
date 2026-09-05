@@ -350,7 +350,7 @@ describe("matrix scenario environment", () => {
     );
   });
 
-  it("shares the preparation deadline across revision and fresh account readiness", async () => {
+  it("shares the preparation deadline but renews action-time config patch deadlines", async () => {
     vi.useFakeTimers();
     vi.setSystemTime(0);
     const callOrder: string[] = [];
@@ -370,6 +370,9 @@ describe("matrix scenario environment", () => {
           opts?: { deadlineMs?: number; timeoutMs?: number },
         ) => {
           callOrder.push(method);
+          if (opts?.deadlineMs !== undefined && opts.deadlineMs <= Date.now()) {
+            throw new Error("gateway RPC deadline expired");
+          }
           if (method === "config.get") {
             configReadCount += 1;
             if (configReadCount === 1) {
@@ -484,6 +487,17 @@ describe("matrix scenario environment", () => {
       "exec.approval.request",
       { id: "approval-1" },
       { expectFinal: false, timeoutMs: 1_000 },
+    );
+
+    // The setup deadline has expired, but the eight-second action window has not.
+    vi.setSystemTime(61_000);
+    await expect(
+      scenarioContext.patchGatewayConfig({ channels: { matrix: { enabled: true } } }),
+    ).resolves.toBeUndefined();
+    expect(gateway.call).toHaveBeenLastCalledWith(
+      "config.patch",
+      expect.objectContaining({ baseHash: "patched-config-hash" }),
+      { deadlineMs: 69_000, timeoutMs: 60_000 },
     );
   });
 

@@ -1,0 +1,94 @@
+/* Shared reply and mention previews, including cold New Session. */
+.chat-reply-preview {
+  display: flex;
+  align-items: center;
+  gap: 9px;
+  min-height: 36px;
+  padding: 7px 10px 7px 12px;
+  margin: 0 0 6px;
+  background: color-mix(in srgb, var(--text-strong) 4%, transparent);
+  border: 1px solid color-mix(in srgb, var(--text-strong) 10%, transparent);
+  border-radius: calc(12px * var(--openclaw-corner-radius-scale));
+  font-size: 12px;
+  color: var(--muted);
+}
+
+.chat-reply-preview__icon {
+  display: inline-flex;
+  width: 14px;
+  height: 14px;
+  flex-shrink: 0;
+  color: var(--muted);
+}
+
+.chat-reply-preview__icon svg {
+  width: 14px;
+  height: 14px;
+}
+
+.chat-reply-preview__label {
+  font-weight: 600;
+  flex-shrink: 0;
+  color: var(--text);
+}
+
+.chat-reply-preview__text {
+  flex: 1;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  color: var(--muted);
+}
+
+.chat-reply-preview__dismiss {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 20px;
+  height: 20px;
+  padding: 0;
+  border: none;
+  background: none;
+  color: var(--muted);
+  border-radius: 4px;
+  flex-shrink: 0;
+}
+
+.chat-reply-preview__dismiss:hover {
+  color: var(--text);
+  background: color-mix(in srgb, var(--text) 10%, transparent);
+}
+
+.chat-reply-preview__dismiss svg {
+  width: 16px;
+  height: 16px;
+  stroke: currentColor;
+  fill: none;
+  stroke-width: 2px;
+}
+
+.chat-reply-preview--message {
+  width: 100%;
+  margin: 0 0 8px;
+  font: inherit;
+  text-align: left;
+}
+
+button.chat-reply-preview--message {
+  cursor: var(--cursor-action);
+}
+
+button.chat-reply-preview--message:hover {
+  background: color-mix(in srgb, var(--accent) 14%, transparent);
+  border-color: color-mix(in srgb, var(--accent) 35%, transparent);
+}
+
+button.chat-reply-preview--message:disabled {
+  cursor: var(--cursor-default);
+  opacity: 0.8;
+}
+
+.chat-reply-preview--unavailable {
+  border-color: var(--border);
+  background: color-mix(in srgb, var(--bg) 70%, transparent);
+}

@@ -19,16 +19,18 @@ import { OPENCLAW_AGENT_SCHEMA_SQL } from "../state/openclaw-agent-schema.js";
 import { OPENCLAW_SQLITE_BUSY_TIMEOUT_MS } from "../state/openclaw-state-db.js";
 import {
   createSessionSqliteMigrationFailureIssue,
+  writeSessionSqliteMigrationFailureReports,
+} from "./doctor-session-sqlite-failure.js";
+import {
   findLatestFailedSessionSqliteMigrationManifest,
   resolveSessionSqliteMigrationRunsDir,
-  restoreSessionSqliteMigrationRun,
-  writeSessionSqliteMigrationFailureReports,
   type SessionSqliteMigrationTargetInput,
 } from "./doctor-session-sqlite-migration-run.js";
 import {
   resolveTargetSqliteOptions,
   resolveTargetSqlitePath,
 } from "./doctor-session-sqlite-readers.js";
+import { restoreSessionSqliteMigrationRun } from "./doctor-session-sqlite-restore.js";
 import {
   createDoctorSessionSqliteTotals,
   createDoctorSessionSqliteTargetReport,
@@ -70,7 +72,8 @@ export async function recoverDoctorSessionSqliteTargets(params: {
       ),
     ]);
   }
-  const restore = restoreSessionSqliteMigrationRun({
+  const restore = await restoreSessionSqliteMigrationRun({
+    env: params.env,
     manifestPath: failedRun.manifestPath,
     trustedTargets,
   });
@@ -95,6 +98,7 @@ export async function recoverDoctorSessionSqliteTargets(params: {
   );
   const failureReports = writeSessionSqliteMigrationFailureReports(failedRun.manifestPath, {
     reason: "doctor recover restored and validated a failed session SQLite migration run",
+    trustedTargets,
   });
   const report = summarizeRecoverReport(targetReports.length > 0 ? targetReports : [reportTarget]);
   report.migrationRun = {

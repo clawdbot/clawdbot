@@ -13,6 +13,7 @@ import {
   getGatewaySuspendAdmissionPhase,
   isGatewayWorkAdmissionClosed,
   markGatewayRestartDraining,
+  onGatewaySuspendAdmissionChange,
   resetGatewayWorkAdmission,
   tryBeginGatewayPreparedRestartRootWorkAdmission,
   tryBeginGatewayRootWorkAdmission,
@@ -748,6 +749,8 @@ describe("gateway suspend coordinator", () => {
 
   it("enters recovery when lease expiry cannot resume the scheduler", () => {
     vi.useFakeTimers();
+    const phases: string[] = [];
+    const unsubscribe = onGatewaySuspendAdmissionChange((phase) => phases.push(phase));
     try {
       const resumeScheduling = vi
         .fn()
@@ -768,6 +771,7 @@ describe("gateway suspend coordinator", () => {
         status: "recovering",
       });
       expect(isGatewayWorkAdmissionClosed()).toBe(true);
+      expect(phases).toEqual(["preparing", "prepared"]);
 
       vi.advanceTimersByTime(1_000);
       expect(resumeScheduling).toHaveBeenCalledTimes(2);
@@ -775,7 +779,9 @@ describe("gateway suspend coordinator", () => {
         status: "running",
       });
       expect(isGatewayWorkAdmissionClosed()).toBe(false);
+      expect(phases).toEqual(["preparing", "prepared", "accepting"]);
     } finally {
+      unsubscribe();
       vi.useRealTimers();
     }
   });

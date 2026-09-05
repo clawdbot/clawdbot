@@ -12,6 +12,10 @@ export type PluginSourceCacheRecord = {
   validatedBoundaries: Set<string>;
   boundaryRoot?: string;
   facadeTracked?: true;
+  capabilityCatalog?: {
+    context: object;
+    value: import("./capability-catalog.types.js").PluginCapabilityCatalog;
+  };
   publicSurface?: { exports?: object; pending?: Promise<object> };
 };
 

@@ -24,6 +24,7 @@ import {
   providerOperationRetryConfig,
   resolveProviderRequestHeaders,
 } from "openclaw/plugin-sdk/provider-http";
+import { notifyLlmRequestActivity } from "openclaw/plugin-sdk/provider-stream-shared";
 import {
   buildGuardedModelFetch,
   coerceTransportToolCallArguments,
@@ -1552,6 +1553,7 @@ function createGoogleTransportStreamFn(kind: CanonicalGoogleTransportApi): Strea
                 yield* sse.chunks;
               })(sse.firstChunk);
         for await (const chunk of chunks) {
+          notifyLlmRequestActivity(options?.signal);
           output.responseId ||= chunk.responseId;
           const responseModel = normalizeOptionalString(chunk.modelVersion);
           if (

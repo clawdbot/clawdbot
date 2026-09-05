@@ -1,6 +1,6 @@
 {
   "name": "@openclaw/line",
-  "version": "2026.8.1",
+  "version": "2026.9.1",
   "description": "OpenClaw LINE channel plugin for LINE Bot API chats.",
   "repository": {
     "type": "git",
@@ -9,7 +9,7 @@
   "type": "module",
   "dependencies": {
     "@line/bot-sdk": "11.2.0",
-    "typebox": "1.3.16",
+    "typebox": "1.3.18",
     "zod": "4.4.3"
   },
   "devDependencies": {
@@ -17,7 +17,7 @@
     "openclaw": "workspace:*"
   },
   "peerDependencies": {
-    "openclaw": ">=2026.8.1"
+    "openclaw": ">=2026.9.1"
   },
   "peerDependenciesMeta": {
     "openclaw": {
@@ -102,7 +102,10 @@
               "flags": "--use-env",
               "description": "Use LINE environment credentials"
             },
-            "envVars": ["LINE_CHANNEL_ACCESS_TOKEN", "LINE_CHANNEL_SECRET"]
+            "envVars": [
+              "LINE_CHANNEL_ACCESS_TOKEN",
+              "LINE_CHANNEL_SECRET"
+            ]
           }
         ]
       }
@@ -113,10 +116,10 @@
       "minHostVersion": ">=2026.4.10"
     },
     "compat": {
-      "pluginApi": ">=2026.8.1"
+      "pluginApi": ">=2026.9.1"
     },
     "build": {
-      "openclawVersion": "2026.8.1"
+      "openclawVersion": "2026.9.1"
     },
     "release": {
       "publishToClawHub": true,

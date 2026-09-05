@@ -98,8 +98,7 @@ function readProviderResponseBytes(
   label: string,
   kind: string,
   opts?: ProviderResponseReadOptions,
-  onOverflow?: ProviderResponseReadOptions["onOverflow"],
-): Promise<Uint8Array> {
+): Promise<Buffer> {
   return readResponseWithLimit(response, opts?.maxBytes ?? PROVIDER_RESPONSE_MAX_BYTES, {
     ...opts,
     chunkTimeoutMs: opts?.chunkTimeoutMs ?? 30_000,
@@ -108,7 +107,7 @@ function readProviderResponseBytes(
       (({ chunkTimeoutMs }) =>
         new Error(`${label}: response body stalled for ${chunkTimeoutMs}ms`)),
     onOverflow:
-      onOverflow ??
+      opts?.onOverflow ??
       (({ maxBytes: limit }) => new Error(`${label}: ${kind} response exceeds ${limit} bytes`)),
   });
 }
@@ -503,7 +502,7 @@ export async function readProviderBinaryResponse(
   label: string,
   kind = "binary",
   opts?: ProviderResponseReadOptions,
-): Promise<Uint8Array> {
+): Promise<Buffer> {
   try {
     assertProviderBinaryResponseContent(response, label, kind);
   } catch (error) {
@@ -512,7 +511,7 @@ export async function readProviderBinaryResponse(
     void response.body?.cancel().catch(() => undefined);
     throw error;
   }
-  const bytes = await readProviderResponseBytes(response, label, kind, opts, opts?.onOverflow);
+  const bytes = await readProviderResponseBytes(response, label, kind, opts);
   if (bytes.byteLength === 0) {
     throw new Error(`${label}: malformed ${kind} response`);
   }

@@ -11,11 +11,9 @@ const finishMain = mode === "main" ? await startVitestProfile(outputDir, false) 
 try {
   const { parseCLI, startVitest } = await import("vitest/node");
   const { normalizePath } = await import("vite");
-  const { z } = await import("zod");
   const { filter, options } = parseCLI(["vitest", ...args]);
-  // parseCLI prints help but does not exit, and its type omits that control flag.
-  const controls = z.object({ help: z.boolean().optional() }).parse(options);
-  if (controls.help) {
+  // Match native help truthiness (including repeated-flag arrays); parseCLI's type omits help.
+  if ("help" in options && options.help) {
     await finishMain?.();
     process.exit(0);
   }
@@ -44,11 +42,6 @@ try {
   if (mode === "runner") {
     const setup = fileURLToPath(new URL("./lib/vitest-profiler.mts", import.meta.url));
     // Vite appends this array to the configured setup, including scalar setup paths.
-    // Explicit API options take precedence, so append at that source when present.
-    if (cliOptions.globalSetup !== undefined) {
-      const selected = cliOptions.globalSetup;
-      cliOptions.globalSetup = [...(Array.isArray(selected) ? selected : [selected]), setup];
-    }
     profilingConfig.test = {
       globalSetup: [setup],
       provide: { openclawVitestProfileDir: outputDir },

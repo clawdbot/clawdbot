@@ -368,9 +368,14 @@ describe("delivery-queue recovery", () => {
     );
     return scope;
   }
-  async function createPendingFinalRecoveryFixture(deliveryId: string) {
+  async function createPendingFinalRecoveryFixture(
+    deliveryId: string,
+    options: { withWriterAuthority?: boolean } = {},
+  ) {
     const sessionKey = "agent:main:demo-channel-a:direct:pending-final";
     const storePath = path.join(tmpDir(), "pending-final-sessions.json");
+    const lifecycleRevision = "pending-final-recovery-revision";
+    const writerRunId = "pending-final-recovery-writer";
     const completion = {
       kind: "pending-final" as const,
       deliveryId,
@@ -378,6 +383,18 @@ describe("delivery-queue recovery", () => {
       sessionId: "pending-final-recovery-session",
       sessionKey,
       storePath,
+      ...(options.withWriterAuthority
+        ? {
+            sessionWriterDeliveryAuthority: {
+              agentId: "main",
+              expectedLifecycleRevision: lifecycleRevision,
+              expectedSessionId: "pending-final-recovery-session",
+              expectedWriterRunId: writerRunId,
+              sessionKey,
+              storePath,
+            },
+          }
+        : {}),
     };
     const context = { channel: "demo-channel-a", to: "+1" };
     await replaceSessionEntry(
@@ -386,6 +403,9 @@ describe("delivery-queue recovery", () => {
         sessionId: completion.sessionId,
         status: "running",
         updatedAt: Date.now(),
+        ...(options.withWriterAuthority
+          ? { activeWriterRunId: writerRunId, lifecycleRevision }
+          : {}),
         pendingFinalDelivery: {
           kind: "replayable",
           text: "recovered delivery identity may have been lost",
@@ -563,6 +583,78 @@ describe("delivery-queue recovery", () => {
       ]);
     },
   );
+  it.each(["onDirectAdapterHandoff", "onPlatformSendDispatch"] as const)(
+    "rejects a recovered pending final before %s after writer replacement",
+    async (transportBoundary) => {
+      const deliveryId = `pending-final-stale-recovery-${transportBoundary}`;
+      const { completion } = await createPendingFinalRecoveryFixture(deliveryId, {
+        withWriterAuthority: true,
+      });
+      const current = loadSessionEntry({
+        sessionKey: completion.sessionKey,
+        storePath: completion.storePath,
+      });
+      if (!current) {
+        throw new Error("test invariant: pending-final recovery session must exist");
+      }
+      await replaceSessionEntry(
+        { sessionKey: completion.sessionKey, storePath: completion.storePath },
+        {
+          ...current,
+          activeWriterRunId: "replacement-writer",
+          lifecycleRevision: "replacement-revision",
+          updatedAt: Date.now(),
+        },
+      );
+      const platformSend = vi.fn();
+      const deliver = vi.fn(async (params: Parameters<DeliverFn>[0]) => {
+        await params[transportBoundary]?.();
+        await platformSend();
+        return [];
+      });
+
+      const { result } = await runRecovery({ deliver });
+
+      expect(deliver).toHaveBeenCalledOnce();
+      expect(platformSend).not.toHaveBeenCalled();
+      expect(result).toEqual(RECOVERY_SUMMARY.failed);
+    },
+  );
+  it("rejects a recovered pending final when its writer changes after the awaited handoff", async () => {
+    const deliveryId = "pending-final-stale-after-handoff";
+    const { completion } = await createPendingFinalRecoveryFixture(deliveryId, {
+      withWriterAuthority: true,
+    });
+    const platformSend = vi.fn();
+    const deliver = vi.fn(async (params: Parameters<DeliverFn>[0]) => {
+      await params.onDirectAdapterHandoff?.();
+      const current = loadSessionEntry({
+        sessionKey: completion.sessionKey,
+        storePath: completion.storePath,
+      });
+      if (!current) {
+        throw new Error("test invariant: pending-final recovery session must exist");
+      }
+      await replaceSessionEntry(
+        { sessionKey: completion.sessionKey, storePath: completion.storePath },
+        {
+          ...current,
+          activeWriterRunId: "replacement-writer",
+          lifecycleRevision: "replacement-revision",
+          updatedAt: Date.now(),
+        },
+      );
+      params.assertDirectAdapterHandoff?.();
+      await platformSend();
+      return [];
+    });
+
+    const { result } = await runRecovery({ deliver });
+
+    expect(deliver).toHaveBeenCalledOnce();
+    expect(platformSend).not.toHaveBeenCalled();
+    expect(result).toEqual(RECOVERY_SUMMARY.failed);
+  });
   it.each(["suppressed", "rejected", "sent"] as const)(
     "acks a persisted %s conversation operation without replaying it",
     async (state) => {

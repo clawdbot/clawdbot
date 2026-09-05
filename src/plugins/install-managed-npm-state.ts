@@ -14,7 +14,7 @@ import {
 import { parseRegistryNpmSpec, validateRegistryNpmSpec } from "../infra/npm-registry-spec.js";
 import { isNotFoundPathError } from "../infra/path-guards.js";
 import { createSafeNpmInstallEnv } from "../infra/safe-package-install.js";
-import { runCommandWithTimeout, type SpawnResult } from "../process/exec.js";
+import { runCommandWithTimeout } from "../process/exec.js";
 import {
   resolvePluginNpmGenerationProjectDir,
   resolvePluginNpmGenerationProjectDirPrefix,
@@ -433,20 +433,6 @@ export async function cleanupManagedNpmPluginInstallRollbackSnapshot(params: {
       `Failed to remove temporary managed npm rollback snapshot ${params.snapshot.tempDir}: ${String(error)}`,
     );
   }
-}
-
-export function formatNpmCommandFailureOutput(result: SpawnResult): string {
-  const detail = result.stderr.trim() || result.stdout.trim();
-  if (detail) {
-    return detail;
-  }
-  if (result.code !== null) {
-    return `exit code ${result.code} (no output from npm)`;
-  }
-  if (result.signal) {
-    return `signal ${result.signal} (no output from npm)`;
-  }
-  return `termination ${result.termination} (no output from npm)`;
 }
 
 export function isManagedNpmProjectCorruptionInstallFailure(result: {

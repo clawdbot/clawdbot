@@ -67,6 +67,7 @@ export type SidebarRecentSession = {
   createdActor?: SessionCreatedActor;
   owner?: SessionOwner;
   participants?: SessionParticipant[];
+  expandedParticipants?: SessionParticipant[];
   participantCount?: number;
   archivedBy?: SessionCreatedActor;
   label: string;
@@ -79,7 +80,6 @@ export type SidebarRecentSession = {
   /** Compact repo/branch/node line for work sessions. */
   subtitle?: string;
   workContext?: SessionWorkContext;
-  href: string;
   active: boolean;
   visuallyActive: boolean;
   hasActiveRun: boolean;
@@ -152,6 +152,7 @@ export type SidebarSessionHovercardRow = Pick<
   | "hasAutomation"
   | "label"
   | "lastMessagePreview"
+  | "expandedParticipants"
   | "participantCount"
   | "participants"
   | "placementProviderId"
@@ -265,6 +266,7 @@ const SIDEBAR_SESSION_CATALOG_GROUPING_STORAGE_KEY = "openclaw:sidebar:sessions:
 const SIDEBAR_SESSION_SHOW_PREVIEW_STORAGE_KEY = "openclaw:sidebar:sessions:show-preview";
 const SIDEBAR_SESSION_SHOW_CRON_STORAGE_KEY = "openclaw:sidebar:sessions:show-cron";
 const SIDEBAR_SESSION_SHOW_SYSTEM_STORAGE_KEY = "openclaw:sidebar:sessions:show-system";
+const SIDEBAR_SESSION_HIDE_EMPTY_GROUPS_STORAGE_KEY = "openclaw:sidebar:sessions:hide-empty-groups";
 const SIDEBAR_SESSION_STATUS_FILTER_STORAGE_KEY = "openclaw:sidebar:sessions:status-filter";
 const SIDEBAR_SESSION_SORT_MODE_STORAGE_KEY = "openclaw:sidebar:sessions:sort-mode";
 const SIDEBAR_SESSION_COLLAPSED_SECTIONS_STORAGE_KEY =
@@ -297,6 +299,10 @@ export function loadStoredSidebarSessionsShowPreview(): boolean {
 
 export function loadStoredSidebarSessionsShowSystem(): boolean {
   return getSafeLocalStorage()?.getItem(SIDEBAR_SESSION_SHOW_SYSTEM_STORAGE_KEY) === "true";
+}
+
+export function loadStoredSidebarSessionsHideEmptyGroups(): boolean {
+  return getSafeLocalStorage()?.getItem(SIDEBAR_SESSION_HIDE_EMPTY_GROUPS_STORAGE_KEY) === "true";
 }
 
 export function loadStoredSidebarSessionStatusFilter(): SidebarSessionStatusFilter {
@@ -386,6 +392,10 @@ export function storeSidebarSessionsShowPreview(show: boolean) {
 
 export function storeSidebarSessionsShowSystem(show: boolean) {
   getSafeLocalStorage()?.setItem(SIDEBAR_SESSION_SHOW_SYSTEM_STORAGE_KEY, String(show));
+}
+
+export function storeSidebarSessionsHideEmptyGroups(hide: boolean) {
+  getSafeLocalStorage()?.setItem(SIDEBAR_SESSION_HIDE_EMPTY_GROUPS_STORAGE_KEY, String(hide));
 }
 
 export function storeSidebarSessionStatusFilter(value: SidebarSessionStatusFilter) {

@@ -8,7 +8,6 @@ import { t } from "../i18n/index.ts";
 import { EDITOR_IDS, EDITOR_LABELS } from "../lib/editor-links.ts";
 import { icons } from "./icons.ts";
 import { menuShortcutHint } from "./menu-shortcuts.ts";
-import { renderSessionColorDot } from "./session-color.ts";
 import { syncDropdownItemRadio } from "./web-awesome.ts";
 
 export function renderSessionEditorOptions(params: { inline: boolean; disabled: boolean }) {
@@ -55,11 +54,13 @@ export function renderSessionGroupOptions(params: {
         title=${params.actionTitle(actionKind)}
       >
         <span class="session-menu__text">${label}</span>
-        ${radio && checked
-          ? html`<span slot="details" class="session-menu__check" aria-hidden="true"
-              >${icons.check}</span
-            >`
-          : nothing}
+        ${
+          radio && checked
+            ? html`<span slot="details" class="session-menu__check" aria-hidden="true"
+                >${icons.check}</span
+              >`
+            : nothing
+        }
         ${digit ? menuShortcutHint(digit) : nothing}
       </wa-dropdown-item>
     `;
@@ -68,50 +69,54 @@ export function renderSessionGroupOptions(params: {
     ${params.groups.map((group) =>
       entry(group, params.category === group, `move-to-group:${encodeURIComponent(group)}`),
     )}
-    ${params.category
-      ? entry(
-          t(
-            params.categoryClearReturnsToGroups
-              ? "sessionsView.moveBackToGroups"
-              : "sessionsView.removeFromGroup",
-          ),
-          false,
-          "move-to-group:",
-          false,
-        )
-      : nothing}
+    ${
+      params.category
+        ? entry(
+            t(
+              params.categoryClearReturnsToGroups
+                ? "sessionsView.moveBackToGroups"
+                : "sessionsView.removeFromGroup",
+            ),
+            false,
+            "move-to-group:",
+            false,
+          )
+        : nothing
+    }
     ${entry(t("sessionsView.newGroup"), false, "new-group", false)}
   `;
 }
 
 export function renderSessionColorOptions(params: {
-  inline: boolean;
   color: string | null;
   disabled: boolean;
   disabledReason?: string;
+  onSelect: (event: MouseEvent, color: string | null) => void;
 }) {
   const current = normalizeSessionColorValue(params.color ?? "");
-  return html`${[null, ...SESSION_COLOR_IDS].map((color) => {
-    const checked = current === color;
-    return html`<wa-dropdown-item
-      slot=${params.inline ? nothing : "submenu"}
-      class="session-menu__item"
-      value=${`set-color:${color ?? ""}`}
-      role="menuitemradio"
-      aria-checked=${String(checked)}
-      ${ref((element) => syncDropdownItemRadio(element, checked))}
-      ?disabled=${params.disabled}
-      title=${params.disabledReason ?? nothing}
-    >
-      <span slot="icon" aria-hidden="true">${renderSessionColorDot(color)}</span>
-      <span class="session-menu__text"
-        >${color ? t(`sessionsView.colors.${color}`) : t("common.default")}</span
+  return html`<div
+    class="session-menu__colors"
+    role="group"
+    aria-label=${t("sessionsView.setColorMenu")}
+  >
+    ${[null, ...SESSION_COLOR_IDS].map((color) => {
+      const label = color ? t(`sessionsView.colors.${color}`) : t("common.default");
+      return html`<button
+        type="button"
+        class="session-menu__color-choice"
+        aria-label=${label}
+        aria-pressed=${String(current === color)}
+        ?disabled=${params.disabled}
+        title=${params.disabledReason ?? label}
+        @click=${(event: MouseEvent) => params.onSelect(event, color)}
       >
-      ${checked
-        ? html`<span slot="details" class="session-menu__check" aria-hidden="true"
-            >${icons.check}</span
-          >`
-        : nothing}
-    </wa-dropdown-item>`;
-  })}`;
+        <span
+          class="session-menu__color-swatch"
+          style=${color ? `background: var(--session-color-${color})` : nothing}
+          aria-hidden="true"
+          >${current === color ? icons.check : nothing}</span
+        >
+      </button>`;
+    })}
+  </div>`;
 }

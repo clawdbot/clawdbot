@@ -9,6 +9,7 @@ import { normalizeLegacySessionEntryDelivery } from "../../infra/state-migration
 import * as transcriptEvents from "../../sessions/transcript-events.js";
 import type { InternalSessionTranscriptUpdate } from "../../sessions/transcript-events.js";
 import {
+  CRON_DIRECT_DELIVERY_CONTEXT_KIND,
   OPENCLAW_DELIVERY_MIRROR_MODEL,
   OPENCLAW_TRANSCRIPT_ARTIFACT_API,
   OPENCLAW_TRANSCRIPT_ARTIFACT_PROVIDER,
@@ -1012,6 +1013,52 @@ describe("appendAssistantMessageToSessionTranscript", () => {
         text: "from shared session",
         timestamp: 4_000,
       },
+    ]);
+  });
+
+  it("admits only marked Cron delivery context when explicitly requested", async () => {
+    await writeTranscriptStore();
+    await persistSessionTranscriptTurn(createFixtureTranscriptScope(), {
+      updateMode: "none",
+      messages: [
+        { eventId: "user", message: { role: "user", content: "ordinary user" } },
+        { eventId: "assistant", message: { role: "assistant", content: "ordinary assistant" } },
+      ],
+    });
+    await appendAssistantMessageToSessionTranscript({
+      sessionKey,
+      storePath: fixture.storePath(),
+      text: "scheduled result",
+      idempotencyKey: "cron-delivery",
+      deliveryMirror: { kind: CRON_DIRECT_DELIVERY_CONTEXT_KIND },
+    });
+    await appendAssistantMessageToSessionTranscript({
+      sessionKey,
+      storePath: fixture.storePath(),
+      text: "ordinary delivery mirror",
+      idempotencyKey: "channel-delivery",
+      deliveryMirror: { kind: "channel-final" },
+    });
+    const params = {
+      agentId: "main",
+      sessionKey,
+      storePath: fixture.storePath(),
+      limit: 10,
+    };
+
+    await expect(readRecentUserAssistantTextForSession(params)).resolves.toEqual([
+      expect.objectContaining({ role: "user", text: "ordinary user" }),
+      expect.objectContaining({ role: "assistant", text: "ordinary assistant" }),
+    ]);
+    await expect(
+      readRecentUserAssistantTextForSession({
+        ...params,
+        includeCronDirectDeliveryContext: true,
+      }),
+    ).resolves.toEqual([
+      expect.objectContaining({ role: "user", text: "ordinary user" }),
+      expect.objectContaining({ role: "assistant", text: "ordinary assistant" }),
+      expect.objectContaining({ role: "assistant", text: "scheduled result" }),
     ]);
   });
 

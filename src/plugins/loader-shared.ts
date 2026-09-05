@@ -170,6 +170,7 @@ export function createPluginCandidatesFromManifestRegistry(
         source: record.source,
         ...(record.setupSource !== undefined ? { setupSource: record.setupSource } : {}),
         origin: record.origin,
+        ...(record.sourcePreferred ? { sourcePreferred: true as const } : {}),
         ...(record.workspaceDir !== undefined ? { workspaceDir: record.workspaceDir } : {}),
         ...(record.format !== undefined ? { format: record.format } : {}),
         ...(record.bundleFormat !== undefined ? { bundleFormat: record.bundleFormat } : {}),
@@ -324,6 +325,7 @@ export function createManifestPluginRecord(params: {
     origin: candidate.origin,
     workspaceDir: candidate.workspaceDir,
     trustedOfficialInstall: manifestRecord.trustedOfficialInstall,
+    trust: manifestRecord.trust,
     enabled: params.enabled,
     compat: collectPluginManifestCompatCodes(manifestRecord),
     activationState: params.activationState,
@@ -333,6 +335,7 @@ export function createManifestPluginRecord(params: {
     configSchema: Boolean(manifestRecord.configSchema),
     contracts: manifestRecord.contracts,
     dashboard: manifestRecord.dashboard,
+    controlUi: manifestRecord.controlUi,
     mcpServers: manifestRecord.mcpServers,
   });
 }

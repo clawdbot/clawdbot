@@ -57,7 +57,6 @@ struct SettingsRootView: View {
         }
         .navigationSplitViewStyle(.balanced)
         .defaultAppStorage(AppDefaults.standard)
-        .frame(width: SettingsTab.windowWidth, height: SettingsTab.windowHeight, alignment: .topLeading)
         .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .topLeading)
         .onReceive(NotificationCenter.default.publisher(for: .openclawSelectSettingsTab)) { note in
             if let tab = note.object as? SettingsTab {
@@ -184,8 +183,8 @@ struct SettingsRootView: View {
             }
 
             VStack(alignment: .leading, spacing: 2) {
-                Text("Config: \(configPath)")
-                Text("State:  \(stateDir)")
+                Text(String(format: String(localized: "Config: %@"), configPath))
+                Text(String(format: String(localized: "State:  %@"), stateDir))
             }
             .font(.caption.monospaced())
             .foregroundStyle(.secondary)
@@ -266,7 +265,7 @@ struct SettingsRootView: View {
         case .instances:
             AnyView(InstancesSettings(isActive: self.selectedTab == tab))
         case .config:
-            AnyView(ConfigSettings())
+            AnyView(ConfigSettings(isActive: self.selectedTab == tab))
         case .debug:
             AnyView(DebugSettings(state: self.state))
         case .about:

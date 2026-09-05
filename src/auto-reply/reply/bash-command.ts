@@ -6,7 +6,12 @@ import {
 import { truncateUtf16Safe } from "@openclaw/normalization-core/utf16-slice";
 import { resolveSessionAgentId } from "../../agents/agent-scope.js";
 import { cancelBackgroundExecSession } from "../../agents/bash-process-control.js";
-import { getFinishedSession, getSession } from "../../agents/bash-process-registry.js";
+import {
+  acknowledgeNotifyOnExit,
+  getFinishedSession,
+  getSession,
+} from "../../agents/bash-process-registry.js";
+import { renderExecExitLabel } from "../../agents/bash-tools.exec-output.js";
 import { createExecTool } from "../../agents/bash-tools.js";
 import { resolveSandboxRuntimeStatus } from "../../agents/sandbox.js";
 import { isCommandFlagEnabled } from "../../config/commands.flags.js";
@@ -14,6 +19,7 @@ import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import { logVerbose } from "../../globals.js";
 import { formatErrorMessage } from "../../infra/errors.js";
 import { clampInt } from "../../utils.js";
+import { setReplyPayloadMetadata } from "../reply-payload.js";
 import type { MsgContext } from "../templating.js";
 import type { ReplyPayload } from "../types.js";
 import { buildDisabledCommandReply } from "./command-gates.js";
@@ -191,7 +197,9 @@ export async function handleBashChatCommand(params: {
   if (!params.elevated.enabled || !params.elevated.allowed) {
     const runtimeSandboxed = resolveSandboxRuntimeStatus({
       cfg: params.cfg,
-      sessionKey: resolveRuntimePolicySessionKey({
+      agentId,
+      sessionKey: params.sessionKey,
+      classificationSessionKey: resolveRuntimePolicySessionKey({
         agentId,
         cfg: params.cfg,
         ctx: params.ctx,
@@ -247,17 +255,18 @@ export async function handleBashChatCommand(params: {
       if (activeJob?.state === "running" && activeJob.sessionId === sessionId) {
         activeJob = null;
       }
-      const exitLabel = finished.exitSignal
-        ? `signal ${String(finished.exitSignal)}`
-        : `code ${String(finished.exitCode ?? 0)}`;
+      const exitLabel = renderExecExitLabel(finished);
       const prefix = finished.terminalStatus === "completed" ? "⚙️" : "⚠️";
-      return {
-        text: [
-          `${prefix} bash finished (session ${formatSessionSnippet(sessionId)}).`,
-          `Exit: ${exitLabel}`,
-          formatOutputBlock(finished.aggregated || finished.tail),
-        ].join("\n"),
-      };
+      return setReplyPayloadMetadata(
+        {
+          text: [
+            `${prefix} bash finished (session ${formatSessionSnippet(sessionId)}).`,
+            `Exit: ${exitLabel}`,
+            formatOutputBlock(finished.aggregated || finished.tail),
+          ].join("\n"),
+        },
+        { onFinalDeliverySuccess: () => acknowledgeNotifyOnExit(finished) },
+      );
     }
     if (activeJob?.state === "running" && activeJob.sessionId === sessionId) {
       activeJob = null;
@@ -326,11 +335,14 @@ export async function handleBashChatCommand(params: {
     const notifyOnExitEmptySuccess = params.cfg.tools?.exec?.notifyOnExitEmptySuccess;
     const execTool = createExecTool({
       scopeKey: CHAT_BASH_SCOPE_KEY,
+      agentId,
       allowBackground: true,
       timeoutSec,
       sessionKey: params.sessionKey,
-      mainKey: params.cfg.session?.mainKey,
-      sessionScope: params.cfg.session?.scope,
+      eventRouting: {
+        mainKey: params.cfg.session?.mainKey,
+        sessionScope: params.cfg.session?.scope,
+      },
       notifyOnExit,
       notifyOnExitEmptySuccess,
       elevated: {
@@ -364,7 +376,11 @@ export async function handleBashChatCommand(params: {
 
     // Completed in foreground.
     activeJob = null;
-    const exitCode = result.details?.status === "completed" ? result.details.exitCode : 0;
+    const exitDetails =
+      result.details?.status === "completed" || result.details?.status === "failed"
+        ? result.details
+        : {};
+    const exitLabel = renderExecExitLabel(exitDetails);
     const output =
       result.details?.status === "completed"
         ? result.details.aggregated
@@ -372,7 +388,7 @@ export async function handleBashChatCommand(params: {
     return {
       text: [
         `⚙️ bash: ${commandText}`,
-        `Exit: ${exitCode}`,
+        `Exit: ${exitLabel}`,
         formatOutputBlock(output || "(no output)"),
       ].join("\n"),
     };

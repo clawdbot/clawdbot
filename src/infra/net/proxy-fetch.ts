@@ -2,14 +2,13 @@
 // options and runtime FormData normalization.
 import { logWarn } from "../../logger.js";
 import { formatErrorMessage } from "../errors.js";
-import { resolveManagedEnvHttpProxyAgentOptions } from "./proxy/managed-proxy-undici.js";
+import { resolveEnvHttpProxyAgentOptions } from "./proxy-env.js";
 import { fetchWithPreparedRuntimeDispatcher } from "./runtime-fetch.js";
 import {
-  buildHttp1EnvHttpProxyAgentOptions,
-  buildHttp1ProxyAgentOptions,
-} from "./undici-dispatcher-options.js";
-import { withUndiciErrorDiagnostics } from "./undici-error-diagnostics.js";
-import { loadUndiciRuntimeDeps } from "./undici-runtime.js";
+  createHttp1EnvHttpProxyAgent,
+  createHttp1ProxyAgent,
+  loadUndiciRuntimeDeps,
+} from "./undici-runtime.js";
 
 /** Non-enumerable marker used to recover the explicit proxy URL from proxy fetch wrappers. */
 export const PROXY_FETCH_PROXY_URL = Symbol.for("openclaw.proxyFetch.proxyUrl");
@@ -23,13 +22,10 @@ type ProxyFetchWithMetadata = typeof fetch & {
  */
 export function makeProxyFetch(proxyUrl: string): typeof fetch {
   const runtimeDeps = loadUndiciRuntimeDeps();
-  const { ProxyAgent } = runtimeDeps;
-  let agent: InstanceType<typeof ProxyAgent> | null = null;
-  const resolveAgent = (): InstanceType<typeof ProxyAgent> => {
+  let agent: ReturnType<typeof createHttp1ProxyAgent> | null = null;
+  const resolveAgent = (): ReturnType<typeof createHttp1ProxyAgent> => {
     if (!agent) {
-      agent = withUndiciErrorDiagnostics(
-        new ProxyAgent(buildHttp1ProxyAgentOptions({ uri: proxyUrl })),
-      );
+      agent = createHttp1ProxyAgent({ uri: proxyUrl });
     }
     return agent;
   };
@@ -66,16 +62,13 @@ export function getProxyUrlFromFetch(fetchImpl?: typeof fetch): string | undefin
 export function resolveProxyFetchFromEnv(
   env: NodeJS.ProcessEnv = process.env,
 ): typeof fetch | undefined {
-  const proxyOptions = resolveManagedEnvHttpProxyAgentOptions(env);
+  const proxyOptions = resolveEnvHttpProxyAgentOptions(env);
   if (!proxyOptions) {
     return undefined;
   }
   try {
     const runtimeDeps = loadUndiciRuntimeDeps();
-    const { EnvHttpProxyAgent } = runtimeDeps;
-    const agent = withUndiciErrorDiagnostics(
-      new EnvHttpProxyAgent(buildHttp1EnvHttpProxyAgentOptions(proxyOptions)),
-    );
+    const agent = createHttp1EnvHttpProxyAgent(proxyOptions, undefined, env);
     return ((input: RequestInfo | URL, init?: RequestInit) =>
       fetchWithPreparedRuntimeDispatcher(runtimeDeps, input, {
         ...init,

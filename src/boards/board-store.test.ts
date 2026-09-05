@@ -78,7 +78,7 @@ describe("board store", () => {
             message: expect.stringMatching(/same content kind.*remove/i),
           }),
         );
-        expect(store.getSnapshot("session")).toMatchObject({
+        expect(store.getSnapshot({ sessionKey: "session" })).toMatchObject({
           revision: created.revision,
           widgets: created.widgets,
         });
@@ -92,7 +92,7 @@ describe("board store", () => {
             content: { ...content, pluginKind: "other:replacement" },
           }),
         ).toThrow(expect.objectContaining({ code: "invalid_operation" }));
-        expect(store.getSnapshot("session")).toMatchObject({
+        expect(store.getSnapshot({ sessionKey: "session" })).toMatchObject({
           revision: created.revision,
           widgets: created.widgets,
         });
@@ -106,7 +106,7 @@ describe("board store", () => {
             content: { ...content, contentKind: "alternate" },
           }),
         ).toThrow(expect.objectContaining({ code: "invalid_operation" }));
-        expect(store.getSnapshot("session")).toMatchObject({
+        expect(store.getSnapshot({ sessionKey: "session" })).toMatchObject({
           revision: created.revision,
           widgets: created.widgets,
         });
@@ -131,7 +131,7 @@ describe("board store", () => {
         revision: 2,
       });
 
-      store.applyOps("session", [{ kind: "widget_remove", name }]);
+      store.applyOps({ sessionKey: "session" }, [{ kind: "widget_remove", name }]);
       const replacement = widgetContents.find((candidate) => candidate.kind !== content.kind)!;
       expect(
         store.putWidget({ sessionKey: "session", name, content: replacement }).widgets[0],
@@ -161,14 +161,14 @@ describe("board store", () => {
         "UPDATE board_widgets SET manifest = json_set(manifest, '$.registeredContentKind', 'other') WHERE session_key = ? AND name = 'status'",
       )
       .run(sessionKey);
-    expect(() => store.getSnapshot(sessionKey)).toThrow(/content ownership/i);
+    expect(() => store.getSnapshot({ sessionKey })).toThrow(/content ownership/i);
     database.db
       .prepare(
         "UPDATE board_widgets SET manifest = json_remove(manifest, '$.contentOwner', '$.registeredContentKind', '$.registeredInstanceId') WHERE session_key = ? AND name = 'status'",
       )
       .run(sessionKey);
 
-    const legacy = store.getSnapshot(sessionKey).widgets[0]!;
+    const legacy = store.getSnapshot({ sessionKey }).widgets[0]!;
     expect(legacy).toMatchObject({ contentOwner: "registered", registeredContentKind: "diagram" });
     expect(legacy).not.toHaveProperty("instanceId");
     expect(() =>
@@ -192,7 +192,7 @@ describe("board store", () => {
       content: { ...content, source: "diagram:refreshed" },
       declared: { tools: ["health"] },
     });
-    store.grant(sessionKey, "status", "granted", 2, refreshed.widgets[0]?.instanceId);
+    store.grant({ sessionKey }, "status", "granted", 2, refreshed.widgets[0]?.instanceId);
     const row = database.db
       .prepare("SELECT manifest FROM board_widgets WHERE session_key = ? AND name = 'status'")
       .get(sessionKey) as { manifest: string };
@@ -203,18 +203,16 @@ describe("board store", () => {
     });
   });
 
-  it("returns immutable snapshots and lists only existing boards", () => {
+  it("returns immutable snapshots and isolates session boards", () => {
     const store = createTestBoardStore();
     putHtml(store, "session-b", "b");
     putHtml(store, "session-a", "a");
-    const snapshot = store.getSnapshot("session-a");
+    const snapshot = store.getSnapshot({ sessionKey: "session-a" });
     snapshot.tabs[0]!.title = "Changed";
-    expect(store.getSnapshot("session-a").tabs[0]!.title).toBe("Main");
-    expect(store.listSessionsWithBoards()).toEqual([
-      "agent:main:session-a",
-      "agent:main:session-b",
-    ]);
-    expect(store.getSnapshot("missing")).toEqual({
+    expect(store.getSnapshot({ sessionKey: "session-a" }).tabs[0]!.title).toBe("Main");
+    expect(store.getSnapshot({ sessionKey: "session-a" }).widgets).toMatchObject([{ name: "a" }]);
+    expect(store.getSnapshot({ sessionKey: "session-b" }).widgets).toMatchObject([{ name: "b" }]);
+    expect(store.getSnapshot({ sessionKey: "missing" })).toEqual({
       sessionKey: "agent:main:missing",
       revision: 0,
       tabs: [],
@@ -239,13 +237,13 @@ describe("board store", () => {
         interactive: false,
       },
     });
-    expect(store.readWidgetHtml("session", "html")).toMatchObject({
+    expect(store.readWidgetHtml({ sessionKey: "session" }, "html")).toMatchObject({
       html: "<main>ok</main>",
       revision: 1,
       sha256: expect.stringMatching(/^[a-f0-9]{64}$/),
     });
-    expect(store.readWidgetHtml("session", "app")).toBeUndefined();
-    expect(store.readWidgetMcpApp("session", "app")).toMatchObject({
+    expect(store.readWidgetHtml({ sessionKey: "session" }, "app")).toBeUndefined();
+    expect(store.readWidgetMcpApp({ sessionKey: "session" }, "app")).toMatchObject({
       descriptor: {
         serverName: "server",
         toolName: "tool",
@@ -256,7 +254,7 @@ describe("board store", () => {
       instanceId: expect.stringMatching(/^[a-f0-9]{32}$/u),
       interactive: false,
     });
-    expect(store.readWidgetHtml("session", "unknown")).toBeUndefined();
+    expect(store.readWidgetHtml({ sessionKey: "session" }, "unknown")).toBeUndefined();
   });
 
   it("transitions declared widgets through pending grants", () => {
@@ -269,11 +267,22 @@ describe("board store", () => {
     });
     expect(pending.widgets[0]!.grantState).toBe("pending");
     expect(
-      store.grant("session", "networked", "granted", 1, pending.widgets[0]?.instanceId).widgets[0]!
-        .grantState,
+      store.grant(
+        { sessionKey: "session" },
+        "networked",
+        "granted",
+        1,
+        pending.widgets[0]?.instanceId,
+      ).widgets[0]!.grantState,
     ).toBe("granted");
     expect(() =>
-      store.grant("session", "networked", "rejected", 1, pending.widgets[0]?.instanceId),
+      store.grant(
+        { sessionKey: "session" },
+        "networked",
+        "rejected",
+        1,
+        pending.widgets[0]?.instanceId,
+      ),
     ).toThrow("not pending");
   });
 
@@ -281,7 +290,7 @@ describe("board store", () => {
     const store = createTestBoardStore();
     putHtml(store, "session", "status");
     // Session reset has no BoardStore call; the stable session key remains authoritative.
-    expect(store.getSnapshot("session").widgets).toHaveLength(1);
+    expect(store.getSnapshot({ sessionKey: "session" }).widgets).toHaveLength(1);
   });
 
   it("rejects stale grant revisions and accepts the current revision", () => {
@@ -293,7 +302,7 @@ describe("board store", () => {
       declared: { tools: ["weather.refresh"] },
     });
     try {
-      store.grant("session", "networked", "granted", 2);
+      store.grant({ sessionKey: "session" }, "networked", "granted", 2);
       throw new Error("expected stale grant to fail");
     } catch (error) {
       expect(error).toBeInstanceOf(BoardValidationError);
@@ -301,7 +310,13 @@ describe("board store", () => {
       expect((error as Error).message).toContain("revision changed");
     }
     expect(
-      store.grant("session", "networked", "granted", 1, pending.widgets[0]?.instanceId).widgets[0],
+      store.grant(
+        { sessionKey: "session" },
+        "networked",
+        "granted",
+        1,
+        pending.widgets[0]?.instanceId,
+      ).widgets[0],
     ).toMatchObject({
       grantState: "granted",
       revision: 1,
@@ -329,13 +344,13 @@ describe("board store", () => {
   it("bumps once per applyOps transaction and removes widget bytes", () => {
     const store = createTestBoardStore();
     putHtml(store, "session", "status");
-    const snapshot = store.applyOps("session", [
+    const snapshot = store.applyOps({ sessionKey: "session" }, [
       { kind: "widget_resize", name: "status", sizeW: 3, sizeH: 3 },
       { kind: "widget_remove", name: "status" },
     ]);
     expect(snapshot.revision).toBe(2);
     expect(snapshot.widgets).toEqual([]);
-    expect(store.readWidgetHtml("session", "status")).toBeUndefined();
+    expect(store.readWidgetHtml({ sessionKey: "session" }, "status")).toBeUndefined();
   });
 
   it("preserves position on content updates and honors explicit after placement", () => {

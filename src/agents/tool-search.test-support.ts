@@ -1,4 +1,5 @@
-import type { ToolSearchConfig, ToolSearchRuntime } from "./tool-search.js";
+import type { ToolSearchRuntime } from "./tool-search-runtime.js";
+import type { ToolSearchConfig } from "./tool-search.js";
 import "./tool-search.js";
 
 type ToolSearchTestApi = {

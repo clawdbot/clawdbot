@@ -7,11 +7,6 @@ import type { WikiFreshnessLevel } from "./claim-health.js";
 import type { ResolvedMemoryWikiConfig } from "./config.js";
 import type { WikiPageKind, WikiPageSummary, WikiRelationship } from "./markdown.js";
 
-export const LEGACY_MEMORY_WIKI_COMPILED_CACHE_PATHS = [
-  ".openclaw-wiki/cache/agent-digest.json",
-  ".openclaw-wiki/cache/claims.jsonl",
-] as const;
-
 const COMPILED_CACHE_NAMESPACE = "compiled-cache";
 const COMPILED_CACHE_MAX_ENTRIES = 256;
 const COMPILED_CACHE_MAX_BYTES_PER_ENTRY = 100 * 1024 * 1024;
@@ -329,6 +324,14 @@ function resolveActiveVault(config: ResolvedMemoryWikiConfig): ActiveVault | nul
     return null;
   }
   return active;
+}
+
+export function isMemoryWikiCompiledCacheOwnerActive(
+  config: ResolvedMemoryWikiConfig,
+  vaultGeneration: string,
+): boolean {
+  const active = resolveActiveVault(config);
+  return active?.reconciled === true && active.vaultGeneration === vaultGeneration;
 }
 
 function parseSnapshot(

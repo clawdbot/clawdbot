@@ -51,7 +51,7 @@ export const telegramChannelConfigUiHints = {
   }),
   richMessages: {
     label: "Telegram Rich Messages",
-    help: "Opt into Bot API 10.2 rich text sends and edits, including native tables and rich media. Default: false because some current Telegram clients render these messages as unsupported.",
+    help: "Opt into Bot API 10.3 rich text sends and edits, including native tables and rich media. Default: false because some current Telegram clients render these messages as unsupported.",
   },
   "network.autoSelectFamily": {
     label: "Telegram autoSelectFamily",
@@ -115,11 +115,11 @@ export const telegramChannelConfigUiHints = {
   },
   "threadBindings.enabled": {
     label: "Telegram Thread Binding Enabled",
-    help: "Enable Telegram conversation binding features (/focus, /unfocus, /agents, and /session idle|max-age). Overrides session.threadBindings.enabled when set.",
+    help: "Enable Telegram conversation-bound session spawning, routing, and delivery. Manage bindings with /agents and /session unbind|idle|max-age. Overrides session.threadBindings.enabled when set.",
   },
   "threadBindings.idleHours": {
     label: "Telegram Thread Binding Idle Timeout (hours)",
-    help: "Inactivity window in hours for Telegram bound sessions. Set 0 to disable idle auto-unfocus (default: 24). Overrides session.threadBindings.idleHours when set.",
+    help: "Inactivity window in hours for Telegram bound sessions. Set 0 to disable idle expiry (default: 24). Overrides session.threadBindings.idleHours when set.",
   },
   "threadBindings.maxAgeHours": {
     label: "Telegram Thread Binding Max Age (hours)",

@@ -60,7 +60,11 @@ struct GatewaySettings: View {
                 }
         } message: {
             if let profile = self.pendingRemoval {
-                Text("\(profile.name) and its saved credentials will be removed. Its open windows will close.")
+                Text(String(
+                    format: String(localized: """
+                    %@ and its saved credentials will be removed. Its open windows will close.
+                    """),
+                    profile.name))
             }
         }
         .alert("Gateway Error", isPresented: Binding(
@@ -130,6 +134,8 @@ struct GatewaySettings: View {
             ScrollView(.vertical) {
                 SettingsCardGroup("Saved Gateways") {
                     ForEach(Array(self.profiles.enumerated()), id: \.element.id) { index, profile in
+                        let removalLabel = Text(verbatim: String(
+                            format: String(localized: "Remove %@"), profile.name))
                         SettingsCardRow(
                             title: .verbatim(profile.name),
                             subtitle: .verbatim(profile.url.absoluteString),
@@ -147,8 +153,8 @@ struct GatewaySettings: View {
                                 } label: {
                                     Image(systemName: "trash")
                                 }
-                                .accessibilityLabel("Remove \(profile.name)")
-                                .help("Remove \(profile.name)")
+                                .accessibilityLabel(removalLabel)
+                                .help(removalLabel)
                                 .disabled(self.isRemoving)
                             }
                         }

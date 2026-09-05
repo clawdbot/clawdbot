@@ -1,18 +1,51 @@
+import { selectApplicationSession } from "../../app/agent-selection.ts";
 import { loadLocalAssistantIdentity } from "../../app/assistant-identity.ts";
-import { patchSettings } from "../../app/settings.ts";
+import type { ApplicationContext } from "../../app/context.ts";
+import { loadSettings, patchSettings } from "../../app/settings.ts";
 import { isRenderableControlUiAvatarUrl } from "../../lib/avatar.ts";
+import { parseCatalogSessionKey } from "../../lib/sessions/catalog-key.ts";
+import { resolveSessionKey } from "../../lib/sessions/index.ts";
 import {
-  areUiSessionKeysEquivalent,
   isUiGlobalSessionKey,
-  isUiGlobalScopeConfigured,
   normalizeAgentId,
-  resolveUiSelectedGlobalAgentId,
+  parseAgentSessionKey,
   uiSessionRowMatchesSelectedChat,
 } from "../../lib/sessions/session-key.ts";
 import { resolveChatAgentId } from "./chat-agent-id.ts";
 import type { ChatPageHost } from "./chat-state-host.ts";
 
 export { resolveChatAgentId } from "./chat-agent-id.ts";
+
+export function bindChatPageSession(
+  context: ApplicationContext,
+  routeKey: string,
+  routeAgentId?: string,
+): void {
+  const agentId = parseAgentSessionKey(routeKey)?.agentId ?? routeAgentId?.trim();
+  if (parseCatalogSessionKey(routeKey)) {
+    if (agentId) {
+      context.agentSelection.set(agentId);
+    }
+    return;
+  }
+  const sessionKey = resolveSessionKey(routeKey, context.gateway.snapshot.hello);
+  const settings = loadSettings();
+  // Navigation owns these bindings; focusing or sending from a dock does not.
+  if (settings.sessionKey !== sessionKey || settings.lastActiveSessionKey !== sessionKey) {
+    patchSettings({ sessionKey, lastActiveSessionKey: sessionKey });
+  }
+  if (
+    context.gateway.snapshot.sessionKey !== sessionKey ||
+    (agentId && context.agentSelection.state.selectedId !== agentId)
+  ) {
+    selectApplicationSession({
+      selection: context.agentSelection,
+      gateway: context.gateway,
+      sessionKey,
+      agentId,
+    });
+  }
+}
 
 export function canCreateChatSession(state: ChatPageHost) {
   return (
@@ -26,20 +59,13 @@ export function canCreateChatSession(state: ChatPageHost) {
 
 export function selectedChatSessionRow(state: ChatPageHost) {
   const rows = state.sessionsResult?.sessions ?? [];
-  const exact = rows.find((candidate) =>
-    areUiSessionKeysEquivalent(candidate.key, state.sessionKey),
+  const row = rows.find((candidate) =>
+    uiSessionRowMatchesSelectedChat(state, candidate.key, state.sessionKey, candidate.agentId),
   );
-  const row =
-    exact ??
-    (isUiGlobalScopeConfigured(state)
-      ? rows.find((candidate) =>
-          uiSessionRowMatchesSelectedChat(state, candidate.key, state.sessionKey),
-        )
-      : undefined);
   if (!row || !isUiGlobalSessionKey(row.key)) {
     return row;
   }
-  const selectedAgentId = resolveUiSelectedGlobalAgentId(state);
+  const selectedAgentId = resolveChatAgentId(state);
   if (
     state.sessionsResultAgentId &&
     normalizeAgentId(state.sessionsResultAgentId) !== selectedAgentId
@@ -53,16 +79,6 @@ export function selectedChatSessionRow(state: ChatPageHost) {
     return { ...row, observerDigest: undefined };
   }
   return row;
-}
-
-export function saveRouteSessionSettings(state: ChatPageHost, sessionKey: string) {
-  if (
-    state.settings.sessionKey === sessionKey &&
-    state.settings.lastActiveSessionKey === sessionKey
-  ) {
-    return;
-  }
-  state.settings = patchSettings({ sessionKey, lastActiveSessionKey: sessionKey });
 }
 
 export function resolveChatAvatarUrl(state: ChatPageHost): string | null {

@@ -25,7 +25,7 @@ import {
   clearAgentRunContext,
   getAgentRunContext,
   getAgentRunContextOwnership,
-  hasProjectedAgentRunForSession,
+  resolveProjectedAgentRunProgressState,
   releaseAgentRunContext,
   sweepStaleRunContexts,
 } from "../../infra/agent-run-registry.js";
@@ -195,6 +195,13 @@ describe("worker live events", () => {
 
   it("persists cloud-worker progress for sessions tail", async () => {
     const credential = ["trajectory", "credential", "secret"].join("-");
+    unsubscribe?.();
+    unsubscribe = onAgentRuntimeEvent((event) => {
+      events.push(event);
+      if (event.stream === "tool" && event.data.phase === "result") {
+        event.data.result = { status: "live-consumer-mutated" };
+      }
+    });
     ack(live(1, lifecycle({ phase: "start", startedAt: 100 })));
     ack(
       live(
@@ -236,7 +243,14 @@ describe("worker live events", () => {
       "model.completed",
       "session.ended",
     ]);
-    expect(rows[2]?.event.data).toMatchObject({ name: "write", success: true });
+    expect(events.find((event) => event.data.phase === "result")?.data.result).toEqual({
+      status: "live-consumer-mutated",
+    });
+    expect(rows[2]?.event.data).toMatchObject({
+      name: "write",
+      success: true,
+      result: { status: "written" },
+    });
     expect(rows[4]?.event.data).toMatchObject({ status: "success" });
     expect(JSON.stringify(rows)).not.toContain(credential);
   });
@@ -709,7 +723,9 @@ describe("worker live events", () => {
       }
 
       expect(getAgentRunContext(RUN)).toBeUndefined();
-      expect(hasProjectedAgentRunForSession({ sessionKeys: [KEY], sessionId: SID })).toBe(false);
+      expect(
+        resolveProjectedAgentRunProgressState({ sessionKeys: [KEY], sessionId: SID }),
+      ).toBeUndefined();
     },
   );
 
@@ -735,7 +751,9 @@ describe("worker live events", () => {
       lifecycleGeneration,
       projectSessionActive: true,
     });
-    expect(hasProjectedAgentRunForSession({ sessionKeys: [KEY], sessionId: SID })).toBe(true);
+    expect(resolveProjectedAgentRunProgressState({ sessionKeys: [KEY], sessionId: SID })).toBe(
+      "running",
+    );
     expect(events.map((event) => [event.stream, event.data.phase ?? event.data.delta])).toEqual([
       ["lifecycle", "start"],
       ["assistant", "worker"],
@@ -753,7 +771,9 @@ describe("worker live events", () => {
     expect(end?.data.phase).toBe("end");
     clearAgentRunContext(RUN, end?.lifecycleGeneration, end?.contextClaimId);
     expect(getAgentRunContext(RUN)).toBeUndefined();
-    expect(hasProjectedAgentRunForSession({ sessionKeys: [KEY], sessionId: SID })).toBe(false);
+    expect(
+      resolveProjectedAgentRunProgressState({ sessionKeys: [KEY], sessionId: SID }),
+    ).toBeUndefined();
   });
 
   it("shares a compatible non-exclusive Gateway run owner", () => {

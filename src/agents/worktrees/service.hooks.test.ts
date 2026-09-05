@@ -9,11 +9,12 @@ import { withTimeout } from "../../infra/fs-safe.js";
 import { SESSION_WORK_ADMISSION_DRAIN_TIMEOUT_MS } from "../../sessions/session-lifecycle-admission.js";
 import { closeOpenClawStateDatabaseForTest } from "../../state/openclaw-state-db.js";
 import { ManagedWorktreeService } from "./service.js";
-import { initializeManagedWorktreeTestRepository } from "./service.test-support.js";
+import { useManagedWorktreeTestRepository } from "./service.test-support.js";
 
 const execFileAsync = promisify(execFile);
 
 describe("ManagedWorktreeService repository code isolation", () => {
+  const initializeRepository = useManagedWorktreeTestRepository();
   let root: string;
   let repo: string;
   let sentinel: string;
@@ -21,7 +22,7 @@ describe("ManagedWorktreeService repository code isolation", () => {
 
   beforeEach(async () => {
     root = await fs.realpath(await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-worktree-hooks-")));
-    repo = await initializeManagedWorktreeTestRepository(root);
+    repo = await initializeRepository(root);
     sentinel = path.join(repo, ".hook-ran");
     const hooks = path.join(repo, "git-hooks");
     await fs.mkdir(hooks);

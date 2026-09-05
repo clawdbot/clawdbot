@@ -137,6 +137,19 @@ describe("legacy TUI last-session migration", () => {
     await expect(readTuiLastSessionKey({ scopeKey: "terminal", stateDir })).resolves.toBeNull();
   });
 
+  it("rejects an empty unexpected field before claiming or writing", async () => {
+    const stateDir = tempDirs.make("openclaw-tui-migration-");
+    const sourcePath = writeLegacyStore(stateDir, {
+      terminal: { "": 1, later: 2, sessionKey: "agent:main:tui-123", updatedAt: 100 },
+    });
+    const result = migrate(stateDir);
+    expect(result.warnings).toEqual([
+      `Failed reading legacy TUI last-session state ${sourcePath}: Error: legacy TUI last-session record terminal has unexpected field ""`,
+    ]);
+    expect(fs.readdirSync(path.dirname(sourcePath))).toEqual(["last-session.json"]);
+    await expect(readTuiLastSessionKey({ scopeKey: "terminal", stateDir })).resolves.toBeNull();
+  });
+
   it("keeps a newer SQLite pointer and removes its superseded source", async () => {
     const stateDir = tempDirs.make("openclaw-tui-migration-");
     const sourcePath = writeLegacyStore(stateDir, {

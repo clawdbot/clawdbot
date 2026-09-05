@@ -1,7 +1,6 @@
 import { execFile } from "node:child_process";
 import { createHash, randomUUID } from "node:crypto";
-import { once } from "node:events";
-import fs, { type Dirent } from "node:fs";
+import type { Dirent } from "node:fs";
 import fsp from "node:fs/promises";
 import type { IncomingMessage } from "node:http";
 import path from "node:path";
@@ -14,6 +13,8 @@ import {
 } from "../../packages/gateway-protocol/src/index.js";
 import { resolveStateDir } from "../config/paths.js";
 import { hasErrnoCode } from "../infra/errors.js";
+import { FsSafeError, root as fsSafeRoot } from "../infra/fs-safe.js";
+import { resolveOpenClawPackageRootSync } from "../infra/openclaw-root.js";
 import { isPathInside } from "../infra/path-guards.js";
 import { redactSensitiveText } from "../logging/redact.js";
 import { KeyedAsyncQueue } from "../plugin-sdk/keyed-async-queue.js";
@@ -25,6 +26,7 @@ import {
 import {
   hashWorkerBundleManifest,
   WORKER_BUNDLE_ENTRY_PATH,
+  workerBundleArchiveRelativePath,
 } from "../shared/worker-bundle-hash.js";
 import { MAX_WORKER_BUNDLE_ARCHIVE_BYTES } from "../shared/worker-bundle-limits.js";
 import {
@@ -63,7 +65,37 @@ async function responseBody(response: IncomingMessage, maxBytes = 64 * 1024): Pr
   return Buffer.concat(chunks).toString("utf8");
 }
 
-async function downloadBundle(params: {
+async function writeBundleArchive(params: {
+  source: AsyncIterable<Uint8Array>;
+  archive: NodeWorkerBundleInstallInput["archive"];
+  destination: string;
+  signal?: AbortSignal;
+}): Promise<void> {
+  const output = await fsp.open(params.destination, "wx", 0o600);
+  const hash = createHash("sha256");
+  let bytes = 0;
+  try {
+    params.signal?.throwIfAborted();
+    for await (const chunk of params.source) {
+      params.signal?.throwIfAborted();
+      bytes += chunk.byteLength;
+      if (bytes > params.archive.bytes || bytes > MAX_WORKER_BUNDLE_ARCHIVE_BYTES) {
+        throw new Error("worker bundle archive exceeded its byte limit");
+      }
+      hash.update(chunk);
+      await output.writeFile(chunk);
+    }
+    params.signal?.throwIfAborted();
+    if (bytes !== params.archive.bytes || hash.digest("hex") !== params.archive.sha256) {
+      throw new Error("worker bundle archive failed integrity validation");
+    }
+  } finally {
+    await output.close();
+  }
+}
+
+async function acquireBundle(params: {
+  packageRoot: string | null;
   gatewayUrl: string;
   gatewayTlsFingerprint?: string;
   gatewayCloudflareAccess?: CloudflareAccessCredentials;
@@ -71,6 +103,39 @@ async function downloadBundle(params: {
   destination: string;
   signal?: AbortSignal;
 }): Promise<void> {
+  if (params.packageRoot) {
+    const root = await fsSafeRoot(params.packageRoot);
+    let opened;
+    try {
+      opened = await root.open(workerBundleArchiveRelativePath(params.input.archive.sha256));
+    } catch (error) {
+      // Only an absent source takes the authenticated update path. Unsafe local bytes fail closed.
+      if (!(error instanceof FsSafeError) || error.code !== "not-found") {
+        throw error;
+      }
+    }
+    if (opened) {
+      try {
+        // Root.open pins a contained regular file; its streaming API does not enforce maxBytes.
+        if (
+          opened.stat.size !== params.input.archive.bytes ||
+          opened.stat.size > MAX_WORKER_BUNDLE_ARCHIVE_BYTES
+        ) {
+          throw new Error("prepared worker bundle archive has an unexpected length");
+        }
+        const source = opened.handle.createReadStream({ autoClose: false });
+        try {
+          await writeBundleArchive({ ...params, source, archive: params.input.archive });
+        } finally {
+          source.destroy();
+        }
+      } finally {
+        await opened.handle.close();
+      }
+      return;
+    }
+  }
+  params.signal?.throwIfAborted();
   const response = await openNodeWorkerTransferHttpRequest({
     gatewayUrl: params.gatewayUrl,
     tlsFingerprint: params.gatewayTlsFingerprint,
@@ -89,33 +154,10 @@ async function downloadBundle(params: {
     response.destroy();
     throw new Error("gateway returned an unexpected worker bundle length");
   }
-  const output = fs.createWriteStream(params.destination, { flags: "wx", mode: 0o600 });
-  const hash = createHash("sha256");
-  let bytes = 0;
   try {
-    for await (const value of response) {
-      const chunk = Buffer.isBuffer(value) ? value : Buffer.from(value);
-      bytes += chunk.byteLength;
-      if (bytes > params.input.archive.bytes || bytes > MAX_WORKER_BUNDLE_ARCHIVE_BYTES) {
-        throw new Error("worker bundle download exceeded its byte limit");
-      }
-      hash.update(chunk);
-      if (!output.write(chunk)) {
-        await once(output, "drain");
-      }
-    }
-    await new Promise<void>((resolve, reject) => {
-      output.end(resolve);
-      output.once("error", reject);
-    });
-  } catch (error) {
-    output.destroy();
-    await fsp.rm(params.destination, { force: true });
-    throw error;
-  }
-  if (bytes !== params.input.archive.bytes || hash.digest("hex") !== params.input.archive.sha256) {
-    await fsp.rm(params.destination, { force: true });
-    throw new Error("worker bundle download failed integrity validation");
+    await writeBundleArchive({ ...params, source: response, archive: params.input.archive });
+  } finally {
+    response.destroy();
   }
 }
 
@@ -170,9 +212,14 @@ async function removeStaleInstallStaging(bundlesRoot: string): Promise<void> {
   );
 }
 
-async function publishBundle(destination: string, staging: string): Promise<void> {
+async function publishBundle(
+  destination: string,
+  staging: string,
+  signal?: AbortSignal,
+): Promise<void> {
   const prior = `${destination}.previous-${process.pid}-${randomUUID()}`;
   let movedPrior = false;
+  signal?.throwIfAborted();
   try {
     await fsp.rename(destination, prior);
     movedPrior = true;
@@ -182,6 +229,8 @@ async function publishBundle(destination: string, staging: string): Promise<void
     }
   }
   try {
+    // Cancellation after moving the old install must restore it through the same rollback path.
+    signal?.throwIfAborted();
     await fsp.rename(staging, destination);
   } catch (error) {
     if (movedPrior) {
@@ -196,6 +245,7 @@ async function publishBundle(destination: string, staging: string): Promise<void
 
 export class NodeWorkerBundleInstaller {
   readonly #root: string;
+  readonly #packageRoot: string | null;
   readonly #operations = new KeyedAsyncQueue();
   readonly #bundleGenerationsByNamespace = new Map<string, Map<string, number>>();
   readonly #currentGenerationByNamespace = new Map<string, number>();
@@ -205,6 +255,7 @@ export class NodeWorkerBundleInstaller {
   constructor(options: { root?: string; env?: NodeJS.ProcessEnv } = {}) {
     const env = options.env ?? process.env;
     this.#root = path.resolve(options.root ?? path.join(resolveStateDir(env), "node-host"));
+    this.#packageRoot = resolveOpenClawPackageRootSync({ moduleUrl: import.meta.url });
     this.#workerEnv = snapshotNodeWorkerEnv(env);
   }
 
@@ -257,54 +308,58 @@ export class NodeWorkerBundleInstaller {
         params.signal?.throwIfAborted();
         const bundlesRoot = path.join(this.#root, input.gatewayNamespace, "bundles");
         const destination = path.join(bundlesRoot, input.build.bundleHash);
-        if (await validateInstalledBundle(destination, input.build)) {
-          if (input.bundlePrewarm) {
-            await this.#prewarmBundle(destination, params.signal);
-          }
-          this.#markPendingRetention(input.gatewayNamespace, input.build.bundleHash);
-          return structuredClone(input.build);
-        }
-        await fsp.mkdir(bundlesRoot, { recursive: true, mode: 0o700 });
-        await removeStaleInstallStaging(bundlesRoot);
-        const operationRoot = await fsp.mkdtemp(
-          path.join(bundlesRoot, `.staging-${input.build.bundleHash}-`),
-        );
-        try {
-          const archivePath = path.join(operationRoot, "bundle.tgz");
-          const staging = path.join(operationRoot, "root");
-          await downloadBundle({
-            gatewayUrl: params.gatewayUrl,
-            gatewayTlsFingerprint: params.gatewayTlsFingerprint,
-            gatewayCloudflareAccess: params.gatewayCloudflareAccess,
-            input,
-            destination: archivePath,
-            signal: params.signal,
-          });
-          await extractWorkerBundleArchive({
-            tarballPath: archivePath,
-            destination: staging,
-            expectedBundleHash: input.build.bundleHash,
-            limits: DEFAULT_WORKER_BUNDLE_ARCHIVE_LIMITS,
-          });
-          const receipt = await fsp.open(path.join(staging, INSTALL_RECEIPT), "wx", 0o600);
+        const installed = await validateInstalledBundle(destination, input.build);
+        params.signal?.throwIfAborted();
+        if (!installed) {
+          await fsp.mkdir(bundlesRoot, { recursive: true, mode: 0o700 });
+          await removeStaleInstallStaging(bundlesRoot);
+          const operationRoot = await fsp.mkdtemp(
+            path.join(bundlesRoot, `.staging-${input.build.bundleHash}-`),
+          );
           try {
-            await receipt.writeFile(`${JSON.stringify(input.build)}\n`);
-            await receipt.sync();
+            const archivePath = path.join(operationRoot, "bundle.tgz");
+            const staging = path.join(operationRoot, "root");
+            params.signal?.throwIfAborted();
+            await acquireBundle({
+              packageRoot: this.#packageRoot,
+              gatewayUrl: params.gatewayUrl,
+              gatewayTlsFingerprint: params.gatewayTlsFingerprint,
+              gatewayCloudflareAccess: params.gatewayCloudflareAccess,
+              input,
+              destination: archivePath,
+              signal: params.signal,
+            });
+            params.signal?.throwIfAborted();
+            await extractWorkerBundleArchive({
+              tarballPath: archivePath,
+              destination: staging,
+              expectedBundleHash: input.build.bundleHash,
+              limits: DEFAULT_WORKER_BUNDLE_ARCHIVE_LIMITS,
+            });
+            params.signal?.throwIfAborted();
+            const receipt = await fsp.open(path.join(staging, INSTALL_RECEIPT), "wx", 0o600);
+            try {
+              params.signal?.throwIfAborted();
+              await receipt.writeFile(`${JSON.stringify(input.build)}\n`);
+              await receipt.sync();
+            } finally {
+              await receipt.close();
+            }
+            await publishBundle(destination, staging, params.signal);
+            if (!(await validateInstalledBundle(destination, input.build))) {
+              throw new Error("published worker bundle failed validation");
+            }
           } finally {
-            await receipt.close();
+            await fsp.rm(operationRoot, { recursive: true, force: true });
           }
-          await publishBundle(destination, staging);
-          if (!(await validateInstalledBundle(destination, input.build))) {
-            throw new Error("published worker bundle failed validation");
-          }
-          if (input.bundlePrewarm) {
-            await this.#prewarmBundle(destination, params.signal);
-          }
-          this.#markPendingRetention(input.gatewayNamespace, input.build.bundleHash);
-          return structuredClone(input.build);
-        } finally {
-          await fsp.rm(operationRoot, { recursive: true, force: true });
         }
+        params.signal?.throwIfAborted();
+        if (input.bundlePrewarm) {
+          await this.#prewarmBundle(destination, params.signal);
+        }
+        params.signal?.throwIfAborted();
+        this.#markPendingRetention(input.gatewayNamespace, input.build.bundleHash);
+        return structuredClone(input.build);
       } catch (error) {
         if (error instanceof NodeWorkerBundleInstallError) {
           throw error;

@@ -6,6 +6,8 @@ import { expect, vi } from "vitest";
 import type { WebSocketServer } from "ws";
 import type { ResolvedGatewayAuth } from "../auth.js";
 import { prepareGatewayIngressAttribution } from "../ingress-attribution.js";
+import { GatewayConnectionWork } from "../server-connection-work.js";
+import { MAX_PREAUTH_PAYLOAD_BYTES } from "../server-constants.js";
 import type { attachGatewayWsConnectionHandler } from "./ws-connection.js";
 
 type AttachGatewayWsConnectionParams = Parameters<typeof attachGatewayWsConnectionHandler>[0];
@@ -65,6 +67,7 @@ export function createGatewayWsTestSocket(
   } = {},
 ): GatewayWsTestSocket {
   const socket = Object.assign(new EventEmitter(), {
+    _receiver: { _maxPayload: MAX_PREAUTH_PAYLOAD_BYTES, _allowSynchronousEvents: false },
     _socket: {
       remoteAddress: "127.0.0.1",
       remotePort: 1234,
@@ -122,6 +125,7 @@ export function attachGatewayWsForTest(params: {
   params.attach({
     wss,
     clients: clients as never,
+    connectionWork: new GatewayConnectionWork(),
     bootId: "ws-test-boot",
     preauthConnectionBudget: { release: vi.fn() } as never,
     port: 19001,

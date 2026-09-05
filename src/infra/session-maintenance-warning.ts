@@ -54,6 +54,7 @@ function buildWarningContext(params: WarningParams): string {
     warning.maxEntries,
     warning.wouldPrune ? "prune" : "",
     warning.wouldCap ? "cap" : "",
+    warning.capOutcome ?? "",
   ]
     .filter(Boolean)
     .join("|");
@@ -68,9 +69,10 @@ function buildWarningText(warning: SessionMaintenanceWarning): string {
     reasons.push(`not in the most recent ${warning.maxEntries} sessions`);
   }
   const reasonText = reasons.length > 0 ? reasons.join(" and ") : "over maintenance limits";
+  const outcome = warning.wouldPrune || warning.capOutcome === "remove" ? "removed" : "archived";
   return (
-    `⚠️ Session maintenance warning: this active session would be evicted (${reasonText}). ` +
-    `Maintenance is set to warn-only, so nothing was reset. ` +
+    `⚠️ Session maintenance warning: this active session would be ${outcome} (${reasonText}). ` +
+    `Maintenance is set to warn-only, so nothing was changed. ` +
     `To enforce cleanup, set \`session.maintenance.mode: "enforce"\` or increase the limits.`
   );
 }

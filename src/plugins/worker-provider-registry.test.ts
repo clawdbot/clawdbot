@@ -77,11 +77,11 @@ describe("worker provider registry", () => {
     },
   );
 
-  it("rejects a non-function optional renew hook", () => {
+  it.each(["renew", "maintain"] as const)("rejects a non-function optional %s hook", (method) => {
     const pluginRegistry = createTestRegistry();
     const provider = {
       ...createWorkerProvider("static-ssh"),
-      renew: "later",
+      [method]: "later",
     } as unknown as WorkerProvider;
 
     pluginRegistry.registerWorkerProvider(createOwner("owner", ["static-ssh"]), provider);
@@ -89,7 +89,7 @@ describe("worker provider registry", () => {
     expect(pluginRegistry.registry.workerProviders.size).toBe(0);
     expect(pluginRegistry.registry.diagnostics).toContainEqual(
       expect.objectContaining({
-        message: "worker provider registration renew must be a function",
+        message: `worker provider registration ${method} must be a function`,
       }),
     );
   });

@@ -39,9 +39,10 @@ curl -fsSL "https://raw.githubusercontent.com/kyle-seongwoo-jun/apple-device-ide
 ```
 
 4. Confirm `LICENSE.apple-device-identifiers.txt` still matches upstream; replace it if the upstream license changed.
-5. Verify the macOS app builds cleanly:
+5. With workspace dependencies installed, run the following from the repository root to prepare the shared chat assets and verify the macOS app builds:
 
 ```bash
+node scripts/prepare-apple-mermaid.mjs
 swift build --package-path apps/macos
 ```
 

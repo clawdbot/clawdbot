@@ -85,11 +85,14 @@ vi.mock("../../plugins/provider-runtime.runtime.js", () => ({
   buildProviderAuthDoctorHintWithPlugin: buildProviderAuthDoctorHintWithPluginMock,
 }));
 
+vi.mock("../../plugins/provider-external-auth.js", () => ({
+  resolveExternalAuthProfilesWithPlugins: () => [],
+}));
+
 vi.mock("../../plugins/provider-runtime.js", () => ({
   buildProviderMissingAuthMessageWithPlugin: () => undefined,
-  resolveExternalAuthProfilesWithPlugins: () => [],
   resolveProviderDeprecatedAuthProfileIds: () => [],
-  resolveProviderSyntheticAuthWithPlugin: () => undefined,
+  prepareProviderSyntheticAuthWithPlugin: async () => undefined,
   shouldDeferProviderSyntheticProfileAuthWithPlugin: () => false,
 }));
 
@@ -98,6 +101,7 @@ afterAll(() => {
   vi.doUnmock("../cli-credentials.js");
   vi.doUnmock("../../plugins/provider-runtime.runtime.js");
   vi.doUnmock("../../plugins/provider-runtime.js");
+  vi.doUnmock("../../plugins/provider-external-auth.js");
   vi.resetModules();
 });
 

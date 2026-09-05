@@ -52,6 +52,7 @@ function createController(options: {
   abortSignal?: AbortSignal;
   runId?: string;
   params?: Pick<LaneParams, "agentId" | "sessionKey">;
+  inputProvenance?: LaneParams["inputProvenance"];
 }) {
   let lifecycleGeneration = options.lifecycleGeneration;
   const runId = options.runId ?? "run-1";
@@ -67,6 +68,7 @@ function createController(options: {
     runId,
     lifecycleGeneration,
     trigger: options.trigger,
+    inputProvenance: options.inputProvenance,
     enqueue: options.enqueue,
     abortSignal: options.abortSignal,
     ...options.params,
@@ -157,6 +159,28 @@ describe("createEmbeddedRunLaneController lifecycle admission", () => {
     expect(state.getLifecycleGeneration()).toBe(currentGeneration);
     expect(state.getParams().lifecycleGeneration).toBe(currentGeneration);
     expect(getAgentRunContext("queued-across-restart")).toMatchObject({
+      lifecycleGeneration: currentGeneration,
+    });
+  });
+
+  it("rebinds inter-session user work that was queued before lifecycle rotation", async () => {
+    const queue = deferredTaskQueue();
+    const generation = getAgentEventLifecycleGeneration();
+    const state = createController({
+      lifecycleGeneration: generation,
+      enqueue: queue.enqueue as LaneParams["enqueue"],
+      trigger: "user",
+      inputProvenance: { kind: "inter_session", sourceTool: "sessions_send" },
+      runId: "inter-session-across-restart",
+    });
+    const run = state.controller.enqueueGlobal(async () => completedResult);
+
+    const currentGeneration = rotateAgentEventLifecycleGeneration();
+    queue.release();
+    await run;
+
+    expect(state.getLifecycleGeneration()).toBe(currentGeneration);
+    expect(getAgentRunContext("inter-session-across-restart")).toMatchObject({
       lifecycleGeneration: currentGeneration,
     });
   });

@@ -771,12 +771,14 @@ describe("skill workshop proposals", () => {
     });
 
     const listed = await listSkillProposals({ agentId: "main", workspaceDir: secondWorkspaceDir });
-    expect(listed.proposals).toEqual([
-      expect.objectContaining({ id: second.record.id }),
+    expect(listed.proposals.toSorted((a, b) => a.skillKey.localeCompare(b.skillKey))).toEqual([
       expect.objectContaining({ id: quarantined.record.id, workspaceMismatch: true }),
       expect.objectContaining({ id: first.record.id, workspaceMismatch: true }),
+      expect.objectContaining({ id: second.record.id }),
     ]);
-    expect(listed.proposals[0]).not.toHaveProperty("workspaceMismatch");
+    expect(listed.proposals.find((entry) => entry.id === second.record.id)).not.toHaveProperty(
+      "workspaceMismatch",
+    );
     await expect(
       inspectSkillProposal(first.record.id, {
         agentId: "main",
@@ -971,7 +973,13 @@ describe("skill workshop proposals", () => {
     );
   });
 
-  it("rejects and quarantines proposals without touching active skills", async () => {
+  it("rejects and quarantines proposals without touching active skills", async (ctx) => {
+    // Manifest order follows updatedAt, so each terminal mutation needs a distinct timestamp.
+    vi.useFakeTimers({ toFake: ["Date"] });
+    ctx.onTestFinished(() => {
+      vi.useRealTimers();
+    });
+    vi.setSystemTime(new Date("2026-08-30T00:00:00.000Z"));
     const workspaceDir = await makeWorkspace();
     const rejected = await proposeCreateSkill({
       workspaceDir,
@@ -997,21 +1005,27 @@ describe("skill workshop proposals", () => {
       proposalId: rejected.record.id,
       reason: "not useful",
     });
+    vi.setSystemTime(new Date("2026-08-30T00:00:01.000Z"));
     await quarantineSkillProposal({
       workspaceDir,
       proposalId: quarantined.record.id,
       reason: "needs review",
     });
+    vi.setSystemTime(new Date("2026-08-30T00:00:02.000Z"));
     await applySkillProposal({
       workspaceDir,
       proposalId: applied.record.id,
     });
 
     const manifest = await readSkillProposalManifest();
-    expect(manifest.proposals.map((entry) => [entry.skillKey, entry.status])).toEqual([
+    expect(
+      manifest.proposals
+        .toSorted((a, b) => a.skillKey.localeCompare(b.skillKey))
+        .map((entry) => [entry.skillKey, entry.status]),
+    ).toEqual([
+      ["draft-one", "rejected"],
       ["draft-three", "applied"],
       ["draft-two", "quarantined"],
-      ["draft-one", "rejected"],
     ]);
     await expect(
       fs.access(path.join(workspaceDir, "skills", "draft-one", "SKILL.md")),
@@ -1212,6 +1226,53 @@ describe("skill workshop proposals", () => {
         applySkillProposal({ workspaceDir, config, proposalId: proposal.record.id }),
       ).resolves.toMatchObject({ record: { status: "applied" } });
       await expect(fs.readFile(targetSupportFile, "utf8")).resolves.toBe("Symlink support.\n");
+    },
+  );
+
+  it.runIf(process.platform !== "win32")(
+    "recovers a partial create through the quarantine config",
+    async () => {
+      const workspaceDir = await makeWorkspace();
+      const targetSkillsDir = await tempDirs.make("openclaw-workshop-quarantine-symlink-");
+      await fs.symlink(targetSkillsDir, path.join(workspaceDir, "skills"), "dir");
+      const config = {
+        skills: {
+          load: { allowSymlinkTargets: [targetSkillsDir] },
+          workshop: { allowSymlinkTargetWrites: true },
+        },
+      };
+      const proposal = await proposeCreateSkill({
+        workspaceDir,
+        config,
+        name: "Quarantine Symlink",
+        description: "Recover before quarantining an allowed symlink target",
+        content: "# Quarantine Symlink\n\nRecover before terminal disposal.\n",
+        supportFiles: [{ path: "references/proof.md", content: "Partial support.\n" }],
+      });
+      const targetSupportFile = path.join(
+        targetSkillsDir,
+        "quarantine-symlink",
+        "references",
+        "proof.md",
+      );
+      await writeSkillProposalRollback({
+        proposalId: proposal.record.id,
+        rollback: createSkillProposalRollback({
+          proposalId: proposal.record.id,
+          targetSkillFile: proposal.record.target.skillFile,
+          action: "create",
+          supportFiles: [{ path: "references/proof.md", existed: false }],
+        }),
+      });
+      await fs.mkdir(path.dirname(targetSupportFile), { recursive: true });
+      await fs.writeFile(targetSupportFile, "Partial support.\n", "utf8");
+
+      closeOpenClawStateDatabaseForTest();
+      await expect(
+        quarantineSkillProposal({ workspaceDir, config, proposalId: proposal.record.id }),
+      ).resolves.toMatchObject({ status: "quarantined" });
+      await expect(fs.access(targetSupportFile)).rejects.toThrow();
+      await expect(readSkillProposalRollback(proposal.record.id)).resolves.toBeNull();
     },
   );
 

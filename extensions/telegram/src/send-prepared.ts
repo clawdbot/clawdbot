@@ -18,7 +18,6 @@ import {
 } from "./reply-parameters.js";
 import { TELEGRAM_OUTBOUND_RETRY_AFTER_CAP_MS } from "./retry-after.js";
 import {
-  getTelegramRichRawApi,
   removeTelegramRichNativeQuoteParam,
   toTelegramRichMessageContextParams,
 } from "./rich-message.js";
@@ -87,6 +86,7 @@ export function createTelegramPreparedSender(config: {
   warn: (message: string) => void;
   beforeTextPage?: () => Promise<void>;
   beforeMedia?: () => Promise<void>;
+  assertPlatformSendAuthorized?: () => void;
 }) {
   const parts: AcceptedPart[] = [];
   const fail = (error: unknown, start = 0, details?: PartialDeliveryResult): never => {
@@ -132,11 +132,20 @@ export function createTelegramPreparedSender(config: {
       requestParams,
       ...(options?.rich ? { removeNativeQuoteParam: removeTelegramRichNativeQuoteParam } : {}),
       request: (effective, operation) =>
-        config.request(() => send(effective), operation, {
-          shouldLog: (error) =>
-            (options?.shouldLog?.(error) ?? true) &&
-            !(getTelegramNativeQuoteReplyMessageId(effective) && isTelegramQuoteParamError(error)),
-        }),
+        config.request(
+          () => {
+            config.assertPlatformSendAuthorized?.();
+            return send(effective);
+          },
+          operation,
+          {
+            shouldLog: (error) =>
+              (options?.shouldLog?.(error) ?? true) &&
+              !(
+                getTelegramNativeQuoteReplyMessageId(effective) && isTelegramQuoteParamError(error)
+              ),
+          },
+        ),
     });
 
   const sendText = async (params: {
@@ -227,7 +236,7 @@ export function createTelegramPreparedSender(config: {
               "sendRichMessage",
               toTelegramRichMessageContextParams(rawParams),
               (effective) =>
-                getTelegramRichRawApi(config.api).sendRichMessage({
+                config.api.raw.sendRichMessage({
                   chat_id: config.chatId,
                   rich_message: richMessage,
                   ...effective,

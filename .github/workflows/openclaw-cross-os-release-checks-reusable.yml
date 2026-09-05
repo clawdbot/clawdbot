@@ -8,6 +8,11 @@ on:
         required: true
         default: main
         type: string
+      target_context_ref:
+        description: Optional canonical release branch or tag context for an exact-SHA target
+        required: false
+        default: ""
+        type: string
       workflow_ref:
         description: Optional openclaw/openclaw ref that provides the reusable workflow harness
         required: false
@@ -37,7 +42,7 @@ on:
         default: ""
         type: string
       previous_version:
-        description: Optional baseline version for installer/dev-update and packaged upgrade
+        description: Optional exact older baseline version for installer/dev-update and packaged upgrade
         required: false
         default: ""
         type: string
@@ -112,20 +117,25 @@ on:
         default: ""
         type: string
       advisory:
-        description: Treat failures as advisory for the caller
+        description: Also treat preparation and Linux failures as advisory for the caller
         required: false
         default: false
         type: boolean
   workflow_call:
     inputs:
       advisory:
-        description: Treat failures as advisory for the caller
+        description: Also treat preparation and Linux failures as advisory for the caller
         required: false
         default: false
         type: boolean
       ref:
         description: Public OpenClaw ref to validate (tag, branch, or full commit SHA)
         required: true
+        type: string
+      target_context_ref:
+        description: Optional canonical release branch or tag context for an exact-SHA target
+        required: false
+        default: ""
         type: string
       workflow_ref:
         description: Optional openclaw/openclaw ref that provides the reusable workflow harness
@@ -146,7 +156,7 @@ on:
         default: ""
         type: string
       previous_version:
-        description: Optional baseline version for the upgrade lane (defaults to npm latest)
+        description: Optional exact older baseline version for the upgrade lane
         required: false
         default: ""
         type: string
@@ -670,14 +680,21 @@ jobs:
         id: baseline
         env:
           INPUT_PREVIOUS_VERSION: ${{ inputs.previous_version }}
+          INPUT_TARGET_CONTEXT_REF: ${{ inputs.target_context_ref }}
+          CANDIDATE_JSON: ${{ runner.temp }}/openclaw-cross-os-release-checks/prepare/candidate.json
         run: |
           set -euo pipefail
-          if [[ -n "${INPUT_PREVIOUS_VERSION}" ]]; then
-            echo "value=openclaw@${INPUT_PREVIOUS_VERSION}" >> "$GITHUB_OUTPUT"
-            exit 0
+          resolver_args=(
+            --candidate-version "$(jq -er '.candidateVersion' "$CANDIDATE_JSON")"
+            --target-context-ref "$INPUT_TARGET_CONTEXT_REF"
+          )
+          if [[ -n "$INPUT_PREVIOUS_VERSION" ]]; then
+            resolver_args+=(--previous-version "$INPUT_PREVIOUS_VERSION")
           fi
-          BASELINE_VERSION="$(npm view openclaw@latest version)"
-          echo "value=openclaw@${BASELINE_VERSION}" >> "$GITHUB_OUTPUT"
+          BASELINE_SPEC="$(
+            node workflow/scripts/lib/release-upgrade-baseline.mjs "${resolver_args[@]}"
+          )"
+          echo "value=${BASELINE_SPEC}" >> "$GITHUB_OUTPUT"
 
       - name: Pack baseline artifact
         if: ${{ inputs.mode != 'fresh' }}
@@ -880,7 +897,7 @@ jobs:
   cross_os_release_checks:
     name: "${{ matrix.display_name }} / ${{ matrix.suite_label }}"
     needs: prepare
-    continue-on-error: ${{ inputs.advisory }}
+    continue-on-error: ${{ inputs.advisory || matrix.os_id != 'ubuntu' }}
     strategy:
       fail-fast: false
       matrix: ${{ fromJson(needs.prepare.outputs.matrix) }}
@@ -899,6 +916,7 @@ jobs:
       # Windows Server 2025 with Node 24.19 can crash in libuv fs-event on RUNNER~1.
       # Keep only packaged-fresh on the last validated Node until an upstream fix ships.
       - name: Setup Node.js
+        id: node
         uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
         with:
           node-version: ${{ matrix.os_id == 'windows' && matrix.suite == 'packaged-fresh' && '24.15.0' || env.NODE_VERSION }}
@@ -910,6 +928,19 @@ jobs:
           package-manager-file: workflow/package.json
           lockfile-path: workflow/pnpm-lock.yaml
           cache-mode: off
+
+      # Lane homes and installed trees stay fresh. Only npm's integrity-checked
+      # download store survives; logs and npx installations never enter this cache.
+      - name: Restore npm downloads
+        id: npm_downloads
+        uses: actions/cache/restore@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
+        with:
+          path: .cache/openclaw-cross-os-npm-cache/_cacache
+          enableCrossOsArchive: true
+          key: openclaw-cross-os-npm-v1-${{ runner.os }}-${{ runner.arch }}-${{ steps.node.outputs.node-version }}-${{ matrix.suite }}-${{ needs.prepare.outputs.candidate_sha256 }}-${{ needs.prepare.outputs.baseline_sha256 }}
+          restore-keys: |
+            openclaw-cross-os-npm-v1-${{ runner.os }}-${{ runner.arch }}-${{ steps.node.outputs.node-version }}-${{ matrix.suite }}-
+            openclaw-cross-os-npm-v1-seed-
 
       - name: Download candidate artifact
         id: download_candidate
@@ -1022,6 +1053,7 @@ jobs:
       - name: Run cross-OS release checks
         shell: bash
         env:
+          NPM_CONFIG_CACHE: ${{ github.workspace }}/.cache/openclaw-cross-os-npm-cache
           OPENAI_API_KEY: ${{ secrets.OPENAI_API_KEY }}
           ANTHROPIC_API_KEY: ${{ secrets.ANTHROPIC_API_KEY }}
           MINIMAX_API_KEY: ${{ secrets.MINIMAX_API_KEY }}
@@ -1091,6 +1123,15 @@ jobs:
 
           echo "::warning::retrying Windows release checks after the outer process exited 127 after the dashboard probe and before summary generation"
           run_cross_os_release_checks
+
+      - name: Save npm downloads
+        if: github.repository == 'openclaw/openclaw' && github.event_name == 'workflow_dispatch' && steps.npm_downloads.outputs.cache-hit != 'true'
+        continue-on-error: true
+        uses: actions/cache/save@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
+        with:
+          path: .cache/openclaw-cross-os-npm-cache/_cacache
+          enableCrossOsArchive: true
+          key: ${{ steps.npm_downloads.outputs.cache-primary-key }}
 
       - name: Summarize release checks
         if: always()

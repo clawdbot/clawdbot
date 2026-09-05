@@ -3,7 +3,7 @@ import { randomBytes, randomUUID } from "node:crypto";
 import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
-import { describe, expect, it } from "vitest";
+import { describe, expect, it, onTestFinished } from "vitest";
 import {
   resolveCliBackendConfig,
   resolveCliBackendLiveTest,
@@ -23,11 +23,14 @@ import { setTestEnvValue } from "../test-utils/env.js";
 import {
   CLI_CACHE_AUTH_PROFILE_ID,
   CLI_BACKEND_PROBE_PLUGIN_ID,
+  CLI_ANNOUNCE_BARRIER_TOOL_NAME,
+  createCliAnnounceBarrier,
   createCliBackendProbePlugin,
   initializeCacheProbeGitWorkspace,
   logCliCacheUsage,
   MCP_SCHEMA_PROBE_TOOL_NAME,
   prepareClaudeCacheProbeBackend,
+  verifyCliBackendAnnounceOrdering,
   type RuntimeBackendEntry,
 } from "./gateway-cli-backend.live-cache.test-helpers.js";
 import {
@@ -384,21 +387,21 @@ describeLive("gateway live (cli backend)", () => {
       const stateDir = path.join(tempDir, "state");
       await fs.mkdir(stateDir, { recursive: true });
       const enableMcpSchemaProbe = CLI_MCP_SCHEMA_PROBE || CLI_CACHE_PROBE;
+      const announceBarrier = await createCliAnnounceBarrier();
+      onTestFinished(() => announceBarrier.close());
       // Load the continuity hook before startup so admitted generations own the fixture.
-      const probePlugin =
-        enableMcpSchemaProbe || resumeContinuityProbe
-          ? await createCliBackendProbePlugin(tempDir, {
-              mcpSchema: enableMcpSchemaProbe,
-              continuity: resumeContinuityProbe
-                ? {
-                    sessionKey,
-                    firstTurnMarker: resumeContinuityProbe.firstTurnMarker,
-                    injectedContext: resumeContinuityProbe.injectedContext,
-                  }
-                : undefined,
-            })
-          : undefined;
-      const probePluginPath = probePlugin?.pluginPath;
+      const probePlugin = await createCliBackendProbePlugin(tempDir, {
+        mcpSchema: enableMcpSchemaProbe,
+        announceBarrierUrl: announceBarrier.url,
+        continuity: resumeContinuityProbe
+          ? {
+              sessionKey,
+              firstTurnMarker: resumeContinuityProbe.firstTurnMarker,
+              injectedContext: resumeContinuityProbe.injectedContext,
+            }
+          : undefined,
+      });
+      const probePluginPath = probePlugin.pluginPath;
       const useMinimalToolsProfile = providerId === "codex-cli" && !enableMcpSchemaProbe;
       setTestEnvValue("OPENCLAW_STATE_DIR", stateDir);
       const bundleMcp = backendResolved.bundleMcp;
@@ -513,14 +516,11 @@ describeLive("gateway live (cli backend)", () => {
                 },
               }
             : cfg.models,
-        ...(useMinimalToolsProfile
-          ? {
-              tools: {
-                ...cfg.tools,
-                profile: "minimal" as const,
-              },
-            }
-          : {}),
+        tools: {
+          ...cfg.tools,
+          alsoAllow: ["sessions_spawn", CLI_ANNOUNCE_BARRIER_TOOL_NAME],
+          ...(useMinimalToolsProfile ? { profile: "minimal" as const } : {}),
+        },
         agents: {
           ...cfg.agents,
           defaults: {
@@ -666,6 +666,13 @@ describeLive("gateway live (cli backend)", () => {
             }
           }
         }
+
+        await verifyCliBackendAnnounceOrdering({
+          client: activeClient,
+          announceBarrier,
+          requestTimeoutMs: CLI_BACKEND_REQUEST_TIMEOUT_MS,
+          logStep: logCliBackendLiveStep,
+        });
 
         if (modelSwitchTarget) {
           const switchNonce = randomBytes(3).toString("hex").toUpperCase();
@@ -975,6 +982,7 @@ describeLive("gateway live (cli backend)", () => {
       } finally {
         try {
           logCliBackendLiveStep("cleanup:start");
+          announceBarrier.release();
           clearRuntimeConfigSnapshot();
           try {
             await client?.stopAndWait();

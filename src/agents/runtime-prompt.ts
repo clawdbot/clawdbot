@@ -52,6 +52,7 @@ export async function resolveAgentRuntimePrompt(params: {
     ? listChannelSupportedActions({
         cfg: params.config,
         channel: runtimeChannel,
+        chatType: params.chatType,
         currentChannelId: params.currentChannelId ?? undefined,
         currentThreadTs: params.currentThreadTs ?? undefined,
         currentMessageId: params.currentMessageId ?? undefined,

@@ -1,7 +1,7 @@
-import { mkdir } from "node:fs/promises";
 import path from "node:path";
 import type { Locator, Page } from "playwright";
 import { expect, it } from "vitest";
+import { createControlUiE2eArtifactDir } from "../test-helpers/control-ui-e2e-artifacts.ts";
 import { createChatFlowE2eSuite, installMockGateway } from "./chat-flow.test-support.ts";
 
 const suite = createChatFlowE2eSuite();
@@ -99,10 +99,10 @@ suite.define(() => {
   it.each(["tool-diff", "selection", "agent-id"] as const)(
     "reports clipboard failure from the %s action",
     async (surface) => {
-      const artifactDir = process.env.OPENCLAW_UI_E2E_ARTIFACT_DIR?.trim();
-      if (artifactDir) {
-        await mkdir(artifactDir, { recursive: true });
-      }
+      const artifactDirParent = process.env.OPENCLAW_UI_E2E_ARTIFACT_DIR?.trim();
+      const artifactDir = artifactDirParent
+        ? createControlUiE2eArtifactDir("chat-flow.clipboard", artifactDirParent)
+        : undefined;
       const context = await suite.newBrowserContext({
         colorScheme: "light",
         locale: "en-US",
@@ -399,9 +399,11 @@ suite.define(() => {
         });
         expect(await gateway.getRequests("chat.send")).toHaveLength(0);
 
-        const artifactDir = process.env.OPENCLAW_UI_E2E_ARTIFACT_DIR?.trim();
+        const artifactDirParent = process.env.OPENCLAW_UI_E2E_ARTIFACT_DIR?.trim();
+        const artifactDir = artifactDirParent
+          ? createControlUiE2eArtifactDir("chat-flow.clipboard", artifactDirParent)
+          : undefined;
         if (artifactDir) {
-          await mkdir(artifactDir, { recursive: true });
           await page.screenshot({
             fullPage: true,
             path: path.join(artifactDir, `clipboard-${action}-failure.png`),
@@ -454,9 +456,11 @@ suite.define(() => {
       });
       expect(await gateway.getRequests("chat.send")).toHaveLength(0);
 
-      const artifactDir = process.env.OPENCLAW_UI_E2E_ARTIFACT_DIR?.trim();
+      const artifactDirParent = process.env.OPENCLAW_UI_E2E_ARTIFACT_DIR?.trim();
+      const artifactDir = artifactDirParent
+        ? createControlUiE2eArtifactDir("chat-flow.clipboard", artifactDirParent)
+        : undefined;
       if (artifactDir) {
-        await mkdir(artifactDir, { recursive: true });
         await page.screenshot({
           fullPage: true,
           path: path.join(artifactDir, "clipboard-assistant-code-failure.png"),

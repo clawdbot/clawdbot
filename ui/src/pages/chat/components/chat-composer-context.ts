@@ -30,7 +30,6 @@ type ProviderCostStats = {
   output?: number;
   cacheRead?: number;
   cacheWrite?: number;
-  provider: string | null;
 };
 
 function readCostValue(
@@ -41,11 +40,8 @@ function readCostValue(
 }
 
 function latestProviderCostStats(messages: unknown[] | undefined): ProviderCostStats | null {
-  if (!messages?.length) {
-    return null;
-  }
-  for (let index = messages.length - 1; index >= 0; index -= 1) {
-    const message = readCostRecord(messages[index]);
+  for (let index = (messages?.length ?? 0) - 1; index >= 0; index -= 1) {
+    const message = readCostRecord(messages?.[index]);
     if (message?.role === "user") {
       return null;
     }
@@ -54,9 +50,7 @@ function latestProviderCostStats(messages: unknown[] | undefined): ProviderCostS
     }
     const directCost = readCostRecord(message.cost);
     const usageCost = readCostRecord(readCostRecord(message.usage)?.cost);
-    const stats: ProviderCostStats = {
-      provider: typeof message.provider === "string" ? message.provider.trim() || null : null,
-    };
+    const stats: ProviderCostStats = {};
     for (const key of ["input", "output", "cacheRead", "cacheWrite"] as const) {
       const cost = readCostValue(directCost, key) ?? readCostValue(usageCost, key);
       if (cost !== undefined) {
@@ -68,6 +62,17 @@ function latestProviderCostStats(messages: unknown[] | undefined): ProviderCostS
     ) {
       return stats;
     }
+  }
+  return null;
+}
+
+function latestAssistantProvider(messages: unknown[] | undefined): string | null {
+  for (let index = (messages?.length ?? 0) - 1; index >= 0; index -= 1) {
+    const message = readCostRecord(messages?.[index]);
+    if (message?.role !== "assistant" || isTranscriptOnlyOpenClawAssistantMessage(message)) {
+      continue;
+    }
+    return typeof message.provider === "string" ? message.provider.trim() || null : null;
   }
   return null;
 }
@@ -246,11 +251,13 @@ function renderQuotaLimitRow(limit: QuotaLimitSummary) {
       <div class="context-usage__limit-head">
         <span class="context-usage__limit-label">${label}</span>
         <span class="context-usage__limit-meta">
-          ${reset
-            ? html`<span class="context-usage__limit-reset"
-                >${t("chat.composer.contextUsage.resets", { time: reset })}</span
-              >`
-            : nothing}
+          ${
+            reset
+              ? html`<span class="context-usage__limit-reset"
+                  >${t("chat.composer.contextUsage.resets", { time: reset })}</span
+                >`
+              : nothing
+          }
           <strong>${limit.usedPercent}%</strong>
         </span>
       </div>
@@ -291,11 +298,13 @@ function renderQuotaGroup(group: ProviderQuotaGroup, usageHref: string) {
         ${icons.externalLink}
       </a>
     </div>
-    ${group.accountEmail
-      ? html`<div class="context-usage__account" data-chat-usage-account="true">
-          ${group.accountEmail}
-        </div>`
-      : nothing}
+    ${
+      group.accountEmail
+        ? html`<div class="context-usage__account" data-chat-usage-account="true">
+            ${group.accountEmail}
+          </div>`
+        : nothing
+    }
     <div class="context-usage__limits">
       ${group.windows.map((limit) => renderQuotaLimitRow(limit))}
       ${group.budgets.map((budget) => renderQuotaBudgetRow(budget))}
@@ -319,7 +328,15 @@ export function renderContextNotice(
         isMonitoredAuthProvider,
       )
     : [];
-  if (!model && quotaGroups.length === 0) {
+  const currentProvider =
+    session?.modelProvider?.trim() || latestAssistantProvider(options.messages);
+  const normalizedProvider = currentProvider?.toLowerCase();
+  const currentGroup = normalizedProvider
+    ? quotaGroups.find((group) =>
+        group.providers.some((id) => id.trim().toLowerCase() === normalizedProvider),
+      )
+    : undefined;
+  if (!model && !currentGroup) {
     return nothing;
   }
   const summary = model
@@ -332,18 +349,6 @@ export function renderContextNotice(
   const percentage = model ? `${model.approximate ? "~" : ""}${model.pct}%` : null;
   const dashOffset = model ? RING_CIRCUMFERENCE * (1 - model.pct / 100) : RING_CIRCUMFERENCE;
   const providerCosts = model ? latestProviderCostStats(options.messages) : null;
-  const findQuotaGroup = (provider: string | null | undefined) => {
-    const normalizedProvider = provider?.trim().toLowerCase();
-    return normalizedProvider
-      ? quotaGroups.find((group) =>
-          group.providers.some((id) => id.trim().toLowerCase() === normalizedProvider),
-        )
-      : undefined;
-  };
-  const currentGroup = findQuotaGroup(session?.modelProvider?.trim() || providerCosts?.provider);
-  const planGroups = currentGroup
-    ? [currentGroup, ...quotaGroups.filter((group) => group !== currentGroup)]
-    : quotaGroups;
   // Plan-billed sessions hide dollar estimates: subscription usage is bounded
   // by the plan windows below, and per-token math would misread as real spend.
   // Billing mode is provider-level: session rows do not record which auth
@@ -401,65 +406,73 @@ export function renderContextNotice(
           </svg>
         </summary>
         <section class="context-usage__popover" aria-label=${t("chat.composer.contextUsage.title")}>
-          ${model
-            ? html`
-                <div class="context-usage__header">
-                  <span class="context-usage__title"
-                    >${t("chat.composer.contextUsage.contextWindow")}</span
-                  >
-                  <strong class="context-usage__context-value"
-                    >${model.detail} · ${percentage}</strong
-                  >
-                </div>
-                <div
-                  class="context-usage__bar"
-                  role="progressbar"
-                  aria-label=${summary}
-                  aria-valuemin="0"
-                  aria-valuemax="100"
-                  aria-valuenow=${model.pct}
-                >
-                  <span style="width: ${model.pct}%"></span>
-                </div>
-              `
-            : nothing}
-          ${model
-            ? html`
-                <div class="context-usage__section-label">
-                  ${t("chat.composer.contextUsage.latestRunTokens")}
-                </div>
-                <dl class="context-usage__stats">
-                  <div>
-                    <dt>${t("usage.breakdown.input")}</dt>
-                    <dd>${formatStat(model.input)}</dd>
+          ${
+            model
+              ? html`
+                  <div class="context-usage__header">
+                    <span class="context-usage__title"
+                      >${t("chat.composer.contextUsage.contextWindow")}</span
+                    >
+                    <strong class="context-usage__context-value"
+                      >${model.detail} · ${percentage}</strong
+                    >
                   </div>
-                  <div>
-                    <dt>${t("usage.breakdown.output")}</dt>
-                    <dd>${formatStat(model.output)}</dd>
+                  <div
+                    class="context-usage__bar"
+                    role="progressbar"
+                    aria-label=${summary}
+                    aria-valuemin="0"
+                    aria-valuemax="100"
+                    aria-valuenow=${model.pct}
+                  >
+                    <span style="width: ${model.pct}%"></span>
                   </div>
-                  ${!showCosts || model.cost === null
-                    ? nothing
-                    : html`
-                        <div>
-                          <dt>${t("chat.composer.contextUsage.estimatedCost")}</dt>
-                          <dd>${formatCost(model.cost)}</dd>
-                        </div>
-                      `}
-                </dl>
-              `
-            : nothing}
-          ${showCosts && providerCosts && hasProviderCosts
-            ? html`
-                <div class="context-usage__section-label">${t("usage.breakdown.costByType")}</div>
-                <dl class="context-usage__stats">
-                  ${renderCostStat(t("usage.breakdown.input"), providerCosts.input)}
-                  ${renderCostStat(t("usage.breakdown.output"), providerCosts.output)}
-                  ${renderCostStat(t("usage.breakdown.cacheRead"), providerCosts.cacheRead)}
-                  ${renderCostStat(t("usage.breakdown.cacheWrite"), providerCosts.cacheWrite)}
-                </dl>
-              `
-            : nothing}
-          ${planGroups.map((group) => renderQuotaGroup(group, usageHref))}
+                `
+              : nothing
+          }
+          ${
+            model
+              ? html`
+                  <div class="context-usage__section-label">
+                    ${t("chat.composer.contextUsage.latestRunTokens")}
+                  </div>
+                  <dl class="context-usage__stats">
+                    <div>
+                      <dt>${t("usage.breakdown.input")}</dt>
+                      <dd>${formatStat(model.input)}</dd>
+                    </div>
+                    <div>
+                      <dt>${t("usage.breakdown.output")}</dt>
+                      <dd>${formatStat(model.output)}</dd>
+                    </div>
+                    ${
+                      !showCosts || model.cost === null
+                        ? nothing
+                        : html`
+                            <div>
+                              <dt>${t("chat.composer.contextUsage.estimatedCost")}</dt>
+                              <dd>${formatCost(model.cost)}</dd>
+                            </div>
+                          `
+                    }
+                  </dl>
+                `
+              : nothing
+          }
+          ${
+            showCosts && providerCosts && hasProviderCosts
+              ? html`
+                  <div class="context-usage__section-label">${t("usage.breakdown.costByType")}</div>
+                  <dl class="context-usage__stats">
+                    ${renderCostStat(t("usage.breakdown.input"), providerCosts.input)}
+                    ${renderCostStat(t("usage.breakdown.output"), providerCosts.output)}
+                    ${renderCostStat(t("usage.breakdown.cacheRead"), providerCosts.cacheRead)}
+                    ${renderCostStat(t("usage.breakdown.cacheWrite"), providerCosts.cacheWrite)}
+                  </dl>
+                `
+              : nothing
+          }
+          ${currentGroup ? renderQuotaGroup(currentGroup, usageHref) : nothing}
         </section>
       </details>
     </div>

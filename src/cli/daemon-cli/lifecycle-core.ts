@@ -39,7 +39,7 @@ import {
   emitDaemonAlreadyRunning,
   emitDaemonScheduledRestart,
 } from "./response.js";
-import { filterContainerGenericHints } from "./shared.js";
+import { filterContainerGenericHints, resolveDaemonInstallBlockMessage } from "./shared.js";
 
 type DaemonLifecycleOptions = {
   json?: boolean;
@@ -57,6 +57,8 @@ type RestartPostCheckContext = {
   warn?: (message: string) => void;
   fail: (message: string, hints?: string[]) => void;
 };
+
+type StartPostCheckContext = RestartPostCheckContext;
 
 type ServiceRecoveryResult<TResult extends "started" | "stopped" | "restarted"> = {
   result: TResult;
@@ -210,12 +212,31 @@ export async function runServiceStart(params: {
   repairLoadedService?: (
     ctx: ServiceStartRepairContext,
   ) => Promise<ServiceRecoveryResult<"started"> | null>;
+  /** Runs after the service process is started, before start reports success. */
+  postStartCheck?: (ctx: StartPostCheckContext) => Promise<void>;
   expectedPort?: number;
 }) {
   const json = Boolean(params.opts?.json);
   const serviceCommand = formatCliCommand(`openclaw ${params.serviceNoun.toLowerCase()}`);
   const { stdout, warnings, emit, fail } = createDaemonActionContext({ action: "start", json });
   const warn = json ? (message: string) => warnings.push(message) : undefined;
+  const emitStarted = async (result: {
+    loaded: boolean;
+    message?: string;
+    reportedWarnings?: readonly string[];
+  }) => {
+    await params.postStartCheck?.({ json, stdout, warnings, warn, fail });
+    emit({
+      ok: true,
+      result: "started",
+      message: result.message,
+      warnings: mergeWarnings(warnings, result.reportedWarnings),
+      service: buildDaemonServiceSnapshot(params.service, result.loaded),
+    });
+    if (!json && result.message) {
+      defaultRuntime.log(result.message);
+    }
+  };
   const loaded = await resolveServiceLoadedOrFail({
     serviceNoun: params.serviceNoun,
     service: params.service,
@@ -243,16 +264,11 @@ export async function runServiceStart(params: {
     try {
       const handled = await params.onNotLoaded?.({ json, stdout, warn, fail });
       if (handled) {
-        emit({
-          ok: true,
-          result: handled.result,
+        await emitStarted({
+          loaded: handled.loaded ?? false,
           message: handled.message,
-          warnings: mergeWarnings(warnings, handled.warnings),
-          service: buildDaemonServiceSnapshot(params.service, handled.loaded ?? false),
+          reportedWarnings: handled.warnings,
         });
-        if (!json && handled.message) {
-          defaultRuntime.log(handled.message);
-        }
         return;
       }
     } catch (err) {
@@ -320,16 +336,11 @@ export async function runServiceStart(params: {
             serviceNoun: params.serviceNoun,
             action: "start",
           });
-          emit({
-            ok: true,
-            result: handled.result,
+          await emitStarted({
+            loaded: handled.loaded ?? true,
             message: handled.message,
-            warnings: mergeWarnings(warnings, handled.warnings),
-            service: buildDaemonServiceSnapshot(params.service, handled.loaded ?? true),
+            reportedWarnings: handled.warnings,
           });
-          if (!json && handled.message) {
-            defaultRuntime.log(handled.message);
-          }
           return;
         }
       } catch (err) {
@@ -345,12 +356,7 @@ export async function runServiceStart(params: {
       return;
     }
     const serviceLoaded = startResult.state.loadState.status === "loaded";
-    emit({
-      ok: true,
-      result: "started",
-      service: buildDaemonServiceSnapshot(params.service, serviceLoaded),
-      warnings: warnings.length ? warnings : undefined,
-    });
+    await emitStarted({ loaded: serviceLoaded });
   } catch (err) {
     fail(`${params.serviceNoun} start failed: ${String(err)}`, params.renderStartHints());
   }
@@ -631,15 +637,13 @@ export async function runServiceRestart(params: {
       const configToken = await resolveGatewayTokenForDriftCheck({ cfg, env: driftEnv });
       const driftIssue = checkTokenDrift({ serviceToken, configToken });
       if (driftIssue) {
-        const warning = driftIssue.detail
-          ? `${driftIssue.message} ${driftIssue.detail}`
-          : driftIssue.message;
+        const recovery =
+          resolveDaemonInstallBlockMessage("gateway") ??
+          `Run \`${formatCliCommand("openclaw gateway install --force")}\` to refresh the service token source.`;
+        const warning = `${driftIssue.message} ${recovery}`;
         warnings.push(warning);
         if (!json) {
-          defaultRuntime.log(`\n⚠️  ${driftIssue.message}`);
-          if (driftIssue.detail) {
-            defaultRuntime.log(`   ${driftIssue.detail}\n`);
-          }
+          defaultRuntime.log(`\n⚠️  ${warning}\n`);
         }
       }
     } catch (err) {

@@ -68,7 +68,7 @@ const coreCliCommandCatalog = defineCommandDescriptorCatalog([
   },
   {
     name: "triage",
-    description: "Collect sanitized diagnostics and prepare an agent debugging handoff",
+    description: "Collect sanitized diagnostics and open a local coding agent for repair",
     hasSubcommands: false,
     machineOutput: ({ argv }) => hasMachineOutputOption(argv, "--json"),
   },

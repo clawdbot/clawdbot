@@ -17,6 +17,10 @@ Use `openclaw onboard` or `openclaw setup` for the full guided first-run journey
 
 ## Options
 
+Before `openclaw configure` changes local credentials or configuration, OpenClaw compares the selected CLI state/config paths with the local Gateway or its installed service. A proven mismatch stops before the write. A remote Gateway or an authenticated path that cannot be verified produces a warning instead.
+
+This comparison also applies when `OPENCLAW_HOME` relocates the CLI's default state directory. The installed service's recorded environment determines its paths, including while the Gateway is stopped; the CLI's path overrides do not replace them. If the service definition or its recorded paths cannot be verified, OpenClaw warns and leaves configuration available. Inspect the service with `openclaw gateway status --deep` before relying on local changes to reach it.
+
 `--section <section>`: repeatable section filter. Available sections:
 
 `workspace`, `model`, `web`, `gateway`, `daemon`, `channels`, `plugins`, `skills`, `health`
@@ -29,6 +33,8 @@ openclaw configure --section gateway --section daemon
 ```
 
 Selecting `gateway`, `daemon`, or `health` (or running the full wizard with no `--section`) prompts where the Gateway runs and updates `gateway.mode`. Section filters that skip all three go straight to the requested setup with no gateway-mode prompt. Picking remote gateway mode writes the remote config and exits immediately; it does not run local-only steps like plugin installs.
+
+Gateway, daemon, health, and web settings do not require an agent owner. Workspace, model, plugin, skill, and channel setup use the configured System Agent in an explicit fleet; if none is configured, the wizard asks which existing agent to use. That selection applies to the remaining agent-scoped sections without changing the System Agent setting. Channel setup uses the selected workspace for plugin discovery; removing channel configuration does not require an agent selection.
 
 <Note>
 `openclaw configure` requires an interactive terminal (both stdin and stdout must be TTYs). Without one it prints the equivalent non-interactive `openclaw config get|set|patch|validate` commands and exits with an error instead of partially running.

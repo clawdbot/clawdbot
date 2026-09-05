@@ -13,9 +13,8 @@ const CONTROL_UI_ASSET_MANIFEST_MAX_FILE_BYTES = 64 * 1024 * 1024;
 const CONTROL_UI_ASSET_MANIFEST_MAX_TOTAL_BYTES = 512 * 1024 * 1024;
 
 function hasExactKeys(record: Record<string, unknown>, keys: readonly string[]): boolean {
-  const actual = Object.keys(record).toSorted();
-  const expected = [...keys].toSorted();
-  return actual.length === expected.length && actual.every((key, index) => key === expected[index]);
+  const actual = Object.keys(record);
+  return actual.length === keys.length && actual.every((key) => keys.includes(key));
 }
 
 function isControlUiAssetManifestPath(value: string): boolean {
@@ -23,12 +22,8 @@ function isControlUiAssetManifestPath(value: string): boolean {
     return false;
   }
   const normalized = path.posix.normalize(value);
-  return (
-    normalized === value &&
-    !path.posix.isAbsolute(normalized) &&
-    !normalized.endsWith("/") &&
-    !normalized.split("/").some((segment) => segment === "" || segment === "." || segment === "..")
-  );
+  // The assets/ prefix is relative; equality rejects dot segments and repeated separators.
+  return normalized === value && !normalized.endsWith("/");
 }
 
 export function parseControlUiAssetManifest(value: unknown): ControlUiAssetManifest | null {
@@ -77,9 +72,10 @@ export function parseControlUiAssetManifest(value: unknown): ControlUiAssetManif
     assets.push({ path: assetPath, sha256, size });
   }
 
-  const sorted = assets.toSorted((left, right) => left.path.localeCompare(right.path));
-  if (sorted.some((entry, index) => entry.path !== assets[index]?.path)) {
-    return null;
+  for (let index = 1; index < assets.length; index += 1) {
+    if (assets[index - 1]!.path.localeCompare(assets[index]!.path) > 0) {
+      return null;
+    }
   }
   if (hashControlUiAssetManifestEntries(assets) !== value.generation) {
     return null;

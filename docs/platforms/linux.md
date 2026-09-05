@@ -111,7 +111,8 @@ the shell does not grant microphone capture to the WebKitGTK WebView, so
 `getUserMedia` is expected to fail there. Until that lands, open the Gateway's
 Control UI in a regular browser for [Talk mode](/nodes/talk).
 
-Stable releases built from `main` ship `.deb` and AppImage bundles as assets on the
+Stable releases built from `main` or their matching `release/YYYY.M.PATCH` branch
+ship `.deb` and AppImage bundles as assets on the
 [GitHub release](https://github.com/openclaw/openclaw/releases) for the tag,
 named `OpenClaw-<version>-amd64.deb` and `OpenClaw-<version>-amd64.AppImage`,
 with a `SHA256SUMS.linux-app.txt` checksum file next to them. Download the
@@ -120,6 +121,12 @@ or mark the AppImage executable and run it directly. The AppImage runtime
 needs FUSE 2 (`sudo apt install libfuse2`, or `libfuse2t64` on Ubuntu 24.04+);
 without it, run the AppImage with `APPIMAGE_EXTRACT_AND_RUN=1`.
 
+Published AMD64 AppImages are built on Ubuntu 22.04 and require glibc 2.35 or
+newer plus a `libstdc++` that provides `GLIBCXX_3.4.30`. Ubuntu 22.04 and
+Debian 12 meet that ABI floor. RHEL 9 and Rocky Linux 9 ship glibc 2.34, so
+they cannot run the published AppImage. Extracting the AppImage does not bypass
+this requirement.
+
 ### Media codecs
 
 The companion uses GStreamer plugins for audio and video playback.
@@ -127,21 +134,43 @@ WebM/VP9, Opus, Vorbis, and WAV normally work through `plugins-good`.
 H.264/MP4, AAC, and MP3 require the `libav` and/or `plugins-bad` packages.
 The `.deb` uses the host's plugins and declares all three packages as
 dependencies. The AppImage bundles the GStreamer media framework and the
-plugins available on its Ubuntu build host. For a source build or when
-rebuilding either Linux bundle, install the packages explicitly:
+plugins required for those formats. For a source build or when rebuilding
+either Linux bundle, install the packages and inspection tool explicitly:
 
 ```bash
-sudo apt update && sudo apt install gstreamer1.0-libav gstreamer1.0-plugins-good gstreamer1.0-plugins-bad
+sudo apt update && sudo apt install gstreamer1.0-libav gstreamer1.0-plugins-good \
+  gstreamer1.0-plugins-bad gstreamer1.0-tools patchelf xdg-utils
 ```
 
-The released AppImage therefore carries the codecs installed by the release
-workflow instead of relying on GStreamer packages from the user's system.
+The packaging script stages only that media capability set before Tauri invokes
+linuxdeploy. This prevents optional host plugins from adding unrelated system
+libraries to the AppImage dependency closure.
+
+The packaging flow provisions Tauri's five AppImage tools into a clean,
+digest-pinned cache. After Tauri builds the AppImage, the finalizer re-verifies
+that cache, removes bundled Wayland client libraries from the retained AppDir,
+and rebuilds the artifact. WebKitGTK and Mesa then use one compatible host
+stack.
 
 You can also build the same bundles from a source checkout:
 
 ```bash
-cd apps/linux/src-tauri
-pnpm dlx @tauri-apps/cli@2.11.4 build --bundles deb,appimage
+plugins=$(mktemp -d)
+cache=$(mktemp -d)
+trap 'rm -rf "$plugins" "$cache"' EXIT
+export XDG_CACHE_HOME="$cache"
+apps/linux/scripts/stage-appimage-gstreamer.sh "$plugins"
+apps/linux/scripts/tauri-appimage-tools.sh prepare
+apps/linux/scripts/tauri-appimage-tools.sh verify pre-build
+export LDAI_RUNTIME_FILE="$cache/tauri/.appimage-runtime-x86_64"
+(
+  cd apps/linux/src-tauri
+  GSTREAMER_PLUGINS_DIR="$plugins" \
+    pnpm dlx @tauri-apps/cli@2.11.4 build --bundles deb,appimage \
+      --config '{"bundle":{"createUpdaterArtifacts":false,"useLocalToolsDir":false}}'
+)
+apps/linux/scripts/finalize-appimage.sh \
+  apps/linux/src-tauri/target/release/bundle/appimage
 ```
 
 The `Linux App` CI workflow uploads the same bundles as the
@@ -244,6 +273,14 @@ Camera devices must be readable by the service user, commonly through the `video
 
 `camera.snap` and `camera.clip` also require explicit Gateway arming through `gateway.nodes.commands.allow`. See [Camera capture](/nodes/camera) and [Location command](/nodes/location-command) for payloads, limits, and errors.
 
+## Retired Linux Canvas
+
+The bundled Linux Canvas bridge and its desktop Canvas window have been removed.
+For inline widgets in the Control UI, use [`show_widget`](/tools/show-widget).
+The separate [macOS widget panel](/platforms/mac/canvas) requires a connected
+Mac and is render-only. These widget surfaces do not restore the former Linux
+Canvas bridge or its A2UI push commands.
+
 ## Install
 
 - [Getting Started](/start/getting-started)
@@ -286,7 +323,7 @@ ExecStart=/usr/local/bin/openclaw gateway --port 18789
 Restart=always
 RestartSec=5
 RestartPreventExitStatus=78
-TimeoutStopSec=30
+TimeoutStopSec=330
 TimeoutStartSec=30
 SuccessExitStatus=0 143
 OOMPolicy=continue
@@ -321,6 +358,7 @@ Covered child process surfaces:
 - Supervisor-managed command children
 - PTY shell children
 - MCP stdio server children
+- Managed local model and embedding service children
 - OpenClaw-launched browser/Chrome processes (via the plugin SDK process runtime)
 
 The wrapper is Linux-only and skipped when `/bin/sh` is unavailable, or when
@@ -329,6 +367,13 @@ the child env sets `OPENCLAW_CHILD_OOM_SCORE_ADJ` to `0`, `false`, `no`, or
 Use this opt-out only for controlled diagnosis: it removes child-first OOM
 protection and makes the Gateway more likely to be selected as the victim under
 real memory pressure.
+
+Managed local model and embedding services fall back to direct spawn when their
+effective environment defines `SHELLOPTS`, `BASHOPTS`, a `BASH_FUNC_*` key, or
+a reserved `OC_INTERNAL_OOM_EXEC_{BASH_ENV,ENV,CDPATH,PS4}` carrier. Exact
+environment fidelity and shell startup safety take precedence in these cases,
+so OpenClaw does not attempt to change `oom_score_adj`; use the verification
+below to check the child's effective value.
 
 Verify a child process:
 
@@ -354,6 +399,6 @@ resource controls (systemd `MemoryMax=`, container memory limits).
 - [Install overview](/install)
 - [Linux server](/vps)
 - [ChromeOS (Crostini)](/platforms/chromeos)
-- [Raspberry Pi](/platforms/raspberry-pi)
+- [Raspberry Pi](/install/raspberry-pi)
 - [Gateway runbook](/gateway)
 - [Gateway configuration](/gateway/configuration)

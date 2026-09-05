@@ -72,9 +72,7 @@ describe("OPENCLAW_LOG_LEVEL", () => {
       file: testLogPath,
     });
     process.env.OPENCLAW_LOG_LEVEL = "nope";
-    const stderrSpy = vi.spyOn(process.stderr, "write").mockImplementation(
-      () => true as unknown as ReturnType<typeof process.stderr.write>, // preserve stream contract in test spy
-    );
+    const stderrSpy = vi.spyOn(process.stderr, "write").mockImplementation(() => true);
 
     expect(getResolvedLoggerSettings().level).toBe("error");
     expect(getResolvedLoggerSettings().maxFileBytes).toBe(defaultMaxFileBytes);
@@ -96,9 +94,7 @@ describe("OPENCLAW_LOG_LEVEL", () => {
       file: testLogPath,
     });
     process.env.OPENCLAW_LOG_LEVEL = "nope";
-    const stderrSpy = vi
-      .spyOn(process.stderr, "write")
-      .mockImplementation(() => true as unknown as ReturnType<typeof process.stderr.write>);
+    const stderrSpy = vi.spyOn(process.stderr, "write").mockImplementation(() => true);
 
     expect(getResolvedConsoleSettings().level).toBe("info");
 

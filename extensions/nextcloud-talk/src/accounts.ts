@@ -156,23 +156,31 @@ export function resolveNextcloudTalkAccount(params: {
 export function inspectNextcloudTalkAccount(params: {
   cfg: CoreConfig;
   accountId?: string | null;
-}): ResolvedNextcloudTalkAccount {
+}) {
   const account = resolveNextcloudTalkAccount(params);
   const apiCredentialResolution = resolveNextcloudTalkApiCredentialsResult({
     apiUser: account.config.apiUser,
     apiPassword: account.config.apiPassword,
     apiPasswordFile: account.config.apiPasswordFile,
     configPath: `channels.nextcloud-talk.accounts.${account.accountId}.apiPasswordFile`,
+    mode: "inspect",
   });
   const credentialDiagnostics = [
     ...(account.credentialDiagnostics ?? []),
-    ...(apiCredentialResolution.status === "configured_unavailable"
+    ...(apiCredentialResolution.status === "configured_unavailable" &&
+    apiCredentialResolution.diagnostic
       ? [apiCredentialResolution.diagnostic]
       : []),
   ];
   return {
     ...account,
+    configured: isNextcloudTalkAccountConfigured(account),
+    mode: "webhook" as const,
     apiCredentialStatus: apiCredentialResolution.status,
     ...(credentialDiagnostics.length > 0 ? { credentialDiagnostics } : {}),
   };
+}
+
+export function isNextcloudTalkAccountConfigured(account: ResolvedNextcloudTalkAccount): boolean {
+  return Boolean(account.tokenStatus !== "missing" && account.baseUrl?.trim());
 }

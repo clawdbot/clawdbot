@@ -11,7 +11,7 @@ import {
   type UpdateChannel,
   UPDATE_EFFECTIVE_CHANNEL_ENV,
 } from "../../infra/update-channels.js";
-import { checkUpdateStatus } from "../../infra/update-check.js";
+import { resolveUpdateInstallKind } from "../../infra/update-check.js";
 import { POST_CORE_UPDATE_SOURCE_CONFIG_PATH_ENV } from "../../infra/update-post-core-context.js";
 import { loadInstalledPluginIndexInstallRecords } from "../../plugins/installed-plugin-index-records.js";
 import { withPluginLifecycleLease } from "../../plugins/plugin-lifecycle-lease.js";
@@ -21,13 +21,15 @@ import { assertOpenClawStateWriteAllowedAtPath } from "../../state/openclaw-stat
 import {
   parseTimeoutMsOrExit,
   resolveUpdateRoot,
+  tryResolveInvocationCwd,
   tryWriteCompletionCache,
   type UpdateFinalizeOptions,
 } from "./shared.js";
 import { suppressDeprecations } from "./suppress-deprecations.js";
+import { createUpdateConfigSnapshot } from "./update-command-config-snapshot.js";
 import {
-  createUpdateConfigSnapshot,
   persistRequestedUpdateChannel,
+  persistValidatedDowngradeConfig,
   readPostCorePreUpdateSourceConfig,
   restoreDroppedPreUpdateChannels,
 } from "./update-command-config.js";
@@ -40,7 +42,9 @@ import {
   updatePluginsAfterCoreUpdate,
   type PostCorePluginUpdateResult,
 } from "./update-command-plugins.js";
-import { reportPreMutationUpdateFailure } from "./update-command-post-core.js";
+import { reportPreMutationUpdateFailure, UpdateCommandFailure } from "./update-command-result.js";
+import { resolveServiceRefreshEnv, withUpdateInProgressEnv } from "./update-command-service-env.js";
+import { withUpdateFailureTriage } from "./update-command-triage.js";
 
 const DEFAULT_UPDATE_STEP_TIMEOUT_MS = 30 * 60_000;
 
@@ -105,9 +109,8 @@ type UpdateFinalizeResult = {
 };
 
 export async function updateFinalizeCommand(opts: UpdateFinalizeOptions): Promise<void> {
+  const invocationCwd = tryResolveInvocationCwd();
   suppressDeprecations();
-  const finalizationStartedAt = performance.now();
-  const phaseTimings: UpdateFinalizePhaseTiming[] = [];
   const timeoutMs = parseTimeoutMsOrExit(opts.timeout);
   if (timeoutMs === null) {
     return;
@@ -124,9 +127,30 @@ export async function updateFinalizeCommand(opts: UpdateFinalizeOptions): Promis
   assertConfigWriteAllowedInCurrentMode();
   await assertOpenClawStateWriteAllowedAtPath({
     databasePath: resolveOpenClawStateSqlitePath(process.env),
+    recoverOrphanedSidecars: false,
   });
 
   const root = await resolveUpdateRoot();
+  const target = { root, env: resolveServiceRefreshEnv(process.env, invocationCwd) };
+  await withUpdateFailureTriage({ ...opts, invocationCwd }, target, () =>
+    withUpdateInProgressEnv(invocationCwd, () =>
+      updateFinalizeCommandInternal(opts, root, timeoutMs, requestedChannel),
+    ),
+  );
+}
+
+async function updateFinalizeCommandInternal(
+  opts: UpdateFinalizeOptions,
+  root: string,
+  timeoutMs: number | undefined,
+  requestedChannel: UpdateChannel | null,
+): Promise<void> {
+  const finalizationStartedAt = performance.now();
+  const phaseTimings: UpdateFinalizePhaseTiming[] = [];
+  // Refused invocations cannot write diagnostics or recover state sidecars.
+  await assertOpenClawStateWriteAllowedAtPath({
+    databasePath: resolveOpenClawStateSqlitePath(process.env),
+  });
   let configSnapshot = await runTimedFinalizePhase({
     finalizationStartedAt,
     phaseTimings,
@@ -147,16 +171,11 @@ export async function updateFinalizeCommand(opts: UpdateFinalizeOptions): Promis
         }
       : undefined);
   if (requestedChannel === "extended-stable") {
-    const updateStatus = await checkUpdateStatus({
-      root,
-      timeoutMs: timeoutMs ?? 3500,
-      fetchGit: false,
-      includeRegistry: false,
-    });
-    if (updateStatus.installKind === "git") {
+    const installKind = await resolveUpdateInstallKind(root);
+    if (installKind === "git") {
       await reportPreMutationUpdateFailure({
         root,
-        installKind: updateStatus.installKind,
+        installKind,
         reason: "unsupported_git_channel",
         opts,
         controlPlaneUpdateSentinelMeta: null,
@@ -238,13 +257,8 @@ export async function updateFinalizeCommand(opts: UpdateFinalizeOptions): Promis
             configSnapshot,
             configChanged: restoredConfig.changed,
             restoredAuthoredChannels: restoredConfig.authoredChannels,
-            opts: {
-              json: opts.json,
-              timeout: opts.timeout,
-              yes: opts.yes,
-              acceptCapabilities: opts.acceptCapabilities,
-              restart: false,
-            },
+            json: opts.json,
+            acceptCapabilities: opts.acceptCapabilities,
             timeoutMs: timeoutMs ?? DEFAULT_UPDATE_STEP_TIMEOUT_MS,
             pluginInstallRecords,
           }),
@@ -280,6 +294,7 @@ export async function updateFinalizeCommand(opts: UpdateFinalizeOptions): Promis
   });
   const pluginUpdate = completedPluginUpdate.pluginUpdate;
   configSnapshot = completedPluginUpdate.configSnapshot;
+  await persistValidatedDowngradeConfig(configSnapshot);
 
   if (opts.deferCompletionCache) {
     phaseTimings.push({
@@ -326,8 +341,20 @@ export async function updateFinalizeCommand(opts: UpdateFinalizeOptions): Promis
     defaultRuntime.writeJson(result);
   } else if (result.status === "ok") {
     defaultRuntime.log(theme.muted("Update finalization completed."));
+  } else if (result.status === "warning") {
+    defaultRuntime.log(theme.warn("Update finalization completed with warnings."));
+  } else {
+    defaultRuntime.log(theme.error("Update finalization failed."));
   }
   if (result.status === "error") {
-    defaultRuntime.exit(1);
+    throw new UpdateCommandFailure({
+      status: "error",
+      mode: "unknown",
+      root,
+      reason: "post-update-plugins",
+      postUpdate: { plugins: pluginUpdate },
+      steps: [],
+      durationMs: Math.round(performance.now() - finalizationStartedAt),
+    });
   }
 }

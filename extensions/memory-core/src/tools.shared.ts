@@ -62,7 +62,9 @@ export async function getMemoryManagerContextWithPurpose(params: {
 export function createMemoryTool(params: {
   options: MemoryToolOptions;
   contract: MemoryToolContract;
-  execute: (ctx: { cfg: OpenClawConfig; agentId: string }) => AnyAgentTool["execute"];
+  execute: (
+    ctx: NonNullable<ReturnType<typeof resolveMemoryToolContext>>,
+  ) => AnyAgentTool["execute"];
 }): AnyAgentTool | null {
   const ctx = resolveMemoryToolContext(params.options);
   if (!ctx) {

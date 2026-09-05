@@ -507,6 +507,10 @@ export function describeGithubCopilotProviderAuthContract(
               provider: "github-copilot",
               token: "github-device-token",
             },
+            secretStorage: {
+              kind: "store",
+              namePrefix: "GITHUB_COPILOT_TOKEN",
+            },
           },
         ],
         defaultModel,
@@ -558,6 +562,10 @@ export function describeGithubCopilotProviderAuthContract(
               type: "token",
               provider: "github-copilot",
               token: "rpc-client-token",
+            },
+            secretStorage: {
+              kind: "store",
+              namePrefix: "GITHUB_COPILOT_TOKEN",
             },
           },
         ]);

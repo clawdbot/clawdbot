@@ -12,6 +12,8 @@ export type TranscriptSenderIdentity = Extract<
 /** Transcript attribution uses the closed product vocabulary, never raw-id inference. */
 export function readTranscriptSenderIdentity(value: unknown): TranscriptSenderIdentity | undefined {
   if (
+    typeof value !== "object" ||
+    value === null ||
     !Value.Check(SessionParticipantIdentitySchema, value) ||
     (value.type !== "profile" && value.type !== "remote" && value.type !== "observation") ||
     Object.values(value).some((part) => part !== null && (!part.trim() || part.length > 512))

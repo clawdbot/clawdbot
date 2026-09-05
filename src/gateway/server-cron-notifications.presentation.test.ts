@@ -14,12 +14,29 @@ vi.mock("../cron/delivery.js", async (importOriginal) => {
   };
 });
 
-import { sendGatewayCronFailureAlert } from "./server-cron-notifications.js";
+import { sendGatewayCronFailureAlert as sendGatewayCronFailureAlertBase } from "./server-cron-notifications.js";
+
+const sendGatewayCronFailureAlert = (
+  params: Omit<Parameters<typeof sendGatewayCronFailureAlertBase>[0], "onDeliverySettled">,
+) =>
+  sendGatewayCronFailureAlertBase({
+    ...params,
+    onDeliverySettled: async () => {},
+  });
 
 describe("sendGatewayCronFailureAlert presentation", () => {
   beforeEach(() => {
     vi.clearAllMocks();
-    mocks.sendCronAnnouncePayloadStrict.mockResolvedValue(undefined);
+    mocks.sendCronAnnouncePayloadStrict.mockResolvedValue({
+      status: "sent",
+      results: [],
+      receipt: {
+        primaryPlatformMessageId: undefined,
+        platformMessageIds: [],
+        parts: [],
+        sentAt: 0,
+      },
+    });
   });
 
   it.each([

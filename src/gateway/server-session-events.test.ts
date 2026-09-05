@@ -22,6 +22,7 @@ import {
   storedMessage,
   subscribePluginSessionsChanged,
 } from "./server-session-events.test-support.js";
+import { GatewayClientRegistry } from "./server/client-registry.js";
 
 describe("createTranscriptUpdateBroadcastHandler", () => {
   beforeEach(() => {
@@ -470,12 +471,12 @@ describe("createTranscriptUpdateBroadcastHandler", () => {
     );
   });
 
-  it("projects queued status into transcript snapshots before execution starts", async () => {
+  it("projects running status into ordinary startup transcript snapshots", async () => {
     await expect(emitAssistantTranscriptUpdate(true, undefined, false)).resolves.toMatchObject({
       sessionKey: "agent:main:main",
-      status: "queued",
+      status: "running",
       hasActiveRun: true,
-      session: { key: "agent:main:main", status: "queued", hasActiveRun: true },
+      session: { key: "agent:main:main", status: "running", hasActiveRun: true },
     });
   });
 
@@ -656,7 +657,9 @@ describe("createTranscriptUpdateBroadcastHandler", () => {
   it("publishes message-phase changes to plugins without websocket subscribers", async () => {
     const received = vi.fn();
     const unsubscribe = subscribePluginSessionsChanged(received);
-    const { broadcastToConnIds } = createGatewayBroadcaster({ clients: new Set() });
+    const { broadcastToConnIds } = createGatewayBroadcaster({
+      clients: new GatewayClientRegistry(),
+    });
     const handler = createTranscriptUpdateBroadcastHandler({
       broadcastToConnIds,
       sessionEventSubscribers: { getAll: () => new Set() },

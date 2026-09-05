@@ -4,6 +4,7 @@ import { expectDefined } from "@openclaw/normalization-core";
 import { expect, it, vi } from "vitest";
 import { SessionManager } from "../../agents/sessions/session-manager.js";
 import { getRuntimeConfig } from "../../config/config.js";
+import { encodeSessionArchiveContent } from "../../config/sessions/archive-compression.js";
 import { loadCombinedSessionStoreForGatewayCore } from "../../config/sessions/combined-store-gateway.js";
 import {
   listSessionTranscriptInstances,
@@ -87,22 +88,28 @@ it.each([undefined, "agent:opus:slack:dm", "global"])(
 );
 
 it.each([
-  { name: "SQLite history", artifact: false, directOwner: false, currentArtifact: false },
+  { name: "SQLite history", artifact: undefined, directOwner: false, currentArtifact: false },
   {
     name: "a direct owner for a historical instance",
-    artifact: false,
+    artifact: undefined,
     directOwner: true,
     currentArtifact: false,
   },
   {
     name: "mixed JSONL and SQLite history",
-    artifact: true,
+    artifact: "plain",
+    directOwner: false,
+    currentArtifact: false,
+  },
+  {
+    name: "mixed compressed JSONL and SQLite history",
+    artifact: "zstd",
     directOwner: false,
     currentArtifact: false,
   },
   {
     name: "current JSONL discovered after SQLite history",
-    artifact: false,
+    artifact: undefined,
     directOwner: false,
     currentArtifact: true,
   },
@@ -150,17 +157,21 @@ it.each([
       });
       const writeArtifact = async (tokens: number) => {
         archiveManager.appendMessage(usageMessage(tokens));
-        return await state.writeText(
-          path.join(
-            "agents",
-            "main",
-            "sessions",
-            `${archiveManager.getSessionId()}.jsonl.reset.2026-08-01T00-00-00.000Z`,
-          ),
-          [archiveManager.getHeader(), ...archiveManager.getEntries()]
-            .map((entry) => JSON.stringify(entry))
-            .join("\n"),
+        const content = [archiveManager.getHeader(), ...archiveManager.getEntries()]
+          .map((entry) => JSON.stringify(entry))
+          .join("\n");
+        const encoded =
+          artifact === "zstd"
+            ? encodeSessionArchiveContent(content)
+            : { bytes: Buffer.from(content), suffix: "" };
+        expect(encoded.suffix).toBe(artifact === "zstd" ? ".zst" : "");
+        const filePath = path.join(
+          state.sessionsDir(),
+          `${archiveManager.getSessionId()}.jsonl.reset.2026-08-01T00-00-00.000Z${encoded.suffix}`,
         );
+        await fs.mkdir(state.sessionsDir(), { recursive: true });
+        await fs.writeFile(filePath, encoded.bytes);
+        return filePath;
       };
       for (const [scope, sessionId, tokens] of [
         [mainScope, firstId, 10],

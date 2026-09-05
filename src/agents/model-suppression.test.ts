@@ -174,30 +174,27 @@ describe("model suppression", () => {
     const aReady = new Promise<void>((resolve) => {
       markAReady = resolve;
     });
-    const resultA = withPluginRuntimeGenerationScope(
-      { config, metadataSnapshot: snapshotA },
-      async () => {
-        const result = shouldSuppressBuiltInModelCore({
+    const resultA = withPluginRuntimeGenerationScope({ metadataSnapshot: snapshotA }, async () => {
+      const result = shouldSuppressBuiltInModelCore({
+        provider: "openai",
+        id: "generation-model",
+        config,
+      });
+      markAReady();
+      await holdA;
+      return [
+        result,
+        shouldSuppressBuiltInModelCore({
           provider: "openai",
           id: "generation-model",
           config,
-        });
-        markAReady();
-        await holdA;
-        return [
-          result,
-          shouldSuppressBuiltInModelCore({
-            provider: "openai",
-            id: "generation-model",
-            config,
-          }),
-        ];
-      },
-    );
+        }),
+      ];
+    });
     await aReady;
 
     const resultB = await withPluginRuntimeGenerationScope(
-      { config, metadataSnapshot: snapshotB },
+      { metadataSnapshot: snapshotB },
       async () =>
         shouldSuppressBuiltInModelCore({
           provider: "openai",
@@ -222,7 +219,7 @@ describe("model suppression", () => {
     mocks.buildManifestBuiltInModelSuppressionResolver.mockReturnValue(() => undefined);
 
     const check = (config: OpenClawConfig, workspaceDir: string) =>
-      withPluginRuntimeGenerationScope({ config, metadataSnapshot: snapshot }, () =>
+      withPluginRuntimeGenerationScope({ metadataSnapshot: snapshot }, () =>
         shouldSuppressBuiltInModelCore({
           provider: "openai",
           id: "generation-model",
@@ -251,7 +248,7 @@ describe("model suppression", () => {
     );
     const envFingerprint = vi.spyOn(pluginMetadataSnapshot, "resolvePluginMetadataEnvFingerprint");
 
-    withPluginRuntimeGenerationScope({ config, metadataSnapshot: snapshot }, () => {
+    withPluginRuntimeGenerationScope({ metadataSnapshot: snapshot }, () => {
       shouldSuppressBuiltInModelCore({ provider: "openai", id: "gpt-5.3", config });
       controlPlaneFingerprint.mockClear();
       envFingerprint.mockClear();

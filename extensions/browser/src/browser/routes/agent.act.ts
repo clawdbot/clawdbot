@@ -171,29 +171,6 @@ async function assertExistingSessionPostInteractionNavigationAllowed(
   throw new Error("Unable to verify stable post-interaction navigation");
 }
 
-async function runExistingSessionActionWithNavigationGuard<T>(params: {
-  execute: () => Promise<T>;
-  guard?: Parameters<typeof assertExistingSessionPostInteractionNavigationAllowed>[0];
-}): Promise<T> {
-  let actionError: unknown;
-  let result: T | undefined;
-  try {
-    result = await params.execute();
-  } catch (error) {
-    actionError = error;
-  }
-
-  if (params.guard) {
-    await assertExistingSessionPostInteractionNavigationAllowed(params.guard);
-  }
-
-  if (actionError) {
-    throw toErrorObject(actionError, "Non-Error thrown");
-  }
-
-  return result as T;
-}
-
 function buildExistingSessionWaitPredicate(params: {
   text?: string;
   textGone?: string;
@@ -475,97 +452,111 @@ export function registerBrowserAgentActRoutes(
         const hasNavigationResultPolicy = Boolean(
           navigationPolicy.ssrfPolicy || navigationPolicy.browserProxyMode,
         );
-        const resolveRelayTarget = captureBrowserOperationTarget({
+        const resolveRelayTarget = await captureBrowserOperationTarget({
           ctx,
           profileName: profileCtx.profile.name,
           targetId: tab.targetId,
         });
-        const jsonOk = async (
-          extra?: Record<string, unknown>,
-          options?: { resolveCurrentTarget?: boolean; operationTargetId?: string },
-        ) => {
-          const shouldResolveCurrentTarget =
-            options?.resolveCurrentTarget && (!isExistingSession || hasNavigationResultPolicy);
-          const responseTargetId = shouldResolveCurrentTarget
-            ? resolveOperationTargetOutcome({
-                actedOnTargetId: tab.targetId,
-                operationTargetId: options?.operationTargetId,
-                resolveRelayTarget,
-              })
-            : tab.targetId;
-          const url =
-            responseTargetId === tab.targetId
-              ? await resolveTabUrl(tab.url)
-              : await resolveSafeRouteTabUrl({
-                  ctx,
-                  profileCtx,
-                  targetId: responseTargetId,
-                  fallbackUrl: tab.url,
-                  ...(isExistingSession ? existingSessionCallOptions : {}),
-                });
-          return res.json({
-            ok: true,
-            targetId: responseTargetId,
-            ...(url ? { url } : {}),
-            ...extra,
-          });
-        };
-        // Nested batch aliases can differ from the request alias, so prefixes
-        // must stay unique across the full tab set before canonicalization.
-        const actionTabs =
-          action.kind === "batch" && !isExistingSession ? await profileCtx.listTabs() : [tab];
-        if (!actionTabs.some((candidate) => candidate.targetId === tab.targetId)) {
-          actionTabs.unshift(tab);
-        }
-        const targetIdError = canonicalizeActTargetIds(action, tab, actionTabs);
-        if (targetIdError) {
-          return jsonActError(res, 403, ACT_ERROR_CODES.targetIdMismatch, targetIdError);
-        }
-        const profileName = profileCtx.profile.name;
-        if (isExistingSession) {
-          const existingSessionTarget: ExistingSessionOperation = {
-            profileName,
-            profile: profileCtx.profile,
-            targetId: tab.targetId,
-            ...existingSessionCallOptions,
+        try {
+          const jsonOk = async (
+            extra?: Record<string, unknown>,
+            options?: { resolveCurrentTarget?: boolean; operationTargetId?: string },
+          ) => {
+            const shouldResolveCurrentTarget =
+              options?.resolveCurrentTarget && (!isExistingSession || hasNavigationResultPolicy);
+            const responseTargetId = shouldResolveCurrentTarget
+              ? await resolveOperationTargetOutcome({
+                  actedOnTargetId: tab.targetId,
+                  operationTargetId: options?.operationTargetId,
+                  resolveRelayTarget,
+                })
+              : tab.targetId;
+            const url =
+              responseTargetId === tab.targetId
+                ? await resolveTabUrl(tab.url)
+                : await resolveSafeRouteTabUrl({
+                    ctx,
+                    profileCtx,
+                    targetId: responseTargetId,
+                    fallbackUrl: tab.url,
+                    ...(isExistingSession ? existingSessionCallOptions : {}),
+                  });
+            return res.json({
+              ok: true,
+              targetId: responseTargetId,
+              ...(url ? { url } : {}),
+              ...extra,
+            });
           };
-          const initialTabTargetIds = hasNavigationResultPolicy
-            ? new Set(
-                (await profileCtx.listTabs(existingSessionCallOptions)).map(
-                  (currentTab) => currentTab.targetId,
-                ),
-              )
-            : new Set<string>();
-          const existingSessionNavigationGuard = {
-            ...existingSessionTarget,
-            ...navigationPolicy,
-            listTabs: () => profileCtx.listTabs(existingSessionCallOptions),
-            initialTabTargetIds,
-          };
-          const unsupportedMessage = getExistingSessionUnsupportedMessage(action);
-          if (unsupportedMessage) {
-            return jsonActError(
-              res,
-              501,
-              ACT_ERROR_CODES.unsupportedForExistingSession,
-              unsupportedMessage,
-            );
+          // Nested batch aliases can differ from the request alias, so prefixes
+          // must stay unique across the full tab set before canonicalization.
+          const actionTabs =
+            action.kind === "batch" && !isExistingSession ? await profileCtx.listTabs() : [tab];
+          if (!actionTabs.some((candidate) => candidate.targetId === tab.targetId)) {
+            actionTabs.unshift(tab);
           }
-          switch (action.kind) {
-            case "click":
-              await runExistingSessionActionWithNavigationGuard({
-                execute: () =>
+          const targetIdError = canonicalizeActTargetIds(action, tab, actionTabs);
+          if (targetIdError) {
+            return jsonActError(res, 403, ACT_ERROR_CODES.targetIdMismatch, targetIdError);
+          }
+          const profileName = profileCtx.profile.name;
+          if (isExistingSession) {
+            const existingSessionTarget: ExistingSessionOperation = {
+              profileName,
+              profile: profileCtx.profile,
+              targetId: tab.targetId,
+              ...existingSessionCallOptions,
+            };
+            const initialTabTargetIds = hasNavigationResultPolicy
+              ? new Set(
+                  (await profileCtx.listTabs(existingSessionCallOptions)).map(
+                    (currentTab) => currentTab.targetId,
+                  ),
+                )
+              : new Set<string>();
+            const existingSessionNavigationGuard = {
+              ...existingSessionTarget,
+              ...navigationPolicy,
+              listTabs: () => profileCtx.listTabs(existingSessionCallOptions),
+              initialTabTargetIds,
+            };
+            const unsupportedMessage = getExistingSessionUnsupportedMessage(action);
+            if (unsupportedMessage) {
+              return jsonActError(
+                res,
+                501,
+                ACT_ERROR_CODES.unsupportedForExistingSession,
+                unsupportedMessage,
+              );
+            }
+            const runGuardedAction = async <T>(execute: () => Promise<T>): Promise<T> => {
+              let actionError: unknown;
+              let result: T | undefined;
+              try {
+                result = await execute();
+              } catch (error) {
+                actionError = error;
+              }
+              await assertExistingSessionPostInteractionNavigationAllowed(
+                existingSessionNavigationGuard,
+              );
+              if (actionError) {
+                throw toErrorObject(actionError, "Non-Error thrown");
+              }
+              return result as T;
+            };
+            switch (action.kind) {
+              case "click":
+                await runGuardedAction(() =>
                   clickChromeMcpElement({
                     ...existingSessionTarget,
                     uid: action.ref!,
                     doubleClick: action.doubleClick ?? false,
                   }),
-                guard: existingSessionNavigationGuard,
-              });
-              return await jsonOk(undefined, { resolveCurrentTarget: true });
-            case "clickCoords":
-              await runExistingSessionActionWithNavigationGuard({
-                execute: () =>
+                );
+                return await jsonOk(undefined, { resolveCurrentTarget: true });
+              case "clickCoords":
+                await runGuardedAction(() =>
                   clickChromeMcpCoords({
                     ...existingSessionTarget,
                     x: action.x,
@@ -574,12 +565,10 @@ export function registerBrowserAgentActRoutes(
                     button: action.button as "left" | "right" | "middle" | undefined,
                     delayMs: action.delayMs,
                   }),
-                guard: existingSessionNavigationGuard,
-              });
-              return await jsonOk(undefined, { resolveCurrentTarget: true });
-            case "type":
-              await runExistingSessionActionWithNavigationGuard({
-                execute: async () => {
+                );
+                return await jsonOk(undefined, { resolveCurrentTarget: true });
+              case "type":
+                await runGuardedAction(async () => {
                   await fillChromeMcpElement({
                     ...existingSessionTarget,
                     uid: action.ref!,
@@ -591,66 +580,53 @@ export function registerBrowserAgentActRoutes(
                       key: "Enter",
                     });
                   }
-                },
-                guard: existingSessionNavigationGuard,
-              });
-              return await jsonOk(undefined, { resolveCurrentTarget: true });
-            case "press":
-              await runExistingSessionActionWithNavigationGuard({
-                execute: () =>
+                });
+                return await jsonOk(undefined, { resolveCurrentTarget: true });
+              case "press":
+                await runGuardedAction(() =>
                   pressChromeMcpKey({
                     ...existingSessionTarget,
                     key: action.key,
                   }),
-                guard: existingSessionNavigationGuard,
-              });
-              return await jsonOk(undefined, { resolveCurrentTarget: true });
-            case "hover":
-              await runExistingSessionActionWithNavigationGuard({
-                execute: () =>
+                );
+                return await jsonOk(undefined, { resolveCurrentTarget: true });
+              case "hover":
+                await runGuardedAction(() =>
                   hoverChromeMcpElement({
                     ...existingSessionTarget,
                     uid: action.ref!,
                   }),
-                guard: existingSessionNavigationGuard,
-              });
-              return await jsonOk(undefined, { resolveCurrentTarget: true });
-            case "scrollIntoView":
-              await runExistingSessionActionWithNavigationGuard({
-                execute: () =>
+                );
+                return await jsonOk(undefined, { resolveCurrentTarget: true });
+              case "scrollIntoView":
+                await runGuardedAction(() =>
                   evaluateChromeMcpScript({
                     ...existingSessionTarget,
                     fn: `(el) => { el.scrollIntoView({ block: "center", inline: "center" }); return true; }`,
                     args: [action.ref!],
                   }),
-                guard: existingSessionNavigationGuard,
-              });
-              return await jsonOk(undefined, { resolveCurrentTarget: true });
-            case "drag":
-              await runExistingSessionActionWithNavigationGuard({
-                execute: () =>
+                );
+                return await jsonOk(undefined, { resolveCurrentTarget: true });
+              case "drag":
+                await runGuardedAction(() =>
                   dragChromeMcpElement({
                     ...existingSessionTarget,
                     fromUid: action.startRef!,
                     toUid: action.endRef!,
                   }),
-                guard: existingSessionNavigationGuard,
-              });
-              return await jsonOk(undefined, { resolveCurrentTarget: true });
-            case "select":
-              await runExistingSessionActionWithNavigationGuard({
-                execute: () =>
+                );
+                return await jsonOk(undefined, { resolveCurrentTarget: true });
+              case "select":
+                await runGuardedAction(() =>
                   fillChromeMcpElement({
                     ...existingSessionTarget,
                     uid: action.ref!,
                     value: action.values[0] ?? "",
                   }),
-                guard: existingSessionNavigationGuard,
-              });
-              return await jsonOk(undefined, { resolveCurrentTarget: true });
-            case "fill":
-              await runExistingSessionActionWithNavigationGuard({
-                execute: () =>
+                );
+                return await jsonOk(undefined, { resolveCurrentTarget: true });
+              case "fill":
+                await runGuardedAction(() =>
                   fillChromeMcpForm({
                     ...existingSessionTarget,
                     elements: action.fields.map((field) => ({
@@ -658,19 +634,17 @@ export function registerBrowserAgentActRoutes(
                       value: String(field.value ?? ""),
                     })),
                   }),
-                guard: existingSessionNavigationGuard,
-              });
-              return await jsonOk(undefined, { resolveCurrentTarget: true });
-            case "resize":
-              await resizeChromeMcpPage({
-                ...existingSessionTarget,
-                width: action.width,
-                height: action.height,
-              });
-              return await jsonOk();
-            case "wait":
-              await runExistingSessionActionWithNavigationGuard({
-                execute: () =>
+                );
+                return await jsonOk(undefined, { resolveCurrentTarget: true });
+              case "resize":
+                await resizeChromeMcpPage({
+                  ...existingSessionTarget,
+                  width: action.width,
+                  height: action.height,
+                });
+                return await jsonOk();
+              case "wait":
+                await runGuardedAction(() =>
                   waitForExistingSessionCondition({
                     ...existingSessionTarget,
                     timeMs: action.timeMs,
@@ -682,12 +656,10 @@ export function registerBrowserAgentActRoutes(
                     fn: action.fn,
                     ...navigationPolicy,
                   }),
-                guard: existingSessionNavigationGuard,
-              });
-              return await jsonOk();
-            case "evaluate": {
-              const result = await runExistingSessionActionWithNavigationGuard({
-                execute: () =>
+                );
+                return await jsonOk();
+              case "evaluate": {
+                const result = await runGuardedAction(() =>
                   evaluateChromeMcpScript({
                     ...existingSessionTarget,
                     fn: normalizeBrowserEvaluateFunctionSource(
@@ -696,79 +668,81 @@ export function registerBrowserAgentActRoutes(
                     ),
                     args: action.ref ? [action.ref] : undefined,
                   }),
-                guard: existingSessionNavigationGuard,
-              });
-              return await jsonOk({ result }, { resolveCurrentTarget: true });
+                );
+                return await jsonOk({ result }, { resolveCurrentTarget: true });
+              }
+              case "close":
+                await profileCtx.closeTab(tab.targetId, {
+                  ...existingSessionCallOptions,
+                  exactTargetId: true,
+                });
+                clearSnapshotKeysForTab(ctx, profileCtx.profile.name, tab.targetId);
+                return await jsonOk();
+              case "batch":
+                return jsonActError(
+                  res,
+                  501,
+                  ACT_ERROR_CODES.unsupportedForExistingSession,
+                  EXISTING_SESSION_LIMITS.act.batch,
+                );
             }
-            case "close":
-              await profileCtx.closeTab(tab.targetId, {
-                ...existingSessionCallOptions,
-                exactTargetId: true,
-              });
-              clearSnapshotKeysForTab(ctx, profileCtx.profile.name, tab.targetId);
-              return await jsonOk();
-            case "batch":
-              return jsonActError(
-                res,
-                501,
-                ACT_ERROR_CODES.unsupportedForExistingSession,
-                EXISTING_SESSION_LIMITS.act.batch,
-              );
           }
-        }
 
-        const pw = await requirePwAi(res, `act:${kind}`);
-        if (!pw) {
-          return;
-        }
-        const result = await pw.executeActViaPlaywright({
-          cdpUrl,
-          action,
-          targetId: tab.targetId,
-          evaluateEnabled,
-          ...navigationPolicy,
-          signal,
-        });
-        const resultTargetOptions = {
-          resolveCurrentTarget: true,
-          operationTargetId: result.targetId,
-        };
-        if (result.blockedByDialog) {
-          return await jsonOk({
-            blockedByDialog: true,
-            browserState: result.browserState,
+          const pw = await requirePwAi(res, `act:${kind}`);
+          if (!pw) {
+            return;
+          }
+          const result = await pw.executeActViaPlaywright({
+            cdpUrl,
+            action,
+            targetId: tab.targetId,
+            evaluateEnabled,
+            ...navigationPolicy,
+            signal,
           });
-        }
-        const downloads = result.downloads;
-        if (action.kind === "close" || result.aborted?.reason === "closed") {
-          clearSnapshotKeysForTab(ctx, profileCtx.profile.name, tab.targetId);
-        }
-        switch (action.kind) {
-          case "batch":
-            return await jsonOk(
-              {
-                results: result.results ?? [],
-                ...(result.aborted ? { aborted: result.aborted } : {}),
-                ...(downloads ? { downloads } : {}),
-              },
-              {
-                ...resultTargetOptions,
-                resolveCurrentTarget: result.aborted?.reason !== "closed",
-              },
-            );
-          case "evaluate":
-            return await jsonOk(
-              { result: result.result, ...(downloads ? { downloads } : {}) },
-              resultTargetOptions,
-            );
-          case "click":
-          case "clickCoords":
-            return await jsonOk(downloads ? { downloads } : undefined, resultTargetOptions);
-          case "resize":
-          case "close":
-            return await jsonOk(downloads ? { downloads } : undefined);
-          default:
-            return await jsonOk(downloads ? { downloads } : undefined, resultTargetOptions);
+          const resultTargetOptions = {
+            resolveCurrentTarget: true,
+            operationTargetId: result.targetId,
+          };
+          if (result.blockedByDialog) {
+            return await jsonOk({
+              blockedByDialog: true,
+              browserState: result.browserState,
+            });
+          }
+          const downloads = result.downloads;
+          if (action.kind === "close" || result.aborted?.reason === "closed") {
+            clearSnapshotKeysForTab(ctx, profileCtx.profile.name, tab.targetId);
+          }
+          switch (action.kind) {
+            case "batch":
+              return await jsonOk(
+                {
+                  results: result.results ?? [],
+                  ...(result.aborted ? { aborted: result.aborted } : {}),
+                  ...(downloads ? { downloads } : {}),
+                },
+                {
+                  ...resultTargetOptions,
+                  resolveCurrentTarget: result.aborted?.reason !== "closed",
+                },
+              );
+            case "evaluate":
+              return await jsonOk(
+                { result: result.result, ...(downloads ? { downloads } : {}) },
+                resultTargetOptions,
+              );
+            case "click":
+            case "clickCoords":
+              return await jsonOk(downloads ? { downloads } : undefined, resultTargetOptions);
+            case "resize":
+            case "close":
+              return await jsonOk(downloads ? { downloads } : undefined);
+            default:
+              return await jsonOk(downloads ? { downloads } : undefined, resultTargetOptions);
+          }
+        } finally {
+          await resolveRelayTarget?.release();
         }
       },
     });

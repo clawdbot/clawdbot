@@ -6,7 +6,6 @@ import type {
   SessionsListResult,
 } from "../../api/types.ts";
 import { t } from "../../i18n/index.ts";
-import { areUiSessionKeysEquivalent } from "../sessions/session-key.ts";
 import {
   buildCatalogDisplayLookup,
   buildChatModelOptionFromLookup,
@@ -18,6 +17,7 @@ import {
 } from "./model-ref.ts";
 
 type ChatModelSelectStateInput = {
+  activeSession?: GatewaySessionRow;
   agentDefaultModel?: string;
   chatModelCatalog: ModelCatalogEntry[];
   modelOverrides: Readonly<Record<string, string | null | undefined>>;
@@ -68,7 +68,6 @@ type ChatFastModeSelectStateInput = {
   gatewayAvailable: boolean;
   loading: boolean;
   sending: boolean;
-  sessionKey: string;
   sessionsResult: SessionsListResult | null;
   stream: string | null;
 };
@@ -83,19 +82,13 @@ export function isChatFastModeProviderSupported(provider: string | null | undefi
   return Boolean(providerId && FAST_MODE_PROVIDER_IDS.has(providerId));
 }
 
-function resolveActiveSessionRow(state: ChatModelSelectStateInput) {
-  return state.sessionsResult?.sessions?.find((row) =>
-    areUiSessionKeysEquivalent(row.key, state.sessionKey),
-  );
-}
-
 function resolveModelOverrideSource(state: ChatModelSelectStateInput) {
   // A local selection is newer than the row that still reports the previous
   // provenance, so it owns the answer until the refreshed row lands.
   if (Object.hasOwn(state.modelOverrides, state.sessionKey)) {
     return state.modelOverrides[state.sessionKey] == null ? null : "user";
   }
-  return resolveActiveSessionRow(state)?.modelOverrideSource;
+  return state.activeSession?.modelOverrideSource;
 }
 
 export function resolveChatModelOverrideValue(state: ChatModelSelectStateInput): string {
@@ -106,8 +99,8 @@ export function resolveChatModelOverrideValue(state: ChatModelSelectStateInput):
     return normalizeChatModelOverrideValue(sharedOverrides[state.sessionKey], catalog);
   }
 
-  const activeRow = resolveActiveSessionRow(state);
-  return resolvePreferredServerChatModelValue(activeRow?.model, activeRow?.modelProvider, catalog);
+  const active = state.activeSession;
+  return resolvePreferredServerChatModelValue(active?.model, active?.modelProvider, catalog);
 }
 
 function resolveDefaultModelValue(state: ChatModelSelectStateInput): string {
@@ -353,11 +346,7 @@ function resolveFastModeProvider(
 export function resolveChatFastModeSelectState(
   input: ChatFastModeSelectStateInput,
 ): ChatFastModeSelectState {
-  const activeRow =
-    input.fastModeTarget ??
-    input.sessionsResult?.sessions?.find((row) =>
-      areUiSessionKeysEquivalent(row.key, input.sessionKey),
-    );
+  const activeRow = input.fastModeTarget;
   const activeProvider = normalizeChatModelProviderId(activeRow?.modelProvider ?? "") || null;
   const defaultProvider =
     normalizeChatModelProviderId(input.sessionsResult?.defaults?.modelProvider ?? "") || null;

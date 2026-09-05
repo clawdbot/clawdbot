@@ -112,24 +112,28 @@ struct MacNodeCodexThreadCatalogTests {
             body: body)
     }
 
-    private func makeBlockedRequestServer(warmup: Bool = false) throws -> FakeCodex {
+    private func makeBlockedRequestServer(warmup: Bool = false, requestGate: Bool = false) throws -> FakeCodex {
         let warmupResponse = warmup ? #"""
         id=$(printf '%s\n' "$request" | /usr/bin/sed -E 's/.*"id":([0-9]+).*/\1/')
         printf '{"id":%s,"result":{"data":[]}}\n' "$id"
         IFS= read -r request || exit 5
         """# : ""
+        let createRequestGate = requestGate ? #"[ "$count" != 1 ] || mkfifo "${0}.request-gate""# : ""
+        let awaitRequestGate = requestGate ? #"IFS= read -r _ < "${0}.request-gate" || exit 0"# : ""
         return try self.makeAppServer(
             preamble: #"""
             count=0
             [ ! -f "${0}.processes" ] || count=$(cat "${0}.processes")
             count=$((count + 1))
             printf '%s\n' "$count" > "${0}.processes"
+            \#(createRequestGate)
             """#,
             body: #"""
             IFS= read -r request || exit 4
             if [ "$count" = 1 ]; then
               \#(warmupResponse)
               printf '%s\n' "$request" > "${0}.request-started"
+              \#(awaitRequestGate)
               IFS= read -r unexpected || exit 0
               printf '%s\n' "$unexpected" > "${0}.unexpected-request"
               exit 6
@@ -1355,20 +1359,41 @@ extension MacNodeCodexThreadCatalogTests {
     }
 
     @Test func `queued request consumes its wall-clock deadline`() async throws {
-        let fake = try makeBlockedRequestServer(warmup: true)
+        let fake = try makeBlockedRequestServer(warmup: true, requestGate: true)
         let client = CodexAppServerThreadClient(idleTimeoutSeconds: 10)
         do {
             // Complete the real handshake before exercising an active or queued deadline.
             _ = try await self.requestEmptyList(client: client, executable: fake.executable)
+        } catch {
+            await client.shutdown()
+            throw error
+        }
 
-            let first = Task {
-                try await self.requestEmptyList(
-                    client: client,
-                    executable: fake.executable,
-                    timeoutSeconds: 0.5)
+        let readiness = Task {
+            try await self.openFIFOForWriting(
+                URL(fileURLWithPath: fake.executable.path + ".request-gate"))
+        }
+        let first = Task {
+            defer { readiness.cancel() }
+            return try await self.requestEmptyList(
+                client: client,
+                executable: fake.executable,
+                timeoutSeconds: MacNodeCodexThreadCatalog.defaultTimeoutSeconds)
+        }
+        do {
+            // The writer witnesses request receipt; readiness shares the first
+            // request's lifetime instead of racing an independent polling deadline.
+            let requestGate: FileHandle
+            do {
+                requestGate = try await readiness.value
+            } catch is CancellationError {
+                _ = try await first.value
+                throw CancellationError()
             }
-            #expect(await self.waitForFile(
-                URL(fileURLWithPath: fake.executable.path + ".request-started")))
+            defer { try? requestGate.close() }
+            try #require(FileManager.default.fileExists(atPath: fake.executable.path + ".request-started"))
+            try requestGate.write(contentsOf: Data("ready\n".utf8))
+            try requestGate.close()
             let second = Task {
                 try await self.requestEmptyList(
                     client: client,
@@ -1379,13 +1404,18 @@ extension MacNodeCodexThreadCatalogTests {
             await #expect(throws: MacNodeCodexThreadCatalog.CatalogError.timedOut) {
                 try await second.value
             }
-            await #expect(throws: MacNodeCodexThreadCatalog.CatalogError.timedOut) {
+            first.cancel()
+            await #expect(throws: CancellationError.self) {
                 try await first.value
             }
             #expect(!FileManager.default.fileExists(atPath: fake.executable.path + ".unexpected-request"))
             #expect(try self.readTrimmed(
                 URL(fileURLWithPath: fake.executable.path + ".processes")) == "1")
         } catch {
+            readiness.cancel()
+            first.cancel()
+            _ = await first.result
+            _ = await readiness.result
             await client.shutdown()
             throw error
         }

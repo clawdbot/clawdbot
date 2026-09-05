@@ -2,10 +2,16 @@
 import { execFileSync, spawnSync } from "node:child_process";
 import { mkdirSync, readFileSync, writeFileSync } from "node:fs";
 import path from "node:path";
-import { isRecord, readStringField } from "@openclaw/normalization-core/record-coerce";
 import { minimatch } from "minimatch";
 import { parse } from "yaml";
-import { booleanFlag, parseFlagArgs, stringFlag } from "./lib/arg-utils.mts";
+// Materialized PR wrappers must use the verified source, not the caller's tsconfig aliases.
+import { isRecord, readStringField } from "../packages/normalization-core/src/record-coerce.ts";
+import {
+  booleanFlag,
+  classifyBoundedUnsignedDecimal,
+  parseFlagArgs,
+  stringFlag,
+} from "./lib/arg-utils.mts";
 import { isDirectRunUrl } from "./lib/direct-run.mjs";
 import { execGhApiRead, plainGhEnv } from "./lib/plain-gh.mjs";
 
@@ -167,11 +173,11 @@ export function parseArgs(argv: readonly string[]) {
         missingValueMessage: "Expected --pr <value>.",
         rejectShortOptions: true,
         transform(value: string) {
-          const parsed = Number(value);
-          if (!Number.isSafeInteger(parsed) || parsed <= 0) {
+          const result = classifyBoundedUnsignedDecimal(value, 1, Number.MAX_SAFE_INTEGER);
+          if (result.kind !== "value") {
             throw new Error("Expected --pr <positive-integer>.");
           }
-          return parsed;
+          return result.value;
         },
       }),
       booleanFlag("--changelog-only", "changelogOnly"),
@@ -961,22 +967,20 @@ function loadCiReuseCandidateRuns(repo: string, headBranch: string) {
   }
   // The workflow selector above supplies the path identity that the REST
   // release-gate matcher normally reads from each full workflow-run object.
-  return runs.map(
-    (run): WorkflowRun => ({
-      id: optionalNumber(run, "databaseId"),
-      name: readStringField(run, "workflowName"),
-      event: readStringField(run, "event"),
-      status: readStringField(run, "status"),
-      conclusion: optionalNullableString(run, "conclusion"),
-      head_sha: readStringField(run, "headSha"),
-      head_branch: readStringField(run, "headBranch"),
-      path: CI_WORKFLOW_PATH,
-      created_at: readStringField(run, "createdAt"),
-      updated_at: readStringField(run, "updatedAt"),
-      html_url: readStringField(run, "url"),
-      display_title: readStringField(run, "displayTitle"),
-    }),
-  );
+  return runs.map((run): WorkflowRun => ({
+    id: optionalNumber(run, "databaseId"),
+    name: readStringField(run, "workflowName"),
+    event: readStringField(run, "event"),
+    status: readStringField(run, "status"),
+    conclusion: optionalNullableString(run, "conclusion"),
+    head_sha: readStringField(run, "headSha"),
+    head_branch: readStringField(run, "headBranch"),
+    path: CI_WORKFLOW_PATH,
+    created_at: readStringField(run, "createdAt"),
+    updated_at: readStringField(run, "updatedAt"),
+    html_url: readStringField(run, "url"),
+    display_title: readStringField(run, "displayTitle"),
+  }));
 }
 
 export function loadPullRequestCommitShas(

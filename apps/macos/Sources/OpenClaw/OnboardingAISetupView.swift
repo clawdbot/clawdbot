@@ -1,6 +1,5 @@
 import AppKit
 import Foundation
-import OpenClawProtocol
 import SwiftUI
 
 enum OnboardingProviderAuthLink {
@@ -74,7 +73,7 @@ private struct OnboardingRecommendedInstallCard: View {
     }
 }
 
-private struct OnboardingSurface: View {
+struct OnboardingSurface: View {
     let cornerRadius: CGFloat
 
     var body: some View {
@@ -98,7 +97,7 @@ struct OnboardingAISetupView: View {
     @Bindable var model: OnboardingAISetupModel
     var returnToGatewayAuthentication: () -> Void
     var retryConfiguredGatewayProbe: () -> Void
-    @State private var openedProviderAuthURL: URL?
+    @State private var manualEntryRequest = 0
 
     static func gatewayAuthCard(for issue: RemoteGatewayAuthIssue) -> GatewayAuthCard {
         GatewayAuthCard(
@@ -109,6 +108,25 @@ struct OnboardingAISetupView: View {
     }
 
     var body: some View {
+        ScrollViewReader { scroll in
+            ScrollView {
+                self.content
+                    .padding(.vertical, 4)
+                    .padding(.trailing, 12)
+            }
+            .scrollIndicators(.automatic)
+            .onChange(of: self.manualEntryRequest) {
+                withAnimation { scroll.scrollTo("manual-entry", anchor: .top) }
+            }
+            .onChange(of: self.model.manualError) { _, error in
+                if error != nil {
+                    withAnimation { scroll.scrollTo("manual-entry", anchor: .bottom) }
+                }
+            }
+        }
+    }
+
+    private var content: some View {
         VStack(alignment: .leading, spacing: 12) {
             switch self.model.phase {
             case .idle, .detecting:
@@ -127,7 +145,7 @@ struct OnboardingAISetupView: View {
                     self.model.cancelProviderAuth()
                 }
             })) {
-                self.providerAuthSheet
+                OnboardingAISetupSheet(model: self.model)
         }
     }
 
@@ -274,7 +292,7 @@ struct OnboardingAISetupView: View {
                     Image(systemName: "info.circle")
                         .foregroundStyle(.secondary)
                     VStack(alignment: .leading, spacing: 1) {
-                        Text("\(candidate.label) — \(candidate.detail)")
+                        Text(verbatim: "\(candidate.label) — \(candidate.detail)")
                             .font(.caption.weight(.semibold))
                         Text(candidate.reason)
                             .font(.caption)
@@ -415,7 +433,6 @@ struct OnboardingAISetupView: View {
                     .foregroundStyle(.secondary)
                 ForEach(self.model.prepareOptions) { option in
                     Button {
-                        self.openedProviderAuthURL = nil
                         self.model.startProviderPrepare(option)
                     } label: {
                         HStack(spacing: 10) {
@@ -492,6 +509,8 @@ struct OnboardingAISetupView: View {
         Button {
             withAnimation(.spring(response: 0.25, dampingFraction: 0.9)) {
                 self.model.showManualEntry = true
+                // The form can already exist below the viewport; every tap must reveal it.
+                self.manualEntryRequest += 1
             }
         } label: {
             HStack(spacing: 10) {
@@ -519,7 +538,6 @@ struct OnboardingAISetupView: View {
 
     private func providerAuthRow(_ option: OnboardingAISetupModel.AuthOption) -> some View {
         Button {
-            self.openedProviderAuthURL = nil
             self.model.startProviderAuth(option)
         } label: {
             HStack(spacing: 10) {
@@ -548,173 +566,6 @@ struct OnboardingAISetupView: View {
         }
         .buttonStyle(.plain)
         .disabled(self.model.isBusy)
-    }
-
-    private var providerAuthSheet: some View {
-        VStack(alignment: .leading, spacing: 16) {
-            HStack {
-                VStack(alignment: .leading, spacing: 2) {
-                    Text(self.model.activeAuthOption?.label ?? "Provider setup")
-                        .font(.title3.weight(.semibold))
-                    Text(self.model.isPreparingModel
-                        ? "OpenClaw will detect and verify the prepared model before using it."
-                        : "Credentials stay on this Gateway and are saved only after the live test succeeds.")
-                        .font(.caption)
-                        .foregroundStyle(.secondary)
-                }
-                Spacer(minLength: 0)
-            }
-
-            if let step = self.model.authStep {
-                let deviceCode = parseWizardDeviceCode(step.devicecode)
-                if deviceCode == nil,
-                   let title = step.title,
-                   !title.isEmpty,
-                   title != self.model.activeAuthOption?.label
-                {
-                    Text(title).font(.headline)
-                }
-                if let deviceCode {
-                    self.deviceCodeStep(deviceCode)
-                } else if let message = step.message, !message.isEmpty {
-                    ScrollView {
-                        Text(message)
-                            .textSelection(.enabled)
-                            .frame(maxWidth: .infinity, alignment: .leading)
-                    }
-                    .frame(maxHeight: 190)
-                }
-                if deviceCode == nil,
-                   let url = OnboardingProviderAuthLink.safeURL(step.externalurl)
-                {
-                    Link("Open sign-in page…", destination: url)
-                        .font(.caption.weight(.semibold))
-                }
-                self.authStepInput(step)
-            } else if self.model.authBusy {
-                HStack(spacing: 10) {
-                    ProgressView().controlSize(.small)
-                    Text(self.model.isPreparingModel
-                        ? "Starting local model setup…"
-                        : "Starting secure sign-in…")
-                }
-            }
-
-            if let error = self.model.authError {
-                OnboardingErrorCard(
-                    title: self.model.isPreparingModel
-                        ? "Model setup didn’t complete"
-                        : "Sign-in didn’t complete",
-                    message: error.summary,
-                    details: error.detail,
-                    docsSlug: "concepts/model-providers",
-                    retryTitle: nil,
-                    retry: nil)
-            }
-
-            Spacer(minLength: 0)
-            HStack {
-                Button("Cancel") { self.model.cancelProviderAuth() }
-                Spacer(minLength: 0)
-                if self.model.authStep != nil {
-                    Button(self.authContinueTitle) { self.model.continueProviderAuth() }
-                        .buttonStyle(.borderedProminent)
-                        .disabled(self.model.authBusy)
-                }
-            }
-        }
-        .padding(22)
-        .frame(width: 560)
-        .frame(minHeight: 330)
-        .onAppear {
-            self.openProviderAuthURLIfNeeded(self.model.authStep?.externalurl)
-        }
-        .onChange(of: self.model.authStep?.externalurl) { _, rawURL in
-            self.openProviderAuthURLIfNeeded(rawURL)
-        }
-    }
-
-    private func deviceCodeStep(_ deviceCode: WizardDeviceCodePresentation) -> some View {
-        VStack(alignment: .leading, spacing: 14) {
-            VStack(alignment: .leading, spacing: 4) {
-                Text("Finish in your browser")
-                    .font(.headline)
-                Text(deviceCode.message ?? "Enter this one-time code on the provider's sign-in page.")
-                    .font(.callout)
-                    .foregroundStyle(.secondary)
-            }
-
-            HStack(spacing: 12) {
-                Text(deviceCode.code)
-                    .font(.system(.title2, design: .monospaced).weight(.semibold))
-                    .textSelection(.enabled)
-                Spacer(minLength: 8)
-                Button {
-                    NSPasteboard.general.clearContents()
-                    NSPasteboard.general.setString(deviceCode.code, forType: .string)
-                } label: {
-                    Label("Copy", systemImage: "doc.on.doc")
-                }
-            }
-            .padding(.horizontal, 16)
-            .padding(.vertical, 14)
-            .background(OnboardingSurface(cornerRadius: 10))
-
-            HStack(spacing: 12) {
-                if let minutes = deviceCode.expiresInMinutes {
-                    Label("Expires in \(minutes) minutes", systemImage: "clock")
-                        .font(.caption)
-                        .foregroundStyle(.secondary)
-                }
-                Spacer(minLength: 0)
-                if let url = OnboardingProviderAuthLink.safeURL(self.model.authStep?.externalurl) {
-                    Link(destination: url) {
-                        Label("Open sign-in page", systemImage: "arrow.up.right.square")
-                    }
-                    .font(.caption.weight(.semibold))
-                }
-            }
-        }
-    }
-
-    private func openProviderAuthURLIfNeeded(_ rawURL: String?) {
-        guard let url = OnboardingProviderAuthLink.safeURL(rawURL),
-              url != openedProviderAuthURL
-        else { return }
-        self.openedProviderAuthURL = url
-        NSWorkspace.shared.open(url)
-    }
-
-    @ViewBuilder
-    private func authStepInput(_ step: WizardStep) -> some View {
-        switch wizardStepType(step) {
-        case "text":
-            if step.sensitive == true {
-                SecureField(step.placeholder ?? "Value", text: self.$model.authText)
-                    .textFieldStyle(.roundedBorder)
-            } else {
-                TextField(step.placeholder ?? "Value", text: self.$model.authText)
-                    .textFieldStyle(.roundedBorder)
-            }
-        case "select":
-            Picker("Option", selection: self.$model.authSelection) {
-                ForEach(Array(self.model.authWizardOptions.enumerated()), id: \.offset) { index, option in
-                    Text(option.label).tag(index)
-                }
-            }
-        case "confirm":
-            Toggle("Confirm", isOn: self.$model.authConfirmation)
-        default:
-            EmptyView()
-        }
-    }
-
-    private var authContinueTitle: String {
-        guard let step = model.authStep else { return "Continue" }
-        if parseWizardDeviceCode(step.devicecode) != nil {
-            return String(localized: "I've signed in")
-        }
-        return wizardStepType(step) == "note" ? "Continue" : "Submit"
     }
 
     private var manualForm: some View {
@@ -775,6 +626,7 @@ struct OnboardingAISetupView: View {
         .padding(12)
         .frame(maxWidth: .infinity, alignment: .leading)
         .background(OnboardingSurface(cornerRadius: 12))
+        .id("manual-entry")
     }
 
     private var manualProviderHelp: String {
@@ -799,6 +651,8 @@ struct OnboardingErrorCard: View {
     var secondaryTitle: String?
     var secondary: (() -> Void)?
 
+    /// Keep retry required so Swift binds a lone trailing closure to the primary
+    /// action instead of the defaulted secondary action.
     init(
         title: String,
         message: String,
@@ -807,7 +661,7 @@ struct OnboardingErrorCard: View {
         retryTitle: String? = nil,
         secondaryTitle: String? = nil,
         secondary: (() -> Void)? = nil,
-        retry: (() -> Void)? = nil)
+        retry: (() -> Void)?)
     {
         self.title = title
         self.message = message

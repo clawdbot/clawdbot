@@ -1,3 +1,4 @@
+import { err, ok, type Result } from "@openclaw/normalization-core/result";
 import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
 import type {
   SessionCreatedActor,
@@ -18,12 +19,14 @@ import { normalizeAgentId } from "../routing/session-key.js";
 import { looksLikeAvatarPath } from "../shared/avatar-policy.js";
 import { SESSIONS_LIST_OWNER_LIMIT } from "../shared/session-list-limits.js";
 import type { SessionOwnerFacetIdentity } from "../shared/session-types.js";
+import { resolveUserProfileReference } from "../state/user-profile-list.js";
 import { buildControlUiResourcePath } from "./control-ui-contract.js";
 import { normalizeControlUiBasePath } from "./control-ui-shared.js";
 import { resolveCurrentUserProfileDisplay } from "./current-user-profile-display.js";
+import type { SessionEntryPair } from "./session-list-order.js";
 import type { SessionActorProfileIdentity } from "./session-utils-contracts.js";
 
-function projectParticipant(
+export function projectSessionParticipant(
   identity: SessionParticipantIdentity,
   profiles: Map<string, SessionActorProfileIdentity | undefined>,
   cfg?: OpenClawConfig,
@@ -81,7 +84,7 @@ export function projectSessionActor(
         ? { type: "profile", id }
         : { type: "legacy", actorType: actor.type, source: null, id };
   // Keep original attribution in the display; authority reads the qualified canonical actor.
-  return { type: actor.type, id, ...projectParticipant(identity, profiles, cfg) };
+  return { type: actor.type, id, ...projectSessionParticipant(identity, profiles, cfg) };
 }
 
 /** Projects an identity only when it can own a session durably. */
@@ -147,7 +150,7 @@ export function projectSessionParticipants(
   const identities = userProfileIdentityById ?? new Map();
   const participants = new Map<string, SessionParticipant>();
   for (const { identity } of entry?.participants ?? []) {
-    const participant = projectParticipant(identity, identities, cfg);
+    const participant = projectSessionParticipant(identity, identities, cfg);
     participants.set(JSON.stringify(participant.identity), participant);
   }
   return participants;
@@ -183,6 +186,53 @@ export function projectSessionPeople(
     }
   }
   return [...people.values()];
+}
+
+/** Resolve navigation references within the caller-prepared visibility scope. */
+export function resolveSessionListProfileReference(
+  reference: string,
+  entries: readonly SessionEntryPair[],
+  identities: Map<string, SessionActorProfileIdentity | undefined>,
+  allowedProfileIds: ReadonlySet<string> | undefined,
+): Result<string | undefined, "ambiguous"> {
+  const exact = projectSessionParticipant({ type: "profile", id: reference }, identities);
+  if (
+    identities.get(reference) &&
+    (!allowedProfileIds || allowedProfileIds.has(exact.identity.id))
+  ) {
+    return ok(exact.identity.id);
+  }
+  const prefix = /^[0-9a-f]{8,32}$/.test(reference);
+  const matches = new Set<string>();
+  // Qualified associations outlive profile rows. Resolve over caller-visible identities
+  // before time/search filters so hidden associations cannot affect the result.
+  for (const [, entry] of entries) {
+    const ids = [
+      sessionCreatorProfileId(entry.createdActor),
+      ...(entry.participants ?? []).flatMap(({ identity }) =>
+        identity.type === "profile" ? [identity.id] : [],
+      ),
+    ];
+    for (const id of ids) {
+      if (id === reference) {
+        return ok(exact.identity.id);
+      }
+      if (id && prefix && id.replaceAll("-", "").toLowerCase().startsWith(reference)) {
+        matches.add(projectSessionParticipant({ type: "profile", id }, identities).identity.id);
+      }
+    }
+  }
+  const durable = resolveUserProfileReference(
+    reference,
+    allowedProfileIds ? { allowedProfileIds } : {},
+  );
+  if (!durable.ok) {
+    return durable;
+  }
+  if (durable.value) {
+    matches.add(durable.value);
+  }
+  return matches.size > 1 ? err("ambiguous") : ok(matches.values().next().value);
 }
 
 export function projectSessionPeopleFacet(

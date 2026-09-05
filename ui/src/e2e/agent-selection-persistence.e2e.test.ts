@@ -1,7 +1,9 @@
-import { mkdir } from "node:fs/promises";
+import { writeFile } from "node:fs/promises";
 import path from "node:path";
 import type { BrowserContext, Page } from "playwright";
-import { expect, it } from "vitest";
+import { beforeEach, expect, it } from "vitest";
+import { createControlUiE2eArtifactDir } from "../test-helpers/control-ui-e2e-artifacts.ts";
+import { takeControlUiViewportScreenshot } from "../test-helpers/control-ui-e2e-screenshot.ts";
 import {
   controlUiBundledGatewayUrl,
   controlUiBundledSettingsStorageKey,
@@ -20,12 +22,12 @@ const suite = createControlUiE2eSuite({
 });
 
 const captureUiProof = process.env.OPENCLAW_CAPTURE_UI_PROOF === "1";
-const proofDir = path.join(
-  process.cwd(),
-  ".artifacts",
-  "control-ui-e2e",
-  "agent-selection-persistence",
-);
+let proofDir: string;
+beforeEach(() => {
+  if (captureUiProof) {
+    proofDir = createControlUiE2eArtifactDir("agent-selection-persistence");
+  }
+});
 
 const agentsList = {
   agents: [
@@ -78,13 +80,13 @@ async function screenshot(page: Page, name: string) {
   if (!captureUiProof) {
     return;
   }
-  await mkdir(proofDir, { recursive: true });
   await page.waitForTimeout(600);
-  await page.screenshot({
-    animations: "disabled",
-    fullPage: true,
-    path: path.join(proofDir, name),
-  });
+  await writeFile(
+    path.join(proofDir, name),
+    await takeControlUiViewportScreenshot(page, page.locator(".shell"), [
+      page.locator(".sidebar-agent-card__name"),
+    ]),
+  );
 }
 
 async function selectedAgentName(page: Page): Promise<string> {
@@ -101,7 +103,7 @@ async function hasOpenClawStartup(gateway: MockGatewayControls): Promise<boolean
     return (
       params?.agentId === "openclaw" &&
       params.sessionKey === "agent:openclaw:main" &&
-      params.limit === 100
+      params.limit === 80
     );
   });
 }
@@ -139,9 +141,6 @@ async function openPage(
 
 suite.define(() => {
   it("restores the selected agent when a fresh shell reopens the canonical global session", async () => {
-    if (captureUiProof) {
-      await mkdir(proofDir, { recursive: true });
-    }
     const context = await suite.newBrowserContext({
       locale: "en-US",
       serviceWorkers: "block",

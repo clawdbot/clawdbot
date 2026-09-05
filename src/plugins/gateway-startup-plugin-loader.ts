@@ -79,6 +79,7 @@ export function loadGatewayStartupPluginPlanWithMetadata(params: GatewayStartupP
     index: metadataSnapshot.index,
     manifestRegistry: metadataSnapshot.manifestRegistry,
     discovery: metadataSnapshot.discovery,
+    normalizePluginId: metadataSnapshot.normalizePluginId,
     workerProviderIds: params.workerProviderIds ?? [],
     platform: params.platform,
     ambientEnvTriggers: params.ambientEnvTriggers,

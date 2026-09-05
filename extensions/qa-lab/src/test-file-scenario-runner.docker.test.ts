@@ -2,6 +2,7 @@ import fs from "node:fs/promises";
 import path from "node:path";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import {
+  dockerLaneName,
   dockerE2eLaneName,
   prepareDockerE2eEnvironment,
 } from "./test-file-scenario-docker-batch.js";
@@ -26,6 +27,19 @@ afterEach(async () => {
   await harness.cleanup();
 });
 
+it("prepares declared candidates for scripts that own their Docker invocation", () => {
+  const scenario = makeTestFileScenario("script", "scripts/e2e/qa-cli-onboarding.mjs");
+  if (scenario.execution.kind !== "script") {
+    throw new Error("expected script scenario");
+  }
+  expect(
+    dockerLaneName({
+      ...scenario,
+      execution: { ...scenario.execution, dockerLane: "onboard" },
+    }),
+  ).toBe("onboard");
+});
+
 it("only batches the canonical Docker lane argument shape", () => {
   const scenario = makeDockerE2eScenario("docker-lane", "gateway-network");
   if (scenario.execution.kind !== "script") {
@@ -45,10 +59,14 @@ it("prepares the exact Docker lane union in a sanitized bound environment", asyn
   const outputDir = path.join(repoRoot, "out");
   const packagePath = path.join(repoRoot, "openclaw.tgz");
   const registryDir = path.join(repoRoot, "registry");
+  const onboardingScenario = makeTestFileScenario("script", "scripts/e2e/qa-cli-onboarding.mjs");
+  if (onboardingScenario.execution.kind !== "script") {
+    throw new Error("expected script scenario");
+  }
   const runCommand = vi.fn(async (command: QaScenarioCommandExecution) => {
     expect(command.env).toMatchObject({
       KEEP_ME: "yes",
-      OPENCLAW_DOCKER_ALL_LANES: "gateway-network,openai-chat-tools",
+      OPENCLAW_DOCKER_ALL_LANES: "gateway-network,openai-chat-tools,onboard",
       OPENCLAW_DOCKER_E2E_REPO_ROOT: repoRoot,
     });
     expect(command.env).not.toHaveProperty("OPENCLAW_DOCKER_ALL_BUILD");
@@ -87,6 +105,10 @@ it("prepares the exact Docker lane union in a sanitized bound environment", asyn
       makeDockerE2eScenario("one", "gateway-network"),
       makeDockerE2eScenario("duplicate", "gateway-network"),
       makeDockerE2eScenario("two", "openai-chat-tools"),
+      {
+        ...onboardingScenario,
+        execution: { ...onboardingScenario.execution, dockerLane: "onboard" },
+      },
     ],
   });
 

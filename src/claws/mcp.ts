@@ -4,6 +4,7 @@ import { setConfiguredMcpServer } from "../agents/mcp-config-mutation.js";
 import { withClawMcpLifecycleLease } from "../agents/mcp-lifecycle-lease.js";
 import { canonicalizeConfiguredMcpServer } from "../config/mcp-config-normalize.js";
 import { listConfiguredMcpServers } from "../config/mcp-config.js";
+import { coerceRequiredSqliteNumber as sqliteNumber } from "../infra/sqlite-number.js";
 import {
   openOpenClawStateDatabase,
   runOpenClawStateWriteTransaction,
@@ -66,11 +67,11 @@ function rowToRef(row: McpRefRow): PersistedClawMcpServerRef {
     configDigest: row.config_digest,
     relationship: row.relationship,
     origin: row.origin,
-    independentOwner: Number(row.independent_owner) === 1,
+    independentOwner: sqliteNumber(row.independent_owner) === 1,
     status: row.status,
     ...(row.error ? { error: row.error } : {}),
-    createdAtMs: Number(row.created_at_ms),
-    updatedAtMs: Number(row.updated_at_ms),
+    createdAtMs: sqliteNumber(row.created_at_ms),
+    updatedAtMs: sqliteNumber(row.updated_at_ms),
   };
 }
 

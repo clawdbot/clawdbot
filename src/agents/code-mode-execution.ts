@@ -2,30 +2,27 @@ import {
   observeAgentRunApprovalWait,
   type AgentRunApprovalWait,
 } from "./agent-run-approval-wait.js";
-import { codeModeReplayIdForToolCall } from "./code-mode-bridge.js";
+import { codeModeReplayIdForToolCall, isCodeModeSwarmAvailable } from "./code-mode-bridge.js";
 import {
   createCodeModeCatalogProjection,
   type CodeModeCatalogProjection,
 } from "./code-mode-catalog.js";
-import { awaitCodeModeDeadline } from "./code-mode-deadline.js";
 import { CodeModeOutputState } from "./code-mode-json.js";
 import {
   createCodeModeNamespaceRuntime,
   type CodeModeNamespaceRuntime,
 } from "./code-mode-namespaces.js";
-import { registerRepairableCodeModeFailure } from "./code-mode-repair-provenance.js";
 import {
   CODE_MODE_WORKER_WATCHDOG_GRACE_MS,
   codeModeFailureCode,
   codeModeFailureMessage,
   createCodeModeApiFilesForRun,
-  enforceSnapshotPayloadLimits,
-  prepareSource,
   toToolSearchConfig,
   type CodeModeConfig,
   type CodeModeLanguage,
   type CodeModeSettlementMode,
   type CodeModeWorkerResult,
+  type PendingBridgeRequest,
   type SettledBridgeRequest,
 } from "./code-mode-runtime.js";
 import {
@@ -38,7 +35,6 @@ import {
   createCodeModeRunOwner,
   createPendingBridgeStates,
   disposeCodeModeRun,
-  isCodeModeBridgeRepairEligible,
   pendingBridgeRequestsReplaySafe,
   pendingBridgeStatesForSettlement,
   pendingToolCalls,
@@ -53,16 +49,18 @@ import {
   type CodeModeBridgeDispatchState,
   type CodeModeRunOwner,
 } from "./code-mode-state.js";
-import { normalizeCodeModeWorkerResult, runCodeModeWorker } from "./code-mode-worker.js";
+import { runCodeModeWorker } from "./code-mode-worker.js";
 import type { AgentToolUpdateCallback } from "./runtime/index.js";
-import { resolveSwarmConfig } from "./subagents/swarm/swarm-config.js";
-import { ToolSearchRuntime, type ToolSearchToolContext } from "./tool-search.js";
+import type { ToolResultBudget } from "./tool-result-limits.js";
+import { ToolSearchRuntime } from "./tool-search-runtime.js";
+import type { ToolSearchToolContext } from "./tool-search-types.js";
 import { ToolInputError } from "./tools/common.js";
 
 export async function runCodeModeExec(params: {
   toolCallId: string;
   ctx: ToolSearchToolContext;
   config: CodeModeConfig;
+  resultBudget?: ToolResultBudget;
   code: string;
   assistantTurnId?: string;
   language?: CodeModeLanguage;
@@ -79,12 +77,9 @@ export async function runCodeModeExec(params: {
   });
   params.onRuntime?.(runtime);
   const bridgeDispatch = createCodeModeBridgeDispatchState();
-  const deadlineMs = Date.now() + config.timeoutMs;
+  const deadlineMs = performance.now() + config.timeoutMs;
   const namespaceCatalog = runtime.namespaceEntries();
-  const swarmEnabled = resolveSwarmConfig(
-    params.ctx.runtimeConfig ?? params.ctx.config,
-    params.ctx.agentId,
-  ).enabled;
+  const swarmEnabled = isCodeModeSwarmAvailable(params.ctx, namespaceCatalog);
   const codeModeReplayId = codeModeReplayIdForToolCall(
     params.ctx,
     params.toolCallId,
@@ -99,34 +94,26 @@ export async function runCodeModeExec(params: {
   const approvalWait = observeAgentRunApprovalWait(params.ctx);
   const owner = createCodeModeRunOwner(params.ctx);
   const signal = owner.bindCall(params.signal);
-  const output = new CodeModeOutputState(config.maxOutputBytes);
+  const output = new CodeModeOutputState(config.maxOutputBytes, params.resultBudget);
   try {
-    const source = await awaitCodeModeDeadline({
-      operation: () => prepareSource({ code: params.code, language: params.language, config }),
-      remainingMs: deadlineMs - Date.now(),
-      signal,
-      createTimeoutError: () => new Error("interrupted"),
-      createAbortError: () => new Error("code mode execution aborted"),
-    });
-    const remainingMs = deadlineMs - Date.now();
+    const remainingMs = deadlineMs - performance.now();
     if (remainingMs <= 0) {
       throw new Error("interrupted");
     }
-    const result = normalizeCodeModeWorkerResult(
-      await runCodeModeWorker(
-        {
-          kind: "exec",
-          source,
-          config: { ...config, timeoutMs: remainingMs },
-          catalog: catalogProjection.guestBindings,
-          apiFiles,
-          namespaces: namespaceRuntime.descriptors,
-          swarmEnabled,
-        },
-        remainingMs + CODE_MODE_WORKER_WATCHDOG_GRACE_MS,
-        undefined,
-        signal,
-      ),
+    const result = await runCodeModeWorker(
+      {
+        kind: "exec",
+        source: params.code,
+        language: params.language,
+        config: { ...config, timeoutMs: remainingMs },
+        catalog: catalogProjection.guestBindings,
+        apiFiles,
+        namespaces: namespaceRuntime.descriptors,
+        swarmEnabled,
+      },
+      remainingMs + CODE_MODE_WORKER_WATCHDOG_GRACE_MS,
+      undefined,
+      signal,
     );
     output.append(result.output);
     return await settleCodeModeResult({
@@ -149,21 +136,22 @@ export async function runCodeModeExec(params: {
     });
   } catch (error) {
     const code = signal.aborted ? ("aborted" as const) : codeModeFailureCode(error);
-    return {
-      status: "failed" as const,
-      ...output.take({
-        error: signal.aborted ? "code mode execution aborted" : codeModeFailureMessage(error),
-      }),
-      code,
-      failurePhase: bridgeDispatch.started
-        ? ("bridge" as const)
-        : code === "invalid_input"
-          ? ("input" as const)
-          : ("host" as const),
-      bridgeDispatchStarted: bridgeDispatch.started,
-      replaySafe: params.restartSafe,
-      telemetry: telemetry(runtime),
-    };
+    return output.takeResult(
+      {
+        status: "failed" as const,
+        code,
+        failurePhase: bridgeDispatch.started
+          ? ("bridge" as const)
+          : code === "invalid_input"
+            ? ("input" as const)
+            : ("host" as const),
+        bridgeDispatchStarted: bridgeDispatch.started,
+        replaySafe: params.restartSafe,
+        telemetry: telemetry(runtime),
+      },
+      { error: signal.aborted ? "code mode execution aborted" : codeModeFailureMessage(error) },
+      runtime.hasNetworkContent(),
+    );
   } finally {
     approvalWait.dispose();
     if (!activeRuns.has(owner.runId)) {
@@ -177,7 +165,7 @@ function usableResumeBudgetMs(deadlineMs: number, config: CodeModeConfig): numbe
   // resuming with less than this floor converts an otherwise successful run
   // into an immediate interrupt timeout, so callers park the snapshot instead.
   const minimum = Math.min(250, Math.max(1, Math.floor(config.timeoutMs / 2)));
-  const remaining = deadlineMs - Date.now();
+  const remaining = deadlineMs - performance.now();
   return remaining >= minimum ? remaining : undefined;
 }
 
@@ -209,16 +197,16 @@ async function waitForPending(
       bridgeReady,
       new Promise<boolean>((resolve) => {
         let remainingMs = timeoutMs;
-        let resumedAtMs = Date.now();
+        let resumedAtMs = performance.now();
         const arm = () => {
-          resumedAtMs = Date.now();
+          resumedAtMs = performance.now();
           timer = setTimeout(() => resolve(false), Math.max(1, remainingMs));
         };
         approvalWait.onChange = (approvalPending) => {
           if (approvalPending) {
             // Preserve the unused guest budget while its owning approval remains inline.
             clearTimeout(timer);
-            remainingMs = Math.max(1, remainingMs - (Date.now() - resumedAtMs));
+            remainingMs = Math.max(1, remainingMs - (performance.now() - resumedAtMs));
           } else {
             arm();
           }
@@ -274,7 +262,7 @@ async function settleCodeModeResult(params: {
   }
   const activeRunId = params.owner.runId;
   const output = params.output;
-  // One exec/wait call shares a single wall-clock deadline across its initial
+  // One exec/wait call shares a single monotonic deadline across its initial
   // worker run and this inline settle phase, so auto-draining bridge calls
   // cannot stack a second full `timeoutMs` budget on top of the run that
   // produced them. The deadline is also the only bound on sequential drain
@@ -282,6 +270,46 @@ async function settleCodeModeResult(params: {
   // the worker.
   const settleDeadline = () => params.deadlineMs + params.approvalWait.pausedMs;
   const abortedResult = () => codeModeAbortedResult(params);
+  const dispatchNewRequests = (requests: PendingBridgeRequest[]) => {
+    const pendingIds = new Set(pending.map((entry) => entry.id));
+    const newPendingRequests = requests.filter((request) => !pendingIds.has(request.id));
+    pending.push(
+      ...createPendingBridgeStates(newPendingRequests, {
+        config: params.config,
+        runtime: params.runtime,
+        catalogProjection: params.catalogProjection,
+        namespaceRuntime: params.namespaceRuntime,
+        parentToolCallId: params.parentToolCallId,
+        codeModeRunId: params.codeModeReplayId,
+        remainingMs: settleDeadline() - performance.now(),
+        activeRunId,
+        ctx: params.ctx,
+        signal: params.signal,
+        onUpdate: params.onUpdate,
+        bridgeDispatch: params.bridgeDispatch,
+      }),
+    );
+  };
+  const parkSnapshot = (
+    waiting: Extract<CodeModeWorkerResult, { status: "waiting" }>,
+    replaySafe: boolean,
+  ) =>
+    storeSnapshotState({
+      owner: params.owner,
+      replayId: params.codeModeReplayId,
+      pending,
+      replaySafe,
+      settlementMode: waiting.settlementMode,
+      snapshot: waiting.snapshot,
+      parentToolCallId: params.parentToolCallId,
+      ctx: params.ctx,
+      config: params.config,
+      runtime: params.runtime,
+      catalogProjection: params.catalogProjection,
+      namespaceRuntime: params.namespaceRuntime,
+      output,
+      bridgeDispatch: params.bridgeDispatch,
+    });
   // Bridge tool calls (search/describe/call/namespace) run through the same
   // policy-checked executor whether the model awaits them one at a time or in a
   // batch, so resolve them inline within the exec deadline and resume the VM
@@ -303,7 +331,7 @@ async function settleCodeModeResult(params: {
     ) {
       break;
     }
-    const remainingMs = settleDeadline() - Date.now();
+    const remainingMs = settleDeadline() - performance.now();
     if (remainingMs <= 0) {
       break;
     }
@@ -313,34 +341,10 @@ async function settleCodeModeResult(params: {
     }
     let releaseReservation: (() => void) | undefined;
     try {
-      enforceSnapshotPayloadLimits({
-        snapshotBytes: result.snapshotBytes,
-        config: params.config,
-      });
       if (!params.reservedActiveRunSlot) {
         releaseReservation = reserveActiveRunSlot();
       }
-      const pendingIds = new Set(pending.map((entry) => entry.id));
-      const newPendingRequests = result.pendingRequests.filter(
-        (request) => !pendingIds.has(request.id),
-      );
-      pending.push(
-        ...createPendingBridgeStates({
-          pendingRequests: newPendingRequests,
-          config: params.config,
-          runtime: params.runtime,
-          catalogProjection: params.catalogProjection,
-          namespaceRuntime: params.namespaceRuntime,
-          parentToolCallId: params.parentToolCallId,
-          codeModeRunId: params.codeModeReplayId,
-          remainingMs: settleDeadline() - Date.now(),
-          activeRunId,
-          ctx: params.ctx,
-          signal: params.signal,
-          onUpdate: params.onUpdate,
-          bridgeDispatch: params.bridgeDispatch,
-        }),
-      );
+      dispatchNewRequests(result.pendingRequests);
       const ready = await waitForPending(
         pending,
         result.settlementMode,
@@ -361,22 +365,7 @@ async function settleCodeModeResult(params: {
         }
         // Parked rather than resumed: without a usable budget the restore alone
         // would burn the remaining deadline and fail a recoverable run.
-        return storeSnapshotState({
-          owner: params.owner,
-          replayId: params.codeModeReplayId,
-          pending,
-          replaySafe: params.replaySafe,
-          settlementMode: result.settlementMode,
-          snapshotBytes: result.snapshotBytes,
-          parentToolCallId: params.parentToolCallId,
-          ctx: params.ctx,
-          config: params.config,
-          runtime: params.runtime,
-          catalogProjection: params.catalogProjection,
-          namespaceRuntime: params.namespaceRuntime,
-          output,
-          bridgeDispatch: params.bridgeDispatch,
-        });
+        return parkSnapshot(result, params.replaySafe);
       }
       // Deliver the settled frontier only. Unresolved sibling promises remain
       // attached to their original bridge ids across the restored snapshot.
@@ -386,22 +375,20 @@ async function settleCodeModeResult(params: {
       // The resumed guest inherits only the remaining shared budget as its
       // QuickJS interrupt deadline; the extra host margin is watchdog grace,
       // not extra guest run time.
-      result = normalizeCodeModeWorkerResult(
-        await runCodeModeWorker(
-          {
-            kind: "resume",
-            snapshotBytes: result.snapshotBytes,
-            config: {
-              ...params.config,
-              timeoutMs: resumeBudgetMs,
-            },
-            settledRequests,
-            pendingRequests: pending.map(({ id, method, args }) => ({ id, method, args })),
+      result = await runCodeModeWorker(
+        {
+          kind: "resume",
+          snapshot: result.snapshot,
+          config: {
+            ...params.config,
+            timeoutMs: resumeBudgetMs,
           },
-          resumeBudgetMs + CODE_MODE_WORKER_WATCHDOG_GRACE_MS,
-          undefined,
-          params.signal,
-        ),
+          settledRequests,
+          pendingRequests: pending.map(({ id, method, args }) => ({ id, method, args })),
+        },
+        resumeBudgetMs + CODE_MODE_WORKER_WATCHDOG_GRACE_MS,
+        undefined,
+        params.signal,
       );
       output.append(result.output);
       if (result.status === "waiting") {
@@ -426,70 +413,32 @@ async function settleCodeModeResult(params: {
     );
     if (params.replaySafe && !pendingReplaySafe) {
       cancelPendingBridgeStates(pending);
-      return {
-        status: "failed" as const,
-        ...output.take({
+      return output.takeResult(
+        {
+          status: "failed" as const,
+          code: "invalid_input" as const,
+          failurePhase: params.bridgeDispatch.started ? ("bridge" as const) : ("input" as const),
+          bridgeDispatchStarted: params.bridgeDispatch.started,
+          replaySafe: true,
+          telemetry: telemetry(params.runtime),
+        },
+        {
           error: result.pendingRequests.every((request) => request.method === "namespace")
             ? "restart-safe code mode cannot call namespace tools."
-            : "restart-safe code mode cannot call tool surfaces that are not proven replay-safe; recovery runs must use audited read, grep, or find tools.",
-        }),
-        code: "invalid_input" as const,
-        failurePhase: params.bridgeDispatch.started ? ("bridge" as const) : ("input" as const),
-        bridgeDispatchStarted: params.bridgeDispatch.started,
-        replaySafe: true,
-        telemetry: telemetry(params.runtime),
-      };
+            : "restart-safe code mode cannot call tool surfaces that are not proven replay-safe; use audited read, grep, or find tools.",
+        },
+        params.runtime.hasNetworkContent(),
+      );
     }
     let releaseReservation: (() => void) | undefined;
     try {
-      // A resumed guest can grow its next snapshot before the shared deadline
-      // expires; validate that new payload before reserving or parking it.
-      enforceSnapshotPayloadLimits({
-        snapshotBytes: result.snapshotBytes,
-        config: params.config,
-      });
       // Reserve before launching fresh work; transferred snapshots must
       // obey the same process-wide active-run cap as initial suspensions.
       if (!params.reservedActiveRunSlot) {
         releaseReservation = reserveActiveRunSlot();
       }
-      const pendingIds = new Set(pending.map((entry) => entry.id));
-      const newPendingRequests = result.pendingRequests.filter(
-        (request) => !pendingIds.has(request.id),
-      );
-      pending.push(
-        ...createPendingBridgeStates({
-          pendingRequests: newPendingRequests,
-          config: params.config,
-          runtime: params.runtime,
-          catalogProjection: params.catalogProjection,
-          namespaceRuntime: params.namespaceRuntime,
-          parentToolCallId: params.parentToolCallId,
-          codeModeRunId: params.codeModeReplayId,
-          remainingMs: settleDeadline() - Date.now(),
-          activeRunId,
-          ctx: params.ctx,
-          signal: params.signal,
-          onUpdate: params.onUpdate,
-          bridgeDispatch: params.bridgeDispatch,
-        }),
-      );
-      return storeSnapshotState({
-        owner: params.owner,
-        replayId: params.codeModeReplayId,
-        pending,
-        replaySafe: params.replaySafe && pendingReplaySafe,
-        settlementMode: result.settlementMode,
-        snapshotBytes: result.snapshotBytes,
-        parentToolCallId: params.parentToolCallId,
-        ctx: params.ctx,
-        config: params.config,
-        runtime: params.runtime,
-        catalogProjection: params.catalogProjection,
-        namespaceRuntime: params.namespaceRuntime,
-        output,
-        bridgeDispatch: params.bridgeDispatch,
-      });
+      dispatchNewRequests(result.pendingRequests);
+      return parkSnapshot(result, params.replaySafe && pendingReplaySafe);
     } catch (error) {
       cancelPendingBridgeStates(pending);
       throw error;
@@ -500,28 +449,23 @@ async function settleCodeModeResult(params: {
   // Defensive cleanup covers aborts or terminal failures; successful runs have
   // already drained every dispatched call before releasing their snapshot.
   cancelPendingBridgeStates(pending);
-  const bounded = output.take({
+  const channels = {
     ...(result.status === "completed" ? { value: result.value } : {}),
     ...(result.status === "failed" ? { error: result.error } : {}),
-  });
-  const finalized = {
-    ...result,
-    ...(bounded.error !== undefined ? { error: bounded.error } : {}),
-    ...(result.status === "completed" ? { value: bounded.value } : {}),
+  };
+  const metadata = {
     ...(result.status === "failed"
       ? {
+          status: result.status,
+          code: result.code,
           failurePhase: params.bridgeDispatch.started ? ("bridge" as const) : result.failurePhase,
           bridgeDispatchStarted: params.bridgeDispatch.started,
         }
-      : {}),
-    output: bounded.output,
+      : { status: result.status }),
     replaySafe: params.replaySafe,
     telemetry: telemetry(params.runtime),
   };
-  if (finalized.status === "failed" && isCodeModeBridgeRepairEligible(params.bridgeDispatch)) {
-    registerRepairableCodeModeFailure(finalized);
-  }
-  return finalized;
+  return output.takeResult(metadata, channels, params.runtime.hasNetworkContent());
 }
 
 export async function runWait(params: {
@@ -552,9 +496,9 @@ export async function runWait(params: {
   }
   params.onRuntime?.(state.runtime);
   resumingRunIds.add(state.runId);
-  // One wait call shares a single wall-clock deadline across draining the prior
+  // One wait call shares a single monotonic deadline across draining the prior
   // pending calls, the resume worker, and the inline settle phase.
-  const deadlineMs = Date.now() + state.config.timeoutMs;
+  const deadlineMs = performance.now() + state.config.timeoutMs;
   const approvalWait = observeAgentRunApprovalWait(state.ctx);
   const signal = state.owner.bindCall(
     params.ctx.abortSignal && params.signal
@@ -566,7 +510,7 @@ export async function runWait(params: {
     const ready = await waitForPending(
       state.pending,
       state.settlementMode,
-      Math.max(1, deadlineMs - Date.now()),
+      Math.max(1, deadlineMs - performance.now()),
       approvalWait,
       signal,
     );
@@ -584,15 +528,18 @@ export async function runWait(params: {
       // so the next wait can resume with a fresh deadline instead of losing
       // the run to a restore-only interrupt timeout.
       const pending = state.pending.filter((entry) => !entry.settled);
-      return {
-        status: "waiting" as const,
-        runId: state.runId,
-        reason: codeModeWaitingReason(pending.length > 0 ? pending : state.pending),
-        pendingToolCalls: pendingToolCalls(pending.length > 0 ? pending : state.pending),
-        replaySafe: state.replaySafe,
-        output: state.output.take().output,
-        telemetry: telemetry(state.runtime),
-      };
+      return state.output.takeResult(
+        {
+          status: "waiting" as const,
+          runId: state.runId,
+          reason: codeModeWaitingReason(pending.length > 0 ? pending : state.pending),
+          pendingToolCalls: pendingToolCalls(pending.length > 0 ? pending : state.pending),
+          replaySafe: state.replaySafe,
+          telemetry: telemetry(state.runtime),
+        },
+        {},
+        state.runtime.hasNetworkContent(),
+      );
     }
 
     const settledRequests: SettledBridgeRequest[] = settledBridgeRequestsInCompletionOrder(
@@ -604,22 +551,20 @@ export async function runWait(params: {
     releaseActiveRunSlot = reserveActiveRunSlot(state.runId);
     // The resumed guest inherits only the remaining shared budget as its QuickJS
     // interrupt deadline; the extra host margin is watchdog grace only.
-    const result = normalizeCodeModeWorkerResult(
-      await runCodeModeWorker(
-        {
-          kind: "resume",
-          snapshotBytes: state.snapshotBytes,
-          config: {
-            ...state.config,
-            timeoutMs: resumeBudgetMs,
-          },
-          settledRequests,
-          pendingRequests: pending.map(({ id, method, args }) => ({ id, method, args })),
+    const result = await runCodeModeWorker(
+      {
+        kind: "resume",
+        snapshot: state.snapshot,
+        config: {
+          ...state.config,
+          timeoutMs: resumeBudgetMs,
         },
-        resumeBudgetMs + CODE_MODE_WORKER_WATCHDOG_GRACE_MS,
-        undefined,
-        signal,
-      ),
+        settledRequests,
+        pendingRequests: pending.map(({ id, method, args }) => ({ id, method, args })),
+      },
+      resumeBudgetMs + CODE_MODE_WORKER_WATCHDOG_GRACE_MS,
+      undefined,
+      signal,
     );
     state.output.append(result.output);
     return await settleCodeModeResult({
@@ -646,17 +591,18 @@ export async function runWait(params: {
     const aborted = signal.aborted;
     state.owner.close();
     cancelPendingBridgeStates(state.pending);
-    return {
-      status: "failed" as const,
-      ...state.output.take({
-        error: aborted ? "code mode execution aborted" : codeModeFailureMessage(error),
-      }),
-      code: aborted ? ("aborted" as const) : codeModeFailureCode(error),
-      failurePhase: "bridge" as const,
-      bridgeDispatchStarted: state.bridgeDispatch.started,
-      replaySafe: state.replaySafe,
-      telemetry: telemetry(state.runtime),
-    };
+    return state.output.takeResult(
+      {
+        status: "failed" as const,
+        code: aborted ? ("aborted" as const) : codeModeFailureCode(error),
+        failurePhase: "bridge" as const,
+        bridgeDispatchStarted: state.bridgeDispatch.started,
+        replaySafe: state.replaySafe,
+        telemetry: telemetry(state.runtime),
+      },
+      { error: aborted ? "code mode execution aborted" : codeModeFailureMessage(error) },
+      state.runtime.hasNetworkContent(),
+    );
   } finally {
     approvalWait.dispose();
     releaseActiveRunSlot?.();
@@ -666,5 +612,3 @@ export async function runWait(params: {
     }
   }
 }
-
-/** Create the exec/wait control tools for one Code Mode run context. */

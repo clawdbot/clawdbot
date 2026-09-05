@@ -1,6 +1,8 @@
 import { asOptionalRecord } from "@openclaw/normalization-core/record-coerce";
 import type { TranscriptDisplayPosition } from "../chat/transcript-display-position.js";
+import { isVisibleTranscriptRecord } from "../sessions/transcript-visible-record.js";
 import {
+  createCurrentUserProfileMessageProjector,
   projectChatDisplayMessage,
   projectChatDisplayMessagesWithState,
 } from "./chat-display-projection.js";
@@ -57,6 +59,7 @@ export function projectSessionMessagePayload(params: {
   messageSeq?: number;
   transcriptPosition?: TranscriptDisplayPosition;
   projectionState?: SessionMessageProjectionState;
+  projectCurrentUserProfile?: (message: Record<string, unknown>) => Record<string, unknown>;
   runId?: string;
   sessionKey: string;
   sessionSnapshot?: Record<string, unknown>;
@@ -72,12 +75,11 @@ export function projectSessionMessagePayload(params: {
   });
   const projected = params.projectionState
     ? projectChatDisplayMessagesWithState([rawMessage], {
-        resolveCurrentUserProfileDisplay,
         streamErrorFallbackPending: params.projectionState.streamErrorFallbackPending,
         turnBoundaryPending: params.projectionState.turnBoundaryPending,
       })
     : {
-        messages: [projectChatDisplayMessage(rawMessage, { resolveCurrentUserProfileDisplay })],
+        messages: [projectChatDisplayMessage(rawMessage)],
         streamErrorFallbackPending: false,
         turnBoundaryPending: false,
       };
@@ -89,12 +91,15 @@ export function projectSessionMessagePayload(params: {
   if (!message) {
     return { projectionState };
   }
+  const projectCurrentUserProfile =
+    params.projectCurrentUserProfile ??
+    createCurrentUserProfileMessageProjector(resolveCurrentUserProfileDisplay);
   return {
     payload: {
       sessionKey: params.sessionKey,
       ...(senderIsOwner === undefined ? {} : { senderIsOwner }),
       ...(params.agentId ? { agentId: params.agentId } : {}),
-      message,
+      message: projectCurrentUserProfile(message),
       ...(params.messageId ? { messageId: params.messageId } : {}),
       ...(params.messageSeq !== undefined ? { messageSeq: params.messageSeq } : {}),
       ...params.sessionSnapshot,
@@ -110,10 +115,10 @@ export function projectTranscriptEntryMessage(
   seq: number,
   transcriptPosition?: TranscriptDisplayPosition,
 ): unknown {
-  if (!entry || typeof entry !== "object" || Array.isArray(entry)) {
+  if (!isVisibleTranscriptRecord(entry)) {
     return null;
   }
-  const record = entry as Record<string, unknown>;
+  const record = entry;
   if (record.message) {
     const recordTimestampMs =
       typeof record.timestamp === "string"
@@ -134,6 +139,8 @@ export function projectTranscriptEntryMessage(
     return null;
   }
   const kind = record.type;
+  const compactionIdentity =
+    kind === "compaction" ? asOptionalRecord(record["__openclaw"]) : undefined;
   const parsedTimestamp =
     typeof record.timestamp === "string" ? Date.parse(record.timestamp) : Number.NaN;
   return {
@@ -143,6 +150,10 @@ export function projectTranscriptEntryMessage(
     __openclaw: {
       kind,
       id: typeof record.id === "string" ? record.id : undefined,
+      ...(typeof compactionIdentity?.runId === "string" ? { runId: compactionIdentity.runId } : {}),
+      ...(typeof compactionIdentity?.itemId === "string"
+        ? { itemId: compactionIdentity.itemId }
+        : {}),
       transcriptPosition,
       seq,
     },

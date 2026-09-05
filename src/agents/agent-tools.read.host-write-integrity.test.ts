@@ -4,6 +4,7 @@ import os from "node:os";
 import path from "node:path";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { createHostWorkspaceEditTool, createHostWorkspaceWriteTool } from "./agent-tools.read.js";
+import { createApplyPatchTool } from "./apply-patch.js";
 
 describe("unrestricted host tool writes", () => {
   let tempDir = "";
@@ -22,6 +23,47 @@ describe("unrestricted host tool writes", () => {
     await fs.writeFile(filePath, content);
     return filePath;
   }
+
+  it.each(["write", "edit", "apply_patch"] as const)(
+    "fences %s after asynchronous file preparation when permissions change",
+    async (kind) => {
+      const filePath = await createFile("original content\n");
+      const generation = new AbortController();
+      const realOpen = fs.open.bind(fs);
+      vi.spyOn(fs, "open").mockImplementation(async (target, flags, mode) => {
+        const handle = await realOpen(target, flags as never, mode as never);
+        if (String(target) === filePath && flags === "r+") {
+          const read = handle.read.bind(handle);
+          handle.read = (async (...args: Parameters<typeof read>) => {
+            const result = await read(...args);
+            generation.abort(new Error("Permission change"));
+            return result;
+          }) as typeof handle.read;
+        }
+        return handle;
+      });
+      const options = { workspaceOnly: false, abortSignal: generation.signal };
+      const execute = () => {
+        if (kind === "apply_patch") {
+          return createApplyPatchTool({ cwd: tempDir, ...options }).execute("permission-write", {
+            input: `*** Begin Patch\n*** Update File: ${filePath}\n@@\n-original content\n+replacement content\n*** End Patch`,
+          });
+        }
+        const tool =
+          kind === "write"
+            ? createHostWorkspaceWriteTool(tempDir, options)
+            : createHostWorkspaceEditTool(tempDir, options);
+        const input =
+          kind === "write"
+            ? { path: filePath, content: "replacement content\n" }
+            : { path: filePath, edits: [{ oldText: "original", newText: "replacement" }] };
+        return tool.execute("permission-write", input);
+      };
+
+      await expect(execute()).rejects.toThrow("Permission change");
+      expect(await fs.readFile(filePath, "utf8")).toBe("original content\n");
+    },
+  );
 
   function failExtensionWrites(filePath: string, originalByteLength: number) {
     const realOpen = fs.open.bind(fs);

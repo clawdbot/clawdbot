@@ -4,6 +4,7 @@ import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { useAutoCleanupTempDirTracker } from "../../../test/helpers/temp-dir.js";
 import type { OpenClawConfig } from "../../config/config.js";
 import * as pdfExtractModule from "../../media/pdf-extract.js";
 import * as webMedia from "../../media/web-media.js";
@@ -22,6 +23,7 @@ import {
 
 const completeMock = vi.hoisted(() => vi.fn());
 const registerProviderStreamForModelMock = vi.hoisted(() => vi.fn());
+const tempDirs = useAutoCleanupTempDirTracker(afterEach);
 
 vi.mock("../../llm/stream.js", async () => {
   const actual = await vi.importActual<typeof import("../../llm/stream.js")>("../../llm/stream.js");
@@ -477,6 +479,39 @@ describe("createPdfTool", () => {
     },
   );
 
+  it("resolves a producer-staged bare PDF handle", async () => {
+    await withTempPdfAgentDir(async (agentDir) => {
+      const workspaceDir = tempDirs.make("openclaw-pdf-sandbox-");
+      const stagedPath = "media/inbound/openclaw-staged-proof/input-file_upload.pdf";
+      await fs.mkdir(path.dirname(path.join(workspaceDir, stagedPath)), { recursive: true });
+      await fs.writeFile(path.join(workspaceDir, stagedPath), FAKE_PDF_MEDIA.buffer);
+      await stubPdfToolInfra(agentDir, {
+        mockLoad: false,
+        provider: "anthropic",
+        input: ["text", "document"],
+      });
+      vi.spyOn(pdfNativeProviders, "anthropicAnalyzePdf").mockResolvedValue("native summary");
+      const tool = requirePdfTool(
+        (await loadCreatePdfTool())({
+          config: withPdfModel(ANTHROPIC_PDF_MODEL),
+          agentDir,
+          workspaceDir,
+          sandbox: {
+            root: workspaceDir,
+            bridge: createContainerWorkspaceSandboxFsBridge(workspaceDir),
+            stagedMediaPaths: new Map([["file_upload", stagedPath]]),
+          },
+          fsPolicy: { workspaceOnly: true },
+        }),
+      );
+
+      const result = await tool.execute("t1", { prompt: "summarize", pdf: "file_upload" });
+
+      expect(result.content).toEqual([{ type: "text", text: "native summary" }]);
+      expect(result.details).toMatchObject({ rewrittenFrom: "file_upload" });
+    });
+  });
+
   it("passes web_fetch SSRF policy when loading remote PDFs", async () => {
     await withTempPdfAgentDir(async (agentDir) => {
       const { loadSpy } = await stubPdfToolInfra(agentDir, {
@@ -643,6 +678,7 @@ describe("createPdfTool", () => {
       expectFields(result.details, {
         native: false,
         model: OPENAI_PDF_MODEL,
+        text: "fallback summary",
       });
       expect(firstCompletionContext()?.systemPrompt).toBeUndefined();
     });

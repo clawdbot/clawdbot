@@ -182,6 +182,7 @@ describe("exec resolve_exec_env hook wiring", () => {
       security: "full",
       ask: "off",
       sessionKey: "agent:main:telegram:chat-1",
+      sessionId: "session-1",
       messageProvider: "telegram",
       currentChannelId: "chat-1",
       channelContext: {
@@ -204,6 +205,7 @@ describe("exec resolve_exec_env hook wiring", () => {
       {
         agentId: "main",
         sessionKey: "agent:main:telegram:chat-1",
+        sessionId: "session-1",
         messageProvider: "telegram",
         channelId: "chat-1",
         channelContext: {
@@ -541,6 +543,8 @@ describe("exec resolve_exec_env hook wiring", () => {
       host: "sandbox",
       security: "full",
       ask: "off",
+      agentId: "policy-agent",
+      sessionKey: "global",
       sandbox: {
         containerName: "remote-sandbox-workdir-test",
         workspaceDir: process.cwd(),
@@ -553,6 +557,7 @@ describe("exec resolve_exec_env hook wiring", () => {
     const [definition] = toToolDefinitions([tool], {
       agentId: "ctx-agent",
       sessionKey: "agent:ctx-agent:telegram:chat-2",
+      sessionId: "ctx-session",
       channelId: "ctx-channel",
     });
 
@@ -579,6 +584,7 @@ describe("exec resolve_exec_env hook wiring", () => {
     expect(mocks.hookRunner.runResolveExecEnv!.mock.calls[0]?.[1]).toMatchObject({
       agentId: "ctx-agent",
       sessionKey: "agent:ctx-agent:telegram:chat-2",
+      sessionId: "ctx-session",
       channelId: "ctx-channel",
     });
     expect(buildExecSpec.mock.calls[0]?.[0]?.env).toMatchObject({
@@ -743,6 +749,7 @@ describe("exec resolve_exec_env hook wiring", () => {
   });
 
   it("recomputes plugin env when before_tool_call changes exec host", async () => {
+    const executionSessionKey = "agent:main:telegram:chat-1";
     mocks.hookRunner = {
       hasHooks: vi.fn(
         (hookName: string) => hookName === "resolve_exec_env" || hookName === "before_tool_call",
@@ -759,11 +766,12 @@ describe("exec resolve_exec_env hook wiring", () => {
       host: "auto",
       security: "full",
       ask: "off",
-      sessionKey: "agent:main:telegram:chat-1",
+      agentId: "policy-agent",
+      sessionKey: "global",
     });
     const [definition] = toToolDefinitions([tool], {
       agentId: "main",
-      sessionKey: "agent:main:telegram:chat-1",
+      sessionKey: executionSessionKey,
     });
 
     await expectDefined(definition, "definition test invariant").execute(
@@ -778,16 +786,13 @@ describe("exec resolve_exec_env hook wiring", () => {
     );
 
     expect(mocks.hookRunner.runResolveExecEnv!).toHaveBeenCalledTimes(2);
-    expect(mocks.hookRunner.runResolveExecEnv!).toHaveBeenNthCalledWith(
-      1,
-      expect.objectContaining({ host: "gateway" }),
-      expect.anything(),
-    );
-    expect(mocks.hookRunner.runResolveExecEnv!).toHaveBeenNthCalledWith(
-      2,
-      expect.objectContaining({ host: "node" }),
-      expect.anything(),
-    );
+    for (const [index, host] of ["gateway", "node"].entries()) {
+      expect(mocks.hookRunner.runResolveExecEnv!).toHaveBeenNthCalledWith(
+        index + 1,
+        expect.objectContaining({ host, sessionKey: executionSessionKey }),
+        expect.objectContaining({ agentId: "main", sessionKey: executionSessionKey }),
+      );
+    }
     expect(mocks.nodeHostParams[0]?.requestedEnv).toEqual({
       NODE_PLUGIN_SAFE: "node",
       REQUEST_SAFE: "request",

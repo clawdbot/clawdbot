@@ -5,6 +5,7 @@ import {
   isEmbeddedAgentRunInProgress,
   waitForEmbeddedAgentRunEnd,
 } from "../../agents/embedded-agent-runner/runs.js";
+import { createAgentRunDirectAbortError } from "../../agents/run-termination.js";
 import { clearSessionQueues } from "../../auto-reply/reply/queue/cleanup.js";
 import { hasPendingFollowupQueueWork } from "../../auto-reply/reply/queue/state.js";
 import {
@@ -16,11 +17,14 @@ import {
 import { withTimeout } from "../../infra/fs-safe.js";
 import { getCommandLaneSnapshot } from "../../process/command-queue.js";
 import {
-  interruptSessionWorkAdmissions,
+  closeSessionWorkAdmissions,
+  startSessionWorkAdmissionInterruption,
   isCompetingSessionWorkAdmissionActive,
+  runExclusiveSessionLifecycleMutation,
   SESSION_WORK_ADMISSION_DRAIN_TIMEOUT_MS,
 } from "../../sessions/session-lifecycle-admission.js";
 import { waitForChatAbortControllerRemoval } from "../chat-abort-lifecycle-internal.js";
+import { createChatAbortOps } from "../chat-abort-ops.js";
 import type { AgentTerminalSessionDrain } from "../terminal/session-manager.types.js";
 import {
   beginWorkerInferenceSessionDrain,
@@ -34,7 +38,6 @@ import {
 } from "../worker-environments/session-placement-lifecycle.js";
 import {
   abortChatRunsForSessionKeyWithPartials,
-  createChatAbortOps,
   hasGatewaySessionAbortOwner,
 } from "./chat-abort-runtime.js";
 import type { GatewayRequestContext } from "./types.js";
@@ -47,6 +50,7 @@ type LifecyclePlacementService = NonNullable<
 type SessionLifecycleParams = {
   action: "archive" | "delete";
   authorize?: () => void;
+  beforeCancel?: () => void;
   context: GatewayRequestContext;
   storePath: string;
   sessionKeys: string[];
@@ -58,6 +62,7 @@ type SessionLifecycleParams = {
 };
 
 export type SessionLifecycleDrain = {
+  handoffToMutation(): void;
   release(): void;
   hasAuthoritativeWork(): boolean;
 };
@@ -94,13 +99,10 @@ function hasAuthoritativeSessionWork(
   );
 }
 
-/** Fence is already active when this starts; retain the returned runtime fence through commit. */
+/** Drain outside mutation locks; retain the closure until the final mutation owns ingress. */
 export async function prepareSessionLifecycleDrain(
   params: SessionLifecycleParams,
 ): Promise<SessionLifecycleDrain> {
-  // Reject unsafe placement before cancellation, then retain this exact owner across drains.
-  params.authorize?.();
-  const reclaim = prepareSessionWorkerPlacementStop(params);
   const timeoutMs = SESSION_WORK_ADMISSION_DRAIN_TIMEOUT_MS;
   const workIdentities = Array.from(
     new Set([...params.sessionKeys, ...(params.sessionId ? [params.sessionId] : [])]),
@@ -109,69 +111,98 @@ export async function prepareSessionLifecycleDrain(
   const workerControl = asWorkerInferenceControl(workerService);
   let workerDrain: WorkerInferenceSessionDrain | undefined;
   let terminalDrain: AgentTerminalSessionDrain | undefined;
+  let releaseAdmissions = () => {};
+  let released = false;
   const release = () => {
+    if (released) {
+      return;
+    }
+    released = true;
     try {
       terminalDrain?.release();
     } finally {
-      workerDrain?.release();
+      try {
+        workerDrain?.release();
+      } finally {
+        releaseAdmissions();
+      }
     }
   };
   try {
-    if (params.sessionId) {
-      workerDrain = beginWorkerInferenceSessionDrain(workerService, params.sessionId);
-      if (!workerDrain && workerControl?.hasInferenceForSession(params.sessionId) === true) {
-        throw new Error("Worker inference drain is unavailable");
-      }
-      terminalDrain = params.context.terminalSessions?.beginAgentSessionDrain({
-        kind: "agent",
-        agentSessionKey: params.sessionKey,
-        agentSessionId: params.sessionId,
-        agentId: params.agentId,
-      });
-    }
-
-    let controllerDrain = Promise.resolve(true);
-    const abortResult = await abortChatRunsForSessionKeyWithPartials({
-      context: params.context,
-      ops: createChatAbortOps(params.context),
-      sessionKey: params.sessionKeys[0]!,
-      sessionKeyAliases: params.sessionKeys.slice(1),
-      sessionId: params.sessionId,
-      agentId: params.agentId,
-      defaultAgentId: params.defaultAgentId,
-      abortOrigin: "rpc",
-      stopReason: params.action,
-      requester: { isAdmin: true },
-      includeProtectedRuns: true,
-      onControllerTargets: (targets) => {
-        controllerDrain = waitForChatAbortControllerRemoval({
-          entries: params.context.chatAbortControllers,
-          targets,
-          timeoutMs,
+    const prepared = await runExclusiveSessionLifecycleMutation({
+      scope: params.storePath,
+      identities: params.lifecycleIdentities,
+      run: async () => {
+        // Settle preceding mutations before selecting owners, but never await their
+        // cancellation completion here: it may need placement and lifecycle recovery.
+        params.authorize?.();
+        params.beforeCancel?.();
+        const reclaim = prepareSessionWorkerPlacementStop(params);
+        releaseAdmissions = closeSessionWorkAdmissions({
+          scope: params.storePath,
+          identities: params.lifecycleIdentities,
+          reason: createAgentRunDirectAbortError(),
         });
-      },
-      onAuthorizedAfterQueuedAbort: () => {
-        const cleared = clearSessionQueues(workIdentities);
-        let aborted = cleared.followupCleared > 0 || cleared.laneCleared > 0;
-        for (const key of params.sessionKeys) {
-          aborted = replyRunRegistry.abort(key) || aborted;
-        }
         if (params.sessionId) {
-          aborted = abortReplyRunBySessionId(params.sessionId) || aborted;
-          aborted = abortEmbeddedAgentRun(params.sessionId) || aborted;
+          workerDrain = beginWorkerInferenceSessionDrain(workerService, params.sessionId);
+          if (!workerDrain && workerControl?.hasInferenceForSession(params.sessionId) === true) {
+            throw new Error("Worker inference drain is unavailable");
+          }
+          terminalDrain = params.context.terminalSessions?.beginAgentSessionDrain({
+            kind: "agent",
+            agentSessionKey: params.sessionKey,
+            agentSessionId: params.sessionId,
+            agentId: params.agentId,
+          });
         }
-        return aborted;
+
+        let controllerDrain = Promise.resolve(true);
+        const cancellation = abortChatRunsForSessionKeyWithPartials({
+          context: params.context,
+          ops: createChatAbortOps(params.context),
+          sessionKey: params.sessionKeys[0]!,
+          sessionKeyAliases: params.sessionKeys.slice(1),
+          sessionId: params.sessionId,
+          agentId: params.agentId,
+          defaultAgentId: params.defaultAgentId,
+          abortOrigin: "rpc",
+          stopReason: params.action,
+          requester: { isAdmin: true },
+          includeProtectedRuns: true,
+          onControllerTargets: (targets) => {
+            controllerDrain = waitForChatAbortControllerRemoval({
+              entries: params.context.chatAbortControllers,
+              targets,
+              timeoutMs,
+            });
+          },
+          onAuthorizedAfterQueuedAbort: () => {
+            const cleared = clearSessionQueues(workIdentities);
+            let aborted = cleared.followupCleared > 0 || cleared.laneCleared > 0;
+            for (const key of params.sessionKeys) {
+              aborted = replyRunRegistry.abort(key) || aborted;
+            }
+            if (params.sessionId) {
+              aborted = abortReplyRunBySessionId(params.sessionId) || aborted;
+              aborted = abortEmbeddedAgentRun(params.sessionId) || aborted;
+            }
+            return aborted;
+          },
+        });
+        // Observe failures immediately while the short mutation releases its queues.
+        void cancellation.catch(() => {});
+        return { reclaim, cancellation, controllerDrain };
       },
     });
+    const abortResult = await prepared.cancellation;
     if (abortResult.unauthorized) {
       throw new Error("Session cancellation lost ownership");
     }
 
     params.authorize?.();
-    const admittedWork = interruptSessionWorkAdmissions({
+    const { released: admittedWork } = startSessionWorkAdmissionInterruption({
       scope: params.storePath,
       identities: params.lifecycleIdentities,
-      timeoutMs,
     });
     const replyWork = Promise.all([
       ...params.sessionKeys.map((key) => replyRunRegistry.waitForIdle(key, timeoutMs)),
@@ -203,8 +234,7 @@ export async function prepareSessionLifecycleDrain(
         )
       : Promise.resolve(true);
     const drains = await Promise.all([
-      controllerDrain,
-      admittedWork,
+      prepared.controllerDrain,
       replyWork,
       embeddedWork,
       placementWork,
@@ -215,12 +245,17 @@ export async function prepareSessionLifecycleDrain(
       throw new Error("Session work is still active after the lifecycle drain");
     }
     // Safe reclaim must finish before the archive or delete can commit.
-    await reclaim();
+    await prepared.reclaim();
+    // Provider settlement keeps its placement custody and deadline. Only after reclaim
+    // finishes does the ordinary admission bound apply, including for local sessions.
+    await withTimeout(admittedWork, timeoutMs, "session work admission lifecycle drain");
     const assertPlacementCurrent = prepareSessionWorkerPlacementMutationCheck({
       context: params.context,
       sessionId: params.sessionId,
     });
     return {
+      // Only the caller's active mutation may replace this mutex-free ingress lease.
+      handoffToMutation: () => releaseAdmissions(),
       release,
       hasAuthoritativeWork: () => {
         try {

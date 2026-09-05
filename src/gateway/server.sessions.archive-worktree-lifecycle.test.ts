@@ -18,6 +18,7 @@ import {
   patchSessionEntryCore,
 } from "../config/sessions/session-accessor.js";
 import { resolveSqliteTargetFromSessionStorePath } from "../config/sessions/session-sqlite-target.js";
+import { createDeferredCore } from "../shared/deferred.js";
 import { openOpenClawAgentDatabase } from "../state/openclaw-agent-db.js";
 import { flushPendingSessionsChangedEvents } from "./server-methods/session-change-event.js";
 import {
@@ -31,12 +32,13 @@ const { createArchiveWorktreeFixture } = setupGatewaySessionsWorktreeTestHarness
 const execFileAsync = promisify(execFile);
 
 test.each([
-  ["sessions.patch", false],
-  ["sessions.patchMany", false],
-  ["sessions.patch", true],
+  ["sessions.patch", false, false],
+  ["sessions.patchMany", false, false],
+  ["sessions.patch", true, false],
+  ["sessions.patch", false, true],
 ] as const)(
-  "%s archives the checkout and restores dirty work without deleting the conversation (already archived=%s)",
-  async (method, alreadyArchived) => {
+  "%s archives the checkout and restores dirty work without deleting the conversation (already archived=%s, catalog preparation=%s)",
+  async (method, alreadyArchived, prepareCatalog) => {
     const fixture = await createArchiveWorktreeFixture();
     const { key, sessionId, storePath, worktree, workspace } = fixture;
     await fs.writeFile(path.join(worktree.path, "committed.txt"), "unpushed work\n");
@@ -52,12 +54,25 @@ test.each([
         skipMaintenance: true,
       });
     }
+    const catalogEntered = createDeferredCore();
+    const catalogRelease = createDeferredCore();
+    const loadGatewayModelCatalog = vi.fn(async () => {
+      catalogEntered.resolve();
+      await catalogRelease.promise;
+      return [];
+    });
     const patch = (archived: boolean) =>
       directSessionReq(
         method,
         method === "sessions.patch"
-          ? { key, expectedSessionId: sessionId, archived }
+          ? {
+              key,
+              expectedSessionId: sessionId,
+              archived,
+              ...(!archived && prepareCatalog ? { thinkingLevel: "off" } : {}),
+            }
           : { targets: [{ key, expectedSessionId: sessionId }], patch: { archived } },
+        !archived && prepareCatalog ? { context: { loadGatewayModelCatalog } } : undefined,
       );
 
     expect(await patch(true)).toMatchObject({ ok: true });
@@ -76,7 +91,30 @@ test.each([
     ).not.toContain(worktree.path);
     await expect(loadSeededTranscriptEvents(fixture.transcriptScope)).resolves.toEqual(transcript);
 
-    expect(await patch(false)).toMatchObject({ ok: true });
+    const restore = prepareCatalog ? vi.spyOn(managedWorktrees, "restore") : undefined;
+    const restored = patch(false);
+    try {
+      if (prepareCatalog) {
+        await Promise.race([catalogEntered.promise, restored]);
+        expect(loadGatewayModelCatalog).toHaveBeenCalledOnce();
+        expect(restore).not.toHaveBeenCalled();
+        expect(loadSessionEntry({ storePath, sessionKey: key })?.archivedAt).toEqual(
+          expect.any(Number),
+        );
+        await expect(fs.access(worktree.path)).rejects.toThrow();
+      }
+      catalogRelease.resolve();
+      expect(await restored).toMatchObject({ ok: true });
+      if (prepareCatalog) {
+        expect(restore).toHaveBeenCalledOnce();
+        expect(loadGatewayModelCatalog).toHaveBeenCalledOnce();
+        expect(loadSessionEntry({ storePath, sessionKey: key })?.thinkingLevel).toBe("off");
+      }
+    } finally {
+      catalogRelease.resolve();
+      await Promise.allSettled([restored]);
+      restore?.mockRestore();
+    }
     expect(loadSessionEntry({ storePath, sessionKey: key })?.archivedAt).toBeUndefined();
     expect(getRegistryWorktree(process.env, worktree.id)?.removedAt).toBeUndefined();
     await expect(fs.readFile(path.join(worktree.path, "README.md"), "utf8")).resolves.toBe(
@@ -377,6 +415,7 @@ test.each(["checkout-failed", "expired", "source-missing"] as const)(
         error: { code: "UNAVAILABLE", retryable: true },
       });
       expect(restored.error?.message).toContain("worktree");
+      expect(restored.error?.message).not.toMatch(/worktree slot/i);
       expect(restored.error?.message).toContain(
         failure === "checkout-failed" ? "Free disk space" : "new worktree task",
       );

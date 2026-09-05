@@ -11,7 +11,6 @@ import { resolveRequiredHomeDir } from "../../infra/home-dir.js";
 import { resolveOpenClawPackageRoot } from "../../infra/openclaw-root.js";
 import { readPackageName, readPackageVersion } from "../../infra/package-json.js";
 import { normalizePackageTagInput } from "../../infra/package-tag.js";
-import { trimLogTail } from "../../infra/restart-sentinel.js";
 import { parseSemver } from "../../infra/runtime-guard.js";
 import { fetchNpmTagVersion } from "../../infra/update-check.js";
 import {
@@ -22,6 +21,7 @@ import {
   type CommandRunner,
   type GlobalInstallManager,
 } from "../../infra/update-global.js";
+import { runStep } from "../../infra/update-runner-command.js";
 import type { UpdateStepProgress, UpdateStepResult } from "../../infra/update-runner.js";
 import { runCommandWithTimeout } from "../../process/exec.js";
 import { defaultRuntime } from "../../runtime.js";
@@ -30,6 +30,8 @@ import { COMPLETION_SKIP_PLUGIN_COMMANDS_ENV } from "../completion-runtime.js";
 import { isJsonOutputModeActive } from "../json-output-mode.js";
 
 export type UpdateCommandOptions = {
+  /** Internal orchestration context, shared across update phases and child processes. */
+  run?: { runId: string; env: NodeJS.ProcessEnv };
   acceptCapabilities?: boolean;
   json?: boolean;
   restart?: boolean;
@@ -61,32 +63,50 @@ export type UpdateWizardOptions = {
   timeout?: string;
 };
 
+export class UpdatePreMutationError extends Error {
+  constructor(
+    readonly reason: string,
+    message: string,
+  ) {
+    super(message);
+    this.name = "UpdatePreMutationError";
+  }
+}
+
 const INVALID_TIMEOUT_ERROR = "--timeout must be a positive integer (seconds)";
 const MAX_SAFE_TIMEOUT_SECONDS = Math.floor(Number.MAX_SAFE_INTEGER / 1000);
 
-/** Parse a CLI timeout in seconds, exiting through the runtime on invalid input. */
-export function parseTimeoutMsOrExit(timeout?: string): number | undefined | null {
+/** Parse the shared timeout contract without exiting an owning operation. */
+export function parseUpdateTimeoutMs(timeout?: string): number | undefined {
   if (timeout === undefined) {
     return undefined;
   }
   const trimmed = timeout.trim();
   const seconds = parseStrictPositiveInteger(trimmed);
   if (seconds === undefined || seconds > MAX_SAFE_TIMEOUT_SECONDS) {
+    throw new Error(INVALID_TIMEOUT_ERROR);
+  }
+  return seconds * 1000;
+}
+
+/** Parse a CLI timeout in seconds, exiting through the runtime on invalid input. */
+export function parseTimeoutMsOrExit(timeout?: string): number | undefined | null {
+  try {
+    return parseUpdateTimeoutMs(timeout);
+  } catch (error) {
     if (isJsonOutputModeActive(process.argv)) {
-      throw new Error(INVALID_TIMEOUT_ERROR);
+      throw error;
     }
     defaultRuntime.error(INVALID_TIMEOUT_ERROR);
     defaultRuntime.exit(1);
     return null;
   }
-  return seconds * 1000;
 }
 
-const OPENCLAW_REPO_URL = "https://github.com/openclaw/openclaw.git";
+const UPSTREAM_REPOSITORY_URL = "https://github.com/openclaw/openclaw.git";
 // Keep the full commit graph for dev ref switching while deferring historical blobs.
 // A shallow clone would make older or non-default dev targets unreachable.
 const GIT_CLONE_BLOB_FILTER = "--filter=blob:none";
-const MAX_LOG_CHARS = 8000;
 
 export const DEFAULT_PACKAGE_NAME = "openclaw";
 const CORE_PACKAGE_NAMES = new Set([DEFAULT_PACKAGE_NAME]);
@@ -182,6 +202,14 @@ export function resolveNodeRunner(): string {
   return "node";
 }
 
+export function tryResolveInvocationCwd(): string | undefined {
+  try {
+    return process.cwd();
+  } catch {
+    return undefined;
+  }
+}
+
 /** Locate the installed OpenClaw package root that should receive update operations. */
 export async function resolveUpdateRoot(): Promise<string> {
   // Preserve the lexical package path from the invoking shim. pnpm 11 package
@@ -205,48 +233,13 @@ export async function runUpdateStep(params: {
   progress?: UpdateStepProgress;
   env?: NodeJS.ProcessEnv;
 }): Promise<UpdateStepResult> {
-  const command = params.argv.join(" ");
-  params.progress?.onStepStart?.({
-    name: params.name,
-    command,
-    index: 0,
-    total: 0,
-  });
-
-  const started = Date.now();
-  const res = await runCommandWithTimeout(params.argv, {
-    cwd: params.cwd,
-    env: params.env,
-    timeoutMs: params.timeoutMs,
-  });
-  const durationMs = Date.now() - started;
-  const stderrTail = trimLogTail(res.stderr, MAX_LOG_CHARS);
-
-  params.progress?.onStepComplete?.({
-    name: params.name,
-    command,
-    index: 0,
-    total: 0,
-    durationMs,
-    exitCode: res.code,
-    stderrTail,
-    signal: res.signal,
-    killed: res.killed,
-    termination: res.termination,
-  });
-
-  return {
-    name: params.name,
-    command,
+  return await runStep({
+    ...params,
     cwd: params.cwd ?? process.cwd(),
-    durationMs,
-    exitCode: res.code,
-    stdoutTail: trimLogTail(res.stdout, MAX_LOG_CHARS),
-    stderrTail,
-    signal: res.signal,
-    killed: res.killed,
-    termination: res.termination,
-  };
+    runCommand: runCommandWithTimeout,
+    stepIndex: 0,
+    totalSteps: 0,
+  });
 }
 
 type GitCheckoutResult = {
@@ -274,7 +267,7 @@ async function cloneGitCheckoutTransactionally(params: {
   try {
     const result = await runUpdateStep({
       name: "git clone",
-      argv: ["git", "clone", GIT_CLONE_BLOB_FILTER, OPENCLAW_REPO_URL, stagingDir],
+      argv: ["git", "clone", GIT_CLONE_BLOB_FILTER, UPSTREAM_REPOSITORY_URL, stagingDir],
       env: params.env,
       timeoutMs: params.timeoutMs,
       progress: params.progress,
@@ -369,7 +362,8 @@ export async function ensureGitCheckout(params: {
   if (!(await isGitCheckout(params.dir))) {
     const empty = await isEmptyDir(params.dir);
     if (!empty) {
-      throw new Error(
+      throw new UpdatePreMutationError(
+        "invalid-git-directory",
         `OPENCLAW_GIT_DIR points at a non-git directory: ${params.dir}. Set OPENCLAW_GIT_DIR to an empty folder or an openclaw checkout.`,
       );
     }
@@ -383,7 +377,10 @@ export async function ensureGitCheckout(params: {
   }
 
   if (!(await isCorePackage(params.dir))) {
-    throw new Error(`OPENCLAW_GIT_DIR does not look like a core checkout: ${params.dir}.`);
+    throw new UpdatePreMutationError(
+      "invalid-git-directory",
+      `OPENCLAW_GIT_DIR does not look like a core checkout: ${params.dir}.`,
+    );
   }
 
   return { checkoutDir: await fs.realpath(params.dir), step: null };
@@ -403,9 +400,12 @@ export async function resolveGlobalManager(params: {
       params.root,
       params.timeoutMs,
     );
-    if (detected) {
-      return detected;
+    if (!detected) {
+      throw new Error(
+        "Update refused: package manager owner is unknown; no changes were made. Run this OpenClaw install through its active npm, pnpm, or Bun global shim, or reinstall it with that package manager, then retry.",
+      );
     }
+    return detected;
   }
 
   const byPresence = await detectGlobalInstallManagerByPresence(runCommand, params.timeoutMs);

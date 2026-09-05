@@ -1,9 +1,20 @@
 import type { AgentMessage } from "openclaw/plugin-sdk/agent-core";
 import { describe, expect, it } from "vitest";
 import type { AgentContextPruningConfig } from "../../config/types.agent-defaults.js";
+import { appendAttemptCacheTtlIfNeeded } from "./run/attempt-thread-helpers.js";
+import {
+  clearEmbeddedSessionPromptStates,
+  createToolResultPromptProjectionState,
+  getEmbeddedSessionPromptState,
+  serializeCacheTtlToolResultProjections,
+  type ToolResultPromptProjectionState,
+} from "./session-prompt-state.js";
 import {
   pruneExpiredCacheTtlToolResults,
+  reconcileToolResultPromptProjectionState,
   resolveCacheTtlPruningSettings,
+  restoreCacheTtlToolResultProjections,
+  truncateOversizedToolResultsInMessages,
 } from "./tool-result-truncation.js";
 
 const NOW = 1_000_000;
@@ -74,6 +85,9 @@ function project(
     dropThinkingBlocksForEstimate?: boolean;
     lastCacheTouchAt?: number | null;
     now?: number;
+    projectionState?: ToolResultPromptProjectionState;
+    pruneNewRounds?: boolean;
+    onPruned?: () => void;
   } = {},
 ): AgentMessage[] {
   return pruneExpiredCacheTtlToolResults({
@@ -84,6 +98,9 @@ function project(
       options.lastCacheTouchAt === undefined ? NOW - 300_000 : options.lastCacheTouchAt,
     dropThinkingBlocksForEstimate: options.dropThinkingBlocksForEstimate ?? false,
     now: options.now ?? NOW,
+    projectionState: options.projectionState ?? createToolResultPromptProjectionState(),
+    pruneNewRounds: options.pruneNewRounds ?? true,
+    onPruned: options.onPruned,
   });
 }
 
@@ -102,6 +119,226 @@ function toolText(messages: AgentMessage[], id: string): string {
 }
 
 describe("cache-TTL tool-result projection", () => {
+  it.each(["soft", "hard"] as const)(
+    "replays %s pruning after TTL refresh and restart, until compaction/reset",
+    (mode) => {
+      const sessionId = `cache-ttl-${mode}`;
+      clearEmbeddedSessionPromptStates([sessionId]);
+      try {
+        const messages = prunableHistory(
+          Array.from({ length: mode === "hard" ? 18 : 1 }, (_, index) =>
+            tool({ id: `tool-${index}`, text: `${index}:` + "x".repeat(6_000), image: true }),
+          ),
+        );
+        const state = getEmbeddedSessionPromptState(sessionId).toolResults;
+        truncateOversizedToolResultsInMessages(messages, 1_000, 5_500, 100_000, state);
+        let pruningRounds = 0;
+        const options = { projectionState: state, onPruned: () => pruningRounds++ };
+        const first = project(messages, options);
+        expect(toolText(first, "tool-0")).toContain(
+          mode === "hard" ? "content cleared" : "Tool result trimmed",
+        );
+        const second = project(messages, { ...options, lastCacheTouchAt: NOW });
+        expect(second).toEqual(first);
+        expect(pruningRounds).toBe(1);
+        const sent = truncateOversizedToolResultsInMessages(
+          second,
+          1_000,
+          2_500,
+          100_000,
+          state,
+        ).messages;
+        expect(
+          truncateOversizedToolResultsInMessages(messages, 1_000, 2_500, 100_000, state).messages,
+        ).toEqual(sent);
+        const entries: { type: string; customType: string; data: unknown }[] = [];
+        const sessionManager = {
+          getEntries: () => entries,
+          appendCustomEntry: (customType: string, data: unknown) => {
+            const serialized = JSON.stringify(data);
+            entries.push({ type: "custom", customType, data: JSON.parse(serialized) });
+          },
+        };
+        appendAttemptCacheTtlIfNeeded({
+          sessionManager,
+          config: { agents: { defaults: { contextPruning: { mode: "cache-ttl" } } } },
+          provider: "anthropic",
+          modelId: "claude-sonnet-4-6",
+          timedOutDuringCompaction: false,
+          compactionOccurredThisAttempt: false,
+          isCacheTtlEligibleProvider: () => true,
+          toolResultPromptProjectionState: state,
+          now: NOW,
+        });
+        expect(entries.at(-1)?.data).toMatchObject({
+          timestamp: NOW,
+          prunedToolResults: expect.arrayContaining([
+            expect.objectContaining({ key: expect.stringContaining("tool-0"), mode }),
+          ]),
+        });
+        // The marker carries keys only; pruned bytes never enter the transcript.
+        expect(JSON.stringify(entries.at(-1)?.data)).not.toContain("x".repeat(20));
+        clearEmbeddedSessionPromptStates([sessionId]);
+        const restarted = getEmbeddedSessionPromptState(sessionId).toolResults;
+        restoreCacheTtlToolResultProjections(restarted, entries);
+        const restored = project(messages, {
+          projectionState: restarted,
+          lastCacheTouchAt: NOW,
+          onPruned: () => pruningRounds++,
+        });
+        expect(restored).toEqual(first);
+        expect(pruningRounds).toBe(1);
+        expect(
+          truncateOversizedToolResultsInMessages(restored, 1_000, 2_500, 100_000, restarted)
+            .messages,
+        ).toEqual(sent);
+        const compacted = [user("summary"), ...messages.slice(-4)];
+        reconcileToolResultPromptProjectionState(compacted, restarted);
+        expect(restarted.replacements.size).toBe(0);
+        restoreCacheTtlToolResultProjections(restarted, entries);
+        project(compacted, { projectionState: restarted, lastCacheTouchAt: NOW });
+        expect(restarted.replacements.size).toBe(0);
+        expect(restarted.restoredCacheTtl.size).toBe(0);
+        clearEmbeddedSessionPromptStates([sessionId]);
+        expect(getEmbeddedSessionPromptState(sessionId).toolResults.replacements.size).toBe(0);
+      } finally {
+        clearEmbeddedSessionPromptStates([sessionId]);
+      }
+    },
+  );
+
+  it("keeps ambiguous tool identities stable when pruning composes with oversized projection", () => {
+    const messages = prunableHistory([
+      tool({ id: "duplicate", text: "a".repeat(5_000) }),
+      tool({ id: "duplicate", text: "b".repeat(5_000) }),
+    ]);
+    const state = createToolResultPromptProjectionState();
+    const first = project(messages, { projectionState: state });
+    const sent = truncateOversizedToolResultsInMessages(
+      first,
+      1_000,
+      2_000,
+      100_000,
+      state,
+    ).messages;
+    const replay = project(messages, { projectionState: state, lastCacheTouchAt: NOW });
+    expect(
+      truncateOversizedToolResultsInMessages(replay, 1_000, 2_000, 100_000, state).messages,
+    ).toEqual(sent);
+    expect(state.replacements.size).toBe(2);
+  });
+
+  it("keeps pruned bytes when a later result makes a tool identity ambiguous", () => {
+    const messages = prunableHistory([tool({ id: "reused", text: "a".repeat(5_000) })]);
+    const state = createToolResultPromptProjectionState();
+    const sent = project(messages, { projectionState: state });
+    const entries = [
+      {
+        type: "custom",
+        customType: "openclaw.cache-ttl",
+        data: serializeCacheTtlToolResultProjections(state),
+      },
+    ];
+    const expanded = [...messages, tool({ id: "reused", text: "b".repeat(5_000) })];
+    const continued = project(expanded, {
+      projectionState: state,
+      lastCacheTouchAt: NOW,
+    });
+    expect(JSON.stringify(continued.slice(0, messages.length))).toBe(JSON.stringify(sent));
+    const restarted = createToolResultPromptProjectionState();
+    restoreCacheTtlToolResultProjections(restarted, entries);
+    const restored = project(expanded, { projectionState: restarted, lastCacheTouchAt: NOW });
+    expect(JSON.stringify(restored)).toBe(JSON.stringify(continued));
+  });
+
+  it("replays restored projections through the history transform when pruning is off", () => {
+    const state = createToolResultPromptProjectionState();
+    const history = prunableHistory(
+      Array.from({ length: 18 }, (_, index) =>
+        tool({ id: `tool-${index}`, text: `${index}:` + "x".repeat(6_000) }),
+      ),
+    );
+    const first = project(history, { projectionState: state });
+    const sent = truncateOversizedToolResultsInMessages(
+      first,
+      1_000,
+      2_500,
+      100_000,
+      state,
+    ).messages;
+    expect(toolText(sent, "tool-0")).toContain("content cleared");
+    const entries = [
+      {
+        type: "custom",
+        customType: "openclaw.cache-ttl",
+        data: structuredClone(serializeCacheTtlToolResultProjections(state)),
+      },
+    ];
+    expect(JSON.stringify(entries[0]?.data)).not.toContain("x".repeat(20));
+    // Pruning is off after the restart: no prune pass runs, only the per-request history transform.
+    const restarted = createToolResultPromptProjectionState();
+    restoreCacheTtlToolResultProjections(restarted, entries);
+    expect(
+      truncateOversizedToolResultsInMessages(history, 1_000, 2_500, 100_000, restarted).messages,
+    ).toEqual(sent);
+    expect(restarted.restoredCacheTtl.size).toBe(0);
+  });
+
+  it("replays existing and restored projections when another owner prunes new rounds", () => {
+    const state = createToolResultPromptProjectionState();
+    const history = prunableHistory([tool({ id: "old", text: "a".repeat(5_000) })]);
+    const first = project(history, { projectionState: state });
+    const entries = [
+      {
+        type: "custom",
+        customType: "openclaw.cache-ttl",
+        data: serializeCacheTtlToolResultProjections(state),
+      },
+    ];
+    const expanded = [
+      ...history,
+      assistant(),
+      tool({ id: "new", text: "b".repeat(5_000) }),
+      assistant(),
+      assistant(),
+      assistant(),
+    ];
+    // Live state: the earlier projection replays, the new result is left to the server.
+    const live = project(expanded, { projectionState: state, pruneNewRounds: false });
+    expect(toolText(live, "old")).toBe(toolText(first, "old"));
+    expect(toolText(live, "new")).toBe("b".repeat(5_000));
+    // Restarted state: marker keys re-derive the same bytes without opening a new round.
+    const restarted = createToolResultPromptProjectionState();
+    restoreCacheTtlToolResultProjections(restarted, entries);
+    const restored = project(expanded, { projectionState: restarted, pruneNewRounds: false });
+    expect(toolText(restored, "old")).toBe(toolText(first, "old"));
+    expect(toolText(restored, "new")).toBe("b".repeat(5_000));
+  });
+
+  it("gates new pruning rounds without undoing earlier projections", () => {
+    const state = createToolResultPromptProjectionState();
+    const history = prunableHistory([tool({ id: "old", text: "a".repeat(5_000) })]);
+    const first = project(history, { projectionState: state });
+    const expanded = [
+      ...history,
+      assistant(),
+      tool({ id: "new", text: "b".repeat(5_000) }),
+      assistant(),
+      assistant(),
+      assistant(),
+    ];
+    const retained = project(expanded, { projectionState: state, lastCacheTouchAt: NOW });
+    expect(toolText(retained, "old")).toBe(toolText(first, "old"));
+    expect(toolText(retained, "new")).toBe("b".repeat(5_000));
+    const expired = project(expanded, {
+      projectionState: state,
+      lastCacheTouchAt: NOW,
+      now: NOW + 300_000,
+    });
+    expect(toolText(expired, "old")).toBe(toolText(first, "old"));
+    expect(toolText(expired, "new")).toContain("[Tool result trimmed:");
+  });
+
   it("normalizes TTL, hard-clear, and deny-first tool matching once", () => {
     expect(resolveCacheTtlPruningSettings(undefined)).toBeUndefined();
     expect(resolveCacheTtlPruningSettings({ mode: "off" })).toBeUndefined();

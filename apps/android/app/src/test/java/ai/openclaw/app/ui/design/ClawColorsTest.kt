@@ -1,5 +1,6 @@
 package ai.openclaw.app.ui.design
 
+import ai.openclaw.app.AppearanceThemeFamily
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.compositeOver
 import androidx.compose.ui.graphics.lerp
@@ -11,6 +12,47 @@ import org.junit.Assert.assertSame
 import org.junit.Test
 
 class ClawColorsTest {
+  @Test
+  fun officialThemeFamiliesExposeTheirDarkPreviewPaletteAndParseWireValues() {
+    for (family in AppearanceThemeFamily.entries) {
+      val colors = clawColorsForTheme(dark = true, family = family, accentArgb = null)
+      assertEquals(Color(family.previewCanvasArgb), colors.canvas)
+      assertEquals(Color(family.previewAccentArgb), colors.accent)
+      assertEquals(family, AppearanceThemeFamily.fromRawValue(family.rawValue.uppercase()))
+    }
+    assertEquals(AppearanceThemeFamily.Claw, AppearanceThemeFamily.fromRawValue("unknown"))
+  }
+
+  @Test
+  fun crtUsesOfficialWebUiCorePalettes() {
+    val dark = clawColorsForTheme(dark = true, family = AppearanceThemeFamily.Crt, accentArgb = null)
+    val light = clawColorsForTheme(dark = false, family = AppearanceThemeFamily.Crt, accentArgb = null)
+
+    assertEquals(Color(0xFF090A09), dark.canvas)
+    assertEquals(Color(0xFF3AFF7D), dark.accent)
+    assertEquals(Color(0xFF052B12), dark.primaryText)
+    assertEquals(Color(0xFFF5F5F4), light.canvas)
+    assertEquals(Color(0xFF0A612B), light.accent)
+    assertEquals(Color.White, light.primaryText)
+  }
+
+  @Test
+  fun currentWebUiThemeFamiliesUseTheirOfficialLightPalettes() {
+    val cases =
+      listOf(
+        Triple(AppearanceThemeFamily.Manuscript, 0xFFF6F1E4L, 0xFF31549BL),
+        Triple(AppearanceThemeFamily.Rose, 0xFFFAF4EDL, 0xFF9C4F66L),
+        Triple(AppearanceThemeFamily.Miami, 0xFFF7F3F6L, 0xFFB0246FL),
+      )
+
+    for ((family, canvas, accent) in cases) {
+      val colors = clawColorsForTheme(dark = false, family = family, accentArgb = null)
+
+      assertEquals(Color(canvas), colors.canvas)
+      assertEquals(Color(accent), colors.accent)
+    }
+  }
+
   @Test
   fun sessionColorsAdaptToThemeAndUnsetNamesHaveNoIndicator() {
     val light = clawColorsForTheme(dark = false, accentArgb = null)
@@ -30,8 +72,8 @@ class ClawColorsTest {
   fun nullAccentPreservesHardcodedDarkAndLightPalettes() {
     val expectedAccents =
       mapOf(
-        true to Triple(Color(0xFF6EA8FF), Color(0xFF1A2A44), Color(0xFF5B93E8)),
-        false to Triple(Color(0xFF1B5ACB), Color(0xFFEAF2FF), Color(0xFF174CA9)),
+        true to Triple(Color(0xFFFF5C5C), Color(0x1AFF5C5C), Color(0xFFD13C3C)),
+        false to Triple(Color(0xFFC23434), Color(0x1AC23434), Color(0xFFA32C2C)),
       )
 
     for ((dark, expected) in expectedAccents) {
@@ -45,24 +87,48 @@ class ClawColorsTest {
   }
 
   @Test
-  fun gatewayAccentOverridesOnlyAccentTokensForBothPalettes() {
-    val accent = Color(0xFFE84B35)
-
-    for (dark in listOf(true, false)) {
-      val base = clawColorsForTheme(dark = dark, accentArgb = null)
-      val colors = clawColorsForTheme(dark = dark, accentArgb = 0xFFE84B35L)
-
-      assertEquals(accent, colors.accent)
-      assertEquals(accent.copy(alpha = if (dark) 0.25f else 0.08f).compositeOver(base.canvas), colors.accentSoft)
-      assertEquals(lerp(accent, Color.Black, 0.12f), colors.accentBorder)
-      assertNotEquals(accent, colors.accentSoft)
-      assertNotEquals(accent, colors.accentBorder)
-      assertNotEquals(base.accentSoft, colors.accentSoft)
-      assertNotEquals(base.accentBorder, colors.accentBorder)
-      assertEquals(
-        base.copy(accent = colors.accent, accentSoft = colors.accentSoft, accentBorder = colors.accentBorder),
-        colors,
+  fun gatewayAccentOverridesAccentAndPrimaryTokensForBothPalettes() {
+    val cases =
+      listOf(
+        0xFFFBBF24L to Color.Black,
+        0xFF777777L to Color.Black,
+        0xFF747474L to Color.White,
+        0xFF2563EBL to Color.White,
       )
+
+    for ((accentArgb, expectedInk) in cases) {
+      val accent = Color(accentArgb)
+      for (dark in listOf(true, false)) {
+        val base = clawColorsForTheme(dark = dark, accentArgb = null)
+        val colors = clawColorsForTheme(dark = dark, accentArgb = accentArgb)
+
+        assertEquals(accent, colors.accent)
+        assertEquals(accent, colors.primary)
+        assertEquals(expectedInk, colors.primaryText)
+        assertEquals(
+          accent.copy(alpha = if (dark) 0.25f else 0.08f).compositeOver(base.canvas),
+          colors.accentSoft,
+        )
+        assertEquals(lerp(accent, Color.Black, 0.12f), colors.accentBorder)
+        assertNotEquals(accent, colors.accentSoft)
+        assertNotEquals(accent, colors.accentBorder)
+        assertNotEquals(base.accentSoft, colors.accentSoft)
+        assertNotEquals(base.accentBorder, colors.accentBorder)
+        assertEquals(
+          accent.copy(alpha = if (dark) 0.12f else 0.15f).compositeOver(base.canvas),
+          colors.userMessageSurface,
+        )
+        assertEquals(
+          base.copy(
+            accent = colors.accent,
+            accentSoft = colors.accentSoft,
+            accentBorder = colors.accentBorder,
+            primary = accent,
+            primaryText = expectedInk,
+          ),
+          colors.copy(userMessageSurface = base.userMessageSurface),
+        )
+      }
     }
   }
 }

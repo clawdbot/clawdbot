@@ -8,7 +8,7 @@ import * as commandExec from "../../process/exec.js";
 import type { SpawnResult } from "../../process/exec.js";
 import { closeOpenClawStateDatabaseForTest } from "../../state/openclaw-state-db.js";
 import { ManagedWorktreeService } from "./service.js";
-import { initializeManagedWorktreeTestRepository } from "./service.test-support.js";
+import { useManagedWorktreeTestRepository } from "./service.test-support.js";
 
 const execFileAsync = promisify(execFile);
 const realRunCommand = commandExec.runCommandWithTimeout;
@@ -82,13 +82,14 @@ const terminationCases: Array<{
 ];
 
 describe("ManagedWorktreeService failure diagnostics", () => {
+  const initializeRepository = useManagedWorktreeTestRepository();
   let root: string;
   let repo: string;
   let service: ManagedWorktreeService;
 
   beforeEach(async () => {
     root = await fs.mkdtemp(path.join(await fs.realpath(os.tmpdir()), "openclaw-worktree-errors-"));
-    repo = await initializeManagedWorktreeTestRepository(root);
+    repo = await initializeRepository(root);
     service = new ManagedWorktreeService({
       env: { ...process.env, OPENCLAW_STATE_DIR: path.join(root, "state") },
     });
@@ -108,6 +109,33 @@ describe("ManagedWorktreeService failure diagnostics", () => {
     });
     return script;
   }
+
+  it("reports actual mixed setup output without losing diagnostics or cleanup", async () => {
+    const script = await writeFailingSetup();
+    await fs.writeFile(
+      script,
+      [
+        "#!/bin/sh",
+        'printf "%s\\n" "$OPENCLAW_WORKTREE_PATH" > "$OPENCLAW_SOURCE_TREE_PATH/setup-path.txt"',
+        "printf '%s\\n' 'fatal: create local-fixture-input.txt and retry'",
+        "printf '%s\\n' 'warning: optional fixture hint is unset' >&2",
+        "exit 23",
+        "",
+      ].join("\n"),
+    );
+    const message = await failureMessage(
+      service.create({ repoRoot: repo, name: "actual-failed-setup", baseRef: "HEAD" }),
+    );
+    const allocated = (await fs.readFile(path.join(repo, "setup-path.txt"), "utf8")).trim();
+    await expect(fs.stat(allocated)).rejects.toMatchObject({ code: "ENOENT" });
+    expect(await git(repo, "worktree", "list", "--porcelain")).not.toContain("actual-failed-setup");
+    expect(await git(repo, "branch", "--list", "openclaw/actual-failed-setup")).toBe("");
+    expect(service.listRegistryRecords()).toEqual([]);
+    expect(message).toContain("worktree setup failed (exit code 23)");
+    expect(message).toContain("create local-fixture-input.txt and retry");
+    expect(message).toContain("optional fixture hint is unset");
+    expect(message.length).toBeLessThanOrEqual(2_300);
+  });
 
   it.each(terminationCases)("reports setup $name and removes its allocation", async (entry) => {
     const script = await writeFailingSetup();

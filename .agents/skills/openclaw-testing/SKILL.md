@@ -161,9 +161,10 @@ sync the current checkout on every run, and stop it before handoff.
   coordinating with another lane. If Testbox queues, fails capacity, or cannot
   allocate, report the blocker or switch to direct AWS Crabbox only when that
   still proves the requested surface.
-- Reuse does not mean stale source: omit `--no-sync` so every run uploads the
-  current checkout. Use `--no-sync` only to rerun an unchanged, already-synced
-  tree intentionally.
+- Blacksmith Testbox owns sync, including reused `--id` runs. Do not pass
+  `--no-sync`; the wrapper rejects it before delegation. Verify the materialized
+  candidate tree before exact-source proof and keep QA evidence outside the
+  synced checkout. Do not bypass security exclusions or silently change providers.
 
 ## Local Development Proof
 
@@ -347,6 +348,14 @@ extension batch sweep, or the release-only `agentic-plugins` Vitest shard. Those
 lanes are intentionally reserved for the separate `Plugin Prerelease` child so
 PRs, main pushes, and ad hoc broad CI checks do not spend Docker/package time or
 all-plugin runtime time on release-only product coverage.
+
+`Plugin Prerelease` performs a supplemental scan of checked-in npm package input
+as inert data; it never runs candidate lifecycle, asset, build, install, or
+replacement scanner code. This scan does not approve post-build or publication
+bytes. A future publisher redesign must scan the exact final bytes and publish
+that identical digest before this can become a publication gate; the current
+publisher does not provide that guarantee. Ingestion stays fail-slow so one
+malformed package cannot hide other package reports.
 
 Use one operator, one foreground owner, and at most one investigator for the
 current failed surface. Do not start `release-ci-summary --watch` while the

@@ -385,7 +385,7 @@ describe("AcpSessionManager turn results", () => {
           status: "failed" as const,
           error: {
             code: "ACP_TURN_FAILED",
-            message: "Codex ACP adapter exited before final output.",
+            message: "Codex ACP adapter timed out before final output.",
           },
         }),
         cancel: vi.fn(async () => {}),
@@ -439,7 +439,7 @@ describe("AcpSessionManager turn results", () => {
         }),
       ).rejects.toMatchObject({
         code: "ACP_TURN_FAILED",
-        message: "Codex ACP adapter exited before final output.",
+        message: "Codex ACP adapter timed out before final output.",
       });
 
       expect(runtimeState.runTurn).not.toHaveBeenCalled();
@@ -454,7 +454,9 @@ describe("AcpSessionManager turn results", () => {
         task: "Investigate and report back",
         status: "failed",
         progressSummary: "Vou mapear o fluxo real primeiro...",
-        error: "AcpRuntimeError [ACP_TURN_FAILED]: Codex ACP adapter exited before final output.",
+        terminalSummary: undefined,
+        error:
+          "AcpRuntimeError [ACP_TURN_FAILED]: Codex ACP adapter timed out before final output.",
       });
     });
   });
@@ -1485,15 +1487,38 @@ describe("AcpSessionManager turn results", () => {
   }
 
   function expectFreshRetry(scenario: ReturnType<typeof setupStaleResumeScenario>) {
-    expect(scenario.runtimeState.prepareFreshSession).toHaveBeenCalledWith({
+    const pendingHandle = {
       sessionKey: scenario.sessionKey,
-    });
+      agentId: "claude",
+      backend: "acpx",
+      runtimeSessionName: `${scenario.sessionKey}:persistent:runtime`,
+      cwd: undefined,
+      acpxRecordId: undefined,
+    };
+    expect(scenario.runtimeState.prepareFreshSession.mock.calls).toEqual([
+      [
+        {
+          sessionKey: scenario.sessionKey,
+          agentId: "claude",
+          persistedHandle: { ...pendingHandle, backendSessionId: "acpx-sid-stale" },
+        },
+      ],
+      [
+        {
+          sessionKey: scenario.sessionKey,
+          agentId: "claude",
+          persistedHandle: pendingHandle,
+        },
+      ],
+    ]);
     expect(scenario.runtimeState.ensureSession).toHaveBeenCalledTimes(2);
     expectRecordFields(mockCallArg(scenario.runtimeState.ensureSession), {
       sessionKey: scenario.sessionKey,
+      agentId: "claude",
       resumeSessionId: "acpx-sid-stale",
     });
     expect(mockCallArg(scenario.runtimeState.ensureSession, 1).resumeSessionId).toBeUndefined();
+    expect(mockCallArg(scenario.runtimeState.ensureSession, 1).agentId).toBe("claude");
     expect(scenario.getMeta().identity?.acpxSessionId).toBe("acpx-sid-fresh");
     expect(scenario.getMeta().identity?.state).toBe("resolved");
     const states = extractStatesFromUpserts();

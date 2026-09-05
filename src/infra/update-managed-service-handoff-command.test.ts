@@ -70,8 +70,10 @@ afterEach(async () => {
 });
 
 async function startHandoffAndReadCommand(params: {
+  runId?: string;
   channel: "beta" | "extended-stable";
   tag?: string;
+  acceptCapabilities?: boolean;
   devTarget?: DevUpdateTarget;
   env?: NodeJS.ProcessEnv;
   restartDelayMs?: number;
@@ -85,11 +87,13 @@ async function startHandoffAndReadCommand(params: {
 }> {
   const { startManagedServiceUpdateHandoff } = await import("./update-managed-service-handoff.js");
   const result = await startManagedServiceUpdateHandoff({
+    runId: params.runId,
     root: MOCK_INSTALL_ROOT,
     restartDrainTimeoutMs: params.restartDrainTimeoutMs ?? 300_000,
     ...(params.restartDelayMs === undefined ? {} : { restartDelayMs: params.restartDelayMs }),
     channel: params.channel,
     ...(params.tag ? { tag: params.tag } : {}),
+    ...(params.acceptCapabilities ? { acceptCapabilities: true } : {}),
     parentPid: process.pid,
     execPath: "/usr/local/bin/node",
     argv1: "/opt/openclaw/openclaw.mjs",
@@ -113,11 +117,12 @@ async function startHandoffAndReadCommand(params: {
   };
   const metaPath = path.join(path.dirname(paramsPath), "sentinel-meta.json");
   const metaFile = JSON.parse(await fs.readFile(metaPath, "utf-8")) as {
-    meta?: { root?: string };
+    meta?: { root?: string; runId?: string };
   };
   expect(metaFile.meta?.root).toBe(
     await fs.realpath(MOCK_INSTALL_ROOT).catch(() => path.resolve(MOCK_INSTALL_ROOT)),
   );
+  expect(metaFile.meta?.runId).toBe(params.runId);
   return {
     command: result.command,
     commandArgv: helperParams.commandArgv,
@@ -166,6 +171,7 @@ describe("managed service update handoff command", () => {
     const result = await startHandoffAndReadCommand({
       channel: "beta",
       tag: "2.0.0-beta.1",
+      acceptCapabilities: true,
     });
 
     expect(result.commandArgv).toEqual([
@@ -174,6 +180,7 @@ describe("managed service update handoff command", () => {
       "update",
       "--yes",
       "--json",
+      "--accept-capabilities",
       "--channel",
       "beta",
       "--tag",
@@ -181,10 +188,15 @@ describe("managed service update handoff command", () => {
     ]);
     expect(result.command).toContain("--tag 2.0.0-beta.1");
     expect(result.command).toContain("--channel beta");
+    expect(result.command).toContain("--accept-capabilities");
+    expect(result.command).toContain("--yes");
+    expect(result.command).not.toContain("--json");
   });
 
   it("merges a tracked target into the child environment without replacing caller fields", async () => {
+    const runId = "970895bf-61e5-48e6-b0f6-468ce6f8e33a";
     const result = await startHandoffAndReadCommand({
+      runId,
       channel: "beta",
       env: {
         KEEP: "value",
@@ -198,6 +210,7 @@ describe("managed service update handoff command", () => {
     });
 
     expect(result.spawnEnv?.KEEP).toBe("value");
+    expect(result.spawnEnv?.OPENCLAW_UPDATE_RUN_ID).toBe(runId);
     expect(parseDevUpdateTargetEnv(result.spawnEnv ?? {})).toEqual({
       status: "valid",
       target: {

@@ -1,5 +1,8 @@
+import { asOptionalRecord } from "@openclaw/normalization-core/record-coerce";
 import { z } from "zod";
 import { boundedJsonUtf8Bytes } from "../infra/json-utf8-bytes.js";
+
+const NESTED_TOOL_ACTIVITY_CUSTOM_TYPE = "openclaw.nested-tool.v1";
 
 const correlationId = z.string().min(1).max(1024);
 const activityDetails = z
@@ -20,7 +23,7 @@ const activityDetails = z
   .strict();
 const activitySchema = z.object({
   role: z.literal("custom"),
-  customType: z.literal("openclaw.nested-tool.v1"),
+  customType: z.literal(NESTED_TOOL_ACTIVITY_CUSTOM_TYPE),
   display: z.literal(true),
   excludeFromContext: z.literal(true),
   content: z.literal(""),
@@ -32,6 +35,9 @@ export type NestedToolActivity = z.infer<typeof activitySchema>;
 
 /** Validate correlation slots separately from the payloads that always require redaction. */
 export function readNestedToolActivity(value: unknown): NestedToolActivity | undefined {
+  if (asOptionalRecord(value)?.customType !== NESTED_TOOL_ACTIVITY_CUSTOM_TYPE) {
+    return undefined;
+  }
   const parsed = activitySchema.safeParse(value);
   return parsed.success ? parsed.data : undefined;
 }
@@ -48,7 +54,7 @@ export function createNestedToolActivity(
     : { content: [{ type: "text", text: "[Nested tool output omitted: exceeds display limit]" }] };
   return activitySchema.parse({
     role: "custom",
-    customType: "openclaw.nested-tool.v1",
+    customType: NESTED_TOOL_ACTIVITY_CUSTOM_TYPE,
     display: true,
     excludeFromContext: true,
     content: "",

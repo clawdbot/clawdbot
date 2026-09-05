@@ -36,7 +36,7 @@ describe("Discord progress visibility", () => {
   it("retries identical progress until Discord acknowledges a draft message", async () => {
     const controller = createDiscordDraftPreviewController({
       cfg: {},
-      discordConfig: { streaming: { mode: "progress" } },
+      discordConfig: { streaming: { mode: "progress", progress: { toolProgress: true } } },
       accountId: "default",
       sourceRepliesAreToolOnly: false,
       textLimit: 2_000,

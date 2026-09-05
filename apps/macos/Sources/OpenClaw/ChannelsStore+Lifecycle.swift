@@ -20,15 +20,46 @@ func whatsappLoginWaitRequestTimeoutMs(
     return 1
 }
 
+func whatsappLoginStartParams(force: Bool) -> [String: AnyCodable] {
+    [
+        "channel": AnyCodable("whatsapp"),
+        "force": AnyCodable(force),
+        "timeoutMs": AnyCodable(30000),
+    ]
+}
+
+func whatsappLoginWaitParams(
+    timeoutMs: Int,
+    currentQrDataUrl: String?,
+    sessionKey: String? = nil) -> [String: AnyCodable]
+{
+    var params: [String: AnyCodable] = [
+        "channel": AnyCodable("whatsapp"),
+        "timeoutMs": AnyCodable(timeoutMs),
+    ]
+    if let currentQrDataUrl {
+        params["currentQrDataUrl"] = AnyCodable(currentQrDataUrl)
+    }
+    if let sessionKey {
+        params["sessionKey"] = AnyCodable(sessionKey)
+    }
+    return params
+}
+
 extension ChannelsStore {
     func start() {
         guard !self.isPreview else { return }
         self.startCount += 1
         guard self.startCount == 1 else { return }
         guard self.pollTask == nil else { return }
-        GatewayPushSubscription.restartTask(task: &self.gatewayPushTask) { [weak self] push in
-            self?.handleGatewayPush(push)
-        }
+        GatewayPushSubscription
+            .restartTask(task: &self.gatewayPushTask, connection: self.gateway) { [weak self] delivery in
+                guard let self else { return }
+                if let source = self.source, !self.owns(source) { self.clearSource() }
+                guard let push = delivery.push else { return }
+                if self.source == nil { self.adoptSource(delivery.serverLease) }
+                self.handleGatewayPush(push)
+            }
         self.pollTask = Task.detached { [weak self] in
             guard let self else { return }
             await self.refresh(probe: false)
@@ -64,13 +95,21 @@ extension ChannelsStore {
     private func handleGatewayPush(_ push: GatewayPush) {
         guard Self.gatewayPushRequestsConfigRefresh(push) else { return }
         // Change events contain only a hash; refetch without overwriting a dirty local draft.
-        Task { await self.loadConfig(force: false, refresh: true) }
+        guard let source = self.source else { return }
+        Task {
+            await self.loadConfig(force: false, refresh: true, source: source)
+            if case .snapshot = push {
+                await self.refresh(probe: false, source: source)
+                await self.loadConfigSchema(source: source)
+            }
+        }
     }
 
-    func refresh(probe: Bool) async {
+    func refresh(probe: Bool, source expected: Source? = nil) async {
+        guard let source = await self.resolveSource(expected) else { return }
         guard !self.isRefreshing else { return }
         self.isRefreshing = true
-        defer { self.isRefreshing = false }
+        defer { if self.owns(source) { self.isRefreshing = false } }
 
         do {
             let statusTimeoutMs = probe ? 8000 : 2500
@@ -78,114 +117,143 @@ extension ChannelsStore {
                 "probe": AnyCodable(probe),
                 "timeoutMs": AnyCodable(statusTimeoutMs),
             ]
-            let snap: ChannelsStatusSnapshot = try await GatewayConnection.shared.requestDecoded(
+            let snap: ChannelsStatusSnapshot = try await self.gateway.requestDecoded(
                 method: .channelsStatus,
                 params: params,
-                timeoutMs: probe ? 12000 : 5000)
+                timeoutMs: probe ? 12000 : 5000,
+                ifCurrentRoute: source.lease.route)
+            guard self.owns(source) else { return }
             self.snapshot = snap
             self.lastSuccess = Date()
             self.lastError = nil
         } catch {
+            guard self.owns(source) else { return }
             self.lastError = error.localizedDescription
         }
     }
 
     func startWhatsAppLogin(force: Bool, autoWait: Bool = true) async {
+        guard let source = await self.resolveSource() else { return }
         guard !self.whatsappBusy else { return }
         self.whatsappBusy = true
-        defer { self.whatsappBusy = false }
+        defer { if self.owns(source) { self.whatsappBusy = false } }
         var shouldAutoWait = false
         do {
-            let params: [String: AnyCodable] = [
-                "force": AnyCodable(force),
-                "timeoutMs": AnyCodable(30000),
-            ]
-            let result: WhatsAppLoginStartResult = try await GatewayConnection.shared.requestDecoded(
+            let params = whatsappLoginStartParams(force: force)
+            let result: WhatsAppLoginStartResult = try await self.gateway.requestDecoded(
                 method: .webLoginStart,
                 params: params,
-                timeoutMs: 35000)
+                timeoutMs: 35000,
+                ifCurrentRoute: source.lease.route)
+            guard self.owns(source) else { return }
             self.whatsappLoginMessage = result.message
             self.whatsappLoginQrDataUrl = result.qrDataUrl
+            self.whatsappLoginSessionKey = result.sessionKey
             self.whatsappLoginConnected = result.connected
             shouldAutoWait = autoWait && result.qrDataUrl != nil
         } catch {
+            guard self.owns(source) else { return }
             self.whatsappLoginMessage = error.localizedDescription
             self.whatsappLoginQrDataUrl = nil
+            self.whatsappLoginSessionKey = nil
             self.whatsappLoginConnected = nil
         }
-        await self.refresh(probe: true)
-        if shouldAutoWait {
-            Task { await self.waitWhatsAppLogin() }
+        await self.refresh(probe: true, source: source)
+        if shouldAutoWait, self.owns(source) {
+            Task { await self.waitWhatsAppLogin(source: source) }
         }
     }
 
-    func waitWhatsAppLogin(timeoutMs: Int = 120_000) async {
+    private func waitWhatsAppLogin(timeoutMs: Int = 120_000, source: Source) async {
+        guard self.owns(source) else { return }
         guard !self.whatsappBusy else { return }
         self.whatsappBusy = true
-        defer { self.whatsappBusy = false }
+        defer { if self.owns(source) { self.whatsappBusy = false } }
         let startedAt = Date()
         var didRunFinalWait = false
+        var retryDelays = GatewayConnection.requestRetryDelaysMs.makeIterator()
         do {
             while let remainingMs = whatsappLoginWaitRequestTimeoutMs(
                 startedAt: startedAt,
                 timeoutMs: timeoutMs,
                 didRunFinalWait: &didRunFinalWait)
             {
-                var params: [String: AnyCodable] = [
-                    "timeoutMs": AnyCodable(remainingMs),
-                ]
-                if let currentQrDataUrl = self.whatsappLoginQrDataUrl {
-                    params["currentQrDataUrl"] = AnyCodable(currentQrDataUrl)
-                }
-                let result: WhatsAppLoginWaitResult = try await GatewayConnection.shared.requestDecoded(
-                    method: .webLoginWait,
-                    params: params,
-                    timeoutMs: Double(remainingMs) + 5000)
-                self.applyWhatsAppLoginWaitResult(result)
-                if result.connected || result.qrDataUrl == nil || didRunFinalWait {
-                    break
+                guard self.owns(source) else { return }
+                let params = whatsappLoginWaitParams(
+                    timeoutMs: remainingMs,
+                    currentQrDataUrl: self.whatsappLoginQrDataUrl,
+                    sessionKey: self.whatsappLoginSessionKey)
+                do {
+                    let result: WhatsAppLoginWaitResult = try await self.gateway.requestDecoded(
+                        method: .webLoginWait,
+                        params: params,
+                        timeoutMs: Double(remainingMs) + 5000,
+                        ifCurrentRoute: source.lease.route)
+                    guard self.owns(source) else { return }
+                    self.applyWhatsAppLoginWaitResult(result)
+                    if result.connected || result.qrDataUrl == nil || didRunFinalWait { break }
+                    retryDelays = GatewayConnection.requestRetryDelaysMs.makeIterator()
+                } catch {
+                    try Task.checkCancellation()
+                    guard self.owns(source) else { return }
+                    guard (error as NSError).domain == URLError.errorDomain,
+                          !didRunFinalWait, let delayMs = retryDelays.next()
+                    else { throw error }
+                    // Retry this QR session on its existing route without extending
+                    // the original deadline or consuming its final one-shot poll.
+                    let delayBudgetMs = max(0, timeoutMs - Int(Date().timeIntervalSince(startedAt) * 1000))
+                    try await Task.sleep(for: .milliseconds(min(delayMs, delayBudgetMs)))
                 }
             }
         } catch {
+            guard self.owns(source) else { return }
             self.whatsappLoginMessage = error.localizedDescription
         }
-        await self.refresh(probe: true)
+        await self.refresh(probe: true, source: source)
     }
 
     func logoutWhatsApp() async {
+        guard let source = await self.resolveSource() else { return }
         guard !self.whatsappBusy else { return }
         self.whatsappBusy = true
-        defer { self.whatsappBusy = false }
+        defer { if self.owns(source) { self.whatsappBusy = false } }
         do {
             let params: [String: AnyCodable] = [
                 "channel": AnyCodable("whatsapp"),
             ]
-            let result: ChannelLogoutResult = try await GatewayConnection.shared.requestDecoded(
+            let result: ChannelLogoutResult = try await self.gateway.requestDecoded(
                 method: .channelsLogout,
                 params: params,
-                timeoutMs: 15000)
+                timeoutMs: 15000,
+                ifCurrentRoute: source.lease.route)
+            guard self.owns(source) else { return }
             self.whatsappLoginMessage = result.cleared
                 ? "Logged out and cleared credentials."
                 : "No WhatsApp session found."
             self.whatsappLoginQrDataUrl = nil
+            self.whatsappLoginSessionKey = nil
         } catch {
+            guard self.owns(source) else { return }
             self.whatsappLoginMessage = error.localizedDescription
         }
-        await self.refresh(probe: true)
+        await self.refresh(probe: true, source: source)
     }
 
     func logoutTelegram() async {
+        guard let source = await self.resolveSource() else { return }
         guard !self.telegramBusy else { return }
         self.telegramBusy = true
-        defer { self.telegramBusy = false }
+        defer { if self.owns(source) { self.telegramBusy = false } }
         do {
             let params: [String: AnyCodable] = [
                 "channel": AnyCodable("telegram"),
             ]
-            let result: ChannelLogoutResult = try await GatewayConnection.shared.requestDecoded(
+            let result: ChannelLogoutResult = try await self.gateway.requestDecoded(
                 method: .channelsLogout,
                 params: params,
-                timeoutMs: 15000)
+                timeoutMs: 15000,
+                ifCurrentRoute: source.lease.route)
+            guard self.owns(source) else { return }
             if result.envToken == true {
                 self.configStatus = "Telegram token still set via env; config cleared."
             } else {
@@ -193,17 +261,19 @@ extension ChannelsStore {
                     ? "Telegram token cleared."
                     : "No Telegram token configured."
             }
-            await self.loadConfig()
+            await self.loadConfig(source: source)
         } catch {
+            guard self.owns(source) else { return }
             self.configStatus = error.localizedDescription
         }
-        await self.refresh(probe: true)
+        await self.refresh(probe: true, source: source)
     }
 }
 
 private struct WhatsAppLoginStartResult: Codable {
     let qrDataUrl: String?
     let message: String
+    let sessionKey: String?
     let connected: Bool?
 }
 

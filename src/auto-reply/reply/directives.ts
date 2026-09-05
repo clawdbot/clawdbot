@@ -13,6 +13,7 @@ import {
   type ThinkLevel,
   type VerboseLevel,
 } from "../thinking.js";
+import { removeDirectiveSpan, skipDirectiveArgPrefix } from "./directive-parsing.js";
 
 type ExtractedLevel<T> = {
   cleaned: string;
@@ -25,12 +26,10 @@ type LevelDirectiveParseOptions = {
   strict?: boolean;
 };
 
-const compileDirectivePattern = (names: readonly string[], suffix = ""): RegExp => {
+const compileDirectivePattern = (names: readonly string[]): RegExp => {
   const namePattern = names.map(escapeRegExp).join("|");
-  return new RegExp(`(?:^|\\s)\\/(?:${namePattern})(?=$|\\s|:)${suffix}`, "i");
+  return new RegExp(`(?<!\\S)\\/(?:${namePattern})(?=$|\\s|:)`, "i");
 };
-
-const STATUS_DIRECTIVE_PATTERN = compileDirectivePattern(["status"], `(?:\\s*:\\s*)?`);
 
 const matchLevelDirective = (
   body: string,
@@ -43,15 +42,11 @@ const matchLevelDirective = (
     return null;
   }
   const start = match.index;
-  let i = match.index + match[0].length;
+  const directiveEnd = match.index + match[0].length;
+  const prefixEnd = directiveEnd + skipDirectiveArgPrefix(body.slice(directiveEnd));
+  let i = prefixEnd;
   while (i < body.length && /\s/.test(body.charAt(i))) {
     i += 1;
-  }
-  if (body[i] === ":") {
-    i += 1;
-    while (i < body.length && /\s/.test(body.charAt(i))) {
-      i += 1;
-    }
   }
   const argStart = i;
   while (
@@ -67,7 +62,7 @@ const matchLevelDirective = (
   ) {
     return { start, end: i, rawLevel: candidate };
   }
-  return { start, end: argStart };
+  return { start, end: prefixEnd };
 };
 
 const extractLevelDirective = <T>(
@@ -78,13 +73,11 @@ const extractLevelDirective = <T>(
 ): ExtractedLevel<T> => {
   const match = matchLevelDirective(body, pattern, normalize, options);
   if (!match) {
-    return { cleaned: body.trim(), hasDirective: false };
+    return { cleaned: body, hasDirective: false };
   }
   const rawLevel = match.rawLevel;
   const level = normalize(rawLevel);
-  const cleaned = `${body.slice(0, match.start)} ${body.slice(match.end)}`
-    .replace(/\s+/g, " ")
-    .trim();
+  const cleaned = removeDirectiveSpan(body, match.start, match.end);
   return {
     cleaned,
     level,
@@ -148,19 +141,6 @@ export const extractReasoningDirective = createLevelDirectiveExtractor(
   normalizeReasoningLevel,
 );
 
-export function extractStatusDirective(body?: string): {
-  cleaned: string;
-  hasDirective: boolean;
-} {
-  if (!body) {
-    return { cleaned: "", hasDirective: false };
-  }
-  const match = body.match(STATUS_DIRECTIVE_PATTERN);
-  return {
-    cleaned: match ? body.replace(match[0], " ").replace(/\s+/g, " ").trim() : body.trim(),
-    hasDirective: Boolean(match),
-  };
-}
-
 export type { ElevatedLevel, ReasoningLevel, ThinkLevel, TraceLevel, VerboseLevel };
 export { extractExecDirective } from "./exec/directive.js";
+export { extractStatusDirective } from "./reply-inline.js";

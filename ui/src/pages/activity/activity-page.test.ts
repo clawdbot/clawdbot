@@ -5,19 +5,16 @@ import { afterEach, describe, expect, it, vi } from "vitest";
 import type { AuditRunInspectResult } from "../../../../packages/gateway-protocol/src/schema/audit-run.js";
 import { GatewayRequestError, type GatewayBrowserClient } from "../../api/gateway.ts";
 import type { ApplicationContext, ApplicationGatewaySnapshot } from "../../app/context.ts";
-import type { RunInspectorState } from "./run-inspector-model.ts";
+import type { ActivityRouteData, RunInspectorState } from "./run-inspector-model.ts";
 import type { ActivityEntry } from "./tool-activity.ts";
+import * as liveActivity from "./view.ts";
 import "./activity-page.ts";
 
 type TestActivityPage = HTMLElement & {
   context: ApplicationContext;
   entries: ActivityEntry[];
-  routeData: {
-    mode: "run";
-    selector: { kind: "run"; id: string };
-    selectorId: string | null;
-    decisionCursor: string | null;
-  };
+  routeData: ActivityRouteData;
+  render: () => unknown;
   runInspector: RunInspectorState;
   loadRunInspector: (
     gateway: ApplicationContext["gateway"],
@@ -73,6 +70,28 @@ afterEach(() => {
 });
 
 describe("ActivityPage gateway lifecycle", () => {
+  it.each(["sessions", "run"] as const)("skips Live Activity rendering in %s mode", (mode) => {
+    const page = document.createElement("openclaw-activity-page") as TestActivityPage;
+    page.context = { gateway: gateway(), basePath: "" } as unknown as ApplicationContext;
+    page.entries = [staleEntry()];
+    page.routeData =
+      mode === "sessions"
+        ? { mode, filters: { personId: null, query: "", time: "7d" }, selector: null }
+        : { mode, selector: null, selectorId: null, decisionCursor: null };
+    const render = vi.spyOn(liveActivity, "renderActivity");
+    try {
+      page.render();
+      expect(render).not.toHaveBeenCalled();
+      page.routeData = { mode: "live", selector: null };
+      page.render();
+      expect(render).toHaveBeenCalledExactlyOnceWith(
+        expect.objectContaining({ entries: page.entries }),
+      );
+    } finally {
+      render.mockRestore();
+    }
+  });
+
   it("replays the active gateway on initial bind and source replacement", () => {
     const page = document.createElement("openclaw-activity-page") as TestActivityPage;
     page.context = { gateway: gateway() } as unknown as ApplicationContext;
@@ -108,14 +127,15 @@ describe("ActivityPage gateway lifecycle", () => {
     } as unknown as ApplicationContext["gateway"];
     const page = document.createElement("openclaw-activity-page") as TestActivityPage;
     page.context = { gateway: activeGateway } as unknown as ApplicationContext;
+    const selector = { kind: "run", id: "run-1" } as const;
     page.routeData = {
       mode: "run",
-      selector: { kind: "run", id: "run-1" },
+      selector,
       selectorId: null,
       decisionCursor: null,
     };
 
-    await page.loadRunInspector(activeGateway, client, page.routeData.selector);
+    await page.loadRunInspector(activeGateway, client, selector);
 
     expect(page.runInspector.status).toBe("ready");
     if (page.runInspector.status === "ready") {
@@ -163,14 +183,15 @@ describe("ActivityPage gateway lifecycle", () => {
     } as unknown as ApplicationContext["gateway"];
     const page = document.createElement("openclaw-activity-page") as TestActivityPage;
     page.context = { gateway: activeGateway } as unknown as ApplicationContext;
+    const selector = { kind: "run", id: "run-1" } as const;
     page.routeData = {
       mode: "run",
-      selector: { kind: "run", id: "run-1" },
+      selector,
       selectorId: "receipt-1",
       decisionCursor: "cursor-1",
     };
 
-    await page.loadRunInspector(activeGateway, client, page.routeData.selector);
+    await page.loadRunInspector(activeGateway, client, selector);
 
     expect(page.runInspector).toEqual({ status: "error", recovery });
   });

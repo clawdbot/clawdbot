@@ -28,6 +28,7 @@ type GatewayRequestContextClient = GatewayClient & {
 };
 
 type GatewayRequestContextParams = {
+  trackExecution: GatewayRequestContext["trackExecution"];
   deps: GatewayRequestContext["deps"];
   configRevisionProjector: GatewayRequestContext["configRevisionProjector"];
   runtimeState: Pick<
@@ -35,10 +36,12 @@ type GatewayRequestContextParams = {
     "cronState" | "controlUiSessionPullRequests" | "sessionViewerPresence"
   >;
   getRuntimeConfig: GatewayRequestContext["getRuntimeConfig"];
+  isConfigReloadSettled: GatewayRequestContext["isConfigReloadSettled"];
   getGatewayMethodRegistry: NonNullable<GatewayRequestContext["getGatewayMethodRegistry"]>;
   gatewayTlsFingerprint?: GatewayRequestContext["gatewayTlsFingerprint"];
   sessionCompanion: SessionCompanionService;
   sessionObserver: SessionObserverService;
+  mentionInbox?: GatewayRequestContext["mentionInbox"];
   getMcpAppSandboxPort?: GatewayRequestContext["getMcpAppSandboxPort"];
   ensureSandboxHostPort?: GatewayRequestContext["ensureSandboxHostPort"];
   getPortalService?: () => GatewayRequestContext["portalService"];
@@ -46,10 +49,15 @@ type GatewayRequestContextParams = {
   isTerminalEnabled: GatewayRequestContext["isTerminalEnabled"];
   execApprovalManager: GatewayRequestContext["execApprovalManager"];
   questionManager?: GatewayRequestContext["questionManager"];
-  cancelRunBoundApprovals?: (runId: string, context: GatewayRequestContext) => number;
+  cancelRunBoundApprovals?: (
+    target: Parameters<NonNullable<GatewayRequestContext["cancelRunBoundApprovals"]>>[0],
+    context: GatewayRequestContext,
+  ) => number;
   forwardPluginApprovalRequest?: GatewayRequestContext["forwardPluginApprovalRequest"];
+  approvalWebPushDelivery?: GatewayRequestContext["approvalWebPushDelivery"];
   pluginApprovalIosPushDelivery?: GatewayRequestContext["pluginApprovalIosPushDelivery"];
   pluginApprovalManager: GatewayRequestContext["pluginApprovalManager"];
+  placementStandingGrants: GatewayRequestContext["placementStandingGrants"];
   systemAgentApprovalManager?: GatewayRequestContext["systemAgentApprovalManager"];
   listSessionPendingApprovals: GatewayRequestContext["listSessionPendingApprovals"];
   loadGatewayModelCatalog: GatewayRequestContext["loadGatewayModelCatalog"];
@@ -172,6 +180,7 @@ export function createGatewayRequestContext(
 ): GatewayRequestContextWithClientLookup {
   const scopeUpgradeCoordinator = new ScopeUpgradeCoordinator();
   const context: GatewayRequestContextWithClientLookup = {
+    trackExecution: params.trackExecution,
     deps: params.deps,
     configRevisionProjector: params.configRevisionProjector,
     // Keep cron reads live so config hot reload can swap cron/store state without rebuilding
@@ -183,12 +192,14 @@ export function createGatewayRequestContext(
       return params.runtimeState.cronState.storePath;
     },
     getRuntimeConfig: params.getRuntimeConfig,
+    isConfigReloadSettled: params.isConfigReloadSettled,
     getGatewayMethodRegistry: params.getGatewayMethodRegistry,
     gatewayTlsFingerprint: params.gatewayTlsFingerprint,
     controlUiSessionPullRequests: params.runtimeState.controlUiSessionPullRequests,
     sessionViewerPresence: params.runtimeState.sessionViewerPresence,
     sessionCompanion: params.sessionCompanion,
     sessionObserver: params.sessionObserver,
+    mentionInbox: params.mentionInbox,
     notifyPluginMetadataChanged: params.notifyPluginMetadataChanged,
     getMcpAppSandboxPort: params.getMcpAppSandboxPort,
     ensureSandboxHostPort: params.ensureSandboxHostPort,
@@ -204,8 +215,10 @@ export function createGatewayRequestContext(
       ? (runId) => params.cancelRunBoundApprovals!(runId, context)
       : undefined,
     forwardPluginApprovalRequest: params.forwardPluginApprovalRequest,
+    approvalWebPushDelivery: params.approvalWebPushDelivery,
     pluginApprovalIosPushDelivery: params.pluginApprovalIosPushDelivery,
     pluginApprovalManager: params.pluginApprovalManager,
+    placementStandingGrants: params.placementStandingGrants,
     systemAgentApprovalManager: params.systemAgentApprovalManager,
     listSessionPendingApprovals: params.listSessionPendingApprovals,
     loadGatewayModelCatalog: params.loadGatewayModelCatalog,

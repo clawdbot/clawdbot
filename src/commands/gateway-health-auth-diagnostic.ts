@@ -1,4 +1,5 @@
 /** Gateway health auth diagnostic helpers for reachable-but-unauthenticated probes. */
+import { isGatewayProtocolResponseError } from "../../packages/gateway-client/src/protocol-request.js";
 import {
   classifyGatewayConnectFailure,
   ConnectErrorDetailCodes,
@@ -30,12 +31,12 @@ export function gatewayProbeResultWasRateLimited(
 
 /** Detects a structured or legacy rate-limit connect error before close projection. */
 export function gatewayConnectErrorWasRateLimited(error: unknown): boolean {
-  if (!(error instanceof Error)) {
+  if (!isGatewayProtocolResponseError(error)) {
     return false;
   }
   return (
     classifyGatewayConnectFailure({
-      details: (error as Error & { details?: unknown }).details,
+      details: error.details,
       message: error.message,
     }).kind === "rate-limited"
   );
@@ -45,21 +46,7 @@ export function gatewayConnectErrorWasRateLimited(error: unknown): boolean {
  * Detects when a daemon probe reached the gateway even if read-scope auth failed.
  */
 export function gatewayProbeResultSawGateway(status: GatewayProbeReachabilityEvidence): boolean {
-  if (status.ok) {
-    return true;
-  }
-  const auth = status.auth;
-  if (auth?.capability && auth.capability !== "unknown") {
-    return true;
-  }
-  if (auth?.role || (auth?.scopes?.length ?? 0) > 0) {
-    return true;
-  }
-  const server = status.server;
-  if (server?.version || server?.connId) {
-    return true;
-  }
-  return gatewayProbeFailureKind(status) !== "unreachable";
+  return status.ok || status.gatewayReached === true;
 }
 
 /**

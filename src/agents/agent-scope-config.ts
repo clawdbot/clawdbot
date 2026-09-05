@@ -66,6 +66,7 @@ export type ResolvedAgentConfig = {
   utilityModel?: AgentEntry["utilityModel"];
   thinkingDefault?: AgentEntry["thinkingDefault"];
   verboseDefault?: AgentDefaultsConfig["verboseDefault"];
+  toolProgressDetail?: AgentDefaultsConfig["toolProgressDetail"];
   reasoningDefault?: AgentEntry["reasoningDefault"];
   fastModeDefault?: AgentEntry["fastModeDefault"];
   contextInjection?: AgentEntry["contextInjection"];
@@ -90,6 +91,41 @@ export type ResolvedAgentConfig = {
 /** Strip null bytes from paths to prevent ENOTDIR errors. */
 function stripNullBytes(s: string): string {
   return s.replaceAll("\0", "");
+}
+
+type AgentRosterFacts = {
+  compatibilityAgentId?: { value: string | undefined };
+  entryByNormalizedId?: Map<string, { clone: boolean; entry: AgentEntry }>;
+};
+
+type AgentRosterFactsBatch = {
+  config: OpenClawConfig;
+  facts: AgentRosterFacts;
+};
+
+let activeAgentRosterFactsBatch: AgentRosterFactsBatch | undefined;
+
+/**
+ * Runs a read-only callback with batch-scoped roster memoization.
+ *
+ * Runtime discovery calls the owner helpers for every configured model. Keep
+ * their derived facts on this exact config and discard them before returning,
+ * so later config mutations cannot observe a stale process cache.
+ */
+export function withAgentRosterFactsBatch<T>(config: OpenClawConfig, callback: () => T): T {
+  const parent = activeAgentRosterFactsBatch;
+  activeAgentRosterFactsBatch = parent?.config === config ? parent : { config, facts: {} };
+  try {
+    return callback();
+  } finally {
+    activeAgentRosterFactsBatch = parent;
+  }
+}
+
+function readAgentRosterFacts(cfg: OpenClawConfig): AgentRosterFacts | undefined {
+  return activeAgentRosterFactsBatch?.config === cfg
+    ? activeAgentRosterFactsBatch.facts
+    : undefined;
 }
 
 /** Lists valid configured agent entries from config. */
@@ -222,10 +258,19 @@ function tryResolveRawLegacyDefaultAgentId(cfg: OpenClawConfig): string | undefi
 
 /** Resolves sole/raw legacy owners plus the retained in-process migration owner. */
 export function tryResolveLegacyCompatibilityAgentId(cfg: OpenClawConfig): string | undefined {
+  const facts = readAgentRosterFacts(cfg);
+  if (facts?.compatibilityAgentId) {
+    return facts.compatibilityAgentId.value;
+  }
   const retainedAgentId = getRetainedLegacyDefaultAgentId(cfg);
-  return retainedAgentId && listAgentIds(cfg).includes(retainedAgentId)
-    ? retainedAgentId
-    : tryResolveDefaultAgentId(cfg);
+  const value =
+    retainedAgentId && listAgentIds(cfg).includes(retainedAgentId)
+      ? retainedAgentId
+      : tryResolveDefaultAgentId(cfg);
+  if (facts) {
+    facts.compatibilityAgentId = { value };
+  }
+  return value;
 }
 
 /** Resolves the owner for ambient system work and explicit requests. */
@@ -251,16 +296,24 @@ export function resolveAmbientOwnerAgentId(
   return tryResolveAmbientOwnerAgentId(cfg, requestedAgentId) ?? resolveSoleAgentId(cfg, context);
 }
 
-/** Resolves a CLI operation owner while preserving legacy default markers outside explicit fleets. */
+/** Returns a CLI operation owner while preserving legacy defaults outside explicit fleets. */
+export function tryResolveAgentOperationAgentId(
+  cfg: OpenClawConfig,
+  requestedAgentId?: string,
+): string | undefined {
+  if (requestedAgentId !== undefined || cfg.agents?.ownership === "explicit") {
+    return tryResolveAmbientOwnerAgentId(cfg, requestedAgentId);
+  }
+  return tryResolveLegacyCompatibilityAgentId(cfg);
+}
+
+/** Resolves a CLI operation owner, requiring selection when no owner is configured. */
 export function resolveAgentOperationAgentId(
   cfg: OpenClawConfig,
   requestedAgentId?: string,
   context?: AgentSelectionContext,
 ): string {
-  if (requestedAgentId !== undefined || cfg.agents?.ownership === "explicit") {
-    return resolveAmbientOwnerAgentId(cfg, requestedAgentId, context);
-  }
-  return tryResolveLegacyCompatibilityAgentId(cfg) ?? resolveDefaultAgentId(cfg, context);
+  return tryResolveAgentOperationAgentId(cfg, requestedAgentId) ?? resolveSoleAgentId(cfg, context);
 }
 
 /**
@@ -282,6 +335,14 @@ export function tryResolveDefaultAgentId(cfg: OpenClawConfig): string | undefine
 
 export function resolveAgentEntry(cfg: OpenClawConfig, agentId: string): AgentEntry | undefined {
   const id = normalizeAgentId(agentId);
+  const facts = readAgentRosterFacts(cfg);
+  if (facts) {
+    // Point lookups inside a batch reuse one first-match index instead of
+    // re-traversing the roster per model ref (#135743).
+    const byId = (facts.entryByNormalizedId ??= buildAgentEntryIndex(cfg));
+    const found = byId.get(id);
+    return found ? (found.clone ? { ...found.entry } : found.entry) : undefined;
+  }
   // Point lookups are hot; the public list helper must clone every keyed entry.
   // Traverse the roster directly so a match does not project unrelated agents.
   const roster = readAgentRosterProperty(cfg);
@@ -304,6 +365,26 @@ export function resolveAgentEntry(cfg: OpenClawConfig, agentId: string): AgentEn
     );
   }
   return undefined;
+}
+
+/**
+ * First-match index over the projected roster for batch point lookups.
+ *
+ * Keyed entries must stay clone-on-read (callers may mutate the returned
+ * entry); list entries keep the original object, matching the direct
+ * traversal semantics of `resolveAgentEntry` outside a batch.
+ */
+function buildAgentEntryIndex(
+  cfg: OpenClawConfig,
+): Map<string, { clone: boolean; entry: AgentEntry }> {
+  const index = new Map<string, { clone: boolean; entry: AgentEntry }>();
+  for (const { entry, source } of listAgentEntriesWithSource(cfg)) {
+    const normalizedId = normalizeAgentId(entry?.id);
+    if (!index.has(normalizedId)) {
+      index.set(normalizedId, { clone: source.kind === "entries", entry });
+    }
+  }
+  return index;
 }
 
 /** Resolves the authored entry object for in-place canonical config mutations. */
@@ -353,6 +434,7 @@ export function resolveAgentConfig(
     utilityModel: readStringValue(entry.utilityModel),
     thinkingDefault: entry.thinkingDefault,
     verboseDefault: entry.verboseDefault ?? agentDefaults?.verboseDefault,
+    toolProgressDetail: entry.toolProgressDetail ?? agentDefaults?.toolProgressDetail,
     reasoningDefault: entry.reasoningDefault,
     fastModeDefault: entry.fastModeDefault ?? agentDefaults?.fastModeDefault,
     contextInjection: entry.contextInjection,
@@ -423,6 +505,14 @@ export function resolveAgentWorkspaceDir(
   }
   const stateDir = resolveStateDir(env);
   return stripNullBytes(path.join(stateDir, `workspace-${id}`));
+}
+
+/** Resolves the configured task directory without changing the agent workspace. */
+export function resolveAgentRunCwd(cfg: OpenClawConfig, agentId: string): string | undefined {
+  const cwd =
+    normalizeOptionalString(resolveAgentEntry(cfg, agentId)?.cwd) ??
+    normalizeOptionalString(cfg.agents?.defaults?.cwd);
+  return cwd ? stripNullBytes(resolveUserPath(cwd)) : undefined;
 }
 
 /** How a resolved agent workspace should be provisioned by the lifecycle owner. */

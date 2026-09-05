@@ -6,6 +6,7 @@ import { DESKTOP_FIELD_LABELS } from "./zod-schema.desktop.js";
 import { projectTelemetryFieldMetadata } from "./zod-schema.telemetry.js";
 
 export const FIELD_LABELS: Record<string, string> = {
+  worktreeRoot: "Worktree Root",
   "channels.discord.activities": "Discord Activities",
   "channels.discord.activities.clientSecret": "Discord Activities Client Secret",
   "channels.discord.activities.applicationId": "Discord Activities Application ID",
@@ -75,6 +76,7 @@ export const FIELD_LABELS: Record<string, string> = {
   "diagnostics.cacheTrace.enabled": "Cache Trace Enabled",
   "agents.entries.*.identity.avatar": "Identity Avatar",
   "agents.entries.*.skills": "Agent Skill Filter",
+  "agents.entries.*.cwd": "Agent Working Directory",
   "agents.entries.*.runtime": "Agent Runtime",
   "agents.entries.*.runtime.type": "Agent Runtime Type",
   "agents.entries.*.runtime.acp": "Agent ACP Runtime",
@@ -369,14 +371,17 @@ export const FIELD_LABELS: Record<string, string> = {
   "tools.web.fetch.ssrfPolicy.dangerouslyAllowPrivateNetwork":
     "Web Fetch Dangerously Allow Private Network",
   "tools.web.fetch.ssrfPolicy.allowedHostnames": "Web Fetch Allowed Hostnames",
+  "tools.web.fetch.ssrfPolicy.blockedHostnames": "Web Fetch Blocked Hostnames",
   "tools.web.fetch.ssrfPolicy.allowRfc2544BenchmarkRange":
     "Web Fetch Allow RFC 2544 Benchmark Range",
   "tools.web.fetch.ssrfPolicy.allowIpv6UniqueLocalRange": "Web Fetch Allow IPv6 Unique Local Range",
   "gateway.controlUi.basePath": "Control UI Base Path",
+  "gateway.controlUi.experimental": "Experimental Control UI Features",
+  "gateway.controlUi.experimental.customPlugins": "Custom Plugin UI",
   "gateway.controlUi.environment": "Control UI Environment",
   "gateway.controlUi.environment.label": "Control UI Environment Label",
   "gateway.controlUi.environment.color": "Control UI Environment Color",
-  "gateway.controlUi.toolTitles": "Control UI Tool Call Titles",
+  "gateway.controlUi.communityInvite": "Control UI Community Invitation",
   "gateway.controlUi.github.token": "Control UI GitHub Service Credential",
   "gateway.controlUi.sessionObserver": "Control UI Session Observer",
   "gateway.controlUi.root": "Control UI Assets Root",
@@ -468,6 +473,7 @@ export const FIELD_LABELS: Record<string, string> = {
   "agents.defaults.subagents.delegationMode": "Sub-agent Delegation Mode",
   "agents.entries.*.subagents.delegationMode": "Sub-agent Delegation Mode",
   "agents.defaults.workspace": "Workspace",
+  "agents.defaults.cwd": "Working Directory",
   "agents.defaults.repoRoot": "Repo Root",
   "agents.defaults.skipOptionalBootstrapFiles": "Skipped Optional Bootstrap Files",
   "agents.defaults.contextInjection": "Context Injection",
@@ -741,6 +747,7 @@ export const FIELD_LABELS: Record<string, string> = {
   "browser.ssrfPolicy": "Browser SSRF Policy",
   "browser.ssrfPolicy.dangerouslyAllowPrivateNetwork": "Browser Dangerously Allow Private Network",
   "browser.ssrfPolicy.allowedHostnames": "Browser Allowed Hostnames",
+  "browser.ssrfPolicy.blockedHostnames": "Browser Blocked Hostnames",
   "browser.ssrfPolicy.allowRfc2544BenchmarkRange": "Browser Allow RFC 2544 Benchmark Range",
   "browser.ssrfPolicy.allowIpv6UniqueLocalRange": "Browser Allow IPv6 Unique Local Range",
   "tools.exec.timeoutSeconds": "Exec Timeout (Seconds)",
@@ -792,11 +799,13 @@ export const FIELD_LABELS: Record<string, string> = {
   "session.maintenance.highWaterBytes": "Session Disk High-water Target",
   cron: "Automations",
   "cron.enabled": "Automations Enabled",
+  "cron.skipMissedJobs": "Skip Missed Recurring Automations",
   "cron.webhookToken": "Automations Webhook Bearer Token",
   "cron.webhookSsrfPolicy": "Automations Webhook SSRF Policy",
   "cron.webhookSsrfPolicy.dangerouslyAllowPrivateNetwork":
     "Automations Webhook Dangerously Allow Private Network",
   "cron.webhookSsrfPolicy.allowedHostnames": "Automations Webhook Allowed Hostnames",
+  "cron.webhookSsrfPolicy.blockedHostnames": "Automations Webhook Blocked Hostnames",
   "cron.webhookSsrfPolicy.allowRfc2544BenchmarkRange":
     "Automations Webhook Allow RFC 2544 Benchmark Range",
   "cron.webhookSsrfPolicy.allowIpv6UniqueLocalRange":
@@ -807,6 +816,7 @@ export const FIELD_LABELS: Record<string, string> = {
   "transcripts.autoStart": "Transcripts Auto-start Sources",
   "transcripts.autoStart[].providerId": "Transcript Source Provider ID",
   "transcripts.autoStart[].sessionId": "Transcript Session ID",
+  "transcripts.autoStart[].whenOccupied": "Transcript Capture When Occupied",
   "transcripts.autoStart[].title": "Transcript Title",
   "transcripts.autoStart[].accountId": "Transcript Account ID",
   "transcripts.autoStart[].guildId": "Discord Guild ID",
@@ -901,7 +911,6 @@ export const FIELD_LABELS: Record<string, string> = {
   "messages.queue.cap": "Queue Capacity",
   "messages.queue.drop": "Queue Drop Strategy",
   "messages.inbound": "Inbound Debounce",
-  "messages.suppressToolErrors": "Suppress Tool Error Warnings",
   "messages.ackReaction": "Ack Reaction Emoji",
   "messages.ackReactionScope": "Ack Reaction Scope",
   "messages.statusReactions": "Status Reactions",

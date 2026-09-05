@@ -115,27 +115,21 @@ export abstract class MemoryKeywordRetrieval extends MemoryProviderLifecycle {
   ): Promise<MemorySearchResult[]> {
     return await this.withManagerOperation(async () => {
       if (this.memorySourceProvenanceRepairPending) {
-        const repairPending = () =>
+        this.memorySourceProvenanceRepairPending =
           this.db
             .prepare(
               `SELECT 1 FROM memory_index_sources
                WHERE source = 'memory' AND hash = '' LIMIT 1`,
             )
             .get() !== undefined;
-        try {
-          // Provenance schema adoption invalidates legacy source hashes. Finish that
-          // owner-classified reindex before the first automatic candidate read.
-          if (repairPending()) {
-            await this.syncAdmitted(
-              { reason: "search" },
-              { allowEmbeddingBootstrapFallback: true },
-            );
-          }
-        } catch (err) {
-          log.warn(`memory sync failed (automatic candidates): ${formatErrorMessage(err)}`);
-        }
-        this.memorySourceProvenanceRepairPending = repairPending();
         if (this.memorySourceProvenanceRepairPending) {
+          // Automatic recall runs before the model. Keep repair admitted for teardown
+          // without holding the reply; unclassified sources stay excluded.
+          void this.withManagerOperation(() =>
+            this.syncAdmitted({ reason: "search" }, { allowEmbeddingBootstrapFallback: true }),
+          ).catch((err: unknown) => {
+            log.warn(`memory sync failed (automatic candidates): ${formatErrorMessage(err)}`);
+          });
           return [];
         }
       }
@@ -235,6 +229,7 @@ export abstract class MemoryKeywordRetrieval extends MemoryProviderLifecycle {
         ...(typeof row?.project_key === "string" && row.project_key.trim()
           ? { projectKey: row.project_key.trim() }
           : {}),
+        ...(row?.provenance ? { provenance: row.provenance } : {}),
       };
     });
   }
@@ -298,7 +293,7 @@ export abstract class MemoryKeywordRetrieval extends MemoryProviderLifecycle {
       ],
       exactPathQuery,
     );
-    return this.attachRecallMetadata(this.limitKeywordSearchHits(merged, limit));
+    return this.limitKeywordSearchHits(merged, limit);
   }
 
   protected async searchKeywordWithFallback(
@@ -315,21 +310,21 @@ export abstract class MemoryKeywordRetrieval extends MemoryProviderLifecycle {
     ).catch(() => []);
     const nonExactResults = fullQueryResults.filter((result) => result.exactPathSpecificity === 0);
     if (nonExactResults.length >= limit) {
-      return fullQueryResults;
+      return this.attachRecallMetadata(fullQueryResults);
     }
 
     // Supplement thin candidate pools for conversational queries, but cap the
     // extra FTS probes so long prompts cannot fan out into unbounded sqlite work.
     const fallbackTerms = this.resolveKeywordFallbackTerms(query);
     if (fallbackTerms.length === 0) {
-      return fullQueryResults;
+      return this.attachRecallMetadata(fullQueryResults);
     }
     const strictFtsQuery = buildFtsQuery(query)?.toLowerCase();
     const keywordFtsQuery = buildFtsQuery(fallbackTerms.join(" "))?.toLowerCase();
     if (fullQueryResults.length > 0 && strictFtsQuery === keywordFtsQuery) {
       // Expansion did not normalize this already-matching keyword query; OR
       // probes can only weaken its strict relevance before importance ranking.
-      return fullQueryResults;
+      return this.attachRecallMetadata(fullQueryResults);
     }
 
     const resultSets = await Promise.all(
@@ -342,9 +337,13 @@ export abstract class MemoryKeywordRetrieval extends MemoryProviderLifecycle {
         ).catch(() => []),
       ),
     );
-    return this.limitKeywordSearchHits(
-      this.mergeKeywordSearchHits([fullQueryResults, ...resultSets], query),
-      limit,
+    // Enrich only the retained candidates after all probes deduplicate. Provenance
+    // and recall annotations share one read under the search generation lease.
+    return this.attachRecallMetadata(
+      this.limitKeywordSearchHits(
+        this.mergeKeywordSearchHits([fullQueryResults, ...resultSets], query),
+        limit,
+      ),
     );
   }
 

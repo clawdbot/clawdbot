@@ -54,18 +54,11 @@ openclaw_live_link_runtime_tree "$tmp_dir"
 openclaw_live_stage_state_dir "$tmp_dir/.openclaw-state"
 openclaw_live_prepare_staged_config
 cd "$tmp_dir"
-docker_packages="$(node --import tsx scripts/print-cli-backend-live-metadata.ts \
-  --docker-packages "${OPENCLAW_LIVE_GATEWAY_PROVIDERS:-}" "${OPENCLAW_LIVE_GATEWAY_MODELS:-}")"
-while IFS= read -r docker_package; do
-  [ -n "$docker_package" ] || continue
-  openclaw_live_run_setup_command 180 "live CLI backend setup" npm install -g "$docker_package"
-done <<<"$docker_packages"
+openclaw_live_prepare_cli_backend_docker_packages \
+  "${OPENCLAW_LIVE_GATEWAY_PROVIDERS:-}" \
+  "${OPENCLAW_LIVE_GATEWAY_MODELS:-}"
 openclaw_live_stage_gemini_auth
-if [[ -f scripts/test-live.mjs ]]; then
-  node scripts/test-live.mjs -- src/gateway/gateway-models.profiles.live.test.ts
-else
-  node --import tsx scripts/test-live.mts -- src/gateway/gateway-models.profiles.live.test.ts
-fi
+openclaw_live_run_staged_script scripts/test-live -- src/gateway/gateway-models.profiles.live.test.ts
 EOF
 
 OPENCLAW_LIVE_DOCKER_REPO_ROOT="$ROOT_DIR" "$TRUSTED_HARNESS_DIR/scripts/test-live-build-docker.sh"
@@ -108,6 +101,9 @@ DOCKER_RUN_ARGS+=(--rm -t \
   -e OPENCLAW_DOCKER_AUTH_PRESTAGED="$DOCKER_AUTH_PRESTAGED" \
   -e OPENCLAW_DOCKER_AUTH_DIRS_RESOLVED="$AUTH_DIRS_CSV" \
   -e OPENCLAW_DOCKER_AUTH_FILES_RESOLVED="$AUTH_FILES_CSV" \
+  -e OPENCLAW_ALLOW_FROZEN_TARGET_SCENARIO_OMISSIONS="${OPENCLAW_ALLOW_FROZEN_TARGET_SCENARIO_OMISSIONS:-0}" \
+  -e OPENCLAW_SELECTED_SHA="${OPENCLAW_SELECTED_SHA:-}" \
+  -e OPENCLAW_TOOLING_SHA="${OPENCLAW_TOOLING_SHA:-}" \
   -e OPENCLAW_LIVE_DOCKER_SCRIPTS_DIR="${DOCKER_TRUSTED_HARNESS_CONTAINER_DIR}/scripts" \
   -e OPENCLAW_LIVE_DOCKER_SOURCE_STAGE_MODE="${OPENCLAW_LIVE_DOCKER_SOURCE_STAGE_MODE:-copy}" \
   -e OPENCLAW_LIVE_TEST=1 \

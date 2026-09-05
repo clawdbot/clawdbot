@@ -1,6 +1,7 @@
-import { mkdir, writeFile } from "node:fs/promises";
+import { writeFile } from "node:fs/promises";
 import path from "node:path";
-import { expect, it } from "vitest";
+import { beforeEach, expect, it } from "vitest";
+import { createControlUiE2eArtifactDir } from "../test-helpers/control-ui-e2e-artifacts.ts";
 import { installMockGateway } from "../test-helpers/control-ui-e2e.ts";
 import { createControlUiE2eSuite } from "./control-ui-e2e-suite.test-support.ts";
 
@@ -12,12 +13,12 @@ const suite = createControlUiE2eSuite({
 });
 
 const proofVariant = process.env.OPENCLAW_PICKER_PROOF_VARIANT;
-const proofDirectory = path.join(
-  process.cwd(),
-  ".artifacts",
-  "control-ui-e2e",
-  "channel-wizard-option-contrast",
-);
+let proofDirectory: string;
+beforeEach(() => {
+  if (proofVariant) {
+    proofDirectory = createControlUiE2eArtifactDir("channel-wizard-option-contrast");
+  }
+});
 
 suite.define(() => {
   it("keeps option subtext legible and keyboard focus visible in forced colors", async () => {
@@ -73,7 +74,10 @@ suite.define(() => {
         });
 
         expect((await page.goto(`${suite.server.baseUrl}settings/channels`))?.status()).toBe(200);
-        await page.locator(".channels-item", { hasText: "iMessage" }).first().click();
+        await page
+          .locator("button.channels-item, button.channels-item__detail", { hasText: "iMessage" })
+          .first()
+          .click();
         await page.locator(".channels-detail").getByRole("button", { name: "Run setup" }).click();
 
         const wizard = page.locator(".channels-wizard");
@@ -101,7 +105,6 @@ suite.define(() => {
         });
 
         if (proofVariant) {
-          await mkdir(proofDirectory, { recursive: true });
           await page.screenshot({
             animations: "disabled",
             fullPage: true,

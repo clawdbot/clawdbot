@@ -34,6 +34,8 @@ export async function attemptServerEndpointCompaction(params: {
   customInstructions?: string;
   config?: OpenClawConfig;
   onUsage?: (usage: ServerEndpointCompactionResult["usage"]) => void;
+  onCompactionCommitted?: () => void;
+  assertActive?: () => void;
 }): Promise<ServerEndpointCompactionResult | undefined> {
   if (
     params.trigger === "overflow" ||
@@ -42,6 +44,8 @@ export async function attemptServerEndpointCompaction(params: {
   ) {
     return undefined;
   }
+  params.assertActive?.();
+  let compacted: ServerEndpointCompactionResult;
   try {
     const messages = params.context.messages.filter(
       (message): message is Message =>
@@ -61,7 +65,7 @@ export async function attemptServerEndpointCompaction(params: {
     if (!owner || owner.type !== "message" || owner.message.role !== "assistant") {
       throw new Error("Responses compact endpoint requires a persisted assistant owner");
     }
-    const compacted = await compactWithSafetyTimeout(
+    compacted = await compactWithSafetyTimeout(
       (signal) =>
         requestPreparedOpenAIResponsesCompaction(
           params.streamFn,
@@ -73,6 +77,7 @@ export async function attemptServerEndpointCompaction(params: {
       params.requestOptions.signal ? { abortSignal: params.requestOptions.signal } : undefined,
     );
     params.onUsage?.(compacted.usage);
+    params.assertActive?.();
     const replacement = structuredClone(owner.message);
     captureOpenAIResponsesCompaction(
       replacement,
@@ -102,11 +107,15 @@ export async function attemptServerEndpointCompaction(params: {
         `Responses compact endpoint checkpoint was not persisted: ${rewritten.reason}`,
       );
     }
-    return compacted;
   } catch (err) {
+    params.assertActive?.();
     log.debug(
       `Responses compact endpoint failed; falling back to client compaction: ${formatErrorMessage(err)}`,
     );
     return undefined;
   }
+  // The rewrite has committed. Observer failures must not trigger a second,
+  // client-side compaction of the already replaced context.
+  params.onCompactionCommitted?.();
+  return compacted;
 }

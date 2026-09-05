@@ -456,18 +456,25 @@ impl DesktopState {
                 return self.connect_remote_locked(app, remote);
             }
         }
-        let cli = match self.resolve_cli() {
+        let cli = self.resolve_cli();
+        if !explicit_local && !remote_gateway::has_configured_gateway()? {
+            // First-run setup belongs to the pending bootstrap reply. Navigating
+            // here replaces its WebView and loses the local/remote choice.
+            let snapshot = match cli {
+                Ok(_) => GatewaySnapshot::unconfigured(),
+                Err(CliError::Missing) => GatewaySnapshot::missing_cli(),
+                Err(error) => return Err(error.to_string()),
+            };
+            self.update_tray(&snapshot);
+            return Ok(snapshot);
+        }
+        let cli = match cli {
             Ok(cli) => cli,
             Err(CliError::Missing) => {
                 return self.show_missing_cli(app, explicit_local, None);
             }
             Err(error) => return Err(error.to_string()),
         };
-        if !explicit_local && !remote_gateway::has_configured_gateway()? {
-            let snapshot = GatewaySnapshot::unconfigured();
-            self.update_tray(&snapshot);
-            return Ok(snapshot);
-        }
         if explicit_local {
             self.inner
                 .remote_tunnel

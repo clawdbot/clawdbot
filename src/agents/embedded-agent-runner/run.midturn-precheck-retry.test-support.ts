@@ -1,5 +1,5 @@
 // Full-entry coverage for retrying an already-capped mid-turn transcript.
-import { beforeAll, beforeEach, describe, expect, it } from "vitest";
+import { afterEach, beforeAll, beforeEach, describe, expect, it } from "vitest";
 import { buildEmbeddedRunnerAssistant } from "../test-helpers/embedded-agent-runner-e2e-fixtures.js";
 import {
   makeAttemptResult,
@@ -9,10 +9,12 @@ import {
 import {
   mockedCompactDirect,
   mockedRunEmbeddedAttempt,
-  overflowBaseRunParams,
   resetSharedRunIntegrationHarnessMocks,
 } from "./run.overflow-compaction.harness.js";
-import { loadSharedRunIntegrationHarness } from "./run.shared-integration-harness.test-support.js";
+import {
+  createSharedRunIntegrationSession,
+  loadSharedRunIntegrationHarness,
+} from "./run.shared-integration-harness.test-support.js";
 
 const settledExecAssistant = buildEmbeddedRunnerAssistant({
   content: [{ type: "toolCall" as const, id: "call-exec", name: "exec", arguments: {} }],
@@ -28,6 +30,7 @@ const settledExecResult = {
   timestamp: 2,
 };
 
+let session: Awaited<ReturnType<typeof createSharedRunIntegrationSession>>;
 let runEmbeddedAgent: Awaited<ReturnType<typeof loadSharedRunIntegrationHarness>>;
 
 function requireAttemptCall(index: number): {
@@ -52,7 +55,7 @@ function expectRetryContinuesFromTranscript(): void {
   const retry = requireAttemptCall(1);
   expect(retry.prompt).toContain("Continue from the current transcript");
   expect(retry.suppressNextUserMessagePersistence).toBe(true);
-  expect(retry.prompt).not.toBe(overflowBaseRunParams.prompt);
+  expect(retry.prompt).not.toBe(session.runParams.prompt);
 }
 
 function makeReplayUnsafeMidTurnOverflow(params?: {
@@ -101,8 +104,13 @@ describe("runEmbeddedAgent mid-turn precheck retry", () => {
     runEmbeddedAgent = await loadSharedRunIntegrationHarness();
   });
 
-  beforeEach(() => {
+  beforeEach(async () => {
     resetSharedRunIntegrationHarnessMocks();
+    session = await createSharedRunIntegrationSession();
+  });
+
+  afterEach(async () => {
+    await session?.cleanup();
   });
 
   it("continues once when persisted truncation is already a no-op", async () => {
@@ -122,7 +130,7 @@ describe("runEmbeddedAgent mid-turn precheck retry", () => {
       .mockResolvedValueOnce(makeAttemptResult());
 
     const result = await runEmbeddedAgent({
-      ...overflowBaseRunParams,
+      ...session.runParams,
       runId: "run-midturn-precheck-noop",
       promptCacheKey: "stable-cache-key",
     });
@@ -162,7 +170,7 @@ describe("runEmbeddedAgent mid-turn precheck retry", () => {
     );
 
     const result = await runEmbeddedAgent({
-      ...overflowBaseRunParams,
+      ...session.runParams,
       runId: "run-midturn-precheck-provider-overflow",
     });
 
@@ -185,7 +193,7 @@ describe("runEmbeddedAgent mid-turn precheck retry", () => {
     );
 
     const result = await runEmbeddedAgent({
-      ...overflowBaseRunParams,
+      ...session.runParams,
       runId: "run-midturn-settled-unsafe",
     });
 
@@ -216,7 +224,7 @@ describe("runEmbeddedAgent mid-turn precheck retry", () => {
     );
 
     const result = await runEmbeddedAgent({
-      ...overflowBaseRunParams,
+      ...session.runParams,
       runId: "run-midturn-waiting-exec",
     });
 
@@ -250,7 +258,7 @@ describe("runEmbeddedAgent mid-turn precheck retry", () => {
       );
 
       const result = await runEmbeddedAgent({
-        ...overflowBaseRunParams,
+        ...session.runParams,
         runId: `run-midturn-waiting-exec-rotated-${activeCount}`,
       });
 
@@ -273,7 +281,7 @@ describe("runEmbeddedAgent mid-turn precheck retry", () => {
     mockedRunEmbeddedAttempt.mockResolvedValueOnce(makeReplayUnsafeMidTurnOverflow(attemptParams));
 
     const result = await runEmbeddedAgent({
-      ...overflowBaseRunParams,
+      ...session.runParams,
       runId: `run-midturn-fail-closed-${_label.replaceAll(" ", "-")}`,
     });
 
@@ -297,7 +305,7 @@ describe("runEmbeddedAgent mid-turn precheck retry", () => {
     });
 
     const result = await runEmbeddedAgent({
-      ...overflowBaseRunParams,
+      ...session.runParams,
       runId: "run-midturn-settled-compaction-failure",
     });
 

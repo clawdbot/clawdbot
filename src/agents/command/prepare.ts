@@ -8,10 +8,10 @@ import {
   normalizeVerboseLevel,
 } from "../../auto-reply/thinking.js";
 import { formatCliCommand } from "../../cli/command-format.js";
+import type { InternalSessionEntry } from "../../config/sessions/types.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import { resolveAgentExplicitRecipientSession } from "../../infra/outbound/agent-delivery.js";
 import { buildOutboundSessionContext } from "../../infra/outbound/session-context.js";
-import { normalizePluginsConfig } from "../../plugins/config-state.js";
 import { resolvePluginMetadataSnapshot } from "../../plugins/plugin-metadata-snapshot.js";
 import {
   classifySessionKeyShape,
@@ -27,6 +27,7 @@ import {
 import { resolveUserPath } from "../../utils.js";
 import { isDeliverableMessageChannel, resolveMessageChannel } from "../../utils/message-channel.js";
 import { resolveAgentRuntimeConfig } from "../agent-runtime-config.js";
+import { resolveAgentRunCwd } from "../agent-scope-config.js";
 import {
   listAgentIds,
   resolveAgentDir,
@@ -50,7 +51,6 @@ import {
 } from "./attempt-execution.shared.js";
 import { resolveExplicitAgentCommandSessionKey } from "./explicit-session-key.js";
 import { loadAcpManagerRuntime } from "./runtime-loaders.js";
-import { createAgentCommandSessionWorkingCopy } from "./session-helpers.js";
 import { resolveSession } from "./session.js";
 import type { AgentCommandOpts } from "./types.js";
 
@@ -122,7 +122,7 @@ export async function prepareAgentCommandExecution(
     );
   }
 
-  const { cfg } = await resolveAgentRuntimeConfig(runtime, {
+  const cfg = await resolveAgentRuntimeConfig(runtime, {
     runtimeTargetsChannelSecrets: opts.deliver === true,
     runtimeChannelSecretScope:
       opts.deliver !== true && shouldResolveExplicitRecipientSession && recipientChannel
@@ -234,11 +234,11 @@ export async function prepareAgentCommandExecution(
     sessionId: commandOpts.sessionId,
     sessionKey: explicitSessionKey ?? explicitRecipientSession?.sessionKey,
     agentId: agentIdOverride,
-    clone: false,
   });
   const {
     sessionId,
     sessionKey,
+    sessionEntry: sessionEntryRaw,
     storePath,
     isNewSession,
     previousSessionId,
@@ -246,24 +246,17 @@ export async function prepareAgentCommandExecution(
     persistedVerbose,
   } = sessionResolution;
   const harnessSessionError = sessionKey
-    ? resolveAgentHarnessSessionContextError(sessionKey, sessionResolution.sessionEntry)
+    ? resolveAgentHarnessSessionContextError(sessionKey, sessionEntryRaw)
     : undefined;
   if (harnessSessionError) {
     throw new Error(harnessSessionError);
   }
   const isOneShotModelRun = opts.modelRun === true || opts.promptMode === "none";
-  if (
-    isOneShotModelRun &&
-    sessionKey &&
-    sessionResolution.sessionEntry?.modelSelectionLocked === true
-  ) {
+  if (isOneShotModelRun && sessionKey && sessionEntryRaw?.modelSelectionLocked === true) {
     throw new Error(AGENT_HARNESS_MODEL_RUN_FORBIDDEN_MESSAGE);
   }
-  const { sessionEntry: sessionEntryRaw, sessionStore } = createAgentCommandSessionWorkingCopy({
-    sessionKey,
-    sessionEntry: sessionResolution.sessionEntry,
-    sessionStore: sessionResolution.sessionStore,
-  });
+  const sessionStore: Record<string, InternalSessionEntry> =
+    sessionKey && sessionEntryRaw ? { [sessionKey]: sessionEntryRaw } : {};
   const sessionAgentId =
     agentIdOverride ??
     resolveSessionAgentId({ sessionKey: sessionKey ?? explicitSessionKey, config: cfg });
@@ -275,17 +268,28 @@ export async function prepareAgentCommandExecution(
   const workspaceDirRaw =
     normalizedSpawned.workspaceDir ?? resolveAgentWorkspaceDir(cfg, sessionAgentId);
   const workspaceDir = resolveUserPath(workspaceDirRaw);
+  const { getAcpSessionManager } = await loadAcpManagerRuntime();
+  const acpManager = getAcpSessionManager();
+  const acpResolution = sessionKey
+    ? acpManager.resolveSession({ cfg, sessionKey, agentId: sessionAgentId })
+    : null;
+  // Configured run cwd is a Gateway-local path; ACP-placed sessions ("ready" or
+  // "stale") execute on their own node with a node-owned execCwd, so the config
+  // fallback applies only to ordinary sessions and never bridges into a node.
+  const isAcpPlacedSession = acpResolution !== null && acpResolution.kind !== "none";
   const cwd =
-    normalizeOptionalString(opts.cwd) ?? normalizeOptionalString(sessionEntryRaw?.spawnedCwd);
+    normalizeOptionalString(opts.cwd) ??
+    normalizeOptionalString(sessionEntryRaw?.spawnedCwd) ??
+    (isAcpPlacedSession ? undefined : resolveAgentRunCwd(cfg, sessionAgentId));
   const agentDir = resolveAgentDir(cfg, sessionAgentId);
-  const pluginsEnabled = normalizePluginsConfig(cfg.plugins).enabled;
+  const pluginsEnabled = cfg.plugins?.enabled !== false;
   const preparedMetadataSnapshot = runtimeContext?.pluginGeneration.pluginMetadataSnapshot;
   const manifestMetadataSnapshot = pluginsEnabled
     ? (preparedMetadataSnapshot ??
       resolvePluginMetadataSnapshot({ config: cfg, env: process.env, workspaceDir }))
     : undefined;
   const modelManifestContext = {
-    manifestPlugins: manifestMetadataSnapshot?.plugins ?? [],
+    manifestPlugins: manifestMetadataSnapshot ?? [],
   } satisfies ModelManifestNormalizationContext;
   const configuredModel = resolveConfiguredModelRef({
     cfg,
@@ -368,9 +372,6 @@ export async function prepareAgentCommandExecution(
       provisioning: workspaceProvisioning,
     });
     const runId = opts.runId?.trim() || sessionId;
-    const { getAcpSessionManager } = await loadAcpManagerRuntime();
-    const acpManager = getAcpSessionManager();
-    const acpResolution = sessionKey ? acpManager.resolveSession({ cfg, sessionKey }) : null;
     let promptMessage = message;
     if (!isRawModelRun && (message.includes("$") || message.trimStart().startsWith("/"))) {
       const {

@@ -99,6 +99,33 @@ const identityContext: ExecutionIdentityContextV1 = {
 };
 
 describe("operator approval decision receipts", () => {
+  it.each([null, "permission-change", "approval-scope-closed"])(
+    "only recommends a new run when the outer approval owner stopped (%s)",
+    (resolverId) => {
+      const database = databaseOptions();
+      insertOperatorApproval({ approval: approval("cancelled-scope"), databaseOptions: database });
+      forceDenyOperatorApproval({
+        id: "cancelled-scope",
+        status: "cancelled",
+        reason: "run-aborted",
+        resolver: { kind: "system", id: resolverId },
+        nowMs: 2_000,
+        databaseOptions: database,
+      });
+      const receipt = pageOperatorApprovalReceiptsForRun({
+        context,
+        limit: 1,
+        nowMs: 3_000,
+        databaseOptions: database,
+      }).entries[0]?.receipt;
+      expect(receipt?.remediation).toEqual([
+        expect.objectContaining({
+          code: resolverId === null ? "start_new_run" : "request_approval_again",
+        }),
+      ]);
+    },
+  );
+
   it("projects every terminal state from the authoritative first answer", () => {
     const database = databaseOptions();
     for (const id of [

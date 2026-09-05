@@ -187,18 +187,14 @@ export function analyzeBootstrapBudget(params: {
 export function buildBootstrapBudgetState(params: {
   config?: OpenClawConfig;
   agentId?: string | null;
-  bootstrapFiles: WorkspaceBootstrapFile[];
-  injectedFiles: EmbeddedContextFile[];
+  files: BootstrapInjectionStat[];
   previousSignature?: string;
   seenSignatures?: string[];
 }) {
   const bootstrapMaxChars = resolveBootstrapMaxChars(params.config, params.agentId);
   const bootstrapTotalMaxChars = resolveBootstrapTotalMaxChars(params.config, params.agentId);
   const bootstrapAnalysis = analyzeBootstrapBudget({
-    files: buildBootstrapInjectionStats({
-      bootstrapFiles: params.bootstrapFiles,
-      injectedFiles: params.injectedFiles,
-    }),
+    files: params.files,
     bootstrapMaxChars,
     bootstrapTotalMaxChars,
   });

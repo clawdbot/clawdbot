@@ -57,10 +57,27 @@ The provider inventory reports the local fallback winner separately from global 
 
 ## OpenAI transcription alongside ChatGPT/Codex OAuth
 
-An OpenAI API key and a ChatGPT/Codex OAuth login are separate credentials even
-though both use the `openai` provider. To keep OAuth first for normal text and
-reasoning requests while using an API key for speech-to-text, create a dedicated
-API-key profile and select it only on the audio model entry.
+OpenAI audio uses the standard `/v1/audio/transcriptions` endpoint with the
+selected API-key or ChatGPT/Codex OAuth profile. An OAuth login can transcribe
+when the account permits it; access, quota, and billing remain account-specific.
+The default model is `gpt-4o-transcribe`; configured models, prompts, and language
+hints are sent through the same multipart request for either credential class.
+Custom endpoints and request overrides require an API-key profile.
+
+Automatic selection can try another provider or local backend when the OpenAI
+plugin rejects authentication or configuration before uploading audio. The
+rejection remains visible in the attempt results; missing credentials simply
+leave that candidate unavailable. Once a provider attempts transcription,
+upload or HTTP failures are reported without automatically sending the recording
+to another provider or switching credential classes. Explicit model lists retain
+their configured fallback order.
+
+Unless a profile or OAuth auth mode is explicitly selected, an authored OpenAI
+provider key takes precedence over ambient OAuth for audio.
+To keep audio billing explicitly separate while keeping OAuth first for normal
+text and reasoning, create a dedicated API-key profile and select it only on the
+audio model entry. This is optional; an API key is not required merely to choose
+a transcription model.
 
 Repeat these steps for every agent that can receive audio. For a single-agent
 installation, run them once for that agent.
@@ -228,6 +245,7 @@ provider-wide rather than scoped to the audio model entry.
 - Mistral setup details: [Mistral](/providers/mistral).
 - SenseAudio picks up `SENSEAUDIO_API_KEY` when `provider: "senseaudio"` is used. Setup details: [SenseAudio](/providers/senseaudio).
 - Audio providers can use defaults under `tools.media.audio` or override `baseUrl`, `headers`, `providerOptions`, and limits on their `tools.media.models[]` entry.
+- Leave `tools.media.audio.language` unset for language autodetection. OpenAI-compatible transcription requests then omit the implicit English prompt; explicit custom prompts and language hints are preserved. Use transcription prompts for context or spelling in the audio's language, not instructions to the downstream agent.
 - The built-in audio size cap is 20MB. An entry-level `maxBytes` override can change it; oversize audio is skipped for that model and the next entry is tried.
 - Audio files below 1024 bytes are skipped before provider/CLI transcription.
 - Default `maxChars` for audio is **unset** (full transcript). Set `tools.media.audio.maxChars` or per-entry `maxChars` to trim output.
@@ -279,7 +297,8 @@ On channels that support audio preflight, OpenClaw transcribes audio **before** 
 - Known file-output modes are authoritative: an empty or missing inferred transcript file produces no transcript instead of falling back to CLI progress output.
 - For `parakeet-mlx`, use `--output-format txt` (or `all`) with `--output-dir` and the default `{filename}` output template. The upstream `PARAKEET_OUTPUT_FORMAT` and `PARAKEET_OUTPUT_TEMPLATE` environment variables are also honored. OpenClaw reads `<output-dir>/<media-basename>.txt`; the default `srt` format, other formats, and custom output templates continue to use stdout.
 - Keep timeouts reasonable (`timeoutSeconds`, default 60s) to avoid blocking the reply queue.
-- Preflight transcription only processes the **first** audio attachment for mention detection. Additional audio attachments are processed during the main media-understanding phase.
+- Preflight transcription only processes the **first** untranscribed audio attachment for mention detection, even when the main phase prefers the last attachment or processes all attachments. Additional audio attachments follow the configured policy during the main media-understanding phase; an empty preflight result does not mark an attachment as transcribed.
+- The preflight transcript stays in the model-facing message when later media or link processing adds context. A separate channel envelope does not replace that prepared text.
 
 ## Related
 

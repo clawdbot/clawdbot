@@ -6,7 +6,7 @@ import { describe, expect, it, vi } from "vitest";
 import { createDeferred } from "../../../test/helpers/promise.js";
 import { createSandboxedReadTool, createSandboxedWriteTool } from "../agent-tools.read.js";
 import { resolveSandboxFileMutationQueueKey } from "./file-mutation-identity.js";
-import { SANDBOX_CREATE_EXISTS_EXIT_CODE } from "./fs-bridge-mutation-helper.js";
+import { SANDBOX_CREATE_EXISTS_EXIT_CODE } from "./fs-bridge-mutation-python.js";
 import { createSandbox } from "./fs-bridge.test-helpers.js";
 import {
   createRemoteShellSandboxFsBridge,
@@ -81,6 +81,79 @@ function createWorkspaceReadBridge(workspaceDir: string) {
 }
 
 describe("remote sandbox fs bridge", () => {
+  it.runIf(process.platform !== "win32").each([
+    { workspaceAccess: "rw", mutation: "write" },
+    { workspaceAccess: "none", mutation: "write" },
+    { workspaceAccess: "ro", mutation: "write" },
+    { workspaceAccess: "rw", mutation: "remove" },
+    { workspaceAccess: "none", mutation: "remove" },
+    { workspaceAccess: "rw", mutation: "rename" },
+    { workspaceAccess: "none", mutation: "rename" },
+  ] as const)(
+    "enforces $workspaceAccess workspace writes and protects remote-only skills from $mutation",
+    async ({ workspaceAccess, mutation }) => {
+      await withTempDir("openclaw-remote-fs-payload-", async (stateDir) => {
+        const workspaceDir = path.join(await fs.realpath(stateDir), "host-workspace");
+        const remoteWorkspaceDir = path.join(await fs.realpath(stateDir), "remote 'workspace'");
+        await fs.mkdir(workspaceDir);
+        await fs.mkdir(remoteWorkspaceDir);
+        const { runtime } = createLocalRemoteRuntime({
+          remoteWorkspaceDir,
+          remoteAgentWorkspaceDir: remoteWorkspaceDir,
+        });
+        const bridge = createRemoteShellSandboxFsBridge({
+          sandbox: createSandbox({
+            workspaceDir,
+            agentWorkspaceDir: workspaceDir,
+            workspaceAccess,
+          }),
+          runtime,
+        });
+        const filePath = "quoted ' \" $() `literal`.bin";
+        const payload = Buffer.from([0, 255, 128, 10, 13, 39, 34, 36, 96]);
+        const createFileExclusive = bridge.createFileExclusive!.bind(bridge);
+        if (workspaceAccess === "ro") {
+          await expect(createFileExclusive({ filePath, data: payload })).rejects.toThrow(
+            "read-only",
+          );
+          await expect(fs.readdir(remoteWorkspaceDir)).resolves.toEqual([]);
+          return;
+        }
+
+        await expect(createFileExclusive({ filePath, data: payload })).resolves.toBe("created");
+        await expect(bridge.readFile({ filePath })).resolves.toEqual(payload);
+        await expect(
+          createFileExclusive({ filePath, data: Buffer.alloc(1_048_576) }),
+        ).resolves.toBe("exists");
+        await expect(fs.readFile(path.join(remoteWorkspaceDir, filePath))).resolves.toEqual(
+          payload,
+        );
+
+        await bridge.writeFile({ filePath: "empty.txt", data: Buffer.alloc(0) });
+        await expect(fs.readFile(path.join(remoteWorkspaceDir, "empty.txt"))).resolves.toEqual(
+          Buffer.alloc(0),
+        );
+        await expect(bridge.readFile({ filePath: "empty.txt", maxBytes: 0 })).resolves.toEqual(
+          Buffer.alloc(0),
+        );
+        await expect(fs.readdir(workspaceDir)).resolves.toEqual([]);
+        const skillRelativePath =
+          mutation === "write" ? "skills/demo/SKILL.md" : ".agents/skills/demo/SKILL.md";
+        const skillPath = path.join(remoteWorkspaceDir, skillRelativePath);
+        await fs.mkdir(path.dirname(skillPath), { recursive: true });
+        await fs.writeFile(skillPath, "managed instructions");
+        const mutate =
+          mutation === "write"
+            ? bridge.writeFile({ filePath: skillRelativePath, data: "changed" })
+            : mutation === "remove"
+              ? bridge.remove({ filePath: ".agents", recursive: true })
+              : bridge.rename({ from: ".agents", to: "moved-instructions" });
+        await expect(mutate).rejects.toThrow("read-only");
+        await expect(fs.readFile(skillPath, "utf8")).resolves.toBe("managed instructions");
+      });
+    },
+  );
+
   it("preserves an authoritative create collision when stdin closes with EPIPE", async () => {
     const pipeError = Object.assign(new Error("write EPIPE"), { code: "EPIPE" });
     const { runtime } = createLocalRemoteRuntime({
@@ -97,7 +170,7 @@ describe("remote sandbox fs bridge", () => {
 
     await expect(
       runtime.runRemoteShellScript({
-        script: "python3 /dev/fd/3 \"$@\" 3<<'PY'",
+        script: 'python3 -c "$python_script" "$@"',
         args: ["create", "/workspace", "", "existing.txt", "1"],
         stdin: Buffer.alloc(1_048_576),
         allowFailure: true,
@@ -155,7 +228,7 @@ describe("remote sandbox fs bridge", () => {
 
     await expect(
       runtime.runRemoteShellScript({
-        script: "python3 /dev/fd/3 \"$@\" 3<<'PY'",
+        script: 'python3 -c "$python_script" "$@"',
         args: ["create", "/workspace", "", "existing.txt", "1"],
         stdin: Buffer.alloc(1_048_576),
         allowFailure: true,
@@ -260,7 +333,7 @@ describe("remote sandbox fs bridge", () => {
   });
 });
 
-// These fixtures execute remote GNU stat/readlink and the fd 3 Python launcher
+// These fixtures execute remote GNU stat/readlink and the Python launcher
 // locally. Portable Python behavior stays in fs-bridge-mutation-helper.test.ts.
 describe.runIf(process.platform === "linux")("remote sandbox fs bridge (GNU shell)", () => {
   it("orders sandbox tools through one remote alias identity", async () => {
@@ -442,6 +515,9 @@ describe.runIf(process.platform === "linux")("remote sandbox fs bridge (GNU shel
       await expect(
         createFileExclusive!({ filePath: "escape/outside.txt", data: "blocked" }),
       ).rejects.toThrow(/escapes allowed mounts/);
+      await expect(bridge.mkdirp({ filePath: "escape/dir" })).rejects.toThrow(
+        /escapes allowed mounts/,
+      );
     });
   });
 
@@ -468,10 +544,6 @@ describe.runIf(process.platform === "linux")("remote sandbox fs bridge (GNU shel
         Buffer.from("hello"),
       );
       expect(calls).toHaveLength(2);
-      const readCall = calls.find((call) => call.args?.[0] === "read");
-      expect(readCall?.script).toContain("python3 /dev/fd/3 \"$@\" 3<<'PY'");
-      expect(readCall?.script).toContain("read_file(parent_fd, basename)");
-      expect(readCall?.script).not.toContain('cat -- "$1"');
     });
   });
 

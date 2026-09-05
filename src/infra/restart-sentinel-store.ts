@@ -7,6 +7,7 @@ import {
   executeSqliteQueryTakeFirstSync,
   getNodeSqliteKysely,
 } from "./kysely-sync.js";
+import { updateRecoverySchema, type UpdateRecovery } from "./update-recovery.js";
 
 type RestartSentinelLog = {
   stdoutTail?: string | null;
@@ -23,6 +24,8 @@ type RestartSentinelStep = {
 };
 
 type RestartSentinelStats = {
+  runId?: string;
+  recovery?: UpdateRecovery;
   mode?: string;
   root?: string;
   requiresRestart?: boolean;
@@ -178,11 +181,14 @@ function parseRestartSentinelStats(value: unknown): RestartSentinelStats | null 
   const mode = parseOptionalNullableString(value, "mode");
   const root = parseOptionalNullableString(value, "root");
   const handoffId = parseOptionalNullableString(value, "handoffId");
+  const runId = parseOptionalNullableString(value, "runId");
   const reason = parseOptionalNullableString(value, "reason");
   const before = value.before;
   const after = value.after;
   const steps = value.steps;
   const durationMs = value.durationMs;
+  const recovery =
+    value.recovery === undefined ? undefined : updateRecoverySchema.safeParse(value.recovery);
   if (
     mode === false ||
     mode === null ||
@@ -190,6 +196,8 @@ function parseRestartSentinelStats(value: unknown): RestartSentinelStats | null 
     root === null ||
     handoffId === false ||
     handoffId === null ||
+    runId === false ||
+    runId === null ||
     reason === false ||
     (value.requiresRestart !== undefined && typeof value.requiresRestart !== "boolean") ||
     (before !== undefined && before !== null && !isPlainRecord(before)) ||
@@ -201,6 +209,10 @@ function parseRestartSentinelStats(value: unknown): RestartSentinelStats | null 
     return null;
   }
   const result: RestartSentinelStats = {};
+  // Recovery is diagnostic here; unsupported metadata must not suppress the restart notice.
+  if (recovery?.success) {
+    result.recovery = recovery.data;
+  }
   if (mode !== undefined) {
     result.mode = mode;
   }
@@ -212,6 +224,9 @@ function parseRestartSentinelStats(value: unknown): RestartSentinelStats | null 
   }
   if (handoffId !== undefined) {
     result.handoffId = handoffId;
+  }
+  if (runId !== undefined) {
+    result.runId = runId;
   }
   if (before !== undefined) {
     result.before = before as Record<string, unknown> | null;
@@ -591,20 +606,29 @@ export function writeRestartSentinelRowSync(
   rawPayload: RestartSentinelPayload,
 ): RestartSentinel {
   const payload = requireValidPayload(rawPayload);
-  const current = readRestartSentinelRowSync(db);
-  const currentRevision =
-    current.kind === "missing"
-      ? null
-      : current.kind === "valid"
-        ? current.sentinel.revision
-        : current.revision;
-  const revision = nextRevision(
-    maxRevision(currentRevision, readRestartSentinelRevisionFloorSync(db)),
-  );
+  const revision = nextRevision(readRestartSentinelSnapshotSync(db).revision);
   const row = buildRestartSentinelRow(payload, revision);
   upsertRestartSentinelRowSync(db, row);
   advanceRestartSentinelRevisionFloorSync(db, revision);
   return { version: 1, payload, revision };
+}
+
+/** Read inside a transaction; the floor also identifies an absent, consumed notification. */
+export function readRestartSentinelSnapshotSync(db: DatabaseSync): {
+  state: RestartSentinelRowState;
+  revision: number | null;
+} {
+  const state = readRestartSentinelRowSync(db);
+  const currentRevision =
+    state.kind === "missing"
+      ? null
+      : state.kind === "valid"
+        ? state.sentinel.revision
+        : state.revision;
+  return {
+    state,
+    revision: maxRevision(currentRevision, readRestartSentinelRevisionFloorSync(db)),
+  };
 }
 
 export function writeUpdateInstallReceiptRowSync(
@@ -635,14 +659,12 @@ export function writeRestartSentinelRowIfRevisionSync(
   rawPayload: RestartSentinelPayload,
   expectedRevision: number,
 ): RestartSentinel | null {
-  const current = readRestartSentinelRowSync(db);
+  const { state: current, revision: previousRevision } = readRestartSentinelSnapshotSync(db);
   if (current.kind !== "valid" || current.sentinel.revision !== expectedRevision) {
     return null;
   }
   const payload = requireValidPayload(rawPayload);
-  const revision = nextRevision(
-    maxRevision(expectedRevision, readRestartSentinelRevisionFloorSync(db)),
-  );
+  const revision = nextRevision(previousRevision);
   const row = buildRestartSentinelRow(payload, revision);
   const stateDb = getNodeSqliteKysely<GatewayRestartSentinelDatabase>(db);
   const result = executeSqliteQuerySync(

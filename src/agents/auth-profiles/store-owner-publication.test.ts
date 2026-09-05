@@ -10,10 +10,12 @@ import {
   AuthProfileMigrationRequiredError,
   markAuthProfileMigrationRequired,
 } from "./legacy-source-diagnostic.js";
-import { loadPersistedSharedAuthProfileStore } from "./persisted.js";
 import {
   getRuntimeAuthProfileStoreCredentialMutationToken,
   getRuntimeAuthProfileStoreStateMutationToken,
+} from "./mutation-lineage.js";
+import { loadPersistedSharedAuthProfileStore } from "./persisted.js";
+import {
   replaceRuntimeAuthProfileStoreSnapshots,
   setRuntimeAuthProfileStoreSnapshot,
 } from "./runtime-snapshots.js";

@@ -16,6 +16,7 @@ export type CommandScope = "text" | "native" | "both";
  */
 export type CommandTier = "essential" | "standard" | "power";
 
+// v2026.8.1 SDK definitions may still use "docks"; it remains presentation-only.
 export type CommandCategory =
   | "session"
   | "options"
@@ -98,6 +99,8 @@ export type NativeCommandSpec = {
 /** Extra context used when normalizing slash command text. */
 export type CommandNormalizeOptions = {
   botUsername?: string;
+  /** Keeps complete directive/task arguments, including whitespace and later lines. */
+  preserveArguments?: boolean;
   /** Strip an explicit command target only while channel bot identity is unavailable. */
   targetedCommandMode?: "pre-identity";
 };

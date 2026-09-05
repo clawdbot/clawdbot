@@ -225,7 +225,7 @@ describe("CUA Driver direct session", () => {
     await driver.dispose();
   });
 
-  it("loads an ESM driver asynchronously and exposes it on a later availability probe", async () => {
+  it("awaits an ESM driver before the first availability declaration without starting an execution", async () => {
     let resolveSdk: ((value: typeof sdk) => void) | undefined;
     const sdkPromise = new Promise<typeof sdk>((resolve) => {
       resolveSdk = resolve;
@@ -233,11 +233,13 @@ describe("CUA Driver direct session", () => {
     const loadSdk = vi.fn(() => sdkPromise as never);
     const driver = createCuaDriver({ loadSdk });
 
-    expect(driver.isAvailable()).toBe(false);
+    const preparing = driver.prepareAvailability?.();
     expect(loadSdk).toHaveBeenCalledOnce();
 
     resolveSdk?.(sdk);
-    await vi.waitFor(() => expect(driver.isAvailable()).toBe(true));
+    await preparing;
+    expect(driver.isAvailable()).toBe(true);
+    expect(mocks.startSession).not.toHaveBeenCalled();
     await driver.getDesktopState();
 
     expect(loadSdk).toHaveBeenCalledOnce();
@@ -256,6 +258,7 @@ describe("CUA Driver direct session", () => {
     });
     const driver = createCuaDriver({ loadSdk });
 
+    await driver.prepareAvailability?.();
     expect(driver.isAvailable()).toBe(false);
     await expect(driver.getDesktopState()).rejects.toThrow(
       "COMPUTER_DRIVER_UNAVAILABLE: failed to load CUA Driver SDK: native module is temporarily unavailable",

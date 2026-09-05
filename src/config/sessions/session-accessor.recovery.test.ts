@@ -94,6 +94,7 @@ describe("recoverSessionEntryFromRestartTombstone", () => {
       }),
     ).toMatchObject({
       archivedAt: expect.any(Number),
+      archiveReason: "restart-recovery",
       mainRestartRecovery: {
         cycleId: "cycle-1",
         revision: 5,

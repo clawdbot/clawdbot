@@ -1,9 +1,10 @@
-import type { TemplateResult } from "lit";
+import { html, nothing, type TemplateResult } from "lit";
 import { isKernelOwnedChannelConfigKey } from "../../../../src/config/channel-config-keys.js";
 import type { ConfigUiHints } from "../../api/types.ts";
 import { hintForPath, humanize, type JsonSchema } from "../../components/config-form.shared.ts";
 import { icons } from "../../components/icons.ts";
 import { t } from "../../i18n/index.ts";
+import type { ConfigProps } from "./view-types.ts";
 
 export function getChannelConfigGroups(schema: JsonSchema, hints: ConfigUiHints) {
   const entries = Object.entries(schema.properties ?? {});
@@ -76,7 +77,17 @@ type SectionCategoryDefinition = {
 export const SECTION_CATEGORIES: SectionCategoryDefinition[] = [
   {
     id: "core",
-    sections: ["env", "auth", "update", "meta", "logging", "diagnostics", "cli", "secrets"],
+    sections: [
+      "env",
+      "auth",
+      "update",
+      "meta",
+      "logging",
+      "diagnostics",
+      "cli",
+      "secrets",
+      "wizard",
+    ],
   },
   { id: "ai", sections: ["agents", "models", "skills", "tools", "memory", "session"] },
   {
@@ -89,13 +100,83 @@ export const SECTION_CATEGORIES: SectionCategoryDefinition[] = [
     id: "infrastructure",
     sections: ["gateway", "browser", "nodeHost", "discovery", "acp", "mcp"],
   },
-  { id: "appearance", sections: ["__appearance__", "ui", "wizard"] },
+  { id: "appearance", sections: ["__appearance__", "ui"] },
 ];
 
 export const CATEGORISED_KEYS = new Set(
   SECTION_CATEGORIES.flatMap((category) => category.sections),
 );
 
-export function getSectionIcon(key: string) {
+function getSectionIcon(key: string) {
   return sidebarIcons[key] ?? icons.file;
+}
+
+export function renderConfigAccordionNav(
+  props: Pick<ConfigProps, "activeSection" | "onSectionChange">,
+  allCategories: SectionCategory[],
+  resetContentScroll: (target: EventTarget | null) => void,
+) {
+  return html`
+    <div class="config-accordion-nav">
+      ${allCategories.map((category) => {
+        const expanded = category.sections.some((section) => section.key === props.activeSection);
+        const panelId = `config-accordion-panel-${category.id}`;
+        return html`
+          <div class="config-accordion-group">
+            <button
+              class="config-accordion-group__header ${
+                expanded ? "config-accordion-group__header--active" : ""
+              }"
+              aria-expanded=${expanded ? "true" : "false"}
+              aria-controls=${panelId}
+              @click=${(event: Event) => {
+                const firstKey = category.sections[0]?.key ?? null;
+                props.onSectionChange(expanded ? null : firstKey);
+                resetContentScroll(event.currentTarget);
+              }}
+            >
+              <span class="config-accordion-group__icon">
+                ${getSectionIcon(category.sections[0]?.key ?? "default")}
+              </span>
+              <span>${category.label}</span>
+              <svg
+                class="config-accordion-group__chevron ${
+                  expanded ? "config-accordion-group__chevron--open" : ""
+                }"
+                viewBox="0 0 24 24"
+                fill="none"
+                stroke="currentColor"
+                stroke-width="2"
+                width="14"
+                height="14"
+              >
+                <polyline points="6 9 12 15 18 9"></polyline>
+              </svg>
+            </button>
+            <div id=${panelId} class="config-accordion-group__items" ?hidden=${!expanded}>
+              ${category.sections.map(
+                (section) => html`<button
+                  class="config-accordion-group__item ${
+                    props.activeSection === section.key
+                      ? "config-accordion-group__item--active"
+                      : ""
+                  }"
+                  aria-current=${props.activeSection === section.key ? "true" : nothing}
+                  @click=${(event: Event) => {
+                    props.onSectionChange(section.key);
+                    resetContentScroll(event.currentTarget);
+                  }}
+                >
+                  <span class="config-accordion-group__item-icon">
+                    ${getSectionIcon(section.key)}
+                  </span>
+                  ${section.label}
+                </button>`,
+              )}
+            </div>
+          </div>
+        `;
+      })}
+    </div>
+  `;
 }

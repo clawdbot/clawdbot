@@ -160,7 +160,11 @@ describe("subagent registry sqlite store", () => {
   it.each([
     {
       name: "visible",
-      terminalReply: { disposition: "visible", text: "restart-visible" } as const,
+      terminalReply: {
+        disposition: "visible",
+        text: "restart-visible",
+        modelRouteChange: "Model route changed: requested/model → actual/model.",
+      } as const,
       resultText: "restart-visible",
     },
     {
@@ -327,6 +331,7 @@ describe("subagent registry sqlite store", () => {
         generation: 3,
         createdAt: 100,
         execution: {
+          status: "terminal",
           startedAt: 110,
           endedAt: 250,
           outcome: { status: "error" },

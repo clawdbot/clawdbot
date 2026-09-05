@@ -13,7 +13,6 @@ import {
   readExactSessionEntryRowValidated,
 } from "./session-accessor.sqlite-entry-store.js";
 import {
-  cloneSessionEntry,
   getSessionKysely,
   resolveSqliteReadScope,
   resolveSqliteScope,
@@ -87,7 +86,7 @@ export function loadExactSessionEntryReadOnlyResult(
     found: true,
     value: {
       sessionKey,
-      entry: scope.clone === false ? result.value.entry : cloneSessionEntry(result.value.entry),
+      entry: result.value.entry,
     },
   };
 }

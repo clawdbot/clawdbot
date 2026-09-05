@@ -63,6 +63,17 @@ describe("agent internal events", () => {
     ).toBe(result);
   });
 
+  it("keeps a bounded route change separate from child result text", () => {
+    const event = {
+      ...taskCompletionEvent("child result"),
+      modelRouteChange: "Model route changed: requested/model → actual/model.",
+    } satisfies AgentInternalEvent;
+    const prompt = formatAgentInternalEventsForPrompt([event]);
+
+    expect(extractChildResult(prompt)).toBe("child result");
+    expect(prompt).toContain(event.modelRouteChange);
+  });
+
   it("bounds status labels carrying caller-supplied error text", () => {
     const event = {
       ...taskCompletionEvent("result"),

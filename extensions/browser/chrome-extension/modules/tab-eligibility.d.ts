@@ -18,6 +18,8 @@ export type TabEligibilityResult =
   | { eligible: true; reason: null }
   | { eligible: false; reason: TabEligibilityReason };
 
+export function isValidTabId(value: unknown): value is number;
+
 export function effectiveTabUrl(tab: BrowserTabSnapshot | null | undefined): string | undefined;
 
 export function tabEligibility(

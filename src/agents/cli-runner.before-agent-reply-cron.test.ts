@@ -1,6 +1,5 @@
-/** Tests cron before_agent_reply gating at the CLI runner entrypoint. */
-
 import { expectDefined } from "@openclaw/normalization-core";
+/** Tests cron before_agent_reply gating at the CLI runner entrypoint. */
 import { afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 import { SILENT_REPLY_TOKEN } from "../auto-reply/tokens.js";
 import {
@@ -13,7 +12,8 @@ import {
   type DiagnosticEventPayload,
 } from "../infra/diagnostic-events.js";
 import type { HookRunner } from "../plugins/hooks.js";
-import { wrapRunWithTestAdmission } from "./admitted-run-context.test-support.js";
+import { wrapRunWithTestPreparedAdmission } from "./admitted-run-context.test-support.js";
+import { getOrCreateSessionMcpRuntime } from "./agent-bundle-mcp-manager.test-support.js";
 import { testing as cliBackendsTesting } from "./cli-backends.test-support.js";
 import type { CliOutput } from "./cli-output-contracts.js";
 import { CliAuthProfilePreparationError } from "./cli-runner/auth-profile-preparation-error.js";
@@ -189,7 +189,7 @@ beforeEach(() => {
 
 beforeAll(async () => {
   const cliRunner = await import("./cli-runner.js");
-  runCliAgent = wrapRunWithTestAdmission(cliRunner.runCliAgent);
+  runCliAgent = wrapRunWithTestPreparedAdmission(cliRunner.runCliAgent);
   ({ restoreCliRunnerTestDeps, setCliRunnerTestDeps } = cliRunner);
 });
 
@@ -965,11 +965,11 @@ describe("runCliAgent before_agent_reply seam", () => {
     executePreparedCliRunMock.mockResolvedValue({ text: "real reply" });
 
     try {
-      await mcpTools.getOrCreateSessionMcpRuntime({
+      await getOrCreateSessionMcpRuntime({
         ...runtimeParams,
         sessionId: originalSessionId,
       });
-      const successorRuntime = await mcpTools.getOrCreateSessionMcpRuntime({
+      const successorRuntime = await getOrCreateSessionMcpRuntime({
         ...runtimeParams,
         sessionId: successorSessionId,
       });

@@ -8,6 +8,7 @@ import type {
   ContextEngineSessionTarget,
 } from "../../context-engine/types.js";
 import type { AgentMessage } from "../runtime/index.js";
+import { resolveToolResultContextMaxChars } from "../tool-result-limits.js";
 import { formatContextLimitTruncationNotice } from "./context-truncation-notice.js";
 import { log } from "./logger.js";
 import { MidTurnPrecheckSignal, type MidTurnPrecheckRequest } from "./run/midturn-precheck.js";
@@ -16,6 +17,7 @@ import {
   type CompactionReplayPressureContext,
 } from "./run/preemptive-compaction.js";
 import {
+  TOOL_IMAGE_CHARS,
   TOOL_RESULT_CHARS_PER_TOKEN_ESTIMATE,
   type MessageCharEstimateCache,
   createMessageCharEstimateCache,
@@ -25,7 +27,6 @@ import {
 } from "./tool-result-char-estimator.js";
 import { truncateToolResultMessage, truncateToolResultText } from "./tool-result-truncation.js";
 
-const SINGLE_TOOL_RESULT_CONTEXT_SHARE = 0.5;
 const TRANSCRIPT_PROMPT_TEXT_KEY = "__openclawTranscriptPromptText";
 
 type GuardableTransformContext = (
@@ -205,9 +206,10 @@ function truncateToolResultToChars(
       ]);
     };
 
-    // Reserve non-text content first. The shared allocator keeps diagnostic tails
-    // and short text blocks within the same weighted cap, with or without images.
-    for (let retainedImages = imageCount; retainedImages >= 0; retainedImages -= 1) {
+    // Image cost alone rules out larger prefixes. The allocator still reserves
+    // other non-text content and preserves diagnostic tails and short text blocks.
+    const maxRetainedImages = Math.min(imageCount, Math.floor(maxChars / TOOL_IMAGE_CHARS));
+    for (let retainedImages = maxRetainedImages; retainedImages >= 0; retainedImages -= 1) {
       let seenImages = 0;
       const retainedContent = content.filter(
         (block) => !isImage(block) || ++seenImages <= retainedImages,
@@ -457,13 +459,7 @@ export function installToolResultContextGuard(params: {
   contextWindowTokens: number;
   midTurnPrecheck?: MidTurnPrecheckOptions;
 }): () => void {
-  const contextWindowTokens = Math.max(1, Math.floor(params.contextWindowTokens));
-  const maxSingleToolResultChars = Math.max(
-    1_024,
-    Math.floor(
-      contextWindowTokens * TOOL_RESULT_CHARS_PER_TOKEN_ESTIMATE * SINGLE_TOOL_RESULT_CONTEXT_SHARE,
-    ),
-  );
+  const maxSingleToolResultChars = resolveToolResultContextMaxChars(params.contextWindowTokens);
 
   // Agent.transformContext is private in session runtime, so access it via a
   // narrow runtime view to keep callsites type-safe while preserving behavior.

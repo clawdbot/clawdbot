@@ -1,3 +1,4 @@
+import { finalizeAgentToolAvailability } from "./agent-tool-availability.js";
 import { copyAgentToolMetadata } from "./agent-tool-metadata.js";
 /** Adjusts cross-tool guidance from the final authorized tool set. */
 import type { AnyAgentTool } from "./agent-tools.types.js";
@@ -11,12 +12,17 @@ function replaceDescription(tool: AnyAgentTool, description: string): AnyAgentTo
 }
 
 const TOOL_FOLLOWUPS = [
-  ["gateway", "openclaw", " unavailable; ask human.", ": use openclaw tool."],
+  [
+    "gateway",
+    "openclaw",
+    "Never via shell.",
+    "Never via shell. Other system changes: use openclaw tool.",
+  ],
   [
     "sessions_search",
     "sessions_history",
-    "Search your own past sessions for matching user and assistant text.",
-    "Search your own past sessions for matching user and assistant text. Follow up with sessions_history using a returned sessionKey, sessionId, and messageId for neighboring context.",
+    "Search visible past sessions for matching user and assistant text.",
+    "Search visible past sessions for matching user and assistant text. Follow up with sessions_history using a returned sessionKey, sessionId, and messageId for neighboring context.",
   ],
   [
     "conversations_send",
@@ -26,10 +32,10 @@ const TOOL_FOLLOWUPS = [
   ],
   ["sessions_spawn", "agents_list", "configured agent;", "configured agent (see agents_list);"],
   [
-    "sessions_spawn",
+    "sessions_yield",
     "agents_wait",
-    "`groupId` groups a batch.",
-    "`groupId` groups a batch; await with agents_wait.",
+    "Collector runs require explicit collection instead.",
+    "Collector runs require agents_wait instead.",
   ],
 ] as const;
 
@@ -73,6 +79,7 @@ export function applyToolAvailabilityDescriptions(
   tools: AnyAgentTool[],
   params?: { agentId?: string },
 ): AnyAgentTool[] {
+  finalizeAgentToolAvailability(tools);
   const availableTools = new Set(tools.map((tool) => tool.name));
   const hasCronTool = tools.some((tool) => isAutomationsToolName(tool.name));
   const hasProcessTool = availableTools.has("process");

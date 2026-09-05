@@ -1,5 +1,6 @@
 // @vitest-environment node
 import { describe, expect, it, vi } from "vitest";
+import { createDeferred } from "../../../../test/helpers/promise.js";
 import type { GatewayBrowserClient, GatewayEventFrame } from "../../api/gateway.ts";
 import type { SessionsListResult } from "../../api/types.ts";
 import {
@@ -11,14 +12,6 @@ import type { SessionCapability } from "./session-capability.ts";
 
 const SESSION_EVENT_REFRESH_DEBOUNCE_MS = 200;
 const SESSION_EVENT_REFRESH_MAX_WAIT_MS = 1_000;
-
-function deferred<T>() {
-  let resolve: (value: T) => void = () => undefined;
-  const promise = new Promise<T>((next) => {
-    resolve = next;
-  });
-  return { promise, resolve };
-}
 
 function installPageLifecycle() {
   const documentEvents = new EventTarget();
@@ -162,7 +155,7 @@ describe("event-driven session list refresh", () => {
         params?: {
           agentId?: string;
           archived?: "all";
-          boardFace?: "dashboard";
+          hasBoard?: boolean;
           includeDerivedTitles?: boolean;
           includeLastMessage?: boolean;
           limit?: number;
@@ -172,7 +165,7 @@ describe("event-driven session list refresh", () => {
         if (method !== "sessions.list") {
           throw new Error(`Unexpected request: ${method}`);
         }
-        if (params?.boardFace !== "dashboard") {
+        if (params?.hasBoard !== true) {
           return sessionsResult([], 1);
         }
         const rows = params.agentId
@@ -192,7 +185,7 @@ describe("event-driven session list refresh", () => {
       request as unknown as GatewayBrowserClient["request"],
     );
     const allAgentsQuery = {
-      boardFace: "dashboard" as const,
+      hasBoard: true,
       archivedFilter: "all" as const,
       includeDerivedTitles: true,
       includeLastMessage: true,
@@ -203,6 +196,7 @@ describe("event-driven session list refresh", () => {
     const stopWriter = sessions.subscribeList(writerQuery, () => undefined);
 
     try {
+      await sessions.refresh({ agentId: "writer", force: true });
       await sessions.refreshList({ ...allAgentsQuery, force: true });
       await sessions.refreshList({ ...allAgentsQuery, offset: 2, append: true, force: true });
       await sessions.refreshList({ ...writerQuery, force: true });
@@ -212,8 +206,9 @@ describe("event-driven session list refresh", () => {
       emitEvent(sessionChangedEvent("agent:research:changed"));
       await vi.advanceTimersByTimeAsync(SESSION_EVENT_REFRESH_DEBOUNCE_MS);
 
+      expect(request).toHaveBeenCalledTimes(1);
       const researchDashboardRequests = request.mock.calls.filter(
-        ([, params]) => (params as { boardFace?: unknown } | undefined)?.boardFace === "dashboard",
+        ([, params]) => (params as { hasBoard?: unknown } | undefined)?.hasBoard === true,
       );
       expect(researchDashboardRequests).toHaveLength(1);
       expect(researchDashboardRequests[0]?.[1]).toEqual({
@@ -224,7 +219,7 @@ describe("event-driven session list refresh", () => {
         includeDerivedTitles: true,
         includeLastMessage: true,
         archived: "all",
-        boardFace: "dashboard",
+        hasBoard: true,
       });
       expect(researchDashboardRequests[0]?.[1]).not.toHaveProperty("offset");
       expect(researchDashboardRequests[0]?.[1]).not.toHaveProperty("agentId");
@@ -234,8 +229,9 @@ describe("event-driven session list refresh", () => {
       emitEvent(sessionChangedEvent("agent:writer:changed"));
       await vi.advanceTimersByTimeAsync(SESSION_EVENT_REFRESH_DEBOUNCE_MS);
 
+      expect(request).toHaveBeenCalledTimes(3);
       const writerDashboardRequests = request.mock.calls.filter(
-        ([, params]) => (params as { boardFace?: unknown } | undefined)?.boardFace === "dashboard",
+        ([, params]) => (params as { hasBoard?: unknown } | undefined)?.hasBoard === true,
       );
       expect(writerDashboardRequests).toHaveLength(2);
       expect(
@@ -729,9 +725,9 @@ describe("event-driven session list refresh", () => {
     "preserves queued explicit options when the event debounce fires $timing the active request completes",
     async ({ fireBeforeInitialCompletion }) => {
       vi.useFakeTimers();
-      const firstList = deferred<SessionsListResult>();
-      const secondList = deferred<SessionsListResult>();
-      const secondListStarted = deferred<void>();
+      const firstList = createDeferred<SessionsListResult>();
+      const secondList = createDeferred<SessionsListResult>();
+      const secondListStarted = createDeferred();
       let listCalls = 0;
       const request = vi.fn(async (method: string, _params?: unknown) => {
         if (method !== "sessions.list") {
@@ -803,90 +799,112 @@ describe("event-driven session list refresh", () => {
     {
       timing: "after the append is queued",
       eventBeforeAppend: false,
-      queueReplacementFirst: false,
+      queueForeground: false,
+      eventDuringForeground: false,
+      expectedCalls: 3,
     },
     {
       timing: "before the append is queued",
       eventBeforeAppend: true,
-      queueReplacementFirst: false,
+      queueForeground: false,
+      eventDuringForeground: false,
+      expectedCalls: 3,
     },
     {
-      timing: "before a queued replacement is replaced by the append",
+      timing: "before a queued foreground replacement",
       eventBeforeAppend: true,
-      queueReplacementFirst: true,
+      queueForeground: true,
+      eventDuringForeground: false,
+      expectedCalls: 2,
     },
-  ])("keeps event invalidation $timing", async ({ eventBeforeAppend, queueReplacementFirst }) => {
-    vi.useFakeTimers();
-    const firstList = deferred<SessionsListResult>();
-    const secondList = deferred<SessionsListResult>();
-    const secondListStarted = deferred<void>();
-    let listCalls = 0;
-    const request = vi.fn(async (method: string, _params?: unknown) => {
-      if (method !== "sessions.list") {
-        throw new Error(`Unexpected request: ${method}`);
-      }
-      listCalls += 1;
-      if (listCalls === 1) {
-        return await firstList.promise;
-      }
-      if (listCalls === 2) {
-        secondListStarted.resolve();
-        return await secondList.promise;
-      }
-      return sessionsResult([], listCalls);
-    });
-    const { sessions, emitEvent } = createSessionCapabilityHarness(
-      request as unknown as GatewayBrowserClient["request"],
-    );
-
-    try {
-      const initialRefresh = sessions.refresh({ agentId: "main", limit: 25, force: true });
-      if (eventBeforeAppend) {
-        emitEvent(sessionChangedEvent("agent:main:later-event"));
-      }
-      if (queueReplacementFirst) {
-        void sessions.refresh({ agentId: "discarded", force: true });
-      }
-      const appendRefresh = sessions.refresh({
-        agentId: "main",
-        limit: 25,
-        offset: 25,
-        append: true,
-        force: true,
+    {
+      timing: "before and during a queued foreground replacement",
+      eventBeforeAppend: true,
+      queueForeground: true,
+      eventDuringForeground: true,
+      expectedCalls: 3,
+    },
+  ])(
+    "keeps event invalidation $timing",
+    async ({ eventBeforeAppend, queueForeground, eventDuringForeground, expectedCalls }) => {
+      vi.useFakeTimers();
+      const firstList = createDeferred<SessionsListResult>();
+      const secondList = createDeferred<SessionsListResult>();
+      const secondListStarted = createDeferred();
+      let listCalls = 0;
+      const request = vi.fn(async (method: string, _params?: unknown) => {
+        if (method !== "sessions.list") {
+          throw new Error(`Unexpected request: ${method}`);
+        }
+        listCalls += 1;
+        if (listCalls === 1) {
+          return await firstList.promise;
+        }
+        if (listCalls === 2) {
+          secondListStarted.resolve();
+          return await secondList.promise;
+        }
+        return sessionsResult([], listCalls);
       });
-      if (!eventBeforeAppend) {
-        emitEvent(sessionChangedEvent("agent:main:later-event"));
+      const { sessions, emitEvent } = createSessionCapabilityHarness(
+        request as unknown as GatewayBrowserClient["request"],
+      );
+
+      try {
+        const initialRefresh = sessions.refresh({ agentId: "main", limit: 25, force: true });
+        if (eventBeforeAppend) {
+          emitEvent(sessionChangedEvent("agent:main:earlier-event"));
+        }
+        const foregroundRefresh = queueForeground
+          ? sessions.refresh({ agentId: "research", limit: 25, force: true })
+          : Promise.resolve();
+        const appendRefresh = sessions.refresh({
+          agentId: "main",
+          limit: 25,
+          offset: 25,
+          append: true,
+          force: true,
+        });
+        if (!eventBeforeAppend) {
+          emitEvent(sessionChangedEvent("agent:main:later-event"));
+        }
+        await vi.advanceTimersByTimeAsync(SESSION_EVENT_REFRESH_DEBOUNCE_MS);
+
+        firstList.resolve(sessionsResult([], 1));
+        await secondListStarted.promise;
+        expect(request.mock.calls[1]?.[1]).toMatchObject({
+          agentId: queueForeground ? "research" : "main",
+          limit: 25,
+          ...(queueForeground ? {} : { offset: 25 }),
+        });
+
+        if (eventDuringForeground) {
+          emitEvent(sessionChangedEvent("agent:research:during-refresh"));
+          await vi.advanceTimersByTimeAsync(SESSION_EVENT_REFRESH_DEBOUNCE_MS);
+        }
+        secondList.resolve(sessionsResult([], 2));
+        await Promise.all([initialRefresh, foregroundRefresh, appendRefresh]);
+        expect(request).toHaveBeenCalledTimes(expectedCalls);
+        if (expectedCalls === 3) {
+          expect(request.mock.calls[2]?.[1]).toMatchObject({
+            agentId: queueForeground ? "research" : "main",
+            limit: 25,
+          });
+          expect(request.mock.calls[2]?.[1]).not.toHaveProperty("offset");
+        }
+      } finally {
+        firstList.resolve(sessionsResult([], 1));
+        secondList.resolve(sessionsResult([], 2));
+        sessions.dispose();
+        vi.useRealTimers();
       }
-      await vi.advanceTimersByTimeAsync(SESSION_EVENT_REFRESH_DEBOUNCE_MS);
-
-      firstList.resolve(sessionsResult([], 1));
-      await secondListStarted.promise;
-      expect(request.mock.calls[1]?.[1]).toMatchObject({
-        agentId: "main",
-        limit: 25,
-        offset: 25,
-      });
-
-      secondList.resolve(sessionsResult([], 2));
-      await Promise.all([initialRefresh, appendRefresh]);
-      expect(request).toHaveBeenCalledTimes(3);
-      expect(request.mock.calls[2]?.[1]).toMatchObject({
-        agentId: "main",
-        limit: 25,
-      });
-      expect(request.mock.calls[2]?.[1]).not.toHaveProperty("offset");
-    } finally {
-      firstList.resolve(sessionsResult([], 1));
-      secondList.resolve(sessionsResult([], 2));
-      sessions.dispose();
-      vi.useRealTimers();
-    }
-  });
+    },
+  );
 
   it("queues one trailing refresh for an event during an in-flight refresh", async () => {
     vi.useFakeTimers();
-    const secondList = deferred<SessionsListResult>();
-    const thirdListStarted = deferred<void>();
+    const secondList = createDeferred<SessionsListResult>();
+    const thirdListStarted = createDeferred();
     let listCalls = 0;
     const request = vi.fn(async (method: string) => {
       if (method !== "sessions.list") {
@@ -927,7 +945,7 @@ describe("event-driven session list refresh", () => {
   it("defers a queued filtered refresh when the page hides during its active request", async () => {
     vi.useFakeTimers();
     const page = installPageLifecycle();
-    const activeRefresh = deferred<SessionsListResult>();
+    const activeRefresh = createDeferred<SessionsListResult>();
     let filteredCalls = 0;
     const request = vi.fn(async (method: string, params?: { archived?: string }) => {
       if (method !== "sessions.list") {

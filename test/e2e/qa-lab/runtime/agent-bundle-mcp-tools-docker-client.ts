@@ -5,16 +5,16 @@ import { randomUUID } from "node:crypto";
 import fs from "node:fs/promises";
 import { createRequire } from "node:module";
 import path from "node:path";
-import { materializeBundleMcpToolsForRun } from "../../../../dist/agents/agent-bundle-mcp-materialize.js";
 import {
   disposeAllSessionMcpRuntimes,
   getOrCreateSessionMcpRuntime,
-} from "../../../../dist/agents/agent-bundle-mcp-runtime.js";
+} from "../../../../dist/agents/agent-bundle-mcp-manager-api.js";
+import { materializeBundleMcpToolsForRun } from "../../../../dist/agents/agent-bundle-mcp-materialize.js";
 import { resolveConversationCapabilityProfile } from "../../../../dist/agents/conversation-capability-profile.js";
 import { applyFinalEffectiveToolPolicy } from "../../../../dist/agents/embedded-agent-runner/effective-tool-policy.js";
 import { splitSdkTools } from "../../../../dist/agents/embedded-agent-runner/tool-split.js";
 import type { OpenClawConfig } from "../../../../dist/config/types.openclaw.js";
-import { getPluginToolMeta } from "../../../../dist/plugins/tools.js";
+import { getPluginToolMeta } from "../../../../dist/plugins/tool-metadata.js";
 import { createE2eStateDir } from "../../../../scripts/e2e/lib/temp-state-dir.ts";
 
 const require = createRequire(import.meta.url);

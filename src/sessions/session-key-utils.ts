@@ -66,15 +66,22 @@ const CASE_PRESERVING_PEERS: readonly CasePreservingPeerDescriptor[] = [
   { channel: "matrix", peerKinds: new Set(["channel", "group"]), span: "tail", unscoped: true },
 ];
 
-/** True when (channel, peerKind) owns a case-sensitive opaque peer ID. */
-function isCasePreservingPeer(
-  channel: string | undefined | null,
-  peerKind: string | undefined | null,
-): boolean {
-  const c = normalizeLowercaseStringOrEmpty(channel);
-  const k = normalizeLowercaseStringOrEmpty(peerKind);
-  return findCasePreservingPeerDescriptor(c, k) !== undefined;
-}
+const CASE_PRESERVING_PEER_PATTERNS = CASE_PRESERVING_PEERS.flatMap((descriptor) =>
+  [...descriptor.peerKinds].map((peerKind) => {
+    const prefix = `${escapeRegExp(descriptor.channel)}:${escapeRegExp(peerKind)}:`;
+    return {
+      span: descriptor.span,
+      pattern: new RegExp(
+        descriptor.span === "segment" ? `(^|:)${prefix}([^:]+)` : `^(?:agent:[^:]*:)+:*${prefix}`,
+        descriptor.span === "segment" ? "gi" : "i",
+      ),
+      unscopedPattern:
+        descriptor.span === "tail" && descriptor.unscoped
+          ? new RegExp(`^${prefix}`, "i")
+          : undefined,
+    };
+  }),
+);
 
 function findCasePreservingPeerDescriptor(
   channel: string | undefined | null,
@@ -121,7 +128,7 @@ export function normalizeSessionPeerId(params: {
   if (!peerId) {
     return "";
   }
-  return isCasePreservingPeer(params.channel, params.peerKind)
+  return findCasePreservingPeerDescriptor(params.channel, params.peerKind) !== undefined
     ? peerId
     : normalizeLowercaseStringOrEmpty(peerId);
 }
@@ -159,56 +166,36 @@ function mayContainCasePreservingPeer(raw: string): boolean {
  */
 function collectCasePreservedSpans(raw: string): PreservedSpan[] {
   const spans: PreservedSpan[] = [];
-  for (const descriptor of CASE_PRESERVING_PEERS) {
-    const channel = escapeRegExp(descriptor.channel);
-    for (const peerKind of descriptor.peerKinds) {
-      const kind = escapeRegExp(peerKind);
-      if (descriptor.span === "segment") {
-        // Unscoped: `<channel>:<peerKind>:<segment>` at start or after any colon.
-        const re = new RegExp(`(^|:)${channel}:${kind}:([^:]+)`, "gi");
-        for (const match of raw.matchAll(re)) {
-          const matched = match[0] ?? "";
-          const segment = match[2] ?? "";
-          const segStart = (match.index ?? 0) + matched.length - segment.length;
-          // Segment spans match the legacy `peerId.trim()` behavior exactly.
-          spans.push({ start: segStart, end: segStart + segment.length, trim: true });
-        }
-      } else {
-        const collectTailSpan = (tailStart: number): void => {
-          if (tailStart >= raw.length) {
-            return;
-          }
-          // Preserve Matrix room/event IDs, but keep structural thread marker
-          // casing canonical so `:Thread:` cannot fork a session key.
-          const tail = raw.slice(tailStart);
-          const threadMarker = ":thread:";
-          const markerIndex = normalizeLowercaseStringOrEmpty(tail).lastIndexOf(threadMarker);
-          if (markerIndex === -1) {
-            spans.push({ start: tailStart, end: raw.length, trim: false });
-            return;
-          }
-          spans.push({ start: tailStart, end: tailStart + markerIndex, trim: false });
-          const threadIdStart = tailStart + markerIndex + threadMarker.length;
-          if (threadIdStart < raw.length) {
-            spans.push({ start: threadIdStart, end: raw.length, trim: false });
-          }
-        };
-        // Preserve tails behind nested or malformed ownership wrappers without
-        // treating an inner channel-shaped identity as a runtime route.
-        const scopedRe = new RegExp(`^(?:agent:[^:]*:)+:*${channel}:${kind}:`, "i");
-        const scopedMatch = scopedRe.exec(raw);
-        if (scopedMatch) {
-          collectTailSpan(scopedMatch[0].length);
-          continue;
-        }
-        if (descriptor.unscoped) {
-          const unscopedRe = new RegExp(`^${channel}:${kind}:`, "i");
-          const unscopedMatch = unscopedRe.exec(raw);
-          if (unscopedMatch) {
-            collectTailSpan(unscopedMatch[0].length);
-          }
-        }
+  for (const descriptor of CASE_PRESERVING_PEER_PATTERNS) {
+    if (descriptor.span === "segment") {
+      // matchAll clones the global matcher, so separate keys never share a cursor.
+      for (const match of raw.matchAll(descriptor.pattern)) {
+        const matched = match[0] ?? "";
+        const segment = match[2] ?? "";
+        const segStart = (match.index ?? 0) + matched.length - segment.length;
+        // Segment spans match the legacy peerId.trim() behavior exactly.
+        spans.push({ start: segStart, end: segStart + segment.length, trim: true });
       }
+      continue;
+    }
+    // Nested/malformed ownership wrappers remain opaque; only the matcher owns their shape.
+    const match = descriptor.pattern.exec(raw) ?? descriptor.unscopedPattern?.exec(raw);
+    if (!match || match[0].length >= raw.length) {
+      continue;
+    }
+    const tailStart = match[0].length;
+    const tail = raw.slice(tailStart);
+    const threadMarker = ":thread:";
+    const markerIndex = normalizeLowercaseStringOrEmpty(tail).lastIndexOf(threadMarker);
+    if (markerIndex === -1) {
+      spans.push({ start: tailStart, end: raw.length, trim: false });
+      continue;
+    }
+    // Room/event bytes stay opaque; only the structural thread marker is folded.
+    spans.push({ start: tailStart, end: tailStart + markerIndex, trim: false });
+    const threadIdStart = tailStart + markerIndex + threadMarker.length;
+    if (threadIdStart < raw.length) {
+      spans.push({ start: threadIdStart, end: raw.length, trim: false });
     }
   }
   return spans;

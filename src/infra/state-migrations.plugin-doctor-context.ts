@@ -1,4 +1,7 @@
-import type { DatabaseSync } from "node:sqlite";
+import {
+  inspectAcpSessionClaimsForDoctor,
+  updateAcpSessionIdentityForDoctor,
+} from "../acp/runtime/session-meta-doctor.js";
 import {
   createChannelIngressQueue,
   listChannelIngressQueueAccountIdsReadOnly,
@@ -27,16 +30,12 @@ import type {
   PluginDoctorStateMigrationContext,
 } from "../plugins/doctor-contract-module.js";
 import { normalizeAgentId } from "../routing/session-key.js";
+import type { PluginDoctorRepairAuthority } from "./state-migrations.types.js";
 
 type SessionEvidenceResult = Awaited<
   ReturnType<NonNullable<PluginDoctorStateMigrationContext["readSessionIdentityEvidenceBatch"]>>
 >[number];
 type DoctorSessionStoreTarget = { agentId: string; storePath: string };
-
-export type PluginDoctorRepairAuthority = {
-  assertCurrent(): void;
-  assertOwnedInTransaction(database: DatabaseSync): void;
-};
 
 function resolveDoctorSessionIdentityEvidence(params: {
   cache: SessionStoreTargetsReadCache;
@@ -273,6 +272,12 @@ export function createPluginDoctorStateMigrationContext(params: {
   const cache: SessionStoreTargetsReadCache = new Map();
   const targetsByAgent = new Map<string, readonly DoctorSessionStoreTarget[] | null>();
   const context: PluginDoctorStateMigrationContext = {
+    inspectAcpSessionClaims: async () => {
+      params.repairAuthority?.assertCurrent();
+      const evidence = await inspectAcpSessionClaimsForDoctor(params);
+      params.repairAuthority?.assertCurrent();
+      return evidence;
+    },
     getPluginStateCapacity: () => getPluginStateCapacity(pluginId, env),
     importPluginStateEntries(options, entries) {
       importPluginStateEntriesForDoctor(pluginId, { ...options, env: options.env ?? env }, entries);
@@ -307,6 +312,8 @@ export function createPluginDoctorStateMigrationContext(params: {
   }
   if (params.repairAuthority) {
     const authority = params.repairAuthority;
+    context.updateAcpSessionIdentity = (input) =>
+      updateAcpSessionIdentityForDoctor(params, authority, input);
     context.deletePluginStateEntriesIfUnchanged = (namespace, entries) => {
       authority.assertCurrent();
       return pluginStateDeleteEntriesIfUnchanged({

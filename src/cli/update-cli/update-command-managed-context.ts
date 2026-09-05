@@ -2,11 +2,11 @@ import { readConfigFileSnapshot } from "../../config/config.js";
 import type { ConfigFileSnapshot } from "../../config/types.openclaw.js";
 import type { PluginInstallRecord } from "../../config/types.plugins.js";
 import { loadInstalledPluginIndexInstallRecords } from "../../plugins/installed-plugin-index-records.js";
-import { resolveOwnedManagedUpdateEnv } from "./update-command-service-env.js";
 import {
+  resolveOwnedManagedUpdateEnv,
   stripGatewayServiceMarkerEnv,
-  type PreManagedServiceStop,
-} from "./update-command-service.js";
+} from "./update-command-service-env.js";
+import type { PreManagedServiceStop } from "./update-command-service.js";
 
 export type OwnedManagedUpdateContext = {
   env: NodeJS.ProcessEnv;

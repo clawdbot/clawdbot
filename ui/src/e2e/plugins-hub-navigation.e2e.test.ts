@@ -1,7 +1,9 @@
-import { mkdir } from "node:fs/promises";
+import { writeFile } from "node:fs/promises";
 import path from "node:path";
 import type { BrowserContext, Page } from "playwright";
-import { expect, it } from "vitest";
+import { beforeEach, expect, it } from "vitest";
+import { createControlUiE2eArtifactDir } from "../test-helpers/control-ui-e2e-artifacts.ts";
+import { takeControlUiViewportScreenshot } from "../test-helpers/control-ui-e2e-screenshot.ts";
 import { installMockGateway, waitForControlUiRoute } from "../test-helpers/control-ui-e2e.ts";
 import { createControlUiE2eSuite } from "./control-ui-e2e-suite.test-support.ts";
 
@@ -12,7 +14,12 @@ const suite = createControlUiE2eSuite({
 });
 
 const captureUiProof = process.env.OPENCLAW_CAPTURE_UI_PROOF === "1";
-const proofDir = path.join(process.cwd(), ".artifacts", "control-ui-e2e", "plugins-hub-shell");
+let proofDir: string;
+beforeEach(() => {
+  if (captureUiProof) {
+    proofDir = createControlUiE2eArtifactDir("plugins-hub-shell");
+  }
+});
 
 const methodResponses = {
   "agents.list": {
@@ -70,6 +77,8 @@ const methodResponses = {
 };
 
 type HubGeometry = {
+  contentLeft: number;
+  contentWidth: number;
   height: number;
   left: number;
   title: string;
@@ -85,9 +94,6 @@ type ControlGeometry = {
 };
 
 async function createContext(viewport: { height: number; width: number }): Promise<BrowserContext> {
-  if (captureUiProof) {
-    await mkdir(proofDir, { recursive: true });
-  }
   return suite.browser.newContext({
     locale: "en-US",
     serviceWorkers: "block",
@@ -102,7 +108,18 @@ async function hubGeometry(page: Page): Promise<HubGeometry> {
   return tabs.evaluate((element) => {
     const rect = element.getBoundingClientRect();
     const title = document.querySelector<HTMLElement>(".content-header .page-title");
+    const workshop = document.querySelector<HTMLElement>(".content--skill-workshop");
+    const contentColumn =
+      workshop && workshop.getClientRects().length > 0
+        ? workshop
+        : document.querySelector<HTMLElement>(".settings-page--wide");
+    if (!contentColumn) {
+      throw new Error("Plugins hub content column did not render");
+    }
+    const contentRect = contentColumn.getBoundingClientRect();
     return {
+      contentLeft: contentRect.left,
+      contentWidth: contentRect.width,
       height: rect.height,
       left: rect.left,
       title: title?.textContent?.trim() ?? "",
@@ -120,6 +137,8 @@ function expectStableGeometry(actual: HubGeometry, expected: HubGeometry) {
   expect(Math.abs(actual.top - expected.top)).toBeLessThanOrEqual(1);
   expect(Math.abs(actual.width - expected.width)).toBeLessThanOrEqual(1);
   expect(Math.abs(actual.height - expected.height)).toBeLessThanOrEqual(1);
+  expect(Math.abs(actual.contentLeft - expected.contentLeft)).toBeLessThanOrEqual(1);
+  expect(Math.abs(actual.contentWidth - expected.contentWidth)).toBeLessThanOrEqual(1);
 }
 
 async function skillsToolbarGeometry(page: Page): Promise<ControlGeometry[]> {
@@ -170,11 +189,12 @@ async function captureScreenshot(page: Page, name: string) {
   if (!captureUiProof) {
     return;
   }
-  await page.screenshot({
-    animations: "disabled",
-    fullPage: true,
-    path: path.join(proofDir, name),
-  });
+  await writeFile(
+    path.join(proofDir, name),
+    await takeControlUiViewportScreenshot(page, page.locator(".shell"), [
+      page.locator(".plugins-hub-tabs"),
+    ]),
+  );
 }
 
 async function selectHubTab(
@@ -191,7 +211,9 @@ async function selectHubTab(
 
 suite.define(() => {
   it.each([
-    { label: "desktop", viewport: { height: 960, width: 1440 } },
+    { label: "desktop", viewport: { height: 1053, width: 2048 } },
+    { label: "laptop", viewport: { height: 768, width: 1366 } },
+    { label: "tablet", viewport: { height: 1024, width: 768 } },
     { label: "narrow", viewport: { height: 852, width: 393 } },
   ])(
     "keeps the hub shell fixed through every $label tab transition",
@@ -273,6 +295,7 @@ suite.define(() => {
           pathname: "/skills/workshop",
           routeId: "skill-workshop",
         });
+        await captureScreenshot(page, `${label}-04-workshop-today.png`);
         expectStableGeometry(await hubGeometry(page), installed);
         const workshopShellBottom = await page
           .locator(".plugins-hub-header")
@@ -281,7 +304,6 @@ suite.define(() => {
           .locator(".sw-header-controls")
           .evaluate((element) => element.getBoundingClientRect().top);
         expect(workshopControlsTop).toBeGreaterThanOrEqual(workshopShellBottom);
-        await captureScreenshot(page, `${label}-04-workshop-today.png`);
 
         await page.locator("#skill-workshop-mode-tab-board").click();
         await expect

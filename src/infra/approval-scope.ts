@@ -1,12 +1,11 @@
 import type { Static } from "typebox";
 import type { ApprovalScopeSchema } from "../../packages/gateway-protocol/src/schema/approvals.js";
-import { sanitizeExecApprovalDisplayText } from "./exec-approval-text-sanitize.js";
+import {
+  exceedsApprovalTextLimit,
+  sanitizeExecApprovalDisplayText,
+} from "./exec-approval-text-sanitize.js";
 
 export type ApprovalScope = Static<typeof ApprovalScopeSchema>;
-
-function exceedsApprovalScopeStringLimit(value: string, maxLength: number): boolean {
-  return Array.from(value).length > maxLength;
-}
 
 export function summarizeApprovalScope(scope: ApprovalScope): string {
   switch (scope.kind) {
@@ -38,13 +37,12 @@ export function sanitizeApprovalScope(scope: ApprovalScope): ApprovalScope | nul
   if (scope.kind === "standing-grant") {
     const automation = sanitizeExecApprovalDisplayText(scope.automation);
     const command = sanitizeExecApprovalDisplayText(scope.command);
-    return exceedsApprovalScopeStringLimit(automation, 128) ||
-      exceedsApprovalScopeStringLimit(command, 256)
+    return exceedsApprovalTextLimit(automation, 128) || exceedsApprovalTextLimit(command, 256)
       ? null
       : { ...scope, automation, command };
   }
   const target = sanitizeExecApprovalDisplayText(scope.target);
-  if (exceedsApprovalScopeStringLimit(target, 128)) {
+  if (exceedsApprovalTextLimit(target, 128)) {
     return null;
   }
 
@@ -55,7 +53,7 @@ export function sanitizeApprovalScope(scope: ApprovalScope): ApprovalScope | nul
       const recipients = scope.recipients
         ?.slice(0, scope.recipientCount)
         .map(sanitizeExecApprovalDisplayText);
-      if (recipients?.some((recipient) => exceedsApprovalScopeStringLimit(recipient, 128))) {
+      if (recipients?.some((recipient) => exceedsApprovalTextLimit(recipient, 128))) {
         return null;
       }
       return { ...scope, target, ...(recipients ? { recipients } : {}) };
@@ -63,8 +61,7 @@ export function sanitizeApprovalScope(scope: ApprovalScope): ApprovalScope | nul
     case "payment": {
       const amount = sanitizeExecApprovalDisplayText(scope.amount);
       const currency = sanitizeExecApprovalDisplayText(scope.currency);
-      return exceedsApprovalScopeStringLimit(amount, 40) ||
-        exceedsApprovalScopeStringLimit(currency, 12)
+      return exceedsApprovalTextLimit(amount, 40) || exceedsApprovalTextLimit(currency, 12)
         ? null
         : { ...scope, amount, currency, target };
     }

@@ -124,7 +124,7 @@ export function projectPresenceViewers(
   selfUser?: AuthenticatedUser | null,
   selfInstanceId?: string,
   sessionKey?: string,
-  excludeIdentity?: SessionParticipantIdentity,
+  excludeIdentities: readonly SessionParticipantIdentity[] = [],
 ): readonly PresenceViewer[] {
   const self =
     selfUser ?? resolveSelfPresenceUser(readPresenceEntries(value) ?? [], selfInstanceId);
@@ -132,7 +132,7 @@ export function projectPresenceViewers(
   return projectPresencePayload(value).users.filter(
     (user) =>
       presenceUserKey(user) !== selfKey &&
-      !presenceMatchesProfile(user, excludeIdentity) &&
+      !excludeIdentities.some((identity) => presenceMatchesProfile(user, identity)) &&
       (sessionKey === undefined || user.watchedSessions.includes(sessionKey)),
   );
 }

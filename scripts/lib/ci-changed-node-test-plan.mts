@@ -1,21 +1,29 @@
 import { existsSync } from "node:fs";
 import path from "node:path";
+import { pluginContractPatterns } from "../../test/vitest/vitest.contracts-paths.mjs";
+import { isPluginControlUiPath, isUiBrowserTestFile } from "../../test/vitest/vitest.ui-paths.mjs";
 import { detectChangedLanes } from "../changed-lanes.mts";
 import {
   buildVitestRunPlans,
+  CHANNEL_CONTRACT_CONFIG_PATTERNS,
+  CONTRACTS_PLUGIN_VITEST_CONFIG,
   findUnmatchedExplicitTestTargets,
   hasImportGraphImpactOnTargets,
   isTestFileTarget,
   isTestSupportFileTarget,
   resolveChangedTestTargetPlan,
+  UI_E2E_VITEST_CONFIG,
 } from "../test-projects.test-support.mts";
 import { listAvailableExtensionIds } from "./changed-extensions.mts";
 import {
   createNodeTestShards,
   isPolicyTestOwnedPath,
+  packNodeTestGroups,
   resolvePolicyTestTargets,
+  type NodeTestShardGroup,
 } from "./ci-node-test-plan.mts";
 import {
+  estimateExtensionTestCost,
   listExtensionTestFilesForRoots,
   resolveExtensionTestConfig,
   shouldSplitExtensionTestProcesses,
@@ -26,18 +34,23 @@ import {
   resolveVitestPretestBuildMode,
   type VitestPretestBuildMode,
 } from "./vitest-build-prerequisites.mts";
+import { VITEST_PRETEST_BUILD_SECONDS } from "./vitest-shard-metadata.mts";
 
 type ChangedNodeTestShard = {
   checkName: string;
   configs: string[];
+  groups?: NodeTestShardGroup[];
+  env?: Record<string, string>;
   includePatterns?: string[];
   planConcurrency?: number;
+  predictedSeconds?: number;
   pretestBuildMode?: VitestPretestBuildMode;
   requiresDist: boolean;
   runner: string;
   shardName: string;
   targets?: string[];
 };
+type ChangedExtensionConfigShard = ChangedNodeTestShard & { predictedSeconds: number };
 type CwdOptions = { cwd?: string };
 
 const DEFAULT_NODE_TEST_RUNNER = "blacksmith-8vcpu-ubuntu-2404";
@@ -45,6 +58,8 @@ const MAX_CHANGED_NODE_TEST_TARGETS = 96;
 // Each target runs in its own child process (isolation contract), so bound the
 // serial tail per job; the shard runner overlaps two children at a time.
 const CHANGED_NODE_TEST_TARGETS_PER_JOB = 12;
+const CHANGED_EXTENSION_JOB_SECONDS = 240;
+const MAX_CHANGED_EXTENSION_FALLBACK_JOBS = 50;
 // Memory Core targets perform real SQLite/indexing work. Two concurrent Vitest
 // processes starve each other on 4-vCPU runners and push otherwise healthy
 // integration tests past the global timeout.
@@ -105,11 +120,11 @@ function isTestOnlyPath(changedPath: string) {
 }
 
 // Inputs `build:ci-artifacts` consumes: runtime/plugin/package sources plus
-// the build pipeline itself (mirrors the build-all cache key in ci.yml).
+// the build pipeline itself, including shared declaration publication and cache owners.
 // Built-artifact test inputs below also require this lane even though they do
 // not change the bytes under test.
 const BUILD_INPUT_RE =
-  /^(?:src|extensions|packages)\/|^(?:openclaw\.mjs|package\.json|pnpm-lock\.yaml|pnpm-workspace\.yaml)$|^tsconfig[^/]*\.json$|^scripts\/(?:build-[^/]+|runtime-postbuild\.mts|write-plugin-sdk-entry-dts\.ts)$|^scripts\/lib\/(?:copy-assets\.ts|plugin-sdk-entries\.mts)$/u;
+  /^(?:src|extensions|packages)\/|^(?:openclaw\.mjs|package\.json|pnpm-lock\.yaml|pnpm-workspace\.yaml)$|^tsconfig[^/]*\.json$|^tsdown(?:\.[^/]+)?\.config\.ts$|^scripts\/(?:build-[^/]+|runtime-postbuild\.mts|tsdown-build\.mts|write-(?:plugin-sdk|unified)-entry-dts\.ts)$|^scripts\/lib\/(?:copy-assets\.ts|plugin-sdk-entries\.mts|(?:build-artifact-cache|compiler-input-snapshot|declaration-stage|tsdown-[^/]+)\.mts)$/u;
 const BUILT_ARTIFACT_TEST_INPUTS = new Set([
   "extensions/browser/chrome-extension/relay-key.test-support.ts",
   "extensions/browser/src/browser/extension-install.native-host.e2e.test.ts",
@@ -314,7 +329,7 @@ function resolvePreciseChangedTargets(
   ) {
     return null;
   }
-  return targetPlans.map(({ target }) => target);
+  return targetPlans;
 }
 
 function createChangedTargetShards(
@@ -357,28 +372,60 @@ function resolveChangedExtensionRoots(changedPaths: string[]) {
   ];
 }
 
-function createChangedExtensionConfigShards(extensionRoots: string[]) {
+function createChangedExtensionConfigShards(
+  extensionRoots: string[],
+): ChangedExtensionConfigShard[] {
   const rootsByConfig = new Map<string, string[]>();
   for (const root of extensionRoots) {
     const config = resolveExtensionTestConfig(root);
     rootsByConfig.set(config, [...(rootsByConfig.get(config) ?? []), root]);
   }
-  const plans: Array<{ config: string; includePatterns?: string[]; roots: string[] }> = [
-    ...rootsByConfig,
-  ].flatMap(([config, roots]) => {
-    const testFiles = shouldSplitExtensionTestProcesses(config)
-      ? listExtensionTestFilesForRoots(roots)
-      : [];
+  const filesByConfig = new Map<string, string[]>();
+  for (const file of rootsByConfig.size > 0 ? listExtensionTestFilesForRoots(["extensions"]) : []) {
+    const config = resolveExtensionTestConfig(file.split("/").slice(0, 2).join("/"));
+    filesByConfig.set(config, [...(filesByConfig.get(config) ?? []), file]);
+  }
+  const plans: Array<{
+    config: string;
+    env?: Record<string, string>;
+    includePatterns?: string[];
+    predictedSeconds: number;
+  }> = [...rootsByConfig].flatMap(([config, roots]) => {
+    const splitProcesses = shouldSplitExtensionTestProcesses(config);
+    const testFiles = (filesByConfig.get(config) ?? []).filter(
+      (file) => !splitProcesses || roots.some((root) => file.startsWith(`${root}/`)),
+    );
     const chunks = testFiles.length > 0 ? splitExtensionTestJobTargets(config, testFiles) : [roots];
+    const predictedSeconds = Math.ceil(
+      estimateExtensionTestCost(config, testFiles.length) / chunks.length,
+    );
     return chunks.length > 1
-      ? chunks.map((includePatterns) => ({ config, includePatterns, roots }))
-      : [{ config, roots }];
+      ? chunks.map((includePatterns, index) =>
+          Object.assign(
+            { config, predictedSeconds },
+            splitProcesses
+              ? { includePatterns }
+              : {
+                  // Counts size jobs only. Vitest owns the complete config inventory,
+                  // including unrelated plugin roots, excludes and untracked tests.
+                  env: {
+                    OPENCLAW_NODE_TEST_VITEST_ARGS_JSON: JSON.stringify([
+                      `--shard=${index + 1}/${chunks.length}`,
+                    ]),
+                  },
+                },
+          ),
+        )
+      : [{ config, predictedSeconds }];
   });
-  return plans.map(({ config, includePatterns, roots }, index) => {
+  return plans.map(({ config, env, includePatterns, predictedSeconds }, index) => {
     const suffix = plans.length === 1 ? "" : `-${index + 1}`;
-    const shard: ChangedNodeTestShard = {
+    const shard: ChangedExtensionConfigShard = {
       checkName: `checks-node-changed-extensions-config${suffix}`,
       configs: [config],
+      // No plans overlap in this row, so CI can scale the single process's worker budget.
+      planConcurrency: 1,
+      predictedSeconds,
       requiresDist: false,
       runner: DEFAULT_NODE_TEST_RUNNER,
       shardName: `changed-extensions-config${suffix}`,
@@ -388,12 +435,13 @@ function createChangedExtensionConfigShards(extensionRoots: string[]) {
     ]);
     if (pretestBuildMode) {
       shard.pretestBuildMode = pretestBuildMode;
+      shard.predictedSeconds = predictedSeconds + VITEST_PRETEST_BUILD_SECONDS[pretestBuildMode];
     }
     if (includePatterns) {
       shard.includePatterns = includePatterns;
     }
-    if (roots.some((root) => SERIAL_CHANGED_TARGET_RE.test(`${root}/`))) {
-      shard.planConcurrency = 1;
+    if (env) {
+      shard.env = env;
     }
     return shard;
   });
@@ -403,6 +451,7 @@ function createChangedExtensionConfigShardsForPaths(changedPaths: string[], cwd:
   const relevantPaths = changedPaths.filter(
     (changedPath) =>
       changedPath.startsWith("extensions/") &&
+      !isPluginControlUiPath(changedPath) &&
       (existsSync(path.join(cwd, changedPath)) || !isTestFileTarget(changedPath)),
   );
   return createChangedExtensionConfigShards(resolveChangedExtensionRoots(relevantPaths));
@@ -439,12 +488,64 @@ export function createChangedExtensionFallbackShards(
   options: CwdOptions = {},
 ): ChangedNodeTestShard[] {
   const cwd = options.cwd ?? process.cwd();
-  if (hasCoreExtensionImpact(changedPaths, { cwd })) {
-    return createChangedExtensionConfigShards(
-      listAvailableExtensionIds().map((extensionId) => `extensions/${extensionId}`),
+  const shards = hasCoreExtensionImpact(changedPaths, { cwd })
+    ? createChangedExtensionConfigShards(
+        listAvailableExtensionIds().map((extensionId) => `extensions/${extensionId}`),
+      )
+    : createChangedExtensionConfigShardsForPaths(changedPaths, cwd);
+  const jobs = packChangedExtensionConfigShards(shards);
+  if (jobs.length > MAX_CHANGED_EXTENSION_FALLBACK_JOBS) {
+    throw new Error(
+      `changed plugin fallback exceeds ${MAX_CHANGED_EXTENSION_FALLBACK_JOBS} jobs (${jobs.length} planned)`,
     );
   }
-  return createChangedExtensionConfigShardsForPaths(changedPaths, cwd);
+  return jobs;
+}
+
+function packChangedExtensionConfigShards(
+  shards: ChangedExtensionConfigShard[],
+): ChangedNodeTestShard[] {
+  const bins = packNodeTestGroups(
+    shards.toSorted(
+      (a, b) => b.predictedSeconds - a.predictedSeconds || a.shardName.localeCompare(b.shardName),
+    ),
+    // Each envelope retains its own child process. Share only the checkout;
+    // runtime preparation stays separate from other configs' readers.
+    (bin, shard) =>
+      !shard.pretestBuildMode &&
+      bin.every(
+        (entry) =>
+          !entry.pretestBuildMode &&
+          entry.runner === shard.runner &&
+          entry.requiresDist === shard.requiresDist,
+      ) &&
+      bin.reduce((seconds, entry) => seconds + entry.predictedSeconds, shard.predictedSeconds) <=
+        CHANGED_EXTENSION_JOB_SECONDS,
+  );
+  // Singleton objects keep their full metadata and original relative order.
+  return bins
+    .toSorted((a, b) => shards.indexOf(a[0]) - shards.indexOf(b[0]))
+    .map((bin, index) =>
+      bin.length === 1
+        ? bin[0]
+        : {
+            checkName: `checks-node-changed-extensions-bundle-${index + 1}`,
+            configs: [],
+            groups: bin.map((shard) => ({
+              configs: shard.configs,
+              ...(shard.env ? { env: shard.env } : {}),
+              ...(shard.includePatterns ? { includePatterns: shard.includePatterns } : {}),
+              requiresDist: shard.requiresDist,
+              runner: shard.runner,
+              shard_name: shard.shardName,
+            })),
+            planConcurrency: 1,
+            predictedSeconds: bin.reduce((seconds, shard) => seconds + shard.predictedSeconds, 0),
+            requiresDist: bin[0].requiresDist,
+            runner: bin[0].runner,
+            shardName: `changed-extensions-bundle-${index + 1}`,
+          },
+    );
 }
 
 /**
@@ -453,7 +554,10 @@ export function createChangedExtensionFallbackShards(
  */
 export function createChangedNodeTestShards(
   changedPaths: string[],
-  options: CwdOptions = {},
+  options: CwdOptions & {
+    dedicatedContractShards?: readonly { task: string; includePatterns: readonly string[] }[];
+    dedicatedUiE2e?: boolean;
+  } = {},
 ): ChangedNodeTestShard[] | null {
   const cwd = options.cwd ?? process.cwd();
   if (!Array.isArray(changedPaths) || changedPaths.length === 0) {
@@ -475,11 +579,16 @@ export function createChangedNodeTestShards(
 
   const policyTargetsByPath = new Map(
     livePaths
-      .filter((changedPath) => !changedPath.startsWith("extensions/"))
+      .filter(
+        (changedPath) =>
+          !changedPath.startsWith("extensions/") || isPluginControlUiPath(changedPath),
+      )
       .map((changedPath) => [changedPath, resolvePolicyTestTargets([changedPath])]),
   );
   const regularLivePaths = livePaths.filter(
-    (changedPath) => !changedPath.startsWith("extensions/") && !isPolicyTestOwnedPath(changedPath),
+    (changedPath) =>
+      (!changedPath.startsWith("extensions/") || isPluginControlUiPath(changedPath)) &&
+      !isPolicyTestOwnedPath(changedPath),
   );
 
   // Workspace package consumers often use package specifiers, which the
@@ -494,7 +603,7 @@ export function createChangedNodeTestShards(
     return null;
   }
 
-  const targets = resolvePreciseChangedTargets(regularLivePaths, cwd, [
+  const targetPlans = resolvePreciseChangedTargets(regularLivePaths, cwd, [
     ...[...policyTargetsByPath.values()].flat(),
     // Plugin changes normally select only extension suites. This host-owned
     // proof also exercises the real Copilot entrypoint and manifest discovery.
@@ -502,19 +611,52 @@ export function createChangedNodeTestShards(
       ? ["src/agents/prepared-model-runtime.copilot.integration.test.ts"]
       : []),
   ]);
-  if (targets === null) {
+  if (targetPlans === null) {
     return null;
   }
+  // CI supplies the suite owners it emits. Validate every changed path first,
+  // then subtract covered plans; local runs and unselected owners keep their targets.
+  const targets = targetPlans
+    .filter(
+      ({ plans }) =>
+        !options.dedicatedUiE2e || !plans.every(({ config }) => config === UI_E2E_VITEST_CONFIG),
+    )
+    .filter(
+      ({ target, plans }) =>
+        !plans.every((plan) => {
+          const plugin = plan.config === CONTRACTS_PLUGIN_VITEST_CONFIG;
+          const patterns = plugin
+            ? pluginContractPatterns
+            : CHANNEL_CONTRACT_CONFIG_PATTERNS.get(plan.config);
+          return (
+            !plan.watchMode &&
+            plan.forwardedArgs.length === 0 &&
+            plan.includePatterns?.every((pattern) => pattern === target) &&
+            patterns?.some((pattern) => path.matchesGlob(target, pattern)) &&
+            options.dedicatedContractShards?.some(
+              (shard) =>
+                shard.task === (plugin ? "contracts-plugins" : "contracts-channels") &&
+                shard.includePatterns.includes(target),
+            )
+          );
+        }),
+    )
+    .map(({ target }) => target);
 
   // Boundary-config targets run as regular nondist targets: the boundary
   // suite scans the checked-out tree and never consumes the built dist.
   const shards = [
-    ...createChangedExtensionConfigShardsForPaths(livePaths, cwd),
-    ...createChangedTargetShards(targets, {
-      checkName: "checks-node-changed",
-      shardName: "changed",
-    }),
+    ...packChangedExtensionConfigShards(createChangedExtensionConfigShardsForPaths(livePaths, cwd)),
+    // Native browser files run in checks-ui, including precise changed-file plans.
+    ...createChangedTargetShards(
+      targets.filter((target) => !isUiBrowserTestFile(target)),
+      {
+        checkName: "checks-node-changed",
+        shardName: "changed",
+      },
+    ),
     ...(hasBuildArtifactAffectingChange(changedPaths) ? [] : [createBoundaryShard()]),
   ];
-  return shards.length > 0 ? shards : null;
+  // Covered source targets keep build-artifacts ownership even with no Node rows.
+  return shards.length > 0 || targets.length < targetPlans.length ? shards : null;
 }

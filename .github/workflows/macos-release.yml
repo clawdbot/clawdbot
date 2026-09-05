@@ -42,6 +42,9 @@ jobs:
             exit 1
           fi
 
+      - name: Prepare Git owner
+        uses: openclaw/openclaw/.github/actions/git-owner@dd4528b6393e7d00063067a080ca7241b48ce475
+
       - name: Checkout selected tag
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
@@ -74,10 +77,13 @@ jobs:
             echo "public_release_branch must be main or release/YYYY.M.PATCH, got ${PUBLIC_RELEASE_BRANCH}." >&2
             exit 1
           fi
-          RELEASE_SHA=$(git rev-parse HEAD)
+          RELEASE_SHA="$(
+            python3 -I -S "$CI_GIT_OWNER" --git 0 rev-parse HEAD
+          )"
           RELEASE_MAIN_REF="refs/remotes/origin/${PUBLIC_RELEASE_BRANCH}"
           export RELEASE_SHA RELEASE_TAG RELEASE_MAIN_REF
-          timeout --signal=TERM --kill-after=10s 120s git fetch --no-tags origin "+refs/heads/${PUBLIC_RELEASE_BRANCH}:refs/remotes/origin/${PUBLIC_RELEASE_BRANCH}"
+          python3 -I -S "$CI_GIT_OWNER" --checkout-git 120 fetch --no-tags origin \
+            "+refs/heads/${PUBLIC_RELEASE_BRANCH}:refs/remotes/origin/${PUBLIC_RELEASE_BRANCH}"
           pnpm release:openclaw:npm:check
 
       - name: Summarize next step

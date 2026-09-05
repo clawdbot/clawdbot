@@ -271,6 +271,7 @@ export abstract class AgentSessionBase {
             content: result.content,
             details: result.details,
             isError,
+            ...(result.terminate !== undefined ? { terminate: result.terminate } : {}),
           }),
       );
 
@@ -280,8 +281,7 @@ export abstract class AgentSessionBase {
       this.extensionModifiedToolResultIds.add(toolCall.id);
 
       return {
-        content: hookResult.content,
-        details: hookResult.details,
+        ...hookResult,
         isError: hookResult.isError ?? isError,
       };
     };

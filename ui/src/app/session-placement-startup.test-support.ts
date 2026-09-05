@@ -5,8 +5,8 @@ import {
   type SessionPlacementRecovery,
   writeSessionPlacementRecovery,
 } from "../lib/sessions/session-placement-recovery.ts";
+import { createChatSubmissions } from "./chat-submissions.ts";
 import type { ApplicationGateway } from "./gateway.ts";
-import { createInitialUserMessageHandoff } from "./initial-user-message-handoff.ts";
 import createApplicationPlacementStartupRuntime from "./session-placement-startup.runtime.ts";
 import { createApplicationPlacementStartup } from "./session-placement-startup.ts";
 
@@ -77,8 +77,8 @@ export function createPlacementStartupHarness(
   if (options.recoveryBeforeStartup) {
     expect(writeSessionPlacementRecovery(recovery)).toBe(true);
   }
-  const initialUserMessage = createInitialUserMessageHandoff();
-  const dependencies = { gateway, sessions, initialUserMessage };
+  const chatSubmissions = createChatSubmissions();
+  const dependencies = { gateway, sessions, chatSubmissions };
   const startup = createApplicationPlacementStartup(
     dependencies,
     options.loadRuntime ?? (async () => ({ default: createApplicationPlacementStartupRuntime })),
@@ -93,7 +93,7 @@ export function createPlacementStartupHarness(
     gateway,
     sessions,
     state,
-    initialUserMessage,
+    chatSubmissions,
     dependencies,
   };
 }

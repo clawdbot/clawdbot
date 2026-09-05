@@ -218,7 +218,7 @@ describe("node-host dispatch cancellation", () => {
     );
 
     expect(result.details).toMatchObject({ status: "completed", exitCode: 0, aggregated: "ok" });
-    expect(result.content).toEqual([{ type: "text", text: "ok" }]);
+    expect(result.content).toEqual([{ type: "text", text: "Node: node-1\nok" }]);
     expect(callGatewayToolMock).toHaveBeenCalledWith(
       "node.invoke",
       { timeoutMs: 40_000 },
@@ -242,7 +242,7 @@ describe("node-host dispatch cancellation", () => {
     );
 
     expect(result.details).toMatchObject({ status: "completed", exitCode: 0, aggregated: "ok" });
-    expect(result.content).toEqual([{ type: "text", text: "ok" }]);
+    expect(result.content).toEqual([{ type: "text", text: "Node: node-1\nok" }]);
     expect(callGatewayToolMock).toHaveBeenCalledWith(
       "node.invoke",
       { timeoutMs: 40_000 },

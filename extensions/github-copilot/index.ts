@@ -49,6 +49,7 @@ const COPILOT_ENV_VARS: [string, string, string] = [
   "GITHUB_TOKEN",
 ];
 const DEFAULT_COPILOT_PROFILE_ID = "github-copilot:github";
+const COPILOT_SECRET_STORE_NAME_PREFIX = "GITHUB_COPILOT_TOKEN";
 
 type GithubCopilotPluginConfig = {
   discovery?: {
@@ -605,6 +606,15 @@ export default definePluginEntry({
         githubToken: result.accessToken,
         githubDomain: normalizedDomain,
       });
+      const persistInline = ctx.secretInputMode === "plaintext";
+      const notes = [
+        ...(starter.notes ?? []),
+        ...(persistInline
+          ? [
+              "Plaintext secret input mode was selected, so the GitHub Copilot token will remain inline in the auth profile and openclaw secrets audit --check will report it.",
+            ]
+          : []),
+      ];
       return {
         profiles: [
           {
@@ -614,9 +624,18 @@ export default definePluginEntry({
               provider: PROVIDER_ID,
               token: result.accessToken,
             },
+            ...(!persistInline
+              ? {
+                  secretStorage: {
+                    kind: "store" as const,
+                    namePrefix: COPILOT_SECRET_STORE_NAME_PREFIX,
+                  },
+                }
+              : {}),
           },
         ],
-        ...starter,
+        ...(starter.defaultModel ? { defaultModel: starter.defaultModel } : {}),
+        ...(notes.length > 0 ? { notes } : {}),
         ...(configPatch ? { configPatch } : {}),
       };
     }

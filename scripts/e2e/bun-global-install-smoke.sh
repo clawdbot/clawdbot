@@ -4,6 +4,7 @@ set -Eeuo pipefail
 ROOT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." && pwd)"
 source "$ROOT_DIR/scripts/lib/docker-e2e-package.sh"
 source "$ROOT_DIR/scripts/lib/openclaw-e2e-instance.sh"
+source "$ROOT_DIR/scripts/e2e/lib/prepublish-plugin-registry.sh"
 
 read_positive_int_env() {
   local name="${1:?missing environment variable name}"
@@ -26,6 +27,8 @@ PACKAGE_TGZ="${OPENCLAW_BUN_GLOBAL_SMOKE_PACKAGE_TGZ:-}"
 COMMAND_TIMEOUT_MS="$(read_positive_int_env OPENCLAW_BUN_GLOBAL_SMOKE_TIMEOUT_MS 180000)"
 DOCKER_COMMAND_TIMEOUT="${DOCKER_COMMAND_TIMEOUT:-${OPENCLAW_BUN_GLOBAL_SMOKE_DOCKER_COMMAND_TIMEOUT:-600s}}"
 AI_PACKAGE_TGZ=""
+REGISTRY_PID=""
+REQUIRED_REGISTRY_PACKAGES='[]'
 SMOKE_DIR=""
 PACK_DIR=""
 MOCK_PID=""
@@ -44,6 +47,7 @@ GATEWAY_AGENT_LOG=""
 cleanup() {
   openclaw_e2e_stop_process "${GATEWAY_PID:-}"
   openclaw_e2e_stop_process "${MOCK_PID:-}"
+  openclaw_e2e_stop_process "${REGISTRY_PID:-}"
   if [ -n "${SMOKE_DIR:-}" ]; then
     rm -rf "$SMOKE_DIR"
   fi
@@ -52,7 +56,7 @@ cleanup() {
   fi
 }
 
-dump_failure_logs() {
+dump_debug_logs() {
   local status="$1"
   echo "bun global install smoke failed with exit code $status" >&2
   openclaw_e2e_dump_logs \
@@ -77,6 +81,24 @@ prepare_ai_candidate() {
   if [ -z "$PACK_DIR" ]; then
     PACK_DIR="$(mktemp -d "${TMPDIR:-/tmp}/openclaw-bun-pack.XXXXXX")"
   fi
+  root_manifest="$PACK_DIR/openclaw-package.json"
+  tar -xOf "$PACKAGE_TGZ" package/package.json >"$root_manifest"
+  if ! tar -tzf "$PACKAGE_TGZ" package/node_modules/@openclaw/ai/package.json >/dev/null 2>&1; then
+    if node -e '
+const manifest = require(process.argv[1]);
+process.exit(manifest.dependencies?.["@openclaw/ai"] ? 0 : 1);
+' "$root_manifest"; then
+      if [ -z "${OPENCLAW_PREPUBLISH_PLUGIN_REGISTRY_DIR:-}" ]; then
+        echo "OpenClaw tarball requires a verified candidate registry for unbundled @openclaw/ai" >&2
+        exit 1
+      fi
+      REQUIRED_REGISTRY_PACKAGES='["@openclaw/ai"]'
+      echo "==> Resolve candidate @openclaw/ai from the prepared package registry"
+      return
+    fi
+    echo "==> Candidate has no bundled @openclaw/ai dependency"
+    return
+  fi
   echo "==> Extract bundled candidate @openclaw/ai package"
   ai_package_dir="$PACK_DIR/ai-candidate"
   mkdir -p "$ai_package_dir"
@@ -84,9 +106,7 @@ prepare_ai_candidate() {
     -C "$ai_package_dir" \
     --strip-components=4 \
     package/node_modules/@openclaw/ai
-  root_manifest="$PACK_DIR/openclaw-package.json"
   ai_manifest="$ai_package_dir/package.json"
-  tar -xOf "$PACKAGE_TGZ" package/package.json >"$root_manifest"
   node scripts/e2e/lib/bun-global-install/assertions.mjs \
     assert-release-versions \
     "$root_manifest" \
@@ -102,7 +122,7 @@ prepare_ai_candidate() {
 }
 
 trap cleanup EXIT
-trap 'status=$?; dump_failure_logs "$status"; exit "$status"' ERR
+openclaw_e2e_enable_failure_diagnostics
 
 run_with_timeout() {
   local timeout_ms="$1"
@@ -217,6 +237,8 @@ main() {
 
   resolve_package_tgz
   prepare_ai_candidate
+  openclaw_prepublish_plugin_registry_start_mounted \
+    "$PACK_DIR/registry" REGISTRY_PID "$REQUIRED_REGISTRY_PACKAGES"
 
   local bun_path
   local bun_version
@@ -249,11 +271,12 @@ main() {
     "$XDG_CACHE_HOME" \
     "$OPENCLAW_STATE_DIR"
   export PATH="$BUN_INSTALL/bin:$(dirname "$(command -v node)"):$PATH"
-  # Release publishes @openclaw/ai first. Pin the local tarball install to
-  # exact candidate bytes instead of allowing public-registry resolution.
-  node --input-type=module - \
-    "$BUN_INSTALL/install/global/package.json" \
-    "$AI_PACKAGE_TGZ" <<'NODE'
+  # Source-export tarballs bundle AI; publication tarballs resolve it from the
+  # prepared registry. Only bundled bytes need Bun's local dependency override.
+  if [ -n "$AI_PACKAGE_TGZ" ]; then
+    node --input-type=module - \
+      "$BUN_INSTALL/install/global/package.json" \
+      "$AI_PACKAGE_TGZ" <<'NODE'
 import fs from "node:fs";
 
 const [, , packageJsonPath, aiPackageTarball] = process.argv;
@@ -262,6 +285,7 @@ fs.writeFileSync(
   `${JSON.stringify({ private: true, overrides: { "@openclaw/ai": `file:${aiPackageTarball}` } })}\n`,
 );
 NODE
+  fi
 
   INSTALL_LOG="$SMOKE_DIR/install.log"
   UNTRUSTED_LOG="$SMOKE_DIR/untrusted.log"
@@ -292,6 +316,7 @@ NODE
   )"
   package_root="$(dirname "$openclaw_entry")"
   export OPENCLAW_E2E_REDACTOR_MODULE="$package_root/dist/plugin-sdk/logging-core.js"
+  "$bun_path" scripts/docker/verify-fs-safe-native.mjs --package-root "$package_root" --mode require
 
   echo "==> Verify OpenClaw lifecycle scripts were trusted and executed"
   run_with_timeout "$COMMAND_TIMEOUT_MS" "$bun_path" pm -g untrusted >"$UNTRUSTED_LOG" 2>&1

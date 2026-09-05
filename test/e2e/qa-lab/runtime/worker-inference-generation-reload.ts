@@ -4,7 +4,8 @@ import { createServer } from "node:http";
 import os from "node:os";
 import path from "node:path";
 import { pathToFileURL } from "node:url";
-import { GatewayClient } from "openclaw/plugin-sdk/gateway-runtime";
+import { coerceErrorMessage, toErrorObject } from "@openclaw/normalization-core/error-coercion";
+import type { GatewayClient } from "openclaw/plugin-sdk/gateway-runtime";
 import {
   createQaBusState,
   createQaChannelTransport,
@@ -15,13 +16,13 @@ import {
   type QaEvidenceSummaryJson,
 } from "../../../../extensions/qa-lab/api.js";
 import type { OpenClawConfig } from "../../../../src/config/types.openclaw.js";
+import { collectErrorGraphCandidates } from "../../../../src/infra/errors.js";
 import { stopQaGatewayFixture } from "../../../helpers/qa-gateway-cleanup.js";
 import {
   MODEL_REF as DEFAULT_MOCK_MODEL_REF,
   PROOF_TIMEOUT_MS,
   waitFor,
 } from "./cloud-worker-midturn-loss-fixture.js";
-import workerGenerationProviderFixture from "./fixtures/worker-inference-generation-provider/index.js";
 import {
   closeWireServer,
   connectWireClient,
@@ -48,7 +49,7 @@ const GENERATION_C_REPLY = "WORKER-GENERATION-C-OK";
 const OWNERSHIP_STAGES = ["factory", "policy", "wrapper", "execution"] as const;
 
 type Generation = "A" | "B" | "C" | "D";
-type ProducerOptions = { artifactBase: string; repoRoot: string };
+type ProducerOptions = Readonly<{ artifactBase: string; repoRoot: string }>;
 type TraceEvent = {
   event: string;
   generation: Generation;
@@ -125,7 +126,7 @@ async function startAuthInspectingProxy(targetBaseUrl: string) {
       });
       response.writeHead(upstream.status, responseHeaders);
       response.end(Buffer.from(await upstream.arrayBuffer()));
-    })().catch((error) => {
+    })().catch((error: unknown) => {
       response.writeHead(502, { "content-type": "text/plain; charset=utf-8" });
       response.end(error instanceof Error ? error.message : String(error));
     });
@@ -435,9 +436,6 @@ async function readMockRequests(baseUrl: string) {
 }
 
 async function runProof(options: ProducerOptions) {
-  if (workerGenerationProviderFixture.id !== PLUGIN_ID) {
-    throw new Error("worker generation fixture id does not match its configured plugin id");
-  }
   // openclaw-temp-dir: standalone QA producer owns and removes this fixture root.
   const root = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-worker-generation-"));
   const tracePath = path.join(options.artifactBase, `${SCENARIO_ID}-trace.jsonl`);
@@ -455,7 +453,7 @@ async function runProof(options: ProducerOptions) {
   let operator: GatewayClient | undefined;
   let worker: PairedNodeWorkerHost | undefined;
   let published: PublishedWireWorkspace | undefined;
-  let proofError: unknown;
+  let proofError: Error | undefined;
   let verdict: Record<string, unknown> | undefined;
   try {
     await fs.mkdir(options.artifactBase, { recursive: true });
@@ -498,6 +496,11 @@ async function runProof(options: ProducerOptions) {
         session: { ...config.session, dmScope: "per-peer" },
       }),
     });
+    const { default: workerGenerationProviderFixture } =
+      await import("./fixtures/worker-inference-generation-provider/index.js");
+    if (workerGenerationProviderFixture.id !== PLUGIN_ID) {
+      throw new Error("worker generation fixture id does not match its configured plugin id");
+    }
     await waitFor("generation A provider registration", async () => {
       const registrations = (await readTrace(tracePath)).filter(
         (event) => event.event === "registered" && event.generation === "A",
@@ -563,22 +566,26 @@ async function runProof(options: ProducerOptions) {
     const requestFacts = requests.map((request) => ({
       model: request.model,
       outcome: request.outcome,
-      generationA: String(request.allInputText ?? "").includes(GENERATION_A_REPLY),
-      generationB: String(request.allInputText ?? "").includes(GENERATION_B_REPLY),
-      generationC: String(request.allInputText ?? "").includes(GENERATION_C_REPLY),
+      generationA: (request.allInputText ?? "").includes(GENERATION_A_REPLY),
+      generationB: (request.allInputText ?? "").includes(GENERATION_B_REPLY),
+      generationC: (request.allInputText ?? "").includes(GENERATION_C_REPLY),
     }));
+    const [firstRequest, secondRequest, thirdRequest] = requestFacts;
     if (
       requests.length !== 3 ||
       requests.some((request) => request.outcome !== "success") ||
-      requestFacts[0]?.generationA !== true ||
-      requestFacts[0]?.generationB !== false ||
-      requestFacts[0]?.generationC !== false ||
-      requestFacts[1]?.generationA !== true ||
-      requestFacts[1]?.generationB !== true ||
-      requestFacts[1]?.generationC !== false ||
-      requestFacts[2]?.generationA !== true ||
-      requestFacts[2]?.generationB !== true ||
-      requestFacts[2]?.generationC !== true
+      !firstRequest ||
+      !secondRequest ||
+      !thirdRequest ||
+      !firstRequest.generationA ||
+      firstRequest.generationB ||
+      firstRequest.generationC ||
+      !secondRequest.generationA ||
+      !secondRequest.generationB ||
+      secondRequest.generationC ||
+      !thirdRequest.generationA ||
+      !thirdRequest.generationB ||
+      !thirdRequest.generationC
     ) {
       throw new Error(`unexpected mock-openai worker requests: ${JSON.stringify(requestFacts)}`);
     }
@@ -691,7 +698,7 @@ async function runProof(options: ProducerOptions) {
       "utf8",
     );
   } catch (error) {
-    proofError = error;
+    proofError = toErrorObject(error, "Worker inference generation proof failed");
   }
 
   const cleanup = await Promise.allSettled([
@@ -702,11 +709,19 @@ async function runProof(options: ProducerOptions) {
     authProxy.stop(),
     mock.stop(),
     channelBus.stop(),
-    fs.rm(root, { recursive: true, force: true }),
   ]);
   const cleanupFailures = cleanup.flatMap((result) =>
     result.status === "rejected" ? [result.reason] : [],
   );
+  // The worker and published workspace still use this namespace during stop.
+  // A failed shutdown retains it for independent cleanup after confirmed joins.
+  if (cleanupFailures.length === 0) {
+    try {
+      await fs.rm(root, { recursive: true, force: true });
+    } catch (error) {
+      cleanupFailures.push(error);
+    }
+  }
   if (cleanupFailures.length > 0) {
     proofError = new AggregateError(
       proofError ? [proofError, ...cleanupFailures] : cleanupFailures,
@@ -723,7 +738,9 @@ async function runProof(options: ProducerOptions) {
   return verdict;
 }
 
-async function runProducer(options: ProducerOptions): Promise<QaEvidenceSummaryJson> {
+export async function runWorkerInferenceGeneration(
+  options: ProducerOptions,
+): Promise<QaEvidenceSummaryJson> {
   const writer = createQaScriptEvidenceWriter({
     artifactBase: options.artifactBase,
     logFileName: `${SCENARIO_ID}.log`,
@@ -757,7 +774,12 @@ async function runProducer(options: ProducerOptions): Promise<QaEvidenceSummaryJ
       status: "pass",
     });
   } catch (error) {
-    const details = error instanceof Error ? error.message : String(error);
+    const details = collectErrorGraphCandidates(error, (current) => [
+      current.cause,
+      ...(current instanceof AggregateError ? current.errors : []),
+    ])
+      .map(coerceErrorMessage)
+      .join("; ");
     writer.appendLog(`fail: ${details}\n`);
     return await writer.write({
       details,
@@ -769,7 +791,7 @@ async function runProducer(options: ProducerOptions): Promise<QaEvidenceSummaryJ
 
 async function main(argv: readonly string[]) {
   const options = parseOptions(argv);
-  const evidence = await runProducer(options);
+  const evidence = await runWorkerInferenceGeneration(options);
   const status = evidence.entries[0]?.result.status;
   console.log(`Worker inference generation evidence: ${QA_EVIDENCE_FILENAME}`);
   console.log(

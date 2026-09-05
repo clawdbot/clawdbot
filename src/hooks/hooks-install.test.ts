@@ -5,6 +5,7 @@ import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import { loadConfigForInstall } from "../cli/plugins-install-config.js";
 import { tryInstallHookPackFromLocalPath } from "../cli/plugins-install-hook-fallback.js";
 import { readConfigFileSnapshot } from "../config/config.js";
+import { withPluginLifecycleLease } from "../plugins/plugin-lifecycle-lease.js";
 import {
   createOpenClawTestState,
   type OpenClawTestState,
@@ -14,9 +15,10 @@ import { readHookInstalls } from "./installs.js";
 import {
   clearInternalHooks,
   createInternalHookEvent,
+  setInternalHooksEnabled,
   triggerInternalHook,
 } from "./internal-hooks.js";
-import { loadInternalHooks } from "./loader.js";
+import { prepareInternalHooks } from "./loader.js";
 import { loadWorkspaceHookEntries } from "./workspace.js";
 
 async function writeHook(hookDir: string, name: string): Promise<void> {
@@ -58,8 +60,13 @@ describe.each([
 
   afterEach(async () => {
     try {
-      await loadInternalHooks({ hooks: { internal: { enabled: false } } }, state.workspaceDir);
+      const disabled = await prepareInternalHooks(
+        { hooks: { internal: { enabled: false } } },
+        state.workspaceDir,
+      );
+      disabled.commit();
       clearInternalHooks();
+      setInternalHooksEnabled(true);
     } finally {
       await state.cleanup();
       pinConfigDir();
@@ -96,13 +103,16 @@ describe.each([
         normalizedSpec: sourceDir,
         resolvedPath: sourceDir,
       });
-      const installResult = await tryInstallHookPackFromLocalPath({
-        snapshot,
-        resolvedPath: sourceDir,
-        installMode: "install",
-        safetyOverrides: { config: snapshot.config },
-        link,
-      });
+      const installResult = await withPluginLifecycleLease({}, async (lease) =>
+        tryInstallHookPackFromLocalPath({
+          snapshot,
+          resolvedPath: sourceDir,
+          installMode: "install",
+          safetyOverrides: { config: snapshot.config },
+          link,
+          assertOwned: lease.assertOwned.bind(lease),
+        }),
+      );
       expect(installResult).toEqual({ ok: true });
 
       const installed = await readConfigFileSnapshot();
@@ -132,12 +142,13 @@ describe.each([
         ...options,
         config: installed.config,
       });
-      const loaded = await loadInternalHooks(installed.config, state.workspaceDir, options);
+      const prepared = await prepareInternalHooks(installed.config, state.workspaceDir, options);
+      prepared.commit();
       const event = createInternalHookEvent("command", "new", "test-session");
       await triggerInternalHook(event);
       expect({
         discovered: discovered.map((entry) => entry.hook.name).toSorted(),
-        loaded,
+        loaded: prepared.loadedCount,
         messages: event.messages.toSorted(),
       }).toEqual({
         discovered: ["hello-hook"],

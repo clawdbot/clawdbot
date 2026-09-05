@@ -8,7 +8,10 @@ import kotlinx.serialization.json.jsonObject
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertNotEquals
 import org.junit.Test
+import org.junit.runner.RunWith
+import org.robolectric.RobolectricTestRunner
 
+@RunWith(RobolectricTestRunner::class)
 class ChatControllerMessageIdentityTest {
   @Test
   fun reconcileMessageIdsKeepsCanonicalEntryIdentityFromReload() {
@@ -91,6 +94,8 @@ class ChatControllerMessageIdentityTest {
       val controller =
         ChatController(
           scope = this,
+          commandOutbox = this.createChatCommandOutbox(),
+          cacheScope = { ChatCacheScope("gateway-test", 1L) },
           json = json,
           requestGateway = { method, _ ->
             if (method == "chat.history") {
@@ -110,7 +115,7 @@ class ChatControllerMessageIdentityTest {
               }
               """.trimIndent()
             } else {
-              "{}"
+              emptyChatGatewayResponse(method)
             }
           },
         )
@@ -136,6 +141,8 @@ class ChatControllerMessageIdentityTest {
       val controller =
         ChatController(
           scope = this,
+          commandOutbox = this.createChatCommandOutbox(),
+          cacheScope = { ChatCacheScope("gateway-test", 1L) },
           json = json,
           requestGateway = { method, _ ->
             if (method == "chat.history") {
@@ -164,7 +171,7 @@ class ChatControllerMessageIdentityTest {
               }
               """.trimIndent()
             } else {
-              "{}"
+              emptyChatGatewayResponse(method)
             }
           },
         )

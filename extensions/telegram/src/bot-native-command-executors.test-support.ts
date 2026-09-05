@@ -114,6 +114,7 @@ export const dispatchChannelInboundTurnMock = vi.fn<DispatchChannelInboundTurnFn
     const providerInfo = {
       ...info,
       onPlatformSendDispatch: async () => undefined,
+      assertPlatformSendAuthorized: () => undefined,
     };
     const result =
       "deliverWithProviderMessageSending" in plan.delivery

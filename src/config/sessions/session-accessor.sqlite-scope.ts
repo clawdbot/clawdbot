@@ -43,6 +43,7 @@ type SessionSqliteDatabase = Pick<
   | "session_members"
   | "session_nodes"
   | "session_participants"
+  | "session_pending_inputs"
   | "session_progress_cards"
   | "session_suggestions"
   | "session_transcript_archives"

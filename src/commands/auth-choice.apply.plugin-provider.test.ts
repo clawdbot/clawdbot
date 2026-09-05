@@ -2,7 +2,7 @@
 import { expectDefined } from "@openclaw/normalization-core";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import type { AuthProfileCredential } from "../agents/auth-profiles/types.js";
-import { buildPluginCapabilityConsentReview } from "../plugins/capability-consent.js";
+import { buildPluginCapabilityConsentReview } from "../plugins/capability-summary.js";
 import * as pluginEnable from "../plugins/enable.js";
 import { metadataSnapshot } from "../plugins/management-service.test-helpers.js";
 import {

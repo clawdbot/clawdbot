@@ -391,6 +391,50 @@ describe("status.command-sections", () => {
     });
   });
 
+  it("shows blocked ingress even when the channel connection is healthy", () => {
+    const rows = buildStatusHealthRows({
+      health: {
+        ok: true,
+        ts: 0,
+        durationMs: 42,
+        heartbeatSeconds: 60,
+        defaultAgentId: "main",
+        agents: [],
+        sessions: { path: "/tmp/sessions.json", count: 0, recent: [] },
+        channels: {},
+        channelOrder: [],
+        channelLabels: {},
+        deliveryQueues: {
+          failed: [],
+          ingressPressure: [
+            {
+              channelId: "telegram",
+              accountId: "ops",
+              laneCount: 1,
+              pendingCount: 2,
+              claimedCount: 0,
+              blockedCount: 1,
+              oldestReceivedAt: Date.now(),
+            },
+          ],
+        },
+      },
+      formatHealthChannelLines: () => ["Telegram: healthy"],
+      ok: (value) => `ok(${value})`,
+      warn: (value) => `warn(${value})`,
+      muted: (value) => `muted(${value})`,
+    });
+
+    expect(rows).toContainEqual({ Item: "Telegram", Status: "ok(OK)", Detail: "healthy" });
+    expect(rows).toContainEqual({
+      Item: "Delivery queue",
+      Status: "warn(WARN)",
+      Detail: expect.stringContaining(
+        "inbound telegram/ops: 1 pressured lane, 2 pending, 0 claimed, 1 blocked",
+      ),
+    });
+  });
+
   it("adds degraded event-loop health to status rows", () => {
     const rows = buildStatusHealthRows({
       health: {

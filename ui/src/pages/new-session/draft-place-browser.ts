@@ -20,7 +20,7 @@ import { projectCloneInput, type DraftRemoteProject } from "./project-chip.ts";
 import { recentPlaces, type RecentPlaceSource } from "./recent-places.ts";
 
 const PROJECT_SEARCH_DEBOUNCE_MS = 300;
-type DraftPickerKind = "where" | "project" | "detail";
+type DraftPickerKind = "where" | "project" | "checkout";
 
 type DraftPlaceBrowserSnapshot = Readonly<{
   context: ApplicationContext | undefined;
@@ -82,7 +82,11 @@ export class DraftPlaceBrowser {
           this.gateway.connectionEpoch,
         ] as const,
       task: async ([client, advertised]) => {
-        if (!client || !advertised) {
+        // A disconnect has no catalog result and cannot retire the selected project.
+        if (!client) {
+          return initialState;
+        }
+        if (!advertised) {
           return { projects: [] } as ProjectsListResult;
         }
         return await (
@@ -99,9 +103,6 @@ export class DraftPlaceBrowser {
         this.callbacks.requestUpdate();
       },
       onError: () => {
-        this.projectsValue = [];
-        this.projectRecentsValue = undefined;
-        this.callbacks.onProjectMissing();
         this.callbacks.requestUpdate();
       },
     });
@@ -335,7 +336,12 @@ export class DraftPlaceBrowser {
     this.callbacks.requestUpdate();
   }
 
-  resetProjects() {
+  resetProjects(resetSelection = true) {
+    // Retire the old request and refetch even when the connection has not changed.
+    void this.projectsTask.run([null, false, -1]);
+    if (!resetSelection) {
+      return;
+    }
     this.projectsValue = [];
     this.projectRecentsValue = undefined;
     this.clearProjectSelection();
@@ -344,7 +350,7 @@ export class DraftPlaceBrowser {
 
   close() {
     this.resetBrowser(true);
-    for (const kind of ["where", "project", "detail"] as const) {
+    for (const kind of ["where", "project", "checkout"] as const) {
       const popover = this.callbacks.querySelector(`.new-session-page__${kind}-popover`) as
         | (HTMLElement & { open: boolean })
         | null;

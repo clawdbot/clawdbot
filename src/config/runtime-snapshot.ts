@@ -140,6 +140,10 @@ function configSnapshotsMatch(left: OpenClawConfig, right: OpenClawConfig): bool
   if (left === right) {
     return true;
   }
+  // Authored SecretRefs live outside the JSON bytes. Projection must not replace their provenance.
+  if (getConfigResolutionFacts(left) !== getConfigResolutionFacts(right)) {
+    return false;
+  }
   try {
     return stableConfigStringify(left) === stableConfigStringify(right);
   } catch {
@@ -319,6 +323,15 @@ export function selectApplicableRuntimeConfig(params: {
     return runtimeConfig;
   }
   return inputConfig;
+}
+
+/** Bind a retained consumer to its current runtime owner while preserving scoped configs. */
+export function createRuntimeConfigReader(inputConfig: OpenClawConfig): () => OpenClawConfig {
+  const followsRuntimeConfig =
+    runtimeConfigSnapshot === inputConfig ||
+    (runtimeConfigSourceSnapshot !== null &&
+      configSnapshotsMatch(inputConfig, runtimeConfigSourceSnapshot));
+  return () => (followsRuntimeConfig ? runtimeConfigSnapshot : null) ?? inputConfig;
 }
 
 export function setRuntimeConfigSnapshotRefreshHandler(

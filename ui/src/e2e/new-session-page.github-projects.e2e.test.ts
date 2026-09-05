@@ -1,14 +1,18 @@
+import { Buffer } from "node:buffer";
+import { writeFile } from "node:fs/promises";
+import path from "node:path";
 import { expect, it } from "vitest";
+import { takeControlUiViewportScreenshot } from "../test-helpers/control-ui-e2e-screenshot.ts";
 import {
   WORKSPACE,
+  ONE_PIXEL_PNG_B64,
   captureProjectUiProof,
   captureUiProofEnabled,
   controlUiSessionPath,
   createNewSessionPageE2eSuite,
   installMockGateway,
+  navigateInApp,
   pollLocatorText,
-  prepareProjectUiProof,
-  projectProofArtifactDir,
   waitForCommittedChatRoute,
 } from "./new-session-page.test-support.ts";
 
@@ -29,14 +33,16 @@ const remoteSearchResult = {
 
 suite.define(() => {
   it("offers a worktree for a GitHub result before its checkout exists", async () => {
-    await prepareProjectUiProof();
     await suite.withPage(
       {
         locale: "en-US",
         serviceWorkers: "block",
         ...(captureUiProofEnabled
           ? {
-              recordVideo: { dir: projectProofArtifactDir, size: { height: 900, width: 1280 } },
+              recordVideo: {
+                dir: path.join(suite.artifactDir, "project-registry"),
+                size: { height: 900, width: 1280 },
+              },
               viewport: { height: 900, width: 1280 },
             }
           : {}),
@@ -68,19 +74,27 @@ suite.define(() => {
           .fill("openclaw");
         await projects.getByRole("button", { name: /openclaw\/openclaw/u }).click();
 
-        await captureProjectUiProof(page, "github-worktree-direct.png");
-        const detail = page.locator("#new-session-detail-trigger");
-        await expect.poll(() => detail.isVisible()).toBe(true);
-        await pollLocatorText(detail).toContain("Runs directly");
-        await detail.click();
-        const branches = page.locator("wa-popover.new-session-page__detail-popover");
-        await branches.getByRole("button", { name: "Worktree", exact: true }).click();
-        await expect.poll(() => detail.getAttribute("data-worktree")).toBe("true");
-        const baseRef = branches.getByLabel("Base branch");
-        expect(await baseRef.getAttribute("placeholder")).toBe("Base branch");
+        await captureProjectUiProof(suite, page, "github-worktree-direct.png");
+        const checkout = page.locator("#new-session-checkout-trigger");
+        await expect.poll(() => checkout.isVisible()).toBe(true);
+        await pollLocatorText(checkout).toContain("Current checkout");
+        await checkout.click();
+        const checkoutPopover = page.locator("wa-popover.new-session-page__checkout-popover");
+        await checkoutPopover
+          .getByRole("button", { name: "New worktree Isolated copy of the repo", exact: true })
+          .click();
+        await expect.poll(() => checkout.getAttribute("data-worktree")).toBe("true");
+        await pollLocatorText(checkout.locator(".new-session-page__trigger-label")).toBe(
+          "New worktree",
+        );
+        const baseRef = checkoutPopover.getByLabel("From");
+        expect(await baseRef.getAttribute("placeholder")).toBe("From");
         expect(await baseRef.inputValue()).toBe("");
-        expect(await branches.locator("datalist option").count()).toBe(0);
-        await captureProjectUiProof(page, "github-worktree-selected.png");
+        expect(await checkoutPopover.locator("datalist option").count()).toBe(0);
+        await captureProjectUiProof(suite, page, "github-worktree-selected.png", {
+          surface: checkoutPopover.locator('wa-popup [part="popup"]'),
+          content: [baseRef],
+        });
         await page.locator(".new-session-page__message").fill("inspect the worktree");
         await page.getByRole("button", { name: "Start session" }).click();
 
@@ -112,14 +126,17 @@ suite.define(() => {
       worktree: true,
     },
   ])("keeps GitHub selection inert and $name", async ({ failure, worktree }) => {
-    await prepareProjectUiProof();
+    // Both capture gates share this attempt's screenshots, custody report, and video.
+    const artifactDir = process.env.OPENCLAW_UI_E2E_ARTIFACT_DIR?.trim()
+      ? path.join(suite.artifactDir, "project-registry")
+      : undefined;
     const context = await suite.browser.newContext({
       locale: "en-US",
       serviceWorkers: "block",
-      ...(captureUiProofEnabled
+      ...(captureUiProofEnabled || artifactDir
         ? {
             recordVideo: {
-              dir: projectProofArtifactDir,
+              dir: path.join(suite.artifactDir, "project-registry"),
               size: { height: 900, width: 1280 },
             },
             viewport: { height: 900, width: 1280 },
@@ -140,21 +157,77 @@ suite.define(() => {
       await chatModuleBlocked;
       await route.continue();
     });
+    let releaseMedia!: () => void;
+    const mediaBlocked = new Promise<void>((resolve) => {
+      releaseMedia = resolve;
+    });
+    let metadataRequested = false;
+    await page.route("**/__openclaw__/assistant-media?**", async (route) => {
+      const metadata = new URL(route.request().url()).searchParams.has("meta");
+      metadataRequested ||= metadata;
+      await mediaBlocked;
+      await route.fulfill(
+        metadata
+          ? { json: { available: true } }
+          : { contentType: "image/png", body: Buffer.from(ONE_PIXEL_PNG_B64, "base64") },
+      );
+    });
+    const acceptedAt = Date.now();
+    const pendingInput = {
+      id: "accepted-project-input",
+      runId,
+      acceptedAt,
+      state: "queued",
+      message: {
+        role: "user",
+        content: message,
+        timestamp: acceptedAt,
+        __openclaw: {
+          id: "pending:accepted-project-input",
+          senderId: "synthetic-author",
+          senderName: "Synthetic Author",
+          media: [
+            {
+              url: "media://inbound/synthetic.png",
+              contentType: "image/png",
+              fileName: "synthetic.png",
+            },
+          ],
+          mediaImageLayout: { slots: [{ kind: "inline", factIndex: 0 }] },
+        },
+      },
+    };
+    const history = {
+      messages: [],
+      sessionId: "cloned-project-session",
+      sessionInfo: {
+        key: sessionKey,
+        hasActiveRun: true,
+        activeRunIds: [runId],
+        status: "running",
+      },
+      pendingInputs: { items: [pendingInput], total: 1 },
+      inFlightRun: {
+        runId,
+        startedAt: acceptedAt,
+        events: [
+          {
+            runId,
+            sessionKey,
+            seq: 1,
+            stream: "run_status",
+            ts: acceptedAt,
+            data: { phase: "preparing_workspace" },
+          },
+        ],
+      },
+    };
     const gateway = await installMockGateway(page, {
+      deferredMethods: ["chat.startup"],
       workspace: WORKSPACE,
       workspaceGit: true,
-      historyMessages: [
-        {
-          role: "user",
-          content: [{ type: "text", text: message }],
-          timestamp: Date.now(),
-          __openclaw: {
-            id: "persisted-remote-project-prompt",
-            idempotencyKey: `${runId}:user`,
-            seq: 1,
-          },
-        },
-      ],
+      historyMessages: [],
+      presenceUsers: [{ id: "synthetic-author", name: "Synthetic Author", self: true }],
       inFlightRun: {
         runId,
         startedAt: Date.now(),
@@ -194,7 +267,9 @@ suite.define(() => {
           defaultBranch: "main",
           repositoryStatus: "git",
         },
-        "sessions.create": { key: sessionKey, runStarted: true, runId, messageSeq: 1 },
+        "sessions.create": { key: sessionKey, runStarted: true, runId },
+        "chat.startup": history,
+        "chat.history": history,
       },
     });
 
@@ -225,13 +300,13 @@ suite.define(() => {
       expect(await trigger.getAttribute("data-project-id")).toBeNull();
 
       if (worktree) {
-        const detailTrigger = page.locator("#new-session-detail-trigger");
-        await detailTrigger.click();
+        const checkoutTrigger = page.locator("#new-session-checkout-trigger");
+        await checkoutTrigger.click();
         await page
-          .locator("wa-popover.new-session-page__detail-popover")
-          .getByRole("button", { name: "Worktree", exact: true })
+          .locator("wa-popover.new-session-page__checkout-popover")
+          .getByRole("button", { name: "New worktree Isolated copy of the repo", exact: true })
           .click();
-        await expect.poll(() => detailTrigger.getAttribute("data-worktree")).toBe("true");
+        await expect.poll(() => checkoutTrigger.getAttribute("data-worktree")).toBe("true");
         await page.keyboard.press("Escape");
       }
 
@@ -239,11 +314,18 @@ suite.define(() => {
       await permission.click();
       await page.locator('[data-chat-permission-option="read-only"]').click();
       await page.locator(".new-session-page__message").fill(message);
+      await page.locator(".agent-chat__photo-input").setInputFiles({
+        name: "synthetic.png",
+        mimeType: "image/png",
+        buffer: Buffer.from(ONE_PIXEL_PNG_B64, "base64"),
+      });
+      await page.getByRole("img", { name: "synthetic.png" }).waitFor();
       await page.getByRole("button", { name: "Start session" }).click();
       const create = await gateway.waitForRequest("sessions.create");
       expect(create.params).toMatchObject({
         agentId: "main",
         message,
+        attachments: [{ type: "image", mimeType: "image/png", content: ONE_PIXEL_PNG_B64 }],
         permissionMode: "read-only",
         projectGitUrl: "https://github.com/openclaw/openclaw.git",
         ...(worktree ? { worktree: true } : {}),
@@ -267,12 +349,66 @@ suite.define(() => {
       expect(new URL(page.url()).pathname).toBe(controlUiSessionPath(sessionKey));
       await gateway.waitForRequest("chat.startup");
 
+      const userImage = page.locator(".chat-group.user img.chat-message-image");
+      const readImage = () =>
+        userImage.evaluate((image) => {
+          const element = image as HTMLImageElement;
+          return {
+            inline: element.src.startsWith("data:image/png;base64,"),
+            usable: element.complete && element.naturalWidth > 0,
+          };
+        });
+      await expect.poll(() => page.locator(".chat-group.user").count()).toBe(1);
+      await expect.poll(() => userImage.count()).toBe(1);
+      await expect.poll(readImage).toEqual({ inline: true, usable: true });
+      const transition = await page.evaluateHandle(() => {
+        const frames: { users: number; images: number }[] = [];
+        let frame: number;
+        const observe = () => {
+          frames.push({
+            users: document.querySelectorAll(".chat-group.user").length,
+            images: document.querySelectorAll(".chat-group.user img.chat-message-image").length,
+          });
+          frame = requestAnimationFrame(observe);
+        };
+        observe();
+        return {
+          stop() {
+            cancelAnimationFrame(frame);
+            return frames;
+          },
+        };
+      });
+      await gateway.resolveDeferred("chat.startup");
+      await expect.poll(() => metadataRequested).toBe(true);
+      expect(await page.locator(".chat-notice").count()).toBe(0);
       const working = page.locator('.chat-working-indicator[role="status"]');
       await pollLocatorText(working).toContain("Preparing workspace…");
+      if (artifactDir) {
+        await writeFile(
+          path.join(artifactDir, "preparing.png"),
+          await takeControlUiViewportScreenshot(page, page.locator(".shell"), [working, userImage]),
+        );
+      }
       await expect.poll(() => page.locator(".chat-group.user").count()).toBe(1);
+      await expect
+        .poll(() => page.locator(".chat-group.user img.chat-message-image").count())
+        .toBe(1);
+      await expect.poll(readImage).toEqual({ inline: true, usable: true });
+      const observed = await transition.evaluate(async (sampler) => {
+        await new Promise(requestAnimationFrame);
+        return sampler.stop();
+      });
+      await transition.dispose();
+      if (artifactDir) {
+        await writeFile(path.join(artifactDir, "custody-frames.json"), JSON.stringify(observed));
+      }
+      expect(observed.length).toBeGreaterThan(1);
+      expect(observed.every(({ users, images }) => users === 1 && images === 1)).toBe(true);
       expect(await working.locator(".chat-reading-indicator").count()).toBe(1);
       expect(await gateway.getRequests("chat.send")).toHaveLength(0);
       await captureProjectUiProof(
+        suite,
         page,
         worktree ? "worktree-preparing.png" : "project-cloning.png",
       );
@@ -294,10 +430,55 @@ suite.define(() => {
           await pollLocatorText(working).toContain(label);
           expect(await page.locator(".chat-group.user").count()).toBe(1);
         }
-        await captureProjectUiProof(page, "worktree-running-setup.png");
+        await captureProjectUiProof(suite, page, "worktree-running-setup.png");
       }
 
       if (!failure) {
+        const promoted = {
+          ...pendingInput.message,
+          __openclaw: {
+            ...pendingInput.message["__openclaw"],
+            id: pendingInput.id,
+            idempotencyKey: `${runId}:user`,
+            seq: 4,
+          },
+        };
+        const promotedHistory = {
+          ...history,
+          messages: [promoted],
+          pendingInputs: { items: [], total: 0 },
+        };
+        await gateway.setMethodResponse("chat.startup", promotedHistory);
+        await gateway.setMethodResponse("chat.history", promotedHistory);
+        await gateway.setHistoryMessages([promoted]);
+        await gateway.emitGatewayEvent("session.message", {
+          sessionKey,
+          sessionId: history.sessionId,
+          agentId: "main",
+          hasActiveRun: true,
+          messageId: pendingInput.id,
+          messageSeq: 4,
+          message: promoted,
+        });
+        const canonicalBubble = page.locator(
+          '.chat-bubble[data-entry-id="accepted-project-input"]',
+        );
+        await canonicalBubble.waitFor();
+        await expect.poll(() => canonicalBubble.count()).toBe(1);
+        await expect.poll(() => page.locator(".chat-group.user").count()).toBe(1);
+        await expect.poll(() => canonicalBubble.locator("img.chat-message-image").count()).toBe(1);
+        await navigateInApp(page, "new-session");
+        await page.locator(".new-session-page__message").waitFor();
+        await page.goBack();
+        await waitForCommittedChatRoute(page);
+        await canonicalBubble.waitFor();
+        await expect.poll(() => page.locator(".chat-group.user").count()).toBe(1);
+        if (artifactDir) {
+          await writeFile(
+            path.join(artifactDir, "promoted.png"),
+            await takeControlUiViewportScreenshot(page, page.locator(".shell"), [canonicalBubble]),
+          );
+        }
         await gateway.emitChatFinal({ runId, sessionKey, text: "Project workspace is ready." });
         await page
           .getByRole("paragraph")
@@ -321,6 +502,7 @@ suite.define(() => {
       const composer = page.locator(".agent-chat__composer-combobox textarea");
       await expect.poll(() => composer.isEnabled()).toBe(true);
       await captureProjectUiProof(
+        suite,
         page,
         worktree ? "worktree-setup-failed.png" : "project-cloning-failed.png",
       );
@@ -333,6 +515,7 @@ suite.define(() => {
       expect(await gateway.getRequests("projects.add")).toHaveLength(0);
     } finally {
       releaseChatModule();
+      releaseMedia();
       await context.close();
     }
   });

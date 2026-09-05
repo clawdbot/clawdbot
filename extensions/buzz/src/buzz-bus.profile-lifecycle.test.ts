@@ -1,4 +1,4 @@
-import { finalizeEvent } from "nostr-tools";
+import { compareEvents, finalizeEvent } from "nostr-tools";
 import { createDeferred } from "openclaw/plugin-sdk/extension-shared";
 import { describe, expect, it, vi } from "vitest";
 
@@ -14,6 +14,43 @@ const { PRIVATE_KEY, CHANNEL_ID, startTestBus, signSenderEvent, subscriptionIncl
   useBuzzBusLifecycleFixture();
 
 describe("Buzz profile lifecycle", () => {
+  it("selects the lowest event ID when profiles share a timestamp", async () => {
+    relayMocks.auth.mockResolvedValue("ok");
+    const secretKey = Uint8Array.from(Buffer.from(PRIVATE_KEY, "hex"));
+    const profiles = ["First profile", "Second profile"].map((displayName) =>
+      finalizeEvent(
+        {
+          kind: 0,
+          created_at: 1_700_000_000,
+          content: JSON.stringify({ display_name: displayName }),
+          tags: [],
+        },
+        secretKey,
+      ),
+    );
+    const sortedProfiles = profiles.toSorted(compareEvents);
+    const lowerIdProfile = sortedProfiles[0];
+    const higherIdProfile = sortedProfiles[1];
+    if (!lowerIdProfile || !higherIdProfile) {
+      throw new Error("Expected two signed profile fixtures");
+    }
+    relayMocks.profileEvents = [higherIdProfile, lowerIdProfile];
+
+    const bus = await startTestBus({ profileName: "Configured Agent Name" });
+
+    await vi.waitFor(() =>
+      expect(relayMocks.publish.mock.calls.some(([event]) => event.kind === 10_100)).toBe(true),
+    );
+    const agentProfile = relayMocks.publish.mock.calls
+      .map(([event]) => event)
+      .find((event) => event.kind === 10_100);
+    expect(JSON.parse(agentProfile?.content ?? "{}")).toMatchObject({
+      name: JSON.parse(lowerIdProfile.content).display_name,
+      display_name: JSON.parse(lowerIdProfile.content).display_name,
+    });
+    await bus.close();
+  });
+
   it("isolates message failures from fatal relay failures", async () => {
     relayMocks.auth.mockResolvedValue("ok");
     relayMocks.profileEvents = [

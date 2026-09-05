@@ -82,6 +82,7 @@ function buildPluginParams(
       to: "test-bot",
     },
     sessionKey: "agent:main:whatsapp:direct:test-user",
+    agentId: "main",
     sessionEntry: {
       sessionId: "session-plugin-command",
       updatedAt: Date.now(),
@@ -550,7 +551,7 @@ describe("handlePluginCommand", () => {
       commands: { text: true },
       channels: { whatsapp: { allowFrom: ["*"] } },
     } as OpenClawConfig);
-    params.agentId = "requester";
+    params.agentId = "target";
     params.sessionKey = "agent:target:whatsapp:direct:test-user";
     params.sessionEntry = {
       sessionId: "wrapper-session",

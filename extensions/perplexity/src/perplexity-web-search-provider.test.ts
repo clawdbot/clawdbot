@@ -1,6 +1,6 @@
 // Perplexity tests cover perplexity web search provider plugin behavior.
 import { withEnv, withEnvAsync } from "openclaw/plugin-sdk/test-env";
-import { describe, expect, it, vi } from "vitest";
+import { beforeEach, describe, expect, it, vi } from "vitest";
 
 const withTrustedWebSearchEndpointMock = vi.hoisted(() => vi.fn());
 
@@ -53,10 +53,13 @@ function createConfiguredPerplexityTool(
 }
 
 describe("perplexity web search provider", () => {
+  beforeEach(() => {
+    withTrustedWebSearchEndpointMock.mockReset();
+  });
+
   it.each([true, false])(
     "redacts reflected request credentials (native=%s)",
     async (structured) => {
-      withTrustedWebSearchEndpointMock.mockReset();
       withTrustedWebSearchEndpointMock.mockImplementationOnce(
         async (_params: unknown, run: (response: Response) => Promise<unknown>) =>
           run(new Response("rejected s7Key", { status: 401 })),
@@ -238,7 +241,6 @@ describe("perplexity web search provider", () => {
       webSearch: { apiKey: "pplx-test", baseUrl: "https://api.perplexity.ai" },
     },
   ])("does not start an already canceled $name request", async ({ webSearch }) => {
-    withTrustedWebSearchEndpointMock.mockReset();
     withTrustedWebSearchEndpointMock.mockResolvedValue({ results: [] });
     const tool = createPerplexityWebSearchProvider().createTool({
       config: { plugins: { entries: { perplexity: { config: { webSearch } } } } },
@@ -265,7 +267,6 @@ describe("perplexity web search provider", () => {
     "applies the current cache TTL of $ttl minutes to $name results",
     async ({ name, structured, ttl }) => {
       const now = vi.spyOn(Date, "now").mockReturnValue(1_700_000_000_000);
-      withTrustedWebSearchEndpointMock.mockReset();
       for (const result of ["initial", "fresh", "uncached"]) {
         mockPerplexityResponseOnce(
           structured
@@ -303,7 +304,6 @@ describe("perplexity web search provider", () => {
         }
       } finally {
         now.mockRestore();
-        withTrustedWebSearchEndpointMock.mockReset();
       }
     },
   );
@@ -312,7 +312,6 @@ describe("perplexity web search provider", () => {
     { name: "missing choices", response: {} },
     { name: "whitespace content", response: { choices: [{ message: { content: " \n " } }] } },
   ])("rejects and does not cache chat-completions $name", async ({ name, response }) => {
-    withTrustedWebSearchEndpointMock.mockReset();
     mockPerplexityResponseOnce(response);
     mockPerplexityResponseOnce({
       choices: [{ message: { content: "  Recovered grounded answer  " } }],
@@ -337,7 +336,6 @@ describe("perplexity web search provider", () => {
   ])(
     "uses count as a cache dimension only when $name sends it upstream",
     async ({ name, structured, expectedRequests }) => {
-      withTrustedWebSearchEndpointMock.mockReset();
       const response = structured
         ? { results: [] }
         : {
@@ -387,7 +385,6 @@ describe("perplexity web search provider", () => {
       webSearch: { apiKey: "pplx-test", baseUrl: "https://api.perplexity.ai" },
     },
   ])("cancels an in-flight $name request", async ({ name, webSearch }) => {
-    withTrustedWebSearchEndpointMock.mockReset();
     withTrustedWebSearchEndpointMock.mockImplementation(
       async (params: { signal?: AbortSignal }) =>
         await new Promise<never>((_resolve, reject) => {
@@ -418,22 +415,9 @@ describe("perplexity web search provider", () => {
 
     await expect(result).rejects.toThrow("Perplexity request canceled in flight");
     expect(withTrustedWebSearchEndpointMock.mock.calls[0]?.[0]?.signal).toBe(controller.signal);
-    withTrustedWebSearchEndpointMock.mockReset();
   });
 
-  it("infers provider routing from api key prefixes", () => {
-    expect(testing.inferPerplexityBaseUrlFromApiKey("pplx-abc")).toBe("direct");
-    expect(testing.inferPerplexityBaseUrlFromApiKey("sk-or-v1-abc")).toBe("openrouter");
-    expect(testing.inferPerplexityBaseUrlFromApiKey("unknown")).toBeUndefined();
-  });
-
-  it("resolves base url from auth source and request model by transport", () => {
-    expect(testing.resolvePerplexityBaseUrl(undefined, "perplexity_env")).toBe(
-      "https://api.perplexity.ai",
-    );
-    expect(testing.resolvePerplexityBaseUrl(undefined, "openrouter_env")).toBe(
-      "https://openrouter.ai/api/v1",
-    );
+  it("strips the provider prefix only for direct chat request models", () => {
     expect(
       testing.resolvePerplexityRequestModel("https://api.perplexity.ai", "perplexity/sonar-pro"),
     ).toBe("sonar-pro");
@@ -442,90 +426,176 @@ describe("perplexity web search provider", () => {
     ).toBe("perplexity/sonar-pro");
   });
 
-  it("chooses direct search_api transport only for direct base urls without legacy overrides", () => {
-    expect(
-      testing.resolvePerplexityTransport({
-        baseUrl: "https://api.perplexity.ai",
-      }).transport,
-    ).toBe("chat_completions");
-
-    expect(
-      testing.resolvePerplexityTransport({
-        apiKey: "pplx-secret",
-      }).transport,
-    ).toBe("search_api");
-  });
-
-  it("prefers explicit baseUrl over key-based defaults", () => {
-    expect(
-      testing.resolvePerplexityBaseUrl({ baseUrl: "https://example.com" }, "config", "pplx-123"),
-    ).toBe("https://example.com");
-  });
-
-  it("resolves OpenRouter env auth and transport", () => {
+  it.each([
+    { env: perplexityApiKeyEnv, key: directPerplexityApiKey, source: "perplexity_env" },
+    { env: openRouterApiKeyEnv, key: openRouterPerplexityApiKey, source: "openrouter_env" },
+  ])("retains the $source credential origin", ({ env, key, source }) => {
     withEnv(
-      { [perplexityApiKeyEnv]: undefined, [openRouterApiKeyEnv]: openRouterPerplexityApiKey },
+      { [perplexityApiKeyEnv]: undefined, [openRouterApiKeyEnv]: undefined, [env]: key },
       () => {
-        expect(testing.resolvePerplexityApiKey(undefined)).toEqual({
-          apiKey: openRouterPerplexityApiKey,
-          source: "openrouter_env",
-        });
-        expect(testing.resolvePerplexityTransport(undefined)).toEqual({
-          apiKey: openRouterPerplexityApiKey,
-          source: "openrouter_env",
-          baseUrl: "https://openrouter.ai/api/v1",
-          model: "perplexity/sonar-pro",
-          transport: "chat_completions",
-        });
+        expect(testing.resolvePerplexityApiKey()).toEqual({ apiKey: key, source });
       },
     );
   });
 
-  it("uses native Search API for direct Perplexity when no legacy overrides exist", () => {
-    withEnv(
-      { [perplexityApiKeyEnv]: directPerplexityApiKey, [openRouterApiKeyEnv]: undefined },
-      () => {
-        expect(testing.resolvePerplexityTransport(undefined)).toEqual({
-          apiKey: directPerplexityApiKey,
-          source: "perplexity_env",
-          baseUrl: "https://api.perplexity.ai",
-          model: "perplexity/sonar-pro",
-          transport: "search_api",
-        });
-      },
-    );
-  });
-
-  it("switches direct Perplexity to chat completions when model override is configured", () => {
-    expect(testing.resolvePerplexityModel({ model: "perplexity/sonar-reasoning-pro" })).toBe(
-      "perplexity/sonar-reasoning-pro",
-    );
-    expect(
-      testing.resolvePerplexityTransport({
-        apiKey: directPerplexityApiKey,
-        model: "perplexity/sonar-reasoning-pro",
-      }),
-    ).toEqual({
-      apiKey: directPerplexityApiKey,
+  it.each([
+    {
+      name: "configured direct key",
+      key: directPerplexityApiKey,
       source: "config",
-      baseUrl: "https://api.perplexity.ai",
-      model: "perplexity/sonar-reasoning-pro",
-      transport: "chat_completions",
-    });
-  });
-
-  it("treats unrecognized configured keys as direct Perplexity by default", () => {
-    expect(
-      testing.resolvePerplexityTransport({
-        apiKey: enterprisePerplexityApiKey,
-      }),
-    ).toEqual({
-      apiKey: enterprisePerplexityApiKey,
+      url: "https://api.perplexity.ai/search",
+    },
+    {
+      name: "configured OpenRouter key",
+      key: openRouterPerplexityApiKey,
       source: "config",
-      baseUrl: "https://api.perplexity.ai",
+      url: "https://openrouter.ai/api/v1/chat/completions",
       model: "perplexity/sonar-pro",
-      transport: "search_api",
-    });
+    },
+    {
+      name: "unrecognized configured key",
+      key: enterprisePerplexityApiKey,
+      source: "config",
+      url: "https://api.perplexity.ai/search",
+    },
+    {
+      name: "configured key ahead of native environment key",
+      key: openRouterPerplexityApiKey,
+      source: "config",
+      fallbackEnvVar: "PERPLEXITY_API_KEY",
+      url: "https://openrouter.ai/api/v1/chat/completions",
+      model: "perplexity/sonar-pro",
+    },
+    {
+      name: "native environment source ahead of key prefix",
+      key: openRouterPerplexityApiKey,
+      source: "env",
+      fallbackEnvVar: "PERPLEXITY_API_KEY",
+      url: "https://api.perplexity.ai/search",
+    },
+    {
+      name: "OpenRouter environment source ahead of key prefix",
+      key: directPerplexityApiKey,
+      source: "env",
+      fallbackEnvVar: "OPENROUTER_API_KEY",
+      url: "https://openrouter.ai/api/v1/chat/completions",
+      model: "perplexity/sonar-pro",
+    },
+    {
+      name: "resolved direct SecretRef",
+      key: directPerplexityApiKey,
+      source: "secretRef",
+      url: "https://api.perplexity.ai/search",
+    },
+    {
+      name: "resolved OpenRouter SecretRef",
+      key: openRouterPerplexityApiKey,
+      source: "secretRef",
+      url: "https://openrouter.ai/api/v1/chat/completions",
+      model: "perplexity/sonar-pro",
+    },
+    {
+      name: "explicit direct base URL",
+      key: directPerplexityApiKey,
+      source: "config",
+      overrides: { baseUrl: " https://api.perplexity.ai/ " },
+      url: "https://api.perplexity.ai/chat/completions",
+      model: "sonar-pro",
+    },
+    {
+      name: "explicit remote base URL",
+      key: directPerplexityApiKey,
+      source: "config",
+      overrides: { baseUrl: "https://search.example/v1/" },
+      url: "https://search.example/v1/chat/completions",
+      model: "perplexity/sonar-pro",
+    },
+    {
+      name: "explicit model",
+      key: directPerplexityApiKey,
+      source: "config",
+      overrides: { model: " perplexity/sonar-reasoning-pro " },
+      url: "https://api.perplexity.ai/chat/completions",
+      model: "sonar-reasoning-pro",
+    },
+    {
+      name: "blank overrides",
+      key: directPerplexityApiKey,
+      source: "config",
+      overrides: { baseUrl: " ", model: " " },
+      url: "https://api.perplexity.ai/search",
+    },
+  ] as const)("routes $name consistently through metadata, schema and execution", async (entry) => {
+    const { key, source, url } = entry;
+    const fallbackEnvVar = "fallbackEnvVar" in entry ? entry.fallbackEnvVar : undefined;
+    await withEnvAsync(
+      {
+        [perplexityApiKeyEnv]: undefined,
+        [openRouterApiKeyEnv]: undefined,
+        ...(fallbackEnvVar
+          ? { [fallbackEnvVar]: source === "env" ? key : directPerplexityApiKey }
+          : {}),
+      },
+      async () => {
+        const provider = createPerplexityWebSearchProvider();
+        const config = {
+          plugins: {
+            entries: {
+              perplexity: {
+                config: {
+                  webSearch: {
+                    ...(source === "config" ? { apiKey: key } : {}),
+                    ...(source === "secretRef"
+                      ? {
+                          apiKey: { source: "env", provider: "default", id: "PERPLEXITY_TEST_REF" },
+                        }
+                      : {}),
+                    ...("overrides" in entry ? entry.overrides : {}),
+                  },
+                },
+              },
+            },
+          },
+        };
+        const metadata = await provider.resolveRuntimeMetadata?.({
+          config,
+          resolvedCredential: { value: key, source, fallbackEnvVar },
+        });
+        const chat = "model" in entry;
+        expect(metadata).toEqual({ perplexityTransport: chat ? "chat_completions" : "search_api" });
+        if (source === "secretRef") {
+          provider.setConfiguredCredentialValue?.(config, key);
+        }
+        const tool = provider.createTool({
+          config,
+          runtimeMetadata: { providerSource: "configured", diagnostics: [], ...metadata },
+        });
+        if (!tool) {
+          throw new Error("Expected Perplexity tool");
+        }
+        if (chat) {
+          expect(tool.parameters).not.toHaveProperty("properties.country");
+        } else {
+          expect(tool.parameters).toHaveProperty("properties.country");
+        }
+        mockPerplexityResponseOnce(
+          chat ? { choices: [{ message: { content: "Grounded answer" } }] } : { results: [] },
+        );
+        const query = `routing ${entry.name}`;
+        await tool.execute({ query });
+        expect(withTrustedWebSearchEndpointMock).toHaveBeenCalledOnce();
+        const [request] = withTrustedWebSearchEndpointMock.mock.calls[0] as [
+          { url: string; init: RequestInit },
+        ];
+        expect(request.url).toBe(url);
+        expect(new Headers(request.init.headers).get("authorization")).toBe(`Bearer ${key}`);
+        expect(JSON.parse(request.init.body as string)).toEqual(
+          chat
+            ? { model: entry.model, messages: [{ role: "user", content: query }] }
+            : { query, max_results: 5 },
+        );
+      },
+    );
   });
 
   it("sends official date filter fields in the Search API request body", async () => {

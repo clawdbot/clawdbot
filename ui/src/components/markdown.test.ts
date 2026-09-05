@@ -4,7 +4,7 @@ import { i18n } from "../i18n/index.ts";
 import { handleMarkdownCodeBlockClick } from "./markdown-code-blocks.ts";
 import * as markdownDetails from "./markdown-details.ts";
 import { splitStableStreamingMarkdown } from "./markdown-streaming.ts";
-import { toSanitizedMarkdownHtml, toStreamingMarkdownHtml } from "./markdown.ts";
+import { toSanitizedMarkdownHtml, toStreamingMarkdownParts } from "./markdown.ts";
 
 function htmlFragment(html: string): HTMLElement {
   const container = document.createElement("div");
@@ -595,9 +595,19 @@ PY
       );
     });
 
-    it("renders basic markdown", () => {
-      const html = toSanitizedMarkdownHtml("**bold** and *italic*");
-      expect(html).toBe("<p><strong>bold</strong> and <em>italic</em></p>\n");
+    it.each([
+      {
+        name: "basic markdown",
+        markdown: "**bold** and *italic*",
+        expected: "<p><strong>bold</strong> and <em>italic</em></p>\n",
+      },
+      {
+        name: "three-space inline code",
+        markdown: "`   `",
+        expected: "<p><code>   </code></p>\n",
+      },
+    ])("renders $name", ({ markdown, expected }) => {
+      expect(toSanitizedMarkdownHtml(markdown)).toBe(expected);
     });
 
     it("renders headings", () => {
@@ -865,7 +875,7 @@ PY
   });
 });
 
-describe("toStreamingMarkdownHtml", () => {
+describe("toStreamingMarkdownParts", () => {
   it("does not rescan completed disclosures in appended prefixes", () => {
     const prefixes: string[] = [];
     let prefix = "<details><summary>Done</summary></details>\n\n";
@@ -926,8 +936,8 @@ describe("toStreamingMarkdownHtml", () => {
           expect(splitIncrementally(prefix, `split-parity-${key}`)).toEqual(
             splitStableStreamingMarkdown(prefix),
           );
-          expect(toStreamingMarkdownHtml(prefix, {}, `html-parity-${key}`)).toBe(
-            toStreamingMarkdownHtml(prefix),
+          expect(toStreamingMarkdownParts(prefix, {}, `html-parity-${key}`).join("")).toBe(
+            toStreamingMarkdownParts(prefix).join(""),
           );
           if (end >= markdown.length) {
             break;
@@ -969,10 +979,10 @@ describe("toStreamingMarkdownHtml", () => {
     const partial = "Intro\n\ncitevery-long-partial-citation-marker";
     const completed = `${partial}\n\n\`\`\`ts\nconst answer = 42;`;
 
-    toStreamingMarkdownHtml(partial, {}, "citation-prefix-replacement");
+    toStreamingMarkdownParts(partial, {}, "citation-prefix-replacement");
 
-    expect(toStreamingMarkdownHtml(completed, {}, "citation-prefix-replacement")).toBe(
-      toStreamingMarkdownHtml(completed),
+    expect(toStreamingMarkdownParts(completed, {}, "citation-prefix-replacement").join("")).toBe(
+      toStreamingMarkdownParts(completed).join(""),
     );
   });
 
@@ -980,7 +990,9 @@ describe("toStreamingMarkdownHtml", () => {
     "keeps details inside a loose %s list continuation while streaming",
     (item) => {
       const markdown = `${item}\n\n    <details>\n    <summary>Logs</summary>\n\n    still inside`;
-      const fragment = htmlFragment(toStreamingMarkdownHtml(markdown, {}, `loose-list:${item}`));
+      const fragment = htmlFragment(
+        toStreamingMarkdownParts(markdown, {}, `loose-list:${item}`).join(""),
+      );
       const details = fragment.querySelector("li details");
 
       expect(details?.querySelector("summary")?.textContent).toBe("Logs");
@@ -997,23 +1009,23 @@ describe("toStreamingMarkdownHtml", () => {
     for (const end of [139_500, 140_050, 141_000, text.length]) {
       const prefix = text.slice(0, end);
 
-      expect(toStreamingMarkdownHtml(prefix, {}, "truncated-stream-parity")).toBe(
-        toStreamingMarkdownHtml(prefix),
+      expect(toStreamingMarkdownParts(prefix, {}, "truncated-stream-parity").join("")).toBe(
+        toStreamingMarkdownParts(prefix).join(""),
       );
     }
   });
 
   it("marks a completed transcript-role header in the streaming tail", () => {
-    const html = toStreamingMarkdownHtml("user[Thu 2026-07-02] question", {
+    const html = toStreamingMarkdownParts("user[Thu 2026-07-02] question", {
       assistantTranscriptRoleHeaders: true,
-    });
+    }).join("");
 
     expect(html).toContain('class="assistant-transcript-role"');
   });
 
   it("renders streaming raw block art without collapsing quiet-zone spaces", () => {
     const blockArt = "  ▀▀▀▀  \n  ▄▄▄▄  \n  ████  ";
-    const html = toStreamingMarkdownHtml(blockArt);
+    const html = toStreamingMarkdownParts(blockArt).join("");
     const fragment = htmlFragment(html);
     const code = fragment.querySelector("pre code.markdown-block-art");
 
@@ -1024,7 +1036,7 @@ describe("toStreamingMarkdownHtml", () => {
   it("truncates oversized streaming raw block art before rendering", () => {
     const line = "  ▀▀▀▀  ";
     const blockArt = Array.from({ length: 20_000 }, () => line).join("\n");
-    const html = toStreamingMarkdownHtml(blockArt);
+    const html = toStreamingMarkdownParts(blockArt).join("");
     const fragment = htmlFragment(html);
     const code = fragment.querySelector("pre code.markdown-block-art");
 
@@ -1044,7 +1056,7 @@ describe("toStreamingMarkdownHtml", () => {
     await i18n.setLocale("pt-BR");
     try {
       const blockArt = Array.from({ length: 20_000 }, () => "  ▀▀▀▀  ").join("\n");
-      const fragment = htmlFragment(toStreamingMarkdownHtml(blockArt));
+      const fragment = htmlFragment(toStreamingMarkdownParts(blockArt).join(""));
       expect(fragment.textContent).toContain("… truncado");
       expect(fragment.textContent).toContain("exibindo os primeiros 140000");
     } finally {
@@ -1053,7 +1065,7 @@ describe("toStreamingMarkdownHtml", () => {
   });
 
   it("renders completed block prefixes as markdown and closes the streaming tail", () => {
-    const html = toStreamingMarkdownHtml("## Done\n\nworking **tail");
+    const html = toStreamingMarkdownParts("## Done\n\nworking **tail").join("");
 
     expect(html).toBe("<h2>Done</h2>\n<p>working <strong>tail</strong></p>\n");
   });
@@ -1069,29 +1081,29 @@ describe("toStreamingMarkdownHtml", () => {
     ["tab-indented list continuation", "Intro\n\n  - one\n\n\tcontinuation"],
     ["list continuation before a root heading", "- one\n\n  continuation\n# Heading"],
   ])("preserves whole-document Markdown semantics for %s", (_kind, input) => {
-    expect(toStreamingMarkdownHtml(input)).toBe(toSanitizedMarkdownHtml(input));
+    expect(toStreamingMarkdownParts(input).join("")).toBe(toSanitizedMarkdownHtml(input));
   });
 
   it("uses Unicode separators as stable markdown boundaries", () => {
-    const html = toStreamingMarkdownHtml("## Done\u2028\u2028working **tail");
+    const html = toStreamingMarkdownParts("## Done\u2028\u2028working **tail").join("");
 
     expect(html).toBe("<h2>Done</h2>\n<p>working <strong>tail</strong></p>\n");
   });
 
   it("renders a single open paragraph as markdown with closed formatting", () => {
-    const html = toStreamingMarkdownHtml("**still streaming");
+    const html = toStreamingMarkdownParts("**still streaming").join("");
 
     expect(html).toBe("<p><strong>still streaming</strong></p>\n");
   });
 
   it("renders half-written links as text only while streaming", () => {
-    const html = toStreamingMarkdownHtml("see [Streamdown](https://strea");
+    const html = toStreamingMarkdownParts("see [Streamdown](https://strea").join("");
 
     expect(html).toBe("<p>see Streamdown</p>\n");
   });
 
   it("streams tables as markdown before the closing row arrives", () => {
-    const html = toStreamingMarkdownHtml("| left | right |\n| --- | --- |\n| 1 | 2");
+    const html = toStreamingMarkdownParts("| left | right |\n| --- | --- |\n| 1 | 2").join("");
     const fragment = htmlFragment(html);
 
     expect(fragment.querySelector("table")).not.toBeNull();
@@ -1100,7 +1112,7 @@ describe("toStreamingMarkdownHtml", () => {
   });
 
   it("leaves dollar amounts alone while streaming", () => {
-    const html = toStreamingMarkdownHtml("prices are $$50 and");
+    const html = toStreamingMarkdownParts("prices are $$50 and").join("");
 
     expect(html).toBe("<p>prices are $$50 and</p>\n");
   });

@@ -16,15 +16,18 @@ suite.define(() => {
   ])("navigates exact session keys at the $name", async ({ basePath }) => {
     await suite.withPage({ viewport: { width: 1200, height: 800 } }, async ({ page }) => {
       const initialSessionKey = "agent:runner:route:initial";
-      await installMockGateway(page, { basePath, sessionKey: initialSessionKey });
-      await page.goto(controlUiSessionUrl(suite.server.baseUrl, initialSessionKey));
+      const mountUrl = new URL(suite.server.baseUrl);
+      mountUrl.pathname = basePath || "/";
+      await installMockGateway(page, {
+        basePath: basePath ? mountUrl.pathname : "",
+        sessionKey: initialSessionKey,
+      });
+      await page.goto(controlUiSessionUrl(mountUrl.href, initialSessionKey));
       const visiblePane = page.locator("openclaw-chat-pane.chat-pane-cache__pane--visible");
       await expect
         .poll(() => visiblePane.evaluate((pane) => (pane as ChatPaneElement).sessionKey))
         .toBe(initialSessionKey);
 
-      const mountUrl = new URL(suite.server.baseUrl);
-      mountUrl.pathname = basePath || "/";
       const encodedBase = basePath ? mountUrl.pathname : "";
       for (const [rest, suffix] of [
         ["a/b", "a%2Fb"],

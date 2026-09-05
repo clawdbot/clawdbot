@@ -3,7 +3,7 @@ import { spawnSync } from "node:child_process";
 import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
-import { afterAll, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
+import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 import { buildServiceEnvironment } from "../../daemon/service-env.js";
 import type {
   GatewayServiceCommandConfig,
@@ -12,9 +12,10 @@ import type {
 import {
   buildSystemdManagerPropertyOutput,
   buildSystemdUnitPropertyOutput,
+  mockSystemAccountHome,
 } from "../../daemon/service.test-helpers.js";
 import { makeTempWorkspace } from "../../test-helpers/workspace.js";
-import { captureEnv } from "../../test-utils/env.js";
+import { captureEnv, withEnvAsync } from "../../test-utils/env.js";
 import { createCliRuntimeCapture } from "../test-runtime-capture.js";
 
 const { runtimeLogs, runtimeErrors, defaultRuntime, resetRuntimeCapture } =
@@ -54,12 +55,6 @@ const serviceMock = vi.hoisted(() => ({
   >(async () => null),
   readRuntime: vi.fn(async () => ({ status: "stopped" as const })),
 }));
-
-vi.mock("../../config/paths.js", async () => {
-  const actual =
-    await vi.importActual<typeof import("../../config/paths.js")>("../../config/paths.js");
-  return { ...actual, isDefaultInstallIdentity: () => true };
-});
 
 vi.mock("../../daemon/service.js", () => ({
   resolveGatewayService: () => serviceMock,
@@ -103,6 +98,7 @@ async function createInstalledServiceCommand() {
 
 describe("runDaemonInstall integration", () => {
   let envSnapshot: ReturnType<typeof captureEnv>;
+  let accountHome: string;
   let tempHome: string;
   let configPath: string;
 
@@ -120,20 +116,27 @@ describe("runDaemonInstall integration", () => {
       "OPENCLAW_GATEWAY_TOKEN",
       "OPENCLAW_GATEWAY_PASSWORD",
     ]);
-    tempHome = await makeTempWorkspace("openclaw-daemon-install-int-");
+    accountHome = await makeTempWorkspace("openclaw-daemon-install-int-");
+    tempHome = path.join(accountHome, ".openclaw");
+    await fs.mkdir(tempHome);
     configPath = path.join(tempHome, "openclaw.json");
-    process.env.HOME = tempHome;
+    process.env.HOME = accountHome;
     process.env.OPENCLAW_STATE_DIR = tempHome;
     process.env.OPENCLAW_CONFIG_PATH = configPath;
   });
 
   afterAll(async () => {
     envSnapshot.restore();
-    await fs.rm(tempHome, { recursive: true, force: true });
+    await fs.rm(accountHome, { recursive: true, force: true });
+  });
+
+  afterEach(() => {
+    vi.restoreAllMocks();
   });
 
   beforeEach(async () => {
     vi.clearAllMocks();
+    mockSystemAccountHome();
     resetRuntimeCapture();
     clearRuntimeConfigSnapshot();
     // Keep these defined-but-empty so dotenv won't repopulate from local .env.
@@ -145,6 +148,53 @@ describe("runDaemonInstall integration", () => {
     serviceMock.readCommand.mockResolvedValue(null);
     await fs.writeFile(configPath, JSON.stringify({}, null, 2));
     clearConfigCache();
+  });
+
+  it.each([
+    { mode: "Nix before external supervision", reason: "Nix mode detected" },
+    { mode: "external supervision", reason: "managed by an external supervisor" },
+    { mode: "relocated home", reason: "non-default state dir or config path" },
+    { mode: "sudo user manager", reason: "Refusing a sudo-to-root" },
+  ])("preserves config and skips native inspection for $mode", async ({ mode, reason }) => {
+    // Keep the synthetic account fixed when the invocation relocates HOME.
+    // Following that override would erase the ownership mismatch being tested.
+    const account = os.userInfo();
+    vi.spyOn(os, "homedir").mockReturnValue(accountHome);
+    vi.spyOn(os, "userInfo").mockReturnValue({ ...account, homedir: accountHome });
+    if (mode === "sudo user manager") {
+      vi.spyOn(process, "platform", "get").mockReturnValue("linux");
+      vi.spyOn(os, "userInfo").mockReturnValue({
+        ...account,
+        username: "root",
+        homedir: accountHome,
+      });
+      if (process.geteuid) {
+        vi.spyOn(process, "geteuid").mockReturnValue(0);
+      }
+    }
+    const before = await snapshotConfig();
+    await withEnvAsync(
+      {
+        OPENCLAW_HOME: undefined,
+        OPENCLAW_PROFILE: undefined,
+        OPENCLAW_LAUNCHD_LABEL: undefined,
+        OPENCLAW_SYSTEMD_UNIT: undefined,
+        OPENCLAW_WINDOWS_TASK_NAME: undefined,
+        OPENCLAW_NIX_MODE: mode.startsWith("Nix") ? "1" : undefined,
+        OPENCLAW_SUPERVISOR_MODE: mode.includes("supervision") ? " ExTeRnAl " : undefined,
+        HOME: mode === "relocated home" ? path.join(accountHome, "relocated") : accountHome,
+        SUDO_USER: mode === "sudo user manager" ? "service-fixture" : undefined,
+      },
+      async () => {
+        await expect(runDaemonInstall({ json: true })).rejects.toThrow("__exit__:1");
+        expect(runtimeLogs.join("\n")).toContain(reason);
+        expect(serviceMock.isLoaded).not.toHaveBeenCalled();
+        expect(serviceMock.readCommand).not.toHaveBeenCalled();
+        expect(serviceMock.readDefinitionMutationCapability).not.toHaveBeenCalled();
+        expect(serviceMock.install).not.toHaveBeenCalled();
+        expect(await snapshotConfig()).toEqual(before);
+      },
+    );
   });
 
   it("fails closed when token SecretRef is required but unresolved", async () => {
@@ -250,11 +300,16 @@ describe("runDaemonInstall integration", () => {
       const fixture = await fs.realpath(await fs.mkdtemp(path.join(tempHome, "manager-owner-")));
       const unitPath = path.join(fixture, ".config/systemd/user/openclaw-gateway.service");
       const extra = path.join(fixture, "global-user", "operator.conf");
-      await fs.mkdir(path.dirname(unitPath), { recursive: true });
-      await fs.mkdir(path.dirname(extra));
-      await fs.writeFile(extra, "[Service]\nEnvironment=TOKEN=operator-secret-canary\n");
+      // Reach the foreign-owner check even when the test process has a permissive umask.
+      await fs.mkdir(path.dirname(unitPath), { recursive: true, mode: 0o700 });
+      await fs.mkdir(path.dirname(extra), { mode: 0o700 });
+      await fs.writeFile(extra, "[Service]\nEnvironment=TOKEN=operator-secret-canary\n", {
+        mode: 0o600,
+      });
       if (kind === "drop-in") {
-        await fs.writeFile(unitPath, "[Service]\nExecStart=/usr/bin/node gateway\n");
+        await fs.writeFile(unitPath, "[Service]\nExecStart=/usr/bin/node gateway\n", {
+          mode: 0o600,
+        });
       }
       const originalLstat = fs.lstat.bind(fs);
       const lstat = vi.spyOn(fs, "lstat").mockImplementation(async (...args) => {
@@ -303,25 +358,27 @@ describe("runDaemonInstall integration", () => {
 
   it("checks the planned generated environment after a drop-in redirects effective state", async () => {
     const fixture = await fs.realpath(await fs.mkdtemp(path.join(tempHome, "planned-owner-")));
-    const plannedState = path.join(fixture, "planned");
+    const plannedState = path.join(fixture, ".openclaw");
     const effectiveState = path.join(fixture, "effective");
     const unit = path.join(fixture, ".config/systemd/user/openclaw-gateway.service");
     const dropIn = `${unit}.d/override.conf`;
     const plannedFile = path.join(plannedState, "gateway.systemd.env");
     const effectiveFile = path.join(effectiveState, "gateway.systemd.env");
-    const invocation = captureEnv(["HOME", "OPENCLAW_STATE_DIR"]);
-    await fs.mkdir(path.dirname(dropIn), { recursive: true });
-    await fs.mkdir(plannedState);
-    await fs.mkdir(effectiveState);
-    await fs.writeFile(plannedFile, "OPERATOR_VALUE=planned\n");
-    await fs.writeFile(effectiveFile, "OPERATOR_VALUE=effective\n");
+    const invocation = captureEnv(["HOME", "OPENCLAW_STATE_DIR", "OPENCLAW_CONFIG_PATH"]);
+    await fs.mkdir(path.dirname(dropIn), { recursive: true, mode: 0o700 });
+    await fs.mkdir(plannedState, { mode: 0o700 });
+    await fs.mkdir(effectiveState, { mode: 0o700 });
+    await fs.writeFile(plannedFile, "OPERATOR_VALUE=planned\n", { mode: 0o600 });
+    await fs.writeFile(effectiveFile, "OPERATOR_VALUE=effective\n", { mode: 0o600 });
     await fs.writeFile(
       unit,
       `[Service]\nExecStart=/usr/bin/node gateway\nEnvironment=OPENCLAW_STATE_DIR=${plannedState}\nEnvironmentFile=${plannedFile}\n`,
+      { mode: 0o600 },
     );
     await fs.writeFile(
       dropIn,
       `[Service]\nEnvironment=OPENCLAW_STATE_DIR=${effectiveState}\nEnvironmentFile=\nEnvironmentFile=${effectiveFile}\n`,
+      { mode: 0o600 },
     );
     await fs.writeFile(
       configPath,
@@ -329,6 +386,7 @@ describe("runDaemonInstall integration", () => {
     );
     process.env.HOME = fixture;
     process.env.OPENCLAW_STATE_DIR = plannedState;
+    process.env.OPENCLAW_CONFIG_PATH = path.join(plannedState, "openclaw.json");
     clearConfigCache();
     const lstat = fs.lstat.bind(fs);
     const owner = vi.spyOn(fs, "lstat").mockImplementation(async (...args) => {
@@ -572,8 +630,12 @@ describe("runDaemonInstall integration", () => {
     { name: "uninspectable definition", kind: "unknown", force: true },
     { name: "rejected definition inspection", kind: "rejected", force: false },
   ])("leaves absent config and state untouched for $name", async ({ kind, force }) => {
-    const stateDir = await fs.mkdtemp(path.join(tempHome, "sealed-install-"));
+    const isolatedHome = await fs.mkdtemp(path.join(tempHome, "sealed-install-"));
+    const stateDir = path.join(isolatedHome, ".openclaw");
+    await fs.mkdir(stateDir);
     const missingConfigPath = path.join(stateDir, "openclaw.json");
+    const originalHome = process.env.HOME;
+    process.env.HOME = isolatedHome;
     const originalStateDir = process.env.OPENCLAW_STATE_DIR;
     const originalConfigPath = process.env.OPENCLAW_CONFIG_PATH;
     const secret = "direct-install-capability-secret-canary";
@@ -602,10 +664,11 @@ describe("runDaemonInstall integration", () => {
       );
       expect(runtimeLogs.join("\n")).not.toContain(secret);
     } finally {
+      process.env.HOME = originalHome;
       process.env.OPENCLAW_STATE_DIR = originalStateDir;
       process.env.OPENCLAW_CONFIG_PATH = originalConfigPath;
       clearConfigCache();
-      await fs.rm(stateDir, { recursive: true, force: true });
+      await fs.rm(isolatedHome, { recursive: true, force: true });
     }
   });
 

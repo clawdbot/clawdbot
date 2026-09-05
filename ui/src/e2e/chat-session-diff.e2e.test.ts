@@ -1,51 +1,42 @@
 // Control UI tests cover the session diff panel (sessions.diff RPC).
-import { mkdir } from "node:fs/promises";
 import path from "node:path";
-import { chromium, type Browser, type BrowserContext } from "playwright";
-import { afterAll, afterEach, beforeAll, describe, expect, it } from "vitest";
+import type { BrowserContext } from "playwright";
+import { beforeEach, expect, it } from "vitest";
 import { CONTROL_UI_SESSION_PULL_REQUESTS_CHANGED_EVENT } from "../../../src/gateway/control-ui-contract.js";
 import { SESSION_PULL_REQUESTS_SUBSCRIBE_METHOD } from "../lib/session-pull-requests.ts";
+import { createControlUiE2eArtifactDir } from "../test-helpers/control-ui-e2e-artifacts.ts";
 import {
-  canRunPlaywrightChromium,
   controlUiBundledSettingsStorageKey,
   controlUiSessionUrl,
   installMockGateway,
   navigateToControlUiSession,
-  resolvePlaywrightChromiumExecutablePath,
-  startControlUiE2eServer,
-  type ControlUiE2eServer,
 } from "../test-helpers/control-ui-e2e.ts";
 import {
   activateChatHeaderPanelAction,
   openChatSidePanelType,
 } from "./chat-side-panel.test-support.ts";
+import { createControlUiE2eSuite } from "./control-ui-e2e-suite.test-support.ts";
 
-const chromiumExecutablePath = resolvePlaywrightChromiumExecutablePath(chromium.executablePath());
-const chromiumAvailable = canRunPlaywrightChromium(chromiumExecutablePath);
-const allowMissingChromium = process.env.OPENCLAW_UI_E2E_ALLOW_MISSING_CHROMIUM === "1";
-const describeControlUiE2e = chromiumAvailable || !allowMissingChromium ? describe : describe.skip;
+const suite = createControlUiE2eSuite({
+  name: "session diff panel",
+  trackBrowserContexts: true,
+  unavailableMessage: (executablePath) => `Playwright Chromium is unavailable at ${executablePath}`,
+});
 const captureProof = process.env.OPENCLAW_CAPTURE_UI_PROOF === "1";
-const artifactDir = path.resolve(process.cwd(), ".artifacts/control-ui-e2e/diff-highlighting");
-
-let server: ControlUiE2eServer;
-// Browser contexts preserve test isolation; keep one process warm for this file.
-let browser: Browser;
-const openContexts = new Set<BrowserContext>();
+let artifactDir: string;
+beforeEach(() => {
+  if (captureProof) {
+    artifactDir = createControlUiE2eArtifactDir("diff-highlighting");
+  }
+});
 
 async function newBrowserContext(): Promise<BrowserContext> {
-  const context = await browser.newContext({
+  return await suite.newBrowserContext({
     colorScheme: "light",
     locale: "en-US",
     serviceWorkers: "block",
     viewport: { height: 800, width: 1180 },
   });
-  openContexts.add(context);
-  return context;
-}
-
-async function closeContexts(): Promise<void> {
-  await Promise.all([...openContexts].map((context) => context.close().catch(() => {})));
-  openContexts.clear();
 }
 
 const APP_PATCH = [
@@ -147,34 +138,13 @@ async function seedPersistedReviewLayouts(
       );
     },
     {
-      key: controlUiBundledSettingsStorageKey(server.baseUrl),
+      key: controlUiBundledSettingsStorageKey(suite.server.baseUrl),
       persistedSessionKeys: sessionKeys,
     },
   );
 }
 
-describeControlUiE2e("session diff panel", () => {
-  beforeAll(async () => {
-    if (!chromiumAvailable) {
-      throw new Error(`Playwright Chromium is unavailable at ${chromiumExecutablePath}`);
-    }
-    browser = await chromium.launch({ executablePath: chromiumExecutablePath });
-    try {
-      server = await startControlUiE2eServer();
-    } catch (error) {
-      await browser.close();
-      throw error;
-    }
-  });
-
-  afterAll(async () => {
-    await closeContexts();
-    await browser?.close();
-    await server?.close();
-  });
-
-  afterEach(closeContexts);
-
+suite.define(() => {
   it("opens a renamed session diff when Review is added from the panel menu", async () => {
     const context = await newBrowserContext();
     const page = await context.newPage();
@@ -205,7 +175,7 @@ describeControlUiE2e("session diff panel", () => {
         },
       },
     });
-    await page.goto(`${server.baseUrl}chat`);
+    await page.goto(`${suite.server.baseUrl}chat`);
 
     await openChatSidePanelType(page, "Files");
     await openChatSidePanelType(page, "Review");
@@ -237,7 +207,7 @@ describeControlUiE2e("session diff panel", () => {
         "sessions.diff": SESSION_DIFF_RESPONSE,
       },
     });
-    await page.goto(`${server.baseUrl}chat`);
+    await page.goto(`${suite.server.baseUrl}chat`);
 
     await openChatSidePanelType(page, "Files");
     await openChatSidePanelType(page, "Review");
@@ -278,12 +248,12 @@ describeControlUiE2e("session diff panel", () => {
       },
     });
 
-    await page.goto(controlUiSessionUrl(server.baseUrl, sessionKey));
+    await page.goto(controlUiSessionUrl(suite.server.baseUrl, sessionKey));
 
     await waitForSessionDiff(page);
   });
 
-  it("replaces an automatically seeded diff when the pane session changes", async () => {
+  it("shows each session's diff and retains its local view state when navigating away", async () => {
     const firstSessionKey = "agent:main:first-review";
     const secondSessionKey = "agent:main:second-review";
     const context = await newBrowserContext();
@@ -344,17 +314,40 @@ describeControlUiE2e("session diff panel", () => {
         },
       },
     });
-    await page.goto(controlUiSessionUrl(server.baseUrl, firstSessionKey));
+    await page.goto(controlUiSessionUrl(suite.server.baseUrl, firstSessionKey));
     await waitForSessionDiff(page);
+    const firstFileToggle = page.locator(".session-diff__file-toggle").first();
+    await firstFileToggle.click();
+    await expect.poll(() => firstFileToggle.getAttribute("aria-expanded")).toBe("false");
 
     await navigateToControlUiSession(page, secondSessionKey);
 
     await expect
-      .poll(() => page.locator(".session-diff__filename").allTextContents())
+      .poll(() =>
+        page
+          .locator('openclaw-chat-pane[aria-hidden="false"] .session-diff__filename')
+          .allTextContents(),
+      )
       .toEqual(["second.md"]);
     await expect
       .poll(async () => (await gateway.getRequests("sessions.diff")).at(-1)?.params)
       .toMatchObject({ sessionKey: secondSessionKey });
+    expect(
+      await firstFileToggle.evaluate((element) =>
+        element.closest("openclaw-chat-pane")?.getAttribute("aria-hidden"),
+      ),
+    ).toBe("true");
+
+    await navigateToControlUiSession(page, firstSessionKey);
+    await expect
+      .poll(() =>
+        page
+          .locator('openclaw-chat-pane[aria-hidden="false"] .session-diff__filename')
+          .allTextContents(),
+      )
+      .toEqual(["app.ts", "notes.md"]);
+    expect(await firstFileToggle.getAttribute("aria-expanded")).toBe("false");
+    expect(await gateway.getRequests("sessions.diff")).toHaveLength(2);
   });
 
   it("opens the session diff from the branch change stats", async () => {
@@ -379,7 +372,7 @@ describeControlUiE2e("session diff panel", () => {
         "sessions.diff": SESSION_DIFF_RESPONSE,
       },
     });
-    await page.goto(`${server.baseUrl}chat`);
+    await page.goto(`${suite.server.baseUrl}chat`);
     let watchedKey = "";
     await expect
       .poll(async () => {
@@ -433,7 +426,7 @@ describeControlUiE2e("session diff panel", () => {
         },
       },
     });
-    await page.goto(`${server.baseUrl}chat`);
+    await page.goto(`${suite.server.baseUrl}chat`);
     expect(await gateway.getRequests("sessions.files.list")).toHaveLength(0);
     expect(await gateway.getRequests("sessions.diff")).toHaveLength(0);
 
@@ -559,13 +552,13 @@ describeControlUiE2e("session diff panel", () => {
         },
       },
     });
-    await page.goto(`${server.baseUrl}chat`);
+    await page.goto(`${suite.server.baseUrl}chat`);
 
     await activateChatHeaderPanelAction(page, "Show session changes");
 
     const panel = page.locator(".session-diff");
     await expect.poll(() => panel.count()).toBe(1);
-    const panelSurface = page.locator(".side-panel").filter({ has: panel });
+    const panelSurface = page.locator('[data-panel-slot="detail"]').filter({ has: panel });
     await expect
       .poll(() => panelSurface.evaluate((element) => element.getBoundingClientRect().width))
       .toBe(480);
@@ -607,7 +600,6 @@ describeControlUiE2e("session diff panel", () => {
         ),
     ).toBe(true);
     if (captureProof) {
-      await mkdir(artifactDir, { recursive: true });
       await panelSurface.screenshot({ path: path.join(artifactDir, "unified-light.png") });
     }
 
@@ -711,7 +703,7 @@ describeControlUiE2e("session diff panel", () => {
         },
       },
     });
-    await page.goto(`${server.baseUrl}chat`);
+    await page.goto(`${suite.server.baseUrl}chat`);
     expect(await gateway.getRequests("sessions.files.list")).toHaveLength(0);
     await activateChatHeaderPanelAction(page, "Show session changes");
     await expect
@@ -743,28 +735,5 @@ describeControlUiE2e("session diff panel", () => {
       .poll(() => page.locator(".session-diff__filename").allTextContents())
       .toEqual(["notes.md"]);
     expect(await gateway.getRequests("sessions.files.list")).toHaveLength(0);
-  });
-
-  it("keeps the panel fallback for gateways that omit checkout capability", async () => {
-    const context = await newBrowserContext();
-    const page = await context.newPage();
-    await installMockGateway(page, {
-      featureMethods: ["chat.metadata", "chat.startup", "sessions.diff"],
-      methodResponses: {
-        "sessions.diff": {
-          sessionKey: "main",
-          files: [],
-          additions: 0,
-          deletions: 0,
-          unavailableReason: "not_git",
-        },
-      },
-    });
-    await page.goto(`${server.baseUrl}chat`);
-
-    await activateChatHeaderPanelAction(page, "Show session changes");
-    await expect
-      .poll(() => page.locator(".session-diff .session-diff__note").textContent())
-      .toContain("not a git checkout");
   });
 });

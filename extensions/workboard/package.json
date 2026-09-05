@@ -1,19 +1,24 @@
 {
   "name": "@openclaw/workboard",
-  "version": "2026.8.1",
+  "version": "2026.9.1",
   "private": true,
   "description": "OpenClaw dashboard workboard plugin",
   "type": "module",
   "dependencies": {
-    "typebox": "1.3.16"
+    "typebox": "1.3.18",
+    "@openclaw/gateway-protocol": "workspace:*",
+    "@openclaw/workboard-contract": "workspace:*",
+    "lit": "3.3.3",
+    "zod": "4.4.3"
   },
   "devDependencies": {
+    "@openclaw/gateway-client": "workspace:*",
+    "@openclaw/normalization-core": "workspace:*",
     "@openclaw/plugin-sdk": "workspace:*",
-    "@openclaw/workboard-contract": "workspace:*",
     "openclaw": "workspace:*"
   },
   "peerDependencies": {
-    "openclaw": ">=2026.8.1"
+    "openclaw": ">=2026.9.1"
   },
   "peerDependenciesMeta": {
     "openclaw": {
@@ -23,6 +28,14 @@
   "openclaw": {
     "extensions": [
       "./index.ts"
-    ]
+    ],
+    "controlUi": "./browser/index.ts",
+    "assetScripts": {
+      "build": "node --import ../../scripts/tsx.mjs ../../scripts/build-plugin-control-ui.mts",
+      "copy": "node --import ../../scripts/tsx.mjs ../../scripts/build-plugin-control-ui.mts --copy",
+      "buildOutputs": [
+        "openclaw.plugin.json"
+      ]
+    }
   }
 }

@@ -66,6 +66,8 @@ In `--json` mode, invalid `--port`, `--limit`, `--interval`, or `--max-bytes` va
 
 In text mode, terminal log-fetch failures print the redacted error reason, selected Gateway connection details, and a doctor hint on stderr. A received RPC rejection is shown as the error, rather than reported as a Gateway reachability failure.
 
+In JSON mode, terminal log-fetch errors use the same redacted failure reason for `message` and `error`, including RPC rejections, timeouts, disconnects, and invalid response payloads. The record retains connection `details` and a doctor `hint` on stderr; the command still exits with status `1`.
+
 ## Related
 
 - [Logging overview](/logging)

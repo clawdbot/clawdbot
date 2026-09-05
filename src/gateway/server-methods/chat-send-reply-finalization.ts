@@ -27,6 +27,7 @@ import {
 } from "./chat-broadcast.js";
 import { normalizeWebchatReplyMediaPathsForDisplay } from "./chat-reply-media.js";
 import { selectChatSendFinalReplyPayloads } from "./chat-send-command-replies.js";
+import { isChatSendReplyDeliveryAuthorized } from "./chat-send-delivery-authority.js";
 import { buildTranscriptReplyText } from "./chat-send-reply-dispatch.js";
 import type { PreparedChatSendSession } from "./chat-send-session.js";
 import type { GatewayInjectedTtsSupplementMarker } from "./chat-transcript-inject.js";
@@ -134,7 +135,7 @@ function buildChatSendBtwSideResult(deliveredReplies: readonly DeliveredReply[])
   };
 }
 
-/** Finalize settled reply payloads, retaining a runtime's successful transcript ownership. */
+/** Finalize settled reply payloads, retaining the runtime's transcript ownership and outcome. */
 export async function finalizeChatSendDispatchedReplies(params: {
   accountId: string | undefined;
   context: GatewayRequestContext;
@@ -162,6 +163,7 @@ export async function finalizeChatSendDispatchedReplies(params: {
     suppressReplies,
   } = params;
   const { agentId, backingSessionId, cfg, clientRunId, sessionKey, sessionLoadOptions } = session;
+  const stopReason = params.state === "aborted" ? "aborted" : "stop";
   const btwResult = buildChatSendBtwSideResult(deliveredReplies);
   if (btwResult) {
     broadcastSideResult({
@@ -189,6 +191,17 @@ export async function finalizeChatSendDispatchedReplies(params: {
     foldCommandBlocks,
     suppressReplies,
   });
+  const deliveryAuthorized = () =>
+    rawFinalPayloads.every((payload) =>
+      isChatSendReplyDeliveryAuthorized({ agentId, payload, sessionLoadOptions }),
+    );
+  if (!deliveryAuthorized()) {
+    context.logGateway.warn(
+      "webchat settled final reply skipped: session writer changed before finalization",
+    );
+    broadcastChatFinal({ context, runId: clientRunId, sessionKey, agentId });
+    return;
+  }
   const transcriptMirrorResolution = resolveTranscriptMirrorOwner(rawFinalPayloads);
   const transcriptMirrorOwner =
     transcriptMirrorResolution.kind === "owner" || transcriptMirrorResolution.kind === "blocked"
@@ -311,12 +324,23 @@ export async function finalizeChatSendDispatchedReplies(params: {
       : buildTranscriptReplyText(finalPayloads)) ||
     transcriptDisplayReply;
   let message: Record<string, unknown> | undefined;
+  const payloadOwnsAssistantTranscript = rawFinalPayloads.some(
+    (payload) => getReplyPayloadMetadata(payload)?.assistantTranscriptOwned === true,
+  );
   const shouldAppendAssistantTranscript = Boolean(
-    (!params.runtimeOwnsTranscript || useTranscriptMirrorOwner) &&
+    ((!params.runtimeOwnsTranscript && !payloadOwnsAssistantTranscript) ||
+      useTranscriptMirrorOwner) &&
     canAppendAssistantTranscript &&
     (transcriptReply || persistedContentForAppend?.length),
   );
   await persistUserTurnTranscript();
+  if (!deliveryAuthorized()) {
+    context.logGateway.warn(
+      "webchat settled final reply skipped: session writer changed before transcript append",
+    );
+    broadcastChatFinal({ context, runId: clientRunId, sessionKey, agentId });
+    return;
+  }
   if (shouldAppendAssistantTranscript) {
     const appended = await appendAssistantTranscriptMessage({
       sessionKey: transcriptSessionKey,
@@ -327,6 +351,7 @@ export async function finalizeChatSendDispatchedReplies(params: {
       agentId: transcriptAgentId,
       createIfMissing: true,
       idempotencyKey: clientRunId,
+      stopReason,
       ttsSupplement: ttsSupplementMarker,
       cfg,
     });
@@ -361,8 +386,7 @@ export async function finalizeChatSendDispatchedReplies(params: {
         ...(fallbackText ? { text: fallbackText } : {}),
         timestamp: Date.now(),
         ...(ttsSupplementMarker ? { openclawTtsSupplement: ttsSupplementMarker } : {}),
-        // Keep compatible with runner stopReason enums when transcript persistence fails.
-        stopReason: "stop",
+        stopReason,
         usage: { input: 0, output: 0, totalTokens: 0 },
       };
     }
@@ -372,12 +396,19 @@ export async function finalizeChatSendDispatchedReplies(params: {
       content: broadcastAssistantContent,
       text: extractAssistantDisplayText(broadcastAssistantContent) ?? "",
       timestamp: Date.now(),
-      stopReason: "stop",
+      stopReason,
       usage: { input: 0, output: 0, totalTokens: 0 },
     };
   }
   if (hasVisibleAssistantFinalMessage(message)) {
     emitFirstAssistantServerTiming();
+  }
+  if (!deliveryAuthorized()) {
+    context.logGateway.warn(
+      "webchat settled final reply skipped: session writer changed before broadcast",
+    );
+    broadcastChatFinal({ context, runId: clientRunId, sessionKey, agentId });
+    return;
   }
   broadcastChatTerminal({
     context,

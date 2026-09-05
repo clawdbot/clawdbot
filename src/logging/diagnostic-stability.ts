@@ -248,6 +248,10 @@ function sanitizeDiagnosticEvent(event: DiagnosticEventPayload): DiagnosticStabi
   };
 
   switch (event.type) {
+    case "gateway.rpc":
+    case "gateway.event_loop.sample":
+      // High-volume measurements are exporter-only and excluded by the subscription.
+      break;
     case "model.usage":
       record.channel = event.channel;
       record.provider = event.provider;
@@ -683,18 +687,16 @@ export function recordDiagnosticExporterHealth(
 
 function listRecords(): DiagnosticStabilityEventRecord[] {
   const state = getDiagnosticStabilityState();
-  if (state.count === 0) {
-    return [];
+  const records: DiagnosticStabilityEventRecord[] = [];
+  const start = state.count < state.capacity ? 0 : state.nextIndex;
+  // Capture the ordered view before query normalization or summary getters can re-enter.
+  for (let offset = 0; offset < state.count; offset += 1) {
+    const record = state.records[(start + offset) % state.capacity];
+    if (record !== undefined) {
+      records.push(record);
+    }
   }
-  if (state.count < state.capacity) {
-    return state.records
-      .slice(0, state.count)
-      .filter((record): record is DiagnosticStabilityEventRecord => record !== undefined);
-  }
-  return [
-    ...state.records.slice(state.nextIndex),
-    ...state.records.slice(0, state.nextIndex),
-  ].filter((record): record is DiagnosticStabilityEventRecord => record !== undefined);
+  return records;
 }
 
 function listExporterRecords(): DiagnosticStabilityEventRecord[] {
@@ -863,7 +865,7 @@ export function startDiagnosticStabilityRecorder(): void {
       }
       appendRecord(sanitizeDiagnosticEvent(event));
     },
-    { exclude: ["log.record", "telemetry.exporter"] },
+    { exclude: ["log.record", "telemetry.exporter", "gateway.rpc", "gateway.event_loop.sample"] },
   );
 }
 

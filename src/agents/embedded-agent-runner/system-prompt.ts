@@ -18,13 +18,13 @@ import type { SystemPromptRuntimeInfo } from "../system-prompt.js";
 import type { PromptMode, SilentReplyPromptMode } from "../system-prompt.types.js";
 import type { PreparedWatchedSessionsPrompt } from "../watched-sessions-prompt.js";
 import type { EmbeddedSandboxInfo } from "./types.js";
-import type { ReasoningLevel, ThinkLevel } from "./utils.js";
+import type { ReasoningLevel } from "./utils.js";
 
 export function buildEmbeddedSystemPrompt(params: {
   config?: OpenClawConfig;
   agentId?: string;
   workspaceDir: string;
-  defaultThinkLevel?: ThinkLevel;
+  runtimeCwd?: string;
   reasoningLevel?: ReasoningLevel;
   extraSystemPrompt?: string;
   ownerNumbers?: string[];
@@ -93,7 +93,7 @@ export function buildEmbeddedSystemPrompt(params: {
     config: params.config,
     agentId: params.agentId ?? params.runtimeInfo.agentId,
     workspaceDir: params.workspaceDir,
-    defaultThinkLevel: params.defaultThinkLevel,
+    runtimeCwd: params.runtimeCwd,
     reasoningLevel: params.reasoningLevel,
     extraSystemPrompt: params.extraSystemPrompt,
     ownerNumbers: params.ownerNumbers,

@@ -3,6 +3,7 @@ import { mkdtemp, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import path from "node:path";
 import { pathToFileURL } from "node:url";
+import { resolveRuntimeWorkerArgv, resolveRuntimeWorkerUrl } from "../infra/runtime-worker-url.js";
 import { TUI_PTY_ASSISTANT_FIXTURE_SCRIPT } from "./tui-pty-assistant-fixture-test-support.js";
 import { TUI_PTY_GAP_HISTORY_FIXTURE_SCRIPT } from "./tui-pty-gap-fixture-test-support.js";
 import {
@@ -12,6 +13,7 @@ import {
 import { TUI_PTY_RECONNECT_FIXTURE } from "./tui-pty-reconnect-fixture-test-support.js";
 import { TUI_PTY_RENDERING_FIXTURE_SCRIPT } from "./tui-pty-rendering-test-support.js";
 import { TUI_PTY_RESET_FIXTURE } from "./tui-pty-reset-fixture-test-support.js";
+import { tuiPtyRuntimeEntrypoints } from "./tui-pty-runtime-test-support.js";
 import { TUI_PTY_STARTUP_SESSION_FIXTURE } from "./tui-pty-startup-session-fixture-test-support.js";
 import { TUI_PTY_SESSION_SUBSCRIPTION_FIXTURE_SCRIPT } from "./tui-pty-subscription-fixture-test-support.js";
 import { TUI_PTY_TASK_FIXTURE } from "./tui-pty-task-fixture-test-support.js";
@@ -29,11 +31,12 @@ export async function disposeActiveTuiFixtures(): Promise<void> {
   }
 }
 
-export async function startTuiFixture(opts: { env?: NodeJS.ProcessEnv } = {}) {
+export async function startTuiFixture(opts: { env?: NodeJS.ProcessEnv; execPath?: string } = {}) {
   const tempDir = await mkdtemp(path.join(tmpdir(), "openclaw-tui-pty-"));
   const scriptPath = await writeTuiPtyFixtureScript(tempDir);
   const logPath = path.join(tempDir, "fixture-log.jsonl");
-  const run = startPty(process.execPath, ["--import", "tsx", scriptPath], {
+  const execPath = opts.execPath ?? process.execPath;
+  const run = startPty(execPath, resolveRuntimeWorkerArgv(pathToFileURL(scriptPath), execPath), {
     activeRuns,
     cwd: process.cwd(),
     env: {
@@ -61,25 +64,21 @@ export async function startTuiFixture(opts: { env?: NodeJS.ProcessEnv } = {}) {
 export async function writeTuiPtyFixtureScript(dir: string) {
   // Temp files sit outside the repo package scope; .mts preserves the ESM contract under tsx.
   const scriptPath = path.join(dir, "run-tui-pty-fixture.mts");
-  const tuiModuleUrl = pathToFileURL(path.join(process.cwd(), "src/tui/tui.ts")).href;
-  const payloadsModuleUrl = pathToFileURL(
-    path.join(process.cwd(), "src/agents/embedded-agent-runner/run/payloads.ts"),
+  const tuiModuleUrl = resolveRuntimeWorkerUrl(tuiPtyRuntimeEntrypoints.tui).href;
+  const payloadsModuleUrl = resolveRuntimeWorkerUrl(tuiPtyRuntimeEntrypoints.embeddedPayloads).href;
+  const replyPayloadModuleUrl = resolveRuntimeWorkerUrl(tuiPtyRuntimeEntrypoints.replyPayload).href;
+  const outboundPayloadsModuleUrl = resolveRuntimeWorkerUrl(
+    tuiPtyRuntimeEntrypoints.outboundPayloads,
   ).href;
-  const replyPayloadModuleUrl = pathToFileURL(
-    path.join(process.cwd(), "src/auto-reply/reply-payload.ts"),
-  ).href;
-  const outboundPayloadsModuleUrl = pathToFileURL(
-    path.join(process.cwd(), "src/infra/outbound/payloads.ts"),
-  ).href;
+  const tuiBackendTypeUrl = pathToFileURL(path.join(process.cwd(), "src/tui/tui-backend.ts")).href;
   await writeFile(
     scriptPath,
     `
-      import { appendFileSync, existsSync, watch } from "node:fs";
-      import { dirname } from "node:path";
+      import { appendFileSync, existsSync, watchFile, unwatchFile } from "node:fs";
       import { buildEmbeddedRunPayloads } from ${JSON.stringify(payloadsModuleUrl)};
       import { getReplyPayloadMetadata } from ${JSON.stringify(replyPayloadModuleUrl)};
       import { normalizeReplyPayloadsForDelivery } from ${JSON.stringify(outboundPayloadsModuleUrl)};
-      import type { TuiBackend } from ${JSON.stringify(tuiModuleUrl.replace("/tui.ts", "/tui-backend.ts"))};
+      import type { TuiBackend } from ${JSON.stringify(tuiBackendTypeUrl)};
       import { runTui } from ${JSON.stringify(tuiModuleUrl)};
 
       const actionLogPath = process.env.OPENCLAW_TUI_PTY_LOG_PATH;

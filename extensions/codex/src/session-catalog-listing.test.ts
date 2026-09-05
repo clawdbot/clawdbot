@@ -1,6 +1,8 @@
 // Codex supervision tests cover passive listing and safe local session takeover.
+import { createDeferred } from "openclaw/plugin-sdk/extension-shared";
 import { describe, expect, it, vi } from "vitest";
 import { MAX_HOST_COUNT } from "./session-catalog-parsing.js";
+import type { CodexSessionCatalogPage } from "./session-catalog-types.js";
 import {
   commandRpcMocks,
   pinnedConnectionMocks,
@@ -73,6 +75,85 @@ describe("Codex session catalog errors", () => {
 });
 
 describe("Codex supervision catalog", () => {
+  it("does not classify threads or request another page when retired during a local page", async () => {
+    const firstPage = createDeferred<CodexSessionCatalogPage>();
+    const pageStarted = createDeferred<void>();
+    const listPage = vi.fn(async ({ cursor }: { cursor?: string }) => {
+      if (cursor) {
+        return { sessions: [] };
+      }
+      pageStarted.resolve();
+      return firstPage.promise;
+    });
+    const mark = vi.fn(async () => undefined);
+    const bindingStore = Object.assign(createCodexTestBindingStore(), {
+      managedThreads: {
+        has: vi.fn(async () => false),
+        mark,
+        snapshot: vi.fn(async () => new Map<string, ReadonlySet<string>>()),
+      },
+    });
+    const home: CodexCatalogHome = {
+      sourceHomeId: "home-main",
+      hostId: CODEX_LOCAL_SESSION_HOST_ID,
+      label: "Main",
+      agentDir: "/agents/main",
+      appServer: {} as CodexCatalogHome["appServer"],
+      usesProcessHomeFallback: false,
+    };
+    const controller = new AbortController();
+    const listed = listCodexSessionCatalog({
+      bindingStore,
+      config,
+      runtime: createRuntime().runtime,
+      control: createControl({ listPage }),
+      localHomes: [home],
+      query: { hostIds: [CODEX_LOCAL_SESSION_HOST_ID] },
+      signal: controller.signal,
+    });
+    await pageStarted.promise;
+    controller.abort(new Error("catalog retired during page"));
+    firstPage.resolve({
+      sessions: [],
+      managedThreads: [{ threadId: "managed" }],
+      nextCursor: "next",
+    });
+    const result = await listed;
+    expect({ pages: listPage.mock.calls.length, marks: mark.mock.calls.length }).toEqual({
+      pages: 1,
+      marks: 0,
+    });
+    expect(result.hosts[0]?.error?.code).toBe("APP_SERVER_UNAVAILABLE");
+  });
+
+  it("does not start local hosts when retired during the managed-thread snapshot", async () => {
+    const snapshotResult = createDeferred<Map<string, ReadonlySet<string>>>();
+    const snapshot = vi.fn(() => snapshotResult.promise);
+    const bindingStore = Object.assign(createCodexTestBindingStore(), {
+      managedThreads: { has: vi.fn(async () => false), mark: vi.fn(), snapshot },
+    });
+    const listPage = vi.fn(async () => ({ sessions: [] }));
+    const controller = new AbortController();
+    const reason = new Error("catalog retired during snapshot");
+    const listed = listCodexSessionCatalog({
+      bindingStore,
+      config,
+      runtime: createRuntime().runtime,
+      control: createControl({ listPage }),
+      query: { hostIds: [CODEX_LOCAL_SESSION_HOST_ID] },
+      signal: controller.signal,
+      waitUntil: () => {
+        controller.signal.throwIfAborted();
+      },
+    }).catch((error: unknown) => error);
+    expect(snapshot).toHaveBeenCalledOnce();
+    controller.abort(reason);
+    snapshotResult.resolve(new Map());
+    const result = await listed;
+    expect(listPage).not.toHaveBeenCalled();
+    expect(result).toBe(reason);
+  });
+
   it("lists non-archived interactive threads without probing transcript previews", async () => {
     const pluginConfig = await normalizeCodexManifestConfig({
       supervision: { enabled: true },
@@ -435,12 +516,22 @@ describe("Codex supervision catalog", () => {
     });
 
     await withEnvAsync({ CODEX_HOME: processCodexHome }, async () => {
-      const hosts = await getProvider()?.list({
+      const onHost = vi.fn();
+      const completions: Promise<void>[] = [];
+      const hosts = await getProvider()!.list({
         agentId: "beta",
         listNodes: async () => ({ nodes: [] }),
+        onHost,
+        waitUntil: (completion) => {
+          completions.push(completion);
+        },
       });
 
       expect(hosts).toHaveLength(3);
+      expect(completions).toHaveLength(3);
+      await Promise.all(completions);
+      expect(onHost).toHaveBeenCalledTimes(3);
+      expect(onHost.mock.calls.map(([host]) => host)).toEqual(expect.arrayContaining(hosts));
       expect(hosts?.every((host) => host.hostId.startsWith("gateway:local"))).toBe(true);
       expect(
         hosts?.every(
@@ -528,7 +619,7 @@ describe("Codex supervision catalog", () => {
       async () => new Map<string, ReadonlySet<string>>([["home-a", new Set(["thread-managed"])]]),
     );
     const bindingStore = Object.assign(createCodexTestBindingStore(), {
-      managedThreads: { mark: vi.fn(), snapshot },
+      managedThreads: { has: vi.fn(async () => false), mark: vi.fn(), snapshot },
     });
     const listPage = vi.fn(async (params?: { cursor?: string; limit?: number }) =>
       params?.cursor === "next"
@@ -612,6 +703,7 @@ describe("Codex supervision catalog", () => {
     const mark = vi.fn(async () => true);
     const bindingStore = Object.assign(createCodexTestBindingStore(), {
       managedThreads: {
+        has: vi.fn(async () => false),
         mark,
         snapshot: vi.fn(async () => new Map<string, ReadonlySet<string>>()),
       },

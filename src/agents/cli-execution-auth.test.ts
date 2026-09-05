@@ -1,5 +1,6 @@
-import { beforeEach, describe, expect, it, vi } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { AuthProfileCredential } from "./auth-profiles/types.js";
+import { testing as cliBackendsTesting } from "./cli-backends.test-support.js";
 
 const mocks = vi.hoisted(() => ({
   order: [] as string[],
@@ -18,10 +19,31 @@ import { resolveCliExecutionAuthProfileId } from "./cli-execution-auth.js";
 
 describe("resolveCliExecutionAuthProfileId", () => {
   beforeEach(() => {
+    cliBackendsTesting.setDepsForTest({
+      resolveRuntimeCliBackends: () => [
+        {
+          id: "claude-cli",
+          modelProvider: "anthropic",
+          pluginId: "anthropic",
+          config: { command: "claude" },
+        },
+        {
+          id: "google-gemini-cli",
+          modelProvider: "google",
+          pluginId: "google-gemini-cli",
+          config: { command: "gemini" },
+        },
+      ],
+      resolvePluginSetupCliBackend: () => undefined,
+    });
     mocks.order.length = 0;
     for (const profileId of Object.keys(mocks.profiles)) {
       delete mocks.profiles[profileId];
     }
+  });
+
+  afterEach(() => {
+    cliBackendsTesting.resetDepsForTest();
   });
 
   it.each(["auto", "user"] as const)(
@@ -72,26 +94,155 @@ describe("resolveCliExecutionAuthProfileId", () => {
     ).toBe(authProfileId);
   });
 
-  it("rejects an explicitly selected profile from another provider", () => {
-    mocks.profiles["openai:work"] = {
-      type: "api_key",
-      provider: "openai",
-      key: "test-openai-key",
-    };
+  it.each([
+    { type: "api_key", registry: "runtime" },
+    { type: "token", registry: "runtime" },
+    { type: "oauth", registry: "runtime" },
+    { type: "token", registry: "setup" },
+  ] as const)(
+    "forwards an explicitly selected canonical Anthropic $type through the $registry registry",
+    ({ type, registry }) => {
+      if (registry === "setup") {
+        cliBackendsTesting.setDepsForTest({
+          resolveRuntimeCliBackends: () => [],
+          resolvePluginSetupCliBackend: ({ backend }) =>
+            backend === "claude-cli"
+              ? {
+                  pluginId: "anthropic",
+                  backend: {
+                    id: "claude-cli",
+                    modelProvider: "anthropic",
+                    config: { command: "claude" },
+                  },
+                }
+              : undefined,
+        });
+      }
+      const authProfileId = `anthropic:managed-${type}`;
+      mocks.profiles[authProfileId] =
+        type === "api_key"
+          ? { type, provider: "anthropic", key: "test-anthropic-key" }
+          : type === "token"
+            ? { type, provider: "anthropic", token: "test-anthropic-token" }
+            : {
+                type,
+                provider: "anthropic",
+                access: "test-anthropic-access",
+                refresh: "test-anthropic-refresh",
+                expires: Date.now() + 60_000,
+              };
 
-    expect(() =>
+      expect(
+        resolveCliExecutionAuthProfileId({
+          cliExecutionProvider: "claude-cli",
+          authProfileProvider: "anthropic",
+          config: {},
+          agentDir: "/tmp/unused-agent",
+          selected: { authProfileId, authProfileIdSource: "user" },
+        }),
+      ).toBe(authProfileId);
+    },
+  );
+
+  it("loads the selected personal profile without falling back to an ambient Claude account", () => {
+    const authProfileId =
+      "personal:11111111-1111-4111-8111-111111111111:22222222-2222-4222-8222-222222222222";
+    const credential: AuthProfileCredential = {
+      type: "token",
+      provider: "anthropic",
+      token: "test-personal-anthropic-token",
+    };
+    mocks.profiles["claude-cli:ambient"] = {
+      type: "api_key",
+      provider: "claude-cli",
+      key: "test-ambient-key",
+    };
+    mocks.order.push("claude-cli:ambient");
+
+    expect(
       resolveCliExecutionAuthProfileId({
-        cliExecutionProvider: "google-gemini-cli",
-        authProfileProvider: "openai",
+        cliExecutionProvider: "claude-cli",
+        authProfileProvider: "anthropic",
         config: {},
         agentDir: "/tmp/unused-agent",
-        selected: {
-          authProfileId: "openai:work",
-          authProfileIdSource: "user",
-        },
+        selected: { authProfileId, authProfileIdSource: "user" },
+        loadAuthProfileStoreForRuntime: (_agentDir, options) => ({
+          version: 1,
+          profiles: {
+            ...mocks.profiles,
+            ...(options?.profileId === authProfileId ? { [authProfileId]: credential } : {}),
+          },
+        }),
       }),
-    ).toThrow(/cannot use auth profile "openai:work"/);
+    ).toBe(authProfileId);
   });
+
+  it.each(["absent", "auto"] as const)(
+    "forwards only automatic Claude profiles owned by Claude CLI (%s selection)",
+    (selection) => {
+      const selected =
+        selection === "auto"
+          ? { authProfileId: "anthropic:default", authProfileIdSource: selection }
+          : undefined;
+      mocks.profiles["anthropic:default"] = {
+        type: "api_key",
+        provider: "anthropic",
+        key: "test-anthropic-key",
+      };
+      mocks.order.push("anthropic:default");
+
+      expect(
+        resolveCliExecutionAuthProfileId({
+          cliExecutionProvider: "claude-cli",
+          authProfileProvider: "anthropic",
+          config: {},
+          agentDir: "/tmp/unused-agent",
+          selected,
+        }),
+      ).toBeUndefined();
+
+      mocks.profiles["claude-cli:work"] = {
+        type: "api_key",
+        provider: "claude-cli",
+        key: "test-claude-key",
+      };
+      mocks.order.push("claude-cli:work");
+
+      expect(
+        resolveCliExecutionAuthProfileId({
+          cliExecutionProvider: "claude-cli",
+          authProfileProvider: "anthropic",
+          config: {},
+          agentDir: "/tmp/unused-agent",
+          selected,
+        }),
+      ).toBe("claude-cli:work");
+    },
+  );
+
+  it.each(["claude-cli", "google-gemini-cli"])(
+    "rejects an explicitly selected profile from another provider for %s",
+    (cliExecutionProvider) => {
+      mocks.profiles["openai:work"] = {
+        type: "api_key",
+        provider: "openai",
+        key: "test-openai-key",
+      };
+
+      expect(() =>
+        resolveCliExecutionAuthProfileId({
+          cliExecutionProvider,
+          authProfileProvider: "openai",
+          config: {},
+          agentDir: "/tmp/unused-agent",
+          selected: {
+            authProfileId: "openai:work",
+            authProfileIdSource: "user",
+          },
+        }),
+      ).toThrow(/cannot use auth profile "openai:work"/);
+    },
+  );
 
   it("rejects a missing explicitly selected profile instead of changing identities", () => {
     expect(() =>

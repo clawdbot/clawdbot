@@ -15,10 +15,11 @@ provider or agent runtime in three different ways.
 
 <Tabs>
   <Tab title="Built-in provider (github-copilot)">
-    Use the native device-login flow to obtain and store a GitHub token. When
-    OpenClaw runs, it validates Copilot access and resolves the account-specific
-    Copilot API endpoint. This is the **default** and simplest path because it does
-    not require VS Code.
+    Use the native device-login flow to obtain a GitHub token. By default,
+    OpenClaw puts the token in its protected local secret store and saves only a
+    `tokenRef` in the auth profile. When OpenClaw runs, it validates Copilot access
+    and resolves the account-specific Copilot API endpoint. This is the **default**
+    and simplest path because it does not require VS Code.
 
     <Steps>
       <Step title="Run the login command">
@@ -322,16 +323,28 @@ configured default model is never replaced.
     | 3        | `GITHUB_TOKEN`        | Standard GitHub token (lowest)   |
 
     When multiple variables are set, OpenClaw uses the highest-priority one.
-    The device-login flow (`openclaw models auth login-github-copilot`) stores
-    its token in the auth profile store and takes precedence over all environment
-    variables.
+    The device-login flow (`openclaw models auth login-github-copilot`) stores a
+    protected-store `tokenRef` in the auth profile and takes precedence over all
+    environment variables.
 
   </Accordion>
 
   <Accordion title="Token storage">
-    The login stores a GitHub token in the auth profile store (profile id
-    `github-copilot:github`). At runtime, OpenClaw validates Copilot access,
-    resolves the account-specific API endpoint, and uses the stored GitHub token
+    By default, device login stores the GitHub token in OpenClaw's protected local
+    secret store and writes only a `tokenRef` to the auth profile (profile id
+    `github-copilot:github`). The built-in store does not require a configured
+    external secret provider. If OpenClaw cannot write the store, login stops
+    before replacing the auth profile and reports that the state-directory or
+    database permissions need repair.
+
+    Interactive onboarding honors an explicit `--secret-input-mode plaintext`
+    choice for compatibility. That mode stores the token inline, reports the
+    choice, and remains visible to `openclaw secrets audit --check`.
+
+    The protected store is write-only through OpenClaw's user-facing secret APIs,
+    but it is not encrypted at rest; its SQLite file relies on state-directory
+    permissions. At runtime, OpenClaw resolves the reference, validates Copilot
+    access, resolves the account-specific API endpoint, and uses the GitHub token
     for Copilot requests. You do not need to manage runtime authentication
     manually.
 

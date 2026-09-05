@@ -1,10 +1,11 @@
 import { createHash, randomUUID } from "node:crypto";
 import fs from "node:fs";
 import path from "node:path";
-import { fileURLToPath, pathToFileURL } from "node:url";
 import { Worker } from "node:worker_threads";
 import { toStringifiedError } from "@openclaw/normalization-core/error-coercion";
 import { syncDirectoryBestEffortSync } from "../../infra/directory-durability.js";
+import { runtimeProcessEntrypoints } from "../../infra/runtime-process-entrypoints.js";
+import { resolveRuntimeWorkerUrl } from "../../infra/runtime-worker-url.js";
 import { KeyedAsyncQueue } from "../../plugin-sdk/keyed-async-queue.js";
 import { withOpenClawAgentDatabaseReadOnly } from "../../state/openclaw-agent-db-readonly.js";
 import {
@@ -12,7 +13,11 @@ import {
   readSessionArchiveContentSync,
   SESSION_ARCHIVE_ZSTD_SUFFIX,
 } from "./archive-compression.js";
-import { formatSessionArchiveTimestamp, type SessionArchiveReason } from "./artifacts.js";
+import {
+  formatSessionArchiveTimestamp,
+  isSessionArchiveArtifactName,
+  type SessionArchiveReason,
+} from "./artifacts.js";
 import type { SessionLifecycleArchivedTranscript } from "./session-accessor.sqlite-contract.js";
 import {
   readSessionStateDeleteSnapshot,
@@ -60,6 +65,17 @@ export type TranscriptArchiveWorkerMessage = {
 
 export const MAX_MATERIALIZED_ARCHIVE_BATCH_BYTES = 256 * 1024 * 1024;
 
+// Leave room under the 255-byte component limit for timestamps, generations,
+// compression suffixes, and staging UUIDs. Raising this can break publication.
+const MAX_REGISTERED_ARCHIVE_SESSION_ID_BYTES = 96;
+
+function resolveRegisteredArchiveSessionIdComponent(sessionId: string): string {
+  if (Buffer.byteLength(sessionId, "utf8") <= MAX_REGISTERED_ARCHIVE_SESSION_ID_BYTES) {
+    return sessionId;
+  }
+  return `session-${createHash("sha256").update(sessionId).digest("hex")}`;
+}
+
 export type TranscriptArchivePublishPlan = {
   agentId: string;
   archiveDirectory: string;
@@ -80,18 +96,23 @@ export type TranscriptArchivePublishWorkerMessage = {
   results: TranscriptArchivePublishResult[];
 };
 
-function resolveSqliteTranscriptArchivePath(params: {
+export function resolveSqliteTranscriptArchivePath(params: {
   archiveDirectory: string;
   generation?: string;
+  identityOwner: "filename" | "registry";
   reason: SessionArchiveReason;
   sessionId: string;
   nowMs?: number;
 }): string {
   const archiveDirectory = path.resolve(params.archiveDirectory);
   const generationSuffix = params.generation ? `.${params.generation}` : "";
+  const sessionIdComponent =
+    params.identityOwner === "registry"
+      ? resolveRegisteredArchiveSessionIdComponent(params.sessionId)
+      : params.sessionId;
   const archivePath = path.resolve(
     archiveDirectory,
-    `${params.sessionId}.jsonl.${params.reason}.${formatSessionArchiveTimestamp(params.nowMs)}${generationSuffix}`,
+    `${sessionIdComponent}.jsonl.${params.reason}.${formatSessionArchiveTimestamp(params.nowMs)}${generationSuffix}`,
   );
   if (path.dirname(archivePath) !== archiveDirectory) {
     throw new Error(`Cannot archive SQLite transcript outside ${archiveDirectory}`);
@@ -99,30 +120,23 @@ function resolveSqliteTranscriptArchivePath(params: {
   return archivePath;
 }
 
-export function encodeMaterializedSessionTranscriptArchive(params: {
-  archiveDirectory: string;
-  content: string;
+export function resolveRegisteredSqliteTranscriptArchiveName(params: {
+  createdAt: number;
+  encoding: "identity" | "zstd";
   generation: string;
   reason: SessionArchiveReason;
   sessionId: string;
-  nowMs?: number;
-}): MaterializedSessionTranscriptArchive {
-  const encoded = encodeSessionArchiveContent(params.content);
-  const createdAt = params.nowMs ?? Date.now();
-  const archivedPath = `${resolveSqliteTranscriptArchivePath({
-    archiveDirectory: params.archiveDirectory,
-    generation: params.generation,
-    reason: params.reason,
-    sessionId: params.sessionId,
-    nowMs: createdAt,
-  })}${encoded.suffix}`;
-  return {
-    archiveName: path.basename(archivedPath),
-    bytes: encoded.bytes,
-    createdAt,
-    encoding: encoded.suffix ? "zstd" : "identity",
-    sha256: createHash("sha256").update(encoded.bytes).digest("hex"),
-  };
+}): string {
+  return path.basename(
+    `${resolveSqliteTranscriptArchivePath({
+      archiveDirectory: ".",
+      generation: params.generation,
+      identityOwner: "registry",
+      reason: params.reason,
+      sessionId: params.sessionId,
+      nowMs: params.createdAt,
+    })}${params.encoding === "zstd" ? SESSION_ARCHIVE_ZSTD_SUFFIX : ""}`,
+  );
 }
 
 function findMatchingSqliteTranscriptArchive(params: {
@@ -139,7 +153,7 @@ function findMatchingSqliteTranscriptArchive(params: {
   }
   const prefix = `${params.sessionId}.jsonl.${params.reason}.`;
   for (const entry of entries) {
-    if (!entry.startsWith(prefix) || entry.endsWith(".tmp")) {
+    if (!entry.startsWith(prefix) || !isSessionArchiveArtifactName(entry)) {
       continue;
     }
     const archivePath = path.join(params.archiveDirectory, entry);
@@ -180,6 +194,7 @@ export function writeTranscriptArchive(params: {
   for (let attempt = 0; attempt < 10; attempt += 1) {
     const archivePath = `${resolveSqliteTranscriptArchivePath({
       archiveDirectory: params.archiveDirectory,
+      identityOwner: "filename",
       reason: params.reason,
       sessionId: params.sessionId,
       nowMs: Date.now() + attempt,
@@ -268,21 +283,6 @@ export function publishEncodedSessionTranscriptArchive(params: {
   return archivePath;
 }
 
-function resolveSqliteTranscriptArchiveWorkerUrl(currentModuleUrl = import.meta.url): URL {
-  const currentPath = fileURLToPath(currentModuleUrl);
-  const normalized = currentPath.replaceAll(path.sep, "/");
-  const distMarker = "/dist/";
-  const distIndex = normalized.lastIndexOf(distMarker);
-  if (distIndex >= 0) {
-    const distRoot = currentPath.slice(0, distIndex + distMarker.length);
-    return pathToFileURL(
-      path.join(distRoot, "config", "sessions", "session-accessor.sqlite-archive.worker.js"),
-    );
-  }
-  const extension = path.extname(currentPath) || ".js";
-  return new URL(`./session-accessor.sqlite-archive.worker${extension}`, currentModuleUrl);
-}
-
 function resolveSourceWorkerExecArgv(): string[] {
   // Node 22 can strip the .ts entrypoint itself, but `--import tsx` does not
   // register tsx's ESM resolver inside a Worker. Explicitly register the
@@ -293,11 +293,13 @@ function resolveSourceWorkerExecArgv(): string[] {
   return ["--import", `data:text/javascript,${encodeURIComponent(registerTsx)}`];
 }
 
-function spawnSqliteTranscriptArchiveWorker<Result>(params: {
-  expectedMessageType: "done" | "published";
+function spawnSqliteTranscriptArchiveWorkerOperation<Result>(params: {
+  expectedMessageType: "done" | "published" | "reclaimed";
+  onCommitRequest?: () => void;
+  transferList?: ArrayBuffer[];
   workerData: object;
 }): Promise<Result[]> {
-  const workerUrl = resolveSqliteTranscriptArchiveWorkerUrl();
+  const workerUrl = resolveRuntimeWorkerUrl(runtimeProcessEntrypoints.sessionTranscriptArchive);
   let worker: Worker;
   try {
     const sourceWorkerExecArgv = workerUrl.pathname.endsWith(".ts")
@@ -306,6 +308,7 @@ function spawnSqliteTranscriptArchiveWorker<Result>(params: {
     worker = new Worker(workerUrl, {
       workerData: params.workerData,
       execArgv: sourceWorkerExecArgv,
+      transferList: params.transferList,
     });
   } catch (error) {
     return Promise.reject(toStringifiedError(error));
@@ -314,18 +317,21 @@ function spawnSqliteTranscriptArchiveWorker<Result>(params: {
   return new Promise((resolve, reject) => {
     let results: Result[] | undefined;
     let workerError: Error | undefined;
-    worker.on(
-      "message",
-      (message: TranscriptArchiveWorkerMessage | TranscriptArchivePublishWorkerMessage) => {
-        if (message.type === params.expectedMessageType) {
-          (results ??= []).push(...(message.results as Result[]));
+    worker.on("message", (message: { results: Result[]; type: string }) => {
+      if (message.type === "commit-request") {
+        try {
+          params.onCommitRequest?.();
+        } catch (error) {
+          workerError = toStringifiedError(error);
         }
-      },
-    );
+      } else if (message.type === params.expectedMessageType) {
+        (results ??= []).push(...message.results);
+      }
+    });
     worker.once("error", (error) => {
       // An uncaught Worker error is followed by exit. Wait for that event so
       // callers never race the Worker's SQLite/file handles on Windows.
-      workerError = toStringifiedError(error);
+      workerError ??= toStringifiedError(error);
     });
     worker.once("exit", (code) => {
       worker.removeAllListeners();
@@ -351,30 +357,34 @@ function spawnSqliteTranscriptArchiveWorker<Result>(params: {
 const sqliteTranscriptArchiveWorkerQueue = new KeyedAsyncQueue();
 const SQLITE_TRANSCRIPT_ARCHIVE_WORKER_QUEUE_KEY = "lifecycle-archive";
 
+export function runSqliteTranscriptArchiveWorkerOperation<Result>(params: {
+  expectedMessageType: "done" | "published" | "reclaimed";
+  onCommitRequest?: () => void;
+  transferList?: ArrayBuffer[];
+  workerData: object;
+}): Promise<Result[]> {
+  return sqliteTranscriptArchiveWorkerQueue.enqueue(
+    SQLITE_TRANSCRIPT_ARCHIVE_WORKER_QUEUE_KEY,
+    () => spawnSqliteTranscriptArchiveWorkerOperation<Result>(params),
+  );
+}
+
 function runSqliteTranscriptArchiveWorker(
   plans: readonly TranscriptArchiveWorkerPlan[],
 ): Promise<TranscriptArchiveWorkerResult[]> {
-  return sqliteTranscriptArchiveWorkerQueue.enqueue(
-    SQLITE_TRANSCRIPT_ARCHIVE_WORKER_QUEUE_KEY,
-    () =>
-      spawnSqliteTranscriptArchiveWorker<TranscriptArchiveWorkerResult>({
-        expectedMessageType: "done",
-        workerData: { operation: "materialize", type: "sqlite-transcript-archive-v2", plans },
-      }),
-  );
+  return runSqliteTranscriptArchiveWorkerOperation<TranscriptArchiveWorkerResult>({
+    expectedMessageType: "done",
+    workerData: { operation: "materialize", type: "sqlite-transcript-archive-v2", plans },
+  });
 }
 
 export function runSqliteTranscriptArchivePublishWorker(
   plans: readonly TranscriptArchivePublishPlan[],
 ): Promise<TranscriptArchivePublishResult[]> {
-  return sqliteTranscriptArchiveWorkerQueue.enqueue(
-    SQLITE_TRANSCRIPT_ARCHIVE_WORKER_QUEUE_KEY,
-    () =>
-      spawnSqliteTranscriptArchiveWorker<TranscriptArchivePublishResult>({
-        expectedMessageType: "published",
-        workerData: { operation: "publish", type: "sqlite-transcript-archive-v2", plans },
-      }),
-  );
+  return runSqliteTranscriptArchiveWorkerOperation<TranscriptArchivePublishResult>({
+    expectedMessageType: "published",
+    workerData: { operation: "publish", type: "sqlite-transcript-archive-v2", plans },
+  });
 }
 
 function validateEmptyTranscriptArchivePlan(plan: TranscriptArchiveWorkerPlan): void {

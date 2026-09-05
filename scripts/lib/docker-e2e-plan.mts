@@ -22,6 +22,7 @@ import {
 } from "./docker-e2e-scenarios.mts";
 import officialExternalChannelCatalog from "./official-external-channel-catalog.json" with { type: "json" };
 import {
+  isTrustedHarnessOwnedUpgradeSurvivorScenario,
   normalizeUpgradeSurvivorBaselineSpec,
   parseUpgradeSurvivorBaselineSpecs,
   parseUpgradeSurvivorScenarios,
@@ -116,6 +117,18 @@ const UPGRADE_SURVIVOR_RUNTIME_COMPANION_PACKAGES = ["@openclaw/codex"];
 // Pre-protocol catalogs are content-addressed. Unknown legacy blocks fail
 // closed instead of requiring a dependency or reimplementing a JavaScript parser.
 const LEGACY_UPGRADE_SURVIVOR_SCENARIO_CATALOGS = new Map([
+  [
+    "28758bbf9d4069d9718fb3325c59ad66a3bc6880248c104aa71b0d7769c54ba3",
+    "base mobile-pairing-reconnect acpx-openclaw-tools-bridge feishu-channel bootstrap-persona channel-post-core-restore codex-allowlist-survival plugin-deps-cleanup configured-plugin-installs stale-source-plugin-shadow prerelease-plugin-registry tilde-log-path meeting-transcripts-sqlite versioned-runtime-deps cron-scheduled-authority sqlite-volume recovery-cleanup auth-profile-v2026-7-2-beta-5 watchos-direct-node",
+  ],
+  [
+    "dd12482a81dc5cc82dbb23f1cf3128321ec97a2176673c34adecbeed18d00484",
+    "base acpx-openclaw-tools-bridge feishu-channel bootstrap-persona channel-post-core-restore codex-allowlist-survival plugin-deps-cleanup configured-plugin-installs stale-source-plugin-shadow prerelease-plugin-registry tilde-log-path meeting-transcripts-sqlite versioned-runtime-deps cron-scheduled-authority sqlite-volume recovery-cleanup auth-profile-v2026-7-2-beta-5 watchos-direct-node",
+  ],
+  [
+    "bb984a8abf8e4f5a5caaa0c6e10fc36efb6a05ca9f44fb960e4a6583cd52695d",
+    "base acpx-openclaw-tools-bridge feishu-channel bootstrap-persona channel-post-core-restore codex-allowlist-survival plugin-deps-cleanup configured-plugin-installs stale-source-plugin-shadow prerelease-plugin-registry tilde-log-path meeting-transcripts-sqlite versioned-runtime-deps cron-scheduled-authority sqlite-volume recovery-cleanup auth-profile-v2026-7-2-beta-5",
+  ],
   [
     "f886fb3ca6232eb97cdfe93a9ab7fc8e8cd4a39658c5518bfb736a2242d0c949",
     "base acpx-openclaw-tools-bridge feishu-channel bootstrap-persona channel-post-core-restore codex-allowlist-survival plugin-deps-cleanup configured-plugin-installs stale-source-plugin-shadow prerelease-plugin-registry tilde-log-path meeting-transcripts-sqlite versioned-runtime-deps cron-scheduled-authority sqlite-volume auth-profile-v2026-7-2-beta-5",
@@ -249,9 +262,15 @@ function filterUpgradeSurvivorScenariosForTarget(
   if (!targetRoot) {
     return scenarios;
   }
+  const targetOwnedScenarios = scenarios.filter(
+    (scenario) => !isTrustedHarnessOwnedUpgradeSurvivorScenario(scenario),
+  );
+  if (targetOwnedScenarios.length === 0) {
+    return scenarios;
+  }
   const assertionsFile = resolve(targetRoot, "scripts/e2e/lib/upgrade-survivor/assertions.mjs");
   if (!existsSync(assertionsFile)) {
-    return [];
+    return scenarios.filter(isTrustedHarnessOwnedUpgradeSurvivorScenario);
   }
   const targetScenarios = readFrozenScenarioContract(
     assertionsFile,
@@ -259,7 +278,10 @@ function filterUpgradeSurvivorScenariosForTarget(
     allowExecutableContract,
   );
   const supportedScenarios = new Set(targetScenarios);
-  return scenarios.filter((scenario) => supportedScenarios.has(scenario));
+  return scenarios.filter(
+    (scenario) =>
+      isTrustedHarnessOwnedUpgradeSurvivorScenario(scenario) || supportedScenarios.has(scenario),
+  );
 }
 
 function expandedUpgradeSurvivorLaneName(

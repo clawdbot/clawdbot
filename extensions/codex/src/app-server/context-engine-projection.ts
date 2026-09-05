@@ -61,15 +61,11 @@ export function projectContextEngineAssemblyForCodex(params: {
   const prompt = params.prompt.trim();
   const contextMessages = dropDuplicateTrailingPrompt(params.assembledMessages, prompt);
   const maxRenderedContextChars = normalizeRenderedContextMaxChars(params.maxRenderedContextChars);
-  const renderedContext = neutralizeCodexExplicitMentionSigils(
-    renderMessagesForCodexContext(contextMessages, {
-      maxTextPartChars: resolveTextPartMaxChars(maxRenderedContextChars),
-      toolPayloadMode: params.toolPayloadMode ?? "elide",
-    }),
-  );
-  const boundedContext = renderedContext
-    ? truncateOlderContext(renderedContext, maxRenderedContextChars)
-    : undefined;
+  const boundedContext = renderMessagesForCodexContext(contextMessages, {
+    maxTextPartChars: resolveTextPartMaxChars(maxRenderedContextChars),
+    toolPayloadMode: params.toolPayloadMode ?? "elide",
+    maxRenderedContextChars,
+  });
   const promptPrefix = boundedContext
     ? [CONTEXT_HEADER, CONTEXT_SAFETY_NOTE, "", CONTEXT_OPEN].join("\n") + "\n"
     : undefined;
@@ -341,21 +337,45 @@ function dropDuplicateTrailingPrompt(messages: AgentMessage[], prompt: string): 
 
 function renderMessagesForCodexContext(
   messages: AgentMessage[],
-  options: { maxTextPartChars: number; toolPayloadMode: "elide" | "preserve" },
+  options: {
+    maxTextPartChars: number;
+    toolPayloadMode: "elide" | "preserve";
+    maxRenderedContextChars: number;
+  },
 ): string {
-  return messages
-    .map((message) => {
-      const text = renderMessageBody(message, options);
-      return text ? `[${message.role}]\n${text}` : undefined;
-    })
-    .filter((value): value is string => Boolean(value))
-    .join("\n\n");
+  const tail: string[] = [];
+  let totalChars = 0;
+  let retainedChars = 0;
+  // Count the discarded prefix for the existing marker, but never materialize the
+  // whole history. Sigil neutralization preserves UTF-16 length and cannot span separators.
+  for (let index = messages.length - 1; index >= 0; index--) {
+    const message = messages[index]!;
+    const text = renderMessageBody(message, options);
+    if (!text) {
+      continue;
+    }
+    const chunk = `[${message.role}]\n${text}${totalChars > 0 ? "\n\n" : ""}`;
+    totalChars += chunk.length;
+    const remaining = options.maxRenderedContextChars - retainedChars;
+    if (remaining > 0) {
+      // The final truncation below owns the surrogate-safe boundary after adding its marker.
+      const retained = neutralizeCodexExplicitMentionSigils(chunk).slice(-remaining);
+      tail.push(retained);
+      retainedChars += retained.length;
+    }
+  }
+  const retainedContext = tail.toReversed().join("");
+  return truncateOlderContext(retainedContext, options.maxRenderedContextChars, totalChars);
 }
 
 function renderMessageBody(
   message: AgentMessage,
   options: { maxTextPartChars: number; toolPayloadMode: "elide" | "preserve" },
 ): string {
+  // Canonical summaries carry `summary`, not `content`; keep them in the quoted history.
+  if (message.role === "compactionSummary" || message.role === "branchSummary") {
+    return truncateText(message.summary.trim(), options.maxTextPartChars);
+  }
   if (!hasMessageContent(message)) {
     return "";
   }
@@ -574,8 +594,8 @@ function truncateText(text: string, maxChars: number): string {
   return `${truncated}\n[truncated ${text.length - truncated.length} chars]`;
 }
 
-function truncateOlderContext(text: string, maxChars: number): string {
-  if (text.length <= maxChars) {
+function truncateOlderContext(text: string, maxChars: number, totalChars = text.length): string {
+  if (totalChars <= maxChars) {
     return text;
   }
   if (maxChars <= 0) {
@@ -584,9 +604,9 @@ function truncateOlderContext(text: string, maxChars: number): string {
 
   const buildMarker = (omittedChars: number): string =>
     `[truncated ${omittedChars} chars from older context]\n`;
-  let marker = buildMarker(text.length - maxChars);
+  let marker = buildMarker(totalChars - maxChars);
   let tailChars = Math.max(0, maxChars - marker.length);
-  marker = buildMarker(text.length - tailChars);
+  marker = buildMarker(totalChars - tailChars);
   if (marker.length >= maxChars) {
     return marker.slice(0, maxChars);
   }

@@ -14,13 +14,24 @@ afterEach(() => {
   localStorage.clear();
 });
 
-function createBrowser(request: (method: string) => Promise<unknown>, data?: NewSessionRouteData) {
+function createBrowser(
+  request: (method: string) => Promise<unknown>,
+  data?: NewSessionRouteData,
+  recoveryReady = true,
+) {
   const host = new TestReactiveControllerHost();
   const controllers: ReactiveController[] = [];
   vi.spyOn(host, "addController").mockImplementation((controller) => controllers.push(controller));
-  const client = { request, recoveryScope: "principal-a", recoveryScopeReady: true };
+  const client = {
+    request,
+    recoveryScope: recoveryReady ? "principal-a" : "",
+    recoveryScopeReady: recoveryReady,
+  };
+  const onInvalidate = vi.fn((reset: boolean) => {
+    browser?.resetProjects(reset);
+  });
   const hello = {
-    auth: { role: "operator", scopes: ["operator.read"] },
+    auth: { recoveryScope: "principal-a", role: "operator", scopes: ["operator.read"] },
     features: { methods: ["projects.list"] },
   };
   const context = {
@@ -52,11 +63,12 @@ function createBrowser(request: (method: string) => Promise<unknown>, data?: New
       cloudProfileId: "",
       pendingPlacement: { sessionKey: "", gatewayUrl: "", recoveryScope: "" },
       agentsHydrated: false,
+      runtimeId: "",
     }),
     {
       requestUpdate: vi.fn(),
       updateComplete: () => Promise.resolve(),
-      onInvalidate: vi.fn(),
+      onInvalidate,
       onVisibilityRetired: vi.fn(),
       onCloudProfileCleared: vi.fn(),
       onCloudState: vi.fn(),
@@ -66,6 +78,7 @@ function createBrowser(request: (method: string) => Promise<unknown>, data?: New
     },
   );
   gateway.synchronize(context.gateway);
+  const onProjectMissing = vi.fn();
   const browser = new DraftPlaceBrowser(
     host,
     gateway,
@@ -75,7 +88,7 @@ function createBrowser(request: (method: string) => Promise<unknown>, data?: New
     }),
     {
       requestUpdate: vi.fn(),
-      onProjectMissing: vi.fn(),
+      onProjectMissing,
       onSelectProject: vi.fn(),
       onApprovedListing: vi.fn(),
       querySelector: () => null,
@@ -85,10 +98,12 @@ function createBrowser(request: (method: string) => Promise<unknown>, data?: New
   );
   onTestFinished(() => {
     gateway.disconnect();
-    browser.disconnect();
+    browser?.disconnect();
   });
   return {
     browser,
+    onProjectMissing,
+    onInvalidate,
     gateway,
     client,
     context,
@@ -103,6 +118,57 @@ function createBrowser(request: (method: string) => Promise<unknown>, data?: New
 }
 
 describe("DraftPlaceBrowser", () => {
+  it.each(["loaded", "pending"])(
+    "reloads the project catalog after an owner reset without reconnecting (%s)",
+    async (initial) => {
+      const retired = { id: "retired", displayName: "Retired", repoRoot: "/retired" };
+      const current = { id: "current", displayName: "Current", repoRoot: "/current" };
+      const pending = createDeferred<{ projects: (typeof retired)[] }>();
+      const request = vi.fn(() => pending.promise);
+      const fixture = createBrowser(request);
+      const previous = fixture.browser.refreshProjects();
+      if (initial === "loaded") {
+        pending.resolve({ projects: [retired] });
+        await previous;
+      }
+
+      request.mockResolvedValue({ projects: [current] });
+      fixture.browser.resetProjects();
+      fixture.update();
+      await waitForFast(() => expect(fixture.browser.projects).toEqual([current]));
+      pending.resolve({ projects: [retired] });
+      await previous;
+      expect(fixture.browser.projects).toEqual([current]);
+    },
+  );
+
+  it.each(["disconnect", "failure"])(
+    "retains the selected project until a catalog confirms its removal (%s)",
+    async (unavailable) => {
+      const project = { id: "project", displayName: "Project", repoRoot: "/project" };
+      const request = vi.fn(async () => ({ projects: [project] }));
+      const fixture = createBrowser(request);
+      await fixture.browser.refreshProjects();
+      fixture.browser.selectProject({ kind: "local", id: project.id });
+
+      if (unavailable === "disconnect") {
+        fixture.context.gateway.snapshot.phase = "reconnecting";
+        fixture.update();
+      } else {
+        request.mockRejectedValue(new Error("projects unavailable"));
+      }
+      await fixture.browser.refreshProjects();
+      expect(fixture.browser.selectedProject()).toEqual(project);
+      expect(fixture.onProjectMissing).not.toHaveBeenCalled();
+
+      fixture.context.gateway.snapshot.phase = "connected";
+      request.mockResolvedValue({ projects: [] });
+      fixture.update();
+      await fixture.browser.refreshProjects();
+      expect(fixture.onProjectMissing).toHaveBeenCalled();
+    },
+  );
+
   it("tracks overlapping popover hides independently", () => {
     const { browser } = createBrowser(async () => ({}));
 
@@ -151,6 +217,93 @@ describe("DraftPlaceBrowser", () => {
 });
 
 describe("DraftGatewayState", () => {
+  it.each(["disconnect", "credential", "gateway"])(
+    "rejects late place catalogs synchronously after %s invalidation",
+    async (change) => {
+      const pending = createDeferred<{
+        projects: { id: string }[];
+        environments: { id: string }[];
+        profiles: [];
+      }>();
+      const request = vi.fn(() => pending.promise);
+      const fixture = createBrowser(request);
+      fixture.hello.auth.scopes.push("operator.write");
+      fixture.update();
+      await waitForFast(() => expect(request).toHaveBeenCalledTimes(2));
+
+      if (change === "disconnect") {
+        fixture.context.gateway.snapshot.phase = "reconnecting";
+      }
+      if (change === "credential") {
+        fixture.hello.auth.recoveryScope = "principal-b";
+      }
+      if (change === "gateway") {
+        fixture.context.gateway.connection.gatewayUrl = "ws://gateway-b.example";
+      }
+      // Retirement must happen in synchronize, before Lit schedules hostUpdate.
+      fixture.gateway.synchronize(fixture.context.gateway);
+      pending.resolve({
+        projects: [{ id: "retired" }],
+        environments: [{ id: "retired" }],
+        profiles: [],
+      });
+      await pending.promise;
+      await new Promise<void>((resolve) => {
+        setTimeout(resolve, 0);
+      });
+      expect(fixture.browser.projects).toEqual([]);
+      expect(fixture.gateway.environments).toBeNull();
+    },
+  );
+
+  it("discovers places from authenticated hello without refetching or losing input during migration", async () => {
+    const request = vi.fn(async (method: string) => {
+      if (method === "system.info") {
+        return { machineName: "Gateway A" };
+      }
+      if (method === "projects.list") {
+        return { projects: [{ id: "project", displayName: "Project" }] };
+      }
+      return { environments: [], profiles: [] };
+    });
+    const fixture = createBrowser(request, undefined, false);
+    fixture.hello.features.methods.push("system.info");
+    fixture.hello.auth.scopes.push("operator.write");
+    fixture.browser.browserPathDraft = "/draft-folder";
+    fixture.update();
+    await waitForFast(() => expect(fixture.gateway.gatewayName).toBe("Gateway A"));
+    await waitForFast(() => expect(fixture.browser.projects).toHaveLength(1));
+    await waitForFast(() => expect(fixture.gateway.cloudProfilesReady).toBe(true));
+    fixture.browser.selectProject({ kind: "local", id: "project" });
+
+    fixture.client.recoveryScope = "principal-a";
+    fixture.client.recoveryScopeReady = true;
+    fixture.update();
+    expect(fixture.onInvalidate).not.toHaveBeenCalled();
+    expect(fixture.browser.browserPathDraft).toBe("/draft-folder");
+    expect(fixture.browser.projectId).toBe("project");
+    expect(request.mock.calls.filter(([method]) => method === "projects.list")).toHaveLength(1);
+    expect(request.mock.calls.filter(([method]) => method === "environments.list")).toHaveLength(1);
+
+    fixture.context.gateway.snapshot.phase = "reconnecting";
+    fixture.client.recoveryScopeReady = false;
+    fixture.update();
+    fixture.context.gateway.snapshot.phase = "connected";
+    fixture.update();
+    await waitForFast(() =>
+      expect(request.mock.calls.filter(([method]) => method === "projects.list")).toHaveLength(2),
+    );
+    fixture.client.recoveryScopeReady = true;
+    fixture.update();
+    expect(fixture.browser.projectId).toBe("project");
+    expect(request.mock.calls.filter(([method]) => method === "environments.list")).toHaveLength(2);
+
+    fixture.hello.auth.recoveryScope = "principal-b";
+    fixture.update();
+    expect(fixture.onInvalidate).toHaveBeenLastCalledWith(true, "gateway-changed");
+    expect(fixture.browser.projectId).toBe("");
+  });
+
   it("retains a discovered name when the same connection's recovery scope arrives", async () => {
     const fixture = createBrowser(async () => ({ machineName: "Gateway A" }));
     fixture.hello.features.methods.push("system.info");

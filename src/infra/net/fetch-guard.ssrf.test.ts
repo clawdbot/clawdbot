@@ -2,9 +2,11 @@ import { toErrorObject as toLintErrorObject } from "@openclaw/normalization-core
 // Guarded fetch SSRF tests cover redirect hardening, pinned dispatcher setup,
 // trusted proxy modes, and safe header retention.
 import { createRequireRecord } from "openclaw/plugin-sdk/test-fixtures";
+import type { Dispatcher } from "undici";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 // Load before cases own mocks; a timed-out import would resume inside the next case.
 import { waitForControlUiDocument } from "../../commands/control-ui-handoff.js";
+import { createDeferredCore } from "../../shared/deferred.js";
 import { readResponseWithLimit } from "../http-body.js";
 import {
   fetchConfiguredLocalOriginWithSsrFGuard,
@@ -20,20 +22,19 @@ import {
 
 const TEST_UNDICI_RUNTIME_DEPS_KEY = "__OPENCLAW_TEST_UNDICI_RUNTIME_DEPS__";
 
-const { agentCtor, envHttpProxyAgentCtor, proxyAgentCtor } = vi.hoisted(() => ({
-  agentCtor: vi.fn(function MockAgent(this: { options: unknown }, options: unknown) {
+type MockDispatcher = { options: unknown; dispatch: Dispatcher["dispatch"] };
+
+const { agentCtor, envHttpProxyAgentCtor, proxyAgentCtor } = vi.hoisted(() => {
+  function createMockDispatcher(this: MockDispatcher, options: unknown) {
     this.options = options;
-  }),
-  envHttpProxyAgentCtor: vi.fn(function MockEnvHttpProxyAgent(
-    this: { options: unknown },
-    options: unknown,
-  ) {
-    this.options = options;
-  }),
-  proxyAgentCtor: vi.fn(function MockProxyAgent(this: { options: unknown }, options: unknown) {
-    this.options = options;
-  }),
-}));
+    this.dispatch = vi.fn(() => true);
+  }
+  return {
+    agentCtor: vi.fn(createMockDispatcher),
+    envHttpProxyAgentCtor: vi.fn(createMockDispatcher),
+    proxyAgentCtor: vi.fn(createMockDispatcher),
+  };
+});
 const { getDefaultAutoSelectFamily, isWSL2SyncMock } = vi.hoisted(() => ({
   getDefaultAutoSelectFamily: vi.fn(() => true as boolean | undefined),
   isWSL2SyncMock: vi.fn(() => false),
@@ -127,6 +128,42 @@ function getSecondRequestHeaders(fetchImpl: ReturnType<typeof vi.fn>): Headers {
 }
 
 const requireRecord = createRequireRecord("record", "expected-label");
+
+function dispatchAttachedRequest(
+  input: RequestInfo | URL,
+  init?: RequestInit & { dispatcher?: Dispatcher },
+): void {
+  const dispatcher = init?.dispatcher;
+  if (!dispatcher) {
+    throw new Error("expected attached dispatcher");
+  }
+  const method = init?.method ?? "GET";
+  if (method !== "GET" && method !== "HEAD") {
+    throw new Error("unexpected fixture request method");
+  }
+  const url = new URL(getFetchInputUrl(input));
+  dispatcher.dispatch({ origin: url.origin, path: url.pathname + url.search, method }, {});
+}
+
+function expectDispatchedRequest(
+  expectedOwner: typeof agentCtor,
+  request: Dispatcher.DispatchOptions,
+): Record<string, unknown> {
+  const observations = [agentCtor, envHttpProxyAgentCtor, proxyAgentCtor].flatMap((owner) =>
+    owner.mock.instances.flatMap((instance) => {
+      const dispatcher = requireRecord(instance, "mock dispatcher");
+      const dispatch = dispatcher.dispatch;
+      if (!vi.isMockFunction(dispatch)) {
+        throw new Error("expected dispatcher spy");
+      }
+      return dispatch.mock.calls.map((args) => ({ owner, options: dispatcher.options, args }));
+    }),
+  );
+  expect(observations).toEqual([
+    expect.objectContaining({ owner: expectedOwner, args: [request, {}] }),
+  ]);
+  return requireRecord(observations[0]?.options, "dispatched owner options");
+}
 
 function getFirstRequestInit(fetchImpl: ReturnType<typeof vi.fn>): RequestInit {
   const [call] = fetchImpl.mock.calls;
@@ -251,13 +288,7 @@ describe("fetchWithSsrFGuard hardening", () => {
     };
     const lookupFn = createPublicLookup();
     const fetchImpl = vi.fn(async (_input: RequestInfo | URL, init?: RequestInit) => {
-      const requestInit = init as RequestInit & { dispatcher?: unknown };
-      if (params.expectEnvProxy) {
-        expectDispatcherAttached(requestInit.dispatcher);
-      } else {
-        expectDispatcherAttached(requestInit.dispatcher);
-        expect(getDispatcherClassName(requestInit.dispatcher)).not.toBe("EnvHttpProxyAgent");
-      }
+      dispatchAttachedRequest(_input, init);
       return okResponse();
     });
 
@@ -270,23 +301,11 @@ describe("fetchWithSsrFGuard hardening", () => {
 
     expect(fetchImpl).toHaveBeenCalledTimes(1);
     expect(lookupFn).toHaveBeenCalledTimes(params.expectEnvProxy ? 0 : 1);
-    if (params.expectEnvProxy) {
-      expect(envHttpProxyAgentCtor).toHaveBeenCalledTimes(1);
-      expect(envHttpProxyAgentCtor).toHaveBeenCalledWith({
-        factory: expect.any(Function),
-        connect: {
-          autoSelectFamily: true,
-          autoSelectFamilyAttemptTimeout: 300,
-        },
-        clientFactory: expect.any(Function),
-        proxyTunnel: true,
-        proxyTls: {
-          autoSelectFamily: true,
-          autoSelectFamilyAttemptTimeout: 300,
-        },
-        allowH2: false,
-      });
-    }
+    expectDispatchedRequest(params.expectEnvProxy ? proxyAgentCtor : agentCtor, {
+      origin: "https://public.example",
+      path: "/resource",
+      method: "GET",
+    });
     await result.release();
   }
 
@@ -720,20 +739,16 @@ describe("fetchWithSsrFGuard hardening", () => {
       },
     });
 
-    expect(proxyAgentCtor).toHaveBeenCalledWith({
-      factory: expect.any(Function),
-      uri: "http://proxy.example:7890",
-      clientFactory: expect.any(Function),
-      proxyTunnel: true,
-      proxyTls: {
-        autoSelectFamily: true,
-        autoSelectFamilyAttemptTimeout: 300,
-      },
-      allowH2: false,
-      requestTls: {
-        servername: "public.example",
-      },
-    });
+    expect(proxyAgentCtor).toHaveBeenCalledWith(
+      expect.objectContaining({
+        uri: "http://proxy.example:7890",
+        proxyTunnel: true,
+        allowH2: false,
+        requestTls: {
+          servername: "public.example",
+        },
+      }),
+    );
     expect(fetchImpl).toHaveBeenCalledTimes(1);
     const fetchCall = firstMockCall(fetchImpl) as [string, { dispatcher?: unknown }] | undefined;
     expect(fetchCall?.[0]).toBe("https://public.example/resource");
@@ -1449,6 +1464,7 @@ describe("fetchWithSsrFGuard hardening", () => {
 
   it("keeps headers when redirect stays on same origin", async () => {
     const lookupFn = createPublicLookup();
+    const beforeRequest = vi.fn();
     const fetchImpl = vi
       .fn()
       .mockResolvedValueOnce(redirectResponse("/next"))
@@ -1458,6 +1474,7 @@ describe("fetchWithSsrFGuard hardening", () => {
       url: "https://api.example.com/start",
       fetchImpl,
       lookupFn,
+      beforeRequest,
       init: {
         headers: {
           Authorization: "Bearer secret",
@@ -1466,6 +1483,7 @@ describe("fetchWithSsrFGuard hardening", () => {
     });
 
     const headers = getSecondRequestHeaders(fetchImpl);
+    expect(beforeRequest).toHaveBeenCalledTimes(2);
     expect(headers.get("authorization")).toBe("Bearer secret");
     await result.release();
   });
@@ -1712,9 +1730,10 @@ describe("fetchWithSsrFGuard hardening", () => {
       installManagedProxyRuntime(mode);
       vi.stubEnv("NO_PROXY", "127.0.0.1");
       vi.stubEnv("no_proxy", "127.0.0.1");
-      const fetchImpl = vi.fn(
-        async () => new Response(null, { status: 200, headers: { "content-type": "text/html" } }),
-      );
+      const fetchImpl = vi.fn(async (input: RequestInfo | URL, init?: RequestInit) => {
+        dispatchAttachedRequest(input, init);
+        return new Response(null, { status: 200, headers: { "content-type": "text/html" } });
+      });
       const lookupFn = createLoopbackLookup();
       const readiness = await waitForControlUiDocument({
         url: "http://127.0.0.1:18789/dashboard/",
@@ -1739,19 +1758,11 @@ describe("fetchWithSsrFGuard hardening", () => {
       expect(readiness).toEqual({ ready: true });
       expect(fetchImpl).toHaveBeenCalledOnce();
       expect(getFirstRequestInit(fetchImpl).method).toBe("HEAD");
-      if (routing === "direct") {
-        expect(agentCtor).toHaveBeenCalledOnce();
-        expect(envHttpProxyAgentCtor).not.toHaveBeenCalled();
-        return;
-      }
-
-      expect(agentCtor).not.toHaveBeenCalled();
-      expect(envHttpProxyAgentCtor).toHaveBeenCalledOnce();
-      const options = requireRecord(
-        firstMockCall(envHttpProxyAgentCtor)?.[0],
-        "managed proxy options",
-      );
-      expect(options.noProxy).toBe("");
+      expectDispatchedRequest(routing === "direct" ? agentCtor : proxyAgentCtor, {
+        origin: "http://127.0.0.1:18789",
+        path: "/dashboard/",
+        method: "HEAD",
+      });
     },
   );
 
@@ -1835,7 +1846,10 @@ describe("fetchWithSsrFGuard hardening", () => {
     vi.stubEnv("NO_PROXY", "127.0.0.1");
     vi.stubEnv("no_proxy", "127.0.0.1");
     const checkServerIdentity = vi.fn();
-    const fetchImpl = vi.fn(async () => okResponse());
+    const fetchImpl = vi.fn(async (input: RequestInfo | URL, init?: RequestInit) => {
+      dispatchAttachedRequest(input, init);
+      return okResponse();
+    });
     const baseUrl = "https://127.0.0.1:18789";
 
     const result = await fetchConfiguredLocalOriginWithSsrFGuard({
@@ -1850,15 +1864,13 @@ describe("fetchWithSsrFGuard hardening", () => {
       },
     });
 
-    expect(agentCtor).not.toHaveBeenCalled();
-    expect(envHttpProxyAgentCtor).toHaveBeenCalledOnce();
-    const options = requireRecord(
-      firstMockCall(envHttpProxyAgentCtor)?.[0],
-      "managed proxy options",
-    );
-    expect(options.noProxy).toBe("");
+    const options = expectDispatchedRequest(proxyAgentCtor, {
+      origin: baseUrl,
+      path: "/dashboard/",
+      method: "GET",
+    });
     expect(options.requestTls).toEqual({ ca: "gateway-certificate", checkServerIdentity });
-    expect(requireRecord(options.proxyTls, "managed proxy TLS options")).not.toHaveProperty("ca");
+    expect(options).not.toHaveProperty("proxyTls.ca");
     expect(process.env.http_proxy).toBe("http://127.0.0.1:7890");
     await result.release();
   });
@@ -2155,43 +2167,66 @@ describe("fetchWithSsrFGuard hardening", () => {
   });
 
   it("rejects timed-out fetches even when dispatcher close stalls", async () => {
-    agentCtor.mockImplementationOnce(function MockAgent(this: { close: () => Promise<void> }) {
-      this.close = () => new Promise(() => {});
-    });
+    const close = vi.fn(() => new Promise<void>(() => {}));
+    const destroy = vi.fn();
+    agentCtor.mockImplementationOnce(
+      function MockAgent(this: { close: typeof close; destroy: typeof destroy }) {
+        this.close = close;
+        this.destroy = destroy;
+      },
+    );
     (globalThis as Record<string, unknown>)[TEST_UNDICI_RUNTIME_DEPS_KEY] = {
       Agent: agentCtor,
       EnvHttpProxyAgent: envHttpProxyAgentCtor,
       ProxyAgent: proxyAgentCtor,
       fetch: vi.fn(async () => okResponse()),
     };
+    const started = createDeferredCore<AbortSignal>();
     const fetchImpl = vi.fn(
       (_input: RequestInfo | URL, init?: RequestInit) =>
         new Promise<Response>((_resolve, reject) => {
-          init?.signal?.addEventListener("abort", () => {
-            reject(
-              toLintErrorObject(init.signal?.reason ?? new Error("aborted"), "Non-Error rejection"),
-            );
+          const signal = init?.signal;
+          if (!signal) {
+            throw new Error("Expected a request deadline signal");
+          }
+          signal.addEventListener("abort", () => {
+            reject(toLintErrorObject(signal.reason, "Non-Error rejection"));
           });
+          started.resolve(signal);
         }),
     );
+    vi.useFakeTimers();
+    try {
+      let outcome: string | undefined;
+      const completed = fetchWithSsrFGuard({
+        url: "https://public.example/resource",
+        fetchImpl,
+        lookupFn: createPublicLookup(),
+        timeoutMs: 1,
+      }).then(
+        () => {
+          outcome = "resolved";
+        },
+        (error: unknown) => {
+          outcome = error instanceof Error ? error.name : "rejected";
+        },
+      );
+      const signal = await started.promise;
 
-    const fetchPromise = fetchWithSsrFGuard({
-      url: "https://public.example/resource",
-      fetchImpl,
-      lookupFn: createPublicLookup(),
-      timeoutMs: 1,
-    });
+      // Keep the deadline/cleanup ordering independent of event-loop starvation.
+      await vi.advanceTimersByTimeAsync(1);
+      expect(signal.aborted).toBe(true);
+      expect(close).toHaveBeenCalledOnce();
+      expect(destroy).not.toHaveBeenCalled();
+      expect(outcome).toBeUndefined();
 
-    const outcome = await raceWithTimeoutResult(
-      fetchPromise.then(
-        () => "resolved",
-        (error: unknown) => (error instanceof Error ? error.name : "rejected"),
-      ),
-      250,
-      "hung",
-    );
-
-    expect(outcome).toBe("TimeoutError");
+      await vi.advanceTimersByTimeAsync(249);
+      expect(destroy).toHaveBeenCalledOnce();
+      expect(outcome).toBe("TimeoutError");
+      await completed;
+    } finally {
+      vi.useRealTimers();
+    }
   });
 
   it("aborts a stalled DNS preflight from the caller signal without dispatching", async () => {
@@ -2246,19 +2281,57 @@ describe("fetchWithSsrFGuard hardening", () => {
         fetch: vi.fn(async () => okResponse()),
       };
       const fetchImpl = vi.fn(async () => okResponse());
+      const lookupFn = createPublicLookup();
+      const beforeRequest = vi.fn();
 
       const result = await fetchWithSsrFGuard({
         url: "https://public.example/resource",
         fetchImpl,
-        lookupFn: createPublicLookup(),
+        lookupFn,
+        beforeRequest,
       });
 
       expect(fetchImpl).toHaveBeenCalledTimes(1);
+      expect(lookupFn).toHaveBeenCalledBefore(beforeRequest);
+      expect(beforeRequest).toHaveBeenCalledBefore(fetchImpl);
       expectAgentConstructorOptions({ bodyTimeout: 1_900_000, headersTimeout: 1_900_000 });
       await result.release();
     } finally {
       resetGlobalUndiciStreamTimeoutsForTests();
     }
+  });
+
+  it("propagates a final dispatch rejection without sending the request", async () => {
+    const rejection = new Error("request owner closed");
+    const fetchImpl = vi.fn(async () => okResponse());
+
+    await expect(
+      fetchWithSsrFGuard({
+        url: "https://public.example/resource",
+        fetchImpl,
+        lookupFn: createPublicLookup(),
+        beforeRequest: () => {
+          throw rejection;
+        },
+      }),
+    ).rejects.toBe(rejection);
+
+    expect(fetchImpl).not.toHaveBeenCalled();
+  });
+
+  it("rejects an asynchronous final dispatch callback before sending the request", async () => {
+    const fetchImpl = vi.fn(async () => okResponse());
+
+    await expect(
+      fetchWithSsrFGuard({
+        url: "https://public.example/resource",
+        fetchImpl,
+        lookupFn: createPublicLookup(),
+        beforeRequest: (() => Promise.resolve()) as never,
+      }),
+    ).rejects.toThrow("beforeRequest must be synchronous");
+
+    expect(fetchImpl).not.toHaveBeenCalled();
   });
 
   it("allows explicit proxy on localhost when allowPrivateProxy is true even with restrictive hostnameAllowlist", async () => {
@@ -2333,37 +2406,99 @@ describe("fetchWithSsrFGuard hardening", () => {
     await result.release();
   });
 
-  it("skips target DNS pinning in trusted explicit-proxy mode after hostname-policy checks", async () => {
+  it.each(["http", "socks", "socks5"])(
+    "skips target DNS pinning through trusted %s proxies after hostname-policy checks",
+    async (protocol) => {
+      (globalThis as Record<string, unknown>)[TEST_UNDICI_RUNTIME_DEPS_KEY] = {
+        Agent: agentCtor,
+        EnvHttpProxyAgent: envHttpProxyAgentCtor,
+        ProxyAgent: proxyAgentCtor,
+        fetch: vi.fn(async () => okResponse()),
+      };
+      const lookupFn: LookupFn = vi.fn(async (hostname: string) => {
+        if (hostname === "localhost") {
+          return [{ address: "127.0.0.1", family: 4 }];
+        }
+        throw new Error(`unexpected target DNS lookup for ${hostname}`);
+      }) as unknown as LookupFn;
+      const fetchImpl = vi.fn(async () => okResponse());
+
+      const result = await fetchWithSsrFGuard({
+        url: "https://api.telegram.org/file/bot123/photos/test.jpg",
+        fetchImpl,
+        lookupFn,
+        mode: GUARDED_FETCH_MODE.TRUSTED_EXPLICIT_PROXY,
+        policy: { hostnameAllowlist: ["api.telegram.org"] },
+        dispatcherPolicy: {
+          mode: "explicit-proxy",
+          proxyUrl: `${protocol}://localhost:6152`,
+          allowPrivateProxy: true,
+        },
+      });
+
+      expect(fetchImpl).toHaveBeenCalledTimes(1);
+      expect(lookupFn).toHaveBeenCalledOnce();
+      expect(lookupFn).toHaveBeenCalledWith("localhost", { all: true });
+      await result.release();
+    },
+  );
+
+  it.each(["socks", "socks5"])(
+    "rejects %s proxies in strict mode before remote target DNS can bypass pinning",
+    async (protocol) => {
+      const fetchImpl = vi.fn(async () => okResponse());
+      await expect(
+        fetchWithSsrFGuard({
+          url: "https://public.example/resource",
+          fetchImpl,
+          lookupFn: createPublicLookup(),
+          dispatcherPolicy: {
+            mode: "explicit-proxy",
+            proxyUrl: `${protocol}://localhost:6152`,
+            allowPrivateProxy: true,
+          },
+        }),
+      ).rejects.toThrow("Explicit proxy URL must use http or https");
+      expect(fetchImpl).not.toHaveBeenCalled();
+    },
+  );
+
+  it("selects proxy policy again after redirects and pins direct targets", async () => {
     (globalThis as Record<string, unknown>)[TEST_UNDICI_RUNTIME_DEPS_KEY] = {
       Agent: agentCtor,
       EnvHttpProxyAgent: envHttpProxyAgentCtor,
       ProxyAgent: proxyAgentCtor,
       fetch: vi.fn(async () => okResponse()),
     };
-    const lookupFn: LookupFn = vi.fn(async (hostname: string) => {
-      if (hostname === "localhost") {
-        return [{ address: "127.0.0.1", family: 4 }];
-      }
-      throw new Error(`unexpected target DNS lookup for ${hostname}`);
-    }) as unknown as LookupFn;
-    const fetchImpl = vi.fn(async () => okResponse());
-
+    const lookupFn = createPublicLookup();
+    const beforeRequest = vi.fn();
+    const fetchImpl = vi
+      .fn()
+      .mockResolvedValueOnce(redirectResponse("https://direct.example/second"))
+      .mockResolvedValueOnce(redirectResponse("https://proxied.example/third"))
+      .mockResolvedValueOnce(okResponse());
     const result = await fetchWithSsrFGuard({
-      url: "https://api.telegram.org/file/bot123/photos/test.jpg",
+      url: "https://proxied.example/first",
       fetchImpl,
       lookupFn,
+      beforeRequest,
       mode: GUARDED_FETCH_MODE.TRUSTED_EXPLICIT_PROXY,
-      policy: { hostnameAllowlist: ["api.telegram.org"] },
-      dispatcherPolicy: {
-        mode: "explicit-proxy",
-        proxyUrl: "http://localhost:6152",
-        allowPrivateProxy: true,
-      },
+      resolveDispatcherPolicy: (url) =>
+        url.hostname === "direct.example"
+          ? undefined
+          : {
+              mode: "explicit-proxy",
+              proxyUrl: "http://proxy.example:6152",
+            },
     });
-
-    expect(fetchImpl).toHaveBeenCalledTimes(1);
-    expect(lookupFn).toHaveBeenCalledOnce();
-    expect(lookupFn).toHaveBeenCalledWith("localhost", { all: true });
+    expect(proxyAgentCtor).toHaveBeenCalledTimes(2);
+    expect(agentCtor).toHaveBeenCalledOnce();
+    expect(vi.mocked(lookupFn).mock.calls.map(([hostname]) => hostname)).toEqual([
+      "proxy.example",
+      "direct.example",
+      "proxy.example",
+    ]);
+    expect(beforeRequest).toHaveBeenCalledTimes(3);
     await result.release();
   });
 
@@ -2482,25 +2617,31 @@ describe("fetchWithSsrFGuard hardening", () => {
     await result.release();
   });
 
-  it("enforces hostnameAllowlist in trusted env proxy mode before dispatch", async () => {
-    clearProxyEnv();
-    vi.stubEnv("HTTPS_PROXY", "http://127.0.0.1:7890");
-    const lookupFn = vi.fn() as unknown as LookupFn;
-    const fetchImpl = vi.fn(async () => okResponse());
+  it.each([
+    { policy: { hostnameAllowlist: ["*.permitted.example"] }, reason: /allowlist/i },
+    { policy: { blockedHostnames: ["not-allowed.example"] }, reason: /configured blocklist/i },
+  ])(
+    "enforces hostname policy $policy in trusted env proxy mode before dispatch",
+    async ({ policy, reason }) => {
+      clearProxyEnv();
+      vi.stubEnv("HTTPS_PROXY", "http://127.0.0.1:7890");
+      const lookupFn = vi.fn() as unknown as LookupFn;
+      const fetchImpl = vi.fn(async () => okResponse());
 
-    await expect(
-      fetchWithSsrFGuard({
-        url: "https://not-allowed.example/resource",
-        fetchImpl,
-        lookupFn,
-        mode: GUARDED_FETCH_MODE.TRUSTED_ENV_PROXY,
-        policy: { hostnameAllowlist: ["*.permitted.example"] },
-      }),
-    ).rejects.toThrow(/allowlist/i);
+      await expect(
+        fetchWithSsrFGuard({
+          url: "https://not-allowed.example/resource",
+          fetchImpl,
+          lookupFn,
+          mode: GUARDED_FETCH_MODE.TRUSTED_ENV_PROXY,
+          policy,
+        }),
+      ).rejects.toThrow(reason);
 
-    expect(lookupFn).not.toHaveBeenCalled();
-    expect(fetchImpl).not.toHaveBeenCalled();
-  });
+      expect(lookupFn).not.toHaveBeenCalled();
+      expect(fetchImpl).not.toHaveBeenCalled();
+    },
+  );
 
   it.each([
     "http://localhost.../resource",

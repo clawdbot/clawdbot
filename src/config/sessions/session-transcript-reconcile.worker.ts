@@ -1,26 +1,41 @@
 /** Worker entrypoint for transcript parsing and active-branch resolution only. */
 import { parentPort, workerData } from "node:worker_threads";
 import {
-  closeOpenClawAgentDatabaseByPath,
-  openOpenClawAgentDatabase,
-} from "../../state/openclaw-agent-db.js";
+  claimOpenClawAgentDatabaseLease,
+  releaseOpenClawAgentDatabaseLease,
+} from "../../state/openclaw-agent-db-lease.js";
+import { openOpenClawAgentDatabaseReadOnly } from "../../state/openclaw-agent-db-readonly.js";
+import { closeOpenClawStateDatabase } from "../../state/openclaw-state-db.js";
 import { listSessionsNeedingTranscriptIndexReconcile } from "./session-transcript-index.js";
 import {
   prepareSessionTranscriptProjection,
+  prepareMemorySessionTranscriptProjection,
+  type SessionTranscriptProjectionRow,
   type PreparedSessionTranscriptProjection,
   type PreparedSessionTranscriptProjectionMetadata,
   type TranscriptIndexEntry,
 } from "./session-transcript-projection-rebuild.js";
+import type { MemoryTranscriptProjectionFrame } from "./session-transcript-reconcile-memory.js";
 
 const ACTIVE_ROWS_PER_CHUNK = 512;
 const FTS_ROWS_PER_CHUNK = 128;
 const FTS_TEXT_BYTES_PER_CHUNK = 256 * 1024;
 
-export type SessionTranscriptReconcileWorkerInput = {
+type ReconcileWorkerOwner = {
+  stateDir: string;
+  externallySupervised: boolean;
+};
+
+type ReconcileWorkerPlanInput = ReconcileWorkerOwner & {
   agentId: string;
   path: string;
   preferredSessionId?: string;
 };
+
+export type SessionTranscriptReconcileWorkerInput =
+  | (ReconcileWorkerPlanInput & { mode: "disk"; leaseId: string })
+  | { mode: "memory"; sessionIds: string[] }
+  | (ReconcileWorkerOwner & { mode: "release"; leaseId: string });
 
 export type EncodedTranscriptFtsChunk = {
   rows: Array<{
@@ -41,9 +56,12 @@ export type SessionTranscriptReconcileWorkerMessage =
     }
   | { type: "done" }
   | { type: "failed"; error: string }
+  | { type: "lease-released" }
+  | { type: "lease-release-failed"; error: string }
   | { type: "fts-chunk"; chunk: EncodedTranscriptFtsChunk; sessionId: string }
   | { type: "plan-finish"; sessionId: string }
-  | { type: "plan-start"; plan: PreparedSessionTranscriptProjectionMetadata };
+  | { type: "plan-start"; plan: PreparedSessionTranscriptProjectionMetadata }
+  | { type: "source-read"; sessionId: string };
 
 type SessionTranscriptReconcileWorkerCommand = { accepted: boolean; type: "continue" };
 
@@ -52,19 +70,38 @@ function parseWorkerInput(value: unknown): SessionTranscriptReconcileWorkerInput
     return undefined;
   }
   const input = value as Record<string, unknown>;
+  if (
+    input.mode === "memory" &&
+    Array.isArray(input.sessionIds) &&
+    input.sessionIds.every((sessionId) => typeof sessionId === "string")
+  ) {
+    return { mode: "memory", sessionIds: input.sessionIds };
+  }
+  if (typeof input.stateDir !== "string" || typeof input.externallySupervised !== "boolean") {
+    return undefined;
+  }
+  const owner = { stateDir: input.stateDir, externallySupervised: input.externallySupervised };
+  if (input.mode === "release" && typeof input.leaseId === "string") {
+    return { ...owner, mode: "release", leaseId: input.leaseId };
+  }
   if (typeof input.agentId !== "string" || typeof input.path !== "string") {
     return undefined;
   }
   if (input.preferredSessionId !== undefined && typeof input.preferredSessionId !== "string") {
     return undefined;
   }
-  return {
+  const plan = {
+    ...owner,
     agentId: input.agentId,
     path: input.path,
     ...(typeof input.preferredSessionId === "string"
       ? { preferredSessionId: input.preferredSessionId }
       : {}),
   };
+  if (input.mode === "disk" && typeof input.leaseId === "string") {
+    return { ...plan, mode: "disk", leaseId: input.leaseId };
+  }
+  return undefined;
 }
 
 function orderSessionIds(sessionIds: string[], preferredSessionId: string | undefined): string[] {
@@ -77,12 +114,33 @@ function orderSessionIds(sessionIds: string[], preferredSessionId: string | unde
   ];
 }
 
-const input = parseWorkerInput(workerData);
-if (!parentPort || !input) {
+const parsedInput = parseWorkerInput(workerData);
+if (!parentPort || !parsedInput) {
   throw new Error("session transcript reconcile worker requires valid worker data");
 }
 const port = parentPort;
-const reconcileInput: SessionTranscriptReconcileWorkerInput = input;
+const input: SessionTranscriptReconcileWorkerInput = parsedInput;
+function resolveLeaseEnvironment(owner: ReconcileWorkerOwner) {
+  return {
+    OPENCLAW_STATE_DIR: owner.stateDir,
+    ...(owner.externallySupervised ? { OPENCLAW_SUPERVISOR_MODE: "external" } : {}),
+  };
+}
+
+function releaseLease(owner: ReconcileWorkerOwner & { leaseId: string }): void {
+  try {
+    releaseOpenClawAgentDatabaseLease(owner.leaseId, { env: resolveLeaseEnvironment(owner) });
+    closeOpenClawStateDatabase();
+    port.postMessage({ type: "lease-released" } satisfies SessionTranscriptReconcileWorkerMessage);
+  } catch (error) {
+    port.postMessage({
+      type: "lease-release-failed",
+      error: error instanceof Error ? error.message : String(error),
+    } satisfies SessionTranscriptReconcileWorkerMessage);
+  } finally {
+    port.close();
+  }
+}
 
 function waitForContinue(): Promise<boolean> {
   return new Promise((resolve, reject) => {
@@ -168,22 +226,85 @@ async function streamPreparedProjection(plan: PreparedSessionTranscriptProjectio
   await postAndWait({ type: "plan-finish", sessionId: plan.sessionId });
 }
 
+async function prepareMemoryProjection(sessionId: string) {
+  const rows = new Map<number, SessionTranscriptProjectionRow>();
+  const decoder = new TextDecoder();
+  let fragments: string[] = [];
+  while (true) {
+    const pending = new Promise<MemoryTranscriptProjectionFrame>((resolve) => {
+      port.once("message", resolve);
+    });
+    port.postMessage({
+      type: "source-read",
+      sessionId,
+    } satisfies SessionTranscriptReconcileWorkerMessage);
+    const frame = await pending;
+    if (frame.type === "source-unavailable") {
+      return undefined;
+    }
+    if (frame.type === "source-end") {
+      const plan = prepareMemorySessionTranscriptProjection(
+        sessionId,
+        frame.snapshot.transcriptUpdatedAt,
+        rows,
+      );
+      rows.clear();
+      return plan;
+    }
+    fragments.push(decoder.decode(frame.bytes, { stream: !frame.final }));
+    if (frame.final) {
+      rows.set(frame.seq, {
+        seq: frame.seq,
+        created_at: frame.createdAt,
+        event_json: fragments.join(""),
+      });
+      fragments = [];
+    }
+  }
+}
+
 async function run(): Promise<void> {
+  if (input.mode === "release") {
+    releaseLease(input);
+    return;
+  }
+  const reconcileInput = input;
+  let closeDatabase: (() => void) | undefined;
   let terminalMessage: Extract<
     SessionTranscriptReconcileWorkerMessage,
     { type: "done" | "failed" }
   >;
   try {
-    const database = openOpenClawAgentDatabase({
-      agentId: reconcileInput.agentId,
-      path: reconcileInput.path,
-    });
-    const sessionIds = orderSessionIds(
-      listSessionsNeedingTranscriptIndexReconcile(database.db),
-      reconcileInput.preferredSessionId,
-    );
+    const database = (() => {
+      if (reconcileInput.mode === "memory") {
+        return undefined;
+      }
+      const options = {
+        agentId: reconcileInput.agentId,
+        path: reconcileInput.path,
+        env: resolveLeaseEnvironment(reconcileInput),
+      };
+      // The parent knows this identity before admission, even if native exit prevents a reply.
+      claimOpenClawAgentDatabaseLease(options, reconcileInput.leaseId);
+      const opened = openOpenClawAgentDatabaseReadOnly(options);
+      if (!opened.found) {
+        throw new Error(`Cannot prepare transcript indexes: ${opened.reason}`);
+      }
+      closeDatabase = opened.database.close;
+      return opened.database;
+    })();
+    const sessionIds =
+      reconcileInput.mode === "memory"
+        ? reconcileInput.sessionIds
+        : orderSessionIds(
+            listSessionsNeedingTranscriptIndexReconcile(database!.db),
+            reconcileInput.preferredSessionId,
+          );
     for (const sessionId of sessionIds) {
-      const plan = prepareSessionTranscriptProjection(database.db, sessionId);
+      const plan =
+        reconcileInput.mode === "memory"
+          ? await prepareMemoryProjection(sessionId)
+          : prepareSessionTranscriptProjection(database!.db, sessionId);
       if (plan) {
         await streamPreparedProjection(plan);
       }
@@ -197,12 +318,21 @@ async function run(): Promise<void> {
   }
 
   try {
-    // The parent terminates this worker as soon as it receives a terminal
-    // message, so release the durable database lease before reporting one.
-    closeOpenClawAgentDatabaseByPath(reconcileInput.path);
+    closeDatabase?.();
     port.postMessage(terminalMessage);
+    if (reconcileInput.mode === "disk") {
+      // The final parent write must finish before this independent deletion fence is released.
+      port.once("message", (message: { type?: unknown }) => {
+        if (message?.type !== "release") {
+          throw new Error("session transcript reconcile worker expected lease release");
+        }
+        releaseLease(reconcileInput);
+      });
+    }
   } finally {
-    port.close();
+    if (reconcileInput.mode === "memory") {
+      port.close();
+    }
   }
 }
 

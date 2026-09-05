@@ -1,6 +1,6 @@
 // Media and voice compatibility migrations retired from canonical runtime config.
 import { getRecord } from "../../../config/legacy.shared.js";
-import { deleteRetiredPath } from "./legacy-config-record-shared.js";
+import { deleteRetiredPath, visitAgentConfigScopes } from "./legacy-config-record-shared.js";
 
 export function moveVoice(owner: Record<string, unknown>, path: string, changes: string[]): void {
   if (!Object.hasOwn(owner, "voice")) {
@@ -250,28 +250,11 @@ export function stripRetiredTuningKnobs(raw: Record<string, unknown>): boolean {
   for (const path of RETIRED_TUNING_PATHS) {
     changed = deleteRetiredPath(raw, path) || changed;
   }
-  const agents = getRecord(raw.agents);
-  const defaults = getRecord(agents?.defaults);
-  if (defaults) {
+  visitAgentConfigScopes(raw, (agent) => {
     for (const path of RETIRED_AGENT_TUNING_PATHS) {
-      changed = deleteRetiredPath(defaults, path) || changed;
+      changed = deleteRetiredPath(agent, path) || changed;
     }
-  }
-  if (Array.isArray(agents?.list)) {
-    for (const agent of agents.list) {
-      for (const path of RETIRED_AGENT_TUNING_PATHS) {
-        changed = deleteRetiredPath(agent, path) || changed;
-      }
-    }
-  }
-  const entries = getRecord(agents?.entries);
-  if (entries) {
-    for (const agent of Object.values(entries)) {
-      for (const path of RETIRED_AGENT_TUNING_PATHS) {
-        changed = deleteRetiredPath(agent, path) || changed;
-      }
-    }
-  }
+  });
   return changed;
 }
 

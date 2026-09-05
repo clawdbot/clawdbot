@@ -60,12 +60,19 @@ jobs:
           mkdir -p .opengrep-out
           scripts/run-opengrep.sh --sarif --error
 
+      - name: Prepare SARIF for GitHub Code Scanning
+        id: github-sarif
+        if: always() && hashFiles('.opengrep-out/precise.sarif') != ''
+        run: >-
+          node scripts/opengrep-github-sarif.mjs .opengrep-out/precise.sarif
+          > .opengrep-out/precise.github.sarif
+
       - name: Upload SARIF to GitHub Code Scanning
         uses: github/codeql-action/upload-sarif@ff2f1c621b7f889edc0d3c761ac2e6a3f8cdb0dd # v4.37.7
-        # Only upload if the scan actually produced a SARIF file.
-        if: always() && hashFiles('.opengrep-out/precise.sarif') != ''
+        # Never publish a partial conversion; the raw audit artifact stays intact.
+        if: always() && steps.github-sarif.outcome == 'success'
         with:
-          sarif_file: .opengrep-out/precise.sarif
+          sarif_file: .opengrep-out/precise.github.sarif
           category: opengrep-full
 
       - name: Upload SARIF as workflow artifact

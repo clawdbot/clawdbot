@@ -1,4 +1,4 @@
-// Formatting helpers for status tokens, durations, prompt-cache stats, and daemon runtime snippets.
+// Formatting helpers for status tokens, prompt-cache stats, and daemon runtime snippets.
 // These helpers are shared by report rows and command output surfaces.
 
 import { normalizeLowercaseStringOrEmpty } from "@openclaw/normalization-core/string-coerce";
@@ -8,7 +8,6 @@ import type { BestEffortConfigSnapshot } from "../config/io.js";
 import { formatConfigIssueLines } from "../config/issue-format.js";
 import type { GatewayServiceRuntime } from "../daemon/service-runtime.js";
 import { getSystemdCgroupHygieneSummary } from "../daemon/service-runtime.js";
-import { formatDurationPrecise } from "../infra/format-time/format-duration.ts";
 import { formatRuntimeStatusWithDetails } from "../infra/runtime-status.ts";
 import type { SessionStatus } from "../status/types.js";
 import { formatTokenCount } from "../utils/token-format.js";
@@ -24,14 +23,6 @@ export const formatStatusConfigDiagnosticEntries = (
   ...formatConfigIssueLines(diagnostics.issues, "-", { normalizeRoot: true }),
   `- Fix: ${formatCliCommand("openclaw doctor --fix")}`,
 ];
-
-/** Formats a duration or returns `unknown` for missing/non-finite values. */
-export const formatDuration = (ms: number | null | undefined) => {
-  if (ms == null || !Number.isFinite(ms)) {
-    return "unknown";
-  }
-  return formatDurationPrecise(ms, { decimals: 1 });
-};
 
 /** Formats session token usage and prompt-cache hit rate for the sessions table. */
 export const formatTokensCompact = (

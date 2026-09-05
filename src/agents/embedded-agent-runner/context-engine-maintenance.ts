@@ -64,6 +64,8 @@ type ContextEngineMaintenanceParams = {
   reason: "bootstrap" | "compaction" | "turn";
   sessionManager?: Parameters<typeof rewriteTranscriptEntriesInSessionManager>[0]["sessionManager"];
   withSessionManagerRewriteLock?: SessionManagerRewriteLock;
+  assertActive?: () => void;
+  abortSignal?: AbortSignal;
   runtimeContext?: ContextEngineRuntimeContext;
   runtimeSettings?: ContextEngineRuntimeSettings;
   agentId?: string;
@@ -256,6 +258,7 @@ function buildContextEngineMaintenanceRuntimeContext(
     ...(params.sessionTarget ? { sessionTarget: params.sessionTarget } : {}),
     ...(params.allowDeferredCompactionExecution ? { allowDeferredCompactionExecution: true } : {}),
     rewriteTranscriptEntries: async (request) => {
+      params.assertActive?.();
       const runtimeAgentId = params.sessionTarget?.agentId ?? params.agentId;
       const runtimeSessionKey = normalizeOptionalString(
         params.sessionTarget?.sessionKey ?? params.sessionKey,
@@ -269,27 +272,33 @@ function buildContextEngineMaintenanceRuntimeContext(
           ? resolveSessionStorePathCore(params.config?.session?.store, { agentId: runtimeAgentId })
           : undefined);
       let runtimeTarget: Awaited<ReturnType<typeof resolveRuntimeTranscriptReadTarget>> | undefined;
-      let sessionManager = params.sessionManager;
-      if (!sessionManager) {
-        runtimeTarget = await resolveRuntimeTranscriptReadTarget({
-          sessionId: params.sessionTarget?.sessionId ?? params.sessionId,
-          sessionKey: runtimeSessionKey,
-          sessionFile: params.sessionFile,
-          ...(runtimeAgentId ? { agentId: runtimeAgentId } : {}),
-          ...(runtimeStorePath ? { storePath: runtimeStorePath } : {}),
-        });
-        sessionManager = SessionManager.open(runtimeTarget);
-      }
-      const rewriteSessionManagerEntries = () =>
-        rewriteTranscriptEntriesInSessionManager({
+      const rewriteSessionManagerEntries = async () => {
+        let sessionManager = params.sessionManager;
+        runtimeTarget = sessionManager?.getSessionTarget();
+        if (!sessionManager) {
+          runtimeTarget = await resolveRuntimeTranscriptReadTarget({
+            sessionId: params.sessionTarget?.sessionId ?? params.sessionId,
+            sessionKey: runtimeSessionKey,
+            sessionFile: params.sessionFile,
+            ...(runtimeAgentId ? { agentId: runtimeAgentId } : {}),
+            ...(runtimeStorePath ? { storePath: runtimeStorePath } : {}),
+          });
+          params.assertActive?.();
+          sessionManager = SessionManager.open(runtimeTarget);
+        }
+        params.assertActive?.();
+        return rewriteTranscriptEntriesInSessionManager({
           sessionManager,
           replacements: request.replacements,
         });
-      const result = params.withSessionManagerRewriteLock
-        ? await params.withSessionManagerRewriteLock(rewriteSessionManagerEntries)
-        : rewriteSessionManagerEntries();
+      };
+      const result = await (params.withSessionManagerRewriteLock
+        ? params.withSessionManagerRewriteLock(rewriteSessionManagerEntries)
+        : rewriteSessionManagerEntries());
+      params.assertActive?.();
       if (result.changed && runtimeTarget) {
         await publishTranscriptUpdate(runtimeTarget);
+        params.assertActive?.();
       }
       return result;
     },
@@ -298,7 +307,6 @@ function buildContextEngineMaintenanceRuntimeContext(
 
 async function executeContextEngineMaintenance(
   params: ContextEngineMaintenanceParams & {
-    abortSignal?: AbortSignal;
     contextEngine: ContextEngine;
     executionMode: "foreground" | "background";
   },
@@ -307,6 +315,7 @@ async function executeContextEngineMaintenance(
     return undefined;
   }
   params.abortSignal?.throwIfAborted();
+  params.assertActive?.();
   const result = await params.contextEngine.maintain({
     sessionId: params.sessionId,
     sessionKey: params.sessionKey,
@@ -325,6 +334,7 @@ async function executeContextEngineMaintenance(
     ...(params.abortSignal ? { abortSignal: params.abortSignal } : {}),
   });
   params.abortSignal?.throwIfAborted();
+  params.assertActive?.();
   if (result.changed) {
     log.info(
       `[context-engine] maintenance(${params.reason}) changed transcript ` +
@@ -627,8 +637,15 @@ export async function runContextEngineMaintenance(
     return undefined;
   }
 
-  const executionMode = params.executionMode ?? "foreground";
+  // Caller memory cannot be reopened by a deferred worker. Keep its manager,
+  // rewrite lock, and lifetime together even when background work is requested.
+  const ownsMemoryTranscript =
+    params.sessionManager !== undefined && params.sessionManager.getSessionTarget() === undefined;
+  const executionMode = ownsMemoryTranscript
+    ? "foreground"
+    : (params.executionMode ?? "foreground");
   const shouldDefer =
+    !ownsMemoryTranscript &&
     params.reason === "turn" &&
     executionMode !== "background" &&
     contextEngine.info.turnMaintenanceMode === "background";
@@ -661,6 +678,8 @@ export async function runContextEngineMaintenance(
   try {
     return await executeContextEngineMaintenance({ ...params, contextEngine, executionMode });
   } catch (err) {
+    params.abortSignal?.throwIfAborted();
+    params.assertActive?.();
     log.warn(`context engine maintain failed (${params.reason}): ${String(err)}`);
     return undefined;
   }

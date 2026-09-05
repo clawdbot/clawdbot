@@ -33,7 +33,11 @@ import {
 import { startThemeTransition } from "../../app/theme-transition.ts";
 import { resolveTheme, type ThemeMode, type ThemeName } from "../../app/theme.ts";
 import type { TypefaceId } from "../../app/typography.ts";
-import { confirmAndStartUpdate, type UpdateProgress } from "../../app/update-confirmation.ts";
+import {
+  confirmAndStartUpdate,
+  createUpdateProgressWatcher,
+  type UpdateProgress,
+} from "../../app/update-confirmation.ts";
 import { CONTROL_UI_BUILD_INFO } from "../../build-info.ts";
 import {
   loadStoredHiddenSessionCatalogIds,
@@ -43,6 +47,7 @@ import {
 import { renderLearnMoreLink, renderSettingsPageHeader } from "../../components/settings-ui.ts";
 import { renderSettingsWorkspace } from "../../components/settings-workspace.ts";
 import { i18n, isSupportedLocale, t, type Locale } from "../../i18n/index.ts";
+import { registerSettingsEnglish } from "../../i18n/locales/en-settings.ts";
 import { resolveControlUiServerQueueMode } from "../../lib/chat/follow-up-mode.ts";
 import { formatUiError } from "../../lib/format-error.ts";
 import { isMissingOperatorReadScopeError } from "../../lib/gateway-errors.ts";
@@ -88,6 +93,8 @@ import {
   type ConfigViewState,
 } from "./view.ts";
 
+registerSettingsEnglish();
+
 export type { ConfigPageId } from "./config-sections.ts";
 
 type ConfigFormMode = "form" | "raw";
@@ -114,6 +121,7 @@ const MOVED_SECTION_ROUTES: Record<string, { routeId: RouteId; keepSection: bool
   "communications:channels": { routeId: "channels", keepSection: false },
   "communications:broadcast": { routeId: "advanced", keepSection: true },
   "communications:talk": { routeId: "talk", keepSection: true },
+  "appearance:wizard": { routeId: "advanced", keepSection: true },
   "automation:approvals": { routeId: "security", keepSection: true },
   "ai-agents:memory": { routeId: "memory", keepSection: true },
   "ai-agents:models": { routeId: "model-providers", keepSection: false },
@@ -275,14 +283,12 @@ export class ConfigPage extends OpenClawLightDomElement {
   @state() private microphoneError: string | null = null;
   private microphoneLoaded = false;
   private microphoneRefreshRequestsPermission = false;
-  private microphonePermissionRefreshPending = false;
   @state() private cameraDevices: RealtimeTalkCameraDevice[] = [];
   @state() private cameraPermissionRequired = true;
   @state() private cameraLoading = false;
   @state() private cameraError: string | null = null;
   private cameraLoaded = false;
   private cameraRefreshRequestsPermission = false;
-  private cameraPermissionRefreshPending = false;
   private cameraSelectionRequest = 0;
   @state() private formModes: Record<ConfigPageId, ConfigFormMode> = {
     communications: "form",
@@ -429,6 +435,10 @@ export class ConfigPage extends OpenClawLightDomElement {
       (selection) => this.synchronizeSessionObserverAgent(selection.state.selectedId),
     )
     .watch(
+      () => this.context?.nativeDeviceSettings ?? undefined,
+      (nativeDeviceSettings, notify) => nativeDeviceSettings.subscribe(notify),
+    )
+    .watch(
       () => this.context?.nativeNotifications ?? undefined,
       (nativeNotifications, notify) => nativeNotifications.subscribe(notify),
     )
@@ -450,6 +460,11 @@ export class ConfigPage extends OpenClawLightDomElement {
   private readonly hiddenSessionCatalogsChanged = () => {
     this.hiddenSessionCatalogIds = loadStoredHiddenSessionCatalogIds();
   };
+
+  private retireMediaPermissionRequests() {
+    this.microphoneRefreshRequestsPermission = false;
+    this.cameraRefreshRequestsPermission = false;
+  }
 
   override connectedCallback() {
     super.connectedCallback();
@@ -479,6 +494,7 @@ export class ConfigPage extends OpenClawLightDomElement {
       this.hiddenSessionCatalogsChanged,
     );
     this.customThemeImportOwner.retireImport();
+    this.retireMediaPermissionRequests();
     this.mediaDeviceWatch?.();
     this.mediaDeviceWatch = null;
     this.systemInfoPolling.stop();
@@ -496,6 +512,7 @@ export class ConfigPage extends OpenClawLightDomElement {
   override willUpdate(changed: PropertyValues) {
     if (changed.get("pageId") === "appearance" && this.pageId !== "appearance") {
       this.customThemeImportOwner.retireImport();
+      this.retireMediaPermissionRequests();
     }
     if (changed.has("pageId") || changed.has("routeData")) {
       this.syncRouteData();
@@ -512,7 +529,7 @@ export class ConfigPage extends OpenClawLightDomElement {
     this.syncUpdateCountdownPolling();
     this.scrollToPendingRouteTarget();
     // Device labels stay hidden until the user grants media permission; each
-    // refresh button next to a picker requests its permission explicitly.
+    // picker requests its permission explicitly when opened.
     if (this.pageId === "appearance" && !this.microphoneLoaded) {
       this.microphoneLoaded = true;
       void this.refreshMicrophones(false);
@@ -525,16 +542,16 @@ export class ConfigPage extends OpenClawLightDomElement {
 
   private async refreshMicrophones(requestPermission: boolean) {
     if (this.microphoneLoading) {
-      if (requestPermission && !this.microphoneRefreshRequestsPermission) {
-        this.microphonePermissionRefreshPending = true;
-      }
+      this.microphoneRefreshRequestsPermission ||= requestPermission;
       return;
     }
     this.microphoneLoading = true;
     this.microphoneRefreshRequestsPermission = requestPermission;
     this.microphoneError = null;
     try {
-      const result = await discoverRealtimeTalkInputs(requestPermission);
+      const result = await discoverRealtimeTalkInputs(
+        () => this.microphoneRefreshRequestsPermission,
+      );
       this.microphoneDevices = result.devices;
       this.microphonePermissionRequired = result.permissionRequired;
       this.microphoneError = result.issue
@@ -548,24 +565,18 @@ export class ConfigPage extends OpenClawLightDomElement {
       this.microphoneLoading = false;
       this.microphoneRefreshRequestsPermission = false;
     }
-    if (this.microphonePermissionRefreshPending) {
-      this.microphonePermissionRefreshPending = false;
-      await this.refreshMicrophones(true);
-    }
   }
 
   private async refreshCameras(requestPermission: boolean) {
     if (this.cameraLoading) {
-      if (requestPermission && !this.cameraRefreshRequestsPermission) {
-        this.cameraPermissionRefreshPending = true;
-      }
+      this.cameraRefreshRequestsPermission ||= requestPermission;
       return;
     }
     this.cameraLoading = true;
     this.cameraRefreshRequestsPermission = requestPermission;
     this.cameraError = null;
     try {
-      const result = await discoverRealtimeTalkCameras(requestPermission);
+      const result = await discoverRealtimeTalkCameras(() => this.cameraRefreshRequestsPermission);
       this.cameraDevices = result.devices;
       this.cameraPermissionRequired = result.permissionRequired;
       this.cameraError = result.issue
@@ -576,10 +587,6 @@ export class ConfigPage extends OpenClawLightDomElement {
     } finally {
       this.cameraLoading = false;
       this.cameraRefreshRequestsPermission = false;
-    }
-    if (this.cameraPermissionRefreshPending) {
-      this.cameraPermissionRefreshPending = false;
-      await this.refreshCameras(true);
     }
   }
 
@@ -808,7 +815,9 @@ export class ConfigPage extends OpenClawLightDomElement {
       this.isConnected &&
       this.systemInfoGatewaySource === gatewaySource &&
       this.context.gateway.snapshot.client === client &&
-      this.context.agentSelection.state.selectedId === agentId;
+      this.context.agentSelection.state.selectedId === agentId &&
+      // Agent selection can cycle A -> B -> A while the first A load is still pending.
+      this.sessionObserverModelsRequest?.promise === promise;
     const promise = loadModelCatalog(client, { agentId, preparedOnly: true })
       .then(({ models }) => {
         if (isCurrent()) {
@@ -1043,23 +1052,8 @@ export class ConfigPage extends OpenClawLightDomElement {
 
   // The update dialog outlives this page and the connection, so it reads live
   // snapshots rather than the values captured during a render.
-  private readonly watchUpdateProgress = (listener: (progress: UpdateProgress) => void) => {
-    const emit = () => {
-      const banner = this.context.overlays.snapshot.updateStatusBanner;
-      listener({
-        busy: this.isUpdateBusy(),
-        connected: this.context.gateway.snapshot.phase === "connected",
-        failure: banner && banner.tone !== "info" ? banner.text : null,
-      });
-    };
-    const stopOverlays = this.context.overlays.subscribe(emit);
-    const stopGateway = this.context.gateway.subscribe(emit);
-    emit();
-    return () => {
-      stopOverlays();
-      stopGateway();
-    };
-  };
+  private readonly watchUpdateProgress = (listener: (progress: UpdateProgress) => void) =>
+    createUpdateProgressWatcher(this.context)(listener);
 
   private isCuratedConfigMutationDisabled(): boolean {
     const runtimeState = this.context.runtimeConfig.state;
@@ -1082,6 +1076,7 @@ export class ConfigPage extends OpenClawLightDomElement {
       const overlaySnapshot = this.context.overlays.snapshot;
       const canAdmin = hasOperatorAdminAccess(gatewaySnapshot.hello?.auth ?? null);
       return renderUpdates({
+        nativeDeviceSettings: this.context.nativeDeviceSettings,
         configObject,
         gatewayVersion:
           this.context.config.current.serverVersion ??
@@ -1094,7 +1089,8 @@ export class ConfigPage extends OpenClawLightDomElement {
         heldUpdateCampaignId: overlaySnapshot.heldUpdateCampaignId,
         updateAvailable: overlaySnapshot.updateAvailable,
         statusBanner: overlaySnapshot.updateStatusBanner,
-        recordedAttempt: overlaySnapshot.recordedUpdateAttempt,
+        run: overlaySnapshot.updateRun,
+        connected: gatewaySnapshot.phase === "connected",
         configBusy: this.isCuratedConfigMutationDisabled(),
         canAdmin,
         canUpdate: canCallGatewayMethod(gatewaySnapshot, "update.run", "operator.admin"),
@@ -1102,12 +1098,16 @@ export class ConfigPage extends OpenClawLightDomElement {
         canHoldUpdate: canCallGatewayMethod(gatewaySnapshot, "update.hold", "operator.admin"),
         updateBusy: this.isUpdateBusy(),
         onChannelChange: (channel) => runtimeConfig.patchForm(["update", "channel"], channel),
+        onUpdateChecksChange: (enabled) =>
+          runtimeConfig.patchForm(["update", "checkOnStart"], enabled),
         onAutomaticUpdatesChange: (enabled) =>
           runtimeConfig.patchForm(["update", "auto", "enabled"], enabled),
         onUpdateNow: () =>
           void confirmAndStartUpdate({
             startGatewayUpdate: () => void this.context.overlays.runUpdate(),
             watchUpdateProgress: this.watchUpdateProgress,
+            onCheckStatus: () => this.context.overlays.refreshUpdateStatus(),
+            onAcknowledge: () => this.context.overlays.acknowledgeUpdateRun(),
             updateAvailable: overlaySnapshot.updateAvailable,
             updateSchedule: overlaySnapshot.updateSchedule,
             // This row has no native-decline listener, so a handoff the Mac app
@@ -1203,8 +1203,8 @@ export class ConfigPage extends OpenClawLightDomElement {
       themeModeProvenance: themeModePref.provenance,
       themeModeResetValue: themeModePref.resetValue ?? UI_APPEARANCE_DEFAULTS.themeMode,
       accent: this.settings.accent,
-      accentOverridden: accentPref.overridden,
       accentProvenance: accentPref.provenance,
+      accentResetValue: accentPref.resetValue,
       fontUi: this.settings.fontUi,
       fontChat: this.settings.fontChat,
       fontUiProvenance: this.currentSyncedPref("fontUi").provenance,
@@ -1356,9 +1356,13 @@ export class ConfigPage extends OpenClawLightDomElement {
         this.context.nativeNotifications?.requestPermission(),
       onNativeNotificationsSendTest: () => this.context.nativeNotifications?.sendTest(),
       webPush: this.context.webPush.snapshot,
-      onWebPushSubscribe: () => void this.context.webPush.enable(),
-      onWebPushUnsubscribe: () => void this.context.webPush.disable(),
-      onWebPushTest: () => void this.context.webPush.sendTest(),
+      onWebPushSubscribe: () => void this.context.webPush.run({ kind: "enable" }),
+      onWebPushUnsubscribe: () => void this.context.webPush.run({ kind: "disable" }),
+      onWebPushTest: () => void this.context.webPush.run({ kind: "test" }),
+      onWebPushSetUserPreferences: (preferences) =>
+        void this.context.webPush.run({ kind: "set", scope: "user", preferences }),
+      onWebPushSetDevicePreferences: (preferences) =>
+        void this.context.webPush.run({ kind: "set", scope: "device", preferences }),
     };
     if (this.pageId === "mcp") {
       return renderMcp({
@@ -1444,14 +1448,16 @@ export class ConfigPage extends OpenClawLightDomElement {
       asConfigRecord(configState.configForm ?? configState.configSnapshot?.config) ?? {};
     const body = this.renderAdvancedConfig(configObject);
     return html`
-      ${this.pageId === "memory"
-        ? nothing
-        : html`
-            ${renderSettingsPageHeader({
-              title: configPageTitle(this.pageId),
-              subtitle: renderConfigPageSubtitle(this.pageId),
-            })}
-          `}
+      ${
+        this.pageId === "memory"
+          ? nothing
+          : html`
+              ${renderSettingsPageHeader({
+                title: configPageTitle(this.pageId),
+                subtitle: renderConfigPageSubtitle(this.pageId),
+              })}
+            `
+      }
       ${renderSettingsWorkspace(body)}
     `;
   }

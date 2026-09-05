@@ -5,6 +5,7 @@
 import type { AssistantMessage } from "openclaw/plugin-sdk/llm";
 import { describe, expect, it } from "vitest";
 import {
+  createAssistantVisibleStreamText,
   extractEmbeddedAssistantText,
   extractAssistantThinking,
   extractAssistantVisibleText,
@@ -86,6 +87,21 @@ function makeAssistantMessage(
   } as unknown as AssistantMessage;
 }
 
+describe("createAssistantVisibleStreamText", () => {
+  it("keeps interleaved streams independent when one is replaced", () => {
+    const first = createAssistantVisibleStreamText();
+    const second = createAssistantVisibleStreamText();
+
+    expect(first.append("\n\nAlpha")).toEqual({ text: "Alpha", delta: "Alpha" });
+    expect(second.append("\n\nBravo")).toEqual({ text: "Bravo", delta: "Bravo" });
+    expect(first.append("\n\nAlpha")).toEqual({ text: "Alpha", delta: "" });
+    expect(second.append(" is here")).toEqual({ text: "Bravo is here", delta: " is here" });
+    expect(first.replace("Reset")).toEqual({ text: "Reset", delta: null });
+    expect(second.append("\n\nBravo is here")).toEqual({ text: "Bravo is here", delta: "" });
+    expect(first.append("!")).toEqual({ text: "Reset!", delta: "!" });
+  });
+});
+
 describe("extractThinkingFromTaggedStream", () => {
   it("matches full-buffer extraction at every randomized chunk boundary", () => {
     const cases = [
@@ -103,11 +119,23 @@ describe("extractThinkingFromTaggedStream", () => {
         let prefix = "";
         for (const chunk of randomChunks(text, seed)) {
           prefix += chunk;
-          expect(extractThinkingFromTaggedStream(prefix, state), `${text} (seed ${seed})`).toBe(
-            extractThinkingFromTaggedStreamReference(prefix),
-          );
+          expect(
+            extractThinkingFromTaggedStream(prefix, state, chunk),
+            `${text} (seed ${seed})`,
+          ).toBe(extractThinkingFromTaggedStreamReference(prefix));
         }
       }
+    }
+  });
+
+  it("resumes from an authoritative checkpoint before consuming later deltas", () => {
+    const state = createThinkingTagStreamState();
+    let text = "<think>Checkpoint";
+    for (const delta of [" continues", "</think>Visible", "", "<think>second</think>"]) {
+      text += delta;
+      expect(extractThinkingFromTaggedStream(text, state, delta)).toBe(
+        extractThinkingFromTaggedStreamReference(text),
+      );
     }
   });
 });

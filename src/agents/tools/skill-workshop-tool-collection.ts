@@ -19,6 +19,7 @@ import { listSkillCollectionReviewOutcomes } from "../../skills/workshop/collect
 import { readSkillProposalTargetTreeSha256 } from "../../skills/workshop/proposal-bundle.js";
 import { stringEnum } from "../schema/typebox.js";
 import { readToolStringParam, ToolInputError } from "./common.js";
+import { textResult } from "./tool-results.js";
 
 const SKILL_COLLECTION_HISTORY_REASON_MAX_CHARS = 300;
 const SKILL_COLLECTION_HISTORY_NAME_LIMIT = 10;
@@ -122,15 +123,10 @@ export async function executeSkillCollectionReconcile(params: {
       params.context.reconciling = false;
     }
   }
-  return {
-    content: [
-      {
-        type: "text" as const,
-        text: `Reconciled the skill collection: kept ${result.kept.length}, wrote ${result.written.length}, dropped ${result.dropped.length}. Backup ${result.backupId}.`,
-      },
-    ],
-    details: result,
-  };
+  return textResult(
+    `Reconciled the skill collection: kept ${result.kept.length}, wrote ${result.written.length}, dropped ${result.dropped.length}. Backup ${result.backupId}.`,
+    result,
+  );
 }
 
 export async function executeSkillCollectionRestore(params: {
@@ -138,15 +134,10 @@ export async function executeSkillCollectionRestore(params: {
   env?: NodeJS.ProcessEnv;
 }) {
   const result = await restoreLatestSkillCollectionBackup(params);
-  return {
-    content: [
-      {
-        type: "text" as const,
-        text: `Restored skill collection backup ${result.backupId}: restored ${result.restored.length}, removed ${result.removed.length}.`,
-      },
-    ],
-    details: result,
-  };
+  return textResult(
+    `Restored skill collection backup ${result.backupId}: restored ${result.restored.length}, removed ${result.removed.length}.`,
+    result,
+  );
 }
 
 export function executeSkillCollectionHistory(
@@ -189,15 +180,10 @@ export function executeSkillCollectionHistory(
   if (truncated) {
     text = `${truncateUtf16Safe(text, textLimit)}${SKILL_COLLECTION_HISTORY_TRUNCATION_MARKER}`;
   }
-  return {
-    content: [
-      {
-        type: "text" as const,
-        text: outcomes.length === 0 ? "No recorded collection reviews." : text,
-      },
-    ],
-    details: { reviews, truncated },
-  };
+  return textResult(outcomes.length === 0 ? "No recorded collection reviews." : text, {
+    reviews,
+    truncated,
+  });
 }
 
 function readCollectionPlanParam(params: Record<string, unknown>): SkillCollectionPlanEntry[] {

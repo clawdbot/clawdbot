@@ -46,8 +46,9 @@ export function resolveManagedSecretRefRuntimeProviderAuth(params: {
   if (!runtimeConfig || !usesRuntimeProvider) {
     return undefined;
   }
-  const resolved = authConfig.resolveLiteralProviderConfigApiKeyAuth({
+  const resolved = authConfig.resolveRuntimeProviderConfigApiKeyAuth({
     cfg: runtimeConfig,
+    sourceConfig,
     provider: params.provider,
   });
   if (!resolved?.apiKey) {

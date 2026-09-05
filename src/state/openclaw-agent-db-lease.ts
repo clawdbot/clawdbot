@@ -8,7 +8,6 @@ import {
 import { normalizeAgentId } from "../routing/session-key.js";
 import { getFileLockProcessStartTime, isPidDefinitelyDead } from "../shared/pid-alive.js";
 import {
-  assertAgentDeletionIdentityClaimAllowed,
   assertAgentDeletionPathFence,
   prepareAgentDeletionPathFence,
 } from "./agent-deletion-journal.js";
@@ -27,6 +26,13 @@ export const AGENT_DATABASE_MAINTENANCE_LEASE = {
   scope: "core:agent-database-maintenance",
   key: "global",
 } as const;
+
+export class OpenClawAgentDatabaseLeaseActiveError extends Error {
+  constructor(message: string) {
+    super(message);
+    this.name = "OpenClawAgentDatabaseLeaseActiveError";
+  }
+}
 
 const maintenanceAuthority = new AsyncLocalStorage<OpenClawStateLeaseContext>();
 
@@ -48,17 +54,32 @@ export function assertAgentDatabaseMaintenanceAuthority(): void {
   authority.assertOwned();
 }
 
-export function claimOpenClawAgentDatabaseLease(params: {
-  agentId: string;
-  path: string;
-  env?: NodeJS.ProcessEnv;
-}): string {
+/** Revalidate a maintenance owner when present, without requiring ordinary opens to hold one. */
+export function assertAgentDatabaseMaintenanceAuthorityIfPresent(): void {
+  maintenanceAuthority.getStore()?.assertOwned();
+}
+
+/** Verify the maintenance owner and its independent heartbeat before a synchronous phase. */
+export function renewAgentDatabaseMaintenanceAuthorityIfPresent(): void {
+  const authority = maintenanceAuthority.getStore();
+  if (!authority) {
+    return;
+  }
+  if (!authority.renew) {
+    throw new Error("Agent database maintenance authority cannot renew its lease.");
+  }
+  authority.renew();
+}
+
+export function claimOpenClawAgentDatabaseLease(
+  params: { agentId: string; path: string; env?: NodeJS.ProcessEnv },
+  leaseId: string = crypto.randomUUID(),
+): string {
   const agentId = normalizeAgentId(params.agentId);
   const deletionFence = prepareAgentDeletionPathFence(
     { agentId, path: params.path },
     { env: params.env },
   );
-  const leaseId = crypto.randomUUID();
   const ownerStartTime = getFileLockProcessStartTime(process.pid);
   runOpenClawStateWriteTransaction(
     (database) => {
@@ -78,12 +99,7 @@ export function claimOpenClawAgentDatabaseLease(params: {
           "Agent database maintenance is in progress; retry after openclaw doctor --fix completes.",
         );
       }
-      const deletion = executeSqliteQueryTakeFirstSync(
-        database.db,
-        db.selectFrom("agent_deletion_journal").select("agent_id").where("agent_id", "=", agentId),
-      );
-      assertAgentDeletionIdentityClaimAllowed(agentId, deletion?.agent_id);
-      assertAgentDeletionPathFence(database.db, deletionFence);
+      assertAgentDeletionPathFence(database, deletionFence);
       executeSqliteQuerySync(
         database.db,
         db.insertInto("agent_database_leases").values({
@@ -182,12 +198,12 @@ export function assertNoOpenClawAgentDatabaseLeases(
             .where("lease_id", "=", row.lease_id),
         ) !== undefined;
       if (leaseStillExists && row.agent_id !== agentId && deletionFence) {
-        assertAgentDeletionPathFence(database.db, deletionFence);
+        assertAgentDeletionPathFence(database, deletionFence);
       }
     }, options);
     if (leaseStillExists && (!agentId || row.agent_id === agentId)) {
       const remediation = agentId ? "." : "; stop that process and rerun openclaw doctor --fix.";
-      throw new Error(
+      throw new OpenClawAgentDatabaseLeaseActiveError(
         `Agent ${row.agent_id} database is still open in another process${remediation}`,
       );
     }

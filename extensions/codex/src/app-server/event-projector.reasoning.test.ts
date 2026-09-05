@@ -568,7 +568,10 @@ describe("CodexAppServerEventProjector reasoning and guardian projection", () =>
     );
     expect(result.toolMetas).toEqual([{ toolName: "sessions_send", isError: false }]);
     expect(result.messagesSnapshot.map((message) => message.role)).toEqual(["user", "assistant"]);
-    expect(JSON.stringify(result.messagesSnapshot[1])).toContain("Codex reasoning");
+    expect(result.messagesSnapshot[1]).toMatchObject({
+      role: "assistant",
+      content: [{ type: "thinking", thinking: "thinking" }],
+    });
     expect(JSON.stringify(result.messagesSnapshot)).not.toContain("Codex plan:");
     expect(result.compactionCount).toBe(1);
     expect(requireRecord(result.itemLifecycle, "item lifecycle")).not.toHaveProperty(

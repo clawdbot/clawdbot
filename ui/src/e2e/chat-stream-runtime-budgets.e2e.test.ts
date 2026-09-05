@@ -1,12 +1,15 @@
-import { appendFile, mkdir } from "node:fs/promises";
+import { appendFile } from "node:fs/promises";
 import path from "node:path";
-import { expect, it } from "vitest";
+import { beforeEach, expect, it } from "vitest";
+import { createControlUiE2eArtifactDir } from "../test-helpers/control-ui-e2e-artifacts.ts";
 import {
   createChatFlowE2eSuite,
   installMockGateway,
   requireRecord,
   requireString,
+  waitForChatScrollIdle,
 } from "./chat-flow.test-support.ts";
+import { waitForCommittedComposerDraft } from "./settle.test-support.ts";
 
 // Durable runtime budgets for the chat streaming surface. Byte budgets
 // (scripts/check-control-ui-performance.mts) cannot see rendering work, so
@@ -23,22 +26,22 @@ const suite = createChatFlowE2eSuite();
 type ChatFlowSuite = ReturnType<typeof createChatFlowE2eSuite>;
 type ChatFlowPage = Parameters<Parameters<ChatFlowSuite["withPage"]>[1]>[0]["page"];
 
-// Burst size for the render-scheduling gate. Each delta lands in its own
-// macrotask, so every event forces an invalidation; the animation-frame queue
-// is what keeps those invalidations executing inside frame callbacks instead
-// of on message/timer tasks.
+// Each delta lands in its own message task. The animation-frame queue must
+// coalesce those invalidations and keep them off message tasks.
 const BURST_DELTA_COUNT = 240;
 // Sanity floor: the burst must invalidate the chat page host at least twice,
 // proving the probe observed the streaming path at all.
 const MIN_BURST_HOST_UPDATES = 2;
-// Valid frame-queued runs commit 115-144 host updates for this burst. A direct
-// update per delta produces 241, so this ceiling catches lost coalescing while
-// retaining headroom for runner cadence.
+// A direct update per delta produces at least 240 host invalidations. Keep the
+// burst below that count so frame scheduling alone cannot hide lost coalescing.
 const MAX_BURST_HOST_UPDATES = 180;
 // Minimum share of host invalidations that must execute inside an animation
 // frame callback. The queue guarantees this for every stream-driven update;
 // only rare timer-driven strays (poll controllers) fall outside frames.
 const FRAME_SCHEDULED_MIN_RATIO = 0.9;
+// Unrelated page timers can contribute one host update after the probe resets;
+// ordinary characters must not invalidate the pane themselves.
+const MAX_STEADY_COMPOSER_HOST_UPDATES = 1;
 
 // Shipped live-tool ceiling: ui/src/pages/chat/tool-stream.ts TOOL_STREAM_LIMIT.
 const TOOL_STREAM_LIMIT_CONTRACT = 50;
@@ -92,18 +95,15 @@ type ScopedWindow = Window & {
   };
 };
 
-const metricsArtifactDir = path.join(
-  process.cwd(),
-  ".artifacts",
-  "control-ui-e2e",
-  "stream-runtime-budgets",
-);
+let metricsArtifactDir: string;
+beforeEach(() => {
+  metricsArtifactDir = createControlUiE2eArtifactDir("stream-runtime-budgets");
+});
 
 async function recordBudgetMetrics(
   testName: string,
   metrics: Record<string, number>,
 ): Promise<void> {
-  await mkdir(metricsArtifactDir, { recursive: true });
   await appendFile(
     path.join(metricsArtifactDir, "metrics.jsonl"),
     `${JSON.stringify({ testName, metrics, recordedAt: new Date().toISOString() })}\n`,
@@ -114,7 +114,7 @@ async function recordBudgetMetrics(
 // plain-text projection of the burst chunk emitted in-page
 // (`delta N with **boldN** and \`codeN\` tail`).
 function renderedChunkText(index: number): string {
-  return `delta ${index} with bold${index}`;
+  return `delta ${index} with bold${index} and code${index} tail`;
 }
 
 async function installRenderProbe(page: ChatFlowPage) {
@@ -191,9 +191,9 @@ async function readRenderProbe(page: ChatFlowPage): Promise<StreamPerfProbe> {
   return page.evaluate(() => (window as ScopedWindow).ocStreamPerf!);
 }
 
-// Emits each delta from its own macrotask so render work cannot hide inside
-// one task's microtask batching: the queue under test schedules commits per
-// animation frame, not per task.
+// Socket-like message tasks avoid nested timers' 4ms clamp, which can spread a
+// burst across enough frames to falsely exhaust the budget. Split at a real
+// frame so the sanity floor observes two streaming batches.
 async function emitDeltaBurstInPage(
   page: ChatFlowPage,
   runId: string,
@@ -208,6 +208,8 @@ async function emitDeltaBurstInPage(
       const scope = window as ScopedWindow;
       scope.ocBurstDone = false;
       let emitted = 0;
+      const channel = new MessageChannel();
+      const postNext = () => channel.port2.postMessage(null);
       const emitNext = () => {
         emitted += 1;
         const chunk = ` delta ${emitted} with **bold${emitted}** and \`code${emitted}\` tail`;
@@ -222,13 +224,19 @@ async function emitDeltaBurstInPage(
           sessionKey: "main",
           state: "delta",
         });
-        if (emitted < targetCount) {
-          setTimeout(emitNext, 0);
-        } else {
+        if (emitted === targetCount) {
+          channel.port1.close();
+          channel.port2.close();
           scope.ocBurstDone = true;
+        } else if (emitted === Math.floor(targetCount / 2)) {
+          requestAnimationFrame(postNext);
+        } else {
+          postNext();
         }
       };
-      setTimeout(emitNext, 0);
+      channel.port1.addEventListener("message", emitNext);
+      channel.port1.start();
+      postNext();
     },
     { runId, count },
   );
@@ -608,6 +616,54 @@ suite.define(() => {
           loadMs,
           heapUsedBytes: Math.round(heapUsedBytes),
         });
+      },
+    );
+  });
+
+  it("keeps steady-state composer edits local to a long transcript", async () => {
+    await suite.withPage(
+      {
+        locale: "en-US",
+        serviceWorkers: "block",
+        viewport: { height: 900, width: 1280 },
+      },
+      async ({ page }) => {
+        const gateway = await installMockGateway(page, {
+          historyMessages: buildLongTranscriptFixture(LONG_TRANSCRIPT_MESSAGE_COUNT),
+        });
+        await page.goto(`${suite.server.baseUrl}chat`);
+        await gateway.waitForRequest("chat.startup");
+        await page.locator(".chat-thread-inner").getByText("LONG-TAIL-SENTINEL").waitFor();
+
+        const composer = page.locator(".agent-chat__composer-combobox textarea");
+        const scopeKey = "chat:v3:agent:main:main\u0000agent:main";
+        await composer.fill("seed");
+        await page.getByRole("button", { name: "Send message" }).waitFor();
+        // The first saved draft notifies presence subscribers. Drain that transition
+        // before measuring edits to an already-present draft.
+        await waitForCommittedComposerDraft(page, scopeKey, "seed", 0);
+        // Finish startup scrolling before measuring steady-state composer invalidations.
+        await waitForChatScrollIdle(page);
+        await installRenderProbe(page);
+        await resetRenderProbe(page);
+
+        const suffix = " ordinary typing without commands";
+        await composer.pressSequentially(suffix);
+        await waitForCommittedComposerDraft(page, scopeKey, `seed${suffix}`, 0);
+        expect(await composer.inputValue()).toBe(`seed${suffix}`);
+        const probe = await readRenderProbe(page);
+
+        expect(probe.hostUpdates).toBeLessThanOrEqual(MAX_STEADY_COMPOSER_HOST_UPDATES);
+
+        const send = page.locator(".chat-send-btn--send");
+        await composer.fill("");
+        await expect.poll(() => send.isDisabled()).toBe(true);
+
+        await composer.fill("new draft");
+        await expect.poll(() => send.isDisabled()).toBe(false);
+
+        await composer.fill("مرحبا");
+        await expect.poll(() => composer.getAttribute("dir")).toBe("rtl");
       },
     );
   });

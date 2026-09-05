@@ -3,11 +3,9 @@ import type { DatabaseSync } from "node:sqlite";
 import {
   assertSqliteSchemaContains,
   assertSqliteSchemaTablesPresent,
+  type SqliteTableContractReader,
 } from "../infra/sqlite-schema-contract.js";
-import {
-  createNewerSqliteSchemaVersionError,
-  readSqliteUserVersion,
-} from "../infra/sqlite-user-version.js";
+import { readSqliteUserVersion } from "../infra/sqlite-user-version.js";
 import {
   OPENCLAW_DATABASE_SCHEMA_DOCS_URL,
   LAZY_ADDITIVE_STATE_TABLES,
@@ -15,6 +13,7 @@ import {
   type OpenClawStateDatabaseOptions,
 } from "./openclaw-state-db-contract.js";
 import { tableExists, tableHasColumn } from "./openclaw-state-db-schema-helpers.js";
+import { assertSupportedStateSchemaVersion } from "./openclaw-state-db-schema-version.js";
 import { resolveOpenClawStateSqlitePath } from "./openclaw-state-db.paths.js";
 import { OPENCLAW_STATE_MAINTENANCE_SCHEMA_COMPATIBILITY } from "./openclaw-state-schema-compatibility.js";
 import { OPENCLAW_STATE_SCHEMA_SQL } from "./openclaw-state-schema.js";
@@ -75,18 +74,6 @@ export function createOpenClawDatabaseVerificationError(
   return error;
 }
 
-export function assertSupportedSchemaVersion(db: DatabaseSync, pathname: string): void {
-  const userVersion = readSqliteUserVersion(db);
-  if (userVersion > OPENCLAW_STATE_SCHEMA_VERSION) {
-    throw createNewerSqliteSchemaVersionError(
-      "OpenClaw state database",
-      pathname,
-      userVersion,
-      OPENCLAW_STATE_SCHEMA_VERSION,
-    );
-  }
-}
-
 /** Require canonical shared-state ownership without requiring the latest schema. */
 export function assertOpenClawStateDatabaseOwner(
   database: DatabaseSync,
@@ -112,16 +99,9 @@ export function assertOpenClawStateDatabaseOwner(
 export function assertOpenClawStateDatabaseForMaintenance(
   database: DatabaseSync,
   options: { pathname: string },
+  readTable?: SqliteTableContractReader,
 ): void {
-  const userVersion = readSqliteUserVersion(database);
-  if (userVersion > OPENCLAW_STATE_SCHEMA_VERSION) {
-    throw createNewerSqliteSchemaVersionError(
-      "OpenClaw state database",
-      options.pathname,
-      userVersion,
-      OPENCLAW_STATE_SCHEMA_VERSION,
-    );
-  }
+  const userVersion = assertSupportedStateSchemaVersion(database, options.pathname);
   if (userVersion !== OPENCLAW_STATE_SCHEMA_VERSION) {
     throw new Error(
       `OpenClaw state database ${options.pathname} uses schema version ${userVersion}; run openclaw doctor --fix before compacting it.`,
@@ -144,6 +124,7 @@ export function assertOpenClawStateDatabaseForMaintenance(
     options.pathname,
     OPENCLAW_STATE_SCHEMA_SQL,
     OPENCLAW_STATE_MAINTENANCE_SCHEMA_COMPATIBILITY,
+    readTable,
   );
 }
 

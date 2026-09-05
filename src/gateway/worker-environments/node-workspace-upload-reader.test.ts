@@ -1,7 +1,10 @@
 import type { IncomingMessage } from "node:http";
 import { Readable } from "node:stream";
 import { describe, expect, it } from "vitest";
-import { RequestByteReader } from "./node-workspace-upload-reader.js";
+import {
+  NodeWorkspaceTransferInvalidError,
+  RequestByteReader,
+} from "./node-workspace-upload-reader.js";
 
 function createReader(chunks: Buffer[]): RequestByteReader {
   const request = Readable.from(chunks) as unknown as IncomingMessage;
@@ -44,7 +47,10 @@ describe("workspace upload byte stream", () => {
   it("rejects premature EOF across chunk boundaries", async () => {
     const reader = createReader([Buffer.from("ab"), Buffer.from("c")]);
 
-    await expect(reader.readExactly(4)).rejects.toThrow("ended before its declared payload");
+    await expect(reader.readExactly(4)).rejects.toMatchObject({
+      constructor: NodeWorkspaceTransferInvalidError,
+      reason: "premature_eof",
+    });
   });
 
   it.each(["buffered", "next chunk"])("rejects trailing bytes in the %s suffix", async (suffix) => {
@@ -53,6 +59,9 @@ describe("workspace upload byte stream", () => {
     );
 
     await expect(reader.readExactly(3)).resolves.toEqual(Buffer.from("abc"));
-    await expect(reader.assertEnd()).rejects.toThrow("contains trailing bytes");
+    await expect(reader.assertEnd()).rejects.toMatchObject({
+      constructor: NodeWorkspaceTransferInvalidError,
+      reason: "trailing_bytes",
+    });
   });
 });

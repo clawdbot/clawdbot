@@ -16,7 +16,7 @@ import {
 } from "../state/openclaw-state-db.js";
 import { applyClawAddPlan } from "./add.js";
 import { markClawCronRefRemoved, readClawCronRefs } from "./cron.js";
-import { claimClawAgentConfigRemoval } from "./lifecycle-config-removal.js";
+import { withClawAgentConfigRemoval } from "./lifecycle-config-removal.js";
 import { applyClawRemovePlan, buildClawRemovePlan, readClawStatus } from "./lifecycle-state.js";
 import { buildClawAddPlan } from "./lifecycle.js";
 import {
@@ -176,15 +176,18 @@ async function addFixture(
 describe("Claw status and remove", () => {
   it("rejects cleanup when an expected-missing agent id was recreated", async () => {
     await expect(
-      claimClawAgentConfigRemoval({
-        agentId: "worker",
-        expectedDigest: "sha256:missing",
-        expectedRemovalSurfaceDigest: "sha256:unused",
-        expectedState: "missing",
-        fallbackWorkspace: "/tmp/old-worker",
-        config: { agents: { entries: { worker: { workspace: "/tmp/new-worker" } } } },
-        onModified: () => new Error("agent recreated"),
-      }),
+      withClawAgentConfigRemoval(
+        {
+          agentId: "worker",
+          expectedDigest: "sha256:missing",
+          expectedRemovalSurfaceDigest: "sha256:unused",
+          expectedState: "missing",
+          fallbackWorkspace: "/tmp/old-worker",
+          config: { agents: { entries: { worker: { workspace: "/tmp/new-worker" } } } },
+          onModified: () => new Error("agent recreated"),
+        },
+        (commitRemoval) => commitRemoval(),
+      ),
     ).rejects.toThrow("agent recreated");
   });
 

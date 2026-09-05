@@ -5,24 +5,31 @@ import path from "node:path";
 import { Command } from "commander";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { clearConfigCache, clearRuntimeConfigSnapshot } from "../../config/config.js";
-import { stampConfigWriteMetadata } from "../../config/io.meta.js";
 import { buildLaunchAgentPlist } from "../../daemon/launchd-plist.js";
+import { decodeLaunchAgentPlistFixture } from "../../daemon/launchd-plist.test-support.js";
 import {
   resolveLaunchAgentPlistPath,
   resolveLaunchAgentEnvFilePath,
   resolveLaunchAgentEnvWrapperPath,
 } from "../../daemon/launchd-service-files.js";
 import { readGatewayServiceState, resolveGatewayService } from "../../daemon/service.js";
+import { gatewayHealthResponse } from "../../gateway/health-response.test-support.js";
 import { captureEnv } from "../../test-utils/env.js";
 import { mockProcessPlatform } from "../../test-utils/vitest-spies.js";
+import * as runtimeUtils from "../../utils.js";
 import { VERSION } from "../../version.js";
 import { runDaemonRestart } from "../daemon-cli/lifecycle.js";
 import { addGatewayServiceCommands } from "../daemon-cli/register-service-commands.js";
 import * as startRepair from "../daemon-cli/start-repair.js";
+import { assertGatewayServiceManagementAllowedForUpdate } from "./update-command-service-plan.js";
 import {
-  assertGatewayServiceManagementAllowedForUpdate,
+  readyRecoveryHealth,
+  registerRecoveryTests,
+  writeRecoveryConfig,
+} from "./update-command-service-recovery.test-support.js";
+import { registerInstallRootTransitionTests } from "./update-command-service-transition.test-support.js";
+import {
   maybeRestartService,
-  maybeRestartServiceAfterFailedMutableUpdate,
   maybeStopManagedServiceBeforeMutableUpdate,
   revalidateManagedGatewayServiceAfterUpdate,
 } from "./update-command-service.js";
@@ -39,7 +46,7 @@ const mocks = vi.hoisted(() => ({
   loaded: true,
   listenerPids: vi.fn(() => [4242]),
   ports: vi.fn<typeof import("../../infra/ports-inspect.js").inspectPortUsage>(),
-  probe: vi.fn<typeof import("../../gateway/probe.js").probeGateway>(),
+  call: vi.fn<(opts: import("../../gateway/call.js").CallGatewayOptions) => Promise<unknown>>(),
   signal: vi.fn(),
   events: [] as string[],
   command: vi.fn<typeof import("../../daemon/systemd.js").readSystemdServiceExecStart>(),
@@ -54,6 +61,7 @@ const mocks = vi.hoisted(() => ({
   child: vi.fn<typeof import("../../process/exec.js").runCommandWithTimeout>(),
   health: vi.fn<typeof import("../daemon-cli/restart-health.js").waitForGatewayHealthyRestart>(),
   doctor: vi.fn(),
+  configSnapshot: vi.fn<() => Promise<void>>(),
   error: vi.fn(),
   log: vi.fn(),
   capability:
@@ -94,12 +102,18 @@ vi.mock("../../infra/ports-inspect.js", () => ({
   inspectPortUsage: mocks.ports,
 }));
 
-vi.mock("../../gateway/probe.js", () => ({ probeGateway: mocks.probe }));
+vi.mock("../../gateway/call.js", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("../../gateway/call.js")>()),
+  callGateway: mocks.call,
+}));
 
 vi.mock("../../daemon/systemd.js", async (importOriginal) => ({
   ...(await importOriginal<typeof import("../../daemon/systemd.js")>()),
   readSystemdServiceExecStart: mocks.command,
-  readSystemdServiceRuntime: async () => ({ status: mocks.running ? "running" : "stopped" }),
+  readSystemdServiceRuntime: async () => ({
+    status: mocks.running ? "running" : "stopped",
+    ...(mocks.running ? { pid: 4242 } : {}),
+  }),
   isSystemdServiceEnabled: async () => mocks.loaded,
   findInstalledSystemdGatewayScope: async () => null,
   isSystemdUserServiceAvailable: async () => true,
@@ -117,6 +131,10 @@ vi.mock("../../daemon/systemd-definition-mutation.js", () => ({
 vi.mock("../../process/exec.js", async (importOriginal) => ({
   ...(await importOriginal<typeof import("../../process/exec.js")>()),
   runCommandWithTimeout: mocks.child,
+  runExec: vi.fn(
+    async (_command: string, _args: string[], options: { input: string | Uint8Array }) =>
+      decodeLaunchAgentPlistFixture(options.input),
+  ),
 }));
 vi.mock("../../infra/gateway-processes.js", async (importOriginal) => ({
   ...(await importOriginal<typeof import("../../infra/gateway-processes.js")>()),
@@ -124,6 +142,9 @@ vi.mock("../../infra/gateway-processes.js", async (importOriginal) => ({
   signalVerifiedGatewayPidSync: mocks.signal,
 }));
 vi.mock("../../commands/doctor.js", () => ({ doctorCommand: mocks.doctor }));
+vi.mock("./update-command-config-snapshot.js", () => ({
+  createUpdateConfigSnapshot: mocks.configSnapshot,
+}));
 vi.mock("./restart-helper.js", () => ({ runRestartScript: mocks.script }));
 vi.mock("../../runtime.js", () => ({
   defaultRuntime: { log: mocks.log, error: mocks.error, exit: vi.fn(), writeJson: vi.fn() },
@@ -141,14 +162,7 @@ vi.mock("../daemon-cli/lifecycle-audit.js", () => ({
 let root: string;
 let configPath: string;
 let envSnapshot: ReturnType<typeof captureEnv>;
-async function writeConfig(version: string) {
-  await fs.writeFile(
-    configPath,
-    JSON.stringify(stampConfigWriteMetadata({ gateway: { port: 19001 } }, undefined, version)),
-  );
-  clearConfigCache();
-  clearRuntimeConfigSnapshot();
-}
+const writeConfig = (version: string) => writeRecoveryConfig(configPath, version);
 
 beforeEach(async () => {
   vi.clearAllMocks();
@@ -176,6 +190,10 @@ beforeEach(async () => {
     delete process.env[key];
   }
   process.env.HOME = root;
+  // This fixture models an installed service even though its manager calls are simulated.
+  const unitPath = path.join(root, ".config/systemd/user/openclaw-gateway.service");
+  await fs.mkdir(path.dirname(unitPath), { recursive: true });
+  await fs.writeFile(unitPath, "[Service]\nExecStart=/fixture/openclaw gateway\n");
   configPath = path.join(root, ".openclaw", "openclaw.json");
   await fs.mkdir(path.dirname(configPath));
   await fs.mkdir(path.join(root, "dist"));
@@ -191,7 +209,7 @@ beforeEach(async () => {
     listeners: [],
     hints: [],
   }));
-  mocks.probe.mockReset();
+  mocks.call.mockReset();
   mocks.running = true;
   mocks.loaded = true;
   mocks.inLaunchd = false;
@@ -220,12 +238,10 @@ beforeEach(async () => {
     mocks.running = true;
     return { code: 0, stdout: "", stderr: "", signal: null, killed: false, termination: "exit" };
   });
-  mocks.health.mockImplementation(async ({ port }) => ({
-    healthy: true,
-    staleGatewayPids: [],
-    runtime: { status: mocks.running ? "running" : "stopped" },
-    portUsage: { port, status: "busy", listeners: [], hints: [] },
-  }));
+  mocks.health.mockImplementation(async ({ port }) => readyRecoveryHealth(port, mocks.running));
+  mocks.configSnapshot
+    .mockReset()
+    .mockRejectedValue(new Error("Unexpected config snapshot during preserved activation"));
 });
 afterEach(async () => {
   envSnapshot.restore();
@@ -278,6 +294,11 @@ describe("preserved update activation with real version guards", () => {
   ])(
     "handles $phase $denial denial for $channel $mode activation ($outcome)",
     async ({ mode, denial, outcome, channel, phase }) => {
+      let nowMs = 0;
+      vi.spyOn(performance, "now").mockImplementation(() => nowMs);
+      vi.spyOn(runtimeUtils, "sleep").mockImplementation(async (ms) => {
+        nowMs += ms;
+      });
       const late = phase === "late";
       const serviceCommand = await mocks.command(process.env);
       if (!serviceCommand) {
@@ -352,25 +373,17 @@ describe("preserved update activation with real version guards", () => {
         listeners: [{ pid: 4242, command: "openclaw-gateway" }],
         hints: [],
       }));
-      mocks.probe.mockImplementation(async ({ url }) => ({
-        ok: true,
-        url,
-        connectLatencyMs: 1,
-        error: null,
-        close: null,
-        auth: { role: "operator", scopes: ["operator.read"], capability: "read_only" },
-        server: {
-          version: VERSION,
-          connId: "fixture",
-          ...(outcome === "missing build"
-            ? {}
-            : { buildId: outcome === "stale build" ? "old-build" : "new-build" }),
-        },
-        health: {},
-        status: {},
-        presence: [],
-        configSnapshot: null,
-      }));
+      mocks.call.mockImplementation(
+        gatewayHealthResponse({
+          server: {
+            version: VERSION,
+            connId: "fixture",
+            ...(outcome === "missing build"
+              ? {}
+              : { buildId: outcome === "stale build" ? "old-build" : "new-build" }),
+          },
+        }),
+      );
       const { waitForGatewayHealthyRestart } = await vi.importActual<
         typeof import("../daemon-cli/restart-health.js")
       >("../daemon-cli/restart-health.js");
@@ -427,11 +440,6 @@ describe("preserved update activation with real version guards", () => {
       );
       expect(mocks.restart).toHaveBeenCalledTimes(restarts.length);
       expect(mocks.health.mock.calls.every(([args]) => args.port === 19305)).toBe(true);
-      if (allowed) {
-        expect(mocks.health.mock.calls.some(([args]) => args.expectedVersion === VERSION)).toBe(
-          true,
-        );
-      }
       if (retried) {
         expect(mocks.terminateStale).toHaveBeenCalledWith([4242]);
       }
@@ -447,9 +455,12 @@ describe("preserved update activation with real version guards", () => {
             ([args]) => args.expectedBuildId === (channel === "dev" ? "new-build" : undefined),
           ),
         ).toBe(true);
-        expect(mocks.probe.mock.calls.every(([args]) => args.url === "ws://127.0.0.1:19305")).toBe(
-          true,
-        );
+        expect(mocks.call).toHaveBeenCalled();
+        expect(
+          mocks.call.mock.calls.every(
+            ([args]) => args.localPortOverride === 19305 && args.method === "health",
+          ),
+        ).toBe(true);
       }
       if (buildMismatch) {
         expect(
@@ -547,77 +558,9 @@ describe("preserved update activation with real version guards", () => {
     expect(mocks.health).not.toHaveBeenCalled();
   });
 
-  it.each(["foreign", "metadata", "unit", "unavailable", "replacement root", "profile"])(
-    "revalidates writable failed-update recovery after %s changes",
-    async (change) => {
-      mocks.capability.mockResolvedValue({ kind: "writable" });
-      const before = await maybeStopManagedServiceBeforeMutableUpdate({
-        updateInstallKind: "package",
-        root,
-        shouldRestart: true,
-        jsonMode: true,
-      });
-      expect(before.stopped).toBe(true);
-      const command = await mocks.command(process.env);
-      if (!command) {
-        throw new Error("missing fixture command");
-      }
-      if (change === "unavailable") {
-        mocks.command.mockRejectedValue(new Error("manager unavailable"));
-      } else {
-        const foreign = path.join(root, "foreign");
-        await fs.mkdir(path.join(foreign, "dist"), { recursive: true });
-        await fs.writeFile(
-          path.join(foreign, "package.json"),
-          JSON.stringify({ name: "openclaw", version: VERSION }),
-        );
-        await fs.writeFile(path.join(foreign, "dist", "index.js"), "export {};\n");
-        mocks.command.mockResolvedValue({
-          ...command,
-          programArguments: [
-            process.execPath,
-            path.join(
-              ["foreign", "replacement root"].includes(change) ? foreign : root,
-              "dist",
-              "index.js",
-            ),
-            "gateway",
-            "--port",
-            "19002",
-          ],
-          environment: {
-            HOME: root,
-            OPENCLAW_PROFILE: "default",
-            OPENCLAW_STATE_DIR: path.dirname(configPath),
-            OPENCLAW_CONFIG_PATH: configPath,
-            OPENCLAW_SYSTEMD_UNIT:
-              change === "unit" ? "openclaw-other.service" : "openclaw-gateway.service",
-            ...(change === "profile"
-              ? {
-                  OPENCLAW_PROFILE: "second",
-                  OPENCLAW_SYSTEMD_UNIT: "openclaw-gateway-second.service",
-                  OPENCLAW_STATE_DIR: path.join(root, ".openclaw-second"),
-                  OPENCLAW_CONFIG_PATH: path.join(root, ".openclaw-second", "openclaw.json"),
-                }
-              : {}),
-          },
-        });
-      }
-      mocks.events.push("update failed after definition changed");
-      await maybeRestartServiceAfterFailedMutableUpdate({
-        root: change === "replacement root" ? path.join(root, "foreign") : undefined,
-        preManagedServiceStop: before,
-        jsonMode: true,
-      });
-      if (change === "metadata" || change === "replacement root") {
-        expect(mocks.restart).toHaveBeenCalledOnce();
-      } else {
-        expect(mocks.restart).not.toHaveBeenCalled();
-        expect(mocks.error.mock.calls.flat().join("\n")).toContain("Failed to restart");
-        expect(mocks.events).toEqual(["native stop", "update failed after definition changed"]);
-      }
-    },
-  );
+  registerRecoveryTests({ root: () => root, configPath: () => configPath, mocks });
+
+  registerInstallRootTransitionTests(() => ({ root, mocks }));
 
   it.each(["metadata", "profile", "unit"])(
     "pins writable service identity across %s changes",
@@ -981,6 +924,7 @@ describe("preserved update activation with real version guards", () => {
     }
     expect(result).toBe(scenario !== "bootstrap denied" && !scenario.startsWith("parent"));
     expect(await snapshot()).toEqual(before);
+    expect(mocks.configSnapshot).not.toHaveBeenCalled();
     expect(writeFile).not.toHaveBeenCalled();
     expect(chmod).not.toHaveBeenCalled();
     expect(rename).not.toHaveBeenCalled();

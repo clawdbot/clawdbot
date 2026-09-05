@@ -1,4 +1,11 @@
 import { beforeEach, describe, expect, it, vi } from "vitest";
+import { registerAgentRunCapacityWait } from "../infra/agent-run-capacity-wait.js";
+import {
+  clearAgentRunContext,
+  getAgentRunLifecycleGeneration,
+  registerAgentRunContext,
+} from "../infra/agent-run-registry.js";
+import { onSessionLifecycleEvent } from "../sessions/session-lifecycle-events.js";
 import {
   createActiveRun,
   createGatewayBroadcaster,
@@ -12,6 +19,7 @@ import {
   sessionRow,
   subscribePluginSessionsChanged,
 } from "./server-session-events.test-support.js";
+import { GatewayClientRegistry } from "./server/client-registry.js";
 
 describe("createLifecycleEventBroadcastHandler", () => {
   beforeEach(() => {
@@ -38,7 +46,7 @@ describe("createLifecycleEventBroadcastHandler", () => {
     expect(loadGatewaySessionRowMock).not.toHaveBeenCalled();
   });
 
-  it("projects swarm phase and log payload fields", () => {
+  it.each(["phase", "log"] as const)("projects swarm %s payload fields", (kind) => {
     const broadcastToConnIds = vi.fn();
     const handler = createLifecycleEventBroadcastHandler({
       broadcastToConnIds,
@@ -50,15 +58,15 @@ describe("createLifecycleEventBroadcastHandler", () => {
       sessionKey: "agent:main:main",
       reason: "swarm-note",
       swarmGroupId: "swarm:agent:main:main:run-1",
-      kind: "phase",
+      kind,
       text: "Research",
-    } as never);
+    });
 
     expect(broadcastToConnIds).toHaveBeenCalledWith(
       "sessions.changed",
       expect.objectContaining({
         swarmGroupId: "swarm:agent:main:main:run-1",
-        kind: "phase",
+        kind,
         text: "Research",
       }),
       new Set(["conn-1"]),
@@ -69,7 +77,9 @@ describe("createLifecycleEventBroadcastHandler", () => {
   it("publishes lifecycle changes to plugins without websocket subscribers", async () => {
     const received = vi.fn();
     const unsubscribe = subscribePluginSessionsChanged(received);
-    const { broadcastToConnIds } = createGatewayBroadcaster({ clients: new Set() });
+    const { broadcastToConnIds } = createGatewayBroadcaster({
+      clients: new GatewayClientRegistry(),
+    });
     const handler = createLifecycleEventBroadcastHandler({
       broadcastToConnIds,
       sessionEventSubscribers: { getAll: () => new Set() },
@@ -97,7 +107,7 @@ describe("createLifecycleEventBroadcastHandler", () => {
   it.each([
     { name: "projects configured persisted state without publishing its goal" },
     { name: "publishes active state and goal for the explicit owner", agentId: "ops" },
-  ])("$name", ({ agentId }) => {
+  ])("$name through capacity transitions without a refresh", ({ agentId }) => {
     runtimeConfigState.value = fixedStoreRuntimeConfig("ops", ["ops", "research"]);
     sessionRow.key = "global";
     const goal = { ...ownerGoal };
@@ -134,6 +144,24 @@ describe("createLifecycleEventBroadcastHandler", () => {
       expect(payload).not.toHaveProperty("agentId");
       expect(payload).not.toHaveProperty("goal");
       expect(payload).not.toHaveProperty("session.goal");
+    }
+    const runId = "run-before-finalize";
+    registerAgentRunContext(runId, { sessionKey: "global", agentId: "ops" });
+    const unsubscribe = onSessionLifecycleEvent(handler);
+    const releaseWait = registerAgentRunCapacityWait(runId, getAgentRunLifecycleGeneration());
+    try {
+      releaseWait?.();
+      const transitions = broadcastToConnIds.mock.calls.slice(1);
+      expect(
+        transitions.map(([, event]) => [event.reason, event.status, event.hasActiveRun]),
+      ).toEqual([
+        ["run-capacity", "queued", true],
+        ["run-capacity", "running", true],
+      ]);
+    } finally {
+      unsubscribe();
+      releaseWait?.();
+      clearAgentRunContext(runId);
     }
   });
 

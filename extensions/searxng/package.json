@@ -1,6 +1,6 @@
 {
   "name": "@openclaw/searxng-plugin",
-  "version": "2026.8.1",
+  "version": "2026.9.1",
   "description": "OpenClaw SearXNG plugin",
   "type": "module",
   "devDependencies": {
@@ -18,10 +18,10 @@
       "allowInvalidConfigRecovery": true
     },
     "compat": {
-      "pluginApi": ">=2026.8.1"
+      "pluginApi": ">=2026.9.1"
     },
     "build": {
-      "openclawVersion": "2026.8.1",
+      "openclawVersion": "2026.9.1",
       "bundledDist": false
     },
     "release": {

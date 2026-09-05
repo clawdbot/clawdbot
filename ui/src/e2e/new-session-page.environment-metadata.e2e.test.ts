@@ -81,6 +81,10 @@ suite.define(() => {
               workerSlots: { total: 2, available: 0 },
               capabilities: ["codex.exec-server.stdio.v1"],
               invocableCommands: ["codex.exec-server.stdio.v1"],
+              requiredNodeCommand: {
+                command: "codex.exec-server.stdio.v1",
+                state: "invocable",
+              },
             },
             {
               id: "node:restricted-mac",
@@ -91,6 +95,10 @@ suite.define(() => {
               workerSlots: { total: 2, available: 1 },
               capabilities: ["codex.exec-server.stdio.v1"],
               invocableCommands: [],
+              requiredNodeCommand: {
+                command: "codex.exec-server.stdio.v1",
+                state: "unauthorized",
+              },
             },
           ],
           profiles: [],
@@ -113,7 +121,7 @@ suite.define(() => {
       expect(await device.isDisabled()).toBe(true);
       expect(await device.textContent()).toContain("No worker slots are available");
       expect(await restrictedDevice.isEnabled()).toBe(true);
-      await captureDeviceRuntimeUiProof(page, "01-embedded-device-capacity-gated.png");
+      await captureDeviceRuntimeUiProof(suite, page, "01-embedded-device-capacity-gated.png");
       await page.keyboard.press("Escape");
 
       await modelSelect.click();
@@ -122,8 +130,18 @@ suite.define(() => {
       await whereTrigger.click();
       await expect.poll(() => device.isEnabled()).toBe(true);
       await expect.poll(() => restrictedDevice.isDisabled()).toBe(true);
-      await expect.poll(() => tooltipTitleText(restrictedDevice)).toMatch(/enable|approv/i);
+      await expect
+        .poll(async () =>
+          (await gateway.getRequests("environments.list")).map((request) => request.params),
+        )
+        .toContainEqual({ runtimeId: "codex" });
+      await expect
+        .poll(() => tooltipTitleText(restrictedDevice))
+        .toBe(
+          "Authorize codex.exec-server.stdio.v1 in the Gateway node command policy, or pick another device.",
+        );
       await captureDeviceRuntimeUiProof(
+        suite,
         page,
         "02-codex-zero-slot-enabled-denied-command-disabled.png",
       );
@@ -140,7 +158,7 @@ suite.define(() => {
       await expect
         .poll(() => tooltipTitleText(device))
         .toBe("This runtime does not support paired devices");
-      await captureDeviceRuntimeUiProof(page, "03-cloud-only-device-disabled.png");
+      await captureDeviceRuntimeUiProof(suite, page, "03-cloud-only-device-disabled.png");
       await page.keyboard.press("Escape");
 
       await modelSelect.click();
@@ -239,7 +257,7 @@ suite.define(() => {
       const place = page.locator("wa-popover.new-session-page__where-popover");
       const row = (id: string) => place.locator(`[data-value="device:${id}"]`);
       await row("alpha-device").waitFor();
-      await captureEnvironmentMetadataUiProof(page);
+      await captureEnvironmentMetadataUiProof(suite, page);
 
       expect(await row("alpha-device").isEnabled()).toBe(true);
       await expect

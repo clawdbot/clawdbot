@@ -1,16 +1,22 @@
-// Run With Env tests cover run with env script behavior.
-import { spawn, spawnSync, type ChildProcess } from "node:child_process";
+import { spawn, spawnSync } from "node:child_process";
 import { existsSync, mkdtempSync, readFileSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import path from "node:path";
 import { MAX_TIMER_TIMEOUT_MS } from "@openclaw/normalization-core/number-coercion";
 import { describe, expect, it } from "vitest";
 import {
+  inspectManagedProcessGroup,
+  terminateManagedChild,
+} from "../../scripts/lib/managed-child-process.mts";
+import {
   isRunWithEnvHelpRequest,
   parseRunWithEnvArgs,
   resolveForceKillDelayMs,
   resolveSpawnCommand,
 } from "../../scripts/run-with-env.mts";
+import { waitForPidFile } from "../helpers/process-wait.js";
+import { withTestTimeout } from "../helpers/promise.js";
+import { runQaGatewayFixture } from "../helpers/qa-gateway-cleanup.js";
 
 // These subprocess fixtures expose explicit ready files. Cold tsx startup can exceed a few
 // seconds on a loaded maintainer host, so this only bounds genuine fixture hangs.
@@ -32,24 +38,119 @@ async function waitFor(
   }
 }
 
-async function waitForExit(
-  child: ChildProcess,
-  timeoutMs = 3_000,
-): Promise<{ code: number | null; signal: NodeJS.Signals | null }> {
-  return await new Promise((resolve, reject) => {
-    const timer = setTimeout(() => {
-      child.kill("SIGKILL");
-      reject(new Error("timed out waiting for child exit"));
-    }, timeoutMs);
-    child.once("exit", (code, signal) => {
-      clearTimeout(timer);
-      resolve({ code, signal });
-    });
-    child.once("error", (error) => {
-      clearTimeout(timer);
-      reject(error);
-    });
-  });
+function spawnWrapperFixture(
+  tempDir: string,
+  assignments: string[],
+  childScript: string,
+  env?: NodeJS.ProcessEnv,
+) {
+  const pidFile = path.join(tempDir, "wrapped-pid");
+  const wrapper = spawn(
+    process.execPath,
+    [
+      "--import",
+      "tsx",
+      "scripts/run-with-env.mts",
+      ...assignments,
+      "--",
+      "node",
+      "-e",
+      [
+        // Publish the detached group before this fixture can create descendants.
+        `require('node:fs').writeFileSync(${JSON.stringify(pidFile + ".tmp")}, String(process.pid));`,
+        `require('node:fs').renameSync(${JSON.stringify(pidFile + ".tmp")}, ${JSON.stringify(pidFile)});`,
+        childScript,
+      ].join("\n"),
+    ],
+    { cwd: process.cwd(), env, detached: true, stdio: ["ignore", "pipe", "pipe"] },
+  );
+  let closed = false;
+  let childError: Error | undefined;
+  const completion = new Promise<{ code: number | null; signal: NodeJS.Signals | null }>(
+    (resolve) => {
+      wrapper.once("error", (error) => {
+        childError = error;
+      });
+      wrapper.once("close", (code, signal) => {
+        closed = true;
+        resolve({ code, signal });
+      });
+    },
+  );
+  // Inherited pipes keep an unrecorded, still-starting command observable after wrapper exit.
+  wrapper.stdout.resume();
+  wrapper.stderr.resume();
+  let shutdownRequested = false;
+  const signal = (value: NodeJS.Signals) => {
+    shutdownRequested = true;
+    return wrapper.kill(value);
+  };
+
+  return {
+    signal,
+    async waitForExit() {
+      const exit = await withTestTimeout(completion, 3_000, "timed out waiting for wrapper close");
+      if (childError) {
+        throw childError;
+      }
+      return exit;
+    },
+    async cleanup(this: void) {
+      // Do not signal twice: after its child exits, the wrapper removes its handlers
+      // while it still gives descendants their shutdown grace period.
+      if (!closed && !shutdownRequested) {
+        signal("SIGTERM");
+      }
+      // The assertion's exit wait still rejects; teardown owns bounded escalation.
+      await withTestTimeout(completion, 3_000, "wrapper still draining").catch(() => undefined);
+      // The wrapper owns tsx helper processes in its group; the wrapped command
+      // creates a separate group whose identity is recorded by the fixture.
+      if (
+        wrapper.pid &&
+        inspectManagedProcessGroup(wrapper, { errorPolicy: "indeterminate" }) !== "dead"
+      ) {
+        terminateManagedChild(wrapper, "SIGKILL", { processGroupFallback: "never" });
+      }
+      await waitFor(
+        () => closed || existsSync(pidFile),
+        `wrapped command identity or closed pipes; retained fixture: ${tempDir}`,
+      );
+      if (existsSync(pidFile)) {
+        const pid = await waitForPidFile(pidFile, 5_000);
+        if (!Number.isSafeInteger(pid) || pid <= 1) {
+          throw new Error(`invalid wrapped command PID; retained fixture: ${tempDir}`);
+        }
+        const group = { pid };
+        if (inspectManagedProcessGroup(group, { errorPolicy: "indeterminate" }) !== "dead") {
+          try {
+            process.kill(-pid, "SIGKILL");
+          } catch (error) {
+            if ((error as NodeJS.ErrnoException).code !== "ESRCH") {
+              throw error;
+            }
+          }
+        }
+        await waitFor(
+          () => inspectManagedProcessGroup(group, { errorPolicy: "indeterminate" }) === "dead",
+          `wrapped group exit before removing fixture: ${tempDir}`,
+          5_000,
+        );
+      }
+      await withTestTimeout(
+        completion,
+        5_000,
+        `wrapper did not close; retained fixture: ${tempDir}`,
+      );
+      if (wrapper.pid) {
+        await waitFor(
+          () => inspectManagedProcessGroup(wrapper, { errorPolicy: "indeterminate" }) === "dead",
+          `wrapper group exit before removing fixture: ${tempDir}`,
+          5_000,
+        );
+      }
+      rmSync(tempDir, { force: true, recursive: true });
+    },
+  };
 }
 
 function isProcessAlive(pid: number): boolean {
@@ -223,33 +324,20 @@ describe("run-with-env", () => {
         "setInterval(() => {}, 1000);",
       ].join("\n");
 
-      const wrapper = spawn(
-        process.execPath,
-        [
-          "--import",
-          "tsx",
-          "scripts/run-with-env.mts",
-          `READY_FILE=${readyFile}`,
-          `SIGNALED_FILE=${signaledFile}`,
-          "--",
-          "node",
-          "-e",
-          childScript,
-        ],
-        { cwd: process.cwd(), stdio: "ignore" },
+      const fixture = spawnWrapperFixture(
+        tempDir,
+        [`READY_FILE=${readyFile}`, `SIGNALED_FILE=${signaledFile}`],
+        childScript,
       );
 
-      try {
+      await runQaGatewayFixture(async () => {
         await waitFor(() => existsSync(readyFile), "wrapped command readiness");
-        wrapper.kill(signal);
+        fixture.signal(signal);
 
-        const exit = await waitForExit(wrapper);
+        const exit = await fixture.waitForExit();
         expect(exit).toEqual({ code: null, signal });
         expect(readFileSync(signaledFile, "utf8")).toBe(signal);
-      } finally {
-        wrapper.kill("SIGKILL");
-        rmSync(tempDir, { force: true, recursive: true });
-      }
+      }, fixture.cleanup);
     },
   );
 
@@ -276,53 +364,36 @@ describe("run-with-env", () => {
         "process.on('SIGTERM', () => process.exit(0));",
         "setInterval(() => {}, 1000);",
       ].join("\n");
-      const wrapper = spawn(
-        process.execPath,
+      const fixture = spawnWrapperFixture(
+        tempDir,
         [
-          "--import",
-          "tsx",
-          "scripts/run-with-env.mts",
           `READY_FILE=${readyFile}`,
           `GRANDCHILD_READY_FILE=${grandchildReadyFile}`,
           `GRANDCHILD_PID_FILE=${grandchildPidFile}`,
-          "--",
-          "node",
-          "-e",
-          childScript,
         ],
-        {
-          cwd: process.cwd(),
-          env: { ...process.env, OPENCLAW_RUN_WITH_ENV_FORCE_KILL_MS: "200" },
-          stdio: "ignore",
-        },
+        childScript,
+        { ...process.env, OPENCLAW_RUN_WITH_ENV_FORCE_KILL_MS: "200" },
       );
-      let grandchildPid = 0;
 
-      try {
+      await runQaGatewayFixture(async () => {
         await waitFor(() => existsSync(readyFile), "wrapped command readiness");
         await waitFor(
           () => existsSync(grandchildReadyFile),
           "wrapped command descendant readiness",
         );
-        grandchildPid = Number(readFileSync(grandchildPidFile, "utf8"));
+        const grandchildPid = Number(readFileSync(grandchildPidFile, "utf8"));
         expect(grandchildPid).toBeGreaterThan(0);
         expect(isProcessAlive(grandchildPid)).toBe(true);
 
-        wrapper.kill("SIGTERM");
-        const exit = await waitForExit(wrapper, 3_000);
+        fixture.signal("SIGTERM");
+        const exit = await fixture.waitForExit();
         expect(exit).toEqual({ code: null, signal: "SIGTERM" });
         await waitFor(
           () => !isProcessAlive(grandchildPid),
           "wrapped command descendant cleanup",
           5_000,
         );
-      } finally {
-        wrapper.kill("SIGKILL");
-        if (grandchildPid > 0 && isProcessAlive(grandchildPid)) {
-          process.kill(grandchildPid, "SIGKILL");
-        }
-        rmSync(tempDir, { force: true, recursive: true });
-      }
+      }, fixture.cleanup);
     },
   );
 
@@ -352,45 +423,32 @@ describe("run-with-env", () => {
         "process.on('SIGTERM', () => process.exit(0));",
         "setInterval(() => {}, 1000);",
       ].join("\n");
-      const wrapper = spawn(
-        process.execPath,
+      const fixture = spawnWrapperFixture(
+        tempDir,
         [
-          "--import",
-          "tsx",
-          "scripts/run-with-env.mts",
           `READY_FILE=${readyFile}`,
           `GRACEFUL_FILE=${gracefulFile}`,
           `GRANDCHILD_READY_FILE=${grandchildReadyFile}`,
-          "--",
-          "node",
-          "-e",
-          childScript,
         ],
+        childScript,
         {
-          cwd: process.cwd(),
-          env: {
-            ...process.env,
-            OPENCLAW_RUN_WITH_ENV_FORCE_KILL_MS: String(MAX_TIMER_TIMEOUT_MS + 1),
-          },
-          stdio: "ignore",
+          ...process.env,
+          OPENCLAW_RUN_WITH_ENV_FORCE_KILL_MS: String(MAX_TIMER_TIMEOUT_MS + 1),
         },
       );
 
-      try {
+      await runQaGatewayFixture(async () => {
         await waitFor(() => existsSync(readyFile), "wrapped command readiness");
         await waitFor(
           () => existsSync(grandchildReadyFile),
           "wrapped command descendant readiness",
         );
-        wrapper.kill("SIGTERM");
+        fixture.signal("SIGTERM");
 
-        const exit = await waitForExit(wrapper, 3_000);
+        const exit = await fixture.waitForExit();
         expect(exit).toEqual({ code: null, signal: "SIGTERM" });
         expect(readFileSync(gracefulFile, "utf8")).toBe("done");
-      } finally {
-        wrapper.kill("SIGKILL");
-        rmSync(tempDir, { force: true, recursive: true });
-      }
+      }, fixture.cleanup);
     },
   );
 

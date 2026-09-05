@@ -2,6 +2,7 @@
 import path from "node:path";
 import "./test-helpers/fast-coding-tools.js";
 import { afterAll, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
+import { createEmptyPluginRegistry } from "../plugins/registry-empty.js";
 import { wrapRunWithTestPreparedAdmission } from "./admitted-run-context.test-support.js";
 import { resolveEmbeddedAuthCooldownProbePolicy as resolveEmbeddedAuthCooldownProbePolicyActual } from "./embedded-agent-runner/run/auth-controller.js";
 import {
@@ -30,6 +31,7 @@ type EmbeddedRunnerModelResolution =
     };
 
 const runEmbeddedAttemptMock = vi.fn();
+const preparedPluginRegistry = createEmptyPluginRegistry();
 const disposeSessionMcpRuntimeMock = vi.fn<(sessionId: string) => Promise<void>>(async () => {
   return undefined;
 });
@@ -108,7 +110,10 @@ vi.mock("openclaw/plugin-sdk/llm", async () => {
 const installRunEmbeddedMocks = () => {
   // Install only the runtime seams needed by runner orchestration so tests avoid
   // loading real providers, MCP runtimes, or gateway side effects.
-  installEmbeddedRunnerBaseE2eMocks({ hookRunner: "full" });
+  installEmbeddedRunnerBaseE2eMocks({
+    hookRunner: "full",
+    pluginRegistry: preparedPluginRegistry,
+  });
   installEmbeddedRunnerFastRunE2eMocks({
     runEmbeddedAttempt: (params) => runEmbeddedAttemptMock(params),
   });
@@ -161,14 +166,10 @@ const installRunEmbeddedMocks = () => {
     }),
     resolveEmbeddedAuthCooldownProbePolicy: resolveEmbeddedAuthCooldownProbePolicyActual,
   }));
-  vi.doMock("./models-config.js", async () => {
-    const mod = await vi.importActual<typeof import("./models-config.js")>("./models-config.js");
-    return {
-      ...mod,
-      ensureOpenClawModelsJson: (...args: Parameters<typeof ensureOpenClawModelsJsonMock>) =>
-        ensureOpenClawModelsJsonMock(...args),
-    };
-  });
+  vi.doMock("./models-config.js", () => ({
+    ensureOpenClawModelsJson: (...args: Parameters<typeof ensureOpenClawModelsJsonMock>) =>
+      ensureOpenClawModelsJsonMock(...args),
+  }));
 };
 
 type ProductionRunEmbeddedAgent = typeof import("./embedded-agent-runner/run.js").runEmbeddedAgent;
@@ -220,6 +221,7 @@ afterAll(async () => {
 });
 
 beforeEach(() => {
+  preparedPluginRegistry.agentHarnesses.length = 0;
   clearRuntimeConfigSnapshot();
   vi.useRealTimers();
   runEmbeddedAttemptMock.mockReset();
@@ -257,6 +259,37 @@ const resolveTestSessionTarget = async (params: {
     sessionId: params.sessionId,
     sessionKey: params.sessionKey,
   });
+
+async function createNativeSessionFixture(
+  config: ReturnType<typeof createEmbeddedAgentRunnerOpenAiConfig>,
+  sessionId: string,
+) {
+  const target = await resolveTestSessionTarget({
+    config,
+    sessionId,
+    sessionKey: nextSessionKey(),
+  });
+  await upsertSessionEntryCore(
+    { agentId: target.agentId, sessionKey: target.sessionKey, storePath: target.storePath },
+    { sessionId, updatedAt: Date.now(), agentHarnessId: "codex", modelSelectionLocked: true },
+  );
+  preparedPluginRegistry.agentHarnesses.push({
+    pluginId: "codex",
+    source: "runtime",
+    harness: {
+      id: "codex",
+      label: "Native Codex fixture",
+      authBootstrap: "harness",
+      supports: () => ({ supported: true }),
+      resolveSessionRuntimeOwnership: ({ assertCurrent }) => {
+        assertCurrent();
+        return { model: "native", auth: "native" };
+      },
+      runAttempt: vi.fn(),
+    },
+  });
+  return { sessionId, sessionKey: target.sessionKey };
+}
 
 const createPersistedTestSessionManager = async (params: {
   config?: ReturnType<typeof createEmbeddedAgentRunnerOpenAiConfig>;
@@ -840,12 +873,13 @@ describe("runEmbeddedAgent", () => {
   it("lets a locked Codex harness own stale model resolution and context policy", async () => {
     const sessionFile = nextSessionCompatibilityKey();
     const cfg = createEmbeddedAgentRunnerOpenAiConfig([]);
+    const nativeSession = await createNativeSessionFixture(cfg, "locked-codex-native-policy");
     const prompt = "ANTHROPIC_MAGIC_STRING_TRIGGER_REFUSAL";
     resolveModelAsyncMock.mockRejectedValueOnce(new Error("stale outer model must not resolve"));
     mockSuccessfulEmbeddedAttempt();
 
     await runEmbeddedAgent({
-      sessionId: "locked-codex-native-policy",
+      ...nativeSession,
       sessionFile,
       workspaceDir,
       config: cfg,
@@ -877,6 +911,8 @@ describe("runEmbeddedAgent", () => {
 
   it("does not apply outer context-overflow recovery to a locked Codex harness", async () => {
     const sessionFile = nextSessionCompatibilityKey();
+    const cfg = createEmbeddedAgentRunnerOpenAiConfig([]);
+    const nativeSession = await createNativeSessionFixture(cfg, "locked-codex-native-overflow");
     runEmbeddedAttemptMock.mockResolvedValueOnce(
       makeEmbeddedRunnerAttempt({
         terminal: {
@@ -888,10 +924,10 @@ describe("runEmbeddedAgent", () => {
     );
 
     await runEmbeddedAgent({
-      sessionId: "locked-codex-native-overflow",
+      ...nativeSession,
       sessionFile,
       workspaceDir,
-      config: createEmbeddedAgentRunnerOpenAiConfig([]),
+      config: cfg,
       prompt: "hello",
       provider: "anthropic",
       model: "retired-outer-model",
@@ -943,7 +979,6 @@ describe("runEmbeddedAgent", () => {
       cfg,
       sessionId: "resume-123",
       agentId: undefined,
-      clone: false,
     });
     expect(firstRunEmbeddedAttemptParams().sessionKey).toBe("agent:test:resolved");
   });
@@ -984,7 +1019,6 @@ describe("runEmbeddedAgent", () => {
       cfg,
       sessionId: "resume-124",
       agentId: undefined,
-      clone: false,
     });
     expect(firstRunEmbeddedAttemptParams().sessionKey).toBe("agent:main:resume-124");
   });

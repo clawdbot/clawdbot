@@ -72,13 +72,15 @@ import {
   loadMediaToolReferences,
   normalizeMediaReferenceInputs,
   readGenerationTimeoutMs,
+  resolveMediaToolSandboxConfig,
   resolveRemoteMediaSsrfPolicy,
   resolveCapabilityModelConfigForTool,
   resolveGenerateAction,
   resolveSelectedCapabilityProvider,
+  type MediaToolSandbox,
 } from "./media-tool-shared.js";
 import type { ToolModelConfig } from "./model-config.helpers.js";
-import type { AnyAgentTool, SandboxFsBridge, ToolFsPolicy } from "./tool-runtime.helpers.js";
+import type { AnyAgentTool, ToolFsPolicy } from "./tool-runtime.helpers.js";
 
 const DEFAULT_COUNT = 1;
 const MAX_COUNT = 4;
@@ -215,30 +217,6 @@ const ImageGenerateToolSchema = Type.Object({
     }),
   ),
 });
-
-function resolveImageGenerationModelConfigForTool(params: {
-  cfg?: OpenClawConfig;
-  workspaceDir?: string;
-  agentDir?: string;
-  authStore?: AuthProfileStore;
-  modelOverride?: string;
-}): ToolModelConfig | null {
-  return resolveCapabilityModelConfigForTool({
-    cfg: params.cfg,
-    workspaceDir: params.workspaceDir,
-    agentDir: params.agentDir,
-    authStore: params.authStore,
-    modelConfig: params.cfg?.agents?.defaults?.mediaModels?.image,
-    modelOverride: params.modelOverride,
-    providers: () => listRuntimeImageGenerationProviders({ config: params.cfg }),
-  });
-}
-
-if (process.env.VITEST || process.env.NODE_ENV === "test") {
-  (globalThis as Record<PropertyKey, unknown>)[Symbol.for("openclaw.imageGenerateToolTestApi")] = {
-    resolveImageGenerationModelConfigForTool,
-  };
-}
 
 function resolveRequestedCount(args: Record<string, unknown>): number {
   if (readSnakeCaseParamRaw(args, "count") === null) {
@@ -515,16 +493,13 @@ function validateImageGenerationCapabilities(params: {
   }
 }
 
-type ImageGenerateSandboxConfig = {
-  root: string;
-  bridge: SandboxFsBridge;
-};
+type ImageGenerateSandboxConfig = MediaToolSandbox;
 
 async function loadReferenceImages(params: {
   imageInputs: string[];
   maxBytes: number;
   workspaceDir?: string;
-  sandboxConfig: { root: string; bridge: SandboxFsBridge; workspaceOnly: boolean } | null;
+  sandboxConfig: ReturnType<typeof resolveMediaToolSandboxConfig>;
   ssrfPolicy?: SsrFPolicy;
   signal?: AbortSignal;
 }): Promise<
@@ -795,14 +770,10 @@ export function createImageGenerateTool(options?: {
   ) {
     return null;
   }
-  const sandboxConfig =
-    options?.sandbox && options.sandbox.root.trim()
-      ? {
-          root: options.sandbox.root.trim(),
-          bridge: options.sandbox.bridge,
-          workspaceOnly: options.fsPolicy?.workspaceOnly === true,
-        }
-      : null;
+  const sandboxConfig = resolveMediaToolSandboxConfig(
+    options?.sandbox,
+    options?.fsPolicy?.workspaceOnly,
+  );
   const scheduleBackgroundWork =
     options?.scheduleBackgroundWork ?? defaultScheduleImageGenerateBackgroundWork;
 
@@ -831,12 +802,14 @@ export function createImageGenerateTool(options?: {
       }
 
       const model = readToolStringParam(params, "model");
-      const imageGenerationModelConfig = resolveImageGenerationModelConfigForTool({
+      const imageGenerationModelConfig = resolveCapabilityModelConfigForTool({
         cfg,
         workspaceDir: options?.workspaceDir,
         agentDir: options?.agentDir,
         authStore: options?.authProfileStore,
+        modelConfig: cfg.agents?.defaults?.mediaModels?.image,
         modelOverride: model,
+        providers: () => listRuntimeImageGenerationProviders({ config: cfg }),
       });
       if (!imageGenerationModelConfig) {
         throw new ToolInputError("No image-generation model configured.");

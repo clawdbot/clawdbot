@@ -17,13 +17,12 @@ import {
   compactSessionMenuViewForValue,
   type CompactSessionMenuView,
 } from "./session-menu-compact.ts";
-import type { SessionOwnerOption } from "./session-owner-chip.ts";
+import type { SessionCreatedActor } from "./session-owner-chip.ts";
 
 /**
- * Worktree-session extras resolved lazily by the menu host after open; null
- * hides the block entirely (plain chat sessions), loading keeps the items
- * rendered-but-disabled so the menu layout never shifts under the pointer.
- * A resolved null `worktreePath` drops the editor row for good — see
+ * Worktree-session extras resolved lazily by the menu host after open.
+ * Only resolved destinations are offered. A null `worktreePath` hides editor
+ * destinations — see
  * `native-editor-locality.runtime.ts` for which checkouts ever get one.
  */
 export type SessionMenuWork = {
@@ -35,14 +34,19 @@ export type SessionMenuWork = {
 export type SessionMenuAction =
   | SessionManagementAction
   | { kind: "open-pr"; url: string }
-  | { kind: "workboard" }
+  | { kind: "plugin"; id: string }
   | { kind: "stop-cloud-worker" };
 
 export type SessionMenuActionKind = SessionMenuAction["kind"];
 
+export type PluginSessionMenuAction = { id: string; label: string; disabled?: boolean };
+
 class SessionMenu extends OpenClawLightDomElement {
   @property({ attribute: false }) session: SessionMenuData = EMPTY_SESSION_MENU_DATA;
   @property({ attribute: false }) compact = false;
+  @property({ attribute: false }) navigationAllowed = false;
+  @property({ attribute: false }) copyMarkdownAllowed = false;
+  @property({ attribute: false }) splitAllowed = false;
   // >1 renders the batch menu: only actions that apply to every selected
   // session (unread/group/archive/delete); `session` then carries aggregated
   // flags (unread = all unread, category = shared category or null).
@@ -60,11 +64,9 @@ class SessionMenu extends OpenClawLightDomElement {
   @property({ attribute: false }) deleteAllowed = false;
   @property({ attribute: false }) cloudWorkerStopAllowed = false;
   @property({ attribute: false }) groups: readonly string[] = [];
-  @property({ attribute: false }) ownerOptions: readonly SessionOwnerOption[] = [];
-  @property({ attribute: false }) selfOwner: SessionOwnerOption | null = null;
-  @property({ attribute: false }) currentOwnerId: string | null = null;
+  @property({ attribute: false }) currentOwner: SessionCreatedActor | null = null;
   @property({ attribute: false }) work: SessionMenuWork | null = null;
-  @property({ attribute: false }) workboard: { captured: boolean; busy: boolean } | null = null;
+  @property({ attribute: false }) pluginActions: readonly PluginSessionMenuAction[] = [];
   @property({ attribute: false }) onAction: (action: SessionMenuAction) => void = () => {};
   @property({ attribute: false }) onClose: () => void = () => {};
   @state() private compactView: CompactSessionMenuView = "root";
@@ -74,6 +76,9 @@ class SessionMenu extends OpenClawLightDomElement {
       session: this.session,
       selectionCount: this.selectionCount,
       compact: this.compact,
+      navigationAllowed: this.navigationAllowed,
+      copyMarkdownAllowed: this.copyMarkdownAllowed,
+      splitAllowed: this.splitAllowed,
       disabled: this.disabled,
       actionDisabledReasons: this.actionDisabledReasons,
       forkDisabled: this.forkDisabled,
@@ -81,9 +86,7 @@ class SessionMenu extends OpenClawLightDomElement {
       archiveAllowed: this.archiveAllowed,
       deleteAllowed: this.deleteAllowed,
       groups: this.groups,
-      ownerOptions: this.ownerOptions,
-      selfOwner: this.selfOwner,
-      currentOwnerId: this.currentOwnerId,
+      currentOwner: this.currentOwner,
       worktreePath: this.work?.worktreePath ?? null,
     }),
     (action) => this.onAction(action),
@@ -134,15 +137,21 @@ class SessionMenu extends OpenClawLightDomElement {
     if (compactView) {
       this.compactView = compactView;
       this.managementActions.prepareCompactView(compactView);
-      void this.updateComplete.then(() => {
-        this.querySelector<HTMLElement>("wa-dropdown-item:not([disabled])")?.focus();
-      });
+      this.managementActions.focusCurrentView();
       return;
     }
     if (this.managementActions.handleSelect(value)) {
       return;
     }
-    if (value === "workboard" || value === "stop-cloud-worker") {
+    if (value.startsWith("plugin:")) {
+      const id = value.slice("plugin:".length);
+      const action = this.pluginActions.find((candidate) => candidate.id === id);
+      if (action && this.selectionCount === 1 && !this.actionDisabled("plugin", action.disabled)) {
+        this.runAction({ kind: "plugin", id });
+      }
+      return;
+    }
+    if (value === "stop-cloud-worker") {
       this.runAction({ kind: value });
       return;
     }
@@ -159,16 +168,10 @@ class SessionMenu extends OpenClawLightDomElement {
   };
 
   private renderWorkItems() {
-    const work = this.work;
-    if (!work) {
+    const pullRequestUrl = this.work?.pullRequestUrl;
+    if (!pullRequestUrl) {
       return nothing;
     }
-    const pullRequestUrl = work.pullRequestUrl;
-    const worktreePath = work.worktreePath;
-    // Hold the row while the path resolves so the menu does not shift under the
-    // pointer, then drop it once we know the checkout is unreachable from this
-    // browser: a disabled row would only advertise a handoff that cannot run.
-    const showEditorEntry = work.loading || Boolean(worktreePath);
     return html`
       <wa-dropdown-item
         class="session-menu__item"
@@ -184,8 +187,6 @@ class SessionMenu extends OpenClawLightDomElement {
         <span class="session-menu__text">${t("sessionsView.openPullRequest")}</span>
         ${menuShortcutHint("g")}
       </wa-dropdown-item>
-      ${showEditorEntry ? this.managementActions.renderOpenInEntry(worktreePath) : nothing}
-      <div class="session-menu__separator" role="separator"></div>
     `;
   }
 
@@ -208,6 +209,7 @@ class SessionMenu extends OpenClawLightDomElement {
         placement="bottom-start"
         .distance=${0}
         aria-label=${menuLabel}
+        @wa-show=${this.managementActions.loadOwners}
         @wa-select=${this.handleSelect}
         @wa-after-hide=${this.handleAfterHide}
       >
@@ -219,57 +221,71 @@ class SessionMenu extends OpenClawLightDomElement {
           aria-label=${menuLabel}
           style="position: fixed; left: ${clampedX}px; top: ${clampedY}px; width: 1px; height: 1px; opacity: 0; pointer-events: none;"
         ></button>
-        ${this.compact && this.compactView !== "root"
-          ? this.managementActions.renderCompactView(this.compactView)
-          : html`
-              ${!batch && this.lastActive
-                ? html`<div class="session-menu__info">
-                    ${t("sessionsView.lastActive", { time: this.lastActive })}
-                  </div>`
-                : nothing}
-              ${batch ? nothing : this.renderWorkItems()}
-              ${this.managementActions.renderPrimaryActions()}
-              ${!batch && this.workboard
-                ? html`
-                    <wa-dropdown-item
-                      class="session-menu__item"
-                      value="workboard"
-                      data-shortcut="w"
-                      aria-keyshortcuts="W"
-                      ?disabled=${this.disabled || this.workboard.busy}
-                    >
-                      <span slot="icon" class="session-menu__icon" aria-hidden="true"
-                        >${this.workboard.captured ? icons.check : icons.plus}</span
-                      >
-                      <span class="session-menu__text"
-                        >${this.workboard.captured
-                          ? t("sessionsView.openWorkboardCard")
-                          : t("sessionsView.addToWorkboard")}</span
-                      >
-                      ${menuShortcutHint("w")}
-                    </wa-dropdown-item>
-                  `
-                : nothing}
-              ${this.managementActions.renderGroupAction()}
-              <div class="session-menu__separator" role="separator"></div>
-              ${!batch && this.cloudWorkerStopAllowed
-                ? html`
-                    <wa-dropdown-item
-                      class="session-menu__item session-menu__item--destructive"
-                      value="stop-cloud-worker"
-                      variant="danger"
-                      ?disabled=${this.actionDisabled("stop-cloud-worker")}
-                      title=${this.actionTitle("stop-cloud-worker")}
-                    >
-                      <span slot="icon" class="session-menu__icon" aria-hidden="true"
-                        >${icons.stop}</span
-                      >
-                      <span class="session-menu__text">${t("sessionsView.stopCloudWorker")}</span>
-                    </wa-dropdown-item>
-                  `
-                : nothing}
-              ${this.managementActions.renderLifecycleActions()}
-            `}
+        ${
+          this.compact && this.compactView !== "root"
+            ? this.managementActions.renderCompactView(this.compactView)
+            : html`
+                ${
+                  !batch && this.lastActive
+                    ? html`<div class="session-menu__info">
+                        ${t("sessionsView.lastActive", { time: this.lastActive })}
+                      </div>`
+                    : nothing
+                }
+                ${this.managementActions.renderPrimaryActions()}
+                <div class="session-menu__separator" role="separator"></div>
+                ${this.managementActions.renderOrganizationActions()}
+                ${
+                  !batch
+                    ? this.pluginActions.map(
+                        (action) => html`
+                          <wa-dropdown-item
+                            class="session-menu__item"
+                            value=${`plugin:${action.id}`}
+                            ?disabled=${this.actionDisabled("plugin", action.disabled)}
+                            title=${this.actionTitle("plugin")}
+                          >
+                            <span slot="icon" class="session-menu__icon" aria-hidden="true"
+                              >${icons.puzzle}</span
+                            >
+                            <span class="session-menu__text">${action.label}</span>
+                          </wa-dropdown-item>
+                        `,
+                      )
+                    : nothing
+                }
+                ${
+                  batch
+                    ? nothing
+                    : html`
+                        <div class="session-menu__separator" role="separator"></div>
+                        ${this.managementActions.renderTransferActions()} ${this.renderWorkItems()}
+                      `
+                }
+                <div class="session-menu__separator" role="separator"></div>
+                ${
+                  !batch && this.cloudWorkerStopAllowed
+                    ? html`
+                        <wa-dropdown-item
+                          class="session-menu__item session-menu__item--destructive"
+                          value="stop-cloud-worker"
+                          variant="danger"
+                          ?disabled=${this.actionDisabled("stop-cloud-worker")}
+                          title=${this.actionTitle("stop-cloud-worker")}
+                        >
+                          <span slot="icon" class="session-menu__icon" aria-hidden="true"
+                            >${icons.stop}</span
+                          >
+                          <span class="session-menu__text"
+                            >${t("sessionsView.stopCloudWorker")}</span
+                          >
+                        </wa-dropdown-item>
+                      `
+                    : nothing
+                }
+                ${this.managementActions.renderDeleteAction()}
+              `
+        }
       </wa-dropdown>`,
     );
   }

@@ -1,7 +1,8 @@
+import { createHash } from "node:crypto";
 import fs from "node:fs/promises";
 import type { ServerResponse } from "node:http";
 import { text as readText } from "node:stream/consumers";
-import { afterAll, beforeAll, describe, expect, it } from "vitest";
+import { afterAll, beforeAll, describe, expect, it, vi } from "vitest";
 import {
   writeOpenAiResponsesSse,
   writeOpenAiResponsesText,
@@ -9,6 +10,7 @@ import {
 import { loadAgentRuntimePluginRegistryHandle } from "../../agents/runtime-plugins.js";
 import { sanitizeToolUseResultPairingForModel } from "../../agents/session-transcript-repair.js";
 import { withServer } from "../../plugin-sdk/test-helpers/http-test-server.js";
+import { openOpenClawAgentDatabase } from "../../state/openclaw-agent-db.js";
 import {
   createOpenClawTestState,
   type OpenClawTestState,
@@ -130,6 +132,12 @@ describe("Workshop experience review through the real provider and tool owners",
           const workspaceDir = await tempDirs.make(`workshop-contract-${scenario}-`);
           const runId = `owner-contract-${scenario}`;
           const messages = scenario === "interrupted" ? interruptedMessages() : positiveMessages();
+          const privateMarker = "synthetic-workshop-native-payload:";
+          if (scenario === "nothing") {
+            Object.assign(messages[0]!, {
+              __openclaw: { upstreamUserText: privateMarker + "x".repeat(2 * 1024 * 1024) },
+            });
+          }
           const replay = sanitizeToolUseResultPairingForModel(messages, true);
           const candidate = await createExperienceReviewCandidate(runId, messages, {
             workspaceDir,
@@ -141,20 +149,48 @@ describe("Workshop experience review through the real provider and tool owners",
           // Load the real provider plugin before entering the review lane, as the live proof does.
           loadAgentRuntimePluginRegistryHandle({ config: candidate.config ?? {}, workspaceDir });
           const outcomesBefore = new Set(Object.keys(readSkillReviewOutcomes().experienceReviews));
+          const database = openOpenClawAgentDatabase({ agentId: "main" });
+          const foregroundFingerprint = () => {
+            const hash = createHash("sha256");
+            for (const row of database.db
+              .prepare("SELECT event_json FROM transcript_events WHERE session_id = ? ORDER BY seq")
+              .iterate(candidate.ctx.sessionId!)) {
+              hash.update(String(row.event_json));
+            }
+            return hash.digest("hex");
+          };
+          const storedBefore = foregroundFingerprint();
           const startedAt = Date.now();
+          const originalParse = JSON.parse;
+          let privateAcquisitionBytes = 0;
+          const parseSpy = vi.spyOn(JSON, "parse").mockImplementation((text, reviver) => {
+            if (typeof text === "string" && text.includes(privateMarker)) {
+              privateAcquisitionBytes += text.length;
+            }
+            return originalParse(text, reviver);
+          });
           const run = observeExperienceReview(() =>
             runSkillExperienceReview(candidate, {
               getCurrentConfig: () => candidate.config ?? {},
             }),
           );
           let observation: Awaited<ReturnType<typeof observeExperienceReview>> | undefined;
-          if (scenario === "failed") {
-            await expect(run).rejects.toThrow(
-              "provider rejected the request schema or tool payload",
-            );
-          } else {
-            observation = await run;
+          try {
+            if (scenario === "failed") {
+              await expect(run).rejects.toThrow(
+                "provider rejected the request schema or tool payload",
+              );
+            } else if (scenario === "rejected") {
+              await expect(run).rejects.toThrow("Skill Workshop failed");
+            } else {
+              observation = await run;
+            }
+          } finally {
+            parseSpy.mockRestore();
           }
+
+          expect(privateAcquisitionBytes).toBe(0);
+          expect(foregroundFingerprint()).toBe(storedBefore);
 
           expect(handlerErrors).toEqual([]);
           expect(requests).toHaveLength(scenario === "proposed" || scenario === "rejected" ? 2 : 1);
@@ -203,7 +239,7 @@ describe("Workshop experience review through the real provider and tool owners",
             expect(proposals).toEqual([]);
             expect(progress.mutationCount).toBe(0);
             expect(outcome).toMatchObject({
-              outcome: scenario === "failed" ? "failed" : "nothing",
+              outcome: scenario === "failed" || scenario === "rejected" ? "failed" : "nothing",
             });
             if (scenario === "rejected") {
               const toolOutput = requests[1]?.input?.find(
@@ -213,7 +249,7 @@ describe("Workshop experience review through the real provider and tool owners",
               expect(toolOutput?.output).toContain("required");
             }
           }
-          if (scenario !== "failed") {
+          if (scenario !== "failed" && scenario !== "rejected") {
             expect(outcome?.usage?.outputTokens).toBeGreaterThan(0);
             expect(observation).toBeDefined();
             const decision = () =>
@@ -225,11 +261,7 @@ describe("Workshop experience review through the real provider and tool owners",
                 outcome,
                 startedAt,
               });
-            if (scenario === "rejected") {
-              expect(decision).toThrow();
-            } else {
-              expect(decision()).toBe(scenario === "proposed" ? "proposed" : "abstained");
-            }
+            expect(decision()).toBe(scenario === "proposed" ? "proposed" : "abstained");
           }
         },
       );

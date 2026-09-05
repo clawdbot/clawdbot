@@ -3,6 +3,7 @@ export type ServiceChildStart = {
   generation: string;
   command: string;
   args: string[];
+  argv0?: string;
   cwd?: string;
   env?: Record<string, string>;
   stdinMode: "inherit" | "pipe-open" | "pipe-closed";

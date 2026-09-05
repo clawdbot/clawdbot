@@ -1,7 +1,7 @@
 import { createHash, createHmac, randomBytes } from "node:crypto";
 import type { IncomingMessage, ServerResponse } from "node:http";
+import { peekSessionMcpRuntime } from "../agents/agent-bundle-mcp-manager-api.js";
 import { runWithSessionMcpRequestSignal } from "../agents/agent-bundle-mcp-request-context.js";
-import { peekSessionMcpRuntime } from "../agents/agent-bundle-mcp-runtime.js";
 import { buildMcpAppSandboxPath, resolveMcpAppSandboxPort } from "../agents/mcp-app-sandbox.js";
 import { getMcpAppViewLease, type McpAppViewLease } from "../agents/mcp-ui-resource.js";
 import { formatErrorMessage } from "../infra/errors.js";

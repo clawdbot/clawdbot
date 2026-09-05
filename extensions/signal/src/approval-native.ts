@@ -66,7 +66,7 @@ const signalApproval = createApproverRestrictedNativeApprovalCapabilityFromForwa
   },
   createNativeRuntime: (routing) =>
     createLazyChannelApprovalNativeRuntimeAdapter({
-      eventKinds: ["exec", "plugin"],
+      eventKinds: ["exec", "plugin", "system-agent"],
       isConfigured: ({ cfg, accountId, context }) =>
         Boolean(context) && routing.isNativeApprovalHandlerConfigured({ cfg, accountId }),
       shouldHandle: ({ cfg, accountId, context, approvalKind, request }) =>

@@ -16,11 +16,10 @@ const TOOL_NAME_PATTERN = /^[a-zA-Z0-9._-]{1,128}$/u;
 const TOOL_ERROR_STATUS_PREFIX = "[Tool result status: error]\n";
 
 type ProjectedToolReference = { id: string; name: string };
-type ProjectedMessageGroup = {
-  items: JsonValue[];
-  calls: ProjectedToolReference[];
-  results: ProjectedToolReference[];
-  bytes: number;
+type ProjectedResponseItem = {
+  item: JsonValue;
+  call?: ProjectedToolReference;
+  result?: ProjectedToolReference;
 };
 
 function readBoundedText(
@@ -92,60 +91,45 @@ function serializeToolArguments(value: unknown): string {
   return requireBoundedText(serialized, "tool arguments");
 }
 
-function projectUserMessage(message: Extract<AgentMessage, { role: "user" }>): JsonValue[] {
+function projectUserMessage(message: Extract<AgentMessage, { role: "user" }>): JsonValue {
   const upstreamUserText = readUpstreamUserText(message);
-  if (upstreamUserText && typeof message.content === "string") {
-    return [
-      {
-        type: "message",
-        role: "user",
-        content: [
-          {
-            type: "input_text",
-            text: requireBoundedText(upstreamUserText, "upstream user text", MAX_PROJECTION_BYTES),
-          },
-        ],
-      },
-    ];
-  }
   if (typeof message.content === "string") {
-    return [
-      {
-        type: "message",
-        role: "user",
-        content: [
-          { type: "input_text", text: requireBoundedText(message.content, "user message") },
-        ],
-      },
-    ];
+    const text = upstreamUserText
+      ? requireBoundedText(upstreamUserText, "upstream user text", MAX_PROJECTION_BYTES)
+      : requireBoundedText(message.content, "user message");
+    return { type: "message", role: "user", content: [{ type: "input_text", text }] };
   }
   if (!Array.isArray(message.content)) {
     throw new Error("Codex settled-turn projection found unsupported user content");
   }
   const content: JsonValue[] = [];
+  let bytes = responseItemBytes({ type: "message", role: "user", content });
   for (const value of message.content) {
     if (!isRecord(value)) {
       throw new Error("Codex settled-turn projection found malformed user content");
     }
-    if (value.type === "text") {
-      const text = readBoundedText(value.text, "user text");
-      if (text) {
-        content.push({ type: "input_text", text });
-      }
-      continue;
+    if (value.type !== "text") {
+      throw new Error(`Codex settled-turn projection does not support user content ${value.type}`);
     }
-    throw new Error(`Codex settled-turn projection does not support user content ${value.type}`);
+    const text = readBoundedText(value.text, "user text");
+    if (text) {
+      const part = { type: "input_text", text };
+      bytes += responseItemBytes(part) + (content.length > 0 ? 1 : 0);
+      if (bytes > MAX_PROJECTION_BYTES) {
+        throw new Error("Codex settled-turn projection exceeds the byte limit");
+      }
+      content.push(part);
+    }
   }
   if (content.length === 0) {
     throw new Error("Codex settled-turn projection found an empty user message");
   }
-  return [{ type: "message", role: "user", content }];
+  return { type: "message", role: "user", content };
 }
 
-function projectAssistantMessage(message: Extract<AgentMessage, { role: "assistant" }>): {
-  items: JsonValue[];
-  calls: ProjectedToolReference[];
-} {
+function* projectAssistantMessage(
+  message: Extract<AgentMessage, { role: "assistant" }>,
+): Generator<ProjectedResponseItem> {
   const values: unknown =
     typeof message.content === "string"
       ? [{ type: "text", text: message.content }]
@@ -153,8 +137,6 @@ function projectAssistantMessage(message: Extract<AgentMessage, { role: "assista
   if (!Array.isArray(values)) {
     throw new Error("Codex settled-turn projection found unsupported assistant content");
   }
-  const items: JsonValue[] = [];
-  const calls: ProjectedToolReference[] = [];
   for (const value of values) {
     if (!isRecord(value)) {
       throw new Error("Codex settled-turn projection found malformed assistant content");
@@ -162,24 +144,24 @@ function projectAssistantMessage(message: Extract<AgentMessage, { role: "assista
     if (value.type === "text") {
       const text = readBoundedText(value.text, "assistant text");
       if (text) {
-        items.push({
-          type: "message",
-          role: "assistant",
-          content: [{ type: "output_text", text }],
-        });
+        yield {
+          item: { type: "message", role: "assistant", content: [{ type: "output_text", text }] },
+        };
       }
       continue;
     }
     if (value.type === "toolCall") {
       const id = requireCallId(value.id ?? value.toolCallId);
       const name = requireToolName(value.name ?? value.toolName);
-      calls.push({ id, name });
-      items.push({
-        type: "function_call",
-        call_id: id,
-        name,
-        arguments: serializeToolArguments(value.arguments ?? value.input),
-      });
+      yield {
+        call: { id, name },
+        item: {
+          type: "function_call",
+          call_id: id,
+          name,
+          arguments: serializeToolArguments(value.arguments ?? value.input),
+        },
+      };
       continue;
     }
     if (value.type === "thinking" || value.type === "reasoning") {
@@ -190,7 +172,6 @@ function projectAssistantMessage(message: Extract<AgentMessage, { role: "assista
       `Codex settled-turn projection does not support assistant content ${String(value.type)}`,
     );
   }
-  return { items, calls };
 }
 
 function projectToolResult(message: Extract<AgentMessage, { role: "toolResult" }>): {
@@ -208,6 +189,14 @@ function projectToolResult(message: Extract<AgentMessage, { role: "toolResult" }
   }
   const isError = isErrorValue === true;
   const parts: string[] = [];
+  let bytes = 0;
+  const appendText = (text: string) => {
+    bytes += Buffer.byteLength(text, "utf8") + (parts.length > 0 ? 1 : 0);
+    if (bytes > MAX_TEXT_BYTES) {
+      throw new Error("Codex settled-turn projection found oversized tool result output");
+    }
+    parts.push(text);
+  };
   for (const value of message.content) {
     if (!isRecord(value)) {
       throw new Error("Codex settled-turn projection found malformed tool result content");
@@ -216,7 +205,7 @@ function projectToolResult(message: Extract<AgentMessage, { role: "toolResult" }
       const mimeType = normalizeOptionalString(value.mimeType) ?? "unknown type";
       // The finalizer selects by text capability. Preserve image evidence as
       // metadata without embedding an executable or oversized multimodal payload.
-      parts.push(`[Image tool result: ${mimeType}]`);
+      appendText(`[Image tool result: ${mimeType}]`);
       continue;
     }
     if (value.type !== "text" && value.type !== "toolResult") {
@@ -227,7 +216,7 @@ function projectToolResult(message: Extract<AgentMessage, { role: "toolResult" }
         ? readBoundedText(value.text, "tool result text")
         : readBoundedText(value.content ?? value.text, "tool result text");
     if (text) {
-      parts.push(text);
+      appendText(text);
     }
   }
   const resultText =
@@ -246,81 +235,53 @@ function projectToolResult(message: Extract<AgentMessage, { role: "toolResult" }
   };
 }
 
-function projectMessage(message: AgentMessage): ProjectedMessageGroup | undefined {
-  let items: JsonValue[];
-  let calls: ProjectedToolReference[] = [];
-  let results: ProjectedToolReference[] = [];
+function* projectMessage(message: AgentMessage): Generator<ProjectedResponseItem> {
   if (message.role === "user") {
-    items = projectUserMessage(message);
+    yield { item: projectUserMessage(message) };
   } else if (message.role === "assistant") {
-    const projected = projectAssistantMessage(message);
-    items = projected.items;
-    calls = projected.calls;
+    yield* projectAssistantMessage(message);
   } else if (message.role === "toolResult") {
-    const projected = projectToolResult(message);
-    items = [projected.item];
-    results = [projected.result];
+    yield projectToolResult(message);
   } else {
     throw new Error(`Codex settled-turn projection does not support role ${message.role}`);
   }
-  if (items.length === 0) {
-    return undefined;
-  }
-  return {
-    items,
-    calls,
-    results,
-    bytes: items.reduce<number>((total, item) => total + responseItemBytes(item), 0),
-  };
 }
 
-function validateExactlyPairedCalls(groups: readonly ProjectedMessageGroup[]): number {
-  const calls = new Map<string, { name: string; groupIndex: number }>();
+/** Consumes complete evidence or rejects at the existing limits, never truncating its history. */
+export function projectSettledCodexMessages(messages: Iterable<AgentMessage>): JsonValue[] {
+  const items: JsonValue[] = [];
+  const calls = new Map<string, string>();
   const results = new Set<string>();
-  let resultCount = 0;
-  for (const [groupIndex, group] of groups.entries()) {
-    for (const call of group.calls) {
-      if (calls.has(call.id)) {
-        throw new Error("Codex settled-turn projection found a duplicate tool call");
+  let bytes = 0;
+  for (const message of messages) {
+    for (const { item, call, result } of projectMessage(message)) {
+      if (call) {
+        if (calls.has(call.id)) {
+          throw new Error("Codex settled-turn projection found a duplicate tool call");
+        }
+        calls.set(call.id, call.name);
       }
-      calls.set(call.id, { name: call.name, groupIndex });
-    }
-    for (const result of group.results) {
-      const call = calls.get(result.id);
-      if (
-        !call ||
-        call.groupIndex >= groupIndex ||
-        call.name !== result.name ||
-        results.has(result.id)
-      ) {
-        throw new Error("Codex settled-turn projection found an ambiguous tool transcript");
+      if (result) {
+        if (calls.get(result.id) !== result.name || results.has(result.id)) {
+          throw new Error("Codex settled-turn projection found an ambiguous tool transcript");
+        }
+        results.add(result.id);
       }
-      results.add(result.id);
-      resultCount += 1;
+      if (items.length === MAX_RESPONSE_ITEMS) {
+        throw new Error("Codex settled-turn projection exceeds the item limit");
+      }
+      bytes += responseItemBytes(item);
+      if (bytes > MAX_PROJECTION_BYTES) {
+        throw new Error("Codex settled-turn projection exceeds the byte limit");
+      }
+      items.push(item);
     }
   }
   if (calls.size !== results.size) {
     throw new Error("Codex settled-turn projection found an incomplete tool transcript");
   }
-  return resultCount;
-}
-
-/** Projects the complete frozen transcript or rejects it without truncation or tail dropping. */
-export function projectSettledCodexMessages(messages: readonly AgentMessage[]): JsonValue[] {
-  const groups = messages.flatMap((message) => {
-    const projected = projectMessage(message);
-    return projected ? [projected] : [];
-  });
-  if (validateExactlyPairedCalls(groups) === 0) {
+  if (results.size === 0) {
     throw new Error("Codex settled-turn projection found no completed tool result");
-  }
-  const items = groups.flatMap((group) => group.items);
-  if (items.length > MAX_RESPONSE_ITEMS) {
-    throw new Error("Codex settled-turn projection exceeds the item limit");
-  }
-  const bytes = groups.reduce((total, group) => total + group.bytes, 0);
-  if (bytes > MAX_PROJECTION_BYTES) {
-    throw new Error("Codex settled-turn projection exceeds the byte limit");
   }
   return items;
 }

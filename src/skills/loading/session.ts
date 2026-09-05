@@ -1,9 +1,10 @@
 import { existsSync, readdirSync, readFileSync, statSync } from "node:fs";
-import { basename, dirname, isAbsolute, join, relative, resolve, sep } from "node:path";
+import { basename, dirname, isAbsolute, join, relative, resolve } from "node:path";
 import { CONFIG_DIR_NAME, getAgentDir } from "../../agents/config.js";
 import type { ResourceDiagnostic } from "../../agents/sessions/diagnostics.js";
 import { createSyntheticSourceInfo, type SourceInfo } from "../../agents/sessions/source-info.js";
 import { canonicalizePath } from "../../agents/utils/paths.js";
+import { isPathInside } from "../../infra/path-guards.js";
 import {
   addIgnoreRules,
   normalizeNativePathSeparators,
@@ -349,21 +350,12 @@ export function loadSkills(options: LoadSkillsOptions): LoadSkillsResult {
   const userSkillsDir = join(resolvedAgentDir, "skills");
   const projectSkillsDir = resolve(cwd, CONFIG_DIR_NAME, "skills");
 
-  const isUnderPath = (target: string, root: string): boolean => {
-    const normalizedRoot = resolve(root);
-    if (target === normalizedRoot) {
-      return true;
-    }
-    const prefix = normalizedRoot.endsWith(sep) ? normalizedRoot : `${normalizedRoot}${sep}`;
-    return target.startsWith(prefix);
-  };
-
   const getSource = (resolvedPath: string): "user" | "project" | "path" => {
     if (!includeDefaults) {
-      if (isUnderPath(resolvedPath, userSkillsDir)) {
+      if (isPathInside(userSkillsDir, resolvedPath)) {
         return "user";
       }
-      if (isUnderPath(resolvedPath, projectSkillsDir)) {
+      if (isPathInside(projectSkillsDir, resolvedPath)) {
         return "project";
       }
     }

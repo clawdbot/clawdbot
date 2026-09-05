@@ -470,7 +470,8 @@ export function createMatrixQaScenarioEnvironment(params: MatrixQaScenarioEnviro
         opts?: { replacePaths?: string[]; restartDelayMs?: number },
       ) => {
         await patchGatewayConfig({
-          deadlineMs: preparationDeadline,
+          // This callback runs during actions, after the preparation budget may expire.
+          deadlineMs: Date.now() + input.timeoutMs,
           gateway: input.gateway,
           patch,
           replacePaths: opts?.replacePaths,

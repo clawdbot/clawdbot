@@ -7,6 +7,7 @@ import {
   createChannelTestPluginBase,
   createTestRegistry,
 } from "../../test-utils/channel-plugins.js";
+import { getReplyPayloadMetadata, setReplyPayloadMetadata } from "../reply-payload.js";
 
 const mocks = vi.hoisted(() => ({
   deliverOutboundPayloads: vi.fn(),
@@ -127,6 +128,36 @@ describe("routeReply delivery result", () => {
       ambiguous: true,
       reason: "adapter_returned_no_identity",
     });
+  });
+
+  it("preserves session writer authority through route normalization", async () => {
+    mocks.deliverOutboundPayloads.mockResolvedValueOnce([
+      { channel: "telegram", messageId: "message-1" },
+    ]);
+    const authority = {
+      expectedLifecycleRevision: "revision-a",
+      expectedSessionId: "session-1",
+      expectedWriterRunId: "run-a",
+      sessionKey: "agent:main:telegram:direct:1",
+      storePath: "/tmp/sessions.json",
+    };
+
+    await routeReply({
+      payload: setReplyPayloadMetadata(
+        { text: "hello" },
+        { sessionWriterDeliveryAuthority: authority },
+      ),
+      channel: "telegram",
+      to: "chat-1",
+      cfg: {} as never,
+    });
+
+    const call = mocks.deliverOutboundPayloads.mock.calls[0];
+    if (!call) {
+      throw new Error("expected routed delivery");
+    }
+    const sentPayload = (call[0] as { payloads: object[] }).payloads[0]!;
+    expect(getReplyPayloadMetadata(sentPayload)?.sessionWriterDeliveryAuthority).toEqual(authority);
   });
 
   it("preserves the last delivered message id when a later send fails", async () => {

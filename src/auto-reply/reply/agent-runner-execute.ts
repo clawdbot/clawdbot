@@ -5,6 +5,7 @@ import type { OpenClawConfig } from "../../config/config.js";
 import type { SessionEntry } from "../../config/sessions.js";
 import { logVerbose } from "../../globals.js";
 import { withBeforeAgentReplyObserver } from "../../plugins/before-agent-reply.js";
+import { getGatewayContextResolver } from "../../plugins/runtime/gateway-request-scope.js";
 import { readSessionInputProfileId } from "../../sessions/session-participant-input.js";
 import { setReplyPayloadMetadata } from "../reply-payload.js";
 import type { OriginatingChannelType } from "../templating.js";
@@ -18,6 +19,7 @@ import {
 import { executeAgentTurn } from "./agent-runner-execution.js";
 import { markPostCompactionModelFailurePayload } from "./agent-runner-failure-reply.js";
 import { runMemoryFlushIfNeeded, runSessionCompactionIfNeeded } from "./agent-runner-memory.js";
+import { accountAgentTurnCompaction } from "./agent-runner-result-accounting.js";
 import { finalizeReplyAgentRun } from "./agent-runner-result.js";
 import { buildThreadingToolContext } from "./agent-runner-utils.js";
 import type { BlockReplyPipeline } from "./block-reply-pipeline.js";
@@ -30,8 +32,7 @@ import {
 import type { FollowupRun } from "./queue.js";
 import type { ReplyMediaContext } from "./reply-media-paths.js";
 import { isReplyOperationSuperseded } from "./reply-operation-abort.js";
-import { recordReplyOperationAgentTurn } from "./reply-operation-agent-turn-state.js";
-import { resolveReplyOperationRunState } from "./reply-operation-run-state.js";
+import { recordReplyOperationAgentTurn } from "./reply-operation-run-state.js";
 import type { ReplyOperation } from "./reply-run-registry.js";
 import { resolveReplyToMode } from "./reply-threading.js";
 import { createReplyRestartRecoveryClaimController } from "./restart-recovery-claim.js";
@@ -248,6 +249,7 @@ export async function executePreparedReplyAgentRun(
   }
 
   const runFollowupTurn = createFollowupRunner({
+    resolveGatewayContext: getGatewayContextResolver(replyOperation),
     opts,
     typing,
     typingMode,
@@ -381,19 +383,21 @@ export async function executePreparedReplyAgentRun(
   );
   const operationSuperseded = isReplyOperationSuperseded(replyOperation);
   recordReplyOperationAgentTurn(
-    resolveReplyOperationRunState(opts),
-    operationSuperseded
-      ? "superseded"
-      : runOutcome.outcome.kind === "rejected"
-        ? "failed"
-        : runOutcome.outcome.kind === "aborted" || runOutcome.outcome.abortReason
-          ? "cancelled"
-          : runOutcome.outcome.status,
+    followupRun.replyOperationRunStates,
     replyOperation,
+    runOutcome.outcome,
   );
   activeSessionEntry = getActiveSessionEntry();
   const activeIsNewSession = getActiveIsNewSession();
 
+  if (runOutcome.outcome.kind !== "settled") {
+    // Only captured facts cross cancellation; no successor adoption, hooks, or reply work.
+    await accountAgentTurnCompaction({
+      compaction: runOutcome.outcome.compaction,
+      sessionStore: activeSessionStore,
+      replyOperation,
+    });
+  }
   if (operationSuperseded) {
     return { text: SILENT_REPLY_TOKEN };
   }
@@ -492,6 +496,7 @@ export function createReplyAgentRestartRecoveryController(
     clear: clearRestartRecoveryDeliveryClaim,
     isArmed: isRestartRecoveryArmed,
   } = createReplyRestartRecoveryClaimController({
+    lifecycleGeneration: replyOperation.lifecycleGeneration,
     admissionRunId:
       normalizeOptionalString(sessionCtx.MessageSid) ??
       normalizeOptionalString(sessionCtx.MessageSidFull),

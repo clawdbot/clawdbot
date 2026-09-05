@@ -100,6 +100,10 @@ function sanitizeExecApprovalDisplayTextInternal(
     };
   }
   const rawRedacted = redactSensitiveText(commandText, { mode: "tools" });
+  // With no invisibles the two views have identical redaction coverage.
+  if (commandText.search(EXEC_APPROVAL_INVISIBLE_CHAR_REGEX) === -1) {
+    return truncateForDisplay(escapeInvisibles(rawRedacted, options));
+  }
   const { stripped, strippedToOrig } = buildStrippedView(commandText);
   const strippedRedacted = redactSensitiveText(stripped, { mode: "tools" });
   // Fast path: stripping invisibles did not expose any additional secret-like content, so the
@@ -198,4 +202,23 @@ export function sanitizeExecApprovalWarningTextWithStatus(
     preserveLineBreaks: true,
     oversizedMarker: EXEC_APPROVAL_WARNING_OVERSIZED_MARKER,
   });
+}
+
+/** Checks the existing approval code-point cap without materializing every character. */
+export function exceedsApprovalTextLimit(value: string, maxLength: number): boolean {
+  // A code point occupies one or two UTF-16 units. Bounds settle ordinary short
+  // values immediately; the remaining scan stops as soon as rejection is certain.
+  if (value.length <= maxLength) {
+    return false;
+  }
+  if (value.length > maxLength * 2) {
+    return true;
+  }
+  let remaining = maxLength;
+  for (const _ of value) {
+    if (--remaining < 0) {
+      return true;
+    }
+  }
+  return false;
 }

@@ -1,11 +1,8 @@
 import { expect, it } from "vitest";
 import { installMockGateway } from "../test-helpers/control-ui-e2e.ts";
+import { createControlUiSessionRow as sessionRow } from "../test-helpers/control-ui-session-fixtures.ts";
 import { createControlUiE2eSuite } from "./control-ui-e2e-suite.test-support.ts";
-import {
-  captureUiProof,
-  sessionRow,
-  sessionsListResponse,
-} from "./session-management.test-support.ts";
+import { captureUiProof, sessionsListResponse } from "./session-management.test-support.ts";
 
 const suite = createControlUiE2eSuite({
   name: "missing session link",
@@ -23,7 +20,7 @@ suite.define(() => {
         const gateway = await installMockGateway(page, {
           methodResponses: {
             "sessions.list": sessionsListResponse([sessionRow(mainKey, "Main", 1)]),
-            "sessions.resolve": { ok: false },
+            "chat.startup": { resolution: { ok: false } },
           },
           mainSessionKey: mainKey,
           sessionKey: savedActiveKey,
@@ -54,8 +51,9 @@ suite.define(() => {
         expect(await page.locator("openclaw-chat-page").count()).toBe(0);
         expect(await page.locator(".agent-chat__input textarea").count()).toBe(0);
         expect(await page.locator("openclaw-toast-host .app-toast").count()).toBe(0);
-        expect(await gateway.getRequests("sessions.resolve")).toHaveLength(1);
-        await captureUiProof(page, "session-link-not-found-after.png");
+        expect(await gateway.getRequests("chat.startup")).toHaveLength(1);
+        expect(await gateway.getRequests("sessions.resolve")).toHaveLength(0);
+        await captureUiProof(suite, page, "session-link-not-found-after.png");
 
         await currentSession.click();
         await expect.poll(() => new URL(page.url()).pathname).toBe("/chat/main");

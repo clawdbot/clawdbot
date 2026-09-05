@@ -321,7 +321,7 @@ export function runDetachedWebhookWork<T>(run: () => Promise<T>): Promise<T> {
     // before any synchronous prefix in the detached callback can run.
     await Promise.resolve();
     return await run();
-  });
+  }, "webhook:detached");
 }
 
 /** Read a webhook request body with bounded size/time limits and translate failures into responses. */

@@ -1,8 +1,13 @@
 // Cron policy tests cover per-agent defaults flattening before model resolution.
 import { describe, expect, it } from "vitest";
 import { resolveAgentConfig } from "../../agents/agent-scope.js";
+import { DEFAULT_PROVIDER } from "../../agents/defaults.js";
 import { resolveAllowedModelRefCore } from "../../agents/model-selection-resolve.js";
+import type { ResolvedPublishedModelCatalogOwner } from "../../agents/prepared-model-catalog.types.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
+import { createPluginMetadataSnapshotFixture } from "../../plugins/plugin-metadata.test-support.js";
+import { withPluginRuntimeGenerationScope } from "../../plugins/runtime/generation-scope.js";
+import { resolveCronModelSelection } from "./model-selection.js";
 import { resolveCronAgentConfig } from "./run-config.js";
 
 function buildCronConfig(cfg: OpenClawConfig, agentId: string): OpenClawConfig {
@@ -61,4 +66,84 @@ describe("resolveCronAgentConfig model policy preservation", () => {
       ref: { provider: "openai", model: "gpt-5.6-sol" },
     });
   });
+
+  it.each(["default", "subagent", "agent", "payload", "session", "hook"] as const)(
+    "keeps the selected owner's metadata for the %s model",
+    async (source) => {
+      const snapshot = (workspaceDir: string, model: string) => ({
+        ...createPluginMetadataSnapshotFixture({
+          plugins: [
+            {
+              id: "cron-model-policy",
+              modelIdNormalization: {
+                providers: {
+                  custom: { aliases: { legacy: model } },
+                  [DEFAULT_PROVIDER]: { aliases: { legacy: model } },
+                },
+              },
+            },
+          ],
+        }),
+        workspaceDir,
+      });
+      const metadataSnapshot = snapshot("/tmp/cron-owner", "selected");
+      const otherWorkspace = snapshot("/tmp/other-owner", "other");
+      const cfg: OpenClawConfig = {
+        agents: {
+          defaults: {
+            model: { primary: source === "default" ? "custom/legacy" : "custom/baseline" },
+            modelPolicy: { allow: ["custom/legacy", `${DEFAULT_PROVIDER}/legacy`] },
+            ...(source === "subagent" ? { subagents: { model: "custom/legacy" } } : {}),
+          },
+          entries: {
+            worker: {
+              agentDir: "/tmp/cron-agent",
+              workspace: metadataSnapshot.workspaceDir,
+              ...(source === "agent" ? { model: "custom/legacy" } : {}),
+            },
+          },
+        },
+        ...(source === "hook" ? { hooks: { gmail: { model: "legacy" } } } : {}),
+      };
+      const owner: ResolvedPublishedModelCatalogOwner = {
+        catalogOwner: { agentId: "worker", workspaceDir: metadataSnapshot.workspaceDir },
+        agentId: "worker",
+        agentDir: "/tmp/cron-agent",
+        workspaceDir: metadataSnapshot.workspaceDir,
+        config: cfg,
+        observationConfig: cfg,
+        isCurrent: () => true,
+        authModes: {},
+        authStore: { version: 1, profiles: {} },
+        metadataSnapshot,
+        modelCatalog: { entries: [], routeVariants: [] },
+      };
+      for (const ambient of [metadataSnapshot, otherWorkspace]) {
+        const result = await withPluginRuntimeGenerationScope({ metadataSnapshot: ambient }, () =>
+          resolveCronModelSelection({
+            cfg,
+            owner,
+            agentConfigOverride: resolveAgentConfig(cfg, owner.agentId),
+            agentId: owner.agentId,
+            agentDir: owner.agentDir,
+            workspaceDir: owner.workspaceDir,
+            payload: {
+              kind: "agentTurn",
+              message: "scheduled work",
+              ...(source === "payload" ? { model: "custom/legacy" } : {}),
+            },
+            sessionEntry:
+              source === "session" ? { providerOverride: "custom", modelOverride: "legacy" } : {},
+            isGmailHook: source === "hook",
+          }),
+        );
+        expect(result).toMatchObject({
+          ok: true,
+          provider: source === "hook" ? DEFAULT_PROVIDER : "custom",
+          model: "selected",
+          modelSource: source,
+        });
+      }
+    },
+  );
 });

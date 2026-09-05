@@ -971,12 +971,14 @@ async function createOpenShellBackendFixture(params: {
 async function createMirrorFsBridgeFixture(
   workspaceDir: string,
   backend: OpenShellMirrorBackend = createMirrorBackendMock(),
+  workspaceAccess: "rw" | "none" | "ro" = "rw",
 ) {
   const sandbox = createSandboxTestContext({
     overrides: {
       backendId: "openshell",
       workspaceDir,
       agentWorkspaceDir: workspaceDir,
+      workspaceAccess,
       containerWorkdir: "/sandbox",
     },
   });
@@ -1156,22 +1158,59 @@ describe("openshell fs bridges", () => {
     },
   );
 
-  it("writes locally and syncs the file to the remote workspace", async () => {
-    await using workspace = await createOpenShellTestWorkspace("fs");
-    const workspaceDir = workspace.dir;
-    const { backend, bridge } = await createMirrorFsBridgeFixture(workspaceDir);
-    await bridge.writeFile({
-      filePath: "nested/file.txt",
-      data: "hello",
-      mkdir: true,
-    });
+  it.each([
+    { workspaceAccess: "rw", mutation: "write" },
+    { workspaceAccess: "none", mutation: "write" },
+    { workspaceAccess: "ro", mutation: "write" },
+    { workspaceAccess: "rw", mutation: "remove" },
+    { workspaceAccess: "none", mutation: "remove" },
+    { workspaceAccess: "rw", mutation: "rename" },
+    { workspaceAccess: "none", mutation: "rename" },
+  ] as const)(
+    "enforces $workspaceAccess workspace writes and protects skills from $mutation",
+    async ({ workspaceAccess, mutation }) => {
+      await using workspace = await createOpenShellTestWorkspace("fs");
+      const workspaceDir = workspace.dir;
+      const { backend, bridge } = await createMirrorFsBridgeFixture(
+        workspaceDir,
+        undefined,
+        workspaceAccess,
+      );
+      if (workspaceAccess === "ro") {
+        await expect(bridge.writeFile({ filePath: "file.txt", data: "blocked" })).rejects.toThrow(
+          "read-only",
+        );
+        expect(backend["syncLocalPathToRemote"]).not.toHaveBeenCalled();
+        return;
+      }
+      await bridge.writeFile({
+        filePath: "nested/file.txt",
+        data: "hello",
+        mkdir: true,
+      });
 
-    expect(await fs.readFile(path.join(workspaceDir, "nested", "file.txt"), "utf8")).toBe("hello");
-    expect(backend["syncLocalPathToRemote"]).toHaveBeenCalledWith(
-      path.join(workspaceDir, "nested", "file.txt"),
-      "/sandbox/nested/file.txt",
-    );
-  });
+      expect(await fs.readFile(path.join(workspaceDir, "nested", "file.txt"), "utf8")).toBe(
+        "hello",
+      );
+      expect(backend["syncLocalPathToRemote"]).toHaveBeenCalledWith(
+        path.join(workspaceDir, "nested", "file.txt"),
+        "/sandbox/nested/file.txt",
+      );
+      const skillRelativePath =
+        mutation === "write" ? "skills/demo/SKILL.md" : ".agents/skills/demo/SKILL.md";
+      const skillPath = path.join(workspaceDir, skillRelativePath);
+      await fs.mkdir(path.dirname(skillPath), { recursive: true });
+      await fs.writeFile(skillPath, "managed instructions");
+      const mutate =
+        mutation === "write"
+          ? bridge.writeFile({ filePath: skillRelativePath, data: "changed" })
+          : mutation === "remove"
+            ? bridge.remove({ filePath: ".agents", recursive: true })
+            : bridge.rename({ from: ".agents", to: "moved-instructions" });
+      await expect(mutate).rejects.toThrow("read-only");
+      await expect(fs.readFile(skillPath, "utf8")).resolves.toBe("managed instructions");
+    },
+  );
 
   it("creates mirror files exclusively before syncing them", async () => {
     await using workspace = await createOpenShellTestWorkspace("fs");
@@ -1562,65 +1601,73 @@ describe("openshell fs bridges", () => {
     );
   });
 
-  it("reads materialized sandbox skills from the protected skills workspace", async () => {
-    await using workspace = await createOpenShellTestWorkspace("fs");
-    const workspaceDir = workspace.dir;
-    await using skillsWorkspace = await createOpenShellTestWorkspace("skills");
-    const skillsWorkspaceDir = skillsWorkspace.dir;
-    const skillFile = path.join(skillsWorkspaceDir, "skills", "demo", "SKILL.md");
-    const shadowFile = path.join(
-      workspaceDir,
-      ".openclaw",
-      "sandbox-skills",
-      "skills",
-      "demo",
-      "SKILL.md",
-    );
-    await fs.mkdir(path.dirname(skillFile), { recursive: true });
-    await fs.mkdir(path.dirname(shadowFile), { recursive: true });
-    await fs.writeFile(skillFile, "# Demo\nmaterialized\n", "utf8");
-    await fs.writeFile(shadowFile, "# Demo\nworkspace shadow\n", "utf8");
-
-    const backend = createMirrorBackendMock();
-    const sandbox = createSandboxTestContext({
-      overrides: {
-        backendId: "openshell",
+  it.each(["external", "nested"] as const)(
+    "reads materialized sandbox skills from a protected %s skills workspace",
+    async (location) => {
+      await using workspace = await createOpenShellTestWorkspace("fs");
+      const workspaceDir = workspace.dir;
+      await using skillsWorkspace = await createOpenShellTestWorkspace("skills");
+      const skillsWorkspaceDir =
+        location === "external" ? skillsWorkspace.dir : path.join(workspaceDir, "materialized");
+      const skillFile = path.join(skillsWorkspaceDir, "skills", "demo", "SKILL.md");
+      const shadowFile = path.join(
         workspaceDir,
-        agentWorkspaceDir: workspaceDir,
-        skillsWorkspaceDir,
-        workspaceAccess: "rw",
-        containerWorkdir: "/sandbox",
-      },
-    });
+        ".openclaw",
+        "sandbox-skills",
+        "skills",
+        "demo",
+        "SKILL.md",
+      );
+      await fs.mkdir(path.dirname(skillFile), { recursive: true });
+      await fs.mkdir(path.dirname(shadowFile), { recursive: true });
+      await fs.writeFile(skillFile, "# Demo\nmaterialized\n", "utf8");
+      await fs.writeFile(shadowFile, "# Demo\nworkspace shadow\n", "utf8");
 
-    const { createOpenShellFsBridge } = await import("./fs-bridge.js");
-    const bridge = createOpenShellFsBridge({ sandbox, backend });
+      const backend = createMirrorBackendMock();
+      const sandbox = createSandboxTestContext({
+        overrides: {
+          backendId: "openshell",
+          workspaceDir,
+          agentWorkspaceDir: workspaceDir,
+          skillsWorkspaceDir,
+          workspaceAccess: "rw",
+          containerWorkdir: "/sandbox",
+        },
+      });
 
-    await expect(
-      bridge.readFile({
-        filePath: "/sandbox/.openclaw/sandbox-skills/skills/demo/SKILL.md",
-      }),
-    ).resolves.toEqual(Buffer.from("# Demo\nmaterialized\n"));
-    await expect(
-      bridge.readFile({
-        filePath: ".openclaw/sandbox-skills/skills/demo/SKILL.md",
-      }),
-    ).resolves.toEqual(Buffer.from("# Demo\nmaterialized\n"));
-    await expect(
-      bridge.writeFile({
-        filePath: ".openclaw/sandbox-skills/skills/demo/SKILL.md",
-        data: "owned",
-      }),
-    ).rejects.toThrow(/read-only/);
-    await expect(
-      bridge.writeFile({
-        filePath: shadowFile,
-        data: "owned",
-      }),
-    ).rejects.toThrow(/read-only/);
-    expect(await fs.readFile(shadowFile, "utf8")).toContain("workspace shadow");
-    expect(backend["syncLocalPathToRemote"]).not.toHaveBeenCalled();
-  });
+      const { createOpenShellFsBridge } = await import("./fs-bridge.js");
+      const bridge = createOpenShellFsBridge({ sandbox, backend });
+
+      await expect(
+        bridge.readFile({
+          filePath: "/sandbox/.openclaw/sandbox-skills/skills/demo/SKILL.md",
+        }),
+      ).resolves.toEqual(Buffer.from("# Demo\nmaterialized\n"));
+      await expect(
+        bridge.readFile({
+          filePath: ".openclaw/sandbox-skills/skills/demo/SKILL.md",
+        }),
+      ).resolves.toEqual(Buffer.from("# Demo\nmaterialized\n"));
+      await expect(
+        bridge.writeFile({
+          filePath: ".openclaw/sandbox-skills/skills/demo/SKILL.md",
+          data: "owned",
+        }),
+      ).rejects.toThrow(/read-only/);
+      await expect(
+        bridge.writeFile({
+          filePath: shadowFile,
+          data: "owned",
+        }),
+      ).rejects.toThrow(/read-only/);
+      await expect(bridge.writeFile({ filePath: skillFile, data: "owned" })).rejects.toThrow(
+        /read-only/,
+      );
+      await expect(fs.readFile(skillFile, "utf8")).resolves.toContain("materialized");
+      expect(await fs.readFile(shadowFile, "utf8")).toContain("workspace shadow");
+      expect(backend["syncLocalPathToRemote"]).not.toHaveBeenCalled();
+    },
+  );
 
   it("rejects reads of a symlinked leaf", async () => {
     await using workspace = await createOpenShellTestWorkspace("fs");

@@ -108,6 +108,10 @@ function buildLocalApprovalPayload(
 }
 
 describe("signal approval capability", () => {
+  it("subscribes the native runtime to system-agent approval events", () => {
+    expect(signalApprovalCapability.nativeRuntime?.eventKinds).toContain("system-agent");
+  });
+
   it("does not enable exec or plugin native approvals from Signal readiness alone", () => {
     const cfg = buildConfig();
     const execRequest = buildExecRequest("+15551230000");

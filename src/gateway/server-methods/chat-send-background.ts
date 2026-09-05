@@ -64,10 +64,7 @@ export function scheduleChatDashboardSessionTitle(params: {
     try {
       await admission.run(async () => {
         const titleEntry = loadSessionEntry(params.sessionKey, params.sessionLoadOptions).entry;
-        if (
-          titleEntry?.sessionId !== params.admittedSessionId ||
-          (titleEntry.pendingWorktree && !titleEntry.pendingWorktree.name)
-        ) {
+        if (titleEntry?.sessionId !== params.admittedSessionId) {
           return;
         }
         const updated = await maybeGenerateDashboardSessionTitle({
@@ -91,7 +88,7 @@ export function scheduleChatDashboardSessionTitle(params: {
     } finally {
       admission.release();
     }
-  }).catch((err: unknown) => {
+  }, "chat-send:background").catch((err: unknown) => {
     params.context.logGateway.warn(
       `dashboard session title generation failed: ${formatForLog(err)}`,
     );

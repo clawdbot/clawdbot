@@ -1,10 +1,11 @@
 import { describe, expect, it, vi } from "vitest";
+import { trackSqliteStatementExecutions } from "../../../test/helpers/sqlite-statement-execution-counter.js";
 import {
   openOpenClawStateDatabase,
   runOpenClawStateWriteTransaction,
 } from "../../state/openclaw-state-db.js";
 import { setupCronServiceSuite, writeCronStoreSnapshot } from "../service.test-harness.js";
-import { loadCronStore } from "../store.js";
+import { loadCronStore, saveCronJobsStore } from "../store.js";
 import {
   claimCronRunReceiptInDatabase,
   finishCronRunReceipt,
@@ -14,7 +15,6 @@ import {
   releaseLocalCronRunReceiptOwnership,
   type CronRunReceiptHandle,
 } from "../store/run-receipt-store.js";
-import { saveCronJobsStoreWithTransactionHooks } from "../store/transaction-hooks.js";
 import type { CronJob } from "../types.js";
 import { start, stop } from "./ops-lifecycle.js";
 import {
@@ -96,18 +96,19 @@ async function commitCompletedJob(params: {
   receipt: CronRunReceiptHandle;
   finishedAtMs: number;
 }) {
-  await saveCronJobsStoreWithTransactionHooks(
+  await saveCronJobsStore(
     params.storePath,
     { version: 1, jobs: params.jobs },
-    undefined,
     {
-      afterWrite: (database) => {
-        finishCronRunReceiptInDatabase({
-          database,
-          handle: params.receipt,
-          status: "ok",
-          finishedAtMs: params.finishedAtMs,
-        });
+      transactionHooks: {
+        afterWrite: (database) => {
+          finishCronRunReceiptInDatabase({
+            database,
+            handle: params.receipt,
+            status: "ok",
+            finishedAtMs: params.finishedAtMs,
+          });
+        },
       },
     },
   );
@@ -115,6 +116,57 @@ async function commitCompletedJob(params: {
 }
 
 describe("atomic cron run recovery", () => {
+  it("repairs a large unowned store with one active-receipt query", async () => {
+    const { storePath } = await makeStorePath();
+    const nowMs = Date.parse("2026-08-30T12:00:00.000Z");
+    const jobs = Array.from({ length: 100 }, (_, index) => {
+      const entry = makeJob(`batch-repair-${index}`, nowMs);
+      entry.state = {};
+      return entry;
+    });
+    await writeCronStoreSnapshot({ storePath, jobs });
+    const owned = jobs[0]!;
+    const receipt = claimReceipt(storePath, owned, nowMs);
+    const database = openOpenClawStateDatabase().db;
+    const ownedRowBefore = database
+      .prepare("SELECT * FROM cron_jobs WHERE store_key = ? AND job_id = ?")
+      .get(receipt.storeKey, owned.id);
+    const receiptBefore = database
+      .prepare("SELECT * FROM cron_run_receipts WHERE receipt_id = ?")
+      .get(receipt.receiptId);
+    const statements = trackSqliteStatementExecutions(
+      database,
+      ["active-receipts"] as const,
+      (sql) =>
+        sql.toLowerCase().includes('from "cron_run_receipts"') &&
+        sql.toLowerCase().includes('"status" =')
+          ? "active-receipts"
+          : null,
+    );
+
+    try {
+      const result = recomputeUnownedCronSchedules(makeState(storePath, nowMs));
+      expect(result.jobs).toHaveLength(99);
+      expect(statements.counts["active-receipts"]).toBe(1);
+      expect(
+        database
+          .prepare("SELECT * FROM cron_jobs WHERE store_key = ? AND job_id = ?")
+          .get(receipt.storeKey, owned.id),
+      ).toEqual(ownedRowBefore);
+      expect(
+        database
+          .prepare("SELECT * FROM cron_run_receipts WHERE receipt_id = ?")
+          .get(receipt.receiptId),
+      ).toEqual(receiptBefore);
+      expect((await loadCronStore(storePath)).jobs.map((job) => job.id)).toEqual(
+        jobs.map((job) => job.id),
+      );
+    } finally {
+      statements.restore();
+      finishCronRunReceipt({ handle: receipt, status: "ok", finishedAtMs: nowMs + 1 });
+    }
+  });
+
   it("rolls back receipt retirement when the pending recovery slot cannot commit", async () => {
     const { storePath } = await makeStorePath();
     const startedAtMs = Date.now();
@@ -170,6 +222,89 @@ describe("atomic cron run recovery", () => {
       } finally {
         stop(next);
       }
+    }
+  });
+
+  it("preserves newer one-shot lifecycle state when startup replays finalized task history", async () => {
+    const { storePath } = await makeStorePath();
+    const startedAtMs = Date.parse("2026-08-31T12:00:00.000Z");
+    const endedAtMs = startedAtMs + 2_000;
+    const persistedRetryAtMs = endedAtMs + 120_000;
+    const historyRetryAtMs = endedAtMs + 30_000;
+    const oneShot = (id: string, enabled: boolean, nextRunAtMs?: number) => {
+      const job = makeJob(id, startedAtMs);
+      job.enabled = enabled;
+      job.schedule = { kind: "at", at: new Date(startedAtMs).toISOString() };
+      job.state.nextRunAtMs = nextRunAtMs;
+      return job;
+    };
+    const jobs = [
+      oneShot("persisted-retry-without-history", true, persistedRetryAtMs),
+      oneShot("persisted-retry", true, persistedRetryAtMs),
+      oneShot("history-retry", true, startedAtMs),
+      oneShot("persisted-disable", false),
+      makeJob("recurring-history", startedAtMs),
+    ];
+    const historyNextRunAtMs = new Map<string, number | undefined>([
+      ["persisted-retry-without-history", undefined],
+      ["persisted-retry", historyRetryAtMs],
+      ["history-retry", historyRetryAtMs],
+      ["persisted-disable", historyRetryAtMs],
+      ["recurring-history", historyRetryAtMs],
+    ]);
+    const executionState = makeState(storePath, endedAtMs);
+
+    for (const job of jobs) {
+      const taskRunId = tryCreateCronTaskRun({
+        state: executionState,
+        job,
+        startedAt: startedAtMs,
+      });
+      expect(taskRunId).toBeDefined();
+      tryFinishCronTaskRun(executionState, {
+        taskRunId,
+        job,
+        event: {
+          jobId: job.id,
+          action: "finished",
+          job,
+          status: "error",
+          error: 'Session "agent:alpha:cron:recovery" changed while starting work. Retry.',
+          runAtMs: startedAtMs,
+          durationMs: endedAtMs - startedAtMs,
+          nextRunAtMs: historyNextRunAtMs.get(job.id),
+        },
+      });
+    }
+    // Production finalization writes task history before its newer job row.
+    await writeCronStoreSnapshot({ storePath, jobs });
+
+    const recovered = makeState(storePath, endedAtMs);
+    try {
+      await start(recovered);
+      const persisted = new Map(
+        (await loadCronStore(storePath)).jobs.map((job) => [job.id, job] as const),
+      );
+      expect(persisted.get("persisted-retry-without-history")).toMatchObject({
+        enabled: true,
+        state: { nextRunAtMs: persistedRetryAtMs },
+      });
+      expect(persisted.get("persisted-retry")).toMatchObject({
+        enabled: true,
+        state: { nextRunAtMs: persistedRetryAtMs },
+      });
+      expect(persisted.get("history-retry")).toMatchObject({
+        enabled: true,
+        state: { nextRunAtMs: historyRetryAtMs },
+      });
+      expect(persisted.get("persisted-disable")?.enabled).toBe(false);
+      expect(persisted.get("persisted-disable")?.state.nextRunAtMs).toBeUndefined();
+      expect(persisted.get("recurring-history")).toMatchObject({
+        enabled: true,
+        state: { nextRunAtMs: historyRetryAtMs },
+      });
+    } finally {
+      stop(recovered);
     }
   });
 

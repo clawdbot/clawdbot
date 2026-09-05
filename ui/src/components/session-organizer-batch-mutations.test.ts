@@ -112,18 +112,20 @@ function createHarness(
   const patch = vi.fn(async (key: string) => ({ ok: true, key }));
   const refreshReplacement = vi.fn(async () => undefined);
   const refreshTheme = vi.fn();
-  const deleteMany = vi.fn(
-    async (): Promise<SessionDeleteBatchResult> => ({
-      deleted: [],
-      errors: [],
-      preservedWorktrees: [],
-    }),
-  );
+  const deleteMany = vi.fn(async (): Promise<SessionDeleteBatchResult> => ({
+    deleted: [],
+    errors: [],
+    preservedWorktrees: [],
+  }));
   const deleteOne = vi.fn(async () => ({ deleted: true }));
   const groupsDelete = vi.fn(async () => "completed" as const);
   const scope = {
     epoch: 1,
-    context: { agents: { state: { agentsList: null } }, theme: { refresh: refreshTheme } },
+    context: {
+      agents: { state: { agentsList: null } },
+      theme: { refresh: refreshTheme },
+      placementStartup: { pause: vi.fn() },
+    },
     gateway: { snapshot },
     sessions: {
       patch,

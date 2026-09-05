@@ -73,7 +73,10 @@ type FollowupDeliveryDecision =
 export function resolveFollowupDeliveryDecision(params: {
   turn: AdmittedFollowupTurn;
   execution: AgentTurnExecutionResult;
-  accounting?: AccountedAgentTurn & { compactionNotice?: ReplyPayload };
+  accounting?: AccountedAgentTurn & {
+    compactionNotice?: ReplyPayload;
+    diagnosticsPayload?: ReplyPayload;
+  };
   opts?: InternalGetReplyOptions;
 }): FollowupDeliveryDecision {
   const { turn, execution, accounting, opts } = params;
@@ -86,10 +89,7 @@ export function resolveFollowupDeliveryDecision(params: {
   ) {
     return { kind: "suppress", reason: "room-event" };
   }
-  if (
-    execution.outcome.kind === "aborted" ||
-    (execution.outcome.kind === "settled" && execution.outcome.abortReason)
-  ) {
+  if (execution.outcome.kind === "aborted") {
     return { kind: "suppress", reason: "aborted" };
   }
   const postCompactionModelFailure = execution.outcome.postCompactionModelFailure;
@@ -280,6 +280,15 @@ export function resolveFollowupDeliveryDecision(params: {
     });
     payloads = [...compactionNotices, ...payloads];
   }
+  if (accounting.diagnosticsPayload && payloads.length > 0) {
+    payloads = [
+      ...payloads,
+      ...resolveFollowupDeliveryPayloads({
+        ...deliveryContext,
+        payloads: [accounting.diagnosticsPayload],
+      }),
+    ];
+  }
   const responseUsageLine = resolveResponseUsageLine({
     config: turn.config,
     agentDir: turn.queued.run.agentDir,
@@ -402,6 +411,7 @@ async function sendFollowupPayloads(params: {
         payload,
         channel: originatingChannel,
         to: originatingTo,
+        agentId: turn.queued.run.agentId,
         sessionKey: turn.queued.run.sessionKey,
         accountId: turn.queued.originatingAccountId,
         requesterSenderId: turn.queued.run.senderId,

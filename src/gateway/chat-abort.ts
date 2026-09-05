@@ -25,6 +25,7 @@ import { jsonUtf8Bytes } from "../infra/json-utf8-bytes.js";
 import { notifyChatAbortControllerRemoved } from "./chat-abort-lifecycle-internal.js";
 import { resolveChatRunOwnerAgentId } from "./chat-run-owner.js";
 import { projectLiveAssistantBufferedText } from "./live-chat-projector.js";
+import type { GatewayBroadcastFn } from "./server-broadcast-types.js";
 import {
   createChatAbortMarker,
   type ChatRunPlanSnapshot,
@@ -143,12 +144,13 @@ export function projectInFlightRunSnapshot(params: {
 
 type RegisteredChatAbortController = {
   controller: AbortController;
-  registered: boolean;
-  entry?: ChatAbortControllerEntry;
   markExecutionStarted: () => boolean;
   bindAgentRunDelegatedAuthority: (authority: AgentRunDelegatedAuthority) => void;
-  cleanup: (opts?: { force?: boolean }) => void;
-};
+  cleanup: () => void;
+} & (
+  | { registered: true; entry: ChatAbortControllerEntry }
+  | { registered: false; entry?: undefined }
+);
 
 export function isChatStopCommandText(text: string): boolean {
   return isAbortRequestText(text);
@@ -270,17 +272,13 @@ export function registerChatAbortController(params: {
     });
     return true;
   };
-  const cleanup = (opts?: { force?: boolean }) => {
+  const cleanup = () => {
     const entry = params.chatAbortControllers.get(params.runId);
     if (entry?.controller === controller) {
       // This registration carries the exact operational instance. Close its
       // capability before terminal cleanup can observe a same-run successor.
       if (entry.agentRunDelegatedAuthority) {
         releaseAgentRunDelegatedAuthority(entry.agentRunDelegatedAuthority);
-      }
-      if (opts?.force === true) {
-        removeChatAbortControllerEntry(params.chatAbortControllers, params.runId, entry);
-        return;
       }
       entry.registrationCleanupRequested = true;
       // Terminal event handling owns final removal once the event has been
@@ -292,12 +290,19 @@ export function registerChatAbortController(params: {
       if (persistence) {
         void persistence
           .then(() => {
-            if (params.chatAbortControllers.get(params.runId)?.controller === controller) {
+            if (
+              params.chatAbortControllers.get(params.runId)?.controller === controller &&
+              entry.projectSessionTerminalPersistence === persistence
+            ) {
+              entry.projectSessionTerminalPersistence = undefined;
               removeChatAbortControllerEntry(params.chatAbortControllers, params.runId, entry);
             }
           })
           .catch(() => {
-            if (params.chatAbortControllers.get(params.runId)?.controller === controller) {
+            if (
+              params.chatAbortControllers.get(params.runId)?.controller === controller &&
+              entry.projectSessionTerminalPersistence === persistence
+            ) {
               removeChatAbortControllerEntry(params.chatAbortControllers, params.runId, entry);
             }
           });
@@ -445,11 +450,8 @@ export function resolveInFlightRunSnapshot(params: {
   if (best === undefined) {
     return undefined;
   }
-  // Adopt the run even when no assistant text is buffered yet. Some runtimes
-  // (e.g. Codex) do not stream incremental assistant text — the result exists
-  // only at completion — so there is nothing to show mid-run, but the client
-  // should still adopt the run and show a `streaming` status (not idle) and
-  // render the result cleanly when it lands.
+  // A run can be active before its first text arrives. Adopt it now so the UI
+  // stays streaming and can reconcile the eventual reply.
   return projectInFlightRunSnapshot({
     chatRunState: params.chatRunState,
     runId: best.runId,
@@ -526,11 +528,7 @@ export type ChatAbortOps = {
   ) => { sessionKey: string; agentId?: string; clientRunId: string } | undefined;
   agentRunSeq: Map<string, number>;
   getRuntimeConfig?: () => OpenClawConfig;
-  broadcast: (
-    event: string,
-    payload: unknown,
-    opts?: { dropIfSlow?: boolean; sessionKeys?: readonly string[] },
-  ) => void;
+  broadcast: GatewayBroadcastFn;
   nodeSendToSession: (sessionKey: string, event: string, payload: unknown) => void;
   onRunAborted?: (runId: string) => void;
 };
@@ -564,6 +562,7 @@ function broadcastChatAborted(
     stopReason?: string;
     partialText?: string;
     errorMessage?: string;
+    liveTextGroup?: AbortSignal;
   },
 ) {
   const { runId, sessionKey, stopReason, partialText } = params;
@@ -592,7 +591,10 @@ function broadcastChatAborted(
       : undefined,
   };
   const deliverySessionKeys = resolveChatAbortDeliverySessionKeys(ops, sessionKey, payloadAgentId);
-  ops.broadcast("chat", payload, { sessionKeys: deliverySessionKeys });
+  ops.broadcast("chat", payload, {
+    sessionKeys: deliverySessionKeys,
+    ...(params.liveTextGroup ? { liveText: { group: params.liveTextGroup } } : {}),
+  });
   for (const deliverySessionKey of deliverySessionKeys) {
     ops.nodeSendToSession(deliverySessionKey, "chat", payload);
   }
@@ -659,6 +661,7 @@ export function abortChatRunById(
   }
 
   const bufferedText = ops.chatRunState.resolveBuffer(runId, { final: true }).text;
+  const liveTextGroup = ops.chatRunState.runs.get(runId)?.liveTextGroup?.signal;
   const partialText = bufferedText && bufferedText.trim() ? bufferedText : undefined;
   ops.chatRunState.getOrCreate(runId).abortMarker = createChatAbortMarker();
   if (stopReason) {
@@ -691,6 +694,7 @@ export function abortChatRunById(
       stopReason,
       partialText,
       errorMessage: active.toolErrorSummary,
+      liveTextGroup,
     });
   }
   emitAgentEvent({
@@ -706,7 +710,8 @@ export function abortChatRunById(
       aborted: true,
       stopReason,
       ...(active.toolErrorSummary ? { toolErrorSummary: active.toolErrorSummary } : {}),
-      startedAt: active.startedAtMs,
+      // Pre-execution admission time is not an execution start.
+      startedAt: active.executionStarted === false ? undefined : active.startedAtMs,
       endedAt: Date.now(),
     },
   });
@@ -717,6 +722,7 @@ export function abortChatRunById(
     active.projectSessionTerminalObservedAt === undefined &&
     !active.projectSessionTerminalPersistence
   ) {
+    active.projectSessionTerminalPending = false;
     removeChatAbortControllerEntry(ops.chatAbortControllers, runId, active);
   }
   ops.agentRunSeq.delete(runId);

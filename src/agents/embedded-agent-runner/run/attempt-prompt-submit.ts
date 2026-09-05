@@ -6,6 +6,7 @@ import type { StreamFn } from "openclaw/plugin-sdk/agent-core";
 import type { ImageContent } from "../../../llm/types.js";
 import type { createTrajectoryRuntimeRecorder } from "../../../trajectory/runtime.js";
 import type { AgentMessage } from "../../runtime/index.js";
+import { agentSessionQueuePromptContext } from "../../sessions/agent-session-prompting.js";
 import type { AgentSession } from "../../sessions/index.js";
 import { ackPendingAgentSteeringItems } from "../../subagents/registry/subagent-registry.js";
 import { recordAggregateTruncation } from "../prompt-cache-observability.js";
@@ -39,6 +40,7 @@ import type { EmbeddedRunAttemptParams } from "./types.js";
  */
 type PromptSubmissionSession = {
   messages: AgentMessage[];
+  [agentSessionQueuePromptContext]: AgentSession[typeof agentSessionQueuePromptContext];
   agent: {
     state: { messages: AgentMessage[] };
     streamFn: StreamFn;
@@ -49,10 +51,7 @@ type PromptSubmissionSession = {
 
 type PromptActiveSession = (
   prompt: string,
-  options?: {
-    images?: ImageContent[];
-    preflightResult?: (submitted: boolean) => void;
-  },
+  options?: Parameters<AgentSession["prompt"]>[1],
 ) => Promise<void>;
 
 type SteeringLease = {
@@ -65,9 +64,14 @@ type TrajectoryRecorder = ReturnType<typeof createTrajectoryRuntimeRecorder>;
 export async function submitEmbeddedAttemptPrompt(input: {
   attempt: Pick<
     EmbeddedRunAttemptParams,
-    "promptCacheKey" | "sessionId" | "sessionKey" | "userTurnTranscriptRecorder"
+    | "promptCacheKey"
+    | "sessionId"
+    | "sessionKey"
+    | "skipPreparedUserTurnMessage"
+    | "userTurnTranscriptRecorder"
   >;
   activeSession: PromptSubmissionSession;
+  appendOnlyRuntimeContext?: boolean;
   appendContext?: string;
   contextTokenBudget: number;
   images: ImageContent[];
@@ -89,6 +93,11 @@ export async function submitEmbeddedAttemptPrompt(input: {
   transcriptPrompt: string;
 }): Promise<void> {
   const { activeSession, attempt } = input;
+  const userTurnRecorder = attempt.userTurnTranscriptRecorder;
+  const persistedUserIdempotencyKey =
+    attempt.skipPreparedUserTurnMessage !== true && userTurnRecorder?.hasPersisted() === true
+      ? (userTurnRecorder.getPersistedMessage?.() ?? userTurnRecorder.message)?.idempotencyKey
+      : undefined;
   const normalizedReplayMessages = normalizeAssistantReplayContent(activeSession.messages);
   if (normalizedReplayMessages !== activeSession.messages) {
     activeSession.agent.state.messages = normalizedReplayMessages;
@@ -162,16 +171,24 @@ export async function submitEmbeddedAttemptPrompt(input: {
   try {
     if (input.runtimeOnly) {
       await input.promptActiveSession(input.transcriptPrompt, {
+        ...(persistedUserIdempotencyKey ? { persistedUserIdempotencyKey } : {}),
         preflightResult: armModelPromptTransform,
       });
     } else {
-      const cleanupRuntimeContextMessage = installRuntimeContextMessageForPrompt({
-        session: activeSession,
-        message: input.runtimeContextMessage,
-      });
+      // The scoped queue persists after the user but retires unconsumed context
+      // if preflight handles or rejects this prompt before the agent loop starts.
+      const cleanupRuntimeContextMessage =
+        input.appendOnlyRuntimeContext && input.runtimeContextMessage
+          ? activeSession[agentSessionQueuePromptContext](input.runtimeContextMessage)
+          : installRuntimeContextMessageForPrompt({
+              session: activeSession,
+              message: input.runtimeContextMessage,
+              persistedUserIdempotencyKey,
+            });
       try {
         await input.promptActiveSession(input.transcriptPrompt, {
           ...(input.images.length > 0 ? { images: input.images } : {}),
+          ...(persistedUserIdempotencyKey ? { persistedUserIdempotencyKey } : {}),
           preflightResult: armModelPromptTransform,
         });
       } finally {

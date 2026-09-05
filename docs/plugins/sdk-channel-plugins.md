@@ -60,6 +60,12 @@ them with `listMessageReceiptPlatformIds(...)` or
 `resolveMessageReceiptPrimaryId(...)` instead of keeping parallel `messageIds`
 fields.
 
+Channel actions and adapter capabilities come from the selected plugin
+registration. An omitted `actions`, `message`, or `outbound` surface is not
+filled from another plugin with the same channel ID. Prepared delivery handlers
+created inside a registry scope retain that handle when invoked after the caller
+leaves the scope.
+
 Declare live and finalizer capabilities precisely - core uses these to decide
 what a channel can do, and drift between the declared and actual behavior is a
 contract test failure:
@@ -84,6 +90,39 @@ Progress callbacks report what the operator can see, not merely what a plugin qu
 update occurred. Existing synchronous and asynchronous callbacks that return `void` remain
 backward-compatible and are treated as visible; new acceptance-aware implementations should use
 an explicit boolean.
+
+### Quiet progress presentation
+
+Native progress renderers must retain approval and failure lines when ordinary
+tool rows are disabled. The shared progress compositor retains those lines in
+its snapshots; native renderers must preserve them alongside plan rows and
+ordinary activity.
+
+`resolveChannelStreamingPreviewToolProgress(entry, defaultValue?, mode?)` keeps
+its shipped default of `true` when the second argument is omitted or
+`undefined`. Bundled channels pass `mode !== "progress"` as the second argument
+and their resolved streaming mode as the third argument, so unconfigured
+`progress` drafts hide ordinary tool rows while `partial` and `block` previews
+show them.
+
+The compositor and formatter's `presentation: "summary"` option and the
+checklist formatter's `plain: true` option are deprecated but retain their
+explicit output until the next breaking SDK release. New callers should omit
+them and use `streaming.progress.toolProgress` to control tool rows with the
+standard progress markers.
+
+### Quiet acknowledgement and coalesced progress
+
+`createStatusReactionController({ presentation: "acknowledgement", ... })`
+keeps the initial reaction through work and success, skips inactivity warnings,
+and retains the existing error/cleanup lifecycle. The default `activity` policy
+continues to expose detailed lifecycle reactions.
+
+For edited or native progress, `createDraftStreamLoop` and finalizable draft
+controls accept `coalesceInFlight: true` to keep background updates arriving
+during a send in the next throttle window. Explicit `flush()` still bypasses
+the delay for attention and finalization. Cancel pending updates and await
+in-flight work before closing or rotating a stream.
 
 ### Commentary delivery ownership
 
@@ -246,6 +285,22 @@ fields, `accounts.default`, removed or unresolvable accounts, and mixed changes
 that can affect inheritance are promoted to a whole-channel restart. Plugins
 that do not opt in always use the whole-channel path.
 
+The Gateway retains the admitted account's `cfg`, resolved `account`, and owning
+`stopAccount` hook through teardown, including failed-stop retries. Cleanup must
+use that context even when the published config removes the account or a new
+plugin registration replaces it.
+
+Finish status updates inside `stopAccount` before its promise settles. The Gateway ignores
+writes through a retained stop callback after that attempt finishes or times out.
+Terminal startup status retires previous webhook handoffs even when the account
+promise stays pending until abort; it does not revoke the current task's ability
+to register ingress and explicitly report ready after recovery.
+
+Account-count-dependent policy needs whole-channel reloads. For example, Telegram
+changes how an empty account `groups` map inherits defaults between single- and
+multi-account configurations. Synology Chat also validates inherited and duplicate
+webhook paths across accounts. These plugins do not opt into account-only reloads.
+
 For channels using the durable ingress drain, the account monitor's stop path
 must first settle all accepted transport admissions, then dispose and await its
 drain. Starting the account opens the same account-keyed queue, whose initial
@@ -384,9 +439,10 @@ liveness, perform network requests, or infer missing provider facts. Return:
 
 Keep temporary unavailability distinct from `null`: an adapter restart is not
 proof that a previously bound conversation is unowned.
-Use `inspectConversationBinding(...)` from
-`openclaw/plugin-sdk/conversation-binding-inspection-runtime` when the resolver needs this
-available/unavailable distinction.
+Use `inspectConversationBinding(...)` and its `ConversationBindingInspection`
+result from `openclaw/plugin-sdk/conversation-binding-inspection-runtime` for this
+available/unavailable distinction. This public inspection helper is synchronous,
+read-only, and does not refresh binding liveness.
 
 ### Account-scoped conversation binding support
 
@@ -410,6 +466,39 @@ configured binding rules or plugin-owned session routing. Contract tests
 should cover at least one supported and one unsupported account through the
 `ChannelPlugin["conversationBindings"]` contract exported by
 `openclaw/plugin-sdk/channel-core`.
+
+Binding ids are local to a channel and account. `SessionBindingService.touch(bindingId, at?, scope?)`
+and `unbind({ bindingId, reason, scope })` accept an optional `{ channel, accountId }`
+scope to select that owner. For an individual mutation, pass the existing binding's
+`conversation` as the scope. For example, to detach a resolved binding:
+
+```ts
+await getSessionBindingService().unbind({
+  bindingId: binding.bindingId,
+  scope: binding.conversation,
+  reason: "manual",
+});
+```
+
+Import `getSessionBindingService` from `openclaw/plugin-sdk/session-binding-runtime`.
+For activity updates, use `service.touch(binding.bindingId, at, binding.conversation)`.
+Omit scope only for intentional global cleanup or an existing legacy cross-channel
+operation. Scope does not change binding ids or require a new adapter method.
+
+Refreshing the same target session and target kind preserves omitted runtime
+metadata. Replacing either starts fresh target metadata, so a new session cannot
+inherit the previous plugin owner, agent, or label. Keep conversation transport
+details and explicit lifecycle settings separate from target metadata.
+
+Preserve opaque plugin ownership metadata when projecting binding records.
+Plugin-owned targets do not require an OpenClaw agent id; use
+`isPluginOwnedSessionBindingRecord(...)` from
+`openclaw/plugin-sdk/conversation-binding-runtime` to distinguish them from
+agent-owned targets before resolving an agent.
+
+For agent-owned targets with an unscoped session key such as `global`, preserve
+`metadata.agentId` so routing keeps the binding's owner. An agent-scoped target
+key remains authoritative over conflicting metadata.
 
 ## Approvals and channel capabilities
 
@@ -499,6 +588,13 @@ subscription, and routed-elsewhere notices.
   handler stop cancels the delivery before `bindPending` runs, or when
   `bindPending` returns no handle
 - `observe` - optional delivery diagnostics hooks
+
+Native approval runtimes can receive three approval kinds: `exec`, `plugin`,
+and `system-agent`. A `system-agent` request asks an operator to approve a
+Gateway-side persistent change, such as a config write or Gateway restart.
+The runtime must render the typed approval actions and then render the final
+application result. An allowed request can finish as applied or not applied;
+do not treat the recorded approval alone as proof that the change completed.
 
 Other approval helpers:
 
@@ -684,6 +780,12 @@ surfaces:
 - `openclaw/plugin-sdk/thread-bindings-runtime` for thread-binding lifecycle
   and adapter registration
 
+The `threading.resolveReplyTransport` hook receives the payload's optional
+`replyToCurrent` intent separately from `replyToIsExplicit`. Channels whose
+native API requires a thread root can resolve a current-message reply against
+the admitted thread without redirecting arbitrary explicit `replyToId` targets.
+Omitted intent keeps the existing explicit-target behavior.
+
 Auth-only channels can usually stop at the default path: core handles
 approvals and the plugin just exposes outbound/auth capabilities. Native
 approval channels such as Matrix, Slack, Telegram, and custom chat transports
@@ -863,7 +965,23 @@ unrelated inbound runtime helpers.
   <Step title="Build the channel plugin object">
     The `ChannelPlugin` interface has many optional adapter surfaces. Start with
     the minimum - `id`, `config`, and `setup` - and add adapters as you need
-    them.
+    them. `createChatChannelPlugin` defaults omitted capabilities to direct
+    messages; declare `capabilities.chatTypes` when the channel supports more.
+
+    `config.inspectAccount` is synchronous and returns metadata
+    for read-only diagnostics, including disabled or configured-but-unavailable
+    accounts. Return `enabled`, `configured`, and applicable credential status
+    fields without requiring secret resolution. Its result is not a resolved
+    account: operational hooks such as probes and account status builders receive
+    `config.resolveAccount` results instead.
+    Diagnostics expose only status-safe fields from the inspection result.
+    Include the same account enablement and configuration decisions used by the
+    runtime, including duplicate-account suppression. If `configured` is omitted,
+    diagnostics use a recorded Gateway value when available; otherwise they report
+    that configuration status is unavailable.
+    Selection before secret redemption also reads this metadata directly. Directory
+    auto-selection requires `configured: true`; callers can still select the channel
+    explicitly when configuration status is unknown.
 
     Create `src/channel.ts`:
 
@@ -1051,12 +1169,13 @@ unrelated inbound runtime helpers.
     `openclaw/plugin-sdk/plugin-command-runtime`. Create one runtime while
     planning the catalog, merge its candidates with built-in and skill entries,
     and retain the winning candidate object in the registered handler closure.
-    Once the provider catalog is finalized, call
-    `retainNativeCatalog(provider)` when at least one plugin candidate remains;
-    if listener registration can fail synchronously, call it after those
-    listeners are installed. This records the current channel-account lifecycle
-    so a registry reload restarts only accounts whose handlers retain that
-    registry generation.
+    A plugin registry replacement drains and restarts loaded channel accounts
+    so their handlers, command catalogs, and routes use the new generation.
+    Manually stopped accounts stay stopped. Ordinary channel config changes
+    still restart only the affected channel or accounts.
+    `retainNativeCatalog(provider)` is deprecated and will be removed in the
+    next breaking SDK release; existing calls only assert that the captured
+    registry generation is still active.
     Call `prepareDispatch(rawArgs)` only on that winner and execute the returned
     dispatch with `dispatch.execute(context)`. Carry an explicit
     `{ kind: "non-plugin" }` decision for retained built-in and skill winners.

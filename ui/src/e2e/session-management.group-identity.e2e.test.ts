@@ -1,6 +1,9 @@
-import { mkdir } from "node:fs/promises";
+import { mkdir, writeFile } from "node:fs/promises";
 import path from "node:path";
+import type { Locator } from "playwright";
 import { expect, it } from "vitest";
+import { takeControlUiViewportScreenshot } from "../test-helpers/control-ui-e2e-screenshot.ts";
+import { createControlUiSessionRow as sessionRow } from "../test-helpers/control-ui-session-fixtures.ts";
 import {
   activateSelfRemovingControl,
   captureUiProofEnabled,
@@ -9,12 +12,10 @@ import {
   installMockGateway,
   openSessionMenuSubmenu,
   requireRecord,
-  sessionRow,
   sessionsListResponse,
 } from "./session-management.test-support.ts";
 
 const suite = createSessionManagementE2eSuite();
-const proofDir = path.join(process.cwd(), ".artifacts/control-ui-e2e/group-identity-20260827");
 
 suite.define(() => {
   it.each(["sessions", "sidebar", "selection", "header"] as const)(
@@ -25,7 +26,9 @@ suite.define(() => {
         locale: "en-US",
         serviceWorkers: "block",
         viewport,
-        recordVideo: captureUiProofEnabled ? { dir: proofDir, size: viewport } : undefined,
+        recordVideo: captureUiProofEnabled
+          ? { dir: path.join(suite.artifactDir, "group-identity-20260827"), size: viewport }
+          : undefined,
       });
       const page = await context.newPage();
       const video = page.video();
@@ -48,14 +51,16 @@ suite.define(() => {
         methodResponses: { "sessions.list": sessionsListResponse([original, survivor]) },
         sessionKey: original.key,
       });
-      const capture = async (stage: string) => {
+      const capture = async (stage: string, proofSurface: Locator, content: readonly Locator[]) => {
         if (captureUiProofEnabled) {
-          await mkdir(proofDir, { recursive: true });
-          await page.screenshot({
-            path: path.join(proofDir, `${surface}-${stage}.png`),
-            animations: "disabled",
-            fullPage: true,
-          });
+          await mkdir(path.join(suite.artifactDir, "group-identity-20260827"), { recursive: true });
+          await writeFile(
+            path.join(
+              path.join(suite.artifactDir, "group-identity-20260827"),
+              `${surface}-${stage}.png`,
+            ),
+            await takeControlUiViewportScreenshot(page, proofSurface, content),
+          );
         }
       };
       try {
@@ -86,18 +91,15 @@ suite.define(() => {
           await row.getByRole("button", { name: "Open session menu" }).click();
         }
         await openSessionMenuSubmenu(page, batch ? "Move 2 to group" : "Move to group");
-        await activateSelfRemovingControl(page.getByRole("menuitem", { name: "New group…" }));
+        await activateSelfRemovingControl(page.getByRole("menuitem", { name: "New group" }));
         const input = page.getByLabel("New group name");
         await input.fill(group);
-        await capture("editing");
+        await capture("editing", page.locator("openclaw-modal-dialog dialog"), [input]);
         await input.press("Enter");
         await gateway.waitForRequest("sessions.groups.put");
 
         // Deletion/recreation changes the durable identity, unlike ordinary reset.
-        await gateway.setMethodResponse(
-          "sessions.list",
-          sessionsListResponse([replacement, survivor]),
-        );
+        await gateway.setSessionsListResponse(sessionsListResponse([replacement, survivor]));
         await gateway.emitGatewayEvent("sessions.changed", {
           ...replacement,
           sessionKey: original.key,
@@ -151,7 +153,13 @@ suite.define(() => {
         } else {
           await failure.waitFor({ state: "visible" });
         }
-        await capture(acceptedKeys.includes(original.key) ? "incorrectly-moved" : "rejected");
+        await capture(
+          acceptedKeys.includes(original.key) ? "incorrectly-moved" : "rejected",
+          !acceptedKeys.includes(original.key) && surface !== "header"
+            ? page.locator("openclaw-modal-dialog dialog")
+            : page.locator(".shell"),
+          [acceptedKeys.includes(original.key) ? row : failure],
+        );
 
         expect(acceptedKeys).not.toContain(original.key);
         expect(targets.find((target) => target.key === original.key)).toMatchObject({
@@ -177,11 +185,13 @@ suite.define(() => {
           await page.getByRole("button", { name: "Cancel", exact: true }).click();
         }
         await input.waitFor({ state: "detached" });
-        await capture("unchanged");
+        await capture("unchanged", page.locator(".shell"), [row]);
       } finally {
         await suite.closeBrowserContext(context);
         if (video) {
-          await video.saveAs(path.join(proofDir, `${surface}.webm`));
+          await video.saveAs(
+            path.join(path.join(suite.artifactDir, "group-identity-20260827"), `${surface}.webm`),
+          );
         }
       }
     },

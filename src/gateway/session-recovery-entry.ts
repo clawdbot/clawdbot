@@ -27,8 +27,6 @@ export function buildRestartRecoverySuccessorEntry(params: {
     ...(source.execHost ? { execHost: source.execHost } : {}),
     ...(source.execNode ? { execNode: source.execNode } : {}),
     ...(source.execCwd ? { execCwd: source.execCwd } : {}),
-    ...(source.execSecurity ? { execSecurity: source.execSecurity } : {}),
-    ...(source.execAsk ? { execAsk: source.execAsk } : {}),
   });
   return { ...entry, ...buildMainSessionRecoveryClearPatch(entry), sessionId: params.sessionId };
 }

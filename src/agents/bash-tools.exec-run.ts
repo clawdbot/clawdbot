@@ -14,6 +14,7 @@ import {
   resolveExecApprovalsFromFile,
   resolveExecModePolicy,
 } from "../infra/exec-approvals.js";
+import type { ExecAutoReviewer } from "../infra/exec-auto-review.js";
 import {
   rejectUnsafeExecControlShellCommand,
   rejectUnsafeExecLiveStateSqliteShellCommand,
@@ -61,6 +62,7 @@ import {
   attachExecApprovalReview,
   buildExecForegroundResult,
   createExecHostResolver,
+  resolveExecElevatedMode,
   resolveExecReviewerDefaults,
 } from "./bash-tools.exec-support.js";
 import {
@@ -75,12 +77,14 @@ import type {
 } from "./bash-tools.exec-types.js";
 import { formatUnavailableWorkdirFailure, resolveExecWorkdir } from "./bash-tools.exec-workdir.js";
 import { clampWithDefault, readEnvInt, truncateMiddle } from "./bash-tools.shared.js";
-import { createModelExecAutoReviewer } from "./exec-auto-reviewer.js";
 import { EXEC_TOOL_DISPLAY_SUMMARY } from "./tool-description-presets.js";
 import type { AgentToolWithMeta } from "./tools/common.js";
 import { withoutGatewayToolCallerIdentity } from "./tools/gateway-caller-context.js";
 
 type GatewayApprovalResult = Awaited<ReturnType<typeof processGatewayAllowlist>>;
+
+const BACKGROUND_EXEC_FOLLOW_UP =
+  "Use process (list/poll/log/write/send-keys/submit/paste/kill/clear/remove) for follow-up.";
 
 function createExecProcessSettlement() {
   const settlement: {
@@ -137,9 +141,7 @@ export function createExecTool(
       safeBinTrustedDirs: defaults?.safeBinTrustedDirs,
       safeBinProfiles: defaults?.safeBinProfiles,
     },
-    onWarning: (message) => {
-      logInfo(message);
-    },
+    onWarning: logInfo,
   });
   if (unprofiledSafeBins.length > 0) {
     logInfo(
@@ -201,21 +203,25 @@ export function createExecTool(
     execute: async (toolCallId, args, signal, onUpdate) => {
       signal?.throwIfAborted();
       assertSupportedExecParams(args);
-      // Review cancellation belongs to this execution, never another call on the shared tool.
-      const autoReviewer =
-        defaults?.autoReviewer ??
-        createModelExecAutoReviewer({
+      // Capture settings and cancellation per execution; unused reviewers must not load model runtime.
+      let autoReviewer: ExecAutoReviewer | undefined = defaults?.autoReviewer;
+      if (!autoReviewer) {
+        const reviewerParams = {
           cfg: defaults?.config,
           agentId,
           reviewer: resolveExecReviewerDefaults({ defaults, agentId }),
           signal,
-        });
+        };
+        autoReviewer = async (input) => {
+          const { createModelExecAutoReviewer } = await import("./exec-auto-reviewer.js");
+          return createModelExecAutoReviewer(reviewerParams)(input);
+        };
+      }
       let params = requestPreparation.normalizeParams(args);
       const resolveExecEnvPrepared = requestPreparation.isResolveExecEnvPrepared(
         args as ExecToolArgs,
       );
-      const deferredResolveExecEnvState =
-        requestPreparation.getDeferredResolveExecEnvPreparedState(params);
+      const hookContext = requestPreparation.getExecHookContext(params);
       const preparedWorkdirState = requestPreparation.getResolvedExecWorkdirPreparedState(params);
 
       const maxOutput = DEFAULT_MAX_OUTPUT;
@@ -245,25 +251,7 @@ export function createExecTool(
             )
         : null;
       const elevatedDefaults = defaults?.elevated;
-      const elevatedAllowed = Boolean(elevatedDefaults?.enabled && elevatedDefaults.allowed);
-      const elevatedDefaultMode =
-        elevatedDefaults?.defaultLevel === "full"
-          ? "full"
-          : elevatedDefaults?.defaultLevel === "ask"
-            ? "ask"
-            : elevatedDefaults?.defaultLevel === "on"
-              ? "ask"
-              : "off";
-      const effectiveDefaultMode =
-        elevatedAllowed && !defaults?.sandboxRequired ? elevatedDefaultMode : "off";
-      const elevatedMode =
-        typeof params.elevated === "boolean"
-          ? params.elevated
-            ? elevatedDefaultMode === "full"
-              ? "full"
-              : "ask"
-            : "off"
-          : effectiveDefaultMode;
+      const elevatedMode = resolveExecElevatedMode(defaults, params.elevated);
       const elevatedRequested = elevatedMode !== "off";
       if (elevatedRequested) {
         if (!elevatedDefaults?.enabled || !elevatedDefaults.allowed) {
@@ -425,7 +413,7 @@ export function createExecTool(
         }
         if (!resolveExecEnvPrepared) {
           params = await requestPreparation.prepareParamsWithResolvedExecEnv(params, {
-            hookContext: deferredResolveExecEnvState?.hookContext,
+            hookContext,
           });
         }
 
@@ -474,6 +462,7 @@ export function createExecTool(
             bashElevated: elevatedDefaults,
             approvalReviewerDeviceId: defaults?.approvalReviewerDeviceId,
             nonInteractiveApproval: defaults?.nonInteractiveApproval,
+            approvalFollowupMode: defaults?.approvalFollowupMode,
             turnSourceChannel: defaults?.messageProvider,
             turnSourceTo: defaults?.currentChannelId,
             turnSourceAccountId: defaults?.accountId,
@@ -505,11 +494,17 @@ export function createExecTool(
           throw new Error("exec internal error: local execution requires a resolved workdir");
         }
 
+        const githubProfileDir =
+          host === "gateway" && preparedRunEnvironment.managedLocalIdentity
+            ? preparedRunEnvironment.localIdentityEnv.GH_CONFIG_DIR
+            : undefined;
+
         if (host === "gateway" && !bypassApprovals) {
           const gatewayResult = await processGatewayAllowlist({
             command: params.command,
             workdir,
             env,
+            githubProfileDir,
             pathPrepend: defaultPathPrepend,
             requestedEnv,
             pty: params.pty === true && !sandbox,
@@ -586,6 +581,7 @@ export function createExecTool(
           execCommand: execCommandOverride,
           workdir,
           env,
+          githubProfileDir,
           pathPrepend: defaultPathPrepend,
           sandbox,
           containerWorkdir,
@@ -598,8 +594,6 @@ export function createExecTool(
           scopeKey: defaults?.scopeKey,
           sessionKey: notifySessionKey,
           agentId,
-          mainKey: defaults?.mainKey,
-          sessionScope: defaults?.sessionScope,
           eventRouting: defaults?.eventRouting,
           notifyDeliveryContext,
           timeoutSec: effectiveTimeout,
@@ -645,10 +639,8 @@ export function createExecTool(
 
       const cleanupToolRunListeners = () => {
         run.disableUpdates();
-        if (registeredAbortSignal) {
-          registeredAbortSignal.removeEventListener("abort", onAbortSignal);
-          registeredAbortSignal = null;
-        }
+        registeredAbortSignal?.removeEventListener("abort", onAbortSignal);
+        registeredAbortSignal = null;
         if (yieldTimer) {
           clearTimeout(yieldTimer);
           yieldTimer = null;
@@ -718,7 +710,7 @@ export function createExecTool(
                     type: "text",
                     text: `${getWarningText()}Command still running (session ${run.session.id}, pid ${
                       run.session.pid ?? "n/a"
-                    }). Use process (list/poll/log/write/send-keys/submit/paste/kill/clear/remove) for follow-up.`,
+                    }). ${BACKGROUND_EXEC_FOLLOW_UP}`,
                   },
                 ],
                 details: {
@@ -728,6 +720,8 @@ export function createExecTool(
                   startedAt: run.startedAt,
                   cwd: run.session.cwd,
                   tail: run.session.tail,
+                  // Structured callers receive details without the visible content.
+                  followUp: BACKGROUND_EXEC_FOLLOW_UP,
                 },
               },
           approvalReview,

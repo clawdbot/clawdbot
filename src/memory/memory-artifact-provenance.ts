@@ -141,9 +141,6 @@ export async function recordMemoryArtifactWriteProvenance(params: {
     return undefined;
   }
   const store = openStore();
-  if (!store.update) {
-    throw new Error("Memory artifact provenance updates are unavailable");
-  }
   const reservationId = randomUUID();
   let previous: StoredMemoryArtifactProvenance | undefined;
   store.update(address.storeKey, (current) => {
@@ -170,15 +167,12 @@ export async function recordMemoryArtifactWriteProvenance(params: {
   return async () => {
     const rollbackStore = openStore();
     if (previous) {
-      rollbackStore.update?.(address.storeKey, (current) =>
+      rollbackStore.update(address.storeKey, (current) =>
         current?.reservationId === reservationId ? previous : undefined,
       );
       return;
     }
-    rollbackStore.deleteIf?.(
-      address.storeKey,
-      (current) => current.reservationId === reservationId,
-    );
+    rollbackStore.deleteIf(address.storeKey, (current) => current.reservationId === reservationId);
   };
 }
 
@@ -192,7 +186,7 @@ export async function clearMemoryArtifactProvenance(params: {
     return;
   }
   const expectedHash = sha256(params.contentBefore);
-  openStore().deleteIf?.(address.storeKey, (current) => current.fileHash === expectedHash);
+  openStore().deleteIf(address.storeKey, (current) => current.fileHash === expectedHash);
 }
 
 export async function readMemoryArtifactProvenance(params: {

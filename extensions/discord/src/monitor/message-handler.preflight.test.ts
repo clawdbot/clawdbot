@@ -1,4 +1,5 @@
 // Discord tests cover message handler.preflight plugin behavior.
+import { MessageReferenceType } from "discord-api-types/v10";
 import { afterEach, beforeAll, beforeEach, describe, expect, it, onTestFinished, vi } from "vitest";
 import { ChannelType, MessageType } from "../internal/discord.js";
 import { createPartialDiscordChannelWithThrowingGetters } from "../test-support/partial-channel.js";
@@ -411,7 +412,7 @@ describe("preflightDiscordMessage", () => {
       id: "m-system-1",
       channelId: threadId,
       content:
-        "⚙️ codex-acp session active (auto-unfocus in 24h). Messages here go directly to this session.",
+        "⚙️ codex-acp session active (idle expiry in 24h). Messages here go directly to this session.",
       author: {
         id: "relay-bot-1",
         bot: true,
@@ -1928,6 +1929,162 @@ describe("preflightDiscordMessage", () => {
     const result = await runIgnoreOtherMentionsPreflight({ channelId, guildId, message });
 
     expect(result).toBeNull();
+  });
+
+  it("drops guild replies to another bot when ignoreOtherMentions=true", async () => {
+    const channelId = "channel-other-bot-reply";
+    const guildId = "guild-other-bot-reply";
+    const message = createDiscordMessage({
+      id: "m-other-bot-reply",
+      channelId,
+      content: "following up",
+      author: { id: "user-1", bot: false, username: "Alice" },
+      referencedMessage: createDiscordMessage({
+        id: "m-other-bot",
+        channelId,
+        content: "earlier answer",
+        author: { id: "other-bot", bot: true, username: "OtherBot" },
+      }),
+    });
+
+    expect(await runIgnoreOtherMentionsPreflight({ channelId, guildId, message })).toBeNull();
+  });
+
+  it("keeps forwarded messages from another bot when ignoreOtherMentions=true", async () => {
+    const channelId = "channel-other-bot-forward";
+    const guildId = "guild-other-bot-forward";
+    const message = createDiscordMessage({
+      id: "m-other-bot-forward",
+      channelId,
+      content: "forwarding this",
+      author: { id: "user-1", bot: false, username: "Alice" },
+      messageReference: { type: MessageReferenceType.Forward, channel_id: channelId },
+      referencedMessage: createDiscordMessage({
+        id: "m-forwarded-other-bot",
+        channelId,
+        content: "earlier answer",
+        author: { id: "other-bot", bot: true, username: "OtherBot" },
+      }),
+    });
+
+    const result = await runIgnoreOtherMentionsPreflight({ channelId, guildId, message });
+
+    expect(expectPreflightResult(result).message.id).toBe("m-other-bot-forward");
+  });
+
+  it("keeps replies to the current bot when ignoreOtherMentions=true", async () => {
+    const channelId = "channel-current-bot-reply";
+    const guildId = "guild-current-bot-reply";
+    const message = createDiscordMessage({
+      id: "m-current-bot-reply",
+      channelId,
+      content: "following up",
+      author: { id: "user-1", bot: false, username: "Alice" },
+      referencedMessage: createDiscordMessage({
+        id: "m-current-bot",
+        channelId,
+        content: "earlier answer",
+        author: { id: "openclaw-bot", bot: true, username: "OpenClaw" },
+      }),
+    });
+
+    const result = await runIgnoreOtherMentionsPreflight({ channelId, guildId, message });
+
+    expect(expectPreflightResult(result).message.id).toBe("m-current-bot-reply");
+  });
+
+  it("lets an explicit current-bot mention override a reply to another bot", async () => {
+    const channelId = "channel-other-bot-reply-override";
+    const guildId = "guild-other-bot-reply-override";
+    const message = createDiscordMessage({
+      id: "m-other-bot-reply-override",
+      channelId,
+      content: "<@openclaw-bot> please weigh in",
+      mentionedUsers: [{ id: "openclaw-bot" }],
+      author: { id: "user-1", bot: false, username: "Alice" },
+      referencedMessage: createDiscordMessage({
+        id: "m-other-bot-override-target",
+        channelId,
+        content: "earlier answer",
+        author: { id: "other-bot", bot: true, username: "OtherBot" },
+      }),
+    });
+
+    const result = await runIgnoreOtherMentionsPreflight({ channelId, guildId, message });
+
+    expect(expectPreflightResult(result).wasMentioned).toBe(true);
+  });
+
+  it("keeps replies to humans when ignoreOtherMentions=true", async () => {
+    const channelId = "channel-human-reply";
+    const guildId = "guild-human-reply";
+    const message = createDiscordMessage({
+      id: "m-human-reply",
+      channelId,
+      content: "following up",
+      author: { id: "user-1", bot: false, username: "Alice" },
+      referencedMessage: createDiscordMessage({
+        id: "m-human-target",
+        channelId,
+        content: "earlier question",
+        author: { id: "user-2", bot: false, username: "Bob" },
+      }),
+    });
+
+    expect(
+      expectPreflightResult(await runIgnoreOtherMentionsPreflight({ channelId, guildId, message }))
+        .message.id,
+    ).toBe("m-human-reply");
+  });
+
+  it("keeps replies to webhook bots when ignoreOtherMentions=true", async () => {
+    const channelId = "channel-webhook-bot-reply";
+    const guildId = "guild-webhook-bot-reply";
+    const message = createDiscordMessage({
+      id: "m-webhook-bot-reply",
+      channelId,
+      content: "following up",
+      author: { id: "user-1", bot: false, username: "Alice" },
+      referencedMessage: createDiscordMessage({
+        id: "m-webhook-bot-target",
+        channelId,
+        content: "relayed human message",
+        webhookId: "webhook-1",
+        author: { id: "webhook-bot", bot: true, username: "Webhook" },
+      }),
+    });
+
+    expect(
+      expectPreflightResult(await runIgnoreOtherMentionsPreflight({ channelId, guildId, message }))
+        .message.id,
+    ).toBe("m-webhook-bot-reply");
+  });
+
+  it("keeps replies to another bot when ignoreOtherMentions=false", async () => {
+    const channelId = "channel-other-bot-reply-open";
+    const guildId = "guild-other-bot-reply-open";
+    const message = createDiscordMessage({
+      id: "m-other-bot-reply-open",
+      channelId,
+      content: "room is open",
+      author: { id: "user-1", bot: false, username: "Alice" },
+      referencedMessage: createDiscordMessage({
+        id: "m-other-bot-open-target",
+        channelId,
+        content: "earlier answer",
+        author: { id: "other-bot", bot: true, username: "OtherBot" },
+      }),
+    });
+
+    const result = await runGuildPreflight({
+      channelId,
+      guildId,
+      message,
+      discordConfig: {} as DiscordConfig,
+      guildEntries: { [guildId]: { requireMention: false, ignoreOtherMentions: false } },
+    });
+
+    expect(expectPreflightResult(result).message.id).toBe("m-other-bot-reply-open");
   });
 
   it("records local image media for skipped mention-gated guild history", async () => {

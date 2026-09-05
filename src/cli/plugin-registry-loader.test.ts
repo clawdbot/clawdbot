@@ -2,14 +2,15 @@
 import { readFile } from "node:fs/promises";
 import { join } from "node:path";
 import { afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
-import { useAutoCleanupTempDirTracker } from "../../test/helpers/temp-dir.js";
+import { createTempDirTracker } from "../../test/helpers/temp-dir.js";
+import { flushDiagnosticsTimeline } from "../infra/diagnostics-timeline.js";
 import { measureCliCommandStartup } from "./command-startup-timing.js";
 
 const ensurePluginRegistryLoadedMock = vi.hoisted(() => vi.fn());
 const readRegistryMock = vi.hoisted(() =>
   vi.fn(async (): Promise<{ entries: Array<{ backendId?: string }> }> => ({ entries: [] })),
 );
-const tempDirs = useAutoCleanupTempDirTracker(afterEach);
+const tempDirs = createTempDirTracker();
 
 vi.mock("./plugin-registry.js", () => ({
   ensurePluginRegistryLoaded: ensurePluginRegistryLoadedMock,
@@ -37,6 +38,8 @@ describe("plugin-registry-loader", () => {
   });
 
   afterEach(() => {
+    flushDiagnosticsTimeline();
+    tempDirs.cleanup();
     loggingState.forceConsoleToStderr = originalForceStderr;
     vi.unstubAllEnvs();
   });
@@ -125,6 +128,7 @@ describe("plugin-registry-loader", () => {
       }),
     );
 
+    flushDiagnosticsTimeline();
     const events = (await readFile(timelinePath, "utf8"))
       .trim()
       .split("\n")

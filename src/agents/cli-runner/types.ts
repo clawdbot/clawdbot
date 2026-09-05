@@ -63,6 +63,7 @@ import type { ExecPolicyOverrides } from "../exec-defaults.js";
 import type { FastModeAutoProgressState } from "../fast-mode.js";
 import type { ContextEngineLogicalTurnLease } from "../harness/context-engine-logical-turn.js";
 import type { ContextEngineTurnAttemptFacts } from "../harness/context-engine-turn-attempt.js";
+import type { PreparedQuestionAnswerAuthority } from "../harness/host-private-capabilities.js";
 import type { AgentHarnessIsolatedCompletionParamsV2 } from "../harness/types.js";
 import type { ModelFallbackAttemptProvenance } from "../model-fallback.types.js";
 import type { ScheduledToolPolicyContext } from "../scheduled-tool-policy.js";
@@ -265,6 +266,7 @@ export type RunCliAgentParams = {
   toolsAllow?: string[];
   /** Exact Skill Workshop proposal revision bound by the Gateway for this turn. */
   skillWorkshopProposalRevision?: SkillWorkshopProposalRevisionConstraint;
+  skillLibraryAuthoring?: import("../../skills/library/authoring.js").SkillLibraryAuthoringCapability;
   /** Trusted server-stamped authority for an explicitly capped scheduled run. */
   scheduledToolPolicy?: ScheduledToolPolicyContext;
   /** Server-authored origin for fresh automation mutations from this CLI run. */
@@ -276,6 +278,8 @@ export type RunCliAgentParams = {
   };
   disableTools?: boolean;
   abortSignal?: AbortSignal;
+  /** Caller-owned authority for credential use; cancellation alone is not authorization. */
+  assertCurrent?: () => void;
   onPartialReply?: (payload: PartialReplyPayload) => boolean | void | Promise<boolean | void>;
   onBlockReply?: (payload: BlockReplyPayload, context?: BlockReplyContext) => void | Promise<void>;
   onExecutionStarted?: () => void;
@@ -329,6 +333,7 @@ type CliPreparedBackend = {
     revokeProcessToken: () => void;
     activate: (captureKey: string) => void;
     deactivate: (captureKey: string) => void;
+    captureNativeTools?: (tools: unknown) => void;
   };
   mcpConfigHash?: string;
   mcpResumeHash?: string;
@@ -352,6 +357,8 @@ export type CliSessionBindingFacts = {
 /** Fully prepared execution context consumed by the CLI runner executor. */
 export type PreparedCliRunContext = {
   params: RunCliAgentParams & { admittedRunContext: AdmittedRunContext };
+  /** Core-only original caller policy, bound to each native request's exact lifetime. */
+  bindQuestionAnswerAuthority?: (assertActive: () => void) => PreparedQuestionAnswerAuthority;
   effectiveAuthProfileId?: string;
   /** Selected profile snapshot used only for terminal health settlement. */
   authProfileStore?: AuthProfileStore;
@@ -372,13 +379,14 @@ export type PreparedCliRunContext = {
   promptContext?: CliBackendPromptContext;
   /** Logical model input retained for policy/observation hooks when transport context is separate. */
   promptForHooks?: string;
-  contextEngineDeferredTurnMaintenance?: Promise<void>;
   modelId: string;
   normalizedModel: string;
   contextWindowInfo?: ContextWindowInfo;
   systemPrompt: string;
   systemPromptReport: SessionSystemPromptReport;
   claudeSkillsPluginArgs: string[];
+  /** Host-held, policy-selected personal Workshop tool for the paired-node adapter. */
+  nodeSkillWorkshop?: import("../tools/common.js").AnyAgentTool;
   openClawHistoryPrompt?: string;
   authEpoch?: string;
   /** Strict owner fingerprint captured for live inference verification only. */

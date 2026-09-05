@@ -179,14 +179,6 @@ function resolveXaiToolSearchConfig(ctx: {
   );
 }
 
-function resolveXaiWebSearchCredential(searchConfig?: Record<string, unknown>): string | undefined {
-  return resolveWebSearchProviderCredential({
-    credentialValue: getScopedCredentialValue(searchConfig, "grok"),
-    path: "plugins.entries.xai.config.webSearch.apiKey",
-    envVars: ["XAI_API_KEY"],
-  });
-}
-
 function resolveConfiguredXaiWebSearchCredential(
   searchConfig?: Record<string, unknown>,
 ): string | undefined {
@@ -416,12 +408,3 @@ export async function executeXaiWebSearchProviderTool(
     });
   }
 }
-
-export const testing = {
-  buildXaiWebSearchPayload,
-  resolveXaiToolSearchConfig,
-  resolveXaiInlineCitations,
-  resolveXaiWebSearchCredential,
-  resolveXaiWebSearchModel,
-  resolveXaiWebSearchTimeoutSeconds,
-};

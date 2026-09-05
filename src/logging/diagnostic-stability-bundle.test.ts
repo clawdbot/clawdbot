@@ -4,13 +4,13 @@ import os from "node:os";
 import path from "node:path";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import { emitDiagnosticEvent, resetDiagnosticEventsForTest } from "../infra/diagnostic-events.js";
-import { resetFatalErrorHooksForTest, runFatalErrorHooks } from "../infra/fatal-error-hooks.js";
+import { registerFatalErrorHook, runFatalErrorHooks } from "../infra/fatal-error-hooks.js";
 import {
   installDiagnosticStabilityFatalHook,
   MAX_DIAGNOSTIC_STABILITY_BUNDLE_BYTES,
   readDiagnosticStabilityBundleFileSync,
   readLatestDiagnosticStabilityBundleSync,
-  resetDiagnosticStabilityBundleForTest,
+  uninstallDiagnosticStabilityFatalHook,
   writeDiagnosticStabilityBundleForFailureSync,
   writeDiagnosticStabilityBundleSync,
   type DiagnosticStabilityBundle,
@@ -27,8 +27,7 @@ describe("diagnostic stability bundles", () => {
   function resetStabilityBundleTestState(): void {
     resetDiagnosticEventsForTest();
     resetDiagnosticStabilityRecorderForTest();
-    resetDiagnosticStabilityBundleForTest();
-    resetFatalErrorHooksForTest();
+    uninstallDiagnosticStabilityFatalHook();
   }
 
   beforeEach(() => {
@@ -192,8 +191,31 @@ describe("diagnostic stability bundles", () => {
     expect(messages[0]).toContain("wrote stability bundle:");
     expect(messages[0]).toContain(tempDir);
 
-    resetDiagnosticStabilityBundleForTest();
+    uninstallDiagnosticStabilityFatalHook();
     expect(runFatalErrorHooks({ reason: "uncaught_exception" })).toStrictEqual([]);
+
+    const unsubscribeIndependent = registerFatalErrorHook(() => "independent diagnostic");
+    try {
+      const reinstalledDir = path.join(tempDir, "reinstalled");
+      installDiagnosticStabilityFatalHook({ stateDir: reinstalledDir });
+      const reinstalledMessages = runFatalErrorHooks({ reason: "uncaught_exception" });
+      expect(reinstalledMessages).toHaveLength(2);
+      expect(reinstalledMessages[0]).toBe("independent diagnostic");
+      expect(reinstalledMessages[1]).toContain("wrote stability bundle:");
+      expect(reinstalledMessages[1]).toContain(reinstalledDir);
+
+      uninstallDiagnosticStabilityFatalHook();
+      expect(runFatalErrorHooks({ reason: "uncaught_exception" })).toEqual([
+        "independent diagnostic",
+      ]);
+      uninstallDiagnosticStabilityFatalHook();
+      expect(runFatalErrorHooks({ reason: "uncaught_exception" })).toEqual([
+        "independent diagnostic",
+      ]);
+    } finally {
+      uninstallDiagnosticStabilityFatalHook();
+      unsubscribeIndependent();
+    }
   });
 
   it("retains only the newest bundle files", () => {
@@ -216,6 +238,47 @@ describe("diagnostic stability bundles", () => {
     expect(files[0]).toContain("12-00-02");
     expect(files[1]).toContain("12-00-03");
   });
+
+  it.each([1, 2])(
+    "keeps the published bundle within retention %i despite future mtimes",
+    (retention) => {
+      for (let index = 0; index < retention; index++) {
+        const older = writeDiagnosticStabilityBundleForFailureSync(
+          "gateway.startup_failed",
+          undefined,
+          {
+            stateDir: tempDir,
+            retention,
+            now: new Date(Date.UTC(2026, 3, 22, 12, 0, index)),
+          },
+        );
+        expect(older.status).toBe("written");
+        if (older.status !== "written") {
+          throw new Error("Fixture publication failed");
+        }
+        const future = new Date(Date.UTC(2036, 3, 22, 12, 0, index));
+        fs.utimesSync(older.path, future, future);
+      }
+
+      const current = writeDiagnosticStabilityBundleForFailureSync(
+        "gateway.restart_respawn_failed",
+        undefined,
+        {
+          stateDir: tempDir,
+          retention,
+          now: new Date("2026-04-22T12:01:00.000Z"),
+        },
+      );
+      expect(current.status).toBe("written");
+      if (current.status !== "written") {
+        throw new Error("Current publication failed");
+      }
+      expect(current.message).toContain(current.path);
+      expect(fs.existsSync(current.path)).toBe(true);
+      expect(readDiagnosticStabilityBundleFileSync(current.path).status).toBe("found");
+      expect(fs.readdirSync(path.dirname(current.path))).toHaveLength(retention);
+    },
+  );
 
   it("reads the newest retained bundle", () => {
     startDiagnosticStabilityRecorder();

@@ -8,13 +8,11 @@ type ModelSelectionRuntimePluginsResult =
   | { ok: true; cfg: OpenClawConfig; codexInstalled: boolean }
   | { ok: false; message: string };
 const ensureModelSelectionRuntimePlugins = vi.hoisted(() =>
-  vi.fn(
-    async ({ cfg }: { cfg: OpenClawConfig }): Promise<ModelSelectionRuntimePluginsResult> => ({
-      ok: true,
-      cfg,
-      codexInstalled: false,
-    }),
-  ),
+  vi.fn(async ({ cfg }: { cfg: OpenClawConfig }): Promise<ModelSelectionRuntimePluginsResult> => ({
+    ok: true,
+    cfg,
+    codexInstalled: false,
+  })),
 );
 vi.mock("../../runtime-plugin-install.js", () => ({
   CODEX_RUNTIME_PLUGIN_ID: "codex",

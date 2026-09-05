@@ -9,7 +9,6 @@ import {
 import {
   captureNodePairingGeneration,
   isNodePairingGenerationCurrent,
-  type NodePairingGeneration,
 } from "../../infra/device-pairing-node-state.js";
 import {
   drainNodePendingWork,
@@ -20,12 +19,12 @@ import {
 } from "../node-pending-work.js";
 import {
   captureNodeWakeLifecycle,
-  isNodeWakeLifecycleCurrent,
   NODE_WAKE_RECONNECT_RETRY_WAIT_MS,
   NODE_WAKE_RECONNECT_WAIT_MS,
   releaseNodeWakeLifecycle,
 } from "../node-wake-state.js";
 import { respondUnavailableOnThrow } from "./nodes.helpers.js";
+import { isNodePairingWorkCurrent } from "./nodes.shared.js";
 import {
   maybeSendNodeWakeNudge,
   maybeWakeNodeWithApns,
@@ -43,17 +42,6 @@ function respondPairingChanged(respond: RespondFn) {
       retryable: true,
       details: { code: "PAIRING_CHANGED" },
     }),
-  );
-}
-
-async function isPendingGenerationCurrent(params: {
-  nodeId: string;
-  generation: NodePairingGeneration;
-  lifecycle: AbortSignal;
-}): Promise<boolean> {
-  return (
-    isNodeWakeLifecycleCurrent(params.nodeId, params.lifecycle, params.generation.key) &&
-    (await isNodePairingGenerationCurrent(params.generation))
   );
 }
 
@@ -127,7 +115,7 @@ export const nodePendingWorkHandlers: GatewayRequestHandlers = {
       }
       const wakeLifecycle = captureNodeWakeLifecycle(nodeId, generation.key);
       try {
-        if (!(await isPendingGenerationCurrent({ nodeId, generation, lifecycle: wakeLifecycle }))) {
+        if (!(await isNodePairingWorkCurrent({ nodeId, generation, lifecycle: wakeLifecycle }))) {
           respondPairingChanged(respond);
           return;
         }
@@ -178,7 +166,7 @@ export const nodePendingWorkHandlers: GatewayRequestHandlers = {
             );
           }
           if (
-            (await isPendingGenerationCurrent({
+            (await isNodePairingWorkCurrent({
               nodeId,
               generation,
               lifecycle: wakeLifecycle,
@@ -216,7 +204,7 @@ export const nodePendingWorkHandlers: GatewayRequestHandlers = {
             }
           }
           if (
-            (await isPendingGenerationCurrent({
+            (await isNodePairingWorkCurrent({
               nodeId,
               generation,
               lifecycle: wakeLifecycle,
@@ -237,7 +225,7 @@ export const nodePendingWorkHandlers: GatewayRequestHandlers = {
               `node pending wake done node=${nodeId} req=${wakeReqId} connected=false reason=not_connected`,
             );
           } else if (
-            await isPendingGenerationCurrent({
+            await isNodePairingWorkCurrent({
               nodeId,
               generation,
               lifecycle: wakeLifecycle,
@@ -248,7 +236,7 @@ export const nodePendingWorkHandlers: GatewayRequestHandlers = {
             );
           }
         }
-        if (!(await isPendingGenerationCurrent({ nodeId, generation, lifecycle: wakeLifecycle }))) {
+        if (!(await isNodePairingWorkCurrent({ nodeId, generation, lifecycle: wakeLifecycle }))) {
           if (!queued.deduped) {
             removeNodePendingWorkItem({
               nodeId,

@@ -11,6 +11,7 @@ import { SUBAGENT_ENDED_REASON_COMPLETE } from "./subagent-lifecycle-events.js";
 import { shouldSuppressSubagentRecoverySessionEffects } from "./subagent-recovery-state.js";
 import {
   resolveCleanupCompletionReason,
+  resolveAnnounceDeliveryDeadline,
   resolveDeferredCleanupDecision,
 } from "./subagent-registry-cleanup.js";
 import {
@@ -40,7 +41,6 @@ import {
   markPendingFinalDelivery,
   maskLifecycleIdentifier,
   recordAnnounceDeliveryResult,
-  safeMarkRequiredCompletionDeliveryBlocked,
   safeSetSubagentTaskDeliveryStatus,
 } from "./subagent-registry-lifecycle-delivery.js";
 import type { SubagentRunRecord } from "./subagent-registry.types.js";
@@ -93,10 +93,6 @@ export const finalizeResumedAnnounceGiveUp = async (
     entry,
     deliveryStatus: "failed",
     deliveryError,
-  });
-  safeMarkRequiredCompletionDeliveryBlocked(params, {
-    entry,
-    reason: deliveryError,
   });
   entry.wakeOnDescendantSettle = undefined;
   const completion = ensureCompletionState(entry);
@@ -205,9 +201,13 @@ const finalizeSubagentCleanup = async (
   const skipRequesterDelivery =
     options?.skipRequesterDelivery === true || entry.suppressCompletionDelivery === true;
   if (entry.expectsCompletionMessage === false || skipRequesterDelivery) {
+    const intentionalNonDelivery = entry.delivery?.disposition === "intentional_non_delivery";
     clearSubagentPendingDelivery(entry);
     if (skipRequesterDelivery) {
-      ensureDeliveryState(entry).status = "not_required";
+      const delivery = ensureDeliveryState(entry);
+      delivery.status = "not_required";
+      // Preserve the lifecycle owner's terminal fact after cleanup clears retry state.
+      delivery.disposition = intentionalNonDelivery ? "intentional_non_delivery" : undefined;
       entry.suppressCompletionDelivery = undefined;
     }
     entry.wakeOnDescendantSettle = undefined;
@@ -240,6 +240,8 @@ const finalizeSubagentCleanup = async (
   }
   if (announceOutcome === "delivered" || announceOutcome === "intentional_non_delivery") {
     const delivery = ensureDeliveryState(entry);
+    const terminalNonDelivery =
+      announceOutcome === "intentional_non_delivery" && delivery.status === "failed";
     const shouldCreditDelivery =
       announceOutcome === "delivered" &&
       (!options?.skipAnnounce ||
@@ -258,9 +260,9 @@ const finalizeSubagentCleanup = async (
     if (announceOutcome === "delivered") {
       clearSubagentPendingDelivery(entry);
     } else {
-      // The requester-settle batch owns the real delivery now. Retire the
-      // per-child retry obligation without converting the handoff into success.
-      delivery.status = "pending";
+      // A handoff stays pending for requester-settle; explicit suppression is
+      // terminal and must not start another turn that overrides the decision.
+      delivery.status = terminalNonDelivery ? "failed" : "pending";
       delivery.disposition = "intentional_non_delivery";
       delivery.payload = undefined;
       delivery.createdAt = undefined;
@@ -281,7 +283,8 @@ const finalizeSubagentCleanup = async (
     } else if (announceOutcome === "intentional_non_delivery" && !options?.skipDeliveryStatus) {
       safeSetSubagentTaskDeliveryStatus(params, {
         entry,
-        deliveryStatus: "pending",
+        deliveryStatus: terminalNonDelivery ? "failed" : "pending",
+        deliveryError: terminalNonDelivery ? getDeliveryLastError(entry) : undefined,
       });
     }
     if (announceOutcome === "delivered") {
@@ -306,6 +309,7 @@ const finalizeSubagentCleanup = async (
       entry,
       cleanup,
       completedAt: Date.now(),
+      skipRequesterSettleWake: terminalNonDelivery,
     });
     // Hook loading is best-effort; durable delivery and cleanup must already
     // be terminal before plugin code can fail or stall.
@@ -637,6 +641,9 @@ export const startSubagentAnnounceCleanupFlow = (
         return;
       }
       const deliveryState = ensureDeliveryState(entry);
+      if (delivery.reason === "delivery_suppressed") {
+        deliveryState.status = "failed";
+      }
       latestDeliveryError = formatAnnounceDeliveryError(delivery);
       if (
         deliveryState.lastError !== latestDeliveryError ||
@@ -656,12 +663,34 @@ export const startSubagentAnnounceCleanupFlow = (
     cleanupGeneration,
     run: async () => {
       let announceOutcome: SubagentAnnounceFlowOutcome = "retryable";
+      const deadline = new AbortController();
+      let deadlineTimer: ReturnType<typeof setTimeout> | undefined;
+      const now = Date.now();
+      const expiryMs =
+        entry.expectsCompletionMessage === true
+          ? ANNOUNCE_COMPLETION_HARD_EXPIRY_MS
+          : ANNOUNCE_EXPIRY_MS;
+      const remainingMs = resolveAnnounceDeliveryDeadline(entry, now, expiryMs) - now;
+      const abortDelivery = () => deadline.abort(new Error("subagent announce delivery expired"));
+      // Accepted handoffs can wait behind a busy parent without spending their
+      // execution timeout, but the lifecycle's delivery window still bounds that wait.
+      if (remainingMs <= 0) {
+        abortDelivery();
+      } else {
+        deadlineTimer = setTimeout(abortDelivery, remainingMs);
+        deadlineTimer.unref?.();
+      }
       try {
-        announceOutcome = await params.runSubagentAnnounceFlow(announceParams);
+        announceOutcome = await params.runSubagentAnnounceFlow({
+          ...announceParams,
+          signal: deadline.signal,
+        });
       } catch (error) {
         defaultRuntime.log(
           `[warn] Subagent announce flow failed during cleanup for run ${runId}: ${String(error)}`,
         );
+      } finally {
+        clearTimeout(deadlineTimer);
       }
       await finalizeAnnounceCleanup(announceOutcome);
     },

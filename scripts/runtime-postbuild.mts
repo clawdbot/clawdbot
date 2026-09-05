@@ -19,6 +19,7 @@ import {
 } from "./lib/static-extension-assets.mts";
 import { writeTextFileIfChanged } from "./runtime-postbuild-shared.mjs";
 import { stageBundledPluginRuntime } from "./stage-bundled-plugin-runtime.mts";
+import { writeBuildInfo } from "./write-build-info.ts";
 import { writeOfficialChannelCatalog } from "./write-official-channel-catalog.mts";
 
 type RuntimePostBuildParams = {
@@ -37,6 +38,15 @@ type LegacyRuntimeAlias = {
   aliasFileName: string;
   sourceIncludes?: readonly string[];
 };
+
+const LEGACY_UPDATE_NODE_RUNNER_COMPAT_CHUNK = [
+  'import path from "node:path";',
+  "export function resolveNodeRunner() {",
+  "  const base = path.basename(process.execPath).trim().toLowerCase();",
+  '  return base === "node" || base === "node.exe" ? process.execPath : "node";',
+  "}",
+  "",
+].join("\n");
 
 /** @internal Shared repository-script contract. */
 export { listStaticExtensionAssetOutputs };
@@ -184,6 +194,16 @@ const LEGACY_PLUGIN_INSTALL_RUNTIME_COMPAT_ALIASES = [
 }));
 /** Compatibility chunks kept for live gateways loading old CLI exit modules. */
 const LEGACY_CLI_EXIT_COMPAT_CHUNKS = [
+  // v2026.8.2 and the exact d413210 build load these after replacing dist/.
+  // Remove only after both source artifacts fall outside the supported upgrade window.
+  {
+    dest: "dist/shared-Y6bNiw2w.js",
+    contents: LEGACY_UPDATE_NODE_RUNNER_COMPAT_CHUNK,
+  },
+  {
+    dest: "dist/shared-DTaQo6Hi.js",
+    contents: LEGACY_UPDATE_NODE_RUNNER_COMPAT_CHUNK,
+  },
   {
     dest: "dist/memory-state-CcqRgDZU.js",
     contents: "export function hasMemoryRuntime() {\n  return false;\n}\n",
@@ -332,6 +352,7 @@ export function listCoreRuntimePostBuildOutputs(
   params: RuntimeFsParams & { chunks?: LegacyCliExitCompatChunk[] } = {},
 ) {
   return [
+    "dist/build-info.json",
     ...listHookMetadataOutputs(params),
     ...listOfficialChannelCatalogOutputs(),
     ...listExportHtmlTemplateOutputs(params),
@@ -733,6 +754,9 @@ export function runRuntimePostBuild(params: RuntimePostBuildParams = {}) {
   runPhase("built plugin control-plane loads", () =>
     verifyBuiltPluginControlPlaneModules(phaseParams),
   );
+  // Source runners launch directly after postbuild, without the full UI build's
+  // final metadata step. Publish identity only after the runtime is complete.
+  runPhase("build provenance", () => writeBuildInfo({ rootDir, env: params.env }));
   logSummary();
 }
 

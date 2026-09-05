@@ -7,11 +7,12 @@ import { tokenizeHtmlTags } from "openclaw/plugin-sdk/text-chunking";
 import { decodeTelegramHtmlEntities } from "./format-html.js";
 import type { RichText } from "./rich-block-model.js";
 
-export type HtmlNode =
+export type HtmlNode = { start: number; end: number } & (
   | { kind: "text"; text: string }
-  | { kind: "element"; name: string; raw: string; children: HtmlNode[]; closed: boolean };
+  | { kind: "element"; name: string; raw: string; children: HtmlNode[]; closed: boolean }
+);
 
-export const VOID_TAGS = new Set(["br", "hr", "img", "input", "tg-map"]);
+const VOID_TAGS = new Set(["br", "hr", "img", "input", "tg-map"]);
 
 const INLINE_STYLE_TAGS: Record<
   string,
@@ -56,17 +57,30 @@ export function parseHtmlAttrs(raw: string): Map<string, string> {
 }
 
 /** Parse an HTML fragment into a light node tree; unmatched tags stay text. */
-export function parseHtmlFragment(text: string): HtmlNode[] {
+export function parseHtmlFragment(
+  text: string,
+  literalRanges: readonly { start: number; end: number }[] = [],
+): HtmlNode[] {
   const root: HtmlNode[] = [];
   const stack: Array<{ name: string; node: Extract<HtmlNode, { kind: "element" }> }> = [];
   const childrenOf = () => (stack.length > 0 ? stack[stack.length - 1]!.node.children : root);
   let cursor = 0;
   const pushText = (from: number, to: number) => {
     if (to > from) {
-      childrenOf().push({ kind: "text", text: text.slice(from, to) });
+      childrenOf().push({ kind: "text", text: text.slice(from, to), start: from, end: to });
     }
   };
   for (const tag of tokenizeHtmlTags(text)) {
+    const parent = stack.at(-1);
+    // Code examples are text, including tag-shaped examples inside a disclosure.
+    // Keep them out of matching so they cannot close or create an authored container.
+    if (
+      literalRanges.some((range) => tag.start >= range.start && tag.start < range.end) ||
+      ((parent?.name === "code" || parent?.name === "pre") &&
+        !(tag.closing && tag.name === parent.name))
+    ) {
+      continue;
+    }
     pushText(cursor, tag.start);
     cursor = tag.end;
     if (tag.closing) {
@@ -74,10 +88,11 @@ export function parseHtmlFragment(text: string): HtmlNode[] {
       if (openIndex >= 0) {
         for (let depth = openIndex; depth < stack.length; depth += 1) {
           stack[depth]!.node.closed = depth === openIndex;
+          stack[depth]!.node.end = depth === openIndex ? tag.end : tag.start;
         }
         stack.length = openIndex;
       } else {
-        childrenOf().push({ kind: "text", text: tag.raw });
+        childrenOf().push({ kind: "text", text: tag.raw, start: tag.start, end: tag.end });
       }
       continue;
     }
@@ -88,6 +103,8 @@ export function parseHtmlFragment(text: string): HtmlNode[] {
       raw: tag.raw,
       children: [],
       closed: selfContained,
+      start: tag.start,
+      end: selfContained ? tag.end : text.length,
     };
     childrenOf().push(element);
     if (!selfContained) {
@@ -95,32 +112,17 @@ export function parseHtmlFragment(text: string): HtmlNode[] {
     }
   }
   pushText(cursor, text.length);
-  return unwrapUnclosed(root);
-}
-
-// An open tag with no matching close is not an island: it stays literal text so
-// malformed agent output remains visible instead of silently restyling the rest.
-function unwrapUnclosed(nodes: HtmlNode[]): HtmlNode[] {
-  const result: HtmlNode[] = [];
-  for (const node of nodes) {
-    if (node.kind === "text") {
-      result.push(node);
-      continue;
-    }
-    const children = unwrapUnclosed(node.children);
-    if (node.closed) {
-      result.push({ ...node, children });
-    } else {
-      result.push({ kind: "text", text: node.raw }, ...children);
-    }
-  }
-  return result;
+  // Retain unmatched parents: extracting their children as islands would hide
+  // malformed authored markup. Both inline and block rendering keep them literal.
+  return root;
 }
 
 export function nodeText(nodes: readonly HtmlNode[]): string {
   return nodes
     .map((node) =>
-      node.kind === "text" ? decodeTelegramHtmlEntities(node.text) : nodeText(node.children),
+      node.kind === "text"
+        ? decodeTelegramHtmlEntities(node.text)
+        : `${node.closed ? "" : decodeTelegramHtmlEntities(node.raw)}${nodeText(node.children)}`,
     )
     .join("");
 }
@@ -139,7 +141,7 @@ function serializeHtmlNodes(nodes: readonly HtmlNode[]): string {
       const selfContained = VOID_TAGS.has(node.name) || node.raw.trimEnd().endsWith("/>");
       return selfContained
         ? node.raw
-        : `${node.raw}${serializeHtmlNodes(node.children)}</${node.name}>`;
+        : `${node.raw}${serializeHtmlNodes(node.children)}${node.closed ? `</${node.name}>` : ""}`;
     })
     .join("");
 }
@@ -155,7 +157,11 @@ export function htmlNodesToRichText(nodes: readonly HtmlNode[]): RichText {
       }
       continue;
     }
-    const style = INLINE_STYLE_TAGS[node.name];
+    if (!node.closed) {
+      parts.push(node.raw, htmlNodesToRichText(node.children));
+      continue;
+    }
+    const style = Object.hasOwn(INLINE_STYLE_TAGS, node.name) && INLINE_STYLE_TAGS[node.name];
     if (style) {
       parts.push({ type: style, text: htmlNodesToRichText(node.children) });
       continue;
@@ -224,8 +230,9 @@ export function parseInlineHtmlIslands(leaf: string): RichText {
     return leaf;
   }
   const nodes = parseHtmlFragment(leaf);
-  const hasElement = nodes.some((node) => node.kind === "element");
-  if (!hasElement) {
+  const hasElement = (children: readonly HtmlNode[]): boolean =>
+    children.some((node) => node.kind === "element" && (node.closed || hasElement(node.children)));
+  if (!hasElement(nodes)) {
     return leaf;
   }
   // Preserve raw whitespace when no islands parse; only island-bearing leaves

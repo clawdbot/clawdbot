@@ -104,9 +104,12 @@ it.each(
       await finished.promise;
       expect(after.execute).not.toHaveBeenCalled();
       if (runId) {
-        await expect(h.tools[1]!.execute("closed", { runId })).rejects.toThrow(
-          /unavailable|expired/,
-        );
+        const closedWait = h.tools[1]!.execute("closed", { runId });
+        if (close === "context") {
+          await expect(closedWait).rejects.toBe(contextController.signal.reason);
+        } else {
+          await expect(closedWait).rejects.toThrow(/unavailable|expired/);
+        }
       }
       const healthy = createCodeModeHarness();
       applyCodeModeCatalog({ ...healthy.ctx, tools: healthy.tools });

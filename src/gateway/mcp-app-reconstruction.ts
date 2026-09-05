@@ -2,7 +2,10 @@ import { type CallToolResult, ContentBlockSchema } from "@modelcontextprotocol/s
 import { asOptionalRecord } from "@openclaw/normalization-core/record-coerce";
 import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
 import type { BoardMcpAppDescriptor } from "../../packages/gateway-protocol/src/index.js";
-import { getOrCreateSessionMcpRuntime } from "../agents/agent-bundle-mcp-runtime.js";
+import {
+  acquireSessionMcpRuntime,
+  releaseSessionMcpRuntime,
+} from "../agents/agent-bundle-mcp-manager-api.js";
 import type { SessionMcpRuntime } from "../agents/agent-bundle-mcp-types.js";
 import { resolveAgentDir, resolveAgentWorkspaceDir } from "../agents/agent-scope.js";
 import {
@@ -266,43 +269,44 @@ async function reconstructMcpAppView(params: {
     sessionEntry: loaded.entry,
   };
   const data = await findMcpAppReconstructionDataByVisit(async (visit) => {
-    await visitSessionMessagesAsync(transcriptScope, (message) => visit(message), {
-      mode: "full",
-      reason: "MCP App restart reconstruction",
-      cache: "reuse",
-    });
+    await visitSessionMessagesAsync(transcriptScope, visit);
   }, params.lookup);
   if (!data) {
     return undefined;
   }
-  const runtime = await getOrCreateSessionMcpRuntime({
+  const acquisition = await acquireSessionMcpRuntime({
     sessionId,
     sessionKey: loaded.canonicalKey,
     workspaceDir: resolveAgentWorkspaceDir(params.cfg, agentId),
     agentDir: resolveAgentDir(params.cfg, agentId),
     cfg: params.cfg,
   });
-  if (runtime.mcpAppsEnabled !== true) {
-    return undefined;
+  const { runtime } = acquisition;
+  try {
+    if (runtime.mcpAppsEnabled !== true) {
+      return undefined;
+    }
+    const fetched = await fetchMcpAppView({
+      runtime,
+      agentId,
+      serverName: data.descriptor.serverName,
+      toolName: data.descriptor.toolName,
+      uiResourceUri: data.descriptor.uiResourceUri,
+      toolCallId: data.descriptor.toolCallId,
+      toolInput: data.toolInput,
+      toolResult: data.toolResult,
+      ...(params.viewId ? { viewId: params.viewId } : {}),
+      allowedAppToolNames: params.allowedAppToolNames,
+      ...(params.authorizeAppInteraction
+        ? { authorizeAppInteraction: params.authorizeAppInteraction }
+        : {}),
+      ...(params.readOnly ? { readOnly: true as const } : {}),
+    });
+    const view = fetched ? getMcpAppViewLease(fetched.viewId, runtime) : undefined;
+    return view ? { runtime, view } : undefined;
+  } finally {
+    await releaseSessionMcpRuntime(acquisition);
   }
-  const fetched = await fetchMcpAppView({
-    runtime,
-    agentId,
-    serverName: data.descriptor.serverName,
-    toolName: data.descriptor.toolName,
-    uiResourceUri: data.descriptor.uiResourceUri,
-    toolCallId: data.descriptor.toolCallId,
-    toolInput: data.toolInput,
-    toolResult: data.toolResult,
-    ...(params.viewId ? { viewId: params.viewId } : {}),
-    allowedAppToolNames: params.allowedAppToolNames,
-    ...(params.authorizeAppInteraction
-      ? { authorizeAppInteraction: params.authorizeAppInteraction }
-      : {}),
-    ...(params.readOnly ? { readOnly: true as const } : {}),
-  });
-  const view = fetched ? getMcpAppViewLease(fetched.viewId, runtime) : undefined;
-  return view ? { runtime, view } : undefined;
 }
 
 async function restoreMcpAppViewOnce(params: {
@@ -335,6 +339,7 @@ export async function mintMcpAppViewFromTranscript(params: {
 }): Promise<ReconstructionResult | undefined> {
   return await reconstructMcpAppView({
     cfg: params.cfg,
+    agentId: params.agentId,
     sessionKey: params.sessionKey,
     lookup: { descriptor: params.descriptor },
     allowedAppToolNames: params.allowedAppToolNames,

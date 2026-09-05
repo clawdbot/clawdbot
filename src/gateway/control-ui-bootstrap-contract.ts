@@ -63,6 +63,8 @@ export type ControlUiBootstrapConfig = {
   automaticallyFetchFavicons?: boolean;
   seamColor?: string;
   environment?: ControlUiEnvironment;
+  /** Whether this Gateway's served UI may show the Discord community invitation. */
+  communityInvite?: boolean;
   /**
    * Whether the operator terminal surface is enabled (`gateway.terminal.enabled`).
    * The Control UI hides the terminal entirely when false so a disabled kill
@@ -71,5 +73,7 @@ export type ControlUiBootstrapConfig = {
   terminalEnabled?: boolean;
   /** Whether the Labs-gated CLI agents model-picker group is enabled. */
   cliAgentsEnabled?: boolean;
+  /** Only explicit no-auth Gateways permit native asset loading without scoped cookies. */
+  pluginAssetsRequireAuth?: boolean;
   pluginFrameGrants?: ControlUiPluginFrameGrantAck[];
 };

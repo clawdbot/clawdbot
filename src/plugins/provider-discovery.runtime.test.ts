@@ -1,6 +1,10 @@
 /** Covers provider discovery runtime loading from plugin manifests and registries. */
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import type { PluginManifestRecord } from "./manifest-registry.js";
+import {
+  prepareSyntheticAuthWithProvider,
+  resolveSyntheticAuthWithProvider,
+} from "./provider-synthetic-auth.js";
 import type { ProviderPlugin } from "./types.js";
 
 const mocks = vi.hoisted(() => {
@@ -239,6 +243,37 @@ describe("resolvePluginDiscoveryProvidersRuntime", () => {
       { ...staticProvider, pluginId: "deepseek" },
     ]);
     expect(mocks.resolvePluginProvidersCore).not.toHaveBeenCalled();
+  });
+
+  it("retains prepared auth through attribution until the provider hook changes", async () => {
+    const auth = { apiKey: "native-marker", source: "fixture", mode: "oauth" as const };
+    const provider: ProviderPlugin = {
+      id: "deepseek",
+      label: "Native fixture",
+      auth: [],
+      prepareSyntheticAuth: vi.fn(async () => auth),
+    };
+    mocks.loadSource.mockReturnValue(provider);
+    const context = { config: {}, provider: "deepseek" };
+    const options = { env: {}, workspaceDir: "/workspace" };
+    const discover = () => {
+      const [discovered] = resolvePluginDiscoveryProvidersRuntime({
+        discoveryEntriesOnly: true,
+        includeSyntheticAuthProviders: true,
+      });
+      if (!discovered) {
+        throw new Error("Fixture discovery provider missing");
+      }
+      return discovered;
+    };
+    await prepareSyntheticAuthWithProvider(discover(), context, options);
+    expect(resolveSyntheticAuthWithProvider(discover(), context, options)).toEqual(auth);
+
+    const replacement = { ...provider, prepareSyntheticAuth: vi.fn(async () => undefined) };
+    mocks.getCachedPluginModuleLoader.mockReturnValueOnce(vi.fn(() => replacement));
+    expect(resolveSyntheticAuthWithProvider(discover(), context, options)).toBeUndefined();
+    expect(provider.prepareSyntheticAuth).toHaveBeenCalledOnce();
+    expect(replacement.prepareSyntheticAuth).not.toHaveBeenCalled();
   });
 
   it("does not synthesize manifest entry providers for runtime-discovered catalogs", () => {
@@ -882,6 +917,64 @@ describe("resolvePluginDiscoveryProvidersRuntime", () => {
       expect(providers.map((provider) => provider.id)).toEqual(
         credential ? ["manifest", "router"] : ["manifest"],
       );
+    },
+  );
+
+  it.each(
+    [
+      { scope: "selected", expectedFullIds: ["broken", "healthy"] },
+      { scope: "unscoped", expectedFullIds: ["healthy"] },
+      { scope: "entries-only", expectedFullIds: [] },
+    ].flatMap(({ scope, expectedFullIds }) =>
+      ["first", "last"].map((failurePosition) => ({ scope, expectedFullIds, failurePosition })),
+    ),
+  )(
+    "recovers discarded discovery entries with $scope scope when failure is $failurePosition",
+    ({ scope, expectedFullIds, failurePosition }) => {
+      const healthy = {
+        ...createManifestPlugin("healthy"),
+        setup: { providers: [{ id: "healthy", envVars: ["HEALTHY_API_KEY"] }] },
+      };
+      const broken = createManifestPlugin("broken");
+      mocks.resolveDiscoveredProviderPluginIds.mockReturnValue(["static", "healthy", "broken"]);
+      mocks.loadPluginMetadataSnapshot.mockReturnValue({
+        index: { plugins: [] },
+        manifestRegistry: {
+          plugins: [
+            createManifestPluginWithModelCatalog("static"),
+            ...(failurePosition === "first" ? [broken, healthy] : [healthy, broken]),
+          ],
+          diagnostics: [],
+        },
+      });
+      mocks.loadSource.mockImplementation((modulePath: string) => {
+        if (modulePath === broken.providerDiscoverySource) {
+          throw new Error("discovery entry unavailable");
+        }
+        return { ...createProvider({ id: "healthy", mode: "catalog" }), label: "entry" };
+      });
+      const fullProviders = expectedFullIds.map((id) => ({
+        ...createProvider({ id, mode: "catalog" }),
+        label: `full:${id}`,
+      }));
+      mocks.resolvePluginProvidersCore.mockReturnValue(fullProviders);
+
+      const providers = resolvePluginDiscoveryProvidersRuntime({
+        env: { HEALTHY_API_KEY: "catalog-test-key" },
+        ...(scope === "unscoped" ? {} : { onlyPluginIds: ["static", "healthy", "broken"] }),
+        discoveryEntriesOnly: scope === "entries-only",
+      });
+
+      expect(providers.map(({ id, label }) => [id, label])).toEqual([
+        ["static", "static"],
+        ...fullProviders.map(({ id, label }) => [id, label]),
+      ]);
+      if (expectedFullIds.length === 0) {
+        expect(mocks.resolvePluginProvidersCore).not.toHaveBeenCalled();
+      } else {
+        expect(mocks.resolvePluginProvidersCore).toHaveBeenCalledOnce();
+        expect(requireResolvePluginProvidersParams().onlyPluginIds).toEqual(expectedFullIds);
+      }
     },
   );
 

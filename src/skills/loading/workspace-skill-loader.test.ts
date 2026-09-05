@@ -21,7 +21,11 @@ import {
   type SkillsHomeEnvSnapshot,
 } from "../test-support/home-env.test-support.js";
 import { writePluginWithSkill } from "../test-support/skill-plugin-fixtures.test-support.js";
-import { loadWorkspaceSkills } from "./workspace-skill-loader.js";
+import {
+  loadBundledSkillEntryByName,
+  loadVisibleSkills,
+  loadWorkspaceSkills,
+} from "./workspace-skill-loader.js";
 
 vi.mock("../../plugins/manifest-registry.js", async () => {
   const fsLocal = await import("node:fs");
@@ -111,6 +115,7 @@ function createWorkspacePluginMetadataSnapshot(params: {
     setupProviders: new Map(),
     commandAliases: new Map(),
     contracts: new Map(),
+    modelIdNormalizationPolicies: new Map(),
   };
   const index: PluginMetadataSnapshot["index"] = {
     version: 1,
@@ -229,6 +234,38 @@ async function setupWorkspaceSkillPlugin() {
 }
 
 describe("loadWorkspaceSkills", () => {
+  it("keeps an eligible bundled skill addressable across a workspace collision", async () => {
+    const workspaceDir = await createTempWorkspaceDir();
+    const bundledSkillsDir = path.join(workspaceDir, ".bundled");
+    await writeSkill({
+      dir: path.join(bundledSkillsDir, "control-ui"),
+      name: "control-ui",
+      description: "Bundled Control UI",
+    });
+    await writeSkill({
+      dir: path.join(workspaceDir, "skills", "control-ui"),
+      name: "control-ui",
+      description: "Workspace replacement",
+    });
+
+    const visible = loadVisibleSkills(workspaceDir, {
+      config: {},
+      bundledSkillsDir,
+      managedSkillsDir: path.join(workspaceDir, ".managed"),
+    });
+    const mergedControlUi = visible.find((entry) => entry.skill.name === "control-ui");
+    const bundledControlUi = loadBundledSkillEntryByName("control-ui", {
+      config: {},
+      bundledSkillsDir,
+    });
+
+    expect(mergedControlUi?.skill.source).toBe("openclaw-workspace");
+    expect(bundledControlUi?.skill.source).toBe("openclaw-bundled");
+    expect(bundledControlUi?.skill.filePath).toBe(
+      path.join(bundledSkillsDir, "control-ui", "SKILL.md"),
+    );
+  });
+
   it("reuses unfiltered skill discovery until the workspace snapshot version changes", async () => {
     const workspaceDir = await createTempWorkspaceDir();
     await writeSkill({

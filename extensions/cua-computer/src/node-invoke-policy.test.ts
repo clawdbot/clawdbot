@@ -52,6 +52,17 @@ describe("cua-computer node invoke policy", () => {
       level: "ordinary",
       family: "observation",
     });
+    expect(
+      classifyRisk({
+        action: "zoom",
+        windowRef: "window",
+        observationId: "observation",
+        x1: 0,
+        y1: 0,
+        x2: 100,
+        y2: 100,
+      }),
+    ).toEqual({ level: "ordinary", family: "observation" });
     expect(classifyRisk({ action: "type", text: "hello", windowRef: "window" })).toEqual({
       level: "ordinary",
       family: "input",

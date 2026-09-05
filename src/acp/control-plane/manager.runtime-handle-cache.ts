@@ -11,8 +11,9 @@ import type {
 } from "@openclaw/acp-core/runtime/types";
 import { normalizeLowercaseStringOrEmpty } from "@openclaw/normalization-core/string-coerce";
 import { logVerbose } from "../../globals.js";
-import type { SessionAcpMeta } from "./manager.types.js";
-import { normalizeActorKey } from "./manager.utils.js";
+import { isAcpOwnerRepairRequired } from "./manager.runtime-owner.js";
+import type { AcpSessionTarget, SessionAcpMeta } from "./manager.types.js";
+import { acpSessionActorKey } from "./manager.utils.js";
 import { normalizeText } from "./runtime-options.js";
 import type { SessionActorQueue } from "./session-actor-queue.js";
 
@@ -32,16 +33,16 @@ export type CachedRuntimeState = {
 export class ManagerRuntimeHandleCache {
   private readonly runtimeCache = new Map<string, CachedRuntimeState>();
 
-  get(sessionKey: string): CachedRuntimeState | null {
-    return this.runtimeCache.get(normalizeActorKey(sessionKey)) ?? null;
+  get(target: AcpSessionTarget): CachedRuntimeState | null {
+    return this.runtimeCache.get(acpSessionActorKey(target)) ?? null;
   }
 
-  set(sessionKey: string, state: CachedRuntimeState): void {
-    this.runtimeCache.set(normalizeActorKey(sessionKey), state);
+  set(target: AcpSessionTarget, state: CachedRuntimeState): void {
+    this.runtimeCache.set(acpSessionActorKey(target), state);
   }
 
-  clear(sessionKey: string): void {
-    this.runtimeCache.delete(normalizeActorKey(sessionKey));
+  clear(target: AcpSessionTarget): void {
+    this.runtimeCache.delete(acpSessionActorKey(target));
   }
 
   /** Returns cache counters used by ACP manager observability snapshots. */
@@ -54,8 +55,8 @@ export class ManagerRuntimeHandleCache {
   }
 
   /** Closes and removes one cached runtime handle when present. */
-  async close(params: { sessionKey: string; reason: string }): Promise<void> {
-    const cached = this.get(params.sessionKey);
+  async close(params: AcpSessionTarget & { reason: string }): Promise<void> {
+    const cached = this.get(params);
     if (!cached) {
       return;
     }
@@ -69,7 +70,7 @@ export class ManagerRuntimeHandleCache {
         `acp-manager: cached runtime close failed for ${params.sessionKey}: ${String(error)}`,
       );
     } finally {
-      this.clear(params.sessionKey);
+      this.clear(params);
     }
   }
 
@@ -78,19 +79,31 @@ export class ManagerRuntimeHandleCache {
     await Promise.all(
       [...this.runtimeCache.keys()].map((actorKey) =>
         params.actorQueue.run(actorKey, async () => {
-          await this.close({ sessionKey: actorKey, reason: params.reason });
+          const cached = this.runtimeCache.get(actorKey);
+          if (!cached) {
+            return;
+          }
+          try {
+            await cached.runtime.close({ handle: cached.handle, reason: params.reason });
+          } catch (error) {
+            logVerbose(
+              `acp-manager: cached runtime close failed for ${cached.handle.sessionKey}: ${String(error)}`,
+            );
+          } finally {
+            this.runtimeCache.delete(actorKey);
+          }
         }),
       ),
     );
   }
 
   /** Clears a cached handle only when the caller still owns the same runtime identifiers. */
-  clearIfHandleMatches(params: { sessionKey: string; handle: AcpRuntimeHandle }): void {
-    const cached = this.get(params.sessionKey);
+  clearIfHandleMatches(params: AcpSessionTarget & { handle: AcpRuntimeHandle }): void {
+    const cached = this.get(params);
     if (!cached || !this.runtimeHandlesMatch(cached.handle, params.handle)) {
       return;
     }
-    this.clear(params.sessionKey);
+    this.clear(params);
   }
 
   /** Checks whether a cached runtime handle is still healthy enough to reuse. */
@@ -114,6 +127,9 @@ export class ManagerRuntimeHandleCache {
       }
       return true;
     } catch (error) {
+      if (isAcpOwnerRepairRequired(error)) {
+        throw error;
+      }
       logVerbose(
         `acp-manager: evicting cached runtime handle for ${params.sessionKey} after status probe failed: ${String(error)}`,
       );
@@ -140,6 +156,7 @@ export class ManagerRuntimeHandleCache {
   private runtimeHandlesMatch(a: AcpRuntimeHandle, b: AcpRuntimeHandle): boolean {
     return (
       a.sessionKey === b.sessionKey &&
+      a.agentId === b.agentId &&
       a.backend === b.backend &&
       a.runtimeSessionName === b.runtimeSessionName &&
       (a.cwd ?? "") === (b.cwd ?? "") &&

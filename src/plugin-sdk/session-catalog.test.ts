@@ -6,7 +6,9 @@ import {
   sessionCatalogPaging,
   sessionCatalogAdoptedSourceKey,
   type SessionCatalogFamilyOptions,
+  type SessionCatalogProvider,
   type SessionCatalogSession,
+  type SessionCatalogTranscriptItem,
 } from "./session-catalog.js";
 
 const messages = {
@@ -27,6 +29,32 @@ const session = (threadId: string): SessionCatalogSession => ({
 });
 
 describe("session catalog SDK", () => {
+  it("exposes the closed share-route contract to external providers", () => {
+    const shareRoute = {
+      kind: "thread-id-prefix",
+      routeSegment: "shared-sessions",
+      hostId: "gateway",
+      identifierAlphabet: "lowercase-hex",
+      fullLength: 32,
+      minPrefixLength: 12,
+      lookup: "catalog-list-search-by-thread-id-prefix",
+      ambiguity: "multiple-results-or-next-cursor",
+    } as const satisfies NonNullable<SessionCatalogProvider["shareRoute"]>;
+    const provider = {
+      id: "external",
+      label: "External",
+      shareRoute,
+      async list() {
+        return [];
+      },
+      async read({ hostId, threadId }) {
+        return { hostId, threadId, items: [] };
+      },
+    } satisfies SessionCatalogProvider;
+
+    expect(provider.shareRoute).toEqual(shareRoute);
+  });
+
   it("owns canonical list/read parameter and cursor parsing", () => {
     const cursor = sessionCatalogPaging.encodeCursor(2);
     expect(
@@ -52,6 +80,47 @@ describe("session catalog SDK", () => {
         { threadIdMaxLength: 32, threadIdPattern: /^(?!-)[a-z0-9-]+$/u, messages },
       ),
     ).toThrow("bad thread");
+  });
+
+  it.each([
+    { name: "missing", timestamps: [] },
+    {
+      name: "equal",
+      timestamps: Array.from({ length: 5 }, () => "2026-08-30T12:00:00Z"),
+    },
+    {
+      name: "non-monotonic",
+      timestamps: [
+        "2026-08-30T12:00:04Z",
+        "2026-08-30T12:00:01Z",
+        "2026-08-30T12:00:03Z",
+        "2026-08-30T12:00:00Z",
+        "2026-08-30T12:00:02Z",
+      ],
+    },
+  ])("pages newest-first by source order with $name timestamps", ({ timestamps }) => {
+    const items: SessionCatalogTranscriptItem[] = ["z", "2", "10", "a", "1"].map((id, index) => ({
+      id,
+      type: "agentMessage",
+      text: id,
+      timestamp: timestamps[index],
+    }));
+    const latest = sessionCatalogPaging.boundTranscriptPage(items, 2, 0);
+    expect(latest.items.map((item) => item.id)).toEqual(["1", "a"]);
+    const older = sessionCatalogPaging.boundTranscriptPage(
+      items,
+      2,
+      sessionCatalogPaging.decodeCursor(latest.nextCursor),
+    );
+    expect(older.items.map((item) => item.id)).toEqual(["10", "2"]);
+    const oldest = sessionCatalogPaging.boundTranscriptPage(
+      items,
+      2,
+      sessionCatalogPaging.decodeCursor(older.nextCursor),
+    );
+    expect(oldest.items.map((item) => item.id)).toEqual(["z"]);
+    expect(oldest.nextCursor).toBeUndefined();
+    expect(items.map((item) => item.id)).toEqual(["z", "2", "10", "a", "1"]);
   });
 
   function createFamilyFixture() {

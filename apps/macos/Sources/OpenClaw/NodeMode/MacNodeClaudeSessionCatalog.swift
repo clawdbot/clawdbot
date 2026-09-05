@@ -351,7 +351,7 @@ enum MacNodeClaudeSessionCatalog {
         var position = end
         var scanned = 0
         var fragments: [Data] = []
-        var found: [(item: [String: Any], start: UInt64)] = []
+        var found: [(item: [String: Any], start: UInt64, end: UInt64)] = []
         func appendLine(prefix: Data, start: UInt64) {
             var line = Data(capacity: prefix.count + fragments.reduce(0) { $0 + $1.count })
             line.append(prefix)
@@ -360,7 +360,7 @@ enum MacNodeClaudeSessionCatalog {
             }
             fragments.removeAll(keepingCapacity: true)
             if let item = parseTranscriptLine(line) {
-                found.append((item, start))
+                found.append((item, start, start + UInt64(line.count)))
             }
         }
         while position > 0,
@@ -408,7 +408,7 @@ enum MacNodeClaudeSessionCatalog {
             throw CatalogError.responseTooLarge
         }
         let requested = Array(found.prefix(params.limit))
-        var selected: [(item: [String: Any], start: UInt64)] = []
+        var selected: [(item: [String: Any], start: UInt64, end: UInt64)] = []
         var selectedBytes = 0
         for entry in requested {
             try Task.checkCancellation()
@@ -422,16 +422,22 @@ enum MacNodeClaudeSessionCatalog {
             selectedBytes += data.count
         }
         let hasEarlierItems = selected.count < found.count || position > 0
-        var response: [String: Any] = [
+        let leaseId = target.leaseId ?? self.transcriptReadLeases.store(
+            rootPath: self.projectsURL(homeURL: homeURL).standardizedFileURL.path,
+            threadId: params.threadId,
+            fileURL: fileURL)
+        var response: [String: Any] = try [
             "threadId": params.threadId,
             // Shared UI expects newest-first pages and restores chronological order.
-            "items": selected.map(\.item),
+            "items": selected.map { entry in
+                var item = entry.item
+                // Mixed-block pages can resume even the only row. Preserve its byte
+                // end and discovery lease across appends and changed page sizes.
+                item["resumeCursor"] = try encodeTranscriptCursor(offset: Int(entry.end), leaseId: leaseId)
+                return item
+            },
         ]
         if hasEarlierItems, let earliest = selected.last?.start, earliest > 0 {
-            let leaseId = target.leaseId ?? self.transcriptReadLeases.store(
-                rootPath: self.projectsURL(homeURL: homeURL).standardizedFileURL.path,
-                threadId: params.threadId,
-                fileURL: fileURL)
             response["nextCursor"] = try encodeTranscriptCursor(
                 offset: Int(earliest),
                 leaseId: leaseId)

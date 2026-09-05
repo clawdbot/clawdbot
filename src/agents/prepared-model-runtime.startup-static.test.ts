@@ -1,6 +1,7 @@
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import { createEmptyPluginRegistry } from "../plugins/registry-empty.js";
 import type { ModelCatalogSnapshot } from "./model-catalog.types.js";
+import { setPreparedModelFullCatalogAuth } from "./prepared-model-runtime-auth.js";
 import type { ModelRegistry } from "./sessions/model-registry.js";
 
 type CreateStaticCatalogResolver =
@@ -22,6 +23,7 @@ const mocks = vi.hoisted(() => {
       setupProviders: new Map(),
       commandAliases: new Map(),
       contracts: new Map(),
+      modelIdNormalizationPolicies: new Map(),
     },
   };
   const authStorage = {
@@ -33,10 +35,12 @@ const mocks = vi.hoisted(() => {
     getAll: vi.fn(() => []),
     find: vi.fn<ModelRegistry["find"]>(() => undefined),
   };
-  const resolveSyntheticAuth = vi.fn(() => ({
+  const resolveSyntheticAuth = vi.fn<
+    () => { apiKey: string; source: string; mode: "api-key" } | undefined
+  >(() => ({
     apiKey: "synthetic-openai-key",
     source: "test",
-    mode: "api-key" as const,
+    mode: "api-key",
   }));
   return {
     authStorage,
@@ -118,7 +122,7 @@ vi.mock("../plugins/plugin-metadata-snapshot.js", async (importOriginal) => ({
 }));
 
 vi.mock("./agent-auth-discovery.js", () => ({
-  resolveAmbientAgentCredentialsForDiscovery: mocks.resolveAmbientCredentials,
+  prepareAmbientAgentCredentialsForDiscovery: mocks.resolveAmbientCredentials,
 }));
 
 vi.mock("../plugins/provider-public-artifacts.js", () => ({
@@ -127,12 +131,16 @@ vi.mock("../plugins/provider-public-artifacts.js", () => ({
 }));
 
 vi.mock("./prepared-model-catalog-worker.js", () => ({
-  createPreparedModelCatalogWorkerInput: ({ agentFacts }: { agentFacts: unknown }) => ({
-    generationFingerprint: "test-generation",
-    input: (agentFacts as { input: unknown }).input,
-  }),
   createPreparedModelCatalogWorker: () => ({
-    loadCatalog: mocks.runPreparedModelCatalogWorker,
+    loadCatalog: async () => {
+      const catalog = await mocks.runPreparedModelCatalogWorker();
+      // Real worker replies pair every catalog with its observed auth generation.
+      setPreparedModelFullCatalogAuth(catalog, {
+        authStore: { version: 1, profiles: {} },
+        authModes: {},
+      });
+      return catalog;
+    },
     loadAuth: async () => ({ authStore: { version: 1, profiles: {} }, authModes: {} }),
   }),
 }));
@@ -168,35 +176,16 @@ vi.mock("./legacy-inherited-auth-dir.js", () => ({
   resolveLegacyInheritedAuthDir: () => "/tmp/prepared-static-agent",
 }));
 
-const agentScopeMocks = vi.hoisted(() => ({
-  listAgentEntries: (config: { agents?: { list?: unknown[] } }) => config.agents?.list ?? [],
+vi.mock("./agent-scope-config.js", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("./agent-scope-config.js")>()),
   listAgentIds: () => ["default"],
   resolveAgentDir: () => "/tmp/prepared-static-agent",
   resolveAgentWorkspaceDir: () => "/tmp/prepared-static-workspace",
-  tryResolveConfiguredAgentWorkspaceDir: () => "/tmp/prepared-static-workspace",
-  tryResolveSystemAgentWorkspaceDir: () => "/tmp/prepared-static-workspace",
-  resolveDefaultAgentDir: () => "/tmp/prepared-static-agent",
-  resolveDefaultAgentId: () => "default",
-  tryResolveSoleAgentId: () => "default",
-  resolveAgentEffectiveModelPrimary: () => undefined,
-  resolveAgentModelFallbacksOverride: () => undefined,
-  resolveRunModelFallbacksOverride: () => undefined,
-  resolveSessionAgentIds: ({ agentId }: { agentId?: string }) => ({
-    defaultAgentId: "default",
-    sessionAgentId: agentId ?? "default",
-  }),
-}));
-
-vi.mock("./agent-scope.js", () => agentScopeMocks);
-vi.mock("./agent-scope-config.js", async (importOriginal) => ({
-  ...(await importOriginal<typeof import("./agent-scope-config.js")>()),
-  listAgentIds: agentScopeMocks.listAgentIds,
-  resolveAgentDir: agentScopeMocks.resolveAgentDir,
-  resolveAgentWorkspaceDir: agentScopeMocks.resolveAgentWorkspaceDir,
 }));
 
 vi.mock("./auth-profiles/runtime-snapshots.js", () => ({
   getPreparedRuntimeAuthProfileStoreSnapshotCore: () => undefined,
+  getRuntimeAuthProfileStoreCredentialsRevision: () => 0,
   registerRuntimeAuthProfileStoreMutationListener: (
     listener: (event: { agentDir?: string; affectsInheritedStores: boolean }) => void,
   ) => {
@@ -237,8 +226,11 @@ const {
   registerPreparedModelRuntimePublicationListener,
 } = await import("./prepared-model-runtime.js");
 const { getAvailablePreparedModelCatalogSnapshot } = await import("./prepared-model-catalog.js");
-const { prepareScopedReadOnlyLiveModelCatalog, prepareScopedReadOnlyModelCatalog } =
-  await import("./prepared-model-runtime.scoped-catalog.js");
+const {
+  prepareScopedReadOnlyLiveModelCatalog,
+  prepareScopedReadOnlyModelAuthModes,
+  prepareScopedReadOnlyModelCatalog,
+} = await import("./prepared-model-runtime.scoped-catalog.js");
 const { resetPreparedModelRuntimeSnapshotsForTest } =
   await import("./prepared-model-runtime.test-support.js");
 const { resolveThinkingProfile } = await import("../auto-reply/thinking.js");
@@ -252,6 +244,66 @@ beforeEach(() => {
   mocks.modelRegistry.find.mockReset();
   mocks.resolveStaticCatalogModel.mockReturnValue(undefined);
   mocks.resolveProviderPolicySurface.mockReset().mockReturnValue(null);
+});
+
+describe("prepareScopedReadOnlyModelAuthModes", () => {
+  function usePreparedSyntheticAuth() {
+    mocks.resolveAmbientCredentials.mockImplementationOnce(async (...args: unknown[]) => {
+      const params = args[0] as {
+        syntheticAuthProviderRefs: string[];
+        resolveSyntheticAuth: (provider: string) => Promise<{ apiKey?: string } | undefined>;
+      };
+      return Object.fromEntries(
+        (
+          await Promise.all(
+            params.syntheticAuthProviderRefs.map(async (provider) => {
+              const key = (await params.resolveSyntheticAuth(provider))?.apiKey;
+              return key ? [[provider, { type: "api_key", key }]] : [];
+            }),
+          )
+        ).flat(),
+      );
+    });
+  }
+
+  it("returns a verified provider-owned auth mode", async () => {
+    usePreparedSyntheticAuth();
+
+    await expect(
+      prepareScopedReadOnlyModelAuthModes(
+        { config: {}, env: {}, workspaceDir: "/tmp/workspace" },
+        ["openai"],
+        mocks.metadataSnapshot as never,
+      ),
+    ).resolves.toEqual({ openai: "api_key" });
+  });
+
+  it("keeps a missing native login unknown", async () => {
+    mocks.resolveSyntheticAuth.mockReturnValueOnce(undefined);
+    usePreparedSyntheticAuth();
+
+    await expect(
+      prepareScopedReadOnlyModelAuthModes(
+        { config: {}, env: {}, workspaceDir: "/tmp/workspace" },
+        ["openai"],
+        mocks.metadataSnapshot as never,
+      ),
+    ).resolves.toEqual({});
+  });
+
+  it("does not resolve auth for a disabled provider", async () => {
+    mocks.prepareStaticCatalog.mockResolvedValueOnce({ providers: [], entries: [] });
+    usePreparedSyntheticAuth();
+
+    await expect(
+      prepareScopedReadOnlyModelAuthModes(
+        { config: {}, env: {}, workspaceDir: "/tmp/workspace" },
+        ["openai"],
+        mocks.metadataSnapshot as never,
+      ),
+    ).resolves.toEqual({});
+    expect(mocks.resolveSyntheticAuth).not.toHaveBeenCalled();
+  });
 });
 
 describe("prepared model runtime Gateway catalog mode", () => {
@@ -449,7 +501,13 @@ describe("prepared model runtime Gateway catalog mode", () => {
       gatewayLifecycle: true,
       catalogMode: "static",
     });
-    await staleHookPending;
+    // Surface refresh failures before hook entry instead of waiting for the test timeout.
+    await Promise.race([
+      staleHookPending,
+      stale.then(() => {
+        throw new Error("static catalog refresh completed before its hook");
+      }),
+    ]);
     const latest = refreshPreparedModelRuntimeSnapshots(latestConfig, {
       gatewayLifecycle: true,
       catalogMode: "static",
@@ -513,9 +571,9 @@ describe("prepared model runtime Gateway catalog mode", () => {
       }),
     );
     const ambientOptions = mocks.resolveAmbientCredentials.mock.calls[0]?.[0] as
-      | { resolveSyntheticAuth?: (provider: string) => { apiKey?: string } | undefined }
+      | { resolveSyntheticAuth?: (provider: string) => Promise<{ apiKey?: string } | undefined> }
       | undefined;
-    expect(ambientOptions?.resolveSyntheticAuth?.("openai")).toMatchObject({
+    expect(await ambientOptions?.resolveSyntheticAuth?.("openai")).toMatchObject({
       apiKey: "synthetic-openai-key",
     });
     expect(mocks.resolveSyntheticAuth).toHaveBeenCalledWith({

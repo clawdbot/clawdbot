@@ -65,6 +65,10 @@ CREATE INDEX IF NOT EXISTS idx_agent_session_nodes_archived_at
   ON session_nodes(archived_at, session_key)
   WHERE archived_at IS NOT NULL;
 
+CREATE INDEX IF NOT EXISTS idx_agent_session_nodes_active
+  ON session_nodes(session_key)
+  WHERE archived_at IS NULL;
+
 CREATE INDEX IF NOT EXISTS idx_agent_session_nodes_current_session_id
   ON session_nodes(current_session_id);
 
@@ -752,3 +756,25 @@ CREATE INDEX IF NOT EXISTS idx_memory_index_chunks_path
 
 CREATE INDEX IF NOT EXISTS idx_memory_index_chunks_source
   ON memory_index_chunks(source);
+
+-- Accepted input stays outside the active transcript until its exact turn owns execution.
+CREATE TABLE IF NOT EXISTS session_pending_inputs (
+  seq INTEGER PRIMARY KEY AUTOINCREMENT,
+  input_id TEXT NOT NULL UNIQUE,
+  session_key TEXT NOT NULL,
+  session_id TEXT NOT NULL,
+  idempotency_key TEXT NOT NULL,
+  run_id TEXT NOT NULL,
+  request_hash TEXT NOT NULL,
+  message_json TEXT NOT NULL,
+  lifecycle_generation TEXT NOT NULL,
+  state TEXT NOT NULL CHECK (state IN ('queued', 'interrupted', 'cancelled')),
+  accepted_at INTEGER NOT NULL,
+  consumed_event_id TEXT,
+  UNIQUE (session_id, idempotency_key),
+  FOREIGN KEY (session_key) REFERENCES session_nodes(session_key) ON DELETE CASCADE,
+  FOREIGN KEY (session_id) REFERENCES session_windows(session_id) ON DELETE CASCADE
+) STRICT;
+
+CREATE INDEX IF NOT EXISTS idx_agent_session_pending_inputs_session
+  ON session_pending_inputs(session_key, session_id, seq DESC);

@@ -37,105 +37,114 @@ describe("OpenClawTerminalPanel reconnect", () => {
     await i18n.setLocale("en");
   });
 
-  it("attaches an agent-owned session from the picker in a fresh browser profile", async () => {
-    const controllers = [createTerminalController(), createTerminalController()] as const;
-    createGhosttyTerminalMock
-      .mockResolvedValueOnce(controllers[0])
-      .mockResolvedValueOnce(controllers[1]);
-    const requests: Array<{ method: string; params: unknown }> = [];
-    const client: TerminalGatewayClient = {
-      forceReconnect: () => {},
-      request: async <T>(method: string, params?: unknown) => {
-        requests.push({ method, params });
-        if (method === "terminal.open") {
-          return terminalOpenResult("current-1") as T;
-        }
-        if (method === "terminal.list") {
-          return {
-            sessions: [
-              { ...terminalOpenResult("current-1"), attached: true, createdAtMs: 1 },
-              {
-                sessionId: "detached-1",
-                agentId: "detached-agent",
-                shell: "/bin/bash",
-                cwd: "/work/detached",
-                confined: false,
-                attached: false,
-                owner: "agent:agent:main:background-task",
-                createdAtMs: 2,
-              },
-              {
-                sessionId: "remote-1",
-                agentId: "remote-agent",
-                shell: "/bin/zsh",
-                cwd: "/work/remote",
-                confined: false,
-                attached: true,
-                createdAtMs: 3,
-              },
-            ],
-          } as T;
-        }
-        if (method === "terminal.attach") {
-          return {
-            sessionId: "detached-1",
-            agentId: "detached-agent",
-            shell: "/bin/bash",
-            cwd: "/work/detached",
-            confined: false,
-            buffer: "detached history",
-            seq: "detached history".length,
-          } as T;
-        }
-        return {} as T;
-      },
-      addEventListener: () => () => {},
-    };
-    const panel = document.createElement(TERMINAL_PANEL_ELEMENT_NAME) as OpenClawTerminalPanel;
-    panel.client = client;
-    panel.available = true;
-    document.body.append(panel);
-    panel.toggle();
-    await waitForFast(() => {
-      expect(requests.some((request) => request.method === "terminal.open")).toBe(true);
-    });
-
-    (
-      panel.renderRoot.querySelector('[aria-label="Terminal sessions"]') as HTMLButtonElement
-    ).click();
-    await waitForFast(() => {
-      expect(panel.renderRoot.querySelector(".tp-session-menu")?.textContent).toContain(
-        "detached-agent",
-      );
-    });
-    const menuText = panel.renderRoot.querySelector(".tp-session-menu")?.textContent;
-    expect(menuText).toContain("/work/detached");
-    expect(
-      [...panel.renderRoot.querySelectorAll<HTMLElement>(".tp-session")]
-        .find((row) => row.textContent?.includes("detached-agent"))
-        ?.querySelector(".tp-session__state")?.textContent,
-    ).toContain("agent");
-    expect(menuText).toContain("attached");
-    expect(menuText).toContain("current");
-    const detachedRow = [
-      ...panel.renderRoot.querySelectorAll<HTMLButtonElement>(".tp-session"),
-    ].find((button) => button.textContent?.includes("detached-agent"));
-    detachedRow?.click();
-
-    await waitForFast(() => {
-      expect(requests).toContainEqual({
-        method: "terminal.attach",
-        params: { sessionId: "detached-1" },
+  it.each(["conn", "agent:agent:main:background-task"] as const)(
+    "attaches a %s session with its native title and actual owner",
+    async (owner) => {
+      const controllers = [createTerminalController(), createTerminalController()] as const;
+      createGhosttyTerminalMock
+        .mockResolvedValueOnce(controllers[0])
+        .mockResolvedValueOnce(controllers[1]);
+      const requests: Array<{ method: string; params: unknown }> = [];
+      const client: TerminalGatewayClient = {
+        forceReconnect: () => {},
+        request: async <T>(method: string, params?: unknown) => {
+          requests.push({ method, params });
+          if (method === "terminal.open") {
+            return terminalOpenResult("current-1") as T;
+          }
+          if (method === "terminal.list") {
+            return {
+              sessions: [
+                { ...terminalOpenResult("current-1"), attached: true, createdAtMs: 1 },
+                {
+                  sessionId: "detached-1",
+                  agentId: "detached-agent",
+                  shell: "/bin/bash",
+                  cwd: "/work/detached",
+                  confined: false,
+                  attached: false,
+                  owner,
+                  createdAtMs: 2,
+                },
+                {
+                  sessionId: "remote-1",
+                  agentId: "remote-agent",
+                  shell: "/bin/zsh",
+                  cwd: "/work/remote",
+                  confined: false,
+                  attached: true,
+                  createdAtMs: 3,
+                },
+              ],
+            } as T;
+          }
+          if (method === "terminal.attach") {
+            return {
+              sessionId: "detached-1",
+              agentId: "detached-agent",
+              shell: "/bin/bash",
+              cwd: "/work/detached",
+              confined: false,
+              title: "codex",
+              owner,
+              buffer: "detached history",
+              seq: "detached history".length,
+            } as T;
+          }
+          return {} as T;
+        },
+        addEventListener: () => () => {},
+      };
+      const panel = document.createElement(TERMINAL_PANEL_ELEMENT_NAME) as OpenClawTerminalPanel;
+      panel.client = client;
+      panel.available = true;
+      document.body.append(panel);
+      panel.toggle();
+      await waitForFast(() => {
+        expect(requests.some((request) => request.method === "terminal.open")).toBe(true);
       });
-    });
-    expect(new TextDecoder().decode(controllers[1].write.mock.calls[0]?.[0])).toBe(
-      "detached history",
-    );
-    expect(panel.renderRoot.querySelector(".tabstrip-tab__badge")?.textContent).toBe("agent");
-    expect(sessionStorage.getItem("openclaw.terminal.sessions.v1")).toBe(
-      JSON.stringify(["current-1", "detached-1"]),
-    );
-  });
+
+      (
+        panel.renderRoot.querySelector('[aria-label="Terminal sessions"]') as HTMLButtonElement
+      ).click();
+      await waitForFast(() => {
+        expect(panel.renderRoot.querySelector(".tp-session-menu")?.textContent).toContain(
+          "detached-agent",
+        );
+      });
+      const menuText = panel.renderRoot.querySelector(".tp-session-menu")?.textContent;
+      expect(menuText).toContain("/work/detached");
+      expect(
+        [...panel.renderRoot.querySelectorAll<HTMLElement>(".tp-session")]
+          .find((row) => row.textContent?.includes("detached-agent"))
+          ?.querySelector(".tp-session__state")?.textContent,
+      ).toContain(owner === "conn" ? "detached" : "agent");
+      expect(menuText).toContain("attached");
+      expect(menuText).toContain("current");
+      const detachedRow = [
+        ...panel.renderRoot.querySelectorAll<HTMLButtonElement>(".tp-session"),
+      ].find((button) => button.textContent?.includes("detached-agent"));
+      detachedRow?.click();
+
+      await waitForFast(() => {
+        expect(requests).toContainEqual({
+          method: "terminal.attach",
+          params: { sessionId: "detached-1" },
+        });
+        expect(controllers[1].terminal.focus).toHaveBeenCalled();
+      });
+      expect(new TextDecoder().decode(controllers[1].write.mock.calls[0]?.[0])).toBe(
+        "detached history",
+      );
+      expect(panel.renderRoot.querySelector(".tabstrip-tab__badge")?.textContent).toBe(
+        owner === "conn" ? undefined : "agent",
+      );
+      expect(panel.renderRoot.textContent).toContain("codex");
+      expect(sessionStorage.getItem("openclaw.terminal.sessions.v1")).toBe(
+        JSON.stringify(["current-1", "detached-1"]),
+      );
+    },
+  );
 
   it("reattaches a same-client reconnect and replaces gapped terminal state", async () => {
     const controllers = [

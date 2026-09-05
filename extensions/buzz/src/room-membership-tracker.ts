@@ -1,4 +1,5 @@
 import type { Event, Filter, Relay } from "nostr-tools";
+import { isNewerBuzzRevision } from "./event-order.js";
 import { catchUpBuzzRoomHistory } from "./history-catchup.js";
 import { BUZZ_INBOUND_MESSAGE_KINDS, isBuzzInboundMessageKind } from "./message-event.js";
 import { openBuzzRelaySubscription } from "./relay-subscription.js";
@@ -10,7 +11,6 @@ import { queryBuzzRoomMemberships } from "./room-membership-query.js";
 import {
   BUZZ_ROOM_SYSTEM_KIND,
   BUZZ_ROOM_MEMBERSHIP_KIND,
-  isNewerBuzzRoomMembership,
   parseBuzzRoomMembershipEvent,
   parseBuzzRoomMembershipChangeEvent,
   type BuzzRoomMembership,
@@ -190,7 +190,7 @@ export async function createBuzzRoomMembershipTracker(params: {
       }
       // A live roster may have advanced while this query was in flight.
       const current = memberships.get(channelId);
-      if (current && isNewerBuzzRoomMembership(current, refreshed)) {
+      if (current && isNewerBuzzRevision(current, refreshed)) {
         refreshed = current;
       }
       const pending = pendingMemberships.get(channelId);
@@ -288,7 +288,7 @@ export async function createBuzzRoomMembershipTracker(params: {
       if (
         membership &&
         memberships.has(membership.roomId) &&
-        isNewerBuzzRoomMembership(membership, memberships.get(membership.roomId))
+        isNewerBuzzRevision(membership, memberships.get(membership.roomId))
       ) {
         try {
           replaceMembership(membership);

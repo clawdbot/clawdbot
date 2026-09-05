@@ -43,7 +43,10 @@ import {
 } from "./io.js";
 import { rejectConfigNonFiniteNumbers } from "./io.read-helpers.js";
 import { warnIfJSON5CommentsWillBeStripped } from "./json5-comments.js";
-import { ConfigMutationConflictError } from "./mutation-conflict.js";
+import {
+  ConfigMutationConflictError,
+  GUARDED_CONFIG_INCLUDE_WRITE_ERROR,
+} from "./mutation-conflict.js";
 import type { ConfigMutationBase } from "./mutation-types.js";
 import { assertConfigWriteAllowedInCurrentMode } from "./nix-mode-write-guard.js";
 import { resolveConfigPath } from "./paths.js";
@@ -147,6 +150,8 @@ export type TransformConfigFileParams<T> = {
   transform: (
     currentConfig: OpenClawConfig,
     context: ConfigMutationContext,
+    // Read-time env stays with host transforms, outside public mutation callbacks.
+    preservation: Pick<ConfigWriteOptions, "envSnapshotForRestore">,
   ) => Promise<ConfigTransformResult<T>> | ConfigTransformResult<T>;
 };
 
@@ -304,14 +309,31 @@ async function readConfigSnapshotForMutation(params: {
   return await readConfigFileSnapshotForWrite(options);
 }
 
+function mergeConfigMutationWriteOptions(
+  prepared: ConfigWriteOptions,
+  caller?: ConfigWriteOptions,
+): ConfigWriteOptions {
+  const merged = copyRuntimeConfigWriteApplication(caller, { ...prepared, ...caller });
+  const capturedGuard = prepared.assertConfigPathForWrite;
+  const callerGuard = caller?.assertConfigPathForWrite;
+  // Caller authority narrows the captured destination; it must never replace
+  // that ownership check through retries and post-write validation.
+  if (capturedGuard && callerGuard && capturedGuard !== callerGuard) {
+    merged.assertConfigPathForWrite = () => {
+      capturedGuard();
+      callerGuard();
+    };
+  } else if (capturedGuard) {
+    merged.assertConfigPathForWrite = capturedGuard;
+  }
+  return merged;
+}
+
 function createConfigMutationOwnership(
   prepared: Awaited<ReturnType<typeof readConfigSnapshotForMutation>>,
   writeOptions?: ConfigWriteOptions,
 ): ConfigMutationOwnership {
-  const mergedWriteOptions = {
-    ...prepared.writeOptions,
-    ...writeOptions,
-  };
+  const mergedWriteOptions = mergeConfigMutationWriteOptions(prepared.writeOptions, writeOptions);
   return {
     initialized: true,
     expectedConfigPath: mergedWriteOptions.expectedConfigPath ?? prepared.snapshot.path,
@@ -682,7 +704,12 @@ async function tryWriteSingleTopLevelIncludeMutation(params: {
     resolveManagedUnsetPathsForWrite(params.writeOptions?.unsetPaths),
   );
   const changedKeys = getChangedTopLevelKeys(params.snapshot.sourceConfig, nextConfig);
-  if (changedKeys.length !== 1 || changedKeys[0] === "<root>") {
+  // An include-only commit cannot also persist the root roster format.
+  if (
+    params.writeOptions?.persistCanonicalAgentRoster === true ||
+    changedKeys.length !== 1 ||
+    changedKeys[0] === "<root>"
+  ) {
     return null;
   }
 
@@ -690,6 +717,10 @@ async function tryWriteSingleTopLevelIncludeMutation(params: {
   const includePath = getSingleTopLevelIncludeTarget({ snapshot: params.snapshot, key });
   if (!includePath || !isRecord(nextConfig) || !(key in nextConfig)) {
     return null;
+  }
+  if (params.writeOptions?.beforeCommit) {
+    // The pinned include writer cannot revalidate an async authority at publication.
+    throw new Error(GUARDED_CONFIG_INCLUDE_WRITE_ERROR);
   }
   const nextConfigRecord = nextConfig as Record<string, unknown>;
 
@@ -757,7 +788,11 @@ async function tryWriteSingleTopLevelIncludeMutation(params: {
       const currentIncludedValue = resolveConfigEnvVars(authoredIncludeValue, envForRestore, {
         onMissing: () => {},
       });
-      const snapshotIncludedValue = (params.snapshot.sourceConfig as Record<string, unknown>)[key];
+      // Compare source with source: the snapshot may already have converted a
+      // legacy roster even though the conflict-checked include bytes are unchanged.
+      const snapshotSource =
+        params.snapshot.sourceConfigBeforeMigrations ?? params.snapshot.sourceConfig;
+      const snapshotIncludedValue = (snapshotSource as Record<string, unknown>)[key];
       if (!isDeepStrictEqual(currentIncludedValue, snapshotIncludedValue)) {
         throw new ConfigMutationConflictError("included config changed since last load");
       }
@@ -1001,10 +1036,7 @@ export async function replaceConfigFile(params: {
         await replaceConfigFileUnlocked({
           ...params,
           snapshot: prepared.snapshot,
-          writeOptions: copyRuntimeConfigWriteApplication(params.writeOptions, {
-            ...prepared.writeOptions,
-            ...params.writeOptions,
-          }),
+          writeOptions: mergeConfigMutationWriteOptions(prepared.writeOptions, params.writeOptions),
         }),
     );
   }
@@ -1029,10 +1061,7 @@ async function replaceConfigFileUnlocked(params: {
         writeOptions: params.writeOptions,
       });
   const { snapshot, writeOptions } = prepared;
-  const mergedWriteOptions = copyRuntimeConfigWriteApplication(params.writeOptions, {
-    ...writeOptions,
-    ...params.writeOptions,
-  });
+  const mergedWriteOptions = mergeConfigMutationWriteOptions(writeOptions, params.writeOptions);
   mergedWriteOptions.assertConfigPathForWrite?.();
   assertExpectedConfigPathMatches(snapshot, mergedWriteOptions.expectedConfigPath);
   assertConfigWriteAllowedInCurrentMode({ configPath: snapshot.path });
@@ -1130,13 +1159,7 @@ async function transformConfigFileAttempt<T>(
       io: params.io,
       writeOptions: params.writeOptions,
     }));
-  let mergedWriteOptions: ConfigWriteOptions = copyRuntimeConfigWriteApplication(
-    params.writeOptions,
-    {
-      ...writeOptions,
-      ...params.writeOptions,
-    },
-  );
+  let mergedWriteOptions = mergeConfigMutationWriteOptions(writeOptions, params.writeOptions);
   if (ownership) {
     if (!ownership.initialized) {
       ownership.initialized = true;
@@ -1164,7 +1187,11 @@ async function transformConfigFileAttempt<T>(
   const afterWrite = resolveConfigWriteAfterWrite(
     params.afterWrite ?? params.writeOptions?.afterWrite,
   );
-  const transformed = await params.transform(baseConfig, { snapshot, previousHash, attempt });
+  const transformed = await params.transform(
+    baseConfig,
+    { snapshot, previousHash, attempt },
+    { envSnapshotForRestore: writeOptions.envSnapshotForRestore },
+  );
   const committed = await (params.commit ?? commitPreparedConfigMutation)({
     nextConfig: transformed.nextConfig,
     snapshot,

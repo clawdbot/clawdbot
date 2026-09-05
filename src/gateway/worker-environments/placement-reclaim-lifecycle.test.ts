@@ -5,10 +5,13 @@ import { NODE_WORKER_ENVIRONMENT_STOP_COMMAND } from "../../infra/node-commands.
 import type { NodeWorkerWorkspaceExecInput } from "../../worker/node-workspace-protocol.js";
 import { createNodeWorkerTunnelManager } from "./node-worker-tunnel.js";
 import * as nodeSupport from "./node-worker-tunnel.test-support.js";
-import { MANIFEST_REF, REQUEST } from "./placement-dispatch-test-fixtures.js";
+import { coordinateWorkerPlacementDispatch } from "./placement-dispatch-coordinator.js";
+import { MANIFEST_REF, REQUEST, seedActivePlacement } from "./placement-dispatch-test-fixtures.js";
 import { createHarness } from "./placement-dispatch-test-harness.js";
+import { createWorkerPlacementIdleSweep } from "./placement-idle-sweep.js";
 import { createWorkerSessionPlacementStore } from "./placement-store.js";
 import * as support from "./service.test-support.js";
+import type { WorkerTunnelManager } from "./tunnel.js";
 import {
   REMOTE_WORKSPACE_QUIESCE_JS,
   REMOTE_WORKSPACE_RENEW_QUIESCENCE_JS,
@@ -209,6 +212,9 @@ describe("placement reclaim with provider-owned node teardown", () => {
           throw error;
         }
       });
+      const coordinated = coordinateWorkerPlacementDispatch(harness.service, (_request, run) =>
+        run(),
+      );
       invoke.mockClear();
       vi.mocked(harness.environments.startTunnel).mockClear();
       vi.useFakeTimers();
@@ -219,10 +225,10 @@ describe("placement reclaim with provider-owned node teardown", () => {
       };
       const result = (
         operation === "recovery"
-          ? harness.service.reconcileActive()
+          ? coordinated.reconcileActive()
           : operation === "reclaim"
-            ? harness.service.reclaim(request)
-            : harness.service.move({
+            ? coordinated.reclaim(request)
+            : coordinated.move({
                 ...request,
                 source: {
                   generation: active.generation,
@@ -265,7 +271,7 @@ describe("placement reclaim with provider-owned node teardown", () => {
                 REMOTE_WORKSPACE_RESUME_JS,
             ),
           ).toHaveLength(1);
-          await expect(harness.service.reclaim(request)).resolves.toMatchObject({
+          await expect(coordinated.reclaim(request)).resolves.toMatchObject({
             state: "reclaimed",
           });
           return;
@@ -280,19 +286,26 @@ describe("placement reclaim with provider-owned node teardown", () => {
           await vi.advanceTimersByTimeAsync(1_001);
         }
         const outcome = await result;
-        expect(primaryError).toMatchObject({ code: "provider_failure" });
+        const expectedError =
+          failure === "timeout"
+            ? "Worker provider operation timed out after 1000ms"
+            : "provider destruction is indeterminate";
+        expect(primaryError).toMatchObject({ code: "provider_failure", message: expectedError });
         if (operation === "recovery") {
           expect(outcome).toBeUndefined();
           expect
             .soft(harness.reportWorkspaceResultRecoveryFailure)
-            .toHaveBeenCalledWith(
-              expect.objectContaining({ error: "Worker provider operation failed" }),
-            );
+            .toHaveBeenCalledWith(expect.objectContaining({ error: expectedError }));
           expect(placements.get(active.sessionId)?.state).toBe("draining");
-          await harness.service.reconcileActive();
         } else {
           expect.soft(outcome).toBe(primaryError);
         }
+        expect(placements.get(active.sessionId)?.state).toBe("draining");
+        expect(placements.listPendingWorkspaceResults()).toEqual([
+          expect.objectContaining({ workspaceAcceptedAtMs: expect.any(Number) }),
+        ]);
+        expect(destroy).toHaveBeenCalledOnce();
+        await coordinated.reconcileActive();
         expect(placements.get(active.sessionId)).toMatchObject({
           state: operation === "move" ? "local" : "reclaimed",
           generation: active.generation + 3,
@@ -315,6 +328,91 @@ describe("placement reclaim with provider-owned node teardown", () => {
         vi.useRealTimers();
         await closingOwner;
       }
+    },
+  );
+});
+
+describe("SSH placement cleanup after worker credential expiry", () => {
+  support.setupWorkerEnvironmentServiceSuite();
+
+  it.each(["reclaim", "move", "idle suspend"] as const)(
+    "%s reconciles the workspace before releasing the exact lease",
+    async (operation) => {
+      const placements = createWorkerSessionPlacementStore({
+        database: support.testState.stateDb,
+        now: () => support.testState.nowMs,
+      });
+      const harness = createHarness(placements, { workspacePath: support.testState.root });
+      const environmentId = harness.ready.environmentId;
+      const identity = support.seedAttachedIdentity(environmentId, REQUEST.sessionId);
+      const active = seedActivePlacement(placements, {
+        environmentId,
+        ownerEpoch: identity.ownerEpoch,
+        executionMode: "remote-exec",
+      });
+      if (active.state !== "active") {
+        throw new Error("expected active SSH placement");
+      }
+      await harness.environments.attachSession({
+        environmentId,
+        ownerEpoch: harness.ready.ownerEpoch,
+        sessionId: REQUEST.sessionId,
+      });
+      const workspace = await harness.environments.startTunnel({
+        environmentId,
+        ownerEpoch: identity.ownerEpoch,
+      });
+      const reconcileWorkspace = vi.spyOn(workspace, "reconcileWorkspace");
+      const tunnelManager = {
+        status: () => "connected" as const,
+        start: vi.fn(async () => workspace),
+        stop: vi.fn(async () => {}),
+        stopAll: vi.fn(async () => {}),
+      } as unknown as WorkerTunnelManager;
+      const destroy = vi.fn(async () => {
+        expect(reconcileWorkspace).toHaveBeenCalledOnce();
+      });
+      const service = support.createService(support.createProvider({ destroy }), { tunnelManager });
+      vi.mocked(harness.environments.get).mockImplementation(service.get);
+      vi.mocked(harness.environments.startTunnel).mockImplementation(service.startTunnel);
+      vi.mocked(harness.environments.stopTunnel).mockImplementation(service.stopTunnel);
+      vi.mocked(harness.environments.destroy).mockImplementation(service.destroy);
+      support.testState.nowMs = identity.credentialExpiresAtMs + 60_001;
+
+      if (operation === "move") {
+        await harness.service.move({
+          ...REQUEST,
+          source: {
+            generation: active.generation,
+            environmentId,
+            ownerEpoch: identity.ownerEpoch,
+          },
+          target: { kind: "gateway" },
+        });
+      } else if (operation === "idle suspend") {
+        support.getDevelopmentProfile().suspendAfter = "1m";
+        const warn = vi.fn();
+        await createWorkerPlacementIdleSweep({
+          placements,
+          environments: service,
+          dispatch: harness.service,
+          getConfig: () => support.testState.config,
+          now: () => support.testState.nowMs,
+          info: vi.fn(),
+          warn,
+        }).sweep();
+        expect(warn).not.toHaveBeenCalled();
+      } else {
+        await harness.service.reclaim(REQUEST);
+      }
+
+      expect(destroy).toHaveBeenCalledOnce();
+      expect(service.get(environmentId)?.state).toBe("destroyed");
+      expect(placements.get(active.sessionId)).toMatchObject({
+        state: operation === "move" ? "local" : "reclaimed",
+        turnClaim: null,
+      });
+      expect(placements.listPendingWorkspaceResults()).toEqual([]);
     },
   );
 });

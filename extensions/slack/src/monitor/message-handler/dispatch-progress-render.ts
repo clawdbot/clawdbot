@@ -1,11 +1,9 @@
 import {
   buildChannelProgressDraftLine,
-  type AgentPlanStep,
   type ChannelProgressDraftCompositorLine,
   type ChannelProgressDraftCompositorSnapshot,
   type ChannelProgressDraftLine,
 } from "openclaw/plugin-sdk/channel-outbound";
-import { buildSlackProgressStreamChunks } from "../../progress-blocks.js";
 
 export function resolveStructuredProgressLines(
   lines: readonly ChannelProgressDraftCompositorLine[],
@@ -28,14 +26,6 @@ export function resolveStructuredProgressLines(
       prefix: false,
     };
   });
-}
-
-// Native cards derive from the compositor snapshot. Empty plans fall back
-// to line tasks, and reconciliation retires rows from the prior source.
-export function resolveNativeProgressPlan(
-  snapshot: ChannelProgressDraftCompositorSnapshot,
-): readonly AgentPlanStep[] | undefined {
-  return snapshot.plan?.length ? snapshot.plan : undefined;
 }
 
 export function resolveNativeProgressLines(
@@ -76,17 +66,4 @@ export function combineProgressHeadlineAndExplanation(
   return headline && explanation && headline !== explanation
     ? `${headline} — ${explanation}`
     : (headline ?? explanation);
-}
-
-export function buildNativeProgressChunks(params: {
-  snapshot: ChannelProgressDraftCompositorSnapshot;
-  title?: string;
-  maxLineChars?: number;
-}) {
-  return buildSlackProgressStreamChunks({
-    title: params.title,
-    lines: resolveNativeProgressLines(params.snapshot),
-    plan: resolveNativeProgressPlan(params.snapshot),
-    maxLineChars: params.maxLineChars,
-  });
 }

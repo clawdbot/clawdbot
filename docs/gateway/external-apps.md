@@ -2,6 +2,7 @@
 summary: "Current integration path for external apps, scripts, dashboards, CI jobs, and IDE extensions"
 title: "Gateway integrations for external apps"
 sidebarTitle: "External apps"
+doc-schema-version: 1
 read_when:
   - You are building an external app, script, dashboard, CI job, or IDE extension that talks to OpenClaw
   - You are choosing between Gateway RPC and the Plugin SDK
@@ -17,11 +18,11 @@ for results, cancel work, or inspect Gateway resources.
 <Note>
   For npm packages, device pairing, reconnect recovery, history, subscriptions,
   and approvals, start with
-  [Building a Gateway client](https://docs.openclaw.ai/gateway/clients). If your
+  [Building a Gateway client](/gateway/clients#install-the-packages). The install
+  guide pins the verified stable `2026.8.1` packages and explains how package and
+  wire versions affect compatibility. If your
   app supervises the Gateway as a child process, also read
-  [Embedding OpenClaw](https://docs.openclaw.ai/gateway/embedding). During the
-  initial package rollout, npm may return `E404` until the first package-bearing
-  OpenClaw release is published.
+  [Embedding OpenClaw](https://docs.openclaw.ai/gateway/embedding).
 </Note>
 
 <Note>
@@ -31,14 +32,14 @@ for results, cancel work, or inspect Gateway resources.
 
 ## What is available today
 
-| Surface                                                          | Status        | Use it for                                                                                    |
-| ---------------------------------------------------------------- | ------------- | --------------------------------------------------------------------------------------------- |
-| [Gateway client guide](https://docs.openclaw.ai/gateway/clients) | Release train | npm packages, auth, reconnect, history, events, approvals, and version policy.                |
-| [Embedding guide](https://docs.openclaw.ai/gateway/embedding)    | Release train | Child-process environment, readiness, lifecycle, recovery, RPC ownership, and packaging.      |
-| [Gateway protocol](/gateway/protocol)                            | Ready         | WebSocket transport, connect handshake, auth scopes, protocol versioning, and events.         |
-| [Gateway RPC reference](/reference/rpc)                          | Ready         | Current Gateway methods for agents, sessions, tasks, models, tools, artifacts, and approvals. |
-| [`openclaw agent`](/cli/agent)                                   | Ready         | One-shot script integration when shelling out to the CLI is enough.                           |
-| [`openclaw message`](/cli/message)                               | Ready         | Sending messages or channel actions from scripts.                                             |
+| Surface                                                       | Status          | Use it for                                                                                    |
+| ------------------------------------------------------------- | --------------- | --------------------------------------------------------------------------------------------- |
+| [Gateway client guide](/gateway/clients#install-the-packages) | Stable packages | npm packages, auth, reconnect, history, events, approvals, and version policy.                |
+| [Embedding guide](https://docs.openclaw.ai/gateway/embedding) | Release train   | Child-process environment, readiness, lifecycle, recovery, RPC ownership, and packaging.      |
+| [Gateway protocol](/gateway/protocol)                         | Ready           | WebSocket transport, connect handshake, auth scopes, protocol versioning, and events.         |
+| [Gateway RPC reference](/reference/rpc)                       | Ready           | Current Gateway methods for agents, sessions, tasks, models, tools, artifacts, and approvals. |
+| [`openclaw agent`](/cli/agent)                                | Ready           | One-shot script integration when shelling out to the CLI is enough.                           |
+| [`openclaw message`](/cli/message)                            | Ready           | Sending messages or channel actions from scripts.                                             |
 
 ## Recommended path
 
@@ -82,6 +83,19 @@ call resume. The
 [Admin HTTP RPC plugin](/plugins/admin-http-rpc) remains available for hosts
 that cannot speak WebSocket at all. If every control path is lost, the
 two-minute lease expiry reopens admission automatically.
+
+Closing the Gateway cancels background work queued by operator reconnects without
+waiting for suspension expiry. Shutdown still waits for work already running to finish.
+
+The hello snapshot includes `suspension: { phase }`, and `gateway.suspension`
+events publish admission changes immediately. The phase is `accepting`,
+`preparing`, `draining`, or `prepared`; neither surface exposes suspension IDs.
+The Control UI's bottom-left connection indicator shows **Suspending…** during
+preparation or draining and **Suspended** while prepared, including in Settings.
+It clears when suspension admission reopens, not when a request succeeds.
+Offline and restart indicators take precedence. Scheduler recovery keeps the
+suspension indicator until admission actually reopens; there is no separate
+resuming phase.
 
 The RPC contract is:
 

@@ -14,6 +14,7 @@ import {
   renderMarkdownFence,
   renderWikiMarkdown,
   slugifyWikiSegment,
+  toWikiPageSummary,
 } from "./markdown.js";
 import { writeImportedSourcePage } from "./source-page-shared.js";
 import { resolveArtifactKey } from "./source-path-shared.js";
@@ -38,6 +39,7 @@ type UnsafeLocalArtifactCollection = {
 };
 
 const DIRECTORY_TEXT_EXTENSIONS = new Set([".json", ".jsonl", ".md", ".txt", ".yaml", ".yml"]);
+const GENERATED_IMPORTED_SOURCE_PREFIXES = ["bridge-", "unsafe-local-"];
 const UNSAFE_LOCAL_SYNC_CONCURRENCY = 16;
 
 function detectFenceLanguage(filePath: string): string {
@@ -73,6 +75,7 @@ async function listAllowedFilesRecursive(rootDir: string): Promise<string[]> {
 
 async function collectUnsafeLocalArtifacts(
   configuredPaths: string[],
+  vaultRootKey: string,
 ): Promise<UnsafeLocalArtifactCollection> {
   const artifacts: UnsafeLocalArtifact[] = [];
   const unavailableConfiguredPaths: string[] = [];
@@ -108,6 +111,20 @@ async function collectUnsafeLocalArtifacts(
 
   const deduped = new Map<string, UnsafeLocalArtifact>();
   for (const artifact of artifacts) {
+    if (isPathInside(vaultRootKey, artifact.syncKey)) {
+      continue;
+    }
+    const sourceName = normalizeLowercaseStringOrEmpty(path.basename(artifact.absolutePath));
+    if (GENERATED_IMPORTED_SOURCE_PREFIXES.some((prefix) => sourceName.startsWith(prefix))) {
+      const sourcePage = toWikiPageSummary({
+        absolutePath: artifact.absolutePath,
+        relativePath: `sources/${sourceName}`,
+        raw: await fs.readFile(artifact.absolutePath, "utf8"),
+      });
+      if (sourcePage?.importedSourceBody) {
+        continue;
+      }
+    }
     deduped.set(artifact.syncKey, artifact);
   }
   return { artifacts: [...deduped.values()], unavailableConfiguredPaths };
@@ -226,8 +243,10 @@ export async function syncMemoryWikiUnsafeLocalSources(
     };
   }
 
+  const vaultRootKey = await resolveArtifactKey(config.vault.path);
   const { artifacts, unavailableConfiguredPaths } = await collectUnsafeLocalArtifacts(
     config.unsafeLocal.paths,
+    vaultRootKey,
   );
   const state = await readMemoryWikiSourceSyncState(config.vault.path);
   let initializePromise: ReturnType<typeof initializeMemoryWikiVault> | undefined;

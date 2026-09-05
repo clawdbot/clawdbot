@@ -9,7 +9,6 @@ import {
 } from "./agent-tools.before-tool-call.state.js";
 import { buildPayloads } from "./embedded-agent-runner/run/payloads.test-helpers.js";
 import { inferToolMetaFromArgsCore } from "./tool-display.js";
-import { consumeToolEffectReceipt, registerToolEffectReceipt } from "./tool-effect-receipt.js";
 import { createToolTerminalObserver } from "./tool-terminal-outcome.js";
 
 describe("tool terminal outcome observer", () => {
@@ -144,6 +143,21 @@ describe("tool terminal outcome observer", () => {
       state: "failed_no_effect",
     },
     {
+      name: "completed computer observation",
+      input: { toolName: "computer", arguments: { action: "list_windows" }, outcome: "success" },
+      state: "read_completed",
+    },
+    {
+      name: "failed computer observation",
+      input: {
+        toolName: "computer",
+        arguments: { action: "get_cursor_position" },
+        outcome: "failure",
+        failure: { error: "observation unavailable" },
+      },
+      state: "failed_no_effect",
+    },
+    {
       name: "owner-declared replay-safe failure",
       input: {
         toolName: "plugin_read",
@@ -178,14 +192,6 @@ describe("tool terminal outcome observer", () => {
     expect(createToolTerminalObserver("run-effect-receipt")(input).effectReceipt).toEqual({
       state,
     });
-  });
-
-  it("binds effect receipts to one exact host-owned result", () => {
-    const result = registerToolEffectReceipt({ status: "failed" }, { state: "failed_no_effect" });
-
-    expect(consumeToolEffectReceipt({ ...result })).toBeUndefined();
-    expect(consumeToolEffectReceipt(result)).toEqual({ state: "failed_no_effect" });
-    expect(consumeToolEffectReceipt(result)).toBeUndefined();
   });
 
   it("clears a failed sessions_spawn once a retry with adjusted arguments succeeds", () => {

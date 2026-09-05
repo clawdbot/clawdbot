@@ -5,6 +5,7 @@ import { resolveStateDir } from "openclaw/plugin-sdk/state-paths";
 import { asNullableRecord } from "openclaw/plugin-sdk/string-coerce-runtime";
 import {
   type BrowserNativeBootstrapResponse,
+  type BrowserNativeRelayEnsureStatus,
   decodeBrowserNativeFrame,
   encodeBrowserNativeResponse,
   readBrowserNativeFrame,
@@ -136,6 +137,8 @@ export async function runBrowserNativeHost(params: {
   input: AsyncIterable<Buffer>;
   write: (frame: Buffer) => void;
   buildPairing: () => Promise<{ pairingString: string; topology: string }>;
+  /** Ensure the standalone extension relay daemon is running (ensure_relay op). */
+  ensureRelay: (port: number) => Promise<BrowserNativeRelayEnsureStatus>;
   stateDir?: string;
   platform?: NodeJS.Platform;
 }): Promise<BrowserNativeBootstrapResponse> {
@@ -161,26 +164,35 @@ export async function runBrowserNativeHost(params: {
         params.write(encodeBrowserNativeResponse(response));
         return response;
       }
-      try {
-        const pairing = await params.buildPairing();
-        response =
-          pairing.topology === "direct-remote"
-            ? { v: 1, ok: false, code: "manual_required" }
-            : {
-                v: 1,
-                ok: true,
-                nonce: decoded.request.nonce,
-                pairingString: pairing.pairingString,
-              };
-      } catch (error) {
-        response = {
-          v: 1,
-          ok: false,
-          code:
-            error instanceof Error && error.message.includes("--gateway-url")
-              ? "manual_required"
-              : "pairing_unavailable",
-        };
+      if (decoded.request.op === "ensure_relay") {
+        try {
+          const relay = await params.ensureRelay(decoded.request.relayPort);
+          response = { v: 1, ok: true, nonce: decoded.request.nonce, relay };
+        } catch {
+          response = { v: 1, ok: false, code: "relay_unavailable" };
+        }
+      } else {
+        try {
+          const pairing = await params.buildPairing();
+          response =
+            pairing.topology === "direct-remote"
+              ? { v: 1, ok: false, code: "manual_required" }
+              : {
+                  v: 1,
+                  ok: true,
+                  nonce: decoded.request.nonce,
+                  pairingString: pairing.pairingString,
+                };
+        } catch (error) {
+          response = {
+            v: 1,
+            ok: false,
+            code:
+              error instanceof Error && error.message.includes("--gateway-url")
+                ? "manual_required"
+                : "pairing_unavailable",
+          };
+        }
       }
     }
   } catch {

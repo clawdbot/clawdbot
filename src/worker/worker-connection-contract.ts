@@ -10,6 +10,7 @@ import type {
 } from "../../packages/gateway-protocol/src/schema/worker-admission.js";
 import type { BackoffPolicy } from "../infra/backoff.js";
 import { redactSensitiveText } from "../logging/redact.js";
+import { hasExactOwnKeys } from "./protocol-record.js";
 import type { WorkerConnectionEndpoint } from "./worker-connection-endpoint.js";
 
 const FENCED_CLOSE_REASONS = new Set<WorkerProtocolCloseReason>([
@@ -100,7 +101,7 @@ export function parseWorkerAdmissionDeadlineResult(
 ): WorkerAdmissionDeadlineResult | undefined {
   if (
     isRecord(value) &&
-    Object.keys(value).length === 3 &&
+    hasExactOwnKeys(value, ["status", "reason", "errorText"]) &&
     value.status === "not-started" &&
     value.reason === "admission-deadline" &&
     typeof value.errorText === "string" &&

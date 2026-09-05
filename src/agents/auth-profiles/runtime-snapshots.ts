@@ -6,11 +6,12 @@ import path from "node:path";
 import { isDeepStrictEqual } from "node:util";
 import { cloneAuthProfileStore } from "./clone.js";
 import {
-  captureAuthProfileOwnerScope,
-  resolveSharedAuthStorePath,
-  type AuthProfileOwnerScope,
-} from "./path-resolve.js";
+  recordRuntimeAuthProfileStorePersistedMutation,
+  resolveRuntimeStoreKey,
+} from "./mutation-lineage.js";
+import { captureAuthProfileOwnerScope } from "./path-resolve.js";
 import { mergeAuthProfileStores } from "./persisted.js";
+import { removePersonalAuthProfileReferences } from "./runtime-external-profile-references.js";
 import {
   clearAllRuntimeAuthMaterializations,
   clearRuntimeAuthMaterializationsAtDatabasePath,
@@ -30,7 +31,6 @@ import {
 } from "./runtime-snapshot-owner.js";
 import {
   closeAuthProfileReadPool,
-  resolveAuthProfileDatabasePath,
   type AuthProfileStoreOwner,
   type PreparedAuthProfileStoreOwner,
 } from "./sqlite.js";
@@ -49,6 +49,7 @@ function runtimeStoreEntries(): Array<[string, RuntimeAuthProfileStore]> {
 type RuntimeAuthProfileStoreMutationListener = (event: {
   agentDir?: string;
   affectsInheritedStores: boolean;
+  profileSetChanged: boolean;
 }) => void;
 const runtimeAuthStoreMutationListeners = new Set<RuntimeAuthProfileStoreMutationListener>();
 let runtimeAuthStoreCredentialsRevision = 0;
@@ -56,10 +57,6 @@ let runtimeAuthStoreSnapshotsRevision = 0;
 // Per-store generations isolate rollback ownership; the global counter remains
 // the deletion generation for keys no longer present in this map.
 const runtimeAuthStoreSnapshotRevisions = new Map<string, number>();
-let persistedMutationRevision = 0;
-let evictedOwnerMutationFloor = 0;
-const MAX_PERSISTED_MUTATION_OWNERS = 256;
-const MAX_PERSISTED_MUTATION_PROFILES_PER_OWNER = 256;
 
 type RuntimeAuthProfileStoreSnapshotEntry = {
   databasePath?: string;
@@ -72,92 +69,10 @@ export {
   type OwnedRuntimeAuthProfileStoreSnapshotEntry,
 } from "./runtime-snapshot-owner.js";
 
-type PersistedMutationRecord = {
-  credentialRevision: number;
-  credentialRevisionKnown: boolean;
-  profileSetRevision: number;
-  profileSetRevisionKnown: boolean;
-  stateRevision: number;
-  stateRevisionKnown: boolean;
-  mutationFloor: number;
-  profileRevisions: Map<string, number>;
-};
-
-const persistedMutationRecords = new Map<string, PersistedMutationRecord>();
-
 function advanceRuntimeAuthStoreSnapshotsRevision(): void {
   // Readers must close before consumers can observe the new snapshot generation.
   closeAuthProfileReadPool();
   runtimeAuthStoreSnapshotsRevision += 1;
-}
-
-function maxMutationRevision(record: PersistedMutationRecord): number {
-  return Math.max(
-    record.credentialRevision,
-    record.profileSetRevision,
-    record.stateRevision,
-    record.mutationFloor,
-    ...record.profileRevisions.values(),
-  );
-}
-
-function getOrCreatePersistedMutationRecord(ownerKey: string): PersistedMutationRecord {
-  const existing = persistedMutationRecords.get(ownerKey);
-  if (existing) {
-    // Mutations, rather than reads, drive LRU recency so observation cannot
-    // retain dormant owners forever.
-    persistedMutationRecords.delete(ownerKey);
-    persistedMutationRecords.set(ownerKey, existing);
-    return existing;
-  }
-  const record: PersistedMutationRecord = {
-    credentialRevision: evictedOwnerMutationFloor,
-    credentialRevisionKnown: evictedOwnerMutationFloor === 0,
-    profileSetRevision: evictedOwnerMutationFloor,
-    profileSetRevisionKnown: evictedOwnerMutationFloor === 0,
-    stateRevision: evictedOwnerMutationFloor,
-    stateRevisionKnown: evictedOwnerMutationFloor === 0,
-    mutationFloor: evictedOwnerMutationFloor,
-    profileRevisions: new Map(),
-  };
-  persistedMutationRecords.set(ownerKey, record);
-  while (persistedMutationRecords.size > MAX_PERSISTED_MUTATION_OWNERS) {
-    const oldestOwnerKey = persistedMutationRecords.keys().next().value;
-    if (oldestOwnerKey === undefined) {
-      break;
-    }
-    const oldest = persistedMutationRecords.get(oldestOwnerKey);
-    persistedMutationRecords.delete(oldestOwnerKey);
-    if (oldest) {
-      // A floor trades false-positive rollback fences for bounded memory; it
-      // must never let an evicted persisted mutation look unchanged.
-      evictedOwnerMutationFloor = Math.max(evictedOwnerMutationFloor, maxMutationRevision(oldest));
-    }
-  }
-  record.mutationFloor = Math.max(record.mutationFloor, evictedOwnerMutationFloor);
-  return record;
-}
-
-function setProfileMutationRevision(
-  record: PersistedMutationRecord,
-  profileId: string,
-  revision: number,
-): void {
-  record.profileRevisions.delete(profileId);
-  record.profileRevisions.set(profileId, revision);
-  while (record.profileRevisions.size > MAX_PERSISTED_MUTATION_PROFILES_PER_OWNER) {
-    const oldestProfileId = record.profileRevisions.keys().next().value;
-    if (oldestProfileId === undefined) {
-      break;
-    }
-    const oldestRevision = record.profileRevisions.get(oldestProfileId) ?? 0;
-    record.profileRevisions.delete(oldestProfileId);
-    record.mutationFloor = Math.max(record.mutationFloor, oldestRevision);
-  }
-}
-
-function getPersistedMutationRecord(ownerKey: string): PersistedMutationRecord | undefined {
-  return persistedMutationRecords.get(ownerKey);
 }
 
 function snapshotOwnershipState(entries: Iterable<[string, OwnedRuntimeSnapshot]>) {
@@ -219,12 +134,6 @@ function recordChangedSnapshotRevisions(
   return changed;
 }
 
-// Runtime snapshots are keyed by the canonical database path so default-agent
-// and per-agent stores do not overwrite each other.
-function resolveRuntimeStoreKey(agentDir?: string): string {
-  return agentDir ? resolveAuthProfileDatabasePath(agentDir) : resolveSharedAuthStorePath();
-}
-
 function resolveRuntimeSnapshotEntryKey(entry: {
   databasePath?: string;
   agentDir?: string;
@@ -233,10 +142,11 @@ function resolveRuntimeSnapshotEntryKey(entry: {
   return entry.databasePath ?? resolveRuntimeStoreKey(entry.agentDir);
 }
 
-function notifyRuntimeAuthStoreMutation(agentDir?: string): void {
+function notifyRuntimeAuthStoreMutation(agentDir?: string, profileSetChanged = false): void {
   const event = {
     ...(agentDir ? { agentDir } : {}),
     affectsInheritedStores: agentDir === undefined,
+    profileSetChanged,
   };
   for (const listener of runtimeAuthStoreMutationListeners) {
     listener(event);
@@ -248,6 +158,16 @@ function authProfilesChanged(
   next: RuntimeAuthProfileStore | undefined,
 ): boolean {
   return !isDeepStrictEqual(previous?.profiles ?? {}, next?.profiles ?? {});
+}
+
+function authProfileSetChanged(
+  previous: RuntimeAuthProfileStore | undefined,
+  next: RuntimeAuthProfileStore | undefined,
+): boolean {
+  return !isDeepStrictEqual(
+    Object.keys(previous?.profiles ?? {}).toSorted(),
+    Object.keys(next?.profiles ?? {}).toSorted(),
+  );
 }
 
 /** Observes credential snapshot changes at their lifecycle publication edge. */
@@ -295,12 +215,15 @@ export function getPreparedRuntimeAuthProfileStoreSnapshotCore(
   agentDir?: string,
   inheritedAuthDir?: string,
 ): AuthProfileStore | undefined {
-  const inherited = getRuntimeAuthProfileStoreSnapshotCore(inheritedAuthDir);
-  const requested = getRuntimeAuthProfileStoreSnapshotCore(agentDir);
-  if (!agentDir || resolveRuntimeStoreKey(agentDir) === resolveRuntimeStoreKey(inheritedAuthDir)) {
-    return requested ?? inherited;
+  const inheritedKey = resolveRuntimeStoreKey(inheritedAuthDir);
+  const requestedKey = resolveRuntimeStoreKey(agentDir);
+  const inherited = getRuntimeAuthProfileStoreSnapshotAtDatabasePath(inheritedKey);
+  if (requestedKey === inheritedKey) {
+    return inherited;
   }
-  if (inherited && requested) {
+  const requested = getRuntimeAuthProfileStoreSnapshotAtDatabasePath(requestedKey);
+  // With no agent, the shared snapshot wins without merging the inherited store.
+  if (agentDir && inherited && requested) {
     return mergeAuthProfileStores(inherited, requested, {
       preserveBaseRuntimeExternalProfiles: true,
     });
@@ -333,17 +256,18 @@ export function hasRuntimeAuthProfileStoreSnapshot(agentDir?: string): boolean {
   return runtimeAuthStoreSnapshots.has(resolveRuntimeStoreKey(agentDir));
 }
 
+/** Checks the owned profile keys without copying private credential data out of the owner. */
+export function hasRuntimeAuthProfileStoreSource(agentDir?: string): boolean {
+  const store = runtimeAuthStoreSnapshots.get(resolveRuntimeStoreKey(agentDir))?.store;
+  return Boolean(store && Object.keys(store.profiles).length > 0);
+}
+
 /** Returns true when requested or main runtime snapshots contain profiles. */
 export function hasAnyRuntimeAuthProfileStoreSource(agentDir?: string): boolean {
-  const requestedStore = getRuntimeAuthProfileStoreSnapshotCore(agentDir);
-  if (requestedStore && Object.keys(requestedStore.profiles).length > 0) {
-    return true;
-  }
-  if (!agentDir) {
-    return false;
-  }
-  const mainStore = getRuntimeAuthProfileStoreSnapshotCore();
-  return Boolean(mainStore && Object.keys(mainStore.profiles).length > 0);
+  return (
+    hasRuntimeAuthProfileStoreSource(agentDir) ||
+    (Boolean(agentDir) && hasRuntimeAuthProfileStoreSource())
+  );
 }
 
 /** Replaces all runtime auth profile snapshots with cloned entries. */
@@ -376,24 +300,31 @@ export function replaceRuntimeAuthProfileStoreSnapshots(
 export function replaceOwnedRuntimeAuthProfileStoreSnapshots(
   entries: OwnedRuntimeAuthProfileStoreSnapshotEntry[],
 ): void {
+  const sharedEntries = entries.map((entry) => ({
+    ...entry,
+    store: removePersonalAuthProfileReferences(entry.store),
+  }));
   // Cold producer facts are enough to fence stale preparation; do not open SQLite
   // merely to avoid conservative invalidation for an irrelevant relocation.
   const reboundKeys = new Set(
-    entries
+    sharedEntries
       .filter((entry) => {
         const previous = runtimeAuthStoreSnapshots.get(entry.databasePath);
         return previous && runtimeAuthSharedOwnerRebound(previous.owner, entry.owner);
       })
       .map((entry) => entry.databasePath),
   );
-  const credentialsChanged = replaceChangesCredentials(entries) || reboundKeys.size > 0;
-  const ownerChanged = replaceChangesOwner(entries);
+  const credentialsChanged = replaceChangesCredentials(sharedEntries) || reboundKeys.size > 0;
+  const ownerChanged = replaceChangesOwner(sharedEntries);
   if (credentialsChanged) {
     runtimeAuthStoreCredentialsRevision += 1;
   }
   const next = new Map(
-    entries.map((entry) => [resolveRuntimeSnapshotEntryKey(entry), entry.store] as const),
+    sharedEntries.map((entry) => [resolveRuntimeSnapshotEntryKey(entry), entry.store] as const),
   );
+  const profileSetChanged = [
+    ...new Set([...runtimeAuthStoreSnapshots.keys(), ...next.keys()]),
+  ].some((key) => authProfileSetChanged(runtimeAuthStoreSnapshots.get(key)?.store, next.get(key)));
   for (const key of new Set([...runtimeAuthStoreSnapshots.keys(), ...next.keys()])) {
     if (
       reboundKeys.has(key) ||
@@ -402,8 +333,8 @@ export function replaceOwnedRuntimeAuthProfileStoreSnapshots(
       clearRuntimeAuthMaterializationsAtDatabasePath(key);
     }
   }
-  recordChangedSnapshotRevisions(entries);
-  const nextOwned = entries.map((entry) => {
+  recordChangedSnapshotRevisions(sharedEntries);
+  const nextOwned = sharedEntries.map((entry) => {
     const key = resolveRuntimeSnapshotEntryKey(entry);
     return [
       key,
@@ -419,7 +350,7 @@ export function replaceOwnedRuntimeAuthProfileStoreSnapshots(
     runtimeAuthStoreSnapshots.set(key, entry);
   }
   if (ownerChanged) {
-    notifyRuntimeAuthStoreMutation();
+    notifyRuntimeAuthStoreMutation(undefined, profileSetChanged);
   }
 }
 
@@ -427,6 +358,9 @@ export function replaceOwnedRuntimeAuthProfileStoreSnapshots(
 export function clearRuntimeAuthProfileStoreSnapshots(): void {
   const snapshotsChanged = runtimeAuthStoreSnapshots.size > 0;
   const credentialsChanged = credentialState(runtimeStoreEntries()).length > 0;
+  const profileSetChanged = runtimeStoreEntries().some(
+    ([, store]) => Object.keys(store.profiles).length > 0,
+  );
   if (credentialsChanged) {
     runtimeAuthStoreCredentialsRevision += 1;
   }
@@ -439,7 +373,7 @@ export function clearRuntimeAuthProfileStoreSnapshots(): void {
   clearAllRuntimeAuthMaterializations();
   runtimeAuthStoreSnapshotRevisions.clear();
   if (snapshotsChanged) {
-    notifyRuntimeAuthStoreMutation();
+    notifyRuntimeAuthStoreMutation(undefined, profileSetChanged);
   }
 }
 
@@ -466,7 +400,7 @@ export function clearRuntimeAuthProfileStoreSnapshotAtDatabasePath(
   runtimeAuthStoreSnapshots.delete(key);
   clearRuntimeAuthMaterializationsAtDatabasePath(key);
   runtimeAuthStoreSnapshotRevisions.delete(key);
-  notifyRuntimeAuthStoreMutation(agentDir);
+  notifyRuntimeAuthStoreMutation(agentDir, Object.keys(store.profiles).length > 0);
   return true;
 }
 
@@ -477,6 +411,7 @@ function setRuntimeAuthProfileStoreSnapshotAtKey(
   owner: RuntimeAuthSharedOwner,
   legacyCandidates?: RuntimeAuthProfileLegacyCandidates,
 ): void {
+  const sharedStore = removePersonalAuthProfileReferences(store);
   const previous = runtimeAuthStoreSnapshots.get(key);
   const sharedOwnerChanged =
     !isDeepStrictEqual(previous?.owner, owner) ||
@@ -485,30 +420,31 @@ function setRuntimeAuthProfileStoreSnapshotAtKey(
     credentialState(
       runtimeAuthStoreSnapshots.has(key) ? [[key, runtimeAuthStoreSnapshots.get(key)!.store]] : [],
     ),
-    credentialState([[key, store]]),
+    credentialState([[key, sharedStore]]),
   );
   const sharedOwnerRebound = previous && runtimeAuthSharedOwnerRebound(previous.owner, owner);
   if (credentialsChanged || sharedOwnerRebound) {
     runtimeAuthStoreCredentialsRevision += 1;
   }
   const previousStore = previous?.store;
-  if (sharedOwnerRebound || authProfilesChanged(previousStore, store)) {
+  const profileSetChanged = authProfileSetChanged(previousStore, sharedStore);
+  if (sharedOwnerRebound || authProfilesChanged(previousStore, sharedStore)) {
     clearRuntimeAuthMaterializationsAtDatabasePath(key);
   }
   const ownerChanged =
-    sharedOwnerChanged || !isDeepStrictEqual(ownerState(previousStore), ownerState(store));
-  const snapshotChanged = sharedOwnerChanged || !isDeepStrictEqual(previousStore, store);
+    sharedOwnerChanged || !isDeepStrictEqual(ownerState(previousStore), ownerState(sharedStore));
+  const snapshotChanged = sharedOwnerChanged || !isDeepStrictEqual(previousStore, sharedStore);
   if (snapshotChanged) {
     advanceRuntimeAuthStoreSnapshotsRevision();
     runtimeAuthStoreSnapshotRevisions.set(key, runtimeAuthStoreSnapshotsRevision);
   }
   runtimeAuthStoreSnapshots.set(key, {
-    store: cloneAuthProfileStore(store),
+    store: cloneAuthProfileStore(sharedStore),
     owner: cloneRuntimeAuthSharedOwner(owner),
     legacyCandidates: cloneRuntimeAuthProfileLegacyCandidates(legacyCandidates),
   });
   if (ownerChanged) {
-    notifyRuntimeAuthStoreMutation(agentDir);
+    notifyRuntimeAuthStoreMutation(agentDir, profileSetChanged);
   }
 }
 
@@ -608,7 +544,6 @@ export function noteRuntimeAuthProfileStorePersistedMutation(
   if (!mutation.credentialsChanged && !mutation.profileSetChanged && !mutation.stateChanged) {
     return;
   }
-  persistedMutationRevision += 1;
   if (mutation.credentialsChanged) {
     runtimeAuthStoreCredentialsRevision += 1;
   }
@@ -616,22 +551,7 @@ export function noteRuntimeAuthProfileStorePersistedMutation(
   if (mutation.credentialsChanged || mutation.profileSetChanged) {
     clearRuntimeAuthMaterializationsAtDatabasePath(ownerKey);
   }
-  const record = getOrCreatePersistedMutationRecord(ownerKey);
-  if (mutation.profileSetChanged) {
-    record.profileSetRevision = persistedMutationRevision;
-    record.profileSetRevisionKnown = true;
-  }
-  if (mutation.credentialsChanged) {
-    record.credentialRevision = persistedMutationRevision;
-    record.credentialRevisionKnown = true;
-    for (const profileId of mutation.profileIds) {
-      setProfileMutationRevision(record, profileId, persistedMutationRevision);
-    }
-  }
-  if (mutation.stateChanged) {
-    record.stateRevision = persistedMutationRevision;
-    record.stateRevisionKnown = true;
-  }
+  recordRuntimeAuthProfileStorePersistedMutation(ownerKey, mutation);
   const mainKey = owner?.sharedDatabasePath ?? resolveRuntimeStoreKey(undefined);
   if (ownerKey !== mainKey || (!mutation.credentialsChanged && !mutation.profileSetChanged)) {
     return;
@@ -649,110 +569,17 @@ export function noteRuntimeAuthProfileStorePersistedMutation(
     advanceRuntimeAuthStoreSnapshotsRevision();
   }
   if (mutation.credentialsChanged || mutation.profileSetChanged) {
-    notifyRuntimeAuthStoreMutation(agentDir);
+    notifyRuntimeAuthStoreMutation(agentDir, mutation.profileSetChanged === true);
   }
-}
-
-export type RuntimeAuthProfileStoreMutationToken = {
-  revision: number;
-  known: boolean;
-};
-
-export type RuntimeAuthProfileStoreMutationOwner =
-  | { kind: "resolved"; databasePath: string; sharedDatabasePath: string }
-  | { kind: "unresolved"; databasePath: string; scope: AuthProfileOwnerScope };
-
-function combineMutationTokens(
-  tokens: RuntimeAuthProfileStoreMutationToken[],
-): RuntimeAuthProfileStoreMutationToken {
-  return {
-    revision: Math.max(0, ...tokens.map((token) => token.revision)),
-    known: tokens.every((token) => token.known),
-  };
-}
-
-/** Bounded persisted credential lineage; unknown means its exact token was evicted. */
-export function getRuntimeAuthProfileStoreCredentialMutationToken(
-  agentDir?: string,
-  profileId?: string,
-  options?: { includeMain?: boolean; owner?: RuntimeAuthProfileStoreMutationOwner },
-): RuntimeAuthProfileStoreMutationToken {
-  const requestedKey = options?.owner?.databasePath ?? resolveRuntimeStoreKey(agentDir);
-  if (!profileId) {
-    const record = getPersistedMutationRecord(requestedKey);
-    return record
-      ? { revision: record.credentialRevision, known: record.credentialRevisionKnown }
-      : { revision: evictedOwnerMutationFloor, known: evictedOwnerMutationFloor === 0 };
-  }
-  if (options?.includeMain && options.owner?.kind === "unresolved") {
-    return { revision: 0, known: false };
-  }
-  const mainKey = !options?.includeMain
-    ? requestedKey
-    : options.owner?.kind === "resolved"
-      ? options.owner.sharedDatabasePath
-      : resolveRuntimeStoreKey(undefined);
-  const keys =
-    requestedKey === mainKey || options?.includeMain !== true
-      ? [requestedKey]
-      : [requestedKey, mainKey];
-  return combineMutationTokens(
-    keys.map((key) => {
-      const record = getPersistedMutationRecord(key);
-      if (!record) {
-        return { revision: evictedOwnerMutationFloor, known: evictedOwnerMutationFloor === 0 };
-      }
-      const revision = record.profileRevisions.get(profileId);
-      return revision === undefined
-        ? { revision: record.mutationFloor, known: record.mutationFloor === 0 }
-        : { revision, known: true };
-    }),
-  );
-}
-
-/** Persisted token for profile-id additions and removals in one owner store. */
-export function getRuntimeAuthProfileStoreProfileSetMutationToken(
-  agentDir?: string,
-  databasePath?: string,
-): RuntimeAuthProfileStoreMutationToken {
-  const ownerKey = databasePath ?? resolveRuntimeStoreKey(agentDir);
-  const record = getPersistedMutationRecord(ownerKey);
-  return record
-    ? { revision: record.profileSetRevision, known: record.profileSetRevisionKnown }
-    : { revision: evictedOwnerMutationFloor, known: evictedOwnerMutationFloor === 0 };
-}
-
-/** Persisted mutation token for non-secret selection state in one owner store. */
-export function getRuntimeAuthProfileStoreStateMutationToken(
-  agentDir?: string,
-  options?: { includeMain?: boolean; owner?: RuntimeAuthProfileStoreMutationOwner },
-): RuntimeAuthProfileStoreMutationToken {
-  const requestedKey = options?.owner?.databasePath ?? resolveRuntimeStoreKey(agentDir);
-  if (options?.includeMain && options.owner?.kind === "unresolved") {
-    return { revision: 0, known: false };
-  }
-  const mainKey = !options?.includeMain
-    ? requestedKey
-    : options.owner?.kind === "resolved"
-      ? options.owner.sharedDatabasePath
-      : resolveRuntimeStoreKey(undefined);
-  const keys =
-    requestedKey === mainKey || options?.includeMain !== true
-      ? [requestedKey]
-      : [requestedKey, mainKey];
-  return combineMutationTokens(
-    keys.map((key) => {
-      const record = getPersistedMutationRecord(key);
-      return record
-        ? { revision: record.stateRevision, known: record.stateRevisionKnown }
-        : { revision: evictedOwnerMutationFloor, known: evictedOwnerMutationFloor === 0 };
-    }),
-  );
 }
 
 /** Stable token for credential ownership without coupling to usage bookkeeping. */
 export function getRuntimeAuthProfileStoreCredentialsRevision(): number {
   return runtimeAuthStoreCredentialsRevision;
+}
+
+export function getRuntimeAuthProfileStoreSnapshotsRevision(): number {
+  return runtimeAuthStoreSnapshotsRevision;
 }
 
 /** Process-local generation for one exact runtime snapshot rollback owner. */
@@ -765,27 +592,4 @@ export function getRuntimeAuthProfileStoreSnapshotRevisionAtDatabasePath(
   databasePath: string,
 ): number {
   return runtimeAuthStoreSnapshotRevisions.get(databasePath) ?? runtimeAuthStoreSnapshotsRevision;
-}
-
-const testing = {
-  MAX_PERSISTED_MUTATION_OWNERS,
-  MAX_PERSISTED_MUTATION_PROFILES_PER_OWNER,
-  getPersistedMutationRecordCounts(): { owners: number; profiles: number } {
-    return {
-      owners: persistedMutationRecords.size,
-      profiles: Math.max(
-        0,
-        ...Array.from(persistedMutationRecords.values(), (record) => record.profileRevisions.size),
-      ),
-    };
-  },
-  resetPersistedMutationLineage(): void {
-    persistedMutationRecords.clear();
-    persistedMutationRevision = 0;
-    evictedOwnerMutationFloor = 0;
-  },
-};
-if (process.env.VITEST || process.env.NODE_ENV === "test") {
-  (globalThis as Record<PropertyKey, unknown>)[Symbol.for("openclaw.runtimeAuthSnapshotsTestApi")] =
-    testing;
 }

@@ -1,3 +1,4 @@
+import path from "node:path";
 import { expect, it } from "vitest";
 import {
   createChatFlowE2eSuite,
@@ -9,6 +10,234 @@ import {
 const suite = createChatFlowE2eSuite();
 
 suite.define(() => {
+  it.each([
+    { order: "before hydration", tool: false, steer: false },
+    { order: "after hydration", tool: false, steer: false },
+    { order: "replayed after hydration", tool: false, steer: false },
+    { order: "before hydration", tool: true, steer: false },
+    { order: "before hydration", tool: false, steer: true },
+  ])(
+    "reconciles persistence $order (tool: $tool, steer: $steer)",
+    async ({ order, tool, steer }) => {
+      await suite.withPage(
+        { locale: "en-US", serviceWorkers: "block", viewport: { height: 900, width: 1280 } },
+        async ({ page }) => {
+          const runId = "hydrated-answer-run";
+          const text = "The workspace check is complete.";
+          const tailText = "The follow-up check is complete.";
+          const toolEvent = {
+            sessionKey: "agent:main:main",
+            runId,
+            seq: 1,
+            ts: 1_001,
+            stream: "tool",
+            data: {
+              phase: "result",
+              toolCallId: "workspace-check",
+              name: "read",
+              result: { content: [{ type: "text", text: "Workspace ready." }] },
+            },
+          };
+          const message = {
+            role: "assistant",
+            content: [{ type: "text", text }],
+            __openclaw: { id: "hydrated-answer", seq: 2, runId },
+          };
+          const historyMessages = [
+            message,
+            ...(steer
+              ? [
+                  {
+                    role: "user",
+                    content: [{ type: "text", text: "Check the follow-up." }],
+                    __openclaw: {
+                      id: "follow-up",
+                      seq: 3,
+                      idempotencyKey: "follow-up:user",
+                      steerTargetRunId: runId,
+                    },
+                  },
+                ]
+              : []),
+          ];
+          const sessionInfo = {
+            key: "agent:main:main",
+            hasActiveRun: true,
+            activeRunIds: [runId],
+          };
+          const inFlightRun = {
+            runId,
+            startedAt: 1_000,
+            text: steer ? `${text} Checking the follow-up.` : text,
+            ...(tool ? { events: [toolEvent] } : {}),
+          };
+          const gateway = await installMockGateway(page, {
+            historyMessages: [],
+            inFlightRun: { ...inFlightRun, text: "" },
+            sessionInfo,
+          });
+          await page.goto(`${suite.server.baseUrl}chat`);
+          await page.getByRole("button", { name: "Stop generating" }).waitFor();
+          await gateway.emitGatewayEvent("chat", {
+            sessionKey: "agent:main:main",
+            runId,
+            state: "delta",
+            deltaText: text,
+            message: { role: "assistant", content: [{ type: "text", text }] },
+          });
+          if (tool) {
+            await gateway.emitGatewayEvent("agent", toolEvent);
+          }
+          const persist = () =>
+            gateway.emitGatewayEvent("session.message", {
+              sessionKey: "agent:main:main",
+              runId,
+              hasActiveRun: true,
+              activeRunIds: [runId],
+              messageId: "hydrated-answer",
+              messageSeq: 2,
+              message,
+            });
+          const startupCount = (await gateway.getRequests("chat.startup")).length;
+          await gateway.deferNext("chat.startup");
+          await gateway.setOnline(false);
+          await gateway.setOnline(true);
+          await gateway.waitForRequest("chat.startup", { after: startupCount });
+          if (order !== "after hydration") {
+            await persist();
+          }
+          await gateway.resolveDeferred("chat.startup", {
+            messages: historyMessages,
+            inFlightRun,
+            sessionInfo,
+            thinkingLevel: null,
+          });
+          await page.waitForFunction(() => {
+            const pane = document.querySelector<HTMLElement & { state?: { chatLoading: boolean } }>(
+              "openclaw-chat-pane",
+            );
+            return pane?.state?.chatLoading === false;
+          });
+          await page.locator(".chat-group.assistant .chat-text", { hasText: text }).waitFor();
+          if (order !== "before hydration") {
+            await persist();
+          }
+          await gateway.deferNext("chat.history");
+          await gateway.emitGatewayEvent("chat", {
+            sessionKey: "agent:main:main",
+            runId,
+            state: "final",
+            message: {
+              role: "assistant",
+              content: [
+                {
+                  type: "text",
+                  text: steer
+                    ? `${text} ${tailText}`
+                    : tool
+                      ? `Checking the workspace.\n\n${text}`
+                      : text,
+                },
+              ],
+            },
+          });
+          await page.getByRole("button", { name: "Stop generating" }).waitFor({ state: "hidden" });
+          if (process.env.OPENCLAW_CAPTURE_UI_PROOF === "1") {
+            await page.screenshot({
+              fullPage: true,
+              path: path.join(
+                suite.artifactDir,
+                steer ? "hydrated-continuation.png" : "hydrated-answer.png",
+              ),
+            });
+          }
+          expect(
+            (await page.locator(".chat-group.assistant .chat-text").allTextContents()).map(
+              (value) => value.trim(),
+            ),
+          ).toEqual(steer ? [text, tailText] : [text]);
+          expect(await page.locator(".chat-duplicate-count").count()).toBe(0);
+          if (tool) {
+            expect(await page.locator(".chat-tool-msg-summary").count()).toBe(1);
+          }
+        },
+      );
+    },
+  );
+
+  it("reconciles distinct commentary items once across reconnect", async () => {
+    await suite.withPage(
+      {
+        locale: "en-US",
+        serviceWorkers: "block",
+        viewport: { height: 900, width: 1280 },
+      },
+      async ({ page }) => {
+        const runId = "commentary-reconciliation-run";
+        const items = [
+          { itemId: "commentary-item-one", text: "Inspecting the workspace." },
+          { itemId: "commentary-item-two", text: "Checking the result." },
+        ];
+        const events = items.map(({ itemId, text }, index) => ({
+          data: { kind: "preamble", itemId, phase: "update", progressText: text },
+          runId,
+          seq: index + 1,
+          sessionKey: "agent:main:main",
+          stream: "item",
+          ts: 2_000 + index,
+        }));
+        const historyMessages = items.map(({ itemId, text }, index) => ({
+          role: "assistant",
+          content: [{ type: "text", text }],
+          timestamp: 1_000 + index,
+          __openclaw: { id: `commentary-message-${index}`, runId, seq: index + 1 },
+          openclawStreamFallback: { itemId, replacementText: text, source: "segment" },
+        }));
+        const sessionInfo = {
+          activeRunIds: [runId],
+          hasActiveRun: true,
+          key: "agent:main:main",
+        };
+        const gateway = await installMockGateway(page, {
+          historyMessages: [],
+          inFlightRun: { runId, startedAt: 1_000, text: "" },
+          sessionInfo,
+        });
+        const transcript = page.locator(".chat-thread-inner");
+        const itemOccurrences = async () => {
+          const bubbles = await transcript.locator(".chat-bubble").allTextContents();
+          return items.map(({ text }) => bubbles.filter((bubble) => bubble.trim() === text).length);
+        };
+
+        await page.goto(`${suite.server.baseUrl}chat`);
+        await page.getByRole("button", { name: "Stop generating" }).waitFor();
+        for (const event of events) {
+          await gateway.emitGatewayEvent("agent", event);
+        }
+        await expect.poll(itemOccurrences).toEqual([1, 1]);
+
+        const startupCount = (await gateway.getRequests("chat.startup")).length;
+        await gateway.setMethodResponse("chat.startup", {
+          messages: historyMessages,
+          inFlightRun: { runId, startedAt: 1_000, text: "", events },
+          sessionInfo,
+          thinkingLevel: null,
+        });
+        await gateway.setOnline(false);
+        await gateway.setOnline(true);
+        await gateway.waitForRequest("chat.startup", { after: startupCount });
+        await expect.poll(itemOccurrences).toEqual([1, 1]);
+
+        if (process.env.OPENCLAW_CAPTURE_UI_PROOF === "1") {
+          await page.screenshot({
+            fullPage: true,
+            path: path.join(suite.artifactDir, "commentary-reconciliation.png"),
+          });
+        }
+      },
+    );
+  });
+
   it.each([
     { persistence: "between deltas", terminal: "final" },
     { persistence: "before streaming", terminal: "error" },
@@ -92,7 +321,7 @@ suite.define(() => {
             .poll(async () =>
               (await page.locator(".chat-working-indicator__tokens").textContent())?.trim(),
             )
-            .toBe("2.4k tokens");
+            .toBe("2.4k output tokens");
           await expect.poll(() => page.locator(".chat-bubble.streaming").count()).toBe(0);
           expect(
             (await page.locator(".chat-group.assistant .chat-text").allTextContents()).map(

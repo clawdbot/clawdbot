@@ -1,12 +1,26 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
-import type { AdmittedRunContext } from "../../agents/admitted-run-context.js";
+import {
+  createOperationalRunInstanceRef,
+  prepareAgentRunAdmission,
+  type AdmittedRunContext,
+} from "../../agents/admitted-run-context.js";
 import { createExecutionIdentityAdmissionToken } from "../../audit/execution-identity-admission.js";
 import * as pidAlive from "../../shared/pid-alive.js";
 import {
   openOpenClawStateDatabase,
   runOpenClawStateWriteTransaction,
 } from "../../state/openclaw-state-db.js";
+import {
+  advanceCronActiveJobGeneration,
+  bindCronJobAdmittedRun,
+  bindCronSelfRemovalCommitGuard,
+  markCronJobActive,
+  noteActiveCronJobRemoval,
+  requestActiveCronJobCancellation,
+  resetCronActiveJobs,
+} from "../active-jobs.js";
 import { setupCronServiceSuite } from "../service.test-harness.js";
+import { assertServiceCronRunReceiptCurrent } from "../service/run-receipts.js";
 import { proposeCronRunRecovery, recoverCronRunProposal } from "../service/run-recovery.js";
 import { createCronServiceState } from "../service/state.js";
 import { loadCronStore, saveCronStore } from "../store.js";
@@ -21,6 +35,7 @@ import {
   CronRunReceiptRevisionError,
   findActiveCronRunReceiptInDatabase,
   finishCronRunReceipt,
+  listActiveCronRunReceiptJobIdsInDatabase,
   prepareCronRunReceiptClaim,
   releaseLocalCronRunReceiptOwnership,
   type CronRunReceiptHandle,
@@ -95,25 +110,111 @@ function makeForeignOwner(handle: CronRunReceiptHandle) {
 }
 
 describe("cron run receipt store", () => {
-  it("lazily creates receipt storage for direct transactional lookups", async () => {
+  it.each([
+    "self-removed",
+    "operator-removed",
+    "cancelled",
+    "copied guard",
+    "copied marker",
+    "replaced marker",
+    "retired generation",
+    "closed receipt",
+    "foreign receipt owner",
+    "unavailable agent",
+  ] as const)("revalidates completion ownership for a %s job", async (scenario) => {
     const { storePath } = await makeStorePath();
-    const job = makeJob("lazy-lookup");
+    const job = makeJob("removed-completion");
     await saveCronStore(storePath, { version: 1, jobs: [job] });
-    openOpenClawStateDatabase().db.exec("DROP TABLE cron_run_receipts");
-
-    expect(
-      runOpenClawStateWriteTransaction(({ db }) =>
-        findActiveCronRunReceiptInDatabase({ database: db, storePath, jobId: job.id }),
-      ),
-    ).toBeUndefined();
-    expect(
-      openOpenClawStateDatabase()
-        .db.prepare(
-          "SELECT name FROM sqlite_schema WHERE type = 'table' AND name = 'cron_run_receipts'",
-        )
-        .get(),
-    ).toEqual({ name: "cron_run_receipts" });
+    const receipt = claim(storePath, job, Date.now());
+    let liveReceipt = receipt;
+    const marker = markCronJobActive(job.id)!;
+    const controller = new AbortController();
+    const admission = prepareAgentRunAdmission({
+      cfg: {},
+      operationalRunInstance: createOperationalRunInstanceRef("removed-completion-run"),
+      facts: {
+        runId: "removed-completion-run",
+        agentId: job.agentId!,
+        ingress: { kind: "schedule", boundary: "cron.script", state: "present" },
+      },
+    });
+    try {
+      const context = await admission.admit("gateway");
+      bindCronJobAdmittedRun(marker, context, controller.signal);
+      const guard = () => {};
+      bindCronSelfRemovalCommitGuard(job.id, context.operationalRunInstance, guard, () => {});
+      await saveCronStore(storePath, { version: 1, jobs: [] });
+      noteActiveCronJobRemoval(
+        job.id,
+        scenario === "operator-removed"
+          ? undefined
+          : scenario === "copied guard"
+            ? () => guard()
+            : guard,
+      );
+      admission.close();
+      if (scenario === "cancelled") {
+        requestActiveCronJobCancellation(job.id, "cancelled after removal");
+      } else if (scenario === "replaced marker") {
+        markCronJobActive(job.id);
+      } else if (scenario === "retired generation") {
+        advanceCronActiveJobGeneration();
+      } else if (scenario === "closed receipt") {
+        finishCronRunReceipt({ handle: receipt, status: "ok", finishedAtMs: Date.now() });
+      } else if (scenario === "foreign receipt owner") {
+        liveReceipt = makeForeignOwner(receipt).handle;
+      }
+      const state = createCronServiceState({
+        storePath,
+        cronEnabled: true,
+        log: logger,
+        nowMs: () => Date.now(),
+        isAgentAvailable: () => scenario !== "unavailable agent",
+        enqueueSystemEvent: vi.fn(),
+        requestHeartbeat: vi.fn(),
+        runIsolatedAgentJob: vi.fn(),
+      });
+      const assertCurrent = () =>
+        assertServiceCronRunReceiptCurrent(
+          state,
+          receipt,
+          scenario === "copied marker" ? { ...marker } : marker,
+        );
+      if (scenario === "self-removed") {
+        expect(assertCurrent).not.toThrow();
+      } else {
+        expect(assertCurrent).toThrow(CronRunReceiptRevisionError);
+      }
+    } finally {
+      admission.close();
+      finishCronRunReceipt({ handle: liveReceipt, status: "ok", finishedAtMs: Date.now() });
+      resetCronActiveJobs();
+    }
   });
+
+  it.each(["single", "batch"] as const)(
+    "lazily creates receipt storage for a direct $case lookup",
+    async (testCase) => {
+      const { storePath } = await makeStorePath();
+      const job = makeJob("lazy-lookup");
+      await saveCronStore(storePath, { version: 1, jobs: [job] });
+      openOpenClawStateDatabase().db.exec("DROP TABLE cron_run_receipts");
+
+      const result = runOpenClawStateWriteTransaction(({ db }) =>
+        testCase === "single"
+          ? findActiveCronRunReceiptInDatabase({ database: db, storePath, jobId: job.id })
+          : listActiveCronRunReceiptJobIdsInDatabase(db, storePath),
+      );
+      expect(result).toEqual(testCase === "single" ? undefined : new Set());
+      expect(
+        openOpenClawStateDatabase()
+          .db.prepare(
+            "SELECT name FROM sqlite_schema WHERE type = 'table' AND name = 'cron_run_receipts'",
+          )
+          .get(),
+      ).toEqual({ name: "cron_run_receipts" });
+    },
+  );
 
   it("records one durable active run and rejects an overlapping claimant", async () => {
     const { storePath } = await makeStorePath();

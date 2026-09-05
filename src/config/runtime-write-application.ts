@@ -3,6 +3,8 @@ import { createDeferredCore } from "../shared/deferred.js";
 export type RuntimeConfigWriteApplicationStatus =
   | "applied"
   | "applied-restart-required"
+  // Restart admission accepted the saved config; the current runtime is not updated.
+  | "restart-pending"
   | "superseded"
   | "failed"
   | "stopped"
@@ -39,7 +41,15 @@ export function createRuntimeConfigWriteApplication(
         return null;
       }
       claimed = true;
-      return { settle: result.resolve, ...(runTransaction ? { runTransaction } : {}) };
+      const claim: RuntimeConfigWriteApplicationClaim = {
+        settle: (status) => {
+          // Reply settlement releases the RPC root; retained watcher intent must reacquire admission.
+          delete claim.runTransaction;
+          result.resolve(status);
+        },
+        ...(runTransaction ? { runTransaction } : {}),
+      };
+      return claim;
     },
   };
 }

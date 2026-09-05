@@ -39,7 +39,10 @@ import type {
 } from "./tui-types.js";
 
 type EventHandlerChatLog = {
-  addLiveUser: (text: string, options: { messageId: string; runId?: string }) => void;
+  addLiveUser: (
+    text: string,
+    options: { messageId: string; runId?: string; sendId?: string },
+  ) => void;
   startTool: (toolCallId: string, toolName: string, args: unknown, runId?: string) => void;
   updateToolResult: (
     toolCallId: string,
@@ -528,10 +531,7 @@ export function createEventHandlers(context: EventHandlerContext) {
     }
     const liveUserMessage = readTuiSessionUserMessage(evt);
     if (liveUserMessage) {
-      chatLog.addLiveUser(liveUserMessage.text, {
-        messageId: liveUserMessage.messageId,
-        ...(liveUserMessage.runId ? { runId: liveUserMessage.runId } : {}),
-      });
+      chatLog.addLiveUser(liveUserMessage.text, liveUserMessage);
       tui.requestRender();
     }
 

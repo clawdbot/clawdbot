@@ -46,11 +46,13 @@ export function createDispatchTestHarness(
     connId?: string;
     extraHandlers?: GatewayWsMessageHandlerParams["extraHandlers"];
     buildRequestContext?: () => unknown;
+    isClosed?: () => boolean;
+    getRequiredSharedGatewaySessionGeneration?: () => string | undefined;
   } = {},
 ) {
   const sentResponses: GatewayTestResponseFrame[] = [];
   const responseWaiters: { id: string; deferred: Deferred<GatewayTestResponseFrame> }[] = [];
-  const send = vi.fn((_frame: unknown) => ({ kind: "sent" }) as const);
+  const send = vi.fn<GatewayWsMessageHandlerParams["send"]>(() => ({ kind: "sent" }));
   // Recording lives outside the spy so tests may replace send's implementation
   // (to observe call context) without silently breaking awaitResponseFrame.
   const sendForDispatcher = (frame: unknown) => {
@@ -77,15 +79,15 @@ export function createDispatchTestHarness(
       buildRequestContext: () => (options.buildRequestContext?.() ?? {}) as never,
       send: sendForDispatcher,
       close,
-      isClosed: () => false,
+      isClosed: options.isClosed ?? (() => false),
+      getRequiredSharedGatewaySessionGeneration: options.getRequiredSharedGatewaySessionGeneration,
       setCloseCause,
       logGateway,
     } as unknown as GatewayWsMessageHandlerParams,
     isWebchatConnect: () => false,
   });
-  // dispatch() is fire-and-forget behind a lazy server-methods import, so waiting
-  // on the response event keeps tests off polling deadlines that lose to a slow
-  // first module load and leak in-flight dispatches into sibling cases.
+  // A response can precede handler completion. Tests driving ongoing work wait
+  // for this event, then release their gates and join the original dispatch.
   const awaitResponseFrame = (id: string): Promise<GatewayTestResponseFrame> => {
     const already = sentResponses.find((frame) => frame.id === id);
     if (already) {
@@ -95,5 +97,15 @@ export function createDispatchTestHarness(
     responseWaiters.push({ id, deferred });
     return deferred.promise;
   };
-  return { awaitResponseFrame, close, dispatcher, logGateway, send, setCloseCause };
+  return {
+    awaitResponseFrame,
+    close,
+    dispatcher: {
+      dispatch: (frame: unknown, client: GatewayWsClient) =>
+        dispatcher.dispatch(frame, client, Buffer.byteLength(JSON.stringify(frame))),
+    },
+    logGateway,
+    send,
+    setCloseCause,
+  };
 }

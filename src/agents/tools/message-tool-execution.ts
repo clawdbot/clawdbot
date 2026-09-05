@@ -33,6 +33,7 @@ import type {
 import { projectGatewayQueuedDeliveryResult } from "../../infra/outbound/message-action-execution.js";
 import { getToolResult, runMessageAction } from "../../infra/outbound/message-action-runner.js";
 import { resolveActionDeliveryTargetAlias } from "../../infra/outbound/message-action-spec.js";
+import { isDeliveredCurrentSourceReply } from "../../infra/outbound/source-reply-mirror.js";
 import { stringifyRouteThreadId } from "../../plugin-sdk/channel-route.js";
 import { getPreparedMessageToolCatalog } from "../../plugins/prepared-message-tool-catalog.js";
 import { normalizeAccountId } from "../../routing/session-key.js";
@@ -236,6 +237,7 @@ export function createMessageTool(options?: MessageToolOptions): AnyAgentTool {
     options?.config && !options.sourceReplyOnly
       ? {
           cfg: options.config,
+          currentChatType: effectiveCurrentChannel.currentChatType,
           currentChannelProvider: effectiveCurrentChannel.currentChannelProvider,
           currentChannelId: effectiveCurrentChannel.currentChannelId,
           currentThreadTs,
@@ -491,7 +493,7 @@ export function createMessageTool(options?: MessageToolOptions): AnyAgentTool {
         sourceReplySinkDeliveryMode === "message_tool_only" &&
         (action === "send" || action === "reply")
       ) {
-        if (Date.now() - recentPollVote.recordedAt > POLL_VOTE_ECHO_TTL_MS) {
+        if (Date.now() - recentPollVote.recordedAt >= POLL_VOTE_ECHO_TTL_MS) {
           recentPollVoteBySession.delete(pollEchoSessionKey);
         } else if (pollVoteEchoRoute === recentPollVote.route) {
           const vote = recentPollVote;
@@ -675,7 +677,32 @@ export function createMessageTool(options?: MessageToolOptions): AnyAgentTool {
         resolveTrustedDecisionChannel(result.channel, preparedMessageToolCatalog),
       );
       const toolResult = getToolResult(result);
-      const messageDelivery = projectEmbeddedMessageDeliveryFact(result);
+      // A2A enters through webchat but resolves an external source route here.
+      // Compare the completed send with that route, independently of display mirrors.
+      const currentSourceReply =
+        result.handledBy !== "internal-source" &&
+        isDeliveredCurrentSourceReply({
+          action,
+          cfg,
+          channel: result.channel,
+          actionParams: "to" in result ? { ...actionParams, target: result.to } : actionParams,
+          accountId,
+          currentAccountId: agentAccountId,
+          sessionKey: options?.agentSessionKey,
+          toolContext,
+          deliveredPayload: result.payload,
+          replyToIsExplicit: Boolean(readToolStringParam(actionParams, "replyTo")),
+        });
+      const messageDelivery = projectEmbeddedMessageDeliveryFact(result, currentSourceReply);
+      if (
+        messageDelivery?.status === "settled" &&
+        !messageDelivery.partialDelivery &&
+        requestedSourceReplyFinal !== false &&
+        !result.dryRun &&
+        currentSourceReply
+      ) {
+        messageDelivery.sourceReplyDelivered = true;
+      }
       const normalizationNotice = result.kind === "send" ? result.normalization?.notice : undefined;
       if (normalizationNotice) {
         const normalizedResult = toolResult ?? jsonResult(result.payload);
@@ -702,7 +729,7 @@ export function createMessageTool(options?: MessageToolOptions): AnyAgentTool {
           // sends a follow-up text can't leak a record forever in a long-lived
           // gateway; the map stays bounded to sessions that voted within the TTL.
           for (const [key, entry] of recentPollVoteBySession) {
-            if (recordedAt - entry.recordedAt > POLL_VOTE_ECHO_TTL_MS) {
+            if (recordedAt - entry.recordedAt >= POLL_VOTE_ECHO_TTL_MS) {
               recentPollVoteBySession.delete(key);
             }
           }

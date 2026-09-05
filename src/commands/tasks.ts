@@ -12,7 +12,7 @@ import { formatLookupMiss } from "../cli/error-format.js";
 import { formatCliJsonFailure, rethrowExpectedCliError } from "../cli/failure-output.js";
 import { getRuntimeConfig } from "../config/config.js";
 import { type RuntimeEnv, writeRuntimeJson } from "../runtime.js";
-import { getTaskById, updateTaskNotifyPolicyById } from "../tasks/runtime-internal.js";
+import { updateTaskNotifyPolicyById } from "../tasks/runtime-internal.js";
 import { cancelDetachedTaskRunById } from "../tasks/task-executor.js";
 import { listTaskFlowAuditFindings } from "../tasks/task-flow-registry.audit.js";
 import {
@@ -63,11 +63,13 @@ import {
   type TaskSystemAuditFinding,
 } from "./tasks-audit-system.js";
 import { runSessionRegistryMaintenance } from "./tasks-session-registry-maintenance.js";
+import { formatTextCell } from "./text-format.js";
 
 const RUNTIME_PAD = 8;
 const DELIVERY_PAD = 14;
 const ID_PAD = 10;
 const RUN_PAD = 10;
+const CHILD_SESSION_PAD = 36;
 const info = theme.info;
 
 function formatTaskLookupMiss(lookup: string): string {
@@ -81,10 +83,6 @@ function formatTaskLookupMiss(lookup: string): string {
 
 function formatTaskTimestamp(value: number | undefined): string {
   return timestampMsToIsoString(value) ?? "n/a";
-}
-
-async function loadTaskCancelConfig() {
-  return getRuntimeConfig();
 }
 
 type GatewayTaskCancelSummary = {
@@ -104,15 +102,13 @@ type GatewayTaskCancelResult = {
 async function tryCancelGatewayOwnedTaskViaGateway(
   task: TaskRecord,
 ): Promise<GatewayTaskCancelResult | null> {
-  if (task.runtime === "cli") {
-    return null;
-  }
   try {
     const { callGateway } = await import("../gateway/call.js");
     return await callGateway<GatewayTaskCancelResult>({
       method: "tasks.cancel",
       params: { taskId: task.taskId },
-      timeoutMs: 5_000,
+      // Ordinary agent cancellation waits for its real execution to settle.
+      timeoutMs: task.runtime === "cli" ? 15_000 : 5_000,
     });
   } catch (error) {
     if (task.runtime === "cron") {
@@ -133,20 +129,12 @@ function configureTaskMaintenanceFromConfig(): void {
 }
 
 function truncate(value: string, maxChars: number) {
-  if (value.length <= maxChars) {
-    return value;
-  }
-  return maxChars <= 0
-    ? ""
-    : truncateWithMarker(value, maxChars, { marker: "…", reserve: 1, trimEnd: false });
+  return truncateWithMarker(value, maxChars, { marker: "…", reserve: 1, trimEnd: false });
 }
 
-function shortToken(value: string | undefined, maxChars = ID_PAD): string {
+function formatTokenCell(value: string | undefined, width = ID_PAD): string {
   const sanitized = sanitizeTerminalText(normalizeOptionalString(value) ?? "").trim();
-  if (!sanitized) {
-    return "n/a";
-  }
-  return truncate(sanitized, maxChars);
+  return formatTextCell(sanitized || "n/a", width);
 }
 
 function formatTaskRows(tasks: TaskRecord[], rich: boolean) {
@@ -156,7 +144,7 @@ function formatTaskRows(tasks: TaskRecord[], rich: boolean) {
     "Status".padEnd(TASK_STATUS_CELL_WIDTH),
     "Delivery".padEnd(DELIVERY_PAD),
     "Run".padEnd(RUN_PAD),
-    "Child Session",
+    "Child Session".padEnd(CHILD_SESSION_PAD),
     "Summary",
   ].join(" ");
   const lines = [rich ? theme.heading(header) : header];
@@ -168,12 +156,12 @@ function formatTaskRows(tasks: TaskRecord[], rich: boolean) {
       80,
     );
     const line = [
-      shortToken(task.taskId).padEnd(ID_PAD),
+      formatTokenCell(task.taskId),
       task.runtime.padEnd(RUNTIME_PAD),
       formatTaskStatusCell(formatTaskStatus(task), rich),
       task.deliveryStatus.padEnd(DELIVERY_PAD),
-      shortToken(task.runId, RUN_PAD).padEnd(RUN_PAD),
-      shortToken(task.childSessionKey, 36).padEnd(36),
+      formatTokenCell(task.runId, RUN_PAD),
+      formatTokenCell(task.childSessionKey, CHILD_SESSION_PAD),
       summary,
     ].join(" ");
     lines.push(line.trimEnd());
@@ -231,7 +219,7 @@ function formatAuditRows(findings: TaskSystemAuditFinding[], rich: boolean) {
         scope.padEnd(8),
         severityCell,
         finding.code.padEnd(22),
-        shortToken(finding.token).padEnd(ID_PAD),
+        formatTokenCell(finding.token),
         status,
         formatAgeMs(finding.ageMs).padEnd(8),
         truncate(sanitizeTerminalText(finding.detail), 88),
@@ -390,34 +378,12 @@ export async function tasksCancelCommand(opts: { lookup: string }, runtime: Runt
     runtime.exit(1);
     return;
   }
-  const gatewayResult = await tryCancelGatewayOwnedTaskViaGateway(task);
-  if (gatewayResult) {
-    if (!gatewayResult.found) {
-      runtime.error(
-        sanitizeTerminalText(gatewayResult.reason ?? formatTaskLookupMiss(opts.lookup)),
-      );
-      runtime.exit(1);
-      return;
-    }
-    if (!gatewayResult.cancelled) {
-      runtime.error(
-        sanitizeTerminalText(gatewayResult.reason ?? `Could not cancel task: ${opts.lookup}`),
-      );
-      runtime.exit(1);
-      return;
-    }
-    const updated = gatewayResult.task;
-    runtime.log(
-      sanitizeTerminalText(
-        `Cancelled ${updated?.taskId ?? updated?.id ?? task.taskId} (${updated?.runtime ?? task.runtime})${updated?.runId ? ` run ${updated.runId}` : ""}.`,
-      ),
-    );
-    return;
-  }
-  const result = await cancelDetachedTaskRunById({
-    cfg: await loadTaskCancelConfig(),
-    taskId: task.taskId,
-  });
+  const result: GatewayTaskCancelResult =
+    (await tryCancelGatewayOwnedTaskViaGateway(task)) ??
+    (await cancelDetachedTaskRunById({
+      cfg: getRuntimeConfig(),
+      taskId: task.taskId,
+    }));
   if (!result.found) {
     runtime.error(sanitizeTerminalText(result.reason ?? formatTaskLookupMiss(opts.lookup)));
     runtime.exit(1);
@@ -428,10 +394,10 @@ export async function tasksCancelCommand(opts: { lookup: string }, runtime: Runt
     runtime.exit(1);
     return;
   }
-  const updated = getTaskById(task.taskId);
+  const updated = result.task;
   runtime.log(
     sanitizeTerminalText(
-      `Cancelled ${updated?.taskId ?? task.taskId} (${updated?.runtime ?? task.runtime})${updated?.runId ? ` run ${updated.runId}` : ""}.`,
+      `Cancelled ${updated?.taskId ?? updated?.id ?? task.taskId} (${updated?.runtime ?? task.runtime})${updated?.runId ? ` run ${updated.runId}` : ""}.`,
     ),
   );
 }

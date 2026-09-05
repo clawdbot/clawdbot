@@ -1,6 +1,7 @@
 // Provider registry tests cover runtime provider loading, normalization aliases,
 // manifest-only hook hydration, and config-derived image providers.
 import { beforeEach, describe, expect, it, vi } from "vitest";
+import { describeImageWithModel, describeImagesWithModel } from "./image-runtime.js";
 import {
   buildMediaUnderstandingRegistry,
   getMediaUnderstandingProvider,
@@ -68,8 +69,52 @@ describe("media-understanding provider registry", () => {
     const provider = requireMediaProvider(registry, "zai");
 
     expect(provider.defaultModels?.image).toBe("glm-4.6v");
-    expect(provider.describeImage).toBeTypeOf("function");
-    expect(provider.describeImages).toBeTypeOf("function");
+    expect(provider.describeImage).toBe(describeImageWithModel);
+    expect(provider.describeImages).toBe(describeImagesWithModel);
+  });
+
+  it("resets earlier custom hooks when a prepared owner explicitly requests generic hooks", () => {
+    const customImage = vi.fn(async () => ({ text: "custom image" }));
+    const customImages = vi.fn(async () => ({ text: "custom images" }));
+    const registry = buildMediaUnderstandingRegistry(undefined, undefined, [
+      createMediaProvider({
+        id: "zai",
+        capabilities: ["image"],
+        describeImage: customImage,
+        describeImages: customImages,
+      }),
+      createMediaProvider({
+        id: "zai",
+        capabilities: ["image"],
+        defaultModels: { image: "glm-4.6v" },
+        describeImage: undefined,
+        describeImages: undefined,
+      }),
+    ]);
+
+    const provider = requireMediaProvider(registry, "zai");
+    expect(provider.defaultModels?.image).toBe("glm-4.6v");
+    expect(provider.describeImage).toBe(describeImageWithModel);
+    expect(provider.describeImages).toBe(describeImagesWithModel);
+  });
+
+  it("keeps partial explicit overrides ahead of hydrated prepared hooks", () => {
+    const overrideImage = vi.fn(async () => ({ text: "override image" }));
+    const registry = buildMediaUnderstandingRegistry(
+      {
+        zai: createMediaProvider({
+          id: "zai",
+          capabilities: ["image"],
+          describeImage: overrideImage,
+        }),
+      },
+      undefined,
+      [createMediaProvider({ id: "zai", capabilities: ["image"] })],
+    );
+
+    const provider = requireMediaProvider(registry, "zai");
+    expect(provider.describeImage).toBe(overrideImage);
+    expect(provider.describeImages).toBe(describeImagesWithModel);
   });
 
   it("keeps provider id normalization behavior for capability providers", () => {

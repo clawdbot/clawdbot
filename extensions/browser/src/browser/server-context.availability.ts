@@ -47,6 +47,7 @@ import {
   registerProfileHandle,
   releaseProfileHandle,
   withProfileOperationLease,
+  waitForProfileOperation,
 } from "./server-context.lifecycle.js";
 import type {
   BrowserServerState,
@@ -180,18 +181,24 @@ export function createProfileAvailability({
   const ensureExtensionRelay = async (signal?: AbortSignal) => {
     signal?.throwIfAborted();
     if (capabilities.mode !== "local-extension") {
-      return;
+      return undefined;
     }
     const { ensureExtensionRelayForProfile } = await getExtensionRelayModule();
     const current = state();
-    await ensureExtensionRelayForProfile(current, profile, signal);
+    const relay = await ensureExtensionRelayForProfile(current, profile, signal);
     signal?.throwIfAborted();
+    return relay;
   };
   const isReachable = async (
     timeoutMs?: number,
     options?: { ephemeral?: boolean; signal?: AbortSignal },
   ) => {
-    await ensureExtensionRelay(options?.signal);
+    const relay = await ensureExtensionRelay(options?.signal);
+    if (relay?.ownership === "borrowed") {
+      const ready = await relay.client.status();
+      options?.signal?.throwIfAborted();
+      return ready.ready && state().extensionRelays?.get(profile.name) === relay;
+    }
     if (capabilities.usesChromeMcp) {
       // countChromeMcpTabs creates the session if needed — no separate availability call required.
       // Status probes opt into ephemeral so they reuse a cached attach session if one exists,
@@ -237,7 +244,12 @@ export function createProfileAvailability({
     if (capabilities.usesChromeMcp) {
       return await isTransportAvailable(timeoutMs, signal);
     }
-    await ensureExtensionRelay(signal);
+    const relay = await ensureExtensionRelay(signal);
+    if (relay?.ownership === "borrowed") {
+      const ready = await relay.client.status();
+      signal?.throwIfAborted();
+      return ready.ready && state().extensionRelays?.get(profile.name) === relay;
+    }
     const { httpTimeoutMs } = resolveTimeouts(timeoutMs);
     return await isChromeReachable(profile.cdpUrl, httpTimeoutMs, getCdpReachabilityPolicy());
   };
@@ -457,10 +469,18 @@ export function createProfileAvailability({
     if (capabilities.mode === "local-extension") {
       const { ensureExtensionRelayForProfile } = await getExtensionRelayModule();
       const relay = await ensureExtensionRelayForProfile(current, profile, signal);
-      const connected = await relay.bridge.waitForExtensionConnection(
-        signal,
-        CHROME_MCP_ATTACH_READY_WINDOW_MS,
-      );
+      const connected =
+        relay.ownership === "borrowed"
+          ? (
+              await waitForProfileOperation(
+                relay.client.status(CHROME_MCP_ATTACH_READY_WINDOW_MS),
+                signal,
+              )
+            ).ready
+          : await relay.bridge.waitForExtensionConnection(
+              signal,
+              CHROME_MCP_ATTACH_READY_WINDOW_MS,
+            );
       signal.throwIfAborted();
       httpReachable =
         connected &&

@@ -528,24 +528,6 @@ describe("subagent announce timeout config", () => {
     expect(gatewayCalls.some((call) => call.method === "chat.history")).toBe(false);
   });
 
-  it("keeps authoritative empty success intentional without transcript inference", async () => {
-    chatHistoryMessages = [
-      { role: "assistant", content: [{ type: "text", text: "stale transcript output" }] },
-    ];
-
-    await runAnnounceFlowForTest("run-ok-empty-terminal", {
-      outcome: { status: "ok" },
-      roundOneReply: undefined,
-      terminalReply: { disposition: "empty" },
-    });
-
-    const directAgentCall = findFinalDirectAgentCall();
-    const internalEvents =
-      (directAgentCall?.params?.internalEvents as Array<{ result?: string }>) ?? [];
-    expect(internalEvents[0]?.result).toBe("(no output)");
-    expect(gatewayCalls.some((call) => call.method === "chat.history")).toBe(false);
-  });
-
   it("keeps delete-mode timeout retryable while the embedded child request is still active", async () => {
     sessionStore["agent:main:subagent:worker"] = {
       sessionId: "child-session",

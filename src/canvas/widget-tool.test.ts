@@ -5,6 +5,8 @@ import path from "node:path";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { InProcessGatewayCaller } from "../agents/tools/in-process-gateway.js";
 import { createTestBoardStore } from "../boards/board-store.test-support.js";
+import { retainLegacyDefaultAgentId } from "../config/legacy.default-agent-owner.js";
+import type { OpenClawConfig } from "../config/types.js";
 import { createBoardHandlers } from "../gateway/server-methods/board.js";
 import type { GatewayRequestContext, RespondFn } from "../gateway/server-methods/types.js";
 import { createPluginBoardWidgetContentKindRegistrar } from "../plugins/board-widget-content-kinds.js";
@@ -16,6 +18,7 @@ import { closeOpenClawAgentDatabasesForTest } from "../state/openclaw-agent-db.j
 import { closeOpenClawStateDatabaseForTest } from "../state/openclaw-state-db.js";
 import { resolveCanvasDocumentsDir } from "./documents.js";
 import { createShowWidgetTool } from "./widget-tool.js";
+import { createBoardPutCaller } from "./widget-tool.test-support.js";
 import { buildWidgetDocument } from "./wrap.js";
 
 const WIDGET_CODE_MAX_CHARS = 262_144;
@@ -64,39 +67,14 @@ function registerDiagramContentKind(): void {
   setActivePluginRegistry(registry);
 }
 
-function createBoardPutCaller() {
-  const mock = vi.fn(async (_method: string, params: Record<string, unknown>) => ({
-    sessionKey: params.sessionKey,
-    revision: 1,
-    tabs: [{ tabId: "main", title: "Main", position: 0, chatDock: "right" }],
-    widgets: [
-      {
-        name: params.name,
-        tabId: "main",
-        contentKind: "plugin",
-        pluginKind: "diagram:diagram",
-        sizeW: 6,
-        sizeH: 4,
-        position: 0,
-        grantState: "none",
-        revision: 1,
-      },
-    ],
-    resolvedWidgetName: params.name,
-  }));
-  const callGateway: InProcessGatewayCaller = async <T>(
-    method: string,
-    params: Record<string, unknown>,
-  ): Promise<T> => (await mock(method, params)) as T;
-  return { mock, callGateway };
-}
-
 function createLiveBoardTestContext(
   broadcast: ReturnType<typeof vi.fn> = vi.fn(),
+  cfg: OpenClawConfig = { agents: { entries: { main: {} } } },
 ): GatewayRequestContext {
   const context = {
     broadcast,
-    getRuntimeConfig: () => ({ agents: { list: [{ id: "main" }] } }),
+    getSessionEventSubscriberConnIds: () => new Set<string>(),
+    getRuntimeConfig: () => cfg,
   } as unknown as GatewayRequestContext;
   context.resolveGatewayContext = () => context;
   return context;
@@ -111,6 +89,7 @@ async function executeWidget(params: {
   sessionId?: string;
   title?: string;
   widgetCode: string;
+  agentId?: string;
   agentSessionKey?: string;
   callGateway?: InProcessGatewayCaller;
   pin?: boolean;
@@ -129,7 +108,7 @@ async function executeWidget(params: {
   const tool = createShowWidgetTool({
     stateDir: params.stateDir,
     sessionId: params.sessionId ?? "widget-session",
-    agentId: "main",
+    agentId: params.agentId ?? "main",
     agentSessionKey: params.agentSessionKey,
     callGateway: params.callGateway,
     presenters: params.presenters,
@@ -248,6 +227,7 @@ describe("show_widget", () => {
     expect(JSON.parse(text ?? "null")).toEqual({
       status: "pinned",
       boardWidgetName: "diagram",
+      capabilityState: "none",
       text: "Widget pinned to dashboard tab main as diagram",
     });
     expect(callGatewayMock).toHaveBeenCalledExactlyOnceWith(
@@ -694,91 +674,112 @@ describe("show_widget", () => {
     expect(callGateway).not.toHaveBeenCalled();
   });
 
-  it("lets the board domain create and refresh explicitly named pinned HTML", async () => {
-    const stateDir = await createStateDir();
-    const store = createTestBoardStore({ stateDir });
-    const broadcast = vi.fn();
-    const handlers = createBoardHandlers(store);
-    const title = "Release Status ".repeat(8).trim();
-    const callGateway: InProcessGatewayCaller = async <T>(
-      method: string,
-      params: Record<string, unknown>,
-    ): Promise<T> => {
-      let result: unknown;
-      let failure: Error | undefined;
-      const respond: RespondFn = (ok, payload, error) => {
-        if (ok) {
-          result = payload;
-        } else {
-          failure = new Error(error?.message ?? "board request failed");
-        }
+  it.each([
+    ["qualified Main", "agent:main:pinned", "main", false],
+    ["explicit Research global", "global", "research", false],
+    ["Research global with retained Main", "global", "research", true],
+  ] as const)(
+    "creates and refreshes pinned HTML in %s",
+    async (_label, sessionKey, agentId, retainedMain) => {
+      const stateDir = await createStateDir();
+      const store = createTestBoardStore({ stateDir });
+      const broadcast = vi.fn();
+      const target = { sessionKey, agentId };
+      const sibling = { sessionKey: "global", agentId: agentId === "main" ? "research" : "main" };
+      const siblingBefore = store.getSnapshot(sibling);
+      const boardBroadcastScope = { sessionKeys: [sessionKey], agentId };
+      const eventSessionKey = sessionKey === "global" ? `agent:${agentId}:global` : sessionKey;
+      const cfg: OpenClawConfig = {
+        agents: { ownership: "explicit", entries: { main: {}, research: {} } },
+        session: { scope: "global" },
       };
-      await handlers[method]!({
-        req: { type: "req", id: "show-widget-pin", method, params },
-        params,
-        client: null,
-        isWebchatConnect: () => false,
-        respond,
-        context: createLiveBoardTestContext(broadcast),
-      });
-      if (failure) {
-        throw failure;
+      if (retainedMain) {
+        retainLegacyDefaultAgentId(cfg, "main");
       }
-      return result as T;
-    };
+      const handlers = createBoardHandlers(store);
+      const title = "Release Status ".repeat(8).trim();
+      const callGateway: InProcessGatewayCaller = async <T>(
+        method: string,
+        params: Record<string, unknown>,
+      ): Promise<T> => {
+        let result: unknown;
+        let failure: Error | undefined;
+        const respond: RespondFn = (ok, payload, error) => {
+          if (ok) {
+            result = payload;
+          } else {
+            failure = new Error(error?.message ?? "board request failed");
+          }
+        };
+        await handlers[method]!({
+          req: { type: "req", id: "show-widget-pin", method, params },
+          params,
+          client: null,
+          isWebchatConnect: () => false,
+          respond,
+          context: createLiveBoardTestContext(broadcast, cfg),
+        });
+        if (failure) {
+          throw failure;
+        }
+        return result as T;
+      };
 
-    const pinWidget = (widgetCode: string, withPlacement = false) =>
-      executeWidget({
-        stateDir,
-        agentSessionKey: "agent:main:pinned",
-        title,
-        widgetCode,
-        pin: true,
-        name: "release-status",
-        ...(withPlacement
-          ? { tab: "main", size: "lg" as const, presentation: { frame: "frameless" as const } }
-          : {}),
-        callGateway,
+      const pinWidget = (widgetCode: string, withPlacement = false) =>
+        executeWidget({
+          stateDir,
+          agentId,
+          agentSessionKey: sessionKey,
+          title,
+          widgetCode,
+          pin: true,
+          name: "release-status",
+          ...(withPlacement
+            ? { tab: "main", size: "lg" as const, presentation: { frame: "frameless" as const } }
+            : {}),
+          callGateway,
+        });
+      const result = await pinWidget("<p>ready</p>", true);
+      const pinnedTitle = Array.from(title).slice(0, 80).join("");
+
+      expect(store.readWidgetHtml(target, "release-status")).toMatchObject({
+        html: buildWidgetDocument(pinnedTitle, "<p>ready</p>"),
+        revision: 1,
       });
-    const result = await pinWidget("<p>ready</p>", true);
-    const pinnedTitle = Array.from(title).slice(0, 80).join("");
+      expect(store.getSnapshot(target).widgets[0]?.title).toBe(pinnedTitle);
+      expect(store.getSnapshot(target).widgets[0]?.presentation).toBe("frameless");
+      expect(result.resultText).toContain("pinned to dashboard tab main as release-status (lg)");
+      expect(result.boardWidgetName).toBe("release-status");
+      expect(broadcast).toHaveBeenCalledWith(
+        "board.changed",
+        { sessionKey: eventSessionKey, revision: 1, widget: "release-status" },
+        boardBroadcastScope,
+      );
 
-    expect(store.readWidgetHtml("agent:main:pinned", "release-status")).toMatchObject({
-      html: buildWidgetDocument(pinnedTitle, "<p>ready</p>"),
-      revision: 1,
-    });
-    expect(store.getSnapshot("agent:main:pinned").widgets[0]?.title).toBe(pinnedTitle);
-    expect(store.getSnapshot("agent:main:pinned").widgets[0]?.presentation).toBe("frameless");
-    expect(result.resultText).toContain("pinned to dashboard tab main as release-status (lg)");
-    expect(result.boardWidgetName).toBe("release-status");
-    expect(broadcast).toHaveBeenCalledWith("board.changed", {
-      sessionKey: "agent:main:pinned",
-      revision: 1,
-      widget: "release-status",
-    });
+      await expect(
+        callGateway("board.widget.put", {
+          ...target,
+          name: "release-status",
+          content: { kind: "plugin", pluginKind: "workboard:card" },
+        }),
+      ).rejects.toThrow(/same content kind.*remove/i);
+      expect(store.readWidgetHtml(target, "release-status")?.revision).toBe(1);
 
-    await expect(
-      callGateway("board.widget.put", {
-        sessionKey: "agent:main:pinned",
-        name: "release-status",
-        content: { kind: "plugin", pluginKind: "workboard:card" },
-      }),
-    ).rejects.toThrow(/same content kind.*remove/i);
-    expect(store.readWidgetHtml("agent:main:pinned", "release-status")?.revision).toBe(1);
+      const refreshed = await pinWidget("<p>refreshed</p>");
 
-    const refreshed = await pinWidget("<p>refreshed</p>");
-
-    expect(store.readWidgetHtml("agent:main:pinned", "release-status")).toMatchObject({
-      html: buildWidgetDocument(pinnedTitle, "<p>refreshed</p>"),
-      revision: 2,
-    });
-    expect(refreshed.boardWidgetName).toBe("release-status");
-    expect(broadcast).toHaveBeenCalledWith("board.changed", {
-      sessionKey: "agent:main:pinned",
-      revision: 2,
-      widget: "release-status",
-    });
-  });
+      expect(store.readWidgetHtml(target, "release-status")).toMatchObject({
+        html: buildWidgetDocument(pinnedTitle, "<p>refreshed</p>"),
+        revision: 2,
+      });
+      expect(refreshed.boardWidgetName).toBe("release-status");
+      expect(broadcast).toHaveBeenCalledWith(
+        "board.changed",
+        { sessionKey: eventSessionKey, revision: 2, widget: "release-status" },
+        boardBroadcastScope,
+      );
+      expect(store.getSnapshot(sibling)).toEqual(siblingBefore);
+    },
+  );
 
   it("pins a granted-CSP document and declaration without networking in the inline preview", async () => {
     const stateDir = await createStateDir();
@@ -826,7 +827,7 @@ describe("show_widget", () => {
       path.join(resolveCanvasDocumentDir(stateDir, result.viewId), "index.html"),
       "utf8",
     );
-    const pinned = store.readWidgetHtml("agent:main:weather", "weather");
+    const pinned = store.readWidgetHtml({ sessionKey: "agent:main:weather" }, "weather");
 
     expect(inlineHtml).toContain("connect-src 'none'");
     expect(pinned).toMatchObject({
@@ -958,7 +959,7 @@ describe("show_widget", () => {
       }),
     ]);
     expect(new Set([slash.boardWidgetName, plus.boardWidgetName]).size).toBe(2);
-    expect(store.getSnapshot(sessionKey).widgets).toHaveLength(2);
+    expect(store.getSnapshot({ sessionKey }).widgets).toHaveLength(2);
 
     const composed = await executeWidget({
       stateDir,
@@ -977,7 +978,7 @@ describe("show_widget", () => {
       callGateway,
     });
     expect(decomposed.boardWidgetName).toBe(composed.boardWidgetName);
-    expect(store.readWidgetHtml(sessionKey, composed.boardWidgetName ?? "")).toMatchObject({
+    expect(store.readWidgetHtml({ sessionKey }, composed.boardWidgetName ?? "")).toMatchObject({
       revision: 2,
     });
   });

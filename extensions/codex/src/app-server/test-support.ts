@@ -6,9 +6,17 @@ import { EventEmitter } from "node:events";
 import { PassThrough, Writable } from "node:stream";
 import type { EmbeddedRunAttemptParamsV2 as EmbeddedRunAttemptParams } from "openclaw/plugin-sdk/agent-harness-runtime";
 import type { Model } from "openclaw/plugin-sdk/llm";
-import { vi } from "vitest";
+import { expect, vi } from "vitest";
+import { resolveCodexAppServerHomeDir } from "./auth-start-options.js";
 import { CodexAppServerClient } from "./client.js";
-import type { CodexAppServerClientFactory, CodexAppServerClientOptions } from "./shared-client.js";
+import { resolveCodexAppServerRuntimeOptions } from "./config.js";
+import { isJsonObject } from "./protocol.js";
+import {
+  getLeasedSharedCodexAppServerClient,
+  releaseLeasedSharedCodexAppServerClient,
+  type CodexAppServerClientFactory,
+  type CodexAppServerClientOptions,
+} from "./shared-client.js";
 
 /** Minimal deterministic host terminal observer for Codex harness tests. */
 export function createCodexTestToolTerminalObserver(): NonNullable<
@@ -100,8 +108,45 @@ export function createCodexTestModel(provider = "openai", input = ["text"]): Mod
   } as Model;
 }
 
+export async function waitForHarnessRequest(
+  harness: ReturnType<typeof createClientHarness>,
+  method: string,
+  startIndex = 0,
+): Promise<{ id: number | string; params?: unknown }> {
+  let request: { id?: number | string; method?: string; params?: unknown } | undefined;
+  await vi.waitFor(
+    () => {
+      request = harness.writes
+        .slice(startIndex)
+        .map(
+          (write) =>
+            JSON.parse(write) as { id?: number | string; method?: string; params?: unknown },
+        )
+        .find((message) => message.method === method);
+      expect(
+        request?.id,
+        `expected ${method} after write ${startIndex}; observed ${JSON.stringify(
+          harness.writes
+            .slice(startIndex)
+            .map((write) => (JSON.parse(write) as { method: string }).method),
+        )}`,
+      ).toBeDefined();
+    },
+    { interval: 1, timeout: 5_000 },
+  );
+  if (request?.id === undefined) {
+    throw new Error(`Codex harness did not write ${method}`);
+  }
+  return { id: request.id, params: request.params };
+}
+
 /** Creates an in-memory Codex app-server client harness with writable stdout frames. */
-export function createClientHarness(options: { autoEmitExit?: boolean } = {}) {
+export function createClientHarness(
+  options: {
+    autoEmitExit?: boolean;
+    onWrite?: (line: string, send: (message: unknown) => void) => void;
+  } = {},
+) {
   const stdout = new PassThrough();
   const writes: string[] = [];
   const writeEvents = new EventEmitter();
@@ -118,6 +163,8 @@ export function createClientHarness(options: { autoEmitExit?: boolean } = {}) {
     stdin: Writable;
     stdout: PassThrough;
     stderr: PassThrough;
+    exitCode: number | null;
+    signalCode: NodeJS.Signals | null;
     killed: boolean;
     kill: (signal?: NodeJS.Signals) => unknown;
   };
@@ -126,6 +173,9 @@ export function createClientHarness(options: { autoEmitExit?: boolean } = {}) {
       writes.push(chunk.toString());
       callback();
       writeEvents.emit("write");
+      options.onWrite?.(chunk.toString(), (message) =>
+        stdout.write(`${JSON.stringify(message)}\n`),
+      );
     },
   });
   const destroyStdin = stdin.destroy.bind(stdin);
@@ -143,6 +193,8 @@ export function createClientHarness(options: { autoEmitExit?: boolean } = {}) {
     stdin,
     stdout,
     stderr: new PassThrough(),
+    exitCode: null,
+    signalCode: null,
     killed: false,
     kill: vi.fn((_signal?: NodeJS.Signals) => {
       process.killed = true;
@@ -151,6 +203,21 @@ export function createClientHarness(options: { autoEmitExit?: boolean } = {}) {
   emitProcessExit = () => {
     process.emit("exit", 0, null);
   };
+  // Record terminal state before client observers, including direct error/signal exits.
+  // Otherwise later closeAndWait calls wait for an exit that already happened.
+  process.once("exit", (code: number | null, signal: NodeJS.Signals | null) => {
+    exitEmitted = true;
+    process.exitCode = code;
+    process.signalCode = signal;
+    stdin.destroy();
+    // Let exit observers run before output reaches EOF.
+    queueMicrotask(() => {
+      for (const output of [stdout, process.stderr]) {
+        output.end();
+        output.resume();
+      }
+    });
+  });
   const client = CodexAppServerClient.fromTransportForTests(process);
   return {
     client,
@@ -186,4 +253,62 @@ export function createClientHarness(options: { autoEmitExit?: boolean } = {}) {
       stdout.write(`${JSON.stringify(message)}\n`);
     },
   };
+}
+
+/** External transport replies with a real initialize handshake and shared-client lease. */
+export async function withLeasedCodexTestClient<T>(params: {
+  agentDir: string;
+  request: (method: string, params?: unknown) => Promise<unknown>;
+  run: (client: CodexAppServerClient) => Promise<T>;
+}): Promise<T> {
+  const harness = createClientHarness({
+    onWrite: (line, send) => {
+      const message: unknown = JSON.parse(line);
+      if (
+        !isJsonObject(message) ||
+        typeof message.method !== "string" ||
+        message.id === undefined
+      ) {
+        return;
+      }
+      const result =
+        message.method === "initialize"
+          ? Promise.resolve({
+              userAgent: "codex-cli/0.151.0",
+              codexHome: resolveCodexAppServerHomeDir(params.agentDir),
+            })
+          : params.request(message.method, message.params);
+      void result.then(
+        (value) => send({ id: message.id, result: value }),
+        (error: unknown) =>
+          send({
+            id: message.id,
+            error: {
+              code: -32000,
+              message: error instanceof Error ? error.message : String(error),
+            },
+          }),
+      );
+    },
+  });
+  const start = vi.spyOn(CodexAppServerClient, "start").mockResolvedValueOnce(harness.client);
+  try {
+    const client = await getLeasedSharedCodexAppServerClient({
+      startOptions: resolveCodexAppServerRuntimeOptions({
+        pluginConfig: { appServer: { command: process.execPath, args: ["app-server"] } },
+        codexConfigToml: null,
+        requirementsToml: null,
+      }).start,
+      agentDir: params.agentDir,
+      authProfileId: null,
+    });
+    try {
+      return await params.run(client);
+    } finally {
+      releaseLeasedSharedCodexAppServerClient(client);
+    }
+  } finally {
+    start.mockRestore();
+    await harness.client.closeAndWait();
+  }
 }

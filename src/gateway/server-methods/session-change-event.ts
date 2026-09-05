@@ -45,6 +45,7 @@ type SessionChangeContext = Pick<
   | "getRuntimeConfig"
   | "getSessionEventSubscriberConnIds"
   | "getSessionMessageSubscriberConnIds"
+  | "mentionInbox"
 >;
 
 type PendingSessionChange = {
@@ -128,7 +129,6 @@ function broadcastSessionsChanged(
               sessionRow,
               agentId: eventAgentId,
               activeRunState,
-              status: activeRunState?.active ? (activeRunState.status ?? "running") : undefined,
             }),
           }
         : {}),
@@ -171,6 +171,8 @@ export function emitSessionsChanged(context: SessionChangeContext, payload: Sess
   // joined or cached by a request that begins after the mutation.
   sessionsMutationVersions.set(context, readSessionsMutationVersion(context) + 1);
   invalidateSessionSharingSnapshot(payload.sessionKey);
+  // Inbox subscriptions are independent of session-list subscriptions, including a closed sidebar.
+  context.mentionInbox?.invalidate();
   const evSubs = context.getSessionEventSubscriberConnIds();
   const isTeardown =
     payload.reason === "reset" || payload.reason === "delete" || payload.reason === "new";

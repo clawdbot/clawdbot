@@ -3272,6 +3272,7 @@ describe("tui session actions", () => {
               __openclaw: {
                 id: "persisted-pending-user",
                 idempotencyKey: "run-pending:user",
+                runId: "execution-run",
                 seq: 1,
               },
             },

@@ -3,7 +3,7 @@ import {
   normalizeOptionalLowercaseString,
   normalizeOptionalString,
 } from "@openclaw/normalization-core/string-coerce";
-import { readAcpSessionMeta } from "../acp/runtime/session-meta.js";
+import { readAcpSessionMeta, readAcpSessionMetaForEntry } from "../acp/runtime/session-meta.js";
 import {
   resolveCurrentSessionAgentRuntimeMetadata,
   resolveModelAgentRuntimeMetadata,
@@ -234,15 +234,20 @@ type GatewaySessionThinkingProjectionParams = {
   providerPolicySource?: ThinkingProviderPolicySource;
 };
 
-export function resolveGatewaySessionThinkingProjectionInternal(
+export function resolveGatewaySessionRuntimeProjection(
   params: GatewaySessionThinkingProjectionParams,
 ) {
+  const { cfg, agentId, sessionKey, entry } = params;
   const cachedAcpMeta = params.rowContext?.acpSessionMetaByEntry;
+  // Keep metadata bound to the projected row; rereading its key can adopt a
+  // replacement lifecycle while projecting the original entry.
   const acpMeta =
-    params.entry?.acp ??
-    (params.entry && cachedAcpMeta?.has(params.entry)
-      ? cachedAcpMeta.get(params.entry)
-      : readAcpSessionMeta({ sessionKey: params.sessionKey, agentId: params.agentId }));
+    entry?.acp ??
+    (entry && cachedAcpMeta?.has(entry)
+      ? cachedAcpMeta.get(entry)
+      : entry
+        ? readAcpSessionMetaForEntry({ cfg, sessionKey, agentId, entry })
+        : readAcpSessionMeta({ sessionKey, agentId }));
   const agentRuntime = resolveCurrentSessionAgentRuntimeMetadata({
     cfg: params.cfg,
     agentId: params.agentId,
@@ -253,6 +258,13 @@ export function resolveGatewaySessionThinkingProjectionInternal(
     acpRuntime: acpMeta != null,
     acpBackend: acpMeta?.backend,
   });
+  return { acpMeta, agentRuntime };
+}
+
+export function resolveGatewaySessionThinkingProjectionInternal(
+  params: GatewaySessionThinkingProjectionParams,
+) {
+  const { acpMeta, agentRuntime } = resolveGatewaySessionRuntimeProjection(params);
   const catalogEntry = params.modelCatalog
     ? findModelCatalogEntry(params.modelCatalog, {
         provider: params.provider,
@@ -658,14 +670,14 @@ function resolveSessionDisplayModelIdentityRef(params: {
   };
 }
 
-export async function projectSessionPatchResult(params: {
+export function projectSessionPatchResult(params: {
   canonicalKey: string;
   cfg: OpenClawConfig;
   entry: SessionEntry;
-  modelCatalogByAgent: ReadonlyMap<string, Promise<ModelCatalogEntry[]>>;
+  modelCatalog?: ModelCatalogEntry[];
   storePath: string;
   targetAgentId: string;
-}): Promise<SessionsPatchResult> {
+}): SessionsPatchResult {
   const agentId = resolveSessionAgentId({
     config: params.cfg,
     sessionKey: params.canonicalKey,
@@ -678,7 +690,7 @@ export async function projectSessionPatchResult(params: {
     provider: resolved.provider,
     model: resolved.model,
   });
-  const modelCatalog = await params.modelCatalogByAgent.get(params.targetAgentId);
+  const modelCatalog = params.modelCatalog;
   const thinking = resolveGatewaySessionThinkingProjectionInternal({
     cfg: params.cfg,
     agentId,

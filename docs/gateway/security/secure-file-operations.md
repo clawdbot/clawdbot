@@ -16,7 +16,7 @@ OpenClaw sets fs-safe's optional native helper to **off** by default:
 - the guarded JavaScript paths support OpenClaw's normal filesystem operations;
 - disabling native loading keeps runtime behavior deterministic across desktop, Docker, CI, and bundled-app environments.
 
-The OpenClaw package includes fs-safe's prebuilt native helpers for Linux x64/arm64 (glibc and musl), macOS x64/arm64, and Windows x64. No separate platform package, download, or compiler is needed. Loading these helpers remains optional.
+fs-safe publishes prebuilt native helpers as optional platform packages for Linux x64/arm64 (glibc and musl), macOS x64/arm64, and Windows x64. A normal package install selects the matching package without a compiler. OpenClaw loads it through fs-safe's own dependency scope, including nested pnpm installs. Installs that omit optional dependencies retain the guarded JavaScript path; `require` mode fails when the binding is unavailable.
 
 OpenClaw only changes the _default_. An explicit setting always wins:
 
@@ -24,7 +24,7 @@ OpenClaw only changes the _default_. An explicit setting always wins:
 # Default OpenClaw behavior: guarded JavaScript fs-safe paths.
 OPENCLAW_FS_SAFE_NATIVE_MODE=off
 
-# Prefer native primitives when the bundled platform helper loads.
+# Prefer native primitives when the installed platform helper loads.
 OPENCLAW_FS_SAFE_NATIVE_MODE=auto
 
 # Fail closed when an operation needs native support and the binding is unavailable.
@@ -33,7 +33,7 @@ OPENCLAW_FS_SAFE_NATIVE_MODE=require
 
 The generic fs-safe environment name also works: `FS_SAFE_NATIVE_MODE`.
 
-fs-safe 0.5 temporarily maps the retired `FS_SAFE_PYTHON_MODE` and `OPENCLAW_FS_SAFE_PYTHON_MODE` values to native modes and emits a deprecation warning. Migrate those names before fs-safe 0.6; Python interpreter path settings are no longer used.
+fs-safe still maps the retired `FS_SAFE_PYTHON_MODE` and `OPENCLAW_FS_SAFE_PYTHON_MODE` values to native modes with a deprecation warning. Replace them with `FS_SAFE_NATIVE_MODE` or `OPENCLAW_FS_SAFE_NATIVE_MODE`; Python interpreter path settings are no longer used.
 
 Use `require` (not `auto`) when native primitives are part of your security posture. `auto` uses the guarded JavaScript implementation when the platform binding is unavailable.
 
@@ -53,7 +53,7 @@ This covers OpenClaw's normal threat model: trusted gateway code handling untrus
 
 ## What native acceleration adds
 
-The bundled native helper provides policy-free filesystem primitives used by fs-safe for create-only writes, guarded hard-link publication, asynchronous sidecar creation, and explicit no-replace rename publication. Linux uses `openat2` and `renameat2`; macOS uses descriptor-relative component checks and `renameatx_np`; Windows uses handle-relative operations and replacement-disabled rename.
+The native helper provides policy-free filesystem primitives used by fs-safe for create-only writes, guarded hard-link publication, asynchronous sidecar creation, and explicit no-replace rename publication. Linux uses `openat2` and `renameat2`; macOS uses descriptor-relative component checks and `renameatx_np`; Windows uses handle-relative operations and replacement-disabled rename.
 
 The TypeScript layer still owns policy, validation, retries, cleanup, and fallback decisions. Native support narrows filesystem race windows; it does not turn fs-safe into a sandbox.
 
@@ -63,7 +63,7 @@ If your package deployment requires those native primitives, set:
 OPENCLAW_FS_SAFE_NATIVE_MODE=require
 ```
 
-In `require` mode, an unavailable or unloadable helper causes `helper-unavailable` instead of silently using the JavaScript path. Standalone portable worker bundles do not carry these native assets; their managed launch environment does not forward fs-safe mode overrides.
+In `require` mode, an unavailable or unloadable helper causes `helper-unavailable` instead of silently using the JavaScript path. Standalone sealed worker bundles have no dependency tree and explicitly disable native loading, even when the host sets a mode override.
 
 ## Plugin and core guidance
 
