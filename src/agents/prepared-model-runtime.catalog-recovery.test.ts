@@ -94,12 +94,12 @@ describe("prepared model runtime catalog recovery", () => {
       throw new Error("default prepared model runtime owner was not published");
     }
 
-    const originalResolve = PreparedModelRuntimeAuthPublicationOwner.prototype.resolve;
     let injectedMutation = false;
     const resolveSpy = vi
       .spyOn(PreparedModelRuntimeAuthPublicationOwner.prototype, "resolve")
-      .mockImplementation(function (...args) {
-        originalResolve.apply(this, args);
+      .mockImplementation(function (this: PreparedModelRuntimeAuthPublicationOwner, ...args) {
+        resolveSpy.mockRestore();
+        const resolved = this.resolve(...args);
         if (!injectedMutation) {
           injectedMutation = true;
           queueMicrotask(() => {
@@ -109,6 +109,7 @@ describe("prepared model runtime catalog recovery", () => {
             });
           });
         }
+        return resolved;
       });
 
     try {
