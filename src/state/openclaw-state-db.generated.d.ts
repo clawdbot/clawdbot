@@ -761,6 +761,12 @@ export interface GithubPublicationRequests {
   worktree_id: string;
 }
 
+export interface GithubPublicationSessionLifecycles {
+  lifecycle_revision: string | null;
+  publication_kind: string;
+  request_id: string;
+}
+
 export interface GithubRepositoryPublicationRequests {
   agent_id: string;
   base_branch: string | null;
@@ -798,6 +804,7 @@ export interface GithubRepositoryPublicationRequests {
   run_id: string | null;
   session_id: string;
   session_key: string;
+  session_lifecycle_revision: string | null;
   source_head_commit: string | null;
   source_index_tree: string | null;
   status: string;
@@ -1734,6 +1741,7 @@ export interface DB {
   gateway_restart_sentinel: GatewayRestartSentinel;
   github_personal_publication_requests: GithubPersonalPublicationRequests;
   github_publication_requests: GithubPublicationRequests;
+  github_publication_session_lifecycles: GithubPublicationSessionLifecycles;
   github_repository_publication_requests: GithubRepositoryPublicationRequests;
   macos_port_guardian_records: MacosPortGuardianRecords;
   managed_outgoing_image_records: ManagedOutgoingImageRecords;

@@ -8,6 +8,7 @@ import type {
 import { preparePersonalGitHubPublicationIdentity } from "../agents/github-tool-identity.js";
 import { acquireWorktreeRunLease } from "../agents/worktrees/run-lease.js";
 import { resolveSessionWorkStartError } from "../config/sessions/lifecycle.js";
+import { readGitHubPublicationSessionLifecycle } from "../state/github-publication-session-lifecycles.js";
 import { readUserGitHubConnection } from "../state/user-github-connections.js";
 import { requestCurrentPersonalGitHubRefresh } from "./github-oauth-lifecycle.js";
 import { personalGitHubStatus, type PersonalGitHubAction } from "./github-personal-oauth.js";
@@ -34,6 +35,7 @@ export type PersonalGitHubSessionAction = PersonalGitHubAction & {
   sessionId: string;
   sessionKey: string;
   agentId: string;
+  lifecycleRevision: string | null;
 };
 type Selection = { generation: string; account: { accountId: number; login: string } };
 
@@ -100,7 +102,7 @@ export function createPersonalGitHubPublicationCoordinator(
   const status = (
     row: PersonalGitHubPublicationRow,
     action: PersonalGitHubAction,
-    session: { sessionId: string },
+    session: { sessionId: string; lifecycleRevision?: string | null },
   ): SessionGitHubStatusResult => {
     // The instance ID alone is not liveness: admission can stop before it claims an execution.
     const executing =
@@ -112,8 +114,14 @@ export function createPersonalGitHubPublicationCoordinator(
       return projected;
     }
     const connection = personalGitHubStatus(action);
+    const lifecycle = readGitHubPublicationSessionLifecycle({
+      publicationKind: "personal",
+      requestId: row.request_id,
+    });
     const code =
-      row.session_id !== session.sessionId
+      row.session_id !== session.sessionId ||
+      !lifecycle ||
+      lifecycle.lifecycle_revision !== (session.lifecycleRevision ?? null)
         ? "session_changed"
         : connection.generation !== row.connection_generation ||
             connection.account?.accountId !== row.identity_account_id ||
@@ -343,14 +351,19 @@ export function createPersonalGitHubPublicationCoordinator(
         row.request_digest = personalGitHubRequestDigest(row);
         return await execute(
           action,
-          insertPersonalGitHubPublication(row, assertCurrent),
+          insertPersonalGitHubPublication(row, action.lifecycleRevision, assertCurrent),
           assertWorkspace,
         );
       });
     },
     personalStatus(
       action: PersonalGitHubAction,
-      session: { sessionKey: string; agentId: string; sessionId: string },
+      session: {
+        sessionKey: string;
+        agentId: string;
+        sessionId: string;
+        lifecycleRevision?: string | null;
+      },
       requestId: string,
     ) {
       action.assertCurrent();
@@ -362,7 +375,12 @@ export function createPersonalGitHubPublicationCoordinator(
     },
     personalPending(
       action: PersonalGitHubAction,
-      session: { sessionKey: string; agentId: string; sessionId: string },
+      session: {
+        sessionKey: string;
+        agentId: string;
+        sessionId: string;
+        lifecycleRevision?: string | null;
+      },
     ) {
       action.assertCurrent();
       const row = readPersonalGitHubPublication(action.owner, {
@@ -377,9 +395,15 @@ export function createPersonalGitHubPublicationCoordinator(
     ): Promise<SessionGitHubPublicationResult> {
       action.assertCurrent();
       const row = readPersonalGitHubPublication(action.owner, { requestId: input.requestId });
+      const lifecycle = readGitHubPublicationSessionLifecycle({
+        publicationKind: "personal",
+        requestId: input.requestId,
+      });
       if (
         !row ||
         row.session_id !== action.sessionId ||
+        (!(row.status === "published" || row.status === "failed") &&
+          (!lifecycle || lifecycle.lifecycle_revision !== action.lifecycleRevision)) ||
         row.request_digest !== input.requestDigest ||
         row.connection_generation !== input.generation ||
         row.identity_account_id !== input.account.accountId ||

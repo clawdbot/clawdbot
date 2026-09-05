@@ -53,15 +53,7 @@ export function createRepositoryGitHubPublicationRecovery(params: {
       const failures: Error[] = [];
       for (let row of listRepositoryGitHubPublications({ ownerProfileId: null, pending: true })) {
         try {
-          const owner = resolveReceiptOwner(row);
-          if (!owner) {
-            failStaleRepositoryGitHubPublication(row, () => Boolean(resolveReceiptOwner(row)));
-            continue;
-          }
           if (placements.get(row.session_id)?.turnClaim || params.isExecuting(row.request_id)) {
-            continue;
-          }
-          if (!row.checkpoint_ref && !owner.workspace.checkpointRef) {
             continue;
           }
           await placements.withRepositoryWorkspaceReservation(
@@ -69,6 +61,16 @@ export function createRepositoryGitHubPublicationRecovery(params: {
             async (assertCurrent) => {
               row = requireRepositoryGitHubPublication(row.request_id);
               if (terminalRepositoryGitHubPublication(row)) {
+                return;
+              }
+              // The execution holds this same exclusion until its awaited effect
+              // observation is recorded. Only then may recovery retire its authority.
+              const owner = resolveReceiptOwner(row);
+              if (!owner) {
+                failStaleRepositoryGitHubPublication(row, () => Boolean(resolveReceiptOwner(row)));
+                return;
+              }
+              if (!row.checkpoint_ref && !owner.workspace.checkpointRef) {
                 return;
               }
               if (!row.checkpoint_ref) {

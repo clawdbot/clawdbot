@@ -5,6 +5,7 @@ import {
   executeSqliteQueryTakeFirstSync,
   getNodeSqliteKysely,
 } from "../infra/kysely-sync.js";
+import { insertGitHubPublicationSessionLifecycle } from "../state/github-publication-session-lifecycles.js";
 import { ensurePersonalGitHubPublicationSchema } from "../state/openclaw-state-db-schema-additive.js";
 import { tableExists } from "../state/openclaw-state-db-schema-helpers.js";
 import type { DB } from "../state/openclaw-state-db.generated.js";
@@ -125,6 +126,7 @@ export function personalGitHubPublicationStatus(
 
 export function insertPersonalGitHubPublication(
   row: PersonalGitHubPublicationRow,
+  lifecycleRevision: string | null,
   assertCurrent: () => void,
 ): PersonalGitHubPublicationRow {
   return runOpenClawStateWriteTransaction(
@@ -133,6 +135,11 @@ export function insertPersonalGitHubPublication(
       assertOwner(row.owner_profile_id);
       ensurePersonalGitHubPublicationSchema(db);
       executeSqliteQuerySync(db, query(db).insertInto(table).values(row));
+      insertGitHubPublicationSessionLifecycle(db, {
+        publicationKind: "personal",
+        requestId: row.request_id,
+        lifecycleRevision,
+      });
       return row;
     },
     undefined,

@@ -38,7 +38,9 @@ export function createGitHubPublicationExecutionEffects<Row>(params: {
       }
       return write(
         { status: "failed", error_code: result.code, next_action: result.nextAction },
-        true,
+        // Closing the session stops actions, but its exact execution still records
+        // the terminal non-outcome after an already-dispatched effect is observed.
+        result.code !== "session_changed",
       );
     },
     recordEffect(

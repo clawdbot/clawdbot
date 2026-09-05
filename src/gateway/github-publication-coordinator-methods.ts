@@ -115,6 +115,7 @@ export function createGitHubPublicationCoordinatorMethods(params: {
         agentId: input.agentId,
       });
       const loaded = initialAuthority.loaded;
+      const lifecycleRevision = loaded.entry?.lifecycleRevision ?? null;
       const placement = params.placements.get(sessionId);
       const capturePlacement = placement
         ? {
@@ -125,6 +126,12 @@ export function createGitHubPublicationCoordinatorMethods(params: {
         : null;
       const assertCaptureAuthority = () => {
         input.assertCurrent?.();
+        resolveGitHubPublicationWorktreeOwner({
+          sessionId,
+          sessionKey: loaded.canonicalKey,
+          agentId: input.agentId,
+          lifecycleRevision,
+        });
         const current = params.placements.get(sessionId);
         const unchanged = capturePlacement
           ? current?.state === capturePlacement.state &&
@@ -228,6 +235,7 @@ export function createGitHubPublicationCoordinatorMethods(params: {
               identity,
               worktree,
               sessionId,
+              lifecycleRevision,
               snapshot,
             });
           },
@@ -240,6 +248,7 @@ export function createGitHubPublicationCoordinatorMethods(params: {
           sessionId,
           sessionKey: loaded.canonicalKey,
           agentId: input.agentId,
+          lifecycleRevision,
           expected: {
             worktreeId: worktree.id,
             repositoryFingerprint: worktree.repoFingerprint,

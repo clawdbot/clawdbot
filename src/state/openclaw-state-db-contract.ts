@@ -21,6 +21,7 @@ export const FIRST_USE_STATE_TABLES = [
   "update_runs",
   "session_repository_workspaces",
   "github_repository_publication_requests",
+  "github_publication_session_lifecycles",
   "skill_library_entries",
   "skill_library_revisions",
   "skill_library_events",

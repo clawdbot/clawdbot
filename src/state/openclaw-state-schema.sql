@@ -1965,6 +1965,7 @@ CREATE TABLE IF NOT EXISTS github_repository_publication_requests (
   idempotency_key TEXT NOT NULL,
   request_digest TEXT NOT NULL,
   session_id TEXT NOT NULL,
+  session_lifecycle_revision TEXT,
   session_key TEXT NOT NULL,
   agent_id TEXT NOT NULL,
   workspace_id TEXT NOT NULL,
@@ -2367,6 +2368,15 @@ CREATE INDEX IF NOT EXISTS idx_github_personal_publication_owner_session
   ON github_personal_publication_requests(owner_profile_id, session_id, created_at_ms);
 CREATE INDEX IF NOT EXISTS idx_github_personal_publication_pending
   ON github_personal_publication_requests(status, updated_at_ms, request_id);
+
+-- Older readers validate both local receipt tables exactly. Their immutable
+-- lifecycle binding stays in a first-use companion so those schemas remain readable.
+CREATE TABLE IF NOT EXISTS github_publication_session_lifecycles (
+  publication_kind TEXT NOT NULL CHECK (publication_kind IN ('shared', 'personal')),
+  request_id TEXT NOT NULL,
+  lifecycle_revision TEXT,
+  PRIMARY KEY (publication_kind, request_id)
+) STRICT;
 
 -- One active, opaque admission credential per worker environment. Plaintext
 -- may be retried until delivery acknowledgement but never enters durable state.

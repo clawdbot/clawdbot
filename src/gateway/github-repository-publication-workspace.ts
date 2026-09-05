@@ -1,6 +1,7 @@
 import type { SessionGitHubPublicationResult } from "../../packages/gateway-protocol/src/schema/session-github-publication.js";
 import { getSessionRepositoryWorkspaceStore } from "../state/session-repository-workspaces.js";
 import { resolveGitHubPublicationWorkspaceOwner } from "./github-publication-availability.js";
+import { GitHubPublicationSessionChangedError } from "./github-publication-failure.js";
 import { projectGitHubPublicationResult } from "./github-publication-store.js";
 import {
   readGitHubRepositoryPublicationMetadata,
@@ -17,6 +18,7 @@ export type RepositoryPublicationSessionIdentity = {
   sessionId: string;
   sessionKey: string;
   agentId: string;
+  lifecycleRevision?: string | null;
 };
 export type PreparedRepositoryPublicationSnapshot = {
   snapshot: GitHubRepositoryPublicationSnapshot;
@@ -38,6 +40,7 @@ export function resolveReceiptOwner(row: RepositoryGitHubPublicationRow) {
   const workspace = getSessionRepositoryWorkspaceStore().get(row.workspace_id);
   if (
     loaded.entry?.sessionId !== row.session_id ||
+    (loaded.entry.lifecycleRevision ?? null) !== row.session_lifecycle_revision ||
     loaded.canonicalKey !== row.session_key ||
     loaded.agentId !== row.agent_id ||
     loaded.entry.archivedAt !== undefined ||
@@ -56,7 +59,7 @@ export function resolveReceiptOwner(row: RepositoryGitHubPublicationRow) {
 export function assertReceiptOwner(row: RepositoryGitHubPublicationRow) {
   const owner = resolveReceiptOwner(row);
   if (!owner) {
-    throw new Error("GitHub publication session repository owner changed.");
+    throw new GitHubPublicationSessionChangedError();
   }
   return owner;
 }

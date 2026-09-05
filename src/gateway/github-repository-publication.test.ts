@@ -361,6 +361,79 @@ describe("repository checkpoint GitHub publication", () => {
     expect(f.runtime.effects).toEqual(["push"]);
   });
 
+  it.each(["shared", "personal"] as const)(
+    "records an in-flight %s push after reset before retiring publication authority",
+    async (source) => {
+      const f = await repositoryFixture();
+      const person = source === "personal" ? await createPersonalPublicationFixture() : undefined;
+      if (person) {
+        f.runtime.accountId = personalPublicationAccount.accountId;
+      }
+      const entered = createDeferredCore();
+      const release = createDeferredCore();
+      const transport = mocks.runCommand.getMockImplementation()!;
+      mocks.runCommand.mockImplementation(async (args: string[], options) => {
+        const result = await transport(args, options);
+        if (args.includes("graphql")) {
+          entered.resolve();
+          await release.promise;
+        }
+        return result;
+      });
+      const pending = person
+        ? person.coordinator.requestPersonalForSession(
+            {
+              sessionKey: SESSION_KEY,
+              idempotencyKey: "reset-during-push",
+              selection: {
+                source: "personal",
+                generation: person.generation,
+                account: personalPublicationAccount,
+              },
+            },
+            person.action,
+          )
+        : f.coordinator.requestForSession({
+            agentId: "main",
+            sessionKey: SESSION_KEY,
+            idempotencyKey: "reset-during-push",
+          });
+      try {
+        await entered.promise;
+        await f.closeSession("reset");
+        const recovering = createTestGitHubPublicationCoordinator({ placements: f.placements });
+        await recovering.resumeSessionRequests();
+        expect(listRepositoryGitHubPublications()[0]).toMatchObject({
+          status: "publishing",
+          last_effect: "push",
+          effect_state: "dispatched",
+        });
+      } finally {
+        release.resolve();
+      }
+      expect(await pending).toMatchObject({ status: "failed", code: "session_changed" });
+      expect(listRepositoryGitHubPublications()[0]).toMatchObject({
+        status: "failed",
+        error_code: "session_changed",
+        last_effect: "push",
+        effect_state: "observed",
+        pushed_head_commit: f.runtime.head,
+      });
+      expect(f.runtime.effects).toEqual(["push"]);
+      await f.capture("new session edit\n", "after-reset");
+      const next = await f.coordinator.requestForSession({
+        agentId: "main",
+        sessionKey: SESSION_KEY,
+        idempotencyKey: "new-after-reset",
+      });
+      expect(next.status).toBe("published");
+      expect(
+        listRepositoryGitHubPublications().find((row) => row.request_id === next.requestId)
+          ?.previous_head_commit,
+      ).toBe(f.casRequests[0]!.afterOid);
+    },
+  );
+
   it.each(["archive", "reset"] as const)(
     "retires a pending receipt after %s and continues a later session's publication",
     async (kind) => {
@@ -377,7 +450,25 @@ describe("repository checkpoint GitHub publication", () => {
         "retained-execution",
         () => {},
       );
-      stale.closeSession(kind);
+      await stale.closeSession(kind);
+      if (kind === "reset") {
+        await expect(
+          stale.coordinator.requestForSession({
+            agentId: "main",
+            sessionKey: SESSION_KEY,
+            idempotencyKey: "stale-before-recovery",
+          }),
+        ).rejects.toThrow("session lifecycle changed");
+      }
+      await stale.coordinator.resumeSessionRequests();
+      expect(readRepositoryGitHubPublication(first.requestId)).toMatchObject({
+        status: "failed",
+        error_code: "session_changed",
+        execution_id: null,
+      });
+      expect(retained.ownsExecution()).toBe(false);
+      expect(() => retained.recordEffect("push", { headCommit: stale.runtime.head! })).toThrow();
+      expect(stale.runtime.effects).toEqual(["push"]);
       const validSession = {
         sessionId: "valid-later-session",
         sessionKey: "agent:main:valid-later",
@@ -391,16 +482,8 @@ describe("repository checkpoint GitHub publication", () => {
       });
       expect(second.status).toBe("requested");
       await valid.coordinator.resumeSessionRequests();
-      expect(readRepositoryGitHubPublication(first.requestId)).toMatchObject({
-        status: "failed",
-        error_code: "session_changed",
-        execution_id: null,
-      });
-      expect(retained.ownsExecution()).toBe(false);
-      expect(() => retained.recordEffect("push", { headCommit: stale.runtime.head! })).toThrow();
       expect(readRepositoryGitHubPublication(second.requestId)?.status).toBe("published");
       expect(valid.runtime.effects).toEqual(["push", "pull_request"]);
-      expect(stale.runtime.effects).toEqual(["push"]);
     },
   );
 
@@ -735,57 +818,80 @@ describe("repository checkpoint GitHub publication", () => {
     },
   );
 
-  it("requires the same personal owner after restart and publishes its retained checkpoint after a later turn", async () => {
-    const f = await repositoryFixture();
-    const person = await createPersonalPublicationFixture();
-    f.runtime.accountId = personalPublicationAccount.accountId;
-    f.runtime.interruptPush = true;
-    const request = {
-      sessionKey: SESSION_KEY,
-      idempotencyKey: "personal",
-      selection: {
-        source: "personal",
-        generation: person.generation,
-        account: personalPublicationAccount,
-      },
-    };
-    const first = (await callPersonalPublicationRpc(person, "sessions.github.publish", request))[1];
-    expect(first.status).toBe("needs_confirmation");
-    const original = readRepositoryGitHubPublication(first.requestId)!;
-    expect(original.pushed_head_commit).toBeNull();
-    await f.capture("later unselected change\n", "later");
-    person.coordinator = createTestGitHubPublicationCoordinator({ placements: person.placements });
-    const pending = person.coordinator.personalStatus(
-      person.action,
-      person.action,
-      first.requestId,
-    );
-    expect(pending.confirmation?.workspaceTree).toBe(f.first.workspaceTree);
-    expect(() =>
-      person.coordinator.personalStatus(
-        { ...person.action, owner: person.otherOwner },
+  it.each(["turn", "reset"] as const)(
+    "requires the same personal owner after restart and a later %s",
+    async (boundary) => {
+      const f = await repositoryFixture();
+      const person = await createPersonalPublicationFixture();
+      f.runtime.accountId = personalPublicationAccount.accountId;
+      f.runtime.interruptPush = true;
+      const request = {
+        sessionKey: SESSION_KEY,
+        idempotencyKey: "personal",
+        selection: {
+          source: "personal",
+          generation: person.generation,
+          account: personalPublicationAccount,
+        },
+      };
+      const first = (
+        await callPersonalPublicationRpc(person, "sessions.github.publish", request)
+      )[1];
+      expect(first.status).toBe("needs_confirmation");
+      const original = readRepositoryGitHubPublication(first.requestId)!;
+      expect(original.pushed_head_commit).toBeNull();
+      await f.capture("later unselected change\n", "later");
+      person.coordinator = createTestGitHubPublicationCoordinator({
+        placements: person.placements,
+      });
+      const pending = person.coordinator.personalStatus(
+        person.action,
         person.action,
         first.requestId,
-      ),
-    ).toThrow();
-    const confirmed = await callPersonalPublicationRpc(person, "sessions.github.confirm", {
-      sessionKey: SESSION_KEY,
-      requestId: first.requestId,
-      generation: person.generation,
-      account: personalPublicationAccount,
-      requestDigest: pending.confirmation!.requestDigest,
-    });
-    expect(confirmed[0], JSON.stringify(confirmed[2])).toBe(true);
-    expect(confirmed[1]).toMatchObject({ status: "published", url });
-    expect(readRepositoryGitHubPublication(first.requestId)?.checkpoint_ref).toBe(
-      original.checkpoint_ref,
-    );
-    expect(readRepositoryGitHubPublication(first.requestId)?.pushed_head_commit).toBe(
-      f.runtime.head,
-    );
-    expect(f.runtime.effects).toEqual(["push", "pull_request"]);
-    expect(f.runtime.uploaded.size).toBe(1);
-  });
+      );
+      expect(pending.confirmation?.workspaceTree).toBe(f.first.workspaceTree);
+      expect(() =>
+        person.coordinator.personalStatus(
+          { ...person.action, owner: person.otherOwner },
+          person.action,
+          first.requestId,
+        ),
+      ).toThrow();
+      if (boundary === "reset") {
+        await f.closeSession("reset");
+        const status = await callPersonalPublicationRpc(person, "sessions.github.status", {
+          sessionKey: SESSION_KEY,
+          requestId: first.requestId,
+        });
+        expect(status[1]).toMatchObject({
+          result: { status: "failed", code: "session_changed" },
+          confirmation: null,
+        });
+      }
+      const confirmed = await callPersonalPublicationRpc(person, "sessions.github.confirm", {
+        sessionKey: SESSION_KEY,
+        requestId: first.requestId,
+        generation: person.generation,
+        account: personalPublicationAccount,
+        requestDigest: pending.confirmation!.requestDigest,
+      });
+      if (boundary === "reset") {
+        expect(confirmed[0]).toBe(false);
+        expect(f.runtime.effects).toEqual(["push"]);
+        return;
+      }
+      expect(confirmed[0], JSON.stringify(confirmed[2])).toBe(true);
+      expect(confirmed[1]).toMatchObject({ status: "published", url });
+      expect(readRepositoryGitHubPublication(first.requestId)?.checkpoint_ref).toBe(
+        original.checkpoint_ref,
+      );
+      expect(readRepositoryGitHubPublication(first.requestId)?.pushed_head_commit).toBe(
+        f.runtime.head,
+      );
+      expect(f.runtime.effects).toEqual(["push", "pull_request"]);
+      expect(f.runtime.uploaded.size).toBe(1);
+    },
+  );
 
   it("does not overwrite a branch changed after observation", async () => {
     const f = await repositoryFixture();

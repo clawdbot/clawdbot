@@ -60,6 +60,16 @@ export class GitHubPublicationWorkspaceChangedError extends GitHubPublicationKno
   }
 }
 
+export class GitHubPublicationSessionChangedError extends GitHubPublicationKnownFailure {
+  constructor() {
+    super("GitHub publication session lifecycle changed.", {
+      code: "session_changed",
+      nextAction:
+        "Review any recorded GitHub effects, then request publication from the current session.",
+    });
+  }
+}
+
 export function resolveGitHubPublicationFailure(error: unknown): PublicationFailure {
   if (error instanceof GitHubPublicationKnownFailure) {
     return error.failure;

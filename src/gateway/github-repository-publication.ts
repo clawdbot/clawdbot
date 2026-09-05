@@ -96,6 +96,7 @@ export function createRepositoryGitHubPublicationCoordinator(
     const mismatch =
       pending &&
       (row.session_id !== session.sessionId ||
+        row.session_lifecycle_revision !== (session.lifecycleRevision ?? null) ||
         connection?.generation !== row.connection_generation ||
         connection.account?.accountId !== row.identity_account_id ||
         connection.account.login.toLowerCase() !== row.identity_login.toLowerCase());
@@ -104,7 +105,11 @@ export function createRepositoryGitHubPublicationCoordinator(
         result: projectGitHubPublicationResult({
           ...row,
           status: "failed",
-          error_code: row.session_id !== session.sessionId ? "session_changed" : "identity_changed",
+          error_code:
+            row.session_id !== session.sessionId ||
+            row.session_lifecycle_revision !== (session.lifecycleRevision ?? null)
+              ? "session_changed"
+              : "identity_changed",
           next_action:
             "Review the original account and any recorded GitHub effects, then create a new publication for the current session.",
         }),
@@ -279,6 +284,7 @@ export function createRepositoryGitHubPublicationCoordinator(
       idempotency_key: input.request.idempotencyKey,
       request_digest: "",
       session_id: input.session.sessionId,
+      session_lifecycle_revision: input.session.lifecycleRevision ?? null,
       session_key: input.session.sessionKey,
       agent_id: input.session.agentId,
       workspace_id: input.workspace.workspaceId,
@@ -333,6 +339,7 @@ export function createRepositoryGitHubPublicationCoordinator(
     }
     const session = {
       sessionId: loaded.entry.sessionId,
+      lifecycleRevision: loaded.entry.lifecycleRevision ?? null,
       sessionKey: loaded.canonicalKey,
       agentId: input.agentId,
     };
@@ -638,6 +645,8 @@ export function createRepositoryGitHubPublicationCoordinator(
         !row ||
         row.owner_profile_id !== action.owner ||
         row.session_id !== action.sessionId ||
+        (!terminalRepositoryGitHubPublication(row) &&
+          row.session_lifecycle_revision !== action.lifecycleRevision) ||
         row.session_key !== action.sessionKey ||
         row.agent_id !== action.agentId ||
         row.request_digest !== input.requestDigest ||

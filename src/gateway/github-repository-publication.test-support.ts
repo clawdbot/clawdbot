@@ -4,6 +4,7 @@ import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 import { expect, type Mock } from "vitest";
+import { patchSessionEntryCore } from "../config/sessions/session-accessor.js";
 import { openOpenClawStateDatabase } from "../state/openclaw-state-db.js";
 import { getSessionRepositoryWorkspaceStore } from "../state/session-repository-workspaces.js";
 import {
@@ -12,6 +13,7 @@ import {
   commandResult,
   createTestGitHubPublicationCoordinator,
   githubPublicationTestMocks,
+  persistPublicationTestSession,
   root,
 } from "./github-publication.test-support.js";
 import { createWorkerSessionPlacementStore } from "./worker-environments/placement-store.js";
@@ -51,8 +53,6 @@ export async function createRepositoryPublicationFixture(
   const baseCommit = git(["commit-tree", baseTree], "fixture base\n");
   const sourceRef = typeof requestedRef === "string" ? requestedRef : requestedRef && baseCommit;
   const store = getSessionRepositoryWorkspaceStore();
-  let currentSessionId = session.sessionId;
-  let archivedAt: number | undefined;
   let workspace = store.create({
     agentId: "main",
     sessionKey: session.sessionKey,
@@ -76,12 +76,12 @@ export async function createRepositoryPublicationFixture(
     return {
       ...loaded,
       entry: {
-        sessionId: currentSessionId,
+        sessionId: session.sessionId,
         repositoryWorkspaceId: workspace.workspaceId,
-        archivedAt,
       },
     };
   });
+  const sessionOwner = await persistPublicationTestSession(session.sessionKey);
   const payloads = new Map<string, { publicationStagingRoot: string; publicationDigest: string }>();
   const capture = async (content: string | null, suffix: string) => {
     const bytes = Buffer.from(content ?? "");
@@ -311,11 +311,18 @@ export async function createRepositoryPublicationFixture(
     casRequests,
     workspace,
     placements,
-    closeSession: (kind: "archive" | "reset") => {
+    closeSession: async (kind: "archive" | "reset") => {
       if (kind === "archive") {
-        archivedAt = Date.now();
+        await patchSessionEntryCore(
+          {
+            agentId: "main",
+            sessionKey: session.sessionKey,
+            storePath: path.join(root, "sessions.json"),
+          },
+          () => ({ archivedAt: Date.now() }),
+        );
       } else {
-        currentSessionId = "reset-" + session.sessionId;
+        await sessionOwner.reset(placements);
       }
     },
     coordinator: createTestGitHubPublicationCoordinator({ placements }),

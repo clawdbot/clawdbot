@@ -7,7 +7,7 @@ import type { PreparedGitHubPublicationIdentity } from "../agents/github-tool-id
 import { resolveControlUiSessionUrl } from "../config/control-ui-link-base.js";
 import {
   currentGitHubPublicationConfig,
-  resolveGitHubPublicationWorktreeOwner,
+  resolveLocalGitHubPublicationWorktreeOwner,
 } from "./github-publication-availability.js";
 import {
   githubPublicationBaseFetchArgs,
@@ -105,17 +105,7 @@ export async function executeGitHubPublication<Row extends PublicationRow>(param
     return params.projectResult(initial);
   }
   let effectPending = false;
-  const currentWorktree = () =>
-    resolveGitHubPublicationWorktreeOwner({
-      sessionId: initial.session_id,
-      sessionKey: initial.session_key,
-      agentId: initial.agent_id,
-      expected: {
-        worktreeId: initial.worktree_id,
-        repositoryFingerprint: initial.repository_fingerprint,
-        branch: initial.branch,
-      },
-    });
+  const currentWorktree = () => resolveLocalGitHubPublicationWorktreeOwner(initial);
   const { assertCurrent: assertAuthority, refreshIdentity } =
     createGitHubPublicationExecutionIdentity({
       row: initial,

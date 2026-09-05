@@ -82,6 +82,18 @@ export function ensureRepositoryGitHubPublicationSchema(database: DatabaseSync):
   database.exec(OPENCLAW_STATE_SCHEMA_SQL.slice(start, end + marker.length)); // sqlite-allow-raw -- Canonical first-use DDL; publication rows use Kysely.
 }
 
+export function ensureGitHubPublicationSessionLifecycleSchema(database: DatabaseSync): void {
+  const start = OPENCLAW_STATE_SCHEMA_SQL.indexOf(
+    "CREATE TABLE IF NOT EXISTS github_publication_session_lifecycles (",
+  );
+  const marker = "\n) STRICT;";
+  const end = OPENCLAW_STATE_SCHEMA_SQL.indexOf(marker, start);
+  if (start < 0 || end < start) {
+    throw new Error("GitHub publication lifecycle schema marker is missing.");
+  }
+  database.exec(OPENCLAW_STATE_SCHEMA_SQL.slice(start, end + marker.length)); // sqlite-allow-raw -- Canonical first-use DDL; bindings use Kysely.
+}
+
 function secretStoreSchemaSql(): string {
   const start = OPENCLAW_STATE_SCHEMA_SQL.indexOf(SECRET_STORE_SCHEMA_START);
   const endMarkerStart = OPENCLAW_STATE_SCHEMA_SQL.indexOf(SECRET_STORE_SCHEMA_END, start);

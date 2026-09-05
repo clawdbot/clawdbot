@@ -110,6 +110,8 @@ Placement is disposable; the session is not. The transcript, the last-reconciled
 
 Repository-only checkpoint history remains until session deletion. While a worker runs, **Files** and diffs use its checkout. After Stop, changed-file previews remain available from the accepted checkpoint; editing, unchanged upstream files, and full diffs require restarting the worker. Publication can use an accepted Git-normalized checkpoint without a Gateway checkout. See [what survives a dead machine](/gateway/cloud-workers#what-survives-a-dead-machine).
 
+Reset keeps the repository and accepted changes but ends unfinished publication requests from the previous session lifecycle. Review the retained changes and request publication again after reset. Existing GitHub commits and pull requests remain unchanged.
+
 ## Related
 
 - [Cloud Workers](/gateway/cloud-workers) — profiles, dispatch, moves, security model

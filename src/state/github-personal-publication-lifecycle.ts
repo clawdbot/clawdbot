@@ -23,6 +23,27 @@ export function deletePersonalGitHubSessionReceipts(params: {
   }
   runOpenClawStateWriteTransaction(
     ({ db }) => {
+      if (
+        existing.includes("github_personal_publication_requests") &&
+        tableExists(db, "github_publication_session_lifecycles")
+      ) {
+        const query = getNodeSqliteKysely<DB>(db);
+        executeSqliteQuerySync(
+          db,
+          query
+            .deleteFrom("github_publication_session_lifecycles")
+            .where("publication_kind", "=", "personal")
+            .where(
+              "request_id",
+              "in",
+              query
+                .selectFrom("github_personal_publication_requests")
+                .select("request_id")
+                .where("agent_id", "=", params.agentId)
+                .where("session_key", "in", params.sessionKeys),
+            ),
+        );
+      }
       for (const table of existing) {
         executeSqliteQuerySync(
           db,

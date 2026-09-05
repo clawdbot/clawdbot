@@ -144,7 +144,7 @@ export function createGitHubPublicationCoordinator(params: {
     ) {
       throw new Error("GitHub publication session identity changed.");
     }
-    resolveGitHubPublicationWorktreeOwner({
+    const admitted = resolveGitHubPublicationWorktreeOwner({
       sessionId: request.claim.sessionId,
       sessionKey: request.sessionKey,
       agentId: request.agentId,
@@ -173,6 +173,7 @@ export function createGitHubPublicationCoordinator(params: {
       sessionId: request.claim.sessionId,
       sessionKey: request.sessionKey,
       agentId: request.agentId,
+      lifecycleRevision: admitted.loaded.entry?.lifecycleRevision ?? null,
     });
     const requestDigest = digestRequest({
       sessionId: request.claim.sessionId,
@@ -193,6 +194,7 @@ export function createGitHubPublicationCoordinator(params: {
           identity,
           worktree,
           sessionId: request.claim.sessionId,
+          lifecycleRevision: admitted.loaded.entry?.lifecycleRevision ?? null,
           claim: request.claim,
         });
         if (!sameClaim(stored, request.claim)) {

@@ -34,6 +34,7 @@ export function repositoryGitHubPublicationDigest(row: RepositoryGitHubPublicati
         row.connection_generation,
         row.idempotency_key,
         row.session_id,
+        row.session_lifecycle_revision,
         row.session_key,
         row.agent_id,
         row.workspace_id,
@@ -182,6 +183,7 @@ export function insertRepositoryGitHubPublication(
         (
           [
             "session_key",
+            "session_lifecycle_revision",
             "agent_id",
             "workspace_id",
             "owner_profile_id",
