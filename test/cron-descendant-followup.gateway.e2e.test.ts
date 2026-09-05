@@ -33,6 +33,7 @@ import {
 import { createDeferred } from "./helpers/promise.js";
 
 const MODEL_REF = "clock-step-proof/clock-step-proof";
+const MODEL_ID = "clock-step-proof";
 
 async function withProofTimeout<T>(label: string, promise: Promise<T>): Promise<T> {
   return await new Promise<T>((resolve, reject) => {
@@ -321,16 +322,20 @@ describe("cron descendant follow-up Gateway transport", () => {
       if (!provider || !instance || !client || !finalRun) {
         throw new Error("proof resources were not initialized");
       }
+      const activeProvider = provider;
+      const activeClient = client;
       const startedAt = performance.now();
       await withProofTimeout("agent accepted", accepted.promise);
-      await withProofTimeout("real child provider request", provider.childRequestSeen).catch(
+      await withProofTimeout("real child provider request", activeProvider.childRequestSeen).catch(
         (error) => {
-          throw new Error(`${String(error)}; provider requests=${provider.requestKinds.join(",")}`);
+          throw new Error(
+            `${String(error)}; provider requests=${activeProvider.requestKinds.join(",")}`,
+          );
         },
       );
       const childTasks = await vi.waitFor(
         async () => {
-          const tasks = await client.request<{ tasks: Array<Record<string, unknown>> }>(
+          const tasks = await activeClient.request<{ tasks: Array<Record<string, unknown>> }>(
             "tasks.list",
             { limit: 100 },
           );
@@ -379,13 +384,13 @@ describe("cron descendant follow-up Gateway transport", () => {
         followupMocks.readLatestAssistantReply.mockReset();
         followupMocks.callGateway.mockReset();
       }
-      provider.releaseChild();
+      activeProvider.releaseChild();
       await withProofTimeout("parent final", finalRun);
       await Promise.all(
         childTaskIds.map((taskId) =>
           withProofTimeout(
             "child task cancellation",
-            client.request("tasks.cancel", { taskId }),
+            activeClient.request("tasks.cancel", { taskId }),
           ).catch(() => undefined),
         ),
       );
@@ -395,12 +400,12 @@ describe("cron descendant follow-up Gateway transport", () => {
         `REAL_GATEWAY_DESCENDANT_BUDGET_PROOF ${JSON.stringify({
           transport: "local-gateway",
           productionLifecycle: "sessions_spawn -> registry -> Gateway child run",
-          providerRequests: provider.requestKinds,
+          providerRequests: activeProvider.requestKinds,
           elapsedMs: Math.round(elapsedMs),
         })}\n`,
       );
-      expect(provider.requestKinds).toContain("parent-tool");
-      expect(provider.requestKinds).toContain("child");
+      expect(activeProvider.requestKinds).toContain("parent-tool");
+      expect(activeProvider.requestKinds).toContain("child");
       expect(childTaskIds.length).toBeGreaterThan(0);
       expect(elapsedMs).toBeLessThan(5_000);
     } finally {
@@ -412,15 +417,16 @@ describe("cron descendant follow-up Gateway transport", () => {
         instance.state.restoreEnv();
       }
       if (client) {
+        const cleanupClient = client;
         await Promise.all(
           childTaskIds.map((taskId) =>
             withProofTimeout(
               "cleanup child task cancellation",
-              client.request("tasks.cancel", { taskId }),
+              cleanupClient.request("tasks.cancel", { taskId }),
             ).catch(() => undefined),
           ),
         );
-        await withProofTimeout("Gateway disconnect", disconnectGatewayClient(client)).catch(
+        await withProofTimeout("Gateway disconnect", disconnectGatewayClient(cleanupClient)).catch(
           () => undefined,
         );
       }
@@ -464,8 +470,8 @@ function createTestConfig(baseUrl: string): OpenClawConfig {
           request: { allowPrivateNetwork: true },
           models: [
             {
-              id: MODEL_REF.split("/")[1],
-              name: MODEL_REF.split("/")[1],
+              id: MODEL_ID,
+              name: MODEL_ID,
               api: "openai-responses",
               reasoning: false,
               input: ["text"],
