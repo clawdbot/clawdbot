@@ -536,9 +536,17 @@ describe("native OpenAI Responses WebSocket client integration", () => {
     expect(transportState.sdkRequests).toHaveLength(2);
   });
 
-  it.each(["previous_response_not_found", "websocket_connection_limit_reached"])(
-    "recovers a cached continuation rejected with %s over full-history SSE",
-    async (code) => {
+  it.each<{ code: string; param?: string; message?: string }>([
+    { code: "previous_response_not_found", param: "previous_response_id" },
+    { code: "websocket_connection_limit_reached" },
+    {
+      code: "unsupported_parameter",
+      param: "previous_response_id",
+      message: "Previous response cannot be used for this organization due to Zero Data Retention.",
+    },
+  ])(
+    "recovers a cached continuation rejected with $code over full-history SSE",
+    async ({ code, param, message: rejection }) => {
       transportState.responseBatches.push(
         [message(completedEvent("resp_1", "first answer"))],
         [
@@ -546,8 +554,8 @@ describe("native OpenAI Responses WebSocket client integration", () => {
             type: "error",
             error: wrappedSdkServerError({
               code,
-              message: `safe rejection: ${code}`,
-              param: code === "previous_response_not_found" ? "previous_response_id" : undefined,
+              message: rejection ?? `safe rejection: ${code}`,
+              param,
               status: 400,
             }),
           },

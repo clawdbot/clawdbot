@@ -89,6 +89,17 @@ function readWebSocketServerError(value: unknown) {
   };
 }
 
+// A continuation reference the server refuses to honor: the response expired or never
+// existed (`previous_response_not_found`), or the organization cannot reference stored
+// responses at all (Zero Data Retention rejects the `previous_response_id` parameter).
+// Both reject before any output is accepted, so the turn resends full history instead.
+export function isPreviousResponseRejection(error: { code?: unknown; param?: unknown }): boolean {
+  return (
+    error.code === "previous_response_not_found" ||
+    (error.code === "unsupported_parameter" && error.param === "previous_response_id")
+  );
+}
+
 export function parseOpenAIResponsesWebSocketServerError(cause: unknown) {
   if (!isRecord(cause)) {
     return undefined;
@@ -103,7 +114,7 @@ export function parseOpenAIResponsesWebSocketServerError(cause: unknown) {
     return undefined;
   }
   const ErrorClass =
-    details.code === "previous_response_not_found" ||
+    isPreviousResponseRejection(details) ||
     details.code === "websocket_connection_limit_reached" ||
     details.code === "invalid_encrypted_content" ||
     details.code === "thinking_signature_invalid"
