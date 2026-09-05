@@ -240,6 +240,7 @@
 
 .chat-tool-msg-summary__names,
 .chat-tool-msg-summary__preview,
+.chat-progress-card-receipt__text,
 .chat-subagent-activity__snippet {
   min-width: 0;
   overflow: hidden;
