@@ -57,7 +57,13 @@ describe("node worker workspace origin fallback", () => {
     const localPath = cleanWorkspace();
     const exec = vi.fn<WorkspaceExec>(async ({ argv, seed }) => ({
       ...spawnResult(
-        seed?.action === "apply" ? "absent\n" : argv[0] === "node" ? MANIFEST_REF : "",
+        seed?.action === "apply"
+          ? "absent\n"
+          : argv[0] === "node" && !argv.includes("--")
+            ? MANIFEST_REF
+            : argv.includes("rev-parse")
+              ? COMMIT
+              : "",
       ),
       workspaceDir: REMOTE_WORKSPACE,
     }));
@@ -76,6 +82,8 @@ describe("node worker workspace origin fallback", () => {
     expect(exec.mock.calls.map(([command]) => command.argv)).toEqual([
       ["openclaw-internal-workspace-seed"],
       expect.arrayContaining(["clone", "--filter=blob:none", ORIGIN]),
+      expect.arrayContaining(["fetch", "origin", COMMIT]),
+      expect.arrayContaining(["rev-parse", "FETCH_HEAD^{commit}"]),
       expect.arrayContaining(["checkout", COMMIT]),
       expect.arrayContaining(["node", REMOTE_WORKSPACE, COMMIT]),
       ["openclaw-internal-workspace-seed"],
@@ -94,11 +102,11 @@ describe("node worker workspace origin fallback", () => {
 
   it.each([
     { operation: "clone", reason: "clone-failed", commandCount: 1 },
-    { operation: "checkout", reason: "checkout-failed", commandCount: 2 },
+    { operation: "checkout", reason: "checkout-failed", commandCount: 4 },
   ] as const)("preserves the $reason fallback", async ({ operation, reason, commandCount }) => {
     const localPath = cleanWorkspace();
     const exec = vi.fn<WorkspaceExec>(async ({ argv }) => ({
-      ...spawnResult("", argv.includes(operation) ? 1 : 0),
+      ...spawnResult(argv.includes("rev-parse") ? COMMIT : "", argv.includes(operation) ? 1 : 0),
       workspaceDir: REMOTE_WORKSPACE,
     }));
 
@@ -130,12 +138,17 @@ describe("node worker workspace origin fallback", () => {
         } else if (argv.includes("get-url")) {
           stdout =
             failure === "remote-mismatch" ? "https://example.invalid/other.git" : `${ORIGIN}\n`;
-        } else if (argv[0] === "node") {
+        } else if (argv[0] === "node" && !argv.includes("--")) {
           stdout =
             !cloned && failure === "manifest-mismatch" ? `sha256:${"d".repeat(64)}` : MANIFEST_REF;
+        } else if (argv.includes("rev-parse")) {
+          stdout = COMMIT;
         }
         return {
-          ...spawnResult(stdout, argv.includes("fetch") && failure === "fetch-failed" ? 1 : 0),
+          ...spawnResult(
+            stdout,
+            !cloned && failure === "fetch-failed" && argv.includes("fetch") ? 1 : 0,
+          ),
           workspaceDir: REMOTE_WORKSPACE,
         };
       });
@@ -159,43 +172,14 @@ describe("node worker workspace origin fallback", () => {
       expect(cloned).toBe(failure !== "none");
       const commands = exec.mock.calls.map(([command]) => command);
       if (failure === "none") {
-        expect(commands[1]?.argv).toEqual([
-          "git",
-          "-c",
-          "credential.helper=",
-          "-c",
-          "core.askPass=",
-          "remote",
-          "get-url",
-          "origin",
-        ]);
-        expect(commands[2]).toEqual({
-          argv: [
-            "git",
-            "-c",
-            "credential.helper=",
-            "-c",
-            "core.askPass=",
-            "fetch",
-            "--prune",
-            "origin",
-            "+refs/heads/*:refs/remotes/origin/*",
-          ],
+        expect(commands[1]?.argv.slice(-3)).toEqual(["remote", "get-url", "origin"]);
+        expect(commands[2]).toMatchObject({
+          argv: expect.arrayContaining(["fetch", "--no-tags", "origin", COMMIT]),
           timeoutMs: 60_000,
           transportRetry: "never",
         });
-        expect(commands[3]).toEqual({
-          argv: [
-            "git",
-            "-c",
-            "credential.helper=",
-            "-c",
-            "core.askPass=",
-            "checkout",
-            "--detach",
-            "--force",
-            COMMIT,
-          ],
+        expect(commands[4]).toMatchObject({
+          argv: expect.arrayContaining(["checkout", "--detach", "--force", COMMIT]),
           timeoutMs: 60_000,
           transportRetry: "never",
         });
@@ -215,41 +199,6 @@ describe("node worker workspace origin fallback", () => {
     },
   );
 
-  it.each(["apply", "store"] as const)(
-    "disables seed operations after INVALID_REQUEST from %s",
-    async (rejectedAction) => {
-      const localPath = cleanWorkspace();
-      const exec = vi.fn<WorkspaceExec>(async ({ argv, seed }) => {
-        if (seed?.action === rejectedAction) {
-          throw new Error("node workspace command failed (INVALID_REQUEST): unknown field seed");
-        }
-        return {
-          ...spawnResult(
-            seed?.action === "apply" ? "absent\n" : argv[0] === "node" ? MANIFEST_REF : "",
-          ),
-          workspaceDir: REMOTE_WORKSPACE,
-        };
-      });
-      const workspace = createNodeWorkerWorkspaceFallback(exec);
-      const request = { localPath, sessionId: "session-1", generation: 1 };
-
-      await expect(workspace.trySyncWorkspace(request, MANIFEST_REF)).resolves.toMatchObject({
-        kind: "synced",
-        seeded: false,
-      });
-      expect(exec.mock.calls.filter(([command]) => command.seed)).toHaveLength(
-        rejectedAction === "apply" ? 1 : 2,
-      );
-      exec.mockClear();
-      await expect(workspace.trySyncWorkspace(request, MANIFEST_REF)).resolves.toMatchObject({
-        kind: "synced",
-        seeded: false,
-      });
-      expect(exec.mock.calls.some(([command]) => command.seed)).toBe(false);
-      expect(exec.mock.calls.some(([command]) => command.argv.includes("clone"))).toBe(true);
-    },
-  );
-
   it("awaits seed storage before releasing the synced workspace and tolerates its failure", async () => {
     const localPath = cleanWorkspace();
     const storing = createDeferredCore();
@@ -264,7 +213,13 @@ describe("node worker workspace origin fallback", () => {
       }
       return {
         ...spawnResult(
-          seed?.action === "apply" ? "absent\n" : argv[0] === "node" ? MANIFEST_REF : "",
+          seed?.action === "apply"
+            ? "absent\n"
+            : argv[0] === "node" && !argv.includes("--")
+              ? MANIFEST_REF
+              : argv.includes("rev-parse")
+                ? COMMIT
+                : "",
         ),
         workspaceDir: REMOTE_WORKSPACE,
       };

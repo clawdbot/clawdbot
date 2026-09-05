@@ -139,6 +139,25 @@ export function createPlacementTurnClaimOps(runtime: PlacementStoreRuntime) {
       owner,
     };
   };
+  const claimWorkspaceResult = (
+    input: WorkerTurnClaimInput,
+    purpose: "reclaim" | "mutation",
+  ): WorkerSessionTurnClaim =>
+    write((db) => {
+      if (purpose === "mutation" && getRequired(db, input.sessionId).state !== "active") {
+        throw new Error(
+          `Session ${input.sessionId} workspace mutation requires an active placement`,
+        );
+      }
+      const updatedAtMs = now();
+      const claim = claimTurnInDatabase(db, input, updatedAtMs, {
+        allowDraining: purpose === "reclaim",
+      });
+      // Mutation admission and its recovery custody must commit together: an
+      // interrupted remote operation cannot leave unowned workspace changes.
+      insertWorkerWorkspacePendingResult(db, claim, updatedAtMs, instanceId);
+      return claim;
+    });
 
   return {
     claimTurn(input: WorkerTurnClaimInput): WorkerSessionTurnClaim {
@@ -149,14 +168,13 @@ export function createPlacementTurnClaimOps(runtime: PlacementStoreRuntime) {
       if (input.claimId !== input.runId || !input.claimId.startsWith("reclaim-")) {
         throw new Error(`Session ${input.sessionId} workspace result is not owned by reclaim`);
       }
-      // Admission and its recovery fence are inseparable. A crash after this
-      // transaction leaves startup recovery enough state to finish or abandon it.
-      return write((db) => {
-        const updatedAtMs = now();
-        const claim = claimTurnInDatabase(db, input, updatedAtMs, { allowDraining: true });
-        insertWorkerWorkspacePendingResult(db, claim, updatedAtMs, instanceId);
-        return claim;
-      });
+      return claimWorkspaceResult(input, "reclaim");
+    },
+
+    claimWorkspaceMutationResult(
+      input: Omit<WorkerTurnClaimInput, "runId">,
+    ): WorkerSessionTurnClaim {
+      return claimWorkspaceResult({ ...input, runId: input.claimId }, "mutation");
     },
 
     ...createPlacementSessionToolOperationOps(runtime),

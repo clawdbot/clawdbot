@@ -1,5 +1,13 @@
 import { describe, expect, it } from "vitest";
-import { parseNodeWorkerWorkspaceExecInput } from "./node-workspace-protocol.js";
+import {
+  NODE_WORKSPACE_DRAIN_COMMAND,
+  parseNodeWorkerWorkspaceExecInput,
+  parseNodeWorkerWorkspaceExecResult,
+} from "./node-workspace-protocol.js";
+import {
+  WORKSPACE_INSPECTION_COMMAND,
+  WORKSPACE_INSPECTION_MAX_BYTES,
+} from "./workspace-inspection-protocol.js";
 
 const request = {
   gatewayNamespace: "gateway-1",
@@ -9,6 +17,22 @@ const request = {
   argv: ["openclaw-internal-workspace-seed"],
 };
 const key = "a".repeat(64);
+
+it("admits workspace drain only without a mutation payload", () => {
+  const drain = { ...request, argv: [NODE_WORKSPACE_DRAIN_COMMAND] };
+  expect(parseNodeWorkerWorkspaceExecInput(JSON.stringify(drain))).toEqual(drain);
+  for (const mutation of [
+    { argv: [NODE_WORKSPACE_DRAIN_COMMAND, "extra"] },
+    { input: "payload" },
+    { resetWorkspace: true },
+    { seed: { action: "apply", key } },
+    { transfer: { direction: "download", token: "token", manifestRef: `sha256:${key}` } },
+  ]) {
+    expect(() =>
+      parseNodeWorkerWorkspaceExecInput(JSON.stringify({ ...drain, ...mutation })),
+    ).toThrow("workspace drain owns its operation");
+  }
+});
 
 describe("node workspace seed protocol", () => {
   const download = {
@@ -71,4 +95,46 @@ describe("node workspace seed protocol", () => {
       parseNodeWorkerWorkspaceExecInput(JSON.stringify({ ...request, ...invalid })),
     ).toThrow("INVALID_REQUEST:");
   });
+});
+
+it("allows larger bounded inspection payloads without widening ordinary command limits", () => {
+  const input = "x".repeat(192 * 1024);
+  const argv = [WORKSPACE_INSPECTION_COMMAND];
+  expect(parseNodeWorkerWorkspaceExecInput(JSON.stringify({ ...request, argv, input })).input).toBe(
+    input,
+  );
+  expect(() => parseNodeWorkerWorkspaceExecInput(JSON.stringify({ ...request, input }))).toThrow(
+    "bound",
+  );
+  const result = {
+    workspaceDir: "/workspace",
+    stdout: input,
+    stderr: "",
+    code: 0,
+    signal: null,
+    killed: false,
+    termination: "exit",
+  };
+  expect(parseNodeWorkerWorkspaceExecResult(result, argv)?.stdout).toBe(input);
+  expect(parseNodeWorkerWorkspaceExecResult(result)).toBeNull();
+  expect(
+    parseNodeWorkerWorkspaceExecResult(
+      { ...result, stdout: "x".repeat(WORKSPACE_INSPECTION_MAX_BYTES + 1) },
+      argv,
+    ),
+  ).toBeNull();
+});
+
+it.each([
+  { argv: [WORKSPACE_INSPECTION_COMMAND, "extra"] },
+  { argv: [WORKSPACE_INSPECTION_COMMAND], resetWorkspace: false },
+  { argv: [WORKSPACE_INSPECTION_COMMAND], seed: { action: "apply", key } },
+  {
+    argv: [WORKSPACE_INSPECTION_COMMAND],
+    transfer: { direction: "upload", token: "token", baseManifestRef: `sha256:${key}` },
+  },
+])("rejects mixed inspection authority %#", (fields) => {
+  expect(() =>
+    parseNodeWorkerWorkspaceExecInput(JSON.stringify({ ...request, ...fields })),
+  ).toThrow("inspection owns its operation");
 });

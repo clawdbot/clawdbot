@@ -43,9 +43,16 @@ export const ProjectRecentFolderSchema = closedObject({
   execNode: Type.Optional(NonEmptyString),
 });
 
+export const ProjectRecentRepositorySchema = closedObject({
+  kind: Type.Literal("repository"),
+  url: Type.String({ minLength: 1, maxLength: 2048 }),
+  displayName: NonEmptyString,
+});
+
 export const ProjectRecentSchema = Type.Union([
   ProjectRecentProjectSchema,
   ProjectRecentFolderSchema,
+  ProjectRecentRepositorySchema,
 ]);
 
 /** One gateway-visible checkout for an observed repository project. */

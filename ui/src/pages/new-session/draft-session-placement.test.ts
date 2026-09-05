@@ -71,4 +71,24 @@ describe("new-session placement target", () => {
       },
     });
   });
+
+  it("restores repository and ref from a creating recovery without a Gateway folder", () => {
+    const repository = { url: "https://github.com/openclaw/openclaw.git", ref: "release/next" };
+    expect(
+      projectDraftSessionPlacementRecovery({
+        sessionKey: "agent:main:cloud",
+        messageId: "message-cloud",
+        message: "Run remotely",
+        target: { kind: "profile", profileId: "cloud" },
+        agentId: "main",
+        gatewayUrl: "ws://gateway.example",
+        recoveryScope: "principal-a",
+        phase: "creating",
+        createParams: { key: "agent:main:cloud", agentId: "main", message: "", repository },
+      }),
+    ).toMatchObject({
+      placement: { repository, cwd: undefined },
+      draft: { message: "Run remotely" },
+    });
+  });
 });

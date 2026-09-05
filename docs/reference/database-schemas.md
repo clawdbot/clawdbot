@@ -20,6 +20,18 @@ OpenClaw stores control-plane state in a global SQLite database and agent data i
 
 The task registry uses the global control-plane database. Runtime trajectory events live with their sessions in the per-agent database or a configured shared session SQLite store.
 
+### Cloud repository workspaces
+
+Repository-only [cloud sessions](/gateway/cloud-workers#dispatching-a-session) use the first-use `session_repository_workspaces` table in the shared state database. The existing session entry carries only `repositoryWorkspaceId`; the shared row owns the canonical agent/session key, repository URL, requested ref, session branch, setup intent, pinned base commit and manifest, accepted checkpoint pointer, and revision. Session reset preserves this owner; a fork receives a distinct owner.
+
+`github_repository_publication_requests` records shared and personal publication against an immutable accepted checkpoint. Personal requests retain the selected profile and connection generation and require same-owner confirmation after an interrupted publication. Pending publication keeps its original source even after an explicit move materializes a Gateway worktree.
+
+Both tables are additive, lazily ensured on first use, and leave the numeric database schema version unchanged. That is not a compatibility promise for older cloud-session implementations: run a build that understands repository-only sessions when using this state. Existing local managed-worktree sessions keep their existing representation.
+
+Checkpoint Git artifacts live under `state/repository-workspaces/<workspace-id>.git`, next to the shared database. These are bare repositories containing complete file manifests, cumulative changed-file blobs, and publication snapshots; they are not working checkouts or a backup of upstream Git history. Restoring an entire checkout still requires access to the pinned upstream commit. Back up these artifacts together with the shared and per-agent databases.
+
+Accepted checkpoint history and publication source artifacts remain until explicit session deletion, including after Stop, archive, reset, or Gateway restart. There is no timed checkpoint expiry. Deletion retires publication requests and source ownership before removing their artifact repository; failed cleanup is reported. The managed-worktree idle cleanup and snapshot retention rules do not apply to these checkpoints.
+
 ### Meeting transcript tables
 
 Meeting captures use three `STRICT` tables in the shared

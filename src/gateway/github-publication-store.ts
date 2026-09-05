@@ -126,7 +126,14 @@ export function claimGitHubPublicationExecution(
 }
 
 export function matchesGitHubPublicationIdentityRow(
-  row: GitHubPublicationExecutionRow,
+  row: Pick<
+    GitHubPublicationExecutionRow,
+    | "agent_id"
+    | "identity_source"
+    | "identity_profile_id"
+    | "identity_account_id"
+    | "identity_login"
+  >,
   identity: Pick<PreparedGitHubPublicationIdentity, "source" | "profileId" | "account">,
 ): boolean {
   return (
@@ -392,7 +399,22 @@ export function digestGitHubPublicationRequest(params: {
 }
 
 export function projectGitHubPublicationResult(
-  row: GitHubPublicationExecutionRow,
+  row: Pick<
+    GitHubPublicationExecutionRow,
+    | "request_id"
+    | "identity_source"
+    | "identity_account_id"
+    | "identity_login"
+    | "status"
+    | "head_commit"
+    | "pull_request_url"
+    | "repository"
+    | "branch"
+    | "error_code"
+    | "next_action"
+    | "last_effect"
+    | "effect_state"
+  >,
 ): SessionGitHubPublicationResult {
   const effect: Pick<SessionGitHubPublicationResult, "effect"> =
     (row.last_effect === "push" || row.last_effect === "pull_request") &&

@@ -15,7 +15,10 @@ import type {
   NodeWorkerSupervisorNodeProof,
   NodeWorkerSupervisorTransport,
 } from "../node-registry-private.js";
-import type { WorkerSessionPlacementStore } from "./placement-store.js";
+import type {
+  WorkerSessionPlacementRecord,
+  WorkerSessionPlacementStore,
+} from "./placement-store.js";
 import type { WorkerEnvironmentService } from "./service.js";
 import { listRetainedWorkerBundleHashes } from "./worker-bundle-retention.js";
 
@@ -26,6 +29,7 @@ type NodeWorkspaceRetainCoordinatorOptions = {
   gatewayNamespace: string;
   placements: Pick<WorkerSessionPlacementStore, "list" | "listPendingWorkspaceResults">;
   environments: Pick<WorkerEnvironmentService, "list">;
+  additionalManifestRefs?: (placement: WorkerSessionPlacementRecord) => readonly string[];
   warn: (message: string) => void;
 };
 
@@ -103,7 +107,12 @@ function snapshotEntriesForNode(
         placement.environmentId === environment.environmentId &&
         placement.workspaceBaseManifestRef &&
         (placement.activeOwnerEpoch === environment.ownerEpoch || placement.state === "starting")
-          ? [placement.workspaceBaseManifestRef]
+          ? [
+              ...new Set([
+                placement.workspaceBaseManifestRef,
+                ...(options.additionalManifestRefs?.(placement) ?? []),
+              ]),
+            ].toSorted()
           : null;
       return [
         {

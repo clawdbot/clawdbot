@@ -99,7 +99,7 @@ it.each(["host", "writable sandbox", "cloud"])(
             timeoutMs: 10_000,
           },
           history: [],
-          localWorkspaceDir: cwd,
+          workspace: { kind: "local", path: cwd },
           remoteWorkspaceDir: remote,
           isAuthorized: () => true,
           signal: new AbortController().signal,

@@ -7,6 +7,7 @@ import {
 import { managedWorktrees } from "../agents/worktrees/service.js";
 import { getRuntimeConfig } from "../config/config.js";
 import { getActiveSecretsRuntimeConfigSnapshot } from "../secrets/runtime-state.js";
+import { getSessionRepositoryWorkspaceStore } from "../state/session-repository-workspaces.js";
 import { requestCurrentGitHubOAuthRefresh } from "./github-oauth-lifecycle.js";
 import {
   GitHubPublicationWorkspaceChangedError,
@@ -106,6 +107,46 @@ export function resolveGitHubPublicationWorktreeOwner(params: {
   return { loaded, worktree };
 }
 
+export function resolveGitHubPublicationWorkspaceOwner(params: {
+  sessionId: string;
+  sessionKey: string;
+  agentId: string;
+}) {
+  const loaded = loadGatewaySessionEntryReadOnly(params.sessionKey, { agentId: params.agentId });
+  const workspaceId = loaded.entry?.repositoryWorkspaceId;
+  if (!workspaceId) {
+    return { kind: "worktree" as const, ...resolveGitHubPublicationWorktreeOwner(params) };
+  }
+  const workspace = getSessionRepositoryWorkspaceStore().get(workspaceId);
+  if (
+    loaded.agentId !== params.agentId ||
+    loaded.canonicalKey !== params.sessionKey ||
+    loaded.entry?.sessionId !== params.sessionId ||
+    loaded.entry.archivedAt !== undefined ||
+    !workspace ||
+    workspace.agentId !== params.agentId ||
+    workspace.sessionKey !== params.sessionKey
+  ) {
+    throw new Error("GitHub publication session repository owner changed.");
+  }
+  return { kind: "repository" as const, loaded, workspace };
+}
+
+export function sameGitHubPublicationWorkspace(
+  first: ReturnType<typeof resolveGitHubPublicationWorkspaceOwner>,
+  current: ReturnType<typeof resolveGitHubPublicationWorkspaceOwner>,
+): boolean {
+  return first.kind === "repository"
+    ? current.kind === "repository" &&
+        current.workspace.workspaceId === first.workspace.workspaceId &&
+        current.workspace.url === first.workspace.url &&
+        current.workspace.branch === first.workspace.branch
+    : current.kind === "worktree" &&
+        current.worktree.id === first.worktree.id &&
+        current.worktree.repoFingerprint === first.worktree.repoFingerprint &&
+        current.worktree.branch === first.worktree.branch;
+}
+
 export async function prepareGitHubPublicationAvailability(params: {
   sessionId: string;
   sessionKey: string;
@@ -116,13 +157,15 @@ export async function prepareGitHubPublicationAvailability(params: {
     if (params.assertCurrent?.() === false) {
       return false;
     }
-    resolveGitHubPublicationWorktreeOwner(params);
+    const initial = resolveGitHubPublicationWorkspaceOwner(params);
     const identity = await prepareCurrentGitHubPublicationIdentity(params.agentId);
     if (params.assertCurrent?.() === false) {
       return false;
     }
-    resolveGitHubPublicationWorktreeOwner(params);
-    return matchesCurrentGitHubPublicationIdentity({ agentId: params.agentId, identity });
+    return (
+      sameGitHubPublicationWorkspace(initial, resolveGitHubPublicationWorkspaceOwner(params)) &&
+      matchesCurrentGitHubPublicationIdentity({ agentId: params.agentId, identity })
+    );
   } catch {
     return false;
   }

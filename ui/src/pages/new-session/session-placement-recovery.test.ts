@@ -368,7 +368,10 @@ describe("session placement recovery", () => {
     ).toEqual(attachmentRecovery);
   });
 
-  it("requires matching create parameters for a creating recovery", () => {
+  it.each([
+    { projectId: "openclaw", worktree: true as const },
+    { repository: { url: "https://github.com/openclaw/openclaw.git", ref: "release/next" } },
+  ])("requires matching create parameters for a creating recovery: %j", (workspace) => {
     const creating = {
       ...recovery,
       phase: "creating" as const,
@@ -377,7 +380,6 @@ describe("session placement recovery", () => {
         agentId: "cloud",
         message: "" as const,
         category: "Client work",
-        projectId: "openclaw",
         thinkingLevel: "high",
         toolOverrides: {
           mcpServers: { github: false },
@@ -385,7 +387,7 @@ describe("session placement recovery", () => {
           webSearch: false,
         },
         visibility: "draft" as const,
-        worktree: true as const,
+        ...workspace,
       },
     };
     expect(writeSessionPlacementRecovery(creating)).toBe(true);
@@ -414,6 +416,19 @@ describe("session placement recovery", () => {
     { name: "an empty project id", value: { projectId: "" } },
     { name: "a non-string project id", value: { projectId: 42 } },
     { name: "a project id with a cwd", value: { projectId: "openclaw", cwd: "/tmp/repo" } },
+    {
+      name: "a repository with a Gateway worktree",
+      value: { repository: { url: "https://github.com/openclaw/openclaw.git" } },
+    },
+    { name: "an invalid repository", value: { worktree: undefined, repository: { url: "" } } },
+    {
+      name: "a repository with a local path",
+      value: {
+        worktree: undefined,
+        repository: { url: "https://github.com/openclaw/openclaw.git" },
+        cwd: "/gateway/repo",
+      },
+    },
     {
       name: "a project id with an exec node",
       value: { projectId: "openclaw", execNode: "macbook" },

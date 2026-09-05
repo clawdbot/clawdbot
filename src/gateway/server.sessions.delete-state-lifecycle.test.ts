@@ -1,3 +1,5 @@
+import fs from "node:fs/promises";
+import path from "node:path";
 import { afterEach, expect, test, vi } from "vitest";
 import { SqliteBoardStore } from "../boards/sqlite-board-store.js";
 import {
@@ -11,6 +13,7 @@ import { replaceTranscriptEvents } from "../config/sessions/session-accessor.sql
 import { resolveSqliteTargetFromSessionStorePath } from "../config/sessions/session-sqlite-target.js";
 import { closeOpenClawAgentDatabasesForTest } from "../state/openclaw-agent-db.js";
 import { closeOpenClawStateDatabaseForTest } from "../state/openclaw-state-db.js";
+import { getSessionRepositoryWorkspaceStore } from "../state/session-repository-workspaces.js";
 import { loadGatewayWorkerEnvironmentStartupState } from "./server-worker-environment-startup.js";
 import { testState, writeSessionStore } from "./test-helpers.js";
 import {
@@ -39,6 +42,62 @@ afterEach(() => {
   vi.restoreAllMocks();
   closeOpenClawAgentDatabasesForTest();
   closeOpenClawStateDatabaseForTest();
+});
+
+test("repository ownership survives reset and archive, then permanent deletion releases it", async () => {
+  const { storePath } = await createSessionStoreDir();
+  const sessionKey = "agent:main:dashboard:repository-lifecycle";
+  const repositories = getSessionRepositoryWorkspaceStore();
+  const repository = repositories.create({
+    agentId: "main",
+    sessionKey,
+    url: "https://github.com/openclaw/fixture.git",
+    runSetupScript: false,
+    assertCurrent: () => {},
+  });
+  await writeSessionStore({
+    entries: {
+      [sessionKey]: sessionStoreEntry("repository-lifecycle-session", {
+        repositoryWorkspaceId: repository.workspaceId,
+      }),
+    },
+  });
+  const artifactRoot = repositories.artifactPath(repository.workspaceId);
+  await fs.mkdir(artifactRoot, { recursive: true });
+  await fs.writeFile(path.join(artifactRoot, "retained-checkpoint"), "accepted checkpoint");
+
+  for (const [method, params] of [
+    ["sessions.reset", { key: sessionKey }],
+    ["sessions.patch", { key: sessionKey, archived: true }],
+    ["sessions.patch", { key: sessionKey, archived: false }],
+  ] as const) {
+    const result = await directSessionReq(
+      method,
+      method === "sessions.patch"
+        ? { ...params, expectedSessionId: loadSessionEntry({ sessionKey, storePath })!.sessionId }
+        : params,
+    );
+    expect(result.ok, JSON.stringify(result.error)).toBe(true);
+    const entry = loadSessionEntry({ sessionKey, storePath });
+    expect(entry?.repositoryWorkspaceId).toBe(repository.workspaceId);
+    expect(entry?.worktree).toBeUndefined();
+    expect(entry?.spawnedCwd).toBeUndefined();
+    expect(repositories.get(repository.workspaceId)).toEqual(repository);
+  }
+  const denied = await directSessionReq("sessions.delete", {
+    key: sessionKey,
+    expectedSessionId: "replaced-session",
+  });
+  expect(denied.ok).toBe(false);
+  expect(repositories.get(repository.workspaceId)).toEqual(repository);
+  expect(await fs.readFile(path.join(artifactRoot, "retained-checkpoint"), "utf8")).toBe(
+    "accepted checkpoint",
+  );
+  const deleted = await directSessionReq("sessions.delete", { key: sessionKey });
+  expect(deleted).toMatchObject({ ok: true, payload: { deleted: true } });
+  expect(loadSessionEntry({ sessionKey, storePath })).toBeUndefined();
+  expect(repositories.get(repository.workspaceId)).toBeUndefined();
+  await expect(fs.stat(artifactRoot)).rejects.toMatchObject({ code: "ENOENT" });
 });
 
 test("sessions.delete broadcasts the removed generation after a replacement appears", async () => {

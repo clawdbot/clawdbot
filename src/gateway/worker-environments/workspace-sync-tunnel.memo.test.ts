@@ -34,7 +34,7 @@ describe("worker tunnel manager hash memo", () => {
 
     try {
       const synced = await handle.syncWorkspace({
-        localPath,
+        source: { kind: "local", path: localPath },
         sessionId: "session:memo-persist",
         generation: 1,
       });
@@ -49,10 +49,9 @@ describe("worker tunnel manager hash memo", () => {
           .map((entry) => JSON.parse(entry.options.input as string) as [string, string][]);
 
       const first = await handle.reconcileWorkspace({
-        localPath,
+        source: { kind: "local", path: localPath, journal },
         remoteWorkspaceDir: synced.remoteWorkspaceDir,
         baseManifestRef: synced.manifestRef,
-        journal,
       });
       expect(first.changed).toBe(false);
       const firstTurnCaptures = memoInputs().length;
@@ -60,10 +59,9 @@ describe("worker tunnel manager hash memo", () => {
       expect(memoInputs()[0]).toEqual([]);
 
       const second = await handle.reconcileWorkspace({
-        localPath,
+        source: { kind: "local", path: localPath, journal },
         remoteWorkspaceDir: synced.remoteWorkspaceDir,
         baseManifestRef: acceptedManifestRef,
-        journal,
       });
       expect(second.changed).toBe(false);
       // The second turn's first capture must reuse the prior turn's worker

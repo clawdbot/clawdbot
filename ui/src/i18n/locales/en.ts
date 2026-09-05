@@ -953,6 +953,8 @@ export const en: TranslationMap & {
     placementReloadBlocked: "Recovery needs a reload. Unsaved starts will be lost.",
     discardUnsavedAndReload: "Discard unsaved starts and reload",
     placementSyncsFolder: "Syncs {folder} to the selected runner",
+    placementClonesRepository:
+      "Clones {folder} on the selected runner. No Gateway checkout is created.",
     folder: "Folder",
     folderPlaceholder: "Agent workspace",
     yourDevices: "Your devices",
@@ -1049,6 +1051,8 @@ export const en: TranslationMap & {
     checkoutWorktree: "New worktree",
     checkoutWorktreeSub: "Isolated copy of the repo",
     checkoutWorktreeFrom: "New worktree from {branch}",
+    checkoutRepository: "Remote checkout",
+    checkoutRepositoryFrom: "Remote checkout from {branch}",
     checkoutRemoteLocked: "Devices and cloud run in a worktree",
     local: "Local",
   },
@@ -5856,6 +5860,9 @@ export const en: TranslationMap & {
       notGit: "This session's workspace is not a git checkout.",
       unknownSession: "No workspace is associated with this session.",
       unknownCommit: "This commit is no longer available in the session checkout.",
+      workspaceStopped:
+        "Saved changed files are shown. Start the cloud session to load full diffs and line counts.",
+      workspaceStoppedFile: "Start the cloud session to load this diff.",
       disconnected: "Gateway is disconnected.",
       allChanges: "All Changes",
       uncommitted: "Uncommitted",

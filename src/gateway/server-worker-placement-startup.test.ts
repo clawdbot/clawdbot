@@ -18,6 +18,7 @@ import {
 import { createDeferredCore } from "../shared/deferred.js";
 import { createGatewayWorkerPlacementRuntime } from "./server-worker-placement-startup.js";
 import type { WorkerPlacementDispatchService } from "./worker-environments/placement-dispatch.js";
+import type { WorkerSessionWorkspace } from "./worker-environments/session-workspace.js";
 
 describe("worker placement startup health lifetime", () => {
   it("samples disk on schedule while reconciliation is stuck and drains both on stop", async () => {
@@ -626,7 +627,7 @@ describe("worker placement startup recovery authority", () => {
             environmentId: string;
             expectedGeneration: number;
             signal?: AbortSignal;
-            run: (localPath: string) => Promise<void>;
+            run: (workspace: WorkerSessionWorkspace) => Promise<void>;
           }) => Promise<void>;
         }
       | undefined;
@@ -658,8 +659,11 @@ describe("worker placement startup recovery authority", () => {
         dispatchOptions.runRecoveryBarrier({
           ...request,
           signal: controller.signal,
-          run: async (localPath) => {
-            events.push(`recovery:${localPath}`);
+          run: async (workspace) => {
+            if (workspace.kind !== "local") {
+              throw new Error("recovery fixture requires a local workspace");
+            }
+            events.push(`recovery:${workspace.path}`);
             await releaseRecovery.promise;
             events.push("recovery:done");
           },

@@ -15,6 +15,7 @@ import {
   registerProjectRegistry,
 } from "../../projects/project-registry.js";
 import { openOpenClawStateDatabase } from "../../state/openclaw-state-db.js";
+import { getSessionRepositoryWorkspaceStore } from "../../state/session-repository-workspaces.js";
 import { ensureProfileForEmail, linkEmail } from "../../state/user-profiles.js";
 import { createOpenClawTestState } from "../../test-utils/openclaw-test-state.js";
 import { createProjectsHandlers } from "./projects.js";
@@ -241,14 +242,22 @@ test("projects.list returns only the caller's deterministic resolved recents", a
     const sourceProfile = ensureProfileForEmail("source@example.test");
     const targetProfile = ensureProfileForEmail("target@example.test");
     const actor = { type: "human" as const, source: "profile" as const, id: sourceProfile.id };
+    const repository = getSessionRepositoryWorkspaceStore().create({
+      agentId: "main",
+      sessionKey: "agent:main:cloud",
+      url: "https://github.com/octocat/hello-world.git",
+      assertCurrent: () => {},
+    });
     const entries: Array<{
       key: string;
       updatedAt: number;
       projectId?: string;
       spawnedCwd?: string;
+      repositoryWorkspaceId?: string;
     }> = [
       { key: "agent:main:a", updatedAt: 500, projectId: project.id },
       { key: "agent:main:b", updatedAt: 500, projectId: project.id },
+      { key: "agent:main:cloud", updatedAt: 450, repositoryWorkspaceId: repository.workspaceId },
       { key: "agent:main:c", updatedAt: 400, projectId: "stale", spawnedCwd: "/work/scratch" },
       ...Array.from({ length: 8 }, (_, index) => ({
         key: `agent:main:folder-${index}`,
@@ -265,6 +274,9 @@ test("projects.list returns only the caller's deterministic resolved recents", a
           createdActor: actor,
           ...(entry.projectId ? { projectId: entry.projectId } : {}),
           ...(entry.spawnedCwd ? { spawnedCwd: entry.spawnedCwd } : {}),
+          ...(entry.repositoryWorkspaceId
+            ? { repositoryWorkspaceId: entry.repositoryWorkspaceId }
+            : {}),
         },
       );
     }
@@ -301,8 +313,9 @@ test("projects.list returns only the caller's deterministic resolved recents", a
     );
     expect((writeResult?.payload as { recents?: unknown[] } | undefined)?.recents).toEqual([
       { kind: "project", projectId: project.id, displayName: "Registered" },
+      { kind: "repository", url: repository.url, displayName: "hello-world" },
       { kind: "folder", folder: "/work/scratch", displayName: "scratch" },
-      ...Array.from({ length: 6 }, (_, index) => ({
+      ...Array.from({ length: 5 }, (_, index) => ({
         kind: "folder",
         folder: `/work/folder-${index}`,
         displayName: `folder-${index}`,

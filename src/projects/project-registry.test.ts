@@ -12,7 +12,11 @@ import {
   closeOpenClawStateDatabaseForTest,
   openOpenClawStateDatabase,
 } from "../state/openclaw-state-db.js";
-import { cloneProjectCheckout, ProjectCloneError } from "./project-clone-runtime.js";
+import {
+  cloneProjectCheckout,
+  ensureProjectCheckoutCommit,
+  ProjectCloneError,
+} from "./project-clone-runtime.js";
 import { materializeProjectClone, removeClonedProjectCheckout } from "./project-clone.js";
 import { parseProjectGitUrl } from "./project-git-url.js";
 import {
@@ -167,6 +171,20 @@ describe("project registry", () => {
     expect(await fs.readFile(path.join(target, "second.txt"), "utf8")).toBe("second\n");
     const history = await execFileAsync("git", ["-C", target, "rev-list", "--count", "HEAD"]);
     expect(history.stdout.trim()).toBe("2");
+    const originalHead = (
+      await execFileAsync("git", ["-C", target, "rev-parse", "HEAD"])
+    ).stdout.trim();
+    await fs.writeFile(path.join(source, "later.txt"), "pinned later commit\n");
+    await execFileAsync("git", ["-C", source, "add", "later.txt"]);
+    await execFileAsync("git", ["-C", source, "commit", "-m", "later"]);
+    const commit = (await execFileAsync("git", ["-C", source, "rev-parse", "HEAD"])).stdout.trim();
+    await ensureProjectCheckoutCommit({ url: source, target, commit });
+    expect((await execFileAsync("git", ["-C", target, "rev-parse", "HEAD"])).stdout.trim()).toBe(
+      originalHead,
+    );
+    expect((await execFileAsync("git", ["-C", target, "show", `${commit}:later.txt`])).stdout).toBe(
+      "pinned later commit\n",
+    );
     const project = await registerClonedProjectRegistry(
       {
         path: target,

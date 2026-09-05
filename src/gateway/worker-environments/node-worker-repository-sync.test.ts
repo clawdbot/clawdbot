@@ -1,0 +1,234 @@
+import fs from "node:fs/promises";
+import os from "node:os";
+import path from "node:path";
+import { pathToFileURL } from "node:url";
+import { afterEach, expect, it, vi } from "vitest";
+import { useAutoCleanupTempDirTracker } from "../../../test/helpers/temp-dir.js";
+import { NodeWorkerWorkspaceRuntime } from "../../node-host/node-worker-workspace.js";
+import { runCommandWithTimeout } from "../../process/exec.js";
+import { createNodeWorkerWorkspaceActions } from "./node-worker-workspace-actions.js";
+import { createNodeWorkspaceTransferService } from "./node-workspace-transfer-service.js";
+import { startNodeWorkspaceTransferTestServer } from "./node-workspace-transfer.test-support.js";
+import type { WorkerRepositoryCheckpointPayload } from "./tunnel-contract.js";
+import { createWorkerWorkspaceActions } from "./workspace-sync.js";
+
+const tempDirs = useAutoCleanupTempDirTracker(afterEach);
+
+it("rejects repository sources on SSH before invoking any remote command", async () => {
+  const run = vi.fn();
+  const waitForPrepared = vi.fn();
+  const actions = createWorkerWorkspaceActions({
+    environmentId: "environment-ssh",
+    ownerSignal: new AbortController().signal,
+    runner: { run },
+    waitForPrepared,
+    tasks: new Set(),
+    bundleHash: "a".repeat(64),
+  });
+  await expect(
+    actions.syncWorkspace({
+      sessionId: "session-ssh",
+      generation: 1,
+      source: {
+        kind: "repository",
+        url: "https://github.com/example/repository.git",
+        branch: "openclaw/session",
+      },
+    }),
+  ).rejects.toThrow("managed node");
+  await expect(
+    actions.reconcileWorkspace({
+      remoteWorkspaceDir: "/worker/workspace",
+      baseManifestRef: `sha256:${"b".repeat(64)}`,
+      source: { kind: "repository", prepareCheckpoint: vi.fn() },
+    }),
+  ).rejects.toThrow("managed node");
+  expect(waitForPrepared).not.toHaveBeenCalled();
+  expect(run).not.toHaveBeenCalled();
+});
+
+it("restores cumulative repository changes and setup output on a replacement node workspace", async () => {
+  const root = await fs.realpath(tempDirs.make("node-repository-roundtrip-"));
+  const origin = path.join(root, "origin");
+  const home = path.join(root, "node-home");
+  await fs.mkdir(path.join(origin, ".openclaw"), { recursive: true });
+  await fs.writeFile(path.join(origin, "tracked.txt"), "base\n");
+  await fs.writeFile(path.join(origin, "a-original.txt"), "turn one\n");
+  await fs.writeFile(
+    path.join(origin, ".openclaw", "worktree-setup.sh"),
+    "#!/bin/sh\nprintf 'prepared\\n' > setup.txt\n",
+    { mode: 0o755 },
+  );
+  const git = async (...args: string[]) => {
+    const result = await runCommandWithTimeout(["git", "-C", origin, ...args], {
+      timeoutMs: 10_000,
+      baseEnv: {
+        PATH: process.env.PATH,
+        HOME: root,
+        GIT_CONFIG_GLOBAL: os.devNull,
+        GIT_CONFIG_NOSYSTEM: "1",
+      },
+    });
+    expect(result.code, result.stderr).toBe(0);
+    return result.stdout.trim();
+  };
+  await git("init", "--quiet");
+  await git("add", ".");
+  await git(
+    "-c",
+    "user.name=Repository Test",
+    "-c",
+    "user.email=repository@example.invalid",
+    "commit",
+    "--quiet",
+    "-m",
+    "base",
+  );
+  const baseCommit = await git("rev-parse", "HEAD");
+  let epoch = 1;
+  const service = createNodeWorkspaceTransferService({
+    temporaryRoot: path.join(root, "transfers"),
+    getOwner: () => ({
+      credential: { ownerEpoch: epoch, sessionId: "session-1" },
+      environment: {
+        ownerEpoch: epoch,
+        attachedSessionIds: ["session-1"],
+        destroyRequestedAtMs: null,
+        state: "attached",
+      },
+    }),
+  });
+  const server = await startNodeWorkspaceTransferTestServer(service);
+  const runtime = new NodeWorkerWorkspaceRuntime({
+    root: path.join(home, "node-host"),
+    env: { PATH: process.env.PATH, HOME: home },
+  });
+  const createActions = () => {
+    const ownerEpoch = epoch;
+    const ownerSignal = new AbortController().signal;
+    return createNodeWorkerWorkspaceActions({
+      environmentId: "environment-1",
+      ownerEpoch,
+      sessionId: "session-1",
+      ownerSignal,
+      isOwnerCurrent: () => epoch === ownerEpoch,
+      workspaceTransfer: service,
+      runWorkspaceCommand: async (command) => {
+        if (epoch !== ownerEpoch) {
+          throw new Error("node workspace authority closed");
+        }
+        return await runtime.exec(
+          {
+            gatewayNamespace: "gateway-1",
+            environmentId: "environment-1",
+            sessionId: "session-1",
+            generation: ownerEpoch,
+            ...command,
+            argv: [...command.argv],
+          },
+          ownerSignal,
+          { url: server.gatewayUrl },
+        );
+      },
+    });
+  };
+  const source = {
+    kind: "repository" as const,
+    url: pathToFileURL(origin).href,
+    ref: "HEAD",
+    branch: "openclaw/session",
+    gitToken: "synthetic-repository-token",
+    runSetupScript: true,
+  };
+  try {
+    const actions = createActions();
+    const first = await actions.syncWorkspace({
+      sessionId: "session-1",
+      generation: epoch,
+      source,
+    });
+    expect(first.mode).toBe("repository");
+    if (first.mode !== "repository") {
+      throw new Error("Repository source was not prepared");
+    }
+    expect(first.baseCommit).toBe(baseCommit);
+    expect(first.manifestRef).not.toBe(first.baseManifestRef);
+    expect(await fs.readFile(path.join(first.remoteWorkspaceDir, "setup.txt"), "utf8")).toBe(
+      "prepared\n",
+    );
+    let checkpoint: WorkerRepositoryCheckpointPayload | undefined;
+    let revision = 0;
+    const capture = async () => {
+      const result = await actions.reconcileWorkspace({
+        remoteWorkspaceDir: first.remoteWorkspaceDir,
+        baseManifestRef: first.baseManifestRef,
+        source: {
+          kind: "repository",
+          prepareCheckpoint: async (payload) => {
+            const stagingRoot = path.join(root, `checkpoint-${++revision}`);
+            await fs.cp(payload.stagingRoot, stagingRoot, { recursive: true });
+            expect(payload.publicationDigest).toMatch(/^sha256:[a-f0-9]{64}$/u);
+            expect(
+              JSON.parse(
+                await fs.readFile(
+                  path.join(payload.publicationStagingRoot!, "snapshot.json"),
+                  "utf8",
+                ),
+              ),
+            ).toMatchObject({ baseCommit });
+            const captured = { ...payload, stagingRoot };
+            return {
+              verify: async () => {
+                expect(await fs.stat(stagingRoot)).toBeDefined();
+              },
+              publish: async () => {
+                checkpoint = captured;
+              },
+              discard: async () => {
+                await fs.rm(stagingRoot, { recursive: true, force: true });
+              },
+            };
+          },
+        },
+      });
+      await result.verifyStable();
+      await result.verifyLocalStable();
+      await result.publishStagedResult?.();
+    };
+    await fs.writeFile(path.join(first.remoteWorkspaceDir, "first.txt"), "turn one\n");
+    await capture();
+    await fs.writeFile(path.join(first.remoteWorkspaceDir, "second.txt"), "turn two\n");
+    await fs.rm(path.join(first.remoteWorkspaceDir, "tracked.txt"));
+    await capture();
+    expect(checkpoint).toBeDefined();
+
+    epoch += 1;
+    const restored = await createActions().syncWorkspace({
+      sessionId: "session-1",
+      generation: epoch,
+      source: { ...source, baseCommit, checkpoint },
+    });
+    expect(restored.remoteWorkspaceDir).not.toBe(first.remoteWorkspaceDir);
+    expect(restored.manifestRef).toBe(checkpoint!.currentManifestRef);
+    expect(await fs.readFile(path.join(restored.remoteWorkspaceDir, "first.txt"), "utf8")).toBe(
+      "turn one\n",
+    );
+    expect(await fs.readFile(path.join(restored.remoteWorkspaceDir, "second.txt"), "utf8")).toBe(
+      "turn two\n",
+    );
+    expect(await fs.readFile(path.join(restored.remoteWorkspaceDir, "setup.txt"), "utf8")).toBe(
+      "prepared\n",
+    );
+    await expect(
+      fs.stat(path.join(restored.remoteWorkspaceDir, "tracked.txt")),
+    ).rejects.toMatchObject({ code: "ENOENT" });
+    expect((await fs.readdir(checkpoint!.stagingRoot)).toSorted()).toEqual([
+      "first.txt",
+      "second.txt",
+      "setup.txt",
+    ]);
+  } finally {
+    await server.close();
+    await service.closeAll();
+  }
+});

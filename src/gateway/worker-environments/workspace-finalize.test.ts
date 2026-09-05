@@ -90,7 +90,7 @@ describe("final worker workspace fences", () => {
     });
   });
 
-  it("publishes between remote stability fences under quiescence", async () => {
+  it.each([true, false])("publishes under quiescence with local apply %s", async (applyLocally) => {
     const log: string[] = [];
     await verifyReconciledWorkspaceFinal(
       {
@@ -102,9 +102,13 @@ describe("final worker workspace fences", () => {
         verifyLocalStable: async () => {
           log.push("local");
         },
-        applyPreparedStagedResult: async () => {
-          log.push("apply-prepared");
-        },
+        ...(applyLocally
+          ? {
+              applyPreparedStagedResult: async () => {
+                log.push("apply-prepared");
+              },
+            }
+          : {}),
         publishStagedResult: async () => {
           log.push("publish");
         },
@@ -120,7 +124,7 @@ describe("final worker workspace fences", () => {
       "remote",
       "quiescence",
       "remote",
-      "apply-prepared",
+      ...(applyLocally ? ["apply-prepared"] : []),
       "local",
       "quiescence",
       "remote",

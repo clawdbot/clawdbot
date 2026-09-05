@@ -6,7 +6,11 @@ import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { sha256HexPrefixCore } from "../infra/crypto-digest.js";
 import type { OpenClawStateDatabaseOptions } from "../state/openclaw-state-db.js";
 import { withOpenClawStateLease } from "../state/openclaw-state-lease.js";
-import { cloneProjectCheckout, ProjectCloneError } from "./project-clone-runtime.js";
+import {
+  cloneProjectCheckout,
+  ensureProjectCheckoutCommit,
+  ProjectCloneError,
+} from "./project-clone-runtime.js";
 import { parseProjectGitUrl } from "./project-git-url.js";
 import {
   listProjectRegistry,
@@ -32,7 +36,7 @@ function existingCanonicalProject(
 
 /** Materializes and registers a project from an accepted GitHub remote. */
 export async function materializeProjectClone(
-  input: { cfg: OpenClawConfig; gitUrl: string; name?: string },
+  input: { cfg: OpenClawConfig; gitUrl: string; name?: string; requiredCommit?: string },
   options: OpenClawStateDatabaseOptions & {
     signal?: AbortSignal;
     timeoutMs?: number;
@@ -72,7 +76,17 @@ export async function materializeProjectClone(
           options,
           async () => {
             const current = existingCanonicalProject(input.cfg, parsed.url, options);
-            return current?.repoRoot === candidate.repoRoot ? current : undefined;
+            if (current?.repoRoot !== candidate.repoRoot) {
+              return undefined;
+            }
+            if (input.requiredCommit) {
+              await ensureProjectCheckoutCommit(
+                { url: parsed.url, target: current.repoRoot, commit: input.requiredCommit },
+                { ...options, env, signal: lease.signal },
+              );
+              lease.assertOwned();
+            }
+            return current;
           },
         );
         if (existing) {
@@ -83,7 +97,7 @@ export async function materializeProjectClone(
       const directoryName = slugifyWorktreeTitle(displayName) ?? "project";
       const target = path.join(resolveStateDir(env), "projects", fingerprint, directoryName);
       await cloneProjectCheckout(
-        { url: parsed.url, target },
+        { url: parsed.url, target, requiredCommit: input.requiredCommit },
         {
           env,
           signal: lease.signal,

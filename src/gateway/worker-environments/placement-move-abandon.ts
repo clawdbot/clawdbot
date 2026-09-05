@@ -20,6 +20,7 @@ import type {
   WorkerPlacementMoveRequest,
   WorkerPlacementReclaimRequest,
 } from "./service-contract.js";
+import type { WorkerSessionWorkspace } from "./session-workspace.js";
 import type { WorkerWorkspaceOperationCoordinator } from "./workspace-operation-coordinator.js";
 
 export function createWorkerPlacementMoveAbandonment(options: {
@@ -27,11 +28,17 @@ export function createWorkerPlacementMoveAbandonment(options: {
   environments: WorkerDispatchEnvironmentService;
   runnerAvailability: WorkerPlacementRunnerAvailabilityReader;
   workspaceOperations: WorkerWorkspaceOperationCoordinator;
-  resolveWorkspacePath: (placement: {
+  resolveWorkspace: (placement: {
     sessionId: string;
     sessionKey: string;
     agentId: string;
-  }) => Promise<string>;
+  }) => Promise<WorkerSessionWorkspace>;
+  prepareGatewayMove?: (params: {
+    sessionId: string;
+    sessionKey: string;
+    agentId: string;
+    assertCurrent: () => void;
+  }) => Promise<void>;
 }) {
   const { environments, placements } = options;
   const forceDestroyEnvironment = async (
@@ -53,7 +60,7 @@ export function createWorkerPlacementMoveAbandonment(options: {
       await forceAbandonWorkerEnvironment({
         placements,
         environmentId,
-        resolveWorkspacePath: options.resolveWorkspacePath,
+        resolveWorkspace: options.resolveWorkspace,
         onCleanupError,
       });
       try {
@@ -117,13 +124,41 @@ export function createWorkerPlacementMoveAbandonment(options: {
       await forceAbandonWorkerEnvironment({
         placements,
         environmentId: intent.source.environmentId,
-        resolveWorkspacePath: options.resolveWorkspacePath,
+        resolveWorkspace: options.resolveWorkspace,
       });
+      const failed = placements.get(request.sessionId);
+      if (!isForceAbandonedWorkerPlacement(failed)) {
+        throw new Error(`Session ${request.sessionKey} abandonment did not fence its remote owner`);
+      }
+      const assertCurrent = () => {
+        authorize?.();
+        const latest = placements.get(request.sessionId);
+        if (
+          !isForceAbandonedWorkerPlacement(latest) ||
+          latest.generation !== failed.generation ||
+          latest.environmentId !== intent.source.environmentId ||
+          latest.activeOwnerEpoch !== intent.source.ownerEpoch ||
+          placements.getPlacementMove(request.sessionId)?.operationId !== intent.operationId
+        ) {
+          throw new Error(
+            `Session ${request.sessionKey} abandonment source changed during Gateway preparation`,
+          );
+        }
+      };
+      assertCurrent();
+      if (intent.target.kind === "gateway") {
+        if (options.prepareGatewayMove) {
+          await options.prepareGatewayMove({ ...request, assertCurrent });
+        } else if ((await options.resolveWorkspace(failed)).kind === "repository") {
+          throw new Error("Repository workspace Gateway materialization is unavailable");
+        }
+        assertCurrent();
+      }
       if (environments.get(intent.source.environmentId)) {
         await environments.destroy(intent.source.environmentId, {
           sessionId: intent.sessionId,
           ownerEpoch: intent.source.ownerEpoch,
-          authorize,
+          authorize: assertCurrent,
         });
       }
     });

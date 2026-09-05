@@ -49,7 +49,7 @@ export type GitHubPublicationClaimRequest = {
   expectedPublisher?: GitHubPublicationPublisher;
 };
 
-function exactClaimForPlacement(
+export function exactClaimForPlacement(
   placement: NonNullable<ReturnType<WorkerSessionPlacementStore["get"]>>,
 ): WorkerSessionTurnClaim | undefined {
   const claim = placement.turnClaim;

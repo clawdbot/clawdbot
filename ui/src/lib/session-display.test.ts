@@ -236,6 +236,14 @@ describe("resolveSessionWorkSubtitle", () => {
   it("combines repo, branch, and node host", () => {
     expect(
       resolveSessionWorkSubtitle({
+        repository: {
+          url: "https://github.com/openclaw/openclaw.git",
+          branch: "openclaw/cloud-task",
+        },
+      }),
+    ).toBe("openclaw ⎇ cloud-task");
+    expect(
+      resolveSessionWorkSubtitle({
         worktree: { branch: "openclaw/session-ui", repoRoot: "/repo/clawdbot" },
       }),
     ).toBe("clawdbot ⎇ session-ui");

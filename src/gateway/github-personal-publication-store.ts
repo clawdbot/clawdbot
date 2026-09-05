@@ -1,8 +1,5 @@
 import { randomUUID, createHash } from "node:crypto";
-import type {
-  SessionGitHubPublicationResult,
-  SessionGitHubStatusResult,
-} from "../../packages/gateway-protocol/src/schema/session-github-publication.js";
+import type { SessionGitHubStatusResult } from "../../packages/gateway-protocol/src/schema/session-github-publication.js";
 import {
   executeSqliteQuerySync,
   executeSqliteQueryTakeFirstSync,
@@ -16,6 +13,7 @@ import {
   runOpenClawStateWriteTransaction,
 } from "../state/openclaw-state-db.js";
 import { resolvePersonalGitHubOwner } from "../state/user-github-connections.js";
+import { createGitHubPublicationExecutionEffects } from "./github-publication-execution-effects.js";
 import { projectGitHubPublicationResult } from "./github-publication-store.js";
 
 export type PersonalGitHubPublicationRow = DB["github_personal_publication_requests"];
@@ -240,49 +238,7 @@ export function claimPersonalGitHubPublication(
   return {
     row: claimed,
     ownsExecution,
-    updateHead(headCommit: string): PersonalGitHubPublicationRow {
-      return write({ head_commit: headCommit }, true);
-    },
-    complete(result: SessionGitHubPublicationResult): PersonalGitHubPublicationRow {
-      if (result.status === "published") {
-        return write(
-          {
-            status: "published",
-            head_commit: result.headCommit,
-            pull_request_url: result.url,
-            error_code: null,
-            next_action: null,
-          },
-          true,
-        );
-      }
-      if (result.status !== "failed") {
-        throw new Error("My GitHub publication result is not terminal.");
-      }
-      return write(
-        { status: "failed", error_code: result.code, next_action: result.nextAction },
-        true,
-      );
-    },
-    recordEffect(
-      effect: "push" | "pull_request",
-      observed?: { headCommit?: string; url?: string },
-    ): void {
-      // Observation preserves already-dispatched effects after revocation; it grants no further action.
-      write(
-        {
-          last_effect: effect,
-          effect_state: observed?.headCommit || observed?.url ? "observed" : "dispatched",
-          ...(observed?.headCommit ? { head_commit: observed.headCommit } : {}),
-          ...(observed?.url ? { pull_request_url: observed.url } : {}),
-        },
-        !observed,
-      );
-    },
-    interrupt(): PersonalGitHubPublicationRow {
-      // This is the execution owner's monotonic stop record, not a new authenticated action.
-      return write({ status: "needs_confirmation", error_code: null, next_action: null }, false);
-    },
+    ...createGitHubPublicationExecutionEffects({ write, interruptedStatus: "needs_confirmation" }),
   };
 }
 

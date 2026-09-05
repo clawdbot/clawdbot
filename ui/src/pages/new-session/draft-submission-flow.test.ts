@@ -1,3 +1,4 @@
+import { expectDefined } from "@openclaw/normalization-core";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { SESSION_CREATE_RETRY_WINDOW_MS } from "../../../../packages/gateway-protocol/src/index.js";
 import type { ApplicationContext } from "../../app/context.ts";
@@ -42,6 +43,66 @@ function stubObjectUrls(...urls: string[]) {
 }
 
 describe("DraftSubmissionFlow", () => {
+  it("starts a cloud repository with its selected ref without cloning on the Gateway", async () => {
+    const { context, flow, gateway, place, request } = createDraftFixture({
+      methods: ["sessions.create", "sessions.dispatch"],
+      scopes: ["operator.admin", "operator.read", "operator.write"],
+    });
+    vi.spyOn(gateway, "cloudProfiles", "get").mockReturnValue([
+      { id: "cloud", providerId: "crabbox", executionModes: ["worker-turn", "remote-exec"] },
+    ]);
+    vi.spyOn(gateway, "cloudProfilesReady", "get").mockReturnValue(true);
+    vi.spyOn(gateway, "cloudProfilesPending", "get").mockReturnValue(false);
+    const start = vi.fn();
+    context.placementStartup.start = start;
+    vi.mocked(context.sessions.createResult).mockImplementation(async (params) => ({
+      key: expectDefined(params?.key, "remote session create key"),
+      initialRun: { status: "idle" },
+    }));
+    vi.mocked(context.navigateAndWait).mockImplementation(async () => {
+      queueMicrotask(() => document.dispatchEvent(new Event(CHAT_ROUTE_READY_EVENT)));
+    });
+    place.selectRemoteProject({
+      identity: "openclaw/openclaw",
+      cloneUrl: "https://github.com/openclaw/openclaw.git",
+      projectId: "old-local-clone",
+    });
+    place.setBaseRef("release/next");
+    place.selectCloudProfile("cloud");
+    flow.setMessage("Run only on the cloud worker");
+
+    expect(flow.submitDisabledReason()).toBeUndefined();
+    await flow.submit();
+
+    expect(context.sessions.createResult).toHaveBeenCalledOnce();
+    const created = expectDefined(
+      vi.mocked(context.sessions.createResult).mock.calls[0]?.[0],
+      "remote session create request",
+    );
+    expect(created).toMatchObject({
+      agentId: "main",
+      message: "",
+      repository: { url: "https://github.com/openclaw/openclaw.git", ref: "release/next" },
+    });
+    for (const field of [
+      "projectId",
+      "projectGitUrl",
+      "cwd",
+      "worktree",
+      "worktreeBaseRef",
+      "worktreeName",
+    ]) {
+      expect(created).not.toHaveProperty(field);
+    }
+    expect(request.mock.calls.some(([method]) => method === "projects.add")).toBe(false);
+    expect(start).toHaveBeenCalledOnce();
+    expect(start.mock.calls[0]![0].recovery).toMatchObject({
+      sessionKey: created.key,
+      message: "Run only on the cloud worker",
+      phase: "dispatching",
+      target: { kind: "profile", profileId: "cloud" },
+    });
+  });
   it("keeps a direct background completion watch through a Gateway reconnect", async () => {
     vi.useFakeTimers();
     const { context, flow, request } = createDraftFixture();

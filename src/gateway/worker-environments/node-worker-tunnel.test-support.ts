@@ -7,6 +7,7 @@ import { WORKER_PROTOCOL_FEATURES } from "../../../packages/gateway-protocol/src
 import { NODE_WORKER_ENVIRONMENT_STOP_COMMAND } from "../../infra/node-commands.js";
 import { NODE_WORKER_SUPERVISOR_PROTOCOL_FEATURE } from "../../infra/node-runner-inventory.js";
 import type { SpawnResult } from "../../process/exec.js";
+import { NODE_WORKSPACE_DRAIN_COMMAND } from "../../worker/node-workspace-protocol.js";
 import type { NodeWorkerSupervisorTransport } from "../node-registry-private.js";
 import type { NodeWorkspaceTransferService } from "./node-workspace-transfer-service.js";
 import type { WorkerEnvironmentRecord } from "./store.js";
@@ -61,10 +62,25 @@ export function transport(): NodeWorkerSupervisorTransport {
       },
     ],
     isCurrent: () => true,
-    invoke: async ({ command }) =>
+    invoke: withWorkspaceDrain(async ({ command }) =>
       command === NODE_WORKER_ENVIRONMENT_STOP_COMMAND
         ? { ok: true, payloadJSON: "null" }
         : { ok: false, error: { code: "UNAVAILABLE" } },
+    ),
+  };
+}
+
+export function withWorkspaceDrain(
+  invoke: NodeWorkerSupervisorTransport["invoke"],
+): NodeWorkerSupervisorTransport["invoke"] {
+  return async (request) => {
+    const input = request.params as { argv?: string[] } | undefined;
+    return input?.argv?.[0] === NODE_WORKSPACE_DRAIN_COMMAND
+      ? {
+          ok: true,
+          payloadJSON: workspaceCommandPayload("/node/workspace", { stdout: "drained\n" }),
+        }
+      : await invoke(request);
   };
 }
 

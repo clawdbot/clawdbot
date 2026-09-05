@@ -81,6 +81,28 @@ afterEach(async () => {
 });
 
 describe("SessionDiffPanel", () => {
+  it("keeps stopped cloud changes visible with restart guidance and no local checkout action", async () => {
+    setNativeGatewayTestState("local");
+    const panel = document.createElement("openclaw-session-diff") as SessionDiffElement;
+    panel.loader = async () => ({
+      ...result("cloud/session"),
+      unavailableReason: "workspace_stopped",
+      files: [{ path: "saved.txt", status: "modified", additions: 0, deletions: 0 }],
+    });
+    document.body.append(panel);
+    await vi.waitFor(() => expect(panel.textContent).toContain("Saved changed files are shown."));
+    expect(panel.textContent).toContain("saved.txt");
+    expect(panel.textContent).toContain("Start the cloud session to load this diff.");
+    expect(panel.textContent).not.toContain("Diff too large");
+    expect(panel.textContent).not.toContain("No changes in this session");
+    expect(panel.querySelector(".session-diff__toolbar-button")).toBeNull();
+    panel.querySelector<HTMLButtonElement>(".session-diff__file-menu")?.click();
+    await panel.updateComplete;
+    expect(panel.querySelector("openclaw-session-diff-menu")?.textContent).not.toContain(
+      "Open in Editor",
+    );
+  });
+
   it("renders a skeleton only while a real diff request is pending", async () => {
     setNativeGatewayTestState(null);
     const pending = deferred<SessionsDiffResult>();

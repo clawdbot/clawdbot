@@ -751,6 +751,8 @@ export type SessionMessageCutMutationParams = {
   sessionStoreKey?: string;
   storePath?: string;
   targetKey?: string;
+  /** Distinct repository owner prepared by the fork lifecycle before transcript commit. */
+  repositoryWorkspaceId?: string;
 };
 
 export type SessionBranchSummary = {

@@ -1268,6 +1268,9 @@ export async function createGatewaySession(params: {
           // restricted to spawned subagent and ACP lineage.
           ...(spawnedCwd ? { spawnedCwd } : {}),
           ...(preparedLifecycle?.worktree ? { worktree: preparedLifecycle.worktree } : {}),
+          ...(preparedLifecycle?.repositoryWorkspaceId
+            ? { repositoryWorkspaceId: preparedLifecycle.repositoryWorkspaceId }
+            : {}),
           ...(execNode ? { execHost: "node", execNode, ...(execCwd ? { execCwd } : {}) } : {}),
           ...(createdNewEntry && params.armSessionDiffBaselineCapture && !execNode
             ? {

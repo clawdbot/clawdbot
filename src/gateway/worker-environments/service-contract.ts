@@ -96,6 +96,8 @@ export type WorkerPlacementDispatchRequest = {
   agentId: string;
   profileId: string;
   executionMode: WorkerPlacementExecutionMode;
+  /** Current dispatch caller's setup authority; never inherited by a new caller. */
+  runSetupScript?: boolean;
   devicePlacement?: DevicePlacementRequirement;
   idempotencyKey?: string;
   deviceId?: string;

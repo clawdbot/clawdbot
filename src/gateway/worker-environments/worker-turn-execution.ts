@@ -104,7 +104,12 @@ export async function executeWorkerTurn(
   let baseLeafId = manager.getLeafId();
   if (!userMessageAlreadyPersisted) {
     const persisted = turn.userTurnTranscriptRecorder
-      ? await turn.userTurnTranscriptRecorder.persistApproved({ cwd: params.localWorkspaceDir })
+      ? await turn.userTurnTranscriptRecorder.persistApproved({
+          cwd:
+            params.workspace.kind === "local"
+              ? params.workspace.path
+              : placement.remoteWorkspaceDir,
+        })
       : undefined;
     if (persisted) {
       baseLeafId = persisted.messageId;
@@ -234,7 +239,7 @@ export async function executeWorkerTurn(
     const media = await prepareWorkerTurnMedia({
       turn,
       history,
-      localWorkspaceDir: params.localWorkspaceDir,
+      workspace: params.workspace,
       remoteWorkspaceDir: placement.remoteWorkspaceDir,
       tunnel,
       isAuthorized,
@@ -456,7 +461,7 @@ export async function executeWorkerTurn(
       placements: params.placements,
       turnClaim: params.turnClaim,
       workspaceOperations: params.workspaceOperations,
-      localWorkspaceDir: params.localWorkspaceDir,
+      workspace: params.workspace,
       transcriptTarget,
       tunnel,
       ...(params.prepareAcceptedWorkspacePublication

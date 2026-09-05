@@ -84,7 +84,7 @@ export async function verifyReconciledWorkspaceFinal(
 ): Promise<WorkerWorkspaceApplyResult | undefined> {
   let succeeded = false;
   try {
-    if (reconciliation.applyPreparedStagedResult && reconciliation.publishStagedResult) {
+    if (reconciliation.publishStagedResult) {
       try {
         // Fence the prepared remote capture before quiescence renewal can enroll late writers.
         await runRetryableFinalFenceStep(async () => await reconciliation.verifyStable());
@@ -92,7 +92,7 @@ export async function verifyReconciledWorkspaceFinal(
         await runRetryableFinalFenceStep(async () => await quiescence.assertActive());
         // Keep this fence: a late writer can mutate before renewal enrolls and SIGSTOPs it.
         await runRetryableFinalFenceStep(async () => await reconciliation.verifyStable());
-        await reconciliation.applyPreparedStagedResult();
+        await reconciliation.applyPreparedStagedResult?.();
         await reconciliation.verifyLocalStable();
         // Renew after apply so lease expiry cannot race the final publish gate.
         await runResultPreservingFinalFenceStep(async () => await quiescence.assertActive());

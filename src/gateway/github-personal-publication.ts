@@ -30,15 +30,15 @@ import { projectGitHubPublicationResult } from "./github-publication-store.js";
 import { prepareGitHubPublicationTarget } from "./github-publication-target.js";
 import type { WorkerSessionPlacementStore } from "./worker-environments/placement-store.js";
 
-type SessionAction = PersonalGitHubAction & {
+export type PersonalGitHubSessionAction = PersonalGitHubAction & {
   sessionId: string;
   sessionKey: string;
   agentId: string;
 };
 type Selection = { generation: string; account: { accountId: number; login: string } };
 
-function bindSelection(
-  action: SessionAction,
+export function bindPersonalGitHubPublicationSelection(
+  action: PersonalGitHubSessionAction,
   selected: Selection,
   preparation?: GitHubPublicationPreparation,
 ) {
@@ -65,6 +65,31 @@ function bindSelection(
     accountId: initial.accountId,
     assertCurrent,
   };
+}
+
+export async function preparePersonalGitHubPublicationSelection(
+  bound: ReturnType<typeof bindPersonalGitHubPublicationSelection>,
+  assertWorkspace: () => void,
+) {
+  const assertCurrent = () => {
+    bound.assertCurrent();
+    assertWorkspace();
+  };
+  assertCurrent();
+  try {
+    await requestCurrentPersonalGitHubRefresh(bound.owner);
+  } catch {
+    assertCurrent();
+    throw new Error(
+      "My GitHub credentials are unavailable; reconnect My GitHub before publishing.",
+    );
+  }
+  assertCurrent();
+  return await preparePersonalGitHubPublicationIdentity({
+    profileId: bound.profileId,
+    accountId: bound.accountId,
+    assertCurrent,
+  });
 }
 
 export function createPersonalGitHubPublicationCoordinator(
@@ -114,7 +139,7 @@ export function createPersonalGitHubPublicationCoordinator(
     };
   };
   const withWorkspace = async <T>(
-    action: SessionAction,
+    action: PersonalGitHubSessionAction,
     run: (assertCurrent: () => void) => Promise<T>,
   ): Promise<T> => {
     action.assertCurrent();
@@ -149,32 +174,8 @@ export function createPersonalGitHubPublicationCoordinator(
       }
     });
   };
-  const prepareIdentity = async (
-    bound: ReturnType<typeof bindSelection>,
-    assertWorkspace: () => void,
-  ) => {
-    const assertCurrent = () => {
-      bound.assertCurrent();
-      assertWorkspace();
-    };
-    assertCurrent();
-    try {
-      await requestCurrentPersonalGitHubRefresh(bound.owner);
-    } catch {
-      assertCurrent();
-      throw new Error(
-        "My GitHub credentials are unavailable; reconnect My GitHub before publishing.",
-      );
-    }
-    assertCurrent();
-    return await preparePersonalGitHubPublicationIdentity({
-      profileId: bound.profileId,
-      accountId: bound.accountId,
-      assertCurrent,
-    });
-  };
   const execute = async (
-    action: SessionAction,
+    action: PersonalGitHubSessionAction,
     row: PersonalGitHubPublicationRow,
     assertWorkspace: () => void,
   ): Promise<SessionGitHubPublicationResult> => {
@@ -182,7 +183,7 @@ export function createPersonalGitHubPublicationCoordinator(
       generation: row.connection_generation,
       account: { accountId: row.identity_account_id, login: row.identity_login },
     };
-    const bound = bindSelection(action, selected);
+    const bound = bindPersonalGitHubPublicationSelection(action, selected);
     const assertCurrent = () => {
       bound.assertCurrent();
       assertWorkspace();
@@ -205,7 +206,8 @@ export function createPersonalGitHubPublicationCoordinator(
           return execution.ownsExecution();
         },
         identity: {
-          prepare: async () => await prepareIdentity(bound, assertWorkspace),
+          prepare: async () =>
+            await preparePersonalGitHubPublicationSelection(bound, assertWorkspace),
           isCurrent: (identity) => {
             assertCurrent();
             return (
@@ -255,7 +257,7 @@ export function createPersonalGitHubPublicationCoordinator(
   return {
     async requestPersonalForSession(
       input: SessionGitHubPublishParams,
-      action: SessionAction,
+      action: PersonalGitHubSessionAction,
     ): Promise<SessionGitHubPublicationResult> {
       if (input.selection?.source !== "personal" || input.idempotencyKey.length > 128) {
         throw new Error("My GitHub publication requires an explicit bounded account selection.");
@@ -283,7 +285,7 @@ export function createPersonalGitHubPublicationCoordinator(
         action.assertCurrent();
         return status(existing, action, action).result;
       }
-      const bound = bindSelection(action, selected, {
+      const bound = bindPersonalGitHubPublicationSelection(action, selected, {
         idempotencyKey: input.idempotencyKey,
         hasRequest: () => Boolean(readRequest()),
       });
@@ -293,7 +295,7 @@ export function createPersonalGitHubPublicationCoordinator(
           bound.assertCurrent();
         };
         const worktree = resolveGitHubPublicationWorktreeOwner(action).worktree;
-        const identity = await prepareIdentity(bound, assertWorkspace);
+        const identity = await preparePersonalGitHubPublicationSelection(bound, assertWorkspace);
         const target = await prepareGitHubPublicationTarget({ worktree, identity, assertCurrent });
         const snapshot = await captureGitHubPublicationWorkspaceSnapshot({
           cwd: worktree.path,
@@ -371,7 +373,7 @@ export function createPersonalGitHubPublicationCoordinator(
     },
     async confirmPersonal(
       input: SessionGitHubConfirmParams,
-      action: SessionAction,
+      action: PersonalGitHubSessionAction,
     ): Promise<SessionGitHubPublicationResult> {
       action.assertCurrent();
       const row = readPersonalGitHubPublication(action.owner, { requestId: input.requestId });
@@ -391,7 +393,7 @@ export function createPersonalGitHubPublicationCoordinator(
       if (active.has(row.request_id)) {
         throw new Error("My GitHub publication is still running; wait for its result.");
       }
-      bindSelection(action, input);
+      bindPersonalGitHubPublicationSelection(action, input);
       return await withWorkspace(
         action,
         async (assertCurrent) => await execute(action, row, assertCurrent),

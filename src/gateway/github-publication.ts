@@ -16,6 +16,7 @@ import {
   assertExpectedSharedGitHubPublisher,
   prepareCurrentGitHubPublicationIdentity,
   resolveGitHubPublicationWorktreeOwner,
+  resolveGitHubPublicationWorkspaceOwner,
 } from "./github-publication-availability.js";
 import {
   createGitHubPublicationCoordinatorMethods,
@@ -37,6 +38,8 @@ import {
   readGitHubPublicationRequest,
   type GitHubPublicationRow as PublicationRow,
 } from "./github-publication-store.js";
+import { createRepositoryGitHubPublicationCoordinator } from "./github-repository-publication.js";
+import { loadGatewaySessionEntryReadOnly } from "./session-utils.js";
 import type {
   WorkerSessionPlacementStore,
   WorkerSessionTurnClaim,
@@ -378,17 +381,78 @@ export function createGitHubPublicationCoordinator(params: {
     deferRequests(rows.map((row) => row.request_id));
   };
 
-  return {
-    ...createPersonalGitHubPublicationCoordinator(params.placements),
+  const repository = createRepositoryGitHubPublicationCoordinator(params.placements);
+  const personal = createPersonalGitHubPublicationCoordinator(params.placements);
+  const methods = createGitHubPublicationCoordinatorMethods({
+    placements: params.placements,
+    readById,
     requestForClaim,
-    prepareClaimWorkspace,
-    deferClaimPreparation,
-    ...createGitHubPublicationCoordinatorMethods({
-      placements: params.placements,
-      readById,
-      requestForClaim,
-      sameWorktree,
-      processRow,
-    }),
+    sameWorktree,
+    processRow,
+  });
+  return {
+    ...methods,
+    ...personal,
+    requestForClaim: (request: GitHubPublicationClaimRequest) =>
+      resolveGitHubPublicationWorkspaceOwner({
+        sessionId: request.claim.sessionId,
+        sessionKey: request.sessionKey,
+        agentId: request.agentId,
+      }).kind === "repository"
+        ? repository.requestForClaim(request)
+        : requestForClaim(request),
+    async prepareClaimWorkspace(claim: WorkerSessionTurnClaim) {
+      await prepareClaimWorkspace(claim);
+      await repository.prepareClaimWorkspace(claim);
+    },
+    deferClaimPreparation(claim: WorkerSessionTurnClaim) {
+      deferClaimPreparation(claim);
+      repository.deferClaimPreparation(claim);
+    },
+    requestForSession(input: Parameters<typeof methods.requestForSession>[0]) {
+      const loaded = loadGatewaySessionEntryReadOnly(input.sessionKey!, { agentId: input.agentId });
+      return loaded.entry?.repositoryWorkspaceId
+        ? repository.requestForSession(input)
+        : methods.requestForSession(input);
+    },
+    requestPersonalForSession(...args: Parameters<typeof personal.requestPersonalForSession>) {
+      return resolveGitHubPublicationWorkspaceOwner(args[1]).kind === "repository"
+        ? repository.requestPersonalForSession(...args)
+        : personal.requestPersonalForSession(...args);
+    },
+    personalStatus(...args: Parameters<typeof personal.personalStatus>) {
+      return repository.hasRequest(args[2])
+        ? repository.personalStatus(...args)!
+        : personal.personalStatus(...args);
+    },
+    personalPending(...args: Parameters<typeof personal.personalPending>) {
+      return repository.personalPending(...args) ?? personal.personalPending(...args);
+    },
+    confirmPersonal(...args: Parameters<typeof personal.confirmPersonal>) {
+      return repository.hasRequest(args[0].requestId)
+        ? repository.confirmPersonal(...args)
+        : personal.confirmPersonal(...args);
+    },
+    async processClaim(claim: WorkerSessionTurnClaim) {
+      return [...(await methods.processClaim(claim)), ...(await repository.processClaim(claim))];
+    },
+    async resumeSessionRequests() {
+      await methods.resumeSessionRequests();
+      await repository.resumeSessionRequests();
+    },
+    deferOrphanedRequests() {
+      methods.deferOrphanedRequests();
+      repository.deferOrphanedRequests();
+    },
+    listUnreportedResults() {
+      return [...methods.listUnreportedResults(), ...repository.listUnreportedResults()];
+    },
+    read(requestId: string) {
+      return repository.read(requestId) ?? methods.read(requestId);
+    },
+    markReported(requestId: string) {
+      methods.markReported(requestId);
+      repository.markReported(requestId);
+    },
   };
 }
