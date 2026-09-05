@@ -6,20 +6,20 @@ import { getModelProviderLocalServiceReconciler } from "./provider-local-service
 import { registerProviderStreamForModel } from "./provider-stream.js";
 
 const { prepare, providerStream, reconcile, runtimeHandle } = vi.hoisted(() => {
-  const prepare = vi.fn(async () => undefined);
-  const reconcile = vi.fn(async () => undefined);
+  const prepareMock = vi.fn(async () => undefined);
+  const reconcileMock = vi.fn(async () => undefined);
   return {
-    prepare,
+    prepare: prepareMock,
     providerStream: vi.fn(),
-    reconcile,
+    reconcile: reconcileMock,
     runtimeHandle: {
       provider: "test-provider",
       modelId: "test-model",
       plugin: {
-        reconcileLocalService: reconcile,
+        reconcileLocalService: reconcileMock,
         wrapStreamFn: ({ streamFn }: { streamFn: typeof providerStream }) => {
           return async (...args: Parameters<typeof providerStream>) => {
-            await prepare();
+            await prepareMock();
             return streamFn(...args);
           };
         },
