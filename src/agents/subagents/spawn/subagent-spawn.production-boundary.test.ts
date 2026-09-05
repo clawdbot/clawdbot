@@ -10,11 +10,7 @@ import {
   type OpenClawConfig,
 } from "../../../config/config.js";
 import { loadSessionEntry } from "../../../config/sessions/session-accessor.js";
-import { readAgentRuntimeExecutionLineage } from "../../../gateway/agent-runtime-execution-lineage.js";
-import {
-  createAgentRuntimeApprovalAuthorityValidator,
-  type AgentRuntimeIdentity,
-} from "../../../gateway/agent-runtime-identity-token.js";
+import type { AgentRuntimeIdentity } from "../../../gateway/agent-runtime-identity-token.js";
 import { registerChatAbortController } from "../../../gateway/chat-abort.js";
 import { createChatAbortContext } from "../../../gateway/server-methods/chat.abort.test-helpers.js";
 import type { GatewayRequestContext } from "../../../gateway/server-methods/types.js";
@@ -37,7 +33,6 @@ import {
   prepareAgentRunAdmission,
 } from "../../admitted-run-context.js";
 import type { EmbeddedAgentRunResult } from "../../embedded-agent.js";
-import { refreshPreparedModelRuntimeSnapshots } from "../../prepared-model-runtime.js";
 import {
   createAdmittedGatewayToolCallerIdentity,
   withGatewayToolCallerIdentity,
@@ -222,11 +217,19 @@ describe("recursive spawn production boundary", () => {
   it("authorizes and admits an upgraded descendant before model execution", async () => {
     process.stderr.write("spawn-boundary:test:start\n");
     const bound = await createBoundParent();
-    const [{ createGatewayInstanceRuntime }, { createRequestGatewayMethodRegistry }] =
-      await Promise.all([
-        import("../../../gateway/server-instance-runtime.js"),
-        import("../../../gateway/server-methods.js"),
-      ]);
+    const [
+      { readAgentRuntimeExecutionLineage },
+      { createAgentRuntimeApprovalAuthorityValidator },
+      { createGatewayInstanceRuntime },
+      { createRequestGatewayMethodRegistry },
+      { refreshPreparedModelRuntimeSnapshots },
+    ] = await Promise.all([
+      import("../../../gateway/agent-runtime-execution-lineage.js"),
+      import("../../../gateway/agent-runtime-identity-token.js"),
+      import("../../../gateway/server-instance-runtime.js"),
+      import("../../../gateway/server-methods.js"),
+      import("../../prepared-model-runtime.js"),
+    ]);
     process.stderr.write("spawn-boundary:refresh:start\n");
     await waitForStage(
       "prepared model runtime publication",
