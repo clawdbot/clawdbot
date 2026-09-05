@@ -908,6 +908,45 @@ cleanup failure, and cancellation stop before fallback, retry, replay, or succes
 Full Release Validation continues to disable the publisher entirely and retains
 performance evidence only as workflow artifacts.
 
+### Vitest paired benchmark
+
+The manual-only `vitest-pair` mode compares two exact commits with the workflow
+implementation from the candidate commit:
+
+```bash
+gh workflow run openclaw-performance.yml \
+  --ref <candidate-branch> \
+  -f mode=vitest-pair \
+  -f baseline_ref=<40-character-baseline-sha> \
+  -f target_ref=<40-character-candidate-sha>
+```
+
+Both inputs must be lowercase full SHAs, `target_ref` must equal the workflow
+SHA selected by `--ref`, and reruns are refused. Dispatch a fresh workflow run
+instead of retrying an attempt. Kova, source probes, report publication, and
+their artifact-only guard stay skipped in this mode. The benchmark job has
+read-only repository permission, does not receive secrets, does not restore or
+save Actions caches, and checks out the helper, candidate, and baseline with
+credentials disabled.
+
+The committed lane manifest covers representative core unit, Gateway, Control
+UI jsdom, and worker-lifecycle tests. Both commits must expose the same lane and
+file inventory and pass correctness before timing state is created. The harness
+then runs one excluded warmup per side and lane, seven paired rounds with
+alternating side order and rotated lane order, plus one separately labeled cold
+pair with fresh caches. Frozen installs are setup and are never timed.
+
+Each child has a fixed deadline and process-group owner. The artifact includes
+raw logs, sampled Linux process-tree RSS, GNU time user/system CPU, environment
+and Git identities, source/config hashes, per-run records, paired-ratio
+analysis, and a terminal success or failure manifest. The workflow always
+uploads the artifact, including failed runs. Mutable pnpm and runtime caches
+stay in an unuploaded scratch tree. Thresholds are fixed in
+`scripts/vitest-pair-benchmark-lanes.json`; the report claims an improvement
+only when every representative lane clears the improvement ratio in at least
+five of seven pairs. Otherwise it reports per-lane evidence without a broad
+improvement claim.
+
 ## Full Release Validation
 
 `Full Release Validation` is the manual release umbrella. Every run binds an
