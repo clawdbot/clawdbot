@@ -19,7 +19,7 @@ import {
   isCliTerminalStopCode,
   resolveFailoverStatus,
 } from "../../failover-error.js";
-import { classifyRateLimitWindow, resolveRetryAfterMs } from "../../failover/retry-evidence.js";
+import { classifyRateLimitWindow } from "../../failover/retry-evidence.js";
 import {
   resolveSessionSuspensionReason,
   type SessionSuspensionParams,
@@ -74,7 +74,6 @@ export async function handleEmbeddedPromptFailure(input: {
     | "advanceAuthProfile"
     | "advanceRateLimitAuthProfile"
     | "maybeMarkAuthProfileFailure"
-    | "maybeRetryTransient"
     | "transientRetryCount"
   >;
   attemptedThinking: Set<ThinkLevel>;
@@ -202,31 +201,6 @@ export async function handleEmbeddedPromptFailure(input: {
       profileRotated,
     });
   let failoverDecision = resolveDecision(false);
-  const canRetryRateLimit =
-    promptFailoverReason !== "rate_limit" || classifyRateLimitWindow(errorText).kind === "short";
-  if (
-    !recordedTerminalStop &&
-    !input.externalAbort &&
-    canRetryRateLimit &&
-    promptFailoverReason &&
-    (await input.failover.maybeRetryTransient({
-      reason: promptFailoverReason,
-      retryAfterMs: resolveRetryAfterMs(errorText),
-    }))
-  ) {
-    logFailoverDecision("retry_same_model", {
-      retryCount: input.failover.transientRetryCount,
-    });
-    return {
-      action: "retry",
-      thinkLevel: input.thinkLevel,
-      authRetryPending: false,
-      lastRetryFailoverReason: mergeRetryFailoverReason({
-        previous: input.previousRetryFailoverReason,
-        failoverReason: promptFailoverReason,
-      }),
-    };
-  }
   let rotated = false;
   if (failoverDecision.action === "rotate_profile") {
     if (promptFailoverReason === "rate_limit") {

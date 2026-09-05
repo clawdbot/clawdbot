@@ -12,6 +12,7 @@ import {
   resolveFailoverReasonFromError,
   resolveFailoverStatus,
 } from "../../failover-error.js";
+import { classifyRateLimitWindow, resolveRetryAfterMs } from "../../failover/retry-evidence.js";
 import { isConfigBackedInlineProviderApiKey, type ResolvedProviderAuth } from "../../model-auth.js";
 import { log } from "../logger.js";
 import type { TraceAttempt } from "../types.js";
@@ -224,7 +225,14 @@ export function createEmbeddedRunFailoverRetryController(input: {
     },
     maybeRetryTransient: async (retry: {
       reason: FailoverReason;
+      message?: string;
       retryAfterMs?: number;
+      onRetry?: (status: {
+        attempt: number;
+        maxRetries: number;
+        delayMs: number;
+        reason: FailoverReason;
+      }) => void | Promise<void>;
     }): Promise<boolean> => {
       if (
         retry.reason !== "rate_limit" &&
@@ -237,11 +245,14 @@ export function createEmbeddedRunFailoverRetryController(input: {
       if (transientRetryCount >= transientRetryBudget) {
         return false;
       }
+      if (retry.reason === "rate_limit" && classifyRateLimitWindow(retry.message).kind === "long") {
+        return false;
+      }
       const nowMs = Date.now();
       transientRetryWindowStartMs ??= nowMs;
       const delayMs = resolveTransientRetryDelayMs({
         retryNumber: transientRetryCount + 1,
-        retryAfterMs: retry.retryAfterMs,
+        retryAfterMs: Math.max(retry.retryAfterMs ?? 0, resolveRetryAfterMs(retry.message) ?? 0),
         elapsedMs: nowMs - transientRetryWindowStartMs,
       });
       if (delayMs === undefined) {
@@ -256,6 +267,12 @@ export function createEmbeddedRunFailoverRetryController(input: {
       log.warn(
         `transient same-model retry ${transientRetryCount + 1}/${transientRetryBudget} for ${sanitizeForLog(provider)}/${sanitizeForLog(modelId)} reason=${retry.reason}: delayMs=${delayMs}`,
       );
+      await retry.onRetry?.({
+        attempt: transientRetryCount + 1,
+        maxRetries: transientRetryBudget,
+        delayMs,
+        reason: retry.reason,
+      });
       await sleepForRetry(delayMs);
       transientRetryCount += 1;
       return true;
