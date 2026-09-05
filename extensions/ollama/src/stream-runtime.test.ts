@@ -2948,6 +2948,12 @@ describe("createOllamaStreamFn", () => {
       expected: undefined,
     },
     {
+      name: "preserves cloud-provider routing through a custom proxy",
+      baseUrl: "https://proxy.example.test",
+      model: { provider: "ollama-cloud", id: "glm-5.2" },
+      expected: undefined,
+    },
+    {
       name: "leaves locally proxied cloud history settings to the server",
       baseUrl: "http://ollama-host:11434",
       model: { id: "qwen3:32b-cloud" },

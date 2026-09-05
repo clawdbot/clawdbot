@@ -40,7 +40,11 @@ import {
   readStringValue,
 } from "openclaw/plugin-sdk/string-coerce-runtime";
 import { estimateStringChars } from "openclaw/plugin-sdk/text-utility-runtime";
-import { OLLAMA_CLOUD_BASE_URL, OLLAMA_DEFAULT_BASE_URL } from "./defaults.js";
+import {
+  isOllamaCloudOrigin,
+  OLLAMA_CLOUD_PROVIDER_ID,
+  OLLAMA_DEFAULT_BASE_URL,
+} from "./defaults.js";
 import { normalizeOllamaWireModelId } from "./model-id.js";
 import { buildOllamaBaseUrlSsrFPolicy, isOllamaCloudModel } from "./provider-models.js";
 import {
@@ -309,7 +313,7 @@ function resolveOllamaResponseFormat(
   if (
     !responseFormat ||
     isOllamaCloudModel(params.modelId) ||
-    isOllamaCloudBaseUrl(params.baseUrl)
+    isOllamaCloudOrigin(params.baseUrl)
   ) {
     return undefined;
   }
@@ -324,14 +328,6 @@ function resolveOllamaResponseFormat(
     return isRecord(schema) ? schema : undefined;
   }
   return responseFormat;
-}
-
-function isOllamaCloudBaseUrl(baseUrl: string): boolean {
-  try {
-    return new URL(baseUrl).origin === OLLAMA_CLOUD_BASE_URL;
-  } catch {
-    return false;
-  }
 }
 
 type StreamModelDescriptor = {
@@ -1015,7 +1011,9 @@ function createRawOllamaStreamFn(
         const requestParams = {
           // OpenClaw owns history compaction. Ask local servers to reject overflow
           // instead of silently discarding messages or shifting the context window.
-          ...(!isOllamaCloudModel(model.id) && !isOllamaCloudBaseUrl(baseUrl)
+          ...(model.provider !== OLLAMA_CLOUD_PROVIDER_ID &&
+          !isOllamaCloudModel(model.id) &&
+          !isOllamaCloudOrigin(baseUrl)
             ? { truncate: false, shift: false }
             : {}),
           ...resolveOllamaTopLevelParams(model),
