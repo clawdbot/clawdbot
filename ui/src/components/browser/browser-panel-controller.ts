@@ -546,7 +546,7 @@ export class BrowserPanelController implements ReactiveController {
     const previous = { targetId: this.activeTargetId, view: this.view };
     this.invalidateViewOperations();
     const epoch = this.operations.epoch;
-    this.setState("activeTargetId", targetId);
+    this.setState("activeTargetId", route ? null : targetId);
     this.setState("view", null);
     this.exitCaptureModes();
     if (!route && this.clearUnavailableView()) {

@@ -219,8 +219,13 @@ describe("browser panel route handoff", () => {
 
   it("leaves a stopped browser on its Start affordance instead of focusing a historical tab", async () => {
     let running = false;
+    const routedRefresh = createDeferred<void>();
+    let pauseRefresh = false;
     const gateway = createBrowserClient(async (request) => {
       if (request.path === "/tabs") {
+        if (pauseRefresh) {
+          await routedRefresh.promise;
+        }
         return running
           ? {
               running: true,
@@ -256,6 +261,16 @@ describe("browser panel route handoff", () => {
       'button[aria-label="Reload"]',
     );
     expect(reload?.disabled).toBe(true);
+
+    pauseRefresh = true;
+    chooseCard(panel, { ...hostTab, targetId: "dead-target" });
+    try {
+      await panel.updateComplete;
+      expect(reload?.disabled).toBe(true);
+    } finally {
+      routedRefresh.resolve();
+    }
+    await flushBrowserResponses();
 
     start?.click();
     await waitForFast(() => expect(pageTitle(panel)).toBe("managed"));
