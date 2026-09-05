@@ -42,7 +42,10 @@ import {
   readCommittedTranscriptMessageSequence,
   rememberCommittedTranscriptMessageSequencesInTransaction,
 } from "./session-accessor.sqlite-transcript-sequences.js";
-import { readTranscriptGenerationInTransaction } from "./session-accessor.sqlite-transcript-state.js";
+import {
+  readNextTranscriptSeq,
+  readTranscriptGenerationInTransaction,
+} from "./session-accessor.sqlite-transcript-state.js";
 import {
   appendTranscriptEventInTransaction,
   replaceSqliteTranscriptEventsInTransaction,
@@ -56,6 +59,7 @@ import type {
   SessionTranscriptRuntimeTarget,
   SessionTranscriptWriteTransactionContext,
 } from "./session-accessor.types.js";
+import { projectCompactionAccountingPatch } from "./session-entry-projection.js";
 import { projectCanonicalSessionEntryShape } from "./store-entry-shape.js";
 import type { TranscriptEntryAnchor } from "./transcript-entry-anchor.js";
 import {
@@ -332,10 +336,12 @@ export function appendTranscriptEventSync(
       return;
     }
     result = ok(
-      appendTranscriptEventInTransaction(
-        database,
-        resolved,
-        resolveTranscriptEventAppendParent(database, resolved.sessionId, event, options),
+      Boolean(
+        appendTranscriptEventInTransaction(
+          database,
+          resolved,
+          resolveTranscriptEventAppendParent(database, resolved.sessionId, event, options),
+        ),
       ),
     );
   }, toDatabaseOptions(resolved));
@@ -343,6 +349,54 @@ export function appendTranscriptEventSync(
     throw new SessionTranscriptWriterClaimReboundError(result.error);
   }
   return result;
+}
+
+/** Commits one compaction boundary and its session accounting as one SQLite write. */
+export function persistCompactionBoundaryWithSessionEntrySync(
+  scope: SessionTranscriptRuntimeTarget &
+    Pick<SessionTranscriptWriteScope, "expectedLifecycleRevision" | "expectedWriterRunId">,
+  params: {
+    append: () => string;
+    transcriptByteCompactionLatch: NonNullable<
+      InternalSessionEntry["transcriptByteCompactionLatch"]
+    >;
+    validateAppend: (entryId: string, appendedText: string) => boolean;
+  },
+): string {
+  const fencedScope = withOwnedSessionTranscriptWriterFence(scope);
+  const resolved = resolveSqliteTranscriptScope(fencedScope);
+  return runOpenClawAgentWriteTransaction(
+    (database) => {
+      assertOwnedTranscriptWriteCommit(fencedScope);
+      const firstAppendedSeq = readNextTranscriptSeq(database, resolved.sessionId);
+      const entryId = params.append();
+      const appendedText = readTranscriptEventRows(database, resolved.sessionId, {
+        afterSeq: firstAppendedSeq - 1,
+      })
+        .map((row) => row.eventJson)
+        .join("\n");
+      if (!params.validateAppend(entryId, appendedText ? `${appendedText}\n` : "")) {
+        throw new Error("Compaction boundary validation failed");
+      }
+      assertOwnedTranscriptWriteCommit(fencedScope);
+      const fresh = readSessionEntryRow(database, resolved.sessionKey)?.entry;
+      const refusal = resolveTranscriptAppendRefusal(fresh, resolved, fencedScope);
+      if (refusal) {
+        throw new SessionTranscriptWriterClaimReboundError(refusal);
+      }
+      const entry = projectCanonicalSessionEntryShape({
+        ...fresh!,
+        ...projectCompactionAccountingPatch(fresh!, {
+          compactionKind: "context-engine",
+          transcriptByteCompactionLatch: params.transcriptByteCompactionLatch,
+        }),
+      });
+      writeSessionEntry(database, resolved.sessionKey, entry, { previousEntry: fresh });
+      return entryId;
+    },
+    toDatabaseOptions(resolved),
+    { operationLabel: "session.compaction-boundary" },
+  );
 }
 
 function resolveTranscriptEventAppendParent(

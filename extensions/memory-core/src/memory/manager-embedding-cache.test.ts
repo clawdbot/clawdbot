@@ -11,7 +11,7 @@ import {
 } from "./manager-embedding-cache.js";
 
 describe("memory embedding cache", () => {
-  const { DatabaseSync } = requireNodeSqlite();
+  const { DatabaseSync, StatementSync } = requireNodeSqlite();
 
   function createDb() {
     const db = new DatabaseSync(":memory:");
@@ -26,6 +26,9 @@ describe("memory embedding cache", () => {
 
   it("loads cached embeddings for the active provider key", () => {
     const db = createDb();
+    const prepare = vi.spyOn(db, "prepare");
+    const columns = vi.spyOn(StatementSync.prototype, "columns");
+    const largeEmbedding = Array.from({ length: 4096 }, () => 0.1234567890123456);
     try {
       upsertMemoryEmbeddingCache({
         db,
@@ -35,9 +38,18 @@ describe("memory embedding cache", () => {
         entries: [
           { hash: "a", embedding: [0.1, 0.2] },
           { hash: "b", embedding: [0.3, 0.4] },
+          { hash: "a", embedding: largeEmbedding },
         ],
         now: 123,
       });
+      expect(prepare).toHaveBeenCalledTimes(1);
+      expect(columns).not.toHaveBeenCalled();
+      expect(
+        db.prepare("SELECT hash, dims, updated_at FROM memory_embedding_cache ORDER BY hash").all(),
+      ).toEqual([
+        { hash: "a", dims: 4096, updated_at: 123 },
+        { hash: "b", dims: 2, updated_at: 123 },
+      ]);
 
       const cached = loadMemoryEmbeddingCache({
         db,
@@ -54,11 +66,13 @@ describe("memory embedding cache", () => {
 
       expect(cached).toEqual(
         new Map([
-          ["a", [0.1, 0.2]],
+          ["a", largeEmbedding],
           ["b", [0.3, 0.4]],
         ]),
       );
     } finally {
+      prepare.mockRestore();
+      columns.mockRestore();
       db.close();
     }
   });

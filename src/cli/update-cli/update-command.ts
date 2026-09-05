@@ -98,58 +98,63 @@ export async function updateCommand(inputOpts: UpdateCommandOptions): Promise<vo
     runId: run.runId,
   };
   recoveryState.triageTarget.root = prepared.discoveredRoot;
-  await withUpdateFailureTriage(
-    { ...opts, invocationCwd },
-    recoveryState.triageTarget,
-    async () => {
-      await withUpdateInProgressEnv(invocationCwd, async () => {
-        let failure: { error: unknown } | undefined;
-        try {
-          await updateCommandInternal(opts, recoveryState, invocationCwd, prepared);
-        } catch (error) {
-          failure = { error };
-        }
-        try {
-          await recoveryState.windowsTaskAutoStartRecovery?.restore();
-        } catch (error) {
-          if (failure?.error instanceof UpdateCommandFailure) {
-            // A rejected restore promise can be observed again during unwinding.
-            // Keep the reported failure and never turn cleanup into safe-exit 80.
-            failure = {
-              error: new UpdateCommandFailure(
-                { ...failure.error.result, status: "error" },
-                1,
-                `${failure.error.message}; Windows autostart recovery: ${formatErrorMessage(error)}`,
-                { cause: error },
-              ),
-            };
-          } else {
-            failure = {
-              error: failure
-                ? new AggregateError(
-                    [failure.error, error],
-                    `Update failed (${formatErrorMessage(failure.error)}) and Windows autostart recovery failed (${formatErrorMessage(error)})`,
-                    { cause: failure.error },
-                  )
-                : error,
-            };
+  const presentation = createUpdateProgress(!opts.json && !prepared.postCoreUpdateResume, run);
+  try {
+    await withUpdateFailureTriage(
+      { ...opts, invocationCwd },
+      recoveryState.triageTarget,
+      async () => {
+        await withUpdateInProgressEnv(invocationCwd, async () => {
+          let failure: { error: unknown } | undefined;
+          try {
+            await updateCommandInternal(opts, recoveryState, invocationCwd, prepared, presentation);
+          } catch (error) {
+            failure = { error };
           }
-        } finally {
-          recoveryState.windowsTaskAutoStartRecovery?.complete();
-        }
-        if (failure) {
-          if (!prepared.postCoreUpdateResume) {
-            if (failure.error instanceof UpdateCommandFailure) {
-              completeUpdateCommandRun(failure.error.result, run);
+          try {
+            await recoveryState.windowsTaskAutoStartRecovery?.restore();
+          } catch (error) {
+            if (failure?.error instanceof UpdateCommandFailure) {
+              // A rejected restore promise can be observed again during unwinding.
+              // Keep the reported failure and never turn cleanup into safe-exit 80.
+              failure = {
+                error: new UpdateCommandFailure(
+                  { ...failure.error.result, status: "error" },
+                  1,
+                  `${failure.error.message}; Windows autostart recovery: ${formatErrorMessage(error)}`,
+                  { cause: error },
+                ),
+              };
             } else {
-              failUpdateCommandRun(failure.error, run);
+              failure = {
+                error: failure
+                  ? new AggregateError(
+                      [failure.error, error],
+                      `Update failed (${formatErrorMessage(failure.error)}) and Windows autostart recovery failed (${formatErrorMessage(error)})`,
+                      { cause: failure.error },
+                    )
+                  : error,
+              };
             }
+          } finally {
+            recoveryState.windowsTaskAutoStartRecovery?.complete();
           }
-          throw failure.error;
-        }
-      });
-    },
-  );
+          if (failure) {
+            if (!prepared.postCoreUpdateResume) {
+              if (failure.error instanceof UpdateCommandFailure) {
+                completeUpdateCommandRun(failure.error.result, run);
+              } else {
+                failUpdateCommandRun(failure.error, run);
+              }
+            }
+            throw failure.error;
+          }
+        });
+      },
+    );
+  } finally {
+    presentation.dispose();
+  }
 }
 
 async function updateCommandInternal(
@@ -157,6 +162,7 @@ async function updateCommandInternal(
   recoveryState: UpdateCommandRecoveryState,
   invocationCwd: string | undefined,
   prepared: NonNullable<Awaited<ReturnType<typeof prepareUpdateCommand>>>,
+  presentation: ReturnType<typeof createUpdateProgress>,
 ): Promise<void> {
   const {
     startedAt,
@@ -184,9 +190,6 @@ async function updateCommandInternal(
     return;
   }
 
-  if (!opts.json) {
-    defaultRuntime.log(theme.muted("Checking for updates..."));
-  }
   let updateInstallKind = installKind;
   const refuseUpdate = (reason: string, message?: string) =>
     reportPreMutationUpdateFailure({
@@ -474,7 +477,7 @@ async function updateCommandInternal(
     { env: run.env },
   );
   recordUpdateRunPhase(run.runId, "validating", undefined, { env: run.env });
-  const packageSchemaPreflight = checkTargetDatabaseSchemas(packageTargetSchemaVersions);
+  const packageSchemaPreflight = await checkTargetDatabaseSchemas(packageTargetSchemaVersions);
   if (!opts.dryRun && hasSchemaRefusal(packageSchemaPreflight)) {
     await refuseUpdate(
       "database-schema-preflight",
@@ -598,13 +601,7 @@ async function updateCommandInternal(
   });
   await disableCurrentOpenClawUpdateLaunchdJob().catch(() => undefined);
 
-  const showProgress = !opts.json;
-  if (!opts.json) {
-    defaultRuntime.log(theme.heading("Updating OpenClaw..."));
-    defaultRuntime.log("");
-  }
-
-  const { progress: displayProgress, stop } = createUpdateProgress(showProgress);
+  const { progress: displayProgress, stop } = presentation;
   const progress = createUpdateRunProgress(run, displayProgress);
   const preUpdatePluginInstallRecords = await loadInstalledPluginIndexInstallRecords();
 

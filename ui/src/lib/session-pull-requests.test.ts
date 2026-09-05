@@ -2,10 +2,10 @@ import { afterEach, describe, expect, it, vi } from "vitest";
 import type { GatewayBrowserClient, GatewayEventListener, GatewayHelloOk } from "../api/gateway.ts";
 import type { ApplicationGateway, ApplicationGatewaySnapshot } from "../app/gateway.ts";
 import {
-  scopedSessionPullRequestKey,
   SESSION_PULL_REQUESTS_SUBSCRIBE_METHOD,
   sessionPullRequestsForGateway,
 } from "./session-pull-requests.ts";
+import { scopedSessionArtifactKey } from "./sessions/session-key.ts";
 
 function createHello(): GatewayHelloOk {
   return {
@@ -636,7 +636,7 @@ describe("session pull request snapshot store", () => {
   });
 
   it("scopes global aliases without changing canonical keys", () => {
-    expect(scopedSessionPullRequestKey("global", "Work")).toBe("agent:work:global");
-    expect(scopedSessionPullRequestKey("agent:work:main", "main")).toBe("agent:work:main");
+    expect(scopedSessionArtifactKey("global", "Work")).toBe("agent:work:global");
+    expect(scopedSessionArtifactKey("agent:work:main", "main")).toBe("agent:work:main");
   });
 });

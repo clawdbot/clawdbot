@@ -27,6 +27,11 @@ export type ModelSetupWizardCompletion = {
   isCurrent?: () => boolean;
 };
 
+type WizardTerminalObserver = (
+  result: WizardNextResult,
+  admissionRejected?: true,
+) => (() => boolean) | void;
+
 type WizardRunnerOptions = {
   getClient: () => GatewayBrowserClient | null;
   getAgentId: () => string | null;
@@ -34,7 +39,7 @@ type WizardRunnerOptions = {
   onStart?: (
     method: ModelSetupWizardStartMethod,
     activation?: SystemAgentSetupActivateParams,
-  ) => ((result: WizardNextResult) => (() => boolean) | void) | undefined;
+  ) => WizardTerminalObserver | undefined;
   requestFailedMessage: () => string;
   cancelledMessage: () => string;
   sessionExpiredMessage: () => string;
@@ -46,7 +51,8 @@ type WizardSession = {
   abortController: AbortController;
   startMethod: ModelSetupWizardStartMethod;
   activationTargetId?: string;
-  onTerminalResult?: (result: WizardNextResult) => (() => boolean) | void;
+  admissionRejected?: true;
+  onTerminalResult?: WizardTerminalObserver;
 };
 
 export class ModelSetupWizardRunner {
@@ -117,6 +123,7 @@ export class ModelSetupWizardRunner {
           if (!isSetupAdmissionBusyError(error)) {
             throw error;
           }
+          session.admissionRejected = true;
           // Normalize only the retained start's proven non-admission, including
           // late replies after deadline/disposal, through exact terminal cleanup.
           return {
@@ -320,7 +327,9 @@ export class ModelSetupWizardRunner {
     // Success and visible state still require this runner's live session.
     const failed = result.status === "cancelled" || result.status === "error";
     if (result.done && (session === this.session || failed)) {
-      return session.onTerminalResult?.(result);
+      return session.admissionRejected
+        ? session.onTerminalResult?.(result, true)
+        : session.onTerminalResult?.(result);
     }
   }
 

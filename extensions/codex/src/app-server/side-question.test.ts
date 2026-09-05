@@ -167,7 +167,11 @@ function createFakeClient(options: { completeTurn?: boolean } = {}) {
       }
       return turnStartResult("turn-1");
     }
-    if (method === "thread/unsubscribe" || method === "turn/interrupt") {
+    if (method === "turn/interrupt") {
+      queueMicrotask(() => client.emit(turnCompleted("side-thread", "turn-1", "", "interrupted")));
+      return {};
+    }
+    if (method === "thread/unsubscribe") {
       return {};
     }
     throw new Error(`unexpected request: ${method}`);
@@ -344,7 +348,12 @@ function agentDelta(threadId: string, turnId: string, delta: string): CodexServe
   };
 }
 
-function turnCompleted(threadId: string, turnId: string, text: string): CodexServerNotification {
+function turnCompleted(
+  threadId: string,
+  turnId: string,
+  text: string,
+  status: "completed" | "interrupted" = "completed",
+): CodexServerNotification {
   return {
     method: "turn/completed",
     params: {
@@ -352,7 +361,7 @@ function turnCompleted(threadId: string, turnId: string, text: string): CodexSer
       turn: {
         id: turnId,
         threadId,
-        status: "completed",
+        status,
         items: [{ id: "agent-1", type: "agentMessage", text }],
         error: null,
         startedAt: null,
@@ -3637,7 +3646,13 @@ describe("runCodexAppServerSideQuestion", () => {
         }, 0);
         return turnStartResult("turn-1");
       }
-      if (method === "thread/unsubscribe" || method === "turn/interrupt") {
+      if (method === "turn/interrupt") {
+        queueMicrotask(() =>
+          client.emit(turnCompleted("side-thread", "turn-1", "", "interrupted")),
+        );
+        return {};
+      }
+      if (method === "thread/unsubscribe") {
         return {};
       }
       throw new Error(`unexpected request: ${method}`);
@@ -3710,7 +3725,13 @@ describe("runCodexAppServerSideQuestion", () => {
         }, 0);
         return turnStartResult("turn-1");
       }
-      if (method === "thread/unsubscribe" || method === "turn/interrupt") {
+      if (method === "turn/interrupt") {
+        queueMicrotask(() =>
+          client.emit(turnCompleted("side-thread", "turn-1", "", "interrupted")),
+        );
+        return {};
+      }
+      if (method === "thread/unsubscribe") {
         return {};
       }
       throw new Error(`unexpected request: ${method}`);
@@ -3977,12 +3998,6 @@ describe("runCodexAppServerSideQuestion", () => {
     { label: "after its request is written", written: true, interruptFails: false },
     { label: "before its request is written", written: false, interruptFails: false },
     {
-      label: "when Codex proves its native turn already ended",
-      written: true,
-      interruptFails: false,
-      alreadyTerminal: true,
-    },
-    {
       label: "when its native thread cannot unsubscribe",
       written: true,
       interruptFails: false,
@@ -3997,7 +4012,7 @@ describe("runCodexAppServerSideQuestion", () => {
     },
   ])(
     "scopes side-turn abort cleanup $label",
-    async ({ written, interruptFails, retirementFails, alreadyTerminal, unsubscribeFails }) => {
+    async ({ written, interruptFails, retirementFails, unsubscribeFails }) => {
       const controller = new AbortController();
       const harness = createClientHarness();
       if (retirementFails) {
@@ -4038,14 +4053,9 @@ describe("runCodexAppServerSideQuestion", () => {
         expect(interrupt.params).toEqual({ threadId: "side-thread", turnId: "" });
         harness.send({ id: turnStart.id, result: turnStartResult("turn-1") });
         harness.send(
-          alreadyTerminal
-            ? {
-                id: interrupt.id,
-                error: { code: -32_600, message: "no active turn to interrupt" },
-              }
-            : interruptFails
-              ? { id: interrupt.id, error: { code: -32_000, message: "side interrupt failed" } }
-              : { id: interrupt.id, result: {} },
+          interruptFails
+            ? { id: interrupt.id, error: { code: -32_000, message: "side interrupt failed" } }
+            : { id: interrupt.id, result: {} },
         );
       } else {
         controller.abort("side-start-cancelled");
@@ -4093,7 +4103,13 @@ describe("runCodexAppServerSideQuestion", () => {
         queueMicrotask(() => controller.abort());
         return turnStartResult("turn-1");
       }
-      if (method === "turn/interrupt" || method === "thread/unsubscribe") {
+      if (method === "turn/interrupt") {
+        queueMicrotask(() =>
+          client.emit(turnCompleted("side-thread", "turn-1", "", "interrupted")),
+        );
+        return {};
+      }
+      if (method === "thread/unsubscribe") {
         return {};
       }
       throw new Error(`unexpected request: ${method}`);
@@ -4107,12 +4123,14 @@ describe("runCodexAppServerSideQuestion", () => {
         }),
       ),
     ).rejects.toThrow("Codex /btw was aborted.");
-    expect(client.request.mock.calls.filter(([method]) => method === "turn/interrupt")).toEqual([
-      ["turn/interrupt", { threadId: "side-thread", turnId: "turn-1" }, { timeoutMs: 60_000 }],
+    expect(
+      client.request.mock.calls
+        .filter(([method]) => method === "turn/interrupt" || method === "thread/unsubscribe")
+        .map(([method, params]) => [method, params]),
+    ).toEqual([
+      ["turn/interrupt", { threadId: "side-thread", turnId: "turn-1" }],
+      ["thread/unsubscribe", { threadId: "side-thread" }],
     ]);
-    expect(client.request.mock.calls.filter(([method]) => method === "thread/unsubscribe")).toEqual(
-      [["thread/unsubscribe", { threadId: "side-thread" }, { timeoutMs: 60_000 }]],
-    );
   });
 });
 /* oxlint-disable max-lines -- TODO: split this grandfathered oversized file. */

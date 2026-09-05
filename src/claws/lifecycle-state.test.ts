@@ -3,6 +3,7 @@ import { join } from "node:path";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { useAutoCleanupTempDirTracker } from "../../test/helpers/temp-dir.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
+import { cronJobReadView } from "../cron/job-read-view.js";
 import { normalizeCronJobCreate } from "../cron/normalize.js";
 import { upsertCronJobRow } from "../cron/store/row-codec.js";
 import type { CronStoredJob } from "../cron/types.js";
@@ -15,7 +16,7 @@ import {
   openOpenClawStateDatabase,
 } from "../state/openclaw-state-db.js";
 import { applyClawAddPlan } from "./add.js";
-import { markClawCronRefRemoved, readClawCronRefs } from "./cron.js";
+import { clawCronGatewayInput, markClawCronRefRemoved, readClawCronRefs } from "./cron.js";
 import { withClawAgentConfigRemoval } from "./lifecycle-config-removal.js";
 import { applyClawRemovePlan, buildClawRemovePlan, readClawStatus } from "./lifecycle-state.js";
 import { buildClawAddPlan } from "./lifecycle.js";
@@ -33,39 +34,17 @@ const tempDirs = useAutoCleanupTempDirTracker(afterEach);
 const packageIntegrity = "sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa";
 
 function cronReadView(agentId: string, ref: ReturnType<typeof readClawCronRefs>[number]) {
-  const job = ref.job;
-  const normalized = normalizeCronJobCreate({
-    name: job.name ?? job.id,
-    declarationKey: ref.declarationKey,
-    ...(job.name ? { displayName: job.name } : {}),
-    owner: { agentId },
-    enabled: true,
-    agentId,
-    schedule: {
-      kind: "cron",
-      expr: job.schedule.cron,
-      ...(job.schedule.timezone ? { tz: job.schedule.timezone } : {}),
-    },
-    sessionTarget: job.session === "main" ? `session:agent:${agentId}:main` : job.session,
-    wakeMode: "now",
-    payload: { kind: "agentTurn", message: job.message },
-    delivery: job.delivery
-      ? {
-          mode: job.delivery.mode,
-          ...(job.delivery.channel ? { channel: job.delivery.channel } : {}),
-        }
-      : { mode: "none" },
-  });
+  const normalized = normalizeCronJobCreate(clawCronGatewayInput(agentId, ref));
   if (!normalized || !ref.schedulerJobId) {
     throw new Error("expected complete cron provenance");
   }
-  return {
+  return cronJobReadView({
     ...normalized,
     id: ref.schedulerJobId,
     createdAtMs: 1,
     updatedAtMs: 1,
-    state: {},
-  };
+    state: { nextRunAtMs: 100, lastRunAtMs: 50, lastStatus: "ok" },
+  });
 }
 
 function seedAttachedCronJob(

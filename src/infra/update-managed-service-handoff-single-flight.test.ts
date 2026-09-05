@@ -6,6 +6,7 @@ import path from "node:path";
 import { PassThrough } from "node:stream";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { useAutoCleanupTempDirTracker } from "../../test/helpers/temp-dir.js";
+import { createDeferredCore } from "../shared/deferred.js";
 import {
   signalMockManagedUpdateHandoffReady,
   type MockManagedUpdateHandoffLeaseFailure,
@@ -118,6 +119,48 @@ const baseParams = {
 };
 
 describe("managed service update handoff single-flight", () => {
+  it.each([false, true])(
+    "awaits the pre-park notice and rechecks helper ownership (lost: %s)",
+    async (lost) => {
+      const { requestManagedServiceUpdateHandoffPark, startManagedServiceUpdateHandoff } =
+        await import("./update-managed-service-handoff.js");
+      const entered = createDeferredCore();
+      const delivered = createDeferredCore();
+      const started = await startManagedServiceUpdateHandoff({
+        ...baseParams,
+        root: `${MOCK_INSTALL_ROOT}-notice-${lost}`,
+        meta: {},
+        beforePark: async () => {
+          entered.resolve();
+          await delivered.promise;
+        },
+      });
+      if (started.status !== "started") {
+        throw new Error("expected helper ownership");
+      }
+      const child = spawnMock.mock.results[0]?.value as ReturnType<typeof createReadyChild>;
+      const commands: string[] = [];
+      child.stdin.on("data", (chunk: Buffer) => {
+        commands.push(chunk.toString());
+        child.stdout.write("parked\n");
+      });
+      const park = requestManagedServiceUpdateHandoffPark({
+        kind: "managed-update-handoff",
+        ...started,
+      });
+      await entered.promise;
+      expect(commands).toEqual([]);
+      if (lost) {
+        child.emit("exit", 0, null);
+      }
+      delivered.resolve();
+      await expect(park).resolves.toBe(!lost);
+      expect(commands).toEqual(lost ? [] : ["park\n"]);
+      if (!lost) {
+        child.emit("exit", 0, null);
+      }
+    },
+  );
   it.each([
     ["does not exist", "absent"],
     ["has malformed helper identity", "malformed"],

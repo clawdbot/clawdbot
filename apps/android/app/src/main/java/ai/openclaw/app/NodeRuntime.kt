@@ -1996,9 +1996,8 @@ class NodeRuntime private constructor(
     )
 
   /**
-   * Triggers an immediate gateway reconnect when Android reports a validated transport
-   * restore, instead of waiting for the time-based backoff slot in [GatewaySession].
-   * Each session keeps ownership of desired-connection and auth-pause decisions.
+   * Wakes gateway retries when Android attaches an app-visible network.
+   * Each session keeps ownership of desired-connection, auth-pause, and readiness decisions.
    */
   private val networkMonitor = NetworkMonitor(appContext, ::retryGatewaySessionsAfterNetworkRestore)
 
@@ -2006,6 +2005,7 @@ class NodeRuntime private constructor(
     launchGatewayLifecycle {
       operatorSession.retryAfterNetworkRestore()
       nodeSession.retryAfterNetworkRestore()
+      secondaryOperatorSessions.values.toList().forEach { it.session.retryAfterNetworkRestore() }
     }
   }
 

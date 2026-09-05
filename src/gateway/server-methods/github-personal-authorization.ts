@@ -5,6 +5,7 @@ import {
   resolveOperatorRolePolicy,
   resolveOperatorRolePolicyForProfile,
 } from "../operator-role-policy.js";
+import type { SessionMutationTarget } from "../session-mutation-authorization-error.js";
 import {
   createSessionListEntryFilter,
   resolveSessionMutationAuthorization,
@@ -83,7 +84,10 @@ type PersonalEligibility =
   | { kind: "absent" | "ineligible" };
 
 /** Shared reads do not require a person; absence never substitutes for failed authentication. */
-export function prepareGitHubPublicationOptionsRead(options: Request, sessionKey: string) {
+export function prepareGitHubPublicationOptionsRead(
+  options: Request,
+  { sessionKey, agentId: requestedAgentId }: SessionMutationTarget,
+) {
   // Store discovery is stable within this request; session rows remain live reads.
   const targetDiscoveryCache: GatewaySessionStoreDiscoveryCache = new Map();
   const resolveEligibility = (): PersonalEligibility => {
@@ -128,7 +132,7 @@ export function prepareGitHubPublicationOptionsRead(options: Request, sessionKey
         }
       : null;
   };
-  const session = readSession(sessionKey);
+  const session = readSession(sessionKey, requestedAgentId);
   if (!session) {
     throw new Error("GitHub publication session was not found.");
   }
@@ -182,11 +186,11 @@ export function preparePersonalGitHubAction(
 
 export function preparePersonalGitHubSessionAction(
   options: Request,
-  sessionKey: string,
+  { sessionKey, agentId }: SessionMutationTarget,
 ): PersonalGitHubAction & { sessionId: string; sessionKey: string; agentId: string } {
   const action = preparePersonalGitHubAction(options, "operator.write");
   const targetDiscoveryCache: GatewaySessionStoreDiscoveryCache = new Map();
-  const initial = loadGatewaySessionEntryReadOnly(sessionKey, { targetDiscoveryCache });
+  const initial = loadGatewaySessionEntryReadOnly(sessionKey, { agentId, targetDiscoveryCache });
   if (!initial.entry?.sessionId) {
     throw new Error("GitHub publication session was not found.");
   }

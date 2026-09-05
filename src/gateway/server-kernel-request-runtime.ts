@@ -287,6 +287,7 @@ export async function prepareGatewayKernelRequestRuntime(params: {
   const hostLifecycle = params.hostLifecycle;
   if (hostLifecycle) {
     gatewayRequestContext.hostLifecycle = {
+      externalRestart: hostLifecycle.externalRestart,
       request: (action, assertCaller) =>
         hostLifecycle.request(action, () => {
           if (!gatewayInstanceRuntime.isAvailable()) {

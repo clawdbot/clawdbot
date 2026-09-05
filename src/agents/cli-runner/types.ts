@@ -29,6 +29,7 @@ import type { ContextEngine } from "../../context-engine/types.js";
 import type { CronScheduledToolCallerOrigin } from "../../cron/scheduled-tool-policy.js";
 import type { ExecMode } from "../../infra/exec-approvals.js";
 import type { ImageContent } from "../../llm/types.js";
+import type { DiagnosticEmbeddedRunOwner } from "../../logging/diagnostic-run-activity.js";
 import type { MediaFact } from "../../media/media-facts.js";
 import type { PromptImageOrderEntry } from "../../media/prompt-image-order.js";
 import type {
@@ -87,6 +88,8 @@ type CliSessionRetryParams = {
 export type RunCliAgentParams = {
   admittedRunContext?: AdmittedRunContext;
   preparedRunAdmission?: PreparedAgentRunAdmission;
+  /** Core lifecycle owner; never forwarded to the plugin execution context. */
+  diagnosticOwner?: DiagnosticEmbeddedRunOwner;
   /** Caller-owned in-memory transcript for ephemeral helper runs. */
   sessionManager?: SessionManager;
   sessionId: string;

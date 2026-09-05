@@ -149,15 +149,20 @@ function sqliteTranscriptStateHasMarker(params: {
   transcriptContentMarker: string;
 }): boolean {
   const db = getSessionKysely(params.database.db);
-  const rows = executeSqliteQuerySync(
+  const rows = iterateSqliteQuerySync(
     params.database.db,
     db
       .selectFrom("transcript_events")
       .select("event_json")
       .where("session_id", "=", params.sessionId)
       .orderBy("seq", "asc"),
-  ).rows;
-  return rows.some((row) => row.event_json.includes(params.transcriptContentMarker));
+  );
+  // Consume every row so late SQLite errors still abort cleanup planning.
+  let hasMarker = false;
+  for (const row of rows) {
+    hasMarker ||= row.event_json.includes(params.transcriptContentMarker);
+  }
+  return hasMarker;
 }
 
 /** Session ids protected by live node state. */

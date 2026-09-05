@@ -603,14 +603,17 @@ back to OpenClaw.
 | Gateway server            | Other `gateway.*` settings (port, bind, auth mode, roles, tailscale, TLS)                                                                                                                                                                                          | **Yes**                                |
 | Infrastructure            | Other `discovery` and `browser` settings, MCP Apps listener settings, `secrets.egressProxy`, `plugins.load`, `plugins.installs`                                                                                                                                    | **Yes**                                |
 
-Changes to `channels.defaults`, `channels.modelByChannel`, `messages.inbound`,
-`commands`, `accessGroups`, `tts`, `surfaces`,
-`acp.stream`, and `diagnostics.flags` restart loaded channel runtimes to refresh shared policy. Manually stopped accounts stay
-stopped, and the Gateway keeps running.
+Changes to `channels.defaults`, `channels.modelByChannel`, `commands`,
+`accessGroups`, `tts`, `surfaces`, `acp.stream`, and `diagnostics.flags` refresh
+loaded channel runtimes that capture those policies. Manually stopped accounts
+stay stopped, and the Gateway keeps running.
 
-`messages.ackReactionScope` applies to subsequent channel turns without reconnecting
-channels. Per-channel and per-account overrides still take precedence; turns
-already being processed retain their captured policy.
+[Inbound debounce settings](/concepts/messages#inbound-debouncing) apply at the
+next inbound admission without reconnecting supported channels.
+`messages.ackReactionScope` applies to subsequent turns without reconnecting
+Discord, Matrix, Signal, Slack, Telegram, or WhatsApp. Other channel plugins
+refresh unless they declare that they read the policy live. Per-channel and
+per-account overrides still take precedence; admitted turns retain their policy.
 
 `diagnostics.enabled` updates diagnostic dispatch and heartbeat ownership live.
 With `diagnostics-otel` loaded, `diagnostics.otel` restarts only its exporter service,
@@ -707,6 +710,12 @@ Install, update, uninstall, and explicit plugin metadata refresh require a
 Gateway restart; `hybrid` schedules that restart, while `off` leaves it to you.
 Changing an agent's workspace also does not discover plugins in the new
 directory until restart. See [Plugin metadata snapshots](/plugins/architecture#plugin-metadata-snapshot-and-lookup-table).
+
+During channel or plugin hot reload, Gateway-hosted channel webhook routes return
+`503` with `Retry-After: 1` until replacement ingress registers. Senders must honor
+retry responses; this does not acknowledge delivery. Disabled or removed accounts,
+manual stops, and cancelled replacement lifetimes release those temporary routes.
+When replacement ingress reports ready, old paths it did not reclaim are removed.
 
 ### Reload planning
 

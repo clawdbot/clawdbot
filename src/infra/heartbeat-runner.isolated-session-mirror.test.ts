@@ -19,7 +19,7 @@ import {
   seedSessionStore,
   withTempHeartbeatSandbox,
 } from "./heartbeat-runner.test-utils.js";
-import { resetSystemEventsForTest } from "./system-events.js";
+import { enqueueSystemEvent, resetSystemEventsForTest } from "./system-events.js";
 
 type MockDeliveryRequest = {
   payloads?: Array<{ text?: string; mediaUrl?: string; mediaUrls?: string[] }>;
@@ -222,19 +222,29 @@ describe("runHeartbeatOnce - isolated heartbeat outbound session mirror", () => 
       const isolatedSessionKey = `${baseSessionKey}:heartbeat`;
       const nowMs = Date.now();
 
-      await seedSessionStore(storePath, isolatedSessionKey, {
-        sessionId: "isolated-session",
+      await seedSessionStore(storePath, baseSessionKey, {
+        sessionId: "base-session",
         updatedAt: nowMs - 1_000,
         lastChannel: "whatsapp",
         lastProvider: "whatsapp",
         lastTo: "+15551234567",
+      });
+      await seedSessionStore(storePath, isolatedSessionKey, {
+        sessionId: "isolated-session",
+        updatedAt: nowMs - 1_000,
         heartbeatIsolatedBaseSessionKey: baseSessionKey,
+      });
+      enqueueSystemEvent("Exec completed (mirror-reentry, code 0) :: result needs attention", {
+        sessionKey: isolatedSessionKey,
       });
       replySpy.mockResolvedValueOnce({ text: "Wake result needs attention." });
 
       const result = await runHeartbeatOnce({
         cfg,
         sessionKey: isolatedSessionKey,
+        source: "exec-event",
+        intent: "event",
+        reason: "exec-event",
         deps: {
           getReplyFromConfig: replySpy,
           getQueueSize: () => 0,
@@ -254,6 +264,37 @@ describe("runHeartbeatOnce - isolated heartbeat outbound session mirror", () => 
           policyKey: baseSessionKey,
         },
       });
+    });
+  });
+
+  it("skips an ambient isolated poll when its base conversation is missing", async () => {
+    await withTempHeartbeatSandbox(async ({ tmpDir, storePath, replySpy }) => {
+      const cfg = makeIsolatedLastTargetConfig(tmpDir, storePath);
+      const baseSessionKey = resolveMainSessionKey(cfg);
+      const isolatedSessionKey = `${baseSessionKey}:heartbeat`;
+      const nowMs = Date.now();
+      await seedSessionStore(storePath, isolatedSessionKey, {
+        sessionId: "isolated-session",
+        updatedAt: nowMs - 1_000,
+        lastChannel: "whatsapp",
+        lastProvider: "whatsapp",
+        lastTo: "+15551234567",
+        heartbeatIsolatedBaseSessionKey: baseSessionKey,
+      });
+
+      const result = await runHeartbeatOnce({
+        cfg,
+        sessionKey: isolatedSessionKey,
+        deps: {
+          getReplyFromConfig: replySpy,
+          getQueueSize: () => 0,
+          nowMs: () => nowMs,
+        },
+      });
+
+      expect(result).toEqual({ status: "skipped", reason: "no-route" });
+      expect(replySpy).not.toHaveBeenCalled();
+      expect(deliverOutboundPayloadsInternal).not.toHaveBeenCalled();
     });
   });
 
@@ -302,7 +343,7 @@ describe("runHeartbeatOnce - isolated heartbeat outbound session mirror", () => 
           sessionKey: targetSessionKey,
           isMainSession: false,
           isNewSession: false,
-          suppressHeartbeatOwnedEvents: true,
+          events: nextHeartbeatPreflight.pendingEventEntries,
         });
         awareness = await drainFormattedSystemEvents({
           cfg,

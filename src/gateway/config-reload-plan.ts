@@ -86,6 +86,29 @@ type GatewayReloadPlanOptions = {
 
 const PLUGIN_INSTALL_TIMESTAMP_KEYS = ["installedAt", "resolvedAt"] as const;
 const AUTH_CREDENTIAL_PATHS = ["gateway.auth.token", "gateway.auth.password"];
+const SHARED_CHANNEL_PREFIXES = [
+  "agents.defaults.mediaMaxMb",
+  "channels.defaults",
+  "channels.modelByChannel",
+  "messages.inbound",
+  "messages.ackReactionScope",
+  "commands",
+  "accessGroups",
+  "tts",
+  "surfaces",
+  "acp.stream",
+  "diagnostics.flags",
+];
+
+function matchesReloadPrefix(path: string, prefix: string): boolean {
+  return path === prefix || path.startsWith(`${prefix}.`);
+}
+
+function expandReloadPolicies(policies: ReloadPolicy[]): ReloadRule[] {
+  return policies
+    .flatMap(({ prefixes, ...policy }) => prefixes.map((prefix) => ({ ...policy, prefix })))
+    .toSorted((a, b) => b.prefix.length - a.prefix.length);
+}
 
 const CORE_RELOAD_POLICIES: ReloadPolicy[] = [
   { prefixes: ["gateway.remote", "gateway.reload"], kind: "none" },
@@ -254,6 +277,24 @@ function getReloadPolicyCatalog() {
     prefixes: service.reload?.configPrefixes ?? [],
     services: [service.id],
   }));
+  const channelPolicies = channelPlugins.flatMap((plugin): ReloadPolicy[] => [
+    {
+      prefixes: plugin.reload?.configPrefixes ?? [],
+      kind: "hot",
+      channels: [plugin],
+      accountScoped: plugin.reload?.accountScopedRestart,
+    },
+    { prefixes: plugin.reload?.noopPrefixes ?? [], kind: "none", channels: [plugin] },
+  ]);
+  const channelRules = expandReloadPolicies(channelPolicies);
+  const sharedPrefixes = new Set([
+    ...SHARED_CHANNEL_PREFIXES,
+    ...channelRules
+      .filter(({ prefix }) =>
+        SHARED_CHANNEL_PREFIXES.some((root) => matchesReloadPrefix(prefix, root)),
+      )
+      .map(({ prefix }) => prefix),
+  ]);
   const policies: ReloadPolicy[] = [
     ...CORE_RELOAD_POLICIES,
     ...(registry?.reloads ?? []).flatMap(({ registration }) =>
@@ -265,53 +306,38 @@ function getReloadPolicyCatalog() {
         ] as const
       ).map(([kind, prefixes]) => ({ kind, prefixes: prefixes ?? [] })),
     ),
-    ...channelPlugins.flatMap((plugin): ReloadPolicy[] => [
-      {
-        prefixes: plugin.reload?.configPrefixes ?? [],
-        kind: "hot",
-        channels: [plugin],
-        accountScoped: plugin.reload?.accountScopedRestart,
-      },
-      { prefixes: plugin.reload?.noopPrefixes ?? [], kind: "none" },
-    ]),
+    // Shared policy belongs to every loaded channel. One owner's opt-out must
+    // not suppress sibling refreshes; undeclared owners remain restart-bound.
+    ...Array.from(sharedPrefixes, (prefix): ReloadPolicy => {
+      const channels = channelPlugins.filter(
+        (plugin) =>
+          channelRules.find(
+            (rule) => rule.channels?.includes(plugin) && matchesReloadPrefix(prefix, rule.prefix),
+          )?.kind !== "none",
+      );
+      const hasService = servicePolicies.some(({ prefixes }) =>
+        prefixes.some((owner) => matchesReloadPrefix(prefix, owner)),
+      );
+      return { prefixes: [prefix], kind: channels.length || hasService ? "hot" : "none", channels };
+    }),
+    ...channelPolicies,
     ...channelPlugins.map((plugin): ReloadPolicy => ({
       prefixes: [`plugins.entries.${plugin.id}`],
       kind: "hot",
       actions: ["reloadPlugins", "disposeMcpRuntimes"],
       channels: [plugin],
     })),
-    // Channel snapshots capture shared policy. Fan out by default while
-    // preserving explicit plugin/channel policies above on equal-prefix ties.
-    {
-      prefixes: [
-        "agents.defaults.mediaMaxMb",
-        "channels.defaults",
-        "channels.modelByChannel",
-        "messages.inbound",
-        "commands",
-        "accessGroups",
-        "tts",
-        "surfaces",
-        "acp.stream",
-        "diagnostics.flags",
-      ],
-      kind: "hot",
-      channels: channelPlugins,
-    },
     { prefixes: ["session.scope", "session.store"], kind: "hot", actions: ["refreshHooksPolicy"] },
+    ...DEFAULT_RELOAD_POLICIES,
   ];
-  const expand = (items: ReloadPolicy[]): ReloadRule[] =>
-    items.flatMap(({ prefixes, ...policy }) => prefixes.map((prefix) => ({ ...policy, prefix })));
-  const ownedRules = expand([...policies, ...DEFAULT_RELOAD_POLICIES]).toSorted(
-    (a, b) => b.prefix.length - a.prefix.length,
-  );
+  const ownedRules = expandReloadPolicies(policies);
   const rules = [
     ...ownedRules,
     // Narrow service declarations retain existing owner actions, including
     // channel account targeting, while supplying their own hot classification.
     ...servicePolicies.flatMap(({ prefixes }) =>
       prefixes.map((prefix): ReloadRule => ({
-        ...ownedRules.find((owner) => matchesPrefix(prefix, owner.prefix)),
+        ...ownedRules.find((owner) => matchesReloadPrefix(prefix, owner.prefix)),
         kind: "hot",
         prefix,
       })),
@@ -319,7 +345,9 @@ function getReloadPolicyCatalog() {
   ];
   for (const rule of rules) {
     rule.services = servicePolicies
-      .filter((service) => service.prefixes.some((owner) => matchesPrefix(rule.prefix, owner)))
+      .filter((service) =>
+        service.prefixes.some((owner) => matchesReloadPrefix(rule.prefix, owner)),
+      )
       .flatMap((service) => service.services);
   }
   // Narrow config contracts must override broad owner fallbacks. Sort once per
@@ -338,12 +366,8 @@ export function listConfigReloadRefinementPrefixes(): string[] {
   return getReloadPolicyCatalog().refinementPrefixes;
 }
 
-function matchesPrefix(path: string, prefix: string): boolean {
-  return path === prefix || path.startsWith(`${prefix}.`);
-}
-
 function matchRule(path: string): ReloadRule | undefined {
-  return getReloadPolicyCatalog().rules.find(({ prefix }) => matchesPrefix(path, prefix));
+  return getReloadPolicyCatalog().rules.find(({ prefix }) => matchesReloadPrefix(path, prefix));
 }
 
 export function resolveConfigReloadMetadata(path: string): ConfigReloadMetadata {

@@ -30,6 +30,17 @@ function run(patch: Partial<UpdateRunRecord> = {}): UpdateRunRecord {
 }
 
 describe("update run report", () => {
+  it("reports changed git commits when the package version stays the same", () => {
+    const report = renderUpdateRunReport(
+      run({
+        before: { version: "2026.8.1", sha: "1111111111111111111111111111111111111111" },
+        after: { version: "2026.8.1", sha: "9f3c21a0000000000000000000000000000000aa" },
+      }),
+    );
+    expect(report.headline).toBe("✅ OpenClaw updated to 9f3c21a0 (from 11111111).");
+    expect(report.markdown).toContain(report.headline);
+  });
+
   it("distinguishes all terminal outcomes without claiming unobserved verification", () => {
     const reports = [
       run(),

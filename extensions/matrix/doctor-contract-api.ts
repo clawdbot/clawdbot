@@ -19,7 +19,7 @@ import {
   openMatrixStorageMetaStoreOptions,
   writeMatrixStorageMetaStateToStore,
   type MatrixStorageMetadata,
-} from "./src/matrix/client/storage.js";
+} from "./src/matrix/client/storage-metadata.js";
 import {
   hasMatrixSyncCacheStateInStore,
   openMatrixSyncCacheStoreOptions,

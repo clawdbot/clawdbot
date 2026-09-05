@@ -708,30 +708,47 @@ test("sessions.delete limits plugin-runtime cleanup to sessions owned by that pl
   expect(deleted.payload?.deleted).toBe(true);
 });
 
-test("sessions.delete scopes selected global deletes to the requested agent", async () => {
-  const globalStores = await createConfiguredGlobalAgentSessionStore({ writePrimeStore: true });
-
-  await expectSessionDeleteSucceeds({
-    key: "global",
-    agentId: "work",
-    deleteTranscript: false,
-  });
-  expect(
-    loadSessionEntry({
+test.each(["sessions.delete", "sessions.reset"] as const)(
+  "%s scopes selected global cleanup to the requested agent",
+  async (method) => {
+    const globalStores = await createConfiguredGlobalAgentSessionStore({ writePrimeStore: true });
+    const mainTarget = {
       agentId: "main",
       sessionKey: "global",
       storePath: globalStores.mainStorePath,
-    })?.sessionId,
-  ).toBe("sess-main-global");
-  expect(
-    loadSessionEntry({
-      agentId: "work",
-      sessionKey: "global",
-      storePath: globalStores.workStorePath,
-    }),
-  ).toBeUndefined();
-  await resetConfiguredGlobalAgentSessionStore(globalStores);
-});
+    };
+    const workTarget = { ...mainTarget, agentId: "work", storePath: globalStores.workStorePath };
+    for (const target of [mainTarget, workTarget]) {
+      await replaceSessionEntry(
+        target,
+        sessionStoreEntry(`sess-${target.agentId}-global`, {
+          pluginExtensions: { fixture: { state: { owner: target.agentId } } },
+        }),
+      );
+    }
+    const mainBefore = loadSessionEntry(mainTarget);
+    const { ws } = await openClient();
+    try {
+      const result = await rpcReq(ws, method, {
+        key: "global",
+        agentId: "work",
+        ...(method === "sessions.delete" ? { deleteTranscript: false } : {}),
+      });
+      expect(result.ok, result.error?.message).toBe(true);
+      expect(loadSessionEntry(mainTarget)).toEqual(mainBefore);
+      const workAfter = loadSessionEntry(workTarget);
+      if (method === "sessions.delete") {
+        expect(workAfter).toBeUndefined();
+      } else {
+        expect(workAfter?.sessionId).toBe("sess-work-global");
+        expect(workAfter?.pluginExtensions).toBeUndefined();
+      }
+    } finally {
+      ws.close();
+      await resetConfiguredGlobalAgentSessionStore(globalStores);
+    }
+  },
+);
 
 test("sessions.delete closes ACP runtime handles before removing ACP sessions", async () => {
   const { dir } = await createSessionStoreDir();

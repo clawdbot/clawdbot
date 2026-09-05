@@ -254,7 +254,7 @@ Use `accountId` to target a specific account on multi-account channels like Tele
   When true, heartbeat runs use lightweight bootstrap context and skip workspace bootstrap files. Monitor scratch is injected by the heartbeat runner either way.
 </ParamField>
 <ParamField path="isolatedSession" type="boolean" default="false">
-  When true, each heartbeat runs in a fresh session with no prior conversation history. Uses the same isolation pattern as automation jobs with `sessionTarget: "isolated"`. Dramatically reduces per-heartbeat token cost. Combine with `lightContext: true` for maximum savings. Delivery routing still uses the main session context.
+  When true, each heartbeat runs in a fresh session with no prior conversation history. Uses the same isolation pattern as automation jobs with `sessionTarget: "isolated"`. Dramatically reduces per-heartbeat token cost. Combine with `lightContext: true` for maximum savings. Delivery routing and conversation context still follow the selected conversation, including its channel, account, and topic. A background command's completion keeps its original event route if that conversation later moves; it does not borrow the new room's description or activation policy.
 </ParamField>
 <ParamField path="session" type="string">
   Optional session key for heartbeat runs.

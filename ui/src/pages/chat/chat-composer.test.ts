@@ -156,6 +156,11 @@ describe("renderChatComposer controls", () => {
       } as unknown as GatewayBrowserClient,
       onToggleRealtimeTalk: vi.fn(),
     });
+    const dismissRecovery = vi.fn();
+    composerProps.realtimeTalkStatus = "error";
+    composerProps.realtimeTalkDetail = "The selected microphone is unavailable";
+    composerProps.onUseSystemDefaultMicrophone = vi.fn();
+    composerProps.onDismissRealtimeTalkError = dismissRecovery;
     const draw = () => render(renderChatComposer(composerProps), container);
     composerProps.onRequestUpdate = draw;
     draw();
@@ -163,6 +168,7 @@ describe("renderChatComposer controls", () => {
     button(container, t("chat.composer.startVoiceInput")).dispatchEvent(
       dictationPointer("pointerdown", 15),
     );
+    expect(dismissRecovery).toHaveBeenCalled();
     await vi.advanceTimersByTimeAsync(800);
     expect(
       container.querySelector('.agent-chat__talk-status[role="status"]')?.textContent,

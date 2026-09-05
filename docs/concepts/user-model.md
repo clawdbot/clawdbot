@@ -47,7 +47,7 @@ Turning **Git co-author credit** off stops attribution for future runs. It does 
 
 ## GitHub connections
 
-Open **Settings → Profile → GitHub connections** to connect **My GitHub** without changing the shared **System GitHub** account. Both accounts and their connection status remain visible together. Connecting a credential does not change your verified GitHub sign-in identity, display name, avatar, Git co-author credit preference, or OpenClaw permissions.
+Open **Settings → Profile → GitHub connections** to connect **My GitHub** without changing the shared **System GitHub** account. Both accounts and their connection status remain visible together. Viewing these connections does not require selecting an agent or configuring a default agent. Connecting a credential does not change your verified GitHub sign-in identity, display name, avatar, Git co-author credit preference, or OpenClaw permissions.
 
 My GitHub requires an authenticated, durable Gateway profile, including the local owner profile. An identified operator with `operator.read` can manage only their own connection, even without administrative or general write access. Shared-secret devices using the owner profile share that connection; use per-person sign-in for a team. System and per-agent connection changes still require `operator.admin`.
 
@@ -62,6 +62,10 @@ For an idle session with a reconciled local worktree, open the compact account a
 The account arrow appears only while publication is idle and the account selection is unlocked, before a publication request or result. Pending status, retry actions, confirmation details, errors, and publication results remain inline, not inside the popover.
 
 If the Gateway rejects the selected account before accepting the first publication request, choose **Refresh publication**, review the current account, then explicitly publish again. An unknown outcome keeps the original account and request locked: **Retry publication** checks that same request instead of switching accounts or starting another publication.
+
+Publication state survives navigation between chats, including when an inactive chat pane is unloaded. Split panes showing the same chat share its publication progress and retry. The page retains up to 32 publication attempts within the current authenticated Gateway connection. At capacity, existing retries remain available; complete and review an existing publication, then select **Choose a new publication** before starting another. Read-only operators can **Dismiss** an observed completed result without publishing or confirming anything.
+
+Pending session deletion blocks publication actions without discarding the original request; a failed deletion restores its retry. Confirmed deletion retires the attempt. The page clears this memory on reload or connection changes; profile and session access changes also retire affected attempts.
 
 Publication requires `operator.write` and current access to modify the session; connecting your account alone does not grant either permission.
 

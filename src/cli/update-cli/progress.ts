@@ -1,8 +1,10 @@
 // Update command presentation helpers: spinner lifecycle, failure hints, and result summaries.
 import { spinner } from "@clack/prompts";
+import { UPDATE_RUN_PHASES } from "../../../packages/gateway-protocol/src/update-run-vocabulary.js";
 import { theme } from "../../../packages/terminal-core/src/theme.js";
 import { formatDurationPrecise } from "../../infra/format-time/format-duration.ts";
 import { getUpdateRun } from "../../infra/update-run-ledger.js";
+import type { UpdateRunPhase } from "../../infra/update-run-record.js";
 import {
   renderUpdateRunReport,
   updateRunReportInputFromResult,
@@ -10,53 +12,16 @@ import {
 import type {
   UpdateRunResult,
   UpdateStepAdvisory,
-  UpdateStepInfo,
   UpdateStepProgress,
   UpdateStepResult,
 } from "../../infra/update-runner.js";
 import { defaultRuntime } from "../../runtime.js";
 import type { UpdateCommandOptions } from "./shared.js";
 
-const STEP_LABELS: Record<string, string> = {
-  "clean check": "Checking for local changes",
-  "upstream check": "Checking the upstream branch",
-  "git fetch": "Fetching latest changes",
-  "git rebase": "Rebasing onto target commit",
-  "git rev-parse @{upstream}": "Resolving upstream commit",
-  "git rev-list": "Enumerating candidate commits",
-  "git clone": "Cloning git checkout",
-  "preflight worktree": "Preparing preflight worktree",
-  "preflight cleanup": "Cleaning preflight worktree",
-  "deps install": "Installing dependencies",
-  build: "Building",
-  "ui:build": "Building UI assets",
-  "ui:build (post-doctor repair)": "Restoring missing UI assets",
-  "ui assets verify": "Validating UI assets",
-  "openclaw doctor entry": "Checking doctor entrypoint",
-  "openclaw doctor": "Running doctor checks",
-  "git rev-parse HEAD (after)": "Verifying update",
-  "global update": "Updating via package manager",
-  "global update (omit optional)": "Retrying update without optional deps",
-  "global install stage": "Preparing staged package install",
-  "global install verify": "Verifying global package",
-  "global install swap": "Activating global package",
-  "global install": "Installing global package",
-  "global update pack": "Downloading the update",
-  "global update pack verify": "Verifying the downloaded package",
-  checkout: "Checking out candidate",
-  lint: "Checking code quality",
-  "config validate": "Validating configuration",
-};
-
-function getStepLabel(step: Pick<UpdateStepInfo, "name">): string {
-  return (
-    STEP_LABELS[step.name] ??
-    step.name.replace(
-      /^preflight (.+) \(([a-f0-9]+)\)$/,
-      (_match, name: string, sha: string) => `Preflight: ${STEP_LABELS[name] ?? name} (${sha})`,
-    )
-  );
-}
+// One command owns each observer. The final report flushes it before printing so
+// a fast final transition cannot appear after the report or leave a spinner active.
+const activeUpdateProgress = new Map<string, () => void>();
+const UPDATE_PROGRESS_POLL_MS = 250;
 
 function isAdvisoryStep(step: { advisory?: UpdateStepAdvisory }): boolean {
   return step.advisory !== undefined;
@@ -66,40 +31,99 @@ function isAdvisoryStep(step: { advisory?: UpdateStepAdvisory }): boolean {
 type ProgressController = {
   progress: UpdateStepProgress;
   stop: () => void;
+  dispose: () => void;
 };
 
 /** Create a progress adapter for the updater runner without coupling runner code to terminal UI. */
-export function createUpdateProgress(enabled: boolean): ProgressController {
+export function createUpdateProgress(
+  enabled: boolean,
+  run?: UpdateCommandOptions["run"],
+): ProgressController {
   if (!enabled) {
-    return {
-      progress: {},
-      stop: () => {},
-    };
+    return { progress: {}, stop: () => {}, dispose: () => {} };
   }
 
   let currentSpinner: ReturnType<typeof spinner> | null = null;
+  let timer: ReturnType<typeof setTimeout> | undefined;
+  let currentPhase: UpdateRunPhase | undefined;
+  const seenPhases = new Set<UpdateRunPhase>();
   const stop = () => {
     currentSpinner?.clear();
     currentSpinner = null;
   };
-
+  const refresh = () => {
+    const record = run ? getUpdateRun(run.runId, { env: run.env }) : undefined;
+    if (!record) {
+      return undefined;
+    }
+    currentPhase = record.phase;
+    // A child process can cross several phases between reads. Replay the recorded
+    // timeline rather than losing fast transitions or inferring unobserved phases.
+    for (const phase of UPDATE_RUN_PHASES) {
+      const recorded = record.steps.some(
+        (step) => step.step === phase && step.status !== "pending",
+      );
+      if (!seenPhases.has(phase) && (recorded || phase === record.phase)) {
+        seenPhases.add(phase);
+        stop();
+        defaultRuntime.log(`Phase: ${phase}`);
+      }
+    }
+    if (record.status !== "running" && timer) {
+      clearTimeout(timer);
+      timer = undefined;
+    }
+    return record;
+  };
+  const flush = () => {
+    refresh();
+    stop();
+  };
+  const poll = () => {
+    timer = undefined;
+    const record = refresh();
+    if (record?.status === "running") {
+      // The CLI owns this poll only for its active operation; fresh-process
+      // finalization and gateway verification write the same ledger row.
+      timer = setTimeout(poll, UPDATE_PROGRESS_POLL_MS);
+      timer.unref?.();
+    }
+  };
+  if (run) {
+    activeUpdateProgress.set(run.runId, flush);
+    poll();
+  }
   const progress: UpdateStepProgress = {
     onStepStart: (step) => {
-      stop();
+      flush();
+      const label = currentPhase ? `${currentPhase} — ${step.name}` : step.name;
       if (process.stdout.isTTY) {
         currentSpinner = spinner({ indicator: "timer" });
-        currentSpinner.start(theme.accent(getStepLabel(step)));
+        currentSpinner.start(theme.accent(label));
       } else {
-        defaultRuntime.log(`${getStepLabel(step)}...`);
+        defaultRuntime.log(`${label}...`);
       }
     },
     onStepComplete: (step) => {
-      stop();
+      flush();
       printStep(step);
     },
   };
 
-  return { progress, stop };
+  return {
+    progress,
+    stop,
+    dispose: () => {
+      flush();
+      if (timer) {
+        clearTimeout(timer);
+        timer = undefined;
+      }
+      if (run && activeUpdateProgress.get(run.runId) === flush) {
+        activeUpdateProgress.delete(run.runId);
+      }
+    },
+  };
 }
 
 type DisplayStep = Pick<
@@ -122,7 +146,7 @@ function printStep(step: DisplayStep): void {
       : step.signal
         ? ` — interrupted (${step.signal})`
         : "";
-  defaultRuntime.log(`  ${formatStepStatus(step)} ${getStepLabel(step)}${termination} ${duration}`);
+  defaultRuntime.log(`  ${formatStepStatus(step)} ${step.name}${termination} ${duration}`);
   if (!isAdvisoryStep(step) && step.exitCode === 0) {
     return;
   }
@@ -160,12 +184,14 @@ export function printResult(
   opts: UpdateCommandOptions,
   reportHints: { doctorHint?: string | null; nextAction?: string } = {},
 ): void {
+  const run = result.runId ? getUpdateRun(result.runId, { env: opts.run?.env }) : undefined;
   if (opts.json) {
-    defaultRuntime.writeJson(result);
+    defaultRuntime.writeJson({ ...result, ...(run ? { run } : {}) });
     return;
   }
-
-  const run = result.runId ? getUpdateRun(result.runId, { env: opts.run?.env }) : undefined;
+  if (result.runId) {
+    activeUpdateProgress.get(result.runId)?.();
+  }
   const report = renderUpdateRunReport(run ?? updateRunReportInputFromResult(result), reportHints);
   defaultRuntime.log("");
   defaultRuntime.log(theme.heading(report.headline));

@@ -45,6 +45,7 @@ const runtimeConsumers = [
   ...[
     "src/commands/doctor-config-preflight.process.test.ts",
     "src/commands/doctor-config-preflight.v17-atomicity.process.test.ts",
+    "src/commands/doctor-plugin-install-config.process.test.ts",
   ].map((file) => ({
     file,
     configs: ["test/vitest/vitest.commands.config.ts"],

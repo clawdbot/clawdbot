@@ -74,7 +74,9 @@ Remote unauthenticated startup responses contain only `ok` and `status`. Local-d
 
 ### CPU pressure and event-loop delay
 
-Detailed readiness can include an `eventLoop` diagnostic snapshot. Its
+Detailed readiness can include the latest completed `eventLoop` diagnostic
+snapshot. The sampler owns observation windows; health reads do not reset a
+pending measurement. No snapshot is available until the first window completes. Its
 `cpuCoreRatio` measures user and system CPU time across the whole Gateway process,
 including worker and native threads, divided by elapsed wall time. The unit is
 core equivalents: `1` means one CPU core fully occupied over the interval, and

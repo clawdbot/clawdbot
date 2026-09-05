@@ -1157,7 +1157,6 @@ export const agentsHandlers: GatewayRequestHandlers = {
                 }
               }),
           );
-          deletion.commit();
         } catch (error) {
           let canReleaseFence =
             !rosterCommitted &&

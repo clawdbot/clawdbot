@@ -1,5 +1,7 @@
 // Narrow SQLite schema, path, and transaction helpers for first-party runtime.
 
+export type { Generated, Selectable } from "kysely";
+
 export {
   borrowOpenClawAgentDatabase,
   ensureOpenClawAgentDatabaseSchema,
@@ -10,6 +12,7 @@ export { withOpenClawAgentDatabaseReadOnly } from "../state/openclaw-agent-db-re
 export { assertOpenClawAgentDatabaseForMaintenance } from "../state/openclaw-agent-db-maintenance.js";
 export { ensureOpenClawAgentStandingIntentsSchema } from "../state/openclaw-agent-standing-intents-schema.js";
 export {
+  compileSqliteQueryBindings,
   executeSqliteQuerySync,
   executeSqliteQueryTakeFirstSync,
   getNodeSqliteKysely,

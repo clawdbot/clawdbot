@@ -198,17 +198,6 @@ openclaw-chat-sidebar-region,
   width: 100%;
 }
 
-.sidebar-column {
-  display: flex;
-  flex: 0 0 auto;
-  min-width: 260px;
-  min-height: 0;
-  overflow: hidden;
-  background: transparent;
-  flex-direction: column;
-  animation: chat-sidebar-fade-in 160ms ease-out;
-}
-
 /* Canonical rail header contract. The header owns geometry; actions are bare
    glyphs with an invisible hit area so generic button chrome cannot leak in. */
 .rail-header {
@@ -952,15 +941,6 @@ openclaw-chat-sidebar-region,
 
 .chat-tasks-rail__task-inspector-retry:disabled {
   opacity: 0.55;
-}
-
-@keyframes chat-sidebar-fade-in {
-  from {
-    opacity: 0;
-  }
-  to {
-    opacity: 1;
-  }
 }
 
 /* Sidebar Panel */

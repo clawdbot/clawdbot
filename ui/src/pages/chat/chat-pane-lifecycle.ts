@@ -51,6 +51,7 @@ import {
   CHAT_OPEN_DETAILS_SELECTOR,
   focusChatComposerFromPrintableKeydown,
 } from "./chat-pane-shared.ts";
+import { resolveSidebarLayoutForBoard } from "./chat-pane-sidebar-layout.ts";
 import {
   subscribeChatPaneSnapshotInvalidation,
   subscribeChatPaneStartup,
@@ -450,6 +451,8 @@ export abstract class ChatPaneLifecycle extends ChatPaneSessionCreation {
         }
         if (state) {
           if (event.event === "config.changed") {
+            state.mediaPolicyEpoch = (state.mediaPolicyEpoch ?? 0) + 1;
+            state.requestUpdate?.();
             chatAvatars.invalidateChatAvatarCache(state);
             state.assistantIdentityRequestVersion += 1;
             void chatAvatars.refreshChatAvatar(state).finally(() => state.requestUpdate?.());
@@ -580,6 +583,19 @@ export abstract class ChatPaneLifecycle extends ChatPaneSessionCreation {
     const board = this.resolveBoardView();
     this.syncRetainedBoardSession(board);
     this.sessionPanelToggles.flush();
+    this.setConversationVisible(
+      Boolean(
+        this.state &&
+        isSidebarSlotVisible(
+          resolveSidebarLayoutForBoard({
+            board,
+            layout: this.state.sidebarLayout,
+            paneWidth: this.paneWidth,
+          }),
+          "conversation",
+        ),
+      ),
+    );
   }
 
   override disconnectedCallback() {

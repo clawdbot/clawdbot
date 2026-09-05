@@ -20,6 +20,7 @@ import {
 } from "../skills/runtime/remote.js";
 import type { RestartRecoveryCandidate } from "./chat-abort.js";
 import { createControlUiSessionPullRequestSubscriptions } from "./control-ui-session-pr-subscriptions.js";
+import { retireDeviceTokenClients } from "./device-token-client-lifecycle.js";
 import { STARTUP_UNAVAILABLE_GATEWAY_METHODS } from "./methods/core-descriptors.js";
 import { disposeNodeConnectionNotifications } from "./node-connection-notifications.js";
 import { clearNodeWakeState } from "./node-wake-state.js";
@@ -163,6 +164,13 @@ export async function prepareGatewayLifecycle(params: {
     broadcast,
     rateLimiter: authRateLimiter,
     nodeReapprovalCoordinator,
+    onDeviceTokensReplaced: (deviceId, roles) => {
+      const context = runtime.resolvePluginGatewayContext();
+      if (!context) {
+        throw new Error("Gateway request context is unavailable during device setup");
+      }
+      retireDeviceTokenClients(context, deviceId, roles, "device-token-rotated");
+    },
     onNodeConnected: (session) => {
       upsertPresence(session.nodeId, {
         host: session.displayName ?? session.clientId ?? session.nodeId,

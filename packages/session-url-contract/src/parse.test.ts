@@ -155,6 +155,15 @@ describe("parseControlUiSessionPath", () => {
         { namespace: "chat", kind: "main", agentId: "research" },
       ],
       [
+        { namespace: "dashboard", sessionKey: "agent:research:global", basePath: "/control" },
+        {
+          namespace: "dashboard",
+          kind: "literal",
+          agentId: "research",
+          sessionKey: "agent:research:global",
+        },
+      ],
+      [
         { namespace: "chat", sessionKey: "agent:main:telegram:group:12345" },
         {
           namespace: "chat",
@@ -191,6 +200,7 @@ describe("parseControlUiSessionPath", () => {
 
   it.each([
     ["agent:main:main", "/chat/main", "main"],
+    ["agent:research:global", "/chat/research/~key/global", "literal"],
     ["agent:main:standup", "/chat/main/standup", "literal"],
     ["agent:main:sessions", "/chat/main/~key/sessions", "literal"],
     ["agent:main:12345678", "/chat/main/~key/12345678", "literal"],

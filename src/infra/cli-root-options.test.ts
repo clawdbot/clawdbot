@@ -1,6 +1,12 @@
 // Covers root CLI option token parsing.
 import { describe, expect, it } from "vitest";
-import { consumeRootOptionToken, isValueToken } from "./cli-root-options.js";
+import {
+  consumeRootOptionToken,
+  getCommandArgsWithRootOptions,
+  getCommandPositionalsWithRootOptions,
+  getRootOptionAwareCommandPath,
+  isValueToken,
+} from "./cli-root-options.js";
 
 function expectValueTokenCases(
   cases: ReadonlyArray<{ value: string | undefined; expected: boolean }>,
@@ -44,5 +50,41 @@ describe("consumeRootOptionToken", () => {
     { args: [], index: 0, expected: 0 },
   ])("consumes %j at %d", ({ args, index, expected }) => {
     expect(consumeRootOptionToken(args, index)).toBe(expected);
+  });
+});
+
+describe("literal command discovery", () => {
+  it.each([
+    { args: ["--", "config", "get"], expected: ["config", "get"] },
+    { args: ["--profile", "work", "--", "config", "get"], expected: ["config", "get"] },
+    { args: ["--profile", "--", "config", "get"], expected: ["config", "get"] },
+    { args: ["--", "--help"], expected: ["--help"] },
+    { args: ["--", "config", "--help"], expected: ["config", "--help"] },
+    { args: ["--", "config", "unknown"], expected: ["config", "unknown"] },
+    { args: ["--"], expected: [] },
+    { args: ["status", "--", "ignored"], expected: ["status"] },
+  ])("discovers $args without promoting literal flags", ({ args, expected }) => {
+    expect(getRootOptionAwareCommandPath(["node", "openclaw", ...args], 2)).toEqual(expected);
+  });
+
+  it.each([
+    ["--", "channels", "add", "--channel", "example"],
+    ["channels", "--", "add", "--channel", "example"],
+    ["channels", "add", "--", "--channel", "example"],
+  ])("retains the literal boundary in a delegated argument tail: %j", (...args) => {
+    expect(
+      getCommandArgsWithRootOptions(["node", "openclaw", ...args], {
+        commandPath: ["channels", "add"],
+        mode: "command-path",
+      }),
+    ).toEqual(["--", "--channel", "example"]);
+  });
+
+  it("keeps literal root invocations out of conservative fast routes", () => {
+    expect(
+      getCommandPositionalsWithRootOptions(["node", "openclaw", "--", "config", "get"], {
+        commandPath: ["config", "get"],
+      }),
+    ).toBeNull();
   });
 });

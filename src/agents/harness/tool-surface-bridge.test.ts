@@ -7,6 +7,7 @@ import { runWithAgentRingZeroTools } from "../agent-tools.ring-zero-context.js";
 import { createStubTool } from "../test-helpers/agent-tool-stubs.js";
 import {
   TOOL_CALL_RAW_TOOL_NAME,
+  createToolSearchTools,
   TOOL_DESCRIBE_RAW_TOOL_NAME,
   TOOL_SEARCH_CODE_MODE_TOOL_NAME,
   TOOL_SEARCH_RAW_TOOL_NAME,
@@ -38,6 +39,68 @@ function createRuntime(config: OpenClawConfig) {
 }
 
 describe("createAgentHarnessToolSurfaceRuntime", () => {
+  it.each([
+    { name: "automatic replies", delivery: {}, directMessage: false },
+    { name: "forced message replies", delivery: { forceMessageTool: true }, directMessage: true },
+    {
+      name: "message-tool-only replies",
+      delivery: { sourceReplyDeliveryMode: "message_tool_only" as const },
+      directMessage: true,
+    },
+  ])(
+    "keeps browser callable through automatic Tool Search for $name with lean disabled",
+    async ({ delivery, directMessage }) => {
+      let calls = 0;
+      const browser = {
+        ...createStubTool("browser"),
+        execute: async () => {
+          calls += 1;
+          return { content: [{ type: "text" as const, text: "BROWSER_RESULT" }], details: {} };
+        },
+      };
+      const config: OpenClawConfig = {
+        agents: { defaults: { experimental: { localModelLean: false } } },
+      };
+      const runtime = createAgentHarnessToolSurfaceRuntime({
+        config,
+        model: { toolSearchMode: "tools" },
+        modelToolsEnabled: true,
+        executeTool: async () => browser.execute(),
+        ...delivery,
+      });
+      try {
+        const surface = runtime.compactTools([
+          ...createToolSearchTools({
+            config: runtime.config,
+            catalogRef: runtime.toolSearchCatalogRef,
+            executeTool: runtime.toolSearchCatalogExecutor,
+          }),
+          createStubTool("read"),
+          createStubTool("message"),
+          browser,
+        ]);
+        expect(surface.tools.map((tool) => tool.name)).toEqual([
+          "tool_search",
+          "tool_describe",
+          "tool_call",
+          "read",
+          ...(directMessage ? ["message"] : []),
+        ]);
+        expect(surface.promptToolPolicy.apply().callableToolNames).toContain("browser");
+        const call = expectDefined(
+          surface.tools.find((tool) => tool.name === "tool_call"),
+          "catalog call control",
+        );
+        expect(
+          JSON.stringify(await call.execute("browser-call", { id: "browser", args: {} })),
+        ).toContain("BROWSER_RESULT");
+        expect(calls).toBe(1);
+        expect(config.tools).toBeUndefined();
+      } finally {
+        runtime.cleanup();
+      }
+    },
+  );
   it.each(["quarantine", "prompt-policy"] as const)(
     "narrows collector capabilities after harness %s",
     async (restriction) => {
