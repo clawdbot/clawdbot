@@ -36,10 +36,12 @@ export function buildInboundLine(params: {
   visibleReplyTo?: WhatsAppReplyContext | null;
 }) {
   const { cfg, msg, agentId, previousTimestamp, envelope } = params;
-  // WhatsApp inbound prefix: channels.whatsapp.responsePrefix > identity/defaults.
+  // WhatsApp inbound prefix: identity name only. responsePrefix is an
+  // outbound template ({provider}/{model}) that has no value at inbound
+  // time — applying it raw leaked the literal template into the agent body.
   const messagePrefix = resolveMessagePrefix(cfg, agentId, {
-    configured: cfg.channels?.whatsapp?.responsePrefix,
     hasAllowFrom: (cfg.channels?.whatsapp?.allowFrom?.length ?? 0) > 0,
+    fallback: "",
   });
   const admission = requireWhatsAppInboundAdmission(msg);
   const conversationId = admission.conversation.id;
