@@ -82,8 +82,12 @@ for (const name of ["info/grafts", "info/attributes"]) {
 }
 const temporary = fs.mkdtempSync(path.join(os.tmpdir(), "openclaw-publication-index-"));
 try {
+  const index = path.resolve(cwd, text(["rev-parse", "--git-path", "index"]));
   env.GIT_INDEX_FILE = path.join(temporary, "index");
-  git(["read-tree", "HEAD"]);
+  // Keep explicitly staged ignored paths and cached removals; normalize only the copy.
+  fs.copyFileSync(index, env.GIT_INDEX_FILE);
+  // Drop copied stat caches; unresolved merge stages cannot define an accepted tree.
+  git(["read-tree", text(["write-tree"])]);
   git(["add", "-A"]);
   const workspaceTree = text(["write-tree"]);
   const baseTree = text(["rev-parse", baseCommit + "^{tree}"]);

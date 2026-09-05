@@ -106,7 +106,7 @@ export async function captureCheckpoint<T>(
         return projectGitHubPublicationResult(
           failRepositoryGitHubPublicationPreparation(
             row,
-            "Save a new checkpoint and request publication again. If capture remains unavailable, review the repository's Git clean filters and transport configuration. Your session changes remain recoverable.",
+            "Save a new checkpoint and request publication again. If capture remains unavailable, resolve any merge conflicts and review the repository's Git clean filters and transport configuration. Your session changes remain recoverable.",
             assertSelected,
           ),
         );

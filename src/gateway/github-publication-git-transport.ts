@@ -214,16 +214,20 @@ export async function captureGitHubPublicationWorkspaceSnapshot(params: {
   const sourceHeadCommit = await command(["git", "rev-parse", "--verify", "HEAD^{commit}"], {
     cwd: params.cwd,
   });
-  const sourceIndexTree = await git(["write-tree"]);
+  const index = path.resolve(params.cwd, await git(["rev-parse", "--git-path", "index"]));
   const tempDir = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-github-snapshot-"));
   try {
-    const env: NodeJS.ProcessEnv = {
+    const env = {
       GIT_ATTR_NOSYSTEM: "1",
       GIT_CONFIG_GLOBAL: os.devNull,
       GIT_CONFIG_SYSTEM: os.devNull,
       GIT_INDEX_FILE: path.join(tempDir, "index"),
     };
-    await git(["read-tree", sourceHeadCommit], env);
+    // Preserve staged path inventory, and keep write-tree cache updates off the real index.
+    await step(() => fs.copyFile(index, env.GIT_INDEX_FILE));
+    const sourceIndexTree = await git(["write-tree"], env);
+    // Drop copied stat caches so same-size edits still receive Git clean conversion.
+    await git(["read-tree", sourceIndexTree], env);
     await git(["-c", `core.attributesFile=${os.devNull}`, "add", "-A"], env);
     const workspaceTree = await git(["write-tree"], env);
     await step(() =>

@@ -232,6 +232,8 @@ export function installGitHubPublicationTestHarness(): void {
   beforeEach(async () => {
     root = await fs.mkdtemp(path.join(await fs.realpath(os.tmpdir()), "openclaw-publication-"));
     vi.stubEnv("OPENCLAW_STATE_DIR", root);
+    const syntheticIndex = path.join(root, "synthetic-index");
+    await fs.writeFile(syntheticIndex, "synthetic Git transport index");
     insertRegistryWorktree(process.env, {
       id: "worktree-1",
       name: "publication",
@@ -362,6 +364,9 @@ export function installGitHubPublicationTestHarness(): void {
         }
         if (command.startsWith("git ls-tree -r -z --full-tree ")) {
           return commandResult();
+        }
+        if (argv.includes("rev-parse") && argv.includes("--git-path") && argv.at(-1) === "index") {
+          return commandResult(syntheticIndex);
         }
         if (command === "git rev-parse --git-path info/attributes") {
           return commandResult(path.join(root, "missing-info-attributes"));
