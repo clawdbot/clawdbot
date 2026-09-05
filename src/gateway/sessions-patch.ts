@@ -681,22 +681,18 @@ function* projectSessionPatchSteps(
     return invalid(contextWindowPatch.error);
   }
 
-  // A thinkingLevel change made on its own (no model switch) never touches the
-  // agent-patch revert marker, so realign its restore target with the user's
-  // newer choice; otherwise a later model-failure revert clobbers it.
+  // Independent preference changes must survive a later model rollback. Copy
+  // the marker so previews and prepared patches keep their input snapshot intact.
   if (
-    "thinkingLevel" in patch &&
+    next.modelFallback?.source === "agent-patch" &&
     !("model" in patch) &&
-    next.modelFallback?.source === "agent-patch"
+    ("thinkingLevel" in patch || "contextWindow" in patch)
   ) {
-    next.modelFallback.prevThinkingLevel = next.thinkingLevel;
-  }
-  if (
-    "contextWindow" in patch &&
-    !("model" in patch) &&
-    next.modelFallback?.source === "agent-patch"
-  ) {
-    next.modelFallback.prevContextWindow = next.contextWindow;
+    next.modelFallback = {
+      ...next.modelFallback,
+      ...("thinkingLevel" in patch ? { prevThinkingLevel: next.thinkingLevel } : {}),
+      ...("contextWindow" in patch ? { prevContextWindow: next.contextWindow } : {}),
+    };
   }
 
   if ("sendPolicy" in patch) {
