@@ -80,7 +80,9 @@ type WorkerLocalDispatchBarrier = (params: {
 type WorkerPlacementDispatchOptions = WorkerPlacementReclaimBarriers & {
   placements: WorkerDispatchPlacementStore;
   environments: WorkerDispatchEnvironmentService &
+    Pick<WorkerEnvironmentService, "recordError"> &
     Partial<Pick<WorkerEnvironmentService, "requiresNodeEnrollment">>;
+  isShuttingDown?: () => boolean;
   runnerAvailability: WorkerPlacementRunnerAvailabilityReader;
   runLocalBarrier: WorkerLocalDispatchBarrier;
   runRecoveryBarrier: WorkerPlacementRecoveryBarrier;
@@ -127,15 +129,8 @@ export function createWorkerPlacementDispatchService(options: WorkerPlacementDis
   const failure = createPlacementFailureActions({ environments, placements });
 
   const startup = createWorkerPlacementDispatchStartup({
-    placements,
-    environments,
+    ...options,
     failure,
-    runRecoveryBarrier: options.runRecoveryBarrier,
-    runActivationBarrier: options.runActivationBarrier,
-    onActivated: options.onActivated,
-    resolveGitAuthor: options.resolveGitAuthor,
-    resolveDevicePlacementRequirement: options.resolveDevicePlacementRequirement,
-    isCurrentNodePlacement: options.isCurrentNodePlacement,
     reportTransition: reportPlacementTransition,
   });
 
@@ -260,6 +255,9 @@ export function createWorkerPlacementDispatchService(options: WorkerPlacementDis
       });
     } catch (error) {
       try {
+        if (placement && startup.retainInterruptedProvisioning(placement, error)) {
+          throw error;
+        }
         const current = placement ? placements.get(request.sessionId) : undefined;
         if (current && current.state !== "local" && current.state !== "reclaimed") {
           if (current.state === "active") {
