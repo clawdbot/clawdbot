@@ -308,7 +308,8 @@ export function createDiagnosticsMetrics(
     ),
     livenessCpuCoreRatioHistogram: createHistogram("openclaw.liveness.cpu_core_ratio", {
       unit: "1",
-      description: "CPU core ratio reported by diagnostic liveness warnings",
+      description:
+        "Whole-process CPU usage in core equivalents, including worker and native threads; can exceed 1.",
     }),
     telemetryExporterCounter: createCounter("openclaw.telemetry.exporter.events", {
       unit: "1",

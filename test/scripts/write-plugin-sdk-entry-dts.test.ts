@@ -6,6 +6,7 @@ import {
   pluginSdkEntrypoints,
   publicPluginSdkEntrypoints,
 } from "../../scripts/lib/plugin-sdk-entries.mts";
+import { materializeNativeCompiler } from "./native-boundary-fixture.js";
 import {
   createFixture,
   declarationCacheRecords,
@@ -100,6 +101,7 @@ describe("write-plugin-sdk-entry-dts", { timeout: WRITER_TEST_TIMEOUT_MS }, () =
 
   it("publishes fresh canonical partitions with stable bytes and public nominal identity", () => {
     const { root, write, writeDeclarations, production, qa } = createFixture();
+    materializeNativeCompiler(root);
     expect(production.toSorted()).toEqual(
       publicPluginSdkEntrypoints.map((entry) => `plugin-sdk/${entry}`).toSorted(),
     );
@@ -190,6 +192,7 @@ describe("write-plugin-sdk-entry-dts", { timeout: WRITER_TEST_TIMEOUT_MS }, () =
       write: writeRelocated,
       writeDeclarations: writeRelocatedDeclarations,
     } = createFixture();
+    materializeNativeCompiler(relocated);
     writeRelocatedDeclarations("after");
     fs.rmSync(path.join(relocated, "contracts/before.ts"));
     writeRelocated("test/unrelated.test.ts", "export const test = 2;\n");

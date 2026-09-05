@@ -102,7 +102,7 @@ describe("skill_workshop review mode", () => {
       description: "Reuse a recovered workflow",
       proposal_content: "# Review Learning\n\nFollow the recovered workflow.\n",
     });
-    expect(proposalMutationBudget.completed).toBe(1);
+    expect(proposalMutationBudget.mutatedProposalIds?.size).toBe(1);
     const retryTool = createSkillWorkshopTool({
       workspaceDir,
       proposalOnly: true,
@@ -591,7 +591,7 @@ describe("skill_workshop review mode", () => {
         proposal_content: "# Second Mutation\n",
       }),
     ).rejects.toThrow("reached its proposal mutation limit");
-    expect(proposalMutationBudget.completed).toBeUndefined();
+    expect(proposalMutationBudget.mutatedProposalIds).toBeUndefined();
     expect(proposalMutationBudget.failedMutations).toBe(1);
   });
 });

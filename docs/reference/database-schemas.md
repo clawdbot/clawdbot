@@ -82,6 +82,29 @@ One current summary per capture. The primary key is
 These are existing feature-local tables. Occupancy episodes and model-backed
 notes do not change their schema or database version.
 
+### Update run ledger
+
+`update_runs` stores one durable record per update in the shared
+`state/openclaw.sqlite` database. `src/infra/update-run-ledger.ts` owns writes
+from the admitting Gateway, orchestrator CLI, and restarted Gateway. The table
+is additive at shared schema version 15: the canonical schema declares it and
+first use ensures it inside the same write transaction. Existing tables and the
+schema version stay unchanged; older readers ignore the new table.
+
+`run_id` is the UUID primary key. Rows retain creation/update timestamps,
+trigger, phase, status, reason, origin, target, before/after versions, steps,
+verification facts, repair attempts, confirmation/finish timestamps, and known
+downtime. Each JSON column has a 16 KiB hard limit with deterministic truncation
+and redaction. The ledger stores bounded diagnostic summaries, not raw logs or
+credentials. There is no automatic history deletion.
+
+The CLI and Gateway share WAL-backed transactions, including while the Gateway
+is stopped. The first terminal outcome wins; subsequent verification can enrich
+its observed facts without rewriting success, failure, skip, or rollback status.
+The restart sentinel carries `stats.runId` and remains the continuation owner;
+consuming it does not delete the run row. Chat, CLI, and status reports read that
+row. See [Run history and reports](/cli/update#run-history-and-reports).
+
 ## Versioning contract
 
 Each database records its schema in two places:

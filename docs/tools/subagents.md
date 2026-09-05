@@ -722,11 +722,23 @@ whichever is longer) stop counting as active/pending in `/subagents list`,
 status summaries, descendant completion gating, and per-session
 concurrency checks.
 
-After a gateway restart, stale unended restored runs are pruned unless
-their child session is marked `abortedLastRun: true`. Restart-aborted
-runs remain registered for the sub-agent orphan recovery flow: stale
-runs are finalized without a resume, while fresh child sessions receive
-a synthetic resume message before the aborted marker is cleared.
+After a Gateway restart, fresh interrupted sub-agents resume automatically
+from their existing child transcript. Recovery handles both sessions marked
+`abortedLastRun: true` and hard kills that prevented the shutdown marker from
+being written. For a hard kill, the child session must still identify the exact
+running sub-agent from the retired Gateway process, with no newer run or admitted
+work owning that session. Stale interrupted runs are finalized without a resume;
+other stale unended restored runs are pruned.
+
+An accepted recovery keeps the original task, Task Flow, requester, and child
+session identities. The task returns to `running` as the replacement execution
+continues, and the aborted marker is cleared after acceptance. You do not need
+to send another prompt to restart the work.
+
+For sub-agents that announce completion, OpenClaw also attempts a notice to the
+original requester: “Resumed your interrupted task after the Gateway restart.”
+Failed or suppressed notices are retried without launching another recovery
+turn; completion continues through the normal delivery path.
 
 Automatic restart recovery is bounded per child session. If the same
 sub-agent child is accepted for orphan recovery repeatedly inside the

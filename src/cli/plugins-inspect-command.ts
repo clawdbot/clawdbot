@@ -9,6 +9,7 @@ import { resolvePluginControlPlaneWorkspace } from "../plugins/control-plane-wor
 import { createInstalledPluginOwnershipResolver } from "../plugins/installed-plugin-package-ownership.js";
 import type { PluginDiagnostic } from "../plugins/manifest-types.js";
 import { tracePluginLifecyclePhase } from "../plugins/plugin-lifecycle-trace.js";
+import { formatPluginTrustDiagnostic } from "../plugins/plugin-trust.js";
 import { defaultRuntime } from "../runtime.js";
 import { shortenHomeInString, shortenHomePath } from "../utils.js";
 import { formatMissingPluginMessage } from "./error-format.js";
@@ -341,6 +342,9 @@ export async function runPluginsInspectCommand(
   }
   lines.push(`${theme.muted("Source:")} ${shortenHomeInString(inspect.plugin.source)}`);
   lines.push(`${theme.muted("Origin:")} ${inspect.plugin.origin}`);
+  if (inspect.plugin.trust) {
+    lines.push(`${theme.muted("Trust:")} ${formatPluginTrustDiagnostic(inspect.plugin.trust)}`);
+  }
   if (inspect.plugin.version) {
     lines.push(`${theme.muted("Version:")} ${inspect.plugin.version}`);
   }

@@ -21,7 +21,6 @@ import { readSkillProposalTargetTreeSha256 } from "../skills/workshop/proposal-b
 import { applySkillProposal, proposeCreateSkill } from "../skills/workshop/service.js";
 import { resolveWorkshopSkillsDir } from "../skills/workshop/skills-root.js";
 import * as workshopStore from "../skills/workshop/store.js";
-import type { SkillProposalRecord } from "../skills/workshop/types.js";
 import {
   createOpenClawTestState,
   type OpenClawTestState,
@@ -100,11 +99,10 @@ async function seedLegacyCollectionBackup(params: {
   return legacyRoot;
 }
 
-async function seedOwnedLegacyCollectionBackup() {
+async function seedOwnedLegacyCollectionBackup(name = "owned-legacy-backup") {
   const workspaceDir = await fs.realpath(
     await tempDirs.make("openclaw-workshop-owned-backup-workspace-"),
   );
-  const name = "owned-legacy-backup";
   const proposal = await proposeCreateSkill({
     workspaceDir,
     config: {},
@@ -140,8 +138,7 @@ async function seedOwnedLegacyCollectionBackup() {
   });
   const resultContent = await fs.readFile(legacySkillFile, "utf8");
   const backupId = "2026-09-01T00-00-00.000Z-owned1";
-  const backupContent =
-    "---\nname: owned-legacy-backup\ndescription: Owned legacy backup\n---\n\n# Before cleanup\n";
+  const backupContent = `---\nname: ${name}\ndescription: Owned legacy backup\n---\n\n# Before cleanup\n`;
   const legacyRoot = await seedLegacyCollectionBackup({
     workspaceDir,
     backupId,
@@ -166,6 +163,7 @@ async function seedOwnedLegacyCollectionBackup() {
     name,
     backupId,
     backupContent,
+    proposalId: applied.record.id,
     sourceBackupDir,
     destinationBackupDir,
   };
@@ -259,23 +257,15 @@ describe("doctor Skill Workshop collection backup migration", () => {
         backupContent: content,
         relativeSkillDir: path.join("skills", name),
       });
-      const record: SkillProposalRecord = {
-        ...createAppliedLegacyProposal({
-          id: "owned-legacy-drop-20260831-1234567890",
-          title: "Create dropped procedure",
-          description: "Dropped procedure",
-          createdAt: now,
-          content: proposalContent,
-          target: {
-            skillName: name,
-            skillKey: name,
-            skillDir,
-            skillFile,
-            source: "openclaw-workspace",
-          },
-        }),
+      const record = createAppliedLegacyProposal({
+        id: "owned-legacy-drop-20260831-1234567890",
+        title: "Create dropped procedure",
+        description: "Dropped procedure",
+        createdAt: now,
+        content: proposalContent,
+        target: { skillKey: name, skillDir },
         createdBy,
-      };
+      });
       await testState.writeText(
         path.join("skill-workshop", "proposals", record.id, "PROPOSAL.md"),
         proposalContent,
@@ -755,55 +745,9 @@ describe("doctor Skill Workshop collection backup migration", () => {
   });
 
   it("converts a legacy collection backup after an interrupted relocation retarget", async () => {
-    const workspaceDir = await fs.realpath(
-      await tempDirs.make("openclaw-workshop-interrupted-backup-workspace-"),
-    );
-    const proposal = await proposeCreateSkill({
-      workspaceDir,
-      config: {},
-      agentId: "main",
-      env: testState.env,
-      name: "interrupted-backup",
-      description: "Interrupted backup relocation",
-      content: "# Current\n",
-    });
-    const applied = await applySkillProposal({
-      workspaceDir,
-      config: {},
-      agentId: "main",
-      env: testState.env,
-      proposalId: proposal.record.id,
-      expectedRevisionHash: proposal.revisionHash,
-    });
+    const { workspaceDir, config, backupId, proposalId } =
+      await seedOwnedLegacyCollectionBackup("interrupted-backup");
     const legacySkillDir = path.join(workspaceDir, "skills", "interrupted-backup");
-    const legacySkillFile = path.join(legacySkillDir, "SKILL.md");
-    await fs.cp(applied.record.target.skillDir, legacySkillDir, { recursive: true });
-    await fs.rm(applied.record.target.skillDir, { recursive: true });
-    await workshopStore.updateSkillProposalRecord({
-      record: {
-        ...applied.record,
-        target: {
-          ...applied.record.target,
-          skillDir: legacySkillDir,
-          skillFile: legacySkillFile,
-          source: "openclaw-workspace",
-        },
-      },
-      store: { env: testState.env },
-    });
-    const resultContent = await fs.readFile(legacySkillFile, "utf8");
-    const backupId = "2026-09-01T00-00-00.000Z-interrupted1";
-    await seedLegacyCollectionBackup({
-      workspaceDir,
-      backupId,
-      relativeSkillDir: path.join("skills", "interrupted-backup"),
-      backupContent:
-        "---\nname: interrupted-backup\ndescription: Interrupted backup\n---\n\n# Before cleanup\n",
-      resultContent,
-    });
-    const config = {
-      agents: { list: [{ id: "main", default: true, workspace: workspaceDir }] },
-    };
     const backupMigration = vi
       .spyOn(collectionBackups, "migrateLegacyCollectionBackups")
       .mockRejectedValueOnce(new Error("injected backup conversion interruption"));
@@ -817,7 +761,7 @@ describe("doctor Skill Workshop collection backup migration", () => {
 
     await expect(fs.access(legacySkillDir)).rejects.toThrow();
     await expect(
-      readSkillProposalRecord(applied.record.id, { env: testState.env }),
+      readSkillProposalRecord(proposalId, { env: testState.env }),
     ).resolves.toMatchObject({
       target: {
         skillDir: path.join(

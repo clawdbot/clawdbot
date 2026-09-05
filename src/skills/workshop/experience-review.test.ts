@@ -84,13 +84,12 @@ function captureCandidate(params: SkillExperienceReviewParams): ExperienceReview
   const source = params.source!;
   return {
     ctx: {
-      ...params.ctx,
-      agentId: params.ctx.foregroundPromptContext.agentId,
-      sessionId: source.sessionId,
-      sessionKey: source.sessionKey,
+      runId: params.ctx.runId,
       workspaceDir: params.ctx.workspaceDir!,
       modelProviderId: params.ctx.modelProviderId!,
       modelId: params.ctx.modelId!,
+      authProfileId: params.ctx.authProfileId,
+      foregroundPromptContext: params.ctx.foregroundPromptContext,
     },
     config: params.config,
     source,
@@ -123,11 +122,9 @@ describe("skill experience review scheduler", () => {
         observedGenerations.push(getPreparedModelRuntimePluginGeneration());
         return false;
       },
-      prepareReview: async (candidate) => {
+      runReview: async (candidate) => {
         observedGenerations.push(getPreparedModelRuntimePluginGeneration());
-        return candidate;
-      },
-      runReview: async () => {
+        await prepareSkillExperienceReviewCandidate(candidate, candidate.config);
         observedGenerations.push(getPreparedModelRuntimePluginGeneration());
         finishReview?.();
       },
@@ -156,9 +153,11 @@ describe("skill experience review scheduler", () => {
     await vi.advanceTimersByTimeAsync(1);
     expect(runReview).toHaveBeenCalledWith(
       expect.objectContaining({
-        ctx: expect.objectContaining({
+        source: expect.objectContaining({
           sessionId: "session-1",
           sessionKey: "agent:main:main",
+        }),
+        ctx: expect.objectContaining({
           foregroundPromptContext: expect.objectContaining({ reasoningLevel: "on" }),
         }),
       }),
@@ -251,22 +250,24 @@ describe("skill experience review scheduler", () => {
   it("rechecks current autonomy and tool policy before a delayed review", async () => {
     vi.useFakeTimers();
     const runReview = vi.fn().mockResolvedValue(undefined);
-    const prepareReview = vi.fn(async (candidate) =>
-      prepareSkillExperienceReviewCandidate(candidate, {
+    const review = vi.fn(async (candidate: ExperienceReviewCandidate) => {
+      const prepared = await prepareSkillExperienceReviewCandidate(candidate, {
         skills: { workshop: { autonomous: { mode: "propose" } } },
         tools: { deny: ["skill_workshop"] },
-      }),
-    );
+      });
+      if (prepared) {
+        await runReview(prepared);
+      }
+    });
     const scheduler = createSkillExperienceReviewScheduler({
       isSystemActive: () => false,
-      prepareReview,
-      runReview,
+      runReview: review,
     });
 
     scheduler.schedule(completedRun());
     await vi.advanceTimersByTimeAsync(30_000);
 
-    expect(prepareReview).toHaveBeenCalledOnce();
+    expect(review).toHaveBeenCalledOnce();
     expect(runReview).not.toHaveBeenCalled();
     scheduler.clear();
   });
@@ -362,23 +363,21 @@ describe("skill experience review scheduler", () => {
     const memberRoleIds = Array.from({ length: 150 }, (_, index) => `role-${index}`);
     const params = completedRun();
     params.ctx.foregroundPromptContext.memberRoleIds = memberRoleIds;
-    const prepareReview = vi.fn(async (candidate) => candidate);
-    const runReview = vi.fn().mockResolvedValue(undefined);
+    const reviewed: ExperienceReviewCandidate[] = [];
     const scheduler = createSkillExperienceReviewScheduler({
       isSystemActive: () => false,
-      prepareReview,
-      runReview,
+      runReview: async (candidate) => {
+        const prepared = await prepareSkillExperienceReviewCandidate(candidate, params.config);
+        if (prepared) {
+          reviewed.push(prepared);
+        }
+      },
     });
 
     scheduler.schedule(params);
     await vi.advanceTimersByTimeAsync(30_000);
 
-    expect(prepareReview.mock.calls[0]?.[0].ctx.foregroundPromptContext.memberRoleIds).toEqual(
-      memberRoleIds,
-    );
-    expect(runReview.mock.calls[0]?.[0].ctx.foregroundPromptContext.memberRoleIds).toEqual(
-      memberRoleIds,
-    );
+    expect(reviewed[0]?.ctx.foregroundPromptContext.memberRoleIds).toEqual(memberRoleIds);
     scheduler.clear();
   });
 
@@ -412,22 +411,24 @@ describe("skill experience review scheduler", () => {
   it("does not re-arm evidence during asynchronous review preparation", async () => {
     vi.useFakeTimers();
     let finishPreparation: (() => void) | undefined;
-    const prepareReview = vi.fn(async (candidate) => {
+    const runReview = vi.fn().mockResolvedValue(undefined);
+    const review = vi.fn(async (candidate: ExperienceReviewCandidate) => {
+      const prepared = await prepareSkillExperienceReviewCandidate(candidate, candidate.config);
       await new Promise<void>((resolve) => {
         finishPreparation = resolve;
       });
-      return candidate;
+      if (prepared) {
+        await runReview(prepared);
+      }
     });
-    const runReview = vi.fn().mockResolvedValue(undefined);
     const scheduler = createSkillExperienceReviewScheduler({
       isSystemActive: () => false,
-      prepareReview,
-      runReview,
+      runReview: review,
     });
 
     scheduler.schedule(completedRun({ runId: "deep-turn" }));
     await vi.advanceTimersByTimeAsync(30_000);
-    expect(prepareReview).toHaveBeenCalledOnce();
+    expect(review).toHaveBeenCalledOnce();
     expect(runReview).not.toHaveBeenCalled();
 
     scheduler.schedule(completedRun({ runId: "shallow-turn", modelIterations: 1 }));
@@ -472,13 +473,13 @@ describe("skill experience review scheduler", () => {
     scheduler.schedule(completedRun(second));
     await vi.advanceTimersByTimeAsync(30_000);
     expect(runReview).toHaveBeenCalledOnce();
-    expect(runReview.mock.calls[0]?.[0].ctx).toMatchObject(first);
+    expect(runReview.mock.calls[0]?.[0].source).toMatchObject(first);
 
     finishFirst?.();
     await Promise.resolve();
     await vi.advanceTimersByTimeAsync(30_000);
     expect(runReview).toHaveBeenCalledTimes(2);
-    expect(runReview.mock.calls[1]?.[0].ctx).toMatchObject(second);
+    expect(runReview.mock.calls[1]?.[0].source).toMatchObject(second);
     scheduler.clear();
   });
 

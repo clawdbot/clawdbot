@@ -27,7 +27,7 @@ import {
 } from "../skills/workshop/frontmatter.js";
 import { resolveWorkshopSkillsDir } from "../skills/workshop/skills-root.js";
 import { hashSkillProposalContent, importLegacySkillProposal } from "../skills/workshop/store.js";
-import { SKILL_WORKSHOP_SCHEMA, type SkillProposalRecord } from "../skills/workshop/types.js";
+import type { SkillProposalRecord } from "../skills/workshop/types.js";
 import {
   closeOpenClawStateDatabaseForTest,
   openOpenClawStateDatabase,
@@ -40,6 +40,7 @@ import {
 import { migrateLegacySkillWorkshopProposals } from "./doctor-skill-workshop-sqlite.js";
 import {
   createAppliedLegacyProposal,
+  expectRelocationWriteFailure,
   readSkillProposalRecord,
   seedLegacyV15ProposalRows,
 } from "./doctor-skill-workshop-sqlite.test-support.js";
@@ -87,29 +88,15 @@ async function createLegacyWorkspace(userContent = false, skillsPath = "skills")
   expect(before.attestation).toBeDefined();
   expect(before.attestation?.generatedHashes.size).toBe(0);
   expect(before.setupExists).toBe(false);
-  const created: SkillProposalRecord = {
-    schema: SKILL_WORKSHOP_SCHEMA,
+  const created = createAppliedLegacyProposal({
     id: "workspace-create-20260901-1234567890",
-    kind: "create",
-    status: "applied",
     title: "Create relocation procedure",
     description: "Procedure moved out of the workspace",
     createdAt: now,
-    updatedAt: now,
     createdBy: "cli",
-    proposedVersion: "v1",
-    draftFile: "PROPOSAL.md",
-    draftHash: hashSkillProposalContent(draft),
-    target: {
-      skillName: name,
-      skillKey: name,
-      skillDir,
-      skillFile,
-      source: "openclaw-workspace",
-    },
-    scan: { state: "clean", scannedAt: now, critical: 0, warn: 0, info: 0, findings: [] },
-    appliedAt: now,
-  };
+    content: draft,
+    target: { skillKey: name, skillDir },
+  });
   const pending: SkillProposalRecord = {
     ...created,
     id: "workspace-update-20260901-1234567890",
@@ -135,24 +122,13 @@ async function createLegacyWorkspace(userContent = false, skillsPath = "skills")
 type LegacyWorkspace = Awaited<ReturnType<typeof createLegacyWorkspace>>;
 
 async function interruptPendingWrite(fixture: LegacyWorkspace) {
-  const database = openOpenClawStateDatabase({ env: state.env });
-  database.db.exec(`
-    CREATE TEMP TRIGGER reject_workspace_pending_relocation
-    BEFORE UPDATE OF record_json ON main.skill_workshop_proposals
-    WHEN OLD.proposal_id = '${fixture.pending.id}'
-      AND NEW.status = 'pending'
-      AND json_extract(NEW.record_json, '$.target.source') = 'openclaw-workshop'
-    BEGIN
-      SELECT RAISE(ABORT, 'workspace pending relocation unavailable');
-    END;
-  `);
-  try {
-    await expect(
-      migrateLegacySkillWorkshopProposals({ config: fixture.config, env: state.env }),
-    ).rejects.toThrow("workspace pending relocation unavailable");
-  } finally {
-    database.db.exec("DROP TRIGGER reject_workspace_pending_relocation");
-  }
+  await expectRelocationWriteFailure({
+    config: fixture.config,
+    env: state.env,
+    proposalId: fixture.pending.id,
+    status: "pending",
+    message: "workspace pending relocation unavailable",
+  });
   await expect(fs.access(fixture.created.target.skillDir)).rejects.toMatchObject({
     code: "ENOENT",
   });
@@ -265,13 +241,7 @@ describe("Workshop relocation and workspace survival", () => {
       title: "Create remaining procedure",
       description: "Procedure remaining after interruption",
       content: draft,
-      target: {
-        skillName: name,
-        skillKey: name,
-        skillDir,
-        skillFile,
-        source: "openclaw-workspace",
-      },
+      target: { skillKey: name, skillDir },
     });
     await fs.mkdir(skillDir, { recursive: true });
     await fs.writeFile(skillFile, content);

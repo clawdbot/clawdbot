@@ -6,10 +6,7 @@ import { resolveWorkshopSkillsDir } from "../skills/workshop/skills-root.js";
 import { hashSkillProposalContent, importLegacySkillProposal } from "../skills/workshop/store.js";
 import * as workshopStore from "../skills/workshop/store.js";
 import { SKILL_WORKSHOP_SCHEMA, type SkillProposalRecord } from "../skills/workshop/types.js";
-import {
-  openOpenClawStateDatabase,
-  repairOpenClawStateDatabaseSchemaIfNeeded,
-} from "../state/openclaw-state-db.js";
+import { repairOpenClawStateDatabaseSchemaIfNeeded } from "../state/openclaw-state-db.js";
 import {
   createOpenClawTestState,
   type OpenClawTestState,
@@ -22,6 +19,8 @@ import {
 } from "./doctor-skill-workshop-sqlite.js";
 import {
   createAppliedLegacyProposal,
+  expectRelocationWriteFailure,
+  expectWorkshopMigrationConverged,
   readSkillProposalRecord,
   seedLegacyV15ProposalRows,
 } from "./doctor-skill-workshop-sqlite.test-support.js";
@@ -51,13 +50,7 @@ describe("doctor Skill Workshop SQLite relocation conflicts and recovery", () =>
       title: "Create Invalid Relocation",
       description: "Invalid relocation",
       content: "invalid relocation",
-      target: {
-        skillName: "invalid-relocation",
-        skillKey: "invalid-relocation",
-        skillDir,
-        skillFile: path.join(skillDir, "SKILL.md"),
-        source: "openclaw-workspace",
-      },
+      target: { skillKey: "invalid-relocation", skillDir },
     });
     await fs.mkdir(skillDir, { recursive: true });
     seedLegacyV15ProposalRows(testState.env, [{ record, workspaceDir, claimReleasedTime: null }]);
@@ -142,27 +135,23 @@ describe("doctor Skill Workshop SQLite relocation conflicts and recovery", () =>
         id: "linked-workshop-20260901-1234567890",
         skillName: "linked-workshop",
         skillDir: symlinkedSkillDir,
-        skillFile: symlinkedSkillFile,
         content: symlinkedContent,
       },
       {
         id: "normal-workshop-20260901-1234567890",
         skillName: "normal-workshop",
         skillDir: normalSkillDir,
-        skillFile: normalSkillFile,
         content: normalContent,
       },
-    ].map(({ id, skillName, skillDir, skillFile, content }) => ({
+    ].map(({ id, skillName, skillDir, content }) => ({
       record: createAppliedLegacyProposal({
         id,
         title: `Create ${skillName}`,
         description: `${skillName} procedure`,
         content,
         target: {
-          skillName,
           skillKey: skillName,
           skillDir,
-          skillFile,
           source: skillName === normalSkillName ? "agents-skills-project" : "openclaw-workspace",
         },
       }),
@@ -237,9 +226,7 @@ describe("doctor Skill Workshop SQLite relocation conflicts and recovery", () =>
       externalProposalCountsByAgent: {},
       legacyBackupRootCount: 0,
     });
-    await expect(
-      migrateLegacySkillWorkshopProposals({ config, env: testState.env }),
-    ).resolves.toEqual({ changes: [], warnings: [], detected: 0, migrated: 0 });
+    await expectWorkshopMigrationConverged({ config, env: testState.env });
     await expect(
       readSkillProposalRecord("linked-workshop-20260901-1234567890", { env: testState.env }),
     ).resolves.toEqual(firstRecord);
@@ -278,8 +265,6 @@ describe("doctor Skill Workshop SQLite relocation conflicts and recovery", () =>
             skillName: "Shared Name",
             skillKey,
             skillDir,
-            skillFile: path.join(skillDir, "SKILL.md"),
-            source: "openclaw-workspace",
           },
         }),
       };
@@ -332,9 +317,7 @@ describe("doctor Skill Workshop SQLite relocation conflicts and recovery", () =>
       externalProposalCountsByAgent: {},
       legacyBackupRootCount: 0,
     });
-    await expect(
-      migrateLegacySkillWorkshopProposals({ config: {}, env: testState.env }),
-    ).resolves.toEqual({ changes: [], warnings: [], detected: 0, migrated: 0 });
+    await expectWorkshopMigrationConverged({ env: testState.env });
   });
 
   it("stales an adoption when the destination is a different skill", async () => {
@@ -355,13 +338,7 @@ describe("doctor Skill Workshop SQLite relocation conflicts and recovery", () =>
       title: "Create Verified Adoption",
       description: "Verified procedure",
       content: expectedContent,
-      target: {
-        skillName: "verified-adoption",
-        skillKey: "verified-adoption",
-        skillDir: legacySkillDir,
-        skillFile: path.join(legacySkillDir, "SKILL.md"),
-        source: "openclaw-workspace",
-      },
+      target: { skillKey: "verified-adoption", skillDir: legacySkillDir },
     });
     await fs.mkdir(destination, { recursive: true });
     await fs.writeFile(path.join(destination, "SKILL.md"), destinationContent, "utf8");
@@ -399,27 +376,17 @@ describe("doctor Skill Workshop SQLite relocation conflicts and recovery", () =>
           return {
             content,
             record: {
-              schema: SKILL_WORKSHOP_SCHEMA,
-              id: `${name}-20260901-123456789${index}`,
+              ...createAppliedLegacyProposal({
+                id: `${name}-20260901-123456789${index}`,
+                title: `Create ${name}`,
+                description: `${name} procedure`,
+                content: index === 0 ? "unmatched content" : content,
+                createdAt: now,
+                target: { skillKey: name, skillDir },
+              }),
               kind: index === 3 ? "update" : "create",
               status: index === 3 ? "pending" : "applied",
-              title: `Create ${name}`,
-              description: `${name} procedure`,
-              createdAt: now,
-              updatedAt: now,
-              createdBy: "skill-workshop",
-              proposedVersion: "v1",
-              draftFile: "PROPOSAL.md",
-              draftHash: hashSkillProposalContent(index === 0 ? "unmatched content" : content),
-              target: {
-                skillName: name,
-                skillKey: name,
-                skillDir,
-                skillFile: path.join(skillDir, "SKILL.md"),
-                source: "openclaw-workspace",
-              },
-              scan: { state: "clean", scannedAt: now, critical: 0, warn: 0, info: 0, findings: [] },
-              ...(index === 3 ? {} : { appliedAt: now }),
+              appliedAt: index === 3 ? undefined : now,
             } satisfies SkillProposalRecord,
           };
         },
@@ -561,13 +528,7 @@ describe("doctor Skill Workshop SQLite relocation conflicts and recovery", () =>
           title: `Create ${name}`,
           description: `${name} procedure`,
           content,
-          target: {
-            skillName: name,
-            skillKey: name,
-            skillDir,
-            skillFile: path.join(skillDir, "SKILL.md"),
-            source: "openclaw-workspace",
-          },
+          target: { skillKey: name, skillDir },
         }),
       };
     });
@@ -583,24 +544,12 @@ describe("doctor Skill Workshop SQLite relocation conflicts and recovery", () =>
 
     const workshopRoot = resolveWorkshopSkillsDir({}, "main", testState.env);
     repairOpenClawStateDatabaseSchemaIfNeeded({ env: testState.env });
-    const database = openOpenClawStateDatabase({ env: testState.env });
-    database.db.exec(`
-      CREATE TEMP TRIGGER reject_first_relocation
-      BEFORE UPDATE OF record_json ON main.skill_workshop_proposals
-      WHEN OLD.proposal_id = '${records[0]!.record.id}'
-        AND NEW.status = 'applied'
-        AND json_extract(NEW.record_json, '$.target.source') = 'openclaw-workshop'
-      BEGIN
-        SELECT RAISE(ABORT, 'injected relocation persistence failure');
-      END;
-    `);
-    try {
-      await expect(
-        migrateLegacySkillWorkshopProposals({ config: {}, env: testState.env }),
-      ).rejects.toThrow("injected relocation persistence failure");
-    } finally {
-      database.db.exec("DROP TRIGGER reject_first_relocation");
-    }
+    await expectRelocationWriteFailure({
+      env: testState.env,
+      proposalId: records[0]!.record.id,
+      status: "applied",
+      message: "injected relocation persistence failure",
+    });
 
     await expect(
       fs.readFile(path.join(workshopRoot, "first-relocation", "SKILL.md"), "utf8"),
@@ -643,9 +592,7 @@ describe("doctor Skill Workshop SQLite relocation conflicts and recovery", () =>
         },
       });
     }
-    await expect(
-      migrateLegacySkillWorkshopProposals({ config: {}, env: testState.env }),
-    ).resolves.toEqual({ changes: [], warnings: [], detected: 0, migrated: 0 });
+    await expectWorkshopMigrationConverged({ env: testState.env });
   });
 
   it("quarantines a non-empty legacy directory missing proposal.json so Doctor converges", async () => {
@@ -701,10 +648,7 @@ describe("doctor Skill Workshop SQLite relocation conflicts and recovery", () =>
       name.startsWith(`${proposalId}-`),
     );
     expect(recoveryDirs).toHaveLength(1);
-    const recoveredProposalDir = recoveryDirs[0];
-    if (!recoveredProposalDir) {
-      throw new Error("expected one recovered proposal directory");
-    }
+    const recoveredProposalDir = recoveryDirs[0]!;
     await expect(
       fs.readFile(path.join(recoveryRoot, recoveredProposalDir, "references", "proof.md"), "utf8"),
     ).resolves.toBe("# Orphan proof\n");
@@ -772,10 +716,7 @@ describe("doctor Skill Workshop SQLite relocation conflicts and recovery", () =>
       name.startsWith(`${proposalId}-`),
     );
     expect(recoveryDirs).toHaveLength(1);
-    const recoveryDir = recoveryDirs[0];
-    if (!recoveryDir) {
-      throw new Error("expected one recovered proposal directory");
-    }
+    const recoveryDir = recoveryDirs[0]!;
     await expect(
       fs.access(path.join(recoveryRoot, recoveryDir, "proposal.json")),
     ).resolves.toBeUndefined();

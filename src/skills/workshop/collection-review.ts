@@ -14,7 +14,6 @@ import {
   MAX_RECONCILED_SKILLS,
   MAX_RECONCILED_SKILL_BYTES,
   type SkillCollectionReconcileContext,
-  type SkillCollectionReconcileResult,
 } from "./collection-contracts.js";
 import {
   recordSkillCollectionReviewStatus,
@@ -35,7 +34,7 @@ async function runSkillCollectionReview(params: {
   env?: NodeJS.ProcessEnv;
   abortSignal?: AbortSignal;
   assertCurrent: () => void;
-}): Promise<SkillCollectionReconcileResult | null> {
+}): Promise<void> {
   params.assertCurrent();
   const skills = listWritableWorkshopSkillSummaries({
     config: params.config,
@@ -43,7 +42,7 @@ async function runSkillCollectionReview(params: {
     env: params.env,
   });
   if (skills.length === 0) {
-    return null;
+    return;
   }
   if (skills.length > MAX_RECONCILED_SKILLS) {
     throw new Error(
@@ -95,7 +94,6 @@ async function runSkillCollectionReview(params: {
   if (!collectionReconcile.result) {
     throw new Error("Skill collection review ended without reconciling the collection.");
   }
-  return collectionReconcile.result;
 }
 
 export async function runSkillCollectionReviewForAgent(params: {

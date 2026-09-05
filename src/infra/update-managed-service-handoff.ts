@@ -35,6 +35,7 @@ import type { UpdateChannel } from "./update-channels.js";
 import {
   CONTROL_PLANE_UPDATE_SENTINEL_META_ENV,
   MANAGED_SERVICE_UPDATE_UNSAFE_EXIT_CODE,
+  UPDATE_RUN_ID_ENV,
   type ControlPlaneUpdateSentinelMetaFile,
 } from "./update-control-plane-sentinel.js";
 import { applyDevUpdateTargetEnv, type DevUpdateTarget } from "./update-dev-target.js";
@@ -612,6 +613,10 @@ function writeRestartSentinelPayload(db, payload, currentRevision) {
 }
 
 let triageFailure;
+let runLedger;
+let runOutcome;
+let serviceStoppedAtMs;
+let serviceDowntimeMs;
 
 function isFailedUpdateOutcome(status, reason) {
   return status === "error" || (status === "skipped" &&
@@ -647,6 +652,7 @@ function recordUpdateHandoffOutcome(reason, restored, completedStatus, expectedR
   const meta = metaFile && metaFile.version === 1 && metaFile.meta ? metaFile.meta : {};
   const status = (reason === "managed-service-handoff-cancelled" || completedStatus === "skipped") && restored !== false
     ? "skipped" : "error";
+  runOutcome = { status: status === "error" ? "failed" : "skipped", reason };
   const fallbackPayload = {
     kind: "update",
     status,
@@ -654,6 +660,7 @@ function recordUpdateHandoffOutcome(reason, restored, completedStatus, expectedR
     message: typeof meta.note === "string" ? meta.note : null,
     stats: {
       mode: "unknown",
+      ...(typeof meta.runId === "string" && meta.runId.trim() ? { runId: meta.runId } : {}),
       ...(typeof meta.root === "string" && meta.root.trim() ? { root: meta.root } : {}),
       ...(typeof meta.handoffId === "string" && meta.handoffId.trim()
         ? { handoffId: meta.handoffId }
@@ -714,6 +721,7 @@ function recordUpdateHandoffOutcome(reason, restored, completedStatus, expectedR
         triageFailure ??= { reason };
         triageFailure.payload = payload;
       }
+      runOutcome = { status: payload.status === "error" ? "failed" : "skipped", reason: payload.stats?.reason ?? reason };
       if (typeof restored === "boolean") {
         payload.stats.steps = [
           ...(payload.stats.steps || []),
@@ -777,6 +785,20 @@ let restorationArmed = false;
 let updaterStarted = false;
 let pendingServiceStop;
 
+function recordServiceStop() {
+  serviceStoppedAtMs ??= Date.now();
+  try {
+    const metaFile = JSON.parse(fs.readFileSync(params.metaPath, "utf-8"));
+    metaFile.meta.serviceStoppedAtMs ??= serviceStoppedAtMs;
+    fs.writeFileSync(params.metaPath, JSON.stringify(metaFile), { mode: 0o600 });
+    runLedger?.recordUpdateRunPhase(params.runId, "activating", {
+      step: { step: "service-stop", status: "in_progress", startedAtMs: metaFile.meta.serviceStoppedAtMs },
+    });
+  } catch (error) {
+    appendLog("could not record service stop time: " + String(error));
+  }
+}
+
 async function parkGatewayService() {
   const recovery = params.serviceRecovery;
   if (!recovery || recovery.kind === "schtasks") return;
@@ -802,6 +824,7 @@ async function parkGatewayService() {
         ["--user", "stop", recovery.unit],
         () => {
           restorationArmed = true;
+          recordServiceStop();
           resolve();
         },
         params.parentExitDeadlineAt,
@@ -831,7 +854,7 @@ async function parkGatewayService() {
   }
   // bootout gets launchd's full teardown budget; its accepted spawn acknowledges parking.
   await new Promise((resolve, reject) => {
-    pendingServiceStop = runServiceCommand("launchctl", ["bootout", target], resolve);
+    pendingServiceStop = runServiceCommand("launchctl", ["bootout", target], () => { recordServiceStop(); resolve(); });
     pendingServiceStop.then((result) => {
       if (result.code !== 0 && !isLaunchdNotLoaded(result)) {
         reject(new Error("launchctl bootout failed: " + result.stderr));
@@ -957,6 +980,13 @@ async function restoreGatewayService(reason, decision = params.recovery, childSt
       restored = ownsRecovery() && health.healthy === true &&
         health.runtime?.status === "running" && health.gatewayVersion === expectedVersion &&
         (!expectedBuildId || health.gatewayBuildId === expectedBuildId);
+      if (restored && serviceStoppedAtMs !== undefined) serviceDowntimeMs = Math.max(0, Date.now() - serviceStoppedAtMs);
+      runLedger?.recordUpdateRunVerification(params.runId, {
+        serviceRunning: health.runtime?.status === "running",
+        runningVersion: health.gatewayVersion ?? undefined,
+        runningBuildId: health.gatewayBuildId ?? undefined,
+        versionMatch: health.gatewayVersion === expectedVersion && (!expectedBuildId || health.gatewayBuildId === expectedBuildId),
+      });
     } catch (error) {
       appendLog("Gateway recovery readiness failed: " + String(error));
       restored = false;
@@ -1121,6 +1151,14 @@ async function collectUpdateFailureTriage() {
     wake?.();
   }, params.parentExitTimeoutMs);
   try {
+    if (params.runId) {
+      // Resolve the one ledger writer before READY and before package replacement
+      // can remove its chunks. Missing support refuses admission without stopping the service.
+      runLedger = await import(pathToFileURL(params.recoveryModulePath).href);
+      for (const name of ["finishUpdateRun", "recordUpdateRunPhase", "recordUpdateRunVerification"]) {
+        if (typeof runLedger[name] !== "function") throw new Error("managed update ledger writer is unavailable");
+      }
+    }
     fs.writeSync(1, ${JSON.stringify(HANDOFF_READY_MARKER)});
     const commands = [];
     let input = "";
@@ -1213,6 +1251,9 @@ async function collectUpdateFailureTriage() {
     }
     clearTimeout(parentExitDeadline);
     const stopped = pendingServiceStop ? await pendingServiceStop : null;
+    if (stopped) runLedger?.recordUpdateRunPhase(params.runId, "activating", {
+      step: { step: "service-stop", status: stopped.code === 0 || (params.serviceRecovery?.kind === "launchd" && isLaunchdNotLoaded(stopped)) ? "completed" : "failed", endedAtMs: Date.now() },
+    });
     if (stopped && stopped.code !== 0 && params.serviceRecovery?.kind === "launchd" &&
       !isLaunchdNotLoaded(stopped)) {
       throw new Error("launchctl bootout failed: " + stopped.stderr);
@@ -1285,6 +1326,11 @@ async function collectUpdateFailureTriage() {
     let resultRoot;
     try { resultRoot = fs.realpathSync(result?.root); } catch {}
     const reportedFailure = isFailedUpdateOutcome(result?.status, result?.reason);
+    if (!exit.signal && exit.code === 0 && resultRoot && result?.status === "ok") {
+      runOutcome = { status: "succeeded", after: result.after };
+    } else if (resultRoot && ["error", "skipped"].includes(result?.status)) {
+      runOutcome = { status: result.status === "error" ? "failed" : "skipped", reason: result.reason, after: result.after };
+    }
     if (reportedFailure) triageFailure ??= { reason: result?.reason || "managed-service-handoff-failed" };
     if (exit.code === ${MANAGED_SERVICE_UPDATE_UNSAFE_EXIT_CODE}) {
       appendLog("managed update reported unsafe recovery; keep the gateway stopped until the installation is repaired and update succeeds");
@@ -1317,15 +1363,23 @@ async function collectUpdateFailureTriage() {
     }
   } catch (err) {
     appendLog("handoff failed: " + (err && err.stack ? err.stack : String(err)));
+    const reason = err?.code === "owner_required" ? "owner_required" : "managed-service-handoff-helper-failed";
+    runOutcome = { status: "failed", reason };
     if (managedUpdateLeaseOwned) {
       bindManagedUpdateLeaseToProcess(process.pid);
-      const reason = err?.code === "owner_required" ? "owner_required" : "managed-service-handoff-helper-failed";
       if (restorationArmed && !updaterStarted) await restoreGatewayService(reason);
       else recordUpdateHandoffOutcome(reason);
     }
     process.exitCode = 1;
   } finally {
     clearTimeout(parentExitDeadline);
+    if (runLedger && runOutcome) {
+      try { runLedger.finishUpdateRun(params.runId, { ...runOutcome, ...(serviceDowntimeMs !== undefined ? { downtimeMs: serviceDowntimeMs } : {}) }); }
+      catch (error) {
+        appendLog("failed to finalize update run: " + String(error));
+        process.exitCode = 1;
+      }
+    }
     // Recovery owns availability. Diagnostics run once only after its terminal
     // outcome, while this helper still owns the installation lease.
     await collectUpdateFailureTriage();
@@ -1342,6 +1396,7 @@ async function collectUpdateFailureTriage() {
 `;
 
 type ManagedServiceUpdateHandoffParams = {
+  runId?: string;
   root: string;
   timeoutMs?: number;
   restartDrainTimeoutMs: number;
@@ -1573,7 +1628,12 @@ async function spawnManagedServiceUpdateHandoff(
   );
   const metaFile: ControlPlaneUpdateSentinelMetaFile = {
     version: 1,
-    meta: { ...params.meta, root: rootIdentity, triageContextPath },
+    meta: {
+      ...params.meta,
+      ...(params.runId ? { runId: params.runId } : {}),
+      root: rootIdentity,
+      triageContextPath,
+    },
   };
   let spawnCommand = params.execPath ?? process.execPath;
   const spawnArgs = [scriptPath, paramsPath];
@@ -1606,6 +1666,7 @@ async function spawnManagedServiceUpdateHandoff(
       PARENT_EXIT_SHUTDOWN_RESERVE_MS,
   );
   const helperParams = {
+    runId: metaFile.meta.runId,
     requester:
       params.requester?.channel && !isInternalMessageChannel(params.requester.channel)
         ? params.requester
@@ -1674,6 +1735,7 @@ async function spawnManagedServiceUpdateHandoff(
       ...serviceEnv,
       [CONTROL_PLANE_UPDATE_SENTINEL_META_ENV]: metaPath,
       OPENCLAW_UPDATE_RUN_HANDOFF: "1",
+      ...(metaFile.meta.runId ? { [UPDATE_RUN_ID_ENV]: metaFile.meta.runId } : {}),
     };
     for (const key of SUPERVISOR_HINT_ENV_VARS) {
       if (!SERVICE_IDENTITY_ENV_VARS.has(key)) {

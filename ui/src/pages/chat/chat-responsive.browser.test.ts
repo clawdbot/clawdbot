@@ -1992,9 +1992,10 @@ describeBrowserLayout.concurrent("chat responsive browser layout", () => {
         await page.setContent(`<!doctype html><html><head><style>${readUiCss()}</style></head><body style="margin:0;height:100vh;overflow:hidden">
           <div class="shell shell--chat ${label.startsWith("mobile") ? "shell--mobile-nav shell--merged-chat-chrome" : ""}">
             <main class="content content--chat" style="padding:0">
-              <div class="chat-pane-layout">
-                <header class="chat-pane__header">Session</header>
-                <div class="sidebar-region">
+              <div class="sidebar-region">
+                <div class="sidebar-region__header">
+                  <header class="chat-pane__header">Session</header>
+                </div>
                   <div class="sidebar-region__primary" data-region="main">
                     <section class="card chat">
                       <div class="chat-main">
@@ -2013,7 +2014,6 @@ describeBrowserLayout.concurrent("chat responsive browser layout", () => {
                       </div>
                     </section>
                   </div>
-                </div>
               </div>
             </main>
             <openclaw-toast-host data-toast-placement="shell">

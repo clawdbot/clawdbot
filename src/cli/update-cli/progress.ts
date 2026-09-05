@@ -1,11 +1,12 @@
 // Update command presentation helpers: spinner lifecycle, failure hints, and result summaries.
 import { spinner } from "@clack/prompts";
-import { normalizeLowercaseStringOrEmpty } from "@openclaw/normalization-core/string-coerce";
 import { theme } from "../../../packages/terminal-core/src/theme.js";
+import { formatDurationPrecise } from "../../infra/format-time/format-duration.ts";
+import { getUpdateRun } from "../../infra/update-run-ledger.js";
 import {
-  formatDurationCompact,
-  formatDurationPrecise,
-} from "../../infra/format-time/format-duration.ts";
+  renderUpdateRunReport,
+  updateRunReportInputFromResult,
+} from "../../infra/update-run-report.js";
 import type {
   UpdateRunResult,
   UpdateStepAdvisory,
@@ -59,80 +60,6 @@ function getStepLabel(step: Pick<UpdateStepInfo, "name">): string {
 
 function isAdvisoryStep(step: { advisory?: UpdateStepAdvisory }): boolean {
   return step.advisory !== undefined;
-}
-
-/** Convert updater failure reasons and stderr tails into operator-facing recovery hints. */
-function inferUpdateFailureHints(result: UpdateRunResult): string[] {
-  if (result.status !== "error") {
-    return [];
-  }
-  if (result.reason === "preflight-insufficient-space") {
-    return [
-      "Free space on the preflight staging and package-manager store filesystems, then rerun the update.",
-      "Preflight stopped because storage was exhausted; trying another commit would not repair it.",
-    ];
-  }
-  if (result.reason === "pnpm-corepack-missing") {
-    return [
-      "This pnpm checkout could not auto-enable pnpm because corepack is missing.",
-      "Install pnpm manually or install Node with corepack available, then rerun the update command.",
-    ];
-  }
-  if (result.reason === "pnpm-corepack-enable-failed") {
-    return [
-      "This pnpm checkout could not auto-enable pnpm via corepack.",
-      "Run `corepack enable` manually or install pnpm manually, then rerun the update command.",
-    ];
-  }
-  if (result.reason === "pnpm-npm-bootstrap-failed") {
-    return [
-      "This pnpm checkout could not bootstrap pnpm from npm automatically.",
-      "Install pnpm manually, then rerun the update command.",
-    ];
-  }
-  if (result.reason === "preferred-manager-unavailable") {
-    return [
-      "This checkout requires its declared package manager and the updater could not find it.",
-      "Install the missing package manager manually, then rerun the update command.",
-    ];
-  }
-  if (result.mode !== "npm") {
-    return [];
-  }
-  const failedStep = [...result.steps].toReversed().find((step) => step.exitCode !== 0);
-  if (!failedStep) {
-    return [];
-  }
-
-  const stderr = normalizeLowercaseStringOrEmpty(failedStep.stderrTail);
-  const hints: string[] = [];
-  const isGlobalPackageInstallStep =
-    failedStep.name.startsWith("global update") || failedStep.name.startsWith("global install");
-
-  if (isGlobalPackageInstallStep && stderr.includes("eacces")) {
-    hints.push(
-      "Detected permission failure (EACCES). Re-run with a writable global prefix or sudo (for system-managed Node installs).",
-    );
-    hints.push(
-      "If you recover with sudo/manual package install on a managed Gateway, stop the Gateway first so it does not load files while the package tree is being replaced.",
-    );
-    hints.push("Example: npm config set prefix ~/.local && npm i -g openclaw@latest");
-    hints.push(
-      "System install outline: openclaw gateway stop -> sudo <system-npm> i -g openclaw@latest -> openclaw gateway install --force -> openclaw gateway restart.",
-    );
-  }
-
-  if (
-    failedStep.name.startsWith("global update") &&
-    (stderr.includes("node-gyp") || stderr.includes("prebuild"))
-  ) {
-    hints.push(
-      "Detected native optional dependency build failure. The updater retries with --omit=optional automatically.",
-    );
-    hints.push("If it still fails: npm i -g openclaw@latest --omit=optional");
-  }
-
-  return hints;
 }
 
 /** Runner-facing progress callbacks plus terminal spinner cleanup. */
@@ -227,66 +154,22 @@ function formatStepStatus(step: {
   return theme.error("\u2717");
 }
 
-type PrintResultOptions = UpdateCommandOptions & {
-  hideSteps?: boolean;
-};
-
 /** Render a completed updater run as JSON or terminal output. */
-export function printResult(result: UpdateRunResult, opts: PrintResultOptions): void {
+export function printResult(
+  result: UpdateRunResult,
+  opts: UpdateCommandOptions,
+  reportHints: { doctorHint?: string | null; nextAction?: string } = {},
+): void {
   if (opts.json) {
     defaultRuntime.writeJson(result);
     return;
   }
 
-  const statusColor =
-    result.status === "ok" ? theme.success : result.status === "skipped" ? theme.warn : theme.error;
-
+  const run = result.runId ? getUpdateRun(result.runId, { env: opts.run?.env }) : undefined;
+  const report = renderUpdateRunReport(run ?? updateRunReportInputFromResult(result), reportHints);
   defaultRuntime.log("");
-  defaultRuntime.log(
-    `${theme.heading("Update Result:")} ${statusColor(result.status.toUpperCase())}`,
-  );
-  if (result.root) {
-    defaultRuntime.log(`  Root: ${theme.muted(result.root)}`);
+  defaultRuntime.log(theme.heading(report.headline));
+  for (const line of report.lines) {
+    defaultRuntime.log(line);
   }
-  if (result.reason) {
-    defaultRuntime.log(`  Reason: ${theme.muted(result.reason)}`);
-  }
-
-  if (result.before?.version || result.before?.sha) {
-    const before = result.before.version ?? result.before.sha?.slice(0, 8) ?? "";
-    defaultRuntime.log(`  Before: ${theme.muted(before)}`);
-  }
-  if (result.after?.version || result.after?.sha) {
-    const after = result.after.version ?? result.after.sha?.slice(0, 8) ?? "";
-    defaultRuntime.log(`  After: ${theme.muted(after)}`);
-  }
-
-  // Some preflight failures are synthesized without a progress callback. Keep
-  // their diagnostics visible even when successful streamed steps are hidden.
-  const steps = opts.hideSteps
-    ? result.steps.filter((step) => step.exitCode !== 0 || isAdvisoryStep(step))
-    : result.steps;
-  if (steps.length > 0) {
-    defaultRuntime.log("");
-    defaultRuntime.log(theme.heading("Steps:"));
-    for (const step of steps) {
-      printStep(step);
-    }
-  }
-
-  const hints = inferUpdateFailureHints(result);
-  if (hints.length > 0) {
-    defaultRuntime.log("");
-    defaultRuntime.log(theme.heading("Recovery hints:"));
-    for (const hint of hints) {
-      defaultRuntime.log(`  - ${theme.warn(hint)}`);
-    }
-  }
-
-  defaultRuntime.log("");
-  const totalTime =
-    result.durationMs < 60_000
-      ? formatDurationPrecise(result.durationMs)
-      : (formatDurationCompact(result.durationMs, { spaced: true }) ?? "0ms");
-  defaultRuntime.log(`Total time: ${theme.muted(totalTime)}`);
 }

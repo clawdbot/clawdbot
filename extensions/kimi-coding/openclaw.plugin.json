@@ -18,6 +18,9 @@
     }
   },
   "modelCatalog": {
+    "modelsDev": {
+      "kimi": "kimi-for-coding"
+    },
     "providers": {
       "kimi": {
         "baseUrl": "https://api.kimi.com/coding/",

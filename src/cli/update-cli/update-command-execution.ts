@@ -5,6 +5,7 @@ import {
   verifyPackageUpdateRecovery,
   type ResolvedGlobalInstallTarget,
 } from "../../infra/update-global.js";
+import { recordUpdateRunPhase } from "../../infra/update-run-ledger.js";
 import { readCurrentGitUpdateRecovery } from "../../infra/update-runner-git-recovery.js";
 import type { UpdateRunResult } from "../../infra/update-runner.js";
 import { defaultRuntime } from "../../runtime.js";
@@ -122,6 +123,7 @@ export async function executeMutableUpdate(params: {
           jsonMode: Boolean(params.opts.json),
           timeoutMs: params.updateStepTimeoutMs,
           phase,
+          updateRun: params.opts.run,
           handoffFromGateway: (state) =>
             handoffUpdateFromGateway({
               state,
@@ -262,6 +264,11 @@ export async function executeMutableUpdate(params: {
       );
     }
     preManagedServiceStop?.windowsTaskAutoStartRecovery?.beginMutation();
+    if (params.opts.run && params.updateInstallKind === "package") {
+      recordUpdateRunPhase(params.opts.run.runId, "activating", undefined, {
+        env: params.opts.run.env,
+      });
+    }
     if (packageExecutor && preparedPackageUpdate) {
       packageActivationStarted = true;
       result = await packageExecutor.activate({
@@ -285,6 +292,7 @@ export async function executeMutableUpdate(params: {
         beforeGitMutation:
           params.updateInstallKind === "git"
             ? createBeforeGitMutation({
+                updateRun: params.opts.run,
                 roots: gitMutationRoots ?? [params.root],
                 shouldRestart: params.shouldRestart,
                 stopManagedService: stopManagedServiceBeforeMutableUpdate,

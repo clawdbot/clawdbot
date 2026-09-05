@@ -36,17 +36,26 @@ type ProgressResult = {
   callId?: string | null;
 };
 
-async function requestProgress(route: string, prompt: string, results: ProgressResult[]) {
+async function requestProgress(
+  route: string,
+  prompt: string,
+  results: ProgressResult[],
+  context?: string,
+) {
   const server = await startQaMockOpenAiServer({ host: "127.0.0.1", port: 0 });
   const toolResults = results.map((result, index) => ({
     ...result,
     callId: result.callId === null ? undefined : (result.callId ?? `progress_${index}`),
   }));
+  const input = [prompt, ...(context ? [context] : [])].map((text) => ({
+    role: "user",
+    content: route === "responses" ? [{ type: "input_text", text }] : text,
+  }));
   const body =
     route === "responses"
       ? {
           input: [
-            { role: "user", content: [{ type: "input_text", text: prompt }] },
+            ...input,
             ...toolResults.flatMap((result) => [
               {
                 type: "function_call",
@@ -65,7 +74,7 @@ async function requestProgress(route: string, prompt: string, results: ProgressR
         }
       : {
           messages: [
-            { role: "user", content: prompt },
+            ...input,
             ...toolResults.flatMap((result) => [
               {
                 role: "assistant",
@@ -429,24 +438,59 @@ async function completeProgress(params: {
   route: string;
   prompt: string;
   tool: string;
+  args: Record<string, unknown>;
   output: string | unknown[];
   isError?: boolean;
+  context?: string;
 }) {
-  return requestProgress(params.route, params.prompt, [
-    {
-      tool: params.tool,
-      args:
-        params.tool === "exec"
-          ? { command: "true" }
-          : { path: params.prompt === ERROR_PROMPT ? "denied.txt" : "empty.txt" },
-      output: params.output,
-      isError: params.isError,
-    },
-  ]);
+  const plan = await requestProgress(params.route, params.prompt, [], params.context);
+  const call = params.route === "responses" ? plan.output[0] : plan.content[0];
+  expect(call).toMatchObject(
+    params.route === "responses"
+      ? { type: "function_call", name: params.tool, arguments: JSON.stringify(params.args) }
+      : { type: "tool_use", name: params.tool, input: params.args },
+  );
+  return requestProgress(
+    params.route,
+    params.prompt,
+    [
+      {
+        tool: params.tool,
+        args: params.args,
+        output: params.output,
+        isError: params.isError,
+        callId: params.route === "responses" ? call.call_id : call.id,
+      },
+    ],
+    params.context,
+  );
 }
 
 describe.each(["responses", "messages"])("%s tool progress", (route) => {
+  const target = "repo/資料🙂/missing.txt";
+  const prompt = [
+    "Conversation info:",
+    "```json",
+    '{"sender":{"id":"fixture-user"}}',
+    "```",
+    "",
+    `Tool progress error QA check: read "${target}" before answering. After the read fails, reply exactly \`PROGRESS_OK\`.`,
+  ].join("\n");
+  const carrier = [
+    "<<<BEGIN_OPENCLAW_INTERNAL_CONTEXT>>>",
+    "Runtime: synthetic metadata.",
+    "<<<END_OPENCLAW_INTERNAL_CONTEXT>>>",
+  ].join("\n");
   it.each([
+    {
+      label: "fenced read with runtime context",
+      tool: "read",
+      prompt,
+      args: { path: target },
+      context: carrier,
+      output: JSON.stringify({ status: "error", tool: "read", error: `File not found: ${target}` }),
+      isError: true,
+    },
     ...[
       { status: "failed" },
       { status: "running", sessionId: "other-session" },
@@ -524,7 +568,11 @@ describe.each(["responses", "messages"])("%s tool progress", (route) => {
       output: "Process exited with code 7.",
     },
   ])("finishes after $label", async (fixture) => {
-    const response = await completeProgress({ route, ...fixture });
+    const response = await completeProgress({
+      route,
+      args: fixture.tool === "exec" ? { command: "true" } : { path: "empty.txt" },
+      ...fixture,
+    });
     expect(response).toMatchObject(
       route === "responses"
         ? { output: [{ type: "message", content: [{ type: "output_text", text: "PROGRESS_OK" }] }] }
@@ -559,6 +607,7 @@ it.each([
     route: "messages",
     prompt: ERROR_PROMPT,
     tool: "read",
+    args: { path: "denied.txt" },
     ...fixture,
   });
   expect(response).toMatchObject({

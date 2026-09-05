@@ -6,6 +6,7 @@ import { probeGatewayStatus } from "../cli/daemon-cli/probe.js";
 import { compareCliGatewayStateDirs, type GatewayHello } from "../cli/state-dir-gateway-check.js";
 import { resolveConfigPath, resolveStateDir } from "../config/paths.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
+import { resolveGatewayService } from "../daemon/service.js";
 import {
   buildGatewayConnectionDetails,
   buildGatewayProbeConnectionDetails,
@@ -13,6 +14,7 @@ import {
   isGatewayCredentialsRequiredError,
 } from "../gateway/call.js";
 import { isGatewaySecretRefUnavailableError } from "../gateway/credentials.js";
+import { isLoopbackGatewayUrl } from "../gateway/net.js";
 import type {
   DoctorMemoryEmbeddingRuntimePayload,
   DoctorMemoryStatusPayload,
@@ -72,6 +74,72 @@ function noteCliGatewayVersionSkew(status: StatusSummary | undefined): void {
   );
 }
 
+function noteGatewayStateDirectory(
+  snapshot: Pick<GatewayHello["snapshot"], "stateDir" | "configPath">,
+  source: "live Gateway" | "installed Gateway service",
+): void {
+  if (!snapshot.stateDir) {
+    return;
+  }
+  const comparison = compareCliGatewayStateDirs({
+    cliStateDir: resolveStateDir(process.env),
+    cliConfigPath: resolveConfigPath(process.env),
+    gatewayStateDir: snapshot.stateDir,
+    gatewayConfigPath: snapshot.configPath,
+    source,
+    mode: "warn",
+  });
+  if (comparison.kind === "warn") {
+    note(
+      `${comparison.message}\nRun plugin inspection and doctor --fix with the Gateway's OPENCLAW_STATE_DIR and OPENCLAW_CONFIG_PATH. To change the managed service, run \`openclaw gateway install --force\` from the intended profile and review operator-owned service overrides.`,
+      "Gateway state directory mismatch",
+    );
+  }
+}
+
+async function noteInstalledGatewayStateDirectory(cfg: OpenClawConfig, timeoutMs: number) {
+  // A remote Gateway can use a loopback tunnel or have no configured URL.
+  // Neither case makes the local installed service authoritative.
+  if (cfg.gateway?.mode === "remote") {
+    return;
+  }
+  try {
+    if (!isLoopbackGatewayUrl(buildGatewayConnectionDetails({ config: cfg }).url)) {
+      return;
+    }
+    const serviceEnv = { ...process.env };
+    // CLI path overrides select its store, not the installed service's environment.
+    delete serviceEnv.OPENCLAW_STATE_DIR;
+    delete serviceEnv.OPENCLAW_CONFIG_PATH;
+    delete serviceEnv.OPENCLAW_HOME;
+    const command = await resolveGatewayService().readCommand(serviceEnv, {
+      timeoutMs: Math.min(timeoutMs, 3_000),
+      requireEffective: true,
+    });
+    if (!command) {
+      return;
+    }
+    const environment = command.environment;
+    if (
+      !environment ||
+      !["OPENCLAW_STATE_DIR", "OPENCLAW_HOME", "HOME", "USERPROFILE"].some((key) =>
+        environment[key]?.trim(),
+      )
+    ) {
+      throw new Error("Service state paths are unavailable");
+    }
+    noteGatewayStateDirectory(
+      { stateDir: resolveStateDir(environment), configPath: resolveConfigPath(environment) },
+      "installed Gateway service",
+    );
+  } catch {
+    note(
+      "Installed Gateway service state and config paths could not be verified. Inspect the service environment with `openclaw gateway status --deep` before repairing plugin state.",
+      "Gateway state directory",
+    );
+  }
+}
+
 /**
  * Probes gateway status and reports user-facing connection/auth/channel warnings.
  *
@@ -87,6 +155,7 @@ export async function checkGatewayHealth(params: {
     typeof params.timeoutMs === "number" && params.timeoutMs > 0 ? params.timeoutMs : 10_000;
   let healthOk = false;
   let status: StatusSummary | undefined;
+  let gatewaySnapshot: GatewayHello["snapshot"] | undefined;
   try {
     status = await callGateway<StatusSummary>({
       method: "status",
@@ -94,20 +163,8 @@ export async function checkGatewayHealth(params: {
       timeoutMs,
       config: params.cfg,
       onHelloOk: ({ snapshot }: GatewayHello) => {
-        if (!snapshot.stateDir) {
-          return;
-        }
-        const comparison = compareCliGatewayStateDirs({
-          cliStateDir: resolveStateDir(process.env),
-          cliConfigPath: resolveConfigPath(process.env),
-          gatewayStateDir: snapshot.stateDir,
-          gatewayConfigPath: snapshot.configPath,
-          source: "live Gateway",
-          mode: "warn",
-        });
-        if (comparison.kind === "warn") {
-          note(comparison.message, "Gateway state directory mismatch");
-        }
+        gatewaySnapshot = snapshot;
+        noteGatewayStateDirectory(snapshot, "live Gateway");
       },
     });
     healthOk = true;
@@ -189,6 +246,9 @@ export async function checkGatewayHealth(params: {
     }
     return { healthOk, authenticated: true, status };
   } catch (err) {
+    if (!gatewaySnapshot?.stateDir) {
+      await noteInstalledGatewayStateDirectory(params.cfg, timeoutMs);
+    }
     if (gatewayConnectErrorWasRateLimited(err)) {
       note(GATEWAY_HEALTH_RATE_LIMITED_MESSAGE, GATEWAY_HEALTH_RATE_LIMITED_TITLE);
       return { healthOk: true, authenticated: false };

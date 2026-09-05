@@ -28,6 +28,7 @@ import {
 } from "./doctor-skill-workshop-sqlite.js";
 import {
   createAppliedLegacyProposal,
+  expectWorkshopMigrationConverged,
   readSkillProposalRecord,
   seedLegacyV15ProposalRows,
 } from "./doctor-skill-workshop-sqlite.test-support.js";
@@ -62,13 +63,7 @@ describe("doctor Skill Workshop SQLite relocation and legacy migration", () => {
       title: "Create Relocated Workshop",
       description: "Relocated procedure",
       content: skillContent,
-      target: {
-        skillName: "relocate-workshop",
-        skillKey: "relocate-workshop",
-        skillDir: legacySkillDir,
-        skillFile: legacySkillFile,
-        source: "openclaw-workspace",
-      },
+      target: { skillKey: "relocate-workshop", skillDir: legacySkillDir },
     });
     await fs.mkdir(legacySkillDir, { recursive: true });
     await fs.writeFile(legacySkillFile, skillContent, "utf8");
@@ -111,9 +106,7 @@ describe("doctor Skill Workshop SQLite relocation and legacy migration", () => {
       },
     });
 
-    await expect(
-      migrateLegacySkillWorkshopProposals({ config: {}, env: testState.env }),
-    ).resolves.toEqual({ changes: [], warnings: [], detected: 0, migrated: 0 });
+    await expectWorkshopMigrationConverged({ env: testState.env });
   });
 
   it("retargets a pending update for a relocated applied skill", async () => {
@@ -131,13 +124,7 @@ describe("doctor Skill Workshop SQLite relocation and legacy migration", () => {
       title: "Create Relocate Update",
       description: "Relocated update",
       content: skillContent,
-      target: {
-        skillName: "relocate-update",
-        skillKey: "relocate-update",
-        skillDir,
-        skillFile,
-        source: "openclaw-workspace",
-      },
+      target: { skillKey: "relocate-update", skillDir },
     });
     const update: SkillProposalRecord = {
       ...create,
@@ -197,13 +184,7 @@ describe("doctor Skill Workshop SQLite relocation and legacy migration", () => {
       title: "Create Ambiguous Workshop",
       description: "Ambiguous procedure",
       content: skillContent,
-      target: {
-        skillName: "ambiguous-workshop",
-        skillKey: "ambiguous-workshop",
-        skillDir: legacySkillDir,
-        skillFile: path.join(legacySkillDir, "SKILL.md"),
-        source: "openclaw-workspace",
-      },
+      target: { skillKey: "ambiguous-workshop", skillDir: legacySkillDir },
     });
     await fs.mkdir(legacySkillDir, { recursive: true });
     await fs.writeFile(record.target.skillFile, skillContent, "utf8");
@@ -253,13 +234,7 @@ describe("doctor Skill Workshop SQLite relocation and legacy migration", () => {
       title: "Create Retired Owner Workshop",
       description: "Retired owner procedure",
       content: skillContent,
-      target: {
-        skillName: "retired-owner-workshop",
-        skillKey: "retired-owner-workshop",
-        skillDir: legacySkillDir,
-        skillFile: path.join(legacySkillDir, "SKILL.md"),
-        source: "openclaw-workspace",
-      },
+      target: { skillKey: "retired-owner-workshop", skillDir: legacySkillDir },
     });
     await fs.mkdir(legacySkillDir, { recursive: true });
     await fs.writeFile(record.target.skillFile, skillContent, "utf8");
@@ -311,13 +286,7 @@ describe("doctor Skill Workshop SQLite relocation and legacy migration", () => {
           title: `Create ${name}`,
           description: `${name} procedure`,
           content,
-          target: {
-            skillName: name,
-            skillKey: name,
-            skillDir,
-            skillFile: path.join(skillDir, "SKILL.md"),
-            source: "openclaw-workspace",
-          },
+          target: { skillKey: name, skillDir },
         }),
       };
     });
@@ -380,9 +349,7 @@ describe("doctor Skill Workshop SQLite relocation and legacy migration", () => {
         },
       });
     }
-    await expect(
-      migrateLegacySkillWorkshopProposals({ config: {}, env: testState.env }),
-    ).resolves.toEqual({ changes: [], warnings: [], detected: 0, migrated: 0 });
+    await expectWorkshopMigrationConverged({ env: testState.env });
   });
 
   it("keeps a released legacy skill user-owned through the v16 migration and Doctor repair", async () => {
@@ -395,13 +362,7 @@ describe("doctor Skill Workshop SQLite relocation and legacy migration", () => {
         title: `Create ${name}`,
         description: `${name} procedure`,
         content,
-        target: {
-          skillName: name,
-          skillKey: name,
-          skillDir: path.join(workspaceDir, "skills", name),
-          skillFile: path.join(workspaceDir, "skills", name, "SKILL.md"),
-          source: "openclaw-workspace",
-        },
+        target: { skillKey: name, skillDir: path.join(workspaceDir, "skills", name) },
       });
     // v15 collection review dropped this skill and released its claim; the operator
     // then recreated the path by hand, so it is theirs.
@@ -456,9 +417,7 @@ describe("doctor Skill Workshop SQLite relocation and legacy migration", () => {
       externalProposalCountsByAgent: {},
       legacyBackupRootCount: 0,
     });
-    await expect(
-      migrateLegacySkillWorkshopProposals({ config: {}, env: testState.env }),
-    ).resolves.toEqual({ changes: [], warnings: [], detected: 0, migrated: 0 });
+    await expectWorkshopMigrationConverged({ env: testState.env });
   });
 
   it("imports verified sidecars, preserves review artifacts, and removes legacy JSON", async () => {

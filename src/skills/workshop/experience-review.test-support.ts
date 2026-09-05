@@ -251,10 +251,7 @@ export async function createExperienceReviewCandidate(
   const sessionKey = `agent:main:${sessionId}`;
   const result = {
     ctx: {
-      agentId: "main",
       runId,
-      sessionId,
-      sessionKey,
       workspaceDir,
       modelProviderId: "openai",
       modelId,

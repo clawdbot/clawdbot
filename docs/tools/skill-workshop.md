@@ -76,9 +76,9 @@ The following lifecycle applies to Workshop proposals:
   `<state-dir>/agents/<agentId>/agent/workshop-skills`. A skill is Workshop-owned
   exactly when it is contained in that agent's directory.
 - **No clobber:** create fails if the target already exists in that agent's
-  Workshop directory. A same-named skill from another source (bundled, plugin,
-  workspace, personal) is never touched; it keeps its precedence over the new
-  Workshop skill.
+  Workshop directory. Skills from other sources are never changed.
+  For same-named skills, [loading order](/tools/skills#loading-order) determines
+  which definition is used.
 - **Hash bound:** update proposals bind to the current target hash and go
   `stale` if the live skill changes before apply.
 - **Scanner gated:** apply reruns the security scanner before writing. Only

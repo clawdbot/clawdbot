@@ -146,8 +146,8 @@ describe("Workshop experience review through the real provider and tool owners",
         const target = await resolveAgentRunSessionTarget({
           agentId: "main",
           config: candidate.config,
-          sessionId: candidate.ctx.sessionId!,
-          sessionKey: candidate.ctx.sessionKey,
+          sessionId: candidate.source.sessionId,
+          sessionKey: candidate.source.sessionKey,
           missingSessionKey: "resolve-existing",
         });
         loadAgentRuntimePluginRegistryHandle({ config: candidate.config, workspaceDir });
@@ -174,7 +174,12 @@ describe("Workshop experience review through the real provider and tool owners",
             }
           },
         });
-        const ctx = { ...candidate.ctx, skillWorkshopAvailable: true, modelIterations: 10 };
+        const ctx = {
+          ...candidate.ctx,
+          sessionKey: candidate.source.sessionKey,
+          skillWorkshopAvailable: true,
+          modelIterations: 10,
+        };
         const laterMessages = [
           makeAgentUserMessage({ content: "What is two plus two?" }),
           makeAgentAssistantMessage({
@@ -313,7 +318,7 @@ describe("Workshop experience review through the real provider and tool owners",
             const hash = createHash("sha256");
             for (const row of database.db
               .prepare("SELECT event_json FROM transcript_events WHERE session_id = ? ORDER BY seq")
-              .iterate(candidate.ctx.sessionId)) {
+              .iterate(candidate.source.sessionId)) {
               hash.update(String(row.event_json));
             }
             return hash.digest("hex");

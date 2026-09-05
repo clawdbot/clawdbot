@@ -3,7 +3,6 @@
  *
  * These functions perform I/O (filesystem, config reads) to detect security issues.
  */
-import fs from "node:fs";
 import path from "node:path";
 import { clearTimeout as clearNodeTimeout, setTimeout as setNodeTimeout } from "node:timers";
 import {
@@ -21,12 +20,11 @@ import { MANIFEST_KEY } from "../compat/legacy-names.js";
 import type { OpenClawConfig, ConfigFileSnapshot } from "../config/config.js";
 import { collectIncludePathsRecursive } from "../config/includes-scan.js";
 import { resolveOAuthDir } from "../config/paths.js";
-import { isMissingPathError } from "../infra/errors.js";
-import { readRegularFile, statRegularFile, walkDirectorySync } from "../infra/fs-safe.js";
+import { readRegularFile, statRegularFile } from "../infra/fs-safe.js";
 import { LEGACY_IMPLICIT_AGENT_ID, normalizeAgentId } from "../routing/session-key.js";
 import { getOrCreatePromise } from "../shared/lazy-promise.js";
 import { createLazyRuntimeModule, createLazyRuntimeNamedExport } from "../shared/lazy-runtime.js";
-import { loadSingleSkillDirectory } from "../skills/loading/local-loader.js";
+import { loadSkillRootRecords } from "../skills/loading/skill-root-loader.js";
 import { loadWorkspaceSkills } from "../skills/loading/workspace-skill-loader.js";
 import type { SkillScanFinding } from "../skills/security/scanner.js";
 import { resolveWorkshopSkillsDir } from "../skills/workshop/skills-root.js";
@@ -943,56 +941,16 @@ export async function collectInstalledSkillsCodeSafetyFindings(params: {
   // artifacts from the audit.
   for (const agentId of listAgentIds(params.cfg)) {
     const workshopDir = resolveWorkshopSkillsDir(params.cfg, agentId, env);
-    const inventory = walkDirectorySync(workshopDir, {
-      maxDepth: 1,
-      symlinks: "include",
-      include: (entry) =>
-        (entry.kind === "directory" || entry.kind === "symlink") &&
-        !entry.name.startsWith(".") &&
-        entry.name !== "node_modules",
-    });
-    for (const failure of inventory.failedDirs) {
-      if (!isMissingPathError(failure.error)) {
-        reportWorkshopScanFailure(failure.path, failure.error);
-      }
-    }
-    if (inventory.failedDirs.length > 0) {
-      continue;
-    }
-    let workshopRealPath: string;
-    try {
-      workshopRealPath = fs.realpathSync(workshopDir);
-    } catch (error) {
-      reportWorkshopScanFailure(workshopDir, error);
-      continue;
-    }
-    for (const candidatePath of [
-      workshopRealPath,
-      ...inventory.entries.map((candidate) => candidate.path).toSorted(),
-    ]) {
-      try {
-        const skillRealPath = fs.realpathSync(candidatePath);
-        if (!fs.statSync(skillRealPath).isDirectory()) {
-          continue;
-        }
-        if (!isPathInside(workshopRealPath, skillRealPath)) {
-          throw new Error("Skill directory resolves outside its Workshop root.");
-        }
-        const loaded = loadSingleSkillDirectory({
-          skillDir: skillRealPath,
-          rootRealPath: skillRealPath,
-          source: "openclaw-workshop",
-          maxBytes: MAX_SKILL_AUDIT_FILE_BYTES,
-          onDiagnostic: ({ path: filePath, message }) =>
-            reportWorkshopScanFailure(filePath, message),
-        });
-        if (loaded) {
-          entries.push(loaded);
-        }
-      } catch (error) {
-        reportWorkshopScanFailure(candidatePath, error);
-      }
-    }
+    entries.push(
+      ...loadSkillRootRecords({
+        dir: workshopDir,
+        source: "openclaw-workshop",
+        config: params.cfg,
+        mode: "audit",
+        rejectHardlinks: true,
+        onDiagnostic: ({ path: filePath, message }) => reportWorkshopScanFailure(filePath, message),
+      }),
+    );
   }
   for (const entry of entries) {
     if (resolveSkillSource(entry.skill) === "openclaw-bundled") {

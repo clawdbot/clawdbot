@@ -9,14 +9,14 @@ const defaultScheduler = createSkillExperienceReviewScheduler({
       await import("../../agents/embedded-agent-runner/active-run-projections.js");
     return getActiveEmbeddedRunCount() > 0;
   },
-  prepareReview: async (candidate) => {
-    const { getRuntimeConfig } = await import("../../config/config.js");
-    const { prepareSkillExperienceReviewCandidate } = await import("./experience-review.js");
-    return prepareSkillExperienceReviewCandidate(candidate, getRuntimeConfig());
-  },
   runReview: async (candidate) => {
-    const { runSkillExperienceReview } = await import("./experience-review.js");
-    await runSkillExperienceReview(candidate);
+    const { getRuntimeConfig } = await import("../../config/config.js");
+    const { prepareSkillExperienceReviewCandidate, runSkillExperienceReview } =
+      await import("./experience-review.js");
+    const prepared = await prepareSkillExperienceReviewCandidate(candidate, getRuntimeConfig());
+    if (prepared) {
+      await runSkillExperienceReview(prepared);
+    }
   },
 });
 

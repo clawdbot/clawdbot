@@ -163,6 +163,10 @@ function prepareDeclarationBoundary({ options }: BuildContext) {
   if (!options.dts) {
     return;
   }
+  // tsdown omits cwd when constructing the declaration plugin. Its entry globs
+  // must match resolved source IDs, not an ambient cwd or Windows junction spelling.
+  const declarationCwd = fs.realpathSync(options.dts.cwd ?? options.cwd);
+  options.dts = { ...options.dts, cwd: declarationCwd };
   const boundary = createDeclarationBoundaryPlugin(options.cwd);
   // Keep this ahead of inputOptions callback plugins at equal hook priority.
   options.plugins = [options.plugins, boundary];

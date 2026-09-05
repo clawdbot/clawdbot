@@ -54,10 +54,8 @@ import {
 const WORKSHOP_DIR = "skill-workshop";
 const PROPOSALS_DIR = `${WORKSHOP_DIR}/proposals`;
 const MANIFEST_PATH = `${WORKSHOP_DIR}/proposals.json`;
-// Doctor-owned recovery archive for orphaned or incomplete legacy proposal
-// directories that cannot be imported. Relocating them out of active discovery
-// lets Doctor converge instead of retrying the same impossible migration on
-// every run, while preserving any remaining artifacts for manual recovery.
+// Preserve incomplete proposal artifacts outside active discovery so Doctor
+// does not retry an impossible import on every run.
 const RECOVERY_DIR = `${WORKSHOP_DIR}/recovery`;
 const RECOVERY_PROPOSALS_DIR = `${RECOVERY_DIR}/proposals`;
 const MAX_RECORD_BYTES = 1024 * 1024;
@@ -152,8 +150,6 @@ async function relocateLegacyWorkshopTargets(
     const record = parseSkillProposalRow(row);
     return record ? [{ record, ownerAgentId: row.owner_agent_id }] : [];
   });
-  let retargetedProposals = 0;
-  let staleProposals = 0;
   const persistUpdates = (updates: WorkshopProposalUpdate[]): void => {
     if (updates.length === 0) {
       return;
@@ -178,13 +174,6 @@ async function relocateLegacyWorkshopTargets(
       { env },
       { operationLabel: "skill-workshop.relocation.commit" },
     );
-    for (const update of updates) {
-      if (update.record.status === "stale") {
-        staleProposals += 1;
-      } else {
-        retargetedProposals += 1;
-      }
-    }
   };
   const plan = await planWorkshopRelocation(records, config, env);
   const workspaceMoves = new Map<string, typeof plan.moves>();
@@ -213,9 +202,11 @@ async function relocateLegacyWorkshopTargets(
   persistUpdates(plan.updates);
   await finishWorkshopWorkspaceRelocations(env);
   const backupMigration = await migrateLegacyCollectionBackups(config, env);
+  const updates = [...plan.updates, ...plan.moves.flatMap((move) => move.updates)];
+  const staleProposals = updates.filter((update) => update.record.status === "stale").length;
   return {
     movedSkills: plan.moves.filter((move) => move.operation === "move").length,
-    retargetedProposals,
+    retargetedProposals: updates.length - staleProposals,
     staleProposals,
     migratedBackupRoots: backupMigration.migrated,
     warnings: [...plan.warnings, ...backupMigration.warnings],
@@ -271,7 +262,7 @@ async function migrateProposal(params: {
   env: NodeJS.ProcessEnv;
   proposalId: string;
   stateRoot: Root;
-}): Promise<"imported" | "already-imported"> {
+}): Promise<void> {
   const proposalDir = `${PROPOSALS_DIR}/${params.proposalId}`;
   const record = validateSkillProposalRecord(
     await readJson(params.stateRoot, `${proposalDir}/proposal.json`, MAX_RECORD_BYTES),
@@ -308,7 +299,7 @@ async function migrateProposal(params: {
         : "owning agent could not be inferred; legacy metadata was retained for manual recovery",
     );
   }
-  const result = importLegacySkillProposal({
+  importLegacySkillProposal({
     record: record.value,
     rollback,
     ownerAgentId: owner.ownerAgentId,
@@ -319,33 +310,24 @@ async function migrateProposal(params: {
     await params.stateRoot.remove(`${proposalDir}/rollback.json`);
   }
   await params.stateRoot.remove(`${proposalDir}/proposal.json`);
-  return result;
 }
 
-type OrphanDisposition = { kind: "removed-empty" } | { kind: "quarantined"; recoveryPath: string };
-
-/**
- * Reconcile a confirmed-incomplete legacy proposal directory that cannot be
- * imported so Doctor converges on the next run. Empty directories are removed
- * directly; non-empty directories are relocated into the Doctor-owned recovery
- * archive under the state directory, preserving any remaining artifacts.
- */
 async function reconcileIncompleteProposal(params: {
   proposalId: string;
   proposalDir: string;
   stateRoot: Root;
-}): Promise<OrphanDisposition> {
+}): Promise<string> {
   const entries = await params.stateRoot.list(params.proposalDir, { withFileTypes: true });
   if (entries.length === 0) {
     await params.stateRoot.remove(params.proposalDir);
-    return { kind: "removed-empty" };
+    return `Removed empty legacy Skill Workshop proposal directory ${params.proposalId}.`;
   }
   await params.stateRoot.mkdir(RECOVERY_PROPOSALS_DIR);
   // A unique target preserves earlier recovery artifacts without an unsafe
   // check-then-replace window. The fs-safe move pins both directory parents.
   const recoveryPath = `${RECOVERY_PROPOSALS_DIR}/${params.proposalId}-${randomUUID()}`;
   await params.stateRoot.move(params.proposalDir, recoveryPath, { overwrite: true });
-  return { kind: "quarantined", recoveryPath };
+  return `Quarantined incomplete Skill Workshop proposal ${params.proposalId} to ${recoveryPath} for manual recovery.`;
 }
 
 /** Import verified legacy proposal sidecars, then remove only the imported JSON metadata. */
@@ -431,16 +413,7 @@ async function importLegacySkillProposalSidecars(params: {
         continue;
       }
       try {
-        const disposition = await reconcileIncompleteProposal({
-          proposalId,
-          proposalDir,
-          stateRoot,
-        });
-        changes.push(
-          disposition.kind === "removed-empty"
-            ? `Removed empty legacy Skill Workshop proposal directory ${proposalId}.`
-            : `Quarantined incomplete Skill Workshop proposal ${proposalId} to ${disposition.recoveryPath} for manual recovery.`,
-        );
+        changes.push(await reconcileIncompleteProposal({ proposalId, proposalDir, stateRoot }));
       } catch (reconcileError) {
         warnings.push(
           `Could not quarantine incomplete Skill Workshop proposal ${proposalId}: ${String(
@@ -457,12 +430,13 @@ async function importLegacySkillProposalSidecars(params: {
       }
     },
   );
-  const migrationChange =
-    migrated > 0
-      ? `Migrated ${migrated} Skill Workshop proposal${migrated === 1 ? "" : "s"} into shared SQLite.`
-      : null;
+  if (migrated > 0) {
+    changes.unshift(
+      `Migrated ${migrated} Skill Workshop proposal${migrated === 1 ? "" : "s"} into shared SQLite.`,
+    );
+  }
   return {
-    changes: [...(migrationChange ? [migrationChange] : []), ...changes],
+    changes,
     warnings,
     detected: proposalIds.length,
     migrated,
@@ -482,18 +456,18 @@ export async function migrateLegacySkillWorkshopProposals(params: {
   try {
     const sidecars = await importLegacySkillProposalSidecars({ config: params.config, env });
     const relocation = await relocateLegacyWorkshopTargets(params.config, env);
-    const relocationChanges =
+    if (
       relocation.movedSkills > 0 ||
       relocation.retargetedProposals > 0 ||
       relocation.staleProposals > 0 ||
       relocation.migratedBackupRoots > 0
-        ? [
-            `Relocated ${relocation.movedSkills} Skill Workshop skill${relocation.movedSkills === 1 ? "" : "s"}, retargeted ${relocation.retargetedProposals} proposal${relocation.retargetedProposals === 1 ? "" : "s"}, marked ${relocation.staleProposals} stale, and migrated ${relocation.migratedBackupRoots} legacy collection backup root${relocation.migratedBackupRoots === 1 ? "" : "s"}.`,
-          ]
-        : [];
+    ) {
+      sidecars.changes.push(
+        `Relocated ${relocation.movedSkills} Skill Workshop skill${relocation.movedSkills === 1 ? "" : "s"}, retargeted ${relocation.retargetedProposals} proposal${relocation.retargetedProposals === 1 ? "" : "s"}, marked ${relocation.staleProposals} stale, and migrated ${relocation.migratedBackupRoots} legacy collection backup root${relocation.migratedBackupRoots === 1 ? "" : "s"}.`,
+      );
+    }
     return {
       ...sidecars,
-      changes: [...sidecars.changes, ...relocationChanges],
       warnings: [...sidecars.warnings, ...relocation.warnings],
     };
   } finally {

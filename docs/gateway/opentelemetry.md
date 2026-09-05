@@ -559,6 +559,11 @@ Liveness warnings also emit:
 - `openclaw.liveness.event_loop_utilization` (histogram, attrs: `openclaw.liveness.reason`)
 - `openclaw.liveness.cpu_core_ratio` (histogram, attrs: `openclaw.liveness.reason`)
 
+The CPU ratio measures whole-process CPU usage in core equivalents, including
+worker and native threads, and can exceed `1`. Event-loop delay and utilization
+measure the main thread separately. See
+[CPU pressure and event-loop delay](/gateway/health#cpu-pressure-and-event-loop-delay).
+
 ### Gateway event-loop observation windows
 
 - `openclaw.gateway.event_loop.delay_max_ms` (histogram, no attrs; maximum delay per completed health-monitor window)

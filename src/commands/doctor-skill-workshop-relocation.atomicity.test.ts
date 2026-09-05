@@ -9,18 +9,20 @@ import {
 import { resolveWorkshopSkillsDir } from "../skills/workshop/skills-root.js";
 import { readStoredProposal } from "../skills/workshop/store-sqlite-record.js";
 import { hashSkillProposalContent, updateSkillProposalRecord } from "../skills/workshop/store.js";
-import { SKILL_WORKSHOP_SCHEMA, type SkillProposalRecord } from "../skills/workshop/types.js";
-import {
-  openOpenClawStateDatabase,
-  repairOpenClawStateDatabaseSchemaIfNeeded,
-} from "../state/openclaw-state-db.js";
+import type { SkillProposalRecord } from "../skills/workshop/types.js";
+import { repairOpenClawStateDatabaseSchemaIfNeeded } from "../state/openclaw-state-db.js";
 import {
   createOpenClawTestState,
   type OpenClawTestState,
 } from "../test-utils/openclaw-test-state.js";
 import { createTrackedTempDirs } from "../test-utils/tracked-temp-dirs.js";
 import { migrateLegacySkillWorkshopProposals } from "./doctor-skill-workshop-sqlite.js";
-import { seedLegacyV15ProposalRows } from "./doctor-skill-workshop-sqlite.test-support.js";
+import {
+  createAppliedLegacyProposal,
+  expectRelocationWriteFailure,
+  expectWorkshopMigrationConverged,
+  seedLegacyV15ProposalRows,
+} from "./doctor-skill-workshop-sqlite.test-support.js";
 
 const tempDirs = createTrackedTempDirs();
 let testState: OpenClawTestState;
@@ -39,30 +41,13 @@ afterEach(async () => {
 
 function appliedCreate(params: { id: string; skillName: string; skillDir: string }) {
   const content = `---\nname: ${params.skillName}\ndescription: Relocation procedure\n---\n\n# Procedure\n`;
-  const now = "2026-09-01T00:00:00.000Z";
-  const record: SkillProposalRecord = {
-    schema: SKILL_WORKSHOP_SCHEMA,
+  const record = createAppliedLegacyProposal({
     id: params.id,
-    kind: "create",
-    status: "applied",
     title: `Create ${params.skillName}`,
     description: "Relocation procedure",
-    createdAt: now,
-    updatedAt: now,
-    createdBy: "skill-workshop",
-    proposedVersion: "v1",
-    draftFile: "PROPOSAL.md",
-    draftHash: hashSkillProposalContent(content),
-    target: {
-      skillName: params.skillName,
-      skillKey: params.skillName,
-      skillDir: params.skillDir,
-      skillFile: path.join(params.skillDir, "SKILL.md"),
-      source: "openclaw-workspace",
-    },
-    scan: { state: "clean", scannedAt: now, critical: 0, warn: 0, info: 0, findings: [] },
-    appliedAt: now,
-  };
+    content,
+    target: { skillKey: params.skillName, skillDir: params.skillDir },
+  });
   return { record, content };
 }
 
@@ -116,23 +101,11 @@ describe("doctor Workshop relocation ownership and commit boundaries", () => {
       legacyRecords.push(legacy);
       await updateSkillProposalRecord({ record: legacy, store: { env: testState.env } });
     }
-    const database = openOpenClawStateDatabase({ env: testState.env });
-    database.db.exec(`
-      CREATE TEMP TRIGGER reject_applied_create_relocation
-      BEFORE UPDATE OF record_json ON main.skill_workshop_proposals
-      WHEN OLD.proposal_id = '${created.record.id}'
-        AND json_extract(NEW.record_json, '$.target.source') = 'openclaw-workshop'
-      BEGIN
-        SELECT RAISE(ABORT, 'applied create relocation metadata unavailable');
-      END;
-    `);
-    try {
-      await expect(
-        migrateLegacySkillWorkshopProposals({ config: {}, env: testState.env }),
-      ).rejects.toThrow("applied create relocation metadata unavailable");
-    } finally {
-      database.db.exec("DROP TRIGGER reject_applied_create_relocation");
-    }
+    await expectRelocationWriteFailure({
+      env: testState.env,
+      proposalId: created.record.id,
+      message: "applied create relocation metadata unavailable",
+    });
     await expect(fs.access(legacySkillDir)).rejects.toMatchObject({ code: "ENOENT" });
     await expect(fs.readFile(updated.targetSkillFile, "utf8")).resolves.toBe(liveContent);
     expect(readStoredProposal(created.record.id, { env: testState.env })?.record).toEqual(
@@ -193,24 +166,12 @@ describe("doctor Workshop relocation ownership and commit boundaries", () => {
         { record: pending, workspaceDir, claimReleasedTime: null },
       ]);
       repairOpenClawStateDatabaseSchemaIfNeeded({ env: testState.env });
-      const database = openOpenClawStateDatabase({ env: testState.env });
-      database.db.exec(`
-      CREATE TEMP TRIGGER reject_pending_relocation
-      BEFORE UPDATE OF record_json ON main.skill_workshop_proposals
-      WHEN OLD.proposal_id = '${pending.id}'
-        AND NEW.status = 'pending'
-        AND json_extract(NEW.record_json, '$.target.source') = 'openclaw-workshop'
-      BEGIN
-        SELECT RAISE(ABORT, 'pending relocation metadata unavailable');
-      END;
-    `);
-      try {
-        await expect(
-          migrateLegacySkillWorkshopProposals({ config: {}, env: testState.env }),
-        ).rejects.toThrow("pending relocation metadata unavailable");
-      } finally {
-        database.db.exec("DROP TRIGGER reject_pending_relocation");
-      }
+      await expectRelocationWriteFailure({
+        env: testState.env,
+        proposalId: pending.id,
+        status: "pending",
+        message: "pending relocation metadata unavailable",
+      });
       const afterFailure = {
         created: readStoredProposal(created.record.id, { env: testState.env })?.record,
         pending: readStoredProposal(pending.id, { env: testState.env })?.record,
@@ -244,9 +205,7 @@ describe("doctor Workshop relocation ownership and commit boundaries", () => {
         created: { status: "applied", target: relocatedTarget },
         pending: { status: "pending", target: relocatedTarget },
       });
-      await expect(
-        migrateLegacySkillWorkshopProposals({ config: {}, env: testState.env }),
-      ).resolves.toEqual({ changes: [], warnings: [], detected: 0, migrated: 0 });
+      await expectWorkshopMigrationConverged({ env: testState.env });
     },
   );
 
@@ -297,9 +256,7 @@ describe("doctor Workshop relocation ownership and commit boundaries", () => {
         ),
       ).rejects.toMatchObject({ code: "ENOENT" });
     }
-    await expect(
-      migrateLegacySkillWorkshopProposals({ config, env: testState.env }),
-    ).resolves.toEqual({ changes: [], warnings: [], detected: 0, migrated: 0 });
+    await expectWorkshopMigrationConverged({ config, env: testState.env });
   });
 
   it.each([

@@ -30,6 +30,11 @@ export type {
 export { resolveUpdateDoctorExecutionPolicy, resolveUpdateInstallSurface };
 
 export async function runGatewayUpdate(opts: UpdateRunnerOptions = {}): Promise<UpdateRunResult> {
+  const result = await runGatewayUpdateInternal(opts);
+  return opts.runId ? { ...result, runId: opts.runId } : result;
+}
+
+async function runGatewayUpdateInternal(opts: UpdateRunnerOptions): Promise<UpdateRunResult> {
   const startedAt = Date.now();
   const { defaultCommandEnv, runCommand } = await buildUpdateCommandRunner(opts.runCommand);
   const timeoutMs = opts.timeoutMs ?? UPDATE_RUNNER_TIMEOUT_MS;

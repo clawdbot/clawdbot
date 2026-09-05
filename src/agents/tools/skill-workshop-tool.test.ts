@@ -13,7 +13,10 @@ import {
 import { SKILL_AUTHORING_STANDARDS_PROMPT } from "../../skills/workshop/skill-authoring-standards.js";
 import { resolveWorkshopSkillsDir } from "../../skills/workshop/skills-root.js";
 import { withSkillCollectionLock } from "../../skills/workshop/target-lock.js";
-import type { SkillWorkshopProposalMutationBudget } from "../../skills/workshop/types.js";
+import type {
+  SkillWorkshopProposalMutationBudget,
+  SkillWorkshopProposalReviewCompletion,
+} from "../../skills/workshop/types.js";
 import {
   createOpenClawTestState,
   type OpenClawTestState,
@@ -395,8 +398,8 @@ describe("skill_workshop tool", () => {
       markProgressStarted = resolve;
     });
     const proposalMutationBudget: SkillWorkshopProposalMutationBudget = { remaining: 1 };
-    const proposalReviewCompletion = {
-      completed: false,
+    const proposalReviewCompletion: SkillWorkshopProposalReviewCompletion = {
+      phase: "open",
       complete: async () => {
         completions += 1;
       },
@@ -511,7 +514,7 @@ describe("skill_workshop tool", () => {
         proposal_content: `# Review Learning ${index}\n\nFollow workflow ${index}.\n`,
       });
     }
-    expect(proposalMutationBudget.completed).toBe(3);
+    expect(proposalMutationBudget.mutatedProposalIds?.size).toBe(3);
     await expect(
       tool.execute("call-create-4", {
         action: "create",
@@ -545,7 +548,7 @@ describe("skill_workshop tool", () => {
       });
     }
 
-    expect(proposalMutationBudget.completed).toBe(1);
+    expect(proposalMutationBudget.mutatedProposalIds).toEqual(new Set([proposalId]));
     expect(proposalMutationBudget.successfulMutations).toBe(3);
   });
 

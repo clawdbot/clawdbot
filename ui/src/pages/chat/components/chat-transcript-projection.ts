@@ -18,7 +18,6 @@ import {
   assistantGroupCanOwnActiveRunStatus,
   agentRunFrameGroups,
   buildCachedChatItems,
-  collectToolTitleCandidates,
   coalesceAgentRunFrames,
   coalesceActivityRuns,
   coalesceStreamRuns,
@@ -32,7 +31,6 @@ import {
   syncToolCardExpansionState,
 } from "../chat-thread.ts";
 import { hasForwardedSource } from "../chat-turn-boundary.ts";
-import { getToolTitlesVersion, scheduleToolTitlesForTranscript } from "../tool-titles.ts";
 import { renderAgentRunFrame } from "./chat-agent-run-frame.ts";
 import { renderBackgroundTasksStatusRow } from "./chat-background-tasks-status.ts";
 import { renderChatDivider, renderChatNotice } from "./chat-divider.ts";
@@ -145,9 +143,6 @@ export function projectChatTranscript(
   const runOutputTokens = workingIndicator?.runId
     ? (props.runUsageById?.get(workingIndicator.runId)?.outputTokens ?? null)
     : null;
-  if (props.showToolCalls && !searchFiltering) {
-    scheduleToolTitlesForTranscript(collectToolTitleCandidates(chatItems));
-  }
   const latestBrowserTabs =
     props.browserTabPreviewsActive === false
       ? latestBrowserTabCards([], [])
@@ -615,7 +610,6 @@ export function projectChatTranscript(
     getChatMediaRenderVersion(),
     // The host minute poll requests an update; this key crosses row guard() memoization.
     Math.floor(Date.now() / 60_000),
-    getToolTitlesVersion(),
     JSON.stringify([...latestBrowserTabs]),
     props.sessionKey,
     props.presented,

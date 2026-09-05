@@ -56,13 +56,7 @@ export type SkillExperienceReviewParams = {
 };
 
 export type ExperienceReviewCandidate = {
-  ctx: Pick<
-    ExperienceReviewAgentContext,
-    "runId" | "modelContextWindowTokens" | "authProfileId" | "foregroundPromptContext"
-  > & {
-    agentId: string;
-    sessionKey: string;
-    sessionId: string;
+  ctx: Pick<ExperienceReviewAgentContext, "runId" | "authProfileId" | "foregroundPromptContext"> & {
     workspaceDir: string;
     modelProviderId: string;
     modelId: string;
@@ -78,9 +72,6 @@ type ExperienceReviewTimer = ReturnType<typeof setTimeout>;
 type ExperienceReviewSchedulerDeps = {
   isSystemActive: () => boolean | Promise<boolean>;
   runReview: (candidate: ExperienceReviewCandidate) => Promise<void>;
-  prepareReview?: (
-    candidate: ExperienceReviewCandidate,
-  ) => ExperienceReviewCandidate | undefined | Promise<ExperienceReviewCandidate | undefined>;
   setTimer?: (callback: () => void, delayMs: number) => ExperienceReviewTimer;
   clearTimer?: (timer: ExperienceReviewTimer) => void;
 };
@@ -143,13 +134,7 @@ export function createSkillExperienceReviewScheduler(deps: ExperienceReviewSched
           reviewInFlight = true;
           try {
             pendingBySession.delete(key);
-            const candidate = deps.prepareReview
-              ? await deps.prepareReview(pending.candidate)
-              : pending.candidate;
-            if (!candidate) {
-              return;
-            }
-            await deps.runReview(candidate);
+            await deps.runReview(pending.candidate);
           } finally {
             reviewInFlight = false;
           }
@@ -251,14 +236,10 @@ export function createSkillExperienceReviewScheduler(deps: ExperienceReviewSched
       }
       const candidate: ExperienceReviewCandidate = {
         ctx: {
-          agentId: source.agentId,
           runId: params.ctx.runId,
-          sessionKey: source.sessionKey,
-          sessionId: source.sessionId,
           workspaceDir,
           modelProviderId,
           modelId,
-          modelContextWindowTokens: params.ctx.modelContextWindowTokens,
           authProfileId: params.ctx.authProfileId,
           foregroundPromptContext: params.ctx.foregroundPromptContext,
         },

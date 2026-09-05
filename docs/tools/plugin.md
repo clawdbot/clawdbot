@@ -349,6 +349,37 @@ TypeScript entry ...`, the package was published without the JavaScript files
 OpenClaw needs at runtime. Update or reinstall after the publisher ships
 compiled JavaScript, or disable/uninstall the plugin until then.
 
+### Trusted plugin state refused
+
+If a plugin fails with `openKeyedStore is only available for trusted plugins`,
+compare the error's `registryPath` with `plugin.trust.registryPath` from:
+
+```bash
+openclaw plugins inspect <plugin-id> --runtime --json
+openclaw doctor
+```
+
+Inspection and the Gateway report the trust decision recorded during plugin
+loading, including `reason`, `origin`, `installSource`, and `installSpec`.
+Matching executable versions and config files does not establish matching
+registry databases. Inspection loads into the CLI process, so compare both paths.
+Doctor also checks the installed service environment when a local Gateway is
+unreachable; if that environment cannot be verified, it says so.
+
+| Reason                  | Remedy                                                                                                                                                                                                               |
+| ----------------------- | -------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `record-missing`        | Align CLI and Gateway state paths if they differ; otherwise reinstall through `openclaw plugins install` so the install is recorded.                                                                                 |
+| `provenance-missing`    | Run `openclaw doctor --fix` with the Gateway's state/config paths. Doctor repairs catalog-proven legacy ClawHub records; unverifiable records require reinstalling from the official npm package or ClawHub listing. |
+| `origin-path`           | Replace the local path/archive install with the official npm package or ClawHub listing.                                                                                                                             |
+| `install-path-mismatch` | Reinstall the intended package and remove load paths that select another copy.                                                                                                                                       |
+| `owner-ambiguous`       | Refresh the registry and resolve conflicting package ownership before reinstalling.                                                                                                                                  |
+| `provenance-invalid`    | Reinstall from the official source; conflicting or partial provenance is not automatically trusted.                                                                                                                  |
+
+`bundled` and `trusted-official` identify accepted sources. Legacy npm records
+with a consistent official package spec remain valid without extra resolution
+fields. Doctor repairs provenance in the existing install ledger; the runtime
+does not fall back to trusting package-authored metadata.
+
 ### Blocked plugin path ownership
 
 If diagnostics say

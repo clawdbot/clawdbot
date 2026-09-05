@@ -19,7 +19,6 @@ import {
   clearRestartSentinelIfRevision,
   finalizeUpdateRestartSentinelRunningVersion,
   formatRestartSentinelMessage,
-  formatUpdateOutcomeNotice,
   readRestartSentinel,
   type RestartSentinelContinuation,
   type RestartSentinelPayload,
@@ -44,6 +43,11 @@ import {
 import { withSystemEventOwner } from "../infra/system-event-ownership.js";
 import { enqueueSystemEvent } from "../infra/system-events.js";
 import { isPendingControlPlaneUpdateRestartSentinel } from "../infra/update-control-plane-sentinel.js";
+import { recordUpdateRunVerification } from "../infra/update-run-ledger.js";
+import {
+  renderUpdateRunReport,
+  updateRunReportInputFromSentinel,
+} from "../infra/update-run-report.js";
 import { createSubsystemLogger } from "../logging/subsystem.js";
 import type { OutboundReplyPayload } from "../plugin-sdk/reply-payload.js";
 import { runWithGatewayIndependentRootWorkAdmission } from "../process/gateway-work-admission.js";
@@ -67,6 +71,7 @@ import {
   enqueueRestartSentinelNotice,
   resolveGatewayLifecycleNoticeRoute,
 } from "./server-restart-sentinel-notice.js";
+import { finalizeRestartUpdateRun } from "./server-restart-update-run.js";
 import { loadSessionEntry } from "./session-utils.js";
 import { runStartupTasks, type StartupTask } from "./startup-tasks.js";
 
@@ -430,7 +435,12 @@ async function loadRestartSentinelStartupTask(params: {
   }
   const sessionKey = payload.sessionKey?.trim();
   const message = formatRestartSentinelMessage(payload);
-  const noticeMessage = payload.kind === "update" ? formatUpdateOutcomeNotice(payload) : message;
+  const updateRun = payload.kind === "update" ? finalizeRestartUpdateRun(payload) : undefined;
+  const updateRunId = updateRun?.runId;
+  let noticeMessage =
+    payload.kind === "update"
+      ? renderUpdateRunReport(updateRun ?? updateRunReportInputFromSentinel(payload)).markdown
+      : message;
   const summary = summarizeRestartSentinel(payload);
   const wakeDeliveryContext = mergeDeliveryContext(
     payload.threadId != null
@@ -462,6 +472,14 @@ async function loadRestartSentinelStartupTask(params: {
         sessionKey,
         reason: payload.stats?.reason ?? null,
       });
+      if (updateRunId) {
+        // A lost updater must leave a terminal outcome after the existing
+        // verification deadline; first-terminal-wins preserves a completed CLI result.
+        const expiredRun = finalizeRestartUpdateRun(payload, true);
+        if (expiredRun) {
+          noticeMessage = renderUpdateRunReport(expiredRun).markdown;
+        }
+      }
     }
 
     if (!routedSessionKey) {
@@ -541,6 +559,9 @@ async function loadRestartSentinelStartupTask(params: {
         idempotencyKey: `restart-sentinel-notice:${canonicalKey}:${sentinelRevision}`,
       }).catch((error: unknown) => ({ ok: false as const, reason: formatErrorMessage(error) }));
       internalNoticeWritten = notice.ok;
+      if (notice.ok && updateRunId) {
+        recordUpdateRunVerification(updateRunId, { noticeDelivered: true });
+      }
       if (!notice.ok) {
         log.warn(
           `${summary}: internal restart notice append failed; falling back to wake: ${notice.reason}`,
@@ -617,7 +638,7 @@ async function loadRestartSentinelStartupTask(params: {
     }
 
     if (route && noticeQueueId && noticeQueueCreated) {
-      await deliverRestartSentinelNotice({
+      const delivered = await deliverRestartSentinelNotice({
         deps: params.deps,
         cfg,
         sessionKey: canonicalKey,
@@ -626,6 +647,9 @@ async function loadRestartSentinelStartupTask(params: {
         ...route,
         queueId: noticeQueueId,
       });
+      if (delivered && updateRunId) {
+        recordUpdateRunVerification(updateRunId, { noticeDelivered: true });
+      }
     } else if (noticeQueueId && !noticeQueueCreated) {
       log.info(`${summary}: durable restart notice already owned`, {
         sessionKey: canonicalKey,

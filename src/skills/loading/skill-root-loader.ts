@@ -45,6 +45,7 @@ function loadContainedSkillRecord(params: {
   maxSkillFileBytes: number;
   canonicalSkillDir?: string;
   rejectHardlinks: boolean;
+  onDiagnostic?: (diagnostic: LocalSkillLoadDiagnostic) => void;
 }): LoadedSkillRecord | null {
   const loaded = loadSingleSkillDirectory({
     skillDir: params.skillDir,
@@ -52,7 +53,8 @@ function loadContainedSkillRecord(params: {
     source: params.source,
     maxBytes: params.maxSkillFileBytes,
     rejectHardlinks: params.rejectHardlinks,
-    onDiagnostic: (diagnostic) => warnInvalidSkill(params.source, diagnostic),
+    onDiagnostic:
+      params.onDiagnostic ?? ((diagnostic) => warnInvalidSkill(params.source, diagnostic)),
   });
   if (!loaded) {
     return null;
@@ -108,8 +110,24 @@ export function loadSkillRootRecords(params: {
   source: string;
   config?: OpenClawConfig;
   rejectHardlinks?: boolean;
+  mode?: "audit";
+  onDiagnostic?: (diagnostic: LocalSkillLoadDiagnostic) => void;
 }): LoadedSkillRecord[] {
   const limits = resolveSkillDiscoveryLimits(params.config);
+  if (params.mode === "audit") {
+    // Prompt budgets must not hide installed skills. Keep larger configured
+    // traversal bounds, and use the existing default file cap for audit reads.
+    const defaults = resolveSkillDiscoveryLimits();
+    limits.maxCandidatesPerRoot = Math.max(
+      limits.maxCandidatesPerRoot,
+      defaults.maxCandidatesPerRoot,
+    );
+    limits.maxSkillsLoadedPerSource = Math.max(
+      limits.maxSkillsLoadedPerSource,
+      defaults.maxSkillsLoadedPerSource,
+    );
+    limits.maxSkillFileBytes = defaults.maxSkillFileBytes;
+  }
   const rejectHardlinks =
     params.rejectHardlinks ??
     shouldRejectHardlinkedPluginFiles({
@@ -122,6 +140,7 @@ export function loadSkillRootRecords(params: {
     source: params.source,
     limits,
     allowedSymlinkTargetRealPaths: resolveAllowedSkillSymlinkTargetRealPaths(params.config),
+    onDiagnostic: params.onDiagnostic,
   });
   const maxSkillsLoadedPerSource = Math.max(0, limits.maxSkillsLoadedPerSource);
   const loadCandidate = (candidate: CandidateSkillDir) =>
@@ -130,8 +149,12 @@ export function loadSkillRootRecords(params: {
       skillDirRealPath: candidate.skillDirRealPath,
       source: params.source,
       maxSkillFileBytes: limits.maxSkillFileBytes,
-      canonicalSkillDir: canonicalSkillDirForSource(params.source, candidate.skillDirRealPath),
+      canonicalSkillDir:
+        params.mode === "audit"
+          ? candidate.skillDirRealPath
+          : canonicalSkillDirForSource(params.source, candidate.skillDirRealPath),
       rejectHardlinks,
+      onDiagnostic: params.onDiagnostic,
     });
   if (discovered.configuredRootCandidate) {
     const rootRecord = loadCandidate(discovered.configuredRootCandidate);
@@ -142,7 +165,11 @@ export function loadSkillRootRecords(params: {
 
   const loadedSkills: LoadedSkillRecord[] = [];
   for (const candidate of discovered.candidates) {
-    if (!discovered.rootIsSkill && loadedSkills.length >= maxSkillsLoadedPerSource) {
+    if (
+      params.mode !== "audit" &&
+      !discovered.rootIsSkill &&
+      loadedSkills.length >= maxSkillsLoadedPerSource
+    ) {
       break;
     }
     const record = loadCandidate(candidate);

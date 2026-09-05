@@ -33,6 +33,13 @@ import {
 import { createSubsystemLogger } from "../logging/subsystem.js";
 import { normalizeAgentId } from "../routing/session-key.js";
 import { resolveGlobalSingleton } from "../shared/global-singleton.js";
+import {
+  assertAgentDeletionCleanupAliases,
+  assertAgentDeletionDatabaseCleanupAccess,
+  getAgentDeletionDatabaseCleanup,
+  registerAgentDeletionDatabaseCleanup,
+  releaseAgentDeletionDatabaseCleanup,
+} from "./agent-deletion-cleanup.js";
 import type {
   OpenClawAgentDatabase,
   OpenClawAgentDatabaseOptions,
@@ -196,22 +203,6 @@ export function clearOpenClawAgentDatabaseOpenFailure(
   return cleared;
 }
 
-function logSlowAgentDatabaseOpen(params: {
-  agentId: string;
-  elapsedMs: number;
-  path: string;
-}): void {
-  if (params.elapsedMs < OPENCLAW_AGENT_DB_SLOW_OPEN_MS) {
-    return;
-  }
-  agentDbLog.warn("slow OpenClaw agent database open", {
-    agentId: params.agentId,
-    elapsedMs: params.elapsedMs,
-    path: params.path,
-    thresholdMs: OPENCLAW_AGENT_DB_SLOW_OPEN_MS,
-  });
-}
-
 /** Read a database's durable role and agent owner without mutating it. */
 export function inspectOpenClawAgentDatabaseOwner(
   pathname: string,
@@ -251,6 +242,7 @@ export function openOpenClawAgentDatabase(
   const agentId = normalizeAgentId(options.agentId);
   const databaseOptions = { ...options, agentId };
   const pathname = resolveOpenClawAgentSqlitePath(databaseOptions);
+  getAgentDeletionDatabaseCleanup(databaseOptions)?.assertCurrent();
   const incognito = isIncognitoOpenClawAgentSqlitePath(pathname, databaseOptions);
   // A live successful cache entry is authoritative; failed entries remain only for disposal.
   const opened = getOpenClawAgentDatabaseIfOpen(databaseOptions);
@@ -405,6 +397,19 @@ export function openOpenClawAgentDatabase(
     ensureOpenClawAgentDatabasePermissions(pathname, databaseOptions);
     const database = { agentId, db, path: pathname, walMaintenance };
     openedDatabase = database;
+    const cleanup = registerAgentDeletionDatabaseCleanup(database, databaseOptions);
+    if (cleanup) {
+      const release = retainAgentDatabase(db);
+      cleanup.registerClose(() => {
+        release();
+        // The scope owns this connection, not a later cache entry at the same pathname.
+        if (cache.databases.get(database.path) === database) {
+          closeOpenClawAgentDatabaseByPath(database.path, database.agentId);
+        } else if (database.db.isOpen) {
+          throw new Error("Agent deletion cleanup lost its database close owner.");
+        }
+      });
+    }
     if (!isValidatedReopen) {
       registerOpenClawAgentDatabase({ agentId, path: pathname, env: options.env });
       setValidatedOpenClawAgentDatabaseOwner(pathname, agentId);
@@ -413,11 +418,15 @@ export function openOpenClawAgentDatabase(
     // Safety net for processes that end without an orderly close: agent DBs have
     // no shutdown owner like the ACP/gateway state DB closes. Closing unregisters.
     cache.unregisterExitClose ??= registerSqliteCacheExitClose(closeOpenClawAgentDatabases);
-    logSlowAgentDatabaseOpen({
-      agentId,
-      elapsedMs: Date.now() - openStartedAt,
-      path: pathname,
-    });
+    const elapsedMs = Date.now() - openStartedAt;
+    if (elapsedMs >= OPENCLAW_AGENT_DB_SLOW_OPEN_MS) {
+      agentDbLog.warn("slow OpenClaw agent database open", {
+        agentId,
+        elapsedMs,
+        path: pathname,
+        thresholdMs: OPENCLAW_AGENT_DB_SLOW_OPEN_MS,
+      });
+    }
     cache.leases.set(pathname, { leaseId, env: leaseEnvironment });
     cache.databases.set(pathname, database);
     return database;
@@ -477,6 +486,7 @@ export function runOpenClawAgentWriteTransaction<T>(
     runSqliteImmediateTransactionSync(
       database.db,
       () => {
+        assertAgentDeletionDatabaseCleanupAccess(database, options);
         const operationResult = operation(database);
         if (!enteredNestedTransaction) {
           // Permission failure must roll back with the write. Repairing after
@@ -503,15 +513,16 @@ export function borrowOpenClawAgentDatabase(options: OpenClawAgentDatabaseOption
   release: () => void;
 } {
   const { db } = openOpenClawAgentDatabase(options);
+  return { db, release: retainAgentDatabase(db) };
+}
+
+function retainAgentDatabase(db: DatabaseSync): () => void {
   const borrowers = cache.borrowers.get(db) ?? new Set<object>();
   const borrower = {};
   borrowers.add(borrower);
   cache.borrowers.set(db, borrowers);
-  return {
-    db,
-    release: () => {
-      borrowers.delete(borrower);
-    },
+  return () => {
+    borrowers.delete(borrower);
   };
 }
 
@@ -530,6 +541,7 @@ function closeCachedOpenClawAgentDatabase(
     releaseOpenClawAgentDatabaseLease(lease.leaseId, { env: lease.env });
     cache.leases.delete(database.path);
   }
+  releaseAgentDeletionDatabaseCleanup(database);
 }
 
 function evictLruAgentDatabaseHandles(): void {
@@ -591,6 +603,7 @@ export function getOpenClawAgentDatabaseIfOpen(
   const pathname = resolveOpenClawAgentSqlitePath({ ...options, agentId });
   const database = cache.databases.get(pathname);
   if (!database?.db.isOpen) {
+    assertAgentDeletionCleanupAliases(options, isSameOpenClawAgentDatabasePath);
     return undefined;
   }
   if (cache.failures.has(pathname)) {
@@ -601,6 +614,7 @@ export function getOpenClawAgentDatabaseIfOpen(
       `OpenClaw agent database ${pathname} is already open for agent ${database.agentId}; requested agent ${agentId}.`,
     );
   }
+  assertAgentDeletionDatabaseCleanupAccess(database, options);
   return database;
 }
 
@@ -637,12 +651,15 @@ export function listOpenClawAgentDatabasesForTest(): Array<{ agentId: string; pa
 }
 
 /** Close one cached agent database identified by its exact resolved pathname. */
-export function closeOpenClawAgentDatabaseByPath(pathname: string): boolean {
+export function closeOpenClawAgentDatabaseByPath(
+  pathname: string,
+  expectedAgentId?: string,
+): boolean {
   // Cache keys are lexical resolved paths. Do not realpath aliases here: a
   // symlink swap must never redirect cleanup onto a different cached database.
   const resolvedPath = path.resolve(pathname);
   const database = cache.databases.get(resolvedPath);
-  if (!database) {
+  if (!database || (expectedAgentId !== undefined && database.agentId !== expectedAgentId)) {
     return false;
   }
   const incognito = cache.incognito.has(database);

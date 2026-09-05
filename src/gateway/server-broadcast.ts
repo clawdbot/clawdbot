@@ -13,6 +13,7 @@ import { isBrowserCopilotClient } from "../utils/message-channel.js";
 import {
   GATEWAY_EVENT_DEVICE_PAIR_CHANGED,
   GATEWAY_EVENT_NODE_RUNNER_INVENTORY_CHANGED,
+  GATEWAY_EVENT_UPDATE_RUN_CHANGED,
 } from "./events.js";
 import {
   ADMIN_SCOPE,
@@ -71,6 +72,7 @@ const EVENT_SCOPE_GUARDS: Record<string, string[]> = {
   task: [READ_SCOPE],
   "task.suggestion": [READ_SCOPE],
   "update.available": [],
+  [GATEWAY_EVENT_UPDATE_RUN_CHANGED]: [ADMIN_SCOPE],
   // Hash-only change notice after a persisted config write; content stays
   // behind the operator-scoped config.get.
   "config.changed": [READ_SCOPE],

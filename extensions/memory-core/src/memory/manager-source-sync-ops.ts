@@ -262,25 +262,26 @@ export abstract class MemoryManagerSourceSyncOps extends MemoryManagerSessionSyn
           .filter((entry) => entry.artifactKind === "active-session")
           .map((entry) => this.sessionPathForCorpusEntry(entry)),
       );
+      const staleLivePaths = Array.from(targetArchiveFiles).flatMap((file) => {
+        const { agentId, sessionId } = corpusEntryForPath(file);
+        return [
+          sessionPathForSessionIdentity(agentId, sessionId),
+          this.legacyExtensionlessSessionPathForIdentity(agentId, sessionId),
+        ];
+      });
+      // Resolve membership after indexing, in one snapshot regardless of target count.
       const existingSessionPaths = new Set(
         loadMemorySourceFileState({
           db: this.db,
           source: "sessions",
+          paths: staleLivePaths,
         }).map((row) => row.path),
       );
-      for (const file of targetArchiveFiles) {
-        const corpusEntry = corpusEntryForPath(file);
-        const staleAgentId = corpusEntry.agentId;
-        const staleLivePaths = [
-          sessionPathForSessionIdentity(staleAgentId, corpusEntry.sessionId),
-          this.legacyExtensionlessSessionPathForIdentity(staleAgentId, corpusEntry.sessionId),
-        ];
-        for (const staleLivePath of staleLivePaths) {
-          if (activeCorpusPaths.has(staleLivePath) || !existingSessionPaths.has(staleLivePath)) {
-            continue;
-          }
-          deleteIndexedSessionPath(staleLivePath);
+      for (const staleLivePath of staleLivePaths) {
+        if (activeCorpusPaths.has(staleLivePath) || !existingSessionPaths.has(staleLivePath)) {
+          continue;
         }
+        deleteIndexedSessionPath(staleLivePath);
       }
     };
     const resolveSessionIndexEntry = async (absPath: string): Promise<MemoryIndexEntry | null> => {

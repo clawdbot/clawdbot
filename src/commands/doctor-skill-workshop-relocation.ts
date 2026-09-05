@@ -183,7 +183,7 @@ export type WorkshopProposalUpdate = {
 };
 
 type WorkshopRelocationPlan = {
-  entry: LegacyWorkshopProposal;
+  record: SkillProposalRecord;
   source: string;
   workspaceDir: string | undefined;
   ownerAgentId?: string;
@@ -237,11 +237,11 @@ export async function planWorkshopRelocation(
     ) {
       return [];
     }
-    return [{ entry, source, workspaceDir, ...owner }];
+    return [{ record: entry.record, source, workspaceDir, ...owner }];
   });
   // Completed updates provide recovery evidence, not ownership or relocation actions.
   const external = candidates.filter(
-    ({ entry }) => entry.record.status === "pending" || entry.record.kind === "create",
+    ({ record }) => record.status === "pending" || record.kind === "create",
   );
   const warnings: string[] = [];
   const deferredWorkspaces = new Set<string>();
@@ -263,11 +263,11 @@ export async function planWorkshopRelocation(
     (plan) => !plan.workspaceDir || !deferredWorkspaces.has(plan.workspaceDir),
   );
   for (const plan of ready) {
-    if (!plan.ownerAgentId || (plan.entry.record.status === "applied" && !plan.workspaceDir)) {
+    if (!plan.ownerAgentId || (plan.record.status === "applied" && !plan.workspaceDir)) {
       continue;
     }
     const target = resolveSkillProposalTarget({
-      skillName: plan.entry.record.target.skillKey,
+      skillName: plan.record.target.skillKey,
       config,
       agentId: plan.ownerAgentId,
       env,
@@ -275,8 +275,8 @@ export async function planWorkshopRelocation(
     const key = [
       plan.ownerAgentId,
       plan.source,
-      path.resolve(plan.entry.record.target.skillFile),
-      plan.entry.record.target.skillKey,
+      path.resolve(plan.record.target.skillFile),
+      plan.record.target.skillKey,
       target.skillDir,
     ].join("\0");
     plan.relocation = relocations.get(key) ?? { target, plans: [] };
@@ -286,12 +286,12 @@ export async function planWorkshopRelocation(
   const moves: WorkshopMove[] = [];
   for (const relocation of relocations.values()) {
     const plan = relocation.plans.find(
-      ({ entry }) => entry.record.kind === "create" && entry.record.status === "applied",
+      ({ record }) => record.kind === "create" && record.status === "applied",
     );
     if (!plan?.workspaceDir) {
       continue;
     }
-    const record = plan.entry.record;
+    const { record } = plan;
     const { target } = relocation;
     let operation: WorkshopMove["operation"] = "move";
     let sourceStat: Awaited<ReturnType<typeof fs.lstat>> | undefined;
@@ -325,13 +325,13 @@ export async function planWorkshopRelocation(
       }
       const evidence = candidates
         .filter(
-          ({ entry, source, ownerAgentId }) =>
+          ({ record: candidate, source, ownerAgentId }) =>
             ownerAgentId === plan.ownerAgentId &&
             source === plan.source &&
-            entry.record.target.skillKey === record.target.skillKey &&
-            path.resolve(entry.record.target.skillFile) === path.resolve(record.target.skillFile),
+            candidate.target.skillKey === record.target.skillKey &&
+            path.resolve(candidate.target.skillFile) === path.resolve(record.target.skillFile),
         )
-        .map(({ entry }) => entry.record);
+        .map((candidate) => candidate.record);
       if (
         !(await verifyRelocationDestination({
           records: evidence,
@@ -421,8 +421,7 @@ export async function planWorkshopRelocation(
   }
   const updates: WorkshopProposalUpdate[] = [];
   for (const plan of ready) {
-    const { entry, relocation, ownerAgentId } = plan;
-    const record = entry.record;
+    const { record, relocation, ownerAgentId } = plan;
     const conflictReason = conflictsBySource.get(plan.source);
     if (!relocation) {
       updates.push({

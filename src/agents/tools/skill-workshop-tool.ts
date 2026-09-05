@@ -55,7 +55,6 @@ import {
   completeProposalReview,
   proposalMutationText,
   proposalResult,
-  proposalReviewPhase,
   readLifecycleProposalIdParam,
   readListLimitParam,
   readProposalForInspect,
@@ -224,10 +223,7 @@ export function createSkillWorkshopTool(options: SkillWorkshopToolOptions): AnyA
         }
         return await completeProposalReview(options.proposalReviewCompletion);
       }
-      if (
-        options.proposalReviewCompletion &&
-        proposalReviewPhase(options.proposalReviewCompletion) !== "open"
-      ) {
+      if (options.proposalReviewCompletion && options.proposalReviewCompletion.phase !== "open") {
         throw new ToolInputError("this Skill Workshop review is already completing or complete");
       }
 
@@ -680,7 +676,6 @@ export function createSkillWorkshopTool(options: SkillWorkshopToolOptions): AnyA
             options.proposalMutationBudget.mutatedProposalIds ?? new Set<string>();
           mutatedProposalIds.add(proposal.record.id);
           options.proposalMutationBudget.mutatedProposalIds = mutatedProposalIds;
-          options.proposalMutationBudget.completed = mutatedProposalIds.size;
           options.proposalMutationBudget.successfulMutations =
             (options.proposalMutationBudget.successfulMutations ?? 0) + 1;
           await options.proposalReviewCompletion?.recordProgress?.({

@@ -2,8 +2,10 @@ import { asOptionalRecord } from "@openclaw/normalization-core/record-coerce";
 import type { ReactiveController, ReactiveControllerHost } from "lit";
 import type { GatewayBrowserClient } from "../../api/gateway.ts";
 import type { GatewaySessionRow } from "../../api/types.ts";
-import type { ApplicationContext } from "../../app/context.ts";
+import type { ApplicationGatewaySnapshot } from "../../app/gateway.ts";
+import type { AgentCapability } from "../../lib/agents/index.ts";
 import { isSessionRunActive } from "../../lib/session-run-state.ts";
+import type { SessionCapability } from "../../lib/sessions/session-capability.ts";
 import {
   CHAT_PANE_LIFECYCLE_CHANGED_EVENT,
   CHAT_TRANSCRIPT_LOADING_CHANGED_EVENT,
@@ -27,6 +29,21 @@ const SESSION_PREFETCH_COOLDOWN_MS = 30_000;
 const SESSION_PREFETCH_LOCK_NAME = "openclaw-chat-prefetch";
 
 type ChatSnapshotKeyHost = Parameters<typeof resolveChatSnapshotKey>[0];
+
+type SessionPrefetchContext = {
+  readonly gateway: {
+    readonly snapshot: Pick<ApplicationGatewaySnapshot, "assistantAgentId" | "hello">;
+    subscribe: (listener: () => void) => () => void;
+  };
+  readonly agents: { readonly state: Pick<AgentCapability["state"], "agentsList"> };
+  readonly sessions: Pick<
+    SessionCapability,
+    "captureConnectionScope" | "isConnectionScopeCurrent" | "canonicalListRevision"
+  > & {
+    readonly state: { readonly result: { readonly sessions: readonly GatewaySessionRow[] } | null };
+    subscribe: (listener: () => void) => () => void;
+  };
+};
 
 type SessionPrefetchSnapshot = {
   client: GatewayBrowserClient | null;
@@ -476,7 +493,7 @@ type SessionPrefetchHost = ReactiveControllerHost & HTMLElement;
 
 class SessionPrefetchController implements ReactiveController {
   private readonly prefetcher: SessionPrefetcher;
-  private context: ApplicationContext | undefined;
+  private context: SessionPrefetchContext | undefined;
   private subscriptions: Array<() => void> = [];
   private intentSessionKey: string | null = null;
   private paneRoot: Element;
@@ -485,7 +502,7 @@ class SessionPrefetchController implements ReactiveController {
     private readonly host: SessionPrefetchHost,
     cache: ChatMessageCache,
     snapshotStore: SessionSnapshotStore,
-    private readonly readContext: () => ApplicationContext | undefined,
+    private readonly readContext: () => SessionPrefetchContext | undefined,
   ) {
     this.paneRoot = host;
     this.prefetcher = new SessionPrefetcher(cache, snapshotStore);
@@ -590,7 +607,7 @@ export function installSessionPrefetch(
   host: SessionPrefetchHost,
   cache: ChatMessageCache,
   snapshotStore: SessionSnapshotStore,
-  readContext: () => ApplicationContext | undefined,
+  readContext: () => SessionPrefetchContext | undefined,
 ): ReactiveController {
   return new SessionPrefetchController(host, cache, snapshotStore, readContext);
 }

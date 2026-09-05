@@ -40,18 +40,22 @@ const runEmbeddedAgent = vi.hoisted(() => vi.fn());
 
 vi.mock("../../agents/embedded-agent.js", () => ({ runEmbeddedAgent }));
 type ExperienceReviewFixture = Omit<ExperienceReviewCandidate, "ctx" | "source"> & {
-  ctx: Omit<ExperienceReviewCandidate["ctx"], "agentId"> & { agentId?: string };
+  ctx: ExperienceReviewCandidate["ctx"] & {
+    sessionId: string;
+    sessionKey: string;
+  };
 };
 
 async function captureReviewFixture(
   fixture: ExperienceReviewFixture,
 ): Promise<ExperienceReviewCandidate> {
+  const { sessionId, sessionKey, ...ctx } = fixture.ctx;
   const agentId = fixture.ctx.foregroundPromptContext.agentId;
   const source = await resolveAgentRunSessionTarget({
     agentId,
     config: fixture.config,
-    sessionId: fixture.ctx.sessionId,
-    sessionKey: fixture.ctx.sessionKey,
+    sessionId,
+    sessionKey,
     missingSessionKey: "create",
   });
   const created = await createSessionEntryWithTranscript(
@@ -75,7 +79,7 @@ async function captureReviewFixture(
   }
   return {
     ...fixture,
-    ctx: { ...fixture.ctx, agentId },
+    ctx,
     source: terminal.anchor,
   };
 }
@@ -507,7 +511,6 @@ describe("experience review auto apply", () => {
       });
       const candidate: ExperienceReviewFixture = {
         ctx: {
-          agentId: "main",
           runId: "foreground-run",
           sessionId: "foreground-session",
           sessionKey: "agent:main:main",
@@ -674,7 +677,6 @@ describe("experience review auto apply", () => {
     });
     const candidate: ExperienceReviewFixture = {
       ctx: {
-        agentId: "main",
         runId: "foreground-run",
         sessionId: "foreground-session",
         sessionKey: "agent:main:main",
@@ -758,7 +760,6 @@ describe("experience review auto apply", () => {
     });
     const candidate: ExperienceReviewFixture = {
       ctx: {
-        agentId: "main",
         runId: "foreground-run",
         sessionId: "foreground-session",
         sessionKey: "agent:main:main",
@@ -801,7 +802,6 @@ describe("experience review auto apply", () => {
     });
     const candidate: ExperienceReviewFixture = {
       ctx: {
-        agentId: "main",
         runId: "foreground-run",
         sessionId: "foreground-session",
         sessionKey: "agent:main:main",
@@ -851,7 +851,6 @@ describe("experience review auto apply", () => {
     });
     const candidate: ExperienceReviewFixture = {
       ctx: {
-        agentId: "main",
         runId: "foreground-run",
         sessionId: "foreground-session",
         sessionKey: "agent:main:main",
@@ -902,7 +901,6 @@ describe("experience review auto apply", () => {
     });
     const candidate: ExperienceReviewFixture = {
       ctx: {
-        agentId: "main",
         runId: "foreground-run",
         sessionId: "foreground-session",
         sessionKey: "agent:main:main",
@@ -963,7 +961,6 @@ describe("experience review auto apply", () => {
     await runSkillExperienceReview(
       {
         ctx: {
-          agentId: "main",
           runId: "foreground-run",
           sessionId: "foreground-session",
           sessionKey: "agent:main:main",

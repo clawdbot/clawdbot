@@ -8,7 +8,6 @@ import {
 import { normalizeAgentId } from "../routing/session-key.js";
 import { getFileLockProcessStartTime, isPidDefinitelyDead } from "../shared/pid-alive.js";
 import {
-  assertAgentDeletionIdentityClaimAllowed,
   assertAgentDeletionPathFence,
   prepareAgentDeletionPathFence,
 } from "./agent-deletion-journal.js";
@@ -100,12 +99,7 @@ export function claimOpenClawAgentDatabaseLease(
           "Agent database maintenance is in progress; retry after openclaw doctor --fix completes.",
         );
       }
-      const deletion = executeSqliteQueryTakeFirstSync(
-        database.db,
-        db.selectFrom("agent_deletion_journal").select("agent_id").where("agent_id", "=", agentId),
-      );
-      assertAgentDeletionIdentityClaimAllowed(agentId, deletion?.agent_id);
-      assertAgentDeletionPathFence(database.db, deletionFence);
+      assertAgentDeletionPathFence(database, deletionFence);
       executeSqliteQuerySync(
         database.db,
         db.insertInto("agent_database_leases").values({
@@ -204,7 +198,7 @@ export function assertNoOpenClawAgentDatabaseLeases(
             .where("lease_id", "=", row.lease_id),
         ) !== undefined;
       if (leaseStillExists && row.agent_id !== agentId && deletionFence) {
-        assertAgentDeletionPathFence(database.db, deletionFence);
+        assertAgentDeletionPathFence(database, deletionFence);
       }
     }, options);
     if (leaseStillExists && (!agentId || row.agent_id === agentId)) {

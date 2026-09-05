@@ -41,7 +41,7 @@ export async function prepareSkillExperienceReviewCandidate(
   const { isToolAllowedByPolicies } = await import("../../agents/tool-policy-match.js");
   const { mergeAlsoAllowPolicy } = await import("../../agents/tool-policy.js");
   const foreground = candidate.ctx.foregroundPromptContext;
-  const sessionKey = candidate.ctx.sessionKey;
+  const sessionKey = candidate.source.sessionKey;
   if (
     resolveSandboxRuntimeStatus({ cfg: config, sessionKey, agentId: foreground.agentId }).sandboxed
   ) {
@@ -116,7 +116,8 @@ async function runSkillExperienceReviewInner(
   // Reset replaces the global controller; this review keeps its original lifetime
   // across model execution and entry to autonomous apply.
   const abortSignal = getGatewayRestartDrainSignal();
-  const { foregroundPromptContext, workspaceDir, sessionKey } = candidate.ctx;
+  const { foregroundPromptContext, workspaceDir } = candidate.ctx;
+  const { sessionKey } = candidate.source;
   const config = candidate.config;
   const runId = `skill-workshop-review:${randomUUID()}`;
   const reviewSession = resolveInternalSessionEffectsIdentity({

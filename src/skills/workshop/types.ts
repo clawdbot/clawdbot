@@ -72,8 +72,6 @@ export type SkillWorkshopPreparedPatch = {
 /** Run-scoped budget shared by every workshop tool instance created across runner retries. */
 export type SkillWorkshopProposalMutationBudget = {
   remaining: number;
-  /** Distinct proposal records successfully mutated by this run. */
-  completed?: number;
   /** Successful persisted mutation calls, including repeated revisions. */
   successfulMutations?: number;
   /** Failed or incompletely checkpointed reservations in the current model run. */
@@ -95,9 +93,8 @@ export type SkillWorkshopProposalReviewProgress = {
 /** Shared completion latch for proposal-only reviewers that require a durable final checkpoint. */
 export type SkillWorkshopProposalReviewCompletion = {
   activeMutations?: Set<Promise<void>>;
-  completed: boolean;
   complete: () => Promise<void>;
-  phase?: "open" | "completing" | "completed";
+  phase: "open" | "completing" | "completed";
   recordProgress?: (progress: SkillWorkshopProposalReviewProgress) => Promise<void>;
 };
 
