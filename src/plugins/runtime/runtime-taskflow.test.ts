@@ -1,9 +1,9 @@
 // Runtime task-flow tests cover plugin task-flow registration and execution behavior.
-import { afterEach, beforeEach, describe, expect, it } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { createAcpTaskBackingDetailForTest } from "../../tasks/task-backing-authority.test-support.js";
 import { createRunningTaskRunCore } from "../../tasks/task-executor.js";
 import { createTaskFlowForTask, getTaskFlowById } from "../../tasks/task-flow-registry.js";
-import { getTaskById } from "../../tasks/task-registry.js";
+import { getTaskById, listTasksForFlowId } from "../../tasks/task-registry.js";
 import { getInspectableActiveTaskRestartBlockers } from "../../tasks/task-registry.maintenance.js";
 import {
   installRuntimeTaskDeliveryMock,
@@ -153,6 +153,66 @@ describe("runtime TaskFlow", () => {
     }
     expect(summary.total).toBe(1);
     expect(summary.active).toBe(1);
+  });
+
+  it("spawns one owner-bound ACP child for a managed reservation and reuses it", async () => {
+    const reservationId = "a".repeat(64);
+    const spawnAcp = vi.fn(async (params, ctx) => {
+      const runId = params.idempotencyKey ?? "unexpected-run";
+      const childSessionKey = `agent:${params.agentId}:acp:managed:${"b".repeat(64)}`;
+      createRunningTaskRunCore({
+        runtime: "acp",
+        ownerKey: ctx.agentSessionKey ?? "missing-owner",
+        scopeKind: "session",
+        childSessionKey,
+        runId,
+        label: params.label,
+        task: params.task,
+        startedAt: 10,
+        detail: createAcpTaskBackingDetailForTest("instance:managed-child"),
+      });
+      return {
+        status: "accepted" as const,
+        childSessionKey,
+        runId,
+        mode: "run" as const,
+        runTimeoutSeconds: 60,
+        expectsCompletionMessage: true,
+        note: "accepted",
+      };
+    });
+    const taskFlow = createRuntimeTaskFlow({ spawnAcp }).bindSession({
+      sessionKey: "agent:main:controller",
+    });
+    const created = requireCreatedFlow(
+      taskFlow.createManaged({ controllerId: "tests/runtime-taskflow", goal: "Run canary" }),
+    );
+
+    const first = await taskFlow.spawnAcpChild({
+      flowId: created.flowId,
+      expectedRevision: created.revision,
+      reservationId,
+      agentId: "codex",
+      label: "managed-canary",
+      task: "Run one bounded canary step.",
+    });
+    expect(first).toMatchObject({ accepted: true, runId: reservationId, reused: false });
+    expect(spawnAcp).toHaveBeenCalledWith(
+      expect.objectContaining({ idempotencyKey: reservationId, agentId: "codex" }),
+      { agentSessionKey: "agent:main:controller" },
+    );
+    expect(listTasksForFlowId(created.flowId)).toHaveLength(1);
+
+    const retry = await taskFlow.spawnAcpChild({
+      flowId: created.flowId,
+      expectedRevision: created.revision,
+      reservationId,
+      agentId: "codex",
+      label: "managed-canary",
+      task: "Run one bounded canary step.",
+    });
+    expect(retry).toMatchObject({ accepted: true, runId: reservationId, reused: true });
+    expect(spawnAcp).toHaveBeenCalledTimes(1);
   });
 
   it("applies each managed transition exactly once with its explicit payload", () => {

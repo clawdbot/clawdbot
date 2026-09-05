@@ -68,6 +68,34 @@ type BoundTaskFlowCancelResult = {
   tasks?: TaskRecord[];
 };
 
+/**
+ * The only ACP spawn surface available to a managed-flow controller. It is
+ * deliberately narrower than sessions_spawn: callers cannot select a model,
+ * provider, workspace, shell command, or resume session.
+ */
+export type BoundTaskFlowAcpChildParams = {
+  flowId: string;
+  expectedRevision: number;
+  /** Stable controller reservation ID; it is also the Gateway idempotency key. */
+  reservationId: string;
+  agentId: string;
+  label: string;
+  task: string;
+};
+
+export type BoundTaskFlowAcpChildResult =
+  | {
+      accepted: true;
+      taskId?: string;
+      childSessionKey: string;
+      runId: string;
+      reused: boolean;
+    }
+  | {
+      accepted: false;
+      reason: string;
+    };
+
 export type BoundTaskFlowRuntime = {
   readonly sessionKey: string;
   readonly requesterOrigin?: TaskDeliveryState["requesterOrigin"];
@@ -118,6 +146,7 @@ export type BoundTaskFlowRuntime = {
     cancelRequestedAt?: number;
   }) => ManagedTaskFlowMutationResult;
   cancel: (params: { flowId: string; cfg: OpenClawConfig }) => Promise<BoundTaskFlowCancelResult>;
+  spawnAcpChild: (params: BoundTaskFlowAcpChildParams) => Promise<BoundTaskFlowAcpChildResult>;
   runTask: (params: {
     flowId: string;
     runtime: TaskRuntime;

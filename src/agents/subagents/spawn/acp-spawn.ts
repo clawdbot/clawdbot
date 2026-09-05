@@ -107,6 +107,8 @@ type SpawnAcpParams = {
   taskName?: string;
   label?: string;
   agentId?: string;
+  /** Internal controller idempotency key; not accepted by sessions_spawn input. */
+  idempotencyKey?: string;
   resumeSessionId?: string;
   model?: string;
   thinking?: string;
@@ -348,7 +350,17 @@ export async function spawnAcpDirect(
     requester: requesterState,
   });
 
-  const sessionKey = mintSpawnSessionKey({ targetAgentId, backend: "acp" });
+  const managedIdempotencyKey = normalizeOptionalString(params.idempotencyKey);
+  const childIdem = managedIdempotencyKey ?? crypto.randomUUID();
+  // Managed TaskFlow retries must resolve the same child session before the
+  // Gateway observes the idempotency key. Public sessions_spawn never supplies
+  // this internal field and retains its random-session behavior.
+  const sessionKey = managedIdempotencyKey
+    ? `agent:${targetAgentId}:acp:managed:${crypto
+        .createHash("sha256")
+        .update(childIdem)
+        .digest("hex")}`
+    : mintSpawnSessionKey({ targetAgentId, backend: "acp" });
   const runtimeMode = resolveAcpSessionMode(spawnMode);
   const resolvedCwd = resolveSpawnedWorkspaceInheritance({
     config: cfg,
@@ -396,7 +408,6 @@ export async function spawnAcpDirect(
   let sessionCreated = false;
   let childCreationEntry: SessionEntry | undefined;
   let initializedRuntime: AcpSpawnRuntimeCloseHandle | undefined;
-  const childIdem = crypto.randomUUID();
   const parentAgentId = parentSessionKey
     ? resolveAgentIdFromSessionKey(parentSessionKey, requesterAgentId)
     : undefined;

@@ -947,6 +947,27 @@ describe("spawnAcpDirect", () => {
     expect(transcriptCalls[1]?.threadId).toBe("child-thread");
   });
 
+  it("uses a managed controller reservation as the stable ACP spawn identity", async () => {
+    const reservationId = "a".repeat(64);
+    const result = await spawnAcpDirect(
+      {
+        task: "Run the isolated canary step",
+        agentId: "codex",
+        idempotencyKey: reservationId,
+      },
+      { agentSessionKey: "agent:main:native-taskflow-controller-v1" },
+    );
+
+    const accepted = expectAcceptedSpawn(result);
+    expect(accepted.childSessionKey).toMatch(/^agent:codex:acp:managed:[a-f0-9]{64}$/);
+    expect(hoisted.callGatewayMock).toHaveBeenCalledWith(
+      expect.objectContaining({
+        method: "agent",
+        params: expect.objectContaining({ idempotencyKey: reservationId }),
+      }),
+    );
+  });
+
   it("reconciles a transport-ambiguous ACP dispatch so an accepted run is surfaced instead of misreported as dispatch_failed", async () => {
     let agentDispatchAttempts = 0;
     // A plain Error whose message matches isGatewayRpcUnavailableError (the gateway

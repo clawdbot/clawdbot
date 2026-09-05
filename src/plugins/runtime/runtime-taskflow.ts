@@ -1,4 +1,5 @@
 // Runtime task-flow helpers adapt plugin task descriptors into executable task flows.
+import { spawnAcpDirect } from "../../agents/subagents/spawn/acp-spawn.js";
 import {
   cancelFlowByIdForOwner,
   getFlowTaskSummary,
@@ -20,14 +21,18 @@ import {
   resumeFlow,
   setFlowWaiting,
 } from "../../tasks/task-flow-runtime-internal.js";
+import { listTasksForFlowId } from "../../tasks/task-registry.js";
 import type { TaskDeliveryState } from "../../tasks/task-registry.types.js";
 import { normalizeDeliveryContext } from "../../utils/delivery-context.shared.js";
 import type {
+  BoundTaskFlowAcpChildResult,
   BoundTaskFlowRuntime,
   ManagedTaskFlowMutationResult,
   ManagedTaskFlowRecord,
   PluginRuntimeTaskFlow,
 } from "./runtime-taskflow.types.js";
+
+const MANAGED_ACP_RESERVATION_ID_RE = /^[a-f0-9]{64}$/;
 
 function assertSessionKey(sessionKey: string | undefined, errorMessage: string): string {
   const normalized = sessionKey?.trim();
@@ -88,9 +93,22 @@ function applyManagedFlowMutationForOwner(params: {
   return mapFlowUpdateResult(params.mutate(managed.flowId));
 }
 
+function resolveManagedFlowForOwner(params: {
+  flowId: string;
+  ownerKey: string;
+}): { ok: true; flow: ManagedTaskFlowRecord } | { ok: false } {
+  const flow = getTaskFlowByIdForOwner({
+    flowId: params.flowId,
+    callerOwnerKey: params.ownerKey,
+  });
+  const managed = asManagedTaskFlowRecord(flow);
+  return managed ? { ok: true, flow: managed } : { ok: false };
+}
+
 function createBoundTaskFlowRuntime(params: {
   sessionKey: string;
   requesterOrigin?: TaskDeliveryState["requesterOrigin"];
+  spawnAcp?: typeof spawnAcpDirect;
 }): BoundTaskFlowRuntime {
   const ownerKey = assertSessionKey(
     params.sessionKey,
@@ -99,6 +117,7 @@ function createBoundTaskFlowRuntime(params: {
   const requesterOrigin = params.requesterOrigin
     ? normalizeDeliveryContext(params.requesterOrigin)
     : undefined;
+  const spawnAcp = params.spawnAcp ?? spawnAcpDirect;
   const tryCreateManaged: BoundTaskFlowRuntime["tryCreateManaged"] = (input) => {
     const flow = createManagedTaskFlow({
       ownerKey,
@@ -229,6 +248,82 @@ function createBoundTaskFlowRuntime(params: {
         flowId,
         callerOwnerKey: ownerKey,
       }),
+    spawnAcpChild: async (input): Promise<BoundTaskFlowAcpChildResult> => {
+      const flow = resolveManagedFlowForOwner({ flowId: input.flowId, ownerKey });
+      if (!flow.ok) return { accepted: false, reason: "Managed TaskFlow was not found." };
+      if (flow.flow.revision !== input.expectedRevision) {
+        return { accepted: false, reason: "Managed TaskFlow revision changed." };
+      }
+      if (flow.flow.cancelRequestedAt != null) {
+        return { accepted: false, reason: "Managed TaskFlow cancellation was requested." };
+      }
+      if (flow.flow.status !== "queued" && flow.flow.status !== "running") {
+        return { accepted: false, reason: `Managed TaskFlow is ${flow.flow.status}.` };
+      }
+      if (!MANAGED_ACP_RESERVATION_ID_RE.test(input.reservationId)) {
+        return { accepted: false, reason: "Managed ACP reservation ID is invalid." };
+      }
+      if (!input.agentId.trim() || !input.label.trim() || !input.task.trim()) {
+        return { accepted: false, reason: "Managed ACP child identity is incomplete." };
+      }
+
+      const existing = listTasksForFlowId(flow.flow.flowId).filter(
+        (task) => task.runtime === "acp" && task.runId === input.reservationId,
+      );
+      if (existing.length > 1) {
+        return { accepted: false, reason: "Managed ACP reservation has multiple child tasks." };
+      }
+      if (existing.length === 1 && existing[0].childSessionKey) {
+        return {
+          accepted: true,
+          taskId: existing[0].taskId,
+          childSessionKey: existing[0].childSessionKey,
+          runId: existing[0].runId ?? input.reservationId,
+          reused: true,
+        };
+      }
+      if (existing.length === 1) {
+        return { accepted: false, reason: "Managed ACP child has no session identity." };
+      }
+
+      const spawned = await spawnAcp(
+        {
+          task: input.task,
+          label: input.label,
+          agentId: input.agentId,
+          mode: "run",
+          idempotencyKey: input.reservationId,
+        },
+        { agentSessionKey: ownerKey },
+      );
+      if (spawned.status !== "accepted") return { accepted: false, reason: spawned.error };
+      const linked = runTaskInFlowForOwner({
+        flowId: flow.flow.flowId,
+        callerOwnerKey: ownerKey,
+        runtime: "acp",
+        sourceId: input.reservationId,
+        childSessionKey: spawned.childSessionKey,
+        agentId: input.agentId,
+        runId: spawned.runId,
+        label: input.label,
+        task: input.task,
+        preferMetadata: true,
+        status: "running",
+      });
+      if (!linked.created || !linked.task) {
+        return {
+          accepted: false,
+          reason: linked.reason ?? "Managed ACP child task was not recorded exactly once.",
+        };
+      }
+      return {
+        accepted: true,
+        taskId: linked.task.taskId,
+        childSessionKey: spawned.childSessionKey,
+        runId: spawned.runId,
+        reused: false,
+      };
+    },
     runTask: (input) => {
       const created = runTaskInFlowForOwner({
         flowId: input.flowId,
@@ -283,12 +378,15 @@ function createBoundTaskFlowRuntime(params: {
   };
 }
 
-export function createRuntimeTaskFlow(): PluginRuntimeTaskFlow {
+export function createRuntimeTaskFlow(
+  options: { spawnAcp?: typeof spawnAcpDirect } = {},
+): PluginRuntimeTaskFlow {
   return {
     bindSession: (params) =>
       createBoundTaskFlowRuntime({
         sessionKey: params.sessionKey,
         requesterOrigin: params.requesterOrigin,
+        spawnAcp: options.spawnAcp,
       }),
     fromToolContext: (ctx) =>
       createBoundTaskFlowRuntime({
@@ -297,6 +395,7 @@ export function createRuntimeTaskFlow(): PluginRuntimeTaskFlow {
           "TaskFlow runtime requires tool context with a sessionKey.",
         ),
         requesterOrigin: ctx.deliveryContext,
+        spawnAcp: options.spawnAcp,
       }),
   };
 }
