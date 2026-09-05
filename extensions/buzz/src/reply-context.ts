@@ -1,4 +1,4 @@
-import type { Event, Relay } from "nostr-tools";
+import { verifyEvent, type Event, type Relay } from "nostr-tools";
 import { BUZZ_INBOUND_MESSAGE_KINDS } from "./message-event.js";
 import { queryBuzzRelaySnapshot } from "./relay-subscription.js";
 
@@ -30,14 +30,14 @@ export async function queryBuzzEventById(params: {
     closeReason: REPLY_TARGET_COMPLETE_REASON,
     closeMessage: (reason) => `Buzz reply target query closed: ${reason}`,
     onEvent: (event) => {
-      // Integrity is already settled before this callback. nostr-tools hands an
-      // event to a subscription only when `matchFilters(...) && verifyEvent(...)`
-      // holds, and that verifier recomputes the event hash, compares it against
-      // `id`, then checks `sig` against `pubkey`. Buzz builds every relay with
-      // `new Relay(...)`, which installs that verifier. What is left here is
-      // relevance: a relay may also answer with events it holds that the reply
-      // tag never named, and only the named one may reach the model.
-      if (!found && event.id === params.eventId) {
+      // This text becomes model-visible quote context, so both questions are
+      // answered here rather than left to the transport. Relevance: a relay may
+      // answer with events the reply tag never named. Integrity: `verifyEvent`
+      // recomputes the event hash, compares it against `id`, then checks `sig`
+      // against `pubkey`. nostr-tools already applies that verifier on delivery
+      // and caches the verdict on the event, so repeating it costs a cached
+      // read while keeping the guarantee visible in the code that relies on it.
+      if (!found && event.id === params.eventId && verifyEvent(event)) {
         found = event;
       }
     },
