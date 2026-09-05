@@ -5693,47 +5693,97 @@ describe("gateway Gmail hot reload handlers", () => {
     }
   });
 
-  it("does not emit a prepared config restart after managed shutdown starts", async () => {
+  it("stops managed config reload while its Gateway admission is suspended", async () => {
     vi.useFakeTimers();
     const harness = createManagedRestartSequenceHarness();
-    let markPreflightStarted: (() => void) | undefined;
-    const preflightStarted = new Promise<void>((resolve) => {
-      markPreflightStarted = resolve;
-    });
-    let releasePreflight: (() => void) | undefined;
-    const preflightBlocked = new Promise<void>((resolve) => {
-      releasePreflight = resolve;
-    });
-    harness.activateRuntimeSecrets.mockImplementationOnce(async (config: OpenClawConfig) => {
-      markPreflightStarted?.();
-      await preflightBlocked;
-      return makePreparedSecretsSnapshot(config);
-    });
-
+    const suspension = tryBeginGatewaySuspendAdmission(() => {});
+    expect(suspension).not.toBeNull();
+    let stopping: Promise<void> | undefined;
     try {
-      expect(harness.reloader.isConfigReloadSettled()).toBe(true);
-      harness.writeConfig(harness.deferredConfig, "shutdown-restart", 1);
-      expect(harness.reloader.isConfigReloadSettled()).toBe(false);
+      harness.writeConfig(harness.deferredConfig, "suspended-restart", 1);
       await vi.advanceTimersByTimeAsync(0);
-      await preflightStarted;
-      expect(harness.reloader.isConfigReloadSettled()).toBe(false);
+      expect(getActiveGatewayRootWorkCount()).toBe(0);
+      expect(harness.activateRuntimeSecrets).not.toHaveBeenCalled();
+      let stopped = false;
+      stopping = harness.reloader.stop().then(() => {
+        stopped = true;
+      });
+      await vi.advanceTimersByTimeAsync(0);
+      expect(stopped).toBe(true);
 
-      const stopPromise = harness.reloader.stop();
-      expect(harness.reloader.isConfigReloadSettled()).toBe(false);
-      releasePreflight?.();
-      await stopPromise;
-      expect(harness.reloader.isConfigReloadSettled()).toBe(false);
-
+      suspension?.rollback();
+      await vi.advanceTimersByTimeAsync(0);
+      expect(harness.activateRuntimeSecrets).not.toHaveBeenCalled();
       expect(harness.requestRecoveryRestart).not.toHaveBeenCalled();
       expect(harness.promoteSnapshot).not.toHaveBeenCalled();
-      expect(harness.logReload.info).toHaveBeenCalledWith(
-        "config restart superseded: GatewayConfigReloadSupersededError: config reload superseded by a newer runtime config source",
-      );
+      expect(harness.reloader.isConfigReloadSettled()).toBe(false);
+      expect(harness.logReload.error).not.toHaveBeenCalled();
     } finally {
-      releasePreflight?.();
-      await harness.reloader.stop();
+      suspension?.rollback();
+      await (stopping ?? harness.reloader.stop());
     }
   });
+
+  it.each(["completion", "AbortError"] as const)(
+    "joins admitted config restart %s after managed shutdown starts",
+    async (outcome) => {
+      vi.useFakeTimers();
+      const harness = createManagedRestartSequenceHarness();
+      let markPreflightStarted: (() => void) | undefined;
+      const preflightStarted = new Promise<void>((resolve) => {
+        markPreflightStarted = resolve;
+      });
+      let releasePreflight: (() => void) | undefined;
+      const preflightBlocked = new Promise<void>((resolve) => {
+        releasePreflight = resolve;
+      });
+      harness.activateRuntimeSecrets.mockImplementationOnce(async (config: OpenClawConfig) => {
+        markPreflightStarted?.();
+        await preflightBlocked;
+        if (outcome === "AbortError") {
+          const error = new Error("admitted secret read aborted");
+          error.name = "AbortError";
+          throw error;
+        }
+        return makePreparedSecretsSnapshot(config);
+      });
+
+      try {
+        expect(harness.reloader.isConfigReloadSettled()).toBe(true);
+        harness.writeConfig(harness.deferredConfig, "shutdown-restart", 1);
+        expect(harness.reloader.isConfigReloadSettled()).toBe(false);
+        await vi.advanceTimersByTimeAsync(0);
+        await preflightStarted;
+        expect(harness.reloader.isConfigReloadSettled()).toBe(false);
+
+        let stopped = false;
+        const stopPromise = harness.reloader.stop().then(() => {
+          stopped = true;
+        });
+        await vi.advanceTimersByTimeAsync(0);
+        expect(stopped).toBe(false);
+        expect(harness.reloader.isConfigReloadSettled()).toBe(false);
+        releasePreflight?.();
+        await stopPromise;
+        expect(harness.reloader.isConfigReloadSettled()).toBe(false);
+
+        expect(harness.requestRecoveryRestart).not.toHaveBeenCalled();
+        expect(harness.promoteSnapshot).not.toHaveBeenCalled();
+        if (outcome === "AbortError") {
+          expect(harness.logReload.error).toHaveBeenCalledWith(
+            "config restart failed: AbortError: admitted secret read aborted",
+          );
+        } else {
+          expect(harness.logReload.info).toHaveBeenCalledWith(
+            "config restart superseded: GatewayConfigReloadSupersededError: config reload superseded by a newer runtime config source",
+          );
+        }
+      } finally {
+        releasePreflight?.();
+        await harness.reloader.stop();
+      }
+    },
+  );
 
   it.each([
     [
