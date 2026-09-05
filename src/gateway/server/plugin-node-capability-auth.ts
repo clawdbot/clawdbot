@@ -18,6 +18,29 @@ import {
 import { withSerializedCredentialFallbackAttempt } from "../rate-limit-attempt-serialization.js";
 import type { GatewayWsClient } from "./ws-types.js";
 
+export type PluginNodeCapabilityFallback = Readonly<{
+  clients: Set<GatewayWsClient>;
+  nodeCapability: PluginNodeCapabilitySurface;
+  capability: string;
+}>;
+
+export type PluginNodeCapabilityAuthResult = GatewayAuthResult & {
+  /** Present only when node capability auth, rather than bearer auth, admitted the request. */
+  pluginNodeCapabilityFallback?: PluginNodeCapabilityFallback;
+};
+
+/** Re-check a capability fallback synchronously immediately before plugin dispatch. */
+export function revalidatePluginNodeCapabilityFallback(
+  fallback: PluginNodeCapabilityFallback,
+): boolean {
+  return hasAuthorizedPluginNodeCapability({
+    clients: fallback.clients,
+    surface: fallback.nodeCapability,
+    capability: fallback.capability,
+    renew: false,
+  });
+}
+
 /**
  * Authorizes plugin HTTP routes that can be reached by node-issued capabilities.
  */
@@ -31,7 +54,7 @@ export async function authorizePluginNodeCapabilityRequest(params: {
   capability?: string;
   malformedScopedPath?: boolean;
   rateLimiter?: AuthRateLimiter;
-}): Promise<GatewayAuthResult> {
+}): Promise<PluginNodeCapabilityAuthResult> {
   const {
     req,
     auth,
@@ -56,7 +79,7 @@ export async function authorizePluginNodeCapabilityRequest(params: {
     return { ok: false, reason: PROXY_ATTRIBUTION_REQUIRED_REASON };
   }
   const token = getBearerToken(req);
-  const run = async (): Promise<GatewayAuthResult> => {
+  const run = async (): Promise<PluginNodeCapabilityAuthResult> => {
     let lastAuthFailure: GatewayAuthResult | null = null;
     if (token) {
       // Bearer gateway auth wins when present; capability auth is only a fallback
@@ -83,7 +106,14 @@ export async function authorizePluginNodeCapabilityRequest(params: {
       capability &&
       hasAuthorizedPluginNodeCapability({ clients, surface: nodeCapability, capability })
     ) {
-      return { ok: true };
+      return {
+        ok: true,
+        pluginNodeCapabilityFallback: {
+          clients,
+          nodeCapability,
+          capability,
+        },
+      };
     }
 
     if (

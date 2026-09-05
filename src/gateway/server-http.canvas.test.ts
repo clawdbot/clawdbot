@@ -105,6 +105,7 @@ function createConnectedClient(): GatewayWsClient {
     socket: {} as GatewayWsClient["socket"],
     connect: {
       role: "node",
+      caps: ["canvas"],
       client: { mode: "node" },
     } as GatewayWsClient["connect"],
     connId: "canvas-node",

@@ -556,9 +556,13 @@ export function createGatewayHttpServer(opts: {
         basePath: controlUiBasePath,
         pathname: scopedRequestPath,
       });
+      let rejectStalePluginNodeCapability = () => false;
       addRequestStage(approvalDocument, handleStandaloneControlUiRequest);
       addRequestStage(Boolean(nodeCapability), async () => {
-        const { authorizePluginNodeCapabilityRequest } = await getPluginNodeCapabilityAuthModule();
+        const {
+          authorizePluginNodeCapabilityRequest,
+          revalidatePluginNodeCapabilityFallback: revalidate,
+        } = await getPluginNodeCapabilityAuthModule();
         const ok = await authorizePluginNodeCapabilityRequest({
           req,
           auth: resolvedAuthValue,
@@ -574,13 +578,23 @@ export function createGatewayHttpServer(opts: {
           sendGatewayAuthFailure(res, ok);
           return true;
         }
+        rejectStalePluginNodeCapability = () =>
+          ok.pluginNodeCapabilityFallback !== undefined &&
+          !revalidate(ok.pluginNodeCapabilityFallback) &&
+          (sendGatewayAuthFailure(res, { ok: false, reason: "token_mismatch" }), true);
         return false;
       });
       addRequestStage(
         Boolean(nodeCapability) &&
           isCoreCanvasHostEnabled(configSnapshot) &&
           isCanvasDocumentHttpPath(scopedRequestPath),
-        async () => (await getCanvasServeModule()).handleCanvasDocumentHttpRequest(req, res),
+        async () => {
+          const canvasServe = await getCanvasServeModule();
+          if (rejectStalePluginNodeCapability()) {
+            return true;
+          }
+          return await canvasServe.handleCanvasDocumentHttpRequest(req, res);
+        },
       );
       // This page must remain reachable when a plugin route is broken so the
       // operator can disable it. Other explicit plugin routes retain precedence.
@@ -646,13 +660,17 @@ export function createGatewayHttpServer(opts: {
             pluginRequestOperatorScopes = authResult.operatorScopes;
             return false;
           },
-          () =>
-            handlePluginRequest(req, res, pluginPathContext, {
+          async () => {
+            if (rejectStalePluginNodeCapability()) {
+              return true;
+            }
+            return await handlePluginRequest(req, res, pluginPathContext, {
               gatewayAuthSatisfied: pluginGatewayAuthSatisfied,
               gatewayRequestAuth: pluginGatewayRequestAuth,
               gatewayRequestOperatorScopes: pluginRequestOperatorScopes,
               gatewayRequestClientIp: requestClientIp,
-            }),
+            });
+          },
         );
       }
 

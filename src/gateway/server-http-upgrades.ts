@@ -323,10 +323,19 @@ export function attachGatewayUpgradeHandler(opts: {
           return;
         }
       }
+      let pluginNodeCapabilityFallback:
+        | import("./server/plugin-node-capability-auth.js").PluginNodeCapabilityFallback
+        | undefined;
+      let revalidatePluginNodeCapabilityFallback:
+        | typeof import("./server/plugin-node-capability-auth.js").revalidatePluginNodeCapabilityFallback
+        | undefined;
       if (nodeCapability) {
         // Node-capability WebSocket upgrades authenticate before plugin upgrade dispatch so
         // plugin handlers never receive unauthorized scoped capability sockets.
-        const { authorizePluginNodeCapabilityRequest } = await getPluginNodeCapabilityAuthModule();
+        const {
+          authorizePluginNodeCapabilityRequest,
+          revalidatePluginNodeCapabilityFallback: revalidate,
+        } = await getPluginNodeCapabilityAuthModule();
         const ok = await authorizePluginNodeCapabilityRequest({
           req,
           auth: resolvedAuthLocal,
@@ -343,6 +352,8 @@ export function attachGatewayUpgradeHandler(opts: {
           socket.destroy();
           return;
         }
+        pluginNodeCapabilityFallback = ok.pluginNodeCapabilityFallback;
+        revalidatePluginNodeCapabilityFallback = revalidate;
       }
       if (handlePluginUpgrade) {
         let pluginGatewayAuthSatisfied = false;
@@ -377,6 +388,14 @@ export function attachGatewayUpgradeHandler(opts: {
             req,
             authCheck.requestAuth,
           );
+        }
+        if (
+          pluginNodeCapabilityFallback &&
+          !revalidatePluginNodeCapabilityFallback?.(pluginNodeCapabilityFallback)
+        ) {
+          writeUpgradeAuthFailure(socket, { ok: false, reason: "token_mismatch" });
+          socket.destroy();
+          return;
         }
         if (
           await handlePluginUpgrade(req, socket, head, pathContext, {
