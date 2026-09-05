@@ -168,5 +168,4 @@ describe("memory search result monotonicity", () => {
       await manager.close?.();
     }
   });
-
 });
