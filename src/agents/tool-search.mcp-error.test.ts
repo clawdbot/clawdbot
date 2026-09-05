@@ -231,6 +231,31 @@ function makeAsciiOutagesCatalog(): McpToolCatalog {
   return catalog;
 }
 
+/** Twenty hits whose descriptions sit at the MCP metadata cap, with or without an outage. */
+function makeWideCatalog(outage: boolean): McpToolCatalog {
+  const catalog = makeOutageCatalog();
+  return {
+    ...catalog,
+    servers: {
+      notes: {
+        serverName: "notes",
+        launchSummary: "notes",
+        toolCount: 20,
+        supportsParallelToolCalls: false,
+      },
+    },
+    tools: Array.from({ length: 20 }, (_, index) => ({
+      serverName: "notes",
+      safeServerName: "notes",
+      toolName: `list_${index}`,
+      description: `List saved notes ${index} `.padEnd(1_200, "n"),
+      inputSchema: { type: "object", properties: {} },
+      fallbackDescription: "List saved notes",
+    })),
+    ...(outage ? {} : { diagnostics: undefined }),
+  };
+}
+
 async function createControls(
   catalog: McpToolCatalog,
   mode: "tools" | "code" = "tools",
@@ -735,6 +760,48 @@ describe("Tool Search with an unavailable MCP server", () => {
       note: expect.stringContaining("memos"),
     });
     expect(JSON.stringify(result)).not.toContain(LAUNCH_SUMMARY);
+  });
+
+  it("keeps the outage ahead of clipped single-query candidates", async () => {
+    const { control } = await createControls(makeWideCatalog(true));
+
+    // Twenty hits at the description cap out-size the network-content render,
+    // so the renderer clips the tail; the outage must lead to survive that clip.
+    const hit = await control(TOOL_SEARCH_RAW_TOOL_NAME).execute("search-wide", {
+      query: "list saved notes",
+      limit: 20,
+    });
+
+    const text = (hit.content[0] as { text: string }).text;
+    expect(text).toContain('<<<EXTERNAL_UNTRUSTED_CONTENT id="');
+    expect(text).toContain("[truncated]");
+    expect(text).toContain("failed for this run");
+    expect(hit.details).toMatchObject({
+      candidates: expect.arrayContaining([expect.objectContaining({ name: "notes__list_0" })]),
+      unavailableMcpServers: [{ server: "memos", error: FAILURE_MESSAGE }],
+      note: expect.stringContaining("memos"),
+    });
+  });
+
+  it("fits a healthy batch beneath the cap after a network tool_call", async () => {
+    const { control } = await createControls(makeWideCatalog(false));
+
+    // A finished network call keeps every later result wrapped, so the batch
+    // fitter has to measure with that same envelope or a near-cap batch overflows.
+    await control(TOOL_CALL_RAW_TOOL_NAME).execute("call-network", {
+      id: "mcp:notes:notes__list_0",
+    });
+    const batch = await control(TOOL_SEARCH_RAW_TOOL_NAME).execute("search-batch-healthy", {
+      queries: Array.from({ length: 16 }, (_, index) => ({
+        query: `list saved notes ${index}`,
+        limit: 1,
+      })),
+    });
+
+    const text = (batch.content[0] as { text: string }).text;
+    expect(text).toContain('<<<EXTERNAL_UNTRUSTED_CONTENT id="');
+    expect(text.length).toBeLessThanOrEqual(MAX_TOOL_SEARCH_BATCH_RESPONSE_CHARS);
+    expect(batch.details).not.toHaveProperty("unavailableMcpServers");
   });
 
   it("carries the outage on a code mode exec whose only action is a search", async () => {

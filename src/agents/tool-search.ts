@@ -158,6 +158,7 @@ function compactBatchCandidate(candidate: ToolSearchCandidate): ToolSearchCandid
 function boundToolSearchBatchResponse(
   results: ToolSearchBatchGroup[],
   outage: UnavailableMcpServersNote | undefined,
+  networkContent: boolean,
 ): {
   results: ToolSearchBatchGroup[];
   truncated?: true;
@@ -178,7 +179,9 @@ function boundToolSearchBatchResponse(
   // re-searching for tools that cannot appear. Hits give ground first; once
   // every group is empty the per-server error text halves toward the cap while
   // server names and the recovery guidance stay whole. The bound is the rendered
-  // control text, envelope included, because that is what the model reads.
+  // control text, envelope included, because that is what the model reads; the
+  // envelope follows the runtime's network-content state (an earlier network
+  // call or a recorded outage), the same flag the final formatter reads.
   let fitted = outage;
   let outageErrorChars = MAX_UNAVAILABLE_MCP_ERROR_CHARS;
   const render = () => ({
@@ -187,8 +190,7 @@ function boundToolSearchBatchResponse(
     ...fitted,
   });
   const renderedLength = () =>
-    renderToolSearchControlText(JSON.stringify(render(), null, 2), fitted !== undefined).text
-      .length;
+    renderToolSearchControlText(JSON.stringify(render(), null, 2), networkContent).text.length;
   while (renderedLength() > MAX_TOOL_SEARCH_BATCH_RESPONSE_CHARS) {
     let removable: ToolSearchBatchGroup | undefined;
     for (const group of bounded) {
@@ -378,11 +380,11 @@ export function createToolSearchTools(ctx: ToolSearchToolContext): AnyAgentTool[
           const candidates = await runtime.search(request.search.query, {
             limit: request.search.limit,
           });
-          // A plain array stays the no-outage shape; the recorded failed servers
-          // ride alongside the candidates only when the MCP runtime reported one.
+          // A plain array stays the no-outage shape. A recorded outage leads the
+          // payload so the network-content render clips hits, never the guidance.
           const outage = describeUnavailableMcpServers(resolveCatalog(ctx));
           return formatToolSearchControlResult(
-            outage ? { candidates, ...outage } : candidates,
+            outage ? { ...outage, candidates } : candidates,
             runtime,
           );
         }
@@ -393,7 +395,11 @@ export function createToolSearchTools(ctx: ToolSearchToolContext): AnyAgentTool[
           })),
         );
         return formatToolSearchControlResult(
-          boundToolSearchBatchResponse(results, describeUnavailableMcpServers(resolveCatalog(ctx))),
+          boundToolSearchBatchResponse(
+            results,
+            describeUnavailableMcpServers(resolveCatalog(ctx)),
+            runtime.hasNetworkContent(),
+          ),
           runtime,
         );
       },
