@@ -579,39 +579,42 @@ describe("setupPluginConfig", () => {
       selectedToken: "__enum_1__",
       expected: { mode: "manual" },
     },
-  ])("preserves the typed enum value for $name", async ({ schemaProp, selectedToken, expected }) => {
-    const pluginId = "typed-enum-plugin";
-    loadPluginManifestRegistryCore.mockReturnValue({
-      plugins: [
-        makeManifestPlugin(
-          pluginId,
-          { mode: { label: "Mode" } },
-          {
-            type: "object",
-            additionalProperties: false,
-            properties: { mode: schemaProp },
-          },
-        ),
-      ],
-    });
+  ])(
+    "preserves the typed enum value for $name",
+    async ({ schemaProp, selectedToken, expected }) => {
+      const pluginId = "typed-enum-plugin";
+      loadPluginManifestRegistryCore.mockReturnValue({
+        plugins: [
+          makeManifestPlugin(
+            pluginId,
+            { mode: { label: "Mode" } },
+            {
+              type: "object",
+              additionalProperties: false,
+              properties: { mode: schemaProp },
+            },
+          ),
+        ],
+      });
 
-    const result = await setupPluginConfig({
-      config: {
-        plugins: { entries: { [pluginId]: { enabled: true } } },
-      },
-      prompter: {
-        intro: vi.fn(async () => {}),
-        outro: vi.fn(async () => {}),
-        note: vi.fn(async () => {}),
-        select: vi.fn(async () => selectedToken) as unknown as WizardPrompter["select"],
-        multiselect: vi.fn(async () => [pluginId]) as unknown as WizardPrompter["multiselect"],
-        text: vi.fn(async () => ""),
-        confirm: vi.fn(async () => true),
-        progress: vi.fn(() => ({ update: vi.fn(), stop: vi.fn() })),
-      },
-    });
+      const result = await setupPluginConfig({
+        config: {
+          plugins: { entries: { [pluginId]: { enabled: true } } },
+        },
+        prompter: {
+          intro: vi.fn(async () => {}),
+          outro: vi.fn(async () => {}),
+          note: vi.fn(async () => {}),
+          select: vi.fn(async () => selectedToken) as unknown as WizardPrompter["select"],
+          multiselect: vi.fn(async () => [pluginId]) as unknown as WizardPrompter["multiselect"],
+          text: vi.fn(async () => ""),
+          confirm: vi.fn(async () => true),
+          progress: vi.fn(() => ({ update: vi.fn(), stop: vi.fn() })),
+        },
+      });
 
-    expect(result.plugins?.entries?.[pluginId]?.config).toEqual({ mode: expected });
-    expect(typeof result.plugins?.entries?.[pluginId]?.config?.["mode"]).toBe(typeof expected);
-  });
+      expect(result.plugins?.entries?.[pluginId]?.config).toEqual({ mode: expected });
+      expect(typeof result.plugins?.entries?.[pluginId]?.config?.["mode"]).toBe(typeof expected);
+    },
+  );
 });
