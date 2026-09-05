@@ -587,6 +587,55 @@ describe("toSanitizedMarkdownHtml links", () => {
       expect(fragment.querySelector("a[data-session-key]")).toBeNull();
     });
 
+    it.each([
+      ["absolute href", `[Open session](${location.origin}/chat/roboclaw/d0effac9)`],
+      ["bare URL", `${location.origin}/chat/roboclaw/d0effac9`],
+      ["relative href", "[Open session](/chat/roboclaw/d0effac9)"],
+      ["literal with a file extension", "[Open session](/chat/roboclaw/d0effac9.md)"],
+      ["inline URL", `\`${location.origin}/chat/roboclaw/d0effac9\``],
+      ["inline relative URL", "`/chat/roboclaw/d0effac9`"],
+    ])("decorates host-local session URLs in %s", (_kind, input) => {
+      const fragment = htmlFragment(
+        toSanitizedMarkdownHtml(input, { sessionLinks: true, fileLinks: true }),
+      );
+      const link = fragment.querySelector<HTMLAnchorElement>("a.markdown-session-link");
+      expect(link?.getAttribute("href")).toContain("/chat/roboclaw/d0effac9");
+      expect(link?.hasAttribute("target")).toBe(false);
+      expect(link?.hasAttribute("data-file-path")).toBe(false);
+      expect(link?.hasAttribute("data-session-key")).toBe(false);
+      expect(fragment.querySelector("a a")).toBeNull();
+    });
+
+    it.each([
+      "https://elsewhere.example/chat/roboclaw/d0effac9",
+      "[External session](https://elsewhere.example/chat/roboclaw/d0effac9)",
+      "`https://elsewhere.example/chat/roboclaw/d0effac9`",
+      "[Other page](/activity)",
+    ])("keeps other destinations undecorated: %s", (input) => {
+      const fragment = htmlFragment(toSanitizedMarkdownHtml(input, { sessionLinks: true }));
+      expect(fragment.querySelector(".markdown-session-link")).toBeNull();
+      expect(fragment.querySelector("[data-session-key]")).toBeNull();
+      if (input.startsWith("`")) {
+        expect(fragment.querySelector("a")).toBeNull();
+      }
+    });
+
+    it("keeps ordinary inline code out of session routes on a chat page", () => {
+      const previous = location.href;
+      history.replaceState(null, "", "/chat/main/d0effac9");
+      try {
+        const fragment = htmlFragment(
+          toSanitizedMarkdownHtml("`README.md` `src/chat.ts` `ordinary text`", {
+            sessionLinks: true,
+          }),
+        );
+        expect(fragment.querySelector("a")).toBeNull();
+        expect(fragment.querySelectorAll("code")).toHaveLength(3);
+      } finally {
+        history.replaceState(null, "", previous);
+      }
+    });
+
     it("keeps punctuation outside the link and rejects embedded word matches", () => {
       const fragment = htmlFragment(
         toSanitizedMarkdownHtml(`(${sessionKey}), x${sessionKey}`, { sessionLinks: true }),
