@@ -35,10 +35,6 @@ export async function startTelegramProofIngress(options: {
     leaseHealth: typeof options.lease;
     fetchImpl: typeof fetch;
   }) => Promise<TestApiProxy>;
-  const upstream = await startProxy({
-    leaseHealth: options.lease,
-    fetchImpl: options.fetchImpl ?? fetch,
-  });
   let closed = false;
   let invalid = false;
   let polls = 0;
@@ -58,17 +54,37 @@ export async function startTelegramProofIngress(options: {
       }
     | undefined;
   const readers = new Set<AbortController>();
+  const forwardingStopped = Promise.withResolvers<Error>();
+  const cancelForwarding = () => {
+    forwardingStopped.resolve(new Error("Telegram proof forwarding stopped"));
+    for (const controller of readers) {
+      controller.abort();
+    }
+  };
   const assertHealthy = () => {
     if (closed || invalid) {
       throw new Error("Telegram ingress is closed or invalid");
     }
     options.lease.assertHealthy();
   };
+  const assertForwardingHealthy = () => {
+    assertHealthy();
+    if (rejectedReply) {
+      throw new Error("Telegram proof reply was rejected");
+    }
+  };
   void options.lease.whenUnhealthy.then(() => {
     invalid = true;
-    for (const controller of readers) {
-      controller.abort();
-    }
+    cancelForwarding();
+  });
+  // The second HTTP hop owns the external fetch, so it must share ingress
+  // revocation rather than only the longer-lived credential lease.
+  const upstream = await startProxy({
+    leaseHealth: {
+      assertHealthy: assertForwardingHealthy,
+      whenUnhealthy: Promise.race([options.lease.whenUnhealthy, forwardingStopped.promise]),
+    },
+    fetchImpl: options.fetchImpl ?? fetch,
   });
   const refuse = (response: http.ServerResponse) => {
     response.writeHead(403, { "Content-Type": "application/json" });
@@ -104,6 +120,7 @@ export async function startTelegramProofIngress(options: {
         }
         chunks.push(Buffer.from(chunk));
       }
+      assertHealthy();
       const body = Buffer.concat(chunks);
       const parsed: unknown = JSON.parse(body.toString("utf8") || "{}");
       const record = z.record(z.string(), z.unknown()).parse(parsed);
@@ -237,6 +254,7 @@ export async function startTelegramProofIngress(options: {
           // Record the failed behavior at its trusted boundary, without sending
           // arbitrary candidate content to Telegram. All later traffic is refused.
           rejectedReply = { textSha256: telegramProofDigest(String(upstreamRecord.text)) };
+          cancelForwarding();
           refuse(response);
           return;
         }
@@ -250,6 +268,9 @@ export async function startTelegramProofIngress(options: {
       const controller = new AbortController();
       readers.add(controller);
       try {
+        // Body collection yielded to concurrent requests. Authority must still
+        // belong to this active proof at the last point before forwarding.
+        assertForwardingHealthy();
         const result = await fetch(`${upstream.apiRoot}/bot${options.sutToken}/${method}`, {
           method: "POST",
           headers: { "Content-Type": "application/json" },
@@ -261,7 +282,7 @@ export async function startTelegramProofIngress(options: {
           throw new Error("Oversized Test Server response");
         }
         const data = z.record(z.string(), z.unknown()).parse(JSON.parse(text));
-        assertHealthy();
+        assertForwardingHealthy();
         if (method === "getUpdates") {
           polls += 1;
           const updates = z.array(z.record(z.string(), z.unknown())).parse(data.result);
@@ -299,6 +320,7 @@ export async function startTelegramProofIngress(options: {
       if (!rejectedReply) {
         invalid = true;
       }
+      cancelForwarding();
       refuse(response);
     });
   });
@@ -327,9 +349,7 @@ export async function startTelegramProofIngress(options: {
     rejectedReplyCapture: () => rejectedReply,
     async close() {
       closed = true;
-      for (const controller of readers) {
-        controller.abort();
-      }
+      cancelForwarding();
       server.closeAllConnections();
       await new Promise<void>((resolve) => {
         server.close(() => {

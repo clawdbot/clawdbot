@@ -172,14 +172,19 @@ jobs:
       - name: Summarize proof limits
         if: ${{ success() }}
         shell: bash
+        env:
+          TARGET_PR: ${{ inputs.pr_number }}
+          CANDIDATE_SHA: ${{ inputs.candidate_ref }}
+          SCENARIO: ${{ inputs.scenario }}
+          TRANSPORT: ${{ inputs.scenario == 'telegram-markdown-parser-fidelity' && 'Crabline Bot API emulator; no Telegram Test Server or TDLib' || 'Telegram Test Server; one DM smoke only' }}
         run: |
           {
             echo "## Requested Telegram behavior proof"
             echo
-            echo "- PR: #${{ inputs.pr_number }}"
-            echo "- Candidate: \`${{ inputs.candidate_ref }}\`"
-            echo "- Scenario: ${{ inputs.scenario }}"
-            echo "- Transport: ${{ inputs.scenario == 'telegram-markdown-parser-fidelity' && 'Crabline Bot API emulator; no Telegram Test Server or TDLib' || 'Telegram Test Server; one DM smoke only' }}"
+            printf -- '- PR: #%s\n' "$TARGET_PR"
+            printf -- '- Candidate: `%s`\n' "$CANDIDATE_SHA"
+            printf -- '- Scenario: %s\n' "$SCENARIO"
+            printf -- '- Transport: %s\n' "$TRANSPORT"
             echo "- Scope: the named trusted recipe only; not general proof of every Telegram change"
             echo "- Limits: no production or personal Telegram, live model, readiness, label, repair, close, or merge effect"
           } >> "$GITHUB_STEP_SUMMARY"

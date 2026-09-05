@@ -645,6 +645,9 @@ export const heartbeatLease = internalMutation({
     if (row.lease.expiresAtMs < nowMs) {
       return brokerError("LEASE_EXPIRED", "Credential lease has already expired.");
     }
+    if (row.lease.actorRole !== args.actorRole) {
+      return brokerError("AUTH_ROLE_MISMATCH", "Credential lease actor role mismatch.");
+    }
 
     await ctx.db.patch(args.credentialId, {
       lease: {
@@ -681,6 +684,9 @@ export const releaseLease = internalMutation({
     }
     if (row.lease.ownerId !== args.ownerId || row.lease.leaseToken !== args.leaseToken) {
       return brokerError("LEASE_NOT_OWNER", "Credential lease owner/token mismatch.");
+    }
+    if (row.lease.actorRole !== args.actorRole) {
+      return brokerError("AUTH_ROLE_MISMATCH", "Credential lease actor role mismatch.");
     }
 
     await ctx.db.patch(args.credentialId, {
@@ -724,6 +730,9 @@ export const quarantineLease = internalMutation({
     }
     if (row.lease.ownerId !== args.ownerId || row.lease.leaseToken !== args.leaseToken) {
       return brokerError("LEASE_NOT_OWNER", "Credential lease owner/token mismatch.");
+    }
+    if (row.lease.actorRole !== args.actorRole) {
+      return brokerError("AUTH_ROLE_MISMATCH", "Credential lease actor role mismatch.");
     }
     await ctx.db.patch(args.credentialId, {
       status: "disabled",
