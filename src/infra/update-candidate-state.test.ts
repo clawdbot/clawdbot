@@ -59,7 +59,7 @@ it.each(["DELETE", "WAL"])(
       Promise.all(
         sources.map(async (file) => ({
           bytes: await fs.readFile(file),
-          entries: (await fs.readdir(path.dirname(file))).sort(),
+          entries: (await fs.readdir(path.dirname(file))).toSorted(),
         })),
       );
     const before = await artifacts();
