@@ -24,6 +24,7 @@ import type {
 import { getAdmittedRunDelegatedAuthority } from "../../admitted-run-context.js";
 import { createAgentRunDirectAbortError } from "../../run-termination.js";
 import { withSessionPlacementTurnAdmission } from "../../session-placement-admission.js";
+import { resolveSessionPlacementTurnSettlementAssertion } from "../../session-placement-forced-terminal-settlement.js";
 import type { EmbeddedAgentRunResult } from "../types.js";
 import {
   EMBEDDED_RUN_LANE_TIMEOUT_GRACE_MS,
@@ -108,6 +109,7 @@ export function createEmbeddedRunLaneController<TParams extends LaneParams>(opti
   const noteLaneTaskProgress = () => {
     laneTaskProgressAtMs = Date.now();
   };
+  let assertPlacementCurrent: (() => void) | undefined;
   let activeAttemptOwner: object | undefined;
   const createAttemptControls = (input: {
     admittedRunContext: NonNullable<RunEmbeddedAgentParams["admittedRunContext"]>;
@@ -115,6 +117,8 @@ export function createEmbeddedRunLaneController<TParams extends LaneParams>(opti
     initialTimeoutMs?: number;
     onAbort?: () => void;
   }) => {
+    // Awaited preflight may finish after recovery has released this lane's claim.
+    assertPlacementCurrent?.();
     const owner = {};
     activeAttemptOwner = owner;
     const lifecycleGeneration = options.getLifecycleGeneration();
@@ -187,6 +191,8 @@ export function createEmbeddedRunLaneController<TParams extends LaneParams>(opti
     };
   };
   const throwIfAborted = () => {
+    // Bind only this lane's admitted claim; queued children can inherit a closed parent.
+    assertPlacementCurrent?.();
     if (!abortSignal.aborted) {
       return;
     }
@@ -312,7 +318,10 @@ export function createEmbeddedRunLaneController<TParams extends LaneParams>(opti
             runId: params.runId,
           },
           params,
-          task,
+          () => {
+            assertPlacementCurrent = resolveSessionPlacementTurnSettlementAssertion();
+            return task();
+          },
           () => {
             throwIfAborted();
             assertAgentRunLifecycleGenerationCurrent(lifecycleGeneration);
