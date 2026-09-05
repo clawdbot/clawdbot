@@ -3530,37 +3530,35 @@ class NodeRuntime private constructor(
     intent: () -> Boolean,
   ): Boolean =
     gatewaySwitchMutex.withLock {
-      if (!intent()) return@withLock false
-      val currentStableId =
-        connectedEndpoint?.stableId
-          ?: connectingEndpointStableId
-          ?: prefs.gatewayRegistry.activeStableId.value
-      if (currentStableId != null && currentStableId != endpoint.stableId) {
-        disconnectAndJoin()
-      } else {
-        drainIdleGatewaySessionTails()
-      }
-      // Focus can promote a secondary operator to the primary session for the same gateway.
-      // Its accepted credentials must finish before either primary role reads them.
-      disconnectSecondaryGatewayConnection(endpoint.stableId)?.disconnectAndJoin()
-      val started =
-        synchronized(gatewayLifecycleIntentLock) {
-          if (!intent()) {
-            false
-          } else {
-            if (prefs.gatewayRegistry.entries.value
-                .any { it.stableId == endpoint.stableId }
-            ) {
-              prefs.gatewayRegistry.setActive(endpoint.stableId)
-            }
-            beginConnect(endpoint, resolveGatewayConnectAuth(endpoint, explicitAuth), intent)
-            requestBackgroundGatewayReconciliation()
-            true
-          }
+      try {
+        if (!intent()) return@withLock false
+        val currentStableId =
+          connectedEndpoint?.stableId
+            ?: connectingEndpointStableId
+            ?: prefs.gatewayRegistry.activeStableId.value
+        if (currentStableId != null && currentStableId != endpoint.stableId) {
+          disconnectAndJoin()
+        } else {
+          drainIdleGatewaySessionTails()
         }
-      if (!started) return@withLock false
-      chat.restoreSelectedGatewayOfflineState()
-      intent()
+        // Focus can promote a secondary operator to the primary session for the same gateway.
+        // Its accepted credentials must finish before either primary role reads them.
+        disconnectSecondaryGatewayConnection(endpoint.stableId)?.disconnectAndJoin()
+        synchronized(gatewayLifecycleIntentLock) {
+          if (!intent()) return@withLock false
+          if (prefs.gatewayRegistry.entries.value
+              .any { it.stableId == endpoint.stableId }
+          ) {
+            prefs.gatewayRegistry.setActive(endpoint.stableId)
+          }
+          beginConnect(endpoint, resolveGatewayConnectAuth(endpoint, explicitAuth), intent)
+        }
+        chat.restoreSelectedGatewayOfflineState()
+        intent()
+      } finally {
+        // A superseded promotion may already have retired an enabled secondary.
+        requestBackgroundGatewayReconciliation()
+      }
     }
 
   private fun autoConnectIfNeeded() {
