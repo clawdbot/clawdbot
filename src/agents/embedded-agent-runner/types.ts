@@ -1,3 +1,4 @@
+import type { AgentRunTimeoutPhase } from "@openclaw/normalization-core/agent-run-terminal-outcome";
 /**
  * Shared metadata and result types for embedded-agent runner surfaces.
  */
@@ -20,7 +21,6 @@ import type { McpConnectAction } from "../mcp-connect-action.js";
 import type { McpAppChannelView } from "../mcp-ui-resource.js";
 import type { FallbackAttempt } from "../model-fallback.types.js";
 import type { ModelRef } from "../model-ref-shared.js";
-import type { AgentRunTimeoutPhase } from "../run-timeout-attribution.js";
 import type { AgentRuntimeCredentialSource } from "../runtime-plan/types.js";
 import type { NormalizedUsage } from "../usage.js";
 

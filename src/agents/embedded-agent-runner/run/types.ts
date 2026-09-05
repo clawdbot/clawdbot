@@ -1,3 +1,4 @@
+import type { AgentRunTimeoutPhase } from "@openclaw/normalization-core/agent-run-terminal-outcome";
 /**
  * Shared result and attempt types for embedded-agent run internals.
  */
@@ -26,7 +27,6 @@ import type { McpConnectAction } from "../../mcp-connect-action.js";
 import type { McpAppChannelView } from "../../mcp-ui-resource.js";
 import type { ModelRef } from "../../model-selection.js";
 import type { PreparedModelRuntimeSnapshot } from "../../prepared-model-runtime.js";
-import type { AgentRunTimeoutPhase } from "../../run-timeout-attribution.js";
 import type { AgentRuntimeModelAttempt, AgentRuntimePlan } from "../../runtime-plan/types.js";
 import type { AgentMessage } from "../../runtime/index.js";
 import type { SandboxContext } from "../../sandbox/types.js";
