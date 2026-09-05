@@ -78,6 +78,7 @@ type WorkboardLifecycleMatchHandler = (input: {
 }) => Promise<void>;
 
 type WorkboardLifecycleService = OpenClawPluginService & {
+  stop: () => void;
   onGatewayStart: () => void;
   onGatewayStop: () => void;
 };
