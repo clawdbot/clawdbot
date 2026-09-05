@@ -1,8 +1,10 @@
 // Covers attempt-execution helper behavior around retries, Claude CLI
 // transcripts, and ACP visible text accumulation.
+import { appendFileSync } from "node:fs";
 import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
+import { setTimeout as nodeSetTimeout } from "node:timers";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { upsertSessionEntryCore } from "../../config/sessions/session-accessor.js";
 import { waitForSessionTranscriptIndexReconcile } from "../../config/sessions/session-transcript-reconcile.js";
@@ -570,27 +572,23 @@ describe("claudeCliSessionTranscriptHasContent", () => {
     );
 
     let graceFires = 0;
-    const setTimeoutSpy = vi.spyOn(globalThis, "setTimeout").mockImplementation(((
-      handler: (...args: unknown[]) => void,
-      delay?: number,
-    ) => {
-      if (delay === GRACE_MS) {
-        graceFires += 1;
-        const flush = fs.appendFile(
-          file,
-          `${JSON.stringify({
-            type: "assistant",
-            message: { role: "assistant", content: [{ type: "text", text: "ack" }] },
-          })}\n`,
-          "utf-8",
-        );
-        void flush.then(() => {
-          handler();
-        });
-        return 0 as unknown as ReturnType<typeof setTimeout>;
-      }
-      return 0 as unknown as ReturnType<typeof setTimeout>;
-    }) as typeof setTimeout);
+    const setTimeoutSpy = vi
+      .spyOn(globalThis, "setTimeout")
+      .mockImplementation((handler, delay, ...args) => {
+        if (delay === GRACE_MS) {
+          graceFires += 1;
+          // Publish after the first scan; keep real handles for background worker timers.
+          appendFileSync(
+            file,
+            `${JSON.stringify({
+              type: "assistant",
+              message: { role: "assistant", content: [{ type: "text", text: "ack" }] },
+            })}\n`,
+            "utf-8",
+          );
+        }
+        return nodeSetTimeout(handler, delay, ...args);
+      });
 
     try {
       expect(
@@ -609,17 +607,6 @@ describe("claudeCliSessionTranscriptHasContent", () => {
   it("returns false and emits a structured v4 warn when the JSONL never appears", async () => {
     const workspaceDir = await makeWorkspace();
     const warnSpy = vi.spyOn(cliBackendLog, "warn").mockImplementation(() => undefined);
-    const setTimeoutSpy = vi.spyOn(globalThis, "setTimeout").mockImplementation(((
-      handler: (...args: unknown[]) => void,
-      delay?: number,
-    ) => {
-      if (delay === GRACE_MS) {
-        handler();
-        return 0 as unknown as ReturnType<typeof setTimeout>;
-      }
-      return 0 as unknown as ReturnType<typeof setTimeout>;
-    }) as typeof setTimeout);
-
     try {
       expect(
         await claudeCliSessionTranscriptHasContent({
@@ -644,7 +631,6 @@ describe("claudeCliSessionTranscriptHasContent", () => {
         })}`,
       );
     } finally {
-      setTimeoutSpy.mockRestore();
       warnSpy.mockRestore();
     }
   });
@@ -662,17 +648,6 @@ describe("claudeCliSessionTranscriptHasContent", () => {
     );
 
     const warnSpy = vi.spyOn(cliBackendLog, "warn").mockImplementation(() => undefined);
-    const setTimeoutSpy = vi.spyOn(globalThis, "setTimeout").mockImplementation(((
-      handler: (...args: unknown[]) => void,
-      delay?: number,
-    ) => {
-      if (delay === GRACE_MS) {
-        handler();
-        return 0 as unknown as ReturnType<typeof setTimeout>;
-      }
-      return 0 as unknown as ReturnType<typeof setTimeout>;
-    }) as typeof setTimeout);
-
     try {
       expect(
         await claudeCliSessionTranscriptHasContent({
@@ -687,7 +662,6 @@ describe("claudeCliSessionTranscriptHasContent", () => {
       expect(v4Warnings).toHaveLength(1);
       expect(v4Warnings[0]?.[0]).toContain("fileExists=true");
     } finally {
-      setTimeoutSpy.mockRestore();
       warnSpy.mockRestore();
     }
   });
