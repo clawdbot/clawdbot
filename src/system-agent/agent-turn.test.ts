@@ -854,6 +854,28 @@ describe("runSystemAgentTurn", () => {
     expect(requireValue(call.systemAgentTool, "missing embedded OpenClaw tool").proposalRef).toBe(
       session.proposalRef,
     );
+
+    await runSystemAgentTurnWithDeps(
+      {
+        input: "hello again",
+        overview: { defaultModel: "openai/gpt-5.4" } as never,
+        surface: "gateway",
+        approvalArmed: false,
+        session,
+      },
+      {
+        ...deps,
+        runCliAgent: runCliAgent as never,
+        runEmbeddedAgent: runEmbeddedAgent as never,
+        readConfigFileSnapshot: vi.fn(async () => configSnapshot(config)) as never,
+      },
+    );
+
+    // Undelegated turns fall back to the verified route's agent for memory, never
+    // to the synthetic system-agent session identity that owns execution.
+    expect(runEmbeddedAgent).toHaveBeenLastCalledWith(
+      expect.objectContaining({ agentId: "openclaw", memoryPromptAgentId: "ops" }),
+    );
   });
 
   it("threads operator-approval-only into the real ring-zero tool and stages the delegated proposal", async () => {

@@ -1,5 +1,7 @@
 // Memory Wiki composed proof: hosted prompt-owner selection, the real compiled
-// SQLite digest reader, and production memory prompt assembly in one path.
+// SQLite digest reader, production memory prompt assembly, and the Codex
+// app-server stdio transport in one path. Transport assertions read the frames
+// the client actually serialized, not the pre-encode request arguments.
 import fs from "node:fs/promises";
 import path from "node:path";
 import {
@@ -18,7 +20,19 @@ import {
   setActivePluginRegistry,
 } from "openclaw/plugin-sdk/plugin-test-runtime";
 import { readStringValue } from "openclaw/plugin-sdk/string-coerce-runtime";
-import { afterEach, beforeEach, describe, expect, it } from "vitest";
+import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
+import { createSystemAgentSession } from "../../../src/system-agent/agent-turn.js";
+import {
+  runSystemAgentTurnWithDeps,
+  type SystemAgentTurnDeps,
+} from "../../../src/system-agent/agent-turn.test-support.js";
+import { ChatTurnRouter } from "../../../src/system-agent/chat-turn-router.js";
+import { ChatWizardHost } from "../../../src/system-agent/chat-wizard-host.js";
+import {
+  createSystemAgentVerifiedInferenceTestFixture,
+  installSystemAgentPluginMetadataTestSnapshot,
+  type SystemAgentPluginMetadataTestSnapshot,
+} from "../../../src/system-agent/system-agent.test-helpers.js";
 import {
   createParams as createCodexParams,
   createStartedThreadHarness,
@@ -44,10 +58,14 @@ import { createMemoryWikiTestHarness } from "./test-helpers.js";
 import { activateExistingMemoryWikiVault, initializeMemoryWikiVault } from "./vault.js";
 
 const REQUESTER_AGENT_ID = "hq";
+/** Distinct owner the turn runner selects when no requester is delegated. */
+const FALLBACK_AGENT_ID = "ops";
 const SESSION_AGENT_ID = "openclaw";
 const SESSION_KEY = `agent:${SESSION_AGENT_ID}:main`;
 const REQUESTER_CLAIM = "HQ closes the quarterly ledger on the fifth business day.";
+const FALLBACK_CLAIM = "Ops keeps the escalation pager on a two-week rotation.";
 const SESSION_CLAIM = "OpenClaw rotates gateway tokens every ninety days.";
+const EVERY_CLAIM = [REQUESTER_CLAIM, FALLBACK_CLAIM, SESSION_CLAIM];
 const TEST_HOME = "/Users/tester";
 
 const { createTempDir } = createMemoryWikiTestHarness();
@@ -55,17 +73,32 @@ const { createTempDir } = createMemoryWikiTestHarness();
 setupRunAttemptTestHooks();
 
 const knownAgentsConfig = {
-  agents: { list: [{ id: SESSION_AGENT_ID, default: true }, { id: REQUESTER_AGENT_ID }] },
+  agents: {
+    defaults: {
+      model: { primary: "openai/gpt-5.4" },
+      models: { "openai/gpt-5.4": { agentRuntime: { id: "codex" } } },
+    },
+    list: [
+      { id: FALLBACK_AGENT_ID, default: true },
+      { id: REQUESTER_AGENT_ID },
+      { id: SESSION_AGENT_ID },
+    ],
+  },
 } as OpenClawConfig;
 // Ownership reassignment: the requester is no longer a configured memory owner.
 const reassignedAgentsConfig = {
-  agents: { list: [{ id: SESSION_AGENT_ID, default: true }] },
+  ...knownAgentsConfig,
+  agents: {
+    ...knownAgentsConfig.agents,
+    list: [{ id: FALLBACK_AGENT_ID, default: true }, { id: SESSION_AGENT_ID }],
+  },
 } as OpenClawConfig;
 
 let blobStoreEnv: NodeJS.ProcessEnv = {};
 let baseConfig: ResolvedMemoryWikiConfig;
 let requesterConfig: ResolvedMemoryWikiConfig;
 let appConfig: OpenClawConfig = knownAgentsConfig;
+let pluginMetadataSnapshot: SystemAgentPluginMetadataTestSnapshot;
 
 /** Mirrors the plugin's compiled-cache store wiring over the SQLite-backed Blob store. */
 function configureSqliteCompiledCacheStore(): void {
@@ -145,8 +178,146 @@ async function assembleMemoryPrompt(agentId?: string): Promise<string> {
   return assembled?.systemPromptAddition ?? "";
 }
 
+type WireFrame = { method?: string; params?: Record<string, unknown> };
+
+/** Decodes the newline-framed JSON-RPC bytes the client wrote to the app-server. */
+function readWireFrames(writes: string[]): WireFrame[] {
+  return writes
+    .flatMap((chunk) => chunk.split("\n"))
+    .filter((line) => line.trim().length > 0)
+    .map((line) => JSON.parse(line) as WireFrame);
+}
+
+/**
+ * Real-transport harness: `persistedThreads` selects the synthetic native
+ * app-server, so the production client, its guards, and stdio JSON-RPC framing
+ * all stay live and `writes` holds the bytes Codex would actually receive.
+ */
+function createWireHarness() {
+  const harness = createStartedThreadHarness(async () => undefined, { persistedThreads: [] });
+  if (!("writes" in harness)) {
+    throw new Error("expected the wire-backed Codex app-server harness");
+  }
+  return harness;
+}
+
+/** Runs the attempt against the real Codex stdio transport, not a client mock. */
+function startCodexAttempt(
+  harness: ReturnType<typeof createWireHarness>,
+  options: {
+    name: string;
+    memoryPromptAgentId: string;
+    runParams?: Parameters<NonNullable<SystemAgentTurnDeps["runEmbeddedAgent"]>>[0];
+  },
+) {
+  const identity = options.runParams
+    ? {
+        prompt: options.runParams.prompt,
+        provider: options.runParams.provider,
+        runId: options.runParams.runId,
+        sessionId: options.runParams.sessionId,
+        sessionKey: options.runParams.sessionKey,
+      }
+    : { sessionKey: SESSION_KEY };
+  const params = createCodexParams(
+    path.join(codexTempDir, `${options.name}.jsonl`),
+    path.join(codexTempDir, `${options.name}-workspace`),
+    identity,
+  );
+  params.agentId = options.runParams?.agentId ?? SESSION_AGENT_ID;
+  params.memoryPromptAgentId = options.memoryPromptAgentId;
+  params.contextEngine = contextEngine;
+  return runCodexAppServerAttempt(params);
+}
+
+/**
+ * Runs the production hosted owner selector into the Codex transport and returns
+ * the serialized developer instructions off the wire.
+ */
+async function submitHostedCodexAttempt(options: {
+  name: string;
+  requesterAgentId?: string;
+}): Promise<string> {
+  const harness = createWireHarness();
+  const fixture = await createSystemAgentVerifiedInferenceTestFixture(knownAgentsConfig);
+  let developerInstructions = "";
+  const runEmbeddedAgent: NonNullable<SystemAgentTurnDeps["runEmbeddedAgent"]> = async (
+    runParams,
+  ) => {
+    const memoryPromptAgentId = runParams.memoryPromptAgentId;
+    if (!memoryPromptAgentId) {
+      throw new Error("hosted turn omitted its memory owner");
+    }
+    const run = startCodexAttempt(harness, {
+      name: options.name,
+      memoryPromptAgentId,
+      runParams,
+    });
+    await harness.waitForMethod("turn/start");
+    const threadStart = readWireFrames(harness.writes).find(
+      (frame) => frame.method === "thread/start",
+    );
+    developerInstructions = readStringValue(threadStart?.params?.developerInstructions) ?? "";
+    await harness.completeTurn({ threadId: "thread-1", turnId: "turn-1" });
+    await run;
+    return {
+      payloads: [{ text: "ready" }],
+      meta: { durationMs: 1, finalAssistantVisibleText: "ready" },
+    };
+  };
+
+  const turnDeps: SystemAgentTurnDeps = {
+    ...fixture.deps,
+    runEmbeddedAgent,
+    readConfigFileSnapshot: vi.fn(async () => ({
+      exists: true,
+      valid: true,
+      path: "/tmp/openclaw.json",
+      hash: "memory-owner-proof",
+      config: knownAgentsConfig,
+      runtimeConfig: knownAgentsConfig,
+      sourceConfig: knownAgentsConfig,
+      issues: [],
+    })) as never,
+  };
+  const router = new ChatTurnRouter(
+    {
+      surface: "gateway",
+      operatorApprovalOnly: options.requesterAgentId !== undefined,
+      ...(options.requesterAgentId ? { requesterAgentId: options.requesterAgentId } : {}),
+      runAgentTurn: async (params) => await runSystemAgentTurnWithDeps(params, turnDeps),
+    },
+    {},
+    createSystemAgentSession(fixture.binding),
+    new ChatWizardHost({ beforePersistentApply: async () => {} }),
+    {
+      requireVerifiedInference: async () => fixture.binding.execution,
+      requirePersistentApplyInference: async () => fixture.binding.execution,
+      rebindVerifiedInference: () => {},
+      getVerifiedInference: () => fixture.binding,
+      loadOverview: async () => ({ defaultModel: "openai/gpt-5.4" }) as never,
+      getHistory: () => [],
+      verifyConfigAfterWrite: async () => null,
+    },
+  );
+
+  await router.resolveTurn("inspect scoped memory");
+
+  return developerInstructions;
+}
+
+beforeAll(() => {
+  pluginMetadataSnapshot = installSystemAgentPluginMetadataTestSnapshot(knownAgentsConfig);
+});
+
+afterAll(() => {
+  pluginMetadataSnapshot.restore();
+});
+
 describe("Memory Wiki hosted prompt-owner composition", () => {
   beforeEach(async () => {
+    vi.stubEnv("OPENCLAW_STATE_DIR", await createTempDir("memory-wiki-system-agent-state-"));
+    pluginMetadataSnapshot.rebindForCurrentEnv();
     clearMemoryPluginState();
     resetPluginBlobStoreForTests();
     configureMemoryWikiCompiledCacheStore(undefined);
@@ -165,6 +336,7 @@ describe("Memory Wiki hosted prompt-owner composition", () => {
       { homedir: TEST_HOME },
     );
     requesterConfig = await compileAgentVault(REQUESTER_AGENT_ID, REQUESTER_CLAIM);
+    await compileAgentVault(FALLBACK_AGENT_ID, FALLBACK_CLAIM);
     await compileAgentVault(SESSION_AGENT_ID, SESSION_CLAIM);
 
     const registry = createMockPluginRegistry([]);
@@ -187,6 +359,56 @@ describe("Memory Wiki hosted prompt-owner composition", () => {
     blobStoreEnv = {};
   });
 
+  it("submits only the requester's compiled digest across hosted delegation and Codex transport", async () => {
+    const developerInstructions = await submitHostedCodexAttempt({
+      name: "memory-wiki-requester",
+      requesterAgentId: REQUESTER_AGENT_ID,
+    });
+
+    expect(developerInstructions).toContain(REQUESTER_CLAIM);
+    expect(developerInstructions).not.toContain(FALLBACK_CLAIM);
+    expect(developerInstructions).not.toContain(SESSION_CLAIM);
+  });
+
+  it("submits the verified fallback owner's digest when no requester is delegated", async () => {
+    const developerInstructions = await submitHostedCodexAttempt({
+      name: "memory-wiki-fallback",
+    });
+
+    expect(developerInstructions).toContain(FALLBACK_CLAIM);
+    expect(developerInstructions).not.toContain(REQUESTER_CLAIM);
+    expect(developerInstructions).not.toContain(SESSION_CLAIM);
+  });
+
+  it("withholds every digest at final I/O after the requester's publication is invalidated", async () => {
+    await invalidateMemoryWikiCompiledCache(requesterConfig);
+
+    const developerInstructions = await submitHostedCodexAttempt({
+      name: "memory-wiki-invalidated",
+      requesterAgentId: REQUESTER_AGENT_ID,
+    });
+
+    for (const claim of EVERY_CLAIM) {
+      expect(developerInstructions).not.toContain(claim);
+    }
+  });
+
+  it("withholds every digest at final I/O after the requester loses ownership", async () => {
+    appConfig = reassignedAgentsConfig;
+
+    const developerInstructions = await submitHostedCodexAttempt({
+      name: "memory-wiki-reassigned",
+      requesterAgentId: REQUESTER_AGENT_ID,
+    });
+
+    // Codex catches assemble failures and submits its baseline prompt, so the
+    // owner rejection must withhold every digest instead of degrading into a
+    // substitute owner's memory.
+    for (const claim of EVERY_CLAIM) {
+      expect(developerInstructions).not.toContain(claim);
+    }
+  });
+
   it("assembles the requester's compiled digest and excludes the session fallback owner", async () => {
     const requesterPrompt = await assembleMemoryPrompt(REQUESTER_AGENT_ID);
 
@@ -194,60 +416,26 @@ describe("Memory Wiki hosted prompt-owner composition", () => {
     expect(requesterPrompt).not.toContain(SESSION_CLAIM);
   });
 
-  it("submits the requester's real compiled digest to the Codex app-server boundary", async () => {
-    const harness = createStartedThreadHarness();
-    const params = createCodexParams(
-      path.join(codexTempDir, "memory-wiki-owner.jsonl"),
-      path.join(codexTempDir, "memory-wiki-owner-workspace"),
-      { sessionKey: SESSION_KEY },
-    );
-    params.agentId = SESSION_AGENT_ID;
-    params.memoryPromptAgentId = REQUESTER_AGENT_ID;
-    params.contextEngine = contextEngine;
-
-    const run = runCodexAppServerAttempt(params);
-    await harness.waitForMethod("turn/start");
-    const threadStart = harness.requests.find((request) => request.method === "thread/start");
-    const developerInstructions = readStringValue(
-      (threadStart?.params as { developerInstructions?: unknown } | undefined)
-        ?.developerInstructions,
-    );
-
-    expect(developerInstructions).toContain(REQUESTER_CLAIM);
-    expect(developerInstructions).not.toContain(SESSION_CLAIM);
-
-    await harness.completeTurn({ threadId: "thread-1", turnId: "turn-1" });
-    await run;
-  });
-
-  it("falls back to the session owner's compiled digest when no requester is declared", async () => {
+  it("falls back to the session owner's compiled digest when no owner is declared", async () => {
     const fallbackPrompt = await assembleMemoryPrompt();
 
     expect(fallbackPrompt).toContain(SESSION_CLAIM);
     expect(fallbackPrompt).not.toContain(REQUESTER_CLAIM);
   });
 
-  it("withholds every digest after the requester's compiled cache is invalidated", async () => {
+  it("keeps invalidation and reassignment scoped to the losing owner", async () => {
     await invalidateMemoryWikiCompiledCache(requesterConfig);
 
-    const invalidatedPrompt = await assembleMemoryPrompt(REQUESTER_AGENT_ID);
-
-    expect(invalidatedPrompt).not.toContain(REQUESTER_CLAIM);
-    expect(invalidatedPrompt).not.toContain(SESSION_CLAIM);
     // The unrelated owner stays readable, so the withholding is ownership-scoped.
     await expect(assembleMemoryPrompt(SESSION_AGENT_ID)).resolves.toContain(SESSION_CLAIM);
     // Re-activating the retired owner must not resurrect the deleted publication.
     await activateExistingMemoryWikiVault(requesterConfig);
     await expect(assembleMemoryPrompt(REQUESTER_AGENT_ID)).resolves.not.toContain(REQUESTER_CLAIM);
-  });
 
-  it("fails assembly instead of substituting an owner when the requester is reassigned", async () => {
     appConfig = reassignedAgentsConfig;
-
     await expect(assembleMemoryPrompt(REQUESTER_AGENT_ID)).rejects.toThrow(
       `Unknown memory-wiki agentId: ${REQUESTER_AGENT_ID}.`,
     );
-    // The still-owned vault stays readable, so rejection is scoped to the lost owner.
     await expect(assembleMemoryPrompt(SESSION_AGENT_ID)).resolves.toContain(SESSION_CLAIM);
   });
 });
