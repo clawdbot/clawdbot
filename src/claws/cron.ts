@@ -98,10 +98,10 @@ function persistPendingRef(
     .where("agent_id", "=", plan.agent.finalId)
     .where("manifest_id", "=", job.id)
     .compile();
-  // SAFETY: Compiled predicates bind strings; the canonical schema supplies the row shape.
   const existing =
     database.db /* sqlite-allow-raw: execute compiled Kysely with the existing native read error boundary. */
       .prepare(query.sql)
+      // SAFETY: Compiled predicates bind strings; the canonical schema supplies the row shape.
       .get(...(query.parameters as SQLInputValue[])) as CronRefRow | undefined;
   if (existing) {
     const ref = rowToRef(existing);
@@ -420,10 +420,10 @@ export function readClawCronRefs(
     .where("agent_id", "=", agentId)
     .orderBy("manifest_id")
     .compile();
-  // SAFETY: The compiled predicate binds a string; the canonical schema supplies the row shape.
   const rows =
     database.db /* sqlite-allow-raw: execute compiled Kysely with the existing native read error boundary. */
       .prepare(query.sql)
+      // SAFETY: The compiled predicate binds a string; the canonical schema supplies the row shape.
       .all(...(query.parameters as SQLInputValue[])) as CronRefRow[];
   return rows.map(rowToRef);
 }
