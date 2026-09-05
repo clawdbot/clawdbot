@@ -134,7 +134,9 @@ export async function finalizeCodexAttempt(
     clearTimeout(abortGraceTimer);
     deadlines.dispose();
   };
-  const settlement = drainNotificationQueue().then(closeProjection);
+  const settlement = drainNotificationQueue()
+    .then(() => activeProjector.presentation.drain())
+    .then(closeProjection);
   let projectionDrained = false;
   try {
     try {

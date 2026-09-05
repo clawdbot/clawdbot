@@ -22,6 +22,7 @@ import {
 import { CodexGeneratedMediaProjection } from "./event-projector-media.js";
 import { CodexNativeToolLifecycleProjector } from "./event-projector-native-tool-lifecycle.js";
 import type { CodexAppServerEventProjectorOptions } from "./event-projector-options.js";
+import { CodexPresentationCallbacks } from "./event-projector-presentation.js";
 import { CodexReasoningProjection } from "./event-projector-reasoning.js";
 import {
   buildCodexAttemptResult,
@@ -67,6 +68,7 @@ export class CodexAppServerEventProjector {
   private readonly toolTranscriptProjection: CodexToolTranscriptProjection;
   private completedTurn: CodexTurn | undefined;
   private projectionClosed = false;
+  readonly presentation: CodexPresentationCallbacks;
   /** Structured overloads may continue once the exact settled transcript is captured. */
   settledTurnFailureFinalizationAllowed = false;
   private readonly terminalFailure = new CodexTerminalFailureProjection();
@@ -130,15 +132,19 @@ export class CodexAppServerEventProjector {
       this.toolTranscriptProjection,
       options.onNativeToolResultRecorded,
     );
-    this.assistantProjection = new CodexAssistantProjection(
+    this.presentation = new CodexPresentationCallbacks(
       params,
+      () => this.projectionClosed || options.runAbortSignal?.aborted,
+    );
+    this.assistantProjection = new CodexAssistantProjection(
+      this.presentation.params,
       (event) => this.emitAgentEvent(event),
       (text) => this.toolProgressProjection.matchesEcho(text),
       this.transcriptCheckpoint.nextTimestamp,
       this.transcriptCheckpoint.enqueueCommentary,
     );
     this.reasoningProjection = new CodexReasoningProjection(
-      params,
+      this.presentation.params,
       (event) => this.emitAgentEvent(event),
       options.onNativePlanUpdate,
     );

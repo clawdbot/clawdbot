@@ -1079,6 +1079,7 @@ describe("runCodexAppServerAttempt native lifecycle", () => {
         finalizationHookNotification("hook/completed", "completed"),
       );
       void harness.notify(makeAgentMessageDelta({ itemId: "msg-final-1", delta: "Done." }));
+      void harness.notify(completedAssistant("msg-final-1", "Done. The complete answer."));
       // Receipt sees the unsettled hook; its completion is still behind the first projection.
       void harness.completeTurn({ threadId: "thread-1", turnId: "turn-1" });
       await vi.advanceTimersByTimeAsync(TURN_TERMINAL_SETTLEMENT_TIMEOUT_MS / 2);
@@ -1094,6 +1095,7 @@ describe("runCodexAppServerAttempt native lifecycle", () => {
       const result = await run;
       expect(readAttemptTerminal(result)).toMatchObject({ aborted: true, timedOut: true });
       expect(result.codexAppServerFailure?.kind).toBe("turn_settlement_timeout");
+      expect(result.assistantTexts).toEqual(["Done. The complete answer."]);
       expect(resolveActiveEmbeddedRunSessionId(params.sessionKey!)).toBeUndefined();
     } finally {
       projection.resolve();
