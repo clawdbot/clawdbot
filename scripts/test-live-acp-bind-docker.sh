@@ -123,12 +123,22 @@ case "$agent" in
       unset ANTHROPIC_AUTH_TOKEN
       unset ANTHROPIC_OAUTH_TOKEN
     fi
+    # Resolve through ACPX so pnpm cannot select an unrelated root or hoisted SDK.
+    claude_code_version="$(
+      node -e 'const path = require("node:path"); const { createRequire } = require("node:module"); const acpxRequire = createRequire(path.resolve("extensions/acpx/package.json")); const adapterPackagePath = acpxRequire.resolve("@agentclientprotocol/claude-agent-acp/package.json"); const adapterRequire = createRequire(adapterPackagePath); const sdkEntry = adapterRequire.resolve("@anthropic-ai/claude-agent-sdk"); const packagePath = path.join(path.dirname(sdkEntry), "package.json"); process.stdout.write(require(packagePath).claudeCodeVersion);'
+    )"
+    claude_package_json="$NPM_CONFIG_PREFIX/lib/node_modules/@anthropic-ai/claude-code/package.json"
     real_claude="$NPM_CONFIG_PREFIX/bin/claude-real"
-    if [ ! -x "$real_claude" ]; then
-      # Claude owns its executable; the retired Agent SDK no longer pins its version.
-      openclaw_live_prepare_cli_backend \
-        "$NPM_CONFIG_PREFIX/bin/claude" "@anthropic-ai/claude-code" \
-        "$OPENCLAW_LIVE_ACP_BIND_SETUP_TIMEOUT_SECONDS"
+    installed_claude_code_version=""
+    if [ -f "$claude_package_json" ]; then
+      installed_claude_code_version="$(
+        node -e 'process.stdout.write(require(process.argv[1]).version);' \
+          "$claude_package_json" 2>/dev/null || true
+      )"
+    fi
+    if [ "$installed_claude_code_version" != "$claude_code_version" ]; then
+      rm -f "$NPM_CONFIG_PREFIX/bin/claude" "$real_claude"
+      run_setup_command npm install -g "@anthropic-ai/claude-code@$claude_code_version"
     fi
     if [ ! -x "$real_claude" ] && [ -x "$NPM_CONFIG_PREFIX/bin/claude" ]; then
       mv "$NPM_CONFIG_PREFIX/bin/claude" "$real_claude"
@@ -153,7 +163,7 @@ WRAP
       chmod +x "$NPM_CONFIG_PREFIX/bin/claude"
     fi
     export CLAUDE_CODE_EXECUTABLE="$NPM_CONFIG_PREFIX/bin/claude"
-    echo "Using installed Claude Code CLI"
+    echo "Using Claude Code $claude_code_version declared by the ACPX-owned Claude Agent SDK"
     claude --version
     claude auth status || true
     ;;
