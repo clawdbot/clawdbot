@@ -16,12 +16,8 @@ import {
 import { hasNonRunVitestSubcommand } from "./lib/vitest-cli-mode.mts";
 import { parseVitestExecutionArgs } from "./lib/vitest-cli.mts";
 import { resolveVitestHomeSelection } from "./lib/vitest-home-selection.mts";
-import {
-  isCiLikeEnv,
-  resolveLocalFullSuiteProfile,
-  resolveLocalVitestEnv,
-} from "./lib/vitest-local-scheduling.mts";
-import { resolveVitestNodeArgs } from "./lib/vitest-process-env.mts";
+import { isCiLikeEnv, resolveLocalFullSuiteProfile } from "./lib/vitest-local-scheduling.mts";
+import { resolveVitestNodeArgs, resolveVitestProcessEnv } from "./lib/vitest-process-env.mts";
 import type { exitVitestBySignal } from "./lib/vitest-process.mts";
 import { createVitestReportOwner, type VitestReportOwner } from "./lib/vitest-report-owner.mts";
 import {
@@ -274,14 +270,17 @@ async function runVitestSpecs(
   return { exitCode, failures, timings, stopScheduling };
 }
 
-export async function runTestProjects(exitBySignal: typeof exitVitestBySignal) {
+export async function runTestProjects(
+  exitBySignal: typeof exitVitestBySignal,
+  args: string[] = process.argv.slice(2),
+  env: NodeJS.ProcessEnv = process.env,
+) {
   const suiteStartedAt = performance.now();
-  const args = process.argv.slice(2);
   if (args.length === 1 && (args[0] === "--help" || args[0] === "-h")) {
     printHelp();
     return;
   }
-  const baseEnv = resolveLocalVitestEnv(process.env);
+  const baseEnv = resolveVitestProcessEnv(env);
   const { targetArgs, forwardedArgs } = parseTestProjectsArgs(args, process.cwd());
   const unmatchedExplicitTargets = findUnmatchedExplicitTestTargets(args, process.cwd());
   if (unmatchedExplicitTargets.length > 0) {
@@ -310,7 +309,7 @@ export async function runTestProjects(exitBySignal: typeof exitVitestBySignal) {
           pnpmArgs: [
             "exec",
             "node",
-            ...resolveVitestNodeArgs(process.env),
+            ...resolveVitestNodeArgs(baseEnv),
             resolveVitestCliEntry(),
             ...(plan.watchMode ? [] : ["run"]),
             "--config",
@@ -437,7 +436,7 @@ export async function runTestProjects(exitBySignal: typeof exitVitestBySignal) {
       ({ spec, execution }) => !spec.watchMode && !execution?.options.watch,
     );
     if (compiled.length) {
-      workers = createVitestWorkerRun();
+      workers = createVitestWorkerRun(baseEnv);
       for (const { spec } of compiled) {
         spec.workerRun = workers;
       }

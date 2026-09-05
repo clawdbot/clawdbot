@@ -22,12 +22,12 @@ import {
   resolveUpdateDoctorExecutionPolicy,
   type UpdateRunResult,
 } from "../../infra/update-runner.js";
+import { runCommandWithTimeout } from "../../process/exec.js";
 import { defaultRuntime } from "../../runtime.js";
 import { resolveCliName } from "../cli-name.js";
 import { createUpdateProgress } from "./progress.js";
 import {
   DEFAULT_PACKAGE_NAME,
-  createGlobalCommandRunner,
   readPackageName,
   readPackageVersion,
   resolveGlobalManager,
@@ -62,7 +62,6 @@ export async function runPackageInstallUpdate(
   params: PackageInstallUpdateParams,
 ): Promise<UpdateRunResult> {
   const installEnv = params.installEnv ?? (await createGlobalInstallEnv());
-  const runCommand = createGlobalCommandRunner();
   let installTarget = params.installTarget;
   if (!installTarget) {
     const manager = await resolveGlobalManager({
@@ -72,7 +71,7 @@ export async function runPackageInstallUpdate(
     });
     installTarget = await resolveGlobalInstallTarget({
       manager,
-      runCommand,
+      runCommand: runCommandWithTimeout,
       timeoutMs: params.timeoutMs,
       pkgRoot: params.root,
       honorPackageRoot: params.honorPackageRoot === true,
@@ -109,7 +108,7 @@ export async function runPackageInstallUpdate(
     installSpec,
     packageName,
     packageRoot: pkgRoot,
-    runCommand,
+    runCommand: runCommandWithTimeout,
     timeoutMs: params.timeoutMs,
     ...(installEnv === undefined ? {} : { env: installEnv }),
     runStep: (stepParams) =>

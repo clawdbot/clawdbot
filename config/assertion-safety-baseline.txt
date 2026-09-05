@@ -1379,7 +1379,7 @@ extensions/workboard/doctor-contract-api.ts	4
 extensions/workboard/src/cli.ts	2
 extensions/workboard/src/command.ts	1
 extensions/workboard/src/gateway-helpers.ts	1
-extensions/workboard/src/sqlite-store.ts	38
+extensions/workboard/src/sqlite-store.ts	36
 extensions/workboard/src/store-automation.ts	1
 extensions/workboard/src/store-card-helpers.ts	1
 extensions/workboard/src/store-core.ts	5
@@ -1788,7 +1788,6 @@ src/agents/embedded-agent-runner/run/attempt.model-diagnostic-events.ts	6
 src/agents/embedded-agent-runner/run/attempt.model-diagnostic-lifecycle.ts	3
 src/agents/embedded-agent-runner/run/attempt.model-diagnostic-observation.ts	1
 src/agents/embedded-agent-runner/run/attempt.tool-call-argument-repair.ts	11
-src/agents/embedded-agent-runner/run/auth-controller.ts	1
 src/agents/embedded-agent-runner/run/auth-profile-success.ts	1
 src/agents/embedded-agent-runner/run/context-recovery-state.ts	2
 src/agents/embedded-agent-runner/run/helpers.ts	3
@@ -3053,7 +3052,7 @@ src/infra/install-source-utils.ts	2
 src/infra/json-file.ts	1
 src/infra/json-utf8-bytes.ts	4
 src/infra/kysely-sync-cache-state.ts	1
-src/infra/kysely-sync.ts	9
+src/infra/kysely-sync.ts	7
 src/infra/net/fetch-guard.ts	3
 src/infra/net/form-data.ts	2
 src/infra/net/node-proxy-agent.ts	4
@@ -3615,7 +3614,7 @@ src/snapshot/local-repository.ts	8
 src/snapshot/manifest.ts	1
 src/state/agent-deletion-journal.ts	15
 src/state/backup-run-records.ts	1
-src/state/config-machine-state.ts	2
+src/state/config-machine-state.ts	1
 src/state/local-onboarding-state.ts	1
 src/state/openclaw-agent-board-schema.ts	1
 src/state/openclaw-agent-db-migration-required.ts	1

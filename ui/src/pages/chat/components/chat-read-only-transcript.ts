@@ -40,7 +40,6 @@ export function renderReadOnlyTranscript(params: {
       basePath: chat.basePath,
       fullMessageAgentId: chat.fullMessageAgentId,
       loadFullAssistantMessage: chat.loadFullAssistantMessage,
-      localMediaPreviewRoots: chat.localMediaPreviewRoots,
       mediaPolicyEpoch: chat.mediaPolicyEpoch,
       assistantAttachmentAuthToken: chat.assistantAttachmentAuthToken,
       resolveArtifactDownload: chat.resolveArtifactDownload,

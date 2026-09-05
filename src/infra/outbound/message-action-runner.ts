@@ -24,7 +24,7 @@ import {
 import { shouldUseInternalSourceReplySink } from "./internal-source-reply.js";
 import { validateExplicitMessageAccountSelection } from "./message-account-selection.js";
 import {
-  resolveMessageSendOutcome,
+  resolveMessageActionOutcome,
   type MessageActionInput,
   type MessageActionResult,
   type ResolvedActionContext,
@@ -160,10 +160,7 @@ async function handleBroadcastAction(
         results.push({
           channel: targetChannel,
           to: resolved.to,
-          ...resolveMessageSendOutcome(
-            sendResult.kind === "send" ? sendResult.sendResult : undefined,
-            "Broadcast",
-          ),
+          ...resolveMessageActionOutcome(sendResult, "Broadcast"),
           payload: sendResult.kind === "send" ? sendResult.payload : undefined,
           result: sendResult.kind === "send" ? sendResult.sendResult : undefined,
         });

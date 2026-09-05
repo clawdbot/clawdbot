@@ -2022,7 +2022,6 @@ describe("memory cli", () => {
           sources: ["memory"],
           store: { vector: { enabled: false } },
           cache: { enabled: false },
-          sync: { watch: false, onSessionStart: false, onSearch: false },
           query: { hybrid: { enabled: true } },
         },
       },

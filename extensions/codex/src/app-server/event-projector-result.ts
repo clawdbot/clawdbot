@@ -43,6 +43,7 @@ type CodexAttemptResultInput = {
   turnId: string;
   upstreamUserText: string | undefined;
   completedTurn: CodexTurn | undefined;
+  turnTainted: boolean;
   promptError: unknown;
   promptErrorSource: AttemptFailureSource | null;
   providerRefusal: CodexProviderRefusal | undefined;
@@ -161,6 +162,7 @@ export function buildCodexAttemptResult(
     commentaryMessages,
     toolMessages: input.toolTranscriptProjection.transcriptMessages,
     lastAssistant,
+    turnTainted: input.turnTainted,
   });
   const turnFailed = input.completedTurn?.status === "failed";
   const promptError = input.providerRefusal

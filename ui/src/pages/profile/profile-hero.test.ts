@@ -7,7 +7,12 @@ import { createApplicationContextProvider } from "../../test-helpers/application
 import { waitForFast } from "../../test-helpers/wait-for.ts";
 import { renderProfileHero } from "./profile-hero.ts";
 import { createConnectedContext } from "./profile-page.test-support.ts";
-import "./profile-page.ts";
+import { ProfilePage } from "./profile-page.ts";
+
+const PROFILE_HERO_TEST_TAG = "test-profile-hero-page";
+if (!customElements.get(PROFILE_HERO_TEST_TAG)) {
+  customElements.define(PROFILE_HERO_TEST_TAG, class extends ProfilePage {});
+}
 
 const container = document.createElement("div");
 afterEach(() => {
@@ -71,7 +76,7 @@ it("honors a live name clear while the profile editor still holds the fetched na
     email: "ada@example.test",
   });
   const provider = createApplicationContextProvider(harness.context);
-  const page = document.createElement("openclaw-profile-page");
+  const page = document.createElement(PROFILE_HERO_TEST_TAG);
   provider.append(page);
   document.body.append(provider);
   await waitForFast(() =>

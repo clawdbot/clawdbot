@@ -1,7 +1,7 @@
 import { createHash, randomBytes } from "node:crypto";
 import fs from "node:fs/promises";
-import os from "node:os";
 import path from "node:path";
+import { resolvePreferredOpenClawTmpDir } from "../../infra/tmp-openclaw-dir.js";
 import type { SpawnResult } from "../../process/exec.js";
 import type { WorkerWorkspaceCommand } from "./tunnel-contract.js";
 import {
@@ -224,7 +224,7 @@ function createAcceptedWorkspacePublisher(params: {
       const transferPaths = [...changed].filter((entryPath) => acceptedNodes.has(entryPath));
       if (transferPaths.length > 0) {
         const temporaryDirectory = await fs.mkdtemp(
-          path.join(os.tmpdir(), "openclaw-worker-workspace-accepted-"),
+          path.join(resolvePreferredOpenClawTmpDir(), "openclaw-worker-workspace-accepted-"),
         );
         const transferListPath = path.join(temporaryDirectory, "transfer-list");
         try {

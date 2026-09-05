@@ -120,7 +120,6 @@ export type ChatThreadProps = ChatSendStatusActions & {
   resourceBasePath?: string;
   fullMessageAgentId?: string;
   loadFullAssistantMessage?: SidebarFullMessageLoader | null;
-  localMediaPreviewRoots?: string[];
   mediaPolicyEpoch?: number;
   connectionEpoch?: number;
   assistantAttachmentAuthToken?: string | null;
