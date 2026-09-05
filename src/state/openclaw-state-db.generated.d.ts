@@ -598,6 +598,7 @@ export interface FleetCells {
 }
 
 export interface FlowRuns {
+  agent_id: string | null;
   blocked_summary: string | null;
   blocked_task_id: string | null;
   cancel_requested_at: number | null;

@@ -119,9 +119,10 @@ function buildTasksText(params: { sessionKey: string; agentId: string }): string
   const sessionSnapshot = buildTaskStatusSnapshot(
     listTasksForSessionKeyForStatus(params.sessionKey, params.agentId),
   );
-  const openTaskFlows = listTaskFlowsForOwner({ callerOwnerKey: params.sessionKey }).filter(
-    (flow) => !isTerminalTaskFlow(flow),
-  );
+  const openTaskFlows = listTaskFlowsForOwner({
+    callerOwnerKey: params.sessionKey,
+    callerAgentId: params.agentId,
+  }).filter((flow) => flow.syncMode === "managed" && !isTerminalTaskFlow(flow));
   const lines = ["📋 Tasks", formatTaskHeadline(sessionSnapshot, openTaskFlows.length)];
 
   if (sessionSnapshot.totalCount > 0) {

@@ -48,6 +48,8 @@ export type TaskFlowRecord = {
   flowId: string;
   syncMode: TaskFlowSyncMode;
   ownerKey: string;
+  /** Agent that owns the flow when ownerKey is an unscoped session key. */
+  agentId?: string;
   requesterOrigin?: DeliveryContext;
   controllerId?: string;
   revision: number;

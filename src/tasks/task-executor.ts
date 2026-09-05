@@ -140,6 +140,7 @@ export function findTaskByRunId(runId: string): TaskRecord | undefined {
 type RunTaskInFlowParams = {
   flowId: string;
   runtime: TaskRuntime;
+  callerAgentId?: string;
   sourceId?: string;
   childSessionKey?: string;
   parentTaskId?: string;
@@ -452,6 +453,7 @@ export function runTaskInFlowForOwner(
   const flow = getTaskFlowByIdForOwner({
     flowId: params.flowId,
     callerOwnerKey: params.callerOwnerKey,
+    callerAgentId: params.callerAgentId,
   });
   if (!flow) {
     return {
@@ -602,10 +604,12 @@ export async function cancelFlowByIdForOwner(params: {
   cfg: OpenClawConfig;
   flowId: string;
   callerOwnerKey: string;
+  callerAgentId?: string;
 }): Promise<CancelFlowResult> {
   const flow = getTaskFlowByIdForOwner({
     flowId: params.flowId,
     callerOwnerKey: params.callerOwnerKey,
+    callerAgentId: params.callerAgentId,
   });
   if (!flow) {
     return {

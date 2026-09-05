@@ -298,6 +298,53 @@ describe("handleTasksCommand task board", () => {
     expect(reply.text).not.toContain("All clear - nothing linked to this session right now.");
   });
 
+  it("does not duplicate mirrored one-task flows in the open TaskFlows section", async () => {
+    const task = createRunningTaskRunCore({
+      runtime: "subagent",
+      requesterSessionKey: "agent:main:main",
+      childSessionKey: "agent:main:subagent:mirrored-board-task",
+      runId: "run-mirrored-board-task",
+      task: "Mirrored task should appear once",
+    });
+
+    expect(task?.parentFlowId).toBeTruthy();
+
+    const reply = await buildTasksReplyForTest();
+
+    expect(reply.text).toContain("Mirrored task should appear once");
+    expect(reply.text).not.toContain("Open TaskFlows:");
+  });
+
+  it("keeps bare-session TaskFlows isolated by agent", async () => {
+    createManagedTaskFlow({
+      ownerKey: "global",
+      agentId: "research",
+      controllerId: "commands-tasks-global-research",
+      goal: "Research global flow",
+      status: "waiting",
+    });
+    createManagedTaskFlow({
+      ownerKey: "global",
+      agentId: "ops",
+      controllerId: "commands-tasks-global-ops",
+      goal: "Ops global flow",
+      status: "waiting",
+    });
+
+    const reply = await buildTasksReplyForTest({
+      sessionKey: "global",
+      agentId: "research",
+      cfg: {
+        ...baseCfg,
+        session: { scope: "global" },
+        agents: { ownership: "explicit", entries: { research: {}, ops: {} } },
+      },
+    });
+
+    expect(reply.text).toContain("Research global flow");
+    expect(reply.text).not.toContain("Ops global flow");
+  });
+
   it("keeps terminal and cross-owner TaskFlows out of the session board", async () => {
     createManagedTaskFlow({
       ownerKey: "agent:main:main",

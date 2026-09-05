@@ -274,6 +274,29 @@ describe("task-flow-registry store runtime", () => {
     });
   });
 
+  it("round-trips the agent identity for bare owner keys through sqlite", async () => {
+    await withFlowRegistryTempDir(async () => {
+      const created = createManagedTaskFlow({
+        ownerKey: "global",
+        agentId: "research",
+        controllerId: "tests/global-agent-flow",
+        goal: "Research global flow",
+      });
+
+      resetTaskFlowRegistryForTests({ persist: false });
+
+      expect(getTaskFlowById(created.flowId)).toMatchObject({
+        ownerKey: "global",
+        agentId: "research",
+      });
+      expect(
+        openOpenClawStateDatabase()
+          .db.prepare("SELECT agent_id FROM flow_runs WHERE flow_id = ?")
+          .get(created.flowId),
+      ).toEqual({ agent_id: "research" });
+    });
+  });
+
   it("round-trips explicit json null through sqlite", async () => {
     await withFlowRegistryTempDir(async () => {
       const created = createManagedTaskFlow({

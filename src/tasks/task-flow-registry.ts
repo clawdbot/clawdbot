@@ -3,6 +3,7 @@ import crypto from "node:crypto";
 import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
 import { formatErrorMessage } from "../infra/errors.js";
 import { createSubsystemLogger } from "../logging/subsystem.js";
+import { normalizeAgentId, parseAgentSessionKey } from "../routing/session-key.js";
 import {
   getTaskFlowRegistryObservers,
   getTaskFlowRegistryStore,
@@ -66,6 +67,7 @@ type FlowRecordPatch = Omit<
 
 type FlowRecordCreateFields = {
   ownerKey: string;
+  agentId?: string;
   requesterOrigin?: TaskFlowRecord["requesterOrigin"];
   status?: TaskFlowStatus;
   notifyPolicy?: TaskNotifyPolicy;
@@ -135,10 +137,13 @@ function normalizeRestoredFlowRecord(record: TaskFlowRecord): TaskFlowRecord {
     syncMode === "managed"
       ? (normalizeOptionalString(record.controllerId) ?? "core/legacy-restored")
       : undefined;
+  const ownerKey = assertFlowOwnerKey(record.ownerKey);
+  const agentId = resolveFlowAgentId({ ownerKey, agentId: record.agentId });
   return {
     ...record,
     syncMode,
-    ownerKey: assertFlowOwnerKey(record.ownerKey),
+    ownerKey,
+    ...(agentId ? { agentId } : {}),
     ...(record.requesterOrigin
       ? { requesterOrigin: cloneStructuredValue(record.requesterOrigin)! }
       : {}),
@@ -186,6 +191,21 @@ function assertFlowOwnerKey(ownerKey: string): string {
     throw new Error("Flow ownerKey is required.");
   }
   return normalized;
+}
+
+function normalizeFlowAgentId(value: string | null | undefined): string | undefined {
+  const normalized = normalizeOptionalString(value);
+  return normalized ? normalizeAgentId(normalized) : undefined;
+}
+
+function resolveFlowAgentId(params: {
+  ownerKey: string;
+  agentId?: string | null;
+}): string | undefined {
+  return (
+    normalizeFlowAgentId(params.agentId) ??
+    normalizeFlowAgentId(parseAgentSessionKey(params.ownerKey)?.agentId)
+  );
 }
 
 function assertControllerId(controllerId?: string | null): string {
@@ -389,10 +409,13 @@ function buildFlowRecord(params: CreateFlowRecordParams): TaskFlowRecord {
   const now = params.createdAt ?? Date.now();
   const syncMode = params.syncMode ?? "managed";
   const controllerId = syncMode === "managed" ? assertControllerId(params.controllerId) : undefined;
+  const ownerKey = assertFlowOwnerKey(params.ownerKey);
+  const agentId = resolveFlowAgentId({ ownerKey, agentId: params.agentId });
   return {
     flowId: crypto.randomUUID(),
     syncMode,
-    ownerKey: assertFlowOwnerKey(params.ownerKey),
+    ownerKey,
+    ...(agentId ? { agentId } : {}),
     ...(params.requesterOrigin
       ? { requesterOrigin: cloneStructuredValue(params.requesterOrigin)! }
       : {}),
@@ -491,6 +514,7 @@ export function createTaskFlowForTask(params: {
   task: Pick<
     TaskRecord,
     | "ownerKey"
+    | "requesterAgentId"
     | "taskId"
     | "notifyPolicy"
     | "status"
@@ -513,6 +537,7 @@ export function createTaskFlowForTask(params: {
   return createFlowRecord({
     syncMode: "task_mirrored",
     ownerKey: params.task.ownerKey,
+    agentId: params.task.requesterAgentId,
     requesterOrigin: params.requesterOrigin,
     status: terminalFlowStatus,
     notifyPolicy: params.task.notifyPolicy,

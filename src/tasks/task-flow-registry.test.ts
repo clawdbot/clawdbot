@@ -454,6 +454,7 @@ describe("task-flow-registry", () => {
       const mirrored = createTaskFlowForTask({
         task: {
           ownerKey: "agent:main:main",
+          requesterAgentId: "main",
           taskId: "task-running",
           notifyPolicy: "done_only",
           status: "running",
@@ -463,6 +464,7 @@ describe("task-flow-registry", () => {
           lastEventAt: 100,
         },
       });
+      expect(mirrored.agentId).toBe("main");
 
       const blocked = syncFlowFromTaskForTest({
         taskId: "task-blocked",

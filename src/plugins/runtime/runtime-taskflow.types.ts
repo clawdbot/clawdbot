@@ -141,9 +141,10 @@ export type BoundTaskFlowRuntime = {
 export type PluginRuntimeTaskFlow = {
   bindSession: (params: {
     sessionKey: string;
+    agentId?: string;
     requesterOrigin?: TaskDeliveryState["requesterOrigin"];
   }) => BoundTaskFlowRuntime;
   fromToolContext: (
-    ctx: Pick<OpenClawPluginToolContext, "sessionKey" | "deliveryContext">,
+    ctx: Pick<OpenClawPluginToolContext, "sessionKey" | "agentId" | "deliveryContext">,
   ) => BoundTaskFlowRuntime;
 };
