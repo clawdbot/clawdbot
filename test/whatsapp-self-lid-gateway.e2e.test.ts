@@ -1,29 +1,36 @@
-// Integration: a native WhatsApp self-LID mention reaches an ephemeral Gateway as agent-facing identity text.
+// E2E: a native WhatsApp self-LID mention reaches an ephemeral Gateway as agent-facing identity text.
 import { randomUUID } from "node:crypto";
 import { createServer, type IncomingMessage } from "node:http";
 import type { AddressInfo } from "node:net";
 import type { OpenClawConfig } from "openclaw/plugin-sdk/config-contracts";
 import type { MsgContext } from "openclaw/plugin-sdk/reply-runtime";
 import { afterEach, describe, expect, it } from "vitest";
-import type { OpenClawConfig as GatewayConfig } from "../../../src/config/types.openclaw.js";
-import {
-  connectGatewayClient,
-  disconnectGatewayClient,
-} from "../../../src/gateway/test-helpers.e2e.js";
-import { writeOpenAiResponsesText } from "../../../test/helpers/openai-responses-sse.js";
+import type { OpenClawConfig as GatewayConfig } from "../src/config/types.openclaw.js";
+import { connectGatewayClient, disconnectGatewayClient } from "../src/gateway/test-helpers.e2e.js";
+import { resolveRelativeBundledPluginPublicModuleId } from "../src/test-utils/bundled-plugin-public-surface.js";
+import { writeOpenAiResponsesText } from "./helpers/openai-responses-sse.js";
 import {
   createOpenClawTestInstance,
   type OpenClawTestInstance,
-} from "../../../test/helpers/openclaw-test-instance.js";
-import { monitorWebChannelWithCapture } from "./auto-reply.broadcast-groups.test-harness.js";
-import {
+} from "./helpers/openclaw-test-instance.js";
+
+const WHATSAPP_TEST_API_MODULE_ID = resolveRelativeBundledPluginPublicModuleId({
+  fromModuleUrl: import.meta.url,
+  pluginId: "whatsapp",
+  artifactBasename: "test-api.js",
+});
+const {
+  extractMentionedJids,
   installWebAutoReplyTestHomeHooks,
   installWebAutoReplyUnitTestHooks,
+  monitorWebChannelWithCapture,
+  projectWhatsAppInboundMessage,
   resetLoadConfigMock,
   sendWebGroupInboundMessage,
   setLoadConfigMock,
-} from "./auto-reply.test-harness.js";
-import { extractMentionedJids, projectWhatsAppInboundMessage } from "./inbound/extract.js";
+} = (await import(
+  WHATSAPP_TEST_API_MODULE_ID
+)) as typeof import("../extensions/whatsapp/test-api.js");
 
 const SELF_LID_ID = "900000000000001";
 const SELF_LID = SELF_LID_ID + "@lid";
