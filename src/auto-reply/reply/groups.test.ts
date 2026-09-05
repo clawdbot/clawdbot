@@ -58,8 +58,12 @@ describe("group runtime loading", () => {
       silentReplyPolicy: "allow",
       silentToken: "NO_REPLY",
     });
-    expect(toolOnlyContext).toContain("Normal final replies are private");
-    expect(toolOnlyContext).toContain("message tool with action=send");
+    expect(toolOnlyContext).toContain(
+      "message(action=send) is the only delivery path for a visible text reply",
+    );
+    expect(toolOnlyContext).toContain(
+      "Reactions and other non-text message actions remain visible outcomes when appropriate.",
+    );
     expect(toolOnlyContext).toContain("Be a good group participant");
     expect(toolOnlyContext).toContain("Avoid Markdown tables");
     expect(toolOnlyContext).toContain("wrap bare URLs");
@@ -75,9 +79,9 @@ describe("group runtime loading", () => {
       silentReplyPolicy: "allow",
       silentToken: "NO_REPLY",
     });
-    expect(channelToolOnlyContext).toContain("visible channel response");
+    expect(channelToolOnlyContext).toContain("visible channel text reply");
     expect(channelToolOnlyContext).toContain("posted to this channel");
-    expect(channelToolOnlyContext).not.toContain("visible group response");
+    expect(channelToolOnlyContext).not.toContain("visible group text reply");
     expect(channelToolOnlyContext).not.toContain("posted to the group");
     expect(
       isolatedGroups.buildGroupIntro({
@@ -117,11 +121,119 @@ describe("group runtime loading", () => {
       sessionCtx: { ChatType: "direct", Provider: "telegram" },
       sourceReplyDeliveryMode: "message_tool_only",
     });
-    expect(toolOnlyContext).toContain("Normal final replies are private");
-    expect(toolOnlyContext).toContain("message tool with action=send");
+    expect(toolOnlyContext).toContain(
+      "message(action=send) is the only delivery path for a visible text reply",
+    );
+    expect(toolOnlyContext).toContain(
+      "Reactions and other non-text message actions remain visible outcomes when appropriate.",
+    );
     expect(toolOnlyContext).toContain("do not call message(action=send)");
     expect(toolOnlyContext).not.toContain("NO_REPLY");
     expect(toolOnlyContext).not.toContain("Your replies are automatically sent");
+  });
+
+  // The prompt failure this pins: an agent that has already decided to answer reads
+  // "your final answer stays private" as a sanctioned quiet way to answer, emits plain
+  // text, calls no tool, and the person waiting gets nothing. Both message_tool_only
+  // surfaces must state one delivery path and must never offer a private-answer exit.
+  it.each([
+    {
+      name: "group chat",
+      context: () =>
+        groups.buildGroupChatContext({
+          sessionCtx: { ChatType: "group", Provider: "whatsapp" },
+          sourceReplyDeliveryMode: "message_tool_only",
+          silentReplyPolicy: "allow",
+          silentToken: "NO_REPLY",
+        }),
+      destination: "this group chat",
+      responseLabel: "visible group text reply",
+    },
+    {
+      name: "channel",
+      context: () =>
+        groups.buildGroupChatContext({
+          sessionCtx: { ChatType: "channel", Provider: "mattermost" },
+          sourceReplyDeliveryMode: "message_tool_only",
+        }),
+      destination: "this channel",
+      responseLabel: "visible channel text reply",
+    },
+    {
+      name: "direct conversation",
+      context: () =>
+        groups.buildDirectChatContext({
+          sessionCtx: { ChatType: "direct", Provider: "telegram" },
+          sourceReplyDeliveryMode: "message_tool_only",
+        }),
+      destination: "this conversation",
+      responseLabel: "visible direct text reply",
+    },
+  ])(
+    "keeps the message_tool_only reply decision separable from its delivery path: $name",
+    ({ context, destination, responseLabel }) => {
+      const prompt = context();
+
+      // Mechanism: exactly one text-delivery path, without excluding visible
+      // reaction-only outcomes.
+      expect(prompt).toContain(
+        `In ${destination}, message(action=send) is the only delivery path for a visible text reply`,
+      );
+      expect(prompt).toContain(
+        "Reactions and other non-text message actions remain visible outcomes when appropriate.",
+      );
+      expect(prompt).toContain(
+        `Your normal final answer is private and is never posted to ${destination}.`,
+      );
+
+      // Gate: reaction-only turns stay actionable, both text exits stay adjacent,
+      // and the "no reply" exit never grants a private answer.
+      expect(prompt).toContain(
+        `If this turn needs no ${responseLabel}, use an appropriate non-text message action when warranted; otherwise do not call message(action=send) and end the turn. If it does, deliver it with message(action=send) before the turn ends; a reply left in your final answer reaches nobody.`,
+      );
+      expect(prompt).not.toContain("stays private and will not be posted");
+      expect(prompt).not.toMatch(/no visible[^.]*response is needed[^.]*\.\s*Your normal final/u);
+    },
+  );
+
+  // Ordering here is load-bearing, not cosmetic. A live model A/B
+  // (scripts/dev/message-tool-only-prompt-live-proof.ts) measured a significant rise in
+  // sends on ambient turns when the group block ended on the delivery gate instead of on
+  // the selectivity sentence: the last thing the prompt says is the thing a weaker model
+  // acts on. Keep the gate before the selectivity close so the block still ends on
+  // "be selective" the way it did before this change.
+  it("closes group message_tool_only guidance with selectivity, after the delivery gate", () => {
+    const prompt = groups.buildGroupChatContext({
+      sessionCtx: { ChatType: "group", Provider: "discord" },
+      sourceReplyDeliveryMode: "message_tool_only",
+      silentReplyPolicy: "allow",
+      silentToken: "NO_REPLY",
+    });
+    const gateIndex = prompt.indexOf("If this turn needs no visible group text reply");
+    const selectivityIndex = prompt.lastIndexOf("Be extremely selective:");
+    expect(gateIndex).toBeGreaterThan(-1);
+    expect(selectivityIndex).toBeGreaterThan(gateIndex);
+    expect(prompt).toMatch(
+      /Be extremely selective: reply only when directly addressed or clearly helpful\.$/u,
+    );
+  });
+
+  it("scopes the whether-versus-how reminder to group message_tool_only turns", () => {
+    const selectivitySplit = "Selectivity governs whether you reply, never how you deliver it.";
+    expect(
+      groups.buildGroupChatContext({
+        sessionCtx: { ChatType: "channel", Provider: "mattermost" },
+        sourceReplyDeliveryMode: "message_tool_only",
+      }),
+    ).toContain(selectivitySplit);
+    expect(
+      groups.buildGroupChatContext({
+        sessionCtx: { ChatType: "channel", Provider: "mattermost" },
+        sourceReplyDeliveryMode: "automatic",
+        silentReplyPolicy: "allow",
+        silentToken: "NO_REPLY",
+      }),
+    ).not.toContain(selectivitySplit);
   });
 
   it("reads markdown table guidance from channel metadata", () => {
