@@ -49,7 +49,7 @@ export async function measureNativeReasoningSubscription(
     stopReason: "stop",
     timestamp: 1,
   };
-  const acknowledgments = chunks.map(() => createDeferredCore<void>());
+  const acknowledgments = chunks.map(() => createDeferredCore());
   const releaseAcknowledgments = () => {
     acknowledgments.forEach((acknowledgment) => acknowledgment.resolve());
   };
@@ -130,7 +130,8 @@ export async function measureNativeReasoningSubscription(
           event.type === "message_update" &&
           event.assistantMessageEvent.type === "thinking_delta"
         ) {
-          acknowledgments[consumed++]?.resolve();
+          acknowledgments[consumed]?.resolve();
+          consumed += 1;
         }
       },
       options.signal,
