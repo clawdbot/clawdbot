@@ -184,6 +184,11 @@ also drop observations, reported by `openclaw_diagnostic_async_queue_dropped_tot
 
 ### Event-loop observation windows
 
+`openclaw_liveness_cpu_core_ratio` measures whole-process CPU usage in core
+equivalents, including worker and native threads, and can exceed `1`. Interpret
+it alongside main-thread delay and utilization; see
+[CPU pressure and event-loop delay](/gateway/health#cpu-pressure-and-event-loop-delay).
+
 The event-loop histogram records the maximum delay from each completed Gateway
 health-monitor window. The counter sums the seconds represented by those
 windows. Both are cumulative: a readiness or status read can complete a window
