@@ -472,9 +472,9 @@ date context. Falls back to the host timezone.
 
 ### `agents.defaults.modelSelectionScope`
 
-Optional scope for chat commands and Gateway session model updates without an explicit scope.
-There is no default value: leaving it unset preserves each surface's existing
-behavior.
+Scope for chat commands and Gateway session model updates without an explicit scope.
+The default is `"session"`: changing a model in one chat does not change other
+chats or the configured default, including when the caller is an owner/admin.
 
 ```json5
 {
@@ -482,15 +482,14 @@ behavior.
 }
 ```
 
-| Value       | Effect                                                                                                                                                                                                                                             |
-| ----------- | -------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| `"session"` | Change only the current session's model selection.                                                                                                                                                                                                 |
-| `"agent"`   | Also update the current agent's explicit primary at `agents.entries.<agent>.model`, creating that primary when needed. Never change the shared global fallback.                                                                                    |
-| `"global"`  | Also update the shared `agents.defaults.model` fallback. Do not replace other agents' explicit primaries or other sessions' pins.                                                                                                                  |
-| Unset       | Keep the existing surface behavior: direct owner/admin chat commands, Discord pickers, and Gateway session model updates request an effective configured-default update; Telegram callback pickers and the embedded local TUI remain session-only. |
+| Value       | Effect                                                                                                                                                          |
+| ----------- | --------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `"session"` | Change only the current session's model selection.                                                                                                              |
+| `"agent"`   | Also update the current agent's explicit primary at `agents.entries.<agent>.model`, creating that primary when needed. Never change the shared global fallback. |
+| `"global"`  | Also update the shared `agents.defaults.model` fallback. Do not replace other agents' explicit primaries or other sessions' pins.                               |
+| Unset       | Change only the current session, the same as `"session"`.                                                                                                       |
 
-An effective configured-default update writes the agent's explicit primary when
-one exists, otherwise the shared global fallback. Explicit `/model` flags
+Agent/global writes require an explicit scope flag or configuration choice. Explicit `/model` flags
 `-s`/`--session`, `-a`/`--agent`, and `-g`/`--global` take precedence over the setting.
 Without owner/admin authority, bare commands remain session-only and explicit
 `-a` or `-g` requests are rejected. Telegram callback pickers and the embedded local TUI remain

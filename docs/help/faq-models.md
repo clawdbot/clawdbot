@@ -93,7 +93,7 @@ troubleshooting, see the main [FAQ](/help/faq).
   <Accordion title="How do I switch models on the fly (without restarting)?">
     Send `/model <name> -s` as a standalone message to switch only this session.
     Without a scope flag, the optional [model selection scope](/gateway/config-agents#agentsdefaultsmodelselectionscope)
-    applies; leaving it unset preserves owner/admin configured-default persistence. See
+    applies; leaving it unset keeps the change in the current session, including for owners/admins. See
     [Slash commands](/tools/slash-commands) for the
     full command list, including the numbered picker (`/model`, `/model
     list`, `/model 3`), `/model default -s` to clear only a session model override, and
