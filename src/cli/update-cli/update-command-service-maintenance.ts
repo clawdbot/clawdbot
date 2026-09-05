@@ -354,6 +354,11 @@ async function maybeSuspendWindowsTaskAutoStartForUpdate(params: {
   const suspensionPromise = suspendScheduledTaskAutoStartForUpdate(serviceEnv);
   const recovery: WindowsTaskAutoStartRecovery = {
     beginMutation: () => {
+      // Async preflight may outlive a signal or settled recovery. Admit mutation
+      // only while this owner can still keep native autostart suspended.
+      if (interrupted || !finishUpdate) {
+        throw new UpdateCommandAbort();
+      }
       restoreAllowed = false;
     },
     restore,

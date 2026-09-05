@@ -579,6 +579,7 @@ export function createSessionsSpawnTool(
           },
           withParentExecutionIdentity(
             {
+              assertActive,
               agentSessionKey: opts?.agentSessionKey,
               requesterTurnRunId: opts?.requesterTurnRunId,
               completionOwnerKey: opts?.completionOwnerKey,

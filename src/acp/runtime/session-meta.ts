@@ -518,6 +518,7 @@ function sessionStoreUpdateOptions(params: {
 }
 
 export async function upsertAcpSessionMeta(params: {
+  assertCommitAllowed?: () => void;
   sessionKey: string;
   agentId?: string;
   cfg?: OpenClawConfig;
@@ -592,11 +593,13 @@ export async function upsertAcpSessionMeta(params: {
           {
             ...sessionStoreUpdateOptions({ ...params, sessionKey: storageSessionKey }),
             replaceEntry: true,
+            assertCommitAllowed: params.assertCommitAllowed,
           },
         )
       : null;
     runOpenClawStateWriteTransaction(
       (database) => {
+        params.assertCommitAllowed?.();
         const sessionKeysToDelete = new Set([databaseSessionKey]);
         if (currentRowKey) {
           sessionKeysToDelete.add(currentRowKey);
@@ -641,6 +644,7 @@ export async function upsertAcpSessionMeta(params: {
       ...sessionStoreUpdateOptions({ ...params, sessionKey: storageSessionKey }),
       fallbackEntry: preparedEntry,
       replaceEntry: true,
+      assertCommitAllowed: params.assertCommitAllowed,
     },
   );
   if (!persisted) {
@@ -653,6 +657,8 @@ export async function upsertAcpSessionMeta(params: {
   });
   runOpenClawStateWriteTransaction(
     (database) => {
+      // The entry patch and legacy cleanup await before this authoritative publication.
+      params.assertCommitAllowed?.();
       const persistedDatabaseSessionKey = buildAcpDatabaseSessionKey(
         persisted.sessionKey,
         storeEntry.agentId,

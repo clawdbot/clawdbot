@@ -433,8 +433,8 @@ export async function removeStaleInventoryEntries(
  * Renames one paired device through the shared operator-alias RPC. Returns
  * `null` when the alias landed (the caller's dialog closes) and a displayable
  * message when it did not, so a rejected attempt stays visible and retryable.
- * Success and failure both end in a visible outcome: the list reloads under
- * the captured request scope, and failures also land in `devicesError`.
+ * Successful renames refresh the captured request scope; rejected attempts
+ * remain visible in the dialog and in `devicesError`.
  */
 export async function renameDevice(
   state: DevicesState,

@@ -11,7 +11,7 @@ import { readSkillProposalTargetTreeSha256 } from "./proposal-bundle.js";
 export async function assertCollectionReadsCurrent(
   current: readonly WritableSkillCollectionEntry[],
   readSkillHashes: ReadonlyMap<string, string>,
-  plannedNames: ReadonlySet<string>,
+  plannedSkillKeys: ReadonlySet<string>,
   maxBytes: number,
 ): Promise<void> {
   let totalBytes = 0;
@@ -21,7 +21,8 @@ export async function assertCollectionReadsCurrent(
     if (totalBytes > maxBytes) {
       throw new Error(`Writable skill collection exceeds the ${maxBytes}-byte review limit.`);
     }
-    if (plannedNames.has(skill.name) && readSkillHashes.get(skill.name) !== sha256Hex(content)) {
+    const skillKey = skill.skillKey;
+    if (plannedSkillKeys.has(skillKey) && readSkillHashes.get(skillKey) !== sha256Hex(content)) {
       throw new Error(`Skill changed after it was read: ${skill.name}`);
     }
   }
@@ -34,10 +35,10 @@ export async function assertResultCollectionBytes(
   maxBytes: number,
 ): Promise<void> {
   // Unlisted skills keep their current bytes; listed ones are dropped or replaced by `prepared`.
-  const plannedNames = new Set(plan.map((entry) => entry.name));
+  const plannedSkillKeys = new Set(plan.map((entry) => entry.skillKey));
   let totalBytes = 0;
   for (const skill of current) {
-    if (!plannedNames.has(skill.name)) {
+    if (!plannedSkillKeys.has(skill.skillKey)) {
       totalBytes += (await fs.stat(skill.filePath)).size;
     }
   }
@@ -52,14 +53,14 @@ export async function assertResultCollectionBytes(
 export async function assertCollectionMutationCurrent(
   current: readonly WritableSkillCollectionEntry[],
   expectedTreeHashes: ReadonlyMap<string, string>,
-  plannedNames: ReadonlySet<string>,
+  plannedSkillKeys: ReadonlySet<string>,
   prepared: readonly PreparedWorkspaceSkillMutation[],
 ): Promise<void> {
   for (const skill of current) {
-    if (!plannedNames.has(skill.name)) {
+    if (!plannedSkillKeys.has(skill.skillKey)) {
       continue;
     }
-    const expectedTreeHash = expectedTreeHashes.get(skill.name);
+    const expectedTreeHash = expectedTreeHashes.get(skill.skillKey);
     if (
       !expectedTreeHash ||
       (await readSkillProposalTargetTreeSha256(skill.baseDir)) !== expectedTreeHash

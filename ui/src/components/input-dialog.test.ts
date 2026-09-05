@@ -78,17 +78,6 @@ describe("showInputDialog", () => {
     expect(document.body.querySelector("openclaw-modal-dialog")).toBeNull();
   });
 
-  it("caps entry length at the caller's protocol bound", async () => {
-    const result = showInputDialog({ title: "Rename device", maxLength: 64 });
-    await getRenderedModalDialog(document.body);
-
-    expect(dialogInput().maxLength).toBe(64);
-    expect(dialogInput().getAttribute("maxlength")).toBe("64");
-
-    findButton("Cancel").click();
-    await expect(result).resolves.toBeNull();
-  });
-
   it("treats modal dismissal as cancellation", async () => {
     const result = showInputDialog({ title: "Rename session" });
     const { modal } = await getRenderedModalDialog(document.body);

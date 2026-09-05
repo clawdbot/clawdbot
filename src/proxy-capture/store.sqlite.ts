@@ -24,6 +24,9 @@ import {
   type OpenClawStateDatabase,
 } from "../state/openclaw-state-db.js";
 import {
+  findDebugProxyCaptureBlobReference,
+  listDebugProxyCaptureSessions,
+  queryDebugProxyCapturePreset,
   readDebugProxyCaptureBlob,
   readDebugProxyCaptureSessionEvents,
   summarizeDebugProxyCaptureSessionCoverage,
@@ -459,23 +462,8 @@ class DebugProxyCaptureStoreImpl {
   }
 
   listSessions(limit = 50): CaptureSessionSummary[] {
-    return this.db
-      .prepare(
-        `SELECT
-           s.id,
-           s.started_at AS startedAt,
-           s.ended_at AS endedAt,
-           s.mode,
-           s.source_process AS sourceProcess,
-           s.proxy_url AS proxyUrl,
-           COUNT(e.id) AS eventCount
-         FROM capture_sessions s
-         LEFT JOIN capture_events e ON e.session_id = s.id
-         GROUP BY s.id
-         ORDER BY s.started_at DESC
-         LIMIT ?`,
-      )
-      .all(limit) as CaptureSessionSummary[];
+    // The shipped SDK type omits null, but callers receive native nullable fields.
+    return listDebugProxyCaptureSessions(this.db, limit) as CaptureSessionSummary[];
   }
 
   getSessionEvents(sessionId: string, limit = 500): Array<Record<string, unknown>> {
@@ -488,13 +476,11 @@ class DebugProxyCaptureStoreImpl {
 
   readBlob(blobId: string): string | null {
     if (this.pathBased) {
-      const legacyRow = this.db
-        .prepare(`SELECT data_blob_id AS blobId FROM capture_events WHERE data_blob_id = ? LIMIT 1`)
-        .get(blobId) as { blobId?: string } | undefined;
-      if (!legacyRow?.blobId) {
+      const legacyBlobId = findDebugProxyCaptureBlobReference(this.db, blobId);
+      if (!legacyBlobId) {
         return null;
       }
-      const blobPath = path.join(this.pathBased.blobDir, `${legacyRow.blobId}.bin.gz`);
+      const blobPath = path.join(this.pathBased.blobDir, `${legacyBlobId}.bin.gz`);
       return fs.existsSync(blobPath)
         ? gunzipSync(fs.readFileSync(blobPath)).toString("utf8")
         : null;
@@ -503,83 +489,7 @@ class DebugProxyCaptureStoreImpl {
   }
 
   queryPreset(preset: CaptureQueryPreset, sessionId?: string): CaptureQueryRow[] {
-    const sessionWhere = sessionId ? "AND session_id = ?" : "";
-    const args = sessionId ? [sessionId] : [];
-    switch (preset) {
-      // Presets are intentionally SQL-only summaries so the CLI can query large
-      // capture sessions without loading every event into memory.
-      case "double-sends":
-        return this.db
-          .prepare(
-            `SELECT host, path, method, COUNT(*) AS duplicateCount
-             FROM capture_events
-             WHERE kind = 'request' ${sessionWhere}
-             GROUP BY host, path, method, data_sha256
-             HAVING COUNT(*) > 1
-             ORDER BY duplicateCount DESC, host ASC`,
-          )
-          .all(...args) as CaptureQueryRow[];
-      case "retry-storms":
-        return this.db
-          .prepare(
-            `SELECT host, path, COUNT(*) AS errorCount
-             FROM capture_events
-             WHERE kind = 'response' AND status >= 429 ${sessionWhere}
-             GROUP BY host, path
-             HAVING COUNT(*) > 1
-             ORDER BY errorCount DESC, host ASC`,
-          )
-          .all(...args) as CaptureQueryRow[];
-      case "cache-busting":
-        return this.db
-          .prepare(
-            `SELECT host, path, COUNT(*) AS variantCount
-             FROM capture_events
-             WHERE kind = 'request'
-               AND (path LIKE '%?%' OR headers_json LIKE '%cache-control%' OR headers_json LIKE '%pragma%')
-               ${sessionWhere}
-             GROUP BY host, path
-             ORDER BY variantCount DESC, host ASC`,
-          )
-          .all(...args) as CaptureQueryRow[];
-      case "ws-duplicate-frames":
-        return this.db
-          .prepare(
-            `SELECT host, path, COUNT(*) AS duplicateFrames
-             FROM capture_events
-             WHERE kind = 'ws-frame' AND direction = 'outbound' ${sessionWhere}
-             GROUP BY host, path, data_sha256
-             HAVING COUNT(*) > 1
-             ORDER BY duplicateFrames DESC, host ASC`,
-          )
-          .all(...args) as CaptureQueryRow[];
-      case "missing-ack":
-        return this.db
-          .prepare(
-            `SELECT flow_id AS flowId, host, path, COUNT(*) AS outboundFrames
-             FROM capture_events
-             WHERE kind = 'ws-frame' AND direction = 'outbound' ${sessionWhere}
-               AND flow_id NOT IN (
-                 SELECT flow_id FROM capture_events
-                 WHERE kind = 'ws-frame' AND direction = 'inbound' ${sessionId ? "AND session_id = ?" : ""}
-               )
-             GROUP BY flow_id, host, path
-             ORDER BY outboundFrames DESC`,
-          )
-          .all(...(sessionId ? [sessionId, sessionId] : [])) as CaptureQueryRow[];
-      case "error-bursts":
-        return this.db
-          .prepare(
-            `SELECT host, path, COUNT(*) AS errorCount
-             FROM capture_events
-             WHERE kind = 'error' ${sessionWhere}
-             GROUP BY host, path
-             ORDER BY errorCount DESC, host ASC`,
-          )
-          .all(...args) as CaptureQueryRow[];
-      default:
-        return [];
-    }
+    return queryDebugProxyCapturePreset(this.db, preset, sessionId);
   }
 
   purgeAll(): { sessions: number; events: number; blobs: number } {

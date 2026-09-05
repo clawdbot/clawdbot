@@ -3,7 +3,7 @@
   "version": "2026.9.1",
   "openclaw": {
     "schemaVersions": {
-      "state": 15,
+      "state": 16,
       "agent": 19
     }
   },
@@ -2154,7 +2154,7 @@
     "tslog": "4.11.0",
     "typebox": "1.3.18",
     "typescript": "6.0.3",
-    "undici": "8.10.0",
+    "undici": "8.10.2",
     "web-push": "3.6.7",
     "web-tree-sitter": "0.26.13",
     "ws": "8.21.3",
@@ -2231,5 +2231,5 @@
   "engines": {
     "node": ">=22.22.3 <23 || >=24.15.0 <25 || >=25.9.0"
   },
-  "packageManager": "pnpm@12.1.0+sha512.d9b8276d97f6ec86e49815877f91ee9f63cee61f2063b304e43b6dab8fa07ce8a9afd46d2facd39f921e6a9d06b3c75a81349c7b888c2d22886bae0229901037"
+  "packageManager": "pnpm@12.3.4+sha512.961aa41fb077da3a04a441d9f8e15ebc0c96da8ef710b2eb67bf9ee7cb0610eabd48f1fd85f51cffe73846785fa0f87c56a3a872a1d893f8446741b5cce45457"
 }

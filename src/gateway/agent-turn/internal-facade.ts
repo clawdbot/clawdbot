@@ -55,6 +55,7 @@ export function createInternalAgentTurnFacade(
   ): Promise<GatewayMethodDispatchResponse> => {
     const method = "agent";
     throwIfGatewayDispatchAborted(method, dispatchOptions.signal);
+    dispatchOptions.assertAdmissionCurrent?.();
     options.assertContextCurrent?.();
     const context = options.getContext();
     const entry = context.requestEntryLifetime?.enter({
@@ -80,6 +81,7 @@ export function createInternalAgentTurnFacade(
         return { ok: false, error: validationError };
       }
       options.assertContextCurrent?.();
+      dispatchOptions.assertAdmissionCurrent?.();
       let acceptance: GatewayMethodDispatchResponse | undefined;
       let final: GatewayMethodDispatchResponse | undefined;
       let resolveAcceptance: ((response: GatewayMethodDispatchResponse) => void) | undefined;
@@ -166,6 +168,7 @@ export function createInternalAgentTurnFacade(
           options.client,
           async () => {
             entry?.assertOpen();
+            dispatchOptions.assertAdmissionCurrent?.();
             entry?.release();
             const principal = captureAgentTurnPrincipal(options.client);
             const preflight = prepareAgentRequestPreflight({
@@ -184,7 +187,13 @@ export function createInternalAgentTurnFacade(
             await createAgentTurnService(
               { context, isWebchatConnect },
               options.assertContextCurrent,
-            ).startTurn({ preflight, principal, io, onRunObserved });
+            ).startTurn({
+              preflight,
+              principal,
+              io,
+              onRunObserved,
+              assertAdmissionCurrent: dispatchOptions.assertAdmissionCurrent,
+            });
           },
           {
             context,

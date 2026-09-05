@@ -17,11 +17,6 @@ import {
   revokeDeviceToken,
 } from "../../lib/nodes/index.ts";
 
-// Protocol bound on operator labels: packages/gateway-protocol/src/schema/devices.ts
-// (DevicePairLabelString, maxLength 64). The dialog caps the entry at the same
-// bound so overlong input is rejected at the source instead of by the rename RPC.
-const DEVICE_ALIAS_MAX_LENGTH = 64;
-
 export type DeviceAliasTarget = {
   id: string;
   name: string;
@@ -70,7 +65,6 @@ export class DevicesDialogController {
         defaultValue: device.operatorLabel ?? "",
         requireValue: true,
         requireChange: true,
-        maxLength: DEVICE_ALIAS_MAX_LENGTH,
         submit: (label) => {
           if (!this.host.canManagePairing()) {
             return Promise.resolve(t("devices.readOnly.pairingRequired"));

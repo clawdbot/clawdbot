@@ -285,7 +285,29 @@ describe("resolveSubagentToolPolicyForSession", () => {
     agents: { defaults: { subagents: { maxSpawnDepth: 2 } } },
   } as unknown as OpenClawConfig;
 
-  it("uses stored leaf role for flat depth-1 session keys", async () => {
+  it("recomputes a persisted leaf as an orchestrator under the recursive default", async () => {
+    const storePath = createSessionStorePath("openclaw-subagent-policy-recursive");
+    const sessionKey = "agent:main:subagent:formerly-leaf";
+    await writeSessionEntries(storePath, {
+      [sessionKey]: {
+        sessionId: "formerly-leaf",
+        updatedAt: Date.now(),
+        spawnDepth: 1,
+        subagentRole: "leaf",
+        subagentControlScope: "none",
+      },
+    });
+
+    const policy = resolveSubagentToolPolicyForSession(
+      { session: { store: storePath } } as OpenClawConfig,
+      sessionKey,
+    );
+
+    expect(isToolAllowedByPolicyName("sessions_spawn", policy)).toBe(true);
+    expect(isToolAllowedByPolicyName("subagents", policy)).toBe(true);
+  });
+
+  it("keeps flat depth-1 sessions as leaves under an explicit finite cap", async () => {
     const storePath = createSessionStorePath("openclaw-subagent-policy");
     await writeSessionEntries(storePath, {
       "agent:main:subagent:flat-leaf": {
@@ -297,10 +319,8 @@ describe("resolveSubagentToolPolicyForSession", () => {
       },
     });
     const cfg = {
-      ...baseCfg,
-      session: {
-        store: storePath,
-      },
+      agents: { defaults: { subagents: { maxSpawnDepth: 1 } } },
+      session: { store: storePath },
     } as unknown as OpenClawConfig;
 
     const policy = resolveSubagentToolPolicyForSession(cfg, "agent:main:subagent:flat-leaf");

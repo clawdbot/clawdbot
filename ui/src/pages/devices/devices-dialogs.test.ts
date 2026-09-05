@@ -74,7 +74,6 @@ describe("DevicesDialogController editAlias", () => {
     expect(captured?.defaultValue).toBe("Old alias");
     expect(captured?.requireValue).toBe(true);
     expect(captured?.requireChange).toBe(true);
-    expect(captured?.maxLength).toBe(64);
 
     const submit = captured?.submit;
     if (!submit) {

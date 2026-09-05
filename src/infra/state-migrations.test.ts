@@ -27,6 +27,7 @@ import type {
 } from "../plugins/doctor-contract-module.js";
 import { EMPTY_LEGACY_SESSION_SURFACES } from "../plugins/legacy-session-surfaces.types.js";
 import { resetPluginRuntimeStateForTest, setActivePluginRegistry } from "../plugins/runtime.js";
+import { proposeCreateSkill } from "../skills/workshop/service.js";
 import { readConfigMachineState, writeConfigMachineState } from "../state/config-machine-state.js";
 import { listOpenClawRegisteredAgentDatabases } from "../state/openclaw-agent-db-registry.js";
 import {
@@ -1007,26 +1008,60 @@ describe("state migrations", () => {
     ).rejects.toBeInstanceOf(AgentSelectionRequiredError);
   });
 
-  it("keeps automatic migration read-only when the shared schema is current", async () => {
-    const root = await createTempDir();
-    const stateDir = path.join(root, ".openclaw");
-    const env = createEnv(stateDir);
-    const databasePath = openOpenClawStateDatabase({ env }).path;
-    closeOpenClawStateDatabaseForTest();
-
-    const writer = new DatabaseSync(databasePath);
-    writer.exec("PRAGMA journal_mode = WAL; BEGIN IMMEDIATE;");
-    try {
+  it.each(["present", "absent", "present with a retained bundle"] as const)(
+    "keeps automatic migration read-only with a current schema and Workshop tables %s",
+    async (workshopTables) => {
+      const root = await createTempDir();
+      const stateDir = path.join(root, ".openclaw");
+      const env = createEnv(stateDir);
       const cfg = createConfig();
       cfg.agents = { list: [{ id: "main" }] };
-      await expect(
-        autoMigrateLegacyState({ cfg, env, homedir: () => root }),
-      ).resolves.toMatchObject({ changes: [], warnings: [] });
-    } finally {
-      writer.exec("ROLLBACK;");
-      writer.close();
-    }
-  });
+      const databasePath = openOpenClawStateDatabase({ env }).path;
+      let bundle: { path: string; content: string } | undefined;
+      if (workshopTables === "present with a retained bundle") {
+        const proposal = await proposeCreateSkill({
+          workspaceDir: path.join(root, "workspace"),
+          config: cfg,
+          agentId: "main",
+          env,
+          name: "retained-procedure",
+          description: "Keep a current proposal through no-op migration",
+          content: "# Retained procedure\n\nKeep this modern draft intact.\n",
+        });
+        const proposalDir = path.join(stateDir, "skill-workshop", "proposals", proposal.record.id);
+        bundle = {
+          path: path.join(proposalDir, proposal.record.draftFile),
+          content: proposal.content,
+        };
+        await expect(fs.access(path.join(proposalDir, "proposal.json"))).rejects.toMatchObject({
+          code: "ENOENT",
+        });
+      }
+      closeOpenClawStateDatabaseForTest();
+
+      const writer = new DatabaseSync(databasePath);
+      if (workshopTables === "absent") {
+        writer.exec(`
+        DROP TABLE skill_workshop_proposal_events;
+        DROP TABLE skill_workshop_proposal_rollbacks;
+        DROP TABLE skill_workshop_collection_reviews;
+        DROP TABLE skill_workshop_proposals;
+      `);
+      }
+      writer.exec("PRAGMA journal_mode = WAL; BEGIN IMMEDIATE;");
+      try {
+        await expect(
+          autoMigrateLegacyState({ cfg, env, homedir: () => root }),
+        ).resolves.toMatchObject({ changes: [], warnings: [] });
+        if (bundle) {
+          await expect(fs.readFile(bundle.path, "utf8")).resolves.toBe(bundle.content);
+        }
+      } finally {
+        writer.exec("ROLLBACK;");
+        writer.close();
+      }
+    },
+  );
 
   it("runs legacy-main session migration when the other automatic detectors are empty", async () => {
     const root = await createTempDir();

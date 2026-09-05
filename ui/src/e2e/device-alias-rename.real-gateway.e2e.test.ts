@@ -2,13 +2,19 @@
 // a real in-process Gateway. Proves the save is a persisted Gateway write, not
 // a client-side effect: the alias survives a full page reload and a Gateway
 // restart, and reads back from the pairing store with the UI's own RPC.
+import { createHash } from "node:crypto";
 import { writeFile } from "node:fs/promises";
 import path from "node:path";
+import { validateDevicePairRenameParams } from "@openclaw/gateway-protocol";
 import type { Page } from "playwright";
 import { expect, it } from "vitest";
 import type { GatewayServer } from "../../../src/gateway/server-public.ts";
 import { approveDevicePairing } from "../../../src/infra/device-pairing-approval.js";
-import { listDevicePairing, requestDevicePairing } from "../../../src/infra/device-pairing.js";
+import {
+  listDevicePairing,
+  requestDevicePairing,
+  type PairedDevice,
+} from "../../../src/infra/device-pairing.js";
 import { createOpenClawTestState } from "../../../src/test-utils/openclaw-test-state.ts";
 import { getFreePort } from "../../../src/test-utils/ports.ts";
 import { createControlUiE2eSuite } from "./control-ui-e2e-suite.test-support.ts";
@@ -24,7 +30,7 @@ const suite = createControlUiE2eSuite({
 // assertions above it already proved, at whatever SHA the lane ran.
 const captureEnabled = process.env.OPENCLAW_CAPTURE_UI_PROOF === "1";
 
-async function captureUiProof(page: Page, fileName: string, observed: unknown) {
+async function captureUiProof(page: Page, fileName: string, observed: Record<string, unknown>) {
   if (!captureEnabled) {
     return;
   }
@@ -32,15 +38,36 @@ async function captureUiProof(page: Page, fileName: string, observed: unknown) {
     animations: "disabled",
     path: path.join(suite.artifactDir, fileName),
   });
+  const script = await page.locator('script[type="module"][src]').first().getAttribute("src");
+  expect(script).toBeTruthy();
+  const assetUrl = new URL(script!, page.url());
+  expect(assetUrl.origin).toBe(new URL(page.url()).origin);
+  const response = await page.request.get(assetUrl.href);
+  expect(response.ok()).toBe(true);
+  const bundle = {
+    path: assetUrl.pathname,
+    sha256: createHash("sha256")
+      .update(await response.body())
+      .digest("hex"),
+  };
   await writeFile(
     path.join(suite.artifactDir, fileName.replace(/\.png$/u, ".json")),
-    `${JSON.stringify(observed, null, 2)}\n`,
+    `${JSON.stringify({ ...observed, bundle }, null, 2)}\n`,
     "utf8",
   );
 }
 
-const DISPLAY_NAME = "LIN-5F196050F5D.zte.intra";
-const NEW_ALIAS = "Office node";
+const DISPLAY_NAME = "office-workstation.example.test";
+const NEW_ALIAS = "🙂".repeat(33);
+
+function pairedDeviceProof(device: PairedDevice | undefined) {
+  if (!device) {
+    return undefined;
+  }
+  // Internal pairing rows include credentials; proof needs only identity and naming facts.
+  const { deviceId, operatorLabel, displayName, roles } = device;
+  return { deviceId, operatorLabel, displayName, roles };
+}
 
 /** Confirm the gateway URL dialog. Required on first load; after a reload the UI remembers the confirmed URL and may not ask again. */
 async function confirmGatewayUrl(page: Page, options: { required: boolean }) {
@@ -149,11 +176,25 @@ suite.define(() => {
             stage: "rename dialog opened",
           });
 
-          await dialog.locator('input[name="value"]').fill(NEW_ALIAS);
-          await captureUiProof(page, "03-real-gateway-alias-dialog-filled.png", {
-            stage: "rename dialog filled",
-            alias: NEW_ALIAS,
+          const protocolAccepted = validateDevicePairRenameParams({
+            deviceId: identity.deviceId,
+            label: NEW_ALIAS,
           });
+          expect(protocolAccepted).toBe(true);
+          const input = dialog.locator('input[name="value"]');
+          await input.click();
+          await page.keyboard.insertText(NEW_ALIAS);
+          const entered = await input.inputValue();
+          await captureUiProof(page, "03-real-gateway-alias-dialog-filled.png", {
+            stage: "operator entered a protocol-valid Unicode alias",
+            protocolAccepted,
+            requestedAlias: NEW_ALIAS,
+            enteredAlias: entered,
+            requestedCodeUnits: NEW_ALIAS.length,
+            enteredCodeUnits: entered.length,
+            maxLength: await input.getAttribute("maxlength"),
+          });
+          expect(entered).toBe(NEW_ALIAS);
           await dialog.getByRole("button", { name: "Save" }).click();
 
           await page
@@ -165,9 +206,10 @@ suite.define(() => {
           const stored = await listDevicePairing();
           const paired = stored.paired.find((device) => device.deviceId === identity.deviceId);
           expect(paired?.operatorLabel).toBe(NEW_ALIAS);
+          expect(paired?.displayName).toBe(DISPLAY_NAME);
           await captureUiProof(page, "04-real-gateway-alias-applied.png", {
             stage: "alias applied and read back from the pairing store",
-            paired,
+            paired: pairedDeviceProof(paired),
           });
 
           // Full page reload: the UI must re-read the alias from the Gateway.
@@ -180,8 +222,8 @@ suite.define(() => {
             stage: "alias survives full page reload",
           });
 
-          // Gateway restart: the alias must survive process lifecycle, proving
-          // persistence beyond any in-memory state.
+          // Stop and restart the Gateway server in this test process, then
+          // verify that both the browser and pairing store retain the alias.
           await gateway?.close({ reason: "device alias rename e2e restart" });
           gateway = await startGatewayServer(port, {
             auth: { mode: "none" },
@@ -201,7 +243,9 @@ suite.define(() => {
           ).toBe(NEW_ALIAS);
           await captureUiProof(page, "06-real-gateway-alias-after-restart.png", {
             stage: "alias survives Gateway restart",
-            paired: afterRestart.paired.find((device) => device.deviceId === identity.deviceId),
+            paired: pairedDeviceProof(
+              afterRestart.paired.find((device) => device.deviceId === identity.deviceId),
+            ),
           });
         },
       );

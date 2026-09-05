@@ -61,10 +61,7 @@ import { callNativeSubagentGateway, readGatewayRunId } from "./subagent-spawn-ga
 import { buildSubagentLaunchRequest } from "./subagent-spawn-launch-request.js";
 import { createSubagentSpawnLifecycleEmitter } from "./subagent-spawn-lifecycle.js";
 import { resolveSubagentSpawnRequest } from "./subagent-spawn-request.js";
-import {
-  createInitialSubagentSession,
-  persistInitialChildSessionRuntimeModel,
-} from "./subagent-spawn-session-patch.js";
+import { createInitialSubagentSession } from "./subagent-spawn-session-patch.js";
 import { bindThreadForSubagentSpawn } from "./subagent-spawn-thread-binding.js";
 import { emitSessionLifecycleEvent, mergeDeliveryContext } from "./subagent-spawn.runtime.js";
 import { buildSubagentSpawnEnvelope } from "./subagent-system-prompt.js";
@@ -129,7 +126,6 @@ export async function spawnSubagentDirect(
     },
     childIdem,
   } = requestResolution.resolved;
-  let modelApplied = false;
   let threadBindingReady = false;
   let hasBoundThreadDeliveryOrigin = false;
   let childRunId: string = childIdem;
@@ -204,6 +200,7 @@ export async function spawnSubagentDirect(
         ...provisionalSessionIdentity,
       });
     const preparedSpawnContext = await prepareSubagentSessionContext({
+      assertActive,
       cfg,
       contextMode,
       requesterAgentId,
@@ -228,24 +225,9 @@ export async function spawnSubagentDirect(
         expectedLifecycleRevision: childEntry.lifecycleRevision,
       };
     }
-    if (resolvedModel) {
-      const runtimeModelPersistError = await persistInitialChildSessionRuntimeModel({
-        cfg,
-        childSessionKey,
-        resolvedModel,
-      });
-      if (runtimeModelPersistError) {
-        await cleanupCreatedSession();
-        return {
-          status: "error",
-          error: runtimeModelPersistError,
-          childSessionKey,
-        };
-      }
-      modelApplied = true;
-    }
     if (requestThreadBinding) {
       const bindResult = await bindThreadForSubagentSpawn({
+        assertActive,
         cfg,
         childSessionKey,
         agentId: targetAgentId,
@@ -312,6 +294,7 @@ export async function spawnSubagentDirect(
     let attachmentRootDir: string | undefined;
 
     const materializedAttachments = await materializeSubagentAttachments({
+      assertActive,
       config: cfg,
       targetAgentId,
       workspaceDir: spawnedCwd ?? spawnedWorkspaceDir,
@@ -370,11 +353,12 @@ export async function spawnSubagentDirect(
       requesterSessionKey: requesterInternalKey,
       agentId: targetAgentId,
     });
-    const launchChildRun = async () =>
+    const launchChildRun = async (assertDispatchCurrent?: () => void) =>
       await callNativeSubagentGateway(
         withSubagentGatewayExecutionIdentity(
           {
             method: "agent",
+            assertDispatchCurrent,
             params: childLaunch.request,
             timeoutMs: childLaunch.timeoutMs,
           },
@@ -431,6 +415,7 @@ export async function spawnSubagentDirect(
           params.lightContext && preparedSpawnContext.mode === "isolated"
             ? ({ status: "ok", preparation: undefined } as const)
             : await prepareContextEngineSubagentSpawn({
+                assertActive,
                 cfg,
                 context: preparedSpawnContext,
                 requesterInternalKey,
@@ -443,13 +428,10 @@ export async function spawnSubagentDirect(
         return { contextEnginePreparation: result.preparation };
       },
       async dispatchTurn() {
-        // Initialize returned its rollback handle. Refusal here follows dispatch
-        // cleanup instead of losing that handle through initialize failure.
-        assertActive?.();
         if (params.collect) {
           return { runId: childIdem };
         }
-        const launch = await launchChildRun();
+        const launch = await launchChildRun(assertActive);
         taskRowOwnership = launch.taskRowOwnership;
         acceptedChildRunId = readGatewayRunId(launch.response) ?? childIdem;
         recordSessionParticipantBestEffort({
@@ -519,11 +501,11 @@ export async function spawnSubagentDirect(
     };
     const pipelineResult = await runSpawnPipeline({
       adapter,
+      assertActive,
       admissionReservation,
       progressOrigin,
       progressSessionKey: requesterInternalKey,
       buildRegistration: (_state, runId) => {
-        assertActive?.();
         if (params.collect) {
           const latestAdmission = resolveAdmission();
           if (!latestAdmission.ok) {
@@ -697,7 +679,7 @@ export async function spawnSubagentDirect(
         [envelope.acceptedNote, preparedSpawnContext.forkFallbackNote].filter(Boolean).join(" ") ||
         undefined,
       ...resolvedModelMetadata,
-      modelApplied: resolvedModel ? modelApplied : undefined,
+      modelApplied: plan.modelApplied || undefined,
       attachments: attachmentsReceipt,
     };
   } finally {

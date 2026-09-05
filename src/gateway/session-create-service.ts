@@ -711,6 +711,7 @@ export async function createGatewaySession(params: {
     const pendingEntry = resolveSessionEntryAccessTarget({
       cfg: params.cfg,
       sessionKey: creationTarget.canonicalKey,
+      agentId: creationTarget.agentId,
     }).entry;
     if (pendingEntry?.initializationPending === true) {
       return {

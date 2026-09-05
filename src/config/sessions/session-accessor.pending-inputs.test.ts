@@ -8,12 +8,14 @@ import { createUserTurnTranscriptRecorder } from "../../sessions/user-turn-trans
 import type { PersistedUserTurnMessage } from "../../sessions/user-turn-transcript.types.js";
 import {
   closeOpenClawAgentDatabasesForTest,
+  deferOpenClawAgentPostCommitPublication,
   openOpenClawAgentDatabase,
   runOpenClawAgentWriteTransaction,
 } from "../../state/openclaw-agent-db.js";
 import {
   appendTranscriptMessage,
   appendTranscriptMessageSync,
+  appendTranscriptEventSync,
   deleteSessionEntryLifecycle,
   loadTranscriptEvents,
   readActiveTranscriptEntryAnchor,
@@ -53,6 +55,12 @@ describe("accepted input custody", () => {
     timestamp: 100,
     idempotencyKey: `${runId}:user`,
   });
+  const readEventId = (event: unknown) => {
+    if (!event || typeof event !== "object" || !("id" in event)) {
+      return undefined;
+    }
+    return typeof event.id === "string" ? event.id : undefined;
+  };
   const stage = async (
     runId: string,
     options: Partial<Parameters<typeof stageSessionPendingInput>[1]> = {},
@@ -198,6 +206,146 @@ describe("accepted input custody", () => {
         appendTranscriptMessage(scope(), { message: receipt.message }),
       ),
     ).rejects.toThrow("conflicts with the admitted message");
+  });
+
+  it("publishes committed relocation before fallible post-commit observers", async () => {
+    const receipt = await stage("relocation-observer");
+    await promote(receipt);
+    const appendCopy = (sourceInputId: string, eventId: string) =>
+      withSessionPendingInputRelocation(sourceInputId, receipt.message, () =>
+        appendTranscriptMessageSync(scope(), {
+          eventId,
+          idempotencyLookup: "caller-checked",
+          message: receipt.message,
+          parentId: null,
+        }),
+      );
+
+    expect(() =>
+      runOpenClawAgentWriteTransaction(
+        (current) => {
+          deferOpenClawAgentPostCommitPublication(current, () => {
+            throw new Error("injected observer failure");
+          });
+          receipt.run(() => appendCopy(receipt.inputId, "relocated-before-observer"));
+        },
+        toDatabaseOptions(resolveSqliteScope(scope())),
+      ),
+    ).toThrow("injected observer failure");
+
+    expect(() =>
+      receipt.run(() => appendCopy(receipt.inputId, "stale-source-after-observer")),
+    ).toThrow("does not match");
+    expect(
+      receipt.run(() => appendTranscriptMessageSync(scope(), { message: receipt.message })),
+    ).toMatchObject({ ok: true, value: { appended: false } });
+  });
+
+  it("stages repeated relocation through savepoints and restores it on rollback", async () => {
+    const receipt = await stage("relocation-savepoints");
+    await promote(receipt);
+    const databaseOptions = toDatabaseOptions(resolveSqliteScope(scope()));
+    const appendCopy = (sourceInputId: string, eventId: string) =>
+      withSessionPendingInputRelocation(sourceInputId, receipt.message, () =>
+        appendTranscriptMessageSync(scope(), {
+          eventId,
+          idempotencyLookup: "caller-checked",
+          message: receipt.message,
+          parentId: null,
+        }),
+      );
+
+    expect(() =>
+      runOpenClawAgentWriteTransaction(() => {
+        receipt.run(() => appendCopy(receipt.inputId, "rolled-back-outer"));
+        throw new Error("outer rollback");
+      }, databaseOptions),
+    ).toThrow("outer rollback");
+
+    runOpenClawAgentWriteTransaction(() => {
+      receipt.run(() => {
+        expect(appendCopy(receipt.inputId, "first-savepoint-copy")).toMatchObject({
+          ok: true,
+          value: { appended: true, messageId: "first-savepoint-copy" },
+        });
+        expect(() =>
+          runOpenClawAgentWriteTransaction(() => {
+            appendCopy("first-savepoint-copy", "rolled-back-savepoint");
+            throw new Error("savepoint rollback");
+          }, databaseOptions),
+        ).toThrow("savepoint rollback");
+        expect(appendCopy("first-savepoint-copy", "final-savepoint-copy")).toMatchObject({
+          ok: true,
+          value: { appended: true, messageId: "final-savepoint-copy" },
+        });
+      });
+    }, databaseOptions);
+
+    expect((await loadTranscriptEvents(scope())).map(readEventId)).not.toContain(
+      "rolled-back-outer",
+    );
+    expect((await loadTranscriptEvents(scope())).map(readEventId)).not.toContain(
+      "rolled-back-savepoint",
+    );
+    expect(() =>
+      receipt.run(() => appendCopy("first-savepoint-copy", "stale-savepoint-source")),
+    ).toThrow("does not match");
+    expect(
+      receipt.run(() => appendTranscriptMessageSync(scope(), { message: receipt.message })),
+    ).toMatchObject({ ok: true, value: { appended: false } });
+  });
+
+  it("does not use a dirty projection to excuse an inactive admitted user", async () => {
+    const receipt = await stage("dirty-off-path");
+    await promote(receipt);
+    expect(
+      appendTranscriptMessageSync(scope(), {
+        eventId: "other-root",
+        message: message("other-root"),
+        parentId: null,
+      }),
+    ).toMatchObject({ ok: true, value: { appended: true, messageId: "other-root" } });
+
+    expect(() =>
+      receipt.run(() => appendTranscriptMessageSync(scope(), { message: receipt.message })),
+    ).toThrow("no longer active");
+  });
+
+  it("rejects a split-cursor replay before and after projection reconciliation", async () => {
+    const visible = await appendTranscriptMessage(scope(), {
+      message: message("visible", "Visible history"),
+    });
+    const receipt = await stage("split-cursor");
+    await promote(receipt);
+    expect(
+      appendTranscriptEventSync(scope(), {
+        type: "leaf",
+        id: "select-visible",
+        parentId: receipt.inputId,
+        targetId: visible?.messageId ?? null,
+        appendParentId: receipt.inputId,
+        appendMode: "side",
+      }),
+    ).toMatchObject({ ok: true, value: true });
+    expect(
+      appendTranscriptMessageSync(scope(), {
+        eventId: "continued",
+        message: message("continued", "Continued visible history"),
+        parentId: receipt.inputId,
+      }),
+    ).toMatchObject({ ok: true, value: { appended: true, messageId: "continued" } });
+
+    const replay = () =>
+      receipt.run(() => appendTranscriptMessageSync(scope(), { message: receipt.message }));
+    expect(
+      readActiveTranscriptEntryAnchor({ ...scope(), entryId: receipt.inputId }),
+    ).toBeUndefined();
+    expect(replay).toThrow("no longer active");
+    await waitForSessionTranscriptProjection(scope());
+    expect(
+      readActiveTranscriptEntryAnchor({ ...scope(), entryId: receipt.inputId }),
+    ).toBeUndefined();
+    expect(replay).toThrow("no longer active");
   });
 
   it("promotes a queued input with its own custody after another receipt releases the writer", async () => {

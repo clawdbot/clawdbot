@@ -31,12 +31,12 @@ async function captureUiProof(page: Page, fileName: string) {
   await page.screenshot({ animations: "disabled", path: path.join(uiProofArtifactDir, fileName) });
 }
 
-const DEVICE_ID = "device-lin-workstation";
+const DEVICE_ID = "synthetic-office-workstation";
 
 function pairedDevice(operatorLabel?: string) {
   return {
     deviceId: DEVICE_ID,
-    displayName: "LIN-5F196050F5D.zte.intra",
+    displayName: "office-workstation.example.test",
     ...(operatorLabel ? { operatorLabel } : {}),
     platform: "linux",
     roles: ["node", "operator"],
@@ -48,7 +48,7 @@ function pairedDevice(operatorLabel?: string) {
 }
 
 suite.define(() => {
-  it("renames a paired device alias through the row menu", async () => {
+  it("retries a rejected alias rename and dismisses unsaved edits on reconnect", async () => {
     await suite.withPage(
       {
         locale: "en-US",
@@ -75,7 +75,7 @@ suite.define(() => {
         await page.goto(`${suite.server.baseUrl}settings/devices`);
         await waitForControlUiRoute(page, { pathname: "/settings/devices", routeId: "devices" });
 
-        const row = page.locator(".device-entry", { hasText: "LIN-5F196050F5D" });
+        const row = page.locator(".device-entry", { hasText: "office-workstation.example.test" });
         await row.waitFor();
         await captureUiProof(page, "01-devices-inventory.png");
 
@@ -88,8 +88,8 @@ suite.define(() => {
         await dialog.locator('input[name="value"]').fill("Office node");
         await captureUiProof(page, "03-alias-dialog-filled.png");
 
-        // Hold the rename response so the refreshed device list deterministically
-        // reads the post-rename alias rather than racing the reload.
+        // Reject the first request at the transport boundary; the same dialog
+        // must preserve the value and remain usable for a second attempt.
         await gateway.deferNext("device.pair.rename");
         const renamesBefore = (await gateway.getRequests("device.pair.rename")).length;
         await dialog.getByRole("button", { name: "Save" }).click();
@@ -99,6 +99,23 @@ suite.define(() => {
         });
         expect(renameRequest.params).toEqual({ deviceId: DEVICE_ID, label: "Office node" });
 
+        await gateway.rejectDeferred("device.pair.rename", { message: "Alias change rejected" });
+        const failure = dialog.getByRole("alert");
+        await failure.waitFor();
+        expect(await failure.textContent()).toContain("Alias change rejected");
+        expect(await dialog.locator('input[name="value"]').inputValue()).toBe("Office node");
+        expect(await dialog.getByRole("button", { name: "Save" }).isEnabled()).toBe(true);
+        await captureUiProof(page, "03b-alias-rejected-retryable.png");
+
+        const retryAfter = (await gateway.getRequests("device.pair.rename")).length;
+        await gateway.deferNext("device.pair.rename");
+        await dialog.getByRole("button", { name: "Save" }).click();
+        const retryRequest = await gateway.waitForRequest("device.pair.rename", {
+          after: retryAfter,
+        });
+        expect(retryRequest.params).toEqual({ deviceId: DEVICE_ID, label: "Office node" });
+
+        // Publish the new list before releasing success so the refresh has no race.
         await gateway.setMethodResponse("device.pair.list", {
           pending: [],
           paired: [pairedDevice("Office node")],
@@ -112,6 +129,19 @@ suite.define(() => {
           .locator(".device-entry .settings-row__title", { hasText: "Office node" })
           .waitFor();
         await captureUiProof(page, "04-alias-applied.png");
+
+        await dialog.waitFor({ state: "hidden" });
+        const renamedRow = page.locator(".device-entry", { hasText: "Office node" });
+        await renamedRow.locator(".device-entry__menu-trigger").click();
+        await page.locator('wa-dropdown-item[value="editAlias"]').click();
+        await dialog.locator('input[name="value"]').fill("Unsaved alias");
+        const socketsBefore = await gateway.getSocketCount();
+        await gateway.closeLatest();
+        await dialog.waitFor({ state: "hidden" });
+        await expect.poll(() => gateway.getSocketCount()).toBeGreaterThan(socketsBefore);
+        await renamedRow.waitFor();
+        expect(await gateway.getRequests("device.pair.rename")).toHaveLength(renamesBefore + 2);
+        await captureUiProof(page, "05-alias-after-reconnect.png");
       },
     );
   });
