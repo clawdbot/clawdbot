@@ -18,6 +18,7 @@ import ai.openclaw.app.chat.ChatQuestionDraft
 import ai.openclaw.app.chat.ChatQuestionPrompt
 import ai.openclaw.app.chat.ChatReaderPosition
 import ai.openclaw.app.chat.ChatReaderPositionBinding
+import ai.openclaw.app.chat.ChatReaderPositionScope
 import ai.openclaw.app.chat.ChatReaderPositionStore
 import ai.openclaw.app.chat.ChatSessionDeletion
 import ai.openclaw.app.chat.ChatSessionEntry
@@ -2083,11 +2084,19 @@ class NodeRuntime private constructor(
 
   private fun publishChatSessionDeletion(deletion: ChatSessionDeletion) {
     synchronized(gatewayDataScopeLock) { chatSelectionSeq.incrementAndGet() }
-    deletion.gatewayId?.let { gatewayId ->
+    val readerScope =
+      deletion.gatewayId?.let { gatewayId ->
+        deletion.sessionId?.let { sessionId ->
+          ChatReaderPositionScope(gatewayId, deletion.agentId, deletion.sessionKey, sessionId)
+        }
+      }
+    // A delete without the durable session ID cannot identify an instance safely. Leave its
+    // bounded LRU entry to expire rather than letting a delayed event delete a replacement.
+    readerScope?.let { readerPositionScope ->
       // Enter the store fence before listeners can bind a replacement with the same key;
       // the database delete may finish asynchronously, but newer state cannot be retired by it.
       scope.launch(start = CoroutineStart.UNDISPATCHED) {
-        runCatching { chatReaderPositionStore.deleteSession(gatewayId, deletion.sessionKey) }
+        runCatching { chatReaderPositionStore.deleteSession(readerPositionScope) }
       }
     }
     chatSessionDeletionListeners.values.forEach { listener -> listener(deletion) }
@@ -3075,10 +3084,7 @@ class NodeRuntime private constructor(
   val chatOutboxItems: StateFlow<List<ChatOutboxItem>> = chat.outboxItems
   val chatOutboxPresentationRestored: StateFlow<Boolean> = chat.outboxPresentationRestored
 
-  internal suspend fun loadChatReaderPosition(
-    gatewayId: String,
-    sessionKey: String,
-  ): ChatReaderPositionBinding = chatReaderPositionStore.bind(gatewayId, sessionKey)
+  internal suspend fun loadChatReaderPosition(scope: ChatReaderPositionScope): ChatReaderPositionBinding = chatReaderPositionStore.bind(scope)
 
   internal suspend fun saveChatReaderPosition(
     binding: ChatReaderPositionBinding,

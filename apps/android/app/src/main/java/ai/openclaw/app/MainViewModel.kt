@@ -13,6 +13,7 @@ import ai.openclaw.app.chat.ChatQuestionDraft
 import ai.openclaw.app.chat.ChatQuestionPrompt
 import ai.openclaw.app.chat.ChatReaderPosition
 import ai.openclaw.app.chat.ChatReaderPositionBinding
+import ai.openclaw.app.chat.ChatReaderPositionScope
 import ai.openclaw.app.chat.ChatSessionEntry
 import ai.openclaw.app.chat.ChatSwarmGroup
 import ai.openclaw.app.chat.ChatThinkingLevelSelection
@@ -623,6 +624,7 @@ class MainViewModel private constructor(
   val talkModeStatusText: StateFlow<String> = runtimeState(initial = "Off") { it.talkModeStatusText }
 
   val chatSessionKey: StateFlow<String> = runtimeState(initial = "main") { it.chatSessionKey }
+  internal val chatSessionId: StateFlow<String?> = runtimeState(initial = null) { it.chatSessionId }
   internal val chatPermissionSettingsAvailable: StateFlow<Boolean> = runtimeState(initial = false) { it.chatPermissionSettingsAvailable }
   internal val chatSelectionGeneration: StateFlow<Long> = runtimeState(initial = 0L) { it.chatSelectionGeneration }
   internal val gatewayCatalogRevision: StateFlow<Long> = runtimeState(initial = 0L) { it.gatewayCatalogRevision }
@@ -669,10 +671,7 @@ class MainViewModel private constructor(
   internal val chatMessageSpeech: StateFlow<MessageSpeechState?> =
     runtimeState(initial = null) { it.messageSpeechState }
 
-  internal suspend fun loadChatReaderPosition(
-    gatewayId: String,
-    sessionKey: String,
-  ): ChatReaderPositionBinding = ensureRuntime().loadChatReaderPosition(gatewayId, sessionKey)
+  internal suspend fun loadChatReaderPosition(scope: ChatReaderPositionScope): ChatReaderPositionBinding = ensureRuntime().loadChatReaderPosition(scope)
 
   internal suspend fun saveChatReaderPosition(
     binding: ChatReaderPositionBinding,

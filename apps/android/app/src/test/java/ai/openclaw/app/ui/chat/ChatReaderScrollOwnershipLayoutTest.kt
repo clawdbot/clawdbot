@@ -2,6 +2,8 @@ package ai.openclaw.app.ui.chat
 
 import ai.openclaw.app.chat.ChatMessage
 import ai.openclaw.app.chat.ChatMessageContent
+import ai.openclaw.app.chat.ChatReaderPosition
+import ai.openclaw.app.chat.ChatReaderPositionBinding
 import ai.openclaw.app.ui.design.ClawDesignTheme
 import android.app.Application
 import androidx.compose.foundation.layout.Arrangement
@@ -99,6 +101,64 @@ class ChatReaderScrollOwnershipLayoutTest {
       composeRule.mainClock.autoAdvance = originalAutoAdvance
       composeRule.waitForIdle()
     }
+  }
+
+  @Test
+  fun persistedAnchorWaitsForAuthoritativeHistoryAfterPartialCache() {
+    val fullHistory = listOf(message("old user", "user", 1)) + (0 until 20).map { message("assistant $it", "assistant", it + 2) }
+    val expectedIndex =
+      buildChatTimeline(fullHistory, 0, emptyList(), null).items.indexOfFirst { item ->
+        (item as? ChatTimelineItem.Message)?.message?.id == "assistant 10"
+      }
+    composeRule.setContent {
+      ClawDesignTheme {
+        var messages by remember { mutableStateOf(listOf(fullHistory.last())) }
+        var historyResolved by remember { mutableStateOf(false) }
+        val timeline = remember(messages) { buildChatTimeline(messages, 0, emptyList(), null) }
+        val current =
+          rememberChatReaderScrollController(
+            gatewayId = "gateway-a",
+            ownerAgentId = "main",
+            sessionKey = "main",
+            sessionId = "session-a",
+            timeline = timeline,
+            historyLoading = false,
+            historyResolved = historyResolved,
+            loadPosition = { scope ->
+              ChatReaderPositionBinding(scope, ChatReaderPosition("assistant 10", 23), generation = 1)
+            },
+          )
+        SideEffect { reader = current }
+        Column {
+          TextButton(
+            onClick = {
+              messages = fullHistory
+              historyResolved = true
+            },
+          ) { Text("Resolve history") }
+          LazyColumn(state = current.listState, reverseLayout = true, modifier = Modifier.height(480.dp)) {
+            items(timeline.items, key = ::chatTimelineItemKey) { item ->
+              Box(Modifier.fillMaxWidth().height(64.dp)) {
+                Text(
+                  (item as ChatTimelineItem.Message)
+                    .message
+                    .content
+                    .single()
+                    .text
+                    .orEmpty(),
+                )
+              }
+            }
+          }
+        }
+      }
+    }
+
+    composeRule.waitForIdle()
+    click("Resolve history")
+    composeRule.waitForIdle()
+
+    assertEquals(ViewportPosition(expectedIndex, 23), viewport().position)
   }
 
   private fun verifyManualTakeover(replaceRunningTransition: Boolean) {

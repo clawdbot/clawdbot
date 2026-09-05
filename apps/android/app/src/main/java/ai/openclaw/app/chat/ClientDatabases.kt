@@ -59,6 +59,9 @@ internal interface ClientStateControlDao {
   @Insert(onConflict = OnConflictStrategy.REPLACE)
   suspend fun upsertMetadata(row: ClientStateMetadataEntity)
 
+  @Query("DELETE FROM client_state_metadata WHERE `key` = :key")
+  suspend fun deleteMetadata(key: String)
+
   @Query("SELECT * FROM gateway_removals ORDER BY gatewayId ASC")
   suspend fun gatewayRemovals(): List<GatewayRemovalEntity>
 
@@ -121,9 +124,8 @@ internal abstract class GatewayCacheDatabase : RoomDatabase() {
     ComposerSendAdmissionEntity::class,
     ClientStateMetadataEntity::class,
     GatewayRemovalEntity::class,
-    ChatReaderPositionEntity::class,
   ],
-  version = 2,
+  version = 1,
   exportSchema = true,
 )
 internal abstract class ClientStateDatabase : RoomDatabase() {
@@ -131,28 +133,13 @@ internal abstract class ClientStateDatabase : RoomDatabase() {
 
   abstract fun controlDao(): ClientStateControlDao
 
-  abstract fun readerPositionDao(): ChatReaderPositionDao
-
   companion object {
-    internal val MIGRATION_1_2 =
-      object : Migration(1, 2) {
-        override suspend fun migrate(connection: SQLiteConnection) {
-          connection.execSQL(
-            "CREATE TABLE IF NOT EXISTS `chat_reader_positions` " +
-              "(`gatewayId` TEXT NOT NULL, `sessionKey` TEXT NOT NULL, `messageId` TEXT NOT NULL, " +
-              "`itemOffset` INTEGER NOT NULL, `messageVersion` TEXT, " +
-              "PRIMARY KEY(`gatewayId`, `sessionKey`))",
-          )
-        }
-      }
-
     suspend fun open(
       context: Context,
       name: String = CLIENT_STATE_DB_NAME,
     ): ClientStateDatabase =
       Room
         .databaseBuilder(context.applicationContext, ClientStateDatabase::class.java, name)
-        .addMigrations(MIGRATION_1_2)
         .build()
         // Fail closed and preserve the file if durable state cannot be opened or validated.
         .openValidated()
@@ -425,7 +412,7 @@ private class OpenedAndroidClientDatabases private constructor(
         state.withWriteTransaction {
           state.controlDao().upsertGatewayRemoval(GatewayRemovalEntity(gateway, GATEWAY_REMOVAL_COMMITTING))
           commandOutbox.clearGateway(gateway)
-          state.readerPositionDao().clearGateway(gateway)
+          state.controlDao().deleteMetadata(chatReaderPositionMetadataKey(gateway))
           state.controlDao().upsertGatewayRemoval(GatewayRemovalEntity(gateway, GATEWAY_REMOVAL_CACHE_PENDING))
         }
       }

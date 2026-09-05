@@ -28,6 +28,7 @@ import ai.openclaw.app.chat.ChatQuestionDraft
 import ai.openclaw.app.chat.ChatQuestionPrompt
 import ai.openclaw.app.chat.ChatReaderPosition
 import ai.openclaw.app.chat.ChatReaderPositionBinding
+import ai.openclaw.app.chat.ChatReaderPositionScope
 import ai.openclaw.app.chat.ChatSessionEntry
 import ai.openclaw.app.chat.ChatSubagentActivity
 import ai.openclaw.app.chat.ChatThinkingLevelOption
@@ -313,6 +314,7 @@ fun ChatScreen(
   val canAdminSessionSettings = operatorScopesAllowAdmin(operatorScopes)
   val activeGatewayStableId by viewModel.activeGatewayStableId.collectAsState()
   val sessionKey by viewModel.chatSessionKey.collectAsState()
+  val sessionId by viewModel.chatSessionId.collectAsState()
   val selectionGeneration by viewModel.chatSelectionGeneration.collectAsState()
   val gatewayCatalogRevision by viewModel.gatewayCatalogRevision.collectAsState()
   val sessionOwnerAgentId by viewModel.chatSessionOwnerAgentId.collectAsState()
@@ -728,6 +730,7 @@ fun ChatScreen(
     ChatMessageList(
       gatewayId = activeGatewayStableId,
       sessionKey = sessionKey,
+      sessionId = sessionId,
       fullMessageOwner = composerOwner,
       selectionGeneration = selectionGeneration,
       gatewayCatalogRevision = gatewayCatalogRevision,
@@ -1324,6 +1327,7 @@ private fun HeaderIcon(
 private fun ChatMessageList(
   gatewayId: String?,
   sessionKey: String,
+  sessionId: String?,
   fullMessageOwner: ChatComposerOwner,
   selectionGeneration: Long,
   gatewayCatalogRevision: Long,
@@ -1332,7 +1336,7 @@ private fun ChatMessageList(
   messages: List<ChatMessage>,
   transcriptAnchor: ChatTranscriptAnchorState?,
   historyLoading: Boolean,
-  loadReaderPosition: suspend (String, String) -> ChatReaderPositionBinding,
+  loadReaderPosition: suspend (ChatReaderPositionScope) -> ChatReaderPositionBinding,
   saveReaderPosition: suspend (ChatReaderPositionBinding, ChatReaderPosition) -> Unit,
   clearReaderPosition: suspend (ChatReaderPositionBinding) -> Unit,
   activeRunCount: Int,
@@ -1407,10 +1411,12 @@ private fun ChatMessageList(
   val readerScroll =
     rememberChatReaderScrollController(
       gatewayId = gatewayId,
+      ownerAgentId = fullMessageOwner.agentId,
       sessionKey = sessionKey,
-      readerGeneration = selectionGeneration,
+      sessionId = sessionId,
       timeline = timeline,
       historyLoading = historyLoading,
+      historyResolved = transcriptAnchor?.sessionKey == sessionKey,
       loadPosition = loadReaderPosition,
       savePosition = saveReaderPosition,
       clearPosition = clearReaderPosition,

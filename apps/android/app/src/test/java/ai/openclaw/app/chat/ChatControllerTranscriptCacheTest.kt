@@ -449,13 +449,13 @@ class ChatControllerTranscriptCacheTest {
 
       controller.handleGatewayEvent(
         "sessions.changed",
-        """{"reason":"delete","sessionKey":"agent:old:main"}""",
+        """{"reason":"delete","sessionKey":"agent:old:main","sessionId":"deleted-id"}""",
       )
       advanceUntilIdle()
 
       assertEquals(listOf(Triple("gateway-a", "old", "agent:old:main")), cache.deletedSessions)
       assertEquals(
-        listOf(ChatSessionDeletion("gateway-a", "old", "agent:old:main", "main")),
+        listOf(ChatSessionDeletion("gateway-a", "old", "agent:old:main", "deleted-id", "main")),
         deletions,
       )
     }
@@ -693,7 +693,7 @@ class ChatControllerTranscriptCacheTest {
         ) { method, params ->
           if (method == "sessions.delete") deleteParams = params.orEmpty()
           when (method) {
-            "sessions.list" -> """{"sessions":[{"key":"custom"}]}"""
+            "sessions.list" -> """{"sessions":[{"key":"custom","sessionId":"custom-id"}]}"""
             "sessions.delete" -> """{"deleted":true}"""
             else -> "{}"
           }
@@ -709,6 +709,7 @@ class ChatControllerTranscriptCacheTest {
       assertEquals("gateway-a", deletion?.gatewayId)
       assertEquals("owner-a", deletion?.agentId)
       assertEquals("custom", deletion?.sessionKey)
+      assertEquals("custom-id", deletion?.sessionId)
       assertTrue(deleteParams.contains("\"agentId\":\"owner-a\""))
       assertEquals(listOf(Triple("gateway-a", "owner-a", "custom")), cache.deletedSessions)
     }

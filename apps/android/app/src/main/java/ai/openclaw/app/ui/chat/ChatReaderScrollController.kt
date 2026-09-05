@@ -2,6 +2,7 @@ package ai.openclaw.app.ui.chat
 
 import ai.openclaw.app.chat.ChatReaderPosition
 import ai.openclaw.app.chat.ChatReaderPositionBinding
+import ai.openclaw.app.chat.ChatReaderPositionScope
 import androidx.compose.foundation.gestures.stopScroll
 import androidx.compose.foundation.lazy.LazyListState
 import androidx.compose.foundation.lazy.rememberLazyListState
@@ -114,9 +115,11 @@ internal fun rememberChatReaderScrollController(
   sessionKey: String,
   timeline: ChatTimeline,
   historyLoading: Boolean,
+  historyResolved: Boolean = false,
   gatewayId: String? = null,
-  readerGeneration: Long = 0,
-  loadPosition: suspend (String, String) -> ChatReaderPositionBinding? = { _, _ -> null },
+  ownerAgentId: String? = null,
+  sessionId: String? = null,
+  loadPosition: suspend (ChatReaderPositionScope) -> ChatReaderPositionBinding? = { null },
   savePosition: suspend (ChatReaderPositionBinding, ChatReaderPosition) -> Unit = { _, _ -> },
   clearPosition: suspend (ChatReaderPositionBinding) -> Unit = {},
 ): ChatReaderScrollController {
@@ -127,15 +130,15 @@ internal fun rememberChatReaderScrollController(
   val currentLoadPosition by rememberUpdatedState(loadPosition)
   val currentSavePosition by rememberUpdatedState(savePosition)
   val currentClearPosition by rememberUpdatedState(clearPosition)
-  val readerStateSaver = remember(gatewayId, sessionKey, readerGeneration) { createChatReaderStateSaver(sessionKey) }
+  val readerStateSaver = remember(gatewayId, ownerAgentId, sessionKey, sessionId) { createChatReaderStateSaver(sessionKey) }
   var readerState by
-    rememberSaveable(gatewayId, sessionKey, readerGeneration, stateSaver = readerStateSaver) {
+    rememberSaveable(gatewayId, ownerAgentId, sessionKey, sessionId, stateSaver = readerStateSaver) {
       mutableStateOf(ChatReaderState(ownerSessionKey = sessionKey))
     }
-  var applyingScrollCount by remember(gatewayId, sessionKey, readerGeneration) { mutableIntStateOf(0) }
-  var isUserScrolling by remember(gatewayId, sessionKey, readerGeneration) { mutableStateOf(false) }
-  var positionBinding by remember(gatewayId, sessionKey, readerGeneration) { mutableStateOf<ChatReaderPositionBinding?>(null) }
-  var positionLoaded by remember(gatewayId, sessionKey, readerGeneration) { mutableStateOf(false) }
+  var applyingScrollCount by remember(gatewayId, ownerAgentId, sessionKey, sessionId) { mutableIntStateOf(0) }
+  var isUserScrolling by remember(gatewayId, ownerAgentId, sessionKey, sessionId) { mutableStateOf(false) }
+  var positionBinding by remember(gatewayId, ownerAgentId, sessionKey, sessionId) { mutableStateOf<ChatReaderPositionBinding?>(null) }
+  var positionLoaded by remember(gatewayId, ownerAgentId, sessionKey, sessionId) { mutableStateOf(false) }
 
   fun pauseFollowing() {
     readerState = readerState.copy(followTarget = null)
@@ -145,7 +148,7 @@ internal fun rememberChatReaderScrollController(
   }
 
   val nestedScroll =
-    remember(gatewayId, sessionKey, readerGeneration) {
+    remember(gatewayId, ownerAgentId, sessionKey, sessionId) {
       object : NestedScrollConnection {
         override fun onPreScroll(
           available: Offset,
@@ -180,13 +183,17 @@ internal fun rememberChatReaderScrollController(
     }
   }
 
-  LaunchedEffect(gatewayId, sessionKey, readerGeneration) {
+  LaunchedEffect(gatewayId, ownerAgentId, sessionKey, sessionId) {
+    val stableGatewayId = gatewayId?.takeIf(String::isNotBlank)
+    val stableOwnerAgentId = ownerAgentId?.takeIf(String::isNotBlank)
+    val stableSessionId = sessionId?.takeIf(String::isNotBlank)
     positionBinding =
-      gatewayId
-        ?.takeIf(String::isNotBlank)
-        ?.let { stableGatewayId ->
-          runCatching { currentLoadPosition(stableGatewayId, sessionKey) }.getOrNull()
-        }
+      if (stableGatewayId != null && stableOwnerAgentId != null && stableSessionId != null) {
+        val scope = ChatReaderPositionScope(stableGatewayId, stableOwnerAgentId, sessionKey, stableSessionId)
+        runCatching { currentLoadPosition(scope) }.getOrNull()
+      } else {
+        null
+      }
     positionLoaded = true
   }
 
@@ -194,14 +201,14 @@ internal fun rememberChatReaderScrollController(
   // must not cancel a moving scroll after its content version has been recorded.
   val waitsForPersistedAnchor = !readerState.initialized && positionBinding?.position != null
   val initialLoadingKey = historyLoading && (timeline.items.isEmpty() || waitsForPersistedAnchor)
-  LaunchedEffect(sessionKey, readerGeneration, timeline, initialLoadingKey, positionLoaded) {
+  LaunchedEffect(sessionKey, timeline, initialLoadingKey, historyResolved, positionLoaded) {
     if (!positionLoaded) return@LaunchedEffect
     val persistedPosition = positionBinding?.position
     val restoredTransition =
       if (readerState.initialized) null else persistedPosition?.let { restoredChatReaderTransition(timeline, it, sessionKey) }
-    if (!readerState.initialized && persistedPosition != null && restoredTransition == null && historyLoading) {
-      // Cached history may not contain the durable anchor yet. Wait for the authoritative
-      // load before applying the normal fallback and replacing the saved position.
+    if (!readerState.initialized && persistedPosition != null && restoredTransition == null && !historyResolved) {
+      // Cached or initially empty history may not contain the durable anchor yet. Wait until
+      // ChatTranscriptAnchorState records that authoritative history was applied.
       return@LaunchedEffect
     }
     val transition =
@@ -213,7 +220,7 @@ internal fun rememberChatReaderScrollController(
     applyTransition(transition)
   }
 
-  LaunchedEffect(gatewayId, sessionKey, readerGeneration, positionBinding) {
+  LaunchedEffect(gatewayId, ownerAgentId, sessionKey, sessionId, positionBinding) {
     gatewayId?.takeIf(String::isNotBlank) ?: return@LaunchedEffect
     val binding = positionBinding ?: return@LaunchedEffect
     collectChatReaderPositionSaves(
@@ -238,7 +245,7 @@ internal fun rememberChatReaderScrollController(
     )
   }
 
-  LaunchedEffect(gatewayId, sessionKey, readerGeneration) {
+  LaunchedEffect(gatewayId, ownerAgentId, sessionKey, sessionId) {
     snapshotFlow {
       Triple(
         listState.isScrollInProgress,
