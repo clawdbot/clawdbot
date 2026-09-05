@@ -36,6 +36,22 @@ runFakeCodexAppServer({
         }),
       ),
     "account/login/start": ({ params, sendResult }) => sendResult({ type: params?.type }),
+    "model/list": ({ sendResult }) =>
+      sendResult({
+        data: ["gpt-5.6-luna", "gpt-future"].map((model) => ({
+          id: model,
+          model,
+          displayName: model,
+          description: "Synthetic auth product proof model",
+          hidden: false,
+          isDefault: model === "gpt-5.6-luna",
+          defaultReasoningEffort: "low",
+          supportedReasoningEfforts: [{ reasoningEffort: "low", description: "Low" }],
+          multiAgentVersion: "v2",
+          inputModalities: ["text"],
+        })),
+        nextCursor: null,
+      }),
     "account/rateLimits/read": ({ sendResult }) =>
       sendResult({
         rateLimits: {

@@ -52,7 +52,7 @@ function expectBoundedMissingProfileRecovery(
   const serialized = JSON.stringify(value);
   if (options?.allowSessionTruncation) {
     expect(typeof value).toBe("string");
-    expect(SELECTED_AUTH_PROFILE_UNAVAILABLE_USER_TEXT.startsWith(String(value))).toBe(true);
+    expect(value).toBe(SELECTED_AUTH_PROFILE_UNAVAILABLE_USER_TEXT.slice(0, String(value).length));
   } else {
     expect(serialized).toContain(SELECTED_AUTH_PROFILE_UNAVAILABLE_USER_TEXT);
   }
