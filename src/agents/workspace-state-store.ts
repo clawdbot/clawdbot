@@ -5,6 +5,7 @@ import {
   executeSqliteQueryTakeFirstSync,
   getNodeSqliteKysely,
 } from "../infra/kysely-sync.js";
+import { deferSqlitePostCommitPublication } from "../infra/sqlite-post-commit.js";
 import { runSqliteDeferredTransactionSync } from "../infra/sqlite-transaction.js";
 import { withExistingOpenClawStateDatabaseReadOnly } from "../state/openclaw-state-db-readonly.js";
 import type { DB as OpenClawStateKyselyDatabase } from "../state/openclaw-state-db.generated.js";
@@ -522,9 +523,8 @@ export function replaceWorkspaceAttestation(params: {
 
 function deleteWorkspaceRows(
   database: WorkspaceStateDatabaseHandle,
-  identity: WorkspaceStateIdentity,
-): string {
-  const workspaceKey = identity.workspaceKey;
+  { workspaceKey, workspacePath }: WorkspaceStateIdentity,
+): void {
   const kysely = getNodeSqliteKysely<WorkspaceStateDatabase>(database.db);
   const receiptRows = executeSqliteQuerySync(
     database.db,
@@ -578,7 +578,9 @@ function deleteWorkspaceRows(
     database.db,
     kysely.deleteFrom("workspace_path_aliases").where("workspace_key", "=", workspaceKey),
   );
-  return identity.workspacePath;
+  // Both deletion paths retire the actual stored identity only after the outer
+  // commit; a failed transaction must retain content for the surviving workspace.
+  deferSqlitePostCommitPublication(database.db, () => retireWorkspaceFileCache(workspacePath));
 }
 
 /** Clear expired state only when no concurrent writer refreshed the vanished workspace. */
@@ -638,9 +640,7 @@ export function deleteWorkspaceState(plan: WorkspaceStateDeletionPlan): void {
     retireWorkspaceFileCache(plan.cacheRoot);
     return;
   }
-  // A vanished alias resolves only from SQLite; retire the identity actually deleted.
-  // Keep eviction after commit so failed state deletion preserves cached content.
-  const deletedWorkspaceRoot = runOpenClawStateWriteTransaction((database) => {
+  runOpenClawStateWriteTransaction((database) => {
     const { lexicalAlias, currentCanonicalIdentity } = plan;
     const kysely = getNodeSqliteKysely<WorkspaceStateDatabase>(database.db);
     const storedAlias = executeSqliteQueryTakeFirstSync(
@@ -687,5 +687,4 @@ export function deleteWorkspaceState(plan: WorkspaceStateDeletionPlan): void {
     });
     return deleteWorkspaceRows(database, resolution.identity);
   });
-  retireWorkspaceFileCache(deletedWorkspaceRoot);
 }

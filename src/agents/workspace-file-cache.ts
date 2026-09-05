@@ -64,8 +64,11 @@ export function writeWorkspaceFileCache(params: {
 }
 
 export function retireWorkspaceFileCache(workspaceRoot: string): void {
+  // SQLite identities are NFC even when the vanished filesystem path was not.
+  // Normalize only retirement comparisons; cache reads keep raw paths distinct.
+  const rootIdentityPath = workspaceRoot.normalize("NFC");
   for (const filePath of workspaceFileCache.keys()) {
-    if (filePath === workspaceRoot || isPathInside(workspaceRoot, filePath)) {
+    if (isPathInside(rootIdentityPath, filePath.normalize("NFC"))) {
       deleteWorkspaceFileCacheEntry(filePath);
     }
   }
