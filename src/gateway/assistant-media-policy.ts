@@ -3,7 +3,7 @@ import { GATEWAY_OWNER_PROFILE_ID } from "../../packages/gateway-protocol/src/sc
 import { resolveSessionPermissionCoreToolPolicy } from "../agents/session-permission-exec-mode.js";
 import { resolveEffectiveToolFsWorkspaceOnly } from "../agents/tool-fs-policy.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
-import { getAgentScopedMediaLocalRoots } from "../media/local-roots.js";
+import { getAgentScopedMediaLocalRoots, getDefaultMediaLocalRoots } from "../media/local-roots.js";
 import { isIncognitoSessionKey } from "../routing/session-key.js";
 import { getUserProfileListItem } from "../state/user-profiles.js";
 import { resolveHttpProfile } from "./http-auth-user-profile.js";
@@ -88,6 +88,7 @@ export function resolveAssistantMediaPolicy(params: {
   }
   const agentId = loaded?.agentId ?? params.agentId;
   const entry = loaded?.entry;
+  const remote = Boolean(entry?.execNode || entry?.repositoryWorkspaceId);
   let session: AssistantMediaSession | undefined;
   let sessionRoot: string | undefined;
   if (loaded && entry && agentId) {
@@ -113,7 +114,9 @@ export function resolveAssistantMediaPolicy(params: {
       }
     }
     session = { sessionKey: loaded.canonicalKey, agentId, sessionId: entry.sessionId };
-    sessionRoot = entry.sessionRoot ?? resolveSessionWorkspaceRoots(config, agentId, entry).root;
+    if (!remote) {
+      sessionRoot = entry.sessionRoot ?? resolveSessionWorkspaceRoots(config, agentId, entry).root;
+    }
   }
   const workspaceOnly =
     !session ||
@@ -121,7 +124,9 @@ export function resolveAssistantMediaPolicy(params: {
       ? resolveSessionPermissionCoreToolPolicy({ mode: entry.permissionMode }).workspaceOnly
       : resolveEffectiveToolFsWorkspaceOnly({ cfg: config, agentId }));
   const localRoots = [
-    ...getAgentScopedMediaLocalRoots(config, agentId, workspaceOnly ? sessionRoot : undefined),
+    ...(remote
+      ? getDefaultMediaLocalRoots()
+      : getAgentScopedMediaLocalRoots(config, agentId, workspaceOnly ? sessionRoot : undefined)),
   ];
   // Full Access retains established agent-workspace downloads alongside the selected project.
   if (sessionRoot && !localRoots.includes(sessionRoot)) {
@@ -135,7 +140,7 @@ export function resolveAssistantMediaPolicy(params: {
     : undefined;
   return {
     session,
-    remote: Boolean(entry?.execNode) || isCloudWorkerPlacementState(placement?.state),
+    remote: remote || isCloudWorkerPlacementState(placement?.state),
     localRoots,
     workspaceOnly,
     reader,

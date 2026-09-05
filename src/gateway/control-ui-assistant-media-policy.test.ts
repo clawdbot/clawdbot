@@ -36,10 +36,11 @@ let project: string;
 let cfg: OpenClawConfig;
 let entry: {
   sessionId: string;
-  spawnedCwd: string;
-  sessionRoot: string;
+  spawnedCwd?: string;
+  sessionRoot?: string;
   permissionMode?: "full" | "workspace";
   execNode?: string;
+  repositoryWorkspaceId?: string;
   incognito?: boolean;
   visibility?: "draft" | "shared";
 };
@@ -224,14 +225,33 @@ describe("assistant image session policy", () => {
     expect((await request(link)).payload).toMatchObject({ available: false, canAllow: true });
   });
 
-  it("does not interpret remote session paths as Gateway-local image paths", async () => {
-    entry.execNode = "remote-node";
-    const source = path.join(project, "image.png");
+  it.each(["execNode", "repositoryWorkspaceId"] as const)(
+    "does not interpret %s session paths as Gateway-local image paths",
+    async (owner) => {
+      entry[owner] = "remote-workspace";
+      const source = path.join(project, "image.png");
+      await fs.writeFile(source, PNG);
+      expect((await request(source)).payload).toMatchObject({
+        available: false,
+        code: "blocked-local-file",
+      });
+    },
+  );
+  it("keeps repository Full Access and Allow from exposing the configured Gateway workspace", async () => {
+    entry.permissionMode = "full";
+    const source = path.join(temp, "agent", "unrelated.png");
+    await fs.mkdir(path.dirname(source));
     await fs.writeFile(source, PNG);
-    expect((await request(source)).payload).toMatchObject({
-      available: false,
-      code: "blocked-local-file",
-    });
+    const ticket = String((await request(source)).payload!.mediaTicket);
+    entry.repositoryWorkspaceId = "repository-workspace";
+    delete entry.spawnedCwd;
+    delete entry.sessionRoot;
+    for (const options of [{}, { allow: true }]) {
+      const denied = (await request(source, options)).payload;
+      expect(denied).toMatchObject({ available: false, code: "blocked-local-file" });
+      expect(denied).not.toHaveProperty("canAllow", true);
+    }
+    expect((await request(source, { bytes: true, ticket })).res.statusCode).toBe(404);
   });
   it("keeps protected project images separate from the unrelated configured agent workspace", async () => {
     const source = path.join(temp, "agent", "unrelated.png");
@@ -389,24 +409,27 @@ describe("assistant image session policy", () => {
     );
   });
 
-  it("keeps Gateway-owned inbound images available in a remote session", async () => {
-    entry.execNode = "remote-node";
-    await withEnvAsync({ OPENCLAW_STATE_DIR: path.join(temp, "state") }, async () => {
-      const id = "remote-session-upload.png";
-      const source = `media://inbound/${id}`;
-      const file = path.join(resolveStateDir(), "media", "inbound", id);
-      await fs.mkdir(path.dirname(file), { recursive: true });
-      await fs.writeFile(file, PNG);
-      const metadata = await request(source);
-      expect(metadata.payload).toMatchObject({ available: true });
-      const served = await request(source, {
-        ticket: String(metadata.payload!.mediaTicket),
-        bytes: true,
+  it.each(["execNode", "repositoryWorkspaceId"] as const)(
+    "keeps Gateway-owned inbound images available in a %s session",
+    async (owner) => {
+      entry[owner] = "remote-workspace";
+      await withEnvAsync({ OPENCLAW_STATE_DIR: path.join(temp, "state") }, async () => {
+        const id = "remote-session-upload.png";
+        const source = `media://inbound/${id}`;
+        const file = path.join(resolveStateDir(), "media", "inbound", id);
+        await fs.mkdir(path.dirname(file), { recursive: true });
+        await fs.writeFile(file, PNG);
+        const metadata = await request(source);
+        expect(metadata.payload).toMatchObject({ available: true });
+        const served = await request(source, {
+          ticket: String(metadata.payload!.mediaTicket),
+          bytes: true,
+        });
+        expect(served.res.statusCode).toBe(200);
+        expect(served.bytes).toEqual(PNG);
       });
-      expect(served.res.statusCode).toBe(200);
-      expect(served.bytes).toEqual(PNG);
-    });
-  });
+    },
+  );
   it.each(["visibility", "role assignment", "role definition"] as const)(
     "revalidates a named reader's saved media ticket after %s withdrawal",
     async (change) => {
