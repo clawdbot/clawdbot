@@ -2154,7 +2154,7 @@
     "tslog": "4.11.0",
     "typebox": "1.3.18",
     "typescript": "6.0.3",
-    "undici": "8.10.0",
+    "undici": "8.10.2",
     "web-push": "3.6.7",
     "web-tree-sitter": "0.26.13",
     "ws": "8.21.3",

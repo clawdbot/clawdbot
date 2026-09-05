@@ -14,7 +14,7 @@
     "@slack/web-api": "8.0.0",
     "get-east-asian-width": "1.6.0",
     "typebox": "1.3.18",
-    "undici": "7.29.0",
+    "undici": "7.29.1",
     "ws": "8.21.3",
     "zod": "4.4.3"
   },
