@@ -14,8 +14,6 @@ import {
   runOpenClawStateWriteTransaction,
   type OpenClawStateDatabaseOptions,
 } from "../../state/openclaw-state-db.js";
-import { withOpenClawStateLease } from "../../state/openclaw-state-lease.js";
-import type { SkillCollectionReconcileResult } from "./collection-contracts.js";
 import {
   databaseOptions,
   ensureSkillWorkshopSchema,
@@ -23,7 +21,6 @@ import {
   type SkillWorkshopStoreOptions,
 } from "./store-sqlite-schema.js";
 
-const REVIEW_CLAIM_MS = 11 * 60_000;
 // Bound history so unattended weekly maintenance cannot grow state forever.
 const SKILL_COLLECTION_REVIEW_RETENTION_COUNT = 90;
 const SKILL_COLLECTION_REVIEW_HISTORY_LIMIT = 20;
@@ -35,12 +32,13 @@ type SkillCuratorState = {
   lastResult: Record<string, unknown>;
 };
 
-type SkillCollectionReviewOutcome = {
-  createTime: number;
+type SkillCollectionReviewOutcome = SkillCollectionReviewResult & { createTime: number };
+
+export type SkillCollectionReviewResult = {
   backupId: string;
   kept: string[];
   written: string[];
-  dropped: SkillCollectionReconcileResult["dropped"];
+  dropped: Array<{ name: string; reason: string }>;
 };
 
 export type SkillCollectionReviewStatus = {
@@ -59,25 +57,6 @@ export type SkillExperienceReviewStatus = {
 
 function experienceReviewKey(agentId: string, workspaceDir: string): string {
   return sha256Hex(`${agentId}\0${path.resolve(workspaceDir)}`);
-}
-
-export async function withSkillCollectionReviewClaim<T>(
-  agentId: string,
-  run: () => Promise<T>,
-  options: OpenClawStateDatabaseOptions = {},
-): Promise<T> {
-  return await withOpenClawStateLease(
-    {
-      scope: "skill-collection-review",
-      key: agentId,
-      database: { scope: "shared", options },
-      leaseMs: REVIEW_CLAIM_MS,
-      waitMs: 0,
-      leaseLabel: "skill collection review claim",
-      operationLabel: "skill-collection.review",
-    },
-    async () => await run(),
-  );
 }
 
 function reviewMap<T>(state: Record<string, unknown>, field: string): Record<string, T> {
@@ -178,7 +157,7 @@ function parseStoredNames(value: string, field: string): string[] {
   return parsed;
 }
 
-function parseStoredDrops(value: string): SkillCollectionReconcileResult["dropped"] {
+function parseStoredDrops(value: string): SkillCollectionReviewResult["dropped"] {
   const parsed: unknown = JSON.parse(value);
   if (!Array.isArray(parsed)) {
     throw new Error("Invalid dropped entries in stored skill collection review.");
@@ -239,7 +218,7 @@ export function listSkillCollectionReviewOutcomes(
 export function recordSkillCollectionReviewHistory(
   agentId: string,
   nowMs: number,
-  result: SkillCollectionReconcileResult,
+  result: SkillCollectionReviewResult,
   options: SkillWorkshopStoreOptions = {},
 ): void {
   ensureSkillWorkshopSchema(options);

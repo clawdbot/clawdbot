@@ -134,20 +134,4 @@ describe("skill_workshop collection history", () => {
     expect(smallContextText.length).toBeLessThanOrEqual(2_867);
     expect(smallContextText).toMatch(/\(history truncated\)$/u);
   });
-
-  it("keeps isolated collection reviews limited to read and reconcile", () => {
-    const standardSchema = JSON.stringify(
-      createSkillWorkshopTool({ workspaceDir: "/tmp/openclaw" }).parameters,
-    );
-    const restrictedSchema = JSON.stringify(
-      createSkillWorkshopTool({
-        workspaceDir: "/tmp/openclaw",
-        collectionReconcile: { approvedSkillKeys: new Set() },
-      }).parameters,
-    );
-
-    expect(standardSchema).toContain('"history"');
-    expect(restrictedSchema).toContain('"enum":["read","reconcile"]');
-    expect(restrictedSchema).not.toContain('"history"');
-  });
 });

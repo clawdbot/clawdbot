@@ -29,6 +29,9 @@ export type RunCronAgentTurnParams = {
   sessionKey: string;
   agentId?: string;
   lane?: string;
+  executionIdentity?: import("../service/state.js").CronExecutionIdentityAdmission;
+  /** Host-only root for system-owned turns; never persisted in cron state. */
+  executionRoot?: string;
 };
 
 export function resolveCronAgentTurnMessage(input: RunCronAgentTurnParams): string {
@@ -41,6 +44,25 @@ export function resolveCronAgentTurnMessage(input: RunCronAgentTurnParams): stri
 export type WithRunSession = (
   result: Omit<RunCronAgentTurnResult, "sessionId" | "sessionKey">,
 ) => RunCronAgentTurnResult;
+
+const CRON_EXECUTION_ROOT_RUNTIME_ERROR =
+  "collection review requires the embedded agent runtime; the configured CLI runtime cannot be rooted at the Workshop directory";
+
+export class CronExecutionRootRuntimeError extends Error {
+  constructor() {
+    super(CRON_EXECUTION_ROOT_RUNTIME_ERROR);
+    this.name = "CronExecutionRootRuntimeError";
+  }
+}
+
+export function assertCronExecutionRootRuntime(
+  executionRoot: string | undefined,
+  runtime: string,
+): void {
+  if (executionRoot && runtime !== "openclaw") {
+    throw new CronExecutionRootRuntimeError();
+  }
+}
 
 const sessionAccessorRuntimeLoader = createLazyImportLoader(
   () => import("../../config/sessions/session-accessor.js"),

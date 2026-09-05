@@ -113,16 +113,37 @@ In `auto` mode, the Gateway runs one system-owned cron job per agent each week
 [Multi-agent](/concepts/multi-agent)).
 Each job appears in `openclaw cron list` and runs every 7 days. Cron owns the
 cadence; the job is enabled only when
-`skills.workshop.autonomous.mode` is `auto`. The review can only read skills
-and submit one atomic collection reconciliation listing only changes. It keeps distinct useful skills,
-rewrites weak ones, consolidates overlap, and drops junk or stale fragments.
+`skills.workshop.autonomous.mode` is `auto`. Each turn uses the normal agent
+tools and its agent's full Workshop directory as its working directory,
+file-tool root, and session root. It keeps distinct useful skills, rewrites
+weak ones, consolidates overlap, and drops junk or stale fragments.
+The review announces nothing; results are in the review history and the cron
+run record.
+The file tools are rooted at that directory. The review keeps the normal `exec`
+tool, but shell access follows the operator's cron exec-approval policy. With
+the default policy and no connected approval client, `exec` is denied
+immediately and the reviewer continues with file tools. Reviewed skill
+instructions cannot grant host access that the operator has not already granted
+to automations.
+If an enabled sandbox uses `workspaceAccess: "rw"`, the review uses the agent's
+Workshop directory as its sandbox workspace. If it uses `"ro"` or `"none"`, the
+review records `sandbox workspace is not read-write; collection review skipped`,
+does not run, and does not commit a backup or advance the skill snapshot.
 Choosing `auto` intentionally authorizes those rewrites and drops without a
 second approval **for Workshop-owned paths only**; `propose` and `off` do not
 run collection review.
 
-Each reviewer reads only its agent's Workshop directory. It reads each skill it
-intends to change. Unlisted skills stay
-untouched. Every skill in the Workshop directory may receive `write` or `drop`.
+Each reviewer reads only its agent's Workshop directory. The turn edits files
+directly. The prompt includes the full relative file index from the same snapshot
+used for inspection, so discovery does not depend on shell access. A full-tree
+snapshot is created before the turn; every changed or
+added file is scanned after it. Critical findings or symbolic links revert the
+affected skill directory while other safe changes stay. Root-level files are
+reverted individually. Unchanged skills stay untouched.
+A `SKILL.md` placed directly in the agent's Workshop root is ignored; skills
+live in subdirectories.
+The review runs on the embedded runtime only; model fallback candidates that
+use CLI runtimes are skipped for this job.
 Collection review records its changes in review history and the backup manifest;
 it does not create proposal rows.
 
@@ -130,11 +151,10 @@ Recorded usage counts and last-used recency are supporting evidence, not an
 age-based lifecycle: heavy use favors preserving a skill's procedure, while no
 recorded use alone never justifies removing it.
 
-OpenClaw validates and scans every write before changing the Workshop directory,
-serializes each agent's collection edits with an agent-scoped lease, and retains
-one backup under that agent directory. The changed collection appears in new
-agent runs;
-running sessions keep their existing skill snapshot.
+Each agent's collection edits share one lock with proposal writes and restore.
+One completed backup is retained under that agent directory. If recovery fails,
+its pending backup is also retained for inspection. The changed collection
+appears in new agent runs; running sessions keep their existing skill snapshot.
 
 To undo the last completed cleanup, ask the agent to restore the skill
 collection. It uses `skill_workshop` action `restore_collection` under the same
@@ -143,16 +163,16 @@ For an older backup that cannot be verified, follow the
 [manual recovery guidance](#when-an-older-backup-cannot-be-restored-automatically).
 
 Each attempt is persisted under the agent id review key before the model starts.
-Review is admitted only for collections of at most
-200 skills and 240,000 total `SKILL.md` bytes. Larger collections stay unchanged.
-The reconciled result must stay inside the same byte limit.
+The inventory is bounded to 10,000 entries and six directory levels. A larger tree fails the
+review with a recorded error; split or prune the agent's Workshop directory by
+hand before running it again.
 
 Every completed review records its kept, written, and dropped skill names in
 the shared state database, including the reason for each drop. OpenClaw retains
 the latest 90 outcomes per agent.
 
-Collection rewrites and merges produce `SKILL.md` files at or below 10,000
-characters. A skill already above the cap can only become shorter.
+The reviewer is asked to keep `SKILL.md` files near or below 10,000 characters.
+This is guidance, not a hard limit for collection edits.
 
 ### When an older backup cannot be restored automatically
 

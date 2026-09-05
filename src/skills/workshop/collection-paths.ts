@@ -21,7 +21,8 @@ export async function pruneOlderSkillCollectionBackups(
 ): Promise<void> {
   try {
     for (const entry of await fs.readdir(backupRoot, { withFileTypes: true })) {
-      if (entry.isDirectory() && entry.name !== keepId) {
+      // Pending copies may be the only recoverable data after a failed rollback.
+      if (entry.isDirectory() && entry.name !== keepId && !entry.name.startsWith(".pending-")) {
         await removePathWithinRoot({
           rootDir: backupRoot,
           relativePath: entry.name,

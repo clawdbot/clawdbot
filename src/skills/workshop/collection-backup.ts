@@ -2,16 +2,15 @@ import { randomUUID } from "node:crypto";
 import fs from "node:fs/promises";
 import path from "node:path";
 import { asNullableRecord } from "@openclaw/normalization-core/record-coerce";
+import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import { removePathWithinRoot } from "../../infra/fs-safe-remove.js";
 import { pathExists } from "../../infra/fs-safe.js";
 import { isPathStrictlyInside } from "../../infra/path-guards.js";
-import type {
-  SkillCollectionPlanEntry,
-  WritableSkillCollectionEntry,
-} from "./collection-contracts.js";
+import { resolveSkillCollectionBackupRoot } from "./collection-paths.js";
 import { readSkillProposalTargetTreeSha256 } from "./proposal-bundle.js";
 
 const BACKUP_SCHEMA = "openclaw.skill-collection-backup.v2";
+
 export type CollectionBackupManifest = {
   schema: typeof BACKUP_SCHEMA;
   id: string;
@@ -24,67 +23,51 @@ export type CollectionBackupManifest = {
 
 export async function createCollectionBackup(params: {
   skillsRoot: string;
-  current: readonly WritableSkillCollectionEntry[];
-  plan: readonly SkillCollectionPlanEntry[];
-  backupRoot: string;
+  skillDirs: readonly string[];
+  config: OpenClawConfig;
+  agentId: string;
+  env?: NodeJS.ProcessEnv;
 }): Promise<{
   backupDir: string;
   committedBackupDir: string;
   backupRoot: string;
   manifest: CollectionBackupManifest;
 }> {
-  const backupRoot = params.backupRoot;
+  const backupRoot = resolveSkillCollectionBackupRoot(params.config, params.agentId, params.env);
   const id = `${new Date().toISOString().replaceAll(":", "-")}-${randomUUID().slice(0, 8)}`;
   const backupDir = path.join(backupRoot, `.pending-${id}`);
   const committedBackupDir = path.join(backupRoot, id);
-  const currentBySkillKey = new Map(params.current.map((skill) => [skill.skillKey, skill]));
-  // A restore must never rewrite an unlisted, externally owned skill. Back up only paths
-  // this transaction may mutate; newly created result paths are removed on restore.
-  const skillDirs = [
-    ...new Set(
-      params.plan.flatMap((entry) => {
-        const existing = currentBySkillKey.get(entry.skillKey);
-        return existing ? [path.relative(params.skillsRoot, existing.baseDir)] : [];
-      }),
-    ),
-  ].toSorted();
   const manifest: CollectionBackupManifest = {
     schema: BACKUP_SCHEMA,
     id,
     createdAt: new Date().toISOString(),
-    skillDirs,
-    resultSkillDirs: params.plan
-      .filter((entry) => entry.action === "write")
-      .map((entry) => {
-        const existing = currentBySkillKey.get(entry.skillKey);
-        return path.relative(
-          params.skillsRoot,
-          existing?.baseDir ?? path.join(params.skillsRoot, entry.skillKey),
-        );
-      }),
+    skillDirs: [...new Set(params.skillDirs)].toSorted(),
+    resultSkillDirs: [],
     resultSkillHashes: {},
   };
-  await fs.mkdir(path.join(backupDir, "skills"), { recursive: true });
-  for (const relativeDir of skillDirs) {
-    await fs.cp(
-      path.join(params.skillsRoot, relativeDir),
-      path.join(backupDir, "skills", relativeDir),
-      {
-        recursive: true,
-        errorOnExist: true,
-        force: false,
-        preserveTimestamps: true,
-      },
-    );
+  const backup = { backupDir, committedBackupDir, backupRoot, manifest };
+  await fs.mkdir(backupDir, { recursive: true });
+  try {
+    await fs.cp(params.skillsRoot, path.join(backupDir, "skills"), {
+      recursive: true,
+      force: false,
+      errorOnExist: true,
+      preserveTimestamps: true,
+    });
+    await fs.writeFile(path.join(backupDir, "manifest.json"), JSON.stringify(manifest, null, 2));
+    return backup;
+  } catch (error) {
+    await discardPendingCollectionBackup(backup);
+    throw error;
   }
-  await fs.writeFile(path.join(backupDir, "manifest.json"), JSON.stringify(manifest, null, 2));
-  return { backupDir, committedBackupDir, backupRoot, manifest };
 }
 
 export async function commitCollectionBackup(
   skillsRoot: string,
   backup: Awaited<ReturnType<typeof createCollectionBackup>>,
+  resultSkillDirs: readonly string[],
 ): Promise<void> {
+  backup.manifest.resultSkillDirs = [...new Set(resultSkillDirs)].toSorted();
   for (const relativeDir of backup.manifest.resultSkillDirs) {
     backup.manifest.resultSkillHashes[relativeDir] = await readSkillProposalTargetTreeSha256(
       path.join(skillsRoot, relativeDir),
@@ -177,7 +160,6 @@ function readBackupSkillDirs(value: unknown, label: string, skillsRoot: string):
   const resolvedRoot = path.resolve(skillsRoot);
   for (const relativeDir of value) {
     const resolvedDir = path.resolve(resolvedRoot, relativeDir);
-    // Strict containment also rejects "." so a manifest can never name the root itself.
     if (
       !relativeDir ||
       path.isAbsolute(relativeDir) ||

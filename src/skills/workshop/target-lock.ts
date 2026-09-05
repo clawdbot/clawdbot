@@ -1,4 +1,7 @@
-import { withOpenClawStateLease } from "../../state/openclaw-state-lease.js";
+import {
+  withOpenClawStateLease,
+  type OpenClawStateLeaseContext,
+} from "../../state/openclaw-state-lease.js";
 import { hashSkillProposalContent } from "./proposal-hash.js";
 import {
   databaseOptions,
@@ -9,7 +12,7 @@ import type { SkillProposalRecord } from "./types.js";
 
 const TARGET_LEASE_MS = 60_000;
 const TARGET_LEASE_WAIT_MS = 5_000;
-const COLLECTION_LEASE_MS = 10 * 60_000;
+const COLLECTION_LEASE_MS = 11 * 60_000;
 
 function requireAgentId(options: SkillWorkshopStoreOptions): string {
   if (!options.agentId) {
@@ -20,7 +23,7 @@ function requireAgentId(options: SkillWorkshopStoreOptions): string {
 
 /** Each agent owns one collection lease; writers for different agents do not contend. */
 export async function withSkillCollectionLock<T>(
-  fn: () => Promise<T>,
+  fn: (lease: OpenClawStateLeaseContext) => Promise<T>,
   options: SkillWorkshopStoreOptions = {},
 ): Promise<T> {
   ensureSkillWorkshopSchema(options);
@@ -31,10 +34,10 @@ export async function withSkillCollectionLock<T>(
       database: { scope: "shared", options: databaseOptions(options) },
       leaseMs: COLLECTION_LEASE_MS,
       waitMs: TARGET_LEASE_WAIT_MS,
-      leaseLabel: "skill collection lease",
-      operationLabel: "skill-collection.commit",
+      leaseLabel: "skill collection review claim",
+      operationLabel: "skill-collection.review",
     },
-    async () => await fn(),
+    fn,
   );
 }
 

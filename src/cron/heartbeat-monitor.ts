@@ -9,9 +9,8 @@ import {
 } from "../infra/heartbeat-schedule.js";
 import type { CronService } from "./service.js";
 import { partitionSystemMonitors } from "./system-monitor-jobs.js";
+import { HEARTBEAT_DECLARATION_PREFIX } from "./system-owned-declaration.js";
 import type { CronJob, CronJobCreate } from "./types.js";
-
-const HEARTBEAT_DECLARATION_PREFIX = "heartbeat:";
 
 type HeartbeatMonitorSpec = { agentId: string; input: CronJobCreate };
 

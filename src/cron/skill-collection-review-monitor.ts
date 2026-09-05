@@ -4,17 +4,14 @@ import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { resolveHeartbeatSchedulerSeed } from "../infra/heartbeat-runner.js";
 import { resolveHeartbeatPhaseMs } from "../infra/heartbeat-schedule.js";
 import { resolveSkillWorkshopConfig } from "../skills/workshop/config.js";
+import { SKILL_COLLECTION_REVIEW_DECLARATION_PREFIX } from "./system-owned-declaration.js";
 import type { CronJob, CronJobCreate } from "./types.js";
 
-export const SKILL_COLLECTION_REVIEW_DECLARATION_PREFIX = "skill-collection-review:";
 const SKILL_COLLECTION_REVIEW_EVERY_MS = 7 * 24 * 60 * 60_000;
 
 export function skillCollectionReviewMonitorAgentId(job: CronJob): string | undefined {
   const key = job.declarationKey;
-  if (
-    !key?.startsWith(SKILL_COLLECTION_REVIEW_DECLARATION_PREFIX) ||
-    job.payload.kind !== "skillCollectionReview"
-  ) {
+  if (!key?.startsWith(SKILL_COLLECTION_REVIEW_DECLARATION_PREFIX)) {
     return undefined;
   }
   return key.slice(SKILL_COLLECTION_REVIEW_DECLARATION_PREFIX.length) || undefined;
@@ -44,9 +41,14 @@ export function resolveSkillCollectionReviewMonitorSpecs(
           intervalMs: SKILL_COLLECTION_REVIEW_EVERY_MS,
         }),
       },
-      payload: { kind: "skillCollectionReview" },
-      // The timer invokes the runner directly because this payload has no turn target.
-      sessionTarget: "main",
+      payload: {
+        kind: "agentTurn",
+        message:
+          "Review the Skill Workshop collection for this agent. Work only inside this agent's Workshop directory.",
+        toolsAllow: ["read", "write", "edit", "apply_patch", "exec", "process"],
+      },
+      sessionTarget: "isolated",
+      delivery: { mode: "none" },
       wakeMode: "next-heartbeat",
     },
   }));
