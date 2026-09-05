@@ -18,7 +18,7 @@ afterEach(async () => {
 });
 
 it.each(["owned", "borrowed"] as const)(
-  "evaluates after tabs when the %s relay delays the frame-tree post-access reply",
+  "repairs the %s relay after initial attach loss and delayed frame-tree publication",
   async (ownership) => {
     const frameTreeHeld = createDeferred<void>();
     const releaseFrameTree = createDeferred<void>();
@@ -27,6 +27,7 @@ it.each(["owned", "borrowed"] as const)(
     const realm = vm.createContext({});
     const objects = new Map<string, unknown>();
     const evaluated: unknown[] = [];
+    let attachAttempts = 0;
     let send: (message: Record<string, unknown>) => void;
     const event = (context: Record<string, unknown>) =>
       send({
@@ -116,7 +117,7 @@ it.each(["owned", "borrowed"] as const)(
       navigateTab: async () => {},
     });
     await withConnectedDaemon(
-      async () => {
+      async ({ extension }) => {
         await startBrowserControlServiceFromConfig();
         const ctx = createBrowserControlContext();
         expect(ctx.state().extensionRelays?.get("chrome")?.ownership).toBe(ownership);
@@ -129,6 +130,17 @@ it.each(["owned", "borrowed"] as const)(
         await expect(listing).resolves.toEqual([
           expect.objectContaining({ targetId: "fixture-target" }),
         ]);
+        expect(attachAttempts).toBe(2);
+
+        extension.send(JSON.stringify({ type: "detached", tabId: 1, reason: "renderer replaced" }));
+        await new Promise<void>((resolve) => {
+          setImmediate(resolve);
+        });
+        await expect(profile.listTabs()).resolves.toEqual([
+          expect.objectContaining({ targetId: "fixture-target" }),
+        ]);
+        expect(attachAttempts).toBe(3);
+
         const abort = new AbortController();
         const evaluation = executeActViaPlaywright({
           cdpUrl: profile.profile.cdpUrl,
@@ -160,7 +172,19 @@ it.each(["owned", "borrowed"] as const)(
         : undefined,
       (command, reply) => {
         send = reply;
-        void handler(command);
+        if (command.type === "attach" && attachAttempts++ === 0) {
+          reply({
+            type: "error",
+            seq: command.seq,
+            message: "tab generation changed during initial auto-attach",
+          });
+          return true;
+        }
+        if (command.type === "cdp") {
+          void handler(command);
+          return true;
+        }
+        return false;
       },
     );
   },

@@ -200,6 +200,51 @@ describe("pw-session page enumeration", () => {
     await unavailable;
   });
 
+  it("observes pages published while complete target inventory is resolving", async () => {
+    const cdpUrl = "http://127.0.0.1:9222";
+    const fixture = makePageEnumerationBrowser([
+      {
+        targetId: "RECOVERED",
+        title: "Recovered",
+        url: "https://recovered.example",
+      },
+    ]);
+    let published = false;
+    const context = fixture.browser.contexts()[0]!;
+    vi.spyOn(context, "pages").mockImplementation(() => (published ? fixture.pages : []));
+    Object.assign(fixture.browser, {
+      newBrowserCDPSession: vi.fn(async () => ({
+        send: vi.fn(async () => {
+          published = true;
+          return {
+            targetInfos: [
+              {
+                targetId: "RECOVERED",
+                type: "page",
+                title: "Recovered",
+                url: "https://recovered.example",
+              },
+            ],
+          };
+        }),
+        detach: vi.fn(async () => {}),
+      })),
+    });
+    connectOverCdpSpy.mockResolvedValue(fixture.browser);
+    getChromeWebSocketUrlSpy.mockResolvedValue(null);
+
+    await expect(
+      listPagesViaPlaywright({ cdpUrl, requireCompleteTargetList: true }),
+    ).resolves.toEqual([
+      {
+        targetId: "RECOVERED",
+        title: "Recovered",
+        url: "https://recovered.example",
+        type: "page",
+      },
+    ]);
+  });
+
   it("rejects an unavailable complete target enumeration even with zero cached pages", async () => {
     const fixture = makeEmptyBrowser();
     const detach = vi.fn(async () => {});

@@ -65,6 +65,8 @@ type TabState = {
 type CdpClientState = RelaySessionClient & {
   socket: BridgeSocket;
   autoAttach: boolean;
+  /** Root auto-attach tabs this client explicitly detached while discovery stays enabled. */
+  detachedTabs: Set<number>;
   creating: Set<Promise<void>>;
 };
 
@@ -426,6 +428,9 @@ export class ExtensionRelayBridge {
       if (!nextIds.has(tabId)) {
         this.sessions.retireTab(tabId);
         this.tabs.delete(tabId);
+        for (const client of this.clients) {
+          client.detachedTabs.delete(tabId);
+        }
       }
     }
     for (const info of tabs) {
@@ -438,13 +443,15 @@ export class ExtensionRelayBridge {
       }
       if (shouldAutoAttach && shouldAttach) {
         for (const client of this.clients) {
-          if (!client.autoAttach) {
+          if (!client.autoAttach || client.detachedTabs.has(info.tabId)) {
             continue;
           }
           void this.withAttachedTab(client, info.tabId, (attached) => {
-            if (client.autoAttach) {
-              this.announceAttachedTab(info.tabId, attached, [client]);
-            }
+            this.announceAttachedTab(
+              info.tabId,
+              attached,
+              this.autoAttachRecipients(info.tabId, attached.sessionId),
+            );
           }).catch((err: unknown) =>
             log.warn(`auto-attach of accessible tab ${info.tabId} failed: ${String(err)}`),
           );
@@ -589,16 +596,61 @@ export class ExtensionRelayBridge {
     };
   }
 
-  private enumerateTargetInfos():
+  private autoAttachRecipients(tabId: number, sessionId?: string): CdpClientState[] {
+    return [...this.clients].filter(
+      (candidate) =>
+        candidate.autoAttach &&
+        !candidate.detachedTabs.has(tabId) &&
+        (!sessionId || !candidate.sessions.has(sessionId)),
+    );
+  }
+
+  private async enumerateTargetInfos(client: CdpClientState): Promise<
     | { status: "available"; targetInfos: Record<string, unknown>[] }
     | {
         status: "unavailable";
         reason: "extension-disconnected" | "target-identity-unresolved";
-      } {
+      }
+  > {
     if (!this.extensionConnected) {
       return { status: "unavailable", reason: "extension-disconnected" };
     }
-    if ([...this.tabs.values()].some((tab) => !tab.target)) {
+    // Reconcile cached physical roots before inventory: Playwright creates Pages
+    // only from attachment events, and a native detach keeps only a stale identity.
+    for (const [tabId, tab] of this.tabs) {
+      if (tab.target?.sessionId) {
+        this.announceAttachedTab(
+          tabId,
+          { targetId: tab.target.id, sessionId: tab.target.sessionId },
+          this.autoAttachRecipients(tabId, tab.target.sessionId),
+        );
+      }
+    }
+    await Promise.allSettled(
+      [...this.tabs]
+        .filter(
+          ([tabId, tab]) =>
+            !tab.target || (!tab.target.sessionId && this.autoAttachRecipients(tabId).length > 0),
+        )
+        .map(([tabId]) =>
+          this.withAttachedTab(client, tabId, (attached) => {
+            this.announceAttachedTab(
+              tabId,
+              attached,
+              this.autoAttachRecipients(tabId, attached.sessionId),
+            );
+          }),
+        ),
+    );
+    if (!this.extensionConnected) {
+      return { status: "unavailable", reason: "extension-disconnected" };
+    }
+    if (
+      [...this.tabs].some(
+        ([tabId, tab]) =>
+          !tab.target || (!tab.target.sessionId && this.autoAttachRecipients(tabId).length > 0),
+      )
+    ) {
       return { status: "unavailable", reason: "target-identity-unresolved" };
     }
     const targetInfos = [...this.tabs.values()].map((tab) =>
@@ -639,6 +691,7 @@ export class ExtensionRelayBridge {
     const client: CdpClientState = {
       socket,
       autoAttach: false,
+      detachedTabs: new Set(),
       sessions: new Map(),
       creating: new Set(),
     };
@@ -1026,7 +1079,7 @@ export class ExtensionRelayBridge {
         return;
       }
       case "Target.getTargets": {
-        const enumeration = this.enumerateTargetInfos();
+        const enumeration = await this.enumerateTargetInfos(client);
         if (enumeration.status === "unavailable") {
           const message =
             enumeration.reason === "extension-disconnected"
@@ -1048,12 +1101,15 @@ export class ExtensionRelayBridge {
         const autoAttach = request.params?.autoAttach !== false;
         client.autoAttach = autoAttach;
         if (autoAttach) {
+          client.detachedTabs.clear();
           const attachResults = await Promise.allSettled(
             [...this.tabs.keys()].map((tabId) =>
               this.withAttachedTab(client, tabId, (attached) => {
-                if (client.autoAttach) {
-                  this.announceAttachedTab(tabId, attached, [client]);
-                }
+                this.announceAttachedTab(
+                  tabId,
+                  attached,
+                  this.autoAttachRecipients(tabId, attached.sessionId),
+                );
               }),
             ),
           );
@@ -1114,6 +1170,9 @@ export class ExtensionRelayBridge {
           if (!sessionId || !session) {
             this.respondError(client, request, `Session not found: ${String(sessionId)}`, -32001);
             return;
+          }
+          if (!session.parent && session.id === session.physical.rootSessionId) {
+            client.detachedTabs.add(session.physical.tabId);
           }
           await this.sessions.detach(client, sessionId);
         }
