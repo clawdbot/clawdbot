@@ -71,8 +71,7 @@
 
 .chat-tool-msg-summary,
 .chat-activity-group__summary,
-.chat-subagent-activity__row,
-.chat-tasks-rail__task-title {
+.chat-subagent-activity__row {
   font-family: inherit;
   font-size: calc(var(--control-ui-text-sm) + 1px);
   font-weight: 400;
