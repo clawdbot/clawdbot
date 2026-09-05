@@ -560,6 +560,11 @@ export class BrowserPanelController implements ReactiveController {
         if (!this.operations.isLive(epoch, actionClient)) {
           return;
         }
+        // A stopped browser cannot hold a historical tab. Keep the Start affordance
+        // instead of reporting the doomed focus request as an error.
+        if (this.running === false) {
+          return;
+        }
         const selected = this.tabs.find((tab) => tab.id === targetId || tab.targetId === targetId);
         this.setState("activeTargetId", selected?.id ?? targetId);
         if (this.clearUnavailableView()) {
