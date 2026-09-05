@@ -223,7 +223,7 @@ Personal publication uses the lazy, same-version `github_personal_publication_re
 
 Local shared and personal publication records use the first-use `github_publication_session_lifecycles` companion table to bind each request to its admitted session lifecycle revision. The key is the publication kind and request ID; the binding commits in the same transaction as the request. An explicit `NULL` records that the session had no revision at admission. A missing binding cannot authorize unfinished publication and is never filled from the current session. Terminal receipt history remains readable.
 
-The companion table leaves shared schema version 15, both existing local request-table definitions, and their receipt digests unchanged. Older schema validators treat those request tables as optional and reject additional columns even when nullable, so the lifecycle binding uses a separate table that older readers ignore.
+The companion table leaves the numeric shared schema version, both existing local request-table definitions, and their receipt digests unchanged. Older schema validators treat those request tables as optional and reject additional columns even when nullable, so the lifecycle binding uses a separate table that older readers ignore.
 
 Older builds ignore both the personal request table and identity-scoped credential rows instead of executing a personal request as System. Re-upgrade still enforces original authorization expiry. Unfinished personal publication requires fresh confirmation by the same authenticated owner after a Gateway restart; remote-result reconciliation reuses the original request markers.
 
