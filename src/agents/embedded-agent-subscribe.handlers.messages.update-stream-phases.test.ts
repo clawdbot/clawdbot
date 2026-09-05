@@ -169,6 +169,18 @@ describe("handleMessageUpdate text signatures", () => {
       ],
     },
     {
+      name: "held GLM arg_key split inside the first closing tag",
+      chunks: [
+        "Visible\n<tool_call>exec<arg_key>command",
+        "</arg_",
+        "key><arg_value>redacted</arg_value></tool_call>\nDone.",
+      ],
+      updates: [
+        { text: "Visible", delta: "Visible" },
+        { text: "Visible\n\nDone.", delta: "\n\nDone." },
+      ],
+    },
+    {
       name: "releases a terminal literal GLM marker after later prose",
       chunks: ["Use <tool_call>exec", " now."],
       updates: [

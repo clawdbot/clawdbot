@@ -125,6 +125,15 @@ describe("telegramPlugin outbound", () => {
         accountId: "default",
       }),
     ).toBe("Use <tool_call>exec");
+    const borrowedClose = "Use <tool_call>exec<arg_key> literally. Example: `</arg_key>`.";
+    expect(
+      telegramOutbound.sanitizeText?.({
+        text: borrowedClose,
+        payload: { text: borrowedClose },
+        cfg,
+        accountId: "default",
+      }),
+    ).toBe(borrowedClose);
   });
 
   it("strips assistant-visible tool traces before outbound delivery", () => {

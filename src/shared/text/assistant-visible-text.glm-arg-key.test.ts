@@ -56,6 +56,16 @@ describe("stripAssistantInternalScaffolding GLM arg_key", () => {
       "prefix <tool_call><arg_key>secret</arg_key></tool_call> suffix",
       "prefix <tool_call><arg_key>secret</arg_key></tool_call> suffix",
     );
+    expectVisibleText(
+      "Use <tool_call>exec<arg_key> literally. Example: `</arg_key>`.",
+      "Use <tool_call>exec<arg_key> literally. Example: `</arg_key>`.",
+    );
+  });
+
+  it("holds a split </arg_key> close on the first payload", () => {
+    expectVisibleText("Visible\n<tool_call>exec<arg_key>command</arg_", "Visible\n");
+    expectVisibleText("Visible\n<tool_call>exec<arg_key>command</arg", "Visible\n");
+    expectVisibleText("Visible\n<tool_call>exec<arg_key>command</", "Visible\n");
   });
 });
 
@@ -82,6 +92,11 @@ describe("sanitizeAssistantVisibleText GLM arg_key", () => {
     expect(sanitizeAssistantVisibleText("Use <tool_call>exec")).toBe("Use <tool_call>exec");
     expect(sanitizeAssistantVisibleText("Use <tool_call>exec ")).toBe("Use <tool_call>exec");
     expect(sanitizeAssistantVisibleText("Use <tool_call>exec\n")).toBe("Use <tool_call>exec");
+    expect(
+      sanitizeAssistantVisibleText(
+        "Use <tool_call>exec<arg_key> literally. Example: `</arg_key>`.",
+      ),
+    ).toBe("Use <tool_call>exec<arg_key> literally. Example: `</arg_key>`.");
   });
 
   it("holds a name-only GLM prefix only while streaming", () => {

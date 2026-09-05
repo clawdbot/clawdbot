@@ -186,7 +186,8 @@ function isClosedGlmArgPayload(rest: string): boolean {
   if (!name) {
     return false;
   }
-  return /^\s*<\s*arg_key\b[\s\S]*<\/\s*arg_key\b/i.test(rest.slice(name.length));
+  // Bound to this payload: the first pair's own close, not a later prose/code tag.
+  return /^\s*<\s*arg_key\b[^>]*>[^\s<]*<\/\s*arg_key\b/i.test(rest.slice(name.length));
 }
 
 // Hold a <tool_call> tool-name / whitespace / partial <arg_key> prefix until
@@ -207,6 +208,31 @@ function isIncompleteGlmArgPayload(rest: string, holdNameOnlyPrefixes = false): 
     return false;
   }
   return isIncompleteGlmArgKeyAfterOpen(afterName.slice(open[0].length));
+}
+
+function isPartialGlmArgKeyClose(text: string): boolean {
+  if (!text.startsWith("<") || text.includes(">")) {
+    return false;
+  }
+  if (text === "<") {
+    return true;
+  }
+  if (text[1] !== "/") {
+    return false;
+  }
+  let idx = 2;
+  while (idx < text.length && /\s/.test(text[idx] ?? "")) {
+    idx += 1;
+  }
+  const remaining = text.slice(idx);
+  if (remaining === "") {
+    return true;
+  }
+  const lower = remaining.toLowerCase();
+  if (GLM_ARG_KEY.startsWith(lower)) {
+    return true;
+  }
+  return lower.startsWith(GLM_ARG_KEY) && /^\s*$/.test(remaining.slice(GLM_ARG_KEY.length));
 }
 
 function isIncompleteGlmArgKeyAfterOpen(afterOpen: string): boolean {
@@ -240,7 +266,15 @@ function isIncompleteGlmArgKeyAfterOpen(afterOpen: string): boolean {
   if (close === -1) {
     return true;
   }
-  return /^[^\s<]*$/.test(afterTag.slice(close + 1));
+  const afterGt = afterTag.slice(close + 1);
+  if (/^[^\s<]*<\/\s*arg_key\b/i.test(afterGt)) {
+    return false;
+  }
+  if (/^[^\s<]*$/.test(afterGt)) {
+    return true;
+  }
+  const split = /^([^\s<]*)(<[\s\S]*)$/.exec(afterGt);
+  return split !== null && isPartialGlmArgKeyClose(split[2] ?? "");
 }
 
 function startsWithNestedJsonToolCallPayload(text: string, start: number): boolean {
