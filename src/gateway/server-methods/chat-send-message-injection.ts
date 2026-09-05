@@ -74,14 +74,12 @@ export function createChatSendMessageInjectionStarter(params: {
             // Extracted page images follow the prepared inbound images, the
             // same inline-then-extracted ordering reply dispatch produces; each
             // keeps its attachment index as ordering provenance.
-            ...documentImages.map(
-              (image): ChatImageContent => ({
-                type: "image",
-                data: image.data,
-                mimeType: image.mimeType,
-                sourceIndex: image.attachmentIndex,
-              }),
-            ),
+            ...documentImages.map((image): ChatImageContent => ({
+              type: "image",
+              data: image.data,
+              mimeType: image.mimeType,
+              sourceIndex: image.attachmentIndex,
+            })),
           ]
         : replyOptionImages;
     const authorization = resolveCommandAuthorization({
