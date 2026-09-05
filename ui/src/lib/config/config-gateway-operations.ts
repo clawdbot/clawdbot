@@ -2,6 +2,7 @@ import { ErrorCodes } from "@openclaw/gateway-client/browser";
 import { asNullableRecord as asConfigRecord } from "@openclaw/normalization-core/record-coerce";
 import { GatewayRequestError, type GatewayBrowserClient } from "../../api/gateway.ts";
 import type { ConfigSchemaResponse, ConfigSnapshot } from "../../api/types.ts";
+import { t } from "../../i18n/index.ts";
 import { copyToClipboard } from "../clipboard.ts";
 import { serializeConfigForm } from "../config-form-utils.ts";
 import { formatUiError, formatUiExternalText } from "../format-error.ts";
@@ -145,6 +146,7 @@ export type ConfigWriteCoordinator = {
   setWritesSuspended: (suspended: boolean) => void;
   waitForPendingWrites: () => Promise<void>;
   save: (options?: RuntimeConfigDispatchOptions) => Promise<boolean>;
+  retry: () => Promise<boolean>;
   apply: () => Promise<boolean>;
   stageDefaultAgent: (agentId: string) => boolean;
   patch: (options: ConfigPatchOptions) => Promise<boolean>;
@@ -241,8 +243,10 @@ export async function loadConfig(
   if (!options.background) {
     state.configLoading = true;
   }
-  state.lastError = null;
-  state.chatError = null;
+  if (state.configAutoSaveStatus !== "error" && state.configAutoSaveStatus !== "conflict") {
+    state.lastError = null;
+    state.chatError = null;
+  }
   try {
     const res = await client.request<ConfigSnapshot>("config.get", {});
     if (!isCurrentRequest(state, "config", version, client, connectionEpoch) || !isCurrentLoad()) {
@@ -251,6 +255,14 @@ export async function loadConfig(
     // Recovery captures the latest intent before a clean draft is replaced.
     options.beforeApplySnapshot?.();
     applyConfigSnapshot(state, res, options);
+    // An explicit reload reconciles a clean patch failure. Background applied-revision
+    // polling must leave the rejected intent and its explanation visible.
+    if (!options.background && !state.configFormDirty) {
+      if (state.configAutoSaveStatus === "error" || state.configAutoSaveStatus === "conflict") {
+        state.configAutoSaveStatus = "idle";
+      }
+      state.lastError = null;
+    }
     return true;
   } catch (err) {
     if (isCurrentRequest(state, "config", version, client, connectionEpoch)) {
@@ -559,11 +571,15 @@ export async function patchConfig(
   const baseHash = currentSnapshot.hash;
   if (!baseHash) {
     state.lastError = "Config hash missing; refresh and retry.";
+    state.configAutoSaveStatus = "conflict";
     return false;
   }
   if (options.canDispatch && !options.canDispatch()) {
     return false;
   }
+  const draftStatus = state.configFormDirty ? state.configAutoSaveStatus : "idle";
+  const draftError = state.lastError;
+  state.configAutoSaveStatus = "saving";
   state.lastError = null;
   state.chatError = null;
   try {
@@ -584,16 +600,30 @@ export async function patchConfig(
       state.configNeedsApply = true;
     }
     await onAck?.(ack, currentSnapshot);
+    if (!isCurrentConfigConnection(state, client, connectionEpoch)) {
+      return false;
+    }
     if (committed) {
       // A successful acknowledgement refresh may publish the previous
       // applied revision. Keep the existing immediate apply-needed signal;
       // reconcileAppliedRefresh replaces it with authoritative process truth.
       state.configNeedsApply = true;
     }
+    // A patch acknowledges only its own intent; it cannot reconcile a separate
+    // stale or connection-paused draft that survived snapshot adoption.
+    const preserveDraftStatus =
+      state.configFormDirty && (draftStatus === "conflict" || draftStatus === "paused");
+    state.configAutoSaveStatus = preserveDraftStatus
+      ? draftStatus
+      : state.configFormDirty
+        ? "idle"
+        : "saved";
+    state.lastError = preserveDraftStatus ? draftError : null;
     return true;
   } catch (err) {
     if (isCurrentConfigConnection(state, client, connectionEpoch)) {
       state.lastError = formatUiError(err);
+      state.configAutoSaveStatus = isConfigBaseHashConflictError(err) ? "conflict" : "error";
     }
     return false;
   }
@@ -680,7 +710,9 @@ export async function openConfigFile(state: RuntimeConfigState): Promise<void> {
         formatUiExternalText(res.error, "Failed to open config file"),
         res.path || state.configSnapshot?.path,
       );
+      return;
     }
+    showToast({ message: t("configView.fileOpenedOnGateway") });
   } catch (err) {
     await publishFailure(formatUiError(err), state.configSnapshot?.path);
   }

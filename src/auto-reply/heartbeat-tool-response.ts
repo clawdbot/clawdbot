@@ -87,17 +87,7 @@ export function getHeartbeatToolNotificationText(response: HeartbeatToolResponse
   return response.notify ? (response.notificationText ?? response.summary).trim() : "";
 }
 
-/**
- * Store public heartbeat response metadata while keeping scratch process-private.
- *
- * Scratch travels through the private `ReplyPayloadMetadata` WeakMap (see
- * `setReplyPayloadMetadata`) rather than a non-enumerable Symbol property. Object
- * spreads elsewhere in the reply pipeline (e.g. media-merge in
- * `mergeAttemptToolMediaPayloads`) drop non-enumerable property keys, which
- * silently lost the scratch proposal and skipped `writeCronJobScratch` with no
- * diagnostic. The WeakMap is keyed by payload identity and is explicitly
- * re-keyed by `copyReplyPayloadMetadata`, so scratch survives every spread.
- */
+/** Store public heartbeat response metadata while keeping scratch process-private. */
 export function createHeartbeatToolResponsePayload(response: HeartbeatToolResponse): ReplyPayload {
   const { scratch, ...publicResponse } = response;
   const payload: ReplyPayload = {

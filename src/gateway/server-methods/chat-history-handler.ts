@@ -470,7 +470,6 @@ async function handleChatHistoryRequest({
             providerPolicySource: "active",
           }),
           modelSelectionTarget: resolveGatewayModelSelectionPolicy({
-            agentId: sessionAgentId,
             callerScopes: client?.connect?.scopes ?? [],
             cfg,
           }).target,

@@ -355,6 +355,8 @@ export function buildEmbeddedCompactionRuntimeContext(
     cwd: params.cwd ?? undefined,
     permissionMode: params.permissionMode,
     sessionRoot: params.sessionRoot,
+    requireWorkspaceOnly: params.requireWorkspaceOnly,
+    requireWritableSandbox: params.requireWritableSandbox,
     agentDir: params.agentDir,
     config: params.config,
     toolOverrides: params.toolOverrides,

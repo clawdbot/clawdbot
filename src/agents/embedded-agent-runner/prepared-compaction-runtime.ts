@@ -13,6 +13,10 @@ import {
 import { getMachineDisplayName } from "../../infra/machine-name.js";
 import { resolveRuntimeOsLabel } from "../../infra/os-summary.js";
 import { listRegisteredPluginAgentPromptGuidance } from "../../plugins/command-registry-state.js";
+import {
+  attachModelProviderRuntimePluginHandle,
+  type ProviderRuntimePluginHandle,
+} from "../../plugins/provider-hook-runtime.js";
 import { extractModelCompat } from "../../plugins/provider-model-compat.js";
 import type { ProviderRuntimeModel } from "../../plugins/provider-runtime-model.types.js";
 import { transformProviderSystemPrompt } from "../../plugins/provider-runtime.js";
@@ -242,7 +246,7 @@ export async function buildPreparedCompactionRuntime(prepared: DirectCompactionP
       requestedTokenBudget: params.contextTokenBudget,
       fallbackTokenBudget: params.tokenBudget,
     });
-    const effectiveModel = applyAuthHeaderOverride(
+    const effectiveModelWithoutRuntimeHandle = applyAuthHeaderOverride(
       applyLocalNoAuthHeaderOverride(
         contextTokenBudget < (runtimeModelWithContext.contextWindow ?? Infinity)
           ? { ...runtimeModelWithContext, contextWindow: contextTokenBudget }
@@ -261,8 +265,8 @@ export async function buildPreparedCompactionRuntime(prepared: DirectCompactionP
       buildAgentRuntimePlan({
         provider,
         modelId,
-        model: effectiveModel,
-        modelApi: effectiveModel.api,
+        model: effectiveModelWithoutRuntimeHandle,
+        modelApi: effectiveModelWithoutRuntimeHandle.api,
         harnessId: preparedHarnessRuntime,
         harnessRuntime: preparedHarnessRuntime,
         authProfileMode: resolvedRuntimeAuthPlan.selectedAuthMode,
@@ -279,6 +283,13 @@ export async function buildPreparedCompactionRuntime(prepared: DirectCompactionP
     const runtimePlan = reuseFullRuntimePlan
       ? preparedRuntimePlan
       : { ...preparedRuntimePlan, auth: resolvedRuntimeAuthPlan };
+    const effectiveModel = runtimePlan.providerRuntimeHandle
+      ? attachModelProviderRuntimePluginHandle(
+          effectiveModelWithoutRuntimeHandle,
+          // SAFETY: runtime plans use canonical plugin handles; public types omit plugin internals.
+          runtimePlan.providerRuntimeHandle as ProviderRuntimePluginHandle,
+        )
+      : effectiveModelWithoutRuntimeHandle;
 
     const runAbortController = new AbortController();
     const spawnWorkspaceDir =
@@ -337,6 +348,7 @@ export async function buildPreparedCompactionRuntime(prepared: DirectCompactionP
           },
           sandbox,
           sessionPermissionPolicy,
+          requireWorkspaceOnly: params.requireWorkspaceOnly,
           messageProvider: resolvedMessageProvider,
           clientCaps: params.clientCaps,
           chatType: params.chatType,

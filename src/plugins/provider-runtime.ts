@@ -566,11 +566,13 @@ export function resolveProviderStreamFn(params: {
   config?: OpenClawConfig;
   workspaceDir?: string;
   env?: NodeJS.ProcessEnv;
+  runtimeHandle?: ProviderRuntimePluginHandle;
   allowRuntimePluginLoad?: boolean;
   context: ProviderCreateStreamFnContext;
 }) {
-  const plugin =
-    params.allowRuntimePluginLoad === false
+  const plugin = params.runtimeHandle
+    ? ensureProviderRuntimePluginHandle(params).plugin
+    : params.allowRuntimePluginLoad === false
       ? resolveLoadedProviderRuntimePlugin(params)
       : resolveProviderRuntimePlugin(params);
   return plugin?.createStreamFn?.(params.context) ?? undefined;

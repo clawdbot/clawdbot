@@ -283,7 +283,6 @@ export const en: TranslationMap & {
     widgetLoading: "Loading session progress…",
     widgetEmpty: "No progress card yet",
     widgetUnavailable: "Session progress is unavailable.",
-    ownerUnsupported: "Update the Gateway to view progress for this session's agent.",
     widgetAccessDenied: "Select a session you can access or change sharing for this session.",
     countLabel: "{completed} of {total} completed",
     activity: {
@@ -1286,6 +1285,7 @@ export const en: TranslationMap & {
     forkedSession: "Forked session",
     copySessionId: "Session ID",
     copySessionLink: "Session link",
+    copySessionPreviewLink: "Preview link",
     copyMarkdown: "Conversation as Markdown",
     openNewTab: "New tab",
     openNewWindow: "New window",
@@ -1835,6 +1835,7 @@ export const en: TranslationMap & {
     rawTitle: "Edit raw JSON/JSON5 config",
     rawUnavailableTitle: "Raw mode unavailable for this snapshot",
     open: "Open",
+    fileOpenedOnGateway: "Configuration file opened on Gateway host.",
     applying: "Applying…",
     autoSaveSaving: "Saving…",
     autoSaveSaved: "Saved",

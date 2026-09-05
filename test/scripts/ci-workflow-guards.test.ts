@@ -131,6 +131,7 @@ function evaluateWorkflowExpression(
     dispatchId?: string;
     draft?: boolean;
     eventName: "pull_request" | "push" | "workflow_dispatch" | "repository_dispatch" | "schedule";
+    failed?: boolean;
     env?: Record<string, string>;
     frozenTarget?: boolean;
     fileHashes?: Record<string, string>;
@@ -175,6 +176,7 @@ function evaluateWorkflowExpression(
   }
   return runInNewContext(source, {
     always: () => true,
+    failure: () => context.failed ?? false,
     cancelled: () => context.cancelled ?? false,
     // GitHub expression builtins the runner-routing clauses use.
     contains: (haystack: unknown, needle: unknown) =>
@@ -12953,6 +12955,44 @@ printf '%s\n' "\${CURL_SUCCESS_IP:-203.0.113.7}"
       OPENCLAW_UI_E2E_ARTIFACT_DIR: proofUpload.with.path,
     });
     expect(proofUploadIndex).toBeGreaterThan(realGatewayIndex);
+  });
+
+  it.each([
+    { failed: false, captured: false },
+    { failed: false, captured: true },
+    { failed: true, captured: false },
+    { failed: true, captured: true },
+  ])("uploads only captured synthetic widget failures: %j", ({ failed, captured }) => {
+    const artifactRoot = ".artifacts/control-ui-e2e/control-ui-authenticated-widget-sandbox-*";
+    const timeline = `${artifactRoot}/widget-prompt-failure.json`;
+    for (const job of [
+      readCiWorkflow().jobs["checks-ui-e2e"],
+      readWorkflow(".github/workflows/openclaw-repo-e2e-reusable.yml").jobs.test,
+    ]) {
+      const upload = expectDefined(
+        job.steps.find(
+          (step: WorkflowStep) => step.name === "Upload synthetic widget prompt failure evidence",
+        ),
+        "synthetic widget upload",
+      );
+      expect(
+        evaluateWorkflowExpression(`\${{ ${upload.if} }}`, {
+          eventName: "workflow_dispatch",
+          repository: "openclaw/openclaw",
+          runAttempt: 1,
+          failed,
+          fileHashes: captured ? { [timeline]: "present" } : {},
+        }),
+      ).toBe(failed && captured);
+      expect(upload.uses).toBe(UPLOAD_ARTIFACT_V7);
+      expect(upload.with.path.trim().split("\n")).toEqual([
+        timeline,
+        `${artifactRoot}/*.png`,
+        `${artifactRoot}/*.webm`,
+      ]);
+      expect(upload.with["retention-days"]).toBe(7);
+      expect(upload.with["if-no-files-found"]).toBe("error");
+    }
   });
 
   it.each([

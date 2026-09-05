@@ -1,4 +1,3 @@
-import { asNullableRecord as asConfigRecord } from "@openclaw/normalization-core/record-coerce";
 import type { GatewayBrowserClient } from "../../api/gateway.ts";
 import { t } from "../../i18n/index.ts";
 import { cloneConfigObject } from "../config-form-utils.ts";
@@ -12,26 +11,23 @@ import {
   updateConfigRawValue,
 } from "./config-draft-model.ts";
 import {
-  adoptConfigPatchAck,
   applyConfig,
   autoSaveConfig,
   executeConfigExternalMutation,
   loadConfig,
-  patchConfig,
   refreshDraft,
   saveConfig,
   teardownFlushConfigDraft,
-  type ConfigPatchBuildResult,
   type ConfigWriteCoordinator,
   type ConfigMethod,
   type RuntimeConfigExternalMutationOptions,
   type RuntimeConfigExternalMutationResult,
 } from "./config-gateway-operations.ts";
+import { createConfigPatchCoordinator } from "./config-patch-coordinator.ts";
 import {
   currentConfigConnectionEpoch,
   invalidateConfigConnection,
   isCurrentConfigConnection,
-  nextRequestVersion,
   resolveEditableSnapshotConfig,
   type RuntimeConfigGateway,
   type RuntimeConfigState,
@@ -166,7 +162,10 @@ export function createConfigWriteCoordinator({
       state.configAutoSaveStatus = "idle";
     }
   };
-  const canAutoSaveDraftOnCurrentConnection = () =>
+  // A stale base or a previous connection needs explicit recovery, including
+  // trailing and teardown saves that do not pass through the debounce scheduler.
+  const canAutoSaveDraft = () =>
+    state.configAutoSaveStatus !== "conflict" &&
     !autoSaveRequiresExplicitSubmit &&
     autoSaveDraftConnection !== null &&
     autoSaveDraftConnection.client === state.client &&
@@ -190,7 +189,7 @@ export function createConfigWriteCoordinator({
       isDisposed() ||
       suppressAutoSave ||
       writesSuspended ||
-      !canAutoSaveDraftOnCurrentConnection() ||
+      !canAutoSaveDraft() ||
       !canCallConfigMethod("config.set")
     ) {
       return;
@@ -214,7 +213,13 @@ export function createConfigWriteCoordinator({
         (ackHash) => {
           lastFlightAckHash = ackHash;
         },
-        () => canCallConfigMethod("config.set"),
+        () => {
+          if (!canCallConfigMethod("config.set")) {
+            return false;
+          }
+          patches.clear();
+          return true;
+        },
       ),
     )
       .catch(() => false)
@@ -259,17 +264,11 @@ export function createConfigWriteCoordinator({
     if (
       isDisposed() ||
       writesSuspended ||
-      !canAutoSaveDraftOnCurrentConnection() ||
+      !canAutoSaveDraft() ||
       !canCallConfigMethod("config.set") ||
       !state.configFormDirty ||
       state.configFormMode !== "form"
     ) {
-      return;
-    }
-    // A conflict proves the snapshot is stale; retrying against the same base
-    // hash would fail again and mask the reload warning with "Saving…". Only
-    // a discard/reload (which installs a fresh snapshot) re-enables autosave.
-    if (state.configAutoSaveStatus === "conflict") {
       return;
     }
     cancelAppliedRefresh();
@@ -326,6 +325,7 @@ export function createConfigWriteCoordinator({
         suppressAutoSave = false;
       }
     }
+    patches.clear();
   };
   // Explicit ops (save/apply/patch) also serialize among THEMSELVES: two
   // callers queued behind the same in-flight write would otherwise both
@@ -407,6 +407,7 @@ export function createConfigWriteCoordinator({
     state.connected = snapshot.phase === "connected";
     state.applySessionKey = snapshot.sessionKey;
     if (clientChanged || connectionChanged) {
+      patches.clear();
       const draftBelongsToPreviousConnection =
         state.configFormDirty || autoSaveInFlight !== null || manualSubmitInFlight !== null;
       resetLoads();
@@ -520,65 +521,38 @@ export function createConfigWriteCoordinator({
     publish();
   });
 
-  const queueConfigPatch = (resolveOptions: () => ConfigPatchBuildResult): Promise<boolean> => {
-    cancelAppliedRefresh();
-    return afterPendingWritesSettled(
-      async () => {
-        // A drained autosave can start its own refresh while this patch waits.
-        cancelAppliedRefresh();
-        try {
-          const resolved = resolveOptions();
-          if ("error" in resolved) {
-            state.lastError = resolved.error;
-            return false;
-          }
-          return await patchConfig(state, resolved.options, async (ack, snapshotAtDispatch) => {
-            // The ack is newer than every config.get that began before it.
-            // Detach and invalidate those loads so stale pre-patch responses
-            // cannot replace the acknowledged config/hash.
-            resetConfigLoad();
-            nextRequestVersion(state, "config");
-            state.configLoading = false;
-            if (asConfigRecord(ack.config)) {
-              adoptConfigPatchAck(state, ack, snapshotAtDispatch);
-              return;
-            }
-            // Older/hash-only acknowledgements do not carry enough data to
-            // pair their new hash with a safe local document. Force a fresh
-            // snapshot instead of publishing an inconsistent hash/config.
-            const refresh = run(() => loadConfig(state));
-            void trackLoad("config", refresh);
-            if (!(await refresh)) {
-              throw new Error(
-                state.lastError ??
-                  "The configuration patch completed, but its authoritative refresh failed.",
-              );
-            }
-          });
-        } finally {
-          reconcileAppliedRefresh();
-        }
-      },
-      false,
-      {
+  const patches = createConfigPatchCoordinator({
+    state,
+    // Patch errors replace display status; the reconnect latch still owns
+    // whether a surviving draft requires the explicit Save action.
+    reconcileDraft: reconcileAutoSaveDraftConnection,
+    dispatch: (task) =>
+      afterPendingWritesSettled(task, false, {
         flushScheduledDraft: true,
         canDispatch: () => canDispatchConfigMutation("config.patch"),
-      },
-    ).finally(() => {
-      scheduleAutoSave();
-    });
-  };
+      }),
+    refresh: () => {
+      const refresh = run(() => loadConfig(state));
+      void trackLoad("config", refresh);
+      return refresh;
+    },
+    resetConfigLoad,
+    cancelAppliedRefresh,
+    reconcileAppliedRefresh,
+    scheduleAutoSave,
+  });
   const mutateDraft = (mutation: () => void) => {
     mutate(mutation);
     reconcileAutoSaveDraftConnection();
     scheduleAutoSave();
   };
-  return {
+  const writes: ConfigWriteCoordinator = {
     prepareDiscard: drainWritesForDiscard,
     patchForm: (path, value) => mutateDraft(() => updateConfigFormValue(state, path, value)),
     removeFormValue: (path) => mutateDraft(() => removeConfigFormValue(state, path)),
     setRaw: (value) => mutateDraft(() => updateConfigRawValue(state, value)),
     resetDraft: () => {
+      patches.clear();
       cancelScheduledAutoSave();
       mutate(() => resetConfigPendingChanges(state));
       clearAutoSaveDraftConnection();
@@ -648,12 +622,17 @@ export function createConfigWriteCoordinator({
         ? Promise.resolve(false)
         : afterPendingWritesSettled(
             async () => {
+              const client = state.client;
+              const epoch = currentConfigConnectionEpoch(state);
               bindDraftToExplicitSubmit();
               cancelAppliedRefresh();
               try {
                 const saved = await saveConfig(
                   state,
                   (info) => {
+                    if (client && isCurrentConfigConnection(state, client, epoch)) {
+                      patches.clear();
+                    }
                     manualFlightInfo = info;
                   },
                   canDispatch,
@@ -668,6 +647,7 @@ export function createConfigWriteCoordinator({
             { canDispatch },
           );
     },
+    retry: () => patches.retry(writes.save),
     apply: () =>
       !canDispatchConfigMutation("config.apply")
         ? Promise.resolve(false)
@@ -686,9 +666,13 @@ export function createConfigWriteCoordinator({
                 return false;
               }
               try {
-                const applied = await applyConfig(state, () =>
-                  canDispatchConfigMutation("config.apply"),
-                );
+                const applied = await applyConfig(state, () => {
+                  if (!canDispatchConfigMutation("config.apply")) {
+                    return false;
+                  }
+                  patches.clear();
+                  return true;
+                });
                 reconcileAutoSaveDraftConnection();
                 return applied;
               } finally {
@@ -715,11 +699,11 @@ export function createConfigWriteCoordinator({
     // re-arm the debounce after so a dirty form is never left timer-less.
     patch: (options) =>
       canDispatchConfigMutation("config.patch") && (options.canDispatch?.() ?? true)
-        ? queueConfigPatch(() => ({ options }))
+        ? patches.queue(() => ({ options }))
         : Promise.resolve(false),
     patchFromSnapshot: (build) =>
       canDispatchConfigMutation("config.patch")
-        ? queueConfigPatch(() => {
+        ? patches.queue(() => {
             const config = resolveEditableSnapshotConfig(state.configSnapshot);
             return config
               ? build(config)
@@ -784,6 +768,7 @@ export function createConfigWriteCoordinator({
       }
     },
     dispose() {
+      patches.clear();
       writesResumed?.();
       writesResumed = null;
       // Free any drain awaiting a flight that will never be reconciled now;
@@ -800,7 +785,7 @@ export function createConfigWriteCoordinator({
         client !== null &&
         state.configFormMode === "form" &&
         !writesSuspended &&
-        canAutoSaveDraftOnCurrentConnection() &&
+        canAutoSaveDraft() &&
         canCallConfigMethod("config.set");
       const autoFlight = autoSaveInFlight;
       const pendingFlight = autoFlight ?? manualSubmitInFlight;
@@ -843,4 +828,5 @@ export function createConfigWriteCoordinator({
       stopGateway();
     },
   };
+  return writes;
 }

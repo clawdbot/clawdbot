@@ -10,6 +10,7 @@ import { AgentDeletionCommitUncertainError } from "../agents/agent-lifecycle-reg
 import type { CliDeps } from "../cli/deps.js";
 import type { OpenClawConfig } from "../config/config.js";
 import { retainLegacyDefaultAgentId } from "../config/legacy.default-agent-owner.js";
+import { resolveSkillCollectionReviewMonitorSpecs } from "../cron/skill-collection-review-monitor.js";
 import { resolveHeartbeatSession } from "../infra/heartbeat-runner-session.js";
 import type { HeartbeatRunResult } from "../infra/heartbeat-wake.js";
 import {
@@ -251,7 +252,7 @@ import {
   getSuspensionVisibleCronTaskRunCount,
 } from "../cron/service/active-run-cancellation.js";
 import { resetActiveCronTaskRunsForTests } from "../cron/service/active-run-cancellation.test-support.js";
-import type { CronServiceState } from "../cron/service/state.js";
+import type { CronExecutionIdentityAdmission, CronServiceState } from "../cron/service/state.js";
 import { armTimer } from "../cron/service/timer.js";
 import type { CronJob, CronJobCreate } from "../cron/types.js";
 import {
@@ -505,6 +506,89 @@ describe("buildGatewayCronService", () => {
     });
   });
 
+  it("converges collection review delivery and runs without a configured channel", async () => {
+    const cfg = {
+      ...createCronConfig("server-cron-skill-review-delivery"),
+      skills: { workshop: { autonomous: { mode: "auto" } } },
+    } satisfies OpenClawConfig;
+    const state = loadCronService(cfg);
+    const [spec] = resolveSkillCollectionReviewMonitorSpecs(cfg, { schedulerSeed: "test-seed" });
+
+    if (!spec) {
+      throw new Error("expected the skill collection review monitor spec");
+    }
+
+    try {
+      const existing = await state.cron.add(
+        { ...spec.input, delivery: { mode: "announce" } },
+        { enabledExplicit: true, systemOwned: true },
+      );
+      runCronIsolatedAgentTurnMock.mockResolvedValueOnce({
+        status: "ok",
+        summary: "review complete",
+      });
+
+      await expect(state.reconcileSystemJobs(cfg)).resolves.toBe("converged");
+      expect(state.cron.getJob(existing.id)).toMatchObject({ delivery: { mode: "none" } });
+
+      await expect(state.cron.run(existing.id, "force")).resolves.toEqual({ ok: true, ran: true });
+      expect(state.cron.getJob(existing.id)?.state).toMatchObject({
+        lastRunStatus: "ok",
+        lastDeliveryStatus: "not-requested",
+      });
+      expect(state.cron.getJob(existing.id)?.state.lastDeliveryError).toBeUndefined();
+    } finally {
+      state.cron.stop();
+    }
+  });
+
+  it("forwards cancellation, execution callbacks, and identity to collection review turns", async () => {
+    const cfg = {
+      ...createCronConfig("server-cron-skill-review-forwarding"),
+      skills: { workshop: { autonomous: { mode: "auto" } } },
+    } satisfies OpenClawConfig;
+    const state = loadCronService(cfg);
+    const abortController = new AbortController();
+    const onExecutionStarted = vi.fn();
+    const onExecutionPhase = vi.fn();
+    const onLaneWait = vi.fn();
+    const executionIdentity = {
+      ingress: { kind: "schedule", boundary: "cron.test", state: "present" },
+    } satisfies CronExecutionIdentityAdmission;
+    await expect(state.reconcileSystemJobs(cfg)).resolves.toBe("converged");
+    const job = (await state.cron.list({ includeDisabled: true })).find(
+      (candidate) => candidate.declarationKey === "skill-collection-review:main",
+    );
+    if (!job) {
+      throw new Error("expected the skill collection review monitor");
+    }
+
+    try {
+      await getCronDeps(state).runIsolatedAgentJob({
+        job,
+        message: "review",
+        abortSignal: abortController.signal,
+        onExecutionStarted,
+        onExecutionPhase,
+        onLaneWait,
+        executionIdentity,
+      });
+
+      expect(runCronIsolatedAgentTurnMock).toHaveBeenCalledWith(
+        expect.objectContaining({
+          abortSignal: abortController.signal,
+          onExecutionStarted,
+          onExecutionPhase,
+          onLaneWait,
+          executionIdentity,
+          skillsSnapshot: { prompt: "", skills: [] },
+        }),
+      );
+    } finally {
+      state.cron.stop();
+    }
+  });
+
   it.each([
     { monitor: "heartbeat", blockedInventory: 1 },
     { monitor: "skill review", blockedInventory: 2 },
@@ -572,7 +656,11 @@ describe("buildGatewayCronService", () => {
       await expect(state.reconcileSystemJobs(cfg)).resolves.toBe("retry-scheduled");
       expect(await listJobs({ includeDisabled: true })).toEqual(
         expect.arrayContaining([
-          expect.objectContaining({ enabled: true, payload: { kind: "skillCollectionReview" } }),
+          expect.objectContaining({
+            enabled: true,
+            declarationKey: "skill-collection-review:main",
+            payload: expect.objectContaining({ kind: "agentTurn" }),
+          }),
         ]),
       );
       state.cron.stop();

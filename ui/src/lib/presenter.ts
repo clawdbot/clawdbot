@@ -85,9 +85,6 @@ export function formatCronPayload(job: CronJob) {
   if (p.kind === "heartbeat") {
     return "Heartbeat monitor";
   }
-  if (p.kind === "skillCollectionReview") {
-    return "Skill collection review";
-  }
   const base = `Agent: ${p.message}`;
   const delivery = job.delivery;
   if (delivery && delivery.mode !== "none") {

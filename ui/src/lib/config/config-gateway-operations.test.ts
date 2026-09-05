@@ -420,6 +420,7 @@ describe("config gateway operations", () => {
     expect(runtimeConfig.state.configFormDirty).toBe(true);
     expect(runtimeConfig.state.configDraftBaseHash).toBe("hash-1");
     expect(runtimeConfig.state.configSnapshot?.hash).toBe("hash-2");
+    expect(runtimeConfig.state.configAutoSaveStatus).toBe("idle");
     runtimeConfig.resetDraft();
     runtimeConfig.dispose();
   });
