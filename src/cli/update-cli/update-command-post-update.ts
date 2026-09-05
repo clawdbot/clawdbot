@@ -87,6 +87,8 @@ export async function finishUpdate(params: FinishUpdateParams): Promise<UpdateRu
   let rollbackAttempted = false;
   let postVerificationRepairAttempted = false;
   let rollbackStopState: PreManagedServiceStop | undefined;
+  // Rollback and later plugin maintenance can replace the suspension owner.
+  const currentServiceStop = () => rollbackStopState ?? params.preManagedServiceStop;
   let rolledBack = false;
   let completedDowntimeMs: number | undefined;
   let pendingRestartAtMs =
@@ -248,11 +250,9 @@ export async function finishUpdate(params: FinishUpdateParams): Promise<UpdateRu
           finalResult.status !== "ok" &&
           finalResult.recovery?.serviceRestartSafe !== true
         ) {
-          await (
-            rollbackStopState ?? params.preManagedServiceStop
-          )?.windowsTaskAutoStartRecovery?.complete(false);
+          await currentServiceStop()?.windowsTaskAutoStartRecovery?.complete(false);
         } else {
-          const stopped = rollbackStopState ?? params.preManagedServiceStop;
+          const stopped = currentServiceStop();
           await maybeResumeWindowsTaskAutoStartAfterPackageUpdate(
             stopped,
             true,
@@ -272,9 +272,7 @@ export async function finishUpdate(params: FinishUpdateParams): Promise<UpdateRu
     if (restoreFailure) {
       rolledBack = false;
       try {
-        await (
-          rollbackStopState ?? params.preManagedServiceStop
-        )?.windowsTaskAutoStartRecovery?.complete(false);
+        await currentServiceStop()?.windowsTaskAutoStartRecovery?.complete(false);
       } catch (cause) {
         restoreFailure = {
           cause: new AggregateError(
@@ -340,18 +338,14 @@ export async function finishUpdate(params: FinishUpdateParams): Promise<UpdateRu
         if (service === "failed") {
           finalResult.status = "error";
           try {
-            await (
-              rollbackStopState ?? params.preManagedServiceStop
-            )?.windowsTaskAutoStartRecovery?.complete(false);
+            await currentServiceStop()?.windowsTaskAutoStartRecovery?.complete(false);
           } catch (cause) {
             return await reportResult(finalResult, false, { cause }, false);
           }
         }
       }
     }
-    await (
-      rollbackStopState ?? params.preManagedServiceStop
-    )?.windowsTaskAutoStartRecovery?.complete(
+    await currentServiceStop()?.windowsTaskAutoStartRecovery?.complete(
       rolledBack ||
         finalResult.status === "ok" ||
         (finalResult.recovery?.serviceRestartSafe === true &&
@@ -390,14 +384,15 @@ export async function finishUpdate(params: FinishUpdateParams): Promise<UpdateRu
     return reportedResult;
   };
   const restoreWindowsAutoStart = async (result: UpdateRunResult) => {
+    const stopped = currentServiceStop();
     try {
       await maybeResumeWindowsTaskAutoStartAfterPackageUpdate(
-        params.preManagedServiceStop,
+        stopped,
         true,
-        params.preManagedServiceStop
+        stopped
           ? createWindowsTaskAutoStartGuard({
               root: result.root ?? params.root,
-              before: params.preManagedServiceStop,
+              before: stopped,
               timeoutMs: params.updateStepTimeoutMs,
             })
           : undefined,
@@ -564,7 +559,7 @@ export async function finishUpdate(params: FinishUpdateParams): Promise<UpdateRu
                   serviceEnv: gatewayServiceEnv ?? serviceStateReadEnv,
                   serviceUpdateVerdict,
                 },
-                recoveryStop: rollbackStopState ?? params.preManagedServiceStop,
+                recoveryStop: currentServiceStop(),
                 onVerified: recordVerifiedDowntime,
               })
           : undefined,
@@ -589,7 +584,7 @@ export async function finishUpdate(params: FinishUpdateParams): Promise<UpdateRu
     await restart();
     if (deferPluginConvergence) {
       ({ resultWithPostUpdate, postUpdateConfigSnapshot } = await convergePlugins(async () => {
-        const before = params.preManagedServiceStop;
+        const before = currentServiceStop();
         if (!before) {
           throw new Error("Plugin maintenance lost its update service owner.");
         }

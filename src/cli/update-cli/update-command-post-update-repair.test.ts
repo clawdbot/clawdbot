@@ -428,6 +428,146 @@ describe("post-activation repair after rollback refusal or failure", () => {
     });
   });
 
+  it.each([true, false])(
+    "settles Windows recovery after candidate repair and plugin activation (healthy=%s)",
+    async (activated) => {
+      const params = fixture();
+      const run = params.opts.run!;
+      vi.stubEnv("OPENCLAW_WINDOWS_TASK_NAME", "repair-plugin-fixture");
+      run.env.OPENCLAW_WINDOWS_TASK_NAME = "repair-plugin-fixture";
+      const root = await fs.realpath(dirs.make("repair-plugin-windows-candidate-"));
+      await fs.writeFile(path.join(root, "package.json"), JSON.stringify({ name: "openclaw" }));
+      const state: GatewayServiceState = {
+        installed: true,
+        loadState: { status: "loaded" },
+        running: false,
+        runtime: { status: "stopped" },
+        env: run.env,
+        command: { programArguments: ["node", path.join(root, "dist/entry.js"), "gateway"] },
+        definitionMutationCapability: { kind: "sealed", reason: "system-owned" },
+      };
+      params.root = root;
+      params.result.root = root;
+      params.preManagedServiceStop!.serviceUpdateVerdict =
+        await revalidateManagedGatewayServiceAfterUpdate({ state, root });
+      mocks.readService.mockResolvedValue(state);
+      mocks.revalidate.mockImplementation(revalidateManagedGatewayServiceAfterUpdate);
+      const actual = await vi.importActual<typeof import("./update-command-rollback.js")>(
+        "./update-command-rollback.js",
+      );
+      mocks.rollback.mockImplementation(actual.rollbackFailedUpdate);
+
+      let enabled = true;
+      mocks.execSchtasks.mockImplementation(async (args) => {
+        if (args[0] === "/Query") {
+          return {
+            code: 0,
+            stdout: `<Task><Settings><Enabled>${enabled}</Enabled></Settings></Task>`,
+            stderr: "",
+          };
+        }
+        if (args[0] === "/Run") {
+          return { code: enabled ? 0 : 1, stdout: "", stderr: enabled ? "" : "task disabled" };
+        }
+        enabled = args.at(-1) === "/ENABLE";
+        return { code: 0, stdout: "", stderr: "" };
+      });
+      const startTask = async () => {
+        const launched = await mocks.execSchtasks(["/Run", "/TN", "repair-plugin-fixture"]);
+        expect(launched.code).toBe(0);
+      };
+      const signals = ["SIGINT", "SIGTERM", "SIGBREAK"] as const;
+      const baselineListeners = signals.map((signal) => process.listenerCount(signal));
+      const recoveries: ReturnType<typeof createWindowsTaskAutoStartRecovery>[] = [];
+      const createRecovery = () => {
+        const recovery = createWindowsTaskAutoStartRecovery({ serviceEnv: run.env });
+        recoveries.push(recovery);
+        return recovery;
+      };
+      const originalRecovery = createRecovery();
+      try {
+        await originalRecovery.suspended;
+        originalRecovery.beginMutation();
+        params.preManagedServiceStop!.windowsTaskAutoStartRecovery = originalRecovery;
+        mocks.stop.mockImplementation(async () => {
+          const recovery = createRecovery();
+          await recovery.suspended;
+          mocks.healthy = false;
+          return { ...params.preManagedServiceStop!, windowsTaskAutoStartRecovery: recovery };
+        });
+        mocks.restart.mockImplementation(async (restart) => {
+          await startTask();
+          const initial = mocks.restart.mock.calls.length === 1;
+          mocks.healthy = !initial && activated;
+          recordUpdateRunPhase(run.runId, "verifying", undefined, { env: run.env });
+          if (!mocks.healthy) {
+            restart.onVerificationFailure?.("readyz-unhealthy");
+          }
+          return mocks.healthy;
+        });
+        mocks.restartCommand.mockImplementation(async () => {
+          await startTask();
+          mocks.healthy = true;
+          return true;
+        });
+        mocks.repair.mockImplementation(async (repair) => {
+          const signal = new AbortController().signal;
+          expect((await repair.validate(signal)).ok).toBe(false);
+          repair.onEvent?.({
+            type: "turn-started",
+            turn: 1,
+            provider: "openai",
+            model: "gpt-5.6-luna",
+          });
+          const validation = await repair.validate(signal);
+          expect(validation.ok).toBe(true);
+          repair.onEvent?.({ type: "stopped", status: "repaired" });
+          return { status: "repaired", attempts: [], finalValidation: validation };
+        });
+        mocks.converge.mockImplementation(
+          async (convergence: {
+            result: FinishUpdateParams["result"];
+            beforeDoctor?: () => Promise<void>;
+          }) => {
+            expect(mocks.healthy).toBe(true);
+            await convergence.beforeDoctor?.();
+            expect(enabled).toBe(false);
+            return {
+              resultWithPostUpdate: {
+                ...convergence.result,
+                postUpdate: { plugins: { status: "ok", changed: true } },
+              },
+              postUpdateConfigSnapshot: params.configSnapshot,
+            };
+          },
+        );
+
+        if (activated) {
+          await expect(finishUpdate(params)).resolves.toMatchObject({ status: "ok" });
+        } else {
+          await expect(finishUpdate(params)).rejects.toMatchObject({
+            exitCode: 1,
+            result: { status: "error" },
+          });
+        }
+        // The outer command retains the original handle after finalization rotates owners.
+        await originalRecovery.restore();
+        await originalRecovery.complete();
+        expect(mocks.rollback).toHaveBeenCalledOnce();
+        expect(mocks.repair).toHaveBeenCalledOnce();
+        expect(mocks.restart).toHaveBeenCalledTimes(2);
+        expect(mocks.restartCommand).toHaveBeenCalledOnce();
+        expect(mocks.stop).toHaveBeenCalledTimes(2);
+        expect(enabled).toBe(activated);
+        expect(signals.map((signal) => process.listenerCount(signal))).toEqual(baselineListeners);
+      } finally {
+        for (const recovery of recoveries) {
+          await recovery.complete(false);
+        }
+      }
+    },
+  );
+
   it.each(["owner-changed", "aborted"] as const)(
     "does not restart after repair is %s",
     async (fence) => {
