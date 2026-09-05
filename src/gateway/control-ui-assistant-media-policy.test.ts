@@ -6,8 +6,13 @@ import { finished } from "node:stream/promises";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { resolveStateDir } from "../config/paths.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
+import { closeOpenClawStateDatabaseForTest } from "../state/openclaw-state-db.js";
+import { ensureProfileForEmail, setUserProfileRole } from "../state/user-profiles.js";
 import { withEnvAsync } from "../test-utils/env.js";
 import { handleControlUiAssistantMediaRequest } from "./control-ui.js";
+import { resolveHttpProfile } from "./http-auth-user-profile.js";
+import { invalidateOperatorRolePolicy } from "./operator-role-policy.js";
+import { invalidateSessionSharingSnapshot } from "./session-sharing-snapshot-cache.js";
 import { makeMockHttpResponse } from "./test-http-response.js";
 
 const state = vi.hoisted(() => ({
@@ -60,6 +65,7 @@ beforeEach(async () => {
   });
 });
 afterEach(async () => {
+  closeOpenClawStateDatabaseForTest();
   await fs.rm(temp, { recursive: true, force: true });
   vi.restoreAllMocks();
 });
@@ -78,11 +84,21 @@ async function request(
   } = {},
 ) {
   const query = new URLSearchParams({ source });
-  if (!options.unscoped) query.set("sessionKey", options.sessionKey ?? sessionKey);
-  if (!options.omitAgent) query.set("agentId", options.agentId ?? "main");
-  if (!options.bytes) query.set("meta", "1");
-  if (options.ticket) query.set("mediaTicket", options.ticket);
-  if (options.allow) query.set("allow", "1");
+  if (!options.unscoped) {
+    query.set("sessionKey", options.sessionKey ?? sessionKey);
+  }
+  if (!options.omitAgent) {
+    query.set("agentId", options.agentId ?? "main");
+  }
+  if (!options.bytes) {
+    query.set("meta", "1");
+  }
+  if (options.ticket) {
+    query.set("mediaTicket", options.ticket);
+  }
+  if (options.allow) {
+    query.set("allow", "1");
+  }
   const response = makeMockHttpResponse();
   const chunks: Buffer[] = [];
   response.res.on("data", (chunk: Buffer) => chunks.push(Buffer.from(chunk)));
@@ -295,23 +311,31 @@ describe("assistant image session policy", () => {
   ] as const)(
     "applies the $cap role to $visibility session images",
     async ({ cap, visibility, available }) => {
-      const source = path.join(project, "image.png");
-      await fs.writeFile(source, PNG);
-      entry.visibility = visibility;
-      state.auth.mockResolvedValue({
-        authMethod: "trusted-proxy",
-        operatorScopes: ["operator.read"],
-        authenticatedUserProfile: {
-          profileId: "reader",
-          displayName: null,
-          hasAvatar: false,
-          updatedAt: 0,
-        },
-        operatorRolePolicy: { sessions: { others: cap }, agents: "*", scopes: ["operator.read"] },
+      await withEnvAsync({ OPENCLAW_STATE_DIR: path.join(temp, "profile-state") }, async () => {
+        cfg.gateway = {
+          roles: {
+            default: "viewer",
+            definitions: {
+              viewer: { sessions: { others: cap }, agents: "*", scopes: ["operator.read"] },
+            },
+          },
+        };
+        const profile = ensureProfileForEmail("media-role-reader@example.test");
+        const source = path.join(project, "image.png");
+        await fs.writeFile(source, PNG);
+        entry.visibility = visibility;
+        state.auth.mockResolvedValue({
+          authMethod: "trusted-proxy",
+          operatorScopes: ["operator.read"],
+          ...resolveHttpProfile(profile.id, profile.updatedAt, cfg),
+        });
+        const result = await request(source);
+        if (available) {
+          expect(result.payload).toMatchObject({ available: true });
+        } else {
+          expect(result.res.statusCode).toBe(404);
+        }
       });
-      const result = await request(source);
-      if (available) expect(result.payload).toMatchObject({ available: true });
-      else expect(result.res.statusCode).toBe(404);
     },
   );
   it("keeps unscoped readers on the default static roots even when a query selects a full-access agent", async () => {
@@ -376,4 +400,114 @@ describe("assistant image session policy", () => {
       expect(served.bytes).toEqual(PNG);
     });
   });
+  it.each(["visibility", "role assignment", "role definition"] as const)(
+    "revalidates a named reader's saved media ticket after %s withdrawal",
+    async (change) => {
+      await withEnvAsync({ OPENCLAW_STATE_DIR: path.join(temp, "profile-state") }, async () => {
+        cfg.gateway = {
+          roles: {
+            default: "viewer",
+            definitions: {
+              viewer: { sessions: { others: "view" }, agents: "*", scopes: ["operator.read"] },
+              denied: { sessions: { others: "none" }, agents: "*", scopes: ["operator.read"] },
+            },
+          },
+        };
+        const profile = ensureProfileForEmail("media-reader@example.test");
+        state.auth.mockResolvedValue({
+          authMethod: "trusted-proxy",
+          operatorScopes: ["operator.read"],
+          ...resolveHttpProfile(profile.id, profile.updatedAt, cfg),
+        });
+        const source = path.join(project, "shared.png");
+        await fs.writeFile(source, PNG);
+        const metadata = await request(source);
+        expect(metadata.payload).toMatchObject({ available: true });
+        const ticket = String(metadata.payload!.mediaTicket);
+        // Ordinary mutations elsewhere must not revoke a still-authorized reader's ticket.
+        invalidateSessionSharingSnapshot("agent:main:unrelated");
+        expect((await request(source, { ticket, bytes: true })).bytes).toEqual(PNG);
+        if (change === "visibility") {
+          entry.visibility = "draft";
+          invalidateSessionSharingSnapshot(sessionKey);
+        } else if (change === "role assignment") {
+          setUserProfileRole(profile.id, "denied");
+          invalidateOperatorRolePolicy(profile.id);
+        } else {
+          cfg.gateway!.roles!.definitions.viewer = {
+            sessions: { others: "none" },
+            agents: "*",
+            scopes: ["operator.read"],
+          };
+        }
+        await fs.rename(source, `${source}.old`);
+        await fs.writeFile(source, PNG);
+        const denied = await request(source, { ticket, bytes: true });
+        expect(denied.res.statusCode).toBe(404);
+        expect(denied.bytes).not.toEqual(PNG);
+      });
+    },
+  );
+
+  it.each(["metadata", "bytes"] as const)(
+    "revalidates named reader access after asynchronous %s file preparation",
+    async (operation) => {
+      await withEnvAsync({ OPENCLAW_STATE_DIR: path.join(temp, "profile-state") }, async () => {
+        cfg.gateway = {
+          roles: {
+            default: "viewer",
+            definitions: {
+              viewer: { sessions: { others: "view" }, agents: "*", scopes: ["operator.read"] },
+            },
+          },
+        };
+        const profile = ensureProfileForEmail("yielding-media-reader@example.test");
+        state.auth.mockResolvedValue({
+          authMethod: "trusted-proxy",
+          operatorScopes: ["operator.read"],
+          ...resolveHttpProfile(profile.id, profile.updatedAt, cfg),
+        });
+        const source = path.join(project, "shared.png");
+        await fs.writeFile(source, PNG);
+        const ticket = String((await request(source)).payload!.mediaTicket);
+        const openFile = fs.open;
+        const openSpy = vi.spyOn(fs, "open").mockImplementation(async (filePath, flags, mode) => {
+          const file = await openFile(filePath, flags, mode);
+          if (filePath === source) {
+            entry.visibility = "draft";
+            invalidateSessionSharingSnapshot(sessionKey);
+          }
+          return file;
+        });
+        try {
+          const denied = await request(source, { ticket, bytes: operation === "bytes" });
+          expect(denied.res.statusCode).toBe(404);
+          expect(denied.bytes).not.toEqual(PNG);
+        } finally {
+          openSpy.mockRestore();
+        }
+      });
+    },
+  );
+
+  it.each([
+    { name: "report.pdf", content: "%PDF-1.7\nexisting report\n", mime: "application/pdf" },
+    { name: "voice.wav", content: "existing audio bytes", mime: "audio/wav" },
+    { name: "clip.mp4", content: "existing video bytes", mime: "video/mp4" },
+  ])(
+    "preserves legacy Full Access $name attachments under the configured agent workspace",
+    async ({ name, content, mime }) => {
+      entry.permissionMode = "full";
+      const source = path.join(temp, "agent", name);
+      await fs.mkdir(path.dirname(source));
+      await fs.writeFile(source, content);
+      const served = await request(source, { bytes: true });
+      expect(served.res.statusCode).toBe(200);
+      expect(served.bytes).toEqual(Buffer.from(content));
+      expect(served.setHeader).toHaveBeenCalledWith("Content-Type", mime);
+      const outside = path.join(temp, name);
+      await fs.writeFile(outside, content);
+      expect((await request(outside, { bytes: true })).res.statusCode).toBe(404);
+    },
+  );
 });

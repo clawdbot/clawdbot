@@ -52,6 +52,7 @@ import { buildAssistantMediaContentDisposition } from "./assistant-media-content
 import {
   resolveAssistantMediaPolicy,
   type AssistantMediaSession,
+  type AssistantMediaReader,
 } from "./assistant-media-policy.js";
 import type { AuthRateLimiter } from "./auth-rate-limit.js";
 import type { ResolvedGatewayAuth } from "./auth.js";
@@ -286,6 +287,7 @@ type AssistantMediaTicketPayload = {
   source: string;
   exp: number;
   session?: AssistantMediaSession;
+  reader: AssistantMediaReader;
   agentId?: string;
   file?: { realPath: string; dev: string; ino: string };
 };
@@ -351,6 +353,8 @@ function verifyAssistantMediaTicket(
       payload.scope === CONTROL_UI_ASSISTANT_MEDIA_TICKET_SCOPE &&
       payload.source === source &&
       payload.agentId === agentId &&
+      typeof payload.reader?.authMethod === "string" &&
+      Array.isArray(payload.reader.operatorScopes) &&
       (payload.file === undefined ||
         (typeof payload.file?.realPath === "string" &&
           typeof payload.file.dev === "string" &&
@@ -436,9 +440,13 @@ async function openAssistantMedia(
   try {
     await assertLocalMediaAllowed(reference.path, policy.localRoots);
   } catch (error) {
-    if (!(error instanceof LocalMediaAccessError) || error.code !== "path-not-allowed") throw error;
+    if (!(error instanceof LocalMediaAccessError) || error.code !== "path-not-allowed") {
+      throw error;
+    }
     outsideRoots = true;
-    if (policy.workspaceOnly && !allowance) throw error;
+    if (policy.workspaceOnly && !allowance) {
+      throw error;
+    }
   }
   const opened = await openLocalFileSafely({ filePath: reference.path });
   try {
@@ -458,7 +466,9 @@ async function openAssistantMedia(
       }
     }
     // Validate the descriptor target too: a symlink may change between containment and open.
-    if (!outsideRoots) await assertLocalMediaAllowed(opened.realPath, policy.localRoots);
+    if (!outsideRoots) {
+      await assertLocalMediaAllowed(opened.realPath, policy.localRoots);
+    }
     const sniffBuffer = Buffer.alloc(Math.min(opened.stat.size, 8192));
     const bytesRead = sniffBuffer.length
       ? await readFileWindowFully(opened.handle, sniffBuffer, 0)
@@ -512,6 +522,7 @@ async function resolveAssistantMediaAvailability(
           source,
           agentId,
           session: policy.session,
+          reader: policy.reader,
           ...(file ? { file } : {}),
         }),
       };
@@ -537,13 +548,19 @@ export async function handleControlUiAssistantMediaRequest(
   },
 ): Promise<boolean> {
   const urlRaw = req.url;
-  if (!urlRaw) return false;
+  if (!urlRaw) {
+    return false;
+  }
   const url = new URL(urlRaw, "http://localhost");
-  if (url.pathname !== resolveAssistantMediaRoutePath(opts?.basePath)) return false;
+  if (url.pathname !== resolveAssistantMediaRoutePath(opts?.basePath)) {
+    return false;
+  }
   const isMetaRequest = url.searchParams.get("meta") === "1";
   const explicitAllow =
     req.method === "POST" && isMetaRequest && url.searchParams.get("allow") === "1";
-  if (!isReadHttpMethod(req.method) && !explicitAllow) return false;
+  if (!isReadHttpMethod(req.method) && !explicitAllow) {
+    return false;
+  }
   applyControlUiSecurityHeaders(res);
   const source = normalizeAssistantMediaSource(url.searchParams.get("source") ?? "");
   if (!source) {
@@ -565,20 +582,21 @@ export async function handleControlUiAssistantMediaRequest(
           allowQueryToken: !explicitAllow,
         })
       : undefined;
-  if ((isMetaRequest || !ticket) && !requestAuth) return true;
-  const isAdmin = requestAuth?.operatorScopes.includes("operator.admin") === true;
-  if (explicitAllow && !isAdmin) {
-    sendJson(res, 403, { error: "Allowing an outside image requires operator.admin" });
+  if ((isMetaRequest || !ticket) && !requestAuth) {
     return true;
   }
+  const policyParams = { config: opts?.config ?? {}, sessionKey, agentId };
   const policy = resolveAssistantMediaPolicy({
-    config: opts?.config ?? {},
-    sessionKey,
-    agentId,
+    ...policyParams,
     requestAuth: requestAuth ?? undefined,
+    reader: isMetaRequest ? undefined : ticket?.reader,
   });
   if (!policy) {
     respondControlUiNotFound(res);
+    return true;
+  }
+  if (explicitAllow && !policy.canAllow) {
+    sendJson(res, 403, { error: "Allowing an outside image requires operator.admin" });
     return true;
   }
   const sameSession =
@@ -592,9 +610,28 @@ export async function handleControlUiAssistantMediaRequest(
   }
   const allowance = explicitAllow
     ? true
-    : ticket?.file && sameSession && (!isMetaRequest || isAdmin)
+    : ticket?.file && sameSession && policy.canAllow
       ? ticket.file
       : undefined;
+  const assertCurrentPolicy = () => {
+    // Reapply durable profile, role, and session owners after every async preparation.
+    // A global access epoch changes on ordinary session activity, so it cannot revoke tickets.
+    const current = resolveAssistantMediaPolicy({ ...policyParams, reader: policy.reader });
+    if (
+      !current ||
+      current.session?.sessionKey !== policy.session?.sessionKey ||
+      current.session?.agentId !== policy.session?.agentId ||
+      current.session?.sessionId !== policy.session?.sessionId ||
+      current.remote !== policy.remote ||
+      current.workspaceOnly !== policy.workspaceOnly ||
+      current.localRoots.length !== policy.localRoots.length ||
+      current.localRoots.some((root, index) => root !== policy.localRoots[index]) ||
+      (allowance && policy.workspaceOnly && !current.canAllow)
+    ) {
+      throw new FsSafeError("path-mismatch", "Media access changed");
+    }
+    return current;
+  };
   if (isMetaRequest) {
     const availability = await resolveAssistantMediaAvailability(
       source,
@@ -602,11 +639,18 @@ export async function handleControlUiAssistantMediaRequest(
       allowance,
       agentId,
     );
+    let current;
+    try {
+      current = assertCurrentPolicy();
+    } catch {
+      respondControlUiNotFound(res);
+      return true;
+    }
     sendJson(
       res,
       200,
       !availability.available && availability.code === "outside-allowed-folders"
-        ? { ...availability, retryable: false, ...(isAdmin ? { canAllow: true } : {}) }
+        ? { ...availability, retryable: false, ...(current.canAllow ? { canAllow: true } : {}) }
         : availability,
     );
     return true;
@@ -638,6 +682,7 @@ export async function handleControlUiAssistantMediaRequest(
       });
       if (playback.kind === "preparing") {
         await byteStream.close();
+        assertCurrentPolicy();
         sendJson(res, 202, { status: "preparing" });
         return true;
       }
@@ -654,7 +699,10 @@ export async function handleControlUiAssistantMediaRequest(
         }
       }
     }
-    if (media.outsideRoots && mediaKind === "image") applyHttpImageContentSecurityPolicy(res);
+    assertCurrentPolicy();
+    if (media.outsideRoots && mediaKind === "image") {
+      applyHttpImageContentSecurityPolicy(res);
+    }
     res.setHeader("Content-Type", contentType);
     res.setHeader(
       "Content-Disposition",

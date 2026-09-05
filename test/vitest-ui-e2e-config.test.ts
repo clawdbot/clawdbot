@@ -408,6 +408,7 @@ describe("Control UI E2E resource ownership", () => {
     const realGateway = [
       "agent-file-lifecycle.real-gateway",
       "chat-loading-performance.real-gateway",
+      "chat-project-media.real-gateway",
       "chat-widget-sandbox.real-gateway",
       "control-ui-auth-transports",
       "cron-duration-save.real-gateway",
