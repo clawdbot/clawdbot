@@ -5,7 +5,7 @@ import { BUZZ_MENTION_MAX_COUNT } from "./mentions.js";
 
 export const BUZZ_NORMAL_MESSAGE_KIND = 9;
 export const BUZZ_TYPING_INDICATOR_KIND = 20_002;
-export const BUZZ_FORUM_MESSAGE_KIND = 45_001;
+const BUZZ_FORUM_MESSAGE_KIND = 45_001;
 const BUZZ_RICH_MESSAGE_KIND = 40_002;
 export const BUZZ_DIFF_MESSAGE_KIND = 40_008;
 export const BUZZ_INBOUND_MESSAGE_KINDS = [
