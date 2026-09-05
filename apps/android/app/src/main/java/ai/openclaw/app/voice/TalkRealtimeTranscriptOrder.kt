@@ -69,7 +69,8 @@ internal class TalkRealtimeTranscriptOrder(
 
   fun close() {
     assignOrders(closing = true)
-    items.values.forEach { if (!it.text.isCompleted) it.text.complete(null) }
+    // Completing a waiter can synchronously release its reservation on Main.immediate.
+    items.values.toList().forEach { it.text.complete(null) }
   }
 
   private fun assignOrders(closing: Boolean = false) {

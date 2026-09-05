@@ -2560,6 +2560,61 @@ class TalkModeManagerTest {
     }
 
   @Test
+  @Config(shadows = [StartupPeerFactory::class, StartupPeerFactoryBuilder::class, StartupPeerConnection::class, StartupDataChannel::class, StartupMediaTrack::class, StartupMediaSource::class])
+  fun webRtcSetupTimeoutRespectsAutoAndStrictPolicy() = verifyWebRtcStartupFailure(timeout = true)
+
+  @Test
+  @Config(shadows = [StartupPeerFactory::class, StartupPeerFactoryBuilder::class, StartupPeerConnection::class, StartupDataChannel::class, StartupMediaTrack::class, StartupMediaSource::class])
+  fun webRtcAsyncStartupFailureRespectsAutoAndStrictPolicy() = verifyWebRtcStartupFailure(timeout = false)
+
+  private fun verifyWebRtcStartupFailure(timeout: Boolean) =
+    runBlocking {
+      for (selection in listOf("{}", """{"transport":"webrtc"}""", """{"providers":{"openai":{"authMethod":"oauth"}}}""")) {
+        StartupPeerConnection.reset()
+        StartupDataChannel.reset()
+        val strict = selection != "{}"
+        val methods = ConcurrentLinkedQueue<String>()
+        var injected = false
+        withStartedTalk(
+          responseForRequest = { request, _ ->
+            val method = request.getValue("method").jsonPrimitive.content
+            methods.add(method)
+            when (method) {
+              "talk.config" -> """{"config":{"talk":{"realtime":$selection}}}"""
+              "talk.catalog" -> """{"realtime":{"activeProvider":"openai","providers":[{"id":"openai","transports":["webrtc","gateway-relay"]}]}}"""
+              "talk.client.create" -> """{"voiceSessionId":"startup-fixture","transport":"webrtc","provider":"openai","clientSecret":"synthetic-capability","offerUrl":"/fixture/offer"}"""
+              else -> null
+            }
+          },
+          duringStart = { _, scheduler ->
+            val offer = StartupPeerConnection.offer
+            if (!injected && offer != null) {
+              injected = true
+              if (timeout) {
+                scheduler.advanceTimeBy(30_000)
+              } else {
+                StartupPeerConnection.observer!!.onConnectionChange(org.webrtc.PeerConnection.PeerConnectionState.FAILED)
+                scheduler.runCurrent()
+                offer.onCreateFailure("synthetic SDP failure after connection failure")
+              }
+              scheduler.runCurrent()
+            }
+          },
+          expectFailure = strict,
+        ) { proof ->
+          assertTrue("The test must reach the actual peer startup boundary", injected)
+          assertEquals(!strict, proof.manager.isEnabled.value)
+          assertEquals(!strict, proof.manager.isListening.value)
+          assertEquals(strict, proof.manager.hasFailure.value)
+          assertEquals(!strict, methods.contains("talk.session.create"))
+          assertEquals(1, methods.count { it == "talk.client.close" })
+          assertTrue(StartupPeerConnection.disposed)
+          assertNull(readPrivateField(proof.manager, "realtimeClient"))
+        }
+      }
+    }
+
+  @Test
   fun autoWebRtcFailureRecoversThroughGatewayRelay() =
     runTest {
       val methods = ConcurrentLinkedQueue<String>()
@@ -2670,6 +2725,7 @@ class TalkModeManagerTest {
     responseForRequest: (JsonObject, WebSocket) -> String? = { _, _ -> null },
     interceptRequest: (JsonObject, WebSocket) -> Boolean = { _, _ -> false },
     expectFailure: Boolean = false,
+    duringStart: (TalkModeManager, TestCoroutineScheduler) -> Unit = { _, _ -> },
     block: suspend (RealtimePlaybackProof) -> Unit,
   ) {
     val app = RuntimeEnvironment.getApplication()
@@ -2781,6 +2837,7 @@ class TalkModeManagerTest {
         val deadline = System.nanoTime() + 5_000_000_000L
         while (if (expectFailure) !manager.hasFailure.value else !manager.isListening.value) {
           scheduler.runCurrent()
+          duringStart(manager, scheduler)
           check(System.nanoTime() < deadline) { "Real gateway session did not reach expected Talk state: ${manager.statusText.value}" }
           withContext(Dispatchers.Default) { delay(10) }
         }

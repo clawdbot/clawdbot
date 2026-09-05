@@ -1,6 +1,11 @@
 package ai.openclaw.app.voice
 
 import kotlinx.coroutines.CompletableDeferred
+import kotlinx.coroutines.CoroutineScope
+import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.Job
+import kotlinx.coroutines.cancel
+import kotlinx.coroutines.launch
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertFalse
 import org.junit.Assert.assertTrue
@@ -8,6 +13,33 @@ import org.junit.Test
 
 @OptIn(kotlinx.coroutines.ExperimentalCoroutinesApi::class)
 class TalkRealtimeTranscriptOrderTest {
+  @Test fun closeDrainsReservationsWhoseWaitersReleaseImmediately() {
+    val scope = CoroutineScope(Job() + Dispatchers.Unconfined)
+    val released = mutableListOf<String>()
+    lateinit var owner: TalkRealtimeTranscriptOrder
+    owner =
+      TalkRealtimeTranscriptOrder { id, _, entryId, text, previous, written ->
+        scope.launch {
+          previous.await().await()
+          entryId.await()
+          text.await()
+          written.complete(Unit)
+          owner.release(id)
+          released += id
+        }
+      }
+    try {
+      assertTrue(owner.reserve("user", null, "user"))
+      assertTrue(owner.reserve("assistant", "user", "assistant"))
+      assertTrue(released.isEmpty())
+      owner.close()
+      assertEquals(listOf("user", "assistant"), released)
+      assertTrue(scope.coroutineContext[Job]!!.children.none())
+    } finally {
+      scope.cancel()
+    }
+  }
+
   @Test fun assistantFinalWaitsBehindDelayedUserFinal() {
     val ordered = mutableListOf<Triple<String, CompletableDeferred<String>, CompletableDeferred<String?>>>()
     val owner = TalkRealtimeTranscriptOrder { _, role, entryId, text, _, _ -> ordered += Triple(role, entryId, text) }

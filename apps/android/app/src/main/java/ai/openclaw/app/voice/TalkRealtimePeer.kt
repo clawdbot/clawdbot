@@ -6,13 +6,16 @@ import android.media.AudioManager
 import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.CompletableDeferred
 import kotlinx.coroutines.CoroutineScope
+import kotlinx.coroutines.CoroutineStart
+import kotlinx.coroutines.Deferred
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.Job
 import kotlinx.coroutines.NonCancellable
+import kotlinx.coroutines.async
 import kotlinx.coroutines.channels.Channel
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
-import kotlinx.coroutines.withTimeout
+import kotlinx.coroutines.withTimeoutOrNull
 import org.webrtc.AudioSource
 import org.webrtc.AudioTrack
 import org.webrtc.DataChannel
@@ -50,7 +53,9 @@ internal class TalkRealtimePeer(
   private var track: AudioTrack? = null
   private var peer: PeerConnection? = null
   private var channel: DataChannel? = null
-  private var closed = false
+  private var closing: Deferred<Unit>? = null
+  private val closed: Boolean get() = closing != null
+  private var startup: CompletableDeferred<Unit>? = null
   private var captureEnabled = true
   private var playbackEnabled = true
   private val ready = CompletableDeferred<Unit>()
@@ -64,13 +69,14 @@ internal class TalkRealtimePeer(
       try {
         for (event in events) onEvent(event)
       } catch (error: Exception) {
-        if (error !is CancellationException) onFailure("Realtime event processing failed")
+        if (error !is CancellationException) fail("Realtime event processing failed")
       }
     }
 
   suspend fun start(exchangeOffer: suspend (String) -> String) =
     withContext(Dispatchers.Main.immediate) {
       check(!closed && peer == null) { "Realtime peer is not available" }
+      val setup = CompletableDeferred<Unit>(coroutineContext[Job]).also { startup = it }
       try {
         PeerConnectionFactory.initialize(PeerConnectionFactory.InitializationOptions.builder(context).createInitializationOptions())
         val audio =
@@ -141,7 +147,7 @@ internal class TalkRealtimePeer(
             }
           },
         )
-        withTimeout(30_000) {
+        withTimeoutOrNull(30_000) {
           val offer = CompletableDeferred<SessionDescription>()
           createdPeer.createOffer(SdpResult(offer), MediaConstraints())
           val local = offer.await()
@@ -158,10 +164,13 @@ internal class TalkRealtimePeer(
           checkCurrent(createdPeer)
           ready.await()
           checkCurrent(createdPeer)
-        }
+        } ?: error("Realtime connection timed out")
       } catch (error: Throwable) {
         close()
         throw error
+      } finally {
+        startup = null
+        setup.complete(Unit)
       }
     }
 
@@ -244,38 +253,41 @@ internal class TalkRealtimePeer(
 
   suspend fun close(): Unit =
     withContext(NonCancellable + Dispatchers.Main.immediate) {
-      if (closed) return@withContext
-      closed = true
-      try {
-        ready.cancel()
-        channel?.unregisterObserver()
-        callbackLock.withLock { acceptingCallbacks = false }
-        withContext(Dispatchers.IO) {
-          callbackLock.withLock {
-            while (callbacksInFlight > 0) callbacksDrained.await()
+      // Publish one cleanup before it can run; every caller awaits its physical result.
+      val cleanup =
+        closing ?: async(start = CoroutineStart.LAZY) {
+          try {
+            ready.cancel()
+            channel?.unregisterObserver()
+            callbackLock.withLock { acceptingCallbacks = false }
+            withContext(Dispatchers.IO) {
+              callbackLock.withLock {
+                while (callbacksInFlight > 0) callbacksDrained.await()
+              }
+            }
+            events.close()
+            eventPump.join()
+            channel?.let {
+              it.close()
+              it.dispose()
+            }
+            channel = null
+            peer?.dispose()
+            peer = null
+            track?.dispose()
+            track = null
+            source?.dispose()
+            source = null
+            factory?.dispose()
+            factory = null
+            audioDevice?.release()
+            audioDevice = null
+          } finally {
+            audioRouting?.close()
+            audioRouting = null
           }
-        }
-        events.close()
-        eventPump.join()
-        channel?.let {
-          it.close()
-          it.dispose()
-        }
-        channel = null
-        peer?.dispose()
-        peer = null
-        track?.dispose()
-        track = null
-        source?.dispose()
-        source = null
-        factory?.dispose()
-        factory = null
-        audioDevice?.release()
-        audioDevice = null
-      } finally {
-        audioRouting?.close()
-        audioRouting = null
-      }
+        }.also { closing = it }
+      cleanup.await()
     }
 
   private fun checkCurrent(expected: PeerConnection) {
@@ -284,7 +296,12 @@ internal class TalkRealtimePeer(
 
   private fun fail(message: String) {
     if (closed) return
-    ready.completeExceptionally(IllegalStateException(message))
+    // Fail the startup scope at any SDP/HTTP/readiness wait. Its caller owns cleanup
+    // and recovery; the runtime callback must not disable Auto first.
+    startup?.let {
+      it.completeExceptionally(IllegalStateException(message))
+      return
+    }
     try {
       onFailure(message)
     } finally {
