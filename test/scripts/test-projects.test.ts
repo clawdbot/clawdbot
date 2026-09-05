@@ -1152,6 +1152,7 @@ describe("scripts/test-projects changed-target routing", () => {
         "test/scripts/release-candidate-checklist.test.ts",
         "test/scripts/release-no-push-workflow.test.ts",
         "test/scripts/release-plan-producer.test.ts",
+        "test/scripts/release-tooling-bootstrap.test.ts",
         "test/scripts/validate-release-publish-approval.test.ts",
         "test/scripts/ci-workflow-guards.test.ts",
       ],
