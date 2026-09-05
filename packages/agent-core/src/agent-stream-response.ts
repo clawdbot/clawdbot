@@ -1,7 +1,4 @@
-import {
-  normalizeOpenAICompletionsTextDelta,
-  replaceCompactionReplayOwnerContent,
-} from "@openclaw/ai/transports";
+import { replaceCompactionReplayOwnerContent } from "@openclaw/ai/transports";
 import type {
   AssistantMessage,
   AssistantMessageEvent,
@@ -75,38 +72,29 @@ function resolveAssistantTextDeltaUpdate(
 ): {
   message: AssistantMessage;
   event: Extract<AssistantMessageUpdateEvent, { type: "text_delta" }>;
-} | null {
+} {
   if ("partial" in event && event.partial) {
     // Direct-mode events carry an authoritative partial; producer already normalized.
     if (event.delta) {
       const emittedText = emittedTextByContentIndex.get(event.contentIndex) ?? "";
-      const growth = normalizeOpenAICompletionsTextDelta(emittedText, event.delta);
-      if (growth) {
-        emittedTextByContentIndex.set(event.contentIndex, emittedText + growth);
-      }
+      emittedTextByContentIndex.set(event.contentIndex, emittedText + event.delta);
     }
     return { message: event.partial, event };
   }
   const currentContent = currentMessage.content[event.contentIndex];
   const messageText = currentContent?.type === "text" ? currentContent.text : "";
-  // Normalize against text already emitted on this index. text_start's mutable
-  // `partial` can already include later deltas, so messageText alone false-drops
-  // the confirming replay that SSE/HTTP sinks still need to observe.
+  // Bare deltas stay additive. Track emitted text so a polluted text_start partial
+  // (already holding later stream text) does not cause a second append for the
+  // confirming deltas HTTP/SSE sinks still need to observe.
   const emittedText = emittedTextByContentIndex.get(event.contentIndex) ?? "";
-  const normalizedDelta = normalizeOpenAICompletionsTextDelta(emittedText, event.delta);
-  if (!normalizedDelta) {
-    return null;
-  }
-  const nextEmitted = emittedText + normalizedDelta;
+  const nextEmitted = emittedText + event.delta;
   emittedTextByContentIndex.set(event.contentIndex, nextEmitted);
-  const nextEvent = normalizedDelta === event.delta ? event : { ...event, delta: normalizedDelta };
-  // Skip re-append when text_start partial already landed this prefix on the message.
   if (messageText.startsWith(nextEmitted) && messageText.length >= nextEmitted.length) {
-    return { message: currentMessage, event: nextEvent };
+    return { message: currentMessage, event };
   }
   return {
-    message: appendTextDeltaToAssistantMessage(currentMessage, event.contentIndex, normalizedDelta),
-    event: nextEvent,
+    message: appendTextDeltaToAssistantMessage(currentMessage, event.contentIndex, event.delta),
+    event,
   };
 }
 
@@ -119,10 +107,8 @@ function resolveAssistantMessageUpdate(
     return event.partial;
   }
   if (event.type === "text_delta") {
-    return (
-      resolveAssistantTextDeltaUpdate(event, currentMessage, emittedTextByContentIndex)?.message ??
-      currentMessage
-    );
+    return resolveAssistantTextDeltaUpdate(event, currentMessage, emittedTextByContentIndex)
+      .message;
   }
   return currentMessage;
 }
@@ -329,9 +315,6 @@ export async function streamAgentResponse(
               partialMessage,
               emittedTextByContentIndex,
             );
-            if (!resolved) {
-              break;
-            }
             partialMessage = resolved.message;
             if (event.contentIndex < committedContentCount) {
               break;

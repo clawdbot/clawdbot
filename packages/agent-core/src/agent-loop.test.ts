@@ -536,7 +536,7 @@ describe("agentLoop streaming updates", () => {
     }
   });
 
-  it("drops bare text_delta exact replays at the accumulation boundary", async () => {
+  it("keeps bare text_delta exact repeats additive at the accumulation boundary", async () => {
     const phrase = "abcdefgh";
     const streamFn: StreamFn = async () => {
       const stream = createAssistantMessageEventStream();
@@ -559,7 +559,7 @@ describe("agentLoop streaming updates", () => {
       };
       const finalMessage: AssistantMessage = {
         ...startMessage,
-        content: [{ type: "text", text: `${phrase}!` }],
+        content: [{ type: "text", text: `${phrase}${phrase}!` }],
       };
 
       queueMicrotask(() => {
@@ -570,13 +570,13 @@ describe("agentLoop streaming updates", () => {
           partial: { ...startMessage, content: [] },
         });
         stream.push({ type: "text_delta", contentIndex: 0, delta: phrase });
-        // Same wire shape as #136262 / deepseek live doubles: delta === accumulated.
+        // Agent Core stays transport-neutral: bare repeats append.
         stream.push({ type: "text_delta", contentIndex: 0, delta: phrase });
         stream.push({ type: "text_delta", contentIndex: 0, delta: "!" });
         stream.push({
           type: "text_end",
           contentIndex: 0,
-          content: `${phrase}!`,
+          content: `${phrase}${phrase}!`,
           partial: finalMessage,
         });
         stream.push({ type: "done", reason: "stop", message: finalMessage });
@@ -599,7 +599,8 @@ describe("agentLoop streaming updates", () => {
     );
     expect(deltaUpdates.map((event) => event.message)).toMatchObject([
       { role: "assistant", content: [{ type: "text", text: phrase }] },
-      { role: "assistant", content: [{ type: "text", text: `${phrase}!` }] },
+      { role: "assistant", content: [{ type: "text", text: `${phrase}${phrase}` }] },
+      { role: "assistant", content: [{ type: "text", text: `${phrase}${phrase}!` }] },
     ]);
   });
 

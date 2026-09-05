@@ -331,9 +331,6 @@ export function isOpenAICompletionsThinkingEnabled(effort: string): boolean {
   return normalized !== "off" && normalized !== "none";
 }
 
-/** Min length before treating exact/prefix/extension frames as cumulative replays. */
-const TEXT_REPLAY_MIN_CHARS = 8;
-
 function growthFromCumulativeExtension(accumulated: string, incoming: string): string {
   const growth = incoming.slice(accumulated.length);
   // Drop doubled snapshots where the "growth" is itself a replay of prior text.
@@ -344,12 +341,11 @@ function growthFromCumulativeExtension(accumulated: string, incoming: string): s
 }
 
 /**
- * Normalize cumulative text snapshots into true increments.
+ * Normalize message-shaped cumulative text snapshots into true increments.
  *
- * Field captures (issue #136262) show compatible providers occasionally emit a bare
- * `text_delta` whose content equals the already-accumulated text. A length-gated
- * monotonic-append contract (also used at the agent-loop accumulation boundary)
- * drops those replays while keeping short intentional repeats like "Ha"×3.
+ * Bare `choice.delta` frames stay additive under the shared assistant-event contract
+ * (intentional long repeats must not be dropped). Only `choice.message` snapshots
+ * have an authoritative full-text frame type and may be de-cumulated here.
  */
 export function normalizeOpenAICompletionsTextDelta(
   accumulated: string,
@@ -363,33 +359,17 @@ export function normalizeOpenAICompletionsTextDelta(
     return incoming;
   }
 
-  const frameKind = options?.frameKind ?? "delta";
-  const longEnough = accumulated.length >= TEXT_REPLAY_MIN_CHARS;
-
-  // Message-shaped frames are snapshots even when short.
-  if (frameKind === "snapshot") {
-    if (incoming.startsWith(accumulated) && incoming.length > accumulated.length) {
-      return growthFromCumulativeExtension(accumulated, incoming);
-    }
-    if (incoming === accumulated || accumulated.startsWith(incoming)) {
-      return "";
-    }
+  // Bare deltas: preserve additive semantics for all StreamFn consumers.
+  if ((options?.frameKind ?? "delta") !== "snapshot") {
     return incoming;
   }
 
-  // Bare delta path: ≥8 monotonic-append contract from production mitigations.
-  if (longEnough) {
-    if (incoming === accumulated) {
-      return "";
-    }
-    if (incoming.startsWith(accumulated) && incoming.length > accumulated.length) {
-      return growthFromCumulativeExtension(accumulated, incoming);
-    }
-    if (accumulated.startsWith(incoming) && incoming.length >= TEXT_REPLAY_MIN_CHARS) {
-      return "";
-    }
+  if (incoming.startsWith(accumulated) && incoming.length > accumulated.length) {
+    return growthFromCumulativeExtension(accumulated, incoming);
   }
-
+  if (incoming === accumulated || accumulated.startsWith(incoming)) {
+    return "";
+  }
   return incoming;
 }
 
