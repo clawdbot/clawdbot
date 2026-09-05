@@ -28,7 +28,8 @@ export async function withOwnedManagedUpdateEnv<T>(
   for (const key of Object.keys(process.env)) {
     delete process.env[key];
   }
-  Object.assign(process.env, env);
+  // A caller may pass process.env itself; clearing it must not erase the supplied scope.
+  Object.assign(process.env, env === process.env ? previousEnv : env);
   try {
     return await run();
   } finally {

@@ -256,7 +256,7 @@ describe("verified package rollback", () => {
         timeoutMs: 1_000,
       });
       expect(outcome.rolledBack).toBe(restored);
-      expect(rollback).toHaveBeenCalledTimes(change === "none" ? 1 : 0);
+      expect(rollback, JSON.stringify(outcome)).toHaveBeenCalledTimes(change === "none" ? 1 : 0);
       expect(mocks.restart).toHaveBeenCalledTimes(restored ? 1 : 0);
       if (service !== "stopped") {
         expect(mocks.stop).not.toHaveBeenCalled();

@@ -144,6 +144,7 @@ vi.mock("./update-command-post-core.js", async (importOriginal) => ({
 }));
 
 import { updateFinalizeCommand } from "./update-command-finalize.js";
+import { withOwnedManagedUpdateEnv } from "./update-command-managed-context.js";
 import { resumePostCoreUpdate } from "./update-command-resume.js";
 
 function expectLifecycleBoundary(preLeaseEvent: string): void {
@@ -180,6 +181,31 @@ describe("update plugin lifecycle lease boundaries", () => {
     vi.spyOn(defaultRuntime, "log").mockImplementation(() => undefined);
     vi.spyOn(defaultRuntime, "writeJson").mockImplementation(() => undefined);
   });
+
+  it.each(["copied", "live"] as const)(
+    "preserves the %s invocation environment through a failed phase",
+    async (source) => {
+      vi.stubEnv("OPENCLAW_STATE_DIR", "/fixture/invocation-state");
+      const failure = new Error("phase failed");
+      let observedStateDir: string | undefined;
+      try {
+        await expect(
+          withOwnedManagedUpdateEnv(
+            source === "live" ? process.env : { ...process.env },
+            async () => {
+              observedStateDir = process.env.OPENCLAW_STATE_DIR;
+              process.env.OPENCLAW_STATE_DIR = "/fixture/phase-state";
+              throw failure;
+            },
+          ),
+        ).rejects.toBe(failure);
+        expect(observedStateDir).toBe("/fixture/invocation-state");
+        expect(process.env.OPENCLAW_STATE_DIR).toBe("/fixture/invocation-state");
+      } finally {
+        vi.unstubAllEnvs();
+      }
+    },
+  );
 
   it("returns resumed package work without Doctor completion and rereads state under the lease", async () => {
     await resumePostCoreUpdate({
