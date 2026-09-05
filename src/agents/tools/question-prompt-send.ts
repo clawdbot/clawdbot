@@ -17,14 +17,20 @@ import {
 import { resolveControlUiSessionLinkBase } from "../../config/control-ui-link-base.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import { runWithQuestionChannelDeliveries } from "../../infra/question-channel-runtime.js";
-import { isDeliverableMessageChannel } from "../../utils/message-channel-normalize.js";
+import {
+  isDeliverableMessageChannel,
+  normalizeMessageChannel,
+} from "../../utils/message-channel-normalize.js";
 import { buildAgentHarnessQuestionPromptPayload } from "../harness/user-input-bridge.js";
 
 /** Tools whose call opens a question a person must answer before the turn continues. */
 export type QuestionPromptToolName = "ask_user" | "secrets";
 
 /** Publishes one prompt into the originating conversation. */
-export type QuestionPromptSend = (payload: ReplyPayload) => void | Promise<void>;
+export type QuestionPromptSend = (
+  payload: ReplyPayload,
+  options?: { signal?: AbortSignal },
+) => void | Promise<void>;
 
 /** A run's own way to show a question prompt, plus the channel it would appear in. */
 export type QuestionPromptDelivery = {
@@ -41,14 +47,14 @@ export function createChannelQuestionPromptDelivery(params: {
   threadId?: string | number | null;
 }): QuestionPromptDelivery | undefined {
   const cfg = params.cfg;
-  const channel = params.channel?.trim();
+  const channel = normalizeMessageChannel(params.channel);
   const to = params.to?.toString().trim();
   if (!cfg || !channel || !to || !isDeliverableMessageChannel(channel)) {
     return undefined;
   }
   return {
     messageChannel: channel,
-    send: async (payload) => {
+    send: async (payload, options) => {
       const send = await sendDurableMessageBatchCore({
         cfg,
         channel,
@@ -58,6 +64,8 @@ export function createChannelQuestionPromptDelivery(params: {
         payloads: [payload],
         bestEffort: true,
         durability: "best_effort",
+        deliveryRetryOwner: "caller",
+        signal: options?.signal,
       });
       settleChannelQuestionPromptSend(send);
     },
@@ -92,10 +100,13 @@ export async function sendQuestionToolPrompt(params: {
   questions: readonly QuestionRequestQuestion[];
   config?: OpenClawConfig;
   send: QuestionPromptSend;
+  signal?: AbortSignal;
 }): Promise<void> {
   const { questionId, questions } = params;
   const send: QuestionPromptSend = (payload) =>
-    runWithQuestionChannelDeliveries([questionId], () => params.send(payload));
+    runWithQuestionChannelDeliveries([questionId], () =>
+      params.send(payload, { signal: params.signal }),
+    );
   if (params.toolName === "secrets") {
     const binding = questions[0]?.secretStore;
     if (!binding) {

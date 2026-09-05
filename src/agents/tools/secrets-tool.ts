@@ -271,6 +271,7 @@ export function createSecretsTool(params: {
         throw new ToolInputError(`Unknown secrets action: ${action}`);
       }
       const request = normalizeSecretsRequestParams(input);
+      const promptAbort = publishOwnPrompt ? new AbortController() : undefined;
       const delivery = beginAskUserPromptDelivery({
         toolCallId,
         sessionKey: params.sessionKey,
@@ -287,6 +288,11 @@ export function createSecretsTool(params: {
                   questions: request.questions,
                   config: params.config,
                   send: publishOwnPrompt,
+                  signal: signal
+                    ? promptAbort
+                      ? AbortSignal.any([signal, promptAbort.signal])
+                      : signal
+                    : promptAbort?.signal,
                 }),
             }
           : {}),
@@ -385,6 +391,7 @@ export function createSecretsTool(params: {
         }
         throw error;
       } finally {
+        promptAbort?.abort(new Error("secrets question ended before prompt delivery"));
         signal?.removeEventListener("abort", cancelOnAbort);
         delivery.release();
       }

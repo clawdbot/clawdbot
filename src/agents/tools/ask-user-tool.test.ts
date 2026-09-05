@@ -410,6 +410,48 @@ describe("ask_user execution", () => {
     expect(result.details).toEqual({ status: "answered", answers });
   });
 
+  it("aborts a self-published prompt when the answer wins before delivery", async () => {
+    const answers = { answers: { deploy_target: ["Production"] } };
+    let capturedSignal: AbortSignal | undefined;
+    let aborted = false;
+    let finishWait: ((value: unknown) => void) | undefined;
+    const gateway = gatewayStub(async (method, _opts, params) => {
+      if (method === "question.request") {
+        return { id: params.id };
+      }
+      if (method === "question.waitAnswer") {
+        return await new Promise((resolve) => {
+          finishWait = resolve;
+        });
+      }
+      throw new Error(`unexpected method ${method}`);
+    });
+
+    const pending = createAskUserTool({
+      sessionKey: "agent:main:direct-dispatch-abort",
+      gatewayCall: gateway.call,
+      questionPrompt: {
+        send: (_payload, options) => {
+          capturedSignal = options?.signal;
+          return new Promise<void>(() => {});
+        },
+      },
+    }).execute("call-direct-dispatch-abort", validArgs);
+
+    await vi.waitFor(() => expect(capturedSignal).toBeDefined());
+    capturedSignal?.addEventListener(
+      "abort",
+      () => {
+        aborted = true;
+      },
+      { once: true },
+    );
+    finishWait?.({ status: "answered", answers });
+
+    await expect(pending).resolves.toMatchObject({ details: { status: "answered", answers } });
+    expect(aborted).toBe(true);
+  });
+
   it("leaves the prompt to a harness that already reserved one", async () => {
     // The embedded tool lifecycle publishes the prompt itself. Publishing here too
     // would show the same question twice in the conversation.

@@ -50,12 +50,13 @@ describe("createChannelQuestionPromptDelivery", () => {
     });
     const delivery = createChannelQuestionPromptDelivery({
       cfg,
-      channel: "telegram",
+      channel: " TeLeGrAm ",
       to: "1",
       accountId: "default",
     });
 
-    await delivery?.send({ text: "Question for you:" });
+    const signal = new AbortController().signal;
+    await delivery?.send({ text: "Question for you:" }, { signal });
 
     expect(sendDurableMessageBatchCore).toHaveBeenCalledWith(
       expect.objectContaining({
@@ -63,6 +64,8 @@ describe("createChannelQuestionPromptDelivery", () => {
         to: "1",
         accountId: "default",
         payloads: [{ text: "Question for you:" }],
+        deliveryRetryOwner: "caller",
+        signal,
       }),
     );
   });

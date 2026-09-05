@@ -329,18 +329,6 @@ describe("loopback ask_user Telegram channel transport", () => {
                     text: expect.stringContaining('"status": "answered"'),
                   }),
                 ]);
-                process.stdout.write(
-                  `TRACE loopback-channel ${JSON.stringify({
-                    ask: {
-                      channel: "telegram",
-                      to: "1",
-                      textContains: "Which destination should be used?",
-                      buttons: ["Staging", "Production"],
-                    },
-                    answered: true,
-                    status: "answered",
-                  })}\n`,
-                );
               },
               () => {
                 requestController.abort();

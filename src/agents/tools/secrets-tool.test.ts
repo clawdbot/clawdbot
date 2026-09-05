@@ -633,6 +633,54 @@ describe("secrets tool", () => {
     expect(sent[0]?.text).toContain("SERVICE_API_KEY");
   });
 
+  it("aborts a self-published credential prompt when the answer wins before delivery", async () => {
+    const sessionKey = "agent:main:secret-direct-dispatch-abort";
+    const args = { action: "request", name: "SERVICE_API_KEY", kind: "secret" };
+    let capturedSignal: AbortSignal | undefined;
+    let aborted = false;
+    let finishWait: ((value: unknown) => void) | undefined;
+    const gateway = gatewayStub(async (method, _options, params) => {
+      if (method === "question.request") {
+        return { id: params.id };
+      }
+      if (method === "question.waitAnswer") {
+        return await new Promise((resolve) => {
+          finishWait = resolve;
+        });
+      }
+      if (method === "secrets.store.list") {
+        return { entries: [unrelatedEnv, secretEntry] };
+      }
+      throw new Error(`unexpected method ${method}`);
+    });
+
+    const pending = createSecretsTool({
+      config: { gateway: { publicOrigin: "https://ops.example.test" } },
+      sessionKey,
+      gatewayCall: gateway.call,
+      questionPrompt: {
+        send: (_payload, options) => {
+          capturedSignal = options?.signal;
+          return new Promise<void>(() => {});
+        },
+        messageChannel: "telegram",
+      },
+    }).execute("call-secret-direct-abort", args);
+
+    await vi.waitFor(() => expect(capturedSignal).toBeDefined());
+    capturedSignal?.addEventListener(
+      "abort",
+      () => {
+        aborted = true;
+      },
+      { once: true },
+    );
+    finishWait?.(storedAnswer);
+
+    await expect(pending).resolves.toMatchObject({ details: { status: "stored" } });
+    expect(aborted).toBe(true);
+  });
+
   it("keeps the credential prompt off a channel that cannot carry a Control UI link", async () => {
     // Native credential cards arrive through question.requested instead, and chat
     // must never become the place a credential is asked for.

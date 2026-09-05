@@ -591,6 +591,7 @@ export function createAskUserTool(params: {
       transitionAskUserQuestion(state, { kind: "registering" });
       askUserQuestions.set(questionId, state);
       let registered = false;
+      let promptAbort: AbortController | undefined;
       const cancelPendingQuestion = createGatewayQuestionCanceller({ gatewayCall, questionId });
       const cancelOnAbort = () => {
         if (askUserQuestions.get(questionId) === state) {
@@ -694,6 +695,10 @@ export function createAskUserTool(params: {
           // A consumed registration-time claim must not expose a stale prompt.
           markAskUserPromptReady(questionId, normalized.questions);
           if (publishOwnPrompt) {
+            promptAbort = new AbortController();
+            const promptSignal = signal
+              ? AbortSignal.any([signal, promptAbort.signal])
+              : promptAbort.signal;
             settleAfterOwnPromptDelivery(
               questionId,
               sendQuestionToolPrompt({
@@ -701,6 +706,7 @@ export function createAskUserTool(params: {
                 questionId,
                 questions: normalized.questions,
                 send: publishOwnPrompt,
+                signal: promptSignal,
               }),
             );
           }
@@ -754,6 +760,7 @@ export function createAskUserTool(params: {
         }
         throw error;
       } finally {
+        promptAbort?.abort(new Error("ask_user question ended before prompt delivery"));
         signal?.removeEventListener("abort", cancelOnAbort);
         if (askUserQuestions.get(questionId) === state) {
           releaseAskUserQuestion(questionId);
