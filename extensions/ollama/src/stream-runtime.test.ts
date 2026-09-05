@@ -2928,6 +2928,40 @@ describe("createOllamaStreamFn", () => {
     expect(JSON.stringify(context)).toContain("dG9vbC1pbWFnZQ==");
   });
 
+  it.each([
+    {
+      name: "preserves local history by default",
+      baseUrl: "http://ollama-host:11434",
+      model: {},
+      expected: false,
+    },
+    {
+      name: "preserves explicit native history settings",
+      baseUrl: "http://ollama-host:11434",
+      model: { params: { truncate: true, shift: true } },
+      expected: true,
+    },
+    {
+      name: "leaves hosted history settings to the server",
+      baseUrl: "https://ollama.com",
+      model: {},
+      expected: undefined,
+    },
+    {
+      name: "leaves locally proxied cloud history settings to the server",
+      baseUrl: "http://ollama-host:11434",
+      model: { id: "qwen3:32b-cloud" },
+      expected: undefined,
+    },
+  ])("$name", async ({ baseUrl, model, expected }) => {
+    await expectSuccessfulOllamaRequest({ baseUrl, model }, ({ body }) => {
+      expect(body.truncate).toBe(expected);
+      expect(body.shift).toBe(expected);
+      expect(requireOptionalRecord(body.options)?.truncate).toBeUndefined();
+      expect(requireOptionalRecord(body.options)?.shift).toBeUndefined();
+    });
+  });
+
   it("normalizes /v1 baseUrl and maps maxTokens + signal", async () => {
     const signal = new AbortController().signal;
     await expectSuccessfulOllamaRequest(

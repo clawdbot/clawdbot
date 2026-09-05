@@ -1002,7 +1002,15 @@ For full setup and behavior, see [Ollama Web Search](/tools/ollama-search).
     `temperature`, `repeat_penalty`, `presence_penalty`, `frequency_penalty`,
     `stop`, `num_batch`, `num_gpu`, `main_gpu`, `use_mmap`, and `num_thread`.
     A few keys (`format`, `keep_alive`, `truncate`, `shift`) are forwarded as
-    top-level request fields instead of nested `options`. OpenClaw only
+    top-level request fields instead of nested `options`. Local native chat
+    requests default to `truncate: false` and `shift: false`, so supporting
+    servers reject overflowing input instead of silently dropping history.
+    OpenClaw then attempts compaction and retries, or reports the failure.
+    Generation that fills the window can still produce a labeled partial reply.
+    This behavior is verified with Ollama 0.33.3; older servers may ignore the
+    fields. Explicit per-model values override these defaults. Hosted models
+    and the OpenAI-compatible endpoint keep their existing behavior.
+    OpenClaw only
     forwards these Ollama request keys, so runtime-only params such as
     `streaming` are never sent to Ollama. Use `params.think` (or
     `params.thinking`) to set top-level `think`; `false` disables API-level

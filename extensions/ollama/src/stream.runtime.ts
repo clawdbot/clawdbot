@@ -1013,6 +1013,11 @@ function createRawOllamaStreamFn(
                 modelId: model.id,
               });
         const requestParams = {
+          // OpenClaw owns history compaction. Ask local servers to reject overflow
+          // instead of silently discarding messages or shifting the context window.
+          ...(!isOllamaCloudModel(model.id) && !isOllamaCloudBaseUrl(baseUrl)
+            ? { truncate: false, shift: false }
+            : {}),
           ...resolveOllamaTopLevelParams(model),
           ...(responseFormat !== undefined ? { format: responseFormat } : {}),
         };
