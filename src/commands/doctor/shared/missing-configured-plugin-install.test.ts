@@ -18,6 +18,11 @@ import {
 } from "../../../plugins/install-channel-specs.js";
 import type { PluginInstallArtifactConsentHandler } from "../../../plugins/install-types.js";
 import { resolveInstalledPluginIndexPolicyHash } from "../../../plugins/installed-plugin-index-policy.js";
+import {
+  hasRetainedManagedNpmInstallMarker,
+  markRetainedManagedNpmInstall,
+  resolveRetainedManagedNpmInstallMarkerPath,
+} from "../../../plugins/managed-npm-retention.js";
 import { isTrustedOfficialPluginInstallRecord } from "../../../plugins/official-external-install-records.js";
 import type { BundledProviderPolicySurface } from "../../../plugins/provider-policy-surface.js";
 import { createColdPluginFixture } from "../../../plugins/test-helpers/cold-plugin-fixtures.js";
@@ -1129,6 +1134,178 @@ describe("repairMissingConfiguredPluginInstalls", () => {
       expect(mocks.updateNpmInstalledPlugins).not.toHaveBeenCalled();
       expect(mocks.installPluginFromNpmSpec).not.toHaveBeenCalled();
       expect(mocks.writePersistedInstalledPluginIndexInstallRecords).not.toHaveBeenCalled();
+    },
+  );
+
+  describe.each([false, true])(
+    "dependency repair with preexisting retention: %s",
+    (preexisting) => {
+      it.each([
+        "updated",
+        "unchanged",
+        "error",
+        "skipped",
+        "throw",
+        "persist-throw",
+        "consent-error",
+        "effect-refused",
+      ] as const)("settles owned dependency repair markers after %s", async (outcome) => {
+        const parent = tempDirs.make("openclaw-doctor-dependency-repair-");
+        const packageName = "dependency-plugin";
+        const pluginId = "dependency-plugin";
+        const rootDir = path.join(parent, "node_modules", packageName);
+        fs.mkdirSync(rootDir, { recursive: true });
+        createColdPluginFixture({ rootDir, pluginId, packageName });
+        const originalManifest = fs.readFileSync(path.join(rootDir, "package.json"), "utf8");
+        const markerPath = resolveRetainedManagedNpmInstallMarkerPath(rootDir);
+        if (preexisting) {
+          await markRetainedManagedNpmInstall({
+            packageDir: rootDir,
+            pluginId,
+            retainedAt: "2026-05-01T00:00:00.000Z",
+            reason: "existing-owner",
+          });
+        }
+        const originalMarker = preexisting ? fs.readFileSync(markerPath, "utf8") : undefined;
+        const record = {
+          source: "npm" as const,
+          spec: `${packageName}@1.0.0`,
+          resolvedName: packageName,
+          resolvedSpec: `${packageName}@1.0.0`,
+          resolvedVersion: "1.0.0",
+          integrity: "sha512-dependency-fixture",
+          version: "1.0.0",
+          installPath: rootDir,
+        };
+        const replacementRecord = { ...record, installPath: path.join(parent, "replacement") };
+        const records = { [pluginId]: record };
+        const cfg: OpenClawConfig = { plugins: { entries: { [pluginId]: { enabled: true } } } };
+        mocks.loadInstalledPluginIndexInstallRecords.mockResolvedValue(records);
+        mocks.loadPluginMetadataSnapshot.mockReturnValue({
+          plugins: [
+            {
+              id: pluginId,
+              origin: "global",
+              rootDir,
+              source: path.join(rootDir, "index.cjs"),
+              packageName,
+              packageDependencies: { "required-runtime": "1.0.0" },
+              channels: [],
+            },
+          ],
+          diagnostics: [],
+        });
+        mocks.listOfficialExternalPluginCatalogEntries.mockReturnValue([
+          officialPluginEntry({ id: pluginId, npmSpec: record.spec }),
+        ]);
+        const failure = new Error(`dependency repair ${outcome}`);
+        const beforePersistentEffect = vi.fn(async () => {
+          if (outcome === "effect-refused") {
+            throw failure;
+          }
+        });
+        const onCapabilityConsent = vi.fn<PluginCapabilityConsentHandler>();
+        mocks.updateNpmInstalledPlugins.mockImplementation(
+          async (params: { config: OpenClawConfig }) => {
+            expect(hasRetainedManagedNpmInstallMarker(rootDir)).toBe(true);
+            const repairRecord = params.config.plugins?.installs?.[pluginId];
+            expect(repairRecord).toMatchObject({
+              source: "npm",
+              spec: record.spec,
+              resolvedName: packageName,
+              integrity: record.integrity,
+              installPath: rootDir,
+            });
+            expect(repairRecord?.resolvedSpec).toBeUndefined();
+            expect(repairRecord?.resolvedVersion).toBeUndefined();
+            if (outcome === "throw") {
+              throw failure;
+            }
+            if (outcome === "persist-throw") {
+              mocks.writePersistedInstalledPluginIndexInstallRecords.mockRejectedValueOnce(failure);
+            }
+            const status =
+              outcome === "persist-throw"
+                ? "updated"
+                : outcome === "consent-error"
+                  ? "error"
+                  : outcome;
+            return {
+              config: { plugins: { installs: { [pluginId]: replacementRecord } } },
+              changed: status === "updated" || status === "unchanged",
+              outcomes: [
+                {
+                  pluginId,
+                  status,
+                  message: failure.message,
+                  ...(outcome === "consent-error"
+                    ? { code: PLUGIN_CAPABILITY_CONSENT_REQUIRED }
+                    : {}),
+                },
+              ],
+            };
+          },
+        );
+        const { repairMissingPluginInstallsForIds } =
+          await import("./missing-configured-plugin-install.js");
+        const repair = () =>
+          repairMissingPluginInstallsForIds({
+            cfg,
+            pluginIds: [pluginId],
+            env: testEnv,
+            beforePersistentEffect,
+            onCapabilityConsent,
+          });
+
+        if (outcome === "throw" || outcome === "persist-throw" || outcome === "effect-refused") {
+          await expect(repair()).rejects.toBe(failure);
+        } else {
+          const result = await repair();
+          if (outcome === "updated" || outcome === "unchanged") {
+            expect(result.repairedPluginIds).toEqual([pluginId]);
+            expect(result.pluginInventoryChanged).toBe(true);
+            expect(result.records).toEqual({ [pluginId]: replacementRecord });
+            expect(mocks.writePersistedInstalledPluginIndexInstallRecords).toHaveBeenCalledWith(
+              result.records,
+              { config: cfg, env: testEnv },
+            );
+          } else {
+            expect(result.failedPluginIds).toEqual([pluginId]);
+            expect(result.records).toEqual(records);
+            expect(result.warnings).toContain(failure.message);
+            expect(mocks.writePersistedInstalledPluginIndexInstallRecords).not.toHaveBeenCalled();
+            if (outcome === "consent-error") {
+              expect(result.outcomes).toContainEqual(
+                expect.objectContaining({
+                  pluginId,
+                  status: "error",
+                  code: PLUGIN_CAPABILITY_CONSENT_REQUIRED,
+                }),
+              );
+              expect(result.notices ?? []).toEqual([]);
+            }
+          }
+        }
+        expect(fs.readFileSync(path.join(rootDir, "package.json"), "utf8")).toBe(originalManifest);
+        expect(mocks.installPluginFromNpmSpec).not.toHaveBeenCalled();
+        if (outcome === "effect-refused") {
+          expect(mocks.updateNpmInstalledPlugins).not.toHaveBeenCalled();
+        } else {
+          expect(mocks.updateNpmInstalledPlugins).toHaveBeenCalledWith(
+            expect.objectContaining({
+              pluginIds: [pluginId],
+              skipDisabledPlugins: true,
+              beforePersistentEffect,
+              onCapabilityConsent,
+            }),
+          );
+        }
+        const retained = preexisting || outcome === "updated" || outcome === "unchanged";
+        expect(hasRetainedManagedNpmInstallMarker(rootDir)).toBe(retained);
+        if (preexisting) {
+          expect(fs.readFileSync(markerPath, "utf8")).toBe(originalMarker);
+        }
+      });
     },
   );
 
