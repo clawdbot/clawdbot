@@ -3,9 +3,53 @@ import fs from "node:fs/promises";
 import nodePath from "node:path";
 import { describe, expect, it, vi } from "vitest";
 import { withTempDir } from "../test-utils/temp-dir.js";
-import { AUTH_NONE, sendRequest, withGatewayServer } from "./server-http.test-harness.js";
+import {
+  AUTH_NONE,
+  AUTH_TOKEN,
+  sendRequest,
+  withGatewayServer,
+} from "./server-http.test-harness.js";
 
 describe("Gateway Control UI identity", () => {
+  it.each(["", "/console/"])("keeps UI resource authentication at base %j", async (basePath) => {
+    await withGatewayServer({
+      prefix: "control-ui-resource-auth",
+      resolvedAuth: AUTH_TOKEN,
+      overrides: { controlUiEnabled: true, controlUiBasePath: basePath },
+      run: async (server) => {
+        const base = basePath.replace(/\/$/, "");
+        for (const path of [
+          `${base}/avatar/main?meta=1`,
+          `${base}/__openclaw__/assistant-media?source=missing.png`,
+        ]) {
+          const response = await sendRequest(server, { path, method: "GET" });
+          expect(response.res.statusCode, path).toBe(401);
+        }
+      },
+    });
+  });
+
+  it("keeps the root UI POST rejection ahead of the startup fallback", async () => {
+    await withGatewayServer({
+      prefix: "control-ui-legacy-post",
+      resolvedAuth: AUTH_NONE,
+      overrides: {
+        controlUiEnabled: true,
+        controlUiBasePath: "",
+        isStartupPluginRuntimeReady: () => false,
+      },
+      run: async (server) => {
+        const response = await sendRequest(server, { path: "/ui", method: "POST" });
+        expect(response.res.statusCode).toBe(404);
+        expect(response.getBody()).toBe("Not Found");
+        expect(response.setHeader).toHaveBeenCalledWith(
+          "Permissions-Policy",
+          "camera=(self), microphone=*, geolocation=*, clipboard-write=*",
+        );
+      },
+    });
+  });
+
   it("applies dashboard enablement to subsequent requests without replacing the listener", async () => {
     await withTempDir("openclaw-http-toggle-", async (controlUiRoot) => {
       await fs.writeFile(nodePath.join(controlUiRoot, "index.html"), "<html>synthetic UI</html>\n");
