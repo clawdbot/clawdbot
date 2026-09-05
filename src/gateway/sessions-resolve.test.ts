@@ -561,14 +561,12 @@ describe("resolveSessionKeyFromResolveParams", () => {
     ).resolves.toEqual({
       ok: true,
       ambiguous: true,
-      candidates: keys
-        .slice(0, 10)
-        .map((key) => ({
-          key,
-          agentId: "main",
-          displayName: "Shared dashboard",
-          boardFace: "dashboard",
-        })),
+      candidates: keys.slice(0, 10).map((key) => ({
+        key,
+        agentId: "main",
+        displayName: "Shared dashboard",
+        boardFace: "dashboard",
+      })),
     });
   });
 
