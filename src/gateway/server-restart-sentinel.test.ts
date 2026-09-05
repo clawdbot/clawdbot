@@ -965,9 +965,26 @@ describe("scheduleRestartSentinelWake", () => {
       expect(result.reason).toBeNull();
       if (!cliFinished) {
         expect(result.finishedAtMs).toBeNull();
+        expect(result.verification.noticeDelivered).toBeUndefined();
+        expect(mocks.appendAssistantMessageToSessionTranscript).toHaveBeenCalledOnce();
+        expect(mocks.clearRestartSentinelIfRevision).not.toHaveBeenCalled();
+        const sentinelReads = mocks.readRestartSentinel.mock.calls.length;
+        await vi.advanceTimersByTimeAsync(900);
+        expect(mocks.readRestartSentinel).toHaveBeenCalledTimes(sentinelReads);
+        finishUpdateRun(record.runId, {
+          status: "succeeded",
+          after: { version: resolveRuntimeServiceVersion() },
+        });
+        await scheduleRestartSentinelWake({ deps: {} as never });
       }
+      const completed = getUpdateRun(record.runId)!;
+      expect(completed.status).toBe("succeeded");
+      expect(completed.verification.noticeDelivered).toBe(true);
       expect(mocks.appendAssistantMessageToSessionTranscript).toHaveBeenCalledWith(
-        expect.objectContaining({ text: renderUpdateRunReport(result).markdown }),
+        expect.objectContaining({
+          text: renderUpdateRunReport(completed).markdown,
+          idempotencyKey: `update-run-finished:${record.runId}`,
+        }),
       );
       expect(mocks.clearRestartSentinelIfRevision).toHaveBeenCalledOnce();
       expect(mocks.appendAssistantMessageToSessionTranscript).toHaveBeenCalledTimes(2);

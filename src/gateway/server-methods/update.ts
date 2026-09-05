@@ -15,6 +15,7 @@ import {
   isGatewayExternallySupervised,
 } from "../../infra/gateway-supervision.js";
 import { readPackageVersion } from "../../infra/package-json.js";
+import type { GatewayRestartIntent } from "../../infra/restart-intent.js";
 import {
   type RestartSentinelPayload,
   writeRestartSentinel,
@@ -181,9 +182,7 @@ export const updateHandlers: GatewayRequestHandlers = {
       | { status: "already-running"; command: string; message: string }
       | { status: "unavailable"; command: string; message: string }
       | null = null;
-    let managedHandoffOwner:
-      | { kind: "managed-update-handoff"; handoffId: string; installRoot: string }
-      | undefined;
+    let managedHandoffOwner: GatewayRestartIntent["successorOwner"];
     let ackDelivered = false;
     let ackQueued = false;
     let acknowledgement: string | undefined;
@@ -698,7 +697,12 @@ export const updateHandlers: GatewayRequestHandlers = {
             },
           })
         : null;
-    if ((ackDelivered || ackQueued) && result.status !== "ok" && handoff?.status !== "started" && !restart) {
+    if (
+      (ackDelivered || ackQueued) &&
+      result.status !== "ok" &&
+      handoff?.status !== "started" &&
+      !restart
+    ) {
       await notify(outcomeRun, "finished");
     }
     context?.logGateway?.info(

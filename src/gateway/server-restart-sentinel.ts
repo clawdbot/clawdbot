@@ -427,7 +427,7 @@ async function loadRestartSentinelStartupTask(params: {
   }
   const sessionKey = payload.sessionKey?.trim();
   const message = formatRestartSentinelMessage(payload);
-  const updateRun = payload.kind === "update" ? await finalizeRestartUpdateRun(payload) : undefined;
+  let updateRun = payload.kind === "update" ? await finalizeRestartUpdateRun(payload) : undefined;
   const updateRunId = updateRun?.runId;
   let noticeMessage =
     payload.kind === "update"
@@ -470,11 +470,17 @@ async function loadRestartSentinelStartupTask(params: {
       if (updateRunId) {
         // Expiry bounds notice delivery, not CLI verification. Only Gateway-owned
         // runs finish here; first-terminal-wins preserves completed CLI results.
-        const expiredRun = await finalizeRestartUpdateRun(payload, true);
-        if (expiredRun) {
-          noticeMessage = renderUpdateRunReport(expiredRun).markdown;
+        updateRun = await finalizeRestartUpdateRun(payload, true);
+        if (updateRun) {
+          noticeMessage = renderUpdateRunReport(updateRun).markdown;
         }
       }
+    }
+
+    // A pending owner can outlive this retry window. Reserving the permanent
+    // finished-notice key now would suppress its eventual verified report.
+    if (updateRun?.status === "running") {
+      return { status: "skipped" as const, reason: "update-restart-pending" };
     }
 
     if (!routedSessionKey) {

@@ -404,7 +404,12 @@ describe("update run ledger", () => {
     ({ count, detail }) => {
       const options = isolatedOptions();
       const run = createUpdateRun({ trigger: "chat" }, options);
-      const notices = ["notice:ack", "notice:activating", "notice:verifying", "previous generation restoration"];
+      const notices = [
+        "notice:ack",
+        "notice:activating",
+        "notice:verifying",
+        "previous generation restoration",
+      ];
       for (const step of [...UPDATE_RUN_PHASES, ...notices]) {
         recordUpdateRunStep(run.runId, { step, status: "completed", detail }, options);
       }

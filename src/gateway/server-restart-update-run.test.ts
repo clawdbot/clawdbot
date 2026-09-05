@@ -16,7 +16,7 @@ afterEach(() => {
 describe("update restart verification ownership", () => {
   it.each(["api", "chat", "control-ui", "campaign"] as const)(
     "finishes an unmanaged %s update after replacement startup",
-    (trigger) => {
+    async (trigger) => {
       vi.stubEnv("OPENCLAW_STATE_DIR", directories.make("update-unmanaged-boot-"));
       const version = resolveRuntimeServiceVersion();
       const run = createUpdateRun({ trigger, target: { version } });
@@ -25,7 +25,7 @@ describe("update restart verification ownership", () => {
         result: { status: "ok", mode: "npm", after: { version }, steps: [], durationMs: 1 },
         meta: { runId: run.runId },
       });
-      expect(finalizeRestartUpdateRun(payload)).toMatchObject({
+      expect(await finalizeRestartUpdateRun(payload)).toMatchObject({
         status: "succeeded",
         phase: "finished",
         finishedAtMs: expect.any(Number),
@@ -36,7 +36,7 @@ describe("update restart verification ownership", () => {
 
   it.each(["api", "chat", "control-ui", "campaign"] as const)(
     "preserves managed %s verification after replacement startup",
-    (trigger) => {
+    async (trigger) => {
       vi.stubEnv("OPENCLAW_STATE_DIR", directories.make("update-managed-boot-"));
       const version = resolveRuntimeServiceVersion();
       const run = createUpdateRun({ trigger, target: { version } });
@@ -45,7 +45,7 @@ describe("update restart verification ownership", () => {
         result: { status: "ok", mode: "npm", after: { version }, steps: [], durationMs: 1 },
         meta: { runId: run.runId, handoffId: "managed-update-handoff" },
       });
-      expect(finalizeRestartUpdateRun(payload, true)).toMatchObject({
+      expect(await finalizeRestartUpdateRun(payload, true)).toMatchObject({
         status: "running",
         phase: "verifying",
         finishedAtMs: null,
@@ -54,12 +54,12 @@ describe("update restart verification ownership", () => {
     },
   );
 
-  it("fails an expired unmanaged pending restart", () => {
+  it("fails an expired unmanaged pending restart", async () => {
     vi.stubEnv("OPENCLAW_STATE_DIR", directories.make("update-unmanaged-expiry-"));
     const run = createUpdateRun({ trigger: "api" });
     recordUpdateRunPhase(run.runId, "restarting");
     expect(
-      finalizeRestartUpdateRun(
+      await finalizeRestartUpdateRun(
         {
           kind: "update",
           status: "skipped",
@@ -79,14 +79,14 @@ describe("update restart verification ownership", () => {
     "activating",
     "restarting",
     "verifying",
-  ] as const)("does not let sentinel expiry finish the orchestrator during %s", (phase) => {
+  ] as const)("does not let sentinel expiry finish the orchestrator during %s", async (phase) => {
     vi.stubEnv("OPENCLAW_STATE_DIR", directories.make("update-boot-owner-"));
     const run = createUpdateRun({
       trigger: "cli",
       target: { version: resolveRuntimeServiceVersion() },
     });
     recordUpdateRunPhase(run.runId, phase);
-    const observed = finalizeRestartUpdateRun(
+    const observed = await finalizeRestartUpdateRun(
       {
         kind: "update",
         status: "skipped",
@@ -97,7 +97,7 @@ describe("update restart verification ownership", () => {
     );
     expect(observed).toMatchObject({
       status: "running",
-      phase,
+      phase: phase === "restarting" ? "verifying" : phase,
       confirmedAtMs: null,
       verification: { booted: true },
     });

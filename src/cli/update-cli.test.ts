@@ -4727,45 +4727,89 @@ describe("update-cli", () => {
     expect(defaultRuntime.writeJson).toHaveBeenCalled();
   });
 
-  it("records ordered update phases across service stop, restart, and verified health", async () => {
-    mockOwnedGitService();
-    mockGitUpdateAfterMutation(
-      makeOkUpdateResult({
-        root: process.cwd(),
-        before: { version: "0.9.0" },
-        after: { version: "1.0.0" },
-      }),
-    );
-    mockCurrentProcessFreshDoctor();
-    serviceLoaded.mockResolvedValue(true);
-    vi.mocked(runDaemonRestart).mockResolvedValue(true);
-    prepareRestartScript.mockResolvedValue(null);
-    try {
-      await updateCommand({ yes: true, json: true });
-    } catch (error) {
-      throw new Error(`${getErrorOutput()}\n${JSON.stringify(lastWriteJsonCall())}`, {
-        cause: error,
+  it.each([false, true])(
+    "records ordered update phases across service stop, restart, and verified health (json=%s)",
+    async (json) => {
+      const ledgerReads = vi.spyOn(await import("../infra/update-run-ledger.js"), "getUpdateRun");
+      const inspectSchemas = expectDefined(
+        stateSchemaVersions.getMockImplementation(),
+        "schema inspection",
+      );
+      let observedActivation = false;
+      stateSchemaVersions.mockImplementation(async (options) => {
+        const versions = await inspectSchemas(options);
+        if (serviceStop.mock.calls.length > 0 && !observedActivation) {
+          // The real onActivation callback has run, but schema inspection has not
+          // yet authorized this process to reopen the candidate's ledger.
+          const progress = expectDefined(
+            vi.mocked(runGatewayUpdate).mock.calls[0]?.[0]?.progress,
+            "update progress",
+          );
+          const readsBefore = ledgerReads.mock.calls.length;
+          expectDefined(
+            progress.onStepComplete,
+            "step completion",
+          )({
+            name: "core migrations",
+            command: "doctor --fix",
+            index: 0,
+            total: 1,
+            durationMs: 1,
+            exitCode: 0,
+          });
+          expect(ledgerReads).toHaveBeenCalledTimes(readsBefore);
+          observedActivation = true;
+        }
+        return versions;
       });
-    }
-    const output = lastWriteJsonCall() as UpdateRunResult;
-    const run = getUpdateRun(output.runId!);
-    expect(serviceStop, getErrorOutput()).toHaveBeenCalledOnce();
-    expect(run, getErrorOutput()).toMatchObject({
-      trigger: "cli",
-      status: "succeeded",
-      phase: "finished",
-      verification: { serviceRunning: true, runningVersion: "1.0.0" },
-    });
-    expect(
-      run?.steps
-        .filter((step) =>
-          ["requested", "staging", "validating", "activating", "restarting", "verifying"].includes(
-            step.step,
-          ),
-        )
-        .map((step) => step.step),
-    ).toEqual(["requested", "staging", "validating", "activating", "restarting", "verifying"]);
-  });
+      mockOwnedGitService();
+      mockGitUpdateAfterMutation(
+        makeOkUpdateResult({
+          root: process.cwd(),
+          before: { version: "0.9.0" },
+          after: { version: "1.0.0" },
+        }),
+      );
+      mockCurrentProcessFreshDoctor();
+      serviceLoaded.mockResolvedValue(true);
+      vi.mocked(runDaemonRestart).mockResolvedValue(true);
+      prepareRestartScript.mockResolvedValue(null);
+      try {
+        await updateCommand({ yes: true, json });
+      } catch (error) {
+        throw new Error(`${getErrorOutput()}\n${JSON.stringify(lastWriteJsonCall())}`, {
+          cause: error,
+        });
+      }
+      expect(observedActivation).toBe(true);
+      const run = expectDefined(listUpdateRuns({ limit: 1 })[0], "admitted update run");
+      expect(serviceStop, getErrorOutput()).toHaveBeenCalledOnce();
+      expect(run, getErrorOutput()).toMatchObject({
+        trigger: "cli",
+        status: "succeeded",
+        phase: "finished",
+        verification: { serviceRunning: true, runningVersion: "1.0.0" },
+      });
+      expect(
+        run?.steps
+          .filter((step) =>
+            [
+              "requested",
+              "staging",
+              "validating",
+              "activating",
+              "restarting",
+              "verifying",
+            ].includes(step.step),
+          )
+          .map((step) => step.step),
+      ).toEqual(["requested", "staging", "validating", "activating", "restarting", "verifying"]);
+      if (!json) {
+        expect(getLogOutput()).toContain("Phase: activating");
+        expect(getLogOutput()).toContain("Phase: verifying");
+      }
+    },
+  );
 
   it("does not clean managed-service handoffs before rejecting an invalid timeout", async () => {
     const runsBefore = listUpdateRuns();
