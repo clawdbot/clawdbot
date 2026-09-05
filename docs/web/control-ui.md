@@ -1109,6 +1109,9 @@ Messages forwarded by `sessions_send` render as left-aligned speech bubbles with
 
 ## Chat message width
 
+Drag the side-panel divider to resize a task's **Review** transcript. Messages
+and expanded tool input reflow within the panel, keeping tool-card borders visible.
+
 Wide-monitor users can override the transcript width under **Settings → Chat →
 Message width**. The preference stays in that browser's local storage. Supported
 forms include plain lengths and percentages such as `960px` or `82%`, plus
