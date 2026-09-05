@@ -380,7 +380,7 @@ struct DashboardManagerGatewayTargetTests {
             #expect(replacement.window === auxiliaryWindow)
             let profileAutosaveName = try #require(replacement.window?.frameAutosaveName)
             #expect(profileAutosaveName.hasPrefix("\(primaryAutosaveName)-\(studio)-"))
-            #expect(replacement._testDashboardDataStore !== dataStore)
+            #expect(replacement._testDashboardDataStore === dataStore)
             #expect(!replacement._testDashboardDataStore.isPersistent)
             replacement._testOpenLinkBrowser(server.url("/reader/replacement"))
             #expect(replacement._testLinkBrowserDataStore === replacement._testDashboardDataStore)

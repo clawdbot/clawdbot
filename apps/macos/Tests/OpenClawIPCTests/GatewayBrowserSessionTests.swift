@@ -392,6 +392,7 @@ struct MacGatewayBrowserSessionStoreTests {
             let attemptA = try await store.beginBrowserSignIn(url: url)
             let profile = try await store.saveBrowserSession(name: "Accounts", session: accountA, attempt: attemptA)
             try await self.setBrowserPreference(profileID: profile.id, origin: accountA.origin)
+            #expect(await self.browserPreference(profileID: profile.id) == "dark")
             let directory = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
             defer { try? FileManager.default.removeItem(at: directory) }
             let result: Result<Void, Error>
@@ -616,6 +617,7 @@ struct MacGatewayBrowserSessionStoreTests {
             profileID: profileID, registryNamespace: MacGatewayProfileStore.service)
         let cookie = try #require(HTTPCookie(properties: [
             .name: "ui-theme", .value: "dark", .originURL: origin, .path: "/",
+            .expires: Date().addingTimeInterval(3600),
         ]))
         await store.dataStore.httpCookieStore.setCookie(cookie)
     }
