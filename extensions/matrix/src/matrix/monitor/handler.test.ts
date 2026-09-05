@@ -4837,6 +4837,46 @@ describe("matrix monitor handler draft streaming", () => {
     }
   });
 
+  it("retains a quiet draft accepted before the handler throws", async () => {
+    sendSingleTextMessageMatrixMock
+      .mockReset()
+      .mockResolvedValue({ messageId: "$draft1", roomId: "!room" });
+    deliverMatrixRepliesMock.mockReset().mockResolvedValue(createMockMatrixDeliveryResult());
+    const redactEventMock = vi.fn(async () => "$redacted");
+    let releaseFailure: (() => void) | undefined;
+    const failureGate = new Promise<void>((resolve) => {
+      releaseFailure = resolve;
+    });
+
+    const { handler } = createMatrixHandlerTestHarness({
+      streaming: "quiet",
+      client: { redactEvent: redactEventMock },
+      createReplyDispatcherWithTyping: () => ({
+        dispatcher: { markComplete: () => {}, waitForIdle: async () => {} },
+        replyOptions: {},
+        markDispatchIdle: () => {},
+        markRunComplete: () => {},
+      }),
+      dispatchInboundMessage: vi.fn(async (args: { replyOptions?: ReplyOpts }) => {
+        args.replyOptions?.onPartialReply?.({ text: "visible before failure" });
+        await failureGate;
+        throw new Error("model timeout");
+      }) as never,
+    });
+
+    const handlerPromise = handler(
+      "!room:example.org",
+      createMatrixTextMessageEvent({ eventId: "$msg1", body: "hello" }),
+    );
+    await waitForMatrixState(() => {
+      expect(sendSingleTextMessageMatrixMock).toHaveBeenCalledTimes(1);
+    });
+    releaseFailure?.();
+    await handlerPromise;
+
+    expect(redactEventMock).not.toHaveBeenCalled();
+  });
+
   it("finalizes and retains visible live drafts when generation aborts mid-stream", async () => {
     sendSingleTextMessageMatrixMock
       .mockReset()

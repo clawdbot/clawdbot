@@ -677,7 +677,7 @@ export function createMatrixRoomMessageHandler(params: MatrixMonitorHandlerParam
       );
       await commitInboundEventIfClaimed();
     } catch (err) {
-      await draftControllerRef?.finalizeAcceptedPartialDraft();
+      await draftControllerRef?.settleAcceptedDraftAfterError();
       runtime.error?.(`matrix handler failed: ${String(err)}`);
     } finally {
       // Stop the draft stream timer so partial drafts don't leak if the

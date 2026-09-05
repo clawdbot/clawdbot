@@ -61,4 +61,29 @@ describe("Matrix progress visibility", () => {
     expect(draftStream.update).toHaveBeenCalledTimes(3);
     controller.cancelProgressDraft();
   });
+
+  it.each(["quiet", "progress"] as const)(
+    "retains an accepted %s preview after a handler error",
+    async (streaming) => {
+      draftStream.eventId.mockReturnValue("$draft");
+      const controller = await createMatrixDraftController({
+        streaming,
+        previewToolProgressEnabled: streaming === "progress",
+        replyToMode: "off",
+        messageId: "$inbound",
+        cfg: {},
+        accountId: "default",
+        roomId: "!room:example.org",
+        client: {} as never,
+        logVerboseMessage: vi.fn(),
+      });
+
+      await controller.settleAcceptedDraftAfterError();
+
+      expect(controller.draftDisposition()).toBe("retained");
+      expect(draftStream.stop).not.toHaveBeenCalled();
+      expect(draftStream.finalizeLive).not.toHaveBeenCalled();
+      controller.cancelProgressDraft();
+    },
+  );
 });
