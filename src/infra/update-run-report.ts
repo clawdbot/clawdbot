@@ -92,8 +92,9 @@ export function renderUpdateRunReport(
   run: ReportInput,
   opts: { doctorHint?: string | null; nextAction?: string } = {},
 ): UpdateRunReport {
-  const before = run.before.version ?? run.before.sha?.slice(0, 8);
-  const after = run.after.version ?? run.after.sha?.slice(0, 8);
+  // Git updates can change commits without changing the package version.
+  const before = run.before.sha?.slice(0, 8) ?? run.before.version;
+  const after = run.after.sha?.slice(0, 8) ?? run.after.version;
   const reason = bounded(run.reason?.trim() || "unknown reason", 240);
   const running =
     run.verification.serviceRunning === false ? undefined : run.verification.runningVersion;
