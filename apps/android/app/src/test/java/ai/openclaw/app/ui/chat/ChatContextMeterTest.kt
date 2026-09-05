@@ -158,6 +158,7 @@ class ChatContextMeterTest {
       listOf("Input cost" to 0.003456, "Output cost" to 0.018, "Cache read cost" to 0.0015, "Cache write cost" to 0.0),
       availableChatCostStats(costs),
     )
+    assertEquals(listOf("Est. cost" to 0.0225), availableChatCostStats(ChatMessageCost(total = 0.0225)))
     assertEquals(costs, latestChatMessageCost(messages + message(role = "user")))
 
     val withoutSessionCost =
@@ -167,11 +168,12 @@ class ChatContextMeterTest {
         listOf(ChatSessionEntry(key = "main", updatedAtMs = 1L)),
         listOf(message(role = "assistant", cost = ChatMessageCost(total = 0.0225))),
       )
-    assertEquals(0.0225, withoutSessionCost.estimatedCostUsd)
+    assertNull(withoutSessionCost.estimatedCostUsd)
+    assertEquals(0.0225, latestChatMessageCost(listOf(message(role = "assistant", cost = ChatMessageCost(total = 0.0225))))?.total)
   }
 
   @Test
-  fun contextBoundaryClearsLatestRunUntilARealAssistantRepopulatesIt() {
+  fun contextBoundaryClearsLatestRunUntilAFreshSessionSnapshotRepopulatesIt() {
     val session =
       ChatSessionEntry(
         key = "main",
@@ -185,7 +187,7 @@ class ChatContextMeterTest {
       )
     for (boundaryKind in listOf("compaction", "reset")) {
       val beforeBoundary = message(role = "assistant", cost = ChatMessageCost(input = 0.003))
-      val boundary = message(role = "system", marker = ChatTranscriptMarker(kind = boundaryKind))
+      val boundary = message(role = "system", marker = ChatTranscriptMarker(kind = boundaryKind)).copy(timestampMs = 2L)
 
       val reset = resolveChatContextUsage("main", "main", listOf(session), listOf(beforeBoundary, boundary))
       assertEquals(ChatContextUsage(totalTokens = 24_700L, totalTokensFresh = true, contextTokens = 272_000L), reset)
@@ -196,23 +198,143 @@ class ChatContextMeterTest {
           role = "assistant",
           usage = ChatMessageUsage(input = 2_100L, output = 160L),
           cost = ChatMessageCost(output = 0.004, total = 0.0045),
-        )
-      val repopulated = resolveChatContextUsage("main", "main", listOf(session), listOf(beforeBoundary, boundary, afterBoundary))
+        ).copy(timestampMs = 3L)
+      val stale = resolveChatContextUsage("main", "main", listOf(session), listOf(beforeBoundary, boundary, afterBoundary))
+      assertNull(stale.inputTokens)
+      assertNull(stale.outputTokens)
+      assertNull(stale.estimatedCostUsd)
+      val freshSession = session.copy(updatedAtMs = 3L, inputTokens = 2_100L, outputTokens = 160L, estimatedCostUsd = 0.0045)
+      val repopulated = resolveChatContextUsage("main", "main", listOf(freshSession), listOf(beforeBoundary, boundary, afterBoundary))
       assertEquals(2_100L, repopulated.inputTokens)
       assertEquals(160L, repopulated.outputTokens)
       assertEquals(0.0045, repopulated.estimatedCostUsd)
       assertEquals(ChatMessageCost(output = 0.004, total = 0.0045), latestChatMessageCost(listOf(beforeBoundary, boundary, afterBoundary)))
 
-      val partialNextRun = message(role = "assistant", usage = ChatMessageUsage(output = 160L))
-      val partial = resolveChatContextUsage("main", "main", listOf(session), listOf(beforeBoundary, boundary, partialNextRun))
+      val partialNextCall = message(role = "assistant", usage = ChatMessageUsage(output = 160L))
+      val partial = resolveChatContextUsage("main", "main", listOf(session), listOf(beforeBoundary, boundary, partialNextCall))
       assertNull(partial.inputTokens)
-      assertEquals(160L, partial.outputTokens)
+      assertNull(partial.outputTokens)
       assertNull(partial.estimatedCostUsd)
+      assertEquals(ChatMessageUsage(output = 160L), latestChatMessageUsage(listOf(beforeBoundary, boundary, partialNextCall)))
     }
   }
 
   @Test
-  fun partialLatestRunDoesNotInheritAggregateSessionTelemetry() {
+  fun timestampedBoundaryRejectsASessionSnapshotOlderThanTheLatestCall() {
+    val boundary = message(role = "system", marker = ChatTranscriptMarker(kind = "reset")).copy(timestampMs = 2L)
+    val postBoundaryAssistant = message(role = "assistant").copy(timestampMs = 4L)
+    val staleSession =
+      ChatSessionEntry(
+        key = "main",
+        updatedAtMs = 3L,
+        inputTokens = 18_420L,
+        outputTokens = 840L,
+        estimatedCostUsd = 0.022956,
+      )
+
+    val stale = resolveChatContextUsage("main", "main", listOf(staleSession), listOf(boundary, postBoundaryAssistant))
+    assertNull(stale.inputTokens)
+    assertNull(stale.outputTokens)
+    assertNull(stale.estimatedCostUsd)
+
+    val freshSession = staleSession.copy(updatedAtMs = 4L, inputTokens = 2_100L, outputTokens = 160L, estimatedCostUsd = 0.0045)
+    val fresh = resolveChatContextUsage("main", "main", listOf(freshSession), listOf(boundary, postBoundaryAssistant))
+    assertEquals(2_100L, fresh.inputTokens)
+    assertEquals(160L, fresh.outputTokens)
+    assertEquals(0.0045, fresh.estimatedCostUsd)
+
+    val unclockedAssistant = message(role = "assistant")
+    val unprovable = resolveChatContextUsage("main", "main", listOf(freshSession), listOf(boundary, unclockedAssistant))
+    assertNull(unprovable.inputTokens)
+    assertNull(unprovable.outputTokens)
+    assertNull(unprovable.estimatedCostUsd)
+  }
+
+  @Test
+  fun timestampLessBoundaryUsesThePostBoundaryAssistantAsItsFreshnessClock() {
+    val staleSession =
+      ChatSessionEntry(
+        key = "main",
+        updatedAtMs = 2L,
+        inputTokens = 18_420L,
+        outputTokens = 840L,
+        estimatedCostUsd = 0.022956,
+      )
+    val preBoundaryAssistant = message(role = "assistant").copy(timestampMs = 2L)
+    val boundary = message(role = "system", marker = ChatTranscriptMarker(kind = "compaction"))
+
+    val cleared = resolveChatContextUsage("main", "main", listOf(staleSession), listOf(preBoundaryAssistant, boundary))
+    assertNull(cleared.inputTokens)
+    assertNull(cleared.outputTokens)
+    assertNull(cleared.estimatedCostUsd)
+
+    val postBoundaryAssistant =
+      message(role = "assistant", usage = ChatMessageUsage(input = 2_100L, output = 160L)).copy(timestampMs = 3L)
+    val freshSession = staleSession.copy(updatedAtMs = 3L, inputTokens = 2_100L, outputTokens = 160L, estimatedCostUsd = 0.0045)
+    val refreshed = resolveChatContextUsage("main", "main", listOf(freshSession), listOf(preBoundaryAssistant, boundary, postBoundaryAssistant))
+    assertEquals(2_100L, refreshed.inputTokens)
+    assertEquals(160L, refreshed.outputTokens)
+    assertEquals(0.0045, refreshed.estimatedCostUsd)
+
+    val unclockedAssistant = message(role = "assistant")
+    val unprovable = resolveChatContextUsage("main", "main", listOf(freshSession), listOf(boundary, unclockedAssistant))
+    assertNull(unprovable.inputTokens)
+    assertNull(unprovable.outputTokens)
+    assertNull(unprovable.estimatedCostUsd)
+  }
+
+  @Test
+  fun latestRunUsesSessionTotalsBeforeTranscriptLoads() {
+    val session =
+      ChatSessionEntry(
+        key = "main",
+        updatedAtMs = 2L,
+        inputTokens = 18_420L,
+        outputTokens = 840L,
+        estimatedCostUsd = 0.022956,
+      )
+
+    assertEquals(
+      ChatContextUsage(
+        totalTokens = null,
+        totalTokensFresh = null,
+        contextTokens = null,
+        inputTokens = 18_420L,
+        outputTokens = 840L,
+        estimatedCostUsd = 0.022956,
+      ),
+      resolveChatContextUsage("main", "main", listOf(session), emptyList()),
+    )
+  }
+
+  @Test
+  fun latestRunUsesCumulativeSessionTotalsAcrossModelCalls() {
+    val session =
+      ChatSessionEntry(
+        key = "main",
+        updatedAtMs = 2L,
+        inputTokens = 18_420L,
+        outputTokens = 840L,
+        estimatedCostUsd = 0.022956,
+      )
+    val finalModelCall =
+      message(
+        role = "assistant",
+        usage = ChatMessageUsage(input = 2_100L, output = 160L, cacheRead = 76_500L),
+        cost = ChatMessageCost(input = 0.003, output = 0.004, cacheRead = 0.0015, total = 0.0085),
+      )
+
+    val usage = resolveChatContextUsage("main", "main", listOf(session), listOf(finalModelCall))
+
+    assertEquals(18_420L, usage.inputTokens)
+    assertEquals(840L, usage.outputTokens)
+    assertEquals(0.022956, usage.estimatedCostUsd)
+    assertEquals(76_500L, latestChatMessageUsage(listOf(finalModelCall))?.cacheRead)
+    assertEquals(0.0085, latestChatMessageCost(listOf(finalModelCall))?.total)
+  }
+
+  @Test
+  fun partialModelCallDoesNotReplaceAggregateSessionTelemetry() {
     val session =
       ChatSessionEntry(
         key = "main",
@@ -225,9 +347,9 @@ class ChatContextMeterTest {
 
     val usage = resolveChatContextUsage("main", "main", listOf(session), listOf(latestRun))
 
-    assertNull(usage.inputTokens)
-    assertEquals(160L, usage.outputTokens)
-    assertNull(usage.estimatedCostUsd)
+    assertEquals(18_420L, usage.inputTokens)
+    assertEquals(1_000L, usage.outputTokens)
+    assertEquals(0.022956, usage.estimatedCostUsd)
   }
 
   private fun message(

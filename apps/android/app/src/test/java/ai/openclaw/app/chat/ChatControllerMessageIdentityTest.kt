@@ -2,7 +2,6 @@ package ai.openclaw.app.chat
 
 import ai.openclaw.app.ui.chat.formatContextUsageTokens
 import ai.openclaw.app.ui.chat.latestChatMessageUsage
-import ai.openclaw.app.ui.chat.resolveChatContextUsage
 import kotlinx.coroutines.ExperimentalCoroutinesApi
 import kotlinx.coroutines.test.advanceUntilIdle
 import kotlinx.coroutines.test.runTest
@@ -132,11 +131,9 @@ class ChatControllerMessageIdentityTest {
 
       assertEquals(cases.map { it.second }, controller.messages.value.map { it.usage })
       controller.messages.value.forEachIndexed { index, message ->
-        val usage = resolveChatContextUsage("main", "main", emptyList(), listOf(message))
-        val expectedInput = cases[index].second.input
-        assertEquals(expectedInput, usage.inputTokens)
-        assertEquals(4L, usage.outputTokens)
-        if (expectedInput == null) assertEquals("\u2014", formatContextUsageTokens(usage.inputTokens))
+        val expected = cases[index].second
+        assertEquals(expected, latestChatMessageUsage(listOf(message)))
+        if (expected.input == null) assertEquals("\u2014", formatContextUsageTokens(expected.input))
       }
     }
 

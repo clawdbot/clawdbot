@@ -46,6 +46,7 @@ import androidx.compose.ui.test.FontScale
 import androidx.compose.ui.test.SemanticsMatcher
 import androidx.compose.ui.test.SemanticsNodeInteraction
 import androidx.compose.ui.test.assert
+import androidx.compose.ui.test.assertCountEquals
 import androidx.compose.ui.test.assertHasClickAction
 import androidx.compose.ui.test.assertIsDisplayed
 import androidx.compose.ui.test.assertIsEnabled
@@ -64,6 +65,7 @@ import androidx.compose.ui.test.isDialog
 import androidx.compose.ui.test.isPopup
 import androidx.compose.ui.test.junit4.v2.createComposeRule
 import androidx.compose.ui.test.onAllNodesWithContentDescription
+import androidx.compose.ui.test.onAllNodesWithText
 import androidx.compose.ui.test.onNodeWithContentDescription
 import androidx.compose.ui.test.onNodeWithTag
 import androidx.compose.ui.test.onNodeWithText
@@ -612,11 +614,11 @@ class ChatComposerLayoutTest {
         },
       )
     composeRule.onNodeWithText(nativeString("Latest run")).assertIsDisplayed()
-    composeRule.onNodeWithText(nativeString("Non-cached input")).assertIsDisplayed()
+    composeRule.onAllNodesWithText(nativeString("Non-cached input")).assertCountEquals(2)
     composeRule.onNodeWithText(nativeString("Non-cached input excludes cache reads.")).assertIsDisplayed()
+    composeRule.onNodeWithText(nativeString("Latest model call")).assertIsDisplayed()
     composeRule.onNodeWithText(nativeString("Cache read")).assertIsDisplayed()
     composeRule.onNodeWithText("76.5k").assertIsDisplayed()
-    composeRule.onNodeWithText(nativeString("Cost breakdown")).assertIsDisplayed()
     composeRule.onNodeWithText(nativeString("Cache read cost")).assertIsDisplayed()
     composeRule.onNodeWithText("\$0.0015").assertIsDisplayed()
     composeRule.onNodeWithText(nativeString("Default model")).assertIsDisplayed().assertHasClickAction()

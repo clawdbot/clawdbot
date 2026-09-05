@@ -3065,20 +3065,23 @@ private fun ChatModelPickerSheet(
               ChatContextStat(label = nativeString("Est. cost"), value = formatContextEstimatedCost(contextUsage.estimatedCostUsd), modifier = Modifier.weight(1f))
             }
             Text(text = nativeString("Non-cached input excludes cache reads."), style = ClawTheme.type.caption, color = ClawTheme.colors.textSubtle)
-            latestChatMessageUsage(messages)?.cacheRead?.let { cacheRead ->
-              ChatContextStat(label = nativeString("Cache read"), value = formatContextUsageTokens(cacheRead))
-            }
-            latestChatMessageCost(messages)?.let { cost ->
-              val stats = availableChatCostStats(cost)
-              if (stats.isNotEmpty()) {
-                Text(text = nativeString("Cost breakdown"), style = ClawTheme.type.caption, color = ClawTheme.colors.textMuted)
-                stats.chunked(2).forEach { row ->
-                  Row(modifier = Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(12.dp)) {
-                    row.forEach { (label, value) ->
-                      ChatContextStat(label = label, value = formatContextEstimatedCost(value), modifier = Modifier.weight(1f))
-                    }
-                    if (row.size == 1) Box(modifier = Modifier.weight(1f))
+            val latestCallUsage = latestChatMessageUsage(messages)
+            val latestCallCostStats = latestChatMessageCost(messages)?.let(::availableChatCostStats).orEmpty()
+            if (latestCallUsage != null || latestCallCostStats.isNotEmpty()) {
+              Text(text = nativeString("Latest model call"), style = ClawTheme.type.caption, color = ClawTheme.colors.textMuted)
+              latestCallUsage?.let { usage ->
+                Row(modifier = Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(12.dp)) {
+                  ChatContextStat(label = nativeString("Non-cached input"), value = formatContextUsageTokens(usage.input), modifier = Modifier.weight(1f))
+                  ChatContextStat(label = nativeString("Output"), value = formatContextUsageTokens(usage.output), modifier = Modifier.weight(1f))
+                  ChatContextStat(label = nativeString("Cache read"), value = formatContextUsageTokens(usage.cacheRead), modifier = Modifier.weight(1f))
+                }
+              }
+              latestCallCostStats.chunked(2).forEach { row ->
+                Row(modifier = Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(12.dp)) {
+                  row.forEach { (label, value) ->
+                    ChatContextStat(label = label, value = formatContextEstimatedCost(value), modifier = Modifier.weight(1f))
                   }
+                  if (row.size == 1) Box(modifier = Modifier.weight(1f))
                 }
               }
             }
@@ -3664,13 +3667,20 @@ internal fun latestChatMessageUsage(messages: List<ChatMessage>): ChatMessageUsa
 
 internal fun latestChatMessageCost(messages: List<ChatMessage>): ChatMessageCost? = latestRealAssistantMessage(messages)?.cost
 
-internal fun availableChatCostStats(cost: ChatMessageCost): List<Pair<String, Double>> =
-  listOf(
-    nativeString("Input cost") to cost.input,
-    nativeString("Output cost") to cost.output,
-    nativeString("Cache read cost") to cost.cacheRead,
-    nativeString("Cache write cost") to cost.cacheWrite,
-  ).mapNotNull { (label, value) -> value?.takeIf { it.isFinite() && it >= 0.0 }?.let { label to it } }
+internal fun availableChatCostStats(cost: ChatMessageCost): List<Pair<String, Double>> {
+  val components =
+    listOf(
+      nativeString("Input cost") to cost.input,
+      nativeString("Output cost") to cost.output,
+      nativeString("Cache read cost") to cost.cacheRead,
+      nativeString("Cache write cost") to cost.cacheWrite,
+    ).mapNotNull { (label, value) -> value?.takeIf { it.isFinite() && it >= 0.0 }?.let { label to it } }
+  if (components.isNotEmpty()) return components
+  return cost.total
+    ?.takeIf { it.isFinite() && it >= 0.0 }
+    ?.let { listOf(nativeString("Est. cost") to it) }
+    .orEmpty()
+}
 
 @Composable
 private fun ChatContextStat(
@@ -3918,22 +3928,27 @@ internal fun resolveChatContextUsage(
         mainSessionKey = mainSessionKey,
       )
     }
-  val waitingForPostCompactionUsage =
-    messages.asReversed().firstNotNullOfOrNull { message ->
-      when {
-        message.role == "assistant" && !message.isSyntheticDisplay && !message.isTranscriptOnlyOpenClawAssistant() -> false
-        message.isContextBoundary() -> true
-        else -> null
-      }
-    } == true
-  val latestAssistant = latestRealAssistantMessage(messages)
+  val latestContextBoundary = messages.asReversed().firstOrNull(ChatMessage::isContextBoundary)
+  val boundaryTimestamp = latestContextBoundary?.timestampMs
+  // This helper stops at the boundary, so only a timestamped later model call can unlock totals.
+  val postBoundaryAssistantTimestamp = latestRealAssistantMessage(messages)?.timestampMs
+  val sessionTimestamp = entry?.updatedAtMs
+  val sessionUsageIsFresh =
+    latestContextBoundary == null ||
+      (
+        postBoundaryAssistantTimestamp != null &&
+          sessionTimestamp?.let { it >= postBoundaryAssistantTimestamp } == true &&
+          (boundaryTimestamp == null || sessionTimestamp > boundaryTimestamp)
+      )
   return ChatContextUsage(
     totalTokens = entry?.totalTokens,
     totalTokensFresh = entry?.totalTokensFresh,
     contextTokens = entry?.contextTokens,
-    inputTokens = latestAssistant?.usage?.input.takeUnless { waitingForPostCompactionUsage },
-    outputTokens = latestAssistant?.usage?.output.takeUnless { waitingForPostCompactionUsage },
-    estimatedCostUsd = latestAssistant?.cost?.total.takeUnless { waitingForPostCompactionUsage },
+    // sessions.list owns run-cumulative usage across model calls, tools, and retries.
+    // Transcript message usage remains a separate latest-model-call detail below.
+    inputTokens = entry?.inputTokens.takeIf { sessionUsageIsFresh },
+    outputTokens = entry?.outputTokens.takeIf { sessionUsageIsFresh },
+    estimatedCostUsd = entry?.estimatedCostUsd.takeIf { sessionUsageIsFresh },
   )
 }
 

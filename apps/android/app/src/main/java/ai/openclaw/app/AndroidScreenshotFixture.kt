@@ -367,16 +367,16 @@ internal object AndroidScreenshotFixture {
               model = "gpt-5.2",
               usage =
                 buildJsonObject {
-                  put("input", JsonPrimitive(18_420))
-                  put("output", JsonPrimitive(840))
+                  put("input", JsonPrimitive(2_100))
+                  put("output", JsonPrimitive(160))
                   put("cacheRead", JsonPrimitive(76_500))
                 },
               cost =
                 buildJsonObject {
-                  put("input", JsonPrimitive(0.003456))
-                  put("output", JsonPrimitive(0.018))
+                  put("input", JsonPrimitive(0.003))
+                  put("output", JsonPrimitive(0.004))
                   put("cacheRead", JsonPrimitive(0.0015))
-                  put("total", JsonPrimitive(0.022956))
+                  put("total", JsonPrimitive(0.0085))
                 },
             ),
           )
