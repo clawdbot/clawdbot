@@ -23,6 +23,14 @@ type A2aInboundDispatchParams = {
 
 export async function dispatchA2aInbound(params: A2aInboundDispatchParams): Promise<void> {
   try {
+    // Peer credentials admit tasks, never user commands (including plugin commands).
+    if (params.text.trimStart().startsWith("/")) {
+      params.store.reject(
+        params.taskId,
+        "A2A peers cannot execute slash commands. Send a task in plain text; only users can issue commands.",
+      );
+      return;
+    }
     const { route, buildEnvelope } = resolveChannelInboundRouteEnvelope({
       cfg: params.config,
       channel: "a2a",
@@ -90,7 +98,7 @@ export async function dispatchA2aInbound(params: A2aInboundDispatchParams): Prom
         commandBody: params.text,
       },
       channelIngress: ingress,
-      access: { commands: { authorized: true } },
+      extra: { CommandInterpretationSuppressed: true },
     });
 
     const dispatch = await params.channelRuntime.inbound.dispatch({
