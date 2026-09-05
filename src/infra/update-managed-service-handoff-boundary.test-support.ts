@@ -15,7 +15,9 @@ import { resolveOpenClawStateSqlitePath } from "../state/openclaw-state-db.paths
 import { executeSqliteQueryTakeFirstSync, getNodeSqliteKysely } from "./kysely-sync.js";
 import { writeRestartSentinel } from "./restart-sentinel.js";
 import {
+  awaitEmulatedRecoveryHandoffExit,
   createManagedServiceCommandFixture,
+  LAUNCHD_GATEWAY_IDENTITY_ENV,
   waitForHandoffResponse,
 } from "./update-managed-service-handoff-command.test-support.js";
 import {
@@ -162,6 +164,7 @@ export function createManagedServiceManagerBoundary({
     );
     const env = {
       ...process.env,
+      ...(kind === "launchd" ? LAUNCHD_GATEWAY_IDENTITY_ENV : {}),
       OPENCLAW_STATE_DIR: root,
       OPENCLAW_CONFIG_PATH: path.join(root, "openclaw.json"),
       PATH: `${root}${path.delimiter}${process.env.PATH ?? ""}`,
@@ -238,7 +241,11 @@ export function createManagedServiceManagerBoundary({
         env,
         meta: { handoffId: `${kind}-boundary` },
       });
-      const [, generatedArgs] = spawnMock.mock.calls.at(-1) as [string, string[]];
+      const [, generatedArgs, { env: childEnv }] = spawnMock.mock.calls.at(-1) as [
+        string,
+        string[],
+        { env: NodeJS.ProcessEnv },
+      ];
       const scriptPath = generatedArgs[0];
       const generatedParamsPath = generatedArgs[1];
       if (!scriptPath || !generatedParamsPath) {
@@ -360,7 +367,7 @@ export function createManagedServiceManagerBoundary({
           outputPath: String(generated.triageContextPath),
         });
       }
-      let helperEnv: NodeJS.ProcessEnv = env;
+      let helperEnv = childEnv;
       if (options?.launchdTeardown?.clockEachCommandMs || options?.recoveryClockAdvanceMs) {
         const preloadPath = path.join(root, "launchd-clock-preload.cjs");
         await fs.writeFile(
@@ -372,7 +379,7 @@ export function createManagedServiceManagerBoundary({
             recoveryCommandArgv: commandFixture.recoveryCommandArgv,
           }),
         );
-        helperEnv = { ...env, NODE_OPTIONS: `--require ${preloadPath}` };
+        helperEnv = { ...childEnv, NODE_OPTIONS: `--require ${preloadPath}` };
       }
       if (options?.runnerFallback) {
         const preloadPath = path.join(root, "spawn-fallback-preload.cjs");
@@ -653,6 +660,9 @@ export function createManagedServiceManagerBoundary({
       }
       if (helper && helper.exitCode === null && helper.signalCode === null) {
         helper.kill("SIGKILL");
+      }
+      if (options?.recoveryChecksServiceIdentity) {
+        await awaitEmulatedRecoveryHandoffExit(statePath);
       }
     }
   };
