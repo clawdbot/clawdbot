@@ -1,4 +1,5 @@
 import { Buffer } from "node:buffer";
+import { createHash } from "node:crypto";
 import type { AgentMessage } from "openclaw/plugin-sdk/agent-harness-runtime";
 import { isRecord, normalizeOptionalString } from "openclaw/plugin-sdk/string-coerce-runtime";
 import type { JsonValue } from "./protocol.js";
@@ -7,6 +8,7 @@ import { readUpstreamUserText } from "./upstream-prompt-provenance.js";
 const MAX_RESPONSE_ITEMS = 200;
 const MAX_PROJECTION_BYTES = 512 * 1024;
 const MAX_TEXT_BYTES = 64 * 1024;
+const OPENAI_RESPONSES_CALL_ID_MAX_LENGTH = 64;
 // Projected names replay as function_call history items, which Codex
 // thread/inject_items deserializes as free-form strings (ResponseItem::FunctionCall).
 // Codex records MCP and connector calls under dotted namespaced ids
@@ -54,6 +56,55 @@ function requireCallId(value: unknown): string {
     throw new Error("Codex settled-turn projection found an invalid tool call id");
   }
   return callId;
+}
+
+function buildProjectedCallId(id: string, salt: number): string {
+  const salted = salt === 0 ? id : `${id}\u0000${salt}`;
+  const hashSuffix = `_${createHash("sha256").update(salted).digest("hex").slice(0, 10)}`;
+  const maxTailLength = OPENAI_RESPONSES_CALL_ID_MAX_LENGTH - "call_".length;
+  const rawTail = id.startsWith("call_") ? id.slice("call_".length) : id;
+  const safeTail = rawTail.replace(/[^A-Za-z0-9_-]/gu, "_").replace(/^_+|_+$/gu, "");
+  const clippedBase = safeTail.slice(0, Math.max(1, maxTailLength - hashSuffix.length));
+  return `call_${`${clippedBase || "id"}${hashSuffix}`.slice(0, maxTailLength)}`;
+}
+
+function createProjectedCallIdResolver(reservedIds: ReadonlySet<string>): (id: string) => string {
+  // Core's createOpenAIResponsesToolCallIdResolver is not exported through the
+  // plugin SDK, so this projection mirrors its rewrite locally. The trigger is
+  // deliberately narrower than core's: core rewrites any id failing
+  // /^call_[A-Za-z0-9_-]{1,59}$/ and splits call_id|fc_id pairings, while this
+  // rewrites on length > 64 only -- the bound OpenAI actually rejects, and the
+  // only one this projection can hit (it emits call_id, never an item id).
+  // Widening it to core's shape would rewrite ids that replay correctly today
+  // (e.g. "call-1"), changing model-visible ids and invalidating prompt caches.
+  // Weigh that before swapping in core's resolver if it is ever exported.
+  const rewrittenByOriginalId = new Map<string, string>();
+  // A rewrite must not land on an id the transcript already replays verbatim,
+  // or on one an earlier rewrite produced: the projection keys its duplicate,
+  // ambiguity and completeness bookkeeping by the resolved id, so a clash would
+  // reject a complete transcript as duplicated -- the same fail-closed turn this
+  // rewrite exists to prevent. Salting is deterministic, so the mapping is still
+  // a pure function of the transcript.
+  const taken = new Set<string>(reservedIds);
+
+  return (id) => {
+    const rewritten = rewrittenByOriginalId.get(id);
+    if (rewritten) {
+      return rewritten;
+    }
+    if (id.length <= OPENAI_RESPONSES_CALL_ID_MAX_LENGTH) {
+      return id;
+    }
+    let salt = 0;
+    let normalized = buildProjectedCallId(id, salt);
+    while (taken.has(normalized)) {
+      salt += 1;
+      normalized = buildProjectedCallId(id, salt);
+    }
+    taken.add(normalized);
+    rewrittenByOriginalId.set(id, normalized);
+    return normalized;
+  };
 }
 
 function requireToolName(value: unknown): string {
@@ -247,6 +298,46 @@ function* projectMessage(message: AgentMessage): Generator<ProjectedResponseItem
   }
 }
 
+/**
+ * Rewrites overlength `call_id`s once the transcript is known to be complete.
+ *
+ * This runs after streaming rather than during it on purpose. The caller passes
+ * a generator that pulls message payloads lazily, so the projection must stay
+ * able to reject at its item and byte limits before the rest of the history is
+ * read; materializing the input to learn every id up front would defeat that.
+ * Deferring instead keeps the stream lazy and still gives the resolver the full
+ * set of replayed ids, which it needs so a rewrite never lands on one.
+ *
+ * Bookkeeping upstream keys on the original ids, so a rewrite cannot invent a
+ * duplicate: the pairs are already proven unique and complete by this point.
+ */
+function rewriteOverlengthCallIds(items: JsonValue[], callIds: Iterable<string>): JsonValue[] {
+  const reserved = new Set<string>();
+  let hasOverlength = false;
+  for (const id of callIds) {
+    if (id.length <= OPENAI_RESPONSES_CALL_ID_MAX_LENGTH) {
+      reserved.add(id);
+    } else {
+      hasOverlength = true;
+    }
+  }
+  if (!hasOverlength) {
+    return items;
+  }
+  const resolveCallId = createProjectedCallIdResolver(reserved);
+  return items.map((item) => {
+    if (!isRecord(item)) {
+      return item;
+    }
+    const callId = item.call_id;
+    if (typeof callId !== "string") {
+      return item;
+    }
+    const resolved = resolveCallId(callId);
+    return resolved === callId ? item : { ...item, call_id: resolved };
+  });
+}
+
 /** Consumes complete evidence or rejects at the existing limits, never truncating its history. */
 export function projectSettledCodexMessages(messages: Iterable<AgentMessage>): JsonValue[] {
   const items: JsonValue[] = [];
@@ -283,5 +374,5 @@ export function projectSettledCodexMessages(messages: Iterable<AgentMessage>): J
   if (results.size === 0) {
     throw new Error("Codex settled-turn projection found no completed tool result");
   }
-  return items;
+  return rewriteOverlengthCallIds(items, calls.keys());
 }

@@ -29,6 +29,45 @@ function toolResult(
   });
 }
 
+const OVERLENGTH_CALL_ID = `${"a".repeat(82)}1`;
+
+function projectedCallIds(messages: AgentMessage[]): string[] {
+  return projectSettledCodexMessages(messages)
+    .filter(
+      (item): item is { call_id: string } =>
+        typeof (item as { call_id?: unknown }).call_id === "string",
+    )
+    .map((item) => item.call_id);
+}
+
+function guardCasesFor(label: string, id: string) {
+  return [
+    {
+      name: `missing result (${label})`,
+      messages: [toolCall(id)],
+      error: "incomplete tool transcript",
+    },
+    {
+      name: `duplicate call id (${label})`,
+      messages: [toolCall(id), toolCall(id), toolResult(id)],
+      error: "duplicate tool call",
+    },
+    {
+      name: `tool-name mismatch (${label})`,
+      messages: [
+        toolCall(id),
+        message({
+          role: "toolResult",
+          toolCallId: id,
+          toolName: "different",
+          content: [{ type: "text", text: "done" }],
+        }),
+      ],
+      error: "ambiguous tool transcript",
+    },
+  ];
+}
+
 describe("projectSettledCodexMessages", () => {
   it("projects a canonical completed tool exchange without exposing reasoning", () => {
     expect(
@@ -86,6 +125,103 @@ describe("projectSettledCodexMessages", () => {
         output: "Telegram delivery complete.",
       },
     ]);
+  });
+
+  it("rewrites overlength call ids once per projection and keeps the pair deterministic", () => {
+    const firstIds = projectedCallIds([
+      toolCall(OVERLENGTH_CALL_ID),
+      toolResult(OVERLENGTH_CALL_ID),
+    ]);
+    const secondIds = projectedCallIds([
+      toolCall(OVERLENGTH_CALL_ID),
+      toolResult(OVERLENGTH_CALL_ID),
+    ]);
+
+    expect(OVERLENGTH_CALL_ID).toHaveLength(83);
+    expect(firstIds).toHaveLength(2);
+    expect(firstIds[0]).toMatch(/^call_[A-Za-z0-9_-]{1,59}$/);
+    expect(firstIds[0]?.length).toBeLessThanOrEqual(64);
+    expect(firstIds[1]).toBe(firstIds[0]);
+    expect(secondIds).toEqual(firstIds);
+  });
+
+  it("does not collide distinct overlength call ids within one projection", () => {
+    const ids = projectedCallIds([
+      toolCall(OVERLENGTH_CALL_ID),
+      toolResult(OVERLENGTH_CALL_ID),
+      toolCall(`${"a".repeat(82)}2`),
+      toolResult(`${"a".repeat(82)}2`),
+    ]);
+
+    expect(ids).toHaveLength(4);
+    expect(ids[0]).toBe(ids[1]);
+    expect(ids[2]).toBe(ids[3]);
+    expect(ids[0]).not.toBe(ids[2]);
+  });
+
+  it("rejects at the item limit without draining the rest of the history", () => {
+    // settled-turn-context passes a generator that pulls message payloads
+    // lazily, so the projection has to fail before the tail is read. Learning
+    // every call id up front (to keep rewrites off replayed ids) must not cost
+    // that laziness.
+    let pulled = 0;
+    function* history(): Generator<AgentMessage> {
+      for (let index = 0; index < 400; index += 1) {
+        pulled += 1;
+        yield toolCall(`call-${index}`);
+        pulled += 1;
+        yield toolResult(`call-${index}`);
+      }
+      throw new Error("history was drained past the projection limit");
+    }
+
+    expect(() => projectSettledCodexMessages(history())).toThrow("exceeds the item limit");
+    expect(pulled).toBeLessThan(400);
+  });
+
+  it("keeps a complete transcript when a raw id equals an overlength id's rewrite", () => {
+    // The rewrite lands in the same call_ space that raw ids occupy, so a
+    // transcript can legitimately carry both. Reserving passthrough ids keeps
+    // that from being rejected as a duplicate -- the fail-closed turn this
+    // whole rewrite exists to prevent.
+    const [collidingId] = projectedCallIds([
+      toolCall(OVERLENGTH_CALL_ID),
+      toolResult(OVERLENGTH_CALL_ID),
+    ]);
+    expect(collidingId).toBeDefined();
+
+    const ids = projectedCallIds([
+      toolCall(OVERLENGTH_CALL_ID),
+      toolResult(OVERLENGTH_CALL_ID),
+      toolCall(collidingId as string),
+      toolResult(collidingId as string),
+    ]);
+
+    expect(ids).toHaveLength(4);
+    // The raw id is replayed verbatim; the overlength one moves out of its way.
+    expect(ids[2]).toBe(collidingId);
+    expect(ids[3]).toBe(collidingId);
+    expect(ids[0]).toBe(ids[1]);
+    expect(ids[0]).not.toBe(collidingId);
+    expect(ids[0]).toMatch(/^call_[A-Za-z0-9_-]{1,59}$/);
+    expect(ids[0]?.length).toBeLessThanOrEqual(64);
+  });
+
+  it("passes a 64-character call id through untouched and rewrites at 65", () => {
+    const atLimit = "b".repeat(64);
+    const overLimit = "c".repeat(65);
+
+    // The Responses contract is maxLength 64, so a 64-character id must stay
+    // byte-identical: narrowing the gate to `< 64` would silently rewrite ids
+    // that already replay correctly today.
+    expect(projectedCallIds([toolCall(atLimit), toolResult(atLimit)])).toEqual([atLimit, atLimit]);
+
+    const rewritten = projectedCallIds([toolCall(overLimit), toolResult(overLimit)]);
+    expect(rewritten).toHaveLength(2);
+    expect(rewritten[0]).not.toBe(overLimit);
+    expect(rewritten[0]).toMatch(/^call_[A-Za-z0-9_-]{1,59}$/);
+    expect(rewritten[0]?.length).toBeLessThanOrEqual(64);
+    expect(rewritten[1]).toBe(rewritten[0]);
   });
 
   it("projects dotted namespaced tool names recorded from Codex MCP calls", () => {
@@ -312,23 +448,15 @@ describe("projectSettledCodexMessages", () => {
   });
 
   it.each([
-    { name: "orphan result", messages: [toolResult()] },
-    { name: "missing result", messages: [toolCall()] },
-    { name: "duplicate call id", messages: [toolCall(), toolCall(), toolResult()] },
     {
-      name: "tool-name mismatch",
-      messages: [
-        toolCall(),
-        message({
-          role: "toolResult",
-          toolCallId: "call-1",
-          toolName: "different",
-          content: [{ type: "text", text: "done" }],
-        }),
-      ],
+      name: "orphan result",
+      messages: [toolResult()],
+      error: "ambiguous tool transcript",
     },
-  ])("fails closed for $name", ({ messages }) => {
-    expect(() => projectSettledCodexMessages(messages)).toThrow(/Codex settled-turn projection/u);
+    ...guardCasesFor("short id", "call-1"),
+    ...guardCasesFor("overlength id", OVERLENGTH_CALL_ID),
+  ])("fails closed for $name", ({ messages, error }) => {
+    expect(() => projectSettledCodexMessages(messages)).toThrow(error);
   });
 
   it("preserves valid image tool results as bounded non-vision evidence", () => {
