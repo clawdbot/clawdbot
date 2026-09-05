@@ -80,7 +80,7 @@ function installBrowserMocks() {
   const mainFrame = {};
   const contextOn = vi.fn();
   const browserEvents = new EventEmitter();
-  const browserOn = vi.spyOn(browserEvents, "on");
+  const browserOn = vi.fn(browserEvents.on.bind(browserEvents));
   const browserClose = vi.fn(async () => {});
   const sessionSend = vi.fn(async (method: string) => {
     if (method === "Target.getTargetInfo") {
@@ -115,10 +115,12 @@ function installBrowserMocks() {
     mainFrame: () => mainFrame,
   } as unknown as import("playwright-core").Page;
 
-  const browser = Object.assign(browserEvents, {
+  const browser = {
     contexts: () => [context],
+    on: browserOn,
+    off: browserEvents.off.bind(browserEvents),
     close: browserClose,
-  }) as import("playwright-core").Browser;
+  } as unknown as import("playwright-core").Browser;
 
   connectOverCdpSpy.mockResolvedValue(browser);
   getChromeWebSocketEndpointSpy.mockResolvedValue(null);

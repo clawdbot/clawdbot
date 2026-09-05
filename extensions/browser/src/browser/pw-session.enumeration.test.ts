@@ -27,6 +27,8 @@ function makePageEnumerationBrowser(
 ): BrowserMockBundle & {
   pages: import("playwright-core").Page[];
   newCDPSession: ReturnType<typeof vi.fn>;
+  contextEvents: EventEmitter;
+  browserEvents: EventEmitter;
 } {
   const browserClose = vi.fn(async () => {});
   const specByPage = new WeakMap<import("playwright-core").Page, (typeof specs)[number]>();
@@ -56,12 +58,18 @@ function makePageEnumerationBrowser(
       detach: vi.fn(spec.detach ?? (async () => {})),
     };
   });
-  const context = Object.assign(new EventEmitter(), {
+  const contextEvents = new EventEmitter();
+  const browserEvents = new EventEmitter();
+  const context = {
     pages: () => pages,
+    on: contextEvents.on.bind(contextEvents),
+    off: contextEvents.off.bind(contextEvents),
     newCDPSession,
-  }) as import("playwright-core").BrowserContext;
-  const browser = Object.assign(new EventEmitter(), {
+  } as unknown as import("playwright-core").BrowserContext;
+  const browser = {
     contexts: () => [context],
+    on: browserEvents.on.bind(browserEvents),
+    off: browserEvents.off.bind(browserEvents),
     close: browserClose,
     newBrowserCDPSession: vi.fn(async () => ({
       send: vi.fn(async () => ({
@@ -69,9 +77,9 @@ function makePageEnumerationBrowser(
       })),
       detach: vi.fn(async () => {}),
     })),
-  }) as import("playwright-core").Browser;
+  } as unknown as import("playwright-core").Browser;
 
-  return { browser, browserClose, pages, newCDPSession };
+  return { browser, browserClose, pages, newCDPSession, contextEvents, browserEvents };
 }
 
 describe("pw-session page enumeration", () => {
@@ -236,7 +244,7 @@ describe("pw-session page enumeration", () => {
       );
       const publish = () => {
         published = true;
-        context.emit("page", fixture.pages[1]);
+        fixture.contextEvents.emit("page", fixture.pages[1]);
       };
       const inventoryRead = vi.fn(async () => {
         if (timing === "during discovery") {
@@ -289,8 +297,8 @@ describe("pw-session page enumeration", () => {
       expect(inventoryRead).toHaveBeenCalledOnce();
       expect(connectOverCdpSpy).toHaveBeenCalledOnce();
       expect(fixture.browserClose).not.toHaveBeenCalled();
-      expect(context.listenerCount("page")).toBe(1);
-      expect(fixture.browser.listenerCount("disconnected")).toBe(1);
+      expect(fixture.contextEvents.listenerCount("page")).toBe(1);
+      expect(fixture.browserEvents.listenerCount("disconnected")).toBe(1);
     },
   );
 
@@ -509,8 +517,8 @@ describe("pw-session page enumeration", () => {
     expect(detach).toHaveBeenCalledTimes(requireCompleteTargetList ? 1 : 0);
     expect(connectOverCdpSpy).toHaveBeenCalledOnce();
     expect(fixture.browserClose).toHaveBeenCalledTimes(testCase.waitsForPublication ? 1 : 0);
-    expect(fixture.browser.contexts()[0]!.listenerCount("page")).toBe(1);
-    expect(fixture.browser.listenerCount("disconnected")).toBe(
+    expect(fixture.contextEvents.listenerCount("page")).toBe(1);
+    expect(fixture.browserEvents.listenerCount("disconnected")).toBe(
       testCase.waitsForPublication ? 0 : 1,
     );
     if (blockedPage) {
@@ -555,13 +563,13 @@ describe("pw-session page enumeration", () => {
     if (stop === "abort") {
       controller.abort(new Error("cancelled publication"));
     } else {
-      fixture.browser.emit("disconnected");
+      fixture.browserEvents.emit("disconnected");
     }
     await result;
-    context.emit("page", fixture.pages[0]);
+    fixture.contextEvents.emit("page", fixture.pages[0]);
     expect(fixture.newCDPSession).not.toHaveBeenCalled();
-    expect(context.listenerCount("page")).toBe(1);
-    expect(fixture.browser.listenerCount("disconnected")).toBe(stop === "abort" ? 0 : 1);
+    expect(fixture.contextEvents.listenerCount("page")).toBe(1);
+    expect(fixture.browserEvents.listenerCount("disconnected")).toBe(stop === "abort" ? 0 : 1);
     expect(getEventListeners(controller.signal, "abort")).toHaveLength(0);
     expect(connectOverCdpSpy).toHaveBeenCalledTimes(stop === "abort" ? 1 : 2);
     expect(successor.browserClose).not.toHaveBeenCalled();
