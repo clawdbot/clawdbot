@@ -264,25 +264,24 @@ async function downloadWorkspace(params: {
   });
   const staging = stagingWorkspace.dir;
   try {
-    if (process.platform === "win32") {
-      const published = await runWorkspaceCommand({
-        workspaceDir: staging,
-        homeDir: params.manifestHome,
-        argv: [
-          "node",
-          "-e",
-          REMOTE_WORKSPACE_MANIFEST_JS,
-          staging,
-          manifest.baseCommit ?? "",
-          "publish",
-          params.transfer.manifestRef.slice("sha256:".length),
-        ],
-        input: raw,
-        signal: params.signal,
-      });
-      if (published.trim() !== params.transfer.manifestRef) {
-        throw new Error("workspace transfer manifest publication acknowledgement is invalid");
-      }
+    // The accepted manifest owns raw path eligibility on every platform.
+    const published = await runWorkspaceCommand({
+      workspaceDir: staging,
+      homeDir: params.manifestHome,
+      argv: [
+        "node",
+        "-e",
+        REMOTE_WORKSPACE_MANIFEST_JS,
+        staging,
+        manifest.baseCommit ?? "",
+        "publish",
+        params.transfer.manifestRef.slice("sha256:".length),
+      ],
+      input: raw,
+      signal: params.signal,
+    });
+    if (published.trim() !== params.transfer.manifestRef) {
+      throw new Error("workspace transfer manifest publication acknowledgement is invalid");
     }
     if (manifest.baseCommit && !checkpointBase) {
       try {
@@ -491,7 +490,13 @@ async function uploadWorkspace(params: {
         baseManifestRef: transfer.baseManifestRef,
         signal: params.signal,
       },
-      (workspaceDir) => uploadWorkspace({ ...params, workspaceDir, transfer, hashMemo: undefined }),
+      (workspaceDir) =>
+        uploadWorkspace({
+          ...params,
+          workspaceDir,
+          transfer: { ...transfer, referenceManifestRef: transfer.baseManifestRef },
+          hashMemo: undefined,
+        }),
     );
   }
   const baseRaw = await fsp.readFile(
@@ -508,7 +513,7 @@ async function uploadWorkspace(params: {
     workspaceDir: params.workspaceDir,
     manifestHome: params.manifestHome,
     baseCommit: base.baseCommit,
-    referenceManifestRef: params.transfer.baseManifestRef,
+    referenceManifestRef: params.transfer.referenceManifestRef,
     ...(params.hashMemo === undefined ? {} : { hashMemo: params.hashMemo }),
     signal: params.signal,
   });

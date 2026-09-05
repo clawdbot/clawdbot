@@ -58,6 +58,8 @@ export type NodeWorkerWorkspaceTransferInput =
       direction: "upload";
       token: string;
       baseManifestRef: string;
+      /** Last accepted raw manifest; independent of the cumulative repository base. */
+      referenceManifestRef: string;
       /** Capture normalized publication artifacts under this pinned repository base. */
       publicationBaseCommit?: string;
     };

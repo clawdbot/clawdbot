@@ -3738,7 +3738,7 @@ src/wizard/setup.shared.ts	1
 src/wizard/setup.ts	2
 src/worker/inference-stream.runtime.ts	5
 src/worker/launch-descriptor.ts	6
-src/worker/node-workspace-protocol.ts	3
+src/worker/node-workspace-protocol.ts	1
 src/worker/worker-command.runtime.ts	1
 src/worker/worker-connection-admission.ts	2
 src/worker/worker-connection-frames.ts	4

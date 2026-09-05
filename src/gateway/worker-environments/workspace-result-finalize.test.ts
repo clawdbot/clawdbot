@@ -281,6 +281,7 @@ describe("concurrent worker workspace results", () => {
                   direction: "upload",
                   token: "fixture-upload",
                   baseManifestRef: base.manifestRef,
+                  referenceManifestRef: base.manifestRef,
                 },
               },
               undefined,

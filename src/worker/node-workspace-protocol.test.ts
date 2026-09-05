@@ -53,7 +53,13 @@ describe("node workspace seed protocol", () => {
     { ...download, seedKey: "../outside" },
     { ...download, seedKey: "A".repeat(64) },
     { ...download, attachments: true },
-    { direction: "upload", token: "token", baseManifestRef: download.manifestRef, seedKey: key },
+    {
+      direction: "upload",
+      token: "token",
+      baseManifestRef: download.manifestRef,
+      referenceManifestRef: download.manifestRef,
+      seedKey: key,
+    },
   ])("rejects an invalid prepared seed transfer %#", (transfer) => {
     expect(() =>
       parseNodeWorkerWorkspaceExecInput(JSON.stringify({ ...request, transfer })),
@@ -97,6 +103,32 @@ describe("node workspace seed protocol", () => {
   });
 });
 
+describe("node workspace upload references", () => {
+  const transfer = {
+    direction: "upload",
+    token: "token",
+    baseManifestRef: `sha256:${"a".repeat(64)}`,
+    referenceManifestRef: `sha256:${"b".repeat(64)}`,
+  };
+
+  it("preserves the accepted manifest independently of the immutable base", () => {
+    expect(
+      parseNodeWorkerWorkspaceExecInput(JSON.stringify({ ...request, transfer })).transfer,
+    ).toEqual(transfer);
+  });
+
+  it.each([undefined, null, "", "../outside", `sha256:${"B".repeat(64)}`])(
+    "rejects missing or invalid accepted references: %s",
+    (referenceManifestRef) => {
+      expect(() =>
+        parseNodeWorkerWorkspaceExecInput(
+          JSON.stringify({ ...request, transfer: { ...transfer, referenceManifestRef } }),
+        ),
+      ).toThrow("workspace transfer is invalid");
+    },
+  );
+});
+
 it("allows larger bounded inspection payloads without widening ordinary command limits", () => {
   const input = "x".repeat(192 * 1024);
   const argv = [WORKSPACE_INSPECTION_COMMAND];
@@ -131,7 +163,12 @@ it.each([
   { argv: [WORKSPACE_INSPECTION_COMMAND], seed: { action: "apply", key } },
   {
     argv: [WORKSPACE_INSPECTION_COMMAND],
-    transfer: { direction: "upload", token: "token", baseManifestRef: `sha256:${key}` },
+    transfer: {
+      direction: "upload",
+      token: "token",
+      baseManifestRef: `sha256:${key}`,
+      referenceManifestRef: `sha256:${key}`,
+    },
   },
 ])("rejects mixed inspection authority %#", (fields) => {
   expect(() =>

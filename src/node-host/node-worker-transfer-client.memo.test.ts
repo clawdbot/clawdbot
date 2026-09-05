@@ -88,7 +88,12 @@ describe("node worker transfer client hash memo", () => {
           environmentId: "environment-memo",
           workspaceDir,
           manifestHome: root,
-          transfer: { direction: "upload", token: "upload-token", baseManifestRef: manifestRef },
+          transfer: {
+            direction: "upload",
+            token: "upload-token",
+            baseManifestRef: manifestRef,
+            referenceManifestRef: manifestRef,
+          },
           hashMemo,
         }),
       ).resolves.toBe(manifestRef);

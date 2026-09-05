@@ -40,7 +40,11 @@ it("rejects repository sources on SSH before invoking any remote command", async
     actions.reconcileWorkspace({
       remoteWorkspaceDir: "/worker/workspace",
       baseManifestRef: `sha256:${"b".repeat(64)}`,
-      source: { kind: "repository", prepareCheckpoint: vi.fn() },
+      source: {
+        kind: "repository",
+        referenceManifestRef: `sha256:${"b".repeat(64)}`,
+        prepareCheckpoint: vi.fn(),
+      },
     }),
   ).rejects.toThrow("managed node");
   expect(waitForPrepared).not.toHaveBeenCalled();
@@ -58,6 +62,9 @@ it.each([
     const origin = path.join(root, "origin");
     const home = path.join(root, "node-home");
     await fs.mkdir(path.join(origin, ".openclaw"), { recursive: true });
+    await fs.writeFile(path.join(origin, ".gitignore"), "*.ignored\n");
+    await fs.writeFile(path.join(origin, ".worktreeinclude"), "retained.ignored\n");
+    await fs.writeFile(path.join(origin, "retained-removal.ignored"), "keep recovered bytes\n");
     await fs.writeFile(path.join(origin, "tracked.txt"), "base\n");
     await fs.writeFile(path.join(origin, "a-original.txt"), "turn one\n");
     if (filters) {
@@ -68,8 +75,8 @@ it.each([
       "#!/bin/sh\nprintf 'prepared\\n' > setup.txt\n",
       { mode: 0o755 },
     );
-    const git = async (...args: string[]) => {
-      const result = await runCommandWithTimeout(["git", "-C", origin, ...args], {
+    const gitAt = async (cwd: string, ...args: string[]) => {
+      const result = await runCommandWithTimeout(["git", "-C", cwd, ...args], {
         timeoutMs: 10_000,
         baseEnv: {
           PATH: process.env.PATH,
@@ -81,8 +88,10 @@ it.each([
       expect(result.code, result.stderr).toBe(0);
       return result.stdout.trim();
     };
+    const git = (...args: string[]) => gitAt(origin, ...args);
     await git("init", "--quiet");
     await git("add", ".");
+    await git("add", "-f", "retained-removal.ignored");
     await git(
       "-c",
       "user.name=Repository Test",
@@ -108,7 +117,7 @@ it.each([
       }),
     });
     const server = await startNodeWorkspaceTransferTestServer(service);
-    const runtime = new NodeWorkerWorkspaceRuntime({
+    let runtime = new NodeWorkerWorkspaceRuntime({
       root: path.join(home, "node-host"),
       env: { PATH: process.env.PATH, HOME: home },
     });
@@ -185,12 +194,13 @@ it.each([
           >[0]
         | undefined;
       let revision = 0;
-      const capture = async () => {
-        const result = await actions.reconcileWorkspace({
-          remoteWorkspaceDir: first.remoteWorkspaceDir,
+      const capture = async (active = actions, directory = first.remoteWorkspaceDir) => {
+        const result = await active.reconcileWorkspace({
+          remoteWorkspaceDir: directory,
           baseManifestRef: first.baseManifestRef,
           source: {
             kind: "repository",
+            referenceManifestRef: checkpoint?.currentManifestRef ?? first.manifestRef,
             prepareCheckpoint: async (payload) => {
               const stagingRoot = path.join(root, `checkpoint-${++revision}`);
               await fs.cp(payload.stagingRoot, stagingRoot, { recursive: true });
@@ -208,7 +218,15 @@ it.each([
                   ),
                 ).toMatchObject({ baseCommit });
               }
-              const captured = { ...payload, stagingRoot };
+              const publicationStagingRoot = payload.publicationStagingRoot
+                ? path.join(root, `publication-${revision}`)
+                : undefined;
+              if (publicationStagingRoot) {
+                await fs.cp(payload.publicationStagingRoot!, publicationStagingRoot, {
+                  recursive: true,
+                });
+              }
+              const captured = { ...payload, stagingRoot, publicationStagingRoot };
               return {
                 verify: async () => {
                   expect(await fs.stat(stagingRoot)).toBeDefined();
@@ -237,6 +255,23 @@ it.each([
       await capture();
       expect(revision).toBe(1);
       expect(checkpoint).toBeDefined();
+      await gitAt(first.remoteWorkspaceDir, "rm", "--cached", "retained-removal.ignored");
+      await fs.writeFile(
+        path.join(first.remoteWorkspaceDir, "published[1].ignored"),
+        "publishable\n",
+      );
+      await fs.writeFile(
+        path.join(first.remoteWorkspaceDir, "retained.ignored"),
+        "recovery only\n",
+      );
+      await gitAt(
+        first.remoteWorkspaceDir,
+        "--literal-pathspecs",
+        "add",
+        "-f",
+        "--",
+        "published[1].ignored",
+      );
       await fs.writeFile(path.join(first.remoteWorkspaceDir, "first.txt"), "turn one\n");
       await capture();
       await fs.writeFile(path.join(first.remoteWorkspaceDir, "second.txt"), "turn two\n");
@@ -245,7 +280,8 @@ it.each([
       expect(checkpoint).toBeDefined();
 
       epoch += 1;
-      const restored = await createActions().syncWorkspace({
+      const replacement = createActions();
+      const restored = await replacement.syncWorkspace({
         sessionId: "session-1",
         generation: epoch,
         source: { ...source, baseCommit, checkpoint },
@@ -266,9 +302,62 @@ it.each([
       ).rejects.toMatchObject({ code: "ENOENT" });
       expect((await fs.readdir(checkpoint!.stagingRoot)).toSorted()).toEqual([
         "first.txt",
+        "published[1].ignored",
+        "retained.ignored",
         "second.txt",
         "setup.txt",
       ]);
+      expect(
+        await fs.readFile(path.join(restored.remoteWorkspaceDir, "published[1].ignored"), "utf8"),
+      ).toBe("publishable\n");
+      expect(
+        await gitAt(restored.remoteWorkspaceDir, "ls-files", "--", "published[1].ignored"),
+      ).toBe(filters ? "" : "published[1].ignored");
+      expect(await gitAt(restored.remoteWorkspaceDir, "ls-files", "--", "retained.ignored")).toBe(
+        "",
+      );
+      expect(
+        await fs.readFile(
+          path.join(restored.remoteWorkspaceDir, "retained-removal.ignored"),
+          "utf8",
+        ),
+      ).toBe("keep recovered bytes\n");
+      expect(
+        await gitAt(restored.remoteWorkspaceDir, "ls-files", "--", "retained-removal.ignored"),
+      ).toBe(filters ? "retained-removal.ignored" : "");
+      expect(await gitAt(restored.remoteWorkspaceDir, "diff", "--cached", "--name-only")).toBe(
+        filters ? "" : "retained-removal.ignored\ntracked.txt",
+      );
+      // A node process restart loses in-memory transfer refs; the Gateway owns the accepted ref.
+      runtime = new NodeWorkerWorkspaceRuntime({
+        root: path.join(home, "node-host"),
+        env: { PATH: process.env.PATH, HOME: home },
+      });
+      await capture(replacement, restored.remoteWorkspaceDir);
+      expect(
+        JSON.parse(checkpoint!.currentManifestRaw).entries.map(
+          (entry: { path: string }) => entry.path,
+        ),
+      ).toContain("published[1].ignored");
+      if (!filters) {
+        const snapshot = JSON.parse(
+          await fs.readFile(
+            path.join(checkpoint!.publicationStagingRoot!, "snapshot.json"),
+            "utf8",
+          ),
+        );
+        expect(snapshot.entries.map((entry: { path: string }) => entry.path)).toContain(
+          "published[1].ignored",
+        );
+        expect(snapshot.entries.map((entry: { path: string }) => entry.path)).not.toContain(
+          "retained.ignored",
+        );
+        expect(snapshot.entries).toContainEqual({
+          path: "retained-removal.ignored",
+          mode: "100644",
+          sha: null,
+        });
+      }
     } finally {
       await server.close();
       await service.closeAll();

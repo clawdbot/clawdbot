@@ -65,7 +65,10 @@ export async function syncSessionRepositoryWorkspace(params: {
     });
   };
   const synced = repository.checkpointRef
-    ? await withSessionRepositoryCheckpoint({ workspaceId: repository.workspaceId }, sync)
+    ? await withSessionRepositoryCheckpoint(
+        { workspaceId: repository.workspaceId, includePublication: true },
+        sync,
+      )
     : await sync();
   params.assertCurrent();
   if (synced.mode !== "repository") {
@@ -100,6 +103,7 @@ export async function syncSessionRepositoryWorkspace(params: {
       baseManifestRef: synced.baseManifestRef,
       source: {
         kind: "repository",
+        referenceManifestRef: synced.manifestRef,
         prepareCheckpoint: (payload) =>
           stageSessionRepositoryCheckpoint({
             ...payload,

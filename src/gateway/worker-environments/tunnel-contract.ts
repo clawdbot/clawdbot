@@ -115,7 +115,11 @@ type WorkerRepositoryWorkspaceSource = {
   runSetupScript?: boolean;
   checkpoint?: Pick<
     WorkerRepositoryCheckpointPayload,
-    "stagingRoot" | "baseManifestRaw" | "currentManifestRaw"
+    | "stagingRoot"
+    | "baseManifestRaw"
+    | "currentManifestRaw"
+    | "publicationStagingRoot"
+    | "publicationDigest"
   >;
 };
 
@@ -163,6 +167,7 @@ export type WorkerWorkspaceReconcileRequest = {
       }
     | {
         kind: "repository";
+        referenceManifestRef: string;
         prepareCheckpoint(
           payload: WorkerRepositoryCheckpointPayload,
         ): Promise<WorkerRepositoryCheckpointPreparation>;

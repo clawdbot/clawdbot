@@ -3,6 +3,7 @@ import fsp from "node:fs/promises";
 import { createSubsystemLogger } from "../../logging/subsystem.js";
 import type { NodeWorkerWorkspaceExecResult } from "../../worker/node-workspace-protocol.js";
 import { NODE_WORKSPACE_EMPTY_MANIFEST_REF } from "../../worker/node-workspace-transfer-protocol.js";
+import { prepareRepositoryPublicationRestore } from "../github-repository-publication-restore.js";
 import { createNodeWorkerRepositoryPreparation } from "./node-worker-repository-preparation.js";
 import {
   createNodeWorkerWorkspaceFallback,
@@ -149,7 +150,12 @@ export function createNodeWorkerWorkspaceActions(params: {
     try {
       const result = await exec({
         argv: ["openclaw-internal-workspace-transfer"],
-        transfer: { direction: "upload", token, baseManifestRef: request.baseManifestRef },
+        transfer: {
+          direction: "upload",
+          token,
+          baseManifestRef: request.baseManifestRef,
+          referenceManifestRef: request.source.referenceManifestRef,
+        },
         timeoutMs: 10 * 60_000,
         transportRetry: "never",
       });
@@ -190,6 +196,7 @@ export function createNodeWorkerWorkspaceActions(params: {
                 direction: "upload",
                 token: publicationToken,
                 baseManifestRef: NODE_WORKSPACE_EMPTY_MANIFEST_REF,
+                referenceManifestRef: NODE_WORKSPACE_EMPTY_MANIFEST_REF,
                 publicationBaseCommit: uploaded.base.baseCommit,
               },
               timeoutMs: 10 * 60_000,
@@ -282,6 +289,7 @@ export function createNodeWorkerWorkspaceActions(params: {
           direction: "upload",
           token: uploadToken,
           baseManifestRef: request.baseManifestRef,
+          referenceManifestRef: request.baseManifestRef,
         },
         timeoutMs: 10 * 60_000,
         transportRetry: "never",
@@ -474,6 +482,17 @@ export function createNodeWorkerWorkspaceActions(params: {
           applied.stdout.trim() !== manifestRef
         ) {
           throw new Error("Repository checkpoint restore failed");
+        }
+        for (const command of await prepareRepositoryPublicationRestore({
+          ...checkpoint,
+          current: manifest,
+        })) {
+          const restored = await exec({ ...command, timeoutMs: 60_000, transportRetry: "never" });
+          if (restored.code !== 0 || restored.termination !== "exit") {
+            throw new Error(
+              "Repository publication paths could not be restored; retry workspace preparation",
+            );
+          }
         }
       } finally {
         params.workspaceTransfer.revoke(params.environmentId, token);

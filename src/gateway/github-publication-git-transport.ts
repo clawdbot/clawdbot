@@ -226,9 +226,9 @@ export async function captureGitHubPublicationWorkspaceSnapshot(params: {
     // Preserve staged path inventory, and keep write-tree cache updates off the real index.
     await step(() => fs.copyFile(index, env.GIT_INDEX_FILE));
     const sourceIndexTree = await git(["write-tree"], env);
-    // Drop copied stat caches so same-size edits still receive Git clean conversion.
-    await git(["read-tree", sourceIndexTree], env);
     await git(["-c", `core.attributesFile=${os.devNull}`, "add", "-A"], env);
+    // Normalize after removals, retaining intent-to-add paths and ignoring copied stat caches.
+    await git(["-c", `core.attributesFile=${os.devNull}`, "add", "--renormalize", "-u"], env);
     const workspaceTree = await git(["write-tree"], env);
     await step(() =>
       assertGitHubPublicationTreeHasNoFilters(params.cwd, workspaceTree, runPublicationCommand),

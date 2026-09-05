@@ -3,6 +3,8 @@ import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { ProjectCloneError } from "../projects/project-clone-runtime.js";
 import { materializeProjectClone } from "../projects/project-clone.js";
 import { getSessionRepositoryWorkspaceStore } from "../state/session-repository-workspaces.js";
+import { createGitHubPublicationCommandRunner } from "./github-publication-git-transport.js";
+import { prepareRepositoryPublicationRestore } from "./github-repository-publication-restore.js";
 import { loadGatewaySessionEntryReadOnly } from "./session-utils-store.js";
 import { prepareSessionWorktree } from "./session-worktree-preparation.js";
 import { withSessionRepositoryCheckpoint } from "./worker-environments/session-repository-checkpoints.js";
@@ -102,26 +104,35 @@ export async function materializeSessionRepositoryWorkspaceOnGateway(params: {
   let bound = false;
   try {
     if (repository.checkpointRef) {
-      await withSessionRepositoryCheckpoint({ workspaceId }, async (snapshot) => {
-        assertCurrent();
-        const applied = await applyStagedWorkerWorkspace({
-          ...snapshot,
-          root,
-          // The checkout is unbound until verification. Failed preparation rolls it
-          // back; a crash leaves the immutable checkpoint available for a fresh retry.
-          journal: {
-            load: () => undefined,
-            begin: assertCurrent,
-            commit: assertCurrent,
-            abort: () => {},
-          },
-        });
-        if (applied.conflictPaths.length || applied.manifestRef !== repository.manifestHash) {
-          throw new Error("Repository changes could not be fully restored; retry the Gateway move");
-        }
-        await applied.verifyLocalStable();
-        assertCurrent();
-      });
+      await withSessionRepositoryCheckpoint(
+        { workspaceId, includePublication: true },
+        async (snapshot) => {
+          assertCurrent();
+          const applied = await applyStagedWorkerWorkspace({
+            ...snapshot,
+            root,
+            // The checkout is unbound until verification. Failed preparation rolls it
+            // back; a crash leaves the immutable checkpoint available for a fresh retry.
+            journal: {
+              load: () => undefined,
+              begin: assertCurrent,
+              commit: assertCurrent,
+              abort: () => {},
+            },
+          });
+          if (applied.conflictPaths.length || applied.manifestRef !== repository.manifestHash) {
+            throw new Error(
+              "Repository changes could not be fully restored; retry the Gateway move",
+            );
+          }
+          await applied.verifyLocalStable();
+          const { require: command } = createGitHubPublicationCommandRunner(assertCurrent);
+          for (const restore of await prepareRepositoryPublicationRestore(snapshot)) {
+            await command(restore.argv, { cwd: root, input: restore.input });
+          }
+          assertCurrent();
+        },
+      );
     }
     const entry = await patchSessionEntryCore(
       { agentId: params.agentId, sessionKey: initial.canonicalKey, storePath: initial.storePath },

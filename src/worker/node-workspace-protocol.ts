@@ -185,6 +185,7 @@ export function parseNodeWorkerWorkspaceExecInput(
     const token = value.transfer.token;
     const manifestRef = value.transfer.manifestRef;
     const baseManifestRef = value.transfer.baseManifestRef;
+    const referenceManifestRef = value.transfer.referenceManifestRef;
     const validRef = (candidate: unknown): candidate is string =>
       typeof candidate === "string" && /^sha256:[a-f0-9]{64}$/u.test(candidate);
     if (
@@ -198,7 +199,6 @@ export function parseNodeWorkerWorkspaceExecInput(
             ["direction", "token", "manifestRef"],
             ["attachments", "seedKey", "checkpointBaseManifestRef"],
           ) ||
-          !validRef(manifestRef) ||
           (value.transfer.attachments !== undefined && value.transfer.attachments !== true) ||
           (value.transfer.checkpointBaseManifestRef !== undefined &&
             (!validRef(value.transfer.checkpointBaseManifestRef) ||
@@ -211,10 +211,9 @@ export function parseNodeWorkerWorkspaceExecInput(
         : direction === "upload"
           ? !hasExactOwnKeys(
               value.transfer,
-              ["direction", "token", "baseManifestRef"],
+              ["direction", "token", "baseManifestRef", "referenceManifestRef"],
               ["publicationBaseCommit"],
             ) ||
-            !validRef(baseManifestRef) ||
             (value.transfer.publicationBaseCommit !== undefined &&
               (typeof value.transfer.publicationBaseCommit !== "string" ||
                 !/^[a-f0-9]{40}$/u.test(value.transfer.publicationBaseCommit)))
@@ -222,28 +221,34 @@ export function parseNodeWorkerWorkspaceExecInput(
     ) {
       throw new Error("INVALID_REQUEST: workspace transfer is invalid");
     }
-    transfer =
-      direction === "download"
-        ? {
-            direction,
-            token,
-            manifestRef: manifestRef as string,
-            ...(typeof value.transfer.seedKey === "string"
-              ? { seedKey: value.transfer.seedKey }
-              : {}),
-            ...(value.transfer.attachments === true ? { attachments: true } : {}),
-            ...(typeof value.transfer.checkpointBaseManifestRef === "string"
-              ? { checkpointBaseManifestRef: value.transfer.checkpointBaseManifestRef }
-              : {}),
-          }
-        : {
-            direction: "upload",
-            token,
-            baseManifestRef: baseManifestRef as string,
-            ...(typeof value.transfer.publicationBaseCommit === "string"
-              ? { publicationBaseCommit: value.transfer.publicationBaseCommit }
-              : {}),
-          };
+    if (direction === "download") {
+      if (!validRef(manifestRef)) {
+        throw new Error("INVALID_REQUEST: workspace transfer is invalid");
+      }
+      transfer = {
+        direction,
+        token,
+        manifestRef,
+        ...(typeof value.transfer.seedKey === "string" ? { seedKey: value.transfer.seedKey } : {}),
+        ...(value.transfer.attachments === true ? { attachments: true } : {}),
+        ...(typeof value.transfer.checkpointBaseManifestRef === "string"
+          ? { checkpointBaseManifestRef: value.transfer.checkpointBaseManifestRef }
+          : {}),
+      };
+    } else {
+      if (!validRef(baseManifestRef) || !validRef(referenceManifestRef)) {
+        throw new Error("INVALID_REQUEST: workspace transfer is invalid");
+      }
+      transfer = {
+        direction: "upload",
+        token,
+        baseManifestRef,
+        referenceManifestRef,
+        ...(typeof value.transfer.publicationBaseCommit === "string"
+          ? { publicationBaseCommit: value.transfer.publicationBaseCommit }
+          : {}),
+      };
+    }
   }
   return {
     gatewayNamespace,

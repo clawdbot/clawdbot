@@ -20,6 +20,8 @@ import * as secretsRuntime from "../secrets/runtime-state.js";
 import { getSessionRepositoryWorkspaceStore } from "../state/session-repository-workspaces.js";
 import { withOpenClawTestState } from "../test-utils/openclaw-test-state.js";
 import * as githubOAuthLifecycle from "./github-oauth-lifecycle.js";
+import { captureGitHubPublicationWorkspaceSnapshot } from "./github-publication-git-transport.js";
+import { REMOTE_GITHUB_PUBLICATION_SNAPSHOT_JS } from "./github-repository-publication-snapshot.js";
 import { materializeSessionRepositoryWorkspaceOnGateway } from "./session-repository-materialization.js";
 import { stageSessionRepositoryCheckpoint } from "./worker-environments/session-repository-checkpoints.js";
 import { serializeWorkerWorkspaceManifest } from "./worker-environments/workspace-manifest.js";
@@ -166,7 +168,7 @@ describe("explicit repository move to Gateway", () => {
     },
   );
 
-  it.each(["success", "revoked", "postcommit failure"] as const)(
+  it.each(["success", "revoked", "postcommit failure", "publication unavailable"] as const)(
     "retains only committed materialization: %s",
     async (outcome) => {
       await withOpenClawTestState({ label: "repository-materialize" }, async (state) => {
@@ -180,6 +182,8 @@ describe("explicit repository move to Gateway", () => {
         await git(source, ["init", "-b", "main"]);
         await git(source, ["config", "user.name", "OpenClaw Test"]);
         await git(source, ["config", "user.email", "test@example.invalid"]);
+        await fsp.writeFile(path.join(source, ".gitignore"), "*.ignored\n");
+        await fsp.writeFile(path.join(source, ".worktreeinclude"), "retained.ignored\n");
         await fsp.writeFile(path.join(source, "edited.txt"), "base\n");
         await fsp.writeFile(path.join(source, "deleted.txt"), "delete me\n");
         await git(source, ["add", "."]);
@@ -190,10 +194,26 @@ describe("explicit repository move to Gateway", () => {
         const base = await readActualWorkspaceManifest({ root: source, baseCommit });
         const remote = state.path("remote");
         await exec("git", ["clone", "--", source, remote]);
+        await fsp.writeFile(path.join(remote, "published[1].ignored"), "publishable\n");
+        await fsp.writeFile(path.join(remote, "retained.ignored"), "recovery only\n");
+        await git(remote, ["--literal-pathspecs", "add", "-f", "--", "published[1].ignored"]);
         await fsp.writeFile(path.join(remote, "edited.txt"), "accepted\n");
         await fsp.writeFile(path.join(remote, "added.txt"), "new\n");
         await fsp.rm(path.join(remote, "deleted.txt"));
         const current = await readActualWorkspaceManifest({ root: remote, baseCommit });
+        const publicationStagingRoot = state.path("publication-snapshot");
+        const publicationDigest =
+          outcome === "publication unavailable"
+            ? undefined
+            : (
+                await exec(process.execPath, [
+                  "-e",
+                  REMOTE_GITHUB_PUBLICATION_SNAPSHOT_JS,
+                  remote,
+                  baseCommit,
+                  publicationStagingRoot,
+                ])
+              ).stdout.trim();
         const scope = { agentId: "main", sessionKey: "agent:main:dashboard:materialization" };
         const repositories = getSessionRepositoryWorkspaceStore();
         let repository = repositories.create({
@@ -213,6 +233,7 @@ describe("explicit repository move to Gateway", () => {
           workspaceId: repository.workspaceId,
           expectedRevision: repository.revision,
           stagingRoot: remote,
+          ...(publicationDigest ? { publicationStagingRoot, publicationDigest } : {}),
           baseManifestRaw: serializeWorkerWorkspaceManifest(base.manifest),
           currentManifestRaw: serializeWorkerWorkspaceManifest(current.manifest),
           baseManifestRef: base.manifestRef,
@@ -273,6 +294,27 @@ describe("explicit repository move to Gateway", () => {
             code: "ENOENT",
           });
           expect(await git(worktree.path, ["rev-parse", "HEAD"])).toBe(baseCommit);
+          expect(await fsp.readFile(path.join(worktree.path, "published[1].ignored"), "utf8")).toBe(
+            "publishable\n",
+          );
+          expect(await fsp.readFile(path.join(worktree.path, "retained.ignored"), "utf8")).toBe(
+            "recovery only\n",
+          );
+          expect(await git(worktree.path, ["ls-files", "--", "published[1].ignored"])).toBe(
+            publicationDigest ? "published[1].ignored" : "",
+          );
+          expect(await git(worktree.path, ["ls-files", "--", "retained.ignored"])).toBe("");
+          expect(await git(worktree.path, ["diff", "--cached", "--name-only"])).toBe(
+            publicationDigest ? "deleted.txt" : "",
+          );
+          const normalized = await captureGitHubPublicationWorkspaceSnapshot({
+            cwd: worktree.path,
+          });
+          const published = (
+            await git(worktree.path, ["ls-tree", "-r", "--name-only", normalized.workspaceTree])
+          ).split("\n");
+          expect(published.includes("published[1].ignored")).toBe(Boolean(publicationDigest));
+          expect(published).not.toContain("retained.ignored");
           await materializeSessionRepositoryWorkspaceOnGateway({
             ...scope,
             cfg,

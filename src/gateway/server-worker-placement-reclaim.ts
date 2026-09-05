@@ -262,7 +262,7 @@ export function createGatewayWorkerPlacementReclaimBarriers(
           placement?.state !== "reclaimed"
         ) {
           throw new Error(
-            `Session ${sessionKey} has active work; wait before stopping its cloud worker`,
+            `Session ${sessionKey} cannot stop cloud worker from placement ${placement?.state ?? "missing"}`,
           );
         }
         workspace = resolved.workspace;

@@ -182,53 +182,84 @@ it("recovers a published artifact after the acceptance transaction fails, withou
   expect((await snapshot.readEntry(snapshot.changedEntries[0]!)).toString()).toBe("recover me\n");
 });
 
-it("binds normalized publication bytes to the checkpoint and forks into an independent owner", async () => {
-  const { root, remote, store, workspace, stage } = await fixture();
-  await fs.writeFile(path.join(remote, "edit.txt"), "working tree\r\n");
-  const normalized = Buffer.from("working tree\n");
-  const sha = createHash("sha1")
-    .update(`blob ${normalized.length}\0`)
-    .update(normalized)
-    .digest("hex");
-  const publicationStagingRoot = path.join(root, "publication");
-  await fs.mkdir(path.join(publicationStagingRoot, "blobs"), { recursive: true });
-  await fs.writeFile(path.join(publicationStagingRoot, "blobs", sha), normalized);
-  const metadata = JSON.stringify({
-    version: 1,
-    baseCommit,
-    baseTree: "b".repeat(40),
-    workspaceTree: "c".repeat(40),
-    entries: [{ path: "edit.txt", mode: "100644", sha }],
-  });
-  await fs.writeFile(path.join(publicationStagingRoot, "snapshot.json"), metadata);
-  const prepared = await stage("turn-publication", {
-    publicationStagingRoot,
-    publicationDigest: hash(metadata),
-  });
-  await prepared.publish();
-  const fork = await forkSessionRepositoryWorkspace({
-    store,
-    sourceWorkspaceId: workspace.workspaceId,
-    agentId: "main",
-    sessionKey: "agent:main:fork",
-    assertCurrent,
-  });
-  expect(fork.workspaceId).not.toBe(workspace.workspaceId);
-  expect(fork.branch).not.toBe(workspace.branch);
-  await store.delete({ workspaceId: workspace.workspaceId, assertCurrent });
-  await withSessionRepositoryCheckpoint(
-    { store, workspaceId: fork.workspaceId, includePublication: true },
-    async (snapshot) => {
-      expect(await fs.readFile(path.join(snapshot.stagingRoot, "edit.txt"), "utf8")).toBe(
-        "working tree\r\n",
-      );
-      expect(snapshot.publicationDigest).toBe(hash(metadata));
-      expect(
-        await fs.readFile(path.join(snapshot.publicationStagingRoot!, "blobs", sha), "utf8"),
-      ).toBe("working tree\n");
-    },
-  );
-});
+it.each([false, true])(
+  "retains independent raw recovery when the forked publication companion is corrupt: %s",
+  async (corrupt) => {
+    const { root, remote, store, workspace, stage } = await fixture();
+    await fs.writeFile(path.join(remote, "edit.txt"), "working tree\r\n");
+    const normalized = Buffer.from("working tree\n");
+    const sha = createHash("sha1")
+      .update(`blob ${normalized.length}\0`)
+      .update(normalized)
+      .digest("hex");
+    const publicationStagingRoot = path.join(root, "publication");
+    await fs.mkdir(path.join(publicationStagingRoot, "blobs"), { recursive: true });
+    await fs.writeFile(path.join(publicationStagingRoot, "blobs", sha), normalized);
+    const metadata = JSON.stringify({
+      version: 1,
+      baseCommit,
+      baseTree: "b".repeat(40),
+      workspaceTree: "c".repeat(40),
+      entries: [{ path: "edit.txt", mode: "100644", sha }],
+    });
+    await fs.writeFile(path.join(publicationStagingRoot, "snapshot.json"), metadata);
+    const prepared = await stage("turn-publication", {
+      publicationStagingRoot,
+      publicationDigest: hash(metadata),
+    });
+    await prepared.publish();
+    const fork = await forkSessionRepositoryWorkspace({
+      store,
+      sourceWorkspaceId: workspace.workspaceId,
+      agentId: "main",
+      sessionKey: "agent:main:fork",
+      assertCurrent,
+    });
+    expect(fork.workspaceId).not.toBe(workspace.workspaceId);
+    expect(fork.branch).not.toBe(workspace.branch);
+    await store.delete({ workspaceId: workspace.workspaceId, assertCurrent });
+    if (corrupt) {
+      const artifact = store.artifactPath(fork.workspaceId);
+      const companion = await requireWorkspaceResultGit(artifact, [
+        "for-each-ref",
+        "--format=%(refname)",
+        "refs/openclaw/worker-results/publication-*",
+      ]);
+      expect(companion).not.toBe("");
+      await requireWorkspaceResultGit(artifact, ["update-ref", companion, fork.checkpointRef!]);
+    }
+    let reads = 0;
+    await withSessionRepositoryCheckpoint(
+      { store, workspaceId: fork.workspaceId, includePublication: true },
+      async (snapshot) => {
+        reads += 1;
+        expect(await fs.readFile(path.join(snapshot.stagingRoot, "edit.txt"), "utf8")).toBe(
+          "working tree\r\n",
+        );
+        if (corrupt) {
+          expect(snapshot.publicationStagingRoot).toBeUndefined();
+          expect(snapshot.publicationDigest).toBeUndefined();
+        } else {
+          expect(snapshot.publicationDigest).toBe(hash(metadata));
+          expect(
+            await fs.readFile(path.join(snapshot.publicationStagingRoot!, "blobs", sha), "utf8"),
+          ).toBe("working tree\n");
+        }
+      },
+    );
+    expect(reads).toBe(1);
+    await expect(
+      withSessionRepositoryCheckpoint(
+        { store, workspaceId: fork.workspaceId, includePublication: true },
+        async () => {
+          reads += 1;
+          throw new Error("consumer failed after starting");
+        },
+      ),
+    ).rejects.toThrow("consumer failed after starting");
+    expect(reads).toBe(2);
+  },
+);
 
 it("accepts raw recovery files when a publication blob fails validation", async () => {
   const { root, remote, store, workspace, stage } = await fixture();

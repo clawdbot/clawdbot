@@ -39,8 +39,8 @@ export function createWorkerWorkspaceReconcileRequest(params: {
       baseManifestRef,
     };
   }
-  if (!workspace.repository.baseManifestHash) {
-    throw new Error("Repository workspace has no pinned source baseline");
+  if (!workspace.repository.baseManifestHash || !workspace.repository.manifestHash) {
+    throw new Error("Repository workspace has no accepted source manifest");
   }
   return {
     remoteWorkspaceDir,
@@ -49,6 +49,7 @@ export function createWorkerWorkspaceReconcileRequest(params: {
     baseManifestRef: workspace.repository.baseManifestHash,
     source: {
       kind: "repository",
+      referenceManifestRef: workspace.repository.manifestHash,
       prepareCheckpoint: async (payload) => {
         const prepared = await stageSessionRepositoryCheckpoint({
           ...payload,

@@ -129,27 +129,45 @@ export async function withSessionRepositoryCheckpoint<T>(
     if (ref === workspace.checkpointRef && snapshot.currentManifestRef !== workspace.manifestHash) {
       throw new Error("Repository checkpoint differs from its accepted manifest");
     }
-    const companion = publicationRef(ref);
-    if (!params.includePublication || !(await refObject(root, companion))) {
+    if (!params.includePublication) {
       return await use(snapshot);
     }
-    return await withStagedWorkerWorkspaceResult(
-      { root, stagedResultRef: companion },
-      async (publication) => {
-        const binding = await publicationBinding(
-          publication.stagingRoot,
-          snapshot.currentManifestRef,
-        );
-        if (binding.snapshot.baseCommit !== workspace.baseCommit) {
-          throw new Error("Repository publication checkpoint base changed");
-        }
-        return await use({
-          ...snapshot,
-          publicationStagingRoot: publication.stagingRoot,
-          publicationDigest: binding.publicationDigest,
-        });
-      },
-    );
+    let useStarted = false;
+    try {
+      const companion = publicationRef(ref);
+      if (!(await refObject(root, companion))) {
+        useStarted = true;
+        return await use(snapshot);
+      }
+      return await withStagedWorkerWorkspaceResult(
+        { root, stagedResultRef: companion },
+        async (publication) => {
+          const binding = await publicationBinding(
+            publication.stagingRoot,
+            snapshot.currentManifestRef,
+          );
+          if (binding.snapshot.baseCommit !== workspace.baseCommit) {
+            throw new Error("Repository publication checkpoint base changed");
+          }
+          useStarted = true;
+          return await use({
+            ...snapshot,
+            publicationStagingRoot: publication.stagingRoot,
+            publicationDigest: binding.publicationDigest,
+          });
+        },
+      );
+    } catch (error) {
+      // Optional publication corruption cannot discard verified recovery bytes.
+      // Once the consumer starts, its failures and effects must propagate unchanged.
+      if (useStarted) {
+        throw error;
+      }
+      workspaceLog.warn(
+        `Repository publication checkpoint unavailable: ${boundedWorkerError(error)}`,
+      );
+      return await use(snapshot);
+    }
   });
 }
 

@@ -2,7 +2,7 @@ import { createHash } from "node:crypto";
 import path from "node:path";
 import { isRecord } from "@openclaw/normalization-core/record-coerce";
 import { root as fsRoot } from "../infra/fs-safe.js";
-import { githubPublicationUnsafeConfigArgs } from "./github-publication-base.js";
+import { GITHUB_PUBLICATION_CONFIG_GUARD_JS } from "./github-publication-base.js";
 import {
   MAX_RECONCILIATION_ENTRIES,
   MAX_RECONCILIATION_FILE_BYTES,
@@ -61,15 +61,7 @@ const relativeOutput = path.relative(path.resolve(cwd), path.resolve(output));
 if (!relativeOutput.startsWith(".." + path.sep) && !path.isAbsolute(relativeOutput)) {
   throw Error("Publication snapshot output must be outside the workspace");
 }
-for (const scope of ["--local", "--worktree"]) {
-  const result = spawnSync("git", ["config", scope, "--includes", "--get-regexp",
-    ${JSON.stringify(githubPublicationUnsafeConfigArgs("--local").at(-1))}], {
-    cwd, env, timeout: 60000, maxBuffer: maxFile,
-  });
-  if (result.error || result.status !== 1 || result.stdout.length) {
-    throw Error("Publication snapshot has unsupported Git transport configuration");
-  }
-}
+${GITHUB_PUBLICATION_CONFIG_GUARD_JS}
 if (text(["for-each-ref", "--count=1", "--format=%(refname)", "refs/replace"])) {
   throw Error("Publication snapshot has unsupported Git replacement metadata");
 }
@@ -86,9 +78,11 @@ try {
   env.GIT_INDEX_FILE = path.join(temporary, "index");
   // Keep explicitly staged ignored paths and cached removals; normalize only the copy.
   fs.copyFileSync(index, env.GIT_INDEX_FILE);
-  // Drop copied stat caches; unresolved merge stages cannot define an accepted tree.
-  git(["read-tree", text(["write-tree"])]);
+  // Unresolved merge stages cannot define an accepted tree.
+  git(["write-tree"]);
   git(["add", "-A"]);
+  // Normalize after removals, retaining intent-to-add paths and ignoring copied stat caches.
+  git(["add", "--renormalize", "-u"]);
   const workspaceTree = text(["write-tree"]);
   const baseTree = text(["rev-parse", baseCommit + "^{tree}"]);
   const attributes = git(["ls-tree", "-r", "-z", "--full-tree", workspaceTree]);
