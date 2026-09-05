@@ -493,6 +493,48 @@ describe("Anthropic Agent SDK runtime ownership", () => {
     expect(queryMock.mock.calls[0]?.[0]?.prompt).toBe("Remember the launch code.");
   });
 
+  it("uses the identity-resolved executable path on Windows", async () => {
+    const result = { ...SUCCESS_RESULT, result: "Launch code remembered." };
+    useSdkMessages([result]);
+    const winPath =
+      "C:\\Users\\test\\AppData\\Roaming\\npm\\node_modules\\@anthropic-ai\\claude-code\\claude.exe";
+    const context = createContext({
+      command: "claude",
+      executableIdentity: {
+        command: "claude",
+        resolvedPath: "C:\\Users\\test\\AppData\\Roaming\\npm\\claude.cmd",
+        invocation: { command: winPath, leadingArgv: [], resolution: "exe-entrypoint" },
+        files: [],
+        runtimeArtifact: { kind: "self-contained-executable" },
+      },
+    });
+    const originalPlatform = process.platform;
+    Object.defineProperty(process, "platform", { value: "win32" });
+    try {
+      expect(await collect(context)).toContainEqual(result);
+      expect(sdkOptions().pathToClaudeCodeExecutable).toBe(winPath);
+    } finally {
+      Object.defineProperty(process, "platform", { value: originalPlatform });
+    }
+  });
+
+  it("uses the bare command path on non-Windows platforms", async () => {
+    const result = { ...SUCCESS_RESULT, result: "Launch code remembered." };
+    useSdkMessages([result]);
+    const context = createContext({
+      command: "/usr/local/bin/claude",
+      executableIdentity: {
+        command: "claude",
+        resolvedPath: "/usr/local/bin/claude",
+        invocation: { command: "/usr/local/bin/claude", leadingArgv: [], resolution: "direct" },
+        files: [],
+        runtimeArtifact: { kind: "self-contained-executable" },
+      },
+    });
+    expect(await collect(context)).toContainEqual(result);
+    expect(sdkOptions().pathToClaudeCodeExecutable).toBe("/usr/local/bin/claude");
+  });
+
   it.each([
     {
       name: "the caller's cancellation reason",
