@@ -3678,8 +3678,8 @@ src/talk/agent-consult-tool.ts	2
 src/talk/agent-run-control-shared.ts	4
 src/talk/client-voice-confirmation.ts	2
 src/talk/client-voice-mutation-digest-owner.ts	1
-src/talk/client-voice-session-store.ts	3
-src/talk/client-voice-session.ts	3
+src/talk/client-voice-session-store.ts	1
+src/talk/client-voice-session.ts	1
 src/talk/consult-question.ts	2
 src/talk/exact-speech-protocol.ts	1
 src/talk/provider-internal.ts	2
