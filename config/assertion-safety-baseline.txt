@@ -2092,7 +2092,7 @@ src/auto-reply/command-auth.ts	3
 src/auto-reply/command-turn-context.ts	1
 src/auto-reply/commands-registry.ts	1
 src/auto-reply/heartbeat-filter.ts	4
-src/auto-reply/heartbeat-tool-response.ts	3
+src/auto-reply/heartbeat-tool-response.ts	2
 src/auto-reply/reply-payload.ts	2
 src/auto-reply/reply.directive.directive-behavior.e2e-mocks.ts	1
 src/auto-reply/reply/acp-reset-target.ts	2
