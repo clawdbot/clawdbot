@@ -28,7 +28,7 @@ async function githubJson(route: string, token: string, fetchImpl: typeof fetch)
 
 export async function assertCurrentTelegramRequest(
   identity: Identity,
-  options: { token: string; fetchImpl?: typeof fetch },
+  options: { token: string; workflowRef?: string; fetchImpl?: typeof fetch },
 ) {
   const fetchImpl = options.fetchImpl ?? fetch;
   if (identity.run.attempt !== 1) {
@@ -54,9 +54,13 @@ export async function assertCurrentTelegramRequest(
       ),
     );
   const title = `Mantis Telegram request [${identity.request_id}]`;
+  const workflowBranch = options.workflowRef?.startsWith("refs/heads/")
+    ? options.workflowRef.slice("refs/heads/".length)
+    : undefined;
   if (
     String(workflowRun.id) !== identity.run.id ||
-    workflowRun.path !== identity.workflow.path ||
+    (workflowRun.path !== identity.workflow.path &&
+      (!workflowBranch || workflowRun.path !== `${identity.workflow.path}@${workflowBranch}`)) ||
     workflowRun.head_sha !== identity.workflow.sha ||
     workflowRun.display_title !== title ||
     String(workflowRun.repository.id) !== identity.repository.id ||

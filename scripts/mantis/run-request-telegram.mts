@@ -231,7 +231,10 @@ async function run() {
   const ready = await preflight(candidate, image).catch((error: unknown) => {
     throw new TelegramProofStageError("runtime-preflight", error);
   });
-  const admissionOptions = { token: process.env.GH_TOKEN ?? "" };
+  const admissionOptions = {
+    token: process.env.GH_TOKEN ?? "",
+    workflowRef: process.env.GITHUB_REF,
+  };
   await assertCurrentTelegramRequest(identity, admissionOptions).catch((error: unknown) => {
     throw new TelegramProofStageError("request-admission-before-lease", error);
   });

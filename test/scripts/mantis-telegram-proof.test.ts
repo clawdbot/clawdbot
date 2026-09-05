@@ -949,7 +949,9 @@ describe("Telegram live-send admission", () => {
     repository: { id: 1 },
     head_repository: { id: 1 },
   };
-  const request = async (options: { staleRead?: number; attempt?: number } = {}) => {
+  const request = async (
+    options: { staleRead?: number; attempt?: number; runPath?: string; workflowRef?: string } = {},
+  ) => {
     const subject = telegramProofIdentitySchema.parse({
       ...identity,
       run: { ...identity.run, attempt: options.attempt ?? 1 },
@@ -959,7 +961,7 @@ describe("Telegram live-send admission", () => {
       const url =
         input instanceof URL ? input : new URL(typeof input === "string" ? input : input.url);
       if (url.pathname.endsWith("/actions/runs/2/attempts/1")) {
-        return Response.json(run);
+        return Response.json({ ...run, path: options.runPath ?? run.path });
       }
       if (url.pathname.endsWith("/pulls/1")) {
         pullReads += 1;
@@ -973,7 +975,11 @@ describe("Telegram live-send admission", () => {
       }
       throw new Error(`Unexpected admission URL: ${url}`);
     };
-    return assertCurrentTelegramRequest(subject, { token: "test-token", fetchImpl });
+    return assertCurrentTelegramRequest(subject, {
+      token: "test-token",
+      workflowRef: options.workflowRef,
+      fetchImpl,
+    });
   };
 
   it("binds attempt one and rechecks the exact PR head after awaited admission reads", async () => {
@@ -981,6 +987,24 @@ describe("Telegram live-send admission", () => {
     await expect(request({ staleRead: 1 })).rejects.toThrow(/no longer current/);
     await expect(request({ staleRead: 2 })).rejects.toThrow(/no longer current/);
     await expect(request({ attempt: 2 })).rejects.toThrow(/expected 1/);
+  });
+
+  it("accepts only a plain path or a qualifier matching the trusted workflow branch", async () => {
+    const workflowRef = "refs/heads/qa-proof";
+    await expect(request({ workflowRef })).resolves.toBeUndefined();
+    await expect(
+      request({ workflowRef, runPath: `${run.path}@qa-proof` }),
+    ).resolves.toBeUndefined();
+    for (const qualifier of ["", "other", identity.candidate_sha]) {
+      await expect(request({ workflowRef, runPath: `${run.path}@${qualifier}` })).rejects.toThrow(
+        /does not match/,
+      );
+    }
+    for (const missingOrTagRef of [undefined, "refs/heads/", "refs/tags/qa-proof"]) {
+      await expect(
+        request({ workflowRef: missingOrTagRef, runPath: `${run.path}@qa-proof` }),
+      ).rejects.toThrow(/does not match/);
+    }
   });
 });
 
