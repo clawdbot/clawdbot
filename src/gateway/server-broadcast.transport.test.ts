@@ -1,5 +1,6 @@
 import { getEventListeners, once } from "node:events";
 import type { AddressInfo } from "node:net";
+import { rawDataToString } from "@openclaw/gateway-client/websocket-data";
 import { describe, expect, it, vi } from "vitest";
 import { WebSocket, WebSocketServer } from "ws";
 import { createGatewayBroadcaster } from "./server-broadcast.js";
@@ -32,7 +33,13 @@ function clientFor(connId: string, socket: WebSocket): GatewayWsClient {
 function controlledPeer(connId: string) {
   const callbacks: Array<(error?: Error) => void> = [];
   const frames: Array<{ seq: number; payload: unknown }> = [];
-  const socket = {
+  const socket: {
+    readyState: WebSocket["readyState"];
+    bufferedAmount: number;
+    close: ReturnType<typeof vi.fn>;
+    terminate: ReturnType<typeof vi.fn>;
+    send: ReturnType<typeof vi.fn<(wire: string, callback: (error?: Error) => void) => void>>;
+  } = {
     readyState: WebSocket.OPEN,
     bufferedAmount: 0,
     close: vi.fn(),
@@ -81,7 +88,7 @@ describe("broadcast transport retirement", () => {
       ]);
       const { broadcast, getBufferedAmount } = createGatewayBroadcaster({ clients });
       const received: Array<{ seq: number; payload: { index: number } }> = [];
-      healthy.peer.on("message", (data) => received.push(JSON.parse(data.toString())));
+      healthy.peer.on("message", (data) => received.push(JSON.parse(rawDataToString(data))));
       const owner = new AbortController();
       sendError.mockClear();
       const terminate = vi.spyOn(broken.socket, "terminate");
