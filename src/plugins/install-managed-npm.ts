@@ -80,6 +80,11 @@ import {
   relinkOpenClawPeerDependenciesInManagedNpmRoot,
 } from "./plugin-peer-link.js";
 
+import {
+  buildPluginDependencyStatus,
+  normalizePluginDependencySpecs,
+} from "./status-dependencies-core.js";
+
 export async function installPluginFromManagedNpmRoot(
   params: InstallSafetyOverrides & {
     packageName: string;
@@ -532,6 +537,17 @@ export async function installPluginFromManagedNpmRoot(
       return {
         ok: false,
         error: `npm install metadata remained incomplete after managed npm project recovery (quarantine: ${recovery.quarantine.quarantineDir}): ${resolutionVerification.error}`,
+      };
+    }
+
+    const dependencyStatus = buildPluginDependencyStatus({
+      rootDir: installRoot,
+      ...normalizePluginDependencySpecs(packageManifestResult.manifest ?? {}),
+    });
+    if (!dependencyStatus.requiredInstalled) {
+      return {
+        ok: false,
+        error: `npm install reported success but left required dependencies missing for ${params.packageName}: ${dependencyStatus.missing.join(", ")}`,
       };
     }
 
