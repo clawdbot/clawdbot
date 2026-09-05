@@ -161,6 +161,8 @@ beforeAll(async () => {
   process.env.OPENCLAW_GATEWAY_PORT = String(gatewayPort);
   process.env.OPENCLAW_GATEWAY_TOKEN = gatewayToken;
   server = await startTestGatewayServer(gatewayPort);
+  // Prepare the real history handler before the RPC deadline starts.
+  await import("./server-methods/chat.js");
 });
 
 beforeEach(async () => {
