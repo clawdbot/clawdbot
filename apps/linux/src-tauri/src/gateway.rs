@@ -312,8 +312,14 @@ mod dashboard_tests {
 }
 
 fn run_service_command(cli: &OpenClawCli, action: &str) -> Result<(), String> {
+    // A native Stop click supplies operator consent. Restart's --force would
+    // instead bypass draining and must remain unset.
     let response = cli
-        .json::<CommandResponse, _, _>(["gateway", action, "--json"])
+        .json::<CommandResponse, _, _>(
+            ["gateway", action, "--json"]
+                .into_iter()
+                .chain((action == "stop").then_some("--force")),
+        )
         .map_err(|error| error.to_string())?;
     if response.ok {
         return Ok(());

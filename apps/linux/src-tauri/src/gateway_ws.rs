@@ -1785,7 +1785,14 @@ mod tests {
                     r#"#!/bin/sh
 case "$*" in
   --version) echo '0.0.0-test' ;;
-  'gateway status --json') echo '{"service":{"loaded":true,"runtime":{"status":"running"}},"rpc":{"ok":true}}' ;;
+  'gateway status --json')
+    if test -f "$(dirname "$0")/stopped"; then
+      echo '{"service":{"loaded":true,"runtime":{"status":"stopped"}},"rpc":{"ok":false}}'
+    else
+      echo '{"service":{"loaded":true,"runtime":{"status":"running"}},"rpc":{"ok":true}}'
+    fi ;;
+  'gateway stop --json --force') touch "$(dirname "$0")/stopped"; echo '{"ok":true}' ;;
+  'gateway start --json'|'gateway restart --json') rm -f "$(dirname "$0")/stopped"; echo '{"ok":true}' ;;
   'dashboard --json --no-open') cat "$(dirname "$0")/dashboard.json" ;;
   *) echo 'Unexpected CLI invocation' >&2; exit 1 ;;
 esac
@@ -1818,6 +1825,23 @@ esac
                     None => std::env::remove_var("OPENCLAW_DESKTOP_CLI"),
                 }
                 let _ = fs::remove_dir_all(&self.directory);
+            }
+        }
+
+        #[test]
+        fn gateway_actions_supply_stop_consent_without_forcing_restart() {
+            let _fixture = CliFixture::new();
+            let cli = OpenClawCli::discover().expect("discover fixture CLI");
+            for action in [
+                gateway::GatewayAction::Stop,
+                gateway::GatewayAction::Start,
+                gateway::GatewayAction::Restart,
+                gateway::GatewayAction::Stop,
+            ] {
+                let snapshot = gateway::act(&cli, action).expect("CLI accepts desktop action");
+                let running = !matches!(action, gateway::GatewayAction::Stop);
+                assert_eq!(snapshot.running, running);
+                assert_eq!(snapshot.reachable, running);
             }
         }
 
