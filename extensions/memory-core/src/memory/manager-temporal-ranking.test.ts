@@ -24,6 +24,7 @@ describe("memory source temporal ranking", () => {
       lexicalOnly: false,
       archived: false,
       ftsUnavailable: false,
+      zeroScoreLike: false,
     },
     {
       name: "lexical recall",
@@ -31,6 +32,7 @@ describe("memory source temporal ranking", () => {
       lexicalOnly: true,
       archived: false,
       ftsUnavailable: false,
+      zeroScoreLike: false,
     },
     {
       name: "hybrid",
@@ -38,6 +40,7 @@ describe("memory source temporal ranking", () => {
       lexicalOnly: false,
       archived: false,
       ftsUnavailable: false,
+      zeroScoreLike: false,
     },
     {
       name: "retained archives",
@@ -45,6 +48,7 @@ describe("memory source temporal ranking", () => {
       lexicalOnly: false,
       archived: true,
       ftsUnavailable: false,
+      zeroScoreLike: false,
     },
     {
       name: "FTS unavailable",
@@ -52,10 +56,19 @@ describe("memory source temporal ranking", () => {
       lexicalOnly: false,
       archived: false,
       ftsUnavailable: true,
+      zeroScoreLike: false,
+    },
+    {
+      name: "LIKE-only hybrid",
+      provider: "openai",
+      lexicalOnly: false,
+      archived: false,
+      ftsUnavailable: false,
+      zeroScoreLike: true,
     },
   ])(
     "decays SQLite session hits by recorded source activity through $name",
-    async ({ provider, lexicalOnly, archived, ftsUnavailable }) => {
+    async ({ provider, lexicalOnly, archived, ftsUnavailable, zeroScoreLike }) => {
       fixture.provider.forceNoProvider = provider === "none";
       const cfg = fixture.createConfig({
         provider,
@@ -63,6 +76,7 @@ describe("memory source temporal ranking", () => {
         sessionMemory: true,
         minScore: 0,
         vectorEnabled: false,
+        ftsTokenizer: zeroScoreLike ? "trigram" : "unicode61",
       });
       const now = Date.now();
       const oldSession = {
@@ -81,7 +95,9 @@ describe("memory source temporal ranking", () => {
           messages: [
             {
               role: "user",
-              content: "Alpha cobalt orchid tidepool preference.",
+              content: zeroScoreLike
+                ? "记忆 彩色 潮池 偏好。"
+                : "Alpha cobalt orchid tidepool preference.",
               timestamp: now - 60 * DAY_MS,
             },
           ],
@@ -145,7 +161,7 @@ describe("memory source temporal ranking", () => {
         minScore: 0,
         lexicalOnly,
       };
-      const query = "alpha cobalt orchid tidepool preference";
+      const query = zeroScoreLike ? "记忆" : "alpha cobalt orchid tidepool preference";
       const search = () => manager.search(query, { ...searchOptions, sources: ["sessions"] });
       const expectSourceRecency = (results: MemorySearchResult[]) => {
         const old = results.find((entry) => entry.path === `sessions/main/${oldSession.fileName}`);
@@ -157,7 +173,14 @@ describe("memory source temporal ranking", () => {
         if (!old || !fresh) {
           throw new Error("Expected both indexed session sources");
         }
-        expect(old.score / fresh.score).toBeCloseTo(Math.SQRT1_2, 5);
+        if (zeroScoreLike) {
+          expect(results).toEqual([
+            expect.objectContaining({ score: 0, vectorScore: 0, textScore: 0 }),
+            expect.objectContaining({ score: 0, vectorScore: 0, textScore: 0 }),
+          ]);
+        } else {
+          expect(old.score / fresh.score).toBeCloseTo(Math.SQRT1_2, 5);
+        }
         expect(results[0]?.path).toBe(fresh.path);
         expect(results.every((entry) => entry.provenance?.observedAt === now - 60 * DAY_MS)).toBe(
           true,
