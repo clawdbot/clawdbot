@@ -1,6 +1,7 @@
 // Collects core dependency status for plugin diagnostics.
 import fs from "node:fs";
 import path from "node:path";
+import { isPathInside, safeRealpathSync } from "./path-safety.js";
 
 /** Dependency name-to-version map from a plugin package manifest. */
 export type PluginDependencySpecMap = Record<string, string>;
@@ -88,15 +89,32 @@ function dependencyPathSegments(name: string): string[] | null {
   return null;
 }
 
-function findDependencyPackageDir(params: { fromDir: string; name: string }): string | undefined {
+function findDependencyPackageDir(params: {
+  fromDir: string;
+  name: string;
+  dependencyRootDir?: string;
+}): string | undefined {
   const segments = dependencyPathSegments(params.name);
   if (!segments) {
     return undefined;
   }
+  const boundaryRoot =
+    params.dependencyRootDir === undefined
+      ? undefined
+      : (safeRealpathSync(params.dependencyRootDir) ?? path.resolve(params.dependencyRootDir));
   let current = path.resolve(params.fromDir);
-  while (true) {
+  if (boundaryRoot) {
+    current = safeRealpathSync(current) ?? current;
+  }
+  while (!boundaryRoot || isPathInside(boundaryRoot, current)) {
     const candidate = path.join(current, "node_modules", ...segments);
     if (fs.existsSync(path.join(candidate, "package.json"))) {
+      if (boundaryRoot) {
+        const resolved = safeRealpathSync(candidate);
+        if (!resolved || !isPathInside(boundaryRoot, resolved)) {
+          return undefined;
+        }
+      }
       return candidate;
     }
     const parent = path.dirname(current);
@@ -105,10 +123,12 @@ function findDependencyPackageDir(params: { fromDir: string; name: string }): st
     }
     current = parent;
   }
+  return undefined;
 }
 
 function buildDependencyEntries(params: {
   rootDir: string | undefined;
+  dependencyRootDir?: string;
   dependencies: PluginDependencySpecMap;
   optional: boolean;
 }): PluginDependencyEntry[] {
@@ -116,7 +136,11 @@ function buildDependencyEntries(params: {
     .toSorted(([left], [right]) => left.localeCompare(right))
     .map(([name, spec]) => {
       const resolvedPath = params.rootDir
-        ? findDependencyPackageDir({ fromDir: params.rootDir, name })
+        ? findDependencyPackageDir({
+            fromDir: params.rootDir,
+            name,
+            dependencyRootDir: params.dependencyRootDir,
+          })
         : undefined;
       const entry: PluginDependencyEntry = {
         name,
@@ -134,16 +158,20 @@ function buildDependencyEntries(params: {
 /** Builds dependency installation status for a plugin package root. */
 export function buildPluginDependencyStatus(params: {
   rootDir?: string;
+  /** Confines managed dependency lookup and symlink targets to this project root. */
+  dependencyRootDir?: string;
   dependencies?: PluginDependencySpecMap;
   optionalDependencies?: PluginDependencySpecMap;
 }): PluginDependencyStatus {
   const dependencies = buildDependencyEntries({
     rootDir: params.rootDir,
+    dependencyRootDir: params.dependencyRootDir,
     dependencies: params.dependencies ?? {},
     optional: false,
   });
   const optionalDependencies = buildDependencyEntries({
     rootDir: params.rootDir,
+    dependencyRootDir: params.dependencyRootDir,
     dependencies: params.optionalDependencies ?? {},
     optional: true,
   });
