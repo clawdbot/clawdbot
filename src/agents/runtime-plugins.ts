@@ -157,9 +157,12 @@ export async function withAgentPluginRegistry<T>(params: {
       : { metadataSnapshot: loadPluginMetadataSnapshot(params) }),
   });
   const pluginRegistry = loadAgentRuntimePluginRegistryHandle({
+    // An ingress without a request registry inherits the configured plugin scope through the
+    // metadata/active-id fallback chain. An explicit empty base here would defeat that chain
+    // and silently drop enabled hook-only plugins from the run (issue #138368).
     basePluginIds: requestPluginRegistry
       ? listRuntimePluginIdsFromRegistry(requestPluginRegistry)
-      : [],
+      : undefined,
     config: params.config,
     env: context.env,
     metadataSnapshot: context.metadataSnapshot,
