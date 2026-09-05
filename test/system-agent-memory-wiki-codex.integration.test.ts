@@ -22,12 +22,12 @@ import {
 import { readStringValue } from "openclaw/plugin-sdk/string-coerce-runtime";
 import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 import {
-  codexRunAttemptTempDir,
-  createCodexRunAttemptParamsForTest,
-  createCodexStartedThreadHarnessForTest,
-  runCodexAppServerAttemptForTest,
-  setupCodexRunAttemptTestHooks,
-} from "../extensions/codex/test-api.js";
+  createParams as createCodexRunAttemptParamsForTest,
+  createStartedThreadHarness as createCodexStartedThreadHarnessForTest,
+  runCodexAppServerAttempt as runCodexAppServerAttemptForTest,
+  setupRunAttemptTestHooks as setupCodexRunAttemptTestHooks,
+  tempDir as codexRunAttemptTempDir,
+} from "../extensions/codex/src/app-server/run-attempt-test-harness.js";
 import type { OpenClawConfig } from "../extensions/memory-wiki/api.js";
 import {
   activateExistingMemoryWikiVault,
