@@ -1,6 +1,6 @@
 {
   "name": "@openclaw/senseaudio-provider",
-  "version": "2026.9.2",
+  "version": "2026.9.3",
   "private": true,
   "description": "OpenClaw SenseAudio media-understanding provider",
   "type": "module",

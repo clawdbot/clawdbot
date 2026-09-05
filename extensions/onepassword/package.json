@@ -1,6 +1,6 @@
 {
   "name": "@openclaw/onepassword",
-  "version": "2026.9.2",
+  "version": "2026.9.3",
   "private": true,
   "description": "1Password SecretRef resolver and audited agent secrets broker for OpenClaw",
   "type": "module",
