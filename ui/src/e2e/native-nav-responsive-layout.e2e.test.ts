@@ -190,6 +190,26 @@ suite.define(() => {
       )
       .toEqual([12, 12, 12]);
 
+    // One rail, one gap: adjacent controls touch in both directions, so no
+    // button carries a private optical offset left over from a bordered box.
+    const controlGaps = () =>
+      sidebarBrand
+        .locator(".sidebar-brand__collapse, .sidebar-brand__search, .sidebar-brand__new-thread")
+        .evaluateAll((actions) => {
+          const [first, ...rest] = actions.map((action) => action.getBoundingClientRect());
+          if (!first) {
+            return [];
+          }
+          let previous = first;
+          return rest.map((box) => {
+            const gap = Math.round(Math.max(box.left - previous.right, previous.left - box.right));
+            previous = box;
+            return gap;
+          });
+        });
+
+    await expect.poll(controlGaps).toEqual([0, 0]);
+
     const actionInset = async (direction: "ltr" | "rtl") => {
       const [brandBox, actionsBox] = await Promise.all([
         sidebarBrand.boundingBox(),
@@ -214,6 +234,7 @@ suite.define(() => {
       document.documentElement.dir = "rtl";
     });
     await expect.poll(() => actionInset("rtl")).toBe(0);
+    await expect.poll(controlGaps).toEqual([0, 0]);
     await expect.poll(nameFade).toEqual(["8px", "0px", expect.stringContaining("270deg")]);
   });
 

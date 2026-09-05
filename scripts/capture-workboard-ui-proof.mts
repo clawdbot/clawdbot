@@ -62,8 +62,8 @@ try {
   await page.goto(new URL("/dashboard", baseUrl).toString());
   const widget = page.locator('[data-test-id="workboard-board-widget"]');
   await widget.waitFor();
-  await page.getByText("Validate onboarding flow", { exact: true }).waitFor();
-  await page.getByText("Review accessibility audit", { exact: true }).waitFor();
+  await widget.getByRole("heading", { name: "Validate onboarding flow", exact: true }).waitFor();
+  await widget.getByRole("heading", { name: "Review accessibility audit", exact: true }).waitFor();
   await page.locator(".board-session-surface--dock-hidden").waitFor();
   const columnCount = await widget.locator(".workboard-column").count();
   if (columnCount !== 6) {

@@ -80,9 +80,13 @@ export function renderNewSessionTerminalHost(params: {
         }
       }}
     >
-      ${!params.hosts.some((host) => host.hostId === params.hostId)
-        ? html`<option value=${params.hostId} disabled>${t("newSession.chooseNativeHost")}</option>`
-        : nothing}
+      ${
+        !params.hosts.some((host) => host.hostId === params.hostId)
+          ? html`<option value=${params.hostId} disabled>
+              ${t("newSession.chooseNativeHost")}
+            </option>`
+          : nothing
+      }
       ${params.hosts.map((host) => html`<option value=${host.hostId}>${host.label}</option>`)}
     </select>
     <button

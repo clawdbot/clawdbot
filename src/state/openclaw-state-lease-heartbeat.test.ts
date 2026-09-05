@@ -106,6 +106,34 @@ describe("maintenance lease heartbeat", () => {
     });
   });
 
+  it("accepts published readiness when the parent notification is withheld", async () => {
+    await withOpenClawTestState({ label: "maintenance-lease-delayed-ready" }, async (state) => {
+      const spawned = new Promise<Worker>((resolve) => {
+        process.once("worker", resolve);
+      });
+      const operation = withOpenClawStateLease(
+        { ...options(state.env), leaseMs: 10_000 },
+        async (lease) => {
+          lease.assertOwned();
+          return "maintained";
+        },
+      );
+      const worker = await spawned;
+      try {
+        expect(worker.listenerCount("message")).toBe(1);
+        // Withhold only the owner's notification; the real worker still renews
+        // and publishes ready before our observer sees its startup message.
+        worker.removeAllListeners("message");
+        await Promise.race([once(worker, "message"), operation]);
+        await expect(operation).resolves.toBe("maintained");
+        expect(readLease(state.env)).toBeUndefined();
+      } finally {
+        await worker.terminate();
+        await operation.catch(() => {});
+      }
+    });
+  });
+
   it.each(["replacement", "expiry", "deletion"] as const)(
     "does not resurrect ownership after %s",
     async (failure) => {

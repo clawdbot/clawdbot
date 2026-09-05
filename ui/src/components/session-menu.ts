@@ -34,10 +34,12 @@ export type SessionMenuWork = {
 export type SessionMenuAction =
   | SessionManagementAction
   | { kind: "open-pr"; url: string }
-  | { kind: "workboard" }
+  | { kind: "plugin"; id: string }
   | { kind: "stop-cloud-worker" };
 
 export type SessionMenuActionKind = SessionMenuAction["kind"];
+
+export type PluginSessionMenuAction = { id: string; label: string; disabled?: boolean };
 
 class SessionMenu extends OpenClawLightDomElement {
   @property({ attribute: false }) session: SessionMenuData = EMPTY_SESSION_MENU_DATA;
@@ -64,7 +66,7 @@ class SessionMenu extends OpenClawLightDomElement {
   @property({ attribute: false }) groups: readonly string[] = [];
   @property({ attribute: false }) currentOwner: SessionCreatedActor | null = null;
   @property({ attribute: false }) work: SessionMenuWork | null = null;
-  @property({ attribute: false }) workboard: { captured: boolean; busy: boolean } | null = null;
+  @property({ attribute: false }) pluginActions: readonly PluginSessionMenuAction[] = [];
   @property({ attribute: false }) onAction: (action: SessionMenuAction) => void = () => {};
   @property({ attribute: false }) onClose: () => void = () => {};
   @state() private compactView: CompactSessionMenuView = "root";
@@ -141,7 +143,15 @@ class SessionMenu extends OpenClawLightDomElement {
     if (this.managementActions.handleSelect(value)) {
       return;
     }
-    if (value === "workboard" || value === "stop-cloud-worker") {
+    if (value.startsWith("plugin:")) {
+      const id = value.slice("plugin:".length);
+      const action = this.pluginActions.find((candidate) => candidate.id === id);
+      if (action && this.selectionCount === 1 && !this.actionDisabled("plugin", action.disabled)) {
+        this.runAction({ kind: "plugin", id });
+      }
+      return;
+    }
+    if (value === "stop-cloud-worker") {
       this.runAction({ kind: value });
       return;
     }
@@ -211,63 +221,71 @@ class SessionMenu extends OpenClawLightDomElement {
           aria-label=${menuLabel}
           style="position: fixed; left: ${clampedX}px; top: ${clampedY}px; width: 1px; height: 1px; opacity: 0; pointer-events: none;"
         ></button>
-        ${this.compact && this.compactView !== "root"
-          ? this.managementActions.renderCompactView(this.compactView)
-          : html`
-              ${!batch && this.lastActive
-                ? html`<div class="session-menu__info">
-                    ${t("sessionsView.lastActive", { time: this.lastActive })}
-                  </div>`
-                : nothing}
-              ${this.managementActions.renderPrimaryActions()}
-              <div class="session-menu__separator" role="separator"></div>
-              ${this.managementActions.renderOrganizationActions()}
-              ${!batch && this.workboard
-                ? html`
-                    <wa-dropdown-item
-                      class="session-menu__item"
-                      value="workboard"
-                      data-shortcut="w"
-                      aria-keyshortcuts="W"
-                      ?disabled=${this.disabled || this.workboard.busy}
-                    >
-                      <span slot="icon" class="session-menu__icon" aria-hidden="true"
-                        >${this.workboard.captured ? icons.check : icons.plus}</span
-                      >
-                      <span class="session-menu__text"
-                        >${this.workboard.captured
-                          ? t("sessionsView.openWorkboardCard")
-                          : t("sessionsView.addToWorkboard")}</span
-                      >
-                      ${menuShortcutHint("w")}
-                    </wa-dropdown-item>
-                  `
-                : nothing}
-              ${batch
-                ? nothing
-                : html`
-                    <div class="session-menu__separator" role="separator"></div>
-                    ${this.managementActions.renderTransferActions()} ${this.renderWorkItems()}
-                  `}
-              <div class="session-menu__separator" role="separator"></div>
-              ${!batch && this.cloudWorkerStopAllowed
-                ? html`
-                    <wa-dropdown-item
-                      class="session-menu__item session-menu__item--destructive"
-                      value="stop-cloud-worker"
-                      variant="danger"
-                      ?disabled=${this.actionDisabled("stop-cloud-worker")}
-                      title=${this.actionTitle("stop-cloud-worker")}
-                    >
-                      <span slot="icon" class="session-menu__icon" aria-hidden="true"
-                        >${icons.stop}</span
-                      >
-                      <span class="session-menu__text">${t("sessionsView.stopCloudWorker")}</span>
-                    </wa-dropdown-item>
-                  `
-                : nothing}
-              ${this.managementActions.renderDeleteAction()}
-            `}
+        ${
+          this.compact && this.compactView !== "root"
+            ? this.managementActions.renderCompactView(this.compactView)
+            : html`
+                ${
+                  !batch && this.lastActive
+                    ? html`<div class="session-menu__info">
+                        ${t("sessionsView.lastActive", { time: this.lastActive })}
+                      </div>`
+                    : nothing
+                }
+                ${this.managementActions.renderPrimaryActions()}
+                <div class="session-menu__separator" role="separator"></div>
+                ${this.managementActions.renderOrganizationActions()}
+                ${
+                  !batch
+                    ? this.pluginActions.map(
+                        (action) => html`
+                          <wa-dropdown-item
+                            class="session-menu__item"
+                            value=${`plugin:${action.id}`}
+                            ?disabled=${this.actionDisabled("plugin", action.disabled)}
+                            title=${this.actionTitle("plugin")}
+                          >
+                            <span slot="icon" class="session-menu__icon" aria-hidden="true"
+                              >${icons.puzzle}</span
+                            >
+                            <span class="session-menu__text">${action.label}</span>
+                          </wa-dropdown-item>
+                        `,
+                      )
+                    : nothing
+                }
+                ${
+                  batch
+                    ? nothing
+                    : html`
+                        <div class="session-menu__separator" role="separator"></div>
+                        ${this.managementActions.renderTransferActions()} ${this.renderWorkItems()}
+                      `
+                }
+                <div class="session-menu__separator" role="separator"></div>
+                ${
+                  !batch && this.cloudWorkerStopAllowed
+                    ? html`
+                        <wa-dropdown-item
+                          class="session-menu__item session-menu__item--destructive"
+                          value="stop-cloud-worker"
+                          variant="danger"
+                          ?disabled=${this.actionDisabled("stop-cloud-worker")}
+                          title=${this.actionTitle("stop-cloud-worker")}
+                        >
+                          <span slot="icon" class="session-menu__icon" aria-hidden="true"
+                            >${icons.stop}</span
+                          >
+                          <span class="session-menu__text"
+                            >${t("sessionsView.stopCloudWorker")}</span
+                          >
+                        </wa-dropdown-item>
+                      `
+                    : nothing
+                }
+                ${this.managementActions.renderDeleteAction()}
+              `
+        }
       </wa-dropdown>`,
     );
   }

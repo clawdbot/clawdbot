@@ -44,28 +44,53 @@ A colored session has a narrow leading stripe in sidebar and menu-bar rows and a
 ## Multiple Gateway windows
 
 Open **Settings → Gateways** to add or remove reusable Gateway profiles. Each
-profile contains a private-network `ws://` or secure `wss://` endpoint and its
-optional token or password; credentials are stored in the macOS Keychain.
-Secure profiles maintain their own system-trust-gated first-use certificate pin
+profile contains a private-network `ws://` or secure `wss://` endpoint with
+browser sign-in or an optional token or password; credentials are stored in the
+macOS Keychain. Entering a hostname in **Add Gateway** defaults to HTTPS.
+For Cloudflare Access, **Connect** opens the default browser to establish your
+personal session. See [browser sign-in and website launch links](/platforms/mac/remote#connect-with-your-browser).
+
+Secure token/password profiles maintain their own system-trust-gated first-use certificate pin
 and do not inherit `gateway.remote.tlsFingerprint` from the primary Gateway.
 Dashboard windows enforce that same saved-profile pinning policy.
-Removing a profile also closes its open windows and shuts down its secondary
-connection.
+Browser sessions use normal HTTPS trust and remain bound to their authenticated
+Gateway origin, including its port. Each browser-authenticated profile has its
+own dashboard browser data, isolated across named app profiles. Manual
+token/password profiles retain their existing browser store and preferences.
+Signing in with your browser starts a personal store without copying credentials
+from the shared browser store. Links opened beside a browser-authenticated
+dashboard use a separate temporary browser session.
+Removing a profile closes its native chat and dashboard windows and shuts down
+its secondary connection.
+Updating a saved profile's credentials refreshes its open dashboard windows.
+Use **Reconnect** to renew an expired browser session. Reconnecting the same
+account retains its browser preferences. Changing accounts or removing a
+browser-authenticated profile clears its isolated dashboard browser data;
+removing any profile also removes its saved credentials.
 
 Choose **File → New Gateway Window…** or press Cmd-N, then select one of those
 saved profiles. The picker remembers the most recently used profile. Every
 selection creates a new independent window, so the same Gateway can appear in
 multiple windows with different active sessions and navigation state.
 
-Each saved profile owns one shared Gateway connection, device-auth scope,
-transcript cache, offline outbox, and route leases. Windows for that profile
-reuse those resources while staying independently navigable. Windows for
-different profiles stay connected and run chats simultaneously.
+The dashboard also reopens your selected Gateway after an app restart.
+Choosing **Primary** switches startup back to the primary Gateway. Background
+connection refreshes do not change this selection.
+
+Windows for the same saved profile and browser account share a Gateway
+connection, transcript cache, offline outbox, and route leases while staying
+independently navigable. Renewing that account's session preserves its queued
+messages. Switching accounts closes the old account's native chat windows;
+its cached history and queued messages stay with that account and are available
+when you sign back in. Token/password profiles retain their profile-scoped
+cache and device authentication. Windows for different profiles stay connected
+and run chats simultaneously.
 
 The menu-bar app's configured Gateway remains the owner of Mac node
 capabilities and Talk Mode. Additional Gateway windows are operator-only, so a
 second Gateway cannot silently retarget global microphone or device controls.
 Listen/TTS and normal chat actions use the window's own Gateway connection.
+Inline widgets also load from that window's Gateway.
 
 ### Gateway picker
 
@@ -73,10 +98,49 @@ The dashboard header shows a Gateway picker when the Mac app has at least two
 configured Gateways. Choose a Gateway to replace the current dashboard in the
 same window, or Option-click it to open a separate dashboard window. **Set as
 primary…** makes the viewed token-authenticated profile the Mac app's primary
-Gateway after confirmation; this resets Talk Mode, the widget panel, and chat
-connections. While connected, the sidebar footer also shows the current Gateway
-and marks it when it is primary. Password-only profiles can be viewed but cannot
-be made primary.
+Gateway after confirmation. The app replaces the primary Gateway's credentials
+and closes its native chat window; independent saved-profile windows stay open.
+Dashboard windows displaying **Primary** follow the new connection, including
+windows opened separately. While connected, the sidebar footer also shows the
+current Gateway and marks it when it is primary. Password-only and browser
+sign-in profiles can be viewed but cannot be made primary.
+
+Native dashboard commands such as New Session and the command palette act on
+the frontmost Gateway window.
+
+Native approval cards and dialogs apply only to the Gateway connection that
+requested them. Changing Primary does not transfer a pending approval to the
+new Gateway.
+
+The native Channels and Config settings follow Primary. Changing Primary clears
+the previous Gateway's channel status, login QR, and unsaved config draft, then
+loads the new Gateway's settings. A temporary reconnect to the same Primary
+keeps its WhatsApp login session and config draft. If the connection fails, these
+panes show the Gateway error and keep **Refresh** or **Reload** available.
+Connection attempts show progress, and retries retain the last failure until
+the Gateway connects or Primary changes.
+Opening or revisiting these panes while settings load waits for the current
+Gateway's shared read. Background refreshes preserve unsaved edits; **Reload**
+replaces them with the Gateway's current values.
+
+### Cron jobs when switching Gateways
+
+By default, **Settings → Cron Jobs** links to the Dashboard. Enable
+**Settings → Debug → Show native settings panes** to use the native pane, which
+shows the Primary Gateway's jobs and run history.
+Run, enable, edit, delete, and transcript actions stay with the Gateway that
+supplied the displayed job. After changing Primary, reopen the job from the new
+list before acting on it. A socket reconnect to the same Gateway keeps an open
+editor usable and reloads the selected job before refreshing its history.
+
+While jobs load, the pane shows a loading indicator and disables **Refresh**.
+A failed load shows the Gateway error and enables **Refresh** to try again.
+“No cron jobs yet” appears only after the Gateway returns an empty list.
+
+You can draft a **New Job** while offline. Saving can reconnect or start that
+Gateway, but changing Primary while the editor is open does not move the draft
+to the new Gateway. The app reports the change so you can reopen the editor for
+the intended Gateway.
 
 ## Quick Chat bar
 

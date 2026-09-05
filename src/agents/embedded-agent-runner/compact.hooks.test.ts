@@ -673,46 +673,42 @@ describe("compactEmbeddedAgentSessionDirect hooks", () => {
   });
 
   it("refreshes the delegated watchdog before delayed fallback setup", async () => {
-    vi.useFakeTimers();
-    try {
-      const compactionTimeoutReset = vi.fn();
-      const fallbackSetupStarted = createDeferred();
-      const createAgentSession = createAgentSessionMock.getMockImplementation();
-      if (!createAgentSession) {
-        throw new Error("Expected a create-agent-session implementation");
-      }
-      createAgentSessionMock.mockImplementation(async (...args) => {
-        if (createAgentSessionMock.mock.calls.length === 2) {
-          expect(compactionTimeoutReset).toHaveBeenCalledTimes(3);
-          fallbackSetupStarted.resolve(undefined);
-          await new Promise<void>((resolve) => {
-            setTimeout(resolve, 20);
-          });
-        }
-        return await createAgentSession(...args);
-      });
-      sessionCompactImpl
-        .mockRejectedValueOnce(new Error("Reasoning is mandatory for this endpoint"))
-        .mockResolvedValueOnce({
-          summary: "fallback summary",
-          firstKeptEntryId: "entry-fallback",
-          tokensBefore: 120,
-          details: { ok: true },
-        });
-
-      const pending = compactEmbeddedAgentSessionDirect(
-        wrappedCompactionArgs({ compactionTimeoutReset, thinkLevel: "off" }),
-      );
-      await fallbackSetupStarted.promise;
-      await vi.advanceTimersByTimeAsync(20);
-
-      await expect(pending).resolves.toMatchObject({ ok: true, compacted: true });
-      expect(createAgentSessionMock).toHaveBeenCalledTimes(2);
-      expect(compactionTimeoutReset).toHaveBeenCalledTimes(6);
-      expect(vi.getTimerCount()).toBe(0);
-    } finally {
-      vi.useRealTimers();
+    const compactionTimeoutReset = vi.fn();
+    const fallbackSetupStarted = createDeferred<number>();
+    const fallbackSetupReleased = createDeferred();
+    const createAgentSession = createAgentSessionMock.getMockImplementation();
+    if (!createAgentSession) {
+      throw new Error("Expected a create-agent-session implementation");
     }
+    createAgentSessionMock.mockImplementation(async (...args) => {
+      if (createAgentSessionMock.mock.calls.length === 2) {
+        fallbackSetupStarted.resolve(compactionTimeoutReset.mock.calls.length);
+        await fallbackSetupReleased.promise;
+      }
+      return await createAgentSession(...args);
+    });
+    sessionCompactImpl
+      .mockRejectedValueOnce(new Error("Reasoning is mandatory for this endpoint"))
+      .mockResolvedValueOnce({
+        summary: "fallback summary",
+        firstKeptEntryId: "entry-fallback",
+        tokensBefore: 120,
+        details: { ok: true },
+      });
+
+    const pending = compactEmbeddedAgentSessionDirect(
+      wrappedCompactionArgs({ compactionTimeoutReset, thinkLevel: "off" }),
+    );
+    try {
+      expect(await fallbackSetupStarted.promise).toBe(3);
+    } finally {
+      fallbackSetupReleased.resolve(undefined);
+      await pending;
+    }
+
+    await expect(pending).resolves.toMatchObject({ ok: true, compacted: true });
+    expect(createAgentSessionMock).toHaveBeenCalledTimes(2);
+    expect(compactionTimeoutReset).toHaveBeenCalledTimes(6);
   });
 
   it("fails closed before generic compaction for a model-locked native session", async () => {
@@ -3409,6 +3405,151 @@ describe("compactEmbeddedAgentSession hooks (ownsCompaction engine)", () => {
     mockQueuedRouteAwareModel();
   });
 
+  it("reports target-only cancellation during prepared runtime lease admission", async () => {
+    const sourceController = new AbortController();
+    const admissionStarted = createDeferred<AbortSignal | undefined>();
+    acquireAgentRunPreparedModelRuntimeMock.mockImplementationOnce((async (
+      _input: Record<string, unknown>,
+      options?: { abortSignal?: AbortSignal },
+    ): Promise<never> => {
+      const signal = options?.abortSignal;
+      admissionStarted.resolve(signal);
+      if (!signal) {
+        throw new Error("prepared runtime lease admission did not receive the caller signal");
+      }
+      return await new Promise<never>((_resolve, reject) => {
+        signal.addEventListener(
+          "abort",
+          () => {
+            const error = new Error("Prepared model runtime lease admission aborted", {
+              cause: signal.reason,
+            });
+            error.name = "AbortError";
+            reject(error);
+          },
+          { once: true },
+        );
+      });
+    }) as never);
+
+    const pending = compactEmbeddedAgentSession(
+      wrappedCompactionArgs({ abortSignal: sourceController.signal, trigger: "manual" }),
+    );
+    const admittedSignal = expectDefined(
+      await admissionStarted.promise,
+      "prepared runtime lease admission signal",
+    );
+    expect(abortEmbeddedAgentRun(TEST_SESSION_ID)).toBe(true);
+
+    await expect(pending).resolves.toMatchObject({
+      ok: false,
+      compacted: false,
+      reason: "compaction aborted",
+    });
+    expect(sourceController.signal.aborted).toBe(false);
+    expect(admittedSignal.aborted).toBe(true);
+    expect(isEmbeddedAgentRunHandleActive(TEST_SESSION_ID)).toBe(false);
+    expect(resolveContextEngineMock).not.toHaveBeenCalled();
+  });
+
+  it("releases the prepared runtime lease when host authority expires after admission", async () => {
+    const admissionStarted = createDeferred();
+    const releaseAdmission = createDeferred();
+    const releaseLease = vi.fn();
+    const defaultAcquire = expectDefined(
+      acquireAgentRunPreparedModelRuntimeMock.getMockImplementation(),
+      "default prepared runtime acquisition mock",
+    );
+    let hostActive = true;
+    acquireAgentRunPreparedModelRuntimeMock.mockImplementationOnce((async (
+      input: Record<string, unknown>,
+    ) => {
+      admissionStarted.resolve(undefined);
+      await releaseAdmission.promise;
+      const lease = await defaultAcquire(input);
+      return { ...lease, release: releaseLease };
+    }) as never);
+
+    const pending = compactEmbeddedAgentSession(wrappedCompactionArgs(), {
+      assertActive: () => {
+        if (!hostActive) {
+          throw new Error("queued compaction host authority expired");
+        }
+      },
+    });
+    await admissionStarted.promise;
+    hostActive = false;
+    releaseAdmission.resolve(undefined);
+
+    await expect(pending).rejects.toThrow("queued compaction host authority expired");
+    expect(releaseLease).toHaveBeenCalledTimes(1);
+    expect(resolveContextEngineMock).not.toHaveBeenCalled();
+  });
+
+  it("stops preparation when host authority expires during context-engine resolution", async () => {
+    const resolutionStarted = createDeferred();
+    const releaseResolution = createDeferred();
+    let hostActive = true;
+    resolveContextEngineMock.mockImplementationOnce(async () => {
+      resolutionStarted.resolve(undefined);
+      await releaseResolution.promise;
+      return {
+        info: { ownsCompaction: true },
+        compact: contextEngineCompactMock,
+      };
+    });
+
+    const pending = compactEmbeddedAgentSession(wrappedCompactionArgs(), {
+      assertActive: () => {
+        if (!hostActive) {
+          throw new Error("queued compaction host authority expired");
+        }
+      },
+    });
+    await resolutionStarted.promise;
+    hostActive = false;
+    releaseResolution.resolve(undefined);
+
+    await expect(pending).rejects.toThrow("queued compaction host authority expired");
+    expect(resolveModelAsyncMock).not.toHaveBeenCalled();
+    expect(selectAgentHarnessForPreparedModelProvidersMock).not.toHaveBeenCalled();
+    expect(contextEngineCompactMock).not.toHaveBeenCalled();
+  });
+
+  it("reports budget compaction cancellation during context-engine resolution", async () => {
+    const sourceController = new AbortController();
+    const resolutionStarted = createDeferred();
+    const releaseResolution = createDeferred();
+    resolveContextEngineMock.mockImplementationOnce(async () => {
+      resolutionStarted.resolve(undefined);
+      await releaseResolution.promise;
+      return {
+        info: { ownsCompaction: true },
+        compact: contextEngineCompactMock,
+      };
+    });
+
+    const pending = compactEmbeddedAgentSession(
+      wrappedCompactionArgs({
+        abortSignal: sourceController.signal,
+        trigger: "budget",
+      }),
+    );
+    await resolutionStarted.promise;
+    sourceController.abort(new Error("request timed out"));
+    releaseResolution.resolve(undefined);
+
+    await expect(pending).resolves.toEqual({
+      ok: false,
+      compacted: false,
+      reason: "compaction aborted",
+    });
+    expect(resolveModelAsyncMock).not.toHaveBeenCalled();
+    expect(selectAgentHarnessForPreparedModelProvidersMock).not.toHaveBeenCalled();
+    expect(contextEngineCompactMock).not.toHaveBeenCalled();
+    expect(enqueueCommandInLaneMock).not.toHaveBeenCalled();
+  });
+
   it("resolves the durable session key before invoking an owning context engine", async () => {
     const dir = await realpath(await mkdtemp(join(tmpdir(), "openclaw-compaction-session-key-")));
     const storePath = join(dir, "sessions.json");
@@ -3504,6 +3645,7 @@ describe("compactEmbeddedAgentSession hooks (ownsCompaction engine)", () => {
     expect(result.ok).toBe(true);
     expect(acquireAgentRunPreparedModelRuntimeMock).toHaveBeenCalledWith(
       expect.objectContaining({ agentId: "marie-clawndo" }),
+      { abortSignal: undefined },
     );
   });
 
@@ -3557,6 +3699,66 @@ describe("compactEmbeddedAgentSession hooks (ownsCompaction engine)", () => {
         .preparedModelRuntime,
     ).toBe(snapshot);
     expect(dispose).toHaveBeenCalledTimes(1);
+    expect(enqueueCommandInLaneMock).not.toHaveBeenCalled();
+  });
+
+  it("stops preparation when host authority expires during model resolution before route rematerialization", async () => {
+    const modelResolutionStarted = createDeferred();
+    const releaseModelResolution = createDeferred();
+    const authStorage = { setRuntimeApiKey: vi.fn() };
+    let hostActive = true;
+    resolveModelAsyncMock.mockImplementationOnce(async () => {
+      modelResolutionStarted.resolve(undefined);
+      await releaseModelResolution.promise;
+      return {
+        model: {
+          provider: "openai",
+          id: "fake",
+          api: "openai-chatgpt-responses",
+          baseUrl: "https://chatgpt.com/backend-api/codex",
+          input: [],
+        },
+        error: null,
+        authStorage,
+        modelRegistry: {},
+      };
+    });
+
+    const pending = compactEmbeddedAgentSession(
+      wrappedCompactionArgs({
+        provider: "openai",
+        model: "fake",
+        runtimeAuthPlan: {
+          providerForAuth: "openai",
+          authProfileProviderForAuth: "openai",
+          selectedAuthMode: "api-key",
+          modelRoute: {
+            provider: "openai",
+            modelId: "fake",
+            api: "openai-responses",
+            baseUrl: "https://api.openai.com/v1",
+            authRequirement: "api-key",
+            requestTransportOverrides: "none",
+          },
+        },
+      }),
+      {
+        assertActive: () => {
+          if (!hostActive) {
+            throw new Error("queued compaction host authority expired");
+          }
+        },
+      },
+    );
+    await modelResolutionStarted.promise;
+    hostActive = false;
+    releaseModelResolution.resolve(undefined);
+
+    await expect(pending).rejects.toThrow("queued compaction host authority expired");
+    expect(resolveModelAsyncMock).toHaveBeenCalledTimes(1);
+    expect(selectAgentHarnessForPreparedModelProvidersMock).not.toHaveBeenCalled();
+    expect(contextEngineCompactMock).not.toHaveBeenCalled();
+    expect(maybeCompactAgentHarnessSessionMock).not.toHaveBeenCalled();
     expect(enqueueCommandInLaneMock).not.toHaveBeenCalled();
   });
 
@@ -4473,6 +4675,76 @@ describe("compactEmbeddedAgentSession hooks (ownsCompaction engine)", () => {
     } finally {
       closeOpenClawAgentDatabasesForTest();
       await rm(agentDir, { force: true, recursive: true });
+    }
+  });
+
+  it("reports cancellation while queued native CLI compaction is in flight", async () => {
+    const agentDir = await realpath(tempDirs.make("openclaw-native-compaction-queued-abort-"));
+    const controller = new AbortController();
+    const cliStarted = createDeferred<AbortSignal>();
+    try {
+      await upsertSessionEntryCore(
+        {
+          agentId: "main",
+          sessionKey: TEST_SESSION_KEY,
+          storePath: join(agentDir, "sessions.json"),
+        },
+        { sessionId: TEST_SESSION_ID, updatedAt: 1 },
+      );
+      resolveCliBackendConfigMock.mockReturnValue({
+        id: "claude-cli",
+        ownsNativeCompaction: true,
+        manualCompaction: {
+          buildPrompt: () => "/compact",
+          input: "arg",
+          validateOutput: () => ({ ok: true }),
+        },
+      });
+      runCliAgentMock.mockImplementationOnce((async (params: { abortSignal?: AbortSignal }) => {
+        const signal = expectDefined(params.abortSignal, "native CLI compaction abort signal");
+        cliStarted.resolve(signal);
+        return await new Promise<never>((_resolve, reject) => {
+          signal.addEventListener(
+            "abort",
+            () => {
+              const reason = signal.reason;
+              reject(reason instanceof Error ? reason : new Error("native CLI compaction aborted"));
+            },
+            { once: true },
+          );
+        });
+      }) as never);
+
+      const pending = compactEmbeddedAgentSession(
+        wrappedCompactionArgs({
+          abortSignal: controller.signal,
+          agentDir,
+          sessionTarget: {
+            agentId: "main",
+            sessionId: TEST_SESSION_ID,
+            sessionKey: TEST_SESSION_KEY,
+            storePath: join(agentDir, "sessions.json"),
+          },
+          trigger: "manual",
+          provider: "anthropic",
+          model: "opus",
+          agentHarnessId: "claude-cli",
+          cliSessionId: "native-session",
+        }),
+      );
+      const nativeSignal = await cliStarted.promise;
+      controller.abort(new Error("request timed out"));
+
+      await expect(pending).resolves.toEqual({
+        ok: false,
+        compacted: false,
+        reason: "compaction aborted",
+      });
+      expect(nativeSignal.aborted).toBe(true);
+      expect(resolveContextEngineMock).not.toHaveBeenCalled();
+      expect(isEmbeddedAgentRunHandleActive(TEST_SESSION_ID)).toBe(false);
+    } finally {
+      closeOpenClawAgentDatabasesForTest();
     }
   });
 

@@ -219,7 +219,7 @@ describe("runSystemAgentTurn", () => {
     expect(session.cliSession).toBeUndefined();
   });
 
-  it("uses a distinct transcript for each chat session", async () => {
+  it("isolates conversation identities and resumes the same transcript", async () => {
     useTempStateDir();
     const config = {
       agents: { defaults: { model: { primary: "openai/gpt-5.5" } } },
@@ -233,26 +233,20 @@ describe("runSystemAgentTurn", () => {
       readConfigFileSnapshot: vi.fn(async () => configSnapshot(config)) as never,
     };
 
-    await runSystemAgentTurnWithDeps(
-      {
-        input: "hello",
-        overview,
-        surface: "gateway",
-        approvalArmed: false,
-        session: first,
-      },
-      deps,
+    for (const session of [first, second, first]) {
+      await runSystemAgentTurnWithDeps(
+        { input: "hello", overview, surface: "gateway", approvalArmed: false, session },
+        deps,
+      );
+    }
+
+    const [firstCall, secondCall, resumedCall] = mocks.runEmbeddedAgent.mock.calls.map(
+      ([params]) => params,
     );
-    await runSystemAgentTurnWithDeps(
-      {
-        input: "hello",
-        overview,
-        surface: "gateway",
-        approvalArmed: false,
-        session: second,
-      },
-      deps,
-    );
+    expect(firstCall?.sessionKey).toBe(`agent:openclaw:${first.sessionId}`);
+    expect(secondCall?.sessionKey).toBe(`agent:openclaw:${second.sessionId}`);
+    expect(resumedCall?.sessionKey).toBe(firstCall?.sessionKey);
+    expect(resumedCall?.sessionManager).toBe(first.sessionManager);
 
     const firstPath = requireValue(
       mocks.runEmbeddedAgent.mock.calls[0]?.[0]?.sessionFile,
@@ -321,7 +315,8 @@ describe("runSystemAgentTurn", () => {
       agentDir,
       authProfileId: "claude-cli:ops",
       agentId: "openclaw",
-      sessionKey: "agent:openclaw:main",
+      sessionKey: `agent:openclaw:${session.sessionId}`,
+      runtimePolicySessionKey: "agent:openclaw:main",
       sessionId: session.sessionId,
       workspaceDir: path.join(stateDir, "openclaw", "workspace"),
       sessionFile: `in-memory:${session.sessionId}`,
@@ -813,7 +808,8 @@ describe("runSystemAgentTurn", () => {
       authProfileIdSource: "user",
       agentHarnessRuntimeOverride: "codex",
       agentId: "openclaw",
-      sessionKey: "agent:openclaw:main",
+      sessionKey: `agent:openclaw:${session.sessionId}`,
+      sandboxSessionKey: "agent:openclaw:main",
       sessionId: session.sessionId,
       workspaceDir: path.join(stateDir, "openclaw", "workspace"),
       sessionFile: `in-memory:${session.sessionId}`,

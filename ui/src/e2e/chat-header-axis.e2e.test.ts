@@ -59,6 +59,12 @@ suite.define(() => {
           await header.locator(".workspace-icon").waitFor();
 
           const geometry = await header.evaluate((root) => {
+            const main = root
+              .closest("openclaw-chat-pane")
+              ?.querySelector('[data-region="main"]:not([hidden])');
+            if (!main) {
+              throw new Error("Task header requires visible main content");
+            }
             const centerY = (selector: string) => {
               const node = root.querySelector(selector);
               if (!node) {
@@ -86,6 +92,8 @@ suite.define(() => {
               separatorDisplays: [
                 ...root.querySelectorAll<HTMLElement>(".chat-pane__crumb-sep"),
               ].map((node) => getComputedStyle(node).display),
+              headerBottom: root.getBoundingClientRect().bottom,
+              contentTop: main.getBoundingClientRect().top,
             };
           });
 
@@ -93,6 +101,7 @@ suite.define(() => {
             Math.abs(geometry.menu - geometry.nav),
             JSON.stringify(geometry),
           ).toBeLessThanOrEqual(0.1);
+          expect(geometry.contentTop).toBeGreaterThanOrEqual(geometry.headerBottom - 0.1);
           if (viewport.label === "desktop") {
             for (const center of [
               geometry.projectIcon,
@@ -147,7 +156,7 @@ suite.define(() => {
     { height: 844, label: "portrait", width: 390 },
     { height: 393, label: "short landscape", width: 852 },
   ] as const) {
-    it(`keeps compact ${viewport.label} transcript search below the floating header`, async () => {
+    it(`keeps compact ${viewport.label} transcript search below the task header`, async () => {
       const context = await suite.newBrowserContext({
         locale: "en-US",
         serviceWorkers: "block",

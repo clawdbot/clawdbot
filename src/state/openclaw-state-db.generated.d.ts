@@ -1345,6 +1345,26 @@ export interface TaskRuns {
   tool_use_count: number | null;
 }
 
+export interface UpdateRuns {
+  after_json: string;
+  before_json: string;
+  confirmed_at_ms: number | null;
+  created_at_ms: number;
+  downtime_ms: number | null;
+  finished_at_ms: number | null;
+  origin_json: string;
+  phase: string;
+  reason: string | null;
+  repair_json: string;
+  run_id: string;
+  status: string;
+  steps_json: string;
+  target_json: string;
+  trigger: string;
+  updated_at_ms: number;
+  verification_json: string;
+}
+
 export interface UserPreferences {
   pref_key: string;
   profile_id: string;
@@ -1699,6 +1719,7 @@ export interface DB {
   subagent_runs: SubagentRuns;
   task_delivery_state: TaskDeliveryState;
   task_runs: TaskRuns;
+  update_runs: UpdateRuns;
   user_preferences: UserPreferences;
   web_push_approval_deliveries: WebPushApprovalDeliveries;
   web_push_subscriptions: WebPushSubscriptions;

@@ -16,7 +16,7 @@ import {
 import { fullSuiteVitestShards } from "../../test/vitest/vitest.test-shards.mjs";
 import { toolingIsolatedTestFiles } from "../../test/vitest/vitest.tooling-isolated-paths.mjs";
 import { uiIsolatedTestFiles } from "../../test/vitest/vitest.ui-isolated-paths.mjs";
-import { isUiBrowserTestFile } from "../../test/vitest/vitest.ui-paths.mjs";
+import { isPluginControlUiPath, isUiBrowserTestFile } from "../../test/vitest/vitest.ui-paths.mjs";
 import {
   getUnitFastIsolatedTestFiles,
   getUnitFastTestFiles,
@@ -148,7 +148,7 @@ export function isPolicyTestOwnedPath(changedPath: string): boolean {
   );
 }
 
-type CompactNodeTestShard = Omit<NodeTestShard, "configs" | "groups"> & {
+export type CompactNodeTestShard = Omit<NodeTestShard, "configs" | "groups"> & {
   groups: NodeTestShardGroup[];
 };
 
@@ -195,11 +195,11 @@ const COMPACT_EMBEDDED_GROUP_NAMES = [
 const MAX_BUNDLED_NODE_TEST_PATTERNS = 64;
 // Compact bundles trade a little serial work for fewer ephemeral runner registrations.
 // Keep runner classes and subprocess isolation intact while bounding each combined job.
-// Two-slot Blacksmith jobs admit 300s of aggregate work. Serial jobs retain
-// 200s/276s caps; expanded profiles retain 210s and their existing estimates.
+// Two-slot Blacksmith placements admit 360s of aggregate work. Serial jobs retain
+// 200s/276s caps; expanded serial jobs retain 210s and their existing estimates.
 const COMPACT_LARGE_NODE_TEST_JOB_SECONDS = 200;
 const COMPACT_SMALL_NODE_TEST_JOB_SECONDS = 276;
-const COMPACT_PARALLEL_NODE_TEST_JOB_SECONDS = 300;
+const COMPACT_PARALLEL_NODE_TEST_JOB_SECONDS = 360;
 const COMPACT_EXPANDED_NODE_TEST_JOB_SECONDS = 210;
 const COMPACT_GITHUB_GROUP_SECONDS_SCALE = 1.6;
 const COMPACT_HYBRID_GROUP_SECONDS_SCALE = 0.87;
@@ -652,6 +652,7 @@ const EXCLUSIVE_COMPACT_GROUP_RE =
 // Exclusive bins run serially, so their packed estimate is their wall clock.
 // An indivisible file above this budget must not acquire additional work.
 const COMPACT_EXCLUSIVE_JOB_SECONDS = 150;
+const COMPACT_HYBRID_SERIAL_CLI_JOB_SECONDS = 250;
 
 export function isExclusiveCompactShardName(shardName: string): boolean {
   return EXCLUSIVE_COMPACT_GROUP_RE.test(shardName);
@@ -766,8 +767,8 @@ function estimateCompactStripeSeconds(
     : blacksmithSeconds;
 }
 
-// Split siblings must stay in different jobs, including nested children of
-// deliberately separated fixed stripes.
+// Identify split siblings, including nested children of deliberately separated
+// fixed stripes.
 function compactStripeFamily(group: NodeTestShardGroup): string | undefined {
   if (
     /^agentic-commands-doctor-sessions-cron(?:-(?:memory|sqlite))?(?:-hosted-\d+)?$/u.test(
@@ -1738,7 +1739,10 @@ function createCoreUnitSrcSecuritySplitShards(): NodeTestSplitShard[] {
 function createCoreRuntimeMediaUiSplitShards(): NodeTestSplitShard[] {
   const unitFastFiles = new Set(getUnitFastTestFiles());
   const isolatedUiFiles = new Set(uiIsolatedTestFiles);
-  const files = listTestFiles("ui/src").filter(
+  const files = [
+    ...listTestFiles("ui/src"),
+    ...listTestFiles("extensions").filter(isPluginControlUiPath),
+  ].filter(
     (file) =>
       isStripeEligibleTestFile(file, unitFastFiles) &&
       !isolatedUiFiles.has(file) &&
@@ -2602,7 +2606,7 @@ function createCompactNodeTestShardBundles(
   const shards = createNodeTestShards(options).filter(
     (shard) => compactMode !== "push" || !COMPACT_PUSH_EXCLUDED_SHARDS.has(shard.shardName),
   );
-  const groupsByRunner = new Map<string, NodeTestShardGroup[]>();
+  const groupsByRunner = new Map<string, [NodeTestShardGroup, ...NodeTestShardGroup[]]>();
   const synthesizedSplitSeconds = new Map<string, number>();
 
   for (const shard of shards) {
@@ -2640,9 +2644,12 @@ function createCompactNodeTestShardBundles(
         options.runnerBackend ?? "blacksmith",
       );
       const key = JSON.stringify([planned.group.runner, shard.requiresDist]);
-      const groups = groupsByRunner.get(key) ?? [];
-      groups.push(planned.group);
-      groupsByRunner.set(key, groups);
+      const groups = groupsByRunner.get(key);
+      if (groups) {
+        groups.push(planned.group);
+      } else {
+        groupsByRunner.set(key, [planned.group]);
+      }
       // The current complete-file membership always retains its parent-derived
       // floor. A matching child sample may raise it, but an old partition must
       // never erase newly assigned work.
@@ -2670,6 +2677,12 @@ function createCompactNodeTestShardBundles(
     );
   };
   for (const groups of groupsByRunner.values()) {
+    const usesBlacksmithCapacity =
+      isBlacksmithProfile ||
+      (options.runnerBackend === "hybrid" &&
+        [DEFAULT_NODE_TEST_RUNNER, BUNDLED_NODE_TEST_RUNNER, EXTRA_LARGE_NODE_TEST_RUNNER].includes(
+          groups[0].runner,
+        ));
     // Admit the final groups with their shared prerequisite. Rebalancing after
     // this check can break build sharing and exceed a bin's admitted cap.
     const sortedGroups = groups
@@ -2680,32 +2693,65 @@ function createCompactNodeTestShardBundles(
           a.shard_name.localeCompare(b.shard_name),
       );
     const bins = packNodeTestGroups(sortedGroups, (candidate, group) => {
-      // Only runtime consumers share preparation; ordinary partners would inherit
-      // the slower serial runner instead of their two-slot capacity.
+      const exclusive = isExclusiveCompactGroup(group);
+      // Keep ordinary work off serial runtime hosts. Hybrid exclusive/dist bins
+      // retain their existing prerequisite sharing and admission policy.
       if (
-        isBlacksmithProfile &&
+        (isBlacksmithProfile || (usesBlacksmithCapacity && !exclusive && !group.requiresDist)) &&
         Boolean(candidate[0].pretestBuildMode) !== Boolean(group.pretestBuildMode)
       ) {
         return false;
       }
-      const exclusive = isExclusiveCompactGroup(group);
-      const serialSecondsCap = exclusive
-        ? COMPACT_EXCLUSIVE_JOB_SECONDS
-        : usesExpandedRunnerProfile(options.runnerBackend)
-          ? COMPACT_EXPANDED_NODE_TEST_JOB_SECONDS
-          : resolveCiNodeTestRunnerClass(group.runner).secondsCap;
       const combined = [...candidate, group];
+      // Spend the larger budget only on a complete no-build CLI bin. Each child
+      // keeps its 150s admission limit, worker budget and separate process.
+      const sharesSerialCliBudget =
+        options.runnerBackend === "hybrid" &&
+        combined.every(
+          (entry) =>
+            !entry.requiresDist &&
+            !entry.pretestBuildMode &&
+            /^agentic-cli(?:-process-hosted-\d+)?$/u.test(entry.shard_name) &&
+            estimateBinSeconds([entry]) <= COMPACT_EXCLUSIVE_JOB_SECONDS,
+        );
+      const serialSecondsCap = sharesSerialCliBudget
+        ? COMPACT_HYBRID_SERIAL_CLI_JOB_SECONDS
+        : exclusive
+          ? COMPACT_EXCLUSIVE_JOB_SECONDS
+          : usesExpandedRunnerProfile(options.runnerBackend)
+            ? COMPACT_EXPANDED_NODE_TEST_JOB_SECONDS
+            : resolveCiNodeTestRunnerClass(group.runner).secondsCap;
       const parallel =
-        isBlacksmithProfile &&
+        usesBlacksmithCapacity &&
         combined.every(isParallelCompactGroup) &&
         combined.every((entry) => estimateBinSeconds([entry]) <= serialSecondsCap);
       const secondsCap = parallel ? COMPACT_PARALLEL_NODE_TEST_JOB_SECONDS : serialSecondsCap;
-      const family = compactStripeFamily(group);
+      // CLI runtime children retain separate serial processes but can share the
+      // prerequisite within the full 150s budget. Fixed stripe families stay apart.
+      const sharesCliRuntimeBuild = combined.every((entry) => entry.pretestBuildMode === "runtime");
+      // A later unrelated member can revoke an earlier complete-CLI exemption.
+      // Recheck every sibling collision against the final bin's eligibility.
+      const preservesStripeFamilies = combined.every((entry, index) => {
+        const family = compactStripeFamily(entry);
+        return (
+          family === undefined ||
+          sharesSerialCliBudget ||
+          combined
+            .slice(0, index)
+            .every(
+              (previous) =>
+                compactStripeFamily(previous) !== family ||
+                (sharesCliRuntimeBuild &&
+                  [previous, entry].every((sibling) =>
+                    /^agentic-cli-process-hosted-\d+$/u.test(sibling.shard_name),
+                  )),
+            )
+        );
+      });
       return (
         isExclusiveCompactGroup(candidate[0]) === exclusive &&
-        (family === undefined ||
-          candidate.every((entry) => compactStripeFamily(entry) !== family)) &&
-        candidate.length < COMPACT_NODE_TEST_JOB_GROUPS &&
+        preservesStripeFamilies &&
+        (parallel || candidate.length < COMPACT_NODE_TEST_JOB_GROUPS) &&
         estimateBinSeconds(combined) <= secondsCap
       );
     });
@@ -2725,7 +2771,7 @@ function createCompactNodeTestShardBundles(
       // The runner admits overlap only after measuring capacity; exclusive and
       // runtime-building jobs stay serial regardless of the requested class.
       const planConcurrency =
-        isBlacksmithProfile && bin.length > 1 && bin.every(isParallelCompactGroup) ? 2 : 1;
+        usesBlacksmithCapacity && bin.length > 1 && bin.every(isParallelCompactGroup) ? 2 : 1;
       // Tooling's nested compilers need host capacity while keeping serial isolation.
       // Promote only the emitted runner so packing, names and timing keys stay stable.
       const capacityRunner =

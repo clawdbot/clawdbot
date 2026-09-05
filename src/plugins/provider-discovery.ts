@@ -82,7 +82,8 @@ export async function resolveRuntimePluginDiscoveryProviders(
       (provider) =>
         resolveProviderCatalogOrderHook(provider) ||
         (params.includeSyntheticAuthProviders === true &&
-          typeof provider.resolveSyntheticAuth === "function"),
+          (typeof provider.resolveSyntheticAuth === "function" ||
+            typeof provider.prepareSyntheticAuth === "function")),
     );
 }
 

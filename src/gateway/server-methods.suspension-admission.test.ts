@@ -1,6 +1,11 @@
 // Proves dispatcher root-work accounting and fail-closed suspension behavior.
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import { resumeGatewaySuspend } from "../infra/gateway-suspend-coordinator.js";
+import { createGatewayHostLifecycle } from "../cli/gateway-cli/host-lifecycle.js";
+import {
+  consumeGatewaySuspendHandoff,
+  prepareGatewaySuspend,
+  resumeGatewaySuspend,
+} from "../infra/gateway-suspend-coordinator.js";
 import {
   getActiveGatewayRootWorkCount,
   resetGatewayWorkAdmission,
@@ -8,8 +13,10 @@ import {
   tryBeginGatewayRootWorkAdmission,
   tryBeginGatewaySuspendAdmission,
 } from "../process/gateway-work-admission.js";
+import { createCoreGatewayMethodDescriptors } from "./methods/core-descriptors.js";
 import { createPluginGatewayMethodDescriptor } from "./methods/descriptor.js";
 import { createGatewayMethodRegistry } from "./methods/registry.js";
+import { getGatewayProcessInstanceId } from "./process-instance.js";
 import { handleGatewayRequest, runWithGatewayRequestEnvelope } from "./server-methods.js";
 import { suspendHandlers } from "./server-methods/suspend.js";
 import type { GatewayRequestHandler } from "./server-methods/types.js";
@@ -30,16 +37,22 @@ function dispatch(params: {
   handler: GatewayRequestHandler;
   requestParams?: unknown;
   context?: Parameters<typeof handleGatewayRequest>[0]["context"];
+  core?: boolean;
+  clientScopes?: string[];
 }) {
   const respond = vi.fn();
-  const methodRegistry = createGatewayMethodRegistry([
-    createPluginGatewayMethodDescriptor({
-      pluginId: "suspend-proof",
-      name: params.method,
-      handler: params.handler,
-      scope: params.scope,
-    }),
-  ]);
+  const methodRegistry = createGatewayMethodRegistry(
+    params.core
+      ? createCoreGatewayMethodDescriptors({ [params.method]: params.handler })
+      : [
+          createPluginGatewayMethodDescriptor({
+            pluginId: "suspend-proof",
+            name: params.method,
+            handler: params.handler,
+            scope: params.scope,
+          }),
+        ],
+  );
   const request = handleGatewayRequest({
     req: {
       type: "req",
@@ -52,7 +65,7 @@ function dispatch(params: {
       connId: "conn-suspend-proof",
       connect: {
         role: "operator",
-        scopes: [params.scope],
+        scopes: params.clientScopes ?? [params.scope],
         client: { id: "cli", version: "test", platform: "linux", mode: "cli" },
         minProtocol: 1,
         maxProtocol: 1,
@@ -78,6 +91,76 @@ afterEach(() => {
 });
 
 describe("gateway request suspension admission", () => {
+  it.each(["armed", "read-scope", "other-pid", "new-process-same-pid", "retired-host"])(
+    "binds an external handoff to the authenticated live owner: %s",
+    async (mode) => {
+      const host = createGatewayHostLifecycle({
+        processOwner: { ownsProcessLifecycle: true, supervisor: "external" },
+        isCurrent: () => true,
+        isServing: () => true,
+        acceptStop: () => {},
+      });
+      const lease = prepareGatewaySuspend({
+        requestId: "handoff-route",
+        drain: true,
+        pauseScheduling: () => {},
+        resumeScheduling: () => {},
+        inspect: { getRootRequests: () => 1, getTerminalPersistence: () => 0 },
+      });
+      if (lease.status !== "draining") {
+        throw new Error("expected a held drain");
+      }
+      try {
+        const result = dispatch({
+          method: "gateway.suspend.handoff",
+          scope: "operator.admin",
+          core: true,
+          clientScopes: [mode === "read-scope" ? "operator.read" : "operator.admin"],
+          handler: suspendHandlers["gateway.suspend.handoff"]!,
+          requestParams: {
+            suspensionId: lease.suspensionId,
+            target: {
+              pid: mode === "other-pid" ? process.pid + 1 : process.pid,
+              processInstanceId:
+                mode === "new-process-same-pid"
+                  ? "different-process"
+                  : getGatewayProcessInstanceId(),
+            },
+          },
+          context: {
+            hostLifecycle: host.capability,
+            logGateway: { warn: vi.fn() },
+          } as unknown as Parameters<typeof handleGatewayRequest>[0]["context"],
+        });
+        // The request has crossed an async dispatch boundary, but the original
+        // host must still own its iteration when the synchronous handler commits.
+        if (mode === "retired-host") {
+          await host.retire();
+        }
+        await result.request;
+        if (mode === "armed") {
+          expect(result.respond).toHaveBeenCalledWith(true, {
+            status: "armed",
+            suspensionId: lease.suspensionId,
+            expiresAtMs: lease.expiresAtMs,
+          });
+          expect(consumeGatewaySuspendHandoff(host.capability.externalRestart)).toEqual({
+            ok: true,
+            value: true,
+          });
+        } else {
+          expect(result.respond).toHaveBeenCalledWith(false, undefined, expect.any(Object));
+          expect(consumeGatewaySuspendHandoff(host.capability.externalRestart)).toEqual({
+            ok: true,
+            value: false,
+          });
+        }
+      } finally {
+        await host.retire();
+        resumeGatewaySuspend(lease.suspensionId);
+      }
+    },
+  );
   it("keeps a facade continuation on the same admitted root", async () => {
     const methodRegistry = createGatewayMethodRegistry([
       createPluginGatewayMethodDescriptor({

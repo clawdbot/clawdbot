@@ -86,7 +86,10 @@ describe("processDiscordMessage draft streaming recovery", () => {
 
     const ctx = await createAutomaticDraftContext({
       baseSessionKey: BASE_CHANNEL_ROUTE.sessionKey,
-      discordConfig: { streaming: { mode: "progress" }, maxLinesPerMessage: 120 },
+      discordConfig: {
+        streaming: { mode: "progress", progress: { toolProgress: true } },
+        maxLinesPerMessage: 120,
+      },
       route: BASE_CHANNEL_ROUTE,
     });
 
@@ -450,7 +453,7 @@ describe("processDiscordMessage draft streaming recovery", () => {
     expect(firstDispatchParams().replyOptions?.disableBlockStreaming).toBe(true);
   });
 
-  it("shows only the authored status in an opted-in Discord progress draft", async () => {
+  it("shows the agent status above the tool lines in an opted-in Discord progress draft", async () => {
     const elapseProgressDraftStartDelay = useProgressDraftStartDelay();
     const draftStream = createMockDraftStreamForTest();
 
@@ -471,6 +474,7 @@ describe("processDiscordMessage draft streaming recovery", () => {
       discordConfig: {
         streaming: {
           mode: "progress",
+          progress: { toolProgress: true },
         },
       },
     });
@@ -479,7 +483,7 @@ describe("processDiscordMessage draft streaming recovery", () => {
 
     expect(draftStream.update).toHaveBeenCalledTimes(1);
     expect(draftStream.update).toHaveBeenCalledWith(
-      "Claiming my square footage. Tastefully, but with claws.",
+      "Claiming my square footage. Tastefully, but with claws.\n\n🛠️ Exec\n• exec done",
     );
     // With no label override, the implicit label stays hidden under the status headline.
     expect(String(draftStream.update.mock.calls[0]?.[0])).not.toMatch(/Working/);
@@ -512,7 +516,7 @@ describe("processDiscordMessage draft streaming recovery", () => {
       discordConfig: {
         streaming: {
           mode: "progress",
-          progress: { label: false, commentary: false },
+          progress: { toolProgress: true, label: false, commentary: false },
         },
       },
     });
@@ -520,7 +524,7 @@ describe("processDiscordMessage draft streaming recovery", () => {
     await runProcessDiscordMessage(ctx);
 
     expect(draftStream.update).toHaveBeenLastCalledWith(
-      "Checking private context before replying.",
+      "Checking private context before replying.\n\n🛠️ Exec",
     );
     expectFinalAnswerText("done");
     expect(getDeliveredFinalTexts()[0]).not.toContain("💬");
@@ -544,14 +548,14 @@ describe("processDiscordMessage draft streaming recovery", () => {
 
     const ctx = await createAutomaticDraftContext({
       discordConfig: {
-        streaming: { mode: "progress", progress: { label: false } },
+        streaming: { mode: "progress", progress: { toolProgress: true, label: false } },
       },
     });
 
     await runProcessDiscordMessage(ctx);
 
     expect(draftStream.update).toHaveBeenCalledWith(
-      "Implementing the change.\n\nCompleted: Inspect\nIn progress: Patch\nPending: Test",
+      "Implementing the change.\n\n✅ Inspect\n▸ Patch\n▢ Test",
     );
     expect(draftStream.flush).toHaveBeenCalledTimes(1);
   });

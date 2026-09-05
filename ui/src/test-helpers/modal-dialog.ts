@@ -48,7 +48,11 @@ async function waitForDialog<T>(read: () => T): Promise<T> {
   return vi.waitFor(read);
 }
 
-export function createModalDialogTestFixture() {
+export function createModalDialogTestFixture(
+  dismissModal: (modal: HTMLElement) => void = (modal) => {
+    modal.dispatchEvent(new CustomEvent("modal-cancel", { cancelable: true }));
+  },
+) {
   const restoreDialogPolyfill = installDialogPolyfill();
   const operations: Promise<unknown>[] = [];
   const requests: Promise<unknown>[] = [];
@@ -79,7 +83,7 @@ export function createModalDialogTestFixture() {
       captureModals();
       for (const modal of modals) {
         if (modal.parentElement) {
-          modal.dispatchEvent(new CustomEvent("modal-cancel", { cancelable: true }));
+          dismissModal(modal);
         }
       }
       const results = await Promise.allSettled(operations);

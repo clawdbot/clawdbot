@@ -61,6 +61,7 @@ const SESSION_PLACEMENT_ERROR_MAX_LENGTH = 4096;
 // while scoping it to this tab, Gateway, and authenticated credential.
 const PLACEMENT_CREATE_STRING_FIELDS = [
   "category",
+  "displayName",
   "model",
   "contextWindow",
   "thinkingLevel",
@@ -514,14 +515,15 @@ export function pauseSessionPlacementRecovery(
     : recovery.phase === "sending"
       ? "unconfirmed"
       : "not-sent",
-): SessionPlacementPausedRecovery {
+): { recovery: SessionPlacementPausedRecovery; persisted: boolean } {
   const paused: SessionPlacementPausedRecovery = {
     ...recovery,
     phase: "paused",
     reason,
     error: formatUiError(error).slice(0, SESSION_PLACEMENT_ERROR_MAX_LENGTH),
   };
-  if (persistent && !writeSessionPlacementRecoveryIfAvailable(paused)) {
+  const persisted = persistent && writeSessionPlacementRecoveryIfAvailable(paused);
+  if (persistent && !persisted) {
     // Preserve input in memory without leaving an executable pending row when
     // storage refuses the paused replacement. Never retire a newer submission.
     const stored = readSessionPlacementRecovery(
@@ -543,5 +545,5 @@ export function pauseSessionPlacementRecovery(
         SESSION_PLACEMENT_ERROR_MAX_LENGTH,
       );
   }
-  return paused;
+  return { recovery: paused, persisted };
 }

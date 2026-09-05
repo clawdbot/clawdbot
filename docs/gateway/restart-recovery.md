@@ -134,6 +134,16 @@ Doctor result leaves the Gateway stopped, including when a detached managed
 update helper is still running. Re-enabling Windows task autostart cannot
 bypass that decision.
 
+On macOS, a terminated update helper can leave the selected Gateway LaunchAgent
+installed but unloaded and disabled across logins. `openclaw doctor` and
+`openclaw doctor --fix` diagnose this state; `--fix` leaves an already-stopped
+Gateway stopped. If the update was interrupted or installation safety is
+uncertain, rerun `openclaw update` or use Doctor and triage before starting it.
+Once verified, run `openclaw gateway start` (or
+`openclaw --profile <profile> gateway start`) to re-enable and start that service.
+Keep the same state/config and custom-label overrides; Doctor prints the selected
+label and recovery command. Interactive Doctor can offer bootstrap repair.
+
 A cancellation before package mutation can restore the original service under
 its existing handoff ownership. Recovery succeeds only after the Gateway passes
 the normal restart health checks and reports the verified installation version
@@ -244,11 +254,15 @@ restriction for the continuation. An aborted turn is the interruption itself,
 so it resumes on a best-effort basis whatever abort detail the provider or worker recorded with it:
 partial streamed text stays in the transcript and the continuation picks up from
 the message beneath it, while a tool call left dangling is dropped from the next
-provider payload and restricted to restart-safe tools unless it is audited
-replay-safe. Provider failures, completed assistant tails, empty transcripts,
+provider payload. Provider failures, completed assistant tails, empty transcripts,
 and stale pending approvals also continue from the existing transcript. States
-with ambiguous side effects use restart-safe tools; otherwise the model decides
-what completed and what remains and can report any uncertainty to the user.
+with ambiguous side effects normally use restart-safe tools. A session with
+effective **Full Access**, including an inherited Full Access default, keeps its
+ordinary tools so it can inspect the outcome and finish the task. Recovery does
+not replay the interrupted call automatically or treat its missing result as
+success. Existing tool restrictions and current permissions still apply.
+Pending reply delivery, ambiguous reply-hook outcomes, and explicitly replay-safe
+Code Mode reconstruction retain their narrower recovery restrictions.
 
 OpenClaw can also reconstruct interrupted read-only [Code Mode](/tools/code-mode)
 work. Code Mode marks these runs as restart-safe and rejects side-effecting
@@ -257,15 +271,24 @@ the `wait` control, the new gateway reconstructs the turn from its transcript
 and forces the reconstructed execution to remain restart-safe even if the
 model omits or clears that flag. The host filters the entire reconstructed
 turn to audited read-only core tools and explicitly replay-safe plugin tools,
-including when Code Mode is disabled after the restart. A non-replay-safe or
-unmatched Code Mode checkpoint still resumes for model reconciliation, but
-without Code Mode controls and with the restart-safe tool restriction.
+including when Code Mode is disabled after the restart. Other interrupted
+Code Mode work resumes for model reconciliation: Full Access keeps its configured
+tool surface unless the current turn has an explicitly replay-safe checkpoint;
+other sessions retain the restart-safe restriction. Old process-local runs and
+approval handles are not revived.
 
 ### Subagents
 
 Subagent runs are persisted in the shared SQLite state database, so the
 subagent registry survives the process. On boot the registry is restored and
 interrupted subagent sessions are resumed with their original task context.
+
+A completed child may still owe its requester a final follow-up. If that
+follow-up is waiting to retry or is interrupted by restart, the saved
+obligation survives and resumes after startup. Restart admission rejection
+does not consume an attempt, and cancellation of an admitted attempt does
+not exhaust the obligation. Existing delivery retry limits still apply.
+
 Two safety valves apply:
 
 - Runs interrupted more than 2 hours ago are finalized instead of resumed, so
@@ -285,8 +308,24 @@ marked lost after a grace period instead of hanging forever.
 When the agent itself triggers a restart (applying a config change, updating
 the gateway, or an explicit restart request), a restart sentinel is written to
 SQLite before the process exits. After boot the gateway posts the outcome back
-to the originating chat and dispatches a one-shot continuation turn so the
-agent picks up exactly where it left off, on the same channel and thread.
+to the originating chat and dispatches any requested one-shot continuation turn
+so the agent picks up exactly where it left off, on the same channel and thread.
+
+For updates, the sentinel carries `stats.runId`, linking the detached updater to
+its durable `update_runs` record. The new Gateway records its observed running
+version, build, and startup facts there. It preserves a terminal outcome already
+written by the updater and waits while a managed handoff is still pending.
+If the existing restart-verification retry window expires, a still-running row
+finishes as failed with `restart-unhealthy`; an already-finalized CLI outcome
+stays intact.
+The post-restart notice is rendered from that row using the same report as
+`openclaw update status`; consuming the sentinel does not remove run history.
+Sentinels left by older releases retain their existing delivery route.
+
+Any update run with an existing internal origin session, including Control UI
+and webchat, appends its report directly to that session's transcript, even when
+the caller supplied only `sessionKey` and no `deliveryContext`. A completed
+update with no continuation does not wake the model to deliver the report.
 
 The sentinel's typed SQLite columns are authoritative for restart handling;
 its `payload_json` value is a replay/debug shadow only. Runtime reads, writes,

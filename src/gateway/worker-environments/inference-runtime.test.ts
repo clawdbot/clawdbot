@@ -214,6 +214,8 @@ function setup(
     allowGatewaySubagentBinding: true,
     workspaceDir: WORKSPACE,
     config,
+    observationConfig: config,
+    isCurrent: () => true,
     authModes: {},
     metadataSnapshot: createEmptyPluginMetadataSnapshot(WORKSPACE),
     pluginRegistry: options.pluginRegistry ?? createEmptyPluginRegistry(),
@@ -257,7 +259,7 @@ function setup(
     entry.authProfileOverride
       ? {
           profileId: entry.authProfileOverride,
-          source: entry.authProfileOverrideSource ?? "user",
+          source: entry.authProfileOverrideSource === "auto" ? "auto" : "user",
           routeRequirement: undefined,
         }
       : undefined,

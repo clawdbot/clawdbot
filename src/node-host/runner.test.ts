@@ -1,6 +1,7 @@
 /** Tests node-host runner startup, connection configuration, and lifecycle. */
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import { ConnectErrorDetailCodes } from "../../packages/gateway-protocol/src/connect-error-details.js";
+import { createDeferred } from "../../test/helpers/promise.js";
 import { getConfigResolutionFacts, setConfigResolutionFacts } from "../config/resolution-facts.js";
 import type { GatewayClientOptions } from "../gateway/client.js";
 import {
@@ -29,7 +30,7 @@ describe("runNodeHost", () => {
     { runtime: "darwin", platform: "macos", deviceFamily: "Mac" },
     { runtime: "win32", platform: "windows", deviceFamily: "Windows" },
     { runtime: "linux", platform: "linux", deviceFamily: "Linux" },
-    { runtime: "freebsd", platform: "unknown", deviceFamily: undefined },
+    { runtime: "freebsd", platform: "freebsd", deviceFamily: undefined },
   ] as const)(
     "maps $runtime to gateway platform $platform",
     async ({ runtime, platform, deviceFamily }) => {
@@ -320,26 +321,15 @@ describe("runNodeHost", () => {
     ConnectErrorDetailCodes.CLIENT_VERSION_MISMATCH,
     ConnectErrorDetailCodes.AUTH_IDENTITY_HEADER_REQUIRED,
   ])("closes MCP clients before exiting on terminal reconnect pause %s", async (detailCode) => {
-    let resolveReadiness:
-      | ((value: { ready: false; aborted: false; elapsedMs: number }) => void)
-      | undefined;
-    mocks.startGatewayClientWhenEventLoopReady.mockReturnValueOnce(
-      new Promise((resolve) => {
-        resolveReadiness = resolve;
-      }),
-    );
-    let resolveMcpClose: (() => void) | undefined;
-    mocks.closeMcpManager.mockImplementationOnce(
-      () =>
-        new Promise<undefined>((resolve) => {
-          resolveMcpClose = () => resolve(undefined);
-        }),
-    );
+    const readiness = createDeferred<{ ready: false; aborted: false; elapsedMs: number }>();
+    const mcpClose = createDeferred<undefined>();
+    mocks.startGatewayClientWhenEventLoopReady.mockReturnValueOnce(readiness.promise);
+    mocks.closeMcpManager.mockReturnValueOnce(mcpClose.promise);
+    const exit = vi.spyOn(process, "exit").mockImplementation((() => undefined) as never);
     const running = runNodeHost({ gatewayHost: "127.0.0.1", gatewayPort: 18789 });
     const stopped = expect(running).rejects.toThrow("event loop readiness timeout");
-    await vi.waitFor(() => expect(startNodeHostMcpManager).toHaveBeenCalled());
-    const exit = vi.spyOn(process, "exit").mockImplementation((() => undefined) as never);
     try {
+      await vi.waitFor(() => expect(startNodeHostMcpManager).toHaveBeenCalled());
       lastCapturedOptions()?.onReconnectPaused?.({
         code: 1008,
         reason: "connect failed",
@@ -351,15 +341,20 @@ describe("runNodeHost", () => {
       expect(mocks.capturedGatewayClients[0]?.stop).toHaveBeenCalled();
       expect(exit).not.toHaveBeenCalled();
 
-      resolveMcpClose?.();
+      mcpClose.resolve(undefined);
       await vi.waitFor(() => expect(exit).toHaveBeenCalledWith(1));
 
-      resolveReadiness?.({ ready: false, aborted: false, elapsedMs: 0 });
+      readiness.resolve({ ready: false, aborted: false, elapsedMs: 0 });
       await stopped;
     } finally {
-      resolveMcpClose?.();
-      resolveReadiness?.({ ready: false, aborted: false, elapsedMs: 0 });
-      exit.mockRestore();
+      mcpClose.resolve(undefined);
+      readiness.resolve({ ready: false, aborted: false, elapsedMs: 0 });
+      try {
+        // Shutdown owns the exit callback; keep it intercepted until the run settles.
+        await stopped;
+      } finally {
+        exit.mockRestore();
+      }
     }
   });
 
@@ -396,31 +391,21 @@ describe("runNodeHost", () => {
     ["gws", "ws://127.0.0.1:18789/gws"],
     ["", "ws://127.0.0.1:18789"],
     [undefined, "ws://127.0.0.1:18789"],
-  ])("builds the Gateway URL for context path %s", async (gatewayContextPath, expectedUrl) => {
-    await expect(
-      runNodeHost({
-        gatewayHost: "127.0.0.1",
-        gatewayPort: 18789,
-        gatewayContextPath,
-      }),
-    ).rejects.toThrow("event loop readiness timeout");
+  ])(
+    "forwards context path %s to config and the Gateway URL",
+    async (gatewayContextPath, expectedUrl) => {
+      await expect(
+        runNodeHost({
+          gatewayHost: "127.0.0.1",
+          gatewayPort: 18789,
+          gatewayContextPath,
+        }),
+      ).rejects.toThrow("event loop readiness timeout");
 
-    expect(lastCapturedOptions()?.url).toBe(expectedUrl);
-  });
-
-  it("configures the SQLite gateway snapshot with contextPath", async () => {
-    await expect(
-      runNodeHost({
-        gatewayHost: "127.0.0.1",
-        gatewayPort: 18789,
-        gatewayContextPath: "/gws",
-      }),
-    ).rejects.toThrow("event loop readiness timeout");
-
-    const lastConfigured =
-      mocks.capturedConfiguredGatewayConfigs[mocks.capturedConfiguredGatewayConfigs.length - 1];
-    expect(lastConfigured?.contextPath).toBe("/gws");
-  });
+      expect(lastCapturedOptions()?.url).toBe(expectedUrl);
+      expect(mocks.capturedConfiguredGatewayConfigs.at(-1)?.contextPath).toBe(gatewayContextPath);
+    },
+  );
 
   it("clears configured contextPath when opts do not pass one (retarget scenario)", async () => {
     await expect(
@@ -434,20 +419,5 @@ describe("runNodeHost", () => {
       mocks.capturedConfiguredGatewayConfigs[mocks.capturedConfiguredGatewayConfigs.length - 1];
     expect(lastConfigured?.contextPath).toBeUndefined();
     expect(lastCapturedOptions()?.url).toBe("ws://192.168.1.1:9999");
-  });
-
-  it("clears configured contextPath when explicitly passed as empty string", async () => {
-    await expect(
-      runNodeHost({
-        gatewayHost: "127.0.0.1",
-        gatewayPort: 18789,
-        gatewayContextPath: "",
-      }),
-    ).rejects.toThrow("event loop readiness timeout");
-
-    const lastConfigured =
-      mocks.capturedConfiguredGatewayConfigs[mocks.capturedConfiguredGatewayConfigs.length - 1];
-    expect(lastConfigured?.contextPath || undefined).toBeUndefined();
-    expect(lastCapturedOptions()?.url).toBe("ws://127.0.0.1:18789");
   });
 });

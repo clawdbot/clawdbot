@@ -198,6 +198,7 @@ describe("channels controller WhatsApp wait", () => {
       },
     } as never);
     channels.state.whatsappLoginQrDataUrl = "data:image/png;base64,existing";
+    channels.state.whatsappLoginSessionKey = "existing-session";
 
     const wait = channels.waitWhatsApp();
     await vi.waitFor(() => expect(channels.state.whatsappBusy).toBe(true));
@@ -210,6 +211,7 @@ describe("channels controller WhatsApp wait", () => {
     }
     expect(channels.state.whatsappBusy).toBe(false);
     expect(channels.state.whatsappLoginQrDataUrl).toBeNull();
+    expect(channels.state.whatsappLoginSessionKey).toBeNull();
 
     pending.resolve({
       message: "stale login",
@@ -253,6 +255,87 @@ describe("channels controller WhatsApp wait", () => {
 
     await channels.waitWhatsApp();
     expect(request).toHaveBeenCalledOnce();
+  });
+});
+
+describe("channels controller WhatsApp provider selection", () => {
+  it("selects WhatsApp for QR login start and wait requests", async () => {
+    const request = vi.fn(async (method: string) => {
+      if (method === "channels.status") {
+        return createChannelsSnapshot("refreshed");
+      }
+      return { connected: true, message: "connected" };
+    });
+    const channels = createChannelCapability({
+      snapshot: { client: { request }, phase: "connected" },
+      subscribe: () => () => undefined,
+    } as never);
+
+    await channels.startWhatsApp(false);
+    await channels.waitWhatsApp();
+
+    expect(request).toHaveBeenCalledWith(
+      "web.login.start",
+      expect.objectContaining({ channel: "whatsapp" }),
+    );
+    expect(request).toHaveBeenCalledWith(
+      "web.login.wait",
+      expect.objectContaining({ channel: "whatsapp" }),
+    );
+    channels.dispose();
+  });
+
+  it("carries the provider session key from login start into wait", async () => {
+    const request = vi.fn(async (method: string) => {
+      if (method === "web.login.start") {
+        return { message: "scan", sessionKey: "opaque-session" };
+      }
+      if (method === "web.login.wait") {
+        return { connected: true, message: "connected" };
+      }
+      return createChannelsSnapshot("refreshed");
+    });
+    const channels = createChannelCapability({
+      snapshot: { client: { request }, phase: "connected" },
+      subscribe: () => () => undefined,
+    } as never);
+
+    await channels.startWhatsApp(false);
+    await channels.waitWhatsApp();
+
+    expect(request).toHaveBeenCalledWith(
+      "web.login.wait",
+      expect.objectContaining({ channel: "whatsapp", sessionKey: "opaque-session" }),
+    );
+    expect(channels.state.whatsappLoginSessionKey).toBeNull();
+    channels.dispose();
+  });
+
+  it("retains the provider session key when a wait remains disconnected", async () => {
+    const request = vi.fn(async (method: string) => {
+      if (method === "web.login.start") {
+        return { message: "scan", sessionKey: "opaque-session" };
+      }
+      if (method === "web.login.wait") {
+        return { connected: false, message: "still waiting" };
+      }
+      return createChannelsSnapshot("refreshed");
+    });
+    const channels = createChannelCapability({
+      snapshot: { client: { request }, phase: "connected" },
+      subscribe: () => () => undefined,
+    } as never);
+
+    await channels.startWhatsApp(false);
+    await channels.waitWhatsApp();
+
+    expect(channels.state.whatsappLoginSessionKey).toBe("opaque-session");
+    await channels.waitWhatsApp();
+    expect(request.mock.calls.findLast(([method]) => method === "web.login.wait")).toEqual([
+      "web.login.wait",
+      expect.objectContaining({ sessionKey: "opaque-session" }),
+    ]);
+    channels.dispose();
   });
 });
 

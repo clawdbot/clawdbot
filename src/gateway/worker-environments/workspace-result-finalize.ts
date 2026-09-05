@@ -1,10 +1,17 @@
+import type { Result } from "@openclaw/normalization-core/result";
 import { truncateUtf16Safe } from "@openclaw/normalization-core/utf16-slice";
+import { appendAgentRunFailure } from "../../agents/agent-run-result.js";
 import type { EmbeddedAgentRunResult } from "../../agents/embedded-agent-runner/types.js";
+import { recordModelFallbackStop } from "../../agents/failover-error.js";
 import { resolveSandboxToolPolicyForAgent } from "../../agents/sandbox/tool-policy.js";
 import type { SessionPlacementTurnParams } from "../../agents/session-placement-admission.js";
 import { withSessionPlacementComputer } from "../../agents/session-placement-computer.js";
 import { withSessionSkillResources } from "../../agents/session-placement-skill-resources.js";
 import { SessionManager } from "../../agents/sessions/session-manager.js";
+import {
+  attachErrorDiagnostic,
+  formatErrorMessageForDisplay,
+} from "../../infra/error-diagnostics.js";
 import { formatErrorMessage } from "../../infra/errors.js";
 import { redactSensitiveText } from "../../logging/redact.js";
 import {
@@ -63,8 +70,17 @@ function workspaceError(error: unknown): string {
   return truncateUtf16Safe(message || "cloud worker turn failed", 1_024);
 }
 
+function retainRemoteExecCleanupFailure(error: unknown, diagnostic?: string): Error {
+  // Preserve typed/abort identity, including frozen errors; display text never owns replay policy.
+  const primary = error instanceof Error ? error : new Error(formatErrorMessage(error));
+  recordModelFallbackStop(primary);
+  return diagnostic
+    ? attachErrorDiagnostic(primary, formatErrorMessageForDisplay(primary, diagnostic))
+    : primary;
+}
+
 function remoteExecWorkspaceFailure(executionError: unknown, reconciliationError: unknown): Error {
-  const executionMessage = formatErrorMessage(executionError);
+  const executionMessage = formatErrorMessageForDisplay(executionError);
   const reconciliationDetail =
     reconciliationError instanceof WorkerWorkspaceReconciliationError &&
     reconciliationError.cause !== undefined
@@ -353,8 +369,7 @@ export async function executeRemoteExecTurn(params: {
   });
   params.placements.markWorkspaceResultPending(params.turnClaim);
   params.onHandoff();
-  let result: EmbeddedAgentRunResult | undefined;
-  let executionError: unknown;
+  let execution: Result<EmbeddedAgentRunResult, unknown>;
   let executionActive = true;
   const originalPrompt = params.turn.prompt;
   const originalTranscriptPrompt = params.turn.transcriptPrompt;
@@ -365,6 +380,7 @@ export async function executeRemoteExecTurn(params: {
       snapshot: params.turn.skillsSnapshot,
       explicitSelections: params.turn.explicitSkillSelections,
       tunnel,
+      remoteWorkspaceDir: params.placement.remoteWorkspaceDir,
       signal: params.turn.abortSignal,
       assertCurrent: () => {
         const current = params.environments.get(environment.environmentId);
@@ -390,7 +406,7 @@ export async function executeRemoteExecTurn(params: {
       params.turn.transcriptPrompt ??= originalPrompt;
       params.turn.prompt = `${originalPrompt}\n\n${attachmentNote}`;
     }
-    result = await withPluginRuntimeGatewayRequestScope(
+    const result = await withPluginRuntimeGatewayRequestScope(
       {
         isWebchatConnect: () => false,
         ...getPluginRuntimeGatewayRequestScope(),
@@ -443,18 +459,32 @@ export async function executeRemoteExecTurn(params: {
               : params.runLocal(),
         ),
     );
+    execution = { ok: true, value: result };
   } catch (error) {
-    executionError = error;
+    execution = { ok: false, error };
   } finally {
-    await skillResources?.cleanup().catch(() => undefined);
+    // Execution admission ends before artifact cleanup; placement still owns teardown.
     executionActive = false;
     params.turn.prompt = originalPrompt;
     params.turn.transcriptPrompt = originalTranscriptPrompt;
-    try {
-      await computer?.close("turn-complete");
-    } catch (error) {
-      executionError ??= error;
-    }
+  }
+  try {
+    await skillResources?.cleanup();
+  } catch (error) {
+    // Security-sensitive cleanup remains a rejecting boundary, not an advisory result.
+    const primary = execution.ok ? error : execution.error;
+    const diagnostic = execution.ok
+      ? undefined
+      : `Skill resource cleanup also failed: ${workspaceError(error)}`;
+    execution = { ok: false, error: retainRemoteExecCleanupFailure(primary, diagnostic) };
+  }
+  try {
+    await computer?.close("turn-complete");
+  } catch (error) {
+    const diagnostic = `Computer cleanup also failed: ${workspaceError(error)}`;
+    execution = execution.ok
+      ? { ok: true, value: appendAgentRunFailure(execution.value, diagnostic) }
+      : { ok: false, error: retainRemoteExecCleanupFailure(execution.error, diagnostic) };
   }
   const workspaceConflict = await reconcileWorkspaceAfterTurn({
     placement: params.placement,
@@ -489,19 +519,20 @@ export async function executeRemoteExecTurn(params: {
         reason: "node-disconnect",
       });
     }
-    if (executionError) {
-      throw remoteExecWorkspaceFailure(executionError, reconciliationError);
+    if (!execution.ok) {
+      throw remoteExecWorkspaceFailure(execution.error, reconciliationError);
+    }
+    if (execution.value.meta.error) {
+      throw remoteExecWorkspaceFailure(execution.value.meta.error.message, reconciliationError);
     }
     throw reconciliationError;
   });
-  if (executionError) {
-    throw executionError instanceof Error
-      ? executionError
-      : new Error(formatErrorMessage(executionError));
+  if (!execution.ok) {
+    throw execution.error instanceof Error
+      ? execution.error
+      : new Error(formatErrorMessage(execution.error));
   }
-  if (!result) {
-    throw new Error("Remote-exec local harness completed without a result");
-  }
+  const result = execution.value;
   if (!workspaceConflict) {
     return result;
   }

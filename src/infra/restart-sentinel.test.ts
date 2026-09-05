@@ -64,7 +64,6 @@ import {
   writeRestartSentinel,
 } from "./restart-sentinel.js";
 import {
-  CONTROL_PLANE_UPDATE_RESTART_HEALTH_PENDING_REASON,
   buildControlPlaneUpdateRestartHealthPendingResult,
   isPendingControlPlaneUpdateRestartSentinel,
 } from "./update-control-plane-sentinel.js";
@@ -961,7 +960,7 @@ describe("control-plane update restart sentinel", () => {
     });
 
     expect(pendingPayload.status).toBe("skipped");
-    expect(pendingPayload.stats?.reason).toBe(CONTROL_PLANE_UPDATE_RESTART_HEALTH_PENDING_REASON);
+    expect(pendingPayload.stats?.reason).toBe("restart-health-pending");
     expect(pendingPayload.continuation).toBeUndefined();
     expect(isPendingControlPlaneUpdateRestartSentinel(pendingPayload)).toBe(true);
 

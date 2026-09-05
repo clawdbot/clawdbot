@@ -1,3 +1,4 @@
+import { err, ok } from "@openclaw/normalization-core/result";
 import { ErrorCodes, errorShape } from "../../../packages/gateway-protocol/src/index.js";
 import { withAgentCommandExecutionIdentitySpawnFacts } from "../../agents/agent-command-execution-identity-spawn.js";
 import {
@@ -20,19 +21,30 @@ import {
   createExecutionStartedOwnerBinding,
   isRetainedExecutionOwnerBinding,
 } from "../../audit/execution-owner-binding.js";
-import { readAgentRunTerminalOutcome } from "../../channels/turn/agent-run-terminal-outcome.js";
+import {
+  readAgentRunTerminalError,
+  readAgentRunTerminalOutcome,
+} from "../../channels/turn/agent-run-terminal-outcome.js";
 import { agentCommandFromGatewayIngress } from "../../commands/agent.js";
 import { isAbortError } from "../../infra/abort-signal.js";
-import { clearAgentRunContext } from "../../infra/agent-run-registry.js";
-import { readErrorName } from "../../infra/errors.js";
+import { isAgentEventLifecycleGenerationCurrent } from "../../infra/agent-events.js";
+import {
+  clearAgentRunContext,
+  validateAgentRunDelegatedAuthority,
+} from "../../infra/agent-run-registry.js";
+import { formatErrorMessage, readErrorName } from "../../infra/errors.js";
+import { withTimeout } from "../../infra/fs-safe.js";
 import { defaultRuntime } from "../../runtime.js";
 import { createRunningTaskRun } from "../../tasks/detached-task-runtime.js";
+import { getTaskById } from "../../tasks/runtime-internal.js";
 import { bindTaskFlowExecution } from "../../tasks/task-flow-registry.store.sqlite.js";
 import { mapAgentRunTerminalOutcomeToTaskStatus } from "../../tasks/task-registry-common.js";
 import { bindTaskRunExecution } from "../../tasks/task-registry.store.sqlite.js";
 import type { TaskRecord } from "../../tasks/task-registry.types.js";
+import { bindTaskRunOwner } from "../../tasks/task-run-owner.js";
 import { normalizeDeliveryContext } from "../../utils/delivery-context.shared.js";
-import type { ChatAbortControllerEntry } from "../chat-abort.js";
+import { createChatAbortOps } from "../chat-abort-ops.js";
+import { abortChatRunById, type ChatAbortControllerEntry } from "../chat-abort.js";
 import { errorShapeFromError } from "../error-shape.js";
 import {
   tryFinalizeTrackedAgentTask,
@@ -143,10 +155,8 @@ export function dispatchAgentRunFromGateway(params: {
     onRecovered?: () => void;
   }) => Promise<boolean> | boolean;
 }) {
-  const shouldTrackTask = params.taskTrackingMode === "cli";
-  let taskTracked = false;
   let trackedTask: TaskRecord | undefined;
-  if (shouldTrackTask) {
+  if (params.taskTrackingMode === "cli") {
     try {
       trackedTask =
         createRunningTaskRun({
@@ -166,12 +176,11 @@ export function dispatchAgentRunFromGateway(params: {
           deliveryStatus: "not_applicable",
           startedAt: Date.now(),
         }) ?? undefined;
-      taskTracked = Boolean(trackedTask);
-    } catch (err) {
+    } catch (error) {
       // Best-effort only: background task tracking must not block agent runs.
       // Still surface the swallowed error so non-transient tracking failures stay observable.
       params.context.logGateway.warn(
-        `failed to start tracked agent task ${params.runId}: ${formatForLog(err)}`,
+        `failed to start tracked agent task ${params.runId}: ${formatForLog(error)}`,
       );
     }
   }
@@ -189,6 +198,8 @@ export function dispatchAgentRunFromGateway(params: {
     }
   };
   let runOwnerCleanedUp = false;
+  let releaseTaskOwner: (() => void) | undefined;
+  let cancellationReason: string | undefined;
   const cleanupRunOwner = () => {
     if (runOwnerCleanedUp) {
       return;
@@ -201,6 +212,7 @@ export function dispatchAgentRunFromGateway(params: {
     ? createCronCreatorAuthorityCapability(
         params.cronCreatorAuthority.runId,
         params.cronCreatorAuthority.callerOrigin,
+        params.cronCreatorAuthority.controlUiAdmin,
       )
     : undefined;
   const ingressOptsWithSpawnFacts = withAgentCommandExecutionIdentitySpawnFacts(
@@ -265,7 +277,7 @@ export function dispatchAgentRunFromGateway(params: {
         params.abortController.signal,
       )
     : runAgent();
-  void agentRun
+  const runCompletion = agentRun
     .then(async (result) => {
       const recordedOutcome = readAgentRunTerminalOutcome(result);
       const signalStopReason = resolveResolvedAgentTimeoutStopReason(
@@ -279,6 +291,7 @@ export function dispatchAgentRunFromGateway(params: {
           ? (result?.meta?.stopReason ?? "rpc")
           : undefined;
       const timeoutPhase = normalizeAgentRunTimeoutPhase(result?.meta?.timeoutPhase);
+      const terminalError = readAgentRunTerminalError(result) ?? result?.meta?.error?.message;
       const terminalOutcome = buildAgentRunTerminalOutcome({
         status:
           aborted || result?.meta?.stopReason === "timeout" || timeoutPhase
@@ -288,7 +301,7 @@ export function dispatchAgentRunFromGateway(params: {
                 result?.meta?.stopReason === "error"
               ? "error"
               : "ok",
-        error: result?.meta?.error,
+        error: terminalError ? formatErrorMessage(terminalError) : undefined,
         stopReason: stopReason ?? result?.meta?.stopReason,
         livenessState: result?.meta?.livenessState,
         timeoutPhase,
@@ -298,10 +311,16 @@ export function dispatchAgentRunFromGateway(params: {
         RESOLVED_GATEWAY_STATUS_BY_TERMINAL_CLASSIFICATION[
           classifyAgentRunTerminalOutcome(terminalOutcome)
         ];
-      if (taskTracked) {
+      if (trackedTask) {
+        const status = mapAgentRunTerminalOutcomeToTaskStatus(terminalOutcome);
         tryFinalizeTrackedAgentTask({
           runId: params.runId,
-          status: mapAgentRunTerminalOutcomeToTaskStatus(terminalOutcome),
+          sessionKey: trackedTask.childSessionKey,
+          status,
+          error:
+            status === "cancelled"
+              ? (cancellationReason ?? terminalOutcome.error)
+              : terminalOutcome.error,
           terminalSummary:
             responseStatus === "timeout"
               ? "aborted"
@@ -357,7 +376,7 @@ export function dispatchAgentRunFromGateway(params: {
           runId: params.runId,
           error: summary,
         });
-        return;
+        return { terminalOutcome, settled };
       }
       persistTerminalDedupe();
       // A final response resumes durable delivery cleanup. Release the terminal
@@ -366,33 +385,36 @@ export function dispatchAgentRunFromGateway(params: {
       // Send a second res frame (same id) so TS clients with expectFinal can wait.
       // Swift clients will typically treat the first res as the result and ignore this.
       params.io.emitFinal([true, payload, undefined], { runId: params.runId });
+      return { terminalOutcome, settled };
     })
-    .catch(async (err: unknown) => {
-      const aborted = isGatewayAgentAbortRejection(err, params.abortController.signal);
-      const error = errorShapeFromError(ErrorCodes.UNAVAILABLE, err);
+    .catch(async (cause: unknown) => {
+      const aborted = isGatewayAgentAbortRejection(cause, params.abortController.signal);
+      const error = errorShapeFromError(ErrorCodes.UNAVAILABLE, cause);
       const renderedErr = error.message;
       const stopReason = aborted
         ? resolveGatewayAgentAbortStopReason(params.abortController.signal)
-        : isAbortError(err)
+        : isAbortError(cause)
           ? "aborted"
           : undefined;
       const terminalOutcome = buildAgentRunTerminalOutcome({
-        status: aborted || isTimeoutError(err) ? "timeout" : "error",
+        status: aborted || isTimeoutError(cause) ? "timeout" : "error",
         error: renderedErr,
         stopReason,
         timeoutPhase: stopReason === "restart" ? "gateway_draining" : undefined,
       });
       const responseStatus = projectRejectedGatewayStatus(terminalOutcome);
-      if (taskTracked) {
+      if (trackedTask) {
+        const status = mapAgentRunTerminalOutcomeToTaskStatus(terminalOutcome);
         tryFinalizeTrackedAgentTask({
           runId: params.runId,
-          status: mapAgentRunTerminalOutcomeToTaskStatus(terminalOutcome),
-          error: renderedErr,
+          sessionKey: trackedTask.childSessionKey,
+          status,
+          error: status === "cancelled" ? (cancellationReason ?? renderedErr) : renderedErr,
           terminalSummary: renderedErr,
           log: params.context.logGateway,
         });
       }
-      Object.defineProperty(error, "cause", { value: err });
+      Object.defineProperty(error, "cause", { value: cause });
       const payload = {
         runId: params.runId,
         status: responseStatus,
@@ -428,6 +450,60 @@ export function dispatchAgentRunFromGateway(params: {
         runId: params.runId,
         ...(aborted ? {} : { error: renderedErr }),
       });
+      return { terminalOutcome, settled };
     })
-    .finally(cleanupRunOwner);
+    .finally(() => {
+      cleanupRunOwner();
+      releaseTaskOwner?.();
+    });
+
+  const entry = params.context.chatAbortControllers.get(params.runId);
+  if (trackedTask && entry?.controller === params.abortController) {
+    const task = trackedTask;
+    const taskId = task.taskId;
+    const { operationalRunInstance, lifecycleGeneration, sessionKey } = entry;
+    releaseTaskOwner = bindTaskRunOwner(task, async (reason) => {
+      const authority = entry.agentRunDelegatedAuthority;
+      if (
+        !operationalRunInstance ||
+        !lifecycleGeneration ||
+        !isAgentEventLifecycleGenerationCurrent(lifecycleGeneration) ||
+        params.context.chatAbortControllers.get(params.runId) !== entry ||
+        entry.controller !== params.abortController ||
+        entry.lifecycleGeneration !== lifecycleGeneration ||
+        entry.operationalRunInstance !== operationalRunInstance ||
+        entry.sessionKey !== sessionKey ||
+        task.childSessionKey !== sessionKey ||
+        entry.registrationCleanupRequested ||
+        (entry.executionStarted && !authority) ||
+        (authority &&
+          (authority.operationalRunInstance !== operationalRunInstance ||
+            !validateAgentRunDelegatedAuthority(authority)))
+      ) {
+        return err("Task no longer owns an active Gateway run.");
+      }
+      const result = abortChatRunById(createChatAbortOps(params.context), {
+        runId: params.runId,
+        sessionKey,
+        stopReason: "rpc",
+      });
+      if (!result.aborted) {
+        return err("Task run did not accept cancellation.");
+      }
+      cancellationReason = reason;
+      // Lifecycle projection can finish before tools unwind. Wait on this exact producer.
+      const outcome = await withTimeout(runCompletion, 10_000, "Task cancellation settlement");
+      const current = getTaskById(taskId);
+      if (
+        !outcome.settled ||
+        classifyAgentRunTerminalOutcome(outcome.terminalOutcome) !== "cancellation" ||
+        current?.status !== "cancelled"
+      ) {
+        return err("Task cancellation was not confirmed. Inspect its final result.");
+      }
+      return ok(current);
+    });
+  }
+  // Gateway shutdown must join this execution, not just its admission.
+  return runCompletion;
 }

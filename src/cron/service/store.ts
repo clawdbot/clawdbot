@@ -10,16 +10,14 @@ import {
   getCronJobsStoreRevision,
   loadCronJobsStoreWithConfigJobs,
   saveCronJobsStore,
+  saveCronJobsStoreChanges,
   type QuarantinedCronConfigJob,
 } from "../store.js";
 import {
   CronRunReceiptConflictError,
   CronRunReceiptRevisionError,
 } from "../store/run-receipt-store.js";
-import {
-  type CronStoreTransactionHooks,
-  saveCronJobsStoreWithTransactionHooks,
-} from "../store/transaction-hooks.js";
+import type { CronStoreTransactionHooks } from "../store/transaction-hooks.types.js";
 import type { CronJob, CronStoreFile } from "../types.js";
 import { computeJobNextRunAtMs, recomputeNextRuns } from "./jobs-scheduling.js";
 import { assertTimeScheduleSatisfiable } from "./jobs-validation.js";
@@ -29,6 +27,7 @@ const loadedCronStoreRevisions = new WeakMap<CronServiceState, number>();
 
 type PersistOptions = {
   stateOnly?: boolean;
+  preserveConcurrentAdds?: boolean;
   suppressScheduledJobId?: string;
   postPersistNotifications?: DeferredCronNotifications;
   transactionHooks?: CronStoreTransactionHooks;
@@ -149,6 +148,9 @@ export async function ensureLoaded(
     /** Skip recomputing nextRunAtMs after load so the caller can run due
      *  jobs against the persisted values first (see onTimer). */
     skipRecompute?: boolean;
+    /** A disabled writer commits only its changed rows, so quarantine cleanup
+     *  must not turn its fresh read back into a full-store replacement. */
+    deferQuarantinePersist?: boolean;
   },
 ) {
   // Keep scheduler-local pacing/catch-up mutations unless another in-process
@@ -256,7 +258,7 @@ export async function ensureLoaded(
   state.storeLoadedAtMs = loadNowMs;
   loadedCronStoreRevisions.set(state, getCronJobsStoreRevision(state.deps.storePath));
 
-  if (quarantinedConfigJobs.length > 0) {
+  if (quarantinedConfigJobs.length > 0 && !opts?.deferQuarantinePersist) {
     // Config decoding and runtime validation reject rows in separate passes;
     // restore their original durable order before writing operator-visible quarantine.
     quarantinedConfigJobs.sort((left, right) => left.sourceIndex - right.sourceIndex);
@@ -287,6 +289,21 @@ export async function ensureLoaded(
   }
 }
 
+/** Loads authoritative passive state without discarding enabled-scheduler transients. */
+export async function ensureLoadedForOperation(state: CronServiceState): Promise<void> {
+  await ensureLoaded(state, {
+    forceReload: !state.deps.cronEnabled,
+    skipRecompute: true,
+    deferQuarantinePersist: !state.deps.cronEnabled,
+  });
+  if (!state.deps.cronEnabled) {
+    // A passive writer cannot sanitize the whole store without racing its scheduler owner.
+    // Leave malformed rows for an enabled owner or doctor instead of carrying a full rewrite.
+    state.pendingQuarantineConfigJobs = [];
+    state.lastQuarantineFailureWarnKey = null;
+  }
+}
+
 /** Emits the cron-disabled warning once per service state. */
 export function warnIfDisabled(state: CronServiceState, action: string) {
   if (state.deps.cronEnabled) {
@@ -314,17 +331,11 @@ export async function persist(state: CronServiceState, opts?: PersistOptions) {
       : undefined;
   const stateOnly = !quarantine && opts?.stateOnly === true;
   try {
-    const saveOptions = quarantine ? { quarantine } : stateOnly ? { stateOnly: true } : undefined;
-    if (opts?.transactionHooks) {
-      await saveCronJobsStoreWithTransactionHooks(
-        state.deps.storePath,
-        store,
-        saveOptions,
-        opts.transactionHooks,
-      );
-    } else {
-      await saveCronJobsStore(state.deps.storePath, store, saveOptions);
-    }
+    await saveCronJobsStore(state.deps.storePath, store, {
+      quarantine,
+      stateOnly,
+      transactionHooks: opts?.transactionHooks,
+    });
   } catch (error) {
     if (
       !quarantine ||
@@ -414,6 +425,27 @@ export async function persistOrRestore(
   opts: Omit<PersistOptions, "stateOnly"> = {},
 ) {
   try {
+    if (!state.deps.cronEnabled && snapshot.store && state.store) {
+      state.store = await saveCronJobsStoreChanges(
+        state.deps.storePath,
+        snapshot.store,
+        state.store,
+        {
+          ...(opts.preserveConcurrentAdds ? { preserveConcurrentAdds: true } : {}),
+          ...(opts.transactionHooks ? { transactionHooks: opts.transactionHooks } : {}),
+        },
+      );
+      state.storeLoadedAtMs = state.deps.nowMs();
+      loadedCronStoreRevisions.set(state, getCronJobsStoreRevision(state.deps.storePath));
+      publishDurableNextRunChanges({
+        state,
+        storeJobs: state.store.jobs,
+        stateOnly: false,
+        suppressScheduledJobId: opts.suppressScheduledJobId,
+      });
+      runPostPersistCronNotifications(state, opts.postPersistNotifications);
+      return;
+    }
     // Notification failures are contained inside persist(), so a throw here
     // always means the durable write itself failed and the snapshot must win.
     const persisted = await persist(state, opts);

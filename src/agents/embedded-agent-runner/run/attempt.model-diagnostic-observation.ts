@@ -1,15 +1,11 @@
 import { isRecord } from "@openclaw/normalization-core/record-coerce";
-import {
-  areDiagnosticsEnabledForProcess,
-  emitTrustedDiagnosticEvent,
-  type DiagnosticModelCallContent,
-} from "../../../infra/diagnostic-events.js";
+import type { DiagnosticModelCallContent } from "../../../infra/diagnostic-events.js";
 import {
   cloneDiagnosticContentValue,
   type DiagnosticModelContentCapturePolicy,
 } from "../../../infra/diagnostic-llm-content.js";
 import { emitCoreSemanticRunProgressDiagnosticEvent } from "../../../infra/diagnostic-semantic-run-progress.js";
-import { markDiagnosticRunProgress } from "../../../logging/diagnostic-run-activity.js";
+import { createModelCallStreamProgressReporter } from "../../../logging/diagnostic-model-stream-progress.js";
 import { derivePromptTokens, normalizeUsage, type UsageLike } from "../../usage.js";
 import type {
   ModelCallEventBase,
@@ -20,8 +16,6 @@ import type {
   ModelCallUsage,
 } from "./attempt.model-diagnostic-lifecycle.js";
 
-const MODEL_CALL_STREAM_PROGRESS_INTERVAL_MS = 30_000;
-const MODEL_CALL_STREAM_PROGRESS_REASON = "model_call:stream_progress";
 const MODEL_CALL_SEMANTIC_PROGRESS_REASON = "model_call:semantic_result";
 
 function utf8JsonByteLength(value: unknown): number | undefined {
@@ -164,13 +158,14 @@ function observeModelCallTerminalMessage(state: ModelCallObservationState, value
     rawUsage = value.usage;
     // The stream contract returns failed assistant messages without throwing.
     // Keep their terminal fact for both iterator and result-only completion.
+    // Abort state takes precedence over transport errors raised during cancellation.
     if (
       value.role === "assistant" &&
       (value.stopReason === "error" || value.stopReason === "aborted")
     ) {
       state.terminalError ??= Object.assign(
         new Error(typeof value.errorMessage === "string" ? value.errorMessage : value.stopReason),
-        { code: value.errorCode },
+        { code: value.stopReason === "aborted" ? "ABORT_ERR" : value.errorCode },
       );
     }
   } catch {
@@ -295,39 +290,6 @@ function observeResponseChunk(
   }
 }
 
-function maybeEmitModelCallStreamProgress(
-  eventBase: ModelCallEventBase,
-  state: ModelCallObservationState,
-): void {
-  if (!areDiagnosticsEnabledForProcess()) {
-    return;
-  }
-  const now = Date.now();
-  const progressFields = {
-    runId: eventBase.runId,
-    ...(eventBase.sessionKey ? { sessionKey: eventBase.sessionKey } : {}),
-    ...(eventBase.sessionId ? { sessionId: eventBase.sessionId } : {}),
-    reason: MODEL_CALL_STREAM_PROGRESS_REASON,
-  };
-  markDiagnosticRunProgress(progressFields);
-  if (
-    state.lastStreamProgressAt !== undefined &&
-    now - state.lastStreamProgressAt < MODEL_CALL_STREAM_PROGRESS_INTERVAL_MS
-  ) {
-    return;
-  }
-  state.lastStreamProgressAt = now;
-  // Streaming providers, local or remote, are expected to produce chunks or
-  // heartbeat-style progress. The in-memory freshness clock is refreshed for
-  // each chunk, while diagnostic events are throttled so token streams do not
-  // spam observers; silent/non-streaming calls remain recoverable after the
-  // configured stuck-session timeout.
-  emitTrustedDiagnosticEvent({
-    type: "run.progress",
-    ...progressFields,
-  });
-}
-
 function modelCallSizeTimingFields(state: ModelCallObservationState): ModelCallSizeTimingFields {
   return {
     ...(state.requestPayloadBytes !== undefined
@@ -370,6 +332,7 @@ export function createModelObserver(params: {
     contentCapture: params.contentCapture,
     suppressPluginHooks: params.suppressPluginHooks,
   };
+  const reportStreamProgress = createModelCallStreamProgressReporter();
   return {
     state,
     promptStats,
@@ -387,7 +350,7 @@ export function createModelObserver(params: {
       maybeEmitModelCallSemanticProgress(eventBase, state, result);
     },
     maybeEmitStreamProgress(eventBase) {
-      maybeEmitModelCallStreamProgress(eventBase, state);
+      reportStreamProgress(eventBase);
     },
     sizeTimingFields() {
       return modelCallSizeTimingFields(state);

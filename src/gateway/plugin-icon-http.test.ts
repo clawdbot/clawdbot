@@ -1,12 +1,14 @@
 // Gateway plugin icon HTTP tests cover authenticated identity lookup, bounded
 // package loading, SVG normalization, caching, and failure fallback behavior.
 import { execFileSync } from "node:child_process";
-import { mkdirSync, renameSync, symlinkSync, writeFileSync } from "node:fs";
+import fs, { mkdirSync, renameSync, symlinkSync, writeFileSync } from "node:fs";
 import { createServer } from "node:http";
+import { syncBuiltinESMExports } from "node:module";
 import type { AddressInfo } from "node:net";
 import path from "node:path";
 import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 import { useAutoCleanupTempDirTracker } from "../../test/helpers/temp-dir.js";
+import * as boundaryFileRead from "../infra/boundary-file-read.js";
 import { createDeferredCore } from "../shared/deferred.js";
 import { APNG_BYTES } from "./http-image.test-support.js";
 import { AUTH_NONE, sendRequest, withGatewayServer } from "./server-http.test-harness.js";
@@ -458,6 +460,44 @@ describe("Control UI plugin and catalog icon routes", () => {
         enlarge: false,
       },
     });
+  });
+
+  it("closes the descriptor when rejecting an empty package icon", async () => {
+    writeFileSync(localIconPath, "");
+    let tracked: { fd: number; closed: boolean } | undefined;
+    const openRootFile = boundaryFileRead.openRootFile;
+    const opened = vi.spyOn(boundaryFileRead, "openRootFile").mockImplementation(async (params) => {
+      const receipt = await openRootFile(params);
+      if (receipt.ok) {
+        // Earlier closes of this fd number belong to a different open.
+        tracked = { fd: receipt.fd, closed: false };
+      }
+      return receipt;
+    });
+    const closeSync = fs.closeSync;
+    const closed = vi.spyOn(fs, "closeSync").mockImplementation((fd) => {
+      closeSync(fd);
+      if (tracked?.fd === fd) {
+        tracked.closed = true;
+      }
+    });
+    try {
+      // The owner imports Node's named binding; observe release before the fd number can be reused.
+      syncBuiltinESMExports();
+      const response = await request("/__openclaw__/plugin-icon/empty-package");
+      expect(response.status).toBe(404);
+      expect(tracked?.closed).toBe(true);
+    } finally {
+      try {
+        if (tracked && !tracked.closed) {
+          closeSync(tracked.fd);
+        }
+      } finally {
+        opened.mockRestore();
+        closed.mockRestore();
+        syncBuiltinESMExports();
+      }
+    }
   });
 
   it("rejects a package icon redirected outside its package after discovery", async () => {

@@ -40,6 +40,7 @@ function asyncDeliveryMessage(text: string, itemId: string): Record<string, unkn
 
 function resolvePolicy(params: {
   messages?: unknown[];
+  fullAccess?: boolean;
   beforeAgentReplyState?:
     | "admitted"
     | "pending"
@@ -57,6 +58,7 @@ function resolvePolicy(params: {
     params.beforeAgentReplyState,
     params.deliveryReceiptState,
     params.deliveryToolCallId,
+    params.fullAccess,
   );
 }
 
@@ -90,6 +92,18 @@ function codeModeWait(runId = "code-run") {
 }
 
 describe("resolveMainSessionResumePolicy former terminal states", () => {
+  it.each([
+    { deliveryReceiptState: "terminal-pending" as const },
+    { beforeAgentReplyState: "pending" as const },
+    { beforeAgentReplyState: "handled-reply" as const },
+    { beforeAgentReplyState: "handled-unrecoverable" as const },
+    { messages: [codeModeCheckpoint({ replaySafe: true, runId: "code-run" }), codeModeWait()] },
+  ])("retains reconciliation restrictions under full access: %j", (params) => {
+    expect(resolvePolicy({ ...params, fullAccess: true })).toMatchObject({
+      action: "resume",
+      forceRestartSafeTools: true,
+    });
+  });
   it.each([
     {
       label: "terminal delivery whose outcome is unknown",

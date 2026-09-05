@@ -765,7 +765,11 @@ describe("config view", () => {
     // The capability refuses form submissions until the raw draft is saved or
     // discarded, so the raw actions stay on screen and Form remains gated.
     expect(container.querySelector(".config-raw-actions")).not.toBeNull();
-    expect(findButtonByText(container, "Form").disabled).toBe(true);
+    const formButton = findButtonByText(container, "Form");
+    const rawButton = findButtonByText(container, "Raw");
+    expect(formButton.disabled).toBe(true);
+    expect(formButton.getAttribute("aria-pressed")).toBe("false");
+    expect(rawButton.getAttribute("aria-pressed")).toBe("true");
   });
 
   it("disables raw save/discard without changes and locks the editor while busy", () => {
@@ -876,6 +880,8 @@ describe("config view", () => {
     const formButton = findButtonByText(container, "Form");
     const rawButton = findButtonByText(container, "Raw");
     expect([...formButton.classList]).toEqual(["config-mode-toggle__btn", "active"]);
+    expect(formButton.getAttribute("aria-pressed")).toBe("true");
+    expect(rawButton.getAttribute("aria-pressed")).toBe("false");
     expect(rawButton.disabled).toBe(true);
     expect(rawButton.getAttribute("title")).toBe("Raw mode unavailable for this snapshot");
     expect(container.querySelector(".config-raw-field")).toBeNull();
@@ -979,6 +985,43 @@ describe("config view", () => {
     expect(queryRequired(expanded.container, `#${controlledPanelId}`, HTMLDivElement).hidden).toBe(
       false,
     );
+    expect(
+      queryRequired(
+        expanded.container,
+        ".config-accordion-group__item--active",
+        HTMLButtonElement,
+      ).getAttribute("aria-current"),
+    ).toBe("true");
+    expect(
+      collapsed.container
+        .querySelector(".config-accordion-group__item")
+        ?.hasAttribute("aria-current"),
+    ).toBe(false);
+  });
+
+  it("exposes the selected Form/Raw mode through aria-pressed", () => {
+    const base = {
+      schema: {
+        type: "object",
+        properties: {
+          gateway: { type: "object", properties: { mode: { type: "string" } } },
+        },
+      },
+      formValue: { gateway: { mode: "local" } },
+      originalValue: { gateway: { mode: "local" } },
+    } as const;
+    const formMode = renderConfigView({ ...base, formMode: "form" });
+    expect(findButtonByText(formMode.container, "Form").getAttribute("aria-pressed")).toBe("true");
+    expect(findButtonByText(formMode.container, "Raw").getAttribute("aria-pressed")).toBe("false");
+
+    const rawMode = renderConfigView({
+      ...base,
+      formMode: "raw",
+      raw: "{}\n",
+      originalRaw: "{}\n",
+    });
+    expect(findButtonByText(rawMode.container, "Form").getAttribute("aria-pressed")).toBe("false");
+    expect(findButtonByText(rawMode.container, "Raw").getAttribute("aria-pressed")).toBe("true");
   });
 
   it("renders the virtual Notifications tab on Notifications settings", () => {

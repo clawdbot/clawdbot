@@ -132,16 +132,18 @@ class SessionOwnerChip extends OpenClawLightDomElement {
     const stacked = this.size === "row" && this.participantCount > 0;
     const chip = html`
       <span
-        class="session-owner-chip session-owner-chip--${this.size} ${this.viewingNow === false
-          ? "session-owner-chip--away"
-          : ""} ${stacked ? "session-owner-stack__front" : ""}"
+        class="session-owner-chip session-owner-chip--${this.size} ${
+          this.viewingNow === false ? "session-owner-chip--away" : ""
+        } ${stacked ? "session-owner-stack__front" : ""}"
         style="--owner-hue: ${ownerHue(owner.id)}"
         role="img"
         aria-label=${accessibleLabel}
         title=${accessibleLabel}
-        >${avatar?.kind === "profile"
-          ? renderSessionOwnerAvatar({ ...owner, id: owner.id })
-          : initials}</span
+        >${
+          avatar?.kind === "profile"
+            ? renderSessionOwnerAvatar({ ...owner, id: owner.id })
+            : initials
+        }</span
       >
     `;
     if (!stacked) {
@@ -155,9 +157,11 @@ class SessionOwnerChip extends OpenClawLightDomElement {
         : `${accessibleLabel} · ${t("sessionsView.withMoreParticipants", { count: String(this.participantCount) })}`;
     return html`<span class="session-owner-stack" role="group" aria-label=${combinedLabel}>
       <span class="session-owner-stack__back" aria-hidden="true">
-        ${this.participantCount === 1 && participant
-          ? renderSessionOwnerAvatar({ ...participant, id: participant.identity.id })
-          : html`<span class="session-owner-stack__overflow">+${this.participantCount}</span>`}
+        ${
+          this.participantCount === 1 && participant
+            ? renderSessionOwnerAvatar({ ...participant, id: participant.identity.id })
+            : html`<span class="session-owner-stack__overflow">+${this.participantCount}</span>`
+        }
       </span>
       ${chip}
     </span>`;

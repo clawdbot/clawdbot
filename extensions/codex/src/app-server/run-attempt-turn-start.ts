@@ -32,7 +32,7 @@ import type { CodexAttemptTurnState } from "./run-attempt-turn-state.js";
 import { assertCodexBindingMayBeReplaced } from "./session-binding.js";
 import { buildCodexUserPromptMessage } from "./transcript-mirror.js";
 import {
-  createCodexUsageLimitPromptError,
+  CodexUsageLimitPromptError,
   formatCodexTurnStartUsageLimitError,
   markCodexAuthProfileBlockedFromRateLimits,
 } from "./usage-limit-error.js";
@@ -67,7 +67,6 @@ export async function startCodexAttemptTurn(
     appServer,
     attemptStartedAt,
     startupAuthProfileId,
-    abortFromUpstream,
   } = connection;
   const { state, turnIdRef } = turnRuntime;
   const { waitForActiveNativeTurnCompletion } = notifications;
@@ -275,7 +274,6 @@ export async function startCodexAttemptTurn(
         log: embeddedAgentLog,
         cleanup: async () => trajectoryRecorder?.flush(),
       });
-      params.abortSignal?.removeEventListener("abort", abortFromUpstream);
       await releaseSharedClientLeaseAndRetireOneShotClient();
       if (usageLimitError) {
         await markCodexAuthProfileBlockedFromRateLimits({
@@ -287,7 +285,7 @@ export async function startCodexAttemptTurn(
           result: buildCodexTurnStartFailureResult({
             params,
             message: usageLimitError.message,
-            promptError: createCodexUsageLimitPromptError(usageLimitError.message),
+            promptError: new CodexUsageLimitPromptError(usageLimitError.message),
             messagesSnapshot,
             systemPromptReport,
           }),

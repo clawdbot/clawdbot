@@ -273,6 +273,7 @@ describe("ModelProvidersPage agent scope", () => {
           defaults: {
             fastModeDefault: "auto",
             thinkingDefault: "high",
+            utilityModel: null,
           },
         },
       },
@@ -357,6 +358,7 @@ describe("ModelProvidersPage agent scope", () => {
           defaults: {
             fastModeDefault: "auto",
             thinkingDefault: null,
+            utilityModel: null,
           },
         },
       },

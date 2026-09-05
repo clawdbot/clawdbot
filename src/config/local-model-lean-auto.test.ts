@@ -1,7 +1,62 @@
 import { describe, expect, it } from "vitest";
 import { applyAutoLocalModelLean } from "./local-model-lean-auto.js";
+import type { OpenClawConfig } from "./types.openclaw.js";
 
 describe("local model lean onboarding defaults", () => {
+  it.each([
+    { providerKey: "managed-local", providerId: "managed-local", managed: true, expected: true },
+    { providerKey: "Managed-Local", providerId: "MANAGED-LOCAL", managed: true, expected: true },
+    { providerKey: "managed-local", providerId: "managed-local", managed: false, expected: false },
+  ])(
+    "classifies $providerKey by its configured process ownership ($managed)",
+    ({ providerKey, providerId, managed, expected }) => {
+      const config: OpenClawConfig = {
+        models: {
+          providers: {
+            [providerKey]: {
+              baseUrl: "http://127.0.0.1:8080/v1",
+              models: [],
+              ...(managed ? { localService: { command: "/usr/bin/model-server" } } : {}),
+            },
+          },
+        },
+      };
+      const modelRef = `${providerId}/test-model`;
+      const result = applyAutoLocalModelLean({ config, providerId, modelRef });
+
+      expect(result.enabled).toBe(expected);
+      expect(result.config.agents?.defaults?.experimental?.localModelLean).toBe(
+        expected ? true : undefined,
+      );
+      expect(result.config.wizard?.localModelLeanAutoModel).toBe(expected ? modelRef : undefined);
+    },
+  );
+
+  it("does not mistake an Ollama cloud model for local inference when its daemon is managed", () => {
+    const config: OpenClawConfig = {
+      models: {
+        providers: {
+          ollama: {
+            baseUrl: "http://127.0.0.1:11434",
+            models: [],
+            localService: { command: "/usr/bin/ollama" },
+          },
+        },
+      },
+    };
+    expect(
+      applyAutoLocalModelLean({
+        config,
+        providerId: "ollama",
+        modelRef: "ollama/test-model:cloud",
+      }),
+    ).toEqual({
+      config,
+      changed: false,
+      enabled: false,
+    });
+  });
+
   it.each([
     ["ollama", true],
     ["OLLAMA", true],
@@ -45,15 +100,46 @@ describe("local model lean onboarding defaults", () => {
   });
 
   it.each([false, true])("preserves an explicit localModelLean=%s", (localModelLean) => {
-    const config = { agents: { defaults: { experimental: { localModelLean } } } };
+    const config: OpenClawConfig = {
+      agents: { defaults: { experimental: { localModelLean } } },
+      models: {
+        providers: {
+          "managed-local": {
+            baseUrl: "http://127.0.0.1:8080/v1",
+            models: [],
+            localService: { command: "/usr/bin/model-server" },
+          },
+        },
+      },
+    };
 
     expect(
-      applyAutoLocalModelLean({ config, providerId: "ollama", modelRef: "ollama/test-model" }),
+      applyAutoLocalModelLean({
+        config,
+        providerId: "managed-local",
+        modelRef: "managed-local/test-model",
+      }),
     ).toEqual({
       config,
       changed: false,
       enabled: false,
     });
+  });
+
+  it("lifts the automatic default when the same provider switches to an external server", () => {
+    const modelRef = "managed-local/test-model";
+    const config: OpenClawConfig = {
+      wizard: { localModelLeanAutoModel: modelRef },
+      agents: { defaults: { model: modelRef, experimental: { localModelLean: true } } },
+      models: {
+        providers: { "managed-local": { models: [], baseUrl: "http://127.0.0.1:8080/v1" } },
+      },
+    };
+
+    const result = applyAutoLocalModelLean({ config, providerId: "managed-local", modelRef });
+
+    expect(result.config.agents?.defaults?.experimental?.localModelLean).toBeUndefined();
+    expect(result.config.wizard?.localModelLeanAutoModel).toBeUndefined();
   });
 
   it("lifts only an onboarding-owned lean setting for a later non-local route", () => {

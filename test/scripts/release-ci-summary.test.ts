@@ -972,6 +972,7 @@ function trustedMainNpmFixture(releaseProfile: "beta" | "stable" = "beta") {
         upgradeSurvivorScenarios: "",
         allowFrozenTargetScenarioOmissions: false,
         allowUnreleasedChangelog: false,
+        packagePublished: false,
         sharedImagePolicy: "no-push-artifact",
       }),
       parentRunAttempt: 1,
@@ -1845,6 +1846,7 @@ describe("release CI summary child correlation", () => {
             upgradeSurvivorScenarios: "reported-issues",
             allowFrozenTargetScenarioOmissions: false,
             allowUnreleasedChangelog: false,
+            packagePublished: false,
             sharedImagePolicy: "no-push-artifact",
           }),
           parentRunAttempt: 1,
@@ -3020,6 +3022,19 @@ describe("release CI summary child correlation", () => {
       expect(() => validateParentManifest(raw, expected)).toThrow(/Telegram waiver/u);
     },
   );
+
+  it("rejects an unreviewed self-declared Telegram waiver", () => {
+    const raw = rawManifest({});
+    raw.releaseProfile = "stable";
+    Object.assign(raw.validationInputs, {
+      telegramWaiver: "2026.10.1-owner-approved",
+      targetVersion: "2026.10.1",
+      releasePackageSpec: "openclaw@2026.10.1",
+    });
+    expect(() => validateParentManifest(raw, { runAttempt: 2, runId: "29090000000" })).toThrow(
+      /Telegram waiver/u,
+    );
+  });
 
   it.each([
     { label: "legacy manifest", version: 3 },

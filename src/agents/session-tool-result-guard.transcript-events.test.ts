@@ -131,6 +131,9 @@ describe("guardSessionManager transcript updates", () => {
       const guarded = guardSessionManager(SessionManager.open(target, root), {
         agentId: target.agentId,
         sessionKey: target.sessionKey,
+        preparedUserTurnMessage: await ambient.resolveMessage(),
+        preparedUserTurnTranscriptRecorder: ambient,
+        suppressNextUserMessagePersistence: true,
       });
       const runtimeMessage = attachRuntimeUserTurnTranscriptContext(
         { role: "user", content: "Rendered steering prompt", timestamp: 2 },

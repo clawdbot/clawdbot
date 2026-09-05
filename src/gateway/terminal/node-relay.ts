@@ -110,11 +110,9 @@ export async function createNodeRelayBackend(params: {
       },
     })
     .then(parseExit)
-    .catch(
-      (error: unknown): TerminalBackendExit => ({
-        error: error instanceof Error ? error.message : String(error),
-      }),
-    )
+    .catch((error: unknown): TerminalBackendExit => ({
+      error: error instanceof Error ? error.message : String(error),
+    }))
     .then((exit) => {
       if (exitCallback) {
         exitCallback(exit);

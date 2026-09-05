@@ -1,8 +1,10 @@
+import { writeFile } from "node:fs/promises";
 import path from "node:path";
 import { chromium, type Browser } from "playwright";
 import { beforeEach, afterAll, beforeAll, describe, expect, it } from "vitest";
 import type { ApplicationRouter } from "../app-routes.ts";
 import { createControlUiE2eArtifactDir } from "../test-helpers/control-ui-e2e-artifacts.ts";
+import { takeControlUiViewportScreenshot } from "../test-helpers/control-ui-e2e-screenshot.ts";
 import {
   canRunPlaywrightChromium,
   installMockGateway,
@@ -164,10 +166,12 @@ describeControlUiE2e("Control UI progressive Model Providers loading", () => {
             .toContain("Loading");
         }
         if (recordVisuals) {
-          await page.screenshot({
-            path: path.join(artifactDir, "route-pending.png"),
-            fullPage: true,
-          });
+          await writeFile(
+            path.join(artifactDir, "route-pending.png"),
+            await takeControlUiViewportScreenshot(page, page.locator(".shell"), [
+              page.locator("openclaw-model-providers-page"),
+            ]),
+          );
         }
         expect(await gateway.getRequests("usage.status")).toHaveLength(previousLoads);
         expect(await gateway.getRequests("sessions.usage")).toHaveLength(previousLoads);
@@ -182,17 +186,20 @@ describeControlUiE2e("Control UI progressive Model Providers loading", () => {
         expect(await gateway.getRequests("usage.status")).toHaveLength(previousLoads + 1);
         expect(await gateway.getRequests("sessions.usage")).toHaveLength(previousLoads + 1);
         if (recordVisuals) {
-          await page.screenshot({ path: path.join(artifactDir, "before.png"), fullPage: true });
+          await writeFile(
+            path.join(artifactDir, "before.png"),
+            await takeControlUiViewportScreenshot(page, page.locator(".shell"), [provider]),
+          );
         }
 
         await gateway.resolveDeferred("usage.status");
         await expect.poll(async () => provider.textContent()).toContain("Pro");
         expect(await provider.textContent()).not.toContain("$1.25");
         if (recordVisuals) {
-          await page.screenshot({
-            path: path.join(artifactDir, "usage-ready.png"),
-            fullPage: true,
-          });
+          await writeFile(
+            path.join(artifactDir, "usage-ready.png"),
+            await takeControlUiViewportScreenshot(page, page.locator(".shell"), [provider]),
+          );
         }
 
         await gateway.resolveDeferred("sessions.usage");
@@ -201,11 +208,19 @@ describeControlUiE2e("Control UI progressive Model Providers loading", () => {
         expect(await gateway.getRequests("sessions.usage")).toHaveLength(previousLoads + 1);
         expect(await page.locator('[data-provider-id="unknown-provider"]').count()).toBe(0);
         if (recordVisuals) {
-          await page.screenshot({ path: path.join(artifactDir, "after.png"), fullPage: true });
+          await writeFile(
+            path.join(artifactDir, "after.png"),
+            await takeControlUiViewportScreenshot(page, page.locator(".shell"), [provider]),
+          );
         }
       } finally {
         if (recordVisuals) {
-          await page.screenshot({ path: path.join(artifactDir, "final.png"), fullPage: true });
+          await writeFile(
+            path.join(artifactDir, "final.png"),
+            await takeControlUiViewportScreenshot(page, page.locator(".shell"), [
+              page.locator("openclaw-model-providers-page"),
+            ]),
+          );
         }
         await context.close();
       }

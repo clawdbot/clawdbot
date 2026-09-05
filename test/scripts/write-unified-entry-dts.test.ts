@@ -1,9 +1,9 @@
 import fs from "node:fs";
-import { createRequire } from "node:module";
 import path from "node:path";
 import { describe, expect, it, vi } from "vitest";
 import { TSDOWN_NON_SDK_DTS_CONFIG_GROUPS } from "../../scripts/lib/tsdown-config-groups.mts";
 import { resolveTsdownDeclarationGeneratorInputs } from "../../scripts/lib/tsdown-declaration-generator-inputs.mts";
+import { materializeNativeCompiler } from "./native-boundary-fixture.js";
 import {
   createFixture,
   declarationCacheRecords,
@@ -26,6 +26,7 @@ describe("write-unified-entry-dts", () => {
     expect(closure).toEqual(
       expect.arrayContaining([
         "scripts/lib/tsdown-declaration-generator-inputs.mts",
+        "scripts/lib/tsdown-declaration-boundary.mts",
         "scripts/lib/plugin-sdk-entrypoints.json",
         "scripts/lib/record-shared.mjs",
         "packages/normalization-core/src/mountinfo-path.ts",
@@ -109,6 +110,7 @@ describe("write-unified-entry-dts", () => {
     const { root, write, production, declarations } = createFixture(
       TSDOWN_NON_SDK_DTS_CONFIG_GROUPS,
     );
+    materializeNativeCompiler(root);
     expect(Object.values(declarations).every((entries) => entries.length > 0)).toBe(true);
     expect(production).toHaveLength(Object.values(declarations).flat().length);
     write("extensions/fixture-a/runtime-only.js", 'export const runtimeOnly = "runtime";');
@@ -134,13 +136,6 @@ describe("write-unified-entry-dts", () => {
     }
     write("dist/obsolete.d.ts", "obsolete root declaration");
     write("dist/extensions/removed/api.d.ts", "obsolete plugin declaration");
-    write("dist/extensions/anthropic/api.d.ts", "obsolete plugin API declaration");
-    write(
-      "dist/extensions/anthropic/agent-sdk-generated/old.d.ts",
-      "obsolete generated declaration",
-    );
-    const sdkAssetRoot = "dist/extensions/anthropic/agent-sdk";
-    write(`${sdkAssetRoot}/obsolete.d.ts`, "removed upstream SDK declaration");
     write(
       "consumer.ts",
       [
@@ -195,29 +190,6 @@ describe("write-unified-entry-dts", () => {
     }
     expect(fs.existsSync(path.join(root, "dist/obsolete.d.ts"))).toBe(false);
     expect(fs.existsSync(path.join(root, "dist/extensions/removed/api.d.ts"))).toBe(false);
-    expect(fs.existsSync(path.join(root, "dist/extensions/anthropic/api.d.ts"))).toBe(false);
-    expect(
-      fs.existsSync(path.join(root, "dist/extensions/anthropic/agent-sdk-generated/old.d.ts")),
-    ).toBe(false);
-    const sdkSource = path.dirname(
-      createRequire(import.meta.url).resolve("@anthropic-ai/claude-agent-sdk"),
-    );
-    const sourceManifest = JSON.parse(
-      fs.readFileSync(path.join(sdkSource, "package.json"), "utf8"),
-    );
-    const sdkFiles: string[] = [...sourceManifest.files, "LICENSE.md", "README.md"];
-    expect(fs.readdirSync(path.join(root, sdkAssetRoot)).toSorted()).toEqual(
-      [...sdkFiles, "package.json"].toSorted(),
-    );
-    for (const file of sdkFiles) {
-      expect(fs.readFileSync(path.join(root, sdkAssetRoot, file))).toEqual(
-        fs.readFileSync(path.join(sdkSource, file)),
-      );
-    }
-    const { optionalDependencies: _nativeCli, ...packagedManifest } = sourceManifest;
-    expect(
-      JSON.parse(fs.readFileSync(path.join(root, sdkAssetRoot, "package.json"), "utf8")),
-    ).toEqual(packagedManifest);
     for (const [file, bytes] of Object.entries(preserved)) {
       expect(fs.readFileSync(path.join(root, file), "utf8")).toBe(bytes);
     }
@@ -236,12 +208,7 @@ describe("write-unified-entry-dts", () => {
     expect(
       records
         .flatMap((record) => Object.keys(record.outputs))
-        .some(
-          (file) =>
-            file.includes(".app/") ||
-            file.includes("control-ui/") ||
-            file.startsWith(`${sdkAssetRoot}/`),
-        ),
+        .some((file) => file.includes(".app/") || file.includes("control-ui/")),
     ).toBe(false);
     const cached = treeHashes(cache);
     const before = treeHashes(path.join(root, "dist"));
@@ -256,7 +223,6 @@ describe("write-unified-entry-dts", () => {
     for (const [file, bytes] of Object.entries(preserved)) {
       write(file, bytes);
     }
-    write(`${sdkAssetRoot}/obsolete.d.ts`, "removed upstream SDK declaration");
     const repeated = runUnifiedBuild(root);
     expect(repeated.status, repeated.stdout + repeated.stderr).toBe(0);
     expect(
@@ -349,17 +315,19 @@ describe("write-unified-entry-dts", () => {
         "tsdown.config.ts",
         `${fs.readFileSync(path.join(root, "tsdown.config.ts"), "utf8")}
 const selected = configs.find(config => config.name === ${JSON.stringify(last)});
+const register = selected.hooks;
+selected.hooks = async hooks => {
+  await register(hooks);
 ${
   failure === "missing successful receipt"
-    ? "selected.hooks = {};"
-    : `const done = selected.hooks["build:done"];
-selected.hooks = { "build:done": async (context) => {
-  await done(context);
-  if (fs.existsSync(".artifacts/mutate-cached-input")) {
-    fs.appendFileSync(${JSON.stringify(declarations[TSDOWN_NON_SDK_DTS_CONFIG_GROUPS[0]!]![0])}, "\\nexport const cachedRevision = 'after';\\n");
-  }
-}};`
+    ? '  hooks.clearHook("build:done");'
+    : `  hooks.hook("build:done", () => {
+    if (fs.existsSync(".artifacts/mutate-cached-input")) {
+      fs.appendFileSync(${JSON.stringify(declarations[TSDOWN_NON_SDK_DTS_CONFIG_GROUPS[0]!]![0])}, "\\nexport const cachedRevision = 'after';\\n");
+    }
+  });`
 }
+};
 `,
       );
     }

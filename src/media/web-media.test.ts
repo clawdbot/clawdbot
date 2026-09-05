@@ -495,6 +495,61 @@ describe("loadWebMedia", () => {
     ).rejects.toThrow(/dimensions exceed model image limits/i);
   });
 
+  it.each(["local", "remote"] as const)(
+    "preserves the explicit GIF byte cap for optimized %s media",
+    async (source) => {
+      const buffer = createGifHeader(16, 16);
+      const fileName = `explicit-cap-${source}.gif`;
+      const filePath = path.join(fixtureRoot, fileName);
+      if (source === "local") {
+        await fs.writeFile(filePath, buffer);
+      }
+      const mediaUrl = source === "local" ? filePath : `https://example.test/${fileName}`;
+      const sourceOptions =
+        source === "local"
+          ? { localRoots: [fixtureRoot] }
+          : {
+              fetchImpl: vi.fn(
+                async () =>
+                  new Response(Buffer.from(buffer), {
+                    status: 200,
+                    headers: { "content-type": "image/gif" },
+                  }),
+              ),
+              ssrfPolicy: { allowedHostnames: ["example.test"] },
+            };
+
+      await expect(
+        loadWebMedia(mediaUrl, { ...sourceOptions, maxBytes: buffer.length - 1 }),
+      ).rejects.toThrow(/^GIF exceeds /);
+      const result = await loadWebMedia(mediaUrl, {
+        ...sourceOptions,
+        maxBytes: buffer.length,
+      });
+      expect(result.buffer).toEqual(buffer);
+      expect(result.contentType).toBe("image/gif");
+      expect(result.fileName).toBe(fileName);
+    },
+  );
+
+  it("rejects raw image dimensions instead of applying optimized image policy", async () => {
+    const buffer = createLargeColorBlockPng(64);
+    const filePath = path.join(fixtureRoot, "raw-dimensions.png");
+    await fs.writeFile(filePath, buffer);
+    const options = {
+      localRoots: [fixtureRoot],
+      maxBytes: 1024 * 1024,
+      imageCompression: { models: [{ maxSidePx: 32, preferredSidePx: 32 }] },
+    };
+
+    await expect(loadWebMediaRaw(filePath, options)).rejects.toThrow(
+      /dimensions exceed model image limits/i,
+    );
+    const optimized = await loadWebMedia(filePath, options);
+    expect(optimized.contentType).toBe("image/jpeg");
+    expect(readJpegDimensions(optimized.buffer)).toEqual({ width: 32, height: 32 });
+  });
+
   it("renames opaque PNGs converted to JPEG across direct and local image owners", async () => {
     const { optimizeImageBufferForWebMedia } = await import("./web-media.js");
     const sourcePng = createLargeColorBlockPng(64);
@@ -1617,7 +1672,10 @@ describe("loadWebMedia", () => {
       async () =>
         new Response(Buffer.from(original), {
           status: 200,
-          headers: { "content-type": "image/png" },
+          headers: {
+            "content-type": "image/png",
+            "content-length": String(10 * 1024 * 1024),
+          },
         }),
     );
 

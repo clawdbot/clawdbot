@@ -11,6 +11,7 @@ import { createUserTurnTranscriptRecorder } from "../../../sessions/user-turn-tr
 import { closeOpenClawAgentDatabasesForTest } from "../../../state/openclaw-agent-db.js";
 import { FULL_BOOTSTRAP_COMPLETED_CUSTOM_TYPE } from "../../bootstrap-files.js";
 import { SessionManager } from "../../sessions/session-manager.js";
+import { createToolResultPromptProjectionState } from "../session-prompt-state.js";
 
 const hoisted = vi.hoisted(() => ({
   runAgentEndSideEffects: vi.fn(),
@@ -76,6 +77,7 @@ describe("embedded attempt phase lifecycle state", () => {
       } as never,
       activeSession: activeSession as never,
       sessionManager: sessionManager as never,
+      toolResultPromptProjectionState: createToolResultPromptProjectionState(),
       withOwnedTranscriptWrite: async (operation) => await operation(),
       subscription: {
         toolMetas: [],
@@ -157,6 +159,7 @@ describe("embedded attempt phase lifecycle state", () => {
       } as never,
       activeSession: activeSession as never,
       sessionManager: sessionManager as never,
+      toolResultPromptProjectionState: createToolResultPromptProjectionState(),
       withOwnedTranscriptWrite: async (operation) => await operation(),
       subscription: {
         toolMetas: [{ toolName: "exec", asyncStarted: true }],
@@ -243,6 +246,7 @@ describe("embedded attempt phase lifecycle state", () => {
       } as never,
       activeSession: activeSession as never,
       sessionManager: sessionManager as never,
+      toolResultPromptProjectionState: createToolResultPromptProjectionState(),
       withOwnedTranscriptWrite: async (operation) => await operation(),
       subscription: {
         toolMetas: [

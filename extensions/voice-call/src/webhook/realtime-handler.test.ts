@@ -1,6 +1,6 @@
 // Voice Call tests cover realtime handler plugin behavior.
 import http from "node:http";
-import { expectDefined } from "@openclaw/normalization-core";
+import { expectDefined } from "openclaw/plugin-sdk/expect-runtime";
 import { createDeferred } from "openclaw/plugin-sdk/extension-shared";
 import type {
   RealtimeVoiceBridge,
@@ -212,14 +212,6 @@ async function waitForRealtimeTest(
   options: { timeout?: number; interval?: number } = {},
 ) {
   await vi.waitFor(callback, { interval: 1, ...options });
-}
-
-function requireFirstMockCall(calls: readonly unknown[][], label: string): unknown[] {
-  const call = calls.at(0);
-  if (!call) {
-    throw new Error(`expected ${label} call`);
-  }
-  return call;
 }
 
 type RealtimeBridgeRequest = Parameters<RealtimeVoiceProviderPlugin["createBridge"]>[0];
@@ -464,21 +456,19 @@ describe("RealtimeCallHandler path routing", () => {
       },
     );
     const processEvent = vi.fn();
-    const getCallByProviderCallId = vi.fn(
-      (): CallRecord => ({
-        callId: "call-1",
-        providerCallId: "CA-outbound",
-        provider: "twilio",
-        direction: "outbound",
-        state: "ringing",
-        from: "+15550001234",
-        to: "+15550009999",
-        startedAt: Date.now(),
-        transcript: [],
-        processedEventIds: [],
-        metadata: {},
-      }),
-    );
+    const getCallByProviderCallId = vi.fn((): CallRecord => ({
+      callId: "call-1",
+      providerCallId: "CA-outbound",
+      provider: "twilio",
+      direction: "outbound",
+      state: "ringing",
+      from: "+15550001234",
+      to: "+15550009999",
+      startedAt: Date.now(),
+      transcript: [],
+      processedEventIds: [],
+      metadata: {},
+    }));
     const handler = makeHandler(undefined, {
       manager: {
         processEvent,
@@ -523,7 +513,7 @@ describe("RealtimeCallHandler path routing", () => {
           channels: 1,
         });
         callbacks?.onReady?.();
-        const event = requireFirstMockCall(processEvent.mock.calls, "processed event")[0] as
+        const event = expectDefined(processEvent.mock.calls.at(0), "processed event")[0] as
           | NormalizedEvent
           | undefined;
         expect(event?.type).toBe("call.initiated");
@@ -547,22 +537,20 @@ describe("RealtimeCallHandler path routing", () => {
     let callbacks: RealtimeBridgeRequest | undefined;
     const processEvent = vi.fn();
     const resolveInstructions = vi.fn((call: CallRecord) => `instructions:${call.agentId}`);
-    const getCall = vi.fn(
-      (): CallRecord => ({
-        callId: "call-1",
-        agentId: "support",
-        providerCallId: "v3:call-1",
-        provider: "telnyx",
-        direction: "inbound",
-        state: "answered",
-        from: "+15550001234",
-        to: "+15550009999",
-        startedAt: Date.now(),
-        transcript: [],
-        processedEventIds: [],
-        metadata: { initialMessage: "hello" },
-      }),
-    );
+    const getCall = vi.fn((): CallRecord => ({
+      callId: "call-1",
+      agentId: "support",
+      providerCallId: "v3:call-1",
+      provider: "telnyx",
+      direction: "inbound",
+      state: "answered",
+      from: "+15550001234",
+      to: "+15550009999",
+      startedAt: Date.now(),
+      transcript: [],
+      processedEventIds: [],
+      metadata: { initialMessage: "hello" },
+    }));
     const triggerGreeting = vi.fn();
     const createBridge = vi.fn((request: RealtimeBridgeRequest) => {
       callbacks = request;
@@ -663,21 +651,19 @@ describe("RealtimeCallHandler path routing", () => {
 
   it("rejects Telnyx stream starts that do not match the token-bound call", async () => {
     const processEvent = vi.fn();
-    const getCall = vi.fn(
-      (): CallRecord => ({
-        callId: "call-1",
-        providerCallId: "v3:call-1",
-        provider: "telnyx",
-        direction: "inbound",
-        state: "answered",
-        from: "+15550001234",
-        to: "+15550009999",
-        startedAt: Date.now(),
-        transcript: [],
-        processedEventIds: [],
-        metadata: {},
-      }),
-    );
+    const getCall = vi.fn((): CallRecord => ({
+      callId: "call-1",
+      providerCallId: "v3:call-1",
+      provider: "telnyx",
+      direction: "inbound",
+      state: "answered",
+      from: "+15550001234",
+      to: "+15550009999",
+      startedAt: Date.now(),
+      transcript: [],
+      processedEventIds: [],
+      metadata: {},
+    }));
     const createBridge = vi.fn(() => makeBridge());
     const handler = makeHandler(undefined, {
       manager: {
@@ -726,21 +712,19 @@ describe("RealtimeCallHandler path routing", () => {
         return makeBridge({ triggerGreeting });
       },
     );
-    const getCallByProviderCallId = vi.fn(
-      (): CallRecord => ({
-        callId: "call-1",
-        providerCallId: "CA-silent",
-        provider: "twilio",
-        direction: "outbound",
-        state: "ringing",
-        from: "+15550001234",
-        to: "+15550009999",
-        startedAt: Date.now(),
-        transcript: [],
-        processedEventIds: [],
-        metadata: {},
-      }),
-    );
+    const getCallByProviderCallId = vi.fn((): CallRecord => ({
+      callId: "call-1",
+      providerCallId: "CA-silent",
+      provider: "twilio",
+      direction: "outbound",
+      state: "ringing",
+      from: "+15550001234",
+      to: "+15550009999",
+      startedAt: Date.now(),
+      transcript: [],
+      processedEventIds: [],
+      metadata: {},
+    }));
     const handler = makeHandler(undefined, {
       manager: {
         getCallByProviderCallId,
@@ -778,21 +762,19 @@ describe("RealtimeCallHandler path routing", () => {
   it("speaks through the active outbound realtime bridge by call id", async () => {
     const triggerGreeting = vi.fn();
     const createBridge = vi.fn(() => makeBridge({ triggerGreeting }));
-    const getCallByProviderCallId = vi.fn(
-      (): CallRecord => ({
-        callId: "call-1",
-        providerCallId: "CA-speak",
-        provider: "twilio",
-        direction: "outbound",
-        state: "ringing",
-        from: "+15550001234",
-        to: "+15550009999",
-        startedAt: Date.now(),
-        transcript: [],
-        processedEventIds: [],
-        metadata: {},
-      }),
-    );
+    const getCallByProviderCallId = vi.fn((): CallRecord => ({
+      callId: "call-1",
+      providerCallId: "CA-speak",
+      provider: "twilio",
+      direction: "outbound",
+      state: "ringing",
+      from: "+15550001234",
+      to: "+15550009999",
+      startedAt: Date.now(),
+      transcript: [],
+      processedEventIds: [],
+      metadata: {},
+    }));
     const handler = makeHandler(undefined, {
       manager: {
         getCallByProviderCallId,
@@ -848,35 +830,30 @@ describe("RealtimeCallHandler path routing", () => {
         return makeBridge({ close });
       },
     );
-    const getCallByProviderCallId = vi.fn(
-      (): CallRecord => ({
-        callId: "call-1",
-        providerCallId: "CA-complete",
-        provider: "twilio",
-        direction: "inbound",
-        state: "ringing",
-        from: "+15550001234",
-        to: "+15550009999",
-        startedAt: Date.now(),
-        transcript: [],
-        processedEventIds: [],
-        metadata: {},
-      }),
-    );
+    const getCallByProviderCallId = vi.fn((): CallRecord => ({
+      callId: "call-1",
+      providerCallId: "CA-complete",
+      provider: "twilio",
+      direction: "inbound",
+      state: "ringing",
+      from: "+15550001234",
+      to: "+15550009999",
+      startedAt: Date.now(),
+      transcript: [],
+      processedEventIds: [],
+      metadata: {},
+    }));
     const streamDisconnectLifecycle = createFinalizingStreamGrace(
       processEvent,
       "disconnect-grace-expired",
     );
-    let resolveDisconnect: (() => void) | undefined;
-    const disconnected = new Promise<void>((resolve) => {
-      resolveDisconnect = resolve;
-    });
+    const disconnected = createDeferred<void>();
     const originalDisconnect = streamDisconnectLifecycle.disconnect.bind(streamDisconnectLifecycle);
     const disconnect = vi
       .spyOn(streamDisconnectLifecycle, "disconnect")
       .mockImplementation((providerCallId, streamId) => {
         originalDisconnect(providerCallId, streamId);
-        resolveDisconnect?.();
+        disconnected.resolve();
       });
     const handler = makeHandler(undefined, {
       manager: {
@@ -905,7 +882,7 @@ describe("RealtimeCallHandler path routing", () => {
         vi.useFakeTimers();
         ws.send(JSON.stringify({ event: "stop" }));
 
-        await disconnected;
+        await disconnected.promise;
         const events = processEvent.mock.calls.map(([event]) => event as NormalizedEvent);
         expect(close).toHaveBeenCalledTimes(1);
         expect(disconnect).toHaveBeenCalledExactlyOnceWith("CA-complete", "MZ-complete");
@@ -958,16 +935,13 @@ describe("RealtimeCallHandler path routing", () => {
       processEvent,
       "abnormal-disconnect-grace-expired",
     );
-    let resolveDisconnect: (() => void) | undefined;
-    const disconnected = new Promise<void>((resolve) => {
-      resolveDisconnect = resolve;
-    });
+    const disconnected = createDeferred<void>();
     const originalDisconnect = streamDisconnectLifecycle.disconnect.bind(streamDisconnectLifecycle);
     const disconnect = vi
       .spyOn(streamDisconnectLifecycle, "disconnect")
       .mockImplementation((disconnectedProviderCallId, disconnectedStreamId) => {
         originalDisconnect(disconnectedProviderCallId, disconnectedStreamId);
-        resolveDisconnect?.();
+        disconnected.resolve();
       });
     const handler = makeHandler(undefined, {
       manager: {
@@ -993,7 +967,7 @@ describe("RealtimeCallHandler path routing", () => {
       const closed = waitForClose(ws);
       ws.terminate();
       expect(await closed).toEqual({ code: 1006, reason: "" });
-      await disconnected;
+      await disconnected.promise;
 
       expect(close).toHaveBeenCalledTimes(1);
       expect(disconnect).toHaveBeenCalledExactlyOnceWith(providerCallId, streamId);
@@ -2016,21 +1990,19 @@ describe("RealtimeCallHandler path routing", () => {
       { consultPolicy: "always" },
       {
         manager: {
-          getCallByProviderCallId: vi.fn(
-            (): CallRecord => ({
-              callId: "call-1",
-              providerCallId: "CA-force",
-              provider: "twilio",
-              direction: "inbound",
-              state: "ringing",
-              from: "+15550001234",
-              to: "+15550009999",
-              startedAt: Date.now(),
-              transcript: [],
-              processedEventIds: [],
-              metadata: {},
-            }),
-          ),
+          getCallByProviderCallId: vi.fn((): CallRecord => ({
+            callId: "call-1",
+            providerCallId: "CA-force",
+            provider: "twilio",
+            direction: "inbound",
+            state: "ringing",
+            from: "+15550001234",
+            to: "+15550009999",
+            startedAt: Date.now(),
+            transcript: [],
+            processedEventIds: [],
+            metadata: {},
+          })),
         },
         realtimeProvider: makeRealtimeProvider(createBridge),
       },
@@ -2061,7 +2033,7 @@ describe("RealtimeCallHandler path routing", () => {
         await waitForRealtimeTest(() => {
           expect(consult).toHaveBeenCalledTimes(1);
         });
-        const [args, callId, context] = requireFirstMockCall(consult.mock.calls, "consult");
+        const [args, callId, context] = expectDefined(consult.mock.calls.at(0), "consult");
         expect(args).toEqual({
           question: "Create a smoke test file for me.",
         });
@@ -2071,7 +2043,7 @@ describe("RealtimeCallHandler path routing", () => {
         expect(context).toEqual({ abortSignal: expect.any(AbortSignal) });
         await waitForRealtimeTest(() => {
           expect(sendUserMessage).toHaveBeenCalledTimes(1);
-          expect(requireFirstMockCall(sendUserMessage.mock.calls, "user message")).toEqual([
+          expect(expectDefined(sendUserMessage.mock.calls.at(0), "user message")).toEqual([
             "Internal OpenClaw consult result is ready.\nDo not call tools for this internal result.\nSpeak the following answer to the caller now, briefly and naturally:\nI created the smoke test file.",
           ]);
         });
@@ -2891,21 +2863,19 @@ describe("RealtimeCallHandler path routing", () => {
     const handler = makeHandler(undefined, {
       manager: {
         processEvent,
-        getCallByProviderCallId: vi.fn(
-          (): CallRecord => ({
-            callId: "call-1",
-            providerCallId: "CA-direct-turns",
-            provider: "twilio",
-            direction: "inbound",
-            state: "ringing",
-            from: "+15550001234",
-            to: "+15550009999",
-            startedAt: Date.now(),
-            transcript: [],
-            processedEventIds: [],
-            metadata: {},
-          }),
-        ),
+        getCallByProviderCallId: vi.fn((): CallRecord => ({
+          callId: "call-1",
+          providerCallId: "CA-direct-turns",
+          provider: "twilio",
+          direction: "inbound",
+          state: "ringing",
+          from: "+15550001234",
+          to: "+15550009999",
+          startedAt: Date.now(),
+          transcript: [],
+          processedEventIds: [],
+          metadata: {},
+        })),
       },
       realtimeProvider: makeRealtimeProvider(createBridge),
     });
@@ -2981,21 +2951,19 @@ describe("RealtimeCallHandler path routing", () => {
     );
     const handler = makeHandler(undefined, {
       manager: {
-        getCallByProviderCallId: vi.fn(
-          (): CallRecord => ({
-            callId: "call-1",
-            providerCallId: "CA-settle",
-            provider: "twilio",
-            direction: "inbound",
-            state: "ringing",
-            from: "+15550001234",
-            to: "+15550009999",
-            startedAt: Date.now(),
-            transcript: [],
-            processedEventIds: [],
-            metadata: {},
-          }),
-        ),
+        getCallByProviderCallId: vi.fn((): CallRecord => ({
+          callId: "call-1",
+          providerCallId: "CA-settle",
+          provider: "twilio",
+          direction: "inbound",
+          state: "ringing",
+          from: "+15550001234",
+          to: "+15550009999",
+          startedAt: Date.now(),
+          transcript: [],
+          processedEventIds: [],
+          metadata: {},
+        })),
       },
       realtimeProvider: makeRealtimeProvider(createBridge),
     });
@@ -3036,7 +3004,7 @@ describe("RealtimeCallHandler path routing", () => {
           },
           { timeout: 2_000 },
         );
-        const [args, callId, context] = requireFirstMockCall(consult.mock.calls, "consult");
+        const [args, callId, context] = expectDefined(consult.mock.calls.at(0), "consult");
         const consultArgs = args as { question?: string; context?: string } | undefined;
         expect(consultArgs?.question).toBe("Send a Discord message.");
         expect(consultArgs?.context).toBe(
@@ -3087,21 +3055,19 @@ describe("RealtimeCallHandler path routing", () => {
       { consultPolicy: "always" },
       {
         manager: {
-          getCallByProviderCallId: vi.fn(
-            (): CallRecord => ({
-              callId: "call-1",
-              providerCallId: "CA-native",
-              provider: "twilio",
-              direction: "inbound",
-              state: "ringing",
-              from: "+15550001234",
-              to: "+15550009999",
-              startedAt: Date.now(),
-              transcript: [],
-              processedEventIds: [],
-              metadata: {},
-            }),
-          ),
+          getCallByProviderCallId: vi.fn((): CallRecord => ({
+            callId: "call-1",
+            providerCallId: "CA-native",
+            provider: "twilio",
+            direction: "inbound",
+            state: "ringing",
+            from: "+15550001234",
+            to: "+15550009999",
+            startedAt: Date.now(),
+            transcript: [],
+            processedEventIds: [],
+            metadata: {},
+          })),
         },
         realtimeProvider: makeRealtimeProvider(createBridge),
       },
@@ -3181,21 +3147,19 @@ describe("RealtimeCallHandler path routing", () => {
       },
       {
         manager: {
-          getCallByProviderCallId: vi.fn(
-            (): CallRecord => ({
-              callId: "call-1",
-              providerCallId: "CA-fast",
-              provider: "twilio",
-              direction: "inbound",
-              state: "ringing",
-              from: "+15550001234",
-              to: "+15550009999",
-              startedAt: Date.now(),
-              transcript: [],
-              processedEventIds: [],
-              metadata: {},
-            }),
-          ),
+          getCallByProviderCallId: vi.fn((): CallRecord => ({
+            callId: "call-1",
+            providerCallId: "CA-fast",
+            provider: "twilio",
+            direction: "inbound",
+            state: "ringing",
+            from: "+15550001234",
+            to: "+15550009999",
+            startedAt: Date.now(),
+            transcript: [],
+            processedEventIds: [],
+            metadata: {},
+          })),
         },
         realtimeProvider: makeRealtimeProvider(createBridge),
       },
@@ -3253,21 +3217,19 @@ describe("RealtimeCallHandler websocket hardening", () => {
     );
     const handler = makeHandler(undefined, {
       manager: {
-        getCallByProviderCallId: vi.fn(
-          (): CallRecord => ({
-            callId: "call-1",
-            providerCallId: "CA-backpressure",
-            provider: "twilio",
-            direction: "inbound",
-            state: "ringing",
-            from: "+15550001234",
-            to: "+15550009999",
-            startedAt: Date.now(),
-            transcript: [],
-            processedEventIds: [],
-            metadata: {},
-          }),
-        ),
+        getCallByProviderCallId: vi.fn((): CallRecord => ({
+          callId: "call-1",
+          providerCallId: "CA-backpressure",
+          provider: "twilio",
+          direction: "inbound",
+          state: "ringing",
+          from: "+15550001234",
+          to: "+15550009999",
+          startedAt: Date.now(),
+          transcript: [],
+          processedEventIds: [],
+          metadata: {},
+        })),
       },
       realtimeProvider: makeRealtimeProvider(createBridge),
     });

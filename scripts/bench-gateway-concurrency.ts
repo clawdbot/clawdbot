@@ -65,6 +65,7 @@ type ReadyProbe = TimedProbe & {
   degraded: boolean | null;
   degradedSinceMs: number | null;
   delayP99Ms: number | null;
+  delayMaxMs: number | null;
   status: number;
   utilization: number | null;
 };
@@ -94,10 +95,26 @@ type GatewayMemorySample = {
   rssMb: number;
 };
 
+type GatewayChildExit = {
+  atMonotonicMicros: number;
+  exitCode: number | null;
+  signal: string | null;
+};
+
 type BenchmarkRun = {
+  controlPlane: Array<TimedProbe & { method: string }>;
   controlUi: ControlUiProbe[];
   durationMs: number;
   freshConnection: FreshConnectionProbe;
+  gatewayExit?: Awaited<ReturnType<typeof stopChild>>;
+  gatewayProcess?: {
+    pid: number | undefined;
+    exitCode: number | null | undefined;
+    signalCode: string | null | undefined;
+    exitEvent: GatewayChildExit | undefined;
+    closeEvent: GatewayChildExit | undefined;
+  };
+  loadWindow?: { startMonotonicMicros: number; endMonotonicMicros: number };
   history: TimedProbe[];
   memory: { after: GatewayMemorySample; before: GatewayMemorySample; peakRssMb: number };
   messageSubscriptions: TimedProbe[];
@@ -120,11 +137,14 @@ type BenchmarkRun = {
 type CliOptions = {
   cadenceMs: number;
   concurrency: number;
+  controlPlane: boolean;
   cpuProfDir?: string;
   diagnosticsTimeline: boolean;
   entry: string;
   historyBurst: number;
   historyClients: number;
+  historyMessages: number;
+  historyMessageChars: number;
   json: boolean;
   maxControlMs?: number;
   maxHandshakeMs?: number;
@@ -169,6 +189,7 @@ const BOOLEAN_FLAGS = new Set([
   "--help",
   "-h",
   "--json",
+  "--control-plane",
   "--no-diagnostics-timeline",
   "--tool-events",
   "--visible-observer",
@@ -181,6 +202,8 @@ const VALUE_FLAGS = new Set([
   "--entry",
   "--history-burst",
   "--history-clients",
+  "--history-messages",
+  "--history-message-chars",
   "--max-control-ms",
   "--max-handshake-ms",
   "--output",
@@ -223,7 +246,7 @@ function parseBoundedNonNegativeInt(
 
 function parseOptions(argv: string[] = process.argv.slice(2)): CliOptions {
   validateCliArgs(argv, { booleanFlags: BOOLEAN_FLAGS, valueFlags: VALUE_FLAGS });
-  return {
+  const options = {
     cadenceMs: parseBoundedPositiveInt(
       parseFlagValue(argv, "--cadence-ms"),
       DEFAULT_CADENCE_MS,
@@ -236,6 +259,7 @@ function parseOptions(argv: string[] = process.argv.slice(2)): CliOptions {
       "--concurrency",
       MAX_CONCURRENCY,
     ),
+    controlPlane: hasFlag(argv, "--control-plane"),
     cpuProfDir: resolveOutputPath(parseFlagValue(argv, "--cpu-prof-dir")),
     diagnosticsTimeline: !hasFlag(argv, "--no-diagnostics-timeline"),
     entry: resolveEntry(parseFlagValue(argv, "--entry"), DEFAULT_ENTRY),
@@ -250,6 +274,18 @@ function parseOptions(argv: string[] = process.argv.slice(2)): CliOptions {
       0,
       "--history-clients",
       MAX_CONCURRENCY,
+    ),
+    historyMessages: parseBoundedNonNegativeInt(
+      parseFlagValue(argv, "--history-messages"),
+      0,
+      "--history-messages",
+      500,
+    ),
+    historyMessageChars: parseBoundedPositiveInt(
+      parseFlagValue(argv, "--history-message-chars"),
+      1_024,
+      "--history-message-chars",
+      65_536,
     ),
     json: hasFlag(argv, "--json"),
     maxControlMs: parseFlagValue(argv, "--max-control-ms")
@@ -322,6 +358,15 @@ function parseOptions(argv: string[] = process.argv.slice(2)): CliOptions {
     ),
     workspaceFanout: hasFlag(argv, "--workspace-fanout"),
   };
+  const historyMessageCount =
+    Math.max(options.sessionCount, options.concurrency) * options.historyMessages;
+  if (
+    historyMessageCount > 100_000 ||
+    historyMessageCount * options.historyMessageChars > 256 * 1024 * 1024
+  ) {
+    throw new CliArgumentError("synthetic history must not exceed 100000 messages or 256 MiB");
+  }
+  return options;
 }
 
 function printUsage(): void {
@@ -333,6 +378,9 @@ Usage:
 
 Options:
   --concurrency <n>  Concurrent synthetic streaming turns (default: ${DEFAULT_CONCURRENCY})
+  --control-plane   Also probe tasks.list, cron.list, and cron.status during load
+  --history-messages <n> Inject up to 500 synthetic messages per seeded session
+  --history-message-chars <n> Synthetic message size (default: 1024, max: 65536)
   --cpu-prof-dir <p> Write Gateway V8 CPU profiles to this directory
   --runs <n>         Measured gateway runs (default: ${DEFAULT_RUNS})
   --warmup <n>       Warmup gateway runs (default: ${DEFAULT_WARMUP})
@@ -923,6 +971,7 @@ async function sampleGateway(params: {
       degraded: typeof eventLoop?.degraded === "boolean" ? eventLoop.degraded : null,
       degradedSinceMs: asFiniteNumber(eventLoop?.degradedSinceMs) ?? null,
       delayP99Ms: asFiniteNumber(eventLoop?.delayP99Ms) ?? null,
+      delayMaxMs: asFiniteNumber(eventLoop?.delayMaxMs) ?? null,
       utilization: asFiniteNumber(eventLoop?.utilization) ?? null,
       cpuCoreRatio: asFiniteNumber(eventLoop?.cpuCoreRatio) ?? null,
     },
@@ -973,12 +1022,15 @@ async function warmGatewayProbes(params: {
 async function runGatewaySample(options: {
   cadenceMs: number;
   concurrency: number;
+  controlPlane: boolean;
   deadlineAt: number;
   diagnosticsTimeline: boolean;
   entry: string;
   cpuProfDir?: string;
   historyBurst: number;
   historyClients: number;
+  historyMessages: number;
+  historyMessageChars: number;
   pluginCount: number;
   sessionCount: number;
   sessionUpdateClients: number;
@@ -1004,6 +1056,15 @@ async function runGatewaySample(options: {
   let mockOutput = { readOutput: () => "", readStderrTail: () => "" };
   let result: BenchmarkRun;
   let gatewayExit: Awaited<ReturnType<typeof stopChild>> | undefined;
+  let gatewayExitEvent: GatewayChildExit | undefined;
+  let gatewayCloseEvent: GatewayChildExit | undefined;
+  const readGatewayProcess = () => ({
+    pid: gateway?.pid,
+    exitCode: gateway?.exitCode,
+    signalCode: gateway?.signalCode,
+    exitEvent: gatewayExitEvent,
+    closeEvent: gatewayCloseEvent,
+  });
   let timelineWindow: { from: number; through: number } | undefined;
 
   try {
@@ -1052,6 +1113,20 @@ async function runGatewaySample(options: {
           },
         },
       );
+      gateway.once("exit", (exitCode, signal) => {
+        gatewayExitEvent = {
+          atMonotonicMicros: Number(process.hrtime.bigint() / 1_000n),
+          exitCode,
+          signal,
+        };
+      });
+      gateway.once("close", (exitCode, signal) => {
+        gatewayCloseEvent = {
+          atMonotonicMicros: Number(process.hrtime.bigint() / 1_000n),
+          exitCode,
+          signal,
+        };
+      });
       gatewayOutput = captureChildOutput(gateway);
       const ready = await waitForInitialProbe({
         deadlineAt: options.deadlineAt,
@@ -1092,6 +1167,7 @@ async function runGatewaySample(options: {
         options.workspaceFanout ||
         options.sessionCount > 0 ||
         options.historyClients > 0 ||
+        options.historyMessages > 0 ||
         options.sessionUpdates > 0 ||
         options.subscribers > 0;
       const sessionKeys = Array.from(
@@ -1121,6 +1197,17 @@ async function runGatewaySample(options: {
                 agentId: "main",
                 ...(workspaceDir ? { cwd: workspaceDir } : {}),
               });
+              for (
+                let messageIndex = 0;
+                messageIndex < options.historyMessages;
+                messageIndex += 1
+              ) {
+                const marker = `Synthetic history ${index + 1}/${messageIndex + 1}. `;
+                const message = marker
+                  .repeat(Math.ceil(options.historyMessageChars / marker.length))
+                  .slice(0, options.historyMessageChars);
+                await rpc("chat.inject", { sessionKey, message });
+              }
               seededSessionCount += 1;
               if (sessionCount >= 250 && seededSessionCount % 250 === 0) {
                 console.error(
@@ -1132,6 +1219,9 @@ async function runGatewaySample(options: {
         );
       }
       const sessionSeedDurationMs = performance.now() - sessionSeedStartedAt;
+      // Normal inventory maintenance can archive older fixture sessions while seeding.
+      // Active turns and observers use the newest sessions; history still spans the inventory.
+      const turnSessionKeys = sessionKeys.slice(-options.concurrency);
       const messageSubscriptions: TimedProbe[] = [];
       for (let index = 0; index < options.subscribers; index += 1) {
         const subscriber = await connectGateway(port, setupDeadlineAt, protocolVersion, false);
@@ -1142,7 +1232,7 @@ async function runGatewaySample(options: {
         const subscription = await timeRpcProbe(
           subscriber.request,
           "sessions.messages.subscribe",
-          { key: sessionKeys[index % sessionKeys.length] },
+          { key: turnSessionKeys[index % turnSessionKeys.length] },
           runStartedAt,
         );
         messageSubscriptions.push(subscription);
@@ -1188,6 +1278,7 @@ async function runGatewaySample(options: {
       for (const auxiliaryClient of auxiliaryClients) {
         auxiliaryClient.setDeadlineAt(loadDeadlineAt);
       }
+      const controlPlane: BenchmarkRun["controlPlane"] = [];
       const controlUi: ControlUiProbe[] = [];
       const history: TimedProbe[] = [];
       const messageSubscriptionsDuringLoad: TimedProbe[] = [];
@@ -1208,6 +1299,7 @@ async function runGatewaySample(options: {
       // Keep the live artifact intact: buffered setup writes can arrive after this boundary.
       // Inclusive millisecond timestamps conservatively include events on the boundary.
       const timelineFrom = Date.now();
+      const loadStartMonotonicMicros = Number(process.hrtime.bigint() / 1_000n);
       const turns = Promise.all(
         Array.from({ length: options.concurrency }, (_, index) =>
           runTurn(rpc, index, loadDeadlineAt, options.toolEvents, {
@@ -1217,7 +1309,7 @@ async function runGatewaySample(options: {
                 resolveAllTurnsStarted();
               }
             },
-            ...(sessionKeys[index] ? { sessionKey: sessionKeys[index] } : {}),
+            ...(turnSessionKeys[index] ? { sessionKey: turnSessionKeys[index] } : {}),
           }),
         ),
       ).finally(() => {
@@ -1241,8 +1333,8 @@ async function runGatewaySample(options: {
       const sampler = (async () => {
         for (;;) {
           const sampleStartedAt = performance.now();
-          const subscriptionKey = sessionKeys[readyz.length % sessionKeys.length];
-          const [sample, subscription] = await Promise.all([
+          const subscriptionKey = turnSessionKeys[readyz.length % turnSessionKeys.length];
+          const [sample, subscription, controlProbes] = await Promise.all([
             sampleGateway({
               deadlineAt: loadDeadlineAt,
               port,
@@ -1257,7 +1349,15 @@ async function runGatewaySample(options: {
                   runStartedAt,
                 )
               : Promise.resolve(undefined),
+            options.controlPlane
+              ? Promise.all(
+                  ["tasks.list", "cron.list", "cron.status"].map(async (method) =>
+                    Object.assign(await timeRpcProbe(rpc, method, {}, runStartedAt), { method }),
+                  ),
+                )
+              : Promise.resolve([]),
           ]);
+          controlPlane.push(...controlProbes);
           if (subscription) {
             messageSubscriptionsDuringLoad.push(subscription);
             if (subscription.ok) {
@@ -1333,6 +1433,7 @@ async function runGatewaySample(options: {
         updatesDone = true;
       });
       await Promise.all([turns, sampler, historyLoad, sessionUpdateLoad]);
+      const loadEndMonotonicMicros = Number(process.hrtime.bigint() / 1_000n);
       if (options.historyClients > 0 && !history.some((sample) => sample.ok)) {
         const failure = history[0]?.error ?? "no requests completed before turns finished";
         throw new Error(`all configured chat.history load probes failed: ${failure}`);
@@ -1347,10 +1448,15 @@ async function runGatewaySample(options: {
 
       timelineWindow = { from: timelineFrom, through: Date.now() };
       result = {
+        controlPlane,
         controlUi,
         durationMs: performance.now() - runStartedAt,
         freshConnection: freshConnectionResult,
         history,
+        loadWindow: {
+          startMonotonicMicros: loadStartMonotonicMicros,
+          endMonotonicMicros: loadEndMonotonicMicros,
+        },
         memory: { after: memoryAfter, before: memoryBefore, peakRssMb },
         messageSubscriptions,
         messageSubscriptionsDuringLoad,
@@ -1389,7 +1495,15 @@ async function runGatewaySample(options: {
     }
     if (options.diagnosticsTimeline) {
       if (!gatewayExit || gatewayExit.exitCode !== 0 || gatewayExit.signal !== null) {
-        throw new Error("Gateway did not exit cleanly; diagnostics timeline may be incomplete");
+        throw new Error(
+          formatRunFailure(
+            new Error(
+              `Gateway did not exit cleanly; diagnostics timeline may be incomplete: ${JSON.stringify({ helper: gatewayExit, child: readGatewayProcess() })}`,
+            ),
+            gatewayOutput,
+            mockOutput,
+          ),
+        );
       }
       if (gatewayOutput.readOutput().includes("[diagnostics] failed to write timeline event")) {
         throw new Error("Gateway reported a diagnostics timeline write failure");
@@ -1398,7 +1512,11 @@ async function runGatewaySample(options: {
         readDiagnosticsTimelineSpans(timelinePath, timelineWindow),
       );
     }
-    return result;
+    return {
+      ...result,
+      gatewayProcess: readGatewayProcess(),
+      ...(gatewayExit ? { gatewayExit } : {}),
+    };
   } finally {
     try {
       if (mockProvider) {
@@ -1414,6 +1532,7 @@ function summarizeRuns(
   runs: readonly BenchmarkRun[],
   options: Pick<CliOptions, "maxControlMs" | "maxHandshakeMs"> = {},
 ) {
+  const controlPlane = runs.flatMap((run) => run.controlPlane);
   const controlUi = runs.flatMap((run) => run.controlUi);
   const readyz = runs.flatMap((run) => run.readyz);
   const sessionsList = runs.flatMap((run) => run.sessionsList);
@@ -1422,7 +1541,17 @@ function summarizeRuns(
   const subscriptionsDuringLoad = runs.flatMap((run) => run.messageSubscriptionsDuringLoad);
   const sessionUpdates = runs.flatMap((run) => run.sessionUpdates);
   // Setup subscriptions and warmup probes are not load-phase measurements.
+  const controlMethods = ["tasks.list", "cron.list", "cron.status"];
+  const controlMethodProbes = controlMethods.map((method) => ({
+    method,
+    samples: controlPlane.filter((sample) => sample.method === method),
+  }));
   const budgetViolations = [
+    ...controlMethodProbes.map(({ method, samples }) => ({
+      name: `Gateway ${method} probe`,
+      maxMs: options.maxControlMs,
+      samples,
+    })),
     {
       name: "fresh Gateway connection",
       maxMs: options.maxHandshakeMs,
@@ -1456,12 +1585,24 @@ function summarizeRuns(
   });
   return {
     budgetViolations,
+    controlPlane: Object.fromEntries(
+      controlMethodProbes.map(({ method, samples }) => [
+        method,
+        {
+          failedSamples: samples.filter((sample) => !sample.ok).length,
+          latencyMs: summarizeNumbers(samples.map((sample) => sample.latencyMs)),
+        },
+      ]),
+    ),
     controlUiFailedSamples: controlUi.filter((sample) => !sample.ok).length,
     controlUiLatencyMs: summarizeNumbers(controlUi.map((sample) => sample.latencyMs)),
     cpuCoreRatio: summarizeNumbers(
       readyz.flatMap((sample) => (sample.cpuCoreRatio == null ? [] : [sample.cpuCoreRatio])),
     ),
     degradedSamples: readyz.filter((sample) => sample.degraded === true).length,
+    eventLoopDelayMaxMs: summarizeNumbers(
+      readyz.flatMap((sample) => (sample.delayMaxMs == null ? [] : [sample.delayMaxMs])),
+    ),
     eventLoopDelayP99Ms: summarizeNumbers(
       readyz.flatMap((sample) => (sample.delayP99Ms == null ? [] : [sample.delayP99Ms])),
     ),
@@ -1470,6 +1611,10 @@ function summarizeRuns(
     ),
     freshConnectionFailedRuns: runs.filter((run) => !run.freshConnection.ok).length,
     freshConnectionLatencyMs: summarizeNumbers(runs.map((run) => run.freshConnection.latencyMs)),
+    gatewayUncleanExits: runs.filter(
+      (run) =>
+        run.gatewayExit && (run.gatewayExit.exitCode !== 0 || run.gatewayExit.signal !== null),
+    ).length,
     gatewayHeapGrowthMb: summarizeNumbers(
       runs.map((run) => run.memory.after.heapUsedMb - run.memory.before.heapUsedMb),
     ),
@@ -1548,6 +1693,9 @@ async function main(): Promise<void> {
   const payload = {
     cadenceMs: options.cadenceMs,
     concurrency: options.concurrency,
+    controlPlane: options.controlPlane,
+    historyMessages: options.historyMessages,
+    historyMessageChars: options.historyMessageChars,
     diagnosticsTimeline: options.diagnosticsTimeline,
     entry: options.entry,
     generatedAt: new Date().toISOString(),

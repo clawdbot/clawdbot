@@ -1,8 +1,14 @@
-import { readBestEffortConfig, resolveGatewayPort } from "../../config/config.js";
+import { isConfiguredCommandOwner } from "../../auto-reply/command-auth.js";
+import {
+  readBestEffortConfig,
+  readConfigFileSnapshot,
+  resolveGatewayPort,
+} from "../../config/config.js";
 import { createConfigIO } from "../../config/io.js";
 import { mergeGatewayServiceEnv } from "../../daemon/service-env-merge.js";
 import { resolveGatewayService } from "../../daemon/service.js";
 import { parseTcpPortFromArgs } from "../../infra/tcp-port.js";
+import { ensureCliPluginRegistryLoaded } from "../plugin-registry-loader.js";
 import { waitForGatewayHealthyRestart } from "./restart-health.js";
 
 export async function resolveGatewayLifecycleContext(
@@ -55,4 +61,13 @@ export async function waitForGatewayUpdateRecovery(
     requireRunningService: true,
     settle: { probes: 12 },
   });
+}
+
+// The helper rechecks external chat authority after parent exit and service stop.
+export async function isManagedUpdateRequesterOwner(
+  requester: Parameters<typeof isConfiguredCommandOwner>[1],
+) {
+  await ensureCliPluginRegistryLoaded({ scope: "configured-channels", routeLogsToStderr: true });
+  const snapshot = await readConfigFileSnapshot({ observe: false, skipPluginValidation: true });
+  return snapshot.valid && isConfiguredCommandOwner(snapshot.config, requester);
 }

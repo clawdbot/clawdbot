@@ -1,5 +1,5 @@
 ---
-summary: "Adds the Clickclack channel surface for sending and receiving OpenClaw messages."
+summary: "OpenClaw ClickClack channel plugin."
 read_when:
   - You are installing, configuring, or auditing the clickclack plugin
 title: "Clickclack plugin"
@@ -7,7 +7,7 @@ title: "Clickclack plugin"
 
 # Clickclack plugin
 
-Adds the Clickclack channel surface for sending and receiving OpenClaw messages.
+OpenClaw ClickClack channel plugin.
 
 ## Distribution
 

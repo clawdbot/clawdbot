@@ -194,7 +194,7 @@ export async function writeConfigFileFromContext(
   const validationCandidate = resolveValidationCandidate(persistCandidate);
   const validateCandidate = (candidate: unknown) => {
     const result = validateConfigObjectRawWithPlugins(candidate, {
-      env: deps.env,
+      ...context.pathResolution,
       pluginValidation: options.skipPluginValidation ? "skip" : "full",
       semanticValidation: "strict",
       preservedLegacyRootKeys: options.preservedLegacyRootKeys,
@@ -408,14 +408,31 @@ export async function writeConfigFileFromContext(
   await preCommitRuntimePreflight(sourceConfigForPreflight);
 
   try {
+    const beforeCommit = options.beforeCommit;
     const result = await replaceFileAtomic({
       filePath: configPath,
       content: json,
       dirMode: 0o700,
       mode: 0o600,
       tempPrefix: path.basename(configPath),
-      copyFallbackOnPermissionError: true,
-      fileSystem: deps.fs,
+      // fs-safe's copy fallback has no final authority hook. Guarded operations
+      // must publish by rename so a failed attempt cannot continue under stale authority.
+      copyFallbackOnPermissionError: !beforeCommit,
+      fileSystem: beforeCommit
+        ? {
+            promises: {
+              ...deps.fs.promises,
+              rename: async (source, destination) => {
+                await beforeCommit();
+                options.assertConfigPathForWrite?.();
+                if (options.baseSnapshot) {
+                  assertBaseSnapshotStillCurrent(snapshot, configPath, deps.fs);
+                }
+                return deps.fs.promises.rename(source, destination);
+              },
+            },
+          }
+        : deps.fs,
       beforeRename: async () => {
         options.assertConfigPathForWrite?.();
         if (options.baseSnapshot) {
@@ -430,7 +447,7 @@ export async function writeConfigFileFromContext(
         options.assertConfigPathForWrite?.();
         await cronOwnerRefusal?.recheck();
         options.assertConfigPathForWrite?.();
-        // Warn only after final guards pass, with no later await before rename.
+        // Warn only after backup and config-owner checks succeed.
         warnIfJSON5CommentsWillBeStripped({
           raw: snapshot.raw,
           filePath: configPath,

@@ -28,10 +28,10 @@ import {
 import { stopQaGatewayFixture } from "../../../helpers/qa-gateway-cleanup.js";
 
 const MODEL = "mock-openai/progress-fixture";
-const FINAL_MARKER = "QUIET-PROGRESS-FINAL";
+const FINAL_MARKER = "TOOL-PROGRESS-FINAL";
 const HEADLINE = "Checking the requested work";
-const synthesizedDecoration =
-  /\p{Extended_Pictographic}|\b(?:Exec|Bash)\b|\btool calls?\b|elapsed/iu;
+// The exec tool renders as a compact tool row on every progress surface.
+const toolRow = /🛠️ (?:Exec|Bash)\b/u;
 type WireWrite = {
   at: number;
   method: string;
@@ -413,10 +413,15 @@ function progressConfig(
   config: OpenClawConfig,
   channel: "discord" | "slack",
   native: boolean,
+  toolProgress: boolean,
 ): OpenClawConfig {
   const streaming = {
     mode: "progress" as const,
-    progress: { label: HEADLINE },
+    progress: {
+      label: HEADLINE,
+      toolProgress,
+      ...(channel === "slack" ? { style: "card" as const } : {}),
+    },
   };
   return {
     ...config,
@@ -1269,15 +1274,18 @@ describe("channel progress presentation through an isolated Gateway", () => {
   }, 180_000);
 
   it.each([
-    { channel: "discord" as const, native: false, thread: "root", rejectStop: false },
-    { channel: "slack" as const, native: true, thread: "root", rejectStop: false },
-    { channel: "slack" as const, native: false, thread: "root", rejectStop: false },
-    { channel: "slack" as const, native: true, thread: "root", rejectStop: true },
-    { channel: "slack" as const, native: false, thread: "reply", rejectStop: false },
-    { channel: "slack" as const, native: false, thread: "current", rejectStop: false },
+    { channel: "discord" as const, native: false, thread: "root", rejectStop: false, tools: true },
+    { channel: "discord" as const, native: false, thread: "root", rejectStop: false, tools: false },
+    { channel: "slack" as const, native: true, thread: "root", rejectStop: false, tools: true },
+    { channel: "slack" as const, native: true, thread: "root", rejectStop: false, tools: false },
+    { channel: "slack" as const, native: false, thread: "root", rejectStop: false, tools: true },
+    { channel: "slack" as const, native: false, thread: "root", rejectStop: false, tools: false },
+    { channel: "slack" as const, native: true, thread: "root", rejectStop: true, tools: true },
+    { channel: "slack" as const, native: false, thread: "reply", rejectStop: false, tools: true },
+    { channel: "slack" as const, native: false, thread: "current", rejectStop: false, tools: true },
   ])(
-    "keeps $channel progress quiet (native=$native, thread=$thread, rejectStop=$rejectStop)",
-    async ({ channel, native, thread, rejectStop }) => {
+    "renders $channel progress (native=$native, thread=$thread, rejectStop=$rejectStop, toolProgress=$tools)",
+    async ({ channel, native, thread, rejectStop, tools }) => {
       const directory = await fs.mkdtemp(
         path.join(await fs.realpath(os.tmpdir()), "channel-progress-"),
       );
@@ -1329,9 +1337,14 @@ describe("channel progress presentation through an isolated Gateway", () => {
         },
         runtimeEnvPatch: environment,
         mutateConfig: (config) => {
-          const configured = progressConfig(config, channel, native);
+          const configured = progressConfig(config, channel, native, tools);
           if (channel === "discord") {
             configured.channels!.discord!.proxy = api.proxyUrl;
+            const qa = configured.agents!.entries!.qa!;
+            qa.tools = {
+              ...qa.tools,
+              alsoAllow: [...(qa.tools?.alsoAllow ?? []), "message"],
+            };
           }
           return configured;
         },
@@ -1480,7 +1493,11 @@ describe("channel progress presentation through an isolated Gateway", () => {
         )
         .join("\n");
       expect(progressText).toContain(HEADLINE);
-      expect(progressText).not.toMatch(synthesizedDecoration);
+      if (tools) {
+        expect(progressText).toMatch(toolRow);
+      } else {
+        expect(progressText).not.toMatch(toolRow);
+      }
       const reactionAdds = writes.filter((write) =>
         channel === "discord"
           ? write.method === "PUT" && write.route.includes("/reactions/")
@@ -1495,7 +1512,7 @@ describe("channel progress presentation through an isolated Gateway", () => {
       );
       expect([...reactionNames]).toEqual([channel === "discord" ? "👀" : "eyes"]);
       const evidenceDir = path.join(process.cwd(), ".artifacts", "channel-progress-presentation");
-      const evidenceName = `${channel}-${native ? "native" : "draft"}-${thread}${rejectStop ? "-stop-failure" : ""}`;
+      const evidenceName = `${channel}-${native ? "native" : "draft"}-${thread}${rejectStop ? "-stop-failure" : ""}${tools ? "" : "-quiet"}`;
       await fs.mkdir(evidenceDir, { recursive: true });
       await fs.writeFile(
         path.join(evidenceDir, `${evidenceName}-diagnostic.json`),
@@ -1550,8 +1567,12 @@ describe("channel progress presentation through an isolated Gateway", () => {
         .flatMap((write) => readChunks(write.body.chunks))
         .filter((chunk) => chunk.type === "task_update");
       if (native) {
-        expect(new Set(tasks.map((task) => task.id)).size).toBe(1);
-        expect(new Set(tasks.map((task) => task.title)).size).toBe(1);
+        // Detailed cards give the exec call its own task row; quiet cards keep
+        // one stable summary row. Both complete with the turn.
+        expect(tasks.some((task) => toolRow.test(String(task.title)))).toBe(tools);
+        if (!tools) {
+          expect(new Set(tasks.map((task) => task.id)).size).toBe(1);
+        }
         expect(tasks.at(-1)?.status).toBe("complete");
       }
       await fs.writeFile(
@@ -1571,12 +1592,84 @@ describe("channel progress presentation through an isolated Gateway", () => {
             finalWrites: finalWrites().length,
             distinctWorkingReactions: reactionNames.size,
             taskIds: new Set(tasks.map((task) => task.id)).size,
-            syntheticDecoration: false,
+            toolRows: tools,
           },
           null,
           2,
         ),
       );
+      if (channel === "discord") {
+        const text = [
+          "QA-PREFIX-REPORT",
+          ...Array.from(
+            { length: 80 },
+            (_, index) =>
+              `Section ${String(index).padStart(3, "0")} 😀 e\u0301: reviewed and ready.`,
+          ),
+          "QA-PREFIX-END",
+        ].join("\n");
+        expect(Array.from(text).length).toBeGreaterThan(1997);
+        const client = await connectGatewayClient({
+          url: gateway.wsUrl,
+          token: gateway.token,
+          scopes: ["operator.admin", "operator.read", "operator.write"],
+        });
+        cleanups.push(() => disconnectGatewayClient(client));
+        const firstWrite = writes.length;
+        const sent = asRecord(
+          await client.request("tools.invoke", {
+            name: "message",
+            agentId: "qa",
+            sessionKey: "agent:qa:discord:channel:123456789012345678",
+            args: {
+              action: "send",
+              channel: "discord",
+              target: "channel:123456789012345678",
+              presentation: { blocks: [{ type: "text", text }] },
+            },
+          }),
+        );
+        expect(sent.ok).toBe(true);
+        const portableWrites = () =>
+          writes
+            .slice(firstWrite)
+            .filter(
+              (write) => write.method === "POST" && /\/channels\/\d+\/messages$/u.test(write.route),
+            );
+        await waitForFact(
+          () => portableWrites().some((write) => write.accepted),
+          "portable presentation accepted",
+        );
+        expect(portableWrites()).toHaveLength(1);
+        const write = portableWrites()[0]!;
+        expect(write.accepted?.id).toEqual(expect.any(String));
+        const containers = readChunks(write.body.components);
+        expect(containers).toHaveLength(1);
+        // Discord wire types are Container (17) and TextDisplay (10).
+        expect(containers[0]?.type).toBe(17);
+        const displays = readChunks(containers[0]?.components);
+        expect(displays.length).toBeGreaterThan(1);
+        for (const display of displays) {
+          expect(display.type).toBe(10);
+          expect(display.content).toEqual(expect.any(String));
+          expect(Array.from(String(display.content)).length).toBeLessThanOrEqual(1997);
+        }
+        expect(displays.map((display) => display.content).join("")).toBe(text);
+        await fs.writeFile(
+          path.join(evidenceDir, `discord-portable-prefix-tool-progress-${tools}.json`),
+          JSON.stringify(
+            {
+              kind: "mock-gateway",
+              status: "pass",
+              expectedText: text,
+              body: write.body,
+              accepted: write.accepted,
+            },
+            null,
+            2,
+          ),
+        );
+      }
     },
     180_000,
   );

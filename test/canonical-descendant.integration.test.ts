@@ -18,6 +18,7 @@ import {
   setRuntimeAuthProfileStoreSnapshot,
   clearRuntimeAuthProfileStoreSnapshots,
 } from "../src/agents/auth-profiles/runtime-snapshots.js";
+import { log as embeddedAgentLog } from "../src/agents/embedded-agent-runner/logger.js";
 import { runAgentHarnessBeforeMessageWriteHook } from "../src/agents/harness/hook-helpers.js";
 import { createAgentHarnessHostCapabilities } from "../src/agents/harness/host-capability.js";
 import { listRegisteredAgentHarnesses } from "../src/agents/harness/registry.js";
@@ -108,12 +109,14 @@ async function withFixture(
     ) => Promise<{ ok: boolean; key?: string; message?: string }>,
     revoke: (target: "source" | "child" | "registry", sourceKey: string) => void,
     admissions: Array<{ recorder: UserTurnTranscriptRecorder; before: unknown[] }>,
+    runtime: ReturnType<typeof createPluginRuntimeMock>,
   ) => Promise<void>,
   options: {
     loading?: "searchable" | "direct";
     codexPlugins?: Parameters<typeof createCanonicalForkFixtureForTest>[0]["codexPlugins"];
     desktopGenerationFingerprint?: string;
     senderIsOwner?: boolean;
+    transcript?: { display?: false; excludeFromContext?: true };
     mcpResolver?: OpenClawPluginMcpServerConnectionResolver;
   } = {},
 ) {
@@ -138,8 +141,8 @@ async function withFixture(
       agent: createRuntimeAgent(),
       config: { current: () => config },
       state: {
-        openSyncKeyedStore: <T>(options: OpenKeyedStoreOptions) =>
-          createPluginStateSyncKeyedStore<T>("codex", options),
+        openSyncKeyedStore: <T>(storeOptions: OpenKeyedStoreOptions) =>
+          createPluginStateSyncKeyedStore<T>("codex", storeOptions),
       },
     });
     const admissions: Array<{ recorder: UserTurnTranscriptRecorder; before: unknown[] }> = [];
@@ -164,6 +167,7 @@ async function withFixture(
         const target = { agentId: "main", sessionId, sessionKey, storePath };
         const recorder = createUserTurnTranscriptRecorder({
           input: {
+            ...options.transcript,
             text: prompt,
             timestamp: 123,
             idempotencyKey: buildRunUserTurnIdempotencyKey(runId),
@@ -265,7 +269,9 @@ async function withFixture(
           abortController,
           invalidate: async (reason) => {
             if (reason === "claim") {
-              if (capturedWorkerClaim) placements?.releaseTurn(capturedWorkerClaim);
+              if (capturedWorkerClaim) {
+                placements?.releaseTurn(capturedWorkerClaim);
+              }
               workerClaim = undefined;
             } else if (reason === "aborted") {
               abortController.abort();
@@ -291,7 +297,9 @@ async function withFixture(
           userTurnTranscriptRecorder: recorder,
           close: () => {
             host.close();
-            if (workerClaim) placements?.releaseTurn(workerClaim);
+            if (workerClaim) {
+              placements?.releaseTurn(workerClaim);
+            }
             admission.close();
             successor?.close();
           },
@@ -326,7 +334,7 @@ async function withFixture(
         source: `${rootDir}index.ts`,
       });
       registry.plugins.push(record);
-      await plugin.register(
+      plugin.register(
         createApi(record, {
           config,
           pluginConfig: config.plugins.entries?.[plugin.id]?.config,
@@ -416,6 +424,7 @@ async function withFixture(
             );
           },
           admissions,
+          runtime,
         ),
       );
     } finally {
@@ -467,7 +476,7 @@ describe("canonical descendant lifecycle through real owners", () => {
           calls.findIndex((call) => call.method === "turn/start"),
         );
         expect(
-          admissions.at(-1)?.recorder.getPersistedMessage?.()?.__openclaw?.mirrorIdentity,
+          admissions.at(-1)?.recorder.getPersistedMessage?.()?.["__openclaw"]?.mirrorIdentity,
         ).toMatch(/:prompt$/);
       }
       expect(
@@ -483,7 +492,7 @@ describe("canonical descendant lifecycle through real owners", () => {
       await withFixture(async (fixture, _fork, _revoke, admissions) => {
         const source = await fixture.adopt();
         const binding = await fixture.turn(source.sessionKey, "accepted");
-        const before = await fixture.bindingStore.read(fixture.identity(source.sessionKey));
+        const before = fixture.bindingStore.read(fixture.identity(source.sessionKey));
         const offset = fixture.native.calls.length;
         const history = structuredClone(fixture.native.threads.get(binding.threadId)?.thread.turns);
         fixture.native.setPolicyFault(fault);
@@ -500,13 +509,11 @@ describe("canonical descendant lifecycle through real owners", () => {
             ["thread/start", "thread/fork", "thread/archive", "turn/start"].includes(call.method),
           ),
         ).toBe(false);
-        expect(await fixture.bindingStore.read(fixture.identity(source.sessionKey))).toEqual(
-          before,
-        );
+        expect(fixture.bindingStore.read(fixture.identity(source.sessionKey))).toEqual(before);
         expect(fixture.native.threads.get(binding.threadId)?.thread.turns).toEqual(history);
-        expect(admissions.at(-1)?.recorder.getPersistedMessage?.()?.__openclaw).not.toHaveProperty(
-          "mirrorIdentity",
-        );
+        expect(
+          admissions.at(-1)?.recorder.getPersistedMessage?.()?.["__openclaw"],
+        ).not.toHaveProperty("mirrorIdentity");
         const lastClient = calls.find((call) => call.method === "thread/inject_items")?.client;
         // A separately admitted cold run may reassert once on a new physical client.
         await fixture.turn(source.sessionKey, "independent retry");
@@ -526,7 +533,7 @@ describe("canonical descendant lifecycle through real owners", () => {
         const source = await fixture.adopt();
         const binding = await fixture.turn(source.sessionKey, "accepted");
         const selected = (await fixture.readEntries(source.sessionKey)).at(-1)!;
-        const before = await fixture.bindingStore.read(fixture.identity(source.sessionKey));
+        const before = fixture.bindingStore.read(fixture.identity(source.sessionKey));
         const offset = fixture.native.calls.length;
         const threads = new Set(fixture.native.threads.keys());
         fixture.native.setPolicyFault(fault);
@@ -544,9 +551,7 @@ describe("canonical descendant lifecycle through real owners", () => {
             ({ entry }) => entry.initializationPending === true,
           ),
         ).toBe(true);
-        expect(await fixture.bindingStore.read(fixture.identity(source.sessionKey))).toEqual(
-          before,
-        );
+        expect(fixture.bindingStore.read(fixture.identity(source.sessionKey))).toEqual(before);
         expect(fixture.native.threads.has(binding.threadId)).toBe(true);
         expect(fixture.native.threads.has("original")).toBe(true);
       });
@@ -578,7 +583,9 @@ describe("canonical descendant lifecycle through real owners", () => {
           await fixture.withClient(async (client) => {
             const request = client.request.bind(client);
             const spy = vi.spyOn(client, "request").mockImplementation((method, input, options) => {
-              if (method === "thread/inject_items") revoke(target, source.sessionKey);
+              if (method === "thread/inject_items") {
+                revoke(target, source.sessionKey);
+              }
               return request(method, input, options);
             });
             restore = () => spy.mockRestore();
@@ -605,7 +612,7 @@ describe("canonical descendant lifecycle through real owners", () => {
       await withFixture(async (fixture, fork) => {
         const source = await fixture.adopt();
         const binding = await fixture.turn(source.sessionKey, "accepted");
-        const before = await fixture.bindingStore.read(fixture.identity(source.sessionKey));
+        const before = fixture.bindingStore.read(fixture.identity(source.sessionKey));
         const selected = (await fixture.readEntries(source.sessionKey)).at(-1)!;
         const mutate = fixture.bindingStore.mutate.bind(fixture.bindingStore);
         const spy = vi
@@ -660,11 +667,9 @@ describe("canonical descendant lifecycle through real owners", () => {
                 call.params.threadId !== binding.threadId && call.params.threadId !== "original",
             ),
         ).toBe(true);
-        expect(await fixture.bindingStore.read(fixture.identity(source.sessionKey))).toEqual(
-          before,
-        );
+        expect(fixture.bindingStore.read(fixture.identity(source.sessionKey))).toEqual(before);
         if (successorKey) {
-          expect(await fixture.bindingStore.read(fixture.identity(successorKey))).toMatchObject({
+          expect(fixture.bindingStore.read(fixture.identity(successorKey))).toMatchObject({
             threadId: "successor-thread",
           });
         }
@@ -683,7 +688,7 @@ describe("canonical descendant lifecycle through real owners", () => {
       await withFixture(async (fixture) => {
         const source = await fixture.adopt();
         await fixture.turn(source.sessionKey, "accepted");
-        const before = await fixture.bindingStore.read(fixture.identity(source.sessionKey));
+        const before = fixture.bindingStore.read(fixture.identity(source.sessionKey));
         const offset = fixture.native.calls.length;
         let restore: (() => void) | undefined;
         try {
@@ -701,7 +706,9 @@ describe("canonical descendant lifecycle through real owners", () => {
                     const spy = vi
                       .spyOn(client, "request")
                       .mockImplementation(async (method, input, options) => {
-                        if (method === "thread/inject_items") await invalidate(reason);
+                        if (method === "thread/inject_items") {
+                          await invalidate(reason);
+                        }
                         return request(method, input, options);
                       });
                     restore = () => spy.mockRestore();
@@ -722,9 +729,7 @@ describe("canonical descendant lifecycle through real owners", () => {
         expect(
           calls.some((call) => call.method === "turn/start" || call.method === "thread/start"),
         ).toBe(false);
-        expect(await fixture.bindingStore.read(fixture.identity(source.sessionKey))).toEqual(
-          before,
-        );
+        expect(fixture.bindingStore.read(fixture.identity(source.sessionKey))).toEqual(before);
       });
     },
     180_000,
@@ -784,6 +789,33 @@ describe("canonical descendant lifecycle through real owners", () => {
       );
       expect(await loadTranscriptEvents(target)).toEqual(before);
     });
+  }, 180_000);
+
+  it("preserves hidden admitted consult prompts without requesting visible-row annotation", async () => {
+    const warn = vi.spyOn(embeddedAgentLog, "warn").mockImplementation(() => undefined);
+    await withFixture(
+      async (fixture, _fork, _revoke, admissions) => {
+        const source = await fixture.adopt();
+        await fixture.turn(source.sessionKey, "Hidden voice consultation");
+        const { recorder, before } = admissions.at(-1)!;
+        expect(recorder.getAdmissionReceipt()).toBeDefined();
+        expect(recorder.getPersistedMessage?.()).toMatchObject({
+          display: false,
+          excludeFromContext: true,
+        });
+        const target = {
+          ...fixture.identity(source.sessionKey),
+          sessionKey: source.sessionKey,
+          storePath: fixture.storePath,
+        };
+        expect(await loadTranscriptEvents(target)).toEqual(before);
+        expect(warn).not.toHaveBeenCalledWith(
+          "failed to mirror codex app-server prompt at turn start",
+          expect.anything(),
+        );
+      },
+      { transcript: { display: false, excludeFromContext: true } },
+    );
   }, 180_000);
 
   it("annotates the pre-admitted Gateway user without replacing its event or read fence", async () => {
@@ -1003,7 +1035,7 @@ describe("canonical descendant lifecycle through real owners", () => {
       expect(result, result.message).toMatchObject({ ok: true });
       const key = expectDefined(result.key, "child");
       const binding = expectDefined(
-        await fixture.bindingStore.read(fixture.identity(key)),
+        fixture.bindingStore.read(fixture.identity(key)),
         "child binding",
       );
       const child = expectDefined(fixture.native.threads.get(binding.threadId), "native child");
@@ -1033,6 +1065,24 @@ describe("canonical descendant lifecycle through real owners", () => {
       ]);
       await runSessionUpstreamMonitorTick({ providers: [fixture.catalog] });
       expect(events()).toHaveLength(before.length + 1);
+    });
+  }, 180_000);
+
+  it("forks with the current native model instead of the stale persisted model", async () => {
+    await withFixture(async (fixture, fork) => {
+      const source = await fixture.adopt();
+      const binding = await fixture.turn(source.sessionKey, "canonical");
+      const current = expectDefined(fixture.native.threads.get(binding.threadId), "canonical");
+      current.thread.model = "gpt-5.5";
+      const selected = (await fixture.readEntries(source.sessionKey)).at(-1)!;
+      const result = await fork(source.sessionKey, selected.entryId);
+      expect(result, result.message).toMatchObject({ ok: true });
+      const childKey = expectDefined(result.key, "child key");
+      expect(fixture.bindingStore.read(fixture.identity(childKey))).toMatchObject({
+        model: "gpt-5.5",
+        modelProvider: current.thread.modelProvider,
+      });
+      expect(current.model).toBe("gpt-5.6-luna");
     });
   }, 180_000);
 
@@ -1081,7 +1131,7 @@ describe("canonical descendant lifecycle through real owners", () => {
           );
           const firstKey = expectDefined(first.key, "first descendant key");
           const firstBinding = expectDefined(
-            await fixture.bindingStore.read(fixture.identity(firstKey)),
+            fixture.bindingStore.read(fixture.identity(firstKey)),
             "first descendant binding",
           );
           const firstForkCalls = fixture.native.calls.slice(firstForkOffset);
@@ -1245,7 +1295,7 @@ describe("canonical descendant lifecycle through real owners", () => {
           expect(later, later.message).toMatchObject({ ok: true });
           const laterKey = expectDefined(later.key, "later descendant key");
           const laterBinding = expectDefined(
-            await fixture.bindingStore.read(fixture.identity(laterKey)),
+            fixture.bindingStore.read(fixture.identity(laterKey)),
             "later binding",
           );
           expect(fixture.native.threads.get(laterBinding.threadId)?.thread.turns).toEqual(
@@ -1318,7 +1368,7 @@ describe("canonical descendant lifecycle through real owners", () => {
     const calls: string[] = [];
     const resolutions: string[] = [];
     let initializations = 0;
-    const server = http.createServer(async (request, response) => {
+    const handleRequest = async (request: http.IncomingMessage, response: http.ServerResponse) => {
       const sessionId = request.headers["mcp-session-id"];
       if (request.method === "DELETE") {
         if (typeof sessionId === "string") {
@@ -1381,8 +1431,15 @@ describe("canonical descendant lifecycle through real owners", () => {
       }
       response.setHeader("content-type", "application/json");
       response.end(JSON.stringify({ jsonrpc: "2.0", id: message.id, result }));
+    };
+    const server = http.createServer((request, response) => {
+      void handleRequest(request, response).catch((error: unknown) => {
+        response.destroy(error instanceof Error ? error : new Error(String(error)));
+      });
     });
-    await new Promise<void>((resolve) => server.listen(0, "127.0.0.1", resolve));
+    await new Promise<void>((resolve) => {
+      server.listen(0, "127.0.0.1", resolve);
+    });
     const address = server.address();
     if (!address || typeof address === "string") {
       throw new Error("requester MCP server did not bind a TCP port");
@@ -1401,7 +1458,7 @@ describe("canonical descendant lifecycle through real owners", () => {
                 }
                 expect(bridge.availableTools.some((tool) => tool.name === toolName)).toBe(true);
                 const binding = expectDefined(
-                  await fixture.bindingStore.read(fixture.identity(key)),
+                  fixture.bindingStore.read(fixture.identity(key)),
                   "requester turn binding",
                 );
                 const before = calls.length;
@@ -1443,7 +1500,7 @@ describe("canonical descendant lifecycle through real owners", () => {
           );
           const childKey = expectDefined(result.key, "requester child key");
           const childBinding = expectDefined(
-            await fixture.bindingStore.read(fixture.identity(childKey)),
+            fixture.bindingStore.read(fixture.identity(childKey)),
             "requester child binding",
           );
           expect(fixture.native.threads.get(childBinding.threadId)?.dynamicTools).toEqual(
@@ -1508,9 +1565,9 @@ describe("canonical descendant lifecycle through real owners", () => {
         },
       );
     } finally {
-      await new Promise<void>((resolve, reject) =>
-        server.close((error) => (error ? reject(error) : resolve())),
-      );
+      await new Promise<void>((resolve, reject) => {
+        server.close((error) => (error ? reject(error) : resolve()));
+      });
     }
   }, 180_000);
 
@@ -1526,7 +1583,7 @@ describe("canonical descendant lifecycle through real owners", () => {
       expect(
         fixture.native.calls.filter((call) => call.method === "thread/inject_items"),
       ).toHaveLength(2);
-      const before = await fixture.bindingStore.read(fixture.identity(childKey));
+      const before = fixture.bindingStore.read(fixture.identity(childKey));
       fixture.native.setCompetingSubscriber(true);
       const turnsBefore = fixture.native.calls.filter(
         (call) => call.method === "turn/start",
@@ -1534,7 +1591,7 @@ describe("canonical descendant lifecycle through real owners", () => {
       await expect(fixture.turn(childKey, "configuration must apply")).rejects.toThrow(
         /confirm unloading/,
       );
-      expect(await fixture.bindingStore.read(fixture.identity(childKey))).toEqual(before);
+      expect(fixture.bindingStore.read(fixture.identity(childKey))).toEqual(before);
       expect(fixture.native.calls.filter((call) => call.method === "turn/start")).toHaveLength(
         turnsBefore,
       );
@@ -1638,22 +1695,29 @@ describe("canonical descendant lifecycle through real owners", () => {
 
   it.each([
     ["ignored cut", /did not apply the exact beforeTurnId cut/],
+    ["missing model", /model/i],
+    ["null model", /model/i],
+    ["model changed during preparation", /canonical Codex source changed/],
+    ["provider changed during preparation", /canonical Codex source changed/],
     ["catalog mismatch", /native tool catalog is missing, corrupt, or changed/],
     ["child catalog", /did not preserve the actual native tool catalog/],
     ["child model", /did not preserve the exact canonical source and selected native model/],
+    ["child thread model", /did not preserve the exact canonical source and selected native model/],
+    [
+      "null child thread model",
+      /did not preserve the exact canonical source and selected native model/,
+    ],
     ["child lineage", /unsafe native thread identity/],
     ["unsubscribe failure", /unsubscribe|subscription|guarded rollback/i],
   ])(
     "refuses %s without publishing an unsafe child",
     async (failure, expectedError) => {
       await withFixture(
-        async (fixture, fork) => {
+        async (fixture, fork, _revoke, _admissions, runtime) => {
           const source = await fixture.adopt();
           const binding = await fixture.turn(source.sessionKey, "first canonical");
           const sourceBefore = structuredClone(fixture.native.source);
-          const bindingBefore = await fixture.bindingStore.read(
-            fixture.identity(source.sessionKey),
-          );
+          const bindingBefore = fixture.bindingStore.read(fixture.identity(source.sessionKey));
           const existingSessions = new Set(
             listSessionEntriesCore({ agentId: "main", storePath: fixture.storePath }).map(
               ({ entry }) => entry.sessionId,
@@ -1663,6 +1727,37 @@ describe("canonical descendant lifecycle through real owners", () => {
           const countBefore = fixture.native.calls.filter(
             (call) => call.method === "thread/fork",
           ).length;
+          const current = expectDefined(fixture.native.threads.get(binding.threadId), "canonical");
+          const create = runtime.agent.session.createSessionEntry;
+          const createSession = vi.spyOn(runtime.agent.session, "createSessionEntry");
+          if (failure === "missing model") {
+            delete current.thread.model;
+          }
+          if (failure === "null model") {
+            current.thread.model = null;
+          }
+          if (
+            failure === "model changed during preparation" ||
+            failure === "provider changed during preparation"
+          ) {
+            createSession.mockImplementation((params) =>
+              create({
+                ...params,
+                afterCreate: async (created) => {
+                  if (failure === "model changed during preparation") {
+                    current.thread.model = "gpt-5.5";
+                  } else {
+                    current.thread.modelProvider = "changed-provider";
+                  }
+                  const patch = await params.afterCreate?.(created);
+                  if (!patch) {
+                    throw new Error("Expected the canonical fork initialization patch");
+                  }
+                  return patch;
+                },
+              }),
+            );
+          }
           if (failure === "ignored cut") {
             fixture.native.setIgnoreCut(true);
           }
@@ -1677,6 +1772,12 @@ describe("canonical descendant lifecycle through real owners", () => {
           if (failure === "child model") {
             fixture.native.setForkFault("model");
           }
+          if (failure === "child thread model") {
+            fixture.native.setForkFault("thread-model");
+          }
+          if (failure === "null child thread model") {
+            fixture.native.setForkFault("null-thread-model");
+          }
           if (failure === "child lineage") {
             fixture.native.setForkFault("lineage");
           }
@@ -1686,19 +1787,28 @@ describe("canonical descendant lifecycle through real owners", () => {
           const result = await fork(source.sessionKey, messages.at(-1)!.entryId);
           expect(result.ok, result.message).toBe(false);
           expect(result.message).toMatch(expectedError);
+          if (failure === "missing model" || failure === "null model") {
+            expect(createSession).not.toHaveBeenCalled();
+          }
           expect(
             listSessionEntriesCore({ agentId: "main", storePath: fixture.storePath })
               .filter(({ entry }) => !existingSessions.has(entry.sessionId))
               .every(({ entry }) => entry.initializationPending === true),
             "failed forks must not publish a ready child",
           ).toBe(true);
-          if (failure === "catalog mismatch") {
+          if (
+            failure === "catalog mismatch" ||
+            failure === "missing model" ||
+            failure === "null model" ||
+            failure === "model changed during preparation" ||
+            failure === "provider changed during preparation"
+          ) {
             expect(
               fixture.native.calls.filter((call) => call.method === "thread/fork"),
             ).toHaveLength(countBefore);
           }
           expect(fixture.native.source).toEqual(sourceBefore);
-          expect(await fixture.bindingStore.read(fixture.identity(source.sessionKey))).toEqual(
+          expect(fixture.bindingStore.read(fixture.identity(source.sessionKey))).toEqual(
             bindingBefore,
           );
         },

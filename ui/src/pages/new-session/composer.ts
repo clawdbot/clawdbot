@@ -118,20 +118,22 @@ function renderStartControl(options: NewSessionComposerOptions) {
   return html` <openclaw-tooltip content=${options.submitDisabledReason ?? startLabel}>
     <button
       type="button"
-      class="chat-send-btn new-session-page__start-submit ${reasonedBlock
-        ? "new-session-page__start-submit--blocked"
-        : ""}"
+      class="chat-send-btn new-session-page__start-submit ${
+        reasonedBlock ? "new-session-page__start-submit--blocked" : ""
+      }"
       ?disabled=${!options.canSubmit && !reasonedBlock}
       aria-disabled=${String(!options.canSubmit)}
       aria-busy=${String(options.submitting)}
       aria-label=${startLabel}
       @click=${() => submitNewSession(options)}
     >
-      ${options.submitting
-        ? icons.loader
-        : options.nativeTerminal
-          ? icons.squareTerminal
-          : icons.arrowUp}
+      ${
+        options.submitting
+          ? icons.loader
+          : options.nativeTerminal
+            ? icons.squareTerminal
+            : icons.arrowUp
+      }
     </button>
   </openclaw-tooltip>`;
 }
@@ -446,7 +448,7 @@ export function renderNewSessionComposer(options: NewSessionComposerOptions) {
     getTextarea: skillMenuHost.getTextarea,
     resolveArgOptions: (command) => command.argOptions ?? [],
     runCommand: () => submitNewSession(options),
-    canRunInlineCommand: () => false,
+    canRun: (inline) => !inline,
     refreshCommands: options.refreshCommands,
     commandFilter: (command) => command.executeLocal !== true,
   };
@@ -571,9 +573,9 @@ export function renderNewSessionComposer(options: NewSessionComposerOptions) {
       @dragover=${attachmentDropHandlers.onDragover}
     >
       <div
-        class="agent-chat__input agent-chat__input--mobile-toolbar${options.dictationActive
-          ? " agent-chat__input--dictating"
-          : ""}"
+        class="agent-chat__input agent-chat__input--mobile-toolbar${
+          options.dictationActive ? " agent-chat__input--dictating" : ""
+        }"
         @openclaw-composer-dismiss-invocations=${() => {
           mentionMenu.close();
           options.requestUpdate();
@@ -588,17 +590,21 @@ export function renderNewSessionComposer(options: NewSessionComposerOptions) {
         <div class="agent-chat__composer-lede">${options.dictationStatus ?? nothing}</div>
         <div class="agent-chat__composer-input-row">
           <div class="agent-chat__composer-combobox">
-            ${slashMenuVisible
-              ? renderSlashMenu(
-                  slashMenuState,
-                  slashMenuHost,
-                  options.message,
-                  options.requestUpdate,
-                )
-              : nothing}
-            ${skillMenuVisible
-              ? renderSkillMenu(skillMenuState, skillMenuHost, options.requestUpdate)
-              : nothing}
+            ${
+              slashMenuVisible
+                ? renderSlashMenu(
+                    slashMenuState,
+                    slashMenuHost,
+                    options.message,
+                    options.requestUpdate,
+                  )
+                : nothing
+            }
+            ${
+              skillMenuVisible
+                ? renderSkillMenu(skillMenuState, skillMenuHost, options.requestUpdate)
+                : nothing
+            }
             <textarea
               ${ref(options.textareaController.ref)}
               class="new-session-page__message"
@@ -683,40 +689,50 @@ export function renderNewSessionComposer(options: NewSessionComposerOptions) {
           <div class="agent-chat__composer-lead">
             ${options.nativeTerminal ? nothing : renderNewSessionPlusMenu(options, attachmentProps)}
             ${options.permissionControl ?? nothing}
-            ${!options.nativeTerminal && options.draftAvailable
-              ? renderNewSessionDraftVisibility(options)
-              : nothing}
+            ${
+              !options.nativeTerminal && options.draftAvailable
+                ? renderNewSessionDraftVisibility(options)
+                : nothing
+            }
             ${options.nativeTerminal ? nothing : renderNewSessionSelectionStatus(options)}
           </div>
           <div class="agent-chat__composer-trail">
             <div class="agent-chat__composer-controls">
-              ${options.modelControl && options.modelControl !== nothing
-                ? html`<div class="chat-composer-model-control">${options.modelControl}</div>`
-                : nothing}
+              ${
+                options.modelControl && options.modelControl !== nothing
+                  ? html`<div class="chat-composer-model-control">${options.modelControl}</div>`
+                  : nothing
+              }
             </div>
             <div class="agent-chat__composer-actions">
-              ${options.voiceControl ?? nothing}${options.dictationActive
-                ? nothing
-                : renderStartControl(options)}
+              ${options.voiceControl ?? nothing}${
+                options.dictationActive ? nothing : renderStartControl(options)
+              }
             </div>
           </div>
         </div>
-        ${options.pendingAttachmentReads > 0
-          ? html`<span class="sr-only" role="status">${t("newSession.readingAttachment")}</span>`
-          : nothing}
+        ${
+          options.pendingAttachmentReads > 0
+            ? html`<span class="sr-only" role="status">${t("newSession.readingAttachment")}</span>`
+            : nothing
+        }
       </div>
-      ${options.blockedSubmitNotice
-        ? html`<div
-            class="new-session-page__blocked-submit agent-chat__composer-underlaps"
-            data-tone="info"
-            role="status"
-          >
-            <div class="agent-chat__composer-status-band">
-              <span class="agent-chat__composer-status-icon" aria-hidden="true">${icons.info}</span>
-              <span class="agent-chat__composer-status-text">${options.blockedSubmitNotice}</span>
-            </div>
-          </div>`
-        : nothing}
+      ${
+        options.blockedSubmitNotice
+          ? html`<div
+              class="new-session-page__blocked-submit agent-chat__composer-underlaps"
+              data-tone="info"
+              role="status"
+            >
+              <div class="agent-chat__composer-status-band">
+                <span class="agent-chat__composer-status-icon" aria-hidden="true"
+                  >${icons.info}</span
+                >
+                <span class="agent-chat__composer-status-text">${options.blockedSubmitNotice}</span>
+              </div>
+            </div>`
+          : nothing
+      }
     </div>
   `;
 }

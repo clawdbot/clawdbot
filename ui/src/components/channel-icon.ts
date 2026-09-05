@@ -26,8 +26,10 @@ export function renderChannelIcon(
     style=${style}
     aria-hidden="true"
   >
-    ${art
-      ? html`<img src=${art} alt="" loading="lazy" decoding="async" />`
-      : html`<span>${pluginMonogram(label)}</span>`}
+    ${
+      art
+        ? html`<img src=${art} alt="" loading="lazy" decoding="async" />`
+        : html`<span>${pluginMonogram(label)}</span>`
+    }
   </span>`;
 }

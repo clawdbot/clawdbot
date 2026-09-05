@@ -11,10 +11,12 @@ import {
   isOptionalElementDefined,
 } from "../app/lazy-custom-element.ts";
 import { beginNativeWindowDrag } from "../app/native-window-drag.ts";
+import { CHAT_ROUTE_READY_EVENT } from "../app/route-transition.ts";
 import { t } from "../i18n/index.ts";
 import { listSelectableAgents } from "../lib/agents/display.ts";
 import { sessionNavigationTarget } from "../lib/sessions/route-navigation.ts";
 import {
+  areUiSessionKeysEquivalent,
   buildAgentMainSessionKey,
   normalizeAgentId,
   resolveUiConfiguredMainKey,
@@ -23,7 +25,9 @@ import {
 } from "../lib/sessions/session-key.ts";
 import { OpenClawLightDomElement } from "../lit/openclaw-element.ts";
 import { getSafeLocalStorage } from "../local-storage.ts";
+import { CHAT_TRANSCRIPT_LOADING_CHANGED_EVENT } from "../pages/chat/chat-history-events.ts";
 import { buildHomeWorkContext, subscribeChatWorkContext } from "../pages/chat/chat-work-context.ts";
+import type { ChatPaneElement } from "../pages/chat/route-draft-focus-handoff.ts";
 import {
   custodianSessionStore,
   type CustodianSessionStore,
@@ -32,6 +36,7 @@ import { DockLayoutController } from "./dock-layout-controller.ts";
 import { assistantPanelLayout, type DockPanelSide } from "./dock-panel-layout.ts";
 import { icons } from "./icons.ts";
 import { renderLazyElementState } from "./lazy-view-error.ts";
+import { renderLoadingState } from "./loading-state.ts";
 import { CUSTODIAN_PANEL_TOGGLE_EVENT, HOME_PANEL_TOGGLE_EVENT } from "./panel-toggle-contract.ts";
 import "../pages/custodian/custodian-surface.ts";
 import "../styles/assistant-panel.css";
@@ -57,6 +62,9 @@ export class OpenClawAssistantPanel extends OpenClawLightDomElement {
   @property() pageSessionKey = "";
   @property() pageAgentId = "";
   @property() pageRouteId: RouteId = "chat";
+  @property({ type: Boolean }) pageRouteFailed = false;
+  @state() private homeStarted = false;
+  private pendingPrimaryPane: ChatPaneElement | null = null;
   @state() private destination: AssistantDestination = "custodian";
   private readonly homeLoader = new LazyCustomElementRequestController(this);
   @property({ type: Number }) minimizeRequestId = 0;
@@ -81,6 +89,11 @@ export class OpenClawAssistantPanel extends OpenClawLightDomElement {
   override connectedCallback(): void {
     super.connectedCallback();
     this.subscribeToStore();
+    document.addEventListener(CHAT_ROUTE_READY_EVENT, this.startHomeAfterPrimaryChat);
+    document.addEventListener(
+      CHAT_TRANSCRIPT_LOADING_CHANGED_EVENT,
+      this.startHomeAfterPrimaryChat,
+    );
     window.addEventListener(CUSTODIAN_PANEL_TOGGLE_EVENT, this.onToggleRequest);
     window.addEventListener(HOME_PANEL_TOGGLE_EVENT, this.onToggleRequest);
     this.dockLayout.setSuppressed(this.suppressed);
@@ -88,6 +101,12 @@ export class OpenClawAssistantPanel extends OpenClawLightDomElement {
   }
 
   override disconnectedCallback(): void {
+    document.removeEventListener(CHAT_ROUTE_READY_EVENT, this.startHomeAfterPrimaryChat);
+    document.removeEventListener(
+      CHAT_TRANSCRIPT_LOADING_CHANGED_EVENT,
+      this.startHomeAfterPrimaryChat,
+    );
+    this.pendingPrimaryPane = null;
     window.removeEventListener(CUSTODIAN_PANEL_TOGGLE_EVENT, this.onToggleRequest);
     window.removeEventListener(HOME_PANEL_TOGGLE_EVENT, this.onToggleRequest);
     this.claimInput("page");
@@ -121,6 +140,8 @@ export class OpenClawAssistantPanel extends OpenClawLightDomElement {
     const scope = this.context?.gateway.connection.gatewayUrl ?? "";
     if (scope !== this.targetScope) {
       this.targetScope = scope;
+      this.homeStarted = false;
+      this.pendingPrimaryPane = null;
       this.homeDefaults = {};
       let saved: Record<string, unknown> | null = null;
       try {
@@ -160,12 +181,61 @@ export class OpenClawAssistantPanel extends OpenClawLightDomElement {
     if (wasOpen && !this.dockLayout.open) {
       this.claimInput("page");
     }
+    this.startHomeAfterPrimaryChat();
     this.homeLoader.requestWhileActive(
       HOME_SESSION_ELEMENT,
-      this.dockLayout.open && this.destination === "home",
+      this.dockLayout.open && this.destination === "home" && this.homeStarted,
     );
     this.dockLayout.syncReservation();
   }
+
+  private primaryChatPane(): ChatPaneElement | undefined {
+    const root = this.closest("openclaw-app-shell") ?? this.parentElement;
+    return [
+      ...(root?.querySelectorAll<ChatPaneElement>(
+        "openclaw-chat-pane.chat-pane-cache__pane--active",
+      ) ?? []),
+    ].find(
+      (pane) =>
+        pane.presented !== false &&
+        pane.sessionKey &&
+        areUiSessionKeysEquivalent(pane.sessionKey, this.pageSessionKey),
+    );
+  }
+
+  private readonly startHomeAfterPrimaryChat = (): void => {
+    if (this.homeStarted || !this.dockLayout.open || this.destination !== "home") {
+      return;
+    }
+    if (this.pageRouteId !== "chat" || this.pageRouteFailed) {
+      this.homeStarted = true;
+      return;
+    }
+    const pane = this.primaryChatPane();
+    if (!pane?.transcriptReady || this.pendingPrimaryPane === pane) {
+      return;
+    }
+    this.pendingPrimaryPane = pane;
+    const context = this.context;
+    // The loading edge precedes the pane's render invalidation. Wait for that
+    // commit before a restored Home starts its competing transcript request.
+    void Promise.resolve()
+      .then(() => pane.updateComplete)
+      .then(() => {
+        if (this.pendingPrimaryPane !== pane) {
+          return;
+        }
+        this.pendingPrimaryPane = null;
+        if (
+          this.isConnected &&
+          this.context === context &&
+          this.primaryChatPane() === pane &&
+          pane.transcriptReady
+        ) {
+          this.homeStarted = true;
+        }
+      });
+  };
 
   private get targetStorageKey(): string {
     return `openclaw.assistant.panel.target.v1:${this.targetScope}`;
@@ -285,6 +355,9 @@ export class OpenClawAssistantPanel extends OpenClawLightDomElement {
   }
 
   private setOpen(open: boolean): void {
+    if (open && this.destination === "home") {
+      this.homeStarted = true;
+    }
     this.persistTarget();
     this.dockLayout.setOpen(open);
     this.claimInput(open ? "dock" : "page");
@@ -371,22 +444,24 @@ export class OpenClawAssistantPanel extends OpenClawLightDomElement {
             )}
           </div>
           <div class="rail-header__actions assistant-panel-actions">
-            ${this.destination === "home"
-              ? html`<button
-                  class="rail-header__action assistant-panel-icon"
-                  type="button"
-                  aria-label=${t("assistantPanel.openHome")}
-                  @click=${() => this.openHomePage()}
-                >
-                  ${icons.maximize}
-                </button>`
-              : nothing}
+            ${
+              this.destination === "home"
+                ? html`<button
+                    class="rail-header__action assistant-panel-icon"
+                    type="button"
+                    aria-label=${t("assistantPanel.openHome")}
+                    @click=${() => this.openHomePage()}
+                  >
+                    ${icons.maximize}
+                  </button>`
+                : nothing
+            }
             <button
               class="rail-header__action assistant-panel-icon"
               type="button"
-              aria-label=${dock === "bottom"
-                ? t("assistantPanel.dockRight")
-                : t("assistantPanel.dockBottom")}
+              aria-label=${
+                dock === "bottom" ? t("assistantPanel.dockRight") : t("assistantPanel.dockBottom")
+              }
               @click=${() => this.setDock(dock === "bottom" ? "right" : "bottom")}
             >
               ${dock === "bottom" ? icons.panelRightOpen : icons.panelBottomOpen}
@@ -401,26 +476,32 @@ export class OpenClawAssistantPanel extends OpenClawLightDomElement {
             </button>
           </div>
         </header>
-        ${this.destination === "home"
-          ? html`${isOptionalElementDefined(HOME_SESSION_ELEMENT)
-              ? html`<openclaw-home-session
-                  .sessionKey=${home.sessionKey}
-                  .agentId=${home.agentId}
-                  .workContext=${workContext}
-                ></openclaw-home-session>`
-              : homeState
-                ? renderLazyElementState(
-                    homeState,
-                    () => this.homeLoader.retry(),
-                    () => this.setOpen(false),
-                  )
-                : nothing}`
-          : html`<openclaw-custodian-surface
-              .store=${this.store}
-              .onboarding=${this.store.activeVariant === "onboarding"}
-              .newAgentIntent=${this.store.activeVariant === "new-agent"}
-              compact
-            ></openclaw-custodian-surface>`}
+        ${
+          this.destination === "home"
+            ? html`${
+                !this.homeStarted
+                  ? renderLoadingState()
+                  : isOptionalElementDefined(HOME_SESSION_ELEMENT)
+                    ? html`<openclaw-home-session
+                        .sessionKey=${home.sessionKey}
+                        .agentId=${home.agentId}
+                        .workContext=${workContext}
+                      ></openclaw-home-session>`
+                    : homeState
+                      ? renderLazyElementState(
+                          homeState,
+                          () => this.homeLoader.retry(),
+                          () => this.setOpen(false),
+                        )
+                      : nothing
+              }`
+            : html`<openclaw-custodian-surface
+                .store=${this.store}
+                .onboarding=${this.store.activeVariant === "onboarding"}
+                .newAgentIntent=${this.store.activeVariant === "new-agent"}
+                compact
+              ></openclaw-custodian-surface>`
+        }
       </section>
     `;
   }

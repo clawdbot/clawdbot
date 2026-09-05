@@ -57,15 +57,17 @@ after service recovery and cleanup finish.
 
 There is no `--verbose` flag. Use `--dry-run` to preview planned actions,
 `--json` for machine-readable results, and `openclaw update status --json`
-for channel/availability only. Gateway console verbosity (`--verbose`) and
+for channel, availability, and the latest durable update report. Gateway console verbosity (`--verbose`) and
 file log level (`logging.level: "debug"`/`"trace"`) are independent knobs; see
 [Gateway logging](/gateway/logging).
 
-Interactive updates show the current step and elapsed time. When output is
-piped or captured in a log, each step prints its progress without animation.
+Interactive updates show phase transitions, the current step, and elapsed time.
+The phases match the Control UI: requested, staging, validating, optional
+repairing, activating, restarting, verifying, and finished. When output is
+piped or captured in a log, progress prints without animation.
 Failed steps include the final diagnostics from both output streams; timeouts
-are labeled explicitly. The final total includes plugin updates and requested
-Gateway restart checks. `--json` keeps stdout machine-readable and does not
+are labeled explicitly. The final report includes the outcome, recorded phase durations, failed steps,
+verification facts, and recovery guidance. `--json` keeps stdout machine-readable and does not
 print progress steps.
 
 `--yes` also skips the optional shell-completion setup prompt. Existing
@@ -82,7 +84,7 @@ changes before modifying the checkout. Use `openclaw update status` to inspect
 the current branch, version, and update availability.
 
 <Note>
-In Nix mode (`OPENCLAW_NIX_MODE=1`), mutating `openclaw update` runs are disabled. Update the Nix source or flake input for this install instead; for nix-openclaw, use the agent-first [Quick Start](https://github.com/openclaw/nix-openclaw#quick-start). `openclaw update status` and `openclaw update --dry-run` remain read-only.
+In Nix mode (`OPENCLAW_NIX_MODE=1`), mutating `openclaw update` runs are disabled. Update the Nix source or flake input for this install instead; for nix-openclaw, use the agent-first [Quick Start](https://github.com/openclaw/nix-openclaw#quick-start). `openclaw update status` remains read-only. `openclaw update --dry-run` previews the flow and records a skipped run without changing the installation.
 </Note>
 
 <Warning>
@@ -142,7 +144,7 @@ the update, or bypass safety checks. See
 ## `update status`
 
 Show the active update channel, git tag/branch/SHA (source checkouts only),
-and update availability.
+update availability, and the active or most recent update report.
 
 ```bash
 openclaw update status
@@ -160,6 +162,39 @@ and exact-package verification as foreground update. It can report
 `ahead of extended-stable` when the installed version is newer. JSON failures
 include `registry.reason` (`selector_missing`, `selector_query_failed`,
 `exact_package_mismatch`, or `unsupported_git_channel`).
+
+## Run history and reports
+
+Every admitted update has a durable `runId`, including updates requested from
+chat, the Control UI, the CLI, and automatic update campaigns. Dry-run previews
+and updates refused after admission keep a skipped or failed record with their
+reason. CLI invocations rejected before admission leave state untouched. The same ID follows
+the detached updater and the restarted Gateway, so reconnecting does not lose
+the outcome.
+
+`openclaw update --json` includes `runId` and the `run` record. `openclaw update status --json`
+includes `activeRun` when a run is active and `lastRun` when history exists.
+Human output, chat completion notices, the Control UI update view, and the
+`openclaw status` update line use the same report, including on success. The report shows recorded facts; an absent verification fact
+means that check has not been observed.
+
+Gateway clients with `operator.admin` can inspect history:
+
+```bash
+openclaw gateway call update.runs.list --params '{"limit":10}'
+openclaw gateway call update.runs.get --params '{"runId":"<run-id>"}'
+```
+
+`update.runs.list` returns `{ runs }`; `limit` defaults to 20 and is capped at 100. `update.runs.get` returns `{ run }`, with `run: null` when the ID is unknown. `update.status` retains its existing
+fields and adds optional `activeRun` and `lastRun` records. While a run is active,
+the Gateway broadcasts `update.run.changed` with `runId`, `phase`, `status`, and
+`updatedAtMs`. Reconnect and read the row to recover changes missed during restart.
+
+Phases are `requested`, `staging`, `validating`, optional `repairing`, `activating`,
+`restarting`, `verifying`, and `finished`. Status is `running`, `succeeded`,
+`failed`, `rolled-back`, or `skipped`. Phase timings and verification facts are
+included only when observed. Chat reports are limited to 1,500 characters;
+`update.runs.get` preserves the bounded record for detailed inspection.
 
 ## `update repair`
 
@@ -467,8 +502,10 @@ health checks complete. During the handoff, the sentinel can carry
 restarted Gateway polls it and fires the continuation only after the CLI has
 verified service health and rewritten the sentinel with the final `ok` result.
 `openclaw status` and `openclaw status --all` show an `Update restart` row
-while that sentinel is pending or failed, and `update.status` refreshes and
-returns the latest sentinel.
+while that sentinel is pending or failed. `update.status` retains the latest
+sentinel and also returns the durable run record. The sentinel carries
+`stats.runId`; the run record remains available after notice delivery consumes
+the sentinel.
 
 ## Git checkout flow
 
@@ -568,8 +605,16 @@ that skip lifecycle scripts also stop before activation. On npm 12 and newer,
 the updater approves only the candidate OpenClaw lifecycle; transitive
 dependency scripts remain blocked. OpenClaw then swaps the clean package tree
 into the real global prefix. If verification fails, post-update doctor, plugin
-sync, and restart work do not run from the suspect tree. Even when the
-installed version already matches the target, the command refreshes the
+sync, and restart work do not run from the suspect tree.
+
+Staging uses a unique `.openclaw.update-stage-*` directory inside the target
+global `node_modules`, separate from disposable npm rename leftovers. Each
+attempt tries to remove only its own staging prefix; leftover cleanup does not
+reclaim these stages. If an interrupted update leaves one behind, confirm that
+no updater is still using it before removing that exact directory. This separation
+does not make simultaneous package swaps safe.
+
+Even when the installed version already matches the target, the command refreshes the
 global package install, then runs plugin sync, a core-command completion
 refresh, and restart work. This keeps packaged sidecars and channel-owned
 plugin records aligned with the installed OpenClaw build, while leaving full

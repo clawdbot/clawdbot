@@ -10,7 +10,8 @@ import {
   tryBeginGatewayRootWorkAdmission,
   tryBeginGatewaySuspendAdmission,
 } from "../process/gateway-work-admission.js";
-import { ExecApprovalManager } from "./exec-approval-manager.js";
+import type { ExecApprovalManager } from "./exec-approval-manager.js";
+import { createTestApprovalManager } from "./exec-approval-manager.test-support.js";
 import { createPluginGatewayMethodDescriptor } from "./methods/descriptor.js";
 import { createGatewayMethodRegistry } from "./methods/registry.js";
 import { createNodeRegistryRuntime, updateNodeRunnerInventory } from "./node-registry-private.js";
@@ -22,11 +23,21 @@ import { handleNodeInvokeResult } from "./server-methods/nodes.handlers.invoke-r
 import type { GatewayRequestContext, GatewayRequestHandler } from "./server-methods/types.js";
 import type { GatewayWsClient } from "./server/ws-types.js";
 
-afterEach(resetGatewayWorkAdmission);
+const managerCleanups: Array<() => void | Promise<void>> = [];
+afterEach(async () => {
+  try {
+    await Promise.all(managerCleanups.splice(0).map(async (close) => await close()));
+  } finally {
+    resetGatewayWorkAdmission();
+  }
+});
 
 const completionDrainModes = ["suspension", "restart signal", "restart drain"] as const;
 
-function closeAdmission(mode: (typeof completionDrainModes)[number]) {
+function closeAdmission(mode: (typeof completionDrainModes)[number] | "direct close") {
+  if (mode === "direct close") {
+    return undefined;
+  }
   if (mode === "restart signal") {
     expect(beginGatewayRestartSignalAdmission()).not.toBeNull();
     return undefined;
@@ -101,6 +112,7 @@ async function dispatch(params: {
   context: GatewayRequestContext;
   client: GatewayWsClient;
   handler: GatewayRequestHandler;
+  admission?: "continuation";
 }) {
   const respond = vi.fn();
   await handleGatewayRequest({
@@ -114,6 +126,7 @@ async function dispatch(params: {
     client: params.client,
     isWebchatConnect: () => false,
     context: params.context,
+    admission: params.admission,
     methodRegistry: createGatewayMethodRegistry([
       createPluginGatewayMethodDescriptor({
         pluginId: "suspension-continuation-proof",
@@ -207,10 +220,11 @@ function resultRequest(invokeId: string) {
 }
 
 describe("draining Gateway completion ownership", () => {
-  it.each(["exec.approval.resolve", "approval.resolve"] as const)(
+  it.for(["exec.approval.resolve", "approval.resolve"] as const)(
     "admits only an exact live approval continuation through %s",
-    async (method) => {
-      const manager = new ExecApprovalManager();
+    async (method, testContext) => {
+      const manager = createTestApprovalManager(testContext);
+      managerCleanups.push(() => manager.drain());
       const client = createClient("operator");
       const context = createContext({ execApprovalManager: manager });
       const ownerReady = deferred();
@@ -266,6 +280,7 @@ describe("draining Gateway completion ownership", () => {
 
   it("admits exact question inspection and resolution without admitting unrelated roots", async () => {
     const manager = new QuestionManager();
+    managerCleanups.push(() => manager.close());
     const client = createClient("operator");
     const context = createContext({ questionManager: manager });
     const root = tryBeginGatewayRootWorkAdmission();
@@ -335,7 +350,6 @@ describe("draining Gateway completion ownership", () => {
     expect(manager.get("question-owned")).toMatchObject({ status: "answered" });
     expect(getActiveGatewayRootWorkCount()).toBe(0);
     expect(suspension?.release()).toBe(true);
-    manager.reset();
   });
 
   it.each(completionDrainModes)(
@@ -452,25 +466,47 @@ describe("draining Gateway completion ownership", () => {
 });
 
 describe("restart lifecycle completion ownership", () => {
-  it.each(["restart signal", "restart drain"] as const)(
+  it.each(["direct close", "restart signal", "restart drain"] as const)(
     "settles newly dispatched lifecycle cleanup during %s without admitting another root",
     async (mode) => {
       closeAdmission(mode);
+      const admission = mode === "direct close" ? "continuation" : undefined;
       const invoke = await createLifecycleInvoke();
       try {
         expect(getActiveGatewayRootWorkCount()).toBe(0);
+        const newWork = vi.fn();
+        const refused = await dispatch({
+          method: "node.runnerInventory.update",
+          requestParams: {},
+          context: invoke.context,
+          client: invoke.client,
+          admission,
+          handler: newWork,
+        });
+        expect(refused).toHaveBeenCalledWith(
+          false,
+          undefined,
+          expect.objectContaining({ code: "UNAVAILABLE" }),
+        );
+        expect(newWork).not.toHaveBeenCalled();
         const progressed = await dispatch({
           method: "node.invoke.progress",
           requestParams: { invokeId: invoke.invokeId, nodeId: "node-1", seq: 0, chunk: "stopped" },
           context: invoke.context,
           client: invoke.client,
-          handler: handleNodeInvokeProgress,
+          admission,
+          handler: (options) => {
+            expect(getActiveGatewayRootWorkCount()).toBe(0);
+            return handleNodeInvokeProgress(options);
+          },
         });
         // Lifecycle invokes have no stream consumer, but authenticated progress
         // still records execution and prevents a contradictory not-ready replay.
         expect(progressed).toHaveBeenCalledWith(true, { ok: true, ignored: true }, undefined);
         expect(getActiveGatewayRootWorkCount()).toBe(0);
-        expect(tryBeginGatewayRootWorkAdmission()).toBeNull();
+        if (mode !== "direct close") {
+          expect(tryBeginGatewayRootWorkAdmission()).toBeNull();
+        }
         const completed = await dispatch({
           method: "node.invoke.result",
           requestParams: {
@@ -480,6 +516,7 @@ describe("restart lifecycle completion ownership", () => {
           },
           context: invoke.context,
           client: invoke.client,
+          admission,
           handler: handleNodeInvokeResult,
         });
         expect(completed).toHaveBeenCalledWith(true, { ok: true }, undefined);
@@ -495,6 +532,7 @@ describe("restart lifecycle completion ownership", () => {
           requestParams: resultRequest(invoke.invokeId),
           context: invoke.context,
           client: invoke.client,
+          admission,
           handler: handleNodeInvokeResult,
         });
         expect(replayed).toHaveBeenCalledWith(
@@ -503,17 +541,23 @@ describe("restart lifecycle completion ownership", () => {
           expect.objectContaining({ code: "UNAVAILABLE" }),
         );
         expect(getActiveGatewayRootWorkCount()).toBe(0);
-        expect(tryBeginGatewayRootWorkAdmission()).toBeNull();
+        if (mode !== "direct close") {
+          expect(tryBeginGatewayRootWorkAdmission()).toBeNull();
+        }
       } finally {
         await invoke.finish();
       }
     },
   );
 
-  it.each(["invoke", "node", "connection", "pairing", "owner"] as const)(
-    "rejects lifecycle completion after its %s identity no longer matches",
-    async (changed) => {
-      closeAdmission("restart drain");
+  it.each(
+    ["invoke", "node", "connection", "pairing", "owner"].flatMap((changed) =>
+      (["direct close", "restart drain"] as const).map((mode) => ({ changed, mode })),
+    ),
+  )(
+    "rejects lifecycle completion after its $changed identity no longer matches during $mode",
+    async ({ changed, mode }) => {
+      closeAdmission(mode);
       const invoke = await createLifecycleInvoke();
       try {
         const request = resultRequest(invoke.invokeId);
@@ -534,6 +578,7 @@ describe("restart lifecycle completion ownership", () => {
           requestParams: request,
           context: invoke.context,
           client,
+          admission: mode === "direct close" ? "continuation" : undefined,
           handler: handleNodeInvokeResult,
         });
         expect(rejected).toHaveBeenCalledWith(
@@ -548,37 +593,52 @@ describe("restart lifecycle completion ownership", () => {
     },
   );
 
-  it("rechecks the lifecycle owner at result settlement after awaited dispatch work", async () => {
-    closeAdmission("restart drain");
-    const invoke = await createLifecycleInvoke();
-    const enteredHandler = deferred();
-    const resumeHandler = deferred();
-    try {
-      const response = dispatch({
-        method: "node.invoke.result",
-        requestParams: resultRequest(invoke.invokeId),
-        context: invoke.context,
-        client: invoke.client,
-        handler: async (options) => {
-          enteredHandler.resolve();
-          await resumeHandler.promise;
-          expect(tryBeginGatewayRootWorkAdmission()).toBeNull();
-          await handleNodeInvokeResult(options);
-        },
-      });
-      await Promise.race([
-        enteredHandler.promise,
-        response.then(() => {
-          throw new Error("lifecycle completion was rejected before reaching its handler");
-        }),
-      ]);
-      invoke.closeOwner();
-      resumeHandler.resolve();
-      expect(await response).toHaveBeenCalledWith(true, { ok: true, ignored: true }, undefined);
-      expect(getActiveGatewayRootWorkCount()).toBe(0);
-    } finally {
-      resumeHandler.resolve();
-      await invoke.finish();
-    }
-  });
+  it.each(
+    (["direct close", "restart drain"] as const).flatMap((mode) =>
+      (["owner", "pairing"] as const).map((changed) => ({ mode, changed })),
+    ),
+  )(
+    "rechecks $changed at result settlement after awaited dispatch during $mode",
+    async ({ mode, changed }) => {
+      closeAdmission(mode);
+      const invoke = await createLifecycleInvoke();
+      const enteredHandler = deferred();
+      const resumeHandler = deferred();
+      try {
+        const response = dispatch({
+          method: "node.invoke.result",
+          requestParams: resultRequest(invoke.invokeId),
+          context: invoke.context,
+          client: invoke.client,
+          admission: mode === "direct close" ? "continuation" : undefined,
+          handler: async (options) => {
+            expect(getActiveGatewayRootWorkCount()).toBe(0);
+            enteredHandler.resolve();
+            await resumeHandler.promise;
+            if (mode !== "direct close") {
+              expect(tryBeginGatewayRootWorkAdmission()).toBeNull();
+            }
+            await handleNodeInvokeResult(options);
+          },
+        });
+        await Promise.race([
+          enteredHandler.promise,
+          response.then(() => {
+            throw new Error("lifecycle completion was rejected before reaching its handler");
+          }),
+        ]);
+        if (changed === "pairing") {
+          invoke.rotatePairing();
+        } else {
+          invoke.closeOwner();
+        }
+        resumeHandler.resolve();
+        expect(await response).toHaveBeenCalledWith(true, { ok: true, ignored: true }, undefined);
+        expect(getActiveGatewayRootWorkCount()).toBe(0);
+      } finally {
+        resumeHandler.resolve();
+        await invoke.finish();
+      }
+    },
+  );
 });

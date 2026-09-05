@@ -162,9 +162,11 @@ function renderCoAuthors(preview: GitHubPreview) {
     title=${label}
     role="img"
     aria-label=${label}
-    >${coAuthors.map((coAuthor) => renderAvatar(coAuthor.avatarDataUrl))}${hidden > 0
-      ? html`<span class="github-link-hovercard__coauthors-more">+${hidden}</span>`
-      : nothing}</span
+    >${coAuthors.map((coAuthor) => renderAvatar(coAuthor.avatarDataUrl))}${
+      hidden > 0
+        ? html`<span class="github-link-hovercard__coauthors-more">+${hidden}</span>`
+        : nothing
+    }</span
   >`;
 }
 
@@ -216,9 +218,11 @@ function renderUnavailable(card: HTMLDivElement, error: string): void {
   render(
     html`<div class="github-link-hovercard__unavailable">
       <div>${label}</div>
-      ${showError
-        ? html`<div class="github-link-hovercard__error" id=${errorId}>${error}</div>`
-        : nothing}
+      ${
+        showError
+          ? html`<div class="github-link-hovercard__error" id=${errorId}>${error}</div>`
+          : nothing
+      }
     </div>`,
     card,
   );
@@ -251,22 +255,26 @@ function renderPreview(card: HTMLDivElement, preview: GitHubPreview): void {
           gitHubProfileUrl(preview.login),
           html`${renderAvatar(preview.avatarDataUrl)}${preview.login}`,
         )}${renderCoAuthors(preview)}
-        ${preview.kind === "pull"
-          ? html`<span class="github-link-hovercard__metrics github-link-hovercard__metrics--diff">
-              <span class="github-link-hovercard__metric github-link-hovercard__metric--additions"
-                >+${preview.additions ?? 0}</span
+        ${
+          preview.kind === "pull"
+            ? html`<span
+                class="github-link-hovercard__metrics github-link-hovercard__metrics--diff"
               >
-              <span class="github-link-hovercard__metric github-link-hovercard__metric--deletions"
-                >−${preview.deletions ?? 0}</span
-              >
-            </span>`
-          : html`<span class="github-link-hovercard__metrics">
-              <span class="github-link-hovercard__metric"
-                >${t(comments === 1 ? "githubPreview.comment" : "githubPreview.comments", {
-                  count: String(comments),
-                })}</span
-              >
-            </span>`}
+                <span class="github-link-hovercard__metric github-link-hovercard__metric--additions"
+                  >+${preview.additions ?? 0}</span
+                >
+                <span class="github-link-hovercard__metric github-link-hovercard__metric--deletions"
+                  >−${preview.deletions ?? 0}</span
+                >
+              </span>`
+            : html`<span class="github-link-hovercard__metrics">
+                <span class="github-link-hovercard__metric"
+                  >${t(comments === 1 ? "githubPreview.comment" : "githubPreview.comments", {
+                    count: String(comments),
+                  })}</span
+                >
+              </span>`
+        }
       </div>`,
     card,
   );

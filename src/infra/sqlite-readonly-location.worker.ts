@@ -1,12 +1,10 @@
+import { coerceErrorMessage } from "@openclaw/normalization-core/error-coercion";
+import { formatSqliteErrorCodeSuffix } from "./sqlite-error-diagnostics.js";
 import {
   SQLITE_READONLY_CHILD_ARG,
   prepareSqliteReadOnlyLocationInProcess,
   prepareSqliteReadOnlyLocationSyncInProcess,
 } from "./sqlite-readonly-location.js";
-
-function formatWorkerError(error: unknown): string {
-  return error instanceof Error ? error.message : String(error);
-}
 
 // The sync strategy raw-copies without attaching SQLite to the source, so sync
 // callers stay byte-neutral on the live family; the async strategy holds a read
@@ -32,7 +30,8 @@ async function runWorker(): Promise<void> {
     process.stdout.write(JSON.stringify({ ok: true, location: prepared.location }));
   } catch (error) {
     process.exitCode = 1;
-    process.stdout.write(JSON.stringify({ ok: false, message: formatWorkerError(error) }));
+    const message = `${coerceErrorMessage(error)}${formatSqliteErrorCodeSuffix(error)}`;
+    process.stdout.write(JSON.stringify({ ok: false, message }));
   }
 }
 

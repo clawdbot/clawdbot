@@ -80,9 +80,11 @@ export function renderPicker<Option extends PickerOption>(params: PickerParams<O
               <span class="picker-select__label" style=${option.labelStyle ?? nothing}
                 >${option.label}</span
               >
-              ${option.description
-                ? html`<span class="picker-select__description">${option.description}</span>`
-                : nothing}
+              ${
+                option.description
+                  ? html`<span class="picker-select__description">${option.description}</span>`
+                  : nothing
+              }
             </span>
           </wa-option>
         `,

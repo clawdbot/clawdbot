@@ -499,11 +499,3 @@ export async function runKimiSearchProviderSetup(
   setProviderWebSearchPluginConfigValue(next, "moonshot", "model", model);
   return next;
 }
-
-export const testing = {
-  resolveKimiApiKey,
-  resolveKimiModel,
-  resolveKimiBaseUrl,
-  extractKimiCitations,
-  extractKimiToolResultContent,
-} as const;

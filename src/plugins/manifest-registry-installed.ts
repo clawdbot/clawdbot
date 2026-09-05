@@ -497,7 +497,25 @@ function toPluginCandidate(
   );
 }
 
+/** Selects installed owners without projecting unrelated manifest fields. */
+export function selectInstalledPluginManifestRecords(
+  index: InstalledPluginIndex,
+  registry: PluginManifestRegistry,
+  pluginIds: ReadonlySet<string> | null,
+  includeDisabled?: boolean,
+): PluginManifestRecord[] {
+  const enabledPluginIds = new Set(
+    index.plugins
+      .filter((plugin) => includeDisabled || plugin.enabled)
+      .map((plugin) => plugin.pluginId),
+  );
+  return registry.plugins.filter(
+    (plugin) => enabledPluginIds.has(plugin.id) && (!pluginIds || pluginIds.has(plugin.id)),
+  );
+}
+
 export function loadPluginManifestRegistryForInstalledIndex(params: {
+  registryPath?: string;
   index: InstalledPluginIndex;
   manifestRegistry?: PluginManifestRegistry;
   config?: OpenClawConfig;
@@ -522,16 +540,13 @@ export function loadPluginManifestRegistryForInstalledIndex(params: {
           })
         : params.index.diagnostics;
       if (params.manifestRegistry && !params.bundledChannelConfigCollector) {
-        const enabledPluginIds = new Set(
-          params.index.plugins
-            .filter((plugin) => params.includeDisabled || plugin.enabled)
-            .map((plugin) => plugin.pluginId),
-        );
         return {
-          plugins: params.manifestRegistry.plugins
-            .filter((plugin) => enabledPluginIds.has(plugin.id))
-            .filter((plugin) => !pluginIdSet || pluginIdSet.has(plugin.id))
-            .map(normalizePreparedManifestRecord),
+          plugins: selectInstalledPluginManifestRecords(
+            params.index,
+            params.manifestRegistry,
+            pluginIdSet,
+            params.includeDisabled,
+          ).map(normalizePreparedManifestRecord),
           diagnostics: [...diagnostics],
         };
       }
@@ -568,6 +583,7 @@ export function loadPluginManifestRegistryForInstalledIndex(params: {
           return candidate;
         });
       return loadPluginManifestRegistryCore({
+        registryPath: params.registryPath,
         config: params.config,
         workspaceDir: params.workspaceDir,
         env,

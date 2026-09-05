@@ -1,7 +1,6 @@
 /* @vitest-environment jsdom */
 
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import { createDeferred } from "../../../../test/helpers/promise.js";
 import type { GatewayBrowserClient } from "../../api/gateway.ts";
 import { createApplicationTheme } from "../../app/bootstrap-theme.ts";
 import type { ApplicationContext } from "../../app/context.ts";
@@ -19,7 +18,14 @@ import { createStorageMock } from "../../test-helpers/storage.ts";
 import "./chat-pane.ts";
 import type { ResolvedBoardView } from "./chat-pane-shared.ts";
 import type { ChatPageHost } from "./chat-state-host.ts";
-import { activatePanel, openSlot } from "./sidebar-layout.ts";
+import {
+  closeSlot,
+  openSlot,
+  promoteSidebarPanel,
+  setSidebarDock,
+  sidebarActivePanel,
+  sidebarMainPanel,
+} from "./sidebar-layout.ts";
 
 const swarmModuleImport = vi.hoisted(() => {
   let markStarted!: () => void;
@@ -43,7 +49,6 @@ vi.mock("../../lib/sessions/swarm-roster.ts", async (importOriginal) => {
 });
 
 type TestChatPane = HTMLElement & {
-  boardChatDockSize: { height: number };
   boardProvider?: BoardProvider;
   connectedClient: GatewayBrowserClient | null;
   connectionGeneration: number;
@@ -56,21 +61,18 @@ type TestChatPane = HTMLElement & {
   sessionKey: string;
   resetConfirmationOpen: boolean;
   routeFace: "chat" | "dashboard";
+  dashboardExpanded: boolean;
   onFaceChange?: (paneId: string, sessionKey: string, face: "chat" | "dashboard") => void;
   confirmConversationReset: () => Promise<boolean>;
   commitSidebarLayout: (layout: ChatPageHost["sidebarLayout"]) => void;
   settleResetConfirmation: (confirmed: boolean) => void;
   updated: () => void;
   handleBoardCommand: (event: BoardCommandEvent) => void;
-  handleBoardDockChange: (dock: "bottom" | "hidden" | "left" | "right") => void;
-  handleBoardDockResize: (
-    dock: "bottom" | "left" | "right",
-    event: CustomEvent<{ splitRatio: number }>,
-  ) => void;
-  syncChatSidebarForDock: (dock: "bottom" | "hidden" | "left" | "right") => boolean;
+  showDashboard: (expanded: boolean) => void;
   persistBoardSessionView: (patch: { face?: "chat" | "dashboard"; activeTabId?: string }) => void;
   resolveBoardProvider: () => BoardProvider;
   resolveBoardView: () => ResolvedBoardView;
+  syncRetainedBoardSession: (board: ResolvedBoardView) => void;
   refreshSwarmRoster: () => void;
   requestUpdate: () => void;
 };
@@ -190,24 +192,166 @@ afterEach(() => {
 });
 
 describe("chat pane board shell", () => {
-  it("couples explicit side-panel visibility to the Board dock", () => {
+  it.each(["agent:main:closed-dashboard", "global"])(
+    "keeps an explicitly closed empty dashboard closed when its first content arrives (%s)",
+    async (sessionKey) => {
+      const { pane, request } = createGatewayBoardPane({ sessionKey });
+      pane.sessionKey = sessionKey;
+      pane.routeFace = "chat";
+      pane.onFaceChange = vi.fn();
+      if (sessionKey === "global") {
+        pane.state.agentsList = { defaultId: "main", mainKey: "main", scope: "global", agents: [] };
+        pane.state.assistantAgentId = "work";
+      }
+      const snapshotKey = sessionKey === "global" ? "agent:work:global" : sessionKey;
+      request.mockResolvedValue({ sessionKey: snapshotKey, revision: 1, tabs: [], widgets: [] });
+      const provider = pane.resolveBoardProvider();
+      try {
+        await vi.waitFor(() => expect(provider.hasLoadedSnapshot).toBe(true));
+        pane.syncRetainedBoardSession(pane.resolveBoardView());
+        const closed = closeSlot(openSlot({ columns: [] }, "dashboard"), "dashboard");
+        pane.commitSidebarLayout(closed);
+        patchSettings({ sidebarSessionLayouts: { [sessionKey]: closed } });
+        request.mockResolvedValue({
+          sessionKey: snapshotKey,
+          revision: 2,
+          tabs: [{ tabId: "main", title: "Overview", position: 0, chatDock: "right" }],
+          widgets: [],
+        });
+        await provider.applyOps([{ kind: "tab_create", tabId: "main", title: "Overview" }]);
+        pane.syncRetainedBoardSession(pane.resolveBoardView());
+        expect(pane.state.sidebarLayout).toEqual(closed);
+        expect(pane.onFaceChange).not.toHaveBeenCalled();
+      } finally {
+        (Reflect.get(pane, "releaseBoardProviderLease") as () => void).call(pane);
+      }
+    },
+  );
+
+  it("keeps side-panel presentation independent from persisted Board data", () => {
     const pane = createTestPane();
     const provider = mockBoardProvider("agent:main:current");
     const applyOps = vi.spyOn(provider, "applyOps");
     pane.boardProvider = provider;
+    pane.commitSidebarLayout(openSlot(pane.state.sidebarLayout, "terminal"));
+    pane.commitSidebarLayout({ ...pane.state.sidebarLayout, open: false });
+    expect(applyOps).not.toHaveBeenCalled();
+  });
+
+  it("opens split view once when the current task first gains a dashboard", async () => {
+    const pane = createTestPane();
+    const provider = mockBoardProvider("agent:main:first-dashboard");
+    pane.state.sessionKey = "agent:main:first-dashboard";
+    pane.sessionKey = "agent:main:first-dashboard";
+    pane.boardProvider = provider;
+    pane.routeFace = "chat";
+    pane.onFaceChange = vi.fn();
+    await provider.applyOps([
+      { kind: "widget_remove", name: "session-status" },
+      { kind: "widget_remove", name: "recent-findings" },
+      { kind: "widget_remove", name: "source-map" },
+      { kind: "tab_delete", tabId: "main" },
+      { kind: "tab_delete", tabId: "research" },
+    ]);
+    pane.syncRetainedBoardSession(pane.resolveBoardView());
+
+    await provider.applyOps([{ kind: "tab_create", tabId: "main", title: "Dashboard" }]);
+    pane.syncRetainedBoardSession(pane.resolveBoardView());
+
+    expect(
+      pane.state.sidebarLayout.columns.flatMap((column) =>
+        column.panels.map((panel) => panel.slot),
+      ),
+    ).toContain("dashboard");
+    expect(pane.state.sidebarLayout.expanded).toBe(false);
+    expect(pane.onFaceChange).toHaveBeenCalledOnce();
+
+    pane.syncRetainedBoardSession(pane.resolveBoardView());
+    expect(pane.onFaceChange).toHaveBeenCalledOnce();
+  });
+
+  it.each(["terminal", "dashboard"] as const)(
+    "applies a focused dashboard link over saved %s main only once",
+    (slot) => {
+      const pane = createTestPane();
+      pane.boardProvider = mockBoardProvider("agent:main:expanded-route");
+      pane.state.sessionKey = "agent:main:expanded-route";
+      pane.sessionKey = "agent:main:expanded-route";
+      pane.routeFace = "dashboard";
+      pane.dashboardExpanded = true;
+      const savedLayout = {
+        ...promoteSidebarPanel(openSlot({ columns: [] }, slot), slot),
+        open: false,
+      };
+      pane.state.sidebarLayout = savedLayout;
+      patchSettings({ sidebarSessionLayouts: { [pane.sessionKey]: savedLayout } });
+
+      pane.syncRetainedBoardSession(pane.resolveBoardView());
+      expect(pane.state.sidebarLayout.expanded).toBe(true);
+      expect(pane.state.sidebarLayout.open).toBe(true);
+      expect(sidebarMainPanel(pane.state.sidebarLayout)?.slot).toBe("dashboard");
+      expect(sidebarActivePanel(pane.state.sidebarLayout)?.slot).toBe(
+        slot === "dashboard" ? "conversation" : "terminal",
+      );
+
+      pane.state.sidebarLayout = { ...pane.state.sidebarLayout, expanded: false };
+      pane.syncRetainedBoardSession(pane.resolveBoardView());
+      expect(pane.state.sidebarLayout.expanded).toBe(false);
+    },
+  );
+
+  it.each([true, false])(
+    "restores saved task layout with side panel open=%s on an ordinary dashboard revisit",
+    (open) => {
+      const pane = createTestPane();
+      pane.state.sessionKey = "agent:main:saved-dashboard-layout";
+      pane.sessionKey = pane.state.sessionKey;
+      pane.boardProvider = mockBoardProvider(pane.sessionKey);
+      pane.routeFace = "dashboard";
+      pane.onFaceChange = vi.fn();
+      const savedLayout = {
+        ...setSidebarDock(
+          promoteSidebarPanel(
+            openSlot(openSlot({ columns: [] }, "dashboard"), "terminal"),
+            "terminal",
+          ),
+          "left",
+        ),
+        open,
+      };
+      pane.state.sidebarLayout = savedLayout;
+      patchSettings({ sidebarSessionLayouts: { [pane.sessionKey]: savedLayout } });
+
+      pane.syncRetainedBoardSession(pane.resolveBoardView());
+
+      expect(pane.state.sidebarLayout).toEqual(savedLayout);
+      expect(pane.onFaceChange).not.toHaveBeenCalled();
+    },
+  );
+
+  it("opens a dashboard route in split view only once", () => {
+    const pane = createTestPane();
+    pane.boardProvider = mockBoardProvider("agent:main:dashboard-route");
+    pane.state.sessionKey = "agent:main:dashboard-route";
+    pane.sessionKey = "agent:main:dashboard-route";
     pane.routeFace = "dashboard";
-    pane.handleBoardDockChange("hidden");
-    applyOps.mockClear();
+    pane.commitSidebarLayout(openSlot(pane.state.sidebarLayout, "terminal"));
+
+    pane.syncRetainedBoardSession(pane.resolveBoardView());
+    expect(
+      pane.state.sidebarLayout.columns.flatMap(
+        (column) => column.panels.find((panel) => panel.id === column.activePanelId)?.slot,
+      ),
+    ).toContain("dashboard");
+    expect(pane.state.sidebarLayout.expanded).toBe(false);
 
     pane.commitSidebarLayout(openSlot(pane.state.sidebarLayout, "terminal"));
-    expect(applyOps).toHaveBeenLastCalledWith([
-      { kind: "tab_update", tabId: "main", chatDock: "right" },
-    ]);
-
-    pane.commitSidebarLayout({ ...pane.state.sidebarLayout, open: false });
-    expect(applyOps).toHaveBeenLastCalledWith([
-      { kind: "tab_update", tabId: "main", chatDock: "hidden" },
-    ]);
+    pane.syncRetainedBoardSession(pane.resolveBoardView());
+    expect(
+      pane.state.sidebarLayout.columns.flatMap(
+        (column) => column.panels.find((panel) => panel.id === column.activePanelId)?.slot,
+      ),
+    ).toContain("terminal");
   });
 
   it("does not hydrate the swarm after becoming hidden during module loading", async () => {
@@ -218,7 +362,7 @@ describe("chat pane board shell", () => {
     pane.context = {
       ...pane.context,
       runtimeConfig: {
-        state: { configSnapshot: { config: { tools: { swarm: { enabled: true } } } } },
+        state: { configSnapshot: { config: {} } },
       },
     } as unknown as ApplicationContext;
     pane.presentedChanged = () => undefined;
@@ -238,7 +382,7 @@ describe("chat pane board shell", () => {
     }
   });
 
-  it.each(["disabled", "disposed", "enabled"] as const)(
+  it.each(["disabled", "disposed", "enabled", "default"] as const)(
     "coalesces swarm roster redraws while %s",
     async (mode) => {
       swarmModuleImport.release();
@@ -251,7 +395,10 @@ describe("chat pane board shell", () => {
         ...pane.context,
         runtimeConfig: {
           state: {
-            configSnapshot: { config: { tools: { swarm: { enabled: mode === "enabled" } } } },
+            configSnapshot: {
+              config:
+                mode === "default" ? {} : { tools: { swarm: { enabled: mode === "enabled" } } },
+            },
           },
         },
       } as unknown as ApplicationContext;
@@ -280,6 +427,8 @@ describe("chat pane board shell", () => {
         if (dispose) {
           expect(dispose).toHaveBeenCalledOnce();
           expect(Reflect.get(pane, "swarmHydrator")).toBeNull();
+        } else if (mode === "enabled" || mode === "default") {
+          expect(Reflect.get(pane, "swarmHydrator")).toBeInstanceOf(SwarmRosterHydrator);
         }
       } finally {
         const hydrator = Reflect.get(pane, "swarmHydrator") as InstanceType<
@@ -453,69 +602,31 @@ describe("chat pane board shell", () => {
     expect(pane.resetConfirmationOpen).toBe(false);
   });
 
-  it("reacts to transient set_chat_dock provider events", () => {
+  it("maps transient Board presentation commands onto the dashboard panel", () => {
     const pane = createTestPane();
     const provider = mockBoardProvider("agent:main:current");
     pane.boardProvider = provider;
+    pane.onFaceChange = vi.fn();
     const unsubscribe = provider.events.subscribe((event) => pane.handleBoardCommand(event));
 
     provider.emitCommand({ kind: "set_chat_dock", dock: "left" });
-
-    expect(pane.resolveBoardView()).toMatchObject({ activeTabId: "main", dock: "left" });
-    unsubscribe();
-  });
-
-  it("restores the visible dock edge after hidden state reloads", () => {
-    const provider = mockBoardProvider("agent:main:current");
-    const pane = createTestPane();
-    pane.boardProvider = provider;
-
-    pane.handleBoardDockChange("left");
-    pane.handleBoardDockChange("hidden");
-
     expect(
       pane.state.sidebarLayout.columns.flatMap((column) =>
         column.panels.map((panel) => panel.slot),
       ),
-    ).toContain("chat");
+    ).toContain("dashboard");
+    expect(pane.state.sidebarLayout.expanded).toBe(false);
 
-    const reloadedPane = createTestPane();
-    reloadedPane.boardProvider = provider;
-    expect(reloadedPane.resolveBoardView()).toMatchObject({
-      dock: "hidden",
-      reopenDock: "left",
-    });
-  });
-
-  it("does not publish a board dock failure after leaving and returning", async () => {
-    const pane = createTestPane();
-    const provider = mockBoardProvider("agent:main:stale-board-outcome");
-    const applied = createDeferred<never>();
-    const applyOps = vi.spyOn(provider, "applyOps").mockReturnValue(applied.promise);
-    pane.boardProvider = provider;
-    pane.presentedChanged = () => undefined;
-
-    pane.handleBoardDockChange("left");
-    pane.presented = false;
-    pane.presented = true;
-    applied.reject(new Error("stale board dock failed"));
-    await applied.promise.catch(() => undefined);
-    await vi.waitFor(() => expect(applyOps).toHaveBeenCalledOnce());
-
-    expect(pane.state.lastError).toBeNull();
-    expect(pane.state.chatError).toBeNull();
-  });
-  it("activates an existing tabbed chat panel when reopening a side dock", () => {
-    const pane = createTestPane();
-    const withChat = openSlot(openSlot({ columns: [] }, "chat"), "discussion");
-    const chatPanel = withChat.columns[0]!.panels[0]!;
-    const discussionPanel = withChat.columns[0]!.panels[1]!;
-    pane.state.sidebarLayout = activatePanel(withChat, discussionPanel.id);
-
-    expect(pane.syncChatSidebarForDock("right")).toBe(true);
-
-    expect(pane.state.sidebarLayout.columns[0]?.activePanelId).toBe(chatPanel.id);
-    expect(pane.state.sidebarFocusPanelId).toBe(chatPanel.id);
+    provider.emitCommand({ kind: "set_chat_dock", dock: "hidden" });
+    expect(pane.state.sidebarLayout.expanded).toBe(true);
+    expect(sidebarMainPanel(pane.state.sidebarLayout)?.slot).toBe("dashboard");
+    expect(sidebarActivePanel(pane.state.sidebarLayout)?.slot).toBe("conversation");
+    provider.emitCommand({ kind: "set_chat_dock", dock: "right" });
+    expect(sidebarMainPanel(pane.state.sidebarLayout)?.slot).toBe("dashboard");
+    expect(sidebarActivePanel(pane.state.sidebarLayout)?.slot).toBe("conversation");
+    expect(pane.state.sidebarLayout.expanded).toBe(false);
+    expect(pane.onFaceChange).toHaveBeenLastCalledWith(pane.paneId, pane.sessionKey, "dashboard");
+    unsubscribe();
   });
 
   it("restores one board view across equivalent main session keys", () => {
@@ -907,23 +1018,5 @@ describe("chat pane board shell", () => {
     expect(provider.canGrant).toBe(profile.canGrant);
     expect(provider.canPinWidgets).toBe(profile.canMutate);
     expect(provider.canPinMcpApps).toBe(profile.canMutate);
-  });
-
-  it("persists bottom chat dock resizing across pane recreation", () => {
-    const pane = createTestPane();
-    const previous = document.createElement("div");
-    const divider = document.createElement("div");
-    const next = document.createElement("div");
-    previous.getBoundingClientRect = () => ({ height: 650 }) as DOMRect;
-    next.getBoundingClientRect = () => ({ height: 350 }) as DOMRect;
-    const container = document.createElement("div");
-    container.append(previous, divider, next);
-    divider.addEventListener("resize", (event) => {
-      pane.handleBoardDockResize("bottom", event as unknown as CustomEvent<{ splitRatio: number }>);
-    });
-    divider.dispatchEvent(new CustomEvent("resize", { detail: { splitRatio: 0.65 } }));
-
-    const recreated = createTestPane();
-    expect(recreated.boardChatDockSize.height).toBe(350);
   });
 });

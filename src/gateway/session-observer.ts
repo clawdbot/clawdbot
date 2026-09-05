@@ -270,9 +270,6 @@ export function createSessionObserver(deps: SessionObserverDeps): SessionObserve
     isCurrent: modelStateIsCurrent,
   });
 
-  const pendingNotes = (state: SessionObserverState) =>
-    state.notes.filter((note) => note.sequence > state.lastDigestNoteSequence);
-
   const schedule = (
     state: SessionObserverState,
     run: (state: SessionObserverState, final: boolean) => void,
@@ -289,7 +286,8 @@ export function createSessionObserver(deps: SessionObserverDeps): SessionObserve
       state.timer ||
       state.terminalHealth ||
       state.digestCount >= MAX_LIVE_DIGESTS_PER_RUN ||
-      pendingNotes(state).length < MIN_NOTES_PER_DIGEST
+      // Notes stay sequence-ordered even when the bounded buffer drops its oldest entries.
+      (state.notes.at(-MIN_NOTES_PER_DIGEST)?.sequence ?? 0) <= state.lastDigestNoteSequence
     ) {
       return;
     }
@@ -325,7 +323,9 @@ export function createSessionObserver(deps: SessionObserverDeps): SessionObserve
       return;
     }
     flushSessionActivityAssistantNote(state);
-    const selectedNotes = pendingNotes(state);
+    const selectedNotes = state.notes.filter(
+      (note) => note.sequence > state.lastDigestNoteSequence,
+    );
     if (!final && selectedNotes.length < MIN_NOTES_PER_DIGEST) {
       return;
     }
@@ -732,6 +732,7 @@ export function createSessionObserver(deps: SessionObserverDeps): SessionObserve
       revisionFloors.clear();
       supersededRuns.clear();
       terminalRuns.clear();
+      contextlessTerminalRuns.clear();
       disabledRuns.clear();
       visibleConnections.clear();
     },

@@ -6,7 +6,11 @@ import { buildTimestampPrefix } from "../../../gateway/server-methods/agent-time
 import { INTER_SESSION_PROMPT_PREFIX_BASE } from "../../../sessions/input-provenance.js";
 import { hasPersistedMedia, MEDIA_ONLY_USER_TEXT } from "../../../sessions/user-turn-media.js";
 import { buildLateMediaAttachedProjection } from "../../../sessions/user-turn-transcript.js";
-import { stripHistoricalRuntimeContextCustomMessages } from "../../internal-runtime-context.js";
+import {
+  resolveRuntimeContextPromptOwner,
+  retainRuntimeContextMessageForPrompt,
+  stripHistoricalRuntimeContextCustomMessages,
+} from "../../internal-runtime-context.js";
 import type { AgentMessage } from "../../runtime/index.js";
 import { stripToolResultDetails } from "../../session-transcript-repair.js";
 import { normalizeAssistantReplayContent } from "../replay-history.js";
@@ -21,7 +25,6 @@ import {
   type CurrentUserTimestampMatch,
   type UserTranscriptContext,
 } from "./attempt-history.js";
-import { sessionMessagesContainIdempotencyKey } from "./pre-persisted-user-turn.js";
 import type { RuntimeContextCustomMessage } from "./runtime-context-prompt.js";
 
 type LlmBoundaryOptions = {
@@ -32,6 +35,11 @@ type LlmBoundaryOptions = {
   userTranscriptContexts?: readonly UserTranscriptContext[];
   currentUserTimestampOverride?: CurrentUserTimestampMatch;
 };
+
+type PromptContextTransform = (
+  messages: AgentMessage[],
+  signal?: AbortSignal,
+) => Promise<AgentMessage[]>;
 
 /**
  * Matches a leading `[... YYYY-MM-DD HH:MM ...]` timestamp envelope — either
@@ -134,6 +142,7 @@ export function installRuntimeContextMessageForPrompt(params: {
     agent: {
       state: { messages: AgentMessage[] };
       continue?: () => Promise<void>;
+      transformContext?: PromptContextTransform;
     };
   };
   message?: RuntimeContextCustomMessage;
@@ -143,33 +152,64 @@ export function installRuntimeContextMessageForPrompt(params: {
   if (!message) {
     return () => undefined;
   }
-  const install = (placeMessage: typeof appendRuntimeContextMessageForPrompt) => {
-    if (!session.messages.includes(message)) {
-      session.agent.state.messages = placeMessage({
-        message,
-        messages: session.messages,
-      });
+  const owner = retainRuntimeContextMessageForPrompt(message);
+  const install = (retry: boolean) => {
+    const messages = session.messages;
+    if (messages.includes(message)) {
+      return;
     }
+    const canonicalUser = owner.transcriptUser ?? owner.user;
+    const canonicalKey =
+      typeof canonicalUser === "object" && canonicalUser !== null
+        ? Reflect.get(canonicalUser, "idempotencyKey")
+        : undefined;
+    const userIdempotencyKey =
+      owner.transcriptUser === undefined
+        ? (params.persistedUserIdempotencyKey ?? canonicalKey)
+        : canonicalKey;
+    const userIndex = userIdempotencyKey
+      ? messages.findIndex(
+          (candidate) =>
+            candidate.role === "user" &&
+            Reflect.get(candidate, "idempotencyKey") === userIdempotencyKey,
+        )
+      : owner.user
+        ? messages.findIndex(
+            (candidate) => candidate === owner.user || candidate === owner.transcriptUser,
+          )
+        : retry
+          ? findActiveUserMessageIndex(messages)
+          : -1;
+    // Compaction restores canonical transcript objects. Keep the original user's
+    // recorded key/reference; never attach its context to a later steering user.
+    if (retry && userIndex < 0) {
+      return;
+    }
+    const index = userIndex < 0 ? messages.length : userIndex;
+    session.agent.state.messages = [...messages.slice(0, index), message, ...messages.slice(index)];
   };
-  // Keyed retries can reuse their recorded user; transient context must precede
-  // that user so the boundary's current-turn filter retains it.
-  install(
-    params.persistedUserIdempotencyKey &&
-      sessionMessagesContainIdempotencyKey(session.messages, params.persistedUserIdempotencyKey)
-      ? insertRuntimeContextMessageForPrompt
-      : appendRuntimeContextMessageForPrompt,
-  );
+  install(false);
   const agent = session.agent;
+  const originalTransformContext = agent.transformContext;
+  agent.transformContext = async (messages, signal) => {
+    // Capture source identity before prompt hooks and replay sanitizers clone it.
+    owner.user ??= messages[resolveRuntimeContextPromptOwner(messages)?.userIndex ?? -1];
+    return originalTransformContext
+      ? await originalTransformContext.call(agent, messages, signal)
+      : messages;
+  };
   const originalContinue = Reflect.get(agent, "continue", agent) as unknown;
   if (typeof originalContinue === "function") {
     const continueWithAgent = originalContinue.bind(agent) as () => Promise<void>;
     agent.continue = function continueWithRuntimeContext(this: typeof agent): Promise<void> {
       // Pi overflow recovery can rebuild state from the persisted branch before retrying.
-      install(insertRuntimeContextMessageForPrompt);
+      install(true);
       return continueWithAgent();
     };
   }
   return () => {
+    owner.release();
+    agent.transformContext = originalTransformContext;
     if (typeof originalContinue === "function") {
       agent.continue = originalContinue as typeof agent.continue;
     }
@@ -177,54 +217,15 @@ export function installRuntimeContextMessageForPrompt(params: {
   };
 }
 
-function appendRuntimeContextMessageForPrompt(params: {
-  message: RuntimeContextCustomMessage;
+function replaceUserTextPrompt(params: {
   messages: AgentMessage[];
-}): AgentMessage[] {
-  if (params.messages.includes(params.message)) {
-    return params.messages;
-  }
-  return [...params.messages, params.message];
-}
-
-/**
- * Inserts runtime context before the active user turn on retry. Overflow rebuilds
- * can rehydrate a transcript ending in tool-call messages, so the active prompt
- * is found by walking backward through tool-call assistants.
- */
-function insertRuntimeContextMessageForPrompt(params: {
-  message: RuntimeContextCustomMessage;
-  messages: AgentMessage[];
-}): AgentMessage[] {
-  if (params.messages.includes(params.message)) {
-    return params.messages;
-  }
-  const activeUserMessageIndex = findActiveUserMessageIndex(params.messages);
-  if (activeUserMessageIndex === -1) {
-    return [...params.messages, params.message];
-  }
-  return [
-    ...params.messages.slice(0, activeUserMessageIndex),
-    params.message,
-    ...params.messages.slice(activeUserMessageIndex),
-  ];
-}
-
-function replaceLastUserTextPrompt(params: {
-  messages: AgentMessage[];
-  shouldCapture?: (message: AgentMessage) => boolean;
+  userIndex: number;
   transcriptText?: string;
   replace: (text: string) => string | undefined;
 }): AgentMessage[] {
-  const userIndex = params.messages.findLastIndex((message) => message.role === "user");
-  if (userIndex === -1) {
-    return params.messages;
-  }
+  const { userIndex } = params;
   const message = params.messages[userIndex];
   if (!message || message.role !== "user") {
-    return params.messages;
-  }
-  if (params.shouldCapture && !params.shouldCapture(message)) {
     return params.messages;
   }
   const content = (message as { content?: unknown }).content;
@@ -287,10 +288,7 @@ function composeModelPromptContext(params: {
 export function installModelPromptTransform(params: {
   session: {
     agent: {
-      transformContext?: (
-        messages: AgentMessage[],
-        signal?: AbortSignal,
-      ) => Promise<AgentMessage[]>;
+      transformContext?: PromptContextTransform;
     };
   };
   transcriptPrompt: string;
@@ -307,24 +305,49 @@ export function installModelPromptTransform(params: {
   }
   const agent = params.session.agent;
   const originalTransformContext = agent.transformContext;
-  let targetPromptTimestamp: number | undefined;
+  let targetPrompt: AgentMessage | undefined;
+  let promptOwner:
+    | NonNullable<ReturnType<typeof resolveRuntimeContextPromptOwner>>["owner"]
+    | undefined;
   agent.transformContext = async (messages, signal) => {
-    const promptMessages = replaceLastUserTextPrompt({
+    if (!targetPrompt && params.shouldCapturePrompt()) {
+      targetPrompt = messages[findActiveUserMessageIndex(messages)];
+      const retainedOwner = resolveRuntimeContextPromptOwner(messages)?.owner;
+      if (retainedOwner?.user === targetPrompt) {
+        promptOwner = retainedOwner;
+      }
+    }
+    const canonicalPrompt = promptOwner?.transcriptUser ?? targetPrompt;
+    const key =
+      typeof canonicalPrompt === "object" && canonicalPrompt !== null
+        ? Reflect.get(canonicalPrompt, "idempotencyKey")
+        : undefined;
+    let userIndex = messages.findIndex(
+      (message) => message === targetPrompt || message === canonicalPrompt,
+    );
+    if (userIndex < 0 && key) {
+      userIndex = messages.findIndex(
+        (message) => message.role === "user" && Reflect.get(message, "idempotencyKey") === key,
+      );
+    }
+    // Carrierless keyless transcript replay has no retained canonical reference.
+    // Preserve its timestamp match only when unique; a known owner never adopts
+    // a later user after compaction removes the original prompt.
+    if (userIndex < 0 && targetPrompt && !promptOwner && !key) {
+      const timestamp = Reflect.get(targetPrompt, "timestamp");
+      const matches = messages.flatMap((message, index) =>
+        message.role === "user" &&
+        typeof timestamp === "number" &&
+        Reflect.get(message, "timestamp") === timestamp
+          ? [index]
+          : [],
+      );
+      userIndex = matches.length === 1 ? (matches[0] ?? -1) : -1;
+    }
+    const promptMessages = replaceUserTextPrompt({
       messages,
+      userIndex,
       transcriptText: params.transcriptPrompt,
-      shouldCapture: (message) => {
-        const timestamp = (message as { timestamp?: unknown }).timestamp;
-        if (targetPromptTimestamp !== undefined) {
-          return timestamp === targetPromptTimestamp;
-        }
-        if (!params.shouldCapturePrompt()) {
-          return false;
-        }
-        if (typeof timestamp === "number") {
-          targetPromptTimestamp = timestamp;
-        }
-        return true;
-      },
       replace: (text) => {
         if (modelPrompt?.trim() && text === params.transcriptPrompt) {
           return modelPrompt;
@@ -468,6 +491,16 @@ function normalizeUserMessagesForLlmBoundary(
   options: LlmBoundaryOptions | undefined,
 ): AgentMessage[] {
   const activeUserMessageIndex = findActiveUserMessageIndex(messages);
+  const prompt = resolveRuntimeContextPromptOwner(messages);
+  const promptUserMessageIndex = prompt?.userIndex ?? -1;
+  if (prompt) {
+    // The persistence owner already records this exact pair, including keyless
+    // users and write-hook replacements. Retain it for same-attempt compaction.
+    prompt.owner.transcriptUser =
+      options?.userTranscriptContexts?.find(
+        (context) => context.runtimeMessage === prompt.owner.user,
+      )?.transcriptMessage ?? prompt.owner.transcriptUser;
+  }
   let changed = false;
   const nextMessages = messages.map((message, index) => {
     if (message.role !== "user") {
@@ -475,13 +508,17 @@ function normalizeUserMessagesForLlmBoundary(
     }
     const content = (message as { content?: unknown }).content;
     const injectMediaText = !hasNonBlankUserText(content) && hasPersistedMedia(message);
-    const isActive = index === activeUserMessageIndex;
+    const isActive =
+      index === activeUserMessageIndex ||
+      (promptUserMessageIndex >= 0 && index >= promptUserMessageIndex);
     const preserveInboundMetadata = isActive || options?.appendOnlyRuntimeContext === true;
     const override = options?.currentUserTimestampOverride;
     const runtimeTimestamp = (message as { timestamp?: unknown }).timestamp;
     const useCurrentUserTimestampOverride =
-      isActive &&
       override !== undefined &&
+      (isActive ||
+        (typeof override.runtimeTimestamp === "number" &&
+          override.runtimeTimestamp === runtimeTimestamp)) &&
       messageContentMatchesCurrentUserText(content, override) &&
       messageRuntimeTimestampMatchesCurrentUserOverride(runtimeTimestamp, override);
     const messageTimestamp = useCurrentUserTimestampOverride

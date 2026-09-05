@@ -3,8 +3,12 @@ import { stableStringify } from "@openclaw/normalization-core";
 import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
 import { resolveConversationCapabilityProfile } from "../../agents/conversation-capability-profile.js";
 import { resolveSandboxRuntimeStatus } from "../../agents/sandbox/runtime-status.js";
-import { readToolAllowlistIntersection } from "../../agents/tool-policy.js";
+import {
+  attachToolAllowlistIntersection,
+  readToolAllowlistIntersection,
+} from "../../agents/tool-policy.js";
 import { normalizeChatType } from "../../channels/chat-type.js";
+import { cloneConfigWithResolutionFacts } from "../../config/resolution-facts.js";
 import type { SessionEntry } from "../../config/sessions.js";
 import { resolveGroupSessionKey } from "../../config/sessions/group.js";
 import type { RuntimeMsgContext } from "../templating.js";
@@ -12,16 +16,59 @@ import { resolveOriginMessageProvider } from "./origin-routing.js";
 import type { FollowupRun } from "./queue.js";
 import type {
   ReplyToolAuthorityOverlay,
-  ReplyToolAuthorityProjector,
   ReplyToolAuthorityRoute,
+  ReplyToolAuthoritySnapshot,
 } from "./reply-run-registry.contracts.js";
 
-type ReplyToolAuthoritySnapshot = {
-  originatingChannel: FollowupRun["originatingChannel"];
-  toolsAllow: FollowupRun["toolsAllow"];
-  toolsAllowIntersection: readonly string[][] | undefined;
-  disableTools: boolean;
-  run: FollowupRun["run"];
+export type ReplyToolAuthorityInput = {
+  originatingChannel?: FollowupRun["originatingChannel"];
+  toolsAllow?: string[];
+  disableTools?: boolean;
+  run: Partial<
+    Pick<
+      FollowupRun["run"],
+      | "config"
+      | "sessionId"
+      | "sessionKey"
+      | "runtimePolicySessionKey"
+      | "agentId"
+      | "agentDir"
+      | "agentAccountId"
+      | "provider"
+      | "model"
+      | "messageProvider"
+      | "chatType"
+      | "conversationToolPolicy"
+      | "groupId"
+      | "groupChannel"
+      | "groupSpace"
+      | "memberRoleIds"
+      | "spawnedBy"
+      | "senderId"
+      | "senderName"
+      | "senderUsername"
+      | "senderE164"
+      | "senderIsOwner"
+      | "workspaceDir"
+      | "cwd"
+      | "inputProvenance"
+      | "trustedInternalHandoff"
+      | "scheduledToolPolicy"
+      | "runtimePluginToolGrant"
+      | "sessionFile"
+      | "permissionMode"
+      | "toolOverrides"
+      | "execOverrides"
+      | "elevatedLevel"
+      | "bashElevated"
+      | "traceAuthorized"
+      | "approvalReviewerDeviceId"
+      | "authProfileId"
+      | "clientCaps"
+      | "toolBindings"
+    >
+  > &
+    Pick<FollowupRun["run"], "sessionId" | "sessionFile" | "workspaceDir" | "provider" | "model">;
 };
 
 /** Projects current inbound facts against the active run's frozen authority snapshot. */
@@ -73,16 +120,30 @@ export function resolveInboundReplyToolAuthorityOverlay(params: {
   };
 }
 
-function snapshotFollowupRunToolAuthority(run: FollowupRun): ReplyToolAuthoritySnapshot {
+function snapshotFollowupRunToolAuthority(run: ReplyToolAuthorityInput): ReplyToolAuthorityInput {
+  const toolsAllow = run.toolsAllow ? [...run.toolsAllow] : undefined;
+  const intersection = run.toolsAllow
+    ? readToolAllowlistIntersection(run.toolsAllow)?.map((restriction) => restriction.slice())
+    : undefined;
+  if (toolsAllow && intersection) {
+    attachToolAllowlistIntersection(toolsAllow, intersection);
+  }
   return {
     originatingChannel: run.originatingChannel,
-    toolsAllow: run.toolsAllow,
-    toolsAllowIntersection: run.toolsAllow
-      ? readToolAllowlistIntersection(run.toolsAllow)
-      : undefined,
+    toolsAllow,
     disableTools: run.disableTools === true,
     run: {
       ...run.run,
+      config: run.run.config ? cloneConfigWithResolutionFacts(run.run.config) : undefined,
+      conversationToolPolicy: structuredClone(run.run.conversationToolPolicy),
+      inputProvenance: structuredClone(run.run.inputProvenance),
+      scheduledToolPolicy: structuredClone(run.run.scheduledToolPolicy),
+      runtimePluginToolGrant: structuredClone(run.run.runtimePluginToolGrant),
+      trustedInternalHandoff: structuredClone(run.run.trustedInternalHandoff),
+      toolOverrides: structuredClone(run.run.toolOverrides),
+      execOverrides: structuredClone(run.run.execOverrides),
+      bashElevated: structuredClone(run.run.bashElevated),
+      toolBindings: structuredClone(run.run.toolBindings),
       clientCaps: run.run.clientCaps ? [...run.run.clientCaps] : undefined,
       memberRoleIds: run.run.memberRoleIds ? [...run.run.memberRoleIds] : undefined,
     },
@@ -90,16 +151,13 @@ function snapshotFollowupRunToolAuthority(run: FollowupRun): ReplyToolAuthorityS
 }
 
 function applyReplyToolAuthorityOverlay(
-  snapshot: ReplyToolAuthoritySnapshot,
+  snapshot: ReplyToolAuthorityInput,
   overlay: ReplyToolAuthorityOverlay,
-): ReplyToolAuthoritySnapshot {
+): ReplyToolAuthorityInput {
   return {
     ...snapshot,
     originatingChannel: overlay.originatingChannel,
     toolsAllow: overlay.toolsAllow,
-    toolsAllowIntersection: overlay.toolsAllow
-      ? readToolAllowlistIntersection(overlay.toolsAllow)
-      : undefined,
     disableTools: overlay.disableTools,
     run: {
       ...snapshot.run,
@@ -131,8 +189,8 @@ function applyReplyToolAuthorityOverlay(
   };
 }
 
-function resolveReplyToolAuthoritySnapshotFingerprint(
-  snapshot: ReplyToolAuthoritySnapshot,
+function resolveReplyToolAuthorityInputFingerprint(
+  snapshot: ReplyToolAuthorityInput,
   route?: ReplyToolAuthorityRoute,
 ): string {
   const execution = snapshot.run;
@@ -148,8 +206,8 @@ function resolveReplyToolAuthoritySnapshotFingerprint(
   const capabilityProfile = resolveConversationCapabilityProfile({
     config: execution.config,
     sessionId: execution.sessionId,
-    sessionKey: policySessionKey,
-    runSessionKey: execution.sessionKey,
+    // Capability identity follows execution, not the independent sandbox policy owner.
+    sessionKey: execution.sessionKey,
     sandboxSessionKey: policySessionKey,
     agentId: execution.agentId,
     agentDir: execution.agentDir,
@@ -185,8 +243,10 @@ function resolveReplyToolAuthoritySnapshotFingerprint(
         model,
         policy: capabilityProfile.policy,
         toolsAllow: snapshot.toolsAllow,
-        toolsAllowIntersection: snapshot.toolsAllowIntersection,
-        disableTools: snapshot.disableTools,
+        toolsAllowIntersection: snapshot.toolsAllow
+          ? readToolAllowlistIntersection(snapshot.toolsAllow)
+          : undefined,
+        disableTools: snapshot.disableTools === true,
         sessionFile: execution.sessionFile,
         agentDir: execution.agentDir,
         workspaceDir: execution.workspaceDir,
@@ -208,20 +268,23 @@ function resolveReplyToolAuthoritySnapshotFingerprint(
 
 /** Fingerprints the complete model-facing tool authority owned by one queued turn. */
 export function resolveFollowupRunToolAuthorityFingerprint(
-  run: FollowupRun,
+  run: ReplyToolAuthorityInput,
   route?: ReplyToolAuthorityRoute,
 ): string {
-  return resolveReplyToolAuthoritySnapshotFingerprint(snapshotFollowupRunToolAuthority(run), route);
+  return resolveReplyToolAuthorityInputFingerprint(snapshotFollowupRunToolAuthority(run), route);
 }
 
-/** Projects a new inbound turn against one active run's frozen owner authority. */
-export function createFollowupRunToolAuthorityProjector(
-  run: FollowupRun,
-): ReplyToolAuthorityProjector {
+/** Capture execution policy once; incoming overlays replace only caller-owned facts. */
+export function prepareReplyToolAuthority(
+  run: ReplyToolAuthorityInput,
+  narrow?: (input: ReplyToolAuthorityInput) => ReplyToolAuthorityInput,
+): ReplyToolAuthoritySnapshot {
   const snapshot = snapshotFollowupRunToolAuthority(run);
-  return (overlay, route) =>
-    resolveReplyToolAuthoritySnapshotFingerprint(
-      applyReplyToolAuthorityOverlay(snapshot, overlay),
-      route,
-    );
+  return {
+    fingerprint: (route) => resolveReplyToolAuthorityInputFingerprint(snapshot, route),
+    project: (overlay, route) => {
+      const incoming = applyReplyToolAuthorityOverlay(snapshot, overlay);
+      return resolveReplyToolAuthorityInputFingerprint(narrow ? narrow(incoming) : incoming, route);
+    },
+  };
 }

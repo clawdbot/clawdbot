@@ -109,6 +109,11 @@ type TaskFlowSyncResult =
       current: TaskFlowRecord;
     };
 
+export type PreparedTaskMirroredFlowSync = {
+  current: TaskFlowRecord;
+  next: TaskFlowRecord;
+};
+
 function cloneStructuredValue<T>(value: T | undefined): T | undefined {
   if (value === undefined) {
     return undefined;
@@ -527,18 +532,6 @@ export function createTaskFlowForTask(params: {
   });
 }
 
-function updateFlowRecordByIdUnchecked(
-  flowId: string,
-  patch: FlowRecordPatch,
-): TaskFlowRecord | null {
-  ensureTaskFlowRegistryReady();
-  const current = flows.get(flowId);
-  if (!current) {
-    return null;
-  }
-  return writeFlowRecord(applyFlowPatch(current, patch), current);
-}
-
 export function updateFlowRecordByIdExpectedRevision(params: {
   flowId: string;
   expectedRevision: number;
@@ -722,6 +715,22 @@ export function syncFlowFromTaskResult(
   if (flow.syncMode !== "task_mirrored") {
     return { ok: true, flow };
   }
+  const prepared = prepareTaskMirroredFlowSyncFromCurrent(task, flow);
+  const updated = writeFlowRecord(prepared.next, prepared.current);
+  if (!updated) {
+    return {
+      ok: false,
+      reason: "persist_failed",
+      current: flow,
+    };
+  }
+  return { ok: true, flow: updated };
+}
+
+function prepareTaskMirroredFlowSyncFromCurrent(
+  task: Parameters<typeof syncFlowFromTaskResult>[0],
+  flow: TaskFlowRecord,
+): PreparedTaskMirroredFlowSync {
   const terminalFlowStatus = deriveTaskFlowStatusFromTask(task);
   const isTerminal = isTerminalTaskFlowStatus(terminalFlowStatus);
   const timing = resolveTaskMirroredFlowTiming(
@@ -732,7 +741,7 @@ export function syncFlowFromTaskResult(
     },
     isTerminal,
   );
-  const updated = updateFlowRecordByIdUnchecked(flowId, {
+  const next = applyFlowPatch(flow, {
     status: terminalFlowStatus,
     notifyPolicy: task.notifyPolicy,
     goal: normalizeOptionalString(task.label) ?? (task.task.trim() || "Background task"),
@@ -747,14 +756,36 @@ export function syncFlowFromTaskResult(
         }
       : { endedAt: null }),
   });
-  if (!updated) {
-    return {
-      ok: false,
-      reason: "persist_failed",
-      current: flow,
-    };
+  return { current: cloneFlowRecord(flow), next };
+}
+
+export function prepareTaskMirroredFlowSync(
+  task: Parameters<typeof syncFlowFromTaskResult>[0],
+): PreparedTaskMirroredFlowSync | undefined {
+  const flowId = task.parentFlowId?.trim();
+  if (!flowId) {
+    return undefined;
   }
-  return { ok: true, flow: updated };
+  const flow = getTaskFlowById(flowId);
+  return flow?.syncMode === "task_mirrored"
+    ? prepareTaskMirroredFlowSyncFromCurrent(task, flow)
+    : undefined;
+}
+
+/** Publishes a mirrored flow record already committed by a shared-state transaction. */
+export function publishTaskFlowAfterAtomicStore(
+  prepared: PreparedTaskMirroredFlowSync,
+  deferredObserverEvents: Array<() => void>,
+): void {
+  const next = cloneFlowRecord(prepared.next);
+  flows.set(next.flowId, next);
+  deferredObserverEvents.push(() =>
+    emitFlowRegistryObserverEvent(() => ({
+      kind: "upserted",
+      flow: cloneFlowRecord(next),
+      previous: cloneFlowRecord(prepared.current),
+    })),
+  );
 }
 
 export function getTaskFlowById(flowId: string): TaskFlowRecord | undefined {

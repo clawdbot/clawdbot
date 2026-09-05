@@ -595,16 +595,18 @@ describe("CodexAppServerEventProjector media projection", () => {
     expect(result.hostOwnedToolMediaUrls).toBeUndefined();
   });
 
-  it("propagates message-tool-only source reply delivery telemetry", async () => {
+  it("propagates source reply delivery without destination telemetry", async () => {
     const projector = await createProjector();
 
     const result = projector.buildResult({
       ...buildEmptyToolTelemetry(),
       didSendViaMessagingTool: true,
       didDeliverSourceReplyViaMessageTool: true,
+      sourceReplyDelivered: true,
     });
 
     expect(result.didSendViaMessagingTool).toBe(true);
     expect(result.didDeliverSourceReplyViaMessageTool).toBe(true);
+    expect(result.sourceReplyDelivered).toBe(true);
   });
 });

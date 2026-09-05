@@ -207,7 +207,7 @@ export function createResponsesTerminalController(params: {
     item: { type: "function_call"; id?: string; call_id?: string },
     outputIndex: number | undefined,
     started: { block: ToolCall; contentIndex: number } | undefined,
-    validated: Pick<ToolCall, "name" | "arguments">,
+    validated: Pick<ToolCall, "name" | "arguments" | "async">,
   ): void => {
     // Complete the same public block with authoritative identities and arguments;
     // scratch JSON must never survive into transcript replay.

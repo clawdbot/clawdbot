@@ -38,6 +38,7 @@ type PendingInputDatabase = Pick<OpenClawAgentDatabase, "db" | "path">;
 
 export type SessionPendingInputOwner = {
   inputId: string;
+  transcriptInputId: string;
   sessionId: string;
   sessionKey: string;
   databasePath: string;
@@ -54,6 +55,10 @@ export type SessionPendingInputOwner = {
 const owners = resolveGlobalSingleton(Symbol.for("openclaw.sessionPendingInputOwners"), () => ({
   live: new Map<string, SessionPendingInputOwner>(),
   current: new AsyncLocalStorage<SessionPendingInputOwner>(),
+  relocation: new AsyncLocalStorage<{
+    owner: SessionPendingInputOwner;
+    sourceInputId: string;
+  }>(),
 }));
 
 registerAgentEventLifecycleRotationHandler("session-pending-inputs", () => {
@@ -110,6 +115,24 @@ export function runWithSessionPendingInputPersistence<T>(
   persist: () => T,
 ): T {
   return owners.current.run(owner, persist);
+}
+
+/** A transcript rewrite may move only the exact current user owned by the live admitted turn. */
+export function withSessionPendingInputRelocation<T>(
+  sourceInputId: string,
+  message: unknown,
+  append: () => T,
+): T {
+  const owner = owners.current.getStore();
+  const record = asOptionalRecord(message);
+  if (!owner || record?.role !== "user" || record.idempotencyKey !== owner.idempotencyKey) {
+    return append();
+  }
+  assertPendingInputOwnerCurrent(owner);
+  if (owner.transcriptInputId !== sourceInputId || JSON.stringify(message) !== owner.messageJson) {
+    throw new Error("Pending input relocation does not match its admitted transcript entry");
+  }
+  return owners.relocation.run({ owner, sourceInputId }, append);
 }
 
 /** Registration owns disposition; execution and promotion check the private operational predicates. */
@@ -192,6 +215,7 @@ export type SessionPendingInputAppend = {
   message: PersistedUserTurnMessage;
   alreadyPromoted: boolean;
   sourceInputIds?: readonly string[];
+  commitRelocation?: (destinationInputId: string) => void;
 };
 
 /** The private call-path owner, not a copied id or durable row, permits promotion. */
@@ -225,6 +249,15 @@ export function resolveSessionPendingInputAppend(
   ) {
     throw new Error("Pending input cannot be appended outside its admitted turn");
   }
+  const relocation = owners.relocation.getStore();
+  const relocationCommit =
+    relocation?.owner === owner && relocation.sourceInputId === owner.transcriptInputId
+      ? (destinationInputId: string) => {
+          if (owner.transcriptInputId === relocation.sourceInputId) {
+            owner.transcriptInputId = destinationInputId;
+          }
+        }
+      : undefined;
   if (owner.sources) {
     const acceptedByKey = new Map(
       executeSqliteQuerySync(
@@ -261,10 +294,11 @@ export function resolveSessionPendingInputAppend(
       assertPendingInputOwnerCurrent(owner);
     }
     return {
-      inputId: owner.inputId,
+      inputId: owner.transcriptInputId,
       message: parseSessionPendingInputMessage(owner.messageJson),
       alreadyPromoted,
       sourceInputIds: sources.map((source) => source.input_id),
+      ...(alreadyPromoted && relocationCommit ? { commitRelocation: relocationCommit } : {}),
     };
   }
   // Terminal mirroring may replay a consumed input after cancellation. The caller
@@ -273,9 +307,10 @@ export function resolveSessionPendingInputAppend(
     assertPendingInputOwnerCurrent(owner);
   }
   return {
-    inputId: owner.inputId,
+    inputId: owner.transcriptInputId,
     message: parseSessionPendingInputMessage(row?.message_json ?? owner.messageJson),
     alreadyPromoted: !row,
+    ...(!row && relocationCommit ? { commitRelocation: relocationCommit } : {}),
   };
 }
 

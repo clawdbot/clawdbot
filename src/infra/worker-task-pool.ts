@@ -7,7 +7,8 @@ import { createDeferredCore, type Deferred } from "../shared/deferred.js";
 
 type WorkerTaskInput<Input> = Input | (() => Input | Promise<Input>);
 type WorkerTaskOptions<Input> = {
-  timeoutMs: number;
+  /** When supplied, queueing and asynchronous preparation consume the execution deadline. */
+  timeoutMs?: number;
   signal?: AbortSignal;
   transferList?: (input: Input) => readonly Transferable[];
 };
@@ -15,7 +16,7 @@ type WorkerReply<Output> = { status: "ok"; value: Output } | { status: "failed";
 type Task<Input, Output> = Deferred<Output> & {
   input?: WorkerTaskInput<Input>;
   options: WorkerTaskOptions<Input>;
-  timer: NodeJS.Timeout;
+  timer?: NodeJS.Timeout;
   abort: () => void;
   done: boolean;
   slot?: Slot<Input, Output>;
@@ -68,12 +69,13 @@ export class WorkerTaskPool<Input, Output> {
       options,
       abort: () => this.cancel(task, toErrorObject(options.signal?.reason, "worker task aborted")),
       done: false,
-      // Queueing and asynchronous preparation consume the same budget as execution.
-      timer: setTimeout(
+    };
+    if (options.timeoutMs !== undefined) {
+      task.timer = setTimeout(
         () => this.cancel(task, new WorkerTaskError("worker task timed out", "timeout")),
         resolveTimerTimeoutMs(options.timeoutMs, 60_000),
-      ),
-    };
+      );
+    }
     options.signal?.addEventListener("abort", task.abort, { once: true });
     this.queue.push(task);
     if (options.signal?.aborted) {
@@ -233,15 +235,20 @@ export class WorkerTaskPool<Input, Output> {
         void this.retire(slot).then(complete);
         return;
       }
-      slot.worker?.unref();
-      const idleMs = this.options.idleTimeoutMs ?? 60_000;
-      if (idleMs > 0) {
-        slot.idleTimer = setTimeout(() => void this.retire(slot), idleMs);
-        slot.idleTimer.unref();
-      }
+      this.idle(slot);
     }
     complete();
     this.dispatch();
+  }
+
+  // A separate scope keeps the idle timer from retaining the completed task/result.
+  private idle(slot: Slot<Input, Output>): void {
+    slot.worker?.unref();
+    const idleMs = this.options.idleTimeoutMs ?? 60_000;
+    if (idleMs > 0) {
+      slot.idleTimer = setTimeout(() => void this.retire(slot), idleMs);
+      slot.idleTimer.unref();
+    }
   }
 
   private retire(slot: Slot<Input, Output>): Promise<void> {

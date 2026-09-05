@@ -3,7 +3,7 @@ import { getReplyPayloadMetadata } from "../../auto-reply/reply-payload.js";
 import type { FollowupRun } from "../../auto-reply/reply/queue.js";
 import { recordAgentRunTerminalOutcome } from "../../channels/turn/agent-run-terminal-outcome.js";
 import type { CliDeps } from "../../cli/deps.types.js";
-import { resolveSessionAuthProfileOverrideSource } from "../../config/sessions/auth-profile-override-provenance.js";
+import { resolveCollapsedSessionAuthPinSource } from "../../config/sessions/auth-profile-override-provenance.js";
 import { formatSqliteSessionFileMarker } from "../../config/sessions/legacy-sqlite-marker.js";
 import { buildRestartRecoveryClaimCleanupPatch } from "../../config/sessions/restart-recovery-state.js";
 import type { RestartRecoveryTerminalDeliveryEvidenceResult } from "../../config/sessions/restart-recovery-types.js";
@@ -151,6 +151,7 @@ export async function finalizeEmbeddedAgentCommand(params: {
   let result = params.attempt.result;
   let deliveryResult: Awaited<ReturnType<typeof deliverAgentCommandResult>>;
   let hasResultError: boolean;
+  let terminalError: string | undefined;
   let { runOwnedSessionId, sessionReboundDuringRun } = params.sessionOwnership;
   const publishSessionOwnership = (committedCompactionSessionId?: string) => {
     // Outer restart-recovery cleanup runs even after later delivery failures.
@@ -304,7 +305,7 @@ export async function finalizeEmbeddedAgentCommand(params: {
       const flushModel = result.meta.agentMeta?.model ?? fallbackModel;
       const maintenanceAuthProfile = params.attempt.maintenanceAuthProfile ?? {
         authProfileId: sessionEntry.authProfileOverride?.trim() || undefined,
-        authProfileIdSource: resolveSessionAuthProfileOverrideSource(sessionEntry),
+        authProfileIdSource: resolveCollapsedSessionAuthPinSource(sessionEntry),
       };
       followupRun = {
         prompt: "",
@@ -674,6 +675,9 @@ export async function finalizeEmbeddedAgentCommand(params: {
     }
 
     hasResultError = Boolean(fallbackExhausted || lifecycle.resolveResultError(result, false));
+    terminalError = hasResultError
+      ? lifecycle.resolveTerminalError(result, fallbackExhausted, terminal)
+      : terminal.outcome.error;
     if (hasResultError) {
       lifecycle.emitResultError(result, fallbackExhausted, terminal);
     } else {
@@ -703,6 +707,7 @@ export async function finalizeEmbeddedAgentCommand(params: {
       hasResultError || classifyAgentRunTerminalOutcome(outcome) !== "success"
         ? "failed"
         : "completed",
+      terminalError ? formatErrorMessage(terminalError) : undefined,
     ),
     sessionEntry,
     runOwnedSessionId,

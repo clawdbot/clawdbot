@@ -369,15 +369,17 @@ describe("models list JSON failure process output", () => {
 });
 
 describe("message broadcast process exit", () => {
-  it("exits nonzero after a structured target failure", async () => {
+  it("drains a large piped JSON payload before exiting nonzero on a structured target failure", async () => {
     const root = tempDirs.make("openclaw-message-broadcast-exit-");
     const stateDir = path.join(root, "state");
     const configPath = path.join(stateDir, "openclaw.json");
     const entryPath = path.join(root, "run-message-broadcast.mjs");
+    const largePayload = "x".repeat(8_388_608);
     await fs.writeFile(
       entryPath,
       `import { registerHooks } from "node:module";
 const messageModule = "data:text/javascript," + encodeURIComponent(\`export async function messageCommand() {
+  process.stdout.write(JSON.stringify(${JSON.stringify({ payload: largePayload })}) + "\\\\n");
   return ${JSON.stringify({
     kind: "broadcast",
     channel: "fixture",
@@ -400,11 +402,18 @@ registerHooks({
   },
 });
 const { createMessageCliHelpers } = await import(${JSON.stringify(pathToFileURL(path.resolve("src/cli/program/message/helpers.ts")).href)});
+const { runCliWithExitFinalization } = await import(${JSON.stringify(pathToFileURL(path.resolve("src/cli/one-shot-exit.ts")).href)});
 const { runMessageAction } = createMessageCliHelpers("fixture");
-await runMessageAction("broadcast", {
-  channel: "fixture",
-  targets: ["ok-target", "failed-target"],
-  message: "hello",
+await runCliWithExitFinalization({
+  run: () =>
+    runMessageAction("broadcast", {
+      channel: "fixture",
+      targets: ["ok-target", "failed-target"],
+      message: "hello",
+    }),
+  onError: (err) => {
+    console.error(err);
+  },
 });
 `,
     );
@@ -412,6 +421,7 @@ await runMessageAction("broadcast", {
     const child = spawnSync(process.execPath, ["--import", "tsx", entryPath], {
       cwd: path.resolve("."),
       encoding: "utf8",
+      maxBuffer: 32 * 1024 * 1024,
       env: {
         ...process.env,
         HOME: root,
@@ -429,10 +439,81 @@ await runMessageAction("broadcast", {
     expect(child.error).toBeUndefined();
     expect(child.signal).toBeNull();
     expect(child.status, child.stderr).toBe(1);
+    expect(JSON.parse(child.stdout.trim())).toEqual({ payload: largePayload });
   });
 });
 
 describe("backup create process", () => {
+  it.runIf(process.platform !== "win32")(
+    "creates a verified backup through an absolute configured config link",
+    async () => {
+      const root = tempDirs.make("openclaw-backup-cli-config-link-");
+      const stateDir = path.join(root, "state");
+      const configPath = path.join(stateDir, "openclaw.json");
+      const managedConfigPath = path.join(root, "nix-store", "openclaw.json");
+      const outputDir = path.join(root, "output");
+      await Promise.all([
+        fs.mkdir(stateDir, { recursive: true }),
+        fs.mkdir(path.dirname(managedConfigPath), { recursive: true }),
+        fs.mkdir(outputDir, { recursive: true }),
+      ]);
+      await fs.writeFile(managedConfigPath, '{"logging":{"level":"silent"}}\n');
+      await fs.symlink(managedConfigPath, configPath);
+
+      const result = await runCliProcessChild({
+        nodeArgs: [
+          "--import",
+          "tsx",
+          "src/entry.ts",
+          "backup",
+          "create",
+          "--no-include-workspace",
+          "--output",
+          outputDir,
+          "--verify",
+          "--json",
+        ],
+        env: {
+          ...process.env,
+          HOME: root,
+          USERPROFILE: root,
+          NODE_DISABLE_COMPILE_CACHE: "1",
+          NODE_ENV: undefined,
+          NODE_OPTIONS: undefined,
+          OPENCLAW_CONFIG_PATH: configPath,
+          OPENCLAW_DISABLE_BUNDLED_PLUGINS: "1",
+          OPENCLAW_HOME: root,
+          OPENCLAW_NO_RESPAWN: "1",
+          OPENCLAW_SKIP_CHANNELS: "1",
+          OPENCLAW_STATE_DIR: stateDir,
+          VITEST: undefined,
+        },
+      });
+      if (result.code !== 0) {
+        throw new Error(
+          formatCliProcessFailure({
+            reason: `backup CLI exited with code ${result.code} and signal ${result.signal}`,
+            stdout: result.stdout,
+            stderr: result.stderr,
+          }),
+        );
+      }
+
+      const output: unknown = JSON.parse(result.stdout);
+      expect(output).toMatchObject({ includeWorkspace: false, verified: true });
+      if (
+        !output ||
+        typeof output !== "object" ||
+        !("archivePath" in output) ||
+        typeof output.archivePath !== "string"
+      ) {
+        throw new Error("backup CLI did not return an archive path");
+      }
+      const entries = await listBackupArchiveEntries(output.archivePath);
+      expect(entries.some((entry) => entry.endsWith("/state/openclaw.json"))).toBe(true);
+    },
+  );
+
   it.runIf(process.platform !== "win32")(
     "excludes a configured workspace before archive link validation",
     async () => {

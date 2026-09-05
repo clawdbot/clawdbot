@@ -54,6 +54,7 @@ import {
   consumeComposerInputIntent,
   getChatComposerState,
   hasTerminalRunStatus,
+  isChatRunWorking,
   isCurrentSessionSubmittedProgress,
   markComposerInputIntent,
   suppressStaleSubmittedDraftReplay,
@@ -99,10 +100,9 @@ export function renderChatComposer(props: ChatComposerProps) {
   );
   const sendingForCurrentSession =
     props.sending && (!hasSubmittedProgress || submittedProgress !== undefined);
+  const runWorking = isChatRunWorking(props);
   const composerRunStatus =
-    sendingForCurrentSession || showAbortableUi || Boolean(submittedProgress)
-      ? { phase: "in-progress" as const }
-      : props.runStatus;
+    sendingForCurrentSession || runWorking ? { phase: "in-progress" as const } : props.runStatus;
   const draftKey = composerDraftKey(props);
   if (state.composerDraftScopeKey !== null && state.composerDraftScopeKey !== draftKey) {
     state.dictation?.dispose();
@@ -199,8 +199,8 @@ export function renderChatComposer(props: ChatComposerProps) {
     commitDraft: skillMenuHost.commitDraft,
     getTextarea: () => state.composerTextarea,
     resolveArgOptions: (command) => resolveChatSlashCommandArgOptions(command, props),
-    runCommand: () => props.onSend(),
-    canRunInlineCommand: () => state.slashCommandDispatchConnected && Boolean(props.onSlashCommand),
+    runCommand: () => void props.onSend(),
+    canRun: (inline) => state.slashCommandDispatchConnected && !(inline && !props.onSlashCommand),
     runInlineCommand: props.connected ? props.onSlashCommand : undefined,
     refreshCommands: props.onSlashIntent,
     activateComposerMode: (command) => goalComposer.activateCommand(command),
@@ -477,7 +477,7 @@ export function renderChatComposer(props: ChatComposerProps) {
       void goalComposer.submit(submissionAction);
       return;
     }
-    props.onSend(undefined, submissionAction);
+    void props.onSend(undefined, submissionAction);
     syncComposerDraftAfterSend(state.composerTextarea);
   };
   state.microphonePicker ??= new ComposerMicrophonePicker(requestUpdate);
@@ -586,7 +586,14 @@ export function renderChatComposer(props: ChatComposerProps) {
       state.dictationError = `${message} ${recovery}`;
       requestUpdate();
     },
-    onStateChange: requestUpdate,
+    onStateChange: () => {
+      // A new dictation gesture retires an earlier Talk recovery offer before
+      // either can acquire another microphone, including queued button clicks.
+      if (state.dictation?.locksComposer) {
+        props.onDismissRealtimeTalkError?.();
+      }
+      requestUpdate();
+    },
     onDictationUnavailable: devicePicker.handleOpen,
     // With an initial empty composer, this button retains the existing
     // send-after-typing behavior until the host rerenders the primary actions.

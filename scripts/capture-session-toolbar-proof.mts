@@ -197,7 +197,7 @@ try {
       const toolbar = grouped.page.locator(".sidebar-session-toolbar");
       await toolbar.getByText("Sessions", { exact: true }).waitFor();
       const filter = toolbar.getByRole("button", { name: "Filter & sort" });
-      const add = toolbar.getByRole("button", { name: "New session" });
+      const add = toolbar.getByRole("link", { name: "New session" });
       await grouped.page.mouse.move(1_000, 850);
       const toolbarOpacity = await Promise.all([
         filter.evaluate((element) => Number.parseFloat(getComputedStyle(element).opacity)),

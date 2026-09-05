@@ -2739,6 +2739,14 @@ docker_e2e_docker_run_cmd run demo
     expect(publishedRunner.indexOf("phase update-candidate update_candidate")).toBeLessThan(
       publishedRunner.indexOf("phase assert-prepublish-requests assert_prepublish_plugin_install"),
     );
+    expect(publishedRunner).toContain(
+      "run_plugin_fixture_phase assert-prepublish-requests assert_prepublish_plugin_install 1",
+    );
+    expect(publishedRunner).toContain(
+      "phase assert-prepublish-recovery-requests assert_prepublish_plugin_install",
+    );
+    expect(publishedRunner).not.toContain("assert-prepublish-idle");
+    expect(publishedRunner).not.toContain("assert-prepublish-recovery-idle");
     expect(publishedRunner).not.toContain('if [ "$candidate_version" = "2026.6.35" ]; then');
     expect(publishedRunner).toContain(
       'local tarball="$fixture_root/openclaw-brave-plugin-${candidate_version}.tgz"',
@@ -2787,6 +2795,17 @@ docker_e2e_docker_run_cmd run demo
         'if [ "$SCENARIO" = "configured-plugin-installs" ] || [ "$SCENARIO" = "sqlite-volume" ]; then',
         '  export MATRIX_ACCESS_TOKEN="upgrade-survivor-matrix-token"',
         '  export BRAVE_API_KEY="BSA_upgrade_survivor_brave_key"',
+        "fi",
+      ].join("\n"),
+    );
+    expect(publishedRunner).toContain(
+      [
+        'if [ "$SCENARIO" = "watchos-direct-node" ] || [ "$SCENARIO" = "mobile-pairing-reconnect" ]; then',
+        "  unset OPENAI_API_KEY DISCORD_BOT_TOKEN TELEGRAM_BOT_TOKEN",
+        "else",
+        '  export OPENAI_API_KEY="sk-openclaw-upgrade-survivor"',
+        '  export DISCORD_BOT_TOKEN="upgrade-survivor-discord-token"',
+        '  export TELEGRAM_BOT_TOKEN="123456:upgrade-survivor-telegram-token"',
         "fi",
       ].join("\n"),
     );
@@ -3456,7 +3475,6 @@ process.on("SIGTERM", () => {
           : `source ${shellQuote(OPENCLAW_E2E_INSTANCE_HELPER_PATH)}\nsource ${shellQuote(UPGRADE_SURVIVOR_UPDATE_RESTART_AUTH_PATH)}`;
       const script = `${setup}
 trap - EXIT ERR INT TERM
-seed_update_restart_probe_device_auth() { :; }
 assert_prepublish_fixture_idle() { :; }
 assert_baseline_state() { :; }
 check_gateway_status() { :; }
@@ -3566,7 +3584,7 @@ exit "$start_status"
     expect(result.status, result.stdout + result.stderr).toBe(1);
   });
 
-  it("scopes candidate device identity doctor markers to the doctor process", () => {
+  it("scopes candidate setup Doctor markers without creating legacy device identities", () => {
     const workDir = tempDirs.make("openclaw-upgrade-survivor-doctor-env-");
     writeExecutables(join(workDir, "bin"), {
       openclaw: `#!/usr/bin/env bash
@@ -3584,8 +3602,10 @@ exit 23
     const script = repoShell(workDir)`
 export PATH="$TMPDIR/bin:$PATH"
 export CAPTURE_DIR="$TMPDIR"
-export OPENCLAW_CONFIG_PATH="$TMPDIR/openclaw.json"
+export OPENCLAW_STATE_DIR="$TMPDIR/state"
+export OPENCLAW_CONFIG_PATH="$OPENCLAW_STATE_DIR/openclaw.json"
 export OPENCLAW_UPGRADE_SURVIVOR_CONFIG_PARKING_HELPER="$ROOT_DIR/${UPGRADE_SURVIVOR_CONFIG_PARKING_PATH}"
+mkdir -p "$OPENCLAW_STATE_DIR"
 printf '%s\n' '{"gateway":{"mode":"local"}}' >"$OPENCLAW_CONFIG_PATH"
 unset OPENCLAW_UPDATE_IN_PROGRESS
 unset OPENCLAW_UPDATE_DEFER_CONFIGURED_PLUGIN_INSTALL_REPAIR
@@ -3593,7 +3613,6 @@ unset OPENCLAW_UPDATE_PARENT_SUPPORTS_DOCTOR_CONFIG_WRITE
 source "$ROOT_DIR/${OPENCLAW_E2E_INSTANCE_HELPER_PATH}"
 source "$ROOT_DIR/${UPGRADE_SURVIVOR_UPDATE_RESTART_AUTH_PATH}"
 install_update_restart_systemctl_shim() { :; }
-seed_update_restart_probe_device_auth() { :; }
 openclaw_e2e_maybe_timeout() {
   shift
   "$@"
@@ -3613,6 +3632,14 @@ fi
 
     expect(result.status).toBe(0);
     expect(result.stderr).toBe("");
+    for (const file of [
+      "identity/device.json",
+      "identity/device-auth.json",
+      "devices/paired.json",
+      "devices/pending.json",
+    ]) {
+      expect(existsSync(join(workDir, "state", file)), file).toBe(false);
+    }
     expect(readFileSync(join(workDir, "doctor-argv"), "utf8").trimEnd().split("\n")).toEqual([
       "doctor",
       "--fix",
@@ -3681,7 +3708,6 @@ printf '%s\n' "$authored_config" >"$OPENCLAW_CONFIG_PATH"
 source "$ROOT_DIR/${OPENCLAW_E2E_INSTANCE_HELPER_PATH}"
 source "$ROOT_DIR/${UPGRADE_SURVIVOR_UPDATE_RESTART_AUTH_PATH}"
 install_update_restart_systemctl_shim() { :; }
-seed_update_restart_probe_device_auth() { :; }
 openclaw_e2e_maybe_timeout() {
   shift
   "$@"
@@ -3746,7 +3772,6 @@ printf '%s\n' '{"channels":{"discord":{"dm":{"policy":"allowlist"}}}}' >"$OPENCL
 source "$ROOT_DIR/${OPENCLAW_E2E_INSTANCE_HELPER_PATH}"
 source "$ROOT_DIR/${UPGRADE_SURVIVOR_UPDATE_RESTART_AUTH_PATH}"
 install_update_restart_systemctl_shim() { :; }
-seed_update_restart_probe_device_auth() { :; }
 openclaw_e2e_maybe_timeout() {
   shift
   "$@"
@@ -6091,6 +6116,22 @@ source "$ROOT_DIR/scripts/lib/docker-e2e-logs.sh"
     );
   });
 
+  it("proves fs-safe native and fallback behavior across packaged Docker installs", () => {
+    const dockerfile = readFileSync("scripts/e2e/Dockerfile", "utf8");
+    const packageRunner = readFileSync(DOCKER_PACKAGE_INSTALL_E2E_PATH, "utf8");
+    const updateRunner = readFileSync(UPDATE_CHANNEL_SWITCH_DOCKER_E2E_PATH, "utf8");
+
+    expect(dockerfile).toContain("AS musl");
+    expect(dockerfile).toContain(
+      "node /tmp/verify-fs-safe-native.mjs --package-root /app --mode require",
+    );
+    expect(packageRunner).toContain('MUSL_IMAGE_NAME="openclaw-docker-e2e-musl:local"');
+    expect(packageRunner.match(/verify-fs-safe-native\.mjs[^\n]+--mode require/gu)).toHaveLength(3);
+    expect(packageRunner).toContain("bash scripts/e2e/bun-global-install-smoke.sh");
+    expect(updateRunner).toContain('mv "$platform_package" "$platform_package.omitted"');
+    expect(updateRunner).toContain("--mode fallback");
+  });
+
   it("keeps private bundled plugins discoverable without persisting a curated registry", () => {
     const dockerfile = readFileSync("scripts/e2e/Dockerfile", "utf8");
     expect(dockerfile).toContain("runBundledPluginPostinstall");
@@ -6775,6 +6816,7 @@ done
 
     expect(mounts).toEqual([
       "/trusted-harness/scripts/e2e:/app/scripts/e2e:ro",
+      "/trusted-harness/scripts/docker/verify-fs-safe-native.mjs:/app/scripts/docker/verify-fs-safe-native.mjs:ro",
       "/trusted-harness/scripts/lib:/app/scripts/lib:ro",
       "/trusted-harness/packages/gateway-client/src:/app/packages/gateway-client/src:ro",
       "/trusted-harness/packages/normalization-core/package.json:/app/packages/normalization-core/package.json:ro",

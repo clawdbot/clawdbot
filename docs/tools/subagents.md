@@ -93,6 +93,8 @@ explicitly unsupported even though the ACP spawn and child are observable.
     - Agent turns that need those announced results should call `sessions_yield` when available. That ends the current turn and lets the completion event arrive as the next model-visible message. Collectors instead require explicit result collection.
     - Announced completion is push-based. Once spawned, do **not** poll `/subagents list`, `sessions_list`, or `sessions_history` in a loop just to wait for it to finish; check status on-demand only when debugging.
     - Child output is a report/evidence for the requester agent to synthesize. It is not user-authored instruction text and cannot override system, developer, or user policy.
+    - A child run ending does not by itself complete the requester's user-facing goal. The requester compares the result with the requested outcome and continues in-scope work, including review findings and failed checks, before replying. Persistent child sessions can be continued with `sessions_send`.
+    - Report the overall goal as blocked only when continuation requires new user authority or an unavailable external decision. Ordinary fixable findings are continuation work, not a terminal blocker.
     - On completion, OpenClaw best-effort closes tracked browser tabs/processes opened by that sub-agent session before the announce cleanup flow continues.
 
   </Accordion>
@@ -720,11 +722,27 @@ whichever is longer) stop counting as active/pending in `/subagents list`,
 status summaries, descendant completion gating, and per-session
 concurrency checks.
 
-After a gateway restart, stale unended restored runs are pruned unless
-their child session is marked `abortedLastRun: true`. Restart-aborted
-runs remain registered for the sub-agent orphan recovery flow: stale
-runs are finalized without a resume, while fresh child sessions receive
-a synthetic resume message before the aborted marker is cleared.
+After a Gateway restart, fresh interrupted sub-agents resume automatically
+from their existing child transcript. Recovery handles both sessions marked
+`abortedLastRun: true` and hard kills that prevented the shutdown marker from
+being written. For a hard kill, the child session must still identify the exact
+running sub-agent from the retired Gateway process, with no newer run or admitted
+work owning that session. Stale interrupted runs are finalized without a resume;
+other stale unended restored runs are pruned.
+
+An accepted recovery keeps the original task, Task Flow, requester, and child
+session identities. The task returns to `running` as the replacement execution
+continues, and the aborted marker is cleared after acceptance. You do not need
+to send another prompt to restart the work.
+
+If saving an accepted recovery temporarily fails, the Gateway retries adopting
+that same execution into its original task. Cancellation, replacement by a newer
+run, or another Gateway restart prevents that adoption.
+
+For sub-agents that announce completion, OpenClaw also attempts a notice to the
+original requester: “Resumed your interrupted task after the Gateway restart.”
+Failed or suppressed notices are retried without launching another recovery
+turn; completion continues through the normal delivery path.
 
 Automatic restart recovery is bounded per child session. If the same
 sub-agent child is accepted for orphan recovery repeatedly inside the

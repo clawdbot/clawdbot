@@ -15,7 +15,6 @@ import {
   resolveLlamaCppEmbeddingModel,
   resolveLlamaCppModelCacheDir,
 } from "./defaults.js";
-import { selectLlamaServerAsset } from "./llama-server-install.js";
 import { resolveManagedLlamaCppProviderConfig } from "./managed-provider-config.js";
 import {
   ensureLlamaCppModel,
@@ -116,7 +115,7 @@ async function prepareEmbeddingServer(
 ): Promise<void> {
   const provider = resolveConfiguredProvider(options);
   const cacheDir = resolveLlamaCppModelCacheDir(provider);
-  const key = JSON.stringify([provider.baseUrl, embeddingSource, cacheDir]);
+  const key = JSON.stringify([provider.baseUrl, provider.localService, embeddingSource, cacheDir]);
   const pending =
     preparedEmbeddingServers.get(key) ??
     (async () => {
@@ -130,6 +129,7 @@ async function prepareEmbeddingServer(
         embeddingModelIsDefault,
         embeddingModelPath,
         port: resolveProviderPort(provider),
+        localService: provider.localService,
       });
     })();
   preparedEmbeddingServers.set(key, pending);
@@ -153,7 +153,6 @@ function wrapProvider(params: {
     runtimeFacts = await inspectLlamaServerRuntime({
       baseUrl: params.baseUrl,
       modelId: DEFAULT_LLAMA_CPP_EMBEDDING_MODEL_ID,
-      backend: selectLlamaServerAsset().backend,
       loadError,
     });
   };

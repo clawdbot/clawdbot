@@ -109,6 +109,7 @@ it.each(["canonical", "managed"] as const)(
     await captureEntered.promise;
     expect(owner.killReconciliation).toBeDefined();
     const order: string[] = [];
+    const completionCommitted = createDeferred();
     const store = getTaskRegistryStore();
     const upsert = store.upsertTaskWithDeliveryState!;
     let faults = 0;
@@ -140,31 +141,20 @@ it.each(["canonical", "managed"] as const)(
         expect(subagentRuns.get(owner.runId)).toBe(owner);
         expect(owner.generation).toBe(generation);
         expect(store.loadSnapshot().tasks.get(peer.taskId)?.status).toBe("succeeded");
+        completionCommitted.resolve();
       }
     });
-    const resolveTargetState = killRuntime.resolveSubagentKillTargetState;
-    const releaseCaptureAfterHandoff = (remaining: number): void => {
-      if (remaining === 0) {
+    const killRun = killRuntime.killSubagentRun;
+    vi.spyOn(killRuntime, "killSubagentRun").mockImplementation(async (params) => {
+      const result = await killRun(params);
+      if (params.entry === owner) {
+        const target = result.targetState;
+        order.push(`snapshot ${target?.state === "terminal" ? target.task.status : target?.state}`);
+        // Hold the actual stale result until same-owner completion commits. This
+        // exercises publication ordering without depending on promise-layer counts.
         order.push("capture released");
         capture.resolve("completed native reply");
-      } else {
-        queueMicrotask(() => releaseCaptureAfterHandoff(remaining - 1));
-      }
-    };
-    const killRun = killRuntime.killSubagentRun;
-    vi.spyOn(killRuntime, "killSubagentRun").mockImplementation((params) => {
-      const pending = killRun(params);
-      if (params.entry === owner) {
-        // Let capture finish as the real kill promises unwind; assertions below
-        // require the observed snapshot -> commit -> publication ordering.
-        releaseCaptureAfterHandoff(5);
-      }
-      return pending;
-    });
-    vi.spyOn(killRuntime, "resolveSubagentKillTargetState").mockImplementation((entry) => {
-      const result = resolveTargetState(entry);
-      if (entry === owner) {
-        order.push(`snapshot ${result?.state === "terminal" ? result.task.status : result?.state}`);
+        await completionCommitted.promise;
       }
       return result;
     });
@@ -461,7 +451,9 @@ it.each([
         }
       }
       if (priorChildKill) {
-        expect(findTaskByRunId("publication-first")?.status).toBe("cancelled");
+        await vi.waitFor(() => {
+          expect(findTaskByRunId("publication-first")?.status).toBe("cancelled");
+        });
       }
       if (replace) {
         // The root lifecycle lock and any marker write have finished before follow-up admission.

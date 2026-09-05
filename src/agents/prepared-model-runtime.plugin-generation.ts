@@ -1,13 +1,7 @@
-import {
-  listRuntimePluginIdsFromRegistry,
-  registryContainsRuntimePluginIds,
-} from "../plugins/active-runtime-registry.js";
+import { registryContainsRuntimePluginIds } from "../plugins/active-runtime-registry.js";
 import { withPluginRuntimeGenerationScope } from "../plugins/runtime/generation-scope.js";
 import { augmentPreparedModelCatalogWithAgentHarness } from "./harness/model-catalog.js";
-import {
-  resolveAgentRuntimePluginLoadPlan,
-  resolveAgentRuntimePluginSelections,
-} from "./harness/runtime-plugin-load-plan.js";
+import { resolveAgentRuntimePluginLoadPlan } from "./harness/runtime-plugin-load-plan.js";
 import { buildPreparedModelCatalogSnapshot } from "./model-catalog.js";
 import type {
   PreparedModelRuntimeCatalogMode,
@@ -31,18 +25,23 @@ export function preparedPluginGenerationSupportsSelections(
     return true;
   }
   const registry = generation.pluginRegistry;
-  if (!registry) {
-    return false;
-  }
   const plan = resolveAgentRuntimePluginLoadPlan({
     config: input.config,
     workspaceDir:
       generation.pluginMetadataSnapshot.workspaceDir ?? input.workspaceDir ?? process.cwd(),
-    basePluginIds: listRuntimePluginIdsFromRegistry(registry),
-    selections: resolveAgentRuntimePluginSelections(input.config, input.runtimePluginSelections),
+    selections: input.runtimePluginSelections,
     metadataSnapshot: generation.pluginMetadataSnapshot,
   });
-  return registryContainsRuntimePluginIds(registry, plan.pluginIds);
+  // Failed loads are recorded generation outcomes, not missing owners. Preserve their
+  // diagnostics without making unrelated configured harnesses a condition of borrowing.
+  return (
+    registry !== undefined &&
+    (plan.pluginIds ?? []).every(
+      (id) =>
+        registry.plugins.some((plugin) => plugin.id === id && plugin.status === "error") ||
+        registryContainsRuntimePluginIds(registry, [id]),
+    )
+  );
 }
 
 export function preparedPluginGenerationReusesBase(
