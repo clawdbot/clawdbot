@@ -992,7 +992,7 @@ async function buildResponsesPayload(
   const pendingCommandProgress = (
     progressInput: ResponsesInputItem[],
     command: string,
-    allowsFailure = false,
+    expectedOutcome: "success" | "failure" | "either" = "success",
   ) => {
     const progress = readProgressCommand(progressInput, command);
     if (progress.error) {
@@ -1005,7 +1005,12 @@ async function buildResponsesPayload(
         timeout: 30_000,
       });
     }
-    return progress.failed && !allowsFailure ? buildAssistantEvents("BUG-TOOL-FAILED") : null;
+    if (expectedOutcome === "failure" && !progress.failed) {
+      return buildAssistantEvents("BUG-TOOL-DID-NOT-FAIL");
+    }
+    return progress.failed && expectedOutcome === "success"
+      ? buildAssistantEvents("BUG-TOOL-FAILED")
+      : null;
   };
   const allInputText = extractAllRequestTexts(input, body);
   const hasCompactionRetryDurableContext = allInputText.includes(
@@ -1819,7 +1824,11 @@ async function buildResponsesPayload(
       const pending = pendingCommandProgress(
         progressInput,
         command,
-        /completes or fails/iu.test(scenarioFamilyPrompt),
+        /command fails/iu.test(scenarioFamilyPrompt)
+          ? "failure"
+          : /completes or fails/iu.test(scenarioFamilyPrompt)
+            ? "either"
+            : "success",
       );
       if (pending) {
         return pending;
