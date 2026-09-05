@@ -265,7 +265,10 @@ dispatch so authorization failures have one canonical structured response:
   arbitrary host or node paths remain `operator.admin`.
 - `worktrees.branches` needs `operator.write`. Its handler limits non-admin
   callers to workspace-contained paths or registered-project roots; other host
-  paths require `operator.admin`.
+  paths require `operator.admin`. That refusal is the standard `FORBIDDEN`
+  missing-scope error with `MISSING_SCOPE` details, the same shape as the
+  `sessions.create` and `fs.listDir` outside-workspace refusals, so clients can
+  show the access requirement instead of a repository failure.
 - `talk.config` needs `operator.read`; `includeSecrets: true` also needs
   `operator.talk.secrets`.
 - `talk.client.*`, `talk.session.*`, `talk.speak`, and `talk.mode` need

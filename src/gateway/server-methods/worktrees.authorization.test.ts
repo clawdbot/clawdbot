@@ -23,23 +23,33 @@ function worktreeRecord(repoRoot: string): ManagedWorktreeRecord {
   };
 }
 
-async function dispatchCreate(params: { repoRoot: string; scopes: string[]; workspace: string }) {
+type WorktreeAuthMethod = "worktrees.create" | "worktrees.branches";
+
+async function dispatchWorktreeMethod(params: {
+  method: WorktreeAuthMethod;
+  repoRoot: string;
+  scopes: string[];
+  workspace: string;
+}) {
   const create = vi.fn(async () => worktreeRecord(params.repoRoot));
-  const handler = createWorktreesHandlers({ create } as never)["worktrees.create"];
+  const listRepositoryBranches = vi.fn(async () => ({ branches: [] }));
+  const handler = createWorktreesHandlers({ create, listRepositoryBranches } as never)[
+    params.method
+  ];
   if (!handler) {
-    throw new Error("worktrees.create handler is not registered");
+    throw new Error(`${params.method} handler is not registered`);
   }
   const respond = vi.fn();
   await handleGatewayRequest({
     req: {
       type: "req",
-      id: "req-worktree-create",
-      method: "worktrees.create",
+      id: `req-${params.method}`,
+      method: params.method,
       params: { repoRoot: params.repoRoot },
     },
     respond,
     client: {
-      connId: "conn-worktree-create",
+      connId: "conn-worktree-auth",
       connect: {
         role: "operator",
         scopes: params.scopes,
@@ -55,10 +65,25 @@ async function dispatchCreate(params: { repoRoot: string; scopes: string[]; work
       }),
       logGateway: { warn: vi.fn() },
     } as unknown as Parameters<typeof handleGatewayRequest>[0]["context"],
-    extraHandlers: { "worktrees.create": handler },
+    extraHandlers: { [params.method]: handler },
   });
-  return { create, respond };
+  return { create, listRepositoryBranches, respond };
 }
+
+function dispatchCreate(params: { repoRoot: string; scopes: string[]; workspace: string }) {
+  return dispatchWorktreeMethod({ ...params, method: "worktrees.create" });
+}
+
+// Clients distinguish an authorization refusal from a Git failure only through this shape.
+const ADMIN_SCOPE_DENIAL = {
+  code: "FORBIDDEN",
+  message: "missing scope: operator.admin",
+  details: {
+    code: "MISSING_SCOPE",
+    missingScope: "operator.admin",
+    requiredScopes: ["operator.admin"],
+  },
+};
 
 describe("worktrees.create authorization", () => {
   it("allows write-scoped creation inside an agent workspace", async () => {
@@ -94,11 +119,7 @@ describe("worktrees.create authorization", () => {
       workspace,
     });
     expect(write.create).not.toHaveBeenCalled();
-    expect(write.respond).toHaveBeenCalledWith(
-      false,
-      undefined,
-      expect.objectContaining({ code: "INVALID_REQUEST" }),
-    );
+    expect(write.respond).toHaveBeenCalledWith(false, undefined, ADMIN_SCOPE_DENIAL);
 
     const admin = await dispatchCreate({
       repoRoot: outside,
@@ -109,5 +130,32 @@ describe("worktrees.create authorization", () => {
       expect.objectContaining({ repoRoot: outside, runSetupScript: true }),
     );
     expect(admin.respond).toHaveBeenCalledWith(true, worktreeRecord(outside), undefined);
+  });
+});
+
+describe("worktrees.branches authorization", () => {
+  it("refuses arbitrary host paths with the missing-scope shape, not a request error", async () => {
+    const root = await fs.realpath(tempDirs.make("openclaw-worktree-branches-host-auth-"));
+    const workspace = path.join(root, "workspace");
+    const outside = path.join(root, "outside");
+    await Promise.all([fs.mkdir(workspace), fs.mkdir(outside)]);
+
+    const write = await dispatchWorktreeMethod({
+      method: "worktrees.branches",
+      repoRoot: outside,
+      scopes: ["operator.write"],
+      workspace,
+    });
+    expect(write.listRepositoryBranches).not.toHaveBeenCalled();
+    expect(write.respond).toHaveBeenCalledWith(false, undefined, ADMIN_SCOPE_DENIAL);
+
+    const admin = await dispatchWorktreeMethod({
+      method: "worktrees.branches",
+      repoRoot: outside,
+      scopes: ["operator.admin"],
+      workspace,
+    });
+    expect(admin.listRepositoryBranches).toHaveBeenCalledWith(outside);
+    expect(admin.respond).toHaveBeenCalledWith(true, { branches: [] }, undefined);
   });
 });

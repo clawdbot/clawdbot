@@ -4,6 +4,7 @@ import {
   type EnvironmentSummary,
   ErrorCodes,
   errorShape,
+  missingScopeErrorShape,
   validateDesktopLaunchParams,
   validateDesktopObserveParams,
   validateEnvironmentsCreateParams,
@@ -473,7 +474,10 @@ export const environmentsHandlers: GatewayRequestHandlers = {
         respond(
           false,
           undefined,
-          errorShape(ErrorCodes.FORBIDDEN, `missing scope: ${access.missingScope}`),
+          missingScopeErrorShape({
+            missingScope: access.missingScope,
+            requiredScopes: [WRITE_SCOPE],
+          }),
         );
         return;
       }
