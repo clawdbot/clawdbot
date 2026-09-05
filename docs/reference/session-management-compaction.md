@@ -286,6 +286,12 @@ Two additional guards run outside these paths:
 
 OpenClaw enforces a built-in reserve for embedded runs and caps it at one quarter of the active model context window. The default reserve remains 20,000 tokens for windows of 80,000 tokens or larger. Smaller windows retain at least three quarters of their capacity for prompts and conversation, while the reserve leaves room for compaction summaries and housekeeping such as the memory flush.
 
+Direct-command post-turn maintenance shares the command's remaining timeout
+allowance across memory flushing and compaction. Expiry cancels maintenance
+without discarding an already completed reply; accepted compaction commits remain
+accounted for. Explicit caller cancellation and session ownership checks still
+apply, and an unlimited command timeout remains unlimited.
+
 Set `enabled: false` to disable threshold-driven auto-compaction inside the embedded agent runtime and direct-command post-turn maintenance. OpenClaw's reply preflight and overflow-recovery compaction paths remain available, and manual `/compact` continues to work.
 
 Manual `/compact` uses `agents.defaults.compaction.keepRecentTokens` (default: `20000`) and keeps that recent-tail cut point.
