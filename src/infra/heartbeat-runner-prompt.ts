@@ -45,7 +45,7 @@ export function truncateHeartbeatPreview(value: string | undefined): string | un
   return value ? truncateUtf16Safe(value, 200) : undefined;
 }
 
-type HeartbeatSkipReason = "empty-heartbeat-file" | typeof HEARTBEAT_SKIP_NO_PENDING_EVENT;
+type HeartbeatSkipReason = "empty-heartbeat-scratch" | typeof HEARTBEAT_SKIP_NO_PENDING_EVENT;
 
 type HeartbeatPreflight = HeartbeatWakePayloadFlags & {
   session: ReturnType<typeof resolveHeartbeatSessionSelection>;
@@ -181,7 +181,7 @@ export async function resolveHeartbeatPreflight(params: {
   if (isHeartbeatContentEffectivelyEmpty(heartbeatScratchContent)) {
     return {
       ...basePreflight,
-      skipReason: "empty-heartbeat-file",
+      skipReason: "empty-heartbeat-scratch",
     };
   }
   return basePreflight;

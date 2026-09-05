@@ -332,7 +332,7 @@ flowchart TD
 
     - `cron: scheduler disabled; jobs will not run automatically` → cron is disabled.
     - `heartbeat skipped` reason `quiet-hours` → outside configured active hours.
-    - `heartbeat skipped` reason `empty-heartbeat-file` → heartbeat monitor scratch contains only blank, comment, header, fence, or empty-checklist scaffolding.
+    - `heartbeat skipped` reason `empty-heartbeat-scratch` → heartbeat monitor scratch contains only blank, comment, header, fence, or empty-checklist scaffolding.
     - `heartbeat skipped` reason `alerts-disabled` → `showOk`, `showAlerts`, and `useIndicator` are all off.
     - `requests-in-flight` → main lane busy; heartbeat wake deferred.
     - `unknown accountId` → heartbeat delivery target account does not exist.

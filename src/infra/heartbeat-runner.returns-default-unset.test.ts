@@ -2088,7 +2088,7 @@ tasks:
       queueCronEvent?: boolean;
       queueSystemEvent?: boolean;
       expectedStatus: "ran" | "skipped";
-      expectedSkipReason?: "empty-heartbeat-file";
+      expectedSkipReason?: "empty-heartbeat-scratch";
       expectedSendCalls: number;
       expectedReplyCalls: number;
       expectCronContext?: boolean;
@@ -2099,7 +2099,7 @@ tasks:
         name: "empty file + interval skips",
         fileState: "empty",
         expectedStatus: "skipped",
-        expectedSkipReason: "empty-heartbeat-file",
+        expectedSkipReason: "empty-heartbeat-scratch",
         expectedSendCalls: 0,
         expectedReplyCalls: 0,
       },
@@ -2107,7 +2107,7 @@ tasks:
         name: "fenced empty template + interval skips",
         fileState: "fenced-empty",
         expectedStatus: "skipped",
-        expectedSkipReason: "empty-heartbeat-file",
+        expectedSkipReason: "empty-heartbeat-scratch",
         expectedSendCalls: 0,
         expectedReplyCalls: 0,
       },

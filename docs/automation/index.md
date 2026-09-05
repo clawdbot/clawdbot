@@ -108,7 +108,7 @@ Heartbeat is a system-owned monitor automation that runs a periodic main-session
 turn, every 30 minutes by default. It can use small monitor-scratch context to
 surface anything requiring attention without creating a detached task record or
 extending session freshness. Create separate automation jobs for work requiring
-its own schedule. Empty scratch skips as `empty-heartbeat-file`. Scheduled
+its own schedule. Empty scratch skips as `empty-heartbeat-scratch`. Scheduled
 monitor turns defer while the main queue or automation work is busy, another run
 for the same agent is active, or the target session has active or queued work.
 
