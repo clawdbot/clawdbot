@@ -9,10 +9,14 @@ import {
 } from "openclaw/plugin-sdk/agent-harness-runtime";
 import { openFileBackedSessionManagerForTest } from "openclaw/plugin-sdk/agent-runtime-test-contracts";
 import { SessionManager } from "openclaw/plugin-sdk/agent-sessions";
+import { buildMemorySystemPromptAddition } from "openclaw/plugin-sdk/core";
 import { createDeferred } from "openclaw/plugin-sdk/extension-shared";
 import { initializeGlobalHookRunner } from "openclaw/plugin-sdk/hook-runtime";
 import { MESSAGE_TOOL_DELIVERY_HINTS } from "openclaw/plugin-sdk/message-tool-delivery-hints";
-import { createMockPluginRegistry } from "openclaw/plugin-sdk/plugin-test-runtime";
+import {
+  createMockPluginRegistry,
+  getActivePluginRegistry,
+} from "openclaw/plugin-sdk/plugin-test-runtime";
 import { registerSandboxBackend } from "openclaw/plugin-sdk/sandbox";
 import { upsertSessionEntry } from "openclaw/plugin-sdk/session-store-runtime";
 import { readSessionTranscriptEvents } from "openclaw/plugin-sdk/session-transcript-runtime";
@@ -377,6 +381,54 @@ describe("runCodexAppServerAttempt context-engine lifecycle", () => {
       expect(openSpy).not.toHaveBeenCalled();
     },
   );
+
+  it("projects prepared memory for the explicit prompt owner into Codex", async () => {
+    const ownerMarker = "WIKI_OWNER_MARKER_127775";
+    const decoyMarker = "WIKI_DECOY_MARKER_127775";
+    const prepare = vi.fn(async ({ agentId }: { agentId?: string }) => [
+      agentId === "hq" ? ownerMarker : decoyMarker,
+    ]);
+    const registry = getActivePluginRegistry();
+    if (!registry) {
+      throw new Error("expected active plugin registry");
+    }
+    registry.memoryPromptPreparations.push({ pluginId: "memory-wiki", prepare });
+    const contextEngine = createContextEngine({
+      assemble: vi.fn(async ({ messages, availableTools, citationsMode }) => ({
+        messages,
+        estimatedTokens: 42,
+        systemPromptAddition: buildMemorySystemPromptAddition({
+          availableTools: availableTools ?? new Set(),
+          citationsMode,
+        }),
+      })),
+    });
+    const sessionFile = path.join(tempDir, "memory-owner.jsonl");
+    const workspaceDir = path.join(tempDir, "memory-owner-workspace");
+    const harness = createStartedThreadHarness();
+    const params = createParams(sessionFile, workspaceDir);
+    params.agentId = "openclaw";
+    params.sessionKey = "agent:openclaw:main";
+    params.memoryPromptAgentId = "hq";
+    params.contextEngine = contextEngine;
+
+    const run = runCodexAppServerAttempt(params);
+    await harness.waitForMethod("turn/start");
+
+    expect(prepare).toHaveBeenCalledWith(
+      expect.objectContaining({
+        agentId: "hq",
+        agentSessionKey: "agent:openclaw:main",
+      }),
+    );
+    const threadStartParams = requireRequestParams(harness, "thread/start");
+    const developerInstructions = readStringValue(threadStartParams.developerInstructions) ?? "";
+    expect(developerInstructions).toContain(ownerMarker);
+    expect(developerInstructions).not.toContain(decoyMarker);
+
+    await harness.completeTurn();
+    await run;
+  });
 
   it("starts a fresh turn before the post-start mirror records admission", async () => {
     const beforeMessageWrite = vi.fn();

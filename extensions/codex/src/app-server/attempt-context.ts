@@ -317,7 +317,8 @@ export async function buildCodexWorkspaceBootstrapContext(params: {
             toolNames: params.memoryToolNames,
             memoryToolRouted: memoryToolsAvailable,
             citationsMode: params.params.config?.memory?.citations,
-            agentId: params.params.agentId ?? params.sessionAgentId,
+            agentId:
+              params.params.memoryPromptAgentId ?? params.params.agentId ?? params.sessionAgentId,
             agentSessionKey: params.sessionKey,
             sandboxed: params.sandboxed,
           })

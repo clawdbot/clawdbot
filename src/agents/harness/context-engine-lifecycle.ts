@@ -164,7 +164,7 @@ export async function assembleHarnessContextEngine(params: {
   contextEngine?: HarnessContextEngine;
   sessionId: string;
   sessionKey?: string;
-  agentId?: string;
+  memoryPromptAgentId?: string;
   appendOnlyRuntimeContext?: boolean;
   messages: AgentMessage[];
   tokenBudget?: number;
@@ -221,7 +221,8 @@ export async function assembleHarnessContextEngine(params: {
             {
               availableTools: params.availableTools ?? new Set(),
               citationsMode: params.citationsMode,
-              agentId: params.agentId ?? resolveAgentIdFromSessionKey(params.sessionKey),
+              agentId:
+                params.memoryPromptAgentId ?? resolveAgentIdFromSessionKey(params.sessionKey),
               agentSessionKey: params.sessionKey,
               sandboxed: params.sandboxed,
             },
