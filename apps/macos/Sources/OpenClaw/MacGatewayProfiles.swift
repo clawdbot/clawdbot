@@ -173,7 +173,7 @@ actor MacGatewayProfileStore {
         defer { self.committingBrowserSignIns.remove(attempt.id) }
         // Retire the old socket before revocation; its pending hello must not
         // repersist a device token after the browser credential commits.
-        _ = await MacGatewayConnectionFleet.shared.remove(profileID: attempt.profileID)
+        await MacGatewayConnectionFleet.shared.disconnect(profileID: attempt.profileID)
         try Task.checkCancellation()
         guard self.browserSignInAttempts[attempt.profileID] == attempt.id else {
             throw GatewayBrowserSessionError.superseded
@@ -246,7 +246,7 @@ actor MacGatewayProfileStore {
         if let attemptID = self.browserSignInAttempts[profileID],
            self.committingBrowserSignIns.contains(attemptID)
         {
-            // A window can request a replacement fleet connection while shutdown
+            // A window can request the profile connection while shutdown
             // suspends. It must not reacquire the credentials being retired.
             throw GatewayBrowserSessionError.superseded
         }
@@ -444,6 +444,12 @@ actor MacGatewayConnectionFleet {
         guard let connection = self.connections.removeValue(forKey: profileID) else { return nil }
         await connection.shutdown()
         return connection
+    }
+
+    func disconnect(profileID: String) async {
+        // Profile observers outlive credentials. Retire the socket while keeping
+        // their connection owner so successor hello and expiry events still arrive.
+        await self.connections[profileID]?.shutdown()
     }
 
     func shutdown() async -> [GatewayConnection] {

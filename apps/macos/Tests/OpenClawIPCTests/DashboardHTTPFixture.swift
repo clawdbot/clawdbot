@@ -71,7 +71,7 @@ final class DashboardHTTPFixture {
         listener.start(queue: .main)
         do {
             let deadline = ContinuousClock.now + .seconds(5)
-            while ContinuousClock.now < deadline {
+            while true {
                 try Task.checkCancellation()
                 switch listener.state {
                 case .ready:
@@ -91,12 +91,14 @@ final class DashboardHTTPFixture {
                 case .cancelled:
                     throw CancellationError()
                 default:
+                    guard ContinuousClock.now < deadline else {
+                        throw URLError(.timedOut, userInfo: [
+                            NSLocalizedDescriptionKey: "Dashboard HTTP fixture listener timed out: \(listener.state)",
+                        ])
+                    }
                     try await Task.sleep(for: .milliseconds(10))
                 }
             }
-            throw URLError(.timedOut, userInfo: [
-                NSLocalizedDescriptionKey: "Dashboard HTTP fixture listener timed out: \(listener.state)",
-            ])
         } catch {
             listener.cancel()
             throw error
