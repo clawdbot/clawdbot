@@ -692,6 +692,7 @@ verification and reporting after migration,
 preserving the same run ID and recorded activation steps.
 
 For pnpm and Bun, changes to sibling global packages after staging refuse automatic rollback (`rollback-project-changed`) without restoring the shared project; keep a reachable candidate installed, otherwise keep the Gateway stopped and follow the report’s repair command.
+A refusal before the live swap restarts the unchanged Gateway and preserves the sibling changes.
 
 ### Before updating: create a verified backup
 

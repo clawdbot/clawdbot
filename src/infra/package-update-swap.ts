@@ -170,6 +170,7 @@ export async function swapStagedPackageInstall(params: {
   packageName: string;
   postVerifyStep?: (packageRoot: string) => Promise<UpdateStepResult | null>;
   beforeActivate?: () => Promise<void>;
+  onLiveMutation?: () => void;
   onTransaction?: (transaction: PackageUpdateTransaction) => void;
 }): Promise<StagedPackageSwapResult> {
   const startedAt = Date.now();
@@ -434,8 +435,10 @@ export async function swapStagedPackageInstall(params: {
         },
       });
     }
-    // A copy-fallback move can reject after committing its destination and
-    // partially removing its source. Only a completed backup permits restoration.
+    // A native refusal must still allow the unchanged Gateway to restart.
+    // Mark mutation only now: a copy-fallback move can fail after partial publication,
+    // and only a completed backup permits restoration.
+    params.onLiveMutation?.();
     packageRollbackVerified = false;
     activePackageRoot = null;
     if (hadPackage) {

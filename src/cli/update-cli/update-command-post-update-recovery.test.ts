@@ -204,7 +204,7 @@ describe("skipped update exit status", () => {
   });
 });
 
-describe("failed Git update recovery restart", () => {
+describe("failed update recovery restart", () => {
   beforeEach(() => {
     vi.resetAllMocks();
     vi.spyOn(defaultRuntime, "exit").mockImplementation(() => undefined as never);
@@ -244,25 +244,50 @@ describe("failed Git update recovery restart", () => {
   );
 
   it.each(
-    (["error", "skipped"] as const).flatMap((status) =>
-      (["healthy", "failed"] as const).map((service) => ({ status, service })),
+    (
+      [
+        { mode: "git", status: "error", reason: "doctor-failed" },
+        { mode: "git", status: "skipped", reason: "dirty" },
+        { mode: "pnpm", status: "error", reason: "global install swap" },
+      ] as const
+    ).flatMap((outcome) =>
+      (["healthy", "failed"] as const).map((service) => ({ ...outcome, service })),
     ),
-  )("reports the terminal $service recovery for a $status update", async ({ status, service }) => {
-    mocks.restart.mockResolvedValueOnce(service);
-    const failure = await finishFailedUpdate(
-      {
-        ...failedResult({ serviceRestartSafe: true, version: "1.0.0" }),
-        status,
-      },
-      { json: true },
-    );
-    expect(mocks.restart).toHaveBeenCalledOnce();
-    expect(mocks.printResult.mock.lastCall?.[0]).toMatchObject({
-      status: service === "failed" ? "error" : status,
-      recovery: { serviceRestartSafe: true, version: "1.0.0", service },
-    });
-    expect(failure.exitCode).toBe(1);
-  });
+  )(
+    "reports the terminal $service recovery for a $mode $status update",
+    async ({ mode, status, reason, service }) => {
+      mocks.restart.mockResolvedValueOnce(service);
+      const failure = await finishFailedUpdate(
+        {
+          ...failedResult({ serviceRestartSafe: true, version: "1.0.0" }),
+          mode,
+          status,
+          reason,
+          steps: [
+            {
+              name: reason,
+              command: "update",
+              cwd: "/repo",
+              durationMs: 1,
+              exitCode: status === "skipped" ? null : 1,
+            },
+          ],
+        },
+        { json: true },
+      );
+      expect(mocks.restart).toHaveBeenCalledOnce();
+      expect(mocks.restart).toHaveBeenCalledWith(
+        expect.objectContaining({
+          recovery: { serviceRestartSafe: true, version: "1.0.0" },
+        }),
+      );
+      expect(mocks.printResult.mock.lastCall?.[0]).toMatchObject({
+        status: service === "failed" ? "error" : status,
+        recovery: { serviceRestartSafe: true, version: "1.0.0", service },
+      });
+      expect(failure.exitCode).toBe(1);
+    },
+  );
 
   it("does not turn missing producer safety into restart permission", async () => {
     await finishFailedUpdate(failedResult(undefined));

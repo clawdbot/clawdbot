@@ -259,6 +259,7 @@ describe.runIf(process.platform !== "win32")("native package transactions", () =
           expect(result.failedStep).toMatchObject({ name: "global install swap", exitCode: 1 });
           expect(result.failedStep?.stderrTail).toContain("native global installation changed");
           expect(result.afterVersion).toBe("1.0.0");
+          expect(result.recovery).toEqual({ serviceRestartSafe: true, version: "1.0.0" });
           expect(retained).toBeUndefined();
           expect(phases).toEqual([
             ...(manager === "pnpm" ? ["probe root", "probe bin"] : []),

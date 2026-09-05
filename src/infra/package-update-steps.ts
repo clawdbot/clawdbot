@@ -1170,8 +1170,8 @@ export async function runGlobalPackageUpdateSteps(params: {
           installTarget: params.installTarget,
           packageName: params.packageName,
           postVerifyStep: params.postVerifyStep,
-          beforeActivate: async () => {
-            await params.beforeActivate?.();
+          beforeActivate: params.beforeActivate,
+          onLiveMutation: () => {
             liveTreeMutated = true;
           },
           onTransaction: params.onTransaction,
