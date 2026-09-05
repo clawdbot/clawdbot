@@ -232,14 +232,52 @@ prompt budget.
 Symlinks, hardlinked files, `.git`, `node_modules`, and excluded host projections
 are skipped. Unavailable roots and unreadable, malformed, or oversized files
 produce bounded diagnostics without blocking unrelated capabilities. Inspect
-`openclaw logs --follow` if a remote skill is missing; check its frontmatter, requirements,
-location, size, and name collisions. Optional `agents/openai.yaml` text is carried
-by discovery but does not add OpenClaw policy or dependency behavior; use the
-existing OpenClaw `SKILL.md` frontmatter contract.
+`openclaw logs --follow` if a remote skill is missing; check its frontmatter,
+requirements, location, size, and name collisions. Use the existing OpenClaw
+`SKILL.md` frontmatter contract for policy and dependency requirements.
 
 This feature does not load remote plugin code, hooks, global configuration, or
 HTTP/SSE MCP transports, and it does not give workspace instructions additional
 authority.
+
+### Authorize a workspace MCP server
+
+A remote workspace may declare stdio servers in `.mcp.json`, but discovery does
+not grant permission to start them. Select each executable declaration in the
+agent's sandbox configuration:
+
+```json5
+{
+  agents: {
+    defaults: {
+      sandbox: {
+        environment: {
+          capabilityRoots: [
+            {
+              id: "project-tools",
+              location: { type: "workspace" },
+              mcpServers: {
+                reports: {
+                  command: "node",
+                  args: ["./tools/reports.mjs"],
+                  cwd: ".",
+                  env: { REPORT_MODE: "readonly" },
+                },
+              },
+            },
+          ],
+        },
+      },
+    },
+  },
+}
+```
+
+The server name and complete launch identity must exactly match the normalized
+workspace declaration. A changed command, argument, working directory, or
+environment value fails closed before transport or process startup. Keep package
+versions pinned. This selection grants startup authority only; normal and
+sandbox tool policy still controls which discovered tools reach the agent.
 
 ## Configuration reference
 
@@ -537,8 +575,9 @@ filesystem must permit the writes. `sandbox.docker.network`,
   apply only to the Docker backend.
 - Native plugin code, Gateway RPC, web tools, and Gateway-configured MCP servers
   stay on the Gateway host. The built-in agent runtime additionally discovers
-  workspace `.mcp.json` declarations in `remote` mode and runs their stdio MCP
-  servers inside OpenShell. Both sets of tools remain subject to normal and sandbox tool policy.
+  workspace `.mcp.json` declarations in `remote` mode. It runs only declarations
+  explicitly selected under `agents.*.sandbox.environment.capabilityRoots`, and
+  their tools remain subject to normal and sandbox tool policy.
 - HTTP/SSE MCP transports are not environment-owned yet.
 
 ## Troubleshooting

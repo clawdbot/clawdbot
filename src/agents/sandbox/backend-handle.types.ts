@@ -65,7 +65,6 @@ export type SandboxCapabilityRootDiscovery = {
   /** Raw executor-local files; parsing and skill policy remain with core. */
   skills?: Array<{
     instructions: SandboxCapabilityTextFile;
-    metadata?: SandboxCapabilityTextFile;
   }>;
   warnings?: string[];
   error?: string;

@@ -1,3 +1,4 @@
+import type { SandboxEnvironmentCapabilityRootConfig } from "../../config/types.agents-shared.js";
 import type { SkillEligibilityContext, SkillUsagePath } from "../../skills/types.js";
 /**
  * Sandbox runtime configuration and context types.
@@ -84,6 +85,9 @@ export type SandboxConfig = {
   scope: SandboxScope;
   workspaceAccess: SandboxWorkspaceAccess;
   workspaceRoot: string;
+  environment?: {
+    capabilityRoots: SandboxEnvironmentCapabilityRootConfig[];
+  };
   // Podman must omit only the inherited bare /run tmpfs default; explicit /run is rejected.
   dockerTmpfsSource: "default" | "configured";
   docker: SandboxDockerConfig;
@@ -91,6 +95,10 @@ export type SandboxConfig = {
   browser: SandboxBrowserConfig;
   tools: SandboxToolPolicy;
   prune: SandboxPruneConfig;
+};
+
+export type ResolvedSandboxConfig = Omit<SandboxConfig, "environment"> & {
+  environment: NonNullable<SandboxConfig["environment"]>;
 };
 
 export type SandboxBrowserContext = {
@@ -118,6 +126,7 @@ export type SandboxContext = {
   containerWorkdir: string;
   docker: SandboxDockerConfig;
   tools: SandboxToolPolicy;
+  environmentCapabilityRoots?: readonly SandboxEnvironmentCapabilityRootConfig[];
   browserAllowHostControl: boolean;
   browser?: SandboxBrowserContext;
   fsBridge?: SandboxFsBridge;

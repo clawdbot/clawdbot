@@ -7,7 +7,7 @@ import {
   resolveSkillManifestMetadata,
 } from "../../skills/loading/frontmatter.js";
 import { parseSkillContent } from "../../skills/loading/local-loader.js";
-import type { Skill } from "../../skills/loading/skill-contract.js";
+import { compactSkillsPromptForContext, type Skill } from "../../skills/loading/skill-contract.js";
 import { formatSkillsForPromptBounded } from "../../skills/loading/skill-prompt-limits.js";
 import { buildSkillSnapshot } from "../../skills/loading/workspace-skill-prompt.js";
 import type { SkillEntry, SkillSnapshot } from "../../skills/types.js";
@@ -194,7 +194,6 @@ export async function prepareSandboxEnvironmentSkills(params: {
   }
 }
 
-/** Keep explicit/native skills first and apply the existing policy and formatter to additions. */
 export function mergeSandboxEnvironmentSkillCatalog(params: {
   skillsPrompt: string;
   candidates: Skill[];
@@ -204,10 +203,11 @@ export function mergeSandboxEnvironmentSkillCatalog(params: {
   workspaceDir: string;
   snapshot?: SkillSnapshot;
   remoteNote?: string;
+  contextTokenBudget?: number;
   warn: (message: string) => void;
 }): { skillsPrompt: string; candidates: Skill[] } {
   if (params.environmentEntries.length === 0) {
-    return params;
+    return { skillsPrompt: params.skillsPrompt, candidates: params.candidates };
   }
   const nativeByName = new Map(params.candidates.map((skill) => [skill.name, skill]));
   const used = new Set(nativeByName.keys());
@@ -236,15 +236,18 @@ export function mergeSandboxEnvironmentSkillCatalog(params: {
   return {
     candidates,
     // Environment catalogs add at most 4K characters; full instruction bodies remain on demand.
-    skillsPrompt: formatSkillsForPromptBounded({
-      skills: candidates,
-      remoteNote: params.remoteNote,
-      preserveOrder: true,
-      maxSkillsInPrompt: limits?.maxSkillsInPrompt,
-      maxSkillsPromptChars: Math.min(
-        agentLimits?.maxSkillsPromptChars ?? limits?.maxSkillsPromptChars ?? 18_000,
-        params.skillsPrompt.length + 4096,
-      ),
-    }),
+    skillsPrompt: compactSkillsPromptForContext(
+      formatSkillsForPromptBounded({
+        skills: candidates,
+        remoteNote: params.remoteNote,
+        preserveOrder: true,
+        maxSkillsInPrompt: limits?.maxSkillsInPrompt,
+        maxSkillsPromptChars: Math.min(
+          agentLimits?.maxSkillsPromptChars ?? limits?.maxSkillsPromptChars ?? 18_000,
+          params.skillsPrompt.length + 4096,
+        ),
+      }),
+      params.contextTokenBudget,
+    ),
   };
 }

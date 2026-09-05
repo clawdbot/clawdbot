@@ -46,23 +46,16 @@ describe.runIf(process.platform !== "win32")("OpenShell environment capabilities
     )[0]!;
   }
 
-  it("discovers executor-local instruction and metadata text alongside MCP, never arbitrary workspace instructions", async () => {
+  it("discovers executor-local skill instructions alongside MCP, never arbitrary workspace instructions", async () => {
     await put(".mcp.json", "{}");
     await put(".agents/skills/demo/SKILL.md");
-    await put(".agents/skills/demo/agents/openai.yaml", "interface: {}");
     await put("AGENTS.md", "not a skill");
     const result = await discover();
     expect(result.error).toBeUndefined();
     expect(result.warnings).toEqual([]);
     expect(result.mcpConfig).toEqual({ path: `${root}/.mcp.json`, contents: "{}" });
     expect(result.skills).toEqual([
-      {
-        instructions: { path: `${root}/.agents/skills/demo/SKILL.md`, contents },
-        metadata: {
-          path: `${root}/.agents/skills/demo/agents/openai.yaml`,
-          contents: "interface: {}",
-        },
-      },
+      { instructions: { path: `${root}/.agents/skills/demo/SKILL.md`, contents } },
     ]);
   });
 
@@ -79,7 +72,7 @@ describe.runIf(process.platform !== "win32")("OpenShell environment capabilities
     ]);
   });
 
-  it("rejects symlink hops at files, directories and metadata plus hardlinked files", async () => {
+  it("rejects symlink hops at files and directories plus hardlinked files", async () => {
     const outside = await fs.realpath(
       await fs.mkdtemp(path.join(os.tmpdir(), "capability-outside-")),
     );
@@ -88,7 +81,6 @@ describe.runIf(process.platform !== "win32")("OpenShell environment capabilities
       await fs.symlink(path.join(outside, "SKILL.md"), path.join(root, ".mcp.json"));
       await fs.symlink(outside, path.join(root, "escape"));
       await put("valid/SKILL.md");
-      await fs.symlink(outside, path.join(root, "valid/agents"));
       await fs.mkdir(path.join(root, "hardlink"));
       await fs.link(path.join(outside, "SKILL.md"), path.join(root, "hardlink/SKILL.md"));
       const result = await discover();

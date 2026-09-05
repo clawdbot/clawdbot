@@ -153,6 +153,39 @@ describe("environment skill policy and catalogs", () => {
     expect(warn).toHaveBeenCalledWith(expect.stringContaining("collision"));
   });
 
+  it("keeps context compaction after merging environment skills without dropping resources", async () => {
+    const environmentEntries = await prepare([declaration("remote")]);
+    environmentEntries[0]!.skill.readContent = "Full instructions for remote.";
+    const nativeEntries = Array.from({ length: 16 }, (_, index) => {
+      const entry = declaration(`native-${index}`);
+      entry.instructions.contents = `---\nname: native-${index}\ndescription: ${"Detailed matching guidance. ".repeat(20)}\n---\nComplete native instructions ${index}.`;
+      return entry;
+    });
+    const native = await prepare(nativeEntries);
+    for (const [index, entry] of native.entries()) {
+      entry.skill.readContent = `Complete native instructions ${index}.`;
+    }
+    const snapshot = buildSkillSnapshot(root, { entries: native });
+    const merged = mergeSandboxEnvironmentSkillCatalog({
+      skillsPrompt: snapshot.prompt,
+      candidates: snapshot.resolvedSkills!,
+      environmentEntries,
+      contextTokenBudget: 8_192,
+      agentId: "main",
+      workspaceDir: root,
+      warn,
+    });
+
+    expect(merged.skillsPrompt.length).toBeLessThan(snapshot.prompt.length);
+    const resources = resolveCodeModeSkills(merged);
+    expect(resources.map((skill) => skill.name)).toEqual([
+      ...snapshot.resolvedSkills!.map((skill) => skill.name),
+      "remote",
+    ]);
+    expect(await readCodeModeSkill(resources[0]!)).toContain("Complete native instructions 0.");
+    expect(await readCodeModeSkill(resources.at(-1)!)).toContain("Full instructions for remote.");
+  });
+
   it("does not reinterpret host-projected instructions, even when returned by discovery", async () => {
     await fs.mkdir(path.join(root, "skills/host"), { recursive: true });
     const context = sandbox();

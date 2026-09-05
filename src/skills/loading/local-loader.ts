@@ -141,7 +141,7 @@ export function parseSkillContent(params: {
       disableModelInvocation: invocation.disableModelInvocation,
     },
     frontmatter,
-    content: raw,
+    content: params.content,
   };
 }
 

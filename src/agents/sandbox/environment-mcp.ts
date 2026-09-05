@@ -1,8 +1,10 @@
 import crypto from "node:crypto";
 import path from "node:path";
+import { isDeepStrictEqual } from "node:util";
 import type { Transport } from "@modelcontextprotocol/sdk/shared/transport.js";
 import type { JSONRPCMessage } from "@modelcontextprotocol/sdk/types.js";
 import type { SessionToolOverrides } from "../../config/sessions/types.js";
+import type { SandboxEnvironmentCapabilityRootConfig } from "../../config/types.agents-shared.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import { racePromiseWithAbortSignal } from "../../infra/abort-signal.js";
 import { logWarn } from "../../logger.js";
@@ -13,11 +15,11 @@ import type { BundleMcpToolRuntime } from "../agent-bundle-mcp-types.js";
 import { OpenClawStdioClientTransport } from "../mcp-stdio-transport.js";
 import { resolveMcpTransportConfig } from "../mcp-transport-config.js";
 import { attachMcpStderrLogging, type ResolvedMcpTransport } from "../mcp-transport.js";
+import type { SandboxBackendExecSpec, SandboxBackendHandle } from "./backend-handle.types.js";
 import type {
-  SandboxBackendExecSpec,
-  SandboxBackendHandle,
-  SandboxCapabilityRootDiscovery,
-} from "./backend-handle.types.js";
+  SandboxEnvironmentCapabilityDiscovery,
+  SandboxEnvironmentMcpAuthorization,
+} from "./environment-capabilities.js";
 import { isPathInsideContainerRoot } from "./path-utils.js";
 import { prepareSandboxRemoteProcess } from "./remote-process.js";
 import { shellEscape } from "./ssh.js";
@@ -46,6 +48,7 @@ class SandboxStdioMcpTransport implements Transport {
       cwd?: string;
       env?: Record<string, string>;
     },
+    private readonly isAuthorized: () => boolean,
   ) {}
 
   async start(): Promise<void> {
@@ -55,6 +58,9 @@ class SandboxStdioMcpTransport implements Transport {
     this.started = true;
     let validated: string | null | undefined;
     try {
+      if (!this.isAuthorized()) {
+        throw new Error("Sandbox MCP startup authorization was revoked");
+      }
       const workdir = path.posix.resolve(this.root, this.server.cwd ?? ".");
       if (!isPathInsideContainerRoot(this.root, workdir) || !this.backend.validateWorkdir) {
         throw new Error(
@@ -62,8 +68,13 @@ class SandboxStdioMcpTransport implements Transport {
         );
       }
       validated = await this.backend.validateWorkdir(workdir);
+      if (this.closed) {
+        throw new Error("Sandbox MCP startup was cancelled");
+      }
+      if (!this.isAuthorized()) {
+        throw new Error("Sandbox MCP startup authorization was revoked");
+      }
       if (
-        this.closed ||
         !validated ||
         !path.posix.isAbsolute(validated) ||
         !isPathInsideContainerRoot(this.root, validated)
@@ -80,10 +91,14 @@ class SandboxStdioMcpTransport implements Transport {
         env: this.remoteProcess.env,
         usePty: false,
       });
-      // Preparation can finish after disposal. Retain its lease for cleanup,
-      // but never launch a process once the owning transport has closed.
+      // Preparation can finish after disposal or config reload. Retain its lease for cleanup,
+      // then revalidate synchronously before the process boundary so neither closure nor grant
+      // revocation can launch a stale transport.
       if (this.closed || this.prepared.stdinMode !== "pipe-open" || !this.prepared.argv[0]) {
         throw new Error("Sandbox MCP startup was cancelled or the backend cannot host stdio MCP");
+      }
+      if (!this.isAuthorized()) {
+        throw new Error("Sandbox MCP startup authorization was revoked");
       }
       const inner = new OpenClawStdioClientTransport({
         command: this.prepared.argv[0],
@@ -194,17 +209,89 @@ class SandboxStdioMcpTransport implements Transport {
   }
 }
 
-function collectDiscoveredStdioServers(
-  discoveries: readonly SandboxCapabilityRootDiscovery[],
-  workspace: string,
+type AuthorizedSandboxMcpServer = {
+  root: string;
+  config: BundleMcpServerConfig;
+  authorization: SandboxEnvironmentMcpAuthorization;
+};
+
+function resolveSandboxMcpLaunchIdentity(
+  serverName: string,
+  root: string,
+  config: BundleMcpServerConfig,
 ) {
-  const servers = new Map<string, { root: string; config: BundleMcpServerConfig }>();
+  const resolved = resolveMcpTransportConfig(serverName, config, { logWarnings: false });
+  if (resolved?.kind !== "stdio") {
+    return undefined;
+  }
+  return {
+    command: resolved.command,
+    args: resolved.args ?? [],
+    cwd: path.posix.resolve(root, resolved.cwd ?? "."),
+    env: resolved.env ?? {},
+  };
+}
+
+function isAuthorizedSandboxMcpServer(params: {
+  backend: SandboxBackendHandle;
+  root: string;
+  serverName: string;
+  config: BundleMcpServerConfig;
+  authorization: SandboxEnvironmentMcpAuthorization;
+}): boolean {
+  const requirement = params.authorization.mcpServers[params.serverName];
+  return (
+    requirement !== undefined &&
+    params.authorization.backendId === params.backend.id &&
+    params.authorization.runtimeId === params.backend.runtimeId &&
+    params.authorization.rootPath === params.root &&
+    isDeepStrictEqual(
+      resolveSandboxMcpLaunchIdentity(params.serverName, params.root, params.config),
+      resolveSandboxMcpLaunchIdentity(params.serverName, params.root, requirement),
+    )
+  );
+}
+
+function isCurrentSandboxMcpAuthorization(params: {
+  backend: SandboxBackendHandle;
+  root: string;
+  serverName: string;
+  config: BundleMcpServerConfig;
+  authorization: SandboxEnvironmentMcpAuthorization;
+  capabilityRoots: readonly SandboxEnvironmentCapabilityRootConfig[];
+}): boolean {
+  if (
+    params.authorization.backendId !== params.backend.id ||
+    params.authorization.runtimeId !== params.backend.runtimeId ||
+    params.authorization.rootPath !== params.root
+  ) {
+    return false;
+  }
+  return params.capabilityRoots.some((root) => {
+    const requirement = root.mcpServers[params.serverName];
+    return (
+      root.id === params.authorization.selectionId &&
+      requirement !== undefined &&
+      isDeepStrictEqual(
+        resolveSandboxMcpLaunchIdentity(params.serverName, params.root, params.config),
+        resolveSandboxMcpLaunchIdentity(params.serverName, params.root, requirement),
+      )
+    );
+  });
+}
+
+export function collectDiscoveredSandboxMcpServers(
+  discoveries: readonly SandboxEnvironmentCapabilityDiscovery[],
+  backend: SandboxBackendHandle,
+) {
+  const servers = new Map<string, AuthorizedSandboxMcpServer>();
+  let authorizationMismatch = false;
   for (const discovery of discoveries) {
     if (!discovery.mcpConfig || discovery.error) {
       continue;
     }
     if (
-      discovery.path !== workspace ||
+      discovery.path !== backend.workdir ||
       Buffer.byteLength(discovery.mcpConfig.contents) > 256 * 1024
     ) {
       logWarn("Sandbox MCP configuration skipped: invalid discovery root or file size limit.");
@@ -217,7 +304,14 @@ function collectDiscoveredStdioServers(
       logWarn("Sandbox MCP configuration skipped: invalid JSON; repair the workspace .mcp.json.");
       continue;
     }
-    for (const [name, config] of Object.entries(extractMcpServerMap(parsed))) {
+    const declarations = Object.entries(extractMcpServerMap(parsed));
+    if (declarations.length > 64) {
+      logWarn("Sandbox MCP discovery reached the 64-server limit.");
+    }
+    for (const [name, config] of declarations.slice(0, 64)) {
+      if (config.enabled === false) {
+        continue;
+      }
       const resolved = resolveMcpTransportConfig(name, config);
       if (resolved?.kind !== "stdio") {
         logWarn(
@@ -225,23 +319,41 @@ function collectDiscoveredStdioServers(
         );
         continue;
       }
-      if (servers.has(name)) {
-        logWarn("Duplicate sandbox MCP server name skipped; the first declaration owns the name.");
-        continue;
+      let matched = false;
+      for (const authorization of discovery.mcpAuthorizations ?? []) {
+        if (
+          servers.has(name) ||
+          !isAuthorizedSandboxMcpServer({
+            backend,
+            root: discovery.path,
+            serverName: name,
+            config,
+            authorization,
+          })
+        ) {
+          continue;
+        }
+        if (servers.size === 64) {
+          logWarn("Sandbox MCP discovery reached the 64-server limit.");
+          return servers;
+        }
+        servers.set(name, { root: discovery.path, config, authorization });
+        matched = true;
       }
-      if (servers.size === 64) {
-        logWarn("Sandbox MCP discovery reached the 64-server limit.");
-        return servers;
-      }
-      servers.set(name, { root: discovery.path, config });
+      authorizationMismatch ||= !matched;
     }
+  }
+  if (authorizationMismatch) {
+    logWarn(
+      "Sandbox MCP declaration skipped: no exact operator capability-root authorization matched.",
+    );
   }
   return servers;
 }
 
 export async function createSandboxEnvironmentMcpToolRuntime(params: {
   backend: SandboxBackendHandle;
-  discoveries: readonly SandboxCapabilityRootDiscovery[];
+  servers: ReturnType<typeof collectDiscoveredSandboxMcpServers>;
   sessionId: string;
   sessionKey?: string;
   workspaceDir: string;
@@ -250,9 +362,10 @@ export async function createSandboxEnvironmentMcpToolRuntime(params: {
   agentId?: string;
   reservedToolNames?: Iterable<string>;
   toolOverrides?: Pick<SessionToolOverrides, "mcpServers" | "mcpToolsDeny">;
+  readCurrentCapabilityRoots: () => readonly SandboxEnvironmentCapabilityRootConfig[];
 }): Promise<BundleMcpToolRuntime | undefined> {
   params.signal?.throwIfAborted();
-  const discovered = collectDiscoveredStdioServers(params.discoveries, params.backend.workdir);
+  const discovered = params.servers;
   const mcpServers = Object.fromEntries(
     [...discovered]
       .filter(([name]) => params.toolOverrides?.mcpServers?.[name] !== false)
@@ -261,35 +374,72 @@ export async function createSandboxEnvironmentMcpToolRuntime(params: {
   if (Object.keys(mcpServers).length === 0) {
     return undefined;
   }
+  const fingerprintEntries = [...discovered]
+    .toSorted(([left], [right]) => left.localeCompare(right))
+    .map(([name, entry]) => [
+      name,
+      entry.authorization.selectionId,
+      entry.authorization.backendId,
+      entry.authorization.runtimeId,
+      entry.authorization.rootPath,
+      entry.config,
+    ]);
   const fingerprint = crypto
     .createHash("sha256")
-    .update(JSON.stringify([params.backend.id, params.backend.runtimeId, mcpServers]))
+    .update(JSON.stringify(fingerprintEntries))
     .digest("hex");
   const runtime = createSessionMcpRuntime({
     sessionId: params.sessionId,
     sessionKey: params.sessionKey,
     workspaceDir: params.workspaceDir,
     cfg: params.cfg,
-    configFingerprint: fingerprint,
-    mcpServersOverride: mcpServers,
     toolOverrides: params.toolOverrides,
-    resolveTransport: async (serverName, rawServer): Promise<ResolvedMcpTransport | null> => {
-      const resolved = resolveMcpTransportConfig(serverName, rawServer);
-      const entry = discovered.get(serverName);
-      if (resolved?.kind !== "stdio" || !entry) {
-        return null;
-      }
-      return {
-        transport: new SandboxStdioMcpTransport(params.backend, entry.root, serverName, {
-          ...resolved,
-          args: resolved.args ?? [],
-        }),
-        description: serverName + ": sandbox environment stdio",
-        transportType: "stdio",
-        connectionTimeoutMs: resolved.connectionTimeoutMs,
-        requestTimeoutMs: resolved.requestTimeoutMs,
-        supportsParallelToolCalls: resolved.supportsParallelToolCalls,
-      };
+    executorOwned: {
+      mcpServers,
+      fingerprint,
+      resolveTransport: async (serverName, rawServer): Promise<ResolvedMcpTransport | null> => {
+        const resolved = resolveMcpTransportConfig(serverName, rawServer);
+        const entry = discovered.get(serverName);
+        const isLaunchAuthorized = () =>
+          params.signal?.aborted !== true &&
+          entry !== undefined &&
+          isCurrentSandboxMcpAuthorization({
+            backend: params.backend,
+            root: entry.root,
+            serverName,
+            config: rawServer,
+            authorization: entry.authorization,
+            capabilityRoots: params.readCurrentCapabilityRoots(),
+          });
+        if (
+          resolved?.kind !== "stdio" ||
+          !entry ||
+          !isAuthorizedSandboxMcpServer({
+            backend: params.backend,
+            root: entry.root,
+            serverName,
+            config: rawServer,
+            authorization: entry.authorization,
+          }) ||
+          !isLaunchAuthorized()
+        ) {
+          return null;
+        }
+        return {
+          transport: new SandboxStdioMcpTransport(
+            params.backend,
+            entry.root,
+            serverName,
+            { ...resolved, args: resolved.args ?? [] },
+            isLaunchAuthorized,
+          ),
+          description: serverName + ": sandbox environment stdio",
+          transportType: "stdio",
+          connectionTimeoutMs: resolved.connectionTimeoutMs,
+          requestTimeoutMs: resolved.requestTimeoutMs,
+          supportsParallelToolCalls: resolved.supportsParallelToolCalls,
+        };
+      },
     },
   });
   try {

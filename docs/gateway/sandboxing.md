@@ -127,17 +127,24 @@ the existing Gateway-owned behavior.
 
 OpenShell in `remote` mode advertises protocol version 1 with process and
 filesystem access plus workspace capability discovery. Each built-in agent
-attempt shares one bounded discovery snapshot between workspace stdio MCP
-servers declared in `.mcp.json` and environment-owned `SKILL.md` files. Skill
-metadata uses the existing eligibility, session policy, and prompt limits; full
-instructions are read on demand through the sandbox filesystem bridge.
+attempt shares one bounded discovery snapshot between environment-owned
+`SKILL.md` files and workspace stdio MCP declarations. Skills use the existing
+eligibility, session policy, and prompt limits; full instructions are read on
+demand through the sandbox filesystem bridge.
 
-MCP working directories are resolved against the discovery root and validated
-by the backend before launch. The processes belong to the attempt, including
-startup cancellation and remote descendant cleanup. Their tools still pass
-through normal MCP and sandbox tool policies. `mirror` mode does not advertise
-these capabilities: its local-canonical synchronization transaction cannot own
-an attempt-long process without blocking later tools. See
+Workspace `.mcp.json` is executable configuration and has no authority by
+default. Before starting a declared server, OpenClaw requires an operator entry
+under `agents.*.sandbox.environment.capabilityRoots` whose server name, command,
+complete arguments, working directory, and environment exactly match the
+declaration. The selection is also bound to the active backend, runtime, and
+workspace root. Normal MCP and sandbox tool policies then decide which of the
+server's tools the agent may invoke.
+
+Authorized MCP working directories are resolved against the selected root and
+validated by the backend before launch. The processes belong to the attempt,
+including startup cancellation and remote descendant cleanup. `mirror` mode
+does not advertise these capabilities: its local-canonical synchronization
+transaction cannot own an attempt-long process without blocking later tools. See
 [OpenShell environment-owned skills](/gateway/openshell#environment-owned-skills)
 for discovery limits and exclusions.
 

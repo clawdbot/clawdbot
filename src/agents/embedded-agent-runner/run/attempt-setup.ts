@@ -42,7 +42,7 @@ import { DEFAULT_CONTEXT_TOKENS } from "../../defaults.js";
 import type { EmbeddedContextFile } from "../../embedded-agent-helpers.js";
 import { resolveImageSanitizationLimits } from "../../image-sanitization.js";
 import { resolveSandboxContext } from "../../sandbox.js";
-import type { SandboxCapabilityRootDiscovery } from "../../sandbox/backend-handle.types.js";
+import type { SandboxEnvironmentCapabilityDiscovery } from "../../sandbox/environment-capabilities.js";
 import {
   MAX_ENVIRONMENT_SKILL_BYTES,
   mergeSandboxEnvironmentSkillCatalog,
@@ -504,7 +504,7 @@ export function installEmbeddedAttemptContextGuards(input: {
 type AttemptSetup = Awaited<ReturnType<typeof prepareEmbeddedAttemptSetup>>;
 
 export async function prepareEmbeddedAttemptSkills(params: {
-  environmentCapabilities?: readonly SandboxCapabilityRootDiscovery[];
+  environmentCapabilities?: readonly SandboxEnvironmentCapabilityDiscovery[];
   attempt: EmbeddedRunAttemptParams;
   effectiveWorkspace: string;
   sandbox: AttemptSetup["sandbox"];
@@ -607,6 +607,7 @@ export async function prepareEmbeddedAttemptSkills(params: {
       workspaceDir: skillsPromptWorkspaceDir,
       snapshot: params.attempt.skillsSnapshot,
       remoteNote: skillsEligibility?.remote?.note,
+      contextTokenBudget: params.attempt.contextTokenBudget,
       warn: (message) => log.warn(message),
     });
     const environmentPaths = new Set(environmentEntries.map((entry) => entry.skill.filePath));

@@ -1,6 +1,7 @@
 import type { SessionToolOverrides } from "../config/sessions/types.js";
 /** Shared session MCP runtime constants and create-runtime factory type. */
 import type { OpenClawConfig } from "../config/types.openclaw.js";
+import type { BundleMcpServerConfig } from "../plugins/bundle-mcp.js";
 import type { PluginManifestRegistry } from "../plugins/manifest-registry.js";
 import type {
   RequesterMcpConnect,
@@ -9,6 +10,7 @@ import type {
   SessionMcpRuntimeManager,
 } from "./agent-bundle-mcp-types.js";
 import type { McpServerConnectionResolved } from "./mcp-connection-resolver.js";
+import type { ResolvedMcpTransport } from "./mcp-transport.js";
 
 export const SESSION_MCP_RUNTIME_MANAGER_KEY = Symbol.for("openclaw.sessionMcpRuntimeManager");
 export const DEFAULT_SESSION_MCP_RUNTIME_IDLE_TTL_MS = 10 * 60 * 1000;
@@ -47,4 +49,13 @@ export type CreateSessionMcpRuntime = (params: {
   requesterConnect?: RequesterMcpConnect;
   configFingerprint?: string;
   toolOverrides?: Pick<SessionToolOverrides, "mcpServers" | "mcpToolsDeny">;
+  /** Ephemeral executor-owned declarations and transport authority. */
+  executorOwned?: {
+    mcpServers: Record<string, BundleMcpServerConfig>;
+    fingerprint: string;
+    resolveTransport: (
+      serverName: string,
+      rawServer: BundleMcpServerConfig,
+    ) => Promise<ResolvedMcpTransport | null>;
+  };
 }) => SessionMcpRuntime | Promise<SessionMcpRuntime>;

@@ -240,17 +240,28 @@ export function createSessionMcpRuntime(
   params: Parameters<CreateSessionMcpRuntime>[0],
   previous = new Map<string, ServerMcpRuntime>(),
 ): SessionMcpRuntime {
-  const declared = loadSessionMcpConfig({
-    ...params,
-    includeServerNames: undefined,
-    excludeServerNames: undefined,
-    logDiagnostics: true,
-  });
-  const config = loadSessionMcpConfig({
-    ...params,
-    loaded: declared.loaded,
-    logDiagnostics: false,
-  });
+  const declared = params.executorOwned
+    ? {
+        loaded: {
+          mcpServers: params.executorOwned.mcpServers,
+          diagnostics: [],
+          prepareDataDirsByServer: {},
+        },
+        fingerprint: params.executorOwned.fingerprint,
+      }
+    : loadSessionMcpConfig({
+        ...params,
+        includeServerNames: undefined,
+        excludeServerNames: undefined,
+        logDiagnostics: true,
+      });
+  const config = params.executorOwned
+    ? declared
+    : loadSessionMcpConfig({
+        ...params,
+        loaded: declared.loaded,
+        logDiagnostics: false,
+      });
   const safeNames =
     params.safeServerNamesByServer ??
     assignSafeServerNames(Object.keys(declared.loaded.mcpServers));
@@ -509,7 +520,7 @@ function createServerMcpRuntime(
       client: session.client,
       transport: session.transport,
       timeoutMs: connectionTimeoutMs,
-      signal: lifecycleAbortController.signal,
+      signal: params.executorOwned ? lifecycleAbortController.signal : undefined,
     })
       .catch((error: unknown) => {
         if (error instanceof McpClientConnectTimeoutError) {
@@ -679,12 +690,14 @@ function createServerMcpRuntime(
       const transportSource = override
         ? applyMcpConnectionOverride(rawServer, override)
         : rawServer;
-      const resolved = resolveMcpTransport(serverName, transportSource, {
-        cfg: params.cfg,
-        agentDir: params.agentDir,
-        prepareDataDir: loaded.prepareDataDirsByServer?.[serverName]?.dataDir,
-        requesterScope: params.requesterScope,
-      });
+      const resolved = params.executorOwned
+        ? await params.executorOwned.resolveTransport(serverName, transportSource)
+        : resolveMcpTransport(serverName, transportSource, {
+            cfg: params.cfg,
+            agentDir: params.agentDir,
+            prepareDataDir: loaded.prepareDataDirsByServer?.[serverName]?.dataDir,
+            requesterScope: params.requesterScope,
+          });
       if (!resolved) {
         return { version: 1, generatedAt: Date.now(), servers: {}, tools: [] };
       }

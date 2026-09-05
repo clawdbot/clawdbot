@@ -973,6 +973,10 @@ In `remote` mode, host-local edits made outside OpenClaw are not synced into the
 Transport is SSH into the OpenShell sandbox, but the plugin owns sandbox lifecycle and optional mirror sync.
 `workspace` selects an existing OpenShell control-plane workspace for the whole plugin; it is separate from the agent's filesystem workspace. `policy` must point to a YAML file readable by the OpenClaw Gateway, not a named policy ID. See [OpenShell](/gateway/openshell) for setup, prerequisites, and troubleshooting.
 
+In `remote` mode, workspace `.mcp.json` servers remain inert unless their exact
+launch identity is selected under `agents.*.sandbox.environment.capabilityRoots`.
+See [Authorize a workspace MCP server](/gateway/openshell#authorize-a-workspace-mcp-server).
+
 **`setupCommand`** runs once after container creation (via `sh -lc`). Needs network egress, writable root, root user.
 
 **Containers default to `network: "none"`** — set to `"bridge"` (or a custom bridge network) if the agent needs outbound access.

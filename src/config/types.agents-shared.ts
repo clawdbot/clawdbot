@@ -34,6 +34,19 @@ export type AgentRuntimePolicyConfig = {
   id?: string;
 };
 
+export type SandboxEnvironmentMcpServerRequirement = {
+  command: string;
+  args?: string[];
+  cwd?: string;
+  env?: Record<string, string>;
+};
+
+export type SandboxEnvironmentCapabilityRootConfig = {
+  id: string;
+  location: { type: "workspace" };
+  mcpServers: Record<string, SandboxEnvironmentMcpServerRequirement>;
+};
+
 /** Per-agent sandbox policy shared by embedded agents and sandbox backends. */
 export type AgentSandboxConfig = {
   /** Sandbox activation mode for this agent. */
@@ -52,6 +65,10 @@ export type AgentSandboxConfig = {
   scope?: "session" | "agent" | "shared";
   /** Host workspace root mounted or copied into the sandbox. */
   workspaceRoot?: string;
+  /** Explicit executable capability selections for the sandbox environment. */
+  environment?: {
+    capabilityRoots?: SandboxEnvironmentCapabilityRootConfig[];
+  };
   /** Docker-specific sandbox settings. */
   docker?: SandboxDockerSettings;
   /** SSH-specific sandbox settings. */

@@ -175,6 +175,7 @@ export async function runEmbeddedAttempt(
         excludePaths: sandbox?.enabled
           ? resolveSandboxEnvironmentSkillExclusions(sandbox)
           : undefined,
+        capabilityRoots: sandbox?.environmentCapabilityRoots,
         signal: runAbortController.signal,
         warn: (message) => log.warn(message),
       }),

@@ -14,6 +14,7 @@ import type { OpenClawConfig } from "../../../config/types.js";
 import { clearMemoryPluginState } from "../../../plugins/memory-state.test-fixtures.js";
 import { createUserTurnTranscriptRecorder } from "../../../sessions/user-turn-transcript.js";
 import { projectAgentRunAttemptTerminal } from "../../agent-run-terminal-outcome.js";
+import { createSandboxTestContext } from "../../sandbox/test-fixtures.js";
 import { makeAgentAssistantMessage } from "../../test-helpers/agent-message-fixtures.js";
 import type { AttemptContextEngine } from "./attempt-context-engine-helpers.js";
 import {
@@ -1049,11 +1050,16 @@ describe("runEmbeddedAttempt context engine sessionKey forwarding", () => {
   it("rebuilds skill prompt inputs from the sandbox workspace for non-rw sandbox runs", async () => {
     const sandboxWorkspace = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-sandbox-skills-"));
     tempPaths.push(sandboxWorkspace);
-    hoisted.resolveSandboxContextMock.mockResolvedValue({
-      enabled: true,
-      workspaceAccess: "ro",
-      workspaceDir: sandboxWorkspace,
-    });
+    hoisted.resolveSandboxContextMock.mockResolvedValue(
+      createSandboxTestContext({
+        overrides: {
+          workspaceAccess: "ro",
+          workspaceDir: sandboxWorkspace,
+          agentWorkspaceDir: sandboxWorkspace,
+          containerWorkdir: sandboxWorkspace,
+        },
+      }),
+    );
 
     await createContextEngineAttemptRunner({
       contextEngine: createContextEngineBootstrapAndAssemble(),

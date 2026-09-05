@@ -28,9 +28,9 @@ import {
 import { resolveSandboxToolPolicyForAgent } from "./tool-policy.js";
 import type {
   SandboxBrowserConfig,
-  SandboxConfig,
   SandboxDockerConfig,
   SandboxPruneConfig,
+  ResolvedSandboxConfig,
   SandboxScope,
   SandboxSshConfig,
 } from "./types.js";
@@ -222,7 +222,7 @@ export function resolveSandboxSshConfig(params: {
 export function resolveSandboxConfigForAgent(
   cfg?: OpenClawConfig,
   agentId?: string,
-): SandboxConfig {
+): ResolvedSandboxConfig {
   const agent = cfg?.agents?.defaults?.sandbox;
 
   // Agent-specific sandbox config overrides global
@@ -251,6 +251,10 @@ export function resolveSandboxConfigForAgent(
     workspaceAccess: agentSandbox?.workspaceAccess ?? agent?.workspaceAccess ?? "none",
     workspaceRoot:
       agentSandbox?.workspaceRoot ?? agent?.workspaceRoot ?? DEFAULT_SANDBOX_WORKSPACE_ROOT,
+    environment: {
+      capabilityRoots:
+        agentSandbox?.environment?.capabilityRoots ?? agent?.environment?.capabilityRoots ?? [],
+    },
     dockerTmpfsSource:
       scopedAgentDocker?.tmpfs === undefined && agent?.docker?.tmpfs === undefined
         ? "default"

@@ -27,7 +27,7 @@ excluded = json.loads(sys.argv[2])
 result = {"skills": [], "warnings": []}
 remaining = ${MAX_ROOT_BYTES}
 entries_left = 2048
-files_left = 1 + ${MAX_SKILLS} * 2
+files_left = 1 + ${MAX_SKILLS}
 dir_flags = os.O_RDONLY | os.O_DIRECTORY | os.O_NOFOLLOW
 
 def warn(message):
@@ -102,20 +102,7 @@ def scan(fd, location, depth):
                 continue
             instructions = read_text(fd, name, child)
             if instructions is not None:
-                skill = {"instructions": instructions}
-                try:
-                    metadata_fd = open_dir(fd, "agents")
-                    try:
-                        metadata = read_text(metadata_fd, "openai.yaml", location + "/agents/openai.yaml")
-                        if metadata is not None:
-                            skill["metadata"] = metadata
-                    finally:
-                        os.close(metadata_fd)
-                except FileNotFoundError:
-                    pass
-                except OSError:
-                    warn("unreadable or symlinked skill metadata directory skipped")
-                result["skills"].append(skill)
+                result["skills"].append({"instructions": instructions})
             continue
         try:
             info = os.stat(name, dir_fd=fd, follow_symlinks=False)
@@ -162,9 +149,7 @@ const textFileSchema = z.object({
 });
 const discoverySchema = z.object({
   mcpConfig: textFileSchema.optional(),
-  skills: z
-    .array(z.object({ instructions: textFileSchema, metadata: textFileSchema.optional() }))
-    .max(MAX_SKILLS),
+  skills: z.array(z.object({ instructions: textFileSchema })).max(MAX_SKILLS),
   warnings: z.array(z.string().max(256)).max(16),
   error: z.string().max(256).optional(),
 });
@@ -221,7 +206,7 @@ export async function discoverOpenShellCapabilityRoots(params: {
       const discovery = discoverySchema.parse(JSON.parse(result.stdout.toString("utf8")));
       const files = [
         discovery.mcpConfig,
-        ...discovery.skills.flatMap((skill) => [skill.instructions, skill.metadata]),
+        ...discovery.skills.map((skill) => skill.instructions),
       ].filter((file) => file !== undefined);
       if (
         files.reduce((total, file) => total + Buffer.byteLength(file.contents), 0) >

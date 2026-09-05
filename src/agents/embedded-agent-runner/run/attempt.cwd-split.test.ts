@@ -3,6 +3,7 @@ import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 import { afterEach, beforeAll, beforeEach, describe, expect, it } from "vitest";
+import { createSandboxTestContext } from "../../sandbox/test-fixtures.js";
 import type { AnyAgentTool } from "../../tools/common.js";
 import {
   cleanupTempPaths,
@@ -242,11 +243,15 @@ describe("runEmbeddedAttempt cwd/workspace split", () => {
   it("rejects cwd overrides for sandboxed runs instead of silently ignoring them", async () => {
     // Sandboxed attempts already remap the workspace; accepting an extra cwd
     // override would make tool roots ambiguous.
-    hoisted.resolveSandboxContextMock.mockResolvedValueOnce({
-      enabled: true,
-      workspaceAccess: "ro",
-      workspaceDir: "/tmp/openclaw-sandbox-copy",
-    });
+    hoisted.resolveSandboxContextMock.mockResolvedValueOnce(
+      createSandboxTestContext({
+        overrides: {
+          workspaceAccess: "ro",
+          workspaceDir: "/tmp/openclaw-sandbox-copy",
+          agentWorkspaceDir: "/tmp/openclaw-sandbox-copy",
+        },
+      }),
+    );
 
     await expect(
       createContextEngineAttemptRunner({
@@ -264,11 +269,11 @@ describe("runEmbeddedAttempt cwd/workspace split", () => {
   it("runs a managed worktree when sandbox workspace and cwd match", async () => {
     const worktree = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-sandbox-worktree-"));
     tempPaths.push(worktree);
-    hoisted.resolveSandboxContextMock.mockResolvedValueOnce({
-      enabled: true,
-      workspaceAccess: "rw",
-      workspaceDir: worktree,
-    });
+    hoisted.resolveSandboxContextMock.mockResolvedValueOnce(
+      createSandboxTestContext({
+        overrides: { workspaceAccess: "rw", workspaceDir: worktree, agentWorkspaceDir: worktree },
+      }),
+    );
 
     await createContextEngineAttemptRunner({
       contextEngine: createContextEngineBootstrapAndAssemble(),
