@@ -3,12 +3,15 @@ import os from "node:os";
 import path from "node:path";
 import { pathToFileURL } from "node:url";
 import { afterEach, beforeEach, expect, it } from "vitest";
+import { runCommandBuffered } from "../process/exec.js";
 import { openNodeSqliteDatabase } from "./node-sqlite.js";
 import { runtimeProcessEntrypoints } from "./runtime-process-entrypoints.js";
+import { resolveRuntimeWorkerArgv, resolveRuntimeWorkerUrl } from "./runtime-worker-url.js";
 import {
   readUpdateStateSchemaVersions,
-  snapshotUpdateCandidateState,
+  type snapshotUpdateCandidateState,
   updateStateSchemaVersionsMatch,
+  UpdateStateSchemaVersionsSchema,
 } from "./update-candidate-state.js";
 
 let root: string;
@@ -29,6 +32,26 @@ async function createDatabase(file: string, sql = ""): Promise<void> {
   } finally {
     db.close();
   }
+}
+
+async function runSnapshotWorker(input: Parameters<typeof snapshotUpdateCandidateState>[0]) {
+  // Backup/VACUUM cannot be cancelled in-process; use the canary's worker before fixture cleanup.
+  const result = await runCommandBuffered(
+    [
+      process.execPath,
+      ...resolveRuntimeWorkerArgv(
+        resolveRuntimeWorkerUrl(runtimeProcessEntrypoints.updateCandidateState),
+      ),
+    ],
+    {
+      input: JSON.stringify({ ...input, mode: "snapshot" }),
+      timeoutMs: 30_000,
+      killGraceMs: 500,
+      maxOutputBytes: { stdout: 1024 * 1024, stderr: 20_000 },
+    },
+  );
+  expect(result.code, result.stderr.toString("utf8")).toBe(0);
+  return UpdateStateSchemaVersionsSchema.parse(JSON.parse(result.stdout.toString("utf8")));
 }
 
 it.each(["DELETE", "WAL"])(
@@ -68,7 +91,7 @@ it.each(["DELETE", "WAL"])(
     const inspected = await readUpdateStateSchemaVersions({ stateDir: source, config: {} });
     expect(inspected.filter((entry) => entry.userVersion === 3)).toHaveLength(3);
     expect(await artifacts()).toEqual(before);
-    const versions = await snapshotUpdateCandidateState({
+    const versions = await runSnapshotWorker({
       stateDir: source,
       targetStateDir: target,
       config: {},
@@ -215,7 +238,7 @@ it.runIf(process.platform !== "win32")(
     insert.run("lexical", lexicalPath);
     registry.close();
 
-    await snapshotUpdateCandidateState({ stateDir: source, targetStateDir: target, config: {} });
+    await runSnapshotWorker({ stateDir: source, targetStateDir: target, config: {} });
 
     const copiedRegistry = openNodeSqliteDatabase(path.join(target, "state", "openclaw.sqlite"));
     try {
