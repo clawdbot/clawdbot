@@ -408,9 +408,11 @@ export class OpenClawApp extends OpenClawLightDomElement {
         <section class="card board-document__state">
           <h2>${t("chat.sessionRoute.chooseTitle")}</h2>
           <p>
-            ${route.data.candidates.length > 1
-              ? t("chat.sessionRoute.multipleMatches", { shortId: route.data.shortId })
-              : t("chat.sessionRoute.additionalMatches")}
+            ${
+              route.data.candidates.length > 1
+                ? t("chat.sessionRoute.multipleMatches", { shortId: route.data.shortId })
+                : t("chat.sessionRoute.additionalMatches")
+            }
           </p>
           ${route.data.candidates.map(
             (candidate) => html`<p>
@@ -418,9 +420,11 @@ export class OpenClawApp extends OpenClawLightDomElement {
               <small>${candidate.agentId} · ${candidate.idPrefix}</small>
             </p>`,
           )}
-          ${route.data.truncated
-            ? html`<p><small>${t("chat.sessionRoute.additionalMatches")}</small></p>`
-            : nothing}
+          ${
+            route.data.truncated
+              ? html`<p><small>${t("chat.sessionRoute.additionalMatches")}</small></p>`
+              : nothing
+          }
           ${this.renderFocusEscape(t("dashboardDocument.close"))}
         </section>
       </main>`;
@@ -429,13 +433,15 @@ export class OpenClawApp extends OpenClawLightDomElement {
       <openclaw-board-document
         .gatewaySnapshot=${gatewaySnapshot}
         .sessionKey=${route.data.sessionKey}
-        .onDocumentClose=${isNativeWebChromeHost()
-          ? null
-          : () => this.closeDocument(this.context?.basePath ?? "")}
+        .onDocumentClose=${
+          isNativeWebChromeHost() ? null : () => this.closeDocument(this.context?.basePath ?? "")
+        }
       ></openclaw-board-document>
-      ${!gatewayConnected && gatewaySnapshot.lastError === null
-        ? renderConnectingSplash(gatewayStartupStatus)
-        : nothing}
+      ${
+        !gatewayConnected && gatewaySnapshot.lastError === null
+          ? renderConnectingSplash(gatewayStartupStatus)
+          : nothing
+      }
       ${gatewayConnected ? this.renderLazyDocumentState(DASHBOARD_DOCUMENT_ELEMENT) : nothing}
     `;
   }
@@ -501,18 +507,22 @@ export class OpenClawApp extends OpenClawLightDomElement {
           .themeMode=${context.theme.resolvedMode}
           fullscreen
         ></openclaw-terminal-panel>
-        ${!gatewayConnected && gatewaySnapshot.lastError === null
-          ? renderConnectingSplash(gatewayStartupStatus)
-          : nothing}
+        ${
+          !gatewayConnected && gatewaySnapshot.lastError === null
+            ? renderConnectingSplash(gatewayStartupStatus)
+            : nothing
+        }
         ${terminalAvailable ? this.renderLazyDocumentState(TERMINAL_PANEL_ELEMENT) : nothing}
-        ${!terminalAvailable && (gatewayConnected || gatewaySnapshot.lastError)
-          ? html`<div class="terminal-view-unavailable">
-              <div class="stack">
-                <span>${t("terminal.unavailable")}</span>
-                ${this.renderFocusEscape(t("common.back"))}
-              </div>
-            </div>`
-          : nothing}
+        ${
+          !terminalAvailable && (gatewayConnected || gatewaySnapshot.lastError)
+            ? html`<div class="terminal-view-unavailable">
+                <div class="stack">
+                  <span>${t("terminal.unavailable")}</span>
+                  ${this.renderFocusEscape(t("common.back"))}
+                </div>
+              </div>`
+            : nothing
+        }
       `;
     }
     // Desktop documents share the panel's connection owner but none of its
@@ -532,18 +542,22 @@ export class OpenClawApp extends OpenClawLightDomElement {
           .documentControl=${focusTarget.control}
           .onDocumentClose=${() => this.closeDocument(context.basePath)}
         ></openclaw-desktop-panel>
-        ${!gatewayConnected && gatewaySnapshot.lastError === null
-          ? renderConnectingSplash(gatewayStartupStatus)
-          : nothing}
+        ${
+          !gatewayConnected && gatewaySnapshot.lastError === null
+            ? renderConnectingSplash(gatewayStartupStatus)
+            : nothing
+        }
         ${desktopAvailable ? this.renderLazyDocumentState(DESKTOP_PANEL_ELEMENT) : nothing}
-        ${!desktopAvailable && (gatewayConnected || gatewaySnapshot.lastError)
-          ? html`<div class="desktop-view-unavailable">
-              <div class="stack">
-                <span>${t("desktop.unavailable")}</span>
-                ${this.renderFocusEscape(t("common.back"))}
-              </div>
-            </div>`
-          : nothing}
+        ${
+          !desktopAvailable && (gatewayConnected || gatewaySnapshot.lastError)
+            ? html`<div class="desktop-view-unavailable">
+                <div class="stack">
+                  <span>${t("desktop.unavailable")}</span>
+                  ${this.renderFocusEscape(t("common.back"))}
+                </div>
+              </div>`
+            : nothing
+        }
       `;
     }
     if (focusTarget?.kind === "dashboard") {
@@ -631,9 +645,9 @@ export class OpenClawApp extends OpenClawLightDomElement {
     return html`
       <openclaw-github-link-hovercard-provider
         .client=${gatewaySnapshot.client}
-        .agentId=${context.agentSelection.state.selectedId ??
-        gatewaySnapshot.assistantAgentId ??
-        undefined}
+        .agentId=${
+          context.agentSelection.state.selectedId ?? gatewaySnapshot.assistantAgentId ?? undefined
+        }
       >
         <openclaw-session-progress-hovercard-provider
           .client=${gatewaySnapshot.client}
