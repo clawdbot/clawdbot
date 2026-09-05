@@ -7,9 +7,14 @@ import {
   setBrowserStateRuntime,
 } from "../browser-runtime-state.js";
 import {
+  clearDurableTabAliases,
   rememberDurableTabAliases,
   resetDurableTabAliases,
 } from "./session-tab-ephemeral-aliases.js";
+import {
+  activeDurableStorageKeys,
+  releaseColdNativeActivityOwner,
+} from "./session-tab-process-state.js";
 
 const BROWSER_SESSION_TABS_NAMESPACE = "browser.session-tabs";
 const BROWSER_SESSION_TABS_MAX_ENTRIES = 5_000;
@@ -123,6 +128,16 @@ export function browserSessionTabNativeIdentity(
   record: Pick<BrowserSessionTabRecord, "sessionKey" | "profile" | "nativeTargetId">,
 ): string {
   return `${record.sessionKey}\u0000${record.profile}\u0000${record.nativeTargetId}`;
+}
+
+export function retireBrowserSessionTabProcessState(
+  record: BrowserSessionTabRecord & { storageKey: string },
+): void {
+  clearDurableTabAliases(record.storageKey);
+  activeDurableStorageKeys().delete(record.storageKey);
+  if (record.interactionTargetKind === "native") {
+    releaseColdNativeActivityOwner(browserSessionTabNativeIdentity(record));
+  }
 }
 
 export function compareBrowserSessionTabProfileAliases(left: string, right: string): number {

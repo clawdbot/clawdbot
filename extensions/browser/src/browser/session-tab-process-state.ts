@@ -48,6 +48,11 @@ const coldNativeActivityStateSymbol = Symbol.for(
   "openclaw.browser.session-tabs.cold-native-activity",
 );
 
+type ColdNativeActivity = {
+  observedAt: number;
+  durableOwners: number;
+};
+
 export function activeDurableStorageKeys(): Set<string> {
   const state = globalThis as typeof globalThis & {
     [activeDurableStateSymbol]?: Set<string>;
@@ -110,16 +115,56 @@ export function deleteVolatileSessionTab(sessionKey: string, tabKey: string): vo
   }
 }
 
-function coldNativeActivity(): Map<string, number> {
+function coldNativeActivity(): Map<string, ColdNativeActivity> {
   const state = globalThis as typeof globalThis & {
-    [coldNativeActivityStateSymbol]?: Map<string, number>;
+    [coldNativeActivityStateSymbol]?: Map<string, ColdNativeActivity>;
   };
   state[coldNativeActivityStateSymbol] ??= new Map();
   return state[coldNativeActivityStateSymbol];
 }
 
-export function rememberColdNativeActivity(identity: string, now: number): void {
-  coldNativeActivity().set(identity, now);
+export function rememberColdNativeActivity(
+  identity: string,
+  now: number,
+  durableOwners: number,
+): void {
+  // One native target may have multiple durable generations. Keep the activity
+  // until the final owner retires so sibling cleanup cannot erase live evidence.
+  coldNativeActivity().set(identity, { observedAt: now, durableOwners });
+}
+
+function retainColdNativeActivityOwner(identity: string): void {
+  const activity = coldNativeActivity().get(identity);
+  if (activity) {
+    activity.durableOwners += 1;
+  }
+}
+
+export function releaseColdNativeActivityOwner(identity: string): void {
+  const activity = coldNativeActivity().get(identity);
+  if (!activity) {
+    return;
+  }
+  if (activity.durableOwners <= 1) {
+    forgetColdNativeActivity(identity);
+  } else {
+    activity.durableOwners -= 1;
+  }
+}
+
+export function replaceColdNativeActivityOwner(
+  previousIdentity: string | undefined,
+  nextIdentity: string | undefined,
+): void {
+  if (previousIdentity === nextIdentity) {
+    return;
+  }
+  if (previousIdentity) {
+    releaseColdNativeActivityOwner(previousIdentity);
+  }
+  if (nextIdentity) {
+    retainColdNativeActivityOwner(nextIdentity);
+  }
 }
 
 export function forgetColdNativeActivity(identity: string): void {
@@ -127,5 +172,5 @@ export function forgetColdNativeActivity(identity: string): void {
 }
 
 export function readColdNativeActivity(identity: string): number | undefined {
-  return coldNativeActivity().get(identity);
+  return coldNativeActivity().get(identity)?.observedAt;
 }

@@ -5,13 +5,12 @@
  */
 import { randomUUID } from "node:crypto";
 import { normalizeLowercaseStringOrEmpty } from "openclaw/plugin-sdk/string-coerce-runtime";
-import { clearDurableTabAliases } from "./session-tab-ephemeral-aliases.js";
-import { activeDurableStorageKeys } from "./session-tab-process-state.js";
 import {
   type BrowserSessionTabRecord,
   deleteBrowserSessionTabIf,
   getBrowserSessionTabStore,
   parseBrowserSessionTabRecord,
+  retireBrowserSessionTabProcessState,
   sameBrowserSessionTabRecord,
   updateBrowserSessionTab,
 } from "./session-tab-store.js";
@@ -87,8 +86,7 @@ export function deleteClaimedTab(tab: DurableTab, onWarn?: (message: string) => 
       return matchesCleanupAttempt(record, tab);
     });
     if (deleted) {
-      clearDurableTabAliases(tab.storageKey);
-      activeDurableStorageKeys().delete(tab.storageKey);
+      retireBrowserSessionTabProcessState(tab);
     }
   } catch (error) {
     onWarn?.(`failed to delete tracked browser tab ${tab.nativeTargetId}: ${String(error)}`);

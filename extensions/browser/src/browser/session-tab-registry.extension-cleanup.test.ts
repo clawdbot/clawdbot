@@ -21,11 +21,15 @@ import { useAutoCleanupTempDirTracker } from "../../test-support.js";
 import type { CloseTrackedCdpTargetResult } from "./cdp.helpers.js";
 import { resolveBrowserConfig, type ResolvedBrowserConfig } from "./config.js";
 import { BROWSER_TAB_UNREACHABLE_RETIRE_MS } from "./constants.js";
-import { durableOwnership } from "./session-tab-registry.sqlite.test-helpers.js";
+import {
+  durableOwnership,
+  type DurableRecord,
+} from "./session-tab-registry.sqlite.test-helpers.js";
 
 const tempDirs = useAutoCleanupTempDirTracker(afterEach);
 const cdpMocks = vi.hoisted(() => ({
-  closeTrackedCdpTarget: vi.fn<() => Promise<CloseTrackedCdpTargetResult>>(),
+  closeTrackedCdpTarget:
+    vi.fn<(params: { nativeTargetId: string }) => Promise<CloseTrackedCdpTargetResult>>(),
 }));
 
 vi.mock("./cdp.helpers.js", async (importOriginal) => ({
@@ -36,7 +40,9 @@ vi.mock("./cdp.helpers.js", async (importOriginal) => ({
 import {
   closeTrackedBrowserTabsForSessions,
   sweepTrackedBrowserTabs,
+  touchSessionBrowserTab,
   trackSessionBrowserTab,
+  untrackSessionBrowserTab,
 } from "./session-tab-registry.js";
 
 const config = {
@@ -66,6 +72,14 @@ function clearProcessLocalTabState(): void {
   ]) {
     delete state[Symbol.for(name)];
   }
+}
+
+function coldNativeActivityIdentities(): string[] {
+  const state = globalThis as Record<symbol, unknown>;
+  const activity = state[Symbol.for("openclaw.browser.session-tabs.cold-native-activity")] as
+    | Map<string, unknown>
+    | undefined;
+  return [...(activity?.keys() ?? [])];
 }
 
 function installRuntime(): void {
@@ -200,5 +214,89 @@ describe("durable extension session tab cleanup", () => {
       }),
     );
     expect(openStore().entries()).toEqual([]);
+  });
+
+  it("retires cold activity only with the final durable generation", () => {
+    const sessionKey = "agent:main:cold-retirement";
+    const nativeTargetId = "NATIVE-COLD-RETIREMENT";
+    const identity = `${sessionKey}\u0000chrome\u0000${nativeTargetId}`;
+    trackSessionBrowserTab({
+      sessionKey,
+      targetId: nativeTargetId,
+      profile: "chrome",
+      ownership: durableOwnership(nativeTargetId, "profile-a", "browser-a"),
+      now: 1_000,
+    });
+    clearProcessLocalTabState();
+    touchSessionBrowserTab({ sessionKey, targetId: nativeTargetId, profile: "chrome", now: 2_000 });
+    expect(coldNativeActivityIdentities()).toEqual([identity]);
+
+    trackSessionBrowserTab({
+      sessionKey,
+      targetId: nativeTargetId,
+      profile: "chrome",
+      ownership: durableOwnership(nativeTargetId, "profile-b", "browser-b"),
+      now: 3_000,
+    });
+    untrackSessionBrowserTab({
+      sessionKey,
+      targetId: nativeTargetId,
+      profile: "chrome",
+      ownership: durableOwnership(nativeTargetId, "profile-a", "browser-a"),
+    });
+    expect(openStore().entries()).toHaveLength(1);
+    expect(coldNativeActivityIdentities()).toEqual([identity]);
+
+    untrackSessionBrowserTab({
+      sessionKey,
+      targetId: nativeTargetId,
+      profile: "chrome",
+      ownership: durableOwnership(nativeTargetId, "profile-b", "browser-b"),
+    });
+    expect(openStore().entries()).toEqual([]);
+    expect(coldNativeActivityIdentities()).toEqual([]);
+  });
+
+  it("retires cold activity for terminal cleanup outcomes", async () => {
+    for (const outcome of ["closed", "unavailable"]) {
+      const nativeTargetId = `NATIVE-${outcome}`;
+      trackSessionBrowserTab({
+        sessionKey: `agent:main:${outcome}`,
+        targetId: nativeTargetId,
+        profile: "chrome",
+        ownership: durableOwnership(nativeTargetId),
+      });
+    }
+    clearProcessLocalTabState();
+    for (const outcome of ["closed", "unavailable"]) {
+      touchSessionBrowserTab({
+        sessionKey: `agent:main:${outcome}`,
+        targetId: `NATIVE-${outcome}`,
+        profile: "chrome",
+      });
+    }
+    cdpMocks.closeTrackedCdpTarget.mockImplementation(async ({ nativeTargetId }) =>
+      nativeTargetId === "NATIVE-closed"
+        ? { status: "closed" }
+        : { status: "unavailable", reason: "target-lookup-failed" },
+    );
+
+    await expect(
+      closeTrackedBrowserTabsForSessions({
+        sessionKeys: ["agent:main:closed", "agent:main:unavailable"],
+        getResolvedBrowserConfig: () => ({
+          ...resolved,
+          extensionRelayInternalTokens: { chrome: "terminal-outcome-test-credential" },
+        }),
+      }),
+    ).resolves.toBe(1);
+    expect(
+      openStore()
+        .entries()
+        .map((entry) => (entry.value as DurableRecord).nativeTargetId),
+    ).toEqual(["NATIVE-unavailable"]);
+    expect(coldNativeActivityIdentities()).toEqual([
+      "agent:main:unavailable\u0000chrome\u0000NATIVE-unavailable",
+    ]);
   });
 });
