@@ -451,6 +451,34 @@ describe("systemd availability", () => {
     await expect(isSystemdUserServiceAvailable({ USER: "debian" })).resolves.toBe(true);
   });
 
+  it("keeps a degraded machine-scope status usable after a user-bus failure", async () => {
+    // The machine-scope manager answered; its nonzero exit reports a degraded
+    // manager, not a transport failure, so the user-bus stderr must not turn a
+    // reachable manager into an unavailable one.
+    const userBusStderr =
+      "Failed to connect to user scope bus via local transport: No such file or directory";
+    const degradedStderr = "degraded\nsome-unit.service failed";
+    const userBusFailure = (): ExecFileMock =>
+      systemctlUserResult(
+        [createExecFileError(userBusStderr, { stderr: userBusStderr }), "", userBusStderr],
+        "status",
+      );
+    const degradedMachineStatus = (): ExecFileMock =>
+      systemctlMachineUserResult(
+        [createExecFileError("degraded", { stderr: degradedStderr }), "", degradedStderr],
+        "debian",
+        "status",
+      );
+    execFileMock
+      .mockImplementationOnce(userBusFailure())
+      .mockImplementationOnce(degradedMachineStatus())
+      .mockImplementationOnce(userBusFailure())
+      .mockImplementationOnce(degradedMachineStatus());
+
+    await expect(isSystemdUserServiceAvailable({ USER: "debian" })).resolves.toBe(true);
+    await expect(systemdExec.assertSystemdAvailable({ USER: "debian" })).resolves.toBeUndefined();
+  });
+
   it("does not fall back to machine scope when --user fails with permission denied", async () => {
     execFileMock.mockImplementationOnce((_cmd, args, _opts, cb) => {
       expect(args).toEqual(["--user", "status"]);
@@ -746,11 +774,9 @@ describe("isSystemdServiceEnabled", () => {
         err.code = 1;
         cb(err, "", "permission denied");
       });
-    const enabled = isSystemdServiceEnabled({ env: { HOME: "/tmp/openclaw-test-home" } });
-    await expect(enabled).rejects.toThrow(
-      "systemctl is-enabled unavailable: Failed to connect to bus",
-    );
-    await expect(enabled).rejects.toThrow("permission denied");
+    await expect(
+      isSystemdServiceEnabled({ env: { HOME: "/tmp/openclaw-test-home" } }),
+    ).rejects.toThrow("systemctl is-enabled unavailable: permission denied");
   });
 
   it("returns false when systemctl is-enabled exits with code 4 (not-found)", async () => {
@@ -1628,6 +1654,31 @@ describe("readSystemdServiceExecStart", () => {
     expect(execFileMock).toHaveBeenCalledWith(
       "busctl",
       expect.arrayContaining(["LoadUnit", GATEWAY_SERVICE]),
+      expect.anything(),
+      expect.anything(),
+    );
+  });
+
+  it("accepts an absent unit answered through the machine-scope retry", async () => {
+    // The manager reached through machine scope reports the unit as absent with
+    // the exact wording the reader matches; a prepended user-bus diagnostic would
+    // turn that absence into an inspection failure.
+    const userBusStderr =
+      "Failed to connect to user scope bus via local transport: No such file or directory";
+    const notFoundStderr = `Call failed: Unit ${GATEWAY_SERVICE} not found.`;
+    mockReadGatewayServiceFile(["[Service]", "ExecStart=/usr/bin/openclaw gateway run"]);
+    execFileMock.mockReset();
+    execFileMock.mockImplementation((_command, args, _options, callback) => {
+      const stderr = args[0] === "--machine" ? notFoundStderr : userBusStderr;
+      callback(createExecFileError(stderr, { stderr }), "", stderr);
+    });
+
+    await expect(
+      readSystemdServiceExecStart({ HOME: TEST_SERVICE_HOME }, { requireEffective: true }),
+    ).resolves.toBeNull();
+    expect(execFileMock).toHaveBeenCalledWith(
+      "busctl",
+      expect.arrayContaining(["--machine", "LoadUnit"]),
       expect.anything(),
       expect.anything(),
     );
@@ -3766,6 +3817,41 @@ describe("systemd service install and uninstall", () => {
       const { write, stdout } = createWritableStreamMock();
 
       await expect(uninstallSystemdService({ env, stdout })).resolves.toBeUndefined();
+      expect(requireFirstWrite(write)).toContain("Systemd service not found");
+    });
+  });
+
+  it("keeps missing-unit removal idempotent through the machine-scope retry", async () => {
+    // Both the availability probe and the disable fall back to machine scope after a
+    // user-bus failure; the manager's already-missing answer must stay matchable.
+    const userBusStderr =
+      "Failed to connect to user scope bus via local transport: No such file or directory";
+    const detail = "Unit file openclaw-node.service does not exist.";
+    const userBusFailure = (...command: string[]): ExecFileMock =>
+      systemctlUserResult(
+        [createExecFileError(userBusStderr, { stderr: userBusStderr }), "", userBusStderr],
+        ...command,
+      );
+    await withNodeSystemdFixture(async ({ env }) => {
+      execFileMock
+        .mockImplementationOnce(userBusFailure("status"))
+        .mockImplementationOnce(systemctlMachineUserSuccess("debian", "status"))
+        .mockImplementationOnce(userBusFailure("disable", "--now", NODE_SERVICE))
+        .mockImplementationOnce(
+          systemctlMachineUserResult(
+            [createExecFileError(detail), "", detail],
+            "debian",
+            "disable",
+            "--now",
+            NODE_SERVICE,
+          ),
+        );
+
+      const { write, stdout } = createWritableStreamMock();
+
+      await expect(
+        uninstallSystemdService({ env: { ...env, USER: "debian" }, stdout }),
+      ).resolves.toBeUndefined();
       expect(requireFirstWrite(write)).toContain("Systemd service not found");
     });
   });

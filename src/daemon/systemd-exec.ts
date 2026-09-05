@@ -279,12 +279,25 @@ async function execSystemdUserCommand(
     return directResult;
   }
   const machineResult = await run(machineScopeArgs);
-  if (machineResult.code === 0) {
+  // A manager reached through machine scope answers with authority: a degraded
+  // `status`, an absent unit, or an already-inactive unit all exit nonzero and
+  // callers match that stderr exactly. Only a retry that never reached a manager
+  // keeps the direct --user stderr, which alone names the real user-bus failure.
+  if (machineResult.code === 0 || !isSystemdBusConnectFailure(machineResult)) {
     return machineResult;
   }
-  // A failed retry diagnoses the machine transport, not the user manager. Keep the
-  // direct --user stderr so callers still classify the real user-bus failure.
   return { ...machineResult, stderr: `${directResult.stderr}\n${machineResult.stderr}`.trim() };
+}
+
+function isSystemdBusConnectFailure(result: ExecResult): boolean {
+  if (result.termination !== "exit") {
+    return true;
+  }
+  // systemd prints its bus connect errors on stderr as "Failed to connect to bus: ..."
+  // or "Failed to connect to <scope> scope bus via <transport> transport: ...".
+  // stdout stays out of this decision: a unit's journal excerpt may quote the same words.
+  const normalized = normalizeLowercaseStringOrEmpty(result.stderr);
+  return normalized.includes("failed to connect to") && normalized.includes("bus");
 }
 
 export async function execSystemctlUser(
