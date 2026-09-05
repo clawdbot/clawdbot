@@ -1,3 +1,4 @@
+import { createDeferred } from "openclaw/plugin-sdk/extension-shared";
 import { describe, expect, it } from "vitest";
 import { ExtensionRelayBridge } from "./relay-bridge.js";
 import {
@@ -7,8 +8,60 @@ import {
   sendHello,
   wireExtension,
 } from "./relay-bridge.test-support.js";
+import type { RelayToExtensionMessage } from "./relay-protocol.js";
 
 describe("ExtensionRelayBridge target enumeration", () => {
+  it("includes a tab discovered while another native attachment is pending", async () => {
+    const bridge = new ExtensionRelayBridge();
+    const firstAttach = createDeferred<RelayToExtensionMessage>();
+    const nextStep = createDeferred<Record<string, unknown>>();
+    const extension = wireExtension(bridge, (message) => {
+      if (message.type !== "attach") {
+        return replyFor(message);
+      }
+      if (message.tabId === 1) {
+        firstAttach.resolve(message);
+      } else {
+        nextStep.resolve(message);
+      }
+      return null;
+    });
+    sendHello(extension.handlers);
+    const client = new FakeSocket();
+    const send = client.send.bind(client);
+    client.send = (data) => {
+      send(data);
+      nextStep.resolve(JSON.parse(data));
+    };
+    const cdp = bridge.attachCdpClientSocket(client);
+    cdp.onMessage(JSON.stringify({ id: 1, method: "Target.getTargets" }));
+    const first = await firstAttach.promise;
+    extension.handlers.onMessage(
+      JSON.stringify({
+        type: "tabs",
+        tabs: [
+          { tabId: 1, url: "https://one.example", title: "One", active: true },
+          { tabId: 2, url: "https://two.example", title: "Two", active: false },
+        ],
+      }),
+    );
+    extension.handlers.onMessage(JSON.stringify(replyFor(first)));
+    const second = await nextStep.promise;
+    expect(second).toMatchObject({ type: "attach", tabId: 2 });
+    extension.handlers.onMessage(
+      JSON.stringify({ type: "result", seq: second.seq, result: { targetId: "target-2" } }),
+    );
+    await flush();
+    expect(client.frames().find((frame) => frame.id === 1)).toMatchObject({
+      result: {
+        targetInfos: [
+          expect.objectContaining({ targetId: "target-1" }),
+          expect.objectContaining({ targetId: "target-2" }),
+        ],
+      },
+    });
+  });
+
   it("repairs reconnect attach without undoing a later explicit detach", async () => {
     const bridge = new ExtensionRelayBridge();
     const initialSocket = new FakeSocket();
@@ -108,9 +161,17 @@ describe("ExtensionRelayBridge target enumeration", () => {
     });
   });
 
-  it("resolves inventory identities without attaching a discovery-only client", async () => {
+  it("refreshes native identities without attaching a discovery-only client", async () => {
     const bridge = new ExtensionRelayBridge();
-    const extension = wireExtension(bridge);
+    let targetId = "target-1";
+    let unavailable = false;
+    const extension = wireExtension(bridge, (message) =>
+      message.type === "attach"
+        ? unavailable
+          ? { type: "error", seq: message.seq, message: "native target unavailable" }
+          : { type: "result", seq: message.seq, result: { targetId } }
+        : replyFor(message),
+    );
     sendHello(extension.handlers);
     const client = new FakeSocket();
     const cdp = bridge.attachCdpClientSocket(client);
@@ -125,6 +186,50 @@ describe("ExtensionRelayBridge target enumeration", () => {
       },
     });
     expect(client.frames().some((frame) => frame.method === "Target.attachedToTarget")).toBe(false);
+
+    targetId = "replacement-target";
+    cdp.onMessage(JSON.stringify({ id: 2, method: "Target.getTargets" }));
+    await flush();
+
+    expect(client.frames().find((frame) => frame.id === 2)).toMatchObject({
+      result: {
+        targetInfos: [expect.objectContaining({ targetId: "replacement-target", attached: false })],
+      },
+    });
+    expect(client.frames().some((frame) => frame.method === "Target.attachedToTarget")).toBe(false);
+
+    unavailable = true;
+    cdp.onMessage(JSON.stringify({ id: 3, method: "Target.getTargets" }));
+    await flush();
+    expect(client.frames().find((frame) => frame.id === 3)).toMatchObject({
+      error: { message: "Target identities are unavailable" },
+    });
+  });
+
+  it("rejects discovery when the previous native retirement fails", async () => {
+    const bridge = new ExtensionRelayBridge();
+    const retirement = createDeferred<Extract<RelayToExtensionMessage, { type: "detach" }>>();
+    const extension = wireExtension(bridge, (message) => {
+      if (message.type === "detach") {
+        retirement.resolve(message);
+        return null;
+      }
+      return replyFor(message);
+    });
+    sendHello(extension.handlers);
+    const client = new FakeSocket();
+    const cdp = bridge.attachCdpClientSocket(client);
+    cdp.onMessage(JSON.stringify({ id: 1, method: "Target.getTargets" }));
+    const detach = await retirement.promise;
+    cdp.onMessage(JSON.stringify({ id: 2, method: "Target.getTargets" }));
+    extension.handlers.onMessage(
+      JSON.stringify({ type: "error", seq: detach.seq, message: "native detach failed" }),
+    );
+    await flush();
+
+    expect(client.frames().find((frame) => frame.id === 2)).toMatchObject({
+      error: { message: "Target identities are unavailable" },
+    });
   });
 
   it("repairs a failed initial auto-attach before Target.getTargets", async () => {

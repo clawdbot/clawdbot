@@ -20,9 +20,9 @@ afterEach(async () => {
 it.each(["owned", "borrowed"] as const)(
   "repairs the %s relay after initial attach loss and delayed frame-tree publication",
   async (ownership) => {
-    const frameTreeHeld = createDeferred<void>();
-    const releaseFrameTree = createDeferred<void>();
-    const laterCommand = createDeferred<void>();
+    let frameTreeHeld = createDeferred<void>();
+    let releaseFrameTree = createDeferred<void>();
+    let laterCommand = createDeferred<void>();
     const methods = new WeakMap<object, { method?: string; checks: number }>();
     const realm = vm.createContext({});
     const objects = new Map<string, unknown>();
@@ -132,13 +132,21 @@ it.each(["owned", "borrowed"] as const)(
         ]);
         expect(attachAttempts).toBe(2);
 
+        frameTreeHeld = createDeferred<void>();
+        releaseFrameTree = createDeferred<void>();
+        laterCommand = createDeferred<void>();
         extension.send(JSON.stringify({ type: "detached", tabId: 1, reason: "renderer replaced" }));
         await new Promise<void>((resolve) => {
           setImmediate(resolve);
         });
-        await expect(profile.listTabs()).resolves.toEqual([
+        const recovered = expect(profile.listTabs()).resolves.toEqual([
           expect.objectContaining({ targetId: "fixture-target" }),
         ]);
+        void recovered.catch(() => {});
+        await frameTreeHeld.promise;
+        await laterCommand.promise;
+        releaseFrameTree.resolve();
+        await recovered;
         expect(attachAttempts).toBe(3);
 
         const abort = new AbortController();

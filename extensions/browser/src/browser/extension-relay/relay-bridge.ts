@@ -615,47 +615,41 @@ export class ExtensionRelayBridge {
     if (!this.extensionConnected) {
       return { status: "unavailable", reason: "extension-disconnected" };
     }
-    // Reconcile cached physical roots before inventory: Playwright creates Pages
-    // only from attachment events, and a native detach keeps only a stale identity.
-    for (const [tabId, tab] of this.tabs) {
-      if (tab.target?.sessionId) {
-        this.announceAttachedTab(
-          tabId,
-          { targetId: tab.target.id, sessionId: tab.target.sessionId },
-          this.autoAttachRecipients(tabId, tab.target.sessionId),
-        );
+    // Tabs can arrive while Chrome attaches the previous batch. Visit each tab
+    // generation once; a failed acquisition still rejects the complete inventory.
+    const identities = new Map<TabState, string | undefined>();
+    while (this.extensionConnected) {
+      const pending = [...this.tabs].filter(([, tab]) => !identities.has(tab));
+      if (pending.length === 0) {
+        break;
       }
-    }
-    await Promise.allSettled(
-      [...this.tabs]
-        .filter(
-          ([tabId, tab]) =>
-            !tab.target || (!tab.target.sessionId && this.autoAttachRecipients(tabId).length > 0),
-        )
-        .map(([tabId]) =>
+      for (const [, tab] of pending) {
+        identities.set(tab, undefined);
+      }
+      await Promise.allSettled(
+        pending.map(([tabId, tab]) =>
           this.withAttachedTab(client, tabId, (attached) => {
             this.announceAttachedTab(
               tabId,
               attached,
               this.autoAttachRecipients(tabId, attached.sessionId),
             );
+            identities.set(tab, attached.targetId);
           }),
         ),
-    );
+      );
+    }
     if (!this.extensionConnected) {
       return { status: "unavailable", reason: "extension-disconnected" };
     }
-    if (
-      [...this.tabs].some(
-        ([tabId, tab]) =>
-          !tab.target || (!tab.target.sessionId && this.autoAttachRecipients(tabId).length > 0),
-      )
-    ) {
-      return { status: "unavailable", reason: "target-identity-unresolved" };
+    const targetInfos: Record<string, unknown>[] = [];
+    for (const [tabId, tab] of this.tabs) {
+      const targetId = identities.get(tab);
+      if (!targetId || (!tab.target?.sessionId && this.autoAttachRecipients(tabId).length > 0)) {
+        return { status: "unavailable", reason: "target-identity-unresolved" };
+      }
+      targetInfos.push(this.targetInfoForTab(tab, targetId));
     }
-    const targetInfos = [...this.tabs.values()].map((tab) =>
-      this.targetInfoForTab(tab, tab.target?.id ?? ""),
-    );
     return { status: "available", targetInfos };
   }
 
