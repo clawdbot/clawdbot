@@ -426,6 +426,13 @@ describe("cron descendant follow-up Gateway transport", () => {
       }
       if (instance) {
         await withProofTimeout("Gateway stop", instance.stopGateway()).catch(() => undefined);
+        const index = instances.indexOf(instance);
+        if (index >= 0) {
+          instances.splice(index, 1);
+        }
+        await withProofTimeout("test state cleanup", instance.state.cleanup()).catch(
+          () => undefined,
+        );
       }
       await provider?.close();
     }
