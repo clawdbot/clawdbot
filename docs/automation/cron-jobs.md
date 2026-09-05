@@ -233,7 +233,8 @@ Every job carries exactly one payload kind, chosen by flag:
 | Command       | `--command <shell>` or `--command-argv <json>` | A shell/process on the Gateway host, no model call         |
 | Script        | `--script <file\|->`                           | A headless code-mode script using the owning agent's tools |
 
-System-owned payload kinds are gateway-converged and cannot be created or edited through the CLI or API. The `heartbeat` kind creates one heartbeat monitor job per heartbeat-enabled agent (see [Heartbeat](/gateway/heartbeat)). The `skillCollectionReview` kind creates one Skill Workshop review job per configured agent, including agents that share a workspace. Each job reviews only its agent's Workshop directory. Both appear in `openclaw cron list`; use `--all` to include disabled rows.
+System-owned monitor jobs are gateway-converged and cannot be created or edited through the CLI or API. The `heartbeat` kind creates one heartbeat monitor job per heartbeat-enabled agent (see [Heartbeat](/gateway/heartbeat)). The weekly Skill Workshop review is a normal isolated `agentTurn` job with a reserved declaration key. Both appear in `openclaw cron list`; use `--all` to include disabled rows.
+The `skillCollectionReview` payload kind is gone; existing rows are replaced with the canonical review job during upgrade.
 
 Skill collection review runs every 7 days. It is enabled when `skills.workshop.autonomous.mode` is `auto`; `propose` and `off` keep the system-owned job disabled. The Gateway converges these jobs at startup and after config reload. Scheduled reviews require automations. When `cron.enabled` is `false` or `OPENCLAW_SKIP_CRON=1`, the Gateway logs a startup warning and does not run scheduled reviews. There is no separate weekly Gateway timer.
 
@@ -701,6 +702,34 @@ This means the run acquired session/global placement admission. It does **not**
 mean the model finished, a tool succeeded, or a message was delivered. A single
 agent request can wait up to 15 seconds for admission; the model runtime may still
 be preparing when the response arrives.
+
+For callers that need the terminal execution and delivery facts in the same
+request, add `"waitForCompletion": true` to the direct `/hooks/agent` payload.
+The response stays open after admission and returns HTTP `200` when the admitted
+run settles:
+
+```json
+{
+  "ok": true,
+  "runId": "<hook-request-run-id>",
+  "completion": {
+    "status": "ok",
+    "replyDisposition": "silent",
+    "delivered": false,
+    "deliveryAttempted": true,
+    "deliverySuppressionReason": "silent"
+  }
+}
+```
+
+`replyDisposition` records whether the model's terminal reply was `visible`,
+`silent`, or `empty`, without exposing its text. Post-admission execution or
+delivery failures are terminal data in `completion`, not retryable HTTP
+failures. `deliveryError`, when present, is the fixed categorical value
+`"delivery-failed"`; provider, runtime, model, target, session, and diagnostic
+details remain private. The response never includes model output or summaries.
+Use an idempotency key so a lost response can replay the same admitted run and
+completion result without dispatching again.
 
 In `openclaw logs --follow`, search for `hook agent run completed` and the exact HTTP
 `runId`. Runs with `status=ok` and no explicit delivery error log at info level;

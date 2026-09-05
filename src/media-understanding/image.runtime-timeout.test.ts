@@ -4,6 +4,7 @@ import path from "node:path";
 import { expectDefined } from "@openclaw/normalization-core/expect";
 import { MAX_TIMER_TIMEOUT_MS } from "@openclaw/normalization-core/number-coercion";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { createEmptyPluginMetadataSnapshot } from "../agents/test-helpers/embedded-agent-runner-e2e-mocks.js";
 
 const API_KEY_FIELD = ["api", "Key"].join("") as "apiKey";
 const REQUIRE_API_KEY_FIELD = ["require", "ApiKey"].join("");
@@ -167,6 +168,7 @@ describe("describeImageWithModelCore", () => {
           agentDir: input.agentDir,
           config: input.config,
           workspaceDir: input.workspaceDir,
+          metadataSnapshot: createEmptyPluginMetadataSnapshot(input.workspaceDir),
           createStores: () => ({
             authStorage: preparedAuthStorage,
             modelRegistry: {},
@@ -304,12 +306,14 @@ describe("describeImageWithModelCore", () => {
     expect(completeMock).toHaveBeenCalledOnce();
     const firstCall = expectDefined(completeMock.mock.calls[0], "image completion call 0");
     const [completionModel, context, options] = firstCall;
-    expect(completionModel).toEqual({
-      provider: "openai",
-      id: "gpt-5.4",
-      input: ["text", "image"],
-      baseUrl: "https://chatgpt.com/backend-api",
-    });
+    expect(completionModel).toEqual(
+      expect.objectContaining({
+        provider: "openai",
+        id: "gpt-5.4",
+        input: ["text", "image"],
+        baseUrl: "https://chatgpt.com/backend-api",
+      }),
+    );
     expect(context.systemPrompt).toBe("Describe the image.");
     expect(context.messages).toHaveLength(1);
     expect(Object.keys(options).toSorted()).toEqual(["apiKey", "maxTokens", "signal", "timeoutMs"]);

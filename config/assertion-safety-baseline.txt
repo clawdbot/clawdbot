@@ -1822,7 +1822,7 @@ src/agents/embedded-agent-runner/thinking.ts	25
 src/agents/embedded-agent-runner/tool-call-argument-decoding.ts	5
 src/agents/embedded-agent-runner/tool-result-char-estimator.ts	9
 src/agents/embedded-agent-runner/tool-result-context-guard.ts	13
-src/agents/embedded-agent-runner/tool-result-truncation.ts	17
+src/agents/embedded-agent-runner/tool-result-truncation.ts	16
 src/agents/embedded-agent-runner/tool-schema-runtime.ts	1
 src/agents/embedded-agent-runner/transcript-rewrite.ts	2
 src/agents/embedded-agent-subscribe.handlers.messages.lifecycle.ts	2
@@ -2058,7 +2058,7 @@ src/agents/tools/sessions-spawn-tool.ts	5
 src/agents/tools/sessions-tool.ts	1
 src/agents/tools/sessions-yield-tool.ts	1
 src/agents/tools/skill-workshop-tool-helpers.ts	3
-src/agents/tools/structured-output-tool.ts	3
+src/agents/tools/structured-output-tool.ts	2
 src/agents/tools/subagents-tool.ts	2
 src/agents/tools/system-agent-tool.ts	1
 src/agents/tools/task-suggestion-tools.ts	2
@@ -2099,7 +2099,6 @@ src/auto-reply/reply/acp-reset-target.ts	2
 src/auto-reply/reply/agent-lifecycle-terminal.ts	2
 src/auto-reply/reply/agent-runner-event-handler.ts	1
 src/auto-reply/reply/agent-runner-execution.ts	1
-src/auto-reply/reply/agent-runner-failure-reply.ts	1
 src/auto-reply/reply/agent-runner-fallback-candidate.ts	1
 src/auto-reply/reply/agent-runner-memory.ts	6
 src/auto-reply/reply/agent-runner-run.ts	1
@@ -2212,7 +2211,7 @@ src/channels/plugins/bootstrap-registry.ts	4
 src/channels/plugins/bundled-setup-policy.ts	2
 src/channels/plugins/bundled.ts	4
 src/channels/plugins/chat-target-prefixes.ts	2
-src/channels/plugins/config-helpers.ts	14
+src/channels/plugins/config-helpers.ts	7
 src/channels/plugins/config-schema.ts	14
 src/channels/plugins/config-write-policy-shared.ts	1
 src/channels/plugins/config-writes.ts	1
@@ -2232,11 +2231,11 @@ src/channels/plugins/read-only.ts	6
 src/channels/plugins/registry.ts	1
 src/channels/plugins/session-thread-info-loaded.ts	1
 src/channels/plugins/setup-contract.ts	3
-src/channels/plugins/setup-helpers.ts	4
+src/channels/plugins/setup-helpers.ts	3
 src/channels/plugins/setup-promotion-helpers.ts	1
 src/channels/plugins/setup-promotion-keys.ts	1
 src/channels/plugins/setup-registry.ts	2
-src/channels/plugins/setup-wizard-helpers.ts	13
+src/channels/plugins/setup-wizard-helpers.ts	12
 src/channels/plugins/setup-wizard-proxy.ts	1
 src/channels/plugins/setup-wizard.ts	5
 src/channels/plugins/threading-helpers.ts	1
@@ -2625,7 +2624,7 @@ src/config/sessions/session-accessor.sqlite-canonical-inventory.ts	1
 src/config/sessions/session-accessor.sqlite-checkpoint.ts	3
 src/config/sessions/session-accessor.sqlite-delta.ts	2
 src/config/sessions/session-accessor.sqlite-entry-availability.ts	1
-src/config/sessions/session-accessor.sqlite-entry-cache.ts	3
+src/config/sessions/session-accessor.sqlite-entry-cache.ts	2
 src/config/sessions/session-accessor.sqlite-entry.ts	1
 src/config/sessions/session-accessor.sqlite-history-events.ts	2
 src/config/sessions/session-accessor.sqlite-message-cut.ts	1
@@ -2837,7 +2836,6 @@ src/gateway/server-methods/chat-broadcast.ts	1
 src/gateway/server-methods/chat-history-budget.ts	6
 src/gateway/server-methods/chat-history-handler.ts	2
 src/gateway/server-methods/chat-message-get-handler.ts	3
-src/gateway/server-methods/chat-restart-recovery.ts	1
 src/gateway/server-methods/chat-send-attachments.ts	1
 src/gateway/server-methods/chat-send-reply-dispatch.ts	2
 src/gateway/server-methods/chat-send-request.ts	1
@@ -2921,7 +2919,6 @@ src/gateway/server.auth.control-ui.pairing.suite.ts	6
 src/gateway/server.auth.control-ui.trusted-proxy.suite.ts	5
 src/gateway/server.auth.default-token.suite.ts	10
 src/gateway/server.auth.modes.suite.ts	1
-src/gateway/server/hooks-request-handler.ts	4
 src/gateway/server/http-listen.ts	1
 src/gateway/server/plugins-http/route-capability.ts	1
 src/gateway/server/ws-connection-diagnostics.ts	3
@@ -3294,7 +3291,7 @@ src/plugin-sdk/approval-auth-helpers.ts	1
 src/plugin-sdk/approval-handler-runtime.ts	1
 src/plugin-sdk/approval-native-helpers.ts	1
 src/plugin-sdk/approval-reaction-binding.ts	2
-src/plugin-sdk/channel-config-helpers.ts	24
+src/plugin-sdk/channel-config-helpers.ts	17
 src/plugin-sdk/channel-config-ui-hints.ts	1
 src/plugin-sdk/channel-entry-contract.ts	6
 src/plugin-sdk/channel-inbound.ts	2
@@ -3676,8 +3673,8 @@ src/talk/agent-consult-tool.ts	2
 src/talk/agent-run-control-shared.ts	4
 src/talk/client-voice-confirmation.ts	2
 src/talk/client-voice-mutation-digest-owner.ts	1
-src/talk/client-voice-session-store.ts	3
-src/talk/client-voice-session.ts	3
+src/talk/client-voice-session-store.ts	1
+src/talk/client-voice-session.ts	1
 src/talk/consult-question.ts	2
 src/talk/exact-speech-protocol.ts	1
 src/talk/provider-internal.ts	2

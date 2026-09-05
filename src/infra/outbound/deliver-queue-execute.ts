@@ -8,6 +8,7 @@ import {
   isProvenDeliveryNotSentError,
 } from "../delivery-recovery.shared.js";
 import { formatErrorMessage } from "../errors.js";
+import { throwIfAborted } from "./abort.js";
 import type { DeliverOutboundPayloadsParams, PlatformSendRoute } from "./deliver-contracts.js";
 import { deliverOutboundPayloadsCore } from "./deliver-core.js";
 import { OUTBOUND_DELIVERY_LOG_SCOPE } from "./deliver-log.js";
@@ -29,6 +30,8 @@ import {
 } from "./deliver-types.js";
 import { runOutboundDeliveryCommitHooks } from "./delivery-commit-hooks.js";
 import { rejectDurableDelivery, settleDurableDelivery } from "./delivery-completion.js";
+import { retireUnsentDelivery } from "./delivery-queue-ack.js";
+import type { DeliveryProducerLease } from "./delivery-queue-lease.js";
 import { releaseSpoolArtifacts } from "./delivery-queue-media-spool.js";
 import {
   failDelivery,
@@ -43,6 +46,7 @@ import {
   emitOutboundAuditLifecycle,
   emitOutboundAuditTerminals,
   failedOutboundAuditTerminals,
+  uniformOutboundAuditTerminals,
 } from "./outbound-audit.js";
 import type { NormalizedOutboundPayload } from "./payloads.js";
 
@@ -53,13 +57,13 @@ export async function deliverOutboundPayloadsWithQueueCleanup(
   queueId: string | null,
   auditStartedAt: number,
   producerClaimId?: string,
-  producerLeaseSignal?: AbortSignal,
+  producerLease?: DeliveryProducerLease,
 ): Promise<OutboundDeliveryResult[]> {
   // Lease loss revokes queue mutation authority. Caller cancellation still
   // follows the normal abort cleanup path through the combined signal.
   const throwIfProducerLeaseLost = (): void => {
-    if (producerLeaseSignal?.aborted) {
-      throw producerLeaseSignal.reason;
+    if (producerLease?.signal.aborted) {
+      throw producerLease.signal.reason;
     }
   };
   const payloadCount = params.preparedBatch?.sourcePayloadCount ?? params.payloads.length;
@@ -183,6 +187,27 @@ export async function deliverOutboundPayloadsWithQueueCleanup(
       await runOutboundDeliveryCommitHooks(deliveredResults);
     }
   };
+  let releaseCancelledPreparation: (() => Promise<void>) | undefined;
+  const cancelBeforeSend = (): void => {
+    if (!queueId || !producerClaimId || platformSendStarted || queuedPostSendState !== undefined) {
+      return;
+    }
+    try {
+      throwIfProducerLeaseLost();
+      releaseCancelledPreparation = retireUnsentDelivery({ id: queueId, producerClaimId });
+      if (releaseCancelledPreparation) {
+        // Keep preparation attached so its late token reaches afterSendFailure.
+        // Custody ends now; media and plugin resources end when that work settles.
+        producerLease?.stop();
+        queuedPostSendState = "acked";
+        emitTerminals(() =>
+          uniformOutboundAuditTerminals(payloadCount, { outcome: "failed", failureStage: "queue" }),
+        );
+      }
+    } catch (error) {
+      log.warn(`failed to retire cancelled delivery ${queueId}: ${formatErrorMessage(error)}`);
+    }
+  };
   const wrappedParams: DeliverOutboundPayloadsParams = {
     ...params,
     // A provider marker can represent the whole durable intent only when one payload owns it.
@@ -192,7 +217,7 @@ export async function deliverOutboundPayloadsWithQueueCleanup(
       : { deliveryQueueId: undefined }),
     requiredUnknownSendReconciliation: exactReconciliationRequired,
     onPlatformSendStart: async (route, sourceIndex) => {
-      params.abortSignal?.throwIfAborted();
+      throwIfAborted(params.abortSignal);
       platformSendRoute = route;
       platformSendSourceIndex = sourceIndex;
       if (platformQueueId && !exactReconciliationRequired && queuedPreSendState === undefined) {
@@ -224,24 +249,24 @@ export async function deliverOutboundPayloadsWithQueueCleanup(
           payloadIndexes: [sourceIndex],
         });
       }
-      params.abortSignal?.throwIfAborted();
+      throwIfAborted(params.abortSignal);
       await params.onPlatformSendStart?.(route);
-      params.abortSignal?.throwIfAborted();
+      throwIfAborted(params.abortSignal);
       platformSendStarted = true;
     },
     onDirectAdapterHandoff: async () => {
-      params.abortSignal?.throwIfAborted();
+      throwIfAborted(params.abortSignal);
       assertSessionWriterDeliveryAuthorized(
         params.deliveryCompletion?.kind === "pending-final"
           ? params.deliveryCompletion.sessionWriterDeliveryAuthority
           : undefined,
       );
       await params.onPlatformSendDispatch?.();
-      params.abortSignal?.throwIfAborted();
+      throwIfAborted(params.abortSignal);
     },
     assertDirectAdapterHandoff: () => {
       params.assertDirectAdapterHandoff?.();
-      params.abortSignal?.throwIfAborted();
+      throwIfAborted(params.abortSignal);
       assertSessionWriterDeliveryAuthorized(
         params.deliveryCompletion?.kind === "pending-final"
           ? params.deliveryCompletion.sessionWriterDeliveryAuthority
@@ -249,7 +274,7 @@ export async function deliverOutboundPayloadsWithQueueCleanup(
       );
     },
     onPlatformSendDispatch: async () => {
-      params.abortSignal?.throwIfAborted();
+      throwIfAborted(params.abortSignal);
       // Once any payload returns an identity, unknown-after-send protects the whole batch.
       // A later payload dispatch must not regress that durable evidence to attempt-started.
       if (platformQueueId && queuedPreSendState !== "acked" && queuedPostSendState === undefined) {
@@ -281,14 +306,14 @@ export async function deliverOutboundPayloadsWithQueueCleanup(
           );
         }
       }
-      params.abortSignal?.throwIfAborted();
+      throwIfAborted(params.abortSignal);
       assertSessionWriterDeliveryAuthorized(
         params.deliveryCompletion?.kind === "pending-final"
           ? params.deliveryCompletion.sessionWriterDeliveryAuthority
           : undefined,
       );
       await params.onPlatformSendDispatch?.();
-      params.abortSignal?.throwIfAborted();
+      throwIfAborted(params.abortSignal);
       if (platformSendSourceIndex !== undefined) {
         platformDispatchedPayloads.add(platformSendSourceIndex);
       }
@@ -323,6 +348,10 @@ export async function deliverOutboundPayloadsWithQueueCleanup(
   let platformResultsReturned = false;
 
   try {
+    params.abortSignal?.addEventListener("abort", cancelBeforeSend, { once: true });
+    if (params.abortSignal?.aborted) {
+      cancelBeforeSend();
+    }
     throwIfProducerLeaseLost();
     const conversationAttemptAuthority =
       params.deliveryCompletion?.kind === "conversation"
@@ -343,6 +372,9 @@ export async function deliverOutboundPayloadsWithQueueCleanup(
       throwIfProducerLeaseLost();
     }
     const results = await deliverOutboundPayloadsCore(wrappedParams);
+    if (releaseCancelledPreparation) {
+      throwIfAborted(params.abortSignal);
+    }
     // Core reconciles adapter progress objects with hook-bearing final results.
     deliveredResults = results;
     const failedOutcomes = payloadOutcomes.filter((outcome) => outcome.status === "failed");
@@ -512,6 +544,10 @@ export async function deliverOutboundPayloadsWithQueueCleanup(
     return results;
   } catch (err) {
     throwIfProducerLeaseLost();
+    if (releaseCancelledPreparation) {
+      flushMessageSentEvents();
+      throw err;
+    }
     if (isOutboundDeliveryAdmissionClosedError(err)) {
       throw err;
     }
@@ -543,7 +579,7 @@ export async function deliverOutboundPayloadsWithQueueCleanup(
         // This process is now the only owner that can publish terminal observers.
         await runCommitHooksAfterAck();
         emitFailedTerminals(platformSendFailureStage);
-      } else if (isDeliveryAbortError(err)) {
+      } else if (params.abortSignal?.aborted || isDeliveryAbortError(err)) {
         if (hasPlatformSendEvidence) {
           if (queuedPostSendState !== "failed") {
             await recordOwnedQueueFailure(
@@ -698,6 +734,9 @@ export async function deliverOutboundPayloadsWithQueueCleanup(
       emitFailedTerminals(platformSendFailureStage);
     }
     throw err;
+  } finally {
+    params.abortSignal?.removeEventListener("abort", cancelBeforeSend);
+    await releaseCancelledPreparation?.();
   }
 }
 

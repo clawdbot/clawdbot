@@ -70,15 +70,15 @@ async function maximalCommit(root: string, candidates: readonly string[]): Promi
       .map((line) => line.trim())
       .filter(Boolean),
   );
-  if (independent.has(first)) {
-    return first;
-  }
-  for (const candidate of unique.slice(1)) {
-    if (independent.has(candidate) && (await isAncestor(root, first, candidate))) {
+  const maxima = unique.filter((candidate) => independent.has(candidate));
+  // A sole survivor is also the fallback, so probing its ancestry cannot
+  // change the choice. Keep competing survivors in their original order.
+  for (const candidate of maxima) {
+    if (candidate === first || maxima.length === 1 || (await isAncestor(root, first, candidate))) {
       return candidate;
     }
   }
-  return unique.find((candidate) => independent.has(candidate)) ?? first;
+  return maxima[0] ?? first;
 }
 
 export async function resolveBranchLanding(

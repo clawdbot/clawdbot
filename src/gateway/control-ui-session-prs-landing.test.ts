@@ -109,6 +109,7 @@ describe("resolveBranchLanding", () => {
   it("selects the newest of three related baselines via the batched path", async () => {
     // Linear chain: fork point (merge base) -> merged head 1 -> merged head 2
     // -> HEAD; the maximal published baseline is merged head 2.
+    const base = await sha("HEAD");
     await git("checkout", "-b", "feature");
     await fs.appendFile(path.join(root, "a.txt"), "two\n");
     await git("add", "a.txt");
@@ -122,6 +123,7 @@ describe("resolveBranchLanding", () => {
     await git("add", "c.txt");
     await git("commit", "-m", "follow-up");
     await git("update-ref", "refs/remotes/origin/feature", "HEAD");
+    const runGit = vi.spyOn(worktreeGit, "runGit");
 
     const landing = await resolveBranchLanding(root, {
       branch: "feature",
@@ -134,5 +136,6 @@ describe("resolveBranchLanding", () => {
 
     expect(landing.statsBase).toBe(head2);
     expect(landing.hasLandedPullRequest).toBe(true);
+    expect(runGit).not.toHaveBeenCalledWith(root, ["merge-base", "--is-ancestor", base, head2]);
   });
 });

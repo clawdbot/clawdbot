@@ -1219,16 +1219,14 @@ function getTrailingToolResultEntryIds(branch: ToolResultBranchEntry[]): Set<str
   const ids = new Set<string>();
   for (let index = branch.length - 1; index >= 0; index--) {
     const entry = branch[index];
-    if (entry?.type !== "message" || !entry.message) {
-      if (ids.size === 0) {
-        continue;
-      }
+    // Only an assistant response consumes tool results. Runtime context and
+    // queued steering must not make the pending batch eligible for elision.
+    if (entry?.type === "message" && entry.message?.role === "assistant") {
       break;
     }
-    if ((entry.message as { role?: string }).role !== "toolResult") {
-      break;
+    if (entry?.type === "message" && entry.message?.role === "toolResult") {
+      ids.add(entry.id);
     }
-    ids.add(entry.id);
   }
   return ids;
 }

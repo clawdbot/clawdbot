@@ -414,10 +414,6 @@ export class SessionProgressHovercardProvider extends ReactiveElement {
       )?.findSidebarHovercardRowByKey(sessionKey);
     const pullRequests = this.pullRequests?.get(artifactKey);
     const currentProgressCard = this.progressCards?.get(session);
-    const progressCardError =
-      this.progressCards?.getError(session) === "unsupported-owner"
-        ? t("sessionProgressCard.ownerUnsupported")
-        : undefined;
     if (currentProgressCard !== undefined) {
       this.lastProgressCard = currentProgressCard;
     }
@@ -439,7 +435,6 @@ export class SessionProgressHovercardProvider extends ReactiveElement {
     };
     const revision = JSON.stringify({
       progress: this.lastProgressCard?.revision ?? null,
-      progressCardError,
       pullRequests: pullRequests
         ? { branch: pullRequests.branch, pullRequests: pullRequests.pullRequests }
         : null,
@@ -501,7 +496,6 @@ export class SessionProgressHovercardProvider extends ReactiveElement {
         personActivity: this.personActivity(),
         pullRequests,
         progressCard: this.lastProgressCard,
-        progressCardError,
       }),
       card,
     );

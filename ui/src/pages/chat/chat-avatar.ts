@@ -432,32 +432,22 @@ async function loadSenderAgentAvatars(host: ChatAvatarHost, agentIds: readonly s
   const roster = new Set(agents?.map((agent) => agent.id));
   // Bound forwarded-agent work independently of transcript size.
   const ids = [...new Set(agentIds)]
-    .filter((id) => id !== agentId && roster.has(id))
+    .filter((id) => host.connected && id !== agentId && roster.has(id))
     .slice(0, CHAT_AVATAR_CACHE_LIMIT - 1);
-  if (!host.connected || ids.length === 0) {
-    const references = chatAvatarReferences.get(host);
-    for (const [key, release] of references ?? []) {
-      if (key !== currentAvatarReference) {
-        release();
-        references?.delete(key);
-      }
-    }
-    if (host.senderAgentAvatars?.size) {
-      host.senderAgentAvatars = new Map();
-      host.requestUpdate?.();
-    }
-    return;
-  }
   const previousAvatars = host.senderAgentAvatars;
-  const snapshots = await Promise.all(ids.map((id) => loadChatAvatarSnapshot(host, id)));
+  // Empty/disconnected batches clear synchronously; only awaited loads need the stale fence.
+  const snapshots = ids.length
+    ? await Promise.all(ids.map((id) => loadChatAvatarSnapshot(host, id)))
+    : [];
   if (
-    !host.connected ||
-    host.client !== client ||
-    host.connectionEpoch !== epoch ||
-    host.agentsList?.agents !== agents ||
-    host.sessionKey !== sessionKey ||
-    resolveAgentIdForSession(host) !== agentId ||
-    senderAvatarRequests.get(host) !== request
+    ids.length &&
+    (!host.connected ||
+      host.client !== client ||
+      host.connectionEpoch !== epoch ||
+      host.agentsList?.agents !== agents ||
+      host.sessionKey !== sessionKey ||
+      resolveAgentIdForSession(host) !== agentId ||
+      senderAvatarRequests.get(host) !== request)
   ) {
     for (const snapshot of snapshots) {
       snapshot?.release();
@@ -471,7 +461,7 @@ async function loadSenderAgentAvatars(host: ChatAvatarHost, agentIds: readonly s
       references?.delete(key);
     }
   }
-  host.senderAgentAvatars = new Map(
+  const avatars = new Map(
     ids.map((id, index) => {
       const snapshot = snapshots[index];
       if (snapshot) {
@@ -480,7 +470,14 @@ async function loadSenderAgentAvatars(host: ChatAvatarHost, agentIds: readonly s
       return [id, snapshot ? snapshot.url : (previousAvatars?.get(id) ?? null)];
     }),
   );
-  host.requestUpdate?.();
+  // Leases and identity TTL refresh independently; unchanged URLs keep settled rows memoized.
+  if (
+    avatars.size !== (previousAvatars?.size ?? 0) ||
+    [...avatars].some(([id, url]) => previousAvatars?.get(id) !== url)
+  ) {
+    host.senderAgentAvatars = avatars;
+    host.requestUpdate?.();
+  }
 }
 
 export async function refreshChatAvatar(host: ChatAvatarHost) {
