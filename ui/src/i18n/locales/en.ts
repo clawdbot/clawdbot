@@ -283,7 +283,6 @@ export const en: TranslationMap & {
     widgetLoading: "Loading session progress…",
     widgetEmpty: "No progress card yet",
     widgetUnavailable: "Session progress is unavailable.",
-    ownerUnsupported: "Update the Gateway to view progress for this session's agent.",
     widgetAccessDenied: "Select a session you can access or change sharing for this session.",
     countLabel: "{completed} of {total} completed",
     activity: {
@@ -1286,6 +1285,7 @@ export const en: TranslationMap & {
     forkedSession: "Forked session",
     copySessionId: "Session ID",
     copySessionLink: "Session link",
+    copySessionPreviewLink: "Preview link",
     copyMarkdown: "Conversation as Markdown",
     openNewTab: "New tab",
     openNewWindow: "New window",
@@ -5480,6 +5480,12 @@ export const en: TranslationMap & {
       showEarlier: "Show earlier",
       loadingEarlier: "Loading earlier history…",
       noMatches: "No matching messages",
+      positionRail: "Conversation position",
+      positionMarker: "{label}, marker {position} of {count}",
+      positionUserMessage: "User message",
+      positionAssistantMessage: "Assistant message",
+      positionMarkerHint:
+        "Use arrow keys to choose a marker, Enter or Space to jump, and Escape to dismiss the preview.",
     },
     pendingInputs: {
       cancelled:

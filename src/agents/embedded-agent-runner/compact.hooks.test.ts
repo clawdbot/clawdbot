@@ -24,6 +24,7 @@ import {
 import { closeOpenClawAgentDatabasesForTest } from "../../state/openclaw-agent-db.js";
 import { getRegisteredAgentHarness, registerAgentHarness } from "../harness/registry.js";
 import type { AgentHarness } from "../harness/types.js";
+import { getModelProviderLocalServiceReconciler } from "../provider-local-service-reconcile.js";
 import {
   createAssistant,
   createAssistantResultStream,
@@ -3319,6 +3320,34 @@ describe("compactEmbeddedAgentSessionDirect hooks", () => {
       api: "ollama",
       id: "qwen3:8b",
     });
+  });
+
+  it("carries the prepared provider reconciler into direct compaction", async () => {
+    mockResolvedModel();
+    const reconcile = vi.fn(async () => undefined);
+    const buildDefaultPlan = buildAgentRuntimePlanMock.getMockImplementation();
+    if (!buildDefaultPlan) {
+      throw new Error("Compaction runtime plan fixture is not configured");
+    }
+    buildAgentRuntimePlanMock.mockImplementation((params) => ({
+      ...buildDefaultPlan(params),
+      providerRuntimeHandle: {
+        provider: params.provider,
+        modelId: params.modelId,
+        workspaceDir: params.workspaceDir,
+        prepared: true,
+        plugin: { reconcileLocalService: reconcile },
+      },
+    }));
+
+    await expect(compactEmbeddedAgentSessionDirect(wrappedCompactionArgs())).resolves.toMatchObject(
+      { ok: true },
+    );
+
+    const streamRegistration = mockCallArg(registerProviderStreamForModelMock) as {
+      model: object;
+    };
+    expect(getModelProviderLocalServiceReconciler(streamRegistration.model)).toBe(reconcile);
   });
 
   it("aborts in-flight compaction when the caller abort signal fires", async () => {

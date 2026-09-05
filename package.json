@@ -2187,8 +2187,7 @@
     "@types/web-push": "3.6.4",
     "@types/ws": "8.18.1",
     "@typescript/native-preview": "7.0.0-dev.20260707.2",
-    "@vitest/coverage-v8": "4.1.11",
-    "@vitest/runner": "4.1.11",
+    "@vitest/coverage-v8": "5.0.0",
     "acpx": "0.13.1",
     "apache-arrow": "18.1.0",
     "baileys": "7.0.0-rc14",
@@ -2223,7 +2222,7 @@
     "tsx": "4.23.12",
     "unrun": "0.3.1",
     "vite": "8.2.2",
-    "vitest": "4.1.11"
+    "vitest": "5.0.0"
   },
   "optionalDependencies": {
     "sqlite-vec": "0.1.9"

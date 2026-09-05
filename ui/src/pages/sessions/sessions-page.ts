@@ -1493,6 +1493,7 @@ class SessionsPage extends OpenClawLightDomElement {
               break;
             case "copy-session-id":
             case "copy-session-link":
+            case "copy-session-preview-link":
             case "copy-markdown":
             case "open-new-tab":
             case "open-new-window":

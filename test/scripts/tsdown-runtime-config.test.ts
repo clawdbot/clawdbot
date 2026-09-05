@@ -134,7 +134,7 @@ describe("tsdown config", () => {
     const plugin = createStateSchemaInlinePlugin(rootDir);
     let cacheKeyGenerator: ((context: { id: string }) => string | undefined) | undefined;
     plugin.configureVitest({
-      experimental_defineCacheKeyGenerator: (generator) => {
+      defineCacheKeyGenerator: (generator) => {
         cacheKeyGenerator = generator;
       },
     });

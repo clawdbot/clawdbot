@@ -698,7 +698,18 @@ describe("sessions_send agent targeting", () => {
           emitLifecycleAssistantReply({
             opts,
             defaultSessionId: "orion-created",
-            resolveText: () => "orion response",
+            // The detached announce flow keeps stepping this same mock after the
+            // awaited reply; skipping both follow-up steps ends the tail instead of
+            // running five ping-pong turns no row asserts on.
+            resolveText: (extraSystemPrompt) => {
+              if (extraSystemPrompt?.includes("Agent-to-agent reply step")) {
+                return "REPLY_SKIP";
+              }
+              if (extraSystemPrompt?.includes("Agent-to-agent announce step")) {
+                return "ANNOUNCE_SKIP";
+              }
+              return "orion response";
+            },
           }),
         );
         spy.mockClear();

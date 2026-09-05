@@ -28,10 +28,6 @@ export class SessionProgressCardController implements ReactiveController {
     return this.target ? (this.store?.get(this.target) ?? null) : null;
   }
 
-  get error() {
-    return this.target ? this.store?.getError(this.target) : undefined;
-  }
-
   dismiss = (card: ProgressCard): Promise<boolean> =>
     this.target
       ? (this.store?.dismiss(this.target, card) ?? Promise.resolve(false))

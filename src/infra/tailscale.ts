@@ -271,6 +271,7 @@ async function startTailscaleRouteOwner(argv: string[]): Promise<TailscaleRouteC
     [TAILSCALE_ROUTE_OWNER_ARG, JSON.stringify({ argv })],
     {
       execArgv,
+      detached: process.platform !== "win32",
       stdio: ["ignore", "ignore", "ignore", "ipc"],
     },
   );
@@ -278,7 +279,6 @@ async function startTailscaleRouteOwner(argv: string[]): Promise<TailscaleRouteC
   let ready = false;
   let active = false;
   let stopping = false;
-  let startupSettled = false;
   let failure: Error | undefined;
   let resolveExit!: () => void;
   const exited = new Promise<void>((resolve) => {
@@ -287,10 +287,6 @@ async function startTailscaleRouteOwner(argv: string[]): Promise<TailscaleRouteC
 
   const startup = new Promise<void>((resolve, reject) => {
     const settle = (error?: Error) => {
-      if (startupSettled) {
-        return;
-      }
-      startupSettled = true;
       clearTimeout(startupTimer);
       if (error) {
         reject(error);

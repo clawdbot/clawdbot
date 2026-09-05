@@ -163,8 +163,7 @@ export class ChatPane extends ChatPaneLayoutRender {
     const canDismissProgressCard =
       state.connected &&
       !sessionParticipationBlocked &&
-      hasOperatorWriteAccess(gatewaySnapshot.hello?.auth ?? null) &&
-      isGatewayMethodAdvertised(gatewaySnapshot, "progressCard.put") === true;
+      hasOperatorWriteAccess(gatewaySnapshot.hello?.auth ?? null);
     const onDismissProgressCard = canDismissProgressCard
       ? (card: ProgressCard) => {
           void this.progressCard
@@ -377,10 +376,6 @@ export class ChatPane extends ChatPaneLayoutRender {
       compactionStatus: state.compactionStatus,
       fallbackStatus: state.fallbackStatus,
       progressCard: this.progressCard.card,
-      progressCardError:
-        this.progressCard.error === "unsupported-owner"
-          ? t("sessionProgressCard.ownerUnsupported")
-          : undefined,
       collapseTaskProgress: state.settings.chatCollapseTaskProgress === true,
       onDismissProgressCard,
       gatewayQuestionPrompts: catalogKey || sessionParticipationBlocked ? [] : this.questionPrompts,

@@ -1,6 +1,6 @@
 /* @vitest-environment jsdom */
 
-import { GATEWAY_SERVER_CAPS, type ProgressCard } from "@openclaw/gateway-protocol";
+import type { ProgressCard } from "@openclaw/gateway-protocol";
 import { expectDefined } from "@openclaw/normalization-core";
 import { describe, expect, it, onTestFinished, vi } from "vitest";
 import { createDeferred } from "../../../../test/helpers/promise.js";
@@ -40,10 +40,6 @@ function createHistoryProgressPane(request: ReturnType<typeof vi.fn>) {
   const client = { request } as unknown as GatewayBrowserClient;
   const { pane, state } = createTestChatPane({ client, sessions: {} as SessionCapability });
   const hello = gatewayHelloForMethods(["chat.history", "progressCard.get", "progressCard.put"]);
-  hello.features = {
-    ...hello.features,
-    capabilities: [GATEWAY_SERVER_CAPS.PROGRESS_CARD_AGENT_SCOPE],
-  };
   pane.context.gateway.snapshot.hello = hello;
   state.hello = hello;
   state.agentsList = {

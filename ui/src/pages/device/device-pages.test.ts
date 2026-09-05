@@ -5,6 +5,7 @@ import type { ApplicationContext } from "../../app/context.ts";
 import type {
   NativeDeviceSettingsCapability,
   NativeDeviceSettingsSnapshot,
+  SettingKey,
 } from "../../app/native-device-settings.ts";
 import { i18n } from "../../i18n/index.ts";
 import { createApplicationContextProvider } from "../../test-helpers/application-context.ts";
@@ -27,7 +28,9 @@ function createCapability(
         listeners.delete(listener);
       };
     },
-    set: vi.fn(),
+    set: vi.fn<
+      (key: SettingKey, value: boolean | string | string[] | null, onSettled?: () => void) => void
+    >(),
     requestPermission: vi.fn(),
     openSystemSettings: vi.fn(),
     openPanel: vi.fn(),
@@ -37,6 +40,11 @@ function createCapability(
   } satisfies NativeDeviceSettingsCapability;
   return {
     capability,
+    settle(index: number, next = createNativeDeviceSettingsSnapshot()) {
+      capability.snapshot = next;
+      capability.set.mock.calls[index]?.[2]?.();
+      listeners.forEach((listener) => listener(next));
+    },
     publish(next: NativeDeviceSettingsSnapshot) {
       capability.snapshot = next;
       listeners.forEach((listener) => listener(next));
@@ -107,6 +115,19 @@ describe("native device settings pages", () => {
       "https://docs.openclaw.ai/platforms/macos",
     );
     expect(row(page, "Quick Chat shortcut").textContent).toContain("Not set");
+    const iconStyles = row(page, "Dock icon").querySelector<HTMLSelectElement>("select")!;
+    expect(iconStyles.value).toBe("paper");
+    expect([...iconStyles.options].map((option) => option.textContent?.trim())).toEqual([
+      "Original",
+      "Heritage",
+      "Clawmark",
+      "Origami",
+      "Pincer",
+      "Open C",
+    ]);
+    iconStyles.value = "origami";
+    iconStyles.dispatchEvent(new Event("change", { bubbles: true }));
+    expect(capability.set).toHaveBeenCalledWith("app.iconStyle", "origami");
     expect(row(page, "Launch at login").querySelector<ToggleElement>("wa-switch")!.disabled).toBe(
       true,
     );
@@ -136,6 +157,16 @@ describe("native device settings pages", () => {
     const native = createCapability();
     const page = await mount("openclaw-device-page", native.capability);
     const next = createNativeDeviceSettingsSnapshot();
+    next.app.iconStyle = {
+      selectedId: "origami",
+      available: [{ id: "origami", name: "Origami" }],
+    };
+    native.publish(next);
+    await page.updateComplete;
+    const iconStyles = row(page, "Dock icon").querySelector<HTMLSelectElement>("select")!;
+    expect(iconStyles.value).toBe("origami");
+    expect(iconStyles.options).toHaveLength(1);
+    delete next.app.iconStyle;
     next.app.quickChatShortcut = "⌘K";
     next.app.showDockIcon = false;
     next.capabilities.computerControlEnabled = false;
@@ -151,6 +182,7 @@ describe("native device settings pages", () => {
       row(page, "Enable Peekaboo Bridge").querySelector<ToggleElement>("wa-switch")!.disabled,
     ).toBe(true);
     expect(page.querySelector('[aria-label="Computer Control provider"]')).toBeNull();
+    expect(page.querySelector('[aria-label="Dock icon"]')).toBeNull();
     expect(page.textContent).not.toContain("Import browser logins…");
     expect(page.querySelector('[aria-label="Target profile"]')).toBeNull();
     expect(page.textContent).toContain("Cookie sync requires remote mode");
@@ -169,14 +201,17 @@ describe("native device settings pages", () => {
       form.dispatchEvent(new Event("submit", { bubbles: true, cancelable: true }));
       await page.updateComplete;
     }
-    expect(capability.set).toHaveBeenLastCalledWith("browser.cookieSync.domains", [
-      "example.com",
-      "accounts.example.org",
-    ]);
+    expect(capability.set).toHaveBeenLastCalledWith(
+      "browser.cookieSync.domains",
+      ["example.com", "accounts.example.org"],
+      expect.any(Function),
+    );
     page.querySelector<HTMLButtonElement>('[aria-label="Remove example.com"]')?.click();
-    expect(capability.set).toHaveBeenLastCalledWith("browser.cookieSync.domains", [
-      "accounts.example.org",
-    ]);
+    expect(capability.set).toHaveBeenLastCalledWith(
+      "browser.cookieSync.domains",
+      ["accounts.example.org"],
+      expect.any(Function),
+    );
   });
 
   it("preserves newer domain edits across an older native acknowledgement", async () => {
@@ -195,17 +230,18 @@ describe("native device settings pages", () => {
 
     const older = createNativeDeviceSettingsSnapshot();
     older.browser.cookieSync.domains = ["example.com", "a.example.com"];
-    native.publish(older);
+    native.settle(0, older);
     await page.updateComplete;
     page.querySelector<HTMLButtonElement>('[aria-label="Remove example.com"]')?.click();
-    expect(native.capability.set).toHaveBeenLastCalledWith("browser.cookieSync.domains", [
-      "a.example.com",
-      "b.example.com",
-    ]);
+    expect(native.capability.set).toHaveBeenLastCalledWith(
+      "browser.cookieSync.domains",
+      ["a.example.com", "b.example.com"],
+      expect.any(Function),
+    );
 
     const latest = createNativeDeviceSettingsSnapshot();
     latest.browser.cookieSync.domains = ["a.example.com", "b.example.com"];
-    native.publish(latest);
+    native.settle(2, latest);
     await page.updateComplete;
     const external = createNativeDeviceSettingsSnapshot();
     external.browser.cookieSync.domains = ["external.example.com"];
@@ -230,6 +266,7 @@ describe("native device settings pages", () => {
     expect(capability.set).toHaveBeenCalledExactlyOnceWith(
       "browser.cookieSync.targetProfile",
       "work-browser",
+      expect.any(Function),
     );
     input.value = "personal-browser";
     input.dispatchEvent(new Event("input", { bubbles: true }));
@@ -237,6 +274,7 @@ describe("native device settings pages", () => {
     expect(capability.set).toHaveBeenLastCalledWith(
       "browser.cookieSync.targetProfile",
       "personal-browser",
+      expect.any(Function),
     );
     await vi.advanceTimersByTimeAsync(500);
     expect(capability.set).toHaveBeenCalledTimes(2);
@@ -254,7 +292,7 @@ describe("native device settings pages", () => {
     }
     const older = createNativeDeviceSettingsSnapshot();
     older.browser.cookieSync.targetProfile = "first-profile";
-    native.publish(older);
+    native.settle(0, older);
     await page.updateComplete;
     expect(input.value).toBe("second-profile");
 
@@ -264,10 +302,11 @@ describe("native device settings pages", () => {
     expect(native.capability.set).toHaveBeenLastCalledWith(
       "browser.cookieSync.targetProfile",
       "second-profile-final",
+      expect.any(Function),
     );
     const latest = createNativeDeviceSettingsSnapshot();
     latest.browser.cookieSync.targetProfile = "second-profile-final";
-    native.publish(latest);
+    native.settle(2, latest);
     await page.updateComplete;
     const external = createNativeDeviceSettingsSnapshot();
     external.browser.cookieSync.targetProfile = "external-profile";
@@ -300,11 +339,11 @@ describe("native device settings pages", () => {
     row(second, "Domains")
       .querySelector<HTMLFormElement>("form")!
       .dispatchEvent(new Event("submit", { bubbles: true, cancelable: true }));
-    expect(native.capability.set).toHaveBeenLastCalledWith("browser.cookieSync.domains", [
-      "example.com",
-      "b.example.com",
-      "c.example.com",
-    ]);
+    expect(native.capability.set).toHaveBeenLastCalledWith(
+      "browser.cookieSync.domains",
+      ["example.com", "b.example.com", "c.example.com"],
+      expect.any(Function),
+    );
     const secondProfile = row(second, "Target profile").querySelector<HTMLInputElement>("input")!;
     secondProfile.value += "-remote";
     secondProfile.dispatchEvent(new Event("input", { bubbles: true }));
@@ -312,12 +351,14 @@ describe("native device settings pages", () => {
     expect(native.capability.set).toHaveBeenLastCalledWith(
       "browser.cookieSync.targetProfile",
       "pending-profile-remote",
+      expect.any(Function),
     );
 
     const acknowledged = createNativeDeviceSettingsSnapshot();
     acknowledged.browser.cookieSync.domains = ["example.com", "b.example.com", "c.example.com"];
     acknowledged.browser.cookieSync.targetProfile = "pending-profile-remote";
-    native.publish(acknowledged);
+    native.settle(2, acknowledged);
+    native.settle(3, acknowledged);
     const external = createNativeDeviceSettingsSnapshot();
     external.browser.cookieSync.domains = ["external.example.com"];
     external.browser.cookieSync.targetProfile = "external-profile";
@@ -328,6 +369,84 @@ describe("native device settings pages", () => {
     expect(row(third, "Target profile").querySelector<HTMLInputElement>("input")!.value).toBe(
       "external-profile",
     );
+  });
+
+  it("settles cancelled cookie edits after navigation without reusing rejected values", async () => {
+    vi.useFakeTimers();
+    const native = createCapability();
+    const first = await mount("openclaw-device-page", native.capability);
+    const domain = row(first, "Domains").querySelector<HTMLInputElement>("input")!;
+    domain.value = "rejected.example.com";
+    domain.dispatchEvent(new Event("input", { bubbles: true }));
+    await first.updateComplete;
+    row(first, "Domains")
+      .querySelector<HTMLFormElement>("form")!
+      .dispatchEvent(new Event("submit", { bubbles: true, cancelable: true }));
+    const profile = row(first, "Target profile").querySelector<HTMLInputElement>("input")!;
+    profile.value = "rejected-profile";
+    profile.dispatchEvent(new Event("input", { bubbles: true }));
+    first.remove();
+    const second = await mount("openclaw-device-page", native.capability);
+    native.settle(0);
+    native.settle(1);
+    await second.updateComplete;
+    expect(row(second, "Domains").textContent).not.toContain("rejected.example.com");
+    expect(row(second, "Target profile").querySelector<HTMLInputElement>("input")!.value).toBe(
+      "default",
+    );
+    second.querySelector<HTMLButtonElement>('[aria-label="Remove example.com"]')!.click();
+    expect(native.capability.set.mock.calls.at(-1)?.slice(0, 2)).toEqual([
+      "browser.cookieSync.domains",
+      [],
+    ]);
+  });
+
+  it("settles native profile normalization without losing a newer unsent edit", async () => {
+    vi.useFakeTimers();
+    const native = createCapability();
+    const page = await mount("openclaw-device-page", native.capability);
+    const input = row(page, "Target profile").querySelector<HTMLInputElement>("input")!;
+    input.value = " work ";
+    input.dispatchEvent(new Event("input", { bubbles: true }));
+    await vi.advanceTimersByTimeAsync(400);
+    const normalized = createNativeDeviceSettingsSnapshot();
+    normalized.browser.cookieSync.targetProfile = "work";
+    native.settle(0, normalized);
+    await page.updateComplete;
+    expect(input.value).toBe("work");
+    input.value = "older";
+    input.dispatchEvent(new Event("input", { bubbles: true }));
+    await vi.advanceTimersByTimeAsync(400);
+    input.value = "newer";
+    input.dispatchEvent(new Event("input", { bubbles: true }));
+    native.settle(1, normalized);
+    await page.updateComplete;
+    expect(input.value).toBe("newer");
+    await vi.advanceTimersByTimeAsync(400);
+    native.settle(2, normalized);
+    await page.updateComplete;
+    expect(input.value).toBe("work");
+  });
+
+  it("keeps a newer equal-valued profile pending when the first request settles", async () => {
+    vi.useFakeTimers();
+    const native = createCapability();
+    const page = await mount("openclaw-device-page", native.capability);
+    const input = row(page, "Target profile").querySelector<HTMLInputElement>("input")!;
+    for (const value of ["first", "middle", "first"]) {
+      input.value = value;
+      input.dispatchEvent(new Event("input", { bubbles: true }));
+      await vi.advanceTimersByTimeAsync(400);
+    }
+    const older = createNativeDeviceSettingsSnapshot();
+    older.browser.cookieSync.targetProfile = "first";
+    native.settle(0, older);
+    native.settle(1);
+    await page.updateComplete;
+    expect(input.value).toBe("first");
+    native.settle(2);
+    await page.updateComplete;
+    expect(input.value).toBe("default");
   });
 
   it("keeps permission order and maps each native status to the correct action", async () => {

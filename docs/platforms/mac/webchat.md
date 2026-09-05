@@ -43,7 +43,7 @@ A colored session has a narrow leading stripe in sidebar and menu-bar rows and a
 
 ## Multiple Gateway windows
 
-Open **Settings → Gateways** to add or remove reusable Gateway profiles. Each
+Open **Connection… → Gateways** to add or remove reusable Gateway profiles. Each
 profile contains a private-network `ws://` or secure `wss://` endpoint with
 browser sign-in or an optional token or password; credentials are stored in the
 macOS Keychain. Entering a hostname in **Add Gateway** defaults to HTTPS.
@@ -112,39 +112,15 @@ Native approval cards and dialogs apply only to the Gateway connection that
 requested them. Changing Primary does not transfer a pending approval to the
 new Gateway.
 
-The native Channels and Config settings follow Primary. Changing Primary clears
-the previous Gateway's channel status, login QR, and unsaved config draft, then
-loads the new Gateway's settings. A temporary reconnect to the same Primary
-keeps its WhatsApp login session and config draft. If the connection fails, these
-panes show the Gateway error and keep **Refresh** or **Reload** available.
-Connection attempts show progress, and retries retain the last failure until
-the Gateway connects or Primary changes.
-Opening or revisiting these panes while settings load waits for the current
-Gateway's shared read. Background refreshes preserve unsaved edits; **Reload**
-replaces them with the Gateway's current values.
-
-### Cron jobs when switching Gateways
-
-By default, **Settings → Cron Jobs** links to the Dashboard. Enable
-**Settings → Debug → Show native settings panes** to use the native pane, which
-shows the Primary Gateway's jobs and run history.
-Run, enable, edit, delete, and transcript actions stay with the Gateway that
-supplied the displayed job. After changing Primary, reopen the job from the new
-list before acting on it. A socket reconnect to the same Gateway keeps an open
-editor usable and reloads the selected job before refreshing its history.
-
-While jobs load, the pane shows a loading indicator and disables **Refresh**.
-A failed load shows the Gateway error and enables **Refresh** to try again.
-“No cron jobs yet” appears only after the Gateway returns an empty list.
-
-You can draft a **New Job** while offline. Saving can reconnect or start that
-Gateway, but changing Primary while the editor is open does not move the draft
-to the new Gateway. The app reports the change so you can reopen the editor for
-the intended Gateway.
+Manage channels, Gateway configuration, skills, and cron jobs in the Dashboard
+for the intended Gateway. **Settings…** (Cmd-,) opens Dashboard settings;
+**Settings → This Mac** controls this Mac's local capabilities from any embedded
+Dashboard window. **Connection…** remains native so you can repair connectivity
+without a working Dashboard.
 
 ## Quick Chat bar
 
-Press Option-Space (⌥Space) or choose **Quick Chat** from the menu bar menu to open a floating composer for the main session. Change the global shortcut with the recorder in **Settings → General → Quick Chat shortcut**.
+Press Option-Space (⌥Space) or choose **Quick Chat** from the menu bar menu to open a floating composer for the main session. Open **Dashboard → Settings → This Mac → App** to change the global shortcut in a native recorder panel, then choose **Done**.
 
 Quick Chat shows the targeted agent (avatar or emoji, with the agent's name as the placeholder) and sends to that agent's main session. After Return accepts a send, the bar stays open and expands downward with the streamed Markdown reply and recent transcript. The bar input remains the composer. Press Command-Return to send and open the same target in the full chat window, Shift-Return for a newline, or Escape to dismiss the whole bar and reply area. Clicking outside also dismisses it. When relevant macOS permissions are missing, an attached strip offers **Grant** and **Not now** actions.
 
@@ -162,7 +138,7 @@ Use the document-text button to attach text from the focused app's focused windo
 
 After a reply finishes, choose **Paste to &lt;app&gt;** to copy its visible assistant text, excluding hidden reasoning, to the general pasteboard and paste it into the app that was frontmost. This requires macOS Accessibility permission. The action replaces the current pasteboard contents and then hides Quick Chat.
 
-Disable the feature entirely with **Settings → General → Quick Chat**; the same section hosts the shortcut recorder.
+Disable the feature entirely under **Dashboard → Settings → This Mac → App**; the same section opens the shortcut recorder.
 
 - **Local mode**: connects directly to the local Gateway WebSocket.
 - **Remote mode**: uses the configured direct `ws://`/`wss://` route or the app-managed SSH tunnel as the data plane.
