@@ -232,6 +232,15 @@ describe("stripAssistantInternalScaffolding", () => {
         expected: "prefix\n\nsuffix",
       },
       {
+        title: "preserves escaped quote state across repeated apparent closing tags",
+        prefix: "prefix",
+        openMarker: "<tool_call>",
+        payload: JSON.stringify({ html: '"</tool_call>', tail: "</tool_call> still hidden" }),
+        closeMarker: "</tool_call>",
+        suffix: "suffix",
+        expected: "prefix\n\nsuffix",
+      },
+      {
         title: "strips Gemma-style <function> with newlines between parameters (#67093)",
         prefix: "Let me check that.",
         openMarker: '<function name="read">',
@@ -418,6 +427,15 @@ describe("stripAssistantInternalScaffolding", () => {
         'Use <function> declarations. <parameter name="path">/tmp</parameter>',
         "Use <function> declarations. /tmp",
       );
+      expectVisibleText(
+        '<schema><other data="</schema>"><parameter name="path">/tmp</parameter>',
+        '<schema><other data="</schema>">/tmp',
+      );
+      expectVisibleText(
+        '`<schema data="` <parameter>x</parameter> "></schema>',
+        '`<schema data="` x "></schema>',
+      );
+      expectVisibleText("<schema>`</schema>`<parameter>x</parameter>", "<schema>`</schema>`x");
     });
 
     it("preserves XML-style explanations after lone <tool_call> tags", () => {
