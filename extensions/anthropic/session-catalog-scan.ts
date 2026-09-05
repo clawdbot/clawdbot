@@ -120,6 +120,7 @@ export async function reserveCatalogJsonFile(
   });
   if (!stat?.isFile()) {
     deleteCatalogJsonCache(filePath);
+    onIoFailure?.();
     return undefined;
   }
   if (stat.size > MAX_CATALOG_JSON_FILE_BYTES) {
@@ -209,7 +210,7 @@ function setCatalogJsonCache(filePath: string, entry: CatalogJsonCacheEntry): vo
   }
 }
 
-function reserveCatalogJsonBytes(
+export function reserveCatalogJsonBytes(
   budget: CatalogJsonReadBudget | undefined,
   bytes: number,
 ): boolean {

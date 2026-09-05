@@ -2879,6 +2879,57 @@ describe("Claude session catalog", () => {
     expect(refreshed.sessions.map((session) => session.threadId)).toEqual(largeSessionIds);
   });
 
+  it("re-admits a warm Desktop overlay against the fresh aggregate budget", async () => {
+    const home = await createHome();
+    const desktopSessionId = "warm-desktop-session";
+    const largeFileBytes = Math.floor(MAX_CATALOG_JSON_SCAN_BYTES / 5) + 1;
+    await writeIndexedDesktopSession(home, {
+      sessionId: desktopSessionId,
+      localSessionId: "local_warm-desktop-session",
+      metadataName: "warm-desktop",
+      title: "Warm Desktop title",
+      prompt: "warm desktop prompt",
+      metadata: { padding: "x".repeat(largeFileBytes) },
+    });
+    await expect(listLocalClaudeSessionPage({ limit: 100 }, home)).resolves.toEqual({
+      sessions: [
+        expect.objectContaining({
+          threadId: desktopSessionId,
+          source: "claude-desktop",
+        }),
+      ],
+    });
+
+    const projectRoot = path.join(home, ".claude", "projects");
+    for (let index = 0; index < 5; index += 1) {
+      const sessionId = `warm-budget-${index}`;
+      const projectDir = path.join(projectRoot, `warm-budget-${index}`);
+      const transcriptPath = path.join(projectDir, `${sessionId}.jsonl`);
+      const indexPath = path.join(projectDir, "sessions-index.json");
+      await fs.mkdir(projectDir, { recursive: true });
+      await fs.writeFile(transcriptPath, `${JSON.stringify({ sessionId })}\n`);
+      const entry = { sessionId, fullPath: transcriptPath, summary: sessionId, isSidechain: false };
+      const prefix = `{"version":1,"entries":${JSON.stringify([entry])},"padding":"`;
+      const suffix = `"}`;
+      const paddingBytes = largeFileBytes - Buffer.byteLength(prefix) - Buffer.byteLength(suffix);
+      await fs.writeFile(indexPath, `${prefix}${"x".repeat(paddingBytes)}${suffix}`);
+    }
+
+    const refreshed = await listLocalClaudeSessionPage({ limit: 100 }, home);
+    expect(refreshed.error).toEqual({
+      code: "LOCAL_CATALOG_PARTIAL",
+      message: expect.stringContaining("2 files"),
+    });
+    expect(refreshed.sessions).toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({
+          threadId: desktopSessionId,
+          source: "claude-cli",
+        }),
+      ]),
+    );
+  });
+
   it("keeps the catalog JSON cap across a stat-to-open replacement race", async () => {
     const home = await createHome();
     const projectDir = path.join(home, ".claude", "projects", "-workspace");
@@ -3023,6 +3074,29 @@ describe("Claude session catalog", () => {
       },
     });
     expect(failAdmission).toBe(false);
+  });
+
+  it("reports a partial catalog when Desktop metadata admission finds a directory", async () => {
+    const home = await createHome();
+    const desktopDir = path.join(
+      home,
+      "Library",
+      "Application Support",
+      "Claude",
+      "claude-code-sessions",
+      "account",
+      "workspace",
+    );
+    const filePath = path.join(desktopDir, "local_directory-race.json");
+    await fs.mkdir(filePath, { recursive: true });
+
+    await expect(listLocalClaudeSessionPage({}, home)).resolves.toMatchObject({
+      sessions: [],
+      error: {
+        code: "LOCAL_CATALOG_PARTIAL",
+        message: expect.stringContaining("could not be read"),
+      },
+    });
   });
 
   it("preserves catalog JSON across short descriptor reads", async () => {

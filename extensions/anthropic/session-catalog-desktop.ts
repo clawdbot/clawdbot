@@ -12,6 +12,7 @@ import {
   desktopSessionsDir,
   readJsonFile,
   reserveCatalogJsonFile,
+  reserveCatalogJsonBytes,
   setBoundedCache,
   type CatalogJsonReadBudget,
 } from "./session-catalog-scan.js";
@@ -140,14 +141,20 @@ async function readDesktopMetadata(
   available: boolean;
   customGroups: Map<string, string>;
   active: Map<string, DesktopSessionMetadata>;
+  activeFileIndexes: Map<string, number>;
   archived: Set<string>;
+  archivedFileIndexes: Map<string, number>;
+  admittedFileSizes: number[];
   skippedFiles: number;
   racedFiles: number;
   scannedBytes: number;
   readFailed: boolean;
 }> {
   const active = new Map<string, DesktopSessionMetadata>();
+  const activeFileIndexes = new Map<string, number>();
   const archived = new Set<string>();
+  const archivedFileIndexes = new Map<string, number>();
+  const admittedFileSizes: number[] = [];
   const skippedFilesBefore = budget?.skippedFiles ?? 0;
   const racedFilesBefore = budget?.racedFiles ?? 0;
   const remainingBytesBefore = budget?.remainingBytes;
@@ -176,6 +183,8 @@ async function readDesktopMetadata(
         if (budget && reservedBytes === undefined) {
           continue;
         }
+        const admittedFileIndex =
+          reservedBytes === undefined ? undefined : admittedFileSizes.push(reservedBytes) - 1;
         const raw = await readJsonFile(filePath, {
           budget,
           onIoFailure: markIoFailure,
@@ -191,13 +200,22 @@ async function readDesktopMetadata(
         }
         if (metadata.isArchived === true) {
           archived.add(cliSessionId);
+          if (admittedFileIndex !== undefined) {
+            archivedFileIndexes.set(cliSessionId, admittedFileIndex);
+          }
           active.delete(cliSessionId);
+          activeFileIndexes.delete(cliSessionId);
           continue;
         }
         if (!archived.has(cliSessionId)) {
           const localSessionId = readBoundedString(metadata.sessionId, 256);
           const customGroup = localSessionId ? customGroups.get(localSessionId) : undefined;
           active.set(cliSessionId, customGroup ? { ...metadata, customGroup } : metadata);
+          if (admittedFileIndex !== undefined) {
+            activeFileIndexes.set(cliSessionId, admittedFileIndex);
+          } else {
+            activeFileIndexes.delete(cliSessionId);
+          }
         }
       }
     }
@@ -205,7 +223,10 @@ async function readDesktopMetadata(
   return {
     available: true,
     active,
+    activeFileIndexes,
     archived,
+    archivedFileIndexes,
+    admittedFileSizes,
     customGroups,
     skippedFiles: (budget?.skippedFiles ?? 0) - skippedFilesBefore,
     racedFiles: (budget?.racedFiles ?? 0) - racedFilesBefore,
@@ -228,7 +249,10 @@ const desktopOverlays = new Map<string, DesktopOverlayCacheEntry>();
 export const emptyDesktopOverlay: DesktopOverlay = {
   available: false,
   active: new Map(),
+  activeFileIndexes: new Map(),
   archived: new Set(),
+  archivedFileIndexes: new Map(),
+  admittedFileSizes: [],
   customGroups: new Map(),
   skippedFiles: 0,
   racedFiles: 0,
@@ -240,20 +264,51 @@ function replayDesktopReadStatus(
   overlay: DesktopOverlay,
   budget?: CatalogJsonReadBudget,
   onIoFailure?: () => void,
-): void {
-  if (budget) {
-    if (overlay.scannedBytes > budget.remainingBytes) {
-      // The cached overlay was admitted by an earlier request, but this request's CLI scan may
-      // have consumed the remaining aggregate budget before the overlay was replayed.
-      budget.skippedFiles += 1;
-    }
-    budget.remainingBytes = Math.max(0, budget.remainingBytes - overlay.scannedBytes);
-    budget.skippedFiles += overlay.skippedFiles;
-    budget.racedFiles += overlay.racedFiles;
+): DesktopOverlay {
+  if (!budget) {
+    return overlay;
   }
+  budget.skippedFiles += overlay.skippedFiles;
+  budget.racedFiles += overlay.racedFiles;
   if (overlay.readFailed) {
     onIoFailure?.();
   }
+  const admittedFileIndexes = new Set<number>();
+  for (const [index, fileSize] of overlay.admittedFileSizes.entries()) {
+    if (reserveCatalogJsonBytes(budget, fileSize)) {
+      admittedFileIndexes.add(index);
+    } else {
+      budget.skippedFiles += 1;
+    }
+  }
+  const active = new Map<string, DesktopSessionMetadata>();
+  const activeFileIndexes = new Map<string, number>();
+  for (const [sessionId, metadata] of overlay.active) {
+    const fileIndex = overlay.activeFileIndexes.get(sessionId);
+    if (fileIndex !== undefined && !admittedFileIndexes.has(fileIndex)) {
+      continue;
+    }
+    active.set(sessionId, metadata);
+    if (fileIndex !== undefined) {
+      activeFileIndexes.set(sessionId, fileIndex);
+    }
+  }
+  const archived = new Set<string>();
+  const archivedFileIndexes = new Map<string, number>();
+  for (const sessionId of overlay.archived) {
+    const fileIndex = overlay.archivedFileIndexes.get(sessionId);
+    if (fileIndex !== undefined && !admittedFileIndexes.has(fileIndex)) {
+      continue;
+    }
+    archived.add(sessionId);
+    if (fileIndex !== undefined) {
+      archivedFileIndexes.set(sessionId, fileIndex);
+    }
+  }
+  if (active.size === overlay.active.size && archived.size === overlay.archived.size) {
+    return overlay;
+  }
+  return { ...overlay, active, activeFileIndexes, archived, archivedFileIndexes };
 }
 
 export async function readDesktopOverlay(
@@ -266,8 +321,7 @@ export async function readDesktopOverlay(
   if (entry?.refreshing) {
     if (!forceRefresh) {
       const overlay = await entry.overlay;
-      replayDesktopReadStatus(overlay, budget, onIoFailure);
-      return overlay;
+      return replayDesktopReadStatus(overlay, budget, onIoFailure);
     }
     await entry.overlay;
     return readDesktopOverlay(homeDir, forceRefresh, budget, onIoFailure);
@@ -283,8 +337,7 @@ export async function readDesktopOverlay(
   ) {
     setBoundedCache(desktopOverlays, homeDir, entry, 8, (evicted) => evicted.watch?.close());
     const overlay = await entry.overlay;
-    replayDesktopReadStatus(overlay, budget, onIoFailure);
-    return overlay;
+    return replayDesktopReadStatus(overlay, budget, onIoFailure);
   }
   const watch = entry?.watch ?? createDirtyDirectoryWatch(desktopSessionsDir(homeDir));
   const current: DesktopOverlayCacheEntry = {
