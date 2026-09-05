@@ -51,13 +51,17 @@ import {
   runPostCompactionSideEffects,
 } from "./compaction-hooks.js";
 import { resolveEmbeddedCompactionTarget } from "./compaction-runtime-context.js";
-import { resolveCompactionRuntimeSelection } from "./compaction-runtime-preparation.js";
+import {
+  projectCodexHostTranscriptBytePreflightConfig,
+  resolveCompactionRuntimeSelection,
+} from "./compaction-runtime-preparation.js";
 import { resolveCompactionTimeoutMs } from "./compaction-safety-timeout.js";
 import { prepareCompactionSessionAgent } from "./compaction-session-agent.js";
 import type { PreparedCompactEmbeddedAgentSessionParams } from "./direct-compaction-preparation.js";
 import { compactEmbeddedAgentSessionDirectOnce } from "./direct-compaction.js";
 import { readCompactionAccountingRecorder } from "./run/compaction-accounting-bridge.js";
 import { prepareEmbeddedSessionActiveProjectKeys } from "./session-prompt-state.js";
+import { consumeTranscriptBytePreflightClaim } from "./transcript-byte-preflight-authority.js";
 import type { EmbeddedAgentCompactResult } from "./types.js";
 
 export type { CompactEmbeddedAgentSessionParams } from "./compact.types.js";
@@ -259,8 +263,18 @@ export async function compactEmbeddedAgentSessionDirect(
     }));
   const entry = loadSessionEntryReadOnly({ ...runSessionTarget, readConsistency: "latest" });
   const lockedHarnessRuntime = resolveSessionPinnedHarnessId(entry);
+  const transcriptBytePreflightClaim = consumeTranscriptBytePreflightClaim(
+    paramsBase,
+    runSessionTarget,
+    lockedHarnessRuntime,
+  );
+  const transcriptBytePreflightAuthority = transcriptBytePreflightClaim?.authority;
   const requestedParams: CompactEmbeddedAgentSessionParamsWithSessionFile = {
     ...paramsBase,
+    config: projectCodexHostTranscriptBytePreflightConfig(
+      paramsBase.config,
+      Boolean(transcriptBytePreflightAuthority),
+    ),
     sessionEntry: entry ? projectPublicSessionEntry(entry) : undefined,
     agentHarnessId: lockedHarnessRuntime ?? paramsBase.agentHarnessId,
     modelSelectionLocked: entry?.modelSelectionLocked ?? paramsBase.modelSelectionLocked,
@@ -311,7 +325,11 @@ export async function compactEmbeddedAgentSessionDirect(
   if (nativeCliResult) {
     return nativeCliResult;
   }
-  if (lockedHarnessRuntime && lockedHarnessRuntime !== "openclaw") {
+  if (
+    lockedHarnessRuntime &&
+    lockedHarnessRuntime !== "openclaw" &&
+    !transcriptBytePreflightAuthority
+  ) {
     return lockedHarnessCompactionFailure(lockedHarnessRuntime);
   }
   const pluginPlanCompactionTarget = resolveEmbeddedCompactionTarget({
@@ -336,7 +354,9 @@ export async function compactEmbeddedAgentSessionDirect(
     provider: pluginPlanCompactionTarget.provider ?? DEFAULT_PROVIDER,
     model: pluginPlanCompactionTarget.model ?? DEFAULT_MODEL,
     requestedRouteResolution: "resolved",
-    fallbacksOverride: resolveCompactionFallbacksOverride(requestedParams),
+    fallbacksOverride: transcriptBytePreflightAuthority
+      ? []
+      : resolveCompactionFallbacksOverride(requestedParams),
   });
   const runtimePluginSelections = [
     {
@@ -379,11 +399,16 @@ export async function compactEmbeddedAgentSessionDirect(
   });
   try {
     const preparedModelRuntimeOwnerSnapshot = preparedModelRuntimeLease.snapshot;
+    const preparedConfig =
+      projectCodexHostTranscriptBytePreflightConfig(
+        preparedModelRuntimeOwnerSnapshot.config,
+        Boolean(transcriptBytePreflightAuthority),
+      ) ?? preparedModelRuntimeOwnerSnapshot.config;
     const preparedWorkspaceDir =
       preparedModelRuntimeOwnerSnapshot.workspaceDir ?? requestedWorkspaceDir;
     const repoRoot =
       resolveSystemPromptRepoRoot({
-        config: preparedModelRuntimeOwnerSnapshot.config,
+        config: preparedConfig,
         workspaceDir: preparedWorkspaceDir,
         cwd: requestedParams.cwd,
       }) ?? null;
@@ -394,6 +419,7 @@ export async function compactEmbeddedAgentSessionDirect(
     );
     const preparedModelRuntime = Object.freeze({
       ...preparedModelRuntimeOwnerSnapshot,
+      config: preparedConfig,
       repoRoot,
       projectKey,
       activeProjectKeys,
@@ -402,14 +428,29 @@ export async function compactEmbeddedAgentSessionDirect(
     // A reload may have committed while session targeting was resolved above.
     const params: PreparedCompactEmbeddedAgentSessionParams = {
       ...requestedParams,
-      config: preparedModelRuntime.config,
+      config: preparedConfig,
       agentId: preparedModelRuntime.agentId ?? requestedAgentIds.sessionAgentId,
       agentDir: preparedModelRuntime.agentDir,
       workspaceDir: preparedWorkspaceDir,
       preparedModelRuntime,
+      ...(transcriptBytePreflightClaim
+        ? {
+            transcriptBytePreflightAuthority: true as const,
+            ...(transcriptBytePreflightClaim.withCompactionPersistence
+              ? {
+                  transcriptByteCompactionPersistence:
+                    transcriptBytePreflightClaim.withCompactionPersistence,
+                }
+              : {}),
+          }
+        : {}),
     };
     const compactPrepared = async () => {
-      if (hasExplicitCompactionModel(params) || !hasCompactionModelFallbackCandidates(params)) {
+      if (
+        transcriptBytePreflightAuthority ||
+        hasExplicitCompactionModel(params) ||
+        !hasCompactionModelFallbackCandidates(params)
+      ) {
         return await compactEmbeddedAgentSessionDirectOnce(params);
       }
       const resolvedCompactionTarget = resolveEmbeddedCompactionTarget({

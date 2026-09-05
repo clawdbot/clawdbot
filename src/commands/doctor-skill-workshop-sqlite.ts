@@ -47,6 +47,7 @@ import {
   migrateLegacyCollectionBackups,
 } from "./doctor-skill-workshop-collection-backups.js";
 import {
+  classifyWorkshopRelocation,
   inferOwnerAgentId,
   planWorkshopRelocation,
   readLegacyWorkshopSourceStat,
@@ -130,11 +131,16 @@ export async function inspectLegacySkillWorkshopMigration(params: {
   } finally {
     database?.walMaintenance.close();
   }
-  const plan = await planWorkshopRelocation(records, params.config, env);
+  // Lint needs ownership counts, not adoption verification through writable recovery readers.
+  const { external } = classifyWorkshopRelocation(records, params.config, env);
   const backups = await listPendingLegacyCollectionBackupRoots(params.config, env);
   return {
-    externalProposalCount: plan.externalProposalCount,
-    externalProposalCountsByAgent: plan.externalProposalCountsByAgent,
+    externalProposalCount: external.length,
+    externalProposalCountsByAgent: external.reduce<Record<string, number>>((counts, plan) => {
+      const ownerAgentId = plan.ownerAgentId ?? plan.unconfiguredOwnerAgentId ?? "unknown";
+      counts[ownerAgentId] = (counts[ownerAgentId] ?? 0) + 1;
+      return counts;
+    }, {}),
     legacyBackupRootCount: backups.length,
   };
 }

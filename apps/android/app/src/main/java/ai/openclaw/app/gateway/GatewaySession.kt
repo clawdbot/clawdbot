@@ -8,6 +8,7 @@ import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.CoroutineStart
 import kotlinx.coroutines.DelicateCoroutinesApi
 import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.ExperimentalCoroutinesApi
 import kotlinx.coroutines.Job
 import kotlinx.coroutines.NonCancellable
 import kotlinx.coroutines.SupervisorJob
@@ -15,11 +16,14 @@ import kotlinx.coroutines.TimeoutCancellationException
 import kotlinx.coroutines.async
 import kotlinx.coroutines.cancelAndJoin
 import kotlinx.coroutines.channels.Channel
+import kotlinx.coroutines.channels.ReceiveChannel
 import kotlinx.coroutines.currentCoroutineContext
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.ensureActive
 import kotlinx.coroutines.job
 import kotlinx.coroutines.launch
+import kotlinx.coroutines.selects.onTimeout
+import kotlinx.coroutines.selects.select
 import kotlinx.coroutines.sync.Mutex
 import kotlinx.coroutines.sync.withLock
 import kotlinx.coroutines.withContext
@@ -48,6 +52,7 @@ import java.util.UUID
 import java.util.concurrent.ConcurrentHashMap
 import java.util.concurrent.atomic.AtomicBoolean
 import java.util.concurrent.atomic.AtomicReference
+import kotlin.random.Random
 
 /**
  * Identity advertised during gateway connect; these fields become the device row users approve.
@@ -273,6 +278,24 @@ internal data class GatewayCanvasHostRoute(
   val url: String,
   val tlsFingerprintSha256: String?,
 )
+
+/** Preserve the first six retry slots; prolonged outages converge to a finite 30–60s timer band. */
+internal fun gatewayReconnectDelayMs(attempt: Int): Long {
+  val ceilingMs = if (attempt <= 6) 8_000L else 60_000L
+  val delayMs = minOf(ceilingMs, (350.0 * Math.pow(1.7, attempt.toDouble())).toLong())
+  return if (delayMs == 60_000L) Random.nextLong(30_000L, 60_001L) else delayMs
+}
+
+/** Select atomically: a timeout must not cancel a receive that already consumed the wake. */
+@OptIn(ExperimentalCoroutinesApi::class)
+internal suspend fun awaitGatewayReconnectSignal(
+  signal: ReceiveChannel<Unit>,
+  delayMs: Long,
+): Boolean =
+  select {
+    signal.onReceive { true }
+    onTimeout(delayMs) { false }
+  }
 
 /**
  * WebSocket RPC session that maintains gateway connection lifecycle, auth, events, and node invokes.
@@ -511,7 +534,7 @@ class GatewaySession(
       val target = desired ?: return
       if (resumeAuthPaused) {
         target.reconnectPausedForAuthFailure = false
-      } else if (target.reconnectPausedForAuthFailure) {
+      } else if (target.reconnectPausedForAuthFailure || currentConnection?.isReady() == true) {
         return
       }
       currentConnection?.closeQuietly()
@@ -519,11 +542,8 @@ class GatewaySession(
     }
   }
 
-  private fun drainReconnectSignals() {
-    while (reconnectSignal.tryReceive().isSuccess) {
-      // A newly ready connection already incorporates every earlier retry request.
-    }
-  }
+  // The channel is conflated. A wake queued just after timeout still resets the next attempt.
+  private fun drainReconnectSignals(): Boolean = reconnectSignal.tryReceive().isSuccess
 
   private fun readyConnection(): Connection? = currentConnection?.takeIf { it.isReady() }
 
@@ -1901,14 +1921,16 @@ class GatewaySession(
           desired ?: return
         }
       if (target.reconnectPausedForAuthFailure) {
-        withTimeoutOrNull(250) { reconnectSignal.receive() }
+        // Only explicit reconnect/target replacement can resume an auth-paused intent.
+        reconnectSignal.receive()
+        target.attempt = 0
         continue
       }
 
       try {
         synchronized(notificationLock) {
           if (synchronized(lifecycleLock) { job === loopJob && loopJob.isActive && desired === target }) {
-            drainReconnectSignals()
+            if (drainReconnectSignals()) target.attempt = 0
             onDisconnected(if (target.attempt == 0) "Connecting…" else "Reconnecting…")
           }
         }
@@ -1917,7 +1939,7 @@ class GatewaySession(
       } catch (err: Throwable) {
         loopJob.ensureActive()
         if (err is CancellationException) throw err
-        target.attempt += 1
+        target.attempt = (target.attempt + 1).coerceAtMost(10)
         synchronized(notificationLock) {
           val failure = err as? GatewayConnectFailure
           val current =
@@ -1939,8 +1961,9 @@ class GatewaySession(
           }
         }
         if (desired !== target || target.reconnectPausedForAuthFailure) continue
-        val sleepMs = minOf(8_000L, (350.0 * Math.pow(1.7, target.attempt.toDouble())).toLong())
-        withTimeoutOrNull(sleepMs) { reconnectSignal.receive() }
+        if (awaitGatewayReconnectSignal(reconnectSignal, gatewayReconnectDelayMs(target.attempt))) {
+          target.attempt = 0
+        }
       }
     }
   }

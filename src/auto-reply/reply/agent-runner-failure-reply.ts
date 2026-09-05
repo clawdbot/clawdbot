@@ -82,9 +82,54 @@ export function resolveReplyFailoverFacts(error: unknown, message: string) {
 type ReplyFailoverFacts = ReturnType<typeof resolveReplyFailoverFacts>;
 
 function readFallbackAttempts(error: unknown): readonly ReplyFallbackAttempt[] {
-  return isFailoverError(error) && Array.isArray(error.attempts)
-    ? (error.attempts as readonly ReplyFallbackAttempt[])
-    : [];
+  return isFailoverError(error) && Array.isArray(error.attempts) ? error.attempts : [];
+}
+
+export function resolveReplyFailureSummary(params: {
+  error: unknown;
+  message: string;
+  reason: ReplyFailoverFacts["reason"];
+  attempts?: readonly ReplyFallbackAttempt[];
+}): { kind: "billing" | "rate_limit" | "overloaded"; text: string } | undefined {
+  const attempts = params.attempts;
+  let kind = params.reason;
+  // The top-level reason describes the last attempt; aggregate copy must account for the entire chain.
+  if (attempts?.length) {
+    if (attempts.some((attempt) => attempt.reason === "billing")) {
+      kind = "billing";
+    } else if (attempts.every((attempt) => attempt.reason === "overloaded")) {
+      kind = "overloaded";
+    } else {
+      kind = attempts.every(
+        (attempt) => attempt.reason === "rate_limit" || attempt.reason === "overloaded",
+      )
+        ? "rate_limit"
+        : undefined;
+    }
+  }
+  if (kind !== "billing" && kind !== "rate_limit" && kind !== "overloaded") {
+    return undefined;
+  }
+  const failoverError = isFailoverError(params.error) ? params.error : undefined;
+  const text =
+    kind === "billing"
+      ? renderBillingReplyCopy({
+          attempts,
+          provider: failoverError?.provider,
+          model: failoverError?.model,
+          authMode: failoverError?.authMode,
+        })
+      : kind === "overloaded"
+        ? renderRateLimitOrOverloadedCopy({ reason: kind, raw: params.message })
+        : renderRateLimitReplyCopy({
+            message: params.message,
+            reason: params.reason,
+            attempts,
+            provider: failoverError?.provider,
+            cooldownExpiry: failoverError?.soonestCooldownExpiry,
+            sanitizeText: (rawText) => sanitizeUserFacingText(rawText, { errorContext: true }),
+          });
+  return { kind, text };
 }
 
 function collapseRepeatedFailureDetail(message: string): string {
@@ -452,105 +497,28 @@ export function buildKnownAgentRunFailureReplyPayload(params: {
   }
   const message = formatErrorMessage(params.err);
   const failoverFacts = resolveReplyFailoverFacts(params.err, message);
-  const fallbackAttempts = readFallbackAttempts(params.err);
-  const hasFallbackAttempts = fallbackAttempts.length > 0;
-  const isBilling = hasFallbackAttempts
-    ? fallbackAttempts.some((attempt) => attempt.reason === "billing")
-    : failoverFacts.reason === "billing";
-  if (isBilling) {
-    return markAgentRunFailureReplyPayload({
-      text: resolveExternalRunFailureTextForConversation({
-        text: renderBillingReplyCopy({
-          attempts: fallbackAttempts,
-          ...(isFailoverError(params.err)
-            ? {
-                provider: params.err.provider,
-                model: params.err.model,
-                authMode: params.err.authMode,
-              }
-            : {}),
-        }),
-        sessionCtx: params.sessionCtx,
-        isGenericRunnerFailure: false,
-        cfg: params.cfg,
-      }),
-    });
-  }
-
-  const preflightCompactionFailureText = buildPreflightCompactionFailureText(message, {
-    includeDetails: isVerboseFailureDetailEnabled(params.resolvedVerboseLevel),
+  const failureSummary = resolveReplyFailureSummary({
+    error: params.err,
+    message,
+    reason: failoverFacts.reason,
+    attempts: readFallbackAttempts(params.err),
   });
-  if (preflightCompactionFailureText) {
-    return markAgentRunFailureReplyPayload({
-      text: resolveExternalRunFailureTextForConversation({
-        text: preflightCompactionFailureText,
-        sessionCtx: params.sessionCtx,
-        isGenericRunnerFailure: false,
-        cfg: params.cfg,
-      }),
-    });
-  }
-
-  const isPureTransientSummary = hasFallbackAttempts
-    ? fallbackAttempts.every(
-        (attempt) => attempt.reason === "rate_limit" || attempt.reason === "overloaded",
-      )
-    : false;
-  const failoverReason = failoverFacts.reason;
-  const isOverloaded = hasFallbackAttempts
-    ? fallbackAttempts.every((attempt) => attempt.reason === "overloaded")
-    : failoverReason === "overloaded";
-  const isRateLimit = hasFallbackAttempts
-    ? isPureTransientSummary
-    : failoverReason === "rate_limit" || failoverReason === "overloaded";
-  const rateLimitOrOverloadedCopy =
-    (!hasFallbackAttempts &&
-      (failoverReason === "rate_limit" || failoverReason === "overloaded")) ||
-    isPureTransientSummary
-      ? renderRateLimitOrOverloadedCopy({
-          reason: isOverloaded ? "overloaded" : "rate_limit",
-          raw: message,
-        })
-      : undefined;
-
-  if (isRateLimit && !isOverloaded) {
-    return markAgentRunFailureReplyPayload({
-      text: resolveExternalRunFailureTextForConversation({
-        text: renderRateLimitReplyCopy({
-          message,
-          reason: failoverReason,
-          attempts: fallbackAttempts,
-          provider: isFailoverError(params.err) ? params.err.provider : undefined,
-          cooldownExpiry: isFailoverError(params.err)
-            ? params.err.soonestCooldownExpiry
-            : undefined,
-          sanitizeText: (text) => sanitizeUserFacingText(text, { errorContext: true }),
-        }),
-        sessionCtx: params.sessionCtx,
-        isGenericRunnerFailure: false,
-        cfg: params.cfg,
-      }),
-    });
-  }
-  if (rateLimitOrOverloadedCopy) {
-    return markAgentRunFailureReplyPayload({
-      text: resolveExternalRunFailureTextForConversation({
-        text: rateLimitOrOverloadedCopy,
-        sessionCtx: params.sessionCtx,
-        isGenericRunnerFailure: false,
-        cfg: params.cfg,
-      }),
-    });
-  }
-
-  const externalRunFailureReply = buildExternalRunFailureReply(
-    { message, error: params.err },
-    {
-      includeAuthProfileId: !isNonDirectConversationContext(params.sessionCtx),
-      includeDetails: isVerboseFailureDetailEnabled(params.resolvedVerboseLevel),
-      failoverFacts,
-    },
-  );
+  const knownFailureText =
+    failureSummary?.kind === "billing"
+      ? failureSummary.text
+      : (buildPreflightCompactionFailureText(message, {
+          includeDetails: isVerboseFailureDetailEnabled(params.resolvedVerboseLevel),
+        }) ?? failureSummary?.text);
+  const externalRunFailureReply: ExternalRunFailureReply = knownFailureText
+    ? { text: knownFailureText, isGenericRunnerFailure: false }
+    : buildExternalRunFailureReply(
+        { message, error: params.err },
+        {
+          includeAuthProfileId: !isNonDirectConversationContext(params.sessionCtx),
+          includeDetails: isVerboseFailureDetailEnabled(params.resolvedVerboseLevel),
+          failoverFacts,
+        },
+      );
   if (externalRunFailureReply.isGenericRunnerFailure) {
     return undefined;
   }
