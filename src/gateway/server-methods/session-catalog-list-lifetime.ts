@@ -4,6 +4,7 @@ import type {
 } from "../../../packages/gateway-protocol/src/index.js";
 import type { SessionCatalogListProviderParams } from "../../plugins/session-catalog.js";
 import { retainGatewayRootWorkAdmissionContinuation } from "../../process/gateway-work-admission.js";
+import { captureAsyncWorkTracker } from "../../shared/async-work-scope.js";
 import type { SessionCatalogInstances } from "./session-catalog-entry-snapshot.js";
 
 export type CatalogListProgressSubscriber = (
@@ -88,6 +89,7 @@ export class SessionCatalogListLifetime {
       params: Required<Pick<SessionCatalogListProviderParams, "onHost" | "waitUntil" | "signal">>,
     ) => Promise<T>,
   ): Promise<T> {
+    const trackWork = captureAsyncWorkTracker();
     let publish = onHost;
     const controller = new AbortController();
     const signal = AbortSignal.any([this.controller.signal, controller.signal]);
@@ -108,6 +110,9 @@ export class SessionCatalogListLifetime {
     };
     try {
       signal.throwIfAborted();
+      // Completion callbacks can arrive from a different async context; both owners
+      // belong to this listing, and finishListing releases zero-background lists.
+      this.releaseRoot ??= retainGatewayRootWorkAdmissionContinuation() ?? undefined;
       return await run({
         signal,
         onHost: (host) => {
@@ -120,11 +125,10 @@ export class SessionCatalogListLifetime {
             throw new Error("Session catalog completion registration is closed");
           }
           // Retirement closes delivery, not accounting for work already started.
-          // Retain the admitted root through the full publication chain before list returns.
-          this.releaseRoot ??= retainGatewayRootWorkAdmissionContinuation() ?? undefined;
+          // Join the publication finalizer before the Gateway releases its dependencies.
           pending += 1;
           this.pending += 1;
-          void completion.then(settle, settle);
+          void trackWork(() => completion.then(settle, settle));
         },
       });
     } catch (error) {

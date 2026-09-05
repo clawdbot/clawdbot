@@ -1,14 +1,18 @@
+import { EventEmitter } from "node:events";
+import { setImmediate as nextTurn } from "node:timers/promises";
 import { describe, expect, it, vi } from "vitest";
 import type { SessionCatalogHost } from "../../../packages/gateway-protocol/src/index.js";
 import type { SessionCatalogListProviderParams } from "../../plugins/session-catalog.js";
 import {
   getActiveGatewayRootWorkCount,
+  getActiveGatewayRootWorkHolders,
   getGatewayRestartDrainSignal,
   markGatewayRestartDraining,
   resetGatewayWorkAdmission,
   tryBeginGatewayRootWorkAdmission,
 } from "../../process/gateway-work-admission.js";
 import { createDeferredCore } from "../../shared/deferred.js";
+import { GatewayConnectionWork } from "../server-connection-work.js";
 import { SessionCatalogListLifetime } from "./session-catalog-list-lifetime.js";
 
 const host: SessionCatalogHost = {
@@ -65,20 +69,119 @@ describe("catalog list completion ownership", () => {
     }
   });
 
-  it("closes zero-background callbacks and completion registration with the list", async () => {
-    const lifetime = new SessionCatalogListLifetime(() => true, []);
+  it.each([false, true])(
+    "closes zero-background callbacks, registration, and root ownership (throws=%s)",
+    async (throws) => {
+      const before = getActiveGatewayRootWorkHolders();
+      const root = tryBeginGatewayRootWorkAdmission("catalog-zero-background");
+      expect(root).not.toBeNull();
+      const lifetime = new SessionCatalogListLifetime(() => true, []);
+      const publish = vi.fn();
+      let retained: SessionCatalogListProviderParams | undefined;
+      try {
+        const listing = root!.run(() =>
+          lifetime.runProvider(publish, async (params) => {
+            retained = params;
+            params.onHost(host);
+            if (throws) {
+              throw new Error("catalog list failed");
+            }
+            return [];
+          }),
+        );
+        if (throws) {
+          await expect(listing).rejects.toThrow("catalog list failed");
+        } else {
+          await expect(listing).resolves.toEqual([]);
+        }
+        root!.release();
+        lifetime.finishListing();
+        retained?.onHost?.(host);
+        expect(publish).toHaveBeenCalledOnce();
+        expect(() => retained?.waitUntil?.(Promise.resolve())).toThrow(/registration is closed/);
+        expect(retained?.signal?.aborted).toBe(true);
+        expect(getActiveGatewayRootWorkHolders()).toEqual(before);
+      } finally {
+        lifetime.finishListing();
+        root!.release();
+      }
+    },
+  );
+
+  it("keeps completion on its admitted owner when an external callback registers it", async () => {
+    const before = getActiveGatewayRootWorkHolders();
+    const ownerOrigin = "catalog-original-owner";
+    const foreignOrigin = "catalog-foreign-callback";
+    const root = tryBeginGatewayRootWorkAdmission(ownerOrigin);
+    const foreignRoot = tryBeginGatewayRootWorkAdmission(foreignOrigin);
+    expect(root).not.toBeNull();
+    expect(foreignRoot).not.toBeNull();
+    const owner = new GatewayConnectionWork();
+    const foreign = new GatewayConnectionWork();
+    const lifetime = new SessionCatalogListLifetime(() => true, [owner.signal]);
+    lifetime.subscribe(
+      "active",
+      () => undefined,
+      () => true,
+    );
+    const callback = new EventEmitter();
+    const registered = createDeferredCore();
+    const release = createDeferredCore();
     const publish = vi.fn();
-    let retained: SessionCatalogListProviderParams | undefined;
-    await lifetime.runProvider(publish, async (params) => {
-      retained = params;
-      params.onHost(host);
-      return [];
-    });
-    lifetime.finishListing();
-    retained?.onHost?.(host);
-    expect(publish).toHaveBeenCalledOnce();
-    expect(() => retained?.waitUntil?.(Promise.resolve())).toThrow(/registration is closed/);
-    expect(retained?.signal?.aborted).toBe(true);
+    let publication: Promise<void> | undefined;
+    let closing: Promise<void> | undefined;
+    let ownerDrained = false;
+    let foreignDrained = false;
+    let rootsAtOwnerDrain: string[] | undefined;
+    const listing = owner.track(() =>
+      root!.run(() =>
+        lifetime.runProvider(publish, async (params) => {
+          publication = release.promise.then(() => params.onHost(host));
+          // EventEmitter invokes the callback in the emitter's current context.
+          callback.once("register", () => {
+            params.waitUntil(publication!);
+            registered.resolve();
+          });
+          await registered.promise;
+        }),
+      ),
+    );
+    try {
+      await foreign.track(() => foreignRoot!.run(async () => callback.emit("register")));
+      foreignRoot!.release();
+      await listing;
+      root!.release();
+      lifetime.finishListing();
+      const retained = getActiveGatewayRootWorkHolders();
+      closing = Promise.all([
+        owner.drain().then(() => {
+          rootsAtOwnerDrain = getActiveGatewayRootWorkHolders();
+          ownerDrained = true;
+        }),
+        foreign.drain().then(() => {
+          foreignDrained = true;
+        }),
+      ]).then(() => undefined);
+      await nextTurn();
+      const whileHeld = { ownerDrained, foreignDrained };
+      release.resolve();
+      await publication;
+      await closing;
+      expect(whileHeld).toEqual({ ownerDrained: false, foreignDrained: true });
+      expect(retained).toEqual([...before, ownerOrigin].toSorted((a, b) => a.localeCompare(b)));
+      expect(rootsAtOwnerDrain).toEqual(before);
+      expect(getActiveGatewayRootWorkHolders()).toEqual(before);
+      expect(publish).not.toHaveBeenCalled();
+    } finally {
+      registered.resolve();
+      release.resolve();
+      await Promise.allSettled([listing, publication, closing]);
+      lifetime.finishListing();
+      root!.release();
+      foreignRoot!.release();
+      callback.removeAllListeners();
+      await Promise.all([owner.drain(), foreign.drain()]);
+    }
   });
 
   it.each([false, true])(
