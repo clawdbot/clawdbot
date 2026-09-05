@@ -4,8 +4,11 @@ import { afterEach, beforeEach, expect, it, vi } from "vitest";
 import type { UpdateAvailable, UpdateScheduleState } from "../api/types.ts";
 import { getRenderedModalDialog, installDialogPolyfill } from "../test-helpers/modal-dialog.ts";
 import { createUpdateRunFixture } from "../test-helpers/update-run.ts";
+import { flushMicrotasks, type RequestFn } from "./overlays-access.test-support.ts";
+import { createApplicationUpdateOverlays } from "./overlays-updates.ts";
 import { confirmAndStartUpdateRuntime } from "./update-confirmation.runtime.ts";
-import type { UpdateProgress } from "./update-confirmation.ts";
+import { createUpdateProgressWatcher, type UpdateProgress } from "./update-confirmation.ts";
+import { updateRunHarness } from "./update-run.test-support.ts";
 
 /** Drives the dialog the way the shell does: one live lifecycle stream. */
 function createProgressStream(
@@ -426,3 +429,110 @@ it("reports a request the Gateway never accepted instead of spinning forever", a
     vi.useRealTimers();
   }
 });
+
+it.each([
+  { status: "running", entry: "existing" },
+  { status: "failed", entry: "existing" },
+  { status: "succeeded", entry: "existing" },
+  { status: "running", entry: "started" },
+] as const)(
+  "keeps the $status report and exposes read recovery for a $entry run",
+  async ({ status, entry }) => {
+    const run = createUpdateRunFixture({
+      status,
+      phase: status === "running" ? "verifying" : "finished",
+      finishedAtMs: status === "running" ? null : 4_000,
+      reason: status === "failed" ? "build-failed" : null,
+    });
+    let admitted = entry === "existing";
+    let rejectRunReads = false;
+    const request = vi.fn<RequestFn>(async (method) => {
+      if (method === "update.run") {
+        admitted = true;
+        return { runId: run.runId };
+      }
+      if (method === "update.runs.get") {
+        if (rejectRunReads) {
+          throw new Error("Run status read failed");
+        }
+        return { run };
+      }
+      return method === "update.status" && admitted
+        ? { [status === "running" ? "activeRun" : "lastRun"]: run }
+        : {};
+    });
+    const harness = updateRunHarness(request);
+    const listeners = new Set<() => void>();
+    const updates = createApplicationUpdateOverlays(harness.gateway, () =>
+      listeners.forEach((emit) => emit()),
+    );
+    const overlays = {
+      get snapshot() {
+        return updates.snapshot;
+      },
+      subscribe(listener: () => void) {
+        listeners.add(listener);
+        return () => {
+          listeners.delete(listener);
+        };
+      },
+    };
+    let operation: Promise<void> | undefined;
+    let settled: Promise<void> | undefined;
+    const startGatewayUpdate = vi.fn(() => {
+      operation = updates.runUpdate();
+    });
+    try {
+      await updates.refreshUpdateStatus();
+      settled = confirmAndStartUpdateRuntime({
+        ...(entry === "existing" ? { existingRun: run } : {}),
+        startGatewayUpdate,
+        onCheckStatus: () => updates.refreshUpdateStatus(),
+        watchUpdateProgress: createUpdateProgressWatcher({ gateway: harness.gateway, overlays }),
+        updateAvailable: UPDATE_AVAILABLE,
+        updateSchedule: null,
+        viaNativeApp: false,
+      });
+      const { modal } = await getRenderedModalDialog(document.body);
+      if (entry === "started") {
+        findButton("Update and restart").click();
+        await flushMicrotasks();
+        await operation;
+      }
+      rejectRunReads = true;
+      updates.handleUpdateRunChanged({ ...run, updatedAtMs: run.updatedAtMs + 1 });
+      await flushMicrotasks();
+      expect(updates.snapshot.updateStatusBanner?.text).toContain("Run status read failed");
+      const view = modal.querySelector<
+        HTMLElement & { run: unknown; updateComplete: Promise<boolean> }
+      >("openclaw-update-run-view")!;
+      await view.updateComplete;
+      expect(modal.textContent).toContain("Run status read failed");
+      expect(view.run).toEqual(run);
+      const check = findButton("Check status");
+      expect(check.disabled).toBe(false);
+      if (status === "running") {
+        expect(
+          [...modal.querySelectorAll("button")].some(
+            (button) => button.textContent?.trim() === "Retry update",
+          ),
+        ).toBe(false);
+      }
+      check.click();
+      await flushMicrotasks();
+      expect(modal.textContent).not.toContain("Run status read failed");
+      expect(view.run).toEqual(run);
+      expect(request.mock.calls.filter(([method]) => method === "update.run")).toHaveLength(
+        entry === "started" ? 1 : 0,
+      );
+      expect(startGatewayUpdate).toHaveBeenCalledTimes(entry === "started" ? 1 : 0);
+    } finally {
+      document.body
+        .querySelector("openclaw-modal-dialog")
+        ?.dispatchEvent(new Event("modal-cancel"));
+      await settled;
+      await operation;
+      updates.dispose();
+    }
+  },
+);

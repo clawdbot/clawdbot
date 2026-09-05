@@ -70,7 +70,7 @@ export function registerGenerationRecoveryTests(
         requireRunningServiceAfterRestart: true,
         timeoutMs: 1000,
       }),
-    ).toBe(false);
+    ).toBe("failed");
     const record = getUpdateRun(run.runId, { env })!;
     expect(record.verification.serviceRunning).toBe(false);
     expect(renderUpdateRunReport({ ...record, status: "failed" }).headline).not.toContain(

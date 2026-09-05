@@ -29,7 +29,7 @@ const mocks = vi.hoisted(() => ({
   createServiceConfigIO: vi.fn(),
   readServiceState: vi.fn(),
   restartService: vi.fn<typeof import("./update-command-service.js").maybeRestartService>(
-    async () => true,
+    async () => "ok",
   ),
   stopService:
     vi.fn<
@@ -412,19 +412,22 @@ describe("successful update finalization ordering", () => {
     expect(mocks.restartService).toHaveBeenCalledOnce();
   });
 
-  it("keeps an unhealthy restart blocking before completion refresh", async () => {
-    Object.defineProperty(process.stdin, "isTTY", { configurable: true, value: true });
-    mocks.restartService.mockResolvedValueOnce(false);
+  it.each(["failed", "restart-health-failed"] as const)(
+    "keeps %s blocking before completion refresh",
+    async (outcome) => {
+      Object.defineProperty(process.stdin, "isTTY", { configurable: true, value: true });
+      mocks.restartService.mockResolvedValueOnce(outcome);
 
-    await expectUpdateFailure(finishSuccessfulPackageSwitch(), "restart-unhealthy");
+      await expectUpdateFailure(finishSuccessfulPackageSwitch(), "restart-unhealthy");
 
-    expect(mocks.printResult).toHaveBeenCalledOnce();
-    expectFailureReport("restart-unhealthy");
-    expect(mocks.markSentinelFailure).toHaveBeenCalledWith(
-      expect.objectContaining({ reason: "restart-unhealthy" }),
-    );
-    expect(mocks.checkCompletionStatus).not.toHaveBeenCalled();
-  });
+      expect(mocks.printResult).toHaveBeenCalledOnce();
+      expectFailureReport("restart-unhealthy");
+      expect(mocks.markSentinelFailure).toHaveBeenCalledWith(
+        expect.objectContaining({ reason: "restart-unhealthy" }),
+      );
+      expect(mocks.checkCompletionStatus).not.toHaveBeenCalled();
+    },
+  );
 
   it("reports elapsed time through restart and shell completion refresh", async () => {
     let now = 1_000;
@@ -432,7 +435,7 @@ describe("successful update finalization ordering", () => {
     Object.defineProperty(process.stdin, "isTTY", { configurable: true, value: true });
     mocks.restartService.mockImplementationOnce(async () => {
       now += 200;
-      return true;
+      return "ok";
     });
     mocks.checkCompletionStatus.mockImplementationOnce(async () => {
       now += 300;
@@ -969,7 +972,7 @@ describe("successful update finalization ordering", () => {
         if (!activated) {
           params.onVerificationFailure?.("readyz-unhealthy");
         }
-        return activated;
+        return activated ? "ok" : "failed";
       });
       const finishing = finishSuccessfulPackageSwitch({
         restartEnvironment: { ...process.env },

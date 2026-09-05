@@ -8,7 +8,7 @@ const mocks = vi.hoisted(() => ({
   runDaemonInstall: vi.fn<typeof import("../daemon-cli.js").runDaemonInstall>(),
   runDaemonRestart: vi.fn<typeof import("../daemon-cli.js").runDaemonRestart>(),
   runRestartScript: vi.fn(async () => undefined),
-  runUpdatedInstallGatewayCommand: vi.fn(async () => true),
+  runUpdatedInstallGatewayCommand: vi.fn(async () => "accepted"),
   waitForGatewayHealthyRestart: vi.fn(),
   waitForGatewayHttpReadiness: vi.fn(),
   runUpdateInferenceProbe: vi.fn(),
@@ -101,15 +101,18 @@ describe("maybeRestartService", () => {
         restartScriptPath: "/tmp/openclaw-configured-ui-restart.sh",
         timeoutMs: 1_000,
       }),
-    ).resolves.toBe(true);
+    ).resolves.toBe("ok");
 
-    expect(mocks.runRestartScript).toHaveBeenCalledWith("/tmp/openclaw-configured-ui-restart.sh");
+    expect(mocks.runRestartScript).toHaveBeenCalledWith(
+      "/tmp/openclaw-configured-ui-restart.sh",
+      1_000,
+    );
     expect(mocks.waitForGatewayHealthyRestart).toHaveBeenCalledWith(
       expect.objectContaining({ expectedBuildId: "new-build" }),
     );
   });
 
-  it("rejects a Git restart when the expected build is never observed", async () => {
+  it("does not infer activation from a detached script when the expected Git build is never observed", async () => {
     mocks.waitForGatewayHealthyRestart.mockResolvedValue({
       runtime: { status: "stopped" },
       portUsage: {
@@ -144,7 +147,7 @@ describe("maybeRestartService", () => {
         restartScriptPath: "/tmp/openclaw-configured-ui-restart.sh",
         timeoutMs: 1_000,
       }),
-    ).resolves.toBe(false);
+    ).resolves.toBe("failed");
   });
 
   it.each(
@@ -247,7 +250,7 @@ describe("maybeRestartService", () => {
           restartScriptPath: "/tmp/openclaw-channel-restart.sh",
           timeoutMs: 1_000,
         }),
-      ).resolves.toBe(true);
+      ).resolves.toBe("ok");
 
       expect(mocks.waitForGatewayHealthyRestart).toHaveBeenCalledWith(
         expect.objectContaining({ expectedBuildId: "new-build" }),
@@ -274,7 +277,7 @@ describe("maybeRestartService", () => {
         serviceMutationSkipMessage: "service management skipped: ownership conflict",
         timeoutMs: 1_000,
       }),
-    ).resolves.toBe(true);
+    ).resolves.toBe("ok");
 
     expect(errorSpy).toHaveBeenCalledWith("service management skipped: ownership conflict");
   });

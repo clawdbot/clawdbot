@@ -63,8 +63,9 @@ describe("update run response races", () => {
           : {},
       );
       let admitted = false;
-      const request = vi.fn<RequestFn>(async (method) => {
+      const request = vi.fn<RequestFn>(async (method, _params, options) => {
         if (method === "update.run") {
+          options?.onSent?.();
           admitted = true;
           return admission.promise;
         }
@@ -72,6 +73,7 @@ describe("update run response races", () => {
       });
       const harness = updateRunHarness(request);
       const overlays = createApplicationOverlays(harness.gateway);
+      await flushMicrotasks();
       const running = overlays.runUpdate();
       try {
         await flushMicrotasks();
@@ -200,6 +202,135 @@ describe("update run response races", () => {
     } finally {
       drained.resolve();
       await running;
+      overlays.dispose();
+    }
+  });
+  it.each([
+    { baseline: "unknown", discovered: "old", attach: false },
+    { baseline: "previous", discovered: "old", attach: false },
+    { baseline: "previous", discovered: "new", attach: true },
+    { baseline: "empty", discovered: "new", attach: true },
+    { baseline: "unknown", discovered: "active", attach: true },
+  ] as const)(
+    "reconciles lost admission using $baseline history and $discovered run identity",
+    async ({ baseline, discovered, attach }) => {
+      const previous = updateRunFixture({
+        status: "succeeded",
+        phase: "finished",
+        finishedAtMs: 3_000,
+      });
+      let found =
+        discovered === "old"
+          ? previous
+          : updateRunFixture({
+              runId: "00000000-0000-4000-8000-000000000002",
+              ...(discovered === "active"
+                ? {}
+                : { status: "succeeded", phase: "finished", finishedAtMs: 4_000 }),
+            });
+      let requested = false;
+      const request = vi.fn<RequestFn>(async (method, _params, options) => {
+        if (method === "update.run") {
+          options?.onSent?.();
+          requested = true;
+          throw new Error("Admission reply lost");
+        }
+        if (method === "update.runs.get") {
+          return { run: found };
+        }
+        if (method !== "update.status") {
+          return {};
+        }
+        if (!requested) {
+          if (baseline === "unknown") {
+            throw new Error("Initial history unavailable");
+          }
+          return baseline === "previous" ? { lastRun: previous } : {};
+        }
+        return found.status === "running" ? { activeRun: found } : { lastRun: found };
+      });
+      const harness = updateRunHarness(request);
+      const overlays = createApplicationOverlays(harness.gateway);
+      try {
+        await flushMicrotasks();
+        await overlays.runUpdate();
+        expect(requested).toBe(true);
+        if (attach) {
+          expect(overlays.snapshot.updateRun).toEqual(found);
+          if (discovered === "active") {
+            found = {
+              ...found,
+              status: "succeeded",
+              phase: "finished",
+              finishedAtMs: 4_000,
+              updatedAtMs: 4_000,
+            };
+            harness.emitEvent("update.run.changed", found);
+            await flushMicrotasks();
+            expect(overlays.snapshot.updateRun).toEqual(found);
+          }
+        } else {
+          expect(overlays.snapshot.updateRun).toBeNull();
+          expect(overlays.snapshot.updateStatusBanner?.text).toContain("Admission reply lost");
+          harness.update({ phase: "reconnecting" });
+          harness.update({ phase: "connected" });
+          await flushMicrotasks();
+          harness.emitEvent("update.run.changed", { ...previous, updatedAtMs: 4_000 });
+          await flushMicrotasks();
+          expect(overlays.snapshot.updateRun).toBeNull();
+          expect(overlays.snapshot.updateStatusBanner?.text).toContain("Admission reply lost");
+          await overlays.refreshUpdateStatus();
+          expect(overlays.snapshot.updateRun).toBeNull();
+          expect(overlays.snapshot.updateStatusBanner?.text).toContain("Admission reply lost");
+        }
+        expect(request.mock.calls.filter(([method]) => method === "update.run")).toHaveLength(1);
+      } finally {
+        overlays.dispose();
+      }
+    },
+  );
+
+  it("keeps a cold admission uncertain when disconnect precedes its lost reply", async () => {
+    const admission = deferred();
+    const previous = updateRunFixture({
+      status: "succeeded",
+      phase: "finished",
+      finishedAtMs: 3_000,
+    });
+    let historyReady = false;
+    const request = vi.fn<RequestFn>(async (method, _params, options) => {
+      if (method === "update.run") {
+        options?.onSent?.();
+        return admission.promise;
+      }
+      if (method !== "update.status") {
+        return {};
+      }
+      if (!historyReady) {
+        throw new Error("Initial history unavailable");
+      }
+      return { lastRun: previous };
+    });
+    const harness = updateRunHarness(request);
+    const overlays = createApplicationOverlays(harness.gateway);
+    let operation: Promise<void> | undefined;
+    try {
+      await flushMicrotasks();
+      operation = overlays.runUpdate();
+      await flushMicrotasks();
+      expect(request.mock.calls.some(([method]) => method === "update.run")).toBe(true);
+      harness.update({ phase: "reconnecting" });
+      admission.reject(new Error("Socket lost"));
+      historyReady = true;
+      harness.update({ phase: "connected" });
+      await operation;
+      await flushMicrotasks();
+      expect(overlays.snapshot.updateRun).toBeNull();
+      expect(overlays.snapshot.updateStatusBanner?.tone).toBe("danger");
+      expect(overlays.snapshot.updateRunning).toBe(false);
+    } finally {
+      admission.resolve({});
+      await operation;
       overlays.dispose();
     }
   });

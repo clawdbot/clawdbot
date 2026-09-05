@@ -29,16 +29,20 @@ export function createUpdateRunNotifier(
   const { sessionKey } = initial.origin;
   return async (run: UpdateRunRecord, kind: UpdateRunNoticeKind) => {
     const message = renderUpdateRunNotice(run, kind);
+    // Pre-park and later activation share one durable notice, never a fifth milestone.
+    const milestone = kind === "parking" ? "activating" : kind;
     const recorded =
       kind === "finished"
         ? run.verification.noticeDelivered === true
-        : run.steps.some((step) => step.step === `notice:${kind}` && step.status === "completed");
+        : run.steps.some(
+            (step) => step.step === `notice:${milestone}` && step.status === "completed",
+          );
     if (!message || recorded) {
       return { delivered: false, owned: recorded };
     }
     // Admission, the watcher, and successor startup share permanent delivery
     // ownership. A repeated phase or sentinel revision cannot send a fifth message.
-    const deliveryIntentId = `update-run-${kind}:${run.runId}`;
+    const deliveryIntentId = `update-run-${milestone}:${run.runId}`;
     let delivered = false;
     if (target.kind === "route") {
       delivered = await sendGatewayLifecycleNotice({
@@ -72,7 +76,7 @@ export function createUpdateRunNotifier(
     const owned = delivered || custody?.status === "pending" || custody?.status === "completed";
     if (owned && kind !== "finished") {
       recordUpdateRunStep(run.runId, {
-        step: `notice:${kind}`,
+        step: `notice:${milestone}`,
         status: "completed",
         endedAtMs: Date.now(),
       });

@@ -3,7 +3,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { createStorageMock } from "../test-helpers/storage.ts";
 import { createUpdateRunReceipts } from "./update-run-receipts.ts";
 
-const TRIAGED_KEY = "openclaw:control-ui:update-triaged:v1";
+const TRIAGED_KEY = "openclaw:control-ui:update:v1";
 beforeEach(() => {
   vi.stubGlobal("sessionStorage", createStorageMock());
   vi.stubGlobal("localStorage", createStorageMock());
@@ -37,10 +37,10 @@ describe("update browser receipts", () => {
     const storage = createStorageMock();
     storage.setItem(
       TRIAGED_KEY,
-      JSON.stringify([JSON.stringify(["ws://gateway.test", null, "previous"])]),
+      JSON.stringify({ triaged: [JSON.stringify(["ws://gateway.test", null, "previous"])] }),
     );
     if (failure === "invalid receipts") {
-      storage.setItem(TRIAGED_KEY, "false");
+      storage.setItem(TRIAGED_KEY, JSON.stringify({ triaged: false }));
     }
     if (failure === "oversized history") {
       storage.setItem(TRIAGED_KEY, "x".repeat(150_000));
@@ -73,5 +73,19 @@ describe("update browser receipts", () => {
     expect(reloaded.triaged("ws://gateway.test", null, "0")).toBe(false);
     expect(reloaded.triaged("ws://gateway.test", null, "1")).toBe(true);
     expect(reloaded.triaged("ws://gateway.test", null, "32")).toBe(true);
+  });
+  it("extends the shipped tab receipt object without losing consumed failures on reload", () => {
+    const previous = JSON.stringify(["ws://gateway.test", null, "recorded:1000"]);
+    sessionStorage.setItem(TRIAGED_KEY, JSON.stringify({ triaged: [previous] }));
+    const receipts = createUpdateRunReceipts();
+    expect(receipts.recordTriage("ws://gateway.test", null, "new-run")).toBe(true);
+    expect(JSON.parse(sessionStorage.getItem(TRIAGED_KEY)!)).toEqual({
+      triaged: [previous, JSON.stringify(["ws://gateway.test", null, "new-run"])],
+    });
+    const reloaded = createUpdateRunReceipts();
+    expect(reloaded.triaged("ws://gateway.test", null, "recorded:1000")).toBe(true);
+    expect(reloaded.triaged("ws://gateway.test", null, "new-run")).toBe(true);
+    expect(reloaded.triaged("ws://gateway.test", "other", "new-run")).toBe(false);
+    expect(sessionStorage.getItem("openclaw:control-ui:update-triaged:v1")).toBeNull();
   });
 });
