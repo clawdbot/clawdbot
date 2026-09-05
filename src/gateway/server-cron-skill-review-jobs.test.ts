@@ -77,8 +77,6 @@ describe("reconcileSkillCollectionReviewJobs", () => {
       enabled: false,
       payload: {
         kind: "agentTurn",
-        message:
-          "Review the Skill Workshop collection for this agent. Work only inside this agent's Workshop directory.",
       },
     });
     expect(add.mock.calls[0]?.[1]).toMatchObject({

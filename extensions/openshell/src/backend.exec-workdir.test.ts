@@ -674,7 +674,7 @@ describe("openshell backend exec workdir validation", () => {
         }),
         "mirror bridge",
       );
-      const readDirectory = expectDefined(bridge.readDirectory, "directory reader").bind(bridge);
+      const readDirectory = expectDefined(bridge.readDirectory?.bind(bridge), "directory reader");
       const exec = await backend.buildExecSpec({ command: "true", env: {}, usePty: false });
       const controller = new AbortController();
       const pending =

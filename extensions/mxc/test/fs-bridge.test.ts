@@ -22,7 +22,7 @@ function createDirectoryReader(params: {
       docker: {},
     },
   });
-  return expectDefined(bridge.readDirectory, "MXC directory reader").bind(bridge);
+  return expectDefined(bridge.readDirectory?.bind(bridge), "MXC directory reader");
 }
 
 describe("MXC filesystem directory reads", () => {
