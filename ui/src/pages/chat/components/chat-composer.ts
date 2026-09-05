@@ -586,7 +586,14 @@ export function renderChatComposer(props: ChatComposerProps) {
       state.dictationError = `${message} ${recovery}`;
       requestUpdate();
     },
-    onStateChange: requestUpdate,
+    onStateChange: () => {
+      // A new dictation gesture retires an earlier Talk recovery offer before
+      // either can acquire another microphone, including queued button clicks.
+      if (state.dictation?.locksComposer) {
+        props.onDismissRealtimeTalkError?.();
+      }
+      requestUpdate();
+    },
     onDictationUnavailable: devicePicker.handleOpen,
     // With an initial empty composer, this button retains the existing
     // send-after-typing behavior until the host rerenders the primary actions.

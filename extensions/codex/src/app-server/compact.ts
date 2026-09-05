@@ -17,7 +17,7 @@ import {
   CODEX_APP_SERVER_UNSUBSCRIBE_TIMEOUT_MS,
   closeCodexStartupClientBestEffort,
   CodexAppServerUnsafeSubscriptionError,
-  isCodexAlreadyTerminalInterruptError,
+  isCodexNoActiveTurnInterruptError,
   unsubscribeCodexThreadBestEffort,
 } from "./attempt-client-cleanup.js";
 import { readCodexNotificationItem } from "./attempt-notifications.js";
@@ -157,8 +157,9 @@ function watchCodexNativeCompactionCompletion(params: {
         { timeoutMs: Math.max(1, params.interruptGraceMs) },
       )
       .catch((error: unknown) => {
-        // This exact InvalidRequest proves the target turn was already terminal.
-        if (isCodexAlreadyTerminalInterruptError(error)) {
+        // Compaction derives its target from a native start/item receipt, never
+        // a start ACK, so an absent active target follows its terminal state.
+        if (isCodexNoActiveTurnInterruptError(error)) {
           if (compactionItemCompleted) {
             complete();
             return;

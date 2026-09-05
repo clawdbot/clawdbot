@@ -23,6 +23,7 @@ import { recordUpdateRunStep } from "../../infra/update-run-ledger.js";
 import type { UpdateRunResult } from "../../infra/update-runner.js";
 import { defaultRuntime } from "../../runtime.js";
 import { formatInstallationTargetCommand } from "../installation-target-format.js";
+import { printResult } from "./progress.js";
 import { resolveNodeRunner, UpdatePreMutationError, type UpdateCommandOptions } from "./shared.js";
 import { resolveOwnedManagedUpdateEnv } from "./update-command-service-env.js";
 
@@ -183,17 +184,16 @@ export async function handoffUpdateFromGateway(params: {
     await cancelManagedServiceUpdateHandoff(identity);
     throw error;
   }
-  if (params.opts.json) {
-    defaultRuntime.writeJson(result);
-  } else {
-    defaultRuntime.log(guidance);
-  }
   if (params.opts.run) {
     recordUpdateRunStep(
       params.opts.run.runId,
       { step: "managed-service update handoff", status: "completed", endedAtMs: Date.now() },
       { env: params.opts.run.env },
     );
+  }
+  printResult(result, params.opts);
+  if (!params.opts.json) {
+    defaultRuntime.log(guidance);
   }
   return true;
 }

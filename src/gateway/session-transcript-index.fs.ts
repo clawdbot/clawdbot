@@ -9,6 +9,7 @@ import {
   createTranscriptDisplayPosition,
   createTranscriptDisplaySource,
 } from "../sessions/transcript-display-position.js";
+import { isVisibleTranscriptRecord } from "../sessions/transcript-visible-record.js";
 import {
   parseTranscriptRecord,
   type TranscriptRecord,
@@ -48,10 +49,6 @@ export function assertArchiveTranscriptSource(
   if (transcriptArtifactDisplaySource(filePath, stat) !== displaySource) {
     throw new SessionTranscriptProjectionUnavailableError(sessionId);
   }
-}
-
-export function isVisibleTranscriptRecord(record: Record<string, unknown>): boolean {
-  return Boolean(record.message) || record.type === "compaction" || record.type === "reset";
 }
 
 export function selectArchiveTranscriptEntries<T extends TranscriptRecord>(

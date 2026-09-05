@@ -148,11 +148,12 @@ export async function enqueueRestartSentinelNotice(
   params: GatewayLifecycleNotice & {
     sessionKey: string;
     revision: number;
+    deliveryIntentId?: string;
   },
 ): Promise<RestartSentinelNoticeEnqueueResult> {
   return await enqueueGatewayLifecycleNotice(
     params,
-    `restart-sentinel-notice:${params.sessionKey}:${params.revision}`,
+    params.deliveryIntentId ?? `restart-sentinel-notice:${params.sessionKey}:${params.revision}`,
   );
 }
 

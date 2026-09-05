@@ -664,6 +664,14 @@ declared scope, approval cards render exactly as before.
 
 ## System events and denials
 
+When an approval can be delivered, ordinary agent runs wait for the decision
+and receive the exec result in the same turn. The final reply uses the original
+delivery path, including an inbound A2A task. An operator denial returns a denied
+tool result without running the command.
+
+Diagnostic and export commands that explicitly use asynchronous execution retain
+their separate follow-up delivery. For those workflows:
+
 Exec lifecycle posts an `Exec finished` system message to the agent's
 session after the node reports completion. OpenClaw can also emit an
 in-progress notice once an approval is granted, after

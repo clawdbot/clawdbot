@@ -310,6 +310,8 @@ export const defaultControlUiFeatureMethods = [
   "tools.github.authorize.cancel",
   "update.hold",
   "update.run",
+  "update.runs.get",
+  "update.runs.list",
   "update.status",
   "worktrees.branches",
 ] as const;

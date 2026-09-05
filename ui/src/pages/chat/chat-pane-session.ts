@@ -63,7 +63,6 @@ export abstract class ChatPaneSession extends ChatPaneTaskSuggestions {
       }
       this.sessionPullRequests = [];
       this.sessionPullRequestsBranch = undefined;
-      this.githubPublication.reset();
       this.sessionPullRequestsRateLimited = false;
       this.requestUpdate();
       return;
@@ -116,8 +115,8 @@ export abstract class ChatPaneSession extends ChatPaneTaskSuggestions {
       );
     }
     const published =
-      this.githubPublication.result?.status === "published"
-        ? this.githubPublication.result
+      this.githubPublication?.result?.status === "published"
+        ? this.githubPublication?.result
         : undefined;
     const publishedPullRequest = published
       ? result.pullRequests.find((pullRequest) => pullRequest.url === published.url)
@@ -130,7 +129,7 @@ export abstract class ChatPaneSession extends ChatPaneTaskSuggestions {
           publishedPullRequest.state !== "open" &&
           publishedPullRequest.state !== "draft"))
     ) {
-      this.githubPublication.reset();
+      this.githubPublication?.reset();
     }
     this.sessionPullRequestsBranch = result.branch;
     this.sessionPullRequestsRateLimited = result.rateLimited;
@@ -144,7 +143,8 @@ export abstract class ChatPaneSession extends ChatPaneTaskSuggestions {
     this.sessionPullRequestsBranch = undefined;
     this.sessionPullRequestsRateLimited = false;
     this.sessionPullRequestsExpanded = false;
-    this.githubPublication.reset();
+    this.githubPublication?.detach();
+    this.githubPublication = null;
     this.dismissedSessionPullRequestIds = new Set();
   }
 

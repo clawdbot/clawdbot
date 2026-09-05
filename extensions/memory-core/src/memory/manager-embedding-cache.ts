@@ -4,17 +4,25 @@ import {
   parseEmbedding,
   type MemoryChunk,
 } from "openclaw/plugin-sdk/memory-core-host-engine-storage";
-import { getNodeSqliteKysely, iterateSqliteQuerySync } from "openclaw/plugin-sdk/sqlite-runtime";
+import {
+  compileSqliteQueryBindings,
+  getNodeSqliteKysely,
+  iterateSqliteQuerySync,
+} from "openclaw/plugin-sdk/sqlite-runtime";
 import type { MemoryIndexProviderIdentity } from "./manager-reindex-state.js";
 
+export type MemoryEmbeddingCacheRow = {
+  provider: string;
+  model: string;
+  provider_key: string;
+  hash: string;
+  embedding: string;
+  dims: number | null;
+  updated_at: number;
+};
+
 type EmbeddingCacheDatabase = {
-  memory_embedding_cache: {
-    provider: string;
-    model: string;
-    provider_key: string;
-    hash: string;
-    embedding: string;
-  };
+  memory_embedding_cache: MemoryEmbeddingCacheRow;
 };
 
 export function loadMemoryEmbeddingCache(params: {
@@ -58,6 +66,32 @@ export function loadMemoryEmbeddingCache(params: {
   return out;
 }
 
+export function prepareMemoryEmbeddingCacheUpsert(db: DatabaseSync) {
+  const { compiled, bind } = compileSqliteQueryBindings<MemoryEmbeddingCacheRow>((parameter) =>
+    getNodeSqliteKysely<EmbeddingCacheDatabase>(db)
+      .insertInto("memory_embedding_cache")
+      .values({
+        provider: parameter((row) => row.provider),
+        model: parameter((row) => row.model),
+        provider_key: parameter((row) => row.provider_key),
+        hash: parameter((row) => row.hash),
+        embedding: parameter((row) => row.embedding),
+        dims: parameter((row) => row.dims),
+        updated_at: parameter((row) => row.updated_at),
+      })
+      .onConflict((conflict) =>
+        conflict.columns(["provider", "model", "provider_key", "hash"]).doUpdateSet((eb) => ({
+          embedding: eb.ref("excluded.embedding"),
+          dims: eb.ref("excluded.dims"),
+          updated_at: eb.ref("excluded.updated_at"),
+        })),
+      ),
+  );
+  // The caller owns this statement for its write loop, including large embedding bindings.
+  const statement = db.prepare(compiled.sql);
+  return (row: MemoryEmbeddingCacheRow) => statement.run(...bind(row));
+}
+
 export function upsertMemoryEmbeddingCache(params: {
   db: DatabaseSync;
   enabled: boolean;
@@ -71,25 +105,18 @@ export function upsertMemoryEmbeddingCache(params: {
     return;
   }
   const now = params.now ?? Date.now();
-  const stmt = params.db.prepare(
-    `INSERT INTO memory_embedding_cache (provider, model, provider_key, hash, embedding, dims, updated_at)\n` +
-      ` VALUES (?, ?, ?, ?, ?, ?, ?)\n` +
-      ` ON CONFLICT(provider, model, provider_key, hash) DO UPDATE SET\n` +
-      `   embedding=excluded.embedding,\n` +
-      `   dims=excluded.dims,\n` +
-      `   updated_at=excluded.updated_at`,
-  );
+  const upsert = prepareMemoryEmbeddingCacheUpsert(params.db);
   for (const entry of params.entries) {
     const embedding = entry.embedding ?? [];
-    stmt.run(
-      provider.id,
-      provider.model,
-      params.providerKey,
-      entry.hash,
-      JSON.stringify(embedding),
-      embedding.length,
-      now,
-    );
+    upsert({
+      provider: provider.id,
+      model: provider.model,
+      provider_key: params.providerKey,
+      hash: entry.hash,
+      embedding: JSON.stringify(embedding),
+      dims: embedding.length,
+      updated_at: now,
+    });
   }
 }
 

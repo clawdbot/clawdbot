@@ -34,6 +34,7 @@ import type {
 } from "../../lib/board/provider.ts";
 import type { BoardFace } from "../../lib/board/settings.ts";
 import { parseCatalogSessionKey } from "../../lib/sessions/catalog-key.ts";
+import type { GitHubPublicationBinding } from "../../lib/sessions/session-capability.ts";
 import { areUiSessionKeysEquivalent } from "../../lib/sessions/session-key.ts";
 import type { SwarmRosterHydrator } from "../../lib/sessions/swarm-roster.ts";
 import { SessionUnreadPatchGuard } from "../../lib/sessions/unread.ts";
@@ -41,7 +42,6 @@ import { OpenClawLightDomElement } from "../../lit/openclaw-element.ts";
 import { PollController } from "../../lit/poll-controller.ts";
 import { SubscriptionsController } from "../../lit/subscriptions-controller.ts";
 import { ChatComposerCapabilityHost } from "./chat-composer-capability-host.ts";
-import { GitHubPublicationController } from "./chat-github-publication.ts";
 import { CHAT_PANE_LIFECYCLE_CHANGED_EVENT } from "./chat-history-events.ts";
 import { getChatHistoryLoadState } from "./chat-history-state.ts";
 import { sendSessionObserverVisibility } from "./chat-observer.ts";
@@ -475,9 +475,7 @@ export abstract class ChatPaneBase extends OpenClawLightDomElement {
   protected sessionPullRequestsBranch: ControlUiSessionBranch | undefined;
   protected sessionPullRequestsRateLimited = false;
   protected sessionPullRequestsExpanded = false;
-  protected readonly githubPublication = new GitHubPublicationController(() =>
-    this.requestUpdate(),
-  );
+  protected githubPublication: GitHubPublicationBinding | null = null;
   protected dismissedSessionPullRequestIds: ReadonlySet<string> = new Set();
   protected readonly dismissedWorkspaceConflictRefs = new Map<string, string>();
   @litState() protected catalogMessages: unknown[] = [];

@@ -181,7 +181,7 @@ async function expectTurnInterrupted(
       expect(harness.request).toHaveBeenCalledWith(
         "turn/interrupt",
         { threadId: "thread-1", turnId: "turn-1" },
-        { timeoutMs: 5_000 },
+        { timeoutMs: 5_000, signal: expect.any(AbortSignal) },
       ),
     { interval: 1 },
   );

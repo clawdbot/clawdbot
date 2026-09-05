@@ -3,6 +3,7 @@ import {
   type DiagnosticArgumentChurnActivity,
   resolveArgumentChurnProgress,
 } from "./diagnostic-argument-churn-activity.js";
+import { resolveCurrentDiagnosticRunId } from "./diagnostic-embedded-run-index.js";
 import {
   type DiagnosticRepeatedRequestActivity,
   resolveRepeatedRequestNoProgressAgeMs,
@@ -69,11 +70,8 @@ export function buildDiagnosticSessionActivitySnapshot(
       activeTool = tool;
     }
   }
-  const churnProgress = resolveArgumentChurnProgress(
-    activity,
-    activity.activeEmbeddedRuns.values(),
-    now,
-  );
+  const currentOwnerRunId = resolveCurrentDiagnosticRunId(activity.activeEmbeddedRuns.values());
+  const churnProgress = resolveArgumentChurnProgress(activity, currentOwnerRunId, now);
   return {
     activeWorkKind,
     ...(activity.activeEmbeddedRuns.size > 0 ? { hasActiveEmbeddedRun: true } : {}),
@@ -85,7 +83,7 @@ export function buildDiagnosticSessionActivitySnapshot(
     lastProgressReason: churnProgress.lastProgressReason,
     repeatedRequestNoProgressAgeMs: resolveRepeatedRequestNoProgressAgeMs(
       activity,
-      activity.activeEmbeddedRuns.values(),
+      currentOwnerRunId,
       now,
     ),
     activeModelCallRequestTimeoutMs,

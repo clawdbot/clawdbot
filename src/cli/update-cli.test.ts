@@ -34,6 +34,7 @@ import {
   writeUpdatePostInstallDoctorResult,
 } from "../infra/update-doctor-result.js";
 import { cleanupStaleManagedServiceUpdateHandoffs } from "../infra/update-managed-service-handoff-cleanup.js";
+import type { UpdateRunRecord } from "../infra/update-run-record.js";
 import type { UpdateRunResult } from "../infra/update-runner.js";
 import { CLAWHUB_INSTALL_ERROR_CODE } from "../plugins/clawhub-error-codes.js";
 import { ManagedPluginLifecycleError } from "../plugins/management-lifecycle-error.js";
@@ -546,7 +547,8 @@ vi.mock("./daemon-cli.js", () => ({
   runDaemonInstall: mockedRunDaemonInstall,
   runDaemonRestart: vi.fn(),
 }));
-vi.mock("./daemon-cli/install.runtime.js", () => ({
+vi.mock("./daemon-cli/install.js", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("./daemon-cli/install.js")>()),
   runDaemonInstall: mockedRunDaemonInstall,
 }));
 
@@ -898,6 +900,9 @@ describe("update-cli", () => {
     writeJsonCall(vi.mocked(defaultRuntime.writeJson).mock.calls.length - 1);
   const getLogOutput = () => getMockCallOutput(vi.mocked(defaultRuntime.log));
   const getErrorOutput = () => getMockCallOutput(vi.mocked(defaultRuntime.error));
+  // Failure assertions must not render the triage target's inherited environment.
+  const getTriageFailures = () =>
+    vi.mocked(runUpdateFailureTriage).mock.calls.map(([call]) => call.failure);
   const expectNoSideEffects = (...effects: unknown[]) => {
     for (const effect of effects) {
       expect(effect).not.toHaveBeenCalled();
@@ -2996,20 +3001,18 @@ describe("update-cli", () => {
       });
 
       await expect(updateCommand({ yes: true, restart: false })).rejects.toEqual(new ExitError(1));
-      expect(runUpdateFailureTriage).toHaveBeenCalledWith(
+      expect(getTriageFailures()).toContainEqual(
         expect.objectContaining({
-          failure: expect.objectContaining({
-            error:
-              failureKind === "spawn"
-                ? "post-core spawn failed"
-                : "pre-plugin Doctor failed before convergence",
-            result: expect.objectContaining({
-              status: "error",
-              mode: "npm",
-              root,
-              before: { version: "2026.4.23" },
-              after: { version: "2026.4.24" },
-            }),
+          error:
+            failureKind === "spawn"
+              ? "post-core spawn failed"
+              : "pre-plugin Doctor failed before convergence",
+          result: expect.objectContaining({
+            status: "error",
+            mode: "npm",
+            root,
+            before: { version: "2026.4.23" },
+            after: { version: "2026.4.24" },
           }),
         }),
       );
@@ -4063,10 +4066,20 @@ describe("update-cli", () => {
           : updateCommand({ yes: true, json: true });
       await expect(command).rejects.toEqual(new ExitError(1));
 
-      const jsonOutput = lastWriteJsonCall() as UpdateRunResult | undefined;
+      const { run, ...jsonOutput } = expectDefined(
+        lastWriteJsonCall(),
+        "JSON update failure",
+      ) as UpdateRunResult & {
+        run?: UpdateRunRecord;
+      };
       expect(jsonOutput?.status).toBe("error");
       if (mode === "update") {
         expect(jsonOutput?.reason).toBe("post-update-plugins");
+        expect(run).toMatchObject({
+          runId: jsonOutput.runId,
+          status: "failed",
+          reason: "post-update-plugins",
+        });
       }
       expect(jsonOutput?.postUpdate?.plugins?.status).toBe("error");
       expect(jsonOutput?.postUpdate?.plugins?.npm.outcomes).toEqual([
@@ -4083,20 +4096,19 @@ describe("update-cli", () => {
       }
       expect(defaultRuntime.exit).not.toHaveBeenCalled();
       expectNoSideEffects(serviceRestart, runRestartScript, runDaemonRestart);
-      expect(runUpdateFailureTriage).toHaveBeenCalledWith(
+      expect(runUpdateFailureTriage).toHaveBeenCalledOnce();
+      expect(vi.mocked(runUpdateFailureTriage).mock.calls[0]?.[0].mode).toBe("json");
+      expect(getTriageFailures()).toContainEqual(
         expect.objectContaining({
-          failure: expect.objectContaining({
-            result:
-              mode === "update"
-                ? jsonOutput
-                : expect.objectContaining({
-                    status: "error",
-                    mode: "unknown",
-                    reason: "post-update-plugins",
-                    postUpdate: { plugins: jsonOutput?.postUpdate?.plugins },
-                  }),
-          }),
-          mode: "json",
+          result:
+            mode === "update"
+              ? jsonOutput
+              : expect.objectContaining({
+                  status: "error",
+                  mode: "unknown",
+                  reason: "post-update-plugins",
+                  postUpdate: { plugins: jsonOutput?.postUpdate?.plugins },
+                }),
         }),
       );
     },
@@ -5009,16 +5021,14 @@ describe("update-cli", () => {
       status: "error",
       reason: "database-schema-preflight",
     });
-    expect(runUpdateFailureTriage).toHaveBeenCalledWith(
+    expect(getTriageFailures()).toContainEqual(
       expect.objectContaining({
-        failure: expect.objectContaining({
-          result: expect.objectContaining({
-            steps: [
-              expect.objectContaining({
-                stderrTail: expect.stringContaining("openclaw-agent.sqlite"),
-              }),
-            ],
-          }),
+        result: expect.objectContaining({
+          steps: [
+            expect.objectContaining({
+              stderrTail: expect.stringContaining("openclaw-agent.sqlite"),
+            }),
+          ],
         }),
       }),
     );
@@ -6856,19 +6866,11 @@ describe("update-cli", () => {
     };
     await withEnvAsync(selectors, async () => {
       await expect(run({ yes: true, json: true, restart: false })).rejects.toBe(failure);
-      expect(runUpdateFailureTriage).toHaveBeenCalledWith(
-        expect.objectContaining({
-          failure: { error: failure.message },
-          target: expect.objectContaining({
-            env: expect.objectContaining({
-              OPENCLAW_STATE_DIR: path.resolve(cwd, selectors.OPENCLAW_STATE_DIR),
-              OPENCLAW_CONFIG_PATH: path.resolve(cwd, selectors.OPENCLAW_CONFIG_PATH),
-              OPENCLAW_WORKSPACE_DIR: path.resolve(cwd, selectors.OPENCLAW_WORKSPACE_DIR),
-            }),
-          }),
-        }),
-      );
+      expect(runUpdateFailureTriage).toHaveBeenCalledOnce();
+      const triageCall = vi.mocked(runUpdateFailureTriage).mock.calls[0]?.[0];
+      expect(triageCall?.failure).toEqual({ error: failure.message });
       for (const [key, value] of Object.entries(selectors)) {
+        expect(triageCall?.target.env[key], key).toBe(path.resolve(cwd, value));
         expect(process.env[key]).toBe(value);
       }
       expect(process.env.OPENCLAW_UPDATE_IN_PROGRESS).toBeUndefined();
@@ -7403,10 +7405,8 @@ describe("update-cli", () => {
         await expect(updateCommand({ yes: true, json: true })).rejects.toEqual(new ExitError(1));
         expect(defaultRuntime.exit).not.toHaveBeenCalled();
         if (failureKind === "post-core exception") {
-          expect(runUpdateFailureTriage).toHaveBeenCalledWith(
-            expect.objectContaining({
-              failure: expect.objectContaining({ error: failure.message }),
-            }),
+          expect(getTriageFailures()).toContainEqual(
+            expect.objectContaining({ error: failure.message }),
           );
         }
         expect(suspendScheduledTaskAutoStartForUpdate).toHaveBeenCalledOnce();

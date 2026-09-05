@@ -1,0 +1,166 @@
+.update-run-view {
+  display: grid;
+  gap: 14px;
+  min-width: 0;
+  color: var(--text);
+  text-align: left;
+}
+
+.update-run-dialog {
+  max-height: calc(100dvh - 48px);
+  overflow-y: auto;
+}
+
+.update-run-view__heading h3,
+.update-run-view__report h4,
+.update-run-view__connection,
+.update-run-view__details {
+  margin: 0;
+}
+
+.update-run-view__heading h3 {
+  color: var(--text-strong);
+  font-size: 15px;
+  line-height: 1.5;
+}
+
+.update-run-view__progress,
+.update-run-view__connection,
+.update-run-view__step-status,
+.update-run-view__detail-heading {
+  color: var(--muted);
+  font-size: 12px;
+}
+
+.update-run-view__phases,
+.update-run-view__step-list ol,
+.update-run-view__oracles {
+  display: grid;
+  gap: 6px;
+  margin: 0;
+  padding: 0;
+  list-style: none;
+}
+
+.update-run-view__phases {
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+}
+
+.update-run-view__step {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  min-width: 0;
+  padding: 5px 8px;
+  border-radius: var(--radius-sm);
+  overflow-wrap: anywhere;
+  font-size: 12px;
+}
+
+.update-run-view__mark {
+  flex: 0 0 14px;
+  font-weight: 700;
+  text-align: center;
+}
+
+.update-run-view__step-status {
+  margin-left: auto;
+  font-size: 10px;
+}
+
+.update-run-view__step--in_progress {
+  background: var(--accent-subtle);
+  color: var(--text-strong);
+}
+
+.update-run-view__step--completed .update-run-view__mark,
+.update-run-view__oracle--pass > span:first-child {
+  color: var(--ok);
+}
+
+.update-run-view__step--failed,
+.update-run-view__oracle--fail > span:first-child {
+  color: var(--danger);
+}
+
+.update-run-view__step--skipped,
+.update-run-view__step--pending,
+.update-run-view__oracle--pending {
+  color: var(--muted);
+}
+
+.update-run-view__oracle--warn > span:first-child {
+  color: var(--warn);
+}
+
+.update-run-view__step-list {
+  max-height: 160px;
+  overflow: auto;
+  font-size: 12px;
+}
+
+.update-run-view__detail-heading {
+  display: flex;
+  flex-wrap: wrap;
+  justify-content: space-between;
+  gap: 4px;
+}
+
+.update-run-view__details {
+  max-height: 144px;
+  overflow: auto;
+  padding: 10px;
+  border: 1px solid var(--border);
+  border-radius: var(--radius-sm);
+  background: var(--bg);
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+  font-size: 11px;
+  line-height: 1.5;
+}
+
+.update-run-view__oracles {
+  grid-template-columns: repeat(auto-fit, minmax(90px, 1fr));
+}
+
+.update-run-view__oracle {
+  display: grid;
+  grid-template-columns: 14px 1fr;
+  gap: 3px;
+  font-size: 12px;
+}
+
+.update-run-view__oracle small {
+  grid-column: 2;
+  color: var(--muted);
+  font-size: 10px;
+}
+
+.update-run-view__report {
+  padding: 12px;
+  border: 1px solid var(--border);
+  border-radius: var(--radius-md);
+  background: var(--panel);
+  font-size: 12px;
+  overflow-wrap: anywhere;
+}
+
+.update-run-view__report--succeeded {
+  border-color: color-mix(in srgb, var(--ok) 40%, var(--border));
+}
+
+.update-run-view__report--failed,
+.update-run-view__report--rolled-back {
+  border-color: color-mix(in srgb, var(--danger) 40%, var(--border));
+}
+
+.update-run-view__report p {
+  margin: 8px 0 0;
+  white-space: pre-wrap;
+}
+
+@media (max-width: 560px) {
+  .update-run-view__phases {
+    grid-template-columns: 1fr;
+  }
+}

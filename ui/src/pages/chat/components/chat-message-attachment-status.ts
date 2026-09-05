@@ -19,9 +19,11 @@ export function renderAssistantAttachmentStatusCard(params: {
   badge: string;
   reason?: string;
   onRetry?: () => void;
+  onAllow?: () => void;
+  path?: string;
 }) {
   const unavailable = params.reason !== undefined;
-  const recoverable = unavailable && params.onRetry !== undefined;
+  const recoverable = unavailable && (params.onRetry !== undefined || params.onAllow !== undefined);
   const statusClass = unavailable
     ? recoverable
       ? "chat-assistant-attachment-card--recoverable"
@@ -45,7 +47,8 @@ export function renderAssistantAttachmentStatusCard(params: {
               class="chat-assistant-attachment-card__title ${
                 unavailable ? "chat-assistant-attachment-card__title--unavailable" : ""
               }"
-              title=${params.label}
+              title=${params.path ?? params.label}
+              tabindex=${params.path ? "0" : nothing}
               >${params.label}</span
             >
             <span
@@ -73,26 +76,34 @@ export function renderAssistantAttachmentStatusCard(params: {
           </span>
         </div>
         ${
-          params.onRetry
+          params.onAllow
             ? html`<button
-                class="chat-assistant-attachment-card__action chat-assistant-attachment-card__action--labeled chat-assistant-attachment-card__retry"
+                class="chat-assistant-attachment-card__action chat-assistant-attachment-card__action--labeled"
                 type="button"
-                @click=${params.onRetry}
+                @click=${params.onAllow}
               >
-                ${icons.refresh} ${t("common.retry")}
+                ${t("chat.attachments.allowImage")}
               </button>`
-            : unavailable
-              ? nothing
-              : html`<span
-                  class="chat-assistant-attachment-card__actions chat-assistant-attachment-card__actions--loading"
-                  aria-hidden="true"
-                  data-label=${t("chat.attachments.open")}
+            : params.onRetry
+              ? html`<button
+                  class="chat-assistant-attachment-card__action chat-assistant-attachment-card__action--labeled chat-assistant-attachment-card__retry"
+                  type="button"
+                  @click=${params.onRetry}
                 >
-                  <span
-                    class="chat-assistant-attachment-card__action-skeleton skeleton"
+                  ${icons.refresh} ${t("common.retry")}
+                </button>`
+              : unavailable
+                ? nothing
+                : html`<span
+                    class="chat-assistant-attachment-card__actions chat-assistant-attachment-card__actions--loading"
                     aria-hidden="true"
-                  ></span>
-                </span>`
+                    data-label=${t("chat.attachments.open")}
+                  >
+                    <span
+                      class="chat-assistant-attachment-card__action-skeleton skeleton"
+                      aria-hidden="true"
+                    ></span>
+                  </span>`
         }
       </div>
     </div>

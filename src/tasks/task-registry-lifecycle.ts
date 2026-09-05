@@ -22,6 +22,7 @@ import {
   setTaskRegistryListenerStop,
 } from "./task-registry-state.js";
 import type { TaskRecord } from "./task-registry.types.js";
+import { getTaskRunOwner } from "./task-run-owner.js";
 
 // Keep durable liveness well inside the 30-minute stale-task audit without writing every delta.
 const ACTIVITY_LIVENESS_WRITE_MS = 60_000;
@@ -66,10 +67,14 @@ function ensureListener() {
       ) {
         continue;
       }
+      const phase = evt.stream === "lifecycle" ? evt.data?.phase : undefined;
+      // An abort event starts cancellation; only the live producer knows when work has settled.
+      if ((phase === "end" || phase === "error") && getTaskRunOwner(current)) {
+        continue;
+      }
       recordTaskActivityEvent(current, evt);
       const patch: Partial<TaskRecord> = {};
       if (evt.stream === "lifecycle") {
-        const phase = typeof evt.data?.phase === "string" ? evt.data.phase : undefined;
         const eventStartedAt = evt.data?.startedAt;
         const startedAt =
           typeof eventStartedAt === "number" && Number.isFinite(eventStartedAt)

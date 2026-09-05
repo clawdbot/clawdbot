@@ -735,6 +735,10 @@ session identities. The task returns to `running` as the replacement execution
 continues, and the aborted marker is cleared after acceptance. You do not need
 to send another prompt to restart the work.
 
+If saving an accepted recovery temporarily fails, the Gateway retries adopting
+that same execution into its original task. Cancellation, replacement by a newer
+run, or another Gateway restart prevents that adoption.
+
 For sub-agents that announce completion, OpenClaw also attempts a notice to the
 original requester: “Resumed your interrupted task after the Gateway restart.”
 Failed or suppressed notices are retried without launching another recovery

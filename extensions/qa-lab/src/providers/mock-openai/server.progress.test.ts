@@ -1,4 +1,5 @@
 import { describe, expect, it } from "vitest";
+import { buildMatrixToolProgressMentionSafetyPrompt } from "../../live-transports/matrix/scenarios/scenario-runtime-prompts.js";
 import { startQaMockOpenAiServer } from "./server.js";
 
 const READ_PROMPT =
@@ -115,6 +116,35 @@ async function requestProgress(
 }
 
 describe.each(["responses", "messages"])("%s background command progress", (route) => {
+  it.each([
+    { exitCode: 1, expected: "PROGRESS_OK" },
+    { exitCode: 0, expected: "BUG-TOOL-DID-NOT-FAIL" },
+  ])("honors the Matrix required failure after exit $exitCode", async ({ exitCode, expected }) => {
+    const prompt = buildMatrixToolProgressMentionSafetyPrompt(
+      "@qa-sut:matrix-qa.test",
+      "PROGRESS_OK",
+    );
+    const plan = await requestProgress(route, prompt, []);
+    const call = (route === "responses" ? plan.output : plan.content)[0];
+    expect(call.name).toBe("exec");
+    const args = route === "responses" ? JSON.parse(call.arguments) : call.input;
+    const results: ProgressResult[] = [{ tool: "exec", args, output: RUNNING_OUTPUT }];
+    const pending = await requestProgress(route, prompt, results);
+    expect(route === "responses" ? pending.output : pending.content).toMatchObject([
+      { name: "process" },
+    ]);
+    results.push({
+      tool: "process",
+      args: { action: "poll", sessionId: "lucky-slug" },
+      output: `\n\nProcess exited with code ${exitCode}.`,
+    });
+    expect(await requestProgress(route, prompt, results)).toMatchObject(
+      route === "responses"
+        ? { output: [{ content: [{ text: expected }] }] }
+        : { content: [{ text: expected }] },
+    );
+  });
+
   it.each([
     { label: "plain text", output: RUNNING_OUTPUT },
     { label: "warning-prefixed text", output: `Task warning\n\n${RUNNING_OUTPUT}` },

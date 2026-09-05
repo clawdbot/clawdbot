@@ -1,5 +1,6 @@
 import { formatErrorMessage } from "../infra/errors.js";
 import { findActiveUpdateRun, getUpdateRun } from "../infra/update-run-ledger.js";
+import type { UpdateRunPhase } from "../infra/update-run-record.js";
 import { GATEWAY_EVENT_UPDATE_RUN_CHANGED } from "./events.js";
 import type { GatewayBroadcastFn } from "./server-broadcast-types.js";
 
@@ -19,7 +20,10 @@ export function startUpdateRunWatcher(params: {
 }): { stop: () => void } {
   let stopped = false;
   let timer: ReturnType<typeof setTimeout> | undefined;
-  let watched: { runId: string; startedAtMs: number; revision?: number } | undefined;
+  let watched:
+    | { runId: string; startedAtMs: number; revision?: number; phase?: UpdateRunPhase }
+    | undefined;
+  let notices = Promise.resolve();
 
   const poll = () => {
     if (stopped) {
@@ -43,6 +47,29 @@ export function startUpdateRunWatcher(params: {
           updatedAtMs: run.updatedAtMs,
         });
         watched.revision = run.updatedAtMs;
+      }
+      if (watched.phase !== run.phase) {
+        watched.phase = run.phase;
+        // The command owns refusals before acknowledgement. Only an admitted
+        // conversation with durable ack custody receives an automatic final notice.
+        const acknowledged = run.steps.some(
+          (step) => step.step === "notice:ack" && step.status === "completed",
+        );
+        if (run.phase === "activating" || (terminal && acknowledged)) {
+          notices = notices
+            .then(async () => {
+              if (stopped) {
+                return;
+              }
+              const { notifyUpdateRunPhase } = await import("./update-run-notice.runtime.js");
+              if (!stopped) {
+                await notifyUpdateRunPhase(run);
+              }
+            })
+            .catch((error: unknown) => {
+              params.log.warn(`update run notice failed: ${formatErrorMessage(error)}`);
+            });
+        }
       }
       if (terminal || expired) {
         watched = undefined;

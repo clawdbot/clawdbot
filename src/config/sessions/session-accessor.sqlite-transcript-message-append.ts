@@ -182,7 +182,9 @@ export function appendTranscriptMessageInTransaction<TMessage>(
   if (!appended) {
     throw new Error(`SQLite transcript append did not insert message ${messageId}.`);
   }
-  const anchor = readAnchor({ message: finalMessage, messageId });
+  // SAFETY: Receipt custody comes from this event's exact committed JSON after storage normalization.
+  const persistedMessage = (JSON.parse(appended) as typeof event).message;
+  const anchor = readAnchor({ message: persistedMessage, messageId });
   if (pending) {
     consumeSessionPendingInput(database, pending);
   }
@@ -190,7 +192,7 @@ export function appendTranscriptMessageInTransaction<TMessage>(
     appended: true,
     ...(anchor ? { anchor } : {}),
     effectiveParentId: parentId ?? null,
-    message: finalMessage,
+    message: persistedMessage,
     messageId,
   };
 }

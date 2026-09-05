@@ -726,8 +726,10 @@ export async function applySessionDiffBaseline(params: {
     return diff;
   }
   const fingerprints = new Map(baseline.files.map((file) => [file.path, file.fingerprint]));
+  // New paths cannot match the baseline; hashing them can exhaust the budget
+  // before an unchanged pre-session file is compared.
   const current = await fingerprintBaselineCandidates({
-    candidates: diff.files,
+    candidates: diff.files.filter((file) => fingerprints.has(file.path)),
     root: diff.root,
   });
   const currentFingerprints = new Map(current.files.map((file) => [file.path, file.fingerprint]));

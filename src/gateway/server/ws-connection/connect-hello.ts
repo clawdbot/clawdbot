@@ -32,11 +32,17 @@ import {
 import { canReadDetailedUpdateMetadata } from "../../events.js";
 import { ADMIN_SCOPE } from "../../method-scopes.js";
 import { scheduleNodeConnectionNotification } from "../../node-connection-notifications.js";
-import { MAX_BUFFERED_BYTES, MAX_PAYLOAD_BYTES, TICK_INTERVAL_MS } from "../../server-constants.js";
+import {
+  MAX_BUFFERED_BYTES,
+  MAX_PAYLOAD_BYTES,
+  TICK_INTERVAL_MS,
+  WEBSOCKET_OPEN_READY_STATE,
+} from "../../server-constants.js";
 import { formatError } from "../../server-utils.js";
 import { allowedSessionVisibilities } from "../../session-sharing.js";
 import { formatForLog, logWs } from "../../ws-log.js";
 import { buildGatewaySnapshot, getHealthCache, getHealthVersion } from "../health-state.js";
+import { broadcastPresenceSnapshot } from "../presence-events.js";
 import { emitGatewayAuthSecurityEvent } from "./connect-auth-security.js";
 import type {
   DeviceAuthorizedGatewayConnect,
@@ -400,4 +406,15 @@ export async function sendGatewayHello(
   void refreshHealthSnapshot({ probe: false }).catch((err: unknown) =>
     logHealth.error(`post-connect health refresh failed: ${formatError(err)}`),
   );
+  const client = context.handler.getClient();
+  if (
+    client?.presenceKey &&
+    !client.invalidated &&
+    client.socket.readyState === WEBSOCKET_OPEN_READY_STATE &&
+    !context.handler.isClosed()
+  ) {
+    // The row is already in hello's snapshot. Notify established readers now,
+    // without queueing this connection's redundant snapshot ahead of hello.
+    broadcastPresenceSnapshot(buildRequestContext());
+  }
 }

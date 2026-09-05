@@ -214,7 +214,6 @@ it("finishes creation bookkeeping when delegated authority closes after successf
     sessionsDir: state.sessionsDir("published"),
     deleteFiles: false,
   });
-  deletion.commit();
   deletion.finish();
   const rollback = vi.fn();
   try {

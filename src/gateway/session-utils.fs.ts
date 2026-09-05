@@ -11,6 +11,7 @@ import type { TranscriptEvent } from "../config/sessions/session-accessor.js";
 import { streamSessionTranscriptLines } from "../config/sessions/transcript-stream.js";
 import { readFileWindowFully } from "../infra/file-read.js";
 import { jsonUtf8Bytes } from "../infra/json-utf8-bytes.js";
+import { isVisibleTranscriptRecord } from "../sessions/transcript-visible-record.js";
 import { projectSessionDisplayMessage } from "./session-display-projection.js";
 import {
   aggregateSessionTranscriptUsage,
@@ -22,7 +23,6 @@ import {
 } from "./session-transcript-files.fs.js";
 import {
   assertArchiveTranscriptSource,
-  isVisibleTranscriptRecord,
   readSessionTranscriptIndex,
   selectArchiveTranscriptEntries,
   type IndexedTranscriptEntry,
@@ -277,6 +277,26 @@ export class ArchivedTranscriptReader {
       oversized: false,
       found: true,
     };
+  }
+
+  async readMessageCandidatesById(
+    messageId: string,
+    opts: { allowResetArchiveFallback?: boolean; resetArchiveOnly?: boolean },
+  ): Promise<unknown[]> {
+    const artifact = await this.resolveArtifact(opts);
+    if (!artifact) {
+      return [];
+    }
+    const index = await readSessionTranscriptIndex(artifact.path, this.scope.sessionId);
+    // Preserve duplicate/oversized full-reader entries and ID-less rows whose
+    // projected metadata can supply the ID. The caller matches after projection.
+    return (
+      index?.entries.flatMap((entry) =>
+        typeof entry.record.id !== "string" || entry.record.id === messageId
+          ? indexedTranscriptEntryToMessages(entry)
+          : [],
+      ) ?? []
+    );
   }
 
   async readRecentWithStats(
