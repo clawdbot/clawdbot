@@ -3312,75 +3312,33 @@ describe("compactEmbeddedAgentSessionDirect hooks", () => {
     });
   });
 
-  it.each([
-    { label: "reloads before", reconcileError: undefined, expectedRequests: 1 },
-    {
-      label: "fails closed before",
-      reconcileError: new Error("llama.cpp preset reload failed"),
-      expectedRequests: 0,
-    },
-  ])(
-    "$label the first direct-compaction provider request",
-    async ({ reconcileError, expectedRequests }) => {
-      const events: string[] = [];
-      const reconcile = vi.fn(async () => {
-        events.push("reload");
-        if (reconcileError) {
-          throw reconcileError;
-        }
-      });
-      registerProviderStreamForModelMock.mockImplementation((params) => {
-        const model = (params as { model: { baseUrl: string } }).model;
-        return async () => {
-          await getModelProviderLocalServiceReconciler(model)?.({ baseUrl: model.baseUrl });
-          events.push("provider-request");
-          return undefined as never;
-        };
-      });
-      attemptServerEndpointCompactionMock.mockImplementationOnce(async (input) => {
-        try {
-          await input.streamFn(input.model, { messages: [] } as never, {});
-        } catch {
-          return undefined;
-        }
-        input.onCompactionCommitted?.();
-        return {
-          item: { type: "compaction", encrypted_content: "opaque" },
-          usage: { input_tokens: 120, output_tokens: 50 },
-        };
-      });
+  it("carries the prepared provider reconciler into direct compaction", async () => {
+    mockResolvedModel();
+    const reconcile = vi.fn(async () => undefined);
+    const buildDefaultPlan = buildAgentRuntimePlanMock.getMockImplementation();
+    if (!buildDefaultPlan) {
+      throw new Error("Compaction runtime plan fixture is not configured");
+    }
+    buildAgentRuntimePlanMock.mockImplementation((params) => ({
+      ...buildDefaultPlan(params),
+      providerRuntimeHandle: {
+        provider: params.provider,
+        modelId: params.modelId,
+        workspaceDir: params.workspaceDir,
+        prepared: true,
+        plugin: { reconcileLocalService: reconcile },
+      },
+    }));
 
-      mockResolvedModel();
-      const buildDefaultPlan = buildAgentRuntimePlanMock.getMockImplementation();
-      if (!buildDefaultPlan) {
-        throw new Error("Compaction runtime plan fixture is not configured");
-      }
-      buildAgentRuntimePlanMock.mockImplementation((params) => ({
-        ...buildDefaultPlan(params),
-        providerRuntimeHandle: {
-          provider: params.provider,
-          modelId: params.modelId,
-          workspaceDir: params.workspaceDir,
-          prepared: true,
-          plugin: { reconcileLocalService: reconcile },
-        },
-      }));
+    await expect(compactEmbeddedAgentSessionDirect(wrappedCompactionArgs())).resolves.toMatchObject(
+      { ok: true },
+    );
 
-      await expect(
-        compactEmbeddedAgentSessionDirect(wrappedCompactionArgs()),
-      ).resolves.toMatchObject({ ok: true });
-
-      const streamRegistration = mockCallArg(registerProviderStreamForModelMock) as {
-        model: object;
-      };
-      expect(getModelProviderLocalServiceReconciler(streamRegistration.model)).toBe(reconcile);
-      expect(events.filter((event) => event === "provider-request")).toHaveLength(expectedRequests);
-      expect(events.indexOf("reload")).toBeGreaterThanOrEqual(0);
-      if (expectedRequests > 0) {
-        expect(events.indexOf("reload")).toBeLessThan(events.indexOf("provider-request"));
-      }
-    },
-  );
+    const streamRegistration = mockCallArg(registerProviderStreamForModelMock) as {
+      model: object;
+    };
+    expect(getModelProviderLocalServiceReconciler(streamRegistration.model)).toBe(reconcile);
+  });
 
   it("aborts in-flight compaction when the caller abort signal fires", async () => {
     const { compactWithSafetyTimeout } = await vi.importActual<

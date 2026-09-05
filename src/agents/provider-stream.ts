@@ -36,6 +36,7 @@ export function registerProviderStreamForModel<TApi extends Api>(params: {
   wrapProviderStream?: boolean;
   apiRegistry?: ApiRegistry;
 }): StreamFn | undefined {
+  const apiRegistry = params.apiRegistry ?? getModelLlmRuntime(params.model)?.registry;
   const runtimeHandle =
     getModelProviderRuntimePluginHandle(params.model) ??
     (params.allowRuntimePluginLoad === false
@@ -115,7 +116,6 @@ export function registerProviderStreamForModel<TApi extends Api>(params: {
     : providerWrappedStreamFn;
   // Register custom APIs only after a concrete stream exists, so later callers
   // can route by model.api without reloading provider runtime hooks.
-  const apiRegistry = params.apiRegistry ?? getModelLlmRuntime(runtimeModel)?.registry;
   if (apiRegistry) {
     ensureCustomApiRegistered(apiRegistry, runtimeModel.api, preparedStreamFn);
   }
