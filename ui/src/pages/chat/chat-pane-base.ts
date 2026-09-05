@@ -125,6 +125,7 @@ export abstract class ChatPaneBase extends OpenClawLightDomElement {
     // former shell so background history does not stay blocked on that pane.
     const paneRoot = this.paneLifecycleRoot;
     this.paneLifecycleRoot = null;
+    this.conversationVisible = false;
     paneRoot?.dispatchEvent(new Event(CHAT_PANE_LIFECYCLE_CHANGED_EVENT));
   }
 
@@ -147,7 +148,37 @@ export abstract class ChatPaneBase extends OpenClawLightDomElement {
   @property({ attribute: false }) workContext?: string;
   // Route ownership settles after retained-pane preview; dashboard activity follows
   // the pane the user can already see so its warmed runtime paints immediately.
-  @property({ attribute: false }) visuallyPresented = true;
+  private visuallyPresentedValue = true;
+  private conversationVisible = false;
+  get visuallyPresented(): boolean {
+    return this.visuallyPresentedValue;
+  }
+  set visuallyPresented(value: boolean) {
+    const previous = this.visuallyPresentedValue;
+    if (value === previous) {
+      return;
+    }
+    const wasConversationPresented = this.conversationPresented;
+    this.visuallyPresentedValue = value;
+    this.requestUpdate("visuallyPresented", previous);
+    this.notifyConversationPresentation(wasConversationPresented);
+  }
+  /** The pane's committed layout and both visual and route ownership permit idle warming. */
+  get conversationPresented(): boolean {
+    return this.presented && this.visuallyPresented && this.conversationVisible;
+  }
+  protected setConversationVisible(visible: boolean): void {
+    const wasConversationPresented = this.conversationPresented;
+    this.conversationVisible = visible;
+    this.notifyConversationPresentation(wasConversationPresented);
+  }
+  private notifyConversationPresentation(wasPresented: boolean): void {
+    if (wasPresented !== this.conversationPresented) {
+      this.dispatchEvent(
+        new Event(CHAT_PANE_LIFECYCLE_CHANGED_EVENT, { bubbles: true, composed: true }),
+      );
+    }
+  }
   private activeValue = false;
   private headerPresentationGeneration = 0;
   private presentedValue = true;
@@ -159,10 +190,12 @@ export abstract class ChatPaneBase extends OpenClawLightDomElement {
     if (value === previous) {
       return;
     }
+    const wasConversationPresented = this.conversationPresented;
     this.headerPresentationGeneration += 1;
     this.presentedValue = value;
     this.requestUpdate("presented", previous);
     this.presentedChanged(value);
+    this.notifyConversationPresentation(wasConversationPresented);
   }
   protected presentedChanged(_presented: boolean): void {}
   /** True while the authoritative transcript for this pane is still being fetched. */

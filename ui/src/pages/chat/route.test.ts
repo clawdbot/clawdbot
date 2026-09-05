@@ -37,7 +37,7 @@ function contextFor(resolution: SessionsResolveResult = { ok: false }, mainKey =
       subscribeEvents: vi.fn(() => () => undefined),
     },
     agents: { state: { agentsList: { mainKey } } },
-    sessions: { list },
+    sessions: { list, state: { result: null } },
   } as unknown as ApplicationContext;
   return { context, list, request };
 }
@@ -91,7 +91,7 @@ describe("loadChatRoute", () => {
       ),
     ).resolves.toEqual({ kind: "session", sessionKey, draft: "ship", face: "chat" });
     expect(list).not.toHaveBeenCalled();
-    expect(request).toHaveBeenCalledTimes(2);
+    expect(request).toHaveBeenCalledOnce();
   });
 
   it("round-trips literal channel, peer, and cron keys without searching", async () => {

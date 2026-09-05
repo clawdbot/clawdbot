@@ -18,6 +18,7 @@ export type SessionPrefetchUpdate = {
   openSessionKeys: readonly string[];
   /** Presented panes still fetching their transcript; omitted panes report committed. */
   loadingSessionKeys?: readonly string[];
+  hiddenConversationSessionKeys?: readonly string[];
   rows: readonly GatewaySessionRow[] | null;
 };
 
@@ -137,6 +138,8 @@ export function createSessionPrefetchFixture() {
       ...update.openSessionKeys.map((sessionKey) =>
         Object.assign(document.createElement("openclaw-chat-pane"), {
           sessionKey,
+          conversationPresented:
+            update.hiddenConversationSessionKeys?.includes(sessionKey) !== true,
           transcriptLoading: update.loadingSessionKeys?.includes(sessionKey) === true,
         }),
       ),

@@ -10,6 +10,7 @@ import {
   buildCatalogSessionKey,
   catalogSessionKeyFromSearch,
 } from "../../lib/sessions/catalog-key.ts";
+import { prepareSessionNavigationHandoff } from "../../lib/sessions/navigation-handoff.ts";
 import {
   findUiSessionRow,
   SESSION_DASHBOARD_EXPANDED_PARAM,
@@ -205,6 +206,7 @@ function resolvedSessionRouteData(params: {
   face: BoardFace;
   row: SessionRoutePresentation;
   preferenceDerived: boolean;
+  isResolutionSourceCurrent: () => boolean;
   shortId?: string;
 }): Extract<ChatRouteData, { kind: "session" }> | null {
   // The loader owns face resolution: a preference-derived open adopts the row's stored
@@ -220,6 +222,14 @@ function resolvedSessionRouteData(params: {
   });
   if (canonicalLocation === undefined) {
     return null;
+  }
+  if (canonicalLocation && params.isResolutionSourceCurrent()) {
+    // A delayed response cannot transfer its key into a replacement connection.
+    prepareSessionNavigationHandoff(
+      params.context.gateway,
+      canonicalLocation.pathname,
+      params.row.key,
+    );
   }
   return {
     kind: "session",
@@ -238,6 +248,7 @@ function resolvedMainSessionRouteData(params: {
   row: SessionRoutePresentation;
   target: Extract<SessionPathTarget, { kind: "main" }>;
   preferenceDerived: boolean;
+  isResolutionSourceCurrent: () => boolean;
 }): Extract<ChatRouteData, { kind: "session" }> | null {
   if (!isUiGlobalSessionKey(params.row.key)) {
     return resolvedSessionRouteData(params);
@@ -274,6 +285,11 @@ export async function loadChatRoute(
   face: BoardFace,
   signal: AbortSignal,
 ): Promise<ChatRouteData | ReturnType<typeof notFound>> {
+  const { client, hello } = context.gateway.snapshot;
+  const isResolutionSourceCurrent = () =>
+    context.gateway.snapshot.phase === "connected" &&
+    context.gateway.snapshot.client === client &&
+    context.gateway.snapshot.hello === hello;
   const catalogShareRoute =
     face === "chat" && (await loadCatalogShareRouteFromLocation(context, location, signal));
   if (catalogShareRoute) {
@@ -336,6 +352,7 @@ export async function loadChatRoute(
       if (resolution?.kind === "unique") {
         const resolved = resolvedMainSessionRouteData({
           context,
+          isResolutionSourceCurrent,
           location: routeLocation,
           face,
           row: resolution.session,
@@ -390,6 +407,7 @@ export async function loadChatRoute(
       if (resolution?.kind === "unique") {
         const resolved = resolvedSessionRouteData({
           context,
+          isResolutionSourceCurrent,
           location: routeLocation,
           face,
           row: resolution.session,
@@ -480,6 +498,7 @@ export async function loadChatRoute(
     if (literalResolution?.kind === "unique") {
       const literal = resolvedSessionRouteData({
         context,
+        isResolutionSourceCurrent,
         location: routeLocation,
         face,
         row: literalResolution.session,
@@ -508,6 +527,7 @@ export async function loadChatRoute(
   }
   const resolved = resolvedSessionRouteData({
     context,
+    isResolutionSourceCurrent,
     location: routeLocation,
     face,
     row: resolution.session,
