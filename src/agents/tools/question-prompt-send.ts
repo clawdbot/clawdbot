@@ -9,9 +9,15 @@
  */
 import type { QuestionRequestQuestion } from "../../../packages/gateway-protocol/src/index.js";
 import type { ReplyPayload } from "../../auto-reply/reply-payload.js";
+import {
+  durableMessageBatchMayHaveReachedRecipient,
+  sendDurableMessageBatchCore,
+  type DurableMessageBatchSendResult,
+} from "../../channels/message/runtime.js";
 import { resolveControlUiSessionLinkBase } from "../../config/control-ui-link-base.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import { runWithQuestionChannelDeliveries } from "../../infra/question-channel-runtime.js";
+import { isDeliverableMessageChannel } from "../../utils/message-channel-normalize.js";
 import { buildAgentHarnessQuestionPromptPayload } from "../harness/user-input-bridge.js";
 
 /** Tools whose call opens a question a person must answer before the turn continues. */
@@ -25,6 +31,54 @@ export type QuestionPromptDelivery = {
   send: QuestionPromptSend;
   messageChannel?: string;
 };
+
+/** Builds a portable prompt sender for Gateway-scoped / loopback tool construction. */
+export function createChannelQuestionPromptDelivery(params: {
+  cfg?: OpenClawConfig;
+  channel?: string | null;
+  to?: string | number | null;
+  accountId?: string;
+  threadId?: string | number | null;
+}): QuestionPromptDelivery | undefined {
+  const cfg = params.cfg;
+  const channel = params.channel?.trim();
+  const to = params.to?.toString().trim();
+  if (!cfg || !channel || !to || !isDeliverableMessageChannel(channel)) {
+    return undefined;
+  }
+  return {
+    messageChannel: channel,
+    send: async (payload) => {
+      const send = await sendDurableMessageBatchCore({
+        cfg,
+        channel,
+        to,
+        accountId: params.accountId,
+        threadId: params.threadId ?? undefined,
+        payloads: [payload],
+        bestEffort: true,
+        durability: "best_effort",
+      });
+      settleChannelQuestionPromptSend(send);
+    },
+  };
+}
+
+function settleChannelQuestionPromptSend(send: DurableMessageBatchSendResult): void {
+  // Fail closed when the durable batch did not reach the chat. ask_user then
+  // cancels instead of waiting on Control UI after a suppressed or failed send.
+  if (send.status === "sent" || durableMessageBatchMayHaveReachedRecipient(send)) {
+    return;
+  }
+  if (send.status === "failed" || send.status === "partial_failed") {
+    throw send.error;
+  }
+  throw new Error(
+    send.status === "suppressed"
+      ? `question prompt delivery was suppressed: ${send.reason}`
+      : "question prompt delivery did not reach the conversation",
+  );
+}
 
 /**
  * Publishes the prompt for an already-committed gateway question record.
