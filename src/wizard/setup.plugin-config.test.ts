@@ -548,7 +548,7 @@ describe("setupPluginConfig", () => {
 
   // Regression coverage for #127577: enum selections must preserve the JSON
   // type of the chosen member instead of being stringified. Enum option values
-  // are opaque tokens; the wizard maps the selected token back to the original
+  // are numeric indices; the wizard maps the selected index back to the original
   // (typed) enum member.
   it.each([
     {
@@ -585,6 +585,7 @@ describe("setupPluginConfig", () => {
     "preserves the typed enum value for $name",
     async ({ schemaProp, selectedToken, expected }) => {
       const pluginId = "typed-enum-plugin";
+      const enumMembers = schemaProp.enum as unknown[];
       loadPluginManifestRegistryCore.mockReturnValue({
         plugins: [
           makeManifestPlugin(
@@ -599,6 +600,17 @@ describe("setupPluginConfig", () => {
         ],
       });
 
+      // Select from the options actually offered: assert each option's value is
+      // its numeric index and its label is the stringified member, then return
+      // the offered option at the chosen index. This proves the saved value is
+      // the same member the wizard displayed, not an independent hardcoded token.
+      const select = vi.fn(async (params) => {
+        const options = params.options as Array<{ value: string; label: string }>;
+        expect(options.map((o) => o.value)).toEqual(enumMembers.map((_, i) => String(i)));
+        expect(options.map((o) => o.label)).toEqual(enumMembers.map((v) => String(v)));
+        return options[Number(selectedToken)].value;
+      });
+
       const result = await setupPluginConfig({
         config: {
           plugins: { entries: { [pluginId]: { enabled: true } } },
@@ -607,7 +619,7 @@ describe("setupPluginConfig", () => {
           intro: vi.fn(async () => {}),
           outro: vi.fn(async () => {}),
           note: vi.fn(async () => {}),
-          select: vi.fn(async () => selectedToken) as unknown as WizardPrompter["select"],
+          select: select as unknown as WizardPrompter["select"],
           multiselect: vi.fn(async () => [pluginId]) as unknown as WizardPrompter["multiselect"],
           text: vi.fn(async () => ""),
           confirm: vi.fn(async () => true),

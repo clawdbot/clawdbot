@@ -240,10 +240,7 @@ async function promptPluginFields(params: {
     }
 
     // Handle enum fields with select. Option values are the member's numeric
-    // index (never the raw stringified member) so that typed enum members —
-    // numbers, booleans, objects — survive the round-trip without being coerced
-    // to strings. The selected index is mapped back to the original member, which
-    // is stored as a structured clone to preserve its JSON type.
+    // index, mapped back to a structured clone of the original member to preserve its JSON type.
     if (schemaProp?.enum && Array.isArray(schemaProp.enum)) {
       const options = schemaProp.enum.map((v, i) => ({
         value: String(i),
