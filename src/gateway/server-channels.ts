@@ -477,9 +477,9 @@ export function createChannelManager(opts: ChannelManagerOptions): ChannelManage
       ? sanitizeAbortedTaskStatusPatch(patch, getRuntime(channelId, accountId))
       : patch;
     const next = setRuntime(channelId, accountId, safePatch);
-    // Readiness belongs to the current task, after all ingress registrations.
-    // Retire old paths it did not reclaim; first registration alone is too early.
-    if (!abortSignal.aborted && next.lifecycle === "ready") {
+    // Ready follows all ingress registrations; terminal startup may wait for abort.
+    // Retire on this task's terminal report, never an inherited diagnosis.
+    if (!abortSignal.aborted && (next.lifecycle === "ready" || patch.terminalDisconnect === true)) {
       releaseRouteHandoff(getStore(channelId), accountId);
     }
     return next;
@@ -1295,9 +1295,10 @@ export function createChannelManager(opts: ChannelManagerOptions): ChannelManage
             }
             if (teardown) {
               const { context, run } = teardown;
-              // The start task can settle before stopAccount. Shutdown routes need
-              // their own lease, bounded by this stop attempt rather than that task.
-              capabilityLease = createPluginRuntimeCapabilityLease("channel account stop");
+              // Teardown can outlive the start task. Its own lease permits route and status
+              // writes only until this stop attempt completes or times out.
+              const stopLease = createPluginRuntimeCapabilityLease("channel account stop");
+              capabilityLease = stopLease;
               // A plugin stopAccount that never settles must not wedge every
               // stop-driven flow (health monitor sweeps, thaw recovery, reload).
               // Bound it like the task teardown below; the timed-out path flows
@@ -1306,22 +1307,15 @@ export function createChannelManager(opts: ChannelManagerOptions): ChannelManage
               const runStopAccount = () =>
                 run({
                   ...context,
-                  setStatus: (next) => {
-                    // A stop we abandoned may settle after a replacement started;
-                    // its late writes must not repaint or tear down that account.
-                    setRuntime(
-                      channelId,
-                      id,
-                      stopAttemptAbandoned
-                        ? sanitizeAbortedTaskStatusPatch(next, getRuntime(channelId, id))
-                        : next,
-                    );
-                  },
+                  setStatus: (next) =>
+                    stopLease.isActive()
+                      ? setRuntime(channelId, id, next)
+                      : getRuntime(channelId, id),
                 });
               const stopAccountAttempt = withPluginHttpRouteRegistry(
                 registry,
                 runStopAccount,
-                capabilityLease,
+                stopLease,
               ).catch((error: unknown) => {
                 if (stopAttemptAbandoned) {
                   log.warn?.(
