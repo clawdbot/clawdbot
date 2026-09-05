@@ -48,10 +48,14 @@ import {
   RUNTIME_AUTH_REFRESH_RETRY_MS,
   type RuntimeAuthState,
 } from "./helpers.js";
+import type { resolveEmbeddedRunEffectiveModel } from "./model-harness.js";
 import type { RunEmbeddedAgentParams } from "./params.js";
 
 export type EmbeddedRunAuthState = {
-  readonly models: { runtime: Model; effective: Model };
+  readonly models: {
+    runtime: Model;
+    effective: ReturnType<typeof resolveEmbeddedRunEffectiveModel>["effectiveModel"];
+  };
   apiKeyInfo: ResolvedProviderAuth | null;
   lastProfileId: string | undefined;
   runtimeAuthState: RuntimeAuthState | null;
