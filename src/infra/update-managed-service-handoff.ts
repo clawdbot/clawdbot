@@ -1719,8 +1719,6 @@ async function spawnManagedServiceUpdateHandoff(
     await fs.rm(dir, { recursive: true, force: true }).catch(() => {});
     throw err;
   }
-  child.unref();
-
   const result = { command: commandLabel, logPath };
   const handoffId = readiness.slice(HANDOFF_BUSY_MARKER.length).trim();
   return `${readiness}\n` === HANDOFF_READY_MARKER
@@ -1938,8 +1936,9 @@ export async function transferManagedServiceUpdateHandoff(
   ) {
     return false;
   }
-  // Node's spawn pipe streams are net.Socket instances. Unref keeps the control
-  // channel open until CLI exit, so its result is printed before service stop.
+  // Readiness still owns cancellation; only acknowledged transfer may detach
+  // the child and its Socket pipes so the CLI can print its result before exit.
+  child.unref();
   child.stdin.unref();
   child.stdout.unref();
   return true;
