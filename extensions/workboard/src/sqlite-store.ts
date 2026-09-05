@@ -21,6 +21,7 @@ import {
   migrateSqliteSchemaToStrict,
 } from "openclaw/plugin-sdk/plugin-state-runtime";
 import {
+  compileSqliteQueryBindings,
   executeSqliteQueryTakeFirstSync,
   getNodeSqliteKysely,
   iterateSqliteQuerySync,
@@ -887,215 +888,213 @@ function bindNull(value: unknown): SQLInputValue {
 
 function insertChildren<T>(
   db: DatabaseSync,
-  table: string,
+  table: (typeof CARD_CHILD_TABLES)[number],
   cardId: string,
   entries: readonly T[] | undefined,
   insert: (entry: T, ordinal: number) => void,
 ): void {
-  db.prepare(`DELETE FROM ${table} WHERE card_id = ?`).run(cardId);
+  const { compiled, bind } = compileSqliteQueryBindings<void>(() =>
+    getNodeSqliteKysely<Record<typeof table, Row>>(db)
+      .deleteFrom(table)
+      .where("card_id", "=", cardId),
+  );
+  db.prepare(compiled.sql).run(...bind());
   entries?.forEach(insert);
 }
 
 function insertCard(db: DatabaseSync, card: WorkboardCard): void {
   const execution = card.execution;
   const metadata = card.metadata;
-  db.prepare(
-    `
-      INSERT INTO workboard_cards (
-        id, board_id, title, notes, status, priority, agent_id, session_key, run_id, task_id,
-        source_url, position, created_at, updated_at, started_at, completed_at,
-        execution_id, execution_kind, execution_engine, execution_mode, execution_status,
-        execution_model, execution_session_key, execution_run_id, execution_started_at,
-        execution_updated_at, automation_json, claim_json, template_id, archived_at, stale_json,
-        lifecycle_status_source_updated_at, failure_count
-      ) VALUES (
-        @id, @board_id, @title, @notes, @status, @priority, @agent_id, @session_key, @run_id,
-        @task_id, @source_url, @position, @created_at, @updated_at, @started_at, @completed_at,
-        @execution_id, @execution_kind, @execution_engine, @execution_mode, @execution_status,
-        @execution_model, @execution_session_key, @execution_run_id, @execution_started_at,
-        @execution_updated_at, @automation_json, @claim_json, @template_id, @archived_at,
-        @stale_json, @lifecycle_status_source_updated_at, @failure_count
-      )
-      ON CONFLICT(id) DO UPDATE SET
-        board_id = excluded.board_id,
-        title = excluded.title,
-        notes = excluded.notes,
-        status = excluded.status,
-        priority = excluded.priority,
-        agent_id = excluded.agent_id,
-        session_key = excluded.session_key,
-        run_id = excluded.run_id,
-        task_id = excluded.task_id,
-        source_url = excluded.source_url,
-        position = excluded.position,
-        created_at = excluded.created_at,
-        updated_at = excluded.updated_at,
-        started_at = excluded.started_at,
-        completed_at = excluded.completed_at,
-        execution_id = excluded.execution_id,
-        execution_kind = excluded.execution_kind,
-        execution_engine = excluded.execution_engine,
-        execution_mode = excluded.execution_mode,
-        execution_status = excluded.execution_status,
-        execution_model = excluded.execution_model,
-        execution_session_key = excluded.execution_session_key,
-        execution_run_id = excluded.execution_run_id,
-        execution_started_at = excluded.execution_started_at,
-        execution_updated_at = excluded.execution_updated_at,
-        automation_json = excluded.automation_json,
-        claim_json = excluded.claim_json,
-        template_id = excluded.template_id,
-        archived_at = excluded.archived_at,
-        stale_json = excluded.stale_json,
-        lifecycle_status_source_updated_at = excluded.lifecycle_status_source_updated_at,
-        failure_count = excluded.failure_count
-    `,
-  ).run({
-    id: card.id,
-    board_id: cardBoardId(card),
-    title: card.title,
-    notes: bindNull(card.notes),
-    status: card.status,
-    priority: card.priority,
-    agent_id: bindNull(card.agentId),
-    session_key: bindNull(card.sessionKey),
-    run_id: bindNull(card.runId),
-    task_id: bindNull(card.taskId),
-    source_url: bindNull(card.sourceUrl),
-    position: card.position,
-    created_at: card.createdAt,
-    updated_at: card.updatedAt,
-    started_at: bindNull(card.startedAt),
-    completed_at: bindNull(card.completedAt),
-    execution_id: bindNull(execution?.id),
-    execution_kind: bindNull(execution?.kind),
-    execution_engine: bindNull(execution?.engine),
-    execution_mode: bindNull(execution?.mode),
-    execution_status: bindNull(execution?.status),
-    execution_model: bindNull(execution?.model),
-    execution_session_key: bindNull(execution?.sessionKey),
-    execution_run_id: bindNull(execution?.runId),
-    execution_started_at: bindNull(execution?.startedAt),
-    execution_updated_at: bindNull(execution?.updatedAt),
-    automation_json: jsonValue(metadata?.automation),
-    claim_json: jsonValue(metadata?.claim),
-    template_id: bindNull(metadata?.templateId),
-    archived_at: bindNull(metadata?.archivedAt),
-    stale_json: jsonValue(metadata?.stale),
-    lifecycle_status_source_updated_at: bindNull(metadata?.lifecycleStatusSourceUpdatedAt),
-    failure_count: bindNull(metadata?.failureCount),
-  });
+  const query =
+    getNodeSqliteKysely<
+      Record<
+        (typeof CARD_CHILD_TABLES)[number] | "workboard_cards" | "workboard_worker_protocol",
+        Row
+      >
+    >(db);
+  // Keep payload getters and JSON serialization after native statement preparation.
+  const parent = compileSqliteQueryBindings<void>((p) =>
+    query
+      .insertInto("workboard_cards")
+      .values({
+        id: p(() => card.id),
+        board_id: p(() => cardBoardId(card)),
+        title: p(() => card.title),
+        notes: p(() => bindNull(card.notes)),
+        status: p(() => card.status),
+        priority: p(() => card.priority),
+        agent_id: p(() => bindNull(card.agentId)),
+        session_key: p(() => bindNull(card.sessionKey)),
+        run_id: p(() => bindNull(card.runId)),
+        task_id: p(() => bindNull(card.taskId)),
+        source_url: p(() => bindNull(card.sourceUrl)),
+        position: p(() => card.position),
+        created_at: p(() => card.createdAt),
+        updated_at: p(() => card.updatedAt),
+        started_at: p(() => bindNull(card.startedAt)),
+        completed_at: p(() => bindNull(card.completedAt)),
+        execution_id: p(() => bindNull(execution?.id)),
+        execution_kind: p(() => bindNull(execution?.kind)),
+        execution_engine: p(() => bindNull(execution?.engine)),
+        execution_mode: p(() => bindNull(execution?.mode)),
+        execution_status: p(() => bindNull(execution?.status)),
+        execution_model: p(() => bindNull(execution?.model)),
+        execution_session_key: p(() => bindNull(execution?.sessionKey)),
+        execution_run_id: p(() => bindNull(execution?.runId)),
+        execution_started_at: p(() => bindNull(execution?.startedAt)),
+        execution_updated_at: p(() => bindNull(execution?.updatedAt)),
+        automation_json: p(() => jsonValue(metadata?.automation)),
+        claim_json: p(() => jsonValue(metadata?.claim)),
+        template_id: p(() => bindNull(metadata?.templateId)),
+        archived_at: p(() => bindNull(metadata?.archivedAt)),
+        stale_json: p(() => jsonValue(metadata?.stale)),
+        lifecycle_status_source_updated_at: p(() =>
+          bindNull(metadata?.lifecycleStatusSourceUpdatedAt),
+        ),
+        failure_count: p(() => bindNull(metadata?.failureCount)),
+      })
+      .onConflict((conflict) =>
+        conflict.column("id").doUpdateSet((eb) => ({
+          board_id: eb.ref("excluded.board_id"),
+          title: eb.ref("excluded.title"),
+          notes: eb.ref("excluded.notes"),
+          status: eb.ref("excluded.status"),
+          priority: eb.ref("excluded.priority"),
+          agent_id: eb.ref("excluded.agent_id"),
+          session_key: eb.ref("excluded.session_key"),
+          run_id: eb.ref("excluded.run_id"),
+          task_id: eb.ref("excluded.task_id"),
+          source_url: eb.ref("excluded.source_url"),
+          position: eb.ref("excluded.position"),
+          created_at: eb.ref("excluded.created_at"),
+          updated_at: eb.ref("excluded.updated_at"),
+          started_at: eb.ref("excluded.started_at"),
+          completed_at: eb.ref("excluded.completed_at"),
+          execution_id: eb.ref("excluded.execution_id"),
+          execution_kind: eb.ref("excluded.execution_kind"),
+          execution_engine: eb.ref("excluded.execution_engine"),
+          execution_mode: eb.ref("excluded.execution_mode"),
+          execution_status: eb.ref("excluded.execution_status"),
+          execution_model: eb.ref("excluded.execution_model"),
+          execution_session_key: eb.ref("excluded.execution_session_key"),
+          execution_run_id: eb.ref("excluded.execution_run_id"),
+          execution_started_at: eb.ref("excluded.execution_started_at"),
+          execution_updated_at: eb.ref("excluded.execution_updated_at"),
+          automation_json: eb.ref("excluded.automation_json"),
+          claim_json: eb.ref("excluded.claim_json"),
+          template_id: eb.ref("excluded.template_id"),
+          archived_at: eb.ref("excluded.archived_at"),
+          stale_json: eb.ref("excluded.stale_json"),
+          lifecycle_status_source_updated_at: eb.ref("excluded.lifecycle_status_source_updated_at"),
+          failure_count: eb.ref("excluded.failure_count"),
+        })),
+      ),
+  );
+  db.prepare(parent.compiled.sql).run(...parent.bind());
 
   insertChildren(db, "workboard_card_labels", card.id, card.labels, (label, ordinal) => {
-    db.prepare("INSERT INTO workboard_card_labels (card_id, ordinal, label) VALUES (?, ?, ?)").run(
-      card.id,
-      ordinal,
-      label,
+    const { compiled, bind } = compileSqliteQueryBindings<void>((p) =>
+      query.insertInto("workboard_card_labels").values({
+        card_id: p(() => card.id),
+        ordinal: p(() => ordinal),
+        label: p(() => label),
+      }),
     );
+    db.prepare(compiled.sql).run(...bind());
   });
   insertChildren(db, "workboard_card_events", card.id, card.events, (event, ordinal) => {
-    db.prepare(
-      `
-        INSERT INTO workboard_card_events
-          (id, card_id, ordinal, kind, at, from_status, to_status, session_key, run_id)
-        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
-      `,
-    ).run(
-      event.id,
-      card.id,
-      ordinal,
-      event.kind,
-      event.at,
-      bindNull(event.fromStatus),
-      bindNull(event.toStatus),
-      bindNull(event.sessionKey),
-      bindNull(event.runId),
+    const { compiled, bind } = compileSqliteQueryBindings<void>((p) =>
+      query.insertInto("workboard_card_events").values({
+        id: p(() => event.id),
+        card_id: p(() => card.id),
+        ordinal: p(() => ordinal),
+        kind: p(() => event.kind),
+        at: p(() => event.at),
+        from_status: p(() => bindNull(event.fromStatus)),
+        to_status: p(() => bindNull(event.toStatus)),
+        session_key: p(() => bindNull(event.sessionKey)),
+        run_id: p(() => bindNull(event.runId)),
+      }),
     );
+    db.prepare(compiled.sql).run(...bind());
   });
   insertChildren(db, "workboard_card_attempts", card.id, metadata?.attempts, (entry, ordinal) => {
-    db.prepare(
-      `
-        INSERT INTO workboard_card_attempts
-          (id, card_id, ordinal, status, started_at, ended_at, engine, mode, model, session_key, run_id, error)
-        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
-      `,
-    ).run(
-      entry.id,
-      card.id,
-      ordinal,
-      entry.status,
-      entry.startedAt,
-      bindNull(entry.endedAt),
-      bindNull(entry.engine),
-      bindNull(entry.mode),
-      bindNull(entry.model),
-      bindNull(entry.sessionKey),
-      bindNull(entry.runId),
-      bindNull(entry.error),
+    const { compiled, bind } = compileSqliteQueryBindings<void>((p) =>
+      query.insertInto("workboard_card_attempts").values({
+        id: p(() => entry.id),
+        card_id: p(() => card.id),
+        ordinal: p(() => ordinal),
+        status: p(() => entry.status),
+        started_at: p(() => entry.startedAt),
+        ended_at: p(() => bindNull(entry.endedAt)),
+        engine: p(() => bindNull(entry.engine)),
+        mode: p(() => bindNull(entry.mode)),
+        model: p(() => bindNull(entry.model)),
+        session_key: p(() => bindNull(entry.sessionKey)),
+        run_id: p(() => bindNull(entry.runId)),
+        error: p(() => bindNull(entry.error)),
+      }),
     );
+    db.prepare(compiled.sql).run(...bind());
   });
   insertChildren(db, "workboard_card_comments", card.id, metadata?.comments, (entry, ordinal) => {
-    db.prepare(
-      `
-        INSERT INTO workboard_card_comments (id, card_id, ordinal, body, created_at, updated_at)
-        VALUES (?, ?, ?, ?, ?, ?)
-      `,
-    ).run(entry.id, card.id, ordinal, entry.body, entry.createdAt, bindNull(entry.updatedAt));
+    const { compiled, bind } = compileSqliteQueryBindings<void>((p) =>
+      query.insertInto("workboard_card_comments").values({
+        id: p(() => entry.id),
+        card_id: p(() => card.id),
+        ordinal: p(() => ordinal),
+        body: p(() => entry.body),
+        created_at: p(() => entry.createdAt),
+        updated_at: p(() => bindNull(entry.updatedAt)),
+      }),
+    );
+    db.prepare(compiled.sql).run(...bind());
   });
   insertChildren(db, "workboard_card_links", card.id, metadata?.links, (entry, ordinal) => {
-    db.prepare(
-      `
-        INSERT INTO workboard_card_links
-          (id, card_id, ordinal, type, target_card_id, title, url, created_at)
-        VALUES (?, ?, ?, ?, ?, ?, ?, ?)
-      `,
-    ).run(
-      entry.id,
-      card.id,
-      ordinal,
-      entry.type,
-      bindNull(entry.targetCardId),
-      bindNull(entry.title),
-      bindNull(entry.url),
-      entry.createdAt,
+    const { compiled, bind } = compileSqliteQueryBindings<void>((p) =>
+      query.insertInto("workboard_card_links").values({
+        id: p(() => entry.id),
+        card_id: p(() => card.id),
+        ordinal: p(() => ordinal),
+        type: p(() => entry.type),
+        target_card_id: p(() => bindNull(entry.targetCardId)),
+        title: p(() => bindNull(entry.title)),
+        url: p(() => bindNull(entry.url)),
+        created_at: p(() => entry.createdAt),
+      }),
     );
+    db.prepare(compiled.sql).run(...bind());
   });
   insertChildren(db, "workboard_card_proof", card.id, metadata?.proof, (entry, ordinal) => {
-    db.prepare(
-      `
-        INSERT INTO workboard_card_proof
-          (id, card_id, ordinal, status, label, command, url, note, created_at)
-        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
-      `,
-    ).run(
-      entry.id,
-      card.id,
-      ordinal,
-      entry.status,
-      bindNull(entry.label),
-      bindNull(entry.command),
-      bindNull(entry.url),
-      bindNull(entry.note),
-      entry.createdAt,
+    const { compiled, bind } = compileSqliteQueryBindings<void>((p) =>
+      query.insertInto("workboard_card_proof").values({
+        id: p(() => entry.id),
+        card_id: p(() => card.id),
+        ordinal: p(() => ordinal),
+        status: p(() => entry.status),
+        label: p(() => bindNull(entry.label)),
+        command: p(() => bindNull(entry.command)),
+        url: p(() => bindNull(entry.url)),
+        note: p(() => bindNull(entry.note)),
+        created_at: p(() => entry.createdAt),
+      }),
     );
+    db.prepare(compiled.sql).run(...bind());
   });
   insertChildren(db, "workboard_card_artifacts", card.id, metadata?.artifacts, (entry, ordinal) => {
-    db.prepare(
-      `
-        INSERT INTO workboard_card_artifacts
-          (id, card_id, ordinal, label, url, path, mime_type, created_at)
-        VALUES (?, ?, ?, ?, ?, ?, ?, ?)
-      `,
-    ).run(
-      entry.id,
-      card.id,
-      ordinal,
-      bindNull(entry.label),
-      bindNull(entry.url),
-      bindNull(entry.path),
-      bindNull(entry.mimeType),
-      entry.createdAt,
+    const { compiled, bind } = compileSqliteQueryBindings<void>((p) =>
+      query.insertInto("workboard_card_artifacts").values({
+        id: p(() => entry.id),
+        card_id: p(() => card.id),
+        ordinal: p(() => ordinal),
+        label: p(() => bindNull(entry.label)),
+        url: p(() => bindNull(entry.url)),
+        path: p(() => bindNull(entry.path)),
+        mime_type: p(() => bindNull(entry.mimeType)),
+        created_at: p(() => entry.createdAt),
+      }),
     );
+    db.prepare(compiled.sql).run(...bind());
   });
   insertChildren(
     db,
@@ -1103,22 +1102,19 @@ function insertCard(db: DatabaseSync, card: WorkboardCard): void {
     card.id,
     metadata?.attachments,
     (entry, ordinal) => {
-      db.prepare(
-        `
-          INSERT INTO workboard_card_attachments
-            (id, card_id, ordinal, file_name, byte_size, mime_type, note, created_at)
-          VALUES (?, ?, ?, ?, ?, ?, ?, ?)
-        `,
-      ).run(
-        entry.id,
-        entry.cardId,
-        ordinal,
-        entry.fileName,
-        entry.byteSize,
-        bindNull(entry.mimeType),
-        bindNull(entry.note),
-        entry.createdAt,
+      const { compiled, bind } = compileSqliteQueryBindings<void>((p) =>
+        query.insertInto("workboard_card_attachments").values({
+          id: p(() => entry.id),
+          card_id: p(() => entry.cardId),
+          ordinal: p(() => ordinal),
+          file_name: p(() => entry.fileName),
+          byte_size: p(() => entry.byteSize),
+          mime_type: p(() => bindNull(entry.mimeType)),
+          note: p(() => bindNull(entry.note)),
+          created_at: p(() => entry.createdAt),
+        }),
       );
+      db.prepare(compiled.sql).run(...bind());
     },
   );
   insertChildren(
@@ -1127,24 +1123,21 @@ function insertCard(db: DatabaseSync, card: WorkboardCard): void {
     card.id,
     metadata?.diagnostics,
     (entry, ordinal) => {
-      db.prepare(
-        `
-          INSERT INTO workboard_card_diagnostics
-            (card_id, ordinal, kind, severity, title, detail, first_seen_at, last_seen_at, count, actions_json)
-          VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
-        `,
-      ).run(
-        card.id,
-        ordinal,
-        entry.kind,
-        entry.severity,
-        entry.title,
-        entry.detail,
-        entry.firstSeenAt,
-        entry.lastSeenAt,
-        entry.count,
-        JSON.stringify(entry.actions),
+      const { compiled, bind } = compileSqliteQueryBindings<void>((p) =>
+        query.insertInto("workboard_card_diagnostics").values({
+          card_id: p(() => card.id),
+          ordinal: p(() => ordinal),
+          kind: p(() => entry.kind),
+          severity: p(() => entry.severity),
+          title: p(() => entry.title),
+          detail: p(() => entry.detail),
+          first_seen_at: p(() => entry.firstSeenAt),
+          last_seen_at: p(() => entry.lastSeenAt),
+          count: p(() => entry.count),
+          actions_json: p(() => JSON.stringify(entry.actions)),
+        }),
       );
+      db.prepare(compiled.sql).run(...bind());
     },
   );
   insertChildren(
@@ -1153,56 +1146,55 @@ function insertCard(db: DatabaseSync, card: WorkboardCard): void {
     card.id,
     metadata?.notifications,
     (entry, ordinal) => {
-      db.prepare(
-        `
-          INSERT INTO workboard_card_notifications
-            (id, card_id, ordinal, kind, message, created_at, sequence, session_key, run_id)
-          VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
-        `,
-      ).run(
-        entry.id,
-        card.id,
-        ordinal,
-        entry.kind,
-        entry.message,
-        entry.createdAt,
-        bindNull(entry.sequence),
-        bindNull(entry.sessionKey),
-        bindNull(entry.runId),
+      const { compiled, bind } = compileSqliteQueryBindings<void>((p) =>
+        query.insertInto("workboard_card_notifications").values({
+          id: p(() => entry.id),
+          card_id: p(() => card.id),
+          ordinal: p(() => ordinal),
+          kind: p(() => entry.kind),
+          message: p(() => entry.message),
+          created_at: p(() => entry.createdAt),
+          sequence: p(() => bindNull(entry.sequence)),
+          session_key: p(() => bindNull(entry.sessionKey)),
+          run_id: p(() => bindNull(entry.runId)),
+        }),
       );
+      db.prepare(compiled.sql).run(...bind());
     },
   );
   insertChildren(db, "workboard_worker_logs", card.id, metadata?.workerLogs, (entry, ordinal) => {
-    db.prepare(
-      `
-        INSERT INTO workboard_worker_logs
-          (id, card_id, ordinal, level, message, created_at, session_key, run_id)
-        VALUES (?, ?, ?, ?, ?, ?, ?, ?)
-      `,
-    ).run(
-      entry.id,
-      card.id,
-      ordinal,
-      entry.level,
-      entry.message,
-      entry.createdAt,
-      bindNull(entry.sessionKey),
-      bindNull(entry.runId),
+    const { compiled, bind } = compileSqliteQueryBindings<void>((p) =>
+      query.insertInto("workboard_worker_logs").values({
+        id: p(() => entry.id),
+        card_id: p(() => card.id),
+        ordinal: p(() => ordinal),
+        level: p(() => entry.level),
+        message: p(() => entry.message),
+        created_at: p(() => entry.createdAt),
+        session_key: p(() => bindNull(entry.sessionKey)),
+        run_id: p(() => bindNull(entry.runId)),
+      }),
     );
+    db.prepare(compiled.sql).run(...bind());
   });
-  db.prepare("DELETE FROM workboard_worker_protocol WHERE card_id = ?").run(card.id);
+  const protocolDelete = compileSqliteQueryBindings<void>((p) =>
+    query.deleteFrom("workboard_worker_protocol").where(
+      "card_id",
+      "=",
+      p(() => card.id),
+    ),
+  );
+  db.prepare(protocolDelete.compiled.sql).run(...protocolDelete.bind());
   if (metadata?.workerProtocol) {
-    db.prepare(
-      `
-        INSERT INTO workboard_worker_protocol (card_id, state, updated_at, detail)
-        VALUES (?, ?, ?, ?)
-      `,
-    ).run(
-      card.id,
-      metadata.workerProtocol.state,
-      metadata.workerProtocol.updatedAt,
-      bindNull(metadata.workerProtocol.detail),
+    const { compiled, bind } = compileSqliteQueryBindings<void>((p) =>
+      query.insertInto("workboard_worker_protocol").values({
+        card_id: p(() => card.id),
+        state: p(() => metadata.workerProtocol!.state),
+        updated_at: p(() => metadata.workerProtocol!.updatedAt),
+        detail: p(() => bindNull(metadata.workerProtocol!.detail)),
+      }),
     );
+    db.prepare(compiled.sql).run(...bind());
   }
 }
 
