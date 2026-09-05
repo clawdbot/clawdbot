@@ -24,8 +24,8 @@ import { createControlUiE2eSuite } from "./control-ui-e2e-suite.test-support.ts"
 const captureUiProof = process.env.OPENCLAW_CAPTURE_UI_PROOF === "1";
 const suite = createControlUiE2eSuite({ name: "Control UI personal GitHub publication" });
 
-async function newPublicationContext() {
-  return await suite.newBrowserContext({
+function publicationContextOptions(): Parameters<typeof suite.newBrowserContext>[0] {
+  return {
     colorScheme: "light",
     locale: "en-US",
     serviceWorkers: "block",
@@ -33,10 +33,155 @@ async function newPublicationContext() {
     ...(captureUiProof
       ? { recordVideo: { dir: suite.artifactDir, size: { width: 1180, height: 800 } } }
       : {}),
-  });
+  };
+}
+
+async function newPublicationContext() {
+  return await suite.newBrowserContext(publicationContextOptions());
 }
 
 suite.define(() => {
+  it.each(["global", "per-sender"] as const)(
+    "carries the selected agent through the complete %s publication flow",
+    async (scope) => {
+      await suite.withPage(publicationContextOptions(), async ({ page }) => {
+        const screenshot = async (name: string) => {
+          if (captureUiProof) {
+            await page.screenshot({ path: path.join(suite.artifactDir, name), fullPage: true });
+          }
+        };
+        const sessionKey = scope === "global" ? "global" : "agent:research:main";
+        const target = { sessionKey, agentId: "research" };
+        const requestId = "8c698e8a-bdc7-4927-a0f2-73a842c2d7b6";
+        const row = createControlUiSessionRow(sessionKey, "Research publication", 1, {
+          kind: scope === "global" ? "global" : "direct",
+        });
+        const result = {
+          requestId,
+          status: "needs_confirmation",
+          publisher: { source: "personal", ...personalAccount },
+          message: "Review the selected research session before continuing.",
+        };
+        const confirmation = {
+          requestDigest: "a".repeat(64),
+          generation: personalGeneration,
+          account: personalAccount,
+          repository: "synthetic/publication-demo",
+          pushRepository: "alice-tools/publication-demo",
+          baseBranch: "main",
+          branch: "feature/research",
+          sourceHeadCommit: "1".repeat(40),
+          sourceIndexTree: "2".repeat(40),
+          workspaceTree: "3".repeat(40),
+        };
+        const gateway = await installMockGateway(page, {
+          defaultAgentId: "ops",
+          assistantAgentId: "research",
+          assistantName: "Research QA",
+          workspace: "/synthetic/research",
+          communityInvite: false,
+          sessionKey,
+          sessionScope: scope === "global" ? "global" : "agent",
+          operatorScopes: ["operator.read", "operator.write"],
+          featureMethods: publicationMethods,
+          sessions: [row],
+          presenceUsers: [
+            {
+              self: true,
+              id: "synthetic",
+              identity: { type: "profile", id: "synthetic" },
+              name: "Synthetic reviewer",
+            },
+          ],
+          methodResponses: {
+            "agents.list": {
+              agents: [
+                { id: "ops", name: "Operations" },
+                { id: "research", name: "Research QA" },
+              ],
+              defaultId: "ops",
+              mainKey: "main",
+              scope: scope === "global" ? "global" : "agent",
+            },
+            "sessions.list": {
+              ts: 1,
+              path: "",
+              count: 1,
+              agentId: "research",
+              defaults: { modelProvider: null, model: null, contextTokens: null },
+              sessions: [row],
+            },
+            [SESSION_PULL_REQUESTS_SUBSCRIBE_METHOD]: { subscribed: true },
+            "sessions.github.options": publicationOptions,
+            "sessions.github.publish": result,
+            "sessions.github.status": { result, confirmation },
+            "sessions.github.confirm": {
+              requestId,
+              status: "published",
+              publisher: result.publisher,
+              url: "https://github.com/synthetic/publication-demo/pull/42",
+              repository: confirmation.repository,
+              branch: confirmation.branch,
+              headCommit: "4".repeat(40),
+            },
+          },
+        });
+        await page.goto(controlUiSessionUrl(suite.server.baseUrl, "agent:research:main"));
+        await showPublicationBranch(gateway, confirmation.branch);
+        const optionRequest = await gateway.waitForRequest("sessions.github.options");
+        expect(optionRequest.params).toEqual(target);
+        await page.getByRole("button", { name: "Publication account", exact: true }).click();
+        await page.getByRole("combobox", { name: "Publication account" }).selectOption("personal");
+        await page.keyboard.press("Escape");
+        await screenshot("01-selected-research.png");
+        await page.getByRole("button", { name: "Publish PR", exact: true }).click();
+        const publication = await gateway.waitForRequest("sessions.github.publish");
+        expect(publication.params).toMatchObject({
+          ...target,
+          selection: {
+            source: "personal",
+            account: personalAccount,
+            generation: personalGeneration,
+          },
+        });
+        const status = await gateway.waitForRequest("sessions.github.status");
+        expect(status.params).toEqual({ ...target, requestId });
+        const confirm = page.getByRole("button", {
+          name: "Confirm original publication",
+          exact: true,
+        });
+        await confirm.waitFor();
+        await screenshot("02-research-confirmation.png");
+        await confirm.click();
+        const confirmed = await gateway.waitForRequest("sessions.github.confirm");
+        expect(confirmed.params).toEqual({
+          ...target,
+          requestId,
+          generation: personalGeneration,
+          account: personalAccount,
+          requestDigest: confirmation.requestDigest,
+        });
+        const openPr = page.getByRole("link", { name: "Open PR", exact: true });
+        await openPr.waitFor();
+        expect(await openPr.getAttribute("href")).toBe(
+          "https://github.com/synthetic/publication-demo/pull/42",
+        );
+        expect(new URL(page.url()).pathname).toBe("/chat/research");
+        await screenshot("03-research-published.png");
+        if (captureUiProof) {
+          await writeFile(
+            path.join(suite.artifactDir, "selected-owner-rpc.json"),
+            JSON.stringify(
+              { scope, target, requests: [optionRequest, publication, status, confirmed] },
+              null,
+              2,
+            ),
+          );
+        }
+      });
+    },
+  );
+
   it("shares admitted publication state between already-open same-session split panes", async () => {
     const context = await newPublicationContext();
     const sessionKey = "agent:main:publication";
@@ -431,6 +576,7 @@ suite.define(() => {
       }
       expect(first.params).toEqual({
         sessionKey: "agent:main:main",
+        agentId: "main",
         idempotencyKey: expect.any(String),
         selection:
           source === "shared"
@@ -567,6 +713,7 @@ suite.define(() => {
     const first = await gateway.waitForRequest("sessions.github.publish");
     expect(first.params).toEqual({
       sessionKey: "agent:main:main",
+      agentId: "main",
       idempotencyKey: expect.any(String),
       selection: { source: "personal", generation: personalGeneration, account: personalAccount },
     });
@@ -720,6 +867,7 @@ suite.define(() => {
       const confirmed = await gateway.waitForRequest("sessions.github.confirm");
       expect(confirmed.params).toEqual({
         sessionKey: "agent:main:main",
+        agentId: "main",
         requestId,
         requestDigest: confirmation.requestDigest,
         generation: personalGeneration,
@@ -783,7 +931,11 @@ suite.define(() => {
     await gateway.setMethodResponse("sessions.github.options", publicationOptions);
     await page.getByRole("button", { name: "Refresh publication", exact: true }).click();
     const statusRequest = await gateway.waitForRequest("sessions.github.status");
-    expect(statusRequest.params).toEqual({ sessionKey: "agent:main:main", requestId });
+    expect(statusRequest.params).toEqual({
+      sessionKey: "agent:main:main",
+      agentId: "main",
+      requestId,
+    });
     const openPr = page.getByRole("link", { name: "Open PR", exact: true });
     await openPr.waitFor();
     expect(await openPr.getAttribute("href")).toBe(

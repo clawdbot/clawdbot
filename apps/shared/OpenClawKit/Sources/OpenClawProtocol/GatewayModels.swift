@@ -6943,15 +6943,19 @@ public struct SessionsObserverVisibilityResult: Codable, Sendable {
 
 public struct SessionGitHubOptionsParams: Codable, Sendable {
     public let sessionkey: String
+    public let agentid: String?
 
     public init(
-        sessionkey: String)
+        sessionkey: String,
+        agentid: String? = nil)
     {
         self.sessionkey = sessionkey
+        self.agentid = agentid
     }
 
     private enum CodingKeys: String, CodingKey {
         case sessionkey = "sessionKey"
+        case agentid = "agentId"
     }
 }
 
@@ -6979,18 +6983,22 @@ public struct SessionGitHubOptionsResult: Codable, Sendable {
 
 public struct SessionGitHubStatusParams: Codable, Sendable {
     public let sessionkey: String
+    public let agentid: String?
     public let requestid: String
 
     public init(
         sessionkey: String,
+        agentid: String? = nil,
         requestid: String)
     {
         self.sessionkey = sessionkey
+        self.agentid = agentid
         self.requestid = requestid
     }
 
     private enum CodingKeys: String, CodingKey {
         case sessionkey = "sessionKey"
+        case agentid = "agentId"
         case requestid = "requestId"
     }
 }
@@ -7010,6 +7018,7 @@ public struct SessionGitHubStatusResult: Codable, Sendable {
 
 public struct SessionGitHubConfirmParams: Codable, Sendable {
     public let sessionkey: String
+    public let agentid: String?
     public let requestid: String
     public let generation: String
     public let account: [String: AnyCodable]
@@ -7017,12 +7026,14 @@ public struct SessionGitHubConfirmParams: Codable, Sendable {
 
     public init(
         sessionkey: String,
+        agentid: String? = nil,
         requestid: String,
         generation: String,
         account: [String: AnyCodable],
         requestdigest: String)
     {
         self.sessionkey = sessionkey
+        self.agentid = agentid
         self.requestid = requestid
         self.generation = generation
         self.account = account
@@ -7031,6 +7042,7 @@ public struct SessionGitHubConfirmParams: Codable, Sendable {
 
     private enum CodingKeys: String, CodingKey {
         case sessionkey = "sessionKey"
+        case agentid = "agentId"
         case requestid = "requestId"
         case generation
         case account
@@ -7040,6 +7052,7 @@ public struct SessionGitHubConfirmParams: Codable, Sendable {
 
 public struct SessionGitHubPublishParams: Codable, Sendable {
     public let sessionkey: String?
+    public let agentid: String?
     public let idempotencykey: String
     public let title: String?
     public let body: String?
@@ -7047,12 +7060,14 @@ public struct SessionGitHubPublishParams: Codable, Sendable {
 
     public init(
         sessionkey: String? = nil,
+        agentid: String? = nil,
         idempotencykey: String,
         title: String? = nil,
         body: String? = nil,
         selection: AnyCodable? = nil)
     {
         self.sessionkey = sessionkey
+        self.agentid = agentid
         self.idempotencykey = idempotencykey
         self.title = title
         self.body = body
@@ -7061,6 +7076,7 @@ public struct SessionGitHubPublishParams: Codable, Sendable {
 
     private enum CodingKeys: String, CodingKey {
         case sessionkey = "sessionKey"
+        case agentid = "agentId"
         case idempotencykey = "idempotencyKey"
         case title
         case body

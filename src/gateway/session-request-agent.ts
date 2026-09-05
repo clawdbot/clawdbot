@@ -112,6 +112,7 @@ export function resolveRequestedSessionAgentId(
       error: errorShape(ErrorCodes.INVALID_REQUEST, `Unknown agent id "${explicitAgentId}"`),
     };
   }
+  let ownerKey = key;
   if (parsed?.agentId) {
     const keyAgentId = normalizeAgentId(parsed.agentId);
     const keyIsGlobalMainAlias =
@@ -132,10 +133,14 @@ export function resolveRequestedSessionAgentId(
         ),
       };
     }
-    return { ok: true, agentId: keyAgentId };
+    if (!keyIsGlobalMainAlias || !normalizedRequestedAgentId) {
+      return { ok: true, agentId: keyAgentId };
+    }
+    // Explicit targets must also match the fixed store after losing their prefix.
+    ownerKey = "global";
   }
 
-  const persistedStoreOwner = resolvePersistedSessionStoreOwnerForKey(cfg, key);
+  const persistedStoreOwner = resolvePersistedSessionStoreOwnerForKey(cfg, ownerKey);
   if (persistedStoreOwner.kind === "retired") {
     return {
       ok: false,

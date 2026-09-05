@@ -83,6 +83,12 @@ export const sessionReadHandlers: GatewayRequestHandlers = {
       return;
     }
     const cfg = context.getRuntimeConfig();
+    const scope = resolveSessionSearchScope(cfg, params);
+    if (!scope.ok) {
+      respond(false, undefined, scope.error);
+      return;
+    }
+    const { agentId, configured, requestedAgentId, sessionKeys } = scope;
     const restrictIncognito =
       Boolean(gatewayClientSessionCreator(client)) && !isGatewayAdmin(client);
     const roleVisibilityFilter = hasOperatorBoundary(client, cfg)
@@ -92,22 +98,16 @@ export const sessionReadHandlers: GatewayRequestHandlers = {
     const canSearchSessionKey = (sessionKey: string) => {
       if (
         isIncognitoSessionKey(sessionKey) &&
-        !canAccessIncognitoSession({ cfg, client: client ?? null, sessionKey })
+        !canAccessIncognitoSession({ cfg, client: client ?? null, sessionKey, agentId })
       ) {
         return false;
       }
       if (!roleVisibilityFilter) {
         return true;
       }
-      const target = resolveSessionSharingTarget({ cfg, sessionKey });
+      const target = resolveSessionSharingTarget({ cfg, sessionKey, agentId });
       return Boolean(target && roleVisibilityFilter(target.storeKey, target.entry));
     };
-    const scope = resolveSessionSearchScope(cfg, params);
-    if (!scope.ok) {
-      respond(false, undefined, scope.error);
-      return;
-    }
-    const { agentId, configured, requestedAgentId, sessionKeys } = scope;
     if (requestedAgentId && !params.sessionKeys && configured) {
       respond(
         false,

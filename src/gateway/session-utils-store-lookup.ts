@@ -23,8 +23,7 @@ import {
 } from "../routing/session-key.js";
 import { resolveIncognitoOpenClawAgentSqlitePath } from "../state/openclaw-agent-db.js";
 import {
-  resolveSessionStoreAgentId,
-  resolveSessionStoreKey,
+  resolveSessionStoreIdentity,
   resolveStoredSessionKeyForAgentStore,
 } from "./session-store-key.js";
 import type {
@@ -387,17 +386,11 @@ function prepareGatewaySessionStoreTarget(
   params: GatewaySessionStoreLookupParams,
 ): GatewaySessionStorePlan<GatewaySessionStoreTargetWithStore> {
   const key = params.key;
-  const requestedAgentId = normalizeOptionalString(params.agentId);
-  const canonicalKey = resolveSessionStoreKey({
+  const { canonicalKey, agentId } = resolveSessionStoreIdentity({
     cfg: params.cfg,
     sessionKey: key,
-    ...(requestedAgentId ? { storeAgentId: requestedAgentId } : {}),
+    agentId: params.agentId,
   });
-  const agentId =
-    requestedAgentId &&
-    (isAgentScopedSentinelSessionKey(canonicalKey) || !parseAgentSessionKey(key))
-      ? normalizeAgentId(requestedAgentId)
-      : resolveSessionStoreAgentId(params.cfg, canonicalKey);
   if (isIncognitoSessionKey(canonicalKey)) {
     const storePath = resolveIncognitoOpenClawAgentSqlitePath({ agentId });
     const read: GatewaySessionStoreRead = {
