@@ -22,6 +22,11 @@ import {
   readChatSessionSnapshot,
   type ChatMessageCache,
 } from "./session-message-cache.ts";
+import {
+  authoritativeHistoryAppliedForRun,
+  rememberAuthoritativeTerminal,
+  rememberLiveTerminalRun,
+} from "./terminal-message-identity.ts";
 import { handleAgentEvent } from "./tool-stream.ts";
 
 function createState(handler: (params?: unknown) => unknown) {
@@ -278,6 +283,60 @@ describe("chat history cursor revalidation", () => {
     const current = getChatSessionProjection(state, readChatSessionProjectionScope(state));
     expect(current.scope.activeLeafEntryId).toBe("next-leaf");
     expect(current.runs).toBe(projection.runs);
+  });
+
+  it("prunes the live terminal bubble once an accepted delta admits its persisted reply", async () => {
+    // Reproduces: chat.final renders a run's reply as a live bubble; the
+    // session.message event that later confirms it was persisted arrives
+    // separately and can be served by an incremental delta catch-up instead
+    // of a full page load. Only the full-page path pruned the now-superseded
+    // live bubble, so the same reply rendered twice until the next reload.
+    const prompt = message("user", "Inspect the workspace", "user-1", 1);
+    const persistedReply = message("assistant", "Workspace inspected.", "assistant-1", 2);
+    const liveReply = rememberLiveTerminalRun(
+      message("assistant", "Workspace inspected.", "live-assistant-1", 1),
+      "run-1",
+    );
+    const handler = vi.fn(async () => ({
+      kind: "delta",
+      messages: [
+        {
+          sessionKey: "main",
+          message: persistedReply,
+          messageId: "assistant-1",
+          messageSeq: 2,
+        },
+      ],
+      deltaCursor: "cursor-2",
+      sessionInfo: {
+        key: "main",
+        kind: "direct",
+        sessionId: "session-cursor",
+        updatedAt: 3,
+        hasActiveRun: false,
+      },
+    }));
+    const state = createState(handler);
+    state.chatMessages = [prompt, liveReply];
+    seedCachedHistory(state, state.chatMessages, "cursor-1");
+    // Mirrors what handleSessionMessageEvent records once it learns run-1's
+    // reply was persisted as message "assistant-1" (rememberAuthoritativeTerminal
+    // in chat-state-events.ts), just before it kicks off the history reload.
+    rememberAuthoritativeTerminal({
+      event: { key: "main", runId: "run-1", hasActiveRun: false },
+      host: state,
+      matchesChat: true,
+      payload: { message: liveReply, messageId: "assistant-1" },
+      runIdBeforeApply: "run-1",
+    });
+
+    await loadChatHistory(state);
+
+    expect(state.chatMessages.map(extractText)).toEqual([
+      "Inspect the workspace",
+      "Workspace inspected.",
+    ]);
+    expect(authoritativeHistoryAppliedForRun(state, "run-1")).toBe(true);
   });
 
   it("keeps cached paint while replay updates an existing tool message in place", async () => {

@@ -178,6 +178,28 @@ export async function hydrateChatHistory(
         applySessionMessagePayload(state, payload, runActive, { kind: "history-delta" });
       }
       const historyProjection = getChatSessionProjection(state);
+      // A run's persisted reply can land via this delta before the pane's live
+      // terminal bubble for that run is cleared (chat.final is a separate,
+      // unordered event). Unlike the full/page load below, this incremental
+      // merge never dropped the superseded live entry, so the same reply
+      // rendered twice until the next full reload. Prune it here too.
+      const retainedPreviousMessages = reconcileAuthoritativeTerminalHistory({
+        host: state,
+        previousMessages,
+        sessionKey,
+        visibleMessages: historyProjection.messages,
+      });
+      const supersededLiveMessages = new Set(
+        previousMessages.filter((message) => !retainedPreviousMessages.includes(message)),
+      );
+      const dedupedProjection = supersededLiveMessages.size
+        ? {
+            ...historyProjection,
+            messages: historyProjection.messages.filter(
+              (message) => !supersededLiveMessages.has(message),
+            ),
+          }
+        : historyProjection;
       if (Object.hasOwn(response.sessionInfo, "activeLeafEntryId")) {
         state.chatDisplayedLeafEntryId = response.sessionInfo.activeLeafEntryId?.trim() || null;
       }
@@ -185,8 +207,8 @@ export async function hydrateChatHistory(
       // An accepted delta advances the same transcript generation, not a branch replacement.
       // Carry ownership across its leaf advance; reseeding loses attributed pending sends and runs.
       publishChatSessionProjection(state, {
-        ...historyProjection,
-        scope: { ...historyProjection.scope, ...readChatSessionProjectionScope(state) },
+        ...dedupedProjection,
+        scope: { ...dedupedProjection.scope, ...readChatSessionProjectionScope(state) },
       });
       applyChatPendingInputs(state, response.pendingInputs, {
         receipts:
