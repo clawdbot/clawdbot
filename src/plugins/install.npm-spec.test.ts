@@ -2860,6 +2860,96 @@ describe("installPluginFromNpmSpec", () => {
     });
   });
 
+  it.each([
+    { payload: "missing", existingProject: false },
+    { payload: "empty", existingProject: false },
+    { payload: "missing", existingProject: true },
+    { payload: "empty", existingProject: true },
+    { payload: "hoisted", existingProject: false },
+    { payload: "optional", existingProject: false },
+  ] as const)(
+    "verifies $payload dependency payload after npm success (existing project: $existingProject)",
+    async ({ payload, existingProject }) => {
+      const npmRoot = path.join(suiteTempRootTracker.makeTempDir(), "npm");
+      const packageName = "dependency-payload-plugin";
+      const spec = `${packageName}@1.0.0`;
+      const npmProjectRoot = resolvePluginNpmProjectDir({ npmDir: npmRoot, packageName });
+      if (existingProject) {
+        writeInstalledNpmPlugin({
+          npmRoot: npmProjectRoot,
+          packageName: "existing-package",
+          version: "1.0.0",
+          indexJs: "export const preserved = true;",
+        });
+        fs.writeFileSync(path.join(npmProjectRoot, "package.json"), '{"private":true}\n');
+        fs.writeFileSync(path.join(npmProjectRoot, "package-lock.json"), '{"lockfileVersion":3}\n');
+      }
+      const projectBefore = existingProject ? readTextFileTree(npmProjectRoot) : undefined;
+      mockNpmViewAndInstall({
+        spec,
+        packageName,
+        version: "1.0.0",
+        npmRoot,
+        dependency: { name: "required-runtime", version: "1.0.0" },
+      });
+      const delegate = runCommandWithTimeoutMock.getMockImplementation();
+      runCommandWithTimeoutMock.mockImplementation(
+        async (argv: string[], options?: { cwd?: string }) => {
+          const result = await delegate?.(argv, options);
+          if (isManagedNpmInstallCommand(argv)) {
+            const pluginDir = resolveTestPluginPackageDir(npmRoot, packageName);
+            const dependencyDir = path.join(pluginDir, "node_modules", "required-runtime");
+            fs.rmSync(dependencyDir, { recursive: true, force: true });
+            if (payload === "empty") {
+              fs.mkdirSync(dependencyDir);
+            } else if (payload === "hoisted") {
+              const hoistedDir = path.join(npmProjectRoot, "node_modules", "required-runtime");
+              fs.mkdirSync(hoistedDir, { recursive: true });
+              fs.writeFileSync(
+                path.join(hoistedDir, "package.json"),
+                JSON.stringify({ name: "required-runtime", version: "1.0.0" }),
+              );
+            } else if (payload === "optional") {
+              const manifestPath = path.join(pluginDir, "package.json");
+              const manifest = JSON.parse(fs.readFileSync(manifestPath, "utf8")) as {
+                optionalDependencies?: Record<string, string>;
+              };
+              manifest.optionalDependencies = { "required-runtime": "2.0.0" };
+              fs.writeFileSync(manifestPath, JSON.stringify(manifest));
+            }
+          }
+          return result;
+        },
+      );
+      const onBeforePluginArtifactCommit = vi.fn(async () => {});
+
+      const result = await installPluginFromNpmSpec({
+        spec,
+        npmDir: npmRoot,
+        onBeforePluginArtifactCommit,
+        logger: { info: () => {}, warn: () => {} },
+      });
+
+      const shouldInstall = payload === "hoisted" || payload === "optional";
+      expect(result.ok).toBe(shouldInstall);
+      if (shouldInstall) {
+        expect(onBeforePluginArtifactCommit).toHaveBeenCalledOnce();
+        expect(fs.existsSync(resolveTestPluginPackageDir(npmRoot, packageName))).toBe(true);
+      } else {
+        expect(result).toMatchObject({
+          ok: false,
+          error: expect.stringContaining("required-runtime"),
+        });
+        expect(onBeforePluginArtifactCommit).not.toHaveBeenCalled();
+        if (existingProject) {
+          expect(readTextFileTree(npmProjectRoot)).toEqual(projectBefore);
+        } else {
+          expect(fs.existsSync(npmProjectRoot)).toBe(false);
+        }
+      }
+    },
+  );
+
   it("rolls back the managed npm root when npm install fails", async () => {
     const npmRoot = path.join(suiteTempRootTracker.makeTempDir(), "npm");
     const npmProjectRoot = resolvePluginNpmProjectDir({
