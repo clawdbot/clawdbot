@@ -20,10 +20,68 @@ const InputTextContentPartSchema = z
   })
   .strict();
 
+const OutputTextAnnotationSchema = z.discriminatedUnion("type", [
+  z
+    .object({
+      type: z.literal("file_citation"),
+      file_id: z.string(),
+      filename: z.string(),
+      index: z.number().int().nonnegative(),
+    })
+    .strict(),
+  z
+    .object({
+      type: z.literal("url_citation"),
+      start_index: z.number().int().nonnegative(),
+      end_index: z.number().int().nonnegative(),
+      title: z.string(),
+      url: z.string(),
+    })
+    .strict(),
+  z
+    .object({
+      type: z.literal("container_file_citation"),
+      container_id: z.string(),
+      start_index: z.number().int().nonnegative(),
+      end_index: z.number().int().nonnegative(),
+      file_id: z.string(),
+      filename: z.string(),
+    })
+    .strict(),
+  z
+    .object({
+      type: z.literal("file_path"),
+      file_id: z.string(),
+      index: z.number().int().nonnegative(),
+    })
+    .strict(),
+]);
+
+const TokenBytesSchema = z.array(z.number().int().min(0).max(255)).nullable();
+
+const TopLogprobSchema = z
+  .object({
+    token: z.string(),
+    bytes: TokenBytesSchema,
+    logprob: z.number(),
+  })
+  .strict();
+
+const OutputTextLogprobSchema = z
+  .object({
+    token: z.string(),
+    bytes: TokenBytesSchema,
+    logprob: z.number(),
+    top_logprobs: z.array(TopLogprobSchema),
+  })
+  .strict();
+
 const OutputTextContentPartSchema = z
   .object({
     type: z.literal("output_text"),
     text: z.string(),
+    annotations: z.array(OutputTextAnnotationSchema).optional(),
+    logprobs: z.array(OutputTextLogprobSchema).optional(),
   })
   .strict();
 
@@ -99,14 +157,29 @@ const MessageItemSchema = z
     id: z.string().optional(),
     role: MessageItemRoleSchema,
     content: z.union([z.string(), z.array(ContentPartSchema)]),
-    phase: AssistantPhaseSchema.optional(),
+    phase: AssistantPhaseSchema.nullable().optional(),
     status: ItemStatusSchema.optional(),
   })
   .strict()
-  .refine((value) => value.phase === undefined || value.role === "assistant", {
-    path: ["phase"],
-    message: "`phase` is only valid on assistant messages.",
+  .superRefine((value, ctx) => {
+    if (value.phase !== undefined && value.role !== "assistant") {
+      ctx.addIssue({
+        code: z.ZodIssueCode.custom,
+        path: ["phase"],
+        message: "`phase` is only valid on assistant messages.",
+      });
+    }
   });
+
+const FunctionCallCallerSchema = z.discriminatedUnion("type", [
+  z.object({ type: z.literal("direct") }).strict(),
+  z
+    .object({
+      type: z.literal("program"),
+      caller_id: z.string(),
+    })
+    .strict(),
+]);
 
 const FunctionCallItemSchema = z
   .object({
@@ -115,24 +188,73 @@ const FunctionCallItemSchema = z
     call_id: z.string().optional(),
     name: z.string(),
     arguments: z.string(),
+    caller: FunctionCallCallerSchema.nullable().optional(),
+    namespace: z.string().optional(),
+    created_by: z.string().optional(),
     status: ItemStatusSchema.optional(),
   })
   .strict();
 
+const FunctionCallOutputPromptCacheBreakpointSchema = z
+  .object({ mode: z.literal("explicit") })
+  .strict();
+
+const FunctionCallOutputContentPartSchema = z.discriminatedUnion("type", [
+  InputTextContentPartSchema.extend({
+    prompt_cache_breakpoint: FunctionCallOutputPromptCacheBreakpointSchema.nullable().optional(),
+  }),
+  z
+    .object({
+      type: z.literal("input_image"),
+      detail: z.enum(["low", "high", "auto", "original"]).nullable().optional(),
+      file_id: z.string().nullable().optional(),
+      image_url: z.string().nullable().optional(),
+      prompt_cache_breakpoint: FunctionCallOutputPromptCacheBreakpointSchema.nullable().optional(),
+    })
+    .strict(),
+  z
+    .object({
+      type: z.literal("input_file"),
+      detail: z.enum(["auto", "low", "high"]).optional(),
+      file_data: z.string().nullable().optional(),
+      file_id: z.string().nullable().optional(),
+      file_url: z.string().nullable().optional(),
+      filename: z.string().nullable().optional(),
+      prompt_cache_breakpoint: FunctionCallOutputPromptCacheBreakpointSchema.nullable().optional(),
+    })
+    .strict(),
+]);
+
 const FunctionCallOutputItemSchema = z
   .object({
     type: z.literal("function_call_output"),
+    id: z.string().nullable().optional(),
     call_id: z.string(),
-    output: z.string(),
+    output: z.union([z.string(), z.array(FunctionCallOutputContentPartSchema)]),
+    caller: FunctionCallCallerSchema.nullable().optional(),
+    created_by: z.string().optional(),
+    status: ItemStatusSchema.nullable().optional(),
   })
   .strict();
 
 const ReasoningItemSchema = z
   .object({
     type: z.literal("reasoning"),
-    content: z.string().optional(),
-    encrypted_content: z.string().optional(),
-    summary: z.string().optional(),
+    id: z.string().optional(),
+    content: z
+      .union([
+        z.string(),
+        z.array(z.object({ type: z.literal("reasoning_text"), text: z.string() }).strict()),
+      ])
+      .optional(),
+    encrypted_content: z.string().nullable().optional(),
+    summary: z
+      .union([
+        z.string(),
+        z.array(z.object({ type: z.literal("summary_text"), text: z.string() }).strict()),
+      ])
+      .optional(),
+    status: ItemStatusSchema.optional(),
   })
   .strict();
 

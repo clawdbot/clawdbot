@@ -109,9 +109,14 @@ export function buildAgentPrompt(input: string | ItemParam[]): {
         },
       });
     } else if (item.type === "function_call_output") {
+      // Structured SDK tool output remains transport data, not permission to
+      // fetch its file or image URLs; serialize every accepted part losslessly.
       conversationEntries.push({
         role: "tool",
-        entry: { sender: `Tool:${item.call_id}`, body: item.output },
+        entry: {
+          sender: `Tool:${item.call_id}`,
+          body: typeof item.output === "string" ? item.output : JSON.stringify(item.output),
+        },
       });
     }
     // Reasoning and item references are not user-visible prompt text in this adapter.

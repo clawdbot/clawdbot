@@ -26,18 +26,13 @@ describe("openresponses phase support", () => {
     });
     expect(assistantPhaseRequest.success).toBe(true);
 
-    const userPhaseRequest = CreateResponseBodySchema.safeParse({
-      model: "gpt-5.4",
-      input: [
-        {
-          type: "message",
-          role: "user",
-          phase: "commentary",
-          content: "Hi",
-        },
-      ],
-    });
-    expect(userPhaseRequest.success).toBe(false);
+    for (const phase of ["commentary", null] as const) {
+      const userPhaseRequest = CreateResponseBodySchema.safeParse({
+        model: "gpt-5.4",
+        input: [{ type: "message", role: "user", phase, content: "Hi" }],
+      });
+      expect(userPhaseRequest.success).toBe(false);
+    }
   });
 
   it("shapes assistant output items with the provided phase", () => {

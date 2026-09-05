@@ -37,7 +37,7 @@ By default the endpoint is **stateless per request** (a new session key is gener
 
 If the request includes an OpenResponses `user` string, the Gateway derives a stable session key from it so repeated calls can share an agent session.
 
-`previous_response_id` reuses the earlier response's session when the request stays within the same agent/user/requested-session scope (matched by auth subject, agent id, and `x-openclaw-session-key`).
+`previous_response_id` reuses the earlier response's session when the request stays within the same agent/user/requested-session scope (matched by auth subject, agent id, normalized `user`, and `x-openclaw-session-key`). Continuations must repeat the same trimmed `user` value; changing or omitting it starts a fresh session instead of attaching the earlier response history.
 
 ### Explicit incognito session continuation
 
