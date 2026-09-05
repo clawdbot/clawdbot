@@ -83,11 +83,25 @@ export class PreparedModelCatalogGenerationRecoveryOwner {
       if (!isReplacementCurrent()) {
         return;
       }
-      await dependencies.drainPendingAuthMutations(() => {
-        if (isReplacementCurrent()) {
-          dependencies.commitReplacement(replacement);
+      try {
+        await dependencies.drainPendingAuthMutations(() => {
+          if (isReplacementCurrent()) {
+            dependencies.commitReplacement(replacement);
+          }
+        });
+      } catch (error) {
+        const refreshError = toStringifiedError(error);
+        if (
+          !isReplacementCurrent() ||
+          dependencies.owners.get(key) !== owner ||
+          !owner.snapshot ||
+          owner.needsRefresh
+        ) {
+          throw refreshError;
         }
-      });
+        notifyPreparedModelRuntimePublication({ phase: "failed", error: refreshError });
+        dependencies.commitReplacement(replacement);
+      }
     });
     this.#recoveries.set(owner, recovery);
     try {
