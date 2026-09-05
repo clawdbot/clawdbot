@@ -220,6 +220,17 @@ function makeEscapedOutagesCatalog(): McpToolCatalog {
   return catalog;
 }
 
+function makeAsciiOutagesCatalog(): McpToolCatalog {
+  const catalog = makeOutageCatalog();
+  catalog.diagnostics = Array.from({ length: 8 }, (_, index) => ({
+    serverName: `down${index}`,
+    safeServerName: `down${index}`.padEnd(30, "d"),
+    launchSummary: LAUNCH_SUMMARY,
+    message: "x".repeat(200),
+  }));
+  return catalog;
+}
+
 async function createControls(
   catalog: McpToolCatalog,
   mode: "tools" | "code" = "tools",
@@ -669,6 +680,61 @@ describe("Tool Search with an unavailable MCP server", () => {
     expect(JSON.stringify(details, null, 2).length).toBeLessThanOrEqual(
       MAX_TOOL_SEARCH_BATCH_RESPONSE_CHARS,
     );
+    const text = (batch.content[0] as { text: string }).text;
+    expect(text.length).toBeLessThanOrEqual(MAX_TOOL_SEARCH_BATCH_RESPONSE_CHARS);
+  });
+
+  it("fits the rendered batch text, envelope included, beneath the response cap", async () => {
+    const { control } = await createControls(makeAsciiOutagesCatalog());
+    // Worst case: sixteen 28-char queries, eight 30-char server names, and
+    // 120-char ASCII errors already exceed the cap once the envelope is added,
+    // so only the error text can give ground after every hit is gone.
+    const batch = await control(TOOL_SEARCH_RAW_TOOL_NAME).execute("search-batch-ascii", {
+      queries: Array.from({ length: 16 }, (_, index) => ({
+        query: `list saved notes ${index}`.padEnd(28, "q"),
+        limit: 1,
+      })),
+    });
+    const text = (batch.content[0] as { text: string }).text;
+    expect(text).toContain('<<<EXTERNAL_UNTRUSTED_CONTENT id="');
+    expect(text.length).toBeLessThanOrEqual(MAX_TOOL_SEARCH_BATCH_RESPONSE_CHARS);
+    const details = batch.details as {
+      results: Array<{ candidates: unknown[]; truncated?: true }>;
+      truncated?: true;
+      unavailableMcpServers: Array<{ server: string; error: string }>;
+      note: string;
+    };
+    expect(details.truncated).toBe(true);
+    expect(details.results).toHaveLength(16);
+    expect(details.unavailableMcpServers.map((server) => server.server)).toEqual(
+      Array.from({ length: 8 }, (_, index) => `down${index}`.padEnd(30, "d")),
+    );
+    for (const server of details.unavailableMcpServers) {
+      expect(server.error.length).toBeGreaterThan(0);
+      expect(server.error.length).toBeLessThan(120);
+    }
+    expect(details.note).toContain("failed for this run");
+  });
+
+  it("keeps the outage ahead of a clipped tool_search_code value", async () => {
+    const { control } = await createControls(makeOutageCatalog(), "code");
+
+    // The value alone exceeds the network-content render cap, so the renderer
+    // clips the tail; the outage must lead the payload to survive that clip.
+    const result = await control(TOOL_SEARCH_CODE_MODE_TOOL_NAME).execute("code-mode-large", {
+      code: `return "v".repeat(30_000);`,
+    });
+
+    const text = (result.content[0] as { text: string }).text;
+    expect(text).toContain('<<<EXTERNAL_UNTRUSTED_CONTENT id="');
+    expect(text).toContain("[truncated]");
+    expect(text).toContain("failed for this run");
+    expect(result.details).toMatchObject({
+      ok: true,
+      unavailableMcpServers: [{ server: "memos", error: FAILURE_MESSAGE }],
+      note: expect.stringContaining("memos"),
+    });
+    expect(JSON.stringify(result)).not.toContain(LAUNCH_SUMMARY);
   });
 
   it("carries the outage on a code mode exec whose only action is a search", async () => {

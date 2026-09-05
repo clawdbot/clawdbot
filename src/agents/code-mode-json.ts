@@ -5,6 +5,7 @@ import {
   renderToolSearchControlText,
   serializeToolSearchControlResult,
 } from "./tool-search-control-result.js";
+import type { UnavailableMcpServersNote } from "./tool-search-lookup-miss.js";
 
 export function toCodeModeJsonSafe(value: unknown): unknown {
   if (value === undefined) {
@@ -166,6 +167,9 @@ export class CodeModeOutputState {
   constructor(
     private readonly maxBytes: number,
     private readonly modelBudget?: ToolResultBudget,
+    // The run's recorded MCP outage rides on every exec/wait result, so it is
+    // fitted with the result here instead of appended after the budget was spent.
+    private readonly outage?: UnavailableMcpServersNote,
   ) {}
 
   append(leg: CodeModeOutputSource): void {
@@ -200,21 +204,22 @@ export class CodeModeOutputState {
     metadata: T,
     params: TerminalChannels & { error: string },
     networkContent?: boolean,
-  ): T & DeliveredChannels & { error: string };
+  ): T & Partial<UnavailableMcpServersNote> & DeliveredChannels & { error: string };
   takeResult<T extends object>(
     metadata: T,
     params?: TerminalChannels,
     networkContent?: boolean,
-  ): T & DeliveredChannels;
+  ): T & Partial<UnavailableMcpServersNote> & DeliveredChannels;
   takeResult<T extends object>(
     metadata: T,
     params: TerminalChannels = {},
     networkContent = false,
-  ): T & DeliveredChannels {
+  ): T & Partial<UnavailableMcpServersNote> & DeliveredChannels {
+    const header = { ...metadata, ...this.outage };
     const project = this.createProjector(params);
     const fits = (candidate: ReturnType<typeof project>) => {
       const rendered = renderToolSearchControlText(
-        serializeToolSearchControlResult({ ...metadata, ...candidate.channels }, true),
+        serializeToolSearchControlResult({ ...header, ...candidate.channels }, true),
         networkContent,
       );
       return !rendered.truncated && toolResultFitsBudget(rendered.text, this.modelBudget);
@@ -254,7 +259,7 @@ export class CodeModeOutputState {
             prior.prefixBytes === receipt.prefixBytes
           ? []
           : channels.output;
-    return { ...metadata, ...channels, output };
+    return { ...header, ...channels, output };
   }
 
   private createProjector(params: TerminalChannels) {

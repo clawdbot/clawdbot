@@ -28,7 +28,7 @@ const MAX_UNAVAILABLE_MCP_SERVERS = 8;
 // chars, plus the note, fit under MAX_TOOL_SEARCH_BATCH_RESPONSE_CHARS even
 // when a batch echoes its full 512-byte query budget and every group and the
 // batch carry the `truncated` flag its dropped candidates leave behind.
-const MAX_UNAVAILABLE_MCP_ERROR_CHARS = 120;
+export const MAX_UNAVAILABLE_MCP_ERROR_CHARS = 120;
 const MCP_CATALOG_ID_SERVER_RE = /^mcp:([^:]+):/u;
 
 export type UnavailableMcpServersNote = {
@@ -37,19 +37,34 @@ export type UnavailableMcpServersNote = {
 };
 
 /** Bounded by serialized length: JSON escaping inflates a control character up to sixfold. */
-function boundedFailure(diagnostic: McpToolCatalogDiagnostic): string {
-  let text = truncateSanitizedExternalContent(
-    diagnostic.message,
-    MAX_UNAVAILABLE_MCP_ERROR_CHARS,
-  ).text;
+function boundSerializedText(message: string, maxChars: number): string {
+  let text = truncateSanitizedExternalContent(message, maxChars).text;
   for (
-    let over = JSON.stringify(text).length - 2 - MAX_UNAVAILABLE_MCP_ERROR_CHARS;
+    let over = JSON.stringify(text).length - 2 - maxChars;
     over > 0;
-    over = JSON.stringify(text).length - 2 - MAX_UNAVAILABLE_MCP_ERROR_CHARS
+    over = JSON.stringify(text).length - 2 - maxChars
   ) {
     text = truncateSanitizedExternalContent(text, text.length - Math.ceil(over / 6)).text;
   }
   return text;
+}
+
+function boundedFailure(diagnostic: McpToolCatalogDiagnostic): string {
+  return boundSerializedText(diagnostic.message, MAX_UNAVAILABLE_MCP_ERROR_CHARS);
+}
+
+/** The outage with every error re-bounded to `maxChars`; server names and the note stay whole. */
+export function trimUnavailableMcpServerErrors(
+  outage: UnavailableMcpServersNote,
+  maxChars: number,
+): UnavailableMcpServersNote {
+  return {
+    ...outage,
+    unavailableMcpServers: outage.unavailableMcpServers.map((server) => ({
+      server: server.server,
+      error: boundSerializedText(server.error, maxChars),
+    })),
+  };
 }
 
 /** Search-result addition naming every recorded failed server; undefined when none failed. */
@@ -74,17 +89,25 @@ export function describeUnavailableMcpServers(
 }
 
 /**
- * Adds the recorded failed servers to a search-capable tool result (Code Mode
- * exec/wait, tool_search_code) so the first exec already carries the outage;
- * the in-guest `search` keeps returning a plain array for user code.
+ * Adds the recorded failed servers to a tool_search_code result so the first
+ * run already carries the outage; the in-guest `search` keeps returning a plain
+ * array for user code. The outage leads the payload: the control renderer clips
+ * an oversized result from the tail, and the value is what may give way.
  */
 export function withUnavailableMcpServers<T extends object>(
   payload: T,
   ctx: Pick<ToolSearchToolContext, "catalogRef">,
 ): T | (T & UnavailableMcpServersNote) {
+  const outage = resolveUnavailableMcpServers(ctx);
+  return outage ? { ...outage, ...payload } : payload;
+}
+
+/** The run's recorded outage, or undefined when no MCP server failed. */
+export function resolveUnavailableMcpServers(
+  ctx: Pick<ToolSearchToolContext, "catalogRef">,
+): UnavailableMcpServersNote | undefined {
   const catalog = ctx.catalogRef?.current;
-  const outage = catalog ? describeUnavailableMcpServers(catalog) : undefined;
-  return outage ? { ...payload, ...outage } : payload;
+  return catalog ? describeUnavailableMcpServers(catalog) : undefined;
 }
 
 /**

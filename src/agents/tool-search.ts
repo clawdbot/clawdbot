@@ -27,6 +27,8 @@ import {
 } from "./tool-search-directory.js";
 import {
   describeUnavailableMcpServers,
+  MAX_UNAVAILABLE_MCP_ERROR_CHARS,
+  trimUnavailableMcpServerErrors,
   type UnavailableMcpServersNote,
 } from "./tool-search-lookup-miss.js";
 import { readToolSearchRequest } from "./tool-search-request.js";
@@ -90,7 +92,6 @@ type ToolSearchBatchGroup = {
 const MAX_BATCH_CANDIDATE_DESCRIPTION_CHARS = 180;
 const MAX_BATCH_CANDIDATE_DESCRIPTION_SCAN_CHARS = MAX_BATCH_CANDIDATE_DESCRIPTION_CHARS * 4;
 const MAX_BATCH_CANDIDATE_METADATA_CHARS = 2_000;
-const TOOL_SEARCH_CONTROL_ENVELOPE_OVERHEAD = renderToolSearchControlText("", true).text.length;
 
 function compactBatchCandidateDescription(candidate: ToolSearchCandidate): ToolSearchCandidate {
   // Remote catalog descriptions are untrusted. Bound the scanned prefix before
@@ -173,22 +174,22 @@ function boundToolSearchBatchResponse(
     };
   });
   let truncated = bounded.some((result) => result.truncated);
-  // The outage note is never trimmed: it is the fact that stops a model from
-  // re-searching for tools that cannot appear. Its budget is reserved by its
-  // own caps (8 servers, 30-char safe names, 120 serialized error chars) plus
-  // the control envelope overhead, which stay under the cap beside the echoed
-  // 16-query text budget and the `truncated` flags every group and the batch
-  // gain once their hits are gone.
+  // The outage note is never dropped: it is the fact that stops a model from
+  // re-searching for tools that cannot appear. Hits give ground first; once
+  // every group is empty the per-server error text halves toward the cap while
+  // server names and the recovery guidance stay whole. The bound is the rendered
+  // control text, envelope included, because that is what the model reads.
+  let fitted = outage;
+  let outageErrorChars = MAX_UNAVAILABLE_MCP_ERROR_CHARS;
   const render = () => ({
     results: bounded,
     ...(truncated ? { truncated: true as const } : {}),
-    ...outage,
+    ...fitted,
   });
-  const envelopeOverhead = outage ? TOOL_SEARCH_CONTROL_ENVELOPE_OVERHEAD : 0;
-  while (
-    JSON.stringify(render(), null, 2).length + envelopeOverhead >
-    MAX_TOOL_SEARCH_BATCH_RESPONSE_CHARS
-  ) {
+  const renderedLength = () =>
+    renderToolSearchControlText(JSON.stringify(render(), null, 2), fitted !== undefined).text
+      .length;
+  while (renderedLength() > MAX_TOOL_SEARCH_BATCH_RESPONSE_CHARS) {
     let removable: ToolSearchBatchGroup | undefined;
     for (const group of bounded) {
       if (group.candidates.length === 0) {
@@ -206,7 +207,12 @@ function boundToolSearchBatchResponse(
       }
     }
     if (!removable) {
-      break;
+      if (!fitted || outageErrorChars === 0) {
+        break;
+      }
+      outageErrorChars = Math.floor(outageErrorChars / 2);
+      fitted = trimUnavailableMcpServerErrors(fitted, outageErrorChars);
+      continue;
     }
     removable.candidates.pop();
     removable.truncated = true;
