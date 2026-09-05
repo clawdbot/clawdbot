@@ -1,8 +1,9 @@
 const HOST_LOCAL_FILE_HREF_RE =
   /^(?:~\/|\/(?:Users|home|tmp|private\/tmp|var\/folders|private\/var\/folders)\/|\/[A-Za-z]:\/|[A-Za-z]:[\\/])/;
 const FILE_SEGMENT_SOURCE = "[A-Za-z0-9_.@#+-]+";
-const FILE_EXTENSION_SOURCE = "[A-Za-z0-9]{1,8}";
-const FILE_LINE_SUFFIX_SOURCE = ":\\d{1,6}(?::\\d{1,6})?";
+// Extensions start with a letter so version numbers ("1.1/1.2") are not files; ":a-b" ranges target line a.
+const FILE_EXTENSION_SOURCE = "[A-Za-z][A-Za-z0-9]{0,7}";
+const FILE_LINE_SUFFIX_SOURCE = ":\\d{1,6}(?:[-:]\\d{1,6})?";
 const FILE_NAME_SOURCE = `${FILE_SEGMENT_SOURCE}\\.${FILE_EXTENSION_SOURCE}`;
 const PREFIXED_FILE_SOURCE = `(?:~\\/|\\.\\.\\/|\\.\\/|\\/)(?:${FILE_SEGMENT_SOURCE}\\/)*${FILE_NAME_SOURCE}`;
 const UNPREFIXED_FILE_SOURCE = `${FILE_SEGMENT_SOURCE}(?:\\/${FILE_SEGMENT_SOURCE})*\\/${FILE_NAME_SOURCE}`;
@@ -16,7 +17,7 @@ export const MARKDOWN_FILE_LINK_SCAN_RE = new RegExp(
   `${MULTI_SEGMENT_FILE_SOURCE}|${BARE_FILE_WITH_LINE_SOURCE}`,
   "g",
 );
-const FILE_LINE_SUFFIX_RE = /:(\d{1,6})(?::\d{1,6})?$/;
+const FILE_LINE_SUFFIX_RE = /:(\d{1,6})(?:[-:]\d{1,6})?$/;
 const BARE_FILE_EXTENSIONS = new Set([
   "astro",
   "bash",

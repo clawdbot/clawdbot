@@ -295,6 +295,26 @@ describe("toSanitizedMarkdownHtml links", () => {
       expect(links[1]?.textContent).toBe("bar.ts:7:3");
     });
 
+    it("targets the first line of a range suffix", () => {
+      const fragment = htmlFragment(
+        toSanitizedMarkdownHtml("`src/commands/auth-choice-options.static.ts:26-35`", {
+          fileLinks: true,
+        }),
+      );
+      const link = fragment.querySelector<HTMLAnchorElement>("a.markdown-file-link");
+      expect(link?.dataset.filePath).toBe("src/commands/auth-choice-options.static.ts");
+      expect(link?.dataset.fileLine).toBe("26");
+    });
+
+    it("does not link dotted version numbers", () => {
+      const fragment = htmlFragment(
+        toSanitizedMarkdownHtml("bumped 1.1/1.2 and `2026.9.2`, see v1.2/3.4", {
+          fileLinks: true,
+        }),
+      );
+      expect(fragment.querySelector("a[data-file-path]")).toBeNull();
+    });
+
     it("links Windows absolute paths", () => {
       const fragment = htmlFragment(
         toSanitizedMarkdownHtml("C:/repo/src/foo.ts:42 and `D:\\work\\bar.ts`", {
