@@ -2546,7 +2546,6 @@ describe("grouped chat rendering", () => {
     { agentId: "research", avatar: "blob:research-avatar", expected: "image" },
     { agentId: "research", avatar: null, expected: "initials" },
     { agentId: "research", avatar: "https://example.test/avatar.png", expected: "initials" },
-    { agentId: "research", avatar: "/avatar/research", expected: "initials" },
     // Same-agent sources wear the current agent's own avatar (fallback logo here).
     { agentId: "main", avatar: "blob:main-avatar", expected: "assistant" },
     { agentId: "removed", avatar: "blob:stale-avatar", expected: "glyph" },
@@ -2562,7 +2561,6 @@ describe("grouped chat rendering", () => {
         agentId: "main",
         agents: [{ id: "main" }, { id: "research", identity: { name: "Research Agent" } }],
         senderAgentAvatars: new Map(agentId ? [[agentId, avatar]] : []),
-        assistantAttachmentAuthToken: "test-token",
       };
       render(renderTestMessageGroup(group, options), container);
 

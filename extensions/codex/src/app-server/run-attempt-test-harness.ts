@@ -471,7 +471,18 @@ export function createAppServerHarness(
   >();
   const serverRequestHandlers = new Set<AppServerRequestHandler>();
   const closeHandlers = new Set<(client: CodexAppServerClient) => void>();
+  let closed = false;
   let closeError: Error | undefined;
+  const close = (error?: Error) => {
+    if (closed) {
+      return;
+    }
+    closed = true;
+    closeError = error;
+    for (const handler of closeHandlers) {
+      handler(client);
+    }
+  };
   const request = vi.fn(async (method: string, params?: unknown, requestOptions?: unknown) => {
     requests.push({ method, params });
     const result = await requestImpl(
@@ -518,6 +529,11 @@ export function createAppServerHarness(
       return () => closeHandlers.delete(handler);
     },
     getCloseError: () => closeError,
+    close: () => close(new Error("codex app-server client is closed")),
+    closeAndWait: async () => {
+      close(new Error("codex app-server client is closed"));
+      return true;
+    },
   } as unknown as CodexAppServerClient;
   setCodexAppServerClientFactoryForTest(
     async (_startOptions, authProfileId, agentDir, _config, clientOptions) => {
@@ -527,10 +543,10 @@ export function createAppServerHarness(
   );
 
   const waitForServerRequestHandler = async () => {
-    await vi.waitFor(() => expect(serverRequestHandlers.size).toBeGreaterThan(0), {
-      interval: 1,
-      timeout: appServerHarnessWait.timeout,
-    });
+    await vi.waitFor(
+      () => expect(serverRequestHandlers.size).toBeGreaterThan(0),
+      appServerHarnessWait,
+    );
     return async (requestLocal: Parameters<AppServerRequestHandler>[0]) => {
       for (const handler of serverRequestHandlers) {
         const result = await handler(requestLocal);
@@ -542,24 +558,18 @@ export function createAppServerHarness(
     };
   };
 
-  const waitForNotificationHandler = async () => {
-    await vi.waitFor(() => expect(notificationHandlers.size).toBeGreaterThan(0), {
-      interval: 1,
-      timeout: appServerHarnessWait.timeout,
-    });
-  };
-  const dispatchNotification = async (notification: CodexServerNotification) => {
-    await Promise.all(
-      [...notificationHandlers].map((handler) => Promise.resolve(handler(notification))),
-    );
-  };
   const sendNotification = async (notification: CodexServerNotification) => {
     // Dispatch synchronously when handlers exist so wire-order interactions
     // (for example completeTurn immediately followed by close) stay faithful.
     if (notificationHandlers.size === 0) {
-      await waitForNotificationHandler();
+      await vi.waitFor(
+        () => expect(notificationHandlers.size).toBeGreaterThan(0),
+        appServerHarnessWait,
+      );
     }
-    await dispatchNotification(notification);
+    await Promise.all(
+      [...notificationHandlers].map((handler) => Promise.resolve(handler(notification))),
+    );
   };
 
   return {
@@ -584,9 +594,7 @@ export function createAppServerHarness(
         { interval: 1, timeout: timeoutMs },
       );
     },
-    notify: async (notification: CodexServerNotification) => {
-      await sendNotification(notification);
-    },
+    notify: sendNotification,
     waitForServerRequestHandler,
     handleServerRequest: async (requestLocal: Parameters<AppServerRequestHandler>[0]) => {
       const handler = await waitForServerRequestHandler();
@@ -602,29 +610,13 @@ export function createAppServerHarness(
         },
       });
     },
-    close: (error?: Error) => {
-      closeError = error;
-      for (const handler of closeHandlers) {
-        handler(client);
-      }
-    },
+    close,
   };
 }
 
 export function createStartedThreadHarness(
-  requestImpl: (
-    method: string,
-    params: unknown,
-    options?: { signal?: AbortSignal },
-  ) => Promise<unknown> = async () => undefined,
-  options: {
-    persistedThreads?: string[];
-    onStart?: (
-      authProfileId: string | undefined,
-      agentDir: string | undefined,
-      options: CodexAppServerClientOptions | undefined,
-    ) => void;
-  } = {},
+  requestImpl: Parameters<typeof createAppServerHarness>[0] = async () => undefined,
+  options: Parameters<typeof createAppServerHarness>[1] = {},
 ) {
   return createAppServerHarness(async (method, params, requestOptions) => {
     const override = await requestImpl(method, params, requestOptions);

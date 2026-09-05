@@ -465,7 +465,6 @@ export function renderMessageGroup(group: MessageGroup, opts: RenderMessageGroup
                   avatar: opts.userAvatar ?? null,
                 },
                 opts.resourceBasePath,
-                opts.assistantAttachmentAuthToken,
                 group.sender,
               )
           : nothing

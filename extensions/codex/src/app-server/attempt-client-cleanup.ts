@@ -51,18 +51,6 @@ export function assertCodexThreadResumeSubscription(
   }
 }
 
-async function closeClientAndWaitIfAvailable(client: CodexAppServerClient): Promise<void> {
-  const closeable = client as {
-    close?: CodexAppServerClient["close"];
-    closeAndWait?: CodexAppServerClient["closeAndWait"];
-  };
-  if (typeof closeable.closeAndWait === "function") {
-    await closeable.closeAndWait();
-    return;
-  }
-  closeable.close?.();
-}
-
 export async function closeCodexStartupClientBestEffort(
   client: CodexAppServerClient | undefined,
 ): Promise<void> {
@@ -73,7 +61,7 @@ export async function closeCodexStartupClientBestEffort(
   // Detached entries retain every ordinary and native lease; only isolated or
   // already-closed shared clients may be joined without aborting sibling turns.
   if (!retiredSharedClient || retiredSharedClient.closed) {
-    await closeClientAndWaitIfAvailable(client);
+    await client.closeAndWait();
   }
 }
 

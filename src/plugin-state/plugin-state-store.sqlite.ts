@@ -380,27 +380,26 @@ function deleteOldestPluginStateNamespaceEntries(
   db: DatabaseSync,
   params: { pluginId: string; namespace: string; protectedKey: string; now: number; limit: number },
 ): number {
-  const keys = executeSqliteQuerySync(
+  const kysely = getPluginStateKysely(db);
+  const keys = kysely
+    .selectFrom("plugin_state_entries")
+    .select("entry_key")
+    .where("plugin_id", "=", params.pluginId)
+    .where("namespace", "=", params.namespace)
+    .where("entry_key", "!=", params.protectedKey)
+    .where((eb) => eb.or([eb("expires_at", "is", null), eb("expires_at", ">", params.now)]))
+    .orderBy("created_at", "asc")
+    .orderBy("entry_key", "asc")
+    .limit(params.limit);
+  const result = executeSqliteQuerySync(
     db,
-    getPluginStateKysely(db)
-      .selectFrom("plugin_state_entries")
-      .select(["entry_key"])
+    kysely
+      .deleteFrom("plugin_state_entries")
       .where("plugin_id", "=", params.pluginId)
       .where("namespace", "=", params.namespace)
-      .where("entry_key", "!=", params.protectedKey)
-      .where((eb) => eb.or([eb("expires_at", "is", null), eb("expires_at", ">", params.now)]))
-      .orderBy("created_at", "asc")
-      .orderBy("entry_key", "asc")
-      .limit(params.limit),
-  ).rows;
-  for (const row of keys) {
-    deletePluginStateEntry(db, {
-      pluginId: params.pluginId,
-      namespace: params.namespace,
-      key: row.entry_key,
-    });
-  }
-  return keys.length;
+      .where("entry_key", "in", keys),
+  );
+  return Number(result.numAffectedRows ?? 0);
 }
 
 function openPluginStateDatabase(

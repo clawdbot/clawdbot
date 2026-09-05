@@ -128,7 +128,7 @@ pnpm ios:release:plan -- --json > /tmp/ios-release-plan.json
 node --import tsx scripts/mobile-release-version.ts --finalize --version 2026.8.2 --plan /tmp/ios-release-plan.json --write
 ```
 
-Review and commit the five cutter outputs, then archive and upload to App Store Connect:
+Review all five cutter outputs, commit every changed output, then archive and upload to App Store Connect:
 
 ```bash
 pnpm ios:release:upload
@@ -177,7 +177,7 @@ pnpm ios:release:plan -- --json > /tmp/ios-release-plan.json
 node --import tsx scripts/mobile-release-version.ts --finalize --version 2026.8.2 --plan /tmp/ios-release-plan.json --write
 ```
 
-5. Review and commit the five cutter outputs, then upload:
+5. Review all five cutter outputs, commit every changed output, then upload:
 
 ```bash
 pnpm ios:release:upload
@@ -234,7 +234,7 @@ Recommended flow:
 
 1. Run the shared mobile cutter `--prepare` phase for the selected gateway.
 2. Capture `pnpm ios:release:plan -- --json`, then run the cutter `--finalize` phase.
-3. Review and commit all five cutter outputs.
+3. Review all five cutter outputs and commit every changed output.
 4. Run `pnpm ios:release:upload`.
 5. Failed, processing, and complete Apple-visible uploads all advance the next numeric build.
 
@@ -243,7 +243,7 @@ Recommended flow:
 1. Select the target gateway version for `apps/mobile/version.json`.
 2. Add release notes under `## Unreleased`.
 3. Run the shared cutter `--prepare` phase and capture the live iOS plan; released history determines the next revision.
-4. Run the cutter `--finalize` phase, review and commit all five outputs, then run `pnpm ios:release:upload`.
+4. Run the cutter `--finalize` phase, review all five outputs, commit every changed output, then run `pnpm ios:release:upload`.
 5. Keep rerunning the planner-driven upload until the release candidate is ready.
 
 See `apps/ios/VERSIONING.md` for the detailed spec.

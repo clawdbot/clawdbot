@@ -117,6 +117,44 @@ suite.define(() => {
             path: path.join(proofDir, "models-snapshot.png"),
           });
         }
+
+        const refresh = snapshots.getByRole("button", { name: "Refresh" });
+        const statusRequestCount = (await gateway.getRequests("status")).length;
+        await gateway.deferNext("status");
+        await refresh.click();
+        await gateway.waitForRequest("status", { after: statusRequestCount });
+        await expect
+          .poll(() => snapshots.textContent())
+          .toContain("Refreshing Gateway diagnostics.");
+        await expect.poll(() => snapshots.textContent()).toContain("diagnostics-e2e");
+        expect(
+          await page.evaluate(() => document.documentElement.scrollWidth <= window.innerWidth),
+        ).toBe(true);
+        if (captureUiProof) {
+          await page.screenshot({
+            animations: "disabled",
+            path: path.join(proofDir, "refreshing-desktop.png"),
+          });
+        }
+
+        await gateway.resolveDeferred("status");
+        await expect.poll(() => refresh.textContent()).toMatch(/^\s*Refresh\s*$/u);
+        await gateway.setOnline(false);
+        await expect
+          .poll(() => snapshots.textContent())
+          .toMatch(/Offline\s+Connect to the Gateway/u);
+        expect(await refresh.isDisabled()).toBe(true);
+        await expect.poll(() => snapshots.textContent()).toContain("diagnostics-e2e");
+        await page.setViewportSize({ height: 844, width: 390 });
+        expect(
+          await page.evaluate(() => document.documentElement.scrollWidth <= window.innerWidth),
+        ).toBe(true);
+        if (captureUiProof) {
+          await page.screenshot({
+            animations: "disabled",
+            path: path.join(proofDir, "offline-mobile.png"),
+          });
+        }
       },
     );
   });

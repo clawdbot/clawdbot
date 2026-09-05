@@ -289,6 +289,50 @@ describe("diffConfigPaths", () => {
 
 describe("buildGatewayReloadPlan", () => {
   const emptyRegistry = createTestRegistry([]);
+  it("selects only attached service owners for their declared config and preserves unknown restart policy", () => {
+    const serviceRegistry = createTestRegistry([]);
+    serviceRegistry.services.push({
+      pluginId: "exporter",
+      source: "test",
+      origin: "workspace",
+      service: {
+        id: "exporter",
+        reload: { configPrefixes: ["diagnostics.otel", "diagnostics.enabled"] },
+        start() {},
+      },
+    });
+    setActivePluginRegistry(serviceRegistry);
+    const plan = buildGatewayReloadPlan(["diagnostics.otel.endpoint", "diagnostics.enabled"]);
+    expect(plan.restartGateway).toBe(false);
+    expect(plan.restartServices).toEqual(new Set(["exporter"]));
+    expect(plan.reloadPlugins).toBe(false);
+    expect(plan.restartChannels.size).toBe(0);
+    expect(resolveConfigReloadMetadata("diagnostics.otel.endpoint")).toEqual({ kind: "hot" });
+    expect(buildGatewayReloadPlan(["diagnostics.futurePolicy"]).restartGateway).toBe(true);
+    setActivePluginRegistry(emptyRegistry);
+    expect(buildGatewayReloadPlan(["diagnostics.otel.endpoint"]).restartGateway).toBe(true);
+  });
+  it("selects every service sharing a changed policy, including broader owners", () => {
+    const registry = createTestRegistry([]);
+    for (const [id, prefix] of [
+      ["parent", "shared.policy"],
+      ["first", "shared.policy.child"],
+      ["second", "shared.policy.child"],
+      ["sibling", "shared.other"],
+    ] as const) {
+      registry.services.push({
+        pluginId: id,
+        source: "test",
+        origin: "workspace",
+        service: { id, reload: { configPrefixes: [prefix] }, start() {} },
+      });
+    }
+    setActivePluginRegistry(registry);
+    expect(buildGatewayReloadPlan(["shared.policy.child.enabled"]).restartServices).toEqual(
+      new Set(["parent", "first", "second"]),
+    );
+    setActivePluginRegistry(emptyRegistry);
+  });
   const telegramPlugin: ChannelPlugin = {
     id: "telegram",
     meta: {
@@ -345,6 +389,67 @@ describe("buildGatewayReloadPlan", () => {
     { pluginId: "whatsapp", plugin: whatsappPlugin, source: "test" },
     { pluginId: "mattermost", plugin: mattermostPlugin, source: "test" },
   ]);
+  it.each([
+    { prefix: "gateway", path: "gateway.port", kind: "restart", services: [] },
+    { prefix: "discovery", path: "discovery.wideArea.enabled", kind: "restart", services: [] },
+    { prefix: "logging", path: "logging.level", kind: "none", services: [] },
+    { prefix: "mcp", path: "mcp.apps.enabled", kind: "restart", services: [] },
+    {
+      prefix: "plugins",
+      path: "plugins.entries.exporter.enabled",
+      kind: "hot",
+      services: ["exporter"],
+    },
+    { prefix: "channels.whatsapp", path: "channels.whatsapp.enabled", kind: "none", services: [] },
+    {
+      prefix: "channels.whatsapp.exporter",
+      path: "channels.whatsapp.exporter.enabled",
+      kind: "hot",
+      services: ["exporter"],
+    },
+  ] as const)("preserves explicit policy precedence for service $prefix", (entry) => {
+    const { prefix, path: changedPath, kind, services } = entry;
+    const serviceRegistry = createTestRegistry([
+      { pluginId: "whatsapp", plugin: whatsappPlugin, source: "test" },
+    ]);
+    serviceRegistry.services.push({
+      pluginId: "exporter",
+      source: "test",
+      origin: "workspace",
+      service: { id: "exporter", reload: { configPrefixes: [prefix] }, start() {} },
+    });
+    setActivePluginRegistry(serviceRegistry);
+    expect(resolveConfigReloadMetadata(changedPath)).toEqual({ kind });
+    const plan = buildGatewayReloadPlan([changedPath]);
+    expect(plan.restartGateway).toBe(kind === "restart");
+    expect(plan.restartServices).toEqual(new Set(services));
+    if (prefix === "plugins") {
+      expect(plan.reloadPlugins).toBe(true);
+      expect(plan.disposeMcpRuntimes).toBe(true);
+    }
+    setActivePluginRegistry(emptyRegistry);
+  });
+  it.each(["channels.mattermost", "channels.mattermost.accounts.work"])(
+    "preserves channel account ownership when a service reloads %s",
+    (prefix) => {
+      const serviceRegistry = createTestRegistry([
+        { pluginId: "mattermost", plugin: mattermostPlugin, source: "test" },
+      ]);
+      serviceRegistry.services.push({
+        pluginId: "exporter",
+        source: "test",
+        origin: "workspace",
+        service: { id: "exporter", reload: { configPrefixes: [prefix] }, start() {} },
+      });
+      setActivePluginRegistry(serviceRegistry);
+      const plan = buildGatewayReloadPlan(["channels.mattermost.accounts.work.token"]);
+      expect(plan.restartServices).toEqual(new Set(["exporter"]));
+      expect(plan.restartChannelAccounts).toEqual(new Map([["mattermost", new Set(["work"])]]));
+      expect(plan.restartChannels.size).toBe(0);
+      expect(plan.restartGateway).toBe(false);
+      setActivePluginRegistry(emptyRegistry);
+    },
+  );
   registry.reloads = [
     {
       pluginId: "browser",
@@ -428,7 +533,6 @@ describe("buildGatewayReloadPlan", () => {
     "plugins.load.paths.0",
     "gateway.auth.mode",
     "discovery.wideArea.domain",
-    "diagnostics.enabled",
     "diagnostics.otel.endpoint",
     "acp.backend",
     "memory.search.enabled",
@@ -481,7 +585,6 @@ describe("buildGatewayReloadPlan", () => {
     "gateway.nodes.browser.mode",
     "gateway.nodes.browser.node",
     "gateway.push.apns.relay.baseUrl",
-    "gateway.publicOrigin",
     "mcp.apps.sandboxOrigin",
     "approvals.exec.enabled",
     "approvals.plugin.targets",
@@ -600,6 +703,10 @@ describe("buildGatewayReloadPlan", () => {
     },
     {
       path: "mcp.servers.context7.command",
+      expected: { disposeMcpRuntimes: true },
+    },
+    {
+      path: "gateway.publicOrigin",
       expected: { disposeMcpRuntimes: true },
     },
     {
@@ -891,6 +998,8 @@ describe("buildGatewayReloadPlan", () => {
       ...sharedChannelSettings.map(({ path }) => path),
       "channels.defaults.groupPolicy",
       "channels.modelByChannel.telegram",
+      "session.scope",
+      "session.store",
     ].flatMap((path) => [
       { path, registration: { restartPrefixes: [path] }, kind: "restart" },
       { path, registration: { hotPrefixes: [path] }, kind: "hot" },

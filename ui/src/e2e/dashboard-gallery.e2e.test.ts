@@ -11,6 +11,12 @@ const suite = createControlUiE2eSuite({
 
 const now = Date.now();
 const selectedSessionKey = "agent:main:dashboard:12345678-90ab-cdef-1234-567890abcdef";
+const selectedSessionResolution = {
+  ok: true,
+  key: selectedSessionKey,
+  agentId: "main",
+  boardFace: "dashboard",
+};
 const dashboardRows = [
   [selectedSessionKey, "Release health", "mira", "Mira", 3_000, "running"],
   ["agent:main:dashboard:model-spend", "Model spend", "peter", "Peter", 8_000, "done"],
@@ -107,10 +113,18 @@ suite.define(() => {
             viewId: "release-tools-view",
             expiresAtMs: now + 60_000,
           },
-          "sessions.resolve": {
-            ok: true,
-            key: selectedSessionKey,
-            boardFace: "dashboard",
+          "sessions.resolve": selectedSessionResolution,
+          "chat.startup": {
+            cases: [
+              {
+                match: { shortId: "12345678", agentId: "main" },
+                response: {
+                  resolution: selectedSessionResolution,
+                  messages: [],
+                  sessionInfo: dashboardRows[0],
+                },
+              },
+            ],
           },
           "sessions.list": {
             cases: [

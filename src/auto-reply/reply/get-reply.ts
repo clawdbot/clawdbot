@@ -570,6 +570,7 @@ export async function getReplyFromConfig(
         agentId,
         sessionKey: agentSessionKey,
         workspaceDir,
+        abortSignal: internalOptsWithSkillFilter?.abortSignal,
       }),
     );
   }
@@ -1279,6 +1280,7 @@ export async function getReplyFromConfig(
         agentId,
         sessionKey,
         workspaceDir,
+        abortSignal: internalOptsWithSkillFilter?.abortSignal,
       }),
     );
     stagedAttachmentPaths = stageResult.staged;

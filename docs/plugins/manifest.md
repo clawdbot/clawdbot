@@ -1101,12 +1101,15 @@ Fields:
 
 ## modelCatalog reference
 
-Use `modelCatalog` when OpenClaw should know provider model metadata before loading plugin runtime. This is the manifest-owned source for fixed catalog rows, provider aliases, suppression rules, and discovery mode. Runtime refresh still belongs in provider runtime code, but the manifest tells core when runtime is required.
+Use `modelCatalog` when OpenClaw should know provider model metadata before loading plugin runtime. This is the manifest-owned source for fixed catalog rows, publication-time metadata sources, provider aliases, suppression rules, and discovery mode. Runtime refresh still belongs in provider runtime code, but the manifest tells core when runtime is required.
 
 ```json
 {
   "providers": ["openai"],
   "modelCatalog": {
+    "modelsDev": {
+      "openai": "openai"
+    },
     "providers": {
       "openai": {
         "baseUrl": "https://api.openai.com/v1",
@@ -1154,11 +1157,18 @@ Top-level fields:
 
 | Field            | Type                                                     | What it means                                                                                               |
 | ---------------- | -------------------------------------------------------- | ----------------------------------------------------------------------------------------------------------- |
+| `modelsDev`      | `Record<string, string>`                                 | Publication-time opt-in mapping from an owned OpenClaw provider id to a models.dev provider id.             |
 | `providers`      | `Record<string, object>`                                 | Catalog rows for provider ids owned by this plugin. Keys should also appear in top-level `providers`.       |
 | `aliases`        | `Record<string, object>`                                 | Provider aliases that should resolve to an owned provider for catalog or suppression planning.              |
 | `suppressions`   | `object[]`                                               | Model rows from another source that this plugin suppresses for a provider-specific reason.                  |
 | `discovery`      | `Record<string, "static" \| "refreshable" \| "runtime">` | Whether the provider catalog can be read from manifest metadata, refreshed into cache, or requires runtime. |
 | `runtimeAugment` | `boolean`                                                | Set to `true` only when the provider runtime must append catalog rows after manifest/config planning.       |
+
+`modelsDev` opts an owned provider into models.dev metadata hydration when the hosted catalog is published. Declare the upstream provider once per OpenClaw provider, not once per model. Omission means no models.dev hydration; there is no central provider fallback. Keys are normalized as OpenClaw provider ids and source ids are trimmed. Empty or non-string source ids and mappings for unowned providers are ignored; an alias alone does not grant ownership. A mapping does not create catalog provider rows or relax their validation.
+
+Hydration adds eligible model ids and fills only undefined metadata. Explicit manifest values remain authoritative, including `false`; models.dev never supplies transport settings or prices. Prices still follow the provider-owned pricing policy. Opt in only when the provider defaults are appropriate for newly imported rows; providers that choose a transport per model should not opt in unless those defaults are safe. Hydration errors fail publication, leaving the last published artifact intact. The publisher hydrates opted-in metadata even without `--pricing`; that flag controls price enrichment only. A dry run performs the same metadata hydration without writing the artifact.
+
+This field is publication-time authoring metadata, not a Gateway discovery hook. It does not add runtime network calls or hot reload; the existing [hosted catalog update lifecycle](/concepts/models#hosted-catalog-updates) is unchanged.
 
 `aliases` participates in provider ownership lookup for model-catalog planning. Alias targets must be top-level providers owned by the same plugin. When a provider-filtered list uses an alias, OpenClaw can read the owning manifest and apply alias API/base URL overrides without loading provider runtime. Aliases do not expand unfiltered catalog listings; broad lists emit the owning canonical provider rows only.
 

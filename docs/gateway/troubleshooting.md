@@ -766,9 +766,9 @@ Related:
 If cron or heartbeat did not run or did not deliver, verify scheduler state first, then delivery target.
 
 ```bash
-openclaw cron status
-openclaw cron list
-openclaw cron runs --id <jobId> --limit 20
+openclaw automations status
+openclaw automations list
+openclaw automations runs <jobId> --limit 20
 openclaw system heartbeat last
 openclaw logs --follow
 ```

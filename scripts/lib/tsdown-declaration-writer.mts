@@ -183,7 +183,7 @@ export async function writeTsdownDeclarations(
             const sealed = after.seal(
               "tsconfig.json",
               group.identity,
-              readDeclarationInputs(group.output, [group.name]),
+              readDeclarationInputs(group.output, group.name),
               before,
               startedAt,
               liveDist,

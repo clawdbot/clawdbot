@@ -31,6 +31,7 @@ import { makeTempDir, useAutoCleanupTempDirTracker } from "../helpers/temp-dir.j
 
 const tempDirs: string[] = [];
 const invocationLogTempDirs = useAutoCleanupTempDirTracker(afterEach);
+const artifactTempDirs = useAutoCleanupTempDirTracker(afterEach);
 const repoRoot = process.cwd();
 const bundledWrapperPath = path.join(repoRoot, ".tmp", `crabbox-wrapper-test-${process.pid}.mjs`);
 const realBundledWrapperPath = bundledWrapperPath.replace(".mjs", "-real.mjs");
@@ -157,9 +158,13 @@ async function main() {
     process.exit(ready ? 0 : 1);
   }
   if (args[0] === "run" || args[0] === "warmup") { ${stampClaimScript} }
+  if (args[0] === "run" && process.env.OPENCLAW_FAKE_CRABBOX_ARTIFACT_LINKS) {
+    for (const [file, target] of Object.entries(JSON.parse(process.env.OPENCLAW_FAKE_CRABBOX_ARTIFACT_LINKS))) { fs.mkdirSync(path.dirname(file), { recursive: true }); fs.symlinkSync(target, file); }
+  }
   if (args[0] === "run" && process.env.OPENCLAW_FAKE_CRABBOX_ARTIFACTS) {
     for (const [file, bytes] of Object.entries(JSON.parse(process.env.OPENCLAW_FAKE_CRABBOX_ARTIFACTS))) { fs.mkdirSync(path.dirname(file), { recursive: true }); fs.writeFileSync(file, Buffer.from(bytes, "base64")); }
   }
+  if (args[0] === "run" && process.env.OPENCLAW_FAKE_CRABBOX_ARTIFACT_FIFO) execFileSync("mkfifo", [process.env.OPENCLAW_FAKE_CRABBOX_ARTIFACT_FIFO]);
   const runStatus = Number.parseInt(process.env.OPENCLAW_FAKE_CRABBOX_RUN_STATUS || "0", 10); if (args[0] === "run" && runStatus !== 0) { process.stdout.write(JSON.stringify({ args, cwd: process.cwd() }) + "\n"); process.stderr.write("fake run failure\n"); process.exit(runStatus); }
   if (args[0] === "config" && args[1] === "show" && args.includes("--json")) {
     const status = Number.parseInt(process.env.OPENCLAW_FAKE_CRABBOX_CONFIG_STATUS || "0", 10);
@@ -4977,25 +4982,50 @@ describe("scripts/crabbox-wrapper", () => {
   });
 
   it.each([
-    { mode: "capsule", artifacts: "captures", exitCode: 23 },
-    { mode: "capsule", artifacts: "both", exitCode: 23 },
-    { mode: "sparse", artifacts: "both", exitCode: 23 },
-    { mode: "capsule", artifacts: "runs", exitCode: 0 },
-    { mode: "capsule", artifacts: "none", exitCode: 0 },
-    { mode: "direct", artifacts: "captures", exitCode: 23 },
-    { mode: "capsule", artifacts: "both", exitCode: 0, blocked: true },
+    { mode: "capsule", artifacts: "captures", exitCode: 23, fault: undefined },
+    { mode: "capsule", artifacts: "both", exitCode: 23, fault: undefined },
+    { mode: "sparse", artifacts: "both", exitCode: 23, fault: undefined },
+    { mode: "capsule", artifacts: "runs", exitCode: 0, fault: undefined },
+    { mode: "capsule", artifacts: "none", exitCode: 0, fault: undefined },
+    { mode: "direct", artifacts: "captures", exitCode: 23, fault: undefined },
+    ...[0, 23].map((exitCode) => ({
+      mode: "capsule",
+      artifacts: "both",
+      exitCode,
+      fault: "destination file",
+    })),
+    ...(process.platform === "win32"
+      ? []
+      : [
+          "source root link",
+          "source root dangling link",
+          "source runs link",
+          "source captures link",
+          "source captures dangling link",
+          "nested file link",
+          "nested directory link",
+          "nested internal link",
+          "nested dangling link",
+          "destination root link",
+          "destination root dangling link",
+          "destination parent link",
+          "destination parent dangling link",
+          "nested fifo",
+        ]
+    ).map((fault) => ({ mode: "capsule", artifacts: "both", exitCode: 0, fault })),
   ])(
-    "retains native artifacts through the wrapper ($mode, $artifacts, exit=$exitCode, blocked=$blocked)",
-    ({ mode, artifacts, exitCode, blocked }) => {
-      const root = realpathSync(makeTempDir(tempDirs, "openclaw-wrapper-artifacts-"));
+    "retains native artifacts through the wrapper ($mode, $artifacts, exit=$exitCode, fault=$fault)",
+    ({ mode, artifacts, exitCode, fault }) => {
+      const root = realpathSync(artifactTempDirs.make("openclaw-wrapper-artifacts-"));
       const producer = path.join(root, "repo");
       const syncRoot = path.join(root, "sync");
       const fixtureWrapper = path.join(producer, ".tmp", "crabbox-wrapper.mjs");
       mkdirSync(path.dirname(fixtureWrapper), { recursive: true });
       copyFileSync(realBundledWrapperPath, fixtureWrapper);
       const env = {
-        ...process.env,
         ...testHomeEnv(path.join(root, "home")),
+        XDG_STATE_HOME: path.join(root, "home", ".local", "state"),
+        ...(process.platform === "win32" ? { SystemRoot: process.env.SystemRoot } : {}),
         PATH: [makeFakeCrabbox(defaultProviderHelp), process.env.PATH ?? ""].join(path.delimiter),
         GIT_CONFIG_GLOBAL: "/dev/null",
         GIT_CONFIG_NOSYSTEM: "1",
@@ -5018,7 +5048,7 @@ describe("scripts/crabbox-wrapper", () => {
         return result.stdout.trim();
       };
       git("init", "-q", "-b", "main");
-      writeFileSync(path.join(producer, ".gitignore"), ".tmp/\n.crabbox/\n");
+      writeFileSync(path.join(producer, ".gitignore"), ".tmp/\n.crabbox\n");
       writeFileSync(path.join(producer, "fixture.txt"), "source fixture\n");
       git("add", ".gitignore", "fixture.txt");
       git("commit", "-qm", "fixture");
@@ -5029,7 +5059,14 @@ describe("scripts/crabbox-wrapper", () => {
       }
       const capturePath = ".crabbox/captures/tbx_fixture-20260904T190427Z.tar.gz";
       const runPath = ".crabbox/runs/run_fixture/proof/nested.json";
-      const bytes = Buffer.from([0x1f, 0x8b, 0, 255, 13, 10, 128]);
+      const bundleInput = path.join(root, "bundle-input");
+      mkdirSync(bundleInput);
+      const logBytes = Buffer.from("synthetic failure\r\n\u001b[31mraw diagnostic\u001b[0m\n");
+      writeFileSync(path.join(bundleInput, "stdout.log"), logBytes);
+      const bundle = path.join(root, "failure.tar.gz");
+      const packed = spawnSync("tar", ["-czf", bundle, "-C", bundleInput, "stdout.log"], { env });
+      expect(packed.status).toBe(0);
+      const bytes = readFileSync(bundle);
       const files = [
         ...(artifacts === "captures" || artifacts === "both" ? [capturePath] : []),
         ...(artifacts === "runs" || artifacts === "both" ? [runPath] : []),
@@ -5041,11 +5078,44 @@ describe("scripts/crabbox-wrapper", () => {
       mkdirSync(path.dirname(previousFile), { recursive: true });
       writeFileSync(previousFile, "prior evidence\n");
       const retainedRoot = path.join(producer, ".crabbox", "wrapper-artifacts");
-      if (blocked) {
+      const outside = path.join(root, "outside");
+      mkdirSync(outside);
+      const sentinel = "synthetic-private-data-must-not-be-printed";
+      const sentinelPath = path.join(outside, "private.txt");
+      writeFileSync(sentinelPath, sentinel);
+      const artifactLinks: Record<string, string> = {};
+      const missing = path.join(root, "missing");
+      if (fault === "destination file") {
         writeFileSync(retainedRoot, "not a directory\n");
+      } else if (fault?.startsWith("destination")) {
+        const target = fault.includes("dangling") ? missing : outside;
+        if (fault.includes("root")) {
+          renameSync(path.join(producer, ".crabbox"), path.join(root, "prior-crabbox"));
+          symlinkSync(target, path.join(producer, ".crabbox"), "dir");
+        } else {
+          symlinkSync(target, retainedRoot, "dir");
+        }
+      } else if (fault?.startsWith("source")) {
+        const file = fault.includes("root")
+          ? ".crabbox"
+          : fault.includes("runs")
+            ? ".crabbox/runs"
+            : ".crabbox/captures";
+        artifactLinks[file] = fault.includes("dangling") ? missing : outside;
+      } else if (fault?.startsWith("nested") && fault !== "nested fifo") {
+        const target = fault.includes("dangling")
+          ? missing
+          : fault.includes("internal")
+            ? path.basename(capturePath)
+            : fault.includes("directory")
+              ? outside
+              : sentinelPath;
+        artifactLinks[".crabbox/captures/linked-artifact"] = target;
       }
       const retainedDirectories: string[] = [];
-      const attempts = mode === "capsule" && artifacts === "both" && !blocked ? 2 : 1;
+      const attempts = mode === "capsule" && artifacts === "both" && !fault ? 2 : 1;
+      const emittedFiles = fault?.startsWith("source") && fault.includes("dangling") ? [] : files;
+      const ignoredFiles = [".crabbox/credentials/token", ".crabbox/state/claim", ".crabbox/env"];
       for (let attempt = 0; attempt < attempts; attempt += 1) {
         const result = spawnSync(
           process.execPath,
@@ -5061,8 +5131,17 @@ describe("scripts/crabbox-wrapper", () => {
             cwd: producer,
             env: {
               ...env,
+              OPENCLAW_FAKE_CRABBOX_ARTIFACT_LINKS: JSON.stringify(artifactLinks),
+              ...(fault === "nested fifo"
+                ? { OPENCLAW_FAKE_CRABBOX_ARTIFACT_FIFO: ".crabbox/captures/pipe" }
+                : {}),
               OPENCLAW_FAKE_CRABBOX_ARTIFACTS: JSON.stringify(
-                Object.fromEntries(files.map((file) => [file, bytes.toString("base64")])),
+                Object.fromEntries([
+                  ...emittedFiles.map((file) => [file, bytes.toString("base64")]),
+                  ...(fault?.includes("dangling") && fault.startsWith("source")
+                    ? []
+                    : ignoredFiles.map((file) => [file, Buffer.from(sentinel).toString("base64")])),
+                ]),
               ),
             },
             encoding: "utf8",
@@ -5070,16 +5149,31 @@ describe("scripts/crabbox-wrapper", () => {
           },
         );
         expect(result.error, result.stderr).toBeUndefined();
+        expect(result.stdout, result.stderr).not.toBe("");
         const output = parseFakeCrabboxOutput(result);
-        expect(readFileSync(previousFile, "utf8")).toBe("prior evidence\n");
-        if (blocked) {
-          expect(result.status).not.toBe(0);
+        const previousPath = fault?.startsWith("destination root")
+          ? path.join(root, "prior-crabbox", path.relative(".crabbox", capturePath))
+          : previousFile;
+        expect(readFileSync(previousPath, "utf8")).toBe("prior evidence\n");
+        expect(readFileSync(sentinelPath, "utf8")).toBe(sentinel);
+        expect(result.stdout + result.stderr).not.toContain(sentinel);
+        if (fault) {
+          expect(result.status, result.stderr).toBe(exitCode || 1);
           expect(result.stderr).toContain("temporary checkout retained");
           expect(result.stderr).toContain(output.cwd);
-          for (const file of files) {
+          expect(result.stderr).not.toContain("preserved temporary artifacts:");
+          expect(existsSync(output.cwd)).toBe(true);
+          for (const file of emittedFiles) {
             expect(readFileSync(path.join(output.cwd, file))).toEqual(bytes);
           }
-          expect(readFileSync(retainedRoot, "utf8")).toBe("not a directory\n");
+          if (fault === "destination file") {
+            expect(readFileSync(retainedRoot, "utf8")).toBe("not a directory\n");
+          } else if (fault.startsWith("destination")) {
+            expect(readdirSync(outside)).toEqual(["private.txt"]);
+            expect(existsSync(missing)).toBe(false);
+          } else {
+            expect(existsSync(retainedRoot) ? readdirSync(retainedRoot) : []).toEqual([]);
+          }
           continue;
         }
         expect(result.status, result.stderr).toBe(exitCode);
@@ -5102,10 +5196,26 @@ describe("scripts/crabbox-wrapper", () => {
             expect(retainedDirectories).not.toContain(retained);
             retainedDirectories.push(retained);
             for (const directory of retainedDirectories) {
+              if (process.platform !== "win32") {
+                expect(lstatSync(directory).mode & 0o777).toBe(0o700);
+              }
+              expect(new Set(readdirSync(directory))).toEqual(
+                new Set(files.map((file) => file.split("/")[1])),
+              );
               for (const file of files) {
-                expect(readFileSync(path.join(directory, path.relative(".crabbox", file)))).toEqual(
-                  bytes,
-                );
+                const retainedFile = path.join(directory, path.relative(".crabbox", file));
+                expect(readFileSync(retainedFile)).toEqual(bytes);
+                expect(lstatSync(retainedFile).isFile()).toBe(true);
+                if (file === capturePath) {
+                  const unpacked = spawnSync("tar", ["-xOf", retainedFile, "stdout.log"], { env });
+                  expect(unpacked.status).toBe(0);
+                  expect(unpacked.stdout).toEqual(logBytes);
+                }
+                if (process.platform !== "win32") {
+                  expect(lstatSync(retainedFile).mode & 0o777).toBe(0o600);
+                  expect(lstatSync(path.dirname(retainedFile)).mode & 0o777).toBe(0o700);
+                  expect(lstatSync(retainedFile).uid).toBe(process.getuid?.());
+                }
               }
             }
           }

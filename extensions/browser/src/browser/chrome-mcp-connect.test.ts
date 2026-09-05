@@ -96,7 +96,10 @@ for await (const line of readline.createInterface({ input: process.stdin })) {
     expect(pid).toBeGreaterThan(0);
     expect(pid).not.toBe(process.pid);
     await vi.waitFor(async () => {
-      expect(await fs.readFile(state.statePath("stdin-ended"), "utf8")).toBe("closed");
+      // Windows terminates the process tree before the transport can close stdin.
+      if (process.platform !== "win32") {
+        expect(await fs.readFile(state.statePath("stdin-ended"), "utf8")).toBe("closed");
+      }
       expect(() => process.kill(pid, 0)).toThrow(expect.objectContaining({ code: "ESRCH" }));
     });
     expect(getChromeMcpPid(profileName)).toBeNull();

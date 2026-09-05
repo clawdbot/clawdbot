@@ -225,6 +225,8 @@ describe("production lint suppressions", () => {
         "src/infra/device-pairing-store.ts|typescript/no-unnecessary-type-parameters|1",
         "src/infra/exec-approvals-effective.ts|typescript/no-unnecessary-type-parameters|1",
         "src/infra/json-file.ts|typescript-eslint/no-unnecessary-type-parameters|1",
+        // Undici invokes its method-shaped clientFactory callback without an options receiver.
+        "src/infra/net/undici-dispatcher-options.ts|typescript/unbound-method|1",
         // NUL delimiters identify protected code spans without colliding with escaped user text.
         "src/infra/outbound/sanitize-text.ts|eslint/no-control-regex|1",
         "src/infra/outbound/send-deps.ts|typescript/no-unnecessary-type-parameters|1",

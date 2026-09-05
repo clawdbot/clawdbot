@@ -147,21 +147,14 @@ function acquireDeclarationSystem(inputs: ReturnType<typeof createDeclarationInp
   };
 }
 
-export function createDeclarationBoundaryHooks(
-  existing?: UserConfig["hooks"],
-): NonNullable<UserConfig["hooks"]> {
-  if (typeof existing === "function") {
-    return async (hooks) => {
+export function createDeclarationBoundaryHooks(existing?: UserConfig["hooks"]) {
+  return async (hooks: BuildContext["hooks"]) => {
+    if (typeof existing === "function") {
       await existing(hooks);
-      hooks.hook("build:prepare", prepareDeclarationBoundary);
-    };
-  }
-  return {
-    ...existing,
-    "build:prepare": async (context) => {
-      await existing?.["build:prepare"]?.(context);
-      prepareDeclarationBoundary(context);
-    },
+    } else if (existing) {
+      hooks.addHooks(existing);
+    }
+    hooks.hook("build:prepare", prepareDeclarationBoundary);
   };
 }
 
@@ -171,6 +164,7 @@ function prepareDeclarationBoundary({ options }: BuildContext) {
     return;
   }
   const boundary = createDeclarationBoundaryPlugin(options.cwd);
+  // Keep this ahead of inputOptions callback plugins at equal hook priority.
   options.plugins = [options.plugins, boundary];
   if (options.format !== "cjs") {
     return;

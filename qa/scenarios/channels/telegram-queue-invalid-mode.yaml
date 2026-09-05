@@ -19,7 +19,7 @@ scenario:
   codeRefs:
     - extensions/telegram/src/bot-native-commands.ts
     - src/auto-reply/reply/get-reply-directives.ts
-    - src/auto-reply/reply/directive-handling.native.ts
+    - src/auto-reply/reply/directive-handling.arguments.ts
     - src/auto-reply/reply/directive-handling.queue-validation.ts
   execution:
     kind: flow

@@ -40,7 +40,7 @@ type QueueStatus = "pending" | "failed" | "completed";
 type DeliveryQueueStatusRow = {
   queue_name: string;
   status?: QueueStatus;
-  entry_json: string;
+  entry_json: string | null;
   recovery_state: string | null;
 };
 
@@ -92,13 +92,14 @@ export function expireStagingAndLoadDeliveryQueueEntries(params: {
   const snapshot = runSqliteImmediateTransactionSync(
     database.db,
     () => {
-      // sqlite-allow-raw: Expiry must share the write snapshot with both ownership reads.
-      database.db
-        .prepare(
-          `DELETE FROM delivery_queue_entries
-            WHERE queue_name = ? AND status = 'pending' AND enqueued_at <= ?`,
-        )
-        .run(params.stagingQueueName, params.expireBeforeMs);
+      executeSqliteQuerySync(
+        database.db,
+        getNodeSqliteKysely<DeliveryQueueDatabase>(database.db)
+          .deleteFrom("delivery_queue_entries")
+          .where("queue_name", "=", params.stagingQueueName)
+          .where("status", "=", "pending")
+          .where("enqueued_at", "<=", params.expireBeforeMs),
+      );
       const read = (queueNames: readonly string[]) =>
         executeSqliteQuerySync(
           database.db,
@@ -175,14 +176,23 @@ export function getDeliveryQueueEntryOwnersInDatabase(
           database.db,
           queueDb
             .selectFrom("delivery_queue_entries")
-            .select(["queue_name", "status", "entry_json", "recovery_state"])
+            .select(["queue_name", "status", "recovery_state"])
+            .select((eb) =>
+              eb
+                .case("recovery_state")
+                .when("completed_bounded")
+                .then(eb.ref("entry_json"))
+                .else(null)
+                .end()
+                .as("entry_json"),
+            )
             .where("queue_name", "in", queueNames)
             .where("id", "=", id),
         ).rows as DeliveryQueueStatusRow[];
       let rows = readExact();
       let pruned = false;
       for (const row of rows) {
-        if (row.recovery_state !== "completed_bounded") {
+        if (row.entry_json === null) {
           continue;
         }
         const entry = safeParseJsonRecord(row.entry_json);

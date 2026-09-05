@@ -5698,11 +5698,18 @@ td.data-table-key-col {
   line-height: 0;
 }
 
-/* Recovery stays outside a plugin-owned workspace so the built-in UI remains reachable. */
+/* Hide the idle manager; full workspace replacements retain a host-owned escape. */
 .plugin-ui-recovery {
+  display: none;
   position: fixed;
   right: max(12px, env(safe-area-inset-right));
   bottom: max(12px, env(safe-area-inset-bottom));
   z-index: 110;
   box-shadow: var(--shadow-md);
+}
+
+openclaw-plugin-view:not([data-plugin-default-mounted])
+  + openclaw-plugin-manager
+  .plugin-ui-recovery {
+  display: block;
 }

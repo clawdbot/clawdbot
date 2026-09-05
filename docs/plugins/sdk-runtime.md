@@ -58,7 +58,8 @@ Retained channel monitors can bind `createRuntimeConfigReader(cfg)` from
 runtime updates when the supplied config belongs to the active runtime, and
 preserves an explicitly scoped config otherwise, including when no runtime has
 been published yet. Read once per turn and carry that snapshot through admission
-and replies.
+and replies. Process-wide controls such as diagnostics should read at the point
+of emission.
 
 ## Reusable runtime utilities
 
@@ -1220,12 +1221,21 @@ already available to Gateway hooks: `list`, `add`, `update`, `remove`, and
 `removeStaleJobFamily`. Non-Gateway service hosts omit this getter.
 
 Use the service's `start()` and `stop()` methods to own recurring reconciliation.
-They run for plugin replacement as well as Gateway startup and shutdown;
+They run for service or plugin replacement as well as Gateway startup and shutdown;
 `gateway_start` and `gateway_stop` do not replay on plugin-only reload.
 Each returned scheduler handle belongs to one service lifetime and one scheduler
 instance. Calls, including queued writes, reject once service shutdown begins or
 that scheduler is replaced. Call `ctx.getCron()` again to obtain the replacement
 scheduler while the service remains active.
+
+A service can declare `reload: { configPrefixes: ["myConfig.service"] }` alongside
+its `id`, `start`, and `stop`. After a matching config change commits, the Gateway
+stops that service and calls `start(ctx)` again with the new `ctx.config`. Only
+loaded services declaring the matching prefix are replaced; overlapping owners
+all refresh. Existing equal or narrower restart or no-op policies still take precedence.
+Each start receives a new capability lease and health reporter. Stop must release
+resources before resolving; failed replacement cleanup or startup triggers
+Gateway recovery. A full plugin replacement subsumes these service restarts.
 
 Long-lived services registered with `api.registerService(...)` receive a process-local
 `ctx.gatewayEvents` facade when the process runs a Gateway broadcaster; in runtimes without one the

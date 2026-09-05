@@ -7,10 +7,8 @@ import { createRequire } from "node:module";
 import path from "node:path";
 import type { Frame } from "playwright";
 import { expect, inject, it } from "vitest";
-import {
-  disposeAllSessionMcpRuntimes,
-  getOrCreateSessionMcpRuntime,
-} from "../../../src/agents/agent-bundle-mcp-manager-api.js";
+import { disposeAllSessionMcpRuntimes } from "../../../src/agents/agent-bundle-mcp-manager-api.js";
+import { getOrCreateSessionMcpRuntime } from "../../../src/agents/agent-bundle-mcp-manager.test-support.js";
 import { materializeBundleMcpToolsForRun } from "../../../src/agents/agent-bundle-mcp-materialize.js";
 import { getMcpAppViewLease } from "../../../src/agents/mcp-ui-resource.js";
 import { readConfigFileSnapshotWithPluginMetadata } from "../../../src/config/config.js";

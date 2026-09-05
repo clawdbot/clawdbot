@@ -14,6 +14,7 @@ import {
   projectSessionDeliveryFields,
 } from "../utils/delivery-context.shared.js";
 import { createGatewayBroadcaster } from "./server-broadcast.js";
+import { GatewayClientRegistry } from "./server/client-registry.js";
 import { embeddedRunMock, rpcReq, testState, writeSessionStore } from "./test-helpers.js";
 import {
   setupGatewaySessionsTestHarness,
@@ -698,7 +699,7 @@ test("sessions.changed mutations reach plugin subscribers without websocket clie
   await writeMainSessionStore({ label: "Original title" });
   const received = vi.fn();
   const unsubscribe = subscribePluginSessionsChanged(received);
-  const { broadcastToConnIds } = createGatewayBroadcaster({ clients: new Set() });
+  const { broadcastToConnIds } = createGatewayBroadcaster({ clients: new GatewayClientRegistry() });
 
   try {
     await invokeSessionMutation({

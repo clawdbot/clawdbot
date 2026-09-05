@@ -1,9 +1,13 @@
 import { resolveActiveEmbeddedRunSessionId } from "../agents/embedded-agent-runner/active-run-projections.js";
 import { fenceSessionSuspensionWritesForGatewayShutdown } from "../agents/session-suspension.js";
 import { getTotalPendingReplies } from "../auto-reply/reply/dispatcher-registry.js";
-import { listLoadedChannelPlugins } from "../channels/plugins/registry-loaded.js";
-import type { ChannelId } from "../channels/plugins/types.public.js";
+import { listLoadedChannelPluginsForRegistry } from "../channels/plugins/registry-loaded.js";
 import { getRuntimeConfig } from "../config/io.js";
+import type { OpenClawConfig } from "../config/types.openclaw.js";
+import {
+  isDiagnosticsEnabled,
+  setDiagnosticsEnabledForProcess,
+} from "../infra/diagnostic-events.js";
 import { upsertPresence } from "../infra/system-presence.js";
 import { startDiagnosticHeartbeat, stopDiagnosticHeartbeat } from "../logging/diagnostic.js";
 import type { createSubsystemLogger } from "../logging/subsystem.js";
@@ -51,10 +55,9 @@ export async function prepareGatewayLifecycle(params: {
   port: number;
   log: GatewayLogger;
   logCron: GatewayLogger;
-  diagnosticsEnabled: boolean;
   shutdownRuntime: GatewayShutdownRuntime;
 }) {
-  const { runtime, port, log, logCron, diagnosticsEnabled, shutdownRuntime } = params;
+  const { runtime, port, log, logCron, shutdownRuntime } = params;
   const requestEntryLifetime = new GatewayRequestEntryLifetime();
   const {
     minimalTestGateway,
@@ -431,7 +434,7 @@ export async function prepareGatewayLifecycle(params: {
     disposeNodeConnectionNotifications(nodeRegistry);
     watchNodeHttpRuntime.close();
     await shutdownRuntime.runGatewayClosePrelude({
-      ...(diagnosticsEnabled ? { stopDiagnostics: stopDiagnosticHeartbeat } : {}),
+      stopDiagnostics: stopDiagnosticHeartbeat,
       clearSkillsRefreshTimer: () => {
         if (!runtimeState?.skillsRefreshTimer) {
           return;
@@ -542,7 +545,9 @@ export async function prepareGatewayLifecycle(params: {
     // Startup may still publish cleanup owners while received work settles.
     // Resolve their handles only when the caller reaches final teardown.
     return async () => {
-      const channelIds = listLoadedChannelPlugins().map((plugin) => plugin.id as ChannelId);
+      const channelIds = listLoadedChannelPluginsForRegistry(pluginRuntime.registry).map(
+        (plugin) => plugin.id,
+      );
       const transport = transportBridge.current();
       await transport?.portalService.closeAll();
       await shutdownRuntime.completeGatewayClose(
@@ -616,7 +621,16 @@ export async function prepareGatewayLifecycle(params: {
     });
   };
 
-  if (diagnosticsEnabled) {
+  const configureDiagnostics = (config: OpenClawConfig) => {
+    if (lifecycle.closePreludeStarted) {
+      return;
+    }
+    const enabled = isDiagnosticsEnabled(config);
+    setDiagnosticsEnabledForProcess(enabled);
+    if (!enabled) {
+      stopDiagnosticHeartbeat();
+      return;
+    }
     // Gateway lifecycle owns both this existing heartbeat timer and the monitor
     // it samples, so startup failure and normal close tear them down together.
     startDiagnosticHeartbeat(undefined, {
@@ -638,10 +652,12 @@ export async function prepareGatewayLifecycle(params: {
         };
       },
     });
-  }
+  };
+  configureDiagnostics(cfgAtStart);
 
   return {
     ...runtime,
+    configureDiagnostics,
     requestEntryLifetime,
     subscribeSessionMessageEvents,
     unsubscribeSessionMessageEvents,

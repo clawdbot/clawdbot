@@ -26,6 +26,7 @@ import {
 } from "./gateway-config-hot-reload-fixtures.js";
 import { proveHotReloadBrowserLaunch } from "./gateway-config-hot-reload-launch.js";
 import { proveHotReloadNodePolicies } from "./gateway-config-hot-reload-nodes.js";
+import { proveHotReloadOtel } from "./gateway-config-hot-reload-otel.js";
 import { prepareGatewayPairingFixture } from "./gateway-config-hot-reload-pairing.js";
 import { proveHotReloadPluginPolicy } from "./gateway-config-hot-reload-plugin-policy.js";
 import { proveHotReloadPolicyAdmission } from "./gateway-config-hot-reload-policy-admission.js";
@@ -653,6 +654,8 @@ async function runProof(repoRoot: string, outputDir: string, appendLog: (text: s
       failures.push(...terminalDeferred.failures);
       const servicePolicy = await proveHotReloadServicePolicy({ repoRoot, outputDir, appendLog });
       failures.push(...servicePolicy.failures);
+      const otel = await proveHotReloadOtel({ repoRoot, outputDir, appendLog });
+      failures.push(...otel.failures);
       await pluginPolicy;
       await proveGroup("attachments.ttlHours", () => retention!.completion);
       await checkContinuity();
@@ -661,14 +664,15 @@ async function runProof(repoRoot: string, outputDir: string, appendLog: (text: s
         channels.evidence.length +
         security.evidence.length +
         terminalDeferred.evidence.length +
-        servicePolicy.evidence.length;
+        servicePolicy.evidence.length +
+        otel.evidence.length;
       // Positive control: startup-owned Control UI routing must replace the boot.
       const beforeControl = await rpc<ConfigResult>("config.get");
       const control = await rpc<{ sentinel: { payload: { stats: { requiresRestart: boolean } } } }>(
         "config.patch",
         {
           baseHash: beforeControl.hash,
-          raw: JSON.stringify({ gateway: { controlUi: { enabled: false } } }),
+          raw: JSON.stringify({ gateway: { controlUi: { basePath: "/reload-proof" } } }),
         },
       );
       assert.equal(control.sentinel.payload.stats.requiresRestart, true);
@@ -679,6 +683,7 @@ async function runProof(repoRoot: string, outputDir: string, appendLog: (text: s
         primary.hellos > 1 && primary.bootId !== bootId ? true : undefined,
       );
       assert.equal((await http("/chat/qa")).status, 404);
+      assert.equal((await http("/reload-proof/chat/qa")).status, 200);
       summary = {
         passed: failures.length === 0,
         failures,
@@ -688,6 +693,7 @@ async function runProof(repoRoot: string, outputDir: string, appendLog: (text: s
         security,
         terminalDeferred,
         servicePolicy,
+        otel,
         counts: {
           passed: passedChecks,
           failed: failures.length,
@@ -696,9 +702,10 @@ async function runProof(repoRoot: string, outputDir: string, appendLog: (text: s
           security: security.evidence.length,
           terminalDeferred: terminalDeferred.evidence.length,
           servicePolicy: servicePolicy.evidence.length,
+          otel: otel.evidence.length,
         },
         startupOnlyControl: {
-          prefix: "gateway.controlUi.enabled",
+          prefix: "gateway.controlUi.basePath",
           closedPersistentSocket: true,
           originalBootId: bootId,
           replacementBootId: primary.bootId,
@@ -780,7 +787,7 @@ async function main() {
     await writer.write({
       status: passed ? "pass" : "fail",
       durationMs: Date.now() - started,
-      details: `${passedChecks} operation and config-admission checks passed across the primary, channel, security, deferred-restart, and service-policy Gateway fixtures; startup-only positive controls restarted${passed ? "" : `; failures: ${failures.map(({ prefix }) => prefix).join(", ")}`}`,
+      details: `${passedChecks} operation and config-admission checks passed across the primary, channel, security, deferred-restart, service-policy, and OTel Gateway fixtures; startup-only positive controls restarted${passed ? "" : `; failures: ${failures.map(({ prefix }) => prefix).join(", ")}`}`,
       artifacts: [
         { kind: "summary", filePath: summaryPath },
         ...[
@@ -788,6 +795,7 @@ async function main() {
           "channels",
           "terminal-deferred",
           "service-policy",
+          "otel",
           "policy",
           "policy-admission",
           "plugin-policy",

@@ -43,6 +43,9 @@
     }
   },
   "modelCatalog": {
+    "modelsDev": {
+      "openai": "openai"
+    },
     "providers": {
       "openai": {
         "baseUrl": "https://api.openai.com/v1",

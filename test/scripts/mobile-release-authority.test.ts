@@ -56,6 +56,8 @@ type Fixture = {
 };
 
 type FixtureOptions = {
+  baseState?: "android-current" | "prepared";
+  emptyCandidate?: boolean;
   mutateCandidate?: (repository: string) => void;
   platform?: Platform;
 };
@@ -95,6 +97,11 @@ function copyFile(root: string, file: string): void {
 function commit(repository: string, message: string): string {
   git(repository, "add", "-A");
   git(repository, "commit", "-m", message);
+  return git(repository, "rev-parse", "HEAD");
+}
+
+function emptyCommit(repository: string, message: string): string {
+  git(repository, "commit", "--allow-empty", "-m", message);
   return git(repository, "rev-parse", "HEAD");
 }
 
@@ -361,11 +368,31 @@ function createFixture(options: FixtureOptions = {}): Fixture {
   copyFile(source, ".github/actions/mobile-release-authority/authority.mjs");
   writeFile(source, `.github/workflows/${platform}-beta-release.yml`, "name: fixture\n");
   writeBaseReleaseFiles(source);
+  if (options.baseState === "android-current") {
+    writeFile(
+      source,
+      "apps/android/version.json",
+      '{\n  "version": "2026.9.2",\n  "versionCode": 2026090201\n}\n',
+    );
+  } else if (options.baseState === "prepared") {
+    applyMobileReleasePlan(
+      planMobileRelease({
+        gatewayVersion: "2026.9.2",
+        phase: "prepare",
+        rootDir: source,
+      }),
+    );
+  }
   const baseSha = commit(source, "base");
 
-  createCandidate(source);
-  options.mutateCandidate?.(source);
-  const targetSha = commit(source, "candidate");
+  let targetSha: string;
+  if (options.emptyCandidate) {
+    targetSha = emptyCommit(source, "candidate");
+  } else {
+    createCandidate(source);
+    options.mutateCandidate?.(source);
+    targetSha = commit(source, "candidate");
+  }
 
   git(root, "clone", "--no-local", source, trusted);
   git(trusted, "checkout", "--detach", baseSha);
@@ -602,6 +629,43 @@ describe("mobile release authority", () => {
     expect(fs.readFileSync(fixture.ghLog, "utf8")).toContain(
       `"--source-digest","${fixture.baseSha}"`,
     );
+  });
+
+  it.each([
+    [
+      "four-file",
+      "android-current",
+      RELEASE_PATHS.filter((file) => file !== "apps/android/version.json").toSorted(),
+    ],
+    ["one-file", "prepared", ["apps/ios/CHANGELOG.md"]],
+  ] as const)(
+    "authorizes a cutter-exact %s release candidate",
+    (_label, baseState, expectedPaths) => {
+      const fixture = createFixture({ baseState });
+      const changedPaths = git(
+        fixture.source,
+        "diff",
+        "--name-only",
+        fixture.baseSha,
+        fixture.targetSha,
+      ).split("\n");
+
+      expect(changedPaths).toEqual(expectedPaths);
+      expect(authorize(fixture)).toMatchObject({
+        approved: "true",
+        gateway_version: "2026.9.2",
+        target_ref: TARGET_REF,
+        target_sha: fixture.targetSha,
+      });
+    },
+  );
+
+  it("rejects an empty release candidate", () => {
+    const fixture = createFixture({ emptyCandidate: true });
+    const result = runAuthority(fixture, "authorize");
+
+    expect(result.status).toBe(1);
+    expect(result.stderr).toContain("raw diff is empty or malformed");
   });
 
   it.each([

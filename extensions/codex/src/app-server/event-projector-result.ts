@@ -18,7 +18,7 @@ import type { CodexReasoningProjection } from "./event-projector-reasoning.js";
 import { buildCodexMessagesSnapshot } from "./event-projector-snapshot.js";
 import type { CodexToolProgressProjection } from "./event-projector-tool-progress.js";
 import type { CodexToolTranscriptProjection } from "./event-projector-tool-transcript.js";
-import type { CodexResponseCompletionProjection } from "./event-projector-usage.js";
+import type { CodexUsageProjection } from "./event-projector-usage.js";
 import type { CodexProviderRefusal } from "./event-projector-values.js";
 import type { CodexTurn } from "./protocol.js";
 
@@ -49,7 +49,6 @@ type CodexAttemptResultInput = {
   synthesizedMissingToolResultError: string | null;
   recordSynthesizedMissingToolResultError: (error: string) => void;
   aborted: boolean;
-  tokenUsage: EmbeddedRunAttemptResult["attemptUsage"];
   contextTokens: number | undefined;
   contextTokensSource: EmbeddedRunAttemptResult["contextTokensSource"];
   completedCompactionCount: number;
@@ -69,7 +68,7 @@ type CodexAttemptResultInput = {
     | "hasAssistantItemTextForSynthesis"
   >;
   reasoningProjection: Pick<CodexReasoningProjection, "planText" | "reasoningText">;
-  responseCompletions: Pick<CodexResponseCompletionProjection, "modelIterations" | "usage">;
+  usageProjection: Pick<CodexUsageProjection, "modelIterations" | "usage">;
   toolTranscriptProjection: Pick<
     CodexToolTranscriptProjection,
     "synthesizeMissingToolResults" | "transcriptMessages"
@@ -95,16 +94,11 @@ export function buildCodexAttemptResult(
   const commentaryMessages = input.assistantProjection.collectCommentaryMessages();
   const reasoningText = input.reasoningProjection.reasoningText();
   const planText = input.reasoningProjection.planText();
-  // A terminal timeout must not publish exact usage, but the timeout watcher
-  // can still recover a completed assistant. Keep the snapshot masked until
-  // recovery clears the abort instead of destroying it in markTimedOut().
-  const unavailableThreadUsage = input.tokenUsage
-    ? { ...input.tokenUsage, contextUsage: { state: "unavailable" } as const }
-    : undefined;
-  const completedUsage =
-    input.responseCompletions.usage ??
-    (input.responseCompletions.modelIterations > 0 ? unavailableThreadUsage : input.tokenUsage);
-  const projectedUsage = input.aborted ? unavailableThreadUsage : completedUsage;
+  // Timeout recovery may still adopt a completed answer. Mask context freshness
+  // until then, retaining all observed response counts for billing.
+  const usage = input.usageProjection.usage;
+  const projectedUsage =
+    input.aborted && usage ? { ...usage, contextUsage: { state: "unavailable" } as const } : usage;
   const hasAssistantItemText = input.assistantProjection.hasAssistantItemTextForSynthesis();
   const legacyFailClosed =
     !input.completedTurn || input.completedTurn.status !== "completed" || hasAssistantItemText;
@@ -210,8 +204,8 @@ export function buildCodexAttemptResult(
     ...(agentHarnessResultClassification ? { agentHarnessResultClassification } : {}),
     bootstrapPromptWarningSignaturesSeen: input.runParams.bootstrapPromptWarningSignaturesSeen,
     bootstrapPromptWarningSignature: input.runParams.bootstrapPromptWarningSignature,
-    ...(input.responseCompletions.modelIterations > 0
-      ? { modelIterations: input.responseCompletions.modelIterations }
+    ...(input.usageProjection.modelIterations > 0
+      ? { modelIterations: input.usageProjection.modelIterations }
       : {}),
     messagesSnapshot,
     assistantTexts,

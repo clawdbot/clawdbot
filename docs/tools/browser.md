@@ -820,6 +820,10 @@ Notes:
 - This path is higher-risk than the isolated `openclaw` profile because it can
   act inside your signed-in browser session.
 - OpenClaw does not launch the browser for this driver; it only attaches.
+- Stopping or failing an attach closes the owned MCP subprocess and its verified
+  descendants, not the already-running browser. Replacement attaches wait for
+  cleanup; if cleanup cannot be verified, OpenClaw reports an error instead of
+  treating the session as closed.
 - OpenClaw uses the official Chrome DevTools MCP `--autoConnect` flow here. If
   `userDataDir` is set, it is passed through to target that user data directory.
 - Existing-session can attach on the selected host or through a connected

@@ -1992,9 +1992,10 @@ describeBrowserLayout.concurrent("chat responsive browser layout", () => {
         await page.setContent(`<!doctype html><html><head><style>${readUiCss()}</style></head><body style="margin:0;height:100vh;overflow:hidden">
           <div class="shell shell--chat ${label.startsWith("mobile") ? "shell--mobile-nav shell--merged-chat-chrome" : ""}">
             <main class="content content--chat" style="padding:0">
-              <div class="chat-pane-layout">
-                <header class="chat-pane__header">Session</header>
-                <div class="sidebar-region">
+              <div class="sidebar-region">
+                <div class="sidebar-region__header">
+                  <header class="chat-pane__header">Session</header>
+                </div>
                   <div class="sidebar-region__primary" data-region="main">
                     <section class="card chat">
                       <div class="chat-main">
@@ -2013,7 +2014,6 @@ describeBrowserLayout.concurrent("chat responsive browser layout", () => {
                       </div>
                     </section>
                   </div>
-                </div>
               </div>
             </main>
             <openclaw-toast-host data-toast-placement="shell">
@@ -4289,7 +4289,6 @@ describeBrowserLayout.concurrent("chat responsive browser layout", () => {
           `<!doctype html><html><head><style>${readUiCss()}</style></head><body>
           <div style="width: ${width}px; height: ${height}px; display: flex;">
             <div class="sidebar-region sidebar-region--${dock} sidebar-region--open" style="--side-panel-height: 360px">
-              <header class="rail-header" data-region-header="main">Chat</header>
               <main class="sidebar-region__primary" data-region="main">Primary chat</main>
               <section class="side-panel">
                 <div class="rail-header side-panel__header" data-region-header="side">Details</div>
@@ -4310,7 +4309,7 @@ describeBrowserLayout.concurrent("chat responsive browser layout", () => {
         expect(sidebar.width).toBeGreaterThanOrEqual(width - 2);
         expect(primary.height).toBeGreaterThan(80);
         expect(sidebar.height).toBeGreaterThan(80);
-        expect(sidebar.bottom - primary.top).toBeLessThan(height);
+        expect(sidebar.bottom - primary.top).toBe(height);
         if (dock === "bottom" && height === 1000) {
           expect(sidebar.height).toBe(360);
         }

@@ -719,6 +719,8 @@ export function onceMessage<T extends GatewayTestMessage = GatewayTestMessage>(
   // never arrives.
   timeoutMs = 10_000,
 ): Promise<T> {
+  // Keep the wait's caller in the stack when a timer eventually rejects it.
+  const timeoutError = new Error("timeout");
   return new Promise<T>((resolve, reject) => {
     function cleanup() {
       clearTimeout(timer);
@@ -738,7 +740,7 @@ export function onceMessage<T extends GatewayTestMessage = GatewayTestMessage>(
     }
     const timer: ReturnType<typeof setTimeout> = setTimeout(() => {
       cleanup();
-      reject(new Error("timeout"));
+      reject(timeoutError);
     }, timeoutMs);
     timer.unref?.();
     ws.on("message", handler);
