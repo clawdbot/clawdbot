@@ -46,6 +46,8 @@ beforeEach(async () => {
   root = await fs.realpath(await fs.mkdtemp(path.join(os.tmpdir(), "canary-unit-")));
   await fs.mkdir(path.join(root, "dist"));
   await fs.writeFile(path.join(root, "dist", "index.js"), "");
+  await fs.mkdir(path.join(root, "dist", "infra"));
+  await fs.writeFile(path.join(root, "dist", "infra", "update-migrated-finalize.worker.js"), "");
   await fs.writeFile(path.join(root, "package.json"), JSON.stringify({ version: "2026.9.1" }));
   mocks.snapshot.mockResolvedValue({
     code: 0,
@@ -98,6 +100,36 @@ afterEach(async () => {
 });
 
 describe("update candidate canary", () => {
+  it("reports unavailable validation when the candidate predates the migration-continuation contract", async () => {
+    await fs.rm(path.join(root, "dist", "infra", "update-migrated-finalize.worker.js"));
+    vi.stubGlobal(
+      "fetch",
+      vi.fn(async () => Response.json({ status: "started", ready: true })),
+    );
+    const onStep = vi.fn();
+    const result = await validateUpdateCandidateCanary({
+      root,
+      stateDir: root,
+      config: {},
+      env: {},
+      timeoutMs: 3_000,
+      onStep,
+    });
+    expect(result).toMatchObject({ status: "ok", phase: "runtime" });
+    expect(result.candidateSchemaVersions).toBeUndefined();
+    expect(result.steps).toEqual([
+      expect.objectContaining({
+        name: "candidate migration continuation",
+        exitCode: null,
+        stdoutTail:
+          "candidate predates the migration-continuation contract; finalization runs in the current binary",
+      }),
+    ]);
+    expect(onStep).toHaveBeenCalledWith(result.steps[0]);
+    expect(mocks.snapshot).not.toHaveBeenCalled();
+    expect(mocks.spawn).not.toHaveBeenCalled();
+  });
+
   it("rehearses and validates only private state before requiring started then ready, and reaps the process group", async () => {
     const requests: string[] = [];
     const completed: Array<{ name: string; argv: string[] }> = [];

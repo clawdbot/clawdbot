@@ -123,6 +123,8 @@ Doctor lint, config and plugin planning, and an isolated canary boot against
 copied configuration and verified database snapshots. Migrations on these
 copies rehearse the upgrade without changing live state. A validation failure
 leaves the old Gateway running; an `already-current` no-op never stops it.
+Older targets that predate migration continuation record runtime validation as
+unavailable and use the [existing downgrade finalization path](/install/updating#roll-back-a-package-install).
 The detached helper also waits for the `activating` phase before parking its
 parent Gateway. The first activation window contains the swap, required live
 migrations, and service start. Plugin package download and sync run while the

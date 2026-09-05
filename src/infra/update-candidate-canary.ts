@@ -14,6 +14,7 @@ import {
   parseOpenClawSchemaVersions,
   type OpenClawSchemaVersions,
 } from "../state/openclaw-schema-versions.js";
+import { hasErrnoCode } from "./errors.js";
 import { resolveUserPath } from "./home-dir.js";
 import { readPackageVersion } from "./package-json.js";
 import { tryListenOnPort } from "./ports-probe.js";
@@ -57,12 +58,12 @@ type CanaryResult = {
   durationMs: number;
   logTail: string[];
   steps: UpdateStepResult[];
+  candidateSchemaVersions?: OpenClawSchemaVersions;
 } & (
-  | { status: "ok"; candidateSchemaVersions: OpenClawSchemaVersions }
+  | { status: "ok" }
   | {
       status: "error";
       reason: "doctor-failed" | "runtime-verification-failed";
-      candidateSchemaVersions?: OpenClawSchemaVersions;
     }
 );
 
@@ -351,6 +352,35 @@ export async function validateUpdateCandidateCanary(params: {
     if (!entry) {
       throw new Error("Candidate gateway entrypoint is missing");
     }
+    const continuationEntry = path.join(
+      params.root,
+      "dist",
+      runtimeProcessEntrypoints.updateMigratedFinalize.distWorkerPath,
+    );
+    phase = "runtime";
+    try {
+      await fs.lstat(continuationEntry);
+    } catch (error) {
+      if (!hasErrnoCode(error, "ENOENT")) {
+        throw error;
+      }
+      const message =
+        "candidate predates the migration-continuation contract; finalization runs in the current binary";
+      const step: UpdateStepResult = {
+        name: "candidate migration continuation",
+        command: "--check",
+        cwd: params.root,
+        durationMs: Date.now() - started,
+        exitCode: null,
+        stdoutTail: message,
+        advisory: { kind: "candidate-runtime-unavailable", message },
+      };
+      steps.push(step);
+      params.onStep?.(step);
+      // Older targets also lack the isolated canary CLI; retain their shipped finalization path.
+      return { status: "ok", phase, durationMs: Date.now() - started, logTail, steps };
+    }
+    phase = "snapshot";
     const policy = resolveUpdateDoctorExecutionPolicy({
       targetVersion: await readPackageVersion(params.root),
       allowGatewayServiceRepair: false,
@@ -429,11 +459,7 @@ export async function validateUpdateCandidateCanary(params: {
         name: "candidate migration continuation",
         // After a schema bump only a fresh candidate may finalize the run;
         // prove its full recovery import graph before live state changes.
-        entry: path.join(
-          params.root,
-          "dist",
-          runtimeProcessEntrypoints.updateMigratedFinalize.distWorkerPath,
-        ),
+        entry: continuationEntry,
         args: ["--check"],
       },
     ];
@@ -568,7 +594,7 @@ export async function validateUpdateCandidateCanary(params: {
     capture(
       `${phase}: ${error instanceof Error ? error.message : String(error)} (${Date.now() - started}ms)`,
     );
-    if (!steps.length || steps.at(-1)?.exitCode === 0) {
+    if (!steps.length || steps.at(-1)?.exitCode === 0 || steps.at(-1)?.advisory) {
       steps.push({
         name: `candidate ${phase}`,
         command: "candidate validation",

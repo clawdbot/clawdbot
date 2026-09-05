@@ -347,6 +347,7 @@ vi.mock("node:child_process", async () => {
 
 vi.mock("../process/exec.js", () => ({
   runCommandWithTimeout: vi.fn(),
+  runUtf8CommandWithTimeout: vi.fn(),
   runExec: vi.fn(async () => ({
     stdout: new Date(Date.now() - 1000).toString(),
     stderr: "",
@@ -605,7 +606,8 @@ const {
 const { fetchNpmPackageTargetStatus } = await import("../infra/update-check-package-target.js");
 const { CONTROL_PLANE_UPDATE_SENTINEL_META_ENV } =
   await import("../infra/update-control-plane-sentinel.js");
-const { runCommandWithTimeout, runExec } = await import("../process/exec.js");
+const { runCommandWithTimeout, runExec, runUtf8CommandWithTimeout } =
+  await import("../process/exec.js");
 const { runDaemonRestart, runDaemonInstall } = await import("./daemon-cli.js");
 const { doctorCommand } = await import("../commands/doctor.js");
 const { defaultRuntime, ExitError } = await import("../runtime.js");
@@ -3342,6 +3344,35 @@ describe("update-cli", () => {
   ])(
     "finalizes downgrade to $targetVersion with target writer=$fresh",
     async ({ targetVersion, fresh }) => {
+      vi.mocked(runUtf8CommandWithTimeout).mockRejectedValue(
+        new Error("Older target does not contain the migration-continuation worker"),
+      );
+      candidateValidation.mockImplementation(async (options) =>
+        reportCandidateSteps(options, {
+          status: "ok",
+          steps: [
+            {
+              name: "candidate migration continuation",
+              command: "--check",
+              cwd: options.root,
+              durationMs: 0,
+              exitCode: null,
+              advisory: {
+                kind: "candidate-runtime-unavailable",
+                message:
+                  "candidate predates the migration-continuation contract; finalization runs in the current binary",
+              },
+            },
+          ],
+        }),
+      );
+      const inspectOriginalState = expectDefined(stateSchemaVersions.getMockImplementation());
+      stateSchemaVersions.mockImplementation(async (options) => {
+        if (options.root !== undefined) {
+          throw new Error("The older target has no state schema worker");
+        }
+        return inspectOriginalState(options);
+      });
       const { nodeModules, pkgRoot, entryPath } = await setupInstalledPackageRoot(
         createCaseDir("openclaw-downgrade-writer"),
         "2026.9.3-beta.1",

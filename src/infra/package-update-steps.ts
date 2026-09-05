@@ -21,7 +21,6 @@ import { trimLogTail } from "./restart-sentinel.js";
 import {
   PACKAGE_POST_INSTALL_DOCTOR_ADVISORY,
   UPDATE_POST_INSTALL_DOCTOR_ADVISORY_EXIT_CODE,
-  type PackageUpdateStepAdvisory,
   type UpdatePostInstallDoctorResult,
 } from "./update-doctor-result.js";
 import type { GitRuntimeIdentity } from "./update-git-runtime.js";
@@ -292,13 +291,13 @@ export function markPackagePostInstallDoctorAdvisory<
     signal?: NodeJS.Signals | null;
     killed?: boolean;
     termination?: "exit" | "timeout" | "no-output-timeout" | "signal";
-    advisory?: PackageUpdateStepAdvisory;
+    advisory?: UpdateStepResult["advisory"];
   },
 >(
   step: T,
   result: UpdatePostInstallDoctorResult | null,
 ): T & {
-  advisory?: PackageUpdateStepAdvisory;
+  advisory?: UpdateStepResult["advisory"];
 } {
   if (
     step.exitCode !== UPDATE_POST_INSTALL_DOCTOR_ADVISORY_EXIT_CODE ||

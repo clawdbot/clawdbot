@@ -304,11 +304,13 @@ export async function executeMutableUpdate(params: {
         formatSchemaRefusalLines(schemaPreflight).join("\n"),
       );
     }
-    schemaVersions = await readUpdateStateSchemaVersions({
-      stateDir: resolveStateDir(env),
-      config,
-      env,
-    });
+    schemaVersions = candidateSchemaVersions
+      ? await readUpdateStateSchemaVersions({
+          stateDir: resolveStateDir(env),
+          config,
+          env,
+        })
+      : undefined;
     if (
       preManagedServiceStop?.running &&
       preManagedServiceStop.serviceUpdateVerdict?.kind === "owned"
@@ -349,7 +351,7 @@ export async function executeMutableUpdate(params: {
             step: "previous gateway verification",
             status: "completed",
             detail: previousVerified
-              ? "Previous package is running and ready; schema-neutral rollback is available."
+              ? "Previous package is running and ready."
               : "Previous gateway was not verified; automatic rollback cannot restart it.",
             endedAtMs: Date.now(),
           },

@@ -395,7 +395,7 @@ It does not stop, replace, or restart the Gateway. Read-only plugin convergence
 checks can still report repair needs; use `openclaw update repair` to apply them.
 An explicit `--channel` selection still persists the channel for future updates.
 
-For a real update, the old Gateway keeps serving through `staging` and
+For targets that support candidate validation, the old Gateway keeps serving through `staging` and
 `validating`. The updater uses the candidate entrypoint for Doctor lint
 (`doctor --lint --json --severity-min error`), config validation, and read-only
 plugin resolution and compatibility planning. It also rehearses migrations and
@@ -413,9 +413,12 @@ then `/readyz` as ready within a five-minute total budget. Failure records the
 phase, elapsed time, and bounded diagnostics; the canary process group and
 temporary state are cleaned up. This proves candidate startup on copied state;
 live channel and provider behavior are checked after activation.
-Older targets without the required isolated validation support fail before
-activation; use the [manual recovery guidance](/install/updating#roll-back-a-package-install)
-only after checking state compatibility.
+Targets that predate migration continuation record runtime validation as
+unavailable and use the current updater's existing finalization path. A present
+continuation entry with an invalid schema contract still refuses activation.
+The database-schema preflight still refuses incompatible downgrades. These older
+targets do not support automatic schema-neutral rollback; see
+[Downgrade finalization](/install/updating#roll-back-a-package-install).
 
 Only `activating` stops the managed service. Its offline work includes the package
 or checkout swap, required `doctor --fix` migrations, and state compatibility

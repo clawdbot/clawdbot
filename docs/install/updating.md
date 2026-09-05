@@ -29,7 +29,7 @@ openclaw update
 An already-installed package version or Git target SHA finishes as
 `skipped` / `already-current` without stopping or restarting the Gateway.
 An explicit `--channel` choice still becomes the saved update channel.
-For a real update, candidate Doctor lint, config and plugin planning, and a
+For targets that support candidate validation, Doctor lint, config and plugin planning, and a
 canary boot on copied state finish before the service stops. The first activation
 window contains the swap, required migrations, and service start. Plugin packages
 download and sync while the core Gateway serves. A changed plugin snapshot then
@@ -748,6 +748,12 @@ their own version, including when a one-off `--tag` leaves the channel unchanged
 This allows later Gateway restarts without an older-binary override. Older targets
 that lack this finalization behavior can still refuse service activation because
 the configuration records a newer writer; follow the reported recovery guidance.
+
+Targets that predate the migration-continuation worker record runtime validation
+as unavailable and use the current updater's existing finalization path. A present
+worker that reports no schema contract still fails before activation. Database
+schema incompatibility still refuses the downgrade before activation. These older
+targets do not support automatic schema-neutral rollback.
 
 Package updates stage and verify the candidate before activation. If the
 filesystem swap or command-shim replacement fails, OpenClaw restores the old
