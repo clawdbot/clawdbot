@@ -34,6 +34,13 @@ plugin coverage lives in the separate
 [`Full Release Validation`](#full-release-validation) or an explicit manual
 dispatch.
 
+Scheduled QA runs nightly at 04:41 UTC. Its live runtime job runs the
+`gateway-restart-full-access-live` scenario with `openai/gpt-5.6-luna` alongside
+the three-restart replay-safety scenario. The Full Access check must preserve
+shell access and delegation without repeating the interrupted side effect;
+failure fails the job. Both scenarios run serially and retain their reports in
+the job's uploaded artifacts.
+
 ## Pipeline overview
 
 | Job                              | Purpose                                                                                                                                                                                                                                                                                                  | When it runs                                           |
