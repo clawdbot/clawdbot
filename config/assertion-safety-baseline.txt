@@ -2625,7 +2625,7 @@ src/config/sessions/session-accessor.sqlite-canonical-inventory.ts	1
 src/config/sessions/session-accessor.sqlite-checkpoint.ts	3
 src/config/sessions/session-accessor.sqlite-delta.ts	2
 src/config/sessions/session-accessor.sqlite-entry-availability.ts	1
-src/config/sessions/session-accessor.sqlite-entry-cache.ts	3
+src/config/sessions/session-accessor.sqlite-entry-cache.ts	2
 src/config/sessions/session-accessor.sqlite-entry.ts	1
 src/config/sessions/session-accessor.sqlite-history-events.ts	2
 src/config/sessions/session-accessor.sqlite-message-cut.ts	1
