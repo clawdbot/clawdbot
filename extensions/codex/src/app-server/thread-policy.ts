@@ -35,15 +35,18 @@ export class CodexThreadPolicyHandoffError extends AgentHarnessPreflightError {
   }
 }
 
-/** The complete body remains generic configuration for compaction and native child inheritance. */
-export async function refreshCodexThreadPolicy(params: {
+type CodexThreadHandoffParams = {
   client: CodexAppServerClient;
   threadId: string;
-  developerInstructions: string;
   timeoutMs: number;
   signal?: AbortSignal;
   assertCurrent: () => void;
-}): Promise<void> {
+};
+
+/** The complete body remains generic configuration for compaction and native child inheritance. */
+export async function refreshCodexThreadPolicy(
+  params: CodexThreadHandoffParams & { developerInstructions: string },
+): Promise<void> {
   const notice =
     "The following is the complete current OpenClaw-supplied generic instruction policy. It replaces earlier OpenClaw-supplied generic policy, including OpenClaw-carried workspace text and sections now absent. Independently supplied native managed, guardian, security, collaboration, and project instructions retain their authority. User requests retain their own authority.\n\n";
   const text =
@@ -51,6 +54,30 @@ export async function refreshCodexThreadPolicy(params: {
     (params.developerInstructions === ""
       ? "The current OpenClaw generic policy is empty; earlier OpenClaw generic policy is withdrawn."
       : params.developerInstructions);
+  await injectCodexThreadDeveloperHandoff(params, text);
+}
+
+/**
+ * Refreshes only the skill catalog on a live thread whose generic policy cannot
+ * change (ephemeral threads have no resume source). The creation-time catalog stays
+ * in the thread's developer instructions, so the model sees it again after compaction.
+ */
+export async function refreshCodexThreadSkillsCatalog(
+  params: CodexThreadHandoffParams & { skillsInstructions: string | undefined },
+): Promise<void> {
+  const notice =
+    "The following is the complete current OpenClaw skills catalog. It replaces the earlier OpenClaw skills catalog in this conversation.\n\n";
+  const text =
+    notice +
+    (params.skillsInstructions ??
+      "The current OpenClaw skills catalog is empty; the earlier catalog is withdrawn.");
+  await injectCodexThreadDeveloperHandoff(params, text);
+}
+
+async function injectCodexThreadDeveloperHandoff(
+  params: CodexThreadHandoffParams,
+  text: string,
+): Promise<void> {
   let outcome: CodexThreadPolicyHandoffError["outcome"] = "unknown";
   try {
     await requestCodexAppServerClientJson({

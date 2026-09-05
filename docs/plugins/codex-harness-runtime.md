@@ -54,10 +54,16 @@ internal turns suppress project-doc loading and that fallback carrier.
 
 OpenClaw developer instructions cover OpenClaw runtime concerns: source-channel
 delivery, OpenClaw dynamic tools, ACP delegation, adapter context, and the
-active agent workspace profile files. Skill catalogs and tool-routed
-`MEMORY.md` pointers are projected as turn-scoped collaboration developer
-instructions. When memory tools are unavailable, active `BOOTSTRAP.md` content
-and full `MEMORY.md` fall back to plain turn input context instead.
+active agent workspace profile files. The eligible skill catalog is carried
+with those thread developer instructions, after the generic policy, because
+Codex prefers model-catalog collaboration messages over caller collaboration
+instructions. The catalog is refreshable context, not generic policy: a changed
+catalog reaches a persistent thread through the normal policy resume, and
+reaches a live incognito thread as an injected developer message, so editing a
+skill does not end an incognito conversation. Tool-routed `MEMORY.md` pointers
+are projected as turn-scoped collaboration developer instructions. When memory
+tools are unavailable, active `BOOTSTRAP.md` content and full `MEMORY.md` fall
+back to plain turn input context instead.
 
 When `openclaw_direct.sessions_yield` is available, those instructions also
 tell a native Codex parent to end the current turn when a child's result should
