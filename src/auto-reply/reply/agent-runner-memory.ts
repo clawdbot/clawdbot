@@ -1362,8 +1362,13 @@ export async function runMemoryFlushIfNeeded(params: {
       })
     : undefined;
   const transcriptByteSize = sessionLogSnapshot?.byteSize;
+  // The size is now read for CLI sessions even when byte forcing is off, so the
+  // threshold gate has to be explicit here: `forceFlushTranscriptBytes: 0`
+  // disables the trigger, and `size >= 0` would otherwise make it always true.
   const shouldForceFlushByTranscriptSize =
-    typeof transcriptByteSize === "number" && transcriptByteSize >= forceFlushTranscriptBytes;
+    shouldCheckTranscriptSizeForForcedFlush &&
+    typeof transcriptByteSize === "number" &&
+    transcriptByteSize >= forceFlushTranscriptBytes;
 
   // CLI backends were excluded from the flush entirely because their
   // compaction watermark can never advance, so one flush would lock the
