@@ -210,8 +210,10 @@ describe("AcpSessionNewOrdering", () => {
       { outbound: overflow },
     ]);
 
-    // Failing open preserves the update; only its ordering degrades to pre-fix behavior.
-    expect(output).toEqual([overflow]);
+    // Failing open preserves the update, and never reorders it against its own
+    // session: the backlog is released in order first, then the overflow follows.
+    // Only the cross-session ordering degrades to pre-fix behavior.
+    expect(output).toEqual([...buffered, overflow]);
   });
 
   it("releases an established session ID when the session closes", async () => {
@@ -425,6 +427,62 @@ describe("AcpSessionNewOrdering", () => {
     ]);
 
     expect(output).toEqual([accepted, update]);
+  });
+
+  it("keeps a session's later updates behind its own queued backlog", async () => {
+    const ordering = new AcpSessionNewOrdering();
+    const a1 = sessionUpdate("sa", "a1");
+    const b1 = sessionUpdate("sb", "b1");
+    const a2 = sessionUpdate("sa", "a2");
+    const a3 = sessionUpdate("sa", "a3");
+    const resultA = newSessionResponse(1, "sa");
+    const resultB = newSessionResponse(2, "sb");
+
+    const output = await runSteps(ordering, [
+      { inbound: newSessionRequest(1) },
+      { inbound: newSessionRequest(2) },
+      { outbound: a1 },
+      { outbound: b1 },
+      { outbound: a2 },
+      { outbound: resultA },
+      // sa is established now, but a2 is still queued behind b1. a3 must not overtake it.
+      { outbound: a3 },
+      { outbound: resultB },
+    ]);
+
+    expect(output).toEqual([resultA, a1, resultB, b1, a2, a3]);
+  });
+
+  it("keeps recognition established by one load when an overlapping load fails", async () => {
+    const ordering = new AcpSessionNewOrdering();
+    const load = (id: number) =>
+      ({
+        jsonrpc: "2.0",
+        id,
+        method: "session/load",
+        params: { sessionId: "shared", cwd: "/tmp" },
+      }) as AnyMessage;
+    const accepted = { jsonrpc: "2.0", id: 11, result: {} } as AnyMessage;
+    const rejected = {
+      jsonrpc: "2.0",
+      id: 10,
+      error: { code: -32602, message: "no" },
+    } as AnyMessage;
+    const update = sessionUpdate("shared");
+
+    const output = await runSteps(ordering, [
+      { inbound: load(10) },
+      { inbound: load(11) },
+      // The second load succeeds first; the first is then rejected.
+      { outbound: accepted },
+      { outbound: rejected },
+      { inbound: newSessionRequest(12) },
+      { outbound: update },
+    ]);
+
+    // Load 11 confirmed the session. Load 10's rejection retires only its own claim,
+    // so the session stays recognized and its update goes straight out.
+    expect(output).toEqual([accepted, rejected, update]);
   });
 
   it("does not settle a correlation on an agent-initiated request that reuses the id", async () => {

@@ -39,8 +39,8 @@ type QueuedUpdate = { sessionId: string; message: AnyMessage };
  */
 export class AcpSessionNewOrdering {
   /**
-   * Session IDs the protocol established, either by client assertion or by a
-   * `session/new` result.
+   * Session IDs the protocol confirmed: a `session/new` result, or a load/resume
+   * the agent accepted. Provisional claims live separately in `provisionalClaims`.
    *
    * Uncapped, and released by `forget` — on `session/close` and whenever the session
    * store removes the session itself. Every entry corresponds to a session
@@ -65,6 +65,13 @@ export class AcpSessionNewOrdering {
    * in-flight loads, each of which is real work, and cleared by its own response.
    */
   private readonly provisionalSessions = new Map<string, string>();
+  /**
+   * How many in-flight load/resume requests currently claim each session. A session
+   * is recognized while it is confirmed *or* while any claim on it is outstanding,
+   * so a rejected claim retires only itself: if another request for the same
+   * session succeeded meanwhile, or is still pending, recognition survives.
+   */
+  private readonly provisionalClaims = new Map<string, number>();
   /**
    * JSON-RPC IDs of in-flight `session/new` requests, used to correlate the
    * establishing response.
@@ -103,15 +110,15 @@ export class AcpSessionNewOrdering {
     // not exist. The translator rejects those, so recording them here would let a
     // peer grow this set for the lifetime of the process.
     if (SESSION_ESTABLISHING_METHODS.has(method)) {
-      // Only recognition this request introduces is provisional. Reloading a session
-      // that is already established must not make its recognition contingent on the
-      // reload succeeding: the session is live either way, and forgetting it would
-      // park its later updates behind an unrelated pending creation.
-      const alreadyEstablished = this.establishedSessionIds.has(sessionId);
-      this.establish(sessionId);
+      // A load or resume is a claim on the session, recognized immediately so its
+      // updates are never delayed, and confirmed or retired by its own response. It
+      // never writes to the confirmed set directly: two overlapping claims on one
+      // session must resolve independently, so that one failing cannot erase what
+      // the other established.
       const requestId = readRequestId(messageObject?.id);
-      if (!alreadyEstablished && requestId !== undefined) {
+      if (requestId !== undefined) {
         this.provisionalSessions.set(requestId, sessionId);
+        this.provisionalClaims.set(sessionId, (this.provisionalClaims.get(sessionId) ?? 0) + 1);
       }
       return;
     }
@@ -147,14 +154,20 @@ export class AcpSessionNewOrdering {
       ? readRequestId(messageObject?.id)
       : undefined;
     if (responseId !== undefined) {
-      const provisional = this.provisionalSessions.get(responseId);
-      if (provisional !== undefined) {
+      const claimed = this.provisionalSessions.get(responseId);
+      if (claimed !== undefined) {
         this.provisionalSessions.delete(responseId);
-        if (messageObject?.error !== undefined) {
-          // The agent rejected the load or resume, so the session it named was never
-          // accepted and must not outlive the request that proposed it.
-          this.forget(provisional);
+        const remaining = (this.provisionalClaims.get(claimed) ?? 1) - 1;
+        if (remaining > 0) {
+          this.provisionalClaims.set(claimed, remaining);
+        } else {
+          this.provisionalClaims.delete(claimed);
         }
+        if (messageObject?.error === undefined) {
+          this.establish(claimed);
+        }
+        // A rejection retires only this claim. Recognition persists exactly when
+        // the session is confirmed or another claim on it is still outstanding.
       }
     }
     if (responseId !== undefined && this.pendingNewSessionRequestIds.delete(responseId)) {
@@ -174,7 +187,7 @@ export class AcpSessionNewOrdering {
       messageObject?.method === "session/update" &&
       sessionId &&
       this.shouldQueue(sessionId) &&
-      this.enqueue(sessionId, message)
+      this.enqueue(sessionId, message, emit)
     ) {
       return;
     }
@@ -182,8 +195,19 @@ export class AcpSessionNewOrdering {
     emit(message);
   }
 
+  private isRecognized(sessionId: string): boolean {
+    return this.establishedSessionIds.has(sessionId) || this.provisionalClaims.has(sessionId);
+  }
+
   private shouldQueue(sessionId: string): boolean {
-    if (this.establishedSessionIds.has(sessionId)) {
+    // A session with updates still queued keeps queuing, recognized or not. Letting
+    // a newer update through while older ones wait behind another session's entry
+    // would deliver them out of order within the session — initial metadata after
+    // newer state — which is worse than the cross-session delay it would avoid.
+    if (this.queuedPerSession.has(sessionId)) {
+      return true;
+    }
+    if (this.isRecognized(sessionId)) {
       return false;
     }
     return this.pendingNewSessionRequestIds.size > 0;
@@ -194,14 +218,39 @@ export class AcpSessionNewOrdering {
   }
 
   /** @returns false when a bound is reached and the caller must write the update through. */
-  private enqueue(sessionId: string, message: AnyMessage): boolean {
+  private enqueue(
+    sessionId: string,
+    message: AnyMessage,
+    emit: (message: AnyMessage) => void,
+  ): boolean {
     const queued = this.queuedPerSession.get(sessionId) ?? 0;
     if (queued >= MAX_QUEUED_UPDATES_PER_SESSION) {
+      // Fail open, but never out of order within the session: release everything
+      // this session has queued, in order, before the caller writes this one through.
+      // Cross-session order degrades here; intra-session order does not.
+      this.releaseSession(sessionId, emit);
       return false;
     }
     this.queue.push({ sessionId, message });
     this.queuedPerSession.set(sessionId, queued + 1);
     return true;
+  }
+
+  /** Emits one session's queued updates in order and removes them from the queue. */
+  private releaseSession(sessionId: string, emit: (message: AnyMessage) => void): void {
+    if (!this.queuedPerSession.delete(sessionId)) {
+      return;
+    }
+    let kept = 0;
+    for (const entry of this.queue) {
+      if (entry.sessionId === sessionId) {
+        emit(entry.message);
+        continue;
+      }
+      this.queue[kept] = entry;
+      kept += 1;
+    }
+    this.queue.length = kept;
   }
 
   /**
@@ -219,7 +268,7 @@ export class AcpSessionNewOrdering {
     const nothingOutstanding = this.pendingNewSessionRequestIds.size === 0;
     let released = 0;
     for (const entry of this.queue) {
-      if (!nothingOutstanding && !this.establishedSessionIds.has(entry.sessionId)) {
+      if (!nothingOutstanding && !this.isRecognized(entry.sessionId)) {
         break;
       }
       emit(entry.message);
