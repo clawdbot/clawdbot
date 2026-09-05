@@ -811,6 +811,10 @@ describe("managed llama-server", () => {
         };
         const model = {
           id: "custom-chat",
+          name: "Custom Chat",
+          reasoning: false,
+          input: ["text" as const],
+          cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
           params: { modelPath: source, contextSize: 8192 },
           maxTokens: 1024,
         };
