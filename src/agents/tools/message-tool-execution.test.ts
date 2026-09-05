@@ -83,4 +83,41 @@ describe("message tool queued gateway delivery", () => {
       tool.execute("ordinary-failure", { action: "send", message: "hello" }),
     ).rejects.toBe(error);
   });
+
+  it("rejects a message action that does not settle before its gateway timeout", async () => {
+    vi.useFakeTimers();
+    const runMessageAction = vi.fn(() => new Promise<never>(() => {}));
+    const tool = createMessageTool({
+      config: {},
+      preparedMessageToolCatalog: EMPTY_CATALOG,
+      sourceReplyOnly: true,
+      sourceReplyDeliveryMode: "message_tool_only",
+      currentChannelProvider: "telegram",
+      currentChannelId: "chat-123",
+      currentMessagingTarget: "chat-123",
+      getScopedChannelsCommandSecretTargets: () => ({ targetIds: new Set<string>() }),
+      resolveCommandSecretRefsViaGateway: async ({ config }) => ({
+        resolvedConfig: config,
+        diagnostics: [],
+        targetStatesByPath: {},
+        hadUnresolvedTargets: false,
+      }),
+      runMessageAction,
+    });
+
+    const result = tool.execute("message-timeout", {
+      action: "send",
+      message: "hello",
+    });
+    const outcome = result.then(
+      () => undefined,
+      (error: unknown) => error,
+    );
+
+    await vi.advanceTimersByTimeAsync(1);
+    expect(runMessageAction).toHaveBeenCalledOnce();
+    await vi.advanceTimersByTimeAsync(30_000);
+    expect(String(await outcome)).toMatch(/timed out|timeout/i);
+    vi.useRealTimers();
+  });
 });

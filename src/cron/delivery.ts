@@ -10,6 +10,7 @@ import { createOutboundSendDeps } from "../cli/outbound-send-deps.js";
 import type { OpenClawConfig } from "../config/types.js";
 import { resolveAgentOutboundIdentity } from "../infra/outbound/identity.js";
 import { buildOutboundSessionContext } from "../infra/outbound/session-context.js";
+import { withAbortTimeout } from "../utils/with-abort-timeout.js";
 import { resolveCronDeliveryPlan } from "./delivery-plan.js";
 import {
   resolveDeliveryTarget,
@@ -19,6 +20,8 @@ import { resolveCronNotificationSessionKey } from "./session-target.js";
 import type { CronMessageChannel } from "./types.js";
 
 export { resolveCronDeliveryPlan };
+
+const CRON_ANNOUNCE_TIMEOUT_MS = 30_000;
 
 /** Channel target metadata used for cron announcements and failure notifications. */
 type CronAnnounceTarget = {
@@ -111,25 +114,31 @@ export async function sendCronAnnouncePayloadStrict(params: {
   // Cron delivery is durable and non-best-effort for primary announces; partial
   // channel failure must surface as a cron run failure.
   let recipientReached = false;
-  const send = await sendDurableMessageBatchCore({
-    cfg: params.cfg,
-    channel: delivery.resolvedTarget.channel,
-    to: delivery.resolvedTarget.to,
-    accountId: delivery.resolvedTarget.accountId,
-    threadId: delivery.resolvedTarget.threadId,
-    payloads: [params.payload],
-    session: delivery.session,
-    identity: delivery.identity,
-    bestEffort: false,
-    deps: createOutboundSendDeps(params.deps),
-    signal: params.abortSignal,
-    onDeliveryResult: () => {
-      if (!recipientReached) {
-        recipientReached = true;
-        params.onDeliveryAttempt?.(true);
-      }
-    },
-  });
+  const send = await withAbortTimeout(
+    (signal) =>
+      sendDurableMessageBatchCore({
+        cfg: params.cfg,
+        channel: delivery.resolvedTarget.channel,
+        to: delivery.resolvedTarget.to,
+        accountId: delivery.resolvedTarget.accountId,
+        threadId: delivery.resolvedTarget.threadId,
+        payloads: [params.payload],
+        session: delivery.session,
+        identity: delivery.identity,
+        bestEffort: false,
+        deps: createOutboundSendDeps(params.deps),
+        signal,
+        onDeliveryResult: () => {
+          if (!recipientReached) {
+            recipientReached = true;
+            params.onDeliveryAttempt?.(true);
+          }
+        },
+      }),
+    CRON_ANNOUNCE_TIMEOUT_MS,
+    params.abortSignal,
+    `cron announcement delivery timed out after ${CRON_ANNOUNCE_TIMEOUT_MS}ms`,
+  );
   if (!recipientReached) {
     params.onDeliveryAttempt?.(durableMessageBatchMayHaveReachedRecipient(send));
   }

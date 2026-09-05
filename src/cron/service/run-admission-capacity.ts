@@ -1,8 +1,9 @@
 import { DEFAULT_CRON_MAX_CONCURRENT_RUNS } from "../../config/cron-limits.js";
+import { getSchedulerPressureSnapshot } from "../../infra/scheduler-pressure.js";
 import type { CronServiceState } from "./state.js";
 
 export function resolveRunConcurrency(): number {
-  return DEFAULT_CRON_MAX_CONCURRENT_RUNS;
+  return getSchedulerPressureSnapshot().pressured ? 1 : DEFAULT_CRON_MAX_CONCURRENT_RUNS;
 }
 
 function acquireCronRunSlot(state: CronServiceState): () => void {

@@ -112,6 +112,33 @@ describe("sendCronAnnouncePayloadStrict", () => {
     expect(mocks.deliverOutboundPayloads).not.toHaveBeenCalled();
   });
 
+  it("hard-times out a channel delivery that ignores cancellation", async () => {
+    vi.useFakeTimers();
+    mocks.deliverOutboundPayloads.mockImplementationOnce(
+      () => new Promise<never>(() => {}),
+    );
+
+    try {
+      const delivery = sendCronAnnouncePayloadStrict({
+        deps: {} as never,
+        cfg: {} as never,
+        agentId: "main",
+        jobId: "job-1",
+        target: { channel: "telegram", to: "123" },
+        payload: { text: "Automation failed" },
+        abortSignal: new AbortController().signal,
+      });
+      const rejection = expect(delivery).rejects.toThrow(/timed out|timeout/i);
+
+      await vi.advanceTimersByTimeAsync(0);
+      expect(mocks.deliverOutboundPayloads).toHaveBeenCalledOnce();
+      await vi.advanceTimersByTimeAsync(30_000);
+      await rejection;
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
   it("reports the first recipient result before later delivery work settles", async () => {
     let releaseDelivery = () => {};
     const pendingDelivery = new Promise<void>((resolve) => {

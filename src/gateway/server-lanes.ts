@@ -5,6 +5,12 @@ import { resolveAgentMaxConcurrent, resolveSubagentMaxConcurrent } from "../conf
 import { resolveCronMaxConcurrentRuns } from "../config/cron-limits.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import {
+  getSchedulerPressureSnapshot,
+  onSchedulerPressureChanged,
+  setSchedulerCronConcurrency,
+  startSchedulerPressureTracking,
+} from "../infra/scheduler-pressure.js";
+import {
   getCommandLaneSnapshot,
   publishLaneConfiguration,
   setCommandLaneConcurrency,
@@ -30,6 +36,8 @@ const HOOK_DISPATCH_LANE_RESERVATION = 1;
 
 /** Group bounding cron inner work and hook dispatch to one shared budget. */
 const CRON_HOOK_LANE_GROUP = "cron-hooks";
+let configuredLaneConcurrency: GatewayLaneConcurrency | undefined;
+let pressureListenerStarted = false;
 
 export function resolveGatewayLaneConcurrency(cfg: OpenClawConfig): GatewayLaneConcurrency {
   const cron = resolveCronMaxConcurrentRuns();
@@ -47,12 +55,31 @@ export function applyGatewayLaneConcurrency(
   concurrency: GatewayLaneConcurrency,
   opts: { gatewayStart?: boolean } = {},
 ): void {
+  configuredLaneConcurrency = concurrency;
+  startSchedulerPressureTracking();
+  if (!pressureListenerStarted) {
+    pressureListenerStarted = true;
+    onSchedulerPressureChanged(() => {
+      if (configuredLaneConcurrency) {
+        publishGatewayLaneConcurrency(configuredLaneConcurrency);
+      }
+    });
+  }
+  publishGatewayLaneConcurrency(concurrency, opts);
+}
+
+function publishGatewayLaneConcurrency(
+  concurrency: GatewayLaneConcurrency,
+  opts: { gatewayStart?: boolean } = {},
+): void {
   if (opts.gatewayStart) {
     enableSessionSuspensionWritesForGatewayStart();
   }
+  const effectiveCronConcurrency = getSchedulerPressureSnapshot().pressured ? 1 : concurrency.cron;
+  setSchedulerCronConcurrency(concurrency.cron, effectiveCronConcurrency);
   // Resolution is deliberately separate: this commit-edge applier only updates
   // live queue state and cannot reject a config midway through publication.
-  setCommandLaneConcurrency(CommandLane.Cron, concurrency.cron);
+  setCommandLaneConcurrency(CommandLane.Cron, effectiveCronConcurrency);
   // `cron-nested` (cron inner agent work) and `hook-dispatch` (external hook
   // agent runs) are published as ONE transaction together with the group that
   // bounds them. Applying them with the per-lane setter would drain each lane
@@ -67,7 +94,7 @@ export function applyGatewayLaneConcurrency(
   const retainInFlightHookBudget = !hooksEnabled && hookSnapshot.activeCount > 0;
   publishLaneConfiguration({
     lanes: {
-      [CommandLane.CronNested]: concurrency.cron,
+      [CommandLane.CronNested]: effectiveCronConcurrency,
       [CommandLane.HookDispatch]: concurrency.hookDispatch,
     },
     // Opt-in. A clean hooks-off publication installs no group and
@@ -82,7 +109,7 @@ export function applyGatewayLaneConcurrency(
             // that cap rather than adding one outside it. Cron inner work
             // trades one slot for the guarantee that hooks cannot be starved.
             [CRON_HOOK_LANE_GROUP]: {
-              budget: concurrency.cron,
+              budget: effectiveCronConcurrency,
               members: [CommandLane.CronNested, CommandLane.HookDispatch],
               reservations: hooksEnabled
                 ? { [CommandLane.HookDispatch]: HOOK_DISPATCH_LANE_RESERVATION }
