@@ -113,9 +113,9 @@ describe("pending spawn invocation authority", () => {
         stream: "lifecycle",
         data: { phase: "end", endedAt: Date.now() },
       });
-      await settleSubagentRegistryPersistenceWork();
-      expect(findTaskByRunId("b")?.status).toBe("succeeded");
+      await vi.waitFor(() => expect(findTaskByRunId("b")?.status).toBe("succeeded"));
       clearAgentRunContext("b");
+      await settleSubagentRegistryPersistenceWork();
       expect(completedB).toMatchObject({
         generation: completedGeneration,
         spawnMode: "session",
