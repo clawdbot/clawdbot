@@ -1,6 +1,6 @@
 // Session diff RPC tests run against real throwaway git repos so the parsing
 // stays honest about git's -z output and --no-index untracked handling.
-import { execFileSync } from "node:child_process";
+import { execFileSync, spawnSync } from "node:child_process";
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
@@ -660,6 +660,57 @@ describe("loadSessionDiff", () => {
     expect(result.truncated).toBe(true);
   });
 
+  it.each([
+    { name: "custom prefixes", config: "srcPrefix = before/\n dstPrefix = after/" },
+    { name: "no prefixes", config: "noprefix = true" },
+    { name: "mnemonic prefixes", config: "mnemonicPrefix = true" },
+    { name: "oversized prefixes", config: `srcPrefix = ${"x".repeat(220_000)}` },
+  ])("keeps tracked and untracked previews under $name", async ({ config }) => {
+    initRepo(repoRoot);
+    fs.writeFileSync(path.join(repoRoot, "tracked.txt"), "before\n");
+    git(repoRoot, "add", ".");
+    git(repoRoot, "commit", "-qm", "init");
+    fs.appendFileSync(path.join(repoRoot, ".git", "config"), `\n[diff]\n ${config}\n`);
+    fs.appendFileSync(path.join(repoRoot, "tracked.txt"), "after\n");
+    fs.writeFileSync(path.join(repoRoot, "untracked.txt"), "new\n");
+    mockSession(repoRoot);
+
+    const result = await loadSessionDiff({ sessionKey: "agent:main:s1" });
+
+    expect(result.files.map((file) => [file.path, file.additions])).toEqual([
+      ["tracked.txt", 1],
+      ["untracked.txt", 1],
+    ]);
+    for (const file of result.files) {
+      expect(file.patch).toContain(`+++ b/${file.path}\n`);
+      expect(file.truncated).toBeUndefined();
+    }
+    expect(result.files[0]?.patch).toContain("--- a/tracked.txt\n");
+  });
+
+  it("keeps carriage-return header-like content as text in both diff paths", async () => {
+    initRepo(repoRoot);
+    fs.writeFileSync(path.join(repoRoot, "tracked.txt"), "before\n");
+    git(repoRoot, "add", ".");
+    git(repoRoot, "commit", "-qm", "init");
+    const content =
+      "\rBinary files a/x and b/x differ\n\r@@ -0,0 +1,999 @@\n\rdiff --git a/fake b/fake\n\r+++ b/fake\nlast\n";
+    fs.appendFileSync(path.join(repoRoot, "tracked.txt"), content);
+    fs.writeFileSync(path.join(repoRoot, "untracked.txt"), content);
+    mockSession(repoRoot);
+
+    const result = await loadSessionDiff({ sessionKey: "agent:main:s1" });
+
+    for (const file of result.files) {
+      expect(file.additions).toBe(5);
+      expect(file.binary).not.toBe(true);
+      for (const line of content.split("\n").slice(0, -1)) {
+        expect(file.patch).toContain(`+${line}\n`);
+      }
+    }
+    expect(result.additions).toBe(10);
+  });
+
   it.skipIf(process.platform === "win32")(
     "preserves tab, newline, and non-ASCII filenames in tracked and untracked statistics",
     async () => {
@@ -697,12 +748,12 @@ describe("loadSessionDiff", () => {
       normalized: `${"A".repeat(60_000)}\n`,
     },
   ])(
-    "keeps fitting untracked previews after $name with verbose diagnostics",
+    "keeps fitting untracked previews after $name without extra conversion passes",
     async ({ attribute, content, normalized }) => {
       initRepo(repoRoot);
       fs.writeFileSync(
         path.join(repoRoot, ".git", "verbose-filter.mjs"),
-        'process.stderr.write("diagnostic\\n".repeat(10_000)); process.stdin.pipe(process.stdout);\n',
+        'import { appendFileSync } from "node:fs"; appendFileSync(".git/filter-calls", "call\\n"); process.stderr.write("diagnostic\\n".repeat(10_000)); process.stdin.pipe(process.stdout);\n',
       );
       git(repoRoot, "config", "filter.verbose.clean", "node .git/verbose-filter.mjs");
       fs.writeFileSync(
@@ -712,6 +763,27 @@ describe("loadSessionDiff", () => {
       git(repoRoot, "add", ".gitattributes");
       git(repoRoot, "commit", "-qm", "attributes");
       fs.writeFileSync(path.join(repoRoot, "converted.txt"), content);
+      const native = spawnSync(
+        "git",
+        [
+          "-C",
+          repoRoot,
+          "diff",
+          "--no-color",
+          "--no-ext-diff",
+          "--no-textconv",
+          "--no-index",
+          "--",
+          "/dev/null",
+          "converted.txt",
+        ],
+        { encoding: "utf8" },
+      );
+      expect(native.status).toBe(1);
+      const callsPath = path.join(repoRoot, ".git", "filter-calls");
+      const nativeCalls = fs.readFileSync(callsPath, "utf8");
+      expect(nativeCalls.length).toBeGreaterThan(0);
+      fs.writeFileSync(callsPath, "");
       mockSession(repoRoot);
 
       const result = await loadSessionDiff({ sessionKey: "agent:main:s1" });
@@ -720,6 +792,7 @@ describe("loadSessionDiff", () => {
       expect(result.files[0]?.additions).toBe(1);
       expect(result.files[0]?.patch?.includes(`+${normalized}`)).toBe(true);
       expect(result.files[0]?.truncated).toBeUndefined();
+      expect(fs.readFileSync(callsPath, "utf8")).toBe(nativeCalls);
     },
   );
 

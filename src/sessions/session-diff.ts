@@ -28,6 +28,16 @@ const MAX_BASELINE_TOTAL_BYTES = 16 * 1024 * 1024;
 // Past this the full-patch git call is skipped entirely: runGit buffers stdout
 // in memory, so a pathological diff must degrade to stats-only entries.
 const MAX_TOTAL_CHANGED_LINES = 100_000;
+// Patch consumers require a/b paths. Pin formatting without changing Git's
+// content conversions; read-scoped RPCs must not execute diff/textconv drivers.
+const PATCH_DIFF_ARGS = [
+  "--patch",
+  "--no-color",
+  "--no-ext-diff",
+  "--no-textconv",
+  "--src-prefix=a/",
+  "--dst-prefix=b/",
+];
 
 type FileStatus = SessionDiffFile["status"];
 
@@ -146,21 +156,21 @@ export function parseNumstatZ(text: string): Map<string, NumstatEntry> {
 }
 
 function chunkPath(chunk: string): string | null {
-  const newFile = /^\+\+\+ b\/(.+)$/m.exec(chunk);
+  const newFile = /(?:^|\n)\+\+\+ b\/([^\n]+)(?:\n|$)/.exec(chunk);
   if (newFile) {
     return expectDefined(newFile[1], "new file capture group 1");
   }
   // Deleted files have `+++ /dev/null`; key the chunk by the old path.
-  const oldFile = /^--- a\/(.+)$/m.exec(chunk);
+  const oldFile = /(?:^|\n)--- a\/([^\n]+)(?:\n|$)/.exec(chunk);
   if (oldFile) {
     return expectDefined(oldFile[1], "old file capture group 1");
   }
   // Pure renames and binary chunks have neither marker line.
-  const renameTo = /^rename to (.+)$/m.exec(chunk);
+  const renameTo = /(?:^|\n)rename to ([^\n]+)(?:\n|$)/.exec(chunk);
   if (renameTo) {
     return expectDefined(renameTo[1], "rename to capture group 1");
   }
-  const header = /^diff --git a\/.+ b\/(.+)$/m.exec(chunk);
+  const header = /(?:^|\n)diff --git a\/[^\n]+ b\/([^\n]+)(?:\n|$)/.exec(chunk);
   return header ? expectDefined(header[1], "header capture group 1") : null;
 }
 
@@ -170,7 +180,8 @@ export function splitPatchByFile(patch: string): Map<string, string> {
   if (!patch.trim()) {
     return byPath;
   }
-  const parts = patch.split(/^(?=diff --git )/m);
+  // Git records end at LF; JavaScript multiline anchors also match content CRs.
+  const parts = patch.split(/(?<=\n)(?=diff --git )/);
   for (const part of parts) {
     if (!part.startsWith("diff --git ")) {
       continue;
@@ -183,8 +194,18 @@ export function splitPatchByFile(patch: string): Map<string, string> {
   return byPath;
 }
 
-function isBinaryChunk(chunk: string): boolean {
-  return /^Binary files .* differ$/m.test(chunk) || chunk.includes("\nGIT binary patch\n");
+function readPatchHeader(chunk: string): { additions?: number; binary: boolean } {
+  // A null-to-file addition has one hunk spanning the converted postimage.
+  // Stop at the first LF-delimited header so content (including CR) cannot
+  // masquerade as binary metadata or a later hunk.
+  const header = /(?:^|\n)(@@ [^\n]*|Binary files [^\n]* differ|GIT binary patch)\n/.exec(
+    chunk,
+  )?.[1];
+  const added = /^@@ -0,0 \+1(?:,(\d+))? @@(?: |$)/.exec(header ?? "");
+  return {
+    ...(added ? { additions: Number(added[1] ?? 1) } : {}),
+    binary: header !== undefined && !header.startsWith("@@ "),
+  };
 }
 
 /**
@@ -251,12 +272,6 @@ async function collectUntrackedFiles(
       file.truncated = true;
       continue;
     }
-    const patchLimit = Math.min(MAX_PATCH_BYTES_PER_FILE, budget.remaining);
-    // Git converts working-tree contents before diffing, so raw file size
-    // cannot establish whether its patch fits the remaining preview budget.
-    const includePatch = patchLimit > 0;
-    // --no-textconv: checkout-configurable textconv drivers must never run
-    // from this read-scoped RPC (same reason as --no-ext-diff).
     const result = await runCommandBuffered(
       [
         "git",
@@ -265,12 +280,7 @@ async function collectUntrackedFiles(
         "-c",
         "core.quotePath=false",
         "diff",
-        "--numstat",
-        "-z",
-        ...(includePatch ? ["--patch"] : []),
-        "--no-color",
-        "--no-ext-diff",
-        "--no-textconv",
+        ...PATCH_DIFF_ARGS,
         "--no-index",
         "--",
         "/dev/null",
@@ -279,18 +289,16 @@ async function collectUntrackedFiles(
       {
         timeoutMs: GIT_TIMEOUT_MS,
         env: gitEnvironment(),
-        maxOutputBytes: MAX_PATCH_BYTES_PER_FILE + patchLimit,
+        maxOutputBytes: MAX_PATCH_BYTES_PER_FILE,
         // This RPC does not consume Git diagnostics. Verbose converters must
         // not abort otherwise valid diff output by filling an unused stream.
         discardOutput: { stderr: true },
       },
     );
     const patchTruncated =
-      includePatch &&
-      result.termination === "output-limit" &&
-      result.outputLimitStream === "stdout";
-    // --no-index exits 1 for differences, but also for missing input. Require
-    // complete numstat metadata before retaining counts from a capped patch.
+      result.termination === "output-limit" && result.outputLimitStream === "stdout";
+    // --no-index exits 1 for differences, but also for missing input, which
+    // has no patch. A complete first hunk retains counts even when its body clips.
     if (
       !patchTruncated &&
       (result.termination !== "exit" || (result.code !== 0 && result.code !== 1))
@@ -298,26 +306,18 @@ async function collectUntrackedFiles(
       file.truncated = true;
       continue;
     }
-    const output = result.stdout.toString("utf8");
-    // Git separates NUL-delimited numstat records from the patch with an
-    // additional NUL; pathnames cannot contain this boundary.
-    const metadataEnd = includePatch
-      ? output.indexOf("\0\0") + 1
-      : output.endsWith("\0")
-        ? output.length
-        : 0;
-    const stat = parseNumstatZ(output.slice(0, metadataEnd)).get(filePath);
-    if (!stat) {
+    const patch = result.stdout.toString("utf8");
+    if (!patch.startsWith("diff --git ")) {
       file.truncated = true;
       continue;
     }
-    file.additions = stat.additions;
-    if (stat.binary) {
+    const header = readPatchHeader(patch);
+    file.additions = header.additions ?? 0;
+    if (header.binary) {
       file.binary = true;
       continue;
     }
-    const patch = includePatch && !patchTruncated ? output.slice(metadataEnd + 1) : undefined;
-    Object.assign(file, takePatch(patch, budget));
+    Object.assign(file, takePatch(patchTruncated ? undefined : patch, budget));
   }
   return { files, truncated };
 }
@@ -343,19 +343,17 @@ async function collectTrackedFiles(
     (sum, entry) => sum + entry.additions + entry.deletions,
     0,
   );
-  // --no-textconv alongside --no-ext-diff: repo config + .gitattributes can
-  // define textconv commands, and a read RPC must never execute them.
   const patchText =
     totalChangedLines > MAX_TOTAL_CHANGED_LINES
       ? null
-      : await gitOut(root, diffArgs(["--patch", "--no-color", "--no-ext-diff", "--no-textconv"]));
+      : await gitOut(root, diffArgs(PATCH_DIFF_ARGS));
   const chunks = patchText === null ? new Map<string, string>() : splitPatchByFile(patchText);
   const truncated = entries.length > MAX_FILES;
   const files: SessionDiffFile[] = [];
   for (const entry of entries.slice(0, MAX_FILES)) {
     const stat = numstat.get(entry.path);
     const chunk = chunks.get(entry.path);
-    const binary = stat?.binary === true || (chunk !== undefined && isBinaryChunk(chunk));
+    const binary = stat?.binary === true || (chunk !== undefined && readPatchHeader(chunk).binary);
     const file: SessionDiffFile = {
       path: entry.path,
       status: entry.status,
