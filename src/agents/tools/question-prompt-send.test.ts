@@ -64,6 +64,8 @@ describe("createChannelQuestionPromptDelivery", () => {
         to: "1",
         accountId: "default",
         payloads: [{ text: "Question for you:" }],
+        bestEffort: false,
+        durability: "required",
         deliveryRetryOwner: "caller",
         signal,
       }),

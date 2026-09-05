@@ -62,8 +62,8 @@ export function createChannelQuestionPromptDelivery(params: {
         accountId: params.accountId,
         threadId: params.threadId ?? undefined,
         payloads: [payload],
-        bestEffort: true,
-        durability: "best_effort",
+        bestEffort: false,
+        durability: "required",
         deliveryRetryOwner: "caller",
         signal: options?.signal,
       });
