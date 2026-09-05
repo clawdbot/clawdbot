@@ -3071,12 +3071,12 @@ src/infra/kysely-sync.ts	9
 src/infra/net/fetch-guard.ts	3
 src/infra/net/form-data.ts	2
 src/infra/net/node-proxy-agent.ts	4
-src/infra/net/proxy-fetch.ts	3
+src/infra/net/proxy-fetch.ts	2
 src/infra/net/proxy/proxy-validation.ts	1
 src/infra/net/runtime-fetch.ts	5
 src/infra/net/ssrf.ts	7
-src/infra/net/undici-dispatcher-options.ts	4
-src/infra/net/undici-global-dispatcher.ts	4
+src/infra/net/undici-dispatcher-options.ts	3
+src/infra/net/undici-global-dispatcher.ts	2
 src/infra/node-commands.ts	1
 src/infra/node-sqlite.ts	3
 src/infra/npm-managed-root.ts	8
