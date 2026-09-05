@@ -1,5 +1,6 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { UpdateRunRecord } from "../infra/update-run-record.js";
+import { createDeferredCore } from "../shared/deferred.js";
 import { startUpdateRunWatcher, wakeUpdateRunWatcher } from "./update-run-watcher.js";
 
 const ledger = vi.hoisted(() => ({
@@ -28,8 +29,8 @@ beforeEach(() => {
   ledger.reads.mockClear();
   ledger.notice.mockClear();
 });
-afterEach(() => {
-  watcher?.stop();
+afterEach(async () => {
+  await watcher?.stop();
   watcher = undefined;
   vi.useRealTimers();
 });
@@ -50,6 +51,40 @@ function currentRunEvent() {
 }
 
 describe("Gateway update run watcher", () => {
+  it("joins an entered notice during shutdown and retires queued notices", async () => {
+    beginRun();
+    const notice = createDeferredCore();
+    const events: string[] = [];
+    ledger.notice.mockImplementationOnce(async () => {
+      events.push("notice-started");
+      await notice.promise;
+      events.push("notice-completed");
+    });
+    watcher = startUpdateRunWatcher({ broadcast: vi.fn(), log: { warn: vi.fn() } });
+    ledger.run = { ...ledger.run!, phase: "activating", updatedAtMs: 2 };
+    await vi.advanceTimersByTimeAsync(2_000);
+    ledger.run = {
+      ...ledger.run!,
+      phase: "finished",
+      status: "succeeded",
+      updatedAtMs: 3,
+      steps: [{ step: "notice:ack", status: "completed" }],
+    };
+    await vi.advanceTimersByTimeAsync(2_000);
+    const stopping = Promise.resolve(watcher.stop()).then(() => events.push("stopped"));
+    try {
+      await vi.advanceTimersByTimeAsync(0);
+      expect(events).toEqual(["notice-started"]);
+      notice.resolve();
+      await stopping;
+      expect(events).toEqual(["notice-started", "notice-completed", "stopped"]);
+      expect(ledger.notice).toHaveBeenCalledOnce();
+    } finally {
+      notice.resolve();
+      await stopping;
+    }
+  });
+
   it("notifies only activating and terminal phase changes, not detail revisions", async () => {
     beginRun();
     ledger.run!.steps = [{ step: "notice:ack", status: "completed" }];
@@ -103,12 +138,12 @@ describe("Gateway update run watcher", () => {
     expect(broadcast).toHaveBeenCalledTimes(3);
   });
 
-  it.each(["teardown", "deadline"] as const)("bounds a running watcher at %s", (ending) => {
+  it.each(["teardown", "deadline"] as const)("bounds a running watcher at %s", async (ending) => {
     beginRun();
     const broadcast = vi.fn();
     watcher = startUpdateRunWatcher({ broadcast, log: { warn: vi.fn() } });
     if (ending === "teardown") {
-      watcher.stop();
+      await watcher.stop();
     } else {
       vi.advanceTimersByTime(45 * 60_000);
     }

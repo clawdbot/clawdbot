@@ -27,6 +27,7 @@ import {
   resetGatewayWorkAdmission,
   tryBeginGatewayRootWorkAdmission,
 } from "../process/gateway-work-admission.js";
+import { AsyncWorkScope } from "../shared/async-work-scope.js";
 import { createDeferredCore } from "../shared/deferred.js";
 import { closeOpenClawStateDatabaseForTest } from "../state/openclaw-state-db.js";
 import { createOutboundTestPlugin, createTestRegistry } from "../test-utils/channel-plugins.js";
@@ -254,30 +255,41 @@ describe("restart sentinel notice recovery", () => {
     expect(mocks.recoveryDeliver).not.toHaveBeenCalled();
   });
 
-  it("bounds a blocked lifecycle send to ten seconds and preserves queued recovery", async () => {
+  it("bounds a blocked lifecycle send while its work owner retains queue settlement", async () => {
     vi.useFakeTimers({ toFake: ["setTimeout", "clearTimeout"] });
     const queueId = "update-run-ack:timeout";
     const started = createDeferredCore();
     const finish = createDeferredCore();
+    const work = new AsyncWorkScope();
     mocks.sendDurableMessageBatch.mockImplementationOnce(async () => {
       started.resolve();
       await finish.promise;
       return { status: "sent", results: [{ channel: "whatsapp", messageId: "late-ack" }] };
     });
     let settled = false;
-    const send = sendLifecycleNotice(queueId).finally(() => {
-      settled = true;
-    });
+    const send = work
+      .track(() => sendLifecycleNotice(queueId))
+      .finally(() => {
+        settled = true;
+      });
     await started.promise;
 
+    let drained = false;
+    let draining: Promise<void> | undefined;
     try {
       await vi.advanceTimersByTimeAsync(9_999);
       expect(settled).toBe(false);
       await vi.advanceTimersByTimeAsync(1);
       await expect(send).resolves.toBe(false);
       expect(queueStatus(queueId)).toBe("pending");
+      draining = work.drain().then(() => {
+        drained = true;
+      });
+      await vi.advanceTimersByTimeAsync(0);
+      expect(drained).toBe(false);
     } finally {
       finish.resolve();
+      await (draining ?? work.drain());
       await vi.waitFor(() => expect(queueStatus(queueId)).toBe("completed"));
     }
     expect(mocks.recoveryDeliver).not.toHaveBeenCalled();
@@ -289,6 +301,7 @@ describe("restart sentinel notice recovery", () => {
     const started = createDeferredCore();
     const finish = createDeferredCore();
     const completed = createDeferredCore();
+    const work = new AsyncWorkScope();
     const result = attachOutboundDeliveryCommitHook(
       { channel: "whatsapp", messageId: "ack-before-hook-timeout" },
       async () => {
@@ -298,15 +311,23 @@ describe("restart sentinel notice recovery", () => {
       },
     );
     mocks.sendDurableMessageBatch.mockResolvedValueOnce({ status: "sent", results: [result] });
-    const send = sendLifecycleNotice(queueId);
+    const send = work.track(() => sendLifecycleNotice(queueId));
     await started.promise;
 
+    let drained = false;
+    let draining: Promise<void> | undefined;
     try {
       expect(queueStatus(queueId)).toBe("completed");
       await vi.advanceTimersByTimeAsync(10_000);
       await expect(send).resolves.toBe(true);
+      draining = work.drain().then(() => {
+        drained = true;
+      });
+      await vi.advanceTimersByTimeAsync(0);
+      expect(drained).toBe(false);
     } finally {
       finish.resolve();
+      await (draining ?? work.drain());
       await completed.promise;
     }
     expect(mocks.recoveryDeliver).not.toHaveBeenCalled();
