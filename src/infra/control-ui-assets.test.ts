@@ -159,15 +159,19 @@ describe("control UI assets helpers (fs-mocked)", () => {
     { marker: "", kind: "stale" },
   ])(
     "checks the runtime identity independently of its public digest: $marker",
-    ({ marker, kind }) => {
+    async ({ marker, kind }) => {
       const root = abs("fixtures/build-identity");
+      const assetRoot = path.join(root, "dist", "control-ui");
       setFile(
-        path.join(root, "index.html"),
+        path.join(assetRoot, "index.html"),
         `<html data-openclaw-control-ui-build-id="${marker}"></html>`,
       );
-      expect(inspectControlUiRootAssets(root, "runtime-b").kind).toBe(kind);
-      // Doctor and update checks without a loaded Gateway retain completeness-only inspection.
-      expect(inspectControlUiRootAssets(root).kind).toBe("ready");
+      expect(inspectControlUiRootAssets(assetRoot, "runtime-b").kind).toBe(kind);
+      await expect(
+        resolveControlUiAssetHealth({ root, expectedBuildId: "runtime-b" }),
+      ).resolves.toMatchObject({ kind });
+      // Updaters may inspect a newly built target from an older running process.
+      await expect(resolveControlUiAssetHealth({ root })).resolves.toMatchObject({ kind: "ready" });
     },
   );
 

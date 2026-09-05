@@ -30,6 +30,7 @@ export async function resolveControlUiAssetHealth(
     root?: string;
     argv1?: string;
     moduleUrl?: string;
+    expectedBuildId?: string | null;
   } = {},
 ): Promise<ControlUiAssetHealth> {
   const indexPath = opts.root
@@ -38,7 +39,7 @@ export async function resolveControlUiAssetHealth(
         argv1: opts.argv1 ?? process.argv[1],
         moduleUrl: opts.moduleUrl,
       });
-  return inspectControlUiAssetHealth(indexPath);
+  return inspectControlUiAssetHealth(indexPath, opts.expectedBuildId);
 }
 
 function resolveControlUiRepoRoot(opts: {
