@@ -131,48 +131,14 @@ export function handleMessageUpdate(
     // streamReasoning rendering hook and message_tool_only source suppression
     // are gated downstream (dispatch wrapProgressCallback, #92738), so emission
     // here stays unconditional.
-    // Native-delta fast path: when this thinking_delta carries a stable content
-    // block index and a non-empty transport delta, accumulate it directly
-    // instead of re-deriving the whole snapshot via extractAssistantThinking()
-    // (map/filter/join over msg.content) on every single chunk — that
-    // reconstruction is O(n) per chunk, so a long reasoning burst is O(n^2)
-    // overall. Fallback (full reconstruction) stays for multi-block/ambiguous
-    // content-index changes, providers with no delta, and thinking_start/end.
-    const contentIndex =
-      typeof assistantRecord?.contentIndex === "number" ? assistantRecord.contentIndex : undefined;
-    const canUseNativeDeltaFastPath =
-      evtType === "thinking_delta" &&
-      thinkingDelta.length > 0 &&
-      contentIndex !== undefined &&
-      (ctx.state.nativeReasoningContentIndex === undefined ||
-        ctx.state.nativeReasoningContentIndex === contentIndex);
-    if (canUseNativeDeltaFastPath) {
-      if (ctx.state.nativeReasoningContentIndex === undefined) {
-        ctx.state.nativeReasoningContentIndex = contentIndex;
-        ctx.state.nativeReasoningRaw = "";
-      }
-      ctx.state.nativeReasoningRaw = (ctx.state.nativeReasoningRaw ?? "") + thinkingDelta;
-      const trimmed = ctx.state.nativeReasoningRaw.trim();
-      ctx.emitReasoningStream(trimmed, thinkingDelta);
-    } else {
-      // Only a thinking_delta can prove ambiguity (two distinct content
-      // blocks actually interleaving deltas). A thinking_start/thinking_end
-      // for the "normal" single-block case also carries a contentIndex but
-      // no delta of its own — poisoning the accumulator here would permanently
-      // disable the fast path before the first real delta ever arrives, since
-      // native producers emit thinking_start (indexed) before thinking_delta.
-      if (
-        evtType === "thinking_delta" &&
-        contentIndex !== undefined &&
-        ctx.state.nativeReasoningContentIndex !== undefined &&
-        ctx.state.nativeReasoningContentIndex !== contentIndex
-      ) {
-        ctx.state.nativeReasoningContentIndex = -1;
-      }
-      // Prefer full partial-message thinking when available; fall back to event payloads.
-      const partialThinking = extractAssistantThinking(msg);
-      ctx.emitReasoningStream(partialThinking || thinkingContent || thinkingDelta);
-    }
+    // Prefer full partial-message thinking when available; fall back to event payloads.
+    const block =
+      Array.isArray(msg.content) && msg.content.length === 1 ? msg.content[0] : undefined;
+    const nativeThinking = block?.type === "thinking" ? block : undefined;
+    ctx.emitReasoningStream(
+      nativeThinking ?? (extractAssistantThinking(msg) || thinkingContent || thinkingDelta),
+      nativeThinking ? thinkingContent || thinkingDelta : undefined,
+    );
     if (evtType === "thinking_end" && !suppressMessageToolOnlySourceReplyOutput) {
       // Mirror the open gate above: when message-tool-only delivery has made the
       // reasoning lane private, do not force-open it just to close it — that

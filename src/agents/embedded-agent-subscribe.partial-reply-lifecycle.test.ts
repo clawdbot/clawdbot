@@ -1,5 +1,6 @@
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import { createDeferred } from "../../test/helpers/promise.js";
+import { onAgentEventForRun } from "../infra/agent-events.js";
 
 const logger = vi.hoisted(() => ({
   debug: vi.fn(),
@@ -263,6 +264,56 @@ describe("subscribeEmbeddedAgentSession partial reply lifecycle", () => {
     } finally {
       first.resolve();
       await delivery.waitForPendingEvents();
+    }
+  });
+
+  it("keeps reasoning deltas coherent when partial delivery reenters", async () => {
+    const pending = createDeferred();
+    const runId = "run-reasoning-reentrant-partial";
+    const bus: Array<{ text: unknown; delta: unknown }> = [];
+    const off = onAgentEventForRun(runId, (event) => {
+      if (event.stream === "thinking") {
+        bus.push({ text: event.data.text, delta: event.data.delta });
+      }
+    });
+    let calls = 0;
+    const { emit, subscription } = createSubscribedSessionHarness({
+      runId,
+      onPartialReply: () => {
+        calls++;
+        if (calls === 1) {
+          return pending.promise;
+        }
+        if (calls === 2) {
+          emitThinking("AX", "X");
+        }
+      },
+    });
+    function emitThinking(thinking: string, delta: string): void {
+      const message = { role: "assistant", content: [{ type: "thinking", thinking }] };
+      emit({
+        type: "message_update",
+        message,
+        assistantMessageEvent: { type: "thinking_delta", contentIndex: 0, delta, partial: message },
+      });
+    }
+    try {
+      emit({ type: "message_start", message: { role: "assistant", content: [] } });
+      emitThinking("A", "A");
+      for (const delta of ["a", "b", "<think>AB"]) {
+        emitAssistantTextDelta({ emit, delta });
+      }
+      expect(calls).toBe(2);
+      expect(bus).toEqual([
+        { text: "A", delta: "A" },
+        { text: "AX", delta: "X" },
+        { text: "AB", delta: "AB" },
+      ]);
+    } finally {
+      pending.resolve();
+      subscription.unsubscribe();
+      await subscription.waitForPendingEvents();
+      off();
     }
   });
 
