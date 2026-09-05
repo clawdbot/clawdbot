@@ -3,6 +3,7 @@ import { randomUUID } from "node:crypto";
 import fs from "node:fs";
 import path from "node:path";
 import { truncateUtf16Safe } from "@openclaw/normalization-core/utf16-slice";
+import { prepareGithubIssue } from "../infra/github-issue.js";
 import { VERSION } from "../version.js";
 import {
   readSessionSqliteMigrationManifest,
@@ -86,7 +87,7 @@ export function createSessionSqliteMigrationFailureIssue(
     ? filterRestoreManifestTargets(manifest, trustedTargets)
     : manifest.targets;
   const persistedBody = bodyPath ? readFailureMarkdown(bodyPath) : undefined;
-  if (persistedIssue && !persistedBody) {
+  if (bodyPath && !persistedBody) {
     return undefined;
   }
   const reportBody =
@@ -143,6 +144,12 @@ export function claimSessionSqliteMigrationGithubIssue(
   }
   if (manifest.failureReports.githubIssue) {
     return { issue: manifest.failureReports.githubIssue, status: "existing" };
+  }
+  // Consent releases maintenance ownership. Recheck the saved report under the claim lock
+  // so a peer recovery cannot leave a durable receipt for a different approved payload.
+  const currentIssue = createSessionSqliteMigrationFailureIssue(manifestPath);
+  if (!currentIssue || prepareGithubIssue(currentIssue).marker !== issue.marker) {
+    return undefined;
   }
   const claimed: SessionSqliteMigrationGithubIssue = {
     marker: issue.marker,

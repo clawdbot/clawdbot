@@ -25,6 +25,7 @@ import {
   readTranscriptStatsSync,
 } from "../config/sessions/session-accessor.sqlite-read.js";
 import * as directoryDurability from "../infra/directory-durability.js";
+import { prepareGithubIssue } from "../infra/github-issue.js";
 import * as nodeSqlite from "../infra/node-sqlite.js";
 import * as replaceFile from "../infra/replace-file.js";
 import { resolveSqliteDatabaseFilePaths } from "../infra/sqlite-files.js";
@@ -923,10 +924,10 @@ describe("runDoctorSessionSqlite", () => {
     }
     fs.writeFileSync(manifestPath, `${JSON.stringify(manifest, null, 2)}\n`, { mode: 0o600 });
     fs.writeFileSync(markdownPath, "sanitized report\n", { mode: 0o600 });
-    const issue = {
-      marker: `openclaw-report:${"d".repeat(64)}`,
-      title: "Stable migration report",
-    };
+    const { marker, title } = prepareGithubIssue(
+      expectDefined(createSessionSqliteMigrationFailureIssue(manifestPath), "adoption report"),
+    );
+    const issue = { marker, title };
     expect(
       claimSessionSqliteMigrationGithubIssue(manifestPath, issue, { assertCurrent: vi.fn() }),
     ).toMatchObject({ status: "claimed" });
@@ -5136,6 +5137,54 @@ describe("runDoctorSessionSqlite", () => {
     expect(recover.supportIssue).not.toHaveProperty("url");
   });
 
+  it.each(["replaced", "missing"] as const)(
+    "refuses a support claim when the saved report is %s during consent",
+    (change) => {
+      const store = createLegacyStore();
+      writeFailedManifest(store, "consent-race.json", "2030-01-01T00:00:00.000Z");
+      const manifestPath = path.join(
+        store.stateDir,
+        "session-sqlite-migration-runs",
+        "consent-race.json",
+      );
+      const { markdownPath } = writeSessionSqliteMigrationFailureReports(manifestPath, {
+        reason: "recovery before consent",
+      });
+      const approved = prepareGithubIssue(
+        expectDefined(createSessionSqliteMigrationFailureIssue(manifestPath), "approved report"),
+      );
+      if (change === "replaced") {
+        writeSessionSqliteMigrationFailureReports(manifestPath, {
+          reason: "another recovery during consent",
+        });
+      } else {
+        fs.unlinkSync(markdownPath);
+      }
+      const manifestBefore = fs.readFileSync(manifestPath);
+
+      expect(
+        claimSessionSqliteMigrationGithubIssue(manifestPath, approved, { assertCurrent: vi.fn() }),
+      ).toBeUndefined();
+      expect(fs.readFileSync(manifestPath)).toEqual(manifestBefore);
+      if (change === "missing") {
+        expect(createSessionSqliteMigrationFailureIssue(manifestPath)).toBeUndefined();
+        expect(fs.existsSync(markdownPath)).toBe(false);
+        return;
+      }
+
+      const current = prepareGithubIssue(
+        expectDefined(createSessionSqliteMigrationFailureIssue(manifestPath), "current report"),
+      );
+      expect(current.marker).not.toBe(approved.marker);
+      expect(
+        claimSessionSqliteMigrationGithubIssue(manifestPath, current, { assertCurrent: vi.fn() }),
+      ).toMatchObject({ issue: { marker: current.marker }, status: "claimed" });
+      expect(readMigrationManifest(manifestPath).failureReports?.githubIssue?.marker).toBe(
+        current.marker,
+      );
+    },
+  );
+
   it.each([1, 2, 3] as const)(
     "persists one support issue receipt on a historical v%s manifest",
     (manifestVersion) => {
@@ -5168,13 +5217,13 @@ describe("runDoctorSessionSqlite", () => {
       };
       fs.writeFileSync(manifestPath, `${JSON.stringify(manifest, null, 2)}\n`, { mode: 0o600 });
       const authority = { assertCurrent: vi.fn() };
-      const issue = {
-        marker: `openclaw-report:${"b".repeat(64)}`,
-        title: `Stable report v${manifestVersion}`,
-      };
       fs.writeFileSync(failureMarkdownPath, `stable sanitized report v${manifestVersion}\n`, {
         mode: 0o600,
       });
+      const { marker, title } = prepareGithubIssue(
+        expectDefined(createSessionSqliteMigrationFailureIssue(manifestPath), "historical report"),
+      );
+      const issue = { marker, title };
 
       expect(claimSessionSqliteMigrationGithubIssue(manifestPath, issue, authority)).toMatchObject({
         issue: { ...issue, status: "attempted" },
