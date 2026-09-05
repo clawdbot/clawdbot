@@ -608,7 +608,7 @@ describe("setupPluginConfig", () => {
         const options = params.options as Array<{ value: string; label: string }>;
         expect(options.map((o) => o.value)).toEqual(enumMembers.map((_, i) => String(i)));
         expect(options.map((o) => o.label)).toEqual(enumMembers.map((v) => String(v)));
-        return options[Number(selectedToken)].value;
+        return options[Number(selectedToken)]!.value;
       });
 
       const result = await setupPluginConfig({
