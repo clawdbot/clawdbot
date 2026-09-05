@@ -2,6 +2,14 @@
 import { describe, expect, it } from "vitest";
 import { GENERATED_BUNDLED_CHANNEL_CONFIG_METADATA } from "../../config/bundled-channel-config-metadata.generated.js";
 import { validateJsonSchemaValue } from "../schema-validator.js";
+import {
+  asChannelSchema as asSchema,
+  channelAccountSchemas,
+  channelPropertySchema as propertySchema,
+  channelSchemaRejectsKey as rejectsKey,
+  channelSchemaRejectsNestedKey as rejectsNestedKey,
+  type JsonSchemaLike,
+} from "./test-helpers/channel-schema-keys.js";
 
 /**
  * The channels docs/gateway/health.md lists as exposing the per-channel
@@ -19,123 +27,6 @@ const HEALTH_MONITOR_CHANNELS = [
   "telegram",
   "whatsapp",
 ] as const;
-
-type JsonSchemaLike = {
-  properties?: Record<string, unknown>;
-  additionalProperties?: unknown;
-  anyOf?: unknown[];
-  oneOf?: unknown[];
-  allOf?: unknown[];
-};
-
-function asSchema(value: unknown): JsonSchemaLike | undefined {
-  return value && typeof value === "object" ? (value as JsonSchemaLike) : undefined;
-}
-
-/**
- * A closed schema without the key is what makes config loading fail. Some
- * channels (twitch) publish composed alternatives instead of one flat object,
- * so a config is refused only when every alternative refuses the key.
- */
-function rejectsKey(schema: JsonSchemaLike | undefined, key: string): boolean {
-  if (!schema) {
-    return false;
-  }
-  // oneOf validates only when exactly one branch matches, so a key two branches
-  // both accept is refused at config load even though either branch alone allows
-  // it. Collapsing oneOf into anyOf reported that as accepted.
-  if (Array.isArray(schema.oneOf) && schema.oneOf.length > 0) {
-    const accepting = schema.oneOf.filter((branch) => !rejectsKey(asSchema(branch), key)).length;
-    if (accepting !== 1) {
-      return true;
-    }
-  }
-  if (Array.isArray(schema.anyOf) && schema.anyOf.length > 0) {
-    return schema.anyOf.every((branch) => rejectsKey(asSchema(branch), key));
-  }
-  if (Array.isArray(schema.oneOf) && schema.oneOf.length > 0) {
-    return false;
-  }
-  // allOf is an intersection: the value must satisfy every component, so one
-  // closed component that omits the key still refuses it at config load.
-  if (Array.isArray(schema.allOf) && schema.allOf.length > 0) {
-    return schema.allOf.some((branch) => rejectsKey(asSchema(branch), key));
-  }
-  if (schema.additionalProperties !== false) {
-    return false;
-  }
-  return !Object.hasOwn(schema.properties ?? {}, key);
-}
-
-/**
- * Resolves a property's sub-schema across composed alternatives. The parent key
- * existing is not the documented contract; `healthMonitor.enabled` is, and a
- * strict empty object would satisfy the parent check while refusing that leaf.
- */
-function propertySchema(
-  schema: JsonSchemaLike | undefined,
-  key: string,
-): JsonSchemaLike | undefined {
-  if (!schema) {
-    return undefined;
-  }
-  const direct = asSchema(schema.properties?.[key]);
-  if (direct) {
-    return direct;
-  }
-  for (const branch of [
-    ...(schema.anyOf ?? []),
-    ...(schema.oneOf ?? []),
-    ...(schema.allOf ?? []),
-  ]) {
-    const nested = propertySchema(asSchema(branch), key);
-    if (nested) {
-      return nested;
-    }
-  }
-  return undefined;
-}
-
-/**
- * Whether the intersection refuses `parentKey.childKey`. Mirrors rejectsKey so
- * every allOf component is evaluated: taking the first component that happens to
- * declare the parent would discard a later closed sibling that refuses the leaf,
- * and the assertion would pass while real config loading fails.
- */
-function rejectsNestedKey(
-  schema: JsonSchemaLike | undefined,
-  parentKey: string,
-  childKey: string,
-): boolean {
-  if (!schema) {
-    return false;
-  }
-  if (Array.isArray(schema.oneOf) && schema.oneOf.length > 0) {
-    const accepting = schema.oneOf.filter(
-      (branch) => !rejectsNestedKey(asSchema(branch), parentKey, childKey),
-    ).length;
-    if (accepting !== 1) {
-      return true;
-    }
-  }
-  if (Array.isArray(schema.anyOf) && schema.anyOf.length > 0) {
-    return schema.anyOf.every((branch) => rejectsNestedKey(asSchema(branch), parentKey, childKey));
-  }
-  if (Array.isArray(schema.oneOf) && schema.oneOf.length > 0) {
-    return false;
-  }
-  if (Array.isArray(schema.allOf) && schema.allOf.length > 0) {
-    return schema.allOf.some((branch) => rejectsNestedKey(asSchema(branch), parentKey, childKey));
-  }
-  const parent = asSchema(schema.properties?.[parentKey]);
-  if (!parent) {
-    // A closed component that omits the parent entirely refuses the leaf too, so
-    // treating that as "not rejecting" would leave the contract green while real
-    // config loading fails on the parent property.
-    return schema.additionalProperties === false;
-  }
-  return rejectsKey(parent, childKey);
-}
 
 /**
  * Validates the documented `{ healthMonitor: { enabled: false } }` override
@@ -328,8 +219,13 @@ describe("channel healthMonitor contract", () => {
   it.each(HEALTH_MONITOR_CHANNELS)(
     "%s accepts channels.<id>.accounts.<account>.healthMonitor",
     (channelId) => {
-      const accounts = asSchema(schemaFor(channelId)?.properties?.accounts);
-      expect(rejectsKey(asSchema(accounts?.additionalProperties), "healthMonitor")).toBe(false);
+      const accountEntries = channelAccountSchemas(schemaFor(channelId));
+      // Channels without an accounts envelope have nothing to assert here; the
+      // channel-scope test above already covers them. Asserting on a missing
+      // envelope passes without testing anything.
+      for (const accountEntry of accountEntries) {
+        expect(rejectsKey(accountEntry, "healthMonitor")).toBe(false);
+      }
     },
   );
 
@@ -348,8 +244,7 @@ describe("channel healthMonitor contract", () => {
   it.each(HEALTH_MONITOR_CHANNELS)(
     "%s accepts the documented accounts.<account>.healthMonitor.enabled leaf",
     (channelId) => {
-      const accounts = asSchema(schemaFor(channelId)?.properties?.accounts);
-      const accountEntry = asSchema(accounts?.additionalProperties);
+      const accountEntry = channelAccountSchemas(schemaFor(channelId))[0];
       if (!accountEntry) {
         // Single-account channels publish no accounts envelope; the channel-scope
         // assertion above already covers the documented override for them.
