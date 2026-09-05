@@ -759,9 +759,6 @@ openclaw-chat-sidebar-region,
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;
-  font-size: var(--control-ui-text-sm);
-  font-weight: 550;
-  line-height: 1.25;
 }
 
 /* Live-run indicator: replaces the old status pill for running rows. */

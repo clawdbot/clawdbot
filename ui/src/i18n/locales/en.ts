@@ -5829,7 +5829,7 @@ export const en: TranslationMap & {
       outputPending: "No output yet.",
       subagentActivity: {
         label: "Subagent activity",
-        working: "Subagent working",
+        running: "Subagent",
         finished: "Subagent finished",
         failed: "Subagent failed",
         cancelled: "Subagent cancelled",
