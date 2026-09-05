@@ -1,5 +1,6 @@
 import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
 import type { InternalSessionEntry as SessionEntry } from "../../config/sessions.js";
+import { isMainSessionRestartRecoveryInputProvenance } from "../../sessions/input-provenance.js";
 import { CODE_MODE_EXEC_TOOL_NAME, CODE_MODE_WAIT_TOOL_NAME } from "../code-mode-control-tools.js";
 import {
   getTranscriptMessageRole as getMessageRole,
@@ -224,7 +225,10 @@ export function hasReplaySafeCodeModeCheckpointInCurrentTurn(
 ): boolean {
   for (let index = messages.length - 1; index >= 0; index -= 1) {
     const message = messages[index];
-    if (getMessageRole(message) === "user") {
+    if (
+      getMessageRole(message) === "user" &&
+      !isMainSessionRestartRecoveryInputProvenance((message as { provenance?: unknown }).provenance)
+    ) {
       return false;
     }
     if (readCodeModeCheckpoint(message)?.replaySafe === true) {

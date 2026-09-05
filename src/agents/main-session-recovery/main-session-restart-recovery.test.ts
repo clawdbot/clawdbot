@@ -5433,22 +5433,31 @@ describe("main-session-restart-recovery", () => {
     expect(gatewayParams()).toMatchObject({ forceRestartSafeTools: true });
   });
 
-  it("keeps restart safety after the recovery prompt leaves the recent transcript window", async () => {
-    await writeMainSessionTranscript(
-      [
-        { role: "user", content: "do the thing" },
-        ...Array.from({ length: 24 }, (_, index) => ({
-          role: "toolResult",
-          toolName: "read",
-          content: [{ type: "text", text: `read result ${index}` }],
-        })),
-      ],
-      { restartRecoveryForceSafeTools: true },
-    );
+  it.each(["guarded", "full"] as const)(
+    "keeps replay safety outside the recent transcript window with %s access",
+    async (permissionMode) => {
+      await writeMainSessionTranscript(
+        [
+          { role: "user", content: "do the thing" },
+          codeModeCheckpointMessage(),
+          {
+            role: "user",
+            content: "Continue after restart",
+            provenance: { kind: "internal_system", sourceTool: "main_session_restart_recovery" },
+          },
+          ...Array.from({ length: 24 }, (_, index) => ({
+            role: "toolResult",
+            toolName: "read",
+            content: [{ type: "text", text: `read result ${index}` }],
+          })),
+        ],
+        { permissionMode, restartRecoveryForceSafeTools: true },
+      );
 
-    await expectRecovery({ started: 1, settled: 0, failed: 0, skipped: 0 });
-    expect(gatewayParams()).toMatchObject({ forceRestartSafeTools: true });
-  });
+      await expectRecovery({ started: 1, settled: 0, failed: 0, skipped: 0 });
+      expect(gatewayParams()).toMatchObject({ forceRestartSafeTools: true });
+    },
+  );
 
   it("resumes an in-flight safe tool call across a repeated restart", async () => {
     await writeMainSessionTranscript(
@@ -5488,17 +5497,23 @@ describe("main-session-restart-recovery", () => {
     },
   );
 
-  it("resumes after a completed historical recovery prompt", async () => {
-    await writeMainSessionTranscript([
-      {
-        role: "user",
-        content:
-          "[System] Your previous turn was interrupted by a gateway restart while OpenClaw was waiting on tool/model work. Continue from the existing transcript and finish the interrupted response.",
-      },
-      { role: "assistant", content: [{ type: "text", text: "Finished that recovery." }] },
-      { role: "user", content: "a later request" },
-      { role: "assistant", content: [{ type: "text", text: "Finished the later request." }] },
-    ]);
+  it("ends prior replay restrictions at a new full-access user turn", async () => {
+    await writeMainSessionTranscript(
+      [
+        { role: "user", content: "the earlier request" },
+        codeModeCheckpointMessage(),
+        {
+          role: "user",
+          provenance: { kind: "internal_system", sourceTool: "main_session_restart_recovery" },
+          content:
+            "[System] Your previous turn was interrupted by a gateway restart while OpenClaw was waiting on tool/model work. Continue from the existing transcript and finish the interrupted response.",
+        },
+        { role: "assistant", content: [{ type: "text", text: "Finished that recovery." }] },
+        { role: "user", content: "a later request" },
+        { role: "assistant", content: [{ type: "text", text: "Finished the later request." }] },
+      ],
+      { permissionMode: "full", restartRecoveryForceSafeTools: true },
+    );
 
     await expectRecovery({ started: 1, settled: 0, failed: 0, skipped: 0 });
     expect(callGateway).toHaveBeenCalledOnce();
