@@ -9,13 +9,13 @@ read_when:
 
 `progress_card` is the single agent status tool for a session. It stores an ordered step plan, a compact Markdown note, or both. Each call replaces the whole card, so the latest write is the source of truth for someone following the work without reading the transcript.
 
-The card belongs to the current session and its agent. The tool binds both from the running session; the model only supplies `markdown` and `plan`.
+The card belongs to the parent session the user is talking to and its agent. Spawned sub-agents never receive `progress_card` or its prompt reminder, including visible dashboard children and resumed children. Their results return to the parent, which owns progress updates. The tool binds the session and agent from the running session; the model only supplies `markdown` and `plan`.
 
 The card is durable session state. A reconnect or page reload reads the latest card from the Gateway instead of reconstructing it from tool events or transcript history. The transcript keeps only a short update receipt, not another full copy of the card.
 
 ## Adoption
 
-OpenClaw adds a short progress-card reminder only for non-main sessions when a web, iOS, Android, or macOS card renderer is paired with the Gateway and the run is not using the agent's utility model. Channel-only deployments such as a WhatsApp-only Gateway do not receive the reminder.
+OpenClaw adds a short progress-card reminder only for non-main, non-sub-agent sessions when a web, iOS, Android, or macOS card renderer is paired with the Gateway and the run is not using the agent's utility model. Channel-only deployments such as a WhatsApp-only Gateway do not receive the reminder.
 
 The reminder says:
 
@@ -94,6 +94,8 @@ Opening a side panel does not move the card out of the conversation. The placeme
 Transient refresh failures retain the last loaded card. The dashboard widget shows a retry notice until a refresh succeeds. If the Gateway reports that the connection no longer participates in the session, clients hide the card until access is restored and a refresh succeeds.
 
 The composer and dashboard placements show the local time of the last progress update. The hovercard instead shows the current-or-next plan step and its completed/total count, followed by Markdown in a separate Agent Notepad when a note is present.
+
+Without a matching terminal outcome, unfinished steps appear paused when the Gateway reports no active run or the card predates a later run. The last-update time shows when the agent last revised the card; elapsed time alone does not expire a card belonging to an active run.
 
 ## Gateway requests
 

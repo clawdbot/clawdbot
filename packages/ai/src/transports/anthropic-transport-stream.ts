@@ -551,22 +551,11 @@ function convertAnthropicTools(tools: Context["tools"], isOAuthToken: boolean) {
   const projection = projectAnthropicTools(tools ?? [], (name) =>
     isOAuthToken ? toClaudeCodeToolName(name) : name,
   );
-  const converted: Array<{
-    name: string;
-    description?: string;
-    input_schema: {
-      type: "object";
-      properties: unknown;
-      required: unknown;
-    };
-  }> = [];
-  for (const tool of projection.tools) {
-    converted.push({
-      name: tool.wireName,
-      description: tool.description,
-      input_schema: tool.inputSchema,
-    });
-  }
+  const converted = projection.tools.map((tool) => ({
+    name: tool.wireName,
+    description: tool.description,
+    input_schema: tool.inputSchema,
+  }));
   return { projection, tools: converted };
 }
 

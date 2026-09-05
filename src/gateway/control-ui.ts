@@ -24,7 +24,6 @@ import { openLocalFileSafely, FsSafeError } from "../infra/fs-safe.js";
 import { safeFileURLToPath } from "../infra/local-file-access.js";
 import { isWithinDir } from "../infra/path-safety.js";
 import { assertLocalMediaAllowed, LocalMediaAccessError } from "../media/local-media-access.js";
-import { getAgentScopedMediaLocalRoots } from "../media/local-roots.js";
 import {
   probePlaybackMediaFileDescriptor,
   toMediaProbeResult,
@@ -1087,7 +1086,6 @@ export async function handleControlUiHttpRequest(
           ? (resolveRuntimeServiceBuildId() ?? undefined)
           : undefined,
       devGitBranch: (await resolveDevInstallGitBranch()) ?? undefined,
-      localMediaPreviewRoots: [...getAgentScopedMediaLocalRoots(config ?? {}, assistantAgentId)],
       embedSandbox:
         config?.gateway?.controlUi?.embedSandbox === "trusted"
           ? "trusted"

@@ -308,6 +308,7 @@ Now create channels and start chatting. The agent sees the channel name, and eac
 
 - Gateway owns the Discord connection.
 - Reply routing is deterministic: Discord inbound replies back to Discord.
+- Forwarded message snapshots reach the agent together with any accompanying caption. Forwarded text is not treated as a typed command; command classification uses only the sender’s own message text.
 - Discord guild/channel metadata is added to the model prompt as untrusted context, not as a user-visible reply prefix. If a model copies that envelope back, OpenClaw strips the copied metadata from outbound replies and from future replay context.
 - By default (`session.dmScope=main`), direct chats share the agent main session (`agent:main:main`).
 - Guild channels are isolated session keys (`agent:<agentId>:discord:channel:<channelId>`).

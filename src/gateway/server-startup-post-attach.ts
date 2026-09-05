@@ -1101,11 +1101,10 @@ function createDeferredGatewayUpdateCheck(params: {
 
   const stop = () => {
     stopped = true;
-    runWatcher?.stop();
     return (stopPromise ??= (async () => {
       // Fence immediately; a lazy factory that finishes later stops its own
       // owner below. Never join the post-ready barrier during failed startup.
-      const cleanup = owner?.stop();
+      const cleanup = Promise.all([runWatcher?.stop(), owner?.stop()]);
       await ownerReady;
       await cleanup;
       await initialization;

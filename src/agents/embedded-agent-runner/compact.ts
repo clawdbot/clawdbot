@@ -6,7 +6,6 @@ import { loadSessionEntryReadOnly } from "../../config/sessions/session-accessor
 import { projectPublicSessionEntry } from "../../config/sessions/session-entry-projection.js";
 import { isAbortError } from "../../infra/abort-signal.js";
 import { formatErrorMessage } from "../../infra/errors.js";
-import { getCurrentPluginMetadataSnapshot } from "../../plugins/current-plugin-metadata-snapshot.js";
 import { withPluginRuntimeGenerationScope } from "../../plugins/runtime/generation-scope.js";
 import { resolveSessionPinnedHarnessId } from "../../sessions/agent-harness-session-key.js";
 import { resolveUserPath } from "../../utils.js";
@@ -332,71 +331,67 @@ export async function compactEmbeddedAgentSessionDirect(
   ) {
     return lockedHarnessCompactionFailure(lockedHarnessRuntime);
   }
-  const pluginPlanCompactionTarget = resolveEmbeddedCompactionTarget({
-    config: requestedParams.config,
-    provider: requestedParams.provider,
-    modelId: requestedParams.model,
-    authProfileId: requestedParams.authProfileId,
-    modelSelectionLocked: requestedParams.modelSelectionLocked,
-    defaultProvider: DEFAULT_PROVIDER,
-    defaultModel: DEFAULT_MODEL,
-  });
-  const currentPluginMetadataSnapshot = getCurrentPluginMetadataSnapshot({
-    config: requestedParams.config ?? {},
-    workspaceDir: requestedWorkspaceDir,
-    env: process.env,
-    allowWorkspaceScopedSnapshot: true,
-  });
-  const pluginPlanCandidates = resolveModelCandidateChain({
-    cfg: requestedParams.config,
-    agentId: requestedAgentIds.sessionAgentId,
-    manifestPlugins: currentPluginMetadataSnapshot ?? [],
-    provider: pluginPlanCompactionTarget.provider ?? DEFAULT_PROVIDER,
-    model: pluginPlanCompactionTarget.model ?? DEFAULT_MODEL,
-    requestedRouteResolution: "resolved",
-    fallbacksOverride: transcriptBytePreflightAuthority
-      ? []
-      : resolveCompactionFallbacksOverride(requestedParams),
-  });
-  const runtimePluginSelections = [
+  const preparedModelRuntimeLease = await acquireAgentRunPreparedModelRuntime(
     {
-      provider: runtimeSelection.provider,
-      modelId: runtimeSelection.modelId,
-      ...(runtimeSelection.selectedHarnessRuntime
-        ? { runtime: runtimeSelection.selectedHarnessRuntime }
-        : {}),
+      config: requestedParams.config ?? {},
       agentId: requestedAgentIds.sessionAgentId,
+      agentDir: requestedAgentDir,
+      workspaceDir: requestedWorkspaceDir,
+      preserveWorkspaceDirOnRefresh: requestedWorkspaceDir !== canonicalWorkspaceDir,
+      ...(requestedParams.allowGatewaySubagentBinding ? { allowGatewaySubagentBinding: true } : {}),
     },
-    ...pluginPlanCandidates
-      .filter(
-        (candidate) =>
-          candidate.provider !== runtimeSelection.provider ||
-          candidate.model !== runtimeSelection.modelId,
-      )
-      .map((candidate) =>
-        runtimeSelection.boundHarnessRuntime
-          ? {
+    {
+      abortSignal: requestedParams.abortSignal,
+      deriveRuntimePluginSelections: ({ config: admittedConfig, metadataSnapshot }) => {
+        const config = projectCodexHostTranscriptBytePreflightConfig(
+          admittedConfig,
+          Boolean(transcriptBytePreflightAuthority),
+        );
+        const selected = resolveCompactionRuntimeSelection({
+          ...requestedParams,
+          config,
+          modelId: requestedParams.model,
+          boundHarnessRuntime: requestedParams.agentHarnessId,
+          preparedRuntimePlan: requestedParams.runtimePlan,
+          manifestPlugins: metadataSnapshot,
+          allowPluginNormalization: false,
+        });
+        const pluginPlanCandidates = resolveModelCandidateChain({
+          cfg: config,
+          agentId: requestedAgentIds.sessionAgentId,
+          manifestPlugins: metadataSnapshot,
+          allowPluginNormalization: false,
+          provider: selected.provider,
+          model: selected.modelId,
+          requestedRouteResolution: "resolved",
+          fallbacksOverride: transcriptBytePreflightAuthority
+            ? []
+            : resolveCompactionFallbacksOverride({ ...requestedParams, config }),
+        });
+        return [
+          {
+            provider: selected.provider,
+            modelId: selected.modelId,
+            ...(selected.selectedHarnessRuntime
+              ? { runtime: selected.selectedHarnessRuntime }
+              : {}),
+            agentId: requestedAgentIds.sessionAgentId,
+          },
+          ...pluginPlanCandidates
+            .filter(
+              (candidate) =>
+                candidate.provider !== selected.provider || candidate.model !== selected.modelId,
+            )
+            .map((candidate) => ({
               provider: candidate.provider,
               modelId: candidate.model,
-              runtime: runtimeSelection.boundHarnessRuntime,
+              runtime: selected.boundHarnessRuntime,
               agentId: requestedAgentIds.sessionAgentId,
-            }
-          : {
-              provider: candidate.provider,
-              modelId: candidate.model,
-              agentId: requestedAgentIds.sessionAgentId,
-            },
-      ),
-  ];
-  const preparedModelRuntimeLease = await acquireAgentRunPreparedModelRuntime({
-    config: requestedParams.config ?? {},
-    agentId: requestedAgentIds.sessionAgentId,
-    agentDir: requestedAgentDir,
-    workspaceDir: requestedWorkspaceDir,
-    preserveWorkspaceDirOnRefresh: requestedWorkspaceDir !== canonicalWorkspaceDir,
-    ...(requestedParams.allowGatewaySubagentBinding ? { allowGatewaySubagentBinding: true } : {}),
-    runtimePluginSelections,
-  });
+            })),
+        ];
+      },
+    },
+  );
   try {
     const preparedModelRuntimeOwnerSnapshot = preparedModelRuntimeLease.snapshot;
     const preparedConfig =

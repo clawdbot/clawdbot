@@ -90,7 +90,7 @@ export async function finalizeCodexAttempt(
     assertCodexBindingMayBeReplaced(resourceState.thread, operation);
     return true;
   };
-  const { state, completion, deadlines } = turnRuntime;
+  const { state, completion, deadlines, settlementExpired } = turnRuntime;
   const { emitLifecycleTerminal, buildLifecycleTerminalMeta } = lifecycle;
   const { drainNotificationQueue } = notifications;
   const { codexModelCallDiagnostics } = requestRuntime;
@@ -103,23 +103,23 @@ export async function finalizeCodexAttempt(
     notifyUserMessagePersisted,
   } = activeTurn;
   await completion;
-  const abortGraceElapsed = createDeferred<void>();
+  const drainGraceElapsed = createDeferred<void>();
   let settlementPhase: "active" | "expired" | "closed" = "active";
-  let abortGraceTimer: ReturnType<typeof setTimeout> | undefined;
-  const beginAbortGrace = () => {
-    if (settlementPhase !== "active") {
+  let drainGraceTimer: ReturnType<typeof setTimeout> | undefined;
+  const beginDrainGrace = () => {
+    if (settlementPhase !== "active" || drainGraceTimer) {
       return;
     }
-    abortGraceTimer = setTimeout(() => {
+    drainGraceTimer = setTimeout(() => {
       settlementPhase = "expired";
-      abortGraceElapsed.resolve();
+      drainGraceElapsed.resolve();
     }, TURN_FINALIZE_DRAIN_ABORT_GRACE_MS);
-    abortGraceTimer.unref?.();
+    drainGraceTimer.unref?.();
   };
   const abortListener = addAbortListener(runAbortController.signal, () => {
     // Abort may first arrive after native completion. Its authoritative cleanup
     // must finish before projection gets the full five-second drain grace.
-    void state.abortCleanup.then(beginAbortGrace, beginAbortGrace);
+    void state.abortCleanup.then(beginDrainGrace, beginDrainGrace);
   });
   const closeProjection = () => {
     state.projectionClosed = true;
@@ -131,10 +131,16 @@ export async function finalizeCodexAttempt(
     }
     settlementPhase = "closed";
     abortListener[Symbol.dispose]();
-    clearTimeout(abortGraceTimer);
+    clearTimeout(drainGraceTimer);
     deadlines.dispose();
   };
-  const settlement = drainNotificationQueue().then(closeProjection);
+  const settlement = drainNotificationQueue().then(async () => {
+    await closeProjection();
+    await activeProjector.settlement.drain();
+  });
+  const degradedSettlement = settlementExpired.then(() => {
+    beginDrainGrace();
+  });
   let projectionDrained = false;
   try {
     try {
@@ -142,7 +148,8 @@ export async function finalizeCodexAttempt(
       // Both remain under the original receipt-anchored settlement deadline.
       projectionDrained = await Promise.race([
         settlement.then(() => true),
-        abortGraceElapsed.promise.then(() => false),
+        drainGraceElapsed.promise.then(() => false),
+        degradedSettlement.then(() => false),
       ]);
       if (runAbortController.signal.aborted) {
         await state.abortCleanup;
@@ -163,14 +170,13 @@ export async function finalizeCodexAttempt(
       (!resourceState.executionDisconnectError &&
         (projectedTerminal.aborted ||
           (runAbortController.signal.aborted && !state.clientClosedAbort)));
-    let enrichedPromptError =
+    const currentPromptError = (fallback: unknown) =>
       resourceState.executionDisconnectError ??
       state.clientClosedPromptError ??
-      (state.timeout?.kind === "settlement"
-        ? "codex app-server terminal settlement timed out"
-        : state.timeout?.kind === "execution"
-          ? "codex app-server execution budget timed out"
-          : projectedTerminal.promptError);
+      (state.timeout
+        ? `codex app-server ${state.timeout.kind === "execution" ? "execution budget" : "terminal settlement"} timed out`
+        : fallback);
+    let enrichedPromptError = currentPromptError(projectedTerminal.promptError);
     const enrichedPromptErrorMessage =
       typeof enrichedPromptError === "string"
         ? enrichedPromptError
@@ -242,14 +248,7 @@ export async function finalizeCodexAttempt(
     const projectTerminalOutcome = () => {
       const effectiveTimedOut = state.timeout !== undefined;
       const clientClosedPromptErrorForFinal = state.clientClosedPromptError;
-      const finalPromptError =
-        resourceState.executionDisconnectError ??
-        clientClosedPromptErrorForFinal ??
-        (state.timeout?.kind === "settlement"
-          ? "codex app-server terminal settlement timed out"
-          : state.timeout?.kind === "execution"
-            ? "codex app-server execution budget timed out"
-            : enrichedPromptError);
+      const finalPromptError = currentPromptError(enrichedPromptError);
       const finalPromptErrorSource =
         effectiveTimedOut || clientClosedPromptErrorForFinal
           ? "prompt"
@@ -310,6 +309,7 @@ export async function finalizeCodexAttempt(
       const attemptSucceeded =
         turnSucceeded && result.agentHarnessResultClassification === undefined;
       result.terminal = attemptTerminal.normalize({
+        settlementWarning: state.settlementWarning,
         timedOut: effectiveTimedOut,
         aborted: finalAborted,
         promptError: finalPromptError,
@@ -351,41 +351,66 @@ export async function finalizeCodexAttempt(
     };
     // Message-write hooks see the enriched native outcome. The same projection
     // runs after the bounded mirror join if Stop or the deadline arrives there.
-    const mirrorTerminal = projectTerminalOutcome();
+    projectTerminalOutcome();
     type MirrorOutcome = Awaited<ReturnType<typeof codexTranscriptMirrorRuntime.mirrorBestEffort>>;
     const unavailableMirror: MirrorOutcome = {
       assistantTranscriptOwned: false,
       mirroredMessages: [],
     };
     let mirrorOutcome = unavailableMirror;
+    const mirrorFinal = () => {
+      const warning = state.settlementWarning;
+      const mirrorTerminal = projectTerminalOutcome();
+      state.pendingSettlementStage = "transcript/mirror";
+      return codexTranscriptMirrorRuntime.mirrorBestEffort({
+        assertWriteCurrent: () => {
+          // Expiry replaces this exact pending write; it cannot borrow the degraded final's owner.
+          if (settlementPhase !== "active" || state.settlementWarning !== warning) {
+            throw new Error("Codex transcript settlement is no longer active");
+          }
+          const current = projectTerminalOutcome();
+          if (
+            current.finalAborted !== mirrorTerminal.finalAborted ||
+            current.effectiveTimedOut !== mirrorTerminal.effectiveTimedOut ||
+            current.finalPromptError !== mirrorTerminal.finalPromptError
+          ) {
+            throw new Error("Codex transcript terminal outcome changed before write");
+          }
+        },
+        params,
+        settlementWarning: warning,
+        agentId: sessionAgentId,
+        notifyUserMessagePersisted,
+        result,
+        sessionKey: contextSessionKey,
+        cwd: effectiveCwd,
+        threadId: resourceState.thread.threadId,
+        turnId: activeTurnId,
+      });
+    };
     try {
-      if (projectionDrained && settlementPhase === "active") {
+      // Canceling retired media can drain the queue; that cannot reopen ordinary settlement.
+      if (projectionDrained && settlementPhase === "active" && !state.settlementWarning) {
         mirrorOutcome = await Promise.race([
-          codexTranscriptMirrorRuntime.mirrorBestEffort({
-            assertWriteCurrent: () => {
-              if (settlementPhase !== "active") {
-                throw new Error("Codex transcript settlement is no longer active");
-              }
-              const current = projectTerminalOutcome();
-              if (
-                current.finalAborted !== mirrorTerminal.finalAborted ||
-                current.effectiveTimedOut !== mirrorTerminal.effectiveTimedOut ||
-                current.finalPromptError !== mirrorTerminal.finalPromptError
-              ) {
-                throw new Error("Codex transcript terminal outcome changed before write");
-              }
-            },
-            params,
-            agentId: sessionAgentId,
-            notifyUserMessagePersisted,
-            result,
-            sessionKey: contextSessionKey,
-            cwd: effectiveCwd,
+          mirrorFinal(),
+          drainGraceElapsed.promise.then(() => unavailableMirror),
+          degradedSettlement.then(() => unavailableMirror),
+        ]);
+      }
+      if (state.settlementWarning && !runAbortController.signal.aborted) {
+        // Preserve transcript ordering and hooks. Only the retired projection is abandoned;
+        // the completed answer, with its warning, uses the existing final transcript owner.
+        mirrorOutcome = await Promise.race([
+          mirrorFinal(),
+          drainGraceElapsed.promise.then(() => unavailableMirror),
+        ]);
+        if (mirrorOutcome === unavailableMirror) {
+          trajectoryRecorder?.recordEvent("turn.settlement_persistence_unavailable", {
+            pendingStage: "transcript/mirror",
             threadId: resourceState.thread.threadId,
             turnId: activeTurnId,
-          }),
-          abortGraceElapsed.promise.then(() => unavailableMirror),
-        ]);
+          });
+        }
       }
       if (runAbortController.signal.aborted) {
         await state.abortCleanup;

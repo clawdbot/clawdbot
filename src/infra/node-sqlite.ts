@@ -9,6 +9,7 @@ import { installProcessWarningFilter } from "./warning-filter.js";
 
 const require = createRequire(import.meta.url);
 let validatedSqliteModule: typeof import("node:sqlite") | undefined;
+let extensionLoadingSupported = false;
 
 type NodeSqliteDatabaseOptions = ConstructorParameters<
   typeof import("node:sqlite").DatabaseSync
@@ -76,6 +77,10 @@ function assertSafeSqliteRuntime(sqlite: typeof import("node:sqlite")): void {
       | undefined;
     const version = typeof row?.version === "string" ? row.version : "unknown";
     assertSqliteWalResetSafeVersion(version, process.versions.node);
+    const capabilities = database
+      .prepare("SELECT sqlite_compileoption_used('OMIT_LOAD_EXTENSION') AS omitted")
+      .get();
+    extensionLoadingSupported = capabilities?.omitted === 0;
     validatedSqliteModule = sqlite;
   } finally {
     database.close();
@@ -97,6 +102,12 @@ export function requireNodeSqlite(): typeof import("node:sqlite") {
       cause: err,
     });
   }
+}
+
+/** Whether the loaded SQLite library supports native extensions. */
+export function supportsNodeSqliteExtensionLoading(): boolean {
+  requireNodeSqlite();
+  return extensionLoadingSupported;
 }
 
 /** Open node:sqlite through OpenClaw's runtime and filesystem-location boundary. */

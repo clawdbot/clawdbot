@@ -238,6 +238,12 @@ describe("plugin background completions", () => {
       allowed: false,
     },
     {
+      name: "auth profile outside allowlist",
+      subagent: { allowModelOverride: true, allowedModels: ["test-provider/override"] },
+      model: "test-provider/override@other-profile",
+      allowed: false,
+    },
+    {
       name: "invalid allowlist",
       subagent: { allowModelOverride: true, allowedModels: ["not-a-model-ref"] },
       model: "test-provider/override",
