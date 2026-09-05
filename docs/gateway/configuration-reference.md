@@ -197,11 +197,13 @@ target server during config edits.
   default MCP approval behavior.
 - Session-scoped bundled MCP runtimes use a built-in 10-minute idle TTL.
   One-shot embedded runs request run-end cleanup; the TTL is the backstop for long-lived sessions and future callers.
-- Changes under `mcp.*` hot-apply by disposing cached session MCP runtimes.
-  The next tool discovery/use recreates them from the new config, so removed
-  `mcp.servers` entries are reaped immediately instead of waiting for idle TTL.
+- MCP config changes retire only changed or removed server connections. Unchanged
+  servers keep their transports and tool catalogs; active runs can continue calling
+  their tools and resources. The next turn's discovery creates changed servers from the new config. Plugin
+  reloads also retire connections owned by the replaced plugins or their resolvers.
+  Requester sign-in tools refresh on the next message after runtime replacement.
 - Runtime discovery also honors MCP tool-list change notifications by dropping
-  the cached catalog for that session. Servers that advertise resources or
+  the affected server's cached catalog. Servers that advertise resources or
   prompts get utility tools for listing/reading resources and listing/fetching
   prompts. Repeated tool-call failures pause the affected server briefly before
   another call is attempted.

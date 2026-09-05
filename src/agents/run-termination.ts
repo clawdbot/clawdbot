@@ -1,5 +1,14 @@
-import { isFailoverError, isTimeoutError } from "./failover/error.js";
-import type { AgentRunTimeoutPhase } from "./run-timeout-attribution.js";
+import {
+  type FailoverError,
+  findErrorProperty,
+  isFailoverError,
+  isSignalTimeoutReason,
+} from "./failover/error.js";
+import {
+  normalizeAgentRunTimeoutPhase,
+  normalizeProviderStarted,
+  type AgentRunTimeoutPhase,
+} from "./run-timeout-attribution.js";
 
 /**
  * Shared agent run termination constants.
@@ -73,17 +82,6 @@ export function throwAgentRunRestartAbortReason(value: unknown): void {
   }
 }
 
-function isAgentRunTimeoutAbortReason(value: unknown): boolean {
-  if (!value || typeof value !== "object") {
-    return false;
-  }
-  try {
-    return "name" in value && value.name === "TimeoutError";
-  } catch {
-    return false;
-  }
-}
-
 export function resolveAgentRunAbortLifecycleFields(signal: AbortSignal | undefined): {
   aborted?: true;
   stopReason?:
@@ -96,7 +94,7 @@ export function resolveAgentRunAbortLifecycleFields(signal: AbortSignal | undefi
   }
   const stopReason = isAgentRunRestartAbortReason(signal.reason)
     ? AGENT_RUN_RESTART_ABORT_STOP_REASON
-    : isAgentRunTimeoutAbortReason(signal.reason)
+    : isSignalTimeoutReason(signal.reason)
       ? "timeout"
       : AGENT_RUN_ABORTED_STOP_REASON;
   return {
@@ -105,22 +103,34 @@ export function resolveAgentRunAbortLifecycleFields(signal: AbortSignal | undefi
   };
 }
 
-function isProviderTimeoutError(error: unknown): boolean {
+function resolveRunErrorTimeout(error: unknown): FailoverError["timeout"] {
   try {
-    const candidate = isFailoverError(error)
-      ? error
-      : error instanceof Error
-        ? error.cause
-        : undefined;
-    return isFailoverError(candidate) && candidate.reason === "timeout";
+    // Retry categories include connection failures and HTTP 5xx. Only recorded
+    // watchdog facts or an intentional TimeoutError establish a deadline.
+    const timeout = findErrorProperty(error, (candidate) =>
+      isFailoverError(candidate)
+        ? candidate.timeout
+        : isSignalTimeoutReason(candidate)
+          ? { timeoutPhase: "provider" as const }
+          : undefined,
+    );
+    if (!timeout) {
+      return undefined;
+    }
+    const timeoutPhase = normalizeAgentRunTimeoutPhase(timeout.timeoutPhase);
+    const providerStarted = normalizeProviderStarted(timeout.providerStarted);
+    return {
+      ...(timeoutPhase ? { timeoutPhase } : {}),
+      ...(providerStarted !== undefined ? { providerStarted } : {}),
+    };
   } catch {
     // Provider/runtime errors may expose hostile getters. Classification must
     // not replace the original failure or suppress its terminal event.
-    return false;
+    return undefined;
   }
 }
 
-/** Preserve structured provider watchdog timeouts when no abort signal was raised. */
+/** Preserve recorded run timeouts when no caller abort signal was raised. */
 export function resolveAgentRunErrorLifecycleFields(
   error: unknown,
   signal: AbortSignal | undefined,
@@ -131,6 +141,7 @@ export function resolveAgentRunErrorLifecycleFields(
     | typeof AGENT_RUN_RESTART_ABORT_STOP_REASON
     | "timeout";
   timeoutPhase?: AgentRunTimeoutPhase;
+  providerStarted?: boolean;
 } {
   const abortFields = resolveAgentRunAbortLifecycleFields(signal);
   if (abortFields.aborted) {
@@ -140,13 +151,8 @@ export function resolveAgentRunErrorLifecycleFields(
   if (isAgentRunDirectAbortReason(error)) {
     return { aborted: true, stopReason: "aborted" };
   }
-  if (!isProviderTimeoutError(error)) {
-    return {};
-  }
-  return {
-    stopReason: "timeout",
-    timeoutPhase: "provider",
-  };
+  const timeout = resolveRunErrorTimeout(error);
+  return timeout ? { stopReason: "timeout", ...timeout } : {};
 }
 
 /** Returns whether a stop reason is the stable aborted-run reason. */
@@ -165,15 +171,15 @@ export function resolveCliToolTerminalReason(params: {
   error?: unknown;
   abortSignal?: AbortSignal;
 }): "timed_out" | "cancelled" | "failed" {
-  const abortFields = resolveAgentRunAbortLifecycleFields(params.abortSignal);
-  if (abortFields.aborted) {
-    return abortFields.stopReason === "timeout" ? "timed_out" : "cancelled";
+  const terminal = resolveAgentRunErrorLifecycleFields(params.error, params.abortSignal);
+  if (terminal.stopReason === "timeout") {
+    return "timed_out";
+  }
+  if (terminal.aborted) {
+    return "cancelled";
   }
   const { error } = params;
   try {
-    if (isTimeoutError(error) || (isFailoverError(error) && error.reason === "timeout")) {
-      return "timed_out";
-    }
     if (error instanceof Error && error.name === "AbortError") {
       return "cancelled";
     }

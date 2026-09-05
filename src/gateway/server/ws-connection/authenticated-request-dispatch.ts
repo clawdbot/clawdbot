@@ -82,6 +82,7 @@ export function createGatewayAuthenticatedRequestDispatcher(params: {
     parsed: unknown,
     client: GatewayWsClient,
     frameBytes: number,
+    admission?: "continuation",
   ): Promise<void> => {
     // After handshake, accept only req frames
     if (!validateRequestFrame(parsed)) {
@@ -238,8 +239,8 @@ export function createGatewayAuthenticatedRequestDispatcher(params: {
             credentialMutationBarrier,
             context.requestEntryLifetime?.signal,
           ).catch(() => undefined);
-          // Refuse within the preparation lease; closing neither cancels nor joins
-          // the mutating handler, and must observe this response before entry settles.
+          // Refuse within the preparation lease so its response settles before the
+          // preparation join; the mutating handler retains its execution owner.
           if (context.requestEntryLifetime?.signal.aborted) {
             respondWithAuthority(
               false,
@@ -297,6 +298,7 @@ export function createGatewayAuthenticatedRequestDispatcher(params: {
               extraHandlers,
               methodRegistry: getMethodRegistry?.(),
               context,
+              ...(admission ? { admission } : {}),
               requestEntry: entry,
               ...(requestController ? { signal: requestController.signal } : {}),
             },
@@ -342,7 +344,7 @@ export function createGatewayAuthenticatedRequestDispatcher(params: {
       });
       deviceCredentialMutationBarrier = barrier;
     }
-    void requestDispatch;
+    await requestDispatch;
   };
 
   return { dispatch };

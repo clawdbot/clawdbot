@@ -373,6 +373,7 @@ export function validateConfigObjectRaw(
     validateBundledChannels?: boolean;
     preservedLegacyRootKeys?: readonly string[];
     env?: NodeJS.ProcessEnv;
+    homedir?: () => string;
   },
 ): { ok: true; config: OpenClawConfig } | { ok: false; issues: ConfigValidationIssue[] } {
   const legacyDefaultAgentId = isRecord(raw)
@@ -445,7 +446,7 @@ export function validateConfigObjectRaw(
   if (sandboxContainerEnvIssues.length > 0) {
     return { ok: false, issues: sandboxContainerEnvIssues };
   }
-  const duplicates = findDuplicateAgentDirs(validatedConfig);
+  const duplicates = findDuplicateAgentDirs(validatedConfig, opts);
   if (duplicates.length > 0) {
     return {
       ok: false,

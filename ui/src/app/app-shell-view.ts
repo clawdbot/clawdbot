@@ -660,6 +660,7 @@ export function renderApplicationShell(host: ShellViewHost) {
         .pageSessionKey=${host.activeSessionKey}
         .pageAgentId=${selectedAgentId}
         .pageRouteId=${activeRoute}
+        .pageRouteFailed=${host.routeState.routeFailed === true}
         .minimizeRequestId=${host.custodianMinimizeRequestId}
       ></openclaw-assistant-panel>
       ${

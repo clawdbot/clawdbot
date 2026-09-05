@@ -1,4 +1,4 @@
-import { disposeAllSessionMcpRuntimes } from "../agents/agent-bundle-mcp-tools.js";
+import { reloadSessionMcpRuntimes } from "../agents/agent-bundle-mcp-tools.js";
 import { tryResolveConfiguredAgentWorkspaceDir } from "../agents/agent-scope-config.js";
 import { refreshContextWindowCache } from "../agents/context.js";
 import {
@@ -530,6 +530,18 @@ export function createGatewayReloadHandlers(params: GatewayReloadHandlerParams) 
       return "applied-restart-required";
     }
 
+    if (!plan.reloadPlugins && plan.restartServices?.size) {
+      try {
+        if (!params.reloadPluginServices) {
+          throw new Error("Plugin service reload owner is unavailable");
+        }
+        await params.reloadPluginServices(nextConfig, plan.restartServices);
+      } catch (err) {
+        scheduleRecoveryRestart("plugin services reload", err);
+        return "applied-restart-required";
+      }
+    }
+
     try {
       await mrReload.refreshModelRuntimeAfterHotReload({
         config: nextConfig,
@@ -543,7 +555,12 @@ export function createGatewayReloadHandlers(params: GatewayReloadHandlerParams) 
 
     if (plan.disposeMcpRuntimes) {
       await disposeMcpRuntimesWithTimeout({
-        dispose: disposeAllSessionMcpRuntimes,
+        dispose: () =>
+          reloadSessionMcpRuntimes({
+            cfg: nextConfig,
+            manifestRegistry: params.getPluginMetadataSnapshot?.()?.manifestRegistry,
+            reloadPlugins: plan.reloadPlugins,
+          }),
         timeoutMs: MCP_RUNTIME_RELOAD_DISPOSE_TIMEOUT_MS,
         onWarn: params.logReload.warn,
         label: "bundle-mcp runtime disposal during config reload",

@@ -3,6 +3,7 @@ import { guard } from "lit/directives/guard.js";
 import { GATEWAY_SERVER_CAPS } from "../../../../packages/gateway-protocol/src/index.js";
 import { hasOperatorApprovalsAccess, hasOperatorWriteAccess } from "../../app/operator-access.ts";
 import { patchSettings } from "../../app/settings.ts";
+import { t } from "../../i18n/index.ts";
 import {
   acquireBoardProviderForSession,
   boardProviderCacheKey,
@@ -19,6 +20,7 @@ import {
 import { resolveSessionKey } from "../../lib/sessions/index.ts";
 import {
   buildAgentMainSessionKey,
+  canonicalUiSessionKeyForPersistence,
   normalizeSessionKeyForUiComparison,
   resolveAgentIdFromSessionKey,
   resolveUiConversationIdentity,
@@ -149,12 +151,16 @@ export abstract class ChatPaneBoard extends ChatPaneHistory {
 
   protected syncRetainedBoardSession(board: ResolvedBoardView): void {
     const sessionKey = this.resolveBoardSessionKey(board.snapshot.sessionKey);
+    const savedLayout = this.state
+      ? this.context.theme.settings.sidebarSessionLayouts?.[
+          canonicalUiSessionKeyForPersistence(this.state, this.state.sessionKey)
+        ]
+      : undefined;
     const routeRequestsDashboard = this.routeFace === "dashboard" || this.dashboardExpanded;
     if (!routeRequestsDashboard) {
       this.dashboardExpandedRouteKey = "";
-    } else if (board.hasBoard && sessionKey && this.dashboardExpandedRouteKey !== sessionKey) {
+    } else if (board.available && sessionKey && this.dashboardExpandedRouteKey !== sessionKey) {
       this.dashboardExpandedRouteKey = sessionKey;
-      const savedLayout = this.context.theme.settings.sidebarSessionLayouts?.[sessionKey];
       if (this.dashboardExpanded || !savedLayout) {
         this.showDashboard(this.dashboardExpanded);
       }
@@ -162,19 +168,12 @@ export abstract class ChatPaneBoard extends ChatPaneHistory {
     if (sessionKey && board.provider.hasLoadedSnapshot) {
       const previous = this.observedBoardPresence.get(sessionKey);
       this.observedBoardPresence.set(sessionKey, board.hasBoard);
-      if (previous === false && board.hasBoard && board.face === "chat") {
+      if (previous === false && board.hasBoard && board.face === "chat" && !savedLayout) {
         this.showDashboard(false);
       }
     }
-    if (!board.hasBoard || !sessionKey) {
-      this.retainedBoardSessionKey = "";
-    } else if (board.face === "dashboard") {
-      this.retainedBoardSessionKey = sessionKey;
-    } else if (this.retainedBoardSessionKey !== sessionKey) {
-      this.retainedBoardSessionKey = "";
-    }
     if (
-      board.hasBoard &&
+      board.available &&
       this.state &&
       isSidebarSlotVisible(this.state.sidebarLayout, "dashboard") &&
       !customElements.get("openclaw-board-view")
@@ -256,8 +255,11 @@ export abstract class ChatPaneBoard extends ChatPaneHistory {
     return {
       provider,
       snapshot,
+      available:
+        Boolean(this.boardProvider) ||
+        isGatewayMethodAdvertised(this.context.gateway.snapshot, "board.get") !== false,
       hasBoard,
-      face: hasBoard ? this.routeFace : "chat",
+      face: this.routeFace,
       activeTabId,
     };
   }
@@ -291,7 +293,15 @@ export abstract class ChatPaneBoard extends ChatPaneHistory {
   protected renderBoardPanel(board: ResolvedBoardView, layout: SidebarLayout) {
     const session = this.resolveBoardConversation();
     const sessionKey = this.resolveBoardSessionKey(board.snapshot.sessionKey);
-    const shouldRender = board.hasBoard && Boolean(sessionKey);
+    if (!board.available || !sessionKey) {
+      return nothing;
+    }
+    if (!board.provider.hasLoadedSnapshot) {
+      const error = board.provider.loadError$.value;
+      return html`<div class="rail-empty" role=${error ? "alert" : "status"}>
+        ${error ? t("dashboardDocument.loadFailed", { error }) : t("common.loading")}
+      </div>`;
+    }
     const boardActive = isSidebarSlotVisible(layout, "dashboard") && this.visuallyPresented;
     const renderSurface = (active: boolean) =>
       renderBoardSessionSurface({
@@ -316,14 +326,11 @@ export abstract class ChatPaneBoard extends ChatPaneHistory {
         widgetFrameUrl: (name, revision) => board.provider.widgetFrameUrl(name, revision),
       });
     // Keep one template boundary so hiding the panel does not remount app iframes.
-    const boardSurface = !shouldRender
-      ? nothing
-      : html`${
-          boardActive
-            ? renderSurface(true)
-            : guard([sessionKey, session.agentId], () => renderSurface(false))
-        }`;
-    return boardSurface;
+    return html`${
+      boardActive
+        ? renderSurface(true)
+        : guard([sessionKey, session.agentId], () => renderSurface(false))
+    }`;
   }
 
   protected showDashboard(expanded: boolean): void {

@@ -25,6 +25,7 @@ import {
   listActiveEmbeddedRunSessionIds,
   listActiveEmbeddedRunSessionKeys,
 } from "../embedded-agent-runner/active-run-projections.js";
+import { resolveExecDefaults } from "../exec-defaults.js";
 import {
   getMainSessionRecoveryRetryCount,
   isMainRestartRecoveryAggregateTerminalOnly,
@@ -43,6 +44,7 @@ import {
   reconcileInterruptedCompletionReport,
 } from "./main-session-restart-recovery-checkpoint.js";
 import { tombstoneMainRestartRecoveryWithNotice } from "./main-session-restart-recovery-failure.js";
+import { readMainSessionReplaySafeCheckpoint } from "./main-session-restart-recovery-replay-safety.js";
 import {
   hasReplaySafeCodeModeCheckpointInCurrentTurn,
   resolveMainSessionResumePolicy,
@@ -530,22 +532,37 @@ export async function recoverStore(params: {
       continue;
     }
 
+    const execPolicy = resolveExecDefaults({
+      cfg: params.cfg,
+      agentId,
+      sessionKey: dispatchSessionKey,
+      sessionEntry: entry,
+    });
+    const fullAccess =
+      execPolicy.mode === "full" &&
+      execPolicy.security === "full" &&
+      execPolicy.ask === "off" &&
+      entry.restartRecoveryDeliveryMediaUrls === undefined &&
+      entry.restartRecoveryDisableMessageTool !== true &&
+      entry.restartRecoverySuppressTextDelivery !== true;
+    let replaySafeCheckpoint = false;
     let messages: unknown[];
     try {
-      messages = await readSessionMessagesAsync(
-        {
-          agentId,
-          sessionEntry: entry,
-          sessionId: entry.sessionId,
-          sessionKey,
-          storePath: params.storePath,
-        },
-        {
-          mode: "recent",
-          maxMessages: 20,
-          maxBytes: 256 * 1024,
-        },
-      );
+      const transcriptScope = {
+        agentId,
+        sessionEntry: entry,
+        sessionId: entry.sessionId,
+        sessionKey,
+        storePath: params.storePath,
+      };
+      messages = await readSessionMessagesAsync(transcriptScope, {
+        mode: "recent",
+        maxMessages: 20,
+        maxBytes: 256 * 1024,
+      });
+      if (fullAccess && !entry.pendingFinalDelivery) {
+        replaySafeCheckpoint = await readMainSessionReplaySafeCheckpoint(transcriptScope);
+      }
     } catch (err) {
       if (stopped()) {
         return result;
@@ -608,13 +625,16 @@ export async function recoverStore(params: {
       continue;
     }
 
+    const retainedSafeTools =
+      replaySafeCheckpoint || (entry.restartRecoveryForceSafeTools === true && !fullAccess);
     const resumePolicy = resolveMainSessionResumePolicy(
       messages,
-      entry.restartRecoveryForceSafeTools === true,
+      retainedSafeTools,
       expectedRecoverySourceRunId,
       entry.restartRecoveryBeforeAgentReplyState,
       entry.restartRecoveryDeliveryReceiptState,
       entry.restartRecoveryDeliveryToolCallId,
+      fullAccess && !retainedSafeTools,
     );
     if (resumePolicy.action === "complete") {
       if (stopped()) {
@@ -646,8 +666,7 @@ export async function recoverStore(params: {
     }
 
     await resumeCurrent({
-      forceRestartSafeTools:
-        entry.restartRecoveryForceSafeTools === true || resumePolicy.forceRestartSafeTools,
+      forceRestartSafeTools: retainedSafeTools || resumePolicy.forceRestartSafeTools,
       forceCodeModeTools: resumePolicy.forceCodeModeTools === true,
     });
   }

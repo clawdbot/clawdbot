@@ -630,12 +630,23 @@ export function normalizeModelCatalog(
     return undefined;
   }
   const ownedProviders = normalizeOwnedProviderSet(params.ownedProviders);
+  const modelsDev = Object.fromEntries(
+    Object.entries(normalizeStringMap(value.modelsDev) ?? {}).flatMap(
+      ([rawProviderId, sourceId]) => {
+        const providerId = normalizeProviderId(rawProviderId);
+        return ownedProviders.has(providerId) && !isBlockedObjectKey(providerId)
+          ? [[providerId, sourceId] as const]
+          : [];
+      },
+    ),
+  );
   const providers = normalizeModelCatalogProviders(value.providers, ownedProviders);
   const aliases = normalizeModelCatalogAliases(value.aliases, ownedProviders);
   const suppressions = normalizeModelCatalogSuppressions(value.suppressions);
   const discovery = normalizeModelCatalogDiscovery(value.discovery, ownedProviders);
   const runtimeAugment = value.runtimeAugment === true;
   const catalog = {
+    ...(Object.keys(modelsDev).length > 0 ? { modelsDev } : {}),
     ...(providers ? { providers } : {}),
     ...(aliases ? { aliases } : {}),
     ...(suppressions ? { suppressions } : {}),

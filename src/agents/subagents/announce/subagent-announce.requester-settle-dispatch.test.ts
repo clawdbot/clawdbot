@@ -13,6 +13,7 @@ import {
 } from "../../../plugins/runtime/gateway-request-scope.js";
 import { enqueueCommandInLane, getCommandLaneSnapshot } from "../../../process/command-queue.js";
 import { resetCommandQueueStateForTest } from "../../../process/command-queue.test-support.js";
+import { trackAsyncWork } from "../../../shared/async-work-scope.js";
 import { createDeferredCore } from "../../../shared/deferred.js";
 import { createEmbeddedRunLaneController } from "../../embedded-agent-runner/run/lane-controller.js";
 import type { RunEmbeddedAgentParams } from "../../embedded-agent-runner/run/params.js";
@@ -93,6 +94,7 @@ function createContext(): GatewayRequestContext {
   const chatRunState = createChatRunState();
   const methodRegistry = createGatewayMethodRegistry([]);
   const context = Object.assign({} as GatewayRequestContext, {
+    trackExecution: trackAsyncWork,
     agentRunSeq: new Map(),
     broadcast: vi.fn(),
     chatAbortControllers: new Map(),

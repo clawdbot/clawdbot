@@ -3,7 +3,7 @@ import { createBundleLspToolRuntime } from "../../agent-bundle-lsp-runtime.js";
 import { assignSafeServerNames, TOOL_NAME_SEPARATOR } from "../../agent-bundle-mcp-names.js";
 import { loadSessionMcpConfig } from "../../agent-bundle-mcp-runtime-config.js";
 import {
-  getOrCreateSessionMcpRuntime,
+  acquireSessionMcpRuntime,
   materializeBundleMcpToolsForRun,
 } from "../../agent-bundle-mcp-tools.js";
 import { wrapToolWithAbortSignal } from "../../agent-tools.abort.js";
@@ -123,8 +123,8 @@ export async function prepareEmbeddedAttemptBundleTools(params: {
         });
       },
     });
-  const bundleMcpSessionRuntime = bundleMcpEnabled
-    ? await getOrCreateSessionMcpRuntime({
+  const bundleMcpAcquisition = bundleMcpEnabled
+    ? await acquireSessionMcpRuntime({
         ...mcpConfig,
         sessionId: params.attempt.sessionId,
         sessionKey: params.attempt.sessionKey,
@@ -137,9 +137,9 @@ export async function prepareEmbeddedAttemptBundleTools(params: {
         messageChannel: params.attempt.messageChannel ?? params.attempt.messageProvider,
       })
     : undefined;
-  const bundleMcpRuntime = bundleMcpSessionRuntime
+  const bundleMcpRuntime = bundleMcpAcquisition
     ? await materializeBundleMcpToolsForRun({
-        runtime: bundleMcpSessionRuntime,
+        ...bundleMcpAcquisition,
         agentId: params.sessionAgentId,
         reservedToolNames: [
           ...tools.map((tool) => tool.name),

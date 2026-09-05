@@ -20,6 +20,9 @@
     }
   },
   "modelCatalog": {
+    "modelsDev": {
+      "mistral": "mistral"
+    },
     "providers": {
       "mistral": {
         "baseUrl": "https://api.mistral.ai/v1",

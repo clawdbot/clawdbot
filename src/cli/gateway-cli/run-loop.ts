@@ -13,6 +13,7 @@ import {
   startGatewayRestartTrace,
 } from "../../gateway/restart-trace.js";
 import type { GatewayHostLifecycle } from "../../gateway/server-public.js";
+import { GatewayStartupCleanupError } from "../../gateway/server-shutdown.js";
 import type { startGatewayServer } from "../../gateway/server.js";
 import { flushDiagnosticsTimeline } from "../../infra/diagnostics-timeline.js";
 import { formatErrorMessage } from "../../infra/errors.js";
@@ -269,7 +270,8 @@ export async function runGatewayLoop(params: {
         }
         continue;
       }
-      if (!committedGenericSuccessor && initialOwner) {
+      // Restoring the helper does not make a failed generation reusable.
+      if (code === 0 && !committedGenericSuccessor && initialOwner) {
         return reacquireAndResumeInProcessRestart(getManagedUpdateOwner() ?? owner);
       }
       exitProcess(code);
@@ -863,9 +865,12 @@ export async function runGatewayLoop(params: {
         } else {
           await hostLifecycle?.retire();
           clearForceExitTimer();
-          params.completeBoot?.({ outcome: "clean_stop", reason: "gateway.stop" });
+          params.completeBoot?.({
+            outcome: shutdownFailed ? "forced_stop" : "clean_stop",
+            reason: shutdownFailed ? "gateway.stop_close_failed" : "gateway.stop",
+          });
           await releaseLockIfHeld();
-          await exitProcessAfterLogFlush(0);
+          await exitProcessAfterLogFlush(shutdownFailed ? 1 : 0);
         }
       }
     })();
@@ -1201,15 +1206,11 @@ export async function runGatewayLoop(params: {
         try {
           await failedServer?.close({ reason: "gateway startup failed" });
         } catch (closeError) {
-          gatewayLog.warn(
-            `failed to close gateway after startup failure: ${formatErrorMessage(closeError)}`,
-          );
+          throw new GatewayStartupCleanupError(err, closeError);
         }
-        // On initial startup, let the error propagate so the outer handler
-        // can report "Gateway failed to start" and exit non-zero. Only
-        // swallow errors on subsequent in-process restarts to keep the
-        // process alive (a crash would lose macOS TCC permissions). (#35862)
-        if (!isRestartIteration) {
+        // Keep TCC recovery after clean restart failures (#35862), but never reuse a
+        // generation whose startup cleanup failed. The outer CLI exits nonzero.
+        if (!isRestartIteration || err instanceof GatewayStartupCleanupError) {
           throw err;
         }
         startupFailedWithoutServerHandle = true;

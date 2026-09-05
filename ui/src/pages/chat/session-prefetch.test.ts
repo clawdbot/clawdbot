@@ -1,51 +1,31 @@
 /* @vitest-environment jsdom */
 
-import { IDBFactory } from "fake-indexeddb";
-import type { ReactiveController, ReactiveControllerHost } from "lit";
+import type { ReactiveControllerHost } from "lit";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { createDeferred } from "../../../../test/helpers/promise.js";
 import type { GatewayBrowserClient } from "../../api/gateway.ts";
 import type { GatewaySessionRow } from "../../api/types.ts";
-import type { ApplicationContext } from "../../app/context.ts";
-import { createGatewayConnectionLifecycle } from "../../lib/gateway-connection-lifecycle.ts";
 import { MAX_CACHED_CHAT_SESSIONS } from "./session-cache.ts";
 import {
   appendChatMessageToCache,
   cacheChatSessionSnapshot,
   clearChatMessagesFromCache,
-  observeChatCache,
   readChatSessionSnapshot,
   type ChatMessageCache,
   type ChatSessionSnapshot,
 } from "./session-message-cache.ts";
-import { installSessionPrefetch } from "./session-prefetch.ts";
+import {
+  createSessionPrefetchFixture,
+  PREFETCH_TEST_NOW as NOW,
+  prefetchSnapshotHost as snapshotHost,
+  prefetchSessionRow as row,
+  prefetchHistoryResult as historyResult,
+  prefetchSessionKeyFromCall as sessionKeyFromCall,
+  settleSessionPrefetch as settlePromises,
+  type SessionPrefetchUpdate,
+} from "./session-prefetch.test-support.ts";
 import { clearStoredChatSnapshots } from "./session-snapshot-invalidation.ts";
 import { SessionSnapshotStore } from "./session-snapshot-store.ts";
-
-const NOW = 1_000_000;
-const snapshotHost = { assistantAgentId: "main", agentsList: null, hello: null };
-
-type SessionPrefetchUpdate = {
-  client: GatewayBrowserClient | null;
-  listRevision: number;
-  openSessionKeys: readonly string[];
-  /** Presented panes still fetching their transcript; omitted panes report committed. */
-  loadingSessionKeys?: readonly string[];
-  rows: readonly GatewaySessionRow[] | null;
-};
-
-function row(
-  key: string,
-  activityAt: number | undefined,
-  updatedAt = activityAt ?? 0,
-): GatewaySessionRow {
-  return {
-    key,
-    kind: "direct",
-    updatedAt,
-    ...(activityAt === undefined ? {} : { lastActivityAt: activityAt }),
-  };
-}
 
 function historySnapshot(message: string, sessionId = `session-${message}`): ChatSessionSnapshot {
   return {
@@ -55,157 +35,18 @@ function historySnapshot(message: string, sessionId = `session-${message}`): Cha
   };
 }
 
-function historyResult(sessionKey: string) {
-  return {
-    completeSnapshot: true,
-    messages: [{ role: "assistant", content: sessionKey }],
-    sessionId: `id:${sessionKey}`,
-  };
-}
-
-function sessionKeyFromCall(call: unknown[]): string {
-  return (call[1] as { sessionKey: string }).sessionKey;
-}
-
-async function settlePromises(): Promise<void> {
-  for (let index = 0; index < 60; index += 1) {
-    await new Promise<void>((resolve) => {
-      setImmediate(resolve);
-    });
-    await Promise.resolve();
-  }
-}
-
 describe("recent session prefetch", () => {
-  let visibility: DocumentVisibilityState;
+  let fixture: ReturnType<typeof createSessionPrefetchFixture>;
   let cache: ChatMessageCache;
   let store: SessionSnapshotStore;
-  let controller: ReactiveController;
   let host: HTMLElement & ReactiveControllerHost;
-  let current: SessionPrefetchUpdate;
-  let context: ApplicationContext;
-  let connection: ReturnType<typeof createGatewayConnectionLifecycle>;
-  let originalVisibility: PropertyDescriptor | undefined;
-  let originalLocks: PropertyDescriptor | undefined;
-  let originalRequestIdleCallback: PropertyDescriptor | undefined;
-  let originalCancelIdleCallback: PropertyDescriptor | undefined;
+  let updatePrefetch: ReturnType<typeof createSessionPrefetchFixture>["updatePrefetch"];
 
   beforeEach(() => {
-    vi.useFakeTimers({ toFake: ["Date", "setTimeout", "clearTimeout"] });
-    vi.setSystemTime(NOW);
-    vi.stubGlobal("indexedDB", new IDBFactory());
-    visibility = "visible";
-    originalVisibility = Object.getOwnPropertyDescriptor(document, "visibilityState");
-    Object.defineProperty(document, "visibilityState", {
-      configurable: true,
-      get: () => visibility,
-    });
-    originalLocks = Object.getOwnPropertyDescriptor(navigator, "locks");
-    originalRequestIdleCallback = Object.getOwnPropertyDescriptor(window, "requestIdleCallback");
-    originalCancelIdleCallback = Object.getOwnPropertyDescriptor(window, "cancelIdleCallback");
-    Object.defineProperty(window, "requestIdleCallback", {
-      configurable: true,
-      value: (callback: IdleRequestCallback) =>
-        window.setTimeout(() => callback({ didTimeout: false, timeRemaining: () => 50 }), 0),
-    });
-    Object.defineProperty(window, "cancelIdleCallback", {
-      configurable: true,
-      value: (handle: number) => window.clearTimeout(handle),
-    });
-    Object.defineProperty(navigator, "locks", { configurable: true, value: undefined });
-    cache = new Map();
-    store = new SessionSnapshotStore(cache);
-    store.connect();
-    observeChatCache(cache, store);
-    current = { client: null, listRevision: 0, openSessionKeys: [], rows: null };
-    connection = createGatewayConnectionLifecycle({ client: null, phase: "stopped" });
-    const gatewayListeners = new Set<() => void>();
-    context = {
-      agents: { state: { agentsList: null } },
-      gateway: {
-        get snapshot() {
-          return {
-            assistantAgentId: "main",
-            client: current.client,
-            hello: null,
-            phase: current.client ? ("connected" as const) : ("stopped" as const),
-          };
-        },
-        subscribe: (listener: () => void) => {
-          gatewayListeners.add(listener);
-          return () => gatewayListeners.delete(listener);
-        },
-      },
-      sessions: {
-        captureConnectionScope: () => connection.capture(),
-        isConnectionScopeCurrent: (scope: Parameters<typeof connection.isCurrent>[0]) =>
-          connection.isCurrent(scope),
-        subscribe: () => () => undefined,
-        get canonicalListRevision() {
-          return current.listRevision;
-        },
-        get state() {
-          return { result: current.rows ? { sessions: current.rows } : null };
-        },
-      },
-    } as unknown as ApplicationContext;
-    host = Object.assign(document.createElement("div"), {
-      addController: (_controller: ReactiveController) => undefined,
-      removeController: (_controller: ReactiveController) => undefined,
-      requestUpdate: () => undefined,
-      updateComplete: Promise.resolve(true),
-    });
-    controller = installSessionPrefetch(host, cache, store, () => context);
-    controller.hostConnected?.();
+    fixture = createSessionPrefetchFixture();
+    ({ cache, store, host, updatePrefetch } = fixture);
   });
-
-  afterEach(async () => {
-    controller.hostDisconnected?.();
-    await store.flush();
-    store.disconnect();
-    await store.whenIdle();
-    await clearStoredChatSnapshots();
-    if (originalVisibility) {
-      Object.defineProperty(document, "visibilityState", originalVisibility);
-    } else {
-      Reflect.deleteProperty(document, "visibilityState");
-    }
-    if (originalLocks) {
-      Object.defineProperty(navigator, "locks", originalLocks);
-    } else {
-      Reflect.deleteProperty(navigator, "locks");
-    }
-    if (originalRequestIdleCallback) {
-      Object.defineProperty(window, "requestIdleCallback", originalRequestIdleCallback);
-    } else {
-      Reflect.deleteProperty(window, "requestIdleCallback");
-    }
-    if (originalCancelIdleCallback) {
-      Object.defineProperty(window, "cancelIdleCallback", originalCancelIdleCallback);
-    } else {
-      Reflect.deleteProperty(window, "cancelIdleCallback");
-    }
-    vi.useRealTimers();
-    vi.restoreAllMocks();
-    vi.unstubAllGlobals();
-  });
-
-  function updatePrefetch(update: SessionPrefetchUpdate): void {
-    current = update;
-    connection.transition({
-      client: update.client,
-      phase: update.client ? "connected" : "stopped",
-    });
-    host.replaceChildren(
-      ...update.openSessionKeys.map((sessionKey) =>
-        Object.assign(document.createElement("openclaw-chat-pane"), {
-          sessionKey,
-          transcriptLoading: update.loadingSessionKeys?.includes(sessionKey) === true,
-        }),
-      ),
-    );
-    controller.hostUpdated?.();
-  }
+  afterEach(async () => fixture.dispose());
 
   /** Resolves pending history requests in arrival order, one per settle, like a serial socket. */
   async function drainSequentially(
@@ -460,7 +301,7 @@ describe("recent session prefetch", () => {
     },
   );
 
-  it("warms five eligible sessions one at a time without reopening fresh or active history", async () => {
+  it("bounds idle warming to two small tails without reopening fresh or active history", async () => {
     store.write("agent:main:fresh", historySnapshot("fresh"));
     await store.flush();
     const open = vi.spyOn(indexedDB, "open");
@@ -506,28 +347,22 @@ describe("recent session prefetch", () => {
     expect(request).not.toHaveBeenCalled();
     await vi.advanceTimersByTimeAsync(300);
     await settlePromises();
-    await drainSequentially(pending, request, [
-      "agent:main:eligible-1",
-      "agent:main:eligible-2",
-      "agent:main:eligible-3",
-      "agent:main:eligible-4",
-      "agent:main:eligible-5",
-    ]);
-    expect(request).toHaveBeenCalledTimes(5);
-    expect(request.mock.calls.every((call) => (call[1] as { limit: number }).limit === 800)).toBe(
-      true,
-    );
+    await drainSequentially(pending, request, ["agent:main:eligible-1", "agent:main:eligible-2"]);
+    expect(request).toHaveBeenCalledTimes(2);
+    for (const [, params] of request.mock.calls) {
+      expect(params).toMatchObject({ limit: 20, maxBytes: 64 * 1024 });
+    }
     expect(locksRequest).toHaveBeenCalledWith(
       "openclaw-chat-prefetch",
       { ifAvailable: true },
       expect.any(Function),
     );
     expect(
-      readChatSessionSnapshot(cache, snapshotHost, { sessionKey: "agent:main:eligible-5" }),
+      readChatSessionSnapshot(cache, snapshotHost, { sessionKey: "agent:main:eligible-2" }),
     ).toEqual({
-      messages: [{ role: "assistant", content: "agent:main:eligible-5" }],
+      messages: [{ role: "assistant", content: "agent:main:eligible-2" }],
       pagination: { hasMore: false, completeSnapshot: true },
-      sessionId: "id:agent:main:eligible-5",
+      sessionId: "id:agent:main:eligible-2",
     });
     expect(
       request.mock.calls.some((call) => sessionKeyFromCall(call) === "agent:main:eligible-6"),
@@ -694,7 +529,7 @@ describe("recent session prefetch", () => {
       row(`agent:main:recent-${index}`, NOW - index - 1),
     );
 
-    for (let listRevision = 1; listRevision <= 5; listRevision += 1) {
+    for (let listRevision = 1; listRevision <= 10; listRevision += 1) {
       updatePrefetch({ client, listRevision, openSessionKeys: [], rows });
       await vi.advanceTimersByTimeAsync(1_000);
       await settlePromises();
@@ -707,7 +542,7 @@ describe("recent session prefetch", () => {
     expect(store.readSavedAt("agent:main:recent-0")).not.toBeNull();
     expect(store.readSavedAt("agent:main:recent-19")).not.toBeNull();
 
-    updatePrefetch({ client, listRevision: 6, openSessionKeys: [], rows });
+    updatePrefetch({ client, listRevision: 11, openSessionKeys: [], rows });
     await vi.advanceTimersByTimeAsync(31_000);
     await settlePromises();
     await store.flush();
@@ -743,7 +578,7 @@ describe("recent session prefetch", () => {
     );
     const rows = [row(presentedSessionKey, NOW), ...backgroundRows];
 
-    for (let listRevision = 1; listRevision <= 5; listRevision += 1) {
+    for (let listRevision = 1; listRevision <= 10; listRevision += 1) {
       updatePrefetch({ client, listRevision, openSessionKeys: [presentedSessionKey], rows });
       await vi.advanceTimersByTimeAsync(1_000);
       await settlePromises();
@@ -996,7 +831,7 @@ describe("recent session prefetch", () => {
       rows: [row("agent:main:hidden", NOW - 1)],
     });
     await vi.advanceTimersByTimeAsync(1_500);
-    visibility = "hidden";
+    fixture.setVisibility("hidden");
     idle.callback?.({ didTimeout: false, timeRemaining: () => 50 });
     await settlePromises();
 

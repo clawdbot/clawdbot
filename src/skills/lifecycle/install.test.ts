@@ -10,11 +10,7 @@ import { createMockPluginRegistry } from "../../plugins/hooks.test-fixtures.js";
 import { captureEnv } from "../../test-utils/env.js";
 import { createFixtureSuite } from "../../test-utils/fixture-suite.js";
 import { buildWorkspaceSkillStatus } from "../discovery/status.js";
-import {
-  resolveSkillInvocationPolicy,
-  resolveSkillManifestMetadata,
-} from "../loading/frontmatter.js";
-import { loadSkillsFromDirSafe, readSkillFrontmatterSafe } from "../loading/local-loader.js";
+import { loadWorkspaceSkills } from "../loading/workspace-skill-loader.js";
 import { runCommandWithTimeoutMock } from "../test-support/install-test-mocks.js";
 import type { SkillEntry, SkillInstallSpec } from "../types.js";
 import { installSkill } from "./install.js";
@@ -66,29 +62,7 @@ async function writeDangerousInstallableSkill(workspaceDir: string, name: string
 }
 
 function loadTestWorkspaceSkillEntries(workspaceDir: string): SkillEntry[] {
-  const skills = loadSkillsFromDirSafe({
-    dir: path.join(workspaceDir, "skills"),
-    source: "openclaw-workspace",
-  }).skills;
-  return skills.map((skill) => {
-    const frontmatter =
-      readSkillFrontmatterSafe({
-        rootDir: skill.baseDir,
-        filePath: skill.filePath,
-      }) ?? {};
-    const invocation = resolveSkillInvocationPolicy(frontmatter);
-    return {
-      skill,
-      frontmatter,
-      metadata: resolveSkillManifestMetadata(frontmatter),
-      invocation,
-      exposure: {
-        includeInRuntimeRegistry: true,
-        includeInAvailableSkillsPrompt: !invocation.disableModelInvocation,
-        userInvocable: invocation.userInvocable,
-      },
-    };
-  });
+  return loadWorkspaceSkills(workspaceDir, { workspaceOnly: true });
 }
 
 function lastRunCommandCall(): unknown[] | undefined {

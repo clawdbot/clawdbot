@@ -188,6 +188,28 @@ describe("chat transcript invalidation", () => {
     expect(restoredItemsA.every((item, index) => item === itemsA[index])).toBe(true);
   });
 
+  it("keeps settled rows idle across session metadata updates but refreshes their identity gutter", () => {
+    vi.spyOn(Date, "now").mockReturnValue(60_000);
+    const props = threadProps("pane-session-metadata");
+    props.selectedSession = { key: props.sessionKey, kind: "direct", updatedAt: 1 };
+    const transcript = createTestTranscript();
+    const container = document.body.appendChild(document.createElement("div"));
+    const rerender = () => render(renderChatThread(props, transcript), container);
+    rerender();
+    const userRow = expectDefined(container.querySelector(".chat-group.user"), "user row");
+    expect(userRow.querySelector(".chat-avatar")).toBeNull();
+    const renderGroup = vi.spyOn(chatMessage, "renderMessageGroup");
+
+    props.selectedSession = { ...props.selectedSession, updatedAt: 2, label: "Renamed chat" };
+    rerender();
+    expect(renderGroup).not.toHaveBeenCalled();
+    expect(container.querySelector(".chat-group.user")).toBe(userRow);
+
+    props.selectedSession = { ...props.selectedSession, kind: "group" };
+    rerender();
+    expect(userRow.querySelector(".chat-avatar")).not.toBeNull();
+  });
+
   it("rebinds guarded transcript images when the gateway rotates its auth token", async () => {
     const NativeUrl = URL;
     const blobUrl = `blob:transcript-media-${crypto.randomUUID()}`;

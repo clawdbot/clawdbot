@@ -254,11 +254,15 @@ restriction for the continuation. An aborted turn is the interruption itself,
 so it resumes on a best-effort basis whatever abort detail the provider or worker recorded with it:
 partial streamed text stays in the transcript and the continuation picks up from
 the message beneath it, while a tool call left dangling is dropped from the next
-provider payload and restricted to restart-safe tools unless it is audited
-replay-safe. Provider failures, completed assistant tails, empty transcripts,
+provider payload. Provider failures, completed assistant tails, empty transcripts,
 and stale pending approvals also continue from the existing transcript. States
-with ambiguous side effects use restart-safe tools; otherwise the model decides
-what completed and what remains and can report any uncertainty to the user.
+with ambiguous side effects normally use restart-safe tools. A session with
+effective **Full Access**, including an inherited Full Access default, keeps its
+ordinary tools so it can inspect the outcome and finish the task. Recovery does
+not replay the interrupted call automatically or treat its missing result as
+success. Existing tool restrictions and current permissions still apply.
+Pending reply delivery, ambiguous reply-hook outcomes, and explicitly replay-safe
+Code Mode reconstruction retain their narrower recovery restrictions.
 
 OpenClaw can also reconstruct interrupted read-only [Code Mode](/tools/code-mode)
 work. Code Mode marks these runs as restart-safe and rejects side-effecting
@@ -267,9 +271,11 @@ the `wait` control, the new gateway reconstructs the turn from its transcript
 and forces the reconstructed execution to remain restart-safe even if the
 model omits or clears that flag. The host filters the entire reconstructed
 turn to audited read-only core tools and explicitly replay-safe plugin tools,
-including when Code Mode is disabled after the restart. A non-replay-safe or
-unmatched Code Mode checkpoint still resumes for model reconciliation, but
-without Code Mode controls and with the restart-safe tool restriction.
+including when Code Mode is disabled after the restart. Other interrupted
+Code Mode work resumes for model reconciliation: Full Access keeps its configured
+tool surface unless the current turn has an explicitly replay-safe checkpoint;
+other sessions retain the restart-safe restriction. Old process-local runs and
+approval handles are not revived.
 
 ### Subagents
 

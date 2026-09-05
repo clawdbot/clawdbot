@@ -407,6 +407,7 @@ describe("Control UI E2E resource ownership", () => {
     }
     const realGateway = [
       "agent-file-lifecycle.real-gateway",
+      "chat-loading-performance.real-gateway",
       "chat-widget-sandbox.real-gateway",
       "control-ui-auth-transports",
       "cron-duration-save.real-gateway",
@@ -440,12 +441,24 @@ describe("Control UI E2E resource ownership", () => {
 });
 
 describe("Control UI E2E Vitest sharding", () => {
-  it("uses the duration weighted sequencer", async () => {
+  it("shares isolated cleanup policy with the duration weighted sequencer", async () => {
     const [{ default: config }, { UiE2eSequencer }] = await Promise.all([
       import("./vitest/vitest.ui-e2e.config.ts"),
       import("./vitest/vitest.ui-e2e.sequencer.ts"),
     ]);
     expect(config.test?.sequence?.sequencer).toBe(UiE2eSequencer);
+    expect(Number.isFinite(config.test?.hookTimeout)).toBe(true);
+    expect(config.test?.hookTimeout).toBeGreaterThan(0);
+    for (const project of config.test?.projects ?? []) {
+      expect(project).toMatchObject({
+        test: {
+          pool: "forks",
+          isolate: true,
+          runner: undefined,
+          hookTimeout: config.test?.hookTimeout,
+        },
+      });
+    }
   });
 
   it("balances unmeasured files by source bytes", async () => {

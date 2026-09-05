@@ -604,9 +604,18 @@ back to OpenClaw.
 | Infrastructure            | Other `discovery` and `browser` settings, MCP Apps listener settings, `secrets.egressProxy`, `plugins.load`, `plugins.installs`                                                                                                                                    | **Yes**                                |
 
 Changes to `channels.defaults`, `channels.modelByChannel`, `messages.inbound`,
-`messages.ackReactionScope`, `commands`, `accessGroups`, `tts`, `surfaces`,
+`commands`, `accessGroups`, `tts`, `surfaces`,
 `acp.stream`, and `diagnostics.flags` restart loaded channel runtimes to refresh shared policy. Manually stopped accounts stay
 stopped, and the Gateway keeps running.
+
+`messages.ackReactionScope` applies to subsequent channel turns without reconnecting
+channels. Per-channel and per-account overrides still take precedence; turns
+already being processed retain their captured policy.
+
+`diagnostics.enabled` updates diagnostic dispatch and heartbeat ownership live.
+With `diagnostics-otel` loaded, `diagnostics.otel` restarts only its exporter service,
+flushing the old generation before starting the new one. Externally preloaded
+OpenTelemetry providers retain their transport and shutdown ownership.
 
 Operation settings apply at their next use; they do not restart in-flight runs
 or recreate provisioned workers. Approval expiry changes affect newly issued

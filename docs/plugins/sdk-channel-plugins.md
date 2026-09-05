@@ -285,6 +285,16 @@ fields, `accounts.default`, removed or unresolvable accounts, and mixed changes
 that can affect inheritance are promoted to a whole-channel restart. Plugins
 that do not opt in always use the whole-channel path.
 
+The Gateway retains the admitted account's `cfg`, resolved `account`, and owning
+`stopAccount` hook through teardown, including failed-stop retries. Cleanup must
+use that context even when the published config removes the account or a new
+plugin registration replaces it.
+
+Account-count-dependent policy needs whole-channel reloads. For example, Telegram
+changes how an empty account `groups` map inherits defaults between single- and
+multi-account configurations. Synology Chat also validates inherited and duplicate
+webhook paths across accounts. These plugins do not opt into account-only reloads.
+
 For channels using the durable ingress drain, the account monitor's stop path
 must first settle all accepted transport admissions, then dispose and await its
 drain. Starting the account opens the same account-keyed queue, whose initial

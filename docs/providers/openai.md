@@ -81,6 +81,10 @@ These defaults also apply to configured Astra model entries without explicit
 reasoning or temperature compatibility metadata.
 Azure Responses deployments continue to use their configured capabilities.
 
+`/think ultra` is also available on the OpenClaw and Codex runtimes. Ultra enables
+proactive sub-agent orchestration; it is not a raw Responses API effort. OpenClaw
+uses `max`, while native Codex selects Astra's model-defined effort (`xhigh`).
+
 Standard pricing per million tokens is $10 input, $1 cache reads, $12.50 cache
 writes, and $50 output. Requests above 272K input tokens have higher rates.
 See the [Astra model reference](https://developers.openai.com/api/docs/models/gpt-6-astra)

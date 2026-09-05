@@ -108,7 +108,7 @@ describe("Gateway restored requester settlement", () => {
         }
       } finally {
         closeOpenClawStateDatabaseForTest();
-        instance.state.restoreEnv();
+        await instance.state.restoreEnv();
       }
 
       await instance.startGateway();

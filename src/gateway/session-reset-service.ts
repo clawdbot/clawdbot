@@ -1577,7 +1577,9 @@ export async function performGatewaySessionReset(params: {
         commitGuard: assertCompletionAuthorized,
         archivePreviousTranscript: false,
         agentId: target.agentId,
-        resetBoundary: boundaryEntry ? { context: "clear", reason: params.reason } : undefined,
+        resetBoundary: boundaryEntry
+          ? { context: "clear", reason: params.reason, cwd: workspaceDir }
+          : undefined,
         storePath,
         target: {
           canonicalKey: target.canonicalKey,

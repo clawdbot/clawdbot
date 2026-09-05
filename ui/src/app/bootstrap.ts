@@ -469,6 +469,7 @@ export function bootstrapApplication(): ApplicationRuntime {
     basePath,
     resourceBasePath,
     lifecycleAbortSignal: startupLifecycle.signal,
+    router,
     gateway,
     connectionBootstrap,
     agents,

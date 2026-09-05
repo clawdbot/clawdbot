@@ -20,7 +20,7 @@ import type { CodexAppServerAuthRequirement, CodexAppServerPreparedAuth } from "
 import type { CodexAppServerClient } from "./client.js";
 import { resolveCodexAppServerRuntimeOptions } from "./config.js";
 import { createCodexElicitationResponse } from "./elicitation-response.js";
-import { normalizeCodexResponseTokenUsage } from "./event-projector-usage.js";
+import { CodexUsageProjection } from "./event-projector-usage.js";
 import { readCodexAppServerConfigOptions } from "./launch-args.js";
 import { readModelListResult } from "./models.js";
 import { readCodexNotificationTurnId } from "./notification-correlation.js";
@@ -84,7 +84,7 @@ type CodexBoundedTurnResult = {
   items: CodexThreadItem[];
   model: string;
   nativeSelection: { model: string; modelProvider?: string | null };
-  usage?: ReturnType<typeof normalizeCodexResponseTokenUsage>;
+  usage?: CodexUsageProjection["usage"];
 };
 
 type CodexBoundedTurnModelSelection = { mode: "required"; id: string } | { mode: "live-default" };
@@ -525,7 +525,7 @@ function createCodexBoundedTurnCollector(
   let turnId: string | undefined;
   let completedTurn: CodexTurn | undefined;
   let promptError: string | undefined;
-  let responseUsage: ReturnType<typeof normalizeCodexResponseTokenUsage>;
+  const usageProjection = new CodexUsageProjection();
   const pending: CodexServerNotification[] = [];
   const completedItems = new Map<string, CodexThreadItem>();
   const assistantTextByItem = new Map<string, string>();
@@ -571,9 +571,7 @@ function createCodexBoundedTurnCollector(
       return;
     }
     if (notification.method === "rawResponse/completed") {
-      const usage = isJsonObject(params.usage) ? params.usage : undefined;
-      // Exact per-response usage replaces any earlier response in this turn.
-      responseUsage = usage ? normalizeCodexResponseTokenUsage(usage) : undefined;
+      usageProjection.record(params);
       return;
     }
     if (notification.method === "turn/completed") {
@@ -583,6 +581,7 @@ function createCodexBoundedTurnCollector(
       return;
     }
     if (notification.method === "error") {
+      usageProjection.invalidateContext();
       if (isRetryableErrorNotification(notification.params)) {
         return;
       }
@@ -638,7 +637,7 @@ function createCodexBoundedTurnCollector(
       if (!text && !allowEmptyText) {
         throw new Error(`Codex app-server ${taskLabel} turn returned no text.`);
       }
-      return { text, items, ...(responseUsage ? { usage: responseUsage } : {}) };
+      return { text, items, usage: usageProjection.usage };
     },
   };
 }

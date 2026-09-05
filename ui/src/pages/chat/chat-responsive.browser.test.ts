@@ -4289,7 +4289,6 @@ describeBrowserLayout.concurrent("chat responsive browser layout", () => {
           `<!doctype html><html><head><style>${readUiCss()}</style></head><body>
           <div style="width: ${width}px; height: ${height}px; display: flex;">
             <div class="sidebar-region sidebar-region--${dock} sidebar-region--open" style="--side-panel-height: 360px">
-              <header class="rail-header" data-region-header="main">Chat</header>
               <main class="sidebar-region__primary" data-region="main">Primary chat</main>
               <section class="side-panel">
                 <div class="rail-header side-panel__header" data-region-header="side">Details</div>
@@ -4310,7 +4309,7 @@ describeBrowserLayout.concurrent("chat responsive browser layout", () => {
         expect(sidebar.width).toBeGreaterThanOrEqual(width - 2);
         expect(primary.height).toBeGreaterThan(80);
         expect(sidebar.height).toBeGreaterThan(80);
-        expect(sidebar.bottom - primary.top).toBeLessThan(height);
+        expect(sidebar.bottom - primary.top).toBe(height);
         if (dock === "bottom" && height === 1000) {
           expect(sidebar.height).toBe(360);
         }

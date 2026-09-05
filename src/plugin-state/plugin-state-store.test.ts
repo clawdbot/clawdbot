@@ -3,6 +3,7 @@ import { chmodSync, existsSync, rmSync, statSync } from "node:fs";
 import path from "node:path";
 import { MAX_DATE_TIMESTAMP_MS } from "@openclaw/normalization-core/number-coercion";
 import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
+import { trackSqliteStatementExecutions } from "../../test/helpers/sqlite-statement-execution-counter.js";
 import {
   closeOpenClawStateDatabaseByPath,
   isOpenClawStateDatabaseOpen,
@@ -505,18 +506,38 @@ describe("plugin state keyed store", () => {
     });
   });
 
-  it("evicts oldest live entries over maxEntries", async () => {
+  it("evicts oldest live entries over maxEntries with bounded database calls", async () => {
     await withPluginStateTestState(async () => {
       vi.useFakeTimers();
-      const store = createPluginStateKeyedStore("discord", { namespace: "evict", maxEntries: 2 });
       vi.setSystemTime(1000);
-      await store.register("a", 1);
-      vi.setSystemTime(2000);
-      await store.register("b", 2);
-      vi.setSystemTime(3000);
-      await store.register("c", 3);
+      seedPluginStateEntriesForTests(
+        Array.from({ length: 64 }, (_, index) => ({
+          pluginId: "discord",
+          namespace: "evict",
+          key: `key-${String(index).padStart(2, "0")}`,
+          value: index,
+          createdAt: Math.floor(index / 2),
+        })),
+      );
+      const store = createPluginStateKeyedStore("discord", { namespace: "evict", maxEntries: 3 });
+      const statements = trackSqliteStatementExecutions(
+        openOpenClawStateDatabase().db,
+        ["delete"],
+        (sql) => (sql.startsWith('delete from "plugin_state_entries"') ? "delete" : null),
+      );
+      try {
+        await store.register("a-protected", 64);
+      } finally {
+        statements.restore();
+      }
 
-      expect((await store.entries()).map((entry) => entry.key)).toEqual(["b", "c"]);
+      // One bounded expiry sweep plus eviction must not scale with the victim count.
+      expect(statements.counts.delete).toBeLessThanOrEqual(2);
+      expect(await store.entries()).toEqual([
+        { key: "key-62", value: 62, createdAt: 31 },
+        { key: "key-63", value: 63, createdAt: 31 },
+        { key: "a-protected", value: 64, createdAt: 1000 },
+      ]);
     });
   });
 

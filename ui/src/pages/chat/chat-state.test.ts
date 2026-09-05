@@ -5,6 +5,7 @@ import type { GatewayBrowserClient } from "../../api/gateway.ts";
 import * as assistantIdentity from "../../app/assistant-identity.ts";
 import { createChatSubmissions } from "../../app/chat-submissions.ts";
 import type { ApplicationContext } from "../../app/context.ts";
+import { createAgentIdentityCapability } from "../../lib/agents/identity.ts";
 import { invalidateChatMetadataStore } from "../../lib/chat/chat-metadata-store.ts";
 import {
   buildFallbackSlashCommands,
@@ -1039,7 +1040,8 @@ describe("canonical session message recovery", () => {
       await vi.waitFor(() =>
         expect(request).toHaveBeenCalledWith("chat.history", {
           sessionKey: state.sessionKey,
-          limit: 800,
+          limit: 80,
+          maxBytes: 256 * 1024,
         }),
       );
       await vi.waitFor(() => expect(state.chatLoading).toBe(false));
@@ -2343,7 +2345,8 @@ describe("canonical session message recovery", () => {
     await vi.waitFor(() => {
       expect(request).toHaveBeenCalledWith("chat.history", {
         sessionKey: state.sessionKey,
-        limit: 800,
+        limit: 80,
+        maxBytes: 256 * 1024,
       });
     });
     expect(state.chatRunId).toBe("active-run");
@@ -3595,6 +3598,10 @@ describe("loadPageAssistantIdentity", () => {
       }),
     );
     const client = { request } as unknown as GatewayBrowserClient;
+    const identities = createAgentIdentityCapability({
+      snapshot: { client, phase: "connected" },
+      subscribe: () => () => undefined,
+    });
     const context = {
       agents: { state: { agentsList: null }, ensureList: vi.fn(async () => null) },
       agentSelection: { state: { selectedId: "main" } },
@@ -3642,10 +3649,9 @@ describe("loadPageAssistantIdentity", () => {
     state.sessionKey = "agent:main:third";
     await state.loadAssistantIdentity();
     expect(request).toHaveBeenCalledTimes(3);
-    expect(request).toHaveBeenLastCalledWith("agent.identity.get", { agentId: "main" });
 
     const staleIdentity = createDeferred<{ name: string; agentId: string }>();
-    assistantIdentity.invalidateAssistantIdentityCache(client);
+    identities.invalidate(["main"]);
     let holdMainIdentity = true;
     request.mockImplementation((method: string, params?: { agentId?: string }) => {
       if (method === "chat.metadata") {

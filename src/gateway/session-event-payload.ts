@@ -109,6 +109,8 @@ export function buildGatewaySessionEventFields(params: {
     effectiveResponseUsage: sessionRow.effectiveResponseUsage,
     modelProvider: sessionRow.modelProvider,
     model: sessionRow.model,
+    activeModelProvider: sessionRow.activeModelProvider ?? null,
+    activeModel: sessionRow.activeModel ?? null,
     modelOverrideSource: sessionRow.modelOverrideSource,
     agentRuntime: sessionRow.agentRuntime,
     status: params.status ?? sessionRow.status,
@@ -165,17 +167,11 @@ export function buildGatewaySessionSnapshot(params: {
   for (const key of ["thinkingLevels", "thinkingOptions", "thinkingDefault"] as const) {
     delete sessionRow[key];
   }
-  if (params.lifecycle) {
-    delete sessionRow.modelProvider;
-    delete sessionRow.model;
-    delete sessionRow.modelOverrideSource;
-    delete sessionRow.agentRuntime;
-    if (sessionRow.totalTokensFresh !== true) {
-      delete sessionRow.totalTokens;
-      delete sessionRow.totalTokensFresh;
-      delete sessionRow.contextTokens;
-      delete sessionRow.estimatedCostUsd;
-    }
+  if (params.lifecycle && sessionRow.totalTokensFresh !== true) {
+    delete sessionRow.totalTokens;
+    delete sessionRow.totalTokensFresh;
+    delete sessionRow.contextTokens;
+    delete sessionRow.estimatedCostUsd;
   }
   // Accepted terminal events outrank retained cleanup liveness; otherwise the
   // active owner, not a stale persisted row, supplies current run status.
@@ -194,6 +190,20 @@ export function buildGatewaySessionSnapshot(params: {
     // Presence means an exact set; null clears stale IDs when only liveness is known.
     activeRunIds: params.activeRunState ? (params.activeRunState.runIds ?? null) : undefined,
   });
+  if (params.lifecycle) {
+    // Lifecycle snapshots cannot replace selection metadata or clear an active fallback.
+    for (const field of [
+      "modelProvider",
+      "model",
+      "activeModelProvider",
+      "activeModel",
+      "modelOverrideSource",
+      "agentRuntime",
+    ] as const) {
+      delete sessionRow[field];
+      delete eventFields[field];
+    }
+  }
   const session: Record<string, unknown> | undefined = params.includeSession
     ? Object.assign(
         sessionRow,

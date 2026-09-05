@@ -39,6 +39,7 @@ import {
 import { recoverStuckDiagnosticSession } from "../../logging/diagnostic-stuck-session-recovery.runtime.js";
 import { diagnosticLogger, startDiagnosticHeartbeat } from "../../logging/diagnostic.js";
 import { resetDiagnosticStateForTest } from "../../logging/diagnostic.test-support.js";
+import { AsyncWorkScope } from "../../shared/async-work-scope.js";
 import { withOpenClawTestState } from "../../test-utils/openclaw-test-state.js";
 import { createAgentRuntimeApprovalAuthorityValidator } from "../agent-runtime-identity-token.js";
 import { QuestionManager } from "../question-manager.js";
@@ -122,7 +123,7 @@ afterEach(() => {
   releaseAgentRunDelegatedAuthority(authority);
   unregister();
   clearAgentRunContext(ref.runId);
-  manager.reset();
+  manager.close();
   embeddedRunTesting.resetActiveEmbeddedRuns();
   resetDiagnosticEventsForTest();
   vi.useRealTimers();
@@ -346,7 +347,29 @@ it.each([900_000, 3_600_000])(
   },
 );
 
-it.each(["cancel", "reset", "authority", "generation"] as const)(
+it("does not expire a stopped RPC observer's question before its expiry callback runs", async () => {
+  const id = await request("ask_user", false, 100);
+  const events: string[] = [];
+  onBroadcast = (event) => events.push(event);
+  const observer = new AsyncWorkScope();
+  const waiting = observer.track(() => call("question.waitAnswer", { id }, false));
+  try {
+    observer.beginClose();
+    // The clock can pass expiry while its timer is still queued. Observation
+    // cleanup must not turn that queued deadline into a question decision.
+    vi.setSystemTime(Date.now() + 101);
+    await expect(waiting).resolves.toEqual([true, { status: "pending" }, undefined]);
+    await observer.drain();
+    manager.close();
+    expect(events).toEqual([]);
+  } finally {
+    manager.close();
+    await waiting;
+    await observer.drain();
+  }
+});
+
+it.each(["cancel", "reset", "close", "authority", "generation"] as const)(
   "releases protection after %s closes the question",
   async (terminal) => {
     const id = await request("ask_user");
@@ -356,6 +379,9 @@ it.each(["cancel", "reset", "authority", "generation"] as const)(
     }
     if (terminal === "reset") {
       manager.reset();
+    }
+    if (terminal === "close") {
+      manager.close();
     }
     if (terminal === "authority") {
       admission.close();

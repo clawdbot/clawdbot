@@ -48,7 +48,7 @@ async function createRegion(
     terminal: html`<div data-panel="terminal">Terminal panel</div>`,
     workspace: html`<div data-panel="workspace">Workspace panel</div>`,
   };
-  region.availableSlots = ["detail", "terminal", "workspace", "companion"];
+  region.availableSlots = ["detail", "terminal", "workspace", "companion", "dashboard"];
   if (definitions) {
     region.panelDefinitions = definitions;
     region.panelTemplates = sidebarPanelTemplates(definitions);
@@ -58,10 +58,8 @@ async function createRegion(
     activatePanel: vi.fn(),
     closeSlot: vi.fn(),
     openSlot: vi.fn(),
-    appendComposerText: vi.fn(),
     reorderPanel: vi.fn(),
     resizePanel: vi.fn(),
-    setExpanded: vi.fn(),
     setOpen: vi.fn(),
   };
   region.availableWidth = 1_200;
@@ -400,8 +398,7 @@ describe("chat sidebar region", () => {
       root(region).querySelectorAll<HTMLButtonElement>(".side-panel-empty__type"),
     ).find((button) => button.textContent?.trim() === "Dashboard");
     dashboard?.click();
-    expect(region.callbacks?.appendComposerText).toHaveBeenCalledWith("/dashboard ");
-    expect(region.callbacks?.openSlot).not.toHaveBeenCalledWith("dashboard");
+    expect(region.callbacks?.openSlot).toHaveBeenCalledWith("dashboard");
   });
 
   it("gives every surface the shared icon, title, and description empty state", async () => {
@@ -477,50 +474,27 @@ describe("chat sidebar region", () => {
     expect(browserEmptyItem?.querySelector('path[d="M2 12h20"]')).not.toBeNull();
   });
 
-  it("focuses or restores main and dismisses the side panel independently", async () => {
+  it("keeps side tab dismissal separate from task toolbar actions", async () => {
     const region = await createRegion();
-    root(region).querySelector<HTMLButtonElement>(".side-panel__expand")?.click();
     root(region)
       .querySelector<HTMLButtonElement>('[data-region-header="side"] .side-panel__minimize')
       ?.click();
-    expect(region.callbacks?.setExpanded).toHaveBeenCalledWith(true);
     expect(region.callbacks?.setOpen).toHaveBeenCalledWith(false);
-
     region.layout = setSidebarExpanded(promoteSidebarPanel(region.layout, "detail"), true);
     await region.updateComplete;
-    const collapse = root(region).querySelector<HTMLButtonElement>(".side-panel__expand");
-    expect(collapse?.getAttribute("aria-label")).toBe("Restore split");
-    expect(root(region).querySelector('[data-region-header="main"]')?.textContent).toContain(
-      "Review",
-    );
+    expect(root(region).querySelector('[data-region-header="main"]')).toBeNull();
     expect(
       Array.from(root(region).querySelectorAll(".tabstrip-tab__label"), (node) =>
         node.textContent?.trim(),
       ),
     ).toEqual(["Chat"]);
-    collapse?.click();
-    expect(region.callbacks?.setExpanded).toHaveBeenLastCalledWith(false);
-    root(region)
-      .querySelector<HTMLButtonElement>('[data-region-header="main"] .side-panel__minimize')
-      ?.click();
-    expect(region.callbacks?.setOpen).toHaveBeenLastCalledWith(true);
-    region.layout = setSidebarExpanded(region.layout, false);
-    await region.updateComplete;
-    root(region)
-      .querySelector<HTMLButtonElement>('[data-region-header="main"] .side-panel__minimize')
-      ?.click();
-    expect(region.callbacks?.setOpen).toHaveBeenLastCalledWith(false);
   });
 
-  it("offers main focus and side dismissal while the tab selector is empty", async () => {
+  it("opens an empty selector without adding another title row", async () => {
     const region = await createRegion(setSidebarOpen({ columns: [] }, true));
     expect(root(region).querySelector("resizable-divider")).not.toBeNull();
-    root(region).querySelector<HTMLButtonElement>(".side-panel__expand")?.click();
-    root(region)
-      .querySelector<HTMLButtonElement>('[data-region-header="side"] .side-panel__minimize')
-      ?.click();
-    expect(region.callbacks?.setExpanded).toHaveBeenCalledWith(true);
-    expect(region.callbacks?.setOpen).toHaveBeenCalledWith(false);
+    expect(root(region).querySelector(".side-panel-empty__types")).not.toBeNull();
+    expect(root(region).querySelector("[data-region-header]")).toBeNull();
   });
 
   it("uses one inherited divider and reports bounded panel width", async () => {
@@ -571,7 +545,7 @@ describe("chat sidebar region", () => {
     );
   });
 
-  it("retains hidden side content and main controls when the side panel is minimized", async () => {
+  it("retains hidden side content and visible main content when the side panel is minimized", async () => {
     const layout = promoteSidebarPanel(
       openSlot(openSlot({ columns: [] }, "detail"), "terminal"),
       "detail",
@@ -585,7 +559,7 @@ describe("chat sidebar region", () => {
       false,
     );
     expect(root(region).querySelector("resizable-divider")).toBeNull();
-    expect(root(region).querySelector('[data-region-header="main"]')).not.toBeNull();
+    expect(root(region).querySelector('[data-region-header="main"]')).toBeNull();
     expect(root(region).querySelector("[data-primary]")).not.toBeNull();
   });
 

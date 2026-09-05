@@ -3,7 +3,6 @@ import type {
   SessionTypingEvent,
   TaskSuggestionEvent,
 } from "../../../../packages/gateway-protocol/src/index.js";
-import { invalidateAssistantIdentityCache } from "../../app/assistant-identity.ts";
 import { chatInputOwnerForContext } from "../../app/chat-input-owner.ts";
 import {
   disposeQuestionPromptState,
@@ -454,7 +453,6 @@ export abstract class ChatPaneLifecycle extends ChatPaneSessionCreation {
         if (state) {
           if (event.event === "config.changed") {
             chatAvatars.invalidateChatAvatarCache(state);
-            invalidateAssistantIdentityCache(state.client);
             state.assistantIdentityRequestVersion += 1;
             void chatAvatars.refreshChatAvatar(state).finally(() => state.requestUpdate?.());
           }
@@ -607,7 +605,6 @@ export abstract class ChatPaneLifecycle extends ChatPaneSessionCreation {
     }
     this.stagedAttachmentGatewayOwner = null;
     this.clearComposerPrefillAttention();
-    this.retainedBoardSessionKey = "";
     this.boardProviderLifecycleConnected = false;
     this.releaseBoardProviderLease();
     this.settleResetConfirmation(false);
