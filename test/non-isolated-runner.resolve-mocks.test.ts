@@ -143,6 +143,19 @@ describe("serializeMockerResolveMocks", () => {
     expect(FakeMocker.pendingIds).toEqual([]);
   });
 
+  it("resolves queued ids before cleanup without an active caller", async () => {
+    FakeMocker.pendingIds = ["mock-idle"];
+    const mocker = new FakeMocker();
+    serializeMockerResolveMocks(mocker);
+
+    await drainMockerResolveMocks(mocker);
+    mocker.reset();
+
+    expect(mocker.resetObservations).toEqual([
+      { active: 0, pendingIds: [], processed: ["mock-idle"] },
+    ]);
+  });
+
   it("drains every queued pass before cleanup resets the mocker", async () => {
     FakeMocker.pendingIds = ["mock-a"];
     const mocker = new FakeMocker();
