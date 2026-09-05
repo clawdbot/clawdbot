@@ -11,7 +11,9 @@ import {
   readSessionMessageByIdAsync,
   readSessionMessageCountAsync,
   readSessionMessagesAsync,
+  readSessionMessagesMatchingIdAsync,
   readSessionMessagesPageWithStatsAsync,
+  visitSessionMessagesAsync,
   type SessionTranscriptReadScope,
 } from "./session-transcript-readers.js";
 
@@ -162,6 +164,23 @@ describe("session transcript reader marker projection", () => {
     });
 
     expect(messageIds(full)).toEqual(fixture.expectedIds);
+    const expectedVisits: Array<{ message: unknown; seq: number }> = [];
+    let messageSeq = 0;
+    for (const event of fixture.events) {
+      if (event.type === "message") {
+        messageSeq += 1;
+        if (fixture.expectedIds.includes(event.id)) {
+          expectedVisits.push({ message: event.message, seq: messageSeq });
+        }
+      }
+    }
+    const visited: Array<{ message: unknown; seq: number }> = [];
+    await expect(
+      visitSessionMessagesAsync(scope, (entryMessage, seq) =>
+        visited.push({ message: entryMessage, seq }),
+      ),
+    ).resolves.toBe(expectedVisits.length);
+    expect(visited).toEqual(expectedVisits);
     expect(messageIds(recent.messages)).toEqual(fixture.expectedIds.slice(-2));
     expect(recent.totalMessages).toBe(fixture.expectedIds.length);
     expect(await readSessionMessageCountAsync(scope)).toBe(fixture.expectedIds.length);
@@ -175,6 +194,7 @@ describe("session transcript reader marker projection", () => {
         messageId: id,
         maxMessages: 10,
       });
+      expect(await readSessionMessagesMatchingIdAsync(scope, id)).toEqual([full[index]]);
       expect(messageIds(page.messages)).toEqual([id]);
       expect(page.totalMessages).toBe(fixture.expectedIds.length);
       expect(byId).toMatchObject({ found: true, seq: index + 1 });
@@ -199,6 +219,7 @@ describe("session transcript reader marker projection", () => {
     for (const { id } of fixture.events.filter(
       (event) => !fixture.expectedIds.includes(event.id),
     )) {
+      expect(await readSessionMessagesMatchingIdAsync(scope, id)).toEqual([]);
       expect(await readSessionMessageByIdAsync(scope, id)).toMatchObject({ found: false });
       expect(
         await readSessionMessagesAroundIdWithStatsAsync(scope, { messageId: id, maxMessages: 10 }),

@@ -101,6 +101,7 @@ function isUserSessionMessageEntry(
 export function resolveOrphanRepairPlan(params: {
   sessionManager: OrphanRepairSessionManager;
   prompt: string;
+  preserveLeaf: boolean;
   trigger: EmbeddedRunAttemptParams["trigger"];
 }): OrphanRepairPlan | undefined {
   const candidate = findTrailingMessageEntryForOrphanRepair(params.sessionManager);
@@ -118,6 +119,6 @@ export function resolveOrphanRepairPlan(params: {
     messageEntry: candidate.messageEntry,
     trailingEntries: candidate.trailingEntries,
     strategy,
-    removeLeaf: merge.removeLeaf,
+    removeLeaf: merge.removeLeaf || !params.preserveLeaf,
   };
 }

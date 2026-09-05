@@ -1,9 +1,10 @@
 // Runs child commands with process-group signal forwarding and Windows shell normalization.
 import { spawn, spawnSync } from "node:child_process";
 import type { ChildProcess, StdioOptions } from "node:child_process";
-import { constants as osConstants } from "node:os";
+import { constants as osConstants, tmpdir } from "node:os";
 import { Writable } from "node:stream";
 import { buildCmdExeCommandLine, resolveWindowsCmdExePath } from "../windows-cmd-helpers.mjs";
+import { findVitestResourceOwner } from "./vitest-resource-ownership.mts";
 import { resolveWindowsTaskkillPath } from "./windows-taskkill.mjs";
 
 const FORWARDED_SIGNALS = ["SIGINT", "SIGTERM", "SIGHUP"] satisfies NodeJS.Signals[];
@@ -66,7 +67,7 @@ type RunManagedCommandOptions = ManagedCommandOptions & {
 };
 
 type ManagedCommandOutcome =
-  | { type: "completed"; status: number }
+  | { type: "completed"; exit: number | NodeJS.Signals }
   | { type: "failed"; error: unknown }
   | { type: "timeout" }
   | { type: "aborted" }
@@ -74,6 +75,35 @@ type ManagedCommandOutcome =
 
 const managedChildren = new Set<(signal: NodeJS.Signals) => void>();
 const signalHandlers = new Map<NodeJS.Signals, () => void>();
+
+/** Nested command failures retain their owner's inputs until process cleanup is verified. */
+export function hasUnjoinedWork(value: unknown): boolean {
+  const pending: unknown[] = [value];
+  const seen = new Set<object>();
+  for (const current of pending) {
+    if (!current || typeof current !== "object" || seen.has(current)) {
+      continue;
+    }
+    // Native execFileSync errors can point .error back to themselves. Skip only
+    // that identity; other aggregate members and wrapper edges still need checking.
+    seen.add(current);
+    if ("processTreeState" in current && current.processTreeState !== "terminated") {
+      return true;
+    }
+    if (current instanceof AggregateError) {
+      for (const error of current.errors) {
+        pending.push(error);
+      }
+    }
+    if ("cause" in current) {
+      pending.push(current.cause);
+    }
+    if ("error" in current) {
+      pending.push(current.error);
+    }
+  }
+  return false;
+}
 
 /** Return the conventional shell exit code for a signal. */
 export function signalExitCode(signal: NodeJS.Signals) {
@@ -187,12 +217,13 @@ export function inspectManagedProcessGroup(
   }
   try {
     process.kill(-pid, 0);
-    if (
-      platform === "linux" &&
-      (child.exitCode != null || child.signalCode != null) &&
-      isLinuxZombieProcessGroup(pid)
-    ) {
-      return "dead";
+    if (platform === "linux" && (child.exitCode != null || child.signalCode != null)) {
+      if (isLinuxZombieProcessGroup(pid)) {
+        return "dead";
+      }
+      // The group may be reaped while ps runs. Recheck kernel existence without
+      // treating an empty or failed snapshot as proof of completion.
+      process.kill(-pid, 0);
     }
     return "live";
   } catch (error) {
@@ -223,7 +254,9 @@ export function inspectManagedProcessGroup(
 function isLinuxZombieProcessGroup(pid: number): boolean {
   // Detached children lead their own session. Linux kill(0) includes zombies,
   // which cannot write or respond to signals while awaiting their parent's reap.
-  const result = spawnSync("ps", ["-s", String(pid), "-o", "pgid=,state="], {
+  // Enumerate threads (-L): a process row reports only the group leader's state,
+  // and a pthread_exit leader reads Z while sibling threads still run and write.
+  const result = spawnSync("ps", ["-s", String(pid), "-L", "-o", "pgid=,state="], {
     encoding: "utf8",
     stdio: ["ignore", "pipe", "ignore"],
     timeout: PROCESS_GROUP_DRAIN_TIMEOUT_MS,
@@ -270,15 +303,8 @@ export async function waitForManagedProcessGroupExit(
 
 /** Run a child command while forwarding termination signals to its process group. */
 export async function runManagedCommand({
-  bin,
-  args = [],
-  cwd,
-  env,
   stdio = "inherit",
   platform = process.platform,
-  shell = platform === "win32",
-  windowsVerbatimArguments,
-  comSpec,
   timeoutMs,
   timeoutKillGraceMs,
   timeoutForceKillOnLeaderExit = false,
@@ -288,9 +314,13 @@ export async function runManagedCommand({
   signal,
   abortKillGraceMs,
   onSignal,
+  ...commandOptions
 }: RunManagedCommandOptions) {
   if (platform === "win32" && requireProcessTreeExit) {
-    throw createManagedCommandUnsupportedTreeVerificationError();
+    throw Object.assign(
+      new Error("Strict managed process-tree verification is not supported on Windows"),
+      { code: "EPROCESS_TREE_VERIFICATION_UNSUPPORTED" },
+    );
   }
   signal?.throwIfAborted();
   const managedStdio: StdioOptions =
@@ -314,16 +344,18 @@ export async function runManagedCommand({
     return undefined;
   });
   const spawnSpec = createManagedCommandSpawnSpec({
-    bin,
-    args,
-    cwd,
-    env,
+    ...commandOptions,
     stdio: managedStdio,
-    shell,
-    windowsVerbatimArguments,
     platform,
-    comSpec,
   });
+  const commandEnv = commandOptions.env ?? process.env;
+  let releaseClaim = findVitestResourceOwner(
+    commandEnv.TMPDIR || commandEnv.TMP || commandEnv.TEMP || tmpdir(),
+  )?.claim();
+  const releaseOwnership = () => {
+    releaseClaim?.();
+    releaseClaim = undefined;
+  };
   // Register before spawn: a child can become ready before spawn returns.
   installSignalHandlers();
   let child: ChildProcess;
@@ -331,37 +363,40 @@ export async function runManagedCommand({
     child = spawn(spawnSpec.command, spawnSpec.args, spawnSpec.options);
   } catch (error) {
     removeSignalHandlersIfIdle();
+    releaseOwnership();
     throw error;
   }
   let timeoutTimer: ReturnType<typeof setTimeout> | undefined;
-  let finalization: Promise<void> | undefined;
-  let cancellation: Promise<ManagedCommandOutcome> | undefined;
-  let resolveCancellation!: (outcome: ManagedCommandOutcome) => void;
-  const canceled = new Promise<ManagedCommandOutcome>((resolve) => {
-    resolveCancellation = resolve;
+  let finalization: Promise<{ type: "failed"; error: unknown } | undefined> | undefined;
+  let cancellation: ManagedCommandOutcome | undefined;
+  let notifyOutcome!: (outcome: ManagedCommandOutcome) => void;
+  const completion = new Promise<ManagedCommandOutcome>((resolve) => {
+    notifyOutcome = resolve;
   });
-  const stop = (
-    outcome: ManagedCommandOutcome,
-    stopSignal: NodeJS.Signals,
+  const finalize = (
+    stopSignal?: NodeJS.Signals,
     forceKillDelayMs?: number,
     forceKillOnLeaderExit = false,
   ) => {
-    if (cancellation) {
-      return cancellation;
-    }
-    clearTimeout(timeoutTimer);
-    finalization ??= finalizeManagedChild(child, stopSignal, {
+    // Observe eager rejection even when cancellation starts inside onReady.
+    // Physical release stays in onTerminated: strict cleanup can release, then fail.
+    return (finalization ??= finalizeManagedChild(child, stopSignal, {
       platform,
       runTaskkill,
       forceKillDelayMs,
       forceKillOnLeaderExit,
-    });
-    cancellation = finalization.then(
-      () => outcome,
+      onTerminated: releaseOwnership,
+    }).then(
+      () => undefined,
       (error: unknown) => ({ type: "failed" as const, error }),
-    );
-    void cancellation.then(resolveCancellation);
-    return cancellation;
+    ));
+  };
+  const stop = (outcome: ManagedCommandOutcome, ...termination: Parameters<typeof finalize>) => {
+    cancellation ??= outcome;
+    clearTimeout(timeoutTimer);
+    const joined = finalize(...termination);
+    notifyOutcome(cancellation);
+    return joined;
   };
   const forwardSignal = (received: NodeJS.Signals) => {
     onSignal?.(received);
@@ -372,20 +407,18 @@ export async function runManagedCommand({
   };
   managedChildren.add(forwardSignal);
   try {
-    const completion = new Promise<ManagedCommandOutcome>((resolve) => {
-      child.once("error", (error) => {
-        clearTimeout(timeoutTimer);
-        resolve({ type: "failed", error });
-      });
-      // The wall deadline includes output drainage, but not group verification after close.
-      child.once("close", () => clearTimeout(timeoutTimer));
-      // Strict owners must start cleanup at exit: descendants can hold output
-      // open indefinitely. Finalization still joins the group and output pipes.
-      child.once(requireProcessTreeExit ? "exit" : "close", (status, received) => {
-        resolve({
-          type: "completed",
-          status: received ? signalExitCode(received) : (status ?? 1),
-        });
+    child.once("error", (error) => {
+      clearTimeout(timeoutTimer);
+      notifyOutcome({ type: "failed", error });
+    });
+    // The wall deadline includes output drainage, but not group verification after close.
+    child.once("close", () => clearTimeout(timeoutTimer));
+    // Strict owners must start cleanup at exit: descendants can hold output
+    // open indefinitely. Finalization still joins the group and output pipes.
+    child.once(requireProcessTreeExit ? "exit" : "close", (status, received) => {
+      notifyOutcome({
+        type: "completed",
+        exit: received ?? status ?? 1,
       });
     });
     if (timeoutMs !== undefined) {
@@ -415,28 +448,32 @@ export async function runManagedCommand({
       onReady?.(child);
     } catch (error) {
       const cleanup = await stop({ type: "failed", error }, "SIGTERM");
-      if (cleanup.type === "failed" && cleanup.error !== error) {
+      if (cleanup && cleanup.error !== error) {
         throw createManagedCommandSetupCleanupError(error, cleanup.error);
       }
       throw error;
     }
-    let outcome = await Promise.race([completion, canceled]);
-    if (outcome.type === "completed" && requireProcessTreeExit && !cancellation) {
-      try {
-        await (finalization ??= finalizeManagedChild(child, undefined, { platform, runTaskkill }));
-      } catch (error) {
-        outcome = { type: "failed", error };
-      }
+    let outcome = await completion;
+    if (outcome.type === "completed" && requireProcessTreeExit) {
+      // Preserve actual signal cleanup; numeric 143 must still reject lingering descendants.
+      const exitSignal = typeof outcome.exit === "string" ? outcome.exit : undefined;
+      void finalize(exitSignal);
     }
-    // Cancellation owns the result even when it arrives during normal drainage.
-    if (cancellation) {
-      outcome = await cancellation;
+    // Cleanup failure overrides the first cancellation, including during strict drainage.
+    const cleanup = finalization ? await finalization : undefined;
+    outcome = cleanup ?? cancellation ?? outcome;
+    // Preserve the ordinary API's close-based contract. Cancellation and strict
+    // commands release only at the finalizer's positive termination boundary.
+    if (outcome.type === "completed" && !requireProcessTreeExit && !cancellation) {
+      releaseOwnership();
     }
     if (outcome.type === "failed") {
       throw outcome.error;
     }
     if (outcome.type === "timeout") {
-      throw createManagedCommandTimeoutError(timeoutMs);
+      throw Object.assign(new Error(`Managed command timed out after ${timeoutMs}ms`), {
+        code: "ETIMEDOUT",
+      });
     }
     if (outcome.type === "aborted") {
       throw Object.assign(new Error("Managed command aborted"), { code: "ABORT_ERR" });
@@ -444,12 +481,15 @@ export async function runManagedCommand({
     if (outcome.type === "signal") {
       return signalExitCode(outcome.signal);
     }
-    return outcome.status;
+    return typeof outcome.exit === "string" ? signalExitCode(outcome.exit) : outcome.exit;
   } finally {
     clearTimeout(timeoutTimer);
     signal?.removeEventListener("abort", abort);
     managedChildren.delete(forwardSignal);
     removeSignalHandlersIfIdle();
+    if (!child.pid) {
+      releaseOwnership();
+    }
   }
 }
 
@@ -461,11 +501,13 @@ async function finalizeManagedChild(
     runTaskkill,
     forceKillDelayMs = FORCE_KILL_DELAY_MS,
     forceKillOnLeaderExit = false,
+    onTerminated,
   }: {
     platform: NodeJS.Platform;
     runTaskkill: TaskkillRunner;
     forceKillDelayMs?: number;
     forceKillOnLeaderExit?: boolean;
+    onTerminated: () => void;
   },
 ) {
   // Nested wrappers own detached groups. Let them forward the signal before
@@ -496,6 +538,7 @@ async function finalizeManagedChild(
     const exited = child.exitCode !== null || child.signalCode !== null;
     const pipesClosed = [child.stdout, child.stderr].every((pipe) => !pipe || pipe.closed);
     if (groupState === "dead" && exited && pipesClosed) {
+      onTerminated();
       // A missing group at signal time supersedes the earlier racy liveness probe.
       if (!signal && termination?.processTreeState !== "terminated") {
         throw createManagedCommandCleanupError(
@@ -532,21 +575,6 @@ async function finalizeManagedChild(
     child,
     platform,
     groupState === "live" ? "live" : "indeterminate",
-  );
-}
-
-function createManagedCommandTimeoutError(timeoutMs: number | undefined) {
-  return Object.assign(new Error(`Managed command timed out after ${timeoutMs}ms`), {
-    code: "ETIMEDOUT",
-  });
-}
-
-function createManagedCommandUnsupportedTreeVerificationError() {
-  return Object.assign(
-    new Error("Strict managed process-tree verification is not supported on Windows"),
-    {
-      code: "EPROCESS_TREE_VERIFICATION_UNSUPPORTED",
-    },
   );
 }
 
@@ -606,37 +634,19 @@ function forwardSignalToManagedChildren(signal: NodeJS.Signals) {
   }
 }
 
-export function createManagedCommandSpawnSpec({
-  bin,
-  args = [],
-  cwd,
-  env,
-  stdio = "inherit",
-  platform = process.platform,
-  shell = platform === "win32",
-  windowsVerbatimArguments,
-  comSpec,
-}: ManagedCommandOptions) {
-  const invocation = createManagedCommandInvocation({
-    bin,
-    args,
-    env,
-    shell,
-    windowsVerbatimArguments,
-    platform,
-    comSpec,
-  });
+export function createManagedCommandSpawnSpec(options: ManagedCommandOptions) {
+  const { cwd, env, stdio = "inherit", platform = process.platform } = options;
+  const { args, command, ...invocationOptions } = createManagedCommandInvocation(options);
 
   return {
-    args: invocation.args,
-    command: invocation.command,
+    args,
+    command,
     options: {
       cwd,
       env,
       stdio,
-      shell: invocation.shell,
+      ...invocationOptions,
       detached: platform !== "win32",
-      windowsVerbatimArguments: invocation.windowsVerbatimArguments,
     },
   };
 }

@@ -8,6 +8,7 @@ import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
 import { DatabaseSync } from "node:sqlite";
+import { expectDefined } from "@openclaw/normalization-core";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import * as kyselySync from "../infra/kysely-sync.js";
 import * as nodeSqlite from "../infra/node-sqlite.js";
@@ -23,11 +24,13 @@ import {
 } from "../state/openclaw-agent-db.js";
 import { closeOpenClawStateDatabaseForTest } from "../state/openclaw-state-db.js";
 import { resolveOpenClawStateSqlitePath } from "../state/openclaw-state-db.paths.js";
-import { withEnvAsync } from "../test-utils/env.js";
+import { withEnv, withEnvAsync } from "../test-utils/env.js";
 import { resolveAgentDir } from "./agent-scope.js";
+import * as authProfileClone from "./auth-profiles/clone.js";
 import { loadPersistedAuthProfileStore } from "./auth-profiles/persisted.js";
 import {
   clearRuntimeAuthProfileStoreSnapshots,
+  getRuntimeAuthProfileStoreSnapshotCore,
   replaceRuntimeAuthProfileStoreSnapshots,
 } from "./auth-profiles/runtime-snapshots.js";
 import {
@@ -40,6 +43,7 @@ import {
 } from "./auth-profiles/sqlite.js";
 import {
   ensureAuthProfileStore,
+  ensureAuthProfileStoreWithoutExternalProfiles,
   getRuntimeAuthProfileStoreSnapshotRevision,
   saveAuthProfileStore,
 } from "./auth-profiles/store.js";
@@ -726,6 +730,68 @@ describe("auth profile sqlite store", () => {
         path: resolveAuthProfileDatabasePath(agentDir),
       });
       expect(database.agentId).toBe("coder");
+    });
+  });
+
+  it("resolves database filenames without reverse-owner filesystem discovery", async () => {
+    await withAgentDirEnv("openclaw-auth-filename-", (agentDir, stateDir) => {
+      const alias = path.join(stateDir, "agent-alias");
+      const missing = path.join(stateDir, "missing", "agent");
+      fs.symlinkSync(agentDir, alias, "junction");
+      withEnv({ OPENCLAW_HOME: stateDir }, () => {
+        const databasePath = path.join(agentDir, "openclaw-agent.sqlite");
+        expect(resolveAuthProfileDatabasePath("")).toBe(databasePath);
+        const realpath = vi.spyOn(fs.realpathSync, "native");
+        try {
+          for (const [input, expected] of [
+            [agentDir, databasePath],
+            [path.relative(process.cwd(), agentDir), databasePath],
+            ["~/agents/main/agent", databasePath],
+            [alias, path.join(alias, "openclaw-agent.sqlite")],
+            [missing, path.join(missing, "openclaw-agent.sqlite")],
+            ["", databasePath],
+            ["  ", "openclaw-agent.sqlite"],
+          ] as const) {
+            expect(resolveAuthProfileDatabasePath(input)).toBe(expected);
+          }
+          expect(realpath).not.toHaveBeenCalled();
+          expect(fs.existsSync(missing)).toBe(false);
+        } finally {
+          realpath.mockRestore();
+        }
+      });
+    });
+  });
+
+  it("does not copy an unused same-owner snapshot during runtime reads", async () => {
+    await withAgentDirEnv("openclaw-auth-snapshot-work-", (agentDir) => {
+      const store = { ...apiKeyStore("synthetic"), order: { openai: ["openai:default"] } };
+      replaceRuntimeAuthProfileStoreSnapshots([{ agentDir, store }]);
+      const clone = vi.spyOn(authProfileClone, "cloneAuthProfileStore");
+      try {
+        const loaded = ensureAuthProfileStoreWithoutExternalProfiles(agentDir);
+        expect(loaded).toMatchObject(store);
+        expect(clone.mock.calls.length).toBeLessThanOrEqual(2);
+        expectDefined(loaded.order?.openai, "loaded profile order").push("mutated");
+        expect(getRuntimeAuthProfileStoreSnapshotCore(agentDir)?.order?.openai).toEqual([
+          "openai:default",
+        ]);
+      } finally {
+        clone.mockRestore();
+      }
+    });
+  });
+
+  it("keeps an explicit inherited snapshot authoritative for an omitted agent", async () => {
+    await withAgentDirEnv("openclaw-auth-inherited-selection-", (agentDir, stateDir) => {
+      const inheritedAuthDir = path.join(stateDir, "inherited");
+      replaceRuntimeAuthProfileStoreSnapshots([
+        { agentDir, store: apiKeyStore("shared") },
+        { agentDir: inheritedAuthDir, store: apiKeyStore("inherited") },
+      ]);
+      expect(
+        ensureAuthProfileStoreWithoutExternalProfiles(undefined, { inheritedAuthDir }).profiles,
+      ).toEqual(apiKeyStore("inherited").profiles);
     });
   });
 

@@ -46,6 +46,7 @@ export function renderAgentRunFrame(frame: AgentRunFrameRenderItem, opts: AgentR
     senderLabel: firstAssistant?.senderLabel,
     replyToSender: firstAssistant?.replyToSender,
     messages: representative?.messages ?? [],
+    visibleContent: representative?.visibleContent ?? "none",
     timestamp: Math.min(...groups.map((group) => group.timestamp), ...streamStarts, Date.now()),
     isStreaming: frame.outcome.kind === "active",
     runId: frame.runId,

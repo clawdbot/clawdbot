@@ -1008,10 +1008,9 @@ describeControlUiE2e("Control UI Plugins mocked Gateway E2E", () => {
       await page.goto(`${server.baseUrl}settings/plugins`);
       const workboardCard = page.locator('[data-plugin-id="workboard"]');
       await workboardCard.waitFor({ state: "visible" });
-      expect(await page.getByRole("note").textContent()).toContain("operator.admin");
-      expect(
-        await workboardCard.getByRole("button", { name: "Enable", exact: true }).isDisabled(),
-      ).toBe(true);
+      expect(await page.locator(".plugins-readonly").count()).toBe(0);
+      const enableButton = workboardCard.getByRole("button", { name: "Enable", exact: true });
+      expect(await enableButton.isDisabled()).toBe(true);
 
       await page.getByRole("tab", { name: /^Discover/u }).click();
       await page.getByRole("searchbox", { name: "Search plugins" }).fill("calendar");

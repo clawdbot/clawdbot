@@ -1,7 +1,8 @@
 // Embedded run helper tests cover final assistant text extraction and error
 // metadata assembly shared by normal exits and failure paths.
 import type { AssistantMessage } from "openclaw/plugin-sdk/llm";
-import { describe, expect, it } from "vitest";
+import { describe, expect, it, vi } from "vitest";
+import { resolveRetryAfterMs } from "../../failover/retry-evidence.js";
 import type { NormalizedUsage } from "../../usage.js";
 import { createUsageAccumulator, mergeUsageIntoAccumulator } from "../usage-accumulator.js";
 import {
@@ -11,8 +12,8 @@ import {
   resolveFinalAssistantRawText,
   resolveFinalAssistantVisibleText,
   resolveLatestCallUsage,
-  resolveNextSameModelRateLimitRetryCount,
-  resolveSameModelRateLimitRetryDelayMs,
+  MAX_TRANSIENT_RETRIES,
+  resolveTransientRetryDelayMs,
 } from "./helpers.js";
 
 describe("resolveEmbeddedAttemptBasePrompt", () => {
@@ -117,72 +118,59 @@ describe("resolveFinalAssistantVisibleText", () => {
   });
 });
 
-describe("resolveSameModelRateLimitRetryDelayMs", () => {
-  it("waits 10s/20s/30s linearly before the 1st/2nd/3rd same-model retry", () => {
-    expect(resolveSameModelRateLimitRetryDelayMs({ retriesSoFar: 0 })).toBe(10_000);
-    expect(resolveSameModelRateLimitRetryDelayMs({ retriesSoFar: 1 })).toBe(20_000);
-    expect(resolveSameModelRateLimitRetryDelayMs({ retriesSoFar: 2 })).toBe(30_000);
+describe("resolveTransientRetryDelayMs", () => {
+  it("bounds three jittered exponential retries", () => {
+    const random = vi.spyOn(Math, "random").mockReturnValue(0);
+    try {
+      const delays = [1, 2, 3].map((retryNumber, index) =>
+        resolveTransientRetryDelayMs({ retryNumber, elapsedMs: delaysBefore(index) }),
+      );
+      expect(delays).toEqual([500, 1_000, 2_000]);
+      expect(MAX_TRANSIENT_RETRIES).toBe(3);
+      expect(delays.every((delay) => delay !== undefined && delay > 0)).toBe(true);
+    } finally {
+      random.mockRestore();
+    }
   });
 
-  it("caps at 60s if the retry count is ever raised further", () => {
-    expect(resolveSameModelRateLimitRetryDelayMs({ retriesSoFar: 10 })).toBe(60_000);
-  });
-
-  it("honors a short provider Retry-After when it is longer than the fixed backoff", () => {
+  it("honors Retry-After and rejects a delay beyond the total ceiling", () => {
     expect(
-      resolveSameModelRateLimitRetryDelayMs({
-        retriesSoFar: 0,
-        retryAfterSeconds: 30,
+      resolveTransientRetryDelayMs({ retryNumber: 1, retryAfterMs: 30_000, elapsedMs: 0 }),
+    ).toBeGreaterThanOrEqual(30_000);
+    expect(
+      resolveTransientRetryDelayMs({
+        retryNumber: 3,
+        retryAfterMs: 2_000,
+        // 1s of the 90s transient retry budget left; retryAfterMs exceeds it.
+        elapsedMs: 89_000,
       }),
-    ).toBe(30_000);
+    ).toBeUndefined();
   });
 
-  it("keeps the existing fixed backoff when Retry-After is shorter", () => {
-    expect(
-      resolveSameModelRateLimitRetryDelayMs({
-        retriesSoFar: 1,
-        retryAfterSeconds: 5,
-      }),
-    ).toBe(20_000);
+  it("keeps jitter below the per-retry cap", () => {
+    const random = vi.spyOn(Math, "random").mockReturnValue(0.999);
+    try {
+      expect(resolveTransientRetryDelayMs({ retryNumber: 3, elapsedMs: 0 })).toBeLessThanOrEqual(
+        30_000,
+      );
+    } finally {
+      random.mockRestore();
+    }
   });
 
-  it("caps provider Retry-After at the same short-window retry ceiling", () => {
+  it("parses Retry-After HTTP dates for the shared retry owner", () => {
     expect(
-      resolveSameModelRateLimitRetryDelayMs({
-        retriesSoFar: 0,
-        retryAfterSeconds: 120,
-      }),
-    ).toBe(60_000);
+      resolveRetryAfterMs(
+        "HTTP 503: temporary failure; Retry-After: Thu, 01 Jan 2026 00:01:30 GMT",
+        Date.parse("2026-01-01T00:00:00.000Z"),
+      ),
+    ).toBe(90_000);
   });
 });
 
-describe("resolveNextSameModelRateLimitRetryCount", () => {
-  it("counts only consecutive same-model rate-limit retries", () => {
-    let retriesSoFar = 0;
-
-    retriesSoFar = resolveNextSameModelRateLimitRetryCount({
-      retriesSoFar,
-      retriedSameModelRateLimit: true,
-    });
-    retriesSoFar = resolveNextSameModelRateLimitRetryCount({
-      retriesSoFar,
-      retriedSameModelRateLimit: true,
-    });
-    expect(retriesSoFar).toBe(2);
-
-    retriesSoFar = resolveNextSameModelRateLimitRetryCount({
-      retriesSoFar,
-      retriedSameModelRateLimit: false,
-    });
-    expect(retriesSoFar).toBe(0);
-
-    retriesSoFar = resolveNextSameModelRateLimitRetryCount({
-      retriesSoFar,
-      retriedSameModelRateLimit: true,
-    });
-    expect(retriesSoFar).toBe(1);
-  });
-});
+function delaysBefore(index: number): number {
+  return index === 0 ? 0 : index === 1 ? 500 : 1_500;
+}
 
 describe("resolveLatestCallUsage", () => {
   it("preserves the previous exact call across a zero-usage retry", () => {

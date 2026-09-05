@@ -13,7 +13,6 @@ import { isGatewayMethodAdvertised } from "../../lib/gateway-methods.ts";
 import { readSessionMethodAccess } from "../../lib/session-method-access.ts";
 import {
   summarizeSessionPullRequests,
-  scopedSessionPullRequestKey,
   SESSION_PULL_REQUESTS_SUBSCRIBE_METHOD,
   sessionPullRequestsForGateway,
 } from "../../lib/session-pull-requests.ts";
@@ -23,7 +22,7 @@ import {
   type CatalogSessionKey,
 } from "../../lib/sessions/catalog-key.ts";
 import { resolveSessionKey, scopedAgentParamsForSession } from "../../lib/sessions/index.ts";
-import { parseAgentSessionKey } from "../../lib/sessions/session-key.ts";
+import { parseAgentSessionKey, scopedSessionArtifactKey } from "../../lib/sessions/session-key.ts";
 import { releaseChatAttachmentPayloads } from "./attachment-payload-store.ts";
 import { catalogMessageId } from "./catalog-message-id.ts";
 import { loadChatBranches } from "./chat-history-branches.ts";
@@ -63,10 +62,6 @@ export abstract class ChatPaneSession extends ChatPaneTaskSuggestions {
       }
       this.sessionPullRequests = [];
       this.sessionPullRequestsBranch = undefined;
-      this.githubPublicationResult = null;
-      this.githubPublicationError = null;
-      this.githubPublicationIdempotencyKey = null;
-      this.githubPublicationBusy = false;
       this.sessionPullRequestsRateLimited = false;
       this.requestUpdate();
       return;
@@ -82,7 +77,7 @@ export abstract class ChatPaneSession extends ChatPaneTaskSuggestions {
     }
     const pullRequestEpoch = scope.context.sessions.capturePullRequestEpoch(sessionKey);
     const store = sessionPullRequestsForGateway(scope.context.gateway);
-    const pullRequestKey = scopedSessionPullRequestKey(
+    const pullRequestKey = scopedSessionArtifactKey(
       sessionKey,
       scopedAgentParamsForSession(scope.state, sessionKey).agentId ??
         resolveChatAgentId(scope.state),
@@ -119,8 +114,8 @@ export abstract class ChatPaneSession extends ChatPaneTaskSuggestions {
       );
     }
     const published =
-      this.githubPublicationResult?.status === "published"
-        ? this.githubPublicationResult
+      this.githubPublication?.result?.status === "published"
+        ? this.githubPublication?.result
         : undefined;
     const publishedPullRequest = published
       ? result.pullRequests.find((pullRequest) => pullRequest.url === published.url)
@@ -133,9 +128,7 @@ export abstract class ChatPaneSession extends ChatPaneTaskSuggestions {
           publishedPullRequest.state !== "open" &&
           publishedPullRequest.state !== "draft"))
     ) {
-      this.githubPublicationResult = null;
-      this.githubPublicationError = null;
-      this.githubPublicationIdempotencyKey = null;
+      this.githubPublication?.reset();
     }
     this.sessionPullRequestsBranch = result.branch;
     this.sessionPullRequestsRateLimited = result.rateLimited;
@@ -144,16 +137,13 @@ export abstract class ChatPaneSession extends ChatPaneTaskSuggestions {
   }
 
   protected resetSessionPullRequests(): void {
-    this.githubPublicationRequestVersion += 1;
     sessionPullRequestsForGateway(this.context.gateway).unwatch(this);
     this.sessionPullRequests = [];
     this.sessionPullRequestsBranch = undefined;
     this.sessionPullRequestsRateLimited = false;
     this.sessionPullRequestsExpanded = false;
-    this.githubPublicationResult = null;
-    this.githubPublicationError = null;
-    this.githubPublicationIdempotencyKey = null;
-    this.githubPublicationBusy = false;
+    this.githubPublication?.detach();
+    this.githubPublication = null;
     this.dismissedSessionPullRequestIds = new Set();
   }
 
@@ -384,6 +374,7 @@ export abstract class ChatPaneSession extends ChatPaneTaskSuggestions {
         : null;
     }
     let content = text;
+    let truncated = item.truncated;
     if (item.type === "reasoning") {
       content = text ? `Thinking\n\n${text}` : "Thinking";
     } else if (item.type === "toolCall") {
@@ -391,17 +382,18 @@ export abstract class ChatPaneSession extends ChatPaneTaskSuggestions {
         text ?? catalogRawString(item.raw, ["command", "name", "tool", "title", "query"]);
       content = label ? `Tool call\n\n${label}` : "Tool call";
     } else if (item.type === "toolResult") {
-      // Raw aggregated output is only bounded by the transcript read's per-item
-      // byte cap (megabytes), so clamp it to the preview size before rendering.
-      const aggregated = catalogRawString(item.raw, ["aggregatedOutput"]);
       const output =
-        text ??
-        (aggregated ? clampText(aggregated, CATALOG_TOOL_RESULT_PREVIEW_MAX_CHARS) : null) ??
-        catalogRawResult(item.raw);
-      content = output ? `Tool result\n\n${output}` : "Tool result";
+        text ?? catalogRawString(item.raw, ["aggregatedOutput"]) ?? catalogRawResult(item.raw);
+      // Native text and raw fallbacks share the same display limit; source data stays intact.
+      const preview = output ? clampText(output, CATALOG_TOOL_RESULT_PREVIEW_MAX_CHARS) : null;
+      truncated ||= Boolean(output && preview !== output);
+      content = preview ? `Tool result\n\n${preview}` : "Tool result";
     }
     if (!content) {
       return null;
+    }
+    if (truncated) {
+      content = `${content}\n\n${t("chat.catalogOutputTruncated")}`;
     }
     return {
       role: "assistant",

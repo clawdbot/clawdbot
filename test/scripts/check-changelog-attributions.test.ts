@@ -30,23 +30,23 @@ function commandOutput(error: unknown): string {
 
 function createRepoWithPrChangelogDiff(entry: string): string {
   const repo = mkdtempSync(path.join(os.tmpdir(), "openclaw-changelog-credit-"));
-  run(repo, "git", ["init", "-q", "--initial-branch=main"]);
-  run(repo, "git", ["config", "user.email", "test@example.com"]);
-  run(repo, "git", ["config", "user.name", "Test User"]);
+  const git = (args: string[]) =>
+    run(repo, "git", ["-c", "user.email=test@example.com", "-c", "user.name=Test User", ...args]);
+  git(["init", "-q", "--initial-branch=main"]);
   writeFileSync(repo + "/CHANGELOG.md", "# Changelog\n\n## Unreleased\n\n### Fixes\n\n", "utf8");
-  run(repo, "git", ["add", "CHANGELOG.md"]);
-  run(repo, "git", ["commit", "-qm", "seed"]);
-  const baseSha = run(repo, "git", ["rev-parse", "HEAD"]);
+  git(["add", "CHANGELOG.md"]);
+  git(["commit", "-qm", "seed"]);
+  const baseSha = git(["rev-parse", "HEAD"]);
   // Direct helper callers capture this base as the operation's main snapshot.
-  run(repo, "git", ["update-ref", "refs/remotes/origin/main", baseSha]);
-  run(repo, "git", ["checkout", "-qb", "feature"]);
+  git(["update-ref", "refs/remotes/origin/main", baseSha]);
+  git(["checkout", "-qb", "feature"]);
   writeFileSync(
     repo + "/CHANGELOG.md",
     `# Changelog\n\n## Unreleased\n\n### Fixes\n\n${entry}\n`,
     "utf8",
   );
-  run(repo, "git", ["add", "CHANGELOG.md"]);
-  run(repo, "git", ["commit", "-qm", "add changelog entry"]);
+  git(["add", "CHANGELOG.md"]);
+  git(["commit", "-qm", "add changelog entry"]);
   return repo;
 }
 
@@ -235,6 +235,7 @@ source "$OPENCLAW_PR_COMMON_SH"
 source "$OPENCLAW_PR_CHANGELOG_SH"
 source "$OPENCLAW_PR_GATES_SH"
 
+gh() { printf '{"headRefName":"feature"}\\n'; }
 enter_worktree() { PR_MAIN_SHA=$(git rev-parse --verify refs/remotes/origin/main); }
 checkout_prep_branch() { :; }
 refresh_prep_branch_for_reviewed_head() { :; }
@@ -287,6 +288,7 @@ source "$OPENCLAW_PR_COMMON_SH"
 source "$OPENCLAW_PR_CHANGELOG_SH"
 source "$OPENCLAW_PR_GATES_SH"
 
+gh() { printf '{"headRefName":"feature"}\\n'; }
 enter_worktree() { PR_MAIN_SHA=$(git rev-parse --verify refs/remotes/origin/main); }
 checkout_prep_branch() { :; }
 refresh_prep_branch_for_reviewed_head() { :; }

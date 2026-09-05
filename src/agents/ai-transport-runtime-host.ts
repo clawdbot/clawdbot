@@ -45,6 +45,7 @@ export function configureAiTransportRuntimeHost(): void {
         resolveProviderStreamFn({
           ...params,
           config: params.config as OpenClawConfig | undefined,
+          runtimeHandle: getModelProviderRuntimePluginHandle(params.context.model),
           context: {
             ...params.context,
             config: params.context.config as OpenClawConfig | undefined,
@@ -65,6 +66,7 @@ export function configureAiTransportRuntimeHost(): void {
         wrapProviderSimpleCompletionStreamFn({
           ...params,
           config: params.config as OpenClawConfig | undefined,
+          runtimeHandle: getModelProviderRuntimePluginHandle(params.context.model),
           context: {
             ...params.context,
             config: params.context.config as OpenClawConfig | undefined,

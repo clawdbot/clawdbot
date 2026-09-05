@@ -13,7 +13,7 @@ import { normalizeNativePathSeparators } from "../../../shared/ignore-rules.js";
 import type { AgentTool } from "../../runtime/index.js";
 import { ensureTool } from "../../utils/tools-manager.js";
 import type { ToolDefinition, ToolRenderResultOptions } from "../extensions/types.js";
-import { appendBoundedTextTail, normalizePositiveLimit } from "./limits.js";
+import { appendBoundedTextTail, formatStderrTail, normalizePositiveLimit } from "./limits.js";
 import { resolveLocalPathToCwd, resolveToCwd } from "./path-utils.js";
 import {
   appendSessionToolTruncationWarning,
@@ -297,6 +297,7 @@ export function createFindToolDefinition(
             releaseChildProcessOutputAfterExit(child.nodeChildProcess);
             const rl = createInterface({ input: child.stdout });
             let stderr = "";
+            let stderrDroppedBytes = 0;
             const lines: string[] = [];
 
             stopChild = () => {
@@ -321,7 +322,9 @@ export function createFindToolDefinition(
             // cannot split multibyte characters into U+FFFD replacement noise.
             child.stderr?.setEncoding("utf8");
             child.stderr?.on("data", (chunk: string) => {
-              stderr = appendBoundedTextTail(stderr, chunk).tail;
+              const appended = appendBoundedTextTail(stderr, chunk);
+              stderr = appended.tail;
+              stderrDroppedBytes += appended.droppedBytes;
             });
             // Readline re-emits input failures, while the stream listener also catches
             // implementations that do not. settle() keeps the shared failure path one-shot.
@@ -346,7 +349,8 @@ export function createFindToolDefinition(
               }
               const output = lines.join("\n");
               if (code !== 0) {
-                const errorMsg = stderr.trim() || `fd exited with code ${code}`;
+                const fallback = `fd exited with code ${code}`;
+                const errorMsg = formatStderrTail(stderr, stderrDroppedBytes, fallback);
                 settle(() => reject(new Error(errorMsg)));
                 return;
               }

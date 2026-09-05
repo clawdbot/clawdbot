@@ -16,10 +16,8 @@ import {
   codexDiagnosticsTargetsMatch,
   createCodexDiagnosticsConfirmation,
   deletePendingCodexDiagnosticsConfirmation,
-  escapeCodexChatText,
   formatCodexDiagnosticsTargetLines,
   formatCodexDiagnosticsUploadResult,
-  formatCodexTextForDisplay,
   formatDiagnosticsUsage,
   normalizeDiagnosticsReason,
   parseDiagnosticsArgs,
@@ -30,6 +28,7 @@ import {
   readPendingCodexDiagnosticsConfirmation,
   recordCodexDiagnosticsUpload,
 } from "./command-diagnostics-support.js";
+import { formatCodexDisplayText } from "./command-formatters.js";
 import { CODEX_CONTROL_METHODS, type CodexCommandDeps } from "./command-handler-deps.js";
 import { resolveControlTarget } from "./command-handler-scope.js";
 
@@ -120,7 +119,7 @@ async function requestCodexDiagnosticsFeedbackApproval(
   });
   const confirmCommand = `${commandPrefix} confirm ${token}`;
   const cancelCommand = `${commandPrefix} cancel ${token}`;
-  const displayReason = reason ? escapeCodexChatText(formatCodexTextForDisplay(reason)) : undefined;
+  const displayReason = reason ? formatCodexDisplayText(reason) : undefined;
   const lines = [
     targets.length === 1 ? "Codex runtime thread detected." : "Codex runtime threads detected.",
     `Codex diagnostics can send ${targets.length === 1 ? "this thread's feedback bundle" : "these threads' feedback bundles"} to OpenAI servers.`,
@@ -180,7 +179,7 @@ async function previewCodexDiagnosticsFeedbackApproval(
     return cooldownMessage;
   }
   const reason = normalizeDiagnosticsReason(note);
-  const displayReason = reason ? escapeCodexChatText(formatCodexTextForDisplay(reason)) : undefined;
+  const displayReason = reason ? formatCodexDisplayText(reason) : undefined;
   return [
     targets.length === 1 ? "Codex runtime thread detected." : "Codex runtime threads detected.",
     `Approving diagnostics will also send ${targets.length === 1 ? "this thread's feedback bundle" : "these threads' feedback bundles"} to OpenAI servers.`,
@@ -218,7 +217,7 @@ async function confirmCodexDiagnosticsFeedback(
     return "Cannot send Codex diagnostics because this command did not include a stable session identity.";
   }
   const currentTargets = pending.privateRouted
-    ? await resolvePendingCodexDiagnosticsTargets(deps, pending.targets, ctx.config)
+    ? resolvePendingCodexDiagnosticsTargets(deps, pending.targets, ctx.config)
     : await resolveCodexDiagnosticsTargets(deps, ctx);
   if (!codexDiagnosticsTargetsMatch(pending.targets, currentTargets)) {
     return "The Codex diagnostics sessions changed before confirmation. Run /diagnostics again for the current threads.";
@@ -413,7 +412,7 @@ async function resolveCodexDiagnosticsTargets(
       continue;
     }
     seenBindingKeys.add(key);
-    const binding = await deps.bindingStore.read(candidate.identity);
+    const binding = deps.bindingStore.read(candidate.identity);
     if (!binding?.threadId || seenThreadIds.has(binding.threadId)) {
       continue;
     }
@@ -423,14 +422,14 @@ async function resolveCodexDiagnosticsTargets(
   return targets;
 }
 
-async function resolvePendingCodexDiagnosticsTargets(
+function resolvePendingCodexDiagnosticsTargets(
   deps: CodexCommandDeps,
   targets: readonly CodexDiagnosticsTarget[],
   config?: PluginCommandContext["config"],
-): Promise<CodexDiagnosticsTarget[]> {
+): CodexDiagnosticsTarget[] {
   const resolved: CodexDiagnosticsTarget[] = [];
   for (const target of targets) {
-    const binding = await deps.bindingStore.read(target.identity);
+    const binding = deps.bindingStore.read(target.identity);
     if (!binding?.threadId) {
       continue;
     }

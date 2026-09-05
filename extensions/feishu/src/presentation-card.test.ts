@@ -1,11 +1,8 @@
 import { normalizeMessagePresentation } from "openclaw/plugin-sdk/interactive-runtime";
 import { describe, expect, it } from "vitest";
-import {
-  buildFeishuPresentationCardElements,
-  isFeishuCardWithinEnvelope,
-} from "./presentation-card.js";
+import { buildFeishuPresentationCard, isFeishuCardWithinEnvelope } from "./presentation-card.js";
 
-describe("buildFeishuPresentationCardElements", () => {
+describe("buildFeishuPresentationCard", () => {
   it("renders table blocks through the portable text fallback", () => {
     const presentation = normalizeMessagePresentation({
       blocks: [
@@ -24,7 +21,7 @@ describe("buildFeishuPresentationCardElements", () => {
       throw new Error("expected valid presentation");
     }
 
-    expect(buildFeishuPresentationCardElements({ presentation })).toEqual([
+    expect(buildFeishuPresentationCard({ presentation }).body.elements).toEqual([
       {
         tag: "markdown",
         content:

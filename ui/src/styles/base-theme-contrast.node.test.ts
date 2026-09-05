@@ -92,14 +92,12 @@ const USER_BUBBLE_RULE = ".chat-group.user .chat-bubble";
 // User and forwarded (cross-session) bubbles share one tint rule via :is().
 const SENDER_TINT_BUBBLE_RULE =
   ".chat-group:is(.user, .chat-group--forwarded).chat-group--sender-tint .chat-bubble";
-// Light mode resets both bubble skins back to flat surfaces, and those rules win
-// on source order (see the order contract in chat/grouped.css). Asserting the
-// dark fills against light palettes would guard a surface nothing paints.
-const LIGHT_USER_BUBBLE_RULE = ':root[data-theme-mode="light"] .chat-group.user .chat-bubble';
-// Light mode tints only user bubbles; forwarded bubbles keep the card skin
-// there (boot CSS budget decision, 2026-08-29) while dark mode tints both.
+// Theme selection changes the skin token without outranking the bare image shell.
+const LIGHT_USER_BUBBLE_RULE =
+  ':where(:root[data-theme-mode="light"]) .chat-group.user .chat-bubble';
+// Only user bubbles override the shared sender tint in light mode.
 const LIGHT_SENDER_TINT_BUBBLE_RULE =
-  ':root[data-theme-mode="light"] .chat-group.user.chat-group--sender-tint .chat-bubble';
+  ':where(:root[data-theme-mode="light"]) .chat-group.user.chat-group--sender-tint .chat-bubble';
 
 type TokenMap = Map<string, string>;
 type RGB = readonly [red: number, green: number, blue: number];
@@ -412,9 +410,11 @@ function readBubbleBackgrounds(groupedCss: string): {
   lightSenderTint: string;
 } {
   const readBackground = (selector: string): string => {
-    const background = readRuleBody(groupedCss, selector).match(/background:\s*([^;]+);/u)?.[1];
+    const background = readRuleBody(groupedCss, selector).match(
+      /^\s*--chat-bubble-background:\s*([^;]+);/mu,
+    )?.[1];
     if (!background) {
-      throw new Error(`could not read bubble background from "${selector}"`);
+      throw new Error(`could not read bubble background token from "${selector}"`);
     }
     return background.trim();
   };

@@ -174,6 +174,8 @@ failures can affect OpenClaw startup. Other shells use noninteractive login star
 This interactive Bash mode is limited to explicit shell env imports; automatic executable PATH
 discovery during ordinary Gateway commands remains noninteractive.
 
+Successful probes are cached. If a probe fails, the next shell environment or PATH lookup tries again.
+
 ## Exec shell snapshots
 
 On non-Windows Gateway hosts, bash and zsh `exec` commands use a startup snapshot by default.
@@ -182,6 +184,13 @@ Values `false`, `no`, and `off` also disable it. Per-call `exec.env` values cann
 snapshots or redirect the snapshot cache.
 
 ## Runtime-injected env vars
+
+Gateway port-listener diagnostics and lock-owner identity probes run native utilities with
+a limited environment containing executable paths, OS bootstrap and account directories,
+temporary directories, and known locale and timezone settings. These children do not inherit provider credentials,
+application tokens, proxies, runtime injection variables, or arbitrary application settings.
+This boundary leaves the parent environment and normal agent, Gateway, and updater payload
+environments unchanged.
 
 OpenClaw also injects context markers into spawned child processes:
 

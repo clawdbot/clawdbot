@@ -5,6 +5,7 @@ import type {
   AgentToolUpdateCallback,
   InternalBeforeToolBatchContext,
   InternalBeforeToolBatchResult,
+  ToolLoopWarning,
 } from "./types.js";
 
 export type InternalBeforeToolBatchHook = (
@@ -33,6 +34,16 @@ type InternalSyncSteeringGetter = () => AgentMessage[];
 const syncSteeringGetterByCallback = new WeakMap<
   InternalSteeringGetter,
   InternalSyncSteeringGetter
+>();
+
+export type InternalSteeringQueueObserver = {
+  peek: () => readonly AgentMessage[];
+  reserve: (messages: readonly AgentMessage[]) => () => void;
+  subscribe: (listener: () => void) => () => void;
+};
+const steeringQueueObserverByCallback = new WeakMap<
+  InternalSteeringGetter,
+  InternalSteeringQueueObserver
 >();
 
 export type InternalToolExecutionPreparation =
@@ -101,9 +112,19 @@ export function takeInternalToolBatchLifecycle(
 export function attachInternalSyncSteeringGetter(
   callback: InternalSteeringGetter,
   syncGetter: InternalSyncSteeringGetter,
+  observer?: InternalSteeringQueueObserver,
 ): InternalSteeringGetter {
   syncSteeringGetterByCallback.set(callback, syncGetter);
+  if (observer) {
+    steeringQueueObserverByCallback.set(callback, observer);
+  }
   return callback;
+}
+
+export function getInternalSteeringQueueObserver(
+  callback: InternalSteeringGetter | undefined,
+): InternalSteeringQueueObserver | undefined {
+  return callback ? steeringQueueObserverByCallback.get(callback) : undefined;
 }
 
 export function getInternalSyncSteeringGetter(
@@ -147,9 +168,13 @@ export function attachInternalToolResultAcknowledgement<T extends object>(
 
 export function attachInternalToolResultProvenance<T extends object>(
   value: T,
-  provenance: object,
+  provenance: object | undefined,
 ): T {
-  toolResultProvenanceByValue.set(value, provenance);
+  if (provenance) {
+    toolResultProvenanceByValue.set(value, provenance);
+  } else {
+    toolResultProvenanceByValue.delete(value);
+  }
   return value;
 }
 
@@ -168,6 +193,24 @@ export function copyInternalToolResultState<T extends object>(source: object, ta
     toolResultProvenanceByValue.set(target, provenance);
   }
   return target;
+}
+
+/** Call only after raw outcome recording: feedback must not change no-progress hashes. */
+export function appendToolLoopWarning<T extends AgentToolResult<unknown>>(
+  result: T,
+  warning: ToolLoopWarning,
+): T {
+  return copyInternalToolResultState(result, {
+    ...result,
+    content: [
+      // Match transcript normalization for tools that omit display content.
+      ...(result.content ?? []),
+      {
+        type: "text",
+        text: `[System note: Tool-loop warning after ${warning.count} repeated calls. Change your approach or stop if you are not making progress.]`,
+      },
+    ],
+  });
 }
 
 /** Commit one tool result after its owning message has attached. */

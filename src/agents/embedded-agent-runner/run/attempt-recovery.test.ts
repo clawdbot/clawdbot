@@ -96,7 +96,8 @@ async function recoverAfterTransportDrop(scenario: TransportDropScenario = {}) {
     advanceAuthProfile: vi.fn(),
     advanceRateLimitAuthProfile: vi.fn(),
     maybeMarkAuthProfileFailure: vi.fn(),
-    maybeBackoffBeforeOverloadFailover: vi.fn(),
+    maybeRetryTransient: vi.fn(),
+    getTransientRetryCount: () => 0,
   };
   const recovery = await recoverEmbeddedRunAttempt({
     runInput: {
@@ -244,7 +245,7 @@ describe("recoverEmbeddedRunAttempt", () => {
     const { recovery, markOwnedTranscriptRetry, continueFromCurrentTranscript } =
       await recoverAfterTransportDrop(scenario);
 
-    expect(recovery).toEqual({ action: "proceed", shouldSurfaceCodexCompletionTimeout: false });
+    expect(recovery).toEqual({ action: "proceed" });
     expect(markOwnedTranscriptRetry).not.toHaveBeenCalled();
     expect(continueFromCurrentTranscript).not.toHaveBeenCalled();
   });
@@ -367,7 +368,8 @@ describe("recoverEmbeddedRunAttempt", () => {
       advanceAuthProfile: vi.fn(),
       advanceRateLimitAuthProfile: vi.fn(),
       maybeMarkAuthProfileFailure: vi.fn(),
-      maybeBackoffBeforeOverloadFailover: vi.fn(),
+      maybeRetryTransient: vi.fn(),
+      getTransientRetryCount: () => 0,
     };
     const attempt = makeEmbeddedRunnerAttempt({
       terminal: {
@@ -441,7 +443,7 @@ describe("recoverEmbeddedRunAttempt", () => {
       sessionAgentId: "main",
     } as never);
 
-    expect(recovery).toEqual({ action: "proceed", shouldSurfaceCodexCompletionTimeout: false });
+    expect(recovery).toEqual({ action: "proceed" });
     expect(promptFailover).not.toHaveBeenCalled();
     expect(failoverRetryController.advanceAuthProfile).not.toHaveBeenCalled();
     expect(failoverRetryController.advanceRateLimitAuthProfile).not.toHaveBeenCalled();

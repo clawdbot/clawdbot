@@ -8,8 +8,8 @@ import { resolveGatewayService, type GatewayService } from "../daemon/service.js
 import { createMockGatewayService } from "../daemon/service.test-helpers.js";
 import { withTestDir } from "../test-helpers/temp-dir.js";
 import { withMockedPlatform } from "../test-utils/vitest-spies.js";
-import { formatStatusServiceValue } from "./status-all/format.js";
 import { readServiceStatusSummary } from "./status.service-summary.js";
+import { getStatusOverviewRowValue } from "./status.test-support.ts";
 
 function createService(overrides: Partial<GatewayService>): GatewayService {
   return createMockGatewayService({
@@ -71,7 +71,9 @@ describe("readServiceStatusSummary", () => {
       expect(summary.managedByOpenClaw).toBe(false);
       expect(summary.externallyManaged).toBe(false);
       expect(summary.loadedText).toBe("disabled");
-      expect(formatStatusServiceValue(summary)).toBe("systemd not installed");
+      expect(getStatusOverviewRowValue("Gateway service", { gatewayService: summary })).toBe(
+        "systemd not installed",
+      );
     },
   );
 
@@ -108,7 +110,7 @@ describe("readServiceStatusSummary", () => {
             }
           : { status: "not-loaded" },
       );
-      expect(formatStatusServiceValue(summary)).toBe(
+      expect(getStatusOverviewRowValue("Gateway service", { gatewayService: summary })).toBe(
         probe === "load"
           ? "systemd unknown (inspection failed: Error: service manager permission denied) · stopped"
           : probe === "runtime"

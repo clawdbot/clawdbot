@@ -68,7 +68,7 @@ export function renderSessionLeadingState(
       return {
         running,
         leadingIndicator: renderSessionGlyph({
-          content: renderSessionAttentionIcon(session.attention),
+          content: renderSessionAttentionIcon(session.attention, true),
           running,
           queued,
           badge: session.unread && !session.hasActiveRun ? renderSessionUnreadBadge() : nothing,
@@ -117,7 +117,7 @@ export function renderSessionLeadingState(
     return {
       running,
       leadingIndicator: renderSessionGlyph({
-        content: renderSessionAttentionIcon(session.attention),
+        content: renderSessionAttentionIcon(session.attention, true),
         running: false,
       }),
       trailingIndicator,

@@ -5,6 +5,8 @@ import type { AgentRunTimeoutPhase } from "./run-timeout-attribution.js";
 export type AgentWaitResult = {
   status: "ok" | "timeout" | "error" | "pending";
   error?: string;
+  /** Set locally when the wait RPC fails; terminal run text is never retry evidence. */
+  retryableTransportError?: true;
   startedAt?: number;
   endedAt?: number;
   stopReason?: string;
@@ -14,4 +16,5 @@ export type AgentWaitResult = {
   timeoutPhase?: AgentRunTimeoutPhase;
   providerStarted?: boolean;
   terminalReply?: AgentRunTerminalReplySnapshot;
+  sourceReplyDelivered?: true;
 };

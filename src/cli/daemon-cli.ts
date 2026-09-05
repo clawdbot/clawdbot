@@ -14,3 +14,14 @@ export type {
   DaemonStatusOptions,
   GatewayRpcOpts,
 } from "./daemon-cli/types.js";
+
+export {
+  isManagedUpdateRequesterOwner,
+  waitForGatewayUpdateRecovery,
+} from "./daemon-cli/lifecycle-context.js";
+// The detached updater loads these closures before replacing its installation.
+export {
+  finishUpdateRun,
+  recordUpdateRunPhase,
+  recordUpdateRunVerification,
+} from "../infra/update-run-ledger.js";

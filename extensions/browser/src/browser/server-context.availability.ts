@@ -3,6 +3,7 @@
  * launch/restart, Chrome MCP attach, and profile stop handling.
  */
 import fs from "node:fs";
+import { setTimeout as delay } from "node:timers/promises";
 import {
   assertChromeMcpCdpTransportAllowed,
   resolveCdpReachabilityPolicy,
@@ -185,39 +186,32 @@ export function createProfileAvailability({
     timeoutMs: number,
     signal?: AbortSignal,
   ) => {
+    signal?.throwIfAborted();
     if (!diagnostic.ok) {
       runtime.externalBrowserMode = undefined;
       return;
     }
-    const current = runtime.externalBrowserMode;
-    if (current?.browserWebSocketUrl === diagnostic.wsUrl) {
-      return;
-    }
-
-    const observation: NonNullable<ProfileRuntimeState["externalBrowserMode"]> = {
-      browserWebSocketUrl: diagnostic.wsUrl,
-    };
-    runtime.externalBrowserMode = observation;
-    try {
-      // Only a process proven to own this host's port may suppress the historical
-      // activation fallback; Docker, tunnels, and unsupported hosts stay unknown.
-      const headless = await inspectLocalChromeHeadlessMode({
-        profile,
+    if (runtime.externalBrowserMode?.browserWebSocketUrl !== diagnostic.wsUrl) {
+      // Concurrent callers share the process observation; their cancellation
+      // must not retire work owned by the browser's lifecycle.
+      const observation: NonNullable<ProfileRuntimeState["externalBrowserMode"]> = {
         browserWebSocketUrl: diagnostic.wsUrl,
-        timeoutMs,
-        signal,
-        ssrfPolicy: getCdpReachabilityPolicy(),
-      });
-      signal?.throwIfAborted();
-      if (runtime.externalBrowserMode === observation && headless !== undefined) {
-        observation.headless = headless;
-      }
-    } catch (error) {
-      if (runtime.externalBrowserMode === observation) {
-        runtime.externalBrowserMode = undefined;
-      }
-      throw error;
+        headless: inspectLocalChromeHeadlessMode({
+          profile,
+          browserWebSocketUrl: diagnostic.wsUrl,
+          timeoutMs,
+          signal: getProfileLifecycle(runtime).controller.signal,
+          ssrfPolicy: getCdpReachabilityPolicy(),
+        }).then((headless) => {
+          if (headless === undefined && runtime.externalBrowserMode === observation) {
+            runtime.externalBrowserMode = undefined;
+          }
+          return headless;
+        }),
+      };
+      runtime.externalBrowserMode = observation;
     }
+    await waitForProfileOperation(runtime.externalBrowserMode.headless, signal);
   };
   // Extension profiles probe against the relay server, so it must be listening
   // before any reachability check; starting it reconciles port/token drift and
@@ -385,25 +379,12 @@ export function createProfileAvailability({
 
   const waitForPoll = async (delayMs: number, signal: AbortSignal): Promise<void> => {
     signal.throwIfAborted();
-    await new Promise<void>((resolve, reject) => {
-      const finish = () => {
-        signal.removeEventListener("abort", onAbort);
-        resolve();
-      };
-      const timer = setTimeout(finish, delayMs);
-      const onAbort = () => {
-        clearTimeout(timer);
-        signal.removeEventListener("abort", onAbort);
-        reject(
-          signal.reason instanceof Error
-            ? signal.reason
-            : new Error("Browser availability wait aborted.", { cause: signal.reason }),
-        );
-      };
-      signal.addEventListener("abort", onAbort, { once: true });
-      if (signal.aborted) {
-        onAbort();
-      }
+    await delay(delayMs, undefined, { signal }).catch((error: unknown) => {
+      throw signal.aborted
+        ? signal.reason instanceof Error
+          ? signal.reason
+          : new Error("Browser availability wait aborted.", { cause: signal.reason })
+        : error;
     });
   };
 

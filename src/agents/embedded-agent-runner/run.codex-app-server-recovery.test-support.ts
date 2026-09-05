@@ -2,15 +2,18 @@
 
 import { expectDefined } from "@openclaw/normalization-core";
 import { afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
+import { createDeferred } from "../../../test/helpers/promise.js";
 import type { OpenClawTestState } from "../../test-utils/openclaw-test-state.js";
 import { makeModelFallbackCfg } from "../test-helpers/model-fallback-config-fixture.js";
 import { makeAttemptResult } from "./run.overflow-compaction.fixture.js";
 import {
   createOverflowRunParams,
+  mockedBuildEmbeddedRunPayloads,
   mockedClassifyFailoverReason,
   mockedMarkAuthProfileFailure,
   mockedRunEmbeddedAttempt,
   resetSharedRunIntegrationHarnessMocks,
+  useOpenAIPlatformAuthFixture,
 } from "./run.overflow-compaction.harness.js";
 import { loadSharedRunIntegrationHarness } from "./run.shared-integration-harness.test-support.js";
 import type { EmbeddedRunAttemptParams, EmbeddedRunAttemptResult } from "./run/types.js";
@@ -108,6 +111,155 @@ describe("runEmbeddedAgent Codex app-server recovery", () => {
   afterEach(async () => {
     await state?.cleanup();
   });
+
+  it("passes native deadline ownership through dispatch and fences retained callbacks", async () => {
+    useOpenAIPlatformAuthFixture();
+    vi.useFakeTimers();
+    const entered = createDeferred<EmbeddedRunAttemptParams>();
+    const finish = createDeferred<EmbeddedRunAttemptResult>();
+    let run: ReturnType<typeof runEmbeddedAgent> | undefined;
+    mockedRunEmbeddedAttempt.mockImplementationOnce(async (value) => {
+      const params = asAttemptParams(value);
+      params.onAttemptDeadlineChanged?.({ kind: "unlimited" });
+      entered.resolve(params);
+      return await finish.promise;
+    });
+    try {
+      run = runEmbeddedAgent({
+        ...createOverflowRunParams(state),
+        provider: "openai",
+        model: "gpt-5.6-luna",
+        runId: "runtime-deadline-handoff",
+        timeoutMs: 1,
+      });
+      let settled = false;
+      void run.then(
+        () => {
+          settled = true;
+        },
+        () => {
+          settled = true;
+        },
+      );
+      const params = await Promise.race([
+        entered.promise,
+        run.then(() => {
+          throw new Error("Run completed before reaching the native attempt");
+        }),
+      ]);
+      await vi.advanceTimersByTimeAsync(30_001);
+      expect(settled).toBe(false);
+      expect(params.onAttemptTimeout).toBeTypeOf("function");
+      params.onAttemptDeadlineChanged?.({ kind: "bounded", deadlineAtMs: Date.now() + 120_000 });
+      await vi.advanceTimersByTimeAsync(125_000);
+      expect(settled).toBe(false);
+      finish.resolve(successAttempt());
+      await expect(run).resolves.toMatchObject({ meta: { aborted: false } });
+
+      const timerCount = vi.getTimerCount();
+      params.onAttemptDeadlineChanged?.({ kind: "bounded", deadlineAtMs: Date.now() });
+      params.onAttemptTimeout?.(new Error("late timeout"));
+      params.onAttemptAbort?.();
+      expect(vi.getTimerCount()).toBe(timerCount);
+      mockedRunEmbeddedAttempt.mockResolvedValueOnce(successAttempt());
+      await expect(
+        runEmbeddedAgent({
+          ...createOverflowRunParams(state),
+          provider: "openai",
+          model: "gpt-5.6-luna",
+          runId: "runtime-deadline-successor",
+        }),
+      ).resolves.toMatchObject({ meta: { aborted: false } });
+    } finally {
+      finish.resolve(successAttempt());
+      await run?.catch(() => undefined);
+      vi.useRealTimers();
+    }
+  });
+
+  it.each([
+    { deadline: "execution", delivery: "partial" },
+    { deadline: "execution", delivery: "completed" },
+    { deadline: "execution", delivery: "message-tool" },
+    { deadline: "settlement", delivery: "partial" },
+    { deadline: "settlement", delivery: "completed" },
+    { deadline: "settlement", delivery: "message-tool" },
+  ] as const)(
+    "preserves $delivery output without hiding the $deadline timeout",
+    async ({ deadline, delivery }) => {
+      useOpenAIPlatformAuthFixture();
+      const { buildEmbeddedRunPayloads } =
+        await vi.importActual<typeof import("./run/payloads.js")>("./run/payloads.js");
+      mockedBuildEmbeddedRunPayloads.mockImplementation(buildEmbeddedRunPayloads);
+      const text = "Work completed so far.";
+      const message = `The runtime's ${deadline} deadline expired; verify the work before continuing.`;
+      const assistant = {
+        role: "assistant" as const,
+        api: "responses" as const,
+        provider: "openai",
+        model: "gpt-5.6-luna",
+        content: [{ type: "text" as const, text }],
+        stopReason: "stop" as const,
+        timestamp: Date.now(),
+        usage: {
+          input: 1,
+          output: 1,
+          cacheRead: 0,
+          cacheWrite: 0,
+          totalTokens: 2,
+          cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, total: 0 },
+        },
+      };
+      mockedRunEmbeddedAttempt.mockResolvedValueOnce(
+        makeAttemptResult({
+          terminal: {
+            kind: "timeout",
+            phase: "prompt",
+            source: "runtime",
+            aborted: true,
+            failure: { source: "prompt", error: new Error(message) },
+          },
+          assistantTexts: delivery === "message-tool" ? [] : [text],
+          lastAssistant: delivery === "completed" ? assistant : undefined,
+          currentAttemptAssistant: delivery === "completed" ? assistant : undefined,
+          currentAttemptCompletedAssistant: delivery === "completed" ? assistant : undefined,
+          didSendViaMessagingTool: delivery === "message-tool",
+          messagingToolSentTexts: delivery === "message-tool" ? [text] : [],
+          promptTimeoutOutcome: { message, replayInvalid: true, livenessState: "abandoned" },
+          ...(deadline === "settlement"
+            ? {
+                codexAppServerFailure: {
+                  kind: "turn_settlement_timeout" as const,
+                  transport: "stdio" as const,
+                  threadId: "thread-1",
+                  turnId: "turn-1",
+                  replaySafe: false,
+                },
+              }
+            : {}),
+        }),
+      );
+      const result = await runEmbeddedAgent({
+        ...createOverflowRunParams(state),
+        provider: "openai",
+        model: "gpt-5.6-luna",
+        runId: `owned-${deadline}-${delivery}`,
+      });
+      expect(result.payloads).toContainEqual(
+        expect.objectContaining({ text: message, isError: true }),
+      );
+      if (delivery !== "message-tool") {
+        expect(result.payloads).toContainEqual(expect.objectContaining({ text }));
+      }
+      expect(result.meta).toMatchObject({
+        replayInvalid: true,
+        livenessState: "abandoned",
+        error: { kind: "incomplete_turn", message, fallbackSafe: false },
+      });
+      expect(mockedRunEmbeddedAttempt).toHaveBeenCalledOnce();
+      expect(mockedMarkAuthProfileFailure).not.toHaveBeenCalled();
+    },
+  );
 
   it.each(["active", "closed", "replaced"] as const)(
     "retries without a durable writer only while its exact native admission is active (%s)",
@@ -341,60 +493,64 @@ describe("runEmbeddedAgent Codex app-server recovery", () => {
     expect(mockedRunEmbeddedAttempt).toHaveBeenCalledTimes(2);
   });
 
-  it("does not hand Codex app-server idle timeouts to model fallback", async () => {
-    mockedClassifyFailoverReason.mockReturnValue("timeout");
-    mockedRunEmbeddedAttempt.mockResolvedValueOnce(
-      codexTurnCompletionIdleTimeoutAttempt({
-        didSendViaMessagingTool: true,
-        replayMetadata: { hadPotentialSideEffects: true, replaySafe: false },
-        promptTimeoutOutcome: {
-          message:
-            "Codex stopped before confirming the turn was complete. Some work may already have been performed; verify the current state before retrying.",
-          replayInvalid: true,
-          livenessState: "abandoned",
-        },
-        codexAppServerFailure: {
-          kind: "turn_completion_idle_timeout",
-          turnWatchTimeoutKind: "completion",
-          transport: "stdio",
-          threadId: "thread-1",
-          turnId: "turn-1",
-          replaySafe: false,
-          replayBlockedReason: "potential_side_effect",
-        },
-      }),
-    );
+  it.each(["turn_completion_idle_timeout", "turn_settlement_timeout"] as const)(
+    "does not hand Codex app-server %s failures to model fallback",
+    async (kind) => {
+      mockedClassifyFailoverReason.mockReturnValue("timeout");
+      mockedRunEmbeddedAttempt.mockResolvedValueOnce(
+        codexTurnCompletionIdleTimeoutAttempt({
+          didSendViaMessagingTool: true,
+          replayMetadata: { hadPotentialSideEffects: true, replaySafe: false },
+          promptTimeoutOutcome: {
+            message:
+              "Codex stopped before confirming the turn was complete. Some work may already have been performed; verify the current state before retrying.",
+            replayInvalid: true,
+            livenessState: "abandoned",
+          },
+          codexAppServerFailure: {
+            kind,
+            turnWatchTimeoutKind:
+              kind === "turn_completion_idle_timeout" ? "completion" : undefined,
+            transport: "stdio",
+            threadId: "thread-1",
+            turnId: "turn-1",
+            replaySafe: false,
+            replayBlockedReason: "potential_side_effect",
+          },
+        }),
+      );
 
-    const result = await runEmbeddedAgent({
-      ...createOverflowRunParams(state),
-      provider: "codex",
-      model: "gpt-5.5",
-      runId: "run-codex-turn-completion-idle-timeout-fallback",
-      config: makeModelFallbackCfg({
-        agents: {
-          defaults: {
-            model: {
-              primary: "openai/gpt-5.5",
-              fallbacks: ["anthropic/claude-opus-4-6"],
+      const result = await runEmbeddedAgent({
+        ...createOverflowRunParams(state),
+        provider: "codex",
+        model: "gpt-5.5",
+        runId: "run-codex-turn-completion-idle-timeout-fallback",
+        config: makeModelFallbackCfg({
+          agents: {
+            defaults: {
+              model: {
+                primary: "openai/gpt-5.5",
+                fallbacks: ["anthropic/claude-opus-4-6"],
+              },
             },
           },
-        },
-      }),
-    });
+        }),
+      });
 
-    expect(result.payloads?.[0]).toMatchObject({
-      isError: true,
-      text: "Codex stopped before confirming the turn was complete. Some work may already have been performed; verify the current state before retrying.",
-    });
-    expect(result.meta.replayInvalid).toBe(true);
-    expect(result.meta.livenessState).toBe("abandoned");
-    expect(result.meta.error).toEqual({
-      kind: "incomplete_turn",
-      message:
-        "Codex stopped before confirming the turn was complete. Some work may already have been performed; verify the current state before retrying.",
-      fallbackSafe: false,
-    });
-    expect(mockedRunEmbeddedAttempt).toHaveBeenCalledTimes(1);
-    expect(mockedMarkAuthProfileFailure).not.toHaveBeenCalled();
-  });
+      expect(result.payloads?.[0]).toMatchObject({
+        isError: true,
+        text: "Codex stopped before confirming the turn was complete. Some work may already have been performed; verify the current state before retrying.",
+      });
+      expect(result.meta.replayInvalid).toBe(true);
+      expect(result.meta.livenessState).toBe("abandoned");
+      expect(result.meta.error).toEqual({
+        kind: "incomplete_turn",
+        message:
+          "Codex stopped before confirming the turn was complete. Some work may already have been performed; verify the current state before retrying.",
+        fallbackSafe: false,
+      });
+      expect(mockedRunEmbeddedAttempt).toHaveBeenCalledTimes(1);
+      expect(mockedMarkAuthProfileFailure).not.toHaveBeenCalled();
+    },
+  );
 });

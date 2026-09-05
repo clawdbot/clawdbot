@@ -12,7 +12,12 @@ import { writeConfigMachineState } from "../state/config-machine-state.js";
 import { closeOpenClawAgentDatabasesForTest } from "../state/openclaw-agent-db.js";
 import { closeOpenClawStateDatabaseForTest } from "../state/openclaw-state-db.js";
 import { withTestDir } from "../test-helpers/temp-dir.js";
-import { captureEnv, deleteTestEnvValue, setTestEnvValue } from "../test-utils/env.js";
+import {
+  captureEnv,
+  deleteTestEnvValue,
+  setTestEnvValue,
+  withEnvAsync,
+} from "../test-utils/env.js";
 import {
   collectWorkspaceBackupTip,
   detectStateIntegrityHealthIssues,
@@ -526,4 +531,104 @@ describe("doctor state integrity oauth dir checks", () => {
     expect(text.includes("without a matching agents.list entry")).toBe(!configuredAgentDirExists);
     expect(text.includes("Examples: Research (id research)")).toBe(!configuredAgentDirExists);
   });
+});
+
+describe("doctor state directory discovery", () => {
+  it.each([
+    { homeSource: "HOME", activeDefault: false, defaultExists: true, warns: true },
+    { homeSource: "HOME", activeDefault: true, defaultExists: true, warns: false },
+    { homeSource: "HOME", activeDefault: false, defaultExists: false, warns: false },
+    { homeSource: "USERPROFILE", activeDefault: false, defaultExists: true, warns: true },
+    { homeSource: "OPENCLAW_HOME", activeDefault: false, defaultExists: true, warns: true },
+    { homeSource: "OPENCLAW_HOME", activeDefault: false, defaultExists: false, warns: false },
+  ])(
+    "compares only the effective home ($homeSource, activeDefault=$activeDefault, defaultExists=$defaultExists)",
+    async ({ homeSource, activeDefault, defaultExists, warns }) => {
+      await withTestDir({ prefix: "openclaw-doctor-discovery-" }, async (root) => {
+        const osHome = path.join(root, "os-home");
+        const effectiveHome =
+          homeSource === "OPENCLAW_HOME" ? path.join(root, "relocated") : osHome;
+        const defaultState = path.join(effectiveHome, ".openclaw");
+        const activeState = activeDefault ? defaultState : path.join(root, "selected-state");
+        fs.mkdirSync(activeState, { recursive: true, mode: 0o700 });
+        if (defaultExists) {
+          fs.mkdirSync(defaultState, { recursive: true, mode: 0o700 });
+        }
+        if (homeSource === "OPENCLAW_HOME") {
+          fs.mkdirSync(path.join(osHome, ".openclaw"), { recursive: true, mode: 0o700 });
+        }
+        await withEnvAsync(
+          {
+            HOME: homeSource === "USERPROFILE" ? undefined : osHome,
+            USERPROFILE: osHome,
+            OPENCLAW_HOME: homeSource === "OPENCLAW_HOME" ? effectiveHome : undefined,
+            OPENCLAW_STATE_DIR: activeState,
+            OPENCLAW_AGENT_DIR: undefined,
+            OPENCLAW_OAUTH_DIR: undefined,
+          },
+          async () => {
+            const attemptedProbes: string[] = [];
+            const readdir = fs.readdirSync;
+            const exists = fs.existsSync;
+            const stat = fs.statSync;
+            const isSiblingPath = (target: fs.PathLike) => {
+              const targetPath = path.resolve(String(target));
+              return (
+                /^\/(?:Users|home)(?:\/|$)/u.test(targetPath) &&
+                targetPath !== root &&
+                !targetPath.startsWith(`${root}${path.sep}`)
+              );
+            };
+            // Fence real account roots, but record every attempt so the old scanner fails.
+            const readdirSpy = vi.spyOn(fs, "readdirSync").mockImplementation((target, options) => {
+              if (isSiblingPath(target)) {
+                attemptedProbes.push(`readdir ${String(target)}`);
+                throw new Error("account-root enumeration is outside Doctor's state scope");
+              }
+              return readdir(target, options);
+            });
+            const existsSpy = vi.spyOn(fs, "existsSync").mockImplementation((target) => {
+              if (isSiblingPath(target)) {
+                attemptedProbes.push(`exists ${String(target)}`);
+                return false;
+              }
+              return exists(target);
+            });
+            const statSpy = vi.spyOn(fs, "statSync").mockImplementation((target, options) => {
+              if (isSiblingPath(target)) {
+                attemptedProbes.push(`stat ${String(target)}`);
+                throw new Error("sibling-account metadata is outside Doctor's state scope");
+              }
+              return stat(target, options);
+            });
+            noteMock.mockClear();
+            try {
+              await noteStateIntegrityRaw(withMainAgentRoster({}), {
+                confirmRuntimeRepair: vi.fn(async () => false),
+                note: noteMock,
+              });
+              const text = stateIntegrityText();
+              expect(attemptedProbes).toEqual([]);
+              expect(text.includes("Multiple state directories detected")).toBe(warns);
+              if (warns) {
+                expect(text).toContain(
+                  homeSource === "OPENCLAW_HOME"
+                    ? "  - $OPENCLAW_HOME/.openclaw"
+                    : "  - ~/.openclaw",
+                );
+                expect(text).toContain(`Active state dir: ${activeState}`);
+              }
+              expect(text).toContain("OAuth dir not present");
+            } finally {
+              readdirSpy.mockRestore();
+              existsSpy.mockRestore();
+              statSpy.mockRestore();
+              closeOpenClawAgentDatabasesForTest();
+              closeOpenClawStateDatabaseForTest();
+            }
+          },
+        );
+      });
+    },
+  );
 });

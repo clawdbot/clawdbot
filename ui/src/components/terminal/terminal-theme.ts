@@ -3,6 +3,7 @@ import type {
   CreateGhosttyTerminalOptions,
   TerminalDefaultColors,
 } from "@openclaw/libterminal/browser";
+import { resolveThemeColor } from "../../lib/theme-color.ts";
 
 type TerminalTheme = NonNullable<
   NonNullable<CreateGhosttyTerminalOptions["terminalOptions"]>["theme"]
@@ -53,33 +54,12 @@ const LIGHT_ANSI = {
   brightWhite: "#0a0c10",
 } as const;
 
-function resolveTerminalColor(styles: CSSStyleDeclaration, property: string): string {
-  const value = styles.getPropertyValue(property).trim();
-  if (!value || /^#[\da-f]{6}$/iu.test(value)) {
-    return value.toLowerCase();
-  }
-  const canvas = document.createElement("canvas");
-  canvas.width = canvas.height = 1;
-  const context = canvas.getContext("2d");
-  if (!context) {
-    return value;
-  }
-  // Custom themes may use modern color functions, while OSC 10-12 accepts
-  // only concrete #rrggbb colors; reading a painted pixel resolves both.
-  context.fillStyle = value;
-  context.fillRect(0, 0, 1, 1);
-  return `#${Array.from(context.getImageData(0, 0, 1, 1).data)
-    .slice(0, 3)
-    .map((channel) => channel.toString(16).padStart(2, "0"))
-    .join("")}`;
-}
-
 export function terminalDynamicColors(): TerminalDefaultColors {
   const styles = getComputedStyle(document.documentElement);
   return {
-    background: resolveTerminalColor(styles, "--bg"),
-    cursor: resolveTerminalColor(styles, "--accent"),
-    foreground: resolveTerminalColor(styles, "--text"),
+    background: resolveThemeColor(styles, "--bg"),
+    cursor: resolveThemeColor(styles, "--accent"),
+    foreground: resolveThemeColor(styles, "--text"),
   };
 }
 

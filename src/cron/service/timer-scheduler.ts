@@ -149,7 +149,7 @@ export async function onTimer(state: CronServiceState) {
   try {
     // A restart signal can be rejected after temporarily closing admission.
     // Wait for that decision so the consumed timer is not silently lost.
-    admission = await beginGatewayRootWorkAdmissionWhenOpen();
+    admission = await beginGatewayRootWorkAdmissionWhenOpen("cron:timer-tick");
   } catch (err) {
     if (err instanceof GatewayDrainingError) {
       return;

@@ -197,15 +197,37 @@ describe("legacy node-host Doctor migration", () => {
   });
 
   it.each([
-    ["unknown top-level field", legacyConfig({ unknown: true }), "unexpected field unknown"],
-    ["invalid version", legacyConfig({ version: 2 }), "version must be 1"],
-    ["blank node id", legacyConfig({ nodeId: " " }), "nodeId must be a non-empty string"],
+    [
+      "unknown top-level field",
+      legacyConfig({ unknown: true }),
+      "legacy node-host config has unexpected field unknown",
+    ],
+    [
+      "empty top-level field",
+      legacyConfig({ "": 1, later: 2 }),
+      'legacy node-host config has unexpected field ""',
+    ],
+    ["invalid version", legacyConfig({ version: 2 }), "legacy node-host config version must be 1"],
+    [
+      "blank node id",
+      legacyConfig({ nodeId: " " }),
+      "legacy node-host nodeId must be a non-empty string",
+    ],
     [
       "unknown gateway field",
       legacyConfig({ gateway: { host: "gateway.example", unknown: true } }),
-      "unexpected field unknown",
+      "legacy node-host gateway has unexpected field unknown",
     ],
-    ["invalid token", legacyConfig({ token: 42 }), "token must be a string"],
+    [
+      "__proto__ gateway field",
+      legacyConfig({ gateway: { ["__proto__"]: 1, later: 2 } }),
+      "legacy node-host gateway has unexpected field __proto__",
+    ],
+    [
+      "invalid token",
+      legacyConfig({ token: 42 }),
+      "legacy node-host token must be a string when present",
+    ],
   ])("rejects strict legacy shape: %s", async (_label, value, message) => {
     const { env, stateDir } = useStateDir();
     const { sourcePath } = await writeLegacy(stateDir, value);
@@ -215,9 +237,10 @@ describe("legacy node-host Doctor migration", () => {
       stateDir,
     });
 
-    expect(result.warnings[0]).toContain(message);
+    expect(result.warnings[0]).toBe(`Failed reading legacy node-host state: Error: ${message}`);
     expect(readCanonicalRow(env)).toBeUndefined();
     expect(fs.existsSync(sourcePath)).toBe(true);
+    expect(fs.existsSync(`${sourcePath}.doctor-importing`)).toBe(false);
   });
 
   it("keeps a newer canonical snapshot with the same node id", async () => {

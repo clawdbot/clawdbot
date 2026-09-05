@@ -129,28 +129,19 @@ describe("fetchParentMessageCached", () => {
     vi.useRealTimers();
   });
 
-  it("invokes the fetcher on first call", async () => {
+  it("fetches a parent once and returns the cached value on repeat calls", async () => {
     const mockMsg: GraphThreadMessage = {
       id: "p1",
       body: { content: "hi", contentType: "text" },
     };
     const fetcher = vi.fn(async () => mockMsg);
 
-    const result = await fetchParentMessageCached("tok", "g1", "c1", "p1", fetcher);
+    const first = await fetchParentMessageCached("tok", "g1", "c1", "p1", fetcher);
 
-    expect(result).toEqual(mockMsg);
+    expect(first).toEqual(mockMsg);
     expect(fetcher).toHaveBeenCalledTimes(1);
     expect(fetcher).toHaveBeenCalledWith("tok", "g1", "c1", "p1");
-  });
 
-  it("returns cached value on repeat fetch without invoking fetcher", async () => {
-    const mockMsg: GraphThreadMessage = {
-      id: "p1",
-      body: { content: "hi", contentType: "text" },
-    };
-    const fetcher = vi.fn(async () => mockMsg);
-
-    await fetchParentMessageCached("tok", "g1", "c1", "p1", fetcher);
     await fetchParentMessageCached("tok", "g1", "c1", "p1", fetcher);
     const third = await fetchParentMessageCached("tok", "g1", "c1", "p1", fetcher);
 
@@ -245,22 +236,13 @@ describe("fetchParentMessageCached", () => {
 describe("shouldInjectParentContext / markParentContextInjected", () => {
   beforeEach(loadParentContextModule);
 
-  it("returns true for first observation", () => {
+  it("deduplicates a marked parent while keeping other parents and sessions independent", () => {
     expect(shouldInjectParentContext("session-1", "parent-1")).toBe(true);
-  });
 
-  it("returns false after marking the same parent", () => {
     markParentContextInjected("session-1", "parent-1");
+
     expect(shouldInjectParentContext("session-1", "parent-1")).toBe(false);
-  });
-
-  it("returns true again when a different parent appears in the session", () => {
-    markParentContextInjected("session-1", "parent-1");
     expect(shouldInjectParentContext("session-1", "parent-2")).toBe(true);
-  });
-
-  it("dedupe is scoped per session key", () => {
-    markParentContextInjected("session-1", "parent-1");
     expect(shouldInjectParentContext("session-2", "parent-1")).toBe(true);
   });
 });

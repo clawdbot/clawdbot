@@ -8,12 +8,8 @@ import { resolveAgentHarnessPolicy } from "../harness/policy.js";
 import {
   selectAgentHarness,
   selectAgentHarnessForPreparedModelProviders,
-  type AgentHarnessPreparedModelProvider,
 } from "../harness/selection.js";
-import {
-  resolveAgentHarnessPreparedAuthSupport,
-  resolveAgentHarnessPreparedRouteSupport,
-} from "../harness/support.js";
+import { projectPreparedModelProvider } from "../harness/support.js";
 import type { AgentHarness } from "../harness/types.js";
 import {
   ensureAuthProfileStore,
@@ -34,6 +30,28 @@ import {
   resolveCompactionHarnessRuntime,
   resolveEmbeddedCompactionTarget,
 } from "./compaction-runtime-context.js";
+
+export function projectCodexHostTranscriptBytePreflightConfig(
+  config: OpenClawConfig | undefined,
+  active: boolean,
+): OpenClawConfig | undefined {
+  const compaction = config?.agents?.defaults?.compaction;
+  if (
+    !active ||
+    !compaction ||
+    (!Object.hasOwn(compaction, "model") && !Object.hasOwn(compaction, "provider"))
+  ) {
+    return config;
+  }
+  const { model: _model, provider: _provider, ...projectedCompaction } = compaction;
+  return {
+    ...config,
+    agents: {
+      ...config.agents,
+      defaults: { ...config.agents?.defaults, compaction: projectedCompaction },
+    },
+  };
+}
 
 /** Resolves the shared policy, target, and harness ownership for either compaction entry point. */
 export function resolveCompactionRuntimeSelection(params: {
@@ -131,27 +149,6 @@ export function resolveCompactionRuntimeSelection(params: {
   };
 }
 
-function buildCompactionHarnessModelProvider(params: {
-  model?: ProviderRuntimeModel;
-  plan?: AgentRuntimeAuthPlan;
-  attempt?: PreparedAgentRuntimeAuthAttempt;
-}): AgentHarnessPreparedModelProvider {
-  const route = params.plan?.modelRoute;
-  return {
-    api: route?.api ?? params.model?.api,
-    baseUrl: route?.baseUrl ?? params.model?.baseUrl,
-    ...resolveAgentHarnessPreparedRouteSupport(params.plan),
-    ...(params.plan
-      ? {
-          preparedAuth: resolveAgentHarnessPreparedAuthSupport({
-            plan: params.plan,
-            source: params.attempt?.kind === "implicit" ? undefined : params.attempt?.kind,
-          }),
-        }
-      : {}),
-  };
-}
-
 /** Prepares one ordered auth-attempt set and converges it on a single compaction harness. */
 export async function prepareCompactionHarnessAuth(params: {
   config?: OpenClawConfig;
@@ -177,10 +174,12 @@ export async function prepareCompactionHarnessAuth(params: {
 }> {
   const runtimeAuthProfileStore = isOpenAIProvider(params.provider)
     ? ensureAuthProfileStore(params.agentDir, {
+        profileId: params.authProfileId ?? params.reusableRuntimeAuthPlan?.forwardedAuthProfileId,
         externalCliProviderIds: ["openai"],
         allowKeychainPrompt: false,
       })
     : ensureAuthProfileStoreWithoutExternalProfiles(params.agentDir, {
+        profileId: params.authProfileId ?? params.reusableRuntimeAuthPlan?.forwardedAuthProfileId,
         allowKeychainPrompt: false,
       });
   const selectPreparedHarness = (attempts: readonly PreparedAgentRuntimeAuthAttempt[]) =>
@@ -188,7 +187,11 @@ export async function prepareCompactionHarnessAuth(params: {
       provider: params.provider,
       modelId: params.modelId,
       modelProviders: attempts.map((attempt) =>
-        buildCompactionHarnessModelProvider({ model: params.model, plan: attempt.plan, attempt }),
+        projectPreparedModelProvider({
+          model: params.model,
+          plan: attempt.plan,
+          attemptKind: attempt.kind,
+        }),
       ),
       config: params.config,
       agentId: params.runtimePolicyAgentId,
@@ -201,7 +204,7 @@ export async function prepareCompactionHarnessAuth(params: {
     : selectAgentHarness({
         provider: params.provider,
         modelId: params.modelId,
-        modelProvider: buildCompactionHarnessModelProvider({ model: params.model }),
+        modelProvider: projectPreparedModelProvider({ model: params.model }),
         config: params.config,
         agentId: params.runtimePolicyAgentId,
         sessionKey: params.runtimePolicySessionKey ?? undefined,

@@ -16,7 +16,6 @@ import { setTimeout as delay } from "node:timers/promises";
 import { expectDefined } from "@openclaw/normalization-core";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import {
-  appendBoundedOutput,
   assertChannelAccountRunning,
   assertCommandResourceCeiling,
   assertCreatedKitchenSinkSession,
@@ -580,6 +579,7 @@ describe("kitchen-sink RPC gateway teardown", () => {
   });
 
   it("requires /readyz body.ready before accepting gateway readiness", async () => {
+    vi.useFakeTimers();
     const root = mkdtempSync(path.join(tmpdir(), "openclaw-kitchen-rpc-ready-body-"));
     try {
       const logPath = path.join(root, "gateway.log");
@@ -589,13 +589,15 @@ describe("kitchen-sink RPC gateway teardown", () => {
         .mockResolvedValueOnce(new Response('{"ready":false}', { status: 200 }))
         .mockResolvedValueOnce(new Response('{"ready":true}', { status: 200 }));
 
-      await expect(
+      const readiness = expect(
         waitForGatewayReady({ exitCode: null, signalCode: null }, 9, logPath, {
           fetchImpl,
           pollDelayMs: 1,
           timeoutMs: 100,
         }),
       ).resolves.toBeUndefined();
+      await vi.advanceTimersByTimeAsync(1);
+      await readiness;
 
       expect(fetchImpl).toHaveBeenCalledTimes(2);
     } finally {
@@ -694,14 +696,6 @@ describe("kitchen-sink RPC gateway readiness logs", () => {
 });
 
 describe("kitchen-sink RPC command output capture", () => {
-  it("keeps a bounded tail and tracks truncated output", () => {
-    const first = appendBoundedOutput({ text: "", truncatedChars: 0 }, "abcdef", 5);
-    expect(first).toEqual({ text: "bcdef", truncatedChars: 1 });
-
-    const second = appendBoundedOutput(first, "ghij", 5);
-    expect(second).toEqual({ text: "fghij", truncatedChars: 5 });
-  });
-
   it("honors the resolved command output capture limit", async () => {
     const result = await runCommand(
       process.execPath,

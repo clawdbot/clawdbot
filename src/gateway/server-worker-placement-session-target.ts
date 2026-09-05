@@ -26,6 +26,7 @@ export async function runWorkerPlacementSessionBarrier<T>(params: {
   agentId: string;
   executionMode: WorkerPlacementExecutionMode;
   action: "activation" | "recovery";
+  signal?: AbortSignal;
   run: (worktree: WorkerPlacementWorktree) => T | Promise<T>;
 }): Promise<T> {
   const target = params.sessionRuntime.resolveGatewaySessionStoreTargetWithStore({
@@ -33,10 +34,12 @@ export async function runWorkerPlacementSessionBarrier<T>(params: {
     key: params.sessionKey,
     agentId: params.agentId,
     clone: false,
+    exactRead: true,
   });
   return await runExclusiveSessionLifecycleMutation({
     scope: target.storePath,
     identities: [params.sessionKey, target.canonicalKey, ...target.storeKeys, params.sessionId],
+    signal: params.signal,
     run: async () => {
       const {
         config,
@@ -103,6 +106,7 @@ export function resolveWorkerPlacementSessionTarget<
       key: string;
       agentId: string;
       clone: false;
+      exactRead: true;
     }) => Target;
     resolveCanonicalSessionEntryFromStoreKeys: (
       store: Store,
@@ -124,6 +128,7 @@ export function resolveWorkerPlacementSessionTarget<
     key: params.sessionKey,
     agentId: params.agentId,
     clone: false,
+    exactRead: true,
   });
   const entry = params.sessionRuntime.resolveCanonicalSessionEntryFromStoreKeys(
     target.store,

@@ -26,6 +26,7 @@ const pluginMetadataSnapshot = vi.hoisted((): PluginMetadataSnapshot => {
     setupProviders: new Map(),
     commandAliases: new Map(),
     contracts: new Map(),
+    modelIdNormalizationPolicies: new Map(),
   };
   const zeroMetrics = {
     registrySnapshotMs: 0,

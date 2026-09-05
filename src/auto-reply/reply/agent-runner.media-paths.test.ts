@@ -17,7 +17,10 @@ import {
   createReplyOperation as createRegisteredReplyOperation,
   type ReplyOperation,
 } from "./reply-run-registry.js";
-import { resolveFollowupRunToolAuthorityFingerprint } from "./reply-tool-authority.js";
+import {
+  prepareReplyToolAuthority,
+  resolveFollowupRunToolAuthorityFingerprint,
+} from "./reply-tool-authority.js";
 import {
   createMockFollowupRun,
   createMockReplyOperation,
@@ -243,6 +246,7 @@ function makeRunReplyAgentParams(
       prompt,
       run: {
         agentId: "main",
+        thinkingCatalog: [{ provider: "anthropic", id: "claude", input: ["text"] }],
         messageProvider: provider,
         workspaceDir: runWorkspaceDir,
       },
@@ -262,10 +266,8 @@ function makeRunReplyAgentParams(
       replyOperation.setPhase("running");
     }
   }
-  if (overrides.isActive === true && !replyOperation.toolAuthorityFingerprint) {
-    replyOperation.bindToolAuthorityFingerprint(
-      resolveFollowupRunToolAuthorityFingerprint(followupRun),
-    );
+  if (overrides.isActive === true && !overrides.replyOperation) {
+    replyOperation.bindToolAuthoritySnapshot(prepareReplyToolAuthority(followupRun));
   }
   if (overrides.isActive === true) {
     replyOperation.attachBackend({
@@ -412,6 +414,7 @@ describe("runReplyAgent media path normalization", () => {
           followupRun: createMediaFollowupRun({
             run: {
               agentId: "qa",
+              thinkingCatalog: [{ provider: "anthropic", id: "claude", input: ["text"] }],
               sessionKey,
               workspaceDir: testWorkspaceDir,
               config,
@@ -570,7 +573,7 @@ describe("runReplyAgent media path normalization", () => {
       resetTriggered: false,
     });
     operation.setPhase("running");
-    operation.bindToolAuthorityFingerprint(resolveFollowupRunToolAuthorityFingerprint(followupRun));
+    operation.bindToolAuthoritySnapshot(prepareReplyToolAuthority(followupRun));
     expect(operation.acceptedSteeredInboundAudio).toBe(false);
     queueEmbeddedAgentMessageWithOutcomeAsyncMock.mockImplementation(async (sessionId: string) => ({
       queued: true,
@@ -713,6 +716,9 @@ describe("runReplyAgent media path normalization", () => {
           run: {
             provider: "ollama",
             model: "gemma4:latest",
+            thinkingCatalog: [
+              { provider: "ollama", id: "gemma4:latest", input: ["text", "image"] },
+            ],
             workspaceDir: testWorkspaceDir,
             config: {},
           },
@@ -773,6 +779,7 @@ describe("runReplyAgent media path normalization", () => {
           sessionKey: "global",
           provider: "anthropic",
           model: "claude",
+          thinkingCatalog: [{ provider: "anthropic", id: "claude", input: ["text"] }],
           workspaceDir: testWorkspaceDir,
           config: { agents: { ownership: "explicit", entries: { qa: {}, beta: {} } } },
         },
@@ -853,6 +860,7 @@ describe("runReplyAgent media path normalization", () => {
           imageOrder?: string[];
         }
       | undefined;
+    expect(call).toMatchObject({ modelHasVision: true });
     expect(call?.images).toEqual([
       {
         type: "image",

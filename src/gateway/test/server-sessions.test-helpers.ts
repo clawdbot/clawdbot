@@ -359,10 +359,10 @@ function createGatewaySessionsTestHarness(startServer: boolean, setup?: GatewayS
     });
   });
 
-  const openClient = async (opts?: Parameters<typeof gatewayTestHelpers.connectOk>[1]) =>
-    await gatewayTestHelpers
-      .prepareGatewayReplyRuntimeForTest({ force: true })
-      .then(() => requireHarness().openClient(opts));
+  const openClient = async (opts?: Parameters<typeof gatewayTestHelpers.connectOk>[1]) => {
+    await gatewayTestHelpers.prepareGatewayReplyRuntimeForTest({ force: true });
+    return await requireHarness().openClient(opts);
+  };
 
   async function createSessionStoreDir() {
     const dir = path.join(requireSharedSessionStoreDir(), `case-${sessionStoreCaseSeq++}`);
@@ -611,10 +611,12 @@ export function expectActiveRunCleanup(
   requesterSessionKey: string,
   expectedQueueKeys: string[],
   sessionId: string,
+  requesterAgentId: string,
 ) {
   expect(sessionCleanupMocks.stopSubagentsForRequester).toHaveBeenCalledWith({
     cfg: expect.any(Object),
     requesterSessionKey,
+    requesterAgentId,
   });
   expectSessionQueueCleanup(expectedQueueKeys);
   expect(embeddedRunMock.abortCalls).toEqual([sessionId]);

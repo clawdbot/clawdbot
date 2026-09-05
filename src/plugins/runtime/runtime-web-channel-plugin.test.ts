@@ -1,4 +1,4 @@
-// Runtime web-channel plugin tests cover web channel plugin activation and runtime behavior.
+// Runtime web-channel plugin tests cover the public monitor facade and plugin lifecycle.
 import fs from "node:fs";
 import path from "node:path";
 import { afterEach, describe, expect, it, vi } from "vitest";
@@ -6,91 +6,99 @@ import { createTempDirTracker } from "../../../test/helpers/temp-dir.js";
 
 const tempDirs = createTempDirTracker();
 
-afterEach(() => {
+afterEach(async () => {
+  const { clearPluginMetadataLifecycleCaches } = await import("../plugin-metadata-lifecycle.js");
+  clearPluginMetadataLifecycleCaches();
   tempDirs.cleanup();
   vi.doUnmock("./runtime-plugin-boundary.js");
   vi.resetModules();
 });
 
 describe("runtime web channel plugin", () => {
-  it("resolves the default auth dir through the light runtime on each call", async () => {
-    let authDir = "/tmp/openclaw-default-auth";
-    const resolveDefaultWebAuthDir = vi.fn(() => authDir);
-    const resolvePluginRuntimeRecordByEntryBaseNames = vi.fn(() => ({
-      origin: "bundled",
-      source: "test",
-    }));
-
+  it("forwards library monitor calls lazily with exact arguments and runtime receiver", async () => {
+    const result = { marker: "complete" };
+    const monitorWebChannel = vi.fn(async (..._args: unknown[]) => result);
+    const runtimeModule = { monitorWebChannel };
+    const loadPluginBoundaryModule = vi.fn(() => runtimeModule);
     vi.doMock("./runtime-plugin-boundary.js", () => ({
-      loadPluginBoundaryModule: () => ({ resolveDefaultWebAuthDir }),
-      resolvePluginRuntimeModulePath: () => "/tmp/light-runtime-api.js",
-      resolvePluginRuntimeRecordByEntryBaseNames,
+      loadPluginBoundaryModule,
+      resolvePluginRuntimeModulePath: () => "/tmp/runtime-api.js",
+      resolvePluginRuntimeRecordByEntryBaseNames: () => ({
+        origin: "bundled",
+        source: "test",
+      }),
     }));
 
-    const { resolveWebChannelAuthDir } = await import("./runtime-web-channel-plugin.js");
+    const library = await import("../../library.js");
+    expect(loadPluginBoundaryModule).not.toHaveBeenCalled();
+    const args = [
+      true,
+      vi.fn(),
+      false,
+      vi.fn(),
+      { log: vi.fn() },
+      new AbortController().signal,
+      { accountId: "work" },
+    ];
+    await expect(library.monitorWebChannel(...args)).resolves.toBe(result);
+    expect(monitorWebChannel).toHaveBeenCalledOnce();
+    expect(monitorWebChannel.mock.contexts[0]).toBe(runtimeModule);
+    const [receivedArgs] = monitorWebChannel.mock.calls;
+    expect(receivedArgs).toHaveLength(args.length);
+    for (const [index, arg] of args.entries()) {
+      expect(receivedArgs?.[index]).toBe(arg);
+    }
 
-    expect(resolveWebChannelAuthDir()).toBe("/tmp/openclaw-default-auth");
-    authDir = "/tmp/openclaw-profile-auth";
-    expect(resolveWebChannelAuthDir()).toBe("/tmp/openclaw-profile-auth");
-    expect(resolveDefaultWebAuthDir).toHaveBeenCalledTimes(2);
+    const monitorError = new Error("monitor failed");
+    monitorWebChannel.mockRejectedValueOnce(monitorError);
+    await expect(library.monitorWebChannel(...args)).rejects.toBe(monitorError);
   });
 
-  it.each(["light", "heavy"] as const)(
-    "reloads replaced %s runtime artifacts and dependencies after plugin lifecycle clears",
-    async (kind) => {
-      const pluginRoot = fs.realpathSync(tempDirs.make("openclaw-web-runtime-replacement-"));
-      const modulePath = path.join(
-        pluginRoot,
-        kind === "light" ? "light-runtime-api.js" : "runtime-api.js",
+  it("reloads replaced monitor artifacts and dependencies after plugin lifecycle clears", async () => {
+    const pluginRoot = fs.realpathSync(tempDirs.make("openclaw-web-runtime-replacement-"));
+    const modulePath = path.join(pluginRoot, "runtime-api.js");
+    const dependencyPath = path.join(pluginRoot, "dependency.js");
+    fs.writeFileSync(path.join(pluginRoot, "package.json"), '{"type":"commonjs"}\n', "utf8");
+
+    const writeRuntime = (marker: string) => {
+      fs.writeFileSync(dependencyPath, `module.exports = ${JSON.stringify(marker)};\n`, "utf8");
+      fs.writeFileSync(
+        modulePath,
+        `module.exports = { monitorWebChannel: () => ${JSON.stringify(marker)} + ":" + require("./dependency.js") };\n`,
+        "utf8",
       );
-      const dependencyPath = path.join(pluginRoot, "dependency.js");
-      fs.writeFileSync(path.join(pluginRoot, "package.json"), '{"type":"commonjs"}\n', "utf8");
+    };
+    writeRuntime("retired");
 
-      const writeRuntime = (marker: string) => {
-        fs.writeFileSync(dependencyPath, `module.exports = ${JSON.stringify(marker)};\n`, "utf8");
-        const exportName = kind === "light" ? "resolveDefaultWebAuthDir" : "startWebLoginWithQr";
-        fs.writeFileSync(
-          modulePath,
-          `module.exports = { ${exportName}: () => ${JSON.stringify(marker)} + ":" + require("./dependency.js") };\n`,
-          "utf8",
-        );
-      };
-      writeRuntime("retired");
+    vi.doMock("./runtime-plugin-boundary.js", async (importOriginal) => ({
+      ...(await importOriginal<typeof import("./runtime-plugin-boundary.js")>()),
+      resolvePluginRuntimeRecordByEntryBaseNames: () => ({
+        origin: "global",
+        rootDir: pluginRoot,
+        source: path.join(pluginRoot, "index.js"),
+      }),
+      resolvePluginRuntimeModulePath: () => modulePath,
+    }));
 
-      vi.doMock("./runtime-plugin-boundary.js", async (importOriginal) => ({
-        ...(await importOriginal<typeof import("./runtime-plugin-boundary.js")>()),
-        resolvePluginRuntimeRecordByEntryBaseNames: () => ({
-          origin: "global",
-          rootDir: pluginRoot,
-          source: path.join(pluginRoot, "index.js"),
-        }),
-        resolvePluginRuntimeModulePath: () => modulePath,
-      }));
+    const runtime = await import("./runtime-web-channel-plugin.js");
+    const { clearPluginMetadataLifecycleCaches } = await import("../plugin-metadata-lifecycle.js");
+    await expect(runtime.monitorWebChannel()).resolves.toBe("retired:retired");
+    writeRuntime("replacement");
+    await expect(runtime.monitorWebChannel()).resolves.toBe("retired:retired");
 
-      const runtime = await import("./runtime-web-channel-plugin.js");
-      const { clearPluginMetadataLifecycleCaches } =
-        await import("../plugin-metadata-lifecycle.js");
-      const invoke = () =>
-        kind === "light"
-          ? Promise.resolve(runtime.resolveWebChannelAuthDir())
-          : runtime.startWebLoginWithQr();
+    clearPluginMetadataLifecycleCaches();
 
-      await expect(invoke()).resolves.toBe("retired:retired");
-      writeRuntime("replacement");
-      await expect(invoke()).resolves.toBe("retired:retired");
-
-      clearPluginMetadataLifecycleCaches();
-
-      await expect(invoke()).resolves.toBe("replacement:replacement");
-      await expect(invoke()).resolves.toBe("replacement:replacement");
-    },
-  );
+    await expect(runtime.monitorWebChannel()).resolves.toBe("replacement:replacement");
+    await expect(runtime.monitorWebChannel()).resolves.toBe("replacement:replacement");
+  });
 
   it("reports heavy runtime load failures as promise rejections", async () => {
+    const loadError = new Error("runtime unavailable");
+    const loadPluginBoundaryModule = vi.fn(() => {
+      throw loadError;
+    });
     vi.doMock("./runtime-plugin-boundary.js", () => ({
-      loadPluginBoundaryModule: () => {
-        throw new Error("runtime unavailable");
-      },
+      loadPluginBoundaryModule,
       resolvePluginRuntimeModulePath: () => "/tmp/runtime-api.js",
       resolvePluginRuntimeRecordByEntryBaseNames: () => ({
         origin: "bundled",
@@ -99,41 +107,7 @@ describe("runtime web channel plugin", () => {
     }));
     const runtime = await import("./runtime-web-channel-plugin.js");
 
-    await expect(runtime.loginWeb(false)).rejects.toThrow("runtime unavailable");
-    await expect(runtime.monitorWebChannel()).rejects.toThrow("runtime unavailable");
-  });
-
-  it("falls back to the older WhatsApp light runtime auth dir export", async () => {
-    vi.doMock("./runtime-plugin-boundary.js", () => ({
-      loadPluginBoundaryModule: () => ({ WA_WEB_AUTH_DIR: "/tmp/openclaw-legacy-auth" }),
-      resolvePluginRuntimeModulePath: () => "/tmp/light-runtime-api.js",
-      resolvePluginRuntimeRecordByEntryBaseNames: () => ({
-        origin: "external",
-        source: "test",
-      }),
-    }));
-
-    const { resolveWebChannelAuthDir } = await import("./runtime-web-channel-plugin.js");
-
-    expect(resolveWebChannelAuthDir()).toBe("/tmp/openclaw-legacy-auth");
-  });
-
-  it("rejects non-string legacy auth dir exports", async () => {
-    vi.doMock("./runtime-plugin-boundary.js", () => ({
-      loadPluginBoundaryModule: () => ({
-        WA_WEB_AUTH_DIR: Object("/tmp/openclaw-string-object-auth"),
-      }),
-      resolvePluginRuntimeModulePath: () => "/tmp/light-runtime-api.js",
-      resolvePluginRuntimeRecordByEntryBaseNames: () => ({
-        origin: "external",
-        source: "test",
-      }),
-    }));
-
-    const { resolveWebChannelAuthDir } = await import("./runtime-web-channel-plugin.js");
-
-    expect(() => resolveWebChannelAuthDir()).toThrow(
-      "web channel plugin runtime is missing export 'resolveDefaultWebAuthDir'",
-    );
+    expect(loadPluginBoundaryModule).not.toHaveBeenCalled();
+    await expect(runtime.monitorWebChannel()).rejects.toBe(loadError);
   });
 });

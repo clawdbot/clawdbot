@@ -1,12 +1,14 @@
 // Builds the status summary used by human and JSON status output.
 // It aggregates sessions, tasks, heartbeat, channel summary, and model/runtime metadata.
 
+import { expectDefined } from "@openclaw/normalization-core";
+import { withAgentRosterFactsBatch } from "../agents/agent-scope-config.js";
 import { resolveAgentConfig } from "../agents/agent-scope.js";
 import { DEFAULT_CONTEXT_TOKENS, DEFAULT_MODEL, DEFAULT_PROVIDER } from "../agents/defaults.js";
 import { areRuntimeModelRefsEquivalent } from "../agents/model-runtime-aliases.js";
 import { getRuntimeConfig } from "../config/config.js";
 import { resolveProjectedSessionContextTokens } from "../config/sessions/context-token-provenance.js";
-import { resolveSystemMainSessionKey } from "../config/sessions/main-session.js";
+import { resolveCanonicalMainSessionKey } from "../config/sessions/main-session-key.js";
 import {
   hasSessionActiveAutoModelFallback,
   hasUserPinnedModelSelection,
@@ -23,8 +25,9 @@ import {
 import type { OpenClawConfig } from "../config/types.js";
 import { listGatewayAgentsBasic } from "../gateway/agent-list.js";
 import { resolveHeartbeatSessionKey } from "../infra/heartbeat-runner-session.js";
-import { resolveHeartbeatSummaryForAgent } from "../infra/heartbeat-summary.js";
+import { resolveHeartbeatSummariesForAgents } from "../infra/heartbeat-summary-projection.js";
 import { hasResolvableHeartbeatOwnerRoute } from "../infra/outbound/targets.js";
+import { readStartupMigrationWarning } from "../infra/state-migrations.messages.js";
 import { peekSystemEvents } from "../infra/system-events.js";
 import {
   listActiveDegradedPlugins,
@@ -272,14 +275,22 @@ async function prepareSessionStatusDetails(cfg: OpenClawConfig, now: number) {
           model,
           defaultProvider: configuredForSession.provider ?? DEFAULT_PROVIDER,
         });
+        const runtimeMatchesConfiguredModel =
+          selectedModelComparisonLabel != null &&
+          configuredSessionModelComparisonLabel != null &&
+          areRuntimeModelRefsEquivalent(
+            selectedModelComparisonLabel,
+            configuredSessionModelComparisonLabel,
+            { config: cfg },
+          );
+        const contextModelProvider = runtimeMatchesConfiguredModel
+          ? configuredForSession.provider
+          : lookupModel.provider;
         const modelSelectionDiffers =
           selectedModelComparisonLabel != null &&
           configuredSessionModelComparisonLabel != null &&
           selectedModelComparisonLabel !== configuredSessionModelComparisonLabel &&
-          !areRuntimeModelRefsEquivalent(
-            selectedModelComparisonLabel,
-            configuredSessionModelComparisonLabel,
-          ) &&
+          !runtimeMatchesConfiguredModel &&
           (hasUserPinnedModelSelection(entry) || hasSessionActiveAutoModelFallback(entry));
         // Session rows show the live selected model and warn for user-pinned
         // differences as well as runtime fallback selections (#96126).
@@ -309,6 +320,7 @@ async function prepareSessionStatusDetails(cfg: OpenClawConfig, now: number) {
             authoredContextTokens: resolveAuthoredModelContextTokens({
               cfg,
               provider: lookupModel.provider,
+              modelProvider: contextModelProvider,
               model: lookupModelId,
             }),
           }) ?? null;
@@ -400,39 +412,53 @@ export async function getStatusSummary(
         )
     : null;
   const agentList = listGatewayAgentsBasic(cfg);
-  const heartbeatAgents: HeartbeatStatus[] = agentList.agents.map((agent) => {
-    const summary = resolveHeartbeatSummaryForAgent(cfg, agent.id);
-    const heartbeatSession = resolveHeartbeatSessionKey(
+  // One roster-facts batch spans enrollment and the per-agent owner-route
+  // lookup below: outside it every resolveAgentConfig re-walks the roster and
+  // a large fleet stalls the loop for the whole projection (#137570).
+  const heartbeatAgents: HeartbeatStatus[] = withAgentRosterFactsBatch(cfg, () => {
+    const heartbeatSummaries = resolveHeartbeatSummariesForAgents(
       cfg,
-      agent.id,
-      summary.session === undefined ? undefined : { session: summary.session },
+      agentList.agents.map((agent) => agent.id),
     );
-    // Status must not create, register, or migrate an absent session database.
-    const entry = loadExactSessionEntryReadOnly({
-      agentId: agent.id,
-      storePath: heartbeatSession.storePath,
-      sessionKey: heartbeatSession.sessionKey,
-    })?.entry;
-    const route = deliveryContextFromSession(entry);
-    const heartbeat = {
-      ...cfg.agents?.defaults?.heartbeat,
-      ...resolveAgentConfig(cfg, agent.id)?.heartbeat,
-    };
-    // Owner status uses the runner's synchronous stage-1 decision.
-    // The shared probe requires positive direct proof before reporting ready.
-    const hasDeliveryRoute =
-      summary.target === "last"
-        ? Boolean(route?.channel && route.to)
-        : summary.target === "owner"
-          ? hasResolvableHeartbeatOwnerRoute({ cfg, agentId: agent.id, entry, heartbeat })
-          : true;
-    return {
-      agentId: agent.id,
-      enabled: summary.enabled,
-      every: summary.every,
-      everyMs: summary.everyMs,
-      waitingForRoute: summary.enabled && !hasDeliveryRoute,
-    } satisfies HeartbeatStatus;
+    return agentList.agents.map((agent, index) => {
+      const summary = expectDefined(heartbeatSummaries[index], "heartbeat summary");
+      let waitingForRoute = false;
+      if (summary.enabled && (summary.target === "last" || summary.target === "owner")) {
+        const heartbeatSession = resolveHeartbeatSessionKey(
+          cfg,
+          agent.id,
+          summary.session === undefined ? undefined : { session: summary.session },
+        );
+        // Only these enabled targets consume the session route. Keep the probe
+        // read-only so status cannot create, register, or migrate an absent store.
+        const entry = loadExactSessionEntryReadOnly({
+          agentId: agent.id,
+          storePath: heartbeatSession.storePath,
+          sessionKey: heartbeatSession.sessionKey,
+        })?.entry;
+        const route = deliveryContextFromSession(entry);
+        // Owner status uses the runner's synchronous stage-1 decision.
+        waitingForRoute =
+          summary.target === "last"
+            ? !(route?.channel && route.to)
+            : !hasResolvableHeartbeatOwnerRoute({
+                cfg,
+                agentId: agent.id,
+                entry,
+                heartbeat: {
+                  ...cfg.agents?.defaults?.heartbeat,
+                  ...resolveAgentConfig(cfg, agent.id)?.heartbeat,
+                },
+              });
+      }
+      return {
+        agentId: agent.id,
+        enabled: summary.enabled,
+        every: summary.every,
+        everyMs: summary.everyMs,
+        waitingForRoute,
+      } satisfies HeartbeatStatus;
+    });
   });
   const channelSummary = needsChannelPlugins
     ? await channelSummaryModuleLoader.load().then(({ buildChannelSummary }) =>
@@ -443,8 +469,18 @@ export async function getStatusSummary(
         }),
       )
     : [];
-  const mainSessionKey = resolveSystemMainSessionKey(cfg);
-  const queuedSystemEvents = peekSystemEvents(mainSessionKey);
+  // Fleet status reads every main queue without selecting an ambient execution owner.
+  // Global session scope shares one queue, so include it only once.
+  const mainSessionKeys = new Set(
+    agentList.agents.map(({ id: agentId }) =>
+      resolveCanonicalMainSessionKey({
+        agentId,
+        mainKey: cfg.session?.mainKey,
+        sessionScope: cfg.session?.scope,
+      }),
+    ),
+  );
+  const queuedSystemEvents = [...mainSessionKeys].flatMap(peekSystemEvents);
   const taskMaintenanceModule = await taskRegistryMaintenanceModuleLoader.load();
   // Status may overlap a live Gateway, so task inspection must not initialize
   // the writable process registry or its schema-owning shared-state handle.
@@ -467,22 +503,22 @@ export async function getStatusSummary(
 
   const sessionDetails = includeSensitive ? await prepareSessionStatusDetails(cfg, now) : undefined;
 
-  const sessionStores = readStatusSessionStores(cfg, agentList.agents);
+  const sessionStores = readStatusSessionStores(
+    cfg,
+    agentList.agents,
+    includeSensitive ? RECENT_SESSION_LIMIT : 0,
+  );
   const byAgent = await Promise.all(
-    sessionStores.byAgent.map(async ({ agent, path, sessions }) => ({
+    sessionStores.byAgent.map(async ({ agent, path, count, recent }) => ({
       agentId: agent.id,
       path: includeSensitive ? path : "[redacted]",
-      count: sessions.length,
-      recent: sessionDetails
-        ? await sessionDetails.buildSessionRows(
-            selectRecentSessionCandidates(sessions, RECENT_SESSION_LIMIT),
-          )
-        : [],
+      count,
+      recent: sessionDetails ? await sessionDetails.buildSessionRows(recent) : [],
     })),
   );
   const recent = sessionDetails
     ? await sessionDetails.buildSessionRows(
-        selectRecentSessionCandidates(sessionStores.sessions, RECENT_SESSION_LIMIT),
+        selectRecentSessionCandidates(sessionStores.recent, RECENT_SESSION_LIMIT),
       )
     : [];
   const hostDesktopStatus =
@@ -509,6 +545,7 @@ export async function getStatusSummary(
     },
     channelSummary,
     queuedSystemEvents,
+    startupMigrationWarning: readStartupMigrationWarning(includeSensitive),
     degradedSecretOwners: listActiveDegradedSecretOwners().map(
       ({ ownerKind, ownerId, state, degradationState, paths: ownerPaths, reason }) => {
         const redactedReason: string = redactSecretDegradationReason(reason);
@@ -532,7 +569,7 @@ export async function getStatusSummary(
     ...(taskAuditRetainedLost.count > 0 ? { taskAuditRetainedLost } : {}),
     sessions: {
       paths: includeSensitive ? sessionStores.paths : [],
-      count: sessionStores.sessions.length,
+      count: sessionStores.count,
       defaults: sessionDetails?.defaults ?? { model: null, contextTokens: null },
       recent,
       byAgent,

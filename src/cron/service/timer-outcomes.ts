@@ -90,6 +90,7 @@ export function applyJobResult(
     scheduleOwnershipAtMs?: number;
     // Startup recovery restores historical notification facts separately.
     replay?: boolean;
+    replaySchedule?: { nextRunAtMs?: number };
     deferredNotifications?: DeferredCronNotifications;
   },
 ): boolean {
@@ -200,7 +201,22 @@ export function applyJobResult(
     job.deleteAfterRun === true &&
     completionStatus === "succeeded";
   let autoDisableNotificationOwnsFailure = false;
+  const applyReplaySchedule = () => {
+    const nextRunAtMs = job.state.autoDisabled ? undefined : opts?.replaySchedule?.nextRunAtMs;
+    job.state.nextRunAtMs =
+      nextRunAtMs === undefined
+        ? undefined
+        : assignNextRunAtMs({
+            state,
+            job,
+            candidate: nextRunAtMs,
+            deferredNotifications: opts?.deferredNotifications,
+          });
+  };
   const finish = () => {
+    if (opts?.replaySchedule && job.schedule.kind !== "at") {
+      applyReplaySchedule();
+    }
     finalizeCronFailureNotifications(state, {
       job,
       alertConfig,
@@ -225,6 +241,9 @@ export function applyJobResult(
       job.state.nextRunAtMs = previousScheduleState.nextRunAtMs;
       job.state.pacedNextRunAtMs = previousScheduleState.pacedNextRunAtMs;
       job.state.forcePreservedNextRunAtMs = previousScheduleState.nextRunAtMs;
+    } else if (opts?.replaySchedule && job.schedule.kind === "at") {
+      applyReplaySchedule();
+      job.enabled = job.state.nextRunAtMs !== undefined;
     } else if (job.schedule.kind === "at") {
       if (shouldRetryDisabledHeartbeatOneShot(job, result)) {
         const retryDecision = resolveDisabledHeartbeatOneShotRetryDecision({

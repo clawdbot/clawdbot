@@ -26,13 +26,13 @@ describe("PluginLruCache", () => {
     expect(cache.get("c")).toBe("charlie");
   });
 
-  it("returns hit state for cached null values", () => {
+  it("distinguishes cached null values from misses", () => {
     const cache = new PluginLruCache<string | null>(2);
 
     cache.set("missing", null);
 
-    expect(cache.getResult("missing")).toEqual({ hit: true, value: null });
-    expect(cache.getResult("unknown")).toEqual({ hit: false });
+    expect(cache.get("missing")).toBeNull();
+    expect(cache.get("unknown")).toBeUndefined();
   });
 });
 

@@ -21,7 +21,6 @@ import { resolveGatewayProbeAuthSafeWithSecretInputs } from "../gateway/probe-au
 import { formatWindowsGatewayFirewallGuidance } from "../infra/windows-gateway-firewall-diagnostics.js";
 import { commitConfigWithPendingPluginInstalls } from "../plugins/install-record-commit.js";
 import { resolvePluginContributionOwners } from "../plugins/plugin-registry.js";
-import { normalizeAgentId } from "../routing/session-key.js";
 import type { RuntimeEnv } from "../runtime.js";
 import { defaultRuntime, ExitError } from "../runtime.js";
 import { createLazyImportLoader } from "../shared/lazy-promise.js";
@@ -50,6 +49,7 @@ import { resolveGatewayStartupTiming } from "./gateway-startup-timing.js";
 import { formatHealthCheckFailure } from "./health-format.js";
 import { healthCommandNonExiting } from "./health.js";
 import {
+  applyOnboardingWorkspace,
   ensureOnboardingAgentWorkspace,
   resolveOnboardingAgentTarget,
 } from "./onboard-agent-target.js";
@@ -700,37 +700,7 @@ export async function runConfigureWizard(
           );
         }
       }
-      const authoredEntryKey = Object.keys(nextConfig.agents?.entries ?? {}).find(
-        (key) => normalizeAgentId(key) === target.agentId,
-      );
-      const targetEntry = authoredEntryKey
-        ? nextConfig.agents?.entries?.[authoredEntryKey]
-        : undefined;
-      // Explicit fleets own workspace at the selected entry even when it inherited
-      // the global default; legacy owners stay global until they author an override.
-      nextConfig =
-        targetEntry?.workspace !== undefined ||
-        (nextConfig.agents?.ownership === "explicit" && targetEntry !== undefined)
-          ? {
-              ...nextConfig,
-              agents: {
-                ...nextConfig.agents,
-                entries: {
-                  ...nextConfig.agents?.entries,
-                  [authoredEntryKey ?? target.agentId]: { ...targetEntry, workspace: workspaceDir },
-                },
-              },
-            }
-          : {
-              ...nextConfig,
-              agents: {
-                ...nextConfig.agents,
-                defaults: {
-                  ...nextConfig.agents?.defaults,
-                  workspace: workspaceDir,
-                },
-              },
-            };
+      nextConfig = applyOnboardingWorkspace(nextConfig, target, workspaceDir);
       await ensureOnboardingAgentWorkspace(await resolveSetupTarget(), runtime, {
         skipBootstrap: Boolean(nextConfig.agents?.defaults?.skipBootstrap),
         skipOptionalBootstrapFiles: nextConfig.agents?.defaults?.skipOptionalBootstrapFiles,

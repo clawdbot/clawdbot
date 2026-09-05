@@ -70,6 +70,8 @@ export function createNodeWorkerWorkspaceActions(params: {
     if (!restoredWorkspace) {
       return;
     }
+    // Restore transport custody only. The uploaded base is hash-bound to placement;
+    // three-way reconciliation owns legitimate changes on either workspace.
     const prepared = await params.workspaceTransfer.prepareSync({
       environmentId: params.environmentId,
       ownerEpoch: params.ownerEpoch,
@@ -82,22 +84,6 @@ export function createNodeWorkerWorkspaceActions(params: {
       signal: params.ownerSignal,
     });
     params.workspaceTransfer.revoke(params.environmentId, prepared.token);
-    if (prepared.snapshot.manifestRef !== restoredWorkspace.manifestRef) {
-      throw new Error("Gateway workspace changed before node tunnel recovery");
-    }
-    const quiescence = await quiesceWorkspace(restoredWorkspace.remoteWorkspaceDir);
-    try {
-      const remoteManifestRef = await workspace.captureManifest(
-        restoredWorkspace.remoteWorkspaceDir,
-        prepared.snapshot.manifest.baseCommit,
-        restoredWorkspace.manifestRef,
-      );
-      if (remoteManifestRef !== restoredWorkspace.manifestRef) {
-        throw new Error("Node workspace changed before tunnel recovery");
-      }
-    } finally {
-      await quiescence.resume();
-    }
   };
   // Same placement-lifetime memo contract as the SSH tunnel owner: stat-identity
   // keys self-invalidate on change, and without this owner every turn re-hashes

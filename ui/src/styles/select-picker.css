@@ -43,7 +43,7 @@ wa-select.settings-select wa-option {
 
   padding: 6px 8px;
   border-radius: calc(var(--radius-md) - 4px);
-  font-size: var(--control-ui-text-md);
+  font-size: var(--control-ui-text-sm);
   color: var(--text);
   cursor: var(--cursor-action);
 }

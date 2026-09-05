@@ -20,6 +20,7 @@ import {
   type CodexAppServerAuthProfileLookup,
   type CodexAppServerBindingIdentity,
   type CodexAppServerBindingStore,
+  type CodexAppServerThreadBinding,
 } from "./app-server/session-binding.js";
 import {
   getLeasedSharedCodexAppServerClient,
@@ -72,17 +73,18 @@ export function readCodexConversationActiveTurn(
 
 export async function stopCodexConversationTurn(params: {
   identity: CodexAppServerBindingIdentity;
-  bindingStore: CodexAppServerBindingStore;
+  binding: CodexAppServerThreadBinding | undefined;
   pluginConfig?: unknown;
   agentDir?: string;
   config?: CodexAppServerBindingLookup["config"];
+  assertCurrent: () => void;
 }): Promise<{ stopped: boolean; message: string }> {
   const active = readCodexConversationActiveTurn(params.identity);
   if (!active) {
     return { stopped: false, message: "No active Codex run to stop." };
   }
   const lookup = buildBindingLookup(params);
-  const binding = await params.bindingStore.read(params.identity);
+  const binding = params.binding;
   if (binding?.threadId !== active.threadId) {
     return {
       stopped: false,
@@ -112,7 +114,7 @@ export async function stopCodexConversationTurn(params: {
         threadId: active.threadId,
         turnId: active.turnId,
       },
-      { timeoutMs: runtime.requestTimeoutMs },
+      { timeoutMs: runtime.requestTimeoutMs, assertCurrent: params.assertCurrent },
     );
   } finally {
     if (!active.client) {
@@ -124,11 +126,12 @@ export async function stopCodexConversationTurn(params: {
 
 export async function steerCodexConversationTurn(params: {
   identity: CodexAppServerBindingIdentity;
-  bindingStore: CodexAppServerBindingStore;
+  binding: CodexAppServerThreadBinding | undefined;
   message: string;
   pluginConfig?: unknown;
   agentDir?: string;
   config?: CodexAppServerBindingLookup["config"];
+  assertCurrent: () => void;
 }): Promise<{ steered: boolean; message: string }> {
   const active = readCodexConversationActiveTurn(params.identity);
   const text = params.message.trim();
@@ -139,7 +142,7 @@ export async function steerCodexConversationTurn(params: {
     return { steered: false, message: "No active Codex run to steer." };
   }
   const lookup = buildBindingLookup(params);
-  const binding = await params.bindingStore.read(params.identity);
+  const binding = params.binding;
   if (binding?.threadId !== active.threadId) {
     return {
       steered: false,
@@ -170,7 +173,7 @@ export async function steerCodexConversationTurn(params: {
         expectedTurnId: active.turnId,
         input: [{ type: "text", text, text_elements: [] }],
       },
-      { timeoutMs: runtime.requestTimeoutMs },
+      { timeoutMs: runtime.requestTimeoutMs, assertCurrent: params.assertCurrent },
     );
   } finally {
     if (!active.client) {
@@ -183,17 +186,21 @@ export async function steerCodexConversationTurn(params: {
 export async function setCodexConversationModel(params: {
   identity: CodexAppServerBindingIdentity;
   bindingStore: CodexAppServerBindingStore;
+  binding: CodexAppServerThreadBinding | undefined;
   model: string;
   pluginConfig?: unknown;
   agentDir?: string;
   config?: CodexAppServerBindingLookup["config"];
+  storePath?: string;
+  assertCurrent: () => void;
 }): Promise<string> {
   const model = params.model.trim();
   if (!model) {
     return "Usage: /codex model <model>";
   }
   const lookup = buildBindingLookup(params);
-  const binding = await requireThreadBinding(params.bindingStore, params.identity);
+  params.assertCurrent();
+  const binding = requirePreparedThreadBinding(params.binding);
   if (binding.connectionScope === "supervision") {
     throw new ModelSelectionLockedError();
   }
@@ -227,10 +234,13 @@ export async function setCodexConversationModel(params: {
     // lifecycle reconciliation can rotate its native generation safely.
     const updated = await patchSessionEntry({
       agentId: identity.agentId,
-      storePath: resolveStorePath(params.config?.session?.store, { agentId: identity.agentId }),
+      storePath:
+        params.storePath ??
+        resolveStorePath(params.config?.session?.store, { agentId: identity.agentId }),
       sessionKey: identity.sessionKey,
       requireWriteSuccess: true,
       replaceEntry: true,
+      assertCommitAllowed: params.assertCurrent,
       update: (entry) => {
         if (entry.sessionId !== identity.sessionId) {
           throw new Error("Codex session changed while applying the model selection.");
@@ -250,16 +260,28 @@ export async function setCodexConversationModel(params: {
       throw new Error("Codex session changed while applying the model selection.");
     }
     if (modelChanged && binding.contextEngine?.projection) {
-      await patchThreadBinding(params.bindingStore, identity, binding.threadId, projectionPatch);
+      await patchThreadBinding(
+        params.bindingStore,
+        identity,
+        binding.threadId,
+        projectionPatch,
+        params.assertCurrent,
+      );
     }
   } else {
     // Conversation bindings and ephemeral sessions own native selection;
     // ambient outer-session metadata must never redirect their runtime.
-    await patchThreadBinding(params.bindingStore, params.identity, binding.threadId, {
-      model: nextModel,
-      modelProvider: nextModelProvider,
-      ...projectionPatch,
-    });
+    await patchThreadBinding(
+      params.bindingStore,
+      params.identity,
+      binding.threadId,
+      {
+        model: nextModel,
+        modelProvider: nextModelProvider,
+        ...projectionPatch,
+      },
+      params.assertCurrent,
+    );
   }
   return `Codex model set to ${formatCodexDisplayText(nextModel)}.`;
 }
@@ -267,30 +289,44 @@ export async function setCodexConversationModel(params: {
 export async function setCodexConversationFastMode(params: {
   identity: CodexAppServerBindingIdentity;
   bindingStore: CodexAppServerBindingStore;
+  binding: CodexAppServerThreadBinding | undefined;
   enabled?: boolean;
   pluginConfig?: unknown;
   agentDir?: string;
   config?: CodexAppServerBindingLookup["config"];
+  assertCurrent: () => void;
 }): Promise<string> {
-  const binding = await requireThreadBinding(params.bindingStore, params.identity);
+  params.assertCurrent();
+  const binding = requirePreparedThreadBinding(params.binding);
   if (params.enabled == null) {
     return `Codex fast mode: ${isCodexFastServiceTier(binding.serviceTier) ? "on" : "off"}.`;
   }
   const serviceTier: CodexServiceTier = params.enabled ? "priority" : "flex";
   // Fast mode is sent on each later turn; do not require Codex to accept an
   // immediate thread/resume control request just to persist the preference.
-  await patchThreadBinding(params.bindingStore, params.identity, binding.threadId, { serviceTier });
+  await patchThreadBinding(
+    params.bindingStore,
+    params.identity,
+    binding.threadId,
+    { serviceTier },
+    params.assertCurrent,
+  );
   return `Codex fast mode ${params.enabled ? "enabled" : "disabled"}.`;
 }
 
 export async function setCodexConversationPermissions(params: {
   mode?: PermissionsMode;
   config?: CodexAppServerBindingLookup["config"];
+  storePath?: string;
+  assertCurrent: () => void;
   session: { agentId: string; sessionId: string; sessionKey: string };
 }): Promise<string> {
-  const storePath = resolveStorePath(params.config?.session?.store, {
-    agentId: params.session.agentId,
-  });
+  params.assertCurrent();
+  const storePath =
+    params.storePath ??
+    resolveStorePath(params.config?.session?.store, {
+      agentId: params.session.agentId,
+    });
   if (!params.mode) {
     const entry = getSessionEntry({
       agentId: params.session.agentId,
@@ -299,6 +335,7 @@ export async function setCodexConversationPermissions(params: {
       sessionKey: params.session.sessionKey,
       storePath,
     });
+    params.assertCurrent();
     if (entry?.sessionId !== params.session.sessionId) {
       throw new Error("Codex session changed while reading the permission mode.");
     }
@@ -310,6 +347,7 @@ export async function setCodexConversationPermissions(params: {
     sessionKey: params.session.sessionKey,
     requireWriteSuccess: true,
     replaceEntry: true,
+    assertCommitAllowed: params.assertCurrent,
     update: (entry) => {
       if (entry.sessionId !== params.session.sessionId) {
         throw new Error("Codex session changed while applying the permission mode.");
@@ -358,11 +396,7 @@ export function formatPermissionsMode(
   return mode === "full" ? "full access" : (mode ?? "default");
 }
 
-async function requireThreadBinding(
-  bindingStore: CodexAppServerBindingStore,
-  identity: CodexAppServerBindingIdentity,
-) {
-  const binding = await bindingStore.read(identity);
+function requirePreparedThreadBinding(binding: CodexAppServerThreadBinding | undefined) {
   if (!binding?.threadId) {
     throw new Error("No Codex thread is attached to this OpenClaw session yet.");
   }
@@ -374,8 +408,9 @@ async function patchThreadBinding(
   identity: CodexAppServerBindingIdentity,
   threadId: string,
   patch: Extract<Parameters<CodexAppServerBindingStore["mutate"]>[1], { kind: "patch" }>["patch"],
+  assertCurrent: () => void,
 ): Promise<void> {
-  if (!(await bindingStore.mutate(identity, { kind: "patch", threadId, patch }))) {
+  if (!(await bindingStore.mutate(identity, { kind: "patch", threadId, patch }, assertCurrent))) {
     throw new Error("Codex thread binding changed while applying the control update.");
   }
 }

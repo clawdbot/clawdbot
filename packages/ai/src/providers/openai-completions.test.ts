@@ -847,7 +847,7 @@ describe("OpenAI-compatible completions params", () => {
     expect(capturedMessages?.find((message) => Array.isArray(message.content))).toMatchObject({
       role: "user",
       content: [
-        { type: "text", text: "Attached image(s) from tool result:" },
+        { type: "text", text: "Image(s) from tool result #1 (screenshot):" },
         { type: "image_url", image_url: { url: "data:image/png;base64,aW1n" } },
       ],
     });
@@ -1836,7 +1836,9 @@ describe("openai-completions stop-reason tool-call guard", () => {
       {
         type: "text",
         text: "following text",
-        textSignature: '{"v":1,"id":"commentary-0","phase":"commentary"}',
+        textSignature: expect.stringMatching(
+          /^\{"v":1,"id":"commentary-0-[0-9a-f]{24}","phase":"commentary"\}$/u,
+        ),
       },
     ]);
   });
@@ -1909,7 +1911,9 @@ describe("openai-completions stop-reason tool-call guard", () => {
     expect(result.content[0]).toEqual({
       type: "text",
       text: "Use <",
-      textSignature: '{"v":1,"id":"commentary-0","phase":"commentary"}',
+      textSignature: expect.stringMatching(
+        /^\{"v":1,"id":"commentary-0-[0-9a-f]{24}","phase":"commentary"\}$/u,
+      ),
     });
     expect(result.content[1]).toMatchObject({ type: "toolCall", id: "call_1", name: "bash" });
   });

@@ -10,6 +10,8 @@ import type { GatewayBrowserClient } from "../api/gateway.ts";
 import type { AgentsListResult, SessionsListResult } from "../api/types.ts";
 import type { NavigationRouteId } from "../app-navigation.ts";
 import type { RouteId } from "../app-route-paths.ts";
+import { createAgentSelectionCapability } from "../app/agent-selection.ts";
+import { createApplicationConfigCapability } from "../app/config.ts";
 import type {
   ApplicationContext,
   ApplicationGateway,
@@ -17,10 +19,6 @@ import type {
 } from "../app/context.ts";
 import type { ExecApprovalRequest } from "../app/exec-approval.ts";
 import type { ApplicationOverlays } from "../app/overlays-types.ts";
-import type {
-  SidebarWorkboardBoard,
-  SidebarWorkboardRenderers,
-} from "../components/app-sidebar-workboard.ts";
 import type { SessionDataController } from "../components/session-data-controller.ts";
 import type { SessionOrganizerController } from "../components/session-organizer-controller.ts";
 import type { AgentIdentityCapability } from "../lib/agents/identity.ts";
@@ -48,14 +46,13 @@ type SessionDeleteResult = Awaited<ReturnType<SessionCapability["delete"]>>;
 type SessionState = SessionCapability["state"];
 const sidebarSessionGatewayBindings = new WeakMap<
   SessionCapability,
-  (gateway: ApplicationGateway) => void
+  (gateway: ApplicationGateway, selection: ApplicationContext["agentSelection"]) => void
 >();
 
 export type SidebarLifecycleState = HTMLElement & {
   basePath: string;
   hiddenSessionCatalogIds: ReadonlySet<string>;
   activeRouteId?: string;
-  activeWorkboardBoardId: string;
   enabledRouteIds?: readonly NavigationRouteId[];
   connected: boolean;
   offline: boolean;
@@ -68,9 +65,6 @@ export type SidebarLifecycleState = HTMLElement & {
   catalogOpenTarget: "viewer" | "terminal";
   canPairDevice: boolean;
   sidebarEntries: readonly string[];
-  workboardBoards: readonly SidebarWorkboardBoard[];
-  workboardBoardsReady: boolean;
-  workboardRenderers?: SidebarWorkboardRenderers;
   sidebarLiveActivity: boolean;
   onUpdateSidebarEntries?: (entries: string[]) => void;
   pinnedAgentIds: readonly string[];
@@ -98,6 +92,8 @@ export type SidebarLifecycleState = HTMLElement & {
   refreshRequired: boolean;
   onRefresh: () => void;
   onRetryConnect?: () => void;
+  onOpenPalette?: () => void;
+  onToggleSidebar?: () => void;
   onOpenNewSession?: (agentId: string, target?: { catalogId: string }) => void;
   variant: "panel" | "drawer";
 };
@@ -262,8 +258,8 @@ export function createSessionsHarness(agentId: string, keys: string[]) {
   const patch = vi.fn((key: string, _patch: Parameters<SessionCapability["patch"]>[1]) =>
     Promise.resolve(successfulSessionPatch(key)),
   );
-  const deleteSession = vi.fn(
-    (): Promise<SessionDeleteResult> => Promise.resolve({ deleted: false }),
+  const deleteSession = vi.fn((): Promise<SessionDeleteResult> =>
+    Promise.resolve({ deleted: false }),
   );
   const deleteMany = vi.fn(() =>
     Promise.resolve({
@@ -422,13 +418,15 @@ export function createSessionsHarness(agentId: string, keys: string[]) {
     unsubscribeMessages,
   } as unknown as SessionCapability;
   let boundGateway: ApplicationGateway | null = null;
+  let boundSelection: ApplicationContext["agentSelection"] | null = null;
   const scopedClients = new WeakMap<GatewayBrowserClient, GatewayBrowserClient>();
-  sidebarSessionGatewayBindings.set(sessions, (gateway) => {
-    if (boundGateway === gateway) {
+  sidebarSessionGatewayBindings.set(sessions, (gateway, selection) => {
+    if (boundGateway === gateway && boundSelection === selection) {
       return;
     }
     scopedSessions?.dispose();
     boundGateway = gateway;
+    boundSelection = selection;
     const scopedClient = (client: GatewayBrowserClient | null): GatewayBrowserClient | null => {
       if (!client) {
         return null;
@@ -464,17 +462,20 @@ export function createSessionsHarness(agentId: string, keys: string[]) {
       scopedClients.set(client, proxy);
       return proxy;
     };
-    scopedSessions = createSessionCapability({
-      get snapshot() {
-        const snapshot = gateway.snapshot;
-        return { ...snapshot, client: scopedClient(snapshot.client) };
+    scopedSessions = createSessionCapability(
+      {
+        get snapshot() {
+          const snapshot = gateway.snapshot;
+          return { ...snapshot, client: scopedClient(snapshot.client) };
+        },
+        subscribe: (listener) =>
+          gateway.subscribe((snapshot) =>
+            listener({ ...snapshot, client: scopedClient(snapshot.client) }),
+          ),
+        subscribeEvents: (listener) => gateway.subscribeEvents(listener),
       },
-      subscribe: (listener) =>
-        gateway.subscribe((snapshot) =>
-          listener({ ...snapshot, client: scopedClient(snapshot.client) }),
-        ),
-      subscribeEvents: (listener) => gateway.subscribeEvents(listener),
-    });
+      selection,
+    );
   });
   const publish = (statePatch: Partial<SessionState>) => {
     state = { ...state, ...statePatch };
@@ -532,29 +533,36 @@ export function createContext(
     subscribe: () => () => undefined,
   },
 ): ApplicationContext<RouteId> {
-  sidebarSessionGatewayBindings.get(sessions)?.(gateway);
   const selectedAgentId = sessions.state.agentId ?? "main";
+  const agents = {
+    state: {
+      client: gateway.snapshot.client,
+      connected: gateway.snapshot.phase === "connected",
+      agentsLoading: false,
+      agentsError: null,
+      agentsList,
+    },
+    subscribe: () => () => undefined,
+  };
+  const agentSelection = createAgentSelectionCapability(gateway, agents, {
+    load: () => selectedAgentId,
+    save: () => undefined,
+  });
+  sidebarSessionGatewayBindings.get(sessions)?.(gateway, agentSelection);
   return {
+    config: createApplicationConfigCapability({ resourceBasePath: "" }),
     gateway,
     sessions,
+    plugins: {
+      registrations: () => [],
+      selectedReplacement: () => undefined,
+      subscribe: () => () => undefined,
+      errors: [],
+    },
     placementStartup: { pause: vi.fn<ApplicationContext["placementStartup"]["pause"]>() },
-    agents: {
-      state: {
-        client: gateway.snapshot.client,
-        connected: gateway.snapshot.phase === "connected",
-        agentsLoading: false,
-        agentsError: null,
-        agentsList,
-      },
-      subscribe: () => () => undefined,
-    },
+    agents,
     agentIdentity,
-    agentSelection: {
-      state: { selectedId: selectedAgentId, scopeId: selectedAgentId },
-      set: () => undefined,
-      setScope: () => undefined,
-      subscribe: () => () => undefined,
-    },
+    agentSelection,
     scopeUpgrade: hiddenScopeUpgradeCapability,
     overlays: {
       snapshot: { approvalQueue },

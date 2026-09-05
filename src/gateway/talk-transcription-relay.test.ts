@@ -7,6 +7,7 @@ import type { RealtimeTranscriptionProviderPlugin } from "../plugins/types.js";
 import type { RealtimeTranscriptionSessionCreateRequest } from "../realtime-transcription/provider-types.js";
 import { createGatewayBroadcaster } from "./server-broadcast.js";
 import { MAX_BUFFERED_BYTES } from "./server-constants.js";
+import { GatewayClientRegistry } from "./server/client-registry.js";
 import type { GatewayWsClient } from "./server/ws-types.js";
 import {
   cleanupTalkConnection,
@@ -588,7 +589,7 @@ describe("talk transcription gateway relay", () => {
         connect: { role: "operator", scopes: ["operator.read"] } as GatewayWsClient["connect"],
         usesSharedGatewayAuth: false,
       }) satisfies GatewayWsClient;
-    const clients = new Set([
+    const clients = new GatewayClientRegistry([
       createClient("conn-slow", slowSocket),
       createClient("conn-healthy", healthySocket),
     ]);

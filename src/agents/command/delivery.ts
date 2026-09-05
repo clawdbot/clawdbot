@@ -1,7 +1,6 @@
 /**
  * Normalizes and delivers agent command results to outbound channels.
  */
-import { hasNonEmptyString } from "@openclaw/normalization-core/string-coerce";
 import {
   resolveAgentWorkspaceDir,
   resolveDefaultAgentId,
@@ -41,7 +40,7 @@ import {
   resolveAgentOutboundTarget,
 } from "../../infra/outbound/agent-delivery.js";
 import { resolveMessageChannelSelection } from "../../infra/outbound/channel-selection.js";
-import { buildOutboundResultEnvelope } from "../../infra/outbound/envelope.js";
+import { resolveAgentOutboundIdentity } from "../../infra/outbound/identity.js";
 import {
   createOutboundPayloadPlan,
   formatOutboundPayloadLog,
@@ -54,6 +53,7 @@ import type { OutboundSessionContext } from "../../infra/outbound/session-contex
 import { hasReplyPayloadContent } from "../../interactive/payload.js";
 import { type RuntimeEnv, writeRuntimeJson } from "../../runtime.js";
 import { isInternalMessageChannel } from "../../utils/message-channel.js";
+import { hasAnyNonEmptyString as hasNonEmptyStringArray } from "../delivery-evidence-values.js";
 import type { MessagingToolSend } from "../embedded-agent-messaging.types.js";
 import type { EmbeddedAgentRunMeta } from "../embedded-agent-runner/types.js";
 import { isNestedAgentLane } from "../lanes.js";
@@ -140,7 +140,7 @@ type DeliverAgentCommandResultParams = {
   outboundSession: OutboundSessionContext | undefined;
   sessionEntry: SessionEntry | undefined;
   result: RunResult;
-  payloads: RunResult["payloads"];
+  payloads: ReplyPayload[] | undefined;
   /** Channel plugin already selected and bootstrapped by the caller. */
   preparedPlugin?: ChannelPlugin;
   assertDeliveryCurrent?: () => void;
@@ -195,10 +195,6 @@ function logNestedOutput(
     }
     runtime.log(`${prefix} ${line}`);
   }
-}
-
-function hasNonEmptyStringArray(value: unknown): value is string[] {
-  return Array.isArray(value) && value.some(hasNonEmptyString);
 }
 
 function hasNonEmptyArray<T>(value: T[] | undefined): value is T[] {
@@ -483,7 +479,7 @@ function normalizeAgentCommandReplyPayloads(params: {
   cfg: OpenClawConfig;
   opts: AgentCommandOpts;
   outboundSession: OutboundSessionContext | undefined;
-  payloads: RunResult["payloads"];
+  payloads: ReplyPayload[] | undefined;
   result: RunResult;
   deliveryChannel?: string;
   plugin?: ChannelPlugin;
@@ -500,7 +496,7 @@ function normalizeAgentCommandReplyPayloads(params: {
       ? (normalizeChannelId(params.deliveryChannel) ?? params.deliveryChannel)
       : undefined;
   if (!channel) {
-    return { kind: "deliver", payload: payloads as ReplyPayload[] };
+    return { kind: "deliver", payload: payloads };
   }
   const applyChannelTransforms = params.applyChannelTransforms ?? true;
   const deliveryPlugin = applyChannelTransforms ? params.plugin : undefined;
@@ -548,7 +544,7 @@ function normalizeAgentCommandReplyPayloads(params: {
   const normalizedPayloads: ReplyPayload[] = [];
   let suppressionReason: NormalizeReplySkipReason | undefined;
   for (const payload of payloads) {
-    const outcome = normalizeReplyPayloadOutcome(payload as ReplyPayload, {
+    const outcome = normalizeReplyPayloadOutcome(payload, {
       responsePrefix,
       applyChannelTransforms,
       responsePrefixContext,
@@ -893,11 +889,10 @@ export async function deliverAgentCommandResult(
     if (!opts.json) {
       return;
     }
+    const meta = result.meta;
     writeRuntimeJson(runtime, {
-      ...buildOutboundResultEnvelope({
-        payloads: normalizedPayloads,
-        meta: result.meta,
-      }),
+      payloads: [...normalizedPayloads],
+      ...(meta ? { meta } : {}),
       ...(status ? { deliveryStatus: status } : {}),
     });
   };
@@ -972,6 +967,7 @@ export async function deliverAgentCommandResult(
           accountId: resolvedAccountId,
           payloads: deliveryPayloads,
           session: outboundSession,
+          identity: resolveAgentOutboundIdentity(cfg, deliveryAgentId),
           replyPayloadSendingHook: {
             kind: "final",
             channel: deliveryChannel,

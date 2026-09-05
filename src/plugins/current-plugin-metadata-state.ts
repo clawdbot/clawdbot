@@ -1,8 +1,5 @@
 // Holds current plugin metadata snapshots for process-scoped consumers.
-import {
-  setCurrentManifestModelIdNormalizationRecords,
-  type ManifestModelIdNormalizationRecord,
-} from "@openclaw/model-catalog-core/provider-model-id-normalization";
+import { setCurrentManifestModelIdNormalizationPolicies } from "@openclaw/model-catalog-core/provider-model-id-normalization";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { getPluginCache, getProcessPluginCache } from "./plugin-cache.js";
 import type { PluginMetadataSnapshot } from "./plugin-metadata-snapshot.types.js";
@@ -34,33 +31,21 @@ export function setCurrentPluginMetadataSnapshotState(
   configFingerprint: string | undefined,
   compatiblePolicyHashes?: readonly string[],
   compatibleConfigFingerprints?: readonly string[],
-  manifestModelIdNormalizationRecords?: readonly ManifestModelIdNormalizationRecord[],
+  modelIdNormalizationPolicies?: PluginMetadataSnapshot["owners"]["modelIdNormalizationPolicies"],
   owner: "gateway" | "operation" = "operation",
+  envFingerprint?: string,
+  defaultDiscoveryCompatible = false,
 ): CurrentPluginMetadataSnapshotRevision {
   const state = getProcessPluginCache().metadata.current;
   state.snapshot = snapshot;
   state.owner = owner;
   state.configFingerprint = snapshot ? configFingerprint : undefined;
+  state.envFingerprint = snapshot ? envFingerprint : undefined;
+  state.defaultDiscoveryCompatible = Boolean(snapshot && defaultDiscoveryCompatible);
   state.compatiblePolicyHashes = snapshot ? compatiblePolicyHashes : undefined;
   state.compatibleConfigFingerprints = snapshot ? compatibleConfigFingerprints : undefined;
-  state.manifestModelIdNormalizationRecords = snapshot
-    ? manifestModelIdNormalizationRecords
-    : undefined;
-  setCurrentManifestModelIdNormalizationRecords(state.manifestModelIdNormalizationRecords);
-  state.revision = Symbol("plugin-metadata-snapshot");
-  return state.revision;
-}
-
-/** Clears the process-current plugin metadata snapshot. */
-function clearCurrentPluginMetadataSnapshotState(): CurrentPluginMetadataSnapshotRevision {
-  const state = getProcessPluginCache().metadata.current;
-  state.snapshot = undefined;
-  state.owner = "operation";
-  state.configFingerprint = undefined;
-  state.compatiblePolicyHashes = undefined;
-  state.compatibleConfigFingerprints = undefined;
-  state.manifestModelIdNormalizationRecords = undefined;
-  setCurrentManifestModelIdNormalizationRecords(undefined);
+  state.modelIdNormalizationPolicies = snapshot ? modelIdNormalizationPolicies : undefined;
+  setCurrentManifestModelIdNormalizationPolicies(state.modelIdNormalizationPolicies);
   state.revision = Symbol("plugin-metadata-snapshot");
   return state.revision;
 }
@@ -68,7 +53,7 @@ function clearCurrentPluginMetadataSnapshotState(): CurrentPluginMetadataSnapsho
 /** Clears the snapshot, its identity cache, and process-wide model normalization. */
 export function clearCurrentPluginMetadataSnapshot(): void {
   currentPluginMetadataConfigIdentityCache.clear();
-  clearCurrentPluginMetadataSnapshotState();
+  setCurrentPluginMetadataSnapshotState(undefined, undefined);
 }
 
 /** Install-ledger writes cannot retire metadata owned by a running Gateway. */
@@ -96,24 +81,18 @@ export function getProcessGatewayPluginMetadataSnapshot(): PluginMetadataSnapsho
   return undefined;
 }
 
-/** Returns the process-current plugin metadata snapshot state. */
-export function getCurrentPluginMetadataSnapshotState(): {
-  snapshot: unknown;
-  owner: "gateway" | "operation";
-  configFingerprint: string | undefined;
-  compatiblePolicyHashes: readonly string[] | undefined;
-  compatibleConfigFingerprints: readonly string[] | undefined;
-  manifestModelIdNormalizationRecords: readonly ManifestModelIdNormalizationRecord[] | undefined;
-  revision: CurrentPluginMetadataSnapshotRevision;
-} {
+/** Captures the current snapshot and the policies eligible for process-wide publication. */
+export function getCurrentPluginMetadataSnapshotState() {
   const state = getProcessPluginCache().metadata.current;
   return {
     snapshot: state.snapshot,
     owner: state.owner,
     configFingerprint: state.configFingerprint,
+    envFingerprint: state.envFingerprint,
+    defaultDiscoveryCompatible: state.defaultDiscoveryCompatible,
     compatiblePolicyHashes: state.compatiblePolicyHashes,
     compatibleConfigFingerprints: state.compatibleConfigFingerprints,
-    manifestModelIdNormalizationRecords: state.manifestModelIdNormalizationRecords,
+    modelIdNormalizationPolicies: state.modelIdNormalizationPolicies,
     revision: state.revision,
   };
 }

@@ -27,6 +27,7 @@ type PreparedSpawnContext =
   | { status: "error"; error: string };
 
 export async function prepareSubagentSessionContext(params: {
+  assertActive?: () => void;
   cfg: OpenClawConfig;
   contextMode: SpawnSubagentContextMode;
   requesterAgentId: string;
@@ -56,6 +57,7 @@ export async function prepareSubagentSessionContext(params: {
     }
 
     const forkedResult = await getSubagentSpawnDeps().forkSessionEntryFromParent({
+      commitGuard: params.assertActive,
       storePath: childTarget.storePath,
       parentSessionKey: parentTarget.canonicalKey,
       parentStoreKeys: parentTarget.storeKeys,
@@ -101,6 +103,7 @@ export async function prepareSubagentSessionContext(params: {
 }
 
 export async function prepareContextEngineSubagentSpawn(params: {
+  assertActive?: () => void;
   cfg: OpenClawConfig;
   context: PreparedSpawnContext & { status: "ok" };
   requesterInternalKey: string;
@@ -113,6 +116,9 @@ export async function prepareContextEngineSubagentSpawn(params: {
     const deps = getSubagentSpawnDeps();
     deps.ensureContextEnginesInitialized();
     const engine = await deps.resolveContextEngine(params.cfg);
+    // Resolution may outlive the caller. Returned preparation must still reach
+    // the pipeline rollback owner before its next authority check.
+    params.assertActive?.();
     const preparation = await engine.prepareSubagentSpawn?.({
       parentSessionKey: params.requesterInternalKey,
       childSessionKey: params.childSessionKey,

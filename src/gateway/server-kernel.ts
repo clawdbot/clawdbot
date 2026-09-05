@@ -1,3 +1,4 @@
+import { randomUUID } from "node:crypto";
 import { isNixMode } from "../config/paths.js";
 import { clearGatewayAgentCliShim } from "../infra/openclaw-cli-shim.js";
 import { ensureOpenClawCliOnPath } from "../infra/path-env.js";
@@ -11,6 +12,7 @@ import { prepareGatewayLifecycle } from "./server-lifecycle.js";
 import { registerGatewayModelCatalogPrivateAccess } from "./server-model-catalog-auth.js";
 import type { GatewayServerOptions } from "./server-public.js";
 import { prepareGatewayKernelState } from "./server-runtime-state-prepare.js";
+import { rethrowGatewayStartupError } from "./server-shutdown.js";
 import { prepareGatewayServerBootstrap } from "./server-startup-bootstrap.js";
 
 type LoadGatewayModelCatalog = typeof import("./server-model-catalog.js").loadGatewayModelCatalog;
@@ -120,10 +122,24 @@ export async function resetPreparedModelCatalogForTestCore(): Promise<void> {
 }
 
 /** Builds the Gateway kernel and internal dispatch surface without creating HTTP servers. */
-export async function createGatewayKernel(port = 18789, opts: GatewayServerOptions = {}) {
+export async function createGatewayKernel(
+  port = 18789,
+  opts: GatewayServerOptions = {},
+  options: { deferEarlyRuntime?: boolean } = {},
+) {
+  // Listener and socket-free embedders share one generation for instance-owned state.
+  const suppliedBootId = opts.bootId;
+  if (
+    suppliedBootId !== undefined &&
+    (suppliedBootId.trim() !== suppliedBootId || !suppliedBootId || suppliedBootId.length > 96)
+  ) {
+    throw new Error("Gateway boot ID must contain 1 to 96 characters");
+  }
+  const bootId = suppliedBootId ?? randomUUID();
   ensureOpenClawCliOnPath();
   const releasePluginMetadata = retainGatewayPluginMetadata();
   let lifecycleRuntime: Awaited<ReturnType<typeof prepareGatewayLifecycle>> | undefined;
+  let kernelState: Awaited<ReturnType<typeof prepareGatewayKernelState>> | undefined;
   try {
     const bootstrap = await prepareGatewayServerBootstrap({
       port,
@@ -133,62 +149,80 @@ export async function createGatewayKernel(port = 18789, opts: GatewayServerOptio
       loadWorkerEnvironmentStartupModule,
       formatRuntimeGatewayAuthTokenWarning,
     });
-    const runtime = await prepareGatewayKernelState({
-      bootstrap,
-      port,
-      opts,
-      log,
-      logChannels,
-      logHooks,
-      logPlugins,
-      gatewayRuntime,
-      resolveChannelRuntime: getChannelRuntime,
-      loadWorkerEnvironmentStartupModule,
-      loadWorkerPlacementStartupModule,
-    });
+    const runtime = await bootstrap.startupTrace.measure("gateway.kernel-state", () =>
+      prepareGatewayKernelState({
+        bootstrap,
+        bootId,
+        port,
+        opts,
+        log,
+        logChannels,
+        logHooks,
+        logPlugins,
+        gatewayRuntime,
+        resolveChannelRuntime: getChannelRuntime,
+        loadWorkerEnvironmentStartupModule,
+        loadWorkerPlacementStartupModule,
+      }),
+    );
+    kernelState = runtime;
     // An in-place update may replace every hashed chunk before SIGTERM arrives.
     // Resolve and retain the complete shutdown graph while the install is healthy.
     const shutdownRuntime = await runtime.startupTrace.measure(
       "gateway.shutdown-runtime-import",
       async () => (await loadGatewayShutdownModule()).prepareGatewayShutdownRuntime(),
     );
-    lifecycleRuntime = await prepareGatewayLifecycle({
-      runtime,
-      releasePluginMetadata,
-      port,
-      log,
-      logCron,
-      diagnosticsEnabled: bootstrap.diagnosticsEnabled,
-      shutdownRuntime,
-    });
+    const preparedLifecycleRuntime = await runtime.startupTrace.measure("gateway.lifecycle", () =>
+      prepareGatewayLifecycle({
+        runtime,
+        releasePluginMetadata,
+        port,
+        log,
+        logCron,
+        shutdownRuntime,
+      }),
+    );
+    lifecycleRuntime = preparedLifecycleRuntime;
     if (bootstrap.cfgAtStart.gateway?.tls?.enabled && !runtime.gatewayTls.enabled) {
       throw new Error(runtime.gatewayTls.error ?? "gateway tls: failed to enable");
     }
-    const coreRuntime = await startGatewayCoreRuntime({
-      lifecycleRuntime,
-      port,
-      log,
-      logDiscovery,
-      logHealth,
-      logChannels,
-      loadGatewayStartupEarlyModule,
-      loadGatewayPluginBootstrapModule,
-      loadGatewayModelCatalog,
-      loadGatewayModelCatalogSnapshot,
-      readPreparedGatewayModelCatalog,
-    });
-    return await prepareGatewayKernelRequestRuntime({ coreRuntime, log, logHealth });
+    const coreRuntime = await runtime.startupTrace.measure("gateway.core-runtime", () =>
+      startGatewayCoreRuntime({
+        lifecycleRuntime: preparedLifecycleRuntime,
+        port,
+        log,
+        logDiscovery,
+        logHealth,
+        logChannels,
+        loadGatewayStartupEarlyModule,
+        loadGatewayPluginBootstrapModule,
+        loadGatewayModelCatalog,
+        loadGatewayModelCatalogSnapshot,
+        readPreparedGatewayModelCatalog,
+      }),
+    );
+    if (!options.deferEarlyRuntime) {
+      await coreRuntime.startEarlyRuntime();
+    }
+    return await runtime.startupTrace.measure("gateway.request-runtime", () =>
+      prepareGatewayKernelRequestRuntime({
+        coreRuntime,
+        log,
+        logHealth,
+        hostLifecycle: opts.hostLifecycle,
+      }),
+    );
   } catch (error) {
-    try {
+    return await rethrowGatewayStartupError(error, async () => {
       if (lifecycleRuntime) {
+        // The lifecycle releases metadata only after its required joins succeed.
         await lifecycleRuntime.closeOnStartupFailure();
       } else {
+        kernelState?.mentionInbox.dispose();
         clearGatewayAgentCliShim();
         clearSecretsRuntimeSnapshotState();
+        releasePluginMetadata();
       }
-    } finally {
-      releasePluginMetadata();
-    }
-    throw error;
+    });
   }
 }

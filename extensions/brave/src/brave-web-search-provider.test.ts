@@ -655,6 +655,66 @@ describe("brave web search provider", () => {
     expect(readHeader(fetchRequestInit(mockFetch), "X-Subscription-Token")).toBe("brave-test-key");
   });
 
+  it("preserves Brave publication timestamps without promoting relative age or crawl time", async () => {
+    global.fetch = vi.fn(async () =>
+      jsonResponse({
+        web: {
+          results: [
+            {
+              title: "Dated",
+              url: "https://example.com/dated",
+              age: "2 days ago",
+              page_age: "2025-04-12T14:22:41",
+            },
+            {
+              title: "Undated",
+              url: "https://example.com/undated",
+              age: "2 days ago",
+              page_fetched: "2025-04-14T14:22:41",
+            },
+          ],
+        },
+      }),
+    ) as typeof global.fetch;
+    const tool = createBraveTool({ webSearch: { apiKey: "brave-test-key" } });
+
+    const result = await tool.execute({ query: "publication metadata" });
+
+    expect((result.results as Array<Record<string, unknown>>).map((row) => row.published)).toEqual([
+      "2025-04-12T14:22:41",
+      undefined,
+    ]);
+  });
+
+  it("joins LLM-context publication dates by source URL, preserving unknown dates", async () => {
+    const urls = [
+      "https://example.com/timestamp",
+      "https://example.com/day",
+      "https://example.com/unknown",
+    ] as const;
+    global.fetch = vi.fn(async () =>
+      jsonResponse({
+        grounding: { generic: urls.map((url) => ({ url, title: "Source", snippets: ["text"] })) },
+        sources: {
+          [urls[1]]: { age: ["Monday, January 15, 2024", "2024-01-15", "380 days ago"] },
+          [urls[0]]: {
+            age: ["Monday, January 15, 2024", "2024-01-15", "380 days ago", "2024-01-15T13:45:02Z"],
+          },
+          [urls[2]]: { age: [] },
+        },
+      }),
+    ) as typeof global.fetch;
+    const tool = createBraveTool({ webSearch: { apiKey: "brave-test-key", mode: "llm-context" } });
+
+    const result = await tool.execute({ query: "context publication metadata" });
+
+    expect((result.results as Array<Record<string, unknown>>).map((row) => row.published)).toEqual([
+      "2024-01-15T13:45:02Z",
+      "2024-01-15",
+      undefined,
+    ]);
+  });
+
   it("sends Brave llm-context auth in the X-Subscription-Token header", async () => {
     vi.stubEnv("BRAVE_API_KEY", "");
     const mockFetch = installBraveLlmContextFetch();

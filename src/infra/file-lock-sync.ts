@@ -4,12 +4,10 @@ import { getFileLockProcessStartTime } from "../shared/pid-alive.js";
 import { acquireFileLockSync } from "./file-lock-manager.js";
 import { isLockOwnerDefinitelyStale } from "./stale-lock-file.js";
 
-let processStartTime: number | null | undefined;
-
 /** Synchronous lock for legacy stores that cannot transact in SQLite yet. */
 export function acquireFileLockSyncWithRetry(path: string): () => void {
   rejectUnsupportedLockPath(`${path}.lock`);
-  processStartTime ??= getFileLockProcessStartTime(process.pid);
+  const processStartTime = getFileLockProcessStartTime(process.pid);
   const createPayload = () => ({
     pid: process.pid,
     createdAt: new Date().toISOString(),

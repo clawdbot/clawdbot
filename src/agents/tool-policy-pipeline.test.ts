@@ -2,6 +2,11 @@
 // warning dedupe, and plugin-aware policy application.
 import { beforeEach, describe, expect, test, vi } from "vitest";
 import { markFrozenClawToolAllowPolicy } from "../claws/tool-policy-runtime.js";
+import {
+  createPluginMetadataSnapshot,
+  makeRegistry,
+} from "../config/plugin-auto-enable.test-helpers.js";
+import { setCurrentPluginMetadataSnapshot } from "../plugins/current-plugin-metadata.test-support.js";
 import { buildDeclaredToolAllowlistContext } from "./tool-policy-declared-context.js";
 import {
   applyToolPolicyPipeline,
@@ -301,23 +306,44 @@ describe("tool-policy-pipeline", () => {
     ]);
   });
 
-  test("declared context excludes disabled plugin tools", () => {
-    const declared = buildDeclaredToolAllowlistContext({
-      config: { plugins: { entries: { browser: { enabled: false } } } },
-      workspaceDir: process.cwd(),
-    });
-
-    expect(Array.from(declared?.pluginToolNames ?? [])).not.toContain("browser");
-  });
-
-  test("declared context excludes denied plugin tools", () => {
-    const declared = buildDeclaredToolAllowlistContext({
-      config: { plugins: { entries: { browser: { enabled: true } } } },
-      workspaceDir: process.cwd(),
-      toolDenylist: ["browser"],
-    });
-
-    expect(Array.from(declared?.pluginToolNames ?? [])).not.toContain("browser");
+  test.each([
+    {
+      name: "disabled owner",
+      plugins: { entries: { "blocked-owner": { enabled: false } } },
+      toolDenylist: undefined,
+    },
+    { name: "denied owner", plugins: { deny: ["blocked-owner"] }, toolDenylist: undefined },
+    { name: "tool-denied owner", plugins: {}, toolDenylist: ["blocked-owner"] },
+    { name: "denied tool", plugins: {}, toolDenylist: ["blocked_tool"] },
+  ])("declared context excludes a $name and keeps eligible tools", ({ plugins, toolDenylist }) => {
+    const config = { plugins };
+    const workspaceDir = process.cwd();
+    const manifestRegistry = makeRegistry([
+      {
+        id: "Allowed-Owner",
+        origin: "bundled",
+        channels: [],
+        contracts: { tools: ["allowed_tool"] },
+      },
+      {
+        id: "Blocked-Owner",
+        origin: "bundled",
+        channels: [],
+        contracts: { tools: ["blocked_tool"] },
+      },
+    ]);
+    setCurrentPluginMetadataSnapshot(
+      createPluginMetadataSnapshot({ config, manifestRegistry, workspaceDir }),
+      { config, workspaceDir },
+    );
+    try {
+      expect(buildDeclaredToolAllowlistContext({ config, workspaceDir, toolDenylist })).toEqual({
+        pluginIds: ["Allowed-Owner"],
+        pluginToolNames: ["allowed_tool"],
+      });
+    } finally {
+      setCurrentPluginMetadataSnapshot(undefined);
+    }
   });
 
   test("declared context excludes disabled MCP servers", () => {

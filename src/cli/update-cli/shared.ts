@@ -30,6 +30,8 @@ import { COMPLETION_SKIP_PLUGIN_COMMANDS_ENV } from "../completion-runtime.js";
 import { isJsonOutputModeActive } from "../json-output-mode.js";
 
 export type UpdateCommandOptions = {
+  /** Internal orchestration context, shared across update phases and child processes. */
+  run?: { runId: string; env: NodeJS.ProcessEnv };
   acceptCapabilities?: boolean;
   json?: boolean;
   restart?: boolean;
@@ -61,28 +63,47 @@ export type UpdateWizardOptions = {
   timeout?: string;
 };
 
+export class UpdatePreMutationError extends Error {
+  constructor(
+    readonly reason: string,
+    message: string,
+  ) {
+    super(message);
+    this.name = "UpdatePreMutationError";
+  }
+}
+
 const INVALID_TIMEOUT_ERROR = "--timeout must be a positive integer (seconds)";
 const MAX_SAFE_TIMEOUT_SECONDS = Math.floor(Number.MAX_SAFE_INTEGER / 1000);
 
-/** Parse a CLI timeout in seconds, exiting through the runtime on invalid input. */
-export function parseTimeoutMsOrExit(timeout?: string): number | undefined | null {
+/** Parse the shared timeout contract without exiting an owning operation. */
+export function parseUpdateTimeoutMs(timeout?: string): number | undefined {
   if (timeout === undefined) {
     return undefined;
   }
   const trimmed = timeout.trim();
   const seconds = parseStrictPositiveInteger(trimmed);
   if (seconds === undefined || seconds > MAX_SAFE_TIMEOUT_SECONDS) {
+    throw new Error(INVALID_TIMEOUT_ERROR);
+  }
+  return seconds * 1000;
+}
+
+/** Parse a CLI timeout in seconds, exiting through the runtime on invalid input. */
+export function parseTimeoutMsOrExit(timeout?: string): number | undefined | null {
+  try {
+    return parseUpdateTimeoutMs(timeout);
+  } catch (error) {
     if (isJsonOutputModeActive(process.argv)) {
-      throw new Error(INVALID_TIMEOUT_ERROR);
+      throw error;
     }
     defaultRuntime.error(INVALID_TIMEOUT_ERROR);
     defaultRuntime.exit(1);
     return null;
   }
-  return seconds * 1000;
 }
 
-const OPENCLAW_REPO_URL = "https://github.com/openclaw/openclaw.git";
+const UPSTREAM_REPOSITORY_URL = "https://github.com/openclaw/openclaw.git";
 // Keep the full commit graph for dev ref switching while deferring historical blobs.
 // A shallow clone would make older or non-default dev targets unreachable.
 const GIT_CLONE_BLOB_FILTER = "--filter=blob:none";
@@ -246,7 +267,7 @@ async function cloneGitCheckoutTransactionally(params: {
   try {
     const result = await runUpdateStep({
       name: "git clone",
-      argv: ["git", "clone", GIT_CLONE_BLOB_FILTER, OPENCLAW_REPO_URL, stagingDir],
+      argv: ["git", "clone", GIT_CLONE_BLOB_FILTER, UPSTREAM_REPOSITORY_URL, stagingDir],
       env: params.env,
       timeoutMs: params.timeoutMs,
       progress: params.progress,
@@ -341,7 +362,8 @@ export async function ensureGitCheckout(params: {
   if (!(await isGitCheckout(params.dir))) {
     const empty = await isEmptyDir(params.dir);
     if (!empty) {
-      throw new Error(
+      throw new UpdatePreMutationError(
+        "invalid-git-directory",
         `OPENCLAW_GIT_DIR points at a non-git directory: ${params.dir}. Set OPENCLAW_GIT_DIR to an empty folder or an openclaw checkout.`,
       );
     }
@@ -355,7 +377,10 @@ export async function ensureGitCheckout(params: {
   }
 
   if (!(await isCorePackage(params.dir))) {
-    throw new Error(`OPENCLAW_GIT_DIR does not look like a core checkout: ${params.dir}.`);
+    throw new UpdatePreMutationError(
+      "invalid-git-directory",
+      `OPENCLAW_GIT_DIR does not look like a core checkout: ${params.dir}.`,
+    );
   }
 
   return { checkoutDir: await fs.realpath(params.dir), step: null };

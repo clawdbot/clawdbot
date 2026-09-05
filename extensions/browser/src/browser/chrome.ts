@@ -10,7 +10,11 @@ import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
 import { setTimeout as delay } from "node:timers/promises";
-import { isPidAlive, prepareOomScoreAdjustedSpawn } from "openclaw/plugin-sdk/process-runtime";
+import {
+  getFileLockProcessStartTime,
+  isPidAlive,
+  prepareOomScoreAdjustedSpawn,
+} from "openclaw/plugin-sdk/process-runtime";
 import { normalizeOptionalString } from "openclaw/plugin-sdk/string-coerce-runtime";
 import { sliceUtf16Safe } from "openclaw/plugin-sdk/text-utility-runtime";
 import type { SsrFPolicy } from "../infra/net/ssrf.js";
@@ -177,18 +181,6 @@ function readSingletonLockTarget(userDataDir: string): { hostname: string; pid: 
   return { hostname, pid };
 }
 
-function readLinuxProcessStartTime(pid: number): string | null {
-  let stat: string;
-  try {
-    stat = fs.readFileSync(`/proc/${pid}/stat`, "utf8");
-  } catch {
-    return null;
-  }
-  const afterCommand = stat.slice(stat.lastIndexOf(")") + 2);
-  const fields = afterCommand.split(/\s+/);
-  return normalizeOptionalString(fields[19]) ?? null;
-}
-
 function readLinuxProcessArgv(pid: number): string[] | null {
   let cmdline: Buffer;
   try {
@@ -219,51 +211,21 @@ function readPsCommandLine(pid: number): string | null {
   }
 }
 
-function readPsStartTime(pid: number): string | null {
-  try {
-    return (
-      normalizeOptionalString(
-        execFileSync("ps", ["-p", String(pid), "-o", "lstart="], {
-          encoding: "utf8",
-          timeout: 1000,
-          maxBuffer: 64 * 1024,
-        }),
-      ) ?? null
-    );
-  } catch {
-    return null;
-  }
-}
-
 function readManagedProcessCommandLine(pid: number): {
   argv: string[] | null;
   text: string;
-  startTime: string | null;
+  startTime: number;
 } | null {
-  if (process.platform === "linux") {
-    const argv = readLinuxProcessArgv(pid);
-    if (!argv) {
-      return null;
-    }
-    const startTime = readLinuxProcessStartTime(pid);
-    if (!startTime) {
-      return null;
-    }
-    return {
-      argv,
-      text: argv.join(" "),
-      startTime,
-    };
+  if (process.platform !== "linux" && process.platform !== "darwin") {
+    return null;
   }
-  if (process.platform === "darwin") {
-    const text = readPsCommandLine(pid);
-    const startTime = readPsStartTime(pid);
-    if (!text || !startTime) {
-      return null;
-    }
-    return { argv: null, text, startTime };
+  const startTime = getFileLockProcessStartTime(pid);
+  if (startTime === null) {
+    return null;
   }
-  return null;
+  const argv = process.platform === "linux" ? readLinuxProcessArgv(pid) : null;
+  const text = process.platform === "linux" ? argv?.join(" ") : readPsCommandLine(pid);
+  return text ? { argv, text, startTime } : null;
 }
 
 function isChromeExecutableFamilyMatch(commandText: string, exe: BrowserExecutable): boolean {
@@ -401,7 +363,7 @@ function pidListensOnPort(pid: number, port: number): boolean {
 
 type ManagedChromeProcessIdentity = {
   pid: number;
-  startTime: string | null;
+  startTime: number;
   commandLine: string;
 };
 
@@ -1327,10 +1289,6 @@ function cdpBrowserProcessId(result: unknown): number | null {
   return browser?.id ?? null;
 }
 
-function cdpProcessListOwnsBrowser(result: unknown, pid: number): boolean {
-  return cdpBrowserProcessId(result) === pid;
-}
-
 function processCommandUsesHeadlessChrome(command: {
   argv: string[] | null;
   text: string;
@@ -1407,12 +1365,9 @@ export async function isChromeCdpOwnedByPid(
     if (!endpoint) {
       return false;
     }
-    let owned = false;
-    await withCdpSocket(
+    return await withCdpSocket(
       endpoint.url,
-      async (send) => {
-        owned = cdpProcessListOwnsBrowser(await send("SystemInfo.getProcessInfo"), pid);
-      },
+      async (send) => cdpBrowserProcessId(await send("SystemInfo.getProcessInfo")) === pid,
       {
         commandTimeoutMs: timeoutMs,
         handshakeRetries: 0,
@@ -1420,7 +1375,6 @@ export async function isChromeCdpOwnedByPid(
         lookup: endpoint.lookup,
       },
     );
-    return owned;
   } catch {
     return false;
   }
@@ -1453,7 +1407,7 @@ async function requestGracefulChromeClose(
         // Never ask a replacement browser to close on behalf of the old child.
         const processInfo = await send("SystemInfo.getProcessInfo");
         if (
-          !cdpProcessListOwnsBrowser(processInfo, running.pid) ||
+          cdpBrowserProcessId(processInfo) !== running.pid ||
           (ownsCurrentProcess && !ownsCurrentProcess())
         ) {
           return;

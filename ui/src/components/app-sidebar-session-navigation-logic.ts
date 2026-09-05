@@ -1,10 +1,8 @@
 import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
-import type { GatewayControlUiPluginTab } from "../api/gateway.ts";
 import type { GatewaySessionRow, SessionsListResult } from "../api/types.ts";
-import { SIDEBAR_NAV_ROUTES, type NavigationRouteId } from "../app-navigation.ts";
+import { SIDEBAR_NAV_ROUTES } from "../app-navigation.ts";
 import type { RouteId } from "../app-route-paths.ts";
 import type { ApplicationContext } from "../app/context.ts";
-import { t } from "../i18n/index.ts";
 import { listSelectableAgents } from "../lib/agents/display.ts";
 import {
   isCronSessionKey,
@@ -23,10 +21,6 @@ import {
   sessionMatchesVisibleSessionScope,
 } from "../lib/sessions/index.ts";
 import {
-  resolveSessionPreferredFace,
-  sessionNavigationTarget,
-} from "../lib/sessions/route-navigation.ts";
-import {
   areUiSessionKeysEquivalent,
   buildAgentMainSessionKey,
   isAcpSessionKey,
@@ -44,10 +38,9 @@ import {
   type SidebarSessionSortMode,
   type SidebarSessionStatusFilter,
 } from "./app-sidebar-session-types.ts";
-import type { SidebarWorkboardBoard } from "./app-sidebar-workboard.ts";
 import { resolveCloudWorkerStopAction } from "./cloud-worker-stop.ts";
 import type { SessionAttentionController } from "./session-attention-controller.ts";
-import { listAssignableSessionOwners, type SessionOwnerOption } from "./session-owner-chip.ts";
+import { sessionSelfOwner, type SessionOwnerOption } from "./session-owner-chip.ts";
 
 type SessionRow = SessionsListResult["sessions"][number];
 
@@ -164,12 +157,6 @@ export function buildSidebarSessionNavigationState(input: {
   resolveAgentStatusNote: (row: GatewaySessionRow) => string | undefined;
 }): SidebarSessionNavigationState {
   const { context } = input;
-  const mainKey = context
-    ? resolveUiConfiguredMainKey({
-        agentsList: context.agents.state.agentsList,
-        hello: context.gateway.snapshot.hello,
-      })
-    : undefined;
   const navigation = resolveSessionNavigation({
     result: input.sessionsResult,
     activeSession: input.activeSession,
@@ -201,6 +188,7 @@ export function buildSidebarSessionNavigationState(input: {
       createdActor: row.createdActor,
       owner: row.owner,
       participants: row.participants,
+      expandedParticipants: row.expandedParticipants,
       participantCount: row.participantCount,
       archivedBy: row.archivedBy,
       // The sidebar's zone structure already says what forked from what;
@@ -209,15 +197,6 @@ export function buildSidebarSessionNavigationState(input: {
       userLabel: row.label,
       subtitle: resolveSessionWorkSubtitle(row),
       workContext: resolveSessionWorkContext(row),
-      href: sessionNavigationTarget({
-        face: resolveSessionPreferredFace(row),
-        sessionKey: row.key,
-        fallbackAgentId: navigation.selectedAgentId,
-        basePath: context?.basePath ?? "",
-        row,
-        mainKey,
-        preferenceDerivedFace: true,
-      }).href,
       active: row.key === navigation.activeRowKey,
       visuallyActive: input.highlightCurrentSession && row.key === navigation.currentSessionKey,
       // Normalize optional gateway state before collapsing it to the sidebar's required fact.
@@ -298,10 +277,7 @@ export function buildSidebarSessionNavigationState(input: {
 export function buildReconciledSidebarZone(input: {
   sidebarEntries: readonly string[];
   rows: SidebarRecentSession[];
-  workboardBoards: readonly SidebarWorkboardBoard[];
-  enabledRouteIds: readonly NavigationRouteId[] | undefined;
-  workboardBoardsReady: boolean;
-  controlUiTabs: readonly GatewayControlUiPluginTab[] | undefined;
+  pluginNavigationKeys: ReadonlySet<string>;
 }) {
   const pinnedRows = input.rows.filter((row) => row.pinned);
   // Only loaded rows count as authoritative unpinned state; entries for
@@ -312,15 +288,11 @@ export function buildReconciledSidebarZone(input: {
     pinnedRows,
     SIDEBAR_NAV_ROUTES,
     knownUnpinnedKeys,
-    input.workboardBoards,
-    input.enabledRouteIds?.includes("workboard") ?? true,
-    input.workboardBoardsReady,
-    input.controlUiTabs?.some((tab) => tab.placement === "route:workboard") === true,
+    input.pluginNavigationKeys,
   );
   return {
     ...reconciled,
     sessionRows: new Map(pinnedRows.map((row) => [row.key, row])),
-    workboardRows: new Map(input.workboardBoards.map((board) => [board.id, board])),
   };
 }
 
@@ -488,13 +460,6 @@ export function resolveSidebarAgentResumeKey(
   return latest?.key ?? buildAgentMainSessionKey({ agentId, mainKey });
 }
 
-export function resolveSidebarAgentChipSubtitle(latest: SessionRow | null): string {
-  if (latest && isSessionRunActive(latest)) {
-    return t("agentChip.working");
-  }
-  return latest ? resolveSessionDisplayName(latest.key, latest) : t("agentChip.ready");
-}
-
 export function collectKnownSidebarSessionCatalogIds(input: {
   loadedCatalogIds: readonly string[];
   hasLoaded: boolean;
@@ -595,11 +560,10 @@ export function applySidebarSessionOwnerFilter(input: {
 } {
   const facetOwners = input.ownerFacet ?? [];
   const selfId = input.self?.id;
-  const selfOwner = selfId
-    ? listAssignableSessionOwners({ facet: facetOwners, self: input.self }).find(
-        (owner) => owner.type === "human" && owner.id === selfId,
-      )
-    : undefined;
+  const selfOwner =
+    facetOwners.find((owner) => owner.id === selfId)?.type === "agent"
+      ? null
+      : sessionSelfOwner(input.self);
   const ownerOptions = selfOwner
     ? [selfOwner, ...facetOwners.filter((owner) => owner.id !== selfOwner.id)]
     : facetOwners;

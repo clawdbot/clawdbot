@@ -12,6 +12,7 @@
 - Source commit: {{SOURCE_COMMIT}}
 - Shared issue: {{ISSUE_URL}}
 - Upgrade result: pending
+- Terminal result: pending
 
 ## Upgrade findings
 

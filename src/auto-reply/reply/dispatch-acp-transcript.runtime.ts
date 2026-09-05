@@ -1,6 +1,6 @@
 // Bridges ACP transcript events into persisted OpenClaw session transcripts.
 import { resolveAcpSessionCwd } from "@openclaw/acp-core/runtime/session-identifiers";
-import { resolveSessionAgentId } from "../../agents/agent-scope.js";
+import type { AgentRunTerminalOutcome } from "../../agents/agent-run-terminal-outcome.js";
 import { persistAcpTurnTranscript } from "../../agents/command/attempt-execution.js";
 import { resolveSessionStorePathCore } from "../../config/sessions.js";
 import { loadSessionEntryReadOnly } from "../../config/sessions/session-accessor.js";
@@ -13,9 +13,11 @@ import type { ReplyDispatchAssistantTranscript } from "../get-reply-options.type
 export async function persistAcpDispatchTranscript(params: {
   cfg: OpenClawConfig;
   sessionKey: string;
+  agentId: string;
   expectedSessionId?: string;
   promptText: string;
   finalText: string;
+  terminalOutcome: AgentRunTerminalOutcome;
   meta?: SessionAcpMeta;
   threadId?: string | number;
   userTurnTranscriptRecorder?: UserTurnTranscriptRecorder;
@@ -28,10 +30,7 @@ export async function persistAcpDispatchTranscript(params: {
     return undefined;
   }
 
-  const sessionAgentId = resolveSessionAgentId({
-    sessionKey: params.sessionKey,
-    config: params.cfg,
-  });
+  const sessionAgentId = params.agentId;
   const storePath = resolveSessionStorePathCore(params.cfg.session?.store, {
     agentId: sessionAgentId,
   });
@@ -52,6 +51,7 @@ export async function persistAcpDispatchTranscript(params: {
     body: promptText,
     transcriptBody: promptText,
     finalText,
+    terminalOutcome: params.terminalOutcome,
     sessionId,
     expectedSessionId: params.expectedSessionId,
     sessionKey: params.sessionKey,

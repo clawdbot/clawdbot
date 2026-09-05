@@ -163,6 +163,7 @@ export async function runAcpAgentCommand(params: {
       admittedRunContext,
       cfg: params.cfg,
       sessionKey: params.sessionKey,
+      agentId: params.sessionAgentId,
       provenance: params.provenance,
       text: params.body,
       attachments: acpImageAttachments.length > 0 ? acpImageAttachments : undefined,
@@ -242,6 +243,12 @@ export async function runAcpAgentCommand(params: {
     throw acpError;
   }
 
+  // Execution is settled before persistence; later delivery cancellation remains live below.
+  const endFields = attemptExecutionRuntime.resolveAcpLifecycleEndFields(
+    params.opts.abortSignal,
+    stopReason,
+    resultStatus,
+  );
   const finalTextRaw = visibleTextAccumulator.finalizeRaw();
   const finalText = visibleTextAccumulator.finalize();
   const terminalReply = visibleTextAccumulator.finalizeReplySnapshot();
@@ -281,6 +288,10 @@ export async function runAcpAgentCommand(params: {
           }
         : {}),
       finalText: finalTextRaw,
+      terminalOutcome: buildAgentRunTerminalOutcomeFromLifecycleEvent({
+        phase: "end",
+        data: endFields,
+      }),
       sessionId: internalTarget?.sessionId ?? params.sessionId,
       sessionKey: internalTarget?.sessionKey ?? params.sessionKey,
       sessionEntry: internalTarget?.sessionEntry ?? sessionEntry,
@@ -317,9 +328,7 @@ export async function runAcpAgentCommand(params: {
     toolTracker: acpToolTracker,
     agentId: params.sessionAgentId,
     lifecycleGeneration: params.lifecycleGeneration,
-    abortSignal: params.opts.abortSignal,
-    stopReason,
-    resultStatus,
+    endFields,
     terminalReply,
   });
 

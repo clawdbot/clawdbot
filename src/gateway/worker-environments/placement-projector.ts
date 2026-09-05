@@ -11,6 +11,10 @@ import type { WorkerEnvironmentServiceContract } from "./service-contract.js";
 
 export type WorkerSessionPlacementReader = {
   getMany(sessionIds: readonly string[]): ReadonlyMap<string, WorkerSessionPlacementRecord>;
+  /** Runtime consumers may cancel work when the exact captured turn claim closes. */
+  registerTurnClaimClosedHandler?: (
+    handler: (claim: import("./placement-record.js").WorkerSessionTurnClaim) => void,
+  ) => () => void;
   getPlacementMoves?(sessionIds: readonly string[]): ReadonlyMap<string, WorkerPlacementMoveIntent>;
 };
 
@@ -97,6 +101,7 @@ export function projectWorkerSessionPlacement(
   diskSpace?: SessionPlacementDiskSpace,
   runner?: SessionPlacementRunner,
   identity?: { providerId: string; profileId: string },
+  failedRecoveryAction?: "restart" | "stop-first",
 ): SessionPlacement {
   const timing = {
     generation: record.generation,
@@ -238,6 +243,7 @@ export function projectWorkerSessionPlacement(
           : {}),
         ...conflict,
         recoveryError: record.recoveryError,
+        ...(failedRecoveryAction ? { recoveryAction: failedRecoveryAction } : {}),
         ...terminal,
       };
   }

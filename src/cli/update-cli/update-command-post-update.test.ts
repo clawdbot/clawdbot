@@ -21,7 +21,6 @@ const mocks = vi.hoisted(() => ({
   readConfig: vi.fn(),
   createServiceConfigIO: vi.fn(),
   readServiceState: vi.fn(),
-  restart: vi.fn(async () => undefined),
   restartService: vi.fn<typeof import("./update-command-service.js").maybeRestartService>(
     async () => true,
   ),
@@ -88,7 +87,6 @@ vi.mock("./restart-helper.js", () => ({
 vi.mock("./update-command-service.js", async (importOriginal) => ({
   ...(await importOriginal<typeof import("./update-command-service.js")>()),
   maybeRestartService: mocks.restartService,
-  maybeRestartServiceAfterFailedMutableUpdate: mocks.restart,
   revalidateManagedGatewayServiceAfterUpdate: mocks.revalidateService,
 }));
 vi.mock("./update-command-result.js", async (importOriginal) => ({
@@ -208,7 +206,6 @@ async function finishSuccessfulPackageSwitch(
     downgradeRisk: true,
     shouldRestart: Boolean(params.restartEnvironment),
     opts: { json: params.json },
-    showProgress: false,
     controlPlaneUpdateSentinelMeta: {},
     preUpdatePluginInstallRecords: {},
     startedAt: Date.now(),
@@ -273,6 +270,8 @@ describe("successful update finalization ordering", () => {
     const output = vi.mocked(defaultRuntime.log).mock.calls.flat().map(String).join("\n");
     expect.soft(failure).toBeUndefined();
     expect.soft(output).toContain("Shell completion refresh failed");
+    expect.soft(output).toContain("Resolve the reported error before retrying");
+    expect.soft(output).not.toContain("session only");
     expect.soft(mocks.restartService).toHaveBeenCalledOnce();
     expect(mocks.restartService.mock.invocationCallOrder[0]).toBeLessThan(
       mocks.checkCompletionStatus.mock.invocationCallOrder[0] ?? Number.POSITIVE_INFINITY,
@@ -319,6 +318,8 @@ describe("successful update finalization ordering", () => {
 
     const output = vi.mocked(defaultRuntime.log).mock.calls.flat().map(String).join("\n");
     expect(output).toContain("completion cache generation failed");
+    expect(output).toContain("Resolve the reported error before retrying");
+    expect(output).not.toContain("source /tmp/openclaw-completion.zsh");
     expect(output).toContain("openclaw completion --write-state --install");
     expect(mocks.restartService).toHaveBeenCalledOnce();
     expect(mocks.restartService.mock.invocationCallOrder[0]).toBeLessThan(
@@ -358,17 +359,22 @@ describe("successful update finalization ordering", () => {
     Object.defineProperty(process.stdin, "isTTY", { configurable: true, value: true });
     mocks.restartService.mockResolvedValueOnce(false);
 
-    await finishSuccessfulPackageSwitch();
+    await expect(finishSuccessfulPackageSwitch()).rejects.toMatchObject({
+      name: "UpdateCommandFailure",
+      exitCode: 1,
+      result: { status: "error", reason: "restart-unhealthy" },
+    });
 
     expect(mocks.printResult).toHaveBeenCalledOnce();
     expect(mocks.printResult).toHaveBeenCalledWith(
       expect.objectContaining({ status: "error", reason: "restart-unhealthy" }),
       expect.any(Object),
+      expect.any(Object),
     );
     expect(mocks.markSentinelFailure).toHaveBeenCalledWith(
       expect.objectContaining({ reason: "restart-unhealthy" }),
     );
-    expect(defaultRuntime.exit).toHaveBeenCalledWith(1);
+    expect(defaultRuntime.exit).not.toHaveBeenCalled();
     expect(mocks.checkCompletionStatus).not.toHaveBeenCalled();
   });
 
@@ -399,30 +405,40 @@ describe("successful update finalization ordering", () => {
   });
 
   it("reports Windows autostart recovery failure before exiting", async () => {
+    const restoreError = new Error("task restore failed");
     const restore = vi.fn(async () => {
-      throw new Error("task restore failed");
+      throw restoreError;
     });
 
-    await finishSuccessfulPackageSwitch({
-      previousRoot: "/tmp/openclaw-update",
-      packageRoot: "/tmp/openclaw-update",
-      restartEnvironment: process.env,
-      json: true,
-      windowsTaskAutoStartRecovery: {
-        suspended: Promise.resolve(true),
-        restore,
-        complete: () => {},
-        interrupted: () => false,
-      },
+    await expect(
+      finishSuccessfulPackageSwitch({
+        previousRoot: "/tmp/openclaw-update",
+        packageRoot: "/tmp/openclaw-update",
+        restartEnvironment: process.env,
+        json: true,
+        windowsTaskAutoStartRecovery: {
+          beginMutation: () => {},
+          restore,
+          complete: () => {},
+          interrupted: () => false,
+        },
+      }),
+    ).rejects.toMatchObject({
+      name: "UpdateCommandFailure",
+      exitCode: 1,
+      cause: restoreError,
+      detail: expect.stringContaining(restoreError.message),
+      result: { status: "error", reason: "windows-task-autostart-restore-failed" },
     });
 
     expect(restore).toHaveBeenCalledOnce();
     expect(mocks.restartService).not.toHaveBeenCalled();
-    expect(defaultRuntime.exit).toHaveBeenCalledWith(1);
+    expect(defaultRuntime.exit).not.toHaveBeenCalled();
     expect(mocks.printResult).toHaveBeenCalledOnce();
     expect(mocks.printResult).toHaveBeenCalledWith(
       expect.objectContaining({ status: "error", reason: "windows-task-autostart-restore-failed" }),
       expect.objectContaining({ json: true }),
+      expect.any(Object),
     );
     expect(mocks.writeSentinel.mock.lastCall?.[0].result).toEqual(
       mocks.printResult.mock.lastCall?.[0],
@@ -518,7 +534,6 @@ describe("successful update finalization ordering", () => {
       downgradeRisk: false,
       shouldRestart: false,
       opts: {},
-      showProgress: false,
       ownedManagedUpdateEnv,
       controlPlaneUpdateSentinelMeta: {},
       preUpdatePluginInstallRecords: {},
@@ -547,20 +562,28 @@ describe("successful update finalization ordering", () => {
     process.env.PATH = path.dirname(wrapper);
     const unlink = vi.spyOn(fs, "unlink").mockRejectedValueOnce(new Error("unlink denied"));
     try {
-      await finishSuccessfulPackageSwitch({
-        previousRoot,
-        packageRoot: path.join(home, "package"),
+      await expect(
+        finishSuccessfulPackageSwitch({
+          previousRoot,
+          packageRoot: path.join(home, "package"),
+        }),
+      ).rejects.toMatchObject({
+        name: "UpdateCommandFailure",
+        exitCode: 1,
+        detail: expect.stringContaining("unlink denied"),
+        result: { status: "error", reason: "wrapper-retirement-failed" },
       });
 
       expect(mocks.writeSentinel).toHaveBeenCalledOnce();
       expect(mocks.printResult).toHaveBeenCalledWith(
         expect.objectContaining({ status: "error", reason: "wrapper-retirement-failed" }),
         expect.any(Object),
+        expect.any(Object),
       );
       expect(mocks.markSentinelFailure).toHaveBeenCalledWith(
         expect.objectContaining({ reason: "wrapper-retirement-failed" }),
       );
-      expect(defaultRuntime.exit).toHaveBeenCalledWith(1);
+      expect(defaultRuntime.exit).not.toHaveBeenCalled();
     } finally {
       unlink.mockRestore();
       process.env.PATH = previousPath;
@@ -783,17 +806,23 @@ describe("successful update finalization ordering", () => {
         } else {
           mocks.revalidateService.mockRejectedValueOnce(error);
         }
-        await finishSuccessfulPackageSwitch({
-          previousRoot: "/tmp/openclaw-update",
-          packageRoot: "/tmp/openclaw-update",
-          restartEnvironment: { ...process.env },
-          sealed: true,
-          json: true,
+        await expect(
+          finishSuccessfulPackageSwitch({
+            previousRoot: "/tmp/openclaw-update",
+            packageRoot: "/tmp/openclaw-update",
+            restartEnvironment: { ...process.env },
+            sealed: true,
+            json: true,
+          }),
+        ).rejects.toMatchObject({
+          name: "UpdateCommandFailure",
+          exitCode: 1,
+          result: { status: "error", reason: "service-revalidation-failed" },
         });
 
         expect(mocks.restartService).not.toHaveBeenCalled();
         expect(mocks.prepareRestartScript).not.toHaveBeenCalled();
-        expect(defaultRuntime.exit).toHaveBeenCalledWith(1);
+        expect(defaultRuntime.exit).not.toHaveBeenCalled();
         expect(defaultRuntime.error).toHaveBeenCalledWith(
           "Stopped gateway service could not be revalidated; inspect it before restarting manually.",
         );
@@ -801,6 +830,7 @@ describe("successful update finalization ordering", () => {
         expect(mocks.printResult).toHaveBeenCalledWith(
           expect.objectContaining({ status: "error", reason: "service-revalidation-failed" }),
           expect.objectContaining({ json: true }),
+          expect.any(Object),
         );
         expect(mocks.writeSentinel.mock.lastCall?.[0].result).toEqual(
           mocks.printResult.mock.lastCall?.[0],
@@ -830,7 +860,7 @@ describe("successful update finalization ordering", () => {
         command: { programArguments, environment: serviceEnv },
       });
       mocks.restartService.mockResolvedValueOnce(activated);
-      await finishSuccessfulPackageSwitch({
+      const finishing = finishSuccessfulPackageSwitch({
         previousRoot: "/tmp/openclaw-update",
         packageRoot: "/tmp/openclaw-update",
         restartEnvironment: { ...process.env },
@@ -838,6 +868,15 @@ describe("successful update finalization ordering", () => {
         updateMode: unloaded ? "git" : "npm",
         stoppedForUpdate: !unloaded,
       });
+      if (activated) {
+        await finishing;
+      } else {
+        await expect(finishing).rejects.toMatchObject({
+          name: "UpdateCommandFailure",
+          exitCode: 1,
+          result: { status: "error", reason: "restart-unhealthy" },
+        });
+      }
 
       expect(mocks.revalidateService).toHaveBeenCalledOnce();
       expect(mocks.prepareRestartScript).not.toHaveBeenCalled();
@@ -872,11 +911,12 @@ describe("successful update finalization ordering", () => {
         expect(mocks.printResult).toHaveBeenCalledWith(
           expect.objectContaining({ status: "error", reason: "restart-unhealthy" }),
           expect.any(Object),
+          expect.any(Object),
         );
         expect(mocks.markSentinelFailure).toHaveBeenCalledWith(
           expect.objectContaining({ reason: "restart-unhealthy" }),
         );
-        expect(defaultRuntime.exit).toHaveBeenCalledWith(1);
+        expect(defaultRuntime.exit).not.toHaveBeenCalled();
       }
     });
 

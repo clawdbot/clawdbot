@@ -24,7 +24,7 @@ export type ProfileRuntimeState = {
   /** Process-memory observation bound to one externally owned browser instance. */
   externalBrowserMode?: {
     browserWebSocketUrl: string;
-    headless?: boolean;
+    headless: Promise<boolean | undefined>;
   };
   managedLaunchFailure?: {
     consecutiveFailures: number;

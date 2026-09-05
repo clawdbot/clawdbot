@@ -69,6 +69,7 @@ export function loadPluginLookUpTable(params: LoadPluginLookUpTableParams): Plug
     index,
     manifestRegistry,
     discovery: metadataSnapshot.discovery,
+    normalizePluginId: metadataSnapshot.normalizePluginId,
     workerProviderIds,
     ambientEnvTriggers: params.ambientEnvTriggers,
   });

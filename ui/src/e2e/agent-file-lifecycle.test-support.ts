@@ -1,21 +1,28 @@
-import { mkdir } from "node:fs/promises";
+import { writeFile } from "node:fs/promises";
 import path from "node:path";
 import type { Page } from "playwright";
 import { expect } from "vitest";
+import { createControlUiE2eArtifactDir } from "../test-helpers/control-ui-e2e-artifacts.ts";
+import { takeControlUiViewportScreenshot } from "../test-helpers/control-ui-e2e-screenshot.ts";
 
-export const captureAgentFileProof = process.env.OPENCLAW_CAPTURE_UI_PROOF === "1";
-export const agentFileProofDir = path.join(
-  process.cwd(),
-  ".artifacts",
-  "control-ui-e2e",
-  "agent-file-lifecycle",
-);
+export const agentFileProofDir =
+  process.env.OPENCLAW_CAPTURE_UI_PROOF === "1"
+    ? createControlUiE2eArtifactDir("agent-file-lifecycle")
+    : undefined;
 
 export async function captureAgentFileScreenshot(page: Page, name: string) {
-  if (!captureAgentFileProof) {
+  if (!agentFileProofDir) {
     return;
   }
-  await mkdir(agentFileProofDir, { recursive: true });
+  if (page.video()) {
+    await writeFile(
+      path.join(agentFileProofDir, name),
+      await takeControlUiViewportScreenshot(page, page.locator(".shell"), [
+        page.locator(".agent-file-textarea"),
+      ]),
+    );
+    return;
+  }
   await page.screenshot({
     animations: "disabled",
     fullPage: true,

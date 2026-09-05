@@ -1,3 +1,4 @@
+import type { AssistantMessage, AssistantMessageEventStreamLike } from "../../../llm/types.js";
 import { isTranscriptOnlyOpenClawAssistantMessage } from "../../../shared/transcript-only-openclaw-assistant.js";
 import type { AgentMessage } from "../../runtime/index.js";
 import type { SessionManager } from "../../sessions/index.js";
@@ -33,36 +34,11 @@ export function createYieldAbortedResponse(model: {
   api?: string;
   provider?: string;
   id?: string;
-}): {
-  [Symbol.asyncIterator]: () => AsyncGenerator<never, void, unknown>;
-  result: () => Promise<{
-    role: "assistant";
-    content: Array<{ type: "text"; text: string }>;
-    stopReason: "aborted";
-    api: string;
-    provider: string;
-    model: string;
-    usage: {
-      input: number;
-      output: number;
-      cacheRead: number;
-      cacheWrite: number;
-      totalTokens: number;
-      cost: {
-        input: number;
-        output: number;
-        cacheRead: number;
-        cacheWrite: number;
-        total: number;
-      };
-    };
-    timestamp: number;
-  }>;
-} {
-  const message = {
-    role: "assistant" as const,
-    content: [{ type: "text" as const, text: "" }],
-    stopReason: "aborted" as const,
+}): AssistantMessageEventStreamLike {
+  const message: AssistantMessage = {
+    role: "assistant",
+    content: [{ type: "text", text: "" }],
+    stopReason: "aborted",
     api: model.api ?? "",
     provider: model.provider ?? "",
     model: model.id ?? "",
@@ -176,8 +152,6 @@ export function stripSessionsYieldArtifacts(activeSession: {
     return;
   }
 
-  activeSession.agent.state.messages = strippedMessages;
-
   // The interrupt marker can settle independently in live and persisted state.
   // Only assistant removals need the live-suffix cap to prevent data loss.
   let remainingAssistantCount = removedMessages.filter(
@@ -209,4 +183,5 @@ export function stripSessionsYieldArtifacts(activeSession: {
         (entry.type === "message" && isTranscriptOnlyOpenClawAssistantMessage(entry.message)),
     },
   );
+  activeSession.agent.state.messages = strippedMessages;
 }

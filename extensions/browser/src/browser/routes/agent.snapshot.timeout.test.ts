@@ -38,9 +38,18 @@ const browserRuntime = vi.hoisted(() => ({
     string,
     {
       running: { headless?: boolean; headlessSource?: string } | null;
-      externalBrowserMode?: { browserWebSocketUrl: string; headless?: boolean };
+      externalBrowserMode?: { browserWebSocketUrl: string; headless: Promise<boolean | undefined> };
     }
   >(),
+}));
+const pwMocks = vi.hoisted(() => ({
+  connected: false,
+  hasCachedPlaywrightBrowserConnection: vi.fn(() => pwMocks.connected),
+  takeScreenshotViaPlaywright: vi.fn(async () => ({ buffer: Buffer.from("owned screenshot") })),
+}));
+
+vi.mock("../pw-ai-module.js", () => ({
+  getLoadedPwAiModule: () => pwMocks,
 }));
 
 vi.mock("../cdp.js", () => ({
@@ -85,7 +94,7 @@ vi.mock("./agent.shared.js", () => ({
     throw err;
   }),
   readBody: vi.fn((req: { body?: unknown }) => req.body ?? {}),
-  requirePwAi: vi.fn(async () => null),
+  requirePwAi: vi.fn(async () => (pwMocks.connected ? pwMocks : null)),
   resolveProfileContext: vi.fn(() => profileContext),
   withPlaywrightRouteContext: vi.fn(),
   withRouteTabContext: vi.fn(
@@ -133,12 +142,14 @@ function getScreenshotHandler() {
 
 describe("browser agent snapshot timeout routing", () => {
   beforeEach(() => {
-    cdpMocks.captureScreenshot.mockClear();
+    cdpMocks.captureScreenshot.mockReset();
     cdpMocks.snapshotAria.mockClear();
     cdpMocks.snapshotRoleViaCdp.mockClear();
     profileContext.ensureTabAvailable.mockClear();
     profileContext.profile.headless = false;
     browserRuntime.profiles.clear();
+    pwMocks.connected = false;
+    pwMocks.takeScreenshotViaPlaywright.mockClear();
   });
 
   it("passes timeoutMs to direct CDP aria snapshots", async () => {
@@ -190,6 +201,28 @@ describe("browser agent snapshot timeout routing", () => {
         timeoutMs: 2_147_483_647,
       }),
     );
+  });
+
+  it("uses the existing Playwright viewport owner even when the tab has a CDP URL", async () => {
+    pwMocks.connected = true;
+    cdpMocks.captureScreenshot.mockRejectedValueOnce(new Error("fresh CDP loses the viewport"));
+    const handler = getScreenshotHandler();
+    const response = createBrowserRouteResponse();
+
+    await handler?.(
+      { params: {}, query: {}, body: { type: "png", timeoutMs: 4321 } },
+      response.res,
+    );
+
+    expect(response.statusCode).toBe(200);
+    expect(pwMocks.takeScreenshotViaPlaywright).toHaveBeenCalledWith(
+      expect.objectContaining({
+        cdpUrl: "http://127.0.0.1:18800",
+        targetId: "tab-1",
+        timeoutMs: 4321,
+      }),
+    );
+    expect(cdpMocks.captureScreenshot).not.toHaveBeenCalled();
   });
 
   it.each([
@@ -247,7 +280,7 @@ describe("browser agent snapshot timeout routing", () => {
           ? {
               externalBrowserMode: {
                 browserWebSocketUrl: "ws://127.0.0.1:18800/devtools/browser/test-browser",
-                headless: externalHeadless,
+                headless: Promise.resolve(externalHeadless),
               },
             }
           : {}),

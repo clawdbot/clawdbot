@@ -4,6 +4,7 @@ read_when:
   - You need a durable record of what the Gateway did without storing content
   - You are deciding whether to enable message lifecycle auditing
   - You need to explain what audit records do and do not prove
+  - You are changing or reviewing execution identity, admission provenance, or decision receipts
 title: "Audit history"
 ---
 
@@ -527,6 +528,56 @@ correlation alone.
   exact match, or a typed ambiguous candidate page with an empty display array
   when a run has multiple executions. Raw owner receipts remain private to the
   aggregation and storage owners.
+
+## Maintainer invariants
+
+Changes to identity producers, storage, and inspection must preserve these
+boundaries alongside the operator behavior above:
+
+- Only byte-identical canonical replay is idempotent. Retries, fallbacks, and
+  recovery reuse the original admission identity.
+- The parent approval row is the sole authorization owner. Its optional identity
+  companion persists identity only for an exact host-validated source-run binding
+  under explicit collection opt-in; disabled and unbound paths leave the table
+  absent. It must not change approval decisions when provenance is missing,
+  deleted, or corrupt. Do not add eager creation, late binding, dual writes,
+  fallback readers, sidecars, or schema-version workarounds. Changes require
+  older-reader open/use and candidate-reopen proof.
+- Invoker evidence is tri-state: tagged principal-bearing input is `present`,
+  tagged principal-less input is `unknown`, and omission alone is `absent`.
+  Validate the closed raw variant before projection or field dropping; reject
+  malformed, mixed, untagged, or extra-field input instead of normalizing it.
+- Generic decision facts require an explicit product-boundary producer and an
+  operator retention opt-in. The 30-day bound does not authorize default
+  collection. Producers use admission's shared `AuditEventWriter` FIFO; never
+  write the generic store directly, create another writer/key, or pseudonymize
+  locally. The writer alone HMAC-projects raw references before persistence.
+- `enforced` receipt coverage is diagnostic, not authority: emit it only when
+  the owner changed the outcome and the exact context/execution/run tuple
+  validates. After awaited work, synchronously revalidate the exact live owner
+  immediately before the sink, with no intervening await. Stale, released,
+  replaced, or throwing authority emits no receipt, not `unknown`. Same-run
+  wrappers compose owner predicates; distinct admitted runs start new predicate
+  roots. Insufficient decision evidence remains `unknown`.
+- Display trust comes from owner-held call-path provenance, never
+  receipt-controlled `source.owner` or prose. Pair every selected owner row or
+  event with its required opaque selector from the same query/page result.
+  Never derive or requery selectors from private receipt, resolution, or event
+  identifiers, or drop corrupt, oversized, or unlinked outcomes.
+- Admission validates a recursively owned, enumerable, accessor-free data
+  snapshot constructed from descriptors before schema checks or ordinary
+  property reads. Inherited properties are absent; accessors never run.
+  Admission may only validate, bound, freeze, and enqueue: no synchronous
+  SQLite, schema, filesystem, HMAC-key, or readiness work. Audit failure never
+  delays or aborts execution.
+- Public Plugin SDK ingress strips private recovery/admission authority,
+  including JavaScript extra and inherited properties.
+- Host-minted participant evidence is redeemed once against the finalized
+  context and exact plugin record/lifecycle epoch. Mixed participants may remove
+  sender-derived authority only; never widen or erase independent tools, grants,
+  routing, or approval authority.
+- Ask before changing reader scope, default-off collection, retained fields,
+  the 30-day cutoff, maintenance/row bounds, or schema/protocol contracts.
 
 ## Related
 

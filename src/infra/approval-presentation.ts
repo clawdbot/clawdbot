@@ -23,6 +23,8 @@ import {
 } from "./plugin-approvals.js";
 import type { SystemAgentApprovalRequestPayload } from "./system-agent-approvals.js";
 
+const PLUGIN_EXTERNAL_RESOLUTION_LABEL_MAX_LENGTH = 80;
+
 function normalizeDecisionList(decisions: readonly ApprovalDecision[]): ApprovalDecision[] {
   const result: ApprovalDecision[] = [];
   for (const decision of decisions) {
@@ -39,6 +41,29 @@ function normalizeDecisionList(decisions: readonly ApprovalDecision[]): Approval
 function sanitizeOptionalSingleLine(value: unknown): string | null {
   const normalized = normalizeOptionalString(value);
   return normalized ? sanitizeExecApprovalDisplayText(normalized) : null;
+}
+
+function normalizePluginExternalResolution(
+  value: PluginApprovalRequestPayload["externalResolution"],
+): NonNullable<PluginApprovalRequestPayload["externalResolution"]> | null {
+  if (!value) {
+    return null;
+  }
+  const rawLabel = value.label?.trim();
+  const label = rawLabel ? sanitizeExecApprovalDisplayText(rawLabel) : "";
+  if (!label || exceedsApprovalTextLimit(label, PLUGIN_EXTERNAL_RESOLUTION_LABEL_MAX_LENGTH)) {
+    throw new Error("invalid external approval label");
+  }
+  const decisions = value.decisions ?? ["allow-once"];
+  if (
+    decisions.length < 1 ||
+    decisions.length > 2 ||
+    decisions.some((decision) => decision !== "allow-once" && decision !== "allow-always") ||
+    new Set(decisions).size !== decisions.length
+  ) {
+    throw new Error("invalid external approval decisions");
+  }
+  return { label, decisions: [...decisions] };
 }
 
 function buildExecApprovalPresentation(params: {
@@ -103,6 +128,12 @@ function buildPluginApprovalPresentation(params: {
     ? truncatePluginApprovalDetail(sanitizeExecApprovalWarningText(rawDetail))
     : null;
   const scope = request.scope ? sanitizeApprovalScope(request.scope) : null;
+  let externalResolution: ReturnType<typeof normalizePluginExternalResolution>;
+  try {
+    externalResolution = normalizePluginExternalResolution(request.externalResolution);
+  } catch {
+    return null;
+  }
   return {
     kind: "plugin",
     title,
@@ -114,6 +145,14 @@ function buildPluginApprovalPresentation(params: {
     agentId: sanitizeOptionalSingleLine(request.agentId),
     ...(scope ? { scope } : {}),
     allowedDecisions: normalizeDecisionList(params.allowedDecisions),
+    ...(externalResolution
+      ? {
+          externalResolution: {
+            label: externalResolution.label,
+            decisions: [...(externalResolution.decisions ?? ["allow-once"])],
+          },
+        }
+      : {}),
   };
 }
 

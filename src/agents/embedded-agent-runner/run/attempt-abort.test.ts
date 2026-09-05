@@ -185,6 +185,7 @@ describe("createEmbeddedAttemptExternalAbortController", () => {
     controller.arm();
     const timeout = prepareEmbeddedAttemptTimeout({
       attempt,
+      runAbortSignal: runAbortController.signal,
       activeSession: { isCompacting: false, isStreaming: false },
       compactionState: { isCompacting: () => false },
       compactionTimeoutMs: 1_000,

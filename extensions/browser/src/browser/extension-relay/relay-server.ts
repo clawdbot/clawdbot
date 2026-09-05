@@ -3,13 +3,14 @@ import crypto from "node:crypto";
 import http, { type IncomingMessage, type Server, type ServerResponse } from "node:http";
 import type { Duplex } from "node:stream";
 import { safeEqualSecret } from "openclaw/plugin-sdk/security-runtime";
+import { isLoopbackHost } from "openclaw/plugin-sdk/ssrf-runtime";
 import {
   rawDataToString,
   readRequestBodyWithLimit,
+  resolveRequestClientIp,
   WEBHOOK_BODY_READ_DEFAULTS,
 } from "openclaw/plugin-sdk/webhook-ingress";
 import { WebSocketServer, type WebSocket } from "ws";
-import { isLoopbackHost } from "../../gateway/net.js";
 import { createSubsystemLogger } from "../../logging/subsystem.js";
 import { randomRelayId } from "./auth-v2-crypto.js";
 import { authenticateExtensionWebSocket } from "./auth-v2-websocket.js";
@@ -272,11 +273,15 @@ export async function startExtensionRelayServer(params: {
     timer.unref?.();
     return timer;
   };
-  const registerHttpSocket = (socket: Duplex, authority: BrowserRelayAuthV2Authority): boolean => {
+  const registerHttpSocket = (
+    socket: Duplex,
+    authority: BrowserRelayAuthV2Authority,
+    source: string,
+  ): boolean => {
     if (authSockets.has(socket)) {
       return true;
     }
-    if (!authority.registerPendingConnection(socket, () => socket.destroy())) {
+    if (!authority.registerPendingConnection(socket, () => socket.destroy(), source)) {
       return false;
     }
     authSockets.add(socket);
@@ -300,6 +305,7 @@ export async function startExtensionRelayServer(params: {
       }
       const path = (req.url ?? "/").split("?")[0];
       const socket = req.socket;
+      const source = resolveRequestClientIp(req) ?? "unknown";
       const existingState = httpStates.get(socket);
       const authority = currentAuthority();
 
@@ -309,7 +315,7 @@ export async function startExtensionRelayServer(params: {
           req.method !== "POST" ||
           existingState ||
           !authority ||
-          !registerHttpSocket(socket, authority)
+          !registerHttpSocket(socket, authority, source)
         ) {
           rejectHttp(res, existingState ? 409 : 400, "Invalid relay auth sequence");
           return;
@@ -473,6 +479,7 @@ export async function startExtensionRelayServer(params: {
 
   server.on("upgrade", (req, socket, head) => {
     const path = (req.url ?? "/").split("?")[0];
+    const source = resolveRequestClientIp(req) ?? "unknown";
     if (retired) {
       destroySocket(socket, "HTTP/1.1 503 Service Unavailable\r\nConnection: close\r\n\r\n");
       return;
@@ -508,6 +515,7 @@ export async function startExtensionRelayServer(params: {
           authenticateExtensionWebSocket({
             ws,
             authority,
+            source,
             resource: `${resource}&owner=${owner}`,
             binding: { role: "cdp", flow: "owner" },
             removePreAuthGuard,
@@ -560,6 +568,7 @@ export async function startExtensionRelayServer(params: {
               authenticateExtensionWebSocket({
                 ws,
                 authority,
+                source,
                 resource,
                 removePreAuthGuard,
                 prepareAuthenticated: async () => () => {

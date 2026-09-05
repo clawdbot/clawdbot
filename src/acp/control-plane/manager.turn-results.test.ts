@@ -1487,15 +1487,38 @@ describe("AcpSessionManager turn results", () => {
   }
 
   function expectFreshRetry(scenario: ReturnType<typeof setupStaleResumeScenario>) {
-    expect(scenario.runtimeState.prepareFreshSession).toHaveBeenCalledWith({
+    const pendingHandle = {
       sessionKey: scenario.sessionKey,
-    });
+      agentId: "claude",
+      backend: "acpx",
+      runtimeSessionName: `${scenario.sessionKey}:persistent:runtime`,
+      cwd: undefined,
+      acpxRecordId: undefined,
+    };
+    expect(scenario.runtimeState.prepareFreshSession.mock.calls).toEqual([
+      [
+        {
+          sessionKey: scenario.sessionKey,
+          agentId: "claude",
+          persistedHandle: { ...pendingHandle, backendSessionId: "acpx-sid-stale" },
+        },
+      ],
+      [
+        {
+          sessionKey: scenario.sessionKey,
+          agentId: "claude",
+          persistedHandle: pendingHandle,
+        },
+      ],
+    ]);
     expect(scenario.runtimeState.ensureSession).toHaveBeenCalledTimes(2);
     expectRecordFields(mockCallArg(scenario.runtimeState.ensureSession), {
       sessionKey: scenario.sessionKey,
+      agentId: "claude",
       resumeSessionId: "acpx-sid-stale",
     });
     expect(mockCallArg(scenario.runtimeState.ensureSession, 1).resumeSessionId).toBeUndefined();
+    expect(mockCallArg(scenario.runtimeState.ensureSession, 1).agentId).toBe("claude");
     expect(scenario.getMeta().identity?.acpxSessionId).toBe("acpx-sid-fresh");
     expect(scenario.getMeta().identity?.state).toBe("resolved");
     const states = extractStatesFromUpserts();

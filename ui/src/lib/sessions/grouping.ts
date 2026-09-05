@@ -401,9 +401,10 @@ export function groupSidebarSessionRows<Row extends SidebarGroupableRow>(
     ...new Set((options.catalogIds ?? []).map((catalogId) => catalogId.trim()).filter(Boolean)),
   ];
   orderedSections.push(
-    ...catalogIds.map(
-      (catalogId): SidebarSessionSection<Row> => ({ id: `catalog:${catalogId}`, rows: [] }),
-    ),
+    ...catalogIds.map((catalogId): SidebarSessionSection<Row> => ({
+      id: `catalog:${catalogId}`,
+      rows: [],
+    })),
   );
   if (options.sectionOrder) {
     const sectionsById = new Map(orderedSections.map((section) => [section.id, section]));

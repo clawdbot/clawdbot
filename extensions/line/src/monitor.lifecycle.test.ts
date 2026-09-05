@@ -2,15 +2,18 @@
 import crypto from "node:crypto";
 import { createServer, IncomingMessage, type ServerResponse } from "node:http";
 import { Socket } from "node:net";
+import type { webhook } from "@line/bot-sdk";
 import type { OpenClawConfig } from "openclaw/plugin-sdk/config-contracts";
 import type { ReplyPayload } from "openclaw/plugin-sdk/reply-runtime";
 import type { RuntimeEnv } from "openclaw/plugin-sdk/runtime-env";
 import { createMockIncomingRequest } from "openclaw/plugin-sdk/test-env";
 import { WEBHOOK_IN_FLIGHT_DEFAULTS } from "openclaw/plugin-sdk/webhook-request-guards";
 import { afterAll, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
+import { createLineWebhookSpool } from "./webhook-spool.js";
+import { createEvent, withQueue } from "./webhook-spool.test-support.js";
 
 type LineNodeWebhookHandler = (req: IncomingMessage, res: ServerResponse) => Promise<void>;
-type LineHandleWebhook = (...args: unknown[]) => Promise<void>;
+type LineHandleWebhook = ReturnType<typeof import("./bot.js").createLineBot>["handleWebhook"];
 type LineBotOptions = Parameters<typeof import("./bot.js").createLineBot>[0];
 
 const {
@@ -22,7 +25,7 @@ const {
 } = vi.hoisted(() => ({
   createLineBotMock: vi.fn((_options: LineBotOptions) => ({
     account: { accountId: "default" },
-    handleWebhook: vi.fn<LineHandleWebhook>(),
+    handleWebhook: vi.fn<LineHandleWebhook>().mockResolvedValue("durable"),
     stop: vi.fn(),
   })),
   createLineNodeWebhookHandlerMock: vi.fn<() => LineNodeWebhookHandler>(() =>
@@ -170,7 +173,7 @@ describe("monitorLineProvider lifecycle", () => {
     createLineBotMock.mockReset();
     createLineBotMock.mockImplementation(() => ({
       account: { accountId: "default" },
-      handleWebhook: vi.fn<LineHandleWebhook>(),
+      handleWebhook: vi.fn<LineHandleWebhook>().mockResolvedValue("durable"),
       stop: vi.fn(async () => undefined),
     }));
     // Clear call history only; the implementation was wired to the actual
@@ -655,8 +658,8 @@ describe("monitorLineProvider lifecycle", () => {
       let releaseAdmission: (() => void) | undefined;
       bot.handleWebhook.mockImplementationOnce(
         () =>
-          new Promise<void>((resolve) => {
-            releaseAdmission = resolve;
+          new Promise<Awaited<ReturnType<LineHandleWebhook>>>((resolve) => {
+            releaseAdmission = () => resolve("durable");
           }),
       );
       const signature = crypto.createHmac("SHA256", "secret").update(payload).digest("base64");
@@ -711,6 +714,69 @@ describe("monitorLineProvider lifecycle", () => {
       expect(message).toContain("retryAfterMs");
       expect(message).not.toContain("[object Object]");
       expect(message).not.toContain(bearerToken);
+
+      // Keep the HTTP receipt tied to the real queue, including deliberate non-admission.
+      await withQueue(async (queue) => {
+        const delivered: webhook.Event[] = [];
+        const spool = createLineWebhookSpool({
+          accountId: "default",
+          runtime,
+          queue,
+          deliver: async (event, _destination, control) => {
+            delivered.push(event);
+            await control.turnAdoptionLifecycle.onAdopted();
+          },
+        });
+        bot.handleWebhook.mockImplementation(spool.accept);
+        const active = createEvent({ webhookEventId: "receipt-active" });
+        const standby = createEvent({ webhookEventId: "receipt-standby", mode: "standby" });
+        const common = {
+          mode: "standby" as const,
+          timestamp: Date.now(),
+          deliveryContext: { isRedelivery: false },
+        };
+        const postback: webhook.Event = {
+          ...common,
+          type: "postback",
+          webhookEventId: "receipt-postback",
+          source: { type: "user", userId: "user-standby" },
+          postback: { data: "continue" },
+        };
+        const join = {
+          ...common,
+          type: "join",
+          webhookEventId: "receipt-join",
+          source: { type: "group", groupId: "group-standby" },
+        };
+        try {
+          for (const [events, expectedIds, marker] of [
+            [[standby, postback, join], [], null],
+            [[standby, active], ["message:message-receipt-active"], "durable"],
+            [[active], ["message:message-receipt-active"], "durable"],
+          ] as const) {
+            const body = JSON.stringify({ destination: "fixture-bot", events });
+            const admittedResponse = await fetch(webhookUrl, {
+              method: "POST",
+              headers: {
+                "content-type": "application/json",
+                "x-line-signature": crypto
+                  .createHmac("SHA256", "secret")
+                  .update(body)
+                  .digest("base64"),
+              },
+              body,
+            });
+            expect(admittedResponse.status).toBe(200);
+            expect((await queue.listPending()).map((entry) => entry.id)).toEqual(expectedIds);
+            expect(admittedResponse.headers.get("x-openclaw-delivery-accepted")).toBe(marker);
+            expect(await admittedResponse.json()).toEqual({ status: "ok" });
+          }
+          spool.start();
+          await vi.waitFor(() => expect(delivered).toEqual([active]));
+        } finally {
+          await spool.stop();
+        }
+      });
     } finally {
       try {
         if (server.listening) {
@@ -808,8 +874,8 @@ describe("monitorLineProvider lifecycle", () => {
     };
     bot.handleWebhook.mockImplementation(
       () =>
-        new Promise<void>((resolve) => {
-          releaseWebhook = resolve;
+        new Promise<Awaited<ReturnType<LineHandleWebhook>>>((resolve) => {
+          releaseWebhook = () => resolve("durable");
         }),
     );
 

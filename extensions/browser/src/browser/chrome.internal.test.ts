@@ -17,14 +17,16 @@ const execFileSyncMock = vi.hoisted(() => vi.fn());
 
 vi.mock("node:child_process", async () => {
   const actual = await vi.importActual<typeof import("node:child_process")>("node:child_process");
+  const execFileSync = (...args: unknown[]) => {
+    const mock = execFileSyncMock.getMockImplementation();
+    return mock
+      ? mock(...args)
+      : (actual.execFileSync as unknown as (...actualArgs: unknown[]) => unknown)(...args);
+  };
   return {
     ...actual,
-    execFileSync: (...args: unknown[]) => {
-      const mock = execFileSyncMock.getMockImplementation();
-      return mock
-        ? mock(...args)
-        : (actual.execFileSync as unknown as (...actualArgs: unknown[]) => unknown)(...args);
-    },
+    default: { ...actual, execFileSync },
+    execFileSync,
     spawn: (...args: unknown[]) => spawnMock(...args),
   };
 });
@@ -1435,7 +1437,7 @@ describe("chrome.ts internal", () => {
               if (command === "ps" && args.includes("command=")) {
                 return `${executablePath} --remote-debugging-port=${port} --user-data-dir=${userDataDir}\n`;
               }
-              if (command === "ps" && args.includes("lstart=")) {
+              if (path.basename(command) === "ps" && args.includes("lstart=")) {
                 return `${processStartTime}\n`;
               }
               if (command === "lsof") {

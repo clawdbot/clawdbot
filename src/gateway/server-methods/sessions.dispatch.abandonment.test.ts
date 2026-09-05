@@ -64,29 +64,21 @@ describe("sessions.move abandonment", () => {
     void remoteSettlement.then(() => {
       remoteSettlementObserved = true;
     });
+    const intent = {
+      operationId: "move:v1:rpc-abandon",
+      sessionId,
+      source,
+      target: { kind: "gateway" as const },
+      abandonSource: true,
+      lastError: null,
+      createdAtMs: 1,
+      updatedAtMs: 1,
+    };
     const moves = createWorkerPlacementMoveService({
       placements: {
-        preparePlacementMove: async (_request: unknown, prepareNew: () => Promise<void>) => {
-          if (!joined) {
-            await prepareNew();
-          }
-          return {
-            intent: {
-              operationId: "move:v1:rpc-abandon",
-              sessionId,
-              source,
-              target: { kind: "gateway" },
-              abandonSource: true,
-              lastError: null,
-              createdAtMs: 1,
-              updatedAtMs: 1,
-            },
-            placement: draining,
-            joined,
-          };
-        },
+        beginPlacementMove: () => ({ intent, placement: draining, joined }),
         get: () => existing,
-        getPlacementMove: () => undefined,
+        getPlacementMove: () => (joined ? intent : undefined),
         recordPlacementMoveError,
       } as never,
       environments: { get: () => undefined },

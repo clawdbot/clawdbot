@@ -379,6 +379,47 @@ describe("openclaw-tooltip", () => {
     expect(webAwesomeTooltip(scoped.tooltip)?.open).toBe(true);
   });
 
+  it("consumes only an unclaimed Escape while a tooltip is active", async () => {
+    const { tooltip, trigger } = createTooltip("Keyboard hint");
+    document.body.append(tooltip);
+    await tooltip.updateComplete;
+    focusTrigger(trigger);
+    const downstream = vi.fn();
+    trigger.addEventListener("keydown", downstream);
+    const descriptionId = trigger.getAttribute("aria-describedby");
+
+    for (const key of ["Tab", "Escape"]) {
+      const event = new KeyboardEvent("keydown", { key, bubbles: true, cancelable: true });
+      if (key === "Escape") {
+        event.preventDefault();
+      }
+      trigger.dispatchEvent(event);
+      expectOpenCount(1);
+    }
+    expect(downstream).toHaveBeenCalledTimes(2);
+
+    const escape = new KeyboardEvent("keydown", {
+      key: "Escape",
+      bubbles: true,
+      cancelable: true,
+    });
+    trigger.dispatchEvent(escape);
+    expectOpenCount(0);
+    expect(escape.defaultPrevented).toBe(true);
+    expect(downstream).toHaveBeenCalledTimes(2);
+    expect(trigger.getAttribute("aria-describedby")).toBe(descriptionId);
+    expect(document.getElementById(descriptionId ?? "")?.textContent).toBe("Keyboard hint");
+
+    const nextEscape = new KeyboardEvent("keydown", {
+      key: "Escape",
+      bubbles: true,
+      cancelable: true,
+    });
+    trigger.dispatchEvent(nextEscape);
+    expect(nextEscape.defaultPrevented).toBe(false);
+    expect(downstream).toHaveBeenCalledTimes(3);
+  });
+
   it("honors per-tooltip hover intent while keyboard focus stays immediate", async () => {
     const provider = createProvider();
     const { tooltip, trigger } = createRichTooltip("Intentional hovercard");
@@ -563,6 +604,16 @@ describe("openclaw-tooltip", () => {
     expectOpenCount(1);
     first.tooltip.remove();
     expectOpenCount(0);
+    const escape = new KeyboardEvent("keydown", {
+      key: "Escape",
+      bubbles: true,
+      cancelable: true,
+    });
+    const downstream = vi.fn();
+    provider.addEventListener("keydown", downstream);
+    provider.dispatchEvent(escape);
+    expect(escape.defaultPrevented).toBe(false);
+    expect(downstream).toHaveBeenCalledOnce();
     vi.advanceTimersByTime(20);
 
     const second = createTooltip("Second tooltip");

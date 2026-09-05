@@ -1,15 +1,13 @@
 // Github Copilot plugin module implements auth behavior.
-import {
-  findNormalizedProviderValue,
-  resolveAuthProfileOrder,
-} from "openclaw/plugin-sdk/agent-runtime";
 import type { OpenClawConfig } from "openclaw/plugin-sdk/config-contracts";
 import type { ProviderPrepareDynamicModelContext } from "openclaw/plugin-sdk/plugin-entry";
 import {
   coerceSecretRef,
   ensureAuthProfileStore,
+  findNormalizedProviderValue,
   listProfilesForProvider,
   normalizeOptionalSecretInput,
+  resolveAuthProfileOrder,
 } from "openclaw/plugin-sdk/provider-auth";
 import {
   resolveConfiguredSecretInputWithFallback,

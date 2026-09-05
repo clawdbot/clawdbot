@@ -32,6 +32,7 @@ import androidx.compose.ui.Modifier
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import androidx.core.net.toUri
+import java.util.Locale
 
 /** Gateway Control UI dashboard for one chat session. */
 @Composable
@@ -43,6 +44,16 @@ internal fun SessionDashboardScreen(
   val isConnected by viewModel.isConnected.collectAsState()
   val controlPage by viewModel.gatewayControlPage.collectAsState()
   val desktopObserveAvailable by viewModel.desktopObserveAvailable.collectAsState()
+  val sessionOwnerAgentId by viewModel.chatSessionOwnerAgentId.collectAsState()
+  val gatewayDefaultAgentId by viewModel.gatewayDefaultAgentId.collectAsState()
+  val dashboardUrl =
+    controlPage?.let { page ->
+      sessionDashboardUrl(
+        baseUrl = page.baseUrl,
+        sessionKey = sessionKey,
+        fallbackAgentId = sessionOwnerAgentId ?: gatewayDefaultAgentId,
+      )
+    }
   var showingDesktop by rememberSaveable(sessionKey) { mutableStateOf(false) }
   if (showingDesktop) {
     // The viewer replaces this screen in place rather than pushing a shell tab, so it must
@@ -73,7 +84,7 @@ internal fun SessionDashboardScreen(
           maxLines = 1,
           overflow = TextOverflow.Ellipsis,
         )
-        if (desktopObserveAvailable) {
+        if (desktopObserveAvailable && dashboardUrl != null) {
           ClawPlainIconButton(
             icon = Icons.Outlined.DesktopWindows,
             contentDescription = nativeString("Open desktop"),
@@ -88,11 +99,11 @@ internal fun SessionDashboardScreen(
       }
       Box(modifier = Modifier.fillMaxWidth().weight(1f)) {
         val page = controlPage
-        if (isConnected && page != null) {
-          key(page, sessionKey) {
+        if (isConnected && page != null && dashboardUrl != null) {
+          key(page, dashboardUrl) {
             ControlUiWebView(
               page = page,
-              url = sessionDashboardUrl(baseUrl = page.baseUrl, sessionKey = sessionKey),
+              url = dashboardUrl,
               modifier = Modifier.fillMaxSize(),
             )
           }
@@ -103,12 +114,22 @@ internal fun SessionDashboardScreen(
             verticalArrangement = Arrangement.spacedBy(6.dp),
           ) {
             Text(
-              text = nativeString("Dashboard needs a connected gateway"),
+              text =
+                if (isConnected && page != null) {
+                  nativeString("Session dashboard unavailable")
+                } else {
+                  nativeString("Dashboard needs a connected gateway")
+                },
               style = ClawTheme.type.section,
               color = ClawTheme.colors.text,
             )
             Text(
-              text = nativeString("Connect to your gateway to open this session dashboard."),
+              text =
+                if (isConnected && page != null) {
+                  nativeString("Go back and select a session to open its dashboard.")
+                } else {
+                  nativeString("Connect to your gateway to open this session dashboard.")
+                },
               style = ClawTheme.type.body,
               color = ClawTheme.colors.textMuted,
             )
@@ -120,22 +141,78 @@ internal fun SessionDashboardScreen(
 }
 
 /**
- * Builds the one-shot dashboard route without placing credentials in the URL.
- * Appends to the served base like the terminal screen so a Control UI mounted
- * under gateway.controlUi.basePath keeps its prefix.
+ * Only bare main/global keys are Gateway aliases. Canonical keys stay literal so
+ * the device-owned main session cannot become the Gateway's main session or a slug.
  */
 internal fun sessionDashboardUrl(
   baseUrl: String,
   sessionKey: String,
-): String =
-  baseUrl
-    .trimEnd('/')
-    .toUri()
+  fallbackAgentId: String? = null,
+): String? {
+  val rawKey = sessionKey.trim().takeIf(String::isNotEmpty) ?: return null
+  val parsed = parseAgentSessionKey(rawKey)
+  if (parsed == null && rawKey.startsWith("agent:", ignoreCase = true)) return null
+  val rawAgentId = (parsed?.first ?: fallbackAgentId)?.trim()?.takeIf(String::isNotEmpty) ?: return null
+  val agentId = normalizeDashboardAgentId(rawAgentId)
+  val rest = parsed?.second ?: rawKey
+  val segments = rest.split(':')
+  if (segments.any(String::isEmpty)) return null
+  val routeSegments =
+    if (parsed == null && (rest.equals("main", ignoreCase = true) || rest.equals("global", ignoreCase = true))) {
+      emptyList()
+    } else {
+      listOf("~key") + segments.map(::encodeDashboardPathSegment)
+    }
+  val uri = baseUrl.trimEnd('/').toUri()
+  val basePath = uri.encodedPath.orEmpty().trimEnd('/')
+  val encodedRoute =
+    buildList {
+      add("dashboard")
+      add(encodeDashboardPathSegment(agentId))
+      addAll(routeSegments)
+    }.joinToString("/")
+  return uri
     .buildUpon()
-    .appendPath("chat")
+    .encodedPath("$basePath/$encodedRoute")
     .clearQuery()
     .fragment(null)
-    .appendQueryParameter("session", sessionKey)
-    .appendQueryParameter("face", "dashboard")
     .build()
     .toString()
+}
+
+private fun parseAgentSessionKey(sessionKey: String): Pair<String, String>? {
+  val parts = sessionKey.split(':')
+  if (parts.size < 3 || !parts.first().equals("agent", ignoreCase = true)) return null
+  val agentId = parts[1].trim().takeIf(String::isNotEmpty) ?: return null
+  val rest = parts.drop(2)
+  if (rest.any(String::isEmpty)) return null
+  return agentId to rest.joinToString(":")
+}
+
+private fun normalizeDashboardAgentId(agentId: String): String {
+  val normalized =
+    agentId
+      .lowercase(Locale.ROOT)
+      .replace(Regex("[^a-z0-9_-]+"), "-")
+      .trim('-')
+      .take(64)
+  return normalized.ifEmpty { "main" }
+}
+
+private fun encodeDashboardPathSegment(segment: String): String =
+  when (segment) {
+    "." -> {
+      "~dot"
+    }
+
+    ".." -> {
+      "~dotdot"
+    }
+
+    else -> {
+      android.net.Uri
+        .encode(segment)
+        .replace(".", "%2E")
+        .let { encoded -> if (encoded.startsWith("~")) "~$encoded" else encoded }
+    }
+  }

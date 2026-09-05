@@ -1,9 +1,9 @@
 // Generate Dependency Release Evidence tests cover generate dependency release evidence script behavior.
-import { spawnSync } from "node:child_process";
+import { execFileSync, spawnSync } from "node:child_process";
 import { mkdir, mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import path from "node:path";
-import { expectDefined } from "@openclaw/normalization-core";
+import { pathToFileURL } from "node:url";
 import { describe, expect, it } from "vitest";
 import {
   DEPENDENCY_EVIDENCE_REPORTS,
@@ -15,6 +15,10 @@ import {
   resolvePreviousReleaseTag,
   resolveReleaseTag,
 } from "../../scripts/generate-dependency-release-evidence.mts";
+import {
+  RELEASE_DEPENDENCY_RISK_LOCKFILES,
+  resolveReleaseDependencyRiskAcceptance,
+} from "../../scripts/lib/release-dependency-risk-acceptance.mts";
 
 async function writeJson(dir: string, fileName: string, value: unknown) {
   await writeFile(path.join(dir, fileName), `${JSON.stringify(value, null, 2)}\n`, "utf8");
@@ -38,6 +42,96 @@ function expectNoNodeStack(stderr: string) {
 }
 
 describe("generate-dependency-release-evidence", () => {
+  function acceptedRiskInput(): Parameters<typeof resolveReleaseDependencyRiskAcceptance>[0] {
+    return {
+      packageVersion: "2026.9.1",
+      lockfileSha256: { ...RELEASE_DEPENDENCY_RISK_LOCKFILES },
+      blockers: [
+        ...["GHSA-58mr-gqgx-xq4g", "GHSA-qw65-cvwx-89v3"].flatMap((id) =>
+          [
+            { lockfile: "pnpm-lock.yaml", matchedVersions: ["4.1.3"] },
+            {
+              lockfile: ".github/release/vercel-cli/package-lock.json",
+              matchedVersions: ["3.1.6"],
+            },
+          ].map(({ lockfile, matchedVersions }) => ({
+            lockfile,
+            matchedVersions,
+            packageName: "fast-uri",
+            id,
+            severity: "high" as const,
+            graph: "production" as const,
+            malware: false,
+            source: "github-repository" as const,
+            title: "URI authority validation",
+            url: `https://github.com/fastify/fast-uri/security/advisories/${id}`,
+            vulnerableVersions: "<4.1.4",
+          })),
+        ),
+        {
+          lockfile: "pnpm-lock.yaml",
+          packageName: "nodemailer",
+          matchedVersions: ["9.0.4", "9.0.5"],
+          id: "GHSA-2x7j-588g-ccc2",
+          severity: "high",
+          graph: "production",
+          malware: false,
+          source: "github-repository",
+          title: "Address list denial of service",
+          url: "https://github.com/nodemailer/nodemailer/security/advisories/GHSA-2x7j-588g-ccc2",
+          vulnerableVersions: "<9.1.0",
+        },
+      ],
+    };
+  }
+
+  it("retains every accepted advisory and exact graph binding without declaring the scan clean", () => {
+    const input = acceptedRiskInput();
+    const original = structuredClone(input);
+    const acceptance = resolveReleaseDependencyRiskAcceptance(input);
+    expect(acceptance).toMatchObject({
+      kind: "operator-accepted-dependency-risk",
+      packageVersion: "2026.9.1",
+      blockers: original.blockers,
+      lockfileSha256: original.lockfileSha256,
+    });
+    expect(input).toEqual(original);
+  });
+
+  it("never carries acceptance to another release, graph, or unaccepted finding", () => {
+    const mutations = [
+      (input: ReturnType<typeof acceptedRiskInput>) => {
+        input.packageVersion = "2026.9.2";
+      },
+      (input: ReturnType<typeof acceptedRiskInput>) => {
+        input.lockfileSha256["pnpm-lock.yaml"] = "changed";
+      },
+      (input: ReturnType<typeof acceptedRiskInput>) => {
+        input.blockers[0]!.severity = "critical";
+      },
+      (input: ReturnType<typeof acceptedRiskInput>) => {
+        input.blockers[0]!.malware = true;
+      },
+      (input: ReturnType<typeof acceptedRiskInput>) => {
+        input.blockers[0]!.id = "GHSA-unaccepted";
+      },
+      (input: ReturnType<typeof acceptedRiskInput>) => {
+        input.blockers[0]!.matchedVersions = ["4.1.2"];
+      },
+      (input: ReturnType<typeof acceptedRiskInput>) => {
+        input.blockers.push({ ...input.blockers[0]! });
+      },
+      (input: ReturnType<typeof acceptedRiskInput>) => {
+        input.blockers[0] = { ...input.blockers[1]! };
+      },
+    ];
+    for (const mutate of mutations) {
+      const input = acceptedRiskInput();
+      mutate(input);
+      expect(resolveReleaseDependencyRiskAcceptance(input)).toBeNull();
+    }
+  });
+
   it("defines the release evidence command list and policy classifications", () => {
     expect(DEPENDENCY_EVIDENCE_REPORTS.map(({ command, policy }) => ({ command, policy }))).toEqual(
       [
@@ -222,21 +316,32 @@ describe("generate-dependency-release-evidence", () => {
   });
 
   it.skipIf(process.platform === "win32")(
-    "retains gate artifacts and publishes their directory when the gate fails",
+    "uses trusted report tooling for a separate target and retains blocking evidence",
     async () => {
       const dir = await mkdtemp(path.join(tmpdir(), "openclaw-release-dependency-failure-test-"));
       try {
         const binDir = path.join(dir, "bin");
         const outputDir = path.join(dir, "evidence");
+        const sourceDir = path.join(dir, "candidate");
+        const marker = path.join(dir, "pnpm-cwd");
         const githubOutput = path.join(dir, "github-output");
         await mkdir(binDir);
+        await mkdir(sourceDir);
+        await writeJson(sourceDir, "package.json", { version: "2026.5.13" });
+        await writeFile(
+          path.join(binDir, "git"),
+          '#!/usr/bin/env node\nconsole.log("a".repeat(40));\n',
+          { mode: 0o755 },
+        );
         await writeFile(
           path.join(binDir, "pnpm"),
           [
             "#!/usr/bin/env node",
             'const { writeFileSync } = require("node:fs");',
             "const args = process.argv.slice(2);",
-            'if (args[0] !== "deps:vuln:gate") throw new Error("Unexpected report command");',
+            "writeFileSync(process.env.RELEASE_TEST_MARKER, process.cwd());",
+            'if (args[0] !== "deps:vuln:gate") throw new Error("Wrong report command");',
+            'if (args[args.indexOf("--root") + 1] !== process.env.RELEASE_TEST_SOURCE_ROOT) throw new Error("Wrong report target");',
             'writeFileSync(args[args.indexOf("--json") + 1], JSON.stringify({ blockers: [{ id: "GHSA-fixture" }] }));',
             'writeFileSync(args[args.indexOf("--markdown") + 1], "# Blocking advisory evidence\\n");',
             "process.exitCode = 1;",
@@ -246,6 +351,8 @@ describe("generate-dependency-release-evidence", () => {
 
         const result = runCli(
           [
+            "--root",
+            sourceDir,
             "--output-dir",
             outputDir,
             "--release-ref",
@@ -259,9 +366,15 @@ describe("generate-dependency-release-evidence", () => {
             "--github-step-summary",
             "",
           ],
-          { ...process.env, PATH: `${binDir}${path.delimiter}${process.env.PATH ?? ""}` },
+          {
+            ...process.env,
+            PATH: `${binDir}${path.delimiter}${process.env.PATH ?? ""}`,
+            RELEASE_TEST_SOURCE_ROOT: sourceDir,
+            RELEASE_TEST_MARKER: marker,
+          },
         );
 
+        await expect(readFile(marker, "utf8")).resolves.toBe(path.resolve("."));
         expect(result.status).toBe(1);
         expect(result.stderr).toContain("Command failed: pnpm deps:vuln:gate");
         await expect(readFile(githubOutput, "utf8")).resolves.toBe(`dir=${outputDir}\n`);
@@ -277,41 +390,67 @@ describe("generate-dependency-release-evidence", () => {
     },
   );
 
-  it("falls back to fetching tags when local previous-release resolution misses", () => {
-    const calls: Array<{ command: string; args: string[] }> = [];
-    let describeCalls = 0;
-    const execFileSyncImpl = (command: string, args: string[] = []) => {
-      calls.push({ command, args });
-      if (command !== "git") {
-        throw new Error(`unexpected command: ${command}`);
-      }
-      if (args[0] === "describe") {
-        describeCalls += 1;
-        if (describeCalls === 1) {
-          throw new Error("tag not found");
-        }
-        return "v2026.5.1\n";
-      }
-      if (args[0] === "fetch") {
-        return "";
-      }
-      throw new Error(`unexpected git args: ${args.join(" ")}`);
-    };
+  it.each([true, false])(
+    "fetches complete target release history without unrelated refs (shallow=%s)",
+    async (shallow) => {
+      const dir = await mkdtemp(path.join(tmpdir(), "openclaw-release-history-test-"));
+      const git = (cwd: string, ...args: string[]) =>
+        execFileSync(
+          "git",
+          [
+            "-c",
+            "core.hooksPath=/dev/null",
+            "-c",
+            "user.name=Release test",
+            "-c",
+            "user.email=release-test@example.invalid",
+            "-c",
+            "commit.gpgSign=false",
+            ...args,
+          ],
+          { cwd, encoding: "utf8", stdio: ["ignore", "pipe", "pipe"] },
+        ).trim();
+      try {
+        const origin = path.join(dir, "origin");
+        const target = path.join(dir, "target");
+        await mkdir(origin);
+        await mkdir(target);
+        git(origin, "init", "--quiet", "--initial-branch=main");
+        git(origin, "config", "uploadpack.allowFilter", "true");
+        git(origin, "commit", "--quiet", "--allow-empty", "-m", "previous release");
+        git(origin, "tag", "--no-sign", "-a", "v2026.5.1", "-m", "previous release");
+        git(origin, "commit", "--quiet", "--allow-empty", "-m", "release target");
+        const releaseSha = git(origin, "rev-parse", "HEAD");
+        git(origin, "branch", "release-target");
+        git(origin, "commit", "--quiet", "--allow-empty", "-m", "later main release");
+        git(origin, "tag", "--no-sign", "v2026.6.1");
+        git(origin, "tag", "--no-sign", "release-tooling-unrelated");
+        git(origin, "branch", "unrelated");
+        git(target, "init", "--quiet", "--initial-branch=consumer");
+        git(target, "remote", "add", "origin", pathToFileURL(origin).href);
+        git(target, "fetch", "--no-tags", ...(shallow ? ["--depth=1"] : []), "origin", releaseSha);
+        git(target, "checkout", "--quiet", "--detach", "FETCH_HEAD");
 
-    expect(
-      resolvePreviousReleaseTag({
-        rootDir: "/repo",
-        execFileSyncImpl,
-      }),
-    ).toBe("v2026.5.1");
-    expect(calls.map(({ args }) => args[0])).toEqual(["describe", "fetch", "describe"]);
-    expect(expectDefined(calls[1], "release tag fetch call").args).toEqual([
-      "fetch",
-      "--tags",
-      "--force",
-      "origin",
-    ]);
-  });
+        expect(() => resolvePreviousReleaseTag({ rootDir: target, fetchOnMiss: false })).toThrow(
+          "Could not resolve a previous reachable release tag",
+        );
+        expect(
+          git(target, "for-each-ref", "--format=%(refname)", "refs/tags", "refs/remotes"),
+        ).toBe("");
+        expect(resolvePreviousReleaseTag({ rootDir: target })).toBe("v2026.5.1");
+        expect(git(target, "rev-parse", "HEAD")).toBe(releaseSha);
+        expect(git(target, "rev-parse", "--is-shallow-repository")).toBe("false");
+        expect(git(target, "rev-list", "--count", "HEAD")).toBe("2");
+        expect(
+          git(target, "for-each-ref", "--format=%(refname)", "refs/tags", "refs/remotes").split(
+            "\n",
+          ),
+        ).toEqual(["refs/tags/v2026.5.1", "refs/tags/v2026.6.1"]);
+      } finally {
+        await rm(dir, { force: true, recursive: true });
+      }
+    },
+  );
 
   it.each([
     { status: "checked", mappedPackageVersions: 101, checkedRepositories: 2, issues: [] },

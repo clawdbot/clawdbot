@@ -3,8 +3,6 @@ import fs from "node:fs";
 import { createRequire } from "node:module";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
-import { runWithFailedTrailer } from "./failed-trailer.mts";
-import { fsSafeNativeCopy } from "./fs-safe-native-assets.mts";
 import { createStateSchemaInlinePlugin } from "./state-schema-inline-plugin.mts";
 import {
   hashVitestWorkerArtifact,
@@ -44,12 +42,12 @@ async function compileVitestWorkerArtifacts(directory: string): Promise<void> {
     "scripts/lib/vitest-worker-run.mts",
     "scripts/lib/vitest-worker-compiler.mts",
     "scripts/lib/managed-child-process.mts",
+    "scripts/lib/vitest-resource-ownership.mts",
     "scripts/lib/windows-taskkill.mjs",
     "scripts/windows-cmd-helpers.mjs",
-    "scripts/lib/failed-trailer.mts",
     "scripts/lib/runtime-process-build-entries.mts",
+    "scripts/lib/runtime-process-core-build-entries.mts",
     "scripts/lib/vitest-worker-build-entries.mts",
-    "scripts/lib/fs-safe-native-assets.mts",
     "scripts/lib/state-schema-inline-plugin.mts",
     "scripts/lib/vitest-cli-mode.mts",
   ]) {
@@ -61,22 +59,11 @@ async function compileVitestWorkerArtifacts(directory: string): Promise<void> {
   };
   const schemaPlugin = createStateSchemaInlinePlugin(root);
   const outDir = path.join(directory, "dist");
-  const nativeCopy = fsSafeNativeCopy({ outDir });
-  // tsdown copies resources after generateBundle. Pin source bytes first so
-  // verification cannot bless missing or altered copies with a post-build scan.
-  for (const name of fs.readdirSync(nativeCopy.from, { recursive: true, encoding: "utf8" })) {
-    const source = path.join(nativeCopy.from, name);
-    if (fs.statSync(source).isFile()) {
-      const target = path.join(nativeCopy.to, path.basename(nativeCopy.from), name);
-      outputs[path.relative(outDir, target)] = hashVitestWorkerArtifact(fs.readFileSync(source));
-    }
-  }
   await build({
     config: false,
     cwd: root,
     entry,
     outDir,
-    copy: nativeCopy,
     format: "esm",
     platform: "node",
     tsconfig: path.join(root, "tsconfig.json"),
@@ -85,8 +72,11 @@ async function compileVitestWorkerArtifacts(directory: string): Promise<void> {
     clean: false,
     outExtensions: () => ({ js: ".js" }),
     deps: {
-      neverBundle: true,
-      alwaysBundle: (id) => id.startsWith("@openclaw/") || id.startsWith("openclaw/"),
+      // Root runtime dependencies stay external; bundled workspace code owns its private deps.
+      alwaysBundle: (id) =>
+        (id.startsWith("@openclaw/") || id.startsWith("openclaw/")) &&
+        id !== "@openclaw/fs-safe" &&
+        !id.startsWith("@openclaw/fs-safe/"),
     },
     logLevel: "warn",
     plugins: [
@@ -146,14 +136,15 @@ async function compileVitestWorkerArtifacts(directory: string): Promise<void> {
     outputs: sortedOutputs,
     durationMs: performance.now() - started,
   };
-  verifyVitestWorkerArtifacts(directory, manifest);
+  await verifyVitestWorkerArtifacts(directory, manifest);
+  manifest.durationMs = performance.now() - started;
   fs.writeFileSync(path.join(directory, "manifest.json"), `${JSON.stringify(manifest)}\n`, {
     flag: "wx",
   });
 }
 
 if (import.meta.main) {
-  await runWithFailedTrailer("vitest-workers", async () => {
+  try {
     const directory = fs.realpathSync(process.argv[2]!);
     const parent = fs.realpathSync(path.join(root, ".artifacts/vitest-workers"));
     if (
@@ -165,5 +156,8 @@ if (import.meta.main) {
       throw new Error("Compiled subprocess compiler requires a fresh invocation directory");
     }
     await compileVitestWorkerArtifacts(directory);
-  });
+  } catch (error) {
+    console.error(error);
+    process.exitCode = 1;
+  }
 }

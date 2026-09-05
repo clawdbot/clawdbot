@@ -6,6 +6,7 @@ import { MAX_TIMER_TIMEOUT_MS } from "@openclaw/normalization-core/number-coerci
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { WebSocket } from "ws";
 import { ErrorCodes } from "../../../packages/gateway-protocol/src/index.js";
+import { createDeferred } from "../../../test/helpers/promise.js";
 import { createOperationalRunInstanceRef } from "../../agents/admitted-run-context.js";
 import * as nodeInvokePluginPolicy from "../node-invoke-plugin-policy.js";
 import { NodeRegistry, type NodeInvokeResult } from "../node-registry.js";
@@ -87,7 +88,8 @@ vi.mock("../../infra/device-pairing-node-state.js", () => ({
   isNodePairingGenerationCurrent: mocks.isNodePairingGenerationCurrent,
 }));
 
-vi.mock("../node-command-policy.js", () => ({
+vi.mock("../node-command-policy.js", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("../node-command-policy.js")>()),
   DEFAULT_DANGEROUS_NODE_COMMANDS: ["sms.send", "sms.search"],
   resolveNodeCommandAllowlist: mocks.resolveNodeCommandAllowlist,
   isNodeCommandAllowed: mocks.isNodeCommandAllowed,
@@ -871,6 +873,7 @@ describe("node.invoke APNs wake path", () => {
         allowlist.has(candidate) ? { ok: true } : { ok: false, reason: "command not allowlisted" },
       );
       registry = new NodeRegistry({
+        getConfig: mocks.getRuntimeConfig,
         resolveCurrentPairingState: async () => {
           if (pairingDelayMs > 0) {
             await new Promise((resolve) => {
@@ -1884,63 +1887,65 @@ describe("node.invoke APNs wake path", () => {
       allowlist.has(command) ? { ok: true } : { ok: false, reason: "command not allowlisted" },
     );
 
+    const nodeId = "mac-node-final-policy-reload";
+    const connId = `conn:${nodeId}`;
     const dispatch = vi.fn();
-    let releasePairingValidation!: () => void;
-    const nodeRegistry = {
-      get: vi.fn(() => ({
-        nodeId: "mac-node-final-policy-reload",
-        connId: "mac-node-final-policy-connection",
-        commands: ["system.which"],
-        platform: "macOS 26.0.0",
-      })),
-      invoke: vi.fn(
-        async (params: {
-          nodeId: string;
-          command: string;
-          isDispatchAuthorized?: () => boolean;
-        }) => {
-          await new Promise<void>((resolve) => {
-            releasePairingValidation = resolve;
-          });
-          if (!params.isDispatchAuthorized?.()) {
-            return {
-              ok: false,
-              error: {
-                code: "APPROVAL_AUTHORITY_CLOSED",
-                message: "runtime authority closed before node dispatch",
-              },
-            };
-          }
-          dispatch();
-          return { ok: true, payload: { path: "/usr/bin/git" } };
-        },
-      ),
-    };
-
-    const invocation = invokeNode({
-      nodeRegistry,
-      requestParams: {
-        nodeId: "mac-node-final-policy-reload",
-        command: "system.which",
-        params: { bins: ["git"] },
-        idempotencyKey: "idem-final-policy-reload",
+    const pairingEntered = createDeferred();
+    const pairingReleased = createDeferred();
+    const registry = new NodeRegistry({
+      getConfig: () => runtimeConfig,
+      resolveCurrentPairingState: async () => {
+        pairingEntered.resolve();
+        await pairingReleased.promise;
+        return { identity: "identity", generation: `generation:${nodeId}:1` };
       },
     });
-    await vi.waitFor(() => expect(nodeRegistry.invoke).toHaveBeenCalledOnce());
-    runtimeConfig = { gateway: { nodes: { commands: { deny: ["system.which"] } } } };
-    releasePairingValidation();
-
-    expect(firstRespondCall(await invocation)).toMatchObject([
-      false,
-      undefined,
+    registry.register(
       {
-        details: {
-          nodeError: { code: "APPROVAL_AUTHORITY_CLOSED" },
-          nodeCommandDispatched: false,
+        ...createNodeClient(nodeId, ["system.which"]),
+        usesSharedGatewayAuth: false,
+        socket: {
+          readyState: WebSocket.OPEN,
+          bufferedAmount: 0,
+          close: vi.fn(),
+          send: dispatch,
         },
-      },
-    ]);
-    expect(dispatch).not.toHaveBeenCalled();
+      } as never,
+      { pairingIdentity: "identity", pairingGeneration: `generation:${nodeId}:1` },
+    );
+    try {
+      const invocation = invokeNode({
+        nodeRegistry: {
+          get: registry.get.bind(registry),
+          getForPairingGeneration: registry.getForPairingGeneration.bind(registry),
+          invoke: registry.invoke.bind(registry),
+        },
+        requestParams: {
+          nodeId,
+          command: "system.which",
+          params: { bins: ["git"] },
+          idempotencyKey: "idem-final-policy-reload",
+        },
+      });
+      await pairingEntered.promise;
+      runtimeConfig = { gateway: { nodes: { commands: { deny: ["system.which"] } } } };
+      pairingReleased.resolve();
+
+      expect(firstRespondCall(await invocation)).toMatchObject([
+        false,
+        undefined,
+        {
+          details: {
+            nodeError: { code: "POLICY_CHANGED" },
+            nodeCommandDispatched: false,
+          },
+        },
+      ]);
+      expect(dispatch).not.toHaveBeenCalled();
+    } finally {
+      pairingReleased.resolve();
+      registry.unregister(connId);
+    }
   });
 
   it("does not retroactively grant a command enabled while waiting for reconnect", async () => {
@@ -2029,6 +2034,35 @@ describe("node.invoke APNs wake path", () => {
     await expect(reconnectPromise).resolves.toBe(false);
     expect(nodeRegistry.get).toHaveBeenCalledWith("ios-node-never-reconnects");
   });
+
+  it.each([-3_600_000, 3_600_000])(
+    "keeps the reconnect wait interval across a %i ms wall-clock change",
+    async (clockChange) => {
+      vi.useFakeTimers();
+      vi.setSystemTime(10_000_000);
+      const nodeRegistry = {
+        get: vi.fn(() => undefined),
+        getForPairingGeneration: vi.fn(() => undefined),
+      };
+      let settled = false;
+      const reconnect = waitForNodeReconnect({
+        nodeId: "clock-node",
+        context: { nodeRegistry },
+        timeoutMs: 300,
+        pollMs: 50,
+      }).then((result) => {
+        settled = true;
+        return result;
+      });
+
+      vi.setSystemTime(10_000_000 + clockChange);
+      await vi.advanceTimersByTimeAsync(299);
+      expect(settled).toBe(false);
+      await vi.advanceTimersByTimeAsync(1);
+      expect(settled).toBe(true);
+      await expect(reconnect).resolves.toBe(false);
+    },
+  );
 
   it("broadcasts canonical Talk capture events for successful PTT node commands", async () => {
     const respond = vi.fn();

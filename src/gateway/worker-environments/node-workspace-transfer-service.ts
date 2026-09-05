@@ -181,15 +181,9 @@ export function createNodeWorkspaceTransferService(options: {
     return temporaryRootReady;
   };
 
-  const currentOwner = (context: TransferContext): TransferOwner | undefined => {
-    if (contexts.get(context.environmentId) !== context) {
-      return undefined;
-    }
-    const owner = options.getOwner(context.environmentId);
-    return contextOwnerValid(context, owner) ? owner : undefined;
-  };
-
-  const isCurrentContext = (context: TransferContext): boolean => Boolean(currentOwner(context));
+  const isCurrentContext = (context: TransferContext): boolean =>
+    contexts.get(context.environmentId) === context &&
+    contextOwnerValid(context, options.getOwner(context.environmentId));
 
   const closeContext = async (context: TransferContext) => {
     if (!context.abortController.signal.aborted) {
@@ -281,17 +275,15 @@ export function createNodeWorkspaceTransferService(options: {
     if (route.direction !== "download" || route.environmentId !== context.environmentId) {
       return false;
     }
-    if (route.kind === "manifest" || route.kind === "pack") {
-      return route.manifestRef === capability.manifestRef;
-    }
-    if (route.kind !== "blob") {
-      return false;
-    }
-    return Boolean(
-      context.snapshots
-        .get(capability.manifestRef)
-        ?.manifest.entries.some((entry) => entry.type === "file" && entry.sha256 === route.sha256),
-    );
+    return route.kind === "blob"
+      ? Boolean(
+          context.snapshots
+            .get(capability.manifestRef)
+            ?.manifest.entries.some(
+              (entry) => entry.type === "file" && entry.sha256 === route.sha256,
+            ),
+        )
+      : route.manifestRef === capability.manifestRef;
   };
 
   return {
@@ -687,6 +679,24 @@ export function createNodeWorkspaceTransferService(options: {
           );
         }
         assertCurrent();
+        const context = authorization.context;
+        if (!context.snapshots.has(base.ref)) {
+          if (context.baseCommit !== base.manifest.baseCommit) {
+            await context.pack?.catch(() => undefined);
+            assertCurrent();
+            context.pack = undefined;
+            context.baseCommit = base.manifest.baseCommit;
+          }
+          // Reconnect may snapshot newer local files. Retain the authenticated original
+          // base before upload-token revocation; accepted publication needs its exact pack.
+          context.snapshots.set(base.ref, {
+            manifest: base.manifest,
+            manifestRef: base.ref,
+            rawManifest: base.raw,
+            root: context.localPath,
+          });
+          context.currentManifestRef = base.ref;
+        }
         operation.uploaded = {
           base: base.manifest,
           baseManifestRef: operation.baseManifestRef,

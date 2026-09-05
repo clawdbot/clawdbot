@@ -84,6 +84,10 @@ function nativeShouldHandle(params: {
 }
 
 describe("whatsapp approval capability", () => {
+  it("subscribes the native runtime to system-agent approval events", () => {
+    expect(whatsappApprovalCapability.nativeRuntime?.eventKinds).toContain("system-agent");
+  });
+
   it("does not enable exec or plugin native approvals from WhatsApp account readiness alone", () => {
     const cfg = buildConfig();
     const execRequest = buildExecRequest("+15551230000");

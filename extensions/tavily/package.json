@@ -1,10 +1,10 @@
 {
   "name": "@openclaw/tavily-plugin",
-  "version": "2026.8.1",
+  "version": "2026.9.1",
   "description": "OpenClaw Tavily plugin",
   "type": "module",
   "dependencies": {
-    "typebox": "1.3.16"
+    "typebox": "1.3.18"
   },
   "devDependencies": {
     "@openclaw/plugin-sdk": "workspace:*"
@@ -21,10 +21,10 @@
       "allowInvalidConfigRecovery": true
     },
     "compat": {
-      "pluginApi": ">=2026.8.1"
+      "pluginApi": ">=2026.9.1"
     },
     "build": {
-      "openclawVersion": "2026.8.1",
+      "openclawVersion": "2026.9.1",
       "bundledDist": false
     },
     "release": {

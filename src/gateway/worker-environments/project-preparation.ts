@@ -40,15 +40,18 @@ export function createWorkerProjectPreparation(params: {
   project: WorkerProjectSnapshot;
   namespace: string;
   requireCurrent: () => void;
+  signal?: AbortSignal;
 }): { project: ProjectPreparation; close: () => void } {
   if (!/^[A-Za-z0-9_-]{1,128}$/u.test(params.namespace)) {
     throw new Error("Worker project preparation namespace is invalid");
   }
   const abort = new AbortController();
+  // Stop must reach active Git/transport work, not only the next owner check.
+  const signal = params.signal ? AbortSignal.any([abort.signal, params.signal]) : abort.signal;
   const seedKey = workerProjectSeedKey(params.project);
   let active: Promise<{ seedKey: string; cacheHit: boolean }> | undefined;
   const requireCurrent = () => {
-    abort.signal.throwIfAborted();
+    signal.throwIfAborted();
     try {
       params.requireCurrent();
     } catch (error) {
@@ -64,7 +67,7 @@ export function createWorkerProjectPreparation(params: {
       baseCommit: params.project.baseCommit,
     };
     const inspection: unknown = JSON.parse(
-      await transport.runScript(createProjectSeedScript(scriptInput), abort.signal),
+      await transport.runScript(createProjectSeedScript(scriptInput), signal),
     );
     requireCurrent();
     if (!isRecord(inspection) || typeof inspection.ready !== "boolean") {
@@ -92,7 +95,7 @@ export function createWorkerProjectPreparation(params: {
         root: params.project.root,
         baseCommit: params.project.baseCommit,
         temporaryRoot,
-        signal: abort.signal,
+        signal,
       });
       requireCurrent();
       const bytes = (await fsp.stat(pack)).size;
@@ -100,11 +103,11 @@ export function createWorkerProjectPreparation(params: {
         throw new Error("Project Git pack exceeds the workspace byte limit");
       }
       const hash = createHash("sha256");
-      for await (const chunk of fs.createReadStream(pack, { signal: abort.signal })) {
+      for await (const chunk of fs.createReadStream(pack, { signal })) {
         hash.update(chunk);
       }
       requireCurrent();
-      await transport.upload(pack, path.posix.join(directory, "base.pack"), abort.signal);
+      await transport.upload(pack, path.posix.join(directory, "base.pack"), signal);
       requireCurrent();
       const installed: unknown = JSON.parse(
         await transport.runScript(
@@ -112,7 +115,7 @@ export function createWorkerProjectPreparation(params: {
             ...scriptInput,
             pack: { directory, bytes, sha256: hash.digest("hex") },
           }),
-          abort.signal,
+          signal,
         ),
       );
       requireCurrent();
@@ -128,7 +131,7 @@ export function createWorkerProjectPreparation(params: {
     project: {
       key: params.project.key,
       baseCommit: params.project.baseCommit,
-      signal: abort.signal,
+      signal,
       assertCurrent: requireCurrent,
       prepare: (transport) => {
         requireCurrent();

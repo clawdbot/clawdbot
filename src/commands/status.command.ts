@@ -11,6 +11,8 @@ import { sanitizeTerminalText } from "../../packages/terminal-core/src/safe-text
 import { withProgress } from "../cli/progress.js";
 import { OPENCLAW_WRAPPER_ENV_KEY } from "../daemon/program-args.js";
 import { readRestartSentinelReadOnly } from "../infra/restart-sentinel.js";
+import { findActiveUpdateRun, listUpdateRuns } from "../infra/update-run-ledger.js";
+import { renderUpdateRunReport } from "../infra/update-run-report.js";
 import type { RuntimeEnv } from "../runtime.js";
 import { createLazyImportLoader } from "../shared/lazy-promise.js";
 import { assertStatusUsageAgentScope, runStatusJsonCommand } from "./status-json-command.ts";
@@ -22,8 +24,6 @@ import {
   resolveStatusUsageSummary,
 } from "./status-runtime-shared.ts";
 import { formatUpdateRestartStatusValue } from "./status-update-restart.ts";
-import { buildStatusCommandReportData } from "./status.command-report-data.ts";
-import { buildStatusCommandReportLines } from "./status.command-report.ts";
 import { logGatewayConnectionDetails } from "./status.gateway-connection.ts";
 
 const statusScanModuleLoader = createLazyImportLoader(() => import("./status.scan.js"));
@@ -232,23 +232,12 @@ export async function statusCommand(
 
   const rich = true;
   const {
+    buildStatusCommandReportData,
+    buildStatusCommandReportLines,
     buildStatusUpdateSurface,
-    formatCliCommand,
-    formatHealthChannelLines,
-    formatKTokens,
-    formatPromptCacheCompact,
-    formatPluginCompatibilityNotice,
-    formatTimeAgo,
-    formatTokensCompact,
     formatUsageReportLines,
-    formatUpdateAvailableHint,
     getTerminalTableWidth,
     info,
-    renderTable,
-    resolveMemoryCacheSummary,
-    resolveMemoryFtsState,
-    resolveMemoryVectorState,
-    shortenText,
     theme,
   } = await statusCommandTextRuntimeLoader.load();
   const muted = (value: string) => (rich ? theme.muted(value) : value);
@@ -331,9 +320,10 @@ export async function statusCommand(
       ok,
       warn,
       muted,
-      formatTimeAgo,
     },
   );
+  const lastRun = findActiveUpdateRun() ?? listUpdateRuns({ limit: 1 })[0];
+  const updateReport = lastRun ? renderUpdateRunReport(lastRun) : undefined;
   const lines = await buildStatusCommandReportLines(
     await buildStatusCommandReportData({
       env: env ?? {},
@@ -353,27 +343,11 @@ export async function statusCommand(
       pluginCompatibility,
       pairingRecovery,
       tableWidth,
-      ok,
-      warn,
-      muted,
-      shortenText,
-      formatCliCommand,
-      formatTimeAgo,
-      formatKTokens,
-      formatTokensCompact,
-      formatPromptCacheCompact,
-      formatHealthChannelLines,
-      formatPluginCompatibilityNotice,
-      formatUpdateAvailableHint,
-      resolveMemoryVectorState,
-      resolveMemoryFtsState,
-      resolveMemoryCacheSummary,
-      accentDim: theme.accentDim,
-      theme,
-      renderTable,
-      updateValue: updateSurface.updateAvailable
-        ? warn(`available · ${updateSurface.updateLine}`)
-        : updateSurface.updateLine,
+      updateValue:
+        updateReport?.headline ??
+        (updateSurface.updateAvailable
+          ? warn(`available · ${updateSurface.updateLine}`)
+          : updateSurface.updateLine),
       updateRestartValue,
     }),
   );

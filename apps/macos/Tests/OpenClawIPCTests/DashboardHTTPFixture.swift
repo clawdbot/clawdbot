@@ -1,5 +1,6 @@
 import Foundation
 import Network
+import Security
 
 /// A test owns the listener until `stop()`, after closing its dashboard windows.
 @MainActor
@@ -15,13 +16,27 @@ final class DashboardHTTPFixture {
     private let listener: NWListener
     private let responseHTML: String
     private let contentSecurityPolicy: String
+    private let beforeResponse: (@MainActor () async -> Void)?
+    private let requestHandler: (@MainActor (String) -> String?)?
     private var clients: [UUID: Client] = [:]
     private var stopped = false
     nonisolated let port: UInt16
+    nonisolated let usesTLS: Bool
 
-    private init(listener: NWListener, port: UInt16, html: String, contentSecurityPolicy: String) {
+    private init(
+        listener: NWListener,
+        port: UInt16,
+        html: String,
+        contentSecurityPolicy: String,
+        beforeResponse: (@MainActor () async -> Void)?,
+        usesTLS: Bool,
+        requestHandler: (@MainActor (String) -> String?)?)
+    {
         self.responseHTML = html
         self.contentSecurityPolicy = contentSecurityPolicy
+        self.beforeResponse = beforeResponse
+        self.requestHandler = requestHandler
+        self.usesTLS = usesTLS
         self.listener = listener
         self.port = port
         self.listener.newConnectionHandler = { [weak self] connection in
@@ -37,16 +52,26 @@ final class DashboardHTTPFixture {
 
     static func start(
         html: String = DashboardHTTPFixture.html,
-        contentSecurityPolicy: String = "default-src 'none'") async throws -> DashboardHTTPFixture
+        contentSecurityPolicy: String = "default-src 'none'",
+        beforeResponse: (@MainActor () async -> Void)? = nil,
+        tlsIdentity: sec_identity_t? = nil,
+        requestHandler: (@MainActor (String) -> String?)? = nil) async throws -> DashboardHTTPFixture
     {
-        let parameters = NWParameters.tcp
+        let parameters: NWParameters
+        if let tlsIdentity {
+            let tls = NWProtocolTLS.Options()
+            sec_protocol_options_set_local_identity(tls.securityProtocolOptions, tlsIdentity)
+            parameters = NWParameters(tls: tls)
+        } else {
+            parameters = .tcp
+        }
         parameters.requiredLocalEndpoint = .hostPort(host: "127.0.0.1", port: .any)
         let listener = try NWListener(using: parameters, on: .any)
         listener.newConnectionHandler = { $0.cancel() }
         listener.start(queue: .main)
         do {
             let deadline = ContinuousClock.now + .seconds(5)
-            while ContinuousClock.now < deadline {
+            while true {
                 try Task.checkCancellation()
                 switch listener.state {
                 case .ready:
@@ -57,16 +82,23 @@ final class DashboardHTTPFixture {
                         listener: listener,
                         port: port.rawValue,
                         html: html,
-                        contentSecurityPolicy: contentSecurityPolicy)
+                        contentSecurityPolicy: contentSecurityPolicy,
+                        beforeResponse: beforeResponse,
+                        usesTLS: tlsIdentity != nil,
+                        requestHandler: requestHandler)
                 case let .failed(error):
                     throw error
                 case .cancelled:
                     throw CancellationError()
                 default:
+                    guard ContinuousClock.now < deadline else {
+                        throw URLError(.timedOut, userInfo: [
+                            NSLocalizedDescriptionKey: "Dashboard HTTP fixture listener timed out: \(listener.state)",
+                        ])
+                    }
                     try await Task.sleep(for: .milliseconds(10))
                 }
             }
-            throw URLError(.timedOut)
         } catch {
             listener.cancel()
             throw error
@@ -74,11 +106,11 @@ final class DashboardHTTPFixture {
     }
 
     nonisolated func url(_ path: String = "/") -> URL {
-        URL(string: "http://127.0.0.1:\(self.port)\(path)")!
+        URL(string: "\(self.usesTLS ? "https" : "http")://127.0.0.1:\(self.port)\(path)")!
     }
 
     nonisolated func websocketURL(_ path: String = "/") -> URL {
-        URL(string: "ws://127.0.0.1:\(self.port)\(path)")!
+        URL(string: "\(self.usesTLS ? "wss" : "ws")://127.0.0.1:\(self.port)\(path)")!
     }
 
     func stop() {
@@ -109,14 +141,23 @@ final class DashboardHTTPFixture {
         guard let client = self.clients[id] else { return }
         // One bounded request per connection; neither slow clients nor a partial
         // header can leave a receive alive beyond the connection's deadline.
-        client.connection.receive(minimumIncompleteLength: 1, maximumLength: 8192 - client.request.count) {
-            [weak self] data, _, complete, error in
+        client.connection.receive(
+            minimumIncompleteLength: 1,
+            maximumLength: 8192 - client.request.count)
+        { [weak self] data, _, complete, error in
             MainActor.assumeIsolated {
                 guard let self, var client = self.clients[id] else { return }
                 if let data { client.request.append(data) }
                 self.clients[id] = client
                 if client.request.range(of: Data("\r\n\r\n".utf8)) != nil {
-                    self.respond(id)
+                    if let beforeResponse = self.beforeResponse {
+                        Task { @MainActor [weak self] in
+                            await beforeResponse()
+                            self?.respond(id)
+                        }
+                    } else {
+                        self.respond(id)
+                    }
                 } else if error != nil || complete || client.request.count >= 8192 {
                     self.close(id)
                 } else {
@@ -139,7 +180,9 @@ final class DashboardHTTPFixture {
             "Content-Security-Policy: \(self.contentSecurityPolicy)",
             "Connection: close",
         ].joined(separator: "\r\n") + "\r\n\r\n"
-        client.connection.send(content: Data(headers.utf8) + body, completion: .contentProcessed { [weak self] _ in
+        let response = self.requestHandler?(String(data: client.request, encoding: .utf8) ?? "")
+            .map { Data($0.utf8) } ?? (Data(headers.utf8) + body)
+        client.connection.send(content: response, completion: .contentProcessed { [weak self] _ in
             MainActor.assumeIsolated { self?.close(id) }
         })
     }

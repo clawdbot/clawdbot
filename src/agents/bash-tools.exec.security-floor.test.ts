@@ -7,6 +7,8 @@ import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { createDeferred } from "../../test/helpers/promise.js";
+import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { onAgentEvent } from "../infra/agent-events.js";
 import { saveExecApprovals, type ExecApprovalsFile } from "../infra/exec-approvals.js";
 import type { ExecAutoReviewer } from "../infra/exec-auto-review.js";
@@ -14,11 +16,37 @@ import { closeOpenClawStateDatabaseForTest } from "../state/openclaw-state-db.js
 import { captureEnv, deleteTestEnvValue, setTestEnvValue } from "../test-utils/env.js";
 import { resetProcessRegistryForTests } from "./bash-process-registry.test-support.js";
 import { createExecTool as createExecToolImpl } from "./bash-tools.exec-run.js";
+import { makeProviderModelFixture } from "./test-helpers/provider-model-fixture.js";
 import { callGatewayTool } from "./tools/gateway.js";
 
 const createExecTool = (
   defaults?: Parameters<typeof createExecToolImpl>[0],
 ): ReturnType<typeof createExecToolImpl> => createExecToolImpl({ agentId: "main", ...defaults });
+
+const optionalRuntimeImports = vi.hoisted(() => ({ reviewer: 0, followup: 0 }));
+const reviewerRuntime = vi.hoisted(() => ({
+  prepare:
+    vi.fn<typeof import("./simple-completion-runtime.js").prepareSimpleCompletionModelForAgent>(),
+  complete:
+    vi.fn<
+      typeof import("./simple-completion-runtime.js").completeWithPreparedSimpleCompletionModel
+    >(),
+}));
+
+vi.mock("./simple-completion-runtime.js", () => ({
+  prepareSimpleCompletionModelForAgent: reviewerRuntime.prepare,
+  completeWithPreparedSimpleCompletionModel: reviewerRuntime.complete,
+}));
+
+vi.mock("./exec-auto-reviewer.js", async (importOriginal) => {
+  optionalRuntimeImports.reviewer += 1;
+  return importOriginal<typeof import("./exec-auto-reviewer.js")>();
+});
+
+vi.mock("./bash-tools.exec-approval-followup.js", async (importOriginal) => {
+  optionalRuntimeImports.followup += 1;
+  return importOriginal<typeof import("./bash-tools.exec-approval-followup.js")>();
+});
 
 vi.mock("./tools/gateway.js", () => ({
   callGatewayTool: vi.fn(),
@@ -58,7 +86,7 @@ function writeFullAskExecApprovalsFixture(root: string): void {
   });
 }
 
-function mockPendingApprovalGateway(): string[] {
+function mockApprovalGateway(decision: "allow-once" | "deny" | null = null): string[] {
   const calls: string[] = [];
   vi.mocked(callGatewayTool).mockImplementation(async (method) => {
     calls.push(method);
@@ -66,7 +94,7 @@ function mockPendingApprovalGateway(): string[] {
       return { status: "accepted", id: "approval-id" };
     }
     if (method === "exec.approval.waitDecision") {
-      return { decision: null };
+      return { decision };
     }
     return { ok: true };
   });
@@ -110,6 +138,8 @@ describe("exec security floor", () => {
     }
     resetProcessRegistryForTests();
     vi.mocked(callGatewayTool).mockReset();
+    reviewerRuntime.prepare.mockReset();
+    reviewerRuntime.complete.mockReset();
   });
 
   afterEach(() => {
@@ -140,6 +170,15 @@ describe("exec security floor", () => {
     expect(text).not.toMatch(/exec denied/i);
     expect(text).not.toMatch(/allowlist miss/i);
     expect(text.trim()).toContain("hello");
+  });
+
+  it("does not load optional review or delivery runtimes for full/off execution", async () => {
+    const tool = createExecTool({ host: "gateway", mode: "full" });
+
+    const result = await tool.execute("call-unused-optional-runtimes", { command: "echo hello" });
+
+    expect(result.details.status).toBe("completed");
+    expect(optionalRuntimeImports).toEqual({ reviewer: 0, followup: 0 });
   });
 
   it("enforces configured allowlist security when model also passes allowlist", async () => {
@@ -186,6 +225,7 @@ describe("exec security floor", () => {
   it("honors per-call ask hardening for trusted callers without messageProvider", async () => {
     const root = tempRoot ?? os.tmpdir();
     const binDir = installAllowlistedGogFixture(root);
+    const calls = mockApprovalGateway("deny");
     const tool = createExecTool({
       host: "gateway",
       security: "allowlist",
@@ -199,8 +239,9 @@ describe("exec security floor", () => {
       ask: "always",
     });
 
-    expect(callGatewayTool).toHaveBeenCalled();
-    expect(result.details.status).toBe("approval-pending");
+    expect(calls).toEqual(["exec.approval.request", "exec.approval.waitDecision"]);
+    expect(result.details).toMatchObject({ status: "failed", timedOut: false });
+    expect((result.content[0] as { text?: string }).text).toContain("user-denied");
   });
 
   it("ignores model-supplied deny security when configured security is allowlist", async () => {
@@ -363,6 +404,7 @@ describe("exec security floor", () => {
     }
 
     expect(liveReviews).toEqual([]);
+    expect(reviewerRuntime.prepare).not.toHaveBeenCalled();
     expect(result.details).toMatchObject({
       status: "completed",
       approvalReviewOutcome: "approved",
@@ -448,7 +490,7 @@ describe("exec security floor", () => {
 
   it("preserves host ask floors for elevated full gateway exec", async () => {
     writeFullAskExecApprovalsFixture(tempRoot ?? os.tmpdir());
-    const calls = mockPendingApprovalGateway();
+    const calls = mockApprovalGateway();
     const tool = createExecTool({
       host: "gateway",
       security: "full",
@@ -462,8 +504,9 @@ describe("exec security floor", () => {
       elevated: true,
     });
 
-    expect(result.details.status).toBe("approval-pending");
-    expect(calls).toContain("exec.approval.request");
+    expect(result.details).toMatchObject({ status: "failed", timedOut: true });
+    expect((result.content[0] as { text?: string }).text).toContain("approval-timeout");
+    expect(calls).toEqual(["exec.approval.request", "exec.approval.waitDecision"]);
   });
 
   it("does not prompt explicit full sessions despite host ask floors", async () => {
@@ -488,31 +531,29 @@ describe("exec security floor", () => {
     "honors ask-only tightening without restoring full-session host floors (approved=%s)",
     async (approved) => {
       writeDenyExecApprovalsFixture(tempRoot ?? os.tmpdir());
-      const calls = mockPendingApprovalGateway();
-      if (approved) {
-        vi.mocked(callGatewayTool).mockImplementation(async (method) => {
-          calls.push(method);
-          return { decision: "allow-once" };
-        });
-      }
+      const calls = mockApprovalGateway(approved ? "allow-once" : null);
       const tool = createExecTool({
         host: "gateway",
         security: "full",
         ask: "always",
         bypassHostApprovalFloors: true,
-        messageProvider: approved ? "webchat" : undefined,
         approvalRunningNoticeMs: 0,
       });
 
       const result = await tool.execute("call-session-full-tightened-ask", { command: "echo ok" });
 
-      expect(result.details.status).toBe(approved ? "completed" : "approval-pending");
-      expect(calls).toContain("exec.approval.request");
+      expect(result.details).toMatchObject(
+        approved ? { status: "completed", exitCode: 0 } : { status: "failed", timedOut: true },
+      );
+      expect((result.content[0] as { text?: string }).text).toContain(
+        approved ? "ok" : "approval-timeout",
+      );
+      expect(calls).toEqual(["exec.approval.request", "exec.approval.waitDecision"]);
     },
   );
 
   it("honors normalized auto mode before elevated full bypass", async () => {
-    const calls = mockPendingApprovalGateway();
+    const calls = mockApprovalGateway();
     const autoReviewer = createAskingAutoReviewer();
     const tool = createExecTool({
       host: "gateway",
@@ -534,14 +575,15 @@ describe("exec security floor", () => {
         reason: "allowlist-miss",
       }),
     );
-    expect(result.details.status).toBe("approval-pending");
-    expect(calls).toContain("exec.approval.request");
+    expect(result.details).toMatchObject({ status: "failed", timedOut: true });
+    expect((result.content[0] as { text?: string }).text).toContain("approval-timeout");
+    expect(calls).toEqual(["exec.approval.request", "exec.approval.waitDecision"]);
   });
 
   it.each(["on-miss", "off"] as const)(
     "keeps auto review enabled when legacy ask=%s does not strengthen auto mode",
     async (ask) => {
-      const calls = mockPendingApprovalGateway();
+      const calls = mockApprovalGateway();
       const autoReviewer = createAskingAutoReviewer();
       const tool = createExecTool({
         host: "gateway",
@@ -562,8 +604,110 @@ describe("exec security floor", () => {
           reason: "allowlist-miss",
         }),
       );
-      expect(result.details.status).toBe("approval-pending");
-      expect(calls).toContain("exec.approval.request");
+      expect(result.details).toMatchObject({ status: "failed", timedOut: true });
+      expect((result.content[0] as { text?: string }).text).toContain("approval-timeout");
+      expect(calls).toEqual(["exec.approval.request", "exec.approval.waitDecision"]);
     },
   );
+
+  it("keeps default reviewer settings and cancellation scoped to each execution", async () => {
+    const reviewer = { model: "synthetic/reviewer-first" };
+    const config: OpenClawConfig = {
+      tools: { exec: { reviewer: { model: "synthetic/reviewer-global" } } },
+      agents: { entries: { main: { tools: { exec: { reviewer } } } } },
+    };
+    reviewerRuntime.prepare.mockResolvedValue({
+      selection: { provider: "synthetic", modelId: "reviewer", agentDir: tempRoot ?? os.tmpdir() },
+      model: makeProviderModelFixture({
+        provider: "synthetic",
+        id: "reviewer",
+        api: "openai-responses",
+        baseUrl: "https://example.invalid",
+      }),
+      auth: { source: "synthetic", mode: "aws-sdk" },
+    });
+    const completion = createDeferred<never>();
+    const completionEntered = createDeferred();
+    reviewerRuntime.complete
+      .mockImplementationOnce(() => {
+        completionEntered.resolve();
+        return completion.promise;
+      })
+      .mockRejectedValueOnce(new Error("synthetic completion unavailable"));
+    vi.mocked(callGatewayTool).mockResolvedValue({ decision: "deny" });
+    const tool = createExecTool({
+      host: "gateway",
+      mode: "auto",
+      safeBins: [],
+      config,
+      messageProvider: "webchat",
+    });
+    const first = new AbortController();
+    const second = new AbortController();
+    const firstRun = tool.execute(
+      "default-review-first",
+      { command: "node --version" },
+      first.signal,
+    );
+    try {
+      await Promise.race([completionEntered.promise, firstRun]);
+      first.abort(new Error("first execution cancelled"));
+      await expect(firstRun).rejects.toThrow("first execution cancelled");
+      expect(reviewerRuntime.complete.mock.calls[0]?.[0].options?.signal?.aborted).toBe(true);
+
+      reviewer.model = "synthetic/reviewer-second";
+      const result = await tool.execute(
+        "default-review-second",
+        { command: "node --version" },
+        second.signal,
+      );
+      expect(reviewerRuntime.prepare.mock.calls.map(([params]) => params.modelRef)).toEqual([
+        "synthetic/reviewer-first",
+        "synthetic/reviewer-second",
+      ]);
+      expect(reviewerRuntime.prepare).toHaveBeenLastCalledWith(
+        expect.objectContaining({ cfg: config, agentId: "main" }),
+      );
+      expect(reviewerRuntime.complete.mock.calls[1]?.[0].options?.signal?.aborted).toBe(false);
+      expect(result.details).toMatchObject({
+        status: "failed",
+        approvalReviewOutcome: "denied",
+        approvalReviews: [{ rationale: "exec reviewer failed: synthetic completion unavailable" }],
+      });
+    } finally {
+      first.abort();
+      completion.reject(new Error("review fixture closed"));
+      await firstRun.catch(() => undefined);
+    }
+  });
+
+  it("defers to human approval when the default reviewer import fails", async () => {
+    const loadReviewer = vi.fn(() => {
+      throw new Error("synthetic reviewer import failure");
+    });
+    vi.doMock("./exec-auto-reviewer.js", loadReviewer);
+    vi.mocked(callGatewayTool).mockResolvedValue({ decision: "deny" });
+    try {
+      const tool = createExecTool({
+        host: "gateway",
+        mode: "auto",
+        safeBins: [],
+        messageProvider: "webchat",
+      });
+      const result = await tool.execute("default-review-import-failure", {
+        command: "node --version",
+      });
+      expect(loadReviewer).toHaveBeenCalled();
+      expect(result.details).toMatchObject({
+        status: "failed",
+        approvalReviewOutcome: "denied",
+        approvalReviews: [
+          { riskLevel: "unknown", rationale: expect.stringContaining("exec reviewer failed:") },
+        ],
+      });
+      expect(reviewerRuntime.prepare).not.toHaveBeenCalled();
+    } finally {
+      vi.doUnmock("./exec-auto-reviewer.js");
+    }
+  });
 });

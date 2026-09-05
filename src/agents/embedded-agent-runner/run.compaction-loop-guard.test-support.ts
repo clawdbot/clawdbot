@@ -21,6 +21,7 @@ import {
   makeOverflowError,
 } from "./run.overflow-compaction.fixture.js";
 import {
+  mockedAcquireAgentRunPreparedModelRuntime,
   mockedCompactDirect,
   mockedIsCompactionFailureError,
   mockedIsLikelyContextOverflowError,
@@ -31,6 +32,7 @@ import {
   createSharedRunIntegrationSession,
   loadSharedRunIntegrationHarness,
 } from "./run.shared-integration-harness.test-support.js";
+import type { EmbeddedRunAttemptParams } from "./run/types.js";
 
 let baseParams: Awaited<ReturnType<typeof createSharedRunIntegrationSession>>["runParams"];
 let runEmbeddedAgent: Awaited<ReturnType<typeof loadSharedRunIntegrationHarness>>;
@@ -303,27 +305,89 @@ describe("post-compaction loop guard wired into runEmbeddedAgent", () => {
     }
   });
 
-  it("keeps a native lane alive while a tool is still running", async () => {
+  it.each([false, true])(
+    "keeps cold runtime acquisition outside execution budget (stop=%s)",
+    async (stop) => {
+      vi.useFakeTimers();
+      const acquisitionStarted = createDeferred();
+      const resumeAcquisition = createDeferred();
+      const parent = new AbortController();
+      const acquire = mockedAcquireAgentRunPreparedModelRuntime.getMockImplementation();
+      if (!acquire) {
+        throw new Error("Missing prepared runtime fixture");
+      }
+      let acquisitionSignal: AbortSignal | undefined;
+      mockedAcquireAgentRunPreparedModelRuntime.mockImplementationOnce(
+        async (input, options?: { abortSignal?: AbortSignal }) => {
+          acquisitionSignal = options?.abortSignal;
+          acquisitionStarted.resolve();
+          await resumeAcquisition.promise;
+          acquisitionSignal?.throwIfAborted();
+          return await acquire(input);
+        },
+      );
+      if (!stop) {
+        mockedRunEmbeddedAttempt.mockResolvedValueOnce(makeAttemptResult());
+      }
+      const run = runEmbeddedAgent({
+        ...baseParams,
+        runId: `run-cold-acquisition-${stop}`,
+        timeoutMs: 1,
+        abortSignal: parent.signal,
+      });
+      let settled = false;
+      const observed = run
+        .finally(() => {
+          settled = true;
+        })
+        .catch((error: unknown) => error);
+      try {
+        await Promise.race([acquisitionStarted.promise, run]);
+        await vi.advanceTimersByTimeAsync(60_000);
+        expect(settled).toBe(false);
+        expect(mockedRunEmbeddedAttempt).not.toHaveBeenCalled();
+        if (stop) {
+          parent.abort(new Error("stopped during preparation"));
+          expect(acquisitionSignal?.aborted).toBe(true);
+        }
+        resumeAcquisition.resolve();
+        if (stop) {
+          await expect(run).rejects.toThrow("stopped during preparation");
+          expect(mockedRunEmbeddedAttempt).not.toHaveBeenCalled();
+        } else {
+          await run;
+          expect(mockedRunEmbeddedAttempt).toHaveBeenCalledOnce();
+        }
+      } finally {
+        resumeAcquisition.resolve();
+        await observed;
+        vi.useRealTimers();
+      }
+    },
+  );
+
+  it("enforces the runtime deadline after a paused built-in attempt resumes", async () => {
     vi.useFakeTimers();
     const heldAttempt = createDeferred<ReturnType<typeof makeAttemptResult>>();
+    const attemptStarted = createDeferred();
     let run: ReturnType<typeof runEmbeddedAgent> | undefined;
-    let resolveAttemptStarted: (() => void) | undefined;
-    const attemptStarted = new Promise<void>((resolve) => {
-      resolveAttemptStarted = resolve;
-    });
+    let publishDeadline: EmbeddedRunAttemptParams["onAttemptDeadlineChanged"];
+    let attemptSignal: AbortSignal | undefined;
     try {
       mockedRunEmbeddedAttempt.mockImplementationOnce(async (attemptParams: unknown) => {
-        const { onAttemptTimeoutArmed } = attemptParams as {
-          onAttemptTimeoutArmed?: () => void;
-        };
-        resolveAttemptStarted?.();
-        onAttemptTimeoutArmed?.();
+        const params = attemptParams as EmbeddedRunAttemptParams;
+        publishDeadline = params.onAttemptDeadlineChanged;
+        attemptSignal = params.abortSignal;
+        // The legacy notification must not substitute a heartbeat for the owner's deadline.
+        params.onAttemptTimeoutArmed?.();
+        publishDeadline?.({ kind: "unlimited" });
+        attemptStarted.resolve();
         return await heldAttempt.promise;
       });
 
       run = runEmbeddedAgent({
         ...baseParams,
-        runId: "run-native-tool-heartbeat",
+        runId: "run-builtin-deadline-handoff",
         timeoutMs: 1,
         agentHarnessRuntimeOverride: "openclaw",
       });
@@ -335,12 +399,17 @@ describe("post-compaction loop guard wired into runEmbeddedAgent", () => {
         .catch(() => {});
 
       await vi.advanceTimersByTimeAsync(0);
-      await attemptStarted;
+      await Promise.race([attemptStarted.promise, run]);
       await vi.advanceTimersByTimeAsync(30_001);
-
       expect(settled).toBe(false);
-      heldAttempt.resolve(makeAttemptResult());
-      await expect(run).resolves.toMatchObject({ meta: { aborted: false } });
+
+      publishDeadline?.({ kind: "bounded", deadlineAtMs: Date.now() + 10 });
+      await vi.advanceTimersByTimeAsync(30_011);
+      expect(settled).toBe(true);
+      expect(pendingTasks.size, "backend still runs after the owner deadline").toBeGreaterThan(0);
+      expect(attemptSignal?.aborted).toBe(true);
+      expect(attemptSignal?.reason).toMatchObject({ name: "CommandLaneTaskTimeoutError" });
+      await expect(run).rejects.toMatchObject({ name: "CommandLaneTaskTimeoutError" });
     } finally {
       heldAttempt.resolve(makeAttemptResult());
       await run?.catch(() => undefined);

@@ -115,7 +115,7 @@ describe("tool-cards", () => {
           name: "web_search",
           args: { query: "openclaw" },
         },
-        { expanded: false, onToggleExpanded: toggle },
+        { messageKey: "test-message", expanded: false, onToggleExpanded: toggle },
       ),
       container,
     );
@@ -144,7 +144,7 @@ describe("tool-cards", () => {
           args: { command: "pnpm test" },
           live: true,
         },
-        { expanded: false, runActive: true, onToggleExpanded: vi.fn() },
+        { messageKey: "test-message", expanded: false, runActive: true, onToggleExpanded: vi.fn() },
       ),
       container,
     );
@@ -167,7 +167,7 @@ describe("tool-cards", () => {
           inputText: '{\n  "url": "https://example.com"\n}',
           outputText: "Opened page",
         },
-        { expanded: true, onToggleExpanded: toggle },
+        { messageKey: "test-message", expanded: true, onToggleExpanded: toggle },
       ),
       container,
     );
@@ -214,7 +214,7 @@ describe("tool-cards", () => {
           },
           outputText: "Applied patch",
         },
-        { expanded: true, onToggleExpanded: vi.fn() },
+        { messageKey: "test-message", expanded: true, onToggleExpanded: vi.fn() },
       ),
       container,
     );
@@ -275,7 +275,7 @@ describe("tool-cards", () => {
           },
           outputText: "Applied patch",
         },
-        { expanded: true, onToggleExpanded: vi.fn() },
+        { messageKey: "test-message", expanded: true, onToggleExpanded: vi.fn() },
       ),
       container,
     );
@@ -298,7 +298,7 @@ describe("tool-cards", () => {
           completed: true,
           isError: true,
         },
-        { expanded: true, onToggleExpanded: vi.fn() },
+        { messageKey: "test-message", expanded: true, onToggleExpanded: vi.fn() },
       ),
       container,
     );
@@ -336,7 +336,7 @@ describe("tool-cards", () => {
           },
           completed: true,
         },
-        { expanded: false, onOpenWorkspaceFile, onToggleExpanded },
+        { messageKey: "test-message", expanded: false, onOpenWorkspaceFile, onToggleExpanded },
       ),
       container,
     );
@@ -401,7 +401,7 @@ describe("tool-cards", () => {
           args: { patch },
           completed: true,
         },
-        { expanded: false, onOpenWorkspaceFile, onToggleExpanded },
+        { messageKey: "test-message", expanded: false, onOpenWorkspaceFile, onToggleExpanded },
       ),
       container,
     );
@@ -486,6 +486,7 @@ describe("tool-cards", () => {
               ...state.card,
             },
             {
+              messageKey: "test-message",
               expanded: true,
               onToggleExpanded: vi.fn(),
               runActive: state.runActive,
@@ -561,7 +562,7 @@ describe("tool-cards", () => {
             args: tool.args,
             completed: true,
           },
-          { expanded: true, onToggleExpanded: vi.fn(), onOpenSidebar },
+          { messageKey: "test-message", expanded: true, onToggleExpanded: vi.fn(), onOpenSidebar },
         ),
         container,
       );
@@ -615,6 +616,7 @@ describe("tool-cards", () => {
           completed: true,
         },
         {
+          messageKey: "test-message",
           expanded: true,
           onOpenWorkspaceFile,
           onToggleExpanded: vi.fn(),
@@ -641,7 +643,7 @@ describe("tool-cards", () => {
           args: { path: "/repo/src/a.ts", offset: 40, limit: 20 },
           inputText: JSON.stringify({ path: "/repo/src/a.ts", offset: 40, limit: 20 }),
         },
-        { expanded: true, onToggleExpanded: vi.fn() },
+        { messageKey: "test-message", expanded: true, onToggleExpanded: vi.fn() },
       ),
       container,
     );
@@ -671,6 +673,7 @@ describe("tool-cards", () => {
           outputText: "Proposal created",
         },
         {
+          messageKey: "test-message",
           expanded: true,
           onOpenSidebar: vi.fn(),
           onToggleExpanded: vi.fn(),
@@ -700,7 +703,7 @@ describe("tool-cards", () => {
           args: { mode: "session", thread: true },
           inputText: '{\n  "mode": "session",\n  "thread": true\n}',
         },
-        { expanded: true, onToggleExpanded: vi.fn() },
+        { messageKey: "test-message", expanded: true, onToggleExpanded: vi.fn() },
       ),
       container,
     );
@@ -729,7 +732,7 @@ describe("tool-cards", () => {
           args: { mode: "run" },
           inputText: '{\n  "mode": "run"\n}',
         },
-        { expanded: false, onToggleExpanded: vi.fn() },
+        { messageKey: "test-message", expanded: false, onToggleExpanded: vi.fn() },
       ),
       container,
     );
@@ -757,7 +760,7 @@ describe("tool-cards", () => {
           },
           inputText: "message input",
         },
-        { expanded: false, onToggleExpanded: vi.fn() },
+        { messageKey: "test-message", expanded: false, onToggleExpanded: vi.fn() },
       ),
       container,
     );
@@ -795,7 +798,7 @@ describe("tool-cards", () => {
           inputText: '{\n  "action": "create"\n}',
           outputText: "Proposal created",
         },
-        { expanded: false, onToggleExpanded: vi.fn() },
+        { messageKey: "test-message", expanded: false, onToggleExpanded: vi.fn() },
       ),
       container,
     );
@@ -820,7 +823,7 @@ describe("tool-cards", () => {
           args: "with Example Deck",
           inputText: "with Example Deck",
         },
-        { expanded: false, onToggleExpanded: vi.fn() },
+        { messageKey: "test-message", expanded: false, onToggleExpanded: vi.fn() },
       ),
       container,
     );
@@ -838,7 +841,7 @@ describe("tool-cards", () => {
           args: "with Example Deck",
           inputText: "with Example Deck",
         },
-        { expanded: true, onToggleExpanded: vi.fn() },
+        { messageKey: "test-message", expanded: true, onToggleExpanded: vi.fn() },
       ),
       container,
     );
@@ -887,7 +890,7 @@ describe("tool-cards", () => {
           args: rawInput,
           inputText: rawInput,
         },
-        { expanded: false, onToggleExpanded: vi.fn() },
+        { messageKey: "test-message", expanded: false, onToggleExpanded: vi.fn() },
       ),
       container,
     );
@@ -928,7 +931,7 @@ describe("tool-cards", () => {
             preferredHeight: 480,
           },
         },
-        { expanded: true, onToggleExpanded: vi.fn() },
+        { messageKey: "test-message", expanded: true, onToggleExpanded: vi.fn() },
       ),
       container,
     );
@@ -983,7 +986,7 @@ describe("tool-cards", () => {
             url: "/__openclaw__/canvas/documents/qr_preview/index.html",
           },
         },
-        { expanded: true, onToggleExpanded: vi.fn() },
+        { messageKey: "test-message", expanded: true, onToggleExpanded: vi.fn() },
       ),
       container,
     );
@@ -1027,7 +1030,7 @@ describe("tool-cards", () => {
             preferredHeight: 360,
           },
         },
-        { expanded: true, onToggleExpanded: vi.fn(), onOpenSidebar },
+        { messageKey: "test-message", expanded: true, onToggleExpanded: vi.fn(), onOpenSidebar },
       ),
       container,
     );
@@ -1057,11 +1060,7 @@ describe("tool-cards", () => {
           outputText: "Opened page",
           messageId: "msg-tool-full",
         },
-        {
-          expanded: true,
-          onToggleExpanded: vi.fn(),
-          onOpenSidebar,
-        },
+        { messageKey: "test-message", expanded: true, onToggleExpanded: vi.fn(), onOpenSidebar },
       ),
       container,
     );

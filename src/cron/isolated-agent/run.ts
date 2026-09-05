@@ -1,10 +1,12 @@
 import { retireSessionMcpRuntime } from "../../agents/agent-bundle-mcp-tools.js";
 import { withPreparedModelRuntimePluginGenerationScope } from "../../agents/prepared-model-runtime-generation-scope.js";
 import type { PreparedModelRuntimeLease } from "../../agents/prepared-model-runtime.types.js";
-import { createAgentRunRestartAbortError } from "../../agents/run-termination.js";
+import {
+  createAgentRunRestartAbortError,
+  resolveAgentRunErrorLifecycleFields,
+} from "../../agents/run-termination.js";
+import { createAgentLifecycleTerminalBackstop } from "../../auto-reply/reply/agent-lifecycle-terminal.js";
 import { cleanupBrowserSessionsForLifecycleEnd } from "../../browser-lifecycle-cleanup.js";
-import type { CliDeps } from "../../cli/outbound-send-deps.js";
-import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import {
   assertAgentRunLifecycleGenerationCurrent,
   getAgentEventLifecycleGeneration,
@@ -29,12 +31,12 @@ import {
   normalizeCronRunErrorText,
   resolveCronAbortReasonText,
 } from "../service/execution-errors.js";
-import type {
-  CronAgentExecutionPhaseUpdate,
-  CronAgentExecutionStarted,
-  CronStoredJob,
-} from "../types.js";
+import type { CronAgentExecutionPhaseUpdate } from "../types.js";
 import { finalizeCronRun } from "./run-finalize.js";
+import {
+  CronExecutionRootRuntimeError,
+  type RunCronAgentTurnParams,
+} from "./run-prepare-runtime.js";
 import { prepareCronRunContext } from "./run-prepare.js";
 import { CronSessionLifecycleClaimError, type MutableCronSession } from "./run-session-state.js";
 import { logWarn } from "./run.runtime.js";
@@ -80,21 +82,9 @@ async function disposeCronRunContext(params: {
 }
 
 /** Runs one isolated cron agent turn, including setup, execution, delivery, and persistence. */
-export async function runCronIsolatedAgentTurn(params: {
-  cfg: OpenClawConfig;
-  deps: CliDeps;
-  job: CronStoredJob;
-  message: string;
-  abortSignal?: AbortSignal;
-  signal?: AbortSignal;
-  onExecutionStarted?: (info?: CronAgentExecutionStarted) => void;
-  onExecutionPhase?: (info: CronAgentExecutionPhaseUpdate) => void;
-  onLaneWait?: (info?: { waiting?: boolean }) => void;
-  sessionKey: string;
-  agentId?: string;
-  lane?: string;
-  executionIdentity?: import("../service/state.js").CronExecutionIdentityAdmission;
-}): Promise<RunCronAgentTurnResult> {
+export async function runCronIsolatedAgentTurn(
+  params: RunCronAgentTurnParams,
+): Promise<RunCronAgentTurnResult> {
   const admittedLifecycleGeneration = getAgentEventLifecycleGeneration();
   const upstreamAbortSignal = params.abortSignal ?? params.signal;
   const lifecycleAbortController = new AbortController();
@@ -113,6 +103,9 @@ export async function runCronIsolatedAgentTurn(params: {
       onLifecycleInterrupt: () => lifecycleAbortController.abort(createAgentRunRestartAbortError()),
     });
   } catch (err) {
+    if (err instanceof CronExecutionRootRuntimeError) {
+      return { status: "error", error: err.message, admissionDisposition: "rejected" };
+    }
     if (err instanceof CronSessionLifecycleClaimError) {
       return {
         status: "error",
@@ -197,6 +190,15 @@ export async function runCronIsolatedAgentTurn(params: {
   let outcome: "completed" | "error" = "completed";
   let outcomeError: string | undefined;
   let cronRunSessionCleanupHandled = false;
+  // The execution owner spans fallback and interim-ack retries. Individual
+  // attempts must not retire the shared run before that execution settles.
+  const lifecycle = createAgentLifecycleTerminalBackstop({
+    runId: initialSessionId,
+    sessionKey: prepared.context.runSessionKey,
+    startedAt: turnStartedAtMs,
+    getLifecycleGeneration: () => runLifecycleGeneration,
+    resolveTerminationFields: (error) => resolveAgentRunErrorLifecycleFields(error, abortSignal),
+  });
   try {
     assertAgentRunLifecycleGenerationCurrent(runLifecycleGeneration);
     const existingRunContext = getAgentRunContext(initialSessionId);
@@ -229,6 +231,7 @@ export async function runCronIsolatedAgentTurn(params: {
       runSessionKey: prepared.context.runSessionKey,
       usesDetachedRunSession: prepared.context.usesDetachedRunSession,
       workspaceDir: prepared.context.workspaceDir,
+      executionRoot: prepared.context.executionRoot,
       lane: params.lane,
       resolvedDelivery: {
         channel: prepared.context.resolvedDelivery.channel,
@@ -254,6 +257,7 @@ export async function runCronIsolatedAgentTurn(params: {
       setRunContinuationCliExecutionProvider:
         prepared.context.runContinuationSession?.setCliExecutionProvider,
       abortSignal,
+      lifecycle,
       onExecutionStarted: notifyExecutionStarted,
       onExecutionPhase: notifyExecutionPhase,
       onLaneWait: params.onLaneWait,
@@ -287,6 +291,9 @@ export async function runCronIsolatedAgentTurn(params: {
     } finally {
       releasePreparedRuntime();
     }
+    // Publish the execution fact captured before bookkeeping; cron persistence
+    // and delivery retain their separate workflow outcome.
+    lifecycle.emit("end", execution.runResult);
     const finalized = await finalizeCronRun({
       prepared: prepared.context,
       execution,
@@ -308,23 +315,23 @@ export async function runCronIsolatedAgentTurn(params: {
       ? finalized
       : { ...finalized, nextCheck: { delayMs } };
   } catch (err) {
+    lifecycle.emit("error", err);
     consumeCronNextCheckProposal(initialSessionId, params.job.id);
     const isCronLaneTimeout = isAborted() || isCronNestedLaneTaskTimeoutError(err);
     const error = isCronLaneTimeout ? abortReason() : normalizeCronRunErrorText(err);
     outcome = "error";
     outcomeError = error;
+    const admissionDisposition =
+      err instanceof CronSessionLifecycleClaimError
+        ? err.admissionDisposition
+        : err instanceof CronExecutionRootRuntimeError || !executionStarted
+          ? "rejected"
+          : undefined;
     return prepared.context.withRunSession({
       status: "error",
       error,
       executionStarted,
-      ...(!executionStarted
-        ? {
-            admissionDisposition:
-              err instanceof CronSessionLifecycleClaimError
-                ? err.admissionDisposition
-                : ("rejected" as const),
-          }
-        : {}),
+      ...(admissionDisposition ? { admissionDisposition } : {}),
       // Carry the already-resolved run model into the error/timeout row so
       // Task-run history keeps provider/model attribution instead of looking like
       // an un-attributed cron timeout. finalizeCronRun does the same via
@@ -373,10 +380,18 @@ export async function runCronIsolatedAgentTurn(params: {
           });
         }
       } finally {
-        // Release runtime references after the run completes (success or failure).
-        // The session entry has already been persisted to disk by this point,
-        // so the in-memory store and run context can be safely dropped.
+        // Release admission before exact-run alias deletion starts its own lifecycle mutation.
         try {
+          try {
+            await disposeCronRunContext({
+              sessionId: initialSessionId,
+              cronSession: prepared.context.cronSession,
+              ownsRunContext,
+              runContextOwnerToken,
+            });
+          } finally {
+            prepared.context.sessionWorkAdmission.release();
+          }
           if (prepared.context.runContinuationSession) {
             try {
               await removeCronRunContinuationSessionIfIdle(prepared.context.runSessionKey);
@@ -386,16 +401,8 @@ export async function runCronIsolatedAgentTurn(params: {
               );
             }
           }
-          await disposeCronRunContext({
-            sessionId: initialSessionId,
-            cronSession: prepared.context.cronSession,
-            ownsRunContext,
-            runContextOwnerToken,
-          });
         } finally {
-          prepared.context.sessionWorkAdmission.release();
-          // Only run-scoped browser identities end with this invocation.
-          // Persistent cron targets keep the session and its tracked tabs alive.
+          // Only run-scoped browser identities end here; persistent targets keep tracked tabs.
           if (prepared.context.runSessionKey !== prepared.context.agentSessionKey) {
             await cleanupBrowserSessionsForLifecycleEnd({
               cfg: prepared.context.cfgWithAgentDefaults,

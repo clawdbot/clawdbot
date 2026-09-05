@@ -12,7 +12,9 @@ type PluginsHubHeaderProps = {
 
 export function renderPluginsHubHeader(props: PluginsHubHeaderProps): TemplateResult {
   return html`
-    <section class="content-header content-header--page hub-page-header plugins-hub-header">
+    <section
+      class="content-header content-header--settings content-header--page hub-page-header plugins-hub-header"
+    >
       <div class="hub-page-header__title">
         <h1 class="page-title">${titleForRoute("plugins")}</h1>
         <div class="page-subtitle">

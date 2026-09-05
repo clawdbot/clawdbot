@@ -78,6 +78,7 @@ async function sendMessageTelegramWithContext(
     opts,
     thread: {
       messageThreadId: opts.messageThreadId,
+      directMessagesTopicId: opts.directMessagesTopicId,
       replyToMessageId: opts.replyToMessageId,
       replyQuoteText: opts.quoteText,
       useReplyIdAsQuoteSource: true,

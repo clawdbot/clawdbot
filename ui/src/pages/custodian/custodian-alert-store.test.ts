@@ -65,6 +65,20 @@ describe("CustodianAlertStore", () => {
     unsubscribe();
   });
 
+  it("retires scoped facts and a queued question when its owner loses authority", () => {
+    let current = true;
+    const admit = vi.fn(() => true);
+    const send = vi.fn();
+    custodianAlertStore.present(alert("scoped"), { isCurrent: () => current, admit });
+    current = false;
+
+    custodianAlertStore.askIfReady(send);
+
+    expect(custodianAlertStore.alert).toBeNull();
+    expect(admit).not.toHaveBeenCalled();
+    expect(send).not.toHaveBeenCalled();
+  });
+
   it("renders without sending when custodian chat is unavailable", async () => {
     const request = vi.fn();
     const { context } = createContext(request, []);

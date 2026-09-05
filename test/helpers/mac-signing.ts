@@ -1,6 +1,7 @@
-import { spawnSync } from "node:child_process";
-import { chmodSync, existsSync, mkdirSync, readFileSync, writeFileSync } from "node:fs";
+import { existsSync, readFileSync } from "node:fs";
+import { chmod, mkdir, writeFile } from "node:fs/promises";
 import path from "node:path";
+import type { MacScriptFixture } from "../scripts/mac-script-fixture.test-support.js";
 import { machoFixture } from "./mac-native.js";
 
 const nativeMetadataReply = `
@@ -12,9 +13,9 @@ for arg in "$@"; do
 done
 `;
 
-export function installFakeCodesign(binDir: string) {
+export async function installFakeCodesign(binDir: string) {
   const fakeCodesign = path.join(binDir, "codesign");
-  writeFileSync(
+  await writeFile(
     fakeCodesign,
     `#!/usr/bin/env bash
 set -euo pipefail
@@ -57,12 +58,12 @@ else
 fi
 `,
   );
-  chmodSync(fakeCodesign, 0o755);
+  await chmod(fakeCodesign, 0o755);
 }
 
-export function installTransientFakeCodesign(binDir: string) {
+export async function installTransientFakeCodesign(binDir: string) {
   const fakeCodesign = path.join(binDir, "codesign");
-  writeFileSync(
+  await writeFile(
     fakeCodesign,
     `#!/usr/bin/env bash
 set -euo pipefail
@@ -91,12 +92,12 @@ if [ "$count" -le "$CODESIGN_TRANSIENT_FAILURES" ]; then
 fi
 `,
   );
-  chmodSync(fakeCodesign, 0o755);
+  await chmod(fakeCodesign, 0o755);
 }
 
-export function installElevationFakeCodesign(binDir: string) {
+export async function installElevationFakeCodesign(binDir: string) {
   const fakeCodesign = path.join(binDir, "codesign");
-  writeFileSync(
+  await writeFile(
     fakeCodesign,
     `#!/usr/bin/env bash
 set -euo pipefail
@@ -124,7 +125,7 @@ done
 exit 0
 `,
   );
-  chmodSync(fakeCodesign, 0o755);
+  await chmod(fakeCodesign, 0o755);
 }
 
 type SigningEvent = {
@@ -135,7 +136,11 @@ type SigningEvent = {
 };
 type FileEvent = { args: string[]; magics: string[] };
 
-export function makeSigningFixture(root: string, appName = "Odd ' app.app") {
+export async function makeSigningFixture(
+  mac: MacScriptFixture,
+  root: string,
+  appName = "Odd ' app.app",
+) {
   const app = path.join(root, appName);
   const worker = path.join(app, "Contents/Resources/node-worker/arm64");
   const bin = path.join(root, "bin");
@@ -147,11 +152,11 @@ export function makeSigningFixture(root: string, appName = "Odd ' app.app") {
   const sealed = path.join(capture, "sealed");
   const swaps = path.join(capture, "swaps.jsonl");
   for (const dir of [worker, bin, capture]) {
-    mkdirSync(dir, { recursive: true });
+    await mkdir(dir, { recursive: true });
   }
-  writeFileSync(options, "{}");
+  await writeFile(options, "{}");
   const fake = path.join(bin, "codesign");
-  writeFileSync(
+  await writeFile(
     fake,
     `#!${process.execPath}
 const fs = require('node:fs');
@@ -196,9 +201,9 @@ if (args.includes('--sign') && target === ${JSON.stringify(app)}) {
 })().catch(error => { console.error(error); process.exit(74); });
 `,
   );
-  chmodSync(fake, 0o755);
+  await chmod(fake, 0o755);
   const boundary = path.join(root, "boundary.py");
-  writeFileSync(
+  await writeFile(
     boundary,
     `import json, os, runpy, subprocess, sys
 config = json.load(open(${JSON.stringify(options)}))
@@ -282,7 +287,7 @@ runpy.run_path(sys.argv[0], run_name='__main__')
   );
   const bashEnv = path.join(root, "bash-env");
   const quote = (value: string) => `'${value.replaceAll("'", "'\\''")}'`;
-  writeFileSync(
+  await writeFile(
     bashEnv,
     `function /usr/bin/file() { command /usr/bin/python3 ${quote(boundary)} file "$@"; }
 function /usr/bin/python3() {
@@ -294,7 +299,7 @@ function /usr/bin/python3() {
 `,
   );
   const driver = path.join(root, "swap-driver.py");
-  writeFileSync(
+  await writeFile(
     driver,
     `import json, os, select, socket, subprocess, sys, tempfile
 config = json.load(open(${JSON.stringify(options)}))
@@ -332,17 +337,17 @@ with tempfile.TemporaryDirectory(prefix='oc-sign-swap-', dir='/tmp') as control:
   return {
     app,
     worker,
-    put(relative: string, data: Buffer | string = machoFixture()) {
+    async put(relative: string, data: Buffer | string = machoFixture()) {
       const filename = path.join(app, relative);
-      mkdirSync(path.dirname(filename), { recursive: true });
-      writeFileSync(filename, data);
+      await mkdir(path.dirname(filename), { recursive: true });
+      await writeFile(filename, data);
       return filename;
     },
-    run(config: Record<string, unknown> = {}, elevation = false, target = app) {
-      writeFileSync(options, JSON.stringify(config));
+    async run(config: Record<string, unknown> = {}, elevation = false, target = app) {
+      await writeFile(options, JSON.stringify(config));
       const command = config.swapStage === "before-sign" ? "/usr/bin/python3" : "/bin/bash";
       const args = ["scripts/codesign-mac-app.sh", target];
-      return spawnSync(command, config.swapStage === "before-sign" ? [driver, ...args] : args, {
+      return mac.run(command, config.swapStage === "before-sign" ? [driver, ...args] : args, {
         encoding: "utf8",
         env: {
           HOME: root,
@@ -355,9 +360,9 @@ with tempfile.TemporaryDirectory(prefix='oc-sign-swap-', dir='/tmp') as control:
         },
       });
     },
-    scan(config: Record<string, unknown> = {}) {
-      writeFileSync(options, JSON.stringify(config));
-      return spawnSync(
+    async scan(config: Record<string, unknown> = {}) {
+      await writeFile(options, JSON.stringify(config));
+      return mac.run(
         "/usr/bin/python3",
         [boundary, "scan", "scripts/lib/mac-native-inventory.py", app],
         {

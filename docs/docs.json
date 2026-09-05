@@ -53,8 +53,52 @@
   },
   "redirects": [
     {
+      "source": "/cli/commitments",
+      "destination": "/en/automation#retired-inferred-commitments"
+    },
+    {
+      "source": "/concepts/commitments",
+      "destination": "/en/automation#retired-inferred-commitments"
+    },
+    {
+      "source": "/concepts/channel-docking",
+      "destination": "/en/concepts/session#retired-channel-docking"
+    },
+    {
       "source": "/install/clawdock",
-      "destination": "/install/docker#clawdock-migration"
+      "destination": "/en/install/docker#clawdock-migration"
+    },
+    {
+      "source": "/plan/swarms",
+      "destination": "/en/tools/swarm"
+    },
+    {
+      "source": "/plugins/reference/linux-canvas",
+      "destination": "/en/platforms/linux#retired-linux-canvas"
+    },
+    {
+      "source": "/plugins/reference/open-prose",
+      "destination": "/en/prose"
+    },
+    {
+      "source": "/plugins/reference/workspaces",
+      "destination": "/en/web/dashboards#retired-workspaces"
+    },
+    {
+      "source": "/providers/qwen-oauth",
+      "destination": "/en/providers/qwen#retired-qwen-portal-authentication"
+    },
+    {
+      "source": "/refactor/canvas",
+      "destination": "/en/platforms/mac/canvas"
+    },
+    {
+      "source": "/reference/templates/TOOLS.dev",
+      "destination": "/en/reference/templates/AGENTS.dev#tools"
+    },
+    {
+      "source": "/web/workspaces",
+      "destination": "/en/web/dashboards#retired-workspaces"
     },
     {
       "source": "/concepts/message-lifecycle-refactor",
@@ -1123,6 +1167,10 @@
     {
       "source": "/gateway/bridge-protocol",
       "destination": "/gateway/protocol"
+    },
+    {
+      "source": "/providers/inferrs",
+      "destination": "/providers/llmman"
     }
   ],
   "navigation": {
@@ -1435,6 +1483,7 @@
                 "group": "Building plugins",
                 "pages": [
                   "plugins/building-plugins",
+                  "plugins/feature-plugins",
                   "plugins/tool-plugins",
                   "plugins/sdk-channel-plugins",
                   "plugins/sdk-provider-plugins",
@@ -1633,10 +1682,10 @@
                   "providers/gradium",
                   "providers/groq",
                   "providers/huggingface",
-                  "providers/inferrs",
                   "providers/inworld",
                   "providers/kilocode",
                   "providers/litellm",
+                  "providers/llmman",
                   "providers/lmstudio",
                   "providers/longcat",
                   "providers/meta",
@@ -2116,6 +2165,8 @@
                 "group": "Release notes",
                 "pages": [
                   "releases/index",
+                  "releases/2026.9.1",
+                  "releases/2026.8.2",
                   "releases/2026.8.1",
                   "releases/2026.7.1",
                   "releases/2026.6.11"

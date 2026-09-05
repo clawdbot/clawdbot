@@ -3917,13 +3917,6 @@ describe("native hook relay registry", () => {
         tool_input: { command: "git status" },
       },
     });
-    relay.unregister();
-    registerNativeHookRelay({
-      provider: "codex",
-      relayId: "codex-stable-permission-cache",
-      sessionId: "session-1",
-      runId: "run-2",
-    });
     const second = await invokeNativeHookRelay({
       provider: "codex",
       relayId: relay.relayId,

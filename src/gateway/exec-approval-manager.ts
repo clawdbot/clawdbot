@@ -1,26 +1,24 @@
-// Gateway exec approval manager.
-// Tracks pending operator decisions and short-lived resolved approval records.
 import { randomUUID } from "node:crypto";
-import { expectDefined } from "@openclaw/normalization-core";
 import {
   resolveExpiresAtMsFromDurationMs,
   resolveTimerTimeoutMs,
 } from "@openclaw/normalization-core/number-coercion";
-import { normalizeLowercaseStringOrEmpty } from "@openclaw/normalization-core/string-coerce";
-import type { ExecutionIdentityAdmissionToken } from "../audit/execution-identity-admission.js";
+import { asOptionalObjectRecord } from "@openclaw/normalization-core/record-coerce";
 import { buildApprovalPresentation } from "../infra/approval-presentation.js";
-import { buildApprovalResolutionRef } from "../infra/approval-resolution-ref.js";
-import type {
-  ExecApprovalDecision,
-  ExecApprovalRequestPayload as InfraExecApprovalRequestPayload,
-} from "../infra/exec-approvals.js";
+import type { ExecApprovalDecision, ExecApprovalRequestPayload } from "../infra/exec-approvals.js";
 import {
-  captureGatewayRootWorkAdmissionContinuationScope,
-  type GatewayRootWorkAdmissionContinuationScope,
-} from "../process/gateway-work-admission.js";
-import type { OpenClawStateDatabaseOptions } from "../state/openclaw-state-db.js";
-import type { AgentRuntimeDelegatedAuthority } from "./agent-runtime-identity-token.js";
-import type { CronStandingGrantMintSpec } from "./operator-approval-standing-grants.js";
+  EXEC_APPROVAL_RESOLVED_ENTRY_GRACE_MS,
+  ExecApprovalLifecycle,
+} from "./exec-approval-lifecycle.js";
+import type {
+  ExecApprovalDurableLookup,
+  ExecApprovalForceDenyResult,
+  ExecApprovalManagerOptions,
+  ExecApprovalRecord,
+  ExecApprovalResolutionSource,
+  ExecApprovalResolveResult,
+  OperatorApprovalLifecycleEvent,
+} from "./exec-approval-manager.types.js";
 import {
   consumeOperatorApprovalAllowOnce,
   forceDenyOperatorApproval,
@@ -31,37 +29,19 @@ import {
   type OperatorApprovalRecord,
   type OperatorApprovalResolver,
   type OperatorApprovalSource,
-  type OperatorApprovalStatus,
   type OperatorApprovalTerminalReason,
   type ResolveOperatorApprovalResult,
 } from "./operator-approval-store.js";
 
-// Grace period to keep resolved entries for late awaitDecision calls.
-// Exported because system.run timeout replay bounds its ask-fallback window
-// to the same anchor; drifting values would widen or starve that window.
-export const EXEC_APPROVAL_RESOLVED_ENTRY_GRACE_MS = 15_000;
+export { EXEC_APPROVAL_RESOLVED_ENTRY_GRACE_MS } from "./exec-approval-lifecycle.js";
+export type {
+  ExecApprovalIdLookupResult,
+  ExecApprovalRecord,
+  OperatorApprovalLifecycleEvent,
+  OperatorStandingGrantMintSpec,
+} from "./exec-approval-manager.types.js";
 
-function unrefTimer(timer: ReturnType<typeof setTimeout>): void {
-  const unref = (timer as { unref?: () => void }).unref;
-  if (typeof unref === "function") {
-    unref.call(timer);
-  }
-}
-
-function scheduleResolvedEntryCleanup(cleanup: () => void): ReturnType<typeof setTimeout> {
-  // Resolved approvals stay visible briefly so node.invoke sanitizers can
-  // consume a just-approved id after the UI decision races the command retry.
-  const timer = setTimeout(cleanup, EXEC_APPROVAL_RESOLVED_ENTRY_GRACE_MS);
-  unrefTimer(timer);
-  return timer;
-}
-
-function resolveApprovalTimeoutMs(timeoutMs: number): number {
-  return resolveTimerTimeoutMs(timeoutMs, 1);
-}
-
-// Approval IDs cross terminal, UI, push, and channel surfaces unchanged. Keep
-// unsafe display bytes and unbounded identifiers out at the creation boundary.
+// These opaque ids cross terminal, UI, push, and channel surfaces unchanged.
 const EXPLICIT_APPROVAL_ID_INVALID_CHAR_PATTERN = /[^A-Za-z0-9._:-]/;
 
 /** Typed creation failure for an explicit approval id outside the shared safe format. */
@@ -77,186 +57,60 @@ export class InvalidApprovalIdError extends Error {
   }
 }
 
-type ExecApprovalRequestPayload = InfraExecApprovalRequestPayload;
-
-// Distinguishes operator decisions from trusted auto-review resolutions.
-// system.run replay validation is stricter for auto-review approvals, so this
-// runtime fact must survive on the process-local record (bindings never persist).
-type ExecApprovalResolutionSource = "operator" | "auto-review";
-
-export type ExecApprovalRecord<TPayload = ExecApprovalRequestPayload> = {
-  id: string;
-  request: TPayload;
-  createdAtMs: number;
-  expiresAtMs: number;
-  // Caller metadata (best-effort). Used to prevent other clients from replaying an approval id.
-  requestedByConnId?: string | null;
-  requestedByDeviceId?: string | null;
-  requestedByClientId?: string | null;
-  requestedByDeviceTokenAuth?: boolean;
-  approvalReviewerDeviceIds?: string[];
-  resolvedAtMs?: number;
-  decision?: ExecApprovalDecision;
-  consumedDecision?: ExecApprovalDecision;
-  resolutionSource?: ExecApprovalResolutionSource;
-  askFallbackConsumed?: boolean;
-  resolvedBy?: string | null;
-  status?: OperatorApprovalStatus;
-  terminalReason?: OperatorApprovalTerminalReason | null;
-  runtimeEpoch?: string;
-  resolverKind?: OperatorApprovalResolver["kind"] | null;
-  consumedAtMs?: number | null;
-  consumedBy?: string | null;
-  executionIdentityToken?: ExecutionIdentityAdmissionToken;
-  /** Exact source authority retained only for use-time liveness validation. */
-  agentRuntimeDelegatedAuthority?: AgentRuntimeDelegatedAuthority;
-};
-
-type OperatorApprovalPersistenceRuntime = {
-  runtimeEpoch: string;
-  databaseOptions?: OpenClawStateDatabaseOptions;
-};
-
-type ExecApprovalManagerOptions<TPayload> = {
-  approvalKind?: OperatorApprovalKind;
-  persistence?: OperatorApprovalPersistenceRuntime;
-  resolveAllowedDecisions?: (request: TPayload) => readonly ExecApprovalDecision[];
-  /** Session-lineage audience policy is gateway-owned and injected as a
-   * non-throwing resolver; importing it here would close an agents->gateway
-   * barrel cycle. Absent resolver (tests) seeds only the raising session. */
-  resolveAudienceSessionKeys?: (
-    sourceSessionKey: string,
-    sourceAgentId?: string | null,
-  ) => string[];
-  onError?: (
-    error: Error,
-    context: { approvalId: string; approvalKind: OperatorApprovalKind; operation: "expire" },
-  ) => void;
-  onLifecycle?: (event: OperatorApprovalLifecycleEvent) => void;
-  /** Cron-context allow-always requests mint a scoped standing grant in the
-   * durable resolution transaction. Returning null keeps the decision
-   * grant-free (non-cron requests, aborted runs, missing bindings). */
-  resolveStandingGrantMint?: (request: TPayload) => CronStandingGrantMintSpec | null;
-  /** Default grant terms frozen at resolve time: config-driven expiry stamp,
-   * or null for until-revoked. A per-resolve override wins over this default. */
-  resolveStandingGrantExpiresAtMs?: (nowMs: number) => number | null;
-  /** Durable timeout expiry can be first observed by a timer, lookup, or replay.
-   * Publish from the local settlement owner so every ordering reaches reviewers. */
-  onExpired?: (record: OperatorApprovalRecord, liveRecord: ExecApprovalRecord<TPayload>) => void;
-  validateAgentRuntimeDelegatedAuthority?: (authority: AgentRuntimeDelegatedAuthority) => boolean;
-};
-
-export type OperatorApprovalLifecycleEvent = {
-  phase: "pending" | "terminal";
-  record: OperatorApprovalRecord;
-};
-
-type WithLiveRecord<TResult, TPayload> = TResult extends { record: OperatorApprovalRecord }
-  ? TResult & { liveRecord?: ExecApprovalRecord<TPayload> }
-  : TResult;
-
-type ExecApprovalResolveResult<TPayload = ExecApprovalRequestPayload> = WithLiveRecord<
-  ResolveOperatorApprovalResult,
-  TPayload
->;
-
-type ExecApprovalForceDenyResult<TPayload = ExecApprovalRequestPayload> = WithLiveRecord<
-  ForceDenyOperatorApprovalResult,
-  TPayload
->;
-
-type ExecApprovalDurableLookup =
-  | { outcome: "found"; record: OperatorApprovalRecord }
-  | { outcome: "missing" | "corrupt"; id: string };
-
-type PendingEntry<TPayload = ExecApprovalRequestPayload> = {
-  record: ExecApprovalRecord<TPayload>;
-  resolve: (decision: ExecApprovalDecision | null) => void;
-  timer: ReturnType<typeof setTimeout> | null;
-  cleanupTimer: ReturnType<typeof setTimeout> | null;
-  handoffRetainCount: number;
-  handoffReleasedAtMs: number | null;
-  retainForManagerLifetime: boolean;
-  promise: Promise<ExecApprovalDecision | null>;
-  admissionContinuation: GatewayRootWorkAdmissionContinuationScope | null;
-};
-
-export type ExecApprovalIdLookupResult =
-  | { kind: "exact" | "prefix"; id: string }
-  | { kind: "ambiguous"; ids: string[] }
-  | { kind: "none" };
-
 function readRequestString(request: unknown, key: string): string | null {
-  if (typeof request !== "object" || request === null) {
-    return null;
-  }
-  const value = (request as Record<string, unknown>)[key];
+  const value = asOptionalObjectRecord(request)?.[key];
   return typeof value === "string" && value.trim() ? value.trim() : null;
 }
 
-function resolveApprovalSource(request: unknown): OperatorApprovalSource {
-  return {
-    agentId: readRequestString(request, "agentId"),
-    sessionKey: readRequestString(request, "sessionKey"),
-    sessionId: readRequestString(request, "sessionId"),
-    runId: readRequestString(request, "runId"),
-    toolCallId: readRequestString(request, "toolCallId"),
-    toolName: readRequestString(request, "toolName"),
-  };
-}
-
-function normalizeAllowedDecisions(
-  decisions: readonly ExecApprovalDecision[] | undefined,
-): ExecApprovalDecision[] {
-  const normalized: ExecApprovalDecision[] = [];
-  for (const decision of decisions ?? ["allow-once", "allow-always", "deny"]) {
-    if (
-      (decision === "allow-once" || decision === "allow-always" || decision === "deny") &&
-      !normalized.includes(decision)
-    ) {
-      normalized.push(decision);
-    }
+/** Approval creation and persistence precede every local wait or delivery handoff. */
+export class ExecApprovalManager<
+  TPayload = ExecApprovalRequestPayload,
+> extends ExecApprovalLifecycle<TPayload> {
+  constructor(protected readonly options: ExecApprovalManagerOptions<TPayload>) {
+    super();
   }
-  // Denial is always a valid fail-closed verdict, including for malformed input.
-  if (!normalized.includes("deny")) {
-    normalized.push("deny");
-  }
-  return normalized;
-}
-
-function attachLiveRecord<TPayload, TResult extends { outcome: string }>(
-  result: TResult,
-  liveRecord: ExecApprovalRecord<TPayload> | undefined,
-): WithLiveRecord<TResult, TPayload> {
-  if (!("record" in result) || !liveRecord) {
-    return result as WithLiveRecord<TResult, TPayload>;
-  }
-  return {
-    ...result,
-    liveRecord,
-  } as WithLiveRecord<TResult, TPayload>;
-}
-
-// Without `persistence` the manager runs process-local-only. Gateway
-// production always injects persistence (server-aux-handlers); local mode
-// exists for unit tests and is slated for removal once the embedded broker
-// migrates onto the durable store — do not grow it new behavior.
-export class ExecApprovalManager<TPayload = ExecApprovalRequestPayload> {
-  private pending = new Map<string, PendingEntry<TPayload>>();
-
-  constructor(private readonly options: ExecApprovalManagerOptions<TPayload> = {}) {}
 
   get approvalKind(): OperatorApprovalKind {
     return this.options.approvalKind ?? "exec";
   }
 
-  get runtimeEpoch(): string | null {
-    return this.options.persistence?.runtimeEpoch ?? null;
+  override get runtimeEpoch(): string {
+    return this.options.persistence.runtimeEpoch;
+  }
+
+  private resolveApprovalSource(request: TPayload): OperatorApprovalSource {
+    return {
+      agentId: readRequestString(request, "agentId"),
+      sessionKey: readRequestString(request, "sessionKey"),
+      sessionId: readRequestString(request, "sessionId"),
+      runId: readRequestString(request, "runId"),
+      toolCallId: readRequestString(request, "toolCallId"),
+      toolName: readRequestString(request, "toolName"),
+    };
+  }
+
+  private allowedDecisionsForRequest(request: TPayload): ExecApprovalDecision[] {
+    const decisions = this.options.resolveAllowedDecisions?.(request);
+    const normalized: ExecApprovalDecision[] = [];
+    for (const decision of decisions ?? ["allow-once", "allow-always", "deny"]) {
+      if (
+        (decision === "allow-once" || decision === "allow-always" || decision === "deny") &&
+        !normalized.includes(decision)
+      ) {
+        normalized.push(decision);
+      }
+    }
+    // Denial remains valid even when the request supplies malformed allowed decisions.
+    if (!normalized.includes("deny")) {
+      normalized.push("deny");
+    }
+    return normalized;
   }
 
   create(request: TPayload, timeoutMs: number, id?: string | null): ExecApprovalRecord<TPayload> {
+    this.assertNotRetired();
     const now = Date.now();
-    const resolvedTimeoutMs = resolveApprovalTimeoutMs(timeoutMs);
+    const resolvedTimeoutMs = resolveTimerTimeoutMs(timeoutMs, 1);
     const expiresAtMs = resolveExpiresAtMsFromDurationMs(resolvedTimeoutMs, { nowMs: now });
     if (expiresAtMs === undefined) {
       throw new Error("approval expiry is unavailable");
@@ -272,25 +126,20 @@ export class ExecApprovalManager<TPayload = ExecApprovalRequestPayload> {
     ) {
       throw new InvalidApprovalIdError();
     }
-    const resolvedId = hasExplicitId ? id : randomUUID();
-    const record: ExecApprovalRecord<TPayload> = {
-      id: resolvedId,
+    return {
+      id: hasExplicitId ? id : randomUUID(),
       request,
       createdAtMs: now,
       expiresAtMs,
     };
-    return record;
   }
 
-  /**
-   * Register an approval record and return a promise that resolves when the decision is made.
-   * This separates registration (synchronous) from waiting (async), allowing callers to
-   * confirm registration before the decision is made.
-   */
+  /** Synchronously persists/registers the request before returning its authority promise. */
   register(
     record: ExecApprovalRecord<TPayload>,
     _timeoutMs: number,
   ): Promise<ExecApprovalDecision | null> {
+    this.assertNotRetired();
     if (
       record.agentRuntimeDelegatedAuthority &&
       this.options.validateAgentRuntimeDelegatedAuthority?.(
@@ -299,97 +148,96 @@ export class ExecApprovalManager<TPayload = ExecApprovalRequestPayload> {
     ) {
       throw new Error("agent runtime approval authority is no longer active");
     }
+    if (record.approvalAuthority && record.approvalAuthority() === false) {
+      throw new Error("approval authority is no longer active");
+    }
     const persistence = this.options.persistence;
-    const allowedDecisions = persistence
-      ? normalizeAllowedDecisions(this.options.resolveAllowedDecisions?.(record.request))
-      : null;
-    const presentation = persistence
-      ? buildApprovalPresentation({
-          kind: this.approvalKind,
-          request: record.request,
-          allowedDecisions: allowedDecisions ?? [],
-        })
-      : null;
-    if (persistence && !presentation) {
-      // No durable row or live waiter may exist without a safe prompt that every
-      // reviewer surface can render; otherwise an approval could be unreviewable.
+    const presentation = buildApprovalPresentation({
+      kind: this.approvalKind,
+      request: record.request,
+      allowedDecisions: this.allowedDecisionsForRequest(record.request),
+    });
+    if (!presentation) {
       throw new Error("approval cannot be persisted without a valid reviewer presentation");
     }
-
     const existing = this.pending.get(record.id);
     if (existing) {
-      // Idempotent: return existing promise if still pending
       if (existing.record.resolvedAtMs === undefined) {
         return existing.promise;
       }
-      // Already resolved - don't allow re-registration
       throw new Error(`approval id '${record.id}' already resolved`);
     }
 
-    let insertedRecord: OperatorApprovalRecord | null = null;
-    if (persistence) {
-      const source = resolveApprovalSource(record.request);
-      let audienceSessionKeys: string[] = [];
-      if (source.sessionKey) {
-        // The injected resolver owns lineage lookup plus its own agent-scoped
-        // fallback and never throws. Without one (tests), seed the raw source.
-        audienceSessionKeys = this.options.resolveAudienceSessionKeys?.(
-          source.sessionKey,
-          source.agentId,
-        ) ?? [source.sessionKey];
-      }
-      const inserted = insertOperatorApproval({
-        approval: {
-          id: record.id,
-          kind: this.approvalKind,
-          presentation: presentation!,
-          requester: {
-            deviceId: record.requestedByDeviceId,
-            clientId: record.requestedByClientId,
-            deviceTokenAuth: record.requestedByDeviceTokenAuth === true,
-          },
-          reviewerDeviceIds: record.approvalReviewerDeviceIds,
-          source,
-          audienceSessionKeys,
-          runtimeEpoch: persistence.runtimeEpoch,
-          createdAtMs: record.createdAtMs,
-          expiresAtMs: record.expiresAtMs,
-          ...(record.executionIdentityToken
-            ? { executionIdentityToken: record.executionIdentityToken }
-            : {}),
-        },
-        databaseOptions: persistence.databaseOptions,
-      });
-      if (inserted.outcome === "conflict") {
-        throw new Error(`approval id '${record.id}' conflicts with persisted state`);
-      }
-      if (inserted.outcome === "inserted") {
-        insertedRecord = inserted.record;
-      }
+    const source = this.resolveApprovalSource(record.request);
+    let audienceSessionKeys: string[] = [];
+    if (source.sessionKey) {
+      // Gateway owns lineage resolution; without it only the source is included.
+      audienceSessionKeys = this.options.resolveAudienceSessionKeys?.(
+        source.sessionKey,
+        source.agentId,
+      ) ?? [source.sessionKey];
     }
-
-    let resolvePromise: (decision: ExecApprovalDecision | null) => void;
-    const promise = new Promise<ExecApprovalDecision | null>((resolve) => {
-      resolvePromise = resolve;
+    const inserted = insertOperatorApproval({
+      approval: {
+        id: record.id,
+        kind: this.approvalKind,
+        presentation,
+        requester: {
+          deviceId: record.requestedByDeviceId,
+          clientId: record.requestedByClientId,
+          deviceTokenAuth: record.requestedByDeviceTokenAuth === true,
+        },
+        reviewerDeviceIds: record.approvalReviewerDeviceIds,
+        source,
+        audienceSessionKeys,
+        runtimeEpoch: persistence.runtimeEpoch,
+        createdAtMs: record.createdAtMs,
+        expiresAtMs: record.expiresAtMs,
+        ...(record.executionIdentityToken
+          ? { executionIdentityToken: record.executionIdentityToken }
+          : {}),
+      },
+      databaseOptions: persistence.databaseOptions,
     });
-    // Create entry first so we can capture it in the closure (not re-fetch from map)
-    const entry: PendingEntry<TPayload> = {
-      record,
-      resolve: resolvePromise!,
-      timer: null,
-      cleanupTimer: null,
-      handoffRetainCount: 0,
-      handoffReleasedAtMs: null,
-      retainForManagerLifetime: false,
-      promise,
-      admissionContinuation: captureGatewayRootWorkAdmissionContinuationScope(),
-    };
-    this.pending.set(record.id, entry);
-    this.scheduleExpiryTimer(entry);
-    if (insertedRecord) {
-      this.emitLifecycle({ phase: "pending", record: insertedRecord });
+    if (inserted.outcome === "conflict") {
+      throw new Error(`approval id '${record.id}' conflicts with persisted state`);
+    }
+    const promise = this.registerEntry(record);
+    for (const signal of record.approvalSignals ?? []) {
+      if (signal.aborted) {
+        this.forceDenyIfRuntimeAuthorityClosed(record.id);
+        continue;
+      }
+      signal.addEventListener(
+        "abort",
+        () => {
+          const closed = this.forceDenyIfRuntimeAuthorityClosed(record.id);
+          if (closed?.outcome === "denied" && closed.liveRecord) {
+            this.options.onExpired?.(closed.record, closed.liveRecord);
+          }
+        },
+        { once: true },
+      );
+    }
+    if (inserted.outcome === "inserted") {
+      this.emitLifecycle({ phase: "pending", record: inserted.record });
     }
     return promise;
+  }
+
+  private isRuntimeAuthorityActive(record: ExecApprovalRecord<TPayload>): boolean {
+    const delegated = record.agentRuntimeDelegatedAuthority;
+    if (delegated && this.options.validateAgentRuntimeDelegatedAuthority?.(delegated) !== true) {
+      return false;
+    }
+    if (record.approvalSignals?.some((signal) => signal.aborted)) {
+      return false;
+    }
+    try {
+      return record.approvalAuthority?.() !== false;
+    } catch {
+      return false;
+    }
   }
 
   private emitLifecycle(event: OperatorApprovalLifecycleEvent): void {
@@ -399,52 +247,6 @@ export class ExecApprovalManager<TPayload = ExecApprovalRequestPayload> {
       // Stream fanout is observational. It must never change approval truth or
       // prevent the durable first-answer transition from releasing its waiter.
     }
-  }
-
-  private projectLocalRecord(record: ExecApprovalRecord<TPayload>): OperatorApprovalRecord | null {
-    const presentation = buildApprovalPresentation({
-      kind: this.approvalKind,
-      request: record.request,
-      allowedDecisions: normalizeAllowedDecisions(
-        this.options.resolveAllowedDecisions?.(record.request),
-      ),
-    });
-    if (!presentation) {
-      return null;
-    }
-    const status = record.status ?? (record.resolvedAtMs === undefined ? "pending" : "denied");
-    const source = resolveApprovalSource(record.request);
-    return {
-      id: record.id,
-      resolutionRef: buildApprovalResolutionRef({
-        approvalId: record.id,
-        approvalKind: this.approvalKind,
-      }),
-      kind: this.approvalKind,
-      status,
-      presentation,
-      requester: {
-        deviceId: record.requestedByDeviceId ?? null,
-        clientId: record.requestedByClientId ?? null,
-        deviceTokenAuth: record.requestedByDeviceTokenAuth === true,
-      },
-      reviewerDeviceIds: record.approvalReviewerDeviceIds ?? [],
-      source,
-      audienceSessionKeys: source.sessionKey ? [source.sessionKey] : [],
-      runtimeEpoch: this.runtimeEpoch ?? "process-local",
-      createdAtMs: record.createdAtMs,
-      expiresAtMs: record.expiresAtMs,
-      updatedAtMs: record.resolvedAtMs ?? record.createdAtMs,
-      decision: status === "pending" ? null : (record.decision ?? "deny"),
-      terminalReason: status === "pending" ? null : (record.terminalReason ?? "user"),
-      resolvedAtMs: record.resolvedAtMs ?? null,
-      resolver:
-        record.resolvedAtMs === undefined
-          ? null
-          : { kind: record.resolverKind ?? "runtime", id: record.resolvedBy ?? null },
-      consumedAtMs: record.consumedAtMs ?? null,
-      consumedBy: record.consumedBy ?? null,
-    };
   }
 
   /** Persist the first verdict, then release the process-local waiter. */
@@ -459,8 +261,11 @@ export class ExecApprovalManager<TPayload = ExecApprovalRequestPayload> {
       grantExpiresAtMs?: number | null;
     } = {},
   ): ExecApprovalResolveResult<TPayload> {
+    if (this.retired) {
+      return { outcome: "not-found" };
+    }
     if (decision !== "deny") {
-      const closed = this.forceDenyIfDelegatedAuthorityClosed(recordId);
+      const closed = this.forceDenyIfRuntimeAuthorityClosed(recordId);
       if (closed) {
         if (closed.outcome === "not-found" || closed.outcome === "corrupt") {
           return closed;
@@ -484,10 +289,11 @@ export class ExecApprovalManager<TPayload = ExecApprovalRequestPayload> {
         return repaired;
       }
       if (repaired.outcome === "denied" && decision === "deny") {
-        return attachLiveRecord(
-          { outcome: "resolved", record: repaired.record } as const,
-          repaired.liveRecord,
-        );
+        return {
+          outcome: "resolved",
+          record: repaired.record,
+          ...(repaired.liveRecord ? { liveRecord: repaired.liveRecord } : {}),
+        };
       }
       return {
         outcome: "already-resolved",
@@ -496,45 +302,20 @@ export class ExecApprovalManager<TPayload = ExecApprovalRequestPayload> {
         ...(repaired.liveRecord ? { liveRecord: repaired.liveRecord } : {}),
       };
     }
-    if (!persistence) {
-      if (!localEntry) {
-        return { outcome: "not-found" };
-      }
-      const previousDecision = localEntry.record.decision ?? localEntry.record.consumedDecision;
-      if (localEntry.record.resolvedAtMs !== undefined) {
-        const record = this.projectLocalRecord(localEntry.record);
-        return record
-          ? {
-              outcome: "already-resolved",
-              retry: previousDecision === decision ? "same" : "conflict",
-              record,
-              liveRecord: localEntry.record,
-            }
-          : { outcome: "corrupt" };
-      }
-      const allowedDecisions = normalizeAllowedDecisions(
-        this.options.resolveAllowedDecisions?.(localEntry.record.request),
-      );
-      if (!allowedDecisions.includes(decision)) {
-        const record = this.projectLocalRecord(localEntry.record);
-        return record
-          ? { outcome: "decision-not-allowed", record, liveRecord: localEntry.record }
-          : { outcome: "corrupt" };
-      }
-      this.resolveLocal(recordId, decision, localResolvedBy);
-      const record = this.projectLocalRecord(localEntry.record);
-      return record
-        ? { outcome: "resolved", record, liveRecord: localEntry.record }
-        : { outcome: "corrupt" };
-    }
     if (decision !== "deny" && !localEntry) {
       return { outcome: "not-found" };
     }
 
-    const standingGrantSpec =
+    let standingGrantSpec =
       decision === "allow-always" && localEntry
         ? (this.options.resolveStandingGrantMint?.(localEntry.record.request) ?? undefined)
         : undefined;
+    if (
+      standingGrantSpec?.kind === "mcp-tool" &&
+      localEntry?.record.mcpToolApprovalActive?.() !== true
+    ) {
+      standingGrantSpec = undefined;
+    }
     const standingGrant = standingGrantSpec
       ? {
           ...standingGrantSpec,
@@ -553,13 +334,21 @@ export class ExecApprovalManager<TPayload = ExecApprovalRequestPayload> {
         expectedKind: this.approvalKind,
         runtimeEpoch: persistence.runtimeEpoch,
         databaseOptions: persistence.databaseOptions,
-        ...(standingGrant ? { standingGrant } : {}),
+        ...(standingGrant?.kind === "cron" ? { standingGrant } : {}),
+        ...(standingGrant?.kind === "mcp-tool" ? { mcpToolGrant: standingGrant } : {}),
       });
     } catch (error) {
       this.settleLocalStorageFailure(recordId);
       throw error;
     }
 
+    if (result.outcome === "resolved" && standingGrant?.kind === "placement") {
+      this.options.retainPlacementStandingGrant?.({
+        ...standingGrant,
+        approvalId: recordId,
+        nowMs: result.record.resolvedAtMs ?? Date.now(),
+      });
+    }
     if (
       result.outcome === "resolved" ||
       result.outcome === "expired" ||
@@ -576,7 +365,7 @@ export class ExecApprovalManager<TPayload = ExecApprovalRequestPayload> {
     } else if (result.outcome === "not-found" || result.outcome === "corrupt") {
       this.settleLocalStorageFailure(recordId);
     }
-    return attachLiveRecord(result, localEntry?.record) as ExecApprovalResolveResult<TPayload>;
+    return "record" in result && localEntry ? { ...result, liveRecord: localEntry.record } : result;
   }
 
   /** Persist a fail-closed terminal state, then release the local waiter. */
@@ -589,36 +378,13 @@ export class ExecApprovalManager<TPayload = ExecApprovalRequestPayload> {
     requireDue = false,
     localResolvedBy: string | null = null,
   ): ExecApprovalForceDenyResult<TPayload> {
+    if (this.retired) {
+      return { outcome: "not-found" };
+    }
     const persistence = this.options.persistence;
     const localRecord = this.pending.get(recordId)?.record;
     if (localRecord?.terminalReason === "storage-corrupt") {
       return this.persistStorageCorruptDeny(recordId);
-    }
-    if (!persistence) {
-      const entry = this.pending.get(recordId);
-      if (!entry) {
-        return { outcome: "not-found" };
-      }
-      if (entry.record.resolvedAtMs !== undefined) {
-        const record = this.projectLocalRecord(entry.record);
-        return record
-          ? { outcome: "already-terminal", record, liveRecord: entry.record }
-          : { outcome: "corrupt" };
-      }
-      this.settleLocalEntry({
-        recordId,
-        decision:
-          localDecision === undefined ? (status === "denied" ? "deny" : null) : localDecision,
-        resolvedAtMs: Date.now(),
-        resolvedBy: localResolvedBy,
-        resolverKind: resolver.kind,
-        status,
-        terminalReason: reason,
-      });
-      const record = this.projectLocalRecord(entry.record);
-      return record
-        ? { outcome: "denied", record, liveRecord: entry.record }
-        : { outcome: "corrupt" };
     }
 
     let result: ForceDenyOperatorApprovalResult;
@@ -644,7 +410,7 @@ export class ExecApprovalManager<TPayload = ExecApprovalRequestPayload> {
     } else if (result.outcome === "not-found" || result.outcome === "corrupt") {
       this.settleLocalStorageFailure(recordId);
     }
-    return attachLiveRecord(result, localRecord) as ExecApprovalForceDenyResult<TPayload>;
+    return "record" in result && localRecord ? { ...result, liveRecord: localRecord } : result;
   }
 
   private settleLocalFromStore(
@@ -657,7 +423,7 @@ export class ExecApprovalManager<TPayload = ExecApprovalRequestPayload> {
     const liveRecord = this.pending.get(record.id)?.record;
     if (
       record.kind !== this.approvalKind ||
-      (persistence && record.runtimeEpoch !== persistence.runtimeEpoch) ||
+      record.runtimeEpoch !== persistence.runtimeEpoch ||
       record.status === "pending" ||
       record.resolvedAtMs === null
     ) {
@@ -704,6 +470,9 @@ export class ExecApprovalManager<TPayload = ExecApprovalRequestPayload> {
     lookup: ExecApprovalDurableLookup,
     localResolvedBy: string | null = null,
   ): OperatorApprovalRecord | null {
+    if (this.retired) {
+      return null;
+    }
     const recordId = lookup.outcome === "found" ? lookup.record.id : lookup.id;
     const entry = this.pending.get(recordId);
     if (lookup.outcome !== "found") {
@@ -715,7 +484,6 @@ export class ExecApprovalManager<TPayload = ExecApprovalRequestPayload> {
     const persistence = this.options.persistence;
     if (
       !entry ||
-      !persistence ||
       lookup.record.kind !== this.approvalKind ||
       lookup.record.runtimeEpoch !== persistence.runtimeEpoch
     ) {
@@ -750,9 +518,6 @@ export class ExecApprovalManager<TPayload = ExecApprovalRequestPayload> {
     if (!localEntry) {
       return { outcome: "not-found" };
     }
-    if (!persistence) {
-      return { outcome: "not-found" };
-    }
     const result = forceDenyOperatorApproval({
       id: recordId,
       status: "denied",
@@ -765,133 +530,13 @@ export class ExecApprovalManager<TPayload = ExecApprovalRequestPayload> {
     if (result.outcome === "denied" || result.outcome === "expired") {
       this.emitLifecycle({ phase: "terminal", record: result.record });
     }
-    return attachLiveRecord(result, localEntry.record) as ExecApprovalForceDenyResult<TPayload>;
+    return "record" in result ? { ...result, liveRecord: localEntry.record } : result;
   }
 
-  private settleLocalEntry(params: {
-    recordId: string;
-    decision: ExecApprovalDecision | null;
-    resolvedAtMs: number;
-    resolvedBy: string | null;
-    resolverKind: OperatorApprovalResolver["kind"] | null;
-    status: OperatorApprovalStatus;
-    terminalReason: OperatorApprovalTerminalReason | null;
-    consumedAtMs?: number | null;
-    consumedBy?: string | null;
-    resolutionSource?: ExecApprovalResolutionSource;
-    retainForManagerLifetime?: boolean;
-  }): boolean {
-    const pending = this.pending.get(params.recordId);
-    if (!pending || pending.record.resolvedAtMs !== undefined) {
-      return false;
-    }
-    if (pending.timer) {
-      clearTimeout(pending.timer);
-    }
-    pending.record.resolvedAtMs = params.resolvedAtMs;
-    if (params.decision === null) {
-      delete pending.record.decision;
-    } else {
-      pending.record.decision = params.decision;
-      // Only explicit decisions carry a source; timeouts/cancellations stay
-      // source-less so system.run ask-fallback replay can identify them.
-      pending.record.resolutionSource = params.resolutionSource ?? "operator";
-    }
-    pending.record.resolvedBy = params.resolvedBy;
-    pending.record.resolverKind = params.resolverKind;
-    pending.record.status = params.status;
-    pending.record.terminalReason = params.terminalReason;
-    pending.record.runtimeEpoch = this.runtimeEpoch ?? undefined;
-    pending.record.consumedAtMs = params.consumedAtMs ?? null;
-    pending.record.consumedBy = params.consumedBy ?? null;
-    pending.retainForManagerLifetime ||= params.retainForManagerLifetime === true;
-    pending.admissionContinuation?.release();
-    pending.admissionContinuation = null;
-    // Keep resolved entries briefly so late waitDecision and system.run replay
-    // validation see the same durable verdict that released this waiter.
-    pending.resolve(params.decision);
-    if (!pending.retainForManagerLifetime && pending.handoffRetainCount === 0) {
-      this.scheduleResolvedCleanup(pending);
-    }
-    return true;
-  }
-
-  private scheduleResolvedCleanup(entry: PendingEntry<TPayload>): void {
-    if (
-      entry.cleanupTimer ||
-      entry.record.resolvedAtMs === undefined ||
-      entry.retainForManagerLifetime ||
-      entry.handoffRetainCount > 0
-    ) {
-      return;
-    }
-    const cleanupTimer = scheduleResolvedEntryCleanup(() => {
-      if (entry.cleanupTimer !== cleanupTimer) {
-        return;
-      }
-      entry.cleanupTimer = null;
-      if (
-        this.pending.get(entry.record.id) === entry &&
-        entry.handoffRetainCount === 0 &&
-        !entry.retainForManagerLifetime
-      ) {
-        this.pending.delete(entry.record.id);
-      }
-    });
-    entry.cleanupTimer = cleanupTimer;
-  }
-
-  private resolvedGraceAnchorMs(entry: PendingEntry<TPayload>, nowMs: number): number | null {
-    if (entry.record.resolvedAtMs === undefined) {
-      return null;
-    }
-    if (entry.handoffRetainCount > 0) {
-      return nowMs;
-    }
-    return entry.handoffReleasedAtMs ?? entry.record.resolvedAtMs;
-  }
-
-  /** Retains an existing local binding across async delivery; final release starts a fresh grace. */
-  retainForHandoff(recordId: string): (() => void) | null {
-    const entry = this.pending.get(recordId);
-    if (!entry) {
-      return null;
-    }
-    const nowMs = Date.now();
-    const graceAnchorMs = this.resolvedGraceAnchorMs(entry, nowMs);
-    if (
-      !entry.retainForManagerLifetime &&
-      graceAnchorMs !== null &&
-      entry.handoffRetainCount === 0 &&
-      nowMs - graceAnchorMs >= EXEC_APPROVAL_RESOLVED_ENTRY_GRACE_MS
-    ) {
-      this.pending.delete(recordId);
-      return null;
-    }
-    if (entry.cleanupTimer) {
-      clearTimeout(entry.cleanupTimer);
-      entry.cleanupTimer = null;
-    }
-    entry.handoffRetainCount += 1;
-    let released = false;
-    return () => {
-      if (released) {
-        return;
-      }
-      released = true;
-      if (this.pending.get(recordId) !== entry) {
-        return;
-      }
-      entry.handoffRetainCount = Math.max(0, entry.handoffRetainCount - 1);
-      if (entry.handoffRetainCount > 0 || entry.record.resolvedAtMs === undefined) {
-        return;
-      }
-      entry.handoffReleasedAtMs = Date.now();
-      this.scheduleResolvedCleanup(entry);
-    };
-  }
-
-  private reportError(error: unknown, context: { approvalId: string; operation: "expire" }): void {
+  protected override reportError(
+    error: unknown,
+    context: { approvalId: string; operation: "expire" },
+  ): void {
     const onError = this.options.onError;
     if (!onError) {
       return;
@@ -906,32 +551,13 @@ export class ExecApprovalManager<TPayload = ExecApprovalRequestPayload> {
     }
   }
 
-  private scheduleExpiryTimer(entry: PendingEntry<TPayload>): void {
-    entry.timer = this.createExpiryTimer(entry.record);
-  }
-
-  private createExpiryTimer(record: ExecApprovalRecord<TPayload>): ReturnType<typeof setTimeout> {
-    const timerDelayMs = resolveApprovalTimeoutMs(record.expiresAtMs - Date.now());
-    return setTimeout(() => {
-      try {
-        this.expireDue(record.id);
-      } catch (error) {
-        this.reportError(error, { approvalId: record.id, operation: "expire" });
-      }
-    }, timerDelayMs);
-  }
-
-  private expireDue(recordId: string): boolean {
+  protected override expireDue(recordId: string): boolean {
+    if (this.retired) {
+      return false;
+    }
     const entry = this.pending.get(recordId);
     if (!entry || entry.record.resolvedAtMs !== undefined) {
       return false;
-    }
-    if (!this.options.persistence) {
-      if (entry.record.expiresAtMs > Date.now()) {
-        this.scheduleExpiryTimer(entry);
-        return false;
-      }
-      return this.expireLocal(recordId, null);
     }
     const result = this.forceDenyDetailed(
       recordId,
@@ -948,60 +574,12 @@ export class ExecApprovalManager<TPayload = ExecApprovalRequestPayload> {
     return result.outcome === "denied" || result.outcome === "expired";
   }
 
-  private resolveLocal(
-    recordId: string,
-    decision: ExecApprovalDecision,
-    resolvedBy: string | null,
-    resolutionSource: ExecApprovalResolutionSource = "operator",
-  ): boolean {
-    const entry = this.pending.get(recordId);
-    if (!entry || entry.record.resolvedAtMs !== undefined) {
-      return false;
-    }
-    const allowedDecisions = normalizeAllowedDecisions(
-      this.options.resolveAllowedDecisions?.(entry.record.request),
-    );
-    if (!allowedDecisions.includes(decision)) {
-      return false;
-    }
-    return this.settleLocalEntry({
-      recordId,
-      decision,
-      resolvedAtMs: Date.now(),
-      resolvedBy,
-      resolverKind: "runtime",
-      status: decision === "deny" ? "denied" : "allowed",
-      terminalReason: "user",
-      resolutionSource,
-    });
-  }
-
-  private expireLocal(recordId: string, resolvedBy: string | null): boolean {
-    const entry = this.pending.get(recordId);
-    if (!entry || entry.record.resolvedAtMs !== undefined) {
-      return false;
-    }
-    const noRoute = resolvedBy === "no-approval-route";
-    return this.settleLocalEntry({
-      recordId,
-      decision: null,
-      resolvedAtMs: Date.now(),
-      resolvedBy,
-      resolverKind: "system",
-      status: noRoute ? "denied" : "expired",
-      terminalReason: noRoute ? "no-route" : "timeout",
-    });
-  }
-
   resolve(
     recordId: string,
     decision: ExecApprovalDecision,
     resolvedBy?: string | null,
     options: { grantExpiresAtMs?: number | null } = {},
   ): boolean {
-    if (!this.options.persistence) {
-      return this.resolveLocal(recordId, decision, resolvedBy ?? null);
-    }
     return (
       this.resolveDetailed(
         recordId,
@@ -1023,9 +601,6 @@ export class ExecApprovalManager<TPayload = ExecApprovalRequestPayload> {
    * record more strictly than an operator decision (see #103515).
    */
   resolveAutoReview(recordId: string, resolvedBy?: string | null): boolean {
-    if (!this.options.persistence) {
-      return this.resolveLocal(recordId, "allow-once", resolvedBy ?? null, "auto-review");
-    }
     return (
       this.resolveDetailed(
         recordId,
@@ -1070,9 +645,6 @@ export class ExecApprovalManager<TPayload = ExecApprovalRequestPayload> {
   }
 
   expire(recordId: string, resolvedBy?: string | null): boolean {
-    if (!this.options.persistence) {
-      return this.expireLocal(recordId, resolvedBy ?? null);
-    }
     const noRoute = resolvedBy === "no-approval-route";
     return (
       this.forceDenyDetailed(
@@ -1087,71 +659,9 @@ export class ExecApprovalManager<TPayload = ExecApprovalRequestPayload> {
     );
   }
 
-  getSnapshot(recordId: string): ExecApprovalRecord<TPayload> | null {
-    const entry = this.pending.get(recordId);
-    if (!entry) {
-      return null;
-    }
-    const nowMs = Date.now();
-    const graceAnchorMs = this.resolvedGraceAnchorMs(entry, nowMs);
-    if (
-      entry.record.terminalReason !== "storage-corrupt" &&
-      graceAnchorMs !== null &&
-      nowMs - graceAnchorMs >= EXEC_APPROVAL_RESOLVED_ENTRY_GRACE_MS
-    ) {
-      this.pending.delete(recordId);
-      return null;
-    }
-    if (entry.record.resolvedAtMs === undefined && entry.record.expiresAtMs <= nowMs) {
-      this.expireDue(recordId);
-    }
-    return entry.record;
-  }
-
-  /** Returns an exact live request snapshot without reading durable state or mutating expiry. */
-  getLiveSnapshot(recordId: string): ExecApprovalRecord<TPayload> | null {
-    const entry = this.pending.get(recordId);
-    if (!entry) {
-      return null;
-    }
-    const nowMs = Date.now();
-    if (entry.record.resolvedAtMs === undefined) {
-      return entry.record.expiresAtMs > nowMs ? entry.record : null;
-    }
-    const graceAnchorMs = this.resolvedGraceAnchorMs(entry, nowMs);
-    if (graceAnchorMs === null || nowMs - graceAnchorMs >= EXEC_APPROVAL_RESOLVED_ENTRY_GRACE_MS) {
-      return null;
-    }
-    return entry.record;
-  }
-
-  /** Re-enters the exact admitted request root only while this approval is pending. */
-  runPendingContinuation<T>(recordId: string, run: () => Promise<T>): Promise<T> | null {
-    const entry = this.pending.get(recordId);
-    if (
-      !entry?.admissionContinuation ||
-      entry.record.resolvedAtMs !== undefined ||
-      entry.record.expiresAtMs <= Date.now()
-    ) {
-      return null;
-    }
-    return entry.admissionContinuation.run(run);
-  }
-
-  listPendingRecords(): ExecApprovalRecord<TPayload>[] {
-    const nowMs = Date.now();
-    for (const entry of this.pending.values()) {
-      if (entry.record.resolvedAtMs === undefined && entry.record.expiresAtMs <= nowMs) {
-        this.expireDue(entry.record.id);
-      }
-    }
-    return Array.from(this.pending.values())
-      .map((entry) => entry.record)
-      .filter((record) => record.resolvedAtMs === undefined);
-  }
-
   consumeAllowOnce(recordId: string, consumerId = recordId): boolean {
-    if (this.forceDenyIfDelegatedAuthorityClosed(recordId)) {
+    // Retirement preserves consumption only inside an already-owned genuine handoff.
+    if (!this.canUseRetainedBinding() || this.forceDenyIfRuntimeAuthorityClosed(recordId)) {
       return false;
     }
     const entry = this.pending.get(recordId);
@@ -1173,41 +683,35 @@ export class ExecApprovalManager<TPayload = ExecApprovalRequestPayload> {
       return false;
     }
     const persistence = this.options.persistence;
-    if (persistence) {
-      const result = consumeOperatorApprovalAllowOnce({
-        id: recordId,
-        consumerId,
-        expectedKind: this.approvalKind,
-        runtimeEpoch: persistence.runtimeEpoch,
-        redemptionWindowMs:
-          EXEC_APPROVAL_RESOLVED_ENTRY_GRACE_MS + Math.max(0, graceAnchorMs - resolvedAtMs),
-        databaseOptions: persistence.databaseOptions,
-      });
-      if (result.outcome !== "consumed") {
-        return false;
-      }
-      // Keep the winning decision for audit/retry reporting; consumedDecision
-      // is the process-local replay guard during the resolved grace window.
-      entry.record.consumedDecision = "allow-once";
-      entry.record.consumedAtMs = result.record.consumedAtMs;
-      entry.record.consumedBy = result.record.consumedBy;
-      return true;
+    const result = consumeOperatorApprovalAllowOnce({
+      id: recordId,
+      consumerId,
+      expectedKind: this.approvalKind,
+      runtimeEpoch: persistence.runtimeEpoch,
+      redemptionWindowMs:
+        EXEC_APPROVAL_RESOLVED_ENTRY_GRACE_MS + Math.max(0, graceAnchorMs - resolvedAtMs),
+      databaseOptions: persistence.databaseOptions,
+    });
+    if (result.outcome !== "consumed") {
+      return false;
     }
+    // Keep the winning decision for audit/retry reporting; consumedDecision
+    // is the process-local replay guard during the resolved grace window.
     entry.record.consumedDecision = "allow-once";
+    entry.record.consumedAtMs = result.record.consumedAtMs;
+    entry.record.consumedBy = result.record.consumedBy;
     return true;
   }
 
-  /**
-   * Wait for decision on an already-registered approval.
-   * Returns the decision promise if the ID is pending, null otherwise.
-   */
+  /** Observes a registered decision; Gateway closure rejects the wait, not the approval. */
   awaitDecision(recordId: string): Promise<ExecApprovalDecision | null> | null {
-    this.forceDenyIfDelegatedAuthorityClosed(recordId);
+    this.assertNotRetired();
+    this.forceDenyIfRuntimeAuthorityClosed(recordId);
     if (!this.getSnapshot(recordId)) {
       return null;
     }
     const entry = this.pending.get(recordId);
-    return entry?.promise ?? null;
+    return entry ? this.observeEntry(entry, entry.promise) : null;
   }
 
   /** Projects an allowed decision only while its exact runtime authority is live. */
@@ -1218,28 +722,30 @@ export class ExecApprovalManager<TPayload = ExecApprovalRequestPayload> {
     if (decision !== "allow-once" && decision !== "allow-always") {
       return decision;
     }
+    if (!this.canUseRetainedBinding()) {
+      return null;
+    }
     const record = this.pending.get(recordId)?.record;
     if (!record) {
       // Durable approval truth is not executable authority. Once the local
       // binding is gone, stale handoffs must fail closed even if they kept its verdict.
       return null;
     }
-    const authority = record.agentRuntimeDelegatedAuthority;
-    if (!authority || this.options.validateAgentRuntimeDelegatedAuthority?.(authority) === true) {
+    if (this.isRuntimeAuthorityActive(record)) {
       return decision;
     }
     // Durable first-answer truth remains auditable even when closure races an
     // already-allowed row. Executable projection fails closed at this handoff.
-    this.forceDenyIfDelegatedAuthorityClosed(recordId);
+    this.forceDenyIfRuntimeAuthorityClosed(recordId);
     return null;
   }
 
-  /** Atomically closes a live approval whose exact delegated owner is gone. */
-  forceDenyIfDelegatedAuthorityClosed(
+  /** Atomically closes a live approval whose exact runtime owner is gone. */
+  forceDenyIfRuntimeAuthorityClosed(
     recordId: string,
   ): ExecApprovalForceDenyResult<TPayload> | null {
-    const authority = this.pending.get(recordId)?.record.agentRuntimeDelegatedAuthority;
-    if (!authority || this.options.validateAgentRuntimeDelegatedAuthority?.(authority) === true) {
+    const record = this.pending.get(recordId)?.record;
+    if (!record || this.isRuntimeAuthorityActive(record)) {
       return null;
     }
     return this.forceDenyDetailed(
@@ -1249,66 +755,4 @@ export class ExecApprovalManager<TPayload = ExecApprovalRequestPayload> {
       "cancelled",
     );
   }
-
-  lookupApprovalId(
-    input: string,
-    opts: {
-      includeResolved?: boolean;
-      filter?: (record: ExecApprovalRecord<TPayload>) => boolean;
-    } = {},
-  ): ExecApprovalIdLookupResult {
-    const rawExact = this.getSnapshot(input);
-    if (rawExact) {
-      return (opts.includeResolved || rawExact.resolvedAtMs === undefined) &&
-        (opts.filter?.(rawExact) ?? true)
-        ? { kind: "exact", id: input }
-        : { kind: "none" };
-    }
-
-    const normalized = input.trim();
-    if (!normalized) {
-      return { kind: "none" };
-    }
-
-    const exact = this.getSnapshot(normalized);
-    if (exact) {
-      return (opts.includeResolved || exact.resolvedAtMs === undefined) &&
-        (opts.filter?.(exact) ?? true)
-        ? { kind: "exact", id: normalized }
-        : { kind: "none" };
-    }
-
-    const lowerPrefix = normalizeLowercaseStringOrEmpty(normalized);
-    const matches: string[] = [];
-    const candidates = new Map<string, ExecApprovalRecord<TPayload>>();
-    for (const entry of this.pending.values()) {
-      candidates.set(entry.record.id, entry.record);
-    }
-    for (const record of this.listPendingRecords()) {
-      candidates.set(record.id, record);
-    }
-    for (const [id, record] of candidates) {
-      if (!opts.includeResolved && record.resolvedAtMs !== undefined) {
-        continue;
-      }
-      if (opts.filter && !opts.filter(record)) {
-        continue;
-      }
-      if (normalizeLowercaseStringOrEmpty(id).startsWith(lowerPrefix)) {
-        matches.push(id);
-      }
-    }
-
-    if (matches.length === 1) {
-      return {
-        kind: "prefix",
-        id: expectDefined(matches[0], "matches capture group 0"),
-      };
-    }
-    if (matches.length > 1) {
-      return { kind: "ambiguous", ids: matches };
-    }
-    return { kind: "none" };
-  }
 }
-/* oxlint-disable max-lines -- TODO: split this grandfathered oversized file. */

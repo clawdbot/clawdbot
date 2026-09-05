@@ -258,6 +258,10 @@ class SubagentRunManager extends SubagentLaunchManager {
       entry.killReconciliation = {
         killedAt:
           existingKillIntent?.requestedAt ?? existingKillReconciliation?.killedAt ?? taskEndedAt,
+        taskCancellationAccepted:
+          existingKillIntent || existingKillReconciliation?.taskCancellationAccepted === true
+            ? true
+            : undefined,
         suppressTaskDelivery:
           existingKillIntent?.suppressTaskDelivery === true ||
           existingKillReconciliation?.suppressTaskDelivery === true ||
@@ -323,7 +327,7 @@ class SubagentRunManager extends SubagentLaunchManager {
               ? safeRemoveAttachmentsDir(entry)
               : Promise.resolve(),
           ]);
-        }).catch((err: unknown) => {
+        }, "subagents:session-finalize").catch((err: unknown) => {
           log.warn("failed to run killed subagent cleanup tail", {
             err,
             runId: entry.runId,

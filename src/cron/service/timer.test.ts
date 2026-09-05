@@ -5,15 +5,19 @@ import { createDeferred } from "../../../test/helpers/promise.js";
 import { upsertSessionEntryCore } from "../../config/sessions/session-accessor.js";
 import { setupCronServiceSuite, writeCronStoreSnapshot } from "../../cron/service.test-harness.js";
 import { createCronServiceState as createCronServiceStateBase } from "../../cron/service/state.js";
-import { executeJobCore, onTimer } from "../../cron/service/timer.test-support.js";
+import { onTimer } from "../../cron/service/timer.test-support.js";
 import { loadCronStore } from "../../cron/store.js";
 import type { CronJob } from "../../cron/types.js";
+import { getActiveGatewayRootWorkCount } from "../../process/gateway-work-admission.js";
 import { openOpenClawStateDatabase } from "../../state/openclaw-state-db.js";
 import * as taskExecutor from "../../tasks/task-executor.js";
 import { findTaskByRunId, listTaskRecordsUnsorted } from "../../tasks/task-registry.js";
 import { resetTaskRegistryForTests } from "../../tasks/task-runtime.test-helpers.js";
 import { formatTaskStatusDetail } from "../../tasks/task-status.js";
 import { normalizeSessionDeliveryState } from "../../utils/delivery-context.shared.js";
+import { getSuspensionVisibleCronTaskRunCount } from "./active-run-cancellation.js";
+import { stop } from "./ops-lifecycle.js";
+import { executeJobCore } from "./timer-execution.js";
 
 const { logger, makeStorePath } = setupCronServiceSuite({
   prefix: "cron-service-timer-seam",
@@ -314,7 +318,7 @@ describe("cron service timer seam coverage", () => {
     });
   });
 
-  it.each(["command", "script", "systemEvent", "heartbeat", "skillCollectionReview"] as const)(
+  it.each(["command", "script", "systemEvent", "heartbeat"] as const)(
     "does not run a %s payload when trigger evaluation resolves after cancellation",
     async (kind) => {
       const { storePath } = await makeStorePath();
@@ -329,9 +333,6 @@ describe("cron service timer seam coverage", () => {
       const requestHeartbeat = vi.fn();
       const runCommandJob = vi.fn(() => Promise.resolve({ status: "ok" as const }));
       const runScriptJob = vi.fn(() => Promise.resolve({ status: "ok" as const }));
-      const runSkillCollectionReview = vi.fn(() =>
-        Promise.resolve({ status: "ok" as const, summary: "Review complete" }),
-      );
       const runIsolatedAgentJob = vi.fn(() => Promise.resolve({ status: "ok" as const }));
       const state = createCronServiceState({
         storePath,
@@ -344,7 +345,6 @@ describe("cron service timer seam coverage", () => {
         evaluateCronTrigger,
         runCommandJob,
         runScriptJob,
-        runSkillCollectionReview,
         runIsolatedAgentJob,
       });
       const baseJob =
@@ -352,7 +352,7 @@ describe("cron service timer seam coverage", () => {
           ? createDueCommandJob({ now })
           : kind === "script"
             ? createDueScriptJob({ now })
-            : kind === "heartbeat" || kind === "skillCollectionReview"
+            : kind === "heartbeat"
               ? {
                   ...createDueMainJob({ now, wakeMode: "next-heartbeat" }),
                   payload: { kind },
@@ -365,50 +365,25 @@ describe("cron service timer seam coverage", () => {
       const controller = new AbortController();
 
       const result = executeJobCore(state, job, controller.signal);
-      expect(evaluateCronTrigger).toHaveBeenCalledOnce();
-      controller.abort(new Error("operator cancelled the scheduled run"));
-      evaluation.resolve({ kind: "evaluated", fire: true, state: { revision: 2 } });
+      try {
+        expect(evaluateCronTrigger).toHaveBeenCalledOnce();
+        controller.abort(new Error("operator cancelled the scheduled run"));
+        evaluation.resolve({ kind: "evaluated", fire: true, state: { revision: 2 } });
 
-      await expect(result).resolves.toMatchObject({ status: "error" });
-      expect(enqueueSystemEvent).not.toHaveBeenCalled();
-      expect(requestHeartbeat).not.toHaveBeenCalled();
-      expect(runCommandJob).not.toHaveBeenCalled();
-      expect(runScriptJob).not.toHaveBeenCalled();
-      expect(runSkillCollectionReview).not.toHaveBeenCalled();
-      expect(runIsolatedAgentJob).not.toHaveBeenCalled();
+        await expect(result).resolves.toMatchObject({ status: "error" });
+        expect(enqueueSystemEvent).not.toHaveBeenCalled();
+        expect(requestHeartbeat).not.toHaveBeenCalled();
+        expect(runCommandJob).not.toHaveBeenCalled();
+        expect(runScriptJob).not.toHaveBeenCalled();
+        expect(runIsolatedAgentJob).not.toHaveBeenCalled();
+      } finally {
+        // Abort before releasing evaluation so failed assertions cannot start payload work.
+        controller.abort(new Error("operator cancelled the scheduled run"));
+        evaluation.resolve({ kind: "evaluated", fire: true, state: { revision: 2 } });
+        await result;
+      }
     },
   );
-
-  it("runs skill collection review payloads through the injected runner", async () => {
-    const { storePath } = await makeStorePath();
-    const now = Date.parse("2026-07-27T12:00:00.000Z");
-    const runSkillCollectionReview = vi.fn(async ({ agentId }: { agentId: string }) => ({
-      status: "ok" as const,
-      summary: `reviewed ${agentId}`,
-    }));
-    const state = createCronServiceState({
-      storePath,
-      cronEnabled: true,
-      cronConfig: { triggers: { enabled: true } },
-      log: logger,
-      nowMs: () => now,
-      enqueueSystemEvent: vi.fn(),
-      requestHeartbeat: vi.fn(),
-      runSkillCollectionReview,
-      runIsolatedAgentJob: vi.fn(async () => ({ status: "ok" as const })),
-    });
-    const job: CronJob = {
-      ...createDueMainJob({ now, wakeMode: "next-heartbeat" }),
-      agentId: "ops",
-      payload: { kind: "skillCollectionReview" },
-    };
-
-    await expect(executeJobCore(state, job)).resolves.toMatchObject({
-      status: "ok",
-      summary: "reviewed ops",
-    });
-    expect(runSkillCollectionReview).toHaveBeenCalledWith({ agentId: "ops" });
-  });
 
   it("runs command cron jobs without isolated agent setup", async () => {
     const { storePath } = await makeStorePath();
@@ -918,13 +893,8 @@ describe("cron service timer seam coverage", () => {
     const now = Date.parse("2026-03-23T12:00:00.000Z");
     const enqueueSystemEvent = vi.fn();
     const requestHeartbeat = vi.fn();
-    let resolveRun: ((value: { status: "ok"; summary: string }) => void) | undefined;
-    const runIsolatedAgentJob = vi.fn(
-      () =>
-        new Promise<{ status: "ok"; summary: string }>((resolve) => {
-          resolveRun = resolve;
-        }),
-    );
+    const runResult = createDeferred<{ status: "ok"; summary: string }>();
+    const runIsolatedAgentJob = vi.fn(() => runResult.promise);
 
     await writeCronStoreSnapshot({
       storePath,
@@ -942,20 +912,34 @@ describe("cron service timer seam coverage", () => {
     });
 
     const timerRun = onTimer(state);
-    await vi.waitFor(() => {
-      expect(runIsolatedAgentJob).toHaveBeenCalledTimes(1);
-    });
+    try {
+      await vi.waitFor(() => {
+        expect(runIsolatedAgentJob).toHaveBeenCalledTimes(1);
+      });
 
-    const task = findCronTaskByBaseRunId(`cron:isolated-agent-job:${now}`);
-    if (!task) {
-      throw new Error("expected active cron task ledger record");
+      const task = findCronTaskByBaseRunId(`cron:isolated-agent-job:${now}`);
+      if (!task) {
+        throw new Error("expected active cron task ledger record");
+      }
+      expect(task.status).toBe("running");
+      expect(task.progressSummary).toBe("Running automation.");
+      expect(formatTaskStatusDetail(task)).toBe("Running automation.");
+
+      runResult.resolve({ status: "ok", summary: "done" });
+      await timerRun;
+    } finally {
+      // Stop new ticks and settle this core before the shared hooks reset its state.
+      stop(state);
+      runResult.resolve({ status: "ok", summary: "done" });
+      try {
+        await timerRun;
+      } finally {
+        await vi.waitFor(() => {
+          expect(getSuspensionVisibleCronTaskRunCount()).toBe(0);
+          expect(getActiveGatewayRootWorkCount()).toBe(0);
+        });
+      }
     }
-    expect(task.status).toBe("running");
-    expect(task.progressSummary).toBe("Running automation.");
-    expect(formatTaskStatusDetail(task)).toBe("Running automation.");
-
-    resolveRun?.({ status: "ok", summary: "done" });
-    await timerRun;
   });
 
   it("keeps scheduler progress when task ledger creation fails", async () => {

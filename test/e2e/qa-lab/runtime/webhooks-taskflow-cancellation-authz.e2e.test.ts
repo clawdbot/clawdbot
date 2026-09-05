@@ -262,12 +262,6 @@ describe("webhooks TaskFlow child cancellation authority", () => {
               stateDir: acpxStateDir,
               permissionMode: "deny-all",
               timeoutSeconds: 15,
-              agents: {
-                codex: {
-                  command: process.execPath,
-                  args: [path.resolve("node_modules/@agentclientprotocol/codex-acp/dist/index.js")],
-                },
-              },
             },
             runtime: acpxRuntime,
             registerService: (service) => {
@@ -524,8 +518,8 @@ describe("webhooks TaskFlow child cancellation authority", () => {
             throw new Error("failed to create persisted ACP projection");
           }
 
-          const elicitationEntered = createDeferred<void>();
-          const releaseElicitation = createDeferred<void>();
+          const elicitationEntered = createDeferred();
+          const releaseElicitation = createDeferred();
           const replacementAcpTurn = acpManager.runTurn({
             admittedRunContext: createTestAdmittedRunContext(reusedAcpRunId),
             cfg: config,
@@ -586,8 +580,8 @@ describe("webhooks TaskFlow child cancellation authority", () => {
             mode: "persistent",
             backendId: "acpx",
           });
-          const queuedTargetEntered = createDeferred<void>();
-          const releaseQueuedTarget = createDeferred<void>();
+          const queuedTargetEntered = createDeferred();
+          const releaseQueuedTarget = createDeferred();
           const queuedTargetTurn = acpManager.runTurn({
             admittedRunContext: createTestAdmittedRunContext(queuedAcpRunId),
             cfg: config,
@@ -614,8 +608,8 @@ describe("webhooks TaskFlow child cancellation authority", () => {
           const interruptsBeforeQueuedCancel = (await readAcpTraceMethods(acpxTracePath)).filter(
             (method) => method === "turn/interrupt",
           ).length;
-          const queuedSuccessorEntered = createDeferred<void>();
-          const releaseQueuedSuccessor = createDeferred<void>();
+          const queuedSuccessorEntered = createDeferred();
+          const releaseQueuedSuccessor = createDeferred();
           const queuedSuccessorTurn = acpManager.runTurn({
             admittedRunContext: createTestAdmittedRunContext(queuedAcpRunId),
             cfg: config,

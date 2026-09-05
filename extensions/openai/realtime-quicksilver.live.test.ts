@@ -8,11 +8,12 @@ import { REALTIME_VOICE_AGENT_CONSULT_TOOL } from "openclaw/plugin-sdk/realtime-
 import type { Page } from "playwright";
 import { describe, expect, it } from "vitest";
 import WebSocket, { type RawData } from "ws";
+import { resolveOpenAIChatGptSubscriptionAuth } from "./realtime-auth.js";
+import { openAIRealtimeHost } from "./realtime-host.js";
 import { OpenAIQuicksilverVoiceBridge } from "./realtime-quicksilver-bridge.js";
 import {
   createOpenAIQuicksilverBrowserSessionBroker,
   OPENAI_QUICKSILVER_OFFER_PATH,
-  resolveOpenAIChatGptSubscriptionAuth,
 } from "./realtime-quicksilver-session.js";
 import {
   buildOpenAIQuicksilverSession,
@@ -171,7 +172,7 @@ async function resolveLiveOAuthProfile(): Promise<
   Extract<OpenAIQuicksilverAuth, { type: "oauth" }> | undefined
 > {
   try {
-    const profile = await resolveOpenAIChatGptSubscriptionAuth({});
+    const profile = await resolveOpenAIChatGptSubscriptionAuth({}, openAIRealtimeHost);
     if (profile) {
       return profile;
     }
@@ -221,16 +222,19 @@ describeLive("GPT-Live Platform WebSocket", () => {
         skip("No OpenAI Platform API key is available");
         return;
       }
-      const bridge = new OpenAIQuicksilverVoiceBridge({
-        providerConfig: {},
-        model: "gpt-live-1-codex",
-        voice: "spruce",
-        instructions: "Keep this transport verification session silent.",
-        audioFormat: { encoding: "pcm16", sampleRateHz: 24000, channels: 1 },
-        resolveAuth: async () => ({ type: "api-key", token: apiKey }),
-        onAudio: () => {},
-        onClearAudio: () => {},
-      });
+      const bridge = new OpenAIQuicksilverVoiceBridge(
+        {
+          providerConfig: {},
+          model: "gpt-live-1-codex",
+          voice: "spruce",
+          instructions: "Keep this transport verification session silent.",
+          audioFormat: { encoding: "pcm16", sampleRateHz: 24000, channels: 1 },
+          resolveAuth: async () => ({ type: "api-key", token: apiKey }),
+          onAudio: () => {},
+          onClearAudio: () => {},
+        },
+        openAIRealtimeHost,
+      );
       try {
         await bridge.connect();
         expect(bridge.isConnected()).toBe(true);
@@ -452,16 +456,19 @@ describeLive("OpenAI OAuth WebRTC", () => {
           sessionId: randomUUID(),
           threadId: randomUUID(),
         };
-        const call = await createOpenAIQuicksilverCall({
-          auth,
-          requestIds,
-          sdp: offerSdp,
-          session: buildOpenAIQuicksilverSession({
-            model: "gpt-live-1-codex",
-            instructions: "Keep this transport verification session silent.",
-            voice: "spruce",
-          }),
-        });
+        const call = await createOpenAIQuicksilverCall(
+          {
+            auth,
+            requestIds,
+            sdp: offerSdp,
+            session: buildOpenAIQuicksilverSession({
+              model: "gpt-live-1-codex",
+              instructions: "Keep this transport verification session silent.",
+              voice: "spruce",
+            }),
+          },
+          openAIRealtimeHost,
+        );
 
         if (call.kind !== "gpt-live") {
           throw new Error("GPT-Live call unexpectedly used the GA realtime wire shape");
@@ -473,7 +480,7 @@ describeLive("OpenAI OAuth WebRTC", () => {
 
         const started = await waitForSidebandSessionStarted({
           url: call.sidebandUrl,
-          headers: openAIQuicksilverAuthHeaders(auth, requestIds),
+          headers: openAIQuicksilverAuthHeaders(auth, requestIds, openAIRealtimeHost),
         });
         sideband = started.socket;
         expect(started.sessionId).toBe(call.callId);

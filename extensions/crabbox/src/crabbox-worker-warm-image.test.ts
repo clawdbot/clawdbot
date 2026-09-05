@@ -332,7 +332,7 @@ describe("Crabbox profile warm images", () => {
       LEASE_ID,
       "--mode",
       "native",
-      "--wait=false",
+      "--wait",
       "--json",
     ]);
     calls.length = 0;
@@ -379,7 +379,7 @@ describe("Crabbox profile warm images", () => {
       LEASE_ID,
       "--mode",
       "native",
-      "--wait=false",
+      "--wait",
       "--json",
       "--strategy",
       "image",

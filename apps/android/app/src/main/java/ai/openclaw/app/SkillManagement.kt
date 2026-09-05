@@ -110,11 +110,21 @@ internal fun parseClawHubInstallReview(
     ) ?: return null
   val author =
     when {
-      ownerDisplayName != null && ownerHandle != null && !ownerDisplayName.equals(ownerHandle, ignoreCase = true) ->
+      ownerDisplayName != null && ownerHandle != null && !ownerDisplayName.equals(ownerHandle, ignoreCase = true) -> {
         "$ownerDisplayName (@$ownerHandle)"
-      ownerDisplayName != null -> ownerDisplayName
-      ownerHandle != null -> "@$ownerHandle"
-      else -> "Unknown publisher"
+      }
+
+      ownerDisplayName != null -> {
+        ownerDisplayName
+      }
+
+      ownerHandle != null -> {
+        "@$ownerHandle"
+      }
+
+      else -> {
+        "Unknown publisher"
+      }
     }
   return GatewayClawHubInstallReview(
     slug = reviewedSlug,

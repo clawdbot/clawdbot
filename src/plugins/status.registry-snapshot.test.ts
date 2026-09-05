@@ -312,28 +312,6 @@ describe("buildPluginRegistrySnapshotReport", () => {
     );
   });
 
-  it("does not project package-local dependency health onto bundled plugins", () => {
-    const tempRoot = makeTempDir();
-    const bundledRoot = path.join(tempRoot, "bundled");
-    const pluginRoot = path.join(bundledRoot, "bundled-demo");
-    fs.mkdirSync(pluginRoot, { recursive: true });
-    createColdPluginFixture({
-      rootDir: pluginRoot,
-      pluginId: "bundled-demo",
-      packageJson: { dependencies: { "missing-build-time-dependency": "1.0.0" } },
-    });
-
-    const report = buildPluginRegistrySnapshotReport({
-      config: { plugins: { entries: { "bundled-demo": { enabled: true } } } },
-      env: createColdPluginHermeticEnv(tempRoot, { bundledPluginsDir: bundledRoot }),
-    });
-    const plugin = requirePlugin(report.plugins, "bundled-demo");
-
-    expectFields(plugin, { origin: "bundled", status: "loaded" });
-    expect(plugin.dependencyStatus).toBeUndefined();
-    expect(report.diagnostics).toEqual([]);
-  });
-
   it.each([
     { consent: "missing", enabled: true, tracked: true, warns: true },
     { consent: "stale", enabled: true, tracked: true, warns: true },

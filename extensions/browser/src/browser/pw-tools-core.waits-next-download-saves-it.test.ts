@@ -159,11 +159,7 @@ describe("pw-tools-core", () => {
   }) {
     const savedPath = requireSaveAsPath(params.saveAs);
     expect(savedPath).not.toBe(params.targetPath);
-    const savedParentName = path.basename(path.dirname(savedPath));
-    expect(
-      savedParentName.includes("fs-safe-output") ||
-        savedParentName === path.basename(path.dirname(params.targetPath)),
-    ).toBe(true);
+    await expectPathMissing(path.dirname(savedPath));
     expect(path.basename(savedPath)).toContain(path.basename(params.targetPath));
     expect(path.basename(savedPath)).toMatch(/\.part$/);
     expect(await fs.readFile(params.targetPath, "utf8")).toBe(params.content);
@@ -282,7 +278,7 @@ describe("pw-tools-core", () => {
           saveAs,
         });
 
-        await expect(p).rejects.toThrow(/path alias|outside workspace|directory changed/i);
+        await expect(p).rejects.toThrow(/directory changed/u);
         expect(parentSwappedBeforeFinalize).toBe(true);
         expect(saveAs).toHaveBeenCalledOnce();
         await expectPathMissing(outsideTargetPath);
@@ -490,7 +486,10 @@ describe("pw-tools-core", () => {
       path.resolve(path.join(path.sep, "tmp", "openclaw-preferred", "downloads")),
     );
     const expectedDownloadsTail = `${path.join("tmp", "openclaw-preferred", "downloads")}${path.sep}`;
-    expect(path.dirname(outPath)).toBe(expectedRootedDownloadsDir);
+    const relativeStagedPath = path.relative(expectedRootedDownloadsDir, outPath);
+    expect(relativeStagedPath.startsWith(`..${path.sep}`)).toBe(false);
+    expect(path.isAbsolute(relativeStagedPath)).toBe(false);
+    await expectPathMissing(path.dirname(outPath));
     await expect(fs.realpath(path.dirname(res.path))).resolves.toBe(expectedRootedDownloadsDir);
     expect(path.basename(outPath)).toContain(path.basename(res.path));
     expect(path.basename(outPath)).toMatch(/\.part$/);
@@ -510,7 +509,10 @@ describe("pw-tools-core", () => {
     const expectedRootedDownloadsDir = await fs.realpath(
       path.resolve(path.join(path.sep, "tmp", "openclaw-preferred", "downloads")),
     );
-    expect(path.dirname(outPath)).toBe(expectedRootedDownloadsDir);
+    const relativeStagedPath = path.relative(expectedRootedDownloadsDir, outPath);
+    expect(relativeStagedPath.startsWith(`..${path.sep}`)).toBe(false);
+    expect(path.isAbsolute(relativeStagedPath)).toBe(false);
+    await expectPathMissing(path.dirname(outPath));
     await expect(fs.realpath(path.dirname(res.path))).resolves.toBe(expectedRootedDownloadsDir);
     expect(path.basename(outPath)).toContain(path.basename(res.path));
     expect(path.basename(outPath)).toMatch(/\.part$/);

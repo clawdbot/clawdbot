@@ -67,6 +67,7 @@ export function resolveEmbeddedCompactionThinkingLevel(params: {
   provider: string;
   modelId: string;
   inheritedLevel?: ThinkLevel;
+  compactionThinkingDefault?: ProviderRuntimeModel["compactionThinkingDefault"];
   catalog?: ThinkingCatalogEntry[];
   agentId?: string;
   sessionKey?: string;
@@ -74,7 +75,9 @@ export function resolveEmbeddedCompactionThinkingLevel(params: {
 }): ThinkLevel {
   const configuredLevel = params.config?.agents?.defaults?.compaction?.thinkingLevel;
   const requestedLevel =
-    configuredLevel === "inherit" ? params.inheritedLevel : (configuredLevel ?? "low");
+    configuredLevel === "inherit"
+      ? params.inheritedLevel
+      : (configuredLevel ?? params.compactionThinkingDefault ?? "low");
   if (!requestedLevel) {
     return "off";
   }
@@ -352,6 +355,8 @@ export function buildEmbeddedCompactionRuntimeContext(
     cwd: params.cwd ?? undefined,
     permissionMode: params.permissionMode,
     sessionRoot: params.sessionRoot,
+    requireWorkspaceOnly: params.requireWorkspaceOnly,
+    requireWritableSandbox: params.requireWritableSandbox,
     agentDir: params.agentDir,
     config: params.config,
     toolOverrides: params.toolOverrides,

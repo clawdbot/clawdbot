@@ -1,7 +1,10 @@
 // Memory Core plugin module owns ranked search-window filtering and diagnostics.
 import { formatErrorMessage } from "openclaw/plugin-sdk/error-runtime";
 import {
-  resolveMemoryIndexIdentityReason,
+  formatMemoryIndexRebuildGuidance,
+  resolveMemoryIndexIdentityDiagnostic,
+  type MemoryIndexIdentityDiagnostic,
+  type MemoryProviderStatus,
   type MemorySearchManager,
   type MemorySearchRuntimeDebug,
   type MemorySource,
@@ -12,15 +15,23 @@ import { filterMemorySearchHitsBySessionVisibility } from "./session-search-visi
 import { buildMemorySearchUnavailableResult } from "./tools.shared.js";
 
 const MEMORY_SEARCH_POST_FILTER_MAX_CANDIDATES = 200;
-const PAUSED_MEMORY_INDEX_WARNING =
-  "Tell the user: memory search is paused because the memory index was built with a different embedding provider/model/settings.";
-const PAUSED_MEMORY_INDEX_ACTION =
-  "Tell the user to run: openclaw memory status --index or openclaw memory index --force.";
 
-export function buildPausedMemoryIndexUnavailableResult(reason: string) {
-  return buildMemorySearchUnavailableResult(reason, {
-    warning: PAUSED_MEMORY_INDEX_WARNING,
-    action: PAUSED_MEMORY_INDEX_ACTION,
+export function buildPausedMemoryIndexUnavailableResult(
+  diagnostic: MemoryIndexIdentityDiagnostic,
+  params: {
+    agentId: string;
+    status: Pick<MemoryProviderStatus, "provider" | "requestedProvider">;
+  },
+) {
+  const cause =
+    diagnostic.owner === "configuration"
+      ? `the current memory configuration no longer matches the index (${diagnostic.reason})`
+      : diagnostic.code === "metadata_missing"
+        ? `the memory index metadata is missing (${diagnostic.reason}); no configuration change is needed`
+        : `this OpenClaw version changed the memory index format (${diagnostic.reason}); no configuration change is needed`;
+  return buildMemorySearchUnavailableResult(diagnostic.reason, {
+    warning: `Tell the user: memory search is paused because ${cause}.`,
+    action: `Tell the user to run: ${formatMemoryIndexRebuildGuidance(params.status, params.agentId)}`,
   });
 }
 
@@ -121,12 +132,12 @@ export async function executeMemorySearchToolQuery(params: {
   }
 
   const status = active.manager.status();
-  const pausedIndexIdentityReason = resolveMemoryIndexIdentityReason(status);
-  if (pausedIndexIdentityReason) {
+  const pausedIndexIdentity = resolveMemoryIndexIdentityDiagnostic(status);
+  if (pausedIndexIdentity) {
     return {
       status,
       rawResults: [],
-      pausedIndexIdentityReason,
+      pausedIndexIdentity,
       searchMode: undefined,
       debug: undefined,
     };
@@ -156,7 +167,7 @@ export async function executeMemorySearchToolQuery(params: {
   return {
     status,
     rawResults,
-    pausedIndexIdentityReason: undefined,
+    pausedIndexIdentity: undefined,
     searchMode: latestDebug?.effectiveMode,
     debug: {
       backend: status.backend,

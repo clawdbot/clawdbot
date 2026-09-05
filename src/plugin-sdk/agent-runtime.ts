@@ -42,7 +42,11 @@ type LoadModelCatalogCompatibilityParams = LoadPreparedModelCatalogParams & {
   /** @deprecated Use getPreparedModelCatalogSnapshot for new nonblocking readers. */
   cacheOnly?: boolean;
   /** @deprecated Plugin metadata belongs to the published lifecycle generation. */
-  metadataSnapshot?: PluginMetadataSnapshot;
+  metadataSnapshot?: Omit<PluginMetadataSnapshot, "owners"> & {
+    // Shipped callers may supply owner maps from before normalization policies were prepared.
+    owners: Omit<PluginMetadataSnapshot["owners"], "modelIdNormalizationPolicies"> &
+      Partial<Pick<PluginMetadataSnapshot["owners"], "modelIdNormalizationPolicies">>;
+  };
 };
 
 /** @deprecated Use loadPreparedModelCatalog or getPreparedModelCatalogSnapshot. */

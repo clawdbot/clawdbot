@@ -31,6 +31,7 @@ import { isNonMinimalServicePathEntry, normalizeServicePathEntry } from "./servi
 import type { GatewayServiceEnvironmentValueSource } from "./service-types.js";
 import { execSystemctlUser } from "./systemd-exec.js";
 import { resolveSystemdServiceName, resolveSystemdUnitPath } from "./systemd-service-files.js";
+import { parseSystemdEnvAssignments, splitSystemdLogicalLines } from "./systemd-unit.js";
 
 export type GatewayServiceCommand = {
   programArguments: string[];
@@ -58,6 +59,7 @@ export const SERVICE_AUDIT_CODES = {
   gatewayPathMissingDirs: "gateway-path-missing-dirs",
   gatewayPathNonMinimal: "gateway-path-nonminimal",
   gatewayTokenEmbedded: "gateway-token-embedded",
+  gatewayPasswordEmbedded: "gateway-password-embedded",
   gatewayManagedEnvEmbedded: "gateway-managed-env-embedded",
   gatewayPortMismatch: "gateway-port-mismatch",
   gatewayProxyEnvEmbedded: "gateway-proxy-env-embedded",
@@ -73,6 +75,7 @@ export const SERVICE_AUDIT_CODES = {
   systemdRestartSec: "systemd-restart-sec",
   systemdWantsNetworkOnline: "systemd-wants-network-online",
   systemdKillModeProcessOrNone: "systemd-kill-mode-process-or-none",
+  systemdUnitBackupUnsafe: "systemd-unit-backup-unsafe",
 } as const;
 
 /** Returns whether audit issues require migrating a daemon to a stable Node runtime. */
@@ -118,7 +121,7 @@ function parseSystemdUnit(content: string): {
 
   // Parse only unit keys relevant to service resilience; this is not a full
   // systemd parser and intentionally ignores sections.
-  for (const rawLine of content.split(/\r?\n/)) {
+  for (const rawLine of splitSystemdLogicalLines(content)) {
     const line = rawLine.trim();
     if (!line) {
       continue;
@@ -188,6 +191,7 @@ async function auditSystemdUnit(
   timeoutMs?: number,
 ) {
   const unitPath = resolveSystemdUnitPath(env);
+  await auditSystemdUnitBackup(unitPath, issues);
   let content;
   try {
     content = await fs.readFile(unitPath, "utf8");
@@ -251,6 +255,63 @@ async function auditSystemdUnit(
       level: "recommended",
     });
   }
+}
+
+async function auditSystemdUnitBackup(unitPath: string, issues: ServiceConfigIssue[]) {
+  const backupPath = `${unitPath}.bak`;
+  let stat;
+  try {
+    stat = await fs.lstat(backupPath);
+  } catch {
+    return;
+  }
+  const mode = stat.mode & 0o777;
+  const embeddedKeys = new Set<string>();
+  let unreadable = false;
+  if (stat.isFile()) {
+    const content = await fs.readFile(backupPath, "utf8").catch(() => {
+      unreadable = true;
+      return "";
+    });
+    for (const rawLine of splitSystemdLogicalLines(content)) {
+      const line = rawLine.trim();
+      const separator = line.indexOf("=");
+      if (separator < 0 || line.slice(0, separator).trim() !== "Environment") {
+        continue;
+      }
+      for (const { key, value } of parseSystemdEnvAssignments(line.slice(separator + 1).trim())) {
+        const normalizedKey = key.toUpperCase();
+        if (
+          value &&
+          (normalizedKey === "OPENCLAW_GATEWAY_TOKEN" ||
+            normalizedKey === "OPENCLAW_GATEWAY_PASSWORD")
+        ) {
+          embeddedKeys.add(normalizedKey);
+        }
+      }
+    }
+  }
+  if (stat.isFile() && !unreadable && embeddedKeys.size === 0 && (mode & 0o077) === 0) {
+    return;
+  }
+  const detail = [
+    backupPath,
+    !stat.isFile() ? "not a regular file" : undefined,
+    unreadable ? "unreadable" : undefined,
+    embeddedKeys.size > 0 ? `embedded keys: ${[...embeddedKeys].toSorted().join(", ")}` : undefined,
+    (mode & 0o077) !== 0 ? `mode: ${mode.toString(8).padStart(3, "0")}` : undefined,
+  ]
+    .filter(Boolean)
+    .join("; ");
+  issues.push({
+    code: SERVICE_AUDIT_CODES.systemdUnitBackupUnsafe,
+    message:
+      embeddedKeys.size > 0
+        ? "Systemd service backup exposes gateway credentials; reinstall the service and rotate the embedded credentials."
+        : "Systemd service backup is unsafe; reinstall the service to replace it.",
+    detail,
+    level: "recommended",
+  });
 }
 
 async function auditLaunchdPlist(
@@ -380,7 +441,6 @@ function auditGatewayToken(
   issues.push({
     code: SERVICE_AUDIT_CODES.gatewayTokenEmbedded,
     message: "Gateway service embeds OPENCLAW_GATEWAY_TOKEN and should be reinstalled.",
-    detail: "Run `openclaw gateway install --force` to remove embedded service token.",
     level: "recommended",
   });
   const expectedToken = normalizeOptionalString(expectedGatewayToken);
@@ -392,6 +452,21 @@ function auditGatewayToken(
     message:
       "Gateway service OPENCLAW_GATEWAY_TOKEN does not match gateway.auth.token in openclaw.json",
     detail: "service token is stale",
+    level: "recommended",
+  });
+}
+
+function auditGatewayPassword(command: GatewayServiceCommand, issues: ServiceConfigIssue[]) {
+  if (
+    !command?.environment?.OPENCLAW_GATEWAY_PASSWORD?.trim() ||
+    isEnvironmentFileOnlySource(command.environmentValueSources?.OPENCLAW_GATEWAY_PASSWORD)
+  ) {
+    return;
+  }
+  issues.push({
+    code: SERVICE_AUDIT_CODES.gatewayPasswordEmbedded,
+    message: "Gateway service embeds OPENCLAW_GATEWAY_PASSWORD and should be reinstalled.",
+    detail: "Rotate the password after reinstalling because the service definition exposed it.",
     level: "recommended",
   });
 }
@@ -451,10 +526,6 @@ export function readEmbeddedGatewayToken(command: GatewayServiceCommand): string
   return normalizeOptionalString(command.environment?.OPENCLAW_GATEWAY_TOKEN);
 }
 
-function getPathModule(platform: NodeJS.Platform) {
-  return platform === "win32" ? path.win32 : path.posix;
-}
-
 function getEquivalentMinimalPathEntries(
   entry: string,
   platform: NodeJS.Platform,
@@ -482,6 +553,9 @@ function auditGatewayServicePath(
   platform: NodeJS.Platform,
   expectedServicePath?: string,
 ) {
+  if (!command) {
+    return;
+  }
   if (platform === "win32") {
     return;
   }
@@ -496,13 +570,13 @@ function auditGatewayServicePath(
   }
 
   const expected = expectedServicePath?.trim()
-    ? normalizeStringEntries(expectedServicePath.split(getPathModule(platform).delimiter))
+    ? normalizeStringEntries(expectedServicePath.split(path.posix.delimiter))
     : getMinimalServicePathPartsFromEnv({
         platform,
         env,
         includeMissingUserBinDefaults: false,
       });
-  const parts = normalizeStringEntries(servicePath.split(getPathModule(platform).delimiter));
+  const parts = normalizeStringEntries(servicePath.split(path.posix.delimiter));
   const normalizedParts = new Set(parts.map((entry) => normalizeServicePathEntry(entry, platform)));
   const normalizedExpected = new Set(
     expected.map((entry) => normalizeServicePathEntry(entry, platform)),
@@ -599,6 +673,7 @@ async function auditGatewayRuntime(
 /**
  * Check if the service's embedded token differs from the config file token.
  * Returns an issue if drift is detected (service will use old token after restart).
+ * The invoking CLI selects recovery advice for its installation.
  */
 export function checkTokenDrift(params: {
   serviceToken: string | undefined;
@@ -617,7 +692,6 @@ export function checkTokenDrift(params: {
       code: SERVICE_AUDIT_CODES.gatewayTokenDrift,
       message:
         "Config token differs from service token. The daemon will use the old token after restart.",
-      detail: "Run `openclaw gateway install --force` to sync the token.",
       level: "recommended",
     };
   }
@@ -647,6 +721,7 @@ export async function auditGatewayServiceConfig(params: {
   auditManagedServiceEnvironment(params.command, issues, params.expectedManagedServiceEnvKeys);
   auditProxyServiceEnvironment(params.command, issues);
   auditGatewayToken(params.command, issues, params.expectedGatewayToken);
+  auditGatewayPassword(params.command, issues);
   auditGatewayServicePath(params.command, issues, params.env, platform, params.expectedServicePath);
   await auditGatewayRuntime(params.env, params.command, issues, platform);
 

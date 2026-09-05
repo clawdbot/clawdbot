@@ -79,5 +79,7 @@ describe("sessions_send tool description", () => {
     expect(describeSessionsSendTool()).toContain("not an external address");
     expect(describeSessionsSendTool()).not.toContain("conversations_");
     expect(describeSessionsSendTool()).toContain("reply may still announce");
+    expect(describeSessionsSendTool()).toContain('`targetDisposition: "queued"` or `"steered"`');
+    expect(describeSessionsSendTool()).toContain("neither proves target completion");
   });
 });

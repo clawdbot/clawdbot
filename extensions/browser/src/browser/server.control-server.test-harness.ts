@@ -195,6 +195,7 @@ const pwMocks = vi.hoisted(() => {
     clickViaPlaywright: vi.fn(async (_opts?: unknown) => {}),
     closePageViaPlaywright: vi.fn(async (_opts?: unknown) => {}),
     closePlaywrightBrowserConnection,
+    hasCachedPlaywrightBrowserConnection: vi.fn((_cdpUrl: string) => false),
     retirePlaywrightBrowserConnection: vi.fn(() => false),
     retirePlaywrightBrowserConnectionExact: vi.fn((opts: { cdpUrl: string }) => ({
       retired: false,
@@ -391,6 +392,7 @@ const chromeMcpMocks = vi.hoisted(() => ({
   clickChromeMcpElement: vi.fn(async () => {}),
   closeChromeMcpSession: vi.fn(async () => true),
   closeChromeMcpTab: vi.fn(async () => {}),
+  countChromeMcpTabs: vi.fn(async () => 1),
   dragChromeMcpElement: vi.fn(async () => {}),
   ensureChromeMcpAvailable: vi.fn(async () => {}),
   evaluateChromeMcpScript: vi.fn(async () => true),

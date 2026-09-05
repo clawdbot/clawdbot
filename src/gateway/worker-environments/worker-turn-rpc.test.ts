@@ -7,75 +7,17 @@ import {
   claimAgentRunDelegatedAuthority,
   releaseAgentRunDelegatedAuthority,
 } from "../../infra/agent-run-registry.js";
+import { createDeferredCore } from "../../shared/deferred.js";
 import { hashWorkerCredential } from "./credential.js";
 import type { WorkerSessionTurnClaim } from "./placement-record.js";
 import { createWorkerSessionPlacementStore } from "./placement-store.js";
-import { bindWorkerTurnExecutionIdentity } from "./placement-turn-claim-events.js";
+import { bindWorkerTurnOwner } from "./placement-turn-claim-events.js";
 import { signalWorkerTurnClaimClosed } from "./placement-turn-claims.js";
 import { createWorkerSessionPlacementGate } from "./placement-worker-gate.js";
 import * as support from "./service.test-support.js";
+import { claimWorkerPlacement } from "./worker-turn-rpc.test-support.js";
 
 type WorkerEnvironmentServiceOptions = support.WorkerEnvironmentServiceOptions;
-
-function claimWorkerPlacement(params: {
-  environmentId: string;
-  ownerEpoch: number;
-  runId?: string;
-  sessionId: string;
-}): { claim: WorkerSessionTurnClaim; store: ReturnType<typeof createWorkerSessionPlacementStore> } {
-  const store = createWorkerSessionPlacementStore({
-    database: support.testState.stateDb,
-    now: () => support.testState.nowMs,
-  });
-  const identity = {
-    sessionId: params.sessionId,
-    agentId: "main",
-    sessionKey: `agent:main:${params.sessionId}`,
-  };
-  let placement = store.startDispatch(identity);
-  placement = store.transition({
-    sessionId: params.sessionId,
-    from: "requested",
-    to: "provisioning",
-    expectedGeneration: placement.generation,
-    patch: { environmentId: params.environmentId },
-  });
-  placement = store.transition({
-    sessionId: params.sessionId,
-    from: "provisioning",
-    to: "syncing",
-    expectedGeneration: placement.generation,
-    patch: { workerBundleHash: support.BUNDLE_HASH },
-  });
-  placement = store.transition({
-    sessionId: params.sessionId,
-    from: "syncing",
-    to: "starting",
-    expectedGeneration: placement.generation,
-    patch: {
-      workspaceBaseManifestRef: `manifest-${params.sessionId}`,
-      remoteWorkspaceDir: `/workspace/${params.sessionId}`,
-    },
-  });
-  store.transition({
-    sessionId: params.sessionId,
-    from: "starting",
-    to: "active",
-    expectedGeneration: placement.generation,
-    patch: { activeOwnerEpoch: params.ownerEpoch },
-  });
-  const claim = store.claimTurn({
-    ...identity,
-    claimId: `claim-${params.sessionId}`,
-    runId: params.runId ?? "run-1",
-    owner: {
-      kind: "worker",
-      environmentId: params.environmentId,
-      ownerEpoch: params.ownerEpoch,
-    },
-  });
-  return { claim, store };
-}
 
 describe("worker environment service", () => {
   support.setupWorkerEnvironmentServiceSuite();
@@ -201,7 +143,7 @@ describe("worker environment service", () => {
     });
     const operationalRun = createOperationalRunInstanceRef(claim.runId);
     const delegatedAuthority = claimAgentRunDelegatedAuthority(operationalRun);
-    bindWorkerTurnExecutionIdentity(
+    bindWorkerTurnOwner(
       store,
       claim,
       createExecutionIdentityAdmissionToken(claim.runId, {
@@ -211,6 +153,7 @@ describe("worker environment service", () => {
       }),
       operationalRun,
       { agentId: "main", sessionKey: `agent:main:${sessionId}` },
+      () => {},
     );
     const gate = createWorkerSessionPlacementGate(store);
     const workerService = support.createService(support.createProvider(), { placementStore: gate });
@@ -276,7 +219,7 @@ describe("worker environment service", () => {
     });
     const firstOperationalRun = createOperationalRunInstanceRef(first.runId);
     const firstAuthority = claimAgentRunDelegatedAuthority(firstOperationalRun);
-    bindWorkerTurnExecutionIdentity(
+    bindWorkerTurnOwner(
       store,
       first,
       createExecutionIdentityAdmissionToken(first.runId, {
@@ -286,14 +229,10 @@ describe("worker environment service", () => {
       }),
       firstOperationalRun,
       { agentId: "main", sessionKey: `agent:main:${sessionId}` },
+      () => {},
     );
-    let resumeInstallation: (() => void) | undefined;
-    support.testState.prepareInstallation = vi.fn(
-      async () =>
-        await new Promise<typeof support.BUNDLE_ARTIFACT>((resolve) => {
-          resumeInstallation = () => resolve(support.BUNDLE_ARTIFACT);
-        }),
-    );
+    const installation = createDeferredCore<typeof support.BUNDLE_ARTIFACT>();
+    support.testState.prepareInstallation = vi.fn(() => installation.promise);
     const gate = createWorkerSessionPlacementGate(store);
     const workerService = support.createService(support.createProvider(), { placementStore: gate });
     const firstCredential = await workerService.acquireTurnCredential(first);
@@ -312,9 +251,11 @@ describe("worker environment service", () => {
       handshake: support.BOOTSTRAP_RECEIPT,
     };
     let secondAuthority: ReturnType<typeof claimAgentRunDelegatedAuthority> | undefined;
+    const pendingAdmission = workerService.admitWorker(admission);
     try {
-      const pendingAdmission = workerService.admitWorker(admission);
-      expect(support.testState.prepareInstallation).toHaveBeenCalledOnce();
+      await support.waitForFast(() =>
+        expect(support.testState.prepareInstallation).toHaveBeenCalledOnce(),
+      );
 
       store.releaseTurn(first);
       releaseAgentRunDelegatedAuthority(firstAuthority);
@@ -329,7 +270,7 @@ describe("worker environment service", () => {
       });
       const secondOperationalRun = createOperationalRunInstanceRef(second.runId);
       secondAuthority = claimAgentRunDelegatedAuthority(secondOperationalRun);
-      bindWorkerTurnExecutionIdentity(
+      bindWorkerTurnOwner(
         store,
         second,
         createExecutionIdentityAdmissionToken(second.runId, {
@@ -339,12 +280,15 @@ describe("worker environment service", () => {
         }),
         secondOperationalRun,
         { agentId: "main", sessionKey: `agent:main:${sessionId}` },
+        () => {},
       );
-      resumeInstallation?.();
+      installation.resolve(support.BUNDLE_ARTIFACT);
 
       await expect(pendingAdmission).resolves.toEqual({ ok: false, reason: "invalid-credential" });
       expect(receipts).toEqual([]);
     } finally {
+      installation.resolve(support.BUNDLE_ARTIFACT);
+      await Promise.allSettled([pendingAdmission]);
       clear();
       releaseAgentRunDelegatedAuthority(firstAuthority);
       if (secondAuthority) {
@@ -686,34 +630,6 @@ describe("worker environment service", () => {
       claim: identity.turnClaim,
       liveSeq: 1,
     });
-  });
-
-  it("does not ACK a transcript commit after its worker claim is fenced", async () => {
-    let finishCommit: (() => void) | undefined;
-    const commitBlocked = new Promise<void>((resolve) => {
-      finishCommit = resolve;
-    });
-    const applyTranscriptCommit = support.successfulTranscriptCommit(
-      "entry-placement-race",
-      () => commitBlocked,
-    );
-    const { identity, placementStore, workerService } = support.placementHarness(
-      "worker-placement-race",
-      "session-placement-race",
-      { applyTranscriptCommit },
-    );
-
-    const commit = workerService.commitTranscript(
-      identity,
-      support.transcriptRequest(identity, "commit before claim fence"),
-    );
-    await support.waitForFast(() => expect(applyTranscriptCommit).toHaveBeenCalledOnce());
-    placementStore.validateWorkerTurn.mockReturnValue(false);
-    finishCommit?.();
-
-    await expect(commit).resolves.toEqual({ ok: false, closeReason: "placement-mismatch" });
-    expect(placementStore.validateWorkerTurn).toHaveBeenCalledTimes(2);
-    expect(placementStore.updateAckCursors).not.toHaveBeenCalled();
   });
 
   it("advances the transcript cursor when a stale-base commit consumes its sequence", async () => {

@@ -42,7 +42,7 @@ import {
   deliveryContextFromSession,
   sessionDeliveryOrigin,
 } from "../utils/delivery-context.shared.js";
-import { resolveSessionStoreTargetsOrExit } from "./session-store-targets.js";
+import { resolveCommandSessionStoreTargets } from "./session-store-targets.js";
 import {
   resolveSessionDisplayModelRef,
   resolveSessionDisplayDefaults,
@@ -312,19 +312,7 @@ export async function sessionsCommand(
     await contextLookupRuntimeLoader.load();
   const configContextTokens =
     lookupContextTokens(displayDefaults.model, { allowAsyncLoad: false }) ?? DEFAULT_CONTEXT_TOKENS;
-  const targets = resolveSessionStoreTargetsOrExit({
-    cfg,
-    opts: {
-      store: opts.store,
-      agent: opts.agent,
-      allAgents: opts.allAgents,
-    },
-    runtime,
-    json: opts.json,
-  });
-  if (!targets) {
-    return;
-  }
+  const targets = resolveCommandSessionStoreTargets({ cfg, opts });
 
   let activeMinutes: number | undefined;
   if (opts.active !== undefined) {
@@ -345,7 +333,11 @@ export async function sessionsCommand(
   const classifyCliProvider = prepareCliProviderClassifier(cfg);
   const activeSince = activeMinutes === undefined ? undefined : Date.now() - activeMinutes * 60_000;
   const sessionEntries = targets.flatMap((target) => {
-    return listSessionEntriesReadOnly({ agentId: target.agentId, storePath: target.storePath })
+    return listSessionEntriesReadOnly({
+      agentId: target.agentId,
+      storePath: target.storePath,
+      projection: "list",
+    })
       .filter(
         ({ entry }) =>
           activeSince === undefined ||
@@ -363,8 +355,10 @@ export async function sessionsCommand(
       });
   });
   const acpSessionMetaByEntry = readAcpSessionMetaBatch({
-    entries: sessionEntries.map(({ acpSessionKey, entry }) => ({
+    cfg,
+    entries: sessionEntries.map(({ acpSessionKey, agentId, entry }) => ({
       sessionKey: acpSessionKey,
+      agentId,
       entry,
     })),
   });

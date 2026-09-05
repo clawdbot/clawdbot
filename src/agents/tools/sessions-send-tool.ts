@@ -66,11 +66,7 @@ import {
   queueEmbeddedAgentMessageWithOutcomeAsync,
 } from "../embedded-agent-runner/runs.js";
 import { resolveNestedAgentLaneForSession } from "../lanes.js";
-import {
-  type AgentWaitResult,
-  readLatestAssistantReplySnapshot,
-  waitForAgentRunAndReadUpdatedAssistantReply,
-} from "../run-wait.js";
+import { type AgentWaitResult, waitForAgentRunReply } from "../run-wait.js";
 import { loadSessionEntryByKey } from "../subagents/announce/subagent-announce-delivery.js";
 import {
   describeSessionsSendTool,
@@ -135,6 +131,7 @@ const SessionsSendOutputSchema = Type.Union([
       runId: Type.String(),
       status: Type.Literal("accepted"),
       sessionKey: Type.String(),
+      targetDisposition: Type.Union([Type.Literal("queued"), Type.Literal("steered")]),
       delivery: SessionsSendDeliverySchema,
       watched: Type.Optional(Type.Boolean()),
     },
@@ -176,7 +173,6 @@ const SessionsSendOutputSchema = Type.Union([
 ]);
 
 type GatewayCaller = AgentToolGatewayRequestCaller;
-const SESSIONS_SEND_REPLY_HISTORY_LIMIT = 50;
 const SESSIONS_SEND_MESSAGE_ALIASES = ["SendMessage", "content", "text"] as const;
 const NO_REPLY_MESSAGE = "No visible reply or pending announcement. Continue or retry if needed.";
 
@@ -375,7 +371,7 @@ async function startAgentRun(params: {
   | {
       ok: true;
       runId: string;
-      activeRunQueue?: boolean;
+      targetDisposition: "queued" | "steered";
       a2aSessionKey?: string;
       a2aDisplayKey?: string;
     }
@@ -440,7 +436,7 @@ async function startAgentRun(params: {
         );
       }
       if (queueOutcome.queued) {
-        return { ok: true, runId: params.runId, activeRunQueue: true };
+        return { ok: true, runId: params.runId, targetDisposition: "steered" };
       }
       const fallbackSessionKey = resolveCronRunScopedFallbackSessionKey(params.sessionKey);
       if (
@@ -461,6 +457,7 @@ async function startAgentRun(params: {
           ok: true,
           runId:
             typeof response?.runId === "string" && response.runId ? response.runId : params.runId,
+          targetDisposition: "queued",
           a2aSessionKey: fallbackSessionKey,
           a2aDisplayKey: fallbackSessionKey,
         };
@@ -477,6 +474,7 @@ async function startAgentRun(params: {
     return {
       ok: true,
       runId: typeof response?.runId === "string" && response.runId ? response.runId : params.runId,
+      targetDisposition: "queued",
     };
   } catch (err) {
     const messageText =
@@ -969,8 +967,6 @@ export function createSessionsSendTool(opts?: {
           }
 
           const requesterChannel = opts?.agentChannel;
-          const sameSessionA2A =
-            requesterSessionKey === resolvedKey && targetAgentId === requesterAgentId;
           const isIsolatedCronRequester = isCronRunSessionKey(requesterSessionKey);
           // Watch registration follows successful dispatch: a failed send must not leave
           // a hidden watch, and cron run-scoped sends can fall back to the durable parent
@@ -990,46 +986,6 @@ export function createSessionsSendTool(opts?: {
                 : false;
             return watchRequested ? { watched } : {};
           };
-          const fallbackA2ASessionKey =
-            timeoutSeconds === 0 && isIsolatedCronRequester
-              ? resolveCronRunScopedFallbackSessionKey(displayKey)
-              : undefined;
-
-          // Capture the pre-run assistant snapshot before starting the nested run.
-          // Fast in-process test doubles and short-circuit agent paths can finish
-          // before we reach the post-run read, which would otherwise make the new
-          // reply look like the baseline and hide it from the caller.
-          // Fire-and-forget same-session sends still need this baseline because the
-          // A2A follow-up may deliver directly to the source channel. Isolated cron
-          // requesters also need it to avoid attributing a stale target reply.
-          const baselineReply =
-            timeoutSeconds !== 0
-              ? await readLatestAssistantReplySnapshot({
-                  sessionKey: resolvedKey,
-                  agentId: targetAgentId,
-                  limit: SESSIONS_SEND_REPLY_HISTORY_LIMIT,
-                  callGateway: gatewayCall,
-                })
-              : sameSessionA2A || isIsolatedCronRequester
-                ? await readLatestAssistantReplySnapshot({
-                    sessionKey: resolvedKey,
-                    agentId: targetAgentId,
-                    limit: SESSIONS_SEND_REPLY_HISTORY_LIMIT,
-                    callGateway: gatewayCall,
-                  }).catch(() => undefined)
-                : undefined;
-          // Active-run delivery can fall back to the durable cron parent. Snapshot
-          // that target before dispatch so a fast reply cannot become its baseline.
-          const fallbackBaselineReply =
-            fallbackA2ASessionKey && fallbackA2ASessionKey !== resolvedKey
-              ? await readLatestAssistantReplySnapshot({
-                  sessionKey: fallbackA2ASessionKey,
-                  agentId: targetAgentId,
-                  limit: SESSIONS_SEND_REPLY_HISTORY_LIMIT,
-                  callGateway: gatewayCall,
-                }).catch(() => undefined)
-              : undefined;
-
           const agentMessageContext = buildAgentToAgentMessageContext({
             requesterSessionKey: replyRequesterSessionKey,
             requesterChannel,
@@ -1097,16 +1053,8 @@ export function createSessionsSendTool(opts?: {
           // post-return work or durable watches that could follow a reused key.
           const skipA2AFlow =
             skipAcpA2AFlow || skipNativeParentA2AFlow || Boolean(expectedSessionId);
-          // When the A2A flow is skipped, no follow-up announcement will fire and
-          // the reply (when present) is returned inline via the `reply` field.
-          // Reflect that in the metadata so the parent LLM does not wait for a
-          // second result that will never arrive.
-          const delivery = skipA2AFlow
-            ? ({ status: "skipped", mode: "announce" } as const)
-            : ({ status: "pending", mode: "announce" } as const);
-
           const startA2AFlow = (
-            roundOneReply?: string,
+            reply?: Awaited<ReturnType<typeof waitForAgentRunReply>>,
             waitRunId?: string,
             flowTargetSessionKey = resolvedKey,
             flowDisplayKey = displayKey,
@@ -1115,33 +1063,31 @@ export function createSessionsSendTool(opts?: {
             if (skipA2AFlow) {
               return;
             }
-            const flowBaseline =
-              flowTargetSessionKey === fallbackA2ASessionKey
-                ? fallbackBaselineReply
-                : baselineReply;
             // This detached flow can outlive the tool request that launched it.
             // Own a fresh root so parent release cannot retire later nested turns.
-            void runWithGatewayIndependentRootWorkContinuation(() =>
-              runWithoutOwnedSessionTranscriptWrites(() =>
-                runSessionsSendA2AFlow({
-                  callGateway: gatewayCall,
-                  targetSessionKey: flowTargetSessionKey,
-                  targetAgentId,
-                  displayKey: flowDisplayKey,
-                  message,
-                  announceTimeoutMs,
-                  // Cron runs are isolated jobs; target replies must not become new
-                  // requester turns, but the target-side announce still runs.
-                  maxPingPongTurns: isIsolatedCronRequester ? 0 : maxPingPongTurns,
-                  requesterSessionKey: replyRequesterSessionKey,
-                  requesterAgentId,
-                  requesterChannel,
-                  baseline: flowBaseline,
-                  roundOneReply,
-                  waitRunId,
-                  notifyRequesterOnWaitFailure,
-                }),
-              ),
+            void runWithGatewayIndependentRootWorkContinuation(
+              () =>
+                runWithoutOwnedSessionTranscriptWrites(() =>
+                  runSessionsSendA2AFlow({
+                    callGateway: gatewayCall,
+                    targetSessionKey: flowTargetSessionKey,
+                    targetAgentId,
+                    displayKey: flowDisplayKey,
+                    message,
+                    announceTimeoutMs,
+                    // Cron runs are isolated jobs; target replies must not become new
+                    // requester turns, but the target-side announce still runs.
+                    maxPingPongTurns: isIsolatedCronRequester ? 0 : maxPingPongTurns,
+                    requesterSessionKey: replyRequesterSessionKey,
+                    requesterAgentId,
+                    requesterChannel,
+                    roundOneReply: reply?.replyText,
+                    sourceReplyDelivered: reply?.sourceReplyDelivered,
+                    waitRunId,
+                    notifyRequesterOnWaitFailure,
+                  }),
+                ),
+              "session:a2a-send",
             ).catch((err: unknown) => {
               log.warn("sessions_send announce flow admission failed", {
                 runId: waitRunId ?? "unknown",
@@ -1172,6 +1118,13 @@ export function createSessionsSendTool(opts?: {
             return start.result;
           }
           const acceptedTargetSessionKey = start.a2aSessionKey ?? resolvedKey;
+          // Active-run steering is consumed by the current turn and does not
+          // launch the detached A2A flow. Report that boundary directly so the
+          // caller never mistakes target admission for announcement delivery.
+          const delivery =
+            skipA2AFlow || start.targetDisposition === "steered"
+              ? ({ status: "skipped", mode: "announce" } as const)
+              : ({ status: "pending", mode: "announce" } as const);
           recordSessionToolActionFact({
             operation: "send",
             fact: "committed",
@@ -1189,25 +1142,22 @@ export function createSessionsSendTool(opts?: {
           runId = start.runId;
           const watchField = registerWatchIfRequested(acceptedTargetSessionKey);
           if (timeoutSeconds === 0) {
-            if (!start.activeRunQueue) {
+            if (start.targetDisposition !== "steered") {
               startA2AFlow(undefined, runId, start.a2aSessionKey, start.a2aDisplayKey, true);
             }
             return jsonResult({
               runId,
               status: "accepted",
               sessionKey: displayKey,
+              targetDisposition: start.targetDisposition,
               delivery,
               ...watchField,
             });
           }
 
-          const result = await waitForAgentRunAndReadUpdatedAssistantReply({
+          const result = await waitForAgentRunReply({
             runId,
-            sessionKey: resolvedKey,
-            agentId: targetAgentId,
             timeoutMs,
-            limit: SESSIONS_SEND_REPLY_HISTORY_LIMIT,
-            baseline: baselineReply,
             callGateway: gatewayCall,
           });
 
@@ -1230,6 +1180,7 @@ export function createSessionsSendTool(opts?: {
                 runId,
                 status: "accepted",
                 sessionKey: displayKey,
+                targetDisposition: start.targetDisposition,
                 delivery,
                 ...watchField,
               });
@@ -1256,9 +1207,14 @@ export function createSessionsSendTool(opts?: {
           const reply = result.replyText;
           const response = reply
             ? { status: "ok" as const, delivery, reply }
-            : { status: "no_reply" as const, message: NO_REPLY_MESSAGE };
+            : {
+                status: "no_reply" as const,
+                message: result.sourceReplyDelivered
+                  ? "The target delivered its final reply directly to its source conversation. Do not resend."
+                  : NO_REPLY_MESSAGE,
+              };
           if (reply) {
-            startA2AFlow(reply);
+            startA2AFlow(result);
           }
           return jsonResult({ runId, sessionKey: displayKey, ...response, ...watchField });
         },

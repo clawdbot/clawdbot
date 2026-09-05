@@ -79,7 +79,9 @@ export function ensurePrivateSqliteCoordinatorDirectory(
     throw new SqliteCoordinatorError(`${coordinatorLabel} directory belongs to another user`);
   }
   if (process.platform !== "win32") {
-    applyPrivateModeSync(directoryPath, 0o700);
+    if ((stats.mode & 0o7777) !== 0o700) {
+      applyPrivateModeSync(directoryPath, 0o700);
+    }
     const secured = fs.lstatSync(directoryPath);
     if (secured.isSymbolicLink() || !secured.isDirectory() || (secured.mode & 0o077) !== 0) {
       throw new SqliteCoordinatorError(`${coordinatorLabel} directory permissions are not private`);

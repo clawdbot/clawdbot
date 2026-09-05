@@ -40,10 +40,9 @@ const { computeBackoffMock, sleepWithAbortMock } = vi.hoisted(() => ({
   sleepWithAbortMock: vi.fn(async (_ms: number, _abortSignal?: AbortSignal) => undefined),
 }));
 
-vi.mock("./models-config.js", async () => {
-  const mod = await vi.importActual<typeof import("./models-config.js")>("./models-config.js");
-  return { ...mod, ensureOpenClawModelsJson: vi.fn(async () => ({ wrote: false })) };
-});
+vi.mock("./models-config.js", () => ({
+  ensureOpenClawModelsJson: vi.fn(async () => ({ wrote: false })),
+}));
 
 function installReplyEntryMocks() {
   vi.doMock("../plugins/runtime.js", () => ({

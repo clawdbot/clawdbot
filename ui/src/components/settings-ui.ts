@@ -48,7 +48,7 @@ type SettingsHelpTriggerProps = {
 export type SettingsPageHeaderProps = {
   title: unknown;
   subtitle?: unknown;
-  actions?: TemplateResult;
+  actions?: TemplateResult | typeof nothing;
 };
 
 export function renderSettingsPage(
@@ -95,12 +95,16 @@ export function renderLearnMoreLink(url: string): TemplateResult {
 
 export function renderSettingsPageHeader(props: SettingsPageHeaderProps): TemplateResult {
   return html`
-    <section class="content-header">
+    <section class="content-header content-header--settings">
       <div>
         <div class="page-title">${props.title}</div>
         ${props.subtitle ? html`<div class="page-subtitle">${props.subtitle}</div>` : nothing}
       </div>
-      ${props.actions ? html`<div class="page-header-actions">${props.actions}</div>` : nothing}
+      ${
+        props.actions && props.actions !== nothing
+          ? html`<div class="page-header-actions">${props.actions}</div>`
+          : nothing
+      }
     </section>
   `;
 }
@@ -114,15 +118,19 @@ export function renderSettingsSection(props: SettingsSectionProps, rows: unknown
     props.title || props.description
       ? html`
           <div class="settings-section__copy">
-            ${props.title
-              ? html`
-                  <h2 class="settings-section__heading">
-                    ${props.title}${props.count !== undefined
-                      ? html` <span class="settings-count">${props.count}</span>`
-                      : nothing}
-                  </h2>
-                `
-              : nothing}
+            ${
+              props.title
+                ? html`
+                    <h2 class="settings-section__heading">
+                      ${props.title}${
+                        props.count !== undefined
+                          ? html` <span class="settings-count">${props.count}</span>`
+                          : nothing
+                      }
+                    </h2>
+                  `
+                : nothing
+            }
             ${description}
           </div>
         `
@@ -132,9 +140,11 @@ export function renderSettingsSection(props: SettingsSectionProps, rows: unknown
       ? html`
           <div class="settings-section__header">
             ${copy}
-            ${props.actions
-              ? html`<div class="settings-section__actions">${props.actions}</div>`
-              : nothing}
+            ${
+              props.actions
+                ? html`<div class="settings-section__actions">${props.actions}</div>`
+                : nothing
+            }
           </div>
         `
       : nothing;
@@ -163,13 +173,17 @@ export function renderSettingsRow(props: SettingsRowProps): TemplateResult {
     <div class=${className}>
       <div class="settings-row__text">
         <span class="settings-row__title">${props.title}</span>
-        ${props.description
-          ? html`<span class="settings-row__desc">${props.description}</span>`
-          : nothing}
+        ${
+          props.description
+            ? html`<span class="settings-row__desc">${props.description}</span>`
+            : nothing
+        }
       </div>
-      ${props.control !== undefined && props.control !== nothing
-        ? html`<div class="settings-row__control">${props.control}</div>`
-        : nothing}
+      ${
+        props.control !== undefined && props.control !== nothing
+          ? html`<div class="settings-row__control">${props.control}</div>`
+          : nothing
+      }
     </div>
   `;
 }
@@ -182,9 +196,11 @@ export function renderSettingsNavRow(
     <button type="button" class="settings-row settings-row--nav" @click=${props.onClick}>
       <div class="settings-row__text">
         <span class="settings-row__title">${props.title}</span>
-        ${props.description
-          ? html`<span class="settings-row__desc">${props.description}</span>`
-          : nothing}
+        ${
+          props.description
+            ? html`<span class="settings-row__desc">${props.description}</span>`
+            : nothing
+        }
       </div>
       <div class="settings-row__control">
         ${props.control ?? nothing}
@@ -260,9 +276,11 @@ export function renderSettingsToggleRow(props: {
     >
       <div class="settings-row__text">
         <span class="settings-row__title">${props.title}</span>
-        ${props.description
-          ? html`<span class="settings-row__desc">${props.description}</span>`
-          : nothing}
+        ${
+          props.description
+            ? html`<span class="settings-row__desc">${props.description}</span>`
+            : nothing
+        }
       </div>
       <div class="settings-row__control">
         <wa-switch
@@ -319,15 +337,17 @@ export function renderSettingsSegmented<T extends string>(props: {
         }
       }}
     >
-      ${props.ariaLabel
-        ? html`<span slot="label" class="settings-control__sr-label">${props.ariaLabel}</span>`
-        : nothing}
+      ${
+        props.ariaLabel
+          ? html`<span slot="label" class="settings-control__sr-label">${props.ariaLabel}</span>`
+          : nothing
+      }
       ${props.options.map(
         (option) => html`
           <wa-radio
-            class="settings-segmented__btn ${option.value === props.value
-              ? "settings-segmented__btn--active"
-              : ""}"
+            class="settings-segmented__btn ${
+              option.value === props.value ? "settings-segmented__btn--active" : ""
+            }"
             appearance="button"
             value=${option.value}
             .checked=${live(option.value === props.value)}
@@ -372,6 +392,42 @@ export function renderSettingsValue(value: unknown, options: { mono?: boolean } 
 
 export function renderSettingsEmpty(message: unknown): TemplateResult {
   return html`<div class="settings-empty">${message}</div>`;
+}
+
+/** Shape-matched placeholder for settings rows whose content has not loaded yet. */
+export function renderSettingsLoadingSkeleton(
+  options: { label?: unknown; rows?: number } = {},
+): TemplateResult {
+  const rowCount = Math.max(1, options.rows ?? 3);
+  return html`
+    <div
+      class="settings-loading-skeleton"
+      role="status"
+      aria-busy="true"
+      aria-label=${options.label ?? t("common.loading")}
+    >
+      <div class="settings-loading-skeleton__rows" aria-hidden="true">
+        ${Array.from(
+          { length: rowCount },
+          (_, index) => html`
+            <div class="settings-row settings-loading-skeleton__row">
+              <div class="settings-row__text">
+                <span class="skeleton settings-loading-skeleton__title"></span>
+                <span class="skeleton settings-loading-skeleton__description"></span>
+              </div>
+              <div class="settings-row__control">
+                <span
+                  class="skeleton settings-loading-skeleton__control ${
+                    index % 2 === 0 ? "settings-loading-skeleton__control--wide" : ""
+                  }"
+                ></span>
+              </div>
+            </div>
+          `,
+        )}
+      </div>
+    </div>
+  `;
 }
 
 /** Secret text input with an inset reveal toggle — one field, no trailing

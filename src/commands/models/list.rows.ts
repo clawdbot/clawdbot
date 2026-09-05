@@ -381,6 +381,7 @@ export async function loadListModelCatalogSnapshot(
     agentDir: context.agentDir,
     ...(workspaceDir ? { workspaceDir } : {}),
     readOnly: true,
+    refreshFullCatalog: "stale",
   });
 }
 
@@ -483,7 +484,7 @@ export async function appendConfiguredProviderRows(params: {
             provider,
             stripSelfProviderModelPrefix(provider, configuredModel.id),
             {
-              manifestPlugins: params.context.metadataSnapshot?.manifestRegistry.plugins,
+              manifestPlugins: params.context.metadataSnapshot,
             },
           )
         : configuredModel.id;

@@ -1,7 +1,7 @@
 import { EventEmitter } from "node:events";
 import type { IncomingMessage, ServerResponse } from "node:http";
 import { createMockIncomingRequest } from "openclaw/plugin-sdk/test-env";
-import { vi } from "vitest";
+import { vi, type Mock } from "vitest";
 import { createOpenAIQuicksilverBrowserSessionBroker } from "./realtime-quicksilver-session.js";
 
 export class FakeSocket extends EventEmitter {
@@ -119,7 +119,7 @@ export function createBroker(params?: {
 }) {
   const sockets: FakeSocket[] = [];
   const socketRequests: Array<{ url: string; headers?: Record<string, string> }> = [];
-  const logger = { debug: vi.fn(), warn: vi.fn() };
+  const logger = { debug: vi.fn() as Mock, warn: vi.fn() as Mock };
   const realtime = createOpenAIQuicksilverBrowserSessionBroker({
     getConfig: () => ({
       gateway: { controlUi: { allowedOrigins: ["https://control.example"] } },

@@ -8,9 +8,9 @@ import type {
 import { formatUiExternalText } from "../../lib/format-error.ts";
 
 export const MODEL_SETUP_DETECT_TIMEOUT_MS = 40_000;
-export const MODEL_SETUP_VERIFY_TIMEOUT_MS = 30_000;
-const MODEL_SETUP_ACTIVATE_TIMEOUT_MS = 150_000;
-const MODEL_SETUP_CODEX_ACTIVATE_TIMEOUT_MS = 480_000;
+// Match native setup: the Gateway's 90-second inference probe also needs startup allowance.
+export const MODEL_SETUP_VERIFY_TIMEOUT_MS = 150_000;
+const MODEL_SETUP_ACTIVATE_TIMEOUT_MS = 480_000;
 export const MODEL_SETUP_AUTH_START_TIMEOUT_MS = 30_000;
 export const MODEL_SETUP_WIZARD_NEXT_TIMEOUT_MS = null;
 
@@ -57,9 +57,7 @@ export function activationTimeoutForKind(kind: string): number {
   if (kind === "provider-auth") {
     return 25 * 60 * 1000;
   }
-  return kind === "codex-cli"
-    ? MODEL_SETUP_CODEX_ACTIVATE_TIMEOUT_MS
-    : MODEL_SETUP_ACTIVATE_TIMEOUT_MS;
+  return MODEL_SETUP_ACTIVATE_TIMEOUT_MS;
 }
 
 export function activationTargetId(kind: string, modelRef: string): string {

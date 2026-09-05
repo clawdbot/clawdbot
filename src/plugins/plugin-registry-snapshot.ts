@@ -273,19 +273,25 @@ function hasMismatchedPersistedBundledRoot(
       );
     }
     if (isRealPathInside(bundledRoot, plugin.rootDir, realpathCache)) {
-      if (!sourceCheckout) {
-        return false;
-      }
-      const resolvedBundledRoot = safeRealpathSync(bundledRoot, realpathCache) ?? bundledRoot;
-      const resolvedPluginRoot = safeRealpathSync(plugin.rootDir, realpathCache) ?? plugin.rootDir;
-      const sourcePackage = tryReadJsonSync<PackageManifest>(
+      const sourcePluginRoot =
+        legacyRoot &&
         path.join(
           legacyRoot,
-          path.relative(resolvedBundledRoot, resolvedPluginRoot),
-          "package.json",
-        ),
+          path.relative(
+            safeRealpathSync(bundledRoot, realpathCache) ?? bundledRoot,
+            safeRealpathSync(plugin.rootDir, realpathCache) ?? plugin.rootDir,
+          ),
+        );
+      // A new mount replaces the bundled owner even when its cached build is unchanged.
+      return Boolean(
+        sourcePluginRoot &&
+        (overlays.some((root) => isRealPathInside(root, sourcePluginRoot, realpathCache)) ||
+          (sourceCheckout &&
+            getPackageManifestMetadata(
+              tryReadJsonSync<PackageManifest>(path.join(sourcePluginRoot, "package.json")) ??
+                undefined,
+            )?.build?.bundledDist === false)),
       );
-      return getPackageManifestMetadata(sourcePackage ?? undefined)?.build?.bundledDist === false;
     }
     return (
       !overlays.some((root) => isRealPathInside(root, plugin.rootDir, realpathCache)) &&
@@ -347,32 +353,20 @@ function requiresDerivedRegistryValidation(
   );
 }
 
-function collectConfiguredPluginIds(config: LoadPluginRegistryParams["config"]): Set<string> {
-  const plugins = normalizePluginsConfig(config?.plugins);
-  const pluginIds = new Set<string>();
-  for (const pluginId of Object.keys(plugins.entries)) {
-    pluginIds.add(pluginId);
-  }
-  for (const pluginId of plugins.allow) {
-    pluginIds.add(pluginId);
-  }
-  for (const pluginId of Object.values(plugins.slots)) {
-    if (typeof pluginId === "string" && pluginId.trim() && pluginId !== "none") {
-      pluginIds.add(pluginId);
-    }
-  }
-  return pluginIds;
-}
-
 function hasConfiguredGlobalSourcePluginMissingFromPersistedIndex(
   params: LoadPluginRegistryParams,
   index: InstalledPluginIndex,
   env: NodeJS.ProcessEnv,
 ): boolean {
-  const configuredPluginIds = collectConfiguredPluginIds(params.config);
+  const plugins = normalizePluginsConfig(params.config?.plugins);
   const persistedPluginIds = new Set(index.plugins.map((plugin) => plugin.pluginId));
   const missingConfiguredPluginIds = new Set(
-    [...configuredPluginIds].filter((pluginId) => !persistedPluginIds.has(pluginId)),
+    [
+      ...Object.keys(plugins.entries),
+      ...plugins.allow,
+      // Slot normalization already represents disabled or unset selections as nullish.
+      ...Object.values(plugins.slots).filter((pluginId): pluginId is string => pluginId != null),
+    ].filter((pluginId) => !persistedPluginIds.has(pluginId)),
   );
   if (missingConfiguredPluginIds.size === 0) {
     return false;
@@ -533,22 +527,22 @@ export function loadPluginRegistrySnapshotWithMetadata(
   };
 }
 
-function resolveSnapshot(params: LoadPluginRegistryParams = {}): PluginRegistrySnapshot {
-  return loadPluginRegistrySnapshotWithMetadata(params).snapshot;
-}
-
 export function loadPluginRegistrySnapshot(
   params: LoadPluginRegistryParams = {},
 ): PluginRegistrySnapshot {
-  return resolveSnapshot(params);
+  return loadPluginRegistrySnapshotWithMetadata(params).snapshot;
 }
 
 export function getPluginRecord(params: GetPluginRecordParams): PluginRegistryRecord | undefined {
-  return getInstalledPluginRecord(resolveSnapshot(params), params.pluginId);
+  return getInstalledPluginRecord(loadPluginRegistrySnapshot(params), params.pluginId);
 }
 
 export function isPluginEnabled(params: GetPluginRecordParams): boolean {
-  return isInstalledPluginEnabled(resolveSnapshot(params), params.pluginId, params.config);
+  return isInstalledPluginEnabled(
+    loadPluginRegistrySnapshot(params),
+    params.pluginId,
+    params.config,
+  );
 }
 
 export async function inspectPluginRegistry(

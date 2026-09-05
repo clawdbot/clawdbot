@@ -3,7 +3,7 @@ import { createServer } from "node:http";
 import { Command } from "commander";
 import { afterAll, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 import { CONFIG_AUDIT_STORE_LABEL } from "../../config/io.audit.js";
-import type { ConfigFileSnapshot } from "../../config/types.js";
+import type { ConfigFileSnapshot, OpenClawConfig } from "../../config/types.js";
 import { GATEWAY_SERVICE_RUNTIME_PID_ENV } from "../../daemon/constants.js";
 import { createNewerSqliteSchemaVersionError } from "../../infra/sqlite-user-version.js";
 import { SUPERVISOR_HINT_ENV_VARS } from "../../infra/supervisor-markers.js";
@@ -76,7 +76,9 @@ const loadShellEnvFallback = vi.fn((_opts?: unknown) => {
   callOrder.push("shell-env");
 });
 const clearShellEnvAppliedKeys = vi.fn((_keys: readonly string[]) => undefined);
-const resolveShellEnvExpectedKeys = vi.fn((_env?: NodeJS.ProcessEnv) => ["OPENCLAW_GATEWAY_TOKEN"]);
+const resolveShellEnvExpectedKeys = vi.fn((_env?: NodeJS.ProcessEnv, _config?: OpenClawConfig) => [
+  "OPENCLAW_GATEWAY_TOKEN",
+]);
 const resolveShellEnvFallbackTimeoutMs = vi.fn((_env?: NodeJS.ProcessEnv) => 15_000);
 const shouldDeferShellEnvFallback = vi.fn((_env?: NodeJS.ProcessEnv) => false);
 const shouldEnableShellEnvFallback = vi.fn((_env?: NodeJS.ProcessEnv) => false);
@@ -201,7 +203,8 @@ vi.mock("../../infra/dotenv-global.js", () => ({
 }));
 
 vi.mock("../../config/shell-env-expected-keys.js", () => ({
-  resolveShellEnvExpectedKeys: (env?: NodeJS.ProcessEnv) => resolveShellEnvExpectedKeys(env),
+  resolveShellEnvExpectedKeys: (...args: Parameters<typeof resolveShellEnvExpectedKeys>) =>
+    resolveShellEnvExpectedKeys(...args),
 }));
 
 vi.mock("../../infra/shell-env.js", () => ({
@@ -686,6 +689,10 @@ describe("gateway run option collisions", () => {
         logger: expect.any(Object),
         timeoutMs: 1234,
       });
+      expect(resolveShellEnvExpectedKeys).toHaveBeenCalledWith(
+        expect.objectContaining({ OPENCLAW_GATEWAY_TOKEN: "config-token" }),
+        finalConfig,
+      );
       expect(readConfigFileSnapshotWithPluginMetadata).toHaveBeenCalledWith(
         expect.objectContaining({
           lowerPrecedenceEnv: { OPENCLAW_GATEWAY_TOKEN: "shell-token" },

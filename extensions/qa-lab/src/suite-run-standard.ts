@@ -2,7 +2,7 @@ import path from "node:path";
 import { disposeRegisteredAgentHarnesses } from "openclaw/plugin-sdk/agent-harness";
 import type { OpenClawConfig } from "openclaw/plugin-sdk/config-contracts";
 import { createQaGatewayChild } from "./gateway-child.js";
-import type { QaLabLatestReport, QaLabScenarioOutcome } from "./lab-server.types.js";
+import type { QaLabLatestReport } from "./lab-server.types.js";
 import {
   formatQaScenarioFailureSuffix,
   sanitizeQaProgressValue as sanitizeQaSuiteProgressValue,
@@ -23,6 +23,7 @@ import {
   collectQaSuiteTransportPolicy,
   scenarioRequiresControlUi,
 } from "./suite-planning.js";
+import { createQaSuiteProgressController } from "./suite-progress.js";
 import { runQaSuiteRoundTripProbe } from "./suite-round-trip.js";
 import { waitForGatewayHealthy, waitForTransportReady } from "./suite-runtime-gateway.js";
 import {
@@ -203,18 +204,12 @@ export async function runQaFlowSuiteStandard(
     }
     const scenarios: QaSuiteScenarioResult[] = [];
     let runtimeParityCellTiming: QaRuntimeParityCellTiming | undefined;
-    const liveScenarioOutcomes: QaLabScenarioOutcome[] = selectedScenarios.map((scenario) => ({
-      id: scenario.id,
-      name: scenario.title,
-      status: "pending",
-    }));
-
-    lab.setScenarioRun({
-      kind: "suite",
-      status: "running",
+    const progress = createQaSuiteProgressController({
+      lab,
+      scenarios: selectedScenarios,
       startedAt: startedAt.toISOString(),
-      scenarios: liveScenarioOutcomes,
     });
+    progress.start();
 
     const gatewayProcessRssSamples: QaSuiteGatewayRssSample[] = [];
     const sampleGatewayProcessRss = (label: string) => {
@@ -253,18 +248,7 @@ export async function runQaFlowSuiteStandard(
         `scenario start (${index + 1}/${selectedScenarios.length}): ${scenarioIdForLog}`,
       );
       sampleGatewayProcessRss(`scenario:${scenario.id}:start`);
-      liveScenarioOutcomes[index] = {
-        id: scenario.id,
-        name: scenario.title,
-        status: "running",
-        startedAt: new Date().toISOString(),
-      };
-      lab.setScenarioRun({
-        kind: "suite",
-        status: "running",
-        startedAt: startedAt.toISOString(),
-        scenarios: [...liveScenarioOutcomes],
-      });
+      progress.markRunning([scenario.id]);
 
       const scenarioBootstrapFinishedAt = new Date();
       let scenarioExecutionStartedAt = scenarioBootstrapFinishedAt;
@@ -328,21 +312,7 @@ export async function runQaFlowSuiteStandard(
         progressEnabled,
         `scenario ${scenarioResult.status} (${index + 1}/${selectedScenarios.length}): ${scenarioIdForLog}${formatQaScenarioFailureSuffix(scenarioResult)}`,
       );
-      liveScenarioOutcomes[index] = {
-        id: scenario.id,
-        name: scenario.title,
-        status: scenarioResult.status,
-        details: scenarioResult.details,
-        steps: scenarioResult.steps,
-        startedAt: liveScenarioOutcomes[index]?.startedAt,
-        finishedAt: new Date().toISOString(),
-      };
-      lab.setScenarioRun({
-        kind: "suite",
-        status: "running",
-        startedAt: startedAt.toISOString(),
-        scenarios: [...liveScenarioOutcomes],
-      });
+      progress.recordScenarioResult(scenario.id, scenarioResult);
       if (params?.failFast === true && scenarioResult.status === "fail") {
         break;
       }
@@ -424,13 +394,7 @@ export async function runQaFlowSuiteStandard(
         markdown: report,
         generatedAt: finishedAt.toISOString(),
       } satisfies QaLabLatestReport);
-      lab.setScenarioRun({
-        kind: "suite",
-        status: "completed",
-        startedAt: startedAt.toISOString(),
-        finishedAt: finishedAt.toISOString(),
-        scenarios: [...liveScenarioOutcomes],
-      });
+      progress.complete([], finishedAt.toISOString());
       return {
         outputDir,
         evidence,

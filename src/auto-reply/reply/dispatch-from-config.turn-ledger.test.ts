@@ -33,6 +33,7 @@ describe("requireQueuedReplyDelivery", () => {
   it.each([
     ["delivered", true],
     ["delivered-not-visible", false],
+    ["channel-transform", false],
     ["cancelled", false],
     ["failed-before-deliver", false],
     ["failed-deliver", false],

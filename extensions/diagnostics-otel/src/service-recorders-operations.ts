@@ -1,4 +1,4 @@
-import { SpanStatusCode } from "@opentelemetry/api";
+import { ROOT_CONTEXT, SpanStatusCode } from "@opentelemetry/api";
 import {
   normalizeDiagnosticValue,
   normalizeDiagnosticLane,
@@ -16,6 +16,12 @@ import type { SessionRecoveryDiagnosticEvent, TalkDiagnosticEvent } from "./serv
 export function createOperationsRecorders(runtime: DiagnosticsRecorderRuntime) {
   const {
     durationHistogram,
+    gatewayRpcRequestsCounter,
+    gatewayRpcOutcomesCounter,
+    gatewayRpcFirstResponseHistogram,
+    gatewayRpcHandlerHistogram,
+    gatewayRpcAdmissionHistogram,
+    gatewayRpcQueueWaitHistogram,
     queueDepthHistogram,
     queueWaitHistogram,
     laneEnqueueCounter,
@@ -44,11 +50,72 @@ export function createOperationsRecorders(runtime: DiagnosticsRecorderRuntime) {
     spanWithDuration,
     trustedTraceContext,
     activeTrustedParentContext,
+    internalOrTrustedExplicitParentContext,
     setSpanAttrs,
     completeTrackedLifecycleSpan,
     addRunAttrs,
     tracesEnabled,
   } = runtime;
+
+  const recordGatewayRpc = (
+    evt: Extract<DiagnosticEventPayload, { type: "gateway.rpc" }>,
+    metadata: DiagnosticEventMetadata,
+  ) => {
+    if (!metadata.trusted) {
+      return;
+    }
+    const attrs = { "openclaw.gateway.rpc.method": evt.method };
+    if (evt.phase === "received") {
+      gatewayRpcRequestsCounter.add(1, attrs);
+      return;
+    }
+    const outcomeAttrs = {
+      "openclaw.gateway.rpc.phase": evt.phase,
+      "openclaw.gateway.rpc.outcome": evt.outcome,
+    };
+    gatewayRpcOutcomesCounter.add(1, outcomeAttrs);
+    switch (evt.phase) {
+      case "response":
+        if (evt.outcome === "ok" || evt.outcome === "error") {
+          gatewayRpcFirstResponseHistogram.record(evt.durationMs, attrs);
+        }
+        break;
+      case "handler":
+        gatewayRpcHandlerHistogram.record(evt.durationMs, attrs);
+        gatewayRpcAdmissionHistogram.record(evt.admissionMs, attrs);
+        break;
+      case "dispatch":
+        if (evt.queueWaitMs !== undefined) {
+          gatewayRpcQueueWaitHistogram.record(evt.queueWaitMs, attrs);
+        }
+        break;
+    }
+    if (!tracesEnabled) {
+      return;
+    }
+    // These completed observations do not own the handler or later response callbacks.
+    // Preserve the explicit upstream parent; an absent parent must not borrow the export callback scope.
+    const span = spanWithDuration(
+      `openclaw.gateway.rpc.${evt.phase}`,
+      {
+        ...attrs,
+        ...outcomeAttrs,
+        ...(evt.phase === "handler"
+          ? { "openclaw.gateway.rpc.admission_ms": evt.admissionMs }
+          : {}),
+        ...(evt.phase === "dispatch" ? { "openclaw.gateway.rpc.response": evt.response } : {}),
+      },
+      evt.durationMs,
+      {
+        endTimeMs: evt.ts,
+        parentContext: internalOrTrustedExplicitParentContext(evt, metadata) ?? ROOT_CONTEXT,
+      },
+    );
+    if (evt.outcome === "error" || evt.outcome === "threw") {
+      span.setStatus({ code: SpanStatusCode.ERROR });
+    }
+    span.end(evt.ts);
+  };
 
   const recordLaneEnqueue = (
     evt: Extract<DiagnosticEventPayload, { type: "queue.lane.enqueue" }>,
@@ -336,6 +403,7 @@ export function createOperationsRecorders(runtime: DiagnosticsRecorderRuntime) {
   };
 
   return {
+    recordGatewayRpc,
     recordLaneEnqueue,
     recordLaneDequeue,
     recordSessionState,

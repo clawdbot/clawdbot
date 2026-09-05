@@ -57,15 +57,6 @@ export function createFeishuSendReceipt(params: {
   });
 }
 
-export function assertFeishuMessageApiSuccess(
-  response: FeishuMessageApiResponse,
-  errorPrefix: string,
-) {
-  if (response.code !== 0) {
-    throw new Error(`${errorPrefix}: ${response.msg || `code ${response.code}`}`);
-  }
-}
-
 export function toFeishuSendResult(
   response: FeishuMessageApiResponse,
   chatId: string,

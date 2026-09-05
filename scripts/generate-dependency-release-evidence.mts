@@ -2,11 +2,17 @@
 
 // Generates release dependency evidence artifacts and summaries.
 import { execFileSync } from "node:child_process";
+import { createHash } from "node:crypto";
 import { appendFile, mkdir, readFile, rm, writeFile } from "node:fs/promises";
 import path from "node:path";
 import process from "node:process";
 import type { runDependencyVulnerabilityGate } from "./dependency-vulnerability-gate.mts";
 import { parseFlagArgs, stringFlag } from "./lib/arg-utils.mts";
+import {
+  RELEASE_DEPENDENCY_RISK_LOCKFILES,
+  resolveReleaseDependencyRiskAcceptance,
+} from "./lib/release-dependency-risk-acceptance.mts";
+import { REPORT_CLI_PARSE_OPTIONS } from "./lib/report-cli-helpers.mts";
 
 /**
  * Dependency evidence reports generated for release artifacts.
@@ -142,7 +148,32 @@ export function resolvePreviousReleaseTag({
     return localTag;
   }
   if (fetchOnMiss) {
-    runCommand("git", ["fetch", "--tags", "--force", "origin"], rootDir, execFileSyncImpl);
+    const releaseSha = commandOutput("git", ["rev-parse", "HEAD"], rootDir, execFileSyncImpl);
+    if (!releaseSha) {
+      throw new Error("Could not resolve the release commit SHA.");
+    }
+    const shallow = commandOutput(
+      "git",
+      ["rev-parse", "--is-shallow-repository"],
+      rootDir,
+      execFileSyncImpl,
+    );
+    // Describe needs complete target ancestry; unrelated branches and tooling tags do not.
+    runCommand(
+      "git",
+      [
+        "fetch",
+        "--filter=blob:none",
+        "--no-tags",
+        "--force",
+        ...(shallow === "true" ? ["--unshallow"] : []),
+        "origin",
+        releaseSha,
+        "+refs/tags/v*:refs/tags/v*",
+      ],
+      rootDir,
+      execFileSyncImpl,
+    );
   }
   const fetchedTag = commandOutput("git", describeArgs, rootDir, execFileSyncImpl, true);
   if (fetchedTag) {
@@ -319,74 +350,80 @@ export function renderDependencyEvidenceStepSummary({
   ].join("\n")}\n`;
 }
 
-function runEvidenceReports(
+async function runEvidenceReports(
   rootDir: string,
   outputDir: string,
   baseRef: string,
   execFileSyncImpl: ExecFileSyncLike,
+  packageVersion: string,
 ) {
-  runCommand(
-    "pnpm",
-    [
-      "deps:vuln:gate",
-      "--",
-      "--json",
-      reportPath(outputDir, "dependency-vulnerability-gate.json"),
-      "--markdown",
-      reportPath(outputDir, "dependency-vulnerability-gate.md"),
-    ],
-    rootDir,
-    execFileSyncImpl,
-  );
-  runCommand(
-    "pnpm",
-    [
-      "deps:transitive-risk:report",
-      "--",
-      "--json",
-      reportPath(outputDir, "transitive-manifest-risk-report.json"),
-      "--markdown",
-      reportPath(outputDir, "transitive-manifest-risk-report.md"),
-    ],
-    rootDir,
-    execFileSyncImpl,
-  );
-  runCommand(
-    "pnpm",
-    [
-      "deps:ownership-surface:report",
-      "--",
-      "--json",
-      reportPath(outputDir, "dependency-ownership-surface-report.json"),
-      "--markdown",
-      reportPath(outputDir, "dependency-ownership-surface-report.md"),
-    ],
-    rootDir,
-    execFileSyncImpl,
-  );
-  runCommand(
-    "pnpm",
-    [
-      "deps:changes:report",
-      "--",
-      "--base-ref",
-      baseRef,
-      "--json",
-      reportPath(outputDir, "dependency-changes-report.json"),
-      "--markdown",
-      reportPath(outputDir, "dependency-changes-report.md"),
-    ],
-    rootDir,
-    execFileSyncImpl,
-  );
+  let riskAcceptance: ReturnType<typeof resolveReleaseDependencyRiskAcceptance> = null;
+  const toolingRoot = path.resolve(import.meta.dirname, "..");
+  // Report implementations belong to this tooling checkout; --root selects only the source data.
+  // Release branches can keep frozen product bytes while trusted release tooling is repaired.
+  for (const report of DEPENDENCY_EVIDENCE_REPORTS) {
+    try {
+      runCommand(
+        "pnpm",
+        [
+          report.command.slice("pnpm ".length),
+          "--",
+          "--root",
+          rootDir,
+          ...(report.json === "dependency-changes-report.json" ? ["--base-ref", baseRef] : []),
+          "--json",
+          reportPath(outputDir, report.json),
+          "--markdown",
+          reportPath(outputDir, report.markdown),
+        ],
+        toolingRoot,
+        execFileSyncImpl,
+      );
+    } catch (error) {
+      if (
+        report.json !== "dependency-vulnerability-gate.json" ||
+        !(error instanceof Error) ||
+        !("status" in error) ||
+        error.status !== 1 ||
+        packageVersion !== "2026.9.1"
+      ) {
+        throw error;
+      }
+      const vulnerability = await readJson<
+        Awaited<ReturnType<typeof runDependencyVulnerabilityGate>>
+      >(reportPath(outputDir, report.json));
+      const lockfileSha256 = Object.fromEntries(
+        await Promise.all(
+          Object.keys(RELEASE_DEPENDENCY_RISK_LOCKFILES).map(async (file) => [
+            file,
+            createHash("sha256")
+              .update(await readFile(path.join(rootDir, file)))
+              .digest("hex"),
+          ]),
+        ),
+      );
+      riskAcceptance = resolveReleaseDependencyRiskAcceptance({
+        packageVersion,
+        lockfileSha256,
+        blockers: vulnerability.blockers,
+      });
+      if (!riskAcceptance) {
+        throw error;
+      }
+      console.warn(
+        "WARNING: 2026.9.1 dependency risks accepted by maintainer; scan findings remain unresolved.",
+      );
+    }
+  }
+  return riskAcceptance;
 }
 
 /**
  * Generates dependency evidence reports, manifest, and summaries for a release.
  */
 async function generateDependencyReleaseEvidence({
-  rootDir = process.cwd(),
-  outputDir,
+  rootDir: sourceRoot = process.cwd(),
+  outputDir: requestedOutputDir,
   releaseRef,
   npmDistTag,
   baseRef = null,
@@ -397,7 +434,7 @@ async function generateDependencyReleaseEvidence({
   execFileSyncImpl = execFileSync,
   now = new Date(),
 }: GenerateEvidenceParams = {}) {
-  if (!outputDir) {
+  if (!requestedOutputDir) {
     throw new Error("Expected --output-dir <path>.");
   }
   if (!releaseRef) {
@@ -407,6 +444,8 @@ async function generateDependencyReleaseEvidence({
     throw new Error("Expected --npm-dist-tag <tag>.");
   }
 
+  const rootDir = path.resolve(sourceRoot);
+  const outputDir = path.resolve(requestedOutputDir);
   await rm(outputDir, { recursive: true, force: true });
   await mkdir(outputDir, { recursive: true });
   // Publish the artifact location before a blocking report exits so CI can retain its evidence.
@@ -424,19 +463,28 @@ async function generateDependencyReleaseEvidence({
   const dependencyChangeBaseRef =
     baseRef ?? resolvePreviousReleaseTag({ rootDir, execFileSyncImpl });
 
-  runEvidenceReports(rootDir, outputDir, dependencyChangeBaseRef, execFileSyncImpl);
-
-  const manifest = createDependencyEvidenceManifest({
-    generatedAt: now.toISOString(),
-    releaseTag,
-    releaseRef,
-    releaseSha,
-    npmDistTag,
-    packageVersion,
-    workflowRunId,
-    workflowRunAttempt,
+  const riskAcceptance = await runEvidenceReports(
+    rootDir,
+    outputDir,
     dependencyChangeBaseRef,
-  });
+    execFileSyncImpl,
+    packageVersion,
+  );
+
+  const manifest = {
+    ...createDependencyEvidenceManifest({
+      generatedAt: now.toISOString(),
+      releaseTag,
+      releaseRef,
+      releaseSha,
+      npmDistTag,
+      packageVersion,
+      workflowRunId,
+      workflowRunAttempt,
+      dependencyChangeBaseRef,
+    }),
+    ...(riskAcceptance ? { riskAcceptance } : {}),
+  };
   await writeFile(
     reportPath(outputDir, "dependency-evidence-manifest.json"),
     `${JSON.stringify(manifest, null, 2)}\n`,
@@ -451,7 +499,10 @@ async function generateDependencyReleaseEvidence({
       releaseSha,
       baseRef: dependencyChangeBaseRef,
       counts,
-    }),
+    }) +
+      (riskAcceptance
+        ? "\n## Operator-accepted dependency risk\n\nThe maintainer accepted the five recorded advisory blockers for 2026.9.1 with unchanged dependencies. They remain unresolved, not a clean security scan. Exact graph hashes and findings are retained in dependency-evidence-manifest.json.\n"
+        : ""),
     "utf8",
   );
 
@@ -462,7 +513,10 @@ async function generateDependencyReleaseEvidence({
         evidenceArtifactName: `openclaw-release-dependency-evidence-${releaseRef}`,
         baseRef: dependencyChangeBaseRef,
         counts,
-      }),
+      }) +
+        (riskAcceptance
+          ? "\nWARNING: Five dependency advisory blockers remain unresolved and were explicitly accepted for 2026.9.1. See the dependency evidence manifest.\n"
+          : ""),
       "utf8",
     );
   }
@@ -517,12 +571,7 @@ export function parseArgs(argv: string[]): EvidenceCliOptions {
         rejectShortOptions: true,
       }),
     ),
-    {
-      duplicateOptionMessage: (flag) => `${flag} was provided more than once.`,
-      onUnhandledArg(arg) {
-        throw new Error(`Unsupported argument: ${arg}`);
-      },
-    },
+    REPORT_CLI_PARSE_OPTIONS,
   );
   return helpIndex === -1 ? parsed : { ...parsed, help: true };
 }

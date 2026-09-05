@@ -18,10 +18,10 @@ const loadConfigModule = createLazyRuntimeModule(() => import("../config/config.
 async function assertDoctorDatabaseSchemasCompatible(): Promise<void> {
   const [databasePreflight, agentDatabase, stateDatabase] = await Promise.all([
     import("../state/openclaw-database-preflight.js"),
-    import("../state/openclaw-agent-db.js"),
+    import("../state/openclaw-agent-db-contract.js"),
     import("../state/openclaw-state-db-contract.js"),
   ]);
-  const databaseSchemas = databasePreflight.preflightOpenClawDatabaseSchemas({
+  const databaseSchemas = await databasePreflight.preflightOpenClawDatabaseSchemas({
     env: process.env,
     supportedVersions: {
       state: stateDatabase.OPENCLAW_STATE_SCHEMA_VERSION,
@@ -142,7 +142,7 @@ export async function runDoctorHealthFlow(runtime?: RuntimeEnv, options: DoctorO
     }
     if (options.repair === true || options.yes === true) {
       // Contributions can report optional migration warnings, but repair must not
-      // complete while startup would still reject a legacy session store.
+      // complete while required state still blocks runtime access.
       const { assertSessionStoreMigrationComplete } =
         await import("../config/sessions/startup-migration.js");
       assertSessionStoreMigrationComplete({ cfg: ctx.cfg, env: process.env });
@@ -150,7 +150,7 @@ export async function runDoctorHealthFlow(runtime?: RuntimeEnv, options: DoctorO
         await import("../state/openclaw-database-preflight.js");
       const { resolveConfiguredAgentDatabaseTargets } =
         await import("../config/sessions/targets.js");
-      assertOpenClawDatabasesReady({
+      await assertOpenClawDatabasesReady({
         env: process.env,
         operation: "doctor",
         configuredAgentDatabaseTargets: resolveConfiguredAgentDatabaseTargets(ctx.cfg, {
@@ -160,6 +160,9 @@ export async function runDoctorHealthFlow(runtime?: RuntimeEnv, options: DoctorO
       const { assertConfiguredWorkspaceStateReady } =
         await import("../agents/workspace-state-dirs.js");
       assertConfiguredWorkspaceStateReady({ cfg: ctx.cfg });
+      const { assertNoPendingLegacyExecApprovals } =
+        await import("../infra/exec-approvals-migration-gate.js");
+      assertNoPendingLegacyExecApprovals();
     }
     await maintenance?.finish(ctx.cfg);
     if (ctx.postInstallDoctorResult) {

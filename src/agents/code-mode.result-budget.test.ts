@@ -28,6 +28,7 @@ import { createAgentHarnessToolSurfaceRuntimeCore } from "./harness/tool-surface
 import { projectMcpCallToolResult } from "./mcp-content.js";
 import { Agent, type AgentMessage, type AgentToolResult } from "./runtime/index.js";
 import { installSessionToolResultGuard } from "./session-tool-result-guard.js";
+import { agentSessionQueuePromptContext } from "./sessions/agent-session-prompting.js";
 import { SessionManager } from "./sessions/session-manager.js";
 import { createReadTool } from "./sessions/tools/read.js";
 import type { ReadToolContinuation } from "./sessions/tools/tool-contracts.js";
@@ -98,6 +99,7 @@ async function dispatch(
     contextWindowTokens,
   });
   const activeSession = {
+    [agentSessionQueuePromptContext]: () => () => undefined,
     agent,
     get messages() {
       return agent.state.messages;
@@ -183,6 +185,9 @@ describe("fresh producer results through persistence and model guards", () => {
       });
       try {
         const tools = runtime.compactTools([]).tools;
+        if (runtime.toolSearchCatalogRef?.current) {
+          runtime.toolSearchCatalogRef.current.counterScope = "result-budget";
+        }
         const first = message(
           await tools[0]!.execute("first", {
             code: `text(${JSON.stringify(firstText)}); await yield_control(); await yield_control(); ${lastText ? `text(${JSON.stringify(lastText)});` : ""} ${fail ? 'throw new Error("DIAGNOSTIC" + "é".repeat(40000));' : `return ${JSON.stringify(value)};`}`,

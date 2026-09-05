@@ -148,7 +148,9 @@ describe("createBundleMcpToolRuntime", () => {
       "demo__hidden_tool",
       "demo__model_tool",
     ]);
-    expect(getPluginToolMeta(runtime.appTools![0]!)?.mcp?.codexApproval).toEqual({ mode: "auto" });
+    expect(getPluginToolMeta(runtime.appTools![0]!)?.mcp?.codexApproval).toEqual({
+      mode: undefined,
+    });
     expect(
       applyEmbeddedAttemptToolsAllow(runtime.appTools ?? [], ["demo__model_tool"], {
         toolMeta: (tool) => getPluginToolMeta(tool),

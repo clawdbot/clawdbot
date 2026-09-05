@@ -1,6 +1,7 @@
 // Diagnostics Prometheus plugin module implements service behavior.
 import type { IncomingMessage, ServerResponse } from "node:http";
 import {
+  isDiagnosticsEnabled,
   normalizeDiagnosticValue,
   normalizeDiagnosticLane,
 } from "openclaw/plugin-sdk/diagnostic-runtime";
@@ -545,6 +546,65 @@ function recordDiagnosticEvent(
   }
 
   switch (evt.type) {
+    case "gateway.event_loop.sample":
+      store.histogram(
+        "openclaw_gateway_event_loop_delay_max_seconds",
+        "Maximum event-loop delay per completed Gateway observation window in seconds.",
+        {},
+        seconds(evt.delayMaxMs),
+      );
+      store.counter(
+        "openclaw_gateway_event_loop_observed_seconds_total",
+        "Elapsed seconds covered by completed Gateway event-loop observation windows.",
+        {},
+        evt.intervalMs / 1000,
+      );
+      return;
+    case "gateway.rpc": {
+      const labels = { method: evt.method };
+      if (evt.phase === "received") {
+        store.counter(
+          "openclaw_gateway_rpc_requests_total",
+          "Authenticated Gateway WebSocket requests received.",
+          labels,
+        );
+        return;
+      }
+      store.counter(
+        "openclaw_gateway_rpc_outcomes_total",
+        "Gateway RPC observations by phase and outcome.",
+        { phase: evt.phase, outcome: evt.outcome },
+      );
+      if (evt.phase === "response" && (evt.outcome === "ok" || evt.outcome === "error")) {
+        store.histogram(
+          "openclaw_gateway_rpc_first_response_seconds",
+          "Elapsed time until the first Gateway RPC response is sent.",
+          labels,
+          seconds(evt.durationMs),
+        );
+      } else if (evt.phase === "handler") {
+        store.histogram(
+          "openclaw_gateway_rpc_handler_seconds",
+          "Gateway RPC handler duration until return or throw.",
+          labels,
+          seconds(evt.durationMs),
+        );
+        store.histogram(
+          "openclaw_gateway_rpc_admission_seconds",
+          "Elapsed time from Gateway RPC receipt until handler invocation.",
+          labels,
+          seconds(evt.admissionMs),
+        );
+      } else if (evt.phase === "dispatch") {
+        store.histogram(
+          "openclaw_gateway_rpc_queue_wait_seconds",
+          "Gateway operator request start queue wait.",
+          labels,
+          seconds(evt.queueWaitMs),
+        );
+      }
+      return;
+    }
     case "model.usage":
       recordModelUsage(store, evt);
       return;
@@ -905,7 +965,7 @@ function recordDiagnosticEvent(
       );
       store.histogram(
         "openclaw_liveness_cpu_core_ratio",
-        "CPU core ratio reported by diagnostic liveness warnings.",
+        "Whole-process CPU usage in core equivalents, including worker and native threads; can exceed 1.",
         livenessLabels(evt),
         numericValue(evt.cpuCoreRatio),
         RATIO_BUCKETS,
@@ -1035,6 +1095,21 @@ export function createDiagnosticsPrometheusExporter() {
       if (!subscribe) {
         ctx.logger.error("diagnostics-prometheus: internal diagnostics capability unavailable");
         return;
+      }
+      const identity = isDiagnosticsEnabled(ctx.config)
+        ? ctx.internalDiagnostics?.getRuntimeIdentity?.()
+        : undefined;
+      if (identity) {
+        // Reserve one sample before event traffic; runtime identity must survive saturation.
+        store.gauge(
+          "openclaw_gateway_build_info",
+          "Identity of the hosting process and its loaded build; not a health or exporter epoch.",
+          {
+            process_instance_id: identity.processInstanceId,
+            ...(identity.buildId ? { build_id: identity.buildId } : {}),
+          },
+          1,
+        );
       }
       unsubscribe = subscribe((event, metadata) => {
         try {

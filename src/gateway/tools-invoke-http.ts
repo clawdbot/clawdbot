@@ -99,6 +99,7 @@ export async function handleToolsInvokeHttpRequest(
       agentTo,
       agentThreadId,
       authenticatedUserProfile: requestAuth.authenticatedUserProfile,
+      operatorRoleActor: requestAuth.operatorRoleActor,
       operatorScopes,
       senderIsOwner,
       conversationReadOrigin: "direct-operator",

@@ -1,13 +1,11 @@
 import { parseStrictNonNegativeInteger } from "@openclaw/normalization-core/number-coercion";
-/**
- * Session trajectory tail command.
- *
- * It selects active or requested sessions, renders recent trajectory events,
- * and can follow newly appended SQLite trajectory rows.
- */
 import { normalizeOptionalString as toOptionalString } from "@openclaw/normalization-core/string-coerce";
 import { sanitizeTerminalText } from "../../packages/terminal-core/src/safe-text.js";
 import { readAcpSessionMeta } from "../acp/runtime/session-meta.js";
+import {
+  buildAgentRunTerminalOutcomeFromLifecycleEvent,
+  classifyAgentRunTerminalOutcome,
+} from "../agents/agent-run-terminal-outcome.js";
 import { getRuntimeConfig } from "../config/config.js";
 import { listSessionEntriesReadOnly } from "../config/sessions/session-accessor.js";
 import type { SessionEntry } from "../config/sessions/types.js";
@@ -17,7 +15,7 @@ import { resolveAgentIdFromSessionKey } from "../routing/session-key.js";
 import type { RuntimeEnv } from "../runtime.js";
 import { loadSqliteTrajectoryRuntimeEventRowsSync } from "../trajectory/runtime-store.sqlite.js";
 import type { TrajectoryEvent } from "../trajectory/types.js";
-import { resolveSessionStoreTargetsOrExit } from "./session-store-targets.js";
+import { resolveCommandSessionStoreTargets } from "./session-store-targets.js";
 import { formatTextCell } from "./text-format.js";
 
 type SessionsTailOptions = {
@@ -34,13 +32,7 @@ type TailSelection = {
   key: string;
   entry: SessionEntry;
   storePath: string;
-  source: TailTrajectorySource;
-};
-
-type TailTrajectorySource = {
-  agentId: string;
   sessionId: string;
-  storePath: string;
 };
 
 type SqliteFollowState = {
@@ -52,6 +44,7 @@ type TrajectorySnapshot = {
   events: TrajectoryEvent[];
   maxStorageSeq: number;
 };
+type FollowOutcome = "ERROR" | "SIGINT" | "SIGTERM";
 
 const DEFAULT_TAIL_COUNT = 80;
 const SESSION_KEY_PAD = 30;
@@ -73,15 +66,6 @@ function formatTimestamp(ts: string): string {
   return date.toISOString().slice(11, 19);
 }
 
-function modelLabel(event: TrajectoryEvent): string | undefined {
-  const provider = event.provider?.trim();
-  const model = event.modelId?.trim();
-  if (provider && model) {
-    return `${provider}/${model}`;
-  }
-  return model || provider || undefined;
-}
-
 function toolName(data: Record<string, unknown> | undefined): string {
   return toOptionalString(data?.name) ?? toOptionalString(data?.toolName) ?? "tool";
 }
@@ -97,16 +81,20 @@ function resultStatus(data: Record<string, unknown> | undefined): string {
 }
 
 function modelCompletionStatus(data: Record<string, unknown> | undefined): string {
-  if (data?.timedOut === true) {
-    return "timeout";
-  }
-  if (data?.aborted === true) {
-    return "aborted";
-  }
-  if (toOptionalString(data?.promptError)) {
-    return "error";
-  }
-  return "done";
+  const outcome = buildAgentRunTerminalOutcomeFromLifecycleEvent({
+    phase: "end",
+    data: {
+      ...data,
+      // Attempt timeouts can also record an abort; retain the owner's timeout attribution.
+      stopReason: data?.timedOut === true ? "timeout" : data?.stopReason,
+    },
+  });
+  return {
+    success: data?.promptError || data?.promptErrorSource || data?.terminalError ? "error" : "done",
+    failure: "error",
+    timeout: "timeout",
+    cancellation: "aborted",
+  }[classifyAgentRunTerminalOutcome(outcome)];
 }
 
 function safePreview(event: TrajectoryEvent): string {
@@ -133,7 +121,7 @@ function safePreview(event: TrajectoryEvent): string {
     case "tool.result":
       return `${toolName(data)} ${resultStatus(data)}`;
     case "model.completed": {
-      const model = modelLabel(event);
+      const model = [event.provider?.trim(), event.modelId?.trim()].filter(Boolean).join("/");
       const status = modelCompletionStatus(data);
       return model ? `${model} ${status}` : status;
     }
@@ -154,24 +142,17 @@ function formatProgressLine(event: TrajectoryEvent): string {
   return [formatTimestamp(event.ts), typeLabel, sessionLabel, preview].join(" ").trimEnd();
 }
 
-function readSqliteTrajectorySnapshot(
-  source: TailTrajectorySource,
-  tailEvents: number,
-): TrajectorySnapshot {
+function readTailSnapshot(selection: TailSelection, tailEvents: number): TrajectorySnapshot {
   const rows = loadSqliteTrajectoryRuntimeEventRowsSync({
-    agentId: source.agentId,
-    sessionId: source.sessionId,
-    storePath: source.storePath,
+    agentId: selection.agentId,
+    sessionId: selection.sessionId,
+    storePath: selection.storePath,
     tailEvents,
   });
   return {
     events: rows.map((row) => row.event),
     maxStorageSeq: rows.at(-1)?.seq ?? -1,
   };
-}
-
-function readTailSnapshot(selection: TailSelection, tailEvents: number): TrajectorySnapshot {
-  return readSqliteTrajectorySnapshot(selection.source, tailEvents);
 }
 
 function renderEvents(events: TrajectoryEvent[], runtime: RuntimeEnv): void {
@@ -203,20 +184,7 @@ function buildTailSelection(params: {
   storePath: string;
 }): TailSelection | null {
   const sessionId = params.entry.sessionId?.trim();
-  if (!sessionId) {
-    return null;
-  }
-  return {
-    agentId: params.agentId,
-    entry: params.entry,
-    key: params.key,
-    source: {
-      agentId: params.agentId,
-      sessionId,
-      storePath: params.storePath,
-    },
-    storePath: params.storePath,
-  };
+  return sessionId ? { ...params, sessionId } : null;
 }
 
 function selectSessionsToTail(selections: TailSelection[], sessionKey?: string): TailSelection[] {
@@ -238,10 +206,10 @@ function selectSessionsToTail(selections: TailSelection[], sessionKey?: string):
 
 function readNewSqliteFollowEvents(state: SqliteFollowState): TrajectoryEvent[] {
   const rows = loadSqliteTrajectoryRuntimeEventRowsSync({
-    agentId: state.selection.source.agentId,
+    agentId: state.selection.agentId,
     afterSeq: state.lastStorageSeq,
-    sessionId: state.selection.source.sessionId,
-    storePath: state.selection.source.storePath,
+    sessionId: state.selection.sessionId,
+    storePath: state.selection.storePath,
   });
   if (rows.length === 0) {
     return [];
@@ -250,11 +218,11 @@ function readNewSqliteFollowEvents(state: SqliteFollowState): TrajectoryEvent[] 
   return rows.map((row) => row.event);
 }
 
-async function followSelections(
+function followSelections(
   selections: TailSelection[],
   runtime: RuntimeEnv,
   initialSnapshots: Map<TailSelection, TrajectorySnapshot>,
-): Promise<void> {
+): Promise<FollowOutcome> {
   const states = selections.map((selection): SqliteFollowState => {
     const snapshot = initialSnapshots.get(selection);
     return {
@@ -263,7 +231,8 @@ async function followSelections(
     };
   });
 
-  await new Promise<void>((resolve) => {
+  return new Promise((resolve) => {
+    let finished = false;
     const interval = setInterval(() => {
       for (const state of states) {
         try {
@@ -274,24 +243,30 @@ async function followSelections(
               error,
             )}`,
           );
-          runtime.exit(1);
+          return finish("ERROR");
         }
       }
     }, FOLLOW_INTERVAL_MS);
 
-    const stop = () => {
-      clearInterval(interval);
-      process.off("SIGINT", stop);
-      process.off("SIGTERM", stop);
-      resolve();
+    const finish = (outcome: FollowOutcome) => {
+      if (!finished) {
+        finished = true;
+        clearInterval(interval);
+        process.off("SIGINT", stopSigint);
+        process.off("SIGTERM", stopSigterm);
+        resolve(outcome);
+      }
     };
-    process.once("SIGINT", stop);
-    process.once("SIGTERM", stop);
+    const stopSigint = () => finish("SIGINT");
+    const stopSigterm = () => finish("SIGTERM");
+    process.once("SIGINT", stopSigint);
+    process.once("SIGTERM", stopSigterm);
   });
 }
 
 function resolveTailTargetAgent(opts: SessionsTailOptions): string | undefined {
-  if (opts.agent?.trim() || opts.store?.trim() || opts.allAgents === true) {
+  // Keep explicit blanks for the selector to reject instead of inferring a different owner.
+  if (opts.agent !== undefined || opts.store !== undefined || opts.allAgents === true) {
     return opts.agent;
   }
   return opts.sessionKey?.trim() ? resolveAgentIdFromSessionKey(opts.sessionKey) : undefined;
@@ -310,18 +285,14 @@ export async function sessionsTailCommand(
   }
 
   const cfg = getRuntimeConfig();
-  const targets = resolveSessionStoreTargetsOrExit({
+  const targets = resolveCommandSessionStoreTargets({
     cfg,
     opts: {
       store: opts.store,
       agent: resolveTailTargetAgent(opts),
       allAgents: opts.allAgents,
     },
-    runtime,
   });
-  if (!targets) {
-    return;
-  }
 
   const selections: TailSelection[] = [];
   for (const target of targets) {
@@ -355,6 +326,7 @@ export async function sessionsTailCommand(
   }
 
   if (opts.follow) {
-    await followSelections(selected, runtime, followSnapshots);
+    const outcome = await followSelections(selected, runtime, followSnapshots);
+    runtime.exit(outcome === "ERROR" ? 1 : outcome === "SIGINT" ? 130 : 143);
   }
 }

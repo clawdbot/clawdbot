@@ -1,4 +1,3 @@
-// Covers provider model helper behavior for plugin model registries.
 import type { ModelRegistry } from "openclaw/plugin-sdk/agent-sessions";
 import { describe, expect, it } from "vitest";
 import {
@@ -36,34 +35,6 @@ function createTemplateModel(
   } as ProviderRuntimeModel;
 }
 
-function expectClonedTemplateModel(
-  params: Parameters<typeof cloneFirstTemplateModel>[0],
-  expected: Record<string, unknown> | undefined,
-) {
-  const model = cloneFirstTemplateModel(params);
-  if (expected == null) {
-    expect(model).toBeUndefined();
-    return;
-  }
-  expect(model).toEqual(expected);
-}
-
-function expectPrefixMatch(params: {
-  id: string;
-  candidates: readonly string[];
-  expected: boolean;
-}) {
-  expect(matchesExactOrPrefix(params.id, params.candidates)).toBe(params.expected);
-}
-
-function expectPrefixMatchCase(params: {
-  id: string;
-  candidates: readonly string[];
-  expected: boolean;
-}) {
-  expectPrefixMatch(params);
-}
-
 describe("cloneFirstTemplateModel", () => {
   it.each([
     {
@@ -94,7 +65,12 @@ describe("cloneFirstTemplateModel", () => {
       expected: undefined,
     },
   ] as const)("$name", ({ params, expected }) => {
-    expectClonedTemplateModel(params, expected);
+    const model = cloneFirstTemplateModel(params);
+    if (expected == null) {
+      expect(model).toBeUndefined();
+      return;
+    }
+    expect(model).toEqual(expected);
   });
 });
 
@@ -115,7 +91,9 @@ describe("matchesExactOrPrefix", () => {
       candidates: ["minimax-m2.7"],
       expected: false,
     },
-  ] as const)("matches $id against prefixes", expectPrefixMatchCase);
+  ] as const)("matches $id against prefixes", ({ id, candidates, expected }) => {
+    expect(matchesExactOrPrefix(id, candidates)).toBe(expected);
+  });
 });
 
 describe("resolveFamilyForwardCompatModel", () => {

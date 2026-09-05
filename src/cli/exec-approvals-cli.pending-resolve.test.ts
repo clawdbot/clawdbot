@@ -164,6 +164,74 @@ describe("exec approvals pending and resolve CLI", () => {
     expect(call?.[2]).toEqual({ limit: 25 });
   });
 
+  it.each(["10junk", "1.5", "1e3", "", "0", "-1", "3651"])(
+    "rejects an invalid grant lifetime without resolving the approval (%s)",
+    async (expiresInDays) => {
+      callGatewayFromCli.mockImplementation(async (method: string) =>
+        method === "approval.get"
+          ? pendingApprovalSnapshot({ id: "lifetime-invalid" })
+          : {
+              applied: true,
+              approval: terminalApprovalSnapshot({
+                id: "lifetime-invalid",
+                decision: "allow-always",
+              }),
+            },
+      );
+
+      await expect(
+        runApprovalsCommand([
+          "approvals",
+          "resolve",
+          "lifetime-invalid",
+          "allow-always",
+          "--expires-in-days",
+          expiresInDays,
+        ]),
+      ).rejects.toThrow("__exit__:1");
+
+      expect(runtimeErrors).toEqual([
+        "--expires-in-days must be a whole number of days between 1 and 3650.",
+      ]);
+      expect(callGatewayFromCli.mock.calls.map(([method]) => method)).toEqual(["approval.get"]);
+    },
+  );
+
+  it.each([undefined, "1", "30", "3650"])(
+    "preserves the numeric or absent grant lifetime (%s)",
+    async (expiresInDays) => {
+      callGatewayFromCli.mockImplementation(async (method: string) =>
+        method === "approval.get"
+          ? pendingApprovalSnapshot({ id: "lifetime-valid" })
+          : {
+              applied: true,
+              approval: terminalApprovalSnapshot({
+                id: "lifetime-valid",
+                decision: "allow-always",
+              }),
+            },
+      );
+
+      await runApprovalsCommand([
+        "approvals",
+        "resolve",
+        "lifetime-valid",
+        "allow-always",
+        ...(expiresInDays === undefined ? [] : ["--expires-in-days", expiresInDays]),
+        "--json",
+      ]);
+
+      expect(callGatewayFromCli.mock.calls[1]?.[0]).toBe("approval.resolve");
+      expect(callGatewayFromCli.mock.calls[1]?.[2]).toEqual({
+        id: "lifetime-valid",
+        kind: "exec",
+        decision: "allow-always",
+        ...(expiresInDays === undefined ? {} : { grantExpiresInDays: Number(expiresInDays) }),
+      });
+      expect(writtenJson()).toMatchObject({ applied: true, alreadyResolved: false });
+    },
+  );
+
   it("renders pending approvals from all three approval kinds", async () => {
     const now = Date.now();
     callGatewayFromCli.mockImplementation(async (method: string) => {

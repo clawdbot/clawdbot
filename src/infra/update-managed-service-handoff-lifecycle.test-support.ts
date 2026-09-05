@@ -1,3 +1,8 @@
+import type { TriageUpdateFailure } from "../commands/triage-update.js";
+import { buildUpdateRestartSentinelPayload } from "./update-restart-sentinel-payload.js";
+import type { UpdateRunRecord } from "./update-run-record.js";
+import type { UpdateRunResult } from "./update-runner-types.js";
+
 type ManagedSystemdPostExitState = {
   activeState: string;
   generation?: "cleared" | "parked" | "replacement";
@@ -8,6 +13,7 @@ type ManagedSystemdPostExitState = {
 };
 
 export type ManagedServiceManagerBoundaryOptions = {
+  ledger?: boolean;
   cancelAfterPark?: boolean;
   parentExitTimeoutMs?: number;
   launchdFault?: "wrong-parent" | "missing-restored-pid" | "dead-restored-pid";
@@ -24,7 +30,24 @@ export type ManagedServiceManagerBoundaryOptions = {
   systemdHandoffFailure?: boolean;
   systemdPostExitStates?: ManagedSystemdPostExitState[];
   systemdStopDelayMs?: number;
+  revokeOwner?: boolean;
+  requester?: { channel?: string; accountId?: string; senderId?: string };
   updaterExitCode?: number;
+  recoveryExitCode?: number;
+  recoveryHang?: boolean;
+  recoveryClockAdvanceMs?: number;
+  recoverySentinel?: "retained" | "consumed" | "replaced";
+  triageExitCode?: number;
+  triageHang?: boolean;
+  triageMissing?: boolean;
+  recordedFailure?: TriageUpdateFailure;
+  helperExitCode?: number;
+  updaterResult?: unknown;
+  updaterOutput?: "malformed" | "overflow" | "missing" | "split-utf8";
+  updaterSignal?: boolean;
+  updaterNotification?: "published" | "consumed";
+  gatewayHealth?: "ready" | "unready" | "wrong-version" | "wrong-build" | "exited";
+  diagnosticReadFailure?: "before-recovery" | "after-recovery";
 };
 
 export type ManagedServiceCommandTiming = {
@@ -34,11 +57,15 @@ export type ManagedServiceCommandTiming = {
 };
 
 export type ManagedServiceManagerBoundaryResult = {
+  run?: UpdateRunRecord;
   commands: string[];
   parentSignal: NodeJS.Signals | null;
   state: Record<string, unknown>;
   sentinel: unknown;
+  log: string;
   commandTimings: ManagedServiceCommandTiming[];
+  savedFailure: { path: string; mode: number; contents: TriageUpdateFailure } | null;
+  sensitiveFilesRemoved: boolean;
 };
 
 type ManagedSystemdFailureCase = readonly [string, ManagedSystemdPostExitState];
@@ -83,6 +110,7 @@ export function registerManagedSystemdHandoffConvergenceTests(
       ],
       systemdStopDelayMs: 100,
       updaterExitCode: 0,
+      updaterResult: { status: "ok", mode: "npm" },
     });
 
     expect(commands.map((command) => command.split(" ")[1])).toEqual([
@@ -130,15 +158,15 @@ export function registerManagedSystemdHandoffConvergenceTests(
         systemdPostExitStates: [invalidState],
       });
 
-      expect(state).toMatchObject({ parked: true, stopCompleted: true, postExitShows: 1 });
-      expect(commands.filter((command) => command.includes("reset-failed"))).toHaveLength(1);
+      expect(state).toMatchObject({ parked: true, stopCompleted: true, postExitShows: 2 });
+      expect(commands.filter((command) => command.includes("reset-failed"))).toHaveLength(0);
       expect(sentinel).toMatchObject({
         payload: {
           status: "error",
           stats: {
-            reason: "managed-service-handoff-helper-failed",
+            reason: "managed-service-handoff-restore-failed",
             steps: expect.arrayContaining([
-              expect.objectContaining({ name: "service-restore", log: { exitCode: 0 } }),
+              expect.objectContaining({ name: "service-restore", log: { exitCode: 1 } }),
             ]),
           },
         },
@@ -155,10 +183,12 @@ export function registerManagedSystemdHandoffConvergenceTests(
         systemdStopDelayMs: 6_000,
       });
 
-      expect(state).toMatchObject({ parked: true, reset: true, restored: true });
+      expect(state).toMatchObject({ parked: true });
+      expect(state.reset).toBeUndefined();
+      expect(state.restored).toBeUndefined();
       expect(state.stopCompleted).toBeUndefined();
       expect(sentinel).toMatchObject({
-        payload: { status: "error", stats: { reason: "managed-service-handoff-helper-failed" } },
+        payload: { status: "error", stats: { reason: "managed-service-handoff-restore-failed" } },
       });
     },
   );
@@ -188,6 +218,7 @@ if (${JSON.stringify(kind)} === "systemd") {
       try { process.kill(${parentPid}, 0); sleep(10); } catch { break; }
     }
     sleep(${options?.systemdStopDelayMs ?? 0});
+    ${options?.revokeOwner ? `fs.writeFileSync(process.env.OPENCLAW_CONFIG_PATH, JSON.stringify({ commands: { ownerAllowFrom: [] } })); state.ownerRevokedAfterExit = true;` : ""}
     state.stopCompleted = true;
   }
   if (action === "reset-failed") state.reset = true;
@@ -286,9 +317,91 @@ fs.writeFileSync(statePath, JSON.stringify(state));
 `;
 }
 
+export function createManagedServiceUpdaterFixtureScript(params: {
+  kind: "systemd" | "launchd";
+  root: string;
+  statePath: string;
+  updaterPath: string;
+  logPath: string;
+  stateDatabasePath: string;
+  consumeNotification: string;
+  options?: ManagedServiceManagerBoundaryOptions;
+}): string {
+  const { kind, root, statePath, updaterPath, stateDatabasePath, consumeNotification, options } =
+    params;
+  const updaterResult = options?.updaterResult
+    ? { root, ...(options.updaterResult as UpdateRunResult) }
+    : null;
+  const notification =
+    updaterResult && options?.updaterNotification
+      ? buildUpdateRestartSentinelPayload({
+          result: {
+            ...updaterResult,
+            steps: updaterResult.steps ?? [],
+            durationMs: updaterResult.durationMs ?? 0,
+          },
+          meta: { root, handoffId: `${kind}-boundary` },
+        })
+      : null;
+  return [
+    `const fs = require("node:fs");`,
+    ...(kind === "launchd"
+      ? [
+          `const state = JSON.parse(fs.readFileSync(${JSON.stringify(statePath)}, "utf8"));`,
+          `if (!state.unloaded) process.exit(19);`,
+          `state.updaterObservedUnloaded = true;`,
+          `fs.writeFileSync(${JSON.stringify(statePath)}, JSON.stringify(state));`,
+        ]
+      : []),
+    `fs.writeFileSync(${JSON.stringify(updaterPath)}, "ran");`,
+    ...(notification
+      ? [
+          `const notification = ${JSON.stringify(notification)};`,
+          `const db = new (require("node:sqlite").DatabaseSync)(${JSON.stringify(stateDatabasePath)});`,
+          `db.prepare("INSERT INTO gateway_restart_sentinel (sentinel_key, version, kind, status, ts, stats_json, payload_json, updated_at_ms) VALUES ('current', 1, ?, ?, ?, ?, ?, ?)").run(notification.kind, notification.status, notification.ts, JSON.stringify(notification.stats), JSON.stringify(notification), notification.ts); db.close();`,
+          `{ const state = JSON.parse(fs.readFileSync(${JSON.stringify(statePath)}, "utf8")); state.publishedSentinel = { version: 1, payload: notification, revision: notification.ts }; fs.writeFileSync(${JSON.stringify(statePath)}, JSON.stringify(state)); }`,
+          ...(options?.updaterNotification === "consumed" &&
+          (updaterResult?.status === "ok" ||
+            (updaterResult?.recovery?.serviceRestartSafe && updaterResult.recovery.service))
+            ? [`{ ${consumeNotification} }`]
+            : []),
+        ]
+      : []),
+    ...(options?.diagnosticReadFailure === "before-recovery"
+      ? [
+          `{ const db = new (require("node:sqlite").DatabaseSync)(${JSON.stringify(stateDatabasePath)}); db.exec("ALTER TABLE gateway_restart_sentinel RENAME COLUMN thread_id TO unreadable_thread_id"); db.close(); }`,
+        ]
+      : []),
+    `const result = JSON.stringify(${JSON.stringify(updaterResult)});`,
+    `const mode = ${JSON.stringify(options?.updaterOutput)};`,
+    `const output = mode === "missing" ? "" : mode === "malformed" ? "diagnostic before JSON\\n" + result : mode === "overflow" ? " ".repeat(4 * 1024 * 1024) + result : result;`,
+    `let remaining = Buffer.from(output);`,
+    ...(options?.updaterOutput === "split-utf8"
+      ? [
+          `const split = remaining.findIndex((byte) => byte >= 0x80) + 1;`,
+          `if (!split) throw new Error("expected a Unicode installation root");`,
+          `const prefix = remaining.subarray(0, split);`,
+          `const logPath = ${JSON.stringify(params.logPath)};`,
+          `const logOffset = fs.statSync(logPath).size;`,
+          `fs.writeSync(1, prefix);`,
+          // The raw log acknowledges a distinct pipe read before the remaining UTF-8 bytes.
+          `const deadline = Date.now() + 5000;`,
+          `while (!fs.readFileSync(logPath).subarray(logOffset).includes(prefix)) {`,
+          `  if (Date.now() >= deadline) throw new Error("helper did not receive the UTF-8 prefix");`,
+          `  Atomics.wait(new Int32Array(new SharedArrayBuffer(4)), 0, 0, 10);`,
+          `}`,
+          `remaining = remaining.subarray(split);`,
+        ]
+      : []),
+    `process.stdout.write(remaining, () => { ${options?.updaterSignal ? 'process.kill(process.pid, "SIGTERM");' : `process.exit(${options?.updaterExitCode ?? 7});`} });`,
+  ].join("");
+}
+
 export function createManagedServiceLaunchdClockPreload(params: {
   commandTimingsPath: string;
   clockEachCommandMs: number;
+  recoveryClockAdvanceMs?: number;
+  recoveryCommandArgv: string[];
 }): string {
   return [
     'const fs = require("node:fs");',
@@ -312,7 +425,67 @@ export function createManagedServiceLaunchdClockPreload(params: {
     `    fs.appendFileSync(${JSON.stringify(params.commandTimingsPath)}, JSON.stringify({ action: args[0], startedAtMs, timeoutMs }) + "\\n");`,
     `    elapsed += Math.min(${params.clockEachCommandMs}, timeoutMs);`,
     "  }",
-    "  return actualSpawn(command, args, options);",
+    "  const child = actualSpawn(command, args, options);",
+    // Advance only when the exact guarded restart closes, before the helper resumes.
+    `  if (command === process.execPath && args.at(-1) === ${JSON.stringify(JSON.stringify(params.recoveryCommandArgv))}) {`,
+    `    child.once("close", () => { elapsed += ${params.recoveryClockAdvanceMs ?? 0}; });`,
+    "  }",
+    "  return child;",
     "};",
   ].join("\n");
+}
+
+export function registerManagedHandoffOwnerTests(
+  runManagedServiceManagerBoundary: (
+    kind: "systemd",
+    options?: ManagedServiceManagerBoundaryOptions,
+  ) => Promise<ManagedServiceManagerBoundaryResult>,
+  itUnix: ReturnType<typeof import("vitest").it.runIf>,
+  expect: typeof import("vitest").expect,
+): void {
+  itUnix.each(["revoked", "unchanged", "internal", "channel-less"] as const)(
+    "rechecks the %s requester after helper readiness and parent exit",
+    async (owner) => {
+      const { state, sentinel, log, sensitiveFilesRemoved } =
+        await runManagedServiceManagerBoundary("systemd", {
+          requester: {
+            channel:
+              owner === "internal" ? "webchat" : owner === "channel-less" ? undefined : "slack",
+            accountId: "primary",
+            senderId: "owner",
+          },
+          revokeOwner: owner === "revoked",
+          helperExitCode: owner === "revoked" ? 1 : 0,
+          updaterExitCode: 0,
+          updaterResult: { status: "ok", mode: "npm" },
+        });
+      expect(state).toMatchObject({ parked: true, stopCompleted: true });
+      expect(state.ownerChecked).toBe(
+        owner === "revoked" || owner === "unchanged" ? true : undefined,
+      );
+      if (owner === "revoked") {
+        expect(state).toMatchObject({
+          ownerRevokedAfterExit: true,
+          restored: true,
+          healthProbed: true,
+        });
+        expect(sentinel).toMatchObject({
+          payload: {
+            status: "error",
+            stats: {
+              reason: "owner_required",
+              steps: expect.arrayContaining([
+                expect.objectContaining({ name: "service-restore", log: { exitCode: 0 } }),
+              ]),
+            },
+          },
+        });
+        expect(log).toContain("owner_required");
+        expect(log).not.toContain("starting managed update command");
+      } else {
+        expect(log).toContain("starting managed update command");
+      }
+      expect(sensitiveFilesRemoved).toBe(true);
+    },
+  );
 }

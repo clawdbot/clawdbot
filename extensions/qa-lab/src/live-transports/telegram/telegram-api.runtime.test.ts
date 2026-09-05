@@ -36,6 +36,25 @@ describe("Telegram QA API boundary", () => {
     });
   });
 
+  it("allows only the leased tester in direct-message mode", () => {
+    const config = buildTelegramQaConfig(
+      {},
+      {
+        apiRoot: "http://127.0.0.1:8080",
+        directMessageOnly: true,
+        groupId: "-100123",
+        sutToken: "placeholder",
+        testerUserId: "1",
+        sutAccountId: "sut",
+      },
+    );
+
+    expect(config.channels?.telegram?.accounts?.sut).toMatchObject({
+      allowFrom: ["1"],
+      dmPolicy: "allowlist",
+    });
+  });
+
   it("waits for the selected Telegram account to connect", async () => {
     const call = vi
       .fn()

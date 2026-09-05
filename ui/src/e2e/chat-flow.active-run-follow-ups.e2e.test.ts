@@ -930,8 +930,7 @@ suite.define(() => {
       await page.getByRole("button", { name: "Queue message" }).click();
       await page.locator(".chat-queue").getByText(queuedPrompt).waitFor({ timeout: 10_000 });
 
-      await gateway.setMethodResponse(
-        "sessions.list",
+      await gateway.setSessionsListResponse(
         chatSessionListResponse([
           {
             activeLeafEntryId: "leaf-active",
@@ -940,6 +939,8 @@ suite.define(() => {
             key: "global",
             kind: "global",
             label: "Global",
+            sessionId: "global-active-run",
+            status: "running",
             updatedAt: Date.now(),
           },
           {
@@ -949,6 +950,8 @@ suite.define(() => {
             key: "agent:main:main",
             kind: "direct",
             label: "Main",
+            sessionId: "main-active-run",
+            status: "running",
             updatedAt: Date.now(),
           },
         ]),

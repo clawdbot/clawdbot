@@ -1,4 +1,6 @@
 // Irc tests cover client plugin behavior.
+import { createDeferred } from "openclaw/plugin-sdk/extension-shared";
+import { withTimeout } from "openclaw/plugin-sdk/security-runtime";
 import { describe, expect, it } from "vitest";
 import { connectIrcClient } from "./client.js";
 import { onIrcTestLine, startIrcTestServer } from "./irc-server.test-support.js";
@@ -6,6 +8,7 @@ import { onIrcTestLine, startIrcTestServer } from "./irc-server.test-support.js"
 type LoopbackIrcServer = {
   port: number;
   lines: string[];
+  quitReceived: Promise<void>;
   close(): Promise<void>;
 };
 
@@ -13,6 +16,7 @@ type HangingIrcServer = {
   port: number;
   acceptedCount: number;
   closedCount: number;
+  socketClosed: Promise<void>;
   openSocketCount(): number;
   close(): Promise<void>;
 };
@@ -21,10 +25,14 @@ async function startLoopbackIrcServer(options?: {
   rejectInitialNick?: boolean;
 }): Promise<LoopbackIrcServer> {
   const lines: string[] = [];
+  const quitReceived = createDeferred<void>();
   const server = await startIrcTestServer((socket) => {
     let awaitingFallbackNick = false;
     onIrcTestLine(socket, (line) => {
       lines.push(line);
+      if (line.startsWith("QUIT :")) {
+        quitReceived.resolve();
+      }
       if (line.startsWith("USER ")) {
         if (options?.rejectInitialNick) {
           awaitingFallbackNick = true;
@@ -38,12 +46,11 @@ async function startLoopbackIrcServer(options?: {
       }
     });
   });
-  return { ...server, lines };
+  return { ...server, lines, quitReceived: quitReceived.promise };
 }
 
 async function connectAndCollectRegistration(params: {
   nickserv: NonNullable<Parameters<typeof connectIrcClient>[0]["nickserv"]>;
-  done: (lines: string[], errors: Error[]) => boolean;
 }): Promise<{ lines: string[]; errors: Error[] }> {
   const server = await startLoopbackIrcServer();
   const errors: Error[] = [];
@@ -59,10 +66,9 @@ async function connectAndCollectRegistration(params: {
       nickserv: params.nickserv,
       onError: (error) => errors.push(error),
     });
-    await waitForIrcCondition(
-      () => params.done(server.lines, errors),
-      "expected IRC registration outcome",
-    );
+    // QUIT follows all registration writes on the same stream; wait for peer receipt.
+    client.quit("test complete");
+    await withTimeout(server.quitReceived, 1000, "IRC registration output");
     return { lines: [...server.lines], errors };
   } finally {
     client?.close();
@@ -91,34 +97,21 @@ async function connectAfterNickCollision(nick: string): Promise<string> {
   }
 }
 
-async function waitForIrcCondition(
-  predicate: () => boolean,
-  message: string,
-  timeoutMs = 1000,
-): Promise<void> {
-  const deadline = Date.now() + timeoutMs;
-  while (!predicate()) {
-    if (Date.now() >= deadline) {
-      throw new Error(message);
-    }
-    await new Promise((resolve) => {
-      setTimeout(resolve, 10);
-    });
-  }
-}
-
 async function startHangingIrcServer(): Promise<HangingIrcServer> {
   let acceptedCount = 0;
   let closedCount = 0;
+  const socketClosed = createDeferred<void>();
   const server = await startIrcTestServer((socket) => {
     acceptedCount += 1;
     socket.on("data", () => {});
     socket.on("close", () => {
       closedCount += 1;
+      socketClosed.resolve();
     });
   });
   return {
     ...server,
+    socketClosed: socketClosed.promise,
     get acceptedCount() {
       return acceptedCount;
     },
@@ -132,7 +125,6 @@ describe("irc client nickserv", () => {
   it("sends IDENTIFY when a password is configured", async () => {
     const result = await connectAndCollectRegistration({
       nickserv: { password: "secret" },
-      done: (lines) => lines.includes("PRIVMSG NickServ :IDENTIFY secret"),
     });
 
     expect(result.lines).toContain("PRIVMSG NickServ :IDENTIFY secret");
@@ -145,7 +137,6 @@ describe("irc client nickserv", () => {
         register: true,
         registerEmail: "bot@example.com",
       },
-      done: (lines) => lines.some((line) => line.startsWith("PRIVMSG NickServ :REGISTER ")),
     });
 
     expect(result.lines.filter((line) => line.startsWith("PRIVMSG NickServ :"))).toEqual([
@@ -160,7 +151,6 @@ describe("irc client nickserv", () => {
         password: "secret",
         register: true,
       },
-      done: (_lines, errors) => errors.length > 0,
     });
 
     expect(result.errors[0]?.message).toMatch(/registerEmail/);
@@ -172,7 +162,6 @@ describe("irc client nickserv", () => {
         service: "NickServ\n",
         password: "secret\r\nJOIN #bad",
       },
-      done: (lines) => lines.some((line) => line.startsWith("PRIVMSG NickServ :IDENTIFY")),
     });
 
     expect(result.lines).toContain("PRIVMSG NickServ :IDENTIFY secret JOIN #bad");
@@ -195,11 +184,10 @@ describe("irc client readiness timeout", () => {
         }),
       ).rejects.toThrow(/IRC connect/);
 
+      await withTimeout(server.socketClosed, 1000, "timed-out IRC socket close");
       expect(server.acceptedCount).toBeGreaterThanOrEqual(1);
-      await waitForIrcCondition(
-        () => server.closedCount >= 1 && server.openSocketCount() === 0,
-        `expected timed-out IRC connect socket to close; accepted=${server.acceptedCount} closed=${server.closedCount} open=${server.openSocketCount()}`,
-      );
+      expect(server.closedCount).toBeGreaterThanOrEqual(1);
+      expect(server.openSocketCount()).toBe(0);
     } finally {
       await server.close();
     }
@@ -250,22 +238,16 @@ async function collectPrivmsgBodies(
     connectTimeoutMs: 5000,
     messageChunkMaxChars,
   });
-  const receivedBodies = () =>
-    server.lines
-      .filter((line) => line.startsWith("PRIVMSG #general :"))
-      .map((line) => line.slice("PRIVMSG #general :".length));
   try {
     client.sendPrivmsg("#general", text);
-    const deadline = Date.now() + 5000;
-    while (receivedBodies().join("").length < text.length && Date.now() < deadline) {
-      await new Promise((resolve) => {
-        setTimeout(resolve, 10);
-      });
-    }
+    client.quit("test complete");
+    await withTimeout(server.quitReceived, 5000, "IRC PRIVMSG output");
+    return server.lines
+      .filter((line) => line.startsWith("PRIVMSG #general :"))
+      .map((line) => line.slice("PRIVMSG #general :".length));
   } finally {
     client.close();
   }
-  return receivedBodies();
 }
 
 const LONE_SURROGATE = /[\uD800-\uDBFF](?![\uDC00-\uDFFF])|(?<![\uD800-\uDBFF])[\uDC00-\uDFFF]/;

@@ -27,6 +27,17 @@ describe("json-coercion", () => {
 
   it.each([
     { name: "an object", value: '{"ok":true}', expected: { ok: true } },
+    {
+      name: "JSON whitespace before an object",
+      value: ' \t\r\n{"ok":true}',
+      expected: { ok: true },
+    },
+    {
+      name: "non-JSON whitespace before an object",
+      value: '\u00a0{"ok":true}',
+      expected: undefined,
+    },
+    { name: "a BOM before an object", value: '\ufeff{"ok":true}', expected: undefined },
     { name: "null", value: "null", expected: undefined },
     { name: "an array", value: "[1]", expected: undefined },
     { name: "a scalar", value: '"text"', expected: undefined },

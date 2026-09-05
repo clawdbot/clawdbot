@@ -93,7 +93,7 @@ function makeNormalizationInput(
         lastProfileId: undefined,
       }),
     } as never,
-    dispatchedAttempt: { rawAttempt: attempt, cancellationRequested: false } as never,
+    dispatchedAttempt: { rawAttempt: attempt } as never,
     sessionPromptState: sessionPromptState as never,
     provider: "openai",
     modelId: "gpt-5.6-luna",
@@ -167,6 +167,25 @@ describe("normalizeEmbeddedRunAttempt", () => {
       );
     },
   );
+
+  it("keeps exact attempt context usage for a tool-only turn", async () => {
+    const attempt = makeAttempt();
+    attempt.attemptUsage = {
+      input: 521,
+      output: 197,
+      total: 21_966,
+      contextUsage: { state: "available", promptTokens: 21_769, totalTokens: 21_966 },
+    };
+
+    const result = await normalizeEmbeddedRunAttempt(
+      makeNormalizationInput(attempt, makePromptState()),
+    );
+
+    expect(result).toMatchObject({
+      action: "proceed",
+      lastRunPromptUsage: attempt.attemptUsage,
+    });
+  });
 
   it("waits for pending user-turn persistence before deriving retry suppression", async () => {
     let releasePersistence: (() => void) | undefined;

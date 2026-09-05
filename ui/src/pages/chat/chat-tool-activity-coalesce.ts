@@ -69,7 +69,7 @@ function readProjections(item: MessageItem, index: number): Projection[] {
   // Resolve no-id fallback once through the card owner. Keep anonymous pairs
   // in the source while identified siblings still join the invocation registry.
   if (blocks.some((block) => !resolveToolBlockId(asRecord(block)!, message!))) {
-    const pending = [...extractToolCardsCached(message, item.key)];
+    const pending = [...extractToolCardsCached(message)];
     content = content.flatMap((block) => {
       if (!isToolBlock(block)) {
         return [block];
@@ -100,7 +100,7 @@ function readProjections(item: MessageItem, index: number): Projection[] {
   }
   const standalone = blocks.length === 0;
   if (standalone) {
-    const [card] = extractToolCardsCached(message, item.key);
+    const [card] = extractToolCardsCached(message);
     if (!card?.callId) {
       return [];
     }

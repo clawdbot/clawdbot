@@ -37,17 +37,11 @@ export class PortaledHovercardController {
     );
   }
 
-  schedulePointerExit(event: PointerEvent, target: HTMLElement, bridgeMs = 220): void {
+  schedulePointerExit(bridgeMs = 220): void {
     this.pointerInside = false;
-    const side = this.card?.dataset.side;
-    const rect = target.getBoundingClientRect();
-    const towardCard =
-      (event.relatedTarget instanceof Node && this.card?.contains(event.relatedTarget)) ||
-      (side === "right" && event.clientX >= rect.right) ||
-      (side === "left" && event.clientX <= rect.left) ||
-      (side === "bottom" && event.clientY >= rect.bottom) ||
-      (side === "top" && event.clientY <= rect.top);
-    this.scheduleClose(towardCard ? bridgeMs : this.closeDelayMs);
+    // Portaled cards can be viewport-clamped diagonally from their trigger, so
+    // exit coordinates cannot reliably tell whether the pointer is crossing the gap.
+    this.scheduleClose(bridgeMs);
   }
 
   focusables(): HTMLElement[] {

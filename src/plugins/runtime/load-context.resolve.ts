@@ -97,6 +97,6 @@ export function resolvePluginRuntimeLoadContext(
     ...(finalManifestRegistry ? { manifestRegistry: finalManifestRegistry } : {}),
     ...(metadataSnapshot ? { metadataSnapshot } : {}),
     installRecords,
-    preferBuiltPluginArtifacts: options?.preferBuiltPluginArtifacts === true,
+    preferBuiltPluginArtifacts: options?.preferBuiltPluginArtifacts,
   };
 }

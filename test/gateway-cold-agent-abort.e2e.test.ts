@@ -125,15 +125,18 @@ it(
       const aborted = await client.request("chat.abort", { sessionKey, runId });
       expect(aborted).toMatchObject({ aborted: true, runIds: [runId] });
       const terminal = await final;
-      // resolveRunLivenessState persists a stop before any output as blocked.
-      expect(terminal).toMatchObject({
+      // The agent RPC retains its cancellation wire status; the task records the outcome.
+      expect(terminal).toEqual({
         runId,
-        status: "error",
-        summary: "failed",
-        stopReason: "aborted",
-        result: { meta: { aborted: true, stopReason: "aborted", livenessState: "blocked" } },
+        status: "timeout",
+        summary: "aborted",
+        stopReason: "rpc",
       });
-      expect(terminal).not.toHaveProperty("result.meta.error");
+      expect(await client.request("tasks.list", { sessionKey })).toEqual({
+        tasks: [
+          expect.objectContaining({ runId, childSessionKey: sessionKey, status: "cancelled" }),
+        ],
+      });
       await vi.waitFor(() => expect(providerAborted).toBe(true), { timeout: 5_000 });
       expect(providerRequests).toBe(1);
     } finally {

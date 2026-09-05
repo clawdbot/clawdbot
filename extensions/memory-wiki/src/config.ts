@@ -1,4 +1,3 @@
-// Memory Wiki helper module supports config behavior.
 import os from "node:os";
 import path from "node:path";
 // agent-scope-runtime exports the same resolvers without memory-host-core's
@@ -7,14 +6,9 @@ import {
   resolveDefaultAgentId,
   resolveSessionAgentIdStrict,
 } from "openclaw/plugin-sdk/agent-scope-runtime";
-import { mapPluginConfigIssues } from "openclaw/plugin-sdk/extension-shared";
 import { resolveStateDir } from "openclaw/plugin-sdk/state-paths";
-import {
-  buildPluginConfigSchema,
-  z,
-  type OpenClawPluginConfigSchema,
-  type OpenClawConfig,
-} from "../api.js";
+import { z } from "zod";
+import type { OpenClawConfig } from "../api.js";
 
 const WIKI_VAULT_MODES = ["isolated", "bridge", "unsafe-local"] as const;
 const WIKI_VAULT_SCOPES = ["global", "agent"] as const;
@@ -28,93 +22,10 @@ type WikiRenderMode = (typeof WIKI_RENDER_MODES)[number];
 export type WikiSearchBackend = (typeof WIKI_SEARCH_BACKENDS)[number];
 export type WikiSearchCorpus = (typeof WIKI_SEARCH_CORPORA)[number];
 
-export type MemoryWikiPluginConfig = {
-  vaultMode?: WikiVaultMode;
-  vault?: {
-    scope?: WikiVaultScope;
-    path?: string;
-    renderMode?: WikiRenderMode;
-  };
-  obsidian?: {
-    enabled?: boolean;
-    useOfficialCli?: boolean;
-    vaultName?: string;
-    openAfterWrites?: boolean;
-  };
-  bridge?: {
-    enabled?: boolean;
-    readMemoryArtifacts?: boolean;
-    indexDreamReports?: boolean;
-    indexDailyNotes?: boolean;
-    indexMemoryRoot?: boolean;
-    followMemoryEvents?: boolean;
-  };
-  unsafeLocal?: {
-    allowPrivateMemoryCoreAccess?: boolean;
-    paths?: string[];
-  };
-  ingest?: {
-    autoCompile?: boolean;
-    maxConcurrentJobs?: number;
-    allowUrlIngest?: boolean;
-  };
-  search?: {
-    backend?: WikiSearchBackend;
-    corpus?: WikiSearchCorpus;
-  };
-  context?: {
-    includeCompiledDigestPrompt?: boolean;
-  };
-  render?: {
-    preserveHumanBlocks?: boolean;
-    createBacklinks?: boolean;
-    createDashboards?: boolean;
-  };
-};
+export type MemoryWikiPluginConfig = z.infer<typeof MemoryWikiConfigSource>;
 
-export type ResolvedMemoryWikiConfig = {
+export type ResolvedMemoryWikiConfig = ReturnType<typeof resolveMemoryWikiConfig> & {
   agentId?: string;
-  vaultMode: WikiVaultMode;
-  vault: {
-    scope: WikiVaultScope;
-    path: string;
-    renderMode: WikiRenderMode;
-  };
-  obsidian: {
-    enabled: boolean;
-    useOfficialCli: boolean;
-    vaultName?: string;
-    openAfterWrites: boolean;
-  };
-  bridge: {
-    enabled: boolean;
-    readMemoryArtifacts: boolean;
-    indexDreamReports: boolean;
-    indexDailyNotes: boolean;
-    indexMemoryRoot: boolean;
-    followMemoryEvents: boolean;
-  };
-  unsafeLocal: {
-    allowPrivateMemoryCoreAccess: boolean;
-    paths: string[];
-  };
-  ingest: {
-    autoCompile: boolean;
-    maxConcurrentJobs: number;
-    allowUrlIngest: boolean;
-  };
-  search: {
-    backend: WikiSearchBackend;
-    corpus: WikiSearchCorpus;
-  };
-  context: {
-    includeCompiledDigestPrompt: boolean;
-  };
-  render: {
-    preserveHumanBlocks: boolean;
-    createBacklinks: boolean;
-    createDashboards: boolean;
-  };
 };
 
 export type MemoryWikiConfigResolver = (
@@ -128,7 +39,7 @@ const DEFAULT_WIKI_RENDER_MODE: WikiRenderMode = "native";
 const DEFAULT_WIKI_SEARCH_BACKEND: WikiSearchBackend = "shared";
 const DEFAULT_WIKI_SEARCH_CORPUS: WikiSearchCorpus = "wiki";
 
-const MemoryWikiConfigSource = z
+export const MemoryWikiConfigSource = z
   .strictObject({
     vaultMode: z.enum(WIKI_VAULT_MODES).optional(),
     vault: z
@@ -205,26 +116,6 @@ const MemoryWikiConfigSource = z
     }
   });
 
-const memoryWikiConfigSchemaBase = buildPluginConfigSchema(MemoryWikiConfigSource, {
-  safeParse(value: unknown) {
-    if (value === undefined) {
-      return { success: true, data: resolveMemoryWikiConfig(undefined) };
-    }
-    const result = MemoryWikiConfigSource.safeParse(value);
-    if (result.success) {
-      return { success: true, data: resolveMemoryWikiConfig(result.data) };
-    }
-    return {
-      success: false,
-      error: {
-        issues: mapPluginConfigIssues(result.error.issues),
-      },
-    };
-  },
-});
-
-export const memoryWikiConfigSchema: OpenClawPluginConfigSchema = memoryWikiConfigSchemaBase;
-
 function expandHomePath(inputPath: string, homedir: string): string {
   if (inputPath === "~") {
     return homedir;
@@ -238,7 +129,7 @@ function expandHomePath(inputPath: string, homedir: string): string {
 export function resolveMemoryWikiConfig(
   config: MemoryWikiPluginConfig | undefined,
   options?: { homedir?: string; env?: NodeJS.ProcessEnv },
-): ResolvedMemoryWikiConfig {
+) {
   const homedir = options?.homedir ?? os.homedir();
   const parsed = config ? MemoryWikiConfigSource.safeParse(config) : null;
   const safeConfig = parsed?.success ? parsed.data : (config ?? {});

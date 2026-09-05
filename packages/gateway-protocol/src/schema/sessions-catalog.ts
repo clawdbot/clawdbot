@@ -26,6 +26,7 @@ export const SessionCatalogCapabilitiesSchema = closedObject({
     }),
   ),
   openTerminal: Type.Optional(Type.Boolean()),
+  startTerminal: Type.Optional(Type.Boolean()),
 });
 
 export const SessionCatalogShareRouteSchema = closedObject({
@@ -90,6 +91,7 @@ export const SessionCatalogHostSchema = closedObject({
   kind: Type.Union([Type.Literal("gateway"), Type.Literal("node")]),
   connected: Type.Boolean(),
   nodeId: Type.Optional(NonEmptyString),
+  canStartTerminal: Type.Optional(Type.Boolean()),
   sessions: Type.Array(SessionCatalogSessionSchema),
   nextCursor: Type.Optional(Type.String()),
   error: Type.Optional(SessionCatalogErrorSchema),
@@ -166,9 +168,7 @@ export const SessionsCatalogReadResultSchema = closedObject({
   nextCursor: Type.Optional(Type.String()),
 });
 
-export const SessionsCatalogContinueParamsSchema = closedObject({
-  ...SessionCatalogLocatorSchema.properties,
-});
+export const SessionsCatalogContinueParamsSchema = SessionCatalogLocatorSchema;
 
 export const SessionsCatalogContinueResultSchema = closedObject({ sessionKey: NonEmptyString });
 
@@ -183,8 +183,8 @@ export const SessionsCatalogStartTerminalParamsSchema = closedObject({
   catalogId: NonEmptyString,
   hostId: Type.Optional(NonEmptyString),
   agentId: NonEmptyString,
-  cwd: NonEmptyString,
-  initialMessage: Type.Optional(Type.String()),
+  cwd: Type.String({ minLength: 1, maxLength: 4096 }),
+  initialMessage: Type.Optional(Type.String({ maxLength: 16384 })),
 });
 
 // Mirrors terminal.open so callers can hand the new session to the same terminal UI.

@@ -330,6 +330,41 @@ gh search issues --repo openclaw/openclaw --match title,body --limit 50 \
   --jq '.[] | "\(.number) | \(.state) | \(.title) | \(.url)"'
 ```
 
+## Choose a writable landing checkout
+
+Before `review-init`, compare the editor's writable workspace with the Git
+common-directory parent. `scripts/pr` intentionally creates its worktree at
+`<canonical-repo>/.worktrees/pr-<PR>`; running it from a linked checkout does not
+put review artifacts under that caller. Shell access or a directory grant alone
+may not make those artifacts editable in an isolated session.
+
+When the canonical PR worktree lies outside the permitted workspace, start from
+a fresh ordinary checkout **inside** that workspace. Use the verified repository
+URL and normal Git, not another linked worktree pointing at the same outside
+common directory. Keep full history and blobs: shallow history breaks provenance
+checks, and blob filters can turn journaled historical restores into serial
+network fetches.
+
+```bash
+git clone --single-branch <verified-repository-url> <permitted-workspace>/landing-checkout
+```
+
+Verify its origin and Git root, then use that checkout's trusted `main` wrapper
+for the unchanged review/prepare/merge sequence. Its native PR worktrees now stay
+inside the permitted tree. Initialize review templates and verify editor access
+before investing in proof. Preserve the original checkout and unique work; never
+use symlinks, shell-mediated writes to denied paths, or weaker isolation flags.
+
+This is fresh workspace selection, not recovery: if another checkout has an
+active operation, uncertain merge capture/outcome, or pending auto/queue request
+for this PR, reconcile that original state first. Never clone away retained evidence or retry
+an uncertain dispatch from a new repository's independent lock/ref namespace.
+
+Keep the generated first line of `review.md` byte-for-byte, and keep `review.json`
+`pr.number`/`pr.headSha` aligned with the initialized metadata. Put descriptive
+prose below that line. Run native artifact validation before calling the review
+ready; regenerated templates, not hand-edited stamps, own head changes.
+
 ## Follow PR review and landing hygiene
 
 - `scripts/pr` requires `git`, `gh`, `jq`, `rg` (ripgrep), `pnpm`, and `node`

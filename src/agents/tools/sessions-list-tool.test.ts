@@ -14,7 +14,7 @@ const SESSION_LINK_RULE = describeSessionLinkRule(SESSION_LINK_BASE);
 
 const VALID_CONFIG: OpenClawConfig = {
   agents: { entries: { main: { default: true } } },
-  tools: { sessions: { visibility: "all" } },
+  tools: { sessions: { visibility: "all" }, agentToAgent: { enabled: false } },
 };
 
 const mocks = vi.hoisted(() => ({
@@ -91,6 +91,7 @@ describe("sessions-list-tool", () => {
     const sessions = entries.map(([key, entry]) =>
       buildGatewaySessionRow({
         cfg: VALID_CONFIG,
+        agentId: "main",
         storePath: "/tmp/sessions.json",
         store,
         key,
@@ -190,7 +191,7 @@ describe("sessions-list-tool", () => {
 
   it.each([
     { requester: "agent:main:main", visibility: "tree" as const },
-    { requester: "agent:main:cron:organize", visibility: undefined },
+    { requester: "agent:main:cron:organize", visibility: "agent" as const },
   ])(
     "lists unspawned same-agent sessions from $requester with $visibility visibility",
     async ({ requester, visibility }) => {

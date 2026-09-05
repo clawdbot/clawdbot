@@ -120,7 +120,7 @@ describe("first-run activation receipt", () => {
     expect(localStorage.getItem(receiptKey)).toBeNull();
   });
 
-  it("expires activation receipts after the request deadline plus its safety window", () => {
+  it("expires activation receipts after the activation session deadline plus its safety window", () => {
     vi.useFakeTimers();
     vi.setSystemTime(1_000);
     const context = createContext();
@@ -129,7 +129,7 @@ describe("first-run activation receipt", () => {
       modelRef: "openai/expected",
     });
 
-    vi.setSystemTime(156_000);
+    vi.setSystemTime(486_000);
 
     expect(readFirstRunActivationReceipt(context)).toBeNull();
     expect(localStorage.getItem(receiptKey)).toBeNull();

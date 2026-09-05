@@ -4,6 +4,7 @@ import {
   readControlUiBuildMismatchId,
   resolveSafeTimeoutDelayMs,
 } from "@openclaw/gateway-client/browser";
+import { asOptionalRecord } from "@openclaw/normalization-core/record-coerce";
 import { isGatewayRestartUnavailableError } from "../../../packages/gateway-protocol/src/restart-unavailable.js";
 import type { ControlUiBootstrapProfileHint } from "../../../src/gateway/control-ui-bootstrap-contract.js";
 // Control UI module owns the application gateway store: the reactive
@@ -19,6 +20,7 @@ import {
 import { CONTROL_UI_BUILD_INFO, controlUiBuildDiffersFrom } from "../build-info.ts";
 import { t } from "../i18n/index.ts";
 import { bumpCanvasWidgetFrameConnectionGeneration } from "../lib/chat/canvas-widget-frame-generation.ts";
+import { readConnectionAuthReason } from "../lib/connection-hints.ts";
 import { formatUiError, formatUiExternalText } from "../lib/format-error.ts";
 import { setAvatarGatewayOrigin } from "../lib/identity-avatar-context.ts";
 import { resolveSessionKey } from "../lib/sessions/index.ts";
@@ -31,7 +33,11 @@ import type {
   ApplicationGatewayConnection,
   ApplicationGatewaySnapshot,
 } from "./context.ts";
-import { resolveControlUiAuthHeader } from "./control-ui-auth.ts";
+import { resolveControlUiAuthCandidates } from "./control-ui-auth.ts";
+import {
+  createGatewayControlUiReloadOptions,
+  isSameOriginGateway,
+} from "./gateway-control-ui-reload.ts";
 import {
   loadGatewaySessionSelection,
   loadSettings,
@@ -49,6 +55,16 @@ type CanvasSurfaceLease = ReturnType<CanvasSurfaceLeaseModule["createCanvasSurfa
 const defaultClientFactory: GatewayClientFactory = (opts) => new GatewayBrowserClient(opts);
 // Grace window before offline presentation appears; reconnects never wait.
 const OFFLINE_INDICATOR_DELAY_MS = 2_000;
+
+function readSuspensionPhase(payload: unknown): ApplicationGatewaySnapshot["suspensionPhase"] {
+  const phase = asOptionalRecord(payload)?.phase;
+  return phase === "accepting" ||
+    phase === "preparing" ||
+    phase === "draining" ||
+    phase === "prepared"
+    ? phase
+    : undefined;
+}
 
 function notifyGatewayObservers<T>(
   listeners: ReadonlySet<(value: T) => void>,
@@ -91,6 +107,10 @@ export function createApplicationGateway(
     persistDefaultConnectionSettings?: boolean;
     resourceBasePath?: string;
     bootstrapProfile?: ControlUiBootstrapProfileHint;
+    clientOptions?: Pick<
+      GatewayBrowserClientOptions,
+      "clientName" | "mode" | "platform" | "deviceFamily" | "instanceId" | "scopes"
+    >;
   } = {},
 ): ApplicationGateway {
   let settings = initialSettings;
@@ -113,6 +133,7 @@ export function createApplicationGateway(
     sessionKey: settings.sessionKey,
     lastError: null,
     lastErrorCode: null,
+    lastErrorAuthReason: null,
     selfUser: null,
   };
   let client: GatewayBrowserClient | null = null;
@@ -182,7 +203,8 @@ export function createApplicationGateway(
       clearOfflineIndicatorTimer();
       snapshot = next.offlineStable ? { ...next, offlineStable: false } : next;
     } else {
-      snapshot = next;
+      // A disconnected transport cannot vouch for admission; the next hello replaces it.
+      snapshot = { ...next, suspensionPhase: undefined };
       scheduleOfflineIndicator();
     }
     notifyGatewayObservers(listeners, snapshot, "snapshot", (current) => current === snapshot);
@@ -284,7 +306,15 @@ export function createApplicationGateway(
   };
   const recordGatewayEvent = (event: Parameters<GatewayEventListener>[0]) => {
     const eventClient = client;
-    if (event.event === "shutdown") {
+    if (event.event === "gateway.suspension") {
+      const suspensionPhase = readSuspensionPhase(event.payload);
+      if (suspensionPhase) {
+        setSnapshot({ ...snapshot, suspensionPhase });
+        if (!isCurrentClient(eventClient)) {
+          return;
+        }
+      }
+    } else if (event.event === "shutdown") {
       // Only a restart-bearing shutdown arms the amber state; an ordinary stop
       // (restartExpectedMs absent) flows through the normal offline pill so the
       // retry action stays reachable. Hostile values fall to the timer clamp.
@@ -384,16 +414,19 @@ export function createApplicationGateway(
       everConnected = false;
     }
     connection = nextConnection;
-    // Trust the connected gateway's origin for avatar route resolution so
-    // split-origin Control UI deployments load uploaded/proxied avatars.
-    setAvatarGatewayOrigin(
-      nextConnection.gatewayUrl,
-      resolveControlUiAuthHeader({
-        settings: { token: nextConnection.token },
-        password: nextConnection.password,
-      }),
-      options.resourceBasePath,
-    );
+    // Both connection setup and hello bind resources to this connection's credentials.
+    const updateAvatarContext = (hello?: GatewayHelloOk) => {
+      setAvatarGatewayOrigin(
+        nextConnection.gatewayUrl,
+        resolveControlUiAuthCandidates({
+          hello,
+          settings: nextConnection,
+          password: nextConnection.password,
+        }),
+        options.resourceBasePath,
+      );
+    };
+    updateAvatarContext();
     updateSettings(
       {
         gatewayUrl: nextConnection.gatewayUrl,
@@ -419,15 +452,20 @@ export function createApplicationGateway(
         : undefined,
       bootstrapProfile: nextConnection.bootstrapProfile,
       password: nextConnection.password.trim() ? nextConnection.password : undefined,
-      clientName: "openclaw-control-ui",
+      clientName: options.clientOptions?.clientName ?? "openclaw-control-ui",
       clientVersion: CONTROL_UI_BUILD_INFO.version ?? "dev",
       clientBuildId: CONTROL_UI_BUILD_INFO.buildId,
-      mode: "webchat",
-      instanceId: generateUUID(),
+      platform: options.clientOptions?.platform,
+      deviceFamily: options.clientOptions?.deviceFamily,
+      mode: options.clientOptions?.mode ?? "webchat",
+      instanceId: options.clientOptions?.instanceId ?? generateUUID(),
+      scopes: options.clientOptions?.scopes,
       onHello: (hello: GatewayHelloOk) => {
         if (client !== nextClient) {
           return;
         }
+        // A successful hello retires bootstrap; the client has processed any issued device grant.
+        connection = { ...connection, bootstrapToken: "", bootstrapProfile: undefined };
         const exactBuildIdentityAvailable = Boolean(hello.server?.buildId?.trim());
         const controlUiBuildFresh = !(
           isSameOriginGateway(nextConnection.gatewayUrl) &&
@@ -450,23 +488,21 @@ export function createApplicationGateway(
             selfUser: null,
             lastError: null,
             lastErrorCode: null,
+            lastErrorAuthReason: null,
           });
           const targetBuildId = hello.server?.buildId?.trim() || hello.server?.version?.trim();
           if (targetBuildId) {
-            void scheduleStaleChunkReload({ buildId: targetBuildId });
+            void scheduleStaleChunkReload({
+              buildId: targetBuildId,
+              ...createGatewayControlUiReloadOptions(
+                gateway,
+                () => isCurrentClient(nextClient) && isSameOriginGateway(nextConnection.gatewayUrl),
+              ),
+            });
           }
           return;
         }
-        setAvatarGatewayOrigin(
-          nextConnection.gatewayUrl,
-          resolveControlUiAuthHeader({
-            hello,
-            settings: { token: nextConnection.token },
-            password: nextConnection.password,
-          }),
-          options.resourceBasePath,
-        );
-        connection = { ...connection, bootstrapToken: "", bootstrapProfile: undefined };
+        updateAvatarContext(hello);
         if (persistConnectionSettings) {
           settings = loadSettings();
         }
@@ -493,6 +529,7 @@ export function createApplicationGateway(
           client: nextClient,
           phase: "connected",
           restartPending: false,
+          suspensionPhase: readSuspensionPhase(asOptionalRecord(hello.snapshot)?.suspension),
           hello,
           canvasPluginSurfaceUrl,
           // Trim guards a whitespace-only defaultId from becoming a truthy selection.
@@ -500,6 +537,7 @@ export function createApplicationGateway(
           sessionKey,
           lastError: null,
           lastErrorCode: null,
+          lastErrorAuthReason: null,
           selfUser: resolveSelfPresenceUser(
             readPresenceEntries(hello.snapshot) ?? [],
             nextClient.instanceId,
@@ -524,7 +562,13 @@ export function createApplicationGateway(
         stopCanvasSurfaceLease();
         const mismatchedBuildId = readControlUiBuildMismatchId(error?.details);
         if (mismatchedBuildId) {
-          void scheduleStaleChunkReload({ buildId: mismatchedBuildId });
+          void scheduleStaleChunkReload({
+            buildId: mismatchedBuildId,
+            ...createGatewayControlUiReloadOptions(
+              gateway,
+              () => isCurrentClient(nextClient) && isSameOriginGateway(nextConnection.gatewayUrl),
+            ),
+          });
         }
         const startupPending =
           mismatchedBuildId === null &&
@@ -566,6 +610,7 @@ export function createApplicationGateway(
               ? formatUiError(error.message)
               : `disconnected (${code}): ${formatUiExternalText(reason, t("common.unknown"))}`,
           lastErrorCode: startupPending ? null : lastErrorCode,
+          lastErrorAuthReason: startupPending ? null : readConnectionAuthReason(error?.details),
         });
       },
       onGap: ({ expected, received }) => {
@@ -576,6 +621,7 @@ export function createApplicationGateway(
           ...snapshot,
           lastError: `event gap detected (expected seq ${expected}, got ${received}); reconnecting`,
           lastErrorCode: null,
+          lastErrorAuthReason: null,
         });
         if (isCurrentClient(nextClient)) {
           connect();
@@ -612,6 +658,7 @@ export function createApplicationGateway(
       sessionKey: nextSessionKey,
       lastError: null,
       lastErrorCode: null,
+      lastErrorAuthReason: null,
     });
     if (isCurrentClient(nextClient)) {
       nextClient.start();
@@ -664,6 +711,7 @@ export function createApplicationGateway(
         selfUser: null,
         lastError: null,
         lastErrorCode: null,
+        lastErrorAuthReason: null,
       });
     },
     subscribe: (listener) => {
@@ -686,14 +734,6 @@ export function createApplicationGateway(
     },
   };
   return gateway;
-}
-
-function isSameOriginGateway(gatewayUrl: string): boolean {
-  try {
-    return new URL(gatewayUrl.replace(/^ws/u, "http")).origin === globalThis.location?.origin;
-  } catch {
-    return false;
-  }
 }
 
 function normalizeCanvasPluginSurfaceUrl(value: string | undefined): string | null {

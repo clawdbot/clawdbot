@@ -10,6 +10,16 @@ import {
 } from "./input-files.js";
 
 describe("extractFileContentFromSource", () => {
+  it("preserves the encoding used to recognize otherwise untyped text", async () => {
+    const text = "Café notes: résumé et météo pour demain.";
+    const result = await extractFileContentFromSource({
+      source: { type: "base64", data: Buffer.from(text, "latin1").toString("base64") },
+      limits: resolveInputFileLimits(),
+    });
+
+    expect(result.text).toBe(text);
+  });
+
   const avi = Buffer.from("524946463800000041564920" + "00".repeat(52), "hex");
   const aviSource = { type: "base64", data: avi.toString("base64"), filename: "clip.avi" } as const;
 
@@ -121,7 +131,7 @@ describe("extractFileContentFromSource", () => {
   it.each([
     ['text/plain; charset="windows-1252', "café €"],
     ['text/plain; note="a; charset=windows-1252', "caf\uFFFD \uFFFD"],
-    ["plain; charset=windows-1252", "caf\uFFFD \uFFFD"],
+    ["plain; charset=windows-1252", "café €"],
   ])("uses MIME parser recovery without changing admission for %s", async (mediaType, text) => {
     const result = await extractFileContentFromSource({
       source: {

@@ -1,15 +1,17 @@
 // Codex plugin module implements command account behavior.
 import {
   ensureAuthProfileStore,
-  findNormalizedProviderValue,
   resolveAuthProfileEligibility,
-  resolveAuthProfileOrder,
   resolveProfileUnusableUntilForDisplay,
   type AuthProfileCredential,
   type AuthProfileFailureReason,
   type AuthProfileStore,
 } from "openclaw/plugin-sdk/agent-runtime";
 import type { PluginCommandContext } from "openclaw/plugin-sdk/plugin-entry";
+import {
+  findNormalizedProviderValue,
+  resolveAuthProfileOrder,
+} from "openclaw/plugin-sdk/provider-auth";
 import {
   normalizeOptionalString,
   normalizeUniqueStringEntries,

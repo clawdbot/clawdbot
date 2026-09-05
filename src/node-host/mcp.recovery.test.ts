@@ -687,9 +687,13 @@ describe("node host MCP live lifecycle", () => {
     await manager.close();
   });
 
-  it("bounds initial server connection fan-out at six", async () => {
+  it("bounds initial server connection fan-out at six", async ({ onTestFinished }) => {
     let active = 0;
     let maxActive = 0;
+    let started = 0;
+    const initialConnectionsStarted = createDeferred();
+    const lastConnectionStarted = createDeferred();
+    const controller = new AbortController();
     const releases: Array<() => void> = [];
     const servers = Object.fromEntries(
       Array.from({ length: 7 }, (_, index) => [`server-${index}`, { command: "server" }]),
@@ -702,23 +706,41 @@ describe("node host MCP live lifecycle", () => {
             maxActive = Math.max(maxActive, active);
             await new Promise<void>((resolve) => {
               releases.push(resolve);
+              started += 1;
+              if (started === 6) {
+                initialConnectionsStarted.resolve();
+              } else if (started === 7) {
+                lastConnectionStarted.resolve();
+              }
             });
             active -= 1;
           },
         }),
       resolveTransport: () => stdioTransport,
+      signal: controller.signal,
       warn: vi.fn(),
     });
+    onTestFinished(async () => {
+      // Retire held and queued connections even when an admission assertion fails.
+      controller.abort();
+      for (const release of releases.splice(0)) {
+        release();
+      }
+      const manager = await starting;
+      await manager.close();
+    });
 
-    await vi.waitFor(() => expect(releases).toHaveLength(6));
+    // Polling can miss the initial window and count retries after the fixture's deadline.
+    await initialConnectionsStarted.promise;
+    expect(releases).toHaveLength(6);
     expect(maxActive).toBe(6);
     releases.shift()?.();
-    await vi.waitFor(() => expect(releases).toHaveLength(6));
+    await lastConnectionStarted.promise;
+    expect(releases).toHaveLength(6);
     for (const release of releases.splice(0)) {
       release();
     }
-    const manager = await starting;
+    await starting;
     expect(maxActive).toBe(6);
-    await manager.close();
   });
 });

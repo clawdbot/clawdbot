@@ -8,7 +8,6 @@ import type { PluginLoadOptions } from "./loader.js";
 import { loadManifestMetadataSnapshot } from "./manifest-contract-eligibility.js";
 import type { PluginManifestRecord } from "./manifest-registry.js";
 import type { PluginWebFetchProviderEntry, PluginWebSearchProviderEntry } from "./types.js";
-import { resolveBundledWebFetchResolutionConfig } from "./web-fetch-providers.shared.js";
 import {
   loadBundledWebFetchProviderEntriesFromDir,
   loadBundledWebSearchProviderEntriesFromDir,
@@ -16,8 +15,10 @@ import {
   resolveBundledExplicitWebFetchProvidersFromPublicArtifacts,
   resolveBundledExplicitWebSearchProvidersFromPublicArtifacts,
 } from "./web-provider-public-artifacts.explicit.js";
-import { resolveManifestDeclaredWebProviderCandidates } from "./web-provider-resolution-shared.js";
-import { resolveBundledWebSearchResolutionConfig } from "./web-search-providers.shared.js";
+import {
+  resolveBundledWebProviderResolutionConfig,
+  resolveManifestDeclaredWebProviderCandidates,
+} from "./web-provider-resolution-shared.js";
 
 type BundledWebProviderPublicArtifactParams = {
   config?: PluginLoadOptions["config"];
@@ -63,10 +64,7 @@ function resolveBundledCandidatePluginIds(params: {
       ...(params.manifestRecords ? { manifestRecords: params.manifestRecords } : {}),
     };
   }
-  const resolvedConfig =
-    params.contract === "webSearchProviders"
-      ? resolveBundledWebSearchResolutionConfig(params).config
-      : resolveBundledWebFetchResolutionConfig(params).config;
+  const resolvedConfig = resolveBundledWebProviderResolutionConfig(params).config;
   const candidates = resolveManifestDeclaredWebProviderCandidates({
     contract: params.contract,
     configKey: params.configKey,
@@ -84,16 +82,18 @@ function resolveBundledCandidatePluginIds(params: {
 }
 
 function resolveBundledRuntimeCandidatePluginIds(params: {
+  contract: "webSearchProviders" | "webFetchProviders";
   config?: PluginLoadOptions["config"];
   workspaceDir?: string;
   env?: PluginLoadOptions["env"];
   onlyPluginIds: readonly string[];
   manifestRecords?: readonly PluginManifestRecord[];
 }): string[] | null {
-  const resolvedConfig = resolveBundledWebFetchResolutionConfig(params).config;
+  const search = params.contract === "webSearchProviders";
+  const resolvedConfig = resolveBundledWebProviderResolutionConfig(params).config;
   const candidates = resolveManifestDeclaredWebProviderCandidates({
-    contract: "webFetchProviders",
-    configKey: "webFetch",
+    contract: params.contract,
+    configKey: search ? "webSearch" : "webFetch",
     config: params.config,
     workspaceDir: params.workspaceDir,
     env: params.env,
@@ -115,7 +115,7 @@ function resolveBundledRuntimeCandidatePluginIds(params: {
       workspaceDir: params.workspaceDir,
       env: params.env,
       onlyPluginIds: pluginIds,
-      contract: "webFetchProviders",
+      contract: params.contract,
       manifestRecords: candidates.manifestRecords,
     }).map((plugin) => plugin.id),
   );
@@ -205,12 +205,25 @@ export function resolveBundledWebFetchProvidersFromPublicArtifacts(
   });
 }
 
+export function resolveEnabledBundledWebSearchProvidersFromPublicArtifacts(
+  params: BundledWebProviderPublicArtifactParams & { onlyPluginIds: readonly string[] },
+): PluginWebSearchProviderEntry[] | null {
+  const pluginIds = resolveBundledRuntimeCandidatePluginIds({
+    ...params,
+    contract: "webSearchProviders",
+  });
+  return pluginIds
+    ? resolveBundledExplicitWebSearchProvidersFromPublicArtifacts({ onlyPluginIds: pluginIds })
+    : null;
+}
+
 export function resolveBundledRuntimeWebFetchProvidersFromPublicArtifacts(
   params: BundledWebProviderPublicArtifactParams & {
     onlyPluginIds: readonly string[];
   },
 ): PluginWebFetchProviderEntry[] | null {
   const pluginIds = resolveBundledRuntimeCandidatePluginIds({
+    contract: "webFetchProviders",
     config: params.config,
     workspaceDir: params.workspaceDir,
     env: params.env,

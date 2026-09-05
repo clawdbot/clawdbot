@@ -1,4 +1,5 @@
 import { isIP } from "node:net";
+import { bufferToBlobPart } from "openclaw/plugin-sdk/blob-runtime";
 // Litellm provider module implements model/runtime integration.
 import type { OpenClawConfig } from "openclaw/plugin-sdk/config-contracts";
 import {
@@ -135,7 +136,7 @@ export function buildLitellmImageGenerationProvider(): ImageGenerationProvider {
         const mimeType = normalizeOptionalString(image.mimeType) ?? "image/png";
         form.append(
           partName,
-          new Blob([new Uint8Array(image.buffer)], { type: mimeType }),
+          new Blob([bufferToBlobPart(image.buffer)], { type: mimeType }),
           imageSourceUploadFileName({ image, index }),
         );
       }

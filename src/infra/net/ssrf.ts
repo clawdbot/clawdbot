@@ -65,11 +65,9 @@ export type SsrFPolicy = {
    */
   allowedOrigins?: string[];
   hostnameAllowlist?: string[];
+  /** Deny exact hosts or wildcard subdomains; "*.example.com" excludes the apex. */
+  blockedHostnames?: string[];
 };
-
-function normalizeSsrFPolicyHostnames(values?: string[]): string[] {
-  return normalizePolicyHostnames(values).toSorted();
-}
 
 function normalizePolicyHostnames(values?: string[]): string[] {
   return normalizeUniqueStringEntries(values?.map((value) => normalizeHostname(value)));
@@ -86,9 +84,10 @@ function normalizeSsrFPolicyForComparison(policy?: SsrFPolicy) {
     dangerouslyAllowPrivateNetwork: policy.dangerouslyAllowPrivateNetwork === true,
     allowRfc2544BenchmarkRange: policy.allowRfc2544BenchmarkRange === true,
     allowIpv6UniqueLocalRange: policy.allowIpv6UniqueLocalRange === true,
-    allowedHostnames: normalizeSsrFPolicyHostnames(policy.allowedHostnames),
+    allowedHostnames: normalizePolicyHostnames(policy.allowedHostnames).toSorted(),
     allowedOrigins: normalizeSsrFPolicyOrigins(policy.allowedOrigins),
     hostnameAllowlist: [...normalizeHostnameAllowlist(policy.hostnameAllowlist)].toSorted(),
+    blockedHostnames: normalizeHostnameAllowlist(policy.blockedHostnames).toSorted(),
   };
 }
 
@@ -119,20 +118,15 @@ export function mergeSsrFPolicies(
     if (policy.allowIpv6UniqueLocalRange) {
       merged.allowIpv6UniqueLocalRange = true;
     }
-    if (policy.allowedHostnames?.length) {
-      merged.allowedHostnames = Array.from(
-        new Set([...(merged.allowedHostnames ?? []), ...policy.allowedHostnames]),
-      );
-    }
-    if (policy.allowedOrigins?.length) {
-      merged.allowedOrigins = Array.from(
-        new Set([...(merged.allowedOrigins ?? []), ...policy.allowedOrigins]),
-      );
-    }
-    if (policy.hostnameAllowlist?.length) {
-      merged.hostnameAllowlist = Array.from(
-        new Set([...(merged.hostnameAllowlist ?? []), ...policy.hostnameAllowlist]),
-      );
+    for (const key of [
+      "allowedHostnames",
+      "allowedOrigins",
+      "hostnameAllowlist",
+      "blockedHostnames",
+    ] as const) {
+      if (policy[key]?.length) {
+        merged[key] = Array.from(new Set([...(merged[key] ?? []), ...policy[key]]));
+      }
     }
   }
   return Object.keys(merged).length > 0 ? merged : undefined;
@@ -383,15 +377,22 @@ function resolveHostnamePolicyChecks(
     throw new Error("Invalid hostname");
   }
 
-  const hostnameAllowlist = normalizeHostnameAllowlist(policy?.hostnameAllowlist);
-  const skipPrivateNetworkChecks = shouldSkipPrivateNetworkChecks(normalized, policy);
+  // Operator denials take precedence over every trust exception, before DNS side effects.
+  const blockedHostnames = normalizeHostnameAllowlist(policy?.blockedHostnames);
+  if (blockedHostnames.some((pattern) => isHostnameAllowedByPattern(normalized, pattern))) {
+    throw new SsrFBlockedError(
+      `Domain policy: Blocked hostname (configured blocklist): ${hostname}. Try a URL on a different domain or ask the operator to review blockedHostnames.`,
+    );
+  }
 
+  const hostnameAllowlist = normalizeHostnameAllowlist(policy?.hostnameAllowlist);
   if (!matchesHostnameAllowlist(normalized, hostnameAllowlist)) {
     throw new SsrFBlockedError(
       `Domain policy: Blocked hostname (not in allowlist): ${hostname}. Permitted hostname patterns: ${hostnameAllowlist.join(", ")}. Try a URL on a permitted domain.`,
     );
   }
 
+  const skipPrivateNetworkChecks = shouldSkipPrivateNetworkChecks(normalized, policy);
   if (!skipPrivateNetworkChecks) {
     // Fail fast for literal hosts/IPs before any DNS lookup side-effects.
     assertAllowedHostOrIpOrThrow(normalized, policy);

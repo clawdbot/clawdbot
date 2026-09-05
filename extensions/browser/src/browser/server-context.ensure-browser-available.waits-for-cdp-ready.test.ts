@@ -673,13 +673,13 @@ describe("browser server-context ensureBrowserAvailable", () => {
 
     await profile.ensureBrowserAvailable();
     const runtime = state.profiles.get("manual-cdp");
-    expect(runtime?.externalBrowserMode?.headless).toBe(false);
+    await expect(runtime?.externalBrowserMode?.headless).resolves.toBe(false);
 
     await profile.ensureBrowserAvailable();
     expect(inspectLocalChromeHeadlessMode).toHaveBeenCalledTimes(1);
 
     await profile.ensureBrowserAvailable();
-    expect(runtime?.externalBrowserMode?.headless).toBe(true);
+    await expect(runtime?.externalBrowserMode?.headless).resolves.toBe(true);
     expect(inspectLocalChromeHeadlessMode).toHaveBeenCalledTimes(2);
 
     if (!runtime) {
