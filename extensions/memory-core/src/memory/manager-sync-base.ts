@@ -344,10 +344,9 @@ export abstract class MemoryManagerSyncBase extends MemoryManagerDatabaseContext
   }
 
   protected hasIndexedChunks(): boolean {
-    const row = this.db.prepare(`SELECT 1 as found FROM memory_index_chunks LIMIT 1`).get() as
-      | { found?: number }
-      | undefined;
-    return row?.found === 1;
+    return (
+      this.db.prepare(`SELECT 1 as found FROM memory_index_chunks LIMIT 1`).get() !== undefined
+    );
   }
 
   protected hasSemanticChunks(): boolean {
