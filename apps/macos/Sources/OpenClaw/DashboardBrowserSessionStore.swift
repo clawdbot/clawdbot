@@ -101,7 +101,7 @@ final class DashboardBrowserSessionStore {
                 await self.dataStore.removeData(
                     ofTypes: [WKWebsiteDataTypeServiceWorkerRegistrations], modifiedSince: .distantPast)
                 for cookie in current {
-                    await self.dataStore.httpCookieStore.delete(cookie)
+                    await self.dataStore.httpCookieStore.deleteCookie(cookie)
                 }
             } else if clearWebsiteData || cookie != nil || !current.isEmpty {
                 // Account replacement also retires cached profile data and service
