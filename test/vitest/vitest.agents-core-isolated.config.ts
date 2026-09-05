@@ -7,7 +7,6 @@ export function createAgentsCoreIsolatedVitestConfig(env?: Record<string, string
   return createScopedVitestConfig(owner.include, {
     dir: owner.dir,
     env,
-    fileParallelism: false,
     isolate: true,
     name: owner.name,
     passWithNoTests: true,

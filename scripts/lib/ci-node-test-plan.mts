@@ -1149,7 +1149,10 @@ function resolveAgentCoreShardName(file: string): string {
 }
 
 function createAgentCoreSplitShards(): NodeTestSplitShard[] {
-  const isolatedTests = new Set(agentVitestProjectOwners.coreIsolated.include);
+  const isolatedTests = new Set([
+    ...agentVitestProjectOwners.spawnProductionBoundary.include,
+    ...agentVitestProjectOwners.coreIsolated.include,
+  ]);
   const groups = new Map<string, string[]>();
   for (const file of listTestFiles("src/agents")) {
     const name = relative("src/agents", file).replaceAll("\\", "/");
@@ -1201,6 +1204,12 @@ function createAgentCoreSplitShards(): NodeTestSplitShard[] {
 
   return [
     ...sharedShards,
+    {
+      configs: [agentVitestProjectOwners.spawnProductionBoundary.config],
+      includePatterns: agentVitestProjectOwners.spawnProductionBoundary.include,
+      requiresDist: false,
+      shardName: "agentic-agents-core-spawn-production-boundary",
+    },
     {
       configs: [agentVitestProjectOwners.coreIsolated.config],
       includePatterns: agentVitestProjectOwners.coreIsolated.include,
