@@ -429,6 +429,7 @@
     {"id":"native.android.aaab13cc0ab5153c","source":"Could not save wake words","surface":"android","sites":[{"kind":"ui-call","path":"apps/android/app/src/main/java/ai/openclaw/app/NodeRuntime.kt"}]},
     {"id":"native.android.f6f0f4e6491e711a","source":"Could not save widget image","surface":"android","sites":[{"kind":"ui-call","path":"apps/android/app/src/main/java/ai/openclaw/app/ui/chat/ChatInlineWidgetView.kt"}]},
     {"id":"native.android.2525b1650cf92f0c","source":"Could not search ClawHub skills.","surface":"android","sites":[{"kind":"ui-call","path":"apps/android/app/src/main/java/ai/openclaw/app/NodeRuntime.kt"}]},
+    {"id":"native.android.d3f266a0285fea61","source":"Could not share file","surface":"android","sites":[{"kind":"ui-call","path":"apps/android/app/src/main/java/ai/openclaw/app/ui/WorkspaceFilesScreen.kt"}]},
     {"id":"native.android.1b79f48e2b7bad07","source":"Could not stage an attachment for sending.","surface":"android","sites":[{"kind":"ui-call","path":"apps/android/app/src/main/java/ai/openclaw/app/chat/ChatController.kt"}]},
     {"id":"native.android.2e28f34529493a97","source":"Could not start the camera. Choose a QR image from gallery or enter the setup code manually.","surface":"android","sites":[{"kind":"ui-call","path":"apps/android/app/src/main/java/ai/openclaw/app/ui/OnboardingFlow.kt"}]},
     {"id":"native.android.495d785a90ecdad4","source":"Could not test connection","surface":"android","sites":[{"kind":"ui-call","path":"apps/android/app/src/main/java/ai/openclaw/app/ui/OnboardingFlow.kt"}]},

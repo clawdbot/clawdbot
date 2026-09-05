@@ -139,17 +139,10 @@ describe("settleEmbeddedAttemptStream liveness", () => {
     const state = getEmbeddedSessionPromptState(sessionId).toolResults;
     const key = "tool:old-read:42";
     state.replacements.set(key, {
-      message: {
-        role: "toolResult",
-        toolCallId: "old-read",
-        toolName: "read",
-        content: [{ type: "text", text: "kept prefix\n...\nkept suffix" }],
-        isError: false,
-        timestamp: 42,
-      },
+      content: [{ type: "text", text: "kept prefix\n...\nkept suffix" }],
       cacheTtl: "soft",
     });
-    state.sourceTextByKey.set(key, ["original full output"]);
+    state.sourceHashByKey.set(key, "original-source-hash");
     state.frozen.add(key);
     const input = {
       ...createSettleFixture(),
