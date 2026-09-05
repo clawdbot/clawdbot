@@ -124,6 +124,11 @@ const contextEngine: HarnessContextEngine = {
   }),
   ingest: async () => ({ ingested: true }),
   maintain: async () => ({ changed: false, bytesFreed: 0, rewrittenEntries: 0 }),
+  compact: async () => ({
+    ok: true,
+    compacted: false,
+    result: { summary: "", firstKeptEntryId: "entry-1", tokensBefore: 1 },
+  }),
 };
 
 /** Drives the hosted requester/fallback selection that owns memory prompt ownership. */
