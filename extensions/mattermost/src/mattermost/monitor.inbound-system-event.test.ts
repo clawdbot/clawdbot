@@ -24,7 +24,7 @@ import {
 } from "openclaw/plugin-sdk/runtime-config-snapshot";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import { WebSocketServer } from "ws";
-import type { MattermostPost } from "./client.js";
+import type { MattermostClient, MattermostPost } from "./client.js";
 import type { MattermostEventPayload } from "./monitor-websocket.js";
 import { monitorMattermostProvider } from "./monitor.js";
 import type { OpenClawConfig, ReplyPayload, RuntimeEnv } from "./runtime-api.js";
@@ -3388,6 +3388,82 @@ describe("mattermost inbound user posts", () => {
     expect(discardPending).toHaveBeenCalledOnce();
     expect(mockState.sendMessageMattermost).toHaveBeenCalledOnce();
     expect(retainTerminalText).toHaveBeenCalledExactlyOnceWith("Working\n\nFailed.");
+  });
+
+  it("attempts a separate final after the real progress stream loses its receipt", async () => {
+    const progressConfig: OpenClawConfig = {
+      channels: {
+        mattermost: {
+          enabled: true,
+          baseUrl: "https://mattermost.example.com",
+          botToken: "bot-token",
+          chatmode: "onmessage",
+          dmPolicy: "open",
+          groupPolicy: "open",
+          streaming: {
+            mode: "progress",
+            progress: { finalDelivery: "separate" },
+          },
+        },
+      },
+    };
+    mockState.runtimeCore = createRuntimeCore(progressConfig);
+    const actualDraftStream =
+      await vi.importActual<typeof import("./draft-stream.js")>("./draft-stream.js");
+    const requestPaths: string[] = [];
+    const request: MattermostClient["request"] = async <T>(requestPath: string): Promise<T> => {
+      requestPaths.push(requestPath);
+      if (requestPath === "/posts") {
+        return { message: "Working..." } as T;
+      }
+      return {} as T;
+    };
+    const client: MattermostClient = {
+      baseUrl: "https://mattermost.example.com",
+      apiBaseUrl: "https://mattermost.example.com/api/v4",
+      token: "bot-token",
+      request,
+      fetchImpl: vi.fn(),
+    };
+    mockState.createMattermostClient.mockReturnValue(client);
+    mockState.createMattermostDraftStream.mockImplementation((params) =>
+      actualDraftStream.createMattermostDraftStream(params),
+    );
+    const socket = new FakeWebSocket();
+    const abortController = new AbortController();
+    mockState.abortController = abortController;
+    mockState.dispatchInboundMessage.mockImplementation(async (params) => {
+      try {
+        await expect(
+          params.replyOptions?.onReasoningStream?.({ text: "Checking the workspace" }),
+        ).rejects.toThrow("did not include a post id");
+        const dispatcherOptions =
+          mockState.createReplyDispatcherWithTyping.mock.results.at(-1)?.value?.options;
+        await expect(
+          dispatcherOptions?.deliver({ text: "Final answer" }, { kind: "final" }),
+        ).rejects.toThrow("did not include a post id");
+      } finally {
+        abortController.abort();
+      }
+    });
+
+    const monitor = monitorMattermostProvider({
+      config: progressConfig,
+      runtime: testRuntime(),
+      abortSignal: abortController.signal,
+      webSocketFactory: () => socket,
+    });
+    await vi.waitFor(() => expect(socket.openListenerCount).toBeGreaterThan(0));
+    socket.emitOpen();
+    await emitMattermostChannelPost(socket, {
+      id: "post-separate-final-real-progress-partial",
+      message: "run this",
+    });
+    socket.emitClose(1000);
+    await monitor;
+
+    expect(requestPaths).toEqual(["/posts"]);
+    expect(mockState.sendMessageMattermost).toHaveBeenCalledOnce();
   });
 
   it("clears separate progress after a provider-accepted partial final", async () => {

@@ -308,8 +308,11 @@ export async function dispatchMattermostInboundTurn(
     deliver: async (payloadEntry: ReplyPayload, info) => {
       if (info.kind === "final") {
         await enterBlockPreviewActivity("text");
-        // Final text uses only confirmed-visible generations, so join prior boundary work before deciding whether to edit in place.
-        await draftStream.settleBoundaries();
+        if (!separateProgressFinalDelivery) {
+          // In-place final text uses only confirmed-visible generations, so join prior
+          // boundary work before deciding whether to edit the preview.
+          await draftStream.settleBoundaries();
+        }
         progressDraft.markFinalReplyStarted();
         await separateProgress.prepareFinal(payloadEntry.isError === true);
       }
