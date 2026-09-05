@@ -38,21 +38,14 @@ const runtimeConsumers = [
     "src/cli/acp-cli-exit.process.test.ts",
     "src/cli/update-dry-run-state.process.test.ts",
     "src/cli/update-cli/update-command-migrated.test.ts",
-  ].map((file) => ({
-    file,
-    configs: ["test/vitest/vitest.cli-process.config.ts"],
-    mode: "runtime" as const,
-    dir: "",
-  })),
-  ...[
     "src/cli/update-cli/update-command-rollback.test.ts",
     "src/cli/update-cli/update-command-post-update-recovery.test.ts",
     "src/cli/update-cli/update-command-service.integration.test.ts",
   ].map((file) => ({
     file,
-    configs: ["test/vitest/vitest.cli.config.ts"],
+    configs: ["test/vitest/vitest.cli-process.config.ts"],
     mode: "runtime" as const,
-    dir: "src/cli",
+    dir: "",
   })),
   {
     file: "src/infra/update-candidate-canary.integration.test.ts",
