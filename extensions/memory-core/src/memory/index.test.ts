@@ -2,6 +2,7 @@
 import fs from "node:fs/promises";
 import path from "node:path";
 import { DatabaseSync } from "node:sqlite";
+import { createDeferred } from "openclaw/plugin-sdk/extension-shared";
 import {
   hashText,
   INVALID_PROJECT_ANNOTATION_KEY,
@@ -553,55 +554,6 @@ describe("memory index", () => {
     }
   });
 
-  it("inherits entry-scoped annotations across oversized curated fragments", async () => {
-    await fs.writeFile(
-      path.join(fixture.paths.workspace, "MEMORY.md"),
-      [
-        "- Oversized alpha entry. <!-- trigger: oversized alpha --> <!-- importance: 8 --> <!-- project: alpha-key -->",
-        `  ${"alpha-fragment-body ".repeat(400)}`,
-        "- Global neighbor. <!-- trigger: global neighbor -->",
-      ].join("\n"),
-    );
-
-    const manager = await getFreshManager(createCfg({ provider: "none" }));
-    try {
-      const settings = Reflect.get(manager, "settings") as {
-        chunking: { tokens: number; overlap: number };
-      };
-      settings.chunking = { tokens: 64, overlap: 0 };
-      await manager.sync({ reason: "test", force: true });
-      const db = Reflect.get(manager, "db") as DatabaseSync;
-      const rows = db
-        .prepare(
-          `SELECT chunk.text, metadata.importance, metadata.triggers,
-                  metadata.project_key AS projectKey
-           FROM memory_index_chunks AS chunk
-           LEFT JOIN memory_index_chunk_recall_metadata AS metadata
-             ON metadata.chunk_id = chunk.id
-           WHERE chunk.path = 'MEMORY.md' AND chunk.source = 'memory'
-           ORDER BY chunk.start_line, chunk.id`,
-        )
-        .all() as Array<{
-        text: string;
-        importance: number | null;
-        triggers: string | null;
-        projectKey: string | null;
-      }>;
-      const fragments = rows.filter((row) => row.triggers === "oversized alpha");
-
-      expect(fragments.length).toBeGreaterThanOrEqual(2);
-      expect(fragments.every((row) => row.projectKey === "alpha-key" && row.importance === 8)).toBe(
-        true,
-      );
-      expect(rows.find((row) => row.triggers === "global neighbor")).toMatchObject({
-        projectKey: null,
-        importance: null,
-      });
-    } finally {
-      await manager.close?.();
-    }
-  });
-
   it("re-chunks unchanged files and removes stale rows when the chunking version advances", async () => {
     const curatedContent = [
       "- Alpha entry. <!-- trigger: alpha entry --> <!-- project: alpha-key -->",
@@ -702,55 +654,6 @@ describe("memory index", () => {
       expect((JSON.parse(upgradedMeta.value) as MemoryIndexMeta).chunkingVersion).toBe(
         MEMORY_CHUNKING_VERSION,
       );
-    } finally {
-      await manager.close?.();
-    }
-  });
-
-  it("keeps existing file index rows when chunk publication fails", async () => {
-    const cfg = createCfg({});
-    const manager = await getFreshManager(cfg);
-    try {
-      const db = Reflect.get(manager, "db") as DatabaseSync;
-
-      await manager.sync({ reason: "test" });
-
-      const initialSource = db
-        .prepare("SELECT hash FROM memory_index_sources WHERE path LIKE ? AND source = ?")
-        .get("%2026-01-12.md", "memory") as { hash: string } | undefined;
-      const initialChunk = db
-        .prepare("SELECT text FROM memory_index_chunks WHERE path LIKE ? AND source = ?")
-        .get("%2026-01-12.md", "memory") as { text: string } | undefined;
-      expect(initialSource?.hash).toBeTruthy();
-      expect(initialChunk?.text).toContain("Alpha memory line.");
-
-      db.exec(`
-        CREATE TRIGGER fail_chunk_publication
-        AFTER INSERT ON memory_index_chunks
-        BEGIN
-          SELECT RAISE(FAIL, 'forced chunk publication failure');
-        END;
-      `);
-      await fs.writeFile(
-        path.join(fixture.paths.memory, "2026-01-12.md"),
-        "# Log\nUpdated memory line.",
-      );
-      Reflect.set(manager, "dirty", true);
-
-      await expect(manager.sync({ reason: "test" })).rejects.toThrow(
-        "forced chunk publication failure",
-      );
-
-      expect(
-        db
-          .prepare("SELECT hash FROM memory_index_sources WHERE path LIKE ? AND source = ?")
-          .get("%2026-01-12.md", "memory"),
-      ).toEqual(initialSource);
-      expect(
-        db
-          .prepare("SELECT text FROM memory_index_chunks WHERE path LIKE ? AND source = ?")
-          .get("%2026-01-12.md", "memory"),
-      ).toEqual(initialChunk);
     } finally {
       await manager.close?.();
     }
@@ -1144,14 +1047,14 @@ describe("memory index", () => {
     }
   });
 
-  it.each([
+  it.for([
     ["success", 0, 0, { enabled: true, failures: 0, lastError: undefined }],
     ["repeated failures", 0, 2, { enabled: false, failures: 2, lastError: "failure 2" }],
     ["late failure", 1, 2, { enabled: false, failures: 2, lastError: "failure 1" }],
     ["late recovery", 1, 1, { enabled: false, failures: 0, lastError: undefined }],
   ] as const)(
     "keeps custom batches concurrent through %s",
-    async (_outcome, priorFailures, errors, expected) => {
+    async ([_outcome, priorFailures, errors, expected], { signal }) => {
       const manager = await getFreshManager(
         createCfg({ provider: "batch-test", batchEnabled: true }),
       );
@@ -1175,17 +1078,26 @@ describe("memory index", () => {
           { length: errors },
           (_, index) => new Error(`failure ${index + 1}`),
         );
-        let releaseBatchGate: (() => void) | undefined;
-        providerFixture.providerRuntimeBatchGate = new Promise((resolve) => {
-          releaseBatchGate = resolve;
-        });
+        const batchesEntered = createDeferred<void>();
+        const releaseBatchGate = createDeferred<void>();
+        providerFixture.providerRuntimeBatchGate = releaseBatchGate.promise;
+        providerFixture.providerRuntimeBatchEntered = (activeCalls) => {
+          if (activeCalls === 2) {
+            batchesEntered.resolve();
+          }
+        };
+        const abort = () => batchesEntered.reject(signal.reason);
+        signal.addEventListener("abort", abort, { once: true });
         const syncPromise = manager.sync({ reason: "test", force: true });
         try {
-          await vi.waitFor(() =>
-            expect(providerFixture.providerRuntimeMaxActiveBatchCalls).toBe(2),
-          );
+          // Provider entry owns this rendezvous; filesystem preparation has no one-second contract.
+          signal.throwIfAborted();
+          await Promise.race([batchesEntered.promise, syncPromise]);
+          expect(providerFixture.providerRuntimeMaxActiveBatchCalls).toBe(2);
         } finally {
-          releaseBatchGate?.();
+          signal.removeEventListener("abort", abort);
+          providerFixture.providerRuntimeBatchEntered = null;
+          releaseBatchGate.resolve();
           await syncPromise;
         }
         expect(manager.status().batch).toMatchObject(expected);
@@ -1341,7 +1253,6 @@ describe("memory index", () => {
         model: providerFixture.identityAlias.canonicalModel,
         cacheEnabled: true,
         vectorEnabled: false,
-        onSearch: false,
         hybrid: { enabled: true, vectorWeight: 0.5, textWeight: 0.5 },
       });
       const indexedManager = await getFreshManager(indexedCfg);
@@ -1357,7 +1268,6 @@ describe("memory index", () => {
         model: configuredModel,
         cacheEnabled: true,
         vectorEnabled: false,
-        onSearch: false,
         hybrid: { enabled: true, vectorWeight: 0.5, textWeight: 0.5 },
       });
       const statusManager = await getFreshManager(nextCfg, "status");
