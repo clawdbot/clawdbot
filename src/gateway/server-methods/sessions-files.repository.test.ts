@@ -214,6 +214,19 @@ beforeEach(async () => {
     baseManifestHash: base.manifestRef,
     assertCurrent: () => {},
   });
+  // Repository startup accepts its first checkpoint before exposing an active editor.
+  const initial = await stageSessionRepositoryCheckpoint({
+    store,
+    workspaceId: source.workspaceId,
+    expectedRevision: source.revision,
+    stagingRoot: workspace,
+    baseManifestRaw: serializeWorkerWorkspaceManifest(base.manifest),
+    currentManifestRaw: serializeWorkerWorkspaceManifest(base.manifest),
+    baseManifestRef: base.manifestRef,
+    currentManifestRef: base.manifestRef,
+    assertCurrent: () => {},
+  });
+  source = await initial.publish();
   mocks.store.mockReturnValue(store);
   mocks.workspace.mockReturnValue(gatewayRoot);
   mocks.load.mockImplementation(() => ({
@@ -415,7 +428,10 @@ it("reports failed editor checkpoint capture and retains the durable recovery ow
     ),
   ).rejects.toThrow("checkpoint capture failed");
   expect(fs.readFileSync(path.join(workspace, "changed.txt"), "utf8")).toBe("saved\n");
-  expect(store.get(source.workspaceId)?.checkpointRef).toBeNull();
+  expect(store.get(source.workspaceId)).toMatchObject({
+    checkpointRef: source.checkpointRef,
+    manifestHash: source.manifestHash,
+  });
   expect(accepted.placements.listPendingWorkspaceResults()).toEqual([
     expect.objectContaining({
       sessionId: identity.sessionId,
