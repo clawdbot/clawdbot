@@ -82,6 +82,39 @@ export class SubagentLifecycleController {
     };
   }
 
+  /** The reset owner calls this synchronously before publishing another session generation. */
+  revokeTerminalSessionEffects(entries: Iterable<SubagentRunRecord>): void {
+    const previous = new Map<SubagentRunRecord, SubagentRunRecord["execution"]>();
+    for (const entry of entries) {
+      if (this.options.runs.get(entry.runId) !== entry) {
+        continue;
+      }
+      // A capture may have staged terminal state and still own rollback. Reset
+      // must not persist that tentative result or let its rollback erase revocation.
+      if (this.terminalCompletionLocks.has(entry.runId)) {
+        throw new Error("Subagent completion is still settling; retry the session reset.");
+      }
+      // Even an already-set flag may come from a failed best-effort sweep write.
+      if (entry.execution.status === "terminal" && entry.pauseReason !== "sessions_yield") {
+        previous.set(entry, entry.execution);
+      }
+    }
+    if (previous.size === 0) {
+      return;
+    }
+    for (const [entry, execution] of previous) {
+      entry.execution = { ...execution, suppressSessionEffects: true };
+    }
+    try {
+      this.options.persistOrThrow(...[...previous.keys()].map((entry) => entry.runId));
+    } catch (error) {
+      for (const [entry, execution] of previous) {
+        entry.execution = execution;
+      }
+      throw error;
+    }
+  }
+
   clearScheduledResumeTimers = () => {
     for (const timer of this.scheduledResumeTimers) {
       clearTimeout(timer);

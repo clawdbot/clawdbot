@@ -199,7 +199,9 @@ export async function listTaskRecordPage(params: {
         await yieldToEventLoop();
       }
       const batch: TaskRecord[] = [];
-      while (!current.done && batch.length < 32 && scannedCount < scanLimit) {
+      // A registry reload can leave this iterator with IDs whose records no longer exist.
+      const batchEnd = Math.min(scannedCount + 32, scanLimit);
+      while (!current.done && scannedCount < batchEnd) {
         const task = tasks.get(current.value);
         if (task) {
           batch.push(task);

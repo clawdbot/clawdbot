@@ -8,7 +8,11 @@ import {
   openOpenClawAgentDatabase,
 } from "../../state/openclaw-agent-db.js";
 import { ensureProfileForEmail } from "../../state/user-profiles.js";
-import { deleteTaskRecordById } from "../../tasks/runtime-internal.js";
+import {
+  deleteTaskRecordById,
+  getTaskById,
+  markTaskTerminalById,
+} from "../../tasks/runtime-internal.js";
 import { reloadTaskRegistryFromStore } from "../../tasks/task-registry.js";
 import { saveTaskRegistryStateToSqlite } from "../../tasks/task-registry.store.sqlite.js";
 import { resetTaskRegistryForTests } from "../../tasks/task-runtime.test-helpers.js";
@@ -34,6 +38,55 @@ afterEach(async () => {
 });
 
 describe("task page access snapshots", () => {
+  it("returns a stable session page before unrelated task churn runs", async () => {
+    const targetKey = "agent:main:target";
+    const tasks = Array.from({ length: 33 }, (_, index) =>
+      createSnapshotTask({
+        taskId: `scoped-task-${index}`,
+        requesterSessionKey: index < 20 ? targetKey : "agent:main:foreign",
+        ownerKey: index < 20 ? targetKey : "agent:main:foreign",
+        deliveryStatus: "not_applicable",
+      }),
+    );
+    saveTaskRegistryStateToSqlite({
+      tasks: new Map(tasks.map((task) => [task.taskId, task])),
+      deliveryStates: new Map(),
+    });
+    reloadTaskRegistryFromStore();
+    const before = tasks.slice(0, 20).map((task) => getTaskById(task.taskId));
+    let mutations = 0;
+    const mutate = () => {
+      if (mutations === 9) {
+        return;
+      }
+      expect(
+        markTaskTerminalById({
+          taskId: `scoped-task-${20 + mutations++}`,
+          status: "succeeded",
+          endedAt: 2_000 + mutations,
+        }),
+      ).not.toBeNull();
+      pending = setImmediate(mutate);
+    };
+    let pending = setImmediate(mutate);
+    try {
+      const { calls, payload } = await runTaskHandler(
+        "tasks.list",
+        { sessionKey: targetKey, limit: 100 },
+        {},
+        identifiedClient(["operator.admin"]),
+      );
+      expect({ calls, mutations }).toMatchObject({
+        calls: [[true, expect.any(Object)]],
+        mutations: 0,
+      });
+      expect(payload?.tasks).toHaveLength(20);
+      expect(payload?.nextCursor).toBeUndefined();
+      expect(tasks.slice(0, 20).map((task) => getTaskById(task.taskId))).toEqual(before);
+    } finally {
+      clearImmediate(pending);
+    }
+  });
   it.each(["canonical", "main alias", "distinct requesters", "warm"] as const)(
     "bounds session lookup work across a yielded task page using %s keys",
     async (mode) => {

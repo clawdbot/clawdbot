@@ -1,3 +1,4 @@
+import { expectDefined } from "@openclaw/normalization-core";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import {
@@ -6,6 +7,7 @@ import {
   resetTaskRegistryForTests,
 } from "./task-registry-query.js";
 import { markTaskTerminalById } from "./task-registry-record-api.js";
+import { reloadTaskRegistryFromStore, tasks as authoritativeTasks } from "./task-registry-state.js";
 import { configureTaskRegistryRuntime } from "./task-registry.store.js";
 import type { TaskRecord } from "./task-registry.types.js";
 
@@ -33,6 +35,66 @@ async function readTaskPage(params: Parameters<typeof listTaskRecordPage>[0]) {
 }
 
 describe("listTaskRecordPage", () => {
+  it("keeps missing indexed IDs bounded across a yielded registry replacement", async () => {
+    const sessionKey = "agent:main:reset";
+    const records = Array.from({ length: 97 }, (_, index): TaskRecord => ({
+      taskId: `task-${index}`,
+      runtime: "cli",
+      requesterSessionKey: sessionKey,
+      ownerKey: sessionKey,
+      scopeKind: "session",
+      task: "Before replacement",
+      status: "running",
+      deliveryStatus: "not_applicable",
+      notifyPolicy: "silent",
+      createdAt: 1,
+    }));
+    configureTaskSnapshot(records);
+    getTaskById("task-0");
+    let reads = 0;
+    const readsPerTurn: number[] = [];
+    const get = authoritativeTasks.get.bind(authoritativeTasks);
+    const spy = vi.spyOn(authoritativeTasks, "get").mockImplementation((id) => {
+      reads += 1;
+      return get(id);
+    });
+    let replaced = false;
+    const preparedAfterReplacement: string[] = [];
+    const tick = () => {
+      readsPerTurn.push(reads);
+      reads = 0;
+      if (!replaced) {
+        configureTaskSnapshot([
+          { ...expectDefined(records[0], "replacement fixture"), taskId: "replacement" },
+        ]);
+        reloadTaskRegistryFromStore();
+        replaced = true;
+      }
+      pending = setImmediate(tick);
+    };
+    let pending = setImmediate(tick);
+    try {
+      const page = await readTaskPage({
+        offset: 0,
+        limit: 10,
+        sessionKey,
+        prepareFilter: (batch) => {
+          if (replaced) {
+            preparedAfterReplacement.push(...batch.map((task) => task.taskId));
+          }
+          return () => true;
+        },
+      });
+      readsPerTurn.push(reads);
+      expect(page.tasks.map((task) => task.taskId)).toEqual(["replacement"]);
+      expect(preparedAfterReplacement).toEqual(["replacement"]);
+      expect(Math.max(...readsPerTurn)).toBeLessThanOrEqual(32);
+    } finally {
+      clearImmediate(pending);
+      spy.mockRestore();
+    }
+  });
+
   it.each([
     { scope: "sparse", matching: 1 },
     { scope: "dense", matching: 65 },

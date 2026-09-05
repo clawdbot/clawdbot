@@ -10,11 +10,7 @@ import {
   resolveSessionStorePathCore,
   type InternalSessionEntry as SessionEntry,
 } from "../../../config/sessions.js";
-import {
-  listSessionEntriesReadOnly,
-  loadSessionEntryReadOnly,
-} from "../../../config/sessions/session-accessor.js";
-import { normalizeStoreSessionKey } from "../../../config/sessions/store-entry.js";
+import { loadSessionEntryReadOnly } from "../../../config/sessions/session-accessor.js";
 import type { OpenClawConfig } from "../../../config/types.openclaw.js";
 import type { SubagentRunOutcome } from "../announce/subagent-announce-output.js";
 import {
@@ -26,7 +22,6 @@ import {
 import type { SubagentRunRecord } from "./subagent-registry.types.js";
 import { isStaleUnendedSubagentRun } from "./subagent-run-liveness.js";
 
-export type SubagentSessionStoreCache = Map<string, Record<string, SessionEntry>>;
 export type SubagentRunOrphanReason =
   | "missing-session-entry"
   | "missing-session-id"
@@ -70,34 +65,8 @@ function freshSessionStartedAt(
   return notBeforeMs === undefined || startedAt >= notBeforeMs ? startedAt : undefined;
 }
 
-/** Load a child session entry using the agent-specific session store path. */
+/** Read the current child entry; session-key scope also selects incognito storage. */
 export function loadSubagentSessionEntry(params: {
-  childSessionKey: string;
-  storeCache?: SubagentSessionStoreCache;
-  cfg?: OpenClawConfig;
-}): SessionEntry | undefined {
-  const key = params.childSessionKey.trim();
-  if (!key) {
-    return undefined;
-  }
-  const agentId = resolveAgentIdFromSessionKey(key);
-  const cfg = params.cfg ?? getRuntimeConfig();
-  const storePath = resolveSessionStorePathCore(cfg.session?.store, { agentId });
-  let store = params.storeCache?.get(storePath);
-  if (!store) {
-    store = Object.fromEntries(
-      listSessionEntriesReadOnly({ storePath, clone: false }).map(({ sessionKey, entry }) => [
-        sessionKey,
-        entry,
-      ]),
-    );
-    params.storeCache?.set(storePath, store);
-  }
-  return store[key] ?? store[normalizeStoreSessionKey(key)];
-}
-
-/** Resolve a child session entry without depending on the file-backed store shape. */
-function loadSubagentSessionEntryForAccessor(params: {
   childSessionKey: string;
   cfg?: OpenClawConfig;
 }): SessionEntry | undefined {
@@ -109,6 +78,7 @@ function loadSubagentSessionEntryForAccessor(params: {
   const cfg = params.cfg ?? getRuntimeConfig();
   const storePath = resolveSessionStorePathCore(cfg.session?.store, { agentId });
   return loadSessionEntryReadOnly({
+    agentId,
     storePath,
     sessionKey: key,
     clone: false,
@@ -127,7 +97,7 @@ export function resolveSubagentRunOrphanReason(params: {
     return "missing-session-entry";
   }
   try {
-    const sessionEntry = loadSubagentSessionEntryForAccessor({
+    const sessionEntry = loadSubagentSessionEntry({
       childSessionKey,
       cfg: params.cfg,
     });
@@ -227,13 +197,11 @@ export function resolveSubagentSessionCompletion(params: {
   childSessionKey: string;
   fallbackEndedAt: number;
   notBeforeMs?: number;
-  storeCache?: SubagentSessionStoreCache;
   cfg?: OpenClawConfig;
 }): SubagentSessionCompletion | null {
   return resolveCompletionFromSessionEntry(
     loadSubagentSessionEntry({
       childSessionKey: params.childSessionKey,
-      storeCache: params.storeCache,
       cfg: params.cfg,
     }),
     params.fallbackEndedAt,
@@ -245,12 +213,10 @@ export function resolveSubagentSessionCompletion(params: {
 export function resolveSubagentSessionStartedAt(params: {
   childSessionKey: string;
   notBeforeMs?: number;
-  storeCache?: SubagentSessionStoreCache;
   cfg?: OpenClawConfig;
 }): number | undefined {
   const sessionEntry = loadSubagentSessionEntry({
     childSessionKey: params.childSessionKey,
-    storeCache: params.storeCache,
     cfg: params.cfg,
   });
   return isFreshForRun(sessionEntry, params.notBeforeMs)

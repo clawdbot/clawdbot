@@ -55,6 +55,7 @@ import {
 import { rebindCliSessionReseedReceiptsForReset } from "../config/sessions/cli-session-binding.js";
 import { formatSqliteSessionFileMarker } from "../config/sessions/legacy-sqlite-marker.js";
 import { resolveResetPreservedSelection } from "../config/sessions/reset-preserved-selection.js";
+import { loadSessionEntryReadOnly } from "../config/sessions/session-accessor.js";
 import { createSessionDiffBaselineCaptureClaim } from "../config/sessions/session-diff-baseline-capture.js";
 import { sessionEntryForkedFromParent } from "../config/sessions/session-entry-lineage.js";
 import { projectPublicSessionEntry } from "../config/sessions/session-entry-projection.js";
@@ -1496,6 +1497,27 @@ export async function performGatewaySessionReset(params: {
           })
         : undefined;
 
+      const { prepareSubagentSessionCleanupRevocation } =
+        await import("../agents/subagents/registry/subagent-registry.js");
+      const revokeSessionCleanup = prepareSubagentSessionCleanupRevocation(target.canonicalKey);
+      const commitGuard = () => {
+        assertCompletionAuthorized?.();
+        const current = loadSessionEntryReadOnly({
+          agentId,
+          storePath,
+          sessionKey: target.canonicalKey,
+          clone: false,
+        });
+        if (
+          current?.sessionId === entry?.sessionId &&
+          current?.lifecycleRevision === resetLifecycleRevision
+        ) {
+          // Revoke durably before publishing the successor. A later reset failure may
+          // retain the old session, but must never restore its stale deletion authority.
+          revokeSessionCleanup();
+        }
+      };
+
       if (incognito) {
         if (!entry) {
           return {
@@ -1513,6 +1535,7 @@ export async function performGatewaySessionReset(params: {
           reason: params.reason,
         });
         const deleted = await deleteSessionEntryLifecycle({
+          commitGuard,
           agentId: target.agentId,
           archiveTranscript: false,
           deleteDeliveryArtifacts: true,
@@ -1576,7 +1599,7 @@ export async function performGatewaySessionReset(params: {
       let creationAuthorizationError: ReturnType<typeof errorShape> | undefined;
       let fastModeSelectionError: ReturnType<typeof missingScopeErrorShape> | undefined;
       const lifecyclePromise = resetSessionEntryLifecycle({
-        commitGuard: assertCompletionAuthorized,
+        commitGuard,
         archivePreviousTranscript: false,
         agentId: target.agentId,
         resetBoundary: boundaryEntry

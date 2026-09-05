@@ -29,7 +29,6 @@ import {
 import {
   loadSubagentSessionEntry,
   resolveCompletionFromSessionEntry,
-  type SubagentSessionStoreCache,
 } from "./subagent-session-reconciliation.js";
 
 function findNextSubagentRunCreatedAt(
@@ -297,7 +296,6 @@ export async function reconcileProvisionalSubagentKill(params: {
   entry: SubagentRunRecord;
   now: number;
   runs: Map<string, SubagentRunRecord>;
-  storeCache: SubagentSessionStoreCache;
   completeSubagentRunWithRecovery: (
     completion: SubagentCompletionRequest,
     source: string,
@@ -356,7 +354,6 @@ export async function reconcileProvisionalSubagentKill(params: {
   }
   const sessionEntry = loadSubagentSessionEntry({
     childSessionKey: entry.childSessionKey,
-    storeCache: params.storeCache,
   });
   const completion = resolveCompletionFromSessionEntry(sessionEntry, now, {
     notBeforeMs: entry.execution.startedAt ?? entry.createdAt,

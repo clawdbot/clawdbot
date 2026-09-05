@@ -100,6 +100,18 @@ function persistSubagentRunsOrThrow(...runIds: string[]) {
   );
 }
 
+/** Prepare registry hydration before the session owner's synchronous reset commit. */
+export function prepareSubagentSessionCleanupRevocation(sessionKey: string): () => void {
+  subagentRestorer.restoreOnce(undefined, true);
+  return () => {
+    // The reset owner already resolved the target. Child keys are agent-scoped;
+    // an unscoped global key must not be reinterpreted as another child session.
+    subagentLifecycleController.revokeTerminalSessionEffects(
+      getSubagentRunsForChildSession(sessionKey),
+    );
+  };
+}
+
 function findSubagentTaskForRun(entry: SubagentRunRecord) {
   return resolveSubagentTaskForRun(getSubagentRunsForChildSession(entry.childSessionKey), entry);
 }

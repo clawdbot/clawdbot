@@ -359,6 +359,13 @@ Collector results remain waitable until their group is archived. After every
 member reaches its retention deadline, OpenClaw archives the group's children
 as a batch so completed swarms do not remain in the live session tree.
 
+Resetting a child session durably revokes completed runs' cleanup before changing
+that session, so a delayed cleanup retry cannot delete its replacement. Reset fails
+if completion is still settling or revocation cannot be saved. If reset fails or
+the Gateway stops after revocation is saved, the original session may remain with
+that cleanup disabled. Collector results and task outcomes keep their normal
+retention, and active reset continuations keep running.
+
 ## Stop a Swarm
 
 Use **Stop** in the parent chat to cancel a running swarm. A Stop targeting a

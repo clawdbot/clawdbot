@@ -27,10 +27,7 @@ import type { SubagentLifecycleController } from "./subagent-registry-lifecycle.
 import { isRetiredRunningSubagent } from "./subagent-registry-restart-recovery-helpers.js";
 import type { SubagentRunRecord } from "./subagent-registry.types.js";
 import { deleteSubagentSessionForCleanup } from "./subagent-session-cleanup.js";
-import {
-  loadSubagentSessionEntry,
-  type SubagentSessionStoreCache,
-} from "./subagent-session-reconciliation.js";
+import { loadSubagentSessionEntry } from "./subagent-session-reconciliation.js";
 
 type RestoredQueuedFailureSettlementClaim = {
   entry: SubagentRunRecord;
@@ -211,7 +208,6 @@ export function createSubagentRegistryRestorer(config: {
     ensureListener();
     // Session-mode runs have no archive deadline but still need TTL cleanup.
     startSweeper();
-    const restoredSessionCache: SubagentSessionStoreCache = new Map();
     for (const [runId, entry] of runs) {
       // Restart recovery exclusively owns receipt-bearing source rows until it
       // remaps or terminalizes them. Generic resume would wait on an obsolete run.
@@ -221,7 +217,6 @@ export function createSubagentRegistryRestorer(config: {
       if (entry.collect && entry.execution.status === "queued") {
         const cleanupSessionEntry = loadSubagentSessionEntry({
           childSessionKey: entry.childSessionKey,
-          storeCache: restoredSessionCache,
         });
         const launch = entry.queuedLaunch;
         if (!launch) {
@@ -320,7 +315,6 @@ export function createSubagentRegistryRestorer(config: {
       }
       const sessionEntry = loadSubagentSessionEntry({
         childSessionKey: entry.childSessionKey,
-        storeCache: restoredSessionCache,
       });
       // Orphan recovery owns aborted sessions and exact still-running retired
       // executions. Completed sessions must resume normal settlement and delivery.
@@ -337,7 +331,7 @@ export function createSubagentRegistryRestorer(config: {
     activated = true;
   }
 
-  function restoreSubagentRunsOnce(retryDelayMs = RESTORE_RETRY_DELAY_MS) {
+  function restoreSubagentRunsOnce(retryDelayMs = RESTORE_RETRY_DELAY_MS, throwOnError = false) {
     if (restoreState !== "idle") {
       return;
     }
@@ -377,6 +371,9 @@ export function createSubagentRegistryRestorer(config: {
         `failed to restore subagent runs from disk: ${err instanceof Error ? err.message : String(err)}`,
       );
       scheduleRestoreRetry(retryDelayMs);
+      if (throwOnError) {
+        throw err;
+      }
     }
   }
 

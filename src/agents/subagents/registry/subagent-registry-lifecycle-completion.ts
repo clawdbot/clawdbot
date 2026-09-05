@@ -315,7 +315,7 @@ export async function completeSubagentRunAttempt(
         completionReason = SUBAGENT_ENDED_REASON_KILLED;
         completionOutcome = { status: "error", error: killIntent.reason };
         entry.killIntent = undefined;
-        if (killOwnsCurrentLifecycle) {
+        if (killOwnsCurrentLifecycle && entry.execution.suppressSessionEffects !== true) {
           suppressSessionEffects = false;
           entry.execution = {
             ...entry.execution,
