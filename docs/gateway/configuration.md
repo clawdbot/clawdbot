@@ -107,8 +107,10 @@ The Gateway keeps a trusted last-known-good copy after each successful startup,
 but startup and hot reload do not restore it automatically - only `openclaw doctor --fix`
 does. If `openclaw.json` remains invalid after eligible startup migrations (including
 plugin-local validation), Gateway startup fails. An invalid hot reload is skipped and
-the current runtime keeps the last accepted config. A rejected write is also saved as
-`<path>.rejected.<timestamp>` for inspection.
+the current runtime keeps the last accepted config. When a write is blocked as an
+accidental clobber, OpenClaw attempts to save the rejected payload as
+`<path>.rejected.<timestamp>` for inspection. The warning reports whether that save
+succeeded; if it failed, the active config still stays unchanged.
 The Gateway blocks writes that look like accidental clobbers - dropping the effective
 `gateway.mode` or shrinking the file by more than half - unless the write explicitly
 allows destructive changes. Mode checks resolve `$include` and environment references

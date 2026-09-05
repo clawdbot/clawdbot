@@ -1,9 +1,5 @@
 /* @vitest-environment jsdom */
-import {
-  GATEWAY_SERVER_CAPS,
-  type ProgressCard,
-  type ProgressCardChangedEvent,
-} from "@openclaw/gateway-protocol";
+import type { ProgressCard, ProgressCardChangedEvent } from "@openclaw/gateway-protocol";
 import { html, render } from "lit";
 import { describe, expect, it, onTestFinished, vi } from "vitest";
 import { createDeferred } from "../../../../test/helpers/promise.js";
@@ -370,7 +366,6 @@ describe("chat pane approval requester identity", () => {
 function createGlobalFeaturePane(
   request: (method: string, params?: unknown) => unknown,
   methods: string[],
-  supportsOwner = true,
 ) {
   const client = createGatewayBrowserClientFixture({
     request: (method, params) =>
@@ -389,10 +384,6 @@ function createGlobalFeaturePane(
     config: { ...initial.config, current: { ...initial.config.current, ...live.config.current } },
   };
   context.gateway.snapshot.hello = gatewayHelloForMethods(methods);
-  context.gateway.snapshot.hello.features = {
-    ...context.gateway.snapshot.hello.features,
-    capabilities: supportsOwner ? [GATEWAY_SERVER_CAPS.PROGRESS_CARD_AGENT_SCOPE] : [],
-  };
   const pane = createRenderTestChatPane();
   const state = pane.initialize(context);
   Object.defineProperty(pane, "isConnected", { configurable: true, value: true });
@@ -446,25 +437,6 @@ function globalProgressCard(agentId: string, revision = 1): ProgressCard {
 }
 
 describe("global chat pane feature ownership", () => {
-  it("explains an unavailable global owner without requesting another session", async () => {
-    const request = vi.fn(async () => ({}));
-    const { pane } = createGlobalFeaturePane(request, ["progressCard.get"], false);
-    await vi.waitFor(() =>
-      expect(pane.chatProps?.progressCardError).toBe(t("sessionProgressCard.ownerUnsupported")),
-    );
-    expect(pane.chatProps?.progressCard).toBeNull();
-    expect(request).not.toHaveBeenCalled();
-    const container = document.createElement("div");
-    try {
-      render(renderChat(pane.chatProps!), container);
-      expect(
-        container.querySelector('.agent-chat__progress-float [role="status"]')?.textContent,
-      ).toBe(t("sessionProgressCard.ownerUnsupported"));
-      expect(request).toHaveBeenCalledExactlyOnceWith("talk.catalog", {});
-    } finally {
-      render(html``, container);
-    }
-  });
   it("loads, refreshes and dismisses the selected agent's global progress card", async () => {
     let card: ProgressCard | null = globalProgressCard("research");
     const request = vi.fn(async (method: string) => {

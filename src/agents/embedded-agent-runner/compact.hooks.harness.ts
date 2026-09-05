@@ -348,6 +348,7 @@ function createCompactHooksRuntimePlan(params: BuildAgentRuntimePlanParams): Age
       ...(modelApi ? { modelApi } : {}),
       ...(params.resolvedTransport ? { transport: params.resolvedTransport } : {}),
     },
+    providerRuntimeHandle: params.providerRuntimeHandle,
     auth: {
       providerForAuth: params.provider,
       authProfileProviderForAuth: params.authProfileProvider ?? params.provider,
@@ -1050,6 +1051,10 @@ export async function loadCompactHooksHarness(options: { durableSession?: boolea
 
   vi.doMock("../runtime-plan/build.js", () => ({
     buildAgentRuntimePlan: buildAgentRuntimePlanMock,
+    resolvePreparedProviderRuntimeHandle: vi.fn(
+      ({ providerRuntimeHandle, provider, modelId, workspaceDir }: BuildAgentRuntimePlanParams) =>
+        providerRuntimeHandle ?? { provider, modelId, workspaceDir, prepared: true },
+    ),
   }));
 
   vi.doMock("../../plugins/memory-runtime.js", () => ({

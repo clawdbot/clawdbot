@@ -1,5 +1,7 @@
 use crate::gateway_ws::GatewayClient;
-use crate::quickchat::{position_quickchat, QuickChatState, QUICKCHAT_LABEL};
+use crate::quickchat::{
+    position_quickchat, require_quickchat_webview, QuickChatState, QUICKCHAT_LABEL,
+};
 use serde::Deserialize;
 use sha2::{Digest, Sha256};
 use std::collections::HashSet;
@@ -393,11 +395,7 @@ impl QuickChatWidgetState {
         if visible_count > 1 {
             return Err("Quick Chat can show only one widget at a time.".to_string());
         }
-        let current = self
-            .views
-            .lock()
-            .map_err(|_| "Quick Chat widget state is unavailable.".to_string())?
-            .clone();
+        let current = self.view_labels()?;
         let mut desired = HashSet::new();
         for (_, label, _) in &prepared {
             if !desired.insert(label.clone()) {
@@ -522,9 +520,7 @@ pub async fn quickchat_refresh_widget_surface(
     webview: Webview,
     gateway: State<'_, GatewayClient>,
 ) -> Result<Option<String>, String> {
-    if webview.label() != QUICKCHAT_LABEL || webview.window().label() != QUICKCHAT_LABEL {
-        return Err("Quick Chat command is available only to the Quick Chat webview.".to_string());
-    }
+    require_quickchat_webview(&webview)?;
     gateway.refresh_canvas_surface().await
 }
 
@@ -540,9 +536,7 @@ pub async fn quickchat_sync_widgets(
     renderer_epoch: u64,
     generation: u64,
 ) -> Result<(), String> {
-    if webview.label() != QUICKCHAT_LABEL || webview.window().label() != QUICKCHAT_LABEL {
-        return Err("Quick Chat command is available only to the Quick Chat webview.".to_string());
-    }
+    require_quickchat_webview(&webview)?;
     state
         .widget_state()
         .sync(

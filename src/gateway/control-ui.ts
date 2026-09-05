@@ -11,6 +11,7 @@ import {
   type AgentAvatarResolution,
   resolvePublicAgentAvatarSource,
 } from "../agents/identity-avatar.js";
+import { resolveGatewayPublicOrigin } from "../config/gateway-public-origin.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import {
   matchRootFileOpenFailure,
@@ -38,6 +39,7 @@ import {
 import { extractOriginalFilename } from "../media/store.js";
 import { safeEqualSecret } from "../security/secret-equal.js";
 import { AVATAR_MAX_BYTES, resolveAvatarMime } from "../shared/avatar-policy.js";
+import { escapeHtml } from "../shared/html-escape.js";
 import { createLazyRuntimeModule } from "../shared/lazy-runtime.js";
 import { resolveUserPath } from "../utils.js";
 import { resolveRuntimeServiceBuildId, resolveRuntimeServiceVersion } from "../version.js";
@@ -84,6 +86,7 @@ import {
   isControlUiApprovalDocumentPath,
   isControlUiFocusDocumentPath,
 } from "./control-ui-routing.js";
+import { isControlUiSharePath, serveControlUiShareDocument } from "./control-ui-share.js";
 import { normalizeControlUiBasePath } from "./control-ui-shared.js";
 import {
   isControlUiFileUnmodified,
@@ -170,15 +173,6 @@ function rewriteControlUiIndexHtmlAssetHrefs(
     next = next.replaceAll(`href="${buildControlUiRootAssetPath(normalized, asset)}"`, assetHref);
   }
   return next;
-}
-
-function escapeHtmlAttribute(value: string): string {
-  return value
-    .replaceAll("&", "&amp;")
-    .replaceAll('"', "&quot;")
-    .replaceAll("<", "&lt;")
-    .replaceAll(">", "&gt;")
-    .replaceAll("'", "&#39;");
 }
 
 type ControlUiAvatarMeta = {
@@ -851,16 +845,16 @@ async function serveResolvedIndexHtml(
   const withBasePath = rewriteControlUiIndexHtmlAssetHrefs(body, normalizedBasePath, buildId);
   // An empty base path is authoritative for Gateway resources even when the
   // router infers a namespace. Always emit it so resources stay root-mounted.
-  const basePathAttribute = ` ${CONTROL_UI_BASE_PATH_ATTRIBUTE}="${escapeHtmlAttribute(normalizedBasePath)}"`;
+  const basePathAttribute = ` ${CONTROL_UI_BASE_PATH_ATTRIBUTE}="${escapeHtml(normalizedBasePath)}"`;
   const environmentAttributes = environment
-    ? ` ${CONTROL_UI_ENVIRONMENT_ATTRIBUTE}="${escapeHtmlAttribute(JSON.stringify(environment))}"`
+    ? ` ${CONTROL_UI_ENVIRONMENT_ATTRIBUTE}="${escapeHtml(JSON.stringify(environment))}"`
     : "";
   // Let the app initialize fail-closed without guessing whether this document
   // was served with the terminal's WASM CSP allowance.
   // The lifecycle owns bundled identity. Strip the build stamp for custom roots,
   // whose files may change independently and must keep revalidating.
   const buildAttribute = buildId
-    ? ` ${CONTROL_UI_BUILD_ID_ATTRIBUTE}="${escapeHtmlAttribute(buildId)}"`
+    ? ` ${CONTROL_UI_BUILD_ID_ATTRIBUTE}="${escapeHtml(buildId)}"`
     : "";
   const prepared = withBasePath.replace(/<html\b[^>]*>/i, (tag) =>
     tag
@@ -1035,6 +1029,11 @@ export async function handleControlUiHttpRequest(
 
   applyControlUiSecurityHeaders(res);
 
+  if (isControlUiSharePath(pathname, basePath) && pathname !== `${basePath}/share/card.png`) {
+    serveControlUiShareDocument(req, res, url, basePath, resolveGatewayPublicOrigin(opts?.config));
+    return true;
+  }
+
   if (matchesControlUiBootstrapConfigPath(pathname, basePath)) {
     let pluginFrameGrants: readonly ControlUiPluginFrameGrantAck[] = [];
     if (
@@ -1161,6 +1160,9 @@ export async function handleControlUiHttpRequest(
     isControlUiApprovalDocumentPath({ basePath, pathname }) ||
     isControlUiFocusDocumentPath({ basePath, pathname });
   const rel = (() => {
+    if (uiPath === "/share/card.png") {
+      return "social-card.png";
+    }
     if (uiPath === ROOT_PREFIX) {
       return "";
     }

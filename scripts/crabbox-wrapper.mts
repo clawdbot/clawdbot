@@ -2740,8 +2740,17 @@ function injectRemotePosixHydratedNodeModulesBootstrap(invocation: CommandInvoca
   );
 }
 
-function remotePosixJsEnvBootstrap() {
+function remotePosixJsEnvBootstrap(packageManager = false) {
   return [
+    ...(packageManager
+      ? [
+          'export COREPACK_HOME="${COREPACK_HOME:-$tool_root/corepack}";',
+          'export PNPM_HOME="${PNPM_HOME:-$tool_root/pnpm-home}";',
+          'mkdir -p "$COREPACK_HOME" "$PNPM_HOME" || return 1;',
+          'export PATH="$PNPM_HOME:$PATH";',
+          'corepack enable --install-directory "$PNPM_HOME" || return 1;',
+        ]
+      : []),
     "openclaw_crabbox_env() {",
     "openclaw_env_args=();",
     "openclaw_env_ignore=0;",
@@ -2820,18 +2829,11 @@ function remoteAwsMacosJsBootstrap({
     "release_install_lock;",
     "fi;",
     "node --version >&2 || return 1;",
-    ...remotePosixJsEnvBootstrap(),
+    ...remotePosixJsEnvBootstrap(packageManager),
     ...(sourceBootstrap ? [`${sourceBootstrap} || return $?;`] : []),
   ];
   if (packageManager) {
-    bootstrap.push(
-      'export COREPACK_HOME="${COREPACK_HOME:-$tool_root/corepack}";',
-      'export PNPM_HOME="${PNPM_HOME:-$tool_root/pnpm-home}";',
-      'mkdir -p "$COREPACK_HOME" "$PNPM_HOME" || return 1;',
-      'export PATH="$PNPM_HOME:$PATH";',
-      'corepack enable --install-directory "$PNPM_HOME" || return 1;',
-      "pnpm --version >&2;",
-    );
+    bootstrap.push("pnpm --version >&2;");
   }
   // Raw AWS macOS boxes skip setup-node-env, so Bun needs its own user-local pin.
   if (bun) {
@@ -2921,18 +2923,17 @@ function remoteWsl2JsBootstrap({ packageManager = false, sourceBootstrap = "" } 
     "release_install_lock;",
     "fi;",
     "node --version >&2 || return 1;",
-    ...remotePosixJsEnvBootstrap(),
+    ...remotePosixJsEnvBootstrap(packageManager),
     ...(sourceBootstrap ? [`${sourceBootstrap} || return $?;`] : []),
   ];
   if (packageManager) {
     bootstrap.push(
-      'export COREPACK_HOME="${COREPACK_HOME:-$tool_root/corepack}";',
-      'export PNPM_HOME="${PNPM_HOME:-$tool_root/pnpm-home}";',
-      'mkdir -p "$COREPACK_HOME" "$PNPM_HOME" || return 1;',
-      'export PATH="$PNPM_HOME:$PATH";',
-      'corepack enable --install-directory "$PNPM_HOME" || return 1;',
       "pnpm --version >&2;",
-      "if [ -f pnpm-lock.yaml ] && [ ! -f node_modules/.modules.yaml ]; then pnpm install --frozen-lockfile || return 1; fi;",
+      ...(sourceBootstrap
+        ? []
+        : [
+            "if [ -f pnpm-lock.yaml ] && [ ! -f node_modules/.modules.yaml ]; then pnpm install --frozen-lockfile || return 1; fi;",
+          ]),
     );
   }
   bootstrap.push('export OPENCLAW_CRABBOX_BOOTSTRAP_PATH="$PATH";');
@@ -3728,6 +3729,8 @@ function applyRunTransforms(
     options.childCwd === repoRoot ? markedArgs : absolutizeLocalRunPaths(markedArgs);
   let invocation = parseCommandInvocation(help.text, localArgs);
   const facts = analyzeRemoteCommand(invocation);
+  // Materializing a capsule runs its installer before the caller's command.
+  facts.packageManager ||= Boolean(options.capsule);
 
   const wsl2ScriptBootstrap = prepareRemoteWsl2JsBootstrapScript(
     invocation,

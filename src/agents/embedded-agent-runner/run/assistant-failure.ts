@@ -216,7 +216,6 @@ export async function handleEmbeddedAssistantFailure(input: {
     ? ("unknown" as const)
     : assistantFailoverReason;
 
-  const failedProfileId = input.authProfileId;
   const logFailoverDecision = createFailoverDecisionLogger({
     stage: "assistant",
     runId: input.runParams.runId,
@@ -227,7 +226,7 @@ export async function handleEmbeddedAssistantFailure(input: {
     model: input.activeErrorContext.model,
     sourceProvider: failedAssistant?.provider ?? input.provider,
     sourceModel: failedAssistant?.model ?? input.modelId,
-    profileId: failedProfileId,
+    profileId: input.authProfileId,
     fallbackConfigured: input.fallbackConfigured,
     timedOut,
     aborted,
@@ -320,12 +319,10 @@ export async function handleEmbeddedAssistantFailure(input: {
   });
   if (outcome.action === "retry") {
     const retryTraceResult =
-      outcome.retryKind === "same_model_transient"
-        ? effectiveFailoverReason === "timeout"
-          ? "timeout"
-          : "same_model_transient"
-        : effectiveFailoverReason === "timeout"
-          ? "timeout"
+      effectiveFailoverReason === "timeout"
+        ? "timeout"
+        : outcome.retryKind === "same_model_transient"
+          ? "same_model_transient"
           : "rotate_profile";
     input.traceAttempts.push({
       provider: input.activeErrorContext.provider,

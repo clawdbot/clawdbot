@@ -221,8 +221,51 @@ try {
   for (const entry of files) verify(entry);
   if (expected.alias) git(["update-ref", expected.alias, expected.baseSha]);
   git(["symbolic-ref", "HEAD", "refs/heads/openclaw-source"]);
+  const sourceIndex = git(["ls-files", "--stage", "-v", "-z"], { encoding: "buffer" });
   fs.rmSync(".git", { recursive: true, force: true });
   fs.renameSync(gitDir, path.join(cwd, ".git"));
+  env.GIT_DIR = path.join(cwd, ".git");
+  env.GIT_INDEX_FILE = path.join(env.GIT_DIR, "index");
+  const sourceGit = stat(env.GIT_DIR);
+  // The payload consumes Git identity as well as bytes. Lifecycle hooks may refresh
+  // index caches or hooksPath, but cannot change source membership or comparison refs.
+  function verifySource() {
+    const currentGit = stat(env.GIT_DIR);
+    if (!currentGit?.isDirectory() || currentGit.dev !== sourceGit.dev || currentGit.ino !== sourceGit.ino ||
+        !stat(env.GIT_INDEX_FILE)?.isFile() || stat(path.join(env.GIT_DIR, "commondir")))
+      fail("source Git owner mismatch");
+    for (const entry of files) verify(entry);
+    for (const file of deleted) {
+      if (reachable(file) && stat(file)) fail("source deletion mismatch: " + file);
+    }
+    if (!git(["ls-files", "--stage", "-v", "-z"], { encoding: "buffer" }).equals(sourceIndex))
+      fail("source index mismatch");
+    if (git(["symbolic-ref", "HEAD"]).trim() !== "refs/heads/openclaw-source")
+      fail("source HEAD mismatch");
+    for (const [ref, value] of [
+      ["HEAD", expected.carrier], ["refs/remotes/origin/main", expected.baseSha],
+      ...(expected.alias ? [[expected.alias, expected.baseSha]] : []),
+    ]) if (git(["rev-parse", ref]).trim() !== value) fail("source comparison ref mismatch: " + ref);
+    const extras = git(["ls-files", "--others", "--exclude-standard", "-z"])
+      .split("\0").filter(file => file && !file.startsWith(path.basename(temporary) + "/"));
+    if (extras.length) fail("unexpected source entry: " + extras[0]);
+  }
+  verifySource();
+  if (selected.has("pnpm-lock.yaml")) {
+    const installer = ".github/actions/setup-node-env/install-dependencies.sh";
+    if (!selected.has(installer) || !stat(installer)?.isFile())
+      fail("selected source lacks a regular dependency install owner");
+    // Hydration belongs to workflow source. Reconcile through the selected
+    // source's install owner before any caller payload can run.
+    const installEnv = { ...env, CI: "true", GITHUB_WORKSPACE: cwd,
+      NODE_BIN: path.dirname(process.execPath), FROZEN_LOCKFILE: "true",
+      DEPENDENCY_CACHE: "false", DEPENDENCY_CACHE_HIT: "false" };
+    for (const key of ["GIT_DIR", "GIT_WORK_TREE", "GIT_INDEX_FILE"]) delete installEnv[key];
+    process.stderr.write("[crabbox] reconciling selected-source dependencies\n");
+    const install = spawnSync("bash", [installer], { cwd, env: installEnv, stdio: "inherit" });
+    if (install.status !== 0) fail("selected-source frozen install failed; payload was not run");
+    verifySource();
+  }
   process.stderr.write("[crabbox] verified source=" + expected.sourceSha + " tree=" + expected.tree + " carrier=" + expected.carrier + "\n");
 } catch (error) {
   process.stderr.write("[crabbox] source verification failed: " + error.message + "\n");

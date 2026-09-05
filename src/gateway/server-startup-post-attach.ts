@@ -198,8 +198,10 @@ function scheduleProviderAuthStatePrewarm(params: {
     if (isStopped()) {
       return;
     }
-    setAuthProfileFailureHook(() => {
-      if (isStopped()) {
+    setAuthProfileFailureHook((reason) => {
+      // Rate-limit cooldowns change profile selection, not credential presence.
+      // Keep the prepared catalog usable instead of rebuilding it after each 429.
+      if (isStopped() || reason === "rate_limit") {
         return;
       }
       clearCurrentProviderAuthState();

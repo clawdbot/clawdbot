@@ -46,14 +46,19 @@ function readE2eLog(text: string, samples: Samples, overhead?: number[]) {
         file[1]?.includes("ui-e2e-standalone") === true ||
         file[1]?.includes("ui-e2e-real-gateway") === true;
     }
-    const summary = /\bDuration\s+([\d.]+)(m?s)\s+\([^)]*\btests\s+([\d.]+)(m?s)/u.exec(line);
+    const summary = /\bDuration\s+([\d.]+)(m?s)(?:\s|$)/u.exec(line);
     if (summary && files.size > 0) {
       // Commit complete native file times, including suite hooks, once per invocation.
       for (const [name, duration] of files) {
         recordSample(samples, name, duration);
       }
-      const value =
-        (seconds(summary[1]!, summary[2]!) - seconds(summary[3]!, summary[4]!)) / files.size;
+      // V5 prints phase percentages, not absolute times. File durations include
+      // suite hooks; historical v4 logs retain their explicit aggregate test time.
+      const legacyTests = /\btests\s+([\d.]+)(m?s)(?:[,\s)]|$)/u.exec(line);
+      const testsSeconds = legacyTests
+        ? seconds(legacyTests[1]!, legacyTests[2]!)
+        : [...files.values()].reduce((total, duration) => total + duration, 0);
+      const value = (seconds(summary[1]!, summary[2]!) - testsSeconds) / files.size;
       // Vitest sums test time across workers, so wall-minus-tests measures
       // per-file overhead only for serial invocations.
       if (overhead && !hasParallelFiles && Number.isFinite(value)) {

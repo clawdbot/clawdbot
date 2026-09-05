@@ -65,6 +65,35 @@ function makeParams(overrides: Partial<Params> = {}): Params {
 }
 
 describe("handleEmbeddedPromptFailure", () => {
+  it.each([false, true])(
+    "keeps account-restricted model errors on the model-failure path with fallback=%s",
+    async (fallbackConfigured) => {
+      const promptError = new Error(
+        "400 The 'unavailable-thinking-model' model is not supported when using Codex with a ChatGPT account.",
+      );
+      const params = makeParams({
+        promptError,
+        fallbackConfigured,
+        pluginHarnessOwnsTransport: true,
+        advanceAuthProfile: vi.fn(async () => false),
+        resolveAuthProfileFailureReason: vi.fn(() => null),
+        thinkLevel: "high",
+        attemptedThinking: new Set(["high"]),
+      });
+
+      const error = await handleEmbeddedPromptFailure(params).catch((failure: unknown) => failure);
+
+      expect(error).toBeInstanceOf(Error);
+      expect(error).toHaveProperty("message", promptError.message);
+      expect(params.traceAttempts).toEqual([
+        expect.objectContaining({
+          result: fallbackConfigured ? "fallback_model" : "surface_error",
+          reason: "model_not_found",
+        }),
+      ]);
+    },
+  );
+
   it.each(
     (["prompt", "compaction", "tool_execution"] as const).flatMap((phase) =>
       [false, true].map((fallbackConfigured) => ({ phase, fallbackConfigured })),

@@ -1269,6 +1269,7 @@ export async function runBtwSideQuestion(
       agentDir: params.agentDir,
       workspaceDir,
       env: process.env,
+      wrapProviderStream: true,
       apiRegistry: modelRegistryRuntime.apiRegistry,
     });
     const { streamFn } = resolveEmbeddedAgentStream({

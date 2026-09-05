@@ -127,7 +127,6 @@ const rawSqliteAllowPathGroups = {
     "src/infra/state-migrations.transcript-directives-archives.ts",
     "src/infra/state-migrations.transcript-directives.ts",
   ],
-  "shared database stores with direct DatabaseSync access": ["src/proxy-capture/store.sqlite.ts"],
   "session entry cache connection-local validity counters": [
     "src/config/sessions/session-accessor.sqlite-entry-cache.ts",
   ],
@@ -141,8 +140,8 @@ const rawSqliteAllowPathGroups = {
     "src/plugin-sdk/memory-core-host-engine-storage.ts",
     "src/plugins/installed-plugin-index-record-reader.ts",
     "src/plugins/installed-plugin-index-store-write.ts",
-    "src/plugins/installed-plugin-index-store.ts",
     "src/plugin-state/plugin-state-store.sqlite.ts",
+    "src/proxy-capture/store.sqlite.ts",
     "src/tasks/task-flow-registry.store.sqlite.ts",
     "src/tasks/task-registry.store.sqlite.ts",
   ],

@@ -6,6 +6,7 @@ import os from "node:os";
 import path from "node:path";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { createDeferred } from "../../test/helpers/promise.js";
+import type { AuthProfileFailureReason } from "../agents/auth-profiles/types.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { writeRestartSentinel } from "../infra/restart-sentinel.js";
 import type { PluginHookGatewayContext, PluginHookHandlerMap } from "../plugins/hook-types.js";
@@ -1828,7 +1829,7 @@ describe("startGatewayPostAttachRuntime", () => {
     }
   });
 
-  it("keeps provider auth failure rewarm without default startup prewarm", async () => {
+  it("skips rate-limit rewarms while retaining auth recovery without startup prewarm", async () => {
     vi.useFakeTimers();
     const onGatewayLifetimeSidecars = vi.fn();
 
@@ -1849,8 +1850,20 @@ describe("startGatewayPostAttachRuntime", () => {
       await vi.advanceTimersByTimeAsync(10_000);
       expect(hoisted.warmCurrentProviderAuthStateOffMainThread).not.toHaveBeenCalled();
 
-      const hook = hoisted.setAuthProfileFailureHook.mock.calls[0]?.[0] as (() => void) | undefined;
-      hook?.();
+      const hook = hoisted.setAuthProfileFailureHook.mock.calls[0]?.[0] as
+        | ((reason: AuthProfileFailureReason) => void)
+        | undefined;
+      if (!hook) {
+        throw new Error("Expected provider auth failure hook to be registered");
+      }
+      hook("rate_limit");
+      hook("rate_limit");
+      await vi.advanceTimersByTimeAsync(1_000);
+      expect(hoisted.clearCurrentProviderAuthState).not.toHaveBeenCalled();
+      expect(hoisted.warmCurrentProviderAuthStateOffMainThread).not.toHaveBeenCalled();
+
+      hook("auth");
+      hook("rate_limit");
       expect(hoisted.clearCurrentProviderAuthState).toHaveBeenCalledTimes(1);
 
       await vi.advanceTimersByTimeAsync(1_000);
@@ -1967,8 +1980,10 @@ describe("startGatewayPostAttachRuntime", () => {
         expect(hoisted.warmCurrentProviderAuthStateOffMainThread).toHaveBeenCalledTimes(1);
       });
 
-      const hook = hoisted.setAuthProfileFailureHook.mock.calls[0]?.[0] as (() => void) | undefined;
-      hook?.();
+      const hook = hoisted.setAuthProfileFailureHook.mock.calls[0]?.[0] as
+        | ((reason: AuthProfileFailureReason) => void)
+        | undefined;
+      hook?.("auth");
       await waitForGatewayTestState(() => {
         expect(hoisted.clearCurrentProviderAuthState).toHaveBeenCalledTimes(1);
       });
@@ -2049,8 +2064,10 @@ describe("startGatewayPostAttachRuntime", () => {
       await vi.advanceTimersByTimeAsync(1_000);
       expect(hoisted.warmCurrentProviderAuthStateOffMainThread).not.toHaveBeenCalled();
 
-      const hook = hoisted.setAuthProfileFailureHook.mock.calls[0]?.[0] as (() => void) | undefined;
-      hook?.();
+      const hook = hoisted.setAuthProfileFailureHook.mock.calls[0]?.[0] as
+        | ((reason: AuthProfileFailureReason) => void)
+        | undefined;
+      hook?.("auth");
       await vi.dynamicImportSettled();
       expect(hoisted.clearCurrentProviderAuthState).not.toHaveBeenCalled();
       expect(hoisted.warmCurrentProviderAuthStateOffMainThread).not.toHaveBeenCalled();
@@ -2080,13 +2097,13 @@ describe("startGatewayPostAttachRuntime", () => {
         expect(hoisted.setAuthProfileFailureHook).toHaveBeenCalledOnce();
       });
       const failureHook = hoisted.setAuthProfileFailureHook.mock.calls[0]?.[0] as
-        | (() => void)
+        | ((reason: AuthProfileFailureReason) => void)
         | undefined;
       if (!failureHook) {
         throw new Error("Expected provider auth failure hook to be registered");
       }
 
-      failureHook();
+      failureHook("auth");
       markGatewayRestartDraining();
       await vi.advanceTimersByTimeAsync(1_000);
       await vi.dynamicImportSettled();
@@ -2121,13 +2138,13 @@ describe("startGatewayPostAttachRuntime", () => {
         expect(hoisted.setAuthProfileFailureHook).toHaveBeenCalledOnce();
       });
       const failureHook = hoisted.setAuthProfileFailureHook.mock.calls[0]?.[0] as
-        | (() => void)
+        | ((reason: AuthProfileFailureReason) => void)
         | undefined;
       if (!failureHook) {
         throw new Error("Expected provider auth failure hook to be registered");
       }
 
-      failureHook();
+      failureHook("auth");
       await vi.advanceTimersByTimeAsync(1_000);
 
       expect(log.warn).toHaveBeenCalledWith(`provider auth state rewarm failed: ${String(error)}`);
@@ -2166,14 +2183,16 @@ describe("startGatewayPostAttachRuntime", () => {
         expect(hoisted.warmCurrentProviderAuthStateOffMainThread).toHaveBeenCalledTimes(1);
       });
 
-      const hook = hoisted.setAuthProfileFailureHook.mock.calls[0]?.[0] as (() => void) | undefined;
+      const hook = hoisted.setAuthProfileFailureHook.mock.calls[0]?.[0] as
+        | ((reason: AuthProfileFailureReason) => void)
+        | undefined;
       if (!hook) {
         throw new Error("Expected provider auth failure hook to be registered");
       }
 
-      hook();
+      hook("auth");
       currentCfg = afterFailureCfg;
-      hook();
+      hook("auth");
       expect(hoisted.warmCurrentProviderAuthStateOffMainThread).toHaveBeenCalledTimes(1);
       expect(hoisted.clearCurrentProviderAuthState).toHaveBeenCalledTimes(2);
 

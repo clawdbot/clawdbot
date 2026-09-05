@@ -84,6 +84,7 @@
     <string name="native_0b0c15d15d686c72" formatted="false" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"设置码未被接受"</string>
     <string name="native_0b184bc5d5341998" formatted="false" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"退出登录"</string>
     <string name="native_0b23b09cee45a5e1" formatted="false" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"camera PTZ"</string>
+    <string name="native_0b69a7256d086b75" formatted="false" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"无法分享文件"</string>
     <string name="native_0b914a09797ede88" formatted="false" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"显示系统应用"</string>
     <string name="native_0bb9ff3a7312f664" formatted="false" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"请更新您的 Gateway 以查看提供商模型配置。"</string>
     <string name="native_0bdbb750609ca61c" formatted="false" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"第一页"</string>
@@ -146,11 +147,9 @@
     <string name="native_14638daf580b6ee0" formatted="false" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"Android 设置指南"</string>
     <string name="native_146c4d822cea4531" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"已禁止 %1$s 个应用转发。"</string>
     <string name="native_1485bc093cdbef6d" formatted="false" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"已配对设备"</string>
-    <string name="native_14a01f1f39e117c7" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">":%1$s"</string>
     <string name="native_14bd5cb7d035e354" formatted="false" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"隐藏搜索"</string>
     <string name="native_1520b570498730a0" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"%1$s 项等待中"</string>
     <string name="native_155106be1173d757" formatted="false" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"设备名称"</string>
-    <string name="native_1553635e57f3f346" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"%1$s://%2$s:%3$s%4$s"</string>
     <string name="native_155f816c0407310c" formatted="false" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"提交"</string>
     <string name="native_15b61974b2707a7b" formatted="false" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"位置"</string>
     <string name="native_16196f98cecd6839" formatted="false" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"例如 America/New_York"</string>
@@ -417,6 +416,7 @@
     <string name="native_3c6168bbf86e6e4b" formatted="false" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"同意并启用"</string>
     <string name="native_3c6af34c83122de7" formatted="false" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"需要更新 Gateway"</string>
     <string name="native_3cb27ae0fbca8ae3" formatted="false" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"复制图片"</string>
+    <string name="native_3ccb9221e7520ec2" formatted="false" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"请更新 Gateway，以加载此智能体的进度卡片。"</string>
     <string name="native_3d06950825de7452" formatted="false" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"Gateway URL"</string>
     <string name="native_3d200f624b8bda8f" formatted="false" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"main, isolated, current, 或 session:&lt;id&gt;"</string>
     <string name="native_3d434618889c0332" formatted="false" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"媒体不可用"</string>
@@ -646,6 +646,7 @@
     <string name="native_604e6d6faf8d0295" formatted="false" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"单次运行成功后移除此自动化任务。"</string>
     <string name="native_60730b6ecdee4be7" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"已连接 (操作员: %1$s)"</string>
     <string name="native_608b57eae065c589" formatted="false" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"Gateway 配对已完成。 请批准此手机作为节点, 以便 OpenClaw 使用您启用的设备功能。"</string>
+    <string name="native_60acc53f13a5d1bf" formatted="false" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"深色"</string>
     <string name="native_60ea1847c2ba5446" formatted="false" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"响应已中止"</string>
     <string name="native_6105d6cc76af4003" formatted="false" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"图像"</string>
     <string name="native_614b8348a2dbe46b" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"%1$s 个已暂停"</string>
@@ -1008,7 +1009,6 @@
     <string name="native_958074a2ffa6bae8" formatted="false" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"控制其他应用"</string>
     <string name="native_95d0536838bd0e14" formatted="false" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"Signal 索引"</string>
     <string name="native_95f20b63460b030c" formatted="false" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"输入密钥…"</string>
-    <string name="native_963e80a1954e4b73" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"%1$s:%2$s"</string>
     <string name="native_966dccd25d82bd2a" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"让 OpenClaw %1$s"</string>
     <string name="native_96a5ba634bfc2ed4" formatted="false" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"已发现"</string>
     <string name="native_9709a3b2e51f0ef3" formatted="false" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"隐藏侧边栏"</string>
@@ -1438,6 +1438,7 @@
     <string name="native_db259fef5236a070" formatted="false" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"连接 Gateway 以更新 Skill Workshop 提案。"</string>
     <string name="native_db4fa8d71b5b2d1e" formatted="false" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"OpenClaw 请求失败。"</string>
     <string name="native_dbb6cf817820de0b" formatted="false" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"需要权限"</string>
+    <string name="native_dbcd5e7bb7a0f538" formatted="false" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"浅色"</string>
     <string name="native_dc1c61f0f60f79a1" formatted="false" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"检查提供商就绪状态\n和已配置的模型。"</string>
     <string name="native_dc380888c4e2c776" formatted="false" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"正在加载"</string>
     <string name="native_dc6409a0d1c41734" formatted="false" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"失败警报"</string>
@@ -1663,7 +1664,6 @@
     <string name="native_fdd0d769c49517c2" formatted="false" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"网络超时"</string>
     <string name="native_fe18013d93d22f4f" formatted="false" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"现在"</string>
     <string name="native_fe4e8d175e15f0a2" formatted="false" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"重命名分组…"</string>
-    <string name="native_febd009ea6d42c29" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"%1$s://%2$s%3$s"</string>
     <string name="native_fed2d83c98a40d55" formatted="false" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"openclaw nodes approve REQUEST_ID"</string>
     <string name="native_ff1cee74414621d8" formatted="false" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"固定"</string>
     <string name="native_ff2670a0df18e148" formatted="false" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"thread list"</string>

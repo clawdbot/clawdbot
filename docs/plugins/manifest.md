@@ -817,6 +817,14 @@ the channel root and under `accounts.<id>`. A channel that declares its own
 wording is wrong for your provider. Provider-specific keys such as credentials,
 hosts, and webhooks still need their own hints.
 
+When multiple plugins declare the same channel, the selected plugin owns its
+schema and presentation hints. Redaction preserves `sensitive: true` and
+`tags: ["url-secret"]` declarations from every discovered owner, so credentials
+left in config stay protected after switching plugins. The `url-secret` tag
+protects credentials embedded in URLs while leaving public URLs visible.
+Setting `sensitive: false` disables name-based secret detection, but does not
+override another owner's positive declaration or URL credential protection.
+
 ## contracts reference
 
 Use `contracts` only for static capability ownership metadata that OpenClaw can read without importing the plugin runtime.

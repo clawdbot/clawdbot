@@ -185,15 +185,7 @@ export async function createChildAdapter(params: ChildAdapterInput): Promise<Wor
     assertCurrent,
     argv: [preparedSpawn.command, ...preparedSpawn.args],
     options,
-    fallbacks:
-      useDetached && params.ownedWorker === undefined
-        ? [
-            {
-              label: "no-detach",
-              options: { detached: false },
-            },
-          ]
-        : [],
+    fallbacks: useDetached && params.ownedWorker === undefined ? [{ detached: false }] : [],
   });
 
   const child = spawned.child as ChildProcessWithoutNullStreams;
