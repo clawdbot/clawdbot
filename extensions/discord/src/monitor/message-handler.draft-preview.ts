@@ -16,6 +16,10 @@ import {
 } from "openclaw/plugin-sdk/text-chunking";
 import { chunkDiscordTextWithMode } from "../chunk.js";
 import { resolveDiscordDraftStreamingChunking } from "../draft-chunking.js";
+import {
+  adoptDiscordDraftDeleteCustody,
+  drainDiscordDraftDeleteCustody,
+} from "../draft-delete-custody.js";
 import { createDiscordDraftStream } from "../draft-stream.js";
 import type { RequestClient } from "../internal/discord.js";
 import { resolveDiscordPreviewStreamMode } from "../preview-streaming.js";
@@ -377,6 +381,20 @@ export function createDiscordDraftPreviewController(params: {
           await draftStream.clear();
         }
         await draftStream?.cleanupPendingMessages();
+        // Kick off custody recovery adopted by earlier turns without blocking
+        // turn completion: the account-wide sweep can span many sequential
+        // deletes bounded by the REST timeout, and a finished turn must not wait
+        // for unrelated previews. Drains are serialized per account, so this
+        // sweep adopts its leftovers after the in-flight drain snapshot.
+        void drainDiscordDraftDeleteCustody(params.accountId, params.log);
+        // Deletes that still fail after the final sweep outlive this per-turn
+        // controller; hand custody to the account-level owner so later turns
+        // and bounded retries remove them.
+        adoptDiscordDraftDeleteCustody({
+          accountId: params.accountId,
+          messages: draftStream?.detachPendingCleanup() ?? [],
+          warn: params.log,
+        });
       } catch (err) {
         params.log(`discord: draft cleanup failed: ${String(err)}`);
       }

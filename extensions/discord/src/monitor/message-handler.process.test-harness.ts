@@ -58,6 +58,7 @@ export function createMockDraftStream() {
     stop: vi.fn(async () => {}),
     retarget: vi.fn(async () => {}),
     cleanupPendingMessages: vi.fn(async () => {}),
+    detachPendingCleanup: vi.fn(() => []),
     forceNewMessage: vi.fn(() => {
       messageId = undefined;
     }),

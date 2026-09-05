@@ -1,6 +1,7 @@
 // Discord plugin module implements draft stream behavior.
 import { createFinalizableDraftStreamControlsForState } from "openclaw/plugin-sdk/channel-outbound";
 import { formatErrorMessage } from "openclaw/plugin-sdk/error-runtime";
+import type { DiscordDraftDeleteCustodyEntry } from "./draft-delete-custody.js";
 import {
   createChannelMessage,
   deleteChannelMessage,
@@ -27,6 +28,8 @@ type DiscordDraftStream = {
   retarget: (channelId: string) => Promise<void>;
   /** Retry failed preview deletes at the owning turn's cleanup boundary. */
   cleanupPendingMessages: () => Promise<void>;
+  /** Release failed preview deletes so a lifecycle owner can retry them. */
+  detachPendingCleanup: () => DiscordDraftDeleteCustodyEntry[];
   /** Reset internal state so the next update creates a new message instead of editing. */
   forceNewMessage: (mode?: "preserve" | "discard") => void;
 };
@@ -193,6 +196,17 @@ export function createDiscordDraftStream(params: {
       await deleteCleanupMessage(message);
     }
   };
+  const detachPendingCleanup = (): DiscordDraftDeleteCustodyEntry[] => {
+    const pending = pendingCleanupMessages;
+    pendingCleanupMessages = [];
+    return pending.map((message) => ({
+      channelId: message.channelId,
+      messageId: message.messageId,
+      remove: async () => {
+        await deleteChannelMessage(rest, message.channelId, message.messageId);
+      },
+    }));
+  };
   const retarget = async (nextChannelId: string) => {
     const normalized = nextChannelId.trim();
     if (!normalized || normalized === channelId) {
@@ -264,6 +278,7 @@ export function createDiscordDraftStream(params: {
     stop,
     retarget,
     cleanupPendingMessages,
+    detachPendingCleanup,
     forceNewMessage,
   };
 }

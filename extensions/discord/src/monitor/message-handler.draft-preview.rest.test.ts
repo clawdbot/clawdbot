@@ -1,5 +1,7 @@
 import { createDeferred } from "openclaw/plugin-sdk/extension-shared";
-import { describe, expect, it } from "vitest";
+import { beforeEach, describe, expect, it } from "vitest";
+import { drainDiscordDraftDeleteCustody } from "../draft-delete-custody.js";
+import { resetDiscordDraftDeleteCustodyForTest } from "../draft-delete-custody.test-support.js";
 import { RequestClient } from "../internal/discord.js";
 import { createDiscordDraftPreviewController } from "./message-handler.draft-preview.js";
 
@@ -21,6 +23,10 @@ function createPreviewController(rest: RequestClient) {
 }
 
 describe("Discord draft preview REST lifecycle", () => {
+  beforeEach(() => {
+    resetDiscordDraftDeleteCustodyForTest();
+  });
+
   it("retains the progress draft after an error final is delivered", async () => {
     const requests: string[] = [];
     const rest = new RequestClient("test-token", {
@@ -119,4 +125,76 @@ describe("Discord draft preview REST lifecycle", () => {
       expect(deletedIds.filter((id) => id === "preview-1")).toHaveLength(deleteFailures + 1);
     },
   );
+
+  it("hands repeated delete failures to account custody and removes them on the next turn", async () => {
+    let deleteFailures = 2;
+    const visibleMessages = new Map<string, string>();
+    let createdCount = 0;
+    const rest = new RequestClient("test-token", {
+      fetch: async (input, init) => {
+        const url = new URL(input instanceof Request ? input.url : input);
+        if (init?.method === "POST") {
+          const id = `preview-${++createdCount}`;
+          visibleMessages.set(id, "orphaned progress");
+          return Response.json({ id });
+        }
+        if (init?.method === "DELETE") {
+          const id = url.pathname.split("/").at(-1)!;
+          if (deleteFailures > 0) {
+            deleteFailures -= 1;
+            return Response.json({ message: "temporarily unavailable" }, { status: 503 });
+          }
+          visibleMessages.delete(id);
+          return new Response(null, { status: 204 });
+        }
+        throw new Error(`Unexpected Discord request: ${init?.method} ${url.pathname}`);
+      },
+    });
+    const firstTurn = createPreviewController(rest);
+
+    firstTurn.draftStream?.update("orphaned progress");
+    await firstTurn.flush();
+    firstTurn.markFinalReplyStarted();
+    firstTurn.markFinalReplyDelivered(false);
+    // Two transient DELETE failures exhaust the per-turn retry; the preview
+    // stays visible while the controller terminates.
+    await firstTurn.cleanup();
+
+    expect([...visibleMessages]).toEqual([["preview-1", "orphaned progress"]]);
+
+    const nextTurn = createPreviewController(rest);
+    await nextTurn.cleanup();
+    // Turn completion schedules account recovery without awaiting it; settle
+    // the serialized drain to observe the deletion.
+    await drainDiscordDraftDeleteCustody("default");
+
+    expect([...visibleMessages]).toEqual([]);
+  });
+
+  it("keeps intentional error-final retention out of custody", async () => {
+    const requests: string[] = [];
+    const rest = new RequestClient("test-token", {
+      queueRequests: false,
+      fetch: async (input, init) => {
+        const url = new URL(input instanceof Request ? input.url : input);
+        requests.push(`${init?.method ?? "GET"} ${url.pathname.replace("/api/v10", "")}`);
+        if (init?.method === "POST") {
+          return Response.json({ id: "preview-error" });
+        }
+        return new Response(null, { status: 204 });
+      },
+    });
+    const firstTurn = createPreviewController(rest);
+
+    firstTurn.draftStream?.update("retained progress");
+    await firstTurn.flush();
+    firstTurn.markFinalReplyStarted();
+    firstTurn.markFinalReplyDelivered(true);
+    await firstTurn.cleanup();
+
+    const nextTurn = createPreviewController(rest);
+    await nextTurn.cleanup();
+
+    expect(requests).not.toContain("DELETE /channels/c1/messages/preview-error");
+  });
 });

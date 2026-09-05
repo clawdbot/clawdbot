@@ -73,6 +73,37 @@ describe("createDiscordDraftStream", () => {
     expect(rest.delete).toHaveBeenNthCalledWith(2, "/channels/parent/messages/parent-draft");
   });
 
+  it("detaches failed deletes so a lifecycle owner can retry them", async () => {
+    const rest = {
+      post: vi.fn().mockResolvedValueOnce({ id: "parent-draft" }),
+      patch: vi.fn(async () => undefined),
+      delete: vi.fn().mockRejectedValueOnce(new Error("transient")),
+    };
+    const stream = createDiscordDraftStream({
+      rest: rest as never,
+      channelId: "parent",
+      throttleMs: 250,
+    });
+
+    stream.update("working");
+    await stream.flush();
+    await stream.clear();
+
+    const detached = stream.detachPendingCleanup();
+    expect(detached).toHaveLength(1);
+    const [firstDetached] = detached;
+    expect(firstDetached).toMatchObject({ channelId: "parent", messageId: "parent-draft" });
+
+    // The failed delete is no longer owned by the stream after detachment.
+    expect(stream.detachPendingCleanup()).toEqual([]);
+    await stream.cleanupPendingMessages();
+    expect(rest.delete).toHaveBeenCalledTimes(1);
+
+    rest.delete.mockResolvedValueOnce(undefined);
+    await firstDetached?.remove();
+    expect(rest.delete).toHaveBeenNthCalledWith(2, "/channels/parent/messages/parent-draft");
+  });
+
   it("keeps the parent draft when the thread replacement cannot be created", async () => {
     const rest = {
       post: vi
