@@ -239,8 +239,16 @@ export async function updateGitCheckout(params: {
     let runtimeRestored = true;
     try {
       await runtimePromotion?.restore();
-    } catch {
+    } catch (error) {
       runtimeRestored = false;
+      steps.push({
+        name: "git runtime rollback",
+        command: "restore previous runtime",
+        cwd: gitRoot,
+        durationMs: 0,
+        exitCode: 1,
+        stderrTail: String(error),
+      });
     }
     recovery = !sourceRestored
       ? { serviceRestartSafe: false, reason: "source-rollback-failed" }

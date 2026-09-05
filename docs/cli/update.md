@@ -614,6 +614,9 @@ the sentinel.
   </Step>
   <Step title="Activate and verify">
     Stops the managed service, checks out the exact candidate SHA, publishes the prepared runtime, and runs required Doctor migrations. It starts and verifies the Gateway without reinstalling dependencies or rebuilding the checkout during downtime.
+
+    If restoring the previous Git runtime fails, the Gateway stays stopped and the failed rollback step records the filesystem error. Pending originals remain in sibling `<runtime>.openclaw-update-<id>.tmp/previous` directories. Preserve those backups and repair the installation before restarting; cleanup does not delete an unrestored original.
+
   </Step>
   <Step title="Sync plugins">
     With the core serving, syncs plugins to the active channel. Dev uses bundled plugins; stable and beta use npm or ClawHub while preserving recorded source choices. A changed plugin snapshot uses the second maintenance and verification window described above; unchanged plugins do not run another full Doctor pass.

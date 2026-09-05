@@ -129,9 +129,14 @@ export async function prepareGitRuntimePromotion(
   );
   const staged: Array<{ destination: string; temporary: string; previous: boolean }> = [];
   const promoted: typeof staged = [];
+  let restoreStarted = false;
   const cleanup = async () => {
+    // Failed restoration must retain pending originals; successfully restored
+    // entries leave the promoted list before cleanup or another restore attempt.
     await Promise.all(
-      staged.map((entry) => fs.rm(entry.temporary, { recursive: true, force: true })),
+      staged
+        .filter((entry) => !restoreStarted || !promoted.includes(entry))
+        .map((entry) => fs.rm(entry.temporary, { recursive: true, force: true })),
     );
   };
   try {
@@ -169,13 +174,14 @@ export async function prepareGitRuntimePromotion(
       }
     },
     async restore() {
+      restoreStarted = true;
       for (const entry of promoted.toReversed()) {
         await fs.rm(entry.destination, { recursive: true, force: true });
         if (entry.previous) {
           await fs.rename(path.join(entry.temporary, "previous"), entry.destination);
         }
+        promoted.pop();
       }
-      promoted.length = 0;
     },
     cleanup,
   };

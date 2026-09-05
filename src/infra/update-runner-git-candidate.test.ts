@@ -373,12 +373,13 @@ describe("Git candidate activation", () => {
   });
 
   it.each([
-    { layout: "node_modules/.pnpm", restoreSource: true },
-    { layout: "node_modules/.pnpm", restoreSource: false },
-    { layout: "../store", restoreSource: true },
+    { layout: "node_modules/.pnpm", restoreSource: true, restoreRuntime: true },
+    { layout: "node_modules/.pnpm", restoreSource: false, restoreRuntime: true },
+    { layout: "../store", restoreSource: true, restoreRuntime: true },
+    { layout: "node_modules/.pnpm", restoreSource: true, restoreRuntime: false },
   ] as const)(
-    "verifies $layout runtime recovery after activation failure (source restored: $restoreSource)",
-    async ({ layout, restoreSource }) => {
+    "verifies $layout runtime recovery after activation failure (source restored: $restoreSource, runtime restored: $restoreRuntime)",
+    async ({ layout, restoreSource, restoreRuntime }) => {
       virtualStoreLayout = layout;
       await writeRuntime(root, beforeSha, path.join(directory, "shared-store"), layout);
       const candidateSha = await advanceRemote();
@@ -401,7 +402,17 @@ describe("Git candidate activation", () => {
       const rename = fs.rename.bind(fs);
       const injected = new Error("activation blocked");
       let faultInjected = false;
+      let distBackup: string | undefined;
+      let restoreFaultInjected = false;
       vi.spyOn(fs, "rename").mockImplementation(async (source, destination) => {
+        if (source === path.join(root, "dist")) {
+          distBackup = String(destination);
+        }
+        if (!restoreRuntime && source === distBackup && destination === path.join(root, "dist")) {
+          restoreFaultInjected = true;
+          await fs.mkdir(destination, { recursive: true });
+          await fs.writeFile(path.join(destination, "restore-race"), "occupied");
+        }
         if (
           String(source).endsWith(`${path.sep}candidate`) &&
           destination === path.join(root, "node_modules")
@@ -414,11 +425,14 @@ describe("Git candidate activation", () => {
       const result = await update();
       expect(faultInjected).toBe(true);
       expect(resetFaultInjected).toBe(!restoreSource);
+      expect(restoreFaultInjected).toBe(!restoreRuntime);
       expect(result).toMatchObject({
         status: "error",
-        recovery: restoreSource
-          ? { serviceRestartSafe: true, buildId: beforeSha }
-          : { serviceRestartSafe: false, reason: "source-rollback-failed" },
+        recovery: !restoreSource
+          ? { serviceRestartSafe: false, reason: "source-rollback-failed" }
+          : restoreRuntime
+            ? { serviceRestartSafe: true, buildId: beforeSha }
+            : { serviceRestartSafe: false, reason: "runtime-verification-failed" },
       });
       expect(events).toEqual(["build", "validate", "stop"]);
       const expectedSha = restoreSource ? beforeSha : candidateSha;
@@ -431,7 +445,88 @@ describe("Git candidate activation", () => {
           ...(restoreSource ? {} : { stderrTail: `expected ${beforeSha}, found ${candidateSha}` }),
         }),
       );
+      if (!restoreRuntime) {
+        if (!distBackup) {
+          throw new Error("The original dist backup was not observed.");
+        }
+        expect(
+          JSON.parse(await fs.readFile(path.join(distBackup, "build-info.json"), "utf8")),
+        ).toMatchObject({
+          commit: beforeSha,
+        });
+        expect(result.steps).toContainEqual(
+          expect.objectContaining({
+            name: "git runtime rollback",
+            exitCode: 1,
+            stderrTail: expect.stringContaining(distBackup),
+          }),
+        );
+        return;
+      }
       await expectRuntime(root, beforeSha);
+    },
+  );
+
+  it.each([false, true])(
+    "retries partial runtime restoration without losing originals (cleanup first: %s)",
+    async (cleanupFirst) => {
+      const candidateSha = await advanceRemote();
+      await git(root, "fetch", "origin");
+      const cleanupRoot = path.join(directory, "restore-candidate");
+      const candidateRoot = path.join(cleanupRoot, "worktree");
+      await fs.mkdir(cleanupRoot);
+      await git(root, "worktree", "add", "--detach", candidateRoot, candidateSha);
+      await writeRuntime(
+        candidateRoot,
+        candidateSha,
+        path.join(directory, "shared-store"),
+        virtualStoreLayout,
+      );
+      await expectRuntime(candidateRoot, candidateSha);
+      const promotion = await prepareGitRuntimePromotion(
+        root,
+        candidateRoot,
+        runCommand,
+        5000,
+        cleanupRoot,
+      );
+      await git(root, "worktree", "remove", "--force", candidateRoot);
+      await fs.rm(cleanupRoot, { recursive: true, force: true });
+      const rename = fs.rename.bind(fs);
+      let distBackup: string | undefined;
+      let rejectRestore = true;
+      vi.spyOn(fs, "rename").mockImplementation(async (source, destination) => {
+        if (source === path.join(root, "dist")) {
+          distBackup = String(destination);
+        }
+        if (rejectRestore && source === distBackup && destination === path.join(root, "dist")) {
+          await fs.mkdir(destination, { recursive: true });
+          await fs.writeFile(path.join(destination, "restore-race"), "occupied");
+        }
+        return rename(source, destination);
+      });
+      await promotion.activate();
+      await expectRuntime(root, candidateSha);
+      await expect(promotion.restore()).rejects.toThrow();
+      if (cleanupFirst) {
+        await promotion.cleanup();
+      }
+      if (!distBackup) {
+        throw new Error("The original dist backup was not observed.");
+      }
+      expect(
+        JSON.parse(await fs.readFile(path.join(distBackup, "build-info.json"), "utf8")),
+      ).toMatchObject({
+        commit: beforeSha,
+      });
+      expect(await fs.readFile(path.join(root, "node_modules", "identity.cjs"), "utf8")).toContain(
+        beforeSha,
+      );
+      rejectRestore = false;
+      await promotion.restore();
+      await expectRuntime(root, beforeSha);
+      await promotion.cleanup();
+      await expect(fs.stat(path.dirname(distBackup))).rejects.toMatchObject({ code: "ENOENT" });
     },
   );
 });
