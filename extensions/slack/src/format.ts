@@ -86,6 +86,13 @@ function buildSlackLink(link: MarkdownLinkSpan, text: string) {
   if (!href) {
     return null;
   }
+  // Local-file links (file://) expose machine-local paths and have no useful
+  // Slack target. The shared parser now admits file: as a link destination
+  // (see packages/markdown-core ir.ts validateLink) so the label renders as
+  // text instead of leaking raw markdown; collapse the link to its label.
+  if (/^file:/i.test(href)) {
+    return null;
+  }
   const label = text.slice(link.start, link.end);
   const trimmedLabel = label.trim();
   const comparableHref = href.startsWith("mailto:") ? href.slice("mailto:".length) : href;

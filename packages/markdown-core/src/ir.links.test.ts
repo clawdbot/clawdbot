@@ -51,3 +51,35 @@ describe("markdownToIR link provenance", () => {
     });
   });
 });
+
+describe("markdownToIR file: and scheme handling (#137705)", () => {
+  it("parses file: links into a MarkdownLinkSpan so renderers can collapse them", () => {
+    const ir = markdownToIR("see [config](file:///etc/config.yaml)");
+
+    expect(ir.links).toEqual([{ start: 4, end: 10, href: "file:///etc/config.yaml" }]);
+    // The link reaches buildLink; a channel that returns null collapses it to
+    // the label text instead of leaking the raw markdown.
+    expect(collectRenderedLinks(ir)).toEqual([
+      { href: "file:///etc/config.yaml", label: "config", origin: "authored" },
+    ]);
+  });
+
+  it("keeps javascript: and vbscript: destinations rejected at the IR layer", () => {
+    for (const scheme of ["javascript:", "vbscript:"]) {
+      const ir = markdownToIR(`[x](${scheme}alert(1))`);
+      expect(ir.links).toEqual([]);
+      expect(collectRenderedLinks(ir)).toEqual([]);
+    }
+  });
+
+  it("admits only data:image embedded images, rejecting other data: URIs", () => {
+    // Safe embedded images reach the image handler (no link span).
+    const image = markdownToIR("![alt](data:image/png;base64,AAAA)");
+    expect(image.links).toEqual([]);
+
+    // Non-image data: URIs stay rejected at the IR layer.
+    const text = markdownToIR("[x](data:text/html,<script>)");
+    expect(text.links).toEqual([]);
+    expect(collectRenderedLinks(text)).toEqual([]);
+  });
+});

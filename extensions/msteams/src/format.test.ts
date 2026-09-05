@@ -132,6 +132,11 @@ describe("formatMSTeamsMarkdown", () => {
       after: "[x](<https://host/a>)",
     },
     {
+      name: "collapses file: link destinations to their label text",
+      before: "see [config](file:///etc/config.yaml)",
+      after: "see config",
+    },
+    {
       name: "drops code language while keeping a collision-safe fence",
       before: ["````md", "```", "example", "```", "````"].join("\n"),
       after: ["````", "```", "example", "```", "````"].join("\n"),

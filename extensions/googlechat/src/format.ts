@@ -305,6 +305,11 @@ function renderGoogleChatIR(ir: MarkdownIR, markers: GoogleChatMarkers): string 
         if (!href || !label) {
           return null;
         }
+        // Local-file links expose machine-local paths and have no useful Chat
+        // target; collapse to the label text instead of serializing the path.
+        if (/^file:/i.test(href)) {
+          return null;
+        }
         const labelHasStyles = ir.styles.some(
           (span) => span.start < link.end && span.end > link.start,
         );

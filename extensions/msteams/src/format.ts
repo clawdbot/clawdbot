@@ -551,12 +551,19 @@ export function formatMSTeamsMarkdown(markdown: string, tableMode: MarkdownTable
     {
       styleMarkers: MSTEAMS_MARKERS,
       escapeText: (text) => text,
-      buildLink: (link) => ({
-        start: link.start,
-        end: link.end,
-        open: "[",
-        close: `](${serializeMarkdownDestination(link.href)})`,
-      }),
+      buildLink: (link) => {
+        // Local-file links expose machine-local paths and have no useful Teams
+        // target; collapse to the label text instead of serializing the path.
+        if (/^file:/i.test(link.href.trim())) {
+          return null;
+        }
+        return {
+          start: link.start,
+          end: link.end,
+          open: "[",
+          close: `](${serializeMarkdownDestination(link.href)})`,
+        };
+      },
     },
     MSTEAMS_FORMAT_CAPABILITIES,
   );

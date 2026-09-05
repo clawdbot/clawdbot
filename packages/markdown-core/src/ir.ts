@@ -337,6 +337,26 @@ function createMarkdownIt(options: MarkdownParseOptions): MarkdownItParser {
     typographer: false,
   });
   md.linkify.set({ fuzzyLink: true });
+  // markdown-it's default link validator rejects `file:` destinations, so a
+  // `[label](file:///path)` link never becomes a MarkdownLinkSpan and the
+  // raw markdown leaks into channel text. Allow `file:` so the link is parsed
+  // into a span; each channel's buildLink then collapses local-file links to
+  // their label text (no clickable target, no path exposure). Script-execution
+  // schemes (`javascript:`, `vbscript:`) stay rejected, and only the safe
+  // embedded-image `data:image/(gif|png|jpeg|webp)` exception is preserved.
+  md.validateLink = (rawHref: string) => {
+    const href = rawHref.trim().toLowerCase();
+    if (/^file:/i.test(href)) {
+      return true;
+    }
+    if (/^(?:javascript|vbscript):/i.test(href)) {
+      return false;
+    }
+    if (/^data:/i.test(href)) {
+      return /^data:image\/(?:gif|png|jpeg|webp);/i.test(href);
+    }
+    return true;
+  };
   md.use(markdownItCjkFriendly);
   md.use(markdownItAssistantTranscriptRoles);
   if (options.preserveDunderIdentifiers) {

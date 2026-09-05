@@ -150,6 +150,13 @@ describe("normalizeSlackOutboundText", () => {
     expect(res).toBe("• item\n  • nested");
   });
 
+  it("collapses file: link destinations to their label text", () => {
+    // Local-file links have no useful Slack target and would expose machine
+    // paths; the shared parser admits file: so the label renders as text
+    // instead of leaking raw markdown.
+    expect(normalizeSlackOutboundText("see [config](file:///etc/config.yaml)")).toBe("see config");
+  });
+
   it("handles complex message with multiple elements", () => {
     const res = normalizeSlackOutboundText(
       "**Important:** Check the _docs_ at [link](https://example.com)\n\n- first\n- second",
