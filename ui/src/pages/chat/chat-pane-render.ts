@@ -300,13 +300,10 @@ export class ChatPane extends ChatPaneLayoutRender {
         sessionParticipationBlocked,
       ]);
     const publicationOwner = publicationOwnerKey();
-    const publicationAvailable = Boolean(
-      publicationScope &&
-      selectedSession?.key &&
-      isGatewayMethodAdvertised(gatewaySnapshot, "sessions.github.publish") === true,
-    );
     this.githubPublication.sync(
-      publicationAvailable && publicationScope && selectedSession
+      publicationScope &&
+        selectedSession?.key &&
+        isGatewayMethodAdvertised(gatewaySnapshot, "sessions.github.publish") === true
         ? {
             client: publicationScope.client,
             key: `${publicationScope.generation}:${selectedSession.key}:${publicationOwner}`,
@@ -319,8 +316,8 @@ export class ChatPane extends ChatPaneLayoutRender {
               !hasAbortableSessionRun(state) &&
               !isCloudWorkerPlacementState(placement?.state) &&
               !workspaceConflict,
+            isPresented: () => this.presented,
             isCurrent: () =>
-              this.presented &&
               this.isConnectionScopeCurrent(publicationScope) &&
               selectedChatSessionRow(state)?.key === selectedSession.key &&
               publicationOwnerKey() === publicationOwner,

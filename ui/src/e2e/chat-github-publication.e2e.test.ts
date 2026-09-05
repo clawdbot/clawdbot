@@ -4,7 +4,11 @@ import { isRecord } from "@openclaw/normalization-core/record-coerce";
 import { expect, it } from "vitest";
 import { SESSION_PULL_REQUESTS_SUBSCRIBE_METHOD } from "../lib/session-pull-requests.ts";
 import { takeControlUiViewportScreenshot } from "../test-helpers/control-ui-e2e-screenshot.ts";
-import { installMockGateway } from "../test-helpers/control-ui-e2e.ts";
+import {
+  controlUiSessionPath,
+  controlUiSessionUrl,
+  installMockGateway,
+} from "../test-helpers/control-ui-e2e.ts";
 import { createControlUiSessionRow } from "../test-helpers/control-ui-session-fixtures.ts";
 import {
   personalAccount,
@@ -32,6 +36,92 @@ async function newPublicationContext() {
 }
 
 suite.define(() => {
+  it.each(["shared", "personal"] as const)(
+    "keeps the original %s retry after navigating away and back",
+    async (source) => {
+      const context = await newPublicationContext();
+      const page = await context.newPage();
+      const sessionA = "agent:main:publication";
+      const sessionB = "agent:main:other";
+      const gateway = await installMockGateway(page, {
+        assistantName: "Publication QA",
+        workspace: "/synthetic/publication-qa",
+        communityInvite: false,
+        operatorScopes: ["operator.read", "operator.write"],
+        featureMethods: publicationMethods,
+        sessionKey: sessionA,
+        sessions: [
+          createControlUiSessionRow(sessionA, "Publication task", 2),
+          createControlUiSessionRow(sessionB, "Other task", 1),
+        ],
+        presenceUsers: [
+          {
+            self: true,
+            id: "synthetic",
+            identity: { type: "profile", id: "synthetic" },
+            name: "Synthetic reviewer",
+          },
+        ],
+        methodResponses: {
+          [SESSION_PULL_REQUESTS_SUBSCRIBE_METHOD]: { subscribed: true },
+          "sessions.github.options": publicationOptions,
+        },
+      });
+      await page.goto(controlUiSessionUrl(suite.server.baseUrl, sessionA));
+      await showPublicationBranch(gateway);
+      const activePane = page.locator(".chat-pane-cache__pane--active");
+      await activePane.getByRole("button", { name: "Publication account", exact: true }).click();
+      await activePane.getByRole("combobox", { name: "Publication account" }).selectOption(source);
+      await page.keyboard.press("Escape");
+      await gateway.deferNext("sessions.github.publish");
+      await activePane.getByRole("button", { name: "Publish PR", exact: true }).click();
+      const first = await gateway.waitForRequest("sessions.github.publish");
+      await gateway.rejectDeferred("sessions.github.publish", {
+        code: "UNAVAILABLE",
+        message: "Publication response lost; retry the original request.",
+      });
+      const retry = activePane.getByRole("button", { name: "Retry publication", exact: true });
+      await retry.waitFor();
+      if (captureUiProof) {
+        await writeFile(
+          path.join(suite.artifactDir, `${source}-before-navigation.png`),
+          await takeControlUiViewportScreenshot(page, page.locator(".shell"), [retry]),
+        );
+      }
+      const sessionLink = (key: string) =>
+        page.locator(
+          `.sidebar-recent-session[data-session-key="${key}"] a.sidebar-recent-session__link`,
+        );
+      await sessionLink(sessionB).click();
+      await expect.poll(() => new URL(page.url()).pathname).toBe(controlUiSessionPath(sessionB));
+      await sessionLink(sessionA).click();
+      await expect.poll(() => new URL(page.url()).pathname).toBe(controlUiSessionPath(sessionA));
+      await showPublicationBranch(gateway);
+      const publication = activePane.locator('.chat-pr[data-state="branch"]');
+      await publication.waitFor();
+      await expect
+        .poll(() =>
+          publication.getByRole("button", { name: /^(Publish PR|Retry publication)$/ }).isEnabled(),
+        )
+        .toBe(true);
+      if (captureUiProof) {
+        await writeFile(
+          path.join(suite.artifactDir, `${source}-after-navigation.png`),
+          await takeControlUiViewportScreenshot(page, page.locator(".shell"), [publication]),
+        );
+      }
+      expect(await gateway.getRequests("sessions.github.publish")).toHaveLength(1);
+      expect(await retry.count()).toBe(1);
+      expect(await activePane.getByRole("combobox", { name: "Publication account" }).count()).toBe(
+        0,
+      );
+      await gateway.deferNext("sessions.github.publish");
+      await retry.click();
+      const second = await gateway.waitForRequest("sessions.github.publish", { after: 1 });
+      expect(second.params).toEqual(first.params);
+    },
+  );
+
   it.each([1180, 390])(
     "keeps a sole publisher compact and keyboard accessible at %ipx",
     async (width) => {

@@ -1,5 +1,6 @@
 /* @vitest-environment jsdom */
 import { describe, expect, it, vi } from "vitest";
+import { createDeferred } from "../../../../test/helpers/promise.js";
 import { GatewayRequestError } from "../../api/gateway.ts";
 import {
   GitHubPublicationController,
@@ -58,11 +59,13 @@ function setup(initialOptions = options) {
     sessionKey: "agent:main:one",
     canWrite: true,
     personalReady: true,
+    isPresented: () => true,
     isCurrent: () => true,
   };
-  const controller = new GitHubPublicationController(vi.fn());
+  const changed = vi.fn();
+  const controller = new GitHubPublicationController(changed);
   controller.sync(scope);
-  return { controller, request, scope };
+  return { controller, request, scope, changed };
 }
 async function settled(controller: GitHubPublicationController) {
   await vi.waitFor(() => expect(controller.view()?.busy).toBe(false));
@@ -322,7 +325,7 @@ describe("explicit GitHub publication", () => {
     const { controller, request, scope } = setup();
     await settled(controller);
     let presented = false;
-    const retainedScope = { ...scope, isCurrent: () => presented };
+    const retainedScope = { ...scope, isPresented: () => presented };
     controller.sync(retainedScope);
     expect(controller.view()).toBeUndefined();
     expect(request).toHaveBeenCalledTimes(1);
@@ -334,6 +337,64 @@ describe("explicit GitHub publication", () => {
     expect(visible.result).toEqual(interrupted.result);
     expect(visible.confirmation).toEqual(confirmation);
   });
+
+  it.each(["published", "unknown", "selection-rejection"] as const)(
+    "retains a %s response that arrives while the pane is hidden",
+    async (outcome) => {
+      const { controller, request, scope, changed } = setup();
+      let presented = true;
+      const retainedScope = { ...scope, isPresented: () => presented };
+      controller.sync(retainedScope);
+      const ready = await settled(controller);
+      const response = createDeferred<unknown>();
+      request.mockImplementationOnce(() => response.promise);
+      ready.onPublish?.();
+      const first = request.mock.calls.at(-1)![1];
+      presented = false;
+      controller.sync(retainedScope);
+      changed.mockClear();
+      if (outcome === "published") {
+        response.resolve({ requestId, publisher: shared, status: "published" });
+      } else {
+        response.reject(
+          new GatewayRequestError({
+            code: "UNAVAILABLE",
+            message: "Publication response",
+            ...(outcome === "selection-rejection"
+              ? {
+                  details: {
+                    code: "GITHUB_PUBLICATION_SELECTION_REJECTED",
+                    idempotencyKey: first.idempotencyKey,
+                  },
+                }
+              : {}),
+          }),
+        );
+      }
+      await vi.waitFor(() => expect(changed).toHaveBeenCalled());
+      controller.sync(retainedScope);
+      expect(controller.view()).toBeUndefined();
+      ready.onPublish?.();
+      ready.onSelect?.("personal");
+      ready.onRefresh();
+      expect(request).toHaveBeenCalledTimes(2);
+      presented = true;
+      controller.sync(retainedScope);
+      const visible = await settled(controller);
+      expect(request).toHaveBeenCalledTimes(2);
+      if (outcome === "published") {
+        expect(visible.result).toMatchObject({ requestId, publisher: shared, status: "published" });
+        presented = false;
+        visible.onNewAction?.();
+        presented = true;
+        expect(controller.view()?.result).toEqual(visible.result);
+      } else {
+        expect(visible.error).toContain("Publication response");
+        expect(visible.locked).toBe(outcome === "unknown");
+        expect(visible.selection).toEqual(outcome === "unknown" ? first.selection : null);
+      }
+    },
+  );
 
   it.each(["result", "selection-rejection"])(
     "retires an old publication %s after reconnect without clearing the discovered request",

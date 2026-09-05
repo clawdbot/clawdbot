@@ -18,6 +18,7 @@ export type GitHubPublicationScope = {
   sessionKey: string;
   canWrite: boolean;
   personalReady: boolean;
+  isPresented: () => boolean;
   isCurrent: () => boolean;
 };
 export type GitHubPublicationView = {
@@ -77,7 +78,13 @@ export class GitHubPublicationController {
   }
 
   sync(scope: GitHubPublicationScope | null): void {
-    if (!scope || !scope.isCurrent()) {
+    // Presentation gates new work, not an existing request's outcome. Only idle
+    // choices retire while hidden so returning can discover current options.
+    if (
+      !scope ||
+      !scope.isCurrent() ||
+      (!scope.isPresented() && !this.busy && !this.locked && !this.result && !this.error)
+    ) {
       this.reset();
       return;
     }
@@ -86,6 +93,9 @@ export class GitHubPublicationController {
       return;
     }
     this.reset();
+    if (!scope.isPresented()) {
+      return;
+    }
     this.scope = scope;
     void this.refresh();
   }
@@ -96,7 +106,13 @@ export class GitHubPublicationController {
 
   private choose(source: "shared" | "personal"): void {
     const options = this.options;
-    if (!options || this.locked || this.busy || !this.scope?.isCurrent()) {
+    if (
+      !options ||
+      this.locked ||
+      this.busy ||
+      !this.scope?.isCurrent() ||
+      !this.scope.isPresented()
+    ) {
       return;
     }
     const personal = options.personal;
@@ -115,7 +131,7 @@ export class GitHubPublicationController {
     action: (scope: GitHubPublicationScope, current: () => boolean) => Promise<void>,
   ): Promise<void> {
     const scope = this.scope;
-    if (!scope?.isCurrent() || this.busy) {
+    if (!scope?.isCurrent() || !scope.isPresented() || this.busy) {
       return;
     }
     const version = ++this.version;
@@ -272,7 +288,7 @@ export class GitHubPublicationController {
 
   view(): GitHubPublicationView | undefined {
     const scope = this.scope;
-    if (!scope?.isCurrent()) {
+    if (!scope?.isCurrent() || !scope.isPresented()) {
       return undefined;
     }
     return {
@@ -297,7 +313,7 @@ export class GitHubPublicationController {
       onNewAction:
         scope.canWrite && terminal(this.result)
           ? () => {
-              if (this.busy || !scope.isCurrent()) {
+              if (this.busy || !scope.isCurrent() || !scope.isPresented()) {
                 return;
               }
               this.reviewedRequestId = this.result?.requestId ?? null;

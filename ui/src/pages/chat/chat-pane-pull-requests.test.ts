@@ -1,14 +1,22 @@
 /* @vitest-environment jsdom */
 
-import { describe, expect, it, vi } from "vitest";
+import { describe, expect, it, onTestFinished, vi } from "vitest";
 import {
   CONTROL_UI_SESSION_PULL_REQUESTS_CHANGED_EVENT,
   type ControlUiSessionPullRequest,
 } from "../../../../src/gateway/control-ui-contract.js";
 import type { GatewayBrowserClient } from "../../api/gateway.ts";
+import type { ApplicationContext } from "../../app/context.ts";
 import { SESSION_PULL_REQUESTS_SUBSCRIBE_METHOD } from "../../lib/session-pull-requests.ts";
 import type { SessionCapability } from "../../lib/sessions/index.ts";
-import { createTestChatPane } from "./chat-pane.test-support.ts";
+import { gatewayHelloForMethods } from "../../test-helpers/gateway-methods.ts";
+import {
+  createGatewayBrowserClientFixture,
+  createInitializationContext,
+  createRenderTestChatPane,
+  createSessionCapabilityFixture,
+  createTestChatPane,
+} from "./chat-pane.test-support.ts";
 
 function pullRequest(
   number: number,
@@ -63,6 +71,112 @@ function emitSnapshot(
 }
 
 describe("chat pane pushed pull request state", () => {
+  it.each(["shared", "personal"] as const)(
+    "retains an unknown %s publication across a retained-pane navigation",
+    async (source) => {
+      const shared = { source: "system-configured", accountId: 1, login: "system-bot" };
+      const account = { accountId: 2, login: "alice-tools" };
+      const generation = "bdca439a-e787-4f9f-b5f3-a878c662cc76";
+      const options = {
+        shared,
+        personal: { state: "connected", generation, account },
+        pendingPersonal: null,
+      };
+      const request = vi.fn(async (method: string, _params?: unknown) => {
+        if (method === "sessions.github.options") {
+          return options;
+        }
+        if (method === SESSION_PULL_REQUESTS_SUBSCRIBE_METHOD) {
+          return { subscribed: true };
+        }
+        if (method === "sessions.github.publish") {
+          throw new Error("Response lost");
+        }
+        throw new Error(`Unexpected request: ${method}`);
+      });
+      const client = createGatewayBrowserClientFixture({ request });
+      const initial = createInitializationContext();
+      const context: ApplicationContext = {
+        ...initial,
+        gateway: {
+          ...initial.gateway,
+          snapshot: {
+            ...initial.gateway.snapshot,
+            client,
+            phase: "connected",
+            hello: gatewayHelloForMethods(
+              ["sessions.github.publish", SESSION_PULL_REQUESTS_SUBSCRIBE_METHOD],
+              ["operator.read", "operator.write"],
+            ),
+          },
+        },
+        sessions: createSessionCapabilityFixture({
+          state: initial.sessions.state,
+          think: () => undefined,
+          capturePullRequestEpoch: () => ({}),
+        }),
+      };
+      const pane = createRenderTestChatPane();
+      Object.defineProperties(pane, {
+        isConnected: { configurable: true, value: true },
+        connectedClient: { configurable: true, value: client, writable: true },
+      });
+      const state = pane.initialize(context);
+      onTestFinished(() => {
+        pane.presented = false;
+      });
+      state.client = client;
+      state.connected = true;
+      state.sessionKey = "agent:main:publication";
+      state.sessionsResult = {
+        ts: 1,
+        path: "",
+        count: 1,
+        defaults: { modelProvider: null, model: null, contextTokens: null },
+        sessions: [
+          { key: state.sessionKey, sessionId: "publication", kind: "direct", updatedAt: 1 },
+        ],
+      };
+      const settled = async () => {
+        await vi.waitFor(() => {
+          pane.render();
+          expect(pane.chatProps?.githubPublication?.busy).toBe(false);
+        });
+        return pane.chatProps!.githubPublication!;
+      };
+      (await settled()).onSelect?.(source);
+      pane.render();
+      pane.chatProps!.githubPublication!.onPublish?.();
+      const unknown = await settled();
+      expect(unknown.locked).toBe(true);
+      const first = request.mock.calls.find(([method]) => method === "sessions.github.publish");
+      expect(first?.[1]).toEqual({
+        sessionKey: state.sessionKey,
+        idempotencyKey: expect.any(String),
+        selection:
+          source === "shared" ? { source, expected: shared } : { source, generation, account },
+      });
+
+      pane.presented = false;
+      pane.render();
+      expect(pane.chatProps?.githubPublication).toBeUndefined();
+      const hiddenRequests = request.mock.calls.length;
+      unknown.onPublish?.();
+      unknown.onRefresh();
+      expect(request).toHaveBeenCalledTimes(hiddenRequests);
+      pane.presented = true;
+      const returned = await settled();
+
+      expect(returned.locked).toBe(true);
+      expect(returned.selection).toEqual(unknown.selection);
+      returned.onPublish?.();
+      await settled();
+      expect(request.mock.calls.filter(([method]) => method === "sessions.github.publish")).toEqual(
+        [first, first],
+      );
+    },
+  );
+
   it("does not let a previous session delta clobber the current PR state", async () => {
     const { pane, state, emitGatewayEvent } = createPullRequestPane({
       capturePullRequestEpoch: vi.fn(() => ({})),
