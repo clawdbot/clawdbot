@@ -56,6 +56,7 @@ type TalkViewProps = {
   voiceWake?: { state: VoiceWakeEditorState; onInput: (text: string) => void; onRetry: () => void };
   selection: TalkRealtimeSelection;
   catalog: TalkCatalogState;
+  modelDefaultPending?: boolean;
   configBusy: boolean;
   onProviderChange: (providerId: string | null) => void;
   onModelChange: (model: string | null) => void;
@@ -236,12 +237,14 @@ function renderModelRow(props: TalkViewProps) {
 function renderVoiceRow(props: TalkViewProps) {
   const provider = selectedTalkProviderOption(props.catalog, props.selection);
   const { model, speakerVoice: voice } = effectiveTalkValues(props.selection, provider);
-  // A missing model is the Gateway-owned active route, including an explicit
-  // reset to provider default. Public draft models must use provider metadata.
-  const usesActiveRoute = model === null || isTalkGptLiveModel(model);
+  // A sanitized missing model represents the active route. An explicit reset
+  // stays on public provider-default metadata until the config write is acked.
+  const usesActiveRoute =
+    props.modelDefaultPending !== true && (model === null || isTalkGptLiveModel(model));
+  const publicModel = props.modelDefaultPending ? provider?.defaultModel : model;
   const voices = usesActiveRoute
     ? (provider?.activeVoices ?? provider?.voices ?? [])
-    : (provider?.voicesByModel?.[model] ?? provider?.voices ?? []);
+    : (provider?.voicesByModel?.[publicModel ?? ""] ?? provider?.voices ?? []);
   const unsupported =
     usesActiveRoute &&
     provider?.activeVoiceSelectionPolicy === "allowlist-default" &&

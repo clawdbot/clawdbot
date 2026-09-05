@@ -13,7 +13,10 @@ import "./talk-page.ts";
 import { isTalkGptLiveModel, resolveTalkRealtimeSelection } from "./talk-schema.ts";
 import { renderTalk } from "./talk.ts";
 
-type TalkSettingsPageTestElement = HTMLElement & {
+const ACTIVE_VOICES = ["", "cove", "spruce", "custom-voice"];
+const DEFAULT_VOICES = ["", "marin", "custom-voice"];
+
+type TalkPageElement = HTMLElement & {
   context: ApplicationContext;
   configObject: Record<string, unknown>;
   updateComplete: Promise<boolean>;
@@ -27,6 +30,11 @@ type TalkMutationHarnessOptions = {
     method: string,
     params: Record<string, unknown>,
   ) => Promise<{ triggers: string[] }>;
+  catalogRequest?: (
+    requestIndex: number,
+    catalog: TalkCatalogResult,
+  ) => Promise<TalkCatalogResult> | TalkCatalogResult;
+  configSnapshot?: { hash?: string | null; configRevisionHash?: string | null };
   activeProvider?: string | null;
   activeVoiceSelectionPolicy?: "allowlist-default";
   aliases?: string[];
@@ -38,53 +46,58 @@ type TalkMutationHarnessOptions = {
   transport?: string | null;
   transports?: TalkCatalogResult["transports"];
   unavailable?: boolean;
+  voicesByModel?: Record<string, string[]>;
 };
 
 function createTalkMutationHarness(options: TalkMutationHarnessOptions = {}) {
-  const request = options.unavailable
-    ? vi.fn(async () => {
-        throw new Error("talk.catalog unavailable");
-      })
-    : vi.fn(async (method: string, params: Record<string, unknown>) => {
-        if (method.startsWith("voicewake.") && options.voiceWakeRequest) {
-          return options.voiceWakeRequest(method, params);
-        }
-        return {
-          modes: ["realtime"],
-          transports: ["gateway-relay", "webrtc"],
-          brains: ["agent-consult"],
-          speech: { providers: [] },
-          transcription: { providers: [] },
-          realtime: {
-            ready: true,
-            activeProvider: options.activeProvider ?? "openai",
-            providers: [
-              {
-                id: "openai",
-                label: "OpenAI",
-                configured: true,
-                aliases: options.aliases ?? [],
-                models: [options.defaultModel ?? "gpt-live-test-canary"],
-                voices: ["marin"],
-                activeVoices: ["cove", "spruce"],
-                activeVoiceSelectionPolicy: options.activeVoiceSelectionPolicy,
-                transports: options.transports ?? ["gateway-relay"],
-                defaultModel: options.defaultModel ?? "gpt-live-test-canary",
-              },
-              {
-                id: "xai",
-                label: "xAI",
-                configured: true,
-                aliases: [],
-                models: ["grok-voice"],
-                voices: ["ara"],
-                transports: ["gateway-relay"],
-                defaultModel: "grok-voice",
-              },
-            ],
-          },
-        } satisfies TalkCatalogResult;
-      });
+  const catalog = {
+    modes: ["realtime"],
+    transports: ["gateway-relay", "webrtc"],
+    brains: ["agent-consult"],
+    speech: { providers: [] },
+    transcription: { providers: [] },
+    realtime: {
+      ready: true,
+      activeProvider: options.activeProvider ?? "openai",
+      providers: [
+        {
+          id: "openai",
+          label: "OpenAI",
+          configured: true,
+          aliases: options.aliases ?? [],
+          models: [options.defaultModel ?? "gpt-live-test-canary"],
+          voices: ["marin"],
+          activeVoices: ["cove", "spruce"],
+          activeVoiceSelectionPolicy: options.activeVoiceSelectionPolicy,
+          voicesByModel: options.voicesByModel,
+          transports: options.transports ?? ["gateway-relay"],
+          defaultModel: options.defaultModel ?? "gpt-live-test-canary",
+        },
+        {
+          id: "xai",
+          label: "xAI",
+          configured: true,
+          aliases: [],
+          models: ["grok-voice"],
+          voices: ["ara"],
+          activeVoices: ["xai-active"],
+          transports: ["gateway-relay"],
+          defaultModel: "grok-voice",
+        },
+      ],
+    },
+  } satisfies TalkCatalogResult;
+  let catalogRequestIndex = 0;
+  const request = vi.fn(async (method: string, params: Record<string, unknown>) => {
+    if (method.startsWith("voicewake.") && options.voiceWakeRequest) {
+      return options.voiceWakeRequest(method, params);
+    }
+    if (options.unavailable) {
+      throw new Error("talk.catalog unavailable");
+    }
+    catalogRequestIndex += 1;
+    return await (options.catalogRequest?.(catalogRequestIndex, catalog) ?? catalog);
+  });
   const snapshot: ApplicationGatewaySnapshot = {
     client: { request } as unknown as GatewayBrowserClient,
     phase: "connected",
@@ -103,7 +116,6 @@ function createTalkMutationHarness(options: TalkMutationHarnessOptions = {}) {
     lastError: null,
     lastErrorCode: null,
   };
-  const subscribe = () => () => undefined;
   const gatewayListeners = new Set<() => void>();
   const gatewayConnection = { gatewayUrl: "wss://gateway.example.test" };
   const hello = snapshot.hello;
@@ -122,17 +134,21 @@ function createTalkMutationHarness(options: TalkMutationHarnessOptions = {}) {
       },
     },
   };
+  const runtimeConfigListeners = new Set<() => void>();
   const runtimeConfig = {
     state: {
       configForm,
-      configSnapshot: { hash: "hash" },
+      configSnapshot: options.configSnapshot ?? { hash: "hash" },
       configLoading: false,
       configSaving: false,
       configApplying: false,
     },
     patchForm: vi.fn(),
     removeFormValue: vi.fn(),
-    subscribe,
+    subscribe: (listener: () => void) => {
+      runtimeConfigListeners.add(listener);
+      return () => runtimeConfigListeners.delete(listener);
+    },
   };
   const context = {
     nativeDeviceSettings: options.nativeDeviceSettings ?? null,
@@ -146,7 +162,7 @@ function createTalkMutationHarness(options: TalkMutationHarnessOptions = {}) {
     },
     runtimeConfig,
   } as unknown as ApplicationContext;
-  const page = document.createElement("openclaw-talk-settings") as TalkSettingsPageTestElement;
+  const page = document.createElement("openclaw-talk-settings") as TalkPageElement;
   page.context = context;
   page.configObject = configForm;
   document.body.append(page);
@@ -154,15 +170,32 @@ function createTalkMutationHarness(options: TalkMutationHarnessOptions = {}) {
     page,
     request,
     runtimeConfig,
+    setConfigHash: (hash: string | null) => {
+      runtimeConfig.state.configSnapshot.hash = hash;
+      runtimeConfigListeners.forEach((notify) => notify());
+    },
     setGatewayConnection: (connected: boolean, gatewayUrl = gatewayConnection.gatewayUrl) => {
       gatewayConnection.gatewayUrl = gatewayUrl;
       snapshot.phase = connected ? "connected" : "reconnecting";
       snapshot.hello = connected ? hello : null;
-      for (const notify of gatewayListeners) {
-        notify();
-      }
+      gatewayListeners.forEach((notify) => notify());
     },
   };
+}
+
+function readVoiceOptions(page: HTMLElement): string[] {
+  return [...page.querySelectorAll("select option")].map(
+    (option) => option.getAttribute("value") ?? "",
+  );
+}
+
+function setTalkRealtimeConfig(page: TalkPageElement, realtime: Record<string, unknown>) {
+  page.configObject = { talk: { realtime } };
+}
+
+function expectVoiceState(page: TalkPageElement, options: string[], unsupported: boolean) {
+  expect(readVoiceOptions(page)).toEqual(options);
+  expect(page.textContent?.includes(t("talkPage.voice.unsupportedDefault"))).toBe(unsupported);
 }
 
 async function selectModel(model: string, options: TalkMutationHarnessOptions = {}) {
@@ -414,9 +447,7 @@ describe("Talk device and voice wake settings", () => {
       page.remove();
       gatewayWords = ["other gateway phrase"];
       setGatewayConnection(true, switchGateway ? "wss://other-gateway.example.test" : undefined);
-      const reopened = document.createElement(
-        "openclaw-talk-settings",
-      ) as TalkSettingsPageTestElement;
+      const reopened = document.createElement("openclaw-talk-settings") as TalkPageElement;
       reopened.context = page.context;
       reopened.configObject = page.configObject;
       document.body.append(reopened);
@@ -773,78 +804,126 @@ describe("TalkSettingsPage realtime transport mutation", () => {
         model: null,
       });
       await vi.waitFor(() => expect(request).toHaveBeenCalledWith("talk.catalog", {}));
-      page.configObject = {
-        talk: {
-          realtime: {
-            provider: "openai",
-            speakerVoice: "custom-voice",
-          },
-        },
-      };
+      setTalkRealtimeConfig(page, { provider: "openai", speakerVoice: "custom-voice" });
       await page.updateComplete;
 
       const savedOption = page.querySelector<HTMLOptionElement>('option[value="custom-voice"]');
+      const text = page.textContent ?? "";
       expect(savedOption?.textContent?.includes(t("talkPage.voice.unsupported"))).toBe(
         expectedWarning,
       );
-      expect(page.textContent?.includes(t("talkPage.voice.unsupportedDefault"))).toBe(
-        expectedWarning,
-      );
+      expect(text.includes(t("talkPage.voice.unsupportedDefault"))).toBe(expectedWarning);
     },
   );
 
-  it("uses active-route voices until a public model is drafted, then restores them on reset", async () => {
-    const { page, request, runtimeConfig } = createTalkMutationHarness({
+  it("acknowledges a model reset from the canonical config revision", async () => {
+    const hashCatalog = createDeferred();
+    const { page, request, runtimeConfig, setConfigHash } = createTalkMutationHarness({
       activeVoiceSelectionPolicy: "allowlist-default",
+      configSnapshot: { hash: null, configRevisionHash: "revision-1" },
       defaultModel: "gpt-realtime-2.1",
       model: null,
+      catalogRequest: (requestIndex, catalog) =>
+        requestIndex === 3 ? hashCatalog.promise.then(() => catalog) : catalog,
     });
     await vi.waitFor(() => expect(request).toHaveBeenCalledWith("talk.catalog", {}));
-    page.configObject = {
-      talk: {
-        realtime: {
-          provider: "openai",
-          speakerVoice: "custom-voice",
-        },
-      },
-    };
-    await page.updateComplete;
-    expect(
-      [...page.querySelectorAll("select option")].map((option) => option.getAttribute("value")),
-    ).toEqual(["", "cove", "spruce", "custom-voice"]);
-    expect(page.textContent).toContain(t("talkPage.voice.unsupportedDefault"));
+    setTalkRealtimeConfig(page, { provider: "openai", speakerVoice: "custom-voice" });
+    await page.updateComplete.then(() => expectVoiceState(page, ACTIVE_VOICES, true));
 
-    page.configObject = {
-      talk: {
-        realtime: {
-          provider: "openai",
-          model: "gpt-realtime-2.1",
-          speakerVoice: "custom-voice",
-        },
-      },
-    };
-    await page.updateComplete;
-    expect(
-      [...page.querySelectorAll("select option")].map((option) => option.getAttribute("value")),
-    ).toEqual(["", "marin", "custom-voice"]);
-    expect(page.textContent).not.toContain(t("talkPage.voice.unsupportedDefault"));
+    setTalkRealtimeConfig(page, {
+      provider: "openai",
+      model: "gpt-realtime-2.1",
+      speakerVoice: "custom-voice",
+    });
+    await page.updateComplete.then(() => expectVoiceState(page, DEFAULT_VOICES, false));
 
     page.changeModel(null);
-    expect(runtimeConfig.removeFormValue).toHaveBeenCalledWith(["talk", "realtime", "model"]);
-    page.configObject = {
-      talk: {
-        realtime: {
-          provider: "openai",
-          speakerVoice: "custom-voice",
-        },
-      },
-    };
+    setTalkRealtimeConfig(page, { provider: "openai", speakerVoice: "custom-voice" });
+    await page.updateComplete.then(() => expectVoiceState(page, DEFAULT_VOICES, false));
+
+    window.dispatchEvent(new Event("focus"));
+    await vi.waitFor(() => expect(request).toHaveBeenCalledTimes(2));
+    await page.updateComplete.then(() => expectVoiceState(page, DEFAULT_VOICES, false));
+
+    Object.assign(runtimeConfig.state.configSnapshot, { configRevisionHash: "revision-2" });
+    setConfigHash(null);
+    await vi.waitFor(() => expect(request).toHaveBeenCalledTimes(3));
+    window.dispatchEvent(new Event("focus"));
+    await vi.waitFor(() => expect(request).toHaveBeenCalledTimes(4));
+    await vi.waitFor(() => expectVoiceState(page, ACTIVE_VOICES, true));
+    hashCatalog.resolve();
+    await request.mock.results[2]?.value;
+    expectVoiceState(page, ACTIVE_VOICES, true);
+    expect(request).toHaveBeenCalledTimes(4);
+  });
+
+  it("retains a reset without revisions across stale reads, then clears it on reconnect", async () => {
+    const [staleCatalog, failedCatalog] = [createDeferred(), createDeferred()];
+    const { page, request, setConfigHash, setGatewayConnection } = createTalkMutationHarness({
+      activeVoiceSelectionPolicy: "allowlist-default",
+      configSnapshot: { hash: null, configRevisionHash: null },
+      defaultModel: "gpt-realtime-2.1",
+      model: null,
+      catalogRequest: (requestIndex, catalog) =>
+        requestIndex === 3
+          ? staleCatalog.promise.then(() => catalog)
+          : requestIndex === 4
+            ? failedCatalog.promise.then(() => expect.fail("catalog refresh failed"))
+            : catalog,
+    });
+    await vi.waitFor(() => expect(request).toHaveBeenCalledTimes(1));
+    page.changeModel(null);
+    setTalkRealtimeConfig(page, { provider: "openai", speakerVoice: "custom-voice" });
     await page.updateComplete;
-    expect(
-      [...page.querySelectorAll("select option")].map((option) => option.getAttribute("value")),
-    ).toEqual(["", "cove", "spruce", "custom-voice"]);
-    expect(page.textContent).toContain(t("talkPage.voice.unsupportedDefault"));
-    expect(request).toHaveBeenCalledTimes(1);
+
+    window.dispatchEvent(new Event("focus"));
+    await vi.waitFor(() => expect(request).toHaveBeenCalledTimes(2));
+    expectVoiceState(page, DEFAULT_VOICES, false);
+    setConfigHash("hash-2");
+    await vi.waitFor(() => expect(request).toHaveBeenCalledTimes(3));
+    window.dispatchEvent(new Event("focus"));
+    await vi.waitFor(() => expect(request).toHaveBeenCalledTimes(4));
+    staleCatalog.resolve();
+    await page.updateComplete.then(() => expectVoiceState(page, DEFAULT_VOICES, false));
+
+    setGatewayConnection(false);
+    setConfigHash("hash-3");
+    expectVoiceState(page, DEFAULT_VOICES, false);
+    failedCatalog.resolve();
+    setGatewayConnection(true);
+    await vi.waitFor(() => expect(request).toHaveBeenCalledTimes(5));
+    await vi.waitFor(() => expectVoiceState(page, ACTIVE_VOICES, true));
+  });
+
+  it("clears model reset intent on explicit model, provider, and Gateway changes", async () => {
+    const { page, request, setGatewayConnection } = createTalkMutationHarness({
+      defaultModel: "gpt-realtime-2.1",
+      model: null,
+      voicesByModel: {
+        "gpt-realtime-2.1": ["marin"],
+        "gpt-realtime-alt": ["verse"],
+      },
+    });
+    await vi.waitFor(() => expect(request).toHaveBeenCalledTimes(1));
+
+    page.changeModel(null);
+    page.changeModel("gpt-realtime-alt");
+    setTalkRealtimeConfig(page, { provider: "openai", model: "gpt-realtime-alt" });
+    await page.updateComplete;
+    expect(readVoiceOptions(page)).toEqual(["", "verse"]);
+
+    page.changeModel(null);
+    page.changeProvider("xai");
+    setTalkRealtimeConfig(page, { provider: "xai" });
+    await page.updateComplete;
+    expect(readVoiceOptions(page)).toEqual(["", "xai-active"]);
+
+    page.changeModel(null);
+    await page.updateComplete;
+    expect(readVoiceOptions(page)).toEqual(["", "ara"]);
+    setGatewayConnection(true, "wss://replacement.example.test");
+    await vi.waitFor(() => expect(request).toHaveBeenCalledTimes(2));
+    await vi.waitFor(() => expect(readVoiceOptions(page)).toEqual(["", "xai-active"]));
   });
 
   it("removes forced consult routing when OpenAI GPT-Live keeps gateway relay", async () => {
