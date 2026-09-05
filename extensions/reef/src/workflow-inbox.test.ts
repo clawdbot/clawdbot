@@ -24,7 +24,7 @@ import { createReefRuntimeAuthority } from "./runtime.js";
 import { ReefInboxConnection, type ReefTransportClient } from "./transport.js";
 import type { InboxEntry } from "./types.js";
 import { encodeReefWorkflowMessage, registerReefWorkflowInbox } from "./workflow-inbox.js";
-import { sendReefWorkflowMessage } from "./workflow-runtime.js";
+import { classifyReefWorkflowSendError, sendReefWorkflowMessage } from "./workflow-runtime.js";
 
 const disposers: Array<() => void> = [];
 beforeEach(resetFlowStoresForTests);
@@ -87,6 +87,23 @@ function setup(verdict: Verdict = allow) {
 }
 
 describe("Reef workflow inbox delivery", () => {
+  it.each([
+    { decision: "review", category: "policy", expected: "review-pending" },
+    { decision: "deny", category: "policy", expected: "rejected" },
+    { decision: "deny", category: "guard_failure", expected: "retryable" },
+  ] as const)(
+    "classifies outbound $category/$decision for the application outbox",
+    async ({ decision, category, expected }) => {
+      const s = setup({ ...allow, decision, category });
+      const error = await s.flow
+        .send("alice", "workflow evidence")
+        .catch((failure: unknown) => failure);
+      expect(error).toBeInstanceOf(Error);
+      expect(classifyReefWorkflowSendError(error)).toBe(expected);
+      expect(s.relay.sendEnvelope).not.toHaveBeenCalled();
+    },
+  );
+
   it("commits through the registered inbox before ack and bypasses chat budgets only for workflows", async () => {
     const s = setup();
     const accepted = new Set<string>();
@@ -212,7 +229,7 @@ describe("Reef workflow inbox delivery", () => {
       );
       const task = s.flow.processEntries([await s.entry()]);
       if (decision === "review") {
-      await expect(task).rejects.toThrow("review approval pending");
+        await expect(task).rejects.toThrow("review approval pending");
         expect(s.relay.acknowledge).not.toHaveBeenCalled();
         expect(await s.reviews.list()).toHaveLength(1);
       } else {
@@ -279,6 +296,14 @@ describe("Reef workflow inbox delivery", () => {
         payload: undefined,
       }),
     ).toThrow();
+    // JSON text is escaped a second time inside the encrypted MessageBody.
+    expect(() =>
+      encodeReefWorkflowMessage({
+        protocol: "example.support.v2",
+        messageId: "id",
+        payload: '"'.repeat(10_000),
+      }),
+    ).toThrow("32 KiB");
   });
 
   it("sends the public runtime API through trust, guard, encryption and durable receiving admission", async () => {

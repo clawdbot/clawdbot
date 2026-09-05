@@ -311,7 +311,9 @@ export const reefPlugin: ChannelPlugin<ReefAccount> = {
             peer: message.peer,
             contextKey: `reef:budget:${message.peer}`,
           });
-          throw new ReefInboxEntryParkedError("Reef auto-reply budget exhausted; message remains pending");
+          throw new ReefInboxEntryParkedError(
+            "Reef auto-reply budget exhausted; message remains pending",
+          );
         }
         await dispatchInboundDirectDm({
           channelIngress: "unsupported",

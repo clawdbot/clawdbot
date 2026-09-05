@@ -156,6 +156,11 @@ transportMessageId? })` returns `{ transportMessageId, status: "queued" }`.
   new transport attempt with the same application `messageId`; the receiving
   inbox must deduplicate application operations. Never retry or rephrase a policy
   denial automatically.
+- `classifyReefWorkflowSendError(error)` returns `review-pending`, `rejected`, or
+  `retryable`. Pause the application outbox for either of the first two outcomes;
+  only an explicit owner decision may resume them. Provider outages and transient
+  transport failures are retryable. Review decisions remain available through
+  Reef's existing review commands.
 
 `protocol` is a lowercase identifier of at most 128 characters using letters,
 digits, dots, underscores, or hyphens. `messageId` is a nonempty application

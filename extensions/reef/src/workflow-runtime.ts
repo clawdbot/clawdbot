@@ -1,7 +1,24 @@
+import { z } from "zod";
+import { PipelineError, ProtocolError } from "../protocol/index.js";
+import { isPermanentReefOutboundRejection } from "./flow.js";
 import type { ReefPeerIdentity } from "./friend-types.js";
 import { getActiveReef } from "./runtime.js";
 import { encodeReefWorkflowMessage } from "./workflow-inbox.js";
 export { prepareReefMessageId } from "./flow.js";
+
+/** Review and policy outcomes require an owner decision, never an automatic rewrite. */
+export function classifyReefWorkflowSendError(
+  error: unknown,
+): "review-pending" | "rejected" | "retryable" {
+  if (error instanceof PipelineError && error.reviewOutcome === "pending") {
+    return "review-pending";
+  }
+  return error instanceof ProtocolError ||
+    error instanceof z.ZodError ||
+    isPermanentReefOutboundRejection(error)
+    ? "rejected"
+    : "retryable";
+}
 
 export {
   REEF_WORKFLOW_API_VERSION,

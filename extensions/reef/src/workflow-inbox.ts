@@ -1,11 +1,12 @@
 import { createPluginRuntimeStore } from "openclaw/plugin-sdk/runtime-store";
 import { z } from "zod";
-import { ReefInboxEntryParkedError } from "./transport.js";
+import { canonicalBytes, REEF_MAX_PLAINTEXT_BYTES, TooLargeError } from "../protocol/index.js";
 import {
   ReefPeerIdentitySchema,
   sameReefPeerIdentity,
   type ReefPeerIdentity,
 } from "./friend-types.js";
+import { ReefInboxEntryParkedError } from "./transport.js";
 
 export const REEF_WORKFLOW_API_VERSION = 1;
 const WORKFLOW_PREFIX = "reef-workflow-v1\n";
@@ -76,8 +77,8 @@ export function encodeReefWorkflowMessage(options: {
   payload: unknown;
 }): string {
   const text = WORKFLOW_PREFIX + JSON.stringify(WorkflowEnvelopeSchema.parse(options));
-  if (Buffer.byteLength(text, "utf8") > 32 * 1024) {
-    throw new Error("Reef workflow envelope exceeds 32 KiB; split evidence before sending");
+  if (canonicalBytes({ text }).length > REEF_MAX_PLAINTEXT_BYTES) {
+    throw new TooLargeError("Reef workflow envelope exceeds 32 KiB; split evidence before sending");
   }
   return text;
 }
@@ -100,7 +101,9 @@ export async function acceptReefWorkflowMessage(options: {
   }
   const inbox = registeredInboxes().get(`${parsed.data.protocol}:${options.peer}`);
   if (!inbox?.active || !sameReefPeerIdentity(inbox.expectedPeer, options.identity)) {
-    throw new ReefInboxEntryParkedError("Reef workflow inbox unavailable for this protocol and peer identity");
+    throw new ReefInboxEntryParkedError(
+      "Reef workflow inbox unavailable for this protocol and peer identity",
+    );
   }
   let result: { accepted: boolean };
   try {
@@ -110,10 +113,14 @@ export async function acceptReefWorkflowMessage(options: {
       transportMessageId: options.transportMessageId,
     });
   } catch {
-    throw new ReefInboxEntryParkedError("Reef workflow inbox commit failed; admission remains pending");
+    throw new ReefInboxEntryParkedError(
+      "Reef workflow inbox commit failed; admission remains pending",
+    );
   }
   if (!inbox.active || result?.accepted !== true) {
-    throw new ReefInboxEntryParkedError("Reef workflow admission deferred; durable acceptance is required");
+    throw new ReefInboxEntryParkedError(
+      "Reef workflow admission deferred; durable acceptance is required",
+    );
   }
   return true;
 }

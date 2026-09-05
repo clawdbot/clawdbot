@@ -446,12 +446,14 @@ export class ReefMessageFlow {
     if (!matchesReefPeerIdentity(this.options.trust.get(relayPeer), reefPeerIdentity(friend))) {
       throw new Error("Reef peer identity changed before ingress");
     }
+    this.options.authoritySignal?.throwIfAborted();
     const workflowAccepted = await acceptReefWorkflowMessage({
       text: result.body.text,
       peer: relayPeer,
       identity: reefPeerIdentity(friend),
       transportMessageId: envelope.id,
     });
+    this.options.authoritySignal?.throwIfAborted();
     const budget = autonomyBudget(friend.autonomy);
     if (!workflowAccepted && budget.notifyOnly) {
       await this.options.onOwnerNotice(

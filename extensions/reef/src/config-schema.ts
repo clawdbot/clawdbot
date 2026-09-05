@@ -3,8 +3,8 @@ import {
   registerSensitiveConfigSchema,
 } from "openclaw/plugin-sdk/secret-input";
 import { z } from "zod";
-import { GUARD_RULES_MAX_CHARS } from "../protocol/guard.js";
 import { parseGuardBaseUrl } from "../protocol/guard-endpoint.js";
+import { GUARD_RULES_MAX_CHARS } from "../protocol/guard.js";
 import type { ReefAutonomy } from "./friend-types.js";
 
 const HandleSchema = z.string().regex(/^[a-z0-9][a-z0-9_-]{0,62}$/);

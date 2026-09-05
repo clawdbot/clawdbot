@@ -86,6 +86,7 @@ describe("configured Reef guard", () => {
           baseUrl: `${baseUrl}/v1/`,
           apiKey: "broker-marker",
           reasoningEffort: "medium",
+          rules: { outbound: "Allow sanitized diagnostic workflow envelopes." },
         },
       }),
     );
@@ -102,6 +103,7 @@ describe("configured Reef guard", () => {
         store: false,
         background: false,
         tools: [],
+        instructions: expect.stringContaining("Allow sanitized diagnostic workflow envelopes."),
       },
     });
   });
