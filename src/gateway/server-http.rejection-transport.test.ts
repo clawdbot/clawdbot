@@ -30,7 +30,7 @@ describe("Gateway closing connection admission", () => {
         return true;
       },
     });
-    const wss = new WebSocketServer({ noServer: true });
+    const wss = new WebSocketServer({ noServer: true, maxPayload: MAX_PREAUTH_PAYLOAD_BYTES });
     attachGatewayUpgradeHandler({
       httpServer: server,
       wss,
