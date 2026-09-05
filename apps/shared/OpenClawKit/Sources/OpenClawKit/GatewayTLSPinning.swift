@@ -868,7 +868,9 @@ public final class GatewayTLSPinningSession: NSObject, WebSocketSessioning, URLS
 
         try Task.checkCancellation()
         guard isCurrent() else { throw CancellationError() }
-        let (bytes, response) = try await self.session.bytes(for: request)
+        // AsyncBytes owns a task delegate; without ours, its authentication
+        // handling bypasses the session-level certificate policy.
+        let (bytes, response) = try await self.session.bytes(for: request, delegate: self)
         let expectedLength = response.expectedContentLength
         guard expectedLength < 0 || expectedLength <= Int64(maximumBytes) else {
             bytes.task.cancel()
@@ -913,6 +915,15 @@ public final class GatewayTLSPinningSession: NSObject, WebSocketSessioning, URLS
         // Browser-session headers are origin-bound credentials. Their callers
         // disable redirects so URLSession cannot forward them to a sign-in or HTTP endpoint.
         completionHandler(self.allowsRedirects ? request : nil)
+    }
+
+    public func urlSession(
+        _ session: URLSession,
+        task _: URLSessionTask,
+        didReceive challenge: URLAuthenticationChallenge,
+        completionHandler: @escaping @Sendable (URLSession.AuthChallengeDisposition, URLCredential?) -> Void)
+    {
+        self.urlSession(session, didReceive: challenge, completionHandler: completionHandler)
     }
 
     public func urlSession(
