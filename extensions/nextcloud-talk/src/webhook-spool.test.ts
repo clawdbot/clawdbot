@@ -185,24 +185,6 @@ describe("Nextcloud Talk durable ingress", () => {
     });
   });
 
-  it("releases the shared retry marker instead of completing the claim", async () => {
-    await withQueue(async (queue) => {
-      const delivered: string[] = [];
-      const interrupted = startSpool(queue, async (message) => {
-        delivered.push(message.messageId);
-        throw new Error("room lookup unavailable");
-      });
-      await interrupted.receive(createRawEvent({ messageId: "msg-retry-marker" }));
-      await interrupted.waitForIdle();
-      expect(await queue.listClaims()).toEqual([]);
-      const pending = await queue.listPending({ limit: "all" });
-      expect(pending).toHaveLength(1);
-      expect(pending[0]?.id).toBe("msg-retry-marker");
-      expect(pending[0]?.attempts).toBeGreaterThanOrEqual(1);
-      await interrupted.stop();
-    });
-  });
-
   it("rejects a duplicate after completion", async () => {
     await withQueue(async (queue) => {
       const deliver = vi.fn(async (_message, lifecycle) => {

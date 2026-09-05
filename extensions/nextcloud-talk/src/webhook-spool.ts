@@ -1,7 +1,6 @@
 // Nextcloud Talk plugin module owns durable webhook admission and replay draining.
 import {
   createChannelIngressMonitor,
-  type ChannelIngressMonitorDeliveryResult,
   type ChannelIngressQueue,
   type ChannelIngressMonitorLifecycle,
 } from "openclaw/plugin-sdk/channel-outbound";
@@ -128,7 +127,7 @@ export function createNextcloudTalkWebhookSpool(options: {
   deliver: (
     message: NextcloudTalkInboundMessage,
     lifecycle: NextcloudTalkIngressLifecycle,
-  ) => Promise<ChannelIngressMonitorDeliveryResult | void>;
+  ) => Promise<void>;
   runtime: Pick<RuntimeEnv, "error" | "log">;
   pollIntervalMs?: number;
   adoptionStallTimeoutMs?: number;
@@ -187,7 +186,7 @@ export function createNextcloudTalkWebhookSpool(options: {
       const message = parseClaimedMessage(claim.payload, claim.id, claim.laneKey);
       // The shared monitor translates these lifecycle callbacks into terminal or deferred
       // drain outcomes, including successful no-dispatch policy gates.
-      return await options.deliver(message, lifecycle);
+      await options.deliver(message, lifecycle);
     },
     pollIntervalMs: options.pollIntervalMs ?? NEXTCLOUD_TALK_INGRESS_POLL_INTERVAL_MS,
     retention: {

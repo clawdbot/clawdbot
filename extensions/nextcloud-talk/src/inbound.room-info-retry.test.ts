@@ -3,7 +3,7 @@ import http from "node:http";
 import {
   closeOpenClawStateDatabaseForTest,
   createChannelIngressQueueForTests,
-} from "openclaw/plugin-sdk/plugin-state-test-runtime";
+} from "openclaw/plugin-sdk/channel-ingress-test-runtime";
 import { withTempDir } from "openclaw/plugin-sdk/test-env";
 import { afterEach, describe, expect, it } from "vitest";
 import type { RuntimeEnv } from "../runtime-api.js";
@@ -201,7 +201,7 @@ describe("nextcloud-talk inbound room-kind lookup retry", () => {
     });
 
     expect(logs).toContain(
-      "nextcloud-talk: retry room room-durable-direct after room lookup failure",
+      "nextcloud-talk spooled update msg-proof failed; keeping for retry: Nextcloud Talk room lookup failed (503)",
     );
   });
 
@@ -235,9 +235,7 @@ describe("nextcloud-talk inbound room-kind lookup retry", () => {
         expect(server.requests).toEqual([]);
         expect(await queue.listPending({ limit: "all" })).toEqual([]);
         expect(await queue.listClaims()).toEqual([]);
-        expect(logs).not.toContain(
-          "nextcloud-talk: retry room room-policy-blocked after room lookup failure",
-        );
+        expect(dispatches.count).toBe(0);
       } finally {
         await spool.stop();
       }
@@ -283,9 +281,6 @@ describe("nextcloud-talk inbound room-kind lookup retry", () => {
         expect(server.requests).toEqual([]);
         expect(await queue.listPending({ limit: "all" })).toEqual([]);
         expect(await queue.listClaims()).toEqual([]);
-        expect(logs).not.toContain(
-          "nextcloud-talk: retry room room-invalid-url after room lookup failure",
-        );
       } finally {
         await spool.stop();
       }
