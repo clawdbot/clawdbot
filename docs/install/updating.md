@@ -90,13 +90,17 @@ See [Release channels](/install/development-channels) for channel semantics.
 ### From chat
 
 The OpenClaw owner can say "update" (the agent uses the `gateway` action
-`update.run`) or send `/update`. A normal update sends four messages in that
-chat:
+`update.run`) or send `/update`. Update runs can send these notices in that
+chat as the Gateway observes the recorded milestones:
 
 1. An acknowledgement when the update is accepted.
-2. `⏳ Restarting the gateway now (v<from> → v<to>)…` before restart.
+2. `⏳ Restarting the gateway now (v<from> → v<to>)…` when activation is recorded before the Gateway stops.
 3. `🔁 Back on v<to>, verifying…` when the new Gateway starts verification.
 4. The final report, including successful updates.
+
+Managed systemd or launchd updates can stop the Gateway before an intermediate
+notice is delivered. The complete four-message sequence is not guaranteed for
+those installations; the durable run report remains available after reconnect.
 
 Runs with an internal origin session, including Control UI and webchat, receive
 these notices directly in that session's transcript. Passing only `sessionKey`
