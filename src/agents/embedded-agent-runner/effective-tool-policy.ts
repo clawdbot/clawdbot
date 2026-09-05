@@ -4,7 +4,8 @@
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import type { PluginMetadataSnapshot } from "../../plugins/plugin-metadata-snapshot.types.js";
 import { getPluginToolMeta } from "../../plugins/tool-metadata.js";
-import { TOOL_NAME_SEPARATOR } from "../agent-bundle-mcp-names.js";
+import { safeToolNameGlob, TOOL_NAME_SEPARATOR } from "../agent-bundle-mcp-names.js";
+import type { McpToolCatalogDiagnostic } from "../agent-bundle-mcp-types.js";
 import type { ResolvedConversationCapabilityProfile } from "../conversation-capability-profile.js";
 import {
   buildConversationToolPolicyPipelineSteps,
@@ -102,6 +103,8 @@ export function applyFinalEffectiveToolPolicy(
 export function buildBundleMcpPolicyLayers(params: {
   conversationCapabilityProfile?: ResolvedConversationCapabilityProfile;
   toolsAllow?: string[];
+  /** Names other tools already hold; `buildSafeToolName` renames an MCP tool that collides. */
+  reservedToolNames?: readonly string[];
 }): ToolPolicyLike[] {
   const capabilityProfile = params.conversationCapabilityProfile;
   const allowlist = params.toolsAllow;
@@ -118,28 +121,35 @@ export function buildBundleMcpPolicyLayers(params: {
           includeRuntimeToolPolicy: false,
         }).flatMap((step) => step.policy ?? [])
       : []),
+    // A failed server's tool whose safe name is already taken would have come
+    // out renamed (`-2`), so an exact allow of the taken name admits none of it.
+    ...(params.reservedToolNames ? [{ deny: [...params.reservedToolNames] }] : []),
   ];
 }
 
 /**
- * Whether the effective policy could still admit some tool of one bundle MCP
- * server, keyed by safe server name. A failed catalog load leaves that server's
+ * Whether the effective policy and a failed bundle MCP server's own tool filter
+ * could still admit some tool of that server. A failed catalog load leaves its
  * tool names unknown, so its outage diagnostic is judged from the same allow/deny
  * layers as its tools, with the server namespace standing in for them.
  */
 export function createBundleMcpServerPolicyMatcher(
   layers: readonly ToolPolicyLike[],
-): (safeServerName: string) => boolean {
-  return (safeServerName) => {
+): (diagnostic: Pick<McpToolCatalogDiagnostic, "safeServerName" | "toolFilter">) => boolean {
+  return ({ safeServerName, toolFilter }) => {
     // The failed server materialized no tools, so its namespace stands in for
     // the `bundle-mcp` plugin id every MCP tool carries: `bundle-mcp` and
     // `group:plugins` entries then expand as they do for a healthy server.
     const prefix = `${safeServerName}${TOOL_NAME_SEPARATOR}`;
     const namespaceTools = [`${prefix}*`];
     const groups = { all: namespaceTools, byPlugin: new Map([["bundle-mcp", namespaceTools]]) };
-    return policiesAdmitToolNamespace(
-      prefix,
-      layers.map((policy) => expandPolicyWithPluginGroups(policy, groups)),
-    );
+    // Healthy discovery applies the server's tool filter to raw names first; here
+    // it is one more layer over the safe names those raw names become, judged with
+    // the rest so no layer admits a tool alone. An empty `include` restricts nothing.
+    const toGlob = (pattern: string) => safeToolNameGlob(safeServerName, pattern);
+    return policiesAdmitToolNamespace(prefix, [
+      ...layers.map((policy) => expandPolicyWithPluginGroups(policy, groups)),
+      { allow: toolFilter?.include?.map(toGlob), deny: toolFilter?.exclude?.map(toGlob) },
+    ]);
   };
 }

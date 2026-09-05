@@ -445,6 +445,14 @@ function createServerMcpRuntime(
 ): ServerMcpRuntime {
   const { loaded, fingerprint: computedFingerprint } = params.serverConfig;
   const serverName = params.serverName;
+  // The server's own tool filter rides on the failure diagnostics this runtime
+  // records so outage admission judges it with the tool policy as healthy
+  // discovery does, instead of naming a hidden server. The retirement notice
+  // follows a config change, so this runtime's filter is stale for it.
+  const rawServerConfig = loaded.mcpServers[serverName];
+  const toolFilter = normalizeMcpToolFilter(
+    isRecord(rawServerConfig) ? rawServerConfig.toolFilter : undefined,
+  );
   const configFingerprint = params.configFingerprint ?? computedFingerprint;
   const mcpAppsEnabled = params.cfg?.mcp?.apps?.enabled === true;
   const createdAt = Date.now();
@@ -478,6 +486,8 @@ function createServerMcpRuntime(
         safeServerName: server.safeServerName ?? serverName,
         launchSummary: server.launchSummary,
         message,
+        // Same runtime and config as the tools listed beside it: the filter is current.
+        ...(toolFilter ? { toolFilter } : {}),
       };
     } else {
       invalidateCatalog();
@@ -842,9 +852,6 @@ function createServerMcpRuntime(
           }
         }
         failIfDisposed();
-        const toolFilter = normalizeMcpToolFilter(
-          isRecord(rawServer) ? rawServer.toolFilter : undefined,
-        );
         const denialMap = params.toolOverrides?.mcpToolsDeny;
         const deniedToolNames = new Set(
           denialMap && Object.hasOwn(denialMap, serverName) ? denialMap[serverName] : [],
@@ -940,19 +947,13 @@ function createServerMcpRuntime(
             `bundle-mcp: failed to ${action} server "${serverName}" (${launchDescription}): ${message}`,
           );
         }
-        // Carry the server's own tool filter so outage admission can hide a
-        // fully excluded server (`toolFilter: { exclude: ["*"] }`) the same way
-        // healthy discovery would, instead of leaking its name and error.
-        const failureToolFilter = normalizeMcpToolFilter(
-          isRecord(rawServer) ? rawServer.toolFilter : undefined,
-        );
         const diags: McpToolCatalogDiagnostic[] = [
           {
             serverName,
             safeServerName,
             launchSummary: launchDescription,
             message,
-            ...(failureToolFilter ? { toolFilter: failureToolFilter } : {}),
+            ...(toolFilter ? { toolFilter } : {}),
           },
         ];
         if (!session.connected) {

@@ -10,7 +10,6 @@ import {
   applyEmbeddedAttemptToolsAllow,
   mergeForcedEmbeddedAttemptToolsAllow,
 } from "../embedded-agent-runner/run/attempt-tool-construction-plan.js";
-import { mcpToolFilterCouldExposeTool } from "../mcp-tool-filter.js";
 import { normalizeToolPolicyName } from "../tool-policy.js";
 import { TOOL_SEARCH_CONTROL_TOOL_NAMES } from "../tool-search-types.js";
 import {
@@ -79,9 +78,10 @@ export function createAgentHarnessPromptToolPolicy<T extends NamedTool>(params: 
         isAgentTool(entry.tool) ? getPluginToolMeta(entry.tool) : undefined,
       );
       // A failed server has no entry for the allowlist to keep or drop, so its
-      // outage note is judged by server namespace. The run's layers are judged
-      // with this hook's cap in one decision: each alone can admit a different
-      // tool of the server while no tool satisfies the layers together.
+      // outage note is judged by server namespace. The run's layers, this hook's
+      // cap, and the server's own tool filter are judged in one decision: each
+      // alone can admit a different tool of the server while no tool satisfies
+      // them together.
       const admitsMcpServer = createBundleMcpServerPolicyMatcher([
         ...catalog.mcpDiagnostics.policyLayers,
         ...buildBundleMcpPolicyLayers({ toolsAllow }),
@@ -92,10 +92,8 @@ export function createAgentHarnessPromptToolPolicy<T extends NamedTool>(params: 
         baselineEntries: catalog.entries,
         mcpDiagnostics: {
           ...catalog.mcpDiagnostics,
-          diagnostics: catalog.mcpDiagnostics.diagnostics.filter(
-            (diagnostic) =>
-              admitsMcpServer(diagnostic.safeServerName) &&
-              mcpToolFilterCouldExposeTool(diagnostic.toolFilter),
+          diagnostics: catalog.mcpDiagnostics.diagnostics.filter((diagnostic) =>
+            admitsMcpServer(diagnostic),
           ),
         },
       });

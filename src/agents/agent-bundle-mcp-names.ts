@@ -90,6 +90,28 @@ export function couldMaterializeToolName(name: string, serverPrefix: string): bo
   );
 }
 
+/**
+ * Glob over the normalized names `buildSafeToolName` gives the raw tool names
+ * one MCP tool-filter pattern matches under `safeServerName`: each literal run is
+ * sanitized like a real name and the whole is lowercased like a policy entry.
+ * Accepted hide-side differences: a literal opening with a non-letter (real names
+ * get a `tool-` prefix) or overrunning the name budget maps to a name no real
+ * tool has, so a filter made only of such patterns hides the server's outage; and
+ * the raw filter is case-sensitive while this glob is not, so an `exclude` that
+ * differs from a real tool only by case denies it here yet not in discovery. The
+ * failed server's raw names are unknown, so an `include` stands for every raw
+ * spelling it admits; each lowercase name this glob accepts has one, which keeps
+ * the expose side exact.
+ */
+export function safeToolNameGlob(safeServerName: string, rawPattern: string): string {
+  const glob = rawPattern
+    .trim()
+    .split("*")
+    .map((literal) => literal.replace(TOOL_NAME_SAFE_RE, "-"))
+    .join("*");
+  return normalizeLowercaseStringOrEmpty(`${safeServerName}${TOOL_NAME_SEPARATOR}${glob}`);
+}
+
 /** Build a safe model-facing tool name from server and tool fragments. */
 export function buildSafeToolName(params: {
   serverName: string;

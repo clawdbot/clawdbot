@@ -1,9 +1,5 @@
 import { describe, expect, it } from "vitest";
-import {
-  isMcpToolAllowed,
-  mcpToolFilterCouldExposeTool,
-  normalizeMcpToolFilter,
-} from "./mcp-tool-filter.js";
+import { isMcpToolAllowed, normalizeMcpToolFilter } from "./mcp-tool-filter.js";
 
 describe("isMcpToolAllowed", () => {
   it.each([
@@ -45,28 +41,5 @@ describe("isMcpToolAllowed", () => {
     expect(isMcpToolAllowed(filter, "read_docs")).toBe(true);
     expect(isMcpToolAllowed(filter, "search_docs")).toBe(false);
     expect(isMcpToolAllowed(filter, "read_file")).toBe(false);
-  });
-});
-
-describe("mcpToolFilterCouldExposeTool", () => {
-  it.each([
-    ["no filter", undefined, true],
-    ["include only", { include: ["read_*"] }, true],
-    ["a partial exclude", { exclude: ["dangerous_*"] }, true],
-    ["an all-wildcard exclude", { exclude: ["*"] }, false],
-    ["a repeated-wildcard exclude", { exclude: ["**"] }, false],
-    ["an all-wildcard exclude with surrounding spaces", { exclude: [" * "] }, false],
-    [
-      "an all-wildcard exclude dominating an include",
-      { include: ["read_*"], exclude: ["*"] },
-      false,
-    ],
-    [
-      "an include beside a partial exclude",
-      { include: ["read_*"], exclude: ["read_secret"] },
-      true,
-    ],
-  ])("reports %s as %j", (_label, filter, expected) => {
-    expect(mcpToolFilterCouldExposeTool(filter)).toBe(expected);
   });
 });

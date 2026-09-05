@@ -2,6 +2,7 @@
 import { GetPromptResultSchema } from "@modelcontextprotocol/sdk/types.js";
 import { expectDefined } from "@openclaw/normalization-core";
 import { describe, expect, it } from "vitest";
+import type { McpServerToolFilterConfig } from "../config/types.mcp.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { getPluginToolMeta } from "../plugins/tool-metadata.js";
 import {
@@ -18,6 +19,7 @@ import {
 import { applyEmbeddedAttemptToolsAllow } from "./embedded-agent-runner/run/attempt-tool-construction-plan.js";
 import { splitSdkTools } from "./embedded-agent-runner/tool-split.js";
 import { consumeMcpCodeModeGuestResult } from "./mcp-content.js";
+import { isMcpToolAllowed } from "./mcp-tool-filter.js";
 
 // Regression coverage for #76063. The reporter's evidence was a captured
 // outbound provider request body that contained only built-in OpenClaw tools
@@ -35,10 +37,14 @@ function makeConfiguredRuntime(
   params: {
     serverName?: string;
     toolNames?: string[];
+    /** The server's own `toolFilter`, applied to raw names as the real catalog load does. */
+    toolFilter?: McpServerToolFilterConfig;
   } = {},
 ): SessionMcpRuntime {
   const serverName = params.serverName ?? "userMcp";
-  const toolNames = params.toolNames ?? ["list_inbox", "send_reply"];
+  const toolNames = (params.toolNames ?? ["list_inbox", "send_reply"]).filter((toolName) =>
+    isMcpToolAllowed(params.toolFilter, toolName),
+  );
   const tools: McpCatalogTool[] = toolNames.map((toolName) => ({
     serverName,
     safeServerName: serverName,
@@ -47,6 +53,19 @@ function makeConfiguredRuntime(
     inputSchema: { type: "object", properties: {} },
     fallbackDescription: `${serverName}.${toolName}`,
   }));
+  const catalog = {
+    version: 1 as const,
+    generatedAt: 0,
+    servers: {
+      [serverName]: {
+        serverName,
+        launchSummary: serverName,
+        toolCount: tools.length,
+        ...(params.toolFilter ? { toolFilter: params.toolFilter } : {}),
+      },
+    },
+    tools,
+  };
   return {
     sessionId: "session-request-boundary",
     workspaceDir: "/workspace",
@@ -54,30 +73,8 @@ function makeConfiguredRuntime(
     createdAt: 0,
     lastUsedAt: 0,
     markUsed: () => {},
-    getCatalog: async () => ({
-      version: 1,
-      generatedAt: 0,
-      servers: {
-        [serverName]: {
-          serverName,
-          launchSummary: serverName,
-          toolCount: tools.length,
-        },
-      },
-      tools,
-    }),
-    peekCatalog: () => ({
-      version: 1,
-      generatedAt: 0,
-      servers: {
-        [serverName]: {
-          serverName,
-          launchSummary: serverName,
-          toolCount: tools.length,
-        },
-      },
-      tools,
-    }),
+    getCatalog: async () => catalog,
+    peekCatalog: () => catalog,
     callTool: async () => ({
       content: [{ type: "text", text: "FROM-CONFIG" }],
       isError: false,
@@ -90,11 +87,14 @@ async function buildConfiguredMcpToolNamesAtRequestBoundary(params: {
   cfg: OpenClawConfig;
   serverName?: string;
   toolNames?: string[];
+  toolFilter?: McpServerToolFilterConfig;
   toolsAllow?: string[];
+  reservedToolNames?: string[];
 }): Promise<string[]> {
   const runtime = await createBundleMcpToolRuntime({
     workspaceDir: "/workspace",
     cfg: params.cfg,
+    reservedToolNames: params.reservedToolNames,
     createRuntime: () => makeConfiguredRuntime(params),
   });
   const filtered = applyFinalEffectiveToolPolicy({
@@ -368,13 +368,16 @@ describe("configured MCP tools reach the request boundary (#76063)", () => {
 // (otherwise the model keeps retrying a generic lookup miss), and one who could
 // never reach any memos tool learns nothing about it.
 describe("failed MCP server outages follow the same policy as that server's tools (#137398)", () => {
-  const mcp = { servers: { memos: { command: "node", args: ["memos.mjs"] } } };
   const outageCases: Array<{
     label: string;
     tools?: OpenClawConfig["tools"];
     toolsAllow?: string[];
+    /** The memos server's own `toolFilter`, applied to raw names before any policy layer. */
+    toolFilter?: McpServerToolFilterConfig;
     /** Healthy memos tool names for this row (defaults to `read_note`, `write_note`). */
     toolNames?: string[];
+    /** Names other tools already hold, so a colliding memos tool materializes renamed. */
+    reservedToolNames?: string[];
     visible: boolean;
   }> = [
     { label: "the coding profile", tools: { profile: "coding" }, visible: true },
@@ -631,24 +634,141 @@ describe("failed MCP server outages follow the same policy as that server's tool
       toolsAllow: ["notes__lookup"],
       visible: false,
     },
+    {
+      label: "a server tool filter with an empty include list",
+      tools: { profile: "coding" },
+      toolFilter: { include: [] },
+      visible: true,
+    },
+    {
+      label: "a server tool filter excluding every tool",
+      tools: { profile: "coding" },
+      toolFilter: { exclude: ["*"] },
+      visible: false,
+    },
+    {
+      label: "a server tool filter excluding every tool with a repeated wildcard",
+      tools: { profile: "coding" },
+      toolFilter: { exclude: ["**"] },
+      visible: false,
+    },
+    {
+      label: "a server tool filter excluding every tool with a padded wildcard",
+      tools: { profile: "coding" },
+      toolFilter: { exclude: [" * "] },
+      visible: false,
+    },
+    {
+      label: "a server tool filter excluding tools memos does not have",
+      tools: { profile: "coding" },
+      toolFilter: { exclude: ["send_*"] },
+      visible: true,
+    },
+    {
+      label: "a server tool filter including the read tools",
+      tools: { profile: "coding" },
+      toolFilter: { include: ["read_*"] },
+      visible: true,
+    },
+    {
+      label: "a server tool filter and an allow glob sharing the read tools",
+      tools: { allow: ["memos__read*"] },
+      toolFilter: { include: ["read_*"] },
+      visible: true,
+    },
+    {
+      label: "a server tool filter and an allow glob sharing no memos tool",
+      tools: { allow: ["memos__write*"] },
+      toolFilter: { include: ["read_*"] },
+      visible: false,
+    },
+    {
+      label: "a server tool filter keeping only the memos tool an allowlist drops",
+      tools: { allow: ["memos__read_note", "notes__list"] },
+      toolFilter: { include: ["write_note"] },
+      visible: false,
+    },
+    {
+      label: "a server tool filter excluding the one memos tool an allowlist names",
+      tools: { allow: ["memos__read_note"] },
+      toolFilter: { exclude: ["read_*"] },
+      visible: false,
+    },
+    {
+      label: "a server tool filter whose include and exclude cancel",
+      tools: { profile: "coding" },
+      toolFilter: { include: ["read_*"], exclude: ["read_*"] },
+      visible: false,
+    },
+    {
+      label: "a server tool filter spelled with a space and capitals like the tool it keeps",
+      tools: { allow: ["memos__read-note"] },
+      toolFilter: { include: ["Read Note"] },
+      toolNames: ["Read Note", "write_note"],
+      visible: true,
+    },
+    {
+      label: "a server tool filter keeping a tool whose safe name an allowlist misspells",
+      tools: { allow: ["memos__read_note"] },
+      toolFilter: { include: ["Read Note"] },
+      toolNames: ["Read Note", "read_note"],
+      visible: false,
+    },
+    {
+      label:
+        "a server tool filter excluding, with a space and capitals, the tool an allowlist names",
+      tools: { allow: ["memos__read-note"] },
+      toolFilter: { exclude: ["Read Note"] },
+      toolNames: ["Read Note"],
+      visible: false,
+    },
+    {
+      label: "an allowlist naming a memos tool whose name another tool already holds",
+      tools: { allow: ["memos__read_note"] },
+      reservedToolNames: ["memos__read_note"],
+      visible: false,
+    },
+    {
+      label: "an allow glob reaching a memos tool renamed after a name collision",
+      tools: { allow: ["memos__read*"] },
+      reservedToolNames: ["memos__read_note"],
+      visible: true,
+    },
   ];
 
   it.each(outageCases)("names the memos outage under $label: $visible", async (testCase) => {
-    const config: OpenClawConfig = { ...(testCase.tools ? { tools: testCase.tools } : {}), mcp };
+    const config: OpenClawConfig = {
+      ...(testCase.tools ? { tools: testCase.tools } : {}),
+      mcp: {
+        servers: {
+          memos: {
+            command: "node",
+            args: ["memos.mjs"],
+            ...(testCase.toolFilter ? { toolFilter: testCase.toolFilter } : {}),
+          },
+        },
+      },
+    };
     const admitsMcpServer = createBundleMcpServerPolicyMatcher(
       buildBundleMcpPolicyLayers({
         conversationCapabilityProfile: resolveConversationCapabilityProfile({ config }),
         toolsAllow: testCase.toolsAllow,
+        reservedToolNames: testCase.reservedToolNames,
       }),
     );
     const namesWhenHealthy = await buildConfiguredMcpToolNamesAtRequestBoundary({
       cfg: config,
       serverName: "memos",
       toolNames: testCase.toolNames ?? ["read_note", "write_note"],
+      toolFilter: testCase.toolFilter,
       toolsAllow: testCase.toolsAllow,
+      reservedToolNames: testCase.reservedToolNames,
     });
 
-    expect(admitsMcpServer("memos")).toBe(testCase.visible);
+    // The failed server's diagnostic carries the same filter its healthy catalog
+    // load applied, so both sides of the parity are judged from one config.
+    const diagnostic = { safeServerName: "memos", toolFilter: testCase.toolFilter };
+    expect(admitsMcpServer(diagnostic)).toBe(testCase.visible);
     expect(namesWhenHealthy.length > 0).toBe(testCase.visible);
   });
 });

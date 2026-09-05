@@ -489,7 +489,10 @@ Tool Search should fail closed:
   `unavailableMcpServers` entry naming that server and its redacted failure
   (the in-script `search` keeps returning a plain array), and `tool_describe` /
   `tool_call` for one of its `mcp:<server>:…` ids report the outage instead of
-  an unknown tool, so the model stops searching for tools that cannot appear
+  an unknown tool, so the model stops searching for tools that cannot appear;
+  a failed server no tool of which the effective tool policy and its own
+  `mcp.servers.<name>.toolFilter` could admit together is not reported at all,
+  exactly as none of its tools would have been listed
 - if policy or approval blocks execution, the call result should report that
   block instead of bypassing it
 - if the code bridge cannot create an isolated runtime, use `mode: "tools"` or

@@ -107,9 +107,9 @@ export type McpToolCatalogDiagnostic = {
   safeServerName: string;
   launchSummary: string;
   message: string;
-  // The failed server's own tool filter, carried so outage admission can hide a
-  // server whose entire tool surface is excluded (`toolFilter: { exclude: ["*"] }`)
-  // exactly as healthy discovery would, instead of leaking its name and error.
+  // The failed server's own tool filter, carried so outage admission judges it
+  // together with the tool policy, exactly as healthy discovery would, instead
+  // of leaking the name and error of a server no tool of which could surface.
   toolFilter?: McpServerToolFilterConfig;
 };
 

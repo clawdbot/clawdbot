@@ -64,24 +64,3 @@ export function isMcpToolAllowed(
     !toolFilter?.exclude?.some(matches)
   );
 }
-
-/** A tool filter glob that matches every name: an all-`*` pattern. */
-function isMatchAllToolFilterPattern(pattern: string): boolean {
-  const trimmed = pattern.trim();
-  return trimmed.length > 0 && /^\*+$/.test(trimmed);
-}
-
-/**
- * Whether a failed server's tool filter could still expose a tool when its raw
- * tool names are unknown after a failed catalog load. `include` alone always
- * leaves a matchable name, so only an `exclude` that matches every name — an
- * all-`*` glob — hides the whole surface, and it dominates any `include`. A
- * self-canceling `include`/`exclude` pair is not a shipped filter shape; it is
- * treated as exposing, matching the healthy path's per-name decision. Guards
- * outage disclosure: a fully excluded server must not leak its name and error.
- */
-export function mcpToolFilterCouldExposeTool(
-  toolFilter: McpServerToolFilterConfig | undefined,
-): boolean {
-  return !(toolFilter?.exclude?.some(isMatchAllToolFilterPattern) ?? false);
-}

@@ -8,6 +8,7 @@ import {
 } from "openclaw/plugin-sdk/llm";
 import { Type } from "typebox";
 import { describe, expect, it } from "vitest";
+import type { McpServerToolFilterConfig } from "../config/types.mcp.js";
 import { runAgentLoop, type AgentEvent, type AgentMessage } from "../plugin-sdk/agent-core.js";
 import { materializeBundleMcpToolsForRun } from "./agent-bundle-mcp-materialize.js";
 import type {
@@ -171,7 +172,7 @@ function makeRequesterConnect(serverName: string): RequesterMcpConnect {
 }
 
 /** One healthy server ("notes") plus one whose catalog load failed ("memos"). */
-function makeOutageCatalog(): McpToolCatalog {
+function makeOutageCatalog(memosToolFilter?: McpServerToolFilterConfig): McpToolCatalog {
   return {
     version: 1,
     generatedAt: 0,
@@ -199,6 +200,7 @@ function makeOutageCatalog(): McpToolCatalog {
         safeServerName: "memos",
         launchSummary: LAUNCH_SUMMARY,
         message: RAW_FAILURE_MESSAGE,
+        ...(memosToolFilter ? { toolFilter: memosToolFilter } : {}),
       },
     ],
   };
@@ -672,6 +674,61 @@ describe("Tool Search with an unavailable MCP server", () => {
     // A hook that keeps the memos tool the run kept still names the outage.
     policy.apply({ toolsAllow: ["memos__read_note", "notes__list"] });
     expect((await search.execute("search-shared", { query: "memos" })).details).toMatchObject({
+      unavailableMcpServers: [{ server: "memos", error: FAILURE_MESSAGE }],
+    });
+  });
+
+  it.each([
+    {
+      label: "keeps only a memos tool the run's allowlist drops",
+      toolFilter: { include: ["write_note"] },
+      runToolsAllow: ["memos__read_note", "notes__list"],
+    },
+    {
+      label: "cancels itself",
+      toolFilter: { include: ["read_*"], exclude: ["read_*"] },
+      runToolsAllow: undefined,
+    },
+  ])("hides an outage whose server tool filter $label", async ({ toolFilter, runToolsAllow }) => {
+    // Healthy discovery would expose no memos tool: the server's own filter and
+    // the policy each admit some memos name, none satisfies both. Judged apart
+    // each said yes and the outage leaked; judged together nothing of memos
+    // reaches the restricted catalog or the rendered search result.
+    const { control, catalogRef, tools } = await createControls(
+      makeOutageCatalog(toolFilter),
+      "tools",
+      runToolsAllow,
+    );
+    createAgentHarnessPromptToolPolicy({
+      tools,
+      catalogRef,
+      codeModeControlsEnabled: false,
+    }).apply();
+    expect(catalogRef.current?.mcpDiagnostics).toBeUndefined();
+
+    const miss = await control(TOOL_SEARCH_RAW_TOOL_NAME).execute("search-filtered", {
+      query: "memos",
+    });
+    expect(miss.details).toEqual([]);
+    const text = JSON.stringify(miss);
+    expect(text).not.toContain("failed for this run");
+    expect(text).not.toContain(FAILURE_MESSAGE);
+  });
+
+  it("keeps naming an outage whose server tool filter excludes only other tools", async () => {
+    const { control, catalogRef, tools } = await createControls(
+      makeOutageCatalog({ exclude: ["send_*"] }),
+    );
+    createAgentHarnessPromptToolPolicy({
+      tools,
+      catalogRef,
+      codeModeControlsEnabled: false,
+    }).apply();
+
+    const miss = await control(TOOL_SEARCH_RAW_TOOL_NAME).execute("search-filter-open", {
+      query: "memos",
+    });
+    expect(miss.details).toMatchObject({
       unavailableMcpServers: [{ server: "memos", error: FAILURE_MESSAGE }],
     });
   });

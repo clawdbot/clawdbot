@@ -2191,16 +2191,21 @@ process.on("SIGINT", shutdown);`,
       listToolsJsonRpcErrorMessage: "Unknown method",
     });
 
-    const runtime = await makeStdioRuntime("session-tools-unknown-method", "notes", serverPath);
+    const runtime = await makeStdioRuntime("session-tools-unknown-method", "notes", serverPath, {
+      server: { toolFilter: { exclude: ["unused_*"] } },
+    });
 
     try {
       const catalog = await runtime.getCatalog();
 
       expect(catalog.servers).toEqual({});
       expect(catalog.tools).toEqual([]);
+      // The failure diagnostic carries the server's own tool filter so outage
+      // admission can judge it together with the tool policy.
       expect(catalog.diagnostics?.[0]).toMatchObject({
         serverName: "notes",
         message: expect.stringContaining("Unknown method"),
+        toolFilter: { exclude: ["unused_*"] },
       });
       await waitForFileText(logPath, "recv tools/list", LIST_TOOLS_SERVER_LOG_TIMEOUT_MS);
     } finally {

@@ -4,6 +4,7 @@ import {
   buildSafeToolName,
   couldMaterializeToolName,
   normalizeReservedToolNames,
+  safeToolNameGlob,
   sanitizeNodeIdFragment,
   sanitizeServerName,
   TOOL_NAME_SEPARATOR,
@@ -91,5 +92,36 @@ describe("agent bundle MCP names", () => {
     for (const name of ["memos__1note", "memos__-note", `memos__${"n".repeat(60)}`, "memos__"]) {
       expect(couldMaterializeToolName(name, "memos__")).toBe(false);
     }
+  });
+
+  it.each([
+    { pattern: "read_*", expected: "memos__read_*" },
+    { pattern: " Read Note ", expected: "memos__read-note" },
+    { pattern: "a**b", expected: "memos__a**b" },
+    { pattern: "*", expected: "memos__*" },
+    { pattern: "", expected: "memos__" },
+  ])(
+    "maps the tool-filter pattern $pattern onto normalized safe names",
+    ({ pattern, expected }) => {
+      expect(safeToolNameGlob("Memos", pattern)).toBe(expected);
+    },
+  );
+
+  it("maps a literal filter pattern onto the name buildSafeToolName gives that tool", () => {
+    const reservedNames = new Set<string>();
+    const emitted = buildSafeToolName({
+      serverName: "memos",
+      toolName: "Read Note",
+      reservedNames,
+    });
+    expect(safeToolNameGlob("memos", "Read Note")).toBe(emitted.toLowerCase());
+  });
+
+  it("maps a non-letter-led filter literal to a name buildSafeToolName never emits", () => {
+    // Accepted hide-side difference: the real name gains a `tool-` prefix.
+    const reservedNames = new Set<string>();
+    const emitted = buildSafeToolName({ serverName: "memos", toolName: "1note", reservedNames });
+    expect(emitted).toBe("memos__tool-1note");
+    expect(couldMaterializeToolName(safeToolNameGlob("memos", "1note"), "memos__")).toBe(false);
   });
 });

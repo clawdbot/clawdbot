@@ -299,6 +299,11 @@ describe("prepareEmbeddedAttemptBundleTools", () => {
     expect(mocks.createBundleLspToolRuntime).toHaveBeenCalledWith(
       expect.objectContaining({ reservedToolNames: ["message", "client_allowed"] }),
     );
+    // The same taken names reach the outage layers: a failed server's tool of
+    // that name would have materialized renamed, so an exact allow admits none.
+    expect(mocks.buildBundleMcpPolicyLayers).toHaveBeenCalledWith(
+      expect.objectContaining({ reservedToolNames: ["message", "client_allowed"] }),
+    );
   });
 
   it("carries recorded MCP catalog failures alongside the materialized tools", async () => {
@@ -320,35 +325,9 @@ describe("prepareEmbeddedAttemptBundleTools", () => {
     // The layers that admitted them ride along: a later prompt-hook cap can only
     // judge the failed server against its own cap and these together.
     expect(result.mcpDiagnostics).toEqual({ diagnostics, policyLayers: runPolicyLayers });
-    // Server-level visibility is decided by the safe server name the tool
-    // namespace is built from, not by a fabricated stand-in tool.
-    expect(mocks.admitsMcpServer).toHaveBeenCalledWith("memos");
-  });
-
-  it("drops a recorded MCP failure whose tool filter excludes every tool", async () => {
-    const input = createInput([], []);
-    input.attempt.config = { plugins: { enabled: false } };
-    mocks.acquireSessionMcpRuntime.mockResolvedValue({ runtime: {}, releaseLease: () => {} });
-    mocks.materializeBundleMcpToolsForRun.mockResolvedValue({
-      tools: [],
-      diagnostics: [
-        {
-          serverName: "memos",
-          safeServerName: "memos",
-          launchSummary: "memos",
-          message: "connect ECONNREFUSED",
-          toolFilter: { exclude: ["*"] },
-        },
-      ],
-    });
-    // The policy would admit the server namespace, but its own tool filter
-    // excludes every tool, so healthy discovery exposes nothing and the outage
-    // must not leak the server name and error either.
-    mocks.admitsMcpServer.mockReturnValue(true);
-
-    const result = await prepareEmbeddedAttemptBundleTools(input);
-
-    expect(result.mcpDiagnostics).toEqual({ diagnostics: [], policyLayers: runPolicyLayers });
+    // Server-level visibility is decided from the recorded failure itself (its
+    // safe server name and tool filter), not by a fabricated stand-in tool.
+    expect(mocks.admitsMcpServer).toHaveBeenCalledWith(diagnostics[0]);
   });
 
   it("drops recorded MCP catalog failures for servers the policy hides", async () => {
