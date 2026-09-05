@@ -93,22 +93,35 @@ export async function querySessionReference(
   let pending = cache.get(cacheKey);
   if (!pending || pending.controller.signal.aborted) {
     const controller = new AbortController();
+    const { hello } = context.gateway.snapshot;
+    const isCurrent = () =>
+      context.gateway.snapshot.phase === "connected" &&
+      context.gateway.snapshot.client === client &&
+      context.gateway.snapshot.hello === hello;
     pending = {
       controller,
-      promise: Promise.resolve()
-        .then(() => {
-          controller.signal.throwIfAborted();
-          return client.request<SessionsResolveResult>("sessions.resolve", {
+      promise: Promise.resolve().then(async () => {
+        controller.signal.throwIfAborted();
+        if (!isCurrent()) {
+          return null;
+        }
+        try {
+          const result = await client.request<SessionsResolveResult>("sessions.resolve", {
             reference: { key: search.key, ...(search.slug ? { slug: search.slug } : {}) },
             agentId: search.agentId,
             includeGlobal: true,
             includeUnknown: true,
             allowMissing: true,
           });
-        })
-        .then(sessionReferenceResolution)
-        // Literal routes remain usable when their best-effort discovery is unavailable.
-        .catch(() => null),
+          return isCurrent() ? sessionReferenceResolution(result) : null;
+        } catch (error) {
+          // Reconnects abandon old discovery; current failures belong to the route's error view.
+          if (!isCurrent()) {
+            return null;
+          }
+          throw error;
+        }
+      }),
       subscribers: new Set(),
     };
     cache.set(cacheKey, pending);

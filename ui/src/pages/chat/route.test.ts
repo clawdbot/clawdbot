@@ -155,7 +155,12 @@ describe("loadChatRoute", () => {
     ];
     const { context, request } = contextFor({
       ok: false,
-      candidates: rows.map((session) => ({ ...session, agentId: session.key.split(":")[1]! })),
+      candidates: rows.map((session) => ({
+        key: session.key,
+        agentId: session.key.split(":")[1]!,
+        displayName: session.displayName ?? undefined,
+        boardFace: session.boardFace ?? undefined,
+      })),
     });
     const ambiguous = await loadChatRoute(
       context,

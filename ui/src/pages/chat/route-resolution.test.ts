@@ -215,27 +215,6 @@ describe("gateway-backed session route resolution", () => {
     });
   });
 
-  it("keeps a preference-derived main route usable when its optional lookup is unavailable", async () => {
-    const { context } = contextFor(new Error("lookup unavailable"));
-    const target = sessionNavigationTarget({
-      context,
-      face: "chat",
-      sessionKey: "agent:roboclaw:main",
-      preferenceDerivedFace: true,
-    });
-
-    await expect(
-      loadChatRoute(context, targetLocation(target), "chat", new AbortController().signal),
-    ).resolves.toEqual({
-      kind: "session",
-      sessionKey: "agent:roboclaw:main",
-      draft: undefined,
-      face: "chat",
-      canonicalLocation: { pathname: "/chat/roboclaw", search: "", hash: "" },
-      canonicalLocationSource: targetLocation(target),
-    });
-  });
-
   it("applies face canonicalization through the router's normalized location", async () => {
     const dashboardRow = row({ boardFace: "dashboard" });
     const { context } = contextFor();
@@ -440,7 +419,12 @@ describe("gateway-backed session route resolution", () => {
     ];
     const { context, list, request } = contextFor({
       ok: false,
-      candidates: rows.map((session) => ({ ...session, agentId: session.key.split(":")[1]! })),
+      candidates: rows.map((session) => ({
+        key: session.key,
+        agentId: session.key.split(":")[1]!,
+        displayName: session.displayName ?? undefined,
+        boardFace: session.boardFace ?? undefined,
+      })),
     });
     const loaded = await loadChatRoute(
       context,
@@ -988,22 +972,46 @@ describe("gateway-backed session route resolution", () => {
     expect(list).not.toHaveBeenCalled();
   });
 
-  it("keeps an authoritative literal usable when best-effort lookup is unavailable", async () => {
-    const { context, list, request } = contextFor(new Error("lookup unavailable"));
-    const loaded = await loadChatRoute(
-      context,
-      { pathname: "/chat/roboclaw/existing-literal", search: "", hash: "" },
-      "chat",
-      new AbortController().signal,
-    );
-
-    expect(loaded).toEqual({
-      kind: "session",
-      sessionKey: "agent:roboclaw:existing-literal",
-      draft: undefined,
-      face: "chat",
-    });
+  it.each([
+    { pathname: "/chat/roboclaw", search: `?${SESSION_FACE_PREFERENCE_PARAM}=1` },
+    { pathname: "/chat/roboclaw/existing-literal", search: "" },
+  ])("surfaces current reference lookup errors for $pathname", async ({ pathname, search }) => {
+    const error = new Error("lookup unavailable");
+    const { context, list, request } = contextFor(error);
+    await expect(
+      loadChatRoute(context, { pathname, search, hash: "" }, "chat", new AbortController().signal),
+    ).rejects.toBe(error);
     expect(request).toHaveBeenCalledOnce();
     expect(list).not.toHaveBeenCalled();
   });
+
+  it.each(["response", "error"] as const)(
+    "ignores an obsolete connection's reference %s",
+    async (outcome) => {
+      const { context, list } = contextFor();
+      const pending = createDeferred<SessionsResolveResult>();
+      const request = vi.fn(() => pending.promise);
+      (context.gateway.snapshot.client as unknown as { request: typeof request }).request = request;
+      const navigation = loadChatRoute(
+        context,
+        { pathname: "/chat/roboclaw/existing-literal", search: "", hash: "" },
+        "chat",
+        new AbortController().signal,
+      );
+      await vi.waitFor(() => expect(request).toHaveBeenCalledOnce());
+      context.gateway.snapshot.client = {} as NonNullable<typeof context.gateway.snapshot.client>;
+      if (outcome === "response") {
+        pending.resolve({ ok: true, key: sessionKey, agentId: "roboclaw" });
+      } else {
+        pending.reject(new Error("obsolete connection"));
+      }
+      await expect(navigation).resolves.toEqual({
+        kind: "session",
+        sessionKey: "agent:roboclaw:existing-literal",
+        draft: undefined,
+        face: "chat",
+      });
+      expect(list).not.toHaveBeenCalled();
+    },
+  );
 });
