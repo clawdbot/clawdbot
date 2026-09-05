@@ -413,10 +413,57 @@ describe("shouldRunMemoryFlush", () => {
 });
 
 describe("shouldRunPreflightCompaction", () => {
-  it("ignores stale cached totals when no projected token count is provided", () => {
+  it("does not trigger when a stale cached total stays under the threshold after the safety factor", () => {
+    // Stale 96k * 0.8 = 76.8k < 93k threshold → gate stays closed.
     expect(
       shouldRunPreflightCompaction({
-        entry: { totalTokens: 96_000, totalTokensFresh: false },
+        entry: { totalTokens: 96_000, totalTokensFresh: false, totalTokensVersion: 1 },
+        threshold: 93_000,
+      }),
+    ).toBe(false);
+  });
+
+  it("triggers from a versioned stale persisted total at the safety factor during a provider outage", () => {
+    // #138871: with no fresh total and no projected count, a *versioned* stale
+    // persisted total (478k, version 1, fresh=false — a frozen snapshot from
+    // before the outage) * 0.8 = 382k still clears the 140k threshold, so the
+    // gate no longer goes blind during provider outages.
+    expect(
+      shouldRunPreflightCompaction({
+        entry: { totalTokens: 478_000, totalTokensFresh: false, totalTokensVersion: 1 },
+        threshold: 140_000,
+      }),
+    ).toBe(true);
+  });
+
+  it("ignores unversioned legacy cumulative totals even when they cross the threshold", () => {
+    // Legacy CLI cumulative totals (no totalTokensVersion) historically
+    // over-count retries and are not comparable to a fresh context snapshot;
+    // the stale fallback does not apply to them.
+    expect(
+      shouldRunPreflightCompaction({
+        entry: { totalTokens: 478_000, totalTokensFresh: false },
+        threshold: 140_000,
+      }),
+    ).toBe(false);
+  });
+
+  it("does not trigger when no persisted total is available", () => {
+    expect(
+      shouldRunPreflightCompaction({
+        entry: { totalTokens: undefined, totalTokensFresh: false, totalTokensVersion: 1 },
+        threshold: 93_000,
+      }),
+    ).toBe(false);
+  });
+
+  it("prefers a fresh total over the stale fallback", () => {
+    // Fresh total 10 wins over the stale 478k fallback (which at 0.8 would
+    // have been 382k and crossed the 93k threshold). Because fresh wins, the
+    // gate uses 10, which stays under the threshold.
+    expect(
+      shouldRunPreflightCompaction({
+        entry: { totalTokens: 10, totalTokensFresh: true, totalTokensVersion: 1 },
         threshold: 93_000,
       }),
     ).toBe(false);
