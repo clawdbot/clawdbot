@@ -131,6 +131,8 @@ extension OnboardingAISetupModel {
         let authOptions: [AuthOption]?
         let prepareOptions: [PrepareOption]?
         let recommendedInstalls: [RecommendedInstall]?
+        let nativeSessionCatalogs: [NativeSessionCatalog]?
+        let nativeSessionCatalogPreferenceRequired: Bool?
         let configuredModel: String?
         let setupComplete: Bool?
 
@@ -273,6 +275,14 @@ extension OnboardingAISetupModel {
         let brandId: String?
     }
 
+    struct NativeSessionCatalog: Identifiable, Equatable, Decodable {
+        let pluginId: String
+        let label: String
+        let detail: String?
+
+        var id: String { self.pluginId }
+    }
+
     struct PrepareOption: Identifiable, Equatable, Decodable {
         let id: String
         let label: String
@@ -357,6 +367,10 @@ extension OnboardingAISetupModel {
         return false
     }
 
+    var nativeSessionCatalogSummary: String {
+        self.nativeSessionCatalogs.map(\.label).formatted(.list(type: .and))
+    }
+
     var isBusy: Bool {
         self.phase == .detecting || self.phase == .testing || self.manualTesting || self.authBusy ||
             self.pendingActivationVerification
@@ -368,6 +382,15 @@ extension OnboardingAISetupModel {
     }
 
     func startProviderAuth(_ option: AuthOption) {
+        if option.kind == "custom", self.connectionModeProvider() == .remote {
+            self.clearProviderAuth()
+            self.activeAuthOption = option
+            self.providerWizardKind = .auth
+            self.authError = Failure(
+                summary: "Set up this endpoint on the Gateway host.",
+                detail: "For security, OpenClaw will not collect a remote Gateway credential on this Mac. On the Gateway host, run `openclaw onboard --auth-choice custom-api-key`, finish the endpoint wizard there, then return here and choose Try again.")
+            return
+        }
         self.startProviderWizard(option, kind: .auth)
     }
 
@@ -382,8 +405,7 @@ extension OnboardingAISetupModel {
         self.advanceProviderAuth(stepID: step.id, value: value)
     }
 
-    /// Candidates the automatic ladder may try: skip definitively logged-out
-    /// installs and anything already attempted.
+    /// Retained for deterministic presentation tests; startup never calls this.
     func autoCandidateAfter(kind: String?) -> Candidate? {
         let startIndex: Int = if let kind, let index = candidates.firstIndex(where: { $0.kind == kind }) {
             index + 1

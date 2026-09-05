@@ -948,6 +948,41 @@ private func inspectAISetupSurface(
 @Suite(.serialized)
 @MainActor
 struct OnboardingAISetupTests {
+    @Test func `detection never activates the first candidate`() async throws {
+        let recorder = AISetupRequestRecorder()
+        let session = makeAISetupSession(recorder: recorder, detectedKind: "codex-cli")
+        let gateway = try makeAISetupGateway(
+            url: #require(URL(string: "ws://example.invalid")),
+            session: session)
+        let model = makeAISetupModel(gateway: gateway)
+
+        await model.detectConnections()
+
+        #expect(await recorder.snapshot().methods == ["openclaw.setup.detect"])
+        #expect(model.candidates.map(\.kind) == ["codex-cli"])
+        #expect(model.selectedKind == nil)
+        #expect(model.phase == .ready)
+    }
+
+    @Test func `remote custom endpoint shows host-side credential handoff`() {
+        let model = makeAISetupModel(connectionModeProvider: { .remote })
+        let option = OnboardingAISetupModel.AuthOption(
+            id: "custom-api-key",
+            brandId: "custom",
+            label: "Custom OpenAI/Anthropic-compatible endpoint",
+            hint: nil,
+            groupLabel: nil,
+            icon: nil,
+            website: nil,
+            kind: "custom",
+            featured: false)
+
+        model.startProviderAuth(option)
+
+        #expect(model.activeAuthOption == option)
+        #expect(model.authError?.detail?.contains("openclaw onboard --auth-choice custom-api-key") == true)
+        #expect(!model.authBusy)
+    }
     @Test func `candidate failure keeps friendly summary and exact detail`() {
         let failure = OnboardingAISetupModel.failure(
             label: "Codex CLI",
@@ -1262,6 +1297,8 @@ struct OnboardingAISetupTests {
                 model.manualProviderID = "openai-api-key"
                 model.manualKey = "fixture-key"
                 await model.submitManualKey()?.value
+            } else {
+                await model.activate(kind: "codex-cli")
             }
             activationSettled = true
         }
@@ -1490,7 +1527,8 @@ struct OnboardingAISetupTests {
         let gateway = try makeAISetupGateway(url: #require(URL(string: "ws://example.invalid")), session: session)
         let defaults = try #require(isolatedAISetupDefaults(prefix: "ActivationCancelTerminalRace"))
         let model = makeAISetupModel(gateway: gateway, defaults: defaults)
-        let activation = Task { await model.detectConnections() }
+        await model.detectConnections()
+        let activation = Task { await model.activate(kind: "codex-cli") }
         defer {
             model.resetForGatewayChange()
             activation.cancel()
@@ -1617,7 +1655,8 @@ struct OnboardingAISetupTests {
         model.onPendingActivationDeadline = { deadline, _ in scheduledDeadlines.append(deadline) }
         var handoffs = 0
         model.onConnected = { handoffs += 1 }
-        let activation = Task { await model.detectConnections() }
+        await model.detectConnections()
+        let activation = Task { await model.activate(kind: "codex-cli") }
         defer {
             model.resetForGatewayChange()
             activation.cancel()
@@ -1736,7 +1775,9 @@ struct OnboardingAISetupTests {
         let model = harness.model(defaults: defaults)
         let activation = Task {
             await model.detectConnections()
-            if kind != .activation {
+            if kind == .activation {
+                await model.activate(kind: "codex-cli")
+            } else {
                 model.startProviderWizard(
                     OnboardingAISetupModel.AuthOption(
                         id: "test-provider", brandId: nil, label: "Test provider", hint: nil,
@@ -1801,7 +1842,8 @@ struct OnboardingAISetupTests {
                     capabilities: ["openclaw-setup-model-ref"]))
             })
         let model = harness.model()
-        let activation = Task { await model.detectConnections() }
+        await model.detectConnections()
+        let activation = Task { await model.activate(kind: "codex-cli") }
         defer { activation.cancel() }
 
         await startGate.waitUntilStarted()
@@ -3126,7 +3168,7 @@ struct OnboardingAISetupTests {
         }
     }
 
-    @Test func `implicit model label falls through verification to automatic setup`() async throws {
+    @Test func `implicit model label falls through verification to explicit choices`() async throws {
         let defaults = try #require(isolatedAISetupDefaults(prefix: "OnboardingImplicitModelTests"))
         let recorder = AISetupRequestRecorder()
         let session = makeAISetupRequestSession(recorder: recorder) { task, request in
@@ -3164,23 +3206,16 @@ struct OnboardingAISetupTests {
             knownVisible: true,
             knownAISetupPage: true))
         await probe.value
-        for _ in 0..<200 {
-            if view.aiSetup.connected {
-                break
-            }
-            try? await Task.sleep(nanoseconds: 5_000_000)
-        }
 
-        #expect(view.aiSetup.connected)
-        #expect(view.aiSetup.selectedKind == "claude-cli")
-        #expect(view.finishState.didFinish)
-        // Fresh activation hands off to the custodian first-run flow.
-        #expect(handoffs == [.custodianOnboarding])
+        #expect(!view.aiSetup.connected)
+        #expect(view.aiSetup.selectedKind == nil)
+        #expect(view.aiSetup.phase == .ready)
+        #expect(!view.finishState.didFinish)
+        #expect(handoffs.isEmpty)
         #expect(await (recorder.snapshot()).methods == [
             "agents.list",
             "openclaw.setup.verify",
             "openclaw.setup.detect",
-            "openclaw.setup.activate",
         ])
     }
 
@@ -4768,7 +4803,7 @@ struct OnboardingAISetupTests {
         #expect(beforePersistence == afterPersistence)
     }
 
-    @Test(arguments: ["automatic", "selected", "manual"], [false, true])
+    @Test(arguments: ["selected", "manual"], [false, true])
     func `setup admission failure releases only confirmed unadmitted activations`(
         entry: String,
         confirmedBusy: Bool) async throws
@@ -4784,7 +4819,7 @@ struct OnboardingAISetupTests {
                     return detectedSetupResponse(id: request.id)
                 }
                 let response = selectableCandidatesDetectedSetupResponse(id: request.id)
-                return entry == "automatic" ? response : Data(String(decoding: response, as: UTF8.self)
+                return Data(String(decoding: response, as: UTF8.self)
                     .replacingOccurrences(of: #""credentials":true"#, with: #""credentials":false"#).utf8)
             case "openclaw.setup.activate":
                 await observation.record(UserDefaults(suiteName: suiteName).map { isPending($0) } == true)
@@ -4804,7 +4839,7 @@ struct OnboardingAISetupTests {
         if entry == "manual" {
             model.manualKey = "test-key-placeholder"
             await model.submitManualKey()?.value
-        } else if entry == "selected" {
+        } else {
             await model.activate(kind: "codex-cli")
         }
 
@@ -4942,7 +4977,8 @@ struct OnboardingAISetupTests {
         var handoffCount = 0
         model.onConnected = { handoffCount += 1 }
 
-        let automatic = Task { await model.detectConnections() }
+        await model.detectConnections()
+        let firstAttempt = Task { await model.activate(kind: "codex-cli") }
         await firstActivation.waitUntilStarted()
         model.userSelect(kind: "claude-cli")
 
@@ -4951,7 +4987,7 @@ struct OnboardingAISetupTests {
         #expect(model.statuses["claude-cli"] == .testing)
         _ = await waitForAISetupRequests(harness.recorder, count: 3)
         await firstActivation.release()
-        await automatic.value
+        await firstAttempt.value
         for _ in 0..<400 where !model.connected && !model.waitingForPendingActivationDeadline {
             try? await Task.sleep(nanoseconds: 5_000_000)
         }
@@ -4993,7 +5029,8 @@ struct OnboardingAISetupTests {
         }
         let model = harness.model(defaults: defaults)
 
-        let automatic = Task { await model.detectConnections() }
+        await model.detectConnections()
+        let selected = Task { await model.activate(kind: "codex-cli") }
         await activation.waitUntilStarted()
         let owner = try #require(storedActivationOwner(defaults))
         model.userSelect(kind: "codex-cli")
@@ -5007,10 +5044,10 @@ struct OnboardingAISetupTests {
             "openclaw.setup.activate",
         ])
         await activation.release()
-        await automatic.value
+        await selected.value
     }
 
-    @Test func `user pick after exhausted auto candidates clears the stale verdict`() async throws {
+    @Test func `failed explicit candidate can be retried without selecting another provider`() async throws {
         let defaults = try #require(isolatedAISetupDefaults(prefix: "OnboardingExhaustedRetryTests"))
         let attempts = AISetupSocketGeneration()
         let url = try #require(URL(string: "ws://example.invalid"))
@@ -5018,7 +5055,7 @@ struct OnboardingAISetupTests {
             switch request.method {
             case "openclaw.setup.detect":
                 selectableCandidatesDetectedSetupResponse(id: request.id)
-            case "openclaw.setup.activate" where attempts.claim() < 2:
+            case "openclaw.setup.activate" where attempts.claim() < 1:
                 failedActivationResponse(id: request.id)
             case "openclaw.setup.activate":
                 successfulActivationResponse(
@@ -5032,13 +5069,12 @@ struct OnboardingAISetupTests {
         let model = harness.model(defaults: defaults)
 
         await model.detectConnections()
-        #expect(model.exhaustedAutoCandidates)
+        model.userSelect(kind: "codex-cli")
+        await waitForAISetupState { model.phase == .ready }
         #expect(!model.connected)
+        #expect(model.statuses["claude-cli"] == .untried)
 
         model.userSelect(kind: "codex-cli")
-        // The retest owns the verdict from the moment it starts; the stale
-        // "none of the found options worked" card must not outlive the pick.
-        #expect(!model.exhaustedAutoCandidates)
         for _ in 0..<400 where !model.connected {
             try? await Task.sleep(nanoseconds: 5_000_000)
         }
@@ -5065,6 +5101,8 @@ struct OnboardingAISetupTests {
         let model = harness.model(defaults: defaults)
 
         await model.detectConnections()
+        model.userSelect(kind: "codex-cli")
+        await waitForAISetupState { model.connected }
         model.userSelect(kind: "claude-cli")
         await settleQueuedAISetupTasks()
 
@@ -5100,7 +5138,8 @@ struct OnboardingAISetupTests {
         }
         let model = harness.model(defaults: defaults)
 
-        let automatic = Task { await model.detectConnections() }
+        await model.detectConnections()
+        let firstAttempt = Task { await model.activate(kind: "codex-cli") }
         await firstActivation.waitUntilStarted()
         let supersededOwner = try #require(storedActivationOwner(defaults))
         guard case let .activating(supersededDeadline) = pendingState(defaults) else {
@@ -5121,7 +5160,7 @@ struct OnboardingAISetupTests {
         #expect(isOwned(by: replacementOwner, defaults: defaults))
         await firstActivation.release()
         await secondActivation.release()
-        await automatic.value
+        await firstAttempt.value
         for _ in 0..<200 where isPending(defaults) {
             try? await Task.sleep(nanoseconds: 5_000_000)
         }
@@ -5218,14 +5257,14 @@ struct OnboardingAISetupTests {
         #expect(!model.manualTesting)
     }
 
-    @Test func `automatic activation rejects an auth-token change before dispatch`() async throws {
+    @Test func `selected activation rejects an auth-token change before dispatch`() async throws {
         let tempDir = FileManager.default.temporaryDirectory
             .appendingPathComponent(UUID().uuidString, isDirectory: true)
         try FileManager.default.createDirectory(at: tempDir, withIntermediateDirectories: true)
         defer { try? FileManager.default.removeItem(at: tempDir) }
 
         try await DeviceIdentityStore.withStateDirectory(tempDir) {
-            let defaults = try #require(isolatedAISetupDefaults(prefix: "OnboardingAutomaticActivationTokenTests"))
+            let defaults = try #require(isolatedAISetupDefaults(prefix: "OnboardingSelectedActivationTokenTests"))
             let url = try #require(URL(string: "ws://example.invalid"))
             let config = AISetupGatewayConfig(url: url, token: "token-a")
             let recorder = AISetupRequestRecorder()
@@ -5678,7 +5717,8 @@ struct OnboardingAISetupTests {
             let model = view.aiSetup
             var handoffs = 0
             model.onConnected = { handoffs += 1 }
-            let activation = Task { await model.detectConnections() }
+            await model.detectConnections()
+            let activation = Task { await model.activate(kind: "claude-cli") }
             @MainActor func stopFixture() async {
                 view.configuredGatewayProbe.invalidate()
                 model.resetForGatewayChange(clearPendingHandoff: false)

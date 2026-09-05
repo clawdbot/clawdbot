@@ -2,6 +2,7 @@ import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 import { resolveAmbientOwnerAgentId } from "../agents/agent-scope-config.js";
+import { resolveAgentEffectiveModelPrimary } from "../agents/agent-scope.js";
 import {
   type CodexCliApiKeyCredential,
   readCodexCliActiveApiKey,
@@ -62,6 +63,11 @@ import {
 import { buildTestPlan } from "./setup-inference-plan.js";
 import { runSetupInferenceTest } from "./setup-inference-test.js";
 import { applySystemAgentModelSelection } from "./setup-model-selection.js";
+import {
+  applySetupNativeSessionCatalogPreference,
+  requiresSetupNativeSessionCatalogConsent,
+  resolveSetupNativeSessionCatalogPreference,
+} from "./setup-native-session-catalogs.js";
 import {
   captureSystemAgentOwnerPluginArtifacts,
   type SystemAgentOwnerPluginArtifactSnapshot,
@@ -166,7 +172,7 @@ async function activateSetupInferenceUnredacted(
       ? withPluginRuntimeGenerationScope(codexProbePluginGeneration, run)
       : run();
   try {
-    const plan = await buildTestPlan({
+    const builtPlan = await buildTestPlan({
       kind: params.kind,
       ...(params.modelRef !== undefined ? { modelRef: params.modelRef } : {}),
       ...(params.authChoice !== undefined ? { authChoice: params.authChoice } : {}),
@@ -182,17 +188,48 @@ async function activateSetupInferenceUnredacted(
       ...(params.signal ? { signal: params.signal } : {}),
       ...(params.isCancelled ? { isCancelled: params.isCancelled } : {}),
       ...(params.kind === "provider-auth"
-        ? { isRemoteProviderAuth: params.surface === "gateway" }
+        ? { isRemoteProviderAuth: params.isRemoteProviderAuth ?? params.surface === "gateway" }
         : {}),
       ...(codexCliApiKey ? { codexCliApiKey } : {}),
       deps,
       routeAgentId,
     });
-    if ("error" in plan) {
+    if ("error" in builtPlan) {
       return {
         ok: false,
-        status: plan.status ?? "unavailable",
-        error: plan.error,
+        status: builtPlan.status ?? "unavailable",
+        error: builtPlan.error,
+      };
+    }
+    let plan = builtPlan;
+    const catalogConsentRequired = requiresSetupNativeSessionCatalogConsent({
+      configPath: snapshot.path,
+      config: sourceCfg,
+      setupComplete: Boolean(resolveAgentEffectiveModelPrimary(cfg, routeAgentId)),
+      ...(params.agentId ? { agentId: params.agentId } : {}),
+    });
+    const catalogPreference = resolveSetupNativeSessionCatalogPreference({
+      consentRequired: catalogConsentRequired,
+      ...(params.nativeSessionCatalogsEnabled !== undefined
+        ? { requested: params.nativeSessionCatalogsEnabled }
+        : {}),
+    });
+    if (catalogPreference !== undefined) {
+      const preferenceConfig = applySetupNativeSessionCatalogPreference({
+        config: plan.config,
+        enabled: catalogPreference,
+        workspaceDir: workspace,
+      });
+      plan = {
+        ...plan,
+        config: preferenceConfig,
+        manualAuth: {
+          profiles: plan.manualAuth?.profiles ?? [],
+          runtimeConfigBase: cfg,
+          sourceConfigBase: sourceCfg,
+          configPatch: createMergePatch(cfg, preferenceConfig),
+          ...(plan.manualAuth?.pluginId ? { pluginId: plan.manualAuth.pluginId } : {}),
+        },
       };
     }
 

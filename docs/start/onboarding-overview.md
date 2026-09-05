@@ -89,8 +89,11 @@ opening the normal dashboard.
 
 For a fresh or incomplete Gateway, native setup handles the Gateway connection,
 any needed local CLI/runtime install, and AI access. It detects existing
-credentials or eligible loaded local models, live-tests candidates, and offers
-provider sign-in or masked key/token entry when needed. After a new model
+credentials or eligible loaded local models without testing or selecting them,
+then waits for an explicit click before activation. The provider list includes
+installable official provider plugins and a custom OpenAI/Anthropic-compatible
+endpoint flow. Fresh installs default native Claude/Codex conversation discovery
+off and ask before enabling it. After a new model
 passes, the app opens guided onboarding in the dashboard for optional setup,
 including memory import and channels, before the handoff to normal agent chat.
 Memory import and permissions are not separate native first-run pages;

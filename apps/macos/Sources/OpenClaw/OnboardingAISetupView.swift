@@ -489,11 +489,28 @@ struct OnboardingAISetupView: View {
     private var providerAuthSection: some View {
         if !self.model.authOptions.isEmpty || !self.model.manualProviders.isEmpty {
             VStack(alignment: .leading, spacing: 8) {
-                Text("Sign in with a provider")
+                if self.model.nativeSessionCatalogPreferenceRequired,
+                   !self.model.nativeSessionCatalogs.isEmpty
+                {
+                    Toggle(isOn: self.$model.nativeSessionCatalogsEnabled) {
+                        VStack(alignment: .leading, spacing: 2) {
+                            Text("Show existing native conversations")
+                                .font(.callout.weight(.semibold))
+                            Text(
+                                "Include existing \(self.model.nativeSessionCatalogSummary) conversations in the sidebar. " +
+                                    "This discovers them in place; it does not copy transcripts.")
+                                .font(.caption)
+                                .foregroundStyle(.secondary)
+                        }
+                    }
+                    .toggleStyle(.checkbox)
+                    .padding(.bottom, 6)
+                }
+                Text("Connect an AI provider")
                     .font(.headline)
                 Text(
-                    "Use an existing subscription or provider account. " +
-                        "OpenClaw opens the provider’s own sign-in flow, then verifies it with a real reply.")
+                    "Choose any supported provider. OpenClaw asks before installing a provider plugin, " +
+                        "then continues into its own sign-in or API-key flow and verifies a real reply.")
                     .font(.caption)
                     .foregroundStyle(.secondary)
                     .fixedSize(horizontal: false, vertical: true)
@@ -562,9 +579,12 @@ struct OnboardingAISetupView: View {
                 OnboardingProviderArtwork(
                     icon: option.icon,
                     brandCandidates: [option.brandId, option.id],
-                    fallbackSymbol: option.kind == "device-code"
-                        ? "link.badge.plus"
-                        : "person.crop.circle.badge.checkmark")
+                    fallbackSymbol: switch option.kind {
+                    case "device-code": "link.badge.plus"
+                    case "install": "puzzlepiece.extension"
+                    case "custom": "point.3.connected.trianglepath.dotted"
+                    default: "person.crop.circle.badge.checkmark"
+                    })
                 VStack(alignment: .leading, spacing: 2) {
                     Text(option.label)
                         .font(.callout.weight(.semibold))
@@ -576,7 +596,12 @@ struct OnboardingAISetupView: View {
                     }
                 }
                 Spacer(minLength: 0)
-                Text(option.kind == "device-code" ? "Pair" : "Sign in")
+                Text(switch option.kind {
+                case "device-code": "Pair"
+                case "install": "Install…"
+                case "custom": "Configure…"
+                default: "Sign in"
+                })
                     .font(.caption.weight(.semibold))
                     .foregroundStyle(Color.accentColor)
             }

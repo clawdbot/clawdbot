@@ -19,12 +19,14 @@ import { enablePluginInConfig, enablePluginWithCapabilityConsent } from "../plug
 import { withPluginLifecycleLease } from "../plugins/plugin-lifecycle-lease.js";
 import {
   applyProviderPluginAuthMethodResultConfig,
+  prepareAuthChoiceLoadedPluginProvider,
   runProviderPluginAuthMethodUnpersisted,
 } from "../plugins/provider-auth-choice.js";
 import {
   resolveManifestProviderAuthChoice,
   type ProviderAuthChoiceMetadata,
 } from "../plugins/provider-auth-choices.js";
+import { resolveProviderInstallCatalogEntry } from "../plugins/provider-install-catalog.js";
 import { resolvePluginProvidersCore } from "../plugins/providers.runtime.js";
 import type { ProviderAuthResult, ProviderPlugin } from "../plugins/types.js";
 import type { RuntimeEnv } from "../runtime.js";
@@ -499,6 +501,58 @@ export async function buildTestPlan(params: {
             },
           )
         : undefined;
+      const installEntry = authChoice
+        ? resolveProviderInstallCatalogEntry(authChoice, {
+            config: cfg,
+            workspaceDir: params.pluginWorkspaceDir,
+            includeUntrustedWorkspacePlugins: false,
+          })
+        : undefined;
+      const managedWizardChoice = !choice
+        ? installEntry
+        : choice.appGuidedSecret === true
+          ? { pluginId: choice.pluginId, label: choice.groupLabel ?? choice.choiceLabel }
+          : undefined;
+      if (interactive && authChoice && managedWizardChoice) {
+        if (!params.prompter) {
+          return { error: "Installing this provider requires an interactive setup session." };
+        }
+        throwIfSetupInferenceCancelled(params);
+        const prepared = await prepareAuthChoiceLoadedPluginProvider({
+          authChoice,
+          config: cfg,
+          prompter: params.prompter,
+          runtime: params.runtime,
+          agentDir: params.agentDir,
+          agentId: routeAgentId,
+          workspaceDir: params.pluginWorkspaceDir,
+          setDefaultModel: false,
+          preserveExistingDefaultModel: true,
+          ...(params.signal ? { signal: params.signal } : {}),
+          isRemote: params.isRemoteProviderAuth,
+          ...(params.beforePersistentEffect
+            ? { beforePersistentEffect: params.beforePersistentEffect }
+            : {}),
+        });
+        throwIfSetupInferenceCancelled(params);
+        const modelRef = prepared?.agentModelOverride?.trim();
+        if (!prepared || prepared.retrySelection || !modelRef) {
+          return {
+            error: `${managedWizardChoice.label} was not installed and configured. Review the installer details and try again.`,
+          };
+        }
+        return buildPreparedProviderTestPlan({
+          cfg,
+          sourceCfg: params.sourceCfg,
+          preparedConfig: prepared.config,
+          profiles: prepared.authProfiles,
+          selectedProfileId: prepared.authProfiles[0]?.profileId,
+          modelRef,
+          pluginId: managedWizardChoice.pluginId,
+          routeAgentId,
+          agentDir: params.agentDir,
+        });
+      }
       if (
         !choice ||
         !supportsSetupTextInference(choice.onboardingScopes) ||

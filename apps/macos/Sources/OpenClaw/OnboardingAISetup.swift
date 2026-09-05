@@ -21,6 +21,9 @@ final class OnboardingAISetupModel {
     private(set) var manualProviders: [ManualProvider] = []
     private(set) var authOptions: [AuthOption] = []
     private(set) var recommendedInstalls: [RecommendedInstall] = []
+    private(set) var nativeSessionCatalogs: [NativeSessionCatalog] = []
+    var nativeSessionCatalogsEnabled = false
+    private(set) var nativeSessionCatalogPreferenceRequired = false
     private(set) var detectedPrepareOptions: [PrepareOption]?
     private(set) var prepareAvailable = false
     private(set) var candidatePresentation: [String: CandidatePresentation] = [:]
@@ -522,6 +525,9 @@ final class OnboardingAISetupModel {
         self.manualProviders = []
         self.authOptions = []
         self.recommendedInstalls = []
+        self.nativeSessionCatalogs = []
+        self.nativeSessionCatalogsEnabled = false
+        self.nativeSessionCatalogPreferenceRequired = false
         self.detectedPrepareOptions = nil
         self.prepareAvailable = false
         self.candidatePresentation = [:]
@@ -620,6 +626,9 @@ extension OnboardingAISetupModel {
             let authOptions = result.authOptions ?? []
             self.authOptions = authOptions
             self.recommendedInstalls = result.recommendedInstalls ?? []
+            self.nativeSessionCatalogs = result.nativeSessionCatalogs ?? []
+            self.nativeSessionCatalogPreferenceRequired =
+                result.nativeSessionCatalogPreferenceRequired == true
             self.detectedPrepareOptions = result.prepareOptions
             self.candidatePresentation = Dictionary(
                 result.candidates.map { candidate in
@@ -680,11 +689,9 @@ extension OnboardingAISetupModel {
                 }
                 return
             }
-            if intent == .startSetup, let first = autoCandidateAfter(kind: nil) {
-                await self.activate(kind: first.kind, context: context)
-            } else {
-                self.showManualEntry = !self.manualProviders.isEmpty
-            }
+            // Detection is presentation-only. Existing credentials and native
+            // subscriptions are never tested or selected until the user clicks one.
+            self.showManualEntry = !self.manualProviders.isEmpty
         } catch {
             guard self.isCurrentAttempt(context) else { return }
             if self.connectionModeProvider() == .remote, let authIssue = RemoteGatewayAuthIssue(error: error) {
@@ -787,7 +794,7 @@ extension OnboardingAISetupModel {
             return
         }
         await self.activate(
-            .candidate(kind: kind, modelRef: candidate.modelRef, label: candidate.label, tryNextOnFailure: true),
+            .candidate(kind: kind, modelRef: candidate.modelRef, label: candidate.label, tryNextOnFailure: false),
             context: context)
     }
 
@@ -833,7 +840,10 @@ extension OnboardingAISetupModel {
             gateway: self.gateway,
             serverLease: lease)
         guard self.isCurrentAttempt(context), !Task.isCancelled else { return }
-        let params = request.params(supportsExactModel: supportsExactModel)
+        var params = request.params(supportsExactModel: supportsExactModel)
+        if self.nativeSessionCatalogPreferenceRequired, !self.nativeSessionCatalogs.isEmpty {
+            params["nativeSessionCatalogsEnabled"] = AnyCodable(self.nativeSessionCatalogsEnabled)
+        }
         // Keychain-unavailable degrades to an unbound per-attempt lease instead
         // of refusing setup: live matching stays attempt-exact, and relaunch
         // repeats activation rather than trusting the receipt, so a broken
@@ -885,12 +895,8 @@ extension OnboardingAISetupModel {
                     originalServerLease: lease)
             } else {
                 let failure = Self.failure(label: request.label, status: result.status, error: result.error)
-                if await self.settleFailedActivation(
-                    failure, request: request, context: context, activationOwner: activationOwner, serverLease: lease),
-                    request.tryNextOnFailure
-                {
-                    await tryNextAfterFailure(of: kind, context: context)
-                }
+                _ = await self.settleFailedActivation(
+                    failure, request: request, context: context, activationOwner: activationOwner, serverLease: lease)
             }
         } catch {
             guard self.isCurrentAttempt(context) else { return }
@@ -1163,10 +1169,14 @@ extension OnboardingAISetupModel {
 extension OnboardingAISetupModel {
     func startProviderWizard(_ option: AuthOption, kind: ProviderWizardKind) {
         guard !isBusy, self.activeAuthOption == nil, let serverLease else { return }
+        var params = ["authChoice": AnyCodable(option.id)]
+        if self.nativeSessionCatalogPreferenceRequired, !self.nativeSessionCatalogs.isEmpty {
+            params["nativeSessionCatalogsEnabled"] = AnyCodable(self.nativeSessionCatalogsEnabled)
+        }
         self.startSetupWizard(
             option,
             kind: kind,
-            params: ["authChoice": AnyCodable(option.id)],
+            params: params,
             serverLease: serverLease)
     }
 

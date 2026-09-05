@@ -190,7 +190,7 @@ export const systemAgentHandlers: GatewayRequestHandlers = {
     });
   },
   /** Start one provider-owned OAuth/device-code login over the shared wizard transport. */
-  "openclaw.setup.auth.start": async ({ params, respond, context }) => {
+  "openclaw.setup.auth.start": async ({ params, respond, context, client }) => {
     if (
       !assertValidParams(
         params,
@@ -208,6 +208,7 @@ export const systemAgentHandlers: GatewayRequestHandlers = {
       timeoutMs: PROVIDER_AUTH_SESSION_TIMEOUT_MS,
       context,
       respond,
+      isLocalClient: client?.internal?.isLocalClient === true,
     });
   },
   /** Activate a detected or manual route with server-owned capability review. */
@@ -351,6 +352,9 @@ export const systemAgentHandlers: GatewayRequestHandlers = {
           ...(params.authChoice !== undefined ? { authChoice: params.authChoice } : {}),
           ...(params.apiKey !== undefined ? { apiKey: params.apiKey } : {}),
           ...(params.workspace !== undefined ? { workspace: params.workspace } : {}),
+          ...(params.nativeSessionCatalogsEnabled !== undefined
+            ? { nativeSessionCatalogsEnabled: params.nativeSessionCatalogsEnabled }
+            : {}),
           surface: "gateway",
           runtime,
         });

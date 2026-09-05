@@ -748,6 +748,7 @@ describe("detectSetupInference", () => {
       expect.objectContaining({
         candidates: [],
         manualProviders: [expect.objectContaining({ id: "fixture-api-key" })],
+        nativeSessionCatalogPreferenceRequired: true,
       }),
     );
   });
