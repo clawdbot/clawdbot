@@ -150,6 +150,10 @@ describe("Gateway profile failure recovery", () => {
             tools: { profile: "minimal" },
           } satisfies OpenClawConfig;
           await gateway.state.writeConfig(cfg);
+          // Exercise retry exhaustion without waiting through the default recovery window.
+          await gateway.state.writeJson("agents/rate/agent/settings.json", {
+            retry: { provider: { maxRetries: 1 } },
+          });
           for (const agentId of ["rate", "auth"] as const) {
             await gateway.state.writeAuthProfiles(
               {
@@ -212,6 +216,7 @@ describe("Gateway profile failure recovery", () => {
           };
           const rewarmCount = () => gateway.logs().split(REWARM_MESSAGE).length - 1;
           expect((await failTurn("rate"))?.cooldownReason).toBe("rate_limit");
+          expect(requests.rate).toBe(2);
           await sleep(RATE_OBSERVATION_MS);
           const afterRate = rewarmCount();
           expect(afterRate).toBe(0);
