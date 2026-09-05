@@ -400,11 +400,12 @@ function getPlanTargetDestinationKey(
   target: SecretsPlanTarget,
   resolved: NonNullable<ReturnType<typeof resolveValidatedPlanTarget>>,
 ): string {
+  const canonicalPath = resolved.pathSegments.join(".");
   if (resolved.entry.configFile === "auth-profile-store") {
     const agentId = (target.agentId ?? "").trim();
-    return `auth-profile-store:${agentId}:${target.path}`;
+    return `auth-profile-store:${agentId}:${canonicalPath}`;
   }
-  return `config:${target.path}`;
+  return `config:${canonicalPath}`;
 }
 
 function applyConfigTargetMutations(params: {

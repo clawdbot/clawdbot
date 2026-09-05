@@ -861,7 +861,7 @@ Note that `resolveConfigDir` prioritizes `OPENCLAW_STATE_DIR` over `OPENCLAW_CON
 
 Across files the first assignment of a name wins, and an inherited process-environment value wins over every file. Within one file the last assignment of a name wins, so apply removes other assignments of a retained name in that file; without that removal the ref could resolve after restart to a value apply never validated. A ref validated against a value exported only in the operator's shell has no retained file source at all, and that shell export has to keep supplying it. Working-directory `.env` files are never scrubbed and never retained.
 
-Scrubbing removes all instances of values present in `migratedValues` across scrubbed files, as well as same-file duplicate assignments of retained keys. It does not delete assignments whose values were not among the migrated plaintext values.
+Scrubbing removes all instances of values present in `migratedValues` across scrubbed files. In addition, when an assignment is retained to back an `env` SecretRef, any other duplicate assignments of that retained key in the same file are removed to ensure deterministic resolution, even if their unmigrated values differ. For unreferenced keys, scrubbing does not delete assignments whose values were not among the migrated plaintext values.
 
 The retained line is unmigrated plaintext, not a completed migration, so both a clean re-audit and the agent-access boundary above still require `file` or `exec` SecretRefs, whose values live outside the agent-readable dotenv directories.
 

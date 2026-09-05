@@ -595,6 +595,60 @@ describe("secrets apply", () => {
     expect(freshProcessEnv.OPENAI_API_KEY).toBeUndefined();
   });
 
+  it("scrubs dotenv plaintext when an env target is overwritten by a file target using equivalent bracket path syntax", async () => {
+    const secretFilePath = path.join(fixture.rootDir, "secrets.json");
+    await writeJsonFile(secretFilePath, {
+      providers: { openai: { apiKey: "sk-openai-file" } },
+    });
+    await fs.chmod(secretFilePath, 0o600);
+
+    const fileRef = {
+      source: "file" as const,
+      provider: "filemain",
+      id: "/providers/openai/apiKey",
+    };
+
+    const plan = createPlan({
+      providerUpserts: {
+        filemain: {
+          source: "file",
+          path: secretFilePath,
+          mode: "json",
+        },
+      },
+      targets: [
+        createOpenAiProviderTarget(),
+        {
+          type: "models.providers.apiKey",
+          path: 'models.providers["openai"].apiKey',
+          providerId: "openai",
+          ref: fileRef,
+        },
+      ],
+      options: createOneWayScrubOptions(),
+    });
+
+    const applied = await runSecretsApply({
+      plan,
+      env: { ...fixture.env, OPENAI_API_KEY: "sk-openai-plaintext" },
+      write: true,
+    });
+    expect(applied.changed).toBe(true);
+    expect(applied.changedFiles).toContain(fixture.envPath);
+
+    const nextConfig = JSON.parse(await fs.readFile(fixture.configPath, "utf8")) as {
+      models: { providers: { openai: { apiKey: unknown } } };
+    };
+    expect(nextConfig.models.providers.openai.apiKey).toEqual(fileRef);
+
+    const nextEnv = await fs.readFile(fixture.envPath, "utf8");
+    expect(nextEnv).not.toContain("sk-openai-plaintext");
+    expect(nextEnv).toContain("UNRELATED=value");
+
+    const freshProcessEnv = readStateDotEnvAsProcessEnv(fixture.envPath);
+    expect(freshProcessEnv.OPENAI_API_KEY).toBeUndefined();
+  });
+
   it("retains surviving env SecretRef source while scrubbing an overwritten env target", async () => {
     const secretFilePath = path.join(fixture.rootDir, "secrets.json");
     await writeJsonFile(secretFilePath, {
