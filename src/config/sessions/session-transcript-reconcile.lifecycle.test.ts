@@ -1,7 +1,7 @@
 import path from "node:path";
 import { setTimeout as delay } from "node:timers/promises";
 import { Worker, type WorkerOptions } from "node:worker_threads";
-import { afterEach, describe, expect, it, vi } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { createDeferred } from "../../../test/helpers/promise.js";
 import { useAutoCleanupTempDirTracker } from "../../../test/helpers/temp-dir.js";
 import * as runtimeWorkerUrl from "../../infra/runtime-worker-url.js";
@@ -34,7 +34,16 @@ import {
 } from "./session-transcript-reconcile.js";
 import type { SessionTranscriptReconcileWorkerMessage } from "./session-transcript-reconcile.worker.js";
 
+const sleepMock = vi.hoisted(() => vi.fn<(ms: number) => Promise<void>>());
+
+vi.mock("../../utils/sleep.js", () => ({ sleep: sleepMock }));
+
 const tempDirs = useAutoCleanupTempDirTracker(afterEach);
+
+beforeEach(() => {
+  sleepMock.mockReset();
+  sleepMock.mockResolvedValue(undefined);
+});
 
 type TerminalType = Extract<
   SessionTranscriptReconcileWorkerMessage,
@@ -307,6 +316,74 @@ describe("session transcript reconcile worker lifecycle", () => {
         await Promise.all([targetReconciliation, allReconciliation]);
       }
     } finally {
+      closeOpenClawAgentDatabasesForTest();
+      closeOpenClawStateDatabaseForTest();
+    }
+  }, 30_000);
+
+  it("backs off repeated pending passes and releases the owner after the final pass", async () => {
+    const stateDir = tempDirs.make("openclaw-reconcile-backoff-");
+    const env = { ...process.env, OPENCLAW_STATE_DIR: stateDir };
+    const databaseOptions = { agentId: "main", env };
+    const scope = {
+      ...databaseOptions,
+      sessionId: "reconcile-backoff",
+      sessionKey: "agent:main:reconcile-backoff",
+    };
+    let injectPending = true;
+    try {
+      await persistSessionTranscriptTurn(scope, {
+        messages: [{ eventId: "backoff-seed", message: { role: "user", content: "backoff seed" } }],
+        touchSessionEntry: false,
+      });
+      await waitForSessionTranscriptIndexReconcile(databaseOptions);
+      const database = openOpenClawAgentDatabase(databaseOptions);
+      const markDirty = database.db.prepare(
+        "UPDATE session_transcript_index_state SET needs_rebuild = 1 WHERE session_id = ?",
+      );
+      markDirty.run(scope.sessionId);
+
+      let createdWorkers = 0;
+      let injectedPending = 0;
+      const createWorker = (filename: string | URL, options: WorkerOptions): Worker => {
+        createdWorkers += 1;
+        const worker = new Worker(filename, options);
+        worker.on("message", (message: SessionTranscriptReconcileWorkerMessage) => {
+          if (message.type !== "done" || !injectPending || injectedPending >= 6) {
+            return;
+          }
+          markDirty.run(scope.sessionId);
+          injectedPending += 1;
+          startSessionTranscriptIndexReconcile({
+            ...databaseOptions,
+            preferredSessionId: scope.sessionId,
+            createWorker,
+          });
+        });
+        return worker;
+      };
+      const params = {
+        ...databaseOptions,
+        preferredSessionId: scope.sessionId,
+        createWorker,
+      };
+      sleepMock.mockClear();
+
+      startSessionTranscriptIndexReconcile(params);
+      await waitForSessionTranscriptIndexReconcile(databaseOptions);
+
+      expect(createdWorkers).toBe(7);
+      expect(injectedPending).toBe(6);
+      expect(sleepMock.mock.calls).toEqual([[0], [50], [200], [500], [1_000], [1_000]]);
+      expect(
+        database.db
+          .prepare("SELECT needs_rebuild FROM session_transcript_index_state WHERE session_id = ?")
+          .get(scope.sessionId),
+      ).toEqual({ needs_rebuild: 0 });
+      expect(isSessionTranscriptIndexReconcileRunning(databaseOptions)).toBe(false);
+    } finally {
+      injectPending = false;
+      await waitForSessionTranscriptIndexReconcile(databaseOptions);
       closeOpenClawAgentDatabasesForTest();
       closeOpenClawStateDatabaseForTest();
     }
