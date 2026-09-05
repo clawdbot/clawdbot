@@ -1098,7 +1098,7 @@ export async function handleControlUiHttpRequest(
       environment: config?.gateway?.controlUi?.environment,
       communityInvite: config?.gateway?.controlUi?.communityInvite !== false,
       terminalEnabled,
-      cliAgentsEnabled: config?.gateway?.cliAgents?.enabled === true,
+      cliAgentsEnabled: config?.gateway?.cliAgents?.enabled !== false,
       pluginAssetsRequireAuth: opts?.auth !== undefined && opts.auth.mode !== "none",
       pluginFrameGrants: pluginFrameGrants.map(({ pluginId, path: grantPath, match }) => ({
         pluginId,
