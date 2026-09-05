@@ -286,7 +286,9 @@ export async function finishUpdate(params: FinishUpdateParams): Promise<UpdateRu
     await (
       rollbackStopState ?? params.preManagedServiceStop
     )?.windowsTaskAutoStartRecovery?.complete(
-      finalResult.status === "ok" || finalResult.recovery?.service === "healthy",
+      finalResult.status === "ok" ||
+        (finalResult.recovery?.serviceRestartSafe === true &&
+          finalResult.recovery.service === "healthy"),
     );
     // Only recovery advances the outcome after persistence; ordinary reports share one snapshot.
     const reportedResult = printFinalResult(
