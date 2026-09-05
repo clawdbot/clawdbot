@@ -192,7 +192,7 @@ export type ChannelAccountSurface = {
 export type ChannelAccountPredicate = (entry: ChannelAccountEntry) => boolean;
 
 /** Stable owner identity shared by SecretRef collection and channel activation. */
-function createChannelAccountSecretOwner(
+export function createChannelAccountSecretOwner(
   channelKey: string,
   accountId: string,
   channel: Record<string, unknown>,

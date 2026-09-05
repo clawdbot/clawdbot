@@ -57,6 +57,7 @@ const EXTERNALIZED_CHANNEL_IDS = [
   "googlechat",
   "msteams",
   "nextcloud-talk",
+  "qqbot",
   "zalo",
 ] as const;
 
@@ -73,7 +74,7 @@ function inactiveExecRef(id: string) {
 function createExternalChannelRecord(id: ExternalizedChannelId): PluginManifestRecord {
   const rootDir = path.resolve("extensions", id);
   return {
-    id,
+    id: id === "qqbot" ? "openclaw-qqbot" : id,
     channels: [id],
     providers: [],
     cliBackends: [],
@@ -329,6 +330,16 @@ describe("secrets runtime externalized channel SecretRef audit", () => {
               },
             },
           },
+          qqbot: {
+            appId: "qqbot-default-app",
+            clientSecret: ref("QQBOT_DEFAULT_SECRET"),
+            accounts: {
+              work: {
+                appId: "qqbot-work-app",
+                clientSecret: ref("QQBOT_WORK_SECRET"),
+              },
+            },
+          },
           zalo: {
             webhookUrl: "https://example.test/zalo",
             botToken: ref("ZALO_BOT_TOKEN"),
@@ -376,6 +387,8 @@ describe("secrets runtime externalized channel SecretRef audit", () => {
           NEXTCLOUD_TALK_API_PASSWORD: "nextcloud-talk-api-password",
           NEXTCLOUD_TALK_WORK_BOT_SECRET: "nextcloud-talk-work-bot-secret",
           NEXTCLOUD_TALK_WORK_API_PASSWORD: "nextcloud-talk-work-api-password",
+          QQBOT_DEFAULT_SECRET: "qqbot-default-secret",
+          QQBOT_WORK_SECRET: "qqbot-work-secret",
           ZALO_BOT_TOKEN: "zalo-bot-token",
           ZALO_WEBHOOK_SECRET: "zalo-webhook-secret",
           ZALO_WORK_BOT_TOKEN: "zalo-work-bot-token",
@@ -409,6 +422,8 @@ describe("secrets runtime externalized channel SecretRef audit", () => {
         "channels.nextcloud-talk.apiPassword": "nextcloud-talk-api-password",
         "channels.nextcloud-talk.accounts.work.botSecret": "nextcloud-talk-work-bot-secret",
         "channels.nextcloud-talk.accounts.work.apiPassword": "nextcloud-talk-work-api-password",
+        "channels.qqbot.clientSecret": "qqbot-default-secret",
+        "channels.qqbot.accounts.work.clientSecret": "qqbot-work-secret",
         "channels.zalo.botToken": "zalo-bot-token",
         "channels.zalo.webhookSecret": "zalo-webhook-secret",
         "channels.zalo.accounts.work.botToken": "zalo-work-bot-token",
@@ -511,6 +526,18 @@ describe("secrets runtime externalized channel SecretRef audit", () => {
             },
           },
         },
+        qqbot: {
+          enabled: false,
+          appId: "qqbot-disabled-app",
+          clientSecret: inactiveExecRef("QQBOT_DISABLED_SECRET"),
+          accounts: {
+            disabled: {
+              enabled: false,
+              appId: "qqbot-disabled-account-app",
+              clientSecret: inactiveExecRef("QQBOT_DISABLED_ACCOUNT_SECRET"),
+            },
+          },
+        },
         zalo: {
           enabled: false,
           webhookUrl: "https://example.test/zalo-disabled",
@@ -562,6 +589,8 @@ describe("secrets runtime externalized channel SecretRef audit", () => {
       "channels.nextcloud-talk.accounts.disabled.botSecret",
       "channels.nextcloud-talk.apiPassword",
       "channels.nextcloud-talk.accounts.disabled.apiPassword",
+      "channels.qqbot.clientSecret",
+      "channels.qqbot.accounts.disabled.clientSecret",
       "channels.zalo.botToken",
       "channels.zalo.accounts.disabled.botToken",
       "channels.zalo.webhookSecret",
@@ -600,6 +629,99 @@ describe("secrets runtime externalized channel SecretRef audit", () => {
     });
     expect(snapshot.warnings).toStrictEqual([]);
     expectMetadataBackedContractsWereUsed(["feishu"]);
+  });
+
+  it.each([
+    {
+      label: "default",
+      missingId: "QQBOT_MISSING_DEFAULT_SECRET",
+      missingPath: "channels.qqbot.clientSecret",
+      missingOwner: "qqbot:default",
+      healthyPath: "channels.qqbot.accounts.Operations-Team.clientSecret",
+      healthyOwner: "qqbot:operations-team",
+      healthyEnv: { QQBOT_NAMED_SECRET: "healthy-named-secret" },
+    },
+    {
+      label: "named",
+      missingId: "QQBOT_MISSING_NAMED_SECRET",
+      missingPath: "channels.qqbot.accounts.Operations-Team.clientSecret",
+      missingOwner: "qqbot:operations-team",
+      healthyPath: "channels.qqbot.clientSecret",
+      healthyOwner: "qqbot:default",
+      healthyEnv: { QQBOT_DEFAULT_SECRET: "healthy-default-secret" },
+    },
+  ])(
+    "isolates only a missing $label QQBot account while its sibling stays healthy",
+    async (testCase) => {
+      const records = configureExternalChannelRecords(["qqbot"]);
+      const missingRef = ref(testCase.missingId);
+      const snapshot = await prepareSecretsRuntimeSnapshot({
+        config: asConfig({
+          channels: {
+            qqbot: {
+              appId: "qqbot-default-app",
+              clientSecret: testCase.label === "default" ? missingRef : ref("QQBOT_DEFAULT_SECRET"),
+              accounts: {
+                "Operations-Team": {
+                  appId: "qqbot-operations-app",
+                  clientSecret: testCase.label === "named" ? missingRef : ref("QQBOT_NAMED_SECRET"),
+                },
+              },
+            },
+          },
+        }),
+        env: {
+          ...testCase.healthyEnv,
+          QQBOT_CLIENT_SECRET: "must-never-replace-an-explicit-secret-ref",
+        },
+        includeAuthStoreRefs: false,
+        allowUnavailableSecretOwners: true,
+        loadablePluginOrigins: externalChannelOrigins(records),
+      });
+
+      expect(getPath(snapshot.config, testCase.missingPath.split("."))).toEqual(missingRef);
+      expect(getPath(snapshot.config, testCase.healthyPath.split("."))).toBe(
+        Object.values(testCase.healthyEnv)[0],
+      );
+      expect(snapshot.degradedOwners).toEqual([
+        expect.objectContaining({
+          ownerKind: "account",
+          ownerId: testCase.missingOwner,
+          state: "unavailable",
+          degradationState: "cold",
+          paths: [testCase.missingPath],
+        }),
+      ]);
+      activateSecretsRuntimeSnapshot(snapshot);
+      expect(() => assertSecretOwnerAvailable("account", testCase.missingOwner)).toThrow(
+        "configured but unavailable",
+      );
+      expect(() => assertSecretOwnerAvailable("account", testCase.healthyOwner)).not.toThrow();
+      expectMetadataBackedContractsWereUsed(["qqbot"]);
+    },
+  );
+
+  it.each([
+    { label: "malformed", secret: ref("invalid-lowercase-id"), error: /invalid/i },
+    {
+      label: "unknown provider",
+      secret: { source: "file", provider: "unconfigured", id: "/qqbot/clientSecret" },
+      error: /provider/i,
+    },
+  ])("keeps $label QQBot SecretRefs fail-closed", async ({ secret, error }) => {
+    const records = configureExternalChannelRecords(["qqbot"]);
+
+    await expect(
+      prepareSecretsRuntimeSnapshot({
+        config: asConfig({
+          channels: { qqbot: { appId: "qqbot-default-app", clientSecret: secret } },
+        }),
+        env: { QQBOT_CLIENT_SECRET: "must-never-replace-an-explicit-secret-ref" },
+        includeAuthStoreRefs: false,
+        allowUnavailableSecretOwners: true,
+        loadablePluginOrigins: externalChannelOrigins(records),
+      }),
+    ).rejects.toThrow(error);
   });
 
   it("publishes an unavailable Discord realtime provider owner as a typed redacted error", async () => {

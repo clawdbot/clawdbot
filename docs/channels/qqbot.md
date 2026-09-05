@@ -84,7 +84,8 @@ Default-account env vars (top-level account only):
 - `QQBOT_APP_ID`
 - `QQBOT_CLIENT_SECRET`
 
-File-backed AppSecret:
+Keep the AppSecret outside the channel config by using a SecretRef. For an
+environment-backed secret:
 
 ```json5
 {
@@ -92,7 +93,39 @@ File-backed AppSecret:
     qqbot: {
       enabled: true,
       appId: "YOUR_APP_ID",
-      clientSecretFile: "/path/to/qqbot-secret.txt",
+      clientSecret: {
+        source: "env",
+        provider: "default",
+        id: "QQBOT_CLIENT_SECRET",
+      },
+    },
+  },
+}
+```
+
+For a file-backed AppSecret, configure a `singleValue` file provider and refer
+to its `value`:
+
+```json5
+{
+  secrets: {
+    providers: {
+      qqbot_secret: {
+        source: "file",
+        path: "/path/to/qqbot-secret.txt",
+        mode: "singleValue",
+      },
+    },
+  },
+  channels: {
+    qqbot: {
+      enabled: true,
+      appId: "YOUR_APP_ID",
+      clientSecret: {
+        source: "file",
+        provider: "qqbot_secret",
+        id: "value",
+      },
     },
   },
 }
@@ -101,12 +134,17 @@ File-backed AppSecret:
 Notes:
 
 - `openclaw channels add --channel qqbot --token-file ...` sets the AppSecret
-  only; `appId` must already be set in config or `QQBOT_APP_ID`.
-- `clientSecret` accepts a plaintext string or a file path (`clientSecretFile`).
-- Known limitation: the external `@tencent-connect/openclaw-qqbot` package does
-  not support structured SecretRef objects for `clientSecret`. If your config
-  uses one, move the secret to the `QQBOT_CLIENT_SECRET` environment variable
-  (or `clientSecretFile`) before upgrading.
+  only; `appId` must already be set in config or `QQBOT_APP_ID`. Run
+  `openclaw doctor --fix` afterward to migrate the legacy file setting into a
+  file-backed SecretRef.
+- `clientSecret` accepts plaintext or an environment-, file-, exec-, or
+  store-backed [SecretRef](/gateway/secrets#secretref-contract). The Gateway
+  resolves the reference before handing credentials to the QQ Bot plugin.
+- `clientSecretFile` is a migration-only legacy setting. Run
+  `openclaw doctor --fix` to replace it with a `clientSecret` file SecretRef;
+  do not use `clientSecretFile` in new configurations.
+- Top-level credentials and `QQBOT_CLIENT_SECRET` belong only to the default
+  account. Named accounts must configure their own `appId` and `clientSecret`.
 
 ### Streaming
 
@@ -157,12 +195,20 @@ Run multiple QQ bots under a single OpenClaw instance:
     qqbot: {
       enabled: true,
       appId: "111111111",
-      clientSecret: "secret-of-bot-1",
+      clientSecret: {
+        source: "env",
+        provider: "default",
+        id: "QQBOT_DEFAULT_SECRET",
+      },
       accounts: {
         bot2: {
           enabled: true,
           appId: "222222222",
-          clientSecret: "secret-of-bot-2",
+          clientSecret: {
+            source: "env",
+            provider: "default",
+            id: "QQBOT_BOT2_SECRET",
+          },
         },
       },
     },
@@ -172,7 +218,10 @@ Run multiple QQ bots under a single OpenClaw instance:
 
 Each account owns an isolated WebSocket connection, API client, and token
 cache, keyed by `appId`. Log lines are tagged with the owning account id so
-diagnostics stay separable when you run several bots under one Gateway.
+diagnostics stay separable when you run several bots under one Gateway. Named
+accounts never inherit the default account's credentials or environment
+fallback. If one account's SecretRef cannot resolve, only that account becomes
+unavailable; other accounts and the Gateway remain available.
 
 Add a second bot via CLI:
 
