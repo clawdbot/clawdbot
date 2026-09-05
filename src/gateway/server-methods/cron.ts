@@ -31,8 +31,8 @@ import {
   resolveCronDeliveryPreviews,
 } from "../../cron/delivery-preview.js";
 import { assertCronDeliveryInputNonBlankFields } from "../../cron/delivery-target-validation.js";
+import { cronJobReadView } from "../../cron/job-read-view.js";
 import { normalizeCronJobCreate, normalizeCronJobPatch } from "../../cron/normalize.js";
-import { toPublicCronJob } from "../../cron/public-job.js";
 import type { CronRuntimeAuthority } from "../../cron/runtime-authority.js";
 import { CRON_JOB_SCRATCH_MAX_BYTES } from "../../cron/scratch-contract.js";
 import { resolveFailureAlert } from "../../cron/service/failure-alerts.js";
@@ -193,25 +193,6 @@ function publicCronScratch(
     content: scratch.content,
     revision: scratch.revision,
     updatedAtMs: scratch.updatedAtMs,
-  };
-}
-
-function cronJobReadView(job: CronJob) {
-  const publicJob = toPublicCronJob(job);
-  return {
-    ...publicJob,
-    configRevision: resolveCronJobConfigRevision(job),
-    nextRunAtMs: job.state.nextRunAtMs,
-    lastRunAtMs: job.state.lastRunAtMs,
-    lastRunStatus: job.state.lastRunStatus ?? job.state.lastStatus,
-    lastRunError: job.state.lastError,
-    lastDelivered: job.state.lastDelivered,
-    lastDeliveryStatus: job.state.lastDeliveryStatus,
-    lastDeliveryError: job.state.lastDeliveryError,
-    deliverySuppressionReason: job.state.deliverySuppressionReason,
-    lastFailureNotificationDelivered: job.state.lastFailureNotificationDelivered,
-    lastFailureNotificationDeliveryStatus: job.state.lastFailureNotificationDeliveryStatus,
-    lastFailureNotificationDeliveryError: job.state.lastFailureNotificationDeliveryError,
   };
 }
 
