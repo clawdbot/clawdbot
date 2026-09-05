@@ -344,7 +344,7 @@ export function preflightOpenClawDatabaseSchemas(options: {
     if (existsSync(statePath)) {
       // Even a read-only source connection can create WAL/SHM. The sync worker
       // preserves source artifacts and cannot release this process's writer locks.
-      stateSnapshot = prepareSqliteReadOnlyLocationSync(realpathSync(statePath));
+      stateSnapshot = prepareSqliteReadOnlyLocationSync(realpathSync.native(statePath));
       stateDatabase = openNodeSqliteDatabase(stateSnapshot.location, {
         readOnly: true,
       });
@@ -438,7 +438,8 @@ export function preflightOpenClawDatabaseSchemas(options: {
     let agentDatabase: DatabaseSync | undefined;
     let agentSnapshot: ReturnType<typeof prepareSqliteReadOnlyLocationSync> | undefined;
     try {
-      const realAgentPath = realpathSync(agentPath);
+      // Preserve SQLite's filesystem traversal through symlink/.. locators.
+      const realAgentPath = realpathSync.native(agentPath);
       if (row.agentId === undefined && inspectedAgentPaths.has(realAgentPath)) {
         continue;
       }

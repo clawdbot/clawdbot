@@ -7,7 +7,10 @@ import { checkTargetDatabaseSchemas } from "../cli/update-cli/schema-preflight.j
 import { readMainDatabasePosixLocks } from "../infra/sqlite-posix-locks.test-support.js";
 import * as snapshots from "../infra/sqlite-readonly-location.js";
 import { OPENCLAW_AGENT_SCHEMA_VERSION } from "./openclaw-agent-db-contract.js";
-import { unregisterOpenClawAgentDatabase } from "./openclaw-agent-db-registry.js";
+import {
+  registerOpenClawAgentDatabase,
+  unregisterOpenClawAgentDatabase,
+} from "./openclaw-agent-db-registry.js";
 import {
   closeOpenClawAgentDatabasesForTest,
   openOpenClawAgentDatabase,
@@ -176,6 +179,49 @@ describe("schema preflight source artifacts", () => {
     ]);
     expect(sourceArtifacts([...fixture.paths, alias])).toEqual(before);
   });
+
+  it.each(["registered", "candidate"] as const)(
+    "preserves native traversal and deduplication for a %s dot-dot locator",
+    (kind) => {
+      const fixture = createFixture();
+      fixture.worker.db.exec(`PRAGMA user_version = ${supportedVersions.agent + 10};`);
+      unregisterOpenClawAgentDatabase({
+        agentId: "worker",
+        path: fixture.worker.path,
+        env: fixture.env,
+      });
+      const link = path.join(fixture.env.OPENCLAW_STATE_DIR, "worker-link");
+      fs.symlinkSync(path.dirname(fixture.worker.path), link, "dir");
+      const locator = `${link}${path.sep}..${path.sep}agent${path.sep}openclaw-agent.sqlite`;
+      if (kind === "registered") {
+        registerOpenClawAgentDatabase({ agentId: "worker", path: locator, env: fixture.env });
+      }
+      fixture.close();
+      const lexicalPath = path.resolve(locator);
+      fs.mkdirSync(path.dirname(lexicalPath), { recursive: true });
+      fs.copyFileSync(fixture.main.path, lexicalPath, fs.constants.COPYFILE_EXCL);
+      expect(fs.realpathSync.native(locator)).toBe(fs.realpathSync.native(fixture.worker.path));
+      expect(fs.realpathSync(locator)).toBe(fs.realpathSync.native(lexicalPath));
+      const paths = [...fixture.paths, lexicalPath];
+      const before = sourceArtifacts(paths);
+      const result = preflightOpenClawDatabaseSchemas({
+        env: fixture.env,
+        supportedVersions,
+        configuredAgentDatabaseCandidatePaths:
+          kind === "candidate"
+            ? [locator, fixture.worker.path, lexicalPath]
+            : [fixture.worker.path, lexicalPath],
+      });
+      expect(result.indeterminate).toEqual([]);
+      expect(result.incompatible).toEqual([
+        expect.objectContaining({
+          path: locator,
+          foundVersion: supportedVersions.agent + 10,
+        }),
+      ]);
+      expect(sourceArtifacts(paths)).toEqual(before);
+    },
+  );
 
   it.each(["state", "main"] as const)(
     "fails closed when the %s snapshot cannot be prepared",
