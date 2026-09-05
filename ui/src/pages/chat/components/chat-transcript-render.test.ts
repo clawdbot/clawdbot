@@ -625,7 +625,7 @@ describe("chat transcript rendering", () => {
     transcript.hostDisconnected();
   });
 
-  it("keeps legacy non-off reasoning levels visible for completed transcripts", async () => {
+  it("hides legacy non-on reasoning levels for completed transcripts", async () => {
     const transcript = createTestTranscript();
     const container = document.body.appendChild(document.createElement("div"));
     const props = {
@@ -653,9 +653,7 @@ describe("chat transcript rendering", () => {
     transcript.hostUpdated();
     await flushDeferredRowPrune();
 
-    expect(container.querySelector(".chat-thinking")?.textContent).toContain(
-      "Legacy high reasoning remains visible.",
-    );
+    expect(container.querySelector(".chat-thinking")).toBeNull();
     transcript.hostDisconnected();
   });
 
