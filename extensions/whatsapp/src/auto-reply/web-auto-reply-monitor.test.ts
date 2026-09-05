@@ -811,9 +811,9 @@ describe("buildInboundLine", () => {
     expect(line).toContain("[/Replying]");
   });
 
-  it("applies the WhatsApp responsePrefix when configured", () => {
+  it("does not leak the WhatsApp responsePrefix template into the inbound body", () => {
     const line = buildInboundLine({
-      cfg: makeInboundCfg("[PFX]"),
+      cfg: makeInboundCfg("[{provider}/{model} | think:{think}]"),
       agentId: "main",
       msg: createDirectMessage({
         admission: {
@@ -827,7 +827,12 @@ describe("buildInboundLine", () => {
       envelope: { includeTimestamp: false },
     });
 
-    expect(line).toContain("[PFX] ping");
+    // The responsePrefix is an outbound-only template; the inbound body
+    // must be the sender's plain message.
+    expect(line).not.toContain("{provider}");
+    expect(line).not.toContain("{model}");
+    expect(line).not.toContain("{think}");
+    expect(line).toContain("ping");
   });
 
   it("normalizes direct from labels by stripping whatsapp: prefix", () => {
