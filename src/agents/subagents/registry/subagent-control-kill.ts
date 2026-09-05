@@ -57,7 +57,7 @@ type KillSelection = {
 };
 
 type KillScope = {
-  refresh: () => void;
+  refresh: () => number;
   retarget: (tree: KillTree, successor: SubagentRunRecord) => boolean;
 };
 
@@ -224,7 +224,10 @@ async function withSubagentKillScope<T>(
     const trees: KillTree[] = [];
     select(params.runs, trees, params.controller);
     const scope: KillScope = {
-      refresh: () => trees.forEach(refreshTree),
+      refresh: () => {
+        trees.forEach(refreshTree);
+        return selected.size;
+      },
       retarget(tree, successor) {
         const binding = tree.bind(successor);
         if (!binding.canTraverse()) {
@@ -348,52 +351,55 @@ type KillTraversal = {
   suppressTaskDelivery?: boolean;
 };
 
-async function killSubagentDescendants(
-  params: KillTraversal & { tree: KillTree },
-): ReturnType<typeof killSubagentRunTree> {
-  const { tree, scope } = params;
-  if (!tree.canTraverse()) {
-    return { killed: 0, labels: [] };
-  }
-  scope.refresh();
-  // Exact admin constraints belong only to its selected root, not each descendant.
-  return killSubagentRunTree({
-    cfg: params.cfg,
-    suppressTaskDelivery: params.suppressTaskDelivery,
-    scope,
-    trees: tree.children,
-  });
-}
-
 async function killSubagentRunTree(
   params: KillTraversal & { trees: KillTree[] },
 ): Promise<{ killed: number; labels: string[] }> {
-  // Interrupt siblings before waiting for any one's cleanup; each branch still
-  // drains its parent before traversing descendants. Preserve selection order.
-  const cancellations = params.trees.map(async (tree) => {
-    const labels: string[] = [];
+  const visits = new Map<KillTree, { label?: string; descendants: boolean }>();
+  const visit = async (tree: KillTree): Promise<void> => {
+    let result = visits.get(tree);
     try {
-      if (!tree.entry.execution.endedAt || tree.entry.pauseReason === "sessions_yield") {
-        const stopped = await killLatestSubagentRun({ ...params, tree });
-        if (stopped.result.error) {
-          tree.errors.add(stopped.result.error);
+      if (!result) {
+        result = { descendants: false };
+        visits.set(tree, result);
+        if (!tree.entry.execution.endedAt || tree.entry.pauseReason === "sessions_yield") {
+          const stopped = await killLatestSubagentRun({ ...params, tree });
+          if (stopped.result.error) {
+            tree.errors.add(stopped.result.error);
+          }
+          if (stopped.result.killed) {
+            result.label = resolveSubagentLabel(stopped.entry);
+          }
+          if (stopped.result.superseded) {
+            return;
+          }
         }
-        if (stopped.result.killed) {
-          labels.push(resolveSubagentLabel(stopped.entry));
-        }
-        if (stopped.result.superseded) {
-          return labels;
-        }
+        result.descendants = true;
       }
-      // Resolve recovery before checking traversal; ended ancestors need the same fence.
-      const cascade = await killSubagentDescendants({ ...params, tree });
-      labels.push(...cascade.labels);
+      if (result.descendants && tree.canTraverse()) {
+        params.scope.refresh();
+        await Promise.all(tree.children.map(visit));
+      }
     } catch (error) {
       tree.errors.add(formatErrorMessage(error));
+      if (result) {
+        result.descendants = false;
+      }
     }
-    return labels;
-  });
-  const labels = (await Promise.all(cancellations)).flat();
+  };
+  let selected: number;
+  do {
+    selected = params.scope.refresh();
+    // First visits interrupt siblings together; descendants still wait for their parent.
+    await Promise.all(params.trees.map(visit));
+    // A sibling's drain can capture children beneath an already visited branch.
+    // Complete that frontier before releasing holds, without stopping a session twice.
+  } while (params.scope.refresh() !== selected);
+  const collectLabels = (trees: KillTree[]): string[] =>
+    trees.flatMap((tree) => {
+      const label = visits.get(tree)?.label;
+      return [...(label === undefined ? [] : [label]), ...collectLabels(tree.children)];
+    });
+  const labels = collectLabels(params.trees);
   return { killed: labels.length, labels };
 }
 
@@ -409,8 +415,14 @@ async function killSubagentRoot(params: Parameters<typeof killLatestSubagentRun>
     if (stopped.result.error) {
       params.tree.errors.add(stopped.result.error);
     }
-    if (!stopped.result.superseded && !stopped.result.declined) {
-      cascade = await killSubagentDescendants(params);
+    if (!stopped.result.superseded && !stopped.result.declined && params.tree.canTraverse()) {
+      // Exact admin constraints belong only to its selected root, not each descendant.
+      cascade = await killSubagentRunTree({
+        cfg: params.cfg,
+        suppressTaskDelivery: params.suppressTaskDelivery,
+        scope: params.scope,
+        trees: params.tree.children,
+      });
     }
   } catch (error) {
     params.tree.errors.add(formatErrorMessage(error));
