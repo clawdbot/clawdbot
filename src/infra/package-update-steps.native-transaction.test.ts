@@ -453,3 +453,39 @@ describe.runIf(process.platform !== "win32")("native package transactions", () =
     },
   );
 });
+
+it("gives actionable Windows Bun recovery before stopping or installing", async () => {
+  await withTestDir({ prefix: "openclaw-windows-bun-refusal-" }, async (base) => {
+    const project = path.join(base, "global");
+    const globalRoot = path.join(project, "node_modules");
+    const packageRoot = path.join(globalRoot, "openclaw");
+    const binDir = path.join(base, "bin");
+    await writePackageRoot(packageRoot, "1.0.0");
+    const beforeActivate = vi.fn(async () => {});
+    const runStep = vi.fn(async () => {
+      throw new Error("A refused Windows Bun update must not install a package");
+    });
+    const platform = vi.spyOn(process, "platform", "get").mockReturnValue("win32");
+    try {
+      const result = await runGlobalPackageUpdateSteps({
+        installTarget: { manager: "bun", command: "bun", globalRoot, packageRoot },
+        packageName: "openclaw",
+        installSpec: "openclaw@2.0.0",
+        env: { BUN_INSTALL_GLOBAL_DIR: project, BUN_INSTALL_BIN: binDir },
+        runCommand: async () => ({ code: 0, stdout: binDir, stderr: "" }),
+        runStep,
+        beforeActivate,
+        timeoutMs: 1000,
+      });
+      expect(result.failedStep).toMatchObject({ name: "global install stage", exitCode: 1 });
+      expect(result.failedStep?.stderrTail).toContain("bun add -g --trust openclaw@2.0.0");
+      expect(result.failedStep?.stderrTail).toContain("openclaw gateway restart");
+      expect(result.failedStep?.stderrTail).toContain("openclaw update status");
+      expect(result.recovery).toEqual({ serviceRestartSafe: true, version: "1.0.0" });
+      expect(runStep).not.toHaveBeenCalled();
+      expect(beforeActivate).not.toHaveBeenCalled();
+    } finally {
+      platform.mockRestore();
+    }
+  });
+});

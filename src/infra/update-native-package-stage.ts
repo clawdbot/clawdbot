@@ -105,6 +105,7 @@ async function nativeProjectFingerprint(
 export async function prepareNativePackageStage(params: {
   installTarget: ResolvedGlobalInstallTarget;
   packageName: string;
+  installSpec: string;
   env?: NodeJS.ProcessEnv;
   globalBinDir?: string | null;
 }): Promise<NativePackageStage | null> {
@@ -113,7 +114,10 @@ export async function prepareNativePackageStage(params: {
     return null;
   }
   if (installTarget.manager === "bun" && process.platform === "win32") {
-    throw new Error("Bun Windows binary launchers cannot be relocated by the staged updater.");
+    throw new Error(
+      "Bun Windows binary launchers cannot be relocated by the staged updater. " +
+        `Run \`bun add -g --trust ${params.installSpec}\` manually, then \`openclaw gateway restart\`; verify with \`openclaw update status\`.`,
+    );
   }
   const env =
     installTarget.manager === "pnpm"

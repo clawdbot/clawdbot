@@ -84,6 +84,7 @@ describe.skipIf(process.platform === "win32")("native package stage", () => {
         const stage = await prepareNativePackageStage({
           installTarget,
           packageName: "openclaw",
+          installSpec: "openclaw@2.0.0",
           globalBinDir: liveBinDir,
           env: {},
         });
@@ -201,6 +202,7 @@ describe.skipIf(process.platform === "win32")("native package stage", () => {
       const stage = await prepareNativePackageStage({
         installTarget: { manager: "bun", command: "bun", globalRoot, packageRoot },
         packageName: "openclaw",
+        installSpec: "openclaw@2.0.0",
         globalBinDir: path.join(base, "bin"),
         env: {},
       });

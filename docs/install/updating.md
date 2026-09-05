@@ -411,8 +411,9 @@ bun add -g --trust openclaw@latest
 `--trust` allows OpenClaw's lifecycle scripts. The canonical `openclaw update`
 path applies the same OpenClaw-only Bun trust when it owns the install.
 On Windows, the staged updater rejects Bun installs before stopping the Gateway
-because it cannot relocate Bun's binary launchers. Stop the Gateway, run the
-manual Bun command above, then restart and verify it as described above.
+because it cannot relocate Bun's binary launchers. Run
+`bun add -g --trust openclaw@<resolved-target-version>` manually, then
+`openclaw gateway restart`; verify with `openclaw update status`.
 
 ### Package lifecycle and operator state
 

@@ -578,7 +578,7 @@ async function prepareNpmGitSourceInstallSpec(params: {
 async function prepareStagedPackageInstall(
   installTarget: ResolvedGlobalInstallTarget,
   packageName: string,
-  nativeOptions?: { env: NodeJS.ProcessEnv; globalBinDir?: string },
+  nativeOptions?: { env: NodeJS.ProcessEnv; globalBinDir?: string; installSpec: string },
   requireStaging = false,
 ): Promise<{
   stagedInstall: StagedPackageInstall | null;
@@ -800,7 +800,7 @@ export async function runGlobalPackageUpdateSteps(params: {
         : undefined;
     }
     const nativeOptions = stageNative
-      ? { env: effectiveInstallEnv ?? process.env, globalBinDir }
+      ? { env: effectiveInstallEnv ?? process.env, globalBinDir, installSpec: params.installSpec }
       : undefined;
     const preparedInstall = await prepareStagedPackageInstall(
       params.installTarget,
