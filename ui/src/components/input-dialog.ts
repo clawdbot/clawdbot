@@ -23,6 +23,11 @@ type InputDialogOptions = {
    */
   requireChange?: boolean;
   /**
+   * Caps the entry length at the caller's protocol bound, rejecting overlong
+   * input at the source instead of letting the backing RPC fail on it.
+   */
+  maxLength?: number;
+  /**
    * Runs the operation the dialog was opened for. `null` resolves the dialog; a
    * message keeps it open with the typed value, so a rejected attempt stays
    * visible and retryable instead of discarding what the operator wrote.
@@ -152,6 +157,7 @@ function presentInputDialog(options: InputDialogOptions): Promise<string | null>
                   type="text"
                   autocomplete="off"
                   spellcheck="false"
+                  maxlength=${options.maxLength ?? nothing}
                   .value=${options.defaultValue ?? ""}
                   ?disabled=${submitting}
                   aria-invalid=${failure ? "true" : nothing}

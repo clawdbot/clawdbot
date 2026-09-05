@@ -22,6 +22,7 @@ import {
   waitForRenderedModalDialog,
 } from "../../test-helpers/modal-dialog.ts";
 import "./devices-page.ts";
+import type { DeviceAliasTarget } from "./devices-dialogs.ts";
 import type { DevicesRouteData } from "./devices-page.ts";
 
 type TestDevicesPage = HTMLElement & {
@@ -47,12 +48,15 @@ type TestDevicesPage = HTMLElement & {
     ) => void;
   };
   ensureInitialData: () => void;
-  confirmInventoryRemoval: (prompt: {
-    kind: "entry";
-    entry: InventoryRemovalRequest;
-  }) => Promise<void>;
-  confirmPairingReject: (target: "device" | "node", requestId: string) => Promise<void>;
-  confirmTokenRevoke: (deviceId: string, role: string) => Promise<void>;
+  dialogs: {
+    confirmInventoryRemoval: (prompt: {
+      kind: "entry";
+      entry: InventoryRemovalRequest;
+    }) => Promise<void>;
+    confirmPairingReject: (target: "device" | "node", requestId: string) => Promise<void>;
+    confirmTokenRevoke: (deviceId: string, role: string) => Promise<void>;
+    editAlias: (device: DeviceAliasTarget) => Promise<void>;
+  };
   reportRotationOutcome: (
     device: { id: string; name: string },
     role: string,
@@ -855,7 +859,7 @@ describe("DevicesPage gateway lifecycle", () => {
     const page = createConnectedPage(client);
 
     const pending = dialogs.track(
-      page.confirmInventoryRemoval({
+      page.dialogs.confirmInventoryRemoval({
         kind: "entry",
         entry: { id: "device-1", name: "Browser", removeNode: false, removeDevice: true },
       }),
@@ -874,7 +878,7 @@ describe("DevicesPage gateway lifecycle", () => {
     const client = { request } as unknown as GatewayBrowserClient;
     const page = createConnectedPage(client);
 
-    const pending = dialogs.track(page.confirmPairingReject("device", "request-1"));
+    const pending = dialogs.track(page.dialogs.confirmPairingReject("device", "request-1"));
     const { dialog } = await waitForRenderedModalDialog(document.body);
     expect(dialog.getAttribute("aria-label")).toBe(t("devices.inventory.rejectDevicePromptTitle"));
 
@@ -890,7 +894,7 @@ describe("DevicesPage gateway lifecycle", () => {
     const client = { request } as unknown as GatewayBrowserClient;
     const page = createConnectedPage(client);
 
-    const pending = dialogs.track(page.confirmPairingReject("node", "request-2"));
+    const pending = dialogs.track(page.dialogs.confirmPairingReject("node", "request-2"));
     await waitForRenderedModalDialog(document.body);
 
     clickDialogButton(t("common.cancel"));
@@ -905,7 +909,7 @@ describe("DevicesPage gateway lifecycle", () => {
     const client = { request } as unknown as GatewayBrowserClient;
     const page = createConnectedPage(client);
 
-    const pending = dialogs.track(page.confirmTokenRevoke("device-1", "operator"));
+    const pending = dialogs.track(page.dialogs.confirmTokenRevoke("device-1", "operator"));
     const { dialog } = await waitForRenderedModalDialog(document.body);
     expect(dialog.getAttribute("aria-label")).toBe(
       t("devices.inventory.revokePromptTitle", { role: "operator" }),
@@ -926,7 +930,7 @@ describe("DevicesPage gateway lifecycle", () => {
     const client = { request } as unknown as GatewayBrowserClient;
     const page = createConnectedPage(client);
 
-    const pending = dialogs.track(page.confirmTokenRevoke("device-1", "operator"));
+    const pending = dialogs.track(page.dialogs.confirmTokenRevoke("device-1", "operator"));
     await waitForRenderedModalDialog(document.body);
     const generation = page.requestGeneration;
     const downgraded = gatewaySnapshot(client, true);
