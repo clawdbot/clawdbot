@@ -29,7 +29,9 @@ async function expectWorkerFailure(error: unknown, message: string): Promise<voi
   prepare.mockRejectedValueOnce(error);
   await import("./sqlite-readonly-location.worker.js");
   await vi.dynamicImportSettled();
-  expect(write).toHaveBeenCalledExactlyOnceWith(JSON.stringify({ ok: false, message }));
+  expect(write).toHaveBeenCalledExactlyOnceWith(
+    JSON.stringify({ ok: false, failure: "error", message }),
+  );
   expect(process.exitCode).toBe(1);
 }
 

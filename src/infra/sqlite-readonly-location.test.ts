@@ -2,6 +2,7 @@ import { spawnSync } from "node:child_process";
 import fs from "node:fs";
 import path from "node:path";
 import type { DatabaseSync } from "node:sqlite";
+import { pathToFileURL } from "node:url";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { useAutoCleanupTempDirTracker } from "../../test/helpers/temp-dir.js";
 import { withEnvAsync } from "../test-utils/env.js";
@@ -9,6 +10,7 @@ import { requireNodeSqlite } from "./node-sqlite.js";
 import { runtimeProcessEntrypoints } from "./runtime-process-entrypoints.js";
 import { resolveRuntimeWorkerArgv, resolveRuntimeWorkerUrl } from "./runtime-worker-url.js";
 import { startSqliteConcurrentWriter } from "./sqlite-concurrent-writer.test-support.js";
+import { isSqliteBackupContentionError } from "./sqlite-online-backup.js";
 import { readMainDatabasePosixLocks } from "./sqlite-posix-locks.test-support.js";
 import {
   prepareSqliteReadOnlyLocation,
@@ -16,6 +18,9 @@ import {
   prepareSqliteReadOnlyLocationSync,
   prepareSqliteReadOnlyLocationSyncInProcess,
 } from "./sqlite-readonly-location.js";
+
+// A regression that drops the bound must fail fast instead of spinning forever.
+const MOCK_BACKUP_STEP_CEILING = 100_000;
 
 const writers: Array<ReturnType<typeof startSqliteConcurrentWriter>> = [];
 const tempDirs = useAutoCleanupTempDirTracker((cleanup) => {
@@ -32,6 +37,18 @@ const tempDirs = useAutoCleanupTempDirTracker((cleanup) => {
 function createTempDatabasePath(): string {
   const tempDir = tempDirs.make("openclaw-sqlite-readonly-");
   return path.join(tempDir, "state.sqlite");
+}
+
+function expectContentionGuidance(error: unknown, sourcePath: string): void {
+  expect(error).toBeInstanceOf(Error);
+  expect(isSqliteBackupContentionError(error)).toBe(true);
+  expect((error as Error).message).toContain(sourcePath);
+  expect((error as Error).message).toMatch(
+    /could not reach a consistent copy.*(stop the gateway|quiesce writes)/isu,
+  );
+  // This path is a read-only state-database open, not a backup, so the failure
+  // must not tell the operator to run a backup command.
+  expect((error as Error).message).not.toMatch(/only-config/iu);
 }
 
 async function expectPublicSnapshot(
@@ -502,6 +519,69 @@ describe("prepareSqliteReadOnlyLocation", () => {
     },
   );
 
+  it("preserves online-backup contention across the isolated worker boundary", () => {
+    const cacheRoot = tempDirs.make("openclaw-sqlite-snapshot-worker-contention-");
+    const preloadPath = path.join(cacheRoot, "wedged-backup.mjs");
+    fs.writeFileSync(
+      preloadPath,
+      `
+        const sqlite = process.getBuiltinModule("node:sqlite");
+        sqlite.backup = async (_source, _destination, options) => {
+          for (let step = 0; step < 20_000; step += 1) {
+            options.progress({ remainingPages: 50, totalPages: 50 });
+          }
+          throw new Error("online backup plateau guard did not abort");
+        };
+      `,
+    );
+    const sqlite = requireNodeSqlite();
+    const databasePath = createTempDatabasePath();
+    const database = new sqlite.DatabaseSync(databasePath);
+    // Rollback journal mode reaches online backup in the async worker; sync raw-copies instead.
+    database.exec("PRAGMA journal_mode = DELETE; CREATE TABLE probe (value TEXT);");
+    database.close();
+    const workerUrl = resolveRuntimeWorkerUrl({
+      ...runtimeProcessEntrypoints.sqliteReadOnly,
+      currentModuleUrl: import.meta.url,
+    });
+    const extension = workerUrl.pathname.endsWith(".ts") ? ".ts" : ".js";
+    const moduleUrl = new URL(`./sqlite-readonly-location${extension}`, workerUrl).href;
+    const ownerUrl = new URL(`./sqlite-online-backup${extension}`, workerUrl).href;
+    const script = `
+      const { prepareSqliteReadOnlyLocation } = await import(${JSON.stringify(moduleUrl)});
+      const { isSqliteBackupContentionError } = await import(${JSON.stringify(ownerUrl)});
+      try {
+        await prepareSqliteReadOnlyLocation(${JSON.stringify(databasePath)});
+        process.exitCode = 24;
+      } catch (error) {
+        console.log(JSON.stringify({
+          message: error instanceof Error ? error.message : String(error),
+          contention: isSqliteBackupContentionError(error),
+        }));
+      }
+    `;
+    const child = spawnSync(
+      process.execPath,
+      [...resolveRuntimeWorkerArgv(workerUrl).slice(0, -1), "--input-type=module", "-e", script],
+      {
+        cwd: process.cwd(),
+        encoding: "utf8",
+        env: {
+          ...process.env,
+          NODE_OPTIONS: [process.env.NODE_OPTIONS, `--import=${pathToFileURL(preloadPath).href}`]
+            .filter(Boolean)
+            .join(" "),
+          XDG_CACHE_HOME: cacheRoot,
+        },
+      },
+    );
+
+    expect(child.status, child.stderr).toBe(0);
+    const reported = JSON.parse(child.stdout) as { contention: boolean; message: string };
+    expect(reported.contention).toBe(true);
+    expect(reported.message).toMatch(/quiesce writes|Stop the Gateway/u);
+  });
+
   it("propagates async public entry point failures", async () => {
     const missingPath = path.join(tempDirs.make("openclaw-sqlite-readonly-missing-"), "missing.db");
     await expect(prepareSqliteReadOnlyLocation(missingPath)).rejects.toThrow(
@@ -514,6 +594,41 @@ describe("prepareSqliteReadOnlyLocation", () => {
     expect(() => prepareSqliteReadOnlyLocationSync(missingPath)).toThrow(
       /SQLite read-only worker .*ENOENT.*\(code=ENOENT\)/u,
     );
+  });
+
+  it("stops a WAL backup that repeatedly makes no net page progress", async () => {
+    const sqlite = requireNodeSqlite();
+    const databasePath = createTempDatabasePath();
+    const writer = new sqlite.DatabaseSync(databasePath);
+    try {
+      writer.exec(`
+        PRAGMA journal_mode = WAL;
+        PRAGMA wal_autocheckpoint = 0;
+        CREATE TABLE writes (id INTEGER PRIMARY KEY, payload BLOB NOT NULL);
+        INSERT INTO writes (payload) VALUES (zeroblob(8192));
+      `);
+      expect(fs.existsSync(`${databasePath}-wal`)).toBe(true);
+      expect(fs.existsSync(`${databasePath}-shm`)).toBe(true);
+
+      vi.spyOn(sqlite, "backup").mockImplementation(async (_source, _destination, options) => {
+        // Tolerating a missing progress option is what makes this a regression
+        // test: pre-fix production passed none, so the copy simply never
+        // stopped, which is the reported defect. The ceiling only keeps a
+        // future regression failing fast instead of spinning.
+        for (let step = 0; step < MOCK_BACKUP_STEP_CEILING; step += 1) {
+          options?.progress?.({ remainingPages: 50, totalPages: 50 });
+        }
+        throw new Error(`backup progress was not bounded in ${MOCK_BACKUP_STEP_CEILING} steps`);
+      });
+
+      const error = await prepareSqliteReadOnlyLocationInProcess(databasePath).then(
+        () => undefined,
+        (cause: unknown) => cause,
+      );
+      expectContentionGuidance(error, fs.realpathSync.native(databasePath));
+    } finally {
+      writer.close();
+    }
   });
 
   it.runIf(process.platform === "linux")(

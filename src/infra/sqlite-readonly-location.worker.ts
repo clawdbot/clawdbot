@@ -1,5 +1,6 @@
 import { coerceErrorMessage } from "@openclaw/normalization-core/error-coercion";
 import { formatSqliteErrorCodeSuffix } from "./sqlite-error-diagnostics.js";
+import { isSqliteBackupContentionError } from "./sqlite-online-backup.js";
 import {
   SQLITE_READONLY_CHILD_ARG,
   prepareSqliteReadOnlyLocationInProcess,
@@ -8,7 +9,8 @@ import {
 
 // The sync strategy raw-copies without attaching SQLite to the source, so sync
 // callers stay byte-neutral on the live family; the async strategy holds a read
-// transaction on the source and may update its WAL index.
+// transaction on the source and may update its WAL index. Failures carry a
+// closed tag so the parent can rebuild the typed contention cause.
 async function runWorker(): Promise<void> {
   const mode = process.argv[3];
   const pathname = process.argv[4];
@@ -17,6 +19,7 @@ async function runWorker(): Promise<void> {
     process.stdout.write(
       JSON.stringify({
         ok: false,
+        failure: "error",
         message: "SQLite read-only worker requires a mode and a database path",
       }),
     );
@@ -31,7 +34,8 @@ async function runWorker(): Promise<void> {
   } catch (error) {
     process.exitCode = 1;
     const message = `${coerceErrorMessage(error)}${formatSqliteErrorCodeSuffix(error)}`;
-    process.stdout.write(JSON.stringify({ ok: false, message }));
+    const failure = isSqliteBackupContentionError(error) ? "contention" : "error";
+    process.stdout.write(JSON.stringify({ ok: false, failure, message }));
   }
 }
 
