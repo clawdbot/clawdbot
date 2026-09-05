@@ -34,10 +34,12 @@ The headline owns that run's sidebar subtitle instead of heuristic live activity
 Session observation is enabled by default. Safe preamble headlines do not require a utility model; the utility model only owns richer assessments and terminal summaries. In **Settings > Appearance > Sidebar**, you can turn observation off gateway-wide, inspect the resolved small model and its provenance, or choose automatic routing, disable utility tasks, or select an explicit `agents.defaults.utilityModel`. The equivalent config controls are `gateway.controlUi.sessionObserver: false` and `agents.defaults.utilityModel: ""`.
 
 Session links in messages open inside the Control UI. This includes `agent:` keys,
-relative chat URLs, and URLs on the current origin or the Gateway's public origin
+root-relative chat URLs, and URLs on the current origin or the Gateway's public origin
 when its applied configuration is loaded. Hovering a link shows the session card
 when the session is known locally. Unknown or ambiguous session references remain
 navigable without a card; links to other origins keep normal browser behavior.
+Document-relative hrefs are never session links; file references such as
+`src/utils/foo.ts` retain workspace file handling.
 
 ## Environment identity
 

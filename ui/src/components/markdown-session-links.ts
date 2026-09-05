@@ -36,6 +36,9 @@ function parseSessionLinkKey(raw: string): SessionKeyTarget | null {
 }
 
 export function parseMarkdownSessionUrl(raw: string, basePath?: string, mainKey?: string) {
+  if (!/^(?:https?:\/\/|\/)/i.test(raw.trim())) {
+    return null;
+  }
   try {
     const url = new URL(raw, globalThis.location.href);
     const target = sessionRefFromPath(
@@ -93,11 +96,7 @@ export function installMarkdownSessionLinks(markdownParser: MarkdownIt, scanPatt
           linkDepth++;
         } else if (token.type === "link_close") {
           linkDepth--;
-        } else if (
-          linkDepth === 0 &&
-          token.type === "code_inline" &&
-          /^(?:agent:|https?:\/\/|\/)/i.test(token.content.trim())
-        ) {
+        } else if (linkDepth === 0 && token.type === "code_inline") {
           const open = new state.Token("link_open", "a", 1);
           if (decorate(open, token.content)) {
             children.splice(index, 1, open, token, new state.Token("link_close", "a", -1));

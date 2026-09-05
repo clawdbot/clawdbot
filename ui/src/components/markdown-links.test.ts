@@ -620,6 +620,29 @@ describe("toSanitizedMarkdownHtml links", () => {
       }
     });
 
+    it.each([
+      ["source", "src/utils/foo.ts", "file"],
+      ["root session", "/chat/main/cafebabe", "session"],
+      ["absolute session", `${location.origin}/chat/main/cafebabe`, "session"],
+      ["relative route", "chat/main/x", "plain"],
+    ])("classifies %s independently of the current chat route", (label, href, kind) => {
+      const previous = location.href;
+      history.replaceState(null, "", "/chat/main/d0effac9");
+      try {
+        const fragment = htmlFragment(
+          toSanitizedMarkdownHtml(`[${label}](${href})`, { sessionLinks: true, fileLinks: true }),
+        );
+        const link = fragment.querySelector<HTMLAnchorElement>("a")!;
+        expect(link.classList.contains("markdown-session-link")).toBe(kind === "session");
+        expect(link.hasAttribute("data-session-href")).toBe(kind === "session");
+        expect(link.classList.contains("markdown-file-link")).toBe(kind === "file");
+        expect(link.dataset.filePath).toBe(kind === "file" ? href : undefined);
+        expect(link.getAttribute("href")).toBe(kind === "file" ? null : href);
+      } finally {
+        history.replaceState(null, "", previous);
+      }
+    });
+
     it("keeps ordinary inline code out of session routes on a chat page", () => {
       const previous = location.href;
       history.replaceState(null, "", "/chat/main/d0effac9");
