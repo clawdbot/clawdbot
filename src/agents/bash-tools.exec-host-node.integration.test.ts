@@ -5,7 +5,13 @@ import { createDeferred } from "../../test/helpers/promise.js";
 import { setRuntimeConfigSnapshot } from "../config/config.js";
 import { readExecApprovalsSnapshot, saveExecApprovals } from "../infra/exec-approvals.js";
 import { handleInvoke } from "../node-host/invoke.js";
+import {
+  captureActivePluginRegistrySnapshot,
+  rollbackStagedPluginRegistry,
+  stageActivePluginRegistry,
+} from "../plugins/runtime.js";
 import type { Deferred } from "../shared/deferred.js";
+import { createChannelTestPluginBase, createTestRegistry } from "../test-utils/channel-plugins.js";
 import { withEnv, withEnvAsync } from "../test-utils/env.js";
 import {
   createOpenClawTestState,
@@ -35,7 +41,18 @@ let afterPrepare: () => Promise<void>;
 let request: ExecuteNodeHostCommandParams & { workdir: string };
 let resolveDecision: (result: { decision: string }) => void;
 let decisionEntered: Deferred;
-beforeEach(async () => {
+beforeEach(async ({ onTestFinished }) => {
+  const previousRegistry = captureActivePluginRegistrySnapshot();
+  onTestFinished(() => rollbackStagedPluginRegistry(previousRegistry));
+  // A real Gateway already loaded its ingress channel before executing a tool.
+  // Keep this node-policy fixture from cold-loading the whole A2A plugin graph.
+  stageActivePluginRegistry(
+    createTestRegistry([
+      { pluginId: "a2a", source: "test", plugin: createChannelTestPluginBase({ id: "a2a" }) },
+    ]),
+    null,
+    "default",
+  );
   state = await createOpenClawTestState({ label: "node-exec-policy" });
   await state.writeConfig({});
   saveExecApprovals({ version: 1, defaults: { security: "full", ask: "off" } });
