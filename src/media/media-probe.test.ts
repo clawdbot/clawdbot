@@ -183,6 +183,16 @@ describe("probeMediaFile", () => {
     },
   );
 
+  it.each([
+    "Failed to set value '0' for option 'threads': Option not found",
+    "Failed to set value '0' for option 'fdfoo': Option not found",
+  ])("does not retry an unrelated ffprobe option failure: %s", async (stderr) => {
+    runFfprobe.mockRejectedValue(Object.assign(new Error("ffprobe failed"), { stderr }));
+
+    await expect(probePlaybackMediaFileDescriptor(17, "audio")).resolves.toBeNull();
+    expect(runFfprobe).toHaveBeenCalledOnce();
+  });
+
   it("uses stream duration when the container duration is absent", async () => {
     runFfprobe.mockResolvedValueOnce(
       JSON.stringify({ streams: [{ codec_type: "audio", duration: "1.5" }] }),
