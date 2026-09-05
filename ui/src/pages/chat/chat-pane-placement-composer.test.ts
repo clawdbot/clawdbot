@@ -37,6 +37,7 @@ function presentation(
     restartingKey: null,
     row,
     startupPending: false,
+    workspaceResultPending: false,
     onRestart: vi.fn(),
     onReclaim: vi.fn(),
     ...overrides,
@@ -50,13 +51,16 @@ describe("chat placement composer presentation", () => {
     ["provisioning", "busy", "Provisioning environment…"],
     ["syncing", "busy", "Preparing workspace…"],
     ["starting", "busy", "Starting…"],
-    ["draining", "busy", "Finishing session move…"],
-    ["reconciling", "busy", "Finishing session move…"],
+    ["draining", "busy", "Send now; your message starts automatically after workspace sync."],
+    ["reconciling", "busy", "Send now; your message starts automatically after workspace sync."],
   ] as const)("projects %s placement into a %s composer", (state, kind, busyMessage) => {
-    const result = presentation(placementSession(state));
+    const acceptsDuringSync = state === "draining" || state === "reconciling";
+    const result = presentation(placementSession(state), {
+      workspaceResultPending: acceptsDuringSync,
+    });
 
     expect(result.state.kind).toBe(kind);
-    expect(result.blocksSend).toBe(kind !== "ready");
+    expect(result.blocksSend).toBe(kind !== "ready" && !acceptsDuringSync);
     expect(result.busyMessage).toBe(busyMessage ?? null);
     expect(
       resolveComposerAvailability({
@@ -73,8 +77,15 @@ describe("chat placement composer presentation", () => {
         placementStartupPending: false,
         sessionDisabledBanner: undefined,
       }).canSend,
-    ).toBe(kind === "ready");
+    ).toBe(kind === "ready" || acceptsDuringSync);
   });
+
+  it.each(["draining", "reconciling"] as const)(
+    "keeps %s blocked without a pending workspace result",
+    (state) => {
+      expect(presentation(placementSession(state)).blocksSend).toBe(true);
+    },
+  );
 
   it.each(["restart", "stop-first"] as const)(
     "projects failed %s recovery into an actionable composer banner",

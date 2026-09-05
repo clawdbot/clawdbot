@@ -302,7 +302,7 @@ describe("worker session placement store", () => {
       }),
     ).toThrow("during an active turn");
 
-    const released = store.waitForTurnClaimRelease(SESSION.sessionId, { timeoutMs: 1_000 });
+    const released = store.waitForTurnClaimRelease(SESSION.sessionId, {});
     store.releaseTurn(localClaim);
     await released;
     expect(
@@ -779,6 +779,9 @@ describe("worker session placement store", () => {
     });
     store.markWorkspaceResultPending(claim);
 
+    expect(
+      store.getPendingWorkspaceResultSessionIds([active.sessionId, "missing-session"]),
+    ).toEqual(new Set([active.sessionId]));
     expect(store.listPendingWorkspaceResults()).toEqual([
       {
         sessionId: active.sessionId,
@@ -852,6 +855,7 @@ describe("worker session placement store", () => {
       createWorkerSessionPlacementStore({ database, now: () => nowMs }).get(SESSION.sessionId),
     ).not.toHaveProperty("workspaceResultConflict");
     expect(store.listPendingWorkspaceResults()).toEqual([]);
+    expect(store.getPendingWorkspaceResultSessionIds([active.sessionId])).toEqual(new Set());
   });
 
   it("preserves an admitted worker result while its placement is draining", () => {

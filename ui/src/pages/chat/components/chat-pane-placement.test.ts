@@ -52,6 +52,39 @@ function mount(
 }
 
 describe("chat pane device placement", () => {
+  it("presents healthy reconciliation as cloud file sync with elapsed safe-apply detail", () => {
+    const container = document.createElement("div");
+    document.body.append(container);
+    containers.push(container);
+    const session = {
+      key: "agent:main:cloud-sync",
+      kind: "direct",
+      updatedAt: 0,
+      placement: {
+        state: "reconciling",
+        generation: 2,
+        createdAtMs: 100_000,
+        updatedAtMs: 300_000,
+        stateChangedAtMs: 300_000,
+        environmentId: "worker:cloud",
+        activeOwnerEpoch: 1,
+        workerBundleHash: "a".repeat(64),
+        workspaceBaseManifestRef: "base-manifest",
+        remoteWorkspaceDir: "/worker/repo",
+      },
+    } satisfies GatewaySessionRow;
+
+    render(renderChatPanePlacement({ session }), container);
+
+    expect(container.querySelector(".chat-pane__placement-chip")?.textContent?.trim()).toBe(
+      "Cloud · syncing files",
+    );
+    expect(container.querySelector(".chat-pane__placement-note")?.textContent).toContain(
+      "Safely applying cloud edits",
+    );
+    expect(container.querySelector("openclaw-elapsed-time")).not.toBeNull();
+  });
+
   it.each(
     [
       {

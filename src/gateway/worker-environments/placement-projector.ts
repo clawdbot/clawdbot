@@ -11,6 +11,7 @@ import type { WorkerEnvironmentServiceContract } from "./service-contract.js";
 
 export type WorkerSessionPlacementReader = {
   getMany(sessionIds: readonly string[]): ReadonlyMap<string, WorkerSessionPlacementRecord>;
+  getPendingWorkspaceResultSessionIds?(sessionIds: readonly string[]): ReadonlySet<string>;
   /** Runtime consumers may cancel work when the exact captured turn claim closes. */
   registerTurnClaimClosedHandler?: (
     handler: (claim: import("./placement-record.js").WorkerSessionTurnClaim) => void,
@@ -102,6 +103,7 @@ export function projectWorkerSessionPlacement(
   runner?: SessionPlacementRunner,
   identity?: { providerId: string; profileId: string },
   failedRecoveryAction?: "restart" | "stop-first",
+  workspaceResultPending = false,
 ): SessionPlacement {
   const timing = {
     generation: record.generation,
@@ -182,6 +184,7 @@ export function projectWorkerSessionPlacement(
         ...(record.lastLiveEventAckCursor !== null
           ? { lastLiveEventAckCursor: record.lastLiveEventAckCursor }
           : {}),
+        ...(workspaceResultPending ? { workspaceResultPending: true as const } : {}),
         ...conflict,
       };
     case "reconciling":
@@ -200,6 +203,7 @@ export function projectWorkerSessionPlacement(
         ...(record.lastLiveEventAckCursor !== null
           ? { lastLiveEventAckCursor: record.lastLiveEventAckCursor }
           : {}),
+        ...(workspaceResultPending ? { workspaceResultPending: true as const } : {}),
         ...conflict,
       };
     case "reclaimed":

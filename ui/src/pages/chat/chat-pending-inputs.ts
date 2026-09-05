@@ -33,6 +33,7 @@ const pendingInputViews = new WeakMap<ChatState, PendingInputView>();
 export function buildPendingInputItems(
   inputs: ChatPendingInputsPage["items"],
   searchQuery?: string,
+  workspaceSyncPendingRunIds?: readonly string[],
 ): ChatItem[] {
   // Custody records stay outside active-run ordering until the writer promotes them.
   const items: ChatItem[] = [];
@@ -51,6 +52,14 @@ export function buildPendingInputItems(
       ),
     );
     if (input.state === "queued") {
+      if (input.runId && workspaceSyncPendingRunIds?.includes(input.runId)) {
+        items.push({
+          kind: "notice",
+          key: `pending-input:${input.id}:workspace-sync`,
+          timestamp: input.acceptedAt,
+          text: t("chat.pendingInputs.waitingForWorkspaceSync"),
+        });
+      }
       continue;
     }
     items.push({

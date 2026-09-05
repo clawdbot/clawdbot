@@ -46,7 +46,7 @@ function resolvePlacementComposerState(params: {
       return { kind: "busy", message: t("newSession.starting") };
     case "draining":
     case "reconciling":
-      return { kind: "busy", message: t("sessionsView.finishingSessionMove") };
+      return { kind: "busy", message: t("sessionsView.syncingCloudFilesComposer") };
     case "failed":
       return {
         kind: "failed",
@@ -68,6 +68,7 @@ export function resolvePlacementComposer(params: {
   restartingKey: string | null;
   row: GatewaySessionRow | undefined;
   startupPending: boolean;
+  workspaceResultPending: boolean;
   onRestart: () => void;
   onReclaim: () => void;
 }): PlacementComposerPresentation {
@@ -80,7 +81,12 @@ export function resolvePlacementComposer(params: {
   const failureReason = placement?.state === "failed" ? placement.recoveryError : terminalReason;
   const common = {
     state,
-    blocksSend: state.kind !== "ready",
+    blocksSend:
+      state.kind !== "ready" &&
+      !(
+        params.workspaceResultPending &&
+        (placement?.state === "draining" || placement?.state === "reconciling")
+      ),
     busyMessage,
     diskSpace: placement?.state === "active" ? placement.diskSpace : undefined,
     runError: failureReason

@@ -5435,6 +5435,7 @@ export const en: TranslationMap & {
       noMatches: "No matching messages",
     },
     pendingInputs: {
+      waitingForWorkspaceSync: "Received · waiting for workspace sync",
       cancelled:
         "Cancelled before the agent started it. It will not run automatically; copy it and send again.",
       interrupted:

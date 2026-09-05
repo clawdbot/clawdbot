@@ -159,6 +159,25 @@ function toolMessage(
   return chatMessage("tool", content, timestamp, { toolCallId, toolName, ...overrides });
 }
 
+it("invalidates cached custody notices when workspace-sync ownership changes", () => {
+  const pendingInputs = [
+    {
+      acceptedAt: 1,
+      id: "pending-follow-up",
+      message: userMessage("continue", 1),
+      runId: "follow-up-run",
+      state: "queued" as const,
+    },
+  ];
+  const waiting = buildCachedChatItems(
+    createProps({ pendingInputs, workspaceSyncPendingRunIds: ["follow-up-run"] }),
+  );
+  const active = buildCachedChatItems(createProps({ pendingInputs }));
+
+  expect(waiting.some((item) => item.kind === "notice")).toBe(true);
+  expect(active.some((item) => item.kind === "notice")).toBe(false);
+});
+
 function queuedSend(
   id: string,
   text: string,

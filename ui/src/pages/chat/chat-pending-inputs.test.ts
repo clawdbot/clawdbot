@@ -21,6 +21,7 @@ import { makeChatHost } from "./chat-host.test-support.ts";
 import { createInitializationContext } from "./chat-pane.test-support.ts";
 import {
   applyChatPendingInputs,
+  buildPendingInputItems,
   getChatPendingInputs,
   loadChatPendingInputs,
 } from "./chat-pending-inputs.ts";
@@ -107,6 +108,21 @@ afterEach(() => {
 });
 
 describe("server-owned pending input display", () => {
+  it("shows a durable receipt while an accepted input waits for workspace sync", () => {
+    const queued = { ...input, state: "queued" as const };
+
+    const items = buildPendingInputItems([queued], undefined, ["run-queued"]);
+
+    expect(items).toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({
+          kind: "notice",
+          text: "Received · waiting for workspace sync",
+        }),
+      ]),
+    );
+  });
+
   it("keeps cached local submissions available after pane remount", async () => {
     const host = makeChatHost({ sessionKey, currentSessionId: sessionId, requestHandlers: {} });
     const runId = "cached-delivery";

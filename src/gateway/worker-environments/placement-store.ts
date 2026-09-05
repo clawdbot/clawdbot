@@ -57,6 +57,7 @@ import {
   createPlacementWorkspaceResultOps,
   hasCurrentWorkspaceResultClaim,
   hasWorkerWorkspacePendingResult,
+  readWorkerWorkspacePendingResultSessionIds,
 } from "./placement-workspace-result.js";
 import { boundedWorkerError } from "./worker-error.js";
 import { projectWorkspaceResultConflict } from "./workspace-conflicts.js";
@@ -173,6 +174,13 @@ export function createWorkerSessionPlacementStore(
         }
       }
       return records;
+    },
+
+    getPendingWorkspaceResultSessionIds(sessionIds: readonly string[]): ReadonlySet<string> {
+      const normalizedIds = [
+        ...new Set(sessionIds.map((sessionId) => required(sessionId, "session id"))),
+      ];
+      return readWorkerWorkspacePendingResultSessionIds(read(), normalizedIds);
     },
 
     retireSessionPlacement(input: WorkerSessionPlacementRetirement): void {

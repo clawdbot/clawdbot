@@ -366,14 +366,20 @@ export function createPlacementTurnClaimOps(runtime: PlacementStoreRuntime) {
 
     async waitForTurnClaimRelease(
       sessionIdInput: string,
-      waitOptions: { timeoutMs: number; signal?: AbortSignal },
+      waitOptions: { timeoutMs?: number; signal?: AbortSignal },
     ): Promise<void> {
       const sessionId = required(sessionIdInput, "session id");
-      if (!Number.isSafeInteger(waitOptions.timeoutMs) || waitOptions.timeoutMs < 0) {
+      if (
+        waitOptions.timeoutMs !== undefined &&
+        (!Number.isSafeInteger(waitOptions.timeoutMs) || waitOptions.timeoutMs < 0)
+      ) {
         throw new Error("Worker session turn claim wait timeout must be a non-negative integer");
       }
       if (!find(read(), sessionId)?.turnClaim) {
         return;
+      }
+      if (waitOptions.signal?.aborted) {
+        throw new Error(`Turn claim wait aborted for session ${sessionId}`);
       }
       await new Promise<void>((resolve, reject) => {
         let settled = false;
@@ -383,7 +389,9 @@ export function createPlacementTurnClaimOps(runtime: PlacementStoreRuntime) {
             return;
           }
           settled = true;
-          clearTimeout(timer);
+          if (timer) {
+            clearTimeout(timer);
+          }
           waitOptions.signal?.removeEventListener("abort", onAbort);
           removeTurnClaimReleaseWaiter(path, sessionId, onRelease);
           if (error) {
@@ -394,10 +402,16 @@ export function createPlacementTurnClaimOps(runtime: PlacementStoreRuntime) {
         };
         const onRelease = (error?: Error) => finish(error);
         const onAbort = () => finish(new Error(`Turn claim wait aborted for session ${sessionId}`));
-        const timer = setTimeout(
-          () => finish(new Error(`Timed out waiting for session ${sessionId} turn claim release`)),
-          waitOptions.timeoutMs,
-        );
+        const timer =
+          waitOptions.timeoutMs === undefined
+            ? undefined
+            : setTimeout(
+                () =>
+                  finish(
+                    new Error(`Timed out waiting for session ${sessionId} turn claim release`),
+                  ),
+                waitOptions.timeoutMs,
+              );
         waiters.add(onRelease);
         waitOptions.signal?.addEventListener("abort", onAbort, { once: true });
         // Register first, then reread. This closes the release-between-check-and-wait race.

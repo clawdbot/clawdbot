@@ -55,6 +55,33 @@ describe("worker placement projection", () => {
     expect(projectWorkerSessionPlacement(active)).not.toHaveProperty("diskSpace");
   });
 
+  it.each(["draining", "reconciling"] as const)(
+    "projects the Gateway-owned pending-result fence for %s placements",
+    (state) => {
+      const placement = {
+        ...RECORD_BASE,
+        state,
+        environmentId: "environment-1",
+        activeOwnerEpoch: 7,
+        workspaceBaseManifestRef: "manifest-1",
+        remoteWorkspaceDir: "/workspace",
+        workerBundleHash: BUNDLE_HASH,
+      } satisfies WorkerSessionPlacementRecord;
+
+      expect(projectWorkerSessionPlacement(placement)).not.toHaveProperty("workspaceResultPending");
+      const projected = projectWorkerSessionPlacement(
+        placement,
+        undefined,
+        undefined,
+        undefined,
+        undefined,
+        true,
+      );
+      expect(projected).toMatchObject({ workspaceResultPending: true });
+      expect(Value.Check(SessionPlacementSchema, projected)).toBe(true);
+    },
+  );
+
   it("projects device availability from the exact active environment and current runner proof", () => {
     const active = {
       ...RECORD_BASE,

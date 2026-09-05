@@ -120,6 +120,26 @@ export function clearWorkerWorkspacePendingResult(db: DatabaseSync, sessionId: s
   );
 }
 
+export function readWorkerWorkspacePendingResultSessionIds(
+  db: DatabaseSync,
+  sessionIds: readonly string[],
+): ReadonlySet<string> {
+  const pending = new Set<string>();
+  for (let offset = 0; offset < sessionIds.length; offset += 250) {
+    const chunk = sessionIds.slice(offset, offset + 250);
+    for (const row of executeSqliteQuerySync(
+      db,
+      query(db)
+        .selectFrom("worker_workspace_pending_results")
+        .select("session_id")
+        .where("session_id", "in", chunk),
+    ).rows) {
+      pending.add(row.session_id);
+    }
+  }
+  return pending;
+}
+
 export function hasWorkerWorkspacePendingResult(db: DatabaseSync, sessionId: string): boolean {
   return Boolean(
     executeSqliteQuerySync(

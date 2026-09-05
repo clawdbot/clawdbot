@@ -71,6 +71,9 @@ export abstract class ChatPaneContext extends ChatPaneLifecycle {
       restartingKey: this.headerPlacementRestartingKey,
       row,
       startupPending,
+      workspaceResultPending:
+        (row?.placement?.state === "draining" || row?.placement?.state === "reconciling") &&
+        row.placement.workspaceResultPending === true,
       onRestart: () => row && void this.restartHeaderPlacement(row),
       onReclaim: () => row && void this.reclaimHeaderPlacement(row),
     });

@@ -20,26 +20,15 @@ import {
 
 type ActiveWorkerPlacement = Extract<WorkerSessionPlacementRecord, { state: "active" }>;
 
-const PREVIOUS_RESULT_RECONCILING_MESSAGE =
-  "The previous cloud turn's workspace result is still reconciling; it retries automatically — try again shortly.";
-
-export async function rejectPendingWorkerResult(params: {
+export async function waitForPendingWorkerResult(params: {
   placements: WorkerSessionPlacementStore;
   sessionId: string;
   signal?: AbortSignal;
-}): Promise<never> {
-  try {
-    await params.placements.waitForTurnClaimRelease(params.sessionId, {
-      timeoutMs: SESSION_WORK_ADMISSION_DRAIN_TIMEOUT_MS,
-      ...(params.signal ? { signal: params.signal } : {}),
-    });
-  } catch (error) {
-    if (params.signal?.aborted) {
-      throw error;
-    }
-    throw new Error(PREVIOUS_RESULT_RECONCILING_MESSAGE, { cause: error });
-  }
-  throw new Error(PREVIOUS_RESULT_RECONCILING_MESSAGE);
+}): Promise<void> {
+  await params.placements.waitForTurnClaimRelease(
+    params.sessionId,
+    params.signal ? { signal: params.signal } : {},
+  );
 }
 const CURRENT_WORKER_BUILD_REMEDIATION =
   "redispatch the session so its worker can bootstrap the current build before retrying.";
@@ -218,7 +207,7 @@ export async function claimWorkerTurn(params: {
   runId: string;
   isCancellationRequested: (claim: WorkerSessionTurnClaim) => boolean;
   signal?: AbortSignal;
-}): Promise<{ placement: ActiveWorkerPlacement; turnClaim: WorkerSessionTurnClaim }> {
+}): Promise<{ placement: ActiveWorkerPlacement; turnClaim: WorkerSessionTurnClaim } | null> {
   const claim = () =>
     params.placements.claimTurn({
       ...params.identity,
@@ -251,10 +240,15 @@ export async function claimWorkerTurn(params: {
           pending.runId === activeClaim.runId,
       );
     const cancelledClaim = activePlacement && projectWorkerSessionTurnClaim(activePlacement);
-    if (
-      !resultIsReconciling &&
-      !(cancelledClaim && params.isCancellationRequested(cancelledClaim))
-    ) {
+    if (resultIsReconciling) {
+      await waitForPendingWorkerResult({
+        placements: params.placements,
+        sessionId: params.identity.sessionId,
+        ...(params.signal ? { signal: params.signal } : {}),
+      });
+      return null;
+    }
+    if (!(cancelledClaim && params.isCancellationRequested(cancelledClaim))) {
       const refreshed = params.placements.get(params.identity.sessionId);
       if (
         refreshed?.state !== "active" ||
@@ -268,17 +262,10 @@ export async function claimWorkerTurn(params: {
       return { placement: refreshed, turnClaim: claim() };
     }
   }
-  try {
-    await params.placements.waitForTurnClaimRelease(params.identity.sessionId, {
-      timeoutMs: SESSION_WORK_ADMISSION_DRAIN_TIMEOUT_MS,
-      ...(params.signal ? { signal: params.signal } : {}),
-    });
-  } catch (error) {
-    if (params.signal?.aborted) {
-      throw error;
-    }
-    throw new Error(PREVIOUS_RESULT_RECONCILING_MESSAGE, { cause: error });
-  }
+  await params.placements.waitForTurnClaimRelease(params.identity.sessionId, {
+    timeoutMs: SESSION_WORK_ADMISSION_DRAIN_TIMEOUT_MS,
+    ...(params.signal ? { signal: params.signal } : {}),
+  });
   const refreshed = params.placements.get(params.identity.sessionId);
   if (
     refreshed?.state !== "active" ||
@@ -286,14 +273,7 @@ export async function claimWorkerTurn(params: {
     refreshed.activeOwnerEpoch !== params.placement.activeOwnerEpoch ||
     refreshed.generation !== params.placement.generation
   ) {
-    throw new Error(PREVIOUS_RESULT_RECONCILING_MESSAGE);
+    throw new Error("Cloud worker placement changed while waiting for the previous turn");
   }
-  try {
-    return { placement: refreshed, turnClaim: claim() };
-  } catch (error) {
-    if (error instanceof ActiveTurnClaimError) {
-      throw new Error(PREVIOUS_RESULT_RECONCILING_MESSAGE, { cause: error });
-    }
-    throw error;
-  }
+  return { placement: refreshed, turnClaim: claim() };
 }

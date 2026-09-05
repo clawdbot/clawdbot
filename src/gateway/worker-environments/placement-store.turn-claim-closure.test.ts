@@ -96,6 +96,23 @@ function advanceToActive(executionMode: "worker-turn" | "remote-exec" = "worker-
   return active;
 }
 
+it("rejects an unbounded claim wait when its signal is already aborted", async () => {
+  const active = advanceToActive();
+  const claim = store.claimTurn({
+    ...SESSION,
+    owner: placementTurnOwner(active),
+    claimId: "claim-aborted-wait",
+    runId: "run-aborted-wait",
+  });
+  const controller = new AbortController();
+  controller.abort();
+
+  await expect(
+    store.waitForTurnClaimRelease(SESSION.sessionId, { signal: controller.signal }),
+  ).rejects.toThrow(`Turn claim wait aborted for session ${SESSION.sessionId}`);
+  expect(store.validateTurnClaim(claim)).toBe(true);
+});
+
 it("emits exact worker claim closure after release and owner fencing", () => {
   const closed = vi.fn();
   const unregister = store.registerTurnClaimClosedHandler(closed);
