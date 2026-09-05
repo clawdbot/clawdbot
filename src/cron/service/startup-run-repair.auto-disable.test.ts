@@ -3,14 +3,15 @@ import { describe, expect, it, vi } from "vitest";
 import { resolveAgentMainSessionKey } from "../../config/sessions/main-session.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import type { HeartbeatRunOptions } from "../../infra/heartbeat-runner-execution.js";
-import { resolveHeartbeatRunPrompt } from "../../infra/heartbeat-runner-prompt.js";
+import {
+  resolveHeartbeatPreflight,
+  resolveHeartbeatRunPrompt,
+} from "../../infra/heartbeat-runner-prompt.js";
 import { startHeartbeatRunner } from "../../infra/heartbeat-runner-scheduler.js";
-import { resolveHeartbeatWakePayloadFlags } from "../../infra/heartbeat-wake-policy.js";
 import { requestHeartbeat as requestHeartbeatWake } from "../../infra/heartbeat-wake.js";
 import {
   drainSystemEvents,
   enqueueSystemEvent as queueSystemEvent,
-  peekSystemEventEntries,
 } from "../../infra/system-events.js";
 import * as cronSchedule from "../schedule.js";
 import type { CronJob } from "../types.js";
@@ -115,23 +116,14 @@ describe("startup run repair auto-disable", () => {
       testCase.creatorSessionKey ?? resolveAgentMainSessionKey({ cfg, agentId: "main" });
     const prompts: string[] = [];
     const runOnce = vi.fn(async (options: HeartbeatRunOptions) => {
-      const pendingEventEntries = peekSystemEventEntries(options.sessionKey ?? "");
-      const preflight = {
-        ...resolveHeartbeatWakePayloadFlags(options),
-        session: {
-          sessionKey,
-          storePath: "/tmp/auto-disable-notification-proof.json",
-          suppressOriginatingContext: false,
-          entry: undefined,
-        },
-        pendingEventEntries,
-        turnSourceDeliveryContext: undefined,
-        hasTaggedCronEvents: pendingEventEntries.some((event) =>
-          event.contextKey?.startsWith("cron:"),
-        ),
-        shouldInspectPendingEvents: true,
-        authoritativeScheduledTick: false,
-      };
+      const preflight = await resolveHeartbeatPreflight({
+        cfg,
+        agentId: "main",
+        sessionKey: options.sessionKey,
+        heartbeat: options.heartbeat,
+        source: options.source,
+        reason: options.reason,
+      });
       prompts.push(
         resolveHeartbeatRunPrompt({
           cfg,

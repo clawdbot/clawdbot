@@ -30,7 +30,7 @@ describe("runNodeHost", () => {
     { runtime: "darwin", platform: "macos", deviceFamily: "Mac" },
     { runtime: "win32", platform: "windows", deviceFamily: "Windows" },
     { runtime: "linux", platform: "linux", deviceFamily: "Linux" },
-    { runtime: "freebsd", platform: "unknown", deviceFamily: undefined },
+    { runtime: "freebsd", platform: "freebsd", deviceFamily: undefined },
   ] as const)(
     "maps $runtime to gateway platform $platform",
     async ({ runtime, platform, deviceFamily }) => {

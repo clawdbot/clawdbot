@@ -250,7 +250,6 @@ function resolveTelegramDispatcherPolicy(params: {
       policy: {
         mode: "env-proxy",
         connect: { ...connect },
-        proxyTls: { ...connect },
       },
       mode: "env-proxy",
     };

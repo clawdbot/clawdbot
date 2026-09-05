@@ -15,9 +15,11 @@ import { readRecentConfigAuditRecords } from "../config/io.audit.js";
 import { retainLegacyDefaultAgentId } from "../config/legacy.default-agent-owner.js";
 import { migratePersistedImplicitMainRoster } from "../config/legacy.roster.js";
 import { CONFIG_PATH } from "../config/paths.js";
+import { inspectShippedPluginInstallConfigRecords } from "../config/plugin-install-config-migration.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { callGateway } from "../gateway/call.js";
 import { isPathInside } from "../infra/path-guards.js";
+import { withoutPluginInstallRecords } from "../plugins/installed-plugin-index-records.js";
 import type { RuntimeEnv } from "../runtime.js";
 import { createPluginCapabilityConsentPrompter } from "../wizard/plugin-capability-consent.js";
 import {
@@ -26,7 +28,10 @@ import {
   noteOpencodeProviderOverrides,
   noteSandboxOriginProxyWarning,
 } from "./doctor-config-analysis.js";
-import { runDoctorConfigPreflight } from "./doctor-config-preflight.js";
+import {
+  runDoctorConfigPreflight,
+  shouldSkipPluginValidationForDoctorConfigPreflight,
+} from "./doctor-config-preflight.js";
 import type { DoctorOptions, DoctorPrompter } from "./doctor-prompter.js";
 import { cronCodexRuntimePolicyTargetKey } from "./doctor/cron/store-migration.js";
 import { emitDoctorNotes, sanitizeDoctorNote } from "./doctor/emit-notes.js";
@@ -40,7 +45,11 @@ import {
   type DoctorConfigMutationResult,
   type DoctorConfigMutationState,
 } from "./doctor/shared/config-mutation-state.js";
-import { isSingleTopLevelIncludeMigration } from "./doctor/shared/include-migration-ownership.js";
+import { listDoctorConfiguredChannelIds } from "./doctor/shared/configured-channel-ids.js";
+import {
+  containsAuthoredInclude,
+  isSingleTopLevelIncludeMigration,
+} from "./doctor/shared/include-migration-ownership.js";
 import { normalizeCompatibilityConfigValues } from "./doctor/shared/legacy-config-core-migrate.js";
 import type { DoctorPluginMetadataSnapshotState } from "./doctor/shared/plugin-metadata-snapshot-scope.js";
 
@@ -88,17 +97,6 @@ function collectUnsupportedInternalHookEntryWarnings(cfg: OpenClawConfig): strin
     ({ hookKey, unsupportedKeys }) =>
       `- hooks.internal.entries.${hookKey}: unsupported loader key${unsupportedKeys.length === 1 ? "" : "s"} ${unsupportedKeys.join(", ")} will not load hook modules. Use bootstrap-extra-files for session bootstrap content, or create a managed/workspace hook directory with HOOK.md + handler.js. Doctor cannot rewrite this automatically because per-hook entry keys are open-ended hook configuration.`,
   );
-}
-
-function collectConfiguredChannelIds(cfg: OpenClawConfig): string[] {
-  const channels =
-    cfg.channels && typeof cfg.channels === "object" && !Array.isArray(cfg.channels)
-      ? cfg.channels
-      : null;
-  if (!channels) {
-    return [];
-  }
-  return Object.keys(channels).filter((channelId) => channelId !== "defaults");
 }
 
 // Repair-mode "Doctor changes" panels queue until the final candidate passes the
@@ -164,7 +162,7 @@ export async function loadAndMaybeMigrateDoctorConfig(params: {
   prompter?: DoctorPrompter;
 }) {
   const shouldRepair = params.options.repair === true || params.options.yes === true;
-  const preflight = await withProgress(
+  let preflight = await withProgress(
     {
       label: "Checking OpenClaw state…",
       enabled: params.options.nonInteractive !== true && params.options.json !== true,
@@ -182,6 +180,28 @@ export async function loadAndMaybeMigrateDoctorConfig(params: {
         },
       }),
   );
+  const { importShippedPluginInstallConfigForDoctor } =
+    await import("./doctor/shared/plugin-registry-migration.js");
+  const pluginInstallConfigImport =
+    inspectShippedPluginInstallConfigRecords(preflight.snapshot.sourceConfig).status === "valid"
+      ? await importShippedPluginInstallConfigForDoctor(preflight.snapshot)
+      : undefined;
+  if (pluginInstallConfigImport?.pluginInventoryChanged) {
+    const { readDoctorConfigPreflightSnapshot } =
+      await import("./doctor-config-preflight-plugin-index.js");
+    const refreshed = await readDoctorConfigPreflightSnapshot({
+      allowCurrentPluginMetadata: false,
+      includePluginMetadata: true,
+      preparePluginMetadataSnapshot: true,
+      skipPluginValidation: shouldSkipPluginValidationForDoctorConfigPreflight(),
+    });
+    preflight = {
+      ...preflight,
+      snapshot: refreshed.snapshot,
+      baseConfig: refreshed.snapshot.sourceConfig,
+      pluginMetadataSnapshot: refreshed.pluginMetadataSnapshot,
+    };
+  }
   const snapshot = preflight.snapshot;
   const baseCfg = preflight.baseConfig;
   const pluginMetadataSnapshotState: DoctorPluginMetadataSnapshotState = {
@@ -499,7 +519,8 @@ export async function loadAndMaybeMigrateDoctorConfig(params: {
     note(sanitizeDoctorNote(pluginToolAllowlistWarnings.join("\n")), "Doctor warnings");
   }
 
-  const hasConfiguredChannels = collectConfiguredChannelIds(state.candidate).length > 0;
+  const hasConfiguredChannels =
+    listDoctorConfiguredChannelIds(state.candidate, { configEntryPolicy: "raw" }).length > 0;
   let collectMutableAllowlistWarnings:
     | typeof import("./doctor/shared/channel-doctor.js").collectChannelDoctorMutableAllowlistWarnings
     | undefined;
@@ -631,6 +652,18 @@ export async function loadAndMaybeMigrateDoctorConfig(params: {
     note(unknownStep.warnings.join("\n"), "Doctor warnings");
   }
 
+  if (inspectShippedPluginInstallConfigRecords(state.candidate).status === "valid") {
+    applyConfigMutation(
+      {
+        config: withoutPluginInstallRecords(state.candidate, {
+          preserveEmptyPlugins: containsAuthoredInclude(snapshot.parsed),
+        }),
+        changes: ["Removed retired plugins.installs after preserving plugin install records."],
+      },
+      { fixHint: `Run "${doctorFixCommand}" to migrate retired plugin install records.` },
+    );
+  }
+
   const finalized = await finalizeDoctorConfigFlow({
     cfg: state.cfg,
     candidate: state.candidate,
@@ -681,6 +714,7 @@ export async function loadAndMaybeMigrateDoctorConfig(params: {
 
   return {
     cfg,
+    ...(pluginInstallConfigImport ? { pluginInstallConfigImport } : {}),
     path: snapshot.path ?? CONFIG_PATH,
     shouldWriteConfig,
     ...(shouldWriteConfig && pendingChangePanels.length > 0 ? { pendingChangePanels } : {}),

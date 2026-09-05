@@ -159,6 +159,7 @@ export async function executePreparedCompactionSession(runtime: PreparedCompacti
               ? "aborted"
               : undefined,
           allowedToolNames,
+          withCompactionPersistence: params.transcriptByteCompactionPersistence,
         },
       );
       checkpointSnapshot = memoryTranscript
@@ -261,10 +262,9 @@ export async function executePreparedCompactionSession(runtime: PreparedCompacti
       while (true) {
         // A thinking retry starts a new attempt; setup/endpoint failures must not reuse its predecessor's cause.
         setCompactionSafeguardCancellation(sessionManager, undefined);
-        // Rebuild the compaction session on retry so provider wrappers, payload
-        // shaping, and the embedded system prompt all reflect the fallback level.
+        // Rebuild on retry so provider wrappers and payload shaping use the fallback effort.
         attemptedThinking.add(thinkLevel);
-        const systemPromptText = buildSystemPromptText(thinkLevel);
+        const systemPromptText = buildSystemPromptText();
         let session: AgentSession | undefined;
         let diagnosticOwner: DiagnosticEmbeddedRunOwner | undefined;
         let resetCompactionTimeout: (() => void) | undefined;
@@ -500,26 +500,28 @@ export async function executePreparedCompactionSession(runtime: PreparedCompacti
             });
             accountingRecorder?.recordCompaction(serverTokensAfter);
           };
-          const serverResult = await attemptServerEndpointCompaction({
-            trigger,
-            streamFn: session.agent.streamFn,
-            model: effectiveModel,
-            context: { systemPrompt: systemPromptText, messages: session.messages },
-            sessionManager,
-            extraParams: effectiveExtraParams,
-            customInstructions: params.customInstructions,
-            config: params.config,
-            onUsage: recordUsage,
-            onCompactionCommitted: recordServerCompaction,
-            assertActive,
-            requestOptions: {
-              apiKey: transportApiKey,
-              sessionId: params.sessionId,
-              authProfileId: runtimePlan.auth.forwardedAuthProfileId,
-              timeoutMs: compactionTimeoutMs,
-              signal: params.abortSignal,
-            },
-          });
+          const serverResult = params.transcriptBytePreflightAuthority
+            ? undefined
+            : await attemptServerEndpointCompaction({
+                trigger,
+                streamFn: session.agent.streamFn,
+                model: effectiveModel,
+                context: { systemPrompt: systemPromptText, messages: session.messages },
+                sessionManager,
+                extraParams: effectiveExtraParams,
+                customInstructions: params.customInstructions,
+                config: params.config,
+                onUsage: recordUsage,
+                onCompactionCommitted: recordServerCompaction,
+                assertActive,
+                requestOptions: {
+                  apiKey: transportApiKey,
+                  sessionId: params.sessionId,
+                  authProfileId: runtimePlan.auth.forwardedAuthProfileId,
+                  timeoutMs: compactionTimeoutMs,
+                  signal: params.abortSignal,
+                },
+              });
           const activeSession = session;
           let clientResult: Awaited<ReturnType<typeof activeSession.compact>> | undefined;
           if (!serverResult) {

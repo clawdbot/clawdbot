@@ -1,7 +1,7 @@
 import fs from "node:fs/promises";
 import path from "node:path";
 import { afterEach, describe, expect, it, onTestFinished, vi } from "vitest";
-import { withTempHome, writeOpenClawConfig } from "../config/test-helpers.js";
+import { writeOpenClawConfig } from "../config/test-helpers.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { executeSqliteQueryTakeFirstSync, getNodeSqliteKysely } from "../infra/kysely-sync.js";
 import * as migrationCheckpoint from "../infra/startup-migration-checkpoint.js";
@@ -33,6 +33,7 @@ import {
   type DoctorConfigPreflightPluginSnapshotRead,
 } from "./doctor-config-preflight-plugin-index.js";
 import { runDoctorConfigPreflight } from "./doctor-config-preflight.js";
+import { withDoctorConfigPreflightHome } from "./doctor-config-preflight.test-support.js";
 import { createDoctorPluginMetadataSnapshotScope } from "./doctor/shared/plugin-metadata-snapshot-scope.js";
 
 async function withPreflightPluginFixture(
@@ -44,7 +45,7 @@ async function withPreflightPluginFixture(
   workspaceNames: string[] = [],
   fixturePluginId = "preflight-fixture",
 ) {
-  await withTempHome(async (home) => {
+  await withDoctorConfigPreflightHome(async (home) => {
     // Scope real discovery to the synthetic plugins owned by this fixture.
     const bundledRoot = path.join(home, "bundled");
     await fs.mkdir(bundledRoot, { recursive: true });
@@ -133,6 +134,8 @@ describe("Doctor plugin persistence", () => {
     "verifies a persisted registry in the $scope scope (replacement before lease: $replaceBeforeLease)",
     async ({ scope, replaceBeforeLease }) => {
       await withPreflightPluginFixture(async (writeVersion) => {
+        const checkpointStatus = vi.spyOn(migrationCheckpoint, "readMigrationCheckpointStatus");
+        onTestFinished(() => checkpointStatus.mockRestore());
         const run = async () => {
           const owner = getPluginCache();
           const read = readPluginPreflight;
@@ -211,6 +214,7 @@ describe("Doctor plugin persistence", () => {
         } else {
           await run();
         }
+        expect(checkpointStatus).not.toHaveBeenCalled();
       });
     },
   );
@@ -606,10 +610,10 @@ describe("Doctor plugin persistence", () => {
         let identity: ReturnType<typeof resolveMigrationCheckpointIdentity> = null;
         // Pin the build input, not the result: source-only runtimes intentionally cannot record.
         // Identity, lease, formatting, and SQLite behavior still use the real checkpoint owner.
-        const realNeedsCheckpoint = migrationCheckpoint.needsStateMigrationCheckpoint;
+        const realNeedsCheckpoint = migrationCheckpoint.readMigrationCheckpointStatus;
         const realRecordCheckpoint = migrationCheckpoint.recordSuccessfulStateMigrations;
         const needsCheckpoint = vi
-          .spyOn(migrationCheckpoint, "needsStateMigrationCheckpoint")
+          .spyOn(migrationCheckpoint, "readMigrationCheckpointStatus")
           .mockImplementation((params) => realNeedsCheckpoint({ ...params, buildIdentity }));
         const recordCheckpoint = vi
           .spyOn(migrationCheckpoint, "recordSuccessfulStateMigrations")
@@ -649,7 +653,7 @@ describe("Doctor plugin persistence", () => {
                 pluginMigrationFingerprint: read.pluginMigrationFingerprint,
               });
               expect(read.pluginMetadataSnapshot?.registrySource).toBe("persisted");
-              expect(migrationCheckpoint.needsStateMigrationCheckpoint({ identity })).toBe(true);
+              expect(migrationCheckpoint.readMigrationCheckpointStatus({ identity })).toBe("stale");
               expect(readStateCheckpoint()).toBeUndefined();
               verified = true;
               if (interrupted) {
@@ -673,7 +677,9 @@ describe("Doctor plugin persistence", () => {
         );
         const recorded = !interrupted && buildIdentity !== null;
         expect(Boolean(readStateCheckpoint())).toBe(recorded);
-        expect(migrationCheckpoint.needsStateMigrationCheckpoint({ identity })).toBe(!recorded);
+        expect(migrationCheckpoint.readMigrationCheckpointStatus({ identity })).toBe(
+          recorded ? "state-current" : "stale",
+        );
       });
     },
   );

@@ -656,6 +656,7 @@ describe("failover-error", () => {
         activeToolCount: 1,
         backgroundTaskCount: 0,
       },
+      timeout: { timeoutPhase: "provider" },
       attempts: [{ provider: "anthropic", model: "sonnet-4.6", reason: "timeout" }],
       soonestCooldownExpiry: null,
     } satisfies ConstructorParameters<typeof FailoverError>[1];
@@ -679,6 +680,26 @@ describe("failover-error", () => {
     );
     expect(original.authMode).toBeUndefined();
   });
+
+  it.each([undefined, "provider"] as const)(
+    "adds a recorded timeout with phase=%s without replacing attribution",
+    (phase) => {
+      const original = new FailoverError("provider failed", {
+        reason: "timeout",
+        authMode: "oauth",
+      });
+      const timeout = phase ? { timeoutPhase: phase } : {};
+      const error = coerceToFailoverError(original, { timeout, authMode: "token" });
+
+      expect(error).toMatchObject({ timeout, authMode: "oauth" });
+      expect(error?.timeout).toBe(timeout);
+      expect(original.timeout).toBeUndefined();
+      expect(coerceToFailoverError(error, { timeout: { timeoutPhase: "preflight" } })).toBe(error);
+      expect(
+        coerceToFailoverError({ status: 500, message: "upstream failed" }, { timeout })?.timeout,
+      ).toBe(timeout);
+    },
+  );
 
   it("preserves raw provider error text for diagnostic logs", () => {
     const err = new FailoverError("LLM request failed: provider rejected the request schema.", {

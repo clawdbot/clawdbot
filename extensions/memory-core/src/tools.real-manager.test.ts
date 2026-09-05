@@ -299,10 +299,12 @@ describe("memory_search real manager", () => {
       minScore: 0,
       sources: ["sessions"],
     });
-    expect(ranked.slice(0, 2).map((hit) => hit.path)).toEqual([
-      expect.stringContaining("hidden-a"),
-      expect.stringContaining("hidden-b"),
-    ]);
+    expect(
+      ranked
+        .slice(0, 2)
+        .map((hit) => hit.path)
+        .toSorted(),
+    ).toEqual([expect.stringContaining("hidden-a"), expect.stringContaining("hidden-b")]);
     fixture.provider.embedQueryCalls = 0;
     fixture.provider.embeddedQueryTexts = [];
 
@@ -335,7 +337,7 @@ describe("memory_search real manager", () => {
       };
     };
 
-    expect(details.results.map((hit) => hit.snippet)).toEqual([
+    expect(details.results.map((hit) => hit.snippet).toSorted()).toEqual([
       expect.stringContaining("visible private a"),
       expect.stringContaining("visible private b"),
     ]);

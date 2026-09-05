@@ -2546,7 +2546,6 @@ describe("grouped chat rendering", () => {
     { agentId: "research", avatar: "blob:research-avatar", expected: "image" },
     { agentId: "research", avatar: null, expected: "initials" },
     { agentId: "research", avatar: "https://example.test/avatar.png", expected: "initials" },
-    { agentId: "research", avatar: "/avatar/research", expected: "initials" },
     // Same-agent sources wear the current agent's own avatar (fallback logo here).
     { agentId: "main", avatar: "blob:main-avatar", expected: "assistant" },
     { agentId: "removed", avatar: "blob:stale-avatar", expected: "glyph" },
@@ -2562,7 +2561,6 @@ describe("grouped chat rendering", () => {
         agentId: "main",
         agents: [{ id: "main" }, { id: "research", identity: { name: "Research Agent" } }],
         senderAgentAvatars: new Map(agentId ? [[agentId, avatar]] : []),
-        assistantAttachmentAuthToken: "test-token",
       };
       render(renderTestMessageGroup(group, options), container);
 
@@ -4936,19 +4934,34 @@ describe("grouped chat rendering", () => {
     expect(container.querySelector(".chat-assistant-attachment-card--blocked")).toBeNull();
   });
 
-  it("renders local files outside preview roots as unavailable", () => {
-    const container = document.createElement("div");
-    renderAssistantMessage(
-      container,
-      createAssistantMessage("Blocked\nMEDIA:/Users/test/Documents/private.pdf\nDone", {
-        id: "assistant-blocked-local-media",
-      }),
-      {
-        showToolCalls: false,
-        resourceBasePath: "/openclaw",
-        localMediaPreviewRoots: ["/tmp/openclaw"],
-      },
+  it("renders the Gateway's outside-workspace denial for a local document", async () => {
+    vi.stubGlobal(
+      "fetch",
+      vi.fn(async () => ({
+        ok: true,
+        json: async () => ({
+          available: false,
+          reason: "Outside allowed folders",
+          retryable: false,
+        }),
+      })),
     );
+    const container = document.createElement("div");
+    const rerender = () =>
+      renderAssistantMessage(
+        container,
+        createAssistantMessage("Blocked\nMEDIA:/Users/test/Documents/private.pdf\nDone", {
+          id: "assistant-blocked-local-media",
+        }),
+        {
+          showToolCalls: false,
+          resourceBasePath: "/openclaw",
+          localMediaPreviewRoots: ["/tmp/openclaw"],
+          onRequestUpdate: rerender,
+        },
+      );
+    rerender();
+    await flushAssistantAttachmentAvailabilityChecks();
 
     expect(container.querySelector(".chat-assistant-attachment-card__download")).toBeNull();
     const blocked = container.querySelector(".chat-assistant-attachment-card--blocked");

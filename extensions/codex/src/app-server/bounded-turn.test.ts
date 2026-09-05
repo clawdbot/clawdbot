@@ -73,6 +73,7 @@ function createClientFactory(
     models?: ReturnType<typeof codexModel>[];
     beforeRequest?: (method: string) => Promise<void>;
     modelProvider?: string;
+    responseCompletions?: Array<{ responseId: string; usage: JsonValue }>;
   } = {},
 ) {
   const methods: string[] = [];
@@ -160,11 +161,8 @@ function createClientFactory(
               },
             });
           }
-          void handler({
-            method: "rawResponse/completed",
-            params: {
-              threadId: "thread-finalizer",
-              turnId: "turn-finalizer",
+          for (const response of options.responseCompletions ?? [
+            {
               responseId: "response-finalizer",
               usage: {
                 totalTokens: 12,
@@ -175,7 +173,16 @@ function createClientFactory(
                 reasoningOutputTokens: 3,
               },
             },
-          });
+          ]) {
+            void handler({
+              method: "rawResponse/completed",
+              params: {
+                threadId: "thread-finalizer",
+                turnId: "turn-finalizer",
+                ...response,
+              },
+            });
+          }
           void handler({
             method: "turn/completed",
             params: {
@@ -765,79 +772,113 @@ describe("runBoundedCodexAppServerTurn settled finalization isolation", () => {
     expect(fake.methods).toEqual(["model/list"]);
   });
 
-  it("attests ring-zero and injects frozen history before starting the final turn", async () => {
-    const fake = createClientFactory();
-    const historyItems: JsonValue[] = [
-      { type: "function_call", call_id: "call-1", name: "message", arguments: "{}" },
-      { type: "function_call_output", call_id: "call-1", output: "sent" },
-    ];
+  it.each([false, true])(
+    "attests ring-zero and totals response usage (missing final usage: %s)",
+    async (missingFinalUsage) => {
+      const firstResponse = {
+        responseId: "response-first",
+        usage: {
+          totalTokens: 12,
+          inputTokens: 8,
+          cachedInputTokens: 2,
+          cacheWriteInputTokens: 1,
+          outputTokens: 4,
+          reasoningOutputTokens: 3,
+        },
+      };
+      const fake = createClientFactory({
+        responseCompletions: [
+          firstResponse,
+          {
+            responseId: "response-final",
+            usage: {
+              totalTokens: 20,
+              inputTokens: 15,
+              cachedInputTokens: 5,
+              cacheWriteInputTokens: 2,
+              outputTokens: 5,
+              reasoningOutputTokens: 2,
+            },
+          },
+          firstResponse,
+          ...(missingFinalUsage ? [{ responseId: "response-without-usage", usage: null }] : []),
+        ],
+      });
+      const historyItems: JsonValue[] = [
+        { type: "function_call", call_id: "call-1", name: "message", arguments: "{}" },
+        { type: "function_call_output", call_id: "call-1", output: "sent" },
+      ];
 
-    await expect(
-      runBoundedCodexAppServerTurn({
-        model: { mode: "required", id: "gpt-5.4" },
-        timeoutMs: 5_000,
-        options: { clientFactory: fake.factory },
-        taskLabel: "settled-turn finalization",
-        developerInstructions: "Finalize only.",
-        input: [{ type: "text", text: "Produce the final answer.", text_elements: [] }],
-        requiredModalities: ["text"],
-        isolation: "private-stdio",
-        historyItems,
-        requireNoExternalCapabilities: true,
-      }),
-    ).resolves.toMatchObject({
-      text: "The message was sent successfully.",
-      model: "gpt-5.4",
-      usage: {
-        input: 5,
-        output: 4,
-        cacheRead: 2,
-        cacheWrite: 1,
-        reasoningTokens: 3,
-        total: 12,
-      },
-    });
+      await expect(
+        runBoundedCodexAppServerTurn({
+          model: { mode: "required", id: "gpt-5.4" },
+          timeoutMs: 5_000,
+          options: { clientFactory: fake.factory },
+          taskLabel: "settled-turn finalization",
+          developerInstructions: "Finalize only.",
+          input: [{ type: "text", text: "Produce the final answer.", text_elements: [] }],
+          requiredModalities: ["text"],
+          isolation: "private-stdio",
+          historyItems,
+          requireNoExternalCapabilities: true,
+        }),
+      ).resolves.toMatchObject({
+        text: "The message was sent successfully.",
+        model: "gpt-5.4",
+        usage: {
+          input: 13,
+          output: 9,
+          cacheRead: 7,
+          cacheWrite: 3,
+          reasoningTokens: 5,
+          total: 32,
+          contextUsage: missingFinalUsage
+            ? { state: "unavailable" }
+            : { state: "available", promptTokens: 15, totalTokens: 20 },
+        },
+      });
 
-    expect(fake.methods).toEqual([
-      "model/list",
-      "config/read",
-      "configRequirements/read",
-      "thread/start",
-      "mcpServerStatus/list",
-      "thread/inject_items",
-      "turn/start",
-    ]);
-    const startParams = fake.request.mock.calls.find(
-      ([method]) => method === "thread/start",
-    )?.[1] as Record<string, unknown> | undefined;
-    expect(startParams).toMatchObject({
-      baseInstructions: "",
-      environments: [],
-      dynamicTools: [],
-      ephemeral: true,
-      config: {
-        "agents.enabled": false,
-        "features.hooks": false,
-        "features.multi_agent": false,
-        "features.multi_agent_v2": false,
-        "features.code_mode": false,
-        "features.code_mode_only": false,
-        "skills.include_instructions": false,
-        include_environment_context: false,
-        mcp_servers: { inherited: { enabled: false } },
-        "tools.experimental_request_user_input.enabled": false,
-        "tools.update_plan.enabled": false,
-      },
-    });
-    const turnParams = fake.request.mock.calls.find(([method]) => method === "turn/start")?.[1];
-    expect(turnParams).not.toHaveProperty("cwd");
-    expect(turnParams).not.toHaveProperty("environments");
-    expect(fake.request).toHaveBeenCalledWith(
-      "thread/inject_items",
-      { threadId: "thread-finalizer", items: historyItems },
-      expect.any(Object),
-    );
-  });
+      expect(fake.methods).toEqual([
+        "model/list",
+        "config/read",
+        "configRequirements/read",
+        "thread/start",
+        "mcpServerStatus/list",
+        "thread/inject_items",
+        "turn/start",
+      ]);
+      const startParams = fake.request.mock.calls.find(
+        ([method]) => method === "thread/start",
+      )?.[1] as Record<string, unknown> | undefined;
+      expect(startParams).toMatchObject({
+        baseInstructions: "",
+        environments: [],
+        dynamicTools: [],
+        ephemeral: true,
+        config: {
+          "agents.enabled": false,
+          "features.hooks": false,
+          "features.multi_agent": false,
+          "features.multi_agent_v2": false,
+          "features.code_mode": false,
+          "features.code_mode_only": false,
+          "skills.include_instructions": false,
+          include_environment_context: false,
+          mcp_servers: { inherited: { enabled: false } },
+          "tools.experimental_request_user_input.enabled": false,
+          "tools.update_plan.enabled": false,
+        },
+      });
+      const turnParams = fake.request.mock.calls.find(([method]) => method === "turn/start")?.[1];
+      expect(turnParams).not.toHaveProperty("cwd");
+      expect(turnParams).not.toHaveProperty("environments");
+      expect(fake.request).toHaveBeenCalledWith(
+        "thread/inject_items",
+        { threadId: "thread-finalizer", items: historyItems },
+        expect.any(Object),
+      );
+    },
+  );
 
   it("fails before history injection when the started thread exposes an MCP server", async () => {
     const fake = createClientFactory({

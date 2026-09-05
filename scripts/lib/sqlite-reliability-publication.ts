@@ -5,7 +5,11 @@ import path from "node:path";
 import { setTimeout as delay } from "node:timers/promises";
 import { fileURLToPath } from "node:url";
 import { createVerifiedSqliteSnapshot } from "../../src/infra/sqlite-snapshot.js";
-import type { ReliabilityReport, ReliabilityStateProof } from "./sqlite-reliability-contract.js";
+import {
+  assertSameReliabilityState,
+  type ReliabilityReport,
+  type ReliabilityStateProof,
+} from "./sqlite-reliability-contract.js";
 
 type PublicationCrashPoint = "after-publish" | "before-publish";
 type PublicationExit = ReliabilityReport["publicationInterruptionProof"]["beforePublish"]["exit"];
@@ -22,22 +26,6 @@ const PUBLICATION_WORKER_PATH = fileURLToPath(
   new URL("./sqlite-reliability-publication-worker.ts", import.meta.url),
 );
 const CRASH_POINT_TIMEOUT_MS = 120_000;
-
-function assertSameState(
-  actual: ReliabilityStateProof,
-  expected: ReliabilityStateProof,
-  label: string,
-): void {
-  if (
-    actual.batches !== expected.batches ||
-    actual.rows !== expected.rows ||
-    actual.sha256 !== expected.sha256
-  ) {
-    throw new Error(
-      `${label} changed reliability state: expected batches=${expected.batches} rows=${expected.rows} sha256=${expected.sha256}, got batches=${actual.batches} rows=${actual.rows} sha256=${actual.sha256}`,
-    );
-  }
-}
 
 function assertNoSqliteSidecars(targetPath: string): void {
   for (const suffix of ["-journal", "-shm", "-wal"]) {
@@ -132,12 +120,12 @@ async function runCrashPoint(params: {
     }
 
     const sourceState = params.verifyDatabase(params.sourcePath);
-    assertSameState(sourceState, params.expectedState, `${params.crashPoint} source`);
+    assertSameReliabilityState(sourceState, params.expectedState, `${params.crashPoint} source`);
     let targetState: ReliabilityStateProof | null = null;
     if (targetVisibleAfterCrash) {
       assertNoSqliteSidecars(targetPath);
       targetState = params.verifyDatabase(targetPath);
-      assertSameState(targetState, params.expectedState, `${params.crashPoint} target`);
+      assertSameReliabilityState(targetState, params.expectedState, `${params.crashPoint} target`);
     }
 
     if (params.crashPoint === "before-publish") {
@@ -147,7 +135,7 @@ async function runCrashPoint(params: {
       });
       assertNoSqliteSidecars(targetPath);
       const retryState = params.verifyDatabase(targetPath);
-      assertSameState(retryState, params.expectedState, `${params.crashPoint} retry`);
+      assertSameReliabilityState(retryState, params.expectedState, `${params.crashPoint} retry`);
     } else {
       const targetHash = hashFile(targetPath);
       let retryError: unknown;
@@ -169,7 +157,11 @@ async function runCrashPoint(params: {
         throw new Error("SQLite retry changed the already-published target.");
       }
       const preservedState = params.verifyDatabase(targetPath);
-      assertSameState(preservedState, params.expectedState, `${params.crashPoint} retry`);
+      assertSameReliabilityState(
+        preservedState,
+        params.expectedState,
+        `${params.crashPoint} retry`,
+      );
     }
     for (const entry of crashStagingEntries) {
       if (!fs.existsSync(path.join(params.scratchPath, entry))) {

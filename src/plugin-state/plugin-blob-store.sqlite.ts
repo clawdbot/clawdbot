@@ -2,6 +2,7 @@
 import type { DatabaseSync } from "node:sqlite";
 import { resolveExpiresAtMsFromDurationMs } from "@openclaw/normalization-core/number-coercion";
 import type { Insertable, Selectable } from "kysely";
+import { hasErrnoCode } from "../infra/errno.js";
 import {
   executeSqliteQuerySync,
   executeSqliteQueryTakeFirstSync,
@@ -11,6 +12,10 @@ import {
   coerceRequiredSqliteNumber as sqliteNumber,
   normalizeSqliteNumber,
 } from "../infra/sqlite-number.js";
+import {
+  hasOpenClawStateTablesBeyondStartupCheckpoint,
+  withExistingOpenClawStateDatabaseReadOnly,
+} from "../state/openclaw-state-db-readonly.js";
 import type { DB as OpenClawStateKyselyDatabase } from "../state/openclaw-state-db.generated.js";
 import {
   openOpenClawStateDatabase,
@@ -39,11 +44,11 @@ type PluginBlobStoredInfo = Pick<
   "entry_key" | "metadata_json" | "created_at" | "expires_at"
 > & { size_bytes: number | bigint };
 
-type BlobDescriptor = {
-  entry_key: string;
-  namespace: string;
-  created_at: number;
-  size_bytes: number | bigint;
+type BlobUsage = {
+  namespaceCount: number;
+  namespaceBytes: number;
+  pluginCount: number;
+  pluginBytes: number;
 };
 
 type BlobWriteParams = {
@@ -96,6 +101,47 @@ function openDatabase(operation: PluginBlobStoreOperation, env?: NodeJS.ProcessE
       operation,
       "PLUGIN_BLOB_OPEN_FAILED",
       "Failed to open plugin blob store.",
+      env,
+    );
+  }
+}
+
+function readDatabase<T>(
+  operation: "lookup" | "entries",
+  read: (db: DatabaseSync) => T,
+  env?: NodeJS.ProcessEnv,
+): T | undefined {
+  let readStarted = false;
+  try {
+    return withExistingOpenClawStateDatabaseReadOnly(
+      ({ db }) => {
+        readStarted = true;
+        try {
+          return read(db);
+        } catch (error) {
+          if (
+            error instanceof Error &&
+            hasErrnoCode(error, "ERR_SQLITE_ERROR") &&
+            error.message === "no such table: plugin_blob_entries" &&
+            !hasOpenClawStateTablesBeyondStartupCheckpoint(db)
+          ) {
+            return undefined;
+          }
+          throw error;
+        }
+      },
+      env ? { env } : {},
+    );
+  } catch (error) {
+    throw wrapError(
+      error,
+      operation,
+      readStarted ? "PLUGIN_BLOB_READ_FAILED" : "PLUGIN_BLOB_OPEN_FAILED",
+      readStarted
+        ? operation === "lookup"
+          ? "Failed to read plugin blob entry."
+          : "Failed to list plugin blob entries."
+        : "Failed to open plugin blob store.",
       env,
     );
   }
@@ -203,56 +249,70 @@ function selectExpiredKeyInfo(
   );
 }
 
-function selectLiveDescriptors(
+function selectEvictionCandidates(
   db: DatabaseSync,
-  params: { pluginId: string; now: number; namespace?: string; excludeKey?: string },
-): BlobDescriptor[] {
-  let query = kysely(db)
-    .selectFrom("plugin_blob_entries")
-    .select(["entry_key", "namespace", "created_at"])
-    .select((eb) => eb.fn<number | bigint>("length", ["blob"]).as("size_bytes"))
-    .where("plugin_id", "=", params.pluginId)
-    .where((eb) => eb.or([eb("expires_at", "is", null), eb("expires_at", ">", params.now)]));
-  if (params.namespace !== undefined) {
-    query = query.where("namespace", "=", params.namespace);
-  }
-  if (params.excludeKey !== undefined) {
-    query = query.where("entry_key", "!=", params.excludeKey);
-  }
-  return executeSqliteQuerySync(db, query.orderBy("created_at", "asc").orderBy("entry_key", "asc"))
-    .rows;
-}
-
-function selectStoredDescriptors(
-  db: DatabaseSync,
-  params: { pluginId: string; namespace?: string },
-): BlobDescriptor[] {
-  let query = kysely(db)
-    .selectFrom("plugin_blob_entries")
-    .select(["entry_key", "namespace", "created_at"])
-    .select((eb) => eb.fn<number | bigint>("length", ["blob"]).as("size_bytes"))
-    .where("plugin_id", "=", params.pluginId);
-  if (params.namespace !== undefined) {
-    query = query.where("namespace", "=", params.namespace);
-  }
-  return executeSqliteQuerySync(db, query.orderBy("created_at", "asc").orderBy("entry_key", "asc"))
-    .rows;
-}
-
-function selectStoredKeyDescriptor(
-  db: DatabaseSync,
-  params: { pluginId: string; namespace: string; key: string },
-): BlobDescriptor | undefined {
-  return executeSqliteQueryTakeFirstSync(
+  params: { pluginId: string; namespace: string; key: string; now: number },
+) {
+  return executeSqliteQuerySync(
     db,
     kysely(db)
       .selectFrom("plugin_blob_entries")
-      .select(["entry_key", "namespace", "created_at"])
+      .select("entry_key")
+      .select((eb) => eb.fn<number | bigint>("length", ["blob"]).as("size_bytes"))
+      .where("plugin_id", "=", params.pluginId)
+      .where("namespace", "=", params.namespace)
+      .where("entry_key", "!=", params.key)
+      .where((eb) => eb.or([eb("expires_at", "is", null), eb("expires_at", ">", params.now)]))
+      .orderBy("created_at", "asc")
+      .orderBy("entry_key", "asc"),
+  ).rows;
+}
+
+function readStoredUsage(
+  db: DatabaseSync,
+  params: { pluginId: string; namespace: string },
+): BlobUsage {
+  // Expired rows retain cleanup metadata, so physical accounting includes them.
+  const row = executeSqliteQueryTakeFirstSync(
+    db,
+    kysely(db)
+      .selectFrom("plugin_blob_entries")
+      .select((eb) => [
+        eb.fn.countAll<number | bigint>().as("plugin_count"),
+        eb.fn
+          .countAll<number | bigint>()
+          .filterWhere("namespace", "=", params.namespace)
+          .as("namespace_count"),
+        eb.fn.sum<number | bigint | null>(eb.fn("length", ["blob"])).as("plugin_bytes"),
+        eb.fn
+          .sum<number | bigint | null>(eb.fn("length", ["blob"]))
+          .filterWhere("namespace", "=", params.namespace)
+          .as("namespace_bytes"),
+      ])
+      .where("plugin_id", "=", params.pluginId),
+  );
+  return {
+    namespaceCount: sqliteNumber(row?.namespace_count ?? 0),
+    namespaceBytes: sqliteNumber(row?.namespace_bytes ?? 0),
+    pluginCount: sqliteNumber(row?.plugin_count ?? 0),
+    pluginBytes: sqliteNumber(row?.plugin_bytes ?? 0),
+  };
+}
+
+function readStoredKeySize(
+  db: DatabaseSync,
+  params: { pluginId: string; namespace: string; key: string },
+): number | undefined {
+  const row = executeSqliteQueryTakeFirstSync(
+    db,
+    kysely(db)
+      .selectFrom("plugin_blob_entries")
       .select((eb) => eb.fn<number | bigint>("length", ["blob"]).as("size_bytes"))
       .where("plugin_id", "=", params.pluginId)
       .where("namespace", "=", params.namespace)
       .where("entry_key", "=", params.key),
   );
+  return row ? sqliteNumber(row.size_bytes) : undefined;
 }
 
 function deleteKey(
@@ -306,10 +366,6 @@ function deleteExpiredNamespace(
   return Number(result.numAffectedRows ?? 0);
 }
 
-function totalBytes(rows: readonly { size_bytes: number | bigint }[]): number {
-  return rows.reduce((total, row) => total + sqliteNumber(row.size_bytes), 0);
-}
-
 function limitError(message: string, env?: NodeJS.ProcessEnv): PluginBlobStoreError {
   return createError({
     code: "PLUGIN_BLOB_LIMIT_EXCEEDED",
@@ -322,33 +378,25 @@ function limitError(message: string, env?: NodeJS.ProcessEnv): PluginBlobStoreEr
 function assertProjectedLimits(params: {
   db: DatabaseSync;
   write: BlobWriteParams;
-  existing?: BlobDescriptor;
+  existingBytes?: number;
 }): void {
-  // Expired rows remain physically stored until their owner claims cleanup
-  // metadata, so hard storage fuses must count them even though reads hide them.
-  const namespaceRows = selectStoredDescriptors(params.db, {
-    pluginId: params.write.pluginId,
-    namespace: params.write.namespace,
-  });
-  const pluginRows = selectStoredDescriptors(params.db, {
-    pluginId: params.write.pluginId,
-  });
-  const previousBytes = params.existing ? sqliteNumber(params.existing.size_bytes) : 0;
-  const rowDelta = params.existing ? 0 : 1;
-  if (namespaceRows.length + rowDelta > params.write.maxEntries) {
+  const usage = readStoredUsage(params.db, params.write);
+  const previousBytes = params.existingBytes ?? 0;
+  const rowDelta = params.existingBytes === undefined ? 1 : 0;
+  if (usage.namespaceCount + rowDelta > params.write.maxEntries) {
     throw limitError("Plugin blob namespace reached its stored row limit.", params.write.env);
   }
   if (
-    totalBytes(namespaceRows) - previousBytes + params.write.bytes.byteLength >
+    usage.namespaceBytes - previousBytes + params.write.bytes.byteLength >
     params.write.maxBytesPerNamespace
   ) {
     throw limitError("Plugin blob namespace reached its stored byte limit.", params.write.env);
   }
-  if (pluginRows.length + rowDelta > MAX_PLUGIN_BLOB_ENTRIES_PER_PLUGIN) {
+  if (usage.pluginCount + rowDelta > MAX_PLUGIN_BLOB_ENTRIES_PER_PLUGIN) {
     throw limitError("Plugin blob store reached its per-plugin row limit.", params.write.env);
   }
   if (
-    totalBytes(pluginRows) - previousBytes + params.write.bytes.byteLength >
+    usage.pluginBytes - previousBytes + params.write.bytes.byteLength >
     MAX_PLUGIN_BLOB_BYTES_PER_PLUGIN
   ) {
     throw limitError("Plugin blob store reached its per-plugin byte limit.", params.write.env);
@@ -360,82 +408,54 @@ function deleteOldestUntilWithinLimits(params: {
   write: BlobWriteParams;
   now: number;
 }): void {
-  const namespaceRows = selectStoredDescriptors(params.db, {
-    pluginId: params.write.pluginId,
-    namespace: params.write.namespace,
-  });
-  let namespaceCount = namespaceRows.length;
-  let namespaceBytes = totalBytes(namespaceRows);
-  const namespaceKeysToDelete: string[] = [];
-  // Owner-managed expired rows are not eviction candidates: deleting one would
-  // lose metadata for an external artifact that still needs cleanup.
-  const namespaceCandidates = selectLiveDescriptors(params.db, {
+  const usage = readStoredUsage(params.db, params.write);
+  const withinLimits = () =>
+    usage.namespaceCount <= params.write.maxEntries &&
+    usage.namespaceBytes <= params.write.maxBytesPerNamespace &&
+    usage.pluginCount <= MAX_PLUGIN_BLOB_ENTRIES_PER_PLUGIN &&
+    usage.pluginBytes <= MAX_PLUGIN_BLOB_BYTES_PER_PLUGIN;
+  if (withinLimits()) {
+    return;
+  }
+  // Only this namespace's live rows may be evicted. Expired rows still own
+  // external cleanup, and sibling namespaces never pay for this write.
+  const candidates = selectEvictionCandidates(params.db, {
     pluginId: params.write.pluginId,
     namespace: params.write.namespace,
     now: params.now,
-    excludeKey: params.write.key,
+    key: params.write.key,
   });
-  for (const row of namespaceCandidates) {
-    if (
-      namespaceCount <= params.write.maxEntries &&
-      namespaceBytes <= params.write.maxBytesPerNamespace
-    ) {
+  const keysToDelete: string[] = [];
+  for (const row of candidates) {
+    keysToDelete.push(row.entry_key);
+    const sizeBytes = sqliteNumber(row.size_bytes);
+    usage.namespaceCount -= 1;
+    usage.namespaceBytes -= sizeBytes;
+    usage.pluginCount -= 1;
+    usage.pluginBytes -= sizeBytes;
+    if (withinLimits()) {
       break;
     }
-    namespaceKeysToDelete.push(row.entry_key);
-    namespaceCount -= 1;
-    namespaceBytes -= sqliteNumber(row.size_bytes);
   }
   if (
-    namespaceCount > params.write.maxEntries ||
-    namespaceBytes > params.write.maxBytesPerNamespace
+    usage.namespaceCount > params.write.maxEntries ||
+    usage.namespaceBytes > params.write.maxBytesPerNamespace
   ) {
     throw limitError(
       "Plugin blob namespace cannot satisfy its configured limits.",
       params.write.env,
     );
   }
-  deleteKeys(params.db, {
-    pluginId: params.write.pluginId,
-    namespace: params.write.namespace,
-    keys: namespaceKeysToDelete,
-  });
-
-  const pluginRows = selectStoredDescriptors(params.db, {
-    pluginId: params.write.pluginId,
-  });
-  let pluginCount = pluginRows.length;
-  let pluginBytes = totalBytes(pluginRows);
-  // Global hard-cap accounting includes every namespace, but this namespace's
-  // live rows are the only entries its overflow policy may safely evict.
-  const liveNamespaceCandidates = selectLiveDescriptors(params.db, {
-    pluginId: params.write.pluginId,
-    namespace: params.write.namespace,
-    now: params.now,
-    excludeKey: params.write.key,
-  });
-  const pluginKeysToDelete: string[] = [];
-  for (const row of liveNamespaceCandidates) {
-    if (
-      pluginCount <= MAX_PLUGIN_BLOB_ENTRIES_PER_PLUGIN &&
-      pluginBytes <= MAX_PLUGIN_BLOB_BYTES_PER_PLUGIN
-    ) {
-      break;
-    }
-    pluginKeysToDelete.push(row.entry_key);
-    pluginCount -= 1;
-    pluginBytes -= sqliteNumber(row.size_bytes);
-  }
   if (
-    pluginCount > MAX_PLUGIN_BLOB_ENTRIES_PER_PLUGIN ||
-    pluginBytes > MAX_PLUGIN_BLOB_BYTES_PER_PLUGIN
+    usage.pluginCount > MAX_PLUGIN_BLOB_ENTRIES_PER_PLUGIN ||
+    usage.pluginBytes > MAX_PLUGIN_BLOB_BYTES_PER_PLUGIN
   ) {
     throw limitError("Plugin blob store cannot satisfy its per-plugin limits.", params.write.env);
   }
   deleteKeys(params.db, {
     pluginId: params.write.pluginId,
     namespace: params.write.namespace,
-    keys: pluginKeysToDelete,
+    keys: keysToDelete,
   });
 }
 
@@ -491,9 +511,9 @@ function writeBlob(params: BlobWriteParams, ifAbsent: boolean): boolean {
           // them as occupied so stable-key reuse cannot discard cleanup metadata.
           return false;
         }
-        const existing = selectStoredKeyDescriptor(db, params);
         if (params.overflowPolicy === "reject-new") {
-          assertProjectedLimits({ db, write: params, existing });
+          const existingBytes = ifAbsent ? undefined : readStoredKeySize(db, params);
+          assertProjectedLimits({ db, write: params, existingBytes });
         }
         upsertBlob(db, params, now);
         if (params.overflowPolicy === "evict-oldest") {
@@ -528,24 +548,19 @@ export function pluginBlobLookup<TMetadata>(params: {
   key: string;
   env?: NodeJS.ProcessEnv;
 }): PluginBlobEntry<TMetadata> | undefined {
-  try {
-    const { db } = openDatabase("lookup", params.env);
-    const row = selectLiveBlob(db, { ...params, now: Date.now() });
-    return row
-      ? {
-          ...decodeBlobInfo<TMetadata>(row, "lookup", params.env),
-          bytes: Uint8Array.from(row.blob),
-        }
-      : undefined;
-  } catch (error) {
-    throw wrapError(
-      error,
-      "lookup",
-      "PLUGIN_BLOB_READ_FAILED",
-      "Failed to read plugin blob entry.",
-      params.env,
-    );
-  }
+  return readDatabase(
+    "lookup",
+    (db) => {
+      const row = selectLiveBlob(db, { ...params, now: Date.now() });
+      return row
+        ? {
+            ...decodeBlobInfo<TMetadata>(row, "lookup", params.env),
+            bytes: Uint8Array.from(row.blob),
+          }
+        : undefined;
+    },
+    params.env,
+  );
 }
 
 export function pluginBlobEntries<TMetadata>(params: {
@@ -553,20 +568,16 @@ export function pluginBlobEntries<TMetadata>(params: {
   namespace: string;
   env?: NodeJS.ProcessEnv;
 }): PluginBlobEntryInfo<TMetadata>[] {
-  try {
-    const { db } = openDatabase("entries", params.env);
-    return selectLiveInfo(db, { ...params, now: Date.now() }).map((row) =>
-      decodeBlobInfo<TMetadata>(row, "entries", params.env),
-    );
-  } catch (error) {
-    throw wrapError(
-      error,
+  return (
+    readDatabase(
       "entries",
-      "PLUGIN_BLOB_READ_FAILED",
-      "Failed to list plugin blob entries.",
+      (db) =>
+        selectLiveInfo(db, { ...params, now: Date.now() }).map((row) =>
+          decodeBlobInfo<TMetadata>(row, "entries", params.env),
+        ),
       params.env,
-    );
-  }
+    ) ?? []
+  );
 }
 
 export function pluginBlobDelete(params: {

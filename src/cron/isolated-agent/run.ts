@@ -7,8 +7,6 @@ import {
 } from "../../agents/run-termination.js";
 import { createAgentLifecycleTerminalBackstop } from "../../auto-reply/reply/agent-lifecycle-terminal.js";
 import { cleanupBrowserSessionsForLifecycleEnd } from "../../browser-lifecycle-cleanup.js";
-import type { CliDeps } from "../../cli/outbound-send-deps.js";
-import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import {
   assertAgentRunLifecycleGenerationCurrent,
   getAgentEventLifecycleGeneration,
@@ -33,12 +31,12 @@ import {
   normalizeCronRunErrorText,
   resolveCronAbortReasonText,
 } from "../service/execution-errors.js";
-import type {
-  CronAgentExecutionPhaseUpdate,
-  CronAgentExecutionStarted,
-  CronStoredJob,
-} from "../types.js";
+import type { CronAgentExecutionPhaseUpdate } from "../types.js";
 import { finalizeCronRun } from "./run-finalize.js";
+import {
+  CronExecutionRootRuntimeError,
+  type RunCronAgentTurnParams,
+} from "./run-prepare-runtime.js";
 import { prepareCronRunContext } from "./run-prepare.js";
 import { CronSessionLifecycleClaimError, type MutableCronSession } from "./run-session-state.js";
 import { logWarn } from "./run.runtime.js";
@@ -84,21 +82,9 @@ async function disposeCronRunContext(params: {
 }
 
 /** Runs one isolated cron agent turn, including setup, execution, delivery, and persistence. */
-export async function runCronIsolatedAgentTurn(params: {
-  cfg: OpenClawConfig;
-  deps: CliDeps;
-  job: CronStoredJob;
-  message: string;
-  abortSignal?: AbortSignal;
-  signal?: AbortSignal;
-  onExecutionStarted?: (info?: CronAgentExecutionStarted) => void;
-  onExecutionPhase?: (info: CronAgentExecutionPhaseUpdate) => void;
-  onLaneWait?: (info?: { waiting?: boolean }) => void;
-  sessionKey: string;
-  agentId?: string;
-  lane?: string;
-  executionIdentity?: import("../service/state.js").CronExecutionIdentityAdmission;
-}): Promise<RunCronAgentTurnResult> {
+export async function runCronIsolatedAgentTurn(
+  params: RunCronAgentTurnParams,
+): Promise<RunCronAgentTurnResult> {
   const admittedLifecycleGeneration = getAgentEventLifecycleGeneration();
   const upstreamAbortSignal = params.abortSignal ?? params.signal;
   const lifecycleAbortController = new AbortController();
@@ -117,6 +103,9 @@ export async function runCronIsolatedAgentTurn(params: {
       onLifecycleInterrupt: () => lifecycleAbortController.abort(createAgentRunRestartAbortError()),
     });
   } catch (err) {
+    if (err instanceof CronExecutionRootRuntimeError) {
+      return { status: "error", error: err.message, admissionDisposition: "rejected" };
+    }
     if (err instanceof CronSessionLifecycleClaimError) {
       return {
         status: "error",
@@ -242,6 +231,7 @@ export async function runCronIsolatedAgentTurn(params: {
       runSessionKey: prepared.context.runSessionKey,
       usesDetachedRunSession: prepared.context.usesDetachedRunSession,
       workspaceDir: prepared.context.workspaceDir,
+      executionRoot: prepared.context.executionRoot,
       lane: params.lane,
       resolvedDelivery: {
         channel: prepared.context.resolvedDelivery.channel,
@@ -331,18 +321,17 @@ export async function runCronIsolatedAgentTurn(params: {
     const error = isCronLaneTimeout ? abortReason() : normalizeCronRunErrorText(err);
     outcome = "error";
     outcomeError = error;
+    const admissionDisposition =
+      err instanceof CronSessionLifecycleClaimError
+        ? err.admissionDisposition
+        : err instanceof CronExecutionRootRuntimeError || !executionStarted
+          ? "rejected"
+          : undefined;
     return prepared.context.withRunSession({
       status: "error",
       error,
       executionStarted,
-      ...(!executionStarted
-        ? {
-            admissionDisposition:
-              err instanceof CronSessionLifecycleClaimError
-                ? err.admissionDisposition
-                : ("rejected" as const),
-          }
-        : {}),
+      ...(admissionDisposition ? { admissionDisposition } : {}),
       // Carry the already-resolved run model into the error/timeout row so
       // Task-run history keeps provider/model attribution instead of looking like
       // an un-attributed cron timeout. finalizeCronRun does the same via

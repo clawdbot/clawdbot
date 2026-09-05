@@ -24,7 +24,7 @@ import type { PluginDoctorStateMigrationContext } from "openclaw/plugin-sdk/runt
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { stateMigrations } from "./doctor-contract-api.js";
 import { SqliteBackedMatrixSyncStore } from "./src/matrix/client/file-sync-store.js";
-import { openMatrixStorageMetaStoreOptions } from "./src/matrix/client/storage.js";
+import { openMatrixStorageMetaStoreOptions } from "./src/matrix/client/storage-metadata.js";
 import {
   MATRIX_IDB_SNAPSHOT_FILENAME,
   MATRIX_RECOVERY_KEY_FILENAME,

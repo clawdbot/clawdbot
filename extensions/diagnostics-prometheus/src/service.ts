@@ -964,7 +964,7 @@ function recordDiagnosticEvent(
       );
       store.histogram(
         "openclaw_liveness_cpu_core_ratio",
-        "CPU core ratio reported by diagnostic liveness warnings.",
+        "Whole-process CPU usage in core equivalents, including worker and native threads; can exceed 1.",
         livenessLabels(evt),
         numericValue(evt.cpuCoreRatio),
         RATIO_BUCKETS,

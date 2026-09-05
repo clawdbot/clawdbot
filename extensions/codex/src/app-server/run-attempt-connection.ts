@@ -41,7 +41,7 @@ import { ensureCodexWorkspaceDirOnce } from "./run-attempt-lifecycle.js";
 import type { CodexRunAttemptInput } from "./run-attempt-types.js";
 import {
   createCodexSessionGenerationSupersededError,
-  reclaimCurrentCodexSessionGeneration,
+  resolveCodexSessionBinding,
   resolveCodexRunSessionBindingAuthority,
   scopeCodexRunBindingStore,
   sessionBindingIdentity,
@@ -207,20 +207,20 @@ export async function prepareCodexAttemptConnection({ params, options }: CodexRu
       bindingIdentity = physicalIdentity;
     }
   }
-  let startupBinding = bindingStore.read(bindingIdentity);
-  assertCodexSessionRuntimeOwnership(startupBinding, params.expectedSessionRuntimeOwnership);
-  if (!startupBinding && bindingIdentity.kind === "session" && bindingIdentity.sessionKey) {
-    const reclaimed = await reclaimCurrentCodexSessionGeneration({
-      bindingStore,
-      identity: bindingIdentity,
-      config: params.config,
-      storePath: params.sessionTarget?.storePath,
-    });
-    if (!reclaimed) {
-      throw createCodexSessionGenerationSupersededError(bindingIdentity.sessionId);
-    }
-    startupBinding = bindingStore.read(bindingIdentity);
-  }
+  const { binding: admittedBinding, assertCurrent } = await resolveCodexSessionBinding({
+    reclaimStale: true,
+    bindingStore,
+    identity: bindingIdentity,
+    config: params.config,
+    storePath: params.sessionTarget?.storePath,
+    assertCurrent: params.hostCapabilities.assertActive,
+    signal: params.abortSignal,
+    assertBinding: params.expectedSessionRuntimeOwnership
+      ? (binding) =>
+          assertCodexSessionRuntimeOwnership(binding, params.expectedSessionRuntimeOwnership)
+      : undefined,
+  });
+  let startupBinding = admittedBinding;
   preDynamicStartupStages.mark("read-binding");
   const usesSupervisionConnection = startupBinding?.connectionScope === "supervision";
   if (usesSupervisionConnection) {
@@ -385,7 +385,8 @@ export async function prepareCodexAttemptConnection({ params, options }: CodexRu
   preDynamicStartupStages.mark("app-server-policy");
   preDynamicStartupStages.mark("native-hook-relay");
   const terminalState = {
-    turnSucceeded: false,
+    // SAFETY: Finalization records a settled status only after native completion and local outcome checks.
+    settledTurnStatus: undefined as "completed" | "failed" | undefined,
     explicitCancellationObserved: false,
     explicitCancellationReason: undefined as unknown,
     terminalOutcomeFrozen: false,
@@ -423,6 +424,7 @@ export async function prepareCodexAttemptConnection({ params, options }: CodexRu
   try {
     const startupBindingBeforeRotation = startupBinding;
     const startupBindingResolution = await rotateOversizedCodexAppServerStartupBinding({
+      assertCurrent,
       binding: startupBinding,
       bindingStore,
       identity: bindingIdentity,
@@ -479,8 +481,11 @@ export async function prepareCodexAttemptConnection({ params, options }: CodexRu
         resolveRuntimeOptionsForBinding(mutable.startupBinding, selection),
         selection,
       ).appServer;
+    assertCurrent();
+    // Host capabilities are identity-keyed; carry generation proof separately.
     return {
       params,
+      assertCurrent,
       options,
       attemptStartedAt,
       profilerEnabled,

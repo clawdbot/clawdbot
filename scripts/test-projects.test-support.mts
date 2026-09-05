@@ -10,6 +10,7 @@ import {
   agentVitestProjectOwners,
   embeddedAgentVitestProjectOwners,
   isAgentsCoreIsolatedTestFile,
+  isAgentsSpawnProductionBoundaryTestFile,
 } from "../test/vitest/vitest.agents-paths.mjs";
 import { isChannelSurfaceTestFile } from "../test/vitest/vitest.channel-paths.mjs";
 import {
@@ -187,6 +188,8 @@ type UnmatchedExplicitTestTarget = {
 
 const DEFAULT_VITEST_CONFIG = "test/vitest/vitest.unit.config.ts";
 const AGENTS_EMBEDDED_AGENT_TEST_ROOT = agentVitestProjectOwners.embedded.root;
+const AGENTS_SPAWN_PRODUCTION_BOUNDARY_VITEST_CONFIG =
+  agentVitestProjectOwners.spawnProductionBoundary.config;
 const AGENTS_CORE_ISOLATED_VITEST_CONFIG = agentVitestProjectOwners.coreIsolated.config;
 const AGENTS_CORE_VITEST_CONFIG = agentVitestProjectOwners.core.config;
 const AGENTS_EMBEDDED_AGENT_VITEST_CONFIG = agentVitestProjectOwners.embedded.config;
@@ -465,7 +468,7 @@ const TUI_VITEST_CONFIG = "test/vitest/vitest.tui.config.ts";
 const TUI_PTY_VITEST_CONFIG = "test/vitest/vitest.tui-pty.config.ts";
 const UI_VITEST_CONFIG = "test/vitest/vitest.ui.config.ts";
 const UI_BROWSER_VITEST_CONFIG = "test/vitest/vitest.ui-browser.config.ts";
-const UI_E2E_VITEST_CONFIG = "test/vitest/vitest.ui-e2e.config.ts";
+export const UI_E2E_VITEST_CONFIG = "test/vitest/vitest.ui-e2e.config.ts";
 const UI_ISOLATED_VITEST_CONFIG = "test/vitest/vitest.ui-isolated.config.ts";
 const UTILS_VITEST_CONFIG = "test/vitest/vitest.utils.config.ts";
 const WIZARD_VITEST_CONFIG = "test/vitest/vitest.wizard.config.ts";
@@ -526,6 +529,7 @@ const VITEST_CONFIG_BY_KIND: Record<string, string> = {
   agentSupport: AGENTS_SUPPORT_VITEST_CONFIG,
   agentTools: AGENTS_TOOLS_VITEST_CONFIG,
   agent: AGENTS_VITEST_CONFIG,
+  agentsSpawnProductionBoundary: AGENTS_SPAWN_PRODUCTION_BOUNDARY_VITEST_CONFIG,
   agentsCoreIsolated: AGENTS_CORE_ISOLATED_VITEST_CONFIG,
   agentsCore: AGENTS_CORE_VITEST_CONFIG,
   agentsSupport: AGENTS_SUPPORT_VITEST_CONFIG,
@@ -1034,7 +1038,10 @@ function listUnitFastFullSuiteTestTargets() {
 }
 
 function listAgentsCoreFullSuiteTestTargets(cwd: string) {
-  const isolatedTests = new Set(agentVitestProjectOwners.coreIsolated.include);
+  const isolatedTests = new Set([
+    ...agentVitestProjectOwners.spawnProductionBoundary.include,
+    ...agentVitestProjectOwners.coreIsolated.include,
+  ]);
   const agentsDir = path.join(cwd, "src/agents");
   if (!fs.existsSync(agentsDir)) {
     return [];
@@ -2737,6 +2744,10 @@ const SEMANTIC_TOOLING_TARGET_PATTERNS: Array<[RegExp, string[]]> = [
   [/^scripts\/lib\/swift-toolchain\.sh$/u, ["package-mac-app", "package-mac-dist"]],
   [/^scripts\/stage-cua-driver-macos\.sh$/u, ["package-mac-app"]],
   [
+    /^scripts\/(stage-cloudflared-macos\.sh|lib\/cloudflared-macos\.json)$/u,
+    ["stage-cloudflared-macos", "package-mac-app"],
+  ],
+  [
     /^scripts\/lib\/npm-publish-plan\.mjs$/u,
     [
       "test/npm-publish-plan.test.ts",
@@ -3490,6 +3501,9 @@ function classifyTarget(arg: string, cwd: string) {
   }
   if (isAgentsCoreIsolatedTestFile(relative)) {
     return agentVitestProjectOwners.coreIsolated.kind;
+  }
+  if (isAgentsSpawnProductionBoundaryTestFile(relative)) {
+    return agentVitestProjectOwners.spawnProductionBoundary.kind;
   }
   if (isControlUiE2eTarget(relative)) {
     return "uiE2e";

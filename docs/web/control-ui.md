@@ -12,6 +12,11 @@ The Control UI is a small **Vite + Lit** single-page app served by the Gateway:
 - default: `http://<host>:18789/`
 - optional prefix: set `gateway.controlUi.basePath` (e.g. `/openclaw`)
 
+`gateway.controlUi.enabled` hot-applies. Disable it to stop serving dashboard
+pages and assets while bots and existing Gateway connections keep running.
+Re-enable it to resume serving; missing assets are prepared in the background.
+Changing the serving base path or asset root still requires a Gateway restart.
+
 For unmatched HTTP paths, the app-shell fallback respects the request's `Accept` header. An explicit HTML rejection such as `text/html;q=0, */*` overrides the broader wildcard, so the request reaches the startup `503` or final `404` response. Headerless and wildcard-only requests retain the browser navigation fallback.
 
 It speaks **directly to the Gateway WebSocket** on the same port.
@@ -203,7 +208,7 @@ Set an agent's display name, emoji, and avatar under **Agent settings → Overvi
 
 The Control UI fetches its runtime settings from `/control-ui-config.json`, resolved relative to the gateway's Control UI base path (for example `/__openclaw__/control-ui-config.json` under base path `/__openclaw__/`). That endpoint is gated by gateway HTTP auth: unauthenticated browsers cannot fetch it, and a successful fetch requires a valid gateway token/password or trusted-proxy identity. Tailscale header auth applies to the Control UI WebSocket, not this HTTP endpoint.
 
-Local agent avatars use [authenticated avatar URLs](#avatar-route-auth) in this response rather than inline image bytes, keeping bootstrap JSON small. Configured data URLs, remote URLs, emoji, and RPC avatar representations are unchanged.
+Local and data-URL agent avatars use [authenticated avatar URLs](#avatar-route-auth) in this response and in browser identity RPCs, keeping startup JSON small. Native and CLI RPC clients retain their inline avatar representation.
 
 ## Gateway host status
 
@@ -315,6 +320,30 @@ The page intentionally focuses on inventory, discovery, install, enablement,
 and removal. Use [`openclaw plugins`](/cli/plugins) for arbitrary npm, git, or
 local-path sources, updates, and advanced plugin configuration.
 
+## Updates
+
+Open **Settings → Updates** (`/settings/updates`) to check the installed version,
+update policy, and active or most recent update. **Update now** opens a
+confirmation showing the target and restart impact. Choose **Update and restart**
+to start; canceling leaves the Gateway untouched.
+
+After confirmation, one update view shows the ordered phases, current or last
+step details, and verification results for the service, version, plugins,
+channels, and inference. The details area follows new lines until you scroll up.
+The dialog stays open with **Gateway restarting…** while the connection is down.
+After reconnecting, it reads the same run from the Gateway; reloading the page
+also restores the active or latest run in Settings.
+
+Every completed run keeps a report, including success. Failed runs retain
+**Check status**, **Retry update**, and Triage recovery actions. The sidebar update
+card shows the active phase and opens the same view. A completed run can appear
+there for up to 24 hours until you acknowledge it in that browser.
+
+The report is shared with chat and the CLI. See [Updating](/install/updating)
+for installation-specific behavior and [Run history and reports](/cli/update#run-history-and-reports)
+for inspecting a run from the Gateway host. In the signed macOS app, an app-owned
+local Gateway still uses **Update Mac app + Gateway** and the native update flow.
+
 ## Apps and extensions
 
 Open **Apps** from the sidebar **More** menu, the command palette, or the
@@ -418,6 +447,8 @@ When you switch sessions, the composer keeps the session's known model name visi
 
 Once the session is created, chat opens immediately. Remote startup uses the same transcript progress indicator and elapsed timer as GitHub workspace preparation, showing provisioning, workspace preparation, startup, and first-message delivery as they happen. The composer stays disabled until the first message is accepted; normal startup is not an error. Startup failures remain visible in the session, with **Retry** when recovery is available.
 
+If startup recovery cannot load after a page reload, the session keeps the loading error and **Retry** available across session switches. Switching sessions does not restart recovery or reset its elapsed time. The saved first message continues holding later input until recovery loads and confirms its delivery state. While this page is responsive and unsaved starts await the recovery code, automatic in-app reloads are blocked and **Retry** is replaced by a warning. This includes Incognito starts and paused starts whose recovery could not be saved. Reload controls elsewhere in the app explain the same restriction. Choose **Discard unsaved starts and reload** to resume saved starts and discard the unsaved starts. The same action is available in the warning shown by other blocked Reload controls. This protection is limited to the open, responsive page; closing it or browser-managed navigation can still discard unsaved input. Incognito input is never saved to browser storage.
+
 If remote startup fails before the first message is sent, chat retains the submitted text, attachments, selected destination, and a bounded error in the same browser tab and Gateway credential scope. Reloading shows the paused submission without provisioning another worker. **Retry** uses the already-created session and the original profile and machine class, device, or Auto selection; it waits for active placement before sending. The session keeps its model and reasoning settings, including any later changes you make in that session. This tab-local startup recovery uses the tab's existing session-storage lifetime, separately from the ordinary browser draft limits below. Incognito startup recovery remains in memory only. A disconnect hides the retained content until the same credential scope is verified again, but does not release its first-turn hold: later input stays in the composer instead of entering the ordinary offline queue. Sessions without an unresolved initial turn keep normal offline queuing.
 
 If the Gateway explicitly rejects the first send, **Retry** creates a new send attempt on that same session and destination. If delivery is uncertain, **Check delivery** looks for the original user message or an exact Gateway receipt showing that the input was retained or consumed. It never resends the prompt, provisions a worker, or treats missing history as proof that delivery failed. A matching receipt clears the browser startup hold without implying that the run has finished. Retained inputs keep their Gateway-owned status, including interrupted or cancelled inputs, without another optimistic message. Without a receipt, the prompt and attachments remain accessible and normal sending stays disabled. Inspect the conversation, or copy the retained prompt if you choose to start a separate attempt. This recovery does not promise exactly-once delivery across Gateway restarts. If browser storage rejects a recovery update, keep the current page open to preserve its in-memory input.
@@ -475,7 +506,7 @@ are Gateway settings and remain available in every browser.
 <AccordionGroup>
   <Accordion title="Chat and Talk">
     - Chat with the model via Gateway WS (`chat.history`, `chat.send`, `chat.abort`, `chat.inject`). Archived sessions keep the composer disabled and show a banner with an **Unarchive** action before the conversation can continue.
-    - Chat history opens with up to 800 recent messages. Session prefetches and history refreshes use the same window. Scrolling back requests up to 1,000 older messages per page and prefetches the next page to reduce loading pauses. Per-message text caps and the Gateway response-size limit still apply, so pages can contain fewer messages.
+    - Opening or refreshing chat requests up to 80 recent messages. Each background warming pass reads at most two inactive sessions sequentially, with up to 20 messages per session, after presented chat loads finish. Automatic warming waits for a visible conversation on the current page; dashboard-only views still warm the session you hover or keyboard-focus. Scrolling back requests up to 1,000 older messages per page and prefetches the next page. Per-message text caps and response-byte limits can reduce these counts.
     - A previous run's error banner clears when Chat adopts a new run or history confirms a newer successful run. Retiring the banner does not erase recorded diagnostics. A late error from the same run can remain visible beside its delivered answer; reconnecting or refreshing metadata alone does not establish recovery.
     - A saved assistant answer replaces its live stream without waiting for the run to finish. Refreshing history or reconnecting while that reply finishes does not add another copy of the saved answer. Later streamed continuations remain visible. Remote workspace reconciliation can keep the working indicator and Stop control active after the answer appears; a later reconciliation failure remains visible beside the answer.
     - Scroll up to read earlier messages without following incoming output. Sending a message, submitting a transcript command such as `/help`, or using the down-arrow button returns to the latest message, including when the composer or progress card resizes. Scrolling manually interrupts that movement or a restored scroll position; keys handled by text fields or media controls do not. Messages continue to reserve their space as full text, images, and tool output load.
@@ -484,7 +515,7 @@ are Gateway settings and remain available in every browser.
     - Talk through browser realtime sessions. OpenAI supports browser WebRTC and Gateway-relayed provider WebSockets, Google Live uses a constrained one-use browser token over WebSocket, and backend-only realtime voice plugins use Gateway relay. Video-capable browser sessions can choose a device-local camera in Settings or flip cameras from the live preview; the browser captures JPEG frames for the realtime provider without streaming camera video through the Gateway. Client-owned provider sessions start with `talk.client.create`; Gateway relay sessions start with `talk.session.create`. The relay keeps provider credentials on the Gateway while the browser streams microphone PCM through `talk.session.appendAudio`, forwards provider delegations or `openclaw_agent_consult` tool calls through Gateway policy and the larger configured OpenClaw model, and routes active-run voice steering through `talk.client.steer` or `talk.session.steer`. Browser WebRTC GPT-Live delegates on the Gateway-owned sideband, but each delegation has the same spoken-confirmation gate and browser-owned `talk.client.steer` lifecycle; a newer spoken task can also supersede the running delegation. Gateway-relayed GPT-Live uses the normal relay consult and steering path. Configure the realtime provider, model, and speaker voice on **Settings → Talk**, whose pickers come from `talk.catalog` and show whether the selection is ready to use.
     - Stream tool calls and live tool output cards in Chat (agent events). Tool activity renders as kind-aware rows: shell commands show the syntax-highlighted command with terminal-style output; supported edit and write calls show bounded inline diffs with source syntax highlighting, line numbers when available, and `+added -removed` stats; and consecutive calls collapse into a summary such as "Ran 13 commands, read 6 files, edited 9 files". While a run is live, the newest running call names the group header. Expand a row to inspect its remaining arguments and raw output.
     - Tool activity counts distinct calls, not start/update/result events, repeated history or live projections, or Gateway observation RPCs. Nested calls count independently, even when their names and arguments match. File summaries count distinct file paths; expand the activity to see each call.
-    - Optional AI purpose titles for complex tool calls (long shell commands, argument-heavy plugin tools), enabled with `gateway.controlUi.toolTitles: true` (default off). Titles come from the batched `chat.toolTitles` method through standard utility-model routing — an explicit `utilityModel` (operator-chosen provider, like other utility tasks), else the session provider's declared small-model default — and cache gateway-side per agent. When the opt-in is off or no cheap model is usable, rows keep their deterministic labels and no model call happens.
+    - Tool activity automatically displays a short purpose description supplied by the acting agent when available, with commands and results expandable underneath. Calls without descriptions keep deterministic labels. Viewing activity makes no additional model calls. The former `gateway.controlUi.toolTitles` option is retired; `openclaw doctor --fix` removes it from existing configs.
     - Start or dismiss ephemeral model-suggested follow-up tasks; accepted suggestions open a fresh managed-worktree session with the proposed prompt.
     - Activity tab with browser-local, redaction-first summaries of live tool activity from existing `session.tool` / tool event delivery.
 
@@ -830,7 +861,11 @@ Chat error banners, including cloud runner failures, show short messages in full
 
     Persistent provider, model, voice, transport, reasoning effort, exact VAD threshold, silence duration, and prefix padding defaults live in **Settings → Communications → Talk**; changing them requires `operator.admin` access. Configuring Gateway relay forces the backend relay path; configuring WebRTC keeps the session client-owned and fails instead of silently falling back to relay if the provider cannot create a browser session.
 
-    The Talk control itself is the microphone button in the composer toolbar. Its caret lists **System default** and every microphone exposed by the browser, including USB, Bluetooth, and virtual inputs. The selected device ID stays browser-local and is never sent to the Gateway; if that exact device disappears, Talk asks you to choose another input instead of silently recording from a different microphone. While Talk is live, the microphone button becomes a pill showing the live input-level meter; clicking it stops voice input, and hovering it reveals the stop glyph. Screen readers announce `Connecting voice input...`, `Listening...`, or `Asking OpenClaw...` while a realtime tool call is consulting the configured larger model through `talk.client.toolCall`. Stopping a running agent response stays a separate square **Stop** control next to the pill.
+    The Talk control itself is the microphone button in the composer toolbar. Its caret lists **System default** and every microphone exposed by the browser, including USB, Bluetooth, and virtual inputs. The selected device ID stays browser-local and is never sent to the Gateway; if that exact device disappears or the browser cannot open it, Talk asks you to choose another input instead of silently recording from a different microphone.
+
+    For a selected-microphone constraint failure, click **Use System default for this call** to explicitly retry with the system default. This does not change your saved microphone preference. Until you click, no different microphone opens and no provider session is allocated. Dismissing the error, leaving the chat, disconnecting, or starting another call cancels that recovery action. For dictation, choose another input or **System default** from the existing microphone picker, then start again; dictation never switches microphones automatically.
+
+    While Talk is live, the microphone button becomes a pill showing the live input-level meter; clicking it stops voice input, and hovering it reveals the stop glyph. Screen readers announce `Connecting voice input...`, `Listening...`, or `Asking OpenClaw...` while a realtime tool call is consulting the configured larger model through `talk.client.toolCall`. Stopping a running agent response stays a separate square **Stop** control next to the pill.
 
     **Video Talk** is available for OpenAI Platform Realtime WebRTC and Google Live browser sessions; GPT-Live is audio-only. Click the camera button, allow camera and microphone access, and confirm the local preview. OpenAI sends one bounded JPEG frame over its browser data channel when `describe_view` requests visual context. Google Live sends bounded JPEG frames directly from the browser to the provider at the supported maximum of one frame per second and answers `describe_view` function calls with the camera-stream state. Camera frames never pass through the Gateway. Stopping Talk closes the preview and releases both media tracks. See Google's [Live API capabilities](https://ai.google.dev/gemini-api/docs/live-api/capabilities#video) and [function-calling guide](https://ai.google.dev/gemini-api/docs/live-api/tools) for the provider wire contracts.
 
@@ -893,6 +928,16 @@ closing fence arrives or the response finishes. Invalid or overly complex
 diagrams keep their source visible with an error; correct the syntax or simplify
 the diagram. Diagram source cannot run scripts or click handlers, load external
 images, or add custom CSS to the Control UI.
+
+Renderer loading or timeout errors instead suggest reloading the dashboard and
+checking proxy authentication. The renderer runs in an isolated frame, so its
+`assets/mermaid.min-*.js` and `assets/frame-*.js` requests do not send `SameSite=Lax`
+or `SameSite=Strict` cookies. Behind a cookie-authenticated reverse proxy, those
+static asset URLs must be reachable without those cookies, including under any
+configured `gateway.controlUi.basePath`. Check the browser Network panel for
+blocked requests or redirects to a login page. Keep authentication on the
+dashboard and Gateway APIs; any proxy exception should cover only these static
+renderer assets. Reload after correcting the asset access rules.
 
 ## Connection loss and reconnect
 
@@ -1135,17 +1180,38 @@ When gateway auth is configured, the Control UI avatar endpoint requires the sam
 - `GET /avatar/<agentId>` returns the avatar image only to authenticated callers. `GET /avatar/<agentId>?meta=1` returns the avatar metadata under the same rule.
 - Unauthenticated requests to either route are rejected (matching the sibling assistant-media route), so the avatar route cannot leak agent identity on hosts that are otherwise protected.
 - The Control UI forwards the gateway token as a bearer header when fetching avatars, and uses authenticated blob URLs so the image still renders in dashboards.
-- Bootstrap avatar URLs include an opaque `v` revision. Refreshed metadata uses a new URL after local-file replacement so the browser does not reuse the previous image. The revision is a cache key, not an access token.
+- Browser avatar URLs include an opaque `v` revision. Static PNG, JPEG, and WebP avatars use cached previews with a maximum side of 128 pixels. Animated images, SVG, and other accepted data-URL formats retain their original bytes and encoding. The sidebar and chat panes share fetched images, and private browser caching avoids downloading unchanged bytes on reload.
+- Refreshed metadata uses a new URL after the source changes. Replacing a local avatar file is picked up by the next identity refresh after the shared 60-second freshness window. Conditional requests still require authentication before returning `304 Not Modified`. The revision is a cache key, not an access token; unversioned image requests retain the original image.
 
 If you disable gateway auth (not recommended on shared hosts), the avatar route also becomes unauthenticated, in line with the rest of the gateway.
 
 ## Assistant media route auth
 
+Local image previews follow the chat's filesystem permissions. Project chats use
+their session workspace, including managed worktrees. Full Access, or disabled
+workspace-only filesystem protection, also permits image previews outside that
+workspace. An explicit session permission mode takes precedence over the agent's
+filesystem setting.
+
+Full Access also preserves playback and downloads for existing attachments in
+the agent's configured workspace. It does not permit arbitrary outside
+non-image files.
+
+With workspace protection enabled, an outside image shows **Outside allowed
+folders**. Hover over its filename to inspect the source path. Administrators can
+select **Allow image** to preview that exact file without changing the session's
+permissions or allowing its parent folder. The allowance uses a short-lived media
+ticket; replacing the file or restarting the Gateway requires a new allowance.
+
 When gateway auth is configured, assistant local-media previews use a two-step route:
 
-- `GET /__openclaw__/assistant-media?meta=1&source=<path>` requires the normal Control UI operator auth; the browser sends the gateway token as a bearer header when checking availability.
-- Successful metadata responses include a short-lived `mediaTicket` scoped to that exact source path.
+- `GET /__openclaw__/assistant-media?meta=1&source=<path>&sessionKey=<key>&agentId=<id>` requires the normal Control UI operator auth and access to the selected session; the browser sends the gateway token as a bearer header when checking availability.
+- Successful metadata responses include a short-lived `mediaTicket` scoped to the file and session. Explicit outside-image allowances use an authenticated administrator `POST` to the same route with `meta=1&allow=1`.
 - Browser-rendered image, audio, video, and document URLs use `mediaTicket=<ticket>` instead of the active gateway token or password. The ticket expires quickly and cannot authorize a different source.
+
+Tickets remain bound to the issuing reader's current access. Losing session
+visibility or role permissions stops new reads through existing tickets, even
+before they expire.
 
 This keeps media rendering compatible with browser-native media elements without putting reusable gateway credentials in visible media URLs.
 

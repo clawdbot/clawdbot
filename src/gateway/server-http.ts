@@ -24,18 +24,18 @@ import { createLazyRuntimeModule } from "../shared/lazy-runtime.js";
 import { resolveAssistantAgentId } from "./assistant-identity.js";
 import type { AuthRateLimiter } from "./auth-rate-limit.js";
 import type { ResolvedGatewayAuth } from "./auth.js";
-import {
-  parseControlUiUserAvatarPath,
-  parseControlUiResourcePath,
-  type ControlUiResourceRoute,
-} from "./control-ui-contract.js";
+import { parseControlUiUserAvatarPath, parseControlUiResourcePath } from "./control-ui-contract.js";
 import { respondNotFound, respondPlainText } from "./control-ui-http-utils.js";
 import { controlUiPluginAssetRoot } from "./control-ui-plugin-assets-contract.js";
+import { resolveAssistantMediaRoutePath } from "./control-ui-resource-routes.js";
 import {
+  classifyControlUiRequest,
   isControlUiApprovalDocumentPath,
   isControlUiFocusDocumentPath,
   isControlUiPluginManagerRequest,
 } from "./control-ui-routing.js";
+import { isControlUiSharePath } from "./control-ui-share.js";
+import { normalizeControlUiBasePath } from "./control-ui-shared.js";
 import type { ControlUiRootState } from "./control-ui.js";
 import {
   classifyGatewayProbePath,
@@ -155,7 +155,7 @@ type GatewayHttpRequestStage = () => Promise<boolean> | boolean;
 /** Creates the gateway HTTP/HTTPS server and ordered request-stage router. */
 export function createGatewayHttpServer(opts: {
   clients: Set<GatewayWsClient>;
-  controlUiEnabled: boolean;
+  controlUiEnabled?: boolean;
   controlUiBasePath: string;
   controlUiRoot?: ControlUiRootState;
   openAiChatCompletionsEnabled?: boolean;
@@ -190,7 +190,6 @@ export function createGatewayHttpServer(opts: {
 }): HttpServer {
   const {
     clients,
-    controlUiEnabled,
     controlUiBasePath,
     controlUiRoot,
     handleHooksRequest,
@@ -297,6 +296,8 @@ export function createGatewayHttpServer(opts: {
       }
 
       const configSnapshot = loadGatewayConfig();
+      const controlUiEnabled =
+        opts.controlUiEnabled ?? configSnapshot.gateway?.controlUi?.enabled ?? true;
       // Pin endpoint admission and input limits to the same request snapshot.
       // Only explicit server overrides survive config reloads.
       const openAiChatCompletionsConfig = configSnapshot.gateway?.http?.endpoints?.chatCompletions;
@@ -358,13 +359,29 @@ export function createGatewayHttpServer(opts: {
         config: configSnapshot,
         ...routeAuth,
       };
+      const loadControlUi = () => {
+        const url = req.url ? new URL(req.url, "http://localhost") : undefined;
+        // Media owns its method/query policy, including explicit-allow POSTs.
+        // Classify the current URL so plugin fallthrough cannot load unrelated UI code.
+        return url &&
+          (url.pathname === resolveAssistantMediaRoutePath(controlUiBasePath) ||
+            classifyControlUiRequest({
+              basePath: normalizeControlUiBasePath(controlUiBasePath),
+              pathname: url.pathname,
+              search: url.search,
+              method: req.method,
+              accept: req.headers.accept,
+            }).kind !== "not-control-ui")
+          ? getControlUiModule()
+          : undefined;
+      };
       const handleControlUiRequest = async () =>
-        (await getControlUiModule()).handleControlUiHttpRequest(req, res, {
+        (await loadControlUi())?.handleControlUiHttpRequest(req, res, {
           ...controlUiRouteOptions,
           terminalEnabled: opts.isTerminalEnabled?.() ?? isTerminalConfigEnabled(configSnapshot),
           agentId: resolveAssistantAgentId(configSnapshot),
           root: controlUiRoot,
-        });
+        }) ?? false;
       const handleStandaloneControlUiRequest = async () => {
         if (!controlUiEnabled) {
           respondNotFound(res);
@@ -540,7 +557,10 @@ export function createGatewayHttpServer(opts: {
         basePath: controlUiBasePath,
         pathname: scopedRequestPath,
       });
-      addRequestStage(approvalDocument, handleStandaloneControlUiRequest);
+      addRequestStage(
+        approvalDocument || isControlUiSharePath(scopedRequestPath, controlUiRouteBasePath),
+        handleStandaloneControlUiRequest,
+      );
       addRequestStage(Boolean(nodeCapability), async () => {
         const { authorizePluginNodeCapabilityRequest } = await getPluginNodeCapabilityAuthModule();
         const ok = await authorizePluginNodeCapabilityRequest({
@@ -653,55 +673,43 @@ export function createGatewayHttpServer(opts: {
             { ...routeAuth, basePath: controlUiRouteBasePath },
           ),
       );
+      for (const [routes, loadHandler] of [
+        [
+          ["pluginIcon", "catalogIcon", "linkFavicon"],
+          async () => (await getPluginIconHttpModule()).handlePluginIconHttpRequest,
+        ],
+        [
+          ["workspaceIcon"],
+          async () => (await getWorkspaceIconHttpModule()).handleWorkspaceIconHttpRequest,
+        ],
+        [
+          ["channelAvatar"],
+          async () => (await getChannelAvatarHttpModule()).handleChannelAvatarHttpRequest,
+        ],
+      ] as const) {
+        addRequestStage(
+          controlUiEnabled &&
+            routes.some(
+              (route) =>
+                parseControlUiResourcePath(route, scopedRequestPath, controlUiRouteBasePath)
+                  .matched,
+            ),
+          async () => (await loadHandler())(req, res, controlUiRouteOptions),
+        );
+      }
       addRequestStage(
-        controlUiEnabled &&
-          (
-            [
-              "pluginIcon",
-              "catalogIcon",
-              "linkFavicon",
-            ] as const satisfies readonly ControlUiResourceRoute[]
-          ).some(
-            (route) =>
-              parseControlUiResourcePath(route, scopedRequestPath, controlUiRouteBasePath).matched,
-          ),
+        controlUiEnabled,
         async () =>
-          (await getPluginIconHttpModule()).handlePluginIconHttpRequest(
-            req,
-            res,
-            controlUiRouteOptions,
-          ),
+          (await loadControlUi())?.handleControlUiAssistantMediaRequest(req, res, {
+            ...controlUiRouteOptions,
+            agentId: resolveAssistantAgentId(configSnapshot),
+          }) ?? false,
       );
       addRequestStage(
-        controlUiEnabled &&
-          parseControlUiResourcePath("workspaceIcon", scopedRequestPath, controlUiRouteBasePath)
-            .matched,
+        controlUiEnabled,
         async () =>
-          (await getWorkspaceIconHttpModule()).handleWorkspaceIconHttpRequest(
-            req,
-            res,
-            controlUiRouteOptions,
-          ),
-      );
-      addRequestStage(
-        controlUiEnabled &&
-          parseControlUiResourcePath("channelAvatar", scopedRequestPath, controlUiRouteBasePath)
-            .matched,
-        async () =>
-          (await getChannelAvatarHttpModule()).handleChannelAvatarHttpRequest(
-            req,
-            res,
-            controlUiRouteOptions,
-          ),
-      );
-      addRequestStage(controlUiEnabled, async () =>
-        (await getControlUiModule()).handleControlUiAssistantMediaRequest(req, res, {
-          ...controlUiRouteOptions,
-          agentId: resolveAssistantAgentId(configSnapshot),
-        }),
-      );
-      addRequestStage(controlUiEnabled, async () =>
-        (await getControlUiModule()).handleControlUiAvatarRequest(req, res, controlUiRouteOptions),
+          (await loadControlUi())?.handleControlUiAvatarRequest(req, res, controlUiRouteOptions) ??
+          false,
       );
       addRequestStage(controlUiEnabled, handleControlUiRequest);
 

@@ -5,6 +5,7 @@ import { readMissingScopeErrorDetails } from "../../../packages/gateway-protocol
 import {
   DEFAULT_SUBAGENT_MAX_CHILDREN_PER_AGENT,
   DEFAULT_SUBAGENT_MAX_SPAWN_DEPTH,
+  isSubagentSpawnDepthAllowed,
 } from "../../config/agent-limits.js";
 import { getRuntimeConfig } from "../../config/config.js";
 import { resolveControlUiSessionUrl } from "../../config/control-ui-link-base.js";
@@ -65,6 +66,7 @@ export type VisibleSessionsSpawnDeps = {
 
 type VisibleSessionsSpawnOptions = VisibleSessionsSpawnDeps &
   SpawnedToolContext & {
+    onSpawnEffectsStart?: () => void;
     agentSessionKey?: string;
     requesterTurnRunId?: string;
     completionOwnerKey?: string;
@@ -183,7 +185,7 @@ export async function maybeSpawnVisibleSession(params: {
   });
   const maxDepth =
     cfg.agents?.defaults?.subagents?.maxSpawnDepth ?? DEFAULT_SUBAGENT_MAX_SPAWN_DEPTH;
-  if (callerDepth >= maxDepth) {
+  if (!isSubagentSpawnDepthAllowed(callerDepth, maxDepth)) {
     return {
       status: "forbidden",
       error: `sessions_spawn is not allowed at this depth (current depth: ${callerDepth}, max: ${maxDepth})`,
@@ -296,6 +298,8 @@ export async function maybeSpawnVisibleSession(params: {
       error: `sessions_spawn has reached max active children for this session (${reservation.activeChildren}/${maxChildren})`,
     };
   }
+  // Successful admission reserves a child before Gateway work can start.
+  params.options?.onSpawnEffectsStart?.();
   try {
     const gatewayCall = params.options?.callGateway ?? callInProcessGatewayTool;
     const createGatewayCall: InProcessGatewayCaller =

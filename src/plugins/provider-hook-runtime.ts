@@ -4,6 +4,7 @@ import {
   normalizeLowercaseStringOrEmpty,
   normalizeOptionalString,
 } from "@openclaw/normalization-core/string-coerce";
+import { attachModelProviderLocalServiceReconciler } from "../agents/provider-local-service-reconcile.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import {
   getLoadedRuntimePluginRegistry,
@@ -74,7 +75,10 @@ export function attachModelProviderRuntimePluginHandle<TModel extends object>(
   model: TModel,
   runtimeHandle: ProviderRuntimePluginHandle,
 ): TModel {
-  const next = { ...model } as TModel & ModelWithProviderRuntimePluginHandle;
+  const next = attachModelProviderLocalServiceReconciler(
+    model,
+    runtimeHandle.plugin?.reconcileLocalService,
+  ) as TModel & ModelWithProviderRuntimePluginHandle;
   next[MODEL_PROVIDER_RUNTIME_PLUGIN_HANDLE_SYMBOL] = runtimeHandle;
   return next;
 }

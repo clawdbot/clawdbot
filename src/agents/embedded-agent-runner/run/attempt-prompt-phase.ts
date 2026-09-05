@@ -140,7 +140,7 @@ export async function runEmbeddedAttemptPromptPhase(input: {
     stopAcceptingSteerMessages: () => void;
     takePendingMidTurnPrecheckRequest: () => MidTurnPrecheckRequest | null | undefined;
   };
-}): Promise<{ promptStartedAt: number }> {
+}): Promise<{ promptStartedAt: number; transcriptLeafId: string | null }> {
   const { activeSession, attempt, sessionManager } = input;
   let skipPromptSubmission = false;
   let leasedSteering: PromptAssemblyResult["leasedSteering"];
@@ -408,5 +408,5 @@ export async function runEmbeddedAttemptPromptPhase(input: {
     });
   }
 
-  return { promptStartedAt };
+  return { promptStartedAt, transcriptLeafId };
 }

@@ -148,12 +148,6 @@ export type GatewayControlUiConfig = {
   communityInvite?: boolean;
   /** Optional service credential used only for Control UI GitHub previews and discovery. */
   github?: { token?: SecretInput };
-  /**
-   * Opt-in AI purpose titles for tool calls in Control UI chat (default false).
-   * When enabled, chat.toolTitles generates short titles through standard
-   * utility-model routing and caches them per agent.
-   */
-  toolTitles?: boolean;
   /** Produce utility-model session status digests for subscribed Control UI clients (default true). */
   sessionObserver?: boolean;
   /**
@@ -213,7 +207,7 @@ export type GatewayTrustedProxyConfig = {
    */
   allowLoopback?: boolean;
   /**
-   * Automatically approve new browser devices and same-key scope upgrades after
+   * Automatically approve new browser/native UI operator devices and same-key scope upgrades after
    * trusted-proxy authentication. Disabled by default; configured scopes cap grants.
    */
   deviceAutoApprove?: {

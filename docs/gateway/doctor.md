@@ -157,6 +157,7 @@ Flags:
   </Accordion>
   <Accordion title="Config and migrations">
     - Config normalization for legacy value shapes.
+    - Removal of retired `gateway.controlUi.toolTitles` config. Tool activity descriptions appear automatically without utility-model requests.
     - Inspection of legacy default HTTPS Tailscale Serve routes from a LAN-bound Gateway. Doctor does not change these routes because status shape cannot prove ownership; after confirming a stale route, clear only its root handler and configure managed loopback ingress manually. Retired named-Service config is removed with managed ingress disabled until the operator chooses a device route; custom external routes receive manual guidance.
     - Talk config migration from legacy flat `talk.*` fields into `talk.provider` + `talk.providers.<provider>`.
     - Browser migration checks for legacy Chrome extension configs, owned native-bootstrap registration drift, and Chrome MCP readiness.
@@ -255,6 +256,8 @@ That stages grounded durable candidates into the short-term dreaming store while
     Startup does not migrate configs using `$include`, configs in Nix mode, or configs last written by a newer OpenClaw version. It also skips automatic config migration while an update is in progress and plugin validation is deferred; the post-update doctor run owns that repair. If any validation or legacy-key issue remains after migration, startup leaves the config unchanged, refuses to start, and prints the `openclaw doctor --fix` hint. An interactive terminal can still offer to run doctor and retry once for configs that need other repairs; headless services stop with the hint.
 
     Other commands that encounter legacy keys still ask you to run `openclaw doctor`. Doctor explains the issues, shows its migrations, and rewrites `~/.openclaw/openclaw.json` with the updated schema. Cron job store migrations are also handled by `openclaw doctor --fix`; automatic config-key migration does not import legacy session stores or repair services.
+
+    When a readable active config can be fully migrated, Doctor preserves it before considering last-known-good recovery. This includes legacy multi-agent rosters with a `default: true` owner: unrelated settings and the original agent ownership survive the migration.
 
     Per-agent migrations apply to both keyed `agents.entries` and legacy `agents.list` rosters, including rosters that already set `agents.ownership: "explicit"`. For example, Doctor preserves an agent's legacy `memorySearch` settings under `memory.search` and converts `sandbox.perSession` to `sandbox.scope`. Existing values at the current config paths take precedence.
 
@@ -511,6 +514,12 @@ That stages grounded durable candidates into the short-term dreaming store while
     When sandboxing is enabled, doctor checks Docker images and offers to build or switch to legacy names if the current image is missing.
   </Accordion>
   <Accordion title="7b. Plugin install cleanup">
+    Doctor repairs legacy official ClawHub install records that predate recorded source authority. With `--fix`, it backfills the existing official host/channel fields only when the original spec and every recorded package identity agree with the official catalog. Local sources, partial or conflicting authority, and unverifiable identities require reinstalling. Ordinary legacy npm records with a consistent official spec already satisfy trust. See [Trusted plugin state refused](/tools/plugin#trusted-plugin-state-refused) for refusal reason codes and remedies.
+
+    When a local Gateway is unreachable, doctor compares the CLI state directory with the installed service's effective environment. It prints both paths when they differ, or reports that the service paths could not be verified. Unreadable or commandless service definitions and unavailable referenced environment files are unknown, not evidence that the paths match. Windows batch assignments with unresolved variable expansion or unsupported escaping also remain unverified; inspect their service environment with `openclaw gateway status --deep` before choosing a repair. Run inspection and repair with the Gateway's `OPENCLAW_STATE_DIR` and `OPENCLAW_CONFIG_PATH`; matching config and executable versions alone does not establish matching plugin installation state.
+
+    If an unreadable native definition also blocks installation or self-update, follow [native service recovery](/cli/gateway#recover-an-unreadable-native-service-definition). Preserve service-only environment values before rebuilding the launcher; configuration and plugin state do not need to be deleted.
+
     Doctor preserves shared plugin runtime caches and staging directories, including older versioned buckets. Another installation or profile can still depend on them; a directory name or marker does not establish that it is unused. `openclaw doctor --fix` / `openclaw doctor --repair` removes global plugin-runtime symlinks only when their targets no longer exist, not merely because they point into an older cache.
 
     The `core/doctor/legacy-plugin-dependencies` lint selector shipped in v2026.8.1 remains available as a deprecated, non-destructive informational check. It no longer scans cache roots or recommends deleting them. Use `--severity-min info` to display its deprecation notice.

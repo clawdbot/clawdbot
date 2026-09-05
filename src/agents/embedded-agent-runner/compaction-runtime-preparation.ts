@@ -31,6 +31,28 @@ import {
   resolveEmbeddedCompactionTarget,
 } from "./compaction-runtime-context.js";
 
+export function projectCodexHostTranscriptBytePreflightConfig(
+  config: OpenClawConfig | undefined,
+  active: boolean,
+): OpenClawConfig | undefined {
+  const compaction = config?.agents?.defaults?.compaction;
+  if (
+    !active ||
+    !compaction ||
+    (!Object.hasOwn(compaction, "model") && !Object.hasOwn(compaction, "provider"))
+  ) {
+    return config;
+  }
+  const { model: _model, provider: _provider, ...projectedCompaction } = compaction;
+  return {
+    ...config,
+    agents: {
+      ...config.agents,
+      defaults: { ...config.agents?.defaults, compaction: projectedCompaction },
+    },
+  };
+}
+
 /** Resolves the shared policy, target, and harness ownership for either compaction entry point. */
 export function resolveCompactionRuntimeSelection(params: {
   config?: OpenClawConfig;

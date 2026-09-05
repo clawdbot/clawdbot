@@ -1,4 +1,5 @@
 // Codex tests cover side question plugin behavior.
+import path from "node:path";
 import {
   nativeHookRelayTesting,
   type NativeHookRelayRegistrationHandle,
@@ -17,6 +18,7 @@ import {
   loadWebFetchToolFactoryForTest,
 } from "openclaw/plugin-sdk/plugin-test-runtime";
 import type { ModelCompatConfig } from "openclaw/plugin-sdk/provider-model-types";
+import { patchSessionEntry, upsertSessionEntry } from "openclaw/plugin-sdk/session-store-runtime";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import {
   codexTestTurnIds,
@@ -36,7 +38,11 @@ import {
   createCodexTestBindingStore,
   type CodexAppServerBindingStore,
 } from "./session-binding.test-helpers.js";
-import { createClientHarness, createCodexTestModel } from "./test-support.js";
+import {
+  createClientHarness,
+  createCodexTestModel,
+  useAutoCleanupTempDirTracker,
+} from "./test-support.js";
 
 const readCodexAppServerBindingMock = vi.fn();
 const isCodexAppServerNativeAuthProfileMock = vi.fn();
@@ -161,7 +167,11 @@ function createFakeClient(options: { completeTurn?: boolean } = {}) {
       }
       return turnStartResult("turn-1");
     }
-    if (method === "thread/unsubscribe" || method === "turn/interrupt") {
+    if (method === "turn/interrupt") {
+      queueMicrotask(() => client.emit(turnCompleted("side-thread", "turn-1", "", "interrupted")));
+      return {};
+    }
+    if (method === "thread/unsubscribe") {
       return {};
     }
     throw new Error(`unexpected request: ${method}`);
@@ -338,7 +348,12 @@ function agentDelta(threadId: string, turnId: string, delta: string): CodexServe
   };
 }
 
-function turnCompleted(threadId: string, turnId: string, text: string): CodexServerNotification {
+function turnCompleted(
+  threadId: string,
+  turnId: string,
+  text: string,
+  status: "completed" | "interrupted" = "completed",
+): CodexServerNotification {
   return {
     method: "turn/completed",
     params: {
@@ -346,7 +361,7 @@ function turnCompleted(threadId: string, turnId: string, text: string): CodexSer
       turn: {
         id: turnId,
         threadId,
-        status: "completed",
+        status,
         items: [{ id: "agent-1", type: "agentMessage", text }],
         error: null,
         startedAt: null,
@@ -551,6 +566,8 @@ async function runSideQuestionWithManagedWebSearchCall(
 }
 
 describe("runCodexAppServerSideQuestion", () => {
+  const tempDirs = useAutoCleanupTempDirTracker(afterEach);
+
   beforeEach(() => {
     nativeHookRelayTesting.clearNativeHookRelaysForTests();
     readCodexAppServerBindingMock.mockReset();
@@ -618,6 +635,68 @@ describe("runCodexAppServerSideQuestion", () => {
     vi.unstubAllGlobals();
     vi.useRealTimers();
   });
+
+  it.each([false, true])(
+    "fences the recovered predecessor before forking a side thread (host rotated: %s)",
+    async (hostRotated) => {
+      const root = tempDirs.make("codex-side-predecessor-");
+      const storePath = path.join(root, "admitted", "sessions.json");
+      const previous = {
+        kind: "session" as const,
+        agentId: "main",
+        sessionKey: "agent:main:side-continuity",
+        sessionId: "before-compaction",
+      };
+      const current = { ...previous, sessionId: "after-compaction" };
+      const scope = { agentId: previous.agentId, sessionKey: previous.sessionKey, storePath };
+      await upsertSessionEntry({
+        ...scope,
+        entry: { sessionId: previous.sessionId, updatedAt: 1 },
+      });
+      const sessionEntry = await patchSessionEntry({
+        ...scope,
+        update: () => ({ sessionId: current.sessionId }),
+      });
+      if (!sessionEntry) {
+        throw new Error("Expected the committed successor session");
+      }
+      const parent = { threadId: "parent-thread", cwd: "/tmp/workspace" };
+      const persistedBindings = createCodexTestBindingStore();
+      await persistedBindings.mutate(previous, { kind: "set", binding: parent });
+      const client = createFakeClient();
+      getSharedCodexAppServerClientMock.mockImplementationOnce(async () => {
+        expect(persistedBindings.read(current)).toEqual(parent);
+        if (hostRotated) {
+          await patchSessionEntry({ ...scope, update: () => ({ sessionId: "next-compaction" }) });
+        }
+        return client;
+      });
+
+      const operation = runCodexAppServerSideQuestionImpl(
+        sideParams({
+          cfg: { session: { store: path.join(root, "configured", "sessions.json") } },
+          storePath,
+          agentId: current.agentId,
+          sessionKey: current.sessionKey,
+          sessionId: current.sessionId,
+          sessionEntry,
+        }),
+        { bindingStore: persistedBindings },
+      );
+      if (hostRotated) {
+        await expect(operation).rejects.toThrow("Codex session generation is no longer current");
+        expect(client.request.mock.calls.some(([method]) => method === "thread/fork")).toBe(false);
+      } else {
+        await expect(operation).resolves.toEqual({ text: "Side answer." });
+        expect(client.request).toHaveBeenCalledWith(
+          "thread/fork",
+          expect.objectContaining({ threadId: parent.threadId }),
+          expect.any(Object),
+        );
+      }
+      expect(persistedBindings.read(current)).toEqual(parent);
+    },
+  );
 
   it("forks an ephemeral side thread and returns the completed assistant text", async () => {
     vi.spyOn(Date, "now").mockReturnValue(Date.parse("2026-09-02T00:30:00.000Z"));
@@ -782,7 +861,11 @@ describe("runCodexAppServerSideQuestion", () => {
           },
         },
       },
-      { timeoutMs: 60_000, signal: expect.any(AbortSignal) },
+      {
+        timeoutMs: 60_000,
+        signal: expect.any(AbortSignal),
+        assertCurrent: expect.any(Function),
+      },
     ]);
     const turnStartParams = turnStartCall?.[1] as Record<string, unknown> | undefined;
     expect(turnStartParams).not.toHaveProperty("approvalPolicy");
@@ -3563,7 +3646,13 @@ describe("runCodexAppServerSideQuestion", () => {
         }, 0);
         return turnStartResult("turn-1");
       }
-      if (method === "thread/unsubscribe" || method === "turn/interrupt") {
+      if (method === "turn/interrupt") {
+        queueMicrotask(() =>
+          client.emit(turnCompleted("side-thread", "turn-1", "", "interrupted")),
+        );
+        return {};
+      }
+      if (method === "thread/unsubscribe") {
         return {};
       }
       throw new Error(`unexpected request: ${method}`);
@@ -3636,7 +3725,13 @@ describe("runCodexAppServerSideQuestion", () => {
         }, 0);
         return turnStartResult("turn-1");
       }
-      if (method === "thread/unsubscribe" || method === "turn/interrupt") {
+      if (method === "turn/interrupt") {
+        queueMicrotask(() =>
+          client.emit(turnCompleted("side-thread", "turn-1", "", "interrupted")),
+        );
+        return {};
+      }
+      if (method === "thread/unsubscribe") {
         return {};
       }
       throw new Error(`unexpected request: ${method}`);
@@ -3903,12 +3998,6 @@ describe("runCodexAppServerSideQuestion", () => {
     { label: "after its request is written", written: true, interruptFails: false },
     { label: "before its request is written", written: false, interruptFails: false },
     {
-      label: "when Codex proves its native turn already ended",
-      written: true,
-      interruptFails: false,
-      alreadyTerminal: true,
-    },
-    {
       label: "when its native thread cannot unsubscribe",
       written: true,
       interruptFails: false,
@@ -3923,7 +4012,7 @@ describe("runCodexAppServerSideQuestion", () => {
     },
   ])(
     "scopes side-turn abort cleanup $label",
-    async ({ written, interruptFails, retirementFails, alreadyTerminal, unsubscribeFails }) => {
+    async ({ written, interruptFails, retirementFails, unsubscribeFails }) => {
       const controller = new AbortController();
       const harness = createClientHarness();
       if (retirementFails) {
@@ -3964,14 +4053,9 @@ describe("runCodexAppServerSideQuestion", () => {
         expect(interrupt.params).toEqual({ threadId: "side-thread", turnId: "" });
         harness.send({ id: turnStart.id, result: turnStartResult("turn-1") });
         harness.send(
-          alreadyTerminal
-            ? {
-                id: interrupt.id,
-                error: { code: -32_600, message: "no active turn to interrupt" },
-              }
-            : interruptFails
-              ? { id: interrupt.id, error: { code: -32_000, message: "side interrupt failed" } }
-              : { id: interrupt.id, result: {} },
+          interruptFails
+            ? { id: interrupt.id, error: { code: -32_000, message: "side interrupt failed" } }
+            : { id: interrupt.id, result: {} },
         );
       } else {
         controller.abort("side-start-cancelled");
@@ -4019,7 +4103,13 @@ describe("runCodexAppServerSideQuestion", () => {
         queueMicrotask(() => controller.abort());
         return turnStartResult("turn-1");
       }
-      if (method === "turn/interrupt" || method === "thread/unsubscribe") {
+      if (method === "turn/interrupt") {
+        queueMicrotask(() =>
+          client.emit(turnCompleted("side-thread", "turn-1", "", "interrupted")),
+        );
+        return {};
+      }
+      if (method === "thread/unsubscribe") {
         return {};
       }
       throw new Error(`unexpected request: ${method}`);
@@ -4033,12 +4123,14 @@ describe("runCodexAppServerSideQuestion", () => {
         }),
       ),
     ).rejects.toThrow("Codex /btw was aborted.");
-    expect(client.request.mock.calls.filter(([method]) => method === "turn/interrupt")).toEqual([
-      ["turn/interrupt", { threadId: "side-thread", turnId: "turn-1" }, { timeoutMs: 60_000 }],
+    expect(
+      client.request.mock.calls
+        .filter(([method]) => method === "turn/interrupt" || method === "thread/unsubscribe")
+        .map(([method, params]) => [method, params]),
+    ).toEqual([
+      ["turn/interrupt", { threadId: "side-thread", turnId: "turn-1" }],
+      ["thread/unsubscribe", { threadId: "side-thread" }],
     ]);
-    expect(client.request.mock.calls.filter(([method]) => method === "thread/unsubscribe")).toEqual(
-      [["thread/unsubscribe", { threadId: "side-thread" }, { timeoutMs: 60_000 }]],
-    );
   });
 });
 /* oxlint-disable max-lines -- TODO: split this grandfathered oversized file. */

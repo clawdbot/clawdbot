@@ -197,11 +197,13 @@ target server during config edits.
   default MCP approval behavior.
 - Session-scoped bundled MCP runtimes use a built-in 10-minute idle TTL.
   One-shot embedded runs request run-end cleanup; the TTL is the backstop for long-lived sessions and future callers.
-- Changes under `mcp.*` hot-apply by disposing cached session MCP runtimes.
-  The next tool discovery/use recreates them from the new config, so removed
-  `mcp.servers` entries are reaped immediately instead of waiting for idle TTL.
+- MCP config changes retire only changed or removed server connections. Unchanged
+  servers keep their transports and tool catalogs; active runs can continue calling
+  their tools and resources. The next turn's discovery creates changed servers from the new config. Plugin
+  reloads also retire connections owned by the replaced plugins or their resolvers.
+  Requester sign-in tools refresh on the next message after runtime replacement.
 - Runtime discovery also honors MCP tool-list change notifications by dropping
-  the cached catalog for that session. Servers that advertise resources or
+  the affected server's cached catalog. Servers that advertise resources or
   prompts get utility tools for listing/reading resources and listing/fetching
   prompts. Repeated tool-call failures pause the affected server briefly before
   another call is attempted.
@@ -224,9 +226,6 @@ See [MCP](/cli/mcp#openclaw-as-an-mcp-client-registry) and
       nodeManager: "npm", // npm | pnpm | yarn | bun
       allowUploadedArchives: false,
     },
-    workshop: {
-      allowSymlinkTargetWrites: false,
-    },
     entries: {
       "image-lab": {
         apiKey: { source: "env", provider: "default", id: "GEMINI_API_KEY" }, // or plaintext string
@@ -243,8 +242,6 @@ See [MCP](/cli/mcp#openclaw-as-an-mcp-client-registry) and
 - `load.extraDirs`: extra shared skill roots (lowest precedence).
 - `load.allowSymlinkTargets`: trusted real target roots that skill symlinks may
   resolve into when the link lives outside its configured source root.
-- `workshop.allowSymlinkTargetWrites`: allows Skill Workshop apply to write
-  through already-trusted symlink targets (default: false).
 - `install.preferBrew`: when true, prefer Homebrew installers when `brew` is
   available before falling back to other installer kinds.
 - `install.nodeManager`: node installer preference for `metadata.openclaw.install`
@@ -772,7 +769,6 @@ policy changes apply within the existing pairing approval.
       // communityInvite: true, // show the sidebar Discord invitation unless dismissed
       // root: "dist/control-ui",
       // github: { token: { source: "store", provider: "default", id: "CONTROL_UI_GITHUB" } },
-      // toolTitles: false, // opt-in AI purpose titles for tool calls (spends utility-model tokens)
       // embedSandbox: "scripts", // strict | scripts | trusted
       // allowExternalEmbedUrls: false, // dangerous: allow absolute external http(s) embed URLs
       // automaticallyFetchFavicons: true, // SSRF-guarded link favicon fetches
@@ -885,7 +881,7 @@ policy changes apply within the existing pairing approval.
 - `controlUi.environment`: optional visual identity for distinguishing Gateway environments. Set `{ label: "edge", color: "amber" }` to show a matching top stripe, agent-avatar ring, environment pills, browser-title suffix, and tinted favicon. `label` is trimmed and must contain 1–24 characters. `color` must be `teal`, `amber`, `purple`, `coral`, `pink`, `blue`, `green`, `red`, or `gray`. The label and color are visible before sign-in; omit the setting to keep the default appearance unchanged.
 - `controlUi.communityInvite`: show the Discord community invitation in the sidebar. Default: `true`. Set `false` on the Gateway serving the UI to hide it for every browser using that deployment, including browsers connected to a different remote Gateway. The setting hot-reloads; existing pages pick it up after browser refresh or reconnect. Re-enabling preserves browser-local dismissals.
 - `controlUi.github.token`: optional SecretRef-backed service credential for GitHub-backed profile verification, Control UI project discovery, and GitHub hover previews without a managed agent identity. Profile verification uses the service credential only for public account metadata; the sign-in provider owns the person's identity. Metadata caching and quota cooldowns are automatic; see [Gateway profile and GitHub credit](/concepts/user-model#gateway-profile-and-github-credit). Hover previews prefer the selected agent's effective `tools.github` identity, including an inherited system identity, and remain restricted to public repositories. Prefer this explicit setting when the Gateway should own service access independently of its shared process environment. When omitted, service access retains the shipped `GH_TOKEN` then `GITHUB_TOKEN` process-environment fallback. An explicitly configured but unavailable credential fails closed instead of using an unrelated credential. Its exact environment or store name is excluded from agent execution; a custom name does not clear unrelated native `GH_TOKEN` or `GITHUB_TOKEN` values. This credential is separate from `tools.github` agent identities and does not create an OS-user security boundary.
-- `controlUi.toolTitles`: opt in to AI-generated purpose titles for tool calls in Control UI chat. Default: `false` (tool rendering stays fully deterministic with no background model calls). When enabled, the `chat.toolTitles` method labels complex calls through standard utility-model routing — the agent's `utilityModel` (an operator decision that may send bounded tool arguments to the chosen provider, like every utility task), or the session provider's declared small-model default (OpenAI → `gpt-5.6-luna`, Anthropic → `claude-haiku-4-5`) — and caches results in the per-agent state database so repeat views never re-bill. `utilityModel: \"\"` disables titles like every other utility task; titles never fall back to the primary model.
+- Tool activity descriptions appear automatically when supplied by the acting agent; viewing tool calls does not request utility-model completions. The former `controlUi.toolTitles` setting is retired. Run `openclaw doctor --fix` to remove it from existing configs.
 - `controlUi.automaticallyFetchFavicons`: link favicons in Control UI chat. Default: `true`. The authenticated browser asks its same-origin Gateway for each hostname. The Gateway requests only `https://<hostname>/favicon.ico`, rejects IP literals and private/internal destinations, pins public DNS results, revalidates every redirect under the same strict SSRF policy, limits redirects/time/bytes/concurrency, validates the image, and returns a private-cacheable image blob. OpenClaw does not use Google or another favicon service for this flow. This discloses linked hostnames and the Gateway's network address to those destination sites. Set `false` to prevent the browser from requesting favicon routes and the Gateway from contacting link destinations.
 - `controlUi.dangerouslyAllowHostHeaderOriginFallback`: dangerous mode that enables Host-header origin fallback for deployments that intentionally rely on Host-header origin policy.
 - `cliAgents.enabled`: opt in to the experimental **CLI agents** group in the Control UI new-session model picker. Default: `false`. The group appears only when the Gateway advertises `sessions.catalog.list`, and it includes only catalog providers that support creating sessions. Selecting one opens the same catalog-target new-session flow used by the sidebar catalog action.
@@ -1171,7 +1167,7 @@ plugin does enforce it.
 | Endpoint             | Payload and result                                                                                                                                                                                                                                                                                                                                                                                     |
 | -------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ |
 | `POST /hooks/wake`   | Required nonempty `text`; optional `mode` (`"now"` default or `"next-heartbeat"`), `agentId`, `sessionKey`. Returns `200 { ok: true, mode, eventOutcome }`; `eventOutcome` is `"queued"` when the queue accepts the wake or `"coalesced"` when the same wake is already the queue's most recent pending event. `now` requests a heartbeat in either case; the result does not prove the heartbeat ran. |
-| `POST /hooks/agent`  | [Agent payload](/gateway/configuration-reference#hook-agent-payload). Returns `200 { ok: true, runId }` after session/global placement admission, not completion.                                                                                                                                                                                                                                      |
+| `POST /hooks/agent`  | [Agent payload](/gateway/configuration-reference#hook-agent-payload). By default returns `200 { ok: true, runId }` after session/global placement admission. With `waitForCompletion: true`, waits for the admitted run and adds bounded terminal execution/delivery facts in `completion`.                                                                                                            |
 | `POST /hooks/<name>` | First matching mapping produces wake/agent actions. No matching mapping returns `404`; no actions returns `204`. Agent fan-out has the [batch response contract](/gateway/configuration-reference#hook-retries-and-fan-out).                                                                                                                                                                           |
 
 The direct `/wake` and `/agent` endpoints take precedence over mappings with
@@ -1199,22 +1195,23 @@ or channel delivery. See [hook verification](/automation/cron-jobs#verify-and-tr
 
 ### Hook agent payload
 
-| Field            | Default                  | Contract                                                                                                                                                                                                                                                     |
-| ---------------- | ------------------------ | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ |
-| `message`        | required                 | Nonempty agent input text; external content is safety-wrapped.                                                                                                                                                                                               |
-| `name`           | `"Hook"`                 | Hook label used in logs/completion events.                                                                                                                                                                                                                   |
-| `agentId`        | resolved owner           | Must name a configured agent when supplied directly. Required when no implicit/retained owner can be resolved.                                                                                                                                               |
-| `sessionKey`     | default/generated key    | Subject to caller-key opt-in and prefix policy.                                                                                                                                                                                                              |
-| `sessionMode`    | `"isolated"`             | `"isolated"` creates a fresh run session; `"persistent"` reuses the resolved session.                                                                                                                                                                        |
-| `idempotencyKey` | unset                    | Optional replay key; headers take precedence. See retries below.                                                                                                                                                                                             |
-| `wakeMode`       | `"now"`                  | `"now"` or `"next-heartbeat"`; controls waking for completion events, not whether the agent is dispatched immediately.                                                                                                                                       |
-| `deliver`        | `true`                   | Only `false` opts out. With no direct destination, successful output can become a main-session completion event. `false` logs successful completion without an announcement and ignores destination fields. Non-ok execution results produce a status event. |
-| `channel`        | none for direct delivery | Registered concrete channel id; must be paired with `to`. Direct `/agent` cannot use `"last"`.                                                                                                                                                               |
-| `to`             | unset                    | Nonempty recipient for direct announce delivery, paired with `channel`.                                                                                                                                                                                      |
-| `accountId`      | channel default          | Selects a configured, enabled account; requires `channel` and `to`. Unknown, disabled, or invalid selections return `400` before dispatch.                                                                                                                   |
-| `model`          | agent/model defaults     | Model id or alias override, subject to model availability and allowlist policy.                                                                                                                                                                              |
-| `thinking`       | agent/model defaults     | Thinking override for the run.                                                                                                                                                                                                                               |
-| `timeoutSeconds` | agent timeout            | Positive numeric turn-timeout override; direct payload values are floored to whole seconds. Invalid/nonpositive values are ignored.                                                                                                                          |
+| Field               | Default                  | Contract                                                                                                                                                                                                                                                     |
+| ------------------- | ------------------------ | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ |
+| `message`           | required                 | Nonempty agent input text; external content is safety-wrapped.                                                                                                                                                                                               |
+| `name`              | `"Hook"`                 | Hook label used in logs/completion events.                                                                                                                                                                                                                   |
+| `agentId`           | resolved owner           | Must name a configured agent when supplied directly. Required when no implicit/retained owner can be resolved.                                                                                                                                               |
+| `sessionKey`        | default/generated key    | Subject to caller-key opt-in and prefix policy.                                                                                                                                                                                                              |
+| `sessionMode`       | `"isolated"`             | `"isolated"` creates a fresh run session; `"persistent"` reuses the resolved session.                                                                                                                                                                        |
+| `idempotencyKey`    | unset                    | Optional replay key; headers take precedence. See retries below.                                                                                                                                                                                             |
+| `waitForCompletion` | `false`                  | Direct `/agent` only. When `true`, keep the HTTP response open after admission and return `completion` with `status` plus available delivery facts. Mappings and fan-out remain admission-only.                                                              |
+| `wakeMode`          | `"now"`                  | `"now"` or `"next-heartbeat"`; controls waking for completion events, not whether the agent is dispatched immediately.                                                                                                                                       |
+| `deliver`           | `true`                   | Only `false` opts out. With no direct destination, successful output can become a main-session completion event. `false` logs successful completion without an announcement and ignores destination fields. Non-ok execution results produce a status event. |
+| `channel`           | none for direct delivery | Registered concrete channel id; must be paired with `to`. Direct `/agent` cannot use `"last"`.                                                                                                                                                               |
+| `to`                | unset                    | Nonempty recipient for direct announce delivery, paired with `channel`.                                                                                                                                                                                      |
+| `accountId`         | channel default          | Selects a configured, enabled account; requires `channel` and `to`. Unknown, disabled, or invalid selections return `400` before dispatch.                                                                                                                   |
+| `model`             | agent/model defaults     | Model id or alias override, subject to model availability and allowlist policy.                                                                                                                                                                              |
+| `thinking`          | agent/model defaults     | Thinking override for the run.                                                                                                                                                                                                                               |
+| `timeoutSeconds`    | agent timeout            | Positive numeric turn-timeout override; direct payload values are floored to whole seconds. Invalid/nonpositive values are ignored.                                                                                                                          |
 
 Omitting all destination fields runs without a direct announce destination.
 Supplying only part of a destination fails with `400` while delivery is enabled.
@@ -1302,9 +1299,24 @@ Agent replay keys resolve in this order: `Idempotency-Key`,
 `X-OpenClaw-Idempotency-Key`, then payload `idempotencyKey`. Only trimmed nonempty
 strings of at most 256 characters are used. The same key replays only for the
 same token, path, and resolved dispatch fields; changing the message or routing
-can create a new run. Completed admission replay entries expire after 5 minutes
-and are bounded to 1,000 entries in memory. Restart clears them. Failed admissions
-remain retryable; a replayed `200` is not a fresh execution or a completion check.
+can create a new run. Pending admissions and admitted runs with unresolved
+completion are retained without TTL or size eviction. After terminal completion
+settles, its replay entry expires after 5 minutes and counts toward the 1,000
+terminal-entry memory bound. Restart clears all replay state. Failed admissions
+remain retryable. Direct retries may change `waitForCompletion` without changing
+dispatch identity: admission-only callers replay the `runId`, while waiting
+callers share the same completion promise and replay its terminal result.
+
+When requested, `completion.status` is `ok`, `error`, or `skipped`, and
+`replyDisposition` is `visible`, `silent`, or `empty`. This disposition exposes
+only whether a terminal model reply existed, never its text. The optional
+delivery fields are `delivered`, `deliveryAttempted`, `deliveryError`, and
+`deliverySuppressionReason` (`empty`, `silent`, `heartbeat`, or
+`channel_transform`). Missing delivery fields remain unknown. Post-admission
+failures still return HTTP `200`; only admission failures use the non-2xx
+statuses above. `deliveryError`, when present, is the fixed categorical value
+`"delivery-failed"`. Provider, runtime, model, target, session, diagnostic,
+output, and summary details are never returned.
 
 For `forEach`, templates/transforms see the original payload with the chosen
 array replaced by `[currentItem]`. Missing, empty, or non-array values produce no

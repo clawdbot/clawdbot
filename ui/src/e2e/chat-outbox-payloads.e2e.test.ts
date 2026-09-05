@@ -1,9 +1,11 @@
+import { writeFile } from "node:fs/promises";
 import path from "node:path";
 import { assert, expect, it } from "vitest";
 import {
   waitForControlUiGatewayReady,
   waitForControlUiGatewayReconnecting,
 } from "../test-helpers/control-ui-e2e-readiness.ts";
+import { takeControlUiViewportScreenshot } from "../test-helpers/control-ui-e2e-screenshot.ts";
 import {
   createChatFlowE2eSuite,
   controlUiSessionUrl,
@@ -351,11 +353,12 @@ suite.define(() => {
         await paneFor(page).getByText("Delivery unconfirmed", { exact: true }).waitFor();
         await expectRequestCountStable(gateway, "chat.send", 0);
         expect((await readQueue(page))[0]?.sendRunId).toBe(queued.sendRunId);
-        await page.screenshot({
-          path: path.join(suite.artifactDir, "reload-unconfirmed.png"),
-          fullPage: true,
-          animations: "disabled",
-        });
+        await writeFile(
+          path.join(suite.artifactDir, "reload-unconfirmed.png"),
+          await takeControlUiViewportScreenshot(page, page.locator(".shell"), [
+            paneFor(page).getByText("Delivery unconfirmed", { exact: true }),
+          ]),
+        );
       },
     );
   });

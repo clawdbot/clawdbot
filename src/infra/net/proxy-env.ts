@@ -126,6 +126,7 @@ export function shouldUseEnvHttpProxyForUrl(
  * (`undici/lib/dispatcher/env-http-proxy-agent.js`):
  * - Entries separated by commas OR whitespace (undici splits on `/[,\s]/`)
  * - Case-insensitive
+ * - A single trailing DNS dot is ignored in both hosts and entries
  * - Lower-case `no_proxy` shadows upper-case `NO_PROXY`, including blank values
  * - Empty or missing → no bypass
  * - Bare `*` value → bypass everything
@@ -160,7 +161,11 @@ export function matchesNoProxy(targetUrl: string, env: NodeJS.ProcessEnv = proce
     return false;
   }
 
-  const targetHost = parsed.hostname.toLowerCase().replace(/^\[|\]$/g, "");
+  // Keep the eligibility gate aligned with Undici so direct bypasses retain DNS pinning.
+  const targetHost = parsed.hostname
+    .toLowerCase()
+    .replace(/^\[|\]$/g, "")
+    .replace(/^(.+)\.$/, "$1");
   if (!targetHost) {
     return false;
   }
@@ -217,7 +222,7 @@ export function matchesNoProxy(targetUrl: string, env: NodeJS.ProcessEnv = proce
     // Mirror undici: strip optional leading `*` followed by `.` so both
     // `.example.com` and `*.example.com` normalize to `example.com`. That also
     // means apex hosts still match those entries after normalization.
-    const normalizedEntry = entryHost.replace(/^\*\./, "").replace(/^\./, "");
+    const normalizedEntry = entryHost.replace(/^\*?\./, "").replace(/^(.+)\.$/, "$1");
     if (!normalizedEntry || normalizedEntry === "*") {
       continue;
     }

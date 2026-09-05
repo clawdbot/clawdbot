@@ -3,14 +3,14 @@
 import { afterEach, beforeEach, expect, it, vi } from "vitest";
 import type { UpdateAvailable, UpdateScheduleState } from "../api/types.ts";
 import { getRenderedModalDialog, installDialogPolyfill } from "../test-helpers/modal-dialog.ts";
-import {
-  closeFailedUpdateDialog,
-  confirmAndStartUpdateRuntime,
-} from "./update-confirmation.runtime.ts";
+import { createUpdateRunFixture } from "../test-helpers/update-run.ts";
+import { confirmAndStartUpdateRuntime } from "./update-confirmation.runtime.ts";
 import type { UpdateProgress } from "./update-confirmation.ts";
 
 /** Drives the dialog the way the shell does: one live lifecycle stream. */
-function createProgressStream() {
+function createProgressStream(
+  initial: UpdateProgress = { run: null, busy: false, connected: true, failure: null },
+) {
   let emit: ((progress: UpdateProgress) => void) | null = null;
   let stopped = false;
   return {
@@ -19,7 +19,7 @@ function createProgressStream() {
     },
     watchUpdateProgress: (listener: (progress: UpdateProgress) => void) => {
       emit = listener;
-      listener({ busy: false, connected: true, failure: null });
+      listener(initial);
       return () => {
         stopped = true;
       };
@@ -184,7 +184,7 @@ it("keeps the dialog open and narrates the install, the disconnect, and the fail
 
   // The Gateway goes away mid-install; the dialog is mounted outside the shell
   // precisely so it can keep reporting through the disconnect.
-  await stream.push({ busy: true, connected: false, failure: null });
+  await stream.push({ run: null, busy: true, connected: false, failure: null });
   expect(modal.textContent).toContain("The Gateway disconnected during the update");
   expect(modal.textContent).toContain("openclaw triage");
   expect(modal.textContent).toContain("on the Gateway host");
@@ -192,6 +192,7 @@ it("keeps the dialog open and narrates the install, the disconnect, and the fail
   expect(document.body.querySelector("openclaw-modal-dialog")).not.toBeNull();
 
   await stream.push({
+    run: null,
     busy: false,
     connected: true,
     failure: "The update failed at install: ENOSPC: no space left on device, write.",
@@ -202,39 +203,152 @@ it("keeps the dialog open and narrates the install, the disconnect, and the fail
   expect(stream.stopped).toBe(true);
 });
 
-it("closes itself once a watched update finishes without a failure", async () => {
+it("keeps the server success report visible across restart until the operator closes it", async () => {
   const stream = createProgressStream();
   const { settled } = startUpdate({ watchUpdateProgress: stream.watchUpdateProgress });
   await getRenderedModalDialog(document.body);
-
   findButton("Update and restart").click();
-  await Promise.resolve();
-  await stream.push({ busy: true, connected: true, failure: null });
-  await stream.push({ busy: false, connected: true, failure: null });
-
+  const restarting = createUpdateRunFixture({ phase: "restarting" });
+  await stream.push({ run: restarting, busy: true, connected: false, failure: null });
+  const view = document.body.querySelector<HTMLElement & { updateComplete: Promise<boolean> }>(
+    "openclaw-update-run-view",
+  )!;
+  await view.updateComplete;
+  expect(view.textContent).toContain("Gateway restarting…");
+  await stream.push({
+    run: createUpdateRunFixture({
+      phase: "finished",
+      status: "succeeded",
+      after: { version: "2026.9.2" },
+      finishedAtMs: 10,
+    }),
+    busy: false,
+    connected: true,
+    failure: null,
+  });
+  await view.updateComplete;
+  expect(document.body.querySelector("openclaw-modal-dialog")).not.toBeNull();
+  expect(view.querySelector(".update-run-view__report")?.textContent).toContain(
+    "OpenClaw updated to 2026.9.2",
+  );
+  findButton("Close").click();
   await settled;
-  expect(document.body.querySelector("openclaw-modal-dialog")).toBeNull();
+  expect(stream.stopped).toBe(true);
 });
 
-it("hands only a failed dialog over to triage", async () => {
-  const stream = createProgressStream();
-  const { settled } = startUpdate({ watchUpdateProgress: stream.watchUpdateProgress });
+it("opens a saved run without starting another update and acknowledges its report on close", async () => {
+  const onAcknowledge = vi.fn();
+  const startGatewayUpdate = vi.fn();
+  const settled = confirmAndStartUpdateRuntime({
+    existingRun: createUpdateRunFixture({
+      phase: "finished",
+      status: "succeeded",
+      finishedAtMs: 10,
+    }),
+    startGatewayUpdate,
+    onAcknowledge,
+    updateAvailable: null,
+    updateSchedule: null,
+    viaNativeApp: false,
+  });
   await getRenderedModalDialog(document.body);
-  closeFailedUpdateDialog();
-  expect(document.body.querySelector("openclaw-modal-dialog")).not.toBeNull();
-  findButton("Update and restart").click();
-  await stream.push({ busy: true, connected: true, failure: null });
-  closeFailedUpdateDialog();
-  expect(document.body.querySelector("openclaw-modal-dialog")).not.toBeNull();
+  expect(document.body.querySelector("openclaw-update-run-view")).not.toBeNull();
+  expect(startGatewayUpdate).not.toHaveBeenCalled();
+  findButton("Close").click();
+  await settled;
+  expect(onAcknowledge).toHaveBeenCalledOnce();
+});
 
+it.each(["existing", "started"] as const)(
+  "clears a %s run report when its scoped row is retired",
+  async (entry) => {
+    const run = createUpdateRunFixture(
+      entry === "existing" ? { phase: "finished", status: "succeeded", finishedAtMs: 10 } : {},
+    );
+    const progress: UpdateProgress = {
+      run,
+      busy: run.status === "running",
+      connected: true,
+      failure: null,
+    };
+    const stream = createProgressStream(entry === "existing" ? progress : undefined);
+    const onAcknowledge = vi.fn();
+    const settled = confirmAndStartUpdateRuntime({
+      ...(entry === "existing" ? { existingRun: run } : {}),
+      onAcknowledge,
+      startGatewayUpdate: vi.fn(),
+      watchUpdateProgress: stream.watchUpdateProgress,
+      updateAvailable: UPDATE_AVAILABLE,
+      updateSchedule: null,
+      viaNativeApp: false,
+    });
+    await getRenderedModalDialog(document.body);
+    if (entry === "started") {
+      findButton("Update and restart").click();
+      await stream.push(progress);
+    }
+    expect(document.body.querySelector("openclaw-update-run-view")).not.toBeNull();
+
+    await stream.push({ run: null, busy: false, connected: false, failure: null });
+
+    expect(document.body.querySelector("openclaw-modal-dialog")).toBeNull();
+    expect(document.body.classList.contains("update-dialog-open")).toBe(false);
+    expect(stream.stopped).toBe(true);
+    expect(onAcknowledge).not.toHaveBeenCalled();
+    await settled;
+  },
+);
+
+it("unsubscribes when the initial snapshot retires a saved run before subscription returns", async () => {
+  const stopWatching = vi.fn();
+  const settled = confirmAndStartUpdateRuntime({
+    existingRun: createUpdateRunFixture({
+      phase: "finished",
+      status: "succeeded",
+      finishedAtMs: 10,
+    }),
+    startGatewayUpdate: vi.fn(),
+    watchUpdateProgress: (listener) => {
+      listener({ run: null, busy: false, connected: true, failure: null });
+      return stopWatching;
+    },
+    updateAvailable: null,
+    updateSchedule: null,
+    viaNativeApp: false,
+  });
+
+  expect(stopWatching).toHaveBeenCalledOnce();
+  expect(document.body.querySelector("openclaw-modal-dialog")).toBeNull();
+  expect(document.body.classList.contains("update-dialog-open")).toBe(false);
+  await settled;
+});
+
+it("keeps the failure visible until the operator explicitly opens its review action", async () => {
+  const stream = createProgressStream();
+  const onReviewUpdate = vi.fn();
+  const settled = confirmAndStartUpdateRuntime({
+    startGatewayUpdate: vi.fn(),
+    watchUpdateProgress: stream.watchUpdateProgress,
+    onReviewUpdate,
+    updateAvailable: UPDATE_AVAILABLE,
+    updateSchedule: null,
+    viaNativeApp: false,
+  });
+  await getRenderedModalDialog(document.body);
+  findButton("Update and restart").click();
   await stream.push({
+    run: null,
     busy: false,
     connected: true,
     failure: "Read the recorded cause before retrying.",
   });
-  closeFailedUpdateDialog();
+  expect(document.body.querySelector("openclaw-modal-dialog")?.textContent).toContain(
+    "Read the recorded cause",
+  );
+  expect(onReviewUpdate).not.toHaveBeenCalled();
+  findButton("Review update").click();
   await settled;
-  expect(document.body.querySelector("openclaw-modal-dialog")).toBeNull();
+  expect(onReviewUpdate).toHaveBeenCalledOnce();
   expect(stream.stopped).toBe(true);
 });
 
@@ -247,6 +361,7 @@ it("hands only a failed dialog over to triage", async () => {
  */
 function createRetryStream(options: { accepted: boolean }) {
   let progress: UpdateProgress = {
+    run: null,
     busy: false,
     connected: true,
     failure: "The update failed at install: ENOSPC: no space left on device, write.",
@@ -257,7 +372,7 @@ function createRetryStream(options: { accepted: boolean }) {
       if (!options.accepted) {
         return;
       }
-      progress = { busy: true, connected: true, failure: null };
+      progress = { run: null, busy: true, connected: true, failure: null };
       emit?.(progress);
     },
     watchUpdateProgress: (listener: (next: UpdateProgress) => void) => {

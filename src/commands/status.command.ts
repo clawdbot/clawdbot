@@ -11,6 +11,8 @@ import { sanitizeTerminalText } from "../../packages/terminal-core/src/safe-text
 import { withProgress } from "../cli/progress.js";
 import { OPENCLAW_WRAPPER_ENV_KEY } from "../daemon/program-args.js";
 import { readRestartSentinelReadOnly } from "../infra/restart-sentinel.js";
+import { findActiveUpdateRun, listUpdateRuns } from "../infra/update-run-ledger.js";
+import { renderUpdateRunReport } from "../infra/update-run-report.js";
 import type { RuntimeEnv } from "../runtime.js";
 import { createLazyImportLoader } from "../shared/lazy-promise.js";
 import { assertStatusUsageAgentScope, runStatusJsonCommand } from "./status-json-command.ts";
@@ -233,7 +235,6 @@ export async function statusCommand(
     buildStatusCommandReportData,
     buildStatusCommandReportLines,
     buildStatusUpdateSurface,
-    formatTimeAgo,
     formatUsageReportLines,
     getTerminalTableWidth,
     info,
@@ -319,9 +320,10 @@ export async function statusCommand(
       ok,
       warn,
       muted,
-      formatTimeAgo,
     },
   );
+  const lastRun = findActiveUpdateRun() ?? listUpdateRuns({ limit: 1 })[0];
+  const updateReport = lastRun ? renderUpdateRunReport(lastRun) : undefined;
   const lines = await buildStatusCommandReportLines(
     await buildStatusCommandReportData({
       env: env ?? {},
@@ -341,9 +343,11 @@ export async function statusCommand(
       pluginCompatibility,
       pairingRecovery,
       tableWidth,
-      updateValue: updateSurface.updateAvailable
-        ? warn(`available · ${updateSurface.updateLine}`)
-        : updateSurface.updateLine,
+      updateValue:
+        updateReport?.headline ??
+        (updateSurface.updateAvailable
+          ? warn(`available · ${updateSurface.updateLine}`)
+          : updateSurface.updateLine),
       updateRestartValue,
     }),
   );

@@ -59,12 +59,14 @@ Principles:
   on the session's board. The agent can pass `pin: true` to do the same. A
   channel presenter can instead make the same core document visible on the
   current transport.
-- **Board view:** the first pinned widget opens a resizable dashboard side panel
-  beside chat. The task toolbar's **Swap** button exchanges the main view and
+- **Board view:** **Dashboard** in the side panel opens the current task's board,
+  including its empty state, without editing the chat draft. The first pinned
+  widget opens a resizable dashboard beside chat unless a task layout is already
+  saved. The task toolbar's **Swap** button exchanges the main view and
   active side-panel content, including Chat, Dashboard, Browser, Terminal,
   Files, and Review. Its tooltip names the two views. The same toolbar's
   **Layout** menu positions the side panel left, right, or below. **Focus** in
-  the main pane header gives that view the full task area; **Restore split**
+  the same toolbar gives the main view the full task area; **Restore split**
   restores the side panel.
   Later board updates preserve the user's current layout. Closing the Dashboard
   tab removes only its view; closing the whole side panel hides it without
@@ -74,6 +76,8 @@ Principles:
   Ordinary revisits restore it. Gallery links with `?dashboard=expanded` explicitly
   make Dashboard main and focus it. Placement changes reuse the mounted content
   so widget frames, browser views, terminals, and chat drafts survive a swap.
+  The task toolbar and side-panel tab header align above their respective panes
+  in left/right layouts; stacked layouts keep each header above its own pane.
 - **Drag:** user drags widgets; grid auto-compacts (widgets float up, neighbors
   reflow). Resize by handle snaps to size steps. No pixel placement — for
   anyone.
@@ -230,10 +234,17 @@ access nor the proxy's origin. Inline views adopt only the wrapper's private
 prompt channel; dashboard views initialize their separate ticket-bound bridge.
 
 The shared loader fetches board HTML while the sandbox proxy starts, then
-delivers it only after that exact proxy reports ready. Mounted widgets retain
-their loaded document across presentation changes and ticket renewal. Inline
-views share concurrent reads of the same document only within one client and
-connection generation; each view still owns its own sandbox and prompt channel.
+delivers it only after that exact proxy reports ready. Dashboard widgets keep a
+themed loading placeholder until the proxy confirms that the current inner
+document has loaded. This rendering signal is separate from HTML delivery and
+bridge initialization, so an empty widget can finish loading without reporting
+a positive content height. Focused dashboard routes reuse an already resolved
+session key and agent owner to avoid a second session lookup.
+
+Mounted widgets retain their loaded document across presentation changes and
+ticket renewal. Inline views share concurrent reads of the same document only
+within one client and connection generation; each view still owns its own sandbox
+and prompt channel.
 Managed `[embed ref="..."]` previews use that authenticated path whenever their
 effective sandbox policy permits scripts, including the default with no explicit
 sandbox field. Explicit strict previews remain script-free.

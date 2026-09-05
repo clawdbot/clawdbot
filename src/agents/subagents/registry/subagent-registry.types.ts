@@ -204,6 +204,8 @@ export type RequesterSettleWakeState = {
 type SubagentKillReconciliationState = {
   /** Actual cancellation time; a yielded run may have an older execution end. */
   killedAt: number;
+  /** The current lifecycle accepted a live kill claim before terminalization. */
+  taskCancellationAccepted?: true;
   /** Requester aborts must not re-inject a delayed completion after queues are cleared. */
   suppressTaskDelivery?: boolean;
   /** Durable ownership boundary even after the newer registry row is released. */
@@ -258,6 +260,8 @@ export type SubagentRunRecord = {
   suppressAnnounceReason?: "steer-restart" | "killed";
   /** Sticky owner while restart recovery replays this exact terminal run. */
   terminalOwner?: "interrupted-recovery";
+  /** Durable requester notice debt, independent of restart execution ownership. */
+  resumptionNotice?: { idempotencyKey: string };
   /** Present only while a current-version killed run awaits bounded reconciliation. */
   killReconciliation?: SubagentKillReconciliationState;
   /** Durable operator cancellation ownership before runtime side effects complete. */

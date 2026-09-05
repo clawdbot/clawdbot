@@ -1,6 +1,8 @@
 // Argv invocation tests cover CLI argv normalization before command dispatch.
+import { Command } from "commander";
 import { describe, expect, it } from "vitest";
 import { resolveCliArgvInvocation } from "./argv-invocation.js";
+import { getCommanderCommandPath } from "./program/commander-parse-facts.js";
 
 describe("argv-invocation", () => {
   it("resolves root help and empty command path", () => {
@@ -114,6 +116,39 @@ describe("argv-invocation", () => {
       resolveCliArgvInvocation(["node", "openclaw", "models", "--agent", "main", "status"])
         .commandPath,
     ).toEqual(["models", "status"]);
+  });
+
+  it.each([
+    ["config", ["--section", "model"], ["config"]],
+    ["config", ["--section", "get"], ["config"]],
+    ["config", ["--section=model", "get"], ["config", "get"]],
+    ["config", ["--", "get"], ["config", "get"]],
+    ["skills", ["--agent", "main", "verify"], ["skills", "verify"]],
+    ["skills", ["--agent=main", "verify"], ["skills", "verify"]],
+    ["skills", ["--agent", "verify"], ["skills"]],
+    ["skills", ["--json", "--agent", "main", "verify"], ["skills", "verify"]],
+    ["skills", ["--", "verify"], ["skills", "verify"]],
+  ])("matches Commander for %s %j", async (rootName, args, expectedPath) => {
+    const program = new Command().name("openclaw").enablePositionalOptions();
+    const root = program.command(rootName);
+    if (rootName === "config") {
+      root.option("--section <section>");
+    } else {
+      root.option("--agent <id>").option("--json");
+    }
+    const child = root.command(rootName === "config" ? "get" : "verify");
+    let parsedPath: string[] = [];
+    for (const command of [root, child]) {
+      command.action(() => {
+        parsedPath = getCommanderCommandPath(command);
+      });
+    }
+    const argv = ["node", "openclaw", rootName, ...args];
+
+    await program.parseAsync(argv);
+
+    expect(parsedPath).toEqual(expectedPath);
+    expect(resolveCliArgvInvocation(argv).commandPath).toEqual(parsedPath);
   });
 
   it.each(["cleanup", "status", "repair", "finalize", "wizard"])(

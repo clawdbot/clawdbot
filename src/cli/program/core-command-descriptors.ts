@@ -3,13 +3,13 @@ import { isExperimentalClawsEnabled } from "../../claws/experimental.js";
 import { isConfigMachineOutput } from "../config-output-mode.js";
 import { isDoctorMachineOutput } from "../doctor-output-mode.js";
 import { hasMachineOutputOption } from "../machine-output-argv.js";
-import { defineCommandDescriptorCatalog } from "./command-descriptor-utils.js";
 import type { NamedCommandDescriptor } from "./command-group-descriptors.js";
 
 /** Descriptor shape for root commands owned by the core CLI. */
 type CoreCliCommandDescriptor = NamedCommandDescriptor;
 
-const coreCliCommandCatalog = defineCommandDescriptorCatalog([
+/** Static root-command descriptors for the core CLI surface. */
+export const CORE_CLI_COMMAND_DESCRIPTORS = [
   {
     name: "setup",
     description: "Chat with OpenClaw; onboard when setup is incomplete",
@@ -138,37 +138,30 @@ const coreCliCommandCatalog = defineCommandDescriptorCatalog([
     description: "Inspect durable background tasks and TaskFlow state",
     hasSubcommands: true,
   },
-] as const satisfies ReadonlyArray<CoreCliCommandDescriptor>);
+] as const satisfies ReadonlyArray<CoreCliCommandDescriptor>;
 
-/** Static root-command descriptors for the core CLI surface. */
-export const CORE_CLI_COMMAND_DESCRIPTORS = coreCliCommandCatalog.descriptors;
-
-function visibleCoreCliCommandDescriptors(): ReadonlyArray<CoreCliCommandDescriptor> {
+/** Return core root-command descriptors in help/registration order. */
+export function getCoreCliCommandDescriptors(): ReadonlyArray<CoreCliCommandDescriptor> {
   return isExperimentalClawsEnabled()
     ? CORE_CLI_COMMAND_DESCRIPTORS
     : CORE_CLI_COMMAND_DESCRIPTORS.filter((descriptor) => descriptor.name !== "claws");
 }
 
-/** Return core root-command descriptors in help/registration order. */
-export function getCoreCliCommandDescriptors(): ReadonlyArray<CoreCliCommandDescriptor> {
-  return visibleCoreCliCommandDescriptors();
-}
-
 /** Return names for all core root commands. */
 export function getCoreCliCommandNamesCore(): string[] {
-  return visibleCoreCliCommandDescriptors().map((descriptor) => descriptor.name);
+  return getCoreCliCommandDescriptors().map((descriptor) => descriptor.name);
 }
 
 /** Return core root commands that own child subcommands. */
 export function getCoreCliCommandsWithSubcommands(): string[] {
-  return visibleCoreCliCommandDescriptors()
+  return getCoreCliCommandDescriptors()
     .filter((descriptor) => descriptor.hasSubcommands)
     .map((descriptor) => descriptor.name);
 }
 
 /** Return core root commands whose parent action should default to help. */
 export function getCoreCliParentDefaultHelpCommands(): string[] {
-  return visibleCoreCliCommandDescriptors()
+  return getCoreCliCommandDescriptors()
     .filter((descriptor) => descriptor.parentDefaultHelp)
     .map((descriptor) => descriptor.name);
 }

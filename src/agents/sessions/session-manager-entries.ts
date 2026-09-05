@@ -290,12 +290,11 @@ export class SessionManagerEntries extends SessionManagerPersistence {
   }
 
   getSessionName(): string | undefined {
-    for (const entry of this.getEntries().toReversed()) {
-      if (entry.type === "session_info") {
-        return entry.name?.trim() || undefined;
-      }
-    }
-    return undefined;
+    const sessionInfo = this.fileEntries.findLast(
+      (entry): entry is SessionInfoEntry =>
+        entry.type === "session_info" && this.byId.has(entry.id),
+    );
+    return sessionInfo?.name?.trim() || undefined;
   }
 
   appendCustomMessageEntry(
@@ -399,25 +398,6 @@ export class SessionManagerEntries extends SessionManagerPersistence {
       this.labelTimestampsById.delete(targetId);
     }
     return entry.id;
-  }
-
-  getBranch(fromId?: string): SessionEntry[] {
-    const path: SessionEntry[] = [];
-    const seen = new Set<string>();
-    let currentId = fromId ?? this.leafId;
-    while (currentId && !seen.has(currentId)) {
-      seen.add(currentId);
-      const current = this.byId.get(currentId);
-      if (current) {
-        const normalizedCurrent = this.normalizeEntryParent(current);
-        path.push(normalizedCurrent);
-        currentId = normalizedCurrent.parentId;
-      } else {
-        currentId = this.opaqueParentsById.get(currentId) ?? null;
-      }
-    }
-    path.reverse();
-    return path;
   }
 
   buildSessionContext(): SessionContext {

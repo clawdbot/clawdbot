@@ -120,7 +120,13 @@ describe("resolveSandboxSkillRuntimeInputs", () => {
     ]);
   });
 
-  it("rebuilds sandbox prompts from materialized skill paths", async () => {
+  it.each([
+    { label: "rebuilds sandbox prompts from materialized skill paths", skillsSnapshot: snapshot },
+    {
+      label: "keeps audited skills out of an explicitly empty sandbox snapshot",
+      skillsSnapshot: { prompt: "", skills: [] },
+    },
+  ])("$label", async ({ skillsSnapshot }) => {
     const root = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-sandbox-skills-"));
     try {
       const effectiveWorkspace = path.join(root, "workspace");
@@ -164,7 +170,7 @@ describe("resolveSandboxSkillRuntimeInputs", () => {
           workspaceAccess: "rw",
         },
         skillsAnchorWorkspace: effectiveWorkspace,
-        skillsSnapshot: snapshot,
+        skillsSnapshot,
       });
       const { shouldLoadSkillEntries, skillEntries } = resolveEmbeddedRunSkillEntries({
         workspaceDir: skillsWorkspaceDir,
@@ -184,7 +190,12 @@ describe("resolveSandboxSkillRuntimeInputs", () => {
         eligibility: skillsEligibilityForRun,
       });
 
-      expect(prompt).toContain("/workspace/.openclaw/sandbox-skills/skills/demo/SKILL.md");
+      if (skillsSnapshot === snapshot) {
+        expect(prompt).toContain("/workspace/.openclaw/sandbox-skills/skills/demo/SKILL.md");
+      } else {
+        expect(prompt).toBe("");
+        expect(skillEntries).toEqual([]);
+      }
       expect(prompt.replaceAll("\\", "/")).not.toContain(
         materializedWorkspace.replaceAll("\\", "/"),
       );

@@ -109,10 +109,11 @@ async function prepareSetupProviderAuthChoice(
   choice: ProviderAuthChoiceMetadata,
 ) {
   // Carry callable auth methods past the lease, never an unbound enabled config.
-  return await withPluginLifecycleLease({}, async () => {
+  return await withPluginLifecycleLease({ signal: params.signal }, async () => {
     const enablePlugin = params.deps.enablePluginInConfig ?? enablePluginInConfig;
     const enableResult = await enablePluginWithCapabilityConsent(params.cfg, choice.pluginId, {
       workspaceDir: params.pluginWorkspaceDir,
+      beforePersistentEffect: params.beforePersistentEffect,
       onCapabilityConsent: params.prompter
         ? createPluginCapabilityConsentPrompter(params.prompter, () =>
             throwIfSetupInferenceCancelled(params),
@@ -159,6 +160,7 @@ export async function buildTestPlan(params: {
   prompter?: WizardPrompter;
   signal?: AbortSignal;
   isCancelled?: () => boolean;
+  beforePersistentEffect?: () => void | Promise<void>;
   isRemoteProviderAuth?: boolean;
   routeAgentId?: string;
   codexCliApiKey?: CodexCliApiKeyCredential;

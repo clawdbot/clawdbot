@@ -128,7 +128,7 @@ export type ChatProps = Omit<
     onOpenSessionDiff?: () => void;
     onExpandPullRequests?: () => void;
     onDismissPullRequest?: (pullRequest: ControlUiSessionPullRequest) => void;
-    githubPublication?: import("./chat-github-publication.ts").GitHubPublicationView;
+    githubPublication?: import("../../lib/sessions/github-publication-controller.ts").GitHubPublicationView;
   };
 
 export function renderChat(props: ChatProps) {

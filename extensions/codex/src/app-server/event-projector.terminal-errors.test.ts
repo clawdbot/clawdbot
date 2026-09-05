@@ -248,6 +248,12 @@ describe("CodexAppServerEventProjector terminal errors", () => {
       codexErrorInfo: "cyberPolicy",
       category: "cyber",
     },
+    {
+      label: "typed misalignment",
+      message: "This request was blocked due to a misalignment policy violation.",
+      codexErrorInfo: "misalignmentPolicyViolation",
+      category: "misalignment",
+    },
   ])(
     "keeps $label refusals terminal when error is followed by failed turn completion",
     async ({ message, codexErrorInfo, category }) => {
@@ -279,6 +285,7 @@ describe("CodexAppServerEventProjector terminal errors", () => {
         ],
       });
       expect(result.lastAssistant).toBe(terminalAssistant);
+      expect(projector.settledTurnFailureFinalizationAllowed).toBe(false);
       expect(
         result.messagesSnapshot.filter(
           (candidate) =>
@@ -293,7 +300,6 @@ describe("CodexAppServerEventProjector terminal errors", () => {
     { codexErrorInfo: "serverOverloaded", expected: true },
     { codexErrorInfo: "usageLimitExceeded", expected: false },
     { codexErrorInfo: "unauthorized", expected: false },
-    { codexErrorInfo: "misalignmentPolicyViolation", expected: false },
     { codexErrorInfo: "other", expected: false },
   ])(
     "projects $codexErrorInfo terminal error recovery eligibility as $expected",

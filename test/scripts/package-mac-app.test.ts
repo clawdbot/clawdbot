@@ -332,7 +332,8 @@ function makePlist(): string {
 }
 
 function runHelper(script: string, shell = "bash") {
-  return spawnSync(shell, ["-lc", script], {
+  // Login/logout hooks can replace the helper's exit status on headless hosts.
+  return spawnSync(shell, ["-c", script], {
     cwd: process.cwd(),
     encoding: "utf8",
   });
@@ -745,7 +746,7 @@ function getStopPackagedAppBlock(): string {
 function getSwiftCompatibilityBlock(): string {
   const script = readFileSync(scriptPath, "utf8");
   const start = script.indexOf('echo "📦 Copying Swift 6.2 compatibility libraries"');
-  const end = script.indexOf('echo "🖼  Copying app icon"');
+  const end = script.indexOf('echo "🖼  Compiling app icon"');
 
   expect(start).toBeGreaterThanOrEqual(0);
   expect(end).toBeGreaterThan(start);
@@ -851,6 +852,8 @@ function runSwiftPMResourceBundleHarness(
 
 function runSwiftPMResourcePatchHarness(failRestore = false) {
   const root = tempDirs.make("openclaw-package-resource-patch-");
+  const workRoot = tempDirs.make("openclaw-resource-backups-");
+  const backupRoot = path.join(workRoot, "resource-backups");
   const buildPath = path.join(root, "build");
   const checkoutRoot = path.join(buildPath, "checkouts");
   const keyboardShortcuts = path.join(
@@ -908,20 +911,20 @@ function runSwiftPMResourcePatchHarness(failRestore = false) {
 
   const result = runHelper(`
     set -euo pipefail
-    SWIFT_WORK_ROOT=${JSON.stringify(tempDirs.make("openclaw-resource-backups-"))}
+    SWIFT_WORK_ROOT=${JSON.stringify(workRoot)}
     BUILD_PATH=${JSON.stringify(buildPath)}
     ${getSwiftPMResourcePatchBlock()}
     patch_swiftpm_resource_lookups ${JSON.stringify(buildPath)}
     grep -q keyboardShortcutsPackagedResources ${JSON.stringify(keyboardShortcuts)}
     test "$(grep -c swiftMathPackagedResources ${JSON.stringify(swiftMathFont)})" -eq 3
     grep -q swiftMathPackagedResources ${JSON.stringify(swiftMathLegacyFont)}
-    ${failRestore ? "mv() { return 13; }" : ""}
+    ${failRestore ? "mv() { printf 'restore failed\\n' >&2; return 13; }" : ""}
     cleanup_status=0
     restore_swiftpm_resource_sources || cleanup_status=$?
     exit "$cleanup_status"
   `);
 
-  return { fixtures, result };
+  return { backupRoot, fixtures, result };
 }
 
 function runStopPackagedAppHarness(killZeroStatus: 0 | 1) {
@@ -1926,19 +1929,25 @@ try {
   });
 
   it("routes dependency resource lookups into signed app resources and restores sources", () => {
-    const { fixtures, result } = runSwiftPMResourcePatchHarness();
+    const { backupRoot, fixtures, result } = runSwiftPMResourcePatchHarness();
 
     expect(result.status).toBe(0);
     expect(result.stderr).toBe("");
     for (const [file, contents] of fixtures) {
       expect(readFileSync(file, "utf8")).toBe(contents);
-      expect(existsSync(`${file}.openclaw-original`)).toBe(false);
     }
+    expect(readdirSync(backupRoot)).toEqual([]);
   });
 
   it("fails cleanup instead of deleting backups when resource restoration fails", () => {
-    const { result } = runSwiftPMResourcePatchHarness(true);
-    expect(result.status).not.toBe(0);
+    const { backupRoot, fixtures, result } = runSwiftPMResourcePatchHarness(true);
+    expect(result.status).toBe(1);
+    expect(result.stderr).toBe("restore failed\n");
+    const backups = readdirSync(backupRoot).map((file) =>
+      readFileSync(path.join(backupRoot, file), "utf8"),
+    );
+    expect(backups).toHaveLength(fixtures.size);
+    expect(backups).toEqual(expect.arrayContaining([...fixtures.values()]));
   });
 
   it("fails closed when any required SwiftPM resource bundle is missing", () => {

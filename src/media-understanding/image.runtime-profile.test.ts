@@ -3,6 +3,7 @@
 import path from "node:path";
 import { expectDefined } from "@openclaw/normalization-core/expect";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { createEmptyPluginMetadataSnapshot } from "../agents/test-helpers/embedded-agent-runner-e2e-mocks.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import {
   looksLikeSecretSentinel,
@@ -13,6 +14,9 @@ import {
 const API_KEY_FIELD = ["api", "Key"].join("") as "apiKey";
 const REQUIRE_API_KEY_FIELD = ["require", "ApiKey"].join("");
 const SET_RUNTIME_API_KEY_FIELD = ["setRuntime", "ApiKey"].join("");
+const MODEL_PROVIDER_RUNTIME_PLUGIN_HANDLE_SYMBOL = Symbol.for(
+  "openclaw.modelProviderRuntimePluginHandle",
+);
 
 const hoisted = vi.hoisted(() => ({
   completeMock: vi.fn(),
@@ -45,6 +49,7 @@ const hoisted = vi.hoisted(() => ({
   releasePreparedModelRuntimeMock: vi.fn(),
   resolveModelAsyncMock: vi.fn(),
   resolveModelWithRegistryMock: vi.fn(),
+  resolveProviderRuntimePluginHandleMock: vi.fn(),
   shouldPreferProviderRuntimeResolvedModelMock: vi.fn(() => false),
   unwrapSecretSentinelsForProviderEgressMock: vi.fn((value: string) => value),
 }));
@@ -64,6 +69,7 @@ const {
   releasePreparedModelRuntimeMock,
   resolveModelAsyncMock,
   resolveModelWithRegistryMock,
+  resolveProviderRuntimePluginHandleMock,
   shouldPreferProviderRuntimeResolvedModelMock,
   unwrapSecretSentinelsForProviderEgressMock,
 } = hoisted;
@@ -141,6 +147,13 @@ vi.mock("../plugins/provider-runtime.runtime.js", () => ({
   prepareProviderRuntimeAuth: prepareProviderRuntimeAuthMock,
 }));
 
+vi.mock("../plugins/provider-hook-runtime.js", async () => ({
+  ...(await vi.importActual<typeof import("../plugins/provider-hook-runtime.js")>(
+    "../plugins/provider-hook-runtime.js",
+  )),
+  resolveProviderRuntimePluginHandle: hoisted.resolveProviderRuntimePluginHandleMock,
+}));
+
 vi.mock("../agents/embedded-agent-runner/model.js", () => ({
   resolveModelAsync: resolveModelAsyncMock,
 }));
@@ -172,12 +185,17 @@ describe("describeImageWithModelCore", () => {
     vi.stubEnv("OPENCLAW_BUNDLED_PLUGINS_DIR", path.join(process.cwd(), "extensions"));
     vi.stubGlobal("fetch", fetchMock);
     vi.clearAllMocks();
+    resolveProviderRuntimePluginHandleMock.mockImplementation((params) => ({
+      ...params,
+      plugin: undefined,
+    }));
     acquireAgentRunPreparedModelRuntimeMock.mockImplementation(
       async (input: { agentDir: string; config: object; workspaceDir?: string }) => ({
         snapshot: {
           agentDir: input.agentDir,
           config: input.config,
           workspaceDir: input.workspaceDir,
+          metadataSnapshot: createEmptyPluginMetadataSnapshot(input.workspaceDir),
           createStores: () => ({
             authStorage: preparedAuthStorage,
             modelRegistry: {},
@@ -773,11 +791,19 @@ describe("describeImageWithModelCore", () => {
   it("uses one committed prepared generation for image setup and streaming", async () => {
     const requestedCfg: OpenClawConfig = { logging: { level: "info" } };
     const committedCfg: OpenClawConfig = { logging: { level: "debug" } };
+    const metadataSnapshot = createEmptyPluginMetadataSnapshot("/tmp/committed-workspace");
+    const providerRuntimeHandle = {
+      provider: "google",
+      modelId: "gemini-2.5-flash",
+      plugin: { id: "generation-a" },
+    };
+    resolveProviderRuntimePluginHandleMock.mockReturnValueOnce(providerRuntimeHandle);
     acquireAgentRunPreparedModelRuntimeMock.mockResolvedValueOnce({
       snapshot: {
         agentDir: "/tmp/committed-agent",
         config: committedCfg,
         workspaceDir: "/tmp/committed-workspace",
+        metadataSnapshot,
         createStores: () => ({
           authStorage: preparedAuthStorage,
           modelRegistry: {},
@@ -792,6 +818,12 @@ describe("describeImageWithModelCore", () => {
         api: "google-generative-ai",
         input: ["text", "image"],
       })),
+    });
+    registerProviderStreamForModelMock.mockImplementationOnce(({ model }) => {
+      expect((model as Record<symbol, unknown>)[MODEL_PROVIDER_RUNTIME_PLUGIN_HANDLE_SYMBOL]).toBe(
+        providerRuntimeHandle,
+      );
+      return undefined;
     });
     completeMock.mockResolvedValue({
       role: "assistant",
@@ -828,7 +860,15 @@ describe("describeImageWithModelCore", () => {
       cfg: committedCfg,
       agentDir: "/tmp/committed-agent",
       workspaceDir: "/tmp/committed-workspace",
+      wrapProviderStream: true,
     });
+    expect(resolveProviderRuntimePluginHandleMock).toHaveBeenCalledWith(
+      expect.objectContaining({
+        provider: "google",
+        modelId: "gemini-2.5-flash",
+        pluginMetadataSnapshot: metadataSnapshot,
+      }),
+    );
   });
 
   it("reuses a parent run generation without acquiring another image lease", async () => {
@@ -854,6 +894,7 @@ describe("describeImageWithModelCore", () => {
       agentDir: "/tmp/parent-agent",
       config: cfg,
       workspaceDir: "/tmp/parent-workspace",
+      metadataSnapshot: createEmptyPluginMetadataSnapshot("/tmp/parent-workspace"),
       configuredRuntimeModels: [],
       inlineProviderModels: [],
       createStores: () => ({ authStorage: preparedAuthStorage, modelRegistry: {} }),

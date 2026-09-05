@@ -164,6 +164,49 @@ describe("azure-openai-responses", () => {
     }
   });
 
+  it.each<{
+    reasoning: "minimal" | "xhigh" | "max" | undefined;
+    compat: Model<"azure-openai-responses">["compat"];
+    effort: string;
+    temperature: number | undefined;
+  }>([
+    { reasoning: undefined, compat: undefined, effort: "none", temperature: 0.5 },
+    { reasoning: "minimal", compat: undefined, effort: "minimal", temperature: 0.5 },
+    { reasoning: "xhigh", compat: undefined, effort: "high", temperature: 0.5 },
+    { reasoning: "max", compat: undefined, effort: "high", temperature: 0.5 },
+    {
+      reasoning: "xhigh",
+      compat: {
+        supportedReasoningEfforts: ["low", "medium", "high", "xhigh"],
+        supportsTemperature: false,
+      },
+      effort: "xhigh",
+      temperature: undefined,
+    },
+  ])(
+    "preserves Azure deployment capabilities for $reasoning with compat=$compat",
+    async ({ reasoning, compat, effort, temperature }) => {
+      let sentParams: { reasoning?: { effort?: unknown }; temperature?: unknown } | undefined;
+      configureAiTransportHost({
+        buildModelFetch: () => async (input, init) => {
+          sentParams = (await new Request(input, init).json()) as typeof sentParams;
+          return Response.json({ error: { message: "captured" } }, { status: 400 });
+        },
+      });
+      try {
+        await streamSimpleAzureOpenAIResponses(
+          { ...azureResponsesModel, id: "gpt-6-astra", compat },
+          context,
+          { apiKey: "test-api-key", reasoning, temperature: 0.5 },
+        ).result();
+        expect(sentParams?.reasoning?.effort).toBe(effort);
+        expect(sentParams?.temperature).toBe(temperature);
+      } finally {
+        configureAiTransportHost({});
+      }
+    },
+  );
+
   it("fences compaction replay by the resolved Azure endpoint", async () => {
     const routeA = "https://route-a.openai.azure.com/openai/v1";
     const routeB = "https://route-b.openai.azure.com/openai/v1";

@@ -143,9 +143,8 @@ export function prepareEmbeddedRunTerminal(input: {
     ...(costUsd !== undefined ? { costUsd } : {}),
   };
   const attemptFinalText = attempt.assistantTexts
-    .toReversed()
-    .map((text) => text.trim())
-    .find((text) => text.length > 0);
+    .findLast((text) => text.trim().length > 0)
+    ?.trim();
   const finalAssistantVisibleText = terminalAssistantCanOwnFinalText
     ? (resolveFinalAssistantVisibleText(terminalAssistant) ?? attemptFinalText)
     : undefined;

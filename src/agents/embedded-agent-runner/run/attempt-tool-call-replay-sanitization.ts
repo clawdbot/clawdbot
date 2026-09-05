@@ -3,7 +3,6 @@ import { replaceCompactionReplayOwnerContent } from "@openclaw/ai/transports";
 import { hasNonEmptyString as replayToolCallNonEmptyString } from "../../../../packages/normalization-core/src/string-coerce.js";
 import {
   downgradeOpenAIFunctionCallReasoningPairs,
-  downgradeOpenAIReasoningBlocks,
   normalizeOpenAIResponsesToolCallIds,
   validateAnthropicTurns,
   validateGeminiTurns,
@@ -429,9 +428,7 @@ export function sanitizeReplayToolCallIdsForStream(params: {
 /** Downgrades OpenAI Responses replay turns into the stream format expected by runtime callers. */
 export function sanitizeOpenAIResponsesReplayForStream(messages: AgentMessage[]): AgentMessage[] {
   const repaired = sanitizeToolUseResultPairingForModel(messages, true);
-  return downgradeOpenAIFunctionCallReasoningPairs(
-    normalizeOpenAIResponsesToolCallIds(downgradeOpenAIReasoningBlocks(repaired)),
-  );
+  return downgradeOpenAIFunctionCallReasoningPairs(normalizeOpenAIResponsesToolCallIds(repaired));
 }
 
 /**

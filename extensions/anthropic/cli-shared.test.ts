@@ -1020,7 +1020,7 @@ describe("normalizeClaudeBackendConfig", () => {
     ).toThrow("Selected Claude CLI OAuth credential is expired or invalid");
   });
 
-  it("runs native Claude login through the official Agent SDK without forwarding credentials", () => {
+  it("runs native Claude login through the CLI transport without forwarding credentials", () => {
     const backend = buildAnthropicCliBackend();
 
     const prepared = backend.prepareExecution?.({

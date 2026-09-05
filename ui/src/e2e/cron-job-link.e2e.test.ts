@@ -1,6 +1,7 @@
 import fs from "node:fs/promises";
 import path from "node:path";
 import { expect, it } from "vitest";
+import { takeControlUiViewportScreenshot } from "../test-helpers/control-ui-e2e-screenshot.ts";
 import { installMockGateway } from "../test-helpers/control-ui-e2e.ts";
 import { createControlUiE2eSuite } from "./control-ui-e2e-suite.test-support.ts";
 
@@ -106,10 +107,12 @@ suite.define(() => {
             }),
           );
         } finally {
-          await page.screenshot({
-            path: path.join(suite.artifactDir, "linked-automation.png"),
-            fullPage: true,
-          });
+          await fs.writeFile(
+            path.join(suite.artifactDir, "linked-automation.png"),
+            await takeControlUiViewportScreenshot(page, page.locator(".cron-page"), [
+              page.locator(".cron-detail-title"),
+            ]),
+          );
           await fs.writeFile(
             path.join(suite.artifactDir, "gateway-requests.json"),
             JSON.stringify(await gateway.getRequests(), null, 2),

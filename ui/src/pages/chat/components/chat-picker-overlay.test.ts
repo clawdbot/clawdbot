@@ -1,6 +1,6 @@
 /* @vitest-environment jsdom */
 
-import { afterEach, describe, expect, it, vi } from "vitest";
+import { afterEach, describe, expect, it, onTestFinished, vi } from "vitest";
 import "../../../components/tooltip.ts";
 import {
   ensureChatComposerPickerDismissal,
@@ -121,6 +121,9 @@ describe("chat picker overlay", () => {
 
     effortPicker.open = true;
     effortPicker.addEventListener("toggle", handleChatComposerDetailsToggle);
+    onTestFinished(() =>
+      effortPicker.removeEventListener("toggle", handleChatComposerDetailsToggle),
+    );
     effortPicker.dispatchEvent(new Event("toggle"));
     effortControl.focus();
     document.dispatchEvent(new KeyboardEvent("keydown", { key: "Escape" }));

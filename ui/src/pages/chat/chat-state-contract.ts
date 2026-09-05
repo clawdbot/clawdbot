@@ -22,6 +22,8 @@ export type ChatState = StreamCausalBoundaryState & {
   chatSubmissions?: ApplicationChatSubmissions;
   /** Monotonic owner epoch; reconnects can reuse the same client object. */
   connectionEpoch: number;
+  /** Config changes retire preview tickets even when session permissions stay inherited. */
+  mediaPolicyEpoch?: number;
   sessionKey: string;
   currentSessionId?: string | null;
   reconnectResumeSessionId?: string | null;

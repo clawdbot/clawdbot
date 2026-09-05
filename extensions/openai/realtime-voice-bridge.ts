@@ -1,19 +1,17 @@
 import { randomUUID } from "node:crypto";
-import { coerceErrorMessage, toStringifiedError } from "openclaw/plugin-sdk/error-runtime";
-import { resolveProviderRequestHeaders } from "openclaw/plugin-sdk/provider-http";
-import {
-  captureWsEvent,
-  createDebugProxyWebSocketAgent,
-  resolveDebugProxySettings,
-} from "openclaw/plugin-sdk/proxy-capture";
 import type {
   RealtimeVoiceBridge,
   RealtimeVoiceSessionConnection,
   RealtimeVoiceToolResultOptions,
 } from "openclaw/plugin-sdk/realtime-voice";
-import { RealtimeVoiceSessionLifecycle } from "openclaw/plugin-sdk/realtime-voice";
-import { sleepWithAbort } from "openclaw/plugin-sdk/runtime-env";
+import {
+  coerceErrorMessage,
+  RealtimeVoiceSessionLifecycle,
+  sleepWithAbort,
+  toStringifiedError,
+} from "openclaw/plugin-sdk/realtime-voice-provider";
 import WebSocket from "ws";
+import type { OpenAIRealtimeHost } from "./realtime-host.js";
 import {
   captureOpenAIRealtimeWsClose,
   readRealtimeErrorDetail,
@@ -74,8 +72,8 @@ export class OpenAIRealtimeBridge extends OpenAIRealtimeEvents implements Realti
 
   private lastInputAudioDropWarningAt = Number.NEGATIVE_INFINITY;
 
-  constructor(config: OpenAIRealtimeVoiceBridgeConfig) {
-    super(config);
+  constructor(config: OpenAIRealtimeVoiceBridgeConfig, runtime: OpenAIRealtimeHost) {
+    super(config, runtime);
     this.lifecycle = new RealtimeVoiceSessionLifecycle("OpenAI", {
       pendingAudioOverflowPolicy: "drop-oldest",
       onPendingAudioOverflow: () =>
@@ -235,8 +233,8 @@ export class OpenAIRealtimeBridge extends OpenAIRealtimeEvents implements Realti
       attempt.startTimeout();
       const url = resolvedConnection.url;
       this.connectionUrl = resolvedConnection.url;
-      const debugProxy = resolveDebugProxySettings();
-      const proxyAgent = createDebugProxyWebSocketAgent(debugProxy);
+      const debugProxy = this.runtime.resolveDebugProxySettings();
+      const proxyAgent = this.runtime.createDebugProxyWebSocketAgent(debugProxy);
       const ws = new WebSocket(resolvedConnection.url, {
         headers: resolvedConnection.headers,
         maxPayload: OPENAI_VOICE_WS_MAX_PAYLOAD_BYTES,
@@ -260,7 +258,7 @@ export class OpenAIRealtimeBridge extends OpenAIRealtimeEvents implements Realti
           return;
         }
         this.resetRealtimeSessionState();
-        captureWsEvent({
+        this.runtime.captureWsEvent({
           url,
           direction: "local",
           kind: "ws-open",
@@ -292,7 +290,7 @@ export class OpenAIRealtimeBridge extends OpenAIRealtimeEvents implements Realti
             return;
           }
         }
-        captureWsEvent({
+        this.runtime.captureWsEvent({
           url,
           direction: "inbound",
           kind: "ws-frame",
@@ -349,7 +347,7 @@ export class OpenAIRealtimeBridge extends OpenAIRealtimeEvents implements Realti
         if (!this.lifecycle.acceptsEvents(lifecycleConnection) || this.ws !== ws) {
           return;
         }
-        captureWsEvent({
+        this.runtime.captureWsEvent({
           url,
           direction: "local",
           kind: "error",
@@ -374,13 +372,16 @@ export class OpenAIRealtimeBridge extends OpenAIRealtimeEvents implements Realti
       });
 
       ws.on("close", (code, reasonBuffer) => {
-        captureOpenAIRealtimeWsClose({
-          url,
-          flowId: this.flowId,
-          capability: "realtime-voice",
-          code,
-          reasonBuffer,
-        });
+        captureOpenAIRealtimeWsClose(
+          {
+            url,
+            flowId: this.flowId,
+            capability: "realtime-voice",
+            code,
+            reasonBuffer,
+          },
+          this.runtime.captureWsEvent,
+        );
         if (!this.lifecycle.isCurrent(lifecycleConnection)) {
           return;
         }
@@ -456,7 +457,7 @@ export class OpenAIRealtimeBridge extends OpenAIRealtimeEvents implements Realti
       )}`;
       return {
         url,
-        headers: resolveProviderRequestHeaders({
+        headers: this.runtime.resolveProviderRequestHeaders({
           provider: "openai",
           baseUrl: url,
           capability: "audio",
@@ -489,11 +490,14 @@ export class OpenAIRealtimeBridge extends OpenAIRealtimeEvents implements Realti
     url: string;
     headers: Record<string, string>;
   }> {
-    const auth = await requireOpenAIRealtimePlatformAuth({
-      configuredApiKey: this.config.apiKey,
-      cfg: this.config.cfg,
-      agentId: this.config.agentId,
-    });
+    const auth = await requireOpenAIRealtimePlatformAuth(
+      {
+        configuredApiKey: this.config.apiKey,
+        cfg: this.config.cfg,
+        agentId: this.config.agentId,
+      },
+      this.runtime,
+    );
     return this.resolveApiKeyConnectionParams(auth.value, model);
   }
 
@@ -509,7 +513,7 @@ export class OpenAIRealtimeBridge extends OpenAIRealtimeEvents implements Realti
       const url = `${base}/v1/realtime?model=${encodeURIComponent(model)}`;
       return {
         url,
-        headers: resolveProviderRequestHeaders({
+        headers: this.runtime.resolveProviderRequestHeaders({
           provider: "openai",
           baseUrl: url,
           capability: "audio",
@@ -524,7 +528,7 @@ export class OpenAIRealtimeBridge extends OpenAIRealtimeEvents implements Realti
       : `wss://api.openai.com/v1/realtime?model=${encodeURIComponent(model)}`;
     return {
       url,
-      headers: resolveProviderRequestHeaders({
+      headers: this.runtime.resolveProviderRequestHeaders({
         provider: "openai",
         baseUrl: url,
         capability: "audio",
@@ -678,7 +682,7 @@ export class OpenAIRealtimeBridge extends OpenAIRealtimeEvents implements Realti
           ? (event as { type: string }).type
           : "unknown";
       const payload = JSON.stringify(event);
-      captureWsEvent({
+      this.runtime.captureWsEvent({
         url: this.connectionUrl,
         direction: "outbound",
         kind: "ws-frame",

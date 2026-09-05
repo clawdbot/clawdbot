@@ -10,7 +10,7 @@ import type {
   RealtimeVoiceSessionConnection,
   RealtimeVoiceToolResultOptions,
 } from "openclaw/plugin-sdk/realtime-voice";
-import { RealtimeVoiceSessionLifecycle } from "openclaw/plugin-sdk/realtime-voice";
+import { RealtimeVoiceSessionLifecycle } from "openclaw/plugin-sdk/realtime-voice-provider";
 import { sleepWithAbort } from "openclaw/plugin-sdk/runtime-env";
 import WebSocket from "ws";
 import { resolveXaiRealtimeApiKey } from "./realtime-voice-auth.runtime.js";

@@ -248,6 +248,49 @@ describe("memory index", () => {
     }
   });
 
+  it.each(["none", "openai"])(
+    "indexes incomplete and mixed annotations promptly with provider %s",
+    async (provider) => {
+      await fs.writeFile(
+        path.join(fixture.paths.workspace, "MEMORY.md"),
+        [
+          "- Alpha mixed. <!--trigger: alpha --><!-- note --> prose <!--importance: 3 --><!--project: alpha-key -->",
+          "- Beta nontrailing. <!--trigger: ignored --> ordinary text",
+          "- Gamma nested. <!--trigger: <!--project: gamma-key -->",
+          `- Incomplete. <!--trigger:${"--><!--project:".repeat(26)}X`,
+        ].join("\n"),
+      );
+      const manager = await getFreshManager(createCfg({ provider }));
+      try {
+        const started = performance.now();
+        await manager.sync({ reason: "test", force: true });
+        expect(performance.now() - started).toBeLessThan(3_000);
+        const db = Reflect.get(manager, "db") as DatabaseSync;
+        expect(
+          db
+            .prepare(
+              `SELECT metadata.triggers, metadata.importance, metadata.project_key AS projectKey
+               FROM memory_index_chunks AS chunk
+               JOIN memory_index_chunk_recall_metadata AS metadata ON metadata.chunk_id = chunk.id
+               WHERE chunk.path = 'MEMORY.md' ORDER BY chunk.start_line`,
+            )
+            .all(),
+        ).toEqual([
+          { triggers: "alpha", importance: 3, projectKey: "alpha-key" },
+          { triggers: null, importance: null, projectKey: null },
+          { triggers: "<!--project: gamma-key", importance: null, projectKey: "gamma-key" },
+          { triggers: null, importance: null, projectKey: INVALID_PROJECT_ANNOTATION_KEY },
+        ]);
+        expect(await manager.search("Alpha mixed", { lexicalOnly: true, minScore: 0 })).toEqual(
+          expect.arrayContaining([expect.objectContaining({ path: "MEMORY.md" })]),
+        );
+        expect(providerFixture.embedBatchCalls > 0).toBe(provider !== "none");
+      } finally {
+        await manager.close();
+      }
+    },
+  );
+
   it("round-trips mixed-case project keys through indexed recall consumers", async () => {
     const projectKey = "github.com/OpenClaw/OpenClaw";
     await fs.writeFile(

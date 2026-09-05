@@ -1,4 +1,4 @@
-import { disposeAllSessionMcpRuntimes } from "../agents/agent-bundle-mcp-tools.js";
+import { reloadSessionMcpRuntimes } from "../agents/agent-bundle-mcp-tools.js";
 import { tryResolveConfiguredAgentWorkspaceDir } from "../agents/agent-scope-config.js";
 import { refreshContextWindowCache } from "../agents/context.js";
 import {
@@ -381,6 +381,9 @@ export function createGatewayReloadHandlers(params: GatewayReloadHandlerParams) 
       const rollbackStoppedPluginTargets = (reason: string) =>
         rollbackStoppedGatewayChannels(params, channelsStoppedBeforePluginReload, reason);
       const failPluginChannelRollback = (reason: string, failures: string[]): never => {
+        for (const channel of channelsStoppedBeforePluginReload) {
+          params.releaseChannelRouteHandoffs(channel);
+        }
         const error = new Error(
           `plugin reload cancellation rollback failed for: ${failures.join(", ")}`,
         );
@@ -414,7 +417,7 @@ export function createGatewayReloadHandlers(params: GatewayReloadHandlerParams) 
             }
             params.logChannels.info(`stopping ${channel} channel before plugin reload`);
             channelsStoppedBeforePluginReload.add(channel);
-            await params.stopChannel(channel, undefined, { manual: false });
+            await params.stopChannel(channel, undefined, { manual: false, routeHandoff: true });
             pluginReloadAborted = isPluginReloadAborted();
           },
           onFailure: (channel, err) => {
@@ -510,6 +513,9 @@ export function createGatewayReloadHandlers(params: GatewayReloadHandlerParams) 
         (!runtimeCommitted || isRestartRetryStopped() || isLifecycleReloadAborted());
     }
     if (pluginReloadAborted) {
+      for (const channel of channelsStoppedBeforePluginReload) {
+        params.releaseChannelRouteHandoffs(channel);
+      }
       // Only an uncommitted reload can transfer its receipt to the watcher. After
       // commit, same-content replay may be a no-op and cannot finish the interrupted tail.
       const error = createReloadCancellationError(
@@ -530,6 +536,18 @@ export function createGatewayReloadHandlers(params: GatewayReloadHandlerParams) 
       return "applied-restart-required";
     }
 
+    if (!plan.reloadPlugins && plan.restartServices?.size) {
+      try {
+        if (!params.reloadPluginServices) {
+          throw new Error("Plugin service reload owner is unavailable");
+        }
+        await params.reloadPluginServices(nextConfig, plan.restartServices);
+      } catch (err) {
+        scheduleRecoveryRestart("plugin services reload", err);
+        return "applied-restart-required";
+      }
+    }
+
     try {
       await mrReload.refreshModelRuntimeAfterHotReload({
         config: nextConfig,
@@ -543,7 +561,12 @@ export function createGatewayReloadHandlers(params: GatewayReloadHandlerParams) 
 
     if (plan.disposeMcpRuntimes) {
       await disposeMcpRuntimesWithTimeout({
-        dispose: disposeAllSessionMcpRuntimes,
+        dispose: () =>
+          reloadSessionMcpRuntimes({
+            cfg: nextConfig,
+            manifestRegistry: params.getPluginMetadataSnapshot?.()?.manifestRegistry,
+            reloadPlugins: plan.reloadPlugins,
+          }),
         timeoutMs: MCP_RUNTIME_RELOAD_DISPOSE_TIMEOUT_MS,
         onWarn: params.logReload.warn,
         label: "bundle-mcp runtime disposal during config reload",

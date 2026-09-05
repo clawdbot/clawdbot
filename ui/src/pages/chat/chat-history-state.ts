@@ -27,7 +27,14 @@ type ChatHistoryLoadState =
       key: string;
       promise: Promise<ChatHistoryResult | undefined>;
     } & ChatHistoryLoadRequest)
-  | { phase: "committed"; key: string }
+  | {
+      phase: "committed";
+      client: GatewayBrowserClient;
+      connectionEpoch: number;
+      sessionKey: string;
+      requestAgentId: string | undefined;
+      sessionInfo: ChatHistoryResult["sessionInfo"];
+    }
   | ({ phase: "failed"; message: string; retryable: boolean } & ChatHistoryLoadRequest);
 
 type ChatHistoryPaneRequests = {
@@ -37,6 +44,7 @@ type ChatHistoryPaneRequests = {
   subscriptionError?: string;
   pendingSubscriptionReleases: Set<SessionMessageSubscription>;
   historyLoad: ChatHistoryLoadState;
+  acceptedHistory?: Extract<ChatHistoryLoadState, { phase: "committed" }>;
 };
 
 const chatHistoryPaneRequests = new WeakMap<object, ChatHistoryPaneRequests>();
@@ -56,9 +64,6 @@ export function chatHistoryRequests(owner: object): ChatHistoryPaneRequests {
   return requests;
 }
 
-/** Dispatched by a pane whenever its authoritative transcript starts or stops loading. */
-export const CHAT_TRANSCRIPT_LOADING_CHANGED_EVENT = "openclaw-chat-transcript-loading-changed";
-
 function isChatHistoryLoading(load: ChatHistoryLoadState): boolean {
   return load.phase === "pending-connection" || load.phase === "in-flight";
 }
@@ -68,6 +73,9 @@ export function setChatHistoryLoad(state: ChatState, load: ChatHistoryLoadState)
   const requests = chatHistoryRequests(state);
   const wasLoading = isChatHistoryLoading(requests.historyLoad);
   requests.historyLoad = load;
+  if (load.phase === "committed") {
+    requests.acceptedHistory = load;
+  }
   if (wasLoading !== isChatHistoryLoading(load)) {
     state.transcriptLoadingChanged?.();
   }
@@ -82,10 +90,7 @@ export function getChatHistoryLoadState(state: ChatState): ChatHistoryLoadState 
   const requestAgentId = isUiSelectedGlobalSessionKey(state, state.sessionKey)
     ? resolveUiSelectedSessionAgentId(state)
     : undefined;
-  const current =
-    load.phase === "committed"
-      ? load.key === `${state.sessionKey}\u0000${requestAgentId ?? ""}`
-      : load.sessionKey === state.sessionKey && load.requestAgentId === requestAgentId;
+  const current = load.sessionKey === state.sessionKey && load.requestAgentId === requestAgentId;
   if (!current) {
     // Lazy repair of a load left behind by a session switch; the switch's own
     // load reports its edge, so this stays a silent write (readers see idle).
@@ -111,8 +116,20 @@ export function getChatHistoryLoadState(state: ChatState): ChatHistoryLoadState 
   return requests.historyLoad;
 }
 
-export function getChatHistoryVersion(state: ChatState): number {
-  return chatHistoryRequests(state).historyVersion;
+/** Same-session refreshes retain the accepted transcript's identity until replacement commits. */
+export function getAcceptedChatHistorySession(state: ChatState) {
+  const accepted = chatHistoryRequests(state).acceptedHistory;
+  return accepted &&
+    state.connected &&
+    state.client === accepted.client &&
+    state.connectionEpoch === accepted.connectionEpoch &&
+    state.sessionKey === accepted.sessionKey &&
+    (!isUiSelectedGlobalSessionKey(state, state.sessionKey) ||
+      resolveUiSelectedSessionAgentId(state) === accepted.requestAgentId) &&
+    accepted.sessionInfo?.sessionId &&
+    state.currentSessionId === accepted.sessionInfo.sessionId
+    ? accepted.sessionInfo
+    : undefined;
 }
 
 type ChatHistoryRequestOwnership = {
@@ -169,6 +186,7 @@ export function resetChatHistoryProjection(state: ChatState, agentId?: string): 
   // A destructive reset keeps the session key, so invalidate both the old
   // snapshot owner and its coalesced request before creating the next epoch.
   requests.historyVersion += 1;
+  delete requests.acceptedHistory;
   setChatHistoryLoad(state, { phase: "idle" });
   state.chatLoading = false;
   const scope = readChatSessionProjectionScope(state, { agentId });

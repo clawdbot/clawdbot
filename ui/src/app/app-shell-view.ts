@@ -513,14 +513,10 @@ export function renderApplicationShell(host: ShellViewHost) {
                     ${icons.search}
                   </button>
                 </openclaw-tooltip>
-                ${
-                  navCollapsed
-                    ? renderCollapsedAssistantToggles({
-                        homeAvailable: homePanelAvailable,
-                        custodianAvailable: custodianPanelAvailable,
-                      })
-                    : nothing
-                }
+                ${renderCollapsedAssistantToggles({
+                  homeAvailable: homePanelAvailable,
+                  custodianAvailable: custodianPanelAvailable,
+                })}
               </div>
             `
           : nothing
@@ -595,6 +591,11 @@ export function renderApplicationShell(host: ShellViewHost) {
           heldUpdateCampaignId: overlaySnapshot.heldUpdateCampaignId,
           updateBusy,
           statusBanner: overlaySnapshot.updateStatusBanner,
+          updateRun: overlaySnapshot.updateRun,
+          updateRunAcknowledged: overlaySnapshot.updateRunAcknowledged,
+          connected: gatewayConnected,
+          onAcknowledge: () => context.overlays.acknowledgeUpdateRun(),
+          onCheckStatus: () => context.overlays.refreshUpdateStatus(),
           watchUpdateProgress,
           canUpdate,
           canHoldUpdate,
@@ -660,6 +661,7 @@ export function renderApplicationShell(host: ShellViewHost) {
         .pageSessionKey=${host.activeSessionKey}
         .pageAgentId=${selectedAgentId}
         .pageRouteId=${activeRoute}
+        .pageRouteFailed=${host.routeState.routeFailed === true}
         .minimizeRequestId=${host.custodianMinimizeRequestId}
       ></openclaw-assistant-panel>
       ${

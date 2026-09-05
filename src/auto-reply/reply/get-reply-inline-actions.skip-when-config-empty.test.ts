@@ -10,6 +10,7 @@ import type { SkillCommandSpec } from "../../skills/types.js";
 import { getReplyPayloadMetadata, setReplyPayloadMetadata } from "../reply-payload.js";
 import type { TemplateContext } from "../templating.js";
 import { markCommandSessionMetadataChanged } from "./command-session-metadata.js";
+import { buildCommandContext } from "./commands-context.js";
 import { clearInlineDirectives } from "./get-reply-directives-utils.js";
 import { handleInlineActions } from "./get-reply-inline-actions.js";
 import { stripInlineStatus } from "./reply-inline.js";
@@ -1022,6 +1023,35 @@ describe("handleInlineActions", () => {
 
     expect(result).toMatchObject({ kind: "continue", cleanedBody: body });
     expect(ctx.Body).toBe(body);
+    expect(handleCommandsMock).not.toHaveBeenCalled();
+  });
+
+  it("preserves suppressed inline command text under a wildcard command allowlist", async () => {
+    const body = "Explain /help please";
+    const cfg = { commands: { allowFrom: { "*": ["*"] } } };
+    const ctx = buildTestCtx({
+      Body: body,
+      CommandBody: body,
+      CommandInterpretationSuppressed: true,
+    });
+    const command = buildCommandContext({
+      ctx,
+      cfg,
+      isGroup: false,
+      triggerBodyNormalized: ctx.commandText,
+      commandAuthorized: ctx.CommandAuthorized,
+    });
+
+    const result = await runTestInlineActions({
+      ctx,
+      typing: createTypingController(),
+      cleanedBody: ctx.agentText,
+      command,
+      overrides: { cfg, allowTextCommands: true },
+    });
+
+    expect(result).toMatchObject({ kind: "continue", cleanedBody: body });
+    expect(ctx.agentText).toBe(body);
     expect(handleCommandsMock).not.toHaveBeenCalled();
   });
 

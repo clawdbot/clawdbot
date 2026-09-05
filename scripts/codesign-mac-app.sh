@@ -441,6 +441,13 @@ if [ -f "$CUA_DRIVER" ]; then
   echo "Signing embedded CUA driver"; sign_plain_item "$CUA_DRIVER"
 fi
 
+while IFS= read -r -d '' helper_kind && IFS= read -r -d '' helper_file; do
+  [[ "$helper_kind" == "executable" ]] || continue
+  [[ "$helper_file" == "$APP_BUNDLE/Contents/Resources/cloudflared/"* ]] || continue
+  sign_plain_item "$helper_file"
+  codesign --verify --strict "$helper_file"
+done < "$NATIVE_INVENTORY"
+
 # Seal all native payloads before the enclosing app; npm packages can carry
 # standalone executables and addons below arbitrarily nested dependency roots.
 WORKER_ROOT="$APP_BUNDLE/Contents/Resources/node-worker"

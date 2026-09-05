@@ -313,7 +313,7 @@ export async function applyLegacyCronStoreRepair(params: {
           jobs: state.rawJobs as unknown as CronJob[],
         } as const;
         const migrationSource = state.legacyMigrationSource;
-        const assertSnapshotCurrent = (db: DatabaseSync) => {
+        const assertSnapshotCurrent = (db: DatabaseSync): undefined => {
           if (state.jobsFingerprint !== undefined) {
             assertCronJobsStoreUnchanged(db, state.storePath, state.jobsFingerprint);
           }

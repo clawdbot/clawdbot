@@ -185,9 +185,12 @@ const ASSET_RUNTIME_STEP_LABELS = [
   ...RUNTIME_FINALIZE_STEP_LABELS,
 ];
 const BUILD_METADATA_STEP_LABELS = ["write-build-info", "write-cli-startup-metadata"] as const;
-const FINAL_BUILD_ARTIFACTS_STEP_LABELS = [
+const SDK_DECLARATION_STEP_LABELS = [
   "write-plugin-sdk-entry-dts",
   "check-plugin-sdk-exports",
+] as const;
+const FINAL_BUILD_ARTIFACTS_STEP_LABELS = [
+  ...SDK_DECLARATION_STEP_LABELS,
   "ui:build",
   ...BUILD_METADATA_STEP_LABELS,
 ] as const;
@@ -201,15 +204,23 @@ const FULL_COMPILER_STEP_LABELS = [
   "tsdown-unified",
   "write-unified-entry-dts",
 ] as const;
-// Full and package builds cache declaration groups separately from the runtime graph.
-const FULL_BUILD_STEP_LABELS = CI_ARTIFACT_STEP_LABELS.flatMap((step) =>
+// Typed builds cache declaration groups separately from the runtime graph.
+const FULL_RUNTIME_STEP_LABELS = ASSET_RUNTIME_STEP_LABELS.flatMap((step) =>
   step === "tsdown" ? FULL_COMPILER_STEP_LABELS : [step],
 );
+const FULL_BUILD_STEP_LABELS = [...FULL_RUNTIME_STEP_LABELS, ...FINAL_BUILD_ARTIFACTS_STEP_LABELS];
 
 export const BUILD_ALL_PROFILES: Record<string, string[]> = {
   full: [...FULL_BUILD_STEP_LABELS],
   package: ["clean:dist", ...FULL_BUILD_STEP_LABELS],
   ciArtifacts: [...CI_ARTIFACT_STEP_LABELS],
+  // Smoke builds retain typed compilation and publication checks without the UI/metadata tail.
+  strictSmoke: [...FULL_RUNTIME_STEP_LABELS, ...SDK_DECLARATION_STEP_LABELS],
+  pluginSdkStrictSmoke: [
+    ...FULL_COMPILER_STEP_LABELS,
+    ...RUNTIME_STEP_LABELS,
+    ...SDK_DECLARATION_STEP_LABELS,
+  ],
   gatewayWatch: ["tsdown", ...RUNTIME_STEP_LABELS],
   qaRuntime: [...ASSET_RUNTIME_STEP_LABELS],
   sourcePerformance: [...ASSET_RUNTIME_STEP_LABELS, ...BUILD_METADATA_STEP_LABELS],
@@ -395,7 +406,9 @@ export function resolveBuildAllTsdownPlan(
   env: NodeJS.ProcessEnv;
   heapShortfall: ReturnType<typeof resolveTsdownBuildPlan>["heapShortfall"];
 } {
-  if (profile !== "full" && profile !== "package" && profile !== "ciArtifacts") {
+  if (
+    !["full", "package", "ciArtifacts", "strictSmoke", "pluginSdkStrictSmoke"].includes(profile)
+  ) {
     return { env, heapShortfall: null };
   }
   const plan = resolveTsdownBuildPlan({ ...params, env });

@@ -1,6 +1,8 @@
 // Text formatting helpers shared by command output.
 import * as terminalAnsi from "../../packages/terminal-core/src/ansi.js";
 
+const graphemeSegmenter = new Intl.Segmenter(undefined, { granularity: "grapheme" });
+
 /** Shortens text to maxLen code points, appending an ellipsis when truncated. */
 export const shortenText = (value: string, maxLen: number) => {
   if (maxLen <= 0) {
@@ -14,10 +16,8 @@ export const shortenText = (value: string, maxLen: number) => {
 export function formatTextCell(text: string, width: number): string {
   // Eight UTF-16 units per column allow ordinary accents/emoji; reserve width for padding.
   // Whole-cluster raw bounds also catch invisible runs and oversized single graphemes.
-  const graphemes = terminalAnsi.splitGraphemes(text);
-  let length = 0;
-  const end = graphemes.findIndex((grapheme) => (length += grapheme.length) > width * 7);
-  const bounded = end < 0 ? text : `${graphemes.slice(0, end).join("")}…`;
+  const overflow = graphemeSegmenter.segment(text).containing(width * 7);
+  const bounded = overflow ? `${text.slice(0, overflow.index)}…` : text;
   const fitted =
     terminalAnsi.visibleWidth(bounded) > width
       ? `${terminalAnsi.truncateToVisibleWidth(bounded, width - 1)}…`
