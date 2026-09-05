@@ -101,6 +101,8 @@ function resolveChatActionThreadKeyFragment(
   if (!threadParams || typeof threadParams !== "object") {
     return "";
   }
+  // SAFETY: the guard above narrows threadParams to a non-null object; the cast
+  // only adds optional property access for grammy's Other params shape.
   const threadId = (threadParams as { message_thread_id?: unknown }).message_thread_id;
   return typeof threadId === "number" ? `:${threadId}` : "";
 }
