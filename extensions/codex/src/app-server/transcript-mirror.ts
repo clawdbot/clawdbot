@@ -151,11 +151,16 @@ async function mirrorBestEffort(params: {
       idempotencyScope: `codex-app-server:${params.threadId}`,
       runId: params.params.runId,
       runMirrorIdentityPrefix: `${params.turnId}:`,
-      terminalAssistantOwner: {
-        mirrorIdentity: `${params.turnId}:assistant`,
-        runId: params.params.runId,
-        settlementWarning: params.settlementWarning,
-      },
+      // The outer run may continue a failed attempt. Only its eventual answer
+      // may own the final projection, otherwise the client sees two terminal rows.
+      terminalAssistantOwner:
+        params.params.deferTerminalLifecycle && params.result.terminal.kind === "failed"
+          ? undefined
+          : {
+              mirrorIdentity: `${params.turnId}:assistant`,
+              runId: params.params.runId,
+              settlementWarning: params.settlementWarning,
+            },
       prepareAssistantTranscriptMessage: params.params.prepareAssistantTranscriptMessage,
       config: params.params.config,
     });

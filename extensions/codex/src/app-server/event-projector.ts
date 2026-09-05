@@ -340,6 +340,17 @@ export class CodexAppServerEventProjector {
       case "error": {
         this.usageProjection.invalidateContext();
         if (params.willRetry === true) {
+          const rateLimited =
+            isJsonObject(params.error) && params.error.codexErrorInfo === "rateLimitExceeded";
+          this.emitAgentEvent({
+            stream: "run_status",
+            data: {
+              phase: "retrying",
+              message: rateLimited
+                ? "Rate limited. The provider is retrying."
+                : "Connection interrupted. The provider is retrying.",
+            },
+          });
           break;
         }
         const codexErrorInfo = isJsonObject(params.error) ? params.error.codexErrorInfo : undefined;
