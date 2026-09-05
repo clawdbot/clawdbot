@@ -51,7 +51,8 @@ struct SettingsViewSmokeTests {
                         #expect(values.contains(profile.name))
                         #expect(values.contains(profile.url.absoluteString))
                     } else {
-                        #expect(values.allSatisfy(\.isEmpty))
+                        let hasOnlyEmptyFields = values.allSatisfy(\.isEmpty)
+                        #expect(hasOnlyEmptyFields)
                     }
                     let cancel = try #require(try await settingsAccessibilityElements(sheet).first {
                         $0.accessibilityRole?() == .button &&
