@@ -27,7 +27,7 @@ class ReadOnlyTranscriptFixture extends LitElement {
           id: "schema-call",
           name: "exec",
           arguments: {
-            code: 'const schemas = await tools.describe({ names: ["example.search", "example.read", "example.describe"] });',
+            code: `const schemas=await tools.describe({names:["example.search"]});text(schemas);const marker="${"x".repeat(510)}";`,
             description: "Get live tool schemas",
           },
         },
@@ -113,13 +113,21 @@ describe.runIf(browserMode)("chat sidebar layout", () => {
         const row = body.closest<HTMLElement>(".chat-virtual-row")!;
         const narrow = bubble.getBoundingClientRect();
         const narrowToolWidth = body.getBoundingClientRect().width;
-        for (const width of [300, 600]) {
+        for (const width of [300, 400, 600, 700]) {
           container.style.width = `${width}px`;
           await new Promise(requestAnimationFrame);
-          const bounds = body.getBoundingClientRect();
           const clip = row.getBoundingClientRect();
-          expect(bounds.left).toBeGreaterThanOrEqual(clip.left);
-          expect(bounds.right).toBeLessThanOrEqual(clip.right);
+          for (const selector of [
+            ".chat-tool-msg-body",
+            ".chat-tool-msg-summary",
+            ".chat-tool-card__block-content",
+            ".chat-tool-card__outcome",
+          ]) {
+            const bounds = panel.querySelector(selector)!.getBoundingClientRect();
+            expect(bounds.left).toBeGreaterThanOrEqual(clip.left);
+            expect(bounds.right).toBeLessThanOrEqual(clip.right);
+          }
+          expect(body.scrollWidth).toBeLessThanOrEqual(body.clientWidth);
         }
         const wide = bubble.getBoundingClientRect();
         expect(wide.width).toBeGreaterThan(narrow.width + 150);

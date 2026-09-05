@@ -149,6 +149,10 @@
   display: block;
 }
 
+.chat-group.tool.chat-group--with-footer > .chat-group-messages {
+  max-width: var(--chat-message-column-max);
+}
+
 .chat-group.user .chat-group-footer {
   justify-content: flex-end;
 }
