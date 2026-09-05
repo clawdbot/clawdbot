@@ -134,6 +134,7 @@ final class GatewayConnectionController {
 
         self.updateFromDiscovery()
         self.observeDiscovery()
+        self.observeGatewayRegistration()
 
         if self.discoveryEnabled, self.localNetworkAccessRequested {
             self.discovery.start()
@@ -715,6 +716,10 @@ final class GatewayConnectionController {
             stableID: cfg.stableID,
             deviceAuthGatewayID: cfg.nodeOptions.deviceAuthGatewayID,
             allowStoredDeviceAuth: cfg.nodeOptions.allowStoredDeviceAuth)
+        // A replacement route can commit within the same connect generation while permissions are sampled.
+        guard appModel.gatewayAutoReconnectEnabled,
+              appModel.activeGatewayConnectConfig?.hasSameConnectionInputs(as: cfg) == true
+        else { return }
         let refreshedConfig = GatewayConnectConfig(
             url: cfg.url,
             stableID: cfg.stableID,
@@ -724,6 +729,20 @@ final class GatewayConnectionController {
             password: cfg.password,
             nodeOptions: nodeOptions)
         appModel.applyGatewayConnectConfig(refreshedConfig, expectedGeneration: generation)
+    }
+
+    private func observeGatewayRegistration() {
+        withObservationTracking {
+            _ = self.appModel?.locationAuthorizationSnapshot
+            // Startup and target-review resume may install options captured before authorization changed.
+            _ = self.appModel?.activeGatewayConnectConfig
+        } onChange: { [weak self] in
+            Task { @MainActor in
+                guard let self else { return }
+                self.observeGatewayRegistration()
+                await self.refreshActiveGatewayRegistrationFromSettingsAsync()
+            }
+        }
     }
 
     func clearPendingTrustPrompt() {

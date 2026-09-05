@@ -328,6 +328,71 @@ import Testing
         #expect(locationService.stopMonitoringCallCount == 1)
     }
 
+    @MainActor @Test(arguments: [CLAuthorizationStatus.notDetermined, .denied], [false, true])
+    func `location authorization refreshes registration without settings`(
+        initialStatus: CLAuthorizationStatus,
+        authorizationBeforeRegistration: Bool) async throws
+    {
+        let isolation = GatewayRegistryTestIsolation()
+        defer { isolation.restore() }
+        try await withUserDefaults(["location.enabledMode": "whileUsing", "gateway.autoconnect": false]) {
+            let locationService = MockLocationService(authorizationStatus: initialStatus)
+            let appModel = NodeAppModel(locationService: locationService)
+            defer { appModel.disconnectGateway() }
+            let controller = GatewayConnectionController(appModel: appModel, startDiscovery: false)
+            let options = await controller.makeConnectOptions(
+                stableID: "manual|127.0.0.1|1",
+                deviceAuthGatewayID: nil,
+                allowStoredDeviceAuth: false)
+            let config = try GatewayConnectConfig(
+                url: #require(URL(string: "ws://127.0.0.1:1")),
+                stableID: "manual|127.0.0.1|1",
+                tls: nil,
+                token: nil,
+                bootstrapToken: nil,
+                password: nil,
+                nodeOptions: options)
+            if authorizationBeforeRegistration {
+                // Startup and target-review resume can apply options captured before an asynchronous reset.
+                locationService.simulateAuthorizationChange(.authorizedWhenInUse)
+                _ = await controller.makeConnectOptions(stableID: config.stableID, deviceAuthGatewayID: nil)
+                #expect(appModel.activeGatewayConnectConfig == nil)
+            }
+            appModel.applyGatewayConnectConfig(config)
+            #expect(appModel.activeGatewayConnectConfig?.nodeOptions.permissions["location"] == false)
+
+            // The system callback must refresh the advertised permission even when no Settings view exists.
+            if !authorizationBeforeRegistration {
+                locationService.simulateAuthorizationChange(.authorizedWhenInUse)
+            }
+            let granted = await Self.waitForLocationRegistration(true, appModel: appModel)
+            try #require(granted)
+            #expect(appModel.activeGatewayConnectConfig?.stableID == config.stableID)
+            #expect(appModel.activeGatewayConnectConfig?.nodeOptions.allowStoredDeviceAuth == false)
+
+            locationService.simulateAuthorizationChange(.denied)
+            #expect(await Self.waitForLocationRegistration(false, appModel: appModel))
+            appModel.suspendGatewayForTargetReview()
+            locationService.simulateAuthorizationChange(.authorizedAlways)
+            await appModel.waitForGatewaySessionResetIfNeeded()
+            _ = await controller.makeConnectOptions(stableID: config.stableID, deviceAuthGatewayID: nil)
+            #expect(appModel.activeGatewayConnectConfig == nil)
+            #expect(!appModel.gatewayAutoReconnectEnabled)
+            withExtendedLifetime(controller) {}
+        }
+    }
+
+    @MainActor
+    private static func waitForLocationRegistration(_ granted: Bool, appModel: NodeAppModel) async -> Bool {
+        let deadline = ContinuousClock.now.advanced(by: .seconds(3))
+        while appModel.activeGatewayConnectConfig?.nodeOptions.permissions["location"] != granted,
+              ContinuousClock.now < deadline
+        {
+            await Task.yield()
+        }
+        return appModel.activeGatewayConnectConfig?.nodeOptions.permissions["location"] == granted
+    }
+
     @MainActor @Test func `node model publishes cached location authorization changes`() {
         let locationService = MockLocationService(
             authorizationStatus: .authorizedWhenInUse,
