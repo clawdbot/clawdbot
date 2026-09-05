@@ -1,11 +1,12 @@
 import { patchSessionEntryCore } from "../config/sessions/session-accessor.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
+import { ProjectCloneError } from "../projects/project-clone-runtime.js";
 import { materializeProjectClone } from "../projects/project-clone.js";
 import { getSessionRepositoryWorkspaceStore } from "../state/session-repository-workspaces.js";
-import { githubApiToken } from "./control-ui-github-api.js";
 import { loadGatewaySessionEntryReadOnly } from "./session-utils-store.js";
 import { prepareSessionWorktree } from "./session-worktree-preparation.js";
 import { withSessionRepositoryCheckpoint } from "./worker-environments/session-repository-checkpoints.js";
+import { prepareWorkerGitHubBinding } from "./worker-environments/worker-github-binding.js";
 import { applyStagedWorkerWorkspace } from "./worker-environments/workspace-reconcile-apply.js";
 
 /** Called only by an explicit Gateway move, after the source result is accepted. */
@@ -51,10 +52,30 @@ export async function materializeSessionRepositoryWorkspaceOnGateway(params: {
     }
   };
   assertCurrent();
+  const github = await prepareWorkerGitHubBinding({
+    sessionId: params.sessionId,
+    sessionKey: initial.canonicalKey,
+    agentId: params.agentId,
+    assertCurrent: () => {
+      assertCurrent();
+      return true;
+    },
+  });
+  // Optional launch binding absorbs unavailable auth, including a thrown owner
+  // assertion. A closed move must never proceed as an anonymous clone.
+  assertCurrent();
   const project = await materializeProjectClone(
     { cfg: params.cfg, gitUrl: repository.url, requiredCommit: repository.baseCommit },
-    { signal: params.signal, token: githubApiToken(process.env, params.cfg) },
-  );
+    { signal: params.signal, token: github?.token },
+  ).catch((error: unknown) => {
+    if (error instanceof ProjectCloneError && error.failure === "auth_required") {
+      throw new ProjectCloneError(
+        error.failure,
+        "GitHub could not authenticate this repository with the selected shared GitHub identity. Check its repository access or reconnect it in Settings, then retry the Gateway move.",
+      );
+    }
+    throw error;
+  });
   assertCurrent();
   const prepared = await prepareSessionWorktree({
     target: {

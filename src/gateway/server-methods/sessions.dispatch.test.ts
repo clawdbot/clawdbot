@@ -357,7 +357,7 @@ describe("sessions.dispatch", () => {
     );
   });
 
-  it("rejects sessions without their bound managed worktree", async () => {
+  it("rejects sessions without a bound worktree or repository workspace", async () => {
     mocks.resolveTarget.mockReturnValue(targetWithEntry({ sessionId }));
     const dispatch = vi.fn();
     const respond = await invoke(
@@ -373,7 +373,7 @@ describe("sessions.dispatch", () => {
       undefined,
       expect.objectContaining({
         code: ErrorCodes.INVALID_REQUEST,
-        message: expect.stringContaining("session-owned managed worktree"),
+        message: "sessions.dispatch requires a session-owned worktree or repository workspace",
       }),
     );
   });

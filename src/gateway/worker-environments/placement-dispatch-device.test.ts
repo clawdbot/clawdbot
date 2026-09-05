@@ -242,7 +242,7 @@ describe("device worker placement dispatch", () => {
     expect(workspaceTunnel?.syncWorkspace).toHaveBeenCalledWith(
       expect.objectContaining({
         sessionId: request.sessionId,
-        localPath: expect.any(String),
+        source: { kind: "local", path: "/gateway/workspace" },
         generation: expect.any(Number),
       }),
     );

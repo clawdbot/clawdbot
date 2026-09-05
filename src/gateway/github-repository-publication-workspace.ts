@@ -1,13 +1,15 @@
-import {
-  getSessionRepositoryWorkspaceStore,
-  type SessionRepositoryWorkspaceRecord,
-} from "../state/session-repository-workspaces.js";
+import type { SessionGitHubPublicationResult } from "../../packages/gateway-protocol/src/schema/session-github-publication.js";
+import { getSessionRepositoryWorkspaceStore } from "../state/session-repository-workspaces.js";
 import { resolveGitHubPublicationWorkspaceOwner } from "./github-publication-availability.js";
+import { projectGitHubPublicationResult } from "./github-publication-store.js";
 import {
   readGitHubRepositoryPublicationMetadata,
   type GitHubRepositoryPublicationSnapshot,
 } from "./github-repository-publication-snapshot.js";
-import type { RepositoryGitHubPublicationRow } from "./github-repository-publication-store.js";
+import {
+  failRepositoryGitHubPublicationPreparation,
+  type RepositoryGitHubPublicationRow,
+} from "./github-repository-publication-store.js";
 import { loadGatewaySessionEntryReadOnly } from "./session-utils.js";
 import { withSessionRepositoryCheckpoint } from "./worker-environments/session-repository-checkpoints.js";
 
@@ -60,7 +62,7 @@ export function assertReceiptOwner(row: RepositoryGitHubPublicationRow) {
 }
 
 export async function captureCheckpoint<T>(
-  workspace: SessionRepositoryWorkspaceRecord,
+  row: RepositoryGitHubPublicationRow,
   assertCurrent: () => void,
   use: (
     facts: Pick<
@@ -73,12 +75,14 @@ export async function captureCheckpoint<T>(
     >,
     prepared: PreparedRepositoryPublicationSnapshot,
   ) => Promise<T>,
-): Promise<T> {
+): Promise<T | SessionGitHubPublicationResult> {
+  const { workspace } = assertReceiptOwner(row);
   if (!workspace.checkpointRef) {
     throw new Error("GitHub publication is waiting for the first accepted repository checkpoint.");
   }
   const assertSelected = () => {
     assertCurrent();
+    assertReceiptOwner(row);
     const current = getSessionRepositoryWorkspaceStore().get(workspace.workspaceId);
     if (
       current?.revision !== workspace.revision ||
@@ -96,8 +100,12 @@ export async function captureCheckpoint<T>(
     async (payload) => {
       assertSelected();
       if (!payload.publicationStagingRoot || !payload.publicationDigest) {
-        throw new Error(
-          "GitHub publication is waiting for a Git-normalized repository checkpoint.",
+        return projectGitHubPublicationResult(
+          failRepositoryGitHubPublicationPreparation(
+            row,
+            "Save a new checkpoint and request publication again. If capture remains unavailable, review the repository's Git clean filters and transport configuration. Your session changes remain recoverable.",
+            assertSelected,
+          ),
         );
       }
       const { snapshot } = await readGitHubRepositoryPublicationMetadata(

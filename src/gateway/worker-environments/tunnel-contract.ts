@@ -89,7 +89,7 @@ export type WorkerLocalWorkspaceSyncRequest = {
   projectKey?: string;
 };
 
-export type WorkerRepositoryCheckpointPayload = {
+type WorkerRepositoryCheckpointPayload = {
   stagingRoot: string;
   baseManifestRaw: string;
   currentManifestRaw: string;
@@ -99,13 +99,13 @@ export type WorkerRepositoryCheckpointPayload = {
   publicationDigest?: string;
 };
 
-export type WorkerRepositoryCheckpointPreparation = {
+type WorkerRepositoryCheckpointPreparation = {
   verify(): Promise<void>;
   publish(): Promise<unknown>;
   discard(): Promise<void>;
 };
 
-export type WorkerRepositoryWorkspaceSource = {
+type WorkerRepositoryWorkspaceSource = {
   kind: "repository";
   url: string;
   ref?: string;

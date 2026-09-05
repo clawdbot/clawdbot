@@ -12,7 +12,6 @@ import {
   type RepositoryGitHubPublicationRow,
 } from "./github-repository-publication-store.js";
 import {
-  assertReceiptOwner,
   captureCheckpoint,
   resolveReceiptOwner,
   type PreparedRepositoryPublicationSnapshot,
@@ -73,14 +72,10 @@ export function createRepositoryGitHubPublicationRecovery(params: {
                 return;
               }
               if (!row.checkpoint_ref) {
-                return await captureCheckpoint(
-                  assertReceiptOwner(row).workspace,
-                  assertCurrent,
-                  async (facts, prepared) => {
-                    row = bindRepositoryGitHubPublicationCheckpoint(row, facts, assertCurrent);
-                    await params.execute(row, assertCurrent, prepared);
-                  },
-                );
+                return await captureCheckpoint(row, assertCurrent, async (facts, prepared) => {
+                  row = bindRepositoryGitHubPublicationCheckpoint(row, facts, assertCurrent);
+                  await params.execute(row, assertCurrent, prepared);
+                });
               }
               await params.execute(row, assertCurrent);
             },

@@ -12,8 +12,8 @@ import {
 import { syncSessionRepositoryWorkspace } from "./repository-workspace-startup.js";
 import { readSessionRepositoryCheckpoint } from "./session-repository-checkpoints.js";
 import type {
-  WorkerRepositoryCheckpointPreparation,
   WorkerTunnelHandle,
+  WorkerWorkspaceReconcileRequest,
   WorkerWorkspaceSyncResult,
 } from "./tunnel-contract.js";
 import { prepareWorkerGitHubBinding } from "./worker-github-binding.js";
@@ -110,9 +110,15 @@ async function fixture(runSetupScript = false) {
   const resume = vi.fn(async () => {});
   const quiesceWorkspace = vi.fn(async () => ({ assertActive, resume }));
   const verifyStable = vi.fn(async () => {});
-  const publish = vi.fn(async (prepared: WorkerRepositoryCheckpointPreparation) => {
-    await prepared.publish();
-  });
+  type RepositorySource = Extract<
+    WorkerWorkspaceReconcileRequest["source"],
+    { kind: "repository" }
+  >;
+  const publish = vi.fn(
+    async (prepared: Awaited<ReturnType<RepositorySource["prepareCheckpoint"]>>) => {
+      await prepared.publish();
+    },
+  );
   const reconcileWorkspace = vi.fn<WorkerTunnelHandle["reconcileWorkspace"]>(async (request) => {
     if (request.source.kind !== "repository") {
       throw new Error("Expected repository checkpoint");

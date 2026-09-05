@@ -3,7 +3,7 @@ import { GatewayRequestError } from "../../api/gateway.ts";
 import type { ApplicationContext } from "../../app/context.ts";
 
 /** fs.listDir uses INVALID_REQUEST for host filesystem errors; only stable errno markers prove stale input. */
-export function isMissingRestoredFolderError(error: unknown): boolean {
+function isMissingRestoredFolderError(error: unknown): boolean {
   return (
     error instanceof GatewayRequestError &&
     error.gatewayCode === "INVALID_REQUEST" &&

@@ -7,8 +7,8 @@ import { afterEach, describe, expect, it } from "vitest";
 import { useAutoCleanupTempDirTracker } from "../../test/helpers/temp-dir.js";
 import {
   REMOTE_GITHUB_PUBLICATION_SNAPSHOT_JS,
-  parseGitHubRepositoryPublicationSnapshot,
   readGitHubRepositoryPublicationBlob,
+  readGitHubRepositoryPublicationMetadata,
 } from "./github-repository-publication-snapshot.js";
 
 const temporary = useAutoCleanupTempDirTracker(afterEach);
@@ -61,10 +61,7 @@ describe("repository publication checkpoint capture", () => {
     const index = f.git("write-tree");
     const head = f.git("rev-parse", "HEAD");
     const digest = f.capture();
-    const snapshot = parseGitHubRepositoryPublicationSnapshot(
-      await fs.readFile(path.join(f.output, "snapshot.json"), "utf8"),
-      digest,
-    );
+    const { snapshot } = await readGitHubRepositoryPublicationMetadata(f.output, digest);
     expect(snapshot.baseCommit).toBe(f.base);
     expect(snapshot.entries.map((entry) => entry.path)).not.toContain(".gitattributes");
     expect(snapshot.entries).toEqual(
@@ -106,20 +103,23 @@ describe("repository publication checkpoint capture", () => {
     const f = await fixture();
     await fs.writeFile(path.join(f.cwd, "counter.txt"), "changed\n");
     const digest = f.capture();
-    const raw = await fs.readFile(path.join(f.output, "snapshot.json"), "utf8");
-    const snapshot = parseGitHubRepositoryPublicationSnapshot(raw, digest);
+    const { snapshot } = await readGitHubRepositoryPublicationMetadata(f.output, digest);
     const entry = snapshot.entries[0]!;
     await fs.writeFile(path.join(f.output, "blobs", entry.sha!), "different\n");
     await expect(readGitHubRepositoryPublicationBlob(f.output, entry.sha!)).rejects.toThrow(
       "changed",
     );
     const unsafe = JSON.stringify({ ...snapshot, entries: [{ ...entry, path: "../escape" }] });
-    expect(() =>
-      parseGitHubRepositoryPublicationSnapshot(
-        unsafe,
+    await fs.writeFile(path.join(f.output, "snapshot.json"), unsafe);
+    await expect(readGitHubRepositoryPublicationMetadata(f.output, digest)).rejects.toThrow(
+      "digest",
+    );
+    await expect(
+      readGitHubRepositoryPublicationMetadata(
+        f.output,
         "sha256:" + createHash("sha256").update(unsafe).digest("hex"),
       ),
-    ).toThrow("entry");
+    ).rejects.toThrow("entry");
     if (process.platform !== "win32") {
       await fs.rm(path.join(f.output, "blobs", entry.sha!));
       await fs.symlink(path.join(f.cwd, "counter.txt"), path.join(f.output, "blobs", entry.sha!));

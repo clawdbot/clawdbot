@@ -418,7 +418,7 @@ export function createRepositoryGitHubPublicationCoordinator(
         !candidate.checkpoint_ref &&
         (candidate.claim_id === null || matchesRepositoryGitHubPublicationClaim(candidate, claim)),
     )) {
-      await captureCheckpoint(assertReceiptOwner(row).workspace, assertCurrent, async (facts) => {
+      await captureCheckpoint(row, assertCurrent, async (facts) => {
         bindRepositoryGitHubPublicationCheckpoint(row, facts, assertCurrent);
       });
     }
@@ -491,14 +491,10 @@ export function createRepositoryGitHubPublicationCoordinator(
             assertReceiptOwner(row);
           };
           if (!row.checkpoint_ref) {
-            return await captureCheckpoint(
-              assertReceiptOwner(row).workspace,
-              assertCurrent,
-              async (facts, prepared) => {
-                row = bindRepositoryGitHubPublicationCheckpoint(row, facts, assertCurrent);
-                return await execute(row, assertCurrent, undefined, prepared);
-              },
-            );
+            return await captureCheckpoint(row, assertCurrent, async (facts, prepared) => {
+              row = bindRepositoryGitHubPublicationCheckpoint(row, facts, assertCurrent);
+              return await execute(row, assertCurrent, undefined, prepared);
+            });
           }
           return await execute(row, assertCurrent);
         },
@@ -551,30 +547,28 @@ export function createRepositoryGitHubPublicationCoordinator(
             identity,
             assertCurrent,
           );
-          return await captureCheckpoint(
-            initial.workspace,
+          const row = insertRepositoryGitHubPublication(
+            makeRow({
+              session: action,
+              workspace: initial.workspace,
+              request: input,
+              identity,
+              target,
+              action,
+              generation: selected.generation,
+            }),
             assertCurrent,
-            async (facts, prepared) => {
-              const row = {
-                ...makeRow({
-                  session: action,
-                  workspace: initial.workspace,
-                  request: input,
-                  identity,
-                  target,
-                  action,
-                  generation: selected.generation,
-                }),
-                ...facts,
-              };
-              row.request_digest = repositoryGitHubPublicationDigest(row);
-              return await execute(
-                insertRepositoryGitHubPublication(row, assertCurrent),
+          );
+          return await captureCheckpoint(
+            row,
+            assertCurrent,
+            async (facts, prepared) =>
+              await execute(
+                bindRepositoryGitHubPublicationCheckpoint(row, facts, assertCurrent),
                 assertCurrent,
                 action,
                 prepared,
-              );
-            },
+              ),
           );
         },
       );

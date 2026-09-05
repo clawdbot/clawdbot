@@ -3,6 +3,7 @@ import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 import { isRecord } from "@openclaw/normalization-core/record-coerce";
+import { createSubsystemLogger } from "../../logging/subsystem.js";
 import {
   getSessionRepositoryWorkspaceStore,
   type SessionRepositoryWorkspaceRecord,
@@ -12,6 +13,7 @@ import {
   readGitHubRepositoryPublicationBlob,
   readGitHubRepositoryPublicationMetadata,
 } from "../github-repository-publication-snapshot.js";
+import { boundedWorkerError } from "./worker-error.js";
 import {
   MAX_RECONCILIATION_TOTAL_BYTES,
   parseWorkerWorkspaceManifest,
@@ -42,6 +44,7 @@ export type SessionRepositoryCheckpointPayload = CheckpointSnapshot & {
 const digest = (raw: string) => `sha256:${createHash("sha256").update(raw).digest("hex")}`;
 const publicationRef = (ref: string) =>
   workerWorkspaceResultRef(`publication-${createHash("sha256").update(ref).digest("hex")}`);
+const workspaceLog = createSubsystemLogger("gateway/worker-workspace");
 
 function owner(params: CheckpointOwner) {
   const store = params.store ?? getSessionRepositoryWorkspaceStore();
@@ -272,9 +275,6 @@ export async function stageSessionRepositoryCheckpoint(
     current,
     baseManifestRef: params.baseManifestRef,
   });
-  if (Boolean(params.publicationStagingRoot) !== Boolean(params.publicationDigest)) {
-    throw new Error("Repository publication checkpoint is incomplete");
-  }
   const assertRevision = () => {
     params.assertCurrent();
     const latest = store.get(params.workspaceId);
@@ -299,23 +299,38 @@ export async function stageSessionRepositoryCheckpoint(
       root,
       stagedResultRef: candidateRef,
     });
-    if (params.publicationStagingRoot && params.publicationDigest) {
-      await stagePublication({
-        root,
-        candidateRef: companionCandidate,
-        publicationStagingRoot: params.publicationStagingRoot,
-        publicationDigest: params.publicationDigest,
-        currentManifestRef: params.currentManifestRef,
-        baseCommit,
-      });
+    let companionId: string | undefined;
+    if (params.publicationStagingRoot || params.publicationDigest) {
+      try {
+        if (!params.publicationStagingRoot || !params.publicationDigest) {
+          throw new Error("Repository publication checkpoint is incomplete");
+        }
+        await stagePublication({
+          root,
+          candidateRef: companionCandidate,
+          publicationStagingRoot: params.publicationStagingRoot,
+          publicationDigest: params.publicationDigest,
+          currentManifestRef: params.currentManifestRef,
+          baseCommit,
+        });
+        companionId = await requireWorkspaceResultGit(root, [
+          "rev-parse",
+          `${companionCandidate}^{commit}`,
+        ]);
+      } catch (error) {
+        // A rejected publication payload cannot discard independently validated
+        // recovery bytes. Remove only its candidate, then recheck live authority.
+        await deleteStagedWorkerWorkspaceResult({ root, stagedResultRef: companionCandidate });
+        assertRevision();
+        workspaceLog.warn(
+          `Repository publication checkpoint unavailable: ${boundedWorkerError(error)}`,
+        );
+      }
     }
     const objectId = await requireWorkspaceResultGit(root, [
       "rev-parse",
       `${candidateRef}^{commit}`,
     ]);
-    const companionId = params.publicationStagingRoot
-      ? await requireWorkspaceResultGit(root, ["rev-parse", `${companionCandidate}^{commit}`])
-      : undefined;
     const verify = async () => {
       if (
         (await requireWorkspaceResultGit(root, ["rev-parse", `${candidateRef}^{commit}`])) !==

@@ -253,6 +253,41 @@ export function bindRepositoryGitHubPublicationCheckpoint(
   );
 }
 
+export function failRepositoryGitHubPublicationPreparation(
+  row: RepositoryGitHubPublicationRow,
+  nextAction: string,
+  assertCurrent: () => void,
+): RepositoryGitHubPublicationRow {
+  return runOpenClawStateWriteTransaction(
+    ({ db }) => {
+      assertCurrent();
+      const updated = executeSqliteQueryTakeFirstSync(
+        db,
+        query(db)
+          .updateTable(table)
+          .set({
+            status: "failed",
+            error_code: "unavailable",
+            next_action: nextAction,
+            updated_at_ms: Date.now(),
+          })
+          .where("request_id", "=", row.request_id)
+          .where("request_digest", "=", row.request_digest)
+          .where("status", "=", "requested")
+          .where("checkpoint_ref", "is", null)
+          .where("execution_id", "is", null)
+          .returningAll(),
+      );
+      if (!updated) {
+        throw new Error("GitHub publication preparation owner changed.");
+      }
+      return checked(updated);
+    },
+    undefined,
+    { operationLabel: "github-repository-publication.unavailable" },
+  );
+}
+
 export function claimRepositoryGitHubPublication(
   row: RepositoryGitHubPublicationRow,
   instanceId: string,

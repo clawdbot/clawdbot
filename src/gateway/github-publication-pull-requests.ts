@@ -14,7 +14,7 @@ type GitHubPublicationPullRequest = {
   baseRef: string;
 };
 
-export function githubPublicationPullRequestLookupArgs(params: {
+function githubPublicationPullRequestLookupArgs(params: {
   repository: string;
   owner: string;
   branch: string;
@@ -54,7 +54,7 @@ export function githubPublicationCreatePullRequestArgs(repository: string): stri
 }
 
 /** Parses the complete authenticated PR lookup; one malformed candidate invalidates the response. */
-export function parseGitHubPublicationPullRequests(raw: string): GitHubPublicationPullRequest[] {
+function parseGitHubPublicationPullRequests(raw: string): GitHubPublicationPullRequest[] {
   let parsed: unknown;
   try {
     parsed = JSON.parse(raw);
@@ -91,7 +91,7 @@ export function parseGitHubPublicationPullRequests(raw: string): GitHubPublicati
   });
 }
 
-export function resolveGitHubPublicationPullRequest(
+function resolveGitHubPublicationPullRequest(
   candidates: readonly GitHubPublicationPullRequest[],
   params: {
     accountId: number;

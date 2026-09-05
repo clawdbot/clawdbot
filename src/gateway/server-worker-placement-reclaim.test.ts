@@ -154,7 +154,11 @@ async function scenario(
       async (...args: Parameters<typeof originalStartTunnel>) => {
         const tunnel = await originalStartTunnel(...args);
         const originalReconcile = tunnel.reconcileWorkspace.bind(tunnel);
-        tunnel.reconcileWorkspace = vi.fn(async (request) => {
+        tunnel.reconcileWorkspace = vi.fn<typeof originalReconcile>(async (request) => {
+          if (request.source.kind !== "local" || !request.source.stagedResult) {
+            throw new Error("Expected a staged local workspace reclaim");
+          }
+          const { journal, stagedResult } = request.source;
           const result = await originalReconcile(request);
           const raw = JSON.stringify({ version: 1, baseCommit: null, entries: [] });
           const ref = `sha256:${createHash("sha256").update(raw).digest("hex")}`;
@@ -163,14 +167,14 @@ async function scenario(
           await workerWorkspaceResultStaging.stageWorkerWorkspaceResult({
             root: worktreePath,
             stagingRoot: payloadRoot,
-            stagedResultRef: request.stagedResult!.ref,
+            stagedResultRef: stagedResult.ref,
             baseManifestRef: ref,
             currentManifestRef: ref,
             baseManifestRaw: raw,
             currentManifestRaw: raw,
           });
-          request.stagedResult!.record(request.stagedResult!.ref);
-          request.journal.commit(ref);
+          stagedResult.record(stagedResult.ref);
+          journal.commit(ref);
 
           return { ...result, manifestRef: ref, changed: false };
         });

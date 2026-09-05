@@ -15,7 +15,7 @@ import {
 import { assertWorkspaceMatchesManifest } from "./workspace-reconcile.js";
 import { workerWorkspaceTransferPaths } from "./workspace-result-staging.js";
 
-export const MAX_UPLOAD_BYTES =
+const MAX_UPLOAD_BYTES =
   MAX_WORKSPACE_MANIFEST_BYTES * 2 +
   MAX_RECONCILIATION_TOTAL_BYTES +
   MAX_RECONCILIATION_ENTRIES * 8 +
@@ -30,7 +30,7 @@ export function isNodeWorkspaceTransferLimitError(
   return error instanceof NodeWorkspaceTransferLimitError;
 }
 
-export class NodeWorkspaceTransferInvalidError extends Error {
+class NodeWorkspaceTransferInvalidError extends Error {
   readonly code = "workspace-transfer-invalid";
 
   constructor(
@@ -48,7 +48,7 @@ export function nodeWorkspaceTransferInvalidReason(
   return error instanceof NodeWorkspaceTransferInvalidError ? error.reason : undefined;
 }
 
-export class RequestByteReader {
+class RequestByteReader {
   readonly #iterator: AsyncIterator<unknown>;
   readonly #signal: AbortSignal;
   readonly #assertCurrent: () => void;
@@ -124,7 +124,7 @@ export class RequestByteReader {
   }
 }
 
-export async function streamUploadFile(params: {
+async function streamUploadFile(params: {
   reader: RequestByteReader;
   handle: FileHandle;
   entry: Extract<WorkerWorkspaceManifestEntry, { type: "file" }>;

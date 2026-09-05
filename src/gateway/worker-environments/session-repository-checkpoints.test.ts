@@ -230,6 +230,47 @@ it("binds normalized publication bytes to the checkpoint and forks into an indep
   );
 });
 
+it("accepts raw recovery files when a publication blob fails validation", async () => {
+  const { root, remote, store, workspace, stage } = await fixture();
+  await fs.writeFile(path.join(remote, "edit.txt"), "recoverable change\n");
+  const publicationStagingRoot = path.join(root, "rejected-publication");
+  await fs.mkdir(path.join(publicationStagingRoot, "blobs"), { recursive: true });
+  const sha = "b".repeat(40);
+  await fs.writeFile(path.join(publicationStagingRoot, "blobs", sha), "wrong Git blob content\n");
+  const metadata = JSON.stringify({
+    version: 1,
+    baseCommit,
+    baseTree: "c".repeat(40),
+    workspaceTree: "d".repeat(40),
+    entries: [{ path: "edit.txt", mode: "100644", sha }],
+  });
+  await fs.writeFile(path.join(publicationStagingRoot, "snapshot.json"), metadata);
+  const prepared = await stage("turn-rejected-publication", {
+    publicationStagingRoot,
+    publicationDigest: hash(metadata),
+  });
+  await prepared.verify();
+  const accepted = await prepared.publish();
+  expect(accepted.checkpointRef).toBe(prepared.checkpointRef);
+  await withSessionRepositoryCheckpoint(
+    { store, workspaceId: workspace.workspaceId, includePublication: true },
+    async (snapshot) => {
+      expect(await fs.readFile(path.join(snapshot.stagingRoot, "edit.txt"), "utf8")).toBe(
+        "recoverable change\n",
+      );
+      expect(snapshot.publicationStagingRoot).toBeUndefined();
+      expect(snapshot.publicationDigest).toBeUndefined();
+    },
+  );
+  expect(
+    await requireWorkspaceResultGit(store.artifactPath(workspace.workspaceId), [
+      "for-each-ref",
+      "--format=%(refname)",
+      "refs/openclaw/worker-result-candidates/",
+    ]),
+  ).toBe("");
+});
+
 it("rejects mismatched transferred bytes and cannot replace an immutable checkpoint identity", async () => {
   const { remote, store, workspace, stage } = await fixture();
   await fs.writeFile(path.join(remote, "edit.txt"), "first\n");

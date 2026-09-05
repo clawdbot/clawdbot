@@ -1,5 +1,6 @@
 import { createHash } from "node:crypto";
 import fsp from "node:fs/promises";
+import { createSubsystemLogger } from "../../logging/subsystem.js";
 import type { NodeWorkerWorkspaceExecResult } from "../../worker/node-workspace-protocol.js";
 import { NODE_WORKSPACE_EMPTY_MANIFEST_REF } from "../../worker/node-workspace-transfer-protocol.js";
 import { createNodeWorkerRepositoryPreparation } from "./node-worker-repository-preparation.js";
@@ -15,6 +16,7 @@ import type {
   WorkerWorkspaceCommand,
   WorkerWorkspaceTunnelHandle,
 } from "./tunnel-contract.js";
+import { boundedWorkerError } from "./worker-error.js";
 import { runInstrumentedWorkspaceReconcile } from "./workspace-finalize.js";
 import { workerProjectSeedKey } from "./workspace-git-base.js";
 import {
@@ -39,6 +41,8 @@ import {
   workerWorkspaceResultStaging,
   workerWorkspaceTransferPaths,
 } from "./workspace-result-staging.js";
+
+const workspaceLog = createSubsystemLogger("gateway/worker-workspace");
 
 export type NodeWorkerWorkspaceBinding = {
   source:
@@ -171,41 +175,57 @@ export function createNodeWorkerWorkspaceActions(params: {
         if (!uploaded.base.baseCommit) {
           throw new Error("Repository checkpoint has no pinned Git base");
         }
-        const publicationToken = params.workspaceTransfer.prepareUpload(
-          params.environmentId,
-          NODE_WORKSPACE_EMPTY_MANIFEST_REF,
-        );
+        let publicationToken: string | undefined;
         let publication: ReturnType<typeof params.workspaceTransfer.takeUpload> | undefined;
+        let publicationDigest: string | undefined;
         try {
-          const captured = await exec({
-            argv: ["openclaw-internal-workspace-transfer"],
-            transfer: {
-              direction: "upload",
-              token: publicationToken,
-              baseManifestRef: NODE_WORKSPACE_EMPTY_MANIFEST_REF,
-              publicationBaseCommit: uploaded.base.baseCommit,
-            },
-            timeoutMs: 10 * 60_000,
-            transportRetry: "never",
-          });
-          if (captured.code !== 0 || captured.termination !== "exit") {
-            throw new Error("Repository publication capture failed");
+          try {
+            publicationToken = params.workspaceTransfer.prepareUpload(
+              params.environmentId,
+              NODE_WORKSPACE_EMPTY_MANIFEST_REF,
+            );
+            const captured = await exec({
+              argv: ["openclaw-internal-workspace-transfer"],
+              transfer: {
+                direction: "upload",
+                token: publicationToken,
+                baseManifestRef: NODE_WORKSPACE_EMPTY_MANIFEST_REF,
+                publicationBaseCommit: uploaded.base.baseCommit,
+              },
+              timeoutMs: 10 * 60_000,
+              transportRetry: "never",
+            });
+            if (captured.code !== 0 || captured.termination !== "exit") {
+              throw new Error("Repository publication capture failed");
+            }
+            publication = params.workspaceTransfer.takeUpload(
+              params.environmentId,
+              NODE_WORKSPACE_EMPTY_MANIFEST_REF,
+            );
+            const snapshot = publication.current.entries.find(
+              (entry) => entry.path === "snapshot.json",
+            );
+            if (snapshot?.type !== "file") {
+              throw new Error("Repository publication snapshot is missing");
+            }
+            publicationDigest = `sha256:${snapshot.sha256}`;
+          } catch (error) {
+            params.ownerSignal.throwIfAborted();
+            if (!params.isOwnerCurrent()) {
+              throw error;
+            }
+            workspaceLog.warn(
+              `Repository publication capture unavailable: ${boundedWorkerError(error)}`,
+            );
           }
-          publication = params.workspaceTransfer.takeUpload(
-            params.environmentId,
-            NODE_WORKSPACE_EMPTY_MANIFEST_REF,
-          );
-          const snapshot = publication.current.entries.find(
-            (entry) => entry.path === "snapshot.json",
-          );
-          if (snapshot?.type !== "file") {
-            throw new Error("Repository publication snapshot is missing");
-          }
+          // Publication restrictions never own recovery acceptance. Its remote
+          // stability, live owner and final quiescence fences still run below.
           await verifyStable();
           const prepared = await request.source.prepareCheckpoint({
             stagingRoot: uploaded.stagingRoot,
-            publicationStagingRoot: publication.stagingRoot,
-            publicationDigest: `sha256:${snapshot.sha256}`,
+            ...(publication && publicationDigest
+              ? { publicationStagingRoot: publication.stagingRoot, publicationDigest }
+              : {}),
             baseManifestRaw: uploaded.baseRaw,
             currentManifestRaw: uploaded.currentRaw,
             baseManifestRef: uploaded.baseManifestRef,
@@ -222,7 +242,9 @@ export function createNodeWorkerWorkspaceActions(params: {
             discardPreparedStagedResult: () => prepared.discard(),
           };
         } finally {
-          params.workspaceTransfer.revoke(params.environmentId, publicationToken);
+          if (publicationToken) {
+            params.workspaceTransfer.revoke(params.environmentId, publicationToken);
+          }
           if (publication) {
             await fsp.rm(publication.stagingRoot, { recursive: true, force: true });
           }

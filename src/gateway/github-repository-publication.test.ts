@@ -1,6 +1,3 @@
-import { createHash } from "node:crypto";
-import fs from "node:fs/promises";
-import path from "node:path";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { createDeferredCore } from "../shared/deferred.js";
 import { deletePersonalGitHubSessionReceipts } from "../state/github-personal-publication-lifecycle.js";
@@ -14,11 +11,9 @@ import {
 import {
   SESSION_ID,
   SESSION_KEY,
-  commandResult,
   createTestGitHubPublicationCoordinator,
   githubPublicationTestMocks,
   installGitHubPublicationTestHarness,
-  root,
 } from "./github-publication.test-support.js";
 import {
   claimRepositoryGitHubPublication,
@@ -26,301 +21,24 @@ import {
   readRepositoryGitHubPublication,
 } from "./github-repository-publication-store.js";
 import {
+  createRepositoryPublicationFixture,
+  repositoryPublicationTestUrl as url,
+} from "./github-repository-publication.test-support.js";
+import {
   REQUEST,
   seedActivePlacement,
 } from "./worker-environments/placement-dispatch-test-fixtures.js";
-import { createWorkerSessionPlacementStore } from "./worker-environments/placement-store.js";
-import type { SessionRepositoryCheckpointPayload } from "./worker-environments/session-repository-checkpoints.js";
 
 const mocks = githubPublicationTestMocks();
 const checkpoint = vi.hoisted(() => vi.fn());
 vi.mock("./worker-environments/session-repository-checkpoints.js", () => ({
   withSessionRepositoryCheckpoint: (...args: unknown[]) => checkpoint(...args),
 }));
-const baseCommit = "a".repeat(40);
-const baseTree = "b".repeat(40);
-const url = "https://github.com/owner/repository/pull/1";
-
-async function repositoryFixture(
-  requestedRef?: string,
-  session = { sessionId: SESSION_ID, sessionKey: SESSION_KEY },
+function repositoryFixture(
+  requestedRef?: Parameters<typeof createRepositoryPublicationFixture>[1],
+  session?: Parameters<typeof createRepositoryPublicationFixture>[2],
 ) {
-  const store = getSessionRepositoryWorkspaceStore();
-  let currentSessionId = session.sessionId;
-  let archivedAt: number | undefined;
-  let workspace = store.create({
-    agentId: "main",
-    sessionKey: session.sessionKey,
-    url: "https://github.com/owner/repository.git",
-    requestedRef,
-    assertCurrent: () => {},
-  });
-  workspace = store.bindBase({
-    workspaceId: workspace.workspaceId,
-    expectedRevision: workspace.revision,
-    baseCommit,
-    baseManifestHash: "sha256:" + "1".repeat(64),
-    assertCurrent: () => {},
-  });
-  const original = mocks.loadSession.getMockImplementation()!;
-  mocks.loadSession.mockImplementation((key: string) => {
-    const loaded = original(key);
-    if (key !== session.sessionKey) {
-      return loaded;
-    }
-    return {
-      ...loaded,
-      entry: {
-        sessionId: currentSessionId,
-        repositoryWorkspaceId: workspace.workspaceId,
-        archivedAt,
-      },
-    };
-  });
-  const payloads = new Map<string, { publicationStagingRoot: string; publicationDigest: string }>();
-  const trees = new Map<string, string>();
-  const capture = async (content: string | null, suffix: string) => {
-    const bytes = Buffer.from(content ?? "");
-    const sha = createHash("sha1")
-      .update("blob " + bytes.length + "\0")
-      .update(bytes)
-      .digest("hex");
-    const workspaceTree =
-      content === null
-        ? baseTree
-        : createHash("sha1")
-            .update("tree-fixture:" + sha)
-            .digest("hex");
-    const publicationStagingRoot = path.join(root, workspace.workspaceId, "checkpoint-" + suffix);
-    await fs.mkdir(path.join(publicationStagingRoot, "blobs"), { recursive: true });
-    await fs.writeFile(path.join(publicationStagingRoot, "blobs", sha), bytes);
-    const raw = JSON.stringify({
-      version: 1,
-      baseCommit,
-      baseTree,
-      workspaceTree,
-      entries: content === null ? [] : [{ path: "counter.txt", mode: "100644", sha }],
-    });
-    await fs.writeFile(path.join(publicationStagingRoot, "snapshot.json"), raw);
-    const publicationDigest = "sha256:" + createHash("sha256").update(raw).digest("hex");
-    const ref = "refs/openclaw/worker-results/" + suffix;
-    payloads.set(ref, { publicationStagingRoot, publicationDigest });
-    trees.set(sha, workspaceTree);
-    workspace = store.acceptCheckpoint({
-      workspaceId: workspace.workspaceId,
-      expectedRevision: workspace.revision,
-      checkpointRef: ref,
-      manifestHash: "sha256:" + createHash("sha256").update(suffix).digest("hex"),
-      assertCurrent: () => {},
-    });
-    return { ref, sha, workspaceTree };
-  };
-  const first = await capture("accepted first\n", "first");
-  checkpoint
-    .mockReset()
-    .mockImplementation(
-      async (
-        request: { workspaceId: string; checkpointRef: string; includePublication?: boolean },
-        use: (payload: Partial<SessionRepositoryCheckpointPayload>) => Promise<unknown>,
-      ) => {
-        expect(request.workspaceId).toBe(workspace.workspaceId);
-        expect(request.includePublication).toBe(true);
-        const payload = payloads.get(request.checkpointRef);
-        if (!payload) {
-          throw new Error("Unknown checkpoint ref");
-        }
-        return await use(payload);
-      },
-    );
-  const runtime = {
-    head: null as string | null,
-    pr: null as {
-      url: string;
-      userId: number;
-      state: string;
-      body: string;
-      headSha: string;
-      headRef: string;
-      baseRef: string;
-    } | null,
-    accountId: 42,
-    interruptPush: false,
-    closePullRequest: false,
-    changeHeadDuringPush: false,
-    commonHistory: true,
-    baseHead: baseCommit,
-    baseHeadTree: baseTree,
-    mergeBase: baseCommit,
-    mergeBaseTree: baseTree,
-    afterPush: () => {},
-    afterHeadObservation: () => {},
-    uploaded: new Map<string, Buffer>(),
-    effects: [] as string[],
-  };
-  const commits = new Map<
-    string,
-    { sha: string; tree: { sha: string }; parents: Array<{ sha: string }>; message: string }
-  >();
-  const casRequests: Array<{ beforeOid: string; afterOid: string; force: boolean }> = [];
-  mocks.runCommand.mockImplementation(async (args: string[], options: { input?: string } = {}) => {
-    // The whole broker path must work with no Git repository on the Gateway.
-    if (args[0] !== "gh") {
-      throw new Error("Publication attempted a Gateway Git command");
-    }
-    const endpoint =
-      args.find((arg) => arg.startsWith("repos/")) ?? (args.includes("graphql") ? "graphql" : "");
-    const body = options.input ? JSON.parse(options.input) : undefined;
-    if (endpoint === "repos/owner/repository") {
-      return commandResult(
-        JSON.stringify({ fork: false, default_branch: "main", node_id: "repository-node" }),
-      );
-    }
-    if (endpoint.endsWith("/git/commits/" + baseCommit)) {
-      return commandResult(JSON.stringify({ sha: baseCommit, tree: { sha: baseTree } }));
-    }
-    if (endpoint.endsWith("/git/commits/" + runtime.baseHead)) {
-      return commandResult(
-        JSON.stringify({ sha: runtime.baseHead, tree: { sha: runtime.baseHeadTree } }),
-      );
-    }
-    if (endpoint.endsWith("/git/commits/" + runtime.mergeBase)) {
-      return commandResult(
-        JSON.stringify({ sha: runtime.mergeBase, tree: { sha: runtime.mergeBaseTree } }),
-      );
-    }
-    if (endpoint.includes("/git/commits/")) {
-      return commandResult(JSON.stringify(commits.get(endpoint.split("/").at(-1)!)));
-    }
-    if (
-      endpoint.includes("/git/matching-refs/") &&
-      decodeURIComponent(endpoint.split("/git/matching-refs/heads/")[1]!) !== workspace.branch
-    ) {
-      return commandResult(
-        JSON.stringify(
-          requestedRef === "topic"
-            ? [{ ref: "refs/heads/topic", object: { sha: baseCommit } }]
-            : [],
-        ),
-      );
-    }
-    if (endpoint.includes("/git/matching-refs/")) {
-      const result = commandResult(
-        JSON.stringify(
-          runtime.head
-            ? [{ ref: "refs/heads/" + workspace.branch, object: { sha: runtime.head } }]
-            : [],
-        ),
-      );
-      runtime.afterHeadObservation();
-      return result;
-    }
-    if (endpoint.includes("/git/ref/heads/")) {
-      return commandResult(
-        JSON.stringify({
-          ref: "refs/heads/" + decodeURIComponent(endpoint.split("/git/ref/heads/")[1]!),
-          object: { sha: runtime.baseHead },
-        }),
-      );
-    }
-    if (endpoint.includes("/compare/")) {
-      expect(endpoint).toContain("/compare/" + baseCommit + "..." + runtime.baseHead);
-      return commandResult(
-        JSON.stringify({ sha: runtime.commonHistory ? runtime.mergeBase : null }),
-      );
-    }
-    if (endpoint.endsWith("/git/blobs")) {
-      expect(body.encoding).toBe("base64");
-      const bytes = Buffer.from(body.content, "base64");
-      const sha = createHash("sha1")
-        .update("blob " + bytes.length + "\0")
-        .update(bytes)
-        .digest("hex");
-      runtime.uploaded.set(sha, bytes);
-      return commandResult(JSON.stringify({ sha }));
-    }
-    if (endpoint.endsWith("/git/trees")) {
-      expect(body.base_tree).toBe(baseTree);
-      expect(body.tree).toHaveLength(1);
-      expect(body.tree[0]).toMatchObject({ path: "counter.txt", mode: "100644", type: "blob" });
-      return commandResult(JSON.stringify({ sha: trees.get(body.tree[0].sha) }));
-    }
-    if (endpoint.endsWith("/git/commits")) {
-      expect(body.parents).toHaveLength(1);
-      expect(body.parents[0] === baseCommit || commits.has(body.parents[0])).toBe(true);
-      expect(body.message).toContain("OpenClaw-Publication:");
-      const sha = createHash("sha1").update(JSON.stringify(body)).digest("hex");
-      const commit = {
-        sha,
-        tree: { sha: body.tree },
-        parents: body.parents.map((parentSha: string) => ({ sha: parentSha })),
-        message: body.message,
-      };
-      commits.set(sha, commit);
-      return commandResult(JSON.stringify(commit));
-    }
-    if (endpoint === "graphql") {
-      const update = body.variables.input.refUpdates[0];
-      casRequests.push(update);
-      expect(update.force).toBe(false);
-      expect(body.variables.input.repositoryId).toBe("repository-node");
-      expect(update.name).toBe("refs/heads/" + workspace.branch);
-      if (runtime.changeHeadDuringPush) {
-        runtime.head = "f".repeat(40);
-      }
-      if (update.beforeOid !== (runtime.head ?? "0".repeat(40))) {
-        return commandResult(JSON.stringify({ errors: [{ message: "Ref lease failed" }] }), 1);
-      }
-      runtime.head = update.afterOid;
-      if (runtime.pr) {
-        runtime.pr.headSha = runtime.head!;
-      }
-      runtime.effects.push("push");
-      runtime.afterPush();
-      if (runtime.interruptPush) {
-        runtime.interruptPush = false;
-        throw new Error("Synthetic lost ref response");
-      }
-      return commandResult(
-        JSON.stringify({
-          data: { updateRefs: { clientMutationId: body.variables.input.clientMutationId } },
-        }),
-      );
-    }
-    if (endpoint.endsWith("/pulls") && args.includes("state=all")) {
-      return commandResult(JSON.stringify(runtime.pr ? [runtime.pr] : []));
-    }
-    if (endpoint.endsWith("/pulls") && args.includes("POST")) {
-      runtime.effects.push("pull_request");
-      runtime.pr = {
-        url,
-        userId: runtime.accountId,
-        state: runtime.closePullRequest ? "closed" : "open",
-        body: body.body,
-        headSha: runtime.head!,
-        headRef: workspace.branch,
-        baseRef: body.base,
-      };
-      return commandResult(JSON.stringify({ html_url: url }), runtime.closePullRequest ? 1 : 0);
-    }
-    throw new Error("Unexpected GitHub endpoint " + endpoint);
-  });
-  const placements = createWorkerSessionPlacementStore({ database: openOpenClawStateDatabase() });
-  return {
-    runtime,
-    capture,
-    first,
-    casRequests,
-    workspace,
-    placements,
-    closeSession: (kind: "archive" | "reset") => {
-      if (kind === "archive") {
-        archivedAt = Date.now();
-      } else {
-        currentSessionId = "reset-" + session.sessionId;
-      }
-    },
-    coordinator: createTestGitHubPublicationCoordinator({ placements }),
-  };
+  return createRepositoryPublicationFixture(checkpoint, requestedRef, session);
 }
 
 describe("repository checkpoint GitHub publication", () => {
@@ -338,6 +56,85 @@ describe("repository checkpoint GitHub publication", () => {
     expect(f.runtime.effects).toEqual(["push", "pull_request"]);
     expect(mocks.findWorktree).not.toHaveBeenCalled();
     expect(mocks.resolveRepository).not.toHaveBeenCalled();
+  });
+
+  it.each(["shared", "personal"] as const)(
+    "records unavailable %s publication without losing its accepted recovery checkpoint",
+    async (source) => {
+      const f = await repositoryFixture();
+      const retained = getSessionRepositoryWorkspaceStore().get(f.workspace.workspaceId);
+      checkpoint.mockImplementation(async (_request, use) => await use({}));
+      const personal = source === "personal" ? await createPersonalPublicationFixture() : undefined;
+      if (personal) {
+        f.runtime.accountId = personalPublicationAccount.accountId;
+      }
+      const coordinator = personal?.coordinator ?? f.coordinator;
+      const request = () =>
+        personal
+          ? coordinator.requestPersonalForSession(
+              {
+                sessionKey: SESSION_KEY,
+                idempotencyKey: "no-publication-snapshot",
+                selection: {
+                  source: "personal",
+                  generation: personal.generation,
+                  account: personalPublicationAccount,
+                },
+              },
+              personal.action,
+            )
+          : coordinator.requestForSession({
+              agentId: "main",
+              sessionKey: SESSION_KEY,
+              idempotencyKey: "no-publication-snapshot",
+            });
+      const result = await request();
+      expect(result).toMatchObject({
+        status: "failed",
+        code: "unavailable",
+        nextAction: expect.stringContaining("Git clean filters"),
+      });
+      expect(readRepositoryGitHubPublication(result.requestId)).toMatchObject({
+        status: "failed",
+        error_code: "unavailable",
+        checkpoint_ref: null,
+        last_effect: null,
+        owner_profile_id: personal?.owner ?? null,
+      });
+      expect(getSessionRepositoryWorkspaceStore().get(f.workspace.workspaceId)).toEqual(retained);
+      expect(await request()).toEqual(result);
+      await coordinator.resumeSessionRequests();
+      expect(checkpoint).toHaveBeenCalledOnce();
+      expect(coordinator.listUnreportedResults()).toEqual([
+        expect.objectContaining({
+          result: expect.objectContaining({
+            requestId: result.requestId,
+            status: "failed",
+            code: "unavailable",
+          }),
+        }),
+      ]);
+      expect(f.runtime.effects).toEqual([]);
+    },
+  );
+
+  it("cannot record publication unavailability after its accepted checkpoint changes", async () => {
+    const f = await repositoryFixture();
+    checkpoint.mockImplementationOnce(async (_request, use) => {
+      await f.capture("new accepted edit\n", "replacement-checkpoint");
+      return await use({});
+    });
+    await expect(
+      f.coordinator.requestForSession({
+        agentId: "main",
+        sessionKey: SESSION_KEY,
+        idempotencyKey: "changed-unavailable",
+      }),
+    ).rejects.toThrow("checkpoint changed");
+    expect(listRepositoryGitHubPublications()).toEqual([
+      expect.objectContaining({ status: "requested", error_code: null, last_effect: null }),
+    ]);
+    expect(f.runtime.effects).toEqual([]);
   });
 
   it("replays the current receipt when another same-key call finishes before reservation", async () => {
@@ -391,9 +188,13 @@ describe("repository checkpoint GitHub publication", () => {
     }
   });
 
-  it.each(["topic", "refs/tags/release", baseCommit])(
-    "publishes unchanged pinned ref %s when its merge-base has a different tree",
-    async (ref) => {
+  it.each([
+    { name: "topic", ref: "topic" },
+    { name: "tag", ref: "refs/tags/release" },
+    { name: "commit", ref: { kind: "commit" } },
+  ] as const)(
+    "publishes unchanged pinned $name when its merge-base has a different tree",
+    async ({ ref }) => {
       const f = await repositoryFixture(ref);
       await f.capture(null, "unchanged-pinned-source");
       f.runtime.baseHead = "d".repeat(40);
@@ -408,7 +209,7 @@ describe("repository checkpoint GitHub publication", () => {
       expect(result.status).toBe("published");
       expect(f.runtime.pr?.baseRef).toBe(ref === "topic" ? "topic" : "main");
       expect(f.runtime.uploaded.size).toBe(0);
-      expect(readRepositoryGitHubPublication(result.requestId)?.workspace_tree).toBe(baseTree);
+      expect(readRepositoryGitHubPublication(result.requestId)?.workspace_tree).toBe(f.baseTree);
       expect(f.casRequests[0]).toMatchObject({ beforeOid: "0".repeat(40), force: false });
     },
   );
@@ -466,9 +267,9 @@ describe("repository checkpoint GitHub publication", () => {
     const reverted = await publish("complete-revert");
     expect(reverted).toMatchObject({ status: "published", url });
     expect(readRepositoryGitHubPublication(reverted.requestId)).toMatchObject({
-      workspace_tree: baseTree,
+      workspace_tree: f.baseTree,
       previous_head_commit: previousHead,
-      source_head_commit: baseCommit,
+      source_head_commit: f.baseCommit,
     });
     expect(f.runtime.head).not.toBe(previousHead);
     expect(f.casRequests[1]).toMatchObject({
@@ -678,9 +479,14 @@ describe("repository checkpoint GitHub publication", () => {
     },
   );
 
-  it.each(["worker-turn", "remote-exec"] as const)(
-    "publishes the accepted checkpoint for an in-turn %s request under its exact remote claim",
-    async (executionMode) => {
+  it.each([
+    { executionMode: "worker-turn", publication: "available" },
+    { executionMode: "remote-exec", publication: "available" },
+    { executionMode: "worker-turn", publication: "unavailable" },
+    { executionMode: "remote-exec", publication: "unavailable" },
+  ] as const)(
+    "settles the accepted checkpoint for an in-turn $executionMode request with publication $publication",
+    async ({ executionMode, publication }) => {
       const f = await repositoryFixture(undefined, REQUEST);
       seedActivePlacement(f.placements, {
         environmentId: "in-turn-worker",
@@ -716,9 +522,31 @@ describe("repository checkpoint GitHub publication", () => {
       });
       expect(f.runtime.effects).toEqual([]);
       const accepted = await f.capture("completed turn change\n", "in-turn-completed");
+      if (publication === "unavailable") {
+        checkpoint.mockImplementation(async (_request, use) => await use({}));
+      }
       f.placements.markWorkspaceResultPending(claim);
       await f.coordinator.prepareClaimWorkspace(claim);
       f.placements.acceptWorkspaceResult(claim);
+      if (publication === "unavailable") {
+        expect(await f.coordinator.processClaim(claim)).toEqual([]);
+        expect(readRepositoryGitHubPublication(requested.requestId)).toMatchObject({
+          status: "failed",
+          error_code: "unavailable",
+          last_effect: null,
+        });
+        expect(f.coordinator.listUnreportedResults()).toEqual([
+          expect.objectContaining({
+            result: expect.objectContaining({
+              requestId: requested.requestId,
+              status: "failed",
+              code: "unavailable",
+            }),
+          }),
+        ]);
+        expect(f.runtime.effects).toEqual([]);
+        return;
+      }
       expect(await f.coordinator.processClaim(claim)).toEqual([
         expect.objectContaining({ requestId: requested.requestId, status: "published" }),
       ]);

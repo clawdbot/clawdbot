@@ -2,7 +2,11 @@ import { setImmediate } from "node:timers/promises";
 import { describe, expect, it, vi } from "vitest";
 import { WORKER_EXECUTION_CONTEXT_PROTOCOL_FEATURE } from "../../../packages/gateway-protocol/src/schema/worker-admission.js";
 import { createDeferred } from "../../../test/helpers/promise.js";
-import { NODE_WORKER_ENVIRONMENT_STOP_COMMAND } from "../../infra/node-commands.js";
+import {
+  NODE_WORKER_ENVIRONMENT_STOP_COMMAND,
+  NODE_WORKER_WORKSPACE_EXEC_COMMAND,
+} from "../../infra/node-commands.js";
+import { NODE_WORKSPACE_DRAIN_COMMAND } from "../../worker/node-workspace-protocol.js";
 import { createNodeWorkerTunnelManager } from "./node-worker-tunnel.js";
 import * as nodeSupport from "./node-worker-tunnel.test-support.js";
 import { REQUEST, seedActivePlacement } from "./placement-dispatch-test-fixtures.js";
@@ -102,10 +106,7 @@ describe("offline device abandonment with retained physical cleanup", () => {
       connectedNodes[0]!.nodeId = deviceId;
       const listNodes = vi.fn<typeof transport.listCurrentNodes>(async () => connectedNodes);
       transport.listCurrentNodes = listNodes;
-      const invoke = vi.fn<typeof transport.invoke>(async () => ({
-        ok: true,
-        payloadJSON: "null",
-      }));
+      const invoke = vi.fn(transport.invoke.bind(transport));
       transport.invoke = invoke;
       const transfer = { ...nodeSupport.workspaceTransfer(), closeAll: vi.fn(async () => {}) };
       const createTunnels = () =>
@@ -318,8 +319,16 @@ describe("offline device abandonment with retained physical cleanup", () => {
         }
         const replacementCredential = support.testState.store.getCredential(replacementId);
         await service.reconcileOnce();
-        expect(invoke).toHaveBeenCalledTimes(multipleRetired ? 2 : 1);
-        for (const [request] of invoke.mock.calls) {
+        const stopRequests = invoke.mock.calls
+          .map(([request]) => request)
+          .filter((request) => request.command === NODE_WORKER_ENVIRONMENT_STOP_COMMAND);
+        const drainRequests = invoke.mock.calls
+          .map(([request]) => request)
+          .filter((request) => request.command === NODE_WORKER_WORKSPACE_EXEC_COMMAND);
+        expect(stopRequests).toHaveLength(multipleRetired ? 2 : 1);
+        expect(drainRequests).toHaveLength(stopRequests.length);
+        expect(invoke).toHaveBeenCalledTimes(stopRequests.length + drainRequests.length);
+        for (const request of stopRequests) {
           expect(request).toMatchObject({
             command: NODE_WORKER_ENVIRONMENT_STOP_COMMAND,
             params: {
@@ -327,6 +336,14 @@ describe("offline device abandonment with retained physical cleanup", () => {
               sessionId: active.sessionId,
               ownerEpoch: attached.ownerEpoch,
             },
+          });
+        }
+        for (const request of drainRequests) {
+          expect(request.params).toMatchObject({
+            environmentId,
+            sessionId: active.sessionId,
+            generation: attached.ownerEpoch,
+            argv: [NODE_WORKSPACE_DRAIN_COMMAND],
           });
         }
         expect(service.get(environmentId)).toMatchObject({

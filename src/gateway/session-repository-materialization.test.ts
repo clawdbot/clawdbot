@@ -4,12 +4,22 @@ import fsp from "node:fs/promises";
 import path from "node:path";
 import { promisify } from "node:util";
 import { afterEach, describe, expect, it, vi } from "vitest";
+import * as githubOAuth from "../agents/github-oauth-client.js";
+import {
+  resolveManagedGitHubProfileDir,
+  writeManagedGitHubProfileFiles,
+} from "../agents/github-tool-identity.js";
 import { managedWorktrees } from "../agents/worktrees/service.js";
 import * as sessionEntries from "../config/sessions/session-accessor.js";
 import { loadSessionEntry, upsertSessionEntryCore } from "../config/sessions/session-accessor.js";
+import type { OpenClawConfig } from "../config/types.openclaw.js";
+import { ProjectCloneError } from "../projects/project-clone-runtime.js";
+import * as projectCloning from "../projects/project-clone.js";
 import { registerClonedProjectRegistry } from "../projects/project-registry.js";
+import * as secretsRuntime from "../secrets/runtime-state.js";
 import { getSessionRepositoryWorkspaceStore } from "../state/session-repository-workspaces.js";
 import { withOpenClawTestState } from "../test-utils/openclaw-test-state.js";
+import * as githubOAuthLifecycle from "./github-oauth-lifecycle.js";
 import { materializeSessionRepositoryWorkspaceOnGateway } from "./session-repository-materialization.js";
 import { stageSessionRepositoryCheckpoint } from "./worker-environments/session-repository-checkpoints.js";
 import { serializeWorkerWorkspaceManifest } from "./worker-environments/workspace-manifest.js";
@@ -22,11 +32,146 @@ const git = async (cwd: string, args: string[]) =>
 describe("explicit repository move to Gateway", () => {
   afterEach(() => vi.restoreAllMocks());
 
+  it.each(["system", "agent", "revoked", "reset", "auth failure"] as const)(
+    "keeps the current shared GitHub identity and move authority at clone admission: %s",
+    async (scenario) => {
+      await withOpenClawTestState(
+        {
+          label: "repository-materialize-identity",
+          env: { GH_TOKEN: "synthetic-legacy-token", GITHUB_TOKEN: undefined },
+        },
+        async (state) => {
+          const systemProfileId = "ghp_11111111111111111111111111111111";
+          const agentProfileId = "ghp_22222222222222222222222222222222";
+          const cfg: OpenClawConfig = {
+            agents: { entries: { main: { workspace: state.workspaceDir } } },
+            gateway: { controlUi: { github: { token: "synthetic-preview-token" } } },
+          };
+          const config: OpenClawConfig = {
+            ...cfg,
+            tools: { github: { profileId: systemProfileId } },
+            agents: {
+              entries: {
+                main: {
+                  workspace: state.workspaceDir,
+                  ...(scenario === "agent"
+                    ? { tools: { github: { profileId: agentProfileId } } }
+                    : {}),
+                },
+              },
+            },
+          };
+          await state.writeConfig(config);
+          vi.spyOn(secretsRuntime, "getActiveSecretsRuntimeConfigSnapshot").mockReturnValue({
+            config,
+            sourceConfig: config,
+            configRefsPrepared: true,
+          });
+          vi.spyOn(githubOAuthLifecycle, "requestCurrentGitHubOAuthRefresh").mockResolvedValue(
+            undefined,
+          );
+          for (const [credentialScope, profileId] of [
+            ["system", systemProfileId],
+            ["agent", agentProfileId],
+          ] as const) {
+            await writeManagedGitHubProfileFiles(
+              resolveManagedGitHubProfileDir({
+                agentId: "main",
+                scope: credentialScope,
+                profileId,
+              }),
+              { login: `${credentialScope}-bot`, token: `synthetic-${credentialScope}-token` },
+            );
+          }
+          const scope = { agentId: "main", sessionKey: "agent:main:dashboard:private-move" };
+          const sessionId = "private-materialization-session";
+          const repositories = getSessionRepositoryWorkspaceStore();
+          const created = repositories.create({
+            ...scope,
+            url: "https://github.com/openclaw/private-materialization-fixture.git",
+            runSetupScript: false,
+            assertCurrent: () => {},
+          });
+          const repository = repositories.bindBase({
+            workspaceId: created.workspaceId,
+            expectedRevision: created.revision,
+            baseCommit: "a".repeat(40),
+            baseManifestHash: `sha256:${"b".repeat(64)}`,
+            assertCurrent: () => {},
+          });
+          await upsertSessionEntryCore(scope, {
+            sessionId,
+            repositoryWorkspaceId: repository.workspaceId,
+          });
+          let current = true;
+          const verify = vi
+            .spyOn(githubOAuth, "verifyGitHubCredential")
+            .mockImplementation(async () => {
+              await Promise.resolve();
+              if (scenario === "revoked") {
+                current = false;
+              } else if (scenario === "reset") {
+                await sessionEntries.patchSessionEntryCore(scope, () => ({ lifecycleRevision: 1 }));
+              }
+              return {
+                status: "available",
+                account: { accountId: 42, login: "shared-bot", avatarUrl: null },
+                scopes: [],
+              };
+            });
+          const cloneFailure =
+            scenario === "auth failure"
+              ? new ProjectCloneError("auth_required", "GitHub rejected the Control UI credential")
+              : new Error("fixture clone transport reached");
+          const clone = vi
+            .spyOn(projectCloning, "materializeProjectClone")
+            .mockRejectedValue(cloneFailure);
+          const operation = materializeSessionRepositoryWorkspaceOnGateway({
+            ...scope,
+            cfg,
+            sessionId,
+            assertCurrent: () => {
+              if (!current) {
+                throw new Error("move authority revoked");
+              }
+            },
+          });
+          if (scenario === "revoked" || scenario === "reset") {
+            await expect(operation).rejects.toThrow(
+              scenario === "revoked" ? "move authority revoked" : "Repository workspace changed",
+            );
+            expect(clone).not.toHaveBeenCalled();
+          } else {
+            if (scenario === "auth failure") {
+              await expect(operation).rejects.toMatchObject({
+                failure: "auth_required",
+                message: expect.stringMatching(/shared GitHub identity.*Settings/u),
+              });
+            } else {
+              await expect(operation).rejects.toBe(cloneFailure);
+            }
+            const token = `synthetic-${scenario === "agent" ? "agent" : "system"}-token`;
+            expect(verify).toHaveBeenCalledWith(token);
+            expect(clone).toHaveBeenCalledWith(
+              { cfg, gitUrl: repository.url, requiredCommit: repository.baseCommit },
+              expect.objectContaining({ token }),
+            );
+          }
+          expect(loadSessionEntry(scope)?.repositoryWorkspaceId).toBe(repository.workspaceId);
+          expect(managedWorktrees.findLiveByOwner("session", scope.sessionKey)).toBeUndefined();
+        },
+      );
+    },
+  );
+
   it.each(["success", "revoked", "postcommit failure"] as const)(
     "retains only committed materialization: %s",
     async (outcome) => {
       await withOpenClawTestState({ label: "repository-materialize" }, async (state) => {
-        const cfg = { agents: { entries: { main: { workspace: state.workspaceDir } } } };
+        const cfg = {
+          agents: { entries: { main: { workspace: state.workspaceDir } } },
+          tools: { github: { profileId: "ghp_11111111111111111111111111111111" } },
+        };
         await state.writeConfig(cfg);
         const source = state.path("source");
         await fsp.mkdir(source);
