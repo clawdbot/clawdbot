@@ -7,8 +7,11 @@ import {
   buildMattermostModelPickerSelectMessageSid,
   canFinalizeMattermostPreviewInPlace,
   formatMattermostFinalDeliveryOutcomeLog,
+  formatMattermostTerminalProgressText,
+  pinMattermostProgressLabel,
   resolveMattermostInteractionReplyRootId,
   resolveMattermostPendingHistoryKey,
+  resolveMattermostProgressDeliveryPolicy,
   resolveMattermostReactionChannelId,
   resolveMattermostReplyRootId,
   resolveMattermostThreadSessionContext,
@@ -311,6 +314,67 @@ describe("shouldUpdateMattermostDraftToolProgress", () => {
         },
       }),
     ).toBe(false);
+  });
+});
+
+describe("resolveMattermostProgressDeliveryPolicy", () => {
+  function resolvePolicy(streaming: {
+    mode: "partial" | "block" | "progress" | "off";
+    progress?: { label?: string; finalDelivery?: "in-place" | "separate" };
+  }) {
+    const account = resolveMattermostAccount({
+      cfg: { channels: { mattermost: { enabled: true, streaming } } },
+      accountId: "default",
+    });
+    return resolveMattermostProgressDeliveryPolicy(account, "channel-1");
+  }
+
+  it("selects an atomic custom post type only for separate progress delivery", () => {
+    expect(
+      resolvePolicy({
+        mode: "progress",
+        progress: { label: "|", finalDelivery: "separate" },
+      }),
+    ).toEqual({
+      separate: true,
+      postType: "custom_openclaw_progress",
+      pinnedLabel: "|",
+      seed: "default:channel-1",
+    });
+    expect(resolvePolicy({ mode: "progress" })).toMatchObject({
+      separate: false,
+      postType: undefined,
+      pinnedLabel: undefined,
+    });
+    expect(
+      resolvePolicy({ mode: "partial", progress: { finalDelivery: "separate" } }),
+    ).toMatchObject({ separate: false, postType: undefined });
+  });
+
+  it("pins the progress label without duplicating it", () => {
+    expect(pinMattermostProgressLabel("Running status", "|")).toBe("|\n\nRunning status");
+    expect(pinMattermostProgressLabel("|\n\nRunning status", "|")).toBe("|\n\nRunning status");
+  });
+
+  it("keeps separate progress and final posts top-level in flat direct messages", () => {
+    const policy = resolvePolicy({
+      mode: "progress",
+      progress: { finalDelivery: "separate" },
+    });
+    const progressRootId = resolveMattermostEffectiveReplyToId({
+      kind: "direct",
+      postId: "dm-post-1",
+      replyToMode: "off",
+    });
+    const finalRootId = resolveMattermostReplyRootId({
+      kind: "direct",
+      threadRootId: progressRootId,
+      replyToId: "payload-reply-1",
+    });
+
+    expect(policy.separate).toBe(true);
+    expect(progressRootId).toBeUndefined();
+    expect(finalRootId).toBeUndefined();
   });
 });
 
@@ -653,6 +717,10 @@ describe("buildMattermostModelPickerSelectMessageSid", () => {
         model: "gpt-4.1",
       }),
     );
+  });
+
+  it("formats terminal progress without provider error details", () => {
+    expect(formatMattermostTerminalProgressText("|")).toBe("|\n\nFailed.");
   });
 });
 

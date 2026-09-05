@@ -686,6 +686,16 @@ describe("config schema", () => {
     expect(res.uiHints["channels.mattermost.streaming.progress.label"]?.label).toBe(
       "Mattermost Progress Label",
     );
+    expect(res.uiHints["channels.mattermost.streaming.progress.finalDelivery"]).toMatchObject({
+      label: "Mattermost Progress Final Delivery",
+      help: expect.stringContaining("delete the progress post only after delivery succeeds"),
+    });
+    expect(
+      res.uiHints["channels.mattermost.accounts.*.streaming.progress.finalDelivery"],
+    ).toMatchObject({
+      label: "Mattermost Progress Final Delivery",
+      help: expect.stringContaining("delete the progress post only after delivery succeeds"),
+    });
   });
 
   it.each(["bundled", "extended"])(

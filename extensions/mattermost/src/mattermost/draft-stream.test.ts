@@ -5,6 +5,7 @@ import type { MattermostClient } from "./client.js";
 import {
   createMattermostDraftPreviewBoundaryController,
   createMattermostDraftStream,
+  MATTERMOST_PROGRESS_POST_TYPE,
 } from "./draft-stream.js";
 
 type RequestRecord = {
@@ -89,6 +90,27 @@ describe("createMattermostDraftStream", () => {
     expect(stream.postId()).toBe("post-1");
   });
 
+  it("creates typed progress posts in the initial request", async () => {
+    const { calls, stream } = createDraftStreamFixture({
+      rootId: "root-1",
+      postType: "custom_openclaw_progress",
+    });
+
+    stream.update("|\n\nWorking");
+    await stream.flush();
+    stream.update("|\n\nStill working");
+    await stream.flush();
+
+    expect(parseRequestJson(calls[0]?.init)).toMatchObject({
+      channel_id: "channel-1",
+      root_id: "root-1",
+      message: "|\n\nWorking",
+      type: "custom_openclaw_progress",
+    });
+    expect(calls[1]?.path).toBe("/posts/post-1");
+    expect(parseRequestJson(calls[1]?.init)).not.toHaveProperty("type");
+  });
+
   it("does not resend identical updates", async () => {
     const { calls, stream } = createDraftStreamFixture();
 
@@ -158,6 +180,109 @@ describe("createMattermostDraftStream", () => {
       id: "post-1",
       message: "Stale partial",
     });
+  });
+
+  it("retains terminal text after discarding a throttled stale update", async () => {
+    const { calls, stream } = createDraftStreamFixture({ throttleMs: 1000 });
+
+    stream.update("Working...");
+    await stream.flush();
+    stream.update("Stale partial");
+    await expect(stream.retainTerminalText("Failed.")).resolves.toBe(true);
+    await stream.stop();
+    stream.update("Late partial");
+    await stream.flush();
+
+    expect(calls.map((call) => [call.path, call.init?.method])).toEqual([
+      ["/posts", "POST"],
+      ["/posts/post-1", "PUT"],
+    ]);
+    expect(parseRequestJson(calls[1]?.init)).toEqual({
+      id: "post-1",
+      message: "Failed.",
+    });
+  });
+
+  it("creates a typed terminal progress post when no draft exists", async () => {
+    const { calls, stream } = createDraftStreamFixture({
+      rootId: "root-1",
+      postType: MATTERMOST_PROGRESS_POST_TYPE,
+    });
+
+    await expect(stream.retainTerminalText("|\n\nFailed.")).resolves.toBe(true);
+
+    expect(calls.map((call) => [call.path, call.init?.method])).toEqual([["/posts", "POST"]]);
+    expect(parseRequestJson(calls[0]?.init)).toEqual({
+      channel_id: "channel-1",
+      root_id: "root-1",
+      message: "|\n\nFailed.",
+      type: MATTERMOST_PROGRESS_POST_TYPE,
+    });
+    expect(stream.postId()).toBe("post-1");
+  });
+
+  it("retries a transient strict cleanup failure", async () => {
+    let deleteAttempts = 0;
+    const requestImpl: MattermostClient["request"] = async <T>(
+      path: string,
+      init?: RequestInit,
+    ): Promise<T> => {
+      if (path === "/posts") {
+        return { id: "post-1" } as T;
+      }
+      if (path === "/posts/post-1" && init?.method === "DELETE") {
+        deleteAttempts += 1;
+        if (deleteAttempts === 1) {
+          throw new Error("transient delete failure");
+        }
+      }
+      return { id: "post-1" } as T;
+    };
+    const { stream } = createDraftStreamFixture({
+      request: requestImpl,
+      cleanupMode: "strict",
+    });
+
+    stream.update("Working...");
+    await stream.flush();
+    await expect(stream.clear()).resolves.toBeUndefined();
+
+    expect(deleteAttempts).toBe(2);
+    expect(stream.postId()).toBeUndefined();
+  });
+
+  it("surfaces repeated strict cleanup failures and retains the post id for a later retry", async () => {
+    let deleteAttempts = 0;
+    const requestImpl: MattermostClient["request"] = async <T>(
+      path: string,
+      init?: RequestInit,
+    ): Promise<T> => {
+      if (path === "/posts") {
+        return { id: "post-1" } as T;
+      }
+      if (path === "/posts/post-1" && init?.method === "DELETE") {
+        deleteAttempts += 1;
+        if (deleteAttempts <= 2) {
+          throw new Error(`delete failure ${deleteAttempts}`);
+        }
+      }
+      return { id: "post-1" } as T;
+    };
+    const { stream } = createDraftStreamFixture({
+      request: requestImpl,
+      cleanupMode: "strict",
+    });
+
+    stream.update("Working...");
+    await stream.flush();
+    await expect(stream.clear()).rejects.toThrow("delete failure 2");
+
+    expect(deleteAttempts).toBe(2);
+    expect(stream.postId()).toBe("post-1");
+
+    await expect(stream.clear()).resolves.toBeUndefined();
+    expect(deleteAttempts).toBe(3);
+    expect(stream.postId()).toBeUndefined();
   });
 
   it("warns and stops when preview creation fails", async () => {

@@ -302,6 +302,13 @@ Slack-only:
   preview post that finalizes in place when the final answer is safe to send.
 - In `progress` mode, streams thinking and tool activity into a single status
   preview that finalizes in place when the final answer is safe to send.
+- With `streaming.progress.finalDelivery: "separate"`, creates the progress
+  preview atomically as `custom_openclaw_progress`, pins the configured label,
+  sends the final answer as a separate normal post in the same conversation
+  and the same thread when a thread root exists, then
+  deletes progress only after that send succeeds. OpenClaw agents ignore typed
+  progress posts; human posts with the same visible prefix remain normal input.
+  Terminal failures retain a sanitized status post.
 - In `block` mode, rotates between completed text and tool-activity posts;
   parallel and consecutive tool updates share the current tool-activity post.
 - Falls back to sending a fresh final post if the preview post was deleted or

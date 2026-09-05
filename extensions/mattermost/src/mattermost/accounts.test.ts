@@ -288,4 +288,100 @@ describe("resolveMattermostReplyToMode", () => {
 
     expect(account.streamingMode).toBe("off");
   });
+
+  it("resolves separate progress final delivery only when configured", () => {
+    const separate = resolveMattermostAccount({
+      cfg: {
+        channels: {
+          mattermost: {
+            streaming: {
+              mode: "progress",
+              progress: { finalDelivery: "separate" },
+            },
+          },
+        },
+      },
+      accountId: "default",
+    });
+    const defaultAccount = resolveMattermostAccount({ cfg: {}, accountId: "default" });
+
+    expect(separate.progressFinalDelivery).toBe("separate");
+    expect(defaultAccount.progressFinalDelivery).toBe("in-place");
+  });
+
+  it("preserves account streaming replacement while resolving final delivery separately", () => {
+    const account = resolveMattermostAccount({
+      cfg: {
+        channels: {
+          mattermost: {
+            streaming: {
+              mode: "progress",
+              preview: { toolProgress: false },
+              progress: {
+                label: "Root progress",
+                toolProgress: false,
+                commandText: "raw",
+              },
+              block: {
+                coalesce: { minChars: 100, maxChars: 1000 },
+              },
+            },
+            accounts: {
+              Work: {
+                streaming: {
+                  preview: { commandText: "status" },
+                  progress: {
+                    commandText: "status",
+                    finalDelivery: "separate",
+                  },
+                  block: {
+                    enabled: true,
+                    coalesce: { idleMs: 250 },
+                  },
+                },
+              },
+            },
+          },
+        },
+      },
+      accountId: "work",
+    });
+
+    expect(account.streamingMode).toBe("progress");
+    expect(account.progressFinalDelivery).toBe("separate");
+    expect(account.config.streaming?.preview).toEqual({ commandText: "status" });
+    expect(account.config.streaming?.progress).toEqual({
+      commandText: "status",
+      finalDelivery: "separate",
+    });
+    expect(account.config.streaming?.block).toEqual({
+      enabled: true,
+      coalesce: { idleMs: 250 },
+    });
+  });
+
+  it("keeps legacy replacement semantics when the account has no final delivery override", () => {
+    const account = resolveMattermostAccount({
+      cfg: {
+        channels: {
+          mattermost: {
+            streaming: {
+              mode: "progress",
+              progress: { toolProgress: false },
+            },
+            accounts: {
+              work: {
+                streaming: { progress: { commandText: "status" } },
+              },
+            },
+          },
+        },
+      },
+      accountId: "work",
+    });
+
+    expect(account.streamingMode).toBe("partial");
+    expect(account.progressFinalDelivery).toBe("in-place");
+    expect(account.config.streaming).toEqual({ progress: { commandText: "status" } });
+  });
 });

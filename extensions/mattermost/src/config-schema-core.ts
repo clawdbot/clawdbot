@@ -94,6 +94,7 @@ const MattermostStreamingProgressSchema = z
     maxLineChars: z.number().int().positive().optional(),
     toolProgress: z.boolean().optional(),
     commandText: z.enum(["raw", "status"]).optional(),
+    finalDelivery: z.enum(["in-place", "separate"]).optional(),
   })
   .strict();
 const MattermostStreamingPreviewSchema = z

@@ -7,6 +7,7 @@ import { createMessageReceiptFromOutboundResults } from "openclaw/plugin-sdk/cha
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import * as clientModule from "./client.js";
 import type { MattermostClient } from "./client.js";
+import { createMattermostDraftStream } from "./draft-stream.js";
 import { deliverMattermostReplyWithDraftPreview } from "./monitor-draft-delivery.js";
 
 const updateMattermostPostSpy = vi.spyOn(clientModule, "updateMattermostPost");
@@ -371,6 +372,155 @@ describe("deliverMattermostReplyWithDraftPreview", () => {
     expect(updateMattermostPostSpy).not.toHaveBeenCalled();
   });
 
+  it("sends a separate final before deleting the progress post", async () => {
+    const draftStream = createDraftStreamMock("progress-post-1");
+    const deliverFinal = createDeliverFinalMock();
+    const recordSuccessfulFinal = vi.fn();
+
+    const result = await deliverDraftPreview({
+      payload: { text: "All good" } as never,
+      draftStream,
+      effectiveReplyToId: "thread-root-1",
+      separateProgressFinalDelivery: true,
+      recordSuccessfulFinal,
+      deliverPayload: deliverFinal,
+    });
+
+    expect(updateMattermostPostSpy).not.toHaveBeenCalled();
+    expect(draftStream.discardPending).toHaveBeenCalledTimes(1);
+    expect(deliverFinal).toHaveBeenCalledExactlyOnceWith({ text: "All good" });
+    expect(recordSuccessfulFinal).toHaveBeenCalledOnce();
+    expect(draftStream.clear).toHaveBeenCalledTimes(1);
+    expect(draftStream.discardPending.mock.invocationCallOrder[0]).toBeLessThan(
+      deliverFinal.mock.invocationCallOrder[0] ?? Number.POSITIVE_INFINITY,
+    );
+    expect(deliverFinal.mock.invocationCallOrder[0]).toBeLessThan(
+      recordSuccessfulFinal.mock.invocationCallOrder[0] ?? Number.POSITIVE_INFINITY,
+    );
+    expect(recordSuccessfulFinal.mock.invocationCallOrder[0]).toBeLessThan(
+      draftStream.clear.mock.invocationCallOrder[0] ?? Number.POSITIVE_INFINITY,
+    );
+    expect(result).toMatchObject({
+      messageIds: ["delivered-post-1"],
+      visibleReplySent: true,
+      content: "All good",
+    });
+  });
+
+  it("retains separate progress when final delivery fails", async () => {
+    const draftStream = createDraftStreamMock("progress-post-1");
+    const deliverFinal = vi.fn(async () => {
+      throw new Error("send failed");
+    });
+
+    await expect(
+      deliverDraftPreview({
+        payload: { text: "Broken" } as never,
+        draftStream,
+        separateProgressFinalDelivery: true,
+        deliverPayload: deliverFinal,
+      }),
+    ).rejects.toThrow("send failed");
+
+    expect(draftStream.discardPending).toHaveBeenCalledTimes(1);
+    expect(draftStream.clear).not.toHaveBeenCalled();
+    expect(updateMattermostPostSpy).not.toHaveBeenCalled();
+  });
+
+  it("does not treat a provider-accepted progress flush as the final reply", async () => {
+    const draftStream = createDraftStreamMock();
+    draftStream.discardPending.mockRejectedValueOnce(
+      createChannelPartialDeliveryError(new Error("progress receipt was unreadable"), {
+        messageIds: [],
+        visibleReplySent: true,
+        content: "Working...",
+      }),
+    );
+    const deliverFinal = vi.fn(async () => {
+      throw new Error("final send failed");
+    });
+    const recordSuccessfulFinal = vi.fn();
+
+    await expect(
+      deliverDraftPreview({
+        payload: { text: "Final answer" } as never,
+        draftStream,
+        separateProgressFinalDelivery: true,
+        recordSuccessfulFinal,
+        deliverPayload: deliverFinal,
+      }),
+    ).rejects.toThrow("final send failed");
+
+    expect(deliverFinal).toHaveBeenCalledExactlyOnceWith({ text: "Final answer" });
+    expect(recordSuccessfulFinal).not.toHaveBeenCalled();
+    expect(draftStream.clear).not.toHaveBeenCalled();
+  });
+
+  it("latches provider-accepted partial finals before progress cleanup", async () => {
+    const draftStream = createDraftStreamMock("progress-post-1");
+    const finalReceipt = createMattermostReceipt("accepted-final-1", "text");
+    const deliverFinal = vi.fn(async () => {
+      throw createChannelPartialDeliveryError(new Error("post-send bookkeeping failed"), {
+        messageIds: ["accepted-final-1"],
+        receipt: finalReceipt,
+        visibleReplySent: true,
+        content: "Accepted final answer",
+      });
+    });
+    const recordSuccessfulFinal = vi.fn();
+
+    let caught: unknown;
+    try {
+      await deliverDraftPreview({
+        payload: { text: "Accepted final answer" } as never,
+        draftStream,
+        separateProgressFinalDelivery: true,
+        recordSuccessfulFinal,
+        deliverPayload: deliverFinal,
+      });
+    } catch (error: unknown) {
+      caught = error;
+    }
+
+    expect(isChannelPartialDeliveryError(caught)).toBe(true);
+    if (!isChannelPartialDeliveryError(caught)) {
+      throw new Error("expected a partial Mattermost final delivery error");
+    }
+    expect(caught.deliveryResult).toMatchObject({
+      messageIds: ["accepted-final-1"],
+      visibleReplySent: true,
+      content: "Accepted final answer",
+    });
+    expect(recordSuccessfulFinal).toHaveBeenCalledOnce();
+    expect(draftStream.clear).toHaveBeenCalledOnce();
+    expect(recordSuccessfulFinal.mock.invocationCallOrder[0]).toBeLessThan(
+      draftStream.clear.mock.invocationCallOrder[0] ?? Number.POSITIVE_INFINITY,
+    );
+  });
+
+  it("retains sanitized separate progress after delivering a terminal error", async () => {
+    const draftStream = createDraftStreamMock("progress-post-1");
+    const deliverFinal = createDeliverFinalMock();
+    const recordSuccessfulFinal = vi.fn();
+
+    await deliverDraftPreview({
+      payload: { text: "Sensitive provider failure", isError: true } as never,
+      draftStream,
+      separateProgressFinalDelivery: true,
+      recordSuccessfulFinal,
+      deliverPayload: deliverFinal,
+    });
+
+    expect(deliverFinal).toHaveBeenCalledExactlyOnceWith({
+      text: "Sensitive provider failure",
+      isError: true,
+    });
+    expect(draftStream.discardPending).toHaveBeenCalledTimes(1);
+    expect(draftStream.clear).not.toHaveBeenCalled();
+    expect(recordSuccessfulFinal).not.toHaveBeenCalled();
+    expect(updateMattermostPostSpy).not.toHaveBeenCalled();
+  });
+
   it("preserves a completed normal send when preview cleanup fails", async () => {
     const draftStream = createDraftStreamMock();
     draftStream.clear.mockRejectedValueOnce(new Error("preview cleanup failed"));
@@ -389,6 +539,61 @@ describe("deliverMattermostReplyWithDraftPreview", () => {
     });
     expect(deliverFinal).toHaveBeenCalledTimes(1);
     expect(draftStream.clear).toHaveBeenCalledTimes(1);
+  });
+
+  it("preserves the final receipt when real separate-progress cleanup fails twice", async () => {
+    let deleteAttempts = 0;
+    const request: MattermostClient["request"] = async <T>(
+      path: string,
+      init?: RequestInit,
+    ): Promise<T> => {
+      if (path === "/posts") {
+        return { id: "progress-post-1", message: "Working..." } as T;
+      }
+      if (path === "/posts/progress-post-1" && init?.method === "DELETE") {
+        deleteAttempts += 1;
+        throw new Error(`cleanup failed ${deleteAttempts}`);
+      }
+      return { id: "progress-post-1" } as T;
+    };
+    const draftStream = createMattermostDraftStream({
+      client: { ...createMattermostClientMock(), request },
+      channelId: "channel-1",
+      postType: "custom_openclaw_progress",
+      cleanupMode: "strict",
+      throttleMs: 0,
+    });
+    draftStream.update("Working...");
+    await draftStream.flush();
+    const deliverFinal = createDeliverFinalMock();
+    const recordSuccessfulFinal = vi.fn();
+
+    let caught: unknown;
+    try {
+      await deliverDraftPreview({
+        payload: { text: "Already visible" } as never,
+        draftStream,
+        separateProgressFinalDelivery: true,
+        recordSuccessfulFinal,
+        deliverPayload: deliverFinal,
+      });
+    } catch (error: unknown) {
+      caught = error;
+    }
+
+    expect(deleteAttempts).toBe(2);
+    expect(isChannelPartialDeliveryError(caught)).toBe(true);
+    if (!isChannelPartialDeliveryError(caught)) {
+      throw new Error("expected a partial Mattermost cleanup error");
+    }
+    expect(caught.deliveryResult).toMatchObject({
+      messageIds: ["delivered-post-1"],
+      visibleReplySent: true,
+      content: "Already visible",
+    });
+    expect(draftStream.postId()).toBe("progress-post-1");
+    expect(deliverFinal).toHaveBeenCalledTimes(1);
+    expect(recordSuccessfulFinal).toHaveBeenCalledOnce();
   });
 
   it("deletes the preview after a successful non-finalizable media final", async () => {

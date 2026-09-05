@@ -759,6 +759,24 @@ describe("createMattermostPost", () => {
     expect(body.root_id).toBe("root456");
   });
 
+  it("includes a custom post type atomically when provided", async () => {
+    const { mockFetch, calls } = createMockFetch({ body: { id: "post-progress" } });
+    const client = createMattermostClient({
+      baseUrl: "http://localhost:8065",
+      botToken: "tok",
+      fetchImpl: mockFetch,
+    });
+
+    await createMattermostPost(client, {
+      channelId: "ch123",
+      message: "|\n\nWorking",
+      postType: "custom_openclaw_progress",
+    });
+
+    const body = parseRequestJson(requireRequestCall(calls).init);
+    expect(body.type).toBe("custom_openclaw_progress");
+  });
+
   it("includes fileIds when provided", async () => {
     const { mockFetch, calls } = createMockFetch({ body: { id: "post3" } });
     const client = createMattermostClient({

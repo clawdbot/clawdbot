@@ -65,6 +65,7 @@ describe("MattermostConfigSchema", () => {
           maxLines: 4,
           toolProgress: false,
           commandText: "status",
+          finalDelivery: "separate",
         },
         preview: { commandText: "raw" },
       },
@@ -75,6 +76,16 @@ describe("MattermostConfigSchema", () => {
       },
     });
     expect(result.success).toBe(true);
+  });
+
+  it("rejects unsupported progress final delivery modes", () => {
+    const result = MattermostConfigSchema.safeParse({
+      streaming: {
+        mode: "progress",
+        progress: { finalDelivery: "replace" },
+      },
+    });
+    expect(result.success).toBe(false);
   });
 
   it("rejects retired scalar streaming and flat delivery keys", () => {

@@ -90,13 +90,6 @@ export function createMattermostPostHandler(monitor: MattermostMonitorContext) {
       monitor.logVerboseMessage(`mattermost: drop post (self sender=${senderId})`);
       return;
     }
-    if (normalizeOptionalString(post.type) !== undefined) {
-      monitor.logVerboseMessage(
-        `mattermost: drop post (system post type=${post.type ?? "unknown"})`,
-      );
-      return;
-    }
-
     const eventPlan = await buildMattermostEventPlan(monitor, {
       channelId,
       senderId,

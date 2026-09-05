@@ -325,6 +325,12 @@ export async function monitorMattermostProvider(opts: MonitorMattermostOpts = {}
     runtime,
     abortSignal: opts.abortSignal,
     dispatch: async (post, payload, turnAdoptionLifecycle) => {
+      if (normalizeOptionalString(post.type) !== undefined) {
+        monitor.logVerboseMessage(
+          `mattermost: drop post (system post type=${post.type ?? "unknown"})`,
+        );
+        return undefined;
+      }
       // Deferred claims settle through lifecycle callbacks, so terminal flush
       // errors spend the drain's bounded retry budget before dead-lettering.
       await debouncer.enqueue({ post, payload, turnAdoptionLifecycle });

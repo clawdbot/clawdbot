@@ -1,6 +1,11 @@
 import { createChannelConfigUiHints } from "openclaw/plugin-sdk/channel-core";
 import type { ChannelConfigUiHint } from "openclaw/plugin-sdk/channel-core";
 
+const progressFinalDeliveryHint = {
+  label: "Mattermost Progress Final Delivery",
+  help: 'Use "in-place" (default) to replace the progress post with the final answer, or "separate" to send a normal final post and delete the progress post only after delivery succeeds.',
+} satisfies ChannelConfigUiHint;
+
 export const mattermostChannelConfigUiHints = {
   "": {
     label: "Mattermost",
@@ -23,4 +28,6 @@ export const mattermostChannelConfigUiHints = {
     },
     progress: {},
   }),
+  "streaming.progress.finalDelivery": progressFinalDeliveryHint,
+  "accounts.*.streaming.progress.finalDelivery": progressFinalDeliveryHint,
 } satisfies Record<string, ChannelConfigUiHint>;

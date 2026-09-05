@@ -10,6 +10,7 @@ import {
   listMessageReceiptPlatformIds,
   type MessageReceipt,
 } from "openclaw/plugin-sdk/channel-outbound";
+import { formatErrorMessage } from "openclaw/plugin-sdk/error-runtime";
 import {
   buildTtsSupplementMediaPayload,
   getReplyPayloadTtsSupplement,
@@ -49,8 +50,11 @@ type MattermostDraftPreviewDeliverParams = {
   effectiveReplyToId?: string;
   resolvePreviewFinalText: (text?: string) => MattermostPreviewFinalResolution | undefined;
   previewState: MattermostDraftPreviewState;
+  separateProgressFinalDelivery?: boolean;
   logVerboseMessage: (message: string) => void;
   deliverPayload: (payload: ReplyPayload) => Promise<MattermostReplyDeliveryResult>;
+  /** Records the accepted durable final before fallible progress cleanup begins. */
+  recordSuccessfulFinal?: () => void;
   // Visible same-thread finals can be delivered by editing the draft preview in
   // place (onPreviewFinalized) without ever calling deliverPayload; this lets the
   // caller record thread participation on that path too.
@@ -86,6 +90,113 @@ function combineMattermostVisibleDeliveryResults(
   };
 }
 
+function emptyMattermostDeliveryResult(): MattermostReplyDeliveryResult {
+  return {
+    outcome: "empty",
+    visibleReplySent: false,
+    suppression: { reason: "no_visible_result" },
+  };
+}
+
+function wrapMattermostCompletedDeliveryError(params: {
+  error: unknown;
+  completedResults: readonly (MattermostReplyDeliveryResult | undefined)[];
+}): unknown {
+  const completedVisibleResults = params.completedResults.filter(
+    (result): result is MattermostReplyDeliveryResult => result?.visibleReplySent === true,
+  );
+  if (completedVisibleResults.length === 0) {
+    return params.error;
+  }
+  const completedReceiptResults: Array<{ receipt: MessageReceipt } | { messageId: string }> = [];
+  for (const result of completedVisibleResults) {
+    if (result.receipt) {
+      completedReceiptResults.push({ receipt: result.receipt });
+    } else {
+      completedReceiptResults.push(
+        ...(result.messageIds ?? []).map((messageId) => ({ messageId })),
+      );
+    }
+  }
+  const failedPartial = isChannelPartialDeliveryError(params.error)
+    ? params.error.deliveryResult
+    : undefined;
+  const receipt = createMessageReceiptFromOutboundResults({
+    results: [
+      ...completedReceiptResults,
+      ...(failedPartial?.receipt
+        ? [{ receipt: failedPartial.receipt }]
+        : (failedPartial?.messageIds ?? []).map((messageId) => ({ messageId }))),
+    ],
+  });
+  return createChannelPartialDeliveryError(params.error, {
+    messageIds: listMessageReceiptPlatformIds(receipt),
+    receipt,
+    visibleReplySent: true,
+    content: joinMattermostVisibleContent([
+      ...completedVisibleResults.map((result) => result.content),
+      failedPartial?.content,
+    ]),
+  });
+}
+
+async function deliverMattermostSeparateProgressFinal(
+  params: MattermostDraftPreviewDeliverParams,
+): Promise<MattermostReplyDeliveryResult> {
+  if (params.info.kind !== "final") {
+    const deliveryResult = await params.deliverPayload(params.payload);
+    return deliveryResult.visibleReplySent ? deliveryResult : emptyMattermostDeliveryResult();
+  }
+
+  let normalDeliveryResult: MattermostReplyDeliveryResult | undefined;
+  try {
+    // A provider-accepted progress post can lose its response receipt while this
+    // quiesces the draft. The stream is already stopped in that case, so the
+    // durable final remains safe to attempt, but the progress receipt must never
+    // be mistaken for evidence that the final sender ran.
+    await params.draftStream.discardPending();
+  } catch (error: unknown) {
+    if (!isChannelPartialDeliveryError(error)) {
+      throw error;
+    }
+    params.logVerboseMessage(
+      `mattermost separate progress receipt incomplete before final delivery: ${formatErrorMessage(error)}`,
+    );
+  }
+  try {
+    // The progress artifact has its own lifecycle. Delete it only after the
+    // durable final sender has produced provider-confirmed visibility.
+    normalDeliveryResult = await params.deliverPayload(params.payload);
+    if (normalDeliveryResult.visibleReplySent && params.payload.isError !== true) {
+      params.recordSuccessfulFinal?.();
+      await params.draftStream.clear();
+    }
+    return normalDeliveryResult.visibleReplySent
+      ? normalDeliveryResult
+      : emptyMattermostDeliveryResult();
+  } catch (error: unknown) {
+    if (
+      normalDeliveryResult === undefined &&
+      params.payload.isError !== true &&
+      isChannelPartialDeliveryError(error)
+    ) {
+      // Mattermost accepted the final before provider bookkeeping failed. Latch
+      // that durable fact before cleanup so turn failure settlement cannot
+      // recreate typed Failed progress beside the visible reply.
+      params.recordSuccessfulFinal?.();
+      try {
+        await params.draftStream.clear();
+      } catch (cleanupError: unknown) {
+        throw createChannelPartialDeliveryError(cleanupError, error.deliveryResult);
+      }
+    }
+    throw wrapMattermostCompletedDeliveryError({
+      error,
+      completedResults: [normalDeliveryResult],
+    });
+  }
+}
+
 export async function deliverMattermostReplyWithDraftPreview(
   params: MattermostDraftPreviewDeliverParams,
 ): Promise<MattermostReplyDeliveryResult> {
@@ -95,6 +206,10 @@ export async function deliverMattermostReplyWithDraftPreview(
       visibleReplySent: false,
       suppression: { reason: "no_visible_result" },
     };
+  }
+
+  if (params.separateProgressFinalDelivery) {
+    return await deliverMattermostSeparateProgressFinal(params);
   }
 
   let normalDeliveryResult: MattermostReplyDeliveryResult | undefined;
@@ -227,14 +342,8 @@ export async function deliverMattermostReplyWithDraftPreview(
 
     if (finalization.kind !== "preview-finalized" || !previewDeliveryResult?.receipt) {
       return (
-        combineMattermostVisibleDeliveryResults([
-          confirmedPreviewDelivery,
-          normalDeliveryResult,
-        ]) ?? {
-          outcome: "empty",
-          visibleReplySent: false,
-          suppression: { reason: "no_visible_result" },
-        }
+        combineMattermostVisibleDeliveryResults([confirmedPreviewDelivery, normalDeliveryResult]) ??
+        emptyMattermostDeliveryResult()
       );
     }
     return (
@@ -247,51 +356,16 @@ export async function deliverMattermostReplyWithDraftPreview(
       ]) ?? previewDeliveryResult
     );
   } catch (error: unknown) {
-    // Preserve confirmed preview and supplemental receipts so core cannot
-    // mistake a later visible-delivery failure for a safe retry.
-    const completedVisibleResults: MattermostReplyDeliveryResult[] = [];
-    const completedReceiptResults: Array<{ receipt: MessageReceipt } | { messageId: string }> = [];
-    for (const result of [
-      confirmedPreviewDelivery,
-      previewDeliveryResult,
-      normalDeliveryResult,
-      supplementalDeliveryResult,
-    ]) {
-      if (result?.visibleReplySent !== true) {
-        continue;
-      }
-      completedVisibleResults.push(result);
-      if (result.receipt) {
-        completedReceiptResults.push({ receipt: result.receipt });
-      } else {
-        completedReceiptResults.push(
-          ...(result.messageIds ?? []).map((messageId) => ({ messageId })),
-        );
-      }
-    }
-    if (completedVisibleResults.length === 0) {
-      throw error;
-    }
-    const failedPartial = isChannelPartialDeliveryError(error) ? error.deliveryResult : undefined;
-    const receipt = createMessageReceiptFromOutboundResults({
-      results: [
-        ...completedReceiptResults,
-        ...(failedPartial?.receipt
-          ? [{ receipt: failedPartial.receipt }]
-          : (failedPartial?.messageIds ?? []).map((messageId) => ({ messageId }))),
+    // A provider send can complete before preview cleanup fails. Preserve every
+    // completed visible receipt so core cannot mistake that post-send failure for a safe retry.
+    throw wrapMattermostCompletedDeliveryError({
+      error,
+      completedResults: [
+        confirmedPreviewDelivery,
+        previewDeliveryResult,
+        normalDeliveryResult,
+        supplementalDeliveryResult,
       ],
-    });
-    throw createChannelPartialDeliveryError(error, {
-      messageIds: listMessageReceiptPlatformIds(receipt),
-      receipt,
-      visibleReplySent: true,
-      content: joinMattermostVisibleContent([
-        confirmedPreviewDelivery?.content,
-        previewDeliveryResult?.content,
-        normalDeliveryResult?.content,
-        supplementalDeliveryResult?.content,
-        failedPartial?.content,
-      ]),
     });
   }
 }
