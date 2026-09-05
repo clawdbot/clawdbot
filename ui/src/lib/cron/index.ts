@@ -488,7 +488,6 @@ export async function loadCronStatus(
         state.taskLanesError = null;
       }
     }
-    }
   } catch (err) {
     if (!isCurrent() || request.queued) {
       return;
