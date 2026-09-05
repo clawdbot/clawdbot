@@ -321,7 +321,9 @@ export async function runCronIsolatedAgentTurn(
             return prepared.context.withRunSession({
               status: "error",
               error,
-              errorClassification: errorReason ? { kind: "reason", reason: errorReason } : undefined,
+              errorClassification: errorReason
+                ? { kind: "reason", reason: errorReason }
+                : undefined,
               executionStarted,
               ...(admissionDisposition ? { admissionDisposition } : {}),
               // Carry the already-resolved run model into the error/timeout row so
