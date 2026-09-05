@@ -641,7 +641,9 @@ describe("manifest model catalog suppression planner", () => {
     });
     const flashRows = plan.rows.filter((row) => row.id === "gemini-2.5-flash");
     expect(flashRows).toHaveLength(1);
-    expect(flashRows[0].source).toBe("manifest");
+    // noUncheckedIndexedAccess: toHaveLength does not narrow flashRows[0];
+    // dereference via optional chaining so tsgo treats the source access safely.
+    expect(flashRows[0]?.source).toBe("manifest");
     expect(plan.rows.map((row) => row.id)).toContain("gemini-3.5-flash");
   });
 });
