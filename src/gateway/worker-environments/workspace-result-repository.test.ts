@@ -1,5 +1,7 @@
 import fs from "node:fs/promises";
+import os from "node:os";
 import path from "node:path";
+import { pathToFileURL } from "node:url";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { setRuntimeConfigSnapshot } from "../../config/io.js";
 import {
@@ -8,26 +10,35 @@ import {
   upsertSessionEntryCore,
 } from "../../config/sessions/session-accessor.js";
 import { executeSqliteQuerySync, getNodeSqliteKysely } from "../../infra/kysely-sync.js";
+import { NodeWorkerWorkspaceRuntime } from "../../node-host/node-worker-workspace.js";
+import { runCommandWithTimeout } from "../../process/exec.js";
 import type { DB } from "../../state/openclaw-state-db.generated.js";
 import {
   closeOpenClawStateDatabaseForTest,
   openOpenClawStateDatabase,
 } from "../../state/openclaw-state-db.js";
 import { getSessionRepositoryWorkspaceStore } from "../../state/session-repository-workspaces.js";
+import { createNodeWorkerWorkspaceActions } from "./node-worker-workspace-actions.js";
+import { createNodeWorkspaceTransferService } from "./node-workspace-transfer-service.js";
+import { startNodeWorkspaceTransferTestServer } from "./node-workspace-transfer.test-support.js";
 import {
   createPlacementFailureActions,
   type WorkerDispatchEnvironmentService,
 } from "./placement-dispatch-failure.js";
 import { recoverPendingWorkspaceResults } from "./placement-dispatch-pending-results.js";
+import { createWorkerPlacementReclaim } from "./placement-reclaim.js";
 import { placementTurnOwner, projectWorkerSessionTurnClaim } from "./placement-record.js";
 import { createWorkerSessionPlacementStore } from "./placement-store.js";
 import { createRepositoryWorkspaceMutationService } from "./repository-workspace-mutation.js";
+import { syncSessionRepositoryWorkspace } from "./repository-workspace-startup.js";
 import { readSessionRepositoryCheckpoint } from "./session-repository-checkpoints.js";
 import type { WorkerTunnelHandle } from "./tunnel-contract.js";
 import {
   attachedEnvironment,
   cleanupWorkerTurnLauncherTest,
   credential,
+  ENVIRONMENT_ID,
+  OWNER_EPOCH,
   placements,
   root,
   seedActivePlacement,
@@ -35,9 +46,7 @@ import {
   sessionTarget,
   setupWorkerTurnLauncherTest,
 } from "./worker-turn-launcher.test-support.js";
-import { serializeWorkerWorkspaceManifest } from "./workspace-manifest.js";
 import { createWorkerWorkspaceOperationCoordinator } from "./workspace-operation-coordinator.js";
-import { readActualWorkspaceManifest } from "./workspace-reconcile.js";
 import { reconcileWorkspaceAfterTurn } from "./workspace-result-finalize.js";
 import { requireWorkspaceResultGit } from "./workspace-result-git.js";
 import {
@@ -45,28 +54,66 @@ import {
   workerWorkspaceResultRef,
 } from "./workspace-result-staging.js";
 
-describe("repository workspace result ownership", () => {
-  beforeEach(setupWorkerTurnLauncherTest);
-  afterEach(cleanupWorkerTurnLauncherTest);
+// This fixture clones a local Git origin; no GitHub identity is involved.
+vi.mock("./worker-github-binding.js", () => ({
+  prepareWorkerGitHubBinding: async () => undefined,
+}));
 
-  async function fixture(executionMode: "worker-turn" | "remote-exec") {
+describe("repository workspace result ownership", () => {
+  let closeNode: (() => Promise<void>) | undefined;
+  beforeEach(setupWorkerTurnLauncherTest);
+  afterEach(async () => {
+    try {
+      await closeNode?.();
+    } finally {
+      closeNode = undefined;
+      await cleanupWorkerTurnLauncherTest();
+    }
+  });
+
+  async function fixture(executionMode: "worker-turn" | "remote-exec", runSetupScript = false) {
     setRuntimeConfigSnapshot({ session: { store: sessionTarget.storePath } });
-    const remote = path.join(root, "remote-checkout");
-    await fs.mkdir(remote);
-    const baseCommit = "1".repeat(40);
-    const base = await readActualWorkspaceManifest({ root: remote, baseCommit });
+    const origin = path.join(root, "origin");
+    await fs.mkdir(origin);
+    if (runSetupScript) {
+      await fs.mkdir(path.join(origin, ".openclaw"));
+      await fs.writeFile(
+        path.join(origin, ".openclaw", "worktree-setup.sh"),
+        "#!/bin/sh\nprintf 'prepared\\n' > setup.txt\n",
+        { mode: 0o755 },
+      );
+    }
+    const git = async (...args: string[]) => {
+      const result = await runCommandWithTimeout(["git", "-C", origin, ...args], {
+        timeoutMs: 10_000,
+        baseEnv: {
+          PATH: process.env.PATH,
+          HOME: root,
+          GIT_CONFIG_GLOBAL: os.devNull,
+          GIT_CONFIG_NOSYSTEM: "1",
+        },
+      });
+      expect(result.code, result.stderr).toBe(0);
+    };
+    await git("init", "--quiet");
+    await git("add", ".");
+    await git(
+      "-c",
+      "user.name=Repository Test",
+      "-c",
+      "user.email=repository@example.invalid",
+      "commit",
+      "--allow-empty",
+      "--quiet",
+      "-m",
+      "base",
+    );
     const store = getSessionRepositoryWorkspaceStore();
-    let repository = store.create({
+    const repository = store.create({
       agentId: sessionTarget.agentId,
       sessionKey: sessionTarget.sessionKey,
-      url: "https://github.com/example/repository.git",
-      assertCurrent: () => {},
-    });
-    repository = store.bindBase({
-      workspaceId: repository.workspaceId,
-      expectedRevision: repository.revision,
-      baseCommit,
-      baseManifestHash: base.manifestRef,
+      url: pathToFileURL(origin).href,
+      runSetupScript,
       assertCurrent: () => {},
     });
     await upsertSessionEntryCore(sessionTarget, {
@@ -74,42 +121,59 @@ describe("repository workspace result ownership", () => {
       updatedAt: Date.now(),
       repositoryWorkspaceId: repository.workspaceId,
     });
-    seedActivePlacement(executionMode, remote);
     const workspaceOperations = createWorkerWorkspaceOperationCoordinator();
-    const tunnel: WorkerTunnelHandle = {
-      environmentId: "environment-worker-turn",
-      ownerEpoch: 3,
-      runWorkspaceCommand: vi.fn(),
-      syncWorkspace: vi.fn(),
-      stop: vi.fn(),
-      quiesceWorkspace: async () => ({ assertActive: async () => {}, resume: async () => {} }),
-      reconcileWorkspace: async (request) => {
-        if (request.source.kind !== "repository") {
-          throw new Error("Repository result was routed to a local checkout");
-        }
-        const current = await readActualWorkspaceManifest({ root: remote, baseCommit });
-        const prepared = await request.source.prepareCheckpoint({
-          stagingRoot: remote,
-          baseManifestRaw: serializeWorkerWorkspaceManifest(base.manifest),
-          currentManifestRaw: serializeWorkerWorkspaceManifest(current.manifest),
-          baseManifestRef: base.manifestRef,
-          currentManifestRef: current.manifestRef,
-        });
-        return {
-          manifestRef: current.manifestRef,
-          changed: current.manifestRef !== request.baseManifestRef,
-          verifyStable: async () => {
-            const latest = await readActualWorkspaceManifest({ root: remote, baseCommit });
-            expect(latest.manifestRef).toBe(current.manifestRef);
-          },
-          verifyLocalStable: () => prepared.verify(),
-          publishStagedResult: async () => {
-            await prepared.publish();
-          },
-          discardPreparedStagedResult: () => prepared.discard(),
-        };
-      },
+    const service = createNodeWorkspaceTransferService({
+      temporaryRoot: path.join(root, "transfers"),
+      getOwner: () => ({ credential: credential(), environment: attachedEnvironment() }),
+    });
+    const server = await startNodeWorkspaceTransferTestServer(service);
+    closeNode = async () => {
+      await server.close();
+      await service.closeAll();
     };
+    const home = path.join(root, "node-home");
+    const runtime = new NodeWorkerWorkspaceRuntime({
+      root: path.join(home, "node-host"),
+      env: { PATH: process.env.PATH, HOME: home },
+    });
+    const ownerSignal = new AbortController().signal;
+    const tunnel: WorkerTunnelHandle = {
+      environmentId: ENVIRONMENT_ID,
+      ownerEpoch: OWNER_EPOCH,
+      stop: vi.fn(),
+      ...createNodeWorkerWorkspaceActions({
+        environmentId: ENVIRONMENT_ID,
+        ownerEpoch: OWNER_EPOCH,
+        sessionId: SESSION_ID,
+        ownerSignal,
+        isOwnerCurrent: () => true,
+        workspaceTransfer: service,
+        runWorkspaceCommand: async (command) =>
+          await runtime.exec(
+            {
+              gatewayNamespace: "gateway-repository-results",
+              environmentId: ENVIRONMENT_ID,
+              sessionId: SESSION_ID,
+              generation: OWNER_EPOCH,
+              ...command,
+              argv: [...command.argv],
+            },
+            ownerSignal,
+            { url: server.gatewayUrl },
+          ),
+      }),
+    };
+    const synced = await syncSessionRepositoryWorkspace({
+      ...sessionTarget,
+      repository,
+      tunnel,
+      generation: 1,
+      runSetupScript,
+      assertCurrent: () => {},
+    });
+    const remote = synced.remoteWorkspaceDir;
+    const initialCheckpointRef = store.get(repository.workspaceId)!.checkpointRef;
+    seedActivePlacement(executionMode, remote, synced.manifestRef);
     const beginTurn = (claimId: string, markResultPending = true) => {
       const placement = placements.get(SESSION_ID);
       if (placement?.state !== "active") {
@@ -161,14 +225,25 @@ describe("repository workspace result ownership", () => {
       resolveWorkspace,
       workspaceOperations,
     });
+    const stop = createWorkerPlacementReclaim({
+      placements,
+      environments,
+      workspaceOperations,
+      runReclaimBarrier: async ({ begin, reclaim }) =>
+        await reclaim(await resolveWorkspace(), begin()),
+      resolveWorkspaceResultConflict: async () => undefined,
+      reportWorkspaceResultConflict: async () => {},
+    });
     return {
       remote,
       store,
       repository,
+      initialCheckpointRef,
       beginTurn,
       finishTurn,
       workspaceOperations,
       mutations,
+      stop,
       environments,
       resolveWorkspace,
       tunnel,
@@ -312,7 +387,7 @@ describe("repository workspace result ownership", () => {
         },
       }),
     ).rejects.toThrow("not durably accepted");
-    expect(f.store.get(f.repository.workspaceId)?.checkpointRef).toBeNull();
+    expect(f.store.get(f.repository.workspaceId)?.checkpointRef).toBe(f.initialCheckpointRef);
     expect(placements.listPendingWorkspaceResults()).toMatchObject([
       { workspaceAcceptedAtMs: null, recoveryRequestedAtMs: expect.any(Number) },
     ]);
@@ -350,7 +425,7 @@ describe("repository workspace result ownership", () => {
         },
       }),
     ).rejects.toThrow("lost its exact session placement owner");
-    expect(f.store.get(f.repository.workspaceId)?.checkpointRef).toBeNull();
+    expect(f.store.get(f.repository.workspaceId)?.checkpointRef).toBe(f.initialCheckpointRef);
     expect(placements.listPendingWorkspaceResults()).toMatchObject([
       {
         recoveryRequestedAtMs: expect.any(Number),
@@ -360,26 +435,47 @@ describe("repository workspace result ownership", () => {
   });
 
   it.each(["worker-turn", "remote-exec"] as const)(
-    "retains cumulative changes and accepted refs after %s settlement",
+    "retains setup and cumulative %s changes through turns, editor saves, and Stop",
     async (executionMode) => {
-      const f = await fixture(executionMode);
+      const f = await fixture(executionMode, true);
+      const pinned = f.store.get(f.repository.workspaceId)!;
+      expect(pinned.manifestHash).not.toBe(pinned.baseManifestHash);
       await fs.writeFile(path.join(f.remote, "first.txt"), "first turn\n");
       const first = f.beginTurn("first");
       await f.finishTurn(first);
       await fs.writeFile(path.join(f.remote, "second.txt"), "second turn\n");
       await f.finishTurn(f.beginTurn("second"));
+      await f.finishTurn(f.beginTurn("read-only"));
+      await f.mutations.mutate({
+        ...sessionTarget,
+        assertCurrent: () => {},
+        mutate: async () => {
+          await fs.writeFile(path.join(f.remote, "editor.txt"), "editor save\n");
+          return { changed: true, value: undefined };
+        },
+      });
+      await f.stop(sessionTarget);
+      expect(placements.get(SESSION_ID)?.state).toBe("reclaimed");
       const snapshot = await readSessionRepositoryCheckpoint({
         workspaceId: f.repository.workspaceId,
       });
       expect(snapshot.changedEntries.map((entry) => entry.path)).toEqual([
+        "editor.txt",
         "first.txt",
         "second.txt",
+        "setup.txt",
+      ]);
+      const expected = new Map([
+        ["editor.txt", "editor save\n"],
+        ["first.txt", "first turn\n"],
+        ["second.txt", "second turn\n"],
+        ["setup.txt", "prepared\n"],
       ]);
       for (const entry of snapshot.changedEntries) {
-        expect((await snapshot.readEntry(entry)).toString()).toBe(
-          entry.path === "first.txt" ? "first turn\n" : "second turn\n",
-        );
+        expect((await snapshot.readEntry(entry)).toString()).toBe(expected.get(entry.path));
       }
+      expect(snapshot.baseManifestRef).toBe(pinned.baseManifestHash);
+      expect(f.store.get(f.repository.workspaceId)?.baseManifestHash).toBe(pinned.baseManifestHash);
       const artifactRoot = f.store.artifactPath(f.repository.workspaceId);
       expect(
         await requireWorkspaceResultGit(artifactRoot, ["rev-parse", "--is-bare-repository"]),

@@ -39,9 +39,14 @@ export function createWorkerWorkspaceReconcileRequest(params: {
       baseManifestRef,
     };
   }
+  if (!workspace.repository.baseManifestHash) {
+    throw new Error("Repository workspace has no pinned source baseline");
+  }
   return {
     remoteWorkspaceDir,
-    baseManifestRef,
+    // Repository results are cumulative from the pinned commit. The placement
+    // journal advances independently as setup, turns, and editor saves settle.
+    baseManifestRef: workspace.repository.baseManifestHash,
     source: {
       kind: "repository",
       prepareCheckpoint: async (payload) => {

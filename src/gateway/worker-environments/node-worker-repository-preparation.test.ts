@@ -86,14 +86,20 @@ it("prepares and reuses an exact repository commit without a Gateway workspace",
   );
   await fs.writeFile(path.join(remoteWorkspaceDir, "session-only.txt"), "discard on replacement");
 
-  const reused = await repository.prepareRepository(source, manifestRef);
+  const offlineOrigin = `${origin}-offline`;
+  await fs.rename(origin, offlineOrigin);
+  try {
+    const reused = await repository.prepareRepository(source, manifestRef);
 
-  expect(reused).toEqual({ ...prepared, seeded: true });
-  expect((await fs.readdir(remoteWorkspaceDir)).toSorted()).toEqual([".git", "tracked.txt"]);
-  expect(await git(remoteWorkspaceDir, "rev-parse", "HEAD")).toBe(commit);
-  expect(await repository.captureManifest(remoteWorkspaceDir, commit, manifestRef)).toBe(
-    manifestRef,
-  );
+    expect(reused).toEqual({ ...prepared, seeded: true });
+    expect((await fs.readdir(remoteWorkspaceDir)).toSorted()).toEqual([".git", "tracked.txt"]);
+    expect(await git(remoteWorkspaceDir, "rev-parse", "HEAD")).toBe(commit);
+    expect(await repository.captureManifest(remoteWorkspaceDir, commit, manifestRef)).toBe(
+      manifestRef,
+    );
+  } finally {
+    await fs.rename(offlineOrigin, origin);
+  }
 
   // A provider can retain an exact commit after a force push removes its advertised ref.
   await git(origin, "config", "uploadpack.allowAnySHA1InWant", "true");
