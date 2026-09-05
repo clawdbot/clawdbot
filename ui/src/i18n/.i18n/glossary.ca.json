@@ -1,0 +1,82 @@
+[
+    {
+        "source": "OpenClaw",
+        "target": "OpenClaw"
+    },
+    {
+        "source": "Gateway",
+        "target": "Passarel·la"
+    },
+    {
+        "source": "Control UI",
+        "target": "Control UI"
+    },
+    {
+        "source": "Skills",
+        "target": "Habilitats"
+    },
+    {
+        "source": "Tailscale",
+        "target": "Tailscale"
+    },
+    {
+        "source": "Settings",
+        "target": "Configuració"
+    },
+    {
+        "source": "Sessions",
+        "target": "Sessions"
+    },
+    {
+        "source": "Agents",
+        "target": "Agents"
+    },
+    {
+        "source": "Channels",
+        "target": "Canals"
+    },
+    {
+        "source": "Plugins",
+        "target": "Connectors"
+    },
+    {
+        "source": "Portals",
+        "target": "Portals"
+    },
+    {
+        "source": "Memory",
+        "target": "Memòria"
+    },
+    {
+        "source": "Models",
+        "target": "Models"
+    },
+    {
+        "source": "Workspace",
+        "target": "Espai de treball"
+    },
+    {
+        "source": "Terminal",
+        "target": "Terminal"
+    },
+    {
+        "source": "Browser",
+        "target": "Navegador"
+    },
+    {
+        "source": "Dashboard",
+        "target": "Tauler"
+    },
+    {
+        "source": "Heartbeat",
+        "target": "Polset"
+    },
+    {
+        "source": "Automations",
+        "target": "Automatitzacions"
+    },
+    {
+        "source": "Tasks",
+        "target": "Tasques"
+    }
+]
