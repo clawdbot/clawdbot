@@ -121,7 +121,7 @@ class SidebarUpdateCard extends OpenClawLightDomContentsElement {
       existingRun: this.updateRun,
       updateAvailable: this.updateAvailable,
       updateSchedule: this.updateSchedule,
-      viaNativeApp: false,
+      viaNativeApp: hasNativeUpdateBridge(),
       startGatewayUpdate: () => this.onUpdate(),
       watchUpdateProgress: this.watchUpdateProgress,
       onCheckStatus: this.onCheckStatus,

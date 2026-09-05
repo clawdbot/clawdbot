@@ -357,76 +357,99 @@ suite.define(() => {
     );
   });
 
-  it("shows and routes the update target from live Mac app ownership", async () => {
-    const artifactDir = captureUiProofEnabled
-      ? path.join(suite.artifactDir, "update-ownership")
-      : "";
-    const context = await suite.browser.newContext({
-      locale: "en-US",
-      serviceWorkers: "block",
-      viewport: { height: 720, width: 1280 },
-    });
-    await context.addInitScript(() => {
-      const nativeWindow = window as unknown as {
-        openClawUpdateMessages: unknown[];
-        webkit: {
-          messageHandlers: { openclawUpdate: { postMessage: (message: unknown) => void } };
+  it.each(["available", "failed", "skipped"] as const)(
+    "routes the %s sidebar update through live Mac app ownership",
+    async (outcome) => {
+      const artifactDir = captureUiProofEnabled
+        ? path.join(suite.artifactDir, `update-ownership-${outcome}`)
+        : "";
+      const context = await suite.browser.newContext({
+        locale: "en-US",
+        serviceWorkers: "block",
+        viewport: { height: 720, width: 1280 },
+      });
+      await context.addInitScript(() => {
+        const nativeWindow = window as unknown as {
+          openClawUpdateMessages: unknown[];
+          webkit: {
+            messageHandlers: { openclawUpdate: { postMessage: (message: unknown) => void } };
+          };
         };
-      };
-      nativeWindow.openClawUpdateMessages = [];
-      nativeWindow.webkit = {
-        messageHandlers: {
-          openclawUpdate: {
-            postMessage: (message) => nativeWindow.openClawUpdateMessages.push(message),
+        nativeWindow.openClawUpdateMessages = [];
+        nativeWindow.webkit = {
+          messageHandlers: {
+            openclawUpdate: {
+              postMessage: (message) => nativeWindow.openClawUpdateMessages.push(message),
+            },
           },
-        },
-      };
-    });
-    const page = await context.newPage();
-    const pageErrors: string[] = [];
-    page.on("pageerror", (error) => pageErrors.push(String(error)));
-    const gateway = await installMockGateway(page, {
-      methodResponses: {
-        "update.run": {
-          ok: true,
-          restart: null,
-          result: { after: { version: "2.0.0" }, status: "ok" },
-        },
-      },
-    });
-
-    try {
-      expect((await page.goto(`${suite.server.baseUrl}chat`))?.status()).toBe(200);
-      await gateway.waitForRequest("chat.startup");
-      await gateway.emitGatewayEvent("update.available", {
-        updateAvailable: {
-          channel: "stable",
-          currentVersion: "1.0.0",
-          latestVersion: "2.0.0",
+        };
+      });
+      const page = await context.newPage();
+      const pageErrors: string[] = [];
+      page.on("pageerror", (error) => pageErrors.push(String(error)));
+      const run =
+        outcome === "available"
+          ? null
+          : createUpdateRunFixture({
+              phase: "finished",
+              status: outcome,
+              finishedAtMs: Date.now(),
+            });
+      const gateway = await installMockGateway(page, {
+        featureMethods: ["openclaw.chat", "update.run"],
+        methodResponses: {
+          "update.status": { activeRun: null, lastRun: run },
+          "update.runs.get": { run },
+          "update.run": {
+            ok: true,
+            restart: null,
+            result: { after: { version: "2.0.0" }, status: "ok" },
+          },
         },
       });
 
-      await openUpdateConfirmation(page);
-      await page.getByRole("button", { name: "Update Mac app and restart", exact: true }).click();
-      expect(
-        await page.evaluate(
-          () => (window as unknown as { openClawUpdateMessages: unknown[] }).openClawUpdateMessages,
-        ),
-      ).toEqual([{ type: "start-update" }]);
-      expect(await gateway.getRequests("update.run")).toHaveLength(0);
+      try {
+        expect((await page.goto(`${suite.server.baseUrl}chat`))?.status()).toBe(200);
+        await gateway.waitForRequest("chat.startup");
+        await gateway.emitGatewayEvent("update.available", {
+          updateAvailable: {
+            channel: "stable",
+            currentVersion: "1.0.0",
+            latestVersion: "2.0.0",
+          },
+        });
 
-      await page.keyboard.press("Control+Shift+,");
-      await page.locator(".shell--settings").waitFor();
-      expect(await page.locator("openclaw-sidebar-attention").count()).toBe(0);
-      await page.evaluate(
-        (eventName) => window.dispatchEvent(new CustomEvent(eventName)),
-        NATIVE_UPDATE_DECLINED_EVENT,
-      );
-      await expect.poll(async () => (await gateway.getRequests("update.run")).length).toBe(1);
-      expect(pageErrors).toEqual([]);
-      await captureUpdateProof(page, artifactDir, "gateway-update-target.png");
-    } finally {
-      await context.close();
-    }
-  });
+        await openUpdateConfirmation(page);
+        if (run) {
+          await page.getByRole("button", { name: "Retry update", exact: true }).click();
+        }
+        expect(await page.locator("openclaw-modal-dialog").getAttribute("label")).toBe(
+          "Update Mac app + Gateway",
+        );
+        expect(await gateway.getRequests("update.run")).toHaveLength(0);
+        await captureUpdateProof(page, artifactDir, "native-update-confirmation.png");
+        await page.getByRole("button", { name: "Update Mac app and restart", exact: true }).click();
+        expect(
+          await page.evaluate(
+            () =>
+              (window as unknown as { openClawUpdateMessages: unknown[] }).openClawUpdateMessages,
+          ),
+        ).toEqual([{ type: "start-update" }]);
+        expect(await gateway.getRequests("update.run")).toHaveLength(0);
+
+        await page.keyboard.press("Control+Shift+,");
+        await page.locator(".shell--settings").waitFor();
+        expect(await page.locator("openclaw-sidebar-attention").count()).toBe(0);
+        await page.evaluate(
+          (eventName) => window.dispatchEvent(new CustomEvent(eventName)),
+          NATIVE_UPDATE_DECLINED_EVENT,
+        );
+        await expect.poll(async () => (await gateway.getRequests("update.run")).length).toBe(1);
+        expect(pageErrors).toEqual([]);
+        await captureUpdateProof(page, artifactDir, "gateway-update-target.png");
+      } finally {
+        await context.close();
+      }
+    },
+  );
 });
