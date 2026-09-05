@@ -17,9 +17,12 @@ import {
 } from "./message-tool-schema-scoping.js";
 
 const AllMessageActions = CHANNEL_MESSAGE_ACTION_NAMES;
+const MESSAGE_CHANNEL_DESCRIPTION =
+  'Name of one configured messaging provider, or "all" for broadcast; not a channel or conversation ID.';
+
 function buildRoutingSchema() {
   return {
-    channel: Type.Optional(Type.String()),
+    channel: Type.Optional(Type.String({ description: MESSAGE_CHANNEL_DESCRIPTION })),
     target: Type.Optional(channelTargetSchema()),
     targets: Type.Optional(channelTargetsSchema()),
     accountId: Type.Optional(Type.String()),

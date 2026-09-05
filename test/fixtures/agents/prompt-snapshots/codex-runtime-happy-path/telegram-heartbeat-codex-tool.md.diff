@@ -1,5 +1,5 @@
---- telegram-direct-codex-message-tool.md	sha256=40b64f9c5a0e1bb1892cbb10ac4f9242d8ba13c425b612dc09a8aa8680bd84e0
-+++ telegram-heartbeat-codex-tool.md	sha256=e4d6099006b385c5434da310ec6669f052c91609bc1495175e1db7c59e11e64b
+--- telegram-direct-codex-message-tool.md	sha256=eb3687497f29fffa4fb43a509df85c924aed5325f0eb25e687fc49511b8ef5f1
++++ telegram-heartbeat-codex-tool.md	sha256=665e6027e02b59d41ea938b8f231fbf6f177502deb1c8e5c1ca43013514644bd
 @@ -1,1 +1,1 @@
 -# Telegram Direct Codex Message Tool Turn
 +# Telegram Direct Codex Heartbeat Tool Turn
@@ -30,20 +30,20 @@
 -    "dynamicToolsFrom": "codex-dynamic-tools.telegram-direct.json",
 +    "dynamicToolsFrom": "codex-dynamic-tools.heartbeat-turn.json",
 @@ -244,2 +241,2 @@
--    "chars": 57519,
--    "roughTokens": 14380
-+    "chars": 59012,
-+    "roughTokens": 14753
+-    "chars": 57650,
+-    "roughTokens": 14413
++    "chars": 59143,
++    "roughTokens": 14786
 @@ -252,2 +249,2 @@
 -    "chars": 27170,
 -    "roughTokens": 6793
 +    "chars": 27512,
 +    "roughTokens": 6878
 @@ -256,2 +253,2 @@
--    "chars": 84691,
--    "roughTokens": 21173
-+    "chars": 86526,
-+    "roughTokens": 21632
+-    "chars": 84822,
+-    "roughTokens": 21206
++    "chars": 86657,
++    "roughTokens": 21665
 @@ -260,2 +257,2 @@
 -    "chars": 863,
 -    "roughTokens": 216
@@ -60,7 +60,7 @@
 +Full tool overrides: `codex-dynamic-tools.heartbeat-turn.json` (base: `codex-dynamic-tools.telegram-direct.json`)
 @@ -561,0 +559,1 @@
 +  "heartbeat_respond",
-@@ -708,0 +707,39 @@
+@@ -709,0 +708,39 @@
 +  },
 +  {
 +    "description": "Accept heartbeat result for post-turn handling. `notify=false` no visible send. `notify=true` needs concise notificationText. Scratch is monitor prose only.",

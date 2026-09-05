@@ -25,11 +25,13 @@ function sourceReplyPolicyError(message: string): MessageActionDeniedError {
     "message-source-reply:current-conversation",
   );
 }
+const SOURCE_REPLY_ONLY_CHANNEL_DESCRIPTION =
+  "Name of one of this agent's configured messaging providers, not a channel or conversation ID. For source replies, it must match the current source provider.";
 export const SOURCE_REPLY_ONLY_MESSAGE_SCHEMA = Type.Object({
   action: stringEnum(["send"], {
     description: "Send a text reply to the current source conversation.",
   }),
-  channel: Type.Optional(Type.String()),
+  channel: Type.Optional(Type.String({ description: SOURCE_REPLY_ONLY_CHANNEL_DESCRIPTION })),
   target: Type.Optional(channelTargetSchema()),
   accountId: Type.Optional(Type.String()),
   message: Type.Optional(

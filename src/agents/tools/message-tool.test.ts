@@ -855,6 +855,10 @@ describe("completion source-reply authority", () => {
     expectStringSchema(properties.message, {
       description: "Text to send to the current source conversation.",
     });
+    expectStringSchema(properties.channel, {
+      description:
+        "Name of one of this agent's configured messaging providers, not a channel or conversation ID. For source replies, it must match the current source provider.",
+    });
     expect(tool.description).toContain("Supports actions: send.");
     expect(tool.description).not.toContain("delete");
   });
@@ -4275,6 +4279,18 @@ describe("message tool description", () => {
       "Discord/Slack/Mattermost <channelId|user:ID|channel:ID>",
     );
     expect(target?.description).toContain("Telegram chat id/@username");
+  });
+
+  it("describes channel as the messaging provider name or broadcast selector", () => {
+    const tool = createMessageTool({
+      config: {} as never,
+    });
+    const properties = getToolProperties(tool);
+
+    expectStringSchema(properties.channel, {
+      description:
+        'Name of one configured messaging provider, or "all" for broadcast; not a channel or conversation ID.',
+    });
   });
 
   it("describes userId as required directly for member-info, not via target", () => {
