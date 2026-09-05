@@ -391,15 +391,14 @@ export function assertVisibleMessageRangeJson(
       projection.database.db,
       range.query
         .select(["active.event_seq", "active.message_position", "event.event_json"])
-        .where((eb) =>
-          eb.or([
-            // The raw check rejects extra values; the enclosing array cannot end at a NUL.
-            /* kysely-allow-raw: validate ordinary payloads without materializing them in JavaScript. */
-            eb(sql<number>`json_valid(event.event_json)`, "=", 0),
-            /* kysely-allow-raw: require a closing delimiter beyond SQLite's NUL-terminated JSON input. */
-            eb(sql<number>`json_valid('[' || event.event_json || ']')`, "=", 0),
-          ]),
-        ),
+        .where((eb) => {
+          // The raw check rejects extra values; the enclosing array cannot end at a NUL.
+          const enclosed = eb(eb.val("["), "||", eb("event.event_json", "||", eb.val("]")));
+          return eb.or([
+            eb(eb.fn<number>("json_valid", ["event.event_json"]), "=", 0),
+            eb(eb.fn<number>("json_valid", [enclosed]), "=", 0),
+          ]);
+        }),
     )) {
       // SQLite's nesting limit is stricter than JSON.parse. Keep readable deep
       // rows and let the existing parser own actual malformed-row failures.
