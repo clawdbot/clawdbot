@@ -1,5 +1,6 @@
 // Exposes private secret file helpers with fs-safe defaults.
 import "./fs-safe-defaults.js";
+import { constants as fsConstants } from "node:fs";
 import fs from "node:fs/promises";
 import path from "node:path";
 import { FsSafeError, type FsSafeErrorCode } from "@openclaw/fs-safe";
@@ -26,7 +27,9 @@ type SecretFileWriteParams = Parameters<typeof writeSecretFileAtomicImpl>[0];
 
 // fs-safe 0.8 no longer repairs existing directory modes; OpenClaw keeps its
 // documented behavior of tightening its own secret directories before writing.
-// Symlinked or non-directory components are left for fs-safe to reject.
+// Every component is opened no-follow and chmodded through the pinned
+// descriptor, so a swapped or symlinked directory is never mutated — fs-safe
+// rejects those itself.
 async function tightenSecretDirectoryModes(params: {
   rootDir: string;
   filePath: string;
@@ -42,9 +45,6 @@ async function tightenSecretDirectoryModes(params: {
     return;
   }
   const targetMode = params.dirMode ?? PRIVATE_SECRET_DIR_MODE;
-  // Walk the lexical chain; never realpath first. A symlinked component —
-  // including the root itself — must be left for fs-safe to reject, not
-  // resolved and chmodded at its destination.
   const chain: string[] = [root];
   if (relative) {
     let current = root;
@@ -53,18 +53,21 @@ async function tightenSecretDirectoryModes(params: {
       chain.push(current);
     }
   }
+  const openFlags = fsConstants.O_RDONLY | fsConstants.O_NOFOLLOW | fsConstants.O_DIRECTORY;
   for (const dir of chain) {
-    let stat;
+    let handle;
     try {
-      stat = await fs.lstat(dir);
+      handle = await fs.open(dir, openFlags);
     } catch {
-      return; // Missing parents are created by fs-safe at dirMode.
+      return; // Missing parents are created by fs-safe at dirMode; symlinked or non-directory components are rejected by it.
     }
-    if (!stat.isDirectory() || stat.isSymbolicLink()) {
-      return; // fs-safe rejects symlinked or non-directory components itself.
-    }
-    if ((stat.mode & 0o777) !== targetMode) {
-      await fs.chmod(dir, targetMode);
+    try {
+      const stat = await handle.stat();
+      if ((stat.mode & 0o777) !== targetMode) {
+        await handle.chmod(targetMode);
+      }
+    } finally {
+      await handle.close().catch(() => undefined);
     }
   }
 }
