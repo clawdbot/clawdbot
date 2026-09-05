@@ -20,7 +20,7 @@ const log = createSubsystemLogger("memory");
 
 export type MemoryIndexManagerPurpose = "default" | "status" | "cli" | "search" | "maintenance";
 
-export function isTransientMemoryIndexManagerPurpose(purpose: MemoryIndexManagerPurpose): boolean {
+function isTransientMemoryIndexManagerPurpose(purpose: MemoryIndexManagerPurpose): boolean {
   return purpose !== "default" && purpose !== "search";
 }
 
