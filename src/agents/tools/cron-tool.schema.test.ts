@@ -8,6 +8,7 @@ import { MAX_DATE_TIMESTAMP_MS } from "@openclaw/normalization-core/number-coerc
 import { Value } from "typebox/value";
 import { describe, expect, it } from "vitest";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
+import { recoverCronObjectFromFlatParams } from "./cron-tool-canonicalize.js";
 import { createCronTool } from "./cron-tool.js";
 
 /** Unwraps nullable anyOf unions to their object variant so paths can descend. */
@@ -110,6 +111,101 @@ describe("createCronToolSchema", () => {
     expect(schemaRecord.properties).not.toHaveProperty("patch");
   });
 
+  it("advertises the narrow flat contract for ordinary add and update calls", () => {
+    expect(
+      [
+        "name",
+        "enabled",
+        "sessionTarget",
+        "at",
+        "everyMs",
+        "expr",
+        "tz",
+        "message",
+        "text",
+        "toolsAllow",
+      ].map((field) => [field, propertyAt(schemaRecord, field)?.type]),
+    ).toEqual([
+      ["name", "string"],
+      ["enabled", "boolean"],
+      ["sessionTarget", "string"],
+      ["at", "string"],
+      ["everyMs", "integer"],
+      ["expr", "string"],
+      ["tz", "string"],
+      ["message", "string"],
+      ["text", "string"],
+      ["toolsAllow", undefined],
+    ]);
+    expect(propertyAt(schemaRecord, "toolsAllow")?.anyOf).toEqual([
+      expect.objectContaining({ type: "array" }),
+      expect.objectContaining({ type: "null" }),
+    ]);
+    expect(propertyAt(schemaRecord, "text")?.description).toMatch(/add.*update.*wake/i);
+    expect(propertyAt(schemaRecord, "mode")?.description).toMatch(/wake.*only/i);
+    expect(createCronTool().description).toContain(
+      "the nested job takes precedence over flat fields",
+    );
+  });
+
+  it("only advertises flat cron fields that the canonicalizer recovers", () => {
+    const callRoutingFields = new Set([
+      "action",
+      "agentId",
+      "contextMessages",
+      "gatewayToken",
+      "gatewayUrl",
+      "id",
+      "includeDisabled",
+      "in",
+      "job",
+      "jobId",
+      "limit",
+      "mode",
+      "offset",
+      "runMode",
+      "sessionKey",
+      "timeoutMs",
+    ]);
+    const topLevelFields = Object.keys((schemaRecord.properties ?? {}) as Record<string, unknown>);
+    const flatFields = topLevelFields.filter((field) => !callRoutingFields.has(field));
+
+    expect(flatFields.toSorted()).toEqual(
+      [
+        "at",
+        "enabled",
+        "everyMs",
+        "expr",
+        "message",
+        "name",
+        "sessionTarget",
+        "text",
+        "toolsAllow",
+        "tz",
+      ].toSorted(),
+    );
+    for (const field of flatFields) {
+      expect({ field, found: recoverCronObjectFromFlatParams({ [field]: true }).found }).toEqual({
+        field,
+        found: true,
+      });
+    }
+  });
+
+  it("repairs a malformed flat call before provider schema validation", () => {
+    const tool = createCronTool();
+    const raw = {
+      action: "add",
+      job: "truncated",
+      name: "daily summary",
+      expr: "0 9 * * *",
+      message: "Send the summary",
+    };
+
+    expect(Value.Check(schema, raw)).toBe(false);
+    expect(Value.Check(schema, tool.prepareArguments?.(raw))).toBe(true);
+  });
+
   it.each([undefined, "", " \t ", "agent:main:telegram:direct:alice", " agent:main:main "])(
     "advertises job retargeting only without session scope (%j)",
     (agentSessionKey) => {
@@ -188,10 +284,10 @@ describe("createCronToolSchema", () => {
 
   it("documents wake, context, and session-target fields", () => {
     expect(propertyAt(schemaRecord, "text")?.description).toBe(
-      'systemEvent text for action="wake"',
+      'systemEvent text for action="add" or action="update"; event text for action="wake"',
     );
     expect(propertyAt(schemaRecord, "mode")?.description).toBe(
-      'Wake mode for action="wake" (default next-heartbeat)',
+      'Wake mode for action="wake" only (default next-heartbeat); not cron job delivery mode',
     );
     expect(propertyAt(schemaRecord, "job.sessionTarget")?.description).toBe(
       "main | isolated | current (agentTurn default) | session:<id>",

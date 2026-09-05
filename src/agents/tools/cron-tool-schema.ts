@@ -315,6 +315,49 @@ function createCronFailureAlertSchema(): TSchema {
   );
 }
 
+// Small flat path for ordinary jobs that less-capable models can emit reliably.
+// Advanced fields stay in the canonical nested job contract.
+function createCronFlatJobSchemaProperties() {
+  return {
+    name: Type.Optional(
+      Type.String({ description: 'Flat job name for action="add" or action="update"' }),
+    ),
+    enabled: Type.Optional(
+      Type.Boolean({ description: 'Flat enabled flag for action="add" or action="update"' }),
+    ),
+    sessionTarget: Type.Optional(
+      Type.String({
+        description:
+          'Flat target for action="add" or action="update": main | isolated | current | session:<id>',
+      }),
+    ),
+    at: Type.Optional(
+      Type.String({
+        description: "Flat one-shot schedule for add/update: the requested ISO-8601 timestamp",
+      }),
+    ),
+    everyMs: optionalPositiveIntegerSchema({
+      description: "Flat interval schedule for add/update in ms (5 minutes = 300000)",
+      maximum: MAX_DATE_TIMESTAMP_MS,
+    }),
+    expr: Type.Optional(
+      Type.String({
+        description: "Flat wall-clock cron schedule for add/update (for example, 0 9 * * *)",
+      }),
+    ),
+    tz: Type.Optional(Type.String({ description: "IANA timezone for a flat cron expression" })),
+    message: Type.Optional(
+      Type.String({
+        description:
+          'Flat agentTurn prompt for action="add" or action="update"; implies agentTurn payload',
+      }),
+    ),
+    toolsAllow: nullableStringArraySchema(
+      'Flat agentTurn tool allowlist for add/update; use ["read"] to restrict the job',
+    ),
+  };
+}
+
 // Flattened schema: runtime validates per-action requirements.
 export function createCronToolSchema(options?: CronToolSchemaOptions): TSchema {
   const triggersEnabled = options?.triggersEnabled !== false;
@@ -385,6 +428,7 @@ export function createCronToolSchema(options?: CronToolSchemaOptions): TSchema {
         managementOnly ? CRON_MANAGEMENT_METHODS.map((method) => method.slice(5)) : CRON_ACTIONS,
       ),
       ...gatewayCallOptionSchemaProperties(),
+      ...(managementOnly ? {} : createCronFlatJobSchemaProperties()),
       includeDisabled: Type.Optional(Type.Boolean()),
       limit: optionalPositiveIntegerSchema({
         maximum: CRON_TOOL_LIST_MAX_LIMIT,
@@ -401,9 +445,15 @@ export function createCronToolSchema(options?: CronToolSchemaOptions): TSchema {
           description: 'Relative duration for action="next_check" (for example, "15m")',
         }),
       ),
-      text: Type.Optional(Type.String({ description: 'systemEvent text for action="wake"' })),
+      text: Type.Optional(
+        Type.String({
+          description:
+            'systemEvent text for action="add" or action="update"; event text for action="wake"',
+        }),
+      ),
       mode: optionalStringEnum(CRON_WAKE_MODES, {
-        description: 'Wake mode for action="wake" (default next-heartbeat)',
+        description:
+          'Wake mode for action="wake" only (default next-heartbeat); not cron job delivery mode',
       }),
       runMode: optionalStringEnum(CRON_RUN_MODES, {
         description:

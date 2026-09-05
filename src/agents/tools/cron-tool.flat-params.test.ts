@@ -127,6 +127,421 @@ describe("cron tool flat-params", () => {
     });
   });
 
+  it("prepares flat add and update calls before schema validation", () => {
+    const tool = createCronTool();
+    const flatAdd = {
+      action: "add",
+      job: "truncated",
+      name: "daily summary",
+      expr: "0 9 * * *",
+      tz: "Europe/London",
+      message: "Send the summary",
+    };
+    const preparedAdd = tool.prepareArguments?.(flatAdd);
+
+    expect(preparedAdd).toMatchObject({
+      action: "add",
+      job: {
+        name: "daily summary",
+        schedule: { kind: "cron", expr: "0 9 * * *", tz: "Europe/London" },
+        payload: { kind: "agentTurn", message: "Send the summary" },
+      },
+    });
+    expect(tool.prepareArguments?.(preparedAdd)).toEqual(preparedAdd);
+    expect(
+      tool.prepareArguments?.({
+        action: "update",
+        jobId: "job-123",
+        enabled: false,
+        everyMs: 300_000,
+      }),
+    ).toMatchObject({
+      action: "update",
+      jobId: "job-123",
+      job: { enabled: false, schedule: { kind: "every", everyMs: 300_000 } },
+    });
+  });
+
+  it.each([
+    {
+      caseName: "one-shot reminder",
+      args: {
+        action: "add",
+        message:
+          "Create a cron job named exactly FLATTEST-1 that reminds me to stretch at 2026-08-16T21:29:19Z.",
+        name: "FLATTEST-1",
+        sessionTarget: "current",
+        text: "remind me to stretch at 2026-08-16T21:29:19Z",
+      },
+    },
+    {
+      caseName: "recurring reminder",
+      args: {
+        action: "add",
+        message:
+          "Create a cron job named exactly FLATTEST-2 that runs every 5 minutes and asks me if I'm still working.",
+        name: "FLATTEST-2",
+        sessionTarget: "current",
+        text: "Are you still working?",
+      },
+    },
+  ])("guides a schedule-less flat $caseName call", ({ args }) => {
+    const tool = createCronTool();
+
+    expect(() => tool.prepareArguments?.(args)).toThrow(
+      'set "at" to an ISO-8601 timestamp, "everyMs" to an interval in milliseconds (5 minutes = 300000), or "expr" to a cron expression',
+    );
+  });
+
+  it('accepts "current" on a corrected weak-model flat add', () => {
+    const tool = createCronTool();
+
+    expect(
+      tool.prepareArguments?.({
+        action: "add",
+        message:
+          "Create a cron job named exactly FLATTEST-2 that runs every 5 minutes and asks me if I'm still working.",
+        name: "FLATTEST-2",
+        sessionTarget: "current",
+        text: "Are you still working?",
+        everyMs: 300_000,
+      }),
+    ).toMatchObject({
+      job: {
+        name: "FLATTEST-2",
+        sessionTarget: "current",
+        schedule: { kind: "every", everyMs: 300_000 },
+      },
+    });
+  });
+
+  it("keeps wake text out of cron job preparation", () => {
+    const tool = createCronTool();
+    const wake = { action: "wake", text: "check now", mode: "now" };
+
+    expect(tool.prepareArguments?.(wake)).toEqual(wake);
+  });
+
+  it("normalizes scalar payload array hints and remains idempotent", () => {
+    const tool = createCronTool();
+    const prepared = tool.prepareArguments?.({
+      action: "add",
+      job: {
+        schedule: { kind: "every", everyMs: 60_000 },
+        payload: {
+          message: "Run the report",
+          toolsAllow: " read ",
+          fallbacks: " openai/gpt-5-mini ",
+        },
+      },
+    });
+
+    expect(prepared).toMatchObject({
+      job: {
+        payload: {
+          kind: "agentTurn",
+          toolsAllow: ["read"],
+          fallbacks: ["openai/gpt-5-mini"],
+        },
+      },
+    });
+    expect(tool.prepareArguments?.(prepared)).toEqual(prepared);
+  });
+
+  it("repairs a scalar flat toolsAllow before schema validation", () => {
+    const tool = createCronTool();
+    const prepared = tool.prepareArguments?.({
+      action: "add",
+      everyMs: 3_600_000,
+      job: "truncated",
+      message: "status summary",
+      name: "FLATTEST-9",
+      text: "status summary",
+      toolsAllow: "read",
+    });
+
+    expect(prepared).toMatchObject({
+      job: {
+        name: "FLATTEST-9",
+        schedule: { kind: "every", everyMs: 3_600_000 },
+        payload: {
+          kind: "agentTurn",
+          message: "status summary",
+          text: "status summary",
+          toolsAllow: ["read"],
+        },
+      },
+    });
+    expect(tool.prepareArguments?.(prepared)).toEqual(prepared);
+  });
+
+  it("caps an allowed scalar flat toolsAllow to creator authority before dispatch", async () => {
+    const tool = createCronTool(
+      { creatorToolAllowlist: ["read", "cron"] },
+      { callGatewayTool: callGatewayToolMock },
+    );
+
+    await tool.execute("call-flat-toolsallow-allowed", {
+      action: "add",
+      everyMs: 3_600_000,
+      message: "status summary",
+      name: "FLATTEST-CAP-ALLOWED",
+      toolsAllow: "read",
+    });
+
+    const [method, , params] = firstGatewayToolCall<{
+      payload?: { toolsAllow?: unknown };
+    }>();
+    expect(method).toBe("cron.add");
+    expect(params.payload?.toolsAllow).toEqual(["read"]);
+  });
+
+  it("strips a scalar flat toolsAllow outside creator authority before dispatch", async () => {
+    const tool = createCronTool(
+      {
+        creatorToolAllowlist: ["read", "cron"],
+      },
+      { callGatewayTool: callGatewayToolMock },
+    );
+
+    await tool.execute("call-flat-toolsallow-unavailable", {
+      action: "add",
+      everyMs: 3_600_000,
+      message: "status summary",
+      name: "FLATTEST-CAP-UNAVAILABLE",
+      toolsAllow: "write",
+    });
+
+    const [method, , params] = firstGatewayToolCall<{
+      payload?: { toolsAllow?: unknown };
+    }>();
+    expect(method).toBe("cron.add");
+    expect(params.payload?.toolsAllow).toEqual([]);
+  });
+
+  it("leaves blank scalar capability fields invalid", () => {
+    const tool = createCronTool();
+    const prepared = tool.prepareArguments?.({
+      action: "add",
+      job: {
+        schedule: { kind: "every", everyMs: 60_000 },
+        payload: { message: "Run the report", toolsAllow: "" },
+      },
+    }) as { job?: { payload?: { toolsAllow?: unknown } } };
+
+    expect(prepared.job?.payload?.toolsAllow).toBe("");
+  });
+
+  it("rejects non-stream top-level mode on add and update calls", async () => {
+    const tool = createCronTool(undefined, { callGatewayTool: callGatewayToolMock });
+
+    for (const action of ["add", "update"] as const) {
+      for (const mode of ["now", "next-heartbeat"] as const) {
+        expect(() => tool.prepareArguments?.({ action, mode })).toThrow(
+          '"mode" is only valid for action="wake"',
+        );
+      }
+    }
+    for (const args of [
+      { action: "add", everyMs: 3_600_000, message: "Run the report", mode: "line" },
+      { action: "add", expr: "0 9 * * *", message: "Run the report", mode: "match" },
+      { action: "update", id: "job-1", mode: "line" },
+    ] as const) {
+      expect(() => tool.prepareArguments?.(args)).toThrow('"mode" is only valid for action="wake"');
+    }
+
+    const nestedCalls = [
+      {
+        action: "add",
+        mode: "match",
+        job: {
+          schedule: { kind: "every", everyMs: 60_000 },
+          payload: { kind: "agentTurn", message: "Run the report" },
+        },
+      },
+      {
+        action: "update",
+        id: "job-1",
+        mode: "now",
+        job: { enabled: false },
+      },
+    ] as const;
+    for (const args of nestedCalls) {
+      expect(() => tool.prepareArguments?.(args)).toThrow('"mode" is only valid for action="wake"');
+      await expect(tool.execute(`call-nested-mode-${args.action}`, args)).rejects.toThrow(
+        '"mode" is only valid for action="wake"',
+      );
+    }
+    expect(callGatewayToolMock).not.toHaveBeenCalled();
+  });
+
+  it("preserves unadvertised flat stream recovery without leaking wake mode", async () => {
+    const tool = createCronTool(undefined, { callGatewayTool: callGatewayToolMock });
+    for (const mode of ["line", "match"] as const) {
+      callGatewayToolMock.mockClear();
+      // Stream fields are deliberately absent from the ten-field advertised
+      // flat contract. Keep accepting this pre-existing recoverable shape so
+      // the mode guard does not regress compatibility providers that emit it.
+      const args = {
+        action: "add",
+        kind: "stream",
+        command: ["node", "events.mjs"],
+        mode,
+        ...(mode === "match" ? { match: "^ready:" } : {}),
+        message: "handle events",
+      };
+      const expectedSchedule = {
+        kind: "stream",
+        command: ["node", "events.mjs"],
+        mode,
+        ...(mode === "match" ? { match: "^ready:" } : {}),
+      };
+
+      const prepared = tool.prepareArguments?.(args) as Record<string, unknown>;
+      expect(prepared).not.toHaveProperty("mode");
+      expect(prepared.job).toMatchObject({
+        schedule: expectedSchedule,
+        payload: { kind: "agentTurn", message: "handle events" },
+      });
+
+      await tool.execute(`call-flat-stream-${mode}`, args);
+      const [method, _gatewayOpts, params] = firstGatewayToolCall<{
+        schedule?: unknown;
+        mode?: unknown;
+      }>();
+      expect(method).toBe("cron.add");
+      expect(params).not.toHaveProperty("mode");
+      expect(params.schedule).toEqual(expectedSchedule);
+    }
+  });
+
+  it("rejects conflicting flat add/update schedules without a Gateway write", async () => {
+    const tool = createCronTool(undefined, { callGatewayTool: callGatewayToolMock });
+    const conflictingUpdate = {
+      action: "update",
+      jobId: "job-recurring",
+      at: "2026-09-01T09:00:00Z",
+      everyMs: 300_000,
+    } as const;
+
+    for (const args of [
+      { action: "add", name: "S1", at: "2026-09-01T09:00:00Z", everyMs: 300_000, message: "x" },
+      {
+        action: "add",
+        name: "S2",
+        at: "2026-09-01T09:00:00Z",
+        atMs: 1_800_000_000_000,
+        message: "x",
+      },
+      { action: "add", name: "S3", everyMs: 300_000, expr: "0 * * * *", message: "x" },
+      conflictingUpdate,
+    ] as const) {
+      expect(() => tool.prepareArguments?.(args)).toThrow(
+        `A cron ${args.action} takes exactly one schedule field`,
+      );
+    }
+
+    await expect(
+      tool.execute("call-flat-schedule-conflict-update", conflictingUpdate),
+    ).rejects.toThrow("A cron update takes exactly one schedule field");
+    expect(callGatewayToolMock).not.toHaveBeenCalled();
+  });
+
+  it("rejects conflicting flat schedule kind on update before Gateway dispatch", async () => {
+    const tool = createCronTool(undefined, { callGatewayTool: callGatewayToolMock });
+
+    for (const args of [
+      { action: "update", jobId: "job-recurring", kind: "at", everyMs: 300_000 },
+      { action: "update", jobId: "job-recurring", kind: "every", at: "2026-09-01T09:00:00Z" },
+      { action: "update", jobId: "job-recurring", kind: "cron", everyMs: 300_000 },
+    ] as const) {
+      await expect(tool.execute(`call-flat-kind-conflict-${args.kind}`, args)).rejects.toThrow(
+        `A cron update with "kind": "${args.kind}" cannot also set`,
+      );
+    }
+
+    expect(callGatewayToolMock).not.toHaveBeenCalled();
+  });
+
+  it("rejects conflicting flat scheduleKind alias before Gateway dispatch", async () => {
+    const tool = createCronTool(undefined, { callGatewayTool: callGatewayToolMock });
+
+    await expect(
+      tool.execute("call-flat-schedule-kind-conflict", {
+        action: "update",
+        jobId: "job-recurring",
+        scheduleKind: "every",
+        at: "2026-09-01T09:00:00Z",
+      }),
+    ).rejects.toThrow('A cron update with "kind": "every" cannot also set at');
+    expect(callGatewayToolMock).not.toHaveBeenCalled();
+  });
+
+  it("accepts a matching flat schedule kind on update", async () => {
+    const tool = createCronTool(undefined, { callGatewayTool: callGatewayToolMock });
+
+    await tool.execute("call-flat-kind-every", {
+      action: "update",
+      jobId: "job-recurring",
+      kind: "every",
+      everyMs: 300_000,
+    });
+
+    const [method, _gatewayOpts, params] = firstGatewayToolCall<{ patch?: unknown }>();
+    expect(method).toBe("cron.update");
+    expect(params.patch).toMatchObject({ schedule: { kind: "every", everyMs: 300_000 } });
+  });
+
+  it("rejects flat schedule updates carrying no complete schedule before Gateway dispatch", async () => {
+    const tool = createCronTool(undefined, { callGatewayTool: callGatewayToolMock });
+
+    for (const key of [
+      "cwd",
+      "match",
+      "batchMs",
+      "maxBatchBytes",
+      "exact",
+      "staggerMs",
+      "anchorMs",
+    ] as const) {
+      await expect(
+        tool.execute(`call-flat-empty-schedule-${key}`, {
+          action: "update",
+          jobId: "job-recurring",
+          [key]:
+            key === "exact" ? true : key.endsWith("Bytes") || key.endsWith("Ms") ? 100 : "unused",
+        }),
+      ).rejects.toThrow("A cron update schedule must be complete");
+    }
+
+    expect(callGatewayToolMock).not.toHaveBeenCalled();
+  });
+
+  it("rejects flat tz without a cron expression on add", () => {
+    const tool = createCronTool();
+
+    expect(() =>
+      tool.prepareArguments?.({ action: "add", name: "TZ1", tz: "Europe/London", message: "x" }),
+    ).toThrow('"tz" is only valid alongside "expr"');
+  });
+
+  it("resolves a flat message/text payload conflict by precedence, not rejection", () => {
+    const tool = createCronTool();
+
+    // Payload conflicts stay recoverable (weak-model tolerance): message wins,
+    // no throw. Only schedule conflicts reject.
+    const prepared = tool.prepareArguments?.({
+      action: "add",
+      name: "P1",
+      everyMs: 300_000,
+      message: "do the thing",
+      text: "stray",
+    }) as { job?: { payload?: { kind?: string; message?: string } } };
+
+    expect(prepared.job?.payload?.kind).toBe("agentTurn");
+    expect(prepared.job?.payload?.message).toBe("do the thing");
+  });
+
   it("recovers flat script payload fields before agent-turn hints", async () => {
     const tool = createCronTool(undefined, { callGatewayTool: callGatewayToolMock });
 
@@ -269,7 +684,7 @@ describe("cron tool flat-params", () => {
     expect(params.schedule).toEqual({ kind: "at", at: invalidAtMs });
   });
 
-  it("recovers flat cron schedule shorthand for update", async () => {
+  it("recovers a complete flat cron schedule update", async () => {
     const tool = createCronTool(undefined, { callGatewayTool: callGatewayToolMock });
 
     await tool.execute("call-flat-cron-update", {
@@ -291,6 +706,53 @@ describe("cron tool flat-params", () => {
       expr: "15 8 * * 1-5",
       tz: "America/Los_Angeles",
       staggerMs: 30_000,
+    });
+  });
+
+  it("rejects incomplete flat schedule updates before Gateway dispatch", async () => {
+    const tool = createCronTool(undefined, { callGatewayTool: callGatewayToolMock });
+
+    // The Gateway validates schedule as a complete discriminated union, so a
+    // partial patch is rejected there rather than merged into the stored job.
+    await expect(
+      tool.execute("call-flat-tz-only-update", {
+        action: "update",
+        jobId: "job-123",
+        tz: "Europe/London",
+      }),
+    ).rejects.toThrow("A cron update schedule must be complete");
+
+    for (const args of [
+      { action: "update", jobId: "job-123", kind: "cron", tz: "Europe/London" },
+      { action: "update", jobId: "job-123", kind: "at" },
+      { action: "update", jobId: "job-123", kind: "every" },
+    ] as const) {
+      await expect(tool.execute(`call-flat-incomplete-${args.kind}`, args)).rejects.toThrow(
+        `A cron update with "kind": "${args.kind}" must also send`,
+      );
+    }
+
+    expect(callGatewayToolMock).not.toHaveBeenCalled();
+  });
+
+  it("accepts a complete flat cron schedule update with a timezone", async () => {
+    const tool = createCronTool(undefined, { callGatewayTool: callGatewayToolMock });
+
+    await tool.execute("call-flat-expr-tz-update", {
+      action: "update",
+      jobId: "job-123",
+      expr: "0 9 * * *",
+      tz: "Europe/London",
+    });
+
+    const [method, _gatewayOpts, params] = firstGatewayToolCall<{
+      patch?: { schedule?: unknown };
+    }>();
+    expect(method).toBe("cron.update");
+    expect(params.patch?.schedule).toEqual({
+      kind: "cron",
+      expr: "0 9 * * *",
+      tz: "Europe/London",
     });
   });
 
