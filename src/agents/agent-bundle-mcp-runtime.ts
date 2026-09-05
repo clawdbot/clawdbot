@@ -940,12 +940,19 @@ function createServerMcpRuntime(
             `bundle-mcp: failed to ${action} server "${serverName}" (${launchDescription}): ${message}`,
           );
         }
+        // Carry the server's own tool filter so outage admission can hide a
+        // fully excluded server (`toolFilter: { exclude: ["*"] }`) the same way
+        // healthy discovery would, instead of leaking its name and error.
+        const failureToolFilter = normalizeMcpToolFilter(
+          isRecord(rawServer) ? rawServer.toolFilter : undefined,
+        );
         const diags: McpToolCatalogDiagnostic[] = [
           {
             serverName,
             safeServerName,
             launchSummary: launchDescription,
             message,
+            ...(failureToolFilter ? { toolFilter: failureToolFilter } : {}),
           },
         ];
         if (!session.connected) {

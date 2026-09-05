@@ -10,6 +10,7 @@ import {
   applyEmbeddedAttemptToolsAllow,
   mergeForcedEmbeddedAttemptToolsAllow,
 } from "../embedded-agent-runner/run/attempt-tool-construction-plan.js";
+import { mcpToolFilterCouldExposeTool } from "../mcp-tool-filter.js";
 import { normalizeToolPolicyName } from "../tool-policy.js";
 import { TOOL_SEARCH_CONTROL_TOOL_NAMES } from "../tool-search-types.js";
 import {
@@ -91,8 +92,10 @@ export function createAgentHarnessPromptToolPolicy<T extends NamedTool>(params: 
         baselineEntries: catalog.entries,
         mcpDiagnostics: {
           ...catalog.mcpDiagnostics,
-          diagnostics: catalog.mcpDiagnostics.diagnostics.filter((diagnostic) =>
-            admitsMcpServer(diagnostic.safeServerName),
+          diagnostics: catalog.mcpDiagnostics.diagnostics.filter(
+            (diagnostic) =>
+              admitsMcpServer(diagnostic.safeServerName) &&
+              mcpToolFilterCouldExposeTool(diagnostic.toolFilter),
           ),
         },
       });

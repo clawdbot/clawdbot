@@ -325,6 +325,32 @@ describe("prepareEmbeddedAttemptBundleTools", () => {
     expect(mocks.admitsMcpServer).toHaveBeenCalledWith("memos");
   });
 
+  it("drops a recorded MCP failure whose tool filter excludes every tool", async () => {
+    const input = createInput([], []);
+    input.attempt.config = { plugins: { enabled: false } };
+    mocks.acquireSessionMcpRuntime.mockResolvedValue({ runtime: {}, releaseLease: () => {} });
+    mocks.materializeBundleMcpToolsForRun.mockResolvedValue({
+      tools: [],
+      diagnostics: [
+        {
+          serverName: "memos",
+          safeServerName: "memos",
+          launchSummary: "memos",
+          message: "connect ECONNREFUSED",
+          toolFilter: { exclude: ["*"] },
+        },
+      ],
+    });
+    // The policy would admit the server namespace, but its own tool filter
+    // excludes every tool, so healthy discovery exposes nothing and the outage
+    // must not leak the server name and error either.
+    mocks.admitsMcpServer.mockReturnValue(true);
+
+    const result = await prepareEmbeddedAttemptBundleTools(input);
+
+    expect(result.mcpDiagnostics).toEqual({ diagnostics: [], policyLayers: runPolicyLayers });
+  });
+
   it("drops recorded MCP catalog failures for servers the policy hides", async () => {
     const input = createInput([], []);
     input.attempt.config = { plugins: { enabled: false } };
