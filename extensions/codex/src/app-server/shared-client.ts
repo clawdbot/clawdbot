@@ -10,7 +10,7 @@ import {
 } from "openclaw/plugin-sdk/agent-harness-runtime";
 import { resolveDefaultAgentDir, type AuthProfileStore } from "openclaw/plugin-sdk/agent-runtime";
 import { createDeferred } from "openclaw/plugin-sdk/extension-shared";
-import { defineCodexBuildState } from "../build-state.js";
+import { codexBuildSymbol, defineCodexBuildState } from "../build-state.js";
 import { CodexAppServerStartupError } from "./attempt-timeouts.js";
 import {
   applyCodexAppServerAuthProfile,
@@ -135,9 +135,11 @@ type CodexAppServerSpawnIdentity = Omit<
   "clientId" | "serverVersion" | "userAgent"
 >;
 
-// Gateway close disposes the old harness before importing the next plugin build.
-// Keep this callback preloaded: importing during shutdown can load replacement bytes.
-const SHARED_CODEX_APP_SERVER_CLIENT_DISPOSER = Symbol.for("openclaw.codexAppServerClientDisposer");
+// Keep disposal preloaded and build-scoped: shutdown must close the old clients
+// even if another module copy has loaded replacement code.
+const SHARED_CODEX_APP_SERVER_CLIENT_DISPOSER = codexBuildSymbol(
+  "openclaw.codexAppServerClientDisposer",
+);
 const createStartupLifetime = (): CodexAppServerStartupLifetime => ({
   controller: new AbortController(),
   pending: new Set(),
