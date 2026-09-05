@@ -550,20 +550,14 @@ export function splitCuratedMarkdownEntries(content: string): CuratedMarkdownEnt
 
 /** Takes the trailing slice of text within the weighted char budget, without splitting surrogate pairs. */
 function takeTailByEstimatedChars(text: string, budget: number): string {
+  const chars = [...text];
   let acc = 0;
-  let start = text.length;
-  while (start > 0) {
-    const lastCodeUnit = text.charCodeAt(start - 1);
-    const charStart =
-      lastCodeUnit >= 0xdc00 && lastCodeUnit <= 0xdfff && start > 1 ? start - 2 : start - 1;
-    const weight = estimateStringChars(text.slice(charStart, start));
-    if (acc + weight > budget) {
-      break;
-    }
-    acc += weight;
-    start = charStart;
+  let start = chars.length;
+  while (start > 0 && acc + estimateStringChars(chars[start - 1] ?? "") <= budget) {
+    acc += estimateStringChars(chars[start - 1] ?? "");
+    start -= 1;
   }
-  return text.slice(start);
+  return chars.slice(start).join("");
 }
 
 export function chunkMarkdown(
@@ -623,14 +617,12 @@ export function chunkMarkdown(
       const entrySize = estimateStringChars(entry.line) + 1;
       const remaining = window - acc;
       if (entrySize > remaining) {
-        if (kept.length === 0) {
-          // A segment wider than the remaining window keeps only its trailing
-          // slice, measured in the same weighted units as the budget.
-          const tail = takeTailByEstimatedChars(entry.line, Math.max(0, remaining - 1));
-          if (tail.length > 0) {
-            kept.unshift({ line: tail, lineNo: entry.lineNo });
-            acc += estimateStringChars(tail) + 1;
-          }
+        // A segment wider than the remaining window keeps only its trailing
+        // slice, measured in the same weighted units as the budget.
+        const tail = kept.length === 0 ? takeTailByEstimatedChars(entry.line, remaining - 1) : "";
+        if (tail.length > 0) {
+          kept.unshift({ line: tail, lineNo: entry.lineNo });
+          acc += estimateStringChars(tail) + 1;
         }
         break;
       }
