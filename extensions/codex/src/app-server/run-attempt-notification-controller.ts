@@ -195,6 +195,10 @@ export function createCodexAttemptNotificationController(
     }
     projector.recordMcpToolCallReceipt(notification);
     if (isTerminalTurnNotificationForTurn(notification, turnId)) {
+      const completed = readCodexTurnCompletedNotification(notification.params);
+      if (completed) {
+        projector.settlement.terminalReceipt = completed.turn;
+      }
       state.terminalTurnNotificationQueued = true;
       steeringQueueRef.current?.sealAdmission();
       deadlines.beginSettlement(receivedAtMs);

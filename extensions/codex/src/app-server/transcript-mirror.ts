@@ -17,7 +17,7 @@ import {
   type SessionTranscriptWriteLockParams,
 } from "openclaw/plugin-sdk/session-transcript-runtime";
 import { normalizeOptionalString } from "openclaw/plugin-sdk/string-coerce-runtime";
-import type { EmbeddedRunAttemptResult } from "./attempt-terminal.js";
+import type { AttemptSettlementWarning, EmbeddedRunAttemptResult } from "./attempt-terminal.js";
 import type { CodexAsyncAssistantMessage } from "./event-projector-assistant-message.js";
 import type { CodexAsyncDeliverySettlement } from "./event-projector-options.js";
 import type { CodexThread } from "./protocol.js";
@@ -114,6 +114,7 @@ export async function importCodexThreadHistoryToTranscript(params: {
 
 async function mirrorBestEffort(params: {
   assertWriteCurrent?: () => void;
+  settlementWarning?: AttemptSettlementWarning;
   params: EmbeddedRunAttemptParams;
   agentId?: string;
   notifyUserMessagePersisted: UserMessagePersistenceNotifier;
@@ -157,6 +158,7 @@ async function mirrorBestEffort(params: {
       terminalAssistantOwner: {
         mirrorIdentity: `${params.turnId}:assistant`,
         runId: params.params.runId,
+        settlementWarning: params.settlementWarning,
       },
       prepareAssistantTranscriptMessage: params.params.prepareAssistantTranscriptMessage,
       config: params.params.config,
@@ -344,7 +346,11 @@ async function mirror(params: {
   idempotencyScope?: string;
   runId?: string;
   runMirrorIdentityPrefix?: string;
-  terminalAssistantOwner?: { mirrorIdentity: string; runId: string };
+  terminalAssistantOwner?: {
+    mirrorIdentity: string;
+    runId: string;
+    settlementWarning?: AttemptSettlementWarning;
+  };
   prepareAssistantTranscriptMessage?: EmbeddedRunAttemptParams["prepareAssistantTranscriptMessage"];
   config?: SessionTranscriptWriteLockParams["config"];
   skipBeforeMessageWriteHooks?: boolean;
@@ -416,7 +422,12 @@ async function mirror(params: {
         );
         const ownedMessage =
           ownsRun && params.runId
-            ? attachCodexMirrorRunId(message, params.runId, ownsTerminal)
+            ? attachCodexMirrorRunId(
+                message,
+                params.runId,
+                ownsTerminal,
+                terminalOwner?.settlementWarning,
+              )
             : message;
         const transcriptMessage = {
           ...attachCodexMirrorAttestation(ownedMessage, sourceFingerprint),
@@ -495,7 +506,12 @@ async function mirror(params: {
           messageToAppend = attachCodexMirrorIdentity(messageToAppend, mirrorIdentity);
         }
         if (ownsRun && params.runId) {
-          messageToAppend = attachCodexMirrorRunId(messageToAppend, params.runId, ownsTerminal);
+          messageToAppend = attachCodexMirrorRunId(
+            messageToAppend,
+            params.runId,
+            ownsTerminal,
+            terminalOwner?.settlementWarning,
+          );
         }
         if (message.role === "assistant" && message.openclawAsyncDelivery) {
           // Async delivery ownership is provider-authored. Whole-message hooks may
