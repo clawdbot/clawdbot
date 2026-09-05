@@ -1408,6 +1408,7 @@ private fun ChatMessageList(
     rememberChatReaderScrollController(
       gatewayId = gatewayId,
       sessionKey = sessionKey,
+      readerGeneration = selectionGeneration,
       timeline = timeline,
       historyLoading = historyLoading,
       loadPosition = loadReaderPosition,

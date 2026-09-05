@@ -115,6 +115,7 @@ internal fun rememberChatReaderScrollController(
   timeline: ChatTimeline,
   historyLoading: Boolean,
   gatewayId: String? = null,
+  readerGeneration: Long = 0,
   loadPosition: suspend (String, String) -> ChatReaderPositionBinding? = { _, _ -> null },
   savePosition: suspend (ChatReaderPositionBinding, ChatReaderPosition) -> Unit = { _, _ -> },
   clearPosition: suspend (ChatReaderPositionBinding) -> Unit = {},
@@ -126,15 +127,15 @@ internal fun rememberChatReaderScrollController(
   val currentLoadPosition by rememberUpdatedState(loadPosition)
   val currentSavePosition by rememberUpdatedState(savePosition)
   val currentClearPosition by rememberUpdatedState(clearPosition)
-  val readerStateSaver = remember(gatewayId, sessionKey) { createChatReaderStateSaver(sessionKey) }
+  val readerStateSaver = remember(gatewayId, sessionKey, readerGeneration) { createChatReaderStateSaver(sessionKey) }
   var readerState by
-    rememberSaveable(gatewayId, sessionKey, stateSaver = readerStateSaver) {
+    rememberSaveable(gatewayId, sessionKey, readerGeneration, stateSaver = readerStateSaver) {
       mutableStateOf(ChatReaderState(ownerSessionKey = sessionKey))
     }
-  var applyingScrollCount by remember(gatewayId, sessionKey) { mutableIntStateOf(0) }
-  var isUserScrolling by remember(gatewayId, sessionKey) { mutableStateOf(false) }
-  var positionBinding by remember(gatewayId, sessionKey) { mutableStateOf<ChatReaderPositionBinding?>(null) }
-  var positionLoaded by remember(gatewayId, sessionKey) { mutableStateOf(false) }
+  var applyingScrollCount by remember(gatewayId, sessionKey, readerGeneration) { mutableIntStateOf(0) }
+  var isUserScrolling by remember(gatewayId, sessionKey, readerGeneration) { mutableStateOf(false) }
+  var positionBinding by remember(gatewayId, sessionKey, readerGeneration) { mutableStateOf<ChatReaderPositionBinding?>(null) }
+  var positionLoaded by remember(gatewayId, sessionKey, readerGeneration) { mutableStateOf(false) }
 
   fun pauseFollowing() {
     readerState = readerState.copy(followTarget = null)
@@ -144,7 +145,7 @@ internal fun rememberChatReaderScrollController(
   }
 
   val nestedScroll =
-    remember(gatewayId, sessionKey) {
+    remember(gatewayId, sessionKey, readerGeneration) {
       object : NestedScrollConnection {
         override fun onPreScroll(
           available: Offset,
@@ -179,7 +180,7 @@ internal fun rememberChatReaderScrollController(
     }
   }
 
-  LaunchedEffect(gatewayId, sessionKey) {
+  LaunchedEffect(gatewayId, sessionKey, readerGeneration) {
     positionBinding =
       gatewayId
         ?.takeIf(String::isNotBlank)
@@ -191,7 +192,9 @@ internal fun rememberChatReaderScrollController(
 
   // Loading only changes empty-timeline transitions. A populated-history refresh
   // must not cancel a moving scroll after its content version has been recorded.
-  LaunchedEffect(sessionKey, timeline, historyLoading && timeline.items.isEmpty(), positionLoaded) {
+  val waitsForPersistedAnchor = !readerState.initialized && positionBinding?.position != null
+  val initialLoadingKey = historyLoading && (timeline.items.isEmpty() || waitsForPersistedAnchor)
+  LaunchedEffect(sessionKey, readerGeneration, timeline, initialLoadingKey, positionLoaded) {
     if (!positionLoaded) return@LaunchedEffect
     val persistedPosition = positionBinding?.position
     val restoredTransition =
@@ -210,7 +213,7 @@ internal fun rememberChatReaderScrollController(
     applyTransition(transition)
   }
 
-  LaunchedEffect(gatewayId, sessionKey, positionBinding) {
+  LaunchedEffect(gatewayId, sessionKey, readerGeneration, positionBinding) {
     gatewayId?.takeIf(String::isNotBlank) ?: return@LaunchedEffect
     val binding = positionBinding ?: return@LaunchedEffect
     collectChatReaderPositionSaves(
@@ -235,7 +238,7 @@ internal fun rememberChatReaderScrollController(
     )
   }
 
-  LaunchedEffect(gatewayId, sessionKey) {
+  LaunchedEffect(gatewayId, sessionKey, readerGeneration) {
     snapshotFlow {
       Triple(
         listState.isScrollInProgress,
