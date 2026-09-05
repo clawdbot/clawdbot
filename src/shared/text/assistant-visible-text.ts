@@ -522,23 +522,60 @@ export function stripToolCallXmlTags(
  * proper structured tool calls.
  */
 export function stripMinimaxToolCallXml(text: string): string {
-  if (!text || !/minimax:tool_call/i.test(text)) {
+  const encodedTransportBoundaryRe = /\]?<\]minimax\[>\[/g;
+  const encodedToolCallOpenRe = /\]?<\]minimax\[>\[<tool_call>/g;
+  const encodedToolCallCloseRe = /\]?<\]minimax\[>\[<\/tool_call>/g;
+  if (!text || (!/minimax:tool_call/i.test(text) && !encodedToolCallOpenRe.test(text))) {
     return text;
   }
+  encodedToolCallOpenRe.lastIndex = 0;
 
-  const codeRegions = findCodeRegions(text);
+  const sourceCodeRegions = findCodeRegions(text);
+  let normalized = "";
+  let envelopeCursor = 0;
+  for (const openMatch of text.matchAll(encodedToolCallOpenRe)) {
+    const start = openMatch.index ?? 0;
+    if (start < envelopeCursor || isInsideCode(start, sourceCodeRegions)) {
+      continue;
+    }
+
+    encodedToolCallCloseRe.lastIndex = start + openMatch[0].length;
+    let closeMatch = encodedToolCallCloseRe.exec(text);
+    while (closeMatch && isInsideCode(closeMatch.index, sourceCodeRegions)) {
+      closeMatch = encodedToolCallCloseRe.exec(text);
+    }
+    if (!closeMatch) {
+      continue;
+    }
+
+    const end = closeMatch.index + closeMatch[0].length;
+    normalized += text.slice(envelopeCursor, start);
+    if (sourceCodeRegions.some((region) => region.start >= start && region.end <= end)) {
+      envelopeCursor = end;
+      continue;
+    }
+    normalized += text.slice(start, end).replace(encodedTransportBoundaryRe, "");
+    envelopeCursor = end;
+  }
+  normalized += text.slice(envelopeCursor);
+
+  if (!/minimax:tool_call/i.test(normalized)) {
+    return normalized;
+  }
+
+  const codeRegions = findCodeRegions(normalized);
   const minimaxToolXmlRe = /<invoke\b[^>]*>[\s\S]*?<\/invoke>|<\/?minimax:tool_call>/gi;
   let result = "";
   let cursor = 0;
-  for (const match of text.matchAll(minimaxToolXmlRe)) {
+  for (const match of normalized.matchAll(minimaxToolXmlRe)) {
     const start = match.index ?? 0;
     if (isInsideCode(start, codeRegions)) {
       continue;
     }
-    result += text.slice(cursor, start);
+    result += normalized.slice(cursor, start);
     cursor = start + match[0].length;
   }
-  result += text.slice(cursor);
+  result += normalized.slice(cursor);
   return result;
 }
 
