@@ -79,6 +79,20 @@ function resetPreparedRuntime() {
   api?.resetPreparedModelRuntimeSnapshotsForTest();
 }
 
+async function waitForStage<T>(label: string, task: Promise<T>, timeoutMs = 30_000): Promise<T> {
+  let timer: ReturnType<typeof setTimeout> | undefined;
+  const timeout = new Promise<never>((_resolve, reject) => {
+    timer = setTimeout(() => reject(new Error(`Timed out during ${label}`)), timeoutMs);
+  });
+  try {
+    return await Promise.race([task, timeout]);
+  } finally {
+    if (timer) {
+      clearTimeout(timer);
+    }
+  }
+}
+
 async function writeTestConfig() {
   await writeFile(
     path.join(stateDir, "openclaw.json"),
@@ -201,11 +215,14 @@ function createBoundSpawnInvocation(bound: Awaited<ReturnType<typeof createBound
 describe("recursive spawn production boundary", () => {
   it("authorizes and admits an upgraded descendant before model execution", async () => {
     const bound = await createBoundParent();
-    await refreshPreparedModelRuntimeSnapshots(bound.cfg, {
-      gatewayLifecycle: true,
-      catalogMode: "static",
-      defaultWorkspaceDir: stateDir,
-    });
+    await waitForStage(
+      "prepared model runtime publication",
+      refreshPreparedModelRuntimeSnapshots(bound.cfg, {
+        gatewayLifecycle: true,
+        catalogMode: "static",
+        defaultWorkspaceDir: stateDir,
+      }),
+    );
     const context = bound.context as unknown as GatewayRequestContext;
     const validateRuntimeAuthority = createAgentRuntimeApprovalAuthorityValidator();
     let observedRuntimeIdentity: AgentRuntimeIdentity | undefined;
@@ -225,7 +242,10 @@ describe("recursive spawn production boundary", () => {
     runEmbeddedAgent.mockReturnValueOnce(modelRun.promise);
     let childRunId: string | undefined;
     try {
-      const result = await createBoundSpawnInvocation(bound)();
+      const result = await waitForStage(
+        "production spawn acceptance",
+        createBoundSpawnInvocation(bound)(),
+      );
       expect(result).toMatchObject({
         details: {
           status: "accepted",
