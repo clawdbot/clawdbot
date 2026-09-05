@@ -312,7 +312,7 @@ describe("prepareEmbeddedAttemptBundleTools", () => {
         message: "connect ECONNREFUSED",
       },
     ];
-    mocks.getOrCreateSessionMcpRuntime.mockResolvedValue({});
+    mocks.acquireSessionMcpRuntime.mockResolvedValue({ runtime: {}, releaseLease: () => {} });
     mocks.materializeBundleMcpToolsForRun.mockResolvedValue({ tools: [], diagnostics });
 
     const result = await prepareEmbeddedAttemptBundleTools(input);
@@ -328,7 +328,7 @@ describe("prepareEmbeddedAttemptBundleTools", () => {
   it("drops recorded MCP catalog failures for servers the policy hides", async () => {
     const input = createInput([], []);
     input.attempt.config = { plugins: { enabled: false } };
-    mocks.getOrCreateSessionMcpRuntime.mockResolvedValue({});
+    mocks.acquireSessionMcpRuntime.mockResolvedValue({ runtime: {}, releaseLease: () => {} });
     mocks.materializeBundleMcpToolsForRun.mockResolvedValue({
       tools: [],
       diagnostics: [
