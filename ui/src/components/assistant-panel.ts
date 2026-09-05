@@ -83,31 +83,35 @@ export class OpenClawAssistantPanel extends OpenClawLightDomElement {
     agentsList?: ApplicationContext["agents"]["state"]["agentsList"];
     hello?: ApplicationContext["gateway"]["snapshot"]["hello"];
   } = {};
-  private readonly subscriptions = new SubscriptionsController(this)
-    .watch(
-      () => this.store,
-      (store, notify) => store.subscribe(notify),
-    )
-    .watch(
-      () => this.context,
-      (context, notify) => subscribeChatWorkContext(context, notify),
-    )
-    .watch(
-      () => this.context?.agentSelection,
-      (selection, notify) => selection.subscribe(notify),
-    )
-    .watch(
-      () => this.context?.sessions,
-      (sessions, notify) => sessions.subscribe(notify),
-    )
-    .watch(
-      () => this.context?.agents,
-      (agents, notify) => agents.subscribe(notify),
-    )
-    .watch(
-      () => this.context?.gateway,
-      (gateway, notify) => gateway.subscribe(notify),
-    );
+
+  constructor() {
+    super();
+    void new SubscriptionsController(this)
+      .watch(
+        () => this.store,
+        (store, notify) => store.subscribe(notify),
+      )
+      .watch(
+        () => this.context,
+        (context, notify) => subscribeChatWorkContext(context, notify),
+      )
+      .watch(
+        () => this.context?.agentSelection,
+        (selection, notify) => selection.subscribe(notify),
+      )
+      .watch(
+        () => this.context?.sessions,
+        (sessions, notify) => sessions.subscribe(notify),
+      )
+      .watch(
+        () => this.context?.agents,
+        (agents, notify) => agents.subscribe(notify),
+      )
+      .watch(
+        () => this.context?.gateway,
+        (gateway, notify) => gateway.subscribe(notify),
+      );
+  }
 
   override connectedCallback(): void {
     super.connectedCallback();

@@ -37,32 +37,36 @@ export class CustodianPage extends OpenClawLightDomElement {
   private historyClient: GatewayBrowserClient | null = null;
   private historyRequestEpoch = 0;
   private channelsSource: ApplicationContext["channels"] | null = null;
-  private readonly subscriptions = new SubscriptionsController(this)
-    .watch(
-      () => this.store,
-      (store, notify) => {
-        const cleanup = store.subscribe(notify);
-        void store.refreshTranscriptIfIdle();
-        return cleanup;
-      },
-    )
-    .effect(
-      () => this.context?.channels,
-      (channels) => {
-        this.channelsSource = channels;
-        const stop = channels.subscribe(() => {
+
+  constructor() {
+    super();
+    void new SubscriptionsController(this)
+      .watch(
+        () => this.store,
+        (store, notify) => {
+          const cleanup = store.subscribe(notify);
+          void store.refreshTranscriptIfIdle();
+          return cleanup;
+        },
+      )
+      .effect(
+        () => this.context?.channels,
+        (channels) => {
+          this.channelsSource = channels;
+          const stop = channels.subscribe(() => {
+            this.ensureOnboardingChannelStatus();
+            this.requestUpdate();
+          });
           this.ensureOnboardingChannelStatus();
-          this.requestUpdate();
-        });
-        this.ensureOnboardingChannelStatus();
-        return () => {
-          stop();
-          if (this.channelsSource === channels) {
-            this.channelsSource = null;
-          }
-        };
-      },
-    );
+          return () => {
+            stop();
+            if (this.channelsSource === channels) {
+              this.channelsSource = null;
+            }
+          };
+        },
+      );
+  }
 
   protected override async getUpdateComplete(): Promise<boolean> {
     const complete = await super.getUpdateComplete();

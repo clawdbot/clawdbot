@@ -39,16 +39,20 @@ class CustodianSurface extends OpenClawLightDomElement {
   @property({ attribute: false }) compact = false;
   @property({ attribute: false }) historyContent: TemplateResult | typeof nothing = nothing;
 
-  private readonly subscriptions = new SubscriptionsController(this)
-    .watch(
-      () => this.store,
-      (store, notify) => store.subscribe(notify),
-    )
-    .watch(
-      () => custodianAlertStore,
-      (alerts, notify) => alerts.subscribe(notify),
-    );
   private lastMessageId: number | null = null;
+
+  constructor() {
+    super();
+    void new SubscriptionsController(this)
+      .watch(
+        () => this.store,
+        (store, notify) => store.subscribe(notify),
+      )
+      .watch(
+        () => custodianAlertStore,
+        (alerts, notify) => alerts.subscribe(notify),
+      );
+  }
 
   protected override async getUpdateComplete(): Promise<boolean> {
     const complete = await super.getUpdateComplete();
