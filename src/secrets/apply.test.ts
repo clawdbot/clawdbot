@@ -546,6 +546,7 @@ describe("secrets apply", () => {
     await writeJsonFile(secretFilePath, {
       providers: { openai: { apiKey: "sk-openai-file" } },
     });
+    await fs.chmod(secretFilePath, 0o600);
 
     const fileRef = {
       source: "file" as const,
@@ -599,6 +600,7 @@ describe("secrets apply", () => {
     await writeJsonFile(secretFilePath, {
       providers: { openai: { apiKey: "sk-openai-file" } },
     });
+    await fs.chmod(secretFilePath, 0o600);
 
     const fileRef = {
       source: "file" as const,
@@ -611,7 +613,10 @@ describe("secrets apply", () => {
       id: "ANTHROPIC_API_KEY",
     };
 
-    const config = JSON.parse(await fs.readFile(fixture.configPath, "utf8")) as Record<string, unknown>;
+    const config = JSON.parse(await fs.readFile(fixture.configPath, "utf8")) as Record<
+      string,
+      unknown
+    >;
     await writeJsonFile(fixture.configPath, {
       ...config,
       models: {
