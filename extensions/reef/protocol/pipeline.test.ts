@@ -186,8 +186,8 @@ describe("pipeline", () => {
     });
     const inbound = await composeInbound(options);
     expect(inbound.disposition).toBe("accepted");
-    if (inbound.disposition !== "accepted") {
-      throw new Error("expected accepted result");
+    if (inbound.disposition !== "accepted" || "federation" in inbound) {
+      throw new Error("expected accepted chat result");
     }
     expect(inbound.body.text).toBe("hello");
     expect(inbound.receipt).toMatchObject({ id: outbound.envelope.id, status: "accepted" });

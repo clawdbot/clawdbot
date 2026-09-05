@@ -505,6 +505,16 @@ export function createPluginRuntimeMock(overrides: DeepPartial<PluginRuntime> = 
   };
   const base: PluginRuntime = {
     version: "1.0.0-test",
+    crossSessionGrants: {
+      create: vi.fn(() => false),
+      list: vi.fn(() => []),
+      get: vi.fn(() => undefined),
+      authorize: vi.fn(() => undefined),
+      allowStanding: vi.fn(() => false),
+      revoke: vi.fn(() => undefined),
+      applyRevocation: vi.fn(() => false),
+      acknowledgeRevocation: vi.fn(() => false),
+    },
     gateway: {
       isAvailable: vi.fn(async () => false),
       request: vi.fn(),

@@ -5,6 +5,11 @@ import { sha256 } from "@noble/hashes/sha2.js";
 import { randomBytes } from "@noble/hashes/utils.js";
 import { canonicalBytes } from "./canonical.js";
 import { base64, decodeUtf8, fromBase64, fromBase64url, hex, utf8 } from "./encoding.js";
+import {
+  isReefFederationBody,
+  validateReefFederationBody,
+  type ReefFederationBody,
+} from "./federation.js";
 import { parseHandleEpoch } from "./identity.js";
 import type { SignedReceipt } from "./receipts.js";
 
@@ -27,11 +32,13 @@ export interface ReplayStore {
   completed(peer: string, id: string): Promise<CompletedReplay | undefined>;
 }
 
-export interface MessageBody {
+export interface ChatMessageBody {
   text: string;
   replyTo?: string;
   thread?: string;
 }
+
+export type MessageBody = ChatMessageBody | ReefFederationBody;
 
 export interface UnsignedEnvelope {
   v: 1;
@@ -295,6 +302,14 @@ export function validateEnvelopeMetadata(id: string, from: string, to: string, t
 }
 
 export function validateMessageBody(value: unknown): asserts value is MessageBody {
+  if (isReefFederationBody(value)) {
+    try {
+      validateReefFederationBody(value);
+      return;
+    } catch {
+      throw new MalformedError("invalid federation body");
+    }
+  }
   if (!isExactObject(value, ["text", "replyTo", "thread"])) {
     throw new MalformedError("invalid body");
   }

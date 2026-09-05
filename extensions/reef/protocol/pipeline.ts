@@ -10,9 +10,11 @@ import {
   seal,
   validateEnvelopeMetadata,
   validateMessageBody,
+  type ChatMessageBody,
   type Envelope,
   type MessageBody,
 } from "./envelope.js";
+import { isReefFederationBody } from "./federation.js";
 import {
   admitVerdict,
   type GuardAdapter,
@@ -75,7 +77,7 @@ export interface ComposeOutboundOptions extends GuardedPipelineOptions {
   id: string;
   from: string;
   to: string;
-  body: MessageBody;
+  body: ChatMessageBody;
   senderSigningSecretKey: string;
   recipientEncryptionPublicKey: string;
   ts?: number;
@@ -163,7 +165,8 @@ export interface ComposeInboundOptions extends GuardedPipelineOptions {
 }
 
 export type InboundResult =
-  | { disposition: "accepted"; body: MessageBody; verdict: Verdict; receipt: SignedReceipt }
+  | { disposition: "accepted"; body: ChatMessageBody; verdict: Verdict; receipt: SignedReceipt }
+  | { disposition: "accepted"; body: MessageBody; federation: true; receipt: SignedReceipt }
   | { disposition: "duplicate"; body?: MessageBody; receipt: SignedReceipt };
 
 const REPLAY_CLAIM_HEARTBEAT_MS = 60_000;
@@ -201,6 +204,32 @@ export async function composeInbound(options: ComposeInboundOptions): Promise<In
       proposalHash,
       options.policyVersion,
     );
+    if (isReefFederationBody(opened.body)) {
+      await refreshClaim();
+      const inboxEntry = await appendAudit(options.audit, "federation_inbox", {
+        id: options.envelope.id,
+        bodyHash: proposalHash,
+        namespace: opened.body.namespace,
+        frameType: opened.body.frame.type,
+      });
+      const receipt = signReceipt(
+        {
+          id: options.envelope.id,
+          bodyHash: proposalHash,
+          auditHead: inboxEntry.entryHash,
+          status: "accepted",
+        },
+        options.recipientSigningSecretKey,
+      );
+      await appendAudit(options.audit, "receipt", {
+        id: options.envelope.id,
+        approvalDigest,
+        receipt,
+      });
+      await options.replayStore.complete(peer, options.envelope.id, receipt, opened.body);
+      finalized = true;
+      return { disposition: "accepted", body: opened.body, federation: true, receipt };
+    }
     const checks = deterministicChecks(opened.body.text);
     if (!checks.allowed) {
       await refreshClaim();

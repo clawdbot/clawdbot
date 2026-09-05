@@ -79,6 +79,16 @@ describe("exec approval card", () => {
     expect(card?.classList.contains("exec-approval-card--severity-warning")).toBe(true);
   });
 
+  it("does not infer plugin standing approval scope from session metadata", () => {
+    const card = renderCard(
+      approval({ request: { ...approval().request, allowedDecisions: ["allow-always"] } }),
+      "inline",
+    );
+
+    expect(card?.querySelector("button")?.textContent).toContain("Always allow");
+    expect(card?.querySelector("button")?.textContent).not.toContain("Always allow here");
+  });
+
   it("shows plugin and agent chips with session details in the modal", () => {
     const card = renderCard(approval());
     const details = card?.querySelector<HTMLDetailsElement>(".exec-approval-details");

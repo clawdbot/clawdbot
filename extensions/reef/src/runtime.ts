@@ -1,13 +1,17 @@
 import type { PluginRuntime } from "openclaw/plugin-sdk/core";
 import { createPluginRuntimeStore } from "openclaw/plugin-sdk/runtime-store";
+import type { ReefFederationState } from "./federation-state.js";
 import type { ReefMessageFlow } from "./flow.js";
 import type { ReefFriendManager } from "./friends.js";
 import type { ReviewApprovalStore } from "./state.js";
+import type { ReefTrustStore } from "./trust-store.js";
 
 type ActiveReef = {
   flow: ReefMessageFlow;
   friends: ReefFriendManager;
   reviews: ReviewApprovalStore;
+  federation: ReefFederationState;
+  trust: ReefTrustStore;
 };
 
 const {

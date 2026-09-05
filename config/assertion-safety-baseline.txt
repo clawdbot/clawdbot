@@ -1077,7 +1077,7 @@ extensions/reef/protocol/canonical.ts	1
 extensions/reef/protocol/envelope.ts	1
 extensions/reef/protocol/guard-adapters.ts	1
 extensions/reef/protocol/guard.ts	1
-extensions/reef/src/channel.ts	6
+extensions/reef/src/channel.ts	4
 extensions/reef/src/cli.ts	6
 extensions/reef/src/doctor-durable-state.ts	2
 extensions/reef/src/legacy-key-guard.ts	1

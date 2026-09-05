@@ -3,6 +3,12 @@ import {
   normalizeOptionalString,
 } from "openclaw/plugin-sdk/string-coerce-runtime";
 import {
+  createReefFederatedPromptDigest,
+  isReefFederationBody,
+  validateReefFederationBody,
+  type ReefFederationFrame,
+} from "../protocol/federation.js";
+import {
   appendAudit,
   appendInboxRead,
   bodyHash as hashMessageBody,
@@ -17,6 +23,7 @@ import {
   InvalidDeliveryReceiptError,
   parseHandleEpoch,
   PipelineError,
+  seal,
   verifyReceipt,
   type AuditEntry,
   type AuditStore,
@@ -26,6 +33,7 @@ import {
 } from "../protocol/index.js";
 import type { ReefChannelConfig } from "./config-schema.js";
 import { autonomyBudget } from "./config-schema.js";
+import type { ReefFederationMount, ReefFederationPromptRequest } from "./federation-state.js";
 import {
   matchesReefPeerIdentity,
   reefPeerIdentity,
@@ -147,6 +155,12 @@ export class ReefMessageFlow {
       delivered: ReefDeliveredStore;
       authoritySignal?: AbortSignal;
       onIngress: (message: ReefIngressMessage) => Promise<void>;
+      onFederation?: (params: {
+        peer: string;
+        from: string;
+        to: string;
+        frame: ReefFederationFrame;
+      }) => Promise<void>;
       onOwnerNotice: (text: string) => Promise<void>;
     },
   ) {}
@@ -217,6 +231,121 @@ export class ReefMessageFlow {
     signal?.throwIfAborted();
     await this.options.transport.sendEnvelope(peer, result.envelope, signal);
     signal?.throwIfAborted();
+    return id;
+  }
+
+  /** Propose one prompt against an exact mounted session authority. */
+  async proposeFederatedPrompt(
+    mount: ReefFederationMount,
+    text: string,
+    proposals: {
+      findOutboundProposal?: (
+        mount: ReefFederationMount,
+        text: string,
+      ) => ReefFederationPromptRequest | undefined;
+      registerOutboundProposal: (request: ReefFederationPromptRequest) => boolean;
+    },
+  ): Promise<string> {
+    if (mount.role !== "guest" || mount.revoked) {
+      throw new Error("Only active guest Reef mounts can propose prompts");
+    }
+    const friend = this.options.trust.get(mount.peer);
+    if (!friend || !matchesReefPeerIdentity(friend, mount.peerIdentity)) {
+      throw new ReefOutboundRejectedError(
+        `Reef peer @${mount.peer} is not approved with current keys`,
+      );
+    }
+    const pending = proposals.findOutboundProposal?.(mount, text);
+    if (pending) {
+      await this.sendFederation(mount.peer, pending.frame);
+      return pending.frame.proposalId;
+    }
+    const proposalId = `reef-proposal-${prepareReefMessageId()}`;
+    const from = formatHandleEpoch(this.requireHandle(), this.options.keys.keyEpoch);
+    const to = formatHandleEpoch(mount.peer, friend.keyEpoch);
+    const frame = {
+      type: "session.prompt.propose" as const,
+      mountId: mount.mountId,
+      proposalId,
+      sessionId: mount.sessionId,
+      grantGeneration: mount.grantGeneration,
+      text,
+      textSha256: createReefFederatedPromptDigest({
+        from,
+        to,
+        mountId: mount.mountId,
+        proposalId,
+        sessionId: mount.sessionId,
+        grantGeneration: mount.grantGeneration,
+        text,
+      }),
+    };
+    validateReefFederationBody({ namespace: "openclaw.session-federation.v1", frame });
+    if (
+      !proposals.registerOutboundProposal({
+        from,
+        to,
+        peer: mount.peer,
+        peerIdentity: mount.peerIdentity,
+        frame,
+      })
+    ) {
+      throw new Error(`Could not reserve Reef prompt proposal ${proposalId}`);
+    }
+    await this.sendFederation(mount.peer, frame);
+    return proposalId;
+  }
+
+  /** Send a typed federation frame without routing it through the chat guard pipeline. */
+  async sendFederation(
+    peer: string,
+    frame: ReefFederationFrame,
+    context: { expectedRecipient?: ReefPeerIdentity } = {},
+  ): Promise<string> {
+    const signal = this.options.authoritySignal;
+    signal?.throwIfAborted();
+    const friend = this.options.trust.get(peer);
+    if (
+      !friend ||
+      friend.safetyNumberChanged ||
+      (context.expectedRecipient !== undefined &&
+        !matchesReefPeerIdentity(friend, context.expectedRecipient))
+    ) {
+      throw new ReefOutboundRejectedError(`Reef peer @${peer} is not approved with current keys`);
+    }
+    const recipient = reefPeerIdentity(friend);
+    const id = prepareReefMessageId();
+    const body = { namespace: "openclaw.session-federation.v1" as const, frame };
+    validateReefFederationBody(body);
+    const from = formatHandleEpoch(this.requireHandle(), this.options.keys.keyEpoch);
+    const to = formatHandleEpoch(peer, friend.keyEpoch);
+    const proposalHash = hashMessageBody(body);
+    await appendAudit(this.options.audit, "federation_proposal", {
+      id,
+      from,
+      to,
+      bodyHash: proposalHash,
+      frameType: frame.type,
+    });
+    const envelope = seal({
+      id,
+      from,
+      to,
+      body,
+      senderSigningSecretKey: this.options.keys.signing.secretKey,
+      recipientEncryptionPublicKey: friend.x25519PublicKey,
+    });
+    await appendAudit(this.options.audit, "envelope", { id, envelope });
+    if (!matchesReefPeerIdentity(this.options.trust.get(peer), recipient)) {
+      throw new ReefOutboundRejectedError(
+        `Reef peer @${peer} changed keys while composing the frame`,
+      );
+    }
+    this.options.trust.recordOutboundDelivery(peer, id, {
+      bodyHash: proposalHash,
+      recipient,
+    });
+    await this.options.transport.sendEnvelope(peer, envelope, signal);
     return id;
   }
 
@@ -444,6 +573,20 @@ export class ReefMessageFlow {
       return;
     }
     if (await this.options.delivered.has(envelope.id)) {
+      await this.options.transport.acknowledge(relayPeer, envelope.id, result.receipt);
+      return;
+    }
+    if (isReefFederationBody(result.body)) {
+      if (!this.options.onFederation) {
+        throw new Error("Reef federation handler is unavailable");
+      }
+      await this.options.onFederation({
+        peer: relayPeer,
+        from: envelope.from,
+        to: envelope.to,
+        frame: result.body.frame,
+      });
+      await this.options.delivered.add(envelope.id);
       await this.options.transport.acknowledge(relayPeer, envelope.id, result.receipt);
       return;
     }

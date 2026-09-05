@@ -97,6 +97,7 @@ export async function dispatchTrustedPluginGatewayMethod<T>(
     ...(!scope?.client ? { operatorRoleActor: { kind: "system" as const } } : {}),
     ...(syntheticScopes ? { syntheticScopes } : {}),
     ...(options?.timeoutMs !== undefined ? { timeoutMs: options.timeoutMs } : {}),
+    ...(options?.signal ? { signal: options.signal } : {}),
   });
 }
 

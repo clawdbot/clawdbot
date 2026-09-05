@@ -1530,6 +1530,21 @@ describe("loadGatewayPlugins", () => {
     expect(getLastDispatchedClientInternal().pluginRuntimeOwnerId).toBe("google-meet");
   });
 
+  test("forwards trusted plugin Gateway request lifecycle signals", async () => {
+    loadOpenClawPlugins.mockReturnValue(addLoadedPlugin(createRegistry([]), { id: "google-meet" }));
+    loadGatewayStartupPluginsForTest();
+    serverPluginsModule.setFallbackGatewayContext(createTestContext("plugin-gateway-signal"));
+    const runtime = createRuntimeFromLastGatewayLoad();
+    const signal = new AbortController().signal;
+
+    await gatewayRequestScopeModule.withPluginRuntimePluginScope(
+      { pluginId: "google-meet", pluginOrigin: "bundled" },
+      () => runtime.gateway.request("voicecall.start", { to: "+15550001234" }, { signal }),
+    );
+
+    expect(handleGatewayRequest.mock.calls.at(-1)?.[0].signal).toBe(signal);
+  });
+
   test("lets trusted official plugins request explicit Gateway scopes", async () => {
     loadOpenClawPlugins.mockReturnValue(addLoadedPlugin(createRegistry([]), { id: "google-meet" }));
     loadGatewayStartupPluginsForTest();

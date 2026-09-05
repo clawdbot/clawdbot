@@ -184,6 +184,22 @@ function createUnavailableSubagentRuntime(): PluginRuntime["subagent"] {
   };
 }
 
+function createUnavailableCrossSessionGrantRuntime(): PluginRuntime["crossSessionGrants"] {
+  const unavailable = () => {
+    throw new Error("Cross-session grants are only available through the plugin runtime proxy.");
+  };
+  return {
+    create: unavailable,
+    list: unavailable,
+    get: unavailable,
+    authorize: unavailable,
+    allowStanding: unavailable,
+    revoke: unavailable,
+    applyRevocation: unavailable,
+    acknowledgeRevocation: unavailable,
+  };
+}
+
 function createUnavailableNodesRuntime(): PluginRuntime["nodes"] {
   const unavailable = () => {
     throw new Error("Plugin node runtime is only available inside the Gateway.");
@@ -272,6 +288,7 @@ export const createPluginRuntime: PluginRuntimeFactory = (
     // Sourced from the shared OpenClaw version resolver (#52899) so plugins
     // always see the same version the CLI reports, avoiding API-version drift.
     version: VERSION,
+    crossSessionGrants: createUnavailableCrossSessionGrantRuntime(),
     gateway: _options.gateway ?? createRuntimeGateway(),
     config: base.config,
     agent,

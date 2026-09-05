@@ -126,12 +126,59 @@ type RuntimeNodeDuplexChannel = {
 
 export type RuntimeGatewayRequestOptions = {
   timeoutMs?: number;
+  signal?: AbortSignal;
   /** Requested Gateway scopes. Honored only for bundled or trusted official plugins. */
   scopes?: OperatorScope[];
 };
 
+export type CrossSessionGrant = {
+  grantId: string;
+  subjectId: string;
+  subjectBinding: string;
+  role: "issuer" | "holder";
+  targetSessionKey: string;
+  targetSessionId: string;
+  generation: number;
+  standing: boolean;
+  revoked: boolean;
+  revocationPending: boolean;
+};
+
+type CrossSessionGrantCreate = Omit<
+  CrossSessionGrant,
+  "standing" | "revoked" | "revocationPending"
+>;
+
+export type CrossSessionGrantAuthority = Pick<
+  CrossSessionGrant,
+  "grantId" | "subjectId" | "subjectBinding" | "targetSessionId" | "generation"
+> & {
+  signal: AbortSignal;
+};
+
+export type CrossSessionGrantRuntime = {
+  create: (grant: CrossSessionGrantCreate, signal: AbortSignal) => boolean;
+  list: (signal: AbortSignal) => CrossSessionGrant[];
+  get: (grantId: string, signal: AbortSignal) => CrossSessionGrant | undefined;
+  authorize: (authority: CrossSessionGrantAuthority) => CrossSessionGrant | undefined;
+  allowStanding: (authority: CrossSessionGrantAuthority) => boolean;
+  revoke: (params: {
+    grantId: string;
+    expectedGeneration: number;
+    signal: AbortSignal;
+  }) => CrossSessionGrant | undefined;
+  applyRevocation: (params: CrossSessionGrantAuthority) => boolean;
+  acknowledgeRevocation: (params: {
+    grantId: string;
+    generation: number;
+    signal: AbortSignal;
+  }) => boolean;
+};
+
 /** Trusted in-process runtime surface injected into native plugins. */
 export type PluginRuntime = PluginRuntimeCore & {
+  /** Host-owned persistent authority for exact cross-session grants. */
+  crossSessionGrants: CrossSessionGrantRuntime;
   gateway: {
     /** Whether this process owns an active Gateway request context. */
     isAvailable: () => Promise<boolean>;
