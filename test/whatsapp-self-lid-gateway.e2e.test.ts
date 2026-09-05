@@ -19,6 +19,32 @@ const WHATSAPP_TEST_API_MODULE_ID = resolveRelativeBundledPluginPublicModuleId({
   pluginId: "whatsapp",
   artifactBasename: "src/test-support/self-lid-gateway-api.js",
 });
+
+type WhatsAppGatewayTestApi = {
+  extractMentionedJids: (message: unknown) => string[];
+  installWebAutoReplyTestHomeHooks: () => void;
+  installWebAutoReplyUnitTestHooks: () => void;
+  monitorWebChannelWithCapture: (
+    resolver: (ctx: MsgContext) => Promise<{ text: string }>,
+  ) => Promise<{ spies: unknown; onMessage: unknown }>;
+  projectWhatsAppInboundMessage: (message: unknown) => unknown;
+  resetLoadConfigMock: () => void;
+  sendWebGroupInboundMessage: (params: {
+    onMessage: unknown;
+    spies: unknown;
+    body: string;
+    id: string;
+    conversationId: string;
+    senderE164: string;
+    senderName: string;
+    mentionedJids: string[];
+    selfE164: string;
+    selfJid: string;
+    selfLid: string;
+  }) => Promise<void>;
+  setLoadConfigMock: (config: OpenClawConfig) => void;
+};
+
 const {
   extractMentionedJids,
   installWebAutoReplyTestHomeHooks,
@@ -28,9 +54,7 @@ const {
   resetLoadConfigMock,
   sendWebGroupInboundMessage,
   setLoadConfigMock,
-} = (await import(
-  WHATSAPP_TEST_API_MODULE_ID
-)) as typeof import("../extensions/whatsapp/src/test-support/self-lid-gateway-api.js");
+} = (await import(WHATSAPP_TEST_API_MODULE_ID)) as WhatsAppGatewayTestApi;
 
 const SELF_LID_ID = "900000000000001";
 const SELF_LID = SELF_LID_ID + "@lid";
