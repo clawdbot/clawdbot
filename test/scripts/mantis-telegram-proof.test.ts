@@ -11,17 +11,12 @@ import {
   telegramProofDigest,
   telegramProofPrompt,
   telegramProofReply,
-  telegramProofRequestId,
   verifyTelegramProofFiles,
 } from "../../scripts/mantis/telegram-request-proof.ts";
 import { assertCurrentTelegramRequest } from "../../scripts/mantis/telegram-run-admission.ts";
 
 const identity = telegramProofIdentitySchema.parse({
-  request_id: telegramProofRequestId({
-    repositoryId: "1",
-    pullRequest: 1,
-    candidateSha: "b".repeat(40),
-  }),
+  request_id: "a".repeat(64),
   repository: { id: "1", full_name: "openclaw/openclaw" },
   pull_request: 1,
   candidate_sha: "b".repeat(40),
@@ -78,22 +73,6 @@ const encode = (files: ReturnType<typeof normalizeTelegramCapture>) =>
   );
 
 describe("canonical Telegram recorder to proof boundary", () => {
-  it("derives one stable request identity per exact PR head", () => {
-    expect(
-      telegramProofRequestId({
-        repositoryId: identity.repository.id,
-        pullRequest: identity.pull_request,
-        candidateSha: identity.candidate_sha,
-      }),
-    ).toBe(identity.request_id);
-    expect(
-      telegramProofRequestId({
-        repositoryId: identity.repository.id,
-        pullRequest: identity.pull_request,
-        candidateSha: "0".repeat(40),
-      }),
-    ).not.toBe(identity.request_id);
-  });
   it("derives three private-identity-free records from the actual recorder path", () => {
     const files = normalizeTelegramCapture(capture());
     const verified = verifyTelegramProofFiles(identity, encode(files));
@@ -517,7 +496,7 @@ describe("actual scoped Telegram Test API ingress", () => {
 });
 
 describe("Telegram live-send admission", () => {
-  const title = `Telegram Test Server proof PR #${identity.pull_request} @${identity.candidate_sha}`;
+  const title = `Mantis Telegram request [${identity.request_id}]`;
   const run = {
     id: 2,
     run_attempt: 1,
@@ -560,7 +539,7 @@ describe("Telegram live-send admission", () => {
     await expect(request()).resolves.toBeUndefined();
     await expect(request({ staleRead: 1 })).rejects.toThrow(/no longer current/);
     await expect(request({ staleRead: 2 })).rejects.toThrow(/no longer current/);
-    await expect(request({ attempt: 2 })).rejects.toThrow(/reruns cannot send traffic/);
+    await expect(request({ attempt: 2 })).rejects.toThrow(/expected 1/);
   });
 });
 

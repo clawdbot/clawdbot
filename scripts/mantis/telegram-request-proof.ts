@@ -19,31 +19,10 @@ export const telegramProofIdentitySchema = z
       sha,
     }),
     harness: z.strictObject({ sha }),
-    run: z.strictObject({ id: messageId, attempt: z.number().int().positive().max(100) }),
+    run: z.strictObject({ id: messageId, attempt: z.literal(1) }),
   })
   .refine((value) => value.workflow.sha === value.harness.sha, "Workflow/harness mismatch");
 
-export function telegramProofRequestId(value: {
-  repositoryId: string;
-  pullRequest: number;
-  candidateSha: string;
-}): string {
-  const subject = z
-    .strictObject({
-      repositoryId: messageId,
-      pullRequest: z.number().int().positive().max(Number.MAX_SAFE_INTEGER),
-      candidateSha: sha,
-    })
-    .parse(value);
-  return telegramProofDigest(
-    JSON.stringify([
-      "openclaw-telegram-test-server-proof-v1",
-      subject.repositoryId,
-      subject.pullRequest,
-      subject.candidateSha,
-    ]),
-  );
-}
 const binding = z.strictObject({
   schema: z.literal("mantis.telegram-observation.v1"),
   request_id: digest,
@@ -51,7 +30,7 @@ const binding = z.strictObject({
   candidate_sha: z.string().regex(/^[0-9a-f]{40}$/),
   harness_sha: z.string().regex(/^[0-9a-f]{40}$/),
   run_id: messageId,
-  run_attempt: z.number().int().positive().max(100),
+  run_attempt: z.literal(1),
   transport: z.literal("TelegramTestServer"),
   test_dc: z.literal(true),
   chat_type: z.literal("dm"),

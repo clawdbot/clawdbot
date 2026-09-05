@@ -11,11 +11,7 @@ import { acquireQaLease } from "../../.agents/skills/telegram-e2e-userbot/script
 import { restoreTelegramTestCredential } from "../../.agents/skills/telegram-e2e-userbot/scripts/telegram-test-credential.mjs";
 import { normalizeTelegramCapture } from "./telegram-capture.ts";
 import { startTelegramProofIngress } from "./telegram-proof-ingress.mts";
-import {
-  telegramProofIdentitySchema,
-  telegramProofPrompt,
-  telegramProofRequestId,
-} from "./telegram-request-proof.ts";
+import { telegramProofIdentitySchema, telegramProofPrompt } from "./telegram-request-proof.ts";
 import { assertCurrentTelegramRequest } from "./telegram-run-admission.ts";
 
 class TelegramProofStageError extends Error {
@@ -218,11 +214,9 @@ async function run() {
     candidateSha: candidate,
   };
   const identity = telegramProofIdentitySchema.parse({
-    request_id: telegramProofRequestId({
-      repositoryId: subject.repositoryId,
-      pullRequest: subject.pullRequest,
-      candidateSha: subject.candidateSha,
-    }),
+    // The consumer binds the request to its source comment and target snapshot.
+    // Recomputing it from PR/head would lose that identity and collapse new requests.
+    request_id: process.env.REQUEST_ID,
     repository: { id: subject.repositoryId, full_name: process.env.GITHUB_REPOSITORY },
     pull_request: subject.pullRequest,
     candidate_sha: subject.candidateSha,

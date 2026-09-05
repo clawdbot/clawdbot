@@ -1,4 +1,5 @@
 name: Mantis Web UI Chat Proof
+run-name: ${{ inputs.request_id != '' && format('Mantis request [{0}]', inputs.request_id) || 'Mantis Web UI Chat Proof' }}
 
 on:
   workflow_dispatch:
@@ -7,6 +8,10 @@ on:
         description: Ref, tag, or SHA expected to prove Control UI web chat behavior
         required: true
         default: main
+        type: string
+      request_id:
+        description: Optional consumer-issued SHA256 request id for isolated request-bound proof
+        required: false
         type: string
       pr_number:
         description: Optional PR number to receive the QA evidence comment
@@ -48,9 +53,15 @@ jobs:
       - name: Require maintainer-level repository access
         id: permission
         uses: actions/github-script@3a2844b7e9c422d3c10d287c895573f7108da1b3 # v9
+        env:
+          REQUEST_ID: ${{ inputs.request_id }}
         with:
           script: |
             const allowed = new Set(["admin", "maintain", "write"]);
+            if (context.actor === "clawsweeper[bot]" && /^[0-9a-f]{64}$/.test(process.env.REQUEST_ID ?? "")) {
+              core.setOutput("authorized", "true");
+              return;
+            }
             const { owner, repo } = context.repo;
             const { data } = await github.rest.repos.getCollaboratorPermissionLevel({
               owner,
@@ -107,7 +118,7 @@ jobs:
   run_web_ui_chat:
     name: Run Control UI web chat proof
     needs: [resolve_request, validate_candidate]
-    if: ${{ needs.resolve_request.outputs.should_run == 'true' }}
+    if: ${{ needs.resolve_request.outputs.should_run == 'true' && inputs.request_id == '' }}
     permissions:
       contents: read
     runs-on: blacksmith-8vcpu-ubuntu-2404
@@ -214,6 +225,122 @@ jobs:
         with:
           name: ${{ steps.prepare_evidence.outputs.artifact_name }}
           path: ${{ steps.prepare_evidence.outputs.output_dir }}
+          retention-days: 14
+          if-no-files-found: error
+
+  admit_bound_request:
+    name: Bind requested PR and candidate
+    needs: [resolve_request, validate_candidate]
+    if: ${{ inputs.request_id != '' && needs.resolve_request.outputs.should_run == 'true' }}
+    runs-on: ubuntu-24.04
+    steps:
+      - name: Require an exact same-repository PR request
+        uses: actions/github-script@3a2844b7e9c422d3c10d287c895573f7108da1b3 # v9
+        env:
+          REQUEST_ID: ${{ inputs.request_id }}
+          TARGET_PR: ${{ inputs.pr_number }}
+          CANDIDATE_SHA: ${{ inputs.candidate_ref }}
+          RESOLVED_SHA: ${{ needs.validate_candidate.outputs.candidate_revision }}
+          WORKFLOW_REF: ${{ github.ref }}
+          RUN_ATTEMPT: ${{ github.run_attempt }}
+        with:
+          script: |
+            const { REQUEST_ID, TARGET_PR, CANDIDATE_SHA, RESOLVED_SHA } = process.env;
+            if (!process.env.WORKFLOW_REF?.startsWith("refs/heads/") || process.env.RUN_ATTEMPT !== "1") {
+              throw new Error("Request proof requires an approved protected branch and run attempt 1.");
+            }
+            if (!/^[0-9a-f]{64}$/.test(REQUEST_ID) || !/^[1-9][0-9]*$/.test(TARGET_PR) ||
+                !Number.isSafeInteger(Number(TARGET_PR)) || !/^[0-9a-f]{40}$/.test(CANDIDATE_SHA) ||
+                CANDIDATE_SHA !== RESOLVED_SHA) {
+              throw new Error("Request proof requires a SHA256 request id, PR number, and exact candidate SHA.");
+            }
+            const { data: pr } = await github.rest.pulls.get({ ...context.repo, pull_number: Number(TARGET_PR) });
+            if (pr.state !== "open" || pr.head.sha !== CANDIDATE_SHA || pr.head.repo?.id !== context.payload.repository.id) {
+              throw new Error("Request proof requires the exact head of an open same-repository PR.");
+            }
+      - name: Checkout workflow admission helper
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          ref: ${{ github.workflow_sha }}
+          persist-credentials: false
+      - name: Verify protected main-ancestry workflow pin
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: node scripts/mantis/request-workflow-admission.mjs
+
+  run_request_proof:
+    name: Run request-bound web chat proof
+    needs: [admit_bound_request, validate_candidate]
+    runs-on: ubuntu-24.04
+    timeout-minutes: 60
+    permissions:
+      contents: read
+    steps:
+      - name: Checkout trusted harness
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          ref: ${{ github.workflow_sha }}
+          persist-credentials: false
+          fetch-depth: 0
+      - name: Setup trusted Node environment
+        uses: ./.github/actions/setup-node-env
+        with:
+          cache-mode: restore
+          node-version: ${{ env.NODE_VERSION }}
+          install-bun: "false"
+          install-deps: "false"
+      - name: Bootstrap trusted image before candidate execution
+        shell: bash
+        run: |
+          set -euo pipefail
+          git archive "$GITHUB_WORKFLOW_SHA" | podman build --file scripts/mantis/request-proof.Dockerfile --tag localhost/mantis-request-proof -
+      - name: Build candidate offline and observe from a separate container
+        env:
+          CANDIDATE_SHA: ${{ needs.validate_candidate.outputs.candidate_revision }}
+        run: node scripts/mantis/run-request-web-ui.mts "$CANDIDATE_SHA" .artifacts/mantis-request-observations
+      - name: Upload independently captured observations
+        if: ${{ success() }}
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7
+        with:
+          name: mantis-request-web-ui-${{ github.run_id }}-${{ github.run_attempt }}
+          path: |
+            .artifacts/mantis-request-observations/observer.json
+            .artifacts/mantis-request-observations/chat-send.json
+            .artifacts/mantis-request-observations/final-reply.json
+            .artifacts/mantis-request-observations/final-reply.png
+          retention-days: 14
+          if-no-files-found: error
+
+  finalize_bound_request:
+    name: Finalize request-bound evidence
+    needs: [admit_bound_request, run_request_proof, validate_candidate]
+    if: ${{ always() && needs.admit_bound_request.result == 'success' }}
+    runs-on: ubuntu-24.04
+    timeout-minutes: 15
+    steps:
+      - name: Checkout trusted finalizer
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          ref: ${{ github.workflow_sha }}
+          persist-credentials: false
+      - name: Setup trusted finalizer dependencies
+        uses: ./.github/actions/setup-node-env
+        with:
+          cache-mode: restore
+          node-version: ${{ env.NODE_VERSION }}
+          install-bun: "false"
+      - name: Verify artifact bytes and bind receipt
+        env:
+          GH_TOKEN: ${{ github.token }}
+          REQUEST_ID: ${{ inputs.request_id }}
+          TARGET_PR: ${{ inputs.pr_number }}
+          CANDIDATE_SHA: ${{ needs.validate_candidate.outputs.candidate_revision }}
+        run: node scripts/mantis/finalize-request-proof.mts
+      - name: Upload request receipt separately
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7
+        with:
+          name: mantis-request-receipt-${{ github.run_id }}-${{ github.run_attempt }}
+          path: .artifacts/mantis-request-finalizer/receipt.json
           retention-days: 14
           if-no-files-found: error
 

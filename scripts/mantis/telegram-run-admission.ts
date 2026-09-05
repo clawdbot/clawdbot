@@ -53,7 +53,7 @@ export async function assertCurrentTelegramRequest(
         fetchImpl,
       ),
     );
-  const title = `Telegram Test Server proof PR #${identity.pull_request} @${identity.candidate_sha}`;
+  const title = `Mantis Telegram request [${identity.request_id}]`;
   if (
     String(workflowRun.id) !== identity.run.id ||
     workflowRun.path !== identity.workflow.path ||
