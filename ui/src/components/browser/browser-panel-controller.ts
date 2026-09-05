@@ -554,15 +554,10 @@ export class BrowserPanelController implements ReactiveController {
     }
     const focused = await this.runAction(async (actionClient) => {
       if (route) {
-        // Listing is safe for blocked tabs; focus is not. Resolve the alias and
-        // current access observation before attempting to activate the target.
+        // Listing can observe stopped or blocked tabs; focus needs a running,
+        // accessible tab. A historical target cannot survive a browser restart.
         await this.refreshTabsOnly(actionClient, () => this.operations.isLive(epoch, actionClient));
-        if (!this.operations.isLive(epoch, actionClient)) {
-          return;
-        }
-        // A stopped browser cannot hold a historical tab. Keep the Start affordance
-        // instead of reporting the doomed focus request as an error.
-        if (this.running === false) {
+        if (!this.operations.isLive(epoch, actionClient) || this.running === false) {
           return;
         }
         const selected = this.tabs.find((tab) => tab.id === targetId || tab.targetId === targetId);

@@ -171,8 +171,8 @@ hidden; displaying a tab title does not grant access to its contents.
 
 Following a historical tab never starts a stopped managed browser: a fresh
 launch cannot contain that tab. The panel shows **Start browser** instead, and
-preview cards keep their title and URL without a thumbnail until the browser
-is running again.
+preview cards keep their title and URL without a thumbnail when that target
+is unavailable. Click **Start browser** to launch the browser and show its current tabs.
 
 ## Configuration
 
@@ -476,9 +476,9 @@ instead, and remote CDP profiles use the browser behind `cdpUrl`.
 ## Local vs remote control
 
 - **Local control (default):** the Gateway starts the loopback control service and can launch a local browser.
-  Only targetless actions (`open`, `navigate`, `openclaw browser start`) launch it. Actions that name a
+  Targetless actions can launch it (for example, `open`, `navigate`, or `openclaw browser start`). Actions that name a
   tab by `targetId`, tab id, or label never start a stopped browser, because a new browser cannot
-  contain that tab; they fail with `Browser profile "<name>" is not running` until it is started.
+  contain that tab; start the browser or open a new tab, then select a current target.
 - **Remote control (node host):** run a node host on the machine that has the browser; the Gateway proxies browser actions to it.
 - **Remote CDP:** set `browser.profiles.<name>.cdpUrl` (or `browser.cdpUrl`) to
   attach to a remote Chromium-based browser. In this case, OpenClaw will not launch a local browser.
