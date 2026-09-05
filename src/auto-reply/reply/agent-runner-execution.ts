@@ -695,6 +695,10 @@ async function executeAgentTurnOutcome(params: AgentTurnParams): Promise<AgentTu
 
 /** Runs the agent turn and records its execution and message-tool delivery outcomes. */
 export async function executeAgentTurn(params: AgentTurnParams): Promise<AgentTurnExecutionResult> {
+  params.opts?.onRunVerbosityResolved?.({
+    verboseLevelOverride: params.followupRun.run.verboseLevelOverride,
+    resolvedVerboseLevel: params.resolvedVerboseLevel,
+  });
   if (params.replyOperation) {
     // Cancellation stops execution, but the exact owner must finish committed accounting first.
     retainReplyOperationUntilComplete(params.replyOperation);

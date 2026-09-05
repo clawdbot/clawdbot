@@ -1437,8 +1437,13 @@ describe("runReplyAgent inline tool verbosity", () => {
       };
       await replaceSessionEntry({ storePath, sessionKey }, sessionEntry);
       const onToolResult = vi.fn(async (_payload: ReplyPayload) => {});
+      const onRunVerbosityResolved = vi.fn();
       runEmbeddedAgentMock.mockImplementationOnce(
         async (params: RunEmbeddedAgentInternalParams) => {
+          expect(onRunVerbosityResolved).toHaveBeenCalledExactlyOnceWith({
+            verboseLevelOverride: override,
+            resolvedVerboseLevel: override,
+          });
           if (params.shouldEmitToolResult?.()) {
             await params.onToolResult?.({ text: "Tool summary" });
           }
@@ -1456,7 +1461,7 @@ describe("runReplyAgent inline tool verbosity", () => {
           sessionEntry,
           sessionStore: { [sessionKey]: sessionEntry },
           resolvedVerboseLevel: override,
-          opts: { onToolResult },
+          opts: { onToolResult, onRunVerbosityResolved },
         },
       }).run();
       expect(onToolResult.mock.calls.map(([payload]) => payload.text)).toEqual(expected);
